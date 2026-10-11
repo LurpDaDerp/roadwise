@@ -15,138 +15,146 @@ import {
   type TxFrame,
 } from '../protocol';
 
-// The golden vectors shared byte-for-byte with the firmware (plan §3, §9).
-const vectors = require('../__fixtures__/ble_vectors.json') as {
-  protocol: number;
-  tx: { name: string; type: number; hex: string; fields: Record<string, number> }[];
-  rx: { name: string; type: number; hex: string; fields: Record<string, number> }[];
-  info: { name: string; hex: string; fields: Record<string, number | string>; dashcam_id: string; local_name: string }[];
-  malformed_tx: { name: string; hex: string }[];
-  longer_tx: { name: string; hex: string; same_as: string }[];
+// The golden vectors, a byte-identical copy of the firmware's `tests/ble_vectors.json` (plan §3, §9).
+import vectors from '../__fixtures__/ble_vectors.json';
+
+type Fields = Record<string, number | string>;
+interface FrameVector {
+  desc: string;
+  dir: 'tx' | 'rx';
+  type: string;
+  fields: Fields;
+  hex: string;
+}
+interface InvalidVector {
+  desc: string;
+  dir: 'tx' | 'rx';
+  hex: string;
+  reason: 'short' | 'type' | 'version';
+}
+interface InfoVector {
+  desc: string;
+  fields: Fields;
+  hex: string;
+  dashcam_id: string;
+  name: string;
+}
+const V = vectors as unknown as {
+  version: number;
+  max_frame_len: number;
+  valid: FrameVector[];
+  decode_only: FrameVector[];
+  invalid: InvalidVector[];
+  info: { valid: InfoVector[]; decode_only: InfoVector[]; invalid: { desc: string; hex: string; reason: string }[] };
+};
+
+const n = (f: Fields, k: string): number => {
+  const v = f[k];
+  if (typeof v !== 'number') throw new Error(`field ${k} missing`);
+  return v;
 };
 
 /** The vector's snake_case fields as the codec's typed frame. */
-function txFrame(type: number, f: Record<string, number>): TxFrame {
-  switch (type) {
-    case 0x01:
-      return { type: 'HELLO', bootId: f.boot_id!, nextSeq: f.next_seq!, oldestSeq: f.oldest_seq!, uptimeMs: f.uptime_ms! };
-    case 0x02:
-      return { type: 'STATUS', uptimeMs: f.uptime_ms!, state: f.state!, flags: f.flags!, fpsX10: f.fps_x10!, tempC: f.temp_c!, bondCount: f.bond_count! };
-    case 0x03:
+function frameOf(v: FrameVector): TxFrame | RxFrame {
+  const f = v.fields;
+  switch (v.type) {
+    case 'HELLO':
+      return { type: 'HELLO', bootId: n(f, 'boot_id'), nextSeq: n(f, 'next_seq'), oldestSeq: n(f, 'oldest_seq'), uptimeMs: n(f, 'uptime_ms') };
+    case 'STATUS':
+      return { type: 'STATUS', uptimeMs: n(f, 'uptime_ms'), state: n(f, 'state'), flags: n(f, 'flags'), fpsX10: n(f, 'fps_x10'), tempC: n(f, 'temp_c'), bondCount: n(f, 'bond_count') };
+    case 'EVENT':
       return {
         type: 'EVENT',
-        seq: f.seq!,
-        tMs: f.t_ms!,
-        durDs: f.dur_ds!,
-        ev: f.ev!,
-        tier: f.tier_aud! & 0x03,
-        audible: (f.tier_aud! & 0x80) !== 0,
-        detail: f.detail!,
-        valueX10: f.value_x10!,
+        seq: n(f, 'seq'),
+        tMs: n(f, 't_ms'),
+        durDs: n(f, 'dur_ds'),
+        ev: n(f, 'ev'),
+        tier: n(f, 'tier_aud') & 0x03,
+        audible: (n(f, 'tier_aud') & 0x80) !== 0,
+        detail: n(f, 'detail'),
+        valueX10: n(f, 'value_x10'),
       };
-    case 0x04:
-      return { type: 'ALERT', alertId: f.alert_id!, sound: f.sound!, tier: f.tier!, level: f.level!, mode: f.mode!, route: f.route!, uptimeMs: f.uptime_ms! };
-    case 0x05:
-      return { type: 'ALERT_STOP', alertId: f.alert_id!, reason: f.reason! };
-    case 0x06:
-      return { type: 'ALERT_FALLBACK', alertId: f.alert_id!, cause: f.cause! };
-    case 0x07:
-      return { type: 'TIME_ECHO', reqId: f.req_id!, uptimeMs: f.uptime_ms! };
-    case 0x08:
-      return { type: 'PAIRED', bondCount: f.bond_count! };
+    case 'ALERT':
+      return { type: 'ALERT', alertId: n(f, 'alert_id'), sound: n(f, 'sound'), tier: n(f, 'tier'), level: n(f, 'level'), mode: n(f, 'mode'), route: n(f, 'route'), uptimeMs: n(f, 'uptime_ms') };
+    case 'ALERT_STOP':
+      return { type: 'ALERT_STOP', alertId: n(f, 'alert_id'), reason: n(f, 'reason') };
+    case 'ALERT_FALLBACK':
+      return { type: 'ALERT_FALLBACK', alertId: n(f, 'alert_id'), cause: n(f, 'cause') };
+    case 'TIME_ECHO':
+      return { type: 'TIME_ECHO', reqId: n(f, 'req_id'), uptimeMs: n(f, 'uptime_ms') };
+    case 'PAIRED':
+      return { type: 'PAIRED', bondCount: n(f, 'bond_count') };
+    case 'STATE':
+      return { type: 'STATE', flags: n(f, 'flags'), ttlDs: n(f, 'ttl_ds'), speedCms: n(f, 'speed_cms'), localMin: n(f, 'local_min'), bootId: n(f, 'boot_id'), ackSeq: n(f, 'ack_seq') };
+    case 'ACK':
+      return { type: 'ACK', bootId: n(f, 'boot_id'), ackSeq: n(f, 'ack_seq') };
+    case 'ALERT_ACK':
+      return { type: 'ALERT_ACK', alertId: n(f, 'alert_id'), outcome: n(f, 'outcome') };
+    case 'TIME_PING':
+      return { type: 'TIME_PING', reqId: n(f, 'req_id'), epochMs: n(f, 'epoch_ms') };
+    case 'RESUME':
+      return { type: 'RESUME', bootId: n(f, 'boot_id'), nextSeq: n(f, 'next_seq') };
+    case 'COMMAND':
+      return { type: 'COMMAND', op: n(f, 'op'), arg: n(f, 'arg') };
     default:
-      throw new Error(`no tx type ${type}`);
+      throw new Error(`no frame type ${v.type}`);
   }
 }
 
-function rxFrame(type: number, f: Record<string, number>): RxFrame {
-  switch (type) {
-    case 0x81:
-      return { type: 'STATE', flags: f.flags!, ttlDs: f.ttl_ds!, speedCms: f.speed_cms!, localMin: f.local_min!, bootId: f.boot_id!, ackSeq: f.ack_seq! };
-    case 0x82:
-      return { type: 'ACK', bootId: f.boot_id!, ackSeq: f.ack_seq! };
-    case 0x83:
-      return { type: 'ALERT_ACK', alertId: f.alert_id!, outcome: f.outcome! };
-    case 0x84:
-      return { type: 'TIME_PING', reqId: f.req_id!, epochMs: f.epoch_ms! };
-    case 0x85:
-      return { type: 'RESUME', bootId: f.boot_id!, nextSeq: f.next_seq! };
-    case 0x86:
-      return { type: 'COMMAND', op: f.op!, arg: f.arg! };
-    default:
-      throw new Error(`no rx type ${type}`);
-  }
-}
+const decode = (dir: 'tx' | 'rx', hex: string) => (dir === 'tx' ? decodeTx(fromHex(hex)) : decodeRx(fromHex(hex)));
+const encode = (f: TxFrame | RxFrame): number[] => (f.type in { STATE: 1, ACK: 1, ALERT_ACK: 1, TIME_PING: 1, RESUME: 1, COMMAND: 1 } ? encodeRx(f as RxFrame) : encodeTx(f as TxFrame));
 
-test('the vectors are protocol v1 and cover every frame type both ways', () => {
-  expect(vectors.protocol).toBe(1);
-  expect(new Set(vectors.tx.map((v) => v.type))).toEqual(new Set([1, 2, 3, 4, 5, 6, 7, 8]));
-  expect(new Set(vectors.rx.map((v) => v.type))).toEqual(new Set([0x81, 0x82, 0x83, 0x84, 0x85, 0x86]));
+test('the vectors are protocol v1 and cover every frame type in its direction', () => {
+  expect(V.version).toBe(1);
+  expect(V.max_frame_len).toBe(MAX_FRAME_BYTES);
+  const tx = new Set(V.valid.filter((v) => v.dir === 'tx').map((v) => v.type));
+  const rx = new Set(V.valid.filter((v) => v.dir === 'rx').map((v) => v.type));
+  expect(tx).toEqual(new Set(['HELLO', 'STATUS', 'EVENT', 'ALERT', 'ALERT_STOP', 'ALERT_FALLBACK', 'TIME_ECHO', 'PAIRED']));
+  expect(rx).toEqual(new Set(['STATE', 'ACK', 'ALERT_ACK', 'TIME_PING', 'RESUME', 'COMMAND']));
 });
 
-describe.each(vectors.tx.map((v) => [v.name, v] as const))('TX vector %s', (_name, v) => {
-  test('decodes to its fields and encodes back to the same bytes', () => {
-    const want = txFrame(v.type, v.fields);
-    const got = decodeTx(fromHex(v.hex));
-    expect(got).toEqual({ ok: true, frame: want });
-    expect(toHex(encodeTx(want))).toBe(v.hex);
-    expect(fromHex(v.hex).length).toBeLessThanOrEqual(MAX_FRAME_BYTES);
-  });
+test.each(V.valid.map((v) => [v.desc, v] as const))('valid: %s — encodes to its bytes and decodes to its fields', (_d, v) => {
+  const want = frameOf(v);
+  expect(toHex(encode(want))).toBe(v.hex);
+  expect(decode(v.dir, v.hex)).toEqual({ ok: true, frame: want });
+  expect(fromHex(v.hex).length).toBeLessThanOrEqual(MAX_FRAME_BYTES);
 });
 
-describe.each(vectors.rx.map((v) => [v.name, v] as const))('RX vector %s', (_name, v) => {
-  test('encodes to the same bytes and decodes back', () => {
-    const want = rxFrame(v.type, v.fields);
-    expect(toHex(encodeRx(want))).toBe(v.hex);
-    expect(decodeRx(fromHex(v.hex))).toEqual({ ok: true, frame: want });
-    expect(fromHex(v.hex).length).toBeLessThanOrEqual(MAX_FRAME_BYTES);
-  });
+test.each(V.decode_only.map((v) => [v.desc, v] as const))('decode only: %s — trailing bytes and reserved bytes ignored', (_d, v) => {
+  expect(decode(v.dir, v.hex)).toEqual({ ok: true, frame: frameOf(v) });
 });
 
-describe.each(vectors.info.map((v) => [v.name, v] as const))('INFO vector %s', (_name, v) => {
-  test('decodes the id, name and flags; encodes back', () => {
-    const info = decodeInfo(fromHex(v.hex));
-    expect(info).not.toBeNull();
-    expect(info!.dashcamId).toBe(v.dashcam_id);
-    expect(isDashcamId(info!.dashcamId)).toBe(true);
-    expect(info!.name).toBe(v.local_name);
-    expect(info!.peerBonded).toBe(v.fields.peer_bonded === 1);
-    expect(info!.bondCount).toBe(v.fields.bond_count);
-    expect(info!.pairingOpen).toBe(((v.fields.flags as number) & 1) === 1);
-    expect(info!.fwMajor).toBe(v.fields.fw_major);
-    expect(speaksV1(info!)).toBe(true);
-    expect(toHex(encodeInfo(info!))).toBe(v.hex);
-  });
+test.each(V.invalid.map((v) => [v.desc, v] as const))('invalid: %s — refused with its reason, never thrown', (_d, v) => {
+  expect(decode(v.dir, v.hex)).toEqual({ ok: false, reason: v.reason });
 });
 
-test.each(vectors.malformed_tx.map((v) => [v.name, v.hex] as const))('malformed TX %s is refused, never thrown', (_name, hex) => {
-  const got = decodeTx(fromHex(hex));
-  expect(got.ok).toBe(false);
+test.each(V.info.valid.map((v) => [v.desc, v] as const))('INFO: %s — id, name and flags; encodes back', (_d, v) => {
+  const info = decodeInfo(fromHex(v.hex));
+  expect(info).not.toBeNull();
+  expect(info!.dashcamId).toBe(v.dashcam_id);
+  expect(info!.dashcamId).toBe(v.fields.mac);
+  expect(isDashcamId(info!.dashcamId)).toBe(true);
+  expect(info!.name).toBe(v.name);
+  expect(info!.peerBonded).toBe(v.fields.peer_bonded === 1);
+  expect(info!.bondCount).toBe(v.fields.bond_count);
+  expect(info!.pairingOpen).toBe(((v.fields.flags as number) & 1) === 1);
+  expect(info!.fwMajor).toBe(v.fields.fw_major);
+  expect(info!.fwMinor).toBe(v.fields.fw_minor);
+  expect(speaksV1(info!)).toBe(true);
+  expect(toHex(encodeInfo(info!))).toBe(v.hex);
 });
 
-test.each(vectors.longer_tx.map((v) => [v.name, v] as const))('a longer TX frame (%s) is accepted, trailing bytes ignored', (_name, v) => {
-  const base = vectors.tx.find((t) => t.name === v.same_as)!;
-  expect(decodeTx(fromHex(v.hex))).toEqual(decodeTx(fromHex(base.hex)));
+test.each(V.info.decode_only.map((v) => [v.desc, v] as const))('INFO decode only: %s', (_d, v) => {
+  expect(decodeInfo(fromHex(v.hex))?.dashcamId).toBe(v.dashcam_id);
 });
 
-test('refusal reasons', () => {
-  expect(decodeTx([])).toEqual({ ok: false, reason: 'empty' });
-  expect(decodeTx([1])).toEqual({ ok: false, reason: 'short' });
-  expect(decodeTx([0x09, 1, 0, 0])).toEqual({ ok: false, reason: 'unknown_type' });
-  expect(decodeTx([0x01, 2, ...new Array(16).fill(0)])).toEqual({ ok: false, reason: 'version' });
-  expect(decodeTx([0x01, 1, 0])).toEqual({ ok: false, reason: 'short' });
-  // A phone → dashcam type is not a TX frame (and vice versa).
-  expect(decodeTx(encodeRx({ type: 'ACK', bootId: 1, ackSeq: 2 }))).toEqual({ ok: false, reason: 'unknown_type' });
-  expect(decodeRx(encodeTx({ type: 'PAIRED', bondCount: 1 }))).toEqual({ ok: false, reason: 'unknown_type' });
+test.each(V.info.invalid.map((v) => [v.desc, v] as const))('INFO invalid: %s — refused', (_d, v) => {
+  expect(decodeInfo(fromHex(v.hex))).toBeNull();
 });
 
-test('INFO: shorter or another version is null; trailing bytes are ignored', () => {
-  const v = vectors.info[0]!;
-  const bytes = fromHex(v.hex);
-  expect(decodeInfo(bytes.slice(0, 13))).toBeNull();
-  expect(decodeInfo([2, ...bytes.slice(1)])).toBeNull();
-  expect(decodeInfo([...bytes, 1, 2, 3])).toEqual(decodeInfo(bytes));
-  expect(speaksV1({ ...decodeInfo(bytes)!, protoMin: 2, protoMax: 3 })).toBe(false);
+test('a protocol range without v1 is not spoken', () => {
+  const info = decodeInfo(fromHex(V.info.valid[0]!.hex))!;
+  expect(speaksV1({ ...info, protoMin: 2, protoMax: 3 })).toBe(false);
 });
 
 test('encoders clamp out-of-range values instead of wrapping', () => {
@@ -156,11 +164,6 @@ test('encoders clamp out-of-range values instead of wrapping', () => {
   expect(neg).toMatchObject({ ok: true, frame: { durDs: 0, valueX10: -32768, audible: false } });
   const st = decodeRx(encodeRx({ type: 'STATE', flags: 0, ttlDs: 30, speedCms: 1e9, localMin: 0xffff, bootId: 2 ** 32 - 1, ackSeq: NaN }));
   expect(st).toMatchObject({ ok: true, frame: { speedCms: 65535, bootId: 4294967295, ackSeq: 0 } });
-});
-
-test('TIME_PING carries a full 64-bit epoch in ms', () => {
-  const epochMs = 1_791_600_000_123;
-  expect(decodeRx(encodeRx({ type: 'TIME_PING', reqId: 65535, epochMs }))).toEqual({ ok: true, frame: { type: 'TIME_PING', reqId: 65535, epochMs } });
 });
 
 test('event names follow the frozen engine order; unknown ids read UNKNOWN_<n>', () => {

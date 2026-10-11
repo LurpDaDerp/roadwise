@@ -4,9 +4,11 @@
 // Rules every decoder here follows:
 // - little-endian; byte 0 = type, byte 1 = protocol version (1);
 // - a frame at least as long as its v1 length is accepted and trailing bytes are ignored (a later
-//   version may append fields); a shorter frame, an unknown type or another version is refused
-//   with a reason, never thrown;
-// - frames are at most 20 bytes, so they fit the default ATT MTU.
+//   version may append fields; the 20-byte sender maximum is not enforced on receipt);
+// - everything else is refused with a reason, never thrown, checked in this order: length < 2
+//   `short`; not a type of this direction `type`; version ≠ 1 `version`; shorter than the type's v1
+//   length `short` (the firmware's codec checks the same, in the same order);
+// - a sender never sends more than 20 bytes, so every frame fits the default ATT MTU.
 //
 // Values cross the BLE bridge as `number[]` (react-native-ble-manager), so encoders return one.
 
@@ -50,8 +52,8 @@ export const RX_TYPE = {
   COMMAND: 0x86,
 } as const;
 
-/** The v1 length of each frame type, header included. */
-export const FRAME_LEN: Readonly<Record<number, number>> = {
+/** The v1 length of each dashcam → phone frame type, header included. */
+export const TX_LEN: Readonly<Record<number, number>> = {
   [TX_TYPE.HELLO]: 18,
   [TX_TYPE.STATUS]: 11,
   [TX_TYPE.EVENT]: 18,
@@ -60,6 +62,10 @@ export const FRAME_LEN: Readonly<Record<number, number>> = {
   [TX_TYPE.ALERT_FALLBACK]: 5,
   [TX_TYPE.TIME_ECHO]: 8,
   [TX_TYPE.PAIRED]: 3,
+};
+
+/** The v1 length of each phone → dashcam frame type, header included. */
+export const RX_LEN: Readonly<Record<number, number>> = {
   [RX_TYPE.STATE]: 16,
   [RX_TYPE.ACK]: 10,
   [RX_TYPE.ALERT_ACK]: 5,
@@ -298,7 +304,8 @@ export interface DashcamInfo {
   pairingOpen: boolean;
 }
 
-export type BadReason = 'empty' | 'version' | 'unknown_type' | 'short';
+/** Why a frame was refused (the firmware's names). */
+export type BadReason = 'short' | 'type' | 'version';
 
 export type Decoded<T> = { ok: true; frame: T } | { ok: false; reason: BadReason };
 
@@ -357,12 +364,12 @@ class Writer {
 
 const header = (type: number): Writer => new Writer().u8(type).u8(PROTOCOL_VERSION);
 
-/** Header checks shared by both directions: version and the ≥ v1 length rule. */
-function check(bytes: ArrayLike<number>): { ok: true; type: number } | { ok: false; reason: BadReason } {
-  if (bytes.length < 2) return { ok: false, reason: bytes.length === 0 ? 'empty' : 'short' };
+/** The header checks, in the order the firmware applies them, for one direction's types. */
+function check(bytes: ArrayLike<number>, lengths: Readonly<Record<number, number>>): { ok: true; type: number } | { ok: false; reason: BadReason } {
+  if (bytes.length < 2) return { ok: false, reason: 'short' };
   const type = u8(bytes, 0);
-  const len = FRAME_LEN[type];
-  if (len === undefined) return { ok: false, reason: 'unknown_type' };
+  const len = lengths[type];
+  if (len === undefined) return { ok: false, reason: 'type' };
   if (u8(bytes, 1) !== PROTOCOL_VERSION) return { ok: false, reason: 'version' };
   if (bytes.length < len) return { ok: false, reason: 'short' };
   return { ok: true, type };
@@ -372,7 +379,7 @@ function check(bytes: ArrayLike<number>): { ok: true; type: number } | { ok: fal
 
 /** Decode one TX notification. Never throws. */
 export function decodeTx(bytes: ArrayLike<number>): Decoded<TxFrame> {
-  const head = check(bytes);
+  const head = check(bytes, TX_LEN);
   if (!head.ok) return head;
   const b = bytes;
   switch (head.type) {
@@ -423,8 +430,7 @@ export function decodeTx(bytes: ArrayLike<number>): Decoded<TxFrame> {
     case TX_TYPE.PAIRED:
       return { ok: true, frame: { type: 'PAIRED', bondCount: u8(b, 2) } };
     default:
-      // A phone → dashcam type arriving on TX is not a TX frame.
-      return { ok: false, reason: 'unknown_type' };
+      return { ok: false, reason: 'type' };
   }
 }
 
@@ -479,7 +485,7 @@ export function encodeRx(f: RxFrame): number[] {
 
 /** Decode a phone → dashcam frame (tests and vectors; the firmware is the real reader). */
 export function decodeRx(bytes: ArrayLike<number>): Decoded<RxFrame> {
-  const head = check(bytes);
+  const head = check(bytes, RX_LEN);
   if (!head.ok) return head;
   const b = bytes;
   switch (head.type) {
@@ -499,7 +505,7 @@ export function decodeRx(bytes: ArrayLike<number>): Decoded<RxFrame> {
     case RX_TYPE.COMMAND:
       return { ok: true, frame: { type: 'COMMAND', op: u8(b, 2), arg: u8(b, 3) } };
     default:
-      return { ok: false, reason: 'unknown_type' };
+      return { ok: false, reason: 'type' };
   }
 }
 
