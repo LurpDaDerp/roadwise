@@ -92,6 +92,11 @@ interface Pending {
   after?: (out: string[]) => void;
 }
 
+export interface Mark {
+  mark: number;
+}
+export type Since = number | Mark;
+
 export interface LogLine {
   /** world time */
   at: number;
@@ -222,10 +227,18 @@ export class World {
     return best;
   }
 
+  /** Timers fired at the current instant (a zero-delay re-arm loop never lets time move). */
+  private firedAt = { w: -1, n: 0 };
+
   private async runDue(): Promise<void> {
     for (;;) {
       const t = this.nextTimer();
       if (!t || t.at > this.W) return;
+      if (this.firedAt.w !== this.W) this.firedAt = { w: this.W, n: 0 };
+      this.firedAt.n += 1;
+      if (this.firedAt.n > 2000) {
+        throw new Error(`world: more than 2000 timers fired at W=${this.W} without time moving (a zero-delay re-arm loop; owner ${t.owner?.name ?? 'bench'})`);
+      }
       this.timers = this.timers.filter((x) => x !== t);
       t.fn();
       await this.settle();
@@ -372,12 +385,21 @@ export class World {
     return parseInt(boot?.line.split(' ')[1] ?? '0', 16);
   }
 
-  out(since = 0): LogLine[] {
-    return this.log.filter((l) => l.dir === 'out' && l.at >= since);
+  /** A point in the log: `since` arguments take a world time or a mark (lines after it). */
+  mark(): Mark {
+    return { mark: this.log.length };
+  }
+
+  private after(since: Since): LogLine[] {
+    return typeof since === 'number' ? this.log.filter((l) => l.at >= since) : this.log.slice(since.mark);
+  }
+
+  out(since: Since = 0): LogLine[] {
+    return this.after(since).filter((l) => l.dir === 'out');
   }
 
   /** Frames the dashcam notified (to `conn`, or all). */
-  tx(conn?: number, since = 0): { at: number; conn: number; f: TxFrame }[] {
+  tx(conn?: number, since: Since = 0): { at: number; conn: number; f: TxFrame }[] {
     const got: { at: number; conn: number; f: TxFrame }[] = [];
     for (const l of this.out(since)) {
       const p = l.line.split(' ');
@@ -389,15 +411,15 @@ export class World {
     return got;
   }
 
-  txOf<T extends TxFrame['type']>(type: T, conn?: number, since = 0): { at: number; conn: number; f: Extract<TxFrame, { type: T }> }[] {
+  txOf<T extends TxFrame['type']>(type: T, conn?: number, since: Since = 0): { at: number; conn: number; f: Extract<TxFrame, { type: T }> }[] {
     return this.tx(conn, since).filter((x) => x.f.type === type) as never;
   }
 
   /** Frames the phones wrote that reached the dashcam. */
-  rx(conn?: number, since = 0): { at: number; conn: number; f: RxFrame }[] {
+  rx(conn?: number, since: Since = 0): { at: number; conn: number; f: RxFrame }[] {
     const got: { at: number; conn: number; f: RxFrame }[] = [];
-    for (const l of this.log) {
-      if (l.dir !== 'in' || l.at < since) continue;
+    for (const l of this.after(since)) {
+      if (l.dir !== 'in') continue;
       const p = l.line.split(' ');
       if (p[0] !== 'RX' || (conn !== undefined && Number(p[1]) !== conn)) continue;
       const d = decodeRx(fromHex(p[2] ?? ''));
@@ -406,18 +428,18 @@ export class World {
     return got;
   }
 
-  rxOf<T extends RxFrame['type']>(type: T, conn?: number, since = 0): { at: number; conn: number; f: Extract<RxFrame, { type: T }> }[] {
+  rxOf<T extends RxFrame['type']>(type: T, conn?: number, since: Since = 0): { at: number; conn: number; f: Extract<RxFrame, { type: T }> }[] {
     return this.rx(conn, since).filter((x) => x.f.type === type) as never;
   }
 
   /** What the buzzer audibly did: `PLAY cont c l`, `PLAY once c`, `STOP`. */
-  buzzer(since = 0): { at: number; line: string }[] {
+  buzzer(since: Since = 0): { at: number; line: string }[] {
     return this.out(since)
       .filter((l) => l.line.startsWith('PLAY') || l.line === 'STOP')
       .map((l) => ({ at: l.at, line: l.line }));
   }
 
-  lines(prefix: string, since = 0): { at: number; line: string }[] {
+  lines(prefix: string, since: Since = 0): { at: number; line: string }[] {
     return this.out(since)
       .filter((l) => l.line.startsWith(prefix))
       .map((l) => ({ at: l.at, line: l.line }));
