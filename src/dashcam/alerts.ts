@@ -117,6 +117,8 @@ interface Entry {
 export interface DashcamAlertController {
   /** An ALERT frame. Returns the ACK the link must send BEFORE playback starts (null: none). */
   onAlert(frame: AlertFrame): 0 | 1 | null;
+  /** The table holds this alert (a re-send of it is a level change or a reconnect's visual copy). */
+  has(alertId: number): boolean;
   onStop(alertId: number): void;
   onFallback(alertId: number, cause: number): void;
   /** Disconnect, a new boot, or a connect: the table is cleared (no ACK: the dashcam knows). */
@@ -260,6 +262,10 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
   }
 
   return {
+    has(alertId) {
+      return table.has(alertId);
+    },
+
     onAlert(f) {
       const existing = table.get(f.alertId);
       if (existing) {

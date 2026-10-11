@@ -48,6 +48,12 @@ export const PING_GAP_MS = 100;
 export const PINGS_PER_SYNC = 3;
 export const RESUME_AFTER_MS = 500;
 export const RESYNC_EVERY_MS = 10 * 60_000;
+/**
+ * A routed ALERT the phone handles this long after the dashcam sent it (by the boot's clock offset)
+ * arrived past the dashcam's ACK deadline (750 ms by default): the buzzer has already taken it, so
+ * the phone shows it and answers ACK(0) instead of playing it a second time.
+ */
+export const LATE_ALERT_MS = 1000;
 /** A HELLO arriving later than this after its request gives no offset sample. */
 export const HELLO_OFFSET_MAX_MS = 1000;
 /** No HELLO this long after COMMAND 7: ask again. */
@@ -108,7 +114,7 @@ export interface LinkSnapshot {
   /** the last ALERT start or level change, for the HUD and the banner */
   visual: DashcamVisual | null;
   firmware: string | null;
-  counters: { badFrames: number; stored: number; duplicates: number; orphanEvents: number; storeErrors: number };
+  counters: { badFrames: number; lateAlerts: number; stored: number; duplicates: number; orphanEvents: number; storeErrors: number };
 }
 
 export interface LinkDeps {
@@ -223,7 +229,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
   let firmware: string | null = null;
   let disposed = false;
   let pingSeq = 0;
-  const counters = { badFrames: 0, stored: 0, duplicates: 0, orphanEvents: 0, storeErrors: 0 };
+  const counters = { badFrames: 0, lateAlerts: 0, stored: 0, duplicates: 0, orphanEvents: 0, storeErrors: 0 };
   const listeners = new Set<(s: LinkSnapshot) => void>();
   /** the latest drive row and when it arrived */
   let lastRow: { row: FeatureRow; at: number } | null = null;
@@ -787,6 +793,12 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
           onEvent(f, now);
           break;
         case 'ALERT': {
+          if (f.route === 1 && !alerts.has(f.alertId) && s.offsetMs !== null && now - (s.offsetMs + f.uptimeMs) > LATE_ALERT_MS) {
+            counters.lateAlerts += 1;
+            alerts.onAlert({ ...f, route: 0 });
+            self.sendAlertAck(f.alertId, 0);
+            break;
+          }
           const ack = alerts.onAlert(f);
           // ALERT_ACK before playback starts (the first play runs after this returns).
           if (ack !== null) self.sendAlertAck(f.alertId, ack);

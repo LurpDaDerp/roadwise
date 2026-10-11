@@ -7,7 +7,7 @@ import { createTripsRepo, migrate, type Db } from '@/data/db';
 
 import { cadenceMs } from '../alerts';
 import type { PairedDashcam } from '../keys';
-import { createDashcamLink, type DashcamLink, type LinkContext } from '../link';
+import { createDashcamLink, LATE_ALERT_MS, type DashcamLink, type LinkContext } from '../link';
 import {
   decodeInfo,
   decodeRx,
@@ -824,6 +824,31 @@ describe('alerts (§3.5)', () => {
     await r.settle();
     expect(r.player.played()).toHaveLength(2); // no repeats for a visual-only alert
     expect(r.link.snapshot().visual).toMatchObject({ alertId: 4, onPhone: false });
+  });
+
+  test('a routed ALERT handled past the ACK deadline (the JS thread woke late): ALERT_ACK(0), visual only, never a second chime; a late level step of a playing alert keeps it', async () => {
+    const r = rig();
+    await connect(r);
+    r.clear();
+    const sentAt = uptime(r);
+    r.advance(LATE_ALERT_MS + 1);
+    r.rx(alert({ alertId: 21, sound: 5, tier: 1, mode: 0, uptimeMs: sentAt }));
+    await r.settle();
+    expect(r.sent('ALERT_ACK')).toEqual([{ type: 'ALERT_ACK', alertId: 21, outcome: 0 }]);
+    expect(r.player.played()).toEqual([expect.objectContaining({ silent: true })]);
+    expect(r.link.snapshot().counters.lateAlerts).toBe(1);
+
+    // On time: played and confirmed; its level step arriving late is still the same alert.
+    r.clear();
+    r.rx(alert({ alertId: 22, sound: 3, tier: 3, uptimeMs: uptime(r) }));
+    await r.settle();
+    expect(r.sent('ALERT_ACK')).toEqual([{ type: 'ALERT_ACK', alertId: 22, outcome: 1 }]);
+    const stepAt = uptime(r);
+    r.advance(LATE_ALERT_MS + 1);
+    r.rx(alert({ alertId: 22, sound: 3, tier: 3, level: 1, uptimeMs: stepAt }));
+    await r.settle();
+    expect(r.sent('ALERT_ACK')).toEqual([{ type: 'ALERT_ACK', alertId: 22, outcome: 1 }]);
+    expect(r.link.snapshot().visual).toMatchObject({ alertId: 22, onPhone: true });
   });
 
   test('the phone that can no longer play mid alert (a call starts) says ALERT_ACK(0) and stops', async () => {
