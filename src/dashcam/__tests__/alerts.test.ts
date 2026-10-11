@@ -71,3 +71,47 @@ test('the spoken words come from the string table', () => {
     SOUND_SPEC[4]!.voice,
   ]);
 });
+
+test('while a DashPal item is in the player nothing else is due: a waiting first play or a past-due repeat never asks for a zero-delay wake; the settle hands them over', async () => {
+  let now = 0;
+  const delivered: AlertDecision[] = [];
+  let hold: (() => void) | null = null;
+  let holding = false;
+  const player: AlertPlayer = {
+    deliver: async (d) => {
+      delivered.push(d);
+      if (holding) await new Promise<void>((resolve) => (hold = resolve));
+    },
+    stopCurrent: async () => {},
+    announce: async () => {},
+  };
+  const c = createDashcamAlerts({ player, now: () => now, sendAck: () => {}, canPlay: () => true });
+  // A continuous glance plays once; its repeat is due 2.5 s after it started.
+  c.onAlert({ type: 'ALERT', alertId: 1, sound: 1, tier: 2, level: 0, mode: 1, route: 1, uptimeMs: 0 });
+  await c.settled();
+  expect(delivered).toHaveLength(1);
+  expect(c.nextDueAt()).toBe(2500);
+  // A one-shot arrives and its first play is held in the player.
+  holding = true;
+  now = 1000;
+  c.onAlert({ type: 'ALERT', alertId: 2, sound: 5, tier: 1, level: 0, mode: 0, route: 1, uptimeMs: 0 });
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  expect(delivered.map((d) => d.id)).toEqual(['dashpal:1:1', 'dashpal:2:2']);
+  // A level change on alert 3 (visual only) owes a haptic while 2 is still in the player.
+  c.onAlert({ type: 'ALERT', alertId: 3, sound: 1, tier: 2, level: 0, mode: 1, route: 0, uptimeMs: 0 });
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  c.onAlert({ type: 'ALERT', alertId: 3, sound: 1, tier: 2, level: 1, mode: 1, route: 0, uptimeMs: 0 });
+  c.tick(now);
+  // The future repeat is still due; nothing is due "now".
+  expect(c.nextDueAt()).toBe(2500);
+  now = 3000;
+  c.tick(now);
+  // The repeat is past due, but it cannot start until 2 settles: no wake.
+  expect(c.nextDueAt()).toBeNull();
+  holding = false;
+  const release = hold as (() => void) | null;
+  release?.();
+  await c.settled();
+  // 2 settled: alert 3's haptic (a first play wins), then 1's repeat.
+  expect(delivered.map((d) => d.id)).toEqual(['dashpal:1:1', 'dashpal:2:2', 'dashpal:3:3', 'dashpal:1:4']);
+});

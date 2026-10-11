@@ -390,10 +390,14 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
     },
 
     nextDueAt() {
+      // While a DashPal item is in the player nothing else can start; its settling pumps whatever is
+      // due by then. Only a repeat still in the future is worth a wake (else: a zero-delay loop).
+      const now = deps.now();
       let at: number | null = null;
       for (const e of table.values()) {
-        if (e.firstOwed) return deps.now();
-        if (e.playing && e.nextAt !== null) at = at === null ? e.nextAt : Math.min(at, e.nextAt);
+        if (e.firstOwed && inFlight === null) return now;
+        if (!e.playing || e.nextAt === null || (inFlight !== null && e.nextAt <= now)) continue;
+        at = at === null ? e.nextAt : Math.min(at, e.nextAt);
       }
       return at;
     },
