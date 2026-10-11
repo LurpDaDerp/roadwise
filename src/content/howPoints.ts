@@ -4,14 +4,23 @@
  */
 import {
   BASE_PENALTY,
+  CAMERA_DISPUTE_AUTO_PER_WEEK,
   CLEAN_BONUS,
   CLEAN_BONUS_MIN_MILES,
   DAILY_FULL_MILES,
   DAILY_HALF_MILES,
+  DASHCAM_DROWSY_GAP_S,
+  DASHCAM_EYES_OFF_GAP_S,
+  DASHCAM_MIN_COVERAGE,
+  DASHCAM_MIN_MOVING_S,
+  DASHCAM_MIN_MPH,
+  DASHCAM_MULT,
   DISPUTE_AUTO_PER_WEEK,
   LEVEL_STEP,
   MAX_FREEZES,
   MIN_SCORED_MILES,
+  MULT_CAP,
+  NO_EVENTS_FIRST_S,
   NOT_DRIVING_PER_MONTH,
   POINTS_PER_MILE,
   RANKED_MIN_MILES,
@@ -25,6 +34,8 @@ type IconName = keyof typeof Ionicons.glyphMap;
 
 const x = (m: number) => `×${m.toFixed(2)}`;
 const streakCapDrives = Math.round((STREAK_MULT_CAP - 1) / STREAK_STEP);
+/** "every 5 min" from seconds. */
+const everyMin = (s: number) => `every ${Math.round(s / 60)} min`;
 
 /** The three ideas the onboarding "how it works" step and Home's first-run card show. */
 export const HOW_IT_WORKS: { icon: IconName; title: string; body: string }[] = [
@@ -45,6 +56,8 @@ export const PENALTIES: PenaltyRow[] = [
   { event: 'Hard cornering', penalty: `−${BASE_PENALTY.hard_corner.minor} · severe −${BASE_PENALTY.hard_corner.severe}` },
   { event: 'Phone pickup', penalty: `−${BASE_PENALTY.phone_pickup} (−${BASE_PENALTY.phone_pickup_stopped} when stopped in traffic)` },
   { event: 'Phone handling', penalty: `−${BASE_PENALTY.phone_handling_per_unit} for every extra 15 s` },
+  { event: 'Eyes off road (DashPal)', penalty: `−${BASE_PENALTY.eyes_off}, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)}` },
+  { event: 'Drowsy (DashPal)', penalty: `−${BASE_PENALTY.drowsy}, at most once ${everyMin(DASHCAM_DROWSY_GAP_S)}` },
 ];
 
 export type RuleSection = { id: string; title: string; icon: IconName; points: string[] };
@@ -56,7 +69,7 @@ export const RULES: RuleSection[] = [
     icon: 'add-circle-outline',
     points: [
       `You get ${POINTS_PER_MILE} points for every safe mile: miles you weren't speeding or using your phone.`,
-      `Finish a drive of ${CLEAN_BONUS_MIN_MILES} mi or more with zero events for a +${CLEAN_BONUS} clean-drive bonus.`,
+      `Finish a drive of ${CLEAN_BONUS_MIN_MILES} mi or more with zero events for a +${CLEAN_BONUS} clean-drive bonus. DashPal events don’t count against it.`,
       'Each event takes points off (see the list below).',
       'A second event of the same kind costs ×1.25, and a third or more costs ×1.5.',
       'On very short drives, penalties are scaled down so one slip doesn’t hit as hard. They count fully from 3 mi.',
@@ -65,11 +78,23 @@ export const RULES: RuleSection[] = [
   },
   {
     id: 'multipliers',
-    title: 'Streak multiplier',
+    title: 'Multipliers',
     icon: 'flash-outline',
     points: [
       `Each drive in your streak adds ${STREAK_STEP} to your multiplier, up to ${x(STREAK_MULT_CAP)} at a ${streakCapDrives}-drive streak.`,
-      'The multiplier only boosts what you earn. Penalties never get bigger because of your streak.',
+      `A DashPal drive earns ${x(DASHCAM_MULT)} on top of that. Together they top out at ${x(MULT_CAP)}.`,
+      'Multipliers only boost what you earn. Penalties never get bigger because of them.',
+    ],
+  },
+  {
+    id: 'dashpal',
+    title: 'DashPal dashcam',
+    icon: 'videocam-outline',
+    points: [
+      `A drive is a DashPal drive when your DashPal watched you for at least ${Math.round(DASHCAM_MIN_COVERAGE * 100)}% of the time you were moving (at least ${DASHCAM_MIN_MOVING_S / 60} min) and your phone had caught up with it by the end of the drive.`,
+      `DashPal can flag eyes off the road with no look back (−${BASE_PENALTY.eyes_off}, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)}) and drowsiness (−${BASE_PENALTY.drowsy}, at most once ${everyMin(DASHCAM_DROWSY_GAP_S)}).`,
+      `They count only at ${DASHCAM_MIN_MPH} mph or more with a good GPS fix, and never in a drive’s first ${NO_EVENTS_FIRST_S} s.`,
+      'DashPal events never lower your Safety Rating or break a clean drive. They do cost points, like any event.',
     ],
   },
   {
@@ -134,6 +159,7 @@ export const RULES: RuleSection[] = [
     points: [
       'Every event in a drive’s breakdown has a Report link.',
       `"Braked for a hazard" and "wrong speed limit" are accepted right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
+      `"DashPal got it wrong" is accepted right away too, up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of those.`,
       `"Wasn't driving" takes a whole drive off when someone else drove. You can use it ${NOT_DRIVING_PER_MONTH} times a month, on your latest drive.`,
       'Recorded drives can’t be deleted, so nobody can hide a bad drive.',
     ],

@@ -34,6 +34,21 @@ export const DISPUTE_AUTO_PER_WEEK = 3;
 /** Freezes held at most. */
 export const MAX_FREEZES = 3;
 
+/** DashPal events score only at this phone GPS speed or faster, on a good fix. */
+export const DASHCAM_MIN_MPH = 10;
+/** At most one `drowsy` per this many seconds of a drive (the earliest is kept). */
+export const DASHCAM_DROWSY_GAP_S = 600;
+/** At most one `eyes_off` per this many seconds of a drive (the earliest is kept). */
+export const DASHCAM_EYES_OFF_GAP_S = 300;
+/** A DashPal drive needs at least this many seconds moving at 5 mph or more… */
+export const DASHCAM_MIN_MOVING_S = 60;
+/** …with the dashcam watching the driver for at least this share of them. */
+export const DASHCAM_MIN_COVERAGE = 0.8;
+/** An eyes-off event within this many seconds of a phone pickup or handling event is dropped: the phone already charged it. */
+export const DASHCAM_PHONE_OVERLAP_S = 5;
+/** "DashPal got it wrong" reports auto-accepted per week, a quota of its own beside `DISPUTE_AUTO_PER_WEEK`. */
+export const CAMERA_DISPUTE_AUTO_PER_WEEK = 3;
+
 /** Weekly league tiers, lowest first. */
 export const LEAGUE_TIERS = ['bronze', 'silver', 'gold', 'platinum', 'diamond'] as const;
 export type LeagueTier = (typeof LEAGUE_TIERS)[number];

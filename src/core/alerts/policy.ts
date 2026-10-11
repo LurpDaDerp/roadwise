@@ -1,6 +1,8 @@
 // What each v3 event sounds like (product spec v3 "Driving screen"): a distinct tone per category,
 // an optional short voice line, and a haptic. Speeding gets the soft chime once per episode (the
 // edge glow carries the tier); harsh driving the warning tone; a phone pickup the urgent one.
+// The two DashPal types are never raised by the phone's engine (the dashcam alerts on its own and
+// through `src/dashcam`); their entries keep the maps exhaustive and name their level and words.
 import type { EventType, Tier } from '@scoring';
 
 import type { AlertEvent } from '@/core/engine/engine.types';
@@ -14,6 +16,8 @@ export const ALERT_LEVEL: Readonly<Record<EventType, AlertLevel>> = {
   hard_corner: 2,
   phone_pickup: 3,
   phone_handling: 2,
+  eyes_off: 2,
+  drowsy: 3,
 };
 
 /** The voice line, ≤ 3 words; none for the speeding chime (the glow says it). */
@@ -24,6 +28,8 @@ export const ALERT_VOICE: Readonly<Record<EventType, string | null>> = {
   hard_corner: 'Hard corner',
   phone_pickup: 'Phone down',
   phone_handling: 'Phone down',
+  eyes_off: 'Eyes up',
+  drowsy: 'Take a break',
 };
 
 export const ALERT_INTENSITY: Readonly<Record<AlertLevel, HapticIntensity>> = { 1: 1, 2: 2, 3: 4 };

@@ -30,7 +30,9 @@ export interface Expectation {
   absent?: true;
 }
 
-const EVENT_TYPES = ['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling'] as const;
+// eyes_off and drowsy come only from the DashPal dashcam: no phone trace ever raises them, but an
+// expectation may still name one (e.g. as `absent`).
+const EVENT_TYPES = ['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling', 'eyes_off', 'drowsy'] as const;
 const TIERS = ['minor', 'moderate', 'severe'] as const;
 
 /** Annotated with the engine's own types, so a field added to `FeatureRow` and forgotten here fails `tsc`. */

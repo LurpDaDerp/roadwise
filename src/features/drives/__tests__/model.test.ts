@@ -1,5 +1,6 @@
 import { DAY, drive, event, NOW, ROUTE, sums } from '../__fixtures__/drives';
 import { formatDuration, formatTimeSpan, groupByWeek, weekLabel, weekStart } from '../format';
+import { eventTally } from '../DriveRow';
 import { routeDots, routeRuns, sketchPath } from '../route';
 import { homeStats, trendFor } from '../stats';
 import {
@@ -11,6 +12,36 @@ import {
   reportReasons,
   streakLine,
 } from '../summary';
+
+describe('DashPal', () => {
+  test('the multiplier line names the DashPal ×1.25 and the ×1.50 cap of the two together', () => {
+    expect(multiplierText(1.2, 1.25, 1.5)).toBe('streak ×1.20 · DashPal ×1.25 → ×1.50 (cap)');
+    expect(multiplierText(1.08, 1.25, 1.35)).toBe('streak ×1.08 · DashPal ×1.25 → ×1.35');
+    expect(multiplierText(1.3, 1, 1.3)).toBe('streak ×1.30 (cap)');
+    expect(multiplierText(1.2, 1, 1.2)).toBe('streak ×1.20');
+  });
+
+  test('a DashPal event is reported as "DashPal got it wrong" or "wasn\'t driving"', () => {
+    expect(reportReasons('drowsy')).toEqual(['camera_wrong', 'not_driving']);
+    expect(reportReasons('eyes_off')).toEqual(['camera_wrong', 'not_driving']);
+    expect(reportReasons('hard_brake')).toEqual(['hazard', 'not_driving']);
+  });
+
+  test('DashPal events are dots on the route, never coloured stretches', () => {
+    const drowsy = event({ id: 'd1', type: 'drowsy', tier: 'severe', durationS: 60 });
+    expect(routeDots([drowsy]).map((d) => [d.id, d.type, d.tier])).toEqual([['d1', 'drowsy', 'severe']]);
+    expect(routeRuns([ROUTE], [drowsy]).every((r) => r.tier === null)).toBe(true);
+  });
+
+  test('a history row shows DashPal events with the phone events', () => {
+    const counts = { speeding: 1, pickups: 0, handlingS: 0, hardBrake: 0, hardAccel: 0, hardCorner: 0, eyesOff: 2, drowsy: 1 };
+    expect(eventTally(counts)).toEqual([
+      { type: 'speeding', n: 1 },
+      { type: 'eyes_off', n: 2 },
+      { type: 'drowsy', n: 1 },
+    ]);
+  });
+});
 
 describe('format', () => {
   test('durations read like a person would say them', () => {

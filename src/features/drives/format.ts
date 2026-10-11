@@ -3,7 +3,7 @@
  * grouping of the history. No React, no theme — every rule is testable on its own.
  */
 import type { Ionicons } from '@expo/vector-icons';
-import type { EventType, Tier } from '@scoring';
+import { isDashcamType, type EventType, type Tier } from '@scoring';
 
 import { formatPointsValue, type Signal } from '@/ui';
 
@@ -72,6 +72,8 @@ export const EVENT_LABEL: Record<EventType, string> = {
   hard_corner: 'Hard cornering',
   phone_pickup: 'Phone pickup',
   phone_handling: 'Phone handling',
+  eyes_off: 'Eyes off road',
+  drowsy: 'Drowsy',
 };
 
 export const EVENT_ICON: Record<EventType, IconName> = {
@@ -81,7 +83,12 @@ export const EVENT_ICON: Record<EventType, IconName> = {
   hard_corner: 'return-down-forward-outline',
   phone_pickup: 'phone-portrait-outline',
   phone_handling: 'phone-portrait-outline',
+  eyes_off: 'eye-off-outline',
+  drowsy: 'moon-outline',
 };
+
+/** The source a DashPal event is marked with wherever it is listed. */
+export const DASHPAL_MARK = 'DashPal';
 
 /** Tier → design-system signal (minor yellow, moderate orange, severe red). */
 export const TIER_SIGNAL: Record<Tier, Signal> = { minor: 'minor', moderate: 'moderate', severe: 'severe' };
@@ -91,8 +98,9 @@ export const TIER_WORD: Record<Tier, string> = { minor: 'Minor', moderate: 'Mode
 /** Types with one tier only say their name; the rest add "minor" / "severe". */
 const SINGLE_TIER: ReadonlySet<EventType> = new Set<EventType>(['phone_pickup']);
 
-/** "Hard brake · Severe", "Phone pickup". */
+/** "Hard brake · Severe", "Phone pickup", "Drowsy · DashPal" (a DashPal event names its source, not its one tier). */
 export function eventName(type: EventType, tier: Tier): string {
+  if (isDashcamType(type)) return `${EVENT_LABEL[type]} · ${DASHPAL_MARK}`;
   return SINGLE_TIER.has(type) ? EVENT_LABEL[type] : `${EVENT_LABEL[type]} · ${TIER_WORD[tier]}`;
 }
 

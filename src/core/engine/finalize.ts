@@ -8,16 +8,40 @@
 //   4. ONE transaction replaces the events, updates the trip row (`pending`), queues the upload
 //      and purges the samples. It commits or it does not.
 // A payload the contract refuses is stored as `failed` (never uploaded, never left `recording`).
-import { scoreDrive, type DriveBreakdown, type DriveContext, type DriveEvent } from '@scoring';
+//
+// DashPal (plan §8.4): before any of that, the dashcam's facts for the drive are read once (they
+// read the samples the transaction purges). Its candidates become severe `eyes_off` / `drowsy`
+// events under the scoring rules (after the first 30 s, at 10 mph or more on a good fix, an eyes-off
+// beside a phone event dropped, at most one drowsy per 10 min and one eyes-off per 5 min), and its
+// seconds become the payload's `dashcam` block, from which the estimate derives the DashPal bonus
+// exactly as the server does.
+import {
+  DASHCAM_DROWSY_GAP_S,
+  DASHCAM_EYES_OFF_GAP_S,
+  DASHCAM_MIN_MPH,
+  DASHCAM_PHONE_OVERLAP_S,
+  NO_EVENTS_FIRST_S,
+  dashcamDrive,
+  isDashcamType,
+  scoreDrive,
+  type DashcamEventType,
+  type DriveBreakdown,
+  type DriveContext,
+  type DriveEvent,
+} from '@scoring';
+
+import type { DashcamCandidate, DashcamTripFacts } from '@/dashcam/facts';
 
 import { createEventsRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db, type EventRow, type NewEvent, type TripRow } from '@/data/db';
 import { deviceTrimSeed } from '@/data/devices/deviceSecret';
 import { countEvents } from '@/data/queries/rows';
 import {
   FinalizeTripPayloadV3Schema,
+  MAX_DRIVE_MS,
   MAX_EVENTS,
   MAX_POLYLINE_BYTES,
   TZ_NAME_PATTERN,
+  type DashcamV3,
   type FinalizeTripPayloadV3,
   type PayloadEventV3,
 } from '@/data/sync/payload';
@@ -46,6 +70,12 @@ export interface FinalizeDeps {
   context?: () => Promise<{ streak: number } | null>;
   /** The per-drive privacy trim seed. Default: `deviceTrimSeed` (HMAC of the SecureStore secret). */
   trimSeed?: (clientTripId: string) => Promise<string>;
+  /**
+   * What the DashPal dashcam saw on this drive (`loadDashcamTripFacts` in `src/dashcam/facts.ts`).
+   * Called once, before the final transaction purges the samples it reads. Absent, or failing: the
+   * drive has no DashPal events and no DashPal block.
+   */
+  dashcamFacts?: (trip: { clientTripId: string; startedAt: number; endedAt: number }) => Promise<DashcamTripFacts>;
 }
 
 export interface FinalizeResult {
@@ -95,6 +125,77 @@ export function normaliseZone(raw: string | null | undefined): string {
   }
 }
 
+/** A lowercase uuid the upload contract (`z.uuid()`) and the server (`apply_drive`) both accept. */
+const EVENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const DASHCAM_ID = /^[0-9a-f]{12}$/;
+const GAP_MS: Readonly<Record<DashcamEventType, number>> = { drowsy: DASHCAM_DROWSY_GAP_S * 1000, eyes_off: DASHCAM_EYES_OFF_GAP_S * 1000 };
+
+const candidateDuration = (c: DashcamCandidate): number => (Number.isFinite(c.durationS) ? Math.max(0, c.durationS) : 0);
+
+/**
+ * The scored DashPal events of a drive from the dashcam's candidates (plan §8.4), in time order:
+ * kept only when they start at least `NO_EVENTS_FIRST_S` into the drive and by its end, at a known
+ * GPS speed of `DASHCAM_MIN_MPH` or more (an unknown speed drops it); an eyes-off whose span comes
+ * within `DASHCAM_PHONE_OVERLAP_S` of an active phone pickup or handling event is dropped (the
+ * phone already charged that look); then at most one drowsy per `DASHCAM_DROWSY_GAP_S` and one
+ * eyes-off per `DASHCAM_EYES_OFF_GAP_S`, the earliest kept. A candidate whose id is not a lowercase
+ * uuid, or repeats an id already on the drive, is dropped rather than refuse the whole upload.
+ */
+export function dashcamEvents(
+  candidates: readonly DashcamCandidate[],
+  trip: { startedAt: number; endedAt: number },
+  driveEvents: readonly Pick<DriveEvent, 'id' | 'type' | 'startedAt' | 'durationS' | 'status'>[]
+): DetectedEvent[] {
+  const earliest = trip.startedAt + NO_EVENTS_FIRST_S * 1000;
+  const slack = DASHCAM_PHONE_OVERLAP_S * 1000;
+  const taken = new Set(driveEvents.map((e) => e.id));
+  const phone = driveEvents
+    .filter((e) => e.status !== 'removed' && (e.type === 'phone_pickup' || e.type === 'phone_handling'))
+    .map((e) => [e.startedAt - slack, e.startedAt + Math.max(0, finite(e.durationS)) * 1000 + slack] as const);
+  const eligible = candidates
+    .filter((c) => (c.kind === 'eyes_off' || c.kind === 'drowsy') && typeof c.id === 'string' && EVENT_UUID.test(c.id) && !taken.has(c.id))
+    .filter((c) => Number.isFinite(c.startedAt) && c.startedAt >= earliest && c.startedAt <= trip.endedAt)
+    .filter((c) => c.speedMph !== null && Number.isFinite(c.speedMph) && c.speedMph >= DASHCAM_MIN_MPH)
+    .filter((c) => {
+      if (c.kind !== 'eyes_off') return true;
+      const end = c.startedAt + candidateDuration(c) * 1000;
+      return !phone.some(([from, to]) => c.startedAt <= to && end >= from);
+    })
+    .slice()
+    .sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const lastKept: Partial<Record<DashcamEventType, number>> = {};
+  const out: DetectedEvent[] = [];
+  for (const c of eligible) {
+    const prev = lastKept[c.kind];
+    if (taken.has(c.id) || (prev !== undefined && c.startedAt - prev < GAP_MS[c.kind])) continue;
+    lastKept[c.kind] = c.startedAt;
+    taken.add(c.id);
+    out.push({
+      id: c.id,
+      type: c.kind,
+      tier: 'severe',
+      startedAt: Math.round(c.startedAt),
+      durationS: candidateDuration(c),
+      measured: { source: 'dashcam', speedMph: c.speedMph as number },
+    });
+  }
+  return out;
+}
+
+/**
+ * The payload's `dashcam` block from the facts: present only when a paired dashcam covered some of
+ * the drive (`dashcamId` non-null and a 12-hex id), whole seconds clamped into the contract
+ * (moving ≤ 12 h, covered ≤ moving). Anything else: null, and the drive is simply not a DashPal one.
+ */
+export function dashcamBlock(facts: DashcamTripFacts | null): DashcamV3 | null {
+  if (facts === null || typeof facts.dashcamId !== 'string') return null;
+  const deviceId = facts.dashcamId.toLowerCase();
+  if (!DASHCAM_ID.test(deviceId)) return null;
+  const movingS = clamp(Math.floor(finite(facts.movingS)), 0, MAX_DRIVE_MS / 1000);
+  const coveredS = clamp(Math.floor(finite(facts.coveredS)), 0, movingS);
+  return { deviceId, movingS, coveredS, synced: facts.synced === true };
+}
+
 /** A copy of the event with every number finite and rounded, so the contract holds whatever a detector emitted. */
 export function sanitizeEvent(e: DetectedEvent, tripStartedAt: number, tripEndedAt: number): DetectedEvent {
   const startedAt = clamp(Number.isFinite(e.startedAt) ? Math.round(e.startedAt) : tripStartedAt, tripStartedAt, tripEndedAt);
@@ -104,6 +205,8 @@ export function sanitizeEvent(e: DetectedEvent, tripStartedAt: number, tripEnded
   if (typeof e.measured.limitMph === 'number' && Number.isFinite(e.measured.limitMph)) measured.limitMph = clamp(Math.round(e.measured.limitMph), 0, 120);
   if (typeof e.measured.peakG === 'number' && Number.isFinite(e.measured.peakG)) measured.peakG = clamp(round3(e.measured.peakG), 0, 10);
   if (typeof e.measured.mounted === 'boolean') measured.mounted = e.measured.mounted;
+  // The contract's rule: a DashPal event carries source dashcam, and nothing else does.
+  if (isDashcamType(e.type)) measured.source = 'dashcam';
   const out: DetectedEvent = {
     id: e.id,
     type: e.type,
@@ -179,6 +282,10 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     await trips.insert({ client_trip_id: id, started_at: startedAt, tz, local_day: localDay, status: 'recording' }, now());
   }
 
+  // 0. What the DashPal dashcam saw: read before the transaction below purges the samples.
+  const facts = deps.dashcamFacts ? await deps.dashcamFacts({ clientTripId: id, startedAt, endedAt }).catch(() => null) : null;
+  const dashcam = dashcamBlock(facts);
+
   // 1. The route and the events on it.
   const zones = await (deps.zones ?? (() => readZones(db)))();
   const route = trimRoute(session.track, zones, MAX_POLYLINE_BYTES, await (deps.trimSeed ?? deviceTrimSeed)(id));
@@ -187,9 +294,9 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const geocode = deps.geocode === undefined ? expoGeocoder : deps.geocode;
   const [fromLabel, toLabel] = await Promise.all([labelFor(session.firstFix, zones, geocode), labelFor(session.lastFix, zones, geocode)]);
 
-  const cleaned = session.events
-    .filter((e) => e.startedAt < endedAt + 2000)
-    .map((e) => sanitizeEvent(e, startedAt, endedAt))
+  const phoneEvents = session.events.filter((e) => e.startedAt < endedAt + 2000).map((e) => sanitizeEvent(e, startedAt, endedAt));
+  const fromDashcam = dashcamEvents(facts?.events ?? [], { startedAt, endedAt }, phoneEvents).map((e) => sanitizeEvent(e, startedAt, endedAt));
+  const cleaned = [...phoneEvents, ...fromDashcam]
     .sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1))
     .slice(0, MAX_EVENTS);
   const payloadEvents: PayloadEventV3[] = cleaned.map((e) => {
@@ -240,6 +347,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     integrity,
     events: payloadEvents,
     appVersion: deps.appVersion.slice(0, 32) || 'unknown',
+    ...(dashcam === null ? {} : { dashcam }),
   };
   const parsed = FinalizeTripPayloadV3Schema.safeParse(candidate);
 
@@ -247,7 +355,8 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const streak = (await deps.context?.().catch(() => null))?.streak ?? 0;
   const ctx: DriveContext = { streak, safeMilesEarlierToday: await safeMilesEarlierToday(db, localDay, startedAt) };
   const driveEvents: DriveEvent[] = cleaned.map(({ measured: _m, ...e }) => e);
-  const breakdown = scoreDrive({ miles, safeMiles, events: driveEvents }, ctx);
+  // The same derivation as the server's: the DashPal bonus from the block's seconds.
+  const breakdown = scoreDrive({ miles, safeMiles, events: driveEvents, dashcam: dashcamDrive(dashcam) }, ctx);
   const penaltyOf = new Map(breakdown.events.map((e) => [e.id, e.penalty]));
   const counts = countEvents(cleaned);
 

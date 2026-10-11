@@ -896,6 +896,11 @@ export type Database = {
           clean: boolean
           client_trip_id: string
           created_at: string
+          dashcam_covered_s: number
+          dashcam_device_id: string | null
+          dashcam_moving_s: number
+          dashcam_on: boolean
+          dashcam_synced: boolean
           duration_s: number
           ended_at: string
           handling_s: number
@@ -906,6 +911,7 @@ export type Database = {
           loop_repeat: boolean
           merged_into: string | null
           miles: number
+          n_dashcam: number
           n_events: number
           n_hard_accel: number
           n_hard_brake: number
@@ -938,6 +944,11 @@ export type Database = {
           clean?: boolean
           client_trip_id: string
           created_at?: string
+          dashcam_covered_s?: number
+          dashcam_device_id?: string | null
+          dashcam_moving_s?: number
+          dashcam_on?: boolean
+          dashcam_synced?: boolean
           duration_s: number
           ended_at: string
           handling_s?: number
@@ -948,6 +959,7 @@ export type Database = {
           loop_repeat?: boolean
           merged_into?: string | null
           miles: number
+          n_dashcam?: number
           n_events?: number
           n_hard_accel?: number
           n_hard_brake?: number
@@ -980,6 +992,11 @@ export type Database = {
           clean?: boolean
           client_trip_id?: string
           created_at?: string
+          dashcam_covered_s?: number
+          dashcam_device_id?: string | null
+          dashcam_moving_s?: number
+          dashcam_on?: boolean
+          dashcam_synced?: boolean
           duration_s?: number
           ended_at?: string
           handling_s?: number
@@ -990,6 +1007,7 @@ export type Database = {
           loop_repeat?: boolean
           merged_into?: string | null
           miles?: number
+          n_dashcam?: number
           n_events?: number
           n_hard_accel?: number
           n_hard_brake?: number

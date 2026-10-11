@@ -13,7 +13,7 @@
 //   device still records that owner.
 // - **A claim is only ever closed by the pass that holds it.**
 // - **Retries** follow the queue's ladder; a terminal refusal fails the item for good and is shown.
-import type { DriveBreakdown } from '@scoring';
+import { isDashcamType, type DriveBreakdown } from '@scoring';
 
 import type { Db } from '@/data/db/driver';
 import { createEventsRepo } from '@/data/db/events';
@@ -230,7 +230,8 @@ export async function applyDisputeResult(
   const trip = await trips.get(action.clientTripId, tx);
   if (trip === null) return;
   const remaining = await events.listByTrip(action.clientTripId, tx);
-  const activeCount = remaining.filter((e) => e.status === 'active').length;
+  // DashPal events never break a clean drive (as the server counts it)
+  const activeCount = remaining.filter((e) => e.status === 'active' && !isDashcamType(e.type)).length;
   // the server re-scored the drive: every remaining event takes its new penalty (repeat indices
   // shift when the removed one was the first of its type), so the itemised list sums to the net
   if (result.breakdown) {

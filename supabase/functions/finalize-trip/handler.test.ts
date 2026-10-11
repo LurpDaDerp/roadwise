@@ -2,8 +2,8 @@ import { assert, assertEquals } from '@std/assert';
 import type { ApplyDriveEnvelope } from '../_shared/engine.ts';
 import { PgError } from '../_shared/pg.ts';
 import { fakeEngine, type FakeEngineScript } from '../_shared/testing/fake_engine.ts';
-import { EVENT, EVENT_2, mergeTarget, payload, response, STARTED_AT, TRIP, TRIP_2, USER } from '../_shared/testing/v3_fixtures.ts';
-import { handleFinalizeTrip, MAX_UPLOADS_PER_DAY, TZ_REFUSAL, UPLOAD_LIMIT_KEY } from './handler.ts';
+import { DASHCAM, EVENT, EVENT_2, mergeTarget, payload, response, STARTED_AT, TRIP, TRIP_2, USER } from '../_shared/testing/v3_fixtures.ts';
+import { dashcamOf, handleFinalizeTrip, MAX_UPLOADS_PER_DAY, TZ_REFUSAL, UPLOAD_LIMIT_KEY } from './handler.ts';
 
 const quiet = { warn: () => {}, error: () => {} };
 const freshContext = {
@@ -54,6 +54,96 @@ Deno.test('happy path: the spec example scores 142 − 10 = 132 inside one trans
   assertEquals(e.events.map((x) => [x.id, x.status, x.lat, x.measured]), [[EVENT, 'active', 40.72, { peakG: 0.42 }]]);
   assertEquals([e.isLoop, e.loopRepeat, e.safeMilesEarlierToday, e.payload.localDay, e.payload.end], [false, false, 0, '2026-10-05', { lat: 40.7306, lng: -73.9352 }]);
   assertEquals(res.headers.get('x-replayed'), null);
+});
+
+// ---------------------------------------------------------------------------------------------
+// DashPal
+// ---------------------------------------------------------------------------------------------
+const DROWSY = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+type Dashcam = NonNullable<ReturnType<typeof payload>['dashcam']>;
+const covered = (over: Partial<Dashcam> = {}): Dashcam => ({ deviceId: DASHCAM, movingS: 1500, coveredS: 1350, synced: true, ...over });
+const drowsyEvent = {
+  id: DROWSY,
+  type: 'drowsy' as const,
+  tier: 'severe' as const,
+  startedAt: STARTED_AT + 20 * 60_000,
+  durationS: 4,
+  lat: 40.725,
+  lng: -73.96,
+  measured: { source: 'dashcam' as const, speedMph: 48 },
+};
+
+Deno.test('a DashPal drive: 118 × 1.50 = 177 − 10 = 167; the seconds and the derived flag go to apply_drive', async () => {
+  const h = harness();
+  const res = await handleFinalizeTrip(post(payload({ dashcam: covered() })), h.deps);
+  assertEquals(res.status, 200);
+  const e = envelopeOf(h);
+  assertEquals([e.breakdown.streakMult, e.breakdown.dashcamMult, e.breakdown.mult, e.breakdown.gains, e.net], [1.2, 1.25, 1.5, 177, 167]);
+  assertEquals(e.dashcam, { deviceId: DASHCAM, movingS: 1500, coveredS: 1350, synced: true, on: true });
+  assertEquals(e.payload.dashcam, covered());
+  const body = await res.json();
+  assertEquals([body.breakdown.dashcamMult, body.breakdown.mult, body.net], [1.25, 1.5, 167]);
+});
+
+Deno.test('no bonus under 80 % coverage, under 60 s moving, or not synced at the end; the payload stays valid', async () => {
+  const cases: [Dashcam, string][] = [
+    [covered({ coveredS: 1199 }), 'coverage 79.9 %'],
+    [covered({ movingS: 59, coveredS: 59 }), 'moving 59 s'],
+    [covered({ synced: false }), 'not synced'],
+  ];
+  for (const [dc, why] of cases) {
+    const h = harness();
+    const res = await handleFinalizeTrip(post(payload({ dashcam: dc })), h.deps);
+    assertEquals(res.status, 200, why);
+    const e = envelopeOf(h);
+    assertEquals([e.dashcam.on, e.breakdown.dashcamMult, e.breakdown.mult, e.net], [false, 1, 1.2, 132], why);
+    assertEquals([e.dashcam.movingS, e.dashcam.coveredS, e.dashcam.deviceId], [dc.movingS, dc.coveredS, DASHCAM], why);
+  }
+  // exactly 80 % earns it
+  const h = harness();
+  await handleFinalizeTrip(post(payload({ dashcam: covered({ coveredS: 1200 }) })), h.deps);
+  assertEquals(envelopeOf(h).dashcam.on, true);
+});
+
+Deno.test('a payload without the dashcam block (an older app) scores as before and stores zero seconds', async () => {
+  const h = harness();
+  await handleFinalizeTrip(post(payload()), h.deps);
+  const e = envelopeOf(h);
+  assertEquals(e.dashcam, { deviceId: null, movingS: 0, coveredS: 0, synced: false, on: false });
+  assertEquals([e.payload.dashcam, e.breakdown.dashcamMult, e.breakdown.mult], [null, 1, 1.2]);
+});
+
+Deno.test('a drowsy event costs its points but keeps the clean bonus, adds 0 to the rating and is not counted as an active event', async () => {
+  const h = harness({ context: { ...freshContext, streak: { streak: 0, atRisk: false, freezes: 2, cleanRun: 0 } } });
+  const res = await handleFinalizeTrip(post(payload({ miles: 5, safeMiles: 5, events: [drowsyEvent] })), h.deps);
+  assertEquals(res.status, 200);
+  const e = envelopeOf(h);
+  assertEquals([e.breakdown.cleanBonus, e.breakdown.gains, e.breakdown.penalties, e.net, e.breakdown.ratingPenalty, e.breakdown.activeEventCount], [25, 75, 50, 25, 0, 0]);
+  assertEquals(e.events.map((x) => [x.id, x.type, x.status, x.measured]), [[DROWSY, 'drowsy', 'active', { source: 'dashcam', speedMph: 48 }]]);
+  // the streak sees a clean, net-positive drive
+  assertEquals([e.streak.outcome, e.streak.after.cleanRun], ['grew', 1]);
+});
+
+Deno.test('merge: DashPal seconds are summed over the target and the upload and the flag is derived from the sums, never OR-ed', async () => {
+  const target = (dashcam: { deviceId: string | null; movingS: number; coveredS: number; synced: boolean }) => ({ ...freshContext, merge: mergeTarget({ dashcam }) });
+  // the target alone was a DashPal drive; the union is not (600 of 3600 s covered)
+  const h1 = harness({ context: target({ deviceId: DASHCAM, movingS: 600, coveredS: 600, synced: true }) });
+  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, dashcam: covered({ movingS: 3000, coveredS: 0 }) })), h1.deps);
+  assertEquals(envelopeOf(h1).dashcam, { deviceId: DASHCAM, movingS: 3600, coveredS: 600, synced: true, on: false });
+  assertEquals([envelopeOf(h1).breakdown.dashcamMult, envelopeOf(h1).payload.dashcam?.movingS], [1, 3000]);
+  // neither part alone, the union does: 500 + 2900 of 600 + 3000 = 94 %
+  const h2 = harness({ context: target({ deviceId: DASHCAM, movingS: 600, coveredS: 500, synced: false }) });
+  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, dashcam: covered({ movingS: 3000, coveredS: 2900 }) })), h2.deps);
+  assertEquals(envelopeOf(h2).dashcam, { deviceId: DASHCAM, movingS: 3600, coveredS: 3400, synced: true, on: true });
+  // 15 mi, 14.8 safe, streak 4: 148 × (1.08 × 1.25 = 1.35) = 199.8 → 200, minus 10
+  assertEquals([envelopeOf(h2).breakdown.mult, envelopeOf(h2).breakdown.gains, envelopeOf(h2).net], [1.35, 200, 190]);
+  // synced comes from the upload (the newest part): absent there → not synced, no bonus
+  const h3 = harness({ context: target({ deviceId: DASHCAM, movingS: 3000, coveredS: 3000, synced: true }) });
+  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2 })), h3.deps);
+  assertEquals(envelopeOf(h3).dashcam, { deviceId: DASHCAM, movingS: 3000, coveredS: 3000, synced: false, on: false });
+  // the upload's device id wins over the target's
+  const both = dashcamOf(payload({ dashcam: covered({ deviceId: 'ffffffffffff' }) }), mergeTarget({ dashcam: { deviceId: DASHCAM, movingS: 1, coveredS: 1, synced: true } }));
+  assertEquals(both.deviceId, 'ffffffffffff');
 });
 
 Deno.test('a replay returns the stored response from the context and applies nothing', async () => {

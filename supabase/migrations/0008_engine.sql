@@ -80,6 +80,15 @@ language sql stable set search_path = public as $$
   from public.progress g where g.user_id = p_user
 $$;
 
+-- accepted disputes this league week in p_reason's auto-accept quota (3 each): camera_wrong
+-- ("DashPal got it wrong") has its own; hazard and wrong_limit share one
+create or replace function private.dispute_quota_used(p_user uuid, p_reason text) returns int
+language sql stable set search_path = public as $$
+  select count(*)::int from public.event_disputes d
+  where d.user_id = p_user and d.status = 'accepted' and d.created_at >= private.week_start(now())
+    and case when p_reason = 'camera_wrong' then d.reason = 'camera_wrong' else d.reason in ('hazard', 'wrong_limit') end
+$$;
+
 create or replace function private.not_driving_left(p_user uuid) returns int
 language sql stable set search_path = public as $$
   select greatest(0, 2 - (select count(*)::int from public.trips t
@@ -140,6 +149,8 @@ begin
       'miles', t.miles, 'safeMiles', t.safe_miles, 'nightMiles', t.night_miles, 'durationS', t.duration_s,
       'polyline', t.polyline,
       'events', private.trip_events_json(t.id),
+      'dashcam', jsonb_build_object('deviceId', t.dashcam_device_id, 'movingS', t.dashcam_moving_s,
+        'coveredS', t.dashcam_covered_s, 'synced', t.dashcam_synced),
       'isLoop', t.is_loop, 'loopRepeat', t.loop_repeat,
       'safeMilesEarlierToday', t.safe_miles_earlier_today,
       'streak', jsonb_build_object('streak', (t.progress_before ->> 'streak')::int, 'atRisk', (t.progress_before ->> 'at_risk')::boolean,
@@ -163,6 +174,23 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- apply_drive
 -- ---------------------------------------------------------------------------
+-- p.dashcam = { deviceId, movingS, coveredS, synced, on }: the DashPal seconds of what is stored
+-- (the union on a merge, summed by finalize-trip) and the DashPal-drive flag derived from them;
+-- p.payload.dashcam = the upload's own (kept on a merged-away row). Both optional: absent = none.
+create or replace function private.dashcam_valid(d jsonb, p_max int, p_with_on boolean) returns boolean
+language sql immutable set search_path = public as $$
+  select d is null or jsonb_typeof(d) = 'null' or (
+    jsonb_typeof(d) = 'object'
+    and (jsonb_typeof(d -> 'deviceId') = 'null' or d -> 'deviceId' is null or (jsonb_typeof(d -> 'deviceId') = 'string' and (d ->> 'deviceId') ~ '^[0-9a-f]{12}$'))
+    and jsonb_typeof(d -> 'movingS') = 'number' and jsonb_typeof(d -> 'coveredS') = 'number' and jsonb_typeof(d -> 'synced') = 'boolean'
+    and (d ->> 'movingS')::numeric = trunc((d ->> 'movingS')::numeric) and (d ->> 'coveredS')::numeric = trunc((d ->> 'coveredS')::numeric)
+    and (d ->> 'movingS')::numeric between 0 and p_max and (d ->> 'coveredS')::numeric between 0 and (d ->> 'movingS')::numeric
+    and (not p_with_on or (jsonb_typeof(d -> 'on') = 'boolean'
+      -- the one rule (scoring dashcamDrive): synced, >= 60 s moving, >= 80 % of it covered
+      and (d ->> 'on')::boolean = ((d ->> 'synced')::boolean and (d ->> 'movingS')::numeric >= 60
+                                   and (d ->> 'coveredS')::numeric * 100 >= 80 * (d ->> 'movingS')::numeric))))
+$$;
+
 create or replace function private.apply_drive(p jsonb) returns jsonb
 language plpgsql volatile set search_path = public as $$
 declare
@@ -189,7 +217,7 @@ declare
   v_snap jsonb;
   v_level_before int;
   v_level_after int;
-  v_n int; v_sp int; v_pk int; v_hs int; v_hb int; v_ha int; v_hc int;
+  v_n int; v_sp int; v_pk int; v_hs int; v_hb int; v_ha int; v_hc int; v_nd int;
   v_clean boolean;
   v_after jsonb;
   v_league jsonb;
@@ -198,6 +226,8 @@ declare
   v_resp jsonb;
   v_end_lat double precision; v_end_lng double precision;
   e jsonb;
+  dc jsonb;
+  pdc jsonb;
 begin
   if p is null or jsonb_typeof(p) <> 'object' or pg_column_size(p) > 1048576 then
     raise exception 'apply_drive needs an object under 1 MB' using errcode = 'invalid_parameter_value';
@@ -238,6 +268,13 @@ begin
   end if;
   if v_net not between -20000 and 20000 or coalesce((bd ->> 'ratingPenalty')::numeric, 0) not between 0 and 20000 then
     raise exception 'net or ratingPenalty is out of range' using errcode = 'invalid_parameter_value';
+  end if;
+  -- DashPal: the stored seconds and their flag (absent = none); the breakdown's x1.25 must agree with the flag
+  dc := case when jsonb_typeof(p -> 'dashcam') = 'object' then p -> 'dashcam' else null end;
+  pdc := case when jsonb_typeof(pl -> 'dashcam') = 'object' then pl -> 'dashcam' else null end;
+  if not private.dashcam_valid(p -> 'dashcam', 86400, true) or not private.dashcam_valid(pl -> 'dashcam', 43200, false)
+     or (bd ? 'dashcamMult' and (bd ->> 'dashcamMult')::numeric <> case when coalesce((dc ->> 'on')::boolean, false) then 1.25 else 1 end) then
+    raise exception 'dashcam seconds are out of range' using errcode = 'invalid_parameter_value';
   end if;
   if jsonb_typeof(pl -> 'end') = 'object' then
     v_end_lat := (pl -> 'end' ->> 'lat')::double precision;
@@ -288,21 +325,27 @@ begin
   v_level_before := (v_snap ->> 'level')::int;
 
   -- the trip row first (counts follow once the events are stored)
-  v_n := 0; v_sp := 0; v_pk := 0; v_hs := 0; v_hb := 0; v_ha := 0; v_hc := 0;
+  v_n := 0; v_sp := 0; v_pk := 0; v_hs := 0; v_hb := 0; v_ha := 0; v_hc := 0; v_nd := 0;
   v_clean := false;
   if v_merge is null then
     insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, safe_miles, night_miles, duration_s,
+        dashcam_device_id, dashcam_moving_s, dashcam_covered_s, dashcam_synced, dashcam_on,
         polyline, scored, reason, is_loop, loop_repeat, safe_miles_earlier_today, points_net, breakdown, rating_penalty,
-        n_events, n_speeding, n_pickup, handling_s, n_hard_brake, n_hard_accel, n_hard_corner, clean, streak_before,
+        n_events, n_speeding, n_pickup, handling_s, n_hard_brake, n_hard_accel, n_hard_corner, n_dashcam, clean, streak_before,
         progress_before, rev, scoring_version, app_version)
       values (v_user, v_client, v_started, v_ended, v_local_day, v_week, v_tz, v_miles, v_safe, v_night, v_dur,
+        dc ->> 'deviceId', coalesce((dc ->> 'movingS')::int, 0), coalesce((dc ->> 'coveredS')::int, 0),
+        coalesce((dc ->> 'synced')::boolean, false), coalesce((dc ->> 'on')::boolean, false),
         v_poly, v_scored, v_reason, coalesce((p ->> 'isLoop')::boolean, false), coalesce((p ->> 'loopRepeat')::boolean, false),
         coalesce((p ->> 'safeMilesEarlierToday')::numeric, 0), v_net, bd, coalesce((bd ->> 'ratingPenalty')::int, 0),
-        v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc, v_clean, coalesce((st -> 'before' ->> 'streak')::int, 0),
+        v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc, v_nd, v_clean, coalesce((st -> 'before' ->> 'streak')::int, 0),
         v_snap, 1, coalesce((p ->> 'scoringVersion')::int, 3), left(pl ->> 'appVersion', 32))
       returning id into v_trip;
   else
     update public.trips set ended_at = v_ended, miles = v_miles, safe_miles = v_safe, night_miles = v_night, duration_s = v_dur,
+        dashcam_device_id = dc ->> 'deviceId', dashcam_moving_s = coalesce((dc ->> 'movingS')::int, 0),
+        dashcam_covered_s = coalesce((dc ->> 'coveredS')::int, 0), dashcam_synced = coalesce((dc ->> 'synced')::boolean, false),
+        dashcam_on = coalesce((dc ->> 'on')::boolean, false),
         polyline = v_poly, scored = v_scored, reason = v_reason,
         loop_repeat = coalesce((p ->> 'loopRepeat')::boolean, loop_repeat), points_net = v_net, breakdown = bd,
         rating_penalty = coalesce((bd ->> 'ratingPenalty')::int, 0),
@@ -316,8 +359,10 @@ begin
   -- `removed` only if it already was (removal happens in apply_dispute alone), whatever the input says.
   for e in select x from jsonb_array_elements(ev) x loop
     if (e ->> 'id') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-       or e ->> 'type' not in ('speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling')
-       or e ->> 'tier' not in ('minor', 'moderate', 'severe') or (e ->> 'startedAt')::numeric is null or (e ->> 'durationS')::numeric is null then
+       or e ->> 'type' not in ('speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling', 'eyes_off', 'drowsy')
+       or e ->> 'tier' not in ('minor', 'moderate', 'severe') or (e ->> 'startedAt')::numeric is null or (e ->> 'durationS')::numeric is null
+       -- a DashPal event is severe only
+       or (e ->> 'type' in ('eyes_off', 'drowsy') and e ->> 'tier' <> 'severe') then
       raise exception 'event needs id, type, tier, startedAt and durationS' using errcode = 'invalid_parameter_value';
     end if;
     if (e ->> 'startedAt')::numeric not between extract(epoch from v_started) * 1000 - 60000 and extract(epoch from v_ended) * 1000 + 60000 then
@@ -339,28 +384,31 @@ begin
           status = case when public.trip_events.status = 'removed' then 'removed' else 'active' end;
   end loop;
 
-  -- counts from the stored rows (the input's status is never trusted); the breakdown must agree
-  select count(*), count(*) filter (where x.type = 'speeding'), count(*) filter (where x.type = 'phone_pickup'),
+  -- counts from the stored rows (the input's status is never trusted); the breakdown must agree.
+  -- DashPal events (eyes_off, drowsy) are counted apart: never in n_events, never break `clean`.
+  select count(*) filter (where x.type not in ('eyes_off', 'drowsy')), count(*) filter (where x.type = 'speeding'), count(*) filter (where x.type = 'phone_pickup'),
          least(172800, coalesce(sum(x.duration_s) filter (where x.type = 'phone_handling'), 0))::int,
          count(*) filter (where x.type = 'hard_brake'), count(*) filter (where x.type = 'hard_accel'),
-         count(*) filter (where x.type = 'hard_corner')
-    into v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc
+         count(*) filter (where x.type = 'hard_corner'), count(*) filter (where x.type in ('eyes_off', 'drowsy'))
+    into v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc, v_nd
     from public.trip_events x where x.trip_id = v_trip and x.status = 'active';
   if v_scored and coalesce((bd ->> 'activeEventCount')::int, v_n) <> v_n then
     raise exception 'events do not match the breakdown' using errcode = 'invalid_parameter_value';
   end if;
   v_clean := v_scored and v_n = 0;
   update public.trips set n_events = v_n, n_speeding = v_sp, n_pickup = v_pk, handling_s = v_hs, n_hard_brake = v_hb, n_hard_accel = v_ha,
-      n_hard_corner = v_hc, clean = v_clean
+      n_hard_corner = v_hc, n_dashcam = v_nd, clean = v_clean
     where id = v_trip;
 
-  -- the merged-away payload keeps its own row (unscored, pointing at the target)
+  -- the merged-away payload keeps its own row (unscored, pointing at the target), with its own DashPal seconds
   if v_merge is not null then
     insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, safe_miles, night_miles, duration_s,
+        dashcam_device_id, dashcam_moving_s, dashcam_covered_s, dashcam_synced,
         polyline, scored, merged_into, app_version)
       values (v_user, v_client, to_timestamp((pl ->> 'startedAt')::bigint / 1000.0), v_ended, (pl ->> 'localDay')::date,
         private.league_week(to_timestamp((pl ->> 'startedAt')::bigint / 1000.0)), pl ->> 'tz',
         (pl ->> 'miles')::numeric, (pl ->> 'safeMiles')::numeric, (pl ->> 'nightMiles')::numeric, (pl ->> 'durationS')::int,
+        pdc ->> 'deviceId', coalesce((pdc ->> 'movingS')::int, 0), coalesce((pdc ->> 'coveredS')::int, 0), coalesce((pdc ->> 'synced')::boolean, false),
         coalesce(pl ->> 'polyline', ''),
         false, v_trip, left(pl ->> 'appVersion', 32));
   end if;
@@ -459,9 +507,9 @@ begin
   perform private.revert_trip(p_user, t.id);
   update public.trips set not_driving = true, not_driving_at = now(), points_net = 0 where id = t.id;
   perform private.refresh_rating(p_user);
-  -- flag an account that mostly uses this on drives with events
-  select count(*), count(*) filter (where x.n_events > 0) into v_uses, v_with_events
-    from (select n_events from public.trips x where x.user_id = p_user and x.not_driving order by x.not_driving_at desc limit 4) x;
+  -- flag an account that mostly uses this on drives with events (DashPal events count too)
+  select count(*), count(*) filter (where x.n_events + x.n_dashcam > 0) into v_uses, v_with_events
+    from (select n_events, n_dashcam from public.trips x where x.user_id = p_user and x.not_driving order by x.not_driving_at desc limit 4) x;
   if v_uses >= 3 and v_with_events >= 3 then
     update public.profiles set flagged = true where id = p_user and not flagged;
   end if;
@@ -476,7 +524,9 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- dispute_context: locks the user's progress row (so two disputes in flight queue and the second
 -- reads the first's result), validates and decides; writes nothing. Returns what the function
--- needs to re-score (the stored input and context with the event marked removed).
+-- needs to re-score (the stored input and context with the event marked removed, and the drive's
+-- stored DashPal flag so the re-score keeps its x1.25). Reasons: hazard (hard_brake), wrong_limit
+-- (speeding), mounted (phone events), camera_wrong ("DashPal got it wrong": eyes_off, drowsy).
 create or replace function private.dispute_context(p_user uuid, p_client_trip_id uuid, p_event_id uuid, p_reason text) returns jsonb
 language plpgsql volatile set search_path = public as $$
 declare
@@ -489,8 +539,8 @@ begin
   if p_user is null or p_client_trip_id is null or p_event_id is null then
     raise exception 'user, clientTripId and eventId are required' using errcode = 'invalid_parameter_value';
   end if;
-  if p_reason is null or p_reason not in ('hazard', 'wrong_limit', 'mounted') then
-    raise exception 'reason must be hazard, wrong_limit or mounted' using errcode = 'invalid_parameter_value';
+  if p_reason is null or p_reason not in ('hazard', 'wrong_limit', 'mounted', 'camera_wrong') then
+    raise exception 'reason must be hazard, wrong_limit, mounted or camera_wrong' using errcode = 'invalid_parameter_value';
   end if;
   perform 1 from public.progress where user_id = p_user for update;
   if not found then
@@ -511,12 +561,12 @@ begin
     raise exception 'already disputed' using errcode = 'insufficient_privilege';
   end if;
   if (p_reason = 'hazard' and e.type <> 'hard_brake') or (p_reason = 'wrong_limit' and e.type <> 'speeding')
-     or (p_reason = 'mounted' and e.type not in ('phone_pickup', 'phone_handling')) then
+     or (p_reason = 'mounted' and e.type not in ('phone_pickup', 'phone_handling'))
+     or (p_reason = 'camera_wrong' and e.type not in ('eyes_off', 'drowsy')) then
     raise exception 'that reason does not apply to this event' using errcode = 'invalid_parameter_value';
   end if;
-  if p_reason in ('hazard', 'wrong_limit') then
-    select count(*) into v_used from public.event_disputes d
-      where d.user_id = p_user and d.status = 'accepted' and d.reason in ('hazard', 'wrong_limit') and d.created_at >= private.week_start(now());
+  if p_reason in ('hazard', 'wrong_limit', 'camera_wrong') then
+    v_used := private.dispute_quota_used(p_user, p_reason);
     if v_used < 3 then
       v_status := 'accepted';
     else
@@ -534,9 +584,9 @@ begin
   return jsonb_build_object(
     'tripId', t.id, 'clientTripId', t.client_trip_id, 'eventId', p_event_id, 'reason', p_reason,
     'status', v_status, 'rejectReason', v_why, 'scored', t.scored, 'oldNet', t.points_net,
-    'quotaLeft', case when p_reason in ('hazard', 'wrong_limit') then greatest(0, 3 - v_used) else null end,
+    'quotaLeft', case when p_reason in ('hazard', 'wrong_limit', 'camera_wrong') then greatest(0, 3 - v_used) else null end,
     'rescore', case when v_status = 'accepted' and t.scored then jsonb_build_object(
-      'input', jsonb_build_object('miles', t.miles, 'safeMiles', t.safe_miles, 'loopRepeat', t.loop_repeat,
+      'input', jsonb_build_object('miles', t.miles, 'safeMiles', t.safe_miles, 'loopRepeat', t.loop_repeat, 'dashcam', t.dashcam_on,
         'events', (select jsonb_agg(case when x ->> 'id' = p_event_id::text then x || '{"status":"removed"}'::jsonb else x end)
                    from jsonb_array_elements(private.trip_events_json(t.id)) x)),
       'ctx', jsonb_build_object('streak', t.streak_before, 'safeMilesEarlierToday', t.safe_miles_earlier_today)) else null end);
@@ -559,12 +609,12 @@ declare
   v_delta int := 0;
   t public.trips%rowtype;
   e public.trip_events%rowtype;
-  v_n int; v_sp int; v_pk int; v_hs int; v_hb int; v_ha int; v_hc int;
+  v_n int; v_sp int; v_pk int; v_hs int; v_hb int; v_ha int; v_hc int; v_nd int;
   v_why text := p ->> 'rejectReason';
   v_used int;
   v_left int;
 begin
-  if v_user is null or v_trip is null or v_event is null or v_reason not in ('hazard', 'wrong_limit', 'mounted')
+  if v_user is null or v_trip is null or v_event is null or v_reason not in ('hazard', 'wrong_limit', 'mounted', 'camera_wrong')
      or v_status not in ('accepted', 'rejected') or (bd is not null and jsonb_typeof(bd) <> 'object') or pg_column_size(p) > 262144 then
     raise exception 'apply_dispute needs user, tripId, eventId, reason and status' using errcode = 'invalid_parameter_value';
   end if;
@@ -581,18 +631,16 @@ begin
     raise exception 'already disputed' using errcode = 'insufficient_privilege';
   end if;
   -- the weekly quota, re-counted under the lock: the decision in dispute_context may be stale
-  if v_status = 'accepted' and v_reason in ('hazard', 'wrong_limit') then
-    select count(*) into v_used from public.event_disputes d
-      where d.user_id = v_user and d.status = 'accepted' and d.reason in ('hazard', 'wrong_limit') and d.created_at >= private.week_start(now());
+  if v_status = 'accepted' and v_reason in ('hazard', 'wrong_limit', 'camera_wrong') then
+    v_used := private.dispute_quota_used(v_user, v_reason);
     if v_used >= 3 then
       v_status := 'rejected';
       v_why := 'quota';
     end if;
   end if;
   insert into public.event_disputes (trip_id, client_event_id, user_id, reason, status) values (v_trip, v_event, v_user, v_reason, v_status);
-  -- the quota left after this dispute, counted under the lock
-  select greatest(0, 3 - count(*))::int into v_left from public.event_disputes d
-    where d.user_id = v_user and d.status = 'accepted' and d.reason in ('hazard', 'wrong_limit') and d.created_at >= private.week_start(now());
+  -- the quota left after this dispute, counted under the lock (camera_wrong's own; otherwise hazard + wrong_limit)
+  v_left := greatest(0, 3 - private.dispute_quota_used(v_user, v_reason));
   if v_status = 'rejected' then
     return jsonb_build_object('tripId', v_trip, 'eventId', v_event, 'status', 'rejected', 'rejectReason', v_why, 'quotaLeft', v_left,
       'net', t.points_net, 'delta', 0, 'breakdown', case when t.scored then t.breakdown else null end, 'progress', private.progress_json(v_user, false));
@@ -609,11 +657,12 @@ begin
       raise exception 'net or ratingPenalty is out of range' using errcode = 'invalid_parameter_value';
     end if;
     v_delta := v_net - v_old;
-    select count(*), count(*) filter (where x.type = 'speeding'), count(*) filter (where x.type = 'phone_pickup'),
+    -- as in apply_drive: DashPal events are counted apart, never in n_events or `clean`
+    select count(*) filter (where x.type not in ('eyes_off', 'drowsy')), count(*) filter (where x.type = 'speeding'), count(*) filter (where x.type = 'phone_pickup'),
            least(172800, coalesce(sum(x.duration_s) filter (where x.type = 'phone_handling'), 0))::int,
            count(*) filter (where x.type = 'hard_brake'), count(*) filter (where x.type = 'hard_accel'),
-           count(*) filter (where x.type = 'hard_corner')
-      into v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc
+           count(*) filter (where x.type = 'hard_corner'), count(*) filter (where x.type in ('eyes_off', 'drowsy'))
+      into v_n, v_sp, v_pk, v_hs, v_hb, v_ha, v_hc, v_nd
       from public.trip_events x where x.trip_id = v_trip and x.status = 'active';
     -- a breakdown scored over a different set of active events (another dispute landed in between): retry
     if coalesce((bd ->> 'activeEventCount')::int, v_n) <> v_n then
@@ -623,7 +672,7 @@ begin
       where x.trip_id = v_trip;
     update public.trips set points_net = v_net, breakdown = bd, rating_penalty = coalesce((bd ->> 'ratingPenalty')::int, rating_penalty),
         n_events = v_n, n_speeding = v_sp, n_pickup = v_pk, handling_s = v_hs, n_hard_brake = v_hb, n_hard_accel = v_ha, n_hard_corner = v_hc,
-        clean = (v_n = 0)
+        n_dashcam = v_nd, clean = (v_n = 0)
       where id = v_trip;
     if v_delta <> 0 or greatest(0, v_net) <> greatest(0, v_old) then
       insert into public.points_ledger (user_id, key, amount, kind, trip_id, league_week)

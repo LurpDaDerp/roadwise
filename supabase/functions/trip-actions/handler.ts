@@ -2,7 +2,8 @@
 // "Disputes"): `dispute { clientTripId, eventId, reason }` and `not_driving { clientTripId }`.
 //
 // The SQL owns every rule (latest drive only, 24 h, 2 a month, 7 days, 3 auto-accepts
-// a week, the mounted test, "already disputed"); this function maps the request to one engine
+// a week, 3 more a week for "DashPal got it wrong", the mounted test, "already disputed"); this
+// function maps the request to one engine
 // transaction, re-scores an accepted dispute with the shared scorer from the stored input and
 // context (streak never re-evaluated), and turns the writers' fixed refusals into codes the device
 // can show. Each action is one request from the device's queue; the writers refuse a repeat
@@ -104,6 +105,8 @@ export async function handleTripAction(req: Request, deps: ActionsDeps): Promise
             miles: d.rescore.input.miles,
             safeMiles: d.rescore.input.safeMiles,
             loopRepeat: d.rescore.input.loopRepeat,
+            // a DashPal drive keeps its ×1.25, so an accepted dispute never lowers the net
+            dashcam: d.rescore.input.dashcam,
             events: d.rescore.input.events as DriveEvent[],
           },
           d.rescore.ctx

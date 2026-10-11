@@ -30,6 +30,7 @@ const disputeAccepted: DisputeContext = {
       miles: 12,
       safeMiles: 11.8,
       loopRepeat: false,
+      dashcam: false,
       events: [
         { id: EVENT, type: 'hard_brake', tier: 'minor', startedAt: STARTED_AT, durationS: 2, units: null, stoppedInTraffic: null, zone: null, status: 'removed', lat: null, lng: null, measured: {}, penalty: 10 },
         { id: EVENT_2, type: 'hard_brake', tier: 'minor', startedAt: STARTED_AT + 1000, durationS: 2, units: null, stoppedInTraffic: null, zone: null, status: 'active', lat: null, lng: null, measured: {}, penalty: 10 },
@@ -92,6 +93,61 @@ Deno.test('dispute accepted: the stored input is re-scored with the event remove
   assertEquals(e.breakdown?.streakMult, 1.2);
   assertEquals(body.breakdown.events, [{ id: EVENT_2, penalty: 10 }]);
   assertEquals(body.breakdown.net, 132);
+});
+
+type Stored = DisputeContext['rescore'] extends infer R ? (R extends { input: { events: (infer E)[] } } ? E : never) : never;
+const stored = (id: string, type: 'drowsy' | 'hard_brake', status: 'active' | 'removed', at: number): Stored => ({
+  id,
+  type,
+  tier: type === 'hard_brake' ? 'minor' : 'severe',
+  startedAt: STARTED_AT + at,
+  durationS: 2,
+  units: null,
+  stoppedInTraffic: null,
+  zone: null,
+  status,
+  lat: null,
+  lng: null,
+  measured: type === 'drowsy' ? { source: 'dashcam' } : {},
+  penalty: 0,
+});
+
+Deno.test('camera_wrong on a DashPal drive: re-scored with the ×1.25 kept, so the dispute never lowers the net', async () => {
+  const DROWSY = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  // 40 mi, streak 10: gains 600 at ×1.50 (DashPal); 480 at ×1.20 would be a −70 "refund"
+  const ctx = (events: Stored[], oldNet: number, reason: 'camera_wrong' | 'hazard'): DisputeContext => ({
+    ...disputeAccepted,
+    reason,
+    eventId: events[0].id,
+    oldNet,
+    rescore: { input: { miles: 40, safeMiles: 40, loopRepeat: false, dashcam: true, events }, ctx: { streak: 10, safeMilesEarlierToday: 0 } },
+  });
+  // before: 600 − 50 (drowsy) − 10 (brake) = 540; the drowsy was wrong → 600 − 10 = 590
+  const h = harness({ disputeContext: ctx([stored(DROWSY, 'drowsy', 'removed', 1000), stored(EVENT_2, 'hard_brake', 'active', 2000)], 540, 'camera_wrong') });
+  const res = await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: DROWSY, reason: 'camera_wrong' }), h.deps);
+  assertEquals(res.status, 200);
+  const e = h.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
+  assertEquals([e.reason, e.breakdown?.dashcamMult, e.breakdown?.mult, e.breakdown?.gains, e.net], ['camera_wrong', 1.25, 1.5, 600, 590]);
+  assertEquals(e.net! - 540 >= 0, true);
+  // a hazard on a DashPal drive that also has a drowsy: the brake goes, the drowsy stays charged and does not
+  // break the now-clean drive: (400 + 25) × 1.5 = 637.5 → 638, − 50
+  const h2 = harness({ disputeContext: ctx([stored(EVENT, 'hard_brake', 'removed', 1000), stored(DROWSY, 'drowsy', 'active', 2000)], 540, 'hazard') });
+  await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), h2.deps);
+  const e2 = h2.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
+  assertEquals([e2.breakdown?.activeEventCount, e2.breakdown?.cleanBonus, e2.breakdown?.penalties, e2.net], [0, 25, 50, 588]);
+  assertEquals(e2.net! - 540 >= 0, true);
+});
+
+Deno.test('every reason the sheet offers passes the contract; anything else is a 400 before the engine', async () => {
+  for (const reason of ['hazard', 'wrong_limit', 'mounted', 'camera_wrong']) {
+    const h = harness();
+    const res = await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason }), h.deps);
+    assertEquals(res.status, 200, reason);
+    assertEquals((h.fake.calls.find((c) => c.fn === 'disputeContext')!.args as { reason: string }).reason, reason);
+  }
+  const h = harness();
+  assertEquals((await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'camera' }), h.deps)).status, 400);
+  assertEquals(h.fake.calls, []);
 });
 
 Deno.test('dispute rejected: recorded without a re-score; the reason comes back', async () => {

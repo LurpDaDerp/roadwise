@@ -1,6 +1,14 @@
 import * as barrel from '../src';
 import {
   ACHIEVEMENTS,
+  CAMERA_DISPUTE_AUTO_PER_WEEK,
+  DASHCAM_DROWSY_GAP_S,
+  DASHCAM_EYES_OFF_GAP_S,
+  DASHCAM_MIN_COVERAGE,
+  DASHCAM_MIN_MOVING_S,
+  DASHCAM_MIN_MPH,
+  DASHCAM_PHONE_OVERLAP_S,
+  DISPUTE_AUTO_PER_WEEK,
   HARD_ACCEL_G,
   HARD_BRAKE_G,
   HARD_CORNER_G,
@@ -28,6 +36,12 @@ test('detection thresholds match the spec', () => {
   expect(SPEEDING_MIN_S).toEqual({ default: 5, severe: 3 });
   expect(MIN_SCORED_MILES).toBe(0.5);
   expect(MERGE_DIST_M).toBe(402);
+});
+
+test('the DashPal rules match the plan', () => {
+  expect([DASHCAM_MIN_MPH, DASHCAM_DROWSY_GAP_S, DASHCAM_EYES_OFF_GAP_S, DASHCAM_MIN_MOVING_S, DASHCAM_MIN_COVERAGE]).toEqual([10, 600, 300, 60, 0.8]);
+  expect(DASHCAM_PHONE_OVERLAP_S).toBe(5);
+  expect([CAMERA_DISPUTE_AUTO_PER_WEEK, DISPUTE_AUTO_PER_WEEK]).toEqual([3, 3]);
 });
 
 test('the barrel re-exports the v3 constants', () => {

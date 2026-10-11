@@ -239,7 +239,7 @@ select pg_temp.drive('00000000-0000-0000-0000-000000000001', '77777777-7777-4777
   '[{"id":"b1b1b1b1-0000-4000-8000-000000000001","type":"phone_pickup","tier":"severe","penalty":40}]', null, '{"ratingPenalty": 40}');
 select is((select row(miles_30d, clean_miles_30d, rating_penalty_30d, safety_rating, ranked)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
   row(29.00, 17.00, 40.00, 86.2, true)::text, '29 miles: ranked; R = 40/29*100 = 138 -> 86.2; clean miles exclude the drives with events');
-select is(private.stat_sums('00000000-0000-0000-0000-000000000001', null), '{"miles": 29.00, "drives": 4, "pickups": 1, "durationS": 4680, "hardAccel": 0, "hardBrake": 1, "speeding": 0, "handlingS": 0, "hardCorner": 0, "nightMiles": 0.00, "cleanDrives": 2}'::jsonb,
+select is(private.stat_sums('00000000-0000-0000-0000-000000000001', null), '{"miles": 29.00, "drives": 4, "pickups": 1, "durationS": 4680, "hardAccel": 0, "hardBrake": 1, "speeding": 0, "handlingS": 0, "hardCorner": 0, "nightMiles": 0.00, "cleanDrives": 2, "dashcamDrives": 0, "dashcamEvents": 0}'::jsonb,
   'stat sums cover the kept scored drives only');
 update public.trips set started_at = started_at - interval '32 days', ended_at = ended_at - interval '32 days' where client_trip_id = '77777777-7777-4777-8777-777777777777';
 update public.progress set rating_updated_at = now() - interval '21 hours' where user_id = '00000000-0000-0000-0000-000000000001';

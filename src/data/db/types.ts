@@ -25,8 +25,8 @@ export type EventStatus = 'active' | 'removed';
 export type DisputeStatus = 'none' | 'pending' | 'accepted' | 'rejected';
 export const DISPUTE_STATUSES: readonly DisputeStatus[] = ['none', 'pending', 'accepted', 'rejected'];
 
-/** The reasons the summary's Report sheet offers (plan §4 "Disputes"). */
-export const DISPUTE_REASONS = ['hazard', 'wrong_limit', 'mounted'] as const;
+/** The reasons the summary's Report sheet offers (plan §4 "Disputes"); `camera_wrong` is "DashPal got it wrong". */
+export const DISPUTE_REASONS = ['hazard', 'wrong_limit', 'mounted', 'camera_wrong'] as const;
 export type DisputeReason = (typeof DISPUTE_REASONS)[number];
 
 export interface TripRow {

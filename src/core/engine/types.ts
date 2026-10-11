@@ -78,6 +78,8 @@ export interface EventMeasured {
   limitMph?: number;
   peakG?: number;
   mounted?: boolean;
+  /** `dashcam` on (and only on) a DashPal event (`eyes_off`, `drowsy`); the phone's own detectors never set it. */
+  source?: 'dashcam';
 }
 
 /** A scorable v3 event as a detector closes it. Coordinates are added at finalize from the track. */

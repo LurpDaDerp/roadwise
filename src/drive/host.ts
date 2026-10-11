@@ -299,11 +299,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     } catch (e) {
       report(e, 'dashcam');
     }
-    // `dashcam` joins the scoring input with the DashPal scoring work; spread so this compiles
-    // before and after that field exists.
-    const dashcamInput: Record<string, unknown> = dashcamOn ? { dashcam: true } : {};
     const bd = scoreDrive(
-      { miles, safeMiles: Math.min(miles, metersToMiles(s.safeDistanceM)), events: s.events.map(({ measured: _m, ...e }) => e), ...dashcamInput },
+      { miles, safeMiles: Math.min(miles, metersToMiles(s.safeDistanceM)), events: s.events.map(({ measured: _m, ...e }) => e), dashcam: dashcamOn },
       pointsCtx
     );
     return bd.scored ? bd.net : 0;

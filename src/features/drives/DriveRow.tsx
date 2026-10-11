@@ -19,6 +19,8 @@ const COUNT_TYPES: [keyof DriveCounts, EventType][] = [
   ['hardBrake', 'hard_brake'],
   ['hardAccel', 'hard_accel'],
   ['hardCorner', 'hard_corner'],
+  ['eyesOff', 'eyes_off'],
+  ['drowsy', 'drowsy'],
 ];
 
 /** The event types present on a drive with how many of each, in a fixed order. */

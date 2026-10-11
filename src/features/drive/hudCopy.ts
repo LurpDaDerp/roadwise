@@ -22,6 +22,8 @@ export const hudCopy = {
     hard_corner: 'Sharp turn',
     phone_pickup: 'Phone',
     phone_handling: 'Phone',
+    eyes_off: 'Eyes up',
+    drowsy: 'Take a break',
   } satisfies Record<EventType, string>,
   weatherLabel: (words: string) => `Weather alert: ${words}`,
   points: {

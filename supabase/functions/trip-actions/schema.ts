@@ -3,8 +3,8 @@
 import { z } from 'zod';
 import { DriveBreakdownSchema } from '../_shared/payload.ts';
 
-/** The reason sheet; `not_driving` routes to the whole-drive action. */
-export const DISPUTE_REASONS = ['hazard', 'wrong_limit', 'mounted', 'not_driving'] as const;
+/** The reason sheet; `not_driving` routes to the whole-drive action; `camera_wrong` is for a DashPal event. */
+export const DISPUTE_REASONS = ['hazard', 'wrong_limit', 'mounted', 'camera_wrong', 'not_driving'] as const;
 export type DisputeReason = (typeof DISPUTE_REASONS)[number];
 
 export const DisputeActionSchema = z
@@ -39,7 +39,7 @@ export const DisputeResultSchema = z.object({
   eventId: z.uuid(),
   status: z.enum(['accepted', 'rejected']),
   rejectReason: z.enum(['quota', 'not_mounted']).nullable(),
-  /** Hazard / wrong-limit auto-accepts left this week, counted under the lock after this dispute. */
+  /** Auto-accepts left this week in this reason's quota (hazard + wrong-limit, or camera_wrong alone), counted under the lock after this dispute. */
   quotaLeft: z.number().int().min(0),
   net: z.number().int(),
   delta: z.number().int(),

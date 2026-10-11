@@ -4,9 +4,9 @@
 //
 // Pure and deterministic: no clock, no randomness, no imports outside this package.
 import { clamp, roundTo } from './num';
-import { MIN_SCORED_MILES } from './thresholds';
+import { DASHCAM_MIN_COVERAGE, DASHCAM_MIN_MOVING_S, MIN_SCORED_MILES } from './thresholds';
 
-export const SCORING_VERSION = 3;
+export const SCORING_VERSION = 4;
 
 export type EventType =
   | 'speeding'
@@ -14,7 +14,20 @@ export type EventType =
   | 'hard_accel'
   | 'hard_corner'
   | 'phone_pickup'
-  | 'phone_handling';
+  | 'phone_handling'
+  | 'eyes_off'
+  | 'drowsy';
+
+/**
+ * The event types only the DashPal dashcam reports (eyes off the road with no return, eyes closed):
+ * severe only. They cost points like any event, but never count toward the Safety Rating, the
+ * clean-drive check or `activeEventCount`.
+ */
+export const DASHCAM_EVENT_TYPES = ['eyes_off', 'drowsy'] as const satisfies readonly EventType[];
+export type DashcamEventType = (typeof DASHCAM_EVENT_TYPES)[number];
+
+export const isDashcamType = (type: EventType): type is DashcamEventType =>
+  (DASHCAM_EVENT_TYPES as readonly EventType[]).includes(type);
 
 /** Colour: minor = yellow, moderate = orange, severe = red. */
 export type Tier = 'minor' | 'moderate' | 'severe';
@@ -27,7 +40,7 @@ export interface DriveEvent {
   type: EventType;
   /**
    * speeding: minor | moderate | severe; harsh: minor | severe; phone_pickup: severe;
-   * phone_handling: moderate (≤30 s) | severe (>30 s).
+   * phone_handling: moderate (≤30 s) | severe (>30 s); eyes_off and drowsy (DashPal): severe.
    */
   tier: Tier;
   /** epoch ms */
@@ -55,6 +68,8 @@ export const BASE_PENALTY = {
   phone_pickup: 40,
   phone_pickup_stopped: 20,
   phone_handling_per_unit: 10,
+  eyes_off: 40,
+  drowsy: 50,
 } as const;
 
 /** Points per credited safe mile, and the clean-drive bonus (from `CLEAN_BONUS_MIN_MILES`). */
@@ -66,6 +81,30 @@ export const DAILY_FULL_MILES = 40;
 export const DAILY_HALF_MILES = 100;
 export const STREAK_STEP = 0.02;
 export const STREAK_MULT_CAP = 1.3;
+/** A DashPal drive (`dashcamDrive`) multiplies gains by this, on top of the streak multiplier… */
+export const DASHCAM_MULT = 1.25;
+/** …and the two together never pass this. */
+export const MULT_CAP = 1.5;
+
+/** The DashPal seconds a drive reports: moving at 5 mph or more, and of those, watched by the dashcam. */
+export interface DashcamSeconds {
+  movingS: number;
+  coveredS: number;
+  /** The phone had every dashcam event persisted within 30 s of the drive's end. */
+  synced: boolean;
+}
+
+/**
+ * Whether a drive is a DashPal drive (×1.25 on gains): synced at the end, at least
+ * `DASHCAM_MIN_MOVING_S` moving and the dashcam watching for at least `DASHCAM_MIN_COVERAGE` of
+ * it. Integer arithmetic on whole seconds, so the device and the server always agree.
+ */
+export function dashcamDrive(d: DashcamSeconds | null | undefined): boolean {
+  if (!d || d.synced !== true) return false;
+  const moving = Number.isFinite(d.movingS) ? Math.max(0, Math.floor(d.movingS)) : 0;
+  const covered = Number.isFinite(d.coveredS) ? Math.max(0, Math.floor(d.coveredS)) : 0;
+  return moving >= DASHCAM_MIN_MOVING_S && covered * 100 >= Math.round(DASHCAM_MIN_COVERAGE * 100) * moving;
+}
 
 /** T(L): tolerance over the posted limit, mph. Fixed at 3 in a school or construction zone. */
 export function speedTolerance(limitMph: number, zone?: Zone | null): number {
@@ -108,11 +147,17 @@ export function basePenalty(e: DriveEvent): number {
       return e.stoppedInTraffic ? BASE_PENALTY.phone_pickup_stopped : BASE_PENALTY.phone_pickup;
     case 'phone_handling':
       return BASE_PENALTY.phone_handling_per_unit * units(e);
+    case 'eyes_off':
+    case 'drowsy':
+      return BASE_PENALTY[e.type];
   }
 }
 
-/** What the event adds to the Safety Rating's penalty sum: the base penalty only. */
-export const ratingPenalty = (e: DriveEvent): number => basePenalty(e);
+/**
+ * What the event adds to the Safety Rating's penalty sum: the base penalty only, and nothing for a
+ * DashPal event (the rating measures what every phone sees, so owners and non-owners compare).
+ */
+export const ratingPenalty = (e: DriveEvent): number => (isDashcamType(e.type) ? 0 : basePenalty(e));
 
 const repeatMult = (repeatIndex: number): number => (repeatIndex <= 0 ? 1 : repeatIndex === 1 ? 1.25 : 1.5);
 
@@ -144,6 +189,8 @@ export interface DriveInput {
   events: DriveEvent[];
   /** Repeats a recent short loop → credited miles halved. */
   loopRepeat?: boolean;
+  /** A DashPal drive (`dashcamDrive` of its seconds): gains × `DASHCAM_MULT`. Absent: false. */
+  dashcam?: boolean;
 }
 
 export interface DriveContext {
@@ -160,11 +207,15 @@ export interface DriveBreakdown {
   creditedMiles: number;
   /** creditedMiles × 10 (unrounded). */
   milePoints: number;
-  /** 25 iff miles ≥ 2, zero active events, creditedMiles > 0 and not a loop repeat. */
+  /** 25 iff miles ≥ 2, zero active non-DashPal events, creditedMiles > 0 and not a loop repeat. */
   cleanBonus: 0 | 25;
-  /** M_gain: the streak multiplier, 1 + 0.02 × streak capped at 1.30. Scales gains only. */
+  /** The streak multiplier, 1 + 0.02 × streak capped at 1.30. */
   streakMult: number;
-  /** round((milePoints + cleanBonus) × streakMult) */
+  /** `DASHCAM_MULT` on a DashPal drive, else 1. */
+  dashcamMult: 1 | 1.25;
+  /** M_gain: min(1.50, streakMult × dashcamMult), 4 dp. Scales gains only. */
+  mult: number;
+  /** round((milePoints + cleanBonus) × mult) */
   gains: number;
   /** min(1, 0.5 + miles / 6) */
   shortScale: number;
@@ -173,16 +224,19 @@ export interface DriveBreakdown {
   penalties: number;
   /** gains − penalties */
   net: number;
-  /** Σ ratingPenalty of active events. */
+  /** Σ ratingPenalty of active events (a DashPal event adds 0). */
   ratingPenalty: number;
+  /** Active events that are not DashPal events: the clean check, the streak's "clean" and the server's `n_events`. */
   activeEventCount: number;
 }
 
 /** Score one drive. Deterministic; does not mutate its input. */
 export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown {
   const streakMult = nextMultiplier(ctx.streak);
+  const dashcamMult: 1 | 1.25 = input.dashcam === true ? DASHCAM_MULT : 1;
+  const mult = Math.min(MULT_CAP, roundTo(streakMult * dashcamMult, 4));
   const shortScale = Math.min(1, 0.5 + Math.max(0, input.miles) / 6);
-  const base = { streakMult, shortScale };
+  const base = { streakMult, dashcamMult, mult, shortScale };
 
   if (!(input.miles >= MIN_SCORED_MILES)) {
     return {
@@ -211,11 +265,13 @@ export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown
     .filter(isActive)
     .slice()
     .sort((x, y) => x.startedAt - y.startedAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+  // DashPal events cost points (below) but never break a clean drive.
+  const phoneCount = active.filter((e) => !isDashcamType(e.type)).length;
   // No bonus once the daily cap is used up or on a repeated loop, so short clean loops can't farm it.
   const earnsBonus =
-    input.miles >= CLEAN_BONUS_MIN_MILES && active.length === 0 && creditedMiles > 0 && !input.loopRepeat;
+    input.miles >= CLEAN_BONUS_MIN_MILES && phoneCount === 0 && creditedMiles > 0 && !input.loopRepeat;
   const cleanBonus: 0 | 25 = earnsBonus ? CLEAN_BONUS : 0;
-  const gains = roundTo((milePoints + cleanBonus) * streakMult);
+  const gains = roundTo((milePoints + cleanBonus) * mult);
 
   const seen: Partial<Record<EventType, number>> = {};
   let penalties = 0;
@@ -241,6 +297,6 @@ export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown
     penalties,
     net: gains - penalties,
     ratingPenalty: rating,
-    activeEventCount: active.length,
+    activeEventCount: phoneCount,
   };
 }

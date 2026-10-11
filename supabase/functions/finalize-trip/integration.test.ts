@@ -9,7 +9,7 @@
 import { assert, assertEquals } from '@std/assert';
 import postgres from 'postgres';
 import { createEngine } from '../_shared/engine.ts';
-import { EVENT, lineOfMiles, payload, STARTED_AT, TRIP, TRIP_2 } from '../_shared/testing/v3_fixtures.ts';
+import { DASHCAM, EVENT, lineOfMiles, payload, STARTED_AT, TRIP, TRIP_2 } from '../_shared/testing/v3_fixtures.ts';
 import { handleTripAction } from '../trip-actions/handler.ts';
 import { handleFinalizeTrip } from './handler.ts';
 
@@ -119,6 +119,71 @@ Deno.test({
       assertEquals(typeof STARTED_AT, 'number');
     } finally {
       await sql`delete from auth.users where id = ${USER}::uuid`;
+      await engine.close();
+      await sql.end({ timeout: 5 });
+    }
+  },
+});
+
+Deno.test({
+  name: 'DashPal against the local stack: the x1.25, the stored seconds, a drowsy kept out of clean, hazard and camera_wrong disputes',
+  ignore: !DB_URL,
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    const sql = postgres(DB_URL!, { max: 1, prepare: false });
+    const engine = createEngine(DB_URL!);
+    const user = crypto.randomUUID();
+    const deps = { verifyJwt: () => Promise.resolve(user), engine, log: quiet };
+    const DROWSY = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const started = Date.now() - 90 * 60_000;
+    const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(started));
+    const drive = payload({
+      startedAt: started,
+      endedAt: started + 30 * 60_000,
+      localDay,
+      events: [
+        { ...payload().events[0], startedAt: started + 10 * 60_000 },
+        { id: DROWSY, type: 'drowsy', tier: 'severe', startedAt: started + 20 * 60_000, durationS: 4, lat: 40.725, lng: -73.96, measured: { source: 'dashcam', speedMph: 48 } },
+      ],
+      dashcam: { deviceId: DASHCAM, movingS: 1500, coveredS: 1350, synced: true },
+    });
+    try {
+      await sql`insert into auth.users (id, email) values (${user}::uuid, ${`it-${user}@example.com`})`;
+      await sql`update public.profiles set username = ${'dp_' + user.slice(0, 8)}, onboarded_at = now() where id = ${user}::uuid`;
+
+      // streak 0, DashPal: 118 x 1.25 = 147.5 -> 148, minus 10 (brake) and 50 (drowsy)
+      const res = await handleFinalizeTrip(post('finalize-trip', drive), deps);
+      assertEquals(res.status, 200);
+      const r = await res.json();
+      assertEquals([r.net, r.breakdown.dashcamMult, r.breakdown.mult, r.breakdown.gains, r.breakdown.penalties, r.breakdown.ratingPenalty, r.breakdown.activeEventCount], [88, 1.25, 1.25, 148, 60, 10, 1]);
+      const [t1] = await sql`select dashcam_device_id, dashcam_moving_s, dashcam_covered_s, dashcam_synced, dashcam_on, n_events, n_dashcam, clean, rating_penalty, scoring_version
+        from public.trips where id = ${r.tripId}::uuid`;
+      assertEquals(
+        [t1.dashcam_device_id, t1.dashcam_moving_s, t1.dashcam_covered_s, t1.dashcam_synced, t1.dashcam_on, t1.n_events, t1.n_dashcam, t1.clean, t1.rating_penalty, t1.scoring_version],
+        [DASHCAM, 1500, 1350, true, true, 1, 1, false, 10, 4]
+      );
+
+      // the brake was a hazard: the drowsy stays charged and no longer stands between the drive and clean
+      const hazard = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), deps);
+      assertEquals(hazard.status, 200);
+      const h = await hazard.json();
+      // (118 + 25) x 1.25 = 178.75 -> 179, minus 50
+      assertEquals([h.status, h.net, h.delta, h.quotaLeft, h.breakdown.cleanBonus, h.breakdown.dashcamMult], ['accepted', 129, 41, 2, 25, 1.25]);
+      const [t2] = await sql`select n_events, n_dashcam, clean from public.trips where id = ${r.tripId}::uuid`;
+      assertEquals([t2.n_events, t2.n_dashcam, t2.clean], [0, 1, true]);
+
+      // "DashPal got it wrong": its own quota, re-scored as the DashPal drive it was
+      const wrong = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: DROWSY, reason: 'camera_wrong' }), deps);
+      assertEquals(wrong.status, 200);
+      const w = await wrong.json();
+      assertEquals([w.status, w.net, w.delta, w.quotaLeft, w.breakdown.gains], ['accepted', 179, 50, 2, 179]);
+      const [t3] = await sql`select n_dashcam, points_net from public.trips where id = ${r.tripId}::uuid`;
+      assertEquals([t3.n_dashcam, t3.points_net], [0, 179]);
+      const again = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'camera_wrong' }), deps);
+      assertEquals([again.status, (await again.json()).code], [409, 'already_disputed']);
+    } finally {
+      await sql`delete from auth.users where id = ${user}::uuid`;
       await engine.close();
       await sql.end({ timeout: 5 });
     }

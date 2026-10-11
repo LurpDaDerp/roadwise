@@ -9,6 +9,7 @@
 // maps. The handlers never see a query builder or a column name.
 import postgres, { type TransactionSql } from 'postgres';
 import { z } from 'zod';
+import { EVENT_TYPES_V3 } from './payload.ts';
 import { PgError } from './pg.ts';
 import type { DriveBreakdown, DriveEvent } from './scoring/index';
 
@@ -18,7 +19,7 @@ const Num = z.coerce.number();
 /** A stored event as `private.trip_events_json` returns it: a `DriveEvent` plus where and what was measured. */
 export const StoredEventSchema = z.object({
   id: Uuid,
-  type: z.enum(['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling']),
+  type: z.enum(EVENT_TYPES_V3),
   tier: z.enum(['minor', 'moderate', 'severe']),
   startedAt: Num,
   durationS: Num,
@@ -32,6 +33,18 @@ export const StoredEventSchema = z.object({
   penalty: Num,
 });
 export type StoredEvent = z.infer<typeof StoredEventSchema>;
+
+/** A stored drive's DashPal seconds (`trips.dashcam_*`); a drive no dashcam covered holds zeros and no device. */
+export const StoredDashcamSchema = z.object({
+  deviceId: z.string().nullable(),
+  movingS: Num,
+  coveredS: Num,
+  synced: z.boolean(),
+});
+export type StoredDashcam = z.infer<typeof StoredDashcamSchema>;
+
+/** The DISPUTE reasons the engine decides (`not_driving` is the whole-drive action). */
+export type EngineDisputeReason = 'hazard' | 'wrong_limit' | 'mounted' | 'camera_wrong';
 
 export const StreakStateSchema = z.object({
   streak: z.number().int().min(0),
@@ -55,6 +68,7 @@ export const MergeTargetSchema = z.object({
   durationS: Num,
   polyline: z.string(),
   events: z.array(StoredEventSchema),
+  dashcam: StoredDashcamSchema,
   isLoop: z.boolean(),
   loopRepeat: z.boolean(),
   safeMilesEarlierToday: Num,
@@ -82,7 +96,7 @@ export const DisputeContextSchema = z.object({
   tripId: Uuid,
   clientTripId: Uuid,
   eventId: Uuid,
-  reason: z.enum(['hazard', 'wrong_limit', 'mounted']),
+  reason: z.enum(['hazard', 'wrong_limit', 'mounted', 'camera_wrong']),
   status: z.enum(['accepted', 'rejected']),
   rejectReason: z.enum(['quota', 'not_mounted']).nullable(),
   scored: z.boolean(),
@@ -94,6 +108,8 @@ export const DisputeContextSchema = z.object({
         miles: Num,
         safeMiles: Num,
         loopRepeat: z.boolean(),
+        /** The drive was stored as a DashPal drive (`trips.dashcam_on`): the re-score keeps its ×1.25. */
+        dashcam: z.boolean(),
         events: z.array(StoredEventSchema),
       }),
       ctx: z.object({ streak: Num, safeMilesEarlierToday: Num }),
@@ -113,10 +129,22 @@ export interface DriveContextArgs {
   start: { lat: number; lng: number } | null;
 }
 
+/** The DashPal seconds of what is stored: the union on a merge, with the derived DashPal-drive flag. */
+export interface EnvelopeDashcam {
+  deviceId: string | null;
+  movingS: number;
+  coveredS: number;
+  synced: boolean;
+  /** scoring `dashcamDrive` of these seconds: the drive earned ×1.25. */
+  on: boolean;
+}
+
 /** The `private.apply_drive` envelope (backend-interface.md §2.2). */
 export interface ApplyDriveEnvelope {
   user: string;
   mergeInto: string | null;
+  /** What the stored (merged) drive holds; `payload.dashcam` is the upload's own, kept on a merged-away row. */
+  dashcam: EnvelopeDashcam;
   payload: {
     clientTripId: string;
     startedAt: number;
@@ -130,6 +158,7 @@ export interface ApplyDriveEnvelope {
     end: { lat: number; lng: number } | null;
     polyline: string;
     appVersion: string;
+    dashcam: { deviceId: string; movingS: number; coveredS: number; synced: boolean } | null;
   };
   scored: boolean;
   reason: 'too_short' | 'spoofed' | 'implausible' | null;
@@ -153,7 +182,7 @@ export interface ApplyDisputeEnvelope {
   user: string;
   tripId: string;
   eventId: string;
-  reason: 'hazard' | 'wrong_limit' | 'mounted';
+  reason: EngineDisputeReason;
   status: 'accepted' | 'rejected';
   rejectReason?: string | null;
   breakdown?: DriveBreakdown;
@@ -167,7 +196,7 @@ export interface EngineTx {
   driveContext(args: DriveContextArgs): Promise<DriveContext>;
   applyDrive(envelope: ApplyDriveEnvelope): Promise<unknown>;
   revertNotDriving(userId: string, clientTripId: string): Promise<unknown>;
-  disputeContext(userId: string, clientTripId: string, eventId: string, reason: 'hazard' | 'wrong_limit' | 'mounted'): Promise<DisputeContext>;
+  disputeContext(userId: string, clientTripId: string, eventId: string, reason: EngineDisputeReason): Promise<DisputeContext>;
   applyDispute(envelope: ApplyDisputeEnvelope): Promise<unknown>;
 }
 

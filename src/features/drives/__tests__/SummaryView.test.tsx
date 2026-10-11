@@ -92,6 +92,48 @@ test('the streak line and anything unlocked show under the points', async () => 
   expect(screen.getByTestId('celebrations')).toHaveProp('accessibilityLabel', 'Unlocked: Level 5!, First Drive');
 });
 
+describe('DashPal', () => {
+  const dashpalResult = () => {
+    const r = result();
+    return { ...r, breakdown: { ...r.breakdown, dashcamMult: 1.25 as const, mult: 1.5, gains: 177, net: 167 }, net: 167 };
+  };
+  const drowsy = event({ id: 'd1', type: 'drowsy', tier: 'severe', penalty: 50, measured: { source: 'dashcam', speedMph: 40 } });
+
+  test('a DashPal drive names both multipliers and shows the DashPal tile', async () => {
+    await draw(<SummaryView {...props({ drive: drive({ pointsNet: 167, result: dashpalResult() }) })} />);
+    expect(screen.getByTestId('counter-dashpal')).toHaveProp('accessibilityLabel', 'DashPal events: 0, none');
+    await press(screen.getByTestId('breakdown-toggle'));
+    expect(within(screen.getByTestId('breakdown')).getByText('Multiplier: streak ×1.20 · DashPal ×1.25 → ×1.50 (cap)')).toBeOnTheScreen();
+  });
+
+  test('a DashPal event is itemised and counted on the DashPal tile', async () => {
+    const counts = { speeding: 0, pickups: 0, handlingS: 0, hardBrake: 1, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 1 };
+    await draw(<SummaryView {...props({ drive: drive({ counts }), events: [event(), drowsy] })} />);
+    expect(screen.getByTestId('counter-dashpal')).toHaveProp('accessibilityLabel', 'DashPal events: 1');
+    await press(screen.getByTestId('breakdown-toggle'));
+    expect(within(screen.getByTestId('breakdown')).getByText('Drowsy · DashPal')).toBeOnTheScreen();
+  });
+
+  test('a drive without DashPal has no DashPal tile', async () => {
+    await draw(<SummaryView {...props()} />);
+    expect(screen.queryByTestId('counter-dashpal')).toBeNull();
+  });
+
+  test('a DashPal event offers "DashPal got it wrong" and "wasn\'t driving", and reports camera_wrong', async () => {
+    const p = props({ events: [drowsy] });
+    await draw(<SummaryView {...p} />);
+    await press(screen.getByTestId('breakdown-toggle'));
+    await press(screen.getByTestId('report-d1'));
+    expect(screen.getByTestId('reason-camera_wrong')).toBeOnTheScreen();
+    expect(screen.getByTestId('reason-not_driving')).toBeOnTheScreen();
+    expect(screen.queryByTestId('reason-hazard')).toBeNull();
+    expect(screen.getByText('DashPal got it wrong')).toBeOnTheScreen();
+    await press(screen.getByTestId('reason-camera_wrong'));
+    await press(screen.getByTestId('report-send'));
+    expect(p.onReport).toHaveBeenCalledWith('d1', 'camera_wrong');
+  });
+});
+
 describe('Report', () => {
   const open = async (e = event()) => {
     const p = props({ events: [e] });
