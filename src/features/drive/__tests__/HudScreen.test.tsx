@@ -312,3 +312,67 @@ test('End is the only control on the screen', async () => {
   await renderHud({ weatherAlert: 'Dense fog', points: { total: 5, sinceLastStop: 0 }, stopped: true });
   expect(screen.getAllByRole('button')).toHaveLength(1);
 });
+
+describe('DashPal (plan §7.10)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the registry, after the mocks
+  const { setActiveDashcam } = require('@/dashcam/registry') as typeof import('@/dashcam/registry');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
+  const { createFakeDashcamRuntime, PAIRED } = require('@/dashcam/__fixtures__/fakeRuntime') as typeof import('@/dashcam/__fixtures__/fakeRuntime');
+
+  afterEach(() => setActiveDashcam(null));
+
+  const visual = (o: { tier: number; sound: number; level?: number; id?: number }) => ({
+    key: `${o.id ?? 1}:${o.level ?? 0}`,
+    alertId: o.id ?? 1,
+    sound: o.sound,
+    tier: o.tier,
+    level: o.level ?? 0,
+    onPhone: true,
+    at: Date.now(),
+  });
+
+  test('no chip without a paired DashPal; a static chip whose dot follows the link when paired', async () => {
+    setActiveDashcam(createFakeDashcamRuntime());
+    await renderHud();
+    expect(screen.queryByTestId('hud-dashpal-chip')).toBeNull();
+    const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
+    await act(async () => setActiveDashcam(rt));
+    expect(screen.getByTestId('hud-dashpal-chip')).toBeTruthy();
+    expect(screen.getByTestId('hud-dashpal-dot-ok')).toBeTruthy();
+    await act(async () => rt.set({ link: { lifecycle: 'connecting' } }));
+    expect(screen.getByTestId('hud-dashpal-dot-warn')).toBeTruthy();
+    await act(async () => rt.set({ link: { lifecycle: 'needs_repair' } }));
+    expect(screen.getByTestId('hud-dashpal-dot-bad')).toBeTruthy();
+  });
+
+  test('a DashPal alert: banner and glow for 1.5 s per start or level change; it outranks the phone event; a critical outranks its glow', async () => {
+    const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
+    setActiveDashcam(rt);
+    const h = await renderHud({ speedingTier: 'minor' });
+    await h.update({ lastAlert: { type: 'hard_brake', tier: 'moderate', at: T + 1000 } });
+    await act(async () => rt.set({ link: { visual: visual({ tier: 3, sound: 3 }) } }));
+    expect(screen.getByTestId('hud-dashpal-alert')).toHaveTextContent(/Wake up/);
+    expect(screen.queryByTestId('hud-alert')).toBeNull();
+    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.severe });
+    await act(() => jest.advanceTimersByTime(1500));
+    expect(screen.queryByTestId('hud-dashpal-alert')).toBeNull();
+    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.minor });
+    // A level change flashes again; a warning's glow yields to a phone event's.
+    await act(async () => rt.set({ link: { visual: visual({ tier: 2, sound: 1, level: 1 }) } }));
+    expect(screen.getByTestId('hud-dashpal-alert')).toHaveTextContent(/Eyes on the road/);
+    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.moderate });
+    await h.update({ lastAlert: { type: 'phone_pickup', tier: 'severe', at: T + 5000 } });
+    expect(screen.getByTestId('hud-dashpal-alert')).toBeTruthy();
+    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.severe });
+  });
+
+  test('never dims while a DashPal alert shows', async () => {
+    const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
+    setActiveDashcam(rt);
+    await renderHud();
+    await act(() => jest.advanceTimersByTime(DIM_AFTER_MS - 500));
+    await act(async () => rt.set({ link: { visual: visual({ tier: 2, sound: 2 }) } }));
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(screen.queryByTestId('hud-dim')).toBeNull();
+  });
+});

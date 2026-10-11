@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ALERT_GLOW_MS } from '@/core/alerts/policy';
 import type { PermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
@@ -23,8 +24,8 @@ import type { DashcamRuntime, DashcamState } from '../runtime';
 import { PENDING_SETUP_KEY, PENDING_SETUP_MAX_AGE_MS, setupHref } from './links';
 import { useDashcamRuntime, useDashcamSelector } from './useDashcam';
 
-/** The DashPal alert banner shows this long per alert start or level change (plan §7.8). */
-export const VISUAL_MS = 1500;
+/** The DashPal alert banner shows this long per alert start or level change (plan §7.8): 1.5 s. */
+export const VISUAL_MS = ALERT_GLOW_MS;
 
 const TAB_ROUTES = new Set(['/home', '/leagues', '/clan', '/profile', '/']);
 const onDriveRoute = (path: string): boolean => path === '/drive' || path.startsWith('/drive/');

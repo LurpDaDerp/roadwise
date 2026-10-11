@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { DashpalChip, DashpalHudBanner, dashpalTier, useDashpalChip, useDashpalFlash } from '@/dashcam/ui/HudDashpal';
 import { useDriveControls, useDriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { sunIsDown } from '@/lib/time';
@@ -96,6 +97,10 @@ export type HudScreenProps = {
  * - Centre: the speed, large, next to a round limit sign ("—" when the limit is unknown).
  * - Edge: a static glow in the speeding tier's colour while speeding; for 1.5 s after an event, a
  *   glow in that event's tier colour with an icon and one or two words at the top. No overlay.
+ * - DashPal (when paired): a small static chip top right with a state dot; for 1.5 s per DashPal
+ *   alert start or level change, its banner and glow. Precedence at the top: DashPal banner, then
+ *   the phone's event, then a failed end, then weather; for the glow: a DashPal critical, then the
+ *   phone's event, then a DashPal warning or advisory, then speeding.
  * - Top: the weather line, only while an alert covers the area.
  * - Stopped only: the points total and the change since the last stop.
  * - Bottom: hold-to-end — the only control, live at any speed. Every other touch only undims.
@@ -117,7 +122,10 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const units = useHudUnits();
 
   const alert = useAlertFlash(live.lastAlert);
-  const { dimmed, wake } = useDimmer(alert !== null);
+  const dashpal = useDashpalFlash();
+  const dashpalChip = useDashpalChip();
+  // The dimmer stays off while either alert shows.
+  const { dimmed, wake } = useDimmer(alert !== null || dashpal !== null);
 
   // Where the drive goes once it is over: its summary, fresh, or Home when there was none.
   const lastTripId = useRef<string | null>(live.clientTripId);
@@ -158,7 +166,17 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   }, [live.status, ending, leave]);
 
   const speeding = live.speedingTier !== null;
-  const glow = alert !== null ? tierColor(p, alert.tier) : speeding ? tierColor(p, live.speedingTier!) : null;
+  const dashpalTierNow = dashpal !== null ? dashpalTier(dashpal.tier) : null;
+  const glow =
+    dashpalTierNow === 'severe'
+      ? tierColor(p, 'severe')
+      : alert !== null
+        ? tierColor(p, alert.tier)
+        : dashpalTierNow !== null
+          ? tierColor(p, dashpalTierNow)
+          : speeding
+            ? tierColor(p, live.speedingTier!)
+            : null;
   const speedColor = speeding ? tierColor(p, live.speedingTier!) : p.ink;
   const numeral = speedNumeralPt(Math.min(width, height));
   const busy = ending || live.status === 'finalizing';
@@ -176,8 +194,15 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           },
         ]}
       >
+        {dashpalChip !== null ? (
+          <View pointerEvents="none" style={[styles.chip, { top: insets.top + 8, right: insets.right + 12 }]}>
+            <DashpalChip status={dashpalChip} palette={p} />
+          </View>
+        ) : null}
         <View style={styles.top}>
-          {alert !== null ? (
+          {dashpal !== null ? (
+            <DashpalHudBanner visual={dashpal} palette={p} />
+          ) : alert !== null ? (
             <EventBanner alert={alert} palette={p} />
           ) : endFailed ? (
             <Text
@@ -246,6 +271,7 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   frame: { flex: 1 },
   top: { minHeight: 56, alignItems: 'center', justifyContent: 'center' },
+  chip: { position: 'absolute', zIndex: 1 },
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 28 },
   gauges: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24 },
   bottom: { alignItems: 'center', justifyContent: 'center' },
