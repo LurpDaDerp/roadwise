@@ -31,6 +31,12 @@ export const en = {
   'alert.takeABreak': 'Take a break soon',
   // Spoken at drive start (product spec §8.4) and the dim label on the pocket screen (C4).
   'alert.recording': 'Recording',
+  // The DashPal dashcam's alerts when the phone plays them (≤ 4 words; "Wake up" is spoken even
+  // with voice off).
+  'dashpal.eyesOnRoad': 'Eyes on the road',
+  'dashpal.takeABreak': 'Take a break',
+  'dashpal.wakeUp': 'Wake up',
+  'dashpal.phoneDown': 'Phone down',
 } as const;
 
 export type StringKey = keyof typeof en;

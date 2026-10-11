@@ -1,5 +1,6 @@
 // DashPal's words (plan §7.9, §7.10). Plain, short, second person; only what the app and the
 // dashcam actually do. The product name is DashPal; its Bluetooth name is `DashPal-XXXX`.
+import { t } from '@/i18n';
 
 export const dashpalCopy = {
   name: 'DashPal',
@@ -86,12 +87,12 @@ export const dashpalCopy = {
     notNow: 'Not now',
   },
 
-  /** The in-app banner for a DashPal alert (HUD and other screens), ≤ 3 words. */
+  /** The in-app banner for a DashPal alert (HUD and other screens): the spoken words. */
   alert: {
-    1: 'Eyes on the road',
-    2: 'Take a break',
-    3: 'Wake up',
-    4: 'Phone down',
+    1: t('dashpal.eyesOnRoad'),
+    2: t('dashpal.takeABreak'),
+    3: t('dashpal.wakeUp'),
+    4: t('dashpal.phoneDown'),
     5: 'DashPal',
   } as Readonly<Record<number, string>>,
 

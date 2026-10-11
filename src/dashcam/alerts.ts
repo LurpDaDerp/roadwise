@@ -20,6 +20,7 @@
 // Pure apart from the player and the clock: time is injected, `tick(now)` advances repeats.
 import type { AlertPlayer } from '@/core/alerts/player';
 import type { AlertDecision, AlertLevel, AlertTone, HapticIntensity } from '@/core/alerts/types';
+import { t } from '@/i18n';
 
 import { FALLBACK_CAUSE, SOUND, type AlertFrame } from './protocol';
 
@@ -33,10 +34,10 @@ export interface SoundSpec {
 }
 
 export const SOUND_SPEC: Readonly<Record<number, SoundSpec>> = {
-  [SOUND.GLANCE]: { level: 2, tone: 'dp_glance', voice: 'Eyes on the road', firstIntensity: 2 },
-  [SOUND.DROWSY]: { level: 3, tone: 'dp_drowsy', voice: 'Take a break', firstIntensity: 3 },
-  [SOUND.WAKE]: { level: 3, tone: 'dp_wake', voice: 'Wake up', voiceAlways: true, firstIntensity: 4 },
-  [SOUND.PHONE]: { level: 3, tone: 'dp_phone', voice: 'Phone down', firstIntensity: 3 },
+  [SOUND.GLANCE]: { level: 2, tone: 'dp_glance', voice: t('dashpal.eyesOnRoad'), firstIntensity: 2 },
+  [SOUND.DROWSY]: { level: 3, tone: 'dp_drowsy', voice: t('dashpal.takeABreak'), firstIntensity: 3 },
+  [SOUND.WAKE]: { level: 3, tone: 'dp_wake', voice: t('dashpal.wakeUp'), voiceAlways: true, firstIntensity: 4 },
+  [SOUND.PHONE]: { level: 3, tone: 'dp_phone', voice: t('dashpal.phoneDown'), firstIntensity: 3 },
   [SOUND.CHIME]: { level: 1, firstIntensity: 1 },
 };
 

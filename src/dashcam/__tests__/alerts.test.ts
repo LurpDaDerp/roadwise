@@ -60,3 +60,14 @@ test('a stop for an unknown alert, a fallback for an unknown alert and a clear o
   }).not.toThrow();
   expect(c.continuousActive()).toBe(false);
 });
+
+test('the spoken words come from the string table', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the table itself
+  const { en } = require('@/i18n/en') as typeof import('@/i18n/en');
+  expect([en['dashpal.eyesOnRoad'], en['dashpal.takeABreak'], en['dashpal.wakeUp'], en['dashpal.phoneDown']]).toEqual([
+    SOUND_SPEC[1]!.voice,
+    SOUND_SPEC[2]!.voice,
+    SOUND_SPEC[3]!.voice,
+    SOUND_SPEC[4]!.voice,
+  ]);
+});
