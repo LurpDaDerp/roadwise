@@ -162,6 +162,8 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
       }, Math.max(0, at - now()));
     },
     delay: (ms) => new Promise<void>((resolve) => setTimer(resolve, ms)),
+    // Android pauses JS timers while the app is in the background (unless a headless task runs).
+    timersPaused: () => deps.platform === 'android' && !foreground,
     onChange: () => notify(),
     onError: (e, ctx) => report(e, `link ${ctx}`),
   });

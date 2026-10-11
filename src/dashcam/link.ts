@@ -127,6 +127,11 @@ export interface LinkDeps {
   wake?(at: number | null): void;
   /** Sleep `ms` (the drive-end catch-up wait). */
   delay(ms: number): Promise<void>;
+  /**
+   * JS timers do not fire now (Android in the background: the host pauses them unless a headless
+   * task runs). The drive-end wait then does not wait at all, since a sleep might never end.
+   */
+  timersPaused?(): boolean;
   onChange?(): void;
   onPaired?(bondCount: number): void;
   onError?(e: unknown, ctx: string): void;
@@ -221,6 +226,18 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
   /** serial chain for coverage writes (one per row) */
   let coverageChain: Promise<void> = Promise.resolve();
   let lastSnapshot: LinkSnapshot | null = null;
+  /** the drive-end wait's sleeps, woken early by any tick or change */
+  let napping: (() => void)[] = [];
+
+  function wakeNappers(): void {
+    if (napping.length === 0) return;
+    const ws = napping;
+    napping = [];
+    for (const w of ws) w();
+  }
+
+  /** Sleep ≤ `ms`, ending early on any tick (a frame, a row, a foreground change) or link change. */
+  const nap = (ms: number): Promise<void> => Promise.race([deps.delay(ms), new Promise<void>((resolve) => napping.push(resolve))]);
 
   // The phone side of DashPal alerts: ACKs go out through this link, at once.
   const alerts = createDashcamAlerts({
@@ -272,6 +289,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
   }
 
   function changed(): void {
+    wakeNappers();
     const next = snapshot();
     const prev = lastSnapshot;
     lastSnapshot = next;
@@ -355,6 +373,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
   // ——— ticking ———
 
   function tick(nowArg?: number): void {
+    wakeNappers();
     if (disposed) return;
     const now = nowArg ?? deps.now();
     const s = session;
@@ -814,18 +833,21 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     async beforeFinalize(clientTripId, opts = {}) {
       if (opts.dryRun || !paired) return;
       const deadline = deps.now() + CATCH_UP_MS;
+      // Every sleep also ends on a tick, so the deadline and the timer check run on each wake (a
+      // foreground app moving to the background ticks the link).
+      const waiting = (): boolean => deps.now() < deadline && !(deps.timersPaused?.() ?? false);
       // The persistence chain, but never past the deadline (a long replay keeps going on its own).
       const drained = async (): Promise<void> => {
         let done = false;
         const settledChain = chain.then(() => {
           done = true;
         });
-        while (!done && deps.now() < deadline) await Promise.race([settledChain, deps.delay(50)]);
+        while (!done && waiting()) await Promise.race([settledChain, nap(50)]);
       };
-      while (session && session.phase !== 'resumed' && deps.now() < deadline) await deps.delay(100);
+      while (session && session.phase !== 'resumed' && waiting()) await nap(100);
       if (session) await drained();
-      while (session && !synced() && deps.now() < deadline) {
-        await deps.delay(100);
+      while (session && !synced() && waiting()) {
+        await nap(100);
         await drained();
       }
       await coverageChain;
@@ -880,6 +902,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     dispose() {
       disposed = true;
       session = null;
+      wakeNappers();
       listeners.clear();
       alerts.clear();
       deps.wake?.(null);

@@ -203,6 +203,31 @@ test('estimateOn follows the drive totals (≥ 60 s moving, ≥ 80 % covered); a
   expect(again.rt.estimateOn(null)).toBe(false);
 });
 
+test('Android in the background (JS timers paused): the drive-end wait does not hang, and a backgrounding mid-wait ends it', async () => {
+  // This rig's timers never fire, like Android's while the app is in the background. The link is
+  // connected but not synced (COMMAND 7 got no HELLO).
+  await createTripsRepo(db).insert({ client_trip_id: TRIP, started_at: 0, tz: 'UTC', status: 'recording' }, 0);
+  await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+  const bg = rig('android', false);
+  await bg.rt.ready;
+  await flush();
+  expect(bg.rt.state().link).toMatchObject({ lifecycle: 'connected', synced: false });
+  await bg.rt.beforeFinalize(TRIP);
+
+  const fg = rig('android', true);
+  await fg.rt.ready;
+  await flush();
+  expect(fg.rt.state().link).toMatchObject({ lifecycle: 'connected', synced: false });
+  let done = false;
+  const ending = fg.rt.beforeFinalize(TRIP).then(() => (done = true));
+  await flush();
+  expect(done).toBe(false);
+  fg.appState.emit('background');
+  await ending;
+  expect(await createDashcamStore(db).coverage(TRIP)).toBeNull();
+  expect([...bg.errors, ...fg.errors]).toEqual([]);
+});
+
 test('setBuzzerToo is saved and reaches the next STATE; optIn writes the launch flag', async () => {
   const r = rig();
   await r.rt.ready;

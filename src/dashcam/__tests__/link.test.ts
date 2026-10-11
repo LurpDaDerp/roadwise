@@ -100,7 +100,7 @@ beforeEach(async () => {
   n = 0;
 });
 
-function rig(over: { store?: Partial<DashcamStore> } = {}): Rig {
+function rig(over: { store?: Partial<DashcamStore>; delay?: (ms: number) => Promise<void>; timersPaused?: () => boolean } = {}): Rig {
   const clock = { t: T0 };
   const writes: Written[] = [];
   const errors: string[] = [];
@@ -151,10 +151,13 @@ function rig(over: { store?: Partial<DashcamStore> } = {}): Rig {
     player: player.player,
     context: () => ctx,
     localMinute: () => 615,
-    delay: async (ms) => {
-      clock.t += ms;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    },
+    delay:
+      over.delay ??
+      (async (ms) => {
+        clock.t += ms;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }),
+    timersPaused: over.timersPaused,
     wake: (at) => wakes.push(at),
     onPaired: (c) => paired.push(c),
     onError: (e, c) => errors.push(`${c}: ${e instanceof Error ? e.message : String(e)}`),
@@ -975,5 +978,50 @@ describe('coverage (§7.5)', () => {
     const t3 = r3.clock.t;
     await r3.link.beforeFinalize(TRIP);
     expect(r3.clock.t).toBe(t3);
+  });
+
+  test('the drive-end wait never hangs on paused JS timers (Android in the background): it wakes on frames and ticks, and does not wait while timers are paused', async () => {
+    // Timers that never fire, as on Android with the app in the background.
+    let paused = false;
+    // One database per test: each case ends its own drive.
+    const [T2, T3, T4] = ['2', '3', '4'].map((d) => `${d.repeat(8)}-${d.repeat(4)}-4${d.repeat(3)}-8${d.repeat(3)}-${d.repeat(12)}`) as [string, string, string];
+    for (const id of [T2, T3, T4]) await createTripsRepo(db).insert({ client_trip_id: id, started_at: T0, tz: 'UTC', status: 'recording' }, T0);
+    const never = () => new Promise<void>(() => {});
+    const r = rig({ delay: never, timersPaused: () => paused });
+    await connect(r, { nextSeq: 2 });
+    expect(r.link.snapshot().synced).toBe(false);
+    let done = false;
+    const ending = r.link.beforeFinalize(TRIP).then(() => (done = true));
+    await r.settle();
+    expect(done).toBe(false);
+    // Inbound frames wake the wait: the events land, the phone is synced, the drive is stamped.
+    r.rx(ev(0));
+    r.rx(ev(1));
+    await ending;
+    expect((await r.store.coverage(TRIP))?.lastSyncedAtMs).toBeGreaterThanOrEqual(T0);
+
+    // Mid-wait the app goes to the background: the runtime ticks the link, and the wait ends.
+    const r2 = rig({ delay: never, timersPaused: () => paused });
+    await connect(r2, { nextSeq: 5 });
+    let done2 = false;
+    const ending2 = r2.link.beforeFinalize(T2).then(() => (done2 = true));
+    await r2.settle();
+    expect(done2).toBe(false);
+    paused = true;
+    r2.link.tick();
+    await ending2;
+    expect((await r2.store.coverage(T2))?.lastSyncedAtMs ?? null).toBeNull();
+
+    // Already in the background at drive end: no wait at all; a synced link still stamps.
+    const r3 = rig({ delay: never, timersPaused: () => paused });
+    await connect(r3, { nextSeq: 5 });
+    await r3.link.beforeFinalize(T3);
+    expect((await r3.store.coverage(T3))?.lastSyncedAtMs ?? null).toBeNull();
+    const r4 = rig({ delay: never, timersPaused: () => paused });
+    await connect(r4, { nextSeq: 0 });
+    expect(r4.link.snapshot().synced).toBe(true);
+    await r4.link.beforeFinalize(T4);
+    expect((await r4.store.coverage(T4))?.lastSyncedAtMs).toBeGreaterThanOrEqual(T0);
+    expect([...r.errors, ...r2.errors, ...r3.errors, ...r4.errors]).toEqual([]);
   });
 });
