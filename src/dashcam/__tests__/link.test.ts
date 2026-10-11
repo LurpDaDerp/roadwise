@@ -691,7 +691,7 @@ describe('alerts (§3.5)', () => {
     await r.settle();
     expect(r.player.played()).toHaveLength(4);
     expect(r.player.played()[3]!.voice).toBeUndefined();
-    expect(r.link.snapshot().visual).toMatchObject({ key: '9:2' });
+    expect(r.link.snapshot().visual).toMatchObject({ key: expect.stringMatching(/^\d+:9:2$/), alertId: 9, level: 2 });
   });
 
   test('an item still playing holds the next repeat (at most one DashPal item in the player)', async () => {

@@ -63,7 +63,10 @@ export const STALE_MS = 3000;
 
 /** What the HUD and the banner show: one flash per start or level change. */
 export interface DashcamVisual {
-  /** `${alertId}:${level}`: a new key flashes again */
+  /**
+   * `${n}:${alertId}:${level}`, `n` counting every flash in the process: a new key flashes again.
+   * Alert ids restart at 1 on each dashcam boot, so the id and level alone can repeat.
+   */
   key: string;
   alertId: number;
   sound: number;
@@ -73,6 +76,9 @@ export interface DashcamVisual {
   onPhone: boolean;
   at: number;
 }
+
+/** Flashes so far in this JS process (outlives a runtime, as the root banner does). */
+let flashes = 0;
 
 export interface DashcamAlertDeps {
   player: AlertPlayer;
@@ -155,7 +161,8 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
 
   function flash(e: Entry): void {
     try {
-      deps.onVisual?.({ key: `${e.id}:${e.level}`, alertId: e.id, sound: e.sound, tier: e.tier, level: e.level, onPhone: e.playing, at: deps.now() });
+      flashes += 1;
+      deps.onVisual?.({ key: `${flashes}:${e.id}:${e.level}`, alertId: e.id, sound: e.sound, tier: e.tier, level: e.level, onPhone: e.playing, at: deps.now() });
     } catch (err) {
       report(err);
     }

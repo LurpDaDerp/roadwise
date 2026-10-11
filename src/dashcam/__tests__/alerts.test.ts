@@ -115,3 +115,19 @@ test('while a DashPal item is in the player nothing else is due: a waiting first
   // 2 settled: alert 3's haptic (a first play wins), then 1's repeat.
   expect(delivered.map((d) => d.id)).toEqual(['dashpal:1:1', 'dashpal:2:2', 'dashpal:3:3', 'dashpal:1:4']);
 });
+
+test('every alert start or level change gets a visual key of its own, even when a rebooted dashcam reuses the alert id (ids restart at 1 each boot) or a new runtime starts', () => {
+  const player: AlertPlayer = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
+  const keys: string[] = [];
+  const make = () => createDashcamAlerts({ player, now: () => 0, sendAck: () => {}, canPlay: () => true, onVisual: (v) => keys.push(v.key) });
+  const a = make();
+  a.onAlert({ type: 'ALERT', alertId: 1, sound: 1, tier: 2, level: 0, mode: 0, route: 0, uptimeMs: 0 });
+  a.onAlert({ type: 'ALERT', alertId: 1, sound: 1, tier: 2, level: 1, mode: 0, route: 0, uptimeMs: 0 });
+  // The dashcam reboots: a new connection clears the table, and its first alert is id 1 again.
+  a.clear();
+  a.onAlert({ type: 'ALERT', alertId: 1, sound: 1, tier: 2, level: 0, mode: 0, route: 0, uptimeMs: 0 });
+  // A handover builds a new runtime (and link); the root banner outlives it.
+  make().onAlert({ type: 'ALERT', alertId: 1, sound: 1, tier: 2, level: 0, mode: 0, route: 0, uptimeMs: 0 });
+  expect(keys).toHaveLength(4);
+  expect(new Set(keys).size).toBe(4);
+});
