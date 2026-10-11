@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 
 import type { PermissionsAdapter } from '@/core/permissions';
+import { dashcamStatus } from '@/dashcam/ui/status';
+import { useDashcamState } from '@/dashcam/ui/useDashcam';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { useMySummary, type HeatmapVisibility, type LicenseStage } from '@/data/server/summary';
@@ -131,6 +133,8 @@ export function SettingsScreen({ deps = {} }: { deps?: { adapter?: PermissionsAd
       .catch(() => {});
   }, [serverUnits, units, settings]);
 
+  const dashcam = dashcamStatus(useDashcamState(), Platform.OS === 'ios' ? 'ios' : 'android');
+
   const shownUnits = edit.value('units', profile?.units) ?? units;
   const shownState = edit.value('state', profile?.state ?? '');
 
@@ -151,6 +155,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { adapter?: PermissionsAd
         />
       ) : null}
       <Section title={copy.driving}>
+        <LinkRow icon="videocam-outline" title={copy.dashcam.title} subtitle={dashcam.label} onPress={() => router.push(SETTINGS_HREFS.dashcam)} testID="settings-dashcam" />
         <LinkRow icon="volume-high-outline" title={copy.alerts.title} subtitle={copy.alerts.subtitle} onPress={() => router.push(SETTINGS_HREFS.alerts)} testID="settings-alerts" />
         <ToggleRow title={copy.reminder.title} subtitle={copy.reminder.subtitle} value={reminder} onValueChange={(v) => void onReminder(v)} testID="settings-reminder" />
         <LinkRow icon="shield-checkmark-outline" title={copy.permissions.title} subtitle={copy.permissions.subtitle} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-permissions" />

@@ -32,6 +32,7 @@ export const settingsCopy = {
 
   root: {
     driving: 'Driving',
+    dashcam: { title: 'DashPal' },
     alerts: { title: 'Alerts', subtitle: 'Voice, sound and vibration' },
     reminder: {
       title: 'Forgot-to-start reminder',

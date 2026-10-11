@@ -11,6 +11,7 @@ import { BootstrapFailed } from '@/boot/BootstrapFailed';
 import { runtimeController } from '@/boot/controller';
 import { watchDeviceOwner } from '@/boot/ownerWatch';
 import { SwitchingAccounts } from '@/boot/SwitchingAccounts';
+import { DashpalPromptHost } from '@/dashcam/ui/PromptHost';
 import { createSettingsRepo } from '@/data/db/settings';
 import { DeviceHost } from '@/data/devices/DeviceHost';
 import { readInstallId } from '@/data/devices/installId';
@@ -244,6 +245,8 @@ export default function RootLayout() {
                     </LockoutGate>
                   </AuthGate>
                   <RuntimeHosts runtime={runtime} ready={ready && runtime !== null} />
+                  {/* DashPal: the found-nearby offer, a deferred box link, alerts off the HUD. */}
+                  <DashpalPromptHost />
                 </SessionProvider>
               </DriveProvider>
             </DataProvider>

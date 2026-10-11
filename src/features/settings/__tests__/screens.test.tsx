@@ -167,6 +167,14 @@ describe('Settings', () => {
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_state: 'OH' }));
   });
 
+  it('Driving › DashPal opens the DashPal screen and says "Set up your dashcam" until one is paired', async () => {
+    const w = await appWorld();
+    await w.render(<SettingsScreen />);
+    expect(await screen.findByText('Set up your dashcam')).toBeOnTheScreen();
+    await tap('settings-dashcam');
+    expect(mockRouter.push).toHaveBeenLastCalledWith(SETTINGS_HREFS.dashcam);
+  });
+
   it('opens alerts, zones and notifications, and has no driver monitoring entry', async () => {
     const w = await appWorld();
     await w.render(<SettingsScreen />);

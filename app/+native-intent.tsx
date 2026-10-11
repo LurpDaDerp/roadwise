@@ -1,10 +1,11 @@
 /**
  * Every link the OS hands the app passes through here first. Only the app's own link shapes go
- * through — a friend link (`add/`), a clan invite (`clan/`), a drive summary (`drives/`) and the
- * magic-link landing (`auth/callback`); anything else, `roadwise://drive` above all, opens Home.
+ * through — a friend link (`add/`), a clan invite (`clan/`), a drive summary (`drives/`), the
+ * magic-link landing (`auth/callback`) and the DashPal box's QR code (`dashpal`, which opens the
+ * setup, or waits until no drive is open); anything else, `roadwise://drive` above all, opens Home.
  * Nothing a link can open starts a drive (plan §1.4).
  */
-const ALLOWED = /^(add\/[^/?#]+|clan\/[^/?#]+|drives(\/[^/?#]+)?|auth\/callback)([?#].*)?$/;
+const ALLOWED = /^(add\/[^/?#]+|clan\/[^/?#]+|drives(\/[^/?#]+)?|auth\/callback|dashpal)([?#].*)?$/;
 
 /** `roadwise://clan/ABC`, `roadwise:///clan/ABC`, `/clan/ABC` → `clan/ABC`. */
 function appPath(path: string): string {

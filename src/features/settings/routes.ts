@@ -10,5 +10,7 @@ export const SETTINGS_HREFS = {
   deleteAccount: '/settings/delete-account' as Href,
   blocked: '/settings/blocked' as Href,
   permissions: '/settings/permissions' as Href,
+  dashcam: '/settings/dashcam' as Href,
+  dashcamSetup: '/settings/dashcam-setup' as Href,
   howPointsWork: '/how-points-work' as Href,
 } as const;

@@ -2,6 +2,7 @@ import type { ComponentType } from 'react';
 
 import type { FlowContext, StepId } from './flow';
 import { ClanStep } from './steps/ClanStep';
+import { DashcamStep } from './steps/DashcamStep';
 import { HowStep } from './steps/HowStep';
 import { LicenseStep } from './steps/LicenseStep';
 import { LocationStep } from './steps/LocationStep';
@@ -29,5 +30,6 @@ export const STEP_REGISTRY: Readonly<Record<StepId, ComponentType<StepProps>>> =
   motion: MotionStep,
   location: LocationStep,
   notifications: NotificationsStep,
+  dashcam: DashcamStep,
   clan: ClanStep,
 };
