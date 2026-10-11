@@ -1,4 +1,9 @@
 import type { Db } from '@/data/db/driver';
+import { asNumber, asNumberOrNull, asText } from '@/data/db/row';
+import { mpsToMph } from '@/lib/units';
+
+import { episodes, SPEED_NEAR_MS, SYNCED_WITHIN_MS, type EpisodeEvent } from './episodes';
+import { asPaired, PAIRED_KEY } from './keys';
 
 /**
  * What a finished drive learned from the DashPal dashcam: the seconds it watched the driver, and
@@ -30,9 +35,109 @@ export interface DashcamTripFacts {
   events: DashcamCandidate[];
 }
 
+interface SpeedRow {
+  ts?: unknown;
+  speed?: unknown;
+  gnssValid?: unknown;
+}
+
+/** The speed (mph) of the valid-fix row nearest `at` within ±2 s, or null. */
+async function speedNear(db: Db, clientTripId: string, at: number): Promise<number | null> {
+  const { rows } = await db.execute('SELECT ts, row_json FROM samples WHERE client_trip_id = ? AND ts BETWEEN ? AND ?', [
+    clientTripId,
+    at - SPEED_NEAR_MS,
+    at + SPEED_NEAR_MS,
+  ]);
+  let best: { gap: number; mps: number } | null = null;
+  for (const row of rows) {
+    let parsed: SpeedRow;
+    try {
+      parsed = JSON.parse(asText(row, 'row_json')) as SpeedRow;
+    } catch {
+      continue;
+    }
+    if (parsed.gnssValid !== true || typeof parsed.speed !== 'number' || !Number.isFinite(parsed.speed) || parsed.speed < 0) continue;
+    const gap = Math.abs(asNumber(row, 'ts') - at);
+    if (best === null || gap < best.gap) best = { gap, mps: parsed.speed };
+  }
+  return best === null ? null : mpsToMph(best.mps);
+}
+
 export async function loadDashcamTripFacts(
-  _db: Db,
-  _trip: { clientTripId: string; startedAt: number; endedAt: number },
+  db: Db,
+  trip: { clientTripId: string; startedAt: number; endedAt: number },
 ): Promise<DashcamTripFacts> {
-  return { dashcamId: null, movingS: 0, coveredS: 0, synced: false, events: [] };
+  const settings = await db.execute('SELECT value_json FROM settings WHERE key = ?', [PAIRED_KEY]);
+  let paired: string | null = null;
+  try {
+    const raw = settings.rows[0] ? (JSON.parse(asText(settings.rows[0], 'value_json')) as unknown) : null;
+    paired = asPaired(raw)?.dashcamId ?? null;
+  } catch {
+    paired = null;
+  }
+
+  const cov = await db.execute('SELECT moving_s, covered_s, last_synced_at_ms FROM dashcam_coverage WHERE client_trip_id = ?', [trip.clientTripId]);
+  const covRow = cov.rows[0];
+  const movingS = covRow ? Math.max(0, Math.round(asNumber(covRow, 'moving_s'))) : 0;
+  const coveredS = covRow ? Math.min(movingS, Math.max(0, Math.round(asNumber(covRow, 'covered_s')))) : 0;
+  const lastSynced = covRow ? asNumberOrNull(covRow, 'last_synced_at_ms') : null;
+  const synced = lastSynced !== null && lastSynced >= trip.endedAt - SYNCED_WITHIN_MS;
+
+  if (paired === null) return { dashcamId: null, movingS, coveredS, synced, events: [] };
+
+  // Every event of the paired dashcam whose condition started inside the drive, by the boot's best
+  // offset now; not claimed by another drive. Events of a boot with no offset cannot be placed.
+  const startExpr = '(b.offset_ms + e.t_ms - e.dur_ds * 100)';
+  const { rows } = await db.execute(
+    `SELECT e.dashcam_id, e.boot_id, e.seq, e.id, e.ev, e.detail, e.audible, e.t_ms, e.dur_ds, b.offset_ms
+       FROM dashcam_events e
+       JOIN dashcam_boots b ON b.dashcam_id = e.dashcam_id AND b.boot_id = e.boot_id
+      WHERE e.dashcam_id = ?
+        AND b.offset_ms IS NOT NULL
+        AND (e.client_trip_id IS NULL OR e.client_trip_id = ?)
+        AND ${startExpr} >= ? AND ${startExpr} <= ?`,
+    [paired, trip.clientTripId, trip.startedAt, trip.endedAt]
+  );
+
+  const inDrive: (EpisodeEvent & { audible: boolean; dashcamId: string; bootKey: number; seq: number })[] = rows.map((r) => {
+    const offset = asNumber(r, 'offset_ms');
+    const firedAt = offset + asNumber(r, 't_ms');
+    return {
+      id: asText(r, 'id'),
+      ev: asNumber(r, 'ev'),
+      detail: asNumber(r, 'detail'),
+      audible: asNumber(r, 'audible') !== 0,
+      firedAt,
+      startedAt: firedAt - asNumber(r, 'dur_ds') * 100,
+      dashcamId: asText(r, 'dashcam_id'),
+      bootKey: asNumber(r, 'boot_id'),
+      seq: asNumber(r, 'seq'),
+    };
+  });
+
+  // Stamp them to this drive (and refresh the wall-time cache) so another drive never claims them
+  // and the 7-day prune keeps them with the drive.
+  for (const e of inDrive) {
+    await db.execute('UPDATE dashcam_events SET client_trip_id = ?, at_ms = ?, started_at_ms = ? WHERE dashcam_id = ? AND boot_id = ? AND seq = ?', [
+      trip.clientTripId,
+      e.firedAt,
+      e.startedAt,
+      e.dashcamId,
+      e.bootKey,
+      e.seq,
+    ]);
+  }
+
+  const events: DashcamCandidate[] = [];
+  for (const ep of episodes(inDrive.filter((e) => e.audible))) {
+    events.push({
+      id: ep.first.id,
+      kind: ep.kind,
+      startedAt: ep.startedAt,
+      durationS: Math.round((ep.endedAt - ep.startedAt) / 100) / 10,
+      speedMph: await speedNear(db, trip.clientTripId, ep.first.firedAt),
+    });
+  }
+
+  return { dashcamId: movingS > 0 ? paired : null, movingS, coveredS, synced, events };
 }

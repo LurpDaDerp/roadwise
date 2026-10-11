@@ -16,7 +16,6 @@ import {
 } from '../protocol';
 
 // The golden vectors shared byte-for-byte with the firmware (plan §3, §9).
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- a JSON fixture
 const vectors = require('../__fixtures__/ble_vectors.json') as {
   protocol: number;
   tx: { name: string; type: number; hex: string; fields: Record<string, number> }[];
