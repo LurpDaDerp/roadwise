@@ -319,7 +319,9 @@ describe('DashPal (plan §7.10)', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
   const { createFakeDashcamRuntime, PAIRED } = require('@/dashcam/__fixtures__/fakeRuntime') as typeof import('@/dashcam/__fixtures__/fakeRuntime');
 
-  afterEach(() => setActiveDashcam(null));
+  afterEach(async () => {
+    await act(async () => setActiveDashcam(null));
+  });
 
   const visual = (o: { tier: number; sound: number; level?: number; id?: number }) => ({
     key: `${o.id ?? 1}:${o.level ?? 0}`,

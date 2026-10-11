@@ -806,11 +806,19 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     async beforeFinalize(clientTripId, opts = {}) {
       if (opts.dryRun || !paired) return;
       const deadline = deps.now() + CATCH_UP_MS;
+      // The persistence chain, but never past the deadline (a long replay keeps going on its own).
+      const drained = async (): Promise<void> => {
+        let done = false;
+        const settledChain = chain.then(() => {
+          done = true;
+        });
+        while (!done && deps.now() < deadline) await Promise.race([settledChain, deps.delay(50)]);
+      };
       while (session && session.phase !== 'resumed' && deps.now() < deadline) await deps.delay(100);
-      await chain;
+      if (session) await drained();
       while (session && !synced() && deps.now() < deadline) {
         await deps.delay(100);
-        await chain;
+        await drained();
       }
       await coverageChain;
       if (synced()) {

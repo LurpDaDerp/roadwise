@@ -50,8 +50,8 @@ beforeEach(() => {
   mockDrive.busy = false;
   mockPath = '/home';
 });
-afterEach(() => {
-  setActiveDashcam(null);
+afterEach(async () => {
+  await act(async () => setActiveDashcam(null));
   clearQueryClients();
 });
 
@@ -329,7 +329,7 @@ describe('the prompt host', () => {
 
     mockPath = '/home';
     const adapter = fakeAdapter(undefined, { bluetoothNow: 'undetermined' });
-    setActiveDashcam(scanningRuntime([{ id: 'X4', rssi: -50 }]));
+    await act(async () => setActiveDashcam(scanningRuntime([{ id: 'X4', rssi: -50 }])));
     const w2 = await appWorld();
     await w2.render(<DashpalPromptHost deps={fastDeps(adapter)} />);
     await act(async () => {});
