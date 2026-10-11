@@ -95,7 +95,7 @@ Little-endian. Byte 0 = type, byte 1 = protocol version `1`. A receiver **accept
 - ALERT_ACKs are accepted only from the link the alert was routed to.
 
 ### 5 Alert handling (phone)
-- `route=1` → ALERT_ACK(1) **before** starting playback if the phone can play now, else ALERT_ACK(0); then play (or haptic + visual only). `route=0` → haptic + visual only, no ACK, no sound. A new `route=1` ALERT handled more than `LATE_ALERT_MS` (1 s) after its `uptime_ms` by the boot's offset (the JS thread woke past the dashcam's ACK deadline, so the buzzer already has it) → ALERT_ACK(0), haptic + visual only; a level step of an alert already in the table is never treated as late.
+- `route=1` → ALERT_ACK(1) **before** starting playback if the phone can play now, else ALERT_ACK(0); then play (or haptic + visual only). `route=0` → haptic + visual only, no ACK, no sound. A new `route=1` ALERT handled more than `LATE_ALERT_MS` (750 ms, the dashcam's default ACK deadline) after its `uptime_ms` by the boot's offset (the JS thread woke past the dashcam's ACK deadline, so the buzzer already has it) → ALERT_ACK(0), haptic + visual only; a level step of an alert already in the table is never treated as late.
 - Continuous: repeat until ALERT_STOP, ALERT_FALLBACK cause 1–3, disconnect, or **3 s with no frame from the dashcam**. Cause 4 → keep playing.
 - Repeat cadence (start-to-start, never faster than an item finishes): glance 2.5 s, drowsy 4 s, wake 1.5 s at level 0 → 1.0 s at level ≥ 2. One-shots once.
 - A new HELLO with a different `boot_id`, or a connect, clears the phone's alert table.

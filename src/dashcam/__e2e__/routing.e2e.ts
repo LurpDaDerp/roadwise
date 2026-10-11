@@ -61,7 +61,7 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
       expect(a.player.stops.some((s) => s >= t1)).toBe(true);
     }));
 
-  test('row 3: the phone never answers (suspended with a fresh lease): buzzer at the 750 ms deadline with ALERT_FALLBACK 1; its late ACK(1) changes nothing and the FALLBACK held behind the ALERT cuts the phone at once', () =>
+  test('row 3: the phone never answers (suspended with a fresh lease): buzzer at the 750 ms deadline with ALERT_FALLBACK 1; the app, woken late, answers ACK(0) and never sounds it', () =>
     scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
       const a = await linkedA(w);
       await afterState(w, a, 200);
@@ -77,14 +77,13 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
       expect(w.txOf('ALERT_FALLBACK', 1, t0).map((x) => [x.at - t0, x.f.cause])).toEqual([[750, 1]]);
 
       // iOS wakes the app: the held frames arrive one after the other (ALERT, then FALLBACK 1). The
-      // ALERT is handled first (ACK(1), the first play starts), the FALLBACK cuts it in the same instant.
+      // ALERT is past the deadline by the boot's offset: shown, ACK(0), never sounded on the phone.
       const t1 = w.W;
       await w.resume(a);
       await w.advance(4000);
-      expect(w.rxOf('ALERT_ACK', 1, t1).map((x) => x.f.outcome)).toEqual([1]);
-      expect(a.player.sounded(t0).every((p) => p.at === t1)).toBe(true);
-      expect(a.player.stops).toContain(t1);
-      expect(a.player.played.filter((p) => p.at > t1 && !p.dropped)).toEqual([]);
+      expect(w.rxOf('ALERT_ACK', 1, t1).map((x) => x.f.outcome)).toEqual([0]);
+      expect(a.player.sounded(t0)).toEqual([]);
+      expect(a.rt.state().link.counters.lateAlerts).toBe(1);
       expect(w.buzzer(t1)).toEqual([]); // still playing: no STOP, no re-gate
       expect(w.txOf('ALERT_FALLBACK', 1, t1).filter((x) => x.f.cause !== 4)).toEqual([]);
     }));
@@ -249,14 +248,13 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
       await w.runTo(t1 + 800);
       expect(w.buzzer(t1)).toEqual([{ at: t1 + 750, line: 'PLAY once 5' }]);
       expect(w.txOf('ALERT_FALLBACK', 1, t1).map((x) => x.f.cause)).toEqual([1]);
-      // The app wakes after the deadline: the held ALERT is still handled in order (ACK(1), which the
-      // dashcam ignores, and the chime), the FALLBACK behind it comes too late to stop a one-shot.
-      // Both protocol sides behave as specified; the late chime is a known race (see the report).
+      // The app wakes after the deadline: the held ALERT is late by the boot's offset, so it is shown
+      // and answered ACK(0) without a chime; the one-shot sounds once, on the buzzer only.
       const back = w.W;
       await w.resume(a);
       await w.advance(1000);
-      expect(w.rxOf('ALERT_ACK', 1, back).map((x) => x.f.outcome)).toEqual([1]);
-      expect(a.player.sounded(t1).map((p) => p.at)).toEqual([back]);
+      expect(w.rxOf('ALERT_ACK', 1, back).map((x) => x.f.outcome)).toEqual([0]);
+      expect(a.player.sounded(t1)).toEqual([]);
       expect(w.buzzer(back)).toEqual([]);
     }));
 

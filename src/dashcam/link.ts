@@ -50,10 +50,11 @@ export const RESUME_AFTER_MS = 500;
 export const RESYNC_EVERY_MS = 10 * 60_000;
 /**
  * A routed ALERT the phone handles this long after the dashcam sent it (by the boot's clock offset)
- * arrived past the dashcam's ACK deadline (750 ms by default): the buzzer has already taken it, so
- * the phone shows it and answers ACK(0) instead of playing it a second time.
+ * is at or past the dashcam's ACK deadline (`device.ble_ack_ms`, 750 by default, counted from a
+ * later moment): the buzzer has it, so the phone shows it and answers ACK(0) instead of playing it
+ * a second time. Erring early only leaves the sound to the buzzer.
  */
-export const LATE_ALERT_MS = 1000;
+export const LATE_ALERT_MS = 750;
 /** A HELLO arriving later than this after its request gives no offset sample. */
 export const HELLO_OFFSET_MAX_MS = 1000;
 /** No HELLO this long after COMMAND 7: ask again. */
