@@ -5,6 +5,10 @@
 -- challenge progress and clan goals are all derived from it by indexed query. Every row keeps the
 -- `progress_before` snapshot (server-only) so the latest drive can be reverted exactly. The
 -- writers (private.drive_context / apply_drive / revert / dispute) are in 0008_engine.
+--
+-- DashPal: a drive keeps the dashcam's seconds (moving, covered), whether the phone was synced at
+-- the end, the dashcam's id and the derived DashPal-drive flag (`dashcam_on`, the x1.25). Its two
+-- event types (eyes_off, drowsy) are counted in `n_dashcam`, never in `n_events` or `clean`.
 
 create table public.trips (
   id uuid primary key default gen_random_uuid(),
@@ -19,6 +23,11 @@ create table public.trips (
   safe_miles numeric(7,2) not null check (safe_miles between 0 and 2000),
   night_miles numeric(7,2) not null check (night_miles between 0 and 2000),
   duration_s int not null check (duration_s between 0 and 86400),
+  dashcam_device_id text check (dashcam_device_id ~ '^[0-9a-f]{12}$'),
+  dashcam_moving_s int not null default 0 check (dashcam_moving_s between 0 and 86400),
+  dashcam_covered_s int not null default 0 check (dashcam_covered_s >= 0),
+  dashcam_synced boolean not null default false,
+  dashcam_on boolean not null default false,
   polyline text not null default '' check (char_length(polyline) <= 65536),
   scored boolean not null default false,
   reason text check (reason in ('too_short', 'spoofed', 'implausible')),
@@ -39,6 +48,7 @@ create table public.trips (
   n_hard_brake int not null default 0 check (n_hard_brake >= 0),
   n_hard_accel int not null default 0 check (n_hard_accel >= 0),
   n_hard_corner int not null default 0 check (n_hard_corner >= 0),
+  n_dashcam int not null default 0 check (n_dashcam >= 0),
   clean boolean not null default false,
   streak_before int not null default 0 check (streak_before >= 0),
   progress_before jsonb not null default '{}'::jsonb check (jsonb_typeof(progress_before) = 'object' and pg_column_size(progress_before) <= 4096),
@@ -49,7 +59,8 @@ create table public.trips (
   updated_at timestamptz not null default now(),
   constraint trips_user_client_unique unique (user_id, client_trip_id),
   constraint trips_time_order check (ended_at > started_at and ended_at - started_at <= interval '12 hours'),
-  constraint trips_safe_le_miles check (safe_miles <= miles and night_miles <= miles)
+  constraint trips_safe_le_miles check (safe_miles <= miles and night_miles <= miles),
+  constraint trips_dashcam_covered_le_moving check (dashcam_covered_s <= dashcam_moving_s)
 );
 create index trips_user_started_idx on public.trips (user_id, started_at desc);
 create index trips_user_week_idx on public.trips (user_id, league_week);
@@ -64,7 +75,7 @@ create table public.trip_events (
   trip_id uuid not null references public.trips(id) on delete cascade,
   client_event_id uuid not null,
   user_id uuid not null references auth.users(id) on delete cascade,
-  type text not null check (type in ('speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling')),
+  type text not null check (type in ('speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling', 'eyes_off', 'drowsy')),
   tier text not null check (tier in ('minor', 'moderate', 'severe')),
   started_at timestamptz not null,
   duration_s numeric(8,1) not null check (duration_s between 0 and 43200),
@@ -87,14 +98,14 @@ create table public.event_disputes (
   trip_id uuid not null,
   client_event_id uuid not null,
   user_id uuid not null references auth.users(id) on delete cascade,
-  reason text not null check (reason in ('hazard', 'wrong_limit', 'mounted')),
+  reason text not null check (reason in ('hazard', 'wrong_limit', 'mounted', 'camera_wrong')),
   status text not null check (status in ('accepted', 'rejected')),
   created_at timestamptz not null default now(),
   primary key (trip_id, client_event_id),
   constraint event_disputes_event_fkey foreign key (trip_id, client_event_id)
     references public.trip_events (trip_id, client_event_id) on delete cascade
 );
--- the weekly quota count
+-- the weekly quota counts (hazard + wrong_limit share one; camera_wrong has its own)
 create index event_disputes_user_created_idx on public.event_disputes (user_id, created_at desc);
 
 -- wrong-limit reports, as anonymous map data: no user id, no trip id
@@ -157,7 +168,8 @@ language sql stable set search_path = public as $$
     and t.started_at > p_at - interval '30 days' and t.started_at <= p_at
 $$;
 
--- StatSums (plan §2) over the kept scored drives since p_since (null = all time)
+-- StatSums (plan §2) over the kept scored drives since p_since (null = all time), plus the DashPal
+-- drives and DashPal events (kept apart from the phone's counts)
 create or replace function private.stat_sums(p_user uuid, p_since timestamptz) returns jsonb
 language sql stable set search_path = public as $$
   select jsonb_build_object(
@@ -171,7 +183,9 @@ language sql stable set search_path = public as $$
     'handlingS', coalesce(sum(t.handling_s), 0),
     'hardBrake', coalesce(sum(t.n_hard_brake), 0),
     'hardAccel', coalesce(sum(t.n_hard_accel), 0),
-    'hardCorner', coalesce(sum(t.n_hard_corner), 0))
+    'hardCorner', coalesce(sum(t.n_hard_corner), 0),
+    'dashcamDrives', count(*) filter (where t.dashcam_on),
+    'dashcamEvents', coalesce(sum(t.n_dashcam), 0))
   from public.trips t
   where t.user_id = p_user and t.scored and not t.not_driving and t.merged_into is null
     and (p_since is null or t.started_at >= p_since)
@@ -226,7 +240,7 @@ begin
       'endedAt', floor(extract(epoch from t.ended_at) * 1000)::bigint,
       'tz', t.tz, 'localDay', t.local_day, 'leagueWeek', t.league_week,
       'miles', t.miles, 'safeMiles', t.safe_miles, 'nightMiles', t.night_miles, 'durationS', t.duration_s,
-      'polyline', t.polyline,
+      'polyline', t.polyline, 'dashcamOn', t.dashcam_on, 'nDashcam', t.n_dashcam,
       'scored', t.scored, 'reason', t.reason, 'notDriving', t.not_driving, 'clean', t.clean,
       'pointsNet', t.points_net, 'breakdown', t.breakdown, 'result', t.result,
       'events', private.trip_events_json(t.id)) order by t.started_at desc), '[]'::jsonb)

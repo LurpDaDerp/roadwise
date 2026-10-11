@@ -7,6 +7,8 @@ export const TRIP = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 export const TRIP_2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 export const EVENT = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 export const EVENT_2 = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+/** A DashPal dashcam's id (its identity MAC, lowercase hex). */
+export const DASHCAM = 'a4c1380f2b7e';
 /** 2026-10-05 18:00:00 UTC = 14:00 New York. */
 export const STARTED_AT = Date.UTC(2026, 9, 5, 18, 0, 0);
 
@@ -137,6 +139,7 @@ export function mergeTarget(over: Partial<MergeTarget> = {}): MergeTarget {
         penalty: 0,
       },
     ],
+    dashcam: { deviceId: null, movingS: 0, coveredS: 0, synced: false },
     isLoop: false,
     loopRepeat: false,
     safeMilesEarlierToday: 0,

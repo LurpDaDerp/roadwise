@@ -10,7 +10,7 @@
 //
 // A user id comes from the JWT and nowhere else. Logs carry the request id, the client trip id and
 // codes — never a position, a name or a database message.
-import type { ApplyDriveEnvelope, Engine, MergeTarget, StoredEvent } from '../_shared/engine.ts';
+import type { ApplyDriveEnvelope, Engine, EnvelopeDashcam, MergeTarget, StoredEvent } from '../_shared/engine.ts';
 import { EngineContractError } from '../_shared/engine.ts';
 import { integrityReason, isLoopDrive, isRefusedReason, unscoredBreakdown } from '../_shared/finalize_rules.ts';
 import {
@@ -33,7 +33,16 @@ import {
   type FinalizeTripPayloadV3,
   type FinalizeTripResponseV3,
 } from '../_shared/payload.ts';
-import { applyStreak, scoreDrive, SCORING_VERSION, type DriveContext, type DriveEvent, type DriveInput, type StreakState } from '../_shared/scoring/index';
+import {
+  applyStreak,
+  dashcamDrive,
+  scoreDrive,
+  SCORING_VERSION,
+  type DriveContext,
+  type DriveEvent,
+  type DriveInput,
+  type StreakState,
+} from '../_shared/scoring/index';
 
 /** Uploads a user may make per rolling day; above it the queue is told to wait. */
 export const MAX_UPLOADS_PER_DAY = 300;
@@ -82,6 +91,21 @@ const fromPayload = (e: FinalizeTripPayloadV3['events'][number]): EnvelopeEvent 
   measured: e.measured,
 });
 
+/**
+ * The DashPal seconds of what is scored. A fresh drive: the upload's own (absent = none). A merge:
+ * the moving and covered seconds summed over the target and the upload, `synced` from the upload
+ * (the newest part, absent = false), the device id the upload's else the target's — and the
+ * DashPal-drive flag derived from those sums (never an OR of the two parts' flags).
+ */
+export function dashcamOf(p: FinalizeTripPayloadV3, merge: MergeTarget | null): EnvelopeDashcam {
+  const own = p.dashcam ?? null;
+  const movingS = (merge?.dashcam.movingS ?? 0) + (own?.movingS ?? 0);
+  const coveredS = (merge?.dashcam.coveredS ?? 0) + (own?.coveredS ?? 0);
+  const synced = own?.synced ?? false;
+  const deviceId = own?.deviceId ?? merge?.dashcam.deviceId ?? null;
+  return { deviceId, movingS, coveredS, synced, on: dashcamDrive({ movingS, coveredS, synced }) };
+}
+
 /** What is scored: the payload alone, or its union with the merge target (plan §4 "Merge"). */
 export function buildScoringInput(
   p: FinalizeTripPayloadV3,
@@ -89,34 +113,47 @@ export function buildScoringInput(
   loopDrivesToday: number,
   streakNow: StreakState,
   safeMilesEarlierToday: number
-): { input: DriveInput; ctx: DriveContext; streak: StreakState; events: EnvelopeEvent[]; isLoop: boolean; loopRepeat: boolean } {
+): {
+  input: DriveInput;
+  ctx: DriveContext;
+  streak: StreakState;
+  events: EnvelopeEvent[];
+  isLoop: boolean;
+  loopRepeat: boolean;
+  dashcam: EnvelopeDashcam;
+} {
   // a refused target never merges, even if a stale engine offered it
   if (merge && !isRefusedReason(merge.reason)) {
     const events = [...merge.events.map(fromStored), ...p.events.map(fromPayload)];
+    const dashcam = dashcamOf(p, merge);
     return {
       input: {
         miles: merge.miles + p.miles,
         safeMiles: merge.safeMiles + p.safeMiles,
         events: events as DriveEvent[],
         loopRepeat: merge.loopRepeat,
+        dashcam: dashcam.on,
       },
       ctx: { streak: merge.streak.streak, safeMilesEarlierToday: merge.safeMilesEarlierToday },
       streak: merge.streak,
       events,
       isLoop: merge.isLoop,
       loopRepeat: merge.loopRepeat,
+      dashcam,
     };
   }
   const events = p.events.map(fromPayload);
   const isLoop = isLoopDrive(p.start, p.end, p.miles);
   const loopRepeat = isLoop && loopDrivesToday >= 2;
+  const dashcam = dashcamOf(p, null);
   return {
-    input: { miles: p.miles, safeMiles: p.safeMiles, events: events as DriveEvent[], loopRepeat },
+    input: { miles: p.miles, safeMiles: p.safeMiles, events: events as DriveEvent[], loopRepeat, dashcam: dashcam.on },
     ctx: { streak: streakNow.streak, safeMilesEarlierToday },
     streak: streakNow,
     events,
     isLoop,
     loopRepeat,
+    dashcam,
   };
 }
 
@@ -181,6 +218,7 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
       const envelope: ApplyDriveEnvelope = {
         user: userId,
         mergeInto: merge ? merge.tripId : null,
+        dashcam: s.dashcam,
         payload: {
           clientTripId: p.clientTripId,
           startedAt: p.startedAt,
@@ -194,6 +232,7 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
           end: p.end,
           polyline: p.polyline,
           appVersion: p.appVersion,
+          dashcam: p.dashcam ?? null,
         },
         scored,
         reason,

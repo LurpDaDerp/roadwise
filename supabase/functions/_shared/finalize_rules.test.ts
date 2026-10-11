@@ -52,6 +52,11 @@ Deno.test('loop: 402 m and 5 miles are the bounds; a missing end point is never 
   assertEquals(isLoopDrive(null, a, 1), false);
 });
 
+Deno.test('an unscored breakdown keeps the multipliers it was scored with (shown, never applied)', () => {
+  const bd = unscoredBreakdown(scoreDrive({ miles: 12, safeMiles: 11.8, events: [], dashcam: true }, { streak: 10, safeMilesEarlierToday: 0 }));
+  assertEquals([bd.streakMult, bd.dashcamMult, bd.mult, bd.gains, bd.net], [1.2, 1.25, 1.5, 0, 0]);
+});
+
 Deno.test('an unscored breakdown keeps the miles and zeroes everything credited or charged', () => {
   const bd = unscoredBreakdown(scoreDrive({ miles: 12, safeMiles: 11.8, events: [] }, { streak: 10, safeMilesEarlierToday: 0 }));
   assertEquals([bd.scored, bd.safeMiles, bd.creditedMiles, bd.gains, bd.penalties, bd.net, bd.ratingPenalty, bd.events], [false, 11.8, 0, 0, 0, 0, 0, []]);
