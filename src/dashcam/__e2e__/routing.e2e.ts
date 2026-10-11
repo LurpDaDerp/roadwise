@@ -276,7 +276,7 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
       expect(a.rt.state().link.visual).toMatchObject({ sound: GLANCE, onPhone: false });
     }));
 
-  test('"Also beep on DashPal": STATE buzzer_too, so a routed alert sounds on both from the start', () =>
+  test('"Also beep on DashPal": STATE buzzer_too, so a routed alert or one-shot sounds on both from the start', () =>
     scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
       const a = await linkedA(w, { buzzerToo: true });
       expect(w.rxOf('STATE', 1).at(-1)!.f.flags & 0x02).toBe(0x02);
@@ -287,6 +287,18 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
       expect(w.rxOf('ALERT_ACK', 1, t0).map((x) => x.f.outcome)).toEqual([1]);
       await w.advance(500);
       expect(a.player.sounded(t0).map((p) => p.decision.tone)).toEqual(['dp_glance']);
+
+      // A one-shot too: the buzzer chimes at once, the phone chimes, and nothing plays again later.
+      await w.dashcam('SNDOFF');
+      await w.advance(500);
+      const t1 = w.W;
+      await w.dashcam('ONCE 5');
+      expect(w.txOf('ALERT', 1, t1).map((x) => x.f.route)).toEqual([1]);
+      expect(w.buzzer(t1)).toEqual([{ at: t1, line: 'PLAY once 5' }]);
+      await w.advance(2000);
+      expect(w.rxOf('ALERT_ACK', 1, t1).map((x) => x.f.outcome)).toEqual([1]);
+      expect(a.player.sounded(t1)).toHaveLength(1);
+      expect(w.buzzer(t1)).toEqual([{ at: t1, line: 'PLAY once 5' }]);
     }));
 
   test('row 2 (disconnect) and row 14: the link drops mid-alert → buzzer at once, the phone stops; back in range COMMAND 7 re-syncs and the active alert comes as route 0 (visual only)', () =>
