@@ -16,6 +16,9 @@ export interface DriveCounts {
   hardBrake: number;
   hardAccel: number;
   hardCorner: number;
+  /** DashPal events: kept apart from the phone's counts (never in the stats). */
+  eyesOff: number;
+  drowsy: number;
 }
 
 export const EMPTY_COUNTS: DriveCounts = Object.freeze({
@@ -25,6 +28,8 @@ export const EMPTY_COUNTS: DriveCounts = Object.freeze({
   hardBrake: 0,
   hardAccel: 0,
   hardCorner: 0,
+  eyesOff: 0,
+  drowsy: 0,
 });
 
 export interface LocalDrive {
@@ -64,7 +69,7 @@ export interface LocalDriveEvent {
   disputeMessage: string | null;
   /** Removed by an accepted dispute: shown struck through, excluded from points. */
   removed: boolean;
-  measured: { speedMph?: number; limitMph?: number; peakG?: number; mounted?: boolean };
+  measured: { speedMph?: number; limitMph?: number; peakG?: number; mounted?: boolean; source?: 'dashcam' };
   stoppedInTraffic: boolean;
 }
 
@@ -94,6 +99,12 @@ export function countEvents(
         break;
       case 'hard_corner':
         c.hardCorner += 1;
+        break;
+      case 'eyes_off':
+        c.eyesOff += 1;
+        break;
+      case 'drowsy':
+        c.drowsy += 1;
         break;
     }
   }

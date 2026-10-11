@@ -53,7 +53,7 @@ export const DisputeActionSchema = z
     action: z.literal('dispute'),
     clientTripId: z.uuid(),
     eventId: z.uuid(),
-    reason: z.enum(['hazard', 'wrong_limit', 'mounted']),
+    reason: z.enum(['hazard', 'wrong_limit', 'mounted', 'camera_wrong']),
   })
   .strict();
 export const NotDrivingActionSchema = z
