@@ -9,6 +9,7 @@
  *   - **a different user** takes everything — every table but the schema's own — before anything
  *     else in the launch touches a row. The install id and the phone's DashPal pairing stay.
  */
+import { activeDashcam } from '@/dashcam/registry';
 import { createSettingsRepo, type Db } from '@/data/db';
 import { clearDeviceSecret } from '@/data/devices/deviceSecret';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
@@ -58,6 +59,19 @@ export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones', 'reminder.
 /** How long a wipe waits for the drive summaries to be cancelled before going on without it. */
 export const CANCEL_SUMMARIES_TIMEOUT_MS = 2_000;
 
+/**
+ * The DashPal events and boots just left while the app (and a connected dashcam's link) lives on:
+ * the link handshakes again, so the boot row comes back and the dashcam replays from the floor.
+ * Otherwise the link stays unsynced, and its events unplaced, until the next reconnect.
+ */
+function restartDashcamLink(): void {
+  try {
+    activeDashcam()?.restartLink();
+  } catch {
+    // the wipe stands; the next reconnect handshakes anyway
+  }
+}
+
 async function cancelSummariesBounded(): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -102,6 +116,7 @@ export async function wipeDevice(db: Db, _deps: DeviceOwnerDeps = {}): Promise<v
       }
     }
   });
+  restartDashcamLink();
 }
 
 /**
@@ -117,6 +132,7 @@ export async function wipeForSignOut(db: Db): Promise<void> {
     // Finished queue items still carry the drives' payloads; what is still owed stays for the next sign-in.
     await tx.execute("DELETE FROM sync_queue WHERE status IN ('done', 'failed')");
   });
+  restartDashcamLink();
 }
 
 /** Who this device belongs to, or null if nobody has signed in on it yet. */

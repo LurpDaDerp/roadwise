@@ -178,6 +178,12 @@ export interface DashcamLink {
   infoRead(info: DashcamInfo): boolean;
   linkUp(info: DashcamInfo): void;
   linkDown(): void;
+  /**
+   * The dashcam tables were emptied under a live connection (a sign-out or account wipe): forget
+   * the boot, cursor and offset and handshake again on the same connection, so the boot row comes
+   * back and RESUME replays from the floor. The alert table and the last STATUS stay.
+   */
+  restart(): void;
   needsRepair(cause: RepairCause): void;
   frame(bytes: ArrayLike<number>): void;
   // app side
@@ -598,6 +604,36 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     }
   }
 
+  function freshSession(info: DashcamInfo, now: number): Session {
+    return {
+      dashcamId: info.dashcamId,
+      info,
+      upAt: now,
+      helloRequestAt: null,
+      helloRetryAt: null,
+      phase: 'hello',
+      wireBoot: null,
+      bootKey: null,
+      bootReady: false,
+      floor: 0,
+      cursor: 0,
+      announcedNext: 0,
+      offsetMs: null,
+      rttMs: null,
+      pings: new Map(),
+      pingAt: [],
+      echoes: 0,
+      resumeDueAt: null,
+      resyncAt: null,
+      nextSyncAt: now + RESYNC_EVERY_MS,
+      lastStateAt: null,
+      lastFrameAt: now,
+      ackDueAt: null,
+      ackSent: -1,
+      status: null,
+    };
+  }
+
   function markAck(s: Session): void {
     if (s.cursor !== s.ackSent && s.ackDueAt === null) s.ackDueAt = deps.now() + ACK_BATCH_MS;
   }
@@ -688,33 +724,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       const now = deps.now();
       connectingNow = false;
       repairCause = null;
-      session = {
-        dashcamId: info.dashcamId,
-        info,
-        upAt: now,
-        helloRequestAt: null,
-        helloRetryAt: null,
-        phase: 'hello',
-        wireBoot: null,
-        bootKey: null,
-        bootReady: false,
-        floor: 0,
-        cursor: 0,
-        announcedNext: 0,
-        offsetMs: null,
-        rttMs: null,
-        pings: new Map(),
-        pingAt: [],
-        echoes: 0,
-        resumeDueAt: null,
-        resyncAt: null,
-        nextSyncAt: now + RESYNC_EVERY_MS,
-        lastStateAt: null,
-        lastFrameAt: now,
-        ackDueAt: null,
-        ackSent: -1,
-        status: null,
-      };
+      session = freshSession(info, now);
       // CCCDs of bonded peers are restored silently: subscribing alone does not produce a HELLO.
       requestHello(session, now);
       changed();
@@ -726,6 +736,22 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       connectingNow = false;
       alerts.clear();
       changed();
+    },
+
+    restart() {
+      const old = session;
+      if (disposed || !old) return;
+      const now = deps.now();
+      const s = freshSession(old.info, now);
+      s.upAt = old.upAt;
+      s.lastFrameAt = old.lastFrameAt;
+      s.lastStateAt = old.lastStateAt;
+      s.status = old.status;
+      // Work queued for the old session sees `session !== s` and stops.
+      session = s;
+      requestHello(s, now);
+      changed();
+      armWake(now);
     },
 
     needsRepair(cause) {

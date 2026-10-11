@@ -11,7 +11,9 @@ import { createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo
 import { createFakeAppState, createFakeSupabase, invokeOk } from '@/data/sync/__fixtures__/fakes';
 import { bootstrapApp, flushBeforeSignOut, type BootSupabase } from '@/boot/bootstrap';
 import { createDriveHeadlessTask } from '@/boot/headless';
-import { DEVICE_TABLES, ensureDeviceOwner, hasDriverData, readDeviceOwner, wipeForSignOut } from '@/boot/device';
+import { DEVICE_TABLES, ensureDeviceOwner, hasDriverData, readDeviceOwner, wipeDevice, wipeForSignOut } from '@/boot/device';
+import { createFakeDashcamRuntime } from '@/dashcam/__fixtures__/fakeRuntime';
+import { setActiveDashcam } from '@/dashcam/registry';
 import { INSTALL_ID_KEY, readInstallId } from '@/data/devices/installId';
 
 jest.mock('expo-notifications', () => ({}));
@@ -233,6 +235,24 @@ test('a handover wipe takes the DashPal events, boots and coverage but keeps the
   expect(await settings.get('dashcam.snoozes')).toEqual({ x: 1 });
   expect(await settings.get('dashcamXpaired')).toBeNull();
   expect(await settings.get('xdashcam.paired')).toBeNull();
+});
+
+test('a wipe under a live app restarts the DashPal link, so it handshakes again and the boot row comes back', async () => {
+  const d = deps({ createDashcam: null });
+  const rt = await bootstrapApp(d.deps);
+  const fake = createFakeDashcamRuntime();
+  setActiveDashcam(fake);
+  try {
+    await wipeForSignOut(db);
+    expect(fake.log).toEqual(['restartLink']);
+    await wipeDevice(db);
+    expect(fake.log).toEqual(['restartLink', 'restartLink']);
+  } finally {
+    setActiveDashcam(null);
+  }
+  // No DashPal runtime: the wipe is unchanged.
+  await expect(wipeForSignOut(db)).resolves.toBeUndefined();
+  await rt.stop();
 });
 
 test('a plain sign-out takes the DashPal events, boots and coverage with the drives; the pairing stays', async () => {

@@ -57,6 +57,8 @@ export interface DashcamRuntime {
   forget(): Promise<void>;
   command(op: number, arg?: number): Promise<boolean>;
   pruneUnattached(): Promise<number>;
+  /** The dashcam tables were emptied (a sign-out or account wipe): a live link handshakes again. */
+  restartLink(): void;
   dispose(): void;
 }
 
@@ -342,6 +344,8 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     command: (op, arg) => link.command(op, arg),
 
     pruneUnattached: () => store.pruneUnattached(now() - UNATTACHED_KEEP_MS),
+
+    restartLink: () => link.restart(),
 
     dispose() {
       disposed = true;

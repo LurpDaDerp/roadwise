@@ -408,6 +408,48 @@ describe('events (§3.6)', () => {
     expect(r.link.snapshot().synced).toBe(true);
   });
 
+  test('the dashcam tables wiped under a live link (a sign-out): restart() handshakes again on the same connection, the boot row comes back and the replay makes the phone synced', async () => {
+    const r = rig();
+    await connect(r, { nextSeq: 0 });
+    r.rx(ev(0));
+    r.rx(ev(1));
+    r.rx(alert({ alertId: 4, route: 0 }));
+    await r.settle();
+    expect(r.link.snapshot().synced).toBe(true);
+    // wipeForSignOut, with the dashcam still connected.
+    await db.execute('DELETE FROM dashcam_events');
+    await db.execute('DELETE FROM dashcam_boots');
+    r.clear();
+    r.link.restart();
+    expect(r.sent('COMMAND')).toEqual([{ type: 'COMMAND', op: 7, arg: 0 }]);
+    expect(r.link.snapshot()).toMatchObject({ lifecycle: 'connected', synced: false, visual: { alertId: 4 } });
+    r.advance(30);
+    r.rx({ type: 'HELLO', bootId: 0xdeadbeef, nextSeq: 3, oldestSeq: 0, uptimeMs: uptime(r) });
+    await r.settle();
+    for (let i = 0; i < 3; i++) {
+      const ping = r.sent('TIME_PING').at(-1)!;
+      r.advance(5);
+      r.rx({ type: 'TIME_ECHO', reqId: ping.reqId, uptimeMs: uptime(r) });
+      r.advance(5);
+      r.advance(PING_STEP);
+    }
+    await r.settle();
+    r.link.tick(r.clock.t);
+    // RESUME from the floor: the dashcam replays its ring, and the new event 2 follows.
+    expect(r.sent('RESUME')).toEqual([{ type: 'RESUME', bootId: 0xdeadbeef, nextSeq: 0 }]);
+    for (const seq of [0, 1, 2]) r.rx(ev(seq));
+    await r.settle();
+    expect(r.link.snapshot().synced).toBe(true);
+    expect((await db.execute('SELECT seq FROM dashcam_events ORDER BY seq')).rows).toEqual([{ seq: 0 }, { seq: 1 }, { seq: 2 }]);
+    expect((await r.store.getBoot(CAM, 0xdeadbeef))?.offsetMs).not.toBeNull();
+    expect(r.errors).toEqual([]);
+    // Not connected: nothing to restart.
+    r.link.linkDown();
+    r.clear();
+    r.link.restart();
+    expect(r.writes).toEqual([]);
+  });
+
   test('row 13: a reboot (new random boot id) keeps its own offsets and stores seq 0 again; the alert table is cleared', async () => {
     const r = rig();
     await connect(r, { bootId: 111 });

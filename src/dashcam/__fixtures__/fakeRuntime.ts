@@ -77,6 +77,7 @@ export function createFakeDashcamRuntime(initial: Partial<Omit<DashcamState, 'li
       return rt.commandResult;
     },
     pruneUnattached: async () => 0,
+    restartLink: () => void log.push('restartLink'),
     dispose: () => {},
   };
   return rt;
