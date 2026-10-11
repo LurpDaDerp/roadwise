@@ -27,6 +27,7 @@ export const PERMISSION_COPY = {
   location: 'RoadWise uses your location to measure speed and miles during a drive you start.',
   motion: "RoadWise uses motion to detect hard braking and when you've stopped driving.",
   camera: 'RoadWise uses the camera only to scan friend QR codes — video never leaves your phone.',
+  bluetooth: 'RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts on your phone and add its events to your drives.',
 } as const;
 
 /** `{ [key]: value }`, or nothing when the value is undefined (the key is left out entirely). */
@@ -64,6 +65,14 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
       // The Live Activity / Dynamic Island for a drive in progress (modules/live-drive +
       // targets/live-drive-widget).
       NSSupportsLiveActivities: true,
+      // The DashPal dashcam (react-native-ble-manager, no config plugin: its plugin can add
+      // location permissions with a maxSdkVersion that would break drive location on Android 12+).
+      // The usage string is shown only to a driver who sets up a DashPal (the BLE manager is never
+      // created otherwise); `bluetooth-central` keeps the link and state restoration while the app
+      // is in the background. expo-location and expo-audio append `location` and `audio` to this
+      // list (both dedupe).
+      NSBluetoothAlwaysUsageDescription: PERMISSION_COPY.bluetooth,
+      UIBackgroundModes: ['bluetooth-central'],
     },
     // Signing for the widget extension target (@bacons/apple-targets reads it). Set
     // EXPO_APPLE_TEAM_ID (EAS: an environment variable) or replace it with the team ID from Xcode.
@@ -90,6 +99,9 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#000814' },
     // Left out when there is no FCM credential: see `googleServicesFile` above.
     ...optional('googleServicesFile', googleServicesFile(projectRoot)),
+    // Bluetooth (DashPal): BLUETOOTH_SCAN (neverForLocation) and BLUETOOTH_CONNECT on Android 12+,
+    // BLUETOOTH/BLUETOOTH_ADMIN (maxSdkVersion 30) below, come from react-native-ble-manager's own
+    // manifest. No new foreground-service type: the drive's location service keeps the process alive.
     permissions: ['android.permission.POST_NOTIFICATIONS', 'android.permission.VIBRATE'],
     // Every drive starts in the app, so background ("all the time") location is never asked for,
     // whatever a library's manifest declares. The camera never records sound.

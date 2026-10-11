@@ -9,7 +9,10 @@ import appConfig, { googleServicesFile, PERMISSION_COPY } from '../../app.config
 
 // Local shapes: the app's tsconfig carries no Node types.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the same module app.config reads
-const fs = require('node:fs') as { existsSync(file: string): boolean };
+const fs = require('node:fs') as { existsSync(file: string): boolean; readFileSync(file: string, enc: 'utf8'): string };
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- a Node read in a test
+const path = require('node:path') as { join(...parts: string[]): string };
+declare const __dirname: string;
 
 const ROOT = '/work/roadwise';
 const LOCAL = `${ROOT}/google-services.json`;
@@ -139,5 +142,47 @@ describe('permissions (v3)', () => {
 
   test('the deep link scheme stays roadwise', () => {
     expect(build().scheme).toBe('roadwise');
+  });
+});
+
+// DashPal (plan §7.1): react-native-ble-manager with no config plugin. iOS gets the Bluetooth usage
+// string and the `bluetooth-central` background mode; Android takes its permissions from the
+// library's manifest, which must never put a maxSdkVersion on fine location (drive location on
+// Android 12+ depends on it).
+describe('Bluetooth (DashPal)', () => {
+  const ROOT_DIR = path.join(__dirname, '..', '..');
+  const manifest = (rel: string) => fs.readFileSync(path.join(ROOT_DIR, rel), 'utf8');
+
+  test('iOS: the usage string and the bluetooth-central background mode', () => {
+    const plist = build().ios?.infoPlist ?? {};
+    expect(plist.NSBluetoothAlwaysUsageDescription).toBe(PERMISSION_COPY.bluetooth);
+    expect(PERMISSION_COPY.bluetooth).toBe(
+      'RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts on your phone and add its events to your drives.'
+    );
+    expect(plist.UIBackgroundModes).toEqual(['bluetooth-central']);
+  });
+
+  test('no ble-manager config plugin; Bluetooth is not blocked on Android', () => {
+    const names = (build().plugins ?? []).map((p) => (Array.isArray(p) ? p[0] : p));
+    expect(names).not.toContain('react-native-ble-manager');
+    expect(build().android?.blockedPermissions?.some((p) => /BLUETOOTH/.test(p))).toBe(false);
+  });
+
+  test('the library manifest: SCAN never-for-location, CONNECT, legacy BLUETOOTH capped at 30, fine location uncapped everywhere', () => {
+    const ble = manifest('node_modules/react-native-ble-manager/android/src/main/AndroidManifest.xml');
+    expect(ble).toMatch(/android\.permission\.BLUETOOTH_SCAN"\s+android:usesPermissionFlags="neverForLocation"/);
+    expect(ble).toContain('android.permission.BLUETOOTH_CONNECT');
+    expect(ble).toMatch(/android\.permission\.BLUETOOTH"\s+android:maxSdkVersion="30"/);
+    for (const rel of [
+      'node_modules/react-native-ble-manager/android/src/main/AndroidManifest.xml',
+      'node_modules/expo-location/android/src/main/AndroidManifest.xml',
+      'modules/drive-sense/android/src/main/AndroidManifest.xml',
+    ]) {
+      const fine = manifest(rel)
+        .split('<uses-permission')
+        .filter((chunk) => chunk.includes('ACCESS_FINE_LOCATION'));
+      expect(fine.length).toBeGreaterThan(0);
+      for (const chunk of fine) expect(chunk.split('/>')[0]).not.toContain('maxSdkVersion');
+    }
   });
 });
