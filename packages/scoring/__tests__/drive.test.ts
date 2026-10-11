@@ -1,7 +1,12 @@
 import {
+  DASHCAM_EVENT_TYPES,
+  DASHCAM_MULT,
+  MULT_CAP,
   SCORING_VERSION,
   basePenalty,
   cappedMiles,
+  dashcamDrive,
+  isDashcamType,
   eventPenalty,
   nextMultiplier,
   ratingPenalty,
@@ -20,6 +25,7 @@ const ev = (p: Partial<DriveEvent> & Pick<DriveEvent, 'type' | 'tier'>): DriveEv
 };
 const ctx0 = { streak: 0, safeMilesEarlierToday: 0 };
 const drive = (p: Partial<DriveInput>): DriveInput => ({ miles: 10, safeMiles: 10, events: [], ...p });
+const roundHalfUp = (v: number): number => Math.floor(v + 0.5);
 
 describe('speedTolerance — T(L) for every row of the spec table', () => {
   test.each([
@@ -78,6 +84,8 @@ describe('basePenalty', () => {
     ['hard_corner', 'minor', 10],
     ['hard_corner', 'severe', 25],
     ['phone_pickup', 'severe', 40],
+    ['eyes_off', 'severe', 40],
+    ['drowsy', 'severe', 50],
   ] as const)('%s %s → %i', (type, tier, points) => expect(basePenalty(ev({ type, tier }))).toBe(points));
 
   test('phone pickup while stopped in traffic is 20', () =>
@@ -130,6 +138,16 @@ describe('eventPenalty', () => {
     expect(ratingPenalty(ev({ type: 'speeding', tier: 'minor', units: 3, zone: 'school' }))).toBe(15);
     expect(ratingPenalty(ev({ type: 'phone_handling', tier: 'severe', units: 3 }))).toBe(30);
   });
+
+  test('a DashPal event adds nothing to the Safety Rating', () => {
+    expect(ratingPenalty(ev({ type: 'eyes_off', tier: 'severe' }))).toBe(0);
+    expect(ratingPenalty(ev({ type: 'drowsy', tier: 'severe' }))).toBe(0);
+  });
+
+  test('DashPal events take the usual repeat multiplier within their own type', () => {
+    expect(eventPenalty(ev({ type: 'drowsy', tier: 'severe' }), 1)).toBe(62.5);
+    expect(eventPenalty(ev({ type: 'eyes_off', tier: 'severe' }), 2)).toBe(60);
+  });
 });
 
 describe('cappedMiles — daily cap as a rate integral', () => {
@@ -172,10 +190,30 @@ describe('scoreDrive — spec examples', () => {
       milePoints: 118,
       cleanBonus: 0,
       streakMult: 1.2,
+      dashcamMult: 1,
+      mult: 1.2,
       gains: 142,
       shortScale: 1,
       penalties: 10,
       net: 132,
+      ratingPenalty: 10,
+      activeEventCount: 1,
+    });
+  });
+
+  test('the same drive as a DashPal drive: 118 × 1.50 = 177 − 10 → +167', () => {
+    const b = scoreDrive(
+      drive({ miles: 12, safeMiles: 11.8, dashcam: true, events: [ev({ type: 'hard_brake', tier: 'minor' })] }),
+      { streak: 10, safeMilesEarlierToday: 0 }
+    );
+    expect(b).toMatchObject({
+      milePoints: 118,
+      streakMult: 1.2,
+      dashcamMult: 1.25,
+      mult: 1.5,
+      gains: 177,
+      penalties: 10,
+      net: 167,
       ratingPenalty: 10,
       activeEventCount: 1,
     });
@@ -201,8 +239,88 @@ describe('scoreDrive — spec examples', () => {
     const b = scoreDrive(drive({ miles: 3, safeMiles: 3 }), { streak: 4, safeMilesEarlierToday: 0 });
     expect(b.cleanBonus).toBe(25);
     expect(b.streakMult).toBe(1.08);
+    expect(b.mult).toBe(1.08);
     expect(b.gains).toBe(59);
     expect(b.net).toBe(59);
+  });
+});
+
+describe('scoreDrive — DashPal', () => {
+  test('the two DashPal types, and only them', () => {
+    expect(DASHCAM_EVENT_TYPES).toEqual(['eyes_off', 'drowsy']);
+    expect(isDashcamType('drowsy')).toBe(true);
+    expect(isDashcamType('eyes_off')).toBe(true);
+    expect(isDashcamType('phone_pickup')).toBe(false);
+    expect([DASHCAM_MULT, MULT_CAP]).toEqual([1.25, 1.5]);
+  });
+
+  test('a drowsy on a clean 5 mi drive keeps the clean bonus and adds 0 to the rating, but costs its points', () => {
+    const b = scoreDrive(drive({ miles: 5, safeMiles: 5, events: [ev({ type: 'drowsy', tier: 'severe' })] }), ctx0);
+    expect(b).toMatchObject({ cleanBonus: 25, gains: 75, penalties: 50, net: 25, ratingPenalty: 0, activeEventCount: 0 });
+    expect(b.events.map((e) => e.penalty)).toEqual([50]);
+  });
+
+  test('DashPal events are left out of activeEventCount but phone events still break clean', () => {
+    const b = scoreDrive(
+      drive({ miles: 5, safeMiles: 5, events: [ev({ type: 'eyes_off', tier: 'severe' }), ev({ type: 'hard_brake', tier: 'minor' })] }),
+      ctx0
+    );
+    expect(b).toMatchObject({ cleanBonus: 0, penalties: 50, ratingPenalty: 10, activeEventCount: 1 });
+  });
+
+  test('two drowsy events: 50 + 62.5 → 63 (the repeat multiplier per type), scaled on a short drive', () => {
+    const two = [ev({ type: 'drowsy', tier: 'severe' }), ev({ type: 'drowsy', tier: 'severe' })];
+    expect(scoreDrive(drive({ events: two }), ctx0).events.map((e) => e.penalty)).toEqual([50, 63]);
+    // shortScale 0.5 + 1.5/6 = 0.75: 37.5 → 38
+    expect(scoreDrive(drive({ miles: 1.5, safeMiles: 1.5, events: [ev({ type: 'drowsy', tier: 'severe' })] }), ctx0).penalties).toBe(38);
+  });
+
+  test('the DashPal multiplier stacks on the streak: 1.02 × 1.25 = 1.275', () => {
+    const b = scoreDrive(drive({ miles: 10, safeMiles: 10, dashcam: true }), { streak: 1, safeMilesEarlierToday: 0 });
+    expect([b.streakMult, b.dashcamMult, b.mult]).toEqual([1.02, 1.25, 1.275]);
+    expect(b.gains).toBe(159); // (100 + 25) × 1.275 = 159.375
+  });
+
+  test('together they cap at ×1.50', () => {
+    const b = scoreDrive(drive({ miles: 10, safeMiles: 10, dashcam: true }), { streak: 30, safeMilesEarlierToday: 0 });
+    expect([b.streakMult, b.dashcamMult, b.mult]).toEqual([1.3, 1.25, 1.5]);
+    expect(b.gains).toBe(188); // 125 × 1.5 = 187.5
+  });
+
+  test('the multiplier never scales penalties', () => {
+    const events = [ev({ type: 'drowsy', tier: 'severe' })];
+    const on = scoreDrive(drive({ dashcam: true, events }), ctx0);
+    const off = scoreDrive(drive({ dashcam: false, events }), ctx0);
+    expect(on.penalties).toBe(off.penalties);
+    expect(on.gains).toBe(roundHalfUp(off.gains * 1.25));
+  });
+
+  test('absent dashcam reads as off', () => {
+    const b = scoreDrive(drive({}), { streak: 4, safeMilesEarlierToday: 0 });
+    expect([b.dashcamMult, b.mult]).toEqual([1, 1.08]);
+  });
+
+  test('a too-short drive still carries the multipliers', () => {
+    const b = scoreDrive(drive({ miles: 0.2, safeMiles: 0.2, dashcam: true }), { streak: 10, safeMilesEarlierToday: 0 });
+    expect(b).toMatchObject({ scored: false, streakMult: 1.2, dashcamMult: 1.25, mult: 1.5, gains: 0 });
+  });
+});
+
+describe('dashcamDrive — synced, ≥ 60 s moving, ≥ 80 % covered', () => {
+  test.each([
+    [{ movingS: 600, coveredS: 480, synced: true }, true],
+    [{ movingS: 600, coveredS: 479, synced: true }, false],
+    [{ movingS: 600, coveredS: 600, synced: false }, false],
+    [{ movingS: 60, coveredS: 48, synced: true }, true],
+    [{ movingS: 59, coveredS: 59, synced: true }, false],
+    [{ movingS: 0, coveredS: 0, synced: true }, false],
+    [{ movingS: 100.9, coveredS: 80.2, synced: true }, true], // whole seconds: 100 and 80
+    [{ movingS: Number.NaN, coveredS: 100, synced: true }, false],
+  ])('%j → %s', (d, on) => expect(dashcamDrive(d)).toBe(on));
+
+  test('nothing reported is not a DashPal drive', () => {
+    expect(dashcamDrive(null)).toBe(false);
+    expect(dashcamDrive(undefined)).toBe(false);
   });
 });
 
@@ -346,8 +464,9 @@ describe('scoreDrive — rules', () => {
   });
 });
 
-test('SCORING_VERSION is 3 and the barrel exports the v3 API', () => {
-  expect(SCORING_VERSION).toBe(3);
+test('SCORING_VERSION is 4 and the barrel exports the API', () => {
+  expect(SCORING_VERSION).toBe(4);
   expect(barrel.scoreDrive).toBe(scoreDrive);
-  expect(barrel.SCORING_VERSION).toBe(3);
+  expect(barrel.dashcamDrive).toBe(dashcamDrive);
+  expect(barrel.SCORING_VERSION).toBe(4);
 });

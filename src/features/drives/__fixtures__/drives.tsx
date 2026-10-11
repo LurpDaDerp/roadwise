@@ -29,6 +29,8 @@ export function result(over: Partial<FinalizeTripResponseV3> = {}): FinalizeTrip
       milePoints: 118,
       cleanBonus: 0,
       streakMult: 1.2,
+      dashcamMult: 1,
+      mult: 1.2,
       gains: 142,
       shortScale: 1,
       events: [{ id: 'e1', penalty: 10 }],

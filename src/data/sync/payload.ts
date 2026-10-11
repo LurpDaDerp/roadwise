@@ -54,8 +54,14 @@ export const EVENT_TYPES_V3 = [
   'hard_corner',
   'phone_pickup',
   'phone_handling',
+  'eyes_off',
+  'drowsy',
 ] as const;
 export const TIERS_V3 = ['minor', 'moderate', 'severe'] as const;
+/** The types only the DashPal dashcam reports (mirrors DASHCAM_EVENT_TYPES in the scoring package). */
+export const DASHCAM_EVENT_TYPES_V3 = ['eyes_off', 'drowsy'] as const satisfies readonly (typeof EVENT_TYPES_V3)[number][];
+const isDashcamTypeV3 = (type: (typeof EVENT_TYPES_V3)[number]): boolean =>
+  (DASHCAM_EVENT_TYPES_V3 as readonly string[]).includes(type);
 
 /** The tiers each event type can have (plan §2). */
 export const TIERS_BY_TYPE: Record<(typeof EVENT_TYPES_V3)[number], readonly (typeof TIERS_V3)[number][]> = {
@@ -65,6 +71,8 @@ export const TIERS_BY_TYPE: Record<(typeof EVENT_TYPES_V3)[number], readonly (ty
   hard_corner: ['minor', 'severe'],
   phone_pickup: ['severe'],
   phone_handling: ['moderate', 'severe'],
+  eyes_off: ['severe'],
+  drowsy: ['severe'],
 };
 
 const roundedTo4dp = (v: number): boolean => Number(v.toFixed(4)) === v;
@@ -84,6 +92,8 @@ export const MeasuredV3Schema = z
     limitMph: z.number().min(0).max(120).optional(),
     peakG: z.number().min(0).max(10).optional(),
     mounted: z.boolean().optional(),
+    /** Who saw it: `dashcam` on (and only on) a DashPal event. */
+    source: z.literal('dashcam').optional(),
   })
   .strict();
 
@@ -113,7 +123,32 @@ export const PayloadEventV3Schema = z
   .refine((e) => e.type !== 'phone_handling' || e.units === undefined || e.units >= 1, {
     error: 'phone handling counts at least 1 unit',
     path: ['units'],
+  })
+  .refine((e) => isDashcamTypeV3(e.type) === (e.measured.source === 'dashcam'), {
+    error: 'a DashPal event carries source dashcam, and only a DashPal event does',
+    path: ['measured', 'source'],
   });
+
+/** The longest a drive can be moving, in seconds (the 12 h drive bound). */
+const MAX_DASHCAM_S = MAX_DRIVE_MS / 1000;
+
+/**
+ * The DashPal seconds of a drive, sent only when a paired dashcam covered some of it (absent: no
+ * DashPal). The server derives the DashPal drive bonus from them (scoring `dashcamDrive`).
+ */
+export const DashcamV3Schema = z
+  .object({
+    /** The dashcam's identity MAC, lowercase hex. */
+    deviceId: z.string().regex(/^[0-9a-f]{12}$/),
+    /** Seconds moving at 5 mph or more. */
+    movingS: z.number().int().min(0).max(MAX_DASHCAM_S),
+    /** Of those, seconds the dashcam watched a live face on this phone's link. */
+    coveredS: z.number().int().min(0),
+    /** Every dashcam event was persisted within 30 s of the drive's end. */
+    synced: z.boolean(),
+  })
+  .strict()
+  .refine((d) => d.coveredS <= d.movingS, { error: 'coveredS exceeds movingS', path: ['coveredS'] });
 
 /** `YYYY-MM-DD` that is a real calendar date → its UTC day number, else null. */
 const dayNumber = (s: string): number | null => {
@@ -160,6 +195,8 @@ export const FinalizeTripPayloadV3Schema = z
       .strict(),
     events: z.array(PayloadEventV3Schema).max(MAX_EVENTS),
     appVersion: z.string().min(1).max(32),
+    /** Optional: an app without DashPal (or a drive no dashcam covered) leaves it out. */
+    dashcam: DashcamV3Schema.optional(),
   })
   .strict()
   .refine((p) => p.endedAt > p.startedAt, { error: 'endedAt must be after startedAt', path: ['endedAt'] })
@@ -191,23 +228,31 @@ export const FinalizeTripPayloadV3Schema = z
     path: ['events'],
   });
 
-/** `DriveBreakdown` from the scoring package, as the server computed it. */
-export const DriveBreakdownSchema = z.object({
-  scored: z.boolean(),
-  reason: z.literal('too_short').optional(),
-  safeMiles: nonNegative,
-  creditedMiles: nonNegative,
-  milePoints: nonNegative,
-  cleanBonus: z.union([z.literal(0), z.literal(25)]),
-  streakMult: z.number().min(1),
-  gains: z.number().int().nonnegative(),
-  shortScale: z.number().min(0).max(1),
-  events: z.array(z.object({ id: z.string(), penalty: z.number().int().nonnegative() })),
-  penalties: z.number().int().nonnegative(),
-  net: z.number().int(),
-  ratingPenalty: nonNegative,
-  activeEventCount: z.number().int().nonnegative(),
-});
+/**
+ * `DriveBreakdown` from the scoring package, as the server computed it. `dashcamMult` and `mult`
+ * are optional on the wire (a result stored before DashPal lacks them) and read as 1 and
+ * `streakMult` when absent, so the parsed value is always a full `DriveBreakdown`.
+ */
+export const DriveBreakdownSchema = z
+  .object({
+    scored: z.boolean(),
+    reason: z.literal('too_short').optional(),
+    safeMiles: nonNegative,
+    creditedMiles: nonNegative,
+    milePoints: nonNegative,
+    cleanBonus: z.union([z.literal(0), z.literal(25)]),
+    streakMult: z.number().min(1),
+    dashcamMult: z.union([z.literal(1), z.literal(1.25)]).optional(),
+    mult: z.number().min(1).max(1.5).optional(),
+    gains: z.number().int().nonnegative(),
+    shortScale: z.number().min(0).max(1),
+    events: z.array(z.object({ id: z.string(), penalty: z.number().int().nonnegative() })),
+    penalties: z.number().int().nonnegative(),
+    net: z.number().int(),
+    ratingPenalty: nonNegative,
+    activeEventCount: z.number().int().nonnegative(),
+  })
+  .transform((b) => ({ ...b, dashcamMult: b.dashcamMult ?? (1 as const), mult: b.mult ?? b.streakMult }));
 
 export const STREAK_OUTCOMES = ['none', 'grew', 'freeze_used', 'at_risk', 'restored', 'reset'] as const;
 
@@ -246,6 +291,7 @@ export const FinalizeTripResponseV3Schema = z.object({
 });
 
 export type PayloadEventV3 = z.infer<typeof PayloadEventV3Schema>;
+export type DashcamV3 = z.infer<typeof DashcamV3Schema>;
 export type FinalizeTripPayloadV3 = z.infer<typeof FinalizeTripPayloadV3Schema>;
 export type DriveBreakdownWire = z.infer<typeof DriveBreakdownSchema>;
 export type FinalizeTripResponseV3 = z.infer<typeof FinalizeTripResponseV3Schema>;

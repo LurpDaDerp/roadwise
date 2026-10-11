@@ -102,6 +102,45 @@ describe('FinalizeTripPayloadV3Schema — accepts', () => {
   });
 });
 
+describe('FinalizeTripPayloadV3Schema — DashPal', () => {
+  const dashcam = { deviceId: 'a4c1380f2b7e', movingS: 1100, coveredS: 990, synced: true };
+  const drowsy = (n: number, p: Partial<PayloadEventV3> = {}) =>
+    event(n, { type: 'drowsy', tier: 'severe', durationS: 4, measured: { source: 'dashcam', speedMph: 52 }, ...p });
+
+  test('a payload without the dashcam block is still valid (older apps, drives no DashPal covered)', () => {
+    expect(valid()).not.toHaveProperty('dashcam');
+    expect(ok(valid())).toBe(true);
+  });
+  test('the dashcam block and both DashPal event types', () => {
+    const p = mutate((x) => {
+      x.dashcam = { ...dashcam };
+      x.events.push(drowsy(7), drowsy(8, { type: 'eyes_off' }));
+    });
+    expect(FinalizeTripPayloadV3Schema.parse(p)).toEqual(p);
+  });
+  test('coverage may equal moving time, and both may be 0', () => {
+    expect(ok(mutate((p) => (p.dashcam = { ...dashcam, coveredS: 1100 })))).toBe(true);
+    expect(ok(mutate((p) => (p.dashcam = { ...dashcam, movingS: 0, coveredS: 0, synced: false })))).toBe(true);
+    expect(ok(mutate((p) => (p.dashcam = { ...dashcam, movingS: 43_200, coveredS: 43_200 })))).toBe(true);
+  });
+  test.each<[string, (p: Record<string, any>) => void]>([
+    ['coveredS over movingS', (p) => (p.dashcam = { ...dashcam, coveredS: 1101 })],
+    ['movingS over 12 h', (p) => (p.dashcam = { ...dashcam, movingS: 43_201, coveredS: 0 })],
+    ['fractional seconds', (p) => (p.dashcam = { ...dashcam, movingS: 1100.5 })],
+    ['negative seconds', (p) => (p.dashcam = { ...dashcam, coveredS: -1 })],
+    ['an uppercase device id', (p) => (p.dashcam = { ...dashcam, deviceId: 'A4C1380F2B7E' })],
+    ['a short device id', (p) => (p.dashcam = { ...dashcam, deviceId: 'a4c1380f2b' })],
+    ['a missing synced flag', (p) => (p.dashcam = { deviceId: dashcam.deviceId, movingS: 1, coveredS: 1 })],
+    ['an unknown dashcam key', (p) => (p.dashcam = { ...dashcam, on: true })],
+    ['a null dashcam block', (p) => (p.dashcam = null)],
+    ['a DashPal event without source dashcam', (p) => p.events.push(drowsy(7, { measured: { speedMph: 52 } }))],
+    ['source dashcam on a phone event', (p) => (p.events[0].measured.source = 'dashcam')],
+    ['another source', (p) => p.events.push(drowsy(7, { measured: { source: 'phone' } as never }))],
+    ['a minor eyes_off', (p) => p.events.push(drowsy(7, { type: 'eyes_off', tier: 'minor' }))],
+    ['a moderate drowsy', (p) => p.events.push(drowsy(7, { tier: 'moderate' }))],
+  ])('rejects %s', (_name, fn) => expect(ok(mutate(fn))).toBe(false));
+});
+
 describe('FinalizeTripPayloadV3Schema — rejects', () => {
   test.each<[string, (p: Record<string, any>) => void]>([
     ['v other than 3', (p) => (p.v = 2)],
@@ -173,6 +212,8 @@ const breakdown: DriveBreakdown = {
   milePoints: 118,
   cleanBonus: 0,
   streakMult: 1.2,
+  dashcamMult: 1,
+  mult: 1.2,
   gains: 142,
   shortScale: 1,
   events: [{ id: uuid(1001), penalty: 10 }],
@@ -203,6 +244,25 @@ describe('FinalizeTripResponseV3Schema', () => {
   test('accepts an unscored, merged drive', () => {
     const r = { ...response(), scored: false, reason: 'too_short', mergedInto: uuid(2), breakdown: { ...breakdown, scored: false, reason: 'too_short' } };
     expect(FinalizeTripResponseV3Schema.safeParse(r).success).toBe(true);
+  });
+
+  test('a breakdown stored before DashPal (no dashcamMult / mult) reads as ×1 and the streak multiplier', () => {
+    const { dashcamMult: _d, mult: _m, ...old } = breakdown;
+    const r = FinalizeTripResponseV3Schema.parse({ ...response(), breakdown: old });
+    expect([r.breakdown.dashcamMult, r.breakdown.mult]).toEqual([1, 1.2]);
+  });
+
+  test('a DashPal breakdown round-trips', () => {
+    const b = { ...breakdown, dashcamMult: 1.25 as const, mult: 1.5, gains: 177, net: 167 };
+    expect(FinalizeTripResponseV3Schema.parse({ ...response(), breakdown: b, net: 167 }).breakdown).toEqual(b);
+  });
+
+  test.each([
+    ['a dashcamMult other than 1 or 1.25', { dashcamMult: 1.3 }],
+    ['a mult above the 1.50 cap', { mult: 1.51 }],
+    ['a mult below 1', { mult: 0.9 }],
+  ])('rejects %s', (_name, over) => {
+    expect(FinalizeTripResponseV3Schema.safeParse({ ...response(), breakdown: { ...breakdown, ...over } }).success).toBe(false);
   });
 
   test('rejects an unknown streak outcome', () => {
