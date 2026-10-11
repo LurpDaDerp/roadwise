@@ -3,12 +3,14 @@ import { join } from 'node:path';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- a CommonJS Node script
 const { renderTones, SAMPLE_RATE } = require('../make-tones.js') as {
-  renderTones: () => Record<'l1' | 'l2' | 'l3', Buffer>;
+  renderTones: () => Record<'l1' | 'l2' | 'l3' | 'dp_glance' | 'dp_drowsy' | 'dp_wake' | 'dp_phone', Buffer>;
   SAMPLE_RATE: number;
 };
 
 const SOUNDS = join(__dirname, '..', '..', 'assets', 'sounds');
 const LEVELS = ['l1', 'l2', 'l3'] as const;
+const DASHPAL = ['dp_glance', 'dp_drowsy', 'dp_wake', 'dp_phone'] as const;
+const ALL = [...LEVELS, ...DASHPAL] as const;
 
 type Wav = { channels: number; rate: number; bits: number; samples: Int16Array };
 
@@ -66,19 +68,17 @@ function soundingSegments(w: Wav): number {
 
 describe('make-tones', () => {
   const tones = renderTones();
-  const wavs = Object.fromEntries(LEVELS.map((l) => [l, parseWav(tones[l])])) as Record<
-    (typeof LEVELS)[number],
-    Wav
-  >;
+  const wavs = Object.fromEntries(ALL.map((l) => [l, parseWav(tones[l])])) as Record<(typeof ALL)[number], Wav>;
 
   test('output is byte-identical across runs', () => {
     const again = renderTones();
-    for (const l of LEVELS) expect(again[l].equals(tones[l])).toBe(true);
+    for (const l of ALL) expect(again[l].equals(tones[l])).toBe(true);
+    expect(Object.keys(tones).sort()).toEqual([...ALL].sort());
   });
 
   test('each file is 16-bit mono PCM at 44.1 kHz', () => {
     expect(SAMPLE_RATE).toBe(44100);
-    for (const l of LEVELS) {
+    for (const l of ALL) {
       expect(wavs[l].channels).toBe(1);
       expect(wavs[l].rate).toBe(44100);
       expect(wavs[l].bits).toBe(16);
@@ -105,7 +105,7 @@ describe('make-tones', () => {
   });
 
   test('every tone starts and ends at silence (ramped, no click)', () => {
-    for (const l of LEVELS) {
+    for (const l of ALL) {
       const s = wavs[l].samples;
       expect(s[0]).toBe(0);
       expect(Math.abs(s[s.length - 1]!)).toBeLessThan(200);
@@ -114,7 +114,7 @@ describe('make-tones', () => {
 
   test('every level peaks near full scale; level balance is the player gain, not the file', () => {
     const peak = (w: Wav) => w.samples.reduce((m, v) => Math.max(m, Math.abs(v)), 0) / 32767;
-    for (const l of LEVELS) {
+    for (const l of ALL) {
       expect(peak(wavs[l])).toBeGreaterThan(0.85);
       expect(peak(wavs[l])).toBeLessThan(0.95);
     }
@@ -128,6 +128,34 @@ describe('make-tones', () => {
   });
 
   test('the committed WAVs are exactly what the script generates', () => {
-    for (const l of LEVELS) expect(readFileSync(join(SOUNDS, `${l}.wav`)).equals(tones[l])).toBe(true);
+    for (const l of ALL) expect(readFileSync(join(SOUNDS, `${l}.wav`)).equals(tones[l])).toBe(true);
+  });
+
+  test('DashPal sounds: lengths and rhythm (glance 3 bursts, drowsy 3, wake one fast burst train, phone 1)', () => {
+    expect(durationMs(wavs.dp_glance)).toBeCloseTo(440, 0);
+    expect(durationMs(wavs.dp_drowsy)).toBeCloseTo(940, 0);
+    expect(durationMs(wavs.dp_wake)).toBeCloseTo(760, 0);
+    expect(durationMs(wavs.dp_phone)).toBeCloseTo(360, 0);
+    expect(soundingSegments(wavs.dp_glance)).toBe(3);
+    expect(soundingSegments(wavs.dp_drowsy)).toBe(3);
+    // 40 ms between wake pairs is under the 50 ms split: one continuous-sounding burst train.
+    expect(soundingSegments(wavs.dp_phone)).toBe(1);
+  });
+
+  test('DashPal sounds are told apart from the levels and from each other (pitch, length or rhythm)', () => {
+    const sig = (w: Wav) => ({ hz: dominantHz(w), ms: durationMs(w), seg: soundingSegments(w) });
+    const all = ALL.map((l) => [l, sig(wavs[l])] as const);
+    for (let i = 0; i < all.length; i++) {
+      for (let j = i + 1; j < all.length; j++) {
+        const [a, x] = all[i]!;
+        const [b, y] = all[j]!;
+        const distinct = Math.abs(x.hz - y.hz) > 20 || Math.abs(x.ms - y.ms) > 50 || x.seg !== y.seg;
+        if (!distinct) throw new Error(`${a} and ${b} are too alike`);
+      }
+    }
+    // The wake sound is the highest-pitched and harsh: its zero-crossing rate is above every level's.
+    expect(dominantHz(wavs.dp_wake)).toBeGreaterThan(dominantHz(wavs.l3));
+    // Drowsy is the low, slow one.
+    expect(dominantHz(wavs.dp_drowsy)).toBeLessThan(dominantHz(wavs.l1));
   });
 });

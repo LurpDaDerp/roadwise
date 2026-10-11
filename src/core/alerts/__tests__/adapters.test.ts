@@ -22,6 +22,7 @@ import {
   PLAYBACK_MODE,
   TONE_FINISH_MARGIN_MS,
   TONE_MS,
+  TONE_MS_BY_TONE,
   vibrationMs,
 } from "../adapters";
 
@@ -114,6 +115,10 @@ jest.mock("expo-speech", () => ({
 jest.mock("../../../../assets/sounds/l1.wav", () => "l1.wav");
 jest.mock("../../../../assets/sounds/l2.wav", () => "l2.wav");
 jest.mock("../../../../assets/sounds/l3.wav", () => "l3.wav");
+jest.mock("../../../../assets/sounds/dp_glance.wav", () => "dp_glance.wav");
+jest.mock("../../../../assets/sounds/dp_drowsy.wav", () => "dp_drowsy.wav");
+jest.mock("../../../../assets/sounds/dp_wake.wav", () => "dp_wake.wav");
+jest.mock("../../../../assets/sounds/dp_phone.wav", () => "dp_phone.wav");
 
 const audioMock = Audio as unknown as {
   setAudioModeAsync: jest.Mock;
@@ -318,6 +323,35 @@ describe("expo alert ports", () => {
       (c: unknown[]) => c[0],
     );
     expect(sources).toEqual(["l1.wav", "l2.wav", "l3.wav"]);
+  });
+
+  it("a DashPal tone plays its own file whatever the level, and its timer uses its own length", async () => {
+    const { audio } = await createExpoAlertPorts();
+    const tones = ["dp_glance", "dp_drowsy", "dp_wake", "dp_phone"] as const;
+    for (const tone of tones) {
+      const p = audio.play(3, { volume: 1, tone });
+      mockPlayers[mockPlayers.length - 1]!.listener!({ didJustFinish: true });
+      await p;
+    }
+    expect(audioMock.createAudioPlayer.mock.calls.map((c: unknown[]) => c[0])).toEqual(tones.map((t) => `${t}.wav`));
+    expect(TONE_MS_BY_TONE).toEqual({ dp_glance: 440, dp_drowsy: 940, dp_wake: 760, dp_phone: 360 });
+
+    jest.useFakeTimers();
+    try {
+      let done = false;
+      const playing = audio.play(1, { volume: 1, tone: "dp_drowsy" }).then(() => {
+        done = true;
+      });
+      mockPlayers[mockPlayers.length - 1]!.listener!({ isLoaded: true, playing: true, didJustFinish: false });
+      // L1's 180 ms would have resolved by now; the drowsy sound's 940 ms has not.
+      await jest.advanceTimersByTimeAsync(TONE_MS[1] + TONE_FINISH_MARGIN_MS + 10);
+      expect(done).toBe(false);
+      await jest.advanceTimersByTimeAsync(TONE_MS_BY_TONE.dp_drowsy - TONE_MS[1]);
+      await playing;
+      expect(done).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("a tone that loaded but sent no finish event resolves after its length plus the margin", async () => {

@@ -5,7 +5,14 @@ import type { EventType } from '@scoring';
 /** The three tones: 1 the soft chime, 2 the warning, 3 the urgent one. */
 export type AlertLevel = 1 | 2 | 3;
 
-export type AlertKind = EventType;
+/** A phone-engine event, or an alert the DashPal dashcam routed to the phone. */
+export type AlertKind = EventType | 'dashpal';
+
+/**
+ * A DashPal tone, distinct from the three levels (scripts/make-tones.js): glance (eyes on the
+ * road), drowsy (take a break), wake (urgent, loud) and phone (phone down). Absent: the level's tone.
+ */
+export type AlertTone = 'dp_glance' | 'dp_drowsy' | 'dp_wake' | 'dp_phone';
 
 /** How hard an alert vibrates: 1 is one short pulse, 4 the longest, heaviest pattern. */
 export type HapticIntensity = 1 | 2 | 3 | 4;
@@ -31,4 +38,20 @@ export interface AlertDecision {
   intensity?: HapticIntensity;
   /** Decided but not to be delivered. The player ignores such a decision outright. */
   suppressed?: boolean;
+  /** Plays this tone instead of the level's (the level still sets gain and the voice rule). */
+  tone?: AlertTone;
+  /**
+   * Re-read as the item starts, next to `deliverable()`: false drops it without touching a port
+   * (a DashPal repeat whose alert the dashcam has since stopped).
+   */
+  stillWanted?: () => boolean;
+  /** Speak the voice line even with the voice setting off (never on a call or vibration-only). */
+  voiceAlways?: true;
+  /**
+   * Keep the audio session active after this item: a continuous DashPal alert keeps music ducked
+   * between its repeats. The next item without it, or `stopCurrent()`, releases the session.
+   */
+  holdSession?: true;
+  /** Haptic only: no tone, no voice, the audio session untouched (the visual is the HUD's). */
+  silent?: true;
 }

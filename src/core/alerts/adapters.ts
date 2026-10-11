@@ -67,13 +67,21 @@ import type {
   SessionKind,
   VoicePort,
 } from "./player";
-import type { AlertLevel, HapticIntensity } from "./types";
+import type { AlertLevel, AlertTone, HapticIntensity } from "./types";
 
 /** The tone lengths P1 rendered (ms): L1 180, L2 300, L3 880. */
 export const TONE_MS: Readonly<Record<AlertLevel, number>> = {
   1: 180,
   2: 300,
   3: 880,
+};
+
+/** The DashPal sounds' lengths (ms), as scripts/make-tones.js renders them. */
+export const TONE_MS_BY_TONE: Readonly<Record<AlertTone, number>> = {
+  dp_glance: 440,
+  dp_drowsy: 940,
+  dp_wake: 760,
+  dp_phone: 360,
 };
 
 /**
@@ -154,8 +162,20 @@ export function audioModeFor(
   return os === "ios" ? IOS_RESPECT_SILENT_MODE : ANDROID_RESPECT_SILENT_MODE;
 }
 
-function toneSource(level: AlertLevel): number {
-  // Static requires, so Metro bundles the three files.
+function toneSource(level: AlertLevel, tone?: AlertTone): number {
+  // Static requires, so Metro bundles every file.
+  switch (tone) {
+    case "dp_glance":
+      return require("../../../assets/sounds/dp_glance.wav") as number;
+    case "dp_drowsy":
+      return require("../../../assets/sounds/dp_drowsy.wav") as number;
+    case "dp_wake":
+      return require("../../../assets/sounds/dp_wake.wav") as number;
+    case "dp_phone":
+      return require("../../../assets/sounds/dp_phone.wav") as number;
+    case undefined:
+      break;
+  }
   switch (level) {
     case 1:
       return require("../../../assets/sounds/l1.wav") as number;
@@ -206,12 +226,12 @@ export async function createExpoAlertPorts(): Promise<
       }
     },
 
-    play(level, { volume }) {
+    play(level, { volume, tone: which }) {
       tone?.finish();
       return new Promise<void>((resolve, reject) => {
         let player: ExpoAudioPlayer;
         try {
-          player = Audio.createAudioPlayer(toneSource(level), {
+          player = Audio.createAudioPlayer(toneSource(level, which), {
             keepAudioSessionActive: true,
           });
         } catch (err) {
@@ -249,7 +269,7 @@ export async function createExpoAlertPorts(): Promise<
           if (settled) return;
           release();
           reject(new Error("the alert tone never loaded or played"));
-        }, TONE_MS[level] + TONE_FINISH_MARGIN_MS);
+        }, (which ? TONE_MS_BY_TONE[which] : TONE_MS[level]) + TONE_FINISH_MARGIN_MS);
         const subscription = player.addListener(
           "playbackStatusUpdate",
           (status) => {

@@ -9,6 +9,10 @@
 // - Alert style (`alertStyle`, the Alerts and sounds setting): `vibration` plays no tone and no
 //   voice and never activates or ducks the audio session; `sound` never vibrates; `both` (the
 //   default) does both. The voice switch still governs speech under `both` and `sound`.
+// - DashPal alerts (`src/dashcam/alerts.ts`): a decision may carry its own `tone`, a `stillWanted`
+//   read (dropped unstarted once the dashcam stopped the alert), `voiceAlways` (the wake line),
+//   `holdSession` (the session stays active between a continuous alert's repeats) and `silent`
+//   (haptic only: a routed-elsewhere alert, or a phone alert during a DashPal continuous one).
 // - Feedback (`feedback`): a one-off nudge that is not a decision — the level-1 tone and a
 //   vibration at the strength it names, on the same rules (style, call) and never a voice.
 // - Audio session: level 1 honours the silent switch only when `l1RespectsSilentSwitch()` says so;
@@ -37,6 +41,7 @@ import type {
   AlertDecision,
   AlertLevel,
   AlertStyle,
+  AlertTone,
   AlertVoiceKey,
   HapticIntensity,
 } from "./types";
@@ -46,8 +51,8 @@ export type SessionKind = "respectSilent" | "playback";
 export interface AudioPort {
   /** Activate a session that ducks others; 'respectSilent' honours the silent switch, 'playback' does not. */
   activate(kind: SessionKind): Promise<void>;
-  /** Resolves when the tone finishes. */
-  play(level: AlertLevel, opts: { volume: number }): Promise<void>;
+  /** Resolves when the tone finishes. `tone` replaces the level's own tone (a DashPal sound). */
+  play(level: AlertLevel, opts: { volume: number; tone?: AlertTone }): Promise<void>;
   stop(): Promise<void>;
   /** Deactivate so ducked audio returns to full volume. */
   deactivate(): Promise<void>;
@@ -170,9 +175,14 @@ export function asAlertStyle(value: unknown): AlertStyle {
 /** What one queued item plays: a decision's sound and pulse, or a feedback's. */
 interface Playable {
   level: AlertLevel;
-  /** Spoken (L2 and up, voice on, no call) when present. */
+  /** Spoken (L2 and up, voice on — or `voiceAlways` — and no call) when present. */
   voice?: AlertVoiceKey;
   intensity: HapticIntensity;
+  tone?: AlertTone;
+  stillWanted?: () => boolean;
+  voiceAlways?: boolean;
+  holdSession?: boolean;
+  silent?: boolean;
 }
 
 interface Run {
@@ -338,15 +348,19 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
    */
   async function play(run: Run, item: Playable): Promise<void> {
     if (!deliverable()) return;
+    const wanted = item.stillWanted;
+    if (wanted && !read(wanted, true)) return;
     const chosen = style();
     const { level } = item;
-    if (chosen !== "vibration") {
+    if (chosen !== "vibration" && !item.silent) {
+      let hold = false;
       try {
         const onCall = read(() => deps.callActive(), false);
         const kind: SessionKind = level === 1 ? sessionForL1() : "playback";
         const activated = await step(run, () => audio.activate(kind));
         const volume = (onCall ? TONE_GAIN_IN_CALL : TONE_GAIN)[level];
-        const played = await step(run, () => audio.play(level, { volume }));
+        const tone = item.tone;
+        const played = await step(run, () => audio.play(level, tone ? { volume, tone } : { volume }));
         // Silent for the driver, and they must be able to see that; a sound that worked
         // clears an earlier mark.
         if (!activated || !played) unavailable();
@@ -356,12 +370,15 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
           level >= 2 &&
           key &&
           !onCall &&
-          read(() => deps.voiceEnabled(), true)
+          (item.voiceAlways === true || read(() => deps.voiceEnabled(), true))
         ) {
           await step(run, () => voice.speak(key, { volume: VOICE_GAIN }));
         }
+        // A continuous DashPal alert keeps the session (and the ducking) between repeats; a stop
+        // releases it.
+        hold = item.holdSession === true && activated && !run.stopped;
       } finally {
-        await releaseSession();
+        if (!hold) await releaseSession();
       }
     }
     if (chosen !== "sound") {
@@ -379,6 +396,11 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         intensity: decision.intensity ?? HAPTIC_INTENSITY_FOR_LEVEL[level],
       };
       if (decision.voice !== undefined) item.voice = decision.voice;
+      if (decision.tone !== undefined) item.tone = decision.tone;
+      if (decision.stillWanted !== undefined) item.stillWanted = decision.stillWanted;
+      if (decision.voiceAlways) item.voiceAlways = true;
+      if (decision.holdSession) item.holdSession = true;
+      if (decision.silent) item.silent = true;
       return enqueue((run) => play(run, item));
     },
 

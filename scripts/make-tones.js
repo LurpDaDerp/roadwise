@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Generates the three in-drive alert tones into assets/sounds, so the app ships no third-party
+ * Generates the in-drive alert tones (three levels, four DashPal sounds) into assets/sounds, so the app ships no third-party
  * audio and every byte of every tone can be regenerated from this file.
  *
  *   npm run tones:make
@@ -13,6 +13,14 @@
  *   L2  two tones rising 660 → 990 Hz, 150 ms each, back to back          — a warning
  *   L3  three pairs of 1040 Hz + 780 Hz (120 ms each), 80 ms between pairs — urgent
  * Every segment is shaped by a raised-cosine ramp so nothing clicks at its edges.
+ *
+ * The DashPal dashcam's four sounds (src/dashcam/alerts.ts) are distinct from the levels and from
+ * each other, by pitch, direction and rhythm:
+ *   dp_glance  two 1175 Hz pips (90 ms, 60 ms apart) then 880 Hz 140 ms   — eyes on the road
+ *   dp_drowsy  a slow rising arpeggio 523 → 659 → 784 Hz (220/220/320 ms, 90 ms gaps) — take a break
+ *   dp_wake    four fast 1500/1000 Hz pairs (80 ms each, 40 ms between pairs) with odd harmonics,
+ *              a harsh square-ish timbre that reads louder at the same peak — wake up (urgent)
+ *   dp_phone   a falling 1320 → 990 → 660 Hz run, 120 ms each, back to back — phone down
  *
  * Every level renders near full scale. Alerts must be heard over music and road noise, often
  * through a pocketed speaker, and L1 is the level a driver hears most. L1 is "soft" by its shape
@@ -48,6 +56,29 @@ function tone(hz, ms, rampMs, amplitude) {
     const edge = Math.min(i, n - 1 - i);
     const env = edge < ramp ? 0.5 * (1 - Math.cos((Math.PI * edge) / ramp)) : 1;
     out[i] = amplitude * env * Math.sin((2 * Math.PI * hz * i) / SAMPLE_RATE);
+  }
+  return out;
+}
+
+/**
+ * Like `tone`, with odd harmonics (1, 1/3, 1/5 of the fundamental's amplitude) for a harsher,
+ * square-ish timbre; normalised so the peak is still `amplitude`.
+ */
+function harshTone(hz, ms, rampMs, amplitude) {
+  const n = samplesFor(ms);
+  const ramp = samplesFor(rampMs);
+  const raw = new Float64Array(n);
+  let peak = 0;
+  for (let i = 0; i < n; i++) {
+    const t = (2 * Math.PI * hz * i) / SAMPLE_RATE;
+    raw[i] = Math.sin(t) + Math.sin(3 * t) / 3 + Math.sin(5 * t) / 5;
+    peak = Math.max(peak, Math.abs(raw[i]));
+  }
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const edge = Math.min(i, n - 1 - i);
+    const env = edge < ramp ? 0.5 * (1 - Math.cos((Math.PI * edge) / ramp)) : 1;
+    out[i] = (amplitude * env * raw[i]) / peak;
   }
   return out;
 }
@@ -99,7 +130,45 @@ function renderTones() {
     tone(780, 120, SEGMENT_RAMP_MS, PEAK),
   ];
   const l3 = concat([...pair(), silence(L3_GAP_MS), ...pair(), silence(L3_GAP_MS), ...pair()]);
-  return { l1: wav(l1), l2: wav(l2), l3: wav(l3) };
+
+  const dpGlance = concat([
+    tone(1175, 90, SEGMENT_RAMP_MS, PEAK),
+    silence(60),
+    tone(1175, 90, SEGMENT_RAMP_MS, PEAK),
+    silence(60),
+    tone(880, 140, SEGMENT_RAMP_MS, PEAK),
+  ]);
+  const dpDrowsy = concat([
+    tone(523, 220, L1_RAMP_MS, PEAK),
+    silence(90),
+    tone(659, 220, L1_RAMP_MS, PEAK),
+    silence(90),
+    tone(784, 320, L1_RAMP_MS, PEAK),
+  ]);
+  const wakePair = () => [harshTone(1500, 80, SEGMENT_RAMP_MS, PEAK), harshTone(1000, 80, SEGMENT_RAMP_MS, PEAK)];
+  const dpWake = concat([
+    ...wakePair(),
+    silence(40),
+    ...wakePair(),
+    silence(40),
+    ...wakePair(),
+    silence(40),
+    ...wakePair(),
+  ]);
+  const dpPhone = concat([
+    tone(1320, 120, SEGMENT_RAMP_MS, PEAK),
+    tone(990, 120, SEGMENT_RAMP_MS, PEAK),
+    tone(660, 120, SEGMENT_RAMP_MS, PEAK),
+  ]);
+  return {
+    l1: wav(l1),
+    l2: wav(l2),
+    l3: wav(l3),
+    dp_glance: wav(dpGlance),
+    dp_drowsy: wav(dpDrowsy),
+    dp_wake: wav(dpWake),
+    dp_phone: wav(dpPhone),
+  };
 }
 
 module.exports = { renderTones, SAMPLE_RATE };

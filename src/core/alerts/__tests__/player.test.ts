@@ -879,3 +879,86 @@ describe("a later alert that sounds clears the mark (final re-review n2)", () =>
     expect(seen).toEqual(["unavailable", "available"]);
   });
 });
+
+describe("DashPal decisions (tone, stillWanted, voiceAlways, holdSession, silent)", () => {
+  function toneRig() {
+    const tones: (string | undefined)[] = [];
+    const r = rig({
+      audio: {
+        play: async (level, opts) => {
+          tones.push(opts.tone);
+          r.calls.push(`play:${level}${opts.tone ? `/${opts.tone}` : ""}@${opts.volume}`);
+        },
+      },
+    });
+    return { r, tones };
+  }
+
+  it("a tone replaces the level's file but keeps the level's gain and the voice rule", async () => {
+    const { r } = toneRig();
+    await createAlertPlayer(r.deps).deliver(decision(3, { kind: "dashpal", tone: "dp_wake", voice: "Wake up" }));
+    expect(r.calls).toEqual(["activate:playback", `play:3/dp_wake@${TONE_GAIN[3]}`, `speak:Wake up@${VOICE_GAIN}`, "deactivate", "haptic:4"]);
+  });
+
+  it("stillWanted false drops the item before any port; it is read as the item starts", async () => {
+    const { r } = toneRig();
+    const player = createAlertPlayer(r.deps);
+    let wanted = true;
+    const first = player.deliver(decision(2, { id: "a" }));
+    const second = player.deliver(decision(2, { id: "b", tone: "dp_glance", stillWanted: () => wanted }));
+    wanted = false; // the dashcam stopped the alert while the first item played
+    await Promise.all([first, second]);
+    expect(r.calls.filter((c) => c.startsWith("play"))).toEqual([`play:2@${TONE_GAIN[2]}`]);
+    expect(count(r.calls, "haptic:2")).toBe(1);
+  });
+
+  it("voiceAlways speaks with the voice setting off, but never on a call or under vibration-only", async () => {
+    const { r } = toneRig();
+    r.flags.voice = false;
+    const player = createAlertPlayer(r.deps);
+    await player.deliver(decision(3, { tone: "dp_wake", voice: "Wake up", voiceAlways: true }));
+    await player.deliver(decision(2, { id: "x", tone: "dp_glance", voice: "Eyes on the road" }));
+    expect(r.calls.filter((c) => c.startsWith("speak"))).toEqual([`speak:Wake up@${VOICE_GAIN}`]);
+    r.calls.length = 0;
+    r.flags.call = true;
+    await player.deliver(decision(3, { id: "y", tone: "dp_wake", voice: "Wake up", voiceAlways: true }));
+    expect(r.calls.some((c) => c.startsWith("speak"))).toBe(false);
+    r.flags.call = false;
+    r.flags.style = "vibration";
+    r.calls.length = 0;
+    await player.deliver(decision(3, { id: "z", tone: "dp_wake", voice: "Wake up", voiceAlways: true }));
+    expect(r.calls).toEqual(["haptic:4"]);
+  });
+
+  it("holdSession keeps the session between repeats; the next plain item or stopCurrent releases it", async () => {
+    const { r } = toneRig();
+    const player = createAlertPlayer(r.deps);
+    await player.deliver(decision(2, { tone: "dp_glance", holdSession: true, intensity: 2 }));
+    await player.deliver(decision(2, { id: "r", tone: "dp_glance", holdSession: true, intensity: 2 }));
+    expect(count(r.calls, "deactivate")).toBe(0);
+    await player.stopCurrent();
+    expect(count(r.calls, "deactivate")).toBe(1);
+    r.calls.length = 0;
+    await player.deliver(decision(2, { id: "h", tone: "dp_glance", holdSession: true }));
+    await player.deliver(decision(1, { id: "plain" }));
+    expect(count(r.calls, "deactivate")).toBe(1);
+    expect(r.calls.at(-2)).toBe("deactivate");
+  });
+
+  it("a held item whose session failed to activate still releases (nothing is left half-open)", async () => {
+    const r = rig({ audio: { activate: async () => Promise.reject(new Error("busy")) } });
+    await createAlertPlayer(r.deps).deliver(decision(2, { tone: "dp_glance", holdSession: true }));
+    expect(count(r.calls, "deactivate")).toBe(1);
+  });
+
+  it("silent is haptic only: no session, no tone, no voice; sound-only style makes it nothing", async () => {
+    const { r } = toneRig();
+    const player = createAlertPlayer(r.deps);
+    await player.deliver(decision(3, { kind: "dashpal", tone: "dp_wake", voice: "Wake up", voiceAlways: true, silent: true }));
+    expect(r.calls).toEqual(["haptic:4"]);
+    r.calls.length = 0;
+    r.flags.style = "sound";
+    await player.deliver(decision(2, { id: "s", silent: true }));
+    expect(r.calls).toEqual([]);
+  });
+});
