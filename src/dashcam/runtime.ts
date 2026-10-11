@@ -197,6 +197,17 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     link.tick();
   });
 
+  /**
+   * The link's pairing changed while the transport may already be linked (a screen created the
+   * transport before the settings were read): attach again, so the transport replays its state
+   * (link up, Bluetooth) to the link with the right pairing.
+   */
+  function reattach(): void {
+    if (!transport || !detach || disposed) return;
+    detach();
+    detach = transport.attach(link);
+  }
+
   async function connectPaired(paired: PairedDashcam | null): Promise<void> {
     if (!paired) {
       transport?.setTarget(null);
@@ -217,6 +228,7 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
       loaded = true;
       if (disposed) return;
       link.setPaired(paired);
+      reattach();
       syncRepeat();
       if (paired) {
         await connectPaired(paired);

@@ -238,3 +238,33 @@ test('a transport that cannot be created is reported once and the runtime keeps 
   await expect(rt.command(1)).resolves.toBe(false);
   rt.dispose();
 });
+
+test('a screen that created the transport before the settings were read: the already-linked dashcam still reaches the link', async () => {
+  await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+  const ble = createFakeBle();
+  ble.addPeripheral({ id: PID, info: INFO });
+  const t = createBleTransport(ble, { platform: 'android', setTimer: () => 0, clearTimer: () => {} });
+  // The transport is up before the runtime exists (early start).
+  t.setTarget({ peripheralId: PID, dashcamId: CAM });
+  await t.start();
+  await flush();
+  expect(t.linked()).toBe(true);
+  const rt = createDashcamRuntime({
+    db,
+    player: { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} },
+    transport: () => t,
+    host: () => ({ recording: false, playerAvailable: true, callActive: false }),
+    styleAllowsSound: () => true,
+    platform: 'android',
+    newId: () => 'x',
+    setRepeat: () => 1,
+    clearRepeat: () => {},
+  });
+  // A screen asks for the transport before `ready` read the pairing.
+  expect(rt.transport()).toBe(t);
+  await rt.ready;
+  await flush();
+  expect(rt.state().link.lifecycle).toBe('connected');
+  expect(ble.writes.some((w) => decodeRx(w.bytes).ok && (decodeRx(w.bytes) as { frame: { type: string } }).frame.type === 'COMMAND')).toBe(true);
+  rt.dispose();
+});
