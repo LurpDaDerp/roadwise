@@ -464,6 +464,8 @@ export class World {
     recording?: boolean;
     buzzerToo?: boolean;
     db?: Db;
+    /** one-way delays (ms), from the first connect */
+    latency?: { up: number; down: number };
   }): Promise<Phone> {
     const platform = o.platform ?? 'ios';
     const raw = o.db ?? (await createSqlJsDb());
@@ -521,7 +523,7 @@ export class World {
       suspended: false,
       held: [] as number[][],
       blackholed: false,
-      latency: { up: 0, down: 0 },
+      latency: { up: o.latency?.up ?? 0, down: o.latency?.down ?? 0 },
     } as unknown as Phone;
     phone.player = this.makePlayer(phone);
     this.wireBle(phone);
