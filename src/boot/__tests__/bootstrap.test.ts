@@ -73,7 +73,7 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
 test('a cold launch: migrates, records the owner, boots the host idle, starts the runner; nothing is armed or started', async () => {
   const d = deps();
   const rt = await bootstrapApp(d.deps);
-  expect(rt.schemaVersion).toBe(4);
+  expect(rt.schemaVersion).toBe(5);
   expect(rt.owner).toBe('first');
   expect(await readDeviceOwner(db)).toBe('user-1');
   expect(rt.drive.snapshot().status).toBe('idle');
@@ -142,7 +142,17 @@ test('device ownership: a different user wipes every table but the schema’s; a
   // The install id is the one setting the wipe keeps: one phone, one device id, whoever signs in.
   expect(await readInstallId(createSettingsRepo(db))).toBe('install-keeps-1234');
   expect(await createSettingsRepo(db).get('privacy.zones')).toBeNull();
-  expect(DEVICE_TABLES).toEqual(['trip_events', 'samples', 'sync_queue', 'settings', 'speed_limit_tiles', 'trips']);
+  expect(DEVICE_TABLES).toEqual([
+    'trip_events',
+    'samples',
+    'sync_queue',
+    'settings',
+    'speed_limit_tiles',
+    'dashcam_events',
+    'dashcam_boots',
+    'dashcam_coverage',
+    'trips',
+  ]);
   expect(await ensureDeviceOwner(db, null)).toBe('signed-out');
   await createSettingsRepo(db).remove('device.lastUserId');
   expect(await ensureDeviceOwner(db, 'user-3')).toBe('first');
@@ -189,5 +199,57 @@ test('flushBeforeSignOut drains once and reports what is still owed', async () =
   const d = deps({ mayDrain: () => true });
   const rt = await bootstrapApp(d.deps);
   expect(await flushBeforeSignOut(rt)).toEqual({ sent: 0, left: 0 });
+  await rt.stop();
+});
+
+test('a handover wipe takes the DashPal events, boots and coverage but keeps the phone’s pairing and preferences (dashcam.*)', async () => {
+  const d = deps();
+  const rt = await bootstrapApp(d.deps);
+  await rt.stop();
+  await createTripsRepo(db).insert({ client_trip_id: uuid(1), started_at: T0, tz: TZ, status: 'scored' }, T0);
+  const settings = createSettingsRepo(db);
+  await settings.set('dashcam.paired', { dashcamId: 'a4cf12b3c4d5', peripheralId: 'p', name: 'DashPal-C4D5', pairedAt: 1 });
+  await settings.set('dashcam.buzzerToo', true);
+  await settings.set('dashcam.btOptIn', true);
+  await settings.set('dashcam.snoozes', { x: 1 });
+  // Lookalikes are not kept: only the `dashcam.` prefix, literally.
+  await settings.set('dashcamXpaired', 1);
+  await settings.set('xdashcam.paired', 1);
+  await db.execute(
+    `INSERT INTO dashcam_events (dashcam_id, boot_id, seq, id, ev, name, tier, audible, detail, t_ms, dur_ds, value, received_at_ms, client_trip_id)
+     VALUES ('a4cf12b3c4d5', 1, 0, 'e', 0, 'MICROSLEEP', 3, 1, 0, 1, 1, 0, 1, ?)`,
+    [uuid(1)]
+  );
+  await db.execute("INSERT INTO dashcam_boots (dashcam_id, boot_id) VALUES ('a4cf12b3c4d5', 1)");
+  await db.execute('INSERT INTO dashcam_coverage (client_trip_id, moving_s, covered_s) VALUES (?, 5, 5)', [uuid(1)]);
+
+  expect(await ensureDeviceOwner(db, 'user-2')).toBe('wiped');
+  for (const table of ['dashcam_events', 'dashcam_boots', 'dashcam_coverage']) {
+    expect((await db.execute(`SELECT COUNT(*) AS n FROM ${table}`)).rows).toEqual([{ n: 0 }]);
+  }
+  expect(await settings.get('dashcam.paired')).toEqual({ dashcamId: 'a4cf12b3c4d5', peripheralId: 'p', name: 'DashPal-C4D5', pairedAt: 1 });
+  expect(await settings.get('dashcam.buzzerToo')).toBe(true);
+  expect(await settings.get('dashcam.btOptIn')).toBe(true);
+  expect(await settings.get('dashcam.snoozes')).toEqual({ x: 1 });
+  expect(await settings.get('dashcamXpaired')).toBeNull();
+  expect(await settings.get('xdashcam.paired')).toBeNull();
+});
+
+test('a plain sign-out takes the DashPal events, boots and coverage with the drives; the pairing stays', async () => {
+  const d = deps();
+  const rt = await bootstrapApp(d.deps);
+  await createTripsRepo(db).insert({ client_trip_id: uuid(1), started_at: T0, tz: TZ, status: 'scored' }, T0);
+  await createSettingsRepo(db).set('dashcam.paired', { dashcamId: 'a4cf12b3c4d5' });
+  await db.execute(
+    `INSERT INTO dashcam_events (dashcam_id, boot_id, seq, id, ev, name, tier, audible, detail, t_ms, dur_ds, value, received_at_ms)
+     VALUES ('a4cf12b3c4d5', 1, 0, 'e', 0, 'MICROSLEEP', 3, 1, 0, 1, 1, 0, 1)`
+  );
+  await db.execute("INSERT INTO dashcam_boots (dashcam_id, boot_id) VALUES ('a4cf12b3c4d5', 1)");
+  await db.execute('INSERT INTO dashcam_coverage (client_trip_id, moving_s, covered_s) VALUES (?, 5, 5)', [uuid(1)]);
+  await wipeForSignOut(db);
+  for (const table of ['dashcam_events', 'dashcam_boots', 'dashcam_coverage']) {
+    expect((await db.execute(`SELECT COUNT(*) AS n FROM ${table}`)).rows).toEqual([{ n: 0 }]);
+  }
+  expect(await createSettingsRepo(db).get('dashcam.paired')).toEqual({ dashcamId: 'a4cf12b3c4d5' });
   await rt.stop();
 });

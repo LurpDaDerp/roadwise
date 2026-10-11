@@ -11,7 +11,7 @@
  *
  * Versions 1 and 2 are the v2 app's (never shipped to users). Version 3 drops the v2 trip tables
  * and creates the v3 ones; `settings` and `speed_limit_tiles` survive untouched. Version 4 removes
- * what the in-app driver monitoring (DMS) left behind.
+ * what the in-app driver monitoring (DMS) left behind. Version 5 adds the DashPal dashcam's tables.
  */
 
 /** Migration bookkeeping. Created before the version row is read, so it is not part of V1. */
@@ -175,4 +175,60 @@ export const SCHEMA_V4: readonly string[] = [
   'ALTER TABLE trips DROP COLUMN dms_face_seen',
   "DELETE FROM trip_events WHERE type IN ('eyes_off', 'drowsy')",
   "DELETE FROM settings WHERE key IN ('dms.enabled', 'dms.calibratedAt', 'dms.profile', 'dms.setup')",
+];
+
+/**
+ * V5 — the DashPal dashcam link (plan §3.6, §7.5).
+ *
+ * - `dashcam_events`: every event the dashcam reported, persisted before the phone acknowledges it,
+ *   deduplicated on `(dashcam_id, boot_id, seq)`. `id` is a fresh lowercase v4 uuid minted at the
+ *   first insert (an event's identity in the upload). `t_ms`/`dur_ds` are dashcam uptime; wall
+ *   times are derived from the boot's best clock offset when needed, so `at_ms`/`started_at_ms`
+ *   are only a cache. `client_trip_id` is stamped at finalize; an event outside a drive keeps
+ *   NULL and is pruned after 7 days. `boot_id` is the dashcam's random per-boot id, plus 2^32 per
+ *   local collision generation (a HELLO that cannot belong to the stored boot of that id).
+ * - `dashcam_boots`: per dashcam boot, the best uptime → epoch offset and its round trip, the
+ *   floor below which events are gone from the dashcam's ring, and the highest seq stored.
+ * - `dashcam_coverage`: per recorded drive, the seconds moving at 5 mph or more and, of those, the
+ *   seconds the dashcam watched a live face on this phone's primary link; the last time the phone
+ *   had every event the dashcam had announced.
+ */
+export const SCHEMA_V5: readonly string[] = [
+  `CREATE TABLE dashcam_events (
+    dashcam_id TEXT NOT NULL,
+    boot_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    id TEXT NOT NULL,
+    ev INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    tier INTEGER NOT NULL,
+    audible INTEGER NOT NULL,
+    detail INTEGER NOT NULL,
+    t_ms INTEGER NOT NULL,
+    dur_ds INTEGER NOT NULL,
+    value REAL NOT NULL,
+    at_ms INTEGER,
+    started_at_ms INTEGER,
+    received_at_ms INTEGER NOT NULL,
+    client_trip_id TEXT REFERENCES trips (client_trip_id) ON DELETE SET NULL,
+    PRIMARY KEY (dashcam_id, boot_id, seq)
+  )`,
+  'CREATE UNIQUE INDEX idx_dashcam_events_id ON dashcam_events (id)',
+  'CREATE INDEX idx_dashcam_events_trip ON dashcam_events (client_trip_id)',
+  'CREATE INDEX idx_dashcam_events_received ON dashcam_events (received_at_ms)',
+  `CREATE TABLE dashcam_boots (
+    dashcam_id TEXT NOT NULL,
+    boot_id INTEGER NOT NULL,
+    offset_ms INTEGER,
+    rtt_ms INTEGER,
+    floor_seq INTEGER NOT NULL DEFAULT 0,
+    max_seq INTEGER NOT NULL DEFAULT -1,
+    PRIMARY KEY (dashcam_id, boot_id)
+  )`,
+  `CREATE TABLE dashcam_coverage (
+    client_trip_id TEXT PRIMARY KEY NOT NULL REFERENCES trips (client_trip_id) ON DELETE CASCADE,
+    moving_s INTEGER NOT NULL DEFAULT 0,
+    covered_s INTEGER NOT NULL DEFAULT 0,
+    last_synced_at_ms INTEGER
+  )`,
 ];

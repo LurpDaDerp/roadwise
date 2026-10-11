@@ -1,5 +1,5 @@
 import type { Db } from '@/data/db/driver';
-import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
 interface Migration {
   readonly version: number;
@@ -15,6 +15,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 2, statements: SCHEMA_V2 },
   { version: 3, statements: SCHEMA_V3 },
   { version: 4, statements: SCHEMA_V4 },
+  { version: 5, statements: SCHEMA_V5 },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

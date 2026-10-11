@@ -7,7 +7,7 @@
  *   - **first sign-in on an empty device** wipes nothing either: the owner is simply recorded. An
  *     unowned device that *does* hold drives is wiped;
  *   - **a different user** takes everything — every table but the schema's own — before anything
- *     else in the launch touches a row.
+ *     else in the launch touches a row. The install id and the phone's DashPal pairing stay.
  */
 import { createSettingsRepo, type Db } from '@/data/db';
 import { clearDeviceSecret } from '@/data/devices/deviceSecret';
@@ -23,7 +23,17 @@ export const LAST_USER_KEY = 'device.lastUserId';
 export const PENDING_OWNER_KEY = 'device.pendingOwner';
 
 /** Every table the wipe empties, children before parents. `schema_version` is the app's, not the driver's. */
-export const DEVICE_TABLES: readonly string[] = ['trip_events', 'samples', 'sync_queue', 'settings', 'speed_limit_tiles', 'trips'];
+export const DEVICE_TABLES: readonly string[] = [
+  'trip_events',
+  'samples',
+  'sync_queue',
+  'settings',
+  'speed_limit_tiles',
+  'dashcam_events',
+  'dashcam_boots',
+  'dashcam_coverage',
+  'trips',
+];
 
 /**
  * The one setting the handover wipe keeps: this install's device id (`src/data/devices/installId.ts`).
@@ -33,8 +43,16 @@ export const DEVICE_TABLES: readonly string[] = ['trip_events', 'samples', 'sync
  */
 export const WIPE_KEEPS_SETTINGS: readonly string[] = ['device.installId'];
 
+/**
+ * The phone's DashPal pairing and preferences (`dashcam.*`: the paired dashcam, "Also beep on
+ * DashPal", the Bluetooth opt-in, the prompt snoozes) belong to the phone, not to an account: the
+ * dashcam holds this phone's bond whoever signs in, so a handover keeps them. Its events, boots and
+ * coverage are the driver's and go with the account.
+ */
+export const WIPE_KEEPS_SETTINGS_PREFIX = 'dashcam.';
+
 /** The driver's own data a plain sign-out removes (the owner key stays, so a return restores from the server). */
-export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'trips'];
+export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'dashcam_events', 'dashcam_boots', 'dashcam_coverage', 'trips'];
 export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones', 'reminder.forgottenCheckedAt'];
 
 /** How long a wipe waits for the drive summaries to be cancelled before going on without it. */
@@ -74,7 +92,11 @@ export async function wipeDevice(db: Db, _deps: DeviceOwnerDeps = {}): Promise<v
     for (const table of DEVICE_TABLES) {
       if (table === 'settings') {
         const keep = WIPE_KEEPS_SETTINGS.map(() => '?').join(', ');
-        await tx.execute(`DELETE FROM settings WHERE key NOT IN (${keep})`, [...WIPE_KEEPS_SETTINGS]);
+        // `_` and `%` are LIKE wildcards; the prefix has neither, so it matches literally.
+        await tx.execute(`DELETE FROM settings WHERE key NOT IN (${keep}) AND key NOT LIKE ?`, [
+          ...WIPE_KEEPS_SETTINGS,
+          `${WIPE_KEEPS_SETTINGS_PREFIX}%`,
+        ]);
       } else {
         await tx.execute(`DELETE FROM ${table}`);
       }
