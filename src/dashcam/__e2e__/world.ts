@@ -666,8 +666,10 @@ export class World {
     const origRead = ble.read.bind(ble);
     ble.read = async (id, service, characteristic) => {
       if (characteristic === TX_CHAR && phone.simConnected && !phone.authorized) {
-        // iOS: Insufficient Encryption makes the OS pair; the new bond then reaches the firmware.
-        if (!(await this.bond(phone))) throw { domain: 'CBATTErrorDomain', code: 15, message: 'Encryption is insufficient.' };
+        // iOS: Insufficient Encryption makes the OS pair; the new bond then reaches the firmware. A
+        // refused bond is deleted and the link terminated, so the read fails with the disconnect
+        // (modelled as CBError 7; what iOS reports there is unmeasured).
+        if (!(await this.bond(phone))) throw { domain: 'CBErrorDomain', code: 7, message: 'The specified device has disconnected from us.' };
       }
       return origRead(id, service, characteristic);
     };
