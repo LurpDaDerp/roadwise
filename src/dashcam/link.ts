@@ -411,13 +411,16 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     if (s) {
       if (s.phase === 'hello' && s.helloRetryAt !== null) times.push(s.helloRetryAt);
       if (s.pingAt.length > 0) times.push(s.pingAt[0]!);
-      if (s.phase === 'syncing' && s.resumeDueAt !== null) times.push(s.resumeDueAt);
-      if (s.resyncAt !== null) times.push(s.resyncAt);
+      // Only what `tick` can act on: RESUME, a resync and an ACK wait for the boot row (the hello
+      // chain ticks once it is known). Waking for them earlier would re-arm a zero-delay timer for
+      // as long as the database is slow.
+      if (s.phase === 'syncing' && s.resumeDueAt !== null && s.bootReady) times.push(s.resumeDueAt);
+      if (s.phase === 'resumed' && s.resyncAt !== null && s.bootReady) times.push(s.resyncAt);
       if (s.phase === 'resumed') {
         times.push((s.lastStateAt ?? 0) + STATE_EVERY_MS);
         times.push(s.nextSyncAt);
       }
-      if (s.ackDueAt !== null) times.push(s.ackDueAt);
+      if (s.ackDueAt !== null && s.bootReady && s.wireBoot !== null) times.push(s.ackDueAt);
       if (alerts.playingAny()) times.push(s.lastFrameAt + STALE_MS + 1);
     }
     const a = alerts.nextDueAt();

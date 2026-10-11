@@ -586,6 +586,36 @@ describe('STATE (§3.2, §3.7)', () => {
     expect(at).not.toBeNull();
     expect(at!).toBeLessThanOrEqual(r.clock.t + 1000);
   });
+
+  test('a slow database never makes the wake time "now" forever: RESUME waits for the boot row without a zero-delay timer loop (found by the cross-repo e2e)', async () => {
+    let releaseBoot: (() => void) | null = null;
+    const real = createDashcamStore(db);
+    const r = rig({
+      store: {
+        ensureBoot: async (...args: Parameters<DashcamStore['ensureBoot']>) => {
+          await new Promise<void>((resolve) => (releaseBoot = resolve));
+          return real.ensureBoot(...args);
+        },
+      },
+    });
+    expect(r.link.infoRead(info())).toBe(true);
+    r.link.linkUp(info());
+    r.advance(30);
+    r.rx({ type: 'HELLO', bootId: 0xdeadbeef, nextSeq: 0, oldestSeq: 0, uptimeMs: uptime(r) });
+    const drain = async () => {
+      for (let i = 0; i < 20; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    };
+    await drain(); // (not settle(): the persistence chain is the thing held)
+    // Past the 500 ms RESUME point with the boot row still unknown: nothing to do now.
+    r.advance(800);
+    const wake = r.link.nextWakeAt();
+    expect(wake === null || wake > r.clock.t).toBe(true);
+    expect(r.sent('RESUME')).toEqual([]);
+    // The boot row arrives: the hello chain ticks and RESUME goes out at once.
+    (releaseBoot as (() => void) | null)?.();
+    await r.settle();
+    expect(r.sent('RESUME')).toEqual([{ type: 'RESUME', bootId: 0xdeadbeef, nextSeq: 0 }]);
+  });
 });
 
 // ——— §3.5 alerts on the phone ———
