@@ -2,7 +2,7 @@
  * What the drive summary derives from a drive before anything is drawn: the points state, the
  * itemized breakdown, the streak line, the celebration row and the report reasons. Pure.
  */
-import { ACHIEVEMENTS, STREAK_MULT_CAP, type EventType } from '@scoring';
+import { ACHIEVEMENTS, isDashcamType, MULT_CAP, STREAK_MULT_CAP, type EventType } from '@scoring';
 
 import { formatMultiplier } from '@/ui';
 
@@ -76,10 +76,17 @@ export type BreakdownLine =
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-/** "streak ×1.20", or "streak ×1.30 (cap)" at the streak cap. */
-export function multiplierText(streakMult: number): string {
-  const capped = streakMult >= STREAK_MULT_CAP - 1e-9;
-  return `streak ${formatMultiplier(streakMult)}${capped ? ' (cap)' : ''}`;
+/**
+ * "streak ×1.20", or "streak ×1.30 (cap)" at the streak cap; on a DashPal drive
+ * "streak ×1.20 · DashPal ×1.25 → ×1.50 (cap)", the cap then being the two together.
+ */
+export function multiplierText(streakMult: number, dashcamMult = 1, mult = streakMult): string {
+  if (dashcamMult <= 1) {
+    const capped = streakMult >= STREAK_MULT_CAP - 1e-9;
+    return `streak ${formatMultiplier(streakMult)}${capped ? ' (cap)' : ''}`;
+  }
+  const capped = mult >= MULT_CAP - 1e-9;
+  return `streak ${formatMultiplier(streakMult)} · DashPal ${formatMultiplier(dashcamMult)} → ${formatMultiplier(mult)}${capped ? ' (cap)' : ''}`;
 }
 
 /** An accepted report took this event off: it no longer counts anywhere. */
@@ -120,7 +127,7 @@ export function breakdownLines(
     lines.push({
       kind: 'mult',
       key: 'mult',
-      label: `Multiplier: ${multiplierText(b.streakMult)}`,
+      label: `Multiplier: ${multiplierText(b.streakMult, b.dashcamMult, b.mult)}`,
       value: `= ${signedPoints(b.gains)}`,
       tone: 'gain',
     });
@@ -198,12 +205,13 @@ export function celebrations(d: LocalDrive): Celebration[] {
 
 // ── Reports ─────────────────────────────────────────────────────────────────────────────
 
-export type ReportReason = 'hazard' | 'wrong_limit' | 'mounted' | 'not_driving';
+export type ReportReason = 'hazard' | 'wrong_limit' | 'mounted' | 'camera_wrong' | 'not_driving';
 
 export const REPORT_LABEL: Record<ReportReason, string> = {
   hazard: 'I braked for a hazard',
   wrong_limit: 'The speed limit was wrong',
   mounted: 'My phone was mounted',
+  camera_wrong: 'DashPal got it wrong',
   not_driving: "I wasn't driving",
 };
 
@@ -216,7 +224,9 @@ export function reportReasons(type: EventType): ReportReason[] {
         ? ['wrong_limit']
         : type === 'phone_pickup' || type === 'phone_handling'
           ? ['mounted']
-          : [];
+          : isDashcamType(type)
+            ? ['camera_wrong']
+            : [];
   return [...specific, 'not_driving'];
 }
 

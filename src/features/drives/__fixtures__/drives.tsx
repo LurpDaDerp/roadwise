@@ -64,7 +64,7 @@ export function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     pointsNet: 132,
     estimate: false,
     clean: false,
-    counts: { speeding: 0, pickups: 0, handlingS: 0, hardBrake: 1, hardAccel: 0, hardCorner: 0 },
+    counts: { speeding: 0, pickups: 0, handlingS: 0, hardBrake: 1, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 0 },
     result: result(),
     reason: null,
     mergedInto: null,

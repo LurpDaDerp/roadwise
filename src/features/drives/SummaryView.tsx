@@ -135,13 +135,19 @@ function counters(drive: LocalDrive, events: readonly LocalDriveEvent[]): Counte
   const worst = (types: EventType[]) =>
     events.filter((e) => types.includes(e.type) && !isRemoved(e)).reduce<Tier | null>((w, e) => worseTier(w, e.tier), null);
   const c = drive.counts;
-  return [
+  const list: Counter[] = [
     { key: 'pickups', label: 'Phone pickups', n: c.pickups, tier: worst(['phone_pickup', 'phone_handling']), icon: EVENT_ICON.phone_pickup },
     { key: 'speeding', label: 'Speeding', n: c.speeding, tier: worst(['speeding']), icon: EVENT_ICON.speeding },
     { key: 'hardBrake', label: 'Hard braking', n: c.hardBrake, tier: worst(['hard_brake']), icon: EVENT_ICON.hard_brake },
     { key: 'hardAccel', label: 'Hard acceleration', n: c.hardAccel, tier: worst(['hard_accel']), icon: EVENT_ICON.hard_accel },
     { key: 'hardCorner', label: 'Cornering', n: c.hardCorner, tier: worst(['hard_corner']), icon: EVENT_ICON.hard_corner },
   ];
+  // A DashPal drive (its x1.25), or any DashPal event on the drive, adds the DashPal tile.
+  const dashcam = c.eyesOff + c.drowsy;
+  if ((drive.result?.breakdown.dashcamMult ?? 1) > 1 || dashcam > 0) {
+    list.push({ key: 'dashpal', label: 'DashPal events', n: dashcam, tier: worst(['eyes_off', 'drowsy']), icon: 'videocam-outline' });
+  }
+  return list;
 }
 
 function CounterTile({ counter }: { counter: Counter }) {
