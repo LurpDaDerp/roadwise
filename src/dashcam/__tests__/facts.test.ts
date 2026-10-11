@@ -130,6 +130,20 @@ test('events 61 s apart are two episodes; non-audible and non-critical events ar
   expect(f.events.every((e) => e.kind === 'drowsy')).toBe(true);
 });
 
+test('CRITICAL_STAND_DOWN (ev 31, detail face_gone) is log only: stamped to the drive, never a candidate, never extends an episode', async () => {
+  const a = T0 + 4 * 60_000;
+  const sleep = await event({ seq: 0, ev: 1, firedAt: a, durS: 2 });
+  // The critical stood down 30 s after the face went (tier 0, not audible on the wire); even if it
+  // arrived marked audible it must not count.
+  const standDown = await event({ seq: 1, ev: 31, detail: 5, firedAt: a + 40_000, durS: 30, audible: false });
+  await event({ seq: 2, ev: 31, detail: 5, firedAt: T0 + 20 * 60_000, durS: 30, audible: true });
+  const f = await loadDashcamTripFacts(db, trip);
+  expect(f.events).toEqual([{ id: sleep, kind: 'drowsy', startedAt: a - 2000, durationS: 2, speedMph: null }]);
+  const { rows } = await db.execute('SELECT client_trip_id, name FROM dashcam_events WHERE id = ?', [standDown]);
+  expect(rows[0]).toMatchObject({ client_trip_id: TRIP });
+  expect(episodes([{ id: 'x', ev: 31, detail: 5, startedAt: 0, firedAt: 30_000 }])).toEqual([]);
+});
+
 test('window selection: the derived start must be inside the drive; other dashcams, boots without an offset and events another drive claimed are left alone', async () => {
   await event({ seq: 0, ev: 0, firedAt: T0 + 500, durS: 1 }); // starts 500 ms before the drive
   const inside = await event({ seq: 1, ev: 0, firedAt: T0 + 1500, durS: 1 }); // starts at T0 + 500

@@ -1,4 +1,6 @@
 import {
+  DETAIL,
+  EV,
   decodeInfo,
   decodeRx,
   decodeTx,
@@ -166,10 +168,22 @@ test('encoders clamp out-of-range values instead of wrapping', () => {
   expect(st).toMatchObject({ ok: true, frame: { speedCms: 65535, bootId: 4294967295, ackSeq: 0 } });
 });
 
+test('every EVENT detail code the firmware sends has a vector, and the app names each one', () => {
+  const details = new Set(V.valid.filter((v) => v.type === 'EVENT').map((v) => n(v.fields, 'detail')));
+  expect([...details].sort()).toEqual([0, 1, 2, 3, 4, 5]);
+  expect(Object.values(DETAIL).sort()).toEqual([0, 1, 2, 3, 4, 5]);
+  const standDown = V.valid.find((v) => v.type === 'EVENT' && n(v.fields, 'ev') === EV.CRITICAL_STAND_DOWN)!;
+  expect(decodeTx(fromHex(standDown.hex))).toEqual({
+    ok: true,
+    frame: expect.objectContaining({ ev: 31, tier: 0, audible: false, detail: DETAIL.FACE_GONE }),
+  });
+});
+
 test('event names follow the frozen engine order; unknown ids read UNKNOWN_<n>', () => {
   expect(eventName(0)).toBe('MICROSLEEP');
   expect(eventName(2)).toBe('UNRESPONSIVE');
   expect(eventName(30)).toBe('PHONE_HANDHELD');
-  expect(eventName(31)).toBe('UNKNOWN_31');
+  expect(eventName(31)).toBe('CRITICAL_STAND_DOWN');
+  expect(eventName(32)).toBe('UNKNOWN_32');
   expect(eventName(255)).toBe('UNKNOWN_255');
 });

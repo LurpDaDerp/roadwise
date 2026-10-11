@@ -110,15 +110,20 @@ export const EVENT_NAMES: readonly string[] = [
   'NUISANCE_TAG',
   'MONITORING_RESTORED',
   'PHONE_HANDHELD',
+  'CRITICAL_STAND_DOWN',
 ];
 
-export const EV = { MICROSLEEP: 0, SLEEP: 1, UNRESPONSIVE: 2 } as const;
+export const EV = { MICROSLEEP: 0, SLEEP: 1, UNRESPONSIVE: 2, CRITICAL_STAND_DOWN: 31 } as const;
 
 /** `UNKNOWN_<n>` for an id this app does not know: stored, never scored. */
 export const eventName = (ev: number): string => EVENT_NAMES[ev] ?? `UNKNOWN_${ev}`;
 
-/** EVENT `detail` values. */
-export const DETAIL = { NONE: 0, NO_RETURN: 1, EYES_CLOSED: 2, NO_RETURN_CRITICAL: 3, NOD: 4 } as const;
+/**
+ * EVENT `detail` values. UNRESPONSIVE: no_return (D4), eyes_closed, no_return_critical (F3);
+ * MICROSLEEP: nod; CRITICAL_STAND_DOWN: face_gone (log only: a critical stopped because the driver
+ * left the car; stored, never scored, never an episode).
+ */
+export const DETAIL = { NONE: 0, NO_RETURN: 1, EYES_CLOSED: 2, NO_RETURN_CRITICAL: 3, NOD: 4, FACE_GONE: 5 } as const;
 
 /** STATUS `state`. */
 export const DASHCAM_STATE = {

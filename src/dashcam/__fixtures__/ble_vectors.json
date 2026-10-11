@@ -146,7 +146,10 @@
   {"desc": "COMMAND 5 pair confirm", "dir": "rx", "type": "COMMAND", "fields": {"op": 5, "arg": 0}, "hex": "86010500"},
   {"desc": "COMMAND 6 test sound chime", "dir": "rx", "type": "COMMAND", "fields": {"op": 6, "arg": 5}, "hex": "86010605"},
   {"desc": "COMMAND 6 test sound glance", "dir": "rx", "type": "COMMAND", "fields": {"op": 6, "arg": 1}, "hex": "86010601"},
-  {"desc": "COMMAND 7 hello", "dir": "rx", "type": "COMMAND", "fields": {"op": 7, "arg": 0}, "hex": "86010700"}
+  {"desc": "COMMAND 7 hello", "dir": "rx", "type": "COMMAND", "fields": {"op": 7, "arg": 0}, "hex": "86010700"},
+  {"desc": "EVENT UNRESPONSIVE tier 3 audible, detail no_return (D4)", "dir": "tx", "type": "EVENT", "fields": {"seq": 10, "t_ms": 650000, "dur_ds": 50, "ev": 2, "tier_aud": 131, "detail": 1, "value_x10": 50}, "hex": "03010a00000010eb09003200028301320000"},
+  {"desc": "EVENT UNRESPONSIVE tier 3 audible, detail eyes_closed", "dir": "tx", "type": "EVENT", "fields": {"seq": 11, "t_ms": 655000, "dur_ds": 60, "ev": 2, "tier_aud": 131, "detail": 2, "value_x10": 60}, "hex": "03010b00000098fe09003c000283023c0000"},
+  {"desc": "EVENT CRITICAL_STAND_DOWN (ev 31) tier 0 log-only, detail face_gone", "dir": "tx", "type": "EVENT", "fields": {"seq": 12, "t_ms": 760000, "dur_ds": 300, "ev": 31, "tier_aud": 0, "detail": 5, "value_x10": 300}, "hex": "03010c000000c0980b002c011f00052c0100"}
  ],
  "decode_only": [
   {"desc": "HELLO with 2 trailing bytes (20 bytes, the maximum a sender uses)", "dir": "tx", "type": "HELLO", "fields": {"boot_id": 2654435769, "next_seq": 42, "oldest_seq": 0, "uptime_ms": 123456}, "hex": "0101b979379e2a0000000000000040e20100dead"},
