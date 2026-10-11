@@ -1,0 +1,378 @@
+{
+  "protocol": 1,
+  "note": "DashPal BLE protocol v1 golden vectors (plan section 3). Little-endian. Fields named as in the protocol tables; tier_aud = tier | 0x80 when audible.",
+  "tx": [
+    {
+      "name": "HELLO",
+      "type": 1,
+      "hex": "0101efbeadde2c0100002c00000015cd5b07",
+      "fields": {
+        "boot_id": 3735928559,
+        "next_seq": 300,
+        "oldest_seq": 44,
+        "uptime_ms": 123456789
+      }
+    },
+    {
+      "name": "HELLO fresh boot",
+      "type": 1,
+      "hex": "0101010000000000000000000000dc050000",
+      "fields": {
+        "boot_id": 1,
+        "next_seq": 0,
+        "oldest_seq": 0,
+        "uptime_ms": 1500
+      }
+    },
+    {
+      "name": "STATUS monitoring live primary",
+      "type": 2,
+      "hex": "020100286bee035cc8fb02",
+      "fields": {
+        "uptime_ms": 4000000000,
+        "state": 3,
+        "flags": 92,
+        "fps_x10": 200,
+        "temp_c": -5,
+        "bond_count": 2
+      }
+    },
+    {
+      "name": "STATUS paused",
+      "type": 2,
+      "hex": "0201410000000501004701",
+      "fields": {
+        "uptime_ms": 65,
+        "state": 5,
+        "flags": 1,
+        "fps_x10": 0,
+        "temp_c": 71,
+        "bond_count": 1
+      }
+    },
+    {
+      "name": "EVENT microsleep audible tier3",
+      "type": 3,
+      "hex": "03010700000080ee36000f000083000f0000",
+      "fields": {
+        "seq": 7,
+        "t_ms": 3600000,
+        "dur_ds": 15,
+        "ev": 0,
+        "tier_aud": 131,
+        "detail": 0,
+        "value_x10": 15,
+        "rsv": 0
+      }
+    },
+    {
+      "name": "EVENT unresponsive no_return",
+      "type": 3,
+      "hex": "030108000000080237003200028201ffff00",
+      "fields": {
+        "seq": 8,
+        "t_ms": 3605000,
+        "dur_ds": 50,
+        "ev": 2,
+        "tier_aud": 130,
+        "detail": 1,
+        "value_x10": -1,
+        "rsv": 0
+      }
+    },
+    {
+      "name": "EVENT unknown id 99 silent",
+      "type": 3,
+      "hex": "0301ffffffffffffffffffff630100008000",
+      "fields": {
+        "seq": 4294967295,
+        "t_ms": 4294967295,
+        "dur_ds": 65535,
+        "ev": 99,
+        "tier_aud": 1,
+        "detail": 0,
+        "value_x10": -32768,
+        "rsv": 0
+      }
+    },
+    {
+      "name": "ALERT glance routed",
+      "type": 4,
+      "hex": "040101020102000101006c023700",
+      "fields": {
+        "alert_id": 513,
+        "sound": 1,
+        "tier": 2,
+        "level": 0,
+        "mode": 1,
+        "route": 1,
+        "rsv": 0,
+        "uptime_ms": 3605100
+      }
+    },
+    {
+      "name": "ALERT wake level 2 informational",
+      "type": 4,
+      "hex": "0401ffff03030201000001000000",
+      "fields": {
+        "alert_id": 65535,
+        "sound": 3,
+        "tier": 3,
+        "level": 2,
+        "mode": 1,
+        "route": 0,
+        "rsv": 0,
+        "uptime_ms": 1
+      }
+    },
+    {
+      "name": "ALERT_STOP superseded",
+      "type": 5,
+      "hex": "0501010201",
+      "fields": {
+        "alert_id": 513,
+        "reason": 1
+      }
+    },
+    {
+      "name": "ALERT_FALLBACK escalation",
+      "type": 6,
+      "hex": "0601010204",
+      "fields": {
+        "alert_id": 513,
+        "cause": 4
+      }
+    },
+    {
+      "name": "TIME_ECHO",
+      "type": 7,
+      "hex": "07010201d0023700",
+      "fields": {
+        "req_id": 258,
+        "uptime_ms": 3605200
+      }
+    },
+    {
+      "name": "PAIRED",
+      "type": 8,
+      "hex": "080103",
+      "fields": {
+        "bond_count": 3
+      }
+    }
+  ],
+  "rx": [
+    {
+      "name": "STATE lease drive speed",
+      "type": 129,
+      "hex": "81010d1e7b0a9f05efbeadde2c010000",
+      "fields": {
+        "flags": 13,
+        "ttl_ds": 30,
+        "speed_cms": 2683,
+        "local_min": 1439,
+        "boot_id": 3735928559,
+        "ack_seq": 300
+      }
+    },
+    {
+      "name": "STATE nothing known",
+      "type": 129,
+      "hex": "8101001e0000ffff0000000000000000",
+      "fields": {
+        "flags": 0,
+        "ttl_ds": 30,
+        "speed_cms": 0,
+        "local_min": 65535,
+        "boot_id": 0,
+        "ack_seq": 0
+      }
+    },
+    {
+      "name": "ACK",
+      "type": 130,
+      "hex": "8201efbeadde2d000000",
+      "fields": {
+        "boot_id": 3735928559,
+        "ack_seq": 45
+      }
+    },
+    {
+      "name": "ALERT_ACK playing",
+      "type": 131,
+      "hex": "8301010201",
+      "fields": {
+        "alert_id": 513,
+        "outcome": 1
+      }
+    },
+    {
+      "name": "ALERT_ACK cannot",
+      "type": 131,
+      "hex": "8301010000",
+      "fields": {
+        "alert_id": 1,
+        "outcome": 0
+      }
+    },
+    {
+      "name": "TIME_PING",
+      "type": 132,
+      "hex": "840102017b7cae23a1010000",
+      "fields": {
+        "req_id": 258,
+        "epoch_ms": 1791600000123
+      }
+    },
+    {
+      "name": "RESUME",
+      "type": 133,
+      "hex": "8501efbeadde2d000000",
+      "fields": {
+        "boot_id": 3735928559,
+        "next_seq": 45
+      }
+    },
+    {
+      "name": "COMMAND op 1",
+      "type": 134,
+      "hex": "86010100",
+      "fields": {
+        "op": 1,
+        "arg": 0
+      }
+    },
+    {
+      "name": "COMMAND op 2",
+      "type": 134,
+      "hex": "86010200",
+      "fields": {
+        "op": 2,
+        "arg": 0
+      }
+    },
+    {
+      "name": "COMMAND op 3",
+      "type": 134,
+      "hex": "86010300",
+      "fields": {
+        "op": 3,
+        "arg": 0
+      }
+    },
+    {
+      "name": "COMMAND op 4",
+      "type": 134,
+      "hex": "86010400",
+      "fields": {
+        "op": 4,
+        "arg": 0
+      }
+    },
+    {
+      "name": "COMMAND op 5",
+      "type": 134,
+      "hex": "86010500",
+      "fields": {
+        "op": 5,
+        "arg": 0
+      }
+    },
+    {
+      "name": "COMMAND op 6",
+      "type": 134,
+      "hex": "86010603",
+      "fields": {
+        "op": 6,
+        "arg": 3
+      }
+    },
+    {
+      "name": "COMMAND op 7",
+      "type": 134,
+      "hex": "86010700",
+      "fields": {
+        "op": 7,
+        "arg": 0
+      }
+    }
+  ],
+  "info": [
+    {
+      "name": "INFO bonded",
+      "hex": "0101010303a4cf12b3c4d5010200",
+      "fields": {
+        "ver": 1,
+        "proto_min": 1,
+        "proto_max": 1,
+        "fw_major": 3,
+        "fw_minor": 3,
+        "mac": "a4cf12b3c4d5",
+        "peer_bonded": 1,
+        "bond_count": 2,
+        "flags": 0
+      },
+      "dashcam_id": "a4cf12b3c4d5",
+      "local_name": "DashPal-C4D5"
+    },
+    {
+      "name": "INFO pairing open, not bonded",
+      "hex": "01010103030000000000ff000001",
+      "fields": {
+        "ver": 1,
+        "proto_min": 1,
+        "proto_max": 1,
+        "fw_major": 3,
+        "fw_minor": 3,
+        "mac": "0000000000ff",
+        "peer_bonded": 0,
+        "bond_count": 0,
+        "flags": 1
+      },
+      "dashcam_id": "0000000000ff",
+      "local_name": "DashPal-00FF"
+    }
+  ],
+  "malformed_tx": [
+    {
+      "name": "empty",
+      "hex": ""
+    },
+    {
+      "name": "type only",
+      "hex": "01"
+    },
+    {
+      "name": "HELLO one byte short",
+      "hex": "0101efbeadde2c0100002c00000015cd5b"
+    },
+    {
+      "name": "HELLO protocol v2",
+      "hex": "0102efbeadde2c0100002c00000015cd5b07"
+    },
+    {
+      "name": "unknown type 0x09",
+      "hex": "0901000000"
+    },
+    {
+      "name": "phone frame on TX",
+      "hex": "8201efbeadde2d000000"
+    },
+    {
+      "name": "STATUS version 0",
+      "hex": "020000286bee035cc8fb02"
+    }
+  ],
+  "longer_tx": [
+    {
+      "name": "HELLO with 2 trailing bytes",
+      "hex": "0101efbeadde2c0100002c00000015cd5b07abcd",
+      "same_as": "HELLO"
+    },
+    {
+      "name": "ALERT_STOP with trailing byte",
+      "hex": "0501010201ff",
+      "same_as": "ALERT_STOP superseded"
+    }
+  ]
+}
