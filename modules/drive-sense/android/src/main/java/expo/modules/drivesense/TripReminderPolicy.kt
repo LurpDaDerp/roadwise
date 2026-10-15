@@ -74,6 +74,7 @@ object TripReminderPolicy {
   const val UNUSED_QUIET_MS = 14_400_000L
   const val DAY_MS = 86_400_000L
   const val DAILY_CAP = 2
+  const val POST_SPACING_MS = 3_600_000L
   const val TTL_MS = 300_000L
   const val CONVERT_WINDOW_MS = 1_800_000L
   const val MISS_LIMIT = 3
@@ -100,6 +101,9 @@ object TripReminderPolicy {
   fun newTrip(startedAt: Long, lastVehicleAt: Long = startedAt): ReminderTrip = ReminderTrip(startedAt, lastVehicleAt)
 
   fun recentPosts(s: ReminderState, now: Long): Int = s.posts.count { now - it < DAY_MS }
+
+  /** policy.ts `tooSoonAfterPost`: a post went up less than an hour before `now`, whatever became of it. */
+  fun tooSoonAfterPost(s: ReminderState, now: Long): Boolean = s.posts.any { now - it < POST_SPACING_MS }
 
   /** policy.ts `settle`. */
   fun settle(s0: ReminderState, now: Long): ReminderState {
@@ -141,6 +145,7 @@ object TripReminderPolicy {
     if (t.reminded) return "reminded"
     if (s.lastCaptureEndAt > 0L && now - s.lastCaptureEndAt < AFTER_DRIVE_MS) return "after-drive"
     if (recentPosts(s, now) >= DAILY_CAP) return "daily-cap"
+    if (tooSoonAfterPost(s, now)) return "spacing"
     if (now - t.startedAt < MIN_IN_VEHICLE_MS) return "too-soon"
     if (ctx.appForeground) return "foreground"
     if (ctx.inCall) return "in-call"

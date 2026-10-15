@@ -144,7 +144,7 @@ extension TripReminderPolicy {
     s.showing = false
     if how == "driving" && now - s.postedAt < UNSEEN_MS {
       resolveIn(&s, .unseen, now)
-      return (s, s.trip != nil && s.trip?.reminded == false)
+      return (s, s.trip != nil && s.trip?.reminded == false && !tooSoonAfterPost(s, now))
     }
     if how == "arrival" {
       s.trip?.inVehicle = false

@@ -103,6 +103,7 @@ enum TripReminderPolicy {
   static let UNUSED_QUIET_MS: Double = 14_400_000
   static let DAY_MS: Double = 86_400_000
   static let DAILY_CAP: Int = 2
+  static let POST_SPACING_MS: Double = 3_600_000
   static let TTL_MS: Double = 300_000
   static let CONVERT_WINDOW_MS: Double = 1_800_000
   static let MISS_LIMIT: Int = 3
@@ -127,6 +128,9 @@ enum TripReminderPolicy {
   }
 
   static func recentPosts(_ s: ReminderState, _ now: Double) -> Int { s.posts.filter { now - $0 < DAY_MS }.count }
+
+  /// policy.ts `tooSoonAfterPost`: a post went up less than an hour before `now`, whatever became of it.
+  static func tooSoonAfterPost(_ s: ReminderState, _ now: Double) -> Bool { s.posts.contains { now - $0 < POST_SPACING_MS } }
 
   /// policy.ts `settle`.
   static func settle(_ s0: ReminderState, _ now: Double) -> ReminderState {
@@ -169,6 +173,7 @@ enum TripReminderPolicy {
     }
     if s.lastCaptureEndAt > 0 && now - s.lastCaptureEndAt < AFTER_DRIVE_MS { return "after-drive" }
     if recentPosts(s, now) >= DAILY_CAP { return "daily-cap" }
+    if tooSoonAfterPost(s, now) { return "spacing" }
     if phase == .wake {
       if ctx.lowPower { return "low-power" }
       if ctx.appForeground { return "foreground" }

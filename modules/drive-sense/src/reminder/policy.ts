@@ -49,6 +49,8 @@ export const REMINDER = {
   DAY_MS: 86_400_000,
   /** Posts in any rolling 24 h, unseen ones included. */
   DAILY_CAP: 2,
+  /** No post sooner than this after the last one, whatever became of it. */
+  POST_SPACING_MS: 3_600_000,
   /** A reminder is withdrawn after this. */
   TTL_MS: 300_000,
   /** A drive started this soon after a post = the reminder helped. */
@@ -180,6 +182,7 @@ export type GateReason =
   | 'reminded'
   | 'after-drive'
   | 'daily-cap'
+  | 'spacing'
   | 'low-power'
   | 'sessions'
   | 'foreground'
@@ -211,6 +214,9 @@ export function newTrip(startedAt: number, lastVehicleAt: number = startedAt): R
 
 /** Posts in the 24 h up to `now`. */
 export const recentPosts = (s: ReminderState, now: number): number => s.posts.filter((p) => now - p < R.DAY_MS).length;
+
+/** A post went up less than an hour before `now` (converted, unseen, missed or "Not driving" alike). */
+export const tooSoonAfterPost = (s: ReminderState, now: number): boolean => s.posts.some((p) => now - p < R.POST_SPACING_MS);
 
 /**
  * Brings the state up to `now`: clamps clock jumps, drops posts older than a day, ends an expired
@@ -263,6 +269,7 @@ export function gate(s: ReminderState, ctx: ReminderCtx, now: number, phase: Gat
   }
   if (s.lastCaptureEndAt > 0 && now - s.lastCaptureEndAt < R.AFTER_DRIVE_MS) return 'after-drive';
   if (recentPosts(s, now) >= R.DAILY_CAP) return 'daily-cap';
+  if (tooSoonAfterPost(s, now)) return 'spacing';
   if (phase === 'wake') {
     if (ctx.lowPower) return 'low-power';
     if (ctx.appForeground) return 'foreground';
@@ -701,7 +708,8 @@ export function onStop(s0: ReminderState, ctx: ReminderCtx, now: number, walked:
 export type WatchEnd = 'driving' | 'arrival' | 'ttl' | 'ended';
 
 /**
- * Driven on within 20 s is unseen (one retry this trip, and the session looks for the next stop);
+ * Driven on within 20 s is unseen (one retry this trip; the session looks for the next stop only
+ * once an hour has passed since the last post, so in practice a later session takes the retry);
  * otherwise the session ends. Walking off ends the trip's car time; the post still waits for its
  * outcome.
  */
@@ -710,7 +718,7 @@ export function onWatchEnd(s0: ReminderState, how: WatchEnd, now: number): { sta
   s.showing = false;
   if (how === 'driving' && now - s.postedAt < R.UNSEEN_MS) {
     resolveIn(s, 'unseen', now);
-    return { state: s, effect: s.trip && !s.trip.reminded ? 'seek' : 'end' };
+    return { state: s, effect: s.trip && !s.trip.reminded && !tooSoonAfterPost(s, now) ? 'seek' : 'end' };
   }
   if (how === 'arrival') {
     if (s.trip) {

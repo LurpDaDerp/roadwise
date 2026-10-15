@@ -105,7 +105,7 @@ describe('the decision table', () => {
 
   test('every gate reason is reached by some row', () => {
     const reached = new Set(REMINDER_VECTORS.filter((v) => v.kind === 'gate').map((v) => v.expected));
-    for (const r of ['off', 'paused', 'quiet', 'permission', 'capturing', 'no-trip', 'recorded', 'reminded', 'after-drive', 'daily-cap', 'low-power', 'sessions', 'foreground', 'not-fresh', 'too-soon', 'in-call', 'stale', 'on-foot', 'ok']) {
+    for (const r of ['off', 'paused', 'quiet', 'permission', 'capturing', 'no-trip', 'recorded', 'reminded', 'after-drive', 'daily-cap', 'spacing', 'low-power', 'sessions', 'foreground', 'not-fresh', 'too-soon', 'in-call', 'stale', 'on-foot', 'ok']) {
       expect({ r, reached: reached.has(r as never) }).toEqual({ r, reached: true });
     }
   });

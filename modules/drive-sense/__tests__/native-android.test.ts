@@ -413,8 +413,11 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
     for (const [name, value] of Object.entries(REMINDER)) expect({ name, value: declared.get(name) }).toEqual({ name, value });
     expect(src).toMatch(new RegExp(`val PAUSE_DAYS = longArrayOf\\(${PAUSE_DAYS.map((d) => `${d}L`).join(', ')}\\)`));
     // The stop gate's reasons, in the reference's order.
-    const order = ['off', 'paused', 'quiet', 'permission', 'capturing', 'no-trip', 'recorded', 'reminded', 'after-drive', 'daily-cap', 'too-soon', 'foreground', 'in-call', 'stale', 'on-foot', 'ok'];
+    const order = ['off', 'paused', 'quiet', 'permission', 'capturing', 'no-trip', 'recorded', 'reminded', 'after-drive', 'daily-cap', 'spacing', 'too-soon', 'foreground', 'in-call', 'stale', 'on-foot', 'ok'];
     const gate = /fun gateStop\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    // An hour between posts, whatever became of the last.
+    expect(src).toMatch(/fun tooSoonAfterPost\(s: ReminderState, now: Long\): Boolean = s\.posts\.any \{ now - it < POST_SPACING_MS \}/);
+    expect(gate).toMatch(/return "daily-cap"\s*if \(tooSoonAfterPost\(s, now\)\) return "spacing"/);
     const at = order.map((r) => gate.indexOf(`"${r}"`));
     expect(at.every((i) => i > 0)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);

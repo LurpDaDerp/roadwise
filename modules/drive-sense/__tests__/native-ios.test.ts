@@ -403,7 +403,7 @@ describe('iOS forgot-to-start reminder (text)', () => {
     );
     for (const [name, value] of Object.entries(REMINDER)) expect({ name, value: declared.get(name) }).toEqual({ name, value });
     expect(src).toContain(`static let PAUSE_DAYS: [Double] = [${PAUSE_DAYS.join(', ')}]`);
-    const order = ['off', 'paused', 'quiet', 'permission', 'capturing', 'no-trip', 'recorded', 'reminded', 'after-drive', 'daily-cap'];
+    const order = ['off', 'paused', 'quiet', 'permission', 'capturing', 'no-trip', 'recorded', 'reminded', 'after-drive', 'daily-cap', 'spacing'];
     const gate = /static func gate\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
     const at = order.map((r) => gate.indexOf(`"${r}"`));
     expect(at.every((i) => i > 0)).toBe(true);
@@ -411,6 +411,12 @@ describe('iOS forgot-to-start reminder (text)', () => {
     const stop = gate.slice(gate.indexOf('"too-soon"'));
     const stopOrder = ['too-soon', 'foreground', 'in-call', 'stale', 'on-foot'].map((r) => stop.indexOf(`"${r}"`));
     expect([...stopOrder].sort((x, y) => x - y)).toEqual(stopOrder);
+    // An hour between posts, whatever became of the last; the unseen retry looks on only once it has passed.
+    expect(src).toMatch(/static func tooSoonAfterPost\(_ s: ReminderState, _ now: Double\) -> Bool \{ s\.posts\.contains \{ now - \$0 < POST_SPACING_MS \} \}/);
+    expect(gate).toMatch(/return "daily-cap" \}\s*if tooSoonAfterPost\(s, now\) \{ return "spacing" \}/);
+    expect(code('TripReminderWakePolicy.swift')).toMatch(
+      /resolveIn\(&s, \.unseen, now\)\s*return \(s, s\.trip != nil && s\.trip\?\.reminded == false && !tooSoonAfterPost\(s, now\)\)/
+    );
   });
 });
 
