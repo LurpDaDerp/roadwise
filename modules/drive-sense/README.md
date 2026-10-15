@@ -717,7 +717,8 @@ wakes (or relaunches) the app after a significant move; `TripReminderAppDelegate
 (`appDelegateSubscribers`, `didFinishLaunching` only) restarts the monitor at every launch and adds
 the "Not driving" handler to expo-notifications' delegate list (it never sets the notification
 center's delegate). A wake first runs the cheap checks (off, paused, quiet, permissions, a drive
-open, 10 min after a drive, the daily cap, Low Power Mode, RoadWise in front), then reads the
+open, 10 min after a drive, the daily cap, an hour since the last reminder, Low Power Mode,
+RoadWise in front), then reads the
 motion history (back to the trip's last car moment, 10 min to 3 h): a trip opens only on confident
 car motion from the last 2 min with the driver not on foot, and closes only after 10 min with no
 car motion in the history; a car run that began 10 min or more after the trip's last car moment
@@ -732,7 +733,8 @@ looks on. It lasts at most 10 min, ends after 3 min without 10 mph, runs at most
 (under 90 s) or during a call waits for the next stop. After the post (sound, interruption level
 `.active`: a Focus holds it), the session watches with a 10 m filter: over 5 mph, or 30 m from the
 stop by a fix accurate to 20 m, with no walking → driven on (within 20 s: **unseen**, not a miss,
-and one more stop may remind); 30 m with walking → walked off (withdrawn; the post still waits for
+and one more stop in the trip may remind, once an hour has passed since it, so a later session
+takes it); 30 m with walking → walked off (withdrawn; the post still waits for
 its outcome); 5 min, RoadWise in front, a capture start, the reminder off, or "Always" or Precise
 Location lost → withdrawn and done. When the back-off turns the reminder off during a wake, the
 wake stops with it. A wake whose background task iOS ends early does not hold the next wake. After
@@ -748,13 +750,14 @@ plus 1 s, on no prompt within 1 s, or after 60 s). Kept at While Using, the stat
 
 | Rule | Number |
 |---|---|
-| At most one reminder a trip (one more on iOS after an unseen one) | 1 (+1) |
+| At most one reminder a trip (one more on iOS after an unseen one, an hour or more later) | 1 (+1) |
 | Never while a drive is open, or for a trip a drive was open in | — |
 | None this soon after a drive ended | 10 min |
 | None this early in a trip | 90 s |
 | None while RoadWise is in front or during a call | — |
 | Quiet after a reminder that did not lead to a drive (lifted by a drive within 30 min, or an unseen one) | 4 h |
 | Reminders in any 24 h, unseen ones and ones that led to a drive included | 2 |
+| Least time between any two reminders, whatever became of the first (led to a drive, unseen, missed, "Not driving") | 1 h |
 | Withdrawn after | 5 min |
 | A drive started within this of a reminder = it helped (streak and back-off reset) | 30 min |
 | "Not driving" quiet | 12 h |

@@ -9,7 +9,7 @@ export const reminderCopy = {
     autoOff: 'Turned off: the last reminders went unused. Turn it on to try again.',
     onAndroid: 'On. At most once a trip, without sound. It often shows as you park.',
     onIos:
-      "On. Once a trip, only while you're stopped (once more if you drove on before you could see it). If Driving Focus is on, allow RoadWise in it. If you swipe RoadWise away, it waits until you open it.",
+      "On. Once a trip, only while you're stopped (once more, an hour or more later, if you drove on before you could see it). If Driving Focus is on, allow RoadWise in it. If you swipe RoadWise away, it waits until you open it.",
     needsAndroid: (what: string) => `On, but it needs ${what}.`,
     needsAlways: 'On, but it needs Location set to Always (Settings › RoadWise › Location).',
     needsPrecise: 'On, but it needs Precise Location turned on.',
@@ -26,7 +26,7 @@ export const reminderCopy = {
     title: 'Forgot to start?',
     body:
       "Turn this on and RoadWise sends one note when you seem to be driving with no drive recording. Tap it when you're stopped and it's safe to open RoadWise and start your drive. It never starts a drive by itself.",
-    bullets: ['Usually once a trip, never more than 2 a day', 'Goes quiet if you keep ignoring it'],
+    bullets: ['Usually once a trip, at least an hour apart, never more than 2 a day', 'Goes quiet if you keep ignoring it'],
     ios: 'Needs Location set to Always so it can notice a trip with the app closed. iOS may ask you later to confirm. Your location stays on your phone.',
     android: 'Silent, and it often shows as you park.',
     turnOn: 'Turn on',
