@@ -1,7 +1,13 @@
 /** @jest-environment node */
 // Events end to end (plan §3.6, §7.5; §10 rows 11–13, 25): the firmware's event ring, HELLO/RESUME
 // replay and ACK handling (simulator) against the app's persistence (sql.js, the real SQLite engine):
-// persist-then-ACK, the cursor and floor, replay exactly once, dedupe, crash, reboot, ring overflow.
+// persist-then-ACK, the cursor and floor, replay exactly once, dedupe, crash, reboot, ring overflow;
+// and events only inside a drive started by hand: what arrives with no drive open is ignored.
+import { dashcamDrive } from '@scoring';
+
+import { dashcamBlock, dashcamEvents } from '@/core/engine/finalize';
+
+import type { DashcamTripFacts } from '../facts';
 import { CAM, EPOCH0, linkedA, scenario, type Phone, type World } from './world';
 import { describeSim } from './suite';
 
@@ -273,4 +279,203 @@ describeSim('DashPal events (firmware ring ↔ app store)', () => {
       expect(a.rt.state().link.lifecycle).toBe('connected');
       expect(w.lines('ERR')).toEqual([]);
     }));
+});
+
+// ——— events only inside a drive started by hand ———
+
+interface FlagRow {
+  seq: number;
+  id: string;
+  ignored: number;
+  client_trip_id: string | null;
+}
+
+async function flagRows(p: Phone): Promise<FlagRow[]> {
+  const { rows } = await p.rawDb.execute('SELECT seq, id, ignored, client_trip_id FROM dashcam_events WHERE dashcam_id = ? ORDER BY boot_id, seq', [CAM]);
+  return rows as unknown as FlagRow[];
+}
+
+/** A critical event fired now on the dashcam: a microsleep (drowsy) or a D4 no-look-back (eyes off). */
+const microsleep = (w: World) => w.dashcam(`EV 0 3 1 0 ${w.uptime()} 15 15`);
+const d4 = (w: World) => w.dashcam(`EV 2 3 1 1 ${w.uptime()} 40 40`);
+
+/** Start Drive: the drive is open from now (recording). */
+function startDrive(w: World, p: Phone): number {
+  p.host.recording = true;
+  return w.now();
+}
+
+/**
+ * The hold-to-end: the engine finalizes (no longer recording, the drive still open through the
+ * catch-up and the facts), the link catches up (at most 3 s), the facts are read; then the drive is
+ * closed. Samples at 15 m/s every second stand in for the drive's rows, for the GPS speed gate.
+ */
+async function endDrive(w: World, p: Phone, startedAt: number): Promise<{ facts: DashcamTripFacts; endedAt: number }> {
+  const endedAt = w.now();
+  p.host.recording = false;
+  p.host.driveOpen = true;
+  let done = false;
+  const ending = p.rt.beforeFinalize(p.tripId).then(() => {
+    done = true;
+  });
+  await w.until(() => done, 5000, 'drive-end catch-up');
+  await ending;
+  for (let ts = startedAt; ts <= endedAt; ts += 1000) {
+    await p.rawDb.execute('INSERT INTO samples (client_trip_id, ts, row_json) VALUES (?, ?, ?)', [p.tripId, ts, JSON.stringify({ ts, speed: 15, gnssValid: true })]);
+  }
+  const facts = await p.rt.facts({ clientTripId: p.tripId, startedAt, endedAt });
+  p.host.driveOpen = false;
+  return { facts, endedAt };
+}
+
+/**
+ * Out of range, then back with the phone's database slow to answer HELLO: the dashcam sends its
+ * whole ring after 2 s with no RESUME. `drive`: rows keep coming meanwhile.
+ */
+async function wholeRingReplay(w: World, p: Phone, drive = false): Promise<number[]> {
+  await w.outOfRange(p);
+  if (drive) w.row(p, { speed: 15 });
+  const release = w.holdDb(p, /dashcam_boots/);
+  const t0 = w.W;
+  await w.backInRange(p);
+  await w.runTo(t0 + 2100);
+  const ring = w.txOf('EVENT', p.conn, t0).map((x) => x.f.seq);
+  await release();
+  if (drive) await w.drive(p, 3000, 15);
+  else await w.advance(3000);
+  return ring;
+}
+
+describeSim('DashPal events only inside a drive started by hand (firmware ring ↔ app store and facts)', () => {
+  test(
+    'a replay holding in-drive and out-of-drive events: only the drive’s events are claimed and scored; every event stored exactly once; the ACK reaches next_seq; the DashPal drive test is unaffected',
+    () =>
+      scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
+        await w.dashcam('STATE 3 72'); // monitoring, calibrated, live face
+        const a = await linkedA(w);
+        // No drive open: two events, delivered live, are kept only as delivery records.
+        await microsleep(w);
+        await w.advance(500);
+        await d4(w);
+        await w.advance(1500);
+        expect((await flagRows(a)).map((r) => [r.seq, r.ignored])).toEqual([
+          [0, 1],
+          [1, 1],
+        ]);
+        expect(lastAck(w, 1)).toBe(2);
+        expect(a.rt.state().link.synced).toBe(true);
+        // Still before the drive, the phone away: one more fires and waits in the ring.
+        await w.outOfRange(a);
+        await w.advance(1000);
+        await microsleep(w);
+        await w.advance(1000);
+
+        // Start Drive. The phone comes back: the pre-drive event arrives inside the drive.
+        const startedAt = startDrive(w, a);
+        await w.backInRange(a);
+        await w.drive(a, 32_000, 15);
+        await microsleep(w); // in the drive (about 32 s in), live
+        await w.drive(a, 55_000, 15);
+        // The link drops mid-drive; an eyes-off fires while it is down (its own episode: it starts
+        // more than 60 s after the microsleep).
+        await w.outOfRange(a);
+        await w.drive(a, 12_000, 15);
+        await d4(w);
+        await w.drive(a, 3000, 15);
+        // Reconnect mid-drive with the whole ring replayed.
+        expect(await wholeRingReplay(w, a, true)).toEqual([0, 1, 2, 3, 4]);
+        await w.drive(a, 70_000, 15);
+
+        const { facts, endedAt } = await endDrive(w, a, startedAt);
+        const rows = await flagRows(a);
+        // Each seq stored once, by its first copy; only the two that arrived with no drive open are ignored.
+        expect(rows.map((r) => [r.seq, r.ignored])).toEqual([
+          [0, 1],
+          [1, 1],
+          [2, 0],
+          [3, 0],
+          [4, 0],
+        ]);
+        const counters = a.rt.state().link.counters;
+        expect(counters).toMatchObject({ stored: 5, ignored: 2, storeErrors: 0, orphanEvents: 0 });
+        expect(counters.duplicates).toBeGreaterThanOrEqual(4);
+        expect(lastAck(w, 1)).toBe(5);
+        expect(a.rt.state().link.synced).toBe(true);
+        // Claimed: the in-drive microsleep and eyes-off. Not the ignored ones, nor the pre-drive one
+        // that arrived during the drive (its condition started before the tap).
+        expect(rows.filter((r) => r.client_trip_id === a.tripId).map((r) => r.seq)).toEqual([3, 4]);
+        expect(facts.events.map((e) => [e.id, e.kind])).toEqual([
+          [rows[3]!.id, 'drowsy'],
+          [rows[4]!.id, 'eyes_off'],
+        ]);
+        expect(dashcamEvents(facts.events, { startedAt, endedAt }, []).map((e) => [e.id, e.type])).toEqual([
+          [rows[3]!.id, 'drowsy'],
+          [rows[4]!.id, 'eyes_off'],
+        ]);
+        // The DashPal drive test: moving and watched seconds from STATUS, synced at the end.
+        const block = dashcamBlock(facts);
+        expect(block).toMatchObject({ deviceId: CAM, synced: true });
+        expect(block!.movingS).toBeGreaterThanOrEqual(120);
+        expect(block!.coveredS * 100).toBeGreaterThanOrEqual(80 * block!.movingS);
+        expect(dashcamDrive(block)).toBe(true);
+
+        // After the drive (finalize done): ignored again, and no drive claims it.
+        await microsleep(w);
+        await w.advance(1500);
+        expect((await flagRows(a)).at(-1)).toMatchObject({ seq: 5, ignored: 1, client_trip_id: null });
+        expect(lastAck(w, 1)).toBe(6);
+      })
+  );
+
+  test('replay duplicates: the whole ring replayed twice (once with no drive open, once in a drive) adds no row and flips no flag; the duplicates counter rises', () =>
+    scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
+      const a = await linkedA(w);
+      await events(w, 3);
+      await w.advance(1500);
+      expect(a.rt.state().link.counters).toMatchObject({ stored: 3, ignored: 3, duplicates: 0 });
+      expect(await wholeRingReplay(w, a)).toEqual([0, 1, 2]);
+      const afterFirst = a.rt.state().link.counters.duplicates;
+      expect(afterFirst).toBeGreaterThanOrEqual(3);
+      startDrive(w, a);
+      expect(await wholeRingReplay(w, a)).toEqual([0, 1, 2]);
+      expect(a.rt.state().link.counters.duplicates).toBeGreaterThanOrEqual(afterFirst + 3);
+      expect(a.rt.state().link.counters).toMatchObject({ stored: 3, ignored: 3, storeErrors: 0 });
+      expect((await flagRows(a)).map((r) => [r.seq, r.ignored])).toEqual([
+        [0, 1],
+        [1, 1],
+        [2, 1],
+      ]);
+      expect((await a.rawDb.execute('SELECT COUNT(*) AS n FROM dashcam_events')).rows).toEqual([{ n: 3 }]);
+      expect(lastAck(w, 1)).toBe(3);
+      expect(a.rt.state().link.synced).toBe(true);
+    }));
+
+  test(
+    'reconnect mid-drive: the drive carries on, coverage resumes once the link is back, an event from the gap joins the drive, and the phone ends synced (a DashPal drive)',
+    () =>
+      scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
+        await w.dashcam('STATE 3 72');
+        const a = await linkedA(w);
+        const startedAt = startDrive(w, a);
+        await w.drive(a, 40_000, 15);
+        const before = (await a.rt.facts({ clientTripId: a.tripId, startedAt, endedAt: w.now() })).coveredS;
+        expect(before).toBeGreaterThanOrEqual(38);
+        await w.outOfRange(a);
+        await w.drive(a, 4000, 15);
+        await d4(w);
+        await w.drive(a, 4000, 15);
+        const gap = (await a.rt.facts({ clientTripId: a.tripId, startedAt, endedAt: w.now() })).coveredS;
+        expect(gap).toBe(before); // nothing watched while the link is down
+        await w.backInRange(a);
+        await w.connected(a);
+        await w.drive(a, 40_000, 15);
+        const { facts } = await endDrive(w, a, startedAt);
+        expect(facts.coveredS).toBeGreaterThanOrEqual(gap + 35);
+        expect(facts.synced).toBe(true);
+        expect(dashcamDrive(dashcamBlock(facts))).toBe(true);
+        expect(facts.events.map((e) => e.kind)).toEqual(['eyes_off']);
+        expect((await flagRows(a)).map((r) => [r.seq, r.ignored, r.client_trip_id])).toEqual([[0, 0, a.tripId]]);
+        expect(lastAck(w, 1)).toBe(1);
+      })
+  );
 });
