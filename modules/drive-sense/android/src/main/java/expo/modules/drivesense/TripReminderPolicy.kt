@@ -61,6 +61,7 @@ object TripReminderPolicy {
   const val SPEED_ACC_MAX_MPS = 2.0
   const val STOP_HOLD_MS = 12_000L
   const val MOVED_AWAY_M = 30.0
+  const val FIX_ACC_MAX_M = 20.0
   const val WALK_CHECK_MS = 30_000L
   const val UNSEEN_MS = 20_000L
   const val MAX_RETRIES_PER_TRIP = 1
@@ -91,7 +92,7 @@ object TripReminderPolicy {
   private const val MAX_PAUSE_MS = 28L * DAY_MS
 
   enum class Tier { NONE, CAPTURE, IDLE, TRIP }
-  enum class Outcome { CONVERTED, UNSEEN, ARRIVAL, NOT_DRIVING, MISSED }
+  enum class Outcome { CONVERTED, UNSEEN, NOT_DRIVING, MISSED }
   enum class Effect { NONE, POST, WITHDRAW }
 
   class TransitionResult(val state: ReminderState, val effect: Effect, val reason: String?)
@@ -148,6 +149,13 @@ object TripReminderPolicy {
     return "ok"
   }
 
+  /** policy.ts `posted`: the reminder went up. */
+  fun posted(s0: ReminderState, now: Long): ReminderState {
+    val s = s0.deepCopy()
+    postedIn(s, now)
+    return s
+  }
+
   private fun postedIn(s: ReminderState, now: Long) {
     s.posts.add(now)
     s.trip?.reminded = true
@@ -161,6 +169,8 @@ object TripReminderPolicy {
     s.missStreak += 1
     if (s.missStreak < MISS_LIMIT) return
     s.missStreak = 0
+    // A stored level out of range reads as the nearest real one.
+    s.pauseLevel = s.pauseLevel.coerceIn(0, PAUSE_DAYS.size)
     if (s.pauseLevel < PAUSE_DAYS.size) {
       s.pausedUntil = now + PAUSE_DAYS[s.pauseLevel] * DAY_MS
       s.pauseLevel += 1
@@ -172,6 +182,7 @@ object TripReminderPolicy {
   }
 
   private fun resolveIn(s: ReminderState, outcome: Outcome, now: Long) {
+    val pending = s.pendingAt > 0L
     s.showing = false
     s.pendingAt = 0L
     when (outcome) {
@@ -188,10 +199,10 @@ object TripReminderPolicy {
           t.reminded = false
         }
       }
-      Outcome.ARRIVAL -> Unit
       Outcome.NOT_DRIVING -> {
+        // A note whose outcome is already counted (or none waiting) gets the quiet, not a second miss.
         s.notDrivingUntil = now + NOT_DRIVING_QUIET_MS
-        missIn(s, now)
+        if (pending) missIn(s, now)
       }
       Outcome.MISSED -> missIn(s, now)
     }
@@ -249,13 +260,15 @@ object TripReminderPolicy {
     return if (s.trip != null) Tier.TRIP else Tier.IDLE
   }
 
-  /** policy.ts `onTransitions`: one delivered batch, read whole before acting. */
+  /** policy.ts `onTransitions`: one delivered batch, read whole before acting; at the same time, IN_VEHICLE EXIT first. */
   fun onTransitions(s0: ReminderState, events: List<Transition>, arrival: Long, subscribedAt: Long, ctx: ReminderCtx): TransitionResult {
     val s = settle(s0, arrival)
     var withdrew = false
     var stop: Transition? = null
     var afterStop = false
-    for (e in events.filter { it.ts >= subscribedAt }.sortedBy { it.ts }) {
+    val batch = events.filter { it.ts >= subscribedAt }
+      .sortedWith(compareBy<Transition>({ it.ts }, { if (it.kind == TransitionKind.VEHICLE_EXIT) 0 else 1 }))
+    for (e in batch) {
       val t = s.trip
       when (e.kind) {
         TransitionKind.VEHICLE_ENTER -> {
@@ -282,7 +295,7 @@ object TripReminderPolicy {
         }
         TransitionKind.WALKING_ENTER, TransitionKind.RUNNING_ENTER -> {
           if (s.showing) {
-            resolveIn(s, Outcome.ARRIVAL, arrival)
+            s.showing = false
             withdrew = true
           }
           if (t != null && t.inVehicle) {

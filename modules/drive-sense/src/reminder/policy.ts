@@ -2,8 +2,9 @@
 // reminder"). Native code mirrors it line for line: `android/.../TripReminderPolicy.kt` (the shared
 // part and the Android activity-transition part) and `ios/TripReminderPolicy.swift` (the shared part
 // and the iOS wake, fix and stop part), each under the SAME constant names with the SAME values
-// (`__tests__/native-*.test.ts` compare them). `vectors.ts` is the decision table every rule is
-// checked against.
+// (`__tests__/native-*.test.ts` compare them). `vectors.ts` is the decision table: Jest runs every
+// row against this reference, and the on-device self-test runs each row its platform has through the
+// native mirror (`src/reminder/selfTest.ts`).
 //
 // The reminder only ever notifies. Nothing here, or in either mirror, starts a drive: the driver
 // taps the notification, RoadWise opens on Home, and the driver taps Start Drive there.
@@ -23,6 +24,8 @@ export const REMINDER = {
   STOP_HOLD_MS: 12_000,
   /** Moved this far from the stop while the reminder shows = moved on (iOS). */
   MOVED_AWAY_M: 30,
+  /** Only a fix this accurate (horizontal, m) can say the phone moved away from the stop (iOS). */
+  FIX_ACC_MAX_M: 20,
   /** How far back the walking check looks when the phone moved away from the stop (iOS). */
   WALK_CHECK_MS: 30_000,
   /** Withdrawn by driving within this = unseen, not a miss (iOS). */
@@ -186,7 +189,7 @@ export type GateReason =
   | 'stale'
   | 'on-foot';
 
-export type Outcome = 'converted' | 'unseen' | 'arrival' | 'notDriving' | 'missed';
+export type Outcome = 'converted' | 'unseen' | 'notDriving' | 'missed';
 
 const clone = (s: ReminderState): ReminderState => ({ ...s, trip: s.trip ? { ...s.trip } : null, posts: [...s.posts] });
 
@@ -302,6 +305,8 @@ function missIn(s: ReminderState, now: number): void {
   s.missStreak += 1;
   if (s.missStreak < R.MISS_LIMIT) return;
   s.missStreak = 0;
+  // A stored level out of range is read as the nearest real one.
+  s.pauseLevel = Math.min(Math.max(s.pauseLevel, 0), PAUSE_DAYS.length);
   const days = PAUSE_DAYS[s.pauseLevel];
   if (days !== undefined) {
     s.pausedUntil = now + days * R.DAY_MS;
@@ -314,6 +319,7 @@ function missIn(s: ReminderState, now: number): void {
 }
 
 function resolveIn(s: ReminderState, outcome: Outcome, now: number): void {
+  const pending = s.pendingAt > 0;
   s.showing = false;
   s.pendingAt = 0;
   switch (outcome) {
@@ -329,11 +335,10 @@ function resolveIn(s: ReminderState, outcome: Outcome, now: number): void {
         s.trip.reminded = false;
       }
       return;
-    case 'arrival':
-      return;
     case 'notDriving':
+      // Tapped on a note whose outcome is already counted (or with none waiting): quiet, no second miss.
       s.notDrivingUntil = now + R.NOT_DRIVING_QUIET_MS;
-      missIn(s, now);
+      if (pending) missIn(s, now);
       return;
     case 'missed':
       missIn(s, now);
@@ -341,7 +346,10 @@ function resolveIn(s: ReminderState, outcome: Outcome, now: number): void {
   }
 }
 
-/** What became of a post (§ outcomes); every outcome takes the notification down. */
+/**
+ * What became of a post; every outcome takes the notification down. Walking off is not an outcome:
+ * it only takes the note down, and the post still waits for a drive within 30 min (else a miss).
+ */
 export function resolve(s0: ReminderState, outcome: Outcome, now: number): ReminderState {
   const s = clone(s0);
   resolveIn(s, outcome, now);
@@ -419,9 +427,11 @@ export interface TransitionResult {
 
 /**
  * One delivered batch, read whole before acting. Events from before the subscription are a replay
- * and are dropped. A stop is a STILL ENTER at most 2 min after an IN_VEHICLE EXIT; it reminds only
- * if nothing after it in the batch says the driver walked off or drove on. Driving on (IN_VEHICLE
- * ENTER) takes a showing reminder down; walking off does too, and that is an arrival, not a miss.
+ * and are dropped. Events with the same time are read EXIT first (Play services stamps the EXIT of
+ * one activity and the ENTER of the next alike). A stop is a STILL ENTER at most 2 min after an
+ * IN_VEHICLE EXIT; it reminds only if nothing after it in the batch says the driver walked off or
+ * drove on. Driving on (IN_VEHICLE ENTER) or walking off takes a showing reminder down; the post
+ * still waits for its outcome.
  */
 export function onTransitions(
   s0: ReminderState,
@@ -434,7 +444,8 @@ export function onTransitions(
   let withdrew = false;
   let stop: Transition | null = null;
   let afterStop = false;
-  const batch = events.filter((e) => e.ts >= subscribedAt).sort((a, b) => a.ts - b.ts);
+  const exitFirst = (e: Transition): number => (e.kind === 'vehicle-exit' ? 0 : 1);
+  const batch = events.filter((e) => e.ts >= subscribedAt).sort((a, b) => a.ts - b.ts || exitFirst(a) - exitFirst(b));
   for (const e of batch) {
     const t = s.trip;
     if (e.kind === 'vehicle-enter') {
@@ -459,7 +470,7 @@ export function onTransitions(
       }
     } else if (e.kind === 'walking-enter' || e.kind === 'running-enter') {
       if (s.showing) {
-        resolveIn(s, 'arrival', arrival);
+        s.showing = false;
         withdrew = true;
       }
       if (t && t.inVehicle) {
@@ -497,7 +508,10 @@ export interface Activity {
 export interface MotionSummary {
   /** End of the newest confident car stretch; 0 for none. */
   lastAutomotiveAt: number;
-  /** Start of the current run of confident car stretches; 0 for none. */
+  /**
+   * Start of the current run of confident car stretches; 0 for none. A confident walk, run or ride
+   * ends a run, and so do 10 min (`TRIP_GAP_MS`) with no confident car motion.
+   */
   automotiveSince: number;
   /** The newest activity is a confident walk, run or ride. */
   onFootNow: boolean;
@@ -520,7 +534,7 @@ export function summarizeActivities(list: readonly Activity[], now: number): Mot
     const end = i + 1 < sorted.length ? sorted[i + 1]!.start : now;
     onFootNow = a.onFoot && a.confident;
     if (a.automotive && a.confident) {
-      if (automotiveSince === 0) automotiveSince = a.start;
+      if (automotiveSince === 0 || (lastAutomotiveAt > 0 && a.start - lastAutomotiveAt >= R.TRIP_GAP_MS)) automotiveSince = a.start;
       lastAutomotiveAt = end;
     } else if (a.onFoot && a.confident) {
       automotiveSince = 0;
@@ -537,8 +551,10 @@ export interface WakeResult {
 
 /**
  * A significant-location wake, after the motion check. A trip closes only after 10 min with no car
- * motion in the history (not merely a long gap between wakes); a trip opens only on car motion from
- * the last 2 min with the driver not on foot. A GPS session starts only through the session gate.
+ * motion in the history (not merely a long gap between wakes), including a car run that began 10 min
+ * or more after the trip's last car moment (a new drive after a park); a trip opens only on car
+ * motion from the last 2 min with the driver not on foot. A GPS session starts only through the
+ * session gate.
  */
 export function onWake(s0: ReminderState, now: number, motion: MotionSummary, ctx: ReminderCtx): WakeResult {
   const s = settle(s0, now);
@@ -548,7 +564,7 @@ export function onWake(s0: ReminderState, now: number, motion: MotionSummary, ct
   const fresh = a > 0 && now - a <= R.AUTOMOTIVE_FRESH_MS && !motion.onFootNow;
   const t = s.trip;
   if (t) {
-    if (now - Math.max(t.lastVehicleAt, a) >= R.TRIP_GAP_MS) {
+    if (now - Math.max(t.lastVehicleAt, a) >= R.TRIP_GAP_MS || motion.automotiveSince - t.lastVehicleAt >= R.TRIP_GAP_MS) {
       s.trip = null;
     } else {
       t.lastVehicleAt = Math.max(t.lastVehicleAt, a);
@@ -583,6 +599,8 @@ export interface Fix {
   speed: number;
   /** m/s; negative = unknown */
   speedAcc: number;
+  /** horizontal accuracy, m; negative = unknown */
+  hAcc: number;
   lat: number;
   lng: number;
 }
@@ -621,7 +639,8 @@ export function metres(lat1: number, lng1: number, lat2: number, lng2: number): 
 
 /**
  * One GPS fix. Looking: 10 mph first, then under 3 mph held 12 s is a stop (a fix with no usable
- * speed neither makes nor breaks the hold). Watching: over 5 mph, or 30 m from the stop, ends it.
+ * speed neither makes nor breaks the hold). Watching: over 5 mph, or 30 m from the stop by a fix
+ * accurate to 20 m, ends it.
  */
 export function onFix(tr0: SessionTracker, fix: Fix, now: number): { tracker: SessionTracker; verdict: FixVerdict } {
   const tr = { ...tr0 };
@@ -630,7 +649,8 @@ export function onFix(tr0: SessionTracker, fix: Fix, now: number): { tracker: Se
   const valid = fix.speed >= 0 && fix.speedAcc >= 0 && fix.speedAcc <= R.SPEED_ACC_MAX_MPS;
   if (tr.watching) {
     if (valid && fix.speed > R.MOVE_MPS) return { tracker: tr, verdict: 'driving' };
-    if (metres(tr.stopLat, tr.stopLng, fix.lat, fix.lng) > R.MOVED_AWAY_M) return { tracker: tr, verdict: 'moved' };
+    const placed = fix.hAcc >= 0 && fix.hAcc <= R.FIX_ACC_MAX_M;
+    if (placed && metres(tr.stopLat, tr.stopLng, fix.lat, fix.lng) > R.MOVED_AWAY_M) return { tracker: tr, verdict: 'moved' };
     return { tracker: tr, verdict: 'none' };
   }
   if (!valid) return { tracker: tr, verdict: 'none' };
@@ -680,7 +700,11 @@ export function onStop(s0: ReminderState, ctx: ReminderCtx, now: number, walked:
 /** How a showing iOS reminder ended: the car drove on, the driver walked off, 5 min passed, or the session was cut short. */
 export type WatchEnd = 'driving' | 'arrival' | 'ttl' | 'ended';
 
-/** Driven on within 20 s is unseen (one retry this trip, and the session looks for the next stop); otherwise the session ends. */
+/**
+ * Driven on within 20 s is unseen (one retry this trip, and the session looks for the next stop);
+ * otherwise the session ends. Walking off ends the trip's car time; the post still waits for its
+ * outcome.
+ */
 export function onWatchEnd(s0: ReminderState, how: WatchEnd, now: number): { state: ReminderState; effect: 'seek' | 'end' } {
   const s = clone(s0);
   s.showing = false;
@@ -689,7 +713,6 @@ export function onWatchEnd(s0: ReminderState, how: WatchEnd, now: number): { sta
     return { state: s, effect: s.trip && !s.trip.reminded ? 'seek' : 'end' };
   }
   if (how === 'arrival') {
-    resolveIn(s, 'arrival', now);
     if (s.trip) {
       s.trip.inVehicle = false;
       s.trip.lastVehicleAt = now;

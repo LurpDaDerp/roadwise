@@ -83,7 +83,7 @@ enum ActivitySource {
   /// Whether the driver walked or ran between two moments (a stop's hold, the last 30 s). Resolves on main.
   static func walkingBetween(_ from: Date, _ to: Date, _ done: @escaping (Bool) -> Void) {
     lookBack(from: from, to: to) { list in
-      done(list.contains { $0.onFoot && $0.confident })
+      done(list.contains { $0.walking && $0.confident })
     }
   }
 
@@ -99,6 +99,7 @@ enum ActivitySource {
           start: a.startDate.timeIntervalSince1970 * 1000,
           automotive: a.automotive,
           onFoot: a.walking || a.running || a.cycling,
+          walking: a.walking || a.running,
           confident: a.confidence != .low
         )
       }

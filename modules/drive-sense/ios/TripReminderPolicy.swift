@@ -55,7 +55,10 @@ struct MotionSummary {
 struct ActivitySample {
   var start: Double
   var automotive: Bool
+  /// walking, running or cycling (the wake's "on foot now")
   var onFoot: Bool
+  /// walking or running only (the stop hold's and the watch's "walked off")
+  var walking: Bool
   var confident: Bool
 }
 
@@ -63,6 +66,8 @@ struct ReminderFix {
   var t: Double
   var speed: Double
   var speedAcc: Double
+  /// horizontal accuracy, m; negative = unknown
+  var hAcc: Double
   var lat: Double
   var lng: Double
 }
@@ -85,6 +90,7 @@ enum TripReminderPolicy {
   static let SPEED_ACC_MAX_MPS: Double = 2
   static let STOP_HOLD_MS: Double = 12_000
   static let MOVED_AWAY_M: Double = 30
+  static let FIX_ACC_MAX_M: Double = 20
   static let WALK_CHECK_MS: Double = 30_000
   static let UNSEEN_MS: Double = 20_000
   static let MAX_RETRIES_PER_TRIP: Int = 1
@@ -113,7 +119,7 @@ enum TripReminderPolicy {
   static let PAUSE_DAYS: [Double] = [7, 28]
   private static let maxPauseMs: Double = 28 * DAY_MS
 
-  enum Outcome { case converted, unseen, arrival, notDriving, missed }
+  enum Outcome { case converted, unseen, notDriving, missed }
   enum Phase { case wake, session, stop }
 
   static func newTrip(_ startedAt: Double, _ lastVehicleAt: Double) -> ReminderTrip {
@@ -198,6 +204,8 @@ enum TripReminderPolicy {
     s.missStreak += 1
     if s.missStreak < MISS_LIMIT { return }
     s.missStreak = 0
+    // A stored level out of range reads as the nearest real one.
+    s.pauseLevel = min(max(s.pauseLevel, 0), PAUSE_DAYS.count)
     if s.pauseLevel < PAUSE_DAYS.count {
       s.pausedUntil = now + PAUSE_DAYS[s.pauseLevel] * DAY_MS
       s.pauseLevel += 1
@@ -209,6 +217,7 @@ enum TripReminderPolicy {
   }
 
   static func resolveIn(_ s: inout ReminderState, _ outcome: Outcome, _ now: Double) {
+    let pending = s.pendingAt > 0
     s.showing = false
     s.pendingAt = 0
     switch outcome {
@@ -222,11 +231,10 @@ enum TripReminderPolicy {
         s.trip?.retries += 1
         s.trip?.reminded = false
       }
-    case .arrival:
-      break
     case .notDriving:
+      // A note whose outcome is already counted (or none waiting) gets the quiet, not a second miss.
       s.notDrivingUntil = now + NOT_DRIVING_QUIET_MS
-      missIn(&s, now)
+      if pending { missIn(&s, now) }
     case .missed:
       missIn(&s, now)
     }

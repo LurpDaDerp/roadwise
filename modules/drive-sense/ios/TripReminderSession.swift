@@ -38,6 +38,7 @@ extension TripReminder {
       t: l.timestamp.timeIntervalSince1970 * 1000,
       speed: l.speed,
       speedAcc: l.speedAccuracy,
+      hAcc: l.horizontalAccuracy,
       lat: l.coordinate.latitude,
       lng: l.coordinate.longitude
     )

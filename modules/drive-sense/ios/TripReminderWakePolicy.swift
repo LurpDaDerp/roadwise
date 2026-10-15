@@ -17,7 +17,9 @@ extension TripReminderPolicy {
       let end = i + 1 < sorted.count ? sorted[i + 1].start : now
       out.onFootNow = a.onFoot && a.confident
       if a.automotive && a.confident {
-        if out.automotiveSince == 0 { out.automotiveSince = a.start }
+        if out.automotiveSince == 0 || (out.lastAutomotiveAt > 0 && a.start - out.lastAutomotiveAt >= TRIP_GAP_MS) {
+          out.automotiveSince = a.start
+        }
         out.lastAutomotiveAt = end
       } else if a.onFoot && a.confident {
         out.automotiveSince = 0
@@ -33,7 +35,7 @@ extension TripReminderPolicy {
     let a = m.lastAutomotiveAt
     let fresh = a > 0 && now - a <= AUTOMOTIVE_FRESH_MS && !m.onFootNow
     if var t = s.trip {
-      if now - max(t.lastVehicleAt, a) >= TRIP_GAP_MS {
+      if now - max(t.lastVehicleAt, a) >= TRIP_GAP_MS || m.automotiveSince - t.lastVehicleAt >= TRIP_GAP_MS {
         s.trip = nil
       } else {
         t.lastVehicleAt = max(t.lastVehicleAt, a)
@@ -94,7 +96,8 @@ extension TripReminderPolicy {
     let valid = fix.speed >= 0 && fix.speedAcc >= 0 && fix.speedAcc <= SPEED_ACC_MAX_MPS
     if tr.watching {
       if valid && fix.speed > MOVE_MPS { return (tr, "driving") }
-      if metres(tr.stopLat, tr.stopLng, fix.lat, fix.lng) > MOVED_AWAY_M { return (tr, "moved") }
+      let placed = fix.hAcc >= 0 && fix.hAcc <= FIX_ACC_MAX_M
+      if placed && metres(tr.stopLat, tr.stopLng, fix.lat, fix.lng) > MOVED_AWAY_M { return (tr, "moved") }
       return (tr, "none")
     }
     if !valid { return (tr, "none") }
@@ -144,7 +147,6 @@ extension TripReminderPolicy {
       return (s, s.trip != nil && s.trip?.reminded == false)
     }
     if how == "arrival" {
-      resolveIn(&s, .arrival, now)
       s.trip?.inVehicle = false
       s.trip?.lastVehicleAt = now
     }

@@ -97,8 +97,8 @@ const on = (over: Partial<ReminderState> = {}, t: Partial<ReminderTrip> | null =
 });
 const ctx = (over: Partial<ReminderCtx> = {}): ReminderCtx => ({ ...CALM_CTX, ...over });
 const ev = (kind: Transition['kind'], ts: number): Transition => ({ kind, ts });
-const fix = (t: number, speed: number, lat = 37, lng = -122, speedAcc = 1): { fix: Fix; now: number } => ({
-  fix: { t, speed, speedAcc, lat, lng },
+const fix = (t: number, speed: number, lat = 37, lng = -122, speedAcc = 1, hAcc = 5): { fix: Fix; now: number } => ({
+  fix: { t, speed, speedAcc, hAcc, lat, lng },
   now: t,
 });
 /** The trip's car stretch ended at T0 − 30 s with an IN_VEHICLE EXIT (Android). */
@@ -180,6 +180,16 @@ export const REMINDER_VECTORS: ReminderVector[] = [
     expected: { effect: 'none', reason: 'on-foot', state: { showing: false, trip: { inVehicle: true } } },
   },
   {
+    name: 'android: a STILL listed before its EXIT at the same time still counts (EXIT is read first)',
+    kind: 'transitions',
+    state: on(),
+    events: [ev('still-enter', T0 - 20 * S), ev('vehicle-exit', T0 - 20 * S)],
+    arrival: T0,
+    subscribedAt: T0 - H,
+    ctx: ctx(),
+    expected: { effect: 'post', reason: 'ok', state: { showing: true, trip: { inVehicle: false, reminded: true } } },
+  },
+  {
     name: 'android: a lone STILL (no EXIT within 2 min) does not count',
     kind: 'transitions',
     state: on({}, { inVehicle: false, vehicleExitAt: T0 - 3 * M, lastVehicleAt: T0 - 3 * M }),
@@ -250,14 +260,24 @@ export const REMINDER_VECTORS: ReminderVector[] = [
     expected: { effect: 'withdraw', state: { showing: false, pendingAt: T0 - M, missStreak: 0, trip: { inVehicle: true, reminded: true } } },
   },
   {
-    name: 'android: WALKING ENTER while showing is an arrival: withdrawn, not a miss, quiet stays',
+    name: 'android: WALKING ENTER while showing withdraws; the post still waits for its outcome, quiet stays',
     kind: 'transitions',
     state: on({ showing: true, postedAt: T0 - M, pendingAt: T0 - M, quietUntil: T0 + 3 * H, posts: [T0 - M] }, exited({ reminded: true })),
     events: [ev('walking-enter', T0 - 5 * S)],
     arrival: T0,
     subscribedAt: T0 - H,
     ctx: ctx(),
-    expected: { effect: 'withdraw', state: { showing: false, pendingAt: 0, missStreak: 0, quietUntil: T0 + 3 * H } },
+    expected: { effect: 'withdraw', state: { showing: false, pendingAt: T0 - M, missStreak: 0, quietUntil: T0 + 3 * H } },
+  },
+  {
+    name: 'android: walked off after a post and no drive in 30 min is a miss',
+    kind: 'transitions',
+    state: on({ showing: false, postedAt: T0 - 30 * M, pendingAt: T0 - 30 * M, quietUntil: T0 + 3 * H, posts: [T0 - 30 * M] }, exited({ reminded: true })),
+    events: [],
+    arrival: T0,
+    subscribedAt: T0 - H,
+    ctx: ctx(),
+    expected: { effect: 'none', state: { pendingAt: 0, missStreak: 1 } },
   },
   {
     name: 'android: picking up the phone (no STILL EXIT is even read) leaves the reminder up',
@@ -355,6 +375,16 @@ export const REMINDER_VECTORS: ReminderVector[] = [
       { start: T0 - 30 * S, automotive: false, onFoot: true, confident: true },
     ], now: T0, expected: { lastAutomotiveAt: T0 - 30 * S, automotiveSince: 0, onFootNow: true } },
   { name: 'summary: nothing', kind: 'summary', activities: [], now: T0, expected: { lastAutomotiveAt: 0, automotiveSince: 0, onFootNow: false } },
+  { name: 'summary: 10 min with no car motion starts a new car run', kind: 'summary', activities: [
+      { start: T0 - 70 * M, automotive: true, onFoot: false, confident: true },
+      { start: T0 - 60 * M, automotive: false, onFoot: false, confident: true },
+      { start: T0 - 4 * M, automotive: true, onFoot: false, confident: true },
+    ], now: T0, expected: { lastAutomotiveAt: T0, automotiveSince: T0 - 4 * M, onFootNow: false } },
+  { name: 'summary: 9 min with no car motion keeps the run', kind: 'summary', activities: [
+      { start: T0 - 20 * M, automotive: true, onFoot: false, confident: true },
+      { start: T0 - 13 * M, automotive: false, onFoot: false, confident: true },
+      { start: T0 - 4 * M, automotive: true, onFoot: false, confident: true },
+    ], now: T0, expected: { lastAutomotiveAt: T0, automotiveSince: T0 - 20 * M, onFootNow: false } },
   {
     name: 'ios wake: fresh car motion opens a trip from the start of the run and starts a session',
     kind: 'wake',
@@ -399,6 +429,24 @@ export const REMINDER_VECTORS: ReminderVector[] = [
     motion: motion(T0 - 10 * M, T0 - 40 * M),
     ctx: ctx(),
     expected: { effect: 'none', reason: 'no-trip', trip: null },
+  },
+  {
+    name: 'ios wake: a new drive after a 1 h park is a new trip, even with no wake while parked',
+    kind: 'wake',
+    state: on({}, { startedAt: T0 - 90 * M, lastVehicleAt: T0 - 60 * M, sessions: 2, lastSessionEndAt: T0 - 62 * M }),
+    now: T0,
+    motion: motion(T0 - 10 * S, T0 - 4 * M),
+    ctx: ctx(),
+    expected: { effect: 'start-session', reason: 'ok', trip: { startedAt: T0 - 4 * M, lastVehicleAt: T0 - 10 * S, sessions: 1, reminded: false } },
+  },
+  {
+    name: 'ios wake: a car run that began 9 min after the last car moment is the same trip',
+    kind: 'wake',
+    state: on({}, { startedAt: T0 - 40 * M, lastVehicleAt: T0 - 13 * M, sessions: 2, lastSessionEndAt: T0 - 15 * M }),
+    now: T0,
+    motion: motion(T0 - 10 * S, T0 - 4 * M),
+    ctx: ctx(),
+    expected: { effect: 'none', reason: 'sessions', trip: { startedAt: T0 - 40 * M, sessions: 2 } },
   },
   {
     name: 'ios wake: a second session 9 min after the first does not start',
@@ -472,6 +520,13 @@ export const REMINDER_VECTORS: ReminderVector[] = [
     expected: ['none', 'driving', 'none', 'moved', 'ttl'],
   },
   {
+    name: 'ios watch: a fix 40 m off but only accurate to 21 m is not moved; one accurate to 20 m is',
+    kind: 'fixes',
+    tracker: { ...seeking({ sawDriving: true, stopStart: T0 - 20 * S, stopLat: 37, stopLng: -122 }), watching: true, postedAt: T0 },
+    fixes: [fix(T0 + 5 * S, -1, 37.00036, -122, 1, 21), fix(T0 + 6 * S, -1, 37.00036, -122, 1, -1), fix(T0 + 7 * S, -1, 37.00036, -122, 1, 20)],
+    expected: ['none', 'none', 'moved'],
+  },
+  {
     name: 'ios stop: walking during the hold is an arrival, no post',
     kind: 'stop',
     state: on(),
@@ -509,12 +564,12 @@ export const REMINDER_VECTORS: ReminderVector[] = [
     expected: { effect: 'end', state: { showing: false, pendingAt: T0, quietUntil: T0 + R.UNUSED_QUIET_MS, trip: { reminded: true, retries: 0 } } },
   },
   {
-    name: 'ios watch end: walked off is an arrival, not a miss',
+    name: 'ios watch end: walked off ends the car time; the post still waits for its outcome',
     kind: 'watchEnd',
     state: on({ showing: true, postedAt: T0, pendingAt: T0, posts: [T0] }, { reminded: true }),
     how: 'arrival',
     now: T0 + M,
-    expected: { effect: 'end', state: { showing: false, pendingAt: 0, missStreak: 0, trip: { inVehicle: false, lastVehicleAt: T0 + M } } },
+    expected: { effect: 'end', state: { showing: false, pendingAt: T0, missStreak: 0, trip: { inVehicle: false, lastVehicleAt: T0 + M } } },
   },
 
   // ——— outcomes, quiet, back-off ———
@@ -566,6 +621,20 @@ export const REMINDER_VECTORS: ReminderVector[] = [
     state: on({ showing: true, pendingAt: T0, postedAt: T0, posts: [T0] }),
     ops: [{ op: 'resolve', outcome: 'notDriving', now: T0 + M }],
     expected: { showing: false, pendingAt: 0, missStreak: 1, notDrivingUntil: T0 + M + 12 * H },
+  },
+  {
+    name: 'Not driving on a note already counted as a miss: the quiet, no second miss',
+    kind: 'ops',
+    state: on({ showing: false, pendingAt: T0, postedAt: T0, posts: [T0] }),
+    ops: [{ op: 'settle', now: T0 + 2 * H }, { op: 'resolve', outcome: 'notDriving', now: T0 + 2 * H }],
+    expected: { pendingAt: 0, missStreak: 1, notDrivingUntil: T0 + 14 * H },
+  },
+  {
+    name: 'a stored pause level out of range reads as the nearest real one',
+    kind: 'ops',
+    state: on({ missStreak: 2, pauseLevel: -1 }),
+    ops: [{ op: 'resolve', outcome: 'missed', now: T0 }],
+    expected: { missStreak: 0, pauseLevel: 1, pausedUntil: T0 + 7 * D, enabled: true },
   },
   {
     name: '3 misses in a row pause it 7 days',
