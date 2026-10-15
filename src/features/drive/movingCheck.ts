@@ -3,8 +3,10 @@
  *
  * One read, on a tap, in the foreground — never a watch. A last-known fix no older than 10 s
  * answers at once; otherwise one fresh fix is awaited for at most 2 s, so a driver in a garage is
- * not kept waiting. An unknown speed is `null`, never 0, and null lets the start through: the
- * engine's lockout takes over the moment it sees real speed.
+ * not kept waiting. An unknown speed is `null`, never 0, and null lets the start through. Nothing
+ * later undoes that start: the engine has no speed rule at start and never cancels a drive for
+ * having begun on the move. Its lockout (a last known speed above 5 mph) only narrows the drive
+ * screen to the End control once real speed arrives.
  */
 import * as Location from 'expo-location';
 
