@@ -6,9 +6,10 @@
 // foreground (Android pauses JS timers in the background unless a headless task runs; rows keep
 // arriving during a drive). Each tick: STATE if ≥ 900 ms since the last one, ACKs batched ≤ 200 ms,
 // TIME_PINGs due, RESUME when due, the 3 s staleness stop, alert repeats, the HELLO retry. With JS
-// timers paused (`timersPaused`), every drive row sends STATE whatever the gap: an Android row closes up
-// to 1.5 s after its second, so rows come up to about 2.5 s apart, and the 900 ms gate could
-// stretch a renewal past the 3 s lease.
+// timers paused (`timersPaused`), every drive row sends STATE unless one went out in the last 300 ms
+// (the row's timer pump or a dashcam frame just sent it), so each row renews the lease once: an
+// Android row closes up to 1.5 s after its second, so rows come up to about 2.5 s apart, and the
+// 900 ms gate could stretch a renewal past the 3 s lease.
 //
 // Connection sequence after the transport subscribed to TX (§3.3): COMMAND 7 hello → HELLO →
 // TIME_PING ×3 (100 ms apart) → RESUME after the 3 echoes or 500 ms → STATE every second, TIME_PING
@@ -48,6 +49,12 @@ import { BOOT_GENERATION, type DashcamStore } from './store';
 // ——— timing (plan §3.3, §3.5, §3.7, §7.3) ———
 
 export const STATE_EVERY_MS = 900;
+/**
+ * With JS timers paused, a row sends STATE unless one went out this recently: the row's own timer
+ * pump (the wake) or a dashcam frame may have sent it a moment before, and a row sends one STATE at
+ * most. 0.3 s plus the longest row gap (about 2.5 s) stays inside the 3 s lease.
+ */
+export const ROW_STATE_FLOOR_MS = 300;
 export const ACK_BATCH_MS = 200;
 export const PING_GAP_MS = 100;
 export const PINGS_PER_SYNC = 3;
@@ -437,10 +444,13 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
         s.resyncAt = null;
         sendResume(s, now);
       }
-      // STATE every second once resumed (carries the ACK too); on every row while timers are paused.
+      // STATE every second once resumed (carries the ACK too); once per row while timers are paused.
       if (
         s.phase === 'resumed' &&
-        (s.lastStateAt === null || now - s.lastStateAt >= STATE_EVERY_MS || now < s.lastStateAt || (fromRow && timersPaused()))
+        (s.lastStateAt === null ||
+          now - s.lastStateAt >= STATE_EVERY_MS ||
+          now < s.lastStateAt ||
+          (fromRow && now - s.lastStateAt >= ROW_STATE_FLOOR_MS && timersPaused()))
       ) {
         s.lastStateAt = now;
         const frame = stateFrame(now, s);

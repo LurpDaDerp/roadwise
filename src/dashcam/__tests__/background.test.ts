@@ -257,8 +257,10 @@ describe('DashPal alerts with JS timers paused (Android, app in the background, 
     expect(r.vibrations).toHaveLength(plays.length);
     expect(alertAcks(r).map((w) => w.frame)).toEqual([{ type: 'ALERT_ACK', alertId: 9, outcome: 1 }]);
     const states = r.writes.filter((w) => w.frame.type === 'STATE').slice(statesBefore);
-    expect(states.length).toBeGreaterThanOrEqual(12);
+    // One STATE per row: the pumped wake (or the STATUS frame's tick) sends it, the row adds none.
+    expect(states).toHaveLength(12);
     const gaps = states.slice(1).map((w, i) => w.at - states[i]!.at);
+    expect(Math.min(...gaps)).toBeGreaterThan(0);
     expect(Math.max(...gaps)).toBeLessThan(STATE_TTL_DS * 100);
   });
 });

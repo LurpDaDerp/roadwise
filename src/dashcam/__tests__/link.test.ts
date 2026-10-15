@@ -7,13 +7,14 @@ import { createTripsRepo, migrate, type Db } from '@/data/db';
 
 import { cadenceMs } from '../alerts';
 import type { PairedDashcam } from '../keys';
-import { createDashcamLink, LATE_ALERT_MS, type DashcamLink, type LinkContext } from '../link';
+import { createDashcamLink, LATE_ALERT_MS, ROW_STATE_FLOOR_MS, type DashcamLink, type LinkContext } from '../link';
 import {
   decodeInfo,
   decodeRx,
   encodeInfo,
   encodeTx,
   STATE_FLAG,
+  STATE_TTL_DS,
   STATUS_FLAG,
   type DashcamInfo,
   type RxFrame,
@@ -783,6 +784,34 @@ describe('STATE (§3.2, §3.7)', () => {
     r.clock.t += 20; // 870 ms after the last STATE
     r.rx({ type: 'STATUS', uptimeMs: uptime(r), state: 3, flags: STATUS_FLAG.LIVE, fpsX10: 150, tempC: 40, bondCount: 1 });
     expect(r.sent('STATE')).toEqual([]);
+  });
+
+  test('with timers paused, a row sends one STATE at most: a wake or frame tick that just sent it counts, and the lease still never lapses', async () => {
+    const r = rig({ timersPaused: () => true });
+    await connect(r);
+    r.ctx.recording = true;
+    r.ctx.foreground = false;
+    r.link.row(row(r.clock.t), { clientTripId: null, recording: true, dryRun: false });
+    r.clear();
+    for (let i = 0; i < 10; i++) {
+      // The row's timer pump fires the due wake (a tick at the same instant), then the row ticks.
+      r.clock.t += 1000;
+      r.link.tick(r.clock.t);
+      r.link.row(row(r.clock.t), { clientTripId: null, recording: true, dryRun: false });
+    }
+    expect(r.sent('STATE')).toHaveLength(10);
+    // A frame tick sends STATE just under 300 ms before a row: the row adds none; the next row, 2.5 s later, renews.
+    r.clear();
+    r.clock.t += 950;
+    r.rx({ type: 'STATUS', uptimeMs: uptime(r), state: 3, flags: STATUS_FLAG.LIVE, fpsX10: 150, tempC: 40, bondCount: 1 });
+    const frameState = r.clock.t;
+    r.clock.t += ROW_STATE_FLOOR_MS - 1;
+    r.link.row(row(r.clock.t), { clientTripId: null, recording: true, dryRun: false });
+    r.clock.t += 2500;
+    r.link.row(row(r.clock.t), { clientTripId: null, recording: true, dryRun: false });
+    const states = r.writes.filter((w) => w.frame.type === 'STATE');
+    expect(states.map((w) => w.at - frameState)).toEqual([0, ROW_STATE_FLOOR_MS - 1 + 2500]);
+    expect(ROW_STATE_FLOOR_MS - 1 + 2500).toBeLessThan(STATE_TTL_DS * 100);
   });
 
   test('a wake time is always asked for while connected (the timer is best effort)', async () => {
