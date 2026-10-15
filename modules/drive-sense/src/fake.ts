@@ -8,6 +8,7 @@
 //   always does; the default is synchronous delivery, for step-by-step tests (review M4).
 import { runSelfTest } from './extract/vectors';
 import { INITIAL, setEnabled, settle, statusOf, type ReminderState } from './reminder/policy';
+import { isReminderWireVector, referenceReminderOutput } from './reminder/selfTest';
 import { parseVectors } from './selfTest';
 import type {
   CaptureMode,
@@ -192,6 +193,11 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     selfTest(vectorsJson: string) {
       command('selfTest');
       try {
+        // The forgot-to-start reminder's rows run through the TS reference, as a native mirror would.
+        const all: unknown = JSON.parse(vectorsJson);
+        if (Array.isArray(all) && all.length > 0 && all.every(isReminderWireVector)) {
+          return resolve(JSON.stringify(referenceReminderOutput(all)));
+        }
         return resolve(JSON.stringify(runSelfTest(parseVectors(vectorsJson), 'reference')));
       } catch (e) {
         return Promise.reject(driveSenseError('E_INVALID_INPUT', e instanceof Error ? e.message : String(e)));

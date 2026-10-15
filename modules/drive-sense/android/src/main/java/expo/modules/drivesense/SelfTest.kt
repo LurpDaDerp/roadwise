@@ -11,7 +11,9 @@ import org.json.JSONObject
  * [SensorSource.androidAccelToReference] — never a copy kept for testing — so a port that
  * forgot `/ G_MPS2` or its sign fails the `android-raw` vector here, not in the car.
  *
- * Android runs every kind; it never answers `skipped` (that form is iOS-only).
+ * Android runs every golden kind; it never answers `skipped` for one (that form is iOS-only). A
+ * `reminder` vector (one row of the forgot-to-start reminder's decision table) goes to
+ * [TripReminderSelfTest], which skips the iOS-only rows.
  */
 object SelfTest {
   class InvalidInput(message: String) : Exception(message)
@@ -39,6 +41,7 @@ object SelfTest {
               .put("name", name).put("kind", "gravityFilter").put("batches", batchesJson(runGravity(inputs)))
             "androidRaw" -> JSONObject()
               .put("name", name).put("kind", "androidRaw").put("rows", rowsJson(runAndroidRaw(inputs)))
+            "reminder" -> TripReminderSelfTest.result(name, inputs)
             else -> throw IllegalArgumentException("unknown vector kind '$kind'")
           }
         } catch (e: Exception) {

@@ -34,6 +34,16 @@ export { extractSecond, initialExtractState } from './extract/extract';
 export { gravityFilter, initialGravityState, androidAccelToReference } from './extract/gravityFilter';
 export { runSelfTest, runVector } from './extract/vectors';
 export { PAUSE_DAYS, REMINDER } from './reminder/policy';
+export {
+  diffReminderSelfTest,
+  matchReminderRow,
+  referenceReminderOutput,
+  reminderRowRunsOn,
+  reminderWireVectors,
+  runReminderRow,
+} from './reminder/selfTest';
+export type { ReminderActual, ReminderWireVector } from './reminder/selfTest';
+export type { ReminderVector } from './reminder/vectors';
 export type {
   ExtractVector,
   GravityVector,

@@ -4,7 +4,9 @@
 // payload encoding the capture path emits — over each golden vector's inputs, exactly as
 // `runVector` in `src/extract/vectors.ts` does (fresh state per vector). JS diffs the output with
 // `diffSelfTest`. iOS has no gravity filter and no raw-accelerometer path (CoreMotion supplies
-// gravity and user acceleration), so `gravityFilter` and `androidRaw` vectors get `skipped`.
+// gravity and user acceleration), so `gravityFilter` and `androidRaw` vectors get `skipped`. A
+// `reminder` vector (one row of the forgot-to-start reminder's decision table) goes to
+// `TripReminderSelfTest`, which skips Android's activity-transition rows.
 import Foundation
 
 enum SelfTest {
@@ -40,6 +42,8 @@ enum SelfTest {
         }
       case "gravityFilter", "androidRaw":
         results.append(["name": name, "kind": kind, "skipped": skipReason])
+      case "reminder":
+        results.append(TripReminderSelfTest.result(name, v?["inputs"]))
       default:
         results.append(["name": name, "kind": kind, "error": "unknown vector kind \(kind)"])
       }
