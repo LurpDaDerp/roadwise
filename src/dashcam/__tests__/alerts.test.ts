@@ -1,7 +1,7 @@
 import type { AlertPlayer } from '@/core/alerts/player';
 import type { AlertDecision } from '@/core/alerts/types';
 
-import { cadenceMs, createDashcamAlerts, REPEAT_INTENSITY, SOUND_SPEC, specFor } from '../alerts';
+import { cadenceMs, createDashcamAlerts, NO_FACE_VOICE_QUIET_MS, REPEAT_INTENSITY, SOUND_SPEC, specFor } from '../alerts';
 
 test('levels, tones, voices and first-play strengths per sound (plan §7.8)', () => {
   expect(SOUND_SPEC).toEqual({
@@ -10,16 +10,18 @@ test('levels, tones, voices and first-play strengths per sound (plan §7.8)', ()
     3: { level: 3, tone: 'dp_wake', voice: 'Wake up', voiceAlways: true, firstIntensity: 4 },
     4: { level: 3, tone: 'dp_phone', voice: 'Phone down', firstIntensity: 3 },
     5: { level: 1, firstIntensity: 1 },
+    6: { level: 2, tone: 'dp_glance', voice: 'Driver not visible', firstIntensity: 2 },
   });
   expect(REPEAT_INTENSITY).toBe(2);
   expect(specFor(99)).toBe(SOUND_SPEC[5]);
 });
 
-test('cadence: glance 2.5 s, drowsy 4 s, wake 1.5 → 1.25 → 1.0 s by level, phone 2.5 s', () => {
+test('cadence: glance 2.5 s, drowsy 4 s, wake 1.5 → 1.25 → 1.0 s by level, phone 2.5 s, no face 5 s', () => {
   expect(cadenceMs(1, 0)).toBe(2500);
   expect(cadenceMs(2, 3)).toBe(4000);
   expect([0, 1, 2, 3].map((l) => cadenceMs(3, l))).toEqual([1500, 1250, 1000, 1000]);
   expect(cadenceMs(4, 0)).toBe(2500);
+  expect(cadenceMs(6, 0)).toBe(5000);
 });
 
 test('a repeat queued before a stop is dropped unstarted (stillWanted); stop releases the held session', async () => {
@@ -64,11 +66,12 @@ test('a stop for an unknown alert, a fallback for an unknown alert and a clear o
 test('the spoken words come from the string table', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- the table itself
   const { en } = require('@/i18n/en') as typeof import('@/i18n/en');
-  expect([en['dashpal.eyesOnRoad'], en['dashpal.takeABreak'], en['dashpal.wakeUp'], en['dashpal.phoneDown']]).toEqual([
+  expect([en['dashpal.eyesOnRoad'], en['dashpal.takeABreak'], en['dashpal.wakeUp'], en['dashpal.phoneDown'], en['dashpal.driverNotVisible']]).toEqual([
     SOUND_SPEC[1]!.voice,
     SOUND_SPEC[2]!.voice,
     SOUND_SPEC[3]!.voice,
     SOUND_SPEC[4]!.voice,
+    SOUND_SPEC[6]!.voice,
   ]);
 });
 
@@ -130,4 +133,79 @@ test('every alert start or level change gets a visual key of its own, even when 
   make().onAlert({ type: 'ALERT', alertId: 1, sound: 1, tier: 2, level: 0, mode: 0, route: 0, uptimeMs: 0 });
   expect(keys).toHaveLength(4);
   expect(new Set(keys).size).toBe(4);
+});
+
+describe('the no-face alert (sound 6)', () => {
+  function rig() {
+    const clock = { now: 0 };
+    const delivered: { at: number; d: AlertDecision }[] = [];
+    const flashed: number[] = [];
+    const player: AlertPlayer = {
+      deliver: async (d) => void delivered.push({ at: clock.now, d }),
+      stopCurrent: async () => {},
+      announce: async () => {},
+    };
+    const c = createDashcamAlerts({ player, now: () => clock.now, sendAck: () => {}, canPlay: () => true, onVisual: (v) => flashed.push(v.alertId) });
+    const alert = (alertId: number, sound = 6) => c.onAlert({ type: 'ALERT', alertId, sound, tier: 2, level: 0, mode: 1, route: 1, uptimeMs: 0 });
+    /** run the clock to `to` in 100 ms steps, as the link's tick does */
+    async function runTo(to: number) {
+      while (clock.now < to) {
+        clock.now = Math.min(to, clock.now + 100);
+        c.tick(clock.now);
+        await c.settled();
+      }
+    }
+    return { clock, delivered, flashed, c, alert, runTo };
+  }
+
+  test('plays the glance tone, says "Driver not visible" on the first play only, repeats every 5 s, never holds the session, and leaves the phone’s own tones on', async () => {
+    const r = rig();
+    expect(r.alert(1)).toBe(1);
+    await r.c.settled();
+    await r.runTo(10_000);
+    expect(r.delivered.map((x) => [x.at, x.d.tone, x.d.voice ?? null, x.d.intensity, x.d.holdSession ?? false, x.d.level])).toEqual([
+      [0, 'dp_glance', 'Driver not visible', 2, false, 2],
+      [5000, 'dp_glance', null, 2, false, 2],
+      [10_000, 'dp_glance', null, 2, false, 2],
+    ]);
+    expect(r.delivered[0]!.d.voiceAlways).toBeUndefined(); // follows the voice setting
+    expect(r.c.continuousActive()).toBe(false);
+    expect(r.c.playingAny()).toBe(true);
+    // A glance warning beside it still counts as continuous (and holds its session).
+    r.alert(2, 1);
+    await r.c.settled();
+    expect(r.c.continuousActive()).toBe(true);
+    expect(r.delivered.at(-1)!.d.holdSession).toBe(true);
+  });
+
+  test('a no-face alert within 60 s of the last one ending shows without its words; after 60 s it speaks again; a clear (disconnect, new boot) counts as an end', async () => {
+    const r = rig();
+    r.alert(1);
+    await r.c.settled();
+    r.clock.now = 7000;
+    r.c.onStop(1);
+    // 59.9 s after the end: no words, but it still plays and flashes.
+    r.clock.now = 7000 + NO_FACE_VOICE_QUIET_MS - 100;
+    r.alert(2);
+    await r.c.settled();
+    expect(r.delivered.at(-1)!.d).toMatchObject({ tone: 'dp_glance', intensity: 2 });
+    expect(r.delivered.at(-1)!.d.voice).toBeUndefined();
+    expect(r.flashed).toEqual([1, 2]); // the banner still shows
+    // A clear ends it too; 60 s after that, the next one speaks.
+    r.c.clear();
+    const clearedAt = r.clock.now;
+    r.clock.now = clearedAt + NO_FACE_VOICE_QUIET_MS;
+    r.alert(3);
+    await r.c.settled();
+    expect(r.delivered.at(-1)!.d.voice).toBe('Driver not visible');
+    // Another sound's end does not quiet it, and its own words are unaffected.
+    r.c.onStop(3);
+    r.clock.now += NO_FACE_VOICE_QUIET_MS;
+    r.alert(4, 1);
+    await r.c.settled();
+    r.c.onStop(4);
+    r.alert(5);
+    await r.c.settled();
+    expect(r.delivered.at(-1)!.d.voice).toBe('Driver not visible');
+  });
 });

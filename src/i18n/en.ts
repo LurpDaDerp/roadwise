@@ -37,6 +37,7 @@ export const en = {
   'dashpal.takeABreak': 'Take a break',
   'dashpal.wakeUp': 'Wake up',
   'dashpal.phoneDown': 'Phone down',
+  'dashpal.driverNotVisible': 'Driver not visible',
 } as const;
 
 export type StringKey = keyof typeof en;

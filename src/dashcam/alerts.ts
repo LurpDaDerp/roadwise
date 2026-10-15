@@ -7,12 +7,16 @@
 // - A continuous alert repeats until ALERT_STOP, ALERT_FALLBACK cause 1–3, a disconnect, or 3 s with
 //   no frame from the dashcam. Cause 4 (the buzzer joined) keeps it playing. One-shots play once.
 // - Cadence, start to start and never faster than an item finishes: glance 2.5 s, drowsy 4 s, wake
-//   1.5 s at level 0, 1.25 s at level 1, 1.0 s from level 2; phone 2.5 s.
+//   1.5 s at level 0, 1.25 s at level 1, 1.0 s from level 2; phone 2.5 s; no face 5 s.
 // - At most one DashPal item is queued or playing; the next repeat is scheduled once the previous
 //   `deliver()` resolved. A generation token, bumped by every stop, drops a repeat already queued
 //   (`stillWanted`). A tier-3 alert preempts the player's queue.
 // - The voice line on the first play and on a level change only; "Wake up" is spoken even with the
 //   voice setting off. Repeats vibrate at intensity 2.
+// - The no-face alert (sound 6, "Driver not visible") can last minutes, so it is gentle: its first
+//   play is not spoken when another no-face alert ended in the last `NO_FACE_VOICE_QUIET_MS`; each
+//   play releases the audio session (music comes back between plays); and it does not count as a
+//   continuous alert for `continuousActive`, so the phone's own event tones keep sounding.
 // - The phone stops a confirmed alert on its own (staleness, the player failing, the phone no
 //   longer able to play): it then sends ALERT_ACK(0) so the dashcam's buzzer takes over.
 // - Visual: one flash per ALERT start or level change (the HUD glows 1.5 s), never per repeat.
@@ -39,6 +43,7 @@ export const SOUND_SPEC: Readonly<Record<number, SoundSpec>> = {
   [SOUND.WAKE]: { level: 3, tone: 'dp_wake', voice: t('dashpal.wakeUp'), voiceAlways: true, firstIntensity: 4 },
   [SOUND.PHONE]: { level: 3, tone: 'dp_phone', voice: t('dashpal.phoneDown'), firstIntensity: 3 },
   [SOUND.CHIME]: { level: 1, firstIntensity: 1 },
+  [SOUND.NO_FACE]: { level: 2, tone: 'dp_glance', voice: t('dashpal.driverNotVisible'), firstIntensity: 2 },
 };
 
 /** An unknown sound (a later firmware) plays as the advisory chime. */
@@ -53,6 +58,8 @@ export function cadenceMs(sound: number, level: number): number {
       return 4000;
     case SOUND.WAKE:
       return level >= 2 ? 1000 : level === 1 ? 1250 : 1500;
+    case SOUND.NO_FACE:
+      return 5000;
     default:
       return 2500;
   }
@@ -60,6 +67,9 @@ export function cadenceMs(sound: number, level: number): number {
 
 /** No frame from the dashcam for this long: the phone stops a continuous alert. */
 export const STALE_MS = 3000;
+
+/** A no-face alert that starts within this long of the previous one ending is not spoken. */
+export const NO_FACE_VOICE_QUIET_MS = 60_000;
 
 /** What the HUD and the banner show: one flash per start or level change. */
 export interface DashcamVisual {
@@ -144,6 +154,12 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
   /** the one DashPal item allowed in the player at a time */
   let inFlight: { alertId: number; done: Promise<void> } | null = null;
   let seq = 0;
+  /** when a no-face alert last left the table (stopped, superseded, cleared) */
+  let lastNoFaceEndAt = -Infinity;
+
+  function noFaceEnded(e: Entry): void {
+    if (e.sound === SOUND.NO_FACE) lastNoFaceEndAt = deps.now();
+  }
 
   function report(e: unknown): void {
     try {
@@ -223,7 +239,8 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
       d.voice = spec.voice;
       if (spec.voiceAlways) d.voiceAlways = true;
     }
-    if (e.continuous) d.holdSession = true;
+    // The no-face alert releases the session after each play: music comes back between its plays.
+    if (e.continuous && e.sound !== SOUND.NO_FACE) d.holdSession = true;
     return d;
   }
 
@@ -303,7 +320,8 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
         continuous: f.mode === 1,
         playing,
         confirmed: ack === 1,
-        speak: true,
+        // A no-face alert right after another one shows its banner without saying it again.
+        speak: !(f.sound === SOUND.NO_FACE && deps.now() - lastNoFaceEndAt < NO_FACE_VOICE_QUIET_MS),
         plays: 0,
         lastStartAt: null,
         nextAt: null,
@@ -330,6 +348,7 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
       const e = table.get(alertId);
       if (!e) return;
       table.delete(alertId);
+      noFaceEnded(e);
       if (e.playing || inFlight?.alertId === alertId) cut(e);
       changed();
     },
@@ -352,6 +371,7 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
     clear() {
       if (table.size === 0 && !inFlight) return;
       const sounding = [...table.values()].some((e) => e.playing) || inFlight !== null;
+      for (const e of table.values()) noFaceEnded(e);
       table.clear();
       gen += 1;
       if (sounding) stopPlayer();
@@ -415,7 +435,8 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
       return at;
     },
 
-    continuousActive: () => [...table.values()].some((e) => e.continuous),
+    // The no-face alert leaves the phone's own alert tones on (it can last minutes).
+    continuousActive: () => [...table.values()].some((e) => e.continuous && e.sound !== SOUND.NO_FACE),
     playingAny: () => [...table.values()].some((e) => e.playing),
 
     async settled() {

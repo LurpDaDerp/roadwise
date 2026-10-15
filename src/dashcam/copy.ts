@@ -100,6 +100,7 @@ export const dashpalCopy = {
     3: t('dashpal.wakeUp'),
     4: t('dashpal.phoneDown'),
     5: 'DashPal',
+    6: t('dashpal.driverNotVisible'),
   } as Readonly<Record<number, string>>,
 
   chip: 'DashPal',

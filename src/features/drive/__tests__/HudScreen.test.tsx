@@ -368,6 +368,16 @@ describe('DashPal (plan §7.10)', () => {
     expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.severe });
   });
 
+  test('the no-face alert (sound 6) shows "Driver not visible" in the warning colour', async () => {
+    const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
+    setActiveDashcam(rt);
+    await renderHud();
+    await act(async () => rt.set({ link: { visual: visual({ tier: 2, sound: 6 }) } }));
+    expect(screen.getByTestId('hud-dashpal-alert')).toHaveTextContent(/Driver not visible/);
+    expect(screen.getByTestId('hud-dashpal-alert').props.accessibilityLabel).toBe('DashPal: Driver not visible');
+    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.moderate });
+  });
+
   test('never dims while a DashPal alert shows', async () => {
     const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
     setActiveDashcam(rt);

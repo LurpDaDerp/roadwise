@@ -28,6 +28,7 @@ const ICON: Readonly<Record<number, keyof typeof Ionicons.glyphMap>> = {
   [SOUND.WAKE]: 'alarm-outline',
   [SOUND.PHONE]: 'phone-portrait',
   [SOUND.CHIME]: 'videocam-outline',
+  [SOUND.NO_FACE]: 'person-remove-outline',
 };
 
 const selectVisual = (s: DashcamState | null): DashcamVisual | null => s?.link.visual ?? null;
