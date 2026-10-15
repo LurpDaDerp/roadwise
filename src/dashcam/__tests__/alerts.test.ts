@@ -193,6 +193,13 @@ describe('the no-face alert (sound 6)', () => {
     expect(r.flashed).toEqual([1, 2]); // the banner still shows
     // A clear ends it too; 60 s after that, the next one speaks.
     r.c.clear();
+    // 1 s after the clear (60.9 s after the stop): still no words, so the clear counted as an end.
+    r.clock.now += 1000;
+    r.alert(30);
+    await r.c.settled();
+    expect(r.delivered.at(-1)!.d).toMatchObject({ tone: 'dp_glance' });
+    expect(r.delivered.at(-1)!.d.voice).toBeUndefined();
+    r.c.clear();
     const clearedAt = r.clock.now;
     r.clock.now = clearedAt + NO_FACE_VOICE_QUIET_MS;
     r.alert(3);
