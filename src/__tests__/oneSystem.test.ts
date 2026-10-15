@@ -67,11 +67,39 @@ export const FORBIDDEN_DETECTION: readonly string[] = [
 /** The forgot-to-start reminder's own JS files. */
 export const REMINDER_FILES: readonly string[] = ['src/features/reminder/', 'src/features/onboarding/steps/ReminderStep.tsx'];
 
-/** What could start a drive from JS; none of it may appear in the reminder's files. */
-export const REMINDER_NEVER_STARTS: readonly string[] = ['startCapture', 'useStartDrive', 'useDriveControls', 'nativeDriveSource', 'StartDriveBar'];
+/** What could start a drive from JS (the drive host and every way to reach it); none of it may appear in the reminder's files. */
+export const REMINDER_NEVER_STARTS: readonly string[] = [
+  'startCapture',
+  'useStartDrive',
+  'useDriveControls',
+  'nativeDriveSource',
+  'StartDriveBar',
+  'useDriveHost',
+  'DriveContext',
+  'DriveProvider',
+  'createDriveHost',
+];
 
-/** Modules the reminder's files may not import: the drive, the drive screens, Home. */
-export const REMINDER_FORBIDDEN_IMPORTS = /from\s+['"](@\/drive|@\/features\/drive|@\/features\/home)(\/[^'"]*)?['"]/;
+/** Repo paths the reminder's files may not import, by any route: the drive, the drive screens, Home. */
+export const REMINDER_FORBIDDEN_MODULES: readonly string[] = ['src/drive', 'src/features/drive', 'src/features/home'];
+
+/** Every module specifier in `from '…'`, `import '…'`, `import('…')` and `require('…')`. */
+const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)(['"`])([^'"`]+)\1/g;
+
+/** A specifier as a repo path (`@/x` is `src/x`; `./` and `../` from the importing file), or null for a package. */
+export function resolveSpecifier(file: string, spec: string): string | null {
+  let joined: string;
+  if (spec.startsWith('@/')) joined = `src/${spec.slice(2)}`;
+  else if (spec.startsWith('.')) joined = `${file.split('/').slice(0, -1).join('/')}/${spec}`;
+  else return null;
+  const out: string[] = [];
+  for (const part of joined.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') out.pop();
+    else out.push(part);
+  }
+  return out.join('/');
+}
 
 /** Packages that run JS in the background with no drive open; none may be a dependency. */
 export const FORBIDDEN_PACKAGES: readonly string[] = ['expo-task-manager', 'expo-background-fetch', 'expo-background-task'];
@@ -205,10 +233,16 @@ export function scan(files: Readonly<Record<string, string>>, rules: readonly Ru
   return found;
 }
 
-/** The reminder files that import the drive, the drive screens or Home. */
+/** The reminder files that import (statically, dynamically or by `require`, by alias or relative path) the drive, the drive screens or Home. */
 export function reminderImports(files: Readonly<Record<string, string>>): string[] {
   return Object.entries(files)
-    .filter(([file, src]) => REMINDER_FILES.some((p) => file.startsWith(p)) && REMINDER_FORBIDDEN_IMPORTS.test(stripComments(src)))
+    .filter(([file, src]) => {
+      if (!REMINDER_FILES.some((p) => file.startsWith(p))) return false;
+      return [...stripComments(src).matchAll(SPECIFIER)].some((m) => {
+        const target = resolveSpecifier(file, m[2] as string);
+        return target !== null && REMINDER_FORBIDDEN_MODULES.some((mod) => target === mod || target.startsWith(`${mod}/`));
+      });
+    })
     .map(([file]) => file);
 }
 
@@ -292,8 +326,41 @@ describe('the scanner (negative control)', () => {
         'src/features/onboarding/steps/ReminderStep.tsx': "import { StartDrive } from '@/features/home';",
         'src/features/reminder/b.ts': "import { x } from '@/features/drives';",
         'src/features/settings/c.ts': "import { useDrive } from '@/drive/useDrive';",
+        // every other route to the drive: a relative path, require, a dynamic import, a re-export, a bare import
+        'src/features/reminder/rel.ts': "import { useDriveHost } from '../../drive/useDrive';",
+        'src/features/reminder/req.ts': "const { useDriveHost } = require('@/drive/useDrive');",
+        'src/features/reminder/dyn.ts': "const host = await import('@/drive/host');",
+        'src/features/reminder/re.ts': "export { DriveScreen } from '../drive/DriveScreen';",
+        'src/features/reminder/side.ts': "import '../home';",
+        // fine: the reminder's own files, other features, packages
+        'src/features/reminder/ok.ts': "import { reminderCopy } from './copy'; import x from '../permissions/usePermissionHealth'; import DriveSense from '@drive-sense';",
       })
-    ).toEqual(['src/features/reminder/a.ts', 'src/features/onboarding/steps/ReminderStep.tsx']);
+    ).toEqual([
+      'src/features/reminder/a.ts',
+      'src/features/onboarding/steps/ReminderStep.tsx',
+      'src/features/reminder/rel.ts',
+      'src/features/reminder/req.ts',
+      'src/features/reminder/dyn.ts',
+      'src/features/reminder/re.ts',
+      'src/features/reminder/side.ts',
+    ]);
+    expect(resolveSpecifier('src/features/reminder/enable.ts', '../../drive/useDrive')).toBe('src/drive/useDrive');
+    expect(resolveSpecifier('src/features/reminder/enable.ts', '@/features/home')).toBe('src/features/home');
+    expect(resolveSpecifier('src/features/reminder/enable.ts', 'expo-router')).toBeNull();
+  });
+
+  test('the reminder files may not name the drive host or any way to reach it', () => {
+    const planted = {
+      'src/features/reminder/h.ts': 'useDriveHost().start();',
+      'src/features/reminder/c.tsx': 'const host = useContext(DriveContext);',
+      'src/features/onboarding/steps/ReminderStep.tsx': '<DriveProvider host={createDriveHost(deps)} />',
+    };
+    expect(scan(planted).map((v) => `${v.file}:${v.name}`)).toEqual([
+      'src/features/reminder/h.ts:useDriveHost',
+      'src/features/reminder/c.tsx:DriveContext',
+      'src/features/onboarding/steps/ReminderStep.tsx:DriveProvider',
+      'src/features/onboarding/steps/ReminderStep.tsx:createDriveHost',
+    ]);
   });
 
   test('a background-task package is found in package.json', () => {
