@@ -66,17 +66,39 @@ test('Android: silent, often as you park; no location asked', async () => {
   expect(screen.getByText(reminderCopy.lines.onAndroid)).toBeOnTheScreen();
 });
 
-test('a phone with no Play services: the line says so, and Continue', async () => {
+test('a phone with no Play services: the line says so, and Continue; nothing is asked or turned on', async () => {
   const native = createFakeDriveSense({ platform: 'android' });
   native.setTripReminderEnv({ available: false });
+  const adapter = fakeAdapter(snap());
   const onNext = jest.fn();
   await render(
     <ThemeProvider>
-      <ReminderStep ctx={ctx('android')} onNext={onNext} deps={{ adapter: fakeAdapter(snap()), native }} />
+      <ReminderStep ctx={ctx('android')} onNext={onNext} deps={{ adapter, native }} />
     </ThemeProvider>
   );
-  await press('reminder-turn-on');
-  expect(screen.getByText(reminderCopy.lines.unavailable)).toBeOnTheScreen();
+  expect(await screen.findByText(reminderCopy.lines.unavailable)).toBeOnTheScreen();
+  expect(screen.queryByTestId('reminder-turn-on')).toBeNull();
   await press('reminder-continue');
   expect(onNext).toHaveBeenCalledTimes(1);
+  expect(adapter.log).toEqual([]);
+  expect(native.calls).toEqual([]);
+  expect(native.tripReminderOn).toBe(false);
+});
+
+test('Back to the step with the reminder already on: where it stands, and Continue (no second Turn on)', async () => {
+  const native = createFakeDriveSense({ platform: 'android' });
+  await native.setTripReminder(true);
+  const adapter = fakeAdapter(snap());
+  const onNext = jest.fn();
+  await render(
+    <ThemeProvider>
+      <ReminderStep ctx={ctx('android')} onNext={onNext} deps={{ adapter, native }} />
+    </ThemeProvider>
+  );
+  expect(await screen.findByText(reminderCopy.lines.onAndroid)).toBeOnTheScreen();
+  expect(screen.queryByTestId('reminder-turn-on')).toBeNull();
+  await press('reminder-continue');
+  expect(onNext).toHaveBeenCalledTimes(1);
+  expect(adapter.log).toEqual([]);
+  expect(native.calls).toEqual(['setTripReminder:true']);
 });

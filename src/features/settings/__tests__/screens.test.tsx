@@ -133,6 +133,23 @@ describe('Settings', () => {
       expect(screen.getByTestId('settings-reminder').props.disabled).toBe(true);
     });
 
+    it('on a phone that can no longer run it, a reminder still on can be turned off', async () => {
+      const r = world('android');
+      await r.native.setTripReminder(true);
+      r.native.setTripReminderEnv({ available: false });
+      const w = await appWorld();
+      await w.render(<SettingsScreen deps={r.deps} />);
+      expect(await screen.findByText(reminderCopy.lines.unavailable, { includeHiddenElements: true })).toBeOnTheScreen();
+      const toggle = screen.getByTestId('settings-reminder');
+      expect(toggle.props.value).toBe(true);
+      expect(toggle.props.disabled).toBe(false);
+      await act(async () => {
+        fireEvent(toggle, 'valueChange', false);
+      });
+      await waitFor(() => expect(r.native.tripReminderOn).toBe(false));
+      expect(screen.getByTestId('settings-reminder').props.disabled).toBe(true);
+    });
+
     it('is not shown where the native module is missing', async () => {
       const w = await appWorld();
       await w.render(<SettingsScreen />);

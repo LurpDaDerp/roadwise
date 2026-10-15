@@ -521,6 +521,16 @@ describe('fix round 1', () => {
     await waitFor(async () => expect(await settings.get(PENDING_TERMS_KEY)).toBeNull());
   });
 
+  test('a SIGNED_OUT the driver did not start (revoked, expired) turns the forgot-to-start reminder off', async () => {
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await act(async () => { mockProfileGate.resolve?.(ava); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
+    mockReminderOff.mockClear();
+    await act(async () => { emit('SIGNED_OUT', null); });
+    expect(mockReminderOff).toHaveBeenCalledTimes(1);
+  });
+
   test('a launch that simply starts signed out keeps a tick waiting for its sign-in', async () => {
     const settings = createSettingsRepo(db);
     await settings.set(PENDING_TERMS_KEY, { version: '1', at: Date.now() });

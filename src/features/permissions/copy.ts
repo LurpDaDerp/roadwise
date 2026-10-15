@@ -17,7 +17,8 @@ export const permissionsCopy = {
     attention: 'A couple of things could be better',
     broken: "RoadWise can't record drives right now",
   },
-  never: 'RoadWise only uses location while a drive you started is running. It never asks for “Always”.',
+  never:
+    'A drive uses location only while it records. Location “Always” is asked for only on iPhone, and only if you turn on the forgot-to-start reminder.',
   status: { ok: 'On', attention: 'Needs a look', off: 'Off' } satisfies Record<RowStatus, string>,
   fix: {
     requestLocation: 'Allow location',

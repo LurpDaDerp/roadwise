@@ -58,6 +58,16 @@ describe('turnOnReminder', () => {
     expect(adapter.log).toEqual(['snapshot']);
   });
 
+  test('a phone that cannot run it is asked nothing and stays off', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android', motion: 'undetermined', notifications: 'undetermined' }));
+    const native = createFakeDriveSense({ platform: 'android' });
+    native.setTripReminderEnv({ available: false });
+    await expect(turnOnReminder(adapter, native)).resolves.toMatchObject({ enabled: false, state: 'unavailable' });
+    expect(adapter.log).toEqual([]);
+    expect(native.calls).toEqual([]);
+    expect(native.tripReminderOn).toBe(false);
+  });
+
   test('a phone read that fails still turns it on', async () => {
     const adapter = fakeAdapter(snap());
     adapter.failReads = true;

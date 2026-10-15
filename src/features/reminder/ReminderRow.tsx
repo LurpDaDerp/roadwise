@@ -103,10 +103,12 @@ export function ReminderRow({
   return (
     <View>
       <ToggleRow
+        icon="notifications-outline"
         title={reminderCopy.title}
         subtitle={line.text}
         value={status.enabled}
-        disabled={line.disabled || busy}
+        // Where it cannot run, a reminder still on from before can always be turned off.
+        disabled={(line.disabled && !status.enabled) || busy}
         onValueChange={onToggle}
         testID="settings-reminder"
       />

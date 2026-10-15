@@ -1,11 +1,11 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 
 import type { TripReminderStatus } from '@drive-sense';
 
 import type { PermissionsAdapter } from '@/core/permissions';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
-import { reminderCopy, reminderLine, turnOnReminder, type ReminderNative } from '@/features/reminder';
+import { readReminderStatus, reminderCopy, reminderLine, turnOnReminder, type ReminderNative } from '@/features/reminder';
 import { Card, Text, useTheme } from '@/ui';
 
 import type { StepProps } from '../stepRegistry';
@@ -22,7 +22,8 @@ export interface ReminderStepDeps {
 /**
  * The optional "Forgot to start?" step (after notifications). "Turn on" asks for what the reminder
  * still needs (on iOS, Location "Always") and turns it on; "Not now" asks nothing. Either way the
- * flow goes on, and it can be turned on later in Settings › Driving. The reminder only ever sends a
+ * flow goes on, and it can be turned on later in Settings › Driving. Coming back to the step (or a
+ * phone that cannot run it) shows where it stands, with Continue. The reminder only ever sends a
  * note that opens RoadWise; it never starts a drive.
  */
 export function ReminderStep({ ctx, onNext, onBack, deps = {} }: StepProps & { deps?: ReminderStepDeps }) {
@@ -31,6 +32,20 @@ export function ReminderStep({ ctx, onNext, onBack, deps = {} }: StepProps & { d
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const leaving = useRef(false);
+  const native = deps.native;
+
+  // Already on (Back from a later step), or not possible on this phone: say so, with Continue.
+  useEffect(() => {
+    let live = true;
+    readReminderStatus(native)
+      .then((s) => {
+        if (live && (s.enabled || s.state === 'unavailable')) setStatus((cur) => cur ?? s);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [native]);
 
   const leave = () => {
     if (leaving.current) return;

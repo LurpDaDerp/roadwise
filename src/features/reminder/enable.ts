@@ -18,8 +18,12 @@ const fullyAllowed = (n: NotificationAccess) => n === 'granted';
 /**
  * Asks for what the reminder still needs, then turns it on. It is saved on even when something
  * stays missing; the returned status says what (Settings shows it, and never asks again by itself).
+ * A phone that cannot run it (no Play services; iOS: no motion or significant-change hardware) is
+ * asked nothing, and it stays off.
  */
 export async function turnOnReminder(adapter: PermissionsAdapter, native: ReminderNative = nativeReminder): Promise<TripReminderStatus> {
+  const before = await native.getTripReminderStatus().catch(() => null);
+  if (before?.state === 'unavailable') return before;
   try {
     const snap = await adapter.snapshot();
     if (snap.motion === 'undetermined') await adapter.requestMotion().catch(() => null);

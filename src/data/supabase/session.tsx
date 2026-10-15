@@ -294,9 +294,13 @@ export function SessionProvider({
     );
     const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
       // Every end of a session — the driver's own sign-out, a revoked or expired one — forgets a
-      // Terms tick not yet recorded (T17 security M-1). Only the event: a launch that simply
-      // starts signed out keeps a tick made on the sign-in screen for the link it is waiting on.
-      if (event === 'SIGNED_OUT') void clearTermsAccepted(settings).catch(() => {});
+      // Terms tick not yet recorded (T17 security M-1) and turns the forgot-to-start reminder off.
+      // Only the event: a launch that simply starts signed out keeps a tick made on the sign-in
+      // screen for the link it is waiting on.
+      if (event === 'SIGNED_OUT') {
+        void clearTermsAccepted(settings).catch(() => {});
+        void turnOffReminder().catch(() => {});
+      }
       void load(next as Session | null);
     });
 
