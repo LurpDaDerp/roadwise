@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import com.google.android.gms.location.ActivityRecognition
 import com.google.android.gms.location.ActivityTransition
@@ -187,15 +188,19 @@ object ActivityTransitions {
         return
       }
       val nowNanos = SystemClock.elapsedRealtimeNanos()
-      // The same request is on file and still in this boot (the boot clock restarts at a reboot,
-      // which drops every registration): nothing to do.
-      if (prefs.transitionsTier == want.name && prefs.transitionsAtNanos in 1L..nowNanos) {
+      val boot = bootCount(context)
+      // The same request is on file and from this boot (a reboot drops every registration): nothing
+      // to do. The boot count says which boot; where the phone does not give it, a stamp ahead of
+      // the boot clock (which restarts at a reboot) is the only sign.
+      val thisBoot = prefs.transitionsAtNanos in 1L..nowNanos && (boot < 0 || prefs.transitionsBoot == boot)
+      if (prefs.transitionsTier == want.name && thisBoot) {
         done()
         return
       }
       // Stamped before the request: whatever the request replays happened before this and is dropped.
       prefs.transitionsTier = null
       prefs.transitionsAtNanos = nowNanos
+      prefs.transitionsBoot = boot
       subscribe(context, want) { e ->
         if (e != null) {
           Log.w(TAG, "activity transitions not subscribed: ${e.javaClass.simpleName}")
@@ -210,6 +215,13 @@ object ActivityTransitions {
       Log.w(TAG, "activity transitions not synced: ${e.javaClass.simpleName}")
       done()
     }
+  }
+
+  /** This boot's number, or -1 where the phone does not say. */
+  private fun bootCount(context: Context): Int = try {
+    Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, -1)
+  } catch (_: Exception) {
+    -1
   }
 
   /** [onDone] gets null on success, else the failure (SecurityException = no permission). */
@@ -231,6 +243,7 @@ object ActivityTransitions {
       val prefs = DriveSensePrefs.init(context)
       prefs.transitionsTier = null
       prefs.transitionsAtNanos = 0L
+      prefs.transitionsBoot = -1
       ActivityRecognition.getClient(context.applicationContext)
         .removeActivityTransitionUpdates(pendingIntent(context))
     } catch (_: Exception) {

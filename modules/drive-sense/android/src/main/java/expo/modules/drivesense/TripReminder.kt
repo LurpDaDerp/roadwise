@@ -112,7 +112,8 @@ object TripReminder {
     val r = TripReminderPolicy.onTransitions(load(context), events, arrival, subscribedAt, ctx(context))
     save(context, r.state)
     when (r.effect) {
-      TripReminderPolicy.Effect.POST -> TripReminderNotifier.post(context)
+      // A post that never showed takes no quiet, no daily slot and no outcome.
+      TripReminderPolicy.Effect.POST -> if (!TripReminderNotifier.post(context)) save(context, unposted(r.state, arrival))
       TripReminderPolicy.Effect.WITHDRAW -> TripReminderNotifier.cancel(context)
       TripReminderPolicy.Effect.NONE -> applyShowing(context, r.state)
     }
@@ -150,6 +151,18 @@ object TripReminder {
     save(context, s)
     TripReminderNotifier.cancel(context)
     ActivityTransitions.sync(context)
+  }
+
+  /** [s0] with the post at [at] taken back: the trip may remind at its next stop. */
+  private fun unposted(s0: ReminderState, at: Long): ReminderState {
+    val s = s0.deepCopy()
+    val i = s.posts.lastIndexOf(at)
+    if (i >= 0) s.posts.removeAt(i)
+    s.trip?.reminded = false
+    s.pendingAt = 0L
+    s.showing = false
+    s.quietUntil = 0L
+    return s
   }
 
   // ——— the phone ———

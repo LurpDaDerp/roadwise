@@ -78,8 +78,8 @@ object TripReminderState {
         pendingAt = o.getLong("pendingAt"),
         postedAt = o.getLong("postedAt"),
         showing = o.getBoolean("showing"),
-        missStreak = o.getInt("missStreak"),
-        pauseLevel = o.getInt("pauseLevel"),
+        missStreak = o.getInt("missStreak").coerceAtLeast(0),
+        pauseLevel = o.getInt("pauseLevel").coerceIn(0, TripReminderPolicy.PAUSE_DAYS.size),
         pausedUntil = o.getLong("pausedUntil"),
         quietUntil = o.getLong("quietUntil"),
         notDrivingUntil = o.getLong("notDrivingUntil")

@@ -26,6 +26,7 @@ object DriveSensePrefs {
   private const val TRIP_REMINDER = "tripReminder"
   private const val TRANSITIONS_TIER = "transitionsTier"
   private const val TRANSITIONS_AT_NANOS = "transitionsAtNanos"
+  private const val TRANSITIONS_BOOT = "transitionsBoot"
 
   @Volatile
   private var prefs: SharedPreferences? = null
@@ -94,6 +95,13 @@ object DriveSensePrefs {
     get() = p.getLong(TRANSITIONS_AT_NANOS, 0L)
     set(v) {
       p.edit().putLong(TRANSITIONS_AT_NANOS, v).commit()
+    }
+
+  /** The boot (Settings.Global.BOOT_COUNT) that request was made in; -1 for none or unknown. */
+  var transitionsBoot: Int
+    get() = p.getInt(TRANSITIONS_BOOT, -1)
+    set(v) {
+      p.edit().putInt(TRANSITIONS_BOOT, v).commit()
     }
 
   /** Converted timestamps that fell back to their arrival time (README §7), for diagnostics. */
