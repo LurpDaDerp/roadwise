@@ -176,12 +176,6 @@ describe('errors and permissions (review I4, README §2 "Errors")', () => {
     expect(isDriveSenseError(driveSenseError('E_NOT_FOUND', 'x'), 'E_NOT_FOUND')).toBe(true);
   });
 
-  test('queryMotionHistory is empty, never rejects, without motion permission', async () => {
-    const fake = createFakeDriveSense();
-    fake.setMotionHistory([{ type: 'automotive', confidence: 'high', ts: 5 }]);
-    await expect(fake.queryMotionHistory(0, 10)).resolves.toEqual([]);
-  });
-
   test('selfTest rejects E_INVALID_INPUT on unparseable vectors', async () => {
     const fake = createFakeDriveSense();
     await expect(codeOf(fake.selfTest('not json'))).resolves.toBe('E_INVALID_INPUT');
@@ -232,11 +226,8 @@ test('every bridged method is implemented and logged', async () => {
   await fake.getThermalState();
   await fake.getLastExitInfo();
   await fake.isIgnoringBatteryOptimizations();
-  await fake.queryMotionHistory(0, 1);
-  await fake.checkForgottenDrive(0);
   await fake.requestMotionPermission();
   await fake.setDriveDisplay({ speed: null, limit: null, unit: 'mph', points: null, pointsDelta: null, stopped: true });
-  await fake.setForgotToStartReminder(true);
   await fake.selfTest('[]');
   expect(fake.queries).toEqual([
     'getState',
@@ -244,10 +235,8 @@ test('every bridged method is implemented and logged', async () => {
     'getThermalState',
     'getLastExitInfo',
     'isIgnoringBatteryOptimizations',
-    'queryMotionHistory',
-    'checkForgottenDrive',
   ]);
-  expect(fake.calls).toEqual(['requestMotionPermission', 'setDriveDisplay', 'setForgotToStartReminder:true', 'selfTest']);
+  expect(fake.calls).toEqual(['requestMotionPermission', 'setDriveDisplay', 'selfTest']);
 });
 
 test('platform defaults: iOS lagged lock signal and battery-optimisation true; Android reliable and false', async () => {
@@ -269,20 +258,6 @@ test('setState overrides, getState returns a copy', async () => {
   expect(s).toMatchObject({ location: 'whenInUse', motion: 'granted', captureWasOpen: true });
   s.capturing = true;
   expect((await fake.getState()).capturing).toBe(false);
-});
-
-test('motion history is filtered to [from, to]', async () => {
-  const fake = createFakeDriveSense();
-  fake.setState({ motion: 'granted' });
-  fake.setMotionHistory([
-    { type: 'walking', confidence: 'high', ts: 100 },
-    { type: 'automotive', confidence: 'medium', ts: 200 },
-    { type: 'stationary', confidence: 'low', ts: 300 },
-  ]);
-  await expect(fake.queryMotionHistory(150, 300)).resolves.toEqual([
-    { type: 'automotive', confidence: 'medium', ts: 200 },
-    { type: 'stationary', confidence: 'low', ts: 300 },
-  ]);
 });
 
 test('motion permission follows the state', async () => {
@@ -328,22 +303,6 @@ describe('the background surface (plan §6)', () => {
     expect(fake.driveDisplay).toBeNull();
   });
 
-  test('the forgot-to-start setting persists; checkForgottenDrive answers on iOS with motion only', async () => {
-    const ios = createFakeDriveSense();
-    expect(ios.forgotToStartReminder).toBe(false);
-    await ios.setForgotToStartReminder(true);
-    expect(ios.forgotToStartReminder).toBe(true);
-    const stretch = { startedAt: 1_000, endedAt: 400_000 };
-    ios.setForgottenDrive(stretch);
-    await expect(ios.checkForgottenDrive(0)).resolves.toBeNull(); // motion not granted
-    ios.setState({ motion: 'granted' });
-    await expect(ios.checkForgottenDrive(0)).resolves.toEqual(stretch);
-    await expect(ios.checkForgottenDrive(500_000)).resolves.toBeNull(); // ended before `since`
-    const android = createFakeDriveSense({ platform: 'android' });
-    android.setState({ motion: 'granted' });
-    android.setForgottenDrive(stretch);
-    await expect(android.checkForgottenDrive(0)).resolves.toBeNull();
-  });
 });
 
 describe('listeners and buffering (README §Buffering)', () => {

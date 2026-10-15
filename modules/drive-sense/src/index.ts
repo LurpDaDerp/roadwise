@@ -15,8 +15,6 @@ import {
   captureRateSchema,
   driveDisplaySchema,
   exitInfoSchema,
-  forgottenDriveSchema,
-  motionActivitySchema,
   motionPermissionSchema,
   screenStateSchema,
   stateSchema,
@@ -92,7 +90,6 @@ function safeJson(v: unknown): string {
 
 const voidResult = z.union([z.undefined(), z.null()]).transform(() => undefined);
 const ok = <S extends z.ZodType>(schema: S, v: unknown) => schema.safeParse(v).success;
-const finite = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
 
 const DriveSense: DriveSenseApi = {
   startCapture: (mode) => call('startCapture', [mode], ok(captureModeSchema, mode), voidResult),
@@ -100,13 +97,6 @@ const DriveSense: DriveSenseApi = {
   setCaptureRate: (rate) =>
     call('setCaptureRate', [rate], ok(captureRateSchema, rate), voidResult),
   getState: () => call('getState', [], true, stateSchema),
-  queryMotionHistory: (fromTs, toTs) =>
-    call(
-      'queryMotionHistory',
-      [fromTs, toTs],
-      finite(fromTs) && finite(toTs) && fromTs <= toTs,
-      z.array(motionActivitySchema)
-    ),
   getScreenState: () => call('getScreenState', [], true, screenStateSchema),
   getThermalState: () => call('getThermalState', [], true, thermalLevelSchema),
   requestMotionPermission: () => call('requestMotionPermission', [], true, motionPermissionSchema),
@@ -114,10 +104,6 @@ const DriveSense: DriveSenseApi = {
     call('excludeFromBackup', [uri], typeof uri === 'string' && uri.length > 0, voidResult),
   setDriveDisplay: (state) =>
     call('setDriveDisplay', [state], ok(driveDisplaySchema, state), voidResult),
-  setForgotToStartReminder: (enabled) =>
-    call('setForgotToStartReminder', [enabled], typeof enabled === 'boolean', voidResult),
-  checkForgottenDrive: (sinceMs) =>
-    call('checkForgottenDrive', [sinceMs], finite(sinceMs) && sinceMs >= 0, forgottenDriveSchema.nullable()),
   getLastExitInfo: () => call('getLastExitInfo', [], true, exitInfoSchema.nullable()),
   isIgnoringBatteryOptimizations: () =>
     call('isIgnoringBatteryOptimizations', [], true, z.boolean()),

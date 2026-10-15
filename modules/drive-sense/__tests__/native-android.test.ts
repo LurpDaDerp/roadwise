@@ -39,13 +39,12 @@ const code = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').repla
 const MODULE = () => code(kt('DriveSenseModule'));
 const MANIFEST = () => read(join(MAIN, 'AndroidManifest.xml'));
 
-describe('native-android: files the contract names exist, and the auto-detect ones are gone', () => {
+describe('native-android: files the contract names exist, and no trip-detection file does', () => {
   const files = [
     'DriveSenseModule',
     'CaptureService',
     'Watchdog',
     'ActivityTransitionReceiver',
-    'ForgotToStartReminder',
     'DriveSenseHeadlessService',
     'LocationSource',
     'SensorSource',
@@ -55,7 +54,6 @@ describe('native-android: files the contract names exist, and the auto-detect on
     'PhoneStateReceiver',
     'NotificationFactory',
     'ExitInfoReader',
-    'TransitionStore',
     'EventBus',
   ];
   it.each(files)('%s.kt', (name) => {
@@ -65,8 +63,8 @@ describe('native-android: files the contract names exist, and the auto-detect on
     expect(existsSync(join(MAIN, 'res', 'drawable', 'ic_drive_notification.xml'))).toBe(true);
   });
   // plan §1 decision 4
-  it('no BootReceiver', () => {
-    expect(existsSync(join(KT_DIR, 'BootReceiver.kt'))).toBe(false);
+  it.each(['BootReceiver', 'ForgotToStartReminder', 'TransitionStore'])('no %s.kt', (name) => {
+    expect(existsSync(join(KT_DIR, `${name}.kt`))).toBe(false);
   });
 });
 
@@ -155,7 +153,7 @@ describe('native-android: manifest (plan §1 decision 4: While Using only, no bo
 describe('native-android: a capture starts only from JS (plan §1 decision 4)', () => {
   it('the transition receiver never starts the capture service or emits a wake', () => {
     const rx = code(kt('ActivityTransitionReceiver'));
-    expect(rx).not.toMatch(/startForegroundService|startNative|CaptureService\.start|"wake"/);
+    expect(rx).not.toMatch(/startForegroundService|startService|startNative|startFromJs|CaptureService\.start|"wake"/);
     expect(code(allKotlin())).not.toMatch(/ACTION_START_NATIVE|fun startNative|"wake"|\barmed\b/);
   });
 
@@ -197,24 +195,26 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(src).toMatch(/ACTIVITY_TRANSITION_EXIT/);
   });
 
-  it('maps ENTERs to automotive/walking/running at high, EXITs of the on-foot types to exit: true, never stores an EXIT', () => {
+  it('maps ENTERs to automotive/walking/running at high, EXITs of the on-foot types to exit: true, an IN_VEHICLE EXIT to nothing', () => {
     const src = code(kt('ActivityTransitionReceiver'));
     expect(src).toMatch(/DetectedActivity\.IN_VEHICLE\s*->\s*"automotive"/);
     expect(src).toMatch(/DetectedActivity\.WALKING\s*->\s*"walking"/);
     expect(src).toMatch(/DetectedActivity\.RUNNING\s*->\s*"running"/);
     expect(src).toMatch(/"exit" to true/);
     expect(src).not.toMatch(/"(low|medium)"/);
-    expect(src).toMatch(/else if \(type != "automotive"\) \{\s*live\.add\(/);
-    expect(src).toMatch(/TransitionStore\.append\(context, mapped\)/);
+    expect(src).toMatch(/else if \(type != "automotive"\) \{\s*EventBus\.emit\("activity", linkedMapOf\("type" to type, "confidence" to "high", "ts" to ts, "exit" to true\)\)/);
   });
 
-  it('live activity reaches JS only while capturing', () => {
-    expect(code(kt('ActivityTransitionReceiver'))).toMatch(/if \(CaptureService\.isCapturing\) for \(m in live\) EventBus\.emit\("activity", m\)/);
+  it('activity reaches JS only while capturing, and nothing is kept: the receiver writes no store or prefs', () => {
+    const on = /override fun onReceive\([\s\S]*?\n {2}\}/.exec(code(kt('ActivityTransitionReceiver')))?.[0] ?? '';
+    expect(on.match(/EventBus\.emit\("activity"/g)).toHaveLength(2);
+    expect(on).not.toMatch(/\.append\(|\.edit\(\)|prefs\.\w+\s*=/);
   });
 
-  it('subscribed exactly while wanted: capturing or the reminder, with motion and Play services; synced at every entry point, best effort', () => {
+  it('subscribed exactly while capturing, with motion and Play services; synced at every entry point, best effort', () => {
     const rx = code(kt('ActivityTransitionReceiver'));
-    expect(rx).toMatch(/fun wanted\(context: Context\): Boolean =\s*\(CaptureService\.isCapturing \|\| DriveSensePrefs\.init\(context\)\.reminderEnabled\) &&\s*DriveSensePermissions\.motionGranted\(context\) && DriveSensePermissions\.playServicesAvailable\(context\)/);
+    // No idle arm: the feed is never registered while no drive is open.
+    expect(rx).toMatch(/fun wanted\(context: Context\): Boolean =\s*CaptureService\.isCapturing && DriveSensePermissions\.motionGranted\(context\) && DriveSensePermissions\.playServicesAvailable\(context\)\n/);
     const sync = /fun sync\([\s\S]*?\n {2}\}/.exec(rx)?.[0] ?? '';
     expect(sync).toMatch(/try \{/);
     expect(sync).toMatch(/catch \(e: Exception\)/);
@@ -228,22 +228,20 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(end).toMatch(/ActivityTransitions\.sync\(this\)/);
     const destroy = /override fun onDestroy\(\)[\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
     expect(destroy).toMatch(/ActivityTransitions\.sync\(this\)/);
+    // At launch, not capturing, sync() removes a registration an earlier process or build left behind.
     const create = /OnCreate \{[\s\S]*?\n {4}\}/.exec(MODULE())?.[0] ?? '';
     expect(create).toMatch(/ActivityTransitions\.sync\(context\)/);
-    const setting = /AsyncFunction\("setForgotToStartReminder"\)[\s\S]*?\n {4}\}/.exec(MODULE())?.[0] ?? '';
-    expect(setting).toMatch(/reminderEnabled = enabled/);
-    expect(setting).toMatch(/ActivityTransitions\.sync\(ctx\)/);
   });
 
   // C12 round 1 (review-C12 m1): no stale registration survives an abnormal end.
-  it('the receiver checks "not reminding and not capturing" FIRST: it unsubscribes and stores nothing', () => {
+  it('the receiver checks "not capturing" FIRST: it unsubscribes and emits nothing', () => {
     const src = code(kt('ActivityTransitionReceiver'));
     const on = /override fun onReceive\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
-    const stale = on.indexOf('if (!prefs.reminderEnabled && !CaptureService.isCapturing) {');
+    const stale = on.indexOf('if (!CaptureService.isCapturing) {');
     expect(stale).toBeGreaterThan(-1);
     expect(on.slice(stale, stale + 200)).toMatch(/ActivityTransitions\.unsubscribe\(context\)\s*return/);
     expect(stale).toBeLessThan(on.indexOf('ActivityTransitionResult.extractResult'));
-    expect(stale).toBeLessThan(on.indexOf('TransitionStore.append'));
+    expect(stale).toBeLessThan(on.indexOf('EventBus.emit'));
   });
 
   it('requestMotionPermission requests ACTIVITY_RECOGNITION at run time on API 29+', () => {
@@ -262,50 +260,17 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
   });
 });
 
-describe('native-android: the forgot-to-start reminder (spec "Starting and ending a drive"; plan §6)', () => {
-  const R = () => code(kt('ForgotToStartReminder'));
-
-  it('the copy, the quiet channel, and that it opens the app', () => {
-    const src = R();
-    expect(src).toContain('"Forgot to record? Tap Start before your next drive."');
-    expect(src).toMatch(/IMPORTANCE_LOW/);
-    expect(src).toMatch(/setSilent\(true\)/);
-    expect(src).toMatch(/getLaunchIntentForPackage/);
+describe('native-android: no trip detection while no drive is open', () => {
+  it('no reminder, no motion history, no idle vehicle bookkeeping anywhere in the Kotlin', () => {
+    const src = code(allKotlin());
+    expect(src).not.toMatch(/ForgotToStart|TransitionStore|reminderEnabled|vehicleEnteredAt|captureRanInVehicle|lastReminderAt|queryMotionHistory|checkForgottenDrive/);
   });
 
-  it('fires only on an IN_VEHICLE exit, after ≥ 5 min in the vehicle with no capture, at most once per 6 h, only while enabled', () => {
-    const src = R();
-    expect(src).toMatch(/MIN_VEHICLE_MS = 5 \* 60_000L/);
-    expect(src).toMatch(/MIN_INTERVAL_MS = 6 \* 60 \* 60_000L/);
-    const exit = /fun onVehicleExit\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
-    expect(exit).toMatch(/val recorded = prefs\.captureRanInVehicle \|\| CaptureService\.isCapturing/);
-    expect(exit).toMatch(/if \(!prefs\.reminderEnabled \|\| enteredAt <= 0 \|\| recorded\) return/);
-    expect(exit).toMatch(/if \(ts - enteredAt < MIN_VEHICLE_MS\) return/);
-    expect(exit).toMatch(/if \(now - prefs\.lastReminderAt < MIN_INTERVAL_MS\) return/);
-    expect(exit).toMatch(/if \(post\(context\)\) prefs\.lastReminderAt = now/);
-    // the ENTER path only records state; posting lives in the EXIT path alone
-    const enter = /fun onVehicleEnter\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
-    expect(enter).not.toMatch(/post\(/);
-    expect(src.match(/post\(context\)/g)).toHaveLength(1);
-  });
-
-  it('never starts a capture, and a capture start marks the vehicle period as recorded', () => {
-    expect(R()).not.toMatch(/CaptureService\.start|startForegroundService/);
-    const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(code(kt('CaptureService')))?.[0] ?? '';
-    expect(begin).toMatch(/ForgotToStartReminder\.onCaptureStarted\(this\)/);
-    const rx = code(kt('ActivityTransitionReceiver'));
-    expect(rx).toMatch(/if \(enter\) ForgotToStartReminder\.onVehicleEnter\(context, ts\) else ForgotToStartReminder\.onVehicleExit\(context, ts\)/);
-  });
-
-  it('its state is persisted (survives the process)', () => {
-    const prefs = code(kt('DriveSensePrefs'));
-    for (const k of ['reminderEnabled', 'vehicleEnteredAt', 'captureRanInVehicle', 'lastReminderAt']) {
-      expect(prefs).toMatch(new RegExp(`var ${k}:`));
-    }
-  });
-
-  it('Android answers checkForgottenDrive with null (the notification is its path)', () => {
-    expect(MODULE()).toMatch(/AsyncFunction\("checkForgottenDrive"\) \{ _: Double ->\s*null as Any\?/);
+  it("no notification but the capture's own: the only channel is NotificationFactory's", () => {
+    const src = code(allKotlin());
+    expect(src.match(/\bNotificationChannel\(/g)).toHaveLength(1);
+    expect(code(kt('NotificationFactory'))).toMatch(/\bNotificationChannel\(/);
+    expect(src).not.toMatch(/"reminders"/);
   });
 });
 

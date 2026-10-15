@@ -5,7 +5,7 @@
        background-location permission anywhere. -->
   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-  <!-- Activity transitions (walking auto-end, forgot-to-start reminder): the runtime permission on API 29+, the Play services one below it. -->
+  <!-- Activity transitions (walking auto-end during a drive): the runtime permission on API 29+, the Play services one below it. -->
   <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
   <uses-permission android:name="com.google.android.gms.permission.ACTIVITY_RECOGNITION" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

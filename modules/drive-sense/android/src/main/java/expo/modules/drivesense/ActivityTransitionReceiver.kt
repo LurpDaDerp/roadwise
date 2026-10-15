@@ -18,22 +18,21 @@ import com.google.android.gms.location.DetectedActivity
  * Manifest-declared, not exported: Play services reaches it through the explicit [PendingIntent]
  * built in [ActivityTransitions].
  *
- * v3: it never starts a capture (plan §1 decision 4). It is subscribed for exactly two reasons:
- * - during a capture, so a walk can end the drive — mapped `activity` events;
- * - while the forgot-to-start reminder is on ([ForgotToStartReminder]) — an IN_VEHICLE period with
- *   no capture posts a quiet notification after its EXIT, never while in the vehicle.
+ * It never starts a capture (plan §1 decision 4). It is subscribed only during a capture, so a walk
+ * can end the drive: mapped `activity` events to JS. A transition that arrives with no capture
+ * running is a leftover registration and is removed.
  *
  * Mapping (README §3): ENTER IN_VEHICLE → `{ automotive, high }`, ENTER WALKING → `{ walking, high }`,
- * ENTER RUNNING → `{ running, high }`; EXIT WALKING / EXIT RUNNING → the same type with `exit: true`,
- * emitted live only (`TransitionStore` keeps the ENTERs); EXIT IN_VEHICLE → nothing to JS.
+ * ENTER RUNNING → `{ running, high }`; EXIT WALKING / EXIT RUNNING → the same type with `exit: true`;
+ * EXIT IN_VEHICLE → nothing to JS.
  */
 class ActivityTransitionReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
-    val prefs = DriveSensePrefs.init(context)
+    DriveSensePrefs.init(context)
     if (intent.action != ActivityTransitions.ACTION || !ActivityTransitionResult.hasResult(intent)) return
-    // C12 round 1 (review-C12 m1): neither capturing nor reminding, this is a stale registration (a capture that
-    // ended without endCapture, or a late subscribe): remove it and store nothing.
-    if (!prefs.reminderEnabled && !CaptureService.isCapturing) {
+    // C12 round 1 (review-C12 m1): not capturing, this is a stale registration (a capture that ended
+    // without endCapture, a late subscribe, or one an older build left behind): remove it, emit nothing.
+    if (!CaptureService.isCapturing) {
       ActivityTransitions.unsubscribe(context)
       return
     }
@@ -41,9 +40,7 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
     val anchor = ClockAnchor.now()
     val arrival = System.currentTimeMillis()
 
-    // ENTERs go to the store and to JS; EXITs of the on-foot types to JS only; in arrival order.
-    val mapped = ArrayList<TransitionStore.Entry>()
-    val live = ArrayList<Map<String, Any>>()
+    // ENTERs, and the EXITs of the on-foot types, to JS in arrival order.
     for (event in result.transitionEvents) {
       val ts = transitionTs(event.elapsedRealTimeNanos, anchor, arrival)
       val enter = event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER
@@ -53,21 +50,12 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
         DetectedActivity.RUNNING -> "running"
         else -> null
       } ?: continue
-      if (type == "automotive") {
-        if (enter) ForgotToStartReminder.onVehicleEnter(context, ts) else ForgotToStartReminder.onVehicleExit(context, ts)
-      }
       if (enter) {
-        val entry = TransitionStore.Entry(type, "high", ts)
-        mapped.add(entry)
-        live.add(entry.toMap())
+        EventBus.emit("activity", linkedMapOf("type" to type, "confidence" to "high", "ts" to ts))
       } else if (type != "automotive") {
-        live.add(linkedMapOf("type" to type, "confidence" to "high", "ts" to ts, "exit" to true))
+        EventBus.emit("activity", linkedMapOf("type" to type, "confidence" to "high", "ts" to ts, "exit" to true))
       }
     }
-    TransitionStore.append(context, mapped)
-
-    // Live events reach JS only while a capture runs: the reminder alone keeps nothing awake in JS.
-    if (CaptureService.isCapturing) for (m in live) EventBus.emit("activity", m)
   }
 
   private fun transitionTs(elapsedNanos: Long, anchor: ClockAnchor, arrival: Long): Long {
@@ -80,9 +68,9 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
 
 /**
  * Subscribing to and unsubscribing from the transitions feed. [sync] is the one rule: subscribed
- * while (motion granted and Play services present) and (capturing or the reminder is on); removed
- * otherwise. Every entry point calls it (the module's launch, a capture's begin and end, the
- * setting's change), so no registration outlives its reason.
+ * while capturing with motion granted and Play services present; removed otherwise. Every entry
+ * point calls it (the module's launch, a capture's begin and end, a motion grant), so no
+ * registration outlives its capture.
  */
 object ActivityTransitions {
   const val ACTION = "expo.modules.drivesense.ACTIVITY_TRANSITION"
@@ -115,8 +103,7 @@ object ActivityTransitions {
 
   /** Whether the feed should be subscribed now. */
   fun wanted(context: Context): Boolean =
-    (CaptureService.isCapturing || DriveSensePrefs.init(context).reminderEnabled) &&
-      DriveSensePermissions.motionGranted(context) && DriveSensePermissions.playServicesAvailable(context)
+    CaptureService.isCapturing && DriveSensePermissions.motionGranted(context) && DriveSensePermissions.playServicesAvailable(context)
 
   /**
    * Subscribe or unsubscribe to match [wanted], best effort and never an error: a failure (a

@@ -303,7 +303,7 @@ class CaptureService : Service() {
     handler.post { stopSources() }
     isCapturing = false
     // C12 round 1 (review-C12 m1): a capture that ends here (the system, a kill, a refused sticky restart)
-    // never ran endCapture: its walking feed goes too, unless the reminder keeps it.
+    // never ran endCapture: its walking feed goes too.
     ActivityTransitions.sync(this)
     currentRate = null
     currentMode = null
@@ -386,8 +386,6 @@ class CaptureService : Service() {
     // WK-m1: the walking feed during every capture (JS start, sticky restart), best
     // effort: a failure is logged and swallowed and the capture runs on.
     ActivityTransitions.sync(this)
-    // The forgot-to-start reminder: this vehicle period is being recorded.
-    ForgotToStartReminder.onCaptureStarted(this)
   }
 
   private fun updateModeAndClaim(mode: String) {
@@ -442,7 +440,7 @@ class CaptureService : Service() {
     captureStartedAt = null
     display = null
     if (clearOpen) prefs.captureOpen = false
-    // The capture's walking feed ends with it, unless the reminder keeps it.
+    // The capture's walking feed ends with it.
     ActivityTransitions.sync(this)
     main.post {
       try {

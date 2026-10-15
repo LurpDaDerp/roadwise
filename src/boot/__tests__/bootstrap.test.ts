@@ -80,9 +80,8 @@ test('a cold launch: migrates, records the owner, boots the host idle, starts th
   expect(await readDeviceOwner(db)).toBe('user-1');
   expect(rt.drive.snapshot().status).toBe('idle');
   expect(rt.adopted).toBeNull();
-  // The stored forgot-to-start setting (off) is applied natively; no capture, no arming.
-  expect(d.source.calls).toEqual(['setForgotToStartReminder:false']);
-  expect(d.source.forgotToStartReminder).toBe(false);
+  // Nothing reaches the native side at launch: no capture, no arming, no motion feed.
+  expect(d.source.calls).toEqual([]);
   await rt.stop();
 });
 

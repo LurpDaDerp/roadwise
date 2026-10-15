@@ -33,7 +33,6 @@ import { dashcamFinalizeDeps } from '@/dashcam/finalizeDeps';
 import { setActiveDashcam } from '@/dashcam/registry';
 import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
-import { applyStoredForgotToStartSetting } from '@/drive/forgottenDrive';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
@@ -353,11 +352,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     });
     host = drive;
     setActiveDashcam(dc);
-    // The optional forgot-to-start reminder follows its stored setting (off by default); WP9's toggle
-    // re-applies it through `applyForgotToStartSetting`.
-    void applyStoredForgotToStartSetting(db, { setForgotToStartReminder: (on) => source.setForgotToStartReminder(on) }).catch((error: unknown) =>
-      onError(error, 'forgot-to-start reminder')
-    );
     const adopt: AdoptedTrip | null = recovery.adopt;
     await drive.boot({ adopt });
     if (!drive.isBusy()) limits.resetTrip();

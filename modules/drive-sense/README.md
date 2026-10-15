@@ -2,8 +2,7 @@
 
 Local Expo module that records a drive the user started: 1 Hz GNSS, 25 Hz IMU reduced natively to
 one `FeatureRow` per second, motion activity (for the walking auto-end), phone state, the
-background surface (Android notification / iOS Live Activity hand-off), the optional
-forgot-to-start reminder, and a few utilities. This README is **binding** for the Swift (`ios/`)
+background surface (Android notification / iOS Live Activity hand-off), and a few utilities. This README is **binding** for the Swift (`ios/`)
 and Kotlin (`android/`) implementations. The TypeScript sources are the machine-checked half of
 the same contract:
 
@@ -40,7 +39,7 @@ running through the `location` background mode; Android through the location for
   platforms, even where it is a no-op. `addListener` is the Expo event emitter's, not a
   function you declare.
 - **Integers.** Every epoch-ms value you send (`ts`, `captureStartedAt`, `lastRowTs`,
-  `MotionActivity.ts`, `ExitInfo.ts`, `ForgottenDrive.*`) is a whole number of milliseconds. JS
+  `MotionActivity.ts`, `ExitInfo.ts`) is a whole number of milliseconds. JS
   rejects a fractional one (`parseRow` drops the row; the result validators reject the promise).
 - **Exact keys.** Payloads and results carry exactly the keys in `src/types.ts` — no extras, none
   missing. JS validates with strict schemas; an extra key makes a method reject (`row` is the one
@@ -49,10 +48,9 @@ running through the `location` background mode; Android through the location for
 - **Silence while moving (SR9).** A failed sensor, a refused foreground-service start or a lost
   fix never produces a notification, sound or modal. Record it (Android: for `getLastExitInfo`)
   and carry on or stop.
-- **Nothing runs between captures.** No GPS, no IMU, no timers, no motion feed while idle. The
-  only idle registration is Android's activity-transition listener **while the forgot-to-start
-  reminder is on** (§2), which Play services delivers at no app cost and which never starts a
-  capture. GPS 1 Hz only while capturing. IMU 25 Hz batched natively and reduced per second —
+- **Nothing runs between captures.** No GPS, no IMU, no timers, no motion feed and no
+  activity-transition registration while idle: nothing watches for a car trip while no drive is
+  open, and nothing ever starts a capture but `startCapture`. GPS 1 Hz only while capturing. IMU 25 Hz batched natively and reduced per second —
   never per sample to JS. No WorkManager jobs.
 
 ---
@@ -65,17 +63,14 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 | Method | Behaviour |
 |---|---|
 | `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of the Android sticky restart** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: a `SecurityException` from the location foreground service → `E_PERMISSION`; any other refusal → `E_FGS_REFUSED`. iOS: a new capture emits `call { active: true }` once if a phone call is already in progress (later changes as they happen). Both platforms subscribe the motion-activity feed for the capture's life when `motion` is `granted`, **best effort** (Android: a `SecurityException` or missing Play services is logged and swallowed, never rejects `startCapture`, never stops the capture), so a walk can end the drive. Only ever called from a user's tap in the foreground. |
-| `stopCapture()` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service (its notification goes with it) and the capture's activity-transition subscription **unless the reminder keeps it**. Idempotent. |
+| `stopCapture()` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service (its notification goes with it) and the capture's activity-transition subscription. Idempotent. |
 | `setCaptureRate(rate)` | `full` as above. `low`: coarse location (iOS `kCLLocationAccuracyHundredMeters`, `distanceFilter = 50`; Android `PRIORITY_BALANCED_POWER_ACCURACY` at 10 s), IMU stopped, and a row is emitted **only when a fix arrives** (IMU-absent encoding, §4). The process stays alive. iOS reads the phone state (`locked`/`screenOn`/`appForeground`, and `screen` changes) on each fix at `low` rather than polling at 1 Hz, so the low rate wakes nothing per second. Ignored (resolves) while not capturing. |
 | `getState()` | `DriveSenseState` (below). |
-| `queryMotionHistory(fromTs, toTs)` | Activities with `fromTs ≤ ts ≤ toTs`, oldest first. iOS: `queryActivityStarting`. Android: the transitions buffered natively over the last 24 h (`TransitionStore`). |
 | `getScreenState()` | `{ locked, on }` now (same derivation as the `screen` event). |
 | `getThermalState()` | `nominal`/`fair`/`serious`/`critical` (iOS `ProcessInfo.thermalState`; Android `PowerManager` thermal status: NONE/LIGHT → nominal, MODERATE → fair, SEVERE → serious, CRITICAL and above → critical). |
 | `requestMotionPermission()` | iOS: triggers the motion prompt with a one-minute activity query; Android API 29+: requests `ACTIVITY_RECOGNITION` (below 29 it is install-time: `granted`). Resolves `granted`/`denied`/`unavailable` (hardware without motion activity). **Never rejects.** Already granted → `granted` without a prompt. When the OS will not ask again (iOS `denied`/`restricted`; Android refused with `shouldShowRequestPermissionRationale` false after a request, i.e. "don't ask again") → `denied` **without prompting**; the app must send the user to Settings. |
 | `excludeFromBackup(uri)` | iOS: sets `isExcludedFromBackup` on the file or directory at `uri` (`file://` URI or a path). Android: resolves (backup exclusion is manifest-level). Rejects `E_NOT_FOUND` if nothing exists at `uri`, and `E_IO` if it exists but the attribute could not be set (iOS). JS callers treat a rejection as non-fatal. |
 | `setDriveDisplay(state)` | The background surface (spec "Driving screen · Background"; plan §6). `state` = `{ speed, limit, unit, points, pointsDelta, stopped, ended? }` (`DriveDisplayState`). **Android:** updates the capture's foreground notification — title **"Driving"**, text **"34 mph · limit 35"** (`—` for a null speed or limit, the unit from `state`), a sub-line **"1,240 pts (+18)"** only when `points` is non-null (the delta only when non-null and non-zero), the **End drive** action (→ `notificationAction`) only while `stopped` and not `ended`; tapping opens the app. Ignored while not capturing; the display resets with each capture. **iOS:** forwarded to the Live Activity (`modules/live-drive`) through the process-local `roadwise.driveDisplay` notification; a no-op when none is running. Callers throttle to ≤ 1 update per 3 s and only on change. Never rejects. |
-| `setForgotToStartReminder(enabled)` | The optional reminder (spec "Starting and ending a drive"; off by default; the JS setting `reminder.forgotToStart`). **Android:** persists the flag and registers (or removes) the activity-transition listener — `ACTIVITY_RECOGNITION` only, no location. After an IN_VEHICLE **exit**, when the vehicle period lasted ≥ 5 min and no capture ran during it, it posts one quiet local notification *"Forgot to record? Tap Start before your next drive."* (channel `reminders`, low importance, silent, opens the app). Never while in the vehicle, at most once per 6 h, and it **never starts a capture**. The state survives the process (prefs) and the listener is re-registered on app start while enabled — there is no boot receiver, so after a reboot it returns with the next app start. **iOS:** a no-op (JS owns the setting); the app calls `checkForgottenDrive` on foreground. Never rejects. |
-| `checkForgottenDrive(sinceMs)` | **iOS:** the most recent **confident** (medium or high) automotive stretch of **≥ 5 min** in `CMMotionActivityManager` history whose end is after `sinceMs`, as `{ startedAt, endedAt }` (integer epoch ms), else `null`. A stretch runs from its first automotive sample to the start of the first confident non-automotive sample after it; one still open (the phone is still in a car) is never reported. `null` without motion permission. JS decides whether it overlaps a recorded drive and shows the one-line notice on Home. **Android:** always `null` (the notification above is its path). Never rejects. |
 | `getLastExitInfo()` | Android: the most recent of `ActivityManager.getHistoricalProcessExitReasons(pkg, 0, 1)` and the persisted watchdog record, as `ExitInfo` (mapping: `REASON_USER_REQUESTED`/`USER_STOPPED` → `user_stopped`, `LOW_MEMORY` → `low_memory`, `CRASH`/`CRASH_NATIVE` → `crash`, `ANR` → `anr`, watchdog stop → `watchdog`, a refused FGS start → `other`, anything else → `other`, unknown → `unknown`); `whileCapturing` from the persisted capture-open flag at that time. iOS: `null`. |
 | `isIgnoringBatteryOptimizations()` | Android: `PowerManager.isIgnoringBatteryOptimizations(packageName)` — whether the app is exempt from battery optimisation (permission health). **iOS: always `true`** — iOS has no equivalent per-app restriction, so there is nothing for the user to fix. |
 | `selfTest(vectorsJson)` | Runs the native extractor and (Android) gravity filter over golden vectors; resolves a JSON string (§8). Rejects `E_INVALID_INPUT` only if the vectors JSON cannot be parsed at all. |
@@ -95,9 +90,8 @@ tests for one. Anything else a native method throws is a bug.
 | `E_INVALID_INPUT` | `selfTest` | the vectors JSON is unparseable |
 
 Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
-`queryMotionHistory` (an empty list when motion is not granted), `getScreenState`,
-`getThermalState`, `requestMotionPermission`, `setDriveDisplay`, `setForgotToStartReminder`,
-`checkForgottenDrive`, `getLastExitInfo` (`null` below Android 11), `isIgnoringBatteryOptimizations`.
+`getScreenState`, `getThermalState`, `requestMotionPermission`, `setDriveDisplay`,
+`getLastExitInfo` (`null` below Android 11), `isIgnoringBatteryOptimizations`.
 
 ### `DriveSenseState`
 
@@ -119,16 +113,16 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 
 | Event | Payload | When |
 |---|---|---|
-| `activity` | `MotionActivity` `{ type, confidence, ts, exit? }` | a motion-activity change **while capturing** (both platforms subscribe the feed for the capture's life; Android's listener may also be registered for the reminder, but then nothing is emitted to JS) |
+| `activity` | `MotionActivity` `{ type, confidence, ts, exit? }` | a motion-activity change **while capturing** (both platforms subscribe the feed for the capture's life only) |
 | `row` | a `DriveSenseRow` (§4) | once per second while capturing at `full`; once per fix at `low` |
 | `screen` | `{ locked, on, ts }` | lock/screen change while capturing (Android `SCREEN_ON`/`SCREEN_OFF`/`USER_PRESENT`; iOS on a change of the 1 Hz poll) |
 | `thermal` | `{ level, ts }` | a thermal-state change while capturing |
 | `notificationAction` | `{ action: 'endDrive', ts }` | Android: the notification's End drive action (offered only while `setDriveDisplay` says `stopped`) |
 | `call` | `{ active, ts }` | iOS only: `CXCallObserver` — a call started or ended |
 
-**Motion-activity mapping** (the `activity` event and `queryMotionHistory` alike). The drive host
-acts on `automotive` (any confidence) and on `walking`/`running` only at confidence `medium` or
-above, so these mappings decide whether walking can end a trip.
+**Motion-activity mapping** (the `activity` event). The drive host acts only on `walking`/`running`
+ENTERs at confidence `medium` or above (never an `exit`), so these mappings decide whether walking
+can end a trip; every other type is ignored.
 
 - **iOS** (`CMMotionActivity`): confidence maps 1:1 (`.low` → `low`, `.medium` → `medium`,
   `.high` → `high`). Several flags can be set at once; `type` is the first set flag in this order:
@@ -143,26 +137,25 @@ above, so these mappings decide whether walking can end a trip.
 
   | Transition | Emitted |
   |---|---|
-  | ENTER IN_VEHICLE | `{ type: 'automotive', confidence: 'high' }` (also opens a forgot-to-start vehicle period) |
+  | ENTER IN_VEHICLE | `{ type: 'automotive', confidence: 'high' }` |
   | ENTER WALKING | `{ type: 'walking', confidence: 'high' }` |
   | ENTER RUNNING | `{ type: 'running', confidence: 'high' }` |
-  | EXIT IN_VEHICLE | nothing to JS (closes the forgot-to-start vehicle period) |
-  | EXIT WALKING | `{ type: 'walking', confidence: 'high', exit: true }` (live only) |
-  | EXIT RUNNING | `{ type: 'running', confidence: 'high', exit: true }` (live only) |
+  | EXIT IN_VEHICLE | nothing to JS |
+  | EXIT WALKING | `{ type: 'walking', confidence: 'high', exit: true }` |
+  | EXIT RUNNING | `{ type: 'running', confidence: 'high', exit: true }` |
 
   `exit: true` marks the END of a walk: the host never treats it as a walk (the walk confirmation,
   T13, times a walk from its ENTER to its EXIT or an IN_VEHICLE). iOS never sets `exit`.
 
   `ts` is the transition's `getElapsedRealTimeNanos()` converted with §7 "Time base" (an anchor
-  read when the transition is received). `TransitionStore` keeps the same mapped entries (ENTER
-  only; never an `exit`) for 24 h for `queryMotionHistory`. `createFakeDriveSense` has no mapping to do: tests emit
-  `MotionActivity` values directly.
+  read when the transition is received). Nothing is stored. `createFakeDriveSense` has no mapping
+  to do: tests emit `MotionActivity` values directly.
 
-  **One rule for the listener** (`ActivityTransitions.sync`): registered while
-  (capturing **or** the reminder is on) **and** motion is granted **and** Play services is
-  present; removed otherwise. Every entry point calls it (module launch, a capture's begin and
-  end, `onDestroy`, the setting's change), and a transition that arrives when neither reason
-  holds removes the registration and stores nothing (C12 round 1).
+  **One rule for the listener** (`ActivityTransitions.sync`): registered while capturing **and**
+  motion is granted **and** Play services is present; removed otherwise. Every entry point calls
+  it (module launch, a capture's begin and end, `onDestroy`, a motion grant), so module launch
+  removes any registration an earlier process or build left behind, and a transition that
+  arrives with no capture running removes the registration and emits nothing (C12 round 1).
 
 **Buffering.** Every event emitted while **no JS listener for that event** is attached is
 buffered natively and delivered, in order, when the first listener for it attaches (Expo
@@ -620,15 +613,14 @@ instead. The fake follows this contract where host tests depend on it:
   what was left;
 - `startCapture` rejects `E_PERMISSION` with `location: 'none'` (set it with `setState`);
 - `setDriveDisplay` is kept (`driveDisplay`) only while capturing and cleared by `stopCapture`,
-  as the Android notification is; `setForgotToStartReminder` persists (`forgotToStartReminder`);
-  `checkForgottenDrive` answers `setForgottenDrive(...)` on iOS with motion granted, else `null`;
+  as the Android notification is;
 - `calls` logs commands and `queries` logs read-only calls, so tests can assert command order;
 - delivery is synchronous by default; `asyncDelivery: true` delivers every event on a microtask
   as native always does — use it in integration tests so a host that relies on synchronous
   delivery fails in Jest rather than on a device;
 - buffering before the first listener and the 300-event cap are native's.
 
-The other controls (`emit`, `loadTrace`, `setMotionHistory`, `listenerCount`, `setLastExitInfo`,
+The other controls (`emit`, `loadTrace`, `listenerCount`, `setLastExitInfo`,
 `setIgnoringBatteryOptimizations`, `transition`, `failCaptureSubscribe`, `strandSubscription`)
 are documented on `FakeControls` in `src/types.ts`; `driveSenseError(code, message)` builds a
 coded rejection for a hand-rolled stub.

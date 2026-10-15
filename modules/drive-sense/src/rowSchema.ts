@@ -12,8 +12,6 @@ import type {
   DriveSenseState,
   ExitInfo,
   FeatureRow,
-  ForgottenDrive,
-  MotionActivity,
   ThermalLevel,
 } from './types';
 
@@ -150,13 +148,6 @@ export const stateSchema: z.ZodType<DriveSenseState> = z.strictObject({
   lastRowTs: epochMs.nullable(),
 });
 
-export const motionActivitySchema: z.ZodType<MotionActivity> = z.strictObject({
-  type: z.enum(['automotive', 'walking', 'running', 'cycling', 'stationary', 'unknown']),
-  confidence: z.enum(['low', 'medium', 'high']),
-  ts: epochMs,
-  exit: z.literal(true).optional(),
-});
-
 export const screenStateSchema = z.strictObject({ locked: z.boolean(), on: z.boolean() });
 
 export const motionPermissionSchema = z.enum(['granted', 'denied', 'unavailable']);
@@ -175,9 +166,4 @@ export const driveDisplaySchema: z.ZodType<DriveDisplayState> = z.strictObject({
   pointsDelta: z.number().nullable(),
   stopped: z.boolean(),
   ended: z.boolean().optional(),
-});
-
-export const forgottenDriveSchema: z.ZodType<ForgottenDrive> = z.strictObject({
-  startedAt: epochMs,
-  endedAt: epochMs,
 });

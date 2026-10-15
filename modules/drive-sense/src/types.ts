@@ -33,8 +33,8 @@ export interface MotionActivity {
   ts: number;
   /**
    * README §3: Android only, the END of a walking or running transition (EXIT). Live
-   * `activity` events only; never in `queryMotionHistory`. An exit is never a walk: the host times a
-   * walk from its ENTER to its EXIT (or to an IN_VEHICLE).
+   * `activity` events only. An exit is never a walk: the host times a walk from its ENTER to its
+   * EXIT (or to an IN_VEHICLE).
    */
   exit?: true;
 }
@@ -90,14 +90,6 @@ export interface DriveDisplayState {
   ended?: boolean;
 }
 
-/** iOS `checkForgottenDrive`: a confident automotive stretch of at least 5 minutes. */
-export interface ForgottenDrive {
-  /** epoch ms, integer */
-  startedAt: number;
-  /** epoch ms, integer */
-  endedAt: number;
-}
-
 export type DriveSenseEvents = {
   activity: MotionActivity;
   /** a `DriveSenseRow` as native emitted it — validate with `parseRow` before use */
@@ -135,14 +127,11 @@ export const DRIVE_SENSE_METHODS = [
   'stopCapture',
   'setCaptureRate',
   'getState',
-  'queryMotionHistory',
   'getScreenState',
   'getThermalState',
   'requestMotionPermission',
   'excludeFromBackup',
   'setDriveDisplay',
-  'setForgotToStartReminder',
-  'checkForgottenDrive',
   'getLastExitInfo',
   'isIgnoringBatteryOptimizations',
   'selfTest',
@@ -198,8 +187,6 @@ export interface DriveSenseApi {
   /** Ignored (resolves) while not capturing. */
   setCaptureRate(rate: CaptureRate): Promise<void>;
   getState(): Promise<DriveSenseState>;
-  /** iOS: CMMotionActivityManager history; Android: the transitions buffered natively over the last 24 h (rev1: m). */
-  queryMotionHistory(fromTs: number, toTs: number): Promise<MotionActivity[]>;
   getScreenState(): Promise<{ locked: boolean; on: boolean }>;
   getThermalState(): Promise<ThermalLevel>;
   /** iOS: motion prompt; Android API 29+: the ACTIVITY_RECOGNITION runtime permission (rev1: I15). */
@@ -213,22 +200,6 @@ export interface DriveSenseApi {
    * Activity when one is running, else a no-op. Never rejects.
    */
   setDriveDisplay(state: DriveDisplayState): Promise<void>;
-  /**
-   * The optional forgot-to-start reminder (spec "Starting and ending a drive"; off by default).
-   * Android: registers (or removes) a lightweight activity-transition listener — ACTIVITY_RECOGNITION
-   * only, no location — that posts a quiet local notification after an IN_VEHICLE exit when no
-   * capture ran during that vehicle period (never while in a vehicle, at most once per 6 h, never
-   * starts anything). The setting is persisted natively and re-registered on app start while
-   * enabled. iOS: persisted only; the app checks `checkForgottenDrive` on foreground instead. Never rejects.
-   */
-  setForgotToStartReminder(enabled: boolean): Promise<void>;
-  /**
-   * iOS: the most recent confident automotive stretch of ≥ 5 min in the motion history since
-   * `sinceMs`, or null (also null without motion permission). JS decides whether it overlaps a
-   * recorded drive and shows the in-app notice. Android: always null (the notification path above
-   * covers it). Never rejects.
-   */
-  checkForgottenDrive(sinceMs: number): Promise<ForgottenDrive | null>;
   /** Android ApplicationExitInfo (+ 'watchdog' from the persisted record); iOS null. */
   getLastExitInfo(): Promise<ExitInfo | null>;
   /**
@@ -266,14 +237,13 @@ export interface FakeControls {
   pendingRows(): number;
   /**
    * Commands, in order: startCapture, stopCapture, setCaptureRate, requestMotionPermission,
-   * excludeFromBackup, setDriveDisplay, setForgotToStartReminder, selfTest — the method name, plus
-   * `:<arg>` for startCapture, setCaptureRate, excludeFromBackup and setForgotToStartReminder.
+   * excludeFromBackup, setDriveDisplay, selfTest — the method name, plus `:<arg>` for startCapture,
+   * setCaptureRate and excludeFromBackup.
    * Rejected calls are logged too.
    */
   calls: string[];
-  /** Read-only calls, in order: getState, queryMotionHistory, getScreenState, getThermalState, checkForgottenDrive, getLastExitInfo, isIgnoringBatteryOptimizations. */
+  /** Read-only calls, in order: getState, getScreenState, getThermalState, getLastExitInfo, isIgnoringBatteryOptimizations. */
   queries: string[];
-  setMotionHistory(a: MotionActivity[]): void;
   setState(s: Partial<DriveSenseState>): void;
   /** JS listeners currently attached for `event` — the watchdog's liveness signal for `row`. */
   listenerCount(event: DriveSenseEvent): number;
@@ -283,10 +253,6 @@ export interface FakeControls {
   setIgnoringBatteryOptimizations(value: boolean): void;
   /** The last `setDriveDisplay` argument delivered while capturing, or null (cleared by stopCapture, as the notification goes). */
   readonly driveDisplay: DriveDisplayState | null;
-  /** The persisted forgot-to-start setting (default false). */
-  readonly forgotToStartReminder: boolean;
-  /** What `checkForgottenDrive` resolves to while motion is granted (null by default). */
-  setForgottenDrive(d: ForgottenDrive | null): void;
   // ——— the native activity feed (README §3) ———
   /**
    * An OS motion-activity delivery as native makes it: an `activity` event only while the feed is

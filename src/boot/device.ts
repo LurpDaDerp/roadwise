@@ -54,7 +54,7 @@ export const WIPE_KEEPS_SETTINGS_PREFIX = 'dashcam.';
 
 /** The driver's own data a plain sign-out removes (the owner key stays, so a return restores from the server). */
 export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'dashcam_events', 'dashcam_boots', 'dashcam_coverage', 'trips'];
-export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones', 'reminder.forgottenCheckedAt'];
+export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones'];
 
 /** How long a wipe waits for the drive summaries to be cancelled before going on without it. */
 export const CANCEL_SUMMARIES_TIMEOUT_MS = 2_000;

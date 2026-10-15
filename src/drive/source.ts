@@ -2,7 +2,7 @@
 // event subscription. `createFakeDriveSense()` satisfies it in tests.
 import DriveSense, { type DriveSenseApi } from '@drive-sense';
 
-export type DriveSource = Pick<DriveSenseApi, 'startCapture' | 'stopCapture' | 'getState' | 'addListener' | 'setForgotToStartReminder'>;
+export type DriveSource = Pick<DriveSenseApi, 'startCapture' | 'stopCapture' | 'getState' | 'addListener'>;
 
 /** The native module (every method rejects where it is absent: Jest, Expo Go, web). */
 export const nativeDriveSource: DriveSource = DriveSense;

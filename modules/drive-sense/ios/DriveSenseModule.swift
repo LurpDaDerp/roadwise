@@ -62,10 +62,6 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
       promise.resolve(CaptureController.shared.state())
     }.runOnQueue(.main)
 
-    AsyncFunction("queryMotionHistory") { (fromTs: Double, toTs: Double, promise: Promise) in
-      ActivitySource.history(fromTs: fromTs, toTs: toTs) { promise.resolve($0) }
-    }.runOnQueue(.main)
-
     AsyncFunction("getScreenState") { (promise: Promise) in
       let s = PhoneState.snapshot()
       promise.resolve(["locked": s.locked, "on": s.screenOn])
@@ -99,15 +95,6 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     AsyncFunction("setDriveDisplay") { (state: DriveDisplayRecord, promise: Promise) in
       DriveDisplayBridge.post(state)
       promise.resolve(nil)
-    }.runOnQueue(.main)
-
-    // iOS has nothing to register: JS owns the setting and asks `checkForgottenDrive` on foreground.
-    AsyncFunction("setForgotToStartReminder") { (_: Bool, promise: Promise) in
-      promise.resolve(nil)
-    }.runOnQueue(.main)
-
-    AsyncFunction("checkForgottenDrive") { (sinceMs: Double, promise: Promise) in
-      ActivitySource.forgottenDrive(sinceMs: sinceMs) { promise.resolve($0) }
     }.runOnQueue(.main)
 
     // Android's ApplicationExitInfo has no iOS equivalent.

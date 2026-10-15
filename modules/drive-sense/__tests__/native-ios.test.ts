@@ -194,20 +194,14 @@ describe('iOS drive-sense module (text)', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
-  // plan §6: forgot-to-start on iOS
-  it('checkForgottenDrive: a confident automotive stretch ≥ 5 min that ended after `since`, the most recent one, never one still open', () => {
-    const src = code('ActivitySource.swift');
-    expect(src).toMatch(/FORGOTTEN_MIN_S: Double = 5 \* 60/);
-    const fn = /static func forgottenDrive\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
-    expect(fn).toMatch(/guard status\(\) == "granted"/);
-    expect(fn).toMatch(/guard a\.confidence != \.low else \{ continue \}/);
-    expect(fn).toMatch(/if a\.automotive \{\s*if openStart == nil \{ openStart = a\.startDate \}/);
-    expect(fn).toMatch(/end\.timeIntervalSince\(start\) >= FORGOTTEN_MIN_S && endMs >= sinceMs/);
-    expect(fn).toMatch(/best = \["startedAt": NSNumber\(value: TimeBase\.ts\(start\)\), "endedAt": NSNumber\(value: TimeBase\.ts\(end\)\)\]/);
-    expect(moduleCode()).toMatch(/AsyncFunction\("checkForgottenDrive"\) \{ \(sinceMs: Double, promise: Promise\) in\s*ActivitySource\.forgottenDrive\(sinceMs: sinceMs\)/);
-    // iOS keeps no state for the setting (JS owns it)
-    expect(moduleCode()).toMatch(/AsyncFunction\("setForgotToStartReminder"\) \{ \(_: Bool, promise: Promise\) in\s*promise\.resolve\(nil\)/);
-    expect(allCode()).not.toMatch(/forgotToStartReminder/);
+  // No trip detection outside a capture: no look-back at the OS motion history.
+  it('reads no motion history: the one history query is the permission prompt', () => {
+    const src = allCode();
+    expect(src).not.toMatch(/forgottenDrive|FORGOTTEN_MIN_S|checkForgottenDrive|setForgotToStartReminder|queryMotionHistory|static func history\(/);
+    expect(src.match(/queryActivityStarting\(/g)).toHaveLength(1);
+    const prompt = /static func requestPermission\([\s\S]*?\n {2}\}/.exec(code('ActivitySource.swift'))?.[0] ?? '';
+    expect(prompt).toMatch(/guard s == "undetermined" else/);
+    expect(prompt).toMatch(/queryActivityStarting\(from: now\.addingTimeInterval\(-60\), to: now/);
   });
 
   // plan §6: the background surface

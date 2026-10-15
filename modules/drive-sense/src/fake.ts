@@ -20,8 +20,6 @@ import type {
   DriveSenseState,
   ExitInfo,
   FakeControls,
-  ForgottenDrive,
-  MotionActivity,
   Subscription,
   ThermalLevel,
 } from './types';
@@ -67,12 +65,9 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   };
   let screen = { locked: false, on: true };
   let thermal: ThermalLevel = 'nominal';
-  let history: MotionActivity[] = [];
   let exitInfo: ExitInfo | null = null;
   let ignoringBatteryOptimizations = platform === 'ios';
   let driveDisplay: DriveDisplayState | null = null;
-  let forgotToStartReminder = false;
-  let forgottenDrive: ForgottenDrive | null = null;
   /** The capture's own activity subscription (best effort), and a forced failure of it. */
   let captureFeed = false;
   let captureSubscribeFails = false;
@@ -153,11 +148,6 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       query('getState');
       return resolve({ ...state });
     },
-    queryMotionHistory(fromTs: number, toTs: number) {
-      query('queryMotionHistory');
-      if (state.motion !== 'granted') return resolve([]);
-      return resolve(history.filter((a) => a.ts >= fromTs && a.ts <= toTs).map((a) => ({ ...a })));
-    },
     getScreenState() {
       query('getScreenState');
       return resolve({ ...screen });
@@ -182,16 +172,6 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       // Activity (which a drive start opens) can show it. Ignored otherwise, like native.
       if (state.capturing) driveDisplay = { ...s };
       return resolve(undefined);
-    },
-    setForgotToStartReminder(enabled) {
-      command('setForgotToStartReminder', String(enabled));
-      forgotToStartReminder = enabled;
-      return resolve(undefined);
-    },
-    checkForgottenDrive(sinceMs) {
-      query('checkForgottenDrive');
-      if (platform !== 'ios' || state.motion !== 'granted' || !forgottenDrive) return resolve(null);
-      return resolve(forgottenDrive.endedAt >= sinceMs ? { ...forgottenDrive } : null);
     },
     getLastExitInfo() {
       query('getLastExitInfo');
@@ -264,9 +244,6 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     calls,
     queries,
-    setMotionHistory(a) {
-      history = a.map((x) => ({ ...x }));
-    },
     setState(s) {
       state = { ...state, ...s };
     },
@@ -281,12 +258,6 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     get driveDisplay() {
       return driveDisplay ? { ...driveDisplay } : null;
-    },
-    get forgotToStartReminder() {
-      return forgotToStartReminder;
-    },
-    setForgottenDrive(d) {
-      forgottenDrive = d ? { ...d } : null;
     },
     transition(a) {
       if (!captureFeed) return false;

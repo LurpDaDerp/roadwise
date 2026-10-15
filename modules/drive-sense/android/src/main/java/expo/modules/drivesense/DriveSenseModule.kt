@@ -46,9 +46,8 @@ class DriveSenseModule : Module() {
     OnCreate {
       DriveSensePrefs.init(context)
       EventBus.attach(emitter)
-      // The transitions feed is subscribed exactly while something needs it: a capture (walking
-      // auto-end) or the forgot-to-start reminder. At launch, re-register for the reminder if it is
-      // on; otherwise, not capturing, remove any registration an earlier process left behind.
+      // The transitions feed is subscribed only during a capture (walking auto-end). At launch, not
+      // capturing, this removes any registration an earlier process or an older build left behind.
       ActivityTransitions.sync(context)
     }
 
@@ -101,15 +100,6 @@ class DriveSenseModule : Module() {
         "captureStartedAt" to (if (capturing) CaptureService.captureStartedAt else null),
         "lastRowTs" to CaptureService.lastRowTs
       )
-    }
-
-    AsyncFunction("queryMotionHistory") { fromTs: Double, toTs: Double ->
-      val ctx = context
-      if (DriveSensePermissions.motion(ctx) != "granted") {
-        emptyList<Map<String, Any>>()
-      } else {
-        TransitionStore.query(ctx, fromTs, toTs).map { it.toMap() }
-      }
     }
 
     AsyncFunction("getScreenState") {
@@ -167,19 +157,6 @@ class DriveSenseModule : Module() {
     // The background surface (plan §6): the capture's foreground notification. Ignored while not capturing.
     AsyncFunction("setDriveDisplay") { state: Map<String, Any?> ->
       CaptureService.setDriveDisplay(DriveDisplay.from(state))
-    }
-
-    // The optional forgot-to-start reminder (spec "Starting and ending a drive"): persisted, and the
-    // transitions feed registered while it is on. Never starts a capture.
-    AsyncFunction("setForgotToStartReminder") { enabled: Boolean ->
-      val ctx = context
-      DriveSensePrefs.init(ctx).reminderEnabled = enabled
-      ActivityTransitions.sync(ctx)
-    }
-
-    // iOS answers from the motion history; Android's reminder is the notification above.
-    AsyncFunction("checkForgottenDrive") { _: Double ->
-      null as Any?
     }
 
     AsyncFunction("getLastExitInfo") {
