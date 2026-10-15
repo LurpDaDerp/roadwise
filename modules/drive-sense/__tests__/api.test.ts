@@ -47,6 +47,21 @@ jest.mock('expo-modules-core', () => {
     })),
     isIgnoringBatteryOptimizations: jest.fn(async () => false),
     selfTest: jest.fn(async () => '{"version":1}'),
+    setTripReminder: jest.fn(async (on: boolean) => ({
+      enabled: on,
+      state: on ? 'needs' : 'off',
+      autoOff: false,
+      missing: on ? ['locationAlways'] : [],
+      pausedUntil: null,
+    })),
+    getTripReminderStatus: jest.fn(async () => ({
+      enabled: true,
+      state: 'paused',
+      autoOff: false,
+      missing: [],
+      pausedUntil: 1_700_600_000_000,
+    })),
+    requestReminderLocation: jest.fn(async () => 'whenInUse'),
     addListener: jest.fn(() => ({ remove })),
   };
   const control = { present: true, native, state, remove };
@@ -135,6 +150,19 @@ describe('every method goes to native with its arguments', () => {
     expect(mockNative.selfTest).toHaveBeenCalledWith('[]');
   });
 
+  test('the forgot-to-start reminder: switch, status and the iOS location answer', async () => {
+    await expect(DriveSense.setTripReminder(true)).resolves.toEqual({
+      enabled: true,
+      state: 'needs',
+      autoOff: false,
+      missing: ['locationAlways'],
+      pausedUntil: null,
+    });
+    expect(mockNative.setTripReminder).toHaveBeenCalledWith(true);
+    await expect(DriveSense.getTripReminderStatus()).resolves.toMatchObject({ state: 'paused', pausedUntil: 1_700_600_000_000 });
+    await expect(DriveSense.requestReminderLocation()).resolves.toBe('whenInUse');
+  });
+
   test('a null exit info is passed through', async () => {
     mockNative.getLastExitInfo!.mockResolvedValueOnce(null);
     await expect(DriveSense.getLastExitInfo()).resolves.toBeNull();
@@ -171,6 +199,10 @@ describe('bridge validation', () => {
     ['getLastExitInfo', { ts: 1, reason: 'bored', whileCapturing: true }],
     ['isIgnoringBatteryOptimizations', 'true'],
     ['selfTest', 42],
+    ['getTripReminderStatus', { enabled: true, state: 'snoozed', autoOff: false, missing: [], pausedUntil: null }],
+    ['getTripReminderStatus', { enabled: true, state: 'needs', autoOff: false, missing: ['camera'], pausedUntil: null }],
+    ['getTripReminderStatus', { enabled: true, state: 'on', autoOff: false, missing: [] }],
+    ['requestReminderLocation', 'sometimes'],
   ] as const)('a malformed %s result rejects', async (method, bad) => {
     mockNative[method]!.mockResolvedValueOnce(bad);
     const args = method === 'selfTest' ? ['[]'] : [];
@@ -188,6 +220,7 @@ describe('bridge validation', () => {
     ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null }]],
     ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, extra: 1 }]],
     ['selfTest', [{}]],
+    ['setTripReminder', ['yes']],
   ] as const)('%s rejects bad arguments without calling native', async (method, args) => {
     const fn = DriveSense[method] as (...a: readonly unknown[]) => Promise<unknown>;
     await expect(fn(...args)).rejects.toThrow(`DriveSense.${method}`);

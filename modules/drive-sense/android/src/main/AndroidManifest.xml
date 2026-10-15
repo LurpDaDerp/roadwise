@@ -13,6 +13,9 @@
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <!-- HeadlessJsTaskService and the 1 Hz row timer hold a partial wake lock while a drive records (rev1: I15). -->
   <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <!-- The forgot-to-start reminder re-registers its activity feed after a reboot (ReminderBootReceiver,
+       enabled only while the reminder is on). It starts nothing. -->
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
   <application>
     <service
@@ -28,6 +31,23 @@
     <receiver
         android:name=".ActivityTransitionReceiver"
         android:exported="false" />
+
+    <!-- The forgot-to-start reminder's "Not driving" action, through its explicit PendingIntent. -->
+    <receiver
+        android:name=".ReminderActionReceiver"
+        android:exported="false" />
+
+    <!-- Disabled until the forgot-to-start reminder is turned on (TripReminder enables it with
+         DONT_KILL_APP). System broadcasts reach an unexported receiver. It only re-subscribes. -->
+    <receiver
+        android:name=".ReminderBootReceiver"
+        android:exported="false"
+        android:enabled="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+      </intent-filter>
+    </receiver>
   </application>
 
 </manifest>

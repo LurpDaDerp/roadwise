@@ -6,9 +6,10 @@ import android.content.SharedPreferences
 /**
  * The state drive-sense persists across processes: the capture-open flag and the capture's
  * parameters (for the `START_STICKY` restart and `captureWasOpen`), the motion "requested once"
- * flag, and the last native exit record ([ExitInfoReader]). Every entry point — the module, the
- * receiver, both services — calls [init] first, so [captureWasOpenAtProcessStart] is read before
- * anything in this process writes the flag.
+ * flag, the last native exit record ([ExitInfoReader]), the forgot-to-start reminder's state
+ * ([TripReminder]) and the activity-transition request on file ([ActivityTransitions]). Every entry
+ * point — the module, the receivers, both services — calls [init] first, so
+ * [captureWasOpenAtProcessStart] is read before anything in this process writes the flag.
  */
 object DriveSensePrefs {
   private const val FILE = "expo.modules.drivesense"
@@ -22,6 +23,9 @@ object DriveSensePrefs {
   private const val EXIT_WHILE_CAPTURING = "exitWhileCapturing"
   private const val FALLBACK_COUNT = "timebaseFallbacks"
   private const val UNPAIRED_COUNT = "imuUnpaired"
+  private const val TRIP_REMINDER = "tripReminder"
+  private const val TRANSITIONS_TIER = "transitionsTier"
+  private const val TRANSITIONS_AT_NANOS = "transitionsAtNanos"
 
   @Volatile
   private var prefs: SharedPreferences? = null
@@ -69,6 +73,28 @@ object DriveSensePrefs {
   var motionRequested: Boolean
     get() = p.getBoolean(MOTION_REQUESTED, false)
     set(v) = p.edit().putBoolean(MOTION_REQUESTED, v).apply()
+
+  /** The forgot-to-start reminder's state as JSON ([TripReminderState]); null until it is first written. */
+  var tripReminderJson: String?
+    get() = p.getString(TRIP_REMINDER, null)
+    // commit: the next broadcast may run in a new process.
+    set(v) {
+      p.edit().putString(TRIP_REMINDER, v).commit()
+    }
+
+  /** The activity-transition tier last requested from Play services, or null for none on file. */
+  var transitionsTier: String?
+    get() = p.getString(TRANSITIONS_TIER, null)
+    set(v) {
+      p.edit().putString(TRANSITIONS_TIER, v).commit()
+    }
+
+  /** The boot clock (elapsedRealtimeNanos) when that request was made; 0 for none. */
+  var transitionsAtNanos: Long
+    get() = p.getLong(TRANSITIONS_AT_NANOS, 0L)
+    set(v) {
+      p.edit().putLong(TRANSITIONS_AT_NANOS, v).commit()
+    }
 
   /** Converted timestamps that fell back to their arrival time (README §7), for diagnostics. */
   fun addTimebaseFallbacks(n: Int) {

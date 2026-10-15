@@ -19,8 +19,9 @@ import expo.modules.kotlin.modules.ModuleDefinition
  * list, one `AsyncFunction` per `DRIVE_SENSE_METHODS` entry, the error codes).
  *
  * v3 (plan §1 decision 4): a capture starts only from a JS `startCapture` (a user's tap in the
- * foreground). There is no arming, no boot receiver, no activity-transition auto-start and no
- * background location permission. Rejections are `CodedException`s with the contract codes only
+ * foreground). There is no arming, no activity-transition auto-start and no background location
+ * permission. The optional forgot-to-start reminder ([TripReminder]) only notifies; JS switches it
+ * and reads its status. Rejections are `CodedException`s with the contract codes only
  * (README §2 "Errors"); every other method never rejects.
  */
 class DriveSenseModule : Module() {
@@ -46,9 +47,19 @@ class DriveSenseModule : Module() {
     OnCreate {
       DriveSensePrefs.init(context)
       EventBus.attach(emitter)
-      // The transitions feed is subscribed only during a capture (walking auto-end). At launch, not
-      // capturing, this removes any registration an earlier process or an older build left behind.
-      ActivityTransitions.sync(context)
+      // The transitions feed: the capture's (walking auto-end) or the forgot-to-start reminder's.
+      // At launch this settles the reminder and re-requests the feed it needs (a registration the
+      // system dropped comes back), or removes one an earlier process or an older build left behind.
+      TripReminder.onLaunch(context)
+    }
+
+    // RoadWise is on screen: Home is visible, so a reminder still up comes down.
+    OnActivityEntersForeground {
+      try {
+        TripReminder.onAppForeground(context)
+      } catch (_: Exception) {
+        // no context yet: the next launch settles it
+      }
     }
 
     OnDestroy {
@@ -157,6 +168,21 @@ class DriveSenseModule : Module() {
     // The background surface (plan §6): the capture's foreground notification. Ignored while not capturing.
     AsyncFunction("setDriveDisplay") { state: Map<String, Any?> ->
       CaptureService.setDriveDisplay(DriveDisplay.from(state))
+    }
+
+    // The optional forgot-to-start reminder (README "Forgot-to-start reminder"). It never starts a
+    // capture: it notifies, and the notification only opens Home.
+    AsyncFunction("setTripReminder") { enabled: Boolean ->
+      TripReminder.setEnabled(context, enabled)
+    }
+
+    AsyncFunction("getTripReminderStatus") {
+      TripReminder.status(context)
+    }
+
+    // Android uses no location for the reminder (activity recognition only).
+    AsyncFunction("requestReminderLocation") {
+      "notNeeded"
     }
 
     AsyncFunction("getLastExitInfo") {

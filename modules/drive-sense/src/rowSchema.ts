@@ -12,7 +12,9 @@ import type {
   DriveSenseState,
   ExitInfo,
   FeatureRow,
+  ReminderLocationAnswer,
   ThermalLevel,
+  TripReminderStatus,
 } from './types';
 
 const epochMs = z.number().int().nonnegative();
@@ -167,3 +169,13 @@ export const driveDisplaySchema: z.ZodType<DriveDisplayState> = z.strictObject({
   stopped: z.boolean(),
   ended: z.boolean().optional(),
 });
+
+export const tripReminderStatusSchema: z.ZodType<TripReminderStatus> = z.strictObject({
+  enabled: z.boolean(),
+  state: z.enum(['off', 'on', 'needs', 'paused', 'unavailable']),
+  autoOff: z.boolean(),
+  missing: z.array(z.enum(['motion', 'notifications', 'locationAlways', 'locationPrecise'])),
+  pausedUntil: epochMs.nullable(),
+});
+
+export const reminderLocationSchema: z.ZodType<ReminderLocationAnswer> = z.enum(['always', 'whenInUse', 'denied', 'notNeeded']);

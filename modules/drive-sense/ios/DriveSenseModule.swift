@@ -107,6 +107,20 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
       promise.resolve(true)
     }
 
+    // The optional forgot-to-start reminder (README "Forgot-to-start reminder"). Not built on iOS
+    // in this version: it reports itself unavailable and asks for nothing.
+    AsyncFunction("setTripReminder") { (_: Bool, promise: Promise) in
+      promise.resolve(["enabled": false, "state": "unavailable", "autoOff": false, "missing": [String](), "pausedUntil": NSNull()] as [String: Any])
+    }
+
+    AsyncFunction("getTripReminderStatus") { (promise: Promise) in
+      promise.resolve(["enabled": false, "state": "unavailable", "autoOff": false, "missing": [String](), "pausedUntil": NSNull()] as [String: Any])
+    }
+
+    AsyncFunction("requestReminderLocation") { (promise: Promise) in
+      promise.resolve("notNeeded")
+    }
+
     // Heavy: runs on the module's own async queue, never the main queue.
     AsyncFunction("selfTest") { (vectorsJson: String, promise: Promise) in
       do {

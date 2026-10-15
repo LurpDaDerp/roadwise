@@ -7,6 +7,7 @@
 // - with `asyncDelivery: true` every event is delivered on a microtask, as the native bridge
 //   always does; the default is synchronous delivery, for step-by-step tests (review M4).
 import { runSelfTest } from './extract/vectors';
+import { INITIAL, setEnabled, settle, statusOf, type ReminderState } from './reminder/policy';
 import { parseVectors } from './selfTest';
 import type {
   CaptureMode,
@@ -20,8 +21,10 @@ import type {
   DriveSenseState,
   ExitInfo,
   FakeControls,
+  ReminderLocationAnswer,
   Subscription,
   ThermalLevel,
+  TripReminderMissing,
 } from './types';
 
 /** Events buffered while no listener for them is attached, across all events (README §Buffering). */
@@ -71,6 +74,11 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   /** The capture's own activity subscription (best effort), and a forced failure of it. */
   let captureFeed = false;
   let captureSubscribeFails = false;
+  /** The forgot-to-start reminder: its state (the policy's own), and the phone as it sees it. */
+  let reminder: ReminderState = INITIAL;
+  let reminderAvailable = true;
+  let reminderMissing: TripReminderMissing[] = [];
+  let reminderLocation: ReminderLocationAnswer = platform === 'ios' ? 'always' : 'notNeeded';
   let queue: DriveSenseRow[] = [];
   const listeners = new Map<DriveSenseEvent, Set<Listener>>();
   let buffer: Buffered[] = [];
@@ -189,6 +197,20 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
         return Promise.reject(driveSenseError('E_INVALID_INPUT', e instanceof Error ? e.message : String(e)));
       }
     },
+    setTripReminder(enabled: boolean) {
+      command('setTripReminder', String(enabled));
+      reminder = setEnabled(reminder, enabled);
+      return resolve(statusOf(reminder, now(), reminderAvailable, reminderMissing));
+    },
+    getTripReminderStatus() {
+      query('getTripReminderStatus');
+      reminder = settle(reminder, now());
+      return resolve(statusOf(reminder, now(), reminderAvailable, reminderMissing));
+    },
+    requestReminderLocation() {
+      command('requestReminderLocation');
+      return resolve(reminderLocation);
+    },
     addListener<E extends DriveSenseEvent>(
       event: E,
       fn: (payload: DriveSenseEvents[E]) => void
@@ -277,6 +299,14 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     get activitySubscribed() {
       return captureFeed;
+    },
+    setTripReminderEnv(env) {
+      if (env.available !== undefined) reminderAvailable = env.available;
+      if (env.missing !== undefined) reminderMissing = [...env.missing];
+      if (env.location !== undefined) reminderLocation = env.location;
+    },
+    get tripReminderOn() {
+      return reminder.enabled;
     },
   };
   return api;

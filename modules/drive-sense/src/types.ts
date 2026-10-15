@@ -1,14 +1,26 @@
 // The drive-sense contract: what the Swift and Kotlin modules implement and what the drive host
 // consumes. README.md is the prose version; this file is the binding one.
 //
-// v3 (plan §1 decision 4, §6): drives start only from a tap in the app. There is no arming, no
-// OS wake, no auto-start, no "Always" location anywhere in this module. Native captures only
-// between a JS `startCapture` and `stopCapture` (plus the Android sticky restart of a capture the
-// user already started, under the watchdog).
+// v3 (plan §1 decision 4, §6): drives start only from a tap in the app. There is no arming and no
+// auto-start. Native captures only between a JS `startCapture` and `stopCapture` (plus the Android
+// sticky restart of a capture the user already started, under the watchdog).
+//
+// The one thing that runs with no drive open is the optional forgot-to-start reminder (off by
+// default; README "Forgot-to-start reminder"): it notices a car trip natively and posts at most one
+// notification, which only opens Home. JS switches it (`setTripReminder`) and reads its status; it
+// never starts a capture. On iOS it is the only reason the app asks for "Always" location, and only
+// when the driver turns it on (`requestReminderLocation`).
 import type { FeatureRow } from '../../../src/core/engine/types';
 import type { ExtractedRow } from './extract/types';
+import type { TripReminderMissing, TripReminderStatus } from './reminder/policy';
 
-export type { FeatureRow };
+export type { FeatureRow, TripReminderMissing, TripReminderStatus };
+
+/**
+ * `requestReminderLocation()`: iOS location after the one "Always" request (`whenInUse` = the
+ * driver kept While Using); Android `notNeeded` (its reminder uses no location).
+ */
+export type ReminderLocationAnswer = 'always' | 'whenInUse' | 'denied' | 'notNeeded';
 
 export type CaptureMode = 'mounted' | 'pocket' | 'auto';
 /** rev1: I5 — `low` = coarse location, no IMU, rows only when a fix arrives. */
@@ -47,8 +59,8 @@ export interface DriveSenseState {
   mode: CaptureMode | null;
   platform: 'ios' | 'android';
   /**
-   * The OS location authorisation. The app never asks for Always (plan §1 decision 4); `always`
-   * is reported only when the user granted it in Settings on their own, and nothing here needs it.
+   * The OS location authorisation. A drive needs While Using only (plan §1 decision 4); the app
+   * asks for Always only on iOS, only when the driver turns on the forgot-to-start reminder.
    */
   location: 'none' | 'whenInUse' | 'always';
   motion: 'granted' | 'denied' | 'undetermined' | 'unavailable';
@@ -135,6 +147,9 @@ export const DRIVE_SENSE_METHODS = [
   'getLastExitInfo',
   'isIgnoringBatteryOptimizations',
   'selfTest',
+  'setTripReminder',
+  'getTripReminderStatus',
+  'requestReminderLocation',
 ] as const;
 
 export type DriveSenseMethod = (typeof DRIVE_SENSE_METHODS)[number];
@@ -210,6 +225,20 @@ export interface DriveSenseApi {
   isIgnoringBatteryOptimizations(): Promise<boolean>;
   /** Runs the native extractor over golden vectors; returns a `SelfTestOutput` as JSON (README §Self-test). */
   selfTest(vectorsJson: string): Promise<string>;
+  /**
+   * The forgot-to-start reminder's switch (README "Forgot-to-start reminder"). On: saved on even
+   * when a permission is missing (the status says what), every back-off and quiet cleared, the
+   * Android channel created. Off: all of its state forgotten, its feed and wakes stopped, any
+   * notification taken down. Never rejects; never starts a capture.
+   */
+  setTripReminder(enabled: boolean): Promise<TripReminderStatus>;
+  /** The reminder's status for Settings, brought up to now first. */
+  getTripReminderStatus(): Promise<TripReminderStatus>;
+  /**
+   * iOS: the one "Always" location request, made only from the driver's tap that turns the reminder
+   * on, with While Using already granted; never asked twice. Android: `notNeeded`.
+   */
+  requestReminderLocation(): Promise<ReminderLocationAnswer>;
   addListener<E extends DriveSenseEvent>(
     event: E,
     fn: (payload: DriveSenseEvents[E]) => void
@@ -253,6 +282,14 @@ export interface FakeControls {
   setIgnoringBatteryOptimizations(value: boolean): void;
   /** The last `setDriveDisplay` argument delivered while capturing, or null (cleared by stopCapture, as the notification goes). */
   readonly driveDisplay: DriveDisplayState | null;
+  /**
+   * The phone as the reminder sees it: `available` false = no Play services / motion hardware
+   * (`unavailable`); `missing` = what `needs` reports; `location` = what `requestReminderLocation`
+   * answers (default: iOS `always`, Android `notNeeded`).
+   */
+  setTripReminderEnv(env: { available?: boolean; missing?: TripReminderMissing[]; location?: ReminderLocationAnswer }): void;
+  /** Whether the reminder is switched on now. */
+  readonly tripReminderOn: boolean;
   // ——— the native activity feed (README §3) ———
   /**
    * An OS motion-activity delivery as native makes it: an `activity` event only while the feed is

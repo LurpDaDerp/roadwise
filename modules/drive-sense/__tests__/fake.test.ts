@@ -410,3 +410,31 @@ test('selfTest runs the TypeScript reference, so a fake diff is clean', async ()
   expect(out.platform).toBe('reference');
   expect(out.results).toEqual([{ name: 'no-imu', kind: 'extract', rows: vector.expected.rows }]);
 });
+
+describe('the forgot-to-start reminder (README "Forgot-to-start reminder")', () => {
+  test('off by default; on and off through the switch, logged; the status follows the phone', async () => {
+    let now = 1_700_000_000_000;
+    const fake = createFakeDriveSense({ platform: 'ios', now: () => now });
+    await expect(fake.getTripReminderStatus()).resolves.toEqual({ enabled: false, state: 'off', autoOff: false, missing: [], pausedUntil: null });
+    fake.setTripReminderEnv({ missing: ['locationAlways'] });
+    await expect(fake.setTripReminder(true)).resolves.toMatchObject({ enabled: true, state: 'needs', missing: ['locationAlways'] });
+    expect(fake.tripReminderOn).toBe(true);
+    fake.setTripReminderEnv({ missing: [] });
+    now += 1000;
+    await expect(fake.getTripReminderStatus()).resolves.toMatchObject({ state: 'on' });
+    await expect(fake.setTripReminder(false)).resolves.toMatchObject({ enabled: false, state: 'off' });
+    fake.setTripReminderEnv({ available: false });
+    await expect(fake.getTripReminderStatus()).resolves.toMatchObject({ state: 'unavailable' });
+    expect(fake.calls).toEqual(['setTripReminder:true', 'setTripReminder:false']);
+    expect(fake.queries).toEqual(['getTripReminderStatus', 'getTripReminderStatus', 'getTripReminderStatus']);
+  });
+
+  test('the location answer: iOS always by default, Android notNeeded; settable', async () => {
+    await expect(createFakeDriveSense({ platform: 'ios' }).requestReminderLocation()).resolves.toBe('always');
+    const android = createFakeDriveSense({ platform: 'android' });
+    await expect(android.requestReminderLocation()).resolves.toBe('notNeeded');
+    android.setTripReminderEnv({ location: 'whenInUse' });
+    await expect(android.requestReminderLocation()).resolves.toBe('whenInUse');
+    expect(android.calls).toEqual(['requestReminderLocation', 'requestReminderLocation']);
+  });
+});

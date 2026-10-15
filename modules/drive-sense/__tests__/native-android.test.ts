@@ -3,8 +3,11 @@
 // sources and the module manifest to the binding contract by reading them as text (README §1, §2,
 // §6, §7). Each check names the contract rule it guards; a failure here means the Android build
 // would ship something the JS side, the watchdog ruling (rev1: C2), the battery rules (design
-// §3.5) or plan §1 decision 4 (manual start only, no Always) do not allow.
+// §3.5) or plan §1 decision 4 (manual start only, no Always) do not allow. The forgot-to-start
+// reminder (README "Forgot-to-start reminder") is held to "it only notifies": no reminder file
+// can reach a capture start, and its policy mirrors src/reminder/policy.ts.
 import * as CONSTANTS from '../src/extract/constants';
+import { PAUSE_DAYS, REMINDER } from '../src/reminder/policy';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
 import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS } from '../src/types';
@@ -55,6 +58,12 @@ describe('native-android: files the contract names exist, and no trip-detection 
     'NotificationFactory',
     'ExitInfoReader',
     'EventBus',
+    'TripReminder',
+    'TripReminderPolicy',
+    'TripReminderState',
+    'TripReminderNotifier',
+    'ReminderActionReceiver',
+    'ReminderBootReceiver',
   ];
   it.each(files)('%s.kt', (name) => {
     expect(existsSync(join(KT_DIR, `${name}.kt`))).toBe(true);
@@ -112,7 +121,7 @@ describe('native-android: the bridge surface (README §1)', () => {
   });
 });
 
-describe('native-android: manifest (plan §1 decision 4: While Using only, no boot, no auto-start)', () => {
+describe('native-android: manifest (plan §1 decision 4: While Using only, no auto-start)', () => {
   it.each([
     'android.permission.ACCESS_FINE_LOCATION',
     'android.permission.ACCESS_COARSE_LOCATION',
@@ -122,12 +131,21 @@ describe('native-android: manifest (plan §1 decision 4: While Using only, no bo
     'android.permission.FOREGROUND_SERVICE_LOCATION',
     'android.permission.POST_NOTIFICATIONS',
     'android.permission.WAKE_LOCK',
+    'android.permission.RECEIVE_BOOT_COMPLETED',
   ])('uses-permission %s', (p) => {
     expect(MANIFEST()).toContain(`<uses-permission android:name="${p}"`);
   });
 
-  it('never asks for background location or boot', () => {
-    expect(allKotlin() + MANIFEST()).not.toMatch(/ACCESS_BACKGROUND_LOCATION|RECEIVE_BOOT_COMPLETED|BOOT_COMPLETED|MY_PACKAGE_REPLACED|BootReceiver/);
+  it('never asks for background location', () => {
+    expect(allKotlin() + MANIFEST()).not.toMatch(/ACCESS_BACKGROUND_LOCATION/);
+  });
+
+  it("only the reminder's boot receiver hears a boot or an update", () => {
+    const files = readdirSync(KT_DIR).filter((f) => f.endsWith('.kt'));
+    for (const f of files) {
+      const hears = /BOOT_COMPLETED|MY_PACKAGE_REPLACED/.test(code(read(join(KT_DIR, f))));
+      expect({ f, hears }).toEqual({ f, hears: f === 'ReminderBootReceiver.kt' });
+    }
   });
 
   it('CaptureService is a location foreground service, not exported', () => {
@@ -143,19 +161,33 @@ describe('native-android: manifest (plan §1 decision 4: While Using only, no bo
     expect(m![0]).toContain('android:exported="false"');
   });
 
-  it('ActivityTransitionReceiver is not exported, and is the only receiver', () => {
+  it("the receivers: the transitions feed and the reminder's two, none exported; the boot one disabled until the reminder is on", () => {
     const receivers = [...MANIFEST().matchAll(/<receiver[^>]*android:name="([^"]+)"[^>]*>/g)];
-    expect(receivers.map((r) => r[1])).toEqual(['.ActivityTransitionReceiver']);
-    expect(receivers[0]![0]).toContain('android:exported="false"');
+    expect(receivers.map((r) => r[1])).toEqual(['.ActivityTransitionReceiver', '.ReminderActionReceiver', '.ReminderBootReceiver']);
+    for (const r of receivers) expect(r[0]).toContain('android:exported="false"');
+    expect(receivers[2]![0]).toContain('android:enabled="false"');
+    expect(receivers[0]![0]).not.toContain('android:enabled');
+    expect(receivers[1]![0]).not.toContain('android:enabled');
   });
 });
 
 describe('native-android: a capture starts only from JS (plan §1 decision 4)', () => {
   it('the transition receiver never starts the capture service or emits a wake', () => {
     const rx = code(kt('ActivityTransitionReceiver'));
-    expect(rx).not.toMatch(/startForegroundService|startService|startNative|startFromJs|CaptureService\.start|"wake"/);
+    expect(rx).not.toMatch(/startForegroundService|startService|startNative|startFromJs|CaptureService\.start|ACTION_START|HeadlessJs|getService\(|getForegroundService\(|"wake"/);
     expect(code(allKotlin())).not.toMatch(/ACTION_START_NATIVE|fun startNative|"wake"|\barmed\b/);
   });
+
+  // The forgot-to-start reminder only notifies.
+  it.each(['TripReminder', 'TripReminderPolicy', 'TripReminderState', 'TripReminderNotifier', 'ReminderActionReceiver', 'ReminderBootReceiver'])(
+    '%s.kt can never start a capture nor reach JS',
+    (name) => {
+      const src = code(kt(name));
+      expect(src).not.toMatch(/startForegroundService|startService|startFromJs|startNative|CaptureService\.start|ACTION_START|EventBus\.emit|HeadlessJs|getService\(|getForegroundService\(/);
+      // The only thing a reminder file reads of the capture is whether one is running.
+      for (const m of src.matchAll(/CaptureService\.(\w+)/g)) expect(m[1]).toBe('isCapturing');
+    }
+  );
 
   it('CaptureService starts from JS or as the sticky restart of a capture JS had opened', () => {
     const svc = code(kt('CaptureService'));
@@ -186,13 +218,25 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(src).toMatch(/requestActivityTransitionUpdates\(/);
   });
 
-  it('the request lists IN_VEHICLE, WALKING and RUNNING (ENTER and EXIT), never the unsupported ON_FOOT', () => {
+  it('the tiers: the capture asks for IN_VEHICLE, WALKING and RUNNING (ENTER and EXIT); the reminder IN_VEHICLE ENTER when idle, and in a trip IN_VEHICLE ENTER and EXIT with the ENTERs of STILL, WALKING and RUNNING; never ON_FOOT', () => {
     const src = code(kt('ActivityTransitionReceiver'));
-    expect(src).toMatch(/ACTIVITY_TYPES\s*=\s*listOf\(DetectedActivity\.IN_VEHICLE,\s*DetectedActivity\.WALKING,\s*DetectedActivity\.RUNNING\)/);
-    expect(src).toMatch(/ACTIVITY_TYPES\.flatMap/);
+    expect(src).toMatch(/CAPTURE_TYPES\s*=\s*listOf\(DetectedActivity\.IN_VEHICLE,\s*DetectedActivity\.WALKING,\s*DetectedActivity\.RUNNING\)/);
+    const tiers = /fun transitions\(tier: TripReminderPolicy\.Tier\)[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(tiers).toMatch(/Tier\.NONE -> emptyList\(\)/);
+    expect(tiers).toMatch(/Tier\.CAPTURE -> CAPTURE_TYPES\.flatMap \{ type -> listOf\(type to ENTER, type to EXIT\) \}/);
+    expect(tiers).toMatch(/Tier\.IDLE -> listOf\(DetectedActivity\.IN_VEHICLE to ENTER\)\n/);
+    const trip = /Tier\.TRIP -> listOf\(([\s\S]*?)\)\n/.exec(tiers)?.[1] ?? '';
+    expect(trip.split(',').map((x) => x.trim())).toEqual([
+      'DetectedActivity.IN_VEHICLE to ENTER',
+      'DetectedActivity.IN_VEHICLE to EXIT',
+      'DetectedActivity.STILL to ENTER',
+      'DetectedActivity.WALKING to ENTER',
+      'DetectedActivity.RUNNING to ENTER',
+    ]);
+    expect(src).not.toMatch(/STILL to EXIT/);
     expect(src).not.toMatch(/ON_FOOT/);
-    expect(src).toMatch(/ACTIVITY_TRANSITION_ENTER/);
-    expect(src).toMatch(/ACTIVITY_TRANSITION_EXIT/);
+    expect(src).toMatch(/ENTER = ActivityTransition\.ACTIVITY_TRANSITION_ENTER/);
+    expect(src).toMatch(/EXIT = ActivityTransition\.ACTIVITY_TRANSITION_EXIT/);
   });
 
   it('maps ENTERs to automotive/walking/running at high, EXITs of the on-foot types to exit: true, an IN_VEHICLE EXIT to nothing', () => {
@@ -205,22 +249,33 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(src).toMatch(/else if \(type != "automotive"\) \{\s*EventBus\.emit\("activity", linkedMapOf\("type" to type, "confidence" to "high", "ts" to ts, "exit" to true\)\)/);
   });
 
-  it('activity reaches JS only while capturing, and nothing is kept: the receiver writes no store or prefs', () => {
+  it('activity reaches JS only while capturing; with no drive open the batch goes to the reminder, natively; the receiver writes no store or prefs itself', () => {
     const on = /override fun onReceive\([\s\S]*?\n {2}\}/.exec(code(kt('ActivityTransitionReceiver')))?.[0] ?? '';
     expect(on.match(/EventBus\.emit\("activity"/g)).toHaveLength(2);
+    const capture = /if \(CaptureService\.isCapturing\) \{[\s\S]*?\n {6}return\n {4}\}/.exec(on)?.[0] ?? '';
+    expect(capture.match(/EventBus\.emit\("activity"/g)).toHaveLength(2);
+    expect(on.indexOf('TripReminder.onTransitions(')).toBeGreaterThan(on.indexOf(capture) + capture.length - 1);
+    expect(on).toMatch(/val pending = goAsync\(\)[\s\S]*ActivityTransitions\.sync\(context\) \{ pending\.finish\(\) \}/);
     expect(on).not.toMatch(/\.append\(|\.edit\(\)|prefs\.\w+\s*=/);
   });
 
-  it('subscribed exactly while capturing, with motion and Play services; synced at every entry point, best effort', () => {
+  it('the feed follows the tier (capture, or the reminder while it is on), with motion and Play services; synced at every entry point, best effort', () => {
     const rx = code(kt('ActivityTransitionReceiver'));
-    // No idle arm: the feed is never registered while no drive is open.
-    expect(rx).toMatch(/fun wanted\(context: Context\): Boolean =\s*CaptureService\.isCapturing && DriveSensePermissions\.motionGranted\(context\) && DriveSensePermissions\.playServicesAvailable\(context\)\n/);
+    expect(rx).toMatch(/fun tier\(context: Context\): TripReminderPolicy\.Tier =\s*TripReminderPolicy\.tier\(TripReminder\.state\(context\), CaptureService\.isCapturing, TripReminder\.transitionsOk\(context\)\)/);
+    expect(code(kt('TripReminder'))).toMatch(/fun transitionsOk\(context: Context\): Boolean =\s*DriveSensePermissions\.motionGranted\(context\) && DriveSensePermissions\.playServicesAvailable\(context\)/);
+    const policyTier = /fun tier\(s: ReminderState[\s\S]*?\n {2}\}/.exec(code(kt('TripReminderPolicy')))?.[0] ?? '';
+    expect(policyTier).toMatch(/if \(!transitionsOk\) return Tier\.NONE\s*if \(capturing\) return Tier\.CAPTURE\s*if \(!s\.enabled\) return Tier\.NONE/);
     const sync = /fun sync\([\s\S]*?\n {2}\}/.exec(rx)?.[0] ?? '';
     expect(sync).toMatch(/try \{/);
     expect(sync).toMatch(/catch \(e: Exception\)/);
     expect(sync).not.toMatch(/throw /);
-    expect(sync).toMatch(/if \(wanted\(context\)\)/);
-    expect(sync).toMatch(/else \{\s*unsubscribe\(context\)/);
+    expect(sync).toMatch(/if \(want == TripReminderPolicy\.Tier\.NONE\) \{\s*unsubscribe\(context\)/);
+    // An identical request on file (this boot) is skipped; every new request is stamped before it goes out.
+    const skip = sync.indexOf('prefs.transitionsTier == want.name && prefs.transitionsAtNanos in 1L..nowNanos');
+    expect(skip).toBeGreaterThan(-1);
+    expect(skip).toBeLessThan(sync.indexOf('prefs.transitionsAtNanos = nowNanos'));
+    expect(sync.indexOf('prefs.transitionsAtNanos = nowNanos')).toBeLessThan(sync.indexOf('subscribe(context, want)'));
+    expect(sync).toMatch(/if \(force\) prefs\.transitionsTier = null/);
     const svc = code(kt('CaptureService'));
     const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
     expect(begin).toMatch(/ActivityTransitions\.sync\(this\)/);
@@ -228,20 +283,22 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(end).toMatch(/ActivityTransitions\.sync\(this\)/);
     const destroy = /override fun onDestroy\(\)[\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
     expect(destroy).toMatch(/ActivityTransitions\.sync\(this\)/);
-    // At launch, not capturing, sync() removes a registration an earlier process or build left behind.
+    // At launch the feed is re-requested (force): one the system dropped comes back, one left behind goes.
     const create = /OnCreate \{[\s\S]*?\n {4}\}/.exec(MODULE())?.[0] ?? '';
-    expect(create).toMatch(/ActivityTransitions\.sync\(context\)/);
+    expect(create).toMatch(/TripReminder\.onLaunch\(context\)/);
+    expect(code(kt('TripReminder'))).toMatch(/fun onLaunch\([\s\S]*?ActivityTransitions\.sync\(context, force = true\)/);
   });
 
   // C12 round 1 (review-C12 m1): no stale registration survives an abnormal end.
-  it('the receiver checks "not capturing" FIRST: it unsubscribes and emits nothing', () => {
+  it('the receiver checks "nothing wants the feed" FIRST: it unsubscribes and acts on nothing', () => {
     const src = code(kt('ActivityTransitionReceiver'));
     const on = /override fun onReceive\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
-    const stale = on.indexOf('if (!CaptureService.isCapturing) {');
+    const stale = on.indexOf('if (ActivityTransitions.tier(context) == TripReminderPolicy.Tier.NONE) {');
     expect(stale).toBeGreaterThan(-1);
     expect(on.slice(stale, stale + 200)).toMatch(/ActivityTransitions\.unsubscribe\(context\)\s*return/);
     expect(stale).toBeLessThan(on.indexOf('ActivityTransitionResult.extractResult'));
     expect(stale).toBeLessThan(on.indexOf('EventBus.emit'));
+    expect(stale).toBeLessThan(on.indexOf('TripReminder.onTransitions'));
   });
 
   it('requestMotionPermission requests ACTIVITY_RECOGNITION at run time on API 29+', () => {
@@ -260,17 +317,105 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
   });
 });
 
-describe('native-android: no trip detection while no drive is open', () => {
-  it('no reminder, no motion history, no idle vehicle bookkeeping anywhere in the Kotlin', () => {
+describe('native-android: with no drive open, only the forgot-to-start reminder, and it only notifies', () => {
+  it('no motion history and none of the old reminder anywhere in the Kotlin', () => {
     const src = code(allKotlin());
     expect(src).not.toMatch(/ForgotToStart|TransitionStore|reminderEnabled|vehicleEnteredAt|captureRanInVehicle|lastReminderAt|queryMotionHistory|checkForgottenDrive/);
   });
 
-  it("no notification but the capture's own: the only channel is NotificationFactory's", () => {
+  it("two notification channels: the capture's (NotificationFactory) and the reminder's (TripReminderNotifier)", () => {
     const src = code(allKotlin());
-    expect(src.match(/\bNotificationChannel\(/g)).toHaveLength(1);
+    expect(src.match(/\bNotificationChannel\(/g)).toHaveLength(2);
     expect(code(kt('NotificationFactory'))).toMatch(/\bNotificationChannel\(/);
+    expect(code(kt('TripReminderNotifier'))).toMatch(/\bNotificationChannel\(CHANNEL_ID, "Drive reminder", NotificationManager\.IMPORTANCE_DEFAULT\)/);
     expect(src).not.toMatch(/"reminders"/);
+  });
+
+  it('the notification: silent, withdrawn after TTL_MS, tap opens roadwise://home, one action "Not driving", nothing that starts a drive', () => {
+    const n = code(kt('TripReminderNotifier'));
+    expect(n).toMatch(/const val CHANNEL_ID = "trip_reminder"/);
+    expect(n).toMatch(/const val NOTIFICATION_ID = 7305/);
+    expect(n).toMatch(/const val TITLE = "Want to record this drive\?"/);
+    expect(n).toContain("when you're stopped and it's safe to open RoadWise and start your drive.");
+    expect(n.match(/addAction\(/g)).toHaveLength(1);
+    expect(n).toMatch(/addAction\(0, NOT_DRIVING, notDriving\(context\)\)/);
+    expect(n).toMatch(/const val NOT_DRIVING = "Not driving"/);
+    expect(n).not.toMatch(/"Start/);
+    // read raw: the comment stripper would take the URL's `//` for a comment
+    expect(kt('TripReminderNotifier')).toMatch(/val home = Intent\(Intent\.ACTION_VIEW, Uri\.parse\("roadwise:\/\/home"\)\)\s*\.setPackage\(context\.packageName\)/);
+    for (const s of ['setTimeoutAfter(TripReminderPolicy.TTL_MS)', 'setSilent(true)', 'setSound(null, null)', 'enableVibration(false)', 'CATEGORY_RECOMMENDATION', 'setOngoing(false)']) {
+      expect(n).toContain(s);
+    }
+    expect(n).not.toMatch(/CATEGORY_REMINDER|setFullScreenIntent|setOngoing\(true\)|setSound\(Uri|DEFAULT_SOUND|DEFAULT_VIBRATE/);
+    // Both PendingIntents are immutable; the action goes to the unexported receiver.
+    expect(n.match(/PendingIntent\.FLAG_IMMUTABLE or PendingIntent\.FLAG_UPDATE_CURRENT/g)).toHaveLength(2);
+    expect(n).toMatch(/Intent\(context, ReminderActionReceiver::class\.java\)\.setAction\(ACTION_NOT_DRIVING\)/);
+  });
+
+  it('"Not driving" only quiets the reminder', () => {
+    const rx = code(kt('ReminderActionReceiver'));
+    expect(rx).toMatch(/if \(intent\.action != TripReminderNotifier\.ACTION_NOT_DRIVING\) return\s*DriveSensePrefs\.init\(context\)\s*TripReminder\.onNotDriving\(context\)\s*\}/);
+  });
+
+  it('the boot receiver only re-subscribes, under goAsync', () => {
+    const on = /override fun onReceive\([\s\S]*?\n {2}\}/.exec(code(kt('ReminderBootReceiver')))?.[0] ?? '';
+    expect(on).toMatch(
+      /val action = intent\.action\s*if \(action != Intent\.ACTION_BOOT_COMPLETED && action != Intent\.ACTION_MY_PACKAGE_REPLACED\) return\s*val pending = goAsync\(\)\s*DriveSensePrefs\.init\(context\)\s*ActivityTransitions\.sync\(context, force = true\) \{ pending\.finish\(\) \}\s*\}$/
+    );
+  });
+
+  it('only TripReminder switches the boot receiver, always with DONT_KILL_APP', () => {
+    const files = readdirSync(KT_DIR).filter((f) => f.endsWith('.kt'));
+    for (const f of files) {
+      const calls = [...code(read(join(KT_DIR, f))).matchAll(/setComponentEnabledSetting\(([^)]*)\)/g)];
+      if (f !== 'TripReminder.kt') expect({ f, calls: calls.length }).toEqual({ f, calls: 0 });
+      else {
+        expect(calls.length).toBeGreaterThan(0);
+        for (const c of calls) expect(c[1]).toMatch(/PackageManager\.DONT_KILL_APP/);
+      }
+    }
+    expect(code(kt('TripReminder'))).toMatch(/ComponentName\(context, ReminderBootReceiver::class\.java\)/);
+  });
+
+  it('the phone as the reminder reads it: RoadWise in front, a call (a VoIP mode counts only with the microphone in use)', () => {
+    const r = code(kt('TripReminder'));
+    expect(r).toMatch(/info\.importance == ActivityManager\.RunningAppProcessInfo\.IMPORTANCE_FOREGROUND/);
+    expect(r).toMatch(/AudioManager\.MODE_IN_CALL, AudioManager\.MODE_RINGTONE -> true/);
+    expect(r).toMatch(/AudioManager\.MODE_IN_COMMUNICATION -> am\.activeRecordingConfigurations\.isNotEmpty\(\)/);
+  });
+
+  it('a drive tells the reminder when it starts and ends (one direction only)', () => {
+    const svc = code(kt('CaptureService'));
+    const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
+    expect(begin).toMatch(/TripReminder\.onCaptureStarted\(this\)/);
+    const end = /private fun endCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
+    expect(end).toMatch(/TripReminder\.onCaptureEnded\(this\)/);
+    expect(svc.match(/TripReminder\./g)).toHaveLength(2);
+  });
+
+  it('the module: switch and status go to TripReminder; Android needs no reminder location; RoadWise in front takes the note down', () => {
+    const m = MODULE();
+    expect(m).toMatch(/AsyncFunction\("setTripReminder"\) \{ enabled: Boolean ->\s*TripReminder\.setEnabled\(context, enabled\)/);
+    expect(m).toMatch(/AsyncFunction\("getTripReminderStatus"\) \{\s*TripReminder\.status\(context\)/);
+    expect(m).toMatch(/AsyncFunction\("requestReminderLocation"\) \{\s*"notNeeded"\s*\}/);
+    expect(m).toMatch(/OnActivityEntersForeground \{[\s\S]{0,80}TripReminder\.onAppForeground\(context\)/);
+  });
+
+  it('TripReminderPolicy is pure and mirrors src/reminder/policy.ts', () => {
+    const raw = kt('TripReminderPolicy');
+    expect(raw).not.toMatch(/^import /m);
+    const src = code(raw);
+    const declared = new Map(
+      [...src.matchAll(/const val ([A-Z][A-Z0-9_]*)\s*=\s*([\d_.]+)L?\b/g)].map((m) => [m[1]!, Number(m[2]!.replace(/_/g, ''))] as const)
+    );
+    for (const [name, value] of Object.entries(REMINDER)) expect({ name, value: declared.get(name) }).toEqual({ name, value });
+    expect(src).toMatch(new RegExp(`val PAUSE_DAYS = longArrayOf\\(${PAUSE_DAYS.map((d) => `${d}L`).join(', ')}\\)`));
+    // The stop gate's reasons, in the reference's order.
+    const order = ['off', 'paused', 'quiet', 'permission', 'capturing', 'no-trip', 'recorded', 'reminded', 'after-drive', 'daily-cap', 'too-soon', 'foreground', 'in-call', 'stale', 'on-foot', 'ok'];
+    const gate = /fun gateStop\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    const at = order.map((r) => gate.indexOf(`"${r}"`));
+    expect(at.every((i) => i > 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
   });
 });
 

@@ -16,9 +16,11 @@ import {
   driveDisplaySchema,
   exitInfoSchema,
   motionPermissionSchema,
+  reminderLocationSchema,
   screenStateSchema,
   stateSchema,
   thermalLevelSchema,
+  tripReminderStatusSchema,
 } from './rowSchema';
 import type { DriveSenseApi, DriveSenseEvent, DriveSenseEvents, Subscription } from './types';
 
@@ -31,6 +33,7 @@ export type { SelfTestDiff, VectorDiff, Mismatch } from './selfTest';
 export { extractSecond, initialExtractState } from './extract/extract';
 export { gravityFilter, initialGravityState, androidAccelToReference } from './extract/gravityFilter';
 export { runSelfTest, runVector } from './extract/vectors';
+export { PAUSE_DAYS, REMINDER } from './reminder/policy';
 export type {
   ExtractVector,
   GravityVector,
@@ -109,6 +112,10 @@ const DriveSense: DriveSenseApi = {
     call('isIgnoringBatteryOptimizations', [], true, z.boolean()),
   selfTest: (vectorsJson) =>
     call('selfTest', [vectorsJson], typeof vectorsJson === 'string', z.string()),
+  setTripReminder: (enabled) =>
+    call('setTripReminder', [enabled], typeof enabled === 'boolean', tripReminderStatusSchema),
+  getTripReminderStatus: () => call('getTripReminderStatus', [], true, tripReminderStatusSchema),
+  requestReminderLocation: () => call('requestReminderLocation', [], true, reminderLocationSchema),
   addListener<E extends DriveSenseEvent>(
     event: E,
     fn: (payload: DriveSenseEvents[E]) => void

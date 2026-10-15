@@ -383,6 +383,9 @@ class CaptureService : Service() {
     watchdog.start(nativeStart, EventBus.rowListenerAttached)
     handler.removeCallbacks(minute)
     handler.postDelayed(minute, MINUTE_MS)
+    // The forgot-to-start reminder learns a drive is open (one direction only): this trip is
+    // recorded, and a notification it showed comes down.
+    TripReminder.onCaptureStarted(this)
     // WK-m1: the walking feed during every capture (JS start, sticky restart), best
     // effort: a failure is logged and swallowed and the capture runs on.
     ActivityTransitions.sync(this)
@@ -440,7 +443,9 @@ class CaptureService : Service() {
     captureStartedAt = null
     display = null
     if (clearOpen) prefs.captureOpen = false
-    // The capture's walking feed ends with it.
+    // No forgot-to-start reminder for the next 10 min.
+    TripReminder.onCaptureEnded(this)
+    // The capture's walking feed ends with it (the reminder's takes over when it is on).
     ActivityTransitions.sync(this)
     main.post {
       try {
