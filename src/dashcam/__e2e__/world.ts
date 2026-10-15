@@ -14,11 +14,14 @@
 // at every phone timer; each step sends `T`, delivers what came out, runs the due timers and lets
 // the promise chains (sql.js included) drain.
 //
+// The IDENTIFY write goes to the simulator (`ID <conn> <byte>`, the firmware's `ble_link_on_identify`,
+// setup claim included): `ok` lets the write succeed, `busy` / `closed` fail it with ATT 0x80; each
+// outcome is recorded in `gatt`. The simulator's `CLAIM` lines say which link holds the setup claim.
 // What the simulator does not contain is modelled here, and only here, from the firmware's
-// `ble_gatt.c` (NimBLE glue): the INFO read (`peer_bonded`, `bond_count`, the window flag), the
-// IDENTIFY write (accepted only inside the window or on an authorized link; recorded in `gatt`),
-// the bond store (which phones are bonded), the TX read that makes iOS pair (it becomes `BOND`),
-// and advertising (the pairing service while the window is open).
+// `ble_gatt.c` (NimBLE glue): the INFO read (`peer_bonded`, `bond_count`, flags bit 0 the window,
+// bit 1 another link holds the claim), the bond store (which phones are bonded), the TX read that
+// makes iOS pair and Android `createBond` (both become `BOND`), Android `removeBond` dropping a live
+// link, and advertising (the pairing service while the window is open).
 import type { AlertPlayer } from '@/core/alerts/player';
 import type { AlertDecision } from '@/core/alerts/types';
 import type { FeatureRow } from '@/core/engine/types';
@@ -175,6 +178,8 @@ export class World {
   /** phones (by name) in the dashcam's bond store */
   readonly bonds = new Set<string>();
   windowOpen = false;
+  /** the link holding the setup claim (the simulator's `CLAIM` lines) */
+  claimConn: number | null = null;
   private timers: Timer[] = [];
   private timerSeq = 0;
   private pending: Pending[] = [];
@@ -332,6 +337,8 @@ export class World {
         if (phone) this.endLink(phone, false);
       } else if (p[0] === 'WINDOW') {
         this.windowOpen = p[1] === '1';
+      } else if (p[0] === 'CLAIM') {
+        this.claimConn = p[1] === '-' ? null : Number(p[1]);
       }
     }
   }
@@ -368,6 +375,7 @@ export class World {
     this.bootAt = this.W;
     this.sim = new SimProcess(bootArgs({ bootId: o.bootId, bonds: this.bonds.size }));
     this.windowOpen = false;
+    this.claimConn = null;
     await this.simLine('T 0');
     await this.settle();
   }
@@ -635,6 +643,7 @@ export class World {
         peerBonded: this.bonds.has(phone.name),
         bondCount: this.bonds.size,
         pairingOpen: this.windowOpen,
+        setupBusy: this.claimConn !== null && this.claimConn !== conn,
       });
     ble.addPeripheral({
       id: phone.peripheralId,
@@ -699,6 +708,13 @@ export class World {
       return origRead(id, service, characteristic);
     };
 
+    const origRemoveBond = ble.removeBond.bind(ble);
+    ble.removeBond = async (id) => {
+      // Android: removing the bond of a connected device drops the link (and the claim with it).
+      if (phone.simConnected) this.endLink(phone, true);
+      return origRemoveBond(id);
+    };
+
     const origCreateBond = ble.createBond.bind(ble);
     ble.createBond = async (id) => {
       if (!phone.simConnected || !(await this.bond(phone))) throw new Error('Bond failed (the dashcam removed it)');
@@ -712,12 +728,19 @@ export class World {
         if (phone.latency.up > 0) this.timer(phone.latency.up, () => phone.simConnected && this.enqueue(line), null);
         else this.enqueue(line);
       } else if (w.characteristic === IDENTIFY_CHAR) {
-        // ble_gatt.c CHR_IDENTIFY: only inside the window or on an authorized link, else ATT 0x80.
-        if (!(phone.authorized || this.windowOpen)) {
-          this.gatt.push({ at: this.W, phone: phone.name, what: 'identify refused (0x80)' });
-          throw { domain: 'CBATTErrorDomain', code: 0x80, message: 'refused' };
-        }
-        if (w.bytes[0] === 1) this.gatt.push({ at: this.W, phone: phone.name, what: 'identify' });
+        // ble_gatt.c CHR_IDENTIFY → ble_link_on_identify: busy and closed are ATT 0x80.
+        return new Promise<void>((resolve, reject) => {
+          this.enqueue(`ID ${conn} ${w.bytes[0] ?? 0}`, (out) => {
+            const answer = out.find((l) => l.startsWith(`ID ${conn} `))?.split(' ')[2] ?? 'none';
+            if (answer === 'ok') {
+              if (w.bytes[0] === 1) this.gatt.push({ at: this.W, phone: phone.name, what: 'identify' });
+              resolve();
+              return;
+            }
+            this.gatt.push({ at: this.W, phone: phone.name, what: `identify refused (${answer}, 0x80)` });
+            reject({ domain: 'CBATTErrorDomain', code: 0x80, message: 'refused' });
+          });
+        });
       }
     };
   }

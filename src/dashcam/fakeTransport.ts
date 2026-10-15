@@ -48,7 +48,8 @@ export interface FakeBle extends BleApi {
   advertise(e: BlePeripheralEvent): void;
   /** Resolve every connect left hanging for `id`. */
   completeConnect(id: string): void;
-  onWrite: ((w: FakeWrite) => void) | null;
+  /** Sees every write; a promise it returns is awaited (a rejection fails the write, as an ATT error). */
+  onWrite: ((w: FakeWrite) => void | Promise<void>) | null;
   listenerCount(): number;
 }
 
@@ -167,14 +168,14 @@ export function createFakeBle(): FakeBle {
       fail('write');
       const w = { id, characteristic, bytes: [...data], withResponse: true };
       writes.push(w);
-      fake.onWrite?.(w);
+      await fake.onWrite?.(w);
     },
     async writeWithoutResponse(id, _service, characteristic, data) {
       calls.push(`writeWithoutResponse:${id}:${characteristic.slice(4, 8)}`);
       fail('writeWithoutResponse');
       const w = { id, characteristic, bytes: [...data], withResponse: false };
       writes.push(w);
-      fake.onWrite?.(w);
+      await fake.onWrite?.(w);
     },
     async startNotification(id, _service, characteristic) {
       calls.push(`startNotification:${id}:${characteristic.slice(4, 8)}`);
