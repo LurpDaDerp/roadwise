@@ -63,6 +63,26 @@ test('insert is deduplicated and keeps the first id; max_seq follows', async () 
   expect((await store.getBoot(CAM, 9))?.maxSeq).toBe(5);
 });
 
+test('the ignored flag is the first copy’s: a later copy of the same seq neither duplicates nor changes it', async () => {
+  await store.ensureBoot(CAM, 9, 0);
+  const copy = (seq: number, id: string, ignored?: boolean) =>
+    store.insertEvent({
+      dashcamId: CAM, bootKey: 9, seq, id, ev: 0, name: 'MICROSLEEP', tier: 3, audible: true, detail: 0,
+      tMs: 1, durDs: 1, value: 0, atMs: null, startedAtMs: null, receivedAtMs: 2, ignored,
+    });
+  expect(await copy(0, 'first-0', true)).toBe(true);
+  expect(await copy(0, 'second-0', false)).toBe(false);
+  expect(await copy(1, 'first-1', false)).toBe(true);
+  expect(await copy(1, 'second-1', true)).toBe(false);
+  expect(await copy(2, 'first-2')).toBe(true); // not given: received in a drive
+  expect((await db.execute('SELECT seq, id, ignored FROM dashcam_events ORDER BY seq')).rows).toEqual([
+    { seq: 0, id: 'first-0', ignored: 1 },
+    { seq: 1, id: 'first-1', ignored: 0 },
+    { seq: 2, id: 'first-2', ignored: 0 },
+  ]);
+  expect(await store.cursor(CAM, 9, 0)).toBe(3);
+});
+
 test('the floor only rises; the offset is replaced only by a shorter round trip', async () => {
   await store.ensureBoot(CAM, 9, 10);
   await store.ensureBoot(CAM, 9, 4);

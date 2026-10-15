@@ -1,4 +1,4 @@
-// The DashPal tables (SQLite V5, plan §3.6, §7.5): events persisted before they are acknowledged,
+// The DashPal tables (SQLite V5–V6, plan §3.6, §7.5): events persisted before they are acknowledged,
 // per-boot clock offsets and floors, and per-drive coverage. Reads and writes SQLite only; the link
 // serialises its own calls, so nothing here takes a transaction (the driver allows one at a time and
 // the recorder and the sync runner hold theirs).
@@ -9,7 +9,7 @@ import { asNumber, asNumberOrNull } from '@/data/db/row';
 export const BOOT_GENERATION = 2 ** 32;
 export const wireBootId = (bootKey: number): number => bootKey % BOOT_GENERATION;
 
-/** Unattached events (no drive) older than this are pruned in the foreground jobs. */
+/** Unattached events (no drive claimed them, ignored ones included) older than this are pruned in the foreground jobs. */
 export const UNATTACHED_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface BootRow {
@@ -38,6 +38,11 @@ export interface NewDashcamEvent {
   atMs: number | null;
   startedAtMs: number | null;
   receivedAtMs: number;
+  /**
+   * It arrived while no drive was open: stored only as a delivery record (the cursor needs every
+   * seq), never claimed by a drive. Set by the first copy only; a replay never changes it.
+   */
+  ignored?: boolean;
 }
 
 function bootRow(row: Record<string, unknown>): BootRow {
@@ -89,12 +94,12 @@ export function createDashcamStore(db: Db) {
       return changes > 0;
     },
 
-    /** INSERT OR IGNORE on (dashcam, boot, seq). True when this call stored it (false: already stored). */
+    /** INSERT OR IGNORE on (dashcam, boot, seq). True when this call stored it (false: already stored, its first copy kept as it was). */
     async insertEvent(e: NewDashcamEvent): Promise<boolean> {
       const { changes } = await db.execute(
         `INSERT OR IGNORE INTO dashcam_events
-           (dashcam_id, boot_id, seq, id, ev, name, tier, audible, detail, t_ms, dur_ds, value, at_ms, started_at_ms, received_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (dashcam_id, boot_id, seq, id, ev, name, tier, audible, detail, t_ms, dur_ds, value, at_ms, started_at_ms, received_at_ms, ignored)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           e.dashcamId,
           e.bootKey,
@@ -111,6 +116,7 @@ export function createDashcamStore(db: Db) {
           e.atMs,
           e.startedAtMs,
           e.receivedAtMs,
+          e.ignored ? 1 : 0,
         ]
       );
       await db.execute('UPDATE dashcam_boots SET max_seq = MAX(max_seq, ?) WHERE dashcam_id = ? AND boot_id = ?', [e.seq, e.dashcamId, e.bootKey]);

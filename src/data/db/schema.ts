@@ -12,6 +12,7 @@
  * Versions 1 and 2 are the v2 app's (never shipped to users). Version 3 drops the v2 trip tables
  * and creates the v3 ones; `settings` and `speed_limit_tiles` survive untouched. Version 4 removes
  * what the in-app driver monitoring (DMS) left behind. Version 5 adds the DashPal dashcam's tables.
+ * Version 6 marks the DashPal events that arrived while no drive was open.
  */
 
 /** Migration bookkeeping. Created before the version row is read, so it is not part of V1. */
@@ -232,3 +233,12 @@ export const SCHEMA_V5: readonly string[] = [
     last_synced_at_ms INTEGER
   )`,
 ];
+
+/**
+ * V6 — `dashcam_events.ignored`: 1 when the event arrived while no drive was open (from the Start
+ * Drive tap until that drive's finalize has finished). The row is still stored, so the ACK cursor
+ * and the dedup on `(dashcam_id, boot_id, seq)` see every seq, but it is only a delivery record: no
+ * drive claims it and it is pruned with the other unclaimed events after 7 days. The first copy's
+ * flag stands; a replayed copy never changes it.
+ */
+export const SCHEMA_V6: readonly string[] = ['ALTER TABLE dashcam_events ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0'];

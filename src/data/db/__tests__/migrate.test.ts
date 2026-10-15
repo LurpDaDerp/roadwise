@@ -2,7 +2,7 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
-import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
 const TABLES = [
   'schema_version',
@@ -38,11 +38,11 @@ test('creates every v3 and v5 table and index, and nothing of v2', async () => {
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
-test('records the schema version it reached (5)', async () => {
+test('records the schema version it reached (6)', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
-  expect(CURRENT_SCHEMA_VERSION).toBe(5);
+  expect(CURRENT_SCHEMA_VERSION).toBe(6);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 5 }]);
+  expect(rows).toEqual([{ version: 6 }]);
 });
 
 test('is idempotent', async () => {
@@ -51,7 +51,7 @@ test('is idempotent', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
   expect(await names(db, 'table')).toEqual(tables);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 5 }]);
+  expect(rows).toEqual([{ version: 6 }]);
 });
 
 test('the v3 trips table carries the v3 columns', async () => {
@@ -107,7 +107,7 @@ test('a v3 database steps up to v4: the DMS columns, events and settings go, eve
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
-test('a v4 database steps up to v5: the DashPal tables are added, everything else survives', async () => {
+test('a v4 database steps up to v5 and on: the DashPal tables are added, everything else survives', async () => {
   for (const statement of [...SCHEMA_V1, ...SCHEMA_V2, ...SCHEMA_V3, ...SCHEMA_V4]) await db.execute(statement);
   await db.execute(SCHEMA_VERSION_TABLE);
   await db.execute('INSERT INTO schema_version (version) VALUES (4)');
@@ -115,7 +115,7 @@ test('a v4 database steps up to v5: the DashPal tables are added, everything els
   await db.execute("INSERT INTO settings (key, value_json) VALUES ('units', ?)", ['"km"']);
   expect(await names(db, 'index')).toEqual([...V4_INDEXES].sort());
 
-  await expect(migrate(db)).resolves.toBe(5);
+  await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
   expect(await names(db, 'table')).toEqual([...TABLES].sort());
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
@@ -123,10 +123,25 @@ test('a v4 database steps up to v5: the DashPal tables are added, everything els
   expect((await db.execute('SELECT key FROM settings')).rows).toEqual([{ key: 'units' }]);
   expect(await columns(db, 'dashcam_events')).toEqual([
     'dashcam_id', 'boot_id', 'seq', 'id', 'ev', 'name', 'tier', 'audible', 'detail', 't_ms', 'dur_ds', 'value',
-    'at_ms', 'started_at_ms', 'received_at_ms', 'client_trip_id',
+    'at_ms', 'started_at_ms', 'received_at_ms', 'client_trip_id', 'ignored',
   ]);
   expect(await columns(db, 'dashcam_boots')).toEqual(['dashcam_id', 'boot_id', 'offset_ms', 'rtt_ms', 'floor_seq', 'max_seq']);
   expect(await columns(db, 'dashcam_coverage')).toEqual(['client_trip_id', 'moving_s', 'covered_s', 'last_synced_at_ms']);
+});
+
+test('a v5 database steps up to v6: every stored DashPal event stays and counts as received in a drive (ignored 0)', async () => {
+  for (const statement of [...SCHEMA_V1, ...SCHEMA_V2, ...SCHEMA_V3, ...SCHEMA_V4, ...SCHEMA_V5]) await db.execute(statement);
+  await db.execute(SCHEMA_VERSION_TABLE);
+  await db.execute('INSERT INTO schema_version (version) VALUES (5)');
+  await db.execute(
+    `INSERT INTO dashcam_events (dashcam_id, boot_id, seq, id, ev, name, tier, audible, detail, t_ms, dur_ds, value, received_at_ms)
+     VALUES ('a4cf12b3c4d5', 7, 0, 'id-0', 0, 'MICROSLEEP', 3, 1, 0, 100, 5, 1.5, 1)`
+  );
+
+  await expect(migrate(db)).resolves.toBe(6);
+
+  expect((await db.execute('SELECT id, ignored FROM dashcam_events')).rows).toEqual([{ id: 'id-0', ignored: 0 }]);
+  expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
 test('dashcam rows: an event dedupes on (dashcam, boot, seq) and its id is unique; a deleted trip unstamps its events and drops its coverage', async () => {

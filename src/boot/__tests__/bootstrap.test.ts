@@ -75,7 +75,7 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
 test('a cold launch: migrates, records the owner, boots the host idle, starts the runner; nothing is armed or started', async () => {
   const d = deps();
   const rt = await bootstrapApp(d.deps);
-  expect(rt.schemaVersion).toBe(5);
+  expect(rt.schemaVersion).toBe(6);
   expect(rt.owner).toBe('first');
   expect(await readDeviceOwner(db)).toBe('user-1');
   expect(rt.drive.snapshot().status).toBe('idle');
