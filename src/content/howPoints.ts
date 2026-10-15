@@ -94,6 +94,7 @@ export const RULES: RuleSection[] = [
       `A drive is a DashPal drive when your DashPal watched you for at least ${Math.round(DASHCAM_MIN_COVERAGE * 100)}% of the time you were moving (at least ${DASHCAM_MIN_MOVING_S / 60} min) and your phone had caught up with it by the end of the drive.`,
       `DashPal can flag eyes off the road with no look back (−${BASE_PENALTY.eyes_off}, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)}) and drowsiness (−${BASE_PENALTY.drowsy}, at most once ${everyMin(DASHCAM_DROWSY_GAP_S)}).`,
       `They count only at ${DASHCAM_MIN_MPH} mph or more with a good GPS fix, and never in a drive’s first ${NO_EVENTS_FIRST_S} s.`,
+      `DashPal may alarm below ${DASHCAM_MIN_MPH} mph; those alarms cost no points.`,
       'DashPal events never lower your Safety Rating or break a clean drive. They do cost points, like any event.',
     ],
   },

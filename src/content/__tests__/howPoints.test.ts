@@ -20,6 +20,7 @@ test('the DashPal section: what makes a DashPal drive, the events, and what they
     'A drive is a DashPal drive when your DashPal watched you for at least 80% of the time you were moving (at least 1 min) and your phone had caught up with it by the end of the drive.',
     'DashPal can flag eyes off the road with no look back (−40, at most once every 5 min) and drowsiness (−50, at most once every 10 min).',
     'They count only at 10 mph or more with a good GPS fix, and never in a drive’s first 30 s.',
+    'DashPal may alarm below 10 mph; those alarms cost no points.',
     'DashPal events never lower your Safety Rating or break a clean drive. They do cost points, like any event.',
   ]);
   expect(section('points').some((p) => p.includes('DashPal events don’t count against it'))).toBe(true);
