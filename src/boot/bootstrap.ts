@@ -535,7 +535,13 @@ function defaultDashcam(args: { db: Db; player: AlertPlayer; host: () => DriveHo
     },
     host: () => {
       const s = args.host()?.snapshot();
-      return { recording: s?.status === 'recording', playerAvailable: s?.alertsAvailable ?? false, callActive: s?.callActive ?? false };
+      return {
+        recording: s?.status === 'recording',
+        // Open from the Start Drive tap until finalize has finished (the drive-end catch-up included).
+        driveOpen: s !== undefined && s.status !== 'idle' && !s.dryRun,
+        playerAvailable: s?.alertsAvailable ?? false,
+        callActive: s?.callActive ?? false,
+      };
     },
     styleAllowsSound: () => alertStylePref() !== 'vibration',
     platform: Platform.OS === 'ios' ? 'ios' : 'android',

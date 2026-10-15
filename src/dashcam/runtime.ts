@@ -20,6 +20,8 @@ import type { DashcamTransport } from './transport';
 /** The drive host as the dashcam reads it, live. */
 export interface DashcamHostView {
   recording: boolean;
+  /** a drive is open, from the Start Drive tap until its finalize has finished (see `LinkContext`) */
+  driveOpen: boolean;
   playerAvailable: boolean;
   callActive: boolean;
 }
@@ -118,6 +120,7 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     const h = deps.host();
     return {
       recording: h.recording,
+      driveOpen: h.driveOpen,
       foreground,
       playerAvailable: h.playerAvailable,
       styleAllowsSound: deps.styleAllowsSound(),

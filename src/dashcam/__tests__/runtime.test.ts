@@ -41,7 +41,7 @@ interface Rig {
   ble: FakeBle;
   transportCalls: number;
   repeats: { live: number; created: number };
-  host: { recording: boolean; playerAvailable: boolean; callActive: boolean };
+  host: { recording: boolean; driveOpen: boolean; playerAvailable: boolean; callActive: boolean };
   appState: { currentState: string; emit(s: string): void; addEventListener(t: 'change', fn: (s: string) => void): { remove(): void } };
   errors: string[];
 }
@@ -64,7 +64,7 @@ function rig(platform: 'ios' | 'android' = 'android', foreground = true): Rig {
       return { remove: () => void listeners.delete(fn) };
     },
   };
-  const host = { recording: false, playerAvailable: true, callActive: false };
+  const host = { recording: false, driveOpen: false, playerAvailable: true, callActive: false };
   const player: AlertPlayer = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
   const r: Rig = {
     rt: null as unknown as DashcamRuntime,
@@ -249,7 +249,7 @@ test('a transport that cannot be created is reported once and the runtime keeps 
       calls += 1;
       throw new Error('BleManagerModule not found');
     },
-    host: () => ({ recording: false, playerAvailable: true, callActive: false }),
+    host: () => ({ recording: false, driveOpen: false, playerAvailable: true, callActive: false }),
     styleAllowsSound: () => true,
     platform: 'android',
     newId: () => 'x',
@@ -278,7 +278,7 @@ test('a screen that created the transport before the settings were read: the alr
     db,
     player: { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} },
     transport: () => t,
-    host: () => ({ recording: false, playerAvailable: true, callActive: false }),
+    host: () => ({ recording: false, driveOpen: false, playerAvailable: true, callActive: false }),
     styleAllowsSound: () => true,
     platform: 'android',
     newId: () => 'x',

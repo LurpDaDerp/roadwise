@@ -118,7 +118,8 @@ export interface Phone {
   gate: DbGate;
   rt: DashcamRuntime;
   player: FakePlayer;
-  host: { recording: boolean; playerAvailable: boolean; callActive: boolean };
+  /** the drive host; `driveOpen` (the drive is open, finalize included) follows `recording` when unset */
+  host: { recording: boolean; driveOpen?: boolean; playerAvailable: boolean; callActive: boolean };
   style: { sound: boolean };
   appState: { currentState: string; emit(s: string): void; addEventListener(t: 'change', fn: (s: string) => void): { remove(): void } };
   tripId: string;
@@ -543,7 +544,7 @@ export class World {
       db,
       player: phone.player,
       transport: getTransport,
-      host: () => phone.host,
+      host: () => ({ ...phone.host, driveOpen: phone.host.driveOpen ?? phone.host.recording }),
       styleAllowsSound: () => phone.style.sound,
       platform,
       appState,

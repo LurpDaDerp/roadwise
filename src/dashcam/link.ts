@@ -12,7 +12,9 @@
 // ×3 again every 10 min.
 //
 // Events (§3.6): persisted (INSERT OR IGNORE, a fresh v4 id) before they are acknowledged; the ACK
-// and RESUME cursor is the lowest seq at or above the boot's floor not yet stored. A HELLO whose
+// and RESUME cursor is the lowest seq at or above the boot's floor not yet stored. An event that
+// arrives while no drive is open is still stored (the cursor needs every seq) but marked ignored,
+// as the frame arrives: no drive ever claims it. A HELLO whose
 // boot id the phone knows but whose next_seq is below what it stored is a different boot (a new
 // local generation). Inbound HELLO and EVENT frames are processed on one serial chain, so an event is
 // never stored before its boot is known; alert frames are handled at once.
@@ -82,6 +84,12 @@ export type RepairCause = 'peer_not_bonded' | 'bond_lost' | 'wrong_dashcam' | 'r
 export interface LinkContext {
   /** a drive is recording (host status `recording`) */
   recording: boolean;
+  /**
+   * a drive is open: from the Start Drive tap until its finalize has finished (host status
+   * `recording` or `finalizing`, not a dry run), so the drive-end catch-up still counts as in the
+   * drive. An event arriving otherwise is stored as ignored.
+   */
+  driveOpen: boolean;
   /** the app is in the foreground */
   foreground: boolean;
   /** the alert player can sound (host `alertsAvailable`) */
@@ -115,7 +123,8 @@ export interface LinkSnapshot {
   /** the last ALERT start or level change, for the HUD and the banner */
   visual: DashcamVisual | null;
   firmware: string | null;
-  counters: { badFrames: number; lateAlerts: number; stored: number; duplicates: number; orphanEvents: number; storeErrors: number };
+  /** `ignored`: events stored as ignored (they arrived with no drive open); also in `stored` */
+  counters: { badFrames: number; lateAlerts: number; stored: number; ignored: number; duplicates: number; orphanEvents: number; storeErrors: number };
 }
 
 export interface LinkDeps {
@@ -230,7 +239,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
   let firmware: string | null = null;
   let disposed = false;
   let pingSeq = 0;
-  const counters = { badFrames: 0, lateAlerts: 0, stored: 0, duplicates: 0, orphanEvents: 0, storeErrors: 0 };
+  const counters = { badFrames: 0, lateAlerts: 0, stored: 0, ignored: 0, duplicates: 0, orphanEvents: 0, storeErrors: 0 };
   const listeners = new Set<(s: LinkSnapshot) => void>();
   /** the latest drive row and when it arrived */
   let lastRow: { row: FeatureRow; at: number } | null = null;
@@ -650,6 +659,15 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     if (!s) return;
     s.announcedNext = Math.max(s.announcedNext, e.seq + 1);
     const dashcamId = s.dashcamId;
+    // Read as the frame arrives, not when the chain gets to it: a drive that closes meanwhile does
+    // not make an in-drive event ignored, nor one opening an earlier event in-drive. Unknown (the
+    // context threw): not ignored, and the finalize window alone decides.
+    let ignored = false;
+    try {
+      ignored = !deps.context().driveOpen;
+    } catch (err) {
+      report(err, 'context');
+    }
     enqueue(async () => {
       if (session !== s) return;
       const bootKey = s.bootKey;
@@ -675,9 +693,14 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
         atMs,
         startedAtMs: atMs === null ? null : atMs - e.durDs * 100,
         receivedAtMs: now,
+        ignored,
       });
-      if (inserted) counters.stored += 1;
-      else counters.duplicates += 1;
+      if (inserted) {
+        counters.stored += 1;
+        if (ignored) counters.ignored += 1;
+      } else {
+        counters.duplicates += 1;
+      }
       if (e.seq >= s.cursor) s.cursor = await store.cursor(dashcamId, bootKey, s.floor);
       markAck(s);
       changed();

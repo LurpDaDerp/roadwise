@@ -109,7 +109,7 @@ function rig(over: { store?: Partial<DashcamStore>; delay?: (ms: number) => Prom
   const player = fakePlayer();
   player.setClock(() => clock.t);
   player.countAcks(() => writes.filter((w) => w.frame.type === 'ALERT_ACK').length);
-  const ctx: LinkContext = { recording: false, foreground: true, playerAvailable: true, styleAllowsSound: true, callActive: false, buzzerToo: false };
+  const ctx: LinkContext = { recording: false, driveOpen: false, foreground: true, playerAvailable: true, styleAllowsSound: true, callActive: false, buzzerToo: false };
   const store = { ...createDashcamStore(db), ...over.store } as DashcamStore;
   const r: Rig = {
     link: null as unknown as DashcamLink,
@@ -564,6 +564,114 @@ test('row 15: a timely HELLO gives a first offset, but a TIME_PING over the same
   const boot = await r.store.getBoot(CAM, 9);
   expect(boot?.rttMs).toBe(40);
   expect(boot!.offsetMs! - truth).toBe(10);
+});
+
+// ——— events with no drive open: stored as delivery records, ignored ———
+
+describe('events with no drive open', () => {
+  const flags = async () => (await db.execute('SELECT seq, ignored FROM dashcam_events ORDER BY seq')).rows;
+  const status = (r: Rig, flags: number) => r.rx({ type: 'STATUS', uptimeMs: uptime(r), state: 3, flags, fpsX10: 200, tempC: 40, bondCount: 1 });
+  const openDrive = (r: Rig, open: boolean) => {
+    r.ctx.recording = open;
+    r.ctx.driveOpen = open;
+  };
+
+  test('an event with no drive open is stored once, marked ignored; the cursor, ACK and STATE still reach next_seq and the phone is synced', async () => {
+    const r = rig();
+    await connect(r, { nextSeq: 0 });
+    r.clear();
+    r.rx(ev(0));
+    r.rx(ev(1));
+    await r.settle();
+    r.advance(300);
+    expect(await flags()).toEqual([
+      { seq: 0, ignored: 1 },
+      { seq: 1, ignored: 1 },
+    ]);
+    expect(r.sent('ACK').at(-1)).toEqual({ type: 'ACK', bootId: 0xdeadbeef, ackSeq: 2 });
+    r.advance(1000);
+    expect(r.sent('STATE').at(-1)).toMatchObject({ ackSeq: 2 });
+    expect(r.link.snapshot()).toMatchObject({ synced: true, counters: { stored: 2, ignored: 2, duplicates: 0 } });
+  });
+
+  test('reconnect mid-drive with a whole-ring replay: the copies stored before the drive stay ignored and are not duplicated; the new ones are in the drive; coverage and the sync stamp are untouched by the ignored ones', async () => {
+    await createTripsRepo(db).insert({ client_trip_id: TRIP, started_at: T0, tz: 'UTC', status: 'recording' }, T0);
+    const r = rig();
+    await connect(r, { nextSeq: 0 });
+    r.rx(ev(0));
+    r.rx(ev(1));
+    await r.settle();
+    // Start Drive; rows with a live, primary dashcam.
+    openDrive(r, true);
+    const drive = { clientTripId: TRIP, recording: true, dryRun: false };
+    status(r, STATUS_FLAG.LIVE | STATUS_FLAG.PRIMARY);
+    r.link.row(row(r.clock.t), drive);
+    r.rx(ev(2));
+    await r.settle();
+    r.link.linkDown();
+    r.clear();
+    // The dashcam made 3 and 4 while the link was down; it replays its whole ring (0..4).
+    await connect(r, { nextSeq: 5, oldestSeq: 0 });
+    expect(r.sent('RESUME')).toEqual([{ type: 'RESUME', bootId: 0xdeadbeef, nextSeq: 3 }]);
+    for (const s of [0, 1, 2, 3, 4]) r.rx(ev(s));
+    await r.settle();
+    status(r, STATUS_FLAG.LIVE | STATUS_FLAG.PRIMARY);
+    r.link.row(row(r.clock.t), drive);
+    r.advance(300);
+    expect(await flags()).toEqual([
+      { seq: 0, ignored: 1 },
+      { seq: 1, ignored: 1 },
+      { seq: 2, ignored: 0 },
+      { seq: 3, ignored: 0 },
+      { seq: 4, ignored: 0 },
+    ]);
+    expect(r.sent('ACK').at(-1)).toEqual({ type: 'ACK', bootId: 0xdeadbeef, ackSeq: 5 });
+    expect(r.link.snapshot()).toMatchObject({ synced: true, counters: { stored: 5, ignored: 2, duplicates: 3 } });
+    // The drive ends: the catch-up finds the phone synced and stamps it.
+    r.ctx.recording = false;
+    await r.link.beforeFinalize(TRIP);
+    expect(await r.store.coverage(TRIP)).toEqual({ movingS: 2, coveredS: 2, lastSyncedAtMs: r.clock.t });
+  });
+
+  test('in the drive and during the drive-end catch-up (finalizing) an event is not ignored; after finalize it is; the drive state is read as the frame arrives', async () => {
+    const r = rig();
+    await connect(r, { nextSeq: 0 });
+    openDrive(r, true);
+    r.rx(ev(0)); // recording
+    await r.settle();
+    // The drive ends: finalizing (no longer recording), the catch-up still in the drive.
+    r.ctx.recording = false;
+    const ending = r.link.beforeFinalize(TRIP);
+    r.rx(ev(1));
+    await ending;
+    // Arrived in the drive, written after it closed: not ignored.
+    r.rx(ev(2));
+    r.ctx.driveOpen = false;
+    await r.settle();
+    // Finalize has finished: ignored; and one that arrived with no drive open stays ignored when a
+    // drive opens before its write.
+    r.rx(ev(3));
+    await r.settle();
+    r.rx(ev(4));
+    openDrive(r, true);
+    await r.settle();
+    expect(await flags()).toEqual([
+      { seq: 0, ignored: 0 },
+      { seq: 1, ignored: 0 },
+      { seq: 2, ignored: 0 },
+      { seq: 3, ignored: 1 },
+      { seq: 4, ignored: 1 },
+    ]);
+    // The same seqs replayed now (a drive open) change nothing.
+    for (const s of [3, 4]) r.rx(ev(s));
+    await r.settle();
+    expect((await flags()).slice(3)).toEqual([
+      { seq: 3, ignored: 1 },
+      { seq: 4, ignored: 1 },
+    ]);
+    expect(r.link.snapshot().counters).toMatchObject({ stored: 5, ignored: 2, duplicates: 2 });
+    expect(r.link.snapshot().synced).toBe(true);
+  });
 });
 
 // ——— STATE: lease and context (§3.2, §3.7) ———
