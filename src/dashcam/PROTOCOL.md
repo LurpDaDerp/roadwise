@@ -77,7 +77,7 @@ Little-endian. Byte 0 = type, byte 1 = protocol version `1`. A receiver **accept
 2. Android `requestMTU(247)`; both `retrieveServices`.
 3. **Read INFO** (open). Outside the setup flow: if `peer_bonded = 0` → `needs_repair`, disconnect, no auto-reconnect, and never touch an encrypted attribute (that would raise an OS pairing dialog, possibly mid-drive).
 4. `startNotification(TX)`, then **COMMAND 7 hello** (always; CCCDs of bonded peers are restored silently, so subscription alone does not produce HELLO).
-5. On HELLO: TIME_PING ×3 (100 ms apart); **RESUME after the 3 echoes or 500 ms**, whichever first; then STATE every second (event-driven, §7.3). With the app in the Android background JS timers are paused, so STATE goes out on every drive row instead (a row closes up to 1.5 s after its second, so rows come up to about 2.5 s apart, inside the 3 s TTL).
+5. On HELLO: TIME_PING ×3 (100 ms apart); **RESUME after the 3 echoes or 500 ms**, whichever first; then STATE every second (event-driven, §7.3). With the app in the Android background JS timers are paused, so STATE goes out once per drive row instead: a row sends it unless one went out in the last 300 ms (the row's timer pump or a dashcam frame just sent it). Rows come once a second, location or not, and a row closes up to 1.5 s after its second, so rows come up to about 2.5 s apart and STATEs at most about 2.8 s apart, inside the 3 s TTL.
 6. TIME_PING ×3 again every 10 min (triggered from the link tick).
 
 ### 4 Routing (dashcam, `ble_link`)
