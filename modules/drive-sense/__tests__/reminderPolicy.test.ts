@@ -84,9 +84,7 @@ function run(v: ReminderVector): void {
       return;
     }
     case 'watchEnd': {
-      const r = onWatchEnd(v.state, v.how, v.now);
-      expect(r.effect).toBe(v.expected.effect);
-      expect(r.state).toMatchObject(v.expected.state);
+      expect(onWatchEnd(v.state, v.how, v.now)).toMatchObject(v.expected.state);
       return;
     }
   }

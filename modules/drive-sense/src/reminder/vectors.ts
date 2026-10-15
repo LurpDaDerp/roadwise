@@ -83,7 +83,7 @@ export type ReminderVector =
       state: ReminderState;
       how: WatchEnd;
       now: number;
-      expected: { effect: 'seek' | 'end'; state: StateMatch };
+      expected: { state: StateMatch };
     };
 
 // ——— builders ———
@@ -564,12 +564,12 @@ export const REMINDER_VECTORS: ReminderVector[] = [
   { name: 'ios stop: a call waits for the next stop', kind: 'stop', state: on(), ctx: ctx({ inCall: true }), now: T0, walked: false, expected: { effect: 'seek', reason: 'in-call' } },
   { name: 'ios stop: RoadWise open ends the session', kind: 'stop', state: on(), ctx: ctx({ appForeground: true }), now: T0, walked: false, expected: { effect: 'end', reason: 'foreground' } },
   {
-    name: 'ios watch end: driven on at 19 s is unseen: no miss, quiet lifted, one retry, but not within the hour (the session ends)',
+    name: 'ios watch end: driven on at 19 s is unseen: no miss, quiet lifted, one retry, an hour or more on (the session ends)',
     kind: 'watchEnd',
     state: on({ showing: true, postedAt: T0, pendingAt: T0, quietUntil: T0 + R.UNUSED_QUIET_MS, posts: [T0] }, { reminded: true }),
     how: 'driving',
     now: T0 + 19 * S,
-    expected: { effect: 'end', state: { showing: false, pendingAt: 0, quietUntil: 0, missStreak: 0, posts: [T0], trip: { reminded: false, retries: 1 } } },
+    expected: { state: { showing: false, pendingAt: 0, quietUntil: 0, missStreak: 0, posts: [T0], trip: { reminded: false, retries: 1 } } },
   },
   {
     name: 'ios stop: the retry after an unseen post is blocked within the hour',
@@ -595,7 +595,7 @@ export const REMINDER_VECTORS: ReminderVector[] = [
     state: on({ showing: true, postedAt: T0, pendingAt: T0, posts: [T0] }, { reminded: true, retries: 1 }),
     how: 'driving',
     now: T0 + 10 * S,
-    expected: { effect: 'end', state: { pendingAt: 0, trip: { reminded: true, retries: 1 } } },
+    expected: { state: { pendingAt: 0, trip: { reminded: true, retries: 1 } } },
   },
   {
     name: 'ios watch end: driven on at 21 s is no retry; the post waits for its outcome',
@@ -603,7 +603,7 @@ export const REMINDER_VECTORS: ReminderVector[] = [
     state: on({ showing: true, postedAt: T0, pendingAt: T0, quietUntil: T0 + R.UNUSED_QUIET_MS, posts: [T0] }, { reminded: true }),
     how: 'driving',
     now: T0 + 21 * S,
-    expected: { effect: 'end', state: { showing: false, pendingAt: T0, quietUntil: T0 + R.UNUSED_QUIET_MS, trip: { reminded: true, retries: 0 } } },
+    expected: { state: { showing: false, pendingAt: T0, quietUntil: T0 + R.UNUSED_QUIET_MS, trip: { reminded: true, retries: 0 } } },
   },
   {
     name: 'ios watch end: walked off ends the car time; the post still waits for its outcome',
@@ -611,7 +611,7 @@ export const REMINDER_VECTORS: ReminderVector[] = [
     state: on({ showing: true, postedAt: T0, pendingAt: T0, posts: [T0] }, { reminded: true }),
     how: 'arrival',
     now: T0 + M,
-    expected: { effect: 'end', state: { showing: false, pendingAt: T0, missStreak: 0, trip: { inVehicle: false, lastVehicleAt: T0 + M } } },
+    expected: { state: { showing: false, pendingAt: T0, missStreak: 0, trip: { inVehicle: false, lastVehicleAt: T0 + M } } },
   },
 
   // ——— outcomes, quiet, back-off ———

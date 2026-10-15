@@ -82,8 +82,7 @@ enum TripReminderSelfTest {
       let s = try state(row["state"])
       let now = try num(row["now"])
       guard let how = row["how"] as? String else { throw Bad(message: "how is missing") }
-      let r = TripReminderPolicy.onWatchEnd(s, how, now)
-      return try ["effect": r.seek ? "seek" : "end", "state": stateJson(r.state)]
+      return try ["state": stateJson(TripReminderPolicy.onWatchEnd(s, how, now))]
     default:
       throw Bad(message: "unknown reminder row kind \(kind)")
     }

@@ -55,7 +55,7 @@ describe('the reminder self-test', () => {
       summary: (a) => ({ summary: { ...(a.summary as object), onFootNow: !(a.summary as { onFootNow: boolean }).onFootNow } }),
       fixes: (a) => ({ verdicts: [...(a.verdicts as string[]), 'none'] }),
       stop: (a) => ({ ...a, effect: 'end' === a.effect ? 'post' : 'end' }),
-      watchEnd: (a) => ({ ...a, effect: a.effect === 'seek' ? 'end' : 'seek' }),
+      watchEnd: (a) => ({ ...a, state: { ...(a.state as object), showing: true } }),
     };
     for (const kind of Object.keys(drifted) as ReminderVector['kind'][]) {
       const v = first(kind);

@@ -102,8 +102,7 @@ export function runReminderRow(v: ReminderRowInputs): ReminderActual {
       return { effect: r.effect, reason: r.reason };
     }
     case 'watchEnd': {
-      const r = onWatchEnd(v.state, v.how, v.now);
-      return { effect: r.effect, state: r.state };
+      return { state: onWatchEnd(v.state, v.how, v.now) };
     }
   }
 }
@@ -168,7 +167,6 @@ export function matchReminderRow(v: ReminderVector, actual: ReminderActual): Mis
       within('reason', v.expected.reason, actual.reason, out);
       break;
     case 'watchEnd':
-      within('effect', v.expected.effect, actual.effect, out);
       within('state', v.expected.state, actual.state, out);
       break;
   }

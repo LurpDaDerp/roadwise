@@ -708,17 +708,17 @@ export function onStop(s0: ReminderState, ctx: ReminderCtx, now: number, walked:
 export type WatchEnd = 'driving' | 'arrival' | 'ttl' | 'ended';
 
 /**
- * Driven on within 20 s is unseen (one retry this trip; the session looks for the next stop only
- * once an hour has passed since the last post, so in practice a later session takes the retry);
- * otherwise the session ends. Walking off ends the trip's car time; the post still waits for its
- * outcome.
+ * The session always ends here. Driven on within 20 s is unseen: no miss, and the trip may take one
+ * more reminder, but only an hour after this one, which is past this session's 5 min watch, so only
+ * a later GPS session of the trip can post it. Walking off ends the trip's car time; the post still
+ * waits for its outcome.
  */
-export function onWatchEnd(s0: ReminderState, how: WatchEnd, now: number): { state: ReminderState; effect: 'seek' | 'end' } {
+export function onWatchEnd(s0: ReminderState, how: WatchEnd, now: number): ReminderState {
   const s = clone(s0);
   s.showing = false;
   if (how === 'driving' && now - s.postedAt < R.UNSEEN_MS) {
     resolveIn(s, 'unseen', now);
-    return { state: s, effect: s.trip && !s.trip.reminded && !tooSoonAfterPost(s, now) ? 'seek' : 'end' };
+    return s;
   }
   if (how === 'arrival') {
     if (s.trip) {
@@ -726,7 +726,7 @@ export function onWatchEnd(s0: ReminderState, how: WatchEnd, now: number): { sta
       s.trip.lastVehicleAt = now;
     }
   }
-  return { state: s, effect: 'end' };
+  return s;
 }
 
 /** A GPS session ended: the next one waits IOS_SESSION_SPACING_MS. */

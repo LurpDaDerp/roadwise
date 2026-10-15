@@ -411,12 +411,18 @@ describe('iOS forgot-to-start reminder (text)', () => {
     const stop = gate.slice(gate.indexOf('"too-soon"'));
     const stopOrder = ['too-soon', 'foreground', 'in-call', 'stale', 'on-foot'].map((r) => stop.indexOf(`"${r}"`));
     expect([...stopOrder].sort((x, y) => x - y)).toEqual(stopOrder);
-    // An hour between posts, whatever became of the last; the unseen retry looks on only once it has passed.
+    // An hour between posts, whatever became of the last.
     expect(src).toMatch(/static func tooSoonAfterPost\(_ s: ReminderState, _ now: Double\) -> Bool \{ s\.posts\.contains \{ now - \$0 < POST_SPACING_MS \} \}/);
     expect(gate).toMatch(/return "daily-cap" \}\s*if tooSoonAfterPost\(s, now\) \{ return "spacing" \}/);
+  });
+
+  it('the session always ends when the watch ends: an unseen retry is an hour on at the soonest, so only a later session takes it', () => {
     expect(code('TripReminderWakePolicy.swift')).toMatch(
-      /resolveIn\(&s, \.unseen, now\)\s*return \(s, s\.trip != nil && s\.trip\?\.reminded == false && !tooSoonAfterPost\(s, now\)\)/
+      /static func onWatchEnd\(_ s0: ReminderState, _ how: String, _ now: Double\) -> ReminderState \{[\s\S]*?resolveIn\(&s, \.unseen, now\)\s*return s\s*\}/
     );
+    const watchEnded = /private func watchEnded\(_ how: String\) \{[\s\S]*?\n {2}\}/.exec(code('TripReminderSession.swift'))?.[0] ?? '';
+    expect(watchEnded).toMatch(/TripReminderNotifier\.remove\(\)\s*if tracker != nil, let s0 = loadState\(\) \{ saveState\(TripReminderPolicy\.onWatchEnd\(s0, how, Self\.nowMs\(\)\)\) \}\s*endSession\(\)\s*\}$/);
+    expect(watchEnded).not.toContain('seekAgain');
   });
 });
 

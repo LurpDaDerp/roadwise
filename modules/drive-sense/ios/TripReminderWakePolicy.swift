@@ -138,19 +138,20 @@ extension TripReminderPolicy {
     return (s, reason == "too-soon" || reason == "in-call" ? "seek" : "end", reason)
   }
 
-  /// policy.ts `onWatchEnd` for "driving", "arrival", "ttl" or "ended": whether the session looks for the next stop.
-  static func onWatchEnd(_ s0: ReminderState, _ how: String, _ now: Double) -> (state: ReminderState, seek: Bool) {
+  /// policy.ts `onWatchEnd` for "driving", "arrival", "ttl" or "ended": the session always ends after it.
+  /// An unseen post's one more try comes an hour on at the soonest, so only a later session can take it.
+  static func onWatchEnd(_ s0: ReminderState, _ how: String, _ now: Double) -> ReminderState {
     var s = s0
     s.showing = false
     if how == "driving" && now - s.postedAt < UNSEEN_MS {
       resolveIn(&s, .unseen, now)
-      return (s, s.trip != nil && s.trip?.reminded == false && !tooSoonAfterPost(s, now))
+      return s
     }
     if how == "arrival" {
       s.trip?.inVehicle = false
       s.trip?.lastVehicleAt = now
     }
-    return (s, false)
+    return s
   }
 
   static func sessionEnded(_ s0: ReminderState, _ now: Double) -> ReminderState {

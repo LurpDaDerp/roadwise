@@ -116,22 +116,12 @@ extension TripReminder {
     }
   }
 
-  /// The note's watch ended: driven on (within 20 s: unseen, one more stop may remind), walked off, or 5 min.
+  /// The note's watch ended: driven on (within 20 s: unseen, so a later session of the trip may remind
+  /// once more, an hour on at the soonest), walked off, or 5 min. The session ends either way.
   private func watchEnded(_ how: String) {
     TripReminderNotifier.remove()
-    guard let tr = tracker, let s0 = loadState() else {
-      endSession()
-      return
-    }
-    let now = Self.nowMs()
-    let r = TripReminderPolicy.onWatchEnd(s0, how, now)
-    saveState(r.state)
-    if r.seek {
-      tracker = TripReminderPolicy.seekAgain(tr, now)
-      sessionManager.distanceFilter = kCLDistanceFilterNone
-    } else {
-      endSession()
-    }
+    if tracker != nil, let s0 = loadState() { saveState(TripReminderPolicy.onWatchEnd(s0, how, Self.nowMs())) }
+    endSession()
   }
 
   func endSession() {
