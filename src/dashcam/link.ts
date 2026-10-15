@@ -6,8 +6,9 @@
 // foreground (Android pauses JS timers in the background unless a headless task runs; rows keep
 // arriving during a drive). Each tick: STATE if ≥ 900 ms since the last one, ACKs batched ≤ 200 ms,
 // TIME_PINGs due, RESUME when due, the 3 s staleness stop, alert repeats, the HELLO retry. With JS
-// timers paused (`timersPaused`), every drive row sends STATE whatever the gap: rows arrive 0.3–2.2 s
-// apart there, and the 900 ms gate could stretch a renewal toward the 3 s lease.
+// timers paused (`timersPaused`), every drive row sends STATE whatever the gap: an Android row closes up
+// to 1.5 s after its second, so rows come up to about 2.5 s apart, and the 900 ms gate could
+// stretch a renewal past the 3 s lease.
 //
 // Connection sequence after the transport subscribed to TX (§3.3): COMMAND 7 hello → HELLO →
 // TIME_PING ×3 (100 ms apart) → RESUME after the 3 echoes or 500 ms → STATE every second, TIME_PING
