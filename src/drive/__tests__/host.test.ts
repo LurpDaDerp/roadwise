@@ -384,3 +384,25 @@ describe('the DashPal hooks (plan §7.7)', () => {
     expect(h.errors.some((e) => e.includes('boom'))).toBe(true);
   });
 });
+
+test('every native row first pumps the timers (Android pauses JS timers in the background); a throwing pump is reported and the row still counts', async () => {
+  let pumps = 0;
+  let throwOnce = true;
+  const h = build({
+    pump: () => {
+      pumps += 1;
+      if (throwOnce) {
+        throwOnce = false;
+        throw new Error('timer callback');
+      }
+    },
+  });
+  await h.host.boot();
+  await h.host.start();
+  await feed(h, rows(5, { speedMps: 15 }));
+  expect(pumps).toBe(5);
+  expect(h.errors).toContain('timers: timer callback');
+  const list = rows(5, { speedMps: 15 });
+  expect(h.host.snapshot().lastRowTs).toBe(list[4]!.ts);
+  await h.host.stop({ endOpenTrip: false });
+});

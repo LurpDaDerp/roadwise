@@ -1,3 +1,6 @@
+import { createPausableTimerBase } from '@/lib/__fixtures__/pausableTimers';
+import { createPumpedTimers } from '@/lib/timers';
+
 import { createFakeBle, type FakeBle } from '../fakeTransport';
 import type { BluetoothState, RepairCause } from '../link';
 import { decodeInfo, encodeInfo, IDENTIFY_CHAR, PAIRING_SERVICE, DASHPAL_SERVICE, RX_CHAR, TX_CHAR, type DashcamInfo } from '../protocol';
@@ -204,6 +207,55 @@ test('a connect call that errors backs off 1 → 2 → 4 … → 30 s; a success
   r.ble.drop(PID);
   await flush();
   expect(r.t.linked()).toBe(true); // straight back, no backoff
+});
+
+test('with JS timers paused (Android, app in the background) the backoff fires from a pump: a drive row or any BLE event once it is due', async () => {
+  const ble: FakeBle = createFakeBle();
+  ble.addPeripheral({ id: PID, info: infoBytes() });
+  ble.connectMode.set(PID, 'reject');
+  const base = createPausableTimerBase();
+  const pumped = createPumpedTimers(base);
+  let pumps = 0;
+  const t = createBleTransport(ble, {
+    platform: 'android',
+    now: base.now,
+    setTimer: (fn, ms) => pumped.setTimeout(fn, ms),
+    clearTimer: (h) => pumped.clearTimeout(h),
+    pump: () => {
+      pumps += 1;
+      pumped.pump();
+    },
+  });
+  const k = sink();
+  t.attach(k.s);
+  t.setTarget({ peripheralId: PID, dashcamId: CAM });
+  await t.start();
+  await flush();
+  const connects = () => ble.calls.filter((c) => c.startsWith('connect')).length;
+  expect(connects()).toBe(1);
+  base.pause(true);
+  base.advance(5000); // the 1 s backoff is long due; paused JS timers never fire it
+  await flush();
+  expect(connects()).toBe(1);
+  pumped.pump(); // a drive row
+  await flush();
+  expect(connects()).toBe(2);
+  // The next backoff (2 s) fires from a BLE event's pump once due, not before.
+  ble.connectMode.set(PID, 'resolve');
+  base.advance(1000);
+  ble.notify('OTHER', [9, 9]);
+  await flush();
+  expect(connects()).toBe(2);
+  base.advance(1000);
+  ble.notify('OTHER', [9, 9]);
+  await flush();
+  expect(connects()).toBe(3);
+  expect(t.linked()).toBe(true);
+  expect(pumps).toBe(2);
+  ble.drop(PID);
+  await flush();
+  expect(pumps).toBe(3);
+  expect(t.linked()).toBe(true); // a link that was up reconnects at once, no timer
 });
 
 test.each([

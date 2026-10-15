@@ -12,6 +12,9 @@
 // - **Battery.** Nothing runs while idle: no timer, no read. While recording, one timeout at most
 //   (the auto-end deadline), the display throttled to one update per 3 s, the points estimate
 //   computed once per stop, and the state published at most once per row.
+// - **Background.** Each row first pumps the process's timers (`src/lib/timers.ts`): with the app
+//   in the Android background JS timers are paused, and the rows are what keeps the alert player
+//   and the DashPal link moving.
 import { parseRow } from '@drive-sense';
 import { scoreDrive, type DriveContext } from '@scoring';
 
@@ -30,6 +33,7 @@ import type { Db, TripStatus } from '@/data/db';
 import { createSettingsRepo } from '@/data/db/settings';
 import { emitDataChanged } from '@/data/events';
 import type { AppStateLike } from '@/data/foreground';
+import { processTimers } from '@/lib/timers';
 import { KMH_PER_MPH, metersToMiles, mpsToMph } from '@/lib/units';
 
 import type { DriveDisplay } from './display';
@@ -137,6 +141,11 @@ export interface DriveHostDeps {
   persistence?: 'full' | 'none';
   /** The DashPal dashcam (none: no hooks). */
   dashcam?: DriveHostDashcam;
+  /**
+   * Called as each row arrives: fires the pumped timers that are due (`src/lib/timers.ts`), which
+   * Android leaves unfired while the app is in the background. Default: the process's.
+   */
+  pump?: () => void;
   onError?: (e: unknown, ctx: string) => void;
 }
 
@@ -438,6 +447,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     subscriptions.push(
       remover(
         source.addListener('row', (raw) => {
+          // First, on every row: a timer the alert player or the dashcam waits on fires here when
+          // JS timers are paused (Android, app in the background).
+          try {
+            (deps.pump ?? processTimers.pump)();
+          } catch (e) {
+            report(e, 'timers');
+          }
           const row = parseRow(raw);
           if (row === null) return;
           void run(() => onRow(row), 'row');

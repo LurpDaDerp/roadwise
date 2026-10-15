@@ -10,7 +10,8 @@
 //
 // Connecting: iOS keeps a pending connect by peripheral id (it never times out); Android re-issues
 // `connect(id, { autoconnect: true })` after every disconnect (ble-manager closes the GATT on
-// disconnect). A connect call that errors backs off 1 → 30 s. After a connect: Android
+// disconnect). A connect call that errors backs off 1 → 30 s (a pumped timer: with JS timers paused
+// in the Android background, the next drive row or BLE event fires it once due). After a connect: Android
 // `requestMTU(247)`, `retrieveServices`, read INFO (open), let the link decide, then subscribe to TX;
 // the link then asks for HELLO. One GATT operation is in flight at a time; ALERT_ACK jumps the queue.
 //
@@ -19,6 +20,8 @@
 // encryption); Android status 5, 15, 0x3D (MIC failure) or 0x06 (key missing); INFO peer_bonded = 0
 // (the link's call); the paired MAC seen advertising the pairing service while the link has been down
 // 20 s (the dashcam lost its bonds: reflashed).
+import { processTimers } from '@/lib/timers';
+
 import { IDENTIFY_BYTE, IDENTIFY_CHAR, INFO_CHAR, PAIRING_SERVICE, RX_CHAR, TX_CHAR, DASHPAL_SERVICE, decodeInfo, type DashcamInfo } from './protocol';
 import type { BluetoothState, RepairCause } from './link';
 
@@ -108,6 +111,11 @@ export interface TransportOptions {
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (h: unknown) => void;
+  /**
+   * Called as each native BLE event arrives (a frame, a disconnect): fires the pumped timers that
+   * are due, which Android leaves unfired while the app is in the background.
+   */
+  pump?: () => void;
   onError?: (e: unknown, ctx: string) => void;
 }
 
@@ -395,6 +403,15 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
 
   // ——— native events (registered once, before start) ———
 
+  /** A native event reached JS: timers JS left unfired (Android, background) fire now if due. */
+  function pump(): void {
+    try {
+      opts.pump?.();
+    } catch (e) {
+      report(e, 'timers');
+    }
+  }
+
   let listening = false;
   function listen(): void {
     if (listening) return;
@@ -409,6 +426,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       settleRestored(ids);
     });
     api.onDisconnectPeripheral((e) => {
+      pump();
       const t = tgt;
       if (!t || !same(e.peripheral, t.peripheralId)) return;
       if (halted) return;
@@ -428,6 +446,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       // 'connecting': the connect call's own rejection re-arms it, with the backoff.
     });
     api.onDidUpdateValueForCharacteristic((e) => {
+      pump();
       if (!same(e.characteristic, TX_CHAR)) return;
       const setup = [...setupFrames.entries()].find(([id]) => same(id, e.peripheral));
       if (setup) {
@@ -681,6 +700,11 @@ export function getDashcamTransport(): DashcamTransport {
   /* eslint-enable @typescript-eslint/no-require-imports */
   singleton = createBleTransport(BleManager, {
     platform: Platform.OS === 'ios' ? 'ios' : 'android',
+    // The reconnect backoff and the GATT op bounds also fire from rows and frames when Android has
+    // paused JS timers (app in the background).
+    setTimer: (fn, ms) => processTimers.setTimeout(fn, ms),
+    clearTimer: (h) => processTimers.clearTimeout(h),
+    pump: () => processTimers.pump(),
     onError: (e, ctx) => {
       if (__DEV__) console.warn(`[dashpal] ${ctx}:`, e);
     },

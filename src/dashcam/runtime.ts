@@ -8,6 +8,7 @@ import type { FeatureRow } from '@/core/engine/types';
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { AppStateLike } from '@/data/foreground';
+import { processTimers } from '@/lib/timers';
 
 import { loadDashcamTripFacts, type DashcamTripFacts } from './facts';
 import { asPaired, BT_OPT_IN_KEY, BUZZER_TOO_KEY, PAIRED_KEY, type PairedDashcam } from './keys';
@@ -89,8 +90,9 @@ export const MIN_COVERAGE_PCT = 80;
 
 export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
   const now = deps.now ?? Date.now;
-  const setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
-  const clearTimer = deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
+  // Pumped timers: a drive row or a frame fires them while Android pauses JS timers.
+  const setTimer = deps.setTimer ?? ((fn, ms) => processTimers.setTimeout(fn, ms));
+  const clearTimer = deps.clearTimer ?? ((h) => processTimers.clearTimeout(h));
   const setRepeat = deps.setRepeat ?? ((fn, ms) => setInterval(fn, ms));
   const clearRepeat = deps.clearRepeat ?? ((h) => clearInterval(h as ReturnType<typeof setInterval>));
   const settings = createSettingsRepo(deps.db);
