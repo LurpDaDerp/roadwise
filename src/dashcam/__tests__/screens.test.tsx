@@ -194,7 +194,7 @@ describe('the setup panel', () => {
     await tap('setup-no');
     await tap('setup-yes');
     expect(s.answers).toEqual([false, true]);
-    await s.to({ kind: 'done', paired: PAIRED });
+    await s.to({ kind: 'done', paired: PAIRED, phones: 1, unexpected: false });
     expect(screen.getByTestId('setup-phase-done')).toHaveTextContent('Connected to DashPal-C4D5.');
     await act(async () => view.unmount());
     expect(s.cancelled()).toBe(1);

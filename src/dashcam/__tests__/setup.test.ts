@@ -3,7 +3,7 @@ import type { BluetoothAccess } from '@/core/permissions/adapters';
 import { createFakeBle, type FakeBle } from '../fakeTransport';
 import type { PairedDashcam } from '../keys';
 import { decodeRx, encodeInfo, encodeTx, IDENTIFY_CHAR, PAIRING_SERVICE, RX_CHAR, type DashcamInfo } from '../protocol';
-import { createSetupFlow, type SetupFlow, type SetupPhase } from '../setup';
+import { BUSY_POLL_MS, BUSY_RETRY_MS, CONFIRM_TIMEOUT_MS, createSetupFlow, type SetupFlow, type SetupPhase } from '../setup';
 import { createBleTransport, type DashcamTransport } from '../transport';
 
 const flush = async () => {
@@ -23,9 +23,15 @@ interface Rig {
   clock: { t: number };
   setBusy(v: boolean): void;
   until(kind: SetupPhase['kind']): Promise<void>;
+  /** the sleeps the flow made (ms) */
+  sleeps: number[];
+  /** End the confirm question's 110 s wait (it otherwise never ends on its own here). */
+  expireConfirm(): void;
 }
 
-function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previous?: PairedDashcam | null; preferId?: string } = {}): Rig {
+function rig(
+  o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previous?: PairedDashcam | null; preferId?: string; pairedCount?: number | null } = {}
+): Rig {
   const platform = o.platform ?? 'android';
   const ble = createFakeBle();
   const t = createBleTransport(ble, { platform, setTimer: () => 0, clearTimer: () => {} });
@@ -37,8 +43,11 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
   ble.onWrite = (w) => {
     if (w.characteristic !== RX_CHAR) return;
     const d = decodeRx(w.bytes);
-    if (d.ok && d.frame.type === 'COMMAND' && d.frame.op === 5) queueMicrotask(() => ble.notify(w.id, encodeTx({ type: 'PAIRED', bondCount: 1 })));
+    const count = o.pairedCount === undefined ? 1 : o.pairedCount;
+    if (d.ok && d.frame.type === 'COMMAND' && d.frame.op === 5 && count !== null) queueMicrotask(() => ble.notify(w.id, encodeTx({ type: 'PAIRED', bondCount: count })));
   };
+  const sleeps: number[] = [];
+  const long: (() => void)[] = [];
   const flow = createSetupFlow({
     platform,
     transport: () => t,
@@ -49,6 +58,11 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
     paired: () => o.previous ?? null,
     now: () => clock.t,
     sleep: async (ms) => {
+      sleeps.push(ms);
+      if (ms >= CONFIRM_TIMEOUT_MS) {
+        await new Promise<void>((resolve) => long.push(resolve));
+        return;
+      }
       clock.t += ms;
       await new Promise<void>((resolve) => setImmediate(resolve));
     },
@@ -63,6 +77,11 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
     paired,
     clock,
     setBusy: (v) => (busy = v),
+    sleeps,
+    expireConfirm: () => {
+      clock.t += CONFIRM_TIMEOUT_MS;
+      for (const fn of long.splice(0)) fn();
+    },
     async until(kind) {
       for (let i = 0; i < 400 && flow.phase().kind !== kind; i++) await new Promise<void>((resolve) => setImmediate(resolve));
       expect(flow.phase().kind).toBe(kind);
@@ -218,4 +237,190 @@ test('cancel mid-confirm releases the candidate and ends as cancelled', async ()
   expect(r.flow.phase().kind).toBe('cancelled');
   expect(r.ble.calls).toContain('disconnect:C');
   expect(r.paired).toEqual([]);
+});
+
+// ——— the setup claim (only the phone that made the dashcam beep can pair) ———
+
+const ATT_REFUSED = { domain: 'CBATTErrorDomain', code: 0x80, message: 'refused' };
+const identifies = (r: Rig, id: string) => r.ble.calls.filter((c) => c === `write:${id}:0003`).length;
+const infoReads = (r: Rig, id: string) => r.ble.calls.filter((c) => c === `read:${id}:0002`).length;
+
+/** Start the flow and advertise these dashcams (strongest first); `run` is the flow's end. */
+async function startWith(r: Rig, ids: string[]): Promise<{ run: Promise<void> }> {
+  const run = r.flow.start();
+  await r.until('scanning');
+  ids.forEach((id, i) => r.ble.advertise({ id, rssi: -40 - i * 5, advertising: { serviceUUIDs: [PAIRING_SERVICE] } }));
+  return { run };
+}
+
+test('INFO says another phone is setting the dashcam up: no IDENTIFY (it would not beep); INFO re-read every 2 s for 8 s; then "another phone is setting up", released', async () => {
+  const previous: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'OLD', name: 'DashPal-C4D5', pairedAt: 1 };
+  const r = rig({ previous });
+  r.t.setTarget({ peripheralId: 'OLD', dashcamId: 'a4cf12b3c4d5' });
+  r.ble.addPeripheral({ id: 'B', info: info(0xe1, { setupBusy: true }) });
+  await (await startWith(r, ['B'])).run;
+  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'setup_busy' });
+  expect(identifies(r, 'B')).toBe(0);
+  expect(r.sleeps.filter((ms) => ms === BUSY_POLL_MS)).toHaveLength(BUSY_RETRY_MS / BUSY_POLL_MS);
+  expect(infoReads(r, 'B')).toBe(1 + BUSY_RETRY_MS / BUSY_POLL_MS);
+  expect(r.ble.calls.lastIndexOf('disconnect:B')).toBeGreaterThan(r.ble.calls.lastIndexOf('read:B:0002'));
+  expect(r.phases).not.toContain('confirm');
+  // The old pairing gets its auto-connect back.
+  expect(r.t.target()).toEqual({ peripheralId: 'OLD', dashcamId: 'a4cf12b3c4d5' });
+});
+
+test("the claim clears within the 8 s (this phone's own earlier setup link went): identify, then the question", async () => {
+  const r = rig();
+  let reads = 0;
+  r.ble.addPeripheral({
+    id: 'B',
+    get info() {
+      reads += 1;
+      return info(0xe2, { setupBusy: reads < 3 });
+    },
+  } as never);
+  const { run } = await startWith(r, ['B']);
+  await r.until('confirm');
+  expect(identifies(r, 'B')).toBe(1);
+  expect(r.sleeps.filter((ms) => ms === BUSY_POLL_MS)).toHaveLength(2);
+  r.flow.answer(true);
+  await run;
+  expect(r.flow.phase()).toMatchObject({ kind: 'done' });
+});
+
+test('IDENTIFY refused (ATT 0x80) and INFO then says busy: watched every 2 s for 8 s, then "another phone is setting up"', async () => {
+  const r = rig();
+  let reads = 0;
+  r.ble.addPeripheral({
+    id: 'B',
+    get info() {
+      reads += 1;
+      return info(0xe3, { setupBusy: reads > 1 });
+    },
+  } as never);
+  r.ble.failNext('write', ATT_REFUSED);
+  await (await startWith(r, ['B'])).run;
+  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'setup_busy' });
+  expect(identifies(r, 'B')).toBe(1);
+  expect(r.sleeps.filter((ms) => ms === BUSY_POLL_MS)).toHaveLength(BUSY_RETRY_MS / BUSY_POLL_MS);
+});
+
+test('IDENTIFY refused and INFO not busy (the window closed): the next candidate, as before; none left → none found', async () => {
+  const r = rig();
+  r.ble.addPeripheral({ id: 'B', info: info(0xe4) });
+  r.ble.failNext('write', ATT_REFUSED);
+  await (await startWith(r, ['B'])).run;
+  expect(r.flow.phase()).toEqual({ kind: 'none_found' });
+  expect(r.sleeps.filter((ms) => ms === BUSY_POLL_MS)).toEqual([]);
+  expect(r.ble.calls).toContain('disconnect:B');
+});
+
+test('a busy dashcam and a free one: the free one is set up; "No" to it leaves only the busy one → "another phone is setting up"', async () => {
+  const r = rig();
+  r.ble.addPeripheral({ id: 'BUSY', info: info(0xe5, { setupBusy: true }) });
+  r.ble.addPeripheral({ id: 'FREE', info: info(0xe6) });
+  const { run } = await startWith(r, ['BUSY', 'FREE']);
+  await r.until('confirm');
+  expect(r.flow.phase()).toMatchObject({ candidate: { id: 'FREE' } });
+  expect(identifies(r, 'BUSY')).toBe(0);
+  r.flow.answer(false);
+  await run;
+  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'setup_busy' });
+});
+
+test('no answer within 110 s: the dashcam is released (its claim ends with the link) and setup fails', async () => {
+  const r = rig();
+  r.ble.addPeripheral({ id: 'Q', info: info(0xe7) });
+  const { run } = await startWith(r, ['Q']);
+  await r.until('confirm');
+  expect(r.sleeps).toContain(CONFIRM_TIMEOUT_MS);
+  r.expireConfirm();
+  await run;
+  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'error' });
+  expect(r.ble.calls.at(-1)).toBe('disconnect:Q');
+  expect(r.ble.calls.some((c) => c.startsWith('createBond') || c === 'read:Q:0004')).toBe(false);
+  // A late answer changes nothing.
+  r.flow.answer(true);
+  await flush();
+  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'error' });
+});
+
+test('an answer before the 110 s: the timeout firing later changes nothing', async () => {
+  const r = rig();
+  r.ble.addPeripheral({ id: 'Q', info: info(0xe8) });
+  const { run } = await startWith(r, ['Q']);
+  await r.until('confirm');
+  r.flow.answer(true);
+  await run;
+  expect(r.flow.phase()).toMatchObject({ kind: 'done' });
+  r.expireConfirm();
+  await flush();
+  expect(r.flow.phase()).toMatchObject({ kind: 'done' });
+});
+
+test.each([
+  ['a new phone, 1 phone paired before, PAIRED 2', { bondCount: 1 }, 2, false],
+  ['a new phone, 1 phone paired before, PAIRED 3 (someone else paired too)', { bondCount: 1 }, 3, true],
+  ['the first phone, PAIRED 1', { bondCount: 0 }, 1, false],
+  ['a re-pair (the dashcam held this phone), 2 before, PAIRED 2', { bondCount: 2, peerBonded: true }, 2, false],
+  ['a re-pair, 2 before, PAIRED 3', { bondCount: 2, peerBonded: true }, 3, true],
+  ['the store full: the oldest replaced, PAIRED 4', { bondCount: 4 }, 4, false],
+  ['PAIRED did not come', { bondCount: 1 }, null, false],
+] as const)('the bond count after pairing: %s', async (_d, over, pairedCount, unexpected) => {
+  const r = rig({ pairedCount });
+  r.ble.addPeripheral({ id: 'N', info: info(0xe9, over) });
+  const { run } = await startWith(r, ['N']);
+  await r.until('confirm');
+  r.flow.answer(true);
+  await run;
+  expect(r.flow.phase()).toMatchObject({ kind: 'done', phones: pairedCount, unexpected });
+});
+
+test.each(['ios', 'android'] as const)('the setup link dropped before "Yes" (%s): reconnect, identify again, then bond on that connection', async (platform) => {
+  const r = rig({ platform });
+  if (platform === 'ios') r.ble.setState('on');
+  r.ble.addPeripheral({ id: 'D', info: info(0xea) });
+  const { run } = await startWith(r, ['D']);
+  await r.until('confirm');
+  r.ble.drop('D');
+  const mark = r.ble.calls.length;
+  r.flow.answer(true);
+  await run;
+  expect(r.flow.phase()).toMatchObject({ kind: 'done' });
+  expect(identifies(r, 'D')).toBe(2);
+  const after = r.ble.calls.slice(mark).filter((c) => c === 'connect:D' || /^(read|write):D:000[234]$/.test(c) || c === 'createBond:D');
+  expect(after.slice(0, 4)).toEqual(['connect:D', 'read:D:0002', 'write:D:0003', platform === 'ios' ? 'read:D:0004' : 'createBond:D']);
+});
+
+test('the setup link dropped before "Yes" and another phone took the claim meanwhile: "another phone is setting up", no bond', async () => {
+  const r = rig();
+  let busy = false;
+  r.ble.addPeripheral({
+    id: 'D',
+    get info() {
+      return info(0xeb, { setupBusy: busy });
+    },
+  } as never);
+  const { run } = await startWith(r, ['D']);
+  await r.until('confirm');
+  r.ble.drop('D');
+  busy = true;
+  r.flow.answer(true);
+  await run;
+  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'setup_busy' });
+  expect(r.ble.calls.some((c) => c.startsWith('createBond'))).toBe(false);
+  expect(r.ble.calls.at(-1)).toBe('disconnect:D');
+});
+
+test('cancel while waiting for a busy dashcam: cancelled, released, no IDENTIFY', async () => {
+  const r = rig();
+  r.ble.addPeripheral({ id: 'B', info: info(0xec, { setupBusy: true }) });
+  const { run } = await startWith(r, ['B']);
+  for (let i = 0; i < 400 && !r.sleeps.includes(BUSY_POLL_MS); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+  await r.flow.cancel();
+  await run;
+  await flush();
+  expect(r.flow.phase().kind).toBe('cancelled');
+  expect(identifies(r, 'B')).toBe(0);
+  expect(r.ble.calls).toContain('disconnect:B');
 });
