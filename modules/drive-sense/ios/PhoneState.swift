@@ -4,7 +4,7 @@
 // with a passcode it turns false about 10 s after the side-button press (the file-protection
 // grace period), so `locked` lags the real lock (`lockSignal: 'lagged'`). Without a passcode it
 // never turns false, so a locked phone looks unlocked (`lockSignal: 'unreliable'`). The phone-use
-// detector takes no lock or unlock evidence from either: an iPhone's pickups come from motion.
+// detector takes no lock or unlock evidence on any platform: pickups come from motion.
 import Foundation
 import LocalAuthentication
 import UIKit

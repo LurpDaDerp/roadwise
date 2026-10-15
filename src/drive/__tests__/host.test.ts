@@ -283,6 +283,19 @@ test('alerts go to the player as decisions (one speeding chime); a hands-free ca
   expect(await createEventsRepo(db).listByTrip(uuid(1))).toHaveLength(1);
 });
 
+test('an Android drive with navigation in front sounds no phone alert and stores no phone event', async () => {
+  const h = build();
+  await h.host.boot();
+  await h.host.start();
+  await feed(h, rows(120, { speedMps: 15, over: () => ({ locked: false, screenOn: true, appForeground: false }) }));
+  await feed(h, rows(3, { speedMps: 15, t0: T0 + 120_000 }));
+  const phone = (kind: string): boolean => kind === 'phone_pickup' || kind === 'phone_handling';
+  expect(h.player.delivered.filter((d) => phone(d.kind))).toEqual([]);
+  await h.host.stop({ endOpenTrip: true });
+  expect((await createEventsRepo(db).listByTrip(uuid(1))).filter((e) => phone(e.type))).toEqual([]);
+  expect(h.errors).toEqual([]);
+});
+
 test('an adopted drive (recovery after a restart) shows the driver’s units too', async () => {
   await createSettingsRepo(db).set('units', 'km');
   const session = createSession({ clientTripId: uuid(1), startedAt: T0 - 60_000 });

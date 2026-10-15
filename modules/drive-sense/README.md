@@ -225,11 +225,15 @@ m and m/s for GNSS, degrees clockwise from true north for `course`.
     and a locked phone is indistinguishable from an unlocked one in the background:
     `lockSignal: 'unreliable'` (`LAContext().canEvaluatePolicy(.deviceOwnerAuthentication)`
     false).
-  - Either way the phone-use detector takes no lock or unlock evidence on iOS
-    (`src/core/detectors/phoneUse.ts` counts an unlock only with a reliable, unlagged signal):
-    an iPhone's pickups and handling come from motion alone (`handlingScore`), so unlocking a
-    phone that stays still in its mount, or using it without moving it, is not detected. iOS has
-    no public lock or unlock signal that would do better.
+- **Phone use reads none of this.** On both platforms the phone-use detector
+  (`src/core/detectors/phoneUse.ts`) takes no lock, unlock or foreground-app evidence: pickups and
+  handling come from motion alone (`handlingScore`). A navigation app (or any app) in front of a
+  phone that stays still in its mount is never phone use. Using a phone without moving it much, in
+  its mount or held steadily in the hand, is not detected, and handling time counts only while the
+  phone moves. Neither platform offers a better signal: iOS has no public lock signal and no way for
+  an app to see which app is in front, and on Android the foreground app would need Usage access
+  (`PACKAGE_USAGE_STATS`), which the app does not ask for. `locked`, `screenOn`, `appForeground` and
+  `lockSignal` stay in the rows and `getState()` for the drive state and the diagnostics screen.
 
 ---
 

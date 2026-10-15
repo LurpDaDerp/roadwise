@@ -63,6 +63,9 @@ const unknown = (fromTs: number) => ({ fromTs, limitMps: null, source: 'unknown'
 const at = (i: number): number => T0 + i * 1000;
 const between = (i: number, a: number, b: number): boolean => i >= a && i < b;
 
+/** A navigation app (or any other app) in front: unlocked, screen on, RoadWise in the background. */
+const NAVIGATION_IN_FRONT = { locked: false, screenOn: true, appForeground: false } as const;
+
 export const TRACE_BUILDERS: Record<string, () => Trace> = {
   /** A clean commute at the limit: nothing fires. */
   'clean-commute': () => ({
@@ -268,23 +271,38 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** Unlocked with the screen on in another app, phone still in its mount, lock signal reliable: a pickup. */
-  'phone-unlocked-other-app': () => ({
-    name: 'phone-unlocked-other-app',
+  /**
+   * A navigation app in front the whole drive: unlocked, screen on, RoadWise in the background, the
+   * phone steady in its mount with road shake, potholes, a GPS gap and a stop: no phone use.
+   */
+  'phone-navigation-in-front': () => ({
+    name: 'phone-navigation-in-front',
     lockSignal: 'reliable',
-    rows: drive(200, (i) => ({ locked: !between(i, 100, 110), screenOn: between(i, 100, 110), appForeground: !between(i, 100, 110) })),
+    rows: drive(300, (i) => {
+      const pothole = between(i, 60, 62) || between(i, 90, 92) || between(i, 150, 152);
+      return {
+        ...NAVIGATION_IN_FRONT,
+        speedMph: between(i, 200, 231) ? 0 : 35,
+        hAcc: between(i, 120, 125) ? 40 : 5,
+        handlingScore: pothole ? 0.7 : i % 7 === 0 ? 0.3 : 0.1,
+        gravityStability: pothole ? 0.6 : 0.93,
+      };
+    }),
     limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), durationMin: 9, durationMax: 11 }],
+    expected: [{ type: 'phone_pickup', startsNear: at(40), absent: true }],
+    noEvents: true,
   }),
 
-  /** The same rows with a lagged lock signal (iOS): an unlock alone is not believed. */
-  'phone-unlocked-lagged-lock': () => ({
-    name: 'phone-unlocked-lagged-lock',
-    lockSignal: 'lagged',
-    rows: drive(200, (i) => ({ locked: !between(i, 100, 110), screenOn: between(i, 100, 110), appForeground: !between(i, 100, 110) })),
+  /** The phone lifted and handled for 10 s with a navigation app in front: a pickup. */
+  'phone-handled-over-navigation': () => ({
+    name: 'phone-handled-over-navigation',
+    rows: drive(200, (i) => ({
+      ...NAVIGATION_IN_FRONT,
+      handlingScore: between(i, 100, 110) ? 0.9 : 0,
+      gravityStability: between(i, 100, 110) ? 0.6 : 0.99,
+    })),
     limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
-    noEvents: true,
+    expected: [{ type: 'phone_pickup', startsNear: at(100), durationMin: 9, durationMax: 11 }],
   }),
 
   /** The limit is unknown for a stretch: speed there is not judged. */

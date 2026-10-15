@@ -1,13 +1,16 @@
 // Phone pickup and phone handling (product spec v3 event table, "Rules against false positives").
 //
-// A use row is the phone being handled (`handlingScore` ≥ 0.6) or, where the lock signal can be
-// believed and is not lagged, unlocked with the screen on and RoadWise in the background. Three
-// consecutive use rows make a pickup — so a tap of under 3 s on a mounted, stable phone never
-// counts — when the car is moving above 5 mph, or stopped mid-drive after having moved
+// A use row is the phone being handled (`handlingScore` ≥ 0.6), on iPhone and Android alike. Which
+// app is in front, and whether the phone is unlocked, are not evidence: a navigation app (or any
+// app) on a phone that stays still in its mount is never phone use, and a phone held still is not
+// either. Three consecutive use rows make a pickup — so a tap of under 3 s on a mounted, stable
+// phone never counts — when the car is moving above 5 mph, or stopped mid-drive after having moved
 // (`stoppedInTraffic`, half the penalty). A pickup before the car has ever moved is parking-lot
 // phone use, not a pickup. The episode continues while use rows persist and closes after two quiet
-// rows; handling past 15 s adds one `phone_handling` event (moderate ≤ 30 s, severe beyond).
-// A hands-free call suppresses everything (CarPlay / Android Auto are not detectable; documented).
+// rows, so handling time counts only while the phone moves; handling past 15 s adds one
+// `phone_handling` event (moderate ≤ 30 s, severe beyond). A call suppresses everything (iOS
+// reports every call and cannot tell hands-free from handheld; Android has no call signal during a
+// drive, and a hands-free call there involves no handling).
 import { PHONE_MIN_MPH, type Tier } from '@scoring';
 
 import type { DetectedEvent, Detector, OpenEpisode } from '../engine/types';
@@ -84,9 +87,7 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
     push(row, _limit, ctx) {
       const speedMph = knownSpeedMph(row);
       if (speedMph !== null && speedMph > PHONE_MIN_MPH) moved = true;
-      const unlockedElsewhere = ctx.lockReliable && !ctx.lockLagged && !row.locked && row.screenOn && !row.appForeground;
-      const useRow =
-        rowEligible(row, ctx) && !ctx.callActive && speedMph !== null && (row.handlingScore >= HANDLING_MIN_SCORE || unlockedElsewhere);
+      const useRow = rowEligible(row, ctx) && !ctx.callActive && speedMph !== null && row.handlingScore >= HANDLING_MIN_SCORE;
 
       if (useRow) {
         if (ep === null) {
