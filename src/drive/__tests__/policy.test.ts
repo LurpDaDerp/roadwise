@@ -16,10 +16,9 @@ test('a start is refused at or above 3 mph; an unknown speed lets it through', (
   expect(isMoving(1.35)).toBe(true);
 });
 
-test('the detector context follows the lock signal and the call state', () => {
-  expect(detectorContext('reliable', false)).toEqual({ callActive: false, lockReliable: true, lockLagged: false });
-  expect(detectorContext('lagged', true)).toEqual({ callActive: true, lockReliable: true, lockLagged: true });
-  expect(detectorContext('unreliable', false).lockReliable).toBe(false);
+test('the detector context follows the call state', () => {
+  expect(detectorContext(false)).toEqual({ callActive: false });
+  expect(detectorContext(true)).toEqual({ callActive: true });
 });
 
 test('only a confident walk or run (not an exit) is a walking report', () => {

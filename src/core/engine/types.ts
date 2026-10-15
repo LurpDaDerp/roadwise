@@ -63,13 +63,6 @@ export interface DetectorContext {
   tripStartedAt: number;
   /** A hands-free call is active (where the native signal exists): phone events are suppressed. */
   callActive: boolean;
-  /**
-   * The row's `locked` / `screenOn` can be believed (drive-sense `lockSignal !== 'unreliable'`): an
-   * iPhone without a passcode never reports locked, so an unlocked screen is no unlock evidence there.
-   */
-  lockReliable: boolean;
-  /** The lock signal arrives late (iOS with a passcode, ~10 s): unlock evidence is held back. */
-  lockLagged: boolean;
 }
 
 /** What the detector measured; shown on the summary and sent with the event (plan §3). */

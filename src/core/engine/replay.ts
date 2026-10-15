@@ -16,15 +16,14 @@ export interface RebuildDeps {
 
 /**
  * Replay the trip's samples through a fresh session and detector suite. Null when the trip has no
- * samples (nothing was recorded). The lock signal is not known after a relaunch, so unlock evidence
- * is not believed; handling still counts.
+ * samples (nothing was recorded).
  */
 export async function rebuildFromSamples(db: Db, trip: TripRow, deps: RebuildDeps): Promise<AdoptedTrip | null> {
   const stored = await createSamplesRepo(db).range(trip.client_trip_id, 0, Number.MAX_SAFE_INTEGER);
   if (stored.length === 0) return null;
   const session = createSession({ clientTripId: trip.client_trip_id, startedAt: trip.started_at });
   const detectors = deps.createDetectors();
-  const ctx: DetectorContext = { tripStartedAt: trip.started_at, callActive: false, lockReliable: false, lockLagged: false };
+  const ctx: DetectorContext = { tripStartedAt: trip.started_at, callActive: false };
   for (const sample of stored) {
     let row: FeatureRow;
     try {

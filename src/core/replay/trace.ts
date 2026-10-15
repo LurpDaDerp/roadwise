@@ -82,8 +82,6 @@ export const expectationSchema: z.ZodType<Expectation> = z.strictObject({
 
 export const traceSchema = z.strictObject({
   name: z.string().min(1),
-  /** The lock signal the rows were recorded under; absent means `reliable`. */
-  lockSignal: z.enum(['reliable', 'lagged', 'unreliable']).optional(),
   /** A hands-free call is active for the whole trace. */
   callActive: z.boolean().optional(),
   rows: z.array(featureRowSchema).min(1),

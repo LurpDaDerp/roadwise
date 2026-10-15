@@ -1,6 +1,5 @@
 {
   "name": "phone-navigation-in-front",
-  "lockSignal": "reliable",
   "limits": [
     {
       "fromTs": 1700000000000,

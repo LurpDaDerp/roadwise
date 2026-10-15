@@ -57,7 +57,7 @@ export const NO_LIMIT: LimitSample = limit(null, 'unknown', { matchConfidence: 0
 
 /** A context whose warm-up is long over (the drive started an hour before row 0). */
 export function ctx(overrides: Partial<DetectorContext> = {}): DetectorContext {
-  return { tripStartedAt: T0 - 3_600_000, callActive: false, lockReliable: true, lockLagged: false, ...overrides };
+  return { tripStartedAt: T0 - 3_600_000, callActive: false, ...overrides };
 }
 
 /** Deterministic ids: e1, e2, ... */

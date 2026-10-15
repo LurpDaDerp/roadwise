@@ -17,9 +17,9 @@ export const START_MAX_MPS = START_MAX_MPH * MPS_PER_MPH;
 /** A speed at or above the line (or unknown-but-fresh fix saying so) refuses a start. */
 export const isMoving = (speedMps: number | null): boolean => speedMps !== null && speedMps >= START_MAX_MPS;
 
-/** The per-row detector context from the native lock signal and the call state. */
-export function detectorContext(lockSignal: 'reliable' | 'lagged' | 'unreliable', callActive: boolean): Omit<DetectorContext, 'tripStartedAt'> {
-  return { callActive, lockReliable: lockSignal !== 'unreliable', lockLagged: lockSignal === 'lagged' };
+/** The per-row detector context from the call state. */
+export function detectorContext(callActive: boolean): Omit<DetectorContext, 'tripStartedAt'> {
+  return { callActive };
 }
 
 /** An OS motion update that says the driver is on foot (a confident walk or run, never an EXIT). */

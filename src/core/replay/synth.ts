@@ -277,7 +277,6 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
    */
   'phone-navigation-in-front': () => ({
     name: 'phone-navigation-in-front',
-    lockSignal: 'reliable',
     rows: drive(300, (i) => {
       const pothole = between(i, 60, 62) || between(i, 90, 92) || between(i, 150, 152);
       return {

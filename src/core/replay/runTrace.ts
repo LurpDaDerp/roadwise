@@ -58,12 +58,7 @@ function checkExpectation(exp: Expectation, events: readonly DetectedEvent[], ba
 export function runTrace(trace: Trace): TraceResult {
   const suite = createDetectors(counterIds());
   const base = trace.rows[0]?.ts ?? 0;
-  const ctx: DetectorContext = {
-    tripStartedAt: base,
-    callActive: trace.callActive === true,
-    lockReliable: trace.lockSignal !== 'unreliable',
-    lockLagged: trace.lockSignal === 'lagged',
-  };
+  const ctx: DetectorContext = { tripStartedAt: base, callActive: trace.callActive === true };
   const events: DetectedEvent[] = [];
   for (const row of trace.rows) events.push(...suite.push(row, limitAt(trace.limits, row.ts), ctx));
   events.push(...suite.flush());

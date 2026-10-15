@@ -25,7 +25,7 @@ function harness(over: Partial<EngineDeps> = {}): Harness {
     newId: () => `id${(n += 1)}`,
     limits: { lookup: () => limit(mph(35)), prefetch: () => {} },
     createDetectors: () => createDetectors(() => `e${(n += 1)}`),
-    ctx: () => ({ callActive: false, lockReliable: true, lockLagged: false }),
+    ctx: () => ({ callActive: false }),
     onAlert: (a) => h.alerts.push(a),
     onCheckpoint: async (s) => {
       if (h.checkpointFails > 0) {

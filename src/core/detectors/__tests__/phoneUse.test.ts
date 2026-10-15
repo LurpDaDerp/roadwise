@@ -49,11 +49,9 @@ describe('phone pickup and handling (spec event table, "Rules against false posi
     expect(drive(createPhoneUseDetector(counterIds()), poor).all).toEqual([]);
   });
 
-  test('an unlocked screen with another app in front (navigation) is not phone use, whatever the lock signal', () => {
+  test('an unlocked screen with another app in front (navigation) is not phone use', () => {
     const rows = seq([10, { speed: mph(35) }], [120, { speed: mph(35), ...navigation }], [10, { speed: mph(35) }]);
     expect(drive(createPhoneUseDetector(counterIds()), rows).all).toEqual([]);
-    expect(drive(createPhoneUseDetector(counterIds()), rows, undefined, ctx({ lockLagged: true })).all).toEqual([]);
-    expect(drive(createPhoneUseDetector(counterIds()), rows, undefined, ctx({ lockReliable: false })).all).toEqual([]);
   });
 
   test('a pothole under navigation is not a pickup: 2-row jolts with 2 quiet rows between them never reach 3', () => {

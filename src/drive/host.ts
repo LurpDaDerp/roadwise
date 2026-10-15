@@ -174,7 +174,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   // --- host-owned state ---------------------------------------------------------------------------
   let booted = false;
   let captureOn = false;
-  let lockSignal: 'reliable' | 'lagged' | 'unreliable' = 'unreliable';
   let callActive = false;
   let screenLocked = false;
   let lastFinalized: LastFinalized = null;
@@ -234,7 +233,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       },
     },
     createDetectors: () => createDetectors(newId),
-    ctx: () => detectorContext(lockSignal, callActive),
+    ctx: () => detectorContext(callActive),
     onAlert(alert: AlertEvent) {
       const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
       // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.
@@ -498,7 +497,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       await run(async () => {
         try {
           const state = await source.getState();
-          lockSignal = state.lockSignal;
           captureOn = state.capturing;
         } catch (e) {
           report(e, 'getState');
@@ -542,7 +540,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         }
         try {
           const state = await source.getState();
-          lockSignal = state.lockSignal;
           captureOn = state.capturing;
         } catch (e) {
           report(e, 'getState');
