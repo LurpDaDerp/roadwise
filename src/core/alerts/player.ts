@@ -37,6 +37,12 @@
 // remaining steps still run, and the session is still released. Each step is bounded by
 // `STEP_TIMEOUT_MS`, so a port that never settles cannot wedge the queue. No timer exists while
 // nothing is playing.
+//
+// Background: the bound is a pumped timer (`src/lib/timers.ts`). With the app in the Android
+// background JS timers are paused, so the next drive row or DashPal frame releases a step that
+// overran instead; nothing else in the queue waits on a JS timer.
+import { processTimers, type Timers } from "@/lib/timers";
+
 import type {
   AlertDecision,
   AlertLevel,
@@ -107,6 +113,8 @@ export interface AlertPlayerDeps {
    * failure is cleared (the mark is not sticky for the whole drive).
    */
   onAvailable?(): void;
+  /** The step bound's timers. Default: the process's pumped timers. */
+  timers?: Timers;
 }
 
 export interface AlertPlayer {
@@ -204,6 +212,7 @@ function isLevel(level: unknown): level is AlertLevel {
 
 export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
   const { audio, voice, haptics } = deps;
+  const timers = deps.timers ?? processTimers;
   let queue: Promise<void> = Promise.resolve();
   let current: Run | null = null;
   /** Items enqueued whose task has not yet finished. */
@@ -253,9 +262,9 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
    * stopped, or an activation that fell back to the audible playback session, is not a failure.
    */
   async function bounded(fn: () => Promise<void>, run?: Run): Promise<boolean> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: unknown;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
+      timer = timers.setTimeout(
         () => reject(new Error("alert player: step timed out")),
         STEP_TIMEOUT_MS,
       );
@@ -275,7 +284,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
       report(err);
       return isFellBack(err);
     } finally {
-      clearTimeout(timer);
+      timers.clearTimeout(timer);
     }
   }
 

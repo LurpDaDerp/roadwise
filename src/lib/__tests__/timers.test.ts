@@ -1,38 +1,6 @@
 // Pumped timers: a timer fires from its JS timer or from a pump once due, whichever is first, once.
+import { createPausableTimerBase as pausableBase } from '../__fixtures__/pausableTimers';
 import { createPumpedTimers } from '../timers';
-
-/** A JS timer base that can be paused, as Android pauses them with the app in the background. */
-function pausableBase() {
-  let t = 0;
-  let paused = false;
-  const armed = new Map<number, { at: number; fn: () => void }>();
-  let id = 0;
-  return {
-    now: () => t,
-    setTimeout: (fn: () => void, ms: number) => {
-      id += 1;
-      armed.set(id, { at: t + ms, fn });
-      return id;
-    },
-    clearTimeout: (h: unknown) => {
-      armed.delete(h as number);
-    },
-    pause(on: boolean) {
-      paused = on;
-    },
-    advance(ms: number) {
-      t += ms;
-      if (paused) return;
-      for (const [k, a] of [...armed]) {
-        if (a.at <= t) {
-          armed.delete(k);
-          a.fn();
-        }
-      }
-    },
-    armed: () => armed.size,
-  };
-}
 
 describe('pumped timers', () => {
   it('fire from the JS timer as usual when timers run, and a pump then finds nothing', () => {

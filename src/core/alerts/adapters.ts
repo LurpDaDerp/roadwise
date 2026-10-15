@@ -17,6 +17,11 @@
 // amplitude API, and Android's default amplitude is already the strongest the driver has chosen.
 // iOS reads a pattern as [delay, gap, gap, …] with a fixed buzz at the end of each entry; the
 // port waits the pattern's length before resolving, so the player's queue never stacks pulses.
+// Android in the background (`timersPaused`): JS timers are paused there, and the native waveform
+// needs none, so the port resolves as soon as the pattern is handed to the vibrator; a later
+// alert's pattern may then replace the tail of this one. Every other wait here (the tone's
+// fallback, the deactivate retry) is a pumped timer (`src/lib/timers.ts`), released by the next
+// drive row or DashPal frame when JS timers are paused.
 //
 // To check on a real device (both platforms, phone in a pocket, screen locked, music playing):
 // - every level vibrates, L1 included, and 1 → 4 feel clearly stronger in that order;
@@ -59,6 +64,8 @@
 //   while the app is idle with no drive open (design §3.5).
 import type { AudioMode, AudioPlayer as ExpoAudioPlayer } from "expo-audio";
 import { Platform, Vibration } from "react-native";
+
+import { processTimers, type Timers } from "@/lib/timers";
 
 import type {
   AlertPlayerDeps,
@@ -186,12 +193,31 @@ function toneSource(level: AlertLevel, tone?: AlertTone): number {
   }
 }
 
-const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
+export interface ExpoAlertPortOptions {
+  /** The tone fallback's and the deactivate retry's timers. Default: the process's pumped timers. */
+  timers?: Timers;
+  /**
+   * JS timers do not fire now (Android with the app in the background). Read per pattern; true
+   * makes the Android haptic resolve once the pattern is handed over. Default: never.
+   */
+  timersPaused?: () => boolean;
+}
 
-export async function createExpoAlertPorts(): Promise<
+export async function createExpoAlertPorts(opts: ExpoAlertPortOptions = {}): Promise<
   Pick<AlertPlayerDeps, "audio" | "voice" | "haptics">
 > {
+  const timers = opts.timers ?? processTimers;
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => {
+      timers.setTimeout(resolve, ms);
+    });
+  const timersPaused = (): boolean => {
+    try {
+      return opts.timersPaused?.() ?? false;
+    } catch {
+      return false;
+    }
+  };
   // Deferred requires rather than `import()`: Metro inlines them just the same, and Jest's CommonJS
   // runtime has no dynamic-import support without `--experimental-vm-modules`.
   await Promise.resolve();
@@ -247,7 +273,7 @@ export async function createExpoAlertPorts(): Promise<
         const silentDropAllowed = Platform.OS === "android" && level === 1 && lastKind === "respectSilent";
         const release = () => {
           settled = true;
-          clearTimeout(timer);
+          timers.clearTimeout(timer);
           subscription.remove();
           if (tone?.player === player) tone = null;
           try {
@@ -261,7 +287,7 @@ export async function createExpoAlertPorts(): Promise<
           release();
           resolve();
         };
-        const timer = setTimeout(() => {
+        const timer = timers.setTimeout(() => {
           if (heard || silentDropAllowed) {
             finish();
             return;
@@ -333,6 +359,9 @@ export async function createExpoAlertPorts(): Promise<
       // outright, on Android the vibrator restarts either way.
       Vibration.cancel();
       Vibration.vibrate([...(os === "ios" ? IOS_VIBRATION : ANDROID_VIBRATION)[intensity]]);
+      // The Android waveform runs natively: with JS timers paused, waiting it out would hold the
+      // player's queue until the next row.
+      if (os === "android" && timersPaused()) return;
       await sleep(vibrationMs(intensity, os));
     },
   };

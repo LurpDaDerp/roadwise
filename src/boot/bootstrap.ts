@@ -306,7 +306,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       dashcam?.playerUnavailable();
     };
     try {
-      player = await (deps.createPlayer ?? defaultPlayer(onError, db))(inputs);
+      player = await (deps.createPlayer ?? defaultPlayer(onError, db, appState))(inputs);
     } catch (error) {
       onError(new Error(`alert sound could not be loaded (${error instanceof Error ? error.name : typeof error})`), 'alert ports');
       alertsAvailable = false;
@@ -552,10 +552,20 @@ function defaultDashcam(args: { db: Db; player: AlertPlayer; host: () => DriveHo
   });
 }
 
-/** The alert player over the device ports. A port that will not load rejects; the drive then records without sound. */
-function defaultPlayer(onError: (error: unknown, context: string) => void, db: Db): (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer> {
+/**
+ * The alert player over the device ports. A port that will not load rejects; the drive then records
+ * without sound. Android pauses JS timers while the app is not active: the haptic port then does not
+ * wait its pattern out (`src/lib/timers.ts` covers every other wait).
+ */
+function defaultPlayer(
+  onError: (error: unknown, context: string) => void,
+  db: Db,
+  appState: { currentState?: string | null }
+): (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer> {
   return async (inputs) => {
-    const ports = await createExpoAlertPorts();
+    const ports = await createExpoAlertPorts({
+      timersPaused: () => Platform.OS === 'android' && appState.currentState !== 'active',
+    });
     const settings = createSettingsRepo(db);
     await Promise.all([loadVoicePref(settings), loadAlertStylePref(settings)]);
     return createAlertPlayer({
