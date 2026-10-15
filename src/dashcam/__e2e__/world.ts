@@ -131,6 +131,8 @@ export interface Phone {
   simConnected: boolean;
   /** the dashcam treats this phone's link as authorized (encrypted, bonded) */
   authorized: boolean;
+  /** Android removed the OS bond: the phone has no keys to encrypt with until a new bond */
+  osKeysLost: boolean;
   /** iOS suspended the app: its timers stop and notifications wait */
   suspended: boolean;
   /** frames held while suspended */
@@ -529,6 +531,7 @@ export class World {
       errors: [] as string[],
       simConnected: false,
       authorized: false,
+      osKeysLost: false,
       suspended: false,
       held: [] as number[][],
       blackholed: false,
@@ -664,8 +667,9 @@ export class World {
     const origConnect = ble.connect.bind(ble);
     ble.connect = (id, opts) =>
       origConnect(id, opts).then(() => {
-        // The link is up at the dashcam: a bonded phone encrypts at once (authorized).
-        const bonded = this.bonds.has(phone.name);
+        // The link is up at the dashcam: a bonded phone that still has its keys encrypts at once
+        // (authorized).
+        const bonded = this.bonds.has(phone.name) && !phone.osKeysLost;
         phone.simConnected = true;
         phone.authorized = bonded;
         this.enqueue(`C ${conn} ${bonded ? 1 : 0} ${bonded ? 1 : 0}`);
@@ -710,14 +714,19 @@ export class World {
 
     const origRemoveBond = ble.removeBond.bind(ble);
     ble.removeBond = async (id) => {
-      // Android: removing the bond of a connected device drops the link (and the claim with it).
+      // Android: removing the bond of a connected device drops the link (and the claim with it), and
+      // the phone has no keys for the dashcam until a new bond.
       if (phone.simConnected) this.endLink(phone, true);
+      phone.osKeysLost = true;
       return origRemoveBond(id);
     };
 
     const origCreateBond = ble.createBond.bind(ble);
     ble.createBond = async (id) => {
+      // Already bonded and encrypted with keys the dashcam holds: ble-manager resolves at once.
+      if (phone.simConnected && phone.authorized) return origCreateBond(id);
       if (!phone.simConnected || !(await this.bond(phone))) throw new Error('Bond failed (the dashcam removed it)');
+      phone.osKeysLost = false;
       return origCreateBond(id);
     };
 

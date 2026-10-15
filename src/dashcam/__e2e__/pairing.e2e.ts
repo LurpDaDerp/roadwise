@@ -340,7 +340,7 @@ describeSim('DashPal pairing (firmware simulator ↔ app setup flow)', () => {
       expect(w.lines('TERM')).toEqual([]);
     }));
 
-  test('row 21 then setup again on Android with the old OS bond: it is removed before connecting, so identify and the new bond share one connection and the bond is accepted', () =>
+  test('row 21 then setup again on Android with the old OS bond: INFO says the dashcam lost it, so it is removed and the phone connects again before the identify; identify and the new bond share one connection and the bond is accepted', () =>
     scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
       const a = await linkedA(w, { platform: 'android' });
       const per = a.ble.peripheral(a.peripheralId)!;
@@ -355,10 +355,31 @@ describeSim('DashPal pairing (firmware simulator ↔ app setup flow)', () => {
       expect(end).toMatchObject({ kind: 'done', phones: 1, unexpected: false });
       const id = a.peripheralId;
       const steps = a.ble.calls.slice(calls).filter((c) => /Bond|^connect|0003/.test(c));
-      expect(steps.slice(0, 5)).toEqual(['getBondedPeripherals', `removeBond:${id}`, `connect:${id}`, `write:${id}:0003`, `createBond:${id}`]);
+      expect(steps.slice(0, 6)).toEqual([`connect:${id}`, 'getBondedPeripherals', `removeBond:${id}`, `connect:${id}`, `write:${id}:0003`, `createBond:${id}`]);
       expect(w.lines('TERM', since)).toEqual([]);
       expect(w.lines('PLAY once 6', since)).toHaveLength(1);
       await w.connected(a);
       expect(a.rt.state().link).toMatchObject({ lifecycle: 'connected', synced: true });
+    }));
+
+  test.each([false, true])('Android setup run on the paired DashPal in pairing mode, its pairing still working (answer Yes: %s): the OS bond is kept, so the pairing still works afterwards', (yes) =>
+    scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
+      const a = await linkedA(w, { platform: 'android' });
+      const per = a.ble.peripheral(a.peripheralId)!;
+      per.osBonded = true; // the OS holds the bond from the first pairing
+      a.ble.addPeripheral(per);
+      await w.dashcam('PAIRWIN 1'); // 5 presses
+      const calls = a.ble.calls.length;
+      const since = w.W;
+      const { end } = await pair(w, a, yes);
+      expect(end).toMatchObject(yes ? { kind: 'done', phones: 1, unexpected: false } : { kind: 'none_found' });
+      expect(a.ble.calls.slice(calls).filter((c) => /Bond/.test(c))).toEqual(yes ? [`createBond:${a.peripheralId}`] : []);
+      // The setup connection was encrypted with the bond the dashcam holds: it beeped, nothing new was bonded.
+      expect(w.gatt.filter((g) => g.at >= since).map((g) => g.what)).toEqual(['identify']);
+      expect(w.log.filter((l) => l.at >= since && l.dir === 'in' && l.line.startsWith('BOND'))).toEqual([]);
+      expect(w.lines('TERM', since)).toEqual([]);
+      await w.connected(a);
+      expect(a.rt.state().link).toMatchObject({ lifecycle: 'connected', synced: true, paired: { peripheralId: a.peripheralId } });
+      expect(a.errors).toEqual([]);
     }));
 });
