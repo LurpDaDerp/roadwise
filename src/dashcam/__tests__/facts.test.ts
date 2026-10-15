@@ -1,6 +1,7 @@
 /** @jest-environment node */
 import { z } from 'zod';
 
+import { dashcamEvents } from '@/core/engine/finalize';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 
@@ -296,4 +297,25 @@ test('no face: an audible FACE_LOST (ev 5) alone is never a candidate; a slump o
   expect((await loadDashcamTripFacts(db, trip)).events).toEqual([{ id: slump, kind: 'eyes_off', startedAt: b - 4000, durationS: 9, speedMph: expect.closeTo(45, 6) }]);
   const e = (id: string, ev: number, detail: number, start: number, fired: number): EpisodeEvent => ({ id, ev, detail, startedAt: start, firedAt: fired });
   expect(episodes([e('f', 5, 0, 0, 4000)])).toEqual([]);
+});
+
+test('DashPal may alarm below 10 mph and those alarms cost no points: an audible SLEEP at 7.5 mph is stored, becomes a candidate and is dropped by finalize; an inaudible MICROSLEEP is never a candidate', async () => {
+  const a = T0 + 5 * 60_000;
+  await sample(a, 7.5 * MPH);
+  // At 12 km/h (7.5 mph) the dashcam sounds a 3 s closure (critical gate 10 km/h) but not the 1 s
+  // microsleep before it (warning gate: on from 20 km/h, off below 15 km/h).
+  const micro = await event({ seq: 0, ev: 0, firedAt: a - 2000, durS: 1, audible: false });
+  const sleep = await event({ seq: 1, ev: 1, firedAt: a, durS: 3, audible: true });
+  const { rows } = await db.execute('SELECT id, client_trip_id FROM dashcam_events ORDER BY seq');
+  expect(rows).toEqual([
+    { id: micro, client_trip_id: null },
+    { id: sleep, client_trip_id: null },
+  ]);
+
+  const f = await loadDashcamTripFacts(db, trip);
+  expect(f.events).toEqual([{ id: sleep, kind: 'drowsy', startedAt: a - 3000, durationS: 3, speedMph: expect.closeTo(7.5, 6) }]);
+  expect(f.events.some((c) => c.id === micro)).toBe(false);
+  expect(dashcamEvents(f.events, trip, [])).toEqual([]);
+  // The same SLEEP at 12 mph is scored: the drop is the 10 mph gate alone.
+  expect(dashcamEvents([{ ...f.events[0]!, speedMph: 12 }], trip, []).map((x) => [x.id, x.type])).toEqual([[sleep, 'drowsy']]);
 });
