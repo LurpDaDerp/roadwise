@@ -35,6 +35,8 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
   /// but only the check acts.
   var checking = false
   private var waking = false
+  /// Counts wakes, so a wake that iOS expired and that finishes late never clears a newer wake's flag.
+  private var wakeId = 0
   var clock: DispatchSourceTimer?
   /// The "Always" request in flight (TripReminderAccess.swift).
   var alwaysPending: ((String) -> Void)?
@@ -198,13 +200,16 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
     if !s.showing { TripReminderNotifier.remove() }
     // The back-off may just have turned it off: the wake stops with it.
     if s.enabled != s0.enabled { syncWake(s) }
+    wakeId &+= 1
+    let thisWake = wakeId
     waking = true
     // The wake's checks finish inside a background task (the session, if any, then keeps the app
-    // running through its own location updates). If iOS ends the task first, the next wake may run.
+    // running through its own location updates). If iOS ends the task first, the next wake may run;
+    // only the latest wake clears the flag.
     let task = ReminderBackgroundTask()
-    task.begin(onExpire: { self.waking = false })
+    task.begin(onExpire: { if self.wakeId == thisWake { self.waking = false } })
     let finish = {
-      self.waking = false
+      if self.wakeId == thisWake { self.waking = false }
       task.end()
     }
     TripReminderNotifier.authorized { notificationsOk in

@@ -447,9 +447,12 @@ describe('iOS forgot-to-start reminder: one post, a stored state never overwritt
     expect(code('TripReminderAccess.swift')).toMatch(/if s\.enabled != s0\.enabled \{ syncWake\(s\) \}/);
   });
 
-  it('a wake whose background task expires lets the next wake run; the session clock bounds a check in flight', () => {
+  it('a wake whose background task expires lets the next wake run, and its late finish leaves a newer wake alone; the session clock bounds a check in flight', () => {
     const r = code('TripReminder.swift');
-    expect(r).toMatch(/task\.begin\(onExpire: \{ self\.waking = false \}\)/);
+    expect(r).toMatch(/wakeId &\+= 1\s*let thisWake = wakeId\s*waking = true/);
+    expect(r).toMatch(/task\.begin\(onExpire: \{ if self\.wakeId == thisWake \{ self\.waking = false \} \}\)/);
+    expect(r).toMatch(/let finish = \{\s*if self\.wakeId == thisWake \{ self\.waking = false \}\s*task\.end\(\)/);
+    expect(r.match(/self\.waking = false/g)).toHaveLength(2);
     expect(r).toMatch(/beginBackgroundTask\(withName: "drivesense\.tripReminder"\) \{ \[weak self\] in\s*onExpire\(\)\s*self\?\.end\(\)/);
     const tick = /private func tick\(\) \{[\s\S]*?\n {2}\}/.exec(code('TripReminderSession.swift'))?.[0] ?? '';
     expect(tick.indexOf('IOS_SESSION_MAX_MS + TripReminderPolicy.TTL_MS')).toBeGreaterThan(-1);
