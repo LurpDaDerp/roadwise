@@ -100,16 +100,17 @@ describeSim('DashPal pairing (firmware simulator ↔ app setup flow)', () => {
       expect(p.rt.state().link.paired).toBeNull();
     }));
 
-  test('row 18: an encrypted-but-unbonded phone is disconnected at once, an unbonded one after 2 s; neither gets a frame or the lease; inside the window an unbonded link gets 30 s to bond', () =>
+  test('row 18: with both link slots taken (BLE_LINK_MAX_LINKS 2) a third phone is disconnected at once; an unbonded or encrypted-but-unbonded link with a free slot ends at the 2 s check; none gets a frame or the lease; inside the window an unbonded link gets 30 s to bond', () =>
     scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
       const a = await linkedA(w);
       const t0 = w.W;
       const STATE = '8101051e00009c04' + 'b979379e' + '00000000';
+      // A holds slot 1, unbonded conn 5 takes slot 2; conn 6 (encrypted, not bonded) finds no free slot.
       await w.dashcam('C 5 0 0', 'C 6 0 1', 'RX 5 86010700', 'RX 6 86010700', `RX 5 ${STATE}`, `RX 6 ${STATE}`, 'SND 1 2 0');
       // The legitimate phone A got the alert routed; the strangers got nothing at all.
       expect(w.txOf('ALERT', 1, t0).map((x) => x.f.route)).toEqual([1]);
       expect(w.rxOf('ALERT_ACK', 1, t0).map((x) => x.f.outcome)).toEqual([1]);
-      // Encrypted but not bonded: refused as soon as the security result says so. Unbonded: 2 s.
+      // The full link table ends conn 6 on connect (encryption plays no part); conn 5 waits for the 2 s check.
       expect(w.lines('TERM', t0).map((l) => [l.at - t0, l.line])).toEqual([[0, 'TERM 6 auth']]);
       await w.runTo(t0 + 1990);
       expect(w.lines('TERM 5', t0)).toEqual([]);
@@ -117,6 +118,16 @@ describeSim('DashPal pairing (firmware simulator ↔ app setup flow)', () => {
       expect(w.lines('TERM 5', t0).map((l) => [l.at - t0, l.line])).toEqual([[2000, 'TERM 5 auth']]);
       expect(w.tx(5)).toEqual([]);
       expect(w.tx(6)).toEqual([]);
+      expect(a.rt.state().link.lifecycle).toBe('connected');
+
+      // Slot 2 is free again: an encrypted-but-unbonded phone keeps it until the same 2 s check.
+      const t2 = w.W;
+      await w.dashcam('C 8 0 1', 'RX 8 86010700', `RX 8 ${STATE}`);
+      await w.runTo(t2 + 1990);
+      expect(w.lines('TERM 8', t2)).toEqual([]);
+      await w.runTo(t2 + 2010);
+      expect(w.lines('TERM 8', t2).map((l) => [l.at - t2, l.line])).toEqual([[2000, 'TERM 8 auth']]);
+      expect(w.tx(8)).toEqual([]);
       expect(a.rt.state().link.lifecycle).toBe('connected');
 
       await w.dashcam('SNDOFF', 'PAIRWIN 1');
