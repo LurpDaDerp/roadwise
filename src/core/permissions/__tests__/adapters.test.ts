@@ -291,6 +291,29 @@ describe('settings links', () => {
   });
 });
 
+describe('requestAlwaysForReminder — the forgot-to-start reminder only', () => {
+  it('iOS: the one Always request through drive-sense; Android: no location at all', async () => {
+    const ds = createFakeDriveSense({ platform: 'ios' });
+    ds.setTripReminderEnv({ location: 'whenInUse' });
+    const port: DriveSensePort = { ...withBattery(ds), requestReminderLocation: () => ds.requestReminderLocation() };
+    const ios = makeDeps('ios', { driveSense: port });
+    expect(await createPermissionsAdapter(ios.deps).requestAlwaysForReminder()).toBe('whenInUse');
+    expect(ds.calls).toEqual(['requestReminderLocation']);
+    expect(ios.calls).toEqual([]);
+    const android = makeDeps('android', { driveSense: port });
+    expect(await createPermissionsAdapter(android.deps).requestAlwaysForReminder()).toBe('notNeeded');
+    expect(ds.calls).toEqual(['requestReminderLocation']);
+  });
+
+  it('denied when it cannot be asked: no drive-sense, an older build, or a failed call', async () => {
+    const ds = createFakeDriveSense({ platform: 'ios' });
+    expect(await createPermissionsAdapter(makeDeps('ios', { driveSense: null }).deps).requestAlwaysForReminder()).toBe('denied');
+    expect(await createPermissionsAdapter(makeDeps('ios', { driveSense: withBattery(ds) }).deps).requestAlwaysForReminder()).toBe('denied');
+    const failing: DriveSensePort = { ...withBattery(ds), requestReminderLocation: () => Promise.reject(new Error('x')) };
+    expect(await createPermissionsAdapter(makeDeps('ios', { driveSense: failing }).deps).requestAlwaysForReminder()).toBe('denied');
+  });
+});
+
 describe('readiness', () => {
   it('allowed from the drive-sense location (While Using is enough) and motion', async () => {
     const ds = createFakeDriveSense({ platform: 'android' });

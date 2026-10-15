@@ -43,7 +43,14 @@ export interface FakeAdapter extends PermissionsAdapter {
 
 export function fakeAdapter(
   initial: PermissionSnapshot = snap(),
-  answers: { foreground?: LocationAccess; motion?: Grant | null; readiness?: Readiness; bluetooth?: BluetoothAccess; bluetoothNow?: BluetoothAccess } = {}
+  answers: {
+    foreground?: LocationAccess;
+    motion?: Grant | null;
+    readiness?: Readiness;
+    bluetooth?: BluetoothAccess;
+    bluetoothNow?: BluetoothAccess;
+    always?: 'always' | 'whenInUse' | 'denied';
+  } = {}
 ): FakeAdapter {
   const a: FakeAdapter = {
     log: [],
@@ -53,6 +60,13 @@ export function fakeAdapter(
     bluetooth: jest.fn(async () => {
       a.log.push('bluetooth');
       return a.bt;
+    }),
+    requestAlwaysForReminder: jest.fn(async () => {
+      a.log.push('requestAlwaysForReminder');
+      if (a.current.platform === 'android') return 'notNeeded' as const;
+      const next = answers.always ?? 'always';
+      if (next === 'always') a.current = { ...a.current, location: 'always' };
+      return next;
     }),
     requestBluetooth: jest.fn(async () => {
       a.log.push('requestBluetooth');

@@ -16,10 +16,10 @@ function ctx(over: Partial<FlowContext> = {}): FlowContext {
   return { platform: 'ios', hasUsername: false, ...over };
 }
 
-const AFTER_USERNAME = ['license', 'how', 'motion', 'location', 'notifications', 'dashcam', 'clan'];
+const AFTER_USERNAME = ['license', 'how', 'motion', 'location', 'notifications', 'reminder', 'dashcam', 'clan'];
 
 describe('stepsFor', () => {
-  it('is the v3 order: username → license → how → motion → location → notifications → clan', () => {
+  it('is the v3 order: username → license → how → motion → location → notifications → reminder → DashPal → clan', () => {
     expect(STEP_IDS).toEqual(['username', ...AFTER_USERNAME]);
     expect(stepsFor(ctx())).toEqual(['username', ...AFTER_USERNAME]);
     expect(stepsFor(ctx({ platform: 'android' }))).toEqual(['username', ...AFTER_USERNAME]);
@@ -35,7 +35,8 @@ describe('navigation', () => {
   it('moves forward in canonical order, even from a step the context just dropped', () => {
     expect(nextStep(ctx(), 'username')).toBe('license');
     expect(nextStep(ctx({ hasUsername: true }), 'username')).toBe('license');
-    expect(nextStep(ctx(), 'notifications')).toBe('dashcam');
+    expect(nextStep(ctx(), 'notifications')).toBe('reminder');
+    expect(nextStep(ctx(), 'reminder')).toBe('dashcam');
     expect(nextStep(ctx(), 'dashcam')).toBe('clan');
     expect(nextStep(ctx(), 'clan')).toBeNull();
   });
@@ -46,7 +47,8 @@ describe('navigation', () => {
     expect(previousStep(ctx({ hasUsername: true }), 'license')).toBeNull();
     expect(previousStep(ctx(), 'motion')).toBe('how');
     expect(previousStep(ctx(), 'clan')).toBe('dashcam');
-    expect(previousStep(ctx(), 'dashcam')).toBe('notifications');
+    expect(previousStep(ctx(), 'dashcam')).toBe('reminder');
+    expect(previousStep(ctx(), 'reminder')).toBe('notifications');
   });
 
   it('resumes at the username until it is claimed, then at the saved step', () => {
@@ -62,7 +64,7 @@ describe('the step count', () => {
   it('keeps steps passed this session, so the count never runs backwards', () => {
     const plan = sessionPlan(ctx({ hasUsername: true }), 'license', ['username']);
     expect(plan).toEqual(['username', ...AFTER_USERNAME]);
-    expect(stepPosition(plan, 'license')).toEqual({ index: 2, total: 8 });
+    expect(stepPosition(plan, 'license')).toEqual({ index: 2, total: 9 });
   });
 
   it('an unknown step counts as the first', () => {

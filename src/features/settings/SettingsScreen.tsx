@@ -8,6 +8,7 @@ import { useDashcamState } from '@/dashcam/ui/useDashcam';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { useMySummary, type HeatmapVisibility, type LicenseStage } from '@/data/server/summary';
+import { ReminderRow, useTripReminder, type ReminderDeps } from '@/features/reminder';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, useTheme } from '@/ui';
 
 import { LICENSE_SHORT, settingsCopy, VISIBILITY_SEGMENTS } from './copy';
@@ -60,7 +61,7 @@ function SegmentRow<V extends string>({
  * `/settings`: everything a driver tunes, grouped by what it touches — the drive, privacy, the
  * public profile, notifications. Every control saves as it changes; there is no Save button.
  */
-export function SettingsScreen() {
+export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps } }) {
   const router = useRouter();
   const th = useTheme();
   const db = useDb();
@@ -68,6 +69,7 @@ export function SettingsScreen() {
   const summary = useMySummary();
   const profile = summary.data?.profile;
   const edit = useProfileEdit();
+  const reminder = useTripReminder(deps.reminder);
 
   const [units, setUnits] = useState<Units | null>(null);
   const [zoneCount, setZoneCount] = useState(0);
@@ -119,6 +121,7 @@ export function SettingsScreen() {
       <Section title={copy.driving}>
         <LinkRow icon="videocam-outline" title={copy.dashcam.title} subtitle={dashcam.label} onPress={() => router.push(SETTINGS_HREFS.dashcam)} testID="settings-dashcam" />
         <LinkRow icon="volume-high-outline" title={copy.alerts.title} subtitle={copy.alerts.subtitle} onPress={() => router.push(SETTINGS_HREFS.alerts)} testID="settings-alerts" />
+        {reminder.status ? <ReminderRow status={reminder.status} onStatus={reminder.setStatus} deps={deps.reminder} /> : null}
         <LinkRow icon="shield-checkmark-outline" title={copy.permissions.title} subtitle={copy.permissions.subtitle} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-permissions" />
       </Section>
 

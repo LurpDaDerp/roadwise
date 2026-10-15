@@ -1,11 +1,14 @@
 /**
- * The settings screens: the root (units, license, state), alerts (voice off by default,
+ * The settings screens: the root (the forgot-to-start reminder, units, license, state), alerts (voice off by default,
  * style, test), account (export, delete, sign out) and delete account. Device settings are an
  * in-memory table; the server, session and drive state are stand-ins.
  */
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
-import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
+import { createFakeDriveSense } from '@drive-sense';
+
+import { answerRpc, appWorld, clearQueryClients, fakeAdapter, fakeAppState, snap, tap } from '@/features/permissions/__fixtures__/harness';
+import { reminderCopy } from '@/features/reminder';
 
 import { alertStyleCopy } from '../alerts/copy';
 import { ALERT_STYLE_PREF_KEY, alertStylePref, resetAlertStylePrefForTests } from '../alerts/stylePref';
@@ -77,6 +80,68 @@ beforeEach(() => {
 afterEach(() => clearQueryClients());
 
 describe('Settings', () => {
+  describe('the forgot-to-start reminder', () => {
+    const world = (platform: 'ios' | 'android', adapter = fakeAdapter(snap({ platform }))) => {
+      const native = createFakeDriveSense({ platform });
+      const appState = fakeAppState();
+      return { native, adapter, appState, deps: { reminder: { native, adapter, platform, appState } } };
+    };
+
+    it('is off by default; turning it on asks for what it needs (iOS: Always) and shows what is still missing', async () => {
+      const r = world('ios', fakeAdapter(snap({ platform: 'ios', location: 'foreground' }), { always: 'whenInUse' }));
+      const w = await appWorld();
+      await w.render(<SettingsScreen deps={r.deps} />);
+      const toggle = await screen.findByTestId('settings-reminder');
+      expect(toggle.props.value).toBe(false);
+      expect(screen.getByText(reminderCopy.lines.off, { includeHiddenElements: true })).toBeOnTheScreen();
+      r.native.setTripReminderEnv({ missing: ['locationAlways'] });
+      await act(async () => {
+        fireEvent(toggle, 'valueChange', true);
+      });
+      await waitFor(() => expect(screen.getByTestId('settings-reminder').props.value).toBe(true));
+      expect(r.adapter.log).toContain('requestAlwaysForReminder');
+      expect(screen.getByText(reminderCopy.lines.needsAlways, { includeHiddenElements: true })).toBeOnTheScreen();
+      await tap('settings-reminder-openSettings');
+      expect(r.adapter.log).toContain('openAppSettings');
+      // The reminder never starts a drive.
+      expect(r.native.calls.filter((c) => c.startsWith('startCapture'))).toEqual([]);
+    });
+
+    it('Android, on: the honest line; turning it off forgets it', async () => {
+      const r = world('android');
+      await r.native.setTripReminder(true);
+      const w = await appWorld();
+      await w.render(<SettingsScreen deps={r.deps} />);
+      expect(await screen.findByText(reminderCopy.lines.onAndroid, { includeHiddenElements: true })).toBeOnTheScreen();
+      await act(async () => {
+        fireEvent(screen.getByTestId('settings-reminder'), 'valueChange', false);
+      });
+      await waitFor(() => expect(r.native.tripReminderOn).toBe(false));
+      expect(r.adapter.log).toEqual([]);
+    });
+
+    it('is read again when RoadWise comes back to the front', async () => {
+      const r = world('android');
+      const w = await appWorld();
+      await w.render(<SettingsScreen deps={r.deps} />);
+      await screen.findByTestId('settings-reminder');
+      r.native.setTripReminderEnv({ available: false });
+      await act(async () => {
+        r.appState.foreground();
+      });
+      expect(await screen.findByText(reminderCopy.lines.unavailable, { includeHiddenElements: true })).toBeOnTheScreen();
+      expect(screen.getByTestId('settings-reminder').props.disabled).toBe(true);
+    });
+
+    it('is not shown where the native module is missing', async () => {
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      await screen.findByTestId('settings-alerts');
+      await act(async () => {});
+      expect(screen.queryByTestId('settings-reminder')).toBeNull();
+    });
+  });
+
   it('units save to the server and to the phone’s mirror', async () => {
     let units = 'mi';
     answerRpc(mockRpc, {

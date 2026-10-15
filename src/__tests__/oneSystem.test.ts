@@ -4,13 +4,18 @@
  * (tests and fixtures excluded) is read with its comments stripped, and:
  *
  * - no file outside `src/core/permissions` names `requestForegroundPermissionsAsync`,
- *   `requestPermissionsAsync` or `requestMotionPermission`;
- * - no file at all names anything that detects or starts a drive on its own: background location
- *   (`requestLocationAlways`, `requestBackgroundPermissionsAsync`, `startLocationUpdatesAsync`),
- *   geofences and significant-location changes, background tasks (`TaskManager`, `defineTask`,
- *   `registerTaskAsync`, `BackgroundFetch`), the old auto-record switch (`setAutoDetect`) or the
- *   old forgot-to-start reminder (`setForgotToStartReminder`, `checkForgottenDrive`); and
- *   `package.json` carries no background-task package;
+ *   `requestPermissionsAsync`, `requestMotionPermission` or `requestReminderLocation`;
+ * - no file at all names anything that detects a trip or starts a drive on its own in JS:
+ *   background location (`requestLocationAlways`, `requestBackgroundPermissionsAsync`,
+ *   `startLocationUpdatesAsync`), geofences and significant-location changes, background tasks
+ *   (`TaskManager`, `defineTask`, `registerTaskAsync`, `BackgroundFetch`), the old auto-record switch
+ *   (`setAutoDetect`) or the old forgot-to-start reminder (`setForgotToStartReminder`,
+ *   `checkForgottenDrive`); and `package.json` carries no background-task package. The optional
+ *   forgot-to-start reminder lives in native code (drive-sense) and only notifies; JS only switches
+ *   it and reads its status, from `src/features/reminder` alone;
+ * - the reminder's own files can reach nothing that starts a drive, Home reads no link parameter
+ *   (a notification or link opens Home and starts nothing), and no JS replaces the native
+ *   notification categories (the reminder's "Not driving" action lives there);
  * - only `src/features/notifications` names `setNotificationHandler` or
  *   `addNotificationResponseReceivedListener`;
  * - M3's interim detection screen, its `/detection` route and the auto-record route are gone.
@@ -39,6 +44,8 @@ interface Rule {
   names: readonly string[];
   /** Repo-relative, forward-slash path prefixes where the names are allowed. */
   allowed: readonly string[];
+  /** When set, the rule applies only to files under these prefixes (else everywhere). */
+  scope?: readonly string[];
 }
 
 /** Names of automatic or background drive and trip detection; allowed nowhere. */
@@ -57,14 +64,49 @@ export const FORBIDDEN_DETECTION: readonly string[] = [
   'setForgotToStartReminder',
 ];
 
+/** The forgot-to-start reminder's own JS files. */
+export const REMINDER_FILES: readonly string[] = ['src/features/reminder/', 'src/features/onboarding/steps/ReminderStep.tsx'];
+
+/** What could start a drive from JS; none of it may appear in the reminder's files. */
+export const REMINDER_NEVER_STARTS: readonly string[] = ['startCapture', 'useStartDrive', 'useDriveControls', 'nativeDriveSource', 'StartDriveBar'];
+
+/** Modules the reminder's files may not import: the drive, the drive screens, Home. */
+export const REMINDER_FORBIDDEN_IMPORTS = /from\s+['"](@\/drive|@\/features\/drive|@\/features\/home)(\/[^'"]*)?['"]/;
+
 /** Packages that run JS in the background with no drive open; none may be a dependency. */
 export const FORBIDDEN_PACKAGES: readonly string[] = ['expo-task-manager', 'expo-background-fetch', 'expo-background-task'];
 
 export const RULES: readonly Rule[] = [
   {
     name: 'OS permission requests only in the permission adapter (rev1: I3)',
-    names: ['requestForegroundPermissionsAsync', 'requestPermissionsAsync', 'requestMotionPermission'],
+    names: ['requestForegroundPermissionsAsync', 'requestPermissionsAsync', 'requestMotionPermission', 'requestReminderLocation'],
     allowed: ['src/core/permissions/'],
+  },
+  {
+    // The optional forgot-to-start reminder is switched from Settings and onboarding, and off at
+    // sign-out and the device wipe, all through `src/features/reminder`.
+    name: 'only the reminder feature switches the forgot-to-start reminder',
+    names: ['setTripReminder', 'getTripReminderStatus'],
+    allowed: ['src/features/reminder/'],
+  },
+  {
+    name: 'the forgot-to-start reminder never starts a drive',
+    names: REMINDER_NEVER_STARTS,
+    allowed: [],
+    scope: REMINDER_FILES,
+  },
+  {
+    // A notification tap or a link opens Home; Home starts nothing from what opened it.
+    name: 'Home never reads a link parameter',
+    names: ['useLocalSearchParams', 'useGlobalSearchParams', 'useSearchParams'],
+    allowed: [],
+    scope: ['app/(tabs)/home.tsx', 'src/features/home/'],
+  },
+  {
+    // The native reminder registers its "Not driving" category; JS must not replace the set.
+    name: 'no JS notification categories',
+    names: ['setNotificationCategoryAsync'],
+    allowed: [],
   },
   {
     // plan §1 decision 4: a drive exists only after the driver taps Start Drive. Nothing watches
@@ -151,6 +193,7 @@ export function scan(files: Readonly<Record<string, string>>, rules: readonly Ru
   for (const [file, source] of Object.entries(files)) {
     const code = stripComments(source);
     for (const rule of rules) {
+      if (rule.scope && !rule.scope.some((prefix) => file.startsWith(prefix))) continue;
       if (rule.allowed.some((prefix) => file.startsWith(prefix))) continue;
       for (const name of rule.names) {
         if (new RegExp(`(^|[^A-Za-z0-9_$])${name}(?![A-Za-z0-9_$])`).test(code)) {
@@ -160,6 +203,13 @@ export function scan(files: Readonly<Record<string, string>>, rules: readonly Ru
     }
   }
   return found;
+}
+
+/** The reminder files that import the drive, the drive screens or Home. */
+export function reminderImports(files: Readonly<Record<string, string>>): string[] {
+  return Object.entries(files)
+    .filter(([file, src]) => REMINDER_FILES.some((p) => file.startsWith(p)) && REMINDER_FORBIDDEN_IMPORTS.test(stripComments(src)))
+    .map(([file]) => file);
 }
 
 const SOURCE = /\.(ts|tsx)$/;
@@ -219,6 +269,33 @@ describe('the scanner (negative control)', () => {
     ]);
   });
 
+  test('the reminder rules: no start in its files, no switch outside them, no Always request outside the adapter, no link parameter on Home', () => {
+    const planted = {
+      'src/features/reminder/x.ts': "import { startCapture } from '@drive-sense'; await DriveSense.startCapture('mounted');",
+      'src/drive/host.ts': 'await DriveSense.setTripReminder(true);',
+      'src/features/settings/y.ts': 'await port.requestReminderLocation();',
+      'src/features/home/z.ts': 'const { start } = useLocalSearchParams();',
+      // Outside the reminder's files the drive is started as before; elsewhere the params are fine.
+      'src/features/drive/ok.ts': "await source.startCapture('mounted');",
+      'app/(app)/clan/[code].tsx': 'const { code } = useLocalSearchParams();',
+      'src/features/reminder/ok.ts': 'await native.setTripReminder(true);',
+    };
+    expect(scan(planted).map((v) => `${v.file}:${v.name}`)).toEqual([
+      'src/features/reminder/x.ts:startCapture',
+      'src/drive/host.ts:setTripReminder',
+      'src/features/settings/y.ts:requestReminderLocation',
+      'src/features/home/z.ts:useLocalSearchParams',
+    ]);
+    expect(
+      reminderImports({
+        'src/features/reminder/a.ts': "import { useDrive } from '@/drive/useDrive';",
+        'src/features/onboarding/steps/ReminderStep.tsx': "import { StartDrive } from '@/features/home';",
+        'src/features/reminder/b.ts': "import { x } from '@/features/drives';",
+        'src/features/settings/c.ts': "import { useDrive } from '@/drive/useDrive';",
+      })
+    ).toEqual(['src/features/reminder/a.ts', 'src/features/onboarding/steps/ReminderStep.tsx']);
+  });
+
   test('a background-task package is found in package.json', () => {
     expect(forbiddenPackages({ dependencies: { 'expo-task-manager': '~1.0.0', expo: '55' } })).toEqual(['expo-task-manager']);
     expect(forbiddenPackages({ devDependencies: { 'expo-background-task': '1' }, optionalDependencies: { 'expo-background-fetch': '1' } })).toEqual([
@@ -267,6 +344,13 @@ describe('the repository', () => {
 
   test('one permission system, one notification plumbing, no automatic drive detection', () => {
     expect(scan(files)).toEqual([]);
+  });
+
+  test("the forgot-to-start reminder's files exist, are scanned, and import nothing that starts a drive", () => {
+    expect(Object.keys(files)).toEqual(
+      expect.arrayContaining(['src/features/reminder/enable.ts', 'src/features/reminder/ReminderRow.tsx', 'src/features/onboarding/steps/ReminderStep.tsx'])
+    );
+    expect(reminderImports(files)).toEqual([]);
   });
 
   test('package.json depends on no background-task package', () => {

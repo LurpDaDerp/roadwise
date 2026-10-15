@@ -6,6 +6,7 @@ import { useDb } from '@/data/queries/context';
 import { bindPendingTerms, clearTermsAccepted } from '@/features/auth/pendingConsent';
 import { readProfileCache, writeProfileCache } from '@/features/auth/profileCache';
 import { cancelDriveSummaries } from '@/features/drive/summaryNotifier';
+import { turnOffReminder } from '@/features/reminder/enable';
 
 import { supabase } from './client';
 import { fetchProfile, type Profile } from './profile';
@@ -340,6 +341,8 @@ export function SessionProvider({
         await supabase.auth.signOut();
         // A summary scheduled for this driver's last drive must not fire once they have left (U3).
         void cancelDriveSummaries().catch(() => {});
+        // The forgot-to-start reminder goes off with the driver and forgets everything it kept.
+        void turnOffReminder().catch(() => {});
         // A Terms acceptance ticked on this device and not yet recorded belongs to the driver who
         // ticked it; the next sign-in ticks for itself (T15 r2).
         void clearTermsAccepted(settings).catch(() => {});

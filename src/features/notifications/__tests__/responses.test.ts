@@ -31,6 +31,11 @@ test('routeForResponse: the url when allowed, Home otherwise; a dismissal opens 
   expect(routeForResponse(null)).toBeNull();
 });
 
+test('the forgot-to-start reminder: its tap opens Home; its "Not driving" action opens nothing (native handles it)', () => {
+  expect(routeForResponse(response({ url: '/home' }))).toEqual({ href: '/home' });
+  expect(routeForResponse(response({ url: '/home' }, 'roadwise.tripReminder.notDriving'))).toBeNull();
+});
+
 test('handleResponse navigates, or holds the tap while a drive is under way and replays it later (not when stale)', async () => {
   const db: Db = await createSqlJsDb();
   await migrate(db);

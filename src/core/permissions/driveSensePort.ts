@@ -1,17 +1,20 @@
 // The slice of drive-sense the permission adapters use, resolved lazily: nothing native is
 // loaded until a snapshot or request asks. `null` where no native DriveSense module exists
 // (Jest, Expo Go, web) — callers report motion as unavailable and battery as unknown, never as
-// granted. `isIgnoringBatteryOptimizations` is feature-detected on the native module, so a dev
-// build that predates it reads as "can't check" rather than a rejected call.
-import type { DriveSenseApi, DriveSenseState } from '@drive-sense';
+// granted. `isIgnoringBatteryOptimizations` and `requestReminderLocation` are feature-detected on
+// the native module, so a dev build that predates them reads as "can't check" rather than a
+// rejected call.
+import type { DriveSenseApi, DriveSenseState, ReminderLocationAnswer } from '@drive-sense';
 
 export interface DriveSensePort {
   getState(): Promise<DriveSenseState>;
   requestMotionPermission(): Promise<'granted' | 'denied' | 'unavailable'>;
   isIgnoringBatteryOptimizations?(): Promise<boolean>;
+  /** iOS: the forgot-to-start reminder's one "Always" request. */
+  requestReminderLocation?(): Promise<ReminderLocationAnswer>;
 }
 
-type Wrapper = Pick<DriveSenseApi, 'getState' | 'requestMotionPermission' | 'isIgnoringBatteryOptimizations'>;
+type Wrapper = Pick<DriveSenseApi, 'getState' | 'requestMotionPermission' | 'isIgnoringBatteryOptimizations' | 'requestReminderLocation'>;
 
 export interface DriveSenseLoaders {
   /** The raw native module (for feature detection), or null when it does not exist. */
@@ -46,6 +49,9 @@ export function createDriveSenseResolver(
       };
       if (typeof native.isIgnoringBatteryOptimizations === 'function') {
         port.isIgnoringBatteryOptimizations = () => ds.isIgnoringBatteryOptimizations();
+      }
+      if (typeof native.requestReminderLocation === 'function') {
+        port.requestReminderLocation = () => ds.requestReminderLocation();
       }
       return port;
     })().catch(() => {

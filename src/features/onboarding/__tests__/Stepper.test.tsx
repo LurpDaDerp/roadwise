@@ -34,6 +34,10 @@ jest.mock('../steps/NotificationsStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { NotificationsStep: (p: object) => <StubStep {...p} step="notifications" /> };
 });
+jest.mock('../steps/ReminderStep', () => {
+  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
+  return { ReminderStep: (p: object) => <StubStep {...p} step="reminder" /> };
+});
 jest.mock('../steps/DashcamStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { DashcamStep: (p: object) => <StubStep {...p} step="dashcam" /> };
@@ -124,7 +128,7 @@ describe('OnboardingStepper', () => {
 
   it('renders the registered step with its position and saves it for a later resume', async () => {
     await renderStepper('motion', ctx());
-    expect(screen.getByText('Step 3 of 7')).toBeOnTheScreen();
+    expect(screen.getByText('Step 3 of 8')).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Motion' })).toBeOnTheScreen();
     await waitFor(async () => expect(await readSavedStep(settings)).toBe('motion'));
   });
@@ -173,7 +177,7 @@ describe('OnboardingStepper', () => {
 
   it('keeps the count steady as the username drops out of the flow', async () => {
     const view = await renderStepper('username', ctx({ hasUsername: false }));
-    expect(screen.getByText('Step 1 of 8')).toBeOnTheScreen();
+    expect(screen.getByText('Step 1 of 9')).toBeOnTheScreen();
     const at = (step: StepId, c: FlowContext) =>
       view.rerender(
         <ThemeProvider>
@@ -181,14 +185,14 @@ describe('OnboardingStepper', () => {
         </ThemeProvider>
       );
     await at('license', ctx());
-    expect(screen.getByText('Step 2 of 8')).toBeOnTheScreen();
+    expect(screen.getByText('Step 2 of 9')).toBeOnTheScreen();
     await act(async () => {});
   });
 
   it('carries the saved count across a restart, through start', async () => {
-    // A plan saved before the DashPal step existed: the step joins the count, which never runs backwards.
+    // A plan saved before the reminder and DashPal steps existed: they join the count, which never runs backwards.
     const PLAN: StepId[] = ['username', 'license', 'how', 'motion', 'location', 'notifications', 'clan'];
-    const NOW: StepId[] = ['username', 'license', 'how', 'motion', 'location', 'notifications', 'dashcam', 'clan'];
+    const NOW: StepId[] = ['username', 'license', 'how', 'motion', 'location', 'notifications', 'reminder', 'dashcam', 'clan'];
     await saveStep(settings, 'location');
     await savePlan(settings, PLAN);
     const view = await renderStepper('start', ctx());
@@ -198,7 +202,7 @@ describe('OnboardingStepper', () => {
         <OnboardingStepper step="location" ctx={ctx()} settings={settings} />
       </ThemeProvider>
     );
-    expect(screen.getByText('Step 5 of 8')).toBeOnTheScreen();
+    expect(screen.getByText('Step 5 of 9')).toBeOnTheScreen();
     await waitFor(async () => expect(await readSavedPlan(settings)).toEqual(NOW));
   });
 

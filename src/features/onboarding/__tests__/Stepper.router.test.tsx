@@ -47,6 +47,10 @@ jest.mock('../steps/NotificationsStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { NotificationsStep: (p: object) => <StubStep {...p} step="notifications" /> };
 });
+jest.mock('../steps/ReminderStep', () => {
+  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
+  return { ReminderStep: (p: object) => <StubStep {...p} step="reminder" /> };
+});
 jest.mock('../steps/DashcamStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { DashcamStep: (p: object) => <StubStep {...p} step="dashcam" /> };

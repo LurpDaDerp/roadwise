@@ -72,6 +72,17 @@ function restartDashcamLink(): void {
   }
 }
 
+/** The forgot-to-start reminder goes off and forgets its state with the account. Best effort. */
+function reminderOff(): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
+    const { turnOffReminder } = require('@/features/reminder/enable') as typeof import('@/features/reminder/enable');
+    void turnOffReminder().catch(() => {});
+  } catch {
+    // No drive-sense in this build: there is no reminder to switch off.
+  }
+}
+
 async function cancelSummariesBounded(): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -100,6 +111,7 @@ export interface DeviceOwnerDeps {
 /** Empty the device: every table in `DEVICE_TABLES` in one transaction. */
 export async function wipeDevice(db: Db, _deps: DeviceOwnerDeps = {}): Promise<void> {
   await cancelSummariesBounded();
+  reminderOff();
   // The privacy trim secret goes with the account (a new one is minted on the next drive).
   await clearDeviceSecret();
   await db.transaction(async (tx) => {

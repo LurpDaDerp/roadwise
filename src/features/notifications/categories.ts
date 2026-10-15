@@ -1,7 +1,8 @@
 /**
- * The one setup call every scheduler awaits: the Android channels. v3 notifications carry no
- * action buttons (the drive summary opens the app; the pushes open their screen), so there is no
- * category to register.
+ * The one setup call every scheduler awaits: the Android channels. The notifications JS posts carry
+ * no action buttons (the drive summary opens the app; the pushes open their screen), so JS registers
+ * no category. The forgot-to-start reminder's one action ("Not driving") is drive-sense's own,
+ * registered natively, and nothing here may replace it.
  */
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';

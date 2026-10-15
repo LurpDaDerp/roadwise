@@ -18,6 +18,7 @@ export const onboardingCopy = {
     motion: 'Motion',
     location: 'Location',
     notifications: 'Notifications',
+    reminder: 'Forgot to start?',
     dashcam: 'DashPal',
     clan: 'Join a clan',
   } satisfies Record<StepId, string>,

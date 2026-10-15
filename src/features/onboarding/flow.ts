@@ -2,7 +2,7 @@ import type { Href } from 'expo-router';
 
 /**
  * The onboarding flow: username → license → how it works → motion → location → notifications →
- * DashPal (optional) → clan (optional) → Home.
+ * forgot-to-start reminder (optional) → DashPal (optional) → clan (optional) → Home.
  *
  * Every step has one fixed place in `STEP_IDS`; the context only decides which of them this driver
  * walks. Navigation works on that canonical order rather than on a list index, so a step the context
@@ -20,6 +20,7 @@ export const STEP_IDS = [
   'motion',
   'location',
   'notifications',
+  'reminder',
   'dashcam',
   'clan',
 ] as const;

@@ -43,6 +43,9 @@ jest.mock('@/features/drive/summaryNotifier', () => ({
     authCalls.push('cancelDriveSummaries');
   }),
 }));
+// The forgot-to-start reminder goes off at sign-out (no native module here: a stand-in).
+const mockReminderOff = jest.fn(async () => ({ enabled: false, state: 'off', autoOff: false, missing: [], pausedUntil: null }));
+jest.mock('@/features/reminder/enable', () => ({ turnOffReminder: () => mockReminderOff() }));
 jest.mock('@/data/supabase/profile', () => ({
   fetchProfile: jest.fn((userId: string) => new Promise((resolve, reject) => {
     profileCalls.push(userId);
@@ -171,8 +174,9 @@ test('signOut asks Supabase to end the session and clears it on the event', asyn
   await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
 
   await act(async () => { fireEvent.press(screen.getByText('sign out')); });
-  // The session ends first; then the pending drive summaries are cancelled.
+  // The session ends first; then the pending drive summaries are cancelled and the reminder goes off.
   expect(authCalls).toEqual(['signOut', 'cancelDriveSummaries']);
+  expect(mockReminderOff).toHaveBeenCalled();
 
   await act(async () => { emit('SIGNED_OUT', null); });
   await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());

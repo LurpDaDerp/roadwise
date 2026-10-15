@@ -17,6 +17,10 @@ test.each([
 test.each([
   'roadwise://drive',
   'roadwise://drive?start=1',
+  // The Android forgot-to-start reminder's tap: Home, and nothing a parameter could start.
+  'roadwise://home',
+  'roadwise:///home',
+  'roadwise://home?start=1',
   'roadwise://settings/account',
   'roadwise://add/a/b',
   'roadwise://',

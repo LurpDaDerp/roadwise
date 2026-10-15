@@ -7,6 +7,8 @@
 // Callers still apply the one prompt policy (`canPrompt` / `recordPrompt`) around every request.
 import { Linking, PermissionsAndroid, Platform } from 'react-native';
 
+import type { ReminderLocationAnswer } from '@drive-sense';
+
 import { resolveDriveSense, type DriveSensePort } from './driveSensePort';
 import type {
   BatteryOptimization,
@@ -128,6 +130,12 @@ export interface PermissionsAdapter {
    * Android 11 and below fine location (Bluetooth scans need it there).
    */
   requestBluetooth(): Promise<BluetoothAccess>;
+  /**
+   * The forgot-to-start reminder only, on the driver's tap that turns it on: iOS asks once for
+   * "Always" (While Using must already be granted; never asked twice). Android uses no location for
+   * it: `notNeeded`. `denied` when it could not be asked at all.
+   */
+  requestAlwaysForReminder(): Promise<ReminderLocationAnswer>;
 }
 
 export const IGNORE_BATTERY_OPTIMIZATION_SETTINGS =
@@ -365,6 +373,17 @@ export function createPermissionsAdapter(
       if (!(await androidBluetoothGranted())) return 'undetermined';
       // Android: reading the radio shows no prompt.
       return fromRadio(await radio.startRadio());
+    },
+
+    async requestAlwaysForReminder() {
+      if (deps.platform === 'android') return 'notNeeded';
+      const port = await deps.driveSense();
+      if (!port?.requestReminderLocation) return 'denied';
+      try {
+        return await port.requestReminderLocation();
+      } catch {
+        return 'denied';
+      }
     },
 
     async requestBluetooth() {
