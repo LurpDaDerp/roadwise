@@ -20,7 +20,10 @@ export interface EpisodeEvent {
 /** Drowsy evidence: a microsleep, sleep, or eyes-closed unresponsive. */
 const isDrowsy = (e: EpisodeEvent): boolean =>
   e.ev === EV.MICROSLEEP || e.ev === EV.SLEEP || (e.ev === EV.UNRESPONSIVE && e.detail === DETAIL.EYES_CLOSED);
-/** Eyes-off evidence: no return after a distraction warning (D4). */
+/**
+ * Eyes-off evidence: no return after a distraction warning (D4), or a slump out of view at speed
+ * (the dashcam's no-face rule sends it with the same detail). FACE_LOST itself is never evidence.
+ */
 const isEyesOff = (e: EpisodeEvent): boolean => e.ev === EV.UNRESPONSIVE && e.detail === DETAIL.NO_RETURN;
 /** No return after a critical (F3): joins an episode, never starts one. */
 const isFollowUp = (e: EpisodeEvent): boolean => e.ev === EV.UNRESPONSIVE && e.detail === DETAIL.NO_RETURN_CRITICAL;

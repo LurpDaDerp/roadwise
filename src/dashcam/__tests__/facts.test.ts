@@ -282,3 +282,18 @@ test('episodes(): order-independent; an F3 within 60 s joins and extends, never 
     { first: expect.objectContaining({ id: 'y' }), kind: 'eyes_off', startedAt: 30_000, endedAt: 31_000 },
   ]);
 });
+
+test('no face: an audible FACE_LOST (ev 5) alone is never a candidate; a slump out of view (no_return at 9 s of absence) is eyes off, and the FACE_LOST before it neither starts nor joins it', async () => {
+  const a = T0 + 5 * 60_000;
+  await sample(a, 40 * MPH);
+  await event({ seq: 0, ev: 5, firedAt: a, durS: 4 }); // FACE_LOST at 4 s of absence, audible (moving)
+  expect((await loadDashcamTripFacts(db, trip)).events).toEqual([]);
+
+  const b = T0 + 15 * 60_000;
+  await sample(b + 5000, 45 * MPH);
+  await event({ seq: 1, ev: 5, firedAt: b, durS: 4 });
+  const slump = await event({ seq: 2, ev: 2, detail: 1, firedAt: b + 5000, durS: 9 });
+  expect((await loadDashcamTripFacts(db, trip)).events).toEqual([{ id: slump, kind: 'eyes_off', startedAt: b - 4000, durationS: 9, speedMph: expect.closeTo(45, 6) }]);
+  const e = (id: string, ev: number, detail: number, start: number, fired: number): EpisodeEvent => ({ id, ev, detail, startedAt: start, firedAt: fired });
+  expect(episodes([e('f', 5, 0, 0, 4000)])).toEqual([]);
+});
