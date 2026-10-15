@@ -1,11 +1,11 @@
 /**
- * The settings screens: the root (reminder, units, license, state), alerts (voice off by default,
+ * The settings screens: the root (units, license, state), alerts (voice off by default,
  * style, test), account (export, delete, sign out) and delete account. Device settings are an
  * in-memory table; the server, session and drive state are stand-ins.
  */
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
-import { answerRpc, appWorld, clearQueryClients, fakeAdapter, snap, tap } from '@/features/permissions/__fixtures__/harness';
+import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
 
 import { alertStyleCopy } from '../alerts/copy';
 import { ALERT_STYLE_PREF_KEY, alertStylePref, resetAlertStylePrefForTests } from '../alerts/stylePref';
@@ -14,7 +14,7 @@ import { AccountScreen } from '../AccountScreen';
 import { AlertsScreen } from '../AlertsScreen';
 import { settingsCopy as copy } from '../copy';
 import { DeleteAccountScreen } from '../DeleteAccountScreen';
-import { REMINDER_KEY, UNITS_KEY, writeReminder } from '../localPrefs';
+import { UNITS_KEY } from '../localPrefs';
 import { SETTINGS_HREFS } from '../routes';
 import { SettingsScreen } from '../SettingsScreen';
 
@@ -77,43 +77,6 @@ beforeEach(() => {
 afterEach(() => clearQueryClients());
 
 describe('Settings', () => {
-  it('the forgot-to-start reminder is off by default; turning it on asks for motion first, then saves', async () => {
-    const adapter = fakeAdapter(snap({ platform: 'android', motion: 'undetermined' }));
-    const w = await appWorld();
-    await w.render(<SettingsScreen deps={{ adapter }} />);
-    const toggle = await screen.findByTestId('settings-reminder');
-    expect(toggle.props.value).toBe(false);
-    await act(async () => {
-      fireEvent(toggle, 'valueChange', true);
-    });
-    await waitFor(async () => expect(await w.settings.get(REMINDER_KEY)).toBe(true));
-    expect(adapter.log).toContain('requestMotion');
-  });
-
-  it('without motion or notifications (Android) the reminder stays off and says what is missing', async () => {
-    const adapter = fakeAdapter(
-      snap({ platform: 'android', motion: 'denied', notifications: 'denied', notificationsCanAskAgain: false })
-    );
-    const w = await appWorld();
-    await w.render(<SettingsScreen deps={{ adapter }} />);
-    await act(async () => {
-      fireEvent(await screen.findByTestId('settings-reminder'), 'valueChange', true);
-    });
-    expect(await screen.findByTestId('settings-reminder-needs')).toBeOnTheScreen();
-    expect(screen.getByText(copy.root.reminder.needs.both)).toBeOnTheScreen();
-    expect(screen.getByTestId('settings-reminder').props.value).toBe(false);
-    expect(await w.settings.get(REMINDER_KEY)).toBeNull();
-  });
-
-  it('the reminder hands the choice to the native side when it can', async () => {
-    const w = await appWorld();
-    const native = jest.fn();
-    await writeReminder(w.settings, true, native);
-    expect(native).toHaveBeenCalledWith(true);
-    await expect(writeReminder(w.settings, false, () => Promise.reject(new Error('no module')))).resolves.toBeUndefined();
-    expect(await w.settings.get(REMINDER_KEY)).toBe(false);
-  });
-
   it('units save to the server and to the phone’s mirror', async () => {
     let units = 'mi';
     answerRpc(mockRpc, {

@@ -34,16 +34,6 @@ export const settingsCopy = {
     driving: 'Driving',
     dashcam: { title: 'DashPal' },
     alerts: { title: 'Alerts', subtitle: 'Voice, sound and vibration' },
-    reminder: {
-      title: 'Forgot-to-start reminder',
-      subtitle: 'A quiet nudge if your phone noticed a drive you didn’t record. Off by default.',
-      needs: {
-        motion: 'The reminder needs motion access to notice a drive. Turn it on in Settings, then try again.',
-        notifications: 'The reminder needs notifications to reach you. Turn them on in Settings, then try again.',
-        both: 'The reminder needs motion access and notifications. Turn them on in Settings, then try again.',
-      },
-      openSettings: 'Open Settings',
-    },
     permissions: { title: 'Permissions', subtitle: 'Location, motion and notifications' },
     privacy: 'Privacy',
     zones: { title: 'Privacy zones', subtitle: (n: number) => (n === 0 ? 'Hide routes near home or school' : `${n} of 3 set`) },

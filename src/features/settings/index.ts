@@ -16,7 +16,7 @@ export { LICENSE_LABEL, settingsCopy, VISIBILITY_LABEL } from './copy';
 export { DeleteAccountScreen, type DeleteAccountDeps } from './DeleteAccountScreen';
 export { ExportMessage, useExport, type ExportDeps } from './exportFlow';
 export { exportFileName, shareExport, type ExportShareOutcome } from './exportShare';
-export { readReminder, readUnits, REMINDER_KEY, UNITS_KEY, writeReminder, writeUnits } from './localPrefs';
+export { readUnits, UNITS_KEY, writeUnits } from './localPrefs';
 export {
   MAX_RADIUS_M,
   MAX_ZONES,

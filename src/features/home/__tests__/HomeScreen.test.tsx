@@ -26,7 +26,6 @@ jest.mock('@/features/drive/DriveInProgressBanner', () => {
   const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
   return { DriveInProgressBanner: () => <Text testID="drive-in-progress">Drive in progress</Text> };
 });
-jest.mock('@/drive/forgottenDrive', () => ({ useForgottenDriveNotice: () => null }));
 
 beforeEach(() => {
   jest.clearAllMocks();
