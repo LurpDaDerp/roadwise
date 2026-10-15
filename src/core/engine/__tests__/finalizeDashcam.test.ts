@@ -10,6 +10,9 @@ import { closedSession, TZ, uuid } from '@/core/engine/__fixtures__/drives';
 import { dashcamBlock, dashcamEvents, finalizeTrip, sanitizeEvent } from '@/core/engine/finalize';
 import type { DetectedEvent } from '@/core/engine/types';
 import type { DashcamCandidate, DashcamTripFacts } from '@/dashcam/facts';
+import { dashcamFinalizeDeps } from '@/dashcam/finalizeDeps';
+import { PAIRED_KEY } from '@/dashcam/keys';
+import { createDashcamStore } from '@/dashcam/store';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { FinalizeTripPayloadV3Schema } from '@/data/sync/payload';
@@ -182,6 +185,48 @@ describe('finalizeTrip with DashPal facts', () => {
     const none = await finalizeTrip(session(), deps(async () => facts({ dashcamId: null, movingS: 0, coveredS: 0, synced: false })));
     expect(none.payload).not.toHaveProperty('dashcam');
     expect(none.breakdown.dashcamMult).toBe(1);
+  });
+
+  test('events that arrived with no drive open are dropped: the stored facts give the same block, ×1.25 and scored events as without them', async () => {
+    const run = async (withIgnored: boolean) => {
+      db = await createSqlJsDb();
+      await migrate(db);
+      await createSettingsRepo(db).set('device.lastUserId', 'user-1');
+      await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: DEVICE, peripheralId: 'p-1', name: 'DashPal-7E', pairedAt: 1 });
+      await createTripsRepo(db).insert({ client_trip_id: TRIP, started_at: T0, tz: TZ, local_day: '2023-11-14', status: 'recording' }, T0);
+      const store = createDashcamStore(db);
+      const offset = T0 - 3_600_000; // the dashcam booted an hour before the drive
+      await store.ensureBoot(DEVICE, 7, 0);
+      await store.offerOffset(DEVICE, 7, offset, 20);
+      await store.addCoverage(TRIP, 1150, 1100, T0 + 1_199_000);
+      let seq = 0;
+      const put = async (s: number, ev: number, detail: number, ignored: boolean) => {
+        await db.execute('INSERT INTO samples (client_trip_id, ts, row_json) VALUES (?, ?, ?)', [TRIP, at(s), JSON.stringify({ ts: at(s), speed: 15, gnssValid: true })]);
+        await store.insertEvent({
+          dashcamId: DEVICE, bootKey: 7, seq, id: cid(100 + seq), ev, name: 'X', tier: 3, audible: true, detail,
+          tMs: at(s) - offset, durDs: 20, value: 0, atMs: null, startedAtMs: null, receivedAtMs: at(s) + 50, ignored,
+        });
+        seq += 1;
+      };
+      await put(300, 0, 0, false); // a microsleep in the drive
+      if (withIgnored) {
+        await put(1000, 1, 0, true); // a sleep and an eyes-off, inside the window by time, that arrived with no drive open
+        await put(600, 2, 1, true);
+      }
+      return finalizeTrip(session(), deps(dashcamFinalizeDeps(db).dashcamFacts));
+    };
+    const plain = await run(false);
+    const result = await run(true);
+    expect(result.payload!.dashcam).toEqual({ deviceId: DEVICE, movingS: 1150, coveredS: 1100, synced: true });
+    expect(result.breakdown.dashcamMult).toBe(1.25);
+    expect(result.payload!.events.map((e) => [e.id, e.type])).toEqual([[cid(100), 'drowsy']]);
+    expect(result.payload!.dashcam).toEqual(plain.payload!.dashcam);
+    expect(result.breakdown).toEqual(plain.breakdown);
+    expect((await db.execute('SELECT seq, client_trip_id FROM dashcam_events ORDER BY seq')).rows).toEqual([
+      { seq: 0, client_trip_id: TRIP },
+      { seq: 1, client_trip_id: null },
+      { seq: 2, client_trip_id: null },
+    ]);
   });
 
   test('a loader that throws leaves the drive a plain one', async () => {

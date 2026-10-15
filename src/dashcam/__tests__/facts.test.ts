@@ -35,7 +35,7 @@ beforeEach(async () => {
 });
 
 /** An event that fired at `firedAt` (epoch) after `durS` seconds of its condition. */
-async function event(o: { seq: number; ev: number; detail?: number; firedAt: number; durS?: number; audible?: boolean; dashcam?: string; boot?: number; trip?: string | null }) {
+async function event(o: { seq: number; ev: number; detail?: number; firedAt: number; durS?: number; audible?: boolean; dashcam?: string; boot?: number; trip?: string | null; ignored?: boolean; receivedAt?: number }) {
   const id = uuid();
   await createDashcamStore(db).insertEvent({
     dashcamId: o.dashcam ?? CAM,
@@ -52,7 +52,8 @@ async function event(o: { seq: number; ev: number; detail?: number; firedAt: num
     value: 0,
     atMs: null,
     startedAtMs: null,
-    receivedAtMs: o.firedAt + 50,
+    receivedAtMs: o.receivedAt ?? o.firedAt + 50,
+    ignored: o.ignored,
   });
   if (o.trip !== undefined) await db.execute('UPDATE dashcam_events SET client_trip_id = ? WHERE id = ?', [o.trip, id]);
   return id;
@@ -174,6 +175,48 @@ test('window selection: the derived start must be inside the drive; other dashca
   ]);
   // Idempotent: the same facts again (finalize retried with the same closed session).
   expect((await loadDashcamTripFacts(db, trip)).events.map((e) => e.id)).toEqual(f.events.map((e) => e.id));
+});
+
+test('an event that arrived with no drive open (ignored) is never a candidate nor stamped, even inside the window; coverage and synced are unchanged', async () => {
+  const store = createDashcamStore(db);
+  await store.addCoverage(TRIP, 600, 590, trip.endedAt - 1000);
+  await sample(T0 + 5 * 60_000, 30 * MPH);
+  const kept = await event({ seq: 0, ev: 0, firedAt: T0 + 5 * 60_000, durS: 1 });
+  // Inside the window by the best offset now (a better offset can move an event's time), but it
+  // arrived while no drive was open: ignored.
+  const dropped = await event({ seq: 1, ev: 1, firedAt: T0 + 10 * 60_000, durS: 2, ignored: true });
+  await event({ seq: 2, ev: 2, detail: 1, firedAt: T0 + 20 * 60_000, durS: 5, ignored: true });
+
+  const f = await loadDashcamTripFacts(db, trip);
+  expect(f).toEqual({
+    dashcamId: CAM,
+    movingS: 600,
+    coveredS: 590,
+    synced: true,
+    events: [{ id: kept, kind: 'drowsy', startedAt: T0 + 5 * 60_000 - 1000, durationS: 1, speedMph: expect.closeTo(30, 6) }],
+  });
+  const { rows } = await db.execute('SELECT id, client_trip_id, ignored FROM dashcam_events ORDER BY seq');
+  expect(rows).toEqual([
+    { id: kept, client_trip_id: TRIP, ignored: 0 },
+    { id: dropped, client_trip_id: null, ignored: 1 },
+    { id: expect.any(String), client_trip_id: null, ignored: 1 },
+  ]);
+});
+
+test('a pre-drive event replayed during the drive (a reconnect mid-drive) is received in the drive but started before it: not claimed', async () => {
+  // It fired 2 min before Start Drive while the phone was away; the reconnect 5 min in replayed it.
+  const before = await event({ seq: 0, ev: 0, firedAt: T0 - 2 * 60_000, durS: 1, receivedAt: T0 + 5 * 60_000 });
+  // Fired 1 s into the drive but its condition began 2 s before the tap: its time is its start.
+  const straddling = await event({ seq: 1, ev: 1, firedAt: T0 + 1000, durS: 3, receivedAt: T0 + 5 * 60_000 });
+  const during = await event({ seq: 2, ev: 0, firedAt: T0 + 4 * 60_000, durS: 1, receivedAt: T0 + 5 * 60_000 });
+  const f = await loadDashcamTripFacts(db, trip);
+  expect(f.events.map((e) => e.id)).toEqual([during]);
+  const { rows } = await db.execute('SELECT id, client_trip_id FROM dashcam_events ORDER BY seq');
+  expect(rows).toEqual([
+    { id: before, client_trip_id: null },
+    { id: straddling, client_trip_id: null },
+    { id: during, client_trip_id: TRIP },
+  ]);
 });
 
 test('wall times use the best offset at load time, not the receipt-time cache', async () => {
