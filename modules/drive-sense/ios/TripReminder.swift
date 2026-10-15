@@ -57,7 +57,7 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
 
   /// The stored state, or nil when it cannot be read yet (before the first unlock after a reboot):
   /// then nothing is decided and nothing is saved. A locked phone after its first unlock reads fine.
-  func load() -> ReminderState? {
+  func loadState() -> ReminderState? {
     if let data = defaults.data(forKey: Key.state) {
       if let s = try? JSONDecoder().decode(ReminderState.self, from: data), s.v == 2 { return s }
       return ReminderState()
@@ -65,7 +65,7 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
     return UIApplication.shared.isProtectedDataAvailable ? ReminderState() : nil
   }
 
-  func save(_ s: ReminderState) {
+  func saveState(_ s: ReminderState) {
     if let data = try? JSONEncoder().encode(s) { defaults.set(data, forKey: Key.state) }
   }
 
@@ -104,9 +104,9 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
   /// didFinishLaunching (TripReminderAppDelegate): settle, take down a stale note, register the
   /// category, and restart the wake (an app relaunched for a location change must ask again).
   func resumeAtLaunch() {
-    guard let s0 = load() else { return }
+    guard let s0 = loadState() else { return }
     let s = TripReminderPolicy.settle(s0, Self.nowMs())
-    save(s)
+    saveState(s)
     if !s.showing { TripReminderNotifier.remove() }
     if s.enabled { TripReminderNotifier.registerCategory() }
     syncWake(s)
@@ -123,9 +123,9 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
     if alwaysPending != nil && alwaysResigned {
       DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.finishAlways() }
     }
-    guard let s0 = load() else { return }
+    guard let s0 = loadState() else { return }
     let s = TripReminderPolicy.appForeground(TripReminderPolicy.settle(s0, Self.nowMs()))
-    save(s)
+    saveState(s)
     TripReminderNotifier.remove()
     endSession()
     syncWake(s)
@@ -137,26 +137,26 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
     captureOpen = true
     endSession()
     TripReminderNotifier.remove()
-    guard let s0 = load() else { return }
+    guard let s0 = loadState() else { return }
     let now = Self.nowMs()
-    save(TripReminderPolicy.captureStarted(TripReminderPolicy.settle(s0, now), now))
+    saveState(TripReminderPolicy.captureStarted(TripReminderPolicy.settle(s0, now), now))
   }
 
   func onCaptureEnded() {
     captureOpen = false
-    guard let s0 = load() else { return }
+    guard let s0 = loadState() else { return }
     let now = Self.nowMs()
-    save(TripReminderPolicy.captureEnded(TripReminderPolicy.settle(s0, now), now))
+    saveState(TripReminderPolicy.captureEnded(TripReminderPolicy.settle(s0, now), now))
   }
 
   /// The notification's "Not driving" (TripReminderAppDelegate): down, 12 h quiet, counted as unused.
   func onNotDriving() {
     TripReminderNotifier.remove()
     endSession()
-    guard let s0 = load() else { return }
+    guard let s0 = loadState() else { return }
     let now = Self.nowMs()
     let s = TripReminderPolicy.resolve(TripReminderPolicy.settle(s0, now), .notDriving, now)
-    save(s)
+    saveState(s)
     syncWake(s)
   }
 
@@ -179,7 +179,7 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
       finishAlways()
       return
     }
-    if let s = load() { syncWake(s) }
+    if let s = loadState() { syncWake(s) }
   }
 
   func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -187,10 +187,10 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
   }
 
   private func onWake() {
-    guard !waking, tracker == nil, let s0 = load() else { return }
+    guard !waking, tracker == nil, let s0 = loadState() else { return }
     let now = Self.nowMs()
     let s = TripReminderPolicy.settle(s0, now)
-    save(s)
+    saveState(s)
     if !s.showing { TripReminderNotifier.remove() }
     waking = true
     // The wake's checks finish inside a background task (the session, if any, then keeps the app
@@ -210,9 +210,9 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
       }
       let since = Date(timeIntervalSince1970: TripReminderPolicy.motionSince(s, now) / 1000)
       ActivitySource.recentAutomotive(since: since) { motion in
-        if let s1 = self.load() {
+        if let s1 = self.loadState() {
           let r = TripReminderPolicy.onWake(s1, Self.nowMs(), motion, ctx)
-          self.save(r.state)
+          self.saveState(r.state)
           if r.startSession && self.tracker == nil { self.startSession() }
         }
         finish()

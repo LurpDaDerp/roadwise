@@ -73,7 +73,7 @@ extension TripReminder {
   private func stopped(_ tr: SessionTracker, walked: Bool) {
     TripReminderNotifier.authorized { notificationsOk in
       self.checking = false
-      guard self.tracker != nil, let s0 = self.load() else {
+      guard self.tracker != nil, let s0 = self.loadState() else {
         self.endSession()
         return
       }
@@ -81,7 +81,7 @@ extension TripReminder {
       ctx.inCall = CallObserver.anyCallActiveNow()
       let now = Self.nowMs()
       let r = TripReminderPolicy.onStop(s0, ctx, now, walked: walked)
-      self.save(r.state)
+      self.saveState(r.state)
       switch r.effect {
       case "post":
         TripReminderNotifier.post()
@@ -98,13 +98,13 @@ extension TripReminder {
   /// The note's watch ended: driven on (within 20 s: unseen, one more stop may remind), walked off, or 5 min.
   private func watchEnded(_ how: String) {
     TripReminderNotifier.remove()
-    guard let tr = tracker, let s0 = load() else {
+    guard let tr = tracker, let s0 = loadState() else {
       endSession()
       return
     }
     let now = Self.nowMs()
     let r = TripReminderPolicy.onWatchEnd(s0, how, now)
-    save(r.state)
+    saveState(r.state)
     if r.seek {
       tracker = TripReminderPolicy.seekAgain(tr, now)
       sessionManager.distanceFilter = kCLDistanceFilterNone
@@ -122,6 +122,6 @@ extension TripReminder {
     clock = nil
     sessionManager.stopUpdatingLocation()
     sessionManager.allowsBackgroundLocationUpdates = false
-    if let s0 = load() { save(TripReminderPolicy.sessionEnded(s0, Self.nowMs())) }
+    if let s0 = loadState() { saveState(TripReminderPolicy.sessionEnded(s0, Self.nowMs())) }
   }
 }

@@ -8,8 +8,8 @@ extension TripReminder {
   /// JS `setTripReminder`: on clears every back-off and quiet; off forgets everything and stops the wake.
   func setEnabled(_ on: Bool, _ done: @escaping ([String: Any]) -> Void) {
     let now = Self.nowMs()
-    let s = TripReminderPolicy.setEnabled(TripReminderPolicy.settle(load() ?? ReminderState(), now), on)
-    save(s)
+    let s = TripReminderPolicy.setEnabled(TripReminderPolicy.settle(loadState() ?? ReminderState(), now), on)
+    saveState(s)
     TripReminderNotifier.remove()
     endSession()
     if on { TripReminderNotifier.registerCategory() }
@@ -21,9 +21,9 @@ extension TripReminder {
   func status(_ done: @escaping ([String: Any]) -> Void) {
     let now = Self.nowMs()
     var s = ReminderState()
-    if let s0 = load() {
+    if let s0 = loadState() {
       s = TripReminderPolicy.settle(s0, now)
-      save(s)
+      saveState(s)
     }
     let always = slcManager.authorizationStatus == .authorizedAlways
     let precise = slcManager.accuracyAuthorization == .fullAccuracy
@@ -91,7 +91,7 @@ extension TripReminder {
     alwaysPending = nil
     alwaysResigned = false
     done(answer(slcManager.authorizationStatus))
-    if let s = load() { syncWake(s) }
+    if let s = loadState() { syncWake(s) }
   }
 
   private func answer(_ status: CLAuthorizationStatus) -> String {
