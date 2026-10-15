@@ -76,6 +76,8 @@ export const RX_LEN: Readonly<Record<number, number>> = {
 
 export const INFO_LEN = 14;
 export const INFO_VERSION = 1;
+/** INFO `flags` bits. */
+export const INFO_FLAG = { PAIRING_OPEN: 0x01, SETUP_BUSY: 0x02 } as const;
 
 /** Engine event ids, in the frozen `dms/alerts.py` `EventType` order. Append-only. */
 export const EVENT_NAMES: readonly string[] = [
@@ -306,7 +308,10 @@ export interface DashcamInfo {
   /** this link's peer is in the dashcam's bond store */
   peerBonded: boolean;
   bondCount: number;
+  /** INFO flags bit 0: the pairing window is open */
   pairingOpen: boolean;
+  /** INFO flags bit 1: another link holds the setup claim (another phone is setting this dashcam up) */
+  setupBusy: boolean;
 }
 
 /** Why a frame was refused (the firmware's names). */
@@ -536,14 +541,17 @@ export function decodeInfo(bytes: ArrayLike<number>): DashcamInfo | null {
     name: `DashPal-${(hex2(mac[4] ?? 0) + hex2(mac[5] ?? 0)).toUpperCase()}`,
     peerBonded: u8(bytes, 11) !== 0,
     bondCount: u8(bytes, 12),
-    pairingOpen: (u8(bytes, 13) & 0x01) !== 0,
+    pairingOpen: (u8(bytes, 13) & INFO_FLAG.PAIRING_OPEN) !== 0,
+    setupBusy: (u8(bytes, 13) & INFO_FLAG.SETUP_BUSY) !== 0,
   };
 }
 
-export function encodeInfo(info: Omit<DashcamInfo, 'dashcamId' | 'name'>): number[] {
+/** The INFO bytes (the dashcam's side; tests and the e2e bench). `setupBusy` defaults to false. */
+export function encodeInfo(info: Omit<DashcamInfo, 'dashcamId' | 'name' | 'setupBusy'> & { setupBusy?: boolean }): number[] {
   const w = new Writer().u8(info.ver).u8(info.protoMin).u8(info.protoMax).u8(info.fwMajor).u8(info.fwMinor);
   for (let i = 0; i < 6; i++) w.u8(info.mac[i] ?? 0);
-  return w.u8(info.peerBonded ? 1 : 0).u8(info.bondCount).u8(info.pairingOpen ? 1 : 0).bytes;
+  const flags = (info.pairingOpen ? INFO_FLAG.PAIRING_OPEN : 0) | (info.setupBusy ? INFO_FLAG.SETUP_BUSY : 0);
+  return w.u8(info.peerBonded ? 1 : 0).u8(info.bondCount).u8(flags).bytes;
 }
 
 /** This app speaks protocol v1: the dashcam must accept it. */

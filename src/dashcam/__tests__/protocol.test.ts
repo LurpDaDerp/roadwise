@@ -140,6 +140,7 @@ test.each(V.info.valid.map((v) => [v.desc, v] as const))('INFO: %s — id, name 
   expect(info!.peerBonded).toBe(v.fields.peer_bonded === 1);
   expect(info!.bondCount).toBe(v.fields.bond_count);
   expect(info!.pairingOpen).toBe(((v.fields.flags as number) & 1) === 1);
+  expect(info!.setupBusy).toBe(((v.fields.flags as number) & 2) === 2);
   expect(info!.fwMajor).toBe(v.fields.fw_major);
   expect(info!.fwMinor).toBe(v.fields.fw_minor);
   expect(speaksV1(info!)).toBe(true);
@@ -152,6 +153,15 @@ test.each(V.info.decode_only.map((v) => [v.desc, v] as const))('INFO decode only
 
 test.each(V.info.invalid.map((v) => [v.desc, v] as const))('INFO invalid: %s — refused', (_d, v) => {
   expect(decodeInfo(fromHex(v.hex))).toBeNull();
+});
+
+test('INFO flags bit 1 (another phone is setting the dashcam up) is in the vectors, decodes alone and encodes back', () => {
+  expect(V.info.valid.some((v) => ((v.fields.flags as number) & 2) === 2)).toBe(true);
+  const base = { ver: 1, protoMin: 1, protoMax: 1, fwMajor: 3, fwMinor: 3, mac: [0xa4, 0xcf, 0x12, 0x34, 0x56, 0x78], peerBonded: false, bondCount: 1 };
+  const busyOnly = decodeInfo(encodeInfo({ ...base, pairingOpen: false, setupBusy: true }))!;
+  expect([busyOnly.pairingOpen, busyOnly.setupBusy]).toEqual([false, true]);
+  expect(encodeInfo({ ...base, pairingOpen: true }).at(-1)).toBe(1);
+  expect(encodeInfo({ ...base, pairingOpen: true, setupBusy: true }).at(-1)).toBe(3);
 });
 
 test('a protocol range without v1 is not spoken', () => {
