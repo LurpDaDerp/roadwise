@@ -2,7 +2,9 @@
 // instance for the process, created lazily on the main thread by the first module call and used
 // on the main thread only; row work happens on `RowPipeline.queue`.
 //
-// v3 (plan §1 decision 4): nothing runs between captures — no wakes, no motion feed, no timers.
+// v3 (plan §1 decision 4): nothing of the capture runs between captures — no wakes, no motion
+// feed, no timers. (The optional forgot-to-start reminder, `TripReminder`, has its own wake and
+// only notifies; this class tells it when a capture starts and ends and never hears from it.)
 // GPS 1 Hz and IMU 25 Hz only while capturing at `full`; at `low` the IMU and the 1 s tick stop
 // and a row is emitted per coarse fix. A capture started in the foreground keeps running in the
 // background on While Using through the `location` background mode (app.config.ts).
@@ -89,6 +91,8 @@ final class CaptureController {
     location.start(low: false)
     startFullRateSensors()
     watchdog.captureStarted(rowListening: EventHub.shared.isListening("row"))
+    // The forgot-to-start reminder learns a drive is open (one direction only).
+    TripReminder.shared.onCaptureStarted()
   }
 
   func stopCapture() {
@@ -108,6 +112,8 @@ final class CaptureController {
     calls.stop()
     ActivitySource.stopLive()
     DriveDisplayBridge.postEnded()
+    // No forgot-to-start reminder for the next 10 min.
+    TripReminder.shared.onCaptureEnded()
   }
 
   func setCaptureRate(_ newRate: String) {

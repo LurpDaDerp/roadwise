@@ -22,13 +22,20 @@ export function googleServicesFile(
   return exists(local) ? './google-services.json' : undefined;
 }
 
-/** The permission strings, in plain words. Location is only ever "While Using": no Always. */
+/** The permission strings, in plain words. A drive needs location only "While Using". */
 export const PERMISSION_COPY = {
   location: 'RoadWise uses your location to measure speed and miles during a drive you start.',
   motion: "RoadWise uses motion to detect hard braking and when you've stopped driving.",
   camera: 'RoadWise uses the camera only to scan friend QR codes — video never leaves your phone.',
   bluetooth: 'RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts on your phone and add its events to your drives.',
 } as const;
+
+/**
+ * The iOS "Always" string. Asked for only when the driver turns on the optional forgot-to-start
+ * reminder (onboarding or Settings › Driving); nothing else in the app uses Always.
+ */
+export const REMINDER_LOCATION_COPY =
+  'Only if you turn on the forgot-to-start reminder: RoadWise notices when a car trip starts with no drive recording, and sends one note at your next stop. Your location stays on your phone.';
 
 /** `{ [key]: value }`, or nothing when the value is undefined (the key is left out entirely). */
 function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
@@ -103,8 +110,9 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     // BLUETOOTH/BLUETOOTH_ADMIN (maxSdkVersion 30) below, come from react-native-ble-manager's own
     // manifest. No new foreground-service type: the drive's location service keeps the process alive.
     permissions: ['android.permission.POST_NOTIFICATIONS', 'android.permission.VIBRATE'],
-    // Every drive starts in the app, so background ("all the time") location is never asked for,
-    // whatever a library's manifest declares. The camera never records sound.
+    // Every drive starts in the app and the forgot-to-start reminder uses activity recognition
+    // only, so background ("all the time") location is never asked for, whatever a library's
+    // manifest declares. The camera never records sound.
     blockedPermissions: ['android.permission.ACCESS_BACKGROUND_LOCATION', 'android.permission.RECORD_AUDIO'],
   },
   extra: { eas: { projectId: EAS_PROJECT_ID } },
@@ -126,9 +134,10 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
       'expo-location',
       {
         locationWhenInUsePermission: PERMISSION_COPY.location,
-        // "While Using" only: no Always strings at all.
-        locationAlwaysAndWhenInUsePermission: false,
-        locationAlwaysPermission: false,
+        // A drive needs "While Using" only. "Always" exists for the optional forgot-to-start
+        // reminder on iOS and is asked for only when the driver turns it on.
+        locationAlwaysAndWhenInUsePermission: REMINDER_LOCATION_COPY,
+        locationAlwaysPermission: REMINDER_LOCATION_COPY,
         motionUsagePermission: PERMISSION_COPY.motion,
         // A drive started in the app continues in the background on iOS with While Using.
         isIosBackgroundLocationEnabled: true,

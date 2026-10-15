@@ -3,7 +3,10 @@
 //
 // v3 (plan §1 decision 4): a capture starts only from a JS `startCapture` (a user's tap in the
 // foreground) and runs in the background on While Using through the `location` background mode.
-// No arming, no OS wakes, no location relaunch, no Always.
+// No arming and nothing that starts a capture by itself. The one thing that runs with no drive open
+// is the optional forgot-to-start reminder (`TripReminder`, off by default): it wakes on
+// significant-location changes and only ever posts a notification. It is the only user of "Always",
+// asked for only when the driver turns the reminder on.
 //
 // The module is a thin bridge: the capture core (`CaptureController`) and the event hub exist for
 // the whole process, and every method below runs on the main queue, where they live. Rejections
@@ -107,19 +110,20 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
       promise.resolve(true)
     }
 
-    // The optional forgot-to-start reminder (README "Forgot-to-start reminder"). Not built on iOS
-    // in this version: it reports itself unavailable and asks for nothing.
-    AsyncFunction("setTripReminder") { (_: Bool, promise: Promise) in
-      promise.resolve(["enabled": false, "state": "unavailable", "autoOff": false, "missing": [String](), "pausedUntil": NSNull()] as [String: Any])
-    }
+    // The optional forgot-to-start reminder (README "Forgot-to-start reminder"). It never starts a
+    // capture: it notifies, and the notification only opens Home.
+    AsyncFunction("setTripReminder") { (enabled: Bool, promise: Promise) in
+      TripReminder.shared.setEnabled(enabled) { promise.resolve($0) }
+    }.runOnQueue(.main)
 
     AsyncFunction("getTripReminderStatus") { (promise: Promise) in
-      promise.resolve(["enabled": false, "state": "unavailable", "autoOff": false, "missing": [String](), "pausedUntil": NSNull()] as [String: Any])
-    }
+      TripReminder.shared.status { promise.resolve($0) }
+    }.runOnQueue(.main)
 
+    // The one "Always" request, from the driver's tap that turns the reminder on.
     AsyncFunction("requestReminderLocation") { (promise: Promise) in
-      promise.resolve("notNeeded")
-    }
+      TripReminder.shared.requestAlways { promise.resolve($0) }
+    }.runOnQueue(.main)
 
     // Heavy: runs on the module's own async queue, never the main queue.
     AsyncFunction("selfTest") { (vectorsJson: String, promise: Promise) in

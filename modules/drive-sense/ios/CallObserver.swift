@@ -41,6 +41,12 @@ final class CallObserver: NSObject, CXCallObserverDelegate {
     observer?.calls.contains { !$0.hasEnded } ?? false
   }
 
+  /// A fresh read for the forgot-to-start reminder's stop check (no drive open, so no observer
+  /// runs). It emits nothing.
+  static func anyCallActiveNow() -> Bool {
+    CXCallObserver().calls.contains { !$0.hasEnded }
+  }
+
   private func emit(_ isActive: Bool) {
     EventHub.shared.emit("call", ["active": isActive, "ts": TimeBase.nowTs()])
   }

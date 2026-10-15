@@ -5,7 +5,7 @@
  */
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
-import appConfig, { googleServicesFile, PERMISSION_COPY } from '../../app.config';
+import appConfig, { googleServicesFile, PERMISSION_COPY, REMINDER_LOCATION_COPY } from '../../app.config';
 
 // Local shapes: the app's tsconfig carries no Node types.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the same module app.config reads
@@ -93,36 +93,47 @@ describe('the runtime version (release gate, C0-I1)', () => {
   });
 });
 
-// v3: every drive starts in the app. "While Using" location only, never Always; a started drive keeps
-// running in the background (iOS location mode, Android foreground service); no microphone.
+// v3: every drive starts in the app and needs "While Using" location only; a started drive keeps
+// running in the background (iOS location mode, Android foreground service); no microphone. The iOS
+// "Always" strings exist for the optional forgot-to-start reminder alone (asked only when the driver
+// turns it on); Android never gets background location.
 describe('permissions (v3)', () => {
   const plugin = (name: string) => {
     const entry = build().plugins?.find((p) => Array.isArray(p) && p[0] === name);
     return Array.isArray(entry) ? (entry[1] as Record<string, unknown>) : undefined;
   };
 
-  test('location is While Using only, and the Always strings are removed', () => {
+  test('a drive needs While Using; the Always strings name the forgot-to-start reminder and nothing else', () => {
     const location = plugin('expo-location');
     expect(location).toMatchObject({
       locationWhenInUsePermission: PERMISSION_COPY.location,
-      locationAlwaysAndWhenInUsePermission: false,
-      locationAlwaysPermission: false,
+      locationAlwaysAndWhenInUsePermission: REMINDER_LOCATION_COPY,
+      locationAlwaysPermission: REMINDER_LOCATION_COPY,
       isIosBackgroundLocationEnabled: true,
       isAndroidBackgroundLocationEnabled: false,
       isAndroidForegroundServiceEnabled: true,
       isAndroidMotionActivityEnabled: true,
       motionUsagePermission: PERMISSION_COPY.motion,
     });
+    // The plugin writes the usage strings; the app's own plist adds none of its own.
     const plist = build().ios?.infoPlist ?? {};
     expect(plist).not.toHaveProperty('NSLocationAlwaysAndWhenInUseUsageDescription');
     expect(plist).not.toHaveProperty('NSLocationAlwaysUsageDescription');
+    expect(REMINDER_LOCATION_COPY.startsWith('Only if you turn on the forgot-to-start reminder')).toBe(true);
+    expect(REMINDER_LOCATION_COPY).toContain('stays on your phone');
   });
 
   test('Android never gets background location or audio recording', () => {
     expect(build().android?.blockedPermissions).toEqual(
       expect.arrayContaining(['android.permission.ACCESS_BACKGROUND_LOCATION', 'android.permission.RECORD_AUDIO'])
     );
+  });
+
+  test("the boot permission comes from drive-sense's manifest only (the reminder's boot receiver), not the app config", () => {
     expect(build().android?.permissions).not.toContain('android.permission.RECEIVE_BOOT_COMPLETED');
+    const ROOT_DIR = path.join(__dirname, '..', '..');
+    const manifest = fs.readFileSync(path.join(ROOT_DIR, 'modules/drive-sense/android/src/main/AndroidManifest.xml'), 'utf8');
+    expect(manifest).toContain('<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />');
   });
 
   test('the camera is for QR codes only, with no microphone', () => {

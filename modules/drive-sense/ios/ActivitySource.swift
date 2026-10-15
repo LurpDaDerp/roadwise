@@ -69,6 +69,43 @@ enum ActivitySource {
     }
   }
 
+  // MARK: - The forgot-to-start reminder's look-backs (no drive open; nothing reaches JS)
+
+  /// The motion history from `since` to now, summarized by the policy (`TripReminderPolicy.summarize`):
+  /// the newest confident car stretch and whether the driver is on foot now. Resolves on main.
+  static func recentAutomotive(since: Date, _ done: @escaping (MotionSummary) -> Void) {
+    let now = Date()
+    lookBack(from: since, to: now) { list in
+      done(TripReminderPolicy.summarize(list, now.timeIntervalSince1970 * 1000))
+    }
+  }
+
+  /// Whether the driver walked or ran between two moments (a stop's hold, the last 30 s). Resolves on main.
+  static func walkingBetween(_ from: Date, _ to: Date, _ done: @escaping (Bool) -> Void) {
+    lookBack(from: from, to: to) { list in
+      done(list.contains { $0.onFoot && $0.confident })
+    }
+  }
+
+  /// The one history query besides the permission prompt. Empty without motion access.
+  private static func lookBack(from: Date, to: Date, _ done: @escaping ([ActivitySample]) -> Void) {
+    guard status() == "granted", from < to else {
+      done([])
+      return
+    }
+    manager.queryActivityStarting(from: from, to: to, to: queue) { activities, _ in
+      let list = (activities ?? []).map { a in
+        ActivitySample(
+          start: a.startDate.timeIntervalSince1970 * 1000,
+          automotive: a.automotive,
+          onFoot: a.walking || a.running || a.cycling,
+          confident: a.confidence != .low
+        )
+      }
+      DispatchQueue.main.async { done(list) }
+    }
+  }
+
   // MARK: - Live updates
 
   /// Main thread. Idempotent. Emits `activity`, skipping an update equal in type and confidence

@@ -12,13 +12,16 @@ Pod::Spec.new do |s|
   s.author         = 'RoadWise'
   s.license        = { :type => 'Proprietary' }
   s.homepage       = 'https://github.com/LurpDaDerp/RoadCash'
-  s.platforms      = { :ios => '15.1' }
+  # 16.4: the Expo SDK's own floor (ExpoModulesCore, ExpoNotifications).
+  s.platforms      = { :ios => '16.4' }
   # Swift-only pod: CocoaPods aborts `pod install` for a pod with Swift sources and no declared
   # Swift version.
   s.swift_version  = '5.9'
   s.source         = { git: '' }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
-  s.frameworks = 'CoreLocation', 'CoreMotion', 'CallKit', 'LocalAuthentication'
+  # The forgot-to-start reminder's "Not driving" action joins expo-notifications' delegate list.
+  s.dependency 'ExpoNotifications'
+  s.frameworks = 'CoreLocation', 'CoreMotion', 'CallKit', 'LocalAuthentication', 'UserNotifications'
   s.source_files = '**/*.{h,m,mm,swift}'
 end
