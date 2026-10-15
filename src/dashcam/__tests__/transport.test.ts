@@ -435,7 +435,7 @@ test('Android: the paired MAC advertising the pairing service 20 s after the lin
   expect(r.k.log).toContain('repair:reflashed');
 });
 
-test('setup ops: scan filters on the service; identify writes 0x01; Android bond drops a stale bond first; iOS bonds through an encrypted read', async () => {
+test('setup ops: scan filters on the service; Android drops a stale OS bond before the setup connect (never after the identify); identify writes 0x01; createBond; iOS bonds through an encrypted read', async () => {
   const r = rig('android');
   r.ble.addPeripheral({ id: PID, info: infoBytes(), osBonded: true });
   const hits: string[] = [];
@@ -450,8 +450,8 @@ test('setup ops: scan filters on the service; identify writes 0x01; Android bond
   await r.t.identify(PID);
   expect(r.ble.writes.at(-1)).toEqual({ id: PID, characteristic: IDENTIFY_CHAR, bytes: [1], withResponse: true });
   await r.t.bond(PID);
-  const order = r.ble.calls.filter((c) => /Bond/.test(c));
-  expect(order).toEqual(['getBondedPeripherals', `removeBond:${PID}`, `createBond:${PID}`]);
+  const order = r.ble.calls.filter((c) => /Bond|connect|0003/.test(c));
+  expect(order).toEqual(['getBondedPeripherals', `removeBond:${PID}`, `connect:${PID}`, `write:${PID}:0003`, `createBond:${PID}`]);
 
   const i = rig('ios');
   await i.t.setupConnect(PID);
@@ -459,6 +459,22 @@ test('setup ops: scan filters on the service; identify writes 0x01; Android bond
   expect(i.ble.calls).toContain(`read:${PID}:0004`);
   expect(i.ble.calls.some((c) => c.includes('Bond'))).toBe(false);
   void TX_CHAR;
+});
+
+test('the setup link is up from the setup connect until a disconnect event or our own disconnect', async () => {
+  const r = rig('android');
+  r.ble.addPeripheral({ id: PID, info: infoBytes() });
+  expect(r.t.setupLinkUp(PID)).toBe(false);
+  await r.t.setupConnect(PID);
+  expect(r.t.setupLinkUp(PID.toLowerCase())).toBe(true);
+  // No OS bond: nothing removed.
+  expect(r.ble.calls.filter((c) => /Bond/.test(c))).toEqual(['getBondedPeripherals']);
+  r.ble.drop(PID);
+  expect(r.t.setupLinkUp(PID)).toBe(false);
+  await r.t.setupConnect(PID);
+  expect(r.t.setupLinkUp(PID)).toBe(true);
+  await r.t.disconnect(PID);
+  expect(r.t.setupLinkUp(PID)).toBe(false);
 });
 
 test('a setup connect that never completes is cancelled at its timeout', async () => {

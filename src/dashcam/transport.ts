@@ -95,10 +95,17 @@ export interface DashcamTransport {
   linked(): boolean;
   // ——— setup (foreground, the driver's explicit action) ———
   scan(opts: { service: string; seconds: number; onHit(hit: ScanHit): void }): Promise<{ stop(): Promise<void> }>;
+  /**
+   * Connect for setup. Android: an OS bond still held for this peripheral (the dashcam was
+   * reflashed, wiped or forgot this phone) is removed first, before connecting: removing a bond
+   * drops the link, and with it the dashcam's setup claim, so a bond made after it would be refused.
+   */
   setupConnect(peripheralId: string, timeoutMs?: number): Promise<void>;
+  /** The setup connection to this peripheral is still up (no disconnect since `setupConnect`). */
+  setupLinkUp(peripheralId: string): boolean;
   readInfo(peripheralId: string): Promise<DashcamInfo | null>;
   identify(peripheralId: string): Promise<void>;
-  /** Make the OS bond (Android: drop a stale bond first, then createBond; iOS: an encrypted read). */
+  /** Make the OS bond on the setup connection (Android: createBond; iOS: an encrypted read). */
   bond(peripheralId: string): Promise<void>;
   subscribe(peripheralId: string, onFrame: (bytes: number[]) => void): Promise<() => void>;
   writeTo(peripheralId: string, bytes: number[]): Promise<void>;
@@ -196,6 +203,8 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
   /** peripherals restored by iOS before the target was known */
   let restored: string[] = [];
   const setupFrames = new Map<string, (bytes: number[]) => void>();
+  /** setup connections that are up (lowercase peripheral ids) */
+  const setupLinks = new Set<string>();
   let scanHit: ((e: BlePeripheralEvent) => void) | null = null;
 
   function report(e: unknown, ctx: string): void {
@@ -427,6 +436,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     });
     api.onDisconnectPeripheral((e) => {
       pump();
+      setupLinks.delete(e.peripheral.toLowerCase());
       const t = tgt;
       if (!t || !same(e.peripheral, t.peripheralId)) return;
       if (halted) return;
@@ -628,15 +638,24 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
 
     async setupConnect(peripheralId, timeoutMs = SETUP_CONNECT_TIMEOUT_MS) {
       await self.start();
+      if (platform === 'android') {
+        const bonded = await gatt('getBondedPeripherals', () => api.getBondedPeripherals());
+        // A stale bond would make createBond report success on the old keys; removing it later,
+        // after the identify, would drop the link that holds the setup claim.
+        if (bonded.some((p) => same(p.id, peripheralId))) await gatt('removeBond', () => api.removeBond(peripheralId));
+      }
       try {
         await bounded(api.connect(peripheralId), timeoutMs, 'connect');
       } catch (e) {
         await api.disconnect(peripheralId, true).catch(() => {});
         throw e;
       }
+      setupLinks.add(peripheralId.toLowerCase());
       if (platform === 'android') await gatt('requestMTU', () => api.requestMTU(peripheralId, MTU)).catch((e: unknown) => report(e, 'requestMTU'));
       await gatt('retrieveServices', () => api.retrieveServices(peripheralId));
     },
+
+    setupLinkUp: (peripheralId) => setupLinks.has(peripheralId.toLowerCase()),
 
     async readInfo(peripheralId) {
       return decodeInfo(await gatt('read INFO', () => api.read(peripheralId, DASHPAL_SERVICE, INFO_CHAR)));
@@ -648,12 +667,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
 
     async bond(peripheralId) {
       if (platform === 'android') {
-        const bonded = await gatt('getBondedPeripherals', () => api.getBondedPeripherals());
-        if (bonded.some((p) => same(p.id, peripheralId))) {
-          // A stale bond (the dashcam was reflashed or forgot this phone): drop it first, or
-          // createBond would report success on the old keys.
-          await gatt('removeBond', () => api.removeBond(peripheralId));
-        }
+        // Any stale OS bond went before the setup connect (`setupConnect`).
         await gatt('createBond', () => api.createBond(peripheralId), false, BOND_TIMEOUT_MS);
         return;
       }
@@ -676,6 +690,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
 
     async disconnect(peripheralId) {
       setupFrames.delete(peripheralId);
+      setupLinks.delete(peripheralId.toLowerCase());
       await api.disconnect(peripheralId, true);
     },
 

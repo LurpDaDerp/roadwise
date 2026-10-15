@@ -1,8 +1,9 @@
 // Setting up a DashPal (plan §7.9): only on the driver's explicit action, never while a drive is
 // open. Find dashcams in pairing mode (the `00f0` service) for up to 15 s, strongest signal first
-// (RSSI ≥ −80); connect, read INFO (open), make the candidate beep (IDENTIFY), and ask "Is your
-// DashPal beeping?". Yes: bond (Android: drop a stale OS bond first, then createBond, ≤ 60 s; iOS:
-// an encrypted TX read raises the system pairing dialog), subscribe, COMMAND 7 hello, COMMAND 5
+// (RSSI ≥ −80); connect (Android: a stale OS bond is dropped before connecting), read INFO (open),
+// make the candidate beep (IDENTIFY), and ask "Is your DashPal beeping?". Yes: bond on that same
+// connection (Android: createBond, ≤ 60 s; iOS: an encrypted TX read raises the system pairing
+// dialog), subscribe, COMMAND 7 hello, COMMAND 5
 // (pair confirm), save the pairing, and hand the dashcam to the auto-connect. No: the next one, or
 // "press its button 5 times". UI-free: the screen renders `phase` and calls `answer`/`cancel`.
 import type { BluetoothAccess } from '@/core/permissions/adapters';

@@ -91,7 +91,7 @@ test.each([
   expect(r.phases).toContain('optIn');
 });
 
-test('the closest candidate first (RSSI ≥ −80); identify; "No" moves to the next; "Yes" bonds (Android: stale bond dropped first), hellos, confirms and saves', async () => {
+test('the closest candidate first (RSSI ≥ −80); identify; "No" moves to the next; "Yes" bonds (Android: a stale OS bond dropped before the connect), hellos, confirms and saves', async () => {
   const r = rig({ platform: 'android' });
   r.ble.addPeripheral({ id: 'FAR', info: info(0xd1) });
   r.ble.addPeripheral({ id: 'NEAR', info: info(0xd2), osBonded: true });
@@ -118,14 +118,15 @@ test('the closest candidate first (RSSI ≥ −80); identify; "No" moves to the 
   expect(r.paired).toEqual([{ dashcamId: 'a4cf12b3c4d3', peripheralId: 'MID', name: 'DashPal-C4D3', pairedAt: expect.any(Number) }]);
   // FAR was never tried (too weak).
   expect(r.ble.calls.some((c) => c.includes('FAR'))).toBe(false);
-  const mid = r.ble.calls.filter((c) => c.includes('MID') || c === 'getBondedPeripherals');
+  const from = r.ble.calls.indexOf('connect:MID') - 1;
+  const mid = r.ble.calls.slice(from).filter((c) => c.includes('MID') || c === 'getBondedPeripherals');
   expect(mid).toEqual([
+    'getBondedPeripherals',
     'connect:MID',
     'requestMTU:MID:247',
     'retrieveServices:MID',
     'read:MID:0002',
     'write:MID:0003',
-    'getBondedPeripherals',
     'createBond:MID',
     'startNotification:MID:0004',
     'write:MID:0005',
@@ -139,7 +140,7 @@ test('the closest candidate first (RSSI ≥ −80); identify; "No" moves to the 
   ]);
 });
 
-test('Android re-pair of a dashcam the OS still holds a bond for: removeBond first, then createBond', async () => {
+test('Android re-pair of a dashcam the OS still holds a bond for: removeBond before the setup connect, then identify and createBond on that connection', async () => {
   const r = rig({ platform: 'android' });
   r.ble.addPeripheral({ id: 'P', info: info(0xd5), osBonded: true });
   const run = r.flow.start();
@@ -148,7 +149,7 @@ test('Android re-pair of a dashcam the OS still holds a bond for: removeBond fir
   await r.until('confirm');
   r.flow.answer(true);
   await run;
-  expect(r.ble.calls.filter((c) => /Bond/.test(c))).toEqual(['getBondedPeripherals', 'removeBond:P', 'createBond:P']);
+  expect(r.ble.calls.filter((c) => /Bond|connect|0003/.test(c))).toEqual(['getBondedPeripherals', 'removeBond:P', 'connect:P', 'write:P:0003', 'createBond:P', 'disconnect:P']);
 });
 
 test('iOS: the encrypted TX read is the pairing; a stale iOS bond says to forget it in Settings first', async () => {
