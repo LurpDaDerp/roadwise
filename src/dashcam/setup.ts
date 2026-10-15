@@ -1,7 +1,9 @@
 // Setting up a DashPal (plan §7.9): only on the driver's explicit action, never while a drive is
 // open. Find dashcams in pairing mode (the `00f0` service) for up to 15 s, strongest signal first
-// (RSSI ≥ −80); connect (Android: a stale OS bond is dropped before connecting), read INFO (open),
-// make the candidate beep (IDENTIFY), and ask "Is your DashPal beeping?". Yes: bond on that same
+// (RSSI ≥ −80); connect (Android: an OS bond with it is dropped before connecting; for the paired
+// dashcam only when INFO says the dashcam no longer holds this phone's bond, so a setup answered
+// No, failed or cancelled leaves a working pairing as it was), read INFO (open), make the
+// candidate beep (IDENTIFY), and ask "Is your DashPal beeping?". Yes: bond on that same
 // connection (Android: createBond, ≤ 60 s; iOS: an encrypted TX read raises the system pairing
 // dialog), subscribe, COMMAND 7 hello, COMMAND 5 (pair confirm), save the pairing, and hand the
 // dashcam to the auto-connect. No: the next one, or "press its button 5 times".
@@ -211,7 +213,8 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       // The link dropped while the driver answered, and the claim with it: reconnect and beep again,
       // so the bond is made on a connection that holds the claim.
       try {
-        await t.setupConnect(c.id);
+        // Any stale OS bond went at the first connect; a working one stays.
+        await t.setupConnect(c.id, { keepBond: true });
         const again = await t.readInfo(c.id);
         if (!again || !speaksV1(again) || again.dashcamId !== identified.dashcamId) throw new Error('not the same DashPal');
         const r = await identifyOrWait(t, c.id, again);
@@ -304,8 +307,17 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
             current = c.id;
             let info: DashcamInfo | null = null;
             try {
-              await t.setupConnect(c.id);
+              const own = deps.platform === 'android' && before !== null && before.peripheralId.toLowerCase() === c.id.toLowerCase();
+              await t.setupConnect(c.id, { keepBond: own });
               info = await t.readInfo(c.id);
+              if (own && info && !info.peerBonded) {
+                // The dashcam no longer holds this phone's bond, so the OS one is stale: connect again
+                // without it, before the identify (removing a bond drops the link).
+                await t.disconnect(c.id).catch((e: unknown) => report(e, 'disconnect'));
+                if (cancelled) break;
+                await t.setupConnect(c.id);
+                info = await t.readInfo(c.id);
+              }
               if (!info || !speaksV1(info)) throw new Error('not a DashPal this app can pair');
               const r = await identifyOrWait(t, c.id, info);
               if (r.kind !== 'ok') {

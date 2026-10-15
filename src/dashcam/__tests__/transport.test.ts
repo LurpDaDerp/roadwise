@@ -477,10 +477,18 @@ test('the setup link is up from the setup connect until a disconnect event or ou
   expect(r.t.setupLinkUp(PID)).toBe(false);
 });
 
+test('a setup connect with keepBond leaves the OS bond alone', async () => {
+  const r = rig('android');
+  r.ble.addPeripheral({ id: PID, info: infoBytes(), osBonded: true });
+  await r.t.setupConnect(PID, { keepBond: true });
+  expect(r.ble.calls.filter((c) => /Bond|^connect/.test(c))).toEqual([`connect:${PID}`]);
+  expect(await r.ble.getBondedPeripherals()).toEqual([{ id: PID }]);
+});
+
 test('a setup connect that never completes is cancelled at its timeout', async () => {
   const r = rig('ios');
   r.ble.connectMode.set(PID, 'hang');
-  const p = r.t.setupConnect(PID, 15_000);
+  const p = r.t.setupConnect(PID, { timeoutMs: 15_000 });
   const caught = p.catch((e: unknown) => e);
   await flush();
   await r.clock.advance(15_000);

@@ -99,8 +99,10 @@ export interface DashcamTransport {
    * Connect for setup. Android: an OS bond still held for this peripheral (the dashcam was
    * reflashed, wiped or forgot this phone) is removed first, before connecting: removing a bond
    * drops the link, and with it the dashcam's setup claim, so a bond made after it would be refused.
+   * `keepBond`: leave the OS bond alone (the paired dashcam, whose pairing may still work; setup
+   * checks INFO's `peer_bonded` and connects again without it if it does not).
    */
-  setupConnect(peripheralId: string, timeoutMs?: number): Promise<void>;
+  setupConnect(peripheralId: string, opts?: { keepBond?: boolean; timeoutMs?: number }): Promise<void>;
   /** The setup connection to this peripheral is still up (no disconnect since `setupConnect`). */
   setupLinkUp(peripheralId: string): boolean;
   readInfo(peripheralId: string): Promise<DashcamInfo | null>;
@@ -636,9 +638,9 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       };
     },
 
-    async setupConnect(peripheralId, timeoutMs = SETUP_CONNECT_TIMEOUT_MS) {
+    async setupConnect(peripheralId, { keepBond = false, timeoutMs = SETUP_CONNECT_TIMEOUT_MS } = {}) {
       await self.start();
-      if (platform === 'android') {
+      if (platform === 'android' && !keepBond) {
         const bonded = await gatt('getBondedPeripherals', () => api.getBondedPeripherals());
         // A stale bond would make createBond report success on the old keys; removing it later,
         // after the identify, would drop the link that holds the setup claim.

@@ -171,6 +171,61 @@ test('Android re-pair of a dashcam the OS still holds a bond for: removeBond bef
   expect(r.ble.calls.filter((c) => /Bond|connect|0003/.test(c))).toEqual(['getBondedPeripherals', 'removeBond:P', 'connect:P', 'write:P:0003', 'createBond:P', 'disconnect:P']);
 });
 
+describe('Android setup that finds the paired DashPal in pairing mode (its OS bond may still work)', () => {
+  const previous: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'P', name: 'DashPal-C4D5', pairedAt: 1 };
+  const steps = (r: Rig) => r.ble.calls.filter((c) => /Bond|^connect|^disconnect|0003/.test(c));
+
+  test('the dashcam still holds this phone: "No" leaves the OS bond alone, and the pairing gets its auto-connect back', async () => {
+    const r = rig({ platform: 'android', previous });
+    r.t.setTarget({ peripheralId: 'P', dashcamId: previous.dashcamId });
+    r.ble.addPeripheral({ id: 'P', info: info(0xd5, { peerBonded: true, bondCount: 1 }), osBonded: true });
+    const { run } = await startWith(r, ['P']);
+    await r.until('confirm');
+    r.flow.answer(false);
+    await run;
+    expect(r.flow.phase().kind).toBe('none_found');
+    expect(r.ble.calls.some((c) => c.startsWith('removeBond') || c === 'getBondedPeripherals')).toBe(false);
+    expect(await r.ble.getBondedPeripherals()).toEqual([{ id: 'P' }]);
+    expect(r.t.target()).toEqual({ peripheralId: 'P', dashcamId: previous.dashcamId });
+  });
+
+  test.each([
+    ['cancel', async (r: Rig) => void (await r.flow.cancel())],
+    ['no answer in 110 s', async (r: Rig) => r.expireConfirm()],
+  ])('the dashcam still holds this phone: %s leaves the OS bond alone', async (_name, end) => {
+    const r = rig({ platform: 'android', previous });
+    r.ble.addPeripheral({ id: 'P', info: info(0xd5, { peerBonded: true, bondCount: 1 }), osBonded: true });
+    const { run } = await startWith(r, ['P']);
+    await r.until('confirm');
+    await end(r);
+    await run;
+    expect(r.ble.calls.some((c) => c.startsWith('removeBond'))).toBe(false);
+    expect(r.t.target()).toEqual({ peripheralId: 'P', dashcamId: previous.dashcamId });
+  });
+
+  test('the dashcam still holds this phone: "Yes" bonds on the same connection with the bond it has', async () => {
+    const r = rig({ platform: 'android', previous });
+    r.ble.addPeripheral({ id: 'P', info: info(0xd5, { peerBonded: true, bondCount: 1 }), osBonded: true });
+    const { run } = await startWith(r, ['P']);
+    await r.until('confirm');
+    r.flow.answer(true);
+    await run;
+    expect(r.flow.phase()).toMatchObject({ kind: 'done', paired: { peripheralId: 'P' }, phones: 1, unexpected: false });
+    expect(steps(r)).toEqual(['connect:P', 'write:P:0003', 'createBond:P', 'disconnect:P']);
+  });
+
+  test('INFO says the dashcam no longer holds this phone: the stale OS bond goes and the phone connects again, all before the identify', async () => {
+    const r = rig({ platform: 'android', previous });
+    r.ble.addPeripheral({ id: 'P', info: info(0xd5), osBonded: true });
+    const { run } = await startWith(r, ['P']);
+    await r.until('confirm');
+    r.flow.answer(true);
+    await run;
+    expect(r.flow.phase()).toMatchObject({ kind: 'done', paired: { peripheralId: 'P' } });
+    expect(steps(r)).toEqual(['connect:P', 'disconnect:P', 'getBondedPeripherals', 'removeBond:P', 'connect:P', 'write:P:0003', 'createBond:P', 'disconnect:P']);
+  });
+});
+
 test('iOS: the encrypted TX read is the pairing; a stale iOS bond says to forget it in Settings first', async () => {
   const ok = rig({ platform: 'ios' });
   ok.ble.setState('on');
