@@ -100,6 +100,30 @@ describeSim('DashPal time, context and two phones (firmware simulator ↔ app li
       expect(Number((await ctx(w))[1])).toBeCloseTo(lastState.f.localMin + (w.W - lastState.at) / 60_000, 3);
     }));
 
+  test('the speed the no-face rule reads: the phone sends its GPS speed in cm/s, so 10 km/h (2.78 m/s) reaches the dashcam as 10 km/h or more and 2.7 m/s below it; with no drive recording the phone vouches for no speed, so the no-face alert cannot sound', () =>
+    scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
+      const a = await linkedA(w);
+      await w.drive(a, 2000, 25); // fresh, accurate fixes, but no drive started
+      expect(w.rxOf('STATE', 1).at(-1)!.f.flags & 0x0c).toBe(0);
+      expect((await ctx(w))[0]).toBe('nan');
+
+      a.host.recording = true;
+      await w.drive(a, 2000, 10 / 3.6);
+      expect(w.rxOf('STATE', 1).at(-1)!.f.speedCms).toBe(278);
+      expect(Number((await ctx(w))[0])).toBeGreaterThanOrEqual(10); // moving for the dashcam (stationary is under 10 km/h)
+      await w.drive(a, 2000, 2.7);
+      expect(w.rxOf('STATE', 1).at(-1)!.f.speedCms).toBe(270);
+      expect(Number((await ctx(w))[0])).toBeLessThan(10);
+
+      // The drive ends: the next STATE drops drive_active and speed_valid, so the speed is unknown at once.
+      await w.drive(a, 1000, 20);
+      a.host.recording = false;
+      const t0 = w.W;
+      await w.until(() => w.rxOf('STATE', 1, t0 + 1).length > 0, 2000, 'a STATE after the drive');
+      expect(w.rxOf('STATE', 1, t0 + 1)[0]!.f.flags & 0x0c).toBe(0);
+      expect((await ctx(w))[0]).toBe('nan');
+    }));
+
   test('row 24: two phones: the one in a drive becomes primary and holds the lease; the other gets alerts visual-only; coverage counts only on the primary; the primary leaving hands over', () =>
     scenario({ bootId: BOOT, bonded: ['A', 'B'] }, async (w) => {
       await w.dashcam('STATE 3 72'); // monitoring, calibrated, live face
