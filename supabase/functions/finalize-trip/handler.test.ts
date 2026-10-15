@@ -172,6 +172,91 @@ Deno.test('merge: the union is scored with the target context and streak; the re
   assertEquals([e.payload.miles, e.payload.clientTripId, e.safeMilesEarlierToday], [12, TRIP_2, 0]);
 });
 
+// The DashPal limits on the server: re-applied over the whole drive, merge target included.
+const dcId = (n: number): string => `dddddddd-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const MIN = 60_000;
+/** An uploaded DashPal event `m` minutes after the upload's start; `speedMph` null = not measured. */
+const dcEvent = (n: number, type: 'drowsy' | 'eyes_off', m: number, speedMph: number | null = 40) => ({
+  id: dcId(n),
+  type,
+  tier: 'severe' as const,
+  startedAt: STARTED_AT + m * MIN,
+  durationS: 4,
+  lat: null,
+  lng: null,
+  measured: speedMph === null ? { source: 'dashcam' as const } : { source: 'dashcam' as const, speedMph },
+});
+/** A stored DashPal event of the merge target, `m` minutes after the upload's start (negative: before). */
+const storedDc = (n: number, type: 'drowsy' | 'eyes_off', m: number, status: 'active' | 'removed' = 'active') => ({
+  ...dcEvent(n, type, m),
+  units: null,
+  stoppedInTraffic: null,
+  zone: null,
+  status,
+  penalty: status === 'active' ? (type === 'drowsy' ? 50 : 40) : 0,
+});
+
+Deno.test("merge: at most one drowsy per 10 min and one eyes-off per 5 min over the merged drive; the target's events stand, the upload's too-close ones are dropped, later ones repeat-scored", async () => {
+  // the target ended 2 min before this start: its drowsy 5 min and its eyes-off 3 min before it
+  const merge = mergeTarget({ events: [...mergeTarget().events, storedDc(1, 'drowsy', -5), storedDc(2, 'eyes_off', -3)] });
+  const h = harness({ context: { ...freshContext, merge } });
+  const upload = payload({
+    clientTripId: TRIP_2,
+    events: [
+      ...payload().events, // the hard brake: a phone event, never touched
+      dcEvent(3, 'drowsy', 1), // 6 min after the target's drowsy: dropped
+      dcEvent(4, 'eyes_off', 1), // 4 min after the target's eyes-off: dropped
+      dcEvent(5, 'eyes_off', 2), // 5 min after it: kept
+      dcEvent(6, 'drowsy', 5), // 10 min after it: kept
+      dcEvent(7, 'drowsy', 14.9), // 9.9 min after the kept one: dropped
+    ],
+  });
+  const res = await handleFinalizeTrip(post(upload), h.deps);
+  assertEquals(res.status, 200);
+  const e = envelopeOf(h);
+  assertEquals(
+    e.events.map((x) => [x.id, x.status]),
+    [[EVENT_2, 'removed'], [dcId(1), 'active'], [dcId(2), 'active'], [EVENT, 'active'], [dcId(5), 'active'], [dcId(6), 'active']]
+  );
+  // in time order, 15 mi (no short-drive scaling): 50, 40, then the repeats 40 × 1.25 = 50 and
+  // 50 × 1.25 = 62.5 → 63, and the hard brake 10 minutes in
+  assertEquals(e.breakdown.events, [
+    { id: dcId(1), penalty: 50 },
+    { id: dcId(2), penalty: 40 },
+    { id: dcId(5), penalty: 50 },
+    { id: dcId(6), penalty: 63 },
+    { id: EVENT, penalty: 10 },
+  ]);
+  assertEquals([e.breakdown.penalties, e.breakdown.ratingPenalty, e.breakdown.activeEventCount, e.net], [213, 10, 1, 160 - 213]);
+  const body = await res.json();
+  assertEquals(body.breakdown.events.map((x: { id: string }) => x.id).includes(dcId(3)), false);
+});
+
+Deno.test('merge: a removed (disputed) target drowsy holds nothing back; without a merge the same upload keeps its first drowsy only', async () => {
+  const merge = mergeTarget({ events: [storedDc(1, 'drowsy', -5, 'removed')] });
+  const h = harness({ context: { ...freshContext, merge } });
+  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, events: [dcEvent(3, 'drowsy', 1), dcEvent(4, 'drowsy', 2)] })), h.deps);
+  assertEquals(envelopeOf(h).events.map((x) => [x.id, x.status]), [[dcId(1), 'removed'], [dcId(3), 'active']]);
+  assertEquals(envelopeOf(h).breakdown.events, [{ id: dcId(3), penalty: 50 }]);
+  const fresh = harness();
+  await handleFinalizeTrip(post(payload({ events: [dcEvent(4, 'drowsy', 2), dcEvent(3, 'drowsy', 1)] })), fresh.deps);
+  assertEquals(envelopeOf(fresh).events.map((x) => x.id), [dcId(3)]);
+});
+
+Deno.test('a DashPal event under 10 mph or with no measured speed is dropped, not the drive: it is scored on what remains', async () => {
+  const h = harness();
+  const res = await handleFinalizeTrip(
+    post(payload({ events: [...payload().events, dcEvent(1, 'drowsy', 2, 9.9), dcEvent(2, 'eyes_off', 3, null), dcEvent(3, 'eyes_off', 20, 10)] })),
+    h.deps
+  );
+  assertEquals(res.status, 200);
+  const e = envelopeOf(h);
+  assertEquals(e.events.map((x) => x.id), [EVENT, dcId(3)]);
+  assertEquals([e.scored, e.breakdown.events], [true, [{ id: EVENT, penalty: 10 }, { id: dcId(3), penalty: 40 }]]);
+  // phone events carry no speed rule: a hard brake with no measured speed stays
+  assertEquals(e.events[0].measured, { peakG: 0.42 });
+});
+
 Deno.test('integrity: a mock location is stored unscored as spoofed, never merged, with a zeroed breakdown and no streak change', async () => {
   const h = harness({ context: { ...freshContext, merge: mergeTarget() } });
   const p = payload({ integrity: { mockLocation: true, motionMismatch: false, validGnssPct: 100, maxSpeedMph: 50 } });

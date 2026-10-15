@@ -8,6 +8,7 @@ import {
   dashcamDrive,
   isDashcamType,
   eventPenalty,
+  keepDashcamEvents,
   nextMultiplier,
   ratingPenalty,
   scoreDrive,
@@ -469,4 +470,50 @@ test('SCORING_VERSION is 4 and the barrel exports the API', () => {
   expect(barrel.scoreDrive).toBe(scoreDrive);
   expect(barrel.dashcamDrive).toBe(dashcamDrive);
   expect(barrel.SCORING_VERSION).toBe(4);
+});
+
+describe('keepDashcamEvents — the DashPal limits re-applied over the whole drive', () => {
+  const MIN = 60_000;
+  const t = (m: number): number => 1_800_000_000_000 + m * MIN;
+  const dc = (id: string, type: 'drowsy' | 'eyes_off', m: number, speedMph: unknown = 30, status?: 'active' | 'removed') => ({
+    id,
+    type,
+    startedAt: t(m),
+    status,
+    measured: speedMph === null ? { source: 'dashcam' } : { source: 'dashcam', speedMph },
+  });
+  const phone = (id: string, m: number) => ({ id, type: 'phone_pickup' as const, startedAt: t(m), measured: {} });
+  const ids = (list: readonly { id: string }[]): string[] => list.map((e) => e.id);
+
+  test('the barrel exports it', () => {
+    expect(barrel.keepDashcamEvents).toBe(keepDashcamEvents);
+  });
+
+  test('an upload alone: under 10 mph, a missing, non-numeric or non-finite speed are dropped; exactly 10 mph is kept; phone events pass untouched', () => {
+    const up = [dc('a', 'drowsy', 1, 9.99), dc('b', 'drowsy', 20, null), dc('s', 'drowsy', 30, '30'), dc('c', 'eyes_off', 3, Number.NaN), dc('d', 'drowsy', 40, 10), phone('p', 2), { ...phone('q', 3), measured: {} }];
+    expect(ids(keepDashcamEvents(up))).toEqual(['d', 'p', 'q']);
+  });
+
+  test('at most one drowsy per 10 min and one eyes_off per 5 min, the earliest kept, in input order', () => {
+    const up = [dc('late', 'drowsy', 9.99), dc('first', 'drowsy', 0), dc('ten', 'drowsy', 10), dc('e1', 'eyes_off', 1), dc('e2', 'eyes_off', 5.9), dc('e3', 'eyes_off', 6)];
+    expect(ids(keepDashcamEvents(up))).toEqual(['first', 'ten', 'e1', 'e3']);
+    // the same start: the lower id is kept
+    expect(ids(keepDashcamEvents([dc('y', 'drowsy', 0), dc('x', 'drowsy', 0)]))).toEqual(['x']);
+  });
+
+  test('a merge: stored events stand and anchor the limits; a removed stored one anchors nothing; the gap is checked both ways', () => {
+    const stored = [dc('s1', 'drowsy', 0), dc('s2', 'eyes_off', 2), dc('gone', 'drowsy', 30, 30, 'removed'), phone('sp', 1)];
+    const up = [dc('u1', 'drowsy', 9), dc('u2', 'drowsy', 10), dc('u3', 'eyes_off', 6.9), dc('u4', 'eyes_off', 7), dc('u5', 'drowsy', 31), phone('up', 8)];
+    expect(ids(keepDashcamEvents(up, stored))).toEqual(['u2', 'u4', 'u5', 'up']);
+    // a stored event later than an upload still blocks it
+    expect(ids(keepDashcamEvents([dc('early', 'drowsy', 50)], [dc('s', 'drowsy', 55)]))).toEqual([]);
+    expect(keepDashcamEvents([], stored)).toEqual([]);
+  });
+
+  test('pure: the inputs are not mutated', () => {
+    const up = [dc('b', 'drowsy', 5), dc('a', 'drowsy', 0)];
+    const copy = JSON.parse(JSON.stringify(up));
+    keepDashcamEvents(up);
+    expect(up).toEqual(copy);
+  });
 });

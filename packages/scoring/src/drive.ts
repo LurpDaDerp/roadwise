@@ -4,7 +4,14 @@
 //
 // Pure and deterministic: no clock, no randomness, no imports outside this package.
 import { clamp, roundTo } from './num';
-import { DASHCAM_MIN_COVERAGE, DASHCAM_MIN_MOVING_S, MIN_SCORED_MILES } from './thresholds';
+import {
+  DASHCAM_DROWSY_GAP_S,
+  DASHCAM_EYES_OFF_GAP_S,
+  DASHCAM_MIN_COVERAGE,
+  DASHCAM_MIN_MOVING_S,
+  DASHCAM_MIN_MPH,
+  MIN_SCORED_MILES,
+} from './thresholds';
 
 export const SCORING_VERSION = 4;
 
@@ -104,6 +111,52 @@ export function dashcamDrive(d: DashcamSeconds | null | undefined): boolean {
   const moving = Number.isFinite(d.movingS) ? Math.max(0, Math.floor(d.movingS)) : 0;
   const covered = Number.isFinite(d.coveredS) ? Math.max(0, Math.floor(d.coveredS)) : 0;
   return moving >= DASHCAM_MIN_MOVING_S && covered * 100 >= Math.round(DASHCAM_MIN_COVERAGE * 100) * moving;
+}
+
+/** The part of an event the DashPal limits read: a stored or uploaded event with what was measured. */
+export interface DashcamLimitEvent {
+  id: string;
+  type: EventType;
+  /** epoch ms */
+  startedAt: number;
+  status?: 'active' | 'removed';
+  measured?: Readonly<Record<string, unknown>>;
+}
+
+const DASHCAM_GAP_MS: Readonly<Record<DashcamEventType, number>> = {
+  drowsy: DASHCAM_DROWSY_GAP_S * 1000,
+  eyes_off: DASHCAM_EYES_OFF_GAP_S * 1000,
+};
+
+/**
+ * The uploaded events a drive keeps once the DashPal limits are re-applied over the whole drive:
+ * the upload, plus `stored` (the events the drive it merges into already holds; none for a fresh
+ * drive). An uploaded DashPal event is dropped, never the whole drive, when its measured speed is
+ * missing or under `DASHCAM_MIN_MPH`, or when it starts within `DASHCAM_DROWSY_GAP_S` (drowsy) or
+ * `DASHCAM_EYES_OFF_GAP_S` (eyes_off) of a kept event of its type: an active stored one, or an
+ * uploaded one kept before it (time order, then id, so the earliest is kept). Stored events always
+ * stand and phone events pass untouched. Returns the kept uploads in their input order. Pure.
+ */
+export function keepDashcamEvents<E extends DashcamLimitEvent>(uploaded: readonly E[], stored: readonly DashcamLimitEvent[] = []): E[] {
+  const kept: Record<DashcamEventType, number[]> = { drowsy: [], eyes_off: [] };
+  for (const s of stored) {
+    if (isDashcamType(s.type) && s.status !== 'removed' && Number.isFinite(s.startedAt)) kept[s.type].push(s.startedAt);
+  }
+  const dropped = new Set<E>();
+  const dashcam = uploaded
+    .filter((e) => isDashcamType(e.type))
+    .sort((x, y) => x.startedAt - y.startedAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+  for (const e of dashcam) {
+    const type = e.type as DashcamEventType;
+    const speed = e.measured?.speedMph;
+    const fast = typeof speed === 'number' && Number.isFinite(speed) && speed >= DASHCAM_MIN_MPH;
+    if (!fast || !Number.isFinite(e.startedAt) || kept[type].some((t) => Math.abs(e.startedAt - t) < DASHCAM_GAP_MS[type])) {
+      dropped.add(e);
+      continue;
+    }
+    kept[type].push(e.startedAt);
+  }
+  return uploaded.filter((e) => !dropped.has(e));
 }
 
 /** T(L): tolerance over the posted limit, mph. Fixed at 3 in a school or construction zone. */

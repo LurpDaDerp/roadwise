@@ -5,8 +5,9 @@
 // (512 KB, checked before parsing), JSON, the zod contract, the time zone and local day (derived
 // here from tz + startedAt; an unknown IANA zone or a mislabelled day is refused), then ONE
 // database transaction: `drive_context` (lock, lazy freeze grant, idempotency, streak state, the
-// daily-cap and loop context, the merge target) → integrity → merge union → `scoreDrive` and
-// `applyStreak` from the shared scoring package → `apply_drive` → the response, stored for replays.
+// daily-cap and loop context, the merge target) → integrity → merge union (the DashPal limits
+// re-applied over it) → `scoreDrive` and `applyStreak` from the shared scoring package →
+// `apply_drive` → the response, stored for replays.
 //
 // A user id comes from the JWT and nowhere else. Logs carry the request id, the client trip id and
 // codes — never a position, a name or a database message.
@@ -36,6 +37,7 @@ import {
 import {
   applyStreak,
   dashcamDrive,
+  keepDashcamEvents,
   scoreDrive,
   SCORING_VERSION,
   type DriveContext,
@@ -106,7 +108,13 @@ export function dashcamOf(p: FinalizeTripPayloadV3, merge: MergeTarget | null): 
   return { deviceId, movingS, coveredS, synced, on: dashcamDrive({ movingS, coveredS, synced }) };
 }
 
-/** What is scored: the payload alone, or its union with the merge target (plan §4 "Merge"). */
+/**
+ * What is scored: the payload alone, or its union with the merge target (plan §4 "Merge"). The
+ * DashPal limits are re-applied over the whole drive (scoring `keepDashcamEvents`): an uploaded
+ * eyes-off or drowsy event under 10 mph or with no measured speed, or within 5 min (eyes-off) or
+ * 10 min (drowsy) of one the drive already keeps (the merge target's, or an earlier one of the
+ * upload), is dropped — never stored, never scored. The target's own events always stand.
+ */
 export function buildScoringInput(
   p: FinalizeTripPayloadV3,
   merge: MergeTarget | null,
@@ -124,7 +132,7 @@ export function buildScoringInput(
 } {
   // a refused target never merges, even if a stale engine offered it
   if (merge && !isRefusedReason(merge.reason)) {
-    const events = [...merge.events.map(fromStored), ...p.events.map(fromPayload)];
+    const events = [...merge.events.map(fromStored), ...keepDashcamEvents(p.events, merge.events).map(fromPayload)];
     const dashcam = dashcamOf(p, merge);
     return {
       input: {
@@ -142,7 +150,7 @@ export function buildScoringInput(
       dashcam,
     };
   }
-  const events = p.events.map(fromPayload);
+  const events = keepDashcamEvents(p.events).map(fromPayload);
   const isLoop = isLoopDrive(p.start, p.end, p.miles);
   const loopRepeat = isLoop && loopDrivesToday >= 2;
   const dashcam = dashcamOf(p, null);
