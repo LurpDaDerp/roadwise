@@ -121,36 +121,42 @@ test('coverage adds up per drive and keeps the last sync stamp; the 7-day prune 
   expect((await db.execute('SELECT seq FROM dashcam_events ORDER BY seq')).rows).toEqual([{ seq: 1 }, { seq: 2 }]);
 });
 
-test('the prune never moves the cursor back: it raises the floor to the cursor and deletes only below it; a re-sent pruned seq is not stored again', async () => {
+test('the prune never moves the cursor back: it raises the floor past the newest old event, gives up a gap below it, and a re-sent pruned seq is not stored again', async () => {
   await store.ensureBoot(CAM, 9, 0);
   for (const seq of [0, 1, 2, 3]) await put(seq, 9, 100);
   await put(5, 9, 100); // above the gap at 4
+  await put(6, 9, 900); // recent: kept
   expect(await store.cursor(CAM, 9, 0)).toBe(4);
-  // Another boot with an old event is pruned on its own cursor; a boot with nothing old is untouched.
+  // Another boot with an old event is pruned on its own; a boot with nothing old is untouched.
   await store.ensureBoot(CAM, 10, 0);
   await put(0, 10, 100);
   await store.ensureBoot(CAM, 11, 2);
   await put(2, 11, 900);
+  // A boot whose stored floor is already above its old events keeps that floor.
+  await store.ensureBoot(CAM, 12, 0);
+  await put(0, 12, 100);
+  await store.ensureBoot(CAM, 12, 3);
 
-  expect(await store.pruneUnattached(500)).toBe(5);
+  expect(await store.pruneUnattached(500)).toBe(7);
   expect((await db.execute('SELECT boot_id, seq FROM dashcam_events ORDER BY boot_id, seq')).rows).toEqual([
-    { boot_id: 9, seq: 5 },
+    { boot_id: 9, seq: 6 },
     { boot_id: 11, seq: 2 },
   ]);
-  expect((await store.getBoot(CAM, 9))?.floorSeq).toBe(4);
+  expect((await store.getBoot(CAM, 9))?.floorSeq).toBe(6);
   expect((await store.getBoot(CAM, 10))?.floorSeq).toBe(1);
   expect((await store.getBoot(CAM, 11))?.floorSeq).toBe(2);
-  // The link still holds the floor it loaded at the HELLO (0): the cursor does not fall back to it.
-  expect(await store.cursor(CAM, 9, 0)).toBe(4);
+  expect((await store.getBoot(CAM, 12))?.floorSeq).toBe(3);
+  // The link still holds the floor it loaded at the HELLO (0): the cursor does not fall back to it,
+  // and the old gap at 4 is given up.
+  expect(await store.cursor(CAM, 9, 0)).toBe(7);
   expect(await store.cursor(CAM, 10, 0)).toBe(1);
 
-  // A whole-ring replay re-sends 0..5: the pruned seqs are not stored again, the gap fills.
-  for (const seq of [0, 1, 2, 3]) expect(await put(seq, 9, 1000)).toBe(false);
-  expect(await put(4, 9, 1000)).toBe(true);
-  expect(await put(5, 9, 1000)).toBe(false);
-  expect(await store.cursor(CAM, 9, 0)).toBe(6);
-  // With the gap filled, the old event above it goes at the next prune; the cursor stays.
-  expect(await store.pruneUnattached(500)).toBe(1);
+  // A whole-ring replay re-sends 0..6: nothing below the floor is stored again, the gap included.
+  for (const seq of [0, 1, 2, 3, 4, 5, 6]) expect(await put(seq, 9, 1000)).toBe(false);
+  expect(await put(7, 9, 1000)).toBe(true);
+  expect(await store.cursor(CAM, 9, 0)).toBe(8);
+  // A second prune with nothing old left changes nothing.
+  expect(await store.pruneUnattached(500)).toBe(0);
   expect((await store.getBoot(CAM, 9))?.floorSeq).toBe(6);
-  expect(await store.cursor(CAM, 9, 0)).toBe(6);
+  expect(await store.cursor(CAM, 9, 0)).toBe(8);
 });

@@ -109,7 +109,8 @@ export function createDashcamStore(db: Db) {
     /**
      * INSERT OR IGNORE on (dashcam, boot, seq). True when this call stored it (false: already
      * stored, its first copy kept as it was, or below the boot's stored floor: every seq there is
-     * stored, gone from the dashcam or pruned, so a re-sent pruned event never comes back as new).
+     * stored, gone from the dashcam, pruned or given up by the prune, so a re-sent pruned event
+     * never comes back as new).
      */
     async insertEvent(e: NewDashcamEvent): Promise<boolean> {
       const { changes } = await db.execute(
@@ -147,7 +148,8 @@ export function createDashcamStore(db: Db) {
      * The phone's cursor for a boot: the lowest seq at or above the floor not yet stored, the floor
      * being the higher of `floorSeq` and the boot's stored floor (the prune may have raised it under
      * a live link). Every seq from the floor up to the cursor is persisted; every seq below the
-     * floor is stored, gone from the dashcam or pruned, so the cursor never moves backwards.
+     * floor is stored, gone from the dashcam, pruned or given up by the prune, so the cursor never
+     * moves backwards.
      */
     async cursor(dashcamId: string, bootKey: number, floorSeq: number): Promise<number> {
       const stored = await getBoot(dashcamId, bootKey);
@@ -180,20 +182,23 @@ export function createDashcamStore(db: Db) {
     },
 
     /**
-     * Events no drive claimed, received before `beforeMs`, below their boot's cursor. Returns how
-     * many went. Each boot holding such events first has its floor raised to its cursor, so the
-     * deleted seqs sit below the floor: the cursor stays where it was (the link stays synced and no
-     * RESUME asks for them again) and a re-sent copy is not stored again. An old event above a gap
-     * waits until the gap fills (the next RESUME asks for it), then goes at the next prune.
+     * Events no drive claimed, received before `beforeMs`. Returns how many went. Each boot holding
+     * such events first has its floor raised past the newest of them, so every deleted seq sits
+     * below the floor: the cursor never moves back (the link stays synced and no RESUME asks for
+     * them again) and a re-sent copy is not stored again. A gap below an old event is given up with
+     * it: seqs rise with time on one boot, so whatever fills it started over `beforeMs` ago and no
+     * drive could claim it, and a boot that never comes back would otherwise keep the event forever.
      */
     async pruneUnattached(beforeMs: number): Promise<number> {
       await db.execute(
         `UPDATE dashcam_boots
-           SET floor_seq = ${cursorSql('dashcam_boots.dashcam_id', 'dashcam_boots.boot_id', 'dashcam_boots.floor_seq')}
+           SET floor_seq = MAX(floor_seq, (SELECT MAX(p.seq) + 1 FROM dashcam_events p
+                                           WHERE p.dashcam_id = dashcam_boots.dashcam_id AND p.boot_id = dashcam_boots.boot_id
+                                             AND p.client_trip_id IS NULL AND p.received_at_ms < ?))
          WHERE EXISTS (SELECT 1 FROM dashcam_events p
                        WHERE p.dashcam_id = dashcam_boots.dashcam_id AND p.boot_id = dashcam_boots.boot_id
                          AND p.client_trip_id IS NULL AND p.received_at_ms < ?)`,
-        [beforeMs]
+        [beforeMs, beforeMs]
       );
       const { changes } = await db.execute(
         `DELETE FROM dashcam_events
