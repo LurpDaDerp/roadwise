@@ -2,9 +2,9 @@
 //
 // iOS gives an app no direct lock or screen state. `isProtectedDataAvailable` is the proxy:
 // with a passcode it turns false about 10 s after the side-button press (the file-protection
-// grace period), so `locked` lags the real lock (`lockSignal: 'lagged'`; the drive host confirms a
-// lock for 12 s). Without a passcode it never turns false, so a locked phone looks unlocked
-// (`lockSignal: 'unreliable'`; the host then does not count background time as phone use).
+// grace period), so `locked` lags the real lock (`lockSignal: 'lagged'`). Without a passcode it
+// never turns false, so a locked phone looks unlocked (`lockSignal: 'unreliable'`). The phone-use
+// detector takes no lock or unlock evidence from either: an iPhone's pickups come from motion.
 import Foundation
 import LocalAuthentication
 import UIKit

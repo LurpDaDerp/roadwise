@@ -201,12 +201,16 @@ m and m/s for GNSS, degrees clockwise from true north for `course`.
   `locked = !available`, `screenOn = available`, `appForeground = applicationState == .active`.
   - With a passcode, protected data becomes unavailable about **10 s after** the side-button
     press (the file-protection grace period), so `locked` lags the real lock by ~10 s:
-    `lockSignal: 'lagged'`. The drive host confirms a lock for 12 s before treating the gap as
-    non-use (rev1: I11).
+    `lockSignal: 'lagged'`.
   - **Without a passcode**, protected data never becomes unavailable, so `locked` stays `false`
     and a locked phone is indistinguishable from an unlocked one in the background:
     `lockSignal: 'unreliable'` (`LAContext().canEvaluatePolicy(.deviceOwnerAuthentication)`
-    false). The host then does not count background time as phone use.
+    false).
+  - Either way the phone-use detector takes no lock or unlock evidence on iOS
+    (`src/core/detectors/phoneUse.ts` counts an unlock only with a reliable, unlagged signal):
+    an iPhone's pickups and handling come from motion alone (`handlingScore`), so unlocking a
+    phone that stays still in its mount, or using it without moving it, is not detected. iOS has
+    no public lock or unlock signal that would do better.
 
 ---
 
