@@ -9,7 +9,7 @@ export const reminderCopy = {
     autoOff: 'Turned off: the last reminders went unused. Turn it on to try again.',
     onAndroid: 'On. At most once a trip, without sound. It often shows as you park.',
     onIos:
-      "On. Once a trip, only while you're stopped (once more, an hour or more later, if you drove on before you could see it). If Driving Focus is on, allow RoadWise in it. If you swipe RoadWise away, it waits until you open it.",
+      "On. Once a trip, only while you're stopped (maybe once more, an hour or more later, if you drove on before you could see it). If Driving Focus is on, allow RoadWise in it. If you swipe RoadWise away, it waits until you open it.",
     needsAndroid: (what: string) => `On, but it needs ${what}.`,
     needsAlways: 'On, but it needs Location set to Always (Settings › RoadWise › Location).',
     needsPrecise: 'On, but it needs Precise Location turned on.',

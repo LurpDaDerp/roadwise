@@ -732,9 +732,9 @@ looks on. It lasts at most 10 min, ends after 3 min without 10 mph, runs at most
 10 min apart, and never outlives 15 min whatever check is in flight. A stop too early in the trip
 (under 90 s) or during a call waits for the next stop. After the post (sound, interruption level
 `.active`: a Focus holds it), the session watches with a 10 m filter: over 5 mph, or 30 m from the
-stop by a fix accurate to 20 m, with no walking → driven on (within 20 s: **unseen**, not a miss,
-and one more stop in the trip may remind, once an hour has passed since it, so a later session
-takes it); 30 m with walking → walked off (withdrawn; the post still waits for
+stop by a fix accurate to 20 m, with no walking → driven on (within 20 s: **unseen**, not a miss;
+the session ends, and the trip's second session, if it has one left and it starts an hour or more
+after the post, may remind once more); 30 m with walking → walked off (withdrawn; the post still waits for
 its outcome); 5 min, RoadWise in front, a capture start, the reminder off, or "Always" or Precise
 Location lost → withdrawn and done. When the back-off turns the reminder off during a wake, the
 wake stops with it. A wake whose background task iOS ends early does not hold the next wake. After
@@ -750,7 +750,7 @@ plus 1 s, on no prompt within 1 s, or after 60 s). Kept at While Using, the stat
 
 | Rule | Number |
 |---|---|
-| At most one reminder a trip (one more on iOS after an unseen one, an hour or more later) | 1 (+1) |
+| At most one reminder a trip (on iOS one more may follow an unseen one, from the trip's second GPS session, an hour or more later) | 1 (+1) |
 | Never while a drive is open, or for a trip a drive was open in | — |
 | None this soon after a drive ended | 10 min |
 | None this early in a trip | 90 s |
