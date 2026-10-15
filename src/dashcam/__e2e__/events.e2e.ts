@@ -5,7 +5,12 @@
 // and events only inside a drive started by hand: what arrives with no drive open is ignored.
 import { dashcamDrive } from '@scoring';
 
-import { dashcamBlock, dashcamEvents } from '@/core/engine/finalize';
+import { closedSession } from '@/core/engine/__fixtures__/drives';
+import { dashcamBlock, dashcamEvents, finalizeTrip } from '@/core/engine/finalize';
+import { createSettingsRepo } from '@/data/db';
+import { readDriveDetail } from '@/data/queries/drives';
+import { signedPoints } from '@/features/drives/format';
+import { breakdownLines } from '@/features/drives/summary';
 
 import type { DashcamTripFacts } from '../facts';
 import { CAM, EPOCH0, linkedA, scenario, type Phone, type World } from './world';
@@ -449,6 +454,67 @@ describeSim('DashPal events only inside a drive started by hand (firmware ring �
       expect(lastAck(w, 1)).toBe(3);
       expect(a.rt.state().link.synced).toBe(true);
     }));
+
+  test(
+    'a fatigue warning (FATIGUE_DROWSY, tier 2, audible) in a drive reaches the phone once with its seq and is stored once, a whole-ring replay adds no copy; it is never scored, while a microsleep at speed after 30 s is one itemized −50 "Drowsy · DashPal" with no Safety Rating penalty',
+    () =>
+      scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
+        await w.dashcam('STATE 3 72');
+        const a = await linkedA(w);
+        await createSettingsRepo(a.rawDb).set('device.lastUserId', 'user-1');
+        const startedAt = startDrive(w, a);
+        await w.drive(a, 35_000, 15);
+        await microsleep(w); // seq 0, 35 s in at 15 m/s on a good fix
+        await w.drive(a, 20_000, 15);
+        const t0 = w.W;
+        await w.dashcam(`EV 6 2 1 0 ${w.uptime()} 0 650`); // seq 1: fatigue score 65, warning tier, audible
+        await w.drive(a, 2000, 15);
+        // Live: exactly one EVENT frame for it, carrying its seq, persisted and acknowledged.
+        expect(w.txOf('EVENT', 1, t0).map((x) => x.f)).toEqual([expect.objectContaining({ seq: 1, ev: 6, tier: 2, audible: true, valueX10: 650 })]);
+        expect(lastAck(w, 1)).toBe(2);
+
+        // The link drops and comes back with the whole ring replayed: both copies are ignored.
+        const dupBefore = a.rt.state().link.counters.duplicates;
+        expect(await wholeRingReplay(w, a, true)).toEqual([0, 1]);
+        expect(a.rt.state().link.counters.duplicates).toBeGreaterThanOrEqual(dupBefore + 2);
+        await w.drive(a, 300_000, 15); // past 3 mi in all, so no short-drive scaling
+
+        const { facts, endedAt } = await endDrive(w, a, startedAt);
+        const rows = await stored(a);
+        expect(rows.map((r) => [r.seq, r.ev, r.name, r.tier, r.audible, r.value])).toEqual([
+          [0, 0, 'MICROSLEEP', 3, 1, 1.5],
+          [1, 6, 'FATIGUE_DROWSY', 2, 1, 65],
+        ]);
+        expect((await a.rawDb.execute('SELECT COUNT(*) AS n FROM dashcam_events')).rows).toEqual([{ n: 2 }]);
+        expect((await flagRows(a)).map((r) => [r.seq, r.ignored, r.client_trip_id])).toEqual([
+          [0, 0, a.tripId],
+          [1, 0, a.tripId],
+        ]);
+        expect(a.rt.state().link.counters).toMatchObject({ stored: 2, storeErrors: 0 });
+        expect(lastAck(w, 1)).toBe(2);
+        // The fatigue warning is stored with the drive, never a candidate: one drowsy, the microsleep's.
+        expect(facts.events.map((e) => [e.id, e.kind])).toEqual([[rows[0]!.id, 'drowsy']]);
+
+        // Finalized as the app finalizes it: one −50 line, no Safety Rating penalty, still clean.
+        const n = Math.round((endedAt - startedAt) / 1000);
+        const result = await finalizeTrip(closedSession(n, [], { clientTripId: a.tripId, t0: startedAt }), {
+          db: a.rawDb,
+          tz: 'UTC',
+          now: () => endedAt,
+          appVersion: '2.0.0',
+          geocode: null,
+          trimSeed: async (id: string) => `${id}-seed`.padEnd(64, '0'),
+          context: async () => ({ streak: 0 }),
+          dashcamFacts: async () => facts,
+        });
+        expect(result.payload!.events.map((e) => [e.id, e.type, e.tier])).toEqual([[rows[0]!.id, 'drowsy', 'severe']]);
+        expect(result.breakdown).toMatchObject({ penalties: 50, ratingPenalty: 0, activeEventCount: 0, events: [{ id: rows[0]!.id, penalty: 50 }] });
+        expect(result.trip.clean).toBe(1);
+        const detail = await readDriveDetail(a.rawDb, a.tripId);
+        const lines = breakdownLines(detail!.drive, detail!.events).lines.filter((l) => l.kind === 'event');
+        expect(lines.map((l) => [l.label, l.value, l.tone])).toEqual([['Drowsy · DashPal', signedPoints(-50), 'loss']]);
+      })
+  );
 
   test(
     'reconnect mid-drive: the drive carries on, coverage resumes once the link is back, an event from the gap joins the drive, and the phone ends synced (a DashPal drive)',
