@@ -634,6 +634,35 @@ describe('events with no drive open', () => {
     expect(await r.store.coverage(TRIP)).toEqual({ movingS: 2, coveredS: 2, lastSyncedAtMs: r.clock.t });
   });
 
+  test('the 7-day prune under a live link (one boot, one socket): the cursor never moves back, the phone stays synced, and a whole-ring replay stores nothing pruned again', async () => {
+    const r = rig();
+    await connect(r, { nextSeq: 0 });
+    for (const s of [0, 1, 2]) r.rx(ev(s));
+    await r.settle();
+    r.advance(300);
+    expect(r.link.snapshot().synced).toBe(true);
+    // A week on, the foreground jobs prune all three while the link is still up.
+    expect(await r.store.pruneUnattached(r.clock.t + 1)).toBe(3);
+    r.clear();
+    r.advance(1000);
+    expect(r.sent('STATE').at(-1)).toMatchObject({ ackSeq: 3 });
+    r.rx(ev(3));
+    await r.settle();
+    r.advance(300);
+    expect(r.sent('ACK').at(-1)).toEqual({ type: 'ACK', bootId: 0xdeadbeef, ackSeq: 4 });
+    expect(r.link.snapshot().synced).toBe(true);
+    // A reconnect RESUMEs at the cursor; a dashcam that replays its whole ring re-stores nothing pruned.
+    r.link.linkDown();
+    r.clear();
+    await connect(r, { nextSeq: 4, oldestSeq: 0 });
+    expect(r.sent('RESUME')).toEqual([{ type: 'RESUME', bootId: 0xdeadbeef, nextSeq: 4 }]);
+    for (const s of [0, 1, 2, 3]) r.rx(ev(s));
+    await r.settle();
+    r.advance(300);
+    expect(await flags()).toEqual([{ seq: 3, ignored: 1 }]);
+    expect(r.link.snapshot()).toMatchObject({ synced: true, counters: { stored: 4, duplicates: 4 } });
+  });
+
   test('in the drive and during the drive-end catch-up (finalizing) an event is not ignored; after finalize it is; the drive state is read as the frame arrives', async () => {
     const r = rig();
     await connect(r, { nextSeq: 0 });

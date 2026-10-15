@@ -58,6 +58,18 @@ function bootRow(row: Record<string, unknown>): BootRow {
 
 const BOOT_COLUMNS = 'dashcam_id, boot_id, offset_ms, rtt_ms, floor_seq, max_seq';
 
+/**
+ * The cursor as one SQL expression over a boot's dashcam id, boot key and floor (column
+ * expressions, no parameters): the floor when its seq is not stored, else one past the end of the
+ * stored run that starts there.
+ */
+const cursorSql = (cam: string, boot: string, floor: string): string => `CASE
+  WHEN NOT EXISTS (SELECT 1 FROM dashcam_events x WHERE x.dashcam_id = ${cam} AND x.boot_id = ${boot} AND x.seq = ${floor}) THEN ${floor}
+  ELSE (SELECT MIN(e.seq) + 1 FROM dashcam_events e
+        WHERE e.dashcam_id = ${cam} AND e.boot_id = ${boot} AND e.seq >= ${floor}
+          AND NOT EXISTS (SELECT 1 FROM dashcam_events n WHERE n.dashcam_id = e.dashcam_id AND n.boot_id = e.boot_id AND n.seq = e.seq + 1))
+END`;
+
 export function createDashcamStore(db: Db) {
   async function getBoot(dashcamId: string, bootKey: number): Promise<BootRow | null> {
     const { rows } = await db.execute(`SELECT ${BOOT_COLUMNS} FROM dashcam_boots WHERE dashcam_id = ? AND boot_id = ?`, [dashcamId, bootKey]);
@@ -94,12 +106,17 @@ export function createDashcamStore(db: Db) {
       return changes > 0;
     },
 
-    /** INSERT OR IGNORE on (dashcam, boot, seq). True when this call stored it (false: already stored, its first copy kept as it was). */
+    /**
+     * INSERT OR IGNORE on (dashcam, boot, seq). True when this call stored it (false: already
+     * stored, its first copy kept as it was, or below the boot's stored floor: every seq there is
+     * stored, gone from the dashcam or pruned, so a re-sent pruned event never comes back as new).
+     */
     async insertEvent(e: NewDashcamEvent): Promise<boolean> {
       const { changes } = await db.execute(
         `INSERT OR IGNORE INTO dashcam_events
            (dashcam_id, boot_id, seq, id, ev, name, tier, audible, detail, t_ms, dur_ds, value, at_ms, started_at_ms, received_at_ms, ignored)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM dashcam_boots b WHERE b.dashcam_id = ? AND b.boot_id = ? AND b.floor_seq > ?)`,
         [
           e.dashcamId,
           e.bootKey,
@@ -117,6 +134,9 @@ export function createDashcamStore(db: Db) {
           e.startedAtMs,
           e.receivedAtMs,
           e.ignored ? 1 : 0,
+          e.dashcamId,
+          e.bootKey,
+          e.seq,
         ]
       );
       await db.execute('UPDATE dashcam_boots SET max_seq = MAX(max_seq, ?) WHERE dashcam_id = ? AND boot_id = ?', [e.seq, e.dashcamId, e.bootKey]);
@@ -124,19 +144,19 @@ export function createDashcamStore(db: Db) {
     },
 
     /**
-     * The phone's cursor for a boot: the lowest seq ≥ `floorSeq` not yet stored. Every seq below it
-     * (and at or above the floor) is persisted; gaps below the floor are gone from the dashcam.
+     * The phone's cursor for a boot: the lowest seq at or above the floor not yet stored, the floor
+     * being the higher of `floorSeq` and the boot's stored floor (the prune may have raised it under
+     * a live link). Every seq from the floor up to the cursor is persisted; every seq below the
+     * floor is stored, gone from the dashcam or pruned, so the cursor never moves backwards.
      */
     async cursor(dashcamId: string, bootKey: number, floorSeq: number): Promise<number> {
-      const { rows } = await db.execute(
-        `SELECT CASE
-           WHEN NOT EXISTS (SELECT 1 FROM dashcam_events WHERE dashcam_id = ? AND boot_id = ? AND seq = ?) THEN ?
-           ELSE (SELECT MIN(e.seq) + 1 FROM dashcam_events e
-                 WHERE e.dashcam_id = ? AND e.boot_id = ? AND e.seq >= ?
-                   AND NOT EXISTS (SELECT 1 FROM dashcam_events n WHERE n.dashcam_id = ? AND n.boot_id = ? AND n.seq = e.seq + 1))
-         END AS cursor`,
-        [dashcamId, bootKey, floorSeq, floorSeq, dashcamId, bootKey, floorSeq, dashcamId, bootKey]
-      );
+      const stored = await getBoot(dashcamId, bootKey);
+      const floor = Math.max(floorSeq, stored?.floorSeq ?? floorSeq);
+      const { rows } = await db.execute(`SELECT ${cursorSql('b.cam', 'b.boot', 'b.floor')} AS cursor FROM (SELECT ? AS cam, ? AS boot, ? AS floor) b`, [
+        dashcamId,
+        bootKey,
+        floor,
+      ]);
       return asNumber(rows[0] ?? {}, 'cursor');
     },
 
@@ -159,9 +179,29 @@ export function createDashcamStore(db: Db) {
       return { movingS: asNumber(row, 'moving_s'), coveredS: asNumber(row, 'covered_s'), lastSyncedAtMs: asNumberOrNull(row, 'last_synced_at_ms') };
     },
 
-    /** Events no drive claimed, received before `beforeMs`. Returns how many went. */
+    /**
+     * Events no drive claimed, received before `beforeMs`, below their boot's cursor. Returns how
+     * many went. Each boot holding such events first has its floor raised to its cursor, so the
+     * deleted seqs sit below the floor: the cursor stays where it was (the link stays synced and no
+     * RESUME asks for them again) and a re-sent copy is not stored again. An old event above a gap
+     * waits until the gap fills (the next RESUME asks for it), then goes at the next prune.
+     */
     async pruneUnattached(beforeMs: number): Promise<number> {
-      const { changes } = await db.execute('DELETE FROM dashcam_events WHERE client_trip_id IS NULL AND received_at_ms < ?', [beforeMs]);
+      await db.execute(
+        `UPDATE dashcam_boots
+           SET floor_seq = ${cursorSql('dashcam_boots.dashcam_id', 'dashcam_boots.boot_id', 'dashcam_boots.floor_seq')}
+         WHERE EXISTS (SELECT 1 FROM dashcam_events p
+                       WHERE p.dashcam_id = dashcam_boots.dashcam_id AND p.boot_id = dashcam_boots.boot_id
+                         AND p.client_trip_id IS NULL AND p.received_at_ms < ?)`,
+        [beforeMs]
+      );
+      const { changes } = await db.execute(
+        `DELETE FROM dashcam_events
+         WHERE client_trip_id IS NULL AND received_at_ms < ?
+           AND seq < COALESCE((SELECT b.floor_seq FROM dashcam_boots b
+                               WHERE b.dashcam_id = dashcam_events.dashcam_id AND b.boot_id = dashcam_events.boot_id), seq + 1)`,
+        [beforeMs]
+      );
       return changes;
     },
   };
