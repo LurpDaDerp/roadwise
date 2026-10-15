@@ -106,6 +106,11 @@ export function createEventsRepo(db: Db) {
       return changes;
     },
 
+    async remove(id: string, on: Db = db): Promise<number> {
+      const { changes } = await on.execute('DELETE FROM trip_events WHERE id = ?', [id]);
+      return changes;
+    },
+
     async removeByTrip(clientTripId: string, on: Db = db): Promise<number> {
       const { changes } = await on.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [clientTripId]);
       return changes;

@@ -105,6 +105,90 @@ test('mergedInto: the earlier local drive becomes the union and this one is hidd
   await r.stop();
 });
 
+/** A local DashPal event on a finalized drive, as finalize stores it. */
+async function dashpal(clientTripId: string, id: string, type: 'drowsy' | 'eyes_off', startedAt: number, over: { dispute_status?: 'none' | 'pending' } = {}): Promise<void> {
+  await createEventsRepo(db).insert({
+    id,
+    client_trip_id: clientTripId,
+    type,
+    tier: 'severe',
+    started_at: startedAt,
+    duration_s: 4,
+    units: null,
+    stopped_in_traffic: 0,
+    lat: null,
+    lng: null,
+    measured_json: JSON.stringify({ source: 'dashcam', speedMph: 33 }),
+    penalty: type === 'drowsy' ? 50 : 40,
+    status: 'active',
+    dispute_status: over.dispute_status ?? 'none',
+  });
+}
+
+test('mergedInto: a DashPal event the server dropped under the DashPal limits (a drowsy within 10 min of the target’s) is deleted; the rest take the server’s penalties and the counts follow', async () => {
+  await finalized(uuid(10), T0, uuid(510));
+  await finalized(uuid(11), T0 + 1_400_000, uuid(511));
+  await dashpal(uuid(10), uuid(600), 'drowsy', T0 + 1_000_000);
+  await dashpal(uuid(11), uuid(601), 'drowsy', T0 + 1_500_000); // 8.3 min after the target's: dropped
+  await dashpal(uuid(11), uuid(602), 'eyes_off', T0 + 1_600_000);
+  const merged = response(uuid(11), { mergedInto: uuid(10), net: 50 });
+  merged.breakdown = {
+    ...merged.breakdown,
+    events: [
+      { id: uuid(510), penalty: 15 },
+      { id: uuid(600), penalty: 50 },
+      { id: uuid(511), penalty: 19 },
+      { id: uuid(602), penalty: 40 },
+    ],
+  };
+  const supabase = createFakeSupabase({
+    invoke: ({ body }) => {
+      const id = (body as { clientTripId: string }).clientTripId;
+      return invokeOk(id === uuid(10) ? response(uuid(10), { breakdown: { ...response(uuid(10)).breakdown, events: [{ id: uuid(510), penalty: 15 }, { id: uuid(600), penalty: 50 }] } }) : merged);
+    },
+  });
+  const r = runner(supabase);
+  await r.start();
+  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+  await r.drainOnce();
+  const events = await createEventsRepo(db).listByTrip(uuid(10));
+  expect(events.map((e) => [e.id, e.type, e.penalty])).toEqual([
+    [uuid(510), 'speeding', 15],
+    [uuid(600), 'drowsy', 50],
+    [uuid(602), 'eyes_off', 40],
+    [uuid(511), 'speeding', 19],
+  ]);
+  expect(await createEventsRepo(db).get(uuid(601))).toBeNull();
+  expect(JSON.parse((await createTripsRepo(db).get(uuid(10)))!.counts_json!)).toMatchObject({ speeding: 2, drowsy: 1, eyesOff: 1 });
+  await r.stop();
+});
+
+test('a scored drive: a DashPal event the server did not keep is deleted and the counts follow; a phone event, one with a report in flight, and any event of an unscored drive are left alone', async () => {
+  await finalized(uuid(10), T0, uuid(1));
+  await dashpal(uuid(10), uuid(600), 'drowsy', T0 + 400_000);
+  await dashpal(uuid(10), uuid(601), 'eyes_off', T0 + 500_000, { dispute_status: 'pending' });
+  await finalized(uuid(12), T0 + 10_000_000, uuid(2));
+  await dashpal(uuid(12), uuid(602), 'drowsy', T0 + 10_400_000);
+  const supabase = createFakeSupabase({
+    invoke: ({ body }) => {
+      const id = (body as { clientTripId: string }).clientTripId;
+      if (id === uuid(10)) return invokeOk(response(uuid(10), { breakdown: { ...response(uuid(10)).breakdown, events: [] } }));
+      return invokeOk(response(uuid(12), { scored: false, reason: 'too_short', net: 0, breakdown: { ...response(uuid(12)).breakdown, scored: false, events: [] } }));
+    },
+  });
+  const r = runner(supabase);
+  await r.start();
+  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+  await r.drainOnce();
+  expect((await createEventsRepo(db).listByTrip(uuid(10))).map((e) => [e.id, e.penalty])).toEqual([
+    [uuid(1), null],
+    [uuid(601), null],
+  ]);
+  expect(JSON.parse((await createTripsRepo(db).get(uuid(10)))!.counts_json!)).toMatchObject({ speeding: 1, drowsy: 0, eyesOff: 1 });
+  expect((await createEventsRepo(db).listByTrip(uuid(12))).map((e) => e.id)).toEqual([uuid(2), uuid(602)]);
+  await r.stop();
+});
+
 test('a terminal refusal fails the item and the drive for good; a transport failure retries; a 429 defers by Retry-After', async () => {
   await finalized(uuid(10));
   let mode: 'refuse' | 'network' | 'busy' = 'refuse';

@@ -16,11 +16,11 @@
 import { isDashcamType, type DriveBreakdown } from '@scoring';
 
 import type { Db } from '@/data/db/driver';
-import { createEventsRepo } from '@/data/db/events';
+import { createEventsRepo, type EventsRepo } from '@/data/db/events';
 import { createQueueRepo, TRANSPORT_FAILURE } from '@/data/db/queue';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
-import type { QueueItem, TripRow, TripStatus } from '@/data/db/types';
+import type { EventRow, QueueItem, TripRow, TripStatus } from '@/data/db/types';
 import { emitDataChanged, onDataChanged } from '@/data/events';
 import { countEvents } from '@/data/queries/rows';
 import { isSyncKind } from '@/data/sync/kinds';
@@ -134,6 +134,23 @@ export function joinPolylines(a: string | null, b: string | null, maxBytes = MAX
 const cleanOf = (bd: DriveBreakdown, scored: boolean): 0 | 1 | null => (scored ? (bd.activeEventCount === 0 ? 1 : 0) : null);
 
 /**
+ * A scored response lists every event the server keeps active. A local DashPal event it does not
+ * list (one the server dropped under the DashPal limits, e.g. a drowsy within 10 min of the merge
+ * target's) never reached the drive: it is deleted here, so the summary itemizes what was scored.
+ * An event with a report in flight or accepted is left alone. Returns the events that remain.
+ */
+async function dropUnkept(events: EventsRepo, list: EventRow[], resp: FinalizeTripResponseV3, tx: Db): Promise<EventRow[]> {
+  if (!resp.scored) return list;
+  const kept = new Set(resp.breakdown.events.map((e) => e.id));
+  const remain: EventRow[] = [];
+  for (const e of list) {
+    if (isDashcamType(e.type) && e.status === 'active' && e.dispute_status === 'none' && !kept.has(e.id)) await events.remove(e.id, tx);
+    else remain.push(e);
+  }
+  return remain;
+}
+
+/**
  * Write a finalize response into the local rows. With `mergedInto`, the earlier local drive becomes
  * the merged union (metrics summed, events re-parented, the server's result) and this one is
  * hidden as `merged`. Runs on a transaction handle.
@@ -151,7 +168,7 @@ export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: 
     const target = await trips.get(resp.mergedInto, tx);
     if (target !== null && target.client_trip_id !== clientTripId) {
       await events.reparent(clientTripId, target.client_trip_id, tx);
-      const all = await events.listByTrip(target.client_trip_id, tx);
+      const all = await dropUnkept(events, await events.listByTrip(target.client_trip_id, tx), resp, tx);
       for (const e of all) {
         const penalty = penaltyOf.get(e.id);
         if (penalty !== undefined && penalty !== e.penalty) await events.update(e.id, { penalty }, tx);
@@ -193,13 +210,16 @@ export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: 
     return;
   }
 
-  for (const e of await events.listByTrip(clientTripId, tx)) {
+  const listed = await events.listByTrip(clientTripId, tx);
+  const own = await dropUnkept(events, listed, resp, tx);
+  for (const e of own) {
     const penalty = penaltyOf.get(e.id) ?? null;
     if (penalty !== e.penalty) await events.update(e.id, { penalty }, tx);
   }
   await trips.update(
     clientTripId,
     {
+      ...(own.length !== listed.length ? { counts_json: JSON.stringify(countEvents(own)) } : {}),
       status,
       points_net: resp.net,
       estimate: 0,
