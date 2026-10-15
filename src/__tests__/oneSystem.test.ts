@@ -1,17 +1,19 @@
 /**
- * Mechanical proof of "one permission system, one disclosure, one notification plumbing" (Task 19;
- * rev1: C1, I3). Every source file under `src/` and `app/` (tests and fixtures excluded) is read
- * with its comments stripped, and:
+ * Mechanical proof of "one permission system, one notification plumbing, and every drive started
+ * by hand" (Task 19; rev1: C1, I3; plan §1 decision 4). Every source file under `src/` and `app/`
+ * (tests and fixtures excluded) is read with its comments stripped, and:
  *
  * - no file outside `src/core/permissions` names `requestForegroundPermissionsAsync`,
- *   `requestBackgroundPermissionsAsync`, `requestPermissionsAsync` or `requestMotionPermission`;
- * - only `BackgroundDisclosure` (and its definition in `src/core/permissions`) names
- *   `requestLocationAlways` — the only background-location request site (T9 security);
+ *   `requestPermissionsAsync` or `requestMotionPermission`;
+ * - no file at all names anything that detects or starts a drive on its own: background location
+ *   (`requestLocationAlways`, `requestBackgroundPermissionsAsync`, `startLocationUpdatesAsync`),
+ *   geofences and significant-location changes, background tasks (`TaskManager`, `defineTask`,
+ *   `registerTaskAsync`, `BackgroundFetch`), the old auto-record switch (`setAutoDetect`) or the
+ *   old forgot-to-start reminder (`setForgotToStartReminder`, `checkForgottenDrive`); and
+ *   `package.json` carries no background-task package;
  * - only `src/features/notifications` names `setNotificationHandler` or
  *   `addNotificationResponseReceivedListener`;
- * - only the host, bootstrap, the shared auto-record model and the disclosure name `setAutoDetect`
- *   (Task 19 r1: every other screen turns auto-record on through the gated model);
- * - M3's interim detection screen and its `/detection` route are gone.
+ * - M3's interim detection screen, its `/detection` route and the auto-record route are gone.
  *
  * A name is matched as a whole identifier anywhere in code (a call, a reference or a destructure),
  * so passing `Location.requestForegroundPermissionsAsync` along uncalled is caught too. The scanner
@@ -39,34 +41,38 @@ interface Rule {
   allowed: readonly string[];
 }
 
+/** Names of automatic or background drive and trip detection; allowed nowhere. */
+export const FORBIDDEN_DETECTION: readonly string[] = [
+  'setAutoDetect',
+  'requestLocationAlways',
+  'requestBackgroundPermissionsAsync',
+  'startLocationUpdatesAsync',
+  'startGeofencingAsync',
+  'defineTask',
+  'registerTaskAsync',
+  'BackgroundFetch',
+  'TaskManager',
+  'startMonitoringSignificantLocationChanges',
+  'checkForgottenDrive',
+  'setForgotToStartReminder',
+];
+
+/** Packages that run JS in the background with no drive open; none may be a dependency. */
+export const FORBIDDEN_PACKAGES: readonly string[] = ['expo-task-manager', 'expo-background-fetch', 'expo-background-task'];
+
 export const RULES: readonly Rule[] = [
   {
     name: 'OS permission requests only in the permission adapter (rev1: I3)',
-    names: [
-      'requestForegroundPermissionsAsync',
-      'requestBackgroundPermissionsAsync',
-      'requestPermissionsAsync',
-      'requestMotionPermission',
-    ],
+    names: ['requestForegroundPermissionsAsync', 'requestPermissionsAsync', 'requestMotionPermission'],
     allowed: ['src/core/permissions/'],
   },
   {
-    name: 'background location is asked for only through the one disclosure (T9 security)',
-    names: ['requestLocationAlways'],
-    allowed: ['src/core/permissions/', 'src/features/permissions/BackgroundDisclosure.tsx'],
-  },
-  {
-    // Task 19 r1 (security I-1): auto-record is turned on only by the host itself, the shared
-    // auto-record model (gated behind this account's disclosure) and the disclosure's Continue.
-    // Bootstrap re-applies the stored choice when the server flag changes.
-    name: 'auto-record is turned on only through the gated model or the disclosure',
-    names: ['setAutoDetect'],
-    allowed: [
-      'src/drive/',
-      'src/boot/bootstrap.ts',
-      'src/features/onboarding/AutoRecordPanel.tsx',
-      'src/features/permissions/BackgroundDisclosure.tsx',
-    ],
+    // plan §1 decision 4: a drive exists only after the driver taps Start Drive. Nothing watches
+    // for a trip in the background, and nothing starts or proposes a drive on its own. Crash
+    // recovery (`adopt`) and the Android sticky restart only continue a drive the driver started.
+    name: 'no automatic or background drive detection: a drive starts only from the Start Drive tap',
+    names: FORBIDDEN_DETECTION,
+    allowed: [],
   },
   {
     name: 'one notification handler and one response listener (rev1: C1)',
@@ -124,6 +130,21 @@ export interface Violation {
   name: string;
 }
 
+interface PackageJson {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+}
+
+/** The forbidden packages `pkg` depends on, in any dependency list, sorted. */
+export function forbiddenPackages(pkg: PackageJson): string[] {
+  const all = new Set(
+    [pkg.dependencies, pkg.devDependencies, pkg.optionalDependencies, pkg.peerDependencies].flatMap((d) => Object.keys(d ?? {}))
+  );
+  return FORBIDDEN_PACKAGES.filter((name) => all.has(name)).sort();
+}
+
 /** Every rule broken by `files` (repo-relative path → source). */
 export function scan(files: Readonly<Record<string, string>>, rules: readonly Rule[] = RULES): Violation[] {
   const found: Violation[] = [];
@@ -168,6 +189,12 @@ describe('the scanner (negative control)', () => {
       // A `//` inside a string is not a comment, and a name in a string (a computed call) counts.
       'src/features/trips/u.ts': "const u = 'http://x'; N['setNotificationHandler'](h);",
       'app/(app)/permissions/auto-record.tsx': 'await host.setAutoDetect(true);',
+      // Detection is allowed nowhere: not in the permission adapter, the drive host or bootstrap.
+      'src/core/permissions/adapters.ts': 'await deps.location.requestBackgroundPermissionsAsync();',
+      'src/drive/host.ts': "TaskManager.defineTask('drive', f); await Location.startLocationUpdatesAsync('drive', {});",
+      'src/boot/bootstrap.ts': "await Location.startGeofencingAsync('home', []); await BackgroundFetch.registerTaskAsync('t');",
+      'app/_layout.tsx': 'await DriveSense.checkForgottenDrive(0); await DriveSense.setForgotToStartReminder(true);',
+      'src/features/home/s.ts': 'manager.startMonitoringSignificantLocationChanges();',
     };
     expect(scan(planted).map((v) => `${v.file}:${v.name}`)).toEqual([
       'src/features/drive/x.ts:requestForegroundPermissionsAsync',
@@ -179,19 +206,38 @@ describe('the scanner (negative control)', () => {
       'src/features/onboarding/v.ts:requestLocationAlways',
       'src/features/trips/u.ts:setNotificationHandler',
       'app/(app)/permissions/auto-record.tsx:setAutoDetect',
+      'src/core/permissions/adapters.ts:requestBackgroundPermissionsAsync',
+      'src/drive/host.ts:startLocationUpdatesAsync',
+      'src/drive/host.ts:defineTask',
+      'src/drive/host.ts:TaskManager',
+      'src/boot/bootstrap.ts:startGeofencingAsync',
+      'src/boot/bootstrap.ts:registerTaskAsync',
+      'src/boot/bootstrap.ts:BackgroundFetch',
+      'app/_layout.tsx:checkForgottenDrive',
+      'app/_layout.tsx:setForgotToStartReminder',
+      'src/features/home/s.ts:startMonitoringSignificantLocationChanges',
     ]);
+  });
+
+  test('a background-task package is found in package.json', () => {
+    expect(forbiddenPackages({ dependencies: { 'expo-task-manager': '~1.0.0', expo: '55' } })).toEqual(['expo-task-manager']);
+    expect(forbiddenPackages({ devDependencies: { 'expo-background-task': '1' }, optionalDependencies: { 'expo-background-fetch': '1' } })).toEqual([
+      'expo-background-fetch',
+      'expo-background-task',
+    ]);
+    expect(forbiddenPackages({ dependencies: { 'expo-location': '1', 'expo-task-managerial': '1' } })).toEqual([]);
   });
 
   test('allows the owners, and ignores comments and longer identifiers', () => {
     const fine = {
-      'src/core/permissions/adapters.ts': 'await deps.location.requestBackgroundPermissionsAsync();',
-      'src/features/permissions/BackgroundDisclosure.tsx': 'await adapter.requestLocationAlways({ firstDriveDone });',
+      'src/core/permissions/adapters.ts': 'await deps.location.requestForegroundPermissionsAsync(); await deps.location.getBackgroundPermissionsAsync();',
       'src/features/notifications/handler.ts': 'n.setNotificationHandler({});',
       'src/features/drive/a.ts': [
         '// Location.requestForegroundPermissionsAsync() is the adapter’s job',
-        '/* setNotificationHandler lives in notifications */',
-        "const url = 'https://example.com/a'; // setNotificationHandler",
+        '/* setNotificationHandler lives in notifications; no TaskManager.defineTask */',
+        "const url = 'https://example.com/a'; // setAutoDetect",
         'const requestMotionPermissionCopy = 1;',
+        'const startLocationUpdatesAsyncLater = 2;',
       ].join('\n'),
     };
     expect(scan(fine)).toEqual([]);
@@ -219,8 +265,14 @@ describe('the repository', () => {
     expect(Object.keys(files).some((f) => f.includes('__tests__'))).toBe(false);
   });
 
-  test('one permission system, one disclosure, one notification plumbing', () => {
+  test('one permission system, one notification plumbing, no automatic drive detection', () => {
     expect(scan(files)).toEqual([]);
+  });
+
+  test('package.json depends on no background-task package', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as PackageJson;
+    expect(Object.keys(pkg.dependencies ?? {})).toContain('expo-location'); // the read found the real file
+    expect(forbiddenPackages(pkg)).toEqual([]);
   });
 
   test("M3's interim detection screen and its /detection route are gone", () => {
