@@ -7,6 +7,7 @@ import { createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db
 import { episodes, type EpisodeEvent } from '../episodes';
 import { loadDashcamTripFacts } from '../facts';
 import { PAIRED_KEY } from '../keys';
+import { eventName } from '../protocol';
 import { createDashcamStore } from '../store';
 
 const CAM = 'a4cf12b3c4d5';
@@ -143,6 +144,36 @@ test('CRITICAL_STAND_DOWN (ev 31, detail face_gone) is log only: stamped to the 
   const { rows } = await db.execute('SELECT client_trip_id, name FROM dashcam_events WHERE id = ?', [standDown]);
   expect(rows[0]).toMatchObject({ client_trip_id: TRIP });
   expect(episodes([{ id: 'x', ev: 31, detail: 5, startedAt: 0, firedAt: 30_000 }])).toEqual([]);
+});
+
+test('fatigue warnings (FATIGUE_DROWSY 6, FATIGUE_SEVERE 7, FATIGUE_EARLY 8) are stored and stamped to the drive but never a candidate, never join or extend an episode', async () => {
+  expect([6, 7, 8].map((ev) => eventName(ev))).toEqual(['FATIGUE_DROWSY', 'FATIGUE_SEVERE', 'FATIGUE_EARLY']);
+  await sample(T0 + 5 * 60_000, 30 * MPH);
+  // Audible tier-2 fatigue warnings at 30 mph on a good fix, well inside the drive.
+  const fatigue = [
+    await event({ seq: 0, ev: 6, firedAt: T0 + 5 * 60_000, durS: 0 }),
+    await event({ seq: 1, ev: 7, firedAt: T0 + 8 * 60_000, durS: 0 }),
+    await event({ seq: 2, ev: 8, firedAt: T0 + 9 * 60_000, durS: 0, audible: false }),
+  ];
+  expect((await loadDashcamTripFacts(db, trip)).events).toEqual([]);
+
+  // Beside a microsleep: the episode is the microsleep's alone (a fatigue warning 30 s later
+  // neither joins it nor stretches its end; one 70 s after the warning opens nothing).
+  const a = T0 + 20 * 60_000;
+  await sample(a, 40 * MPH);
+  const micro = await event({ seq: 3, ev: 0, firedAt: a, durS: 1 });
+  const late = await event({ seq: 4, ev: 6, firedAt: a + 30_000, durS: 0 });
+  await event({ seq: 5, ev: 7, firedAt: a + 100_000, durS: 0 });
+  const f = await loadDashcamTripFacts(db, trip);
+  expect(f.events).toEqual([{ id: micro, kind: 'drowsy', startedAt: a - 1000, durationS: 1, speedMph: expect.closeTo(40, 6) }]);
+
+  // Every one is stored once and stamped to the drive.
+  const { rows } = await db.execute('SELECT id, ev, client_trip_id FROM dashcam_events ORDER BY seq');
+  expect(rows).toHaveLength(6);
+  for (const id of [...fatigue, late]) expect(rows.find((r) => r.id === id)).toMatchObject({ client_trip_id: TRIP });
+
+  const e = (id: string, ev: number, start: number): EpisodeEvent => ({ id, ev, detail: 0, startedAt: start, firedAt: start });
+  expect(episodes([e('d', 6, 0), e('s', 7, 10_000), e('x', 8, 20_000)])).toEqual([]);
 });
 
 test('window selection: the derived start must be inside the drive; other dashcams, boots without an offset and events another drive claimed are left alone', async () => {
