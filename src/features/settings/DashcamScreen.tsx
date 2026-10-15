@@ -17,8 +17,10 @@ const copy = dashpalCopy.screen;
 
 /**
  * `/settings/dashcam` (Settings › Driving › DashPal). Unpaired: what DashPal is and "Set up
- * DashPal". Paired: the link's status and its fix, "Also beep on DashPal", a test sound, recalibrate,
- * "Add another phone" (opens the dashcam's pairing window for 2 minutes) and "Forget DashPal".
+ * DashPal". Paired: the link's status and its fix, how many phones are paired with the dashcam (its
+ * STATUS bond count, while connected; from 2, how to remove one), "Also beep on DashPal", a test
+ * sound, recalibrate, "Add another phone" (opens the dashcam's pairing window for 2 minutes, for one
+ * phone) and "Forget DashPal".
  */
 export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAdapter; platform?: 'ios' | 'android' } }) {
   const th = useTheme();
@@ -32,6 +34,7 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
   const [working, setWorking] = useState(false);
   const paired = state?.link.paired ?? null;
   const connected = state?.link.lifecycle === 'connected';
+  const phones = connected ? (state?.link.status?.bondCount ?? null) : null;
 
   const command = async (op: number, arg: number, done?: string) => {
     if (!runtime) return;
@@ -84,6 +87,16 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
             {status.fix ? (
               <Text variant="callout" tone="muted" style={{ marginTop: th.space.sm }} testID="dashcam-fix">
                 {status.fix}
+              </Text>
+            ) : null}
+            {phones !== null ? (
+              <Text variant="callout" tone="muted" style={{ marginTop: th.space.sm }} testID="dashcam-phones">
+                {copy.phonesPaired(phones)}
+              </Text>
+            ) : null}
+            {phones !== null && phones >= 2 ? (
+              <Text variant="footnote" tone="muted" testID="dashcam-phones-help">
+                {copy.phonesPairedHelp}
               </Text>
             ) : null}
             {status.kind === 'not_allowed' ? <Button label={copy.fix.openSettings} variant="secondary" size="sm" onPress={openSettings} testID="dashcam-open-settings" /> : null}

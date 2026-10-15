@@ -5,7 +5,7 @@ import { Platform, View } from 'react-native';
 import type { PermissionsAdapter } from '@/core/permissions';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { TopBar } from '@/features/settings/parts';
-import { Button, Card, Screen, Text, useTheme } from '@/ui';
+import { Banner, Button, Card, Screen, Text, useTheme } from '@/ui';
 
 import { dashpalCopy } from '../copy';
 import { createSetupFlow, type SetupDeps, type SetupFlow, type SetupPhase } from '../setup';
@@ -146,7 +146,7 @@ export function SetupPanel({
       actions = [{ label: copy.doneButton, onPress: close, testID: 'setup-done' }];
       break;
     case 'failed':
-      body = phase.reason === 'ios_forget_first' ? copy.iosForgetFirst : copy.failed;
+      body = phase.reason === 'ios_forget_first' ? copy.iosForgetFirst : phase.reason === 'setup_busy' ? copy.busyElsewhere : copy.failed;
       actions = [{ label: copy.tryAgain, onPress: retry, testID: 'setup-retry' }];
       break;
     case 'cancelled':
@@ -162,7 +162,13 @@ export function SetupPanel({
         <Text variant="body" accessibilityLiveRegion="polite" testID={`setup-phase-${phase.kind}`}>
           {body}
         </Text>
+        {phase.kind === 'done' && phase.phones !== null && phase.phones >= 2 ? (
+          <Text variant="callout" tone="muted" style={{ marginTop: th.space.sm }} testID="setup-phones">
+            {copy.donePhones(phase.phones)}
+          </Text>
+        ) : null}
       </Card>
+      {phase.kind === 'done' && phase.unexpected ? <Banner tone="warning" message={copy.doneUnexpected} testID="setup-unexpected" /> : null}
       <View style={{ gap: th.space.sm }}>
         {actions.map((a) => (
           <Button key={a.testID} label={a.label} variant={a.variant ?? 'primary'} onPress={a.onPress} testID={a.testID} />

@@ -147,10 +147,28 @@ describe('Settings › DashPal', () => {
     await tap('dashcam-recalibrate');
     await tap('dashcam-add-phone');
     expect(screen.getByTestId('dashcam-notice')).toHaveTextContent(dashpalCopy.screen.addPhoneDone, { exact: false });
+    expect(dashpalCopy.screen.addPhoneDone).toBe('Pairing is open for 2 minutes, for one phone: set up DashPal on the other phone now.');
     await tap('dashcam-forget');
     await tap('dashcam-forget-confirm');
     expect(rt.log).toEqual(['buzzerToo:true', 'command:6:1', 'command:2:0', 'command:3:0', 'forget']);
     expect(screen.getByTestId('dashcam-notice')).toHaveTextContent(dashpalCopy.screen.forgetIos, { exact: false });
+  });
+
+  it('connected: "Phones paired: N" from STATUS; from 2 phones, how to remove one; nothing while not connected or before STATUS', async () => {
+    const status = (bondCount: number) => ({ state: 3, flags: 0, fpsX10: 200, tempC: 40, bondCount, at: 1 });
+    const rt = createFakeDashcamRuntime({ link: { lifecycle: 'connected', paired: PAIRED, status: status(1) } });
+    setActiveDashcam(rt);
+    const w = await appWorld();
+    await w.render(<DashcamScreen deps={{ adapter: fakeAdapter(), platform: 'android' }} />);
+    expect(await screen.findByTestId('dashcam-phones')).toHaveTextContent('Phones paired: 1');
+    expect(screen.queryByTestId('dashcam-phones-help')).toBeNull();
+    await act(async () => rt.set({ link: { lifecycle: 'connected', status: status(2) } }));
+    expect(screen.getByTestId('dashcam-phones')).toHaveTextContent('Phones paired: 2');
+    expect(screen.getByTestId('dashcam-phones-help')).toHaveTextContent(dashpalCopy.screen.phonesPairedHelp);
+    await act(async () => rt.set({ link: { lifecycle: 'connecting', status: status(2) } }));
+    expect(screen.queryByTestId('dashcam-phones')).toBeNull();
+    await act(async () => rt.set({ link: { lifecycle: 'connected', status: null } }));
+    expect(screen.queryByTestId('dashcam-phones')).toBeNull();
   });
 
   it('commands while not connected say so and send nothing; a failed one says it did not reach', async () => {
@@ -198,6 +216,35 @@ describe('the setup panel', () => {
     expect(screen.getByTestId('setup-phase-done')).toHaveTextContent('Connected to DashPal-C4D5.');
     await act(async () => view.unmount());
     expect(s.cancelled()).toBe(1);
+  });
+
+  it('done: one phone says nothing more; 2 or more says how many; more than expected warns how to remove the others', async () => {
+    setActiveDashcam(createFakeDashcamRuntime());
+    const s = scriptedFlow();
+    const w = await appWorld();
+    await w.render(<SetupPanel deps={{ adapter: fakeAdapter(), platform: 'ios', flow: s.make }} onClose={() => {}} />);
+    await s.to({ kind: 'done', paired: PAIRED, phones: 1, unexpected: false });
+    expect(screen.queryByTestId('setup-phones')).toBeNull();
+    expect(screen.queryByTestId('setup-unexpected')).toBeNull();
+    await s.to({ kind: 'done', paired: PAIRED, phones: null, unexpected: false });
+    expect(screen.queryByTestId('setup-phones')).toBeNull();
+    await s.to({ kind: 'done', paired: PAIRED, phones: 2, unexpected: false });
+    expect(screen.getByTestId('setup-phones')).toHaveTextContent('2 phones are paired with this DashPal.');
+    expect(screen.queryByTestId('setup-unexpected')).toBeNull();
+    await s.to({ kind: 'done', paired: PAIRED, phones: 3, unexpected: true });
+    expect(screen.getByTestId('setup-phones')).toHaveTextContent('3 phones are paired with this DashPal.');
+    expect(screen.getByTestId('setup-unexpected')).toHaveTextContent(dashpalCopy.setup.doneUnexpected, { exact: false });
+  });
+
+  it('another phone is setting it up: says so, and Try again restarts the flow', async () => {
+    setActiveDashcam(createFakeDashcamRuntime());
+    const s = scriptedFlow();
+    const w = await appWorld();
+    await w.render(<SetupPanel deps={{ adapter: fakeAdapter(), platform: 'android', flow: s.make }} onClose={() => {}} />);
+    await s.to({ kind: 'failed', reason: 'setup_busy' });
+    expect(screen.getByTestId('setup-phase-failed')).toHaveTextContent(dashpalCopy.setup.busyElsewhere);
+    await tap('setup-retry');
+    await waitFor(() => expect(s.started()).toBe(2));
   });
 
   it('none found tells how to open pairing, and Try again restarts the flow', async () => {

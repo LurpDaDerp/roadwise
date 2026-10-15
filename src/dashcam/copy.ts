@@ -36,7 +36,9 @@ export const dashpalCopy = {
     test: 'Play test sound',
     recalibrate: 'Recalibrate',
     addPhone: 'Add another phone',
-    addPhoneDone: 'Pairing is open for 2 minutes: set up DashPal on the other phone now.',
+    addPhoneDone: 'Pairing is open for 2 minutes, for one phone: set up DashPal on the other phone now.',
+    phonesPaired: (n: number) => `Phones paired: ${n}`,
+    phonesPairedHelp: 'To remove a phone you don’t know, press the DashPal’s button 10 times within 6 seconds. It forgets every phone; then set up yours again.',
     forget: 'Forget DashPal',
     forgetConfirm: {
       title: 'Forget DashPal?',
@@ -66,8 +68,12 @@ export const dashpalCopy = {
     noneFound: 'No DashPal found. Hold your phone near the DashPal and press its button 5 times, then try again.',
     tryAgain: 'Try again',
     done: (name: string) => `Connected to ${name}.`,
+    donePhones: (n: number) => `${n} phones are paired with this DashPal.`,
+    doneUnexpected:
+      'This DashPal has more phones paired than expected. If one isn’t yours, press its button 10 times within 6 seconds to forget every phone, then set it up again.',
     doneButton: 'Done',
     failed: 'That didn’t work. Hold your phone near the DashPal and try again.',
+    busyElsewhere: 'Another phone is setting up this DashPal. Wait 3 minutes, or press its button 5 times, then try again.',
     iosForgetFirst:
       'Your phone still remembers an older pairing. In Settings › Bluetooth, tap ⓘ next to the DashPal and choose Forget This Device, then try again.',
     cancel: 'Cancel',
