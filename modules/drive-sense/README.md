@@ -156,8 +156,9 @@ can end a trip; every other type is ignored.
   | EXIT WALKING | `{ type: 'walking', confidence: 'high', exit: true }` |
   | EXIT RUNNING | `{ type: 'running', confidence: 'high', exit: true }` |
 
-  `exit: true` marks the END of a walk: the host never treats it as a walk (the walk confirmation,
-  T13, times a walk from its ENTER to its EXIT or an IN_VEHICLE). iOS never sets `exit`.
+  `exit: true` marks the END of a walk: the host never treats it as a walk. It acts on the ENTER
+  alone, at once (the engine ends the drive when the last speed is walking pace or the fix is
+  stale), and times nothing between an ENTER and its EXIT. iOS never sets `exit`.
 
   `ts` is the transition's `getElapsedRealTimeNanos()` converted with §7 "Time base" (an anchor
   read when the transition is received). Nothing is stored. `createFakeDriveSense` has no mapping

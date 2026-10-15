@@ -45,8 +45,8 @@ export interface MotionActivity {
   ts: number;
   /**
    * README §3: Android only, the END of a walking or running transition (EXIT). Live
-   * `activity` events only. An exit is never a walk: the host times a walk from its ENTER to its
-   * EXIT (or to an IN_VEHICLE).
+   * `activity` events only. An exit is never a walk: the host acts only on a confident walking or
+   * running ENTER, at once, and times nothing between an ENTER and its EXIT.
    */
   exit?: true;
 }
