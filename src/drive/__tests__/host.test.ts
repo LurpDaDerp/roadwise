@@ -147,10 +147,10 @@ test('start: refuses while moving, without location, before boot, or while busy;
   await ok.host.stop({ endOpenTrip: true });
 });
 
-// Pins today's speed gate at Start Drive. The line is START_MAX_MPH (3 mph): at or above it the tap
-// is refused as 'moving'. An unknown speed (no fix within the probe's bound, or a probe that fails)
-// is NOT treated as moving, so the drive starts. Whether an unknown speed should block the start is
-// an open product decision; change this test only together with that decision.
+// Pins the speed gate at Start Drive. The line is START_MAX_MPH (3 mph): at or above it the tap is
+// refused as 'moving'. An unknown speed (no fix within the probe's bound, or a probe that fails) is
+// NOT treated as moving, so the drive starts: that is the product rule (product spec, Starting and
+// ending a drive), so change this test only together with the spec.
 const SPEED_GATE: [string, () => Promise<number | null>, { ok: true } | { ok: false; reason: 'moving' }][] = [
   ['an unknown speed (no fix in time)', async () => null, { ok: true }],
   ['a speed probe that fails', () => Promise.reject(new Error('no fix')), { ok: true }],
