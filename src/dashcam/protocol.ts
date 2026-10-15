@@ -149,9 +149,13 @@ export const STATUS_FLAG = {
   LIVE: 1 << 6,
 } as const;
 
-/** ALERT `sound`. */
-export const SOUND = { GLANCE: 1, DROWSY: 2, WAKE: 3, PHONE: 4, CHIME: 5 } as const;
-export type AlertSound = 1 | 2 | 3 | 4 | 5;
+/**
+ * ALERT `sound`. NO_FACE (6): the driver's face out of view while the phone reports the car moving;
+ * continuous, tier 2, never joined by the buzzer, silent on both outputs while no phone is live.
+ * COMMAND 6 (test sound) takes 1–5 only.
+ */
+export const SOUND = { GLANCE: 1, DROWSY: 2, WAKE: 3, PHONE: 4, CHIME: 5, NO_FACE: 6 } as const;
+export type AlertSound = 1 | 2 | 3 | 4 | 5 | 6;
 
 /** ALERT_STOP `reason`. */
 export const STOP_REASON = { CLEARED: 0, SUPERSEDED: 1, MUTED: 2 } as const;
