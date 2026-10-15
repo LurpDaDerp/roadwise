@@ -26,14 +26,24 @@ extension TripReminder {
     clock = timer
   }
 
-  /// The session's own clocks, so it ends on time even with no fixes.
+  /// The session's own clocks, so it ends on time even with no fixes. The longest a session can
+  /// last (10 min looking, then 5 min watching) holds even while a check is in flight, so a check
+  /// whose answer never comes cannot keep GPS on.
   private func tick() {
-    guard let tr = tracker, !checking else { return }
-    handle(TripReminderPolicy.sessionClock(tr, Self.nowMs()))
+    guard let tr = tracker else { return }
+    let now = Self.nowMs()
+    if now - tr.startedAt >= TripReminderPolicy.IOS_SESSION_MAX_MS + TripReminderPolicy.TTL_MS {
+      if tr.watching { watchEnded("ttl") } else { endSession() }
+      return
+    }
+    guard !checking else { return }
+    handle(TripReminderPolicy.sessionClock(tr, now))
   }
 
+  /// While a check is in flight the fixes still move the tracker (a car pulling away clears the
+  /// stop, which the check then sees), but only the check acts.
   func onFix(_ l: CLLocation) {
-    guard let tr = tracker, !checking else { return }
+    guard let tr = tracker else { return }
     let fix = ReminderFix(
       t: l.timestamp.timeIntervalSince1970 * 1000,
       speed: l.speed,
@@ -44,7 +54,13 @@ extension TripReminder {
     )
     let r = TripReminderPolicy.onFix(tr, fix, Self.nowMs())
     tracker = r.tracker
-    handle(r.verdict)
+    if !checking { handle(r.verdict) }
+  }
+
+  /// The session `tr` is still the one running (a check's answer can outlive its session).
+  private func current(_ tr: SessionTracker) -> SessionTracker? {
+    guard let cur = tracker, cur.startedAt == tr.startedAt else { return nil }
+    return cur
   }
 
   private func handle(_ verdict: String) {
@@ -58,6 +74,7 @@ extension TripReminder {
     case "moved":
       checking = true
       ActivitySource.walkingBetween(Date().addingTimeInterval(-TripReminderPolicy.WALK_CHECK_MS / 1000), Date()) { walked in
+        guard self.current(tr) != nil else { return }
         self.checking = false
         self.watchEnded(walked ? "arrival" : "driving")
       }
@@ -70,14 +87,17 @@ extension TripReminder {
     }
   }
 
-  /// A held stop: post, look for the next stop, or end.
+  /// A held stop: post, look for the next stop, or end. A fix during the checks that broke the stop
+  /// (3 mph or more) means the car pulled away: no post, and the session looks on.
   private func stopped(_ tr: SessionTracker, walked: Bool) {
     TripReminderNotifier.authorized { notificationsOk in
+      guard let cur = self.current(tr) else { return }
       self.checking = false
-      guard self.tracker != nil, let s0 = self.loadState() else {
+      guard let s0 = self.loadState() else {
         self.endSession()
         return
       }
+      if cur.stopStart != tr.stopStart { return }
       var ctx = self.context(notificationsOk: notificationsOk)
       ctx.inCall = CallObserver.anyCallActiveNow()
       let now = Self.nowMs()
@@ -86,10 +106,10 @@ extension TripReminder {
       switch r.effect {
       case "post":
         TripReminderNotifier.post()
-        self.tracker = TripReminderPolicy.watchFrom(tr, now)
+        self.tracker = TripReminderPolicy.watchFrom(cur, now)
         self.sessionManager.distanceFilter = 10
       case "seek":
-        self.tracker = TripReminderPolicy.seekAgain(tr, now)
+        self.tracker = TripReminderPolicy.seekAgain(cur, now)
       default:
         self.endSession()
       }

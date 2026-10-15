@@ -24,6 +24,8 @@ extension TripReminder {
     if let s0 = loadState() {
       s = TripReminderPolicy.settle(s0, now)
       saveState(s)
+      // The back-off may just have turned it off: the wake stops with it.
+      if s.enabled != s0.enabled { syncWake(s) }
     }
     let always = slcManager.authorizationStatus == .authorizedAlways
     let precise = slcManager.accuracyAuthorization == .fullAccuracy

@@ -31,7 +31,8 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
   private var slcRunning = false
   private var slcStartedAt: Double = 0
   var tracker: SessionTracker?
-  /// A motion or notification check is in flight for the session: fixes wait.
+  /// A motion or notification check is in flight for the session: fixes still move the tracker,
+  /// but only the check acts.
   var checking = false
   private var waking = false
   var clock: DispatchSourceTimer?
@@ -55,14 +56,14 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
 
   // MARK: - State
 
-  /// The stored state, or nil when it cannot be read yet (before the first unlock after a reboot):
-  /// then nothing is decided and nothing is saved. A locked phone after its first unlock reads fine.
+  /// The stored state, or nil when nothing is stored: then nothing is decided and nothing is saved.
+  /// Before the first unlock after a reboot (or in a process iOS started then) a stored state can
+  /// read as missing, so a missing read is never saved back as the default; the default is off, so
+  /// there is nothing to keep either. Only `setEnabled` writes a first state. Unreadable data is off.
   func loadState() -> ReminderState? {
-    if let data = defaults.data(forKey: Key.state) {
-      if let s = try? JSONDecoder().decode(ReminderState.self, from: data), s.v == 2 { return s }
-      return ReminderState()
-    }
-    return UIApplication.shared.isProtectedDataAvailable ? ReminderState() : nil
+    guard let data = defaults.data(forKey: Key.state) else { return nil }
+    if let s = try? JSONDecoder().decode(ReminderState.self, from: data), s.v == 2 { return s }
+    return ReminderState()
   }
 
   func saveState(_ s: ReminderState) {
@@ -76,7 +77,8 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
   }
 
   /// Significant-location changes run while the reminder is on and allowed (paused or quiet
-  /// included, so a pause can end without RoadWise being opened); otherwise they stop.
+  /// included, so a pause can end without RoadWise being opened); otherwise they stop, and with them
+  /// the session and its watch, so a note still up comes down here (nothing else would take it down).
   func syncWake(_ s: ReminderState) {
     let want = s.enabled && wakeAllowed
     if want && !slcRunning {
@@ -87,6 +89,8 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
       slcRunning = false
       slcManager.stopMonitoringSignificantLocationChanges()
       endSession()
+      TripReminderNotifier.remove()
+      if let s0 = loadState(), s0.showing { saveState(TripReminderPolicy.appForeground(s0)) }
     }
   }
 
@@ -192,11 +196,13 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
     let s = TripReminderPolicy.settle(s0, now)
     saveState(s)
     if !s.showing { TripReminderNotifier.remove() }
+    // The back-off may just have turned it off: the wake stops with it.
+    if s.enabled != s0.enabled { syncWake(s) }
     waking = true
     // The wake's checks finish inside a background task (the session, if any, then keeps the app
-    // running through its own location updates).
+    // running through its own location updates). If iOS ends the task first, the next wake may run.
     let task = ReminderBackgroundTask()
-    task.begin()
+    task.begin(onExpire: { self.waking = false })
     let finish = {
       self.waking = false
       task.end()
@@ -213,6 +219,7 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
         if let s1 = self.loadState() {
           let r = TripReminderPolicy.onWake(s1, Self.nowMs(), motion, ctx)
           self.saveState(r.state)
+          if r.state.enabled != s1.enabled { self.syncWake(r.state) }
           if r.startSession && self.tracker == nil { self.startSession() }
         }
         finish()
@@ -221,12 +228,14 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
   }
 }
 
-/// One background task for a wake's checks, ended once (by the wake or by iOS's expiry).
+/// One background task for a wake's checks, ended once (by the wake or by iOS's expiry, which also
+/// runs `onExpire`).
 final class ReminderBackgroundTask {
   private var id: UIBackgroundTaskIdentifier = .invalid
 
-  func begin() {
+  func begin(onExpire: @escaping () -> Void) {
     id = UIApplication.shared.beginBackgroundTask(withName: "drivesense.tripReminder") { [weak self] in
+      onExpire()
       self?.end()
     }
   }
