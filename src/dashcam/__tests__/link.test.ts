@@ -753,6 +753,38 @@ describe('STATE (§3.2, §3.7)', () => {
     expect(states.every((w) => (w.frame as Extract<RxFrame, { type: 'STATE' }>).flags & STATE_FLAG.DRIVE_ACTIVE)).toBe(true);
   });
 
+  test('with timers paused, every row renews the lease: rows 0.85 s then 2.2 s apart never leave a 3 s gap between STATEs', async () => {
+    const paused = { on: true };
+    const r = rig({ timersPaused: () => paused.on });
+    await connect(r);
+    r.ctx.recording = true;
+    r.ctx.foreground = false;
+    r.link.row(row(r.clock.t), { clientTripId: null, recording: true, dryRun: false });
+    r.clear();
+    for (let i = 0; i < 20; i++) {
+      r.clock.t += i % 2 === 0 ? 850 : 2200; // no tick() but the row's
+      r.link.row(row(r.clock.t), { clientTripId: null, recording: true, dryRun: false });
+    }
+    const states = r.writes.filter((w) => w.frame.type === 'STATE');
+    expect(states).toHaveLength(20);
+    const gaps = states.slice(1).map((w, i) => w.at - states[i]!.at);
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(2200);
+    expect(states.every((w) => ((w.frame as Extract<RxFrame, { type: 'STATE' }>).flags & STATE_FLAG.CAN_PLAY) !== 0)).toBe(true);
+    // With timers running, the 1 s cadence stands: a row 0.85 s after a STATE sends none.
+    paused.on = false;
+    r.clock.t += 1000;
+    r.link.row(row(r.clock.t), { clientTripId: null, recording: true, dryRun: false });
+    r.clear();
+    r.clock.t += 850;
+    r.link.row(row(r.clock.t), { clientTripId: null, recording: true, dryRun: false });
+    expect(r.sent('STATE')).toEqual([]);
+    // A frame never renews it early, paused or not (an event replay is many frames).
+    paused.on = true;
+    r.clock.t += 20; // 870 ms after the last STATE
+    r.rx({ type: 'STATUS', uptimeMs: uptime(r), state: 3, flags: STATUS_FLAG.LIVE, fpsX10: 150, tempC: 40, bondCount: 1 });
+    expect(r.sent('STATE')).toEqual([]);
+  });
+
   test('a wake time is always asked for while connected (the timer is best effort)', async () => {
     const r = rig();
     await connect(r);

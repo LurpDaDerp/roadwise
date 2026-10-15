@@ -5,7 +5,9 @@
 // `tick(now)` runs on every drive row, every inbound frame and a 1 s timer while the app is in the
 // foreground (Android pauses JS timers in the background unless a headless task runs; rows keep
 // arriving during a drive). Each tick: STATE if ≥ 900 ms since the last one, ACKs batched ≤ 200 ms,
-// TIME_PINGs due, RESUME when due, the 3 s staleness stop, alert repeats, the HELLO retry.
+// TIME_PINGs due, RESUME when due, the 3 s staleness stop, alert repeats, the HELLO retry. With JS
+// timers paused (`timersPaused`), every drive row sends STATE whatever the gap: rows arrive 0.3–2.2 s
+// apart there, and the 900 ms gate could stretch a renewal toward the 3 s lease.
 //
 // Connection sequence after the transport subscribed to TX (§3.3): COMMAND 7 hello → HELLO →
 // TIME_PING ×3 (100 ms apart) → RESUME after the 3 echoes or 500 ms → STATE every second, TIME_PING
@@ -394,10 +396,23 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
 
   // ——— ticking ———
 
+  function timersPaused(): boolean {
+    try {
+      return deps.timersPaused?.() ?? false;
+    } catch (e) {
+      report(e, 'timersPaused');
+      return false;
+    }
+  }
+
   function tick(nowArg?: number): void {
+    tickAt(nowArg ?? deps.now(), false);
+  }
+
+  /** One tick; `fromRow`: a drive row's, which renews the lease at once while timers are paused. */
+  function tickAt(now: number, fromRow: boolean): void {
     wakeNappers();
     if (disposed) return;
-    const now = nowArg ?? deps.now();
     const s = session;
     if (s) {
       // HELLO retry: COMMAND 7 got no answer.
@@ -421,8 +436,11 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
         s.resyncAt = null;
         sendResume(s, now);
       }
-      // STATE every second once resumed (carries the ACK too).
-      if (s.phase === 'resumed' && (s.lastStateAt === null || now - s.lastStateAt >= STATE_EVERY_MS || now < s.lastStateAt)) {
+      // STATE every second once resumed (carries the ACK too); on every row while timers are paused.
+      if (
+        s.phase === 'resumed' &&
+        (s.lastStateAt === null || now - s.lastStateAt >= STATE_EVERY_MS || now < s.lastStateAt || (fromRow && timersPaused()))
+      ) {
         s.lastStateAt = now;
         const frame = stateFrame(now, s);
         if (frame.type === 'STATE' && s.bootReady) {
@@ -870,7 +888,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     row(row, drive) {
       const now = deps.now();
       lastRow = { row, at: now };
-      tick(now);
+      tickAt(now, true);
       if (!paired || !drive.recording || drive.dryRun || drive.clientTripId === null) return null;
       const s = session;
       const speed = knownSpeed(row);
@@ -897,7 +915,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       const deadline = deps.now() + CATCH_UP_MS;
       // Every sleep also ends on a tick, so the deadline and the timer check run on each wake (a
       // foreground app moving to the background ticks the link).
-      const waiting = (): boolean => deps.now() < deadline && !(deps.timersPaused?.() ?? false);
+      const waiting = (): boolean => deps.now() < deadline && !timersPaused();
       // The persistence chain, but never past the deadline (a long replay keeps going on its own).
       const drained = async (): Promise<void> => {
         let done = false;
