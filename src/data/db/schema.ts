@@ -186,10 +186,12 @@ export const SCHEMA_V4: readonly string[] = [
  *   first insert (an event's identity in the upload). `t_ms`/`dur_ds` are dashcam uptime; wall
  *   times are derived from the boot's best clock offset when needed, so `at_ms`/`started_at_ms`
  *   are only a cache. `client_trip_id` is stamped at finalize; an event outside a drive keeps
- *   NULL and is pruned after 7 days. `boot_id` is the dashcam's random per-boot id, plus 2^32 per
+ *   NULL and is pruned 7 days after receipt, below its boot's floor. `boot_id` is the dashcam's random per-boot id, plus 2^32 per
  *   local collision generation (a HELLO that cannot belong to the stored boot of that id).
  * - `dashcam_boots`: per dashcam boot, the best uptime → epoch offset and its round trip, the
- *   floor below which events are gone from the dashcam's ring, and the highest seq stored.
+ *   floor below which every seq is stored, gone from the dashcam's ring, pruned or given up by the
+ *   prune (an incoming event below it is not stored; the prune raises it past what it deletes),
+ *   and the highest seq stored.
  * - `dashcam_coverage`: per recorded drive, the seconds moving at 5 mph or more and, of those, the
  *   seconds the dashcam watched a live face on this phone's primary link; the last time the phone
  *   had every event the dashcam had announced.
