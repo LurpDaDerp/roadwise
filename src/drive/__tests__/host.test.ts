@@ -151,14 +151,15 @@ test('start: refuses while moving, without location, before boot, or while busy;
 // is refused as 'moving'. An unknown speed (no fix within the probe's bound, or a probe that fails)
 // is NOT treated as moving, so the drive starts. Whether an unknown speed should block the start is
 // an open product decision; change this test only together with that decision.
-test.each([
+const SPEED_GATE: [string, () => Promise<number | null>, { ok: true } | { ok: false; reason: 'moving' }][] = [
   ['an unknown speed (no fix in time)', async () => null, { ok: true }],
-  ['a speed probe that fails', async () => Promise.reject(new Error('no fix')), { ok: true }],
+  ['a speed probe that fails', () => Promise.reject(new Error('no fix')), { ok: true }],
   ['stopped', async () => 0, { ok: true }],
   ['just under 3 mph', async () => START_MAX_MPS - 0.01, { ok: true }],
   ['exactly 3 mph', async () => START_MAX_MPS, { ok: false, reason: 'moving' }],
   ['above 3 mph', async () => START_MAX_MPS + 1, { ok: false, reason: 'moving' }],
-] as const)('start with %s', async (_label, speedProbe, expected) => {
+];
+test.each(SPEED_GATE)('start with %s', async (_label, speedProbe, expected) => {
   const h = build({ speedProbe });
   await h.host.boot();
   const result = await h.host.start();
