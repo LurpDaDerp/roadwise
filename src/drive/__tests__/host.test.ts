@@ -15,6 +15,7 @@ import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
 import { createDriveHost, type DriveHost, type DriveState } from '@/drive/host';
+import { START_MAX_MPS } from '@/drive/policy';
 import type { Scheduler } from '@/drive/ticks';
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -144,6 +145,27 @@ test('start: refuses while moving, without location, before boot, or while busy;
   expect(ok.display.log[0]).toBe('start null');
   expect(await ok.host.start()).toEqual({ ok: false, reason: 'busy' });
   await ok.host.stop({ endOpenTrip: true });
+});
+
+// Pins today's speed gate at Start Drive. The line is START_MAX_MPH (3 mph): at or above it the tap
+// is refused as 'moving'. An unknown speed (no fix within the probe's bound, or a probe that fails)
+// is NOT treated as moving, so the drive starts. Whether an unknown speed should block the start is
+// an open product decision; change this test only together with that decision.
+test.each([
+  ['an unknown speed (no fix in time)', async () => null, { ok: true }],
+  ['a speed probe that fails', async () => Promise.reject(new Error('no fix')), { ok: true }],
+  ['stopped', async () => 0, { ok: true }],
+  ['just under 3 mph', async () => START_MAX_MPS - 0.01, { ok: true }],
+  ['exactly 3 mph', async () => START_MAX_MPS, { ok: false, reason: 'moving' }],
+  ['above 3 mph', async () => START_MAX_MPS + 1, { ok: false, reason: 'moving' }],
+] as const)('start with %s', async (_label, speedProbe, expected) => {
+  const h = build({ speedProbe });
+  await h.host.boot();
+  const result = await h.host.start();
+  expect(result).toMatchObject(expected);
+  expect(h.source.calls).toEqual(expected.ok ? ['startCapture:mounted'] : []);
+  expect(h.host.snapshot().status).toBe(expected.ok ? 'recording' : 'idle');
+  await h.host.stop({ endOpenTrip: true });
 });
 
 test('a drive: rows publish at most once each, the display updates on change, points show only while stopped, end finalizes and queues', async () => {
