@@ -64,6 +64,7 @@ describe('native-android: files the contract names exist, and no trip-detection 
     'TripReminderNotifier',
     'ReminderActionReceiver',
     'ReminderBootReceiver',
+    'TripReminderSelfTest',
   ];
   it.each(files)('%s.kt', (name) => {
     expect(existsSync(join(KT_DIR, `${name}.kt`))).toBe(true);
@@ -179,7 +180,7 @@ describe('native-android: a capture starts only from JS (plan §1 decision 4)', 
   });
 
   // The forgot-to-start reminder only notifies.
-  it.each(['TripReminder', 'TripReminderPolicy', 'TripReminderState', 'TripReminderNotifier', 'ReminderActionReceiver', 'ReminderBootReceiver'])(
+  it.each(['TripReminder', 'TripReminderPolicy', 'TripReminderState', 'TripReminderNotifier', 'ReminderActionReceiver', 'ReminderBootReceiver', 'TripReminderSelfTest'])(
     '%s.kt can never start a capture nor reach JS',
     (name) => {
       const src = code(kt(name));
@@ -271,7 +272,8 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(sync).not.toMatch(/throw /);
     expect(sync).toMatch(/if \(want == TripReminderPolicy\.Tier\.NONE\) \{\s*unsubscribe\(context\)/);
     // An identical request on file (this boot) is skipped; every new request is stamped before it goes out.
-    const skip = sync.indexOf('prefs.transitionsTier == want.name && prefs.transitionsAtNanos in 1L..nowNanos');
+    expect(sync).toContain('val thisBoot = prefs.transitionsAtNanos in 1L..nowNanos');
+    const skip = sync.indexOf('prefs.transitionsTier == want.name && thisBoot');
     expect(skip).toBeGreaterThan(-1);
     expect(skip).toBeLessThan(sync.indexOf('prefs.transitionsAtNanos = nowNanos'));
     expect(sync.indexOf('prefs.transitionsAtNanos = nowNanos')).toBeLessThan(sync.indexOf('subscribe(context, want)'));
@@ -622,5 +624,41 @@ describe('native-android: build.gradle pins exact versions', () => {
     expect(g).not.toMatch(/:\s*[\d.]*\+['"]/);
     expect(g).not.toMatch(/latest\.(integration|release)/);
     expect(g).toContain("'com.google.android.gms:play-services-location:21.3.0'");
+  });
+});
+
+describe('native-android: the reminder posts in one place, and its rules run in the self-test', () => {
+  it("one post call in all the Kotlin: the policy's POST effect, and a post that never showed is taken back", () => {
+    expect(code(allKotlin()).match(/TripReminderNotifier\.post\(/g)).toHaveLength(1);
+    expect(code(kt('TripReminder'))).toMatch(
+      /TripReminderPolicy\.Effect\.POST -> if \(!TripReminderNotifier\.post\(context\)\) save\(context, unposted\(r\.state, arrival\)\)/
+    );
+  });
+
+  it('a stored pause level out of range is read back into range', () => {
+    expect(code(kt('TripReminderState'))).toMatch(/pauseLevel = o\.getInt\("pauseLevel"\)\.coerceIn\(0, TripReminderPolicy\.PAUSE_DAYS\.size\)/);
+  });
+
+  it('the feed skips a re-request only for a registration from this boot', () => {
+    const rx = code(kt('ActivityTransitionReceiver'));
+    expect(rx).toMatch(/Settings\.Global\.getInt\(context\.contentResolver, Settings\.Global\.BOOT_COUNT, -1\)/);
+    expect(rx).toMatch(/val thisBoot = prefs\.transitionsAtNanos in 1L\.\.nowNanos && \(boot < 0 \|\| prefs\.transitionsBoot == boot\)/);
+    expect(rx).toMatch(/if \(prefs\.transitionsTier == want\.name && thisBoot\) \{/);
+    expect(rx).toMatch(/prefs\.transitionsAtNanos = nowNanos\s*prefs\.transitionsBoot = boot/);
+  });
+
+  it('SelfTest hands each reminder row to TripReminderSelfTest, which runs the production policy for every Android row kind', () => {
+    expect(code(kt('SelfTest'))).toMatch(/"reminder" -> TripReminderSelfTest\.result\(name, inputs\)/);
+    const st = code(kt('TripReminderSelfTest'));
+    for (const call of ['gateStop(', 'onTransitions(', 'settle(', 'posted(', 'resolve(', 'captureStarted(', 'captureEnded(', 'appForeground(', 'setEnabled(']) {
+      expect({ call, used: st.includes(`TripReminderPolicy.${call}`) }).toEqual({ call, used: true });
+    }
+    expect(st).toMatch(/TripReminderState\.fromJson\(o\.toString\(\)\)/);
+    // the same rows the JS diff expects Android to skip
+    expect(st).toMatch(/"transitions" -> null\s*else -> "an iOS rule"/);
+    expect(st).toMatch(/"gate" -> if \(row\.getString\("phase"\) == "stop"\) null/);
+    expect(st).toMatch(/getString\("op"\) == "sessionEnded"/);
+    // nothing in it touches the phone
+    expect(st).not.toMatch(/Context|DriveSensePrefs|TripReminderNotifier|ActivityTransitions/);
   });
 });
