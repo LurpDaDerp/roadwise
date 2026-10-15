@@ -1,7 +1,7 @@
 // Battery at the start and end of the last drive (U5, `diag.battery`), for the device pass's
 // battery budget (design §3.5: pocket ≤ 6–8 %/h, mounted ≤ 12–15 %/h).
 //
-// §3.5 forbids any timer, query or sensor while armed and idle, so nothing here polls:
+// §3.5 forbids any timer, query or sensor while no drive is open, so nothing here polls:
 // - `createDriveBatteryRecorder` takes exactly two one-shot readings per drive, on the host's own
 //   transitions — when a trip starts recording and when it returns to idle — and does nothing on
 //   the 1 Hz rows between (one boolean compare). H2 mounts it, and only in a diagnostics build
@@ -53,8 +53,8 @@ export interface DriveBatteryRecorderDeps {
 }
 
 /**
- * Records `diag.battery` for each real drive: a reading when it starts recording (a candidate
- * that is discarded is not a drive) and one when it closes. Returns the unsubscribe.
+ * Records `diag.battery` for each real drive: a reading when it starts recording and one when it
+ * closes. Returns the unsubscribe.
  */
 export function createDriveBatteryRecorder(deps: DriveBatteryRecorderDeps): () => void {
   const read = deps.read ?? (() => readBattery());

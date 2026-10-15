@@ -1,7 +1,7 @@
 /**
  * v3 permission health: what a drive needs from the phone, row by row. Location "While Using" is
- * all v3 ever asks for (a drive starts in the app and the OS keeps it running), so there is no
- * Always row, no auto-record row and no battery row.
+ * all v3 ever asks for (a drive starts only from the Start Drive tap and the OS keeps it running),
+ * so there is no Always row and no battery row.
  */
 import type { PermissionSnapshot } from '@/core/permissions';
 

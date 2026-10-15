@@ -28,7 +28,7 @@ import { handleResponse, replayPendingHref, type ResponseDeps } from './response
 export interface NotificationsHostProps {
   /** A drive is recording now: foreground notifications are not shown. Read per notification. */
   isRecording: () => boolean;
-  /** A drive is under way (candidate → finalizing): taps are held, not navigated. */
+  /** A drive is under way (recording → finalizing): taps are held, not navigated. */
   isBusy: () => boolean;
   /** Called on every change of the busy signal's source; returns the unsubscribe. */
   subscribeBusy: (listener: () => void) => () => void;

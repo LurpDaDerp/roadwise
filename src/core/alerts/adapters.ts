@@ -56,7 +56,7 @@
 //   releases the session itself, once, after the last sound (rev1: I9).
 // - Each tone player is removed as soon as its tone ends: an Android expo-audio player runs a
 //   status loop every `updateInterval` for as long as it exists, which would be a timer running
-//   while the app is armed but idle (design §3.5).
+//   while the app is idle with no drive open (design §3.5).
 import type { AudioMode, AudioPlayer as ExpoAudioPlayer } from "expo-audio";
 import { Platform, Vibration } from "react-native";
 

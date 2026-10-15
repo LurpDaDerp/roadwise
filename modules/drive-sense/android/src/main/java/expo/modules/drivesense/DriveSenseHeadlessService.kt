@@ -7,7 +7,7 @@ import com.facebook.react.jstasks.HeadlessJsTaskConfig
 
 /**
  * Runs the JS drive host while the app is not open (design §2.4, rev1: I15). [CaptureService]
- * starts it after its own foreground start (a transition wake or a sticky restart); JS registers
+ * starts it after its sticky restart of a capture the driver started; JS registers
  * the task as `DriveSenseTask` (H2's `registerDriveHeadlessTask`), claims the capture with
  * `startCapture`, records until the drive is idle and uploads once. If that boot throws, the task
  * itself calls `stopCapture` (H2), and the native [Watchdog] is the second line.

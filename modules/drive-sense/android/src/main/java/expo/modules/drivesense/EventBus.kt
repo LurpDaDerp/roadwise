@@ -8,7 +8,7 @@ import java.lang.ref.WeakReference
  * Every event native emits goes through here (README §3 "Buffering", rev1: C2).
  *
  * An event emitted while no JS listener for THAT event is attached — before the bundle has loaded
- * (the `wake` that launched the process), or while JS is between listeners — is buffered in this
+ * (a sticky restart that launched the process), or while JS is between listeners — is buffered in this
  * process and delivered, in order, when the first listener for it attaches (Expo
  * `OnStartObserving`), after `addListener` returns. The buffer holds at most [MAX_BUFFERED] events
  * across all names; when full, the oldest `row` goes first, else the oldest event.

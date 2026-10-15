@@ -3,7 +3,7 @@ import { drainPolicy, enterHeadless, isHeadlessActive, launchProfile } from '@/b
 describe('launchProfile', () => {
   test('only an active app is a foreground launch', () => {
     expect(launchProfile({ currentState: 'active' })).toBe('foreground');
-    // An iOS location wake, the Android headless task, and an iOS cold start not yet active.
+    // An iOS relaunch in the background, the Android headless task, and an iOS cold start not yet active.
     for (const state of ['background', 'inactive', 'unknown', null, undefined]) {
       expect(launchProfile({ currentState: state })).toBe('background');
     }

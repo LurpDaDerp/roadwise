@@ -2,8 +2,8 @@
  * The one runtime of this process, and its lifecycle (plan H2).
  *
  * Three callers want the runtime, and they must share one:
- *   - `index.ts` boots it eagerly at module load, so a background launch (an iOS location wake, an
- *     iOS relaunch mid-drive) starts the drive engine without waiting for React to mount anything;
+ *   - `index.ts` boots it eagerly at module load, so a background launch (an iOS relaunch mid-drive,
+ *     a Bluetooth relaunch for a paired DashPal) is up without waiting for React to mount anything;
  *   - the Android headless task (`./headless.ts`) asks for it as `'background'`;
  *   - the root layout renders from it.
  * `ensureRuntime` memoises the launch per **generation**: the first caller's profile is the

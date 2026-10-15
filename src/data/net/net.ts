@@ -3,8 +3,8 @@
  *
  * One adapter per process. It reads the state once when it is created and then keeps it current
  * from the OS's own change callback (`NWPathMonitor` on iOS, `ConnectivityManager` on Android):
- * nothing here polls, runs a timer or makes a request (design §3.5), so holding it while the app
- * is armed but idle costs nothing but a listener the OS calls on a real change.
+ * nothing here polls, runs a timer or makes a request (design §3.5), so holding it while no drive
+ * is open costs nothing but a listener the OS calls on a real change.
  *
  * Two readings come out of it:
  * - **online** — there is a connection *and* the OS has not said the internet is unreachable

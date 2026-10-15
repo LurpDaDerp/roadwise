@@ -2,10 +2,10 @@
  * Work that may run only while the driver is looking at the app, and not too often even then
  * (design §3.5; M3 plan R10/R13, review I3).
  *
- * An eager runtime boots on every background wake — an iOS region exit, a significant-location
- * change, the Android headless task — and iOS wakes an armed phone many times a day with no drive.
- * Anything that touches the network on those wakes is radio time the battery budget has no room
- * for. So hydration and the config fetch are registered here and run only on a transition to
+ * An eager runtime boots on every background launch — the Android headless task of a drive that
+ * is still recording, an iOS Bluetooth relaunch for a paired DashPal — with nobody looking at the
+ * app. Anything that touches the network on those launches is radio time the battery budget has
+ * no room for. So hydration and the config fetch are registered here and run only on a transition to
  * `active` (or at registration, when the app is already known to be active), and at most once per
  * `minIntervalMs`. The last successful run is stamped in `settings`, so the throttle survives a
  * relaunch — a driver who opens the app ten times an hour triggers one run, not ten.
@@ -17,7 +17,7 @@
  * - **One run at a time per registration.** A foreground that arrives while the job is still
  *   running does not start a second one.
  * - **No timer.** Nothing here schedules anything: the only trigger is the OS telling us the app
- *   came forward, so an armed-idle phone costs nothing.
+ *   came forward, so an idle phone costs nothing.
  */
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';

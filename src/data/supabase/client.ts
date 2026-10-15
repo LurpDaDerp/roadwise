@@ -24,7 +24,7 @@ export const supabase = createClient<Database>(env.supabaseUrl, env.supabaseAnon
 //
 // auth-js cannot see focus in React Native, so it starts its 30 s refresh ticker by itself once
 // the client has initialised, whatever AppState says, and a `change` listener alone only catches
-// up at the next transition. A launch that begins in the background — an iOS location wake, a
+// up at the next transition. A launch that begins in the background — an iOS Bluetooth relaunch, a
 // relaunch mid-drive, the Android headless drive — gets no such transition, so the ticker ran for
 // that process's whole life: a keychain read and an AES decrypt of the stored session every 30 s,
 // and a refresh request as soon as the token neared expiry, through a drive nobody was looking at

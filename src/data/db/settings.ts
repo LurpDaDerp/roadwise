@@ -35,7 +35,7 @@ export function createSettingsRepo(db: Db) {
     },
 
     /**
-     * Several keys in one read (the drive host's arming check, Task 19 r2). A key never set is
+     * Several keys in one read (Task 19 r2). A key never set is
      * absent from the result. Rejects on a read failure, like `get`.
      */
     async getMany(keys: readonly string[]): Promise<Record<string, unknown>> {

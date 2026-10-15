@@ -54,7 +54,7 @@ export const diagCopy = {
   motion: 'Motion',
   batteryOptimisation: 'Battery optimisation',
   exempt: 'Exempt',
-  restricted: 'Restricted: Doze may stop auto-record',
+  restricted: "Restricted: Doze may stop a drive's recording",
   noRestriction: 'None on iOS',
   notRead: 'Not read',
   yes: 'Yes',

@@ -231,7 +231,7 @@ describe('sign-out stops recording (final review I3)', () => {
     await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
   }
 
-  test('the drive is stopped (ended, finalized, disarmed) first, then the deletes flushed, then the session ends', async () => {
+  test('the drive is stopped (ended, finalized, host signed out) first, then the deletes flushed, then the session ends', async () => {
     const recording = {
       stop: jest.fn(async () => { authCalls.push('stopRecording'); }),
       resume: jest.fn(async () => { authCalls.push('resumeRecording'); }),
@@ -254,7 +254,7 @@ describe('sign-out stops recording (final review I3)', () => {
     expect(authCalls).toEqual(['stopRecording', 'resumeRecording']);
   });
 
-  test('a recording stop that fails still signs out (the next launch starts disarmed anyway)', async () => {
+  test('a recording stop that fails still signs out (the next launch is signed out anyway)', async () => {
     const recording = {
       stop: jest.fn(async () => { throw new Error('host gone'); }),
       resume: jest.fn(async () => {}),

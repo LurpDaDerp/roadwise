@@ -89,7 +89,7 @@ export function fakeAdapter(
     }),
     readiness: jest.fn(async () => {
       a.log.push('readiness');
-      return answers.readiness ?? { allowed: true, armed: false };
+      return answers.readiness ?? { allowed: true };
     }),
   };
   return a;

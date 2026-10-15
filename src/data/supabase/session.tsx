@@ -136,8 +136,8 @@ export function SessionProvider({
   /**
    * The drive host's sign-out hooks, wired by the root layout (§8.2 "Sign out: stops recording";
    * final review I3). `stop` ends and finalizes an open drive under the driver who is still signed
-   * in, then disarms auto-record; `resume` undoes the disarm when the driver backs out of the
-   * sign-out. Absent (no runtime), sign-out does not touch recording.
+   * in, then marks the host signed out so no drive can start; `resume` undoes that when the driver
+   * backs out of the sign-out. Absent (no runtime), sign-out does not touch recording.
    */
   recording?: { stop(): Promise<void>; resume(): Promise<void> };
 }) {
@@ -313,8 +313,8 @@ export function SessionProvider({
       profileSource,
       signOut: async (opts?: { force?: boolean }): Promise<SignOutOutcome> => {
         // First, while this driver is still signed in: an open drive is ended and finalized under
-        // them, and auto-record stops (I3). A stop that fails does not hold the sign-out — the host
-        // marked itself signed out before anything else, and the next launch starts disarmed.
+        // them, and no new drive can start (I3). A stop that fails does not hold the sign-out — the
+        // host marked itself signed out before anything else, and the next launch is signed out.
         try {
           await recording?.stop();
         } catch {
