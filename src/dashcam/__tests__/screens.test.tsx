@@ -272,6 +272,18 @@ describe('the onboarding step', () => {
     expect(adapter.log).toEqual([]);
   });
 
+  it.each([
+    ['ios', null, 'Setting it up asks for Bluetooth.'],
+    ['android', 31, 'Setting it up asks for Nearby devices (Bluetooth).'],
+    ['android', 34, 'Setting it up asks for Nearby devices (Bluetooth).'],
+    ['android', 30, 'Setting it up uses Location to find it.'],
+  ] as const)('the step says what setting it up asks for (%s, API %s)', async (platform, api, line) => {
+    const w = await appWorld();
+    await w.render(<DashcamStep ctx={{ platform, hasUsername: true }} onNext={jest.fn()} deps={{ adapter: fakeAdapter() }} api={api} />);
+    expect(await screen.findByText(`${dashpalCopy.onboarding.body} ${line}`)).toBeOnTheScreen();
+    expect(dashpalCopy.onboarding.asks(platform, api)).toBe(line);
+  });
+
   it('"Find my DashPal" opens the setup inline (it opts in and asks there); Continue moves on whatever happened', async () => {
     setActiveDashcam(createFakeDashcamRuntime());
     const s = scriptedFlow();

@@ -51,7 +51,7 @@ test('the primer says why in plain words, and nothing is asked before the tap', 
   const adapter = fakeAdapter(snap({ platform: 'ios', location: 'undetermined', precise: null }));
   await renderStep('ios', adapter);
   expect(await screen.findByText(copy.body)).toBeOnTheScreen();
-  expect(copy.body).toBe('RoadWise uses location to measure speed and miles during a drive you start.');
+  expect(copy.body).toBe('RoadWise uses precise location to measure speed and miles during a drive you start.');
   expect(requests(adapter)).toEqual([]);
 });
 
@@ -117,6 +117,7 @@ test('approximate location: said plainly, with Settings, and Continue moves on',
   const { onNext } = await renderStep('ios', adapter);
   await press(await screen.findByTestId('location-allow'));
   expect(await screen.findByText(copy.approximate)).toBeOnTheScreen();
+  expect(copy.approximate).toBe("Location is set to approximate, so drives can't record. Turn on Precise Location in Settings.");
   expect(onNext).not.toHaveBeenCalled();
   await press(screen.getByTestId('location-settings'));
   expect(adapter.log).toContain('openAppSettings');

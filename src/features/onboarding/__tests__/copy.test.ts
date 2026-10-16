@@ -41,4 +41,12 @@ describe('onboarding copy', () => {
     );
     for (const s of strings(onboardingCopy.motion)) expect(s).not.toMatch(/hard braking|detect/i);
   });
+
+  it('says why each permission is asked, in one line where it is asked', () => {
+    expect(onboardingCopy.location.body).toBe('RoadWise uses precise location to measure speed and miles during a drive you start.');
+    expect(onboardingCopy.location.approximate).toBe("Location is set to approximate, so drives can't record. Turn on Precise Location in Settings.");
+    expect(onboardingCopy.notifications.body).toBe(
+      'Get your forgot-to-start reminder, your Sunday recap, your league results, and a heads-up when a friend adds you.'
+    );
+  });
 });

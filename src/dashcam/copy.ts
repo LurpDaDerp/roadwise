@@ -82,6 +82,13 @@ export const dashpalCopy = {
   onboarding: {
     title: 'Got a DashPal dashcam?',
     body: 'If you have a DashPal, RoadWise can play its alerts and add its events to your drives. You can always set it up later in Settings.',
+    /** What setting it up asks the phone for (Bluetooth scans use location on Android 11 and lower). */
+    asks: (platform: 'ios' | 'android', androidApi: number | null): string =>
+      platform === 'ios'
+        ? 'Setting it up asks for Bluetooth.'
+        : (androidApi ?? 31) >= 31
+          ? 'Setting it up asks for Nearby devices (Bluetooth).'
+          : 'Setting it up uses Location to find it.',
     find: 'Find my DashPal',
     notNow: 'Not now',
     continue: 'Continue',

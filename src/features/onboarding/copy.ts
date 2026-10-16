@@ -85,7 +85,7 @@ export const onboardingCopy = {
   },
   location: {
     title: 'Measure your drives',
-    body: 'RoadWise uses location to measure speed and miles during a drive you start.',
+    body: 'RoadWise uses precise location to measure speed and miles during a drive you start.',
     promise: 'During drives you start, and for the optional forgot-to-start reminder only if you turn it on · Never sold',
     allow: 'Allow location',
     notNow: 'Not now',
@@ -94,8 +94,7 @@ export const onboardingCopy = {
     allowed: 'Location is allowed.',
     denied:
       "Location is off, so RoadWise can't record drives. You can finish setting up and turn it on later in Settings.",
-    approximate:
-      "Location is set to approximate, so speed and distance can't be measured accurately. Turn on Precise Location in Settings.",
+    approximate: "Location is set to approximate, so drives can't record. Turn on Precise Location in Settings.",
     failed: "Your phone didn't answer. Try again.",
   },
   motion: {
@@ -114,7 +113,7 @@ export const onboardingCopy = {
   /** The examples are the server's own push copy (`supabase/functions/_shared/push_copy.ts`). */
   notifications: {
     title: 'Notifications',
-    body: 'Get your Sunday recap, your league results, and a heads-up when a friend adds you.',
+    body: 'Get your forgot-to-start reminder, your Sunday recap, your league results, and a heads-up when a friend adds you.',
     examples: 'Examples',
     previews: [
       { id: 'weekly_recap', title: 'Your week in review', body: '4 drives, +312 points. Safety Rating 92.4 (up 1.2). Streak 6.' },

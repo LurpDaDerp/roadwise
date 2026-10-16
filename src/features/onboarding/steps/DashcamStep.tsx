@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 
 import { dashpalCopy } from '@/dashcam/copy';
 import type { SetupPhase } from '@/dashcam/setup';
@@ -17,7 +17,13 @@ const copy = dashpalCopy.onboarding;
  * ever asked. The setup runs inline (onboarding keeps its own routes); "Not now" and "Continue" move
  * on whatever happened, and it can be done later from Settings › DashPal.
  */
-export function DashcamStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: SetupPanelDeps }) {
+const androidApi = (): number | null => {
+  if (Platform.OS !== 'android') return null;
+  const v = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
+  return Number.isFinite(v) ? v : null;
+};
+
+export function DashcamStep({ ctx, onNext, onBack, deps, api = androidApi() }: StepProps & { deps?: SetupPanelDeps; api?: number | null }) {
   const th = useTheme();
   const [finding, setFinding] = useState(false);
   const [phase, setPhase] = useState<SetupPhase['kind'] | null>(null);
@@ -32,7 +38,7 @@ export function DashcamStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: 
   return (
     <StepFrame
       title={copy.title}
-      body={finding ? undefined : copy.body}
+      body={finding ? undefined : `${copy.body} ${copy.asks(ctx.platform, api)}`}
       onBack={onBack}
       primary={
         finding
