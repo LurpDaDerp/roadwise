@@ -5,7 +5,7 @@ import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DashpalChip, DashpalHudBanner, dashpalTier, useDashpalChip, useDashpalFlash } from '@/dashcam/ui/HudDashpal';
-import { useDriveControls, useDriveLive } from '@/drive/useDrive';
+import { useDrive, useDriveControls, useDriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { sunIsDown } from '@/lib/time';
 import { fontFamilies } from '@/ui/fonts';
@@ -127,7 +127,9 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // The dimmer stays off while either alert shows.
   const { dimmed, wake } = useDimmer(alert !== null || dashpal !== null);
 
-  // Where the drive goes once it is over: its summary, fresh, or Home when there was none.
+  // Where the drive goes once it is over: its summary, fresh, or Home when there was none (a drive
+  // that was not kept has no summary; Home says why).
+  const droppedId = useDrive((d) => (d.lastFinalized !== null && d.lastFinalized.ok && d.lastFinalized.dropped !== null ? d.lastFinalized.clientTripId : null));
   const lastTripId = useRef<string | null>(live.clientTripId);
   useEffect(() => {
     if (live.clientTripId !== null) lastTripId.current = live.clientTripId;
@@ -151,19 +153,20 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
     setEndFailed(false);
     try {
       const done = await controls.end();
-      leave(done?.clientTripId ?? lastTripId.current);
+      leave(done?.dropped ? null : (done?.clientTripId ?? lastTripId.current));
     } catch {
       setEnding(false);
       setEndFailed(true);
     }
   }, [ending, controls, leave]);
 
-  // A drive that ends without the button (the auto-end safety net) still lands on its summary.
+  // A drive that ends without the button (it ended by itself) still lands on its summary, or on
+  // Home when it was not kept.
   const sawRecording = useRef(false);
   useEffect(() => {
     if (live.status === 'recording') sawRecording.current = true;
-    else if (live.status === 'idle' && sawRecording.current && !ending) leave(lastTripId.current);
-  }, [live.status, ending, leave]);
+    else if (live.status === 'idle' && sawRecording.current && !ending) leave(droppedId !== null && droppedId === lastTripId.current ? null : lastTripId.current);
+  }, [live.status, ending, leave, droppedId]);
 
   const speeding = live.speedingTier !== null;
   const dashpalTierNow = dashpal !== null ? dashpalTier(dashpal.tier) : null;

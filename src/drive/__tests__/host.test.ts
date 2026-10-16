@@ -14,7 +14,7 @@ import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
-import { readDropNotice } from '@/drive/dropNotice';
+import { readDropNotice, writeDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, type DriveHost, type DriveState } from '@/drive/host';
 import type { Scheduler } from '@/drive/ticks';
 import { metersToMiles } from '@/lib/units';
@@ -351,6 +351,20 @@ describe('a drive that never moved is not kept', () => {
     expect(await h.host.end()).toEqual({ clientTripId: uuid(1), dropped: 'no_movement' });
     expect(h.host.snapshot().lastFinalized).toMatchObject({ endCause: 'stopped' });
     await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('a successful start clears the notice; a refused one leaves it', async () => {
+    await writeDropNotice(db, { clientTripId: 'old', cause: 'stopped', reason: 'no_movement', at: T0 - 1000 });
+    const denied = build({ permissions: async () => ({ location: 'denied' }) });
+    await denied.host.boot();
+    expect(await denied.host.start()).toEqual({ ok: false, reason: 'permission' });
+    expect(await readDropNotice(db)).not.toBeNull();
+    await denied.host.stop({ endOpenTrip: false });
+    const h = build();
+    await h.host.boot();
+    expect(await h.host.start()).toMatchObject({ ok: true });
+    expect(await readDropNotice(db)).toBeNull();
+    await h.host.stop({ endOpenTrip: true });
   });
 
   test('a kept drive’s end() says dropped: null and writes no notice', async () => {

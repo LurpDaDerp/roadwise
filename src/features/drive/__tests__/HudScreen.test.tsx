@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 
+import type { LastFinalized } from '@/drive/host';
 import type { DriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { DIM_AFTER_MS, HOLD_TO_END_MS, HUD } from '@/ui/drive';
@@ -26,8 +27,10 @@ jest.mock('@/data/queries/context', () => ({ useDb: () => mockDb, useOptionalDb:
 
 const T = 1_790_000_000_000;
 let mockLive: DriveLive;
-const mockEnd = jest.fn<Promise<{ clientTripId: string } | null>, []>();
+const mockEnd = jest.fn<Promise<{ clientTripId: string; dropped: 'no_movement' | 'no_gps' | null } | null>, []>();
+let mockLastFinalized: LastFinalized = null;
 jest.mock('@/drive/useDrive', () => ({
+  useDrive: <T,>(sel: (s: { lastFinalized: LastFinalized }) => T) => sel({ lastFinalized: mockLastFinalized }),
   useDriveLive: () => mockLive,
   useDriveControls: () => ({ start: jest.fn(), end: mockEnd }),
 }));
@@ -68,7 +71,8 @@ beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
   mockUnits = null;
-  mockEnd.mockResolvedValue({ clientTripId: 't1' });
+  mockLastFinalized = null;
+  mockEnd.mockResolvedValue({ clientTripId: 't1', dropped: null });
 });
 afterEach(() => jest.useRealTimers());
 
@@ -249,6 +253,36 @@ describe('hold to end', () => {
     expect(mockRouter.replace).not.toHaveBeenCalled();
     await h.update({ status: 'idle', clientTripId: null });
     expect(mockRouter.replace).toHaveBeenCalledTimes(1);
+    expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
+  });
+
+  const drop = (clientTripId: string): LastFinalized => ({ clientTripId, ok: true, status: null, pointsNet: null, dropped: 'no_movement', endCause: 'stopped', at: T });
+
+  test('a drive that ended by itself and was not kept lands on Home once, not on a summary', async () => {
+    const h = await renderHud();
+    await h.update({ status: 'finalizing' });
+    mockLastFinalized = drop('t1');
+    await h.update({ status: 'idle', clientTripId: null });
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
+    expect(mockRouter.replace).toHaveBeenCalledWith(HOME_HREF);
+  });
+
+  test('a hold that ends a drive that was not kept (or lands during its automatic drop) goes Home once', async () => {
+    mockEnd.mockResolvedValue({ clientTripId: 't1', dropped: 'no_movement' });
+    const h = await renderHud();
+    await fireEvent(screen.getByRole('button', { name: hudCopy.endLabel }), 'pressIn');
+    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    mockLastFinalized = drop('t1');
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
+    expect(mockRouter.replace).toHaveBeenCalledWith(HOME_HREF);
+  });
+
+  test('an older drive’s drop does not send this kept drive Home', async () => {
+    mockLastFinalized = drop('old');
+    const h = await renderHud();
+    await h.update({ status: 'idle', clientTripId: null });
     expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
   });
 

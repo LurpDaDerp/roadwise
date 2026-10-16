@@ -9,9 +9,11 @@ jest.mock('expo-router', () => ({ useRouter: () => mockRouter, useFocusEffect: j
 
 const mockOk = <T,>(data: T) => ({ data, isLoading: false, isError: false, isRefetching: false, refetch: jest.fn() });
 const mockStart = jest.fn();
+const mockDbHandle = {};
 
 jest.mock('@/data/queries', () => ({
   useDataSource: () => ({ now: () => Date.now() }),
+  useDb: () => mockDbHandle,
   useDriveCount: () => mockOk(12),
   useRecentDrives: () => mockOk([mockDrive()]),
   useStatSums: () => mockOk(mockSums()),
@@ -20,7 +22,15 @@ jest.mock('@/data/server/summary', () => ({ useMySummary: () => mockOk(mockSumma
 let mockRecording = false;
 jest.mock('@/drive/useDrive', () => ({
   useDriveControls: () => ({ start: mockStart, end: jest.fn() }),
-  useDrive: (sel: (d: { status: string }) => unknown) => sel({ status: mockRecording ? 'recording' : 'idle' }),
+  useDrive: (sel: (d: { status: string; lastFinalized: null }) => unknown) => sel({ status: mockRecording ? 'recording' : 'idle', lastFinalized: null }),
+}));
+let mockNotice: { clientTripId: string; cause: string; reason: string; at: number } | null = null;
+const mockClearNotice = jest.fn(async () => {
+  mockNotice = null;
+});
+jest.mock('@/drive/dropNotice', () => ({
+  readDropNotice: async () => mockNotice,
+  clearDropNotice: () => mockClearNotice(),
 }));
 jest.mock('@/features/drive/DriveInProgressBanner', () => {
   const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
@@ -30,6 +40,43 @@ jest.mock('@/features/drive/DriveInProgressBanner', () => {
 beforeEach(() => {
   jest.clearAllMocks();
   mockRecording = false;
+  mockNotice = null;
+});
+
+describe('the notice of a drive that was not kept', () => {
+  const notice = { clientTripId: 'gone', cause: 'stopped', reason: 'no_movement', at: 1 };
+
+  test('read from storage on mount (so it survives a relaunch), it shows above Start until OK, which clears it', async () => {
+    mockNotice = { ...notice };
+    await draw(<HomeScreen />);
+    expect(await screen.findByTestId('drive-dropped')).toHaveTextContent(/the car didn’t move for 15 min, so it wasn’t saved\./);
+    await press(screen.getByText('OK'));
+    expect(screen.queryByTestId('drive-dropped')).toBeNull();
+    expect(mockClearNotice).toHaveBeenCalledTimes(1);
+  });
+
+  test('hidden while a drive is recording (Start is not shown)', async () => {
+    mockNotice = { ...notice };
+    mockRecording = true;
+    await draw(<HomeScreen />);
+    await waitFor(() => expect(screen.getByTestId('drive-in-progress')).toBeOnTheScreen());
+    expect(screen.queryByTestId('drive-dropped')).toBeNull();
+  });
+
+  test('a successful start takes it down; a refusal shows instead of it', async () => {
+    mockNotice = { ...notice };
+    mockStart.mockResolvedValue({ ok: false, reason: 'busy' });
+    await draw(<HomeScreen />);
+    expect(await screen.findByTestId('drive-dropped')).toBeOnTheScreen();
+    await press(screen.getByTestId('start-drive'));
+    expect(await screen.findByTestId('start-refusal')).toBeOnTheScreen();
+    expect(screen.queryByTestId('drive-dropped')).toBeNull();
+    mockStart.mockResolvedValue({ ok: true, clientTripId: 'x' });
+    await press(screen.getByTestId('start-drive'));
+    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/drive'));
+    expect(screen.queryByTestId('drive-dropped')).toBeNull();
+    expect(screen.queryByTestId('start-refusal')).toBeNull();
+  });
 });
 
 test('a successful start opens the driving screen', async () => {

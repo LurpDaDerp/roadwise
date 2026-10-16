@@ -5,6 +5,7 @@ import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
 import { tokens } from '@/ui/tokens';
 
 import { HomeView, type HomeViewProps } from '../HomeView';
+import { dropCopy } from '../StartDrive';
 
 const props = (over: Partial<HomeViewProps> = {}): HomeViewProps => ({
   summary: summary(),
@@ -109,6 +110,35 @@ describe('Start drive', () => {
     await press(screen.getByTestId('start-drive'));
     expect(p.onStart).toHaveBeenCalled();
     expect(screen.queryByTestId('dms-chip')).toBeNull();
+  });
+
+  test.each([
+    ['stopped', 'no_movement', 'Drive ended: the car didn’t move for 15 min, so it wasn’t saved.'],
+    ['stopped', 'no_gps', 'Drive ended: there was no GPS signal, so it wasn’t saved.'],
+    ['limit', 'no_movement', 'Drive ended: the car didn’t move for 15 min, so it wasn’t saved.'],
+    ['limit', 'no_gps', 'Drive ended: there was no GPS signal, so it wasn’t saved.'],
+    ['walking', 'no_movement', 'Drive ended: you walked away before driving, so it wasn’t saved.'],
+    ['walking', 'no_gps', 'Drive ended: you walked away before driving, so it wasn’t saved.'],
+    ['manual', 'no_movement', 'The car never moved, so the drive wasn’t saved.'],
+    ['manual', 'no_gps', 'There was no GPS signal, so the drive wasn’t saved.'],
+    ['orphan', 'no_movement', 'A drive left open when RoadWise closed never moved, so it wasn’t saved.'],
+    ['orphan', 'no_gps', 'A drive left open when RoadWise closed had no GPS signal, so it wasn’t saved.'],
+  ] as const)('a drive not kept (%s, %s) says why above Start, in at most 90 characters', async (cause, reason, line) => {
+    expect(dropCopy(cause, reason)).toBe(line);
+    expect(line.length).toBeLessThanOrEqual(90);
+    const onDismiss = jest.fn();
+    await draw(<HomeView {...props({ dropNotice: { message: dropCopy(cause, reason), onDismiss } })} />);
+    expect(screen.getByTestId('drive-dropped')).toHaveTextContent(line, { exact: false });
+    await press(screen.getByText('OK'));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  test('a refusal outranks the notice; no notice without one', async () => {
+    await draw(<HomeView {...props({ refusal: 'busy', dropNotice: { message: dropCopy('stopped', 'no_movement'), onDismiss: jest.fn() } })} />);
+    expect(screen.getByTestId('start-refusal')).toBeOnTheScreen();
+    expect(screen.queryByTestId('drive-dropped')).toBeNull();
+    await draw(<HomeView {...props()} />);
+    expect(screen.queryByTestId('drive-dropped')).toBeNull();
   });
 
   test('refused without location: one line, no speed wording', async () => {

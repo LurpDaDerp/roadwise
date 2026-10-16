@@ -37,7 +37,7 @@ import { processTimers } from '@/lib/timers';
 import { KMH_PER_MPH, metersToMiles, mpsToMph } from '@/lib/units';
 
 import type { DriveDisplay } from './display';
-import { writeDropNotice } from './dropNotice';
+import { clearDropNotice, writeDropNotice } from './dropNotice';
 import { detectorContext, isBusyStatus, walkingReported } from './policy';
 import type { DriveSource } from './source';
 import { createTicker, type Scheduler } from './ticks';
@@ -584,6 +584,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           return;
         }
         result = { ok: true, clientTripId: id };
+        // A new drive replaces Home's notice about the last one that was not kept.
+        if (persist) await clearDropNotice(db).catch((e: unknown) => report(e, 'dropNotice'));
       }, 'start');
       return result;
     },

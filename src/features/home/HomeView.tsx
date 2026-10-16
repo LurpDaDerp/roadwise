@@ -27,6 +27,8 @@ export type HomeViewProps = {
   month: StatSums | undefined;
   starting: boolean;
   refusal: StartRefusal | null;
+  /** The last drive was not kept: one line above Start until OK (a refusal outranks it). */
+  dropNotice?: { message: string; onDismiss: () => void } | null;
   onStart: () => void;
   onRefusalAction: () => void;
   onOpenDrive: (clientTripId: string) => void;
@@ -93,6 +95,7 @@ export function HomeView(p: HomeViewProps) {
           starting={p.starting}
           refusal={p.refusal}
           onRefusalAction={p.onRefusalAction}
+          notice={p.dropNotice ?? null}
         />
       )}
     </View>

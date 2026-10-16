@@ -2,11 +2,12 @@
  * Home wired to its data: the server summary for the header and challenges, local drives for
  * the first-run gate, stats and recent drives, and the drive controls for Start.
  */
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
 
-import { useDataSource, useDriveCount, useRecentDrives, useStatSums } from '@/data/queries';
+import { useDataSource, useDb, useDriveCount, useRecentDrives, useStatSums } from '@/data/queries';
 import { useMySummary } from '@/data/server/summary';
+import { clearDropNotice, readDropNotice, type DropNotice } from '@/drive/dropNotice';
 import { useDrive, useDriveControls } from '@/drive/useDrive';
 import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
 import { sinceDays } from '@/features/drives/format';
@@ -22,7 +23,7 @@ import {
 import { Screen } from '@/ui';
 
 import { HomeView } from './HomeView';
-import type { StartRefusal } from './StartDrive';
+import { dropCopy, type StartRefusal } from './StartDrive';
 
 export function HomeScreen() {
   const router = useRouter();
@@ -38,14 +39,39 @@ export function HomeScreen() {
   const [starting, setStarting] = useState(false);
   const [refusal, setRefusal] = useState<StartRefusal | null>(null);
 
+  // The notice of a drive that was not kept: read on focus and whenever a drive closes.
+  const db = useDb();
+  const lastFinalized = useDrive((d) => d.lastFinalized);
+  const [dropped, setDropped] = useState<DropNotice | null>(null);
+  const reloadDropped = useCallback(() => {
+    let alive = true;
+    readDropNotice(db)
+      .then((n) => {
+        if (alive) setDropped(n);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [db]);
+  useFocusEffect(reloadDropped);
+  useEffect(() => reloadDropped(), [reloadDropped, lastFinalized]);
+  const dismissDropped = () => {
+    setDropped(null);
+    void clearDropNotice(db).catch(() => {});
+  };
+
   const onStart = async () => {
     if (starting) return;
     setStarting(true);
     setRefusal(null);
     try {
       const res = await start();
-      if (res.ok) router.push(DRIVE_HREF);
-      else setRefusal(res.reason);
+      if (res.ok) {
+        // The host clears the stored notice on a successful start.
+        setDropped(null);
+        router.push(DRIVE_HREF);
+      } else setRefusal(res.reason);
     } catch {
       setRefusal('error');
     } finally {
@@ -68,6 +94,7 @@ export function HomeScreen() {
         month={month.data}
         starting={starting}
         refusal={refusal}
+        dropNotice={dropped ? { message: dropCopy(dropped.cause, dropped.reason), onDismiss: dismissDropped } : null}
         onStart={() => void onStart()}
         onRefusalAction={() => (refusal === 'permission' ? router.push(PERMISSIONS_HREF) : router.push(DRIVE_HREF))}
         onOpenDrive={(id) => router.push(driveSummaryHref(id))}

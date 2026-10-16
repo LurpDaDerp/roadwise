@@ -1,6 +1,8 @@
 // The hooks screens read the drive through (plan §10).
 import type { EventType, Tier } from '@scoring';
 import { useCallback, useContext, useMemo } from 'react';
+
+import type { DropReason } from '@/core/engine/finalize';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -33,8 +35,8 @@ export function useDriveHost(): DriveHost {
 export interface DriveControls {
   /** Start Drive. Only from a user tap; at any speed. */
   start(): Promise<StartResult>;
-  /** End the drive; resolves once it is finalized. Navigation is the caller's job. */
-  end(): Promise<{ clientTripId: string } | null>;
+  /** End the drive; resolves once it is finalized (`dropped`: it was not kept). Navigation is the caller's job. */
+  end(): Promise<{ clientTripId: string; dropped: DropReason | null } | null>;
 }
 
 export function useDriveControls(): DriveControls {
