@@ -15,6 +15,8 @@ import type { DashcamRuntime, DashcamState } from '@/dashcam/runtime';
 import { DataProvider } from '@/data/queries/context';
 
 import { appWorld, clearQueryClients, fakeAdapter, fakeAppState, snap, type AppWorld } from '../__fixtures__/harness';
+import * as homePrefs from '../homePrefs';
+import type { HomePrefs } from '../homePrefs';
 import { usePermissionBoard, watchDashcamPermissions, type PermissionBoardDeps } from '../usePermissionBoard';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -112,6 +114,38 @@ test('an unreadable phone is an error, not a card', async () => {
   const { result } = await mount(w, s.deps);
   await waitFor(() => expect(result.current.status).toBe('error'));
   expect(result.current.read).toBeNull();
+});
+
+test('a board read that lands before the stored prefs stays loading, so a hidden row never shows and no tap runs on empty marks', async () => {
+  const w = await appWorld();
+  const s = setup();
+  let land: (p: HomePrefs) => void = () => {};
+  const spy = jest.spyOn(homePrefs, 'readHomePrefs').mockImplementationOnce(
+    () =>
+      new Promise<HomePrefs>((resolve) => {
+        land = resolve;
+      })
+  );
+  try {
+    const { result } = await mount(w, s.deps);
+    await waitFor(() => expect(s.reads()).toBe(1));
+    // Let the board read settle.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(result.current.status).toBe('loading');
+    await act(async () => {
+      expect(await result.current.fix('motion')).toBeNull();
+    });
+    expect(s.adapter.log.filter((c) => c.startsWith('request') || c.startsWith('open'))).toEqual([]);
+    await act(async () => {
+      land({ hidden: ['motion'], toSettings: { motion: 'denied:true' } });
+    });
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(result.current.prefs).toEqual({ hidden: ['motion'], toSettings: { motion: 'denied:true' } });
+  } finally {
+    spy.mockRestore();
+  }
 });
 
 test('a reminder or camera read that fails nulls only its field', async () => {

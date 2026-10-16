@@ -80,7 +80,8 @@ export function HomeScreen() {
   // every visit (focus, a return to the front, or the row appearing while Home is in view).
   const board = usePermissionBoard();
   const scrollRef = useRef<ScrollView>(null);
-  const hasRow = !recording && board.read !== null && homeCard(board.read, board.prefs, recording).row !== null;
+  // Only a ready board (the phone read and the stored prefs both in), as the card itself shows.
+  const hasRow = !recording && board.status === 'ready' && board.read !== null && homeCard(board.read, board.prefs, recording).row !== null;
   const focused = useRef(false);
   const showsRow = useRef(hasRow);
   const toTop = useCallback(() => {

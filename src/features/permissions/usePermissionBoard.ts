@@ -143,6 +143,9 @@ export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBo
   const board = useQuery({ queryKey: boardKey, queryFn: readBoard, staleTime: SHARED_READ_MS, retry: false });
   const prefsQuery = useQuery({ queryKey: prefsKey, queryFn: () => readHomePrefs(settings), staleTime: Infinity, retry: false });
   const prefs = prefsQuery.data ?? EMPTY_HOME_PREFS;
+  // The board is not ready before the stored prefs are (a read for display never rejects; an error
+  // still settles to empty prefs): a hidden row must never show, nor a tap run on empty marks.
+  const prefsSettled = prefsQuery.data !== undefined || prefsQuery.isError;
 
   const { refetch } = board;
   const refresh = useCallback(
@@ -196,7 +199,7 @@ export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBo
     async (id: PermissionId, opts: { markReturn?: boolean } = {}): Promise<FixOutcome | null> => {
       // The read and prefs the tap was made on.
       const r = read;
-      if (r === null) return null;
+      if (r === null || !prefsSettled) return null;
       const state = permissionDef(id).state(r);
       const which = fixFor(id, state, prefs);
       if (which === null || state.kind !== 'missing') return null;
@@ -217,7 +220,7 @@ export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBo
       }
       return outcome;
     },
-    [read, prefs, adapter, settings, now, deps.ensureChannels, deps.requestDeviceSync, refresh, queryClient, boardKey, commitPrefs]
+    [read, prefsSettled, prefs, adapter, settings, now, deps.ensureChannels, deps.requestDeviceSync, refresh, queryClient, boardKey, commitPrefs]
   );
 
   const hide = useCallback(
@@ -234,6 +237,7 @@ export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBo
     [settings, commitPrefs]
   );
 
-  const status: PermissionBoard['status'] = read !== null ? 'ready' : board.isFetched && !board.isFetching ? 'error' : 'loading';
+  const status: PermissionBoard['status'] =
+    read !== null ? (prefsSettled ? 'ready' : 'loading') : board.isFetched && !board.isFetching ? 'error' : 'loading';
   return { status, read, prefs, refresh, fix, hide, show };
 }

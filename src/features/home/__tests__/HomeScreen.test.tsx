@@ -24,7 +24,7 @@ jest.mock('@/features/permissions/PermissionCard', () => {
   const { homeCard } = jest.requireActual<typeof import('@/features/permissions/board')>('@/features/permissions/board');
   return {
     PermissionCard: ({ board, recording }: { board: MockBoard; recording: boolean }) =>
-      board.read && homeCard(board.read as never, board.prefs as never, recording).row ? <Text testID="home-permissions">a permission row</Text> : null,
+      board.status === 'ready' && board.read && homeCard(board.read as never, board.prefs as never, recording).row ? <Text testID="home-permissions">a permission row</Text> : null,
   };
 });
 
@@ -234,6 +234,13 @@ describe('the permission card', () => {
     await act(async () => {
       for (const fn of appStateListeners) fn('active');
     });
+    expect(screen.queryByTestId('home-permissions')).toBeNull();
+    expect(scrollTo()).not.toHaveBeenCalled();
+  });
+
+  test('a board read that is in before the stored prefs (still loading): no card and no scroll', async () => {
+    mockBoard = { ...boardWith(MOTION_OFF), status: 'loading' };
+    await draw(<HomeScreen />);
     expect(screen.queryByTestId('home-permissions')).toBeNull();
     expect(scrollTo()).not.toHaveBeenCalled();
   });
