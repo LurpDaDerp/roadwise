@@ -3,8 +3,8 @@ import { AUTO_END_STOPPED_S } from '@scoring';
 import { createDetectors } from '@/core/detectors';
 import { limit, mph, row, seq, T0 } from '@/core/detectors/__fixtures__/rows';
 import type { AlertEvent, EngineDeps, EngineSnapshot, TripSession } from '@/core/engine/engine.types';
-import { CHECKPOINT_ROWS, createEngine, stillWithoutFix } from '@/core/engine/machine';
-import { createSession } from '@/core/engine/session';
+import { CHECKPOINT_ROWS, createEngine } from '@/core/engine/machine';
+import { createSession, stillWithoutFix } from '@/core/engine/session';
 import type { FeatureRow } from '@/core/engine/types';
 
 interface Harness {

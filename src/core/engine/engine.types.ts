@@ -39,6 +39,49 @@ export interface Warmup {
 }
 
 /**
+ * The session as it stood right after the drive's latest movement row (`session.ts` "Movement"):
+ * what a drive closed at its last movement keeps. Computed from the rows alone, so the live engine
+ * and the replay agree on it (bar `safeDistanceM`, which follows the detectors).
+ */
+export interface MovementMark {
+  /** `ts` of the movement row; the drive's last movement ends one row later. */
+  rowTs: number;
+  rowsCount: number;
+  validGnssRows: number;
+  mockRows: number;
+  movingRows: number;
+  imuActiveRows: number;
+  distanceM: number;
+  safeDistanceM: number;
+  nightDistanceM: number;
+  maxSpeedMps: number;
+  lastFix: Fix | null;
+  /** `track.length` right after the row. */
+  trackLength: number;
+}
+
+/** The movement rule's running state (`session.ts`). Replaced on every row, never mutated. */
+export interface MotionTrack {
+  /** Consecutive pace rows (trusted speed over 5 mph) ending at the latest row. */
+  paceRun: number;
+  /** Any of them had a fix worse than `MAX_H_ACC_M`. */
+  paceRunPoor: boolean;
+  /** `ts` of the latest pace row. */
+  lastPaceTs: number | null;
+  /** Where place movement is measured from. */
+  anchor: { lat: number; lng: number; hAcc: number } | null;
+  /** No anchor is set before this `ts` (a position jump settling). */
+  anchorAfter: number | null;
+  /** The previous valid fix was already past the place threshold. */
+  placePending: boolean;
+  /** Rows with a known speed since the anchor was set, and how many of them were at walking pace. */
+  speedRows: number;
+  walkRows: number;
+  /** End of the latest fix-less row that held the clock since the last movement. */
+  heldUntil: number | null;
+}
+
+/**
  * One drive as the engine accumulates it. Mutable while open; the finalizer receives a frozen
  * copy once.
  */
@@ -73,6 +116,11 @@ export interface TripSession {
   /** `ts` of the last durable row. */
   checkpointTs: number | null;
   warmup: Readonly<Warmup>;
+  /** The latest movement (`session.ts`), or null while the car has not moved. */
+  moved: Readonly<MovementMark> | null;
+  motion: Readonly<MotionTrack>;
+  /** Closed at its last movement (`closeAtLastMovement`): the tail after it is left out. */
+  cut: boolean;
 }
 
 /** An alert the engine raised: the alert layer plays it, the HUD glows for 1.5 s. */

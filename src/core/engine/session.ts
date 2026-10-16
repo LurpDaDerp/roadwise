@@ -1,18 +1,128 @@
-// The per-drive accumulators: miles, safe miles, night miles, the track, integrity counters.
-// Pure functions over a mutable `TripSession`; nothing here reads a clock.
-import { NO_EVENTS_FIRST_S, PHONE_MIN_MPH } from '@scoring';
+// The per-drive accumulators: miles, safe miles, night miles, the track, integrity counters, and
+// the movement rule (product spec v3 "Ending on its own"). Pure functions over a mutable
+// `TripSession`; nothing here reads a clock.
+//
+// Movement: the car counts as moving on two consecutive rows with a trusted GPS speed over 5 mph
+// (three when either fix is worse than 20 m), or on two consecutive valid fixes at least
+// max(100 m, 2 × (anchor hAcc + fix hAcc)) from where it last moved (the anchor), with no position
+// jump no car could make since the anchor, and not at the steady walking pace of someone on foot.
+// Each movement row records the mark (the session right after it). A fix-less row on a phone that
+// is neither still nor carried holds the idle clock for up to an hour after the last movement,
+// without counting as movement. Nothing else is movement: a stop, walking pace, an isolated
+// reading, a still or carried phone, OS motion reports.
+import { MAX_H_ACC_M, NO_EVENTS_FIRST_S, PHONE_MIN_MPH } from '@scoring';
 
-import { knownSpeed, MPS_PER_MPH, speedTrusted } from '@/core/detectors/common';
+import { knownSpeed, MPS_PER_MPH, ROW_MS, speedTrusted } from '@/core/detectors/common';
 import { haversineMeters } from '@/lib/geo';
 import { sunIsDown } from '@/lib/time';
 
-import type { EndCause, Fix, TripSession } from './engine.types';
+import type { EndCause, Fix, MotionTrack, MovementMark, TripSession } from './engine.types';
 import type { FeatureRow } from './types';
 
 /** Consecutive fixes implying a speed above this are GNSS noise, not distance. */
 export const GNSS_JUMP_MPS = 100;
 /** Any IMU extreme beyond this (g, or rad/s for yaw) on a moving row is "the IMU saw motion". */
 export const IMU_ACTIVE_MIN = 0.03;
+
+/** Consecutive pace rows that make movement; `MOVE_PACE_ROWS_POOR` when any has a fix worse than `MAX_H_ACC_M`. */
+export const MOVE_PACE_ROWS = 2;
+export const MOVE_PACE_ROWS_POOR = 3;
+/** Place movement: at least this far from the anchor… */
+export const MOVE_MIN_M = 100;
+/** …and at least this many times the two fixes' combined accuracy. */
+export const MOVE_HACC_FACTOR = 2;
+/** A step between consecutive valid fixes faster than this is a position jump, not travel. */
+export const PLACE_MAX_STEP_MPS = 45;
+/** After a jump, no anchor is set for this long. */
+export const PLACE_SETTLE_MS = 30_000;
+/** A known speed over `min` and at most `max` (mph) is walking pace. */
+export const WALK_BAND_MPH = Object.freeze({ min: 2, max: 5 });
+/** Place movement is refused when at least this share of the known-speed rows since the anchor were at walking pace. */
+export const PED_SHARE = 1 / 3;
+/** Fix-less rows hold the idle clock only this long after the last movement (or the start). */
+export const FIXLESS_HOLD_MAX_S = 3600;
+/** A fix-less row reads as carried with handling, an unsteady gravity vector, or a turning phone. */
+export const CARRIED_HANDLING_MIN = 0.6;
+export const CARRIED_GRAVITY_MAX = 0.5;
+export const CARRIED_ORIENT_RAD = 0.35;
+/** `gravityStability` at or above this, with no handling and a quiet IMU, reads as a still phone. */
+export const STILL_GRAVITY_MIN = 0.95;
+export const STILL_IMU_MAX_G = 0.05;
+
+/** A row with no fix on a phone that is not moving. */
+export function stillWithoutFix(row: FeatureRow): boolean {
+  return (
+    !row.gnssValid &&
+    row.gravityStability >= STILL_GRAVITY_MIN &&
+    row.handlingScore === 0 &&
+    Math.abs(row.aLonMax) <= STILL_IMU_MAX_G &&
+    Math.abs(row.aLonMin) <= STILL_IMU_MAX_G &&
+    Math.abs(row.aLatMax) <= STILL_IMU_MAX_G &&
+    Math.abs(row.aLatMin) <= STILL_IMU_MAX_G &&
+    Math.abs(row.yawRateMax) <= STILL_IMU_MAX_G &&
+    Math.abs(row.jerkMax) <= STILL_IMU_MAX_G
+  );
+}
+
+/** The IMU-absent encoding (drive-sense README §4): all nine IMU fields 0. Evidence of nothing. */
+export function imuAbsent(row: FeatureRow): boolean {
+  return (
+    row.aLonMax === 0 &&
+    row.aLonMin === 0 &&
+    row.aLatMax === 0 &&
+    row.aLatMin === 0 &&
+    row.yawRateMax === 0 &&
+    row.jerkMax === 0 &&
+    row.gravityStability === 0 &&
+    row.orientationDelta === 0 &&
+    row.handlingScore === 0
+  );
+}
+
+/** A phone being carried or handled (the harsh detector's spike and frame-reset lines). */
+export function carried(row: FeatureRow): boolean {
+  return row.handlingScore >= CARRIED_HANDLING_MIN || row.gravityStability < CARRIED_GRAVITY_MAX || row.orientationDelta > CARRIED_ORIENT_RAD;
+}
+
+/** A row with a trusted GPS speed over `PHONE_MIN_MPH`. Walking pace never is one. */
+export function isPaceRow(row: FeatureRow): boolean {
+  const speed = knownSpeed(row);
+  return speed !== null && speed > PHONE_MIN_MPH * MPS_PER_MPH && speedTrusted(row);
+}
+
+const validFix = (row: FeatureRow): boolean => row.gnssValid && Number.isFinite(row.lat) && Number.isFinite(row.lng);
+
+/** End of the drive's latest movement (its mark row plus one row), or null while it never moved. */
+export const lastMovedAt = (session: Pick<TripSession, 'moved'>): number | null => (session.moved === null ? null : session.moved.rowTs + ROW_MS);
+
+/**
+ * A fix-less row that holds the idle clock: the phone is neither still nor carried (or reports no
+ * IMU at all), within `FIXLESS_HOLD_MAX_S` of the last movement or the start. A car in a tunnel, a
+ * phone in a glovebox.
+ */
+export function holdsClock(session: Pick<TripSession, 'moved' | 'startedAt'>, row: FeatureRow): boolean {
+  if (row.gnssValid) return false;
+  if (row.ts >= (lastMovedAt(session) ?? session.startedAt) + FIXLESS_HOLD_MAX_S * 1000) return false;
+  if (imuAbsent(row)) return true;
+  return !stillWithoutFix(row) && !carried(row);
+}
+
+/** Where the idle clock runs from: the last movement (or the start), or a later holding row's end. */
+export function idleSince(session: Pick<TripSession, 'moved' | 'startedAt' | 'motion'>): number {
+  return Math.max(lastMovedAt(session) ?? session.startedAt, session.motion.heldUntil ?? Number.NEGATIVE_INFINITY);
+}
+
+const EMPTY_MOTION: Readonly<MotionTrack> = Object.freeze({
+  paceRun: 0,
+  paceRunPoor: false,
+  lastPaceTs: null,
+  anchor: null,
+  anchorAfter: null,
+  placePending: false,
+  speedRows: 0,
+  walkRows: 0,
+  heldUntil: null,
+});
 
 export interface SessionStart {
   clientTripId: string;
@@ -49,6 +159,9 @@ export function createSession(start: SessionStart): TripSession {
       decided: continues,
       endsAt: continues ? start.startedAt : start.startedAt + NO_EVENTS_FIRST_S * 1000,
     }),
+    moved: null,
+    motion: EMPTY_MOTION,
+    cut: false,
   };
 }
 
@@ -81,9 +194,15 @@ const imuActive = (row: FeatureRow): boolean =>
 
 /**
  * Append one row the machine has accepted. `unsafe`: a speeding or phone episode is active on this
- * row (its distance is not safe miles).
+ * row (its distance is not safe miles). The accumulators first, then the movement step.
  */
 export function appendRow(session: TripSession, row: FeatureRow, unsafe: boolean): void {
+  const prevFix = session.lastFix;
+  accumulate(session, row, unsafe);
+  noteMovement(session, row, prevFix);
+}
+
+function accumulate(session: TripSession, row: FeatureRow, unsafe: boolean): void {
   session.rowsCount += 1;
   session.lastRowTs = row.ts;
   session.pending.push(row);
@@ -96,7 +215,7 @@ export function appendRow(session: TripSession, row: FeatureRow, unsafe: boolean
       if (imuActive(row)) session.imuActiveRows += 1;
     }
   }
-  if (!row.gnssValid || !Number.isFinite(row.lat) || !Number.isFinite(row.lng)) return;
+  if (!validFix(row)) return;
   session.validGnssRows += 1;
   const fix: Fix = { lat: row.lat, lng: row.lng, ts: row.ts };
   const prev = session.lastFix;
@@ -113,6 +232,91 @@ export function appendRow(session: TripSession, row: FeatureRow, unsafe: boolean
   if (session.firstFix === null) session.firstFix = fix;
   session.lastFix = fix;
   session.track.push({ ...fix, hAcc: row.hAcc });
+}
+
+const markOf = (session: TripSession, rowTs: number): Readonly<MovementMark> =>
+  Object.freeze({
+    rowTs,
+    rowsCount: session.rowsCount,
+    validGnssRows: session.validGnssRows,
+    mockRows: session.mockRows,
+    movingRows: session.movingRows,
+    imuActiveRows: session.imuActiveRows,
+    distanceM: session.distanceM,
+    safeDistanceM: session.safeDistanceM,
+    nightDistanceM: session.nightDistanceM,
+    maxSpeedMps: session.maxSpeedMps,
+    lastFix: session.lastFix,
+    trackLength: session.track.length,
+  });
+
+/**
+ * The movement step, after the row's accumulators. `prevFix` is the last valid fix before this
+ * row. Replaces `session.motion` (and `session.moved` on movement); never mutates either.
+ */
+function noteMovement(session: TripSession, row: FeatureRow, prevFix: Fix | null): void {
+  const m: MotionTrack = { ...session.motion };
+  // Pace: consecutive trusted readings over 5 mph.
+  if (isPaceRow(row)) {
+    m.paceRun += 1;
+    m.paceRunPoor ||= !(row.hAcc <= MAX_H_ACC_M);
+    m.lastPaceTs = row.ts;
+  } else {
+    m.paceRun = 0;
+    m.paceRunPoor = false;
+  }
+  let moved = m.paceRun >= (m.paceRunPoor ? MOVE_PACE_ROWS_POOR : MOVE_PACE_ROWS);
+
+  const valid = validFix(row);
+  const here = { lat: row.lat, lng: row.lng };
+  // A position jump no car could make: start again from wherever the fixes settle.
+  let jump = false;
+  if (valid && prevFix !== null) {
+    const stepMps = haversineMeters(prevFix, here) / Math.max(1, (row.ts - prevFix.ts) / 1000);
+    if (stepMps > PLACE_MAX_STEP_MPS) {
+      jump = true;
+      m.anchor = null;
+      m.anchorAfter = row.ts + PLACE_SETTLE_MS;
+      m.placePending = false;
+    }
+  }
+  let anchoredNow = false;
+  if (valid && !jump && m.anchor === null && (m.anchorAfter === null || row.ts >= m.anchorAfter)) {
+    m.anchor = Object.freeze({ lat: row.lat, lng: row.lng, hAcc: row.hAcc });
+    m.speedRows = 0;
+    m.walkRows = 0;
+    m.placePending = false;
+    anchoredNow = true;
+  }
+  // Place: two consecutive valid fixes past the threshold, unless the way there was at walking pace.
+  if (valid && !jump && !anchoredNow && m.anchor !== null) {
+    const speed = knownSpeed(row);
+    if (speed !== null) {
+      m.speedRows += 1;
+      const mph = speed / MPS_PER_MPH;
+      if (mph > WALK_BAND_MPH.min && mph <= WALK_BAND_MPH.max) m.walkRows += 1;
+    }
+    const d = haversineMeters(m.anchor, here);
+    if (d >= Math.max(MOVE_MIN_M, MOVE_HACC_FACTOR * (m.anchor.hAcc + row.hAcc))) {
+      const onFoot = m.speedRows > 0 && m.walkRows >= m.speedRows * PED_SHARE;
+      if (m.placePending && !onFoot) moved = true;
+      else m.placePending = true;
+    } else {
+      m.placePending = false;
+    }
+  }
+
+  if (moved) {
+    m.anchor = valid && !jump ? Object.freeze({ lat: row.lat, lng: row.lng, hAcc: row.hAcc }) : null;
+    m.placePending = false;
+    m.speedRows = 0;
+    m.walkRows = 0;
+    m.heldUntil = null;
+    session.moved = markOf(session, row.ts);
+  } else if (holdsClock(session, row)) {
+    m.heldUntil = row.ts + ROW_MS;
+  }
+  session.motion = Object.freeze(m);
 }
 
 /** A frozen copy, arrays included, so a callback holding it sees what it was handed. */

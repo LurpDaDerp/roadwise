@@ -3,6 +3,7 @@ import { createDetectors } from '@/core/detectors';
 import { T0 } from '@/core/detectors/__fixtures__/rows';
 import { rows, TZ, uuid } from '@/core/engine/__fixtures__/drives';
 import type { TripSession } from '@/core/engine/engine.types';
+import { createEngine } from '@/core/engine/machine';
 import { recoverRecordingTrips } from '@/core/engine/recovery';
 import { rebuildFromSamples } from '@/core/engine/replay';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
@@ -88,4 +89,40 @@ test('a rebuilt drive decides its warm-up as the live engine did: a stored resta
   await createSamplesRepo(db).appendMany(uuid(3), rows(10, { speedMps: 0 }).map((r) => ({ ts: r.ts, row: r })));
   const stopped = (await rebuildFromSamples(db, (await trips.get(uuid(3)))!, base()))!;
   expect(stopped.session.warmup).toEqual({ continues: false, decided: true, endsAt: T0 + 30_000 });
+});
+
+test('a rebuilt drive agrees with the live engine on movement: the mark (bar safe miles), the hold and the warm-up, despite a call and missing tiles', async () => {
+  // Driving, a tunnel (vehicle-like fix-less rows), more driving with handling, then parked.
+  const list = [
+    ...rows(60, { speedMps: 15 }),
+    ...rows(40, { t0: T0 + 60_000, speedMps: 15, over: () => ({ gnssValid: false, speed: -1, gravityStability: 0.9, yawRateMax: 0.1 }) }),
+    ...rows(60, { t0: T0 + 100_000, speedMps: 15, over: (i) => (i >= 20 && i < 30 ? { handlingScore: 0.9, gravityStability: 0.5 } : {}) }),
+    ...rows(120, { t0: T0 + 160_000, speedMps: 0 }),
+  ];
+  let live: Readonly<TripSession> | null = null;
+  const engine = createEngine({
+    now: () => T0,
+    newId: () => uuid(7),
+    limits: { lookup: () => ({ limitMps: 35 * 0.44704, source: 'posted', matchConfidence: 1, parallelRoads: false }), prefetch: () => {} },
+    createDetectors: () => createDetectors(() => 'x'),
+    ctx: () => ({ callActive: true }),
+    onAlert: () => {},
+    onCheckpoint: async () => {},
+    onFinalize: async () => {},
+  });
+  await engine.dispatch({ type: 'start', ts: T0, continues: false });
+  for (const r of list) await engine.dispatch({ type: 'row', row: r });
+  live = engine.session();
+
+  const trips = createTripsRepo(db);
+  await trips.insert({ client_trip_id: uuid(7), started_at: T0, tz: TZ, status: 'recording' }, T0);
+  await createSamplesRepo(db).appendMany(uuid(7), list.map((r) => ({ ts: r.ts, row: r })));
+  const rebuilt = (await rebuildFromSamples(db, (await trips.get(uuid(7)))!, base()))!.session;
+
+  const { safeDistanceM: _a, ...liveMark } = live!.moved!;
+  const { safeDistanceM: _b, ...rebuiltMark } = rebuilt.moved!;
+  expect(rebuiltMark).toEqual(liveMark);
+  expect(rebuilt.motion).toEqual(live!.motion);
+  expect(rebuilt.warmup).toEqual(live!.warmup);
+  expect(live!.moved!.rowTs).toBe(T0 + 159_000);
 });

@@ -12,7 +12,7 @@ import { AUTO_END_STOPPED_S, PHONE_MIN_MPH, type EventType, type Tier } from '@s
 import { knownSpeed, limitMphFor, MPS_PER_MPH, ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
 
 import type { AdoptedTrip, EndCause, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
-import { appendRow, closeSession, createSession, noteWarmup, snapshotSession } from './session';
+import { appendRow, closeSession, createSession, noteWarmup, snapshotSession, stillWithoutFix } from './session';
 import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
 /** Speed-limit tiles are prefetched once per this much distance, never per fix. */
@@ -31,25 +31,6 @@ export const WALK_STALE_FIX_MS = 60_000;
 export const NO_FIX_STILL_S = 30;
 /** The phone-handling alert, this long after the pickup. */
 export const HANDLING_ALERT_MS = 15_000;
-
-/** `gravityStability` at or above this, with no handling and a quiet IMU, reads as a still phone. */
-export const STILL_GRAVITY_MIN = 0.95;
-export const STILL_IMU_MAX_G = 0.05;
-
-/** A row with no fix on a phone that is not moving. */
-export function stillWithoutFix(row: FeatureRow): boolean {
-  return (
-    !row.gnssValid &&
-    row.gravityStability >= STILL_GRAVITY_MIN &&
-    row.handlingScore === 0 &&
-    Math.abs(row.aLonMax) <= STILL_IMU_MAX_G &&
-    Math.abs(row.aLonMin) <= STILL_IMU_MAX_G &&
-    Math.abs(row.aLatMax) <= STILL_IMU_MAX_G &&
-    Math.abs(row.aLatMin) <= STILL_IMU_MAX_G &&
-    Math.abs(row.yawRateMax) <= STILL_IMU_MAX_G &&
-    Math.abs(row.jerkMax) <= STILL_IMU_MAX_G
-  );
-}
 
 interface Seen {
   row: FeatureRow;
