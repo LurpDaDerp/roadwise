@@ -86,7 +86,7 @@ export const RULES: RuleSection[] = [
       'Leaving RoadWise during a drive counts as phone use too: another app or the home screen, and on Android phones the app switcher and split screen. The time away counts as handling until you come back or lock your phone, which can wait until you’ve stopped.',
       'Open your navigation app with the navigation button on the drive screen. That never costs points. Going back to it any other way does.',
       'Locking your phone and the notification shade never count. A call’s own screen doesn’t count; once you’ve been back in RoadWise for 10 s of the connected call, leaving again does.',
-      'On iPhone a switch counts after 15 s (about 26 s when you unlock straight into another app), and only once your iPhone has shown RoadWise it reports a lock in time (this needs a passcode). Several short switches in a row count as one pickup (on iPhone, ones of more than about 11 s, so a quick lock and unlock never counts).',
+      'On iPhone a switch counts after about 26 s (iOS reports a lock late, so a lock screen that lights up briefly for a message doesn’t count), and only once your iPhone has shown RoadWise it reports a lock in time (this needs a passcode). Several short switches in a row count as one pickup (on iPhone, ones of more than about 11 s, so a quick lock and unlock never counts).',
     ],
   },
   {
