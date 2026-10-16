@@ -38,7 +38,7 @@ test('phone use: leaving RoadWise is phone use too, the navigation button never 
   expect(phone[2]).toBe('Open your navigation app with the navigation button on the drive screen. That never costs points. Once you lock your phone or come back to RoadWise, open it with the button again: going back to it any other way costs points.');
   expect(phone[3]).toMatch(/^Locking your phone and the notification shade never count\./);
   expect(phone[3]).toMatch(/A call’s own screen doesn’t count; once you’ve been back in RoadWise for 10 s of the connected call, leaving again does\.$/);
-  expect(phone[4]).toMatch(/^On iPhone a switch counts once you come back to RoadWise after 15 s or more, or after about 26 s away \(iOS reports a lock late, so a lock screen that lights up briefly for a message doesn’t count\), and only once/);
+  expect(phone[4]).toMatch(/^On iPhone a switch counts once you come back to RoadWise after 15 s or more, or after about 26 s away \(iOS reports a lock late, so a lock screen that lights up briefly for a message doesn’t count\)\. One that began with an unlock outside RoadWise, or that a call cuts short, counts only after about 26 s\. Switches count only once/);
   expect(phone[4]).toMatch(/Several short switches in a row count as one pickup \(on iPhone, ones of more than about 11 s, so a quick lock and unlock never counts\)\.$/);
   expect(PENALTIES.find((p) => p.event === 'Phone pickup or leaving RoadWise')?.penalty).toBe('−40 (−20 when stopped in traffic)');
   expect(PENALTIES.find((p) => p.event === 'Phone handling or time away')?.penalty).toBe('−10 for every extra 15 s');

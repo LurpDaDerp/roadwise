@@ -364,6 +364,14 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
     expect(pickups(run(rows, ANDROID))).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 10 })]);
   });
 
+  test('30a. a switch a call cuts short counts only once it reached 15 s plus the lock cut while away (a lock pressed, a woken lock screen, then a call reads the same)', () => {
+    const callAfter = (n: number) => seq([10, front], [n, away], [20, { ...away, call: 'ring' }], [5, front]);
+    expect(run(callAfter(20), IOS)).toEqual([]);
+    expect(run(callAfter(25), IOS)).toEqual([]);
+    expect(pickups(run(callAfter(26), IOS))).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 26 })]);
+    expect(pickups(run(callAfter(3), ANDROID))).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 3 })]);
+  });
+
   describe('31. bursts: a short switch counts toward one only when it outlasted the lock cut (a lock undone before its report never does)', () => {
     const three = (n: number) => seq([10, front], [n, away], [10, front], [n, away], [10, front], [n, away], [5, front]);
     test('three 13-s switches ending in RoadWise within 2 min are one pickup (span 12 s > the 11-s cut)', () => {
