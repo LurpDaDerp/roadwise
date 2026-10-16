@@ -42,8 +42,12 @@ export const CHECKPOINT_ROWS = 30;
 export const STOPPED_MPS = PHONE_MIN_MPH * MPS_PER_MPH;
 /** A manual end this long after the idle clock's base (the car standing still) is cut at the last movement. */
 export const MANUAL_CUT_AFTER_S = 120;
-/** The phone-handling alert, this long after the pickup. */
+/** The phone-handling alert, once the pickup's use has lasted this long. */
 export const HANDLING_ALERT_MS = 15_000;
+/** …and no sooner than this after the pickup alert. */
+export const HANDLING_AFTER_PICKUP_MS = 10_000;
+/** While a counted screen switch goes on, the handling alert ("Back to RoadWise") repeats this often. */
+export const SWITCH_REPEAT_ALERT_MS = 60_000;
 
 interface Seen {
   row: FeatureRow;
@@ -69,6 +73,9 @@ export function createEngine(deps: EngineDeps): Engine {
   let chimed: string | null = null;
   let pickupAlerted: string | null = null;
   let handlingAlerted: string | null = null;
+  /** Row clock of the current phone episode's pickup alert, and of its latest phone alert. */
+  let pickupAt = 0;
+  let lastPhoneAlertAt = 0;
 
   const listeners = new Set<(snapshot: EngineSnapshot) => void>();
   let version = 0;
@@ -134,11 +141,13 @@ export function createEngine(deps: EngineDeps): Engine {
     chimed = null;
     pickupAlerted = null;
     handlingAlerted = null;
+    pickupAt = 0;
+    lastPhoneAlertAt = 0;
     touch();
   }
 
-  function alert(id: string, type: EventType, tier: Tier, at: number): void {
-    lastAlert = { id, type, tier, at };
+  function alert(id: string, type: EventType, tier: Tier, at: number, words?: 'switch'): void {
+    lastAlert = words === undefined ? { id, type, tier, at } : { id, type, tier, at, words };
     touch();
     try {
       deps.onAlert(lastAlert);
@@ -187,14 +196,29 @@ export function createEngine(deps: EngineDeps): Engine {
       chimed = speeding.id;
       alert(speeding.id, 'speeding', speeding.tier, row.ts);
     }
+    // Phone: the pickup alert once per episode ("Back to RoadWise" while a switch counts); the
+    // handling alert once its use has lasted 15 s and 10 s have passed since the pickup alert; while
+    // a counted switch goes on, the handling alert again every 60 s. Never during an iPhone hold.
     const phone = det.openPhone();
     if (phone !== null && phone.confirmed) {
+      const words = phone.phase === 'switching' ? 'switch' : undefined;
       if (pickupAlerted !== phone.id) {
         pickupAlerted = phone.id;
-        alert(phone.id, 'phone_pickup', 'severe', row.ts);
-      } else if (handlingAlerted !== phone.id && row.ts - phone.startedAt >= HANDLING_ALERT_MS) {
-        handlingAlerted = phone.id;
-        alert(phone.id, 'phone_handling', 'moderate', row.ts);
+        pickupAt = row.ts;
+        lastPhoneAlertAt = row.ts;
+        alert(phone.id, 'phone_pickup', 'severe', row.ts, words);
+      } else if (phone.phase !== 'hold') {
+        const used = (phone.lastUseAt ?? row.ts) - phone.startedAt;
+        if (handlingAlerted !== phone.id) {
+          if (used >= HANDLING_ALERT_MS && row.ts - pickupAt >= HANDLING_AFTER_PICKUP_MS) {
+            handlingAlerted = phone.id;
+            lastPhoneAlertAt = row.ts;
+            alert(phone.id, 'phone_handling', 'moderate', row.ts, words);
+          }
+        } else if (phone.phase === 'switching' && row.ts - lastPhoneAlertAt >= SWITCH_REPEAT_ALERT_MS) {
+          lastPhoneAlertAt = row.ts;
+          alert(phone.id, 'phone_handling', 'moderate', row.ts, 'switch');
+        }
       }
     }
     appendRow(s, row, det.unsafe());

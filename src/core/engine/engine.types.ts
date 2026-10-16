@@ -151,6 +151,11 @@ export interface AlertEvent {
   tier: Tier;
   /** epoch ms, row clock */
   at: number;
+  /**
+   * `switch`: a phone alert raised while a screen switch counts; its voice line is "Back to RoadWise".
+   * Local only (never stored or uploaded); level, tone, haptic and the HUD word are unchanged.
+   */
+  words?: 'switch';
 }
 
 export interface EngineSnapshot {

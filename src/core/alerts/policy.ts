@@ -32,6 +32,9 @@ export const ALERT_VOICE: Readonly<Record<EventType, string | null>> = {
   drowsy: 'Take a break',
 };
 
+/** The voice line of a phone alert raised while the driver is away from RoadWise (a screen switch). */
+export const SWITCH_VOICE = 'Back to RoadWise';
+
 export const ALERT_INTENSITY: Readonly<Record<AlertLevel, HapticIntensity>> = { 1: 1, 2: 2, 3: 4 };
 
 /** The HUD's edge glow after an alert, ms. */
@@ -39,7 +42,7 @@ export const ALERT_GLOW_MS = 1500;
 
 export function decisionFor(alert: AlertEvent, opts: { voiceEnabled: boolean }): AlertDecision {
   const level = ALERT_LEVEL[alert.type];
-  const voice = opts.voiceEnabled ? ALERT_VOICE[alert.type] : null;
+  const voice = opts.voiceEnabled ? (alert.words === 'switch' ? SWITCH_VOICE : ALERT_VOICE[alert.type]) : null;
   const decision: AlertDecision = {
     id: alert.id,
     level,
