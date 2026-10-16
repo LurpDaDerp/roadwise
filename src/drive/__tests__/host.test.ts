@@ -594,6 +594,49 @@ describe('a drive that never moved is not kept', () => {
   });
 });
 
+describe('the drive end stopCapture hands the reminder', () => {
+  test('ended with End while driving on: the tap is the driving end, and the car is at driving speed', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 15 }));
+    clock = T0 + 60_000;
+    await h.host.end();
+    expect(h.source.captureEnds).toEqual([{ drivingEndedAt: T0 + 60_000, drivingAtEnd: true }]);
+  });
+
+  test('ended with End after standing still 3 min: the cut where the car last moved, not at driving speed', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 15 }));
+    await feed(h, rows(180, { speedMps: 0, t0: T0 + 60_000 }));
+    clock = T0 + 240_000;
+    await h.host.end();
+    const [end] = h.source.captureEnds;
+    expect(end).toEqual({ drivingEndedAt: (await createTripsRepo(db).get(uuid(1)))!.ended_at, drivingAtEnd: false });
+    expect(end!.drivingEndedAt).toBeLessThanOrEqual(T0 + 61_000);
+  });
+
+  test('ended 16 s after the last driving-speed reading: not at driving speed; a drive not kept passes no driving end', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 15 }));
+    await feed(h, rows(16, { speedMps: 3, t0: T0 + 60_000 }));
+    clock = T0 + 76_000;
+    await h.host.end();
+    expect(h.source.captureEnds.at(-1)).toMatchObject({ drivingAtEnd: false });
+    clock = T0 + 200_000;
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 3.58, t0: T0 + 200_000 }));
+    clock = T0 + 260_000;
+    expect((await h.host.end())?.dropped).toBe('not_driven');
+    expect(h.source.captureEnds.at(-1)).toEqual({ drivingEndedAt: null, drivingAtEnd: false });
+    await h.host.stop({ endOpenTrip: false });
+  });
+});
+
 test('alerts go to the player as decisions (one speeding chime); a hands-free call suppresses phone events', async () => {
   const h = build();
   await h.host.boot();

@@ -131,10 +131,12 @@ enum TripReminderSelfTest {
     case "captureStarted":
       return try TripReminderPolicy.captureStarted(s, num(o["now"]))
     case "captureEnded":
-      // Left out = now; null = a drive that was not kept.
+      // Left out = now; null = a drive that was not kept. drivingAtEnd and vehicle left out = false.
       let now = try num(o["now"])
       let end: Double? = o.keys.contains("drivingEndedAt") ? jsonNumber(o["drivingEndedAt"]) : now
-      return TripReminderPolicy.captureEnded(s, now, end)
+      let drivingAtEnd = jsonBool(o["drivingAtEnd"]) ?? false
+      let vehicle = jsonBool(o["vehicle"]) ?? false
+      return TripReminderPolicy.captureEnded(s, now, end, drivingAtEnd: drivingAtEnd, vehicle: vehicle)
     case "setEnabled":
       return try TripReminderPolicy.setEnabled(s, bool(o, "on"))
     case "lookEnded":

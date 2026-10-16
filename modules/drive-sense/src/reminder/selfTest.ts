@@ -80,7 +80,7 @@ function runOp(s: ReminderState, o: ReminderOp): ReminderState {
       return captureStarted(s, o.now);
     case 'captureEnded':
       // JSON keeps a null and drops an undefined, so the three cases survive the wire.
-      return 'drivingEndedAt' in o && o.drivingEndedAt !== undefined ? captureEnded(s, o.now, o.drivingEndedAt) : captureEnded(s, o.now);
+      return captureEnded(s, o.now, 'drivingEndedAt' in o && o.drivingEndedAt !== undefined ? o.drivingEndedAt : o.now, o.drivingAtEnd === true, o.vehicle === true);
     case 'captureTransitions':
       return foldCaptureTransitions(s, o.events, o.subscribedAt);
     case 'setEnabled':

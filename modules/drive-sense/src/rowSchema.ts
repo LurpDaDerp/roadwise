@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { featureRowSchema } from '../../../src/core/replay/trace';
 import type {
   AudioOutputState,
+  CaptureEnd,
   DashpalLinkResult,
   DashpalLinkState,
   InstalledApp,
@@ -176,6 +177,11 @@ export function parseActivity(raw: unknown): MotionActivity | null {
 }
 
 export const captureModeSchema = z.enum(['mounted', 'pocket', 'auto']);
+/** `stopCapture`'s drive end: a driving end at or after 0 (or null: not kept), and whether the car was at driving speed. */
+export const captureEndSchema: z.ZodType<CaptureEnd> = z.strictObject({
+  drivingEndedAt: z.number().finite().nonnegative().nullable(),
+  drivingAtEnd: z.boolean(),
+});
 export const captureRateSchema = z.enum(['full', 'low']);
 export const thermalLevelSchema: z.ZodType<ThermalLevel> = z.enum([
   'nominal',

@@ -197,17 +197,17 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
     }
   }
 
-  /// A drive ended: its end is the session's last driving moment. (The motion reads are answered in
-  /// order on one queue, so this lands after the start's. With the reminder off nothing is read and
-  /// both steps run at once on a state with no session, so their order changes nothing.)
-  func onCaptureEnded() {
+  /// A drive ended: its driving end (now with no `end` from JS) is the session's last driving moment.
+  /// Motion reads are answered in order on one queue, so this lands after the start's.
+  func onCaptureEnded(_ end: CaptureEnd? = nil) {
     captureOpen = false
     let at = Self.nowMs()
+    let drivingEndedAt: Double? = end == nil ? at : end?.drivingEndedAt, drivingAtEnd = end?.drivingAtEnd ?? false
     guard loadState() != nil else { return }
     motionWhileOn { motion in
       guard let s0 = self.loadState() else { return }
       let folded = TripReminderPolicy.foldMotion(TripReminderPolicy.clampTimes(s0, at), at, motion, true)
-      self.saveState(TripReminderPolicy.captureEnded(folded, at, at))
+      self.saveState(TripReminderPolicy.captureEnded(folded, at, drivingEndedAt, drivingAtEnd: drivingAtEnd, vehicle: false))
     }
   }
 

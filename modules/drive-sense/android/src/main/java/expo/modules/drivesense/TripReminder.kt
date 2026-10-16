@@ -139,11 +139,17 @@ object TripReminder {
     TripReminderNotifier.cancel(context)
   }
 
-  /** CaptureService.endCapture: the drive's end is the session's last driving moment. */
+  /**
+   * CaptureService.endCapture: the drive's driving end is the session's last driving moment (now
+   * with no [end] from JS: the watchdog, or a stop that knew nothing of the drive), and a drive ended
+   * while driving on has driven, in the vehicle.
+   */
   @Synchronized
-  fun onCaptureEnded(context: Context) {
+  fun onCaptureEnded(context: Context, end: CaptureEnd? = null) {
     val now = now()
-    save(context, TripReminderPolicy.captureEnded(TripReminderPolicy.settle(load(context), now, true), now))
+    val drivingEndedAt: Long? = if (end == null) now else end.drivingEndedAt
+    val drivingAtEnd = end?.drivingAtEnd == true
+    save(context, TripReminderPolicy.captureEnded(TripReminderPolicy.settle(load(context), now, true), now, drivingEndedAt, drivingAtEnd, true))
   }
 
   /**

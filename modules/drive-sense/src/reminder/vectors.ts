@@ -40,8 +40,8 @@ export type ReminderOp =
   | { op: 'unposted'; token: string }
   | { op: 'noteGone' }
   | { op: 'captureStarted'; now: number }
-  /** `drivingEndedAt` left out = now; null = a drive that was not kept. */
-  | { op: 'captureEnded'; now: number; drivingEndedAt?: number | null }
+  /** `drivingEndedAt` left out = now; null = a drive that was not kept. `drivingAtEnd` and `vehicle` left out = false. */
+  | { op: 'captureEnded'; now: number; drivingEndedAt?: number | null; drivingAtEnd?: boolean; vehicle?: boolean }
   /** Android only: a capture batch folded as state. */
   | { op: 'captureTransitions'; events: Transition[]; subscribedAt: number }
   | { op: 'setEnabled'; on: boolean }
@@ -317,6 +317,51 @@ export const REMINDER_VECTORS: ReminderVector[] = [
     state: on({}, { lastDrivingAt: T0 - 5 * M }),
     ops: [{ op: 'captureEnded', now: T0, drivingEndedAt: T0 - 10 * M }],
     expected: { session: { lastDrivingAt: T0 - 5 * M } },
+  },
+  {
+    name: 'ops: a drive ended while driving on (Android): the session has driven, is in the vehicle and drives now',
+    kind: 'ops',
+    state: on({}, { inVehicle: false, drove: false, lastDrivingAt: T0 - 10 * M }),
+    ops: [{ op: 'captureEnded', now: T0, drivingEndedAt: T0, drivingAtEnd: true, vehicle: true }],
+    expected: { lastDriveEndAt: T0, session: { drove: true, inVehicle: true, lastDrivingAt: T0, lastNewsAt: T0, reminded: false } },
+  },
+  {
+    name: 'ops: a drive ended while driving on with no session opens one that has driven (Android: in the vehicle)',
+    kind: 'ops',
+    state: on({}, null),
+    ops: [{ op: 'captureEnded', now: T0, drivingEndedAt: T0 - 2 * S, drivingAtEnd: true, vehicle: true }],
+    expected: { lastDriveEndAt: T0, session: { startedAt: T0, lastDrivingAt: T0, lastNewsAt: T0, inVehicle: true, vehicleExitAt: 0, drove: true, reminded: false } },
+  },
+  {
+    name: 'ops: a drive ended while driving on with no session opens one that has driven (iOS: never in the vehicle)',
+    kind: 'ops',
+    state: on({}, null),
+    ops: [{ op: 'captureEnded', now: T0, drivingEndedAt: T0, drivingAtEnd: true }],
+    expected: { session: { startedAt: T0, lastDrivingAt: T0, inVehicle: false, drove: true, reminded: false } },
+  },
+  {
+    name: 'ops: a drive ended while driving on with the reminder off opens nothing',
+    kind: 'ops',
+    state: INITIAL,
+    ops: [{ op: 'captureEnded', now: T0, drivingEndedAt: T0, drivingAtEnd: true, vehicle: true }],
+    expected: { enabled: false, session: null, lastDriveEndAt: T0 },
+  },
+  {
+    name: 'ops: a reminded session ended while driving on has driven but stays reminded (one reminder a session)',
+    kind: 'ops',
+    state: noted(),
+    ops: [
+      { op: 'captureStarted', now: T0 },
+      { op: 'captureEnded', now: T0 + 20 * M, drivingEndedAt: T0 + 20 * M, drivingAtEnd: true, vehicle: true },
+    ],
+    expected: { token: '', session: { reminded: true, drove: true, inVehicle: true, lastDrivingAt: T0 + 20 * M } },
+  },
+  {
+    name: 'ops: a drive that was not kept, ended while moving under driving speed: not driven, clock left alone',
+    kind: 'ops',
+    state: on({}, { lastDrivingAt: T0 - 20 * M, drove: true }),
+    ops: [{ op: 'captureEnded', now: T0, drivingEndedAt: null, drivingAtEnd: false, vehicle: true }],
+    expected: { session: { lastDrivingAt: T0 - 20 * M, drove: false } },
   },
   {
     name: 'ops: a reminded session stays reminded through a drive',

@@ -12,6 +12,7 @@ import { requireOptionalNativeModule } from 'expo-modules-core';
 import { z } from 'zod';
 import {
   audioOutputSchema,
+  captureEndSchema,
   captureModeSchema,
   captureRateSchema,
   dashpalLinkResultSchema,
@@ -31,7 +32,7 @@ import {
   tripReminderStatusSchema,
 } from './rowSchema';
 import { isNavAppPackage } from './navPackages';
-import type { AudioOutputState, DriveSenseApi, DriveSenseEvent, DriveSenseEvents, DriveSenseSyncMethod, Subscription } from './types';
+import type { AudioOutputState, CaptureEnd, DriveSenseApi, DriveSenseEvent, DriveSenseEvents, DriveSenseSyncMethod, Subscription } from './types';
 
 export * from './types';
 export { CALL_ROW_KEY, MOCK_ROW_KEY, parseActivity, parseRow, REMINDER_TOKEN, resetUnknownRowKeys, unknownRowKeys } from './rowSchema';
@@ -141,12 +142,22 @@ const MARK_LOCK_PROOF_MAX_MS = 60_000;
 /** A well-formed package name that is one of the navigation apps (`navPackages.ts`). */
 const isPackageName = (v: unknown): v is string => typeof v === 'string' && v.length <= 255 && PACKAGE_NAME.test(v) && isNavAppPackage(v);
 
+/**
+ * `stopCapture`'s native arguments (kind, endedAt, drivingAtEnd): "now" with nothing known,
+ * "dropped" for a drive not kept, "at" with its driving end. Only a valid `end` is ever sent.
+ */
+function captureEndArgs(end: CaptureEnd | undefined): [string, number, boolean] {
+  if (end === undefined || end === null || typeof end !== 'object') return ['now', 0, false];
+  const atEnd = end.drivingAtEnd === true;
+  return end.drivingEndedAt === null ? ['dropped', 0, atEnd] : ['at', end.drivingEndedAt, atEnd];
+}
+
 const voidResult = z.union([z.undefined(), z.null()]).transform(() => undefined);
 const ok = <S extends z.ZodType>(schema: S, v: unknown) => schema.safeParse(v).success;
 
 const DriveSense: DriveSenseApi = {
   startCapture: (mode) => call('startCapture', [mode], ok(captureModeSchema, mode), voidResult),
-  stopCapture: () => call('stopCapture', [], true, voidResult),
+  stopCapture: (end) => call('stopCapture', captureEndArgs(end), end === undefined || ok(captureEndSchema, end), voidResult),
   setCaptureRate: (rate) =>
     call('setCaptureRate', [rate], ok(captureRateSchema, rate), voidResult),
   getState: () => call('getState', [], true, stateSchema),

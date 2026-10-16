@@ -101,11 +101,15 @@ object TripReminderSelfTest {
         "unposted" -> TripReminderPolicy.unposted(s, o.getString("token"))
         "noteGone" -> TripReminderPolicy.noteGone(s)
         "captureStarted" -> TripReminderPolicy.captureStarted(s, o.getLong("now"))
-        // Left out = now; null = a drive that was not kept.
-        "captureEnded" -> when {
-          !o.has("drivingEndedAt") -> TripReminderPolicy.captureEnded(s, o.getLong("now"))
-          o.isNull("drivingEndedAt") -> TripReminderPolicy.captureEnded(s, o.getLong("now"), null)
-          else -> TripReminderPolicy.captureEnded(s, o.getLong("now"), o.getLong("drivingEndedAt"))
+        // Left out = now; null = a drive that was not kept. drivingAtEnd and vehicle left out = false.
+        "captureEnded" -> {
+          val now = o.getLong("now")
+          val end: Long? = when {
+            !o.has("drivingEndedAt") -> now
+            o.isNull("drivingEndedAt") -> null
+            else -> o.getLong("drivingEndedAt")
+          }
+          TripReminderPolicy.captureEnded(s, now, end, o.optBoolean("drivingAtEnd", false), o.optBoolean("vehicle", false))
         }
         "captureTransitions" -> TripReminderPolicy.foldCaptureTransitions(s, transitions(o.getJSONArray("events")), o.getLong("subscribedAt"))
         "setEnabled" -> TripReminderPolicy.setEnabled(s, o.getBoolean("on"))

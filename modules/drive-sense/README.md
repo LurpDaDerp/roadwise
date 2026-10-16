@@ -78,7 +78,7 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 | Method | Behaviour |
 |---|---|
 | `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of the Android sticky restart** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: a `SecurityException` from the location foreground service → `E_PERMISSION`; any other refusal → `E_FGS_REFUSED`. iOS: a new capture emits `call { active: true }` once if a phone call is already in progress (later changes as they happen). Both platforms subscribe the motion-activity feed for the capture's life when `motion` is `granted`, **best effort** (Android: a `SecurityException` or missing Play services is logged and swallowed, never rejects `startCapture`, never stops the capture), for the drive's walking end. Only ever called from a user's tap in the foreground. |
-| `stopCapture()` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service (its notification goes with it) and the capture's activity-transition subscription. Idempotent. |
+| `stopCapture(end?)` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service (its notification goes with it) and the capture's activity-transition subscription. Idempotent. `end` (`CaptureEnd`): the drive's driving end (`drivingEndedAt`, epoch ms, or null for a drive that was not kept) and whether the car was still at driving speed as it ended (`drivingAtEnd`), for the reminder's session (§10); sent natively as `(kind, endedAt, drivingAtEnd)` with kind `now` (no `end`), `dropped` or `at`. The watchdog's stop passes none (now). |
 | `setCaptureRate(rate)` | `full` as above. `low`: coarse location (iOS `kCLLocationAccuracyHundredMeters`, `distanceFilter = 50`; Android `PRIORITY_BALANCED_POWER_ACCURACY` at 10 s), IMU stopped, and a row is emitted **only when a fix arrives** (IMU-absent encoding, §4). The process stays alive. iOS reads the phone state (`locked`/`screenOn`/`appForeground`, and `screen` changes) on each fix at `low` rather than polling at 1 Hz, so the low rate wakes nothing per second. Ignored (resolves) while not capturing. |
 | `getState()` | `DriveSenseState` (below). |
 | `getScreenState()` | `{ locked, on }` now (same derivation as the `screen` event). |
@@ -729,9 +729,12 @@ Optional, **off by default**, switched on from an optional onboarding step or Se
 (`setTripReminder`). It works in **sessions**: a session is a stretch of driving, and it ends 30 min
 after its last driving moment (`SESSION_GAP_MS`); every driving moment starts the 30 min again, and
 an open drive counts as driving (a session never ends while a drive is open; the drive's driving
-end is a driving moment, a drive that was not kept leaves the clock alone). Each session gets **at
-most one** reminder, posted only **at a stop**, only after the car reached **driving speed with no
-drive open** in that session (and after the last drive ended), and never while a drive is open.
+end, which JS passes to `stopCapture`, is a driving moment, a drive that was not kept leaves the
+clock alone, and the watchdog's stop, which knows nothing of the drive, uses now). Each session gets
+**at most one** reminder, posted only **at a stop**, only after the car reached **driving speed with
+no drive open** in that session (and after the last drive ended; a drive ended with the car still at
+driving speed, `drivingAtEnd`, counts at once, opening a session if there is none, in the vehicle on
+Android), and never while a drive is open.
 Nothing else limits it: no daily cap, no spacing, no quiet or back-off, no wait after a drive, no
 minimum trip time, no check of calls, Low Power Mode or RoadWise being in front.
 
@@ -813,8 +816,9 @@ request is skipped only when the same tier was requested in this boot (`Settings
 where the phone does not give it, a stamp ahead of the boot clock). `ReminderBootReceiver`
 (BOOT_COMPLETED, MY_PACKAGE_REPLACED; unexported, disabled in the manifest, enabled with
 `DONT_KILL_APP` only while the reminder is on) only re-subscribes; its replay repairs the vehicle
-state. Known gaps: a drive that ends while the car keeps moving brings no reminder for the rest of
-that session (only a new report of getting into a vehicle counts as driving again); a red light is
+state. **Driving speed** also comes from the end of a drive ended while the car was still at
+driving speed (`stopCapture`'s `drivingAtEnd`): the session (opened then if there is none) has
+driven and is in the vehicle, so the next EXIT then STILL is a stop. Known gaps: a red light is
 rarely reported (catching lights would need background location); a Play services update or data
 clear can drop the registration with no broadcast (it comes back at the next app open); a force
 stop or an OEM "deep sleeping" list stops it until RoadWise is opened.

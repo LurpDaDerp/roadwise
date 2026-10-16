@@ -97,7 +97,8 @@ final class CaptureController {
     LockProbe.shared.captureRunning(true)
   }
 
-  func stopCapture() {
+  /// `end`: what JS said about the drive's end, for the reminder; nil (the watchdog) = now.
+  func stopCapture(end: CaptureEnd? = nil) {
     guard capturing else { return }
     generation += 1
     let gen = generation
@@ -114,8 +115,8 @@ final class CaptureController {
     calls.stop()
     ActivitySource.stopLive()
     DriveDisplayBridge.postEnded()
-    // No forgot-to-start reminder for the next 10 min.
-    TripReminder.shared.onCaptureEnded()
+    // The reminder's session takes the drive's end.
+    TripReminder.shared.onCaptureEnded(end)
     LockProbe.shared.captureRunning(false)
   }
 

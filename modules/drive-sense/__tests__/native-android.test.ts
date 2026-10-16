@@ -459,7 +459,18 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
     const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
     expect(begin).toMatch(/TripReminder\.onCaptureStarted\(this\)/);
     const end = /private fun endCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
-    expect(end).toMatch(/TripReminder\.onCaptureEnded\(this\)/);
+    expect(end).toMatch(/private fun endCapture\(clearOpen: Boolean, headlessNow: Boolean = false, end: CaptureEnd\? = null\)/);
+    expect(end).toMatch(/TripReminder\.onCaptureEnded\(this, end\)/);
+    // JS's stop passes the drive's end; the watchdog's stop passes none (now)
+    expect(svc).toMatch(/fun stopFromJs\(context: Context, end: CaptureEnd\?, done: \(\) -> Unit\)[\s\S]*?inst\.endCapture\(clearOpen = true, end = end\)/);
+    expect(svc).toMatch(/endCapture\(clearOpen = true, headlessNow = true\)/);
+    expect(MODULE()).toMatch(/AsyncFunction\("stopCapture"\) \{ kind: String, endedAt: Double, drivingAtEnd: Boolean, promise: Promise ->\s*CaptureService\.stopFromJs\(context, CaptureEnd\.of\(kind, endedAt, drivingAtEnd\)\) \{ promise\.resolve\(null\) \}/);
+    const ce = code(kt('CaptureEnd'));
+    expect(ce).toMatch(/"dropped" -> CaptureEnd\(null, drivingAtEnd\)/);
+    expect(ce).toMatch(/"at" -> if \(endedAt\.isFinite\(\) && endedAt >= 0\.0\) CaptureEnd\(endedAt\.toLong\(\), drivingAtEnd\) else null/);
+    expect(ce).toMatch(/else -> null/);
+    const rem = code(kt('TripReminder'));
+    expect(rem).toMatch(/fun onCaptureEnded\(context: Context, end: CaptureEnd\? = null\) \{\s*val now = now\(\)\s*val drivingEndedAt: Long\? = if \(end == null\) now else end\.drivingEndedAt\s*val drivingAtEnd = end\?\.drivingAtEnd == true\s*save\(context, TripReminderPolicy\.captureEnded\(TripReminderPolicy\.settle\(load\(context\), now, true\), now, drivingEndedAt, drivingAtEnd, true\)\)/);
     expect(svc.match(/TripReminder\./g)).toHaveLength(2);
   });
 

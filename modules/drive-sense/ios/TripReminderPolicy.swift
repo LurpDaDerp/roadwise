@@ -180,14 +180,26 @@ enum TripReminderPolicy {
 
   /// policy.ts `captureEnded`: the drive's driving end (never later than now) is the session's last
   /// driving moment; nil (a drive that was not kept) leaves the clock as it was. A caller with no
-  /// driving end passes `now`.
-  static func captureEnded(_ s0: ReminderState, _ now: Double, _ drivingEndedAt: Double?) -> ReminderState {
+  /// driving end passes `now`. `drivingAtEnd`: the car was at driving speed as the drive ended, so
+  /// the session (opened now if there is none) has driven; `vehicle` marks it in the vehicle
+  /// (Android's; iOS's own calls pass false).
+  static func captureEnded(
+    _ s0: ReminderState, _ now: Double, _ drivingEndedAt: Double?, drivingAtEnd: Bool = false, vehicle: Bool = false
+  ) -> ReminderState {
     var s = s0
     s.lastDriveEndAt = now
     if var x = s.session {
-      x.drove = false
+      x.drove = drivingAtEnd
       x.lastNewsAt = max(x.lastNewsAt, now)
       if let end = drivingEndedAt { x.lastDrivingAt = max(x.lastDrivingAt, min(now, end)) }
+      if drivingAtEnd {
+        x.lastDrivingAt = max(x.lastDrivingAt, now)
+        x.inVehicle = x.inVehicle || vehicle
+      }
+      s.session = x
+    } else if drivingAtEnd && s.enabled {
+      var x = newSession(now, now, inVehicle: vehicle)
+      x.drove = true
       s.session = x
     }
     return s

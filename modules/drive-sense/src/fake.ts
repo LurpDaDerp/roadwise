@@ -12,6 +12,7 @@ import { isReminderWireVector, referenceReminderOutput } from './reminder/selfTe
 import { parseVectors } from './selfTest';
 import type {
   AudioOutputState,
+  CaptureEnd,
   CaptureMode,
   CaptureRate,
   DashpalLinkResult,
@@ -107,6 +108,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   let buffer: Buffered[] = [];
   const calls: string[] = [];
   const queries: string[] = [];
+  const captureEnds: (CaptureEnd | null)[] = [];
 
   const command = (name: string, arg?: string) =>
     calls.push(arg === undefined ? name : `${name}:${arg}`);
@@ -162,8 +164,9 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
         : { ...state, capturing: true, mode, rate: 'full', captureStartedAt: now() };
       return resolve(undefined);
     },
-    stopCapture() {
+    stopCapture(end) {
       command('stopCapture');
+      captureEnds.push(end === undefined ? null : { ...end });
       // The capture's feed ends with it; the notification goes with the service.
       captureFeed = false;
       driveDisplay = null;
@@ -353,6 +356,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     calls,
     queries,
+    captureEnds,
     setState(s) {
       state = { ...state, ...s };
     },

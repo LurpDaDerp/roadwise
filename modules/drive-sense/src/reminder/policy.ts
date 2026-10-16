@@ -9,7 +9,8 @@
 // The rule is the SESSION: a stretch of driving that ends 30 min after its last driving moment
 // (every driving moment restarts the 30 min; an open drive counts as driving). A session gets at
 // most one reminder, posted only at a stop, only after the car reached driving speed with no drive
-// open (and after the last drive ended), and never while a drive is open. Nothing else limits it.
+// open (and after the last drive ended; a drive ended while driving on counts at once), and never
+// while a drive is open. Nothing else limits it.
 //
 // The reminder never starts a drive by itself. Its note carries a one-use token; a tap that JS
 // claims (`claim`) is the only way the reminder leads to a drive, and JS then starts it through
@@ -275,15 +276,26 @@ export function captureStarted(s0: ReminderState, now: number): ReminderState {
  * A drive ended. Its driving end is the session's last driving moment: `drivingEndedAt` omitted =
  * now; null (a drive that was not kept) = the session's clock is left as it was; a time = that time
  * (never later than now). The vehicle state is left to the reports.
+ *
+ * `drivingAtEnd`: the car was at driving speed as the drive ended (it was ended while driving on).
+ * Driving with no drive open starts right then, so the session (opened now if there is none) has
+ * driven, and its next stop may remind. `vehicle` (Android, where the session keeps the vehicle
+ * state) marks it in the vehicle; the next replayed report corrects that if the phone says otherwise.
  */
-export function captureEnded(s0: ReminderState, now: number, drivingEndedAt?: number | null): ReminderState {
+export function captureEnded(s0: ReminderState, now: number, drivingEndedAt?: number | null, drivingAtEnd = false, vehicle = false): ReminderState {
   const s = clone(s0);
   s.lastDriveEndAt = now;
   const x = s.session;
   if (x) {
-    x.drove = false;
+    x.drove = drivingAtEnd;
     x.lastNewsAt = Math.max(x.lastNewsAt, now);
     if (drivingEndedAt !== null) x.lastDrivingAt = Math.max(x.lastDrivingAt, Math.min(now, drivingEndedAt ?? now));
+    if (drivingAtEnd) {
+      x.lastDrivingAt = Math.max(x.lastDrivingAt, now);
+      x.inVehicle = x.inVehicle || vehicle;
+    }
+  } else if (drivingAtEnd && s.enabled) {
+    s.session = { ...newSession(now, now, vehicle), drove: true };
   }
   return s;
 }

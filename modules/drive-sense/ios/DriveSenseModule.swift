@@ -62,8 +62,10 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
       }
     }.runOnQueue(.main)
 
-    AsyncFunction("stopCapture") { (promise: Promise) in
-      CaptureController.shared.stopCapture()
+    // The drive's end for the reminder (README §2): kind "now" (nothing known), "dropped" (the drive
+    // was not kept) or "at" (its driving ended at endedAt), and whether the car was at driving speed.
+    AsyncFunction("stopCapture") { (kind: String, endedAt: Double, drivingAtEnd: Bool, promise: Promise) in
+      CaptureController.shared.stopCapture(end: CaptureEnd.of(kind, endedAt, drivingAtEnd))
       promise.resolve(nil)
     }.runOnQueue(.main)
 

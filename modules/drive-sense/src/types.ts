@@ -61,6 +61,14 @@ export type DashpalLinkState = 'off' | 'waiting' | 'connected';
 export type DashpalLinkResult = 'running' | 'stopped' | 'refused' | 'unsupported';
 
 export type CaptureMode = 'mounted' | 'pocket' | 'auto';
+
+/** What JS knows of a drive's end at `stopCapture`, for the forgot-to-start reminder's session. */
+export interface CaptureEnd {
+  /** When its driving ended, epoch ms (where the car last moved, or the End tap); null when the drive was not kept. */
+  drivingEndedAt: number | null;
+  /** The car was still at driving speed as the drive ended (it was ended while driving on). */
+  drivingAtEnd: boolean;
+}
 /** rev1: I5 — `low` = coarse location, no IMU, rows only when a fix arrives. */
 export type CaptureRate = 'full' | 'low';
 export type ThermalLevel = 'nominal' | 'fair' | 'serious' | 'critical';
@@ -271,8 +279,11 @@ export interface DriveSenseApi {
    * called from a user's tap in the foreground (plan §1 decision 4).
    */
   startCapture(mode: CaptureMode): Promise<void>;
-  /** Idempotent; clears the persisted capture-open flag. */
-  stopCapture(): Promise<void>;
+  /**
+   * Idempotent; clears the persisted capture-open flag. `end`: the drive's end, for the reminder's
+   * session (left out: the end is now, nothing more known, as the native watchdog's stop).
+   */
+  stopCapture(end?: CaptureEnd): Promise<void>;
   /** Ignored (resolves) while not capturing. */
   setCaptureRate(rate: CaptureRate): Promise<void>;
   getState(): Promise<DriveSenseState>;
@@ -403,6 +414,8 @@ export interface FakeControls {
   setLastExitInfo(info: ExitInfo | null): void;
   /** What `isIgnoringBatteryOptimizations` resolves to (default: true on iOS, false on Android). */
   setIgnoringBatteryOptimizations(value: boolean): void;
+  /** Every `stopCapture`'s `end`, in order (null when none was given). */
+  readonly captureEnds: readonly (CaptureEnd | null)[];
   /** The last `setDriveDisplay` argument delivered while capturing, or null (cleared by stopCapture, as the notification goes). */
   readonly driveDisplay: DriveDisplayState | null;
   /**

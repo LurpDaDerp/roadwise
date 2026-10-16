@@ -130,6 +130,7 @@ describe('every method goes to native with its arguments', () => {
     await DriveSense.setDriveDisplay(display);
     expect(mockNative.startCapture).toHaveBeenCalledWith('pocket');
     expect(mockNative.stopCapture).toHaveBeenCalledTimes(1);
+    expect(mockNative.stopCapture).toHaveBeenCalledWith('now', 0, false);
     expect(mockNative.setCaptureRate).toHaveBeenCalledWith('low');
     expect(mockNative.excludeFromBackup).toHaveBeenCalledWith('file:///data/traces/');
     expect(mockNative.setDriveDisplay).toHaveBeenCalledWith(display);
@@ -178,6 +179,17 @@ describe('every method goes to native with its arguments', () => {
     await expect(DriveSense.takeReminderTap()).resolves.toEqual({ token: '9f1c2b7e-0d4a-4c1e-9a77-1b2c3d4e5f60', at: 1_700_000_000_000 });
     mockNative.takeReminderTap!.mockResolvedValueOnce(null);
     await expect(DriveSense.takeReminderTap()).resolves.toBeNull();
+  });
+
+  test("stopCapture's drive end goes to native as (kind, endedAt, drivingAtEnd)", async () => {
+    await DriveSense.stopCapture({ drivingEndedAt: 1_760_000_000_000, drivingAtEnd: true });
+    await DriveSense.stopCapture({ drivingEndedAt: null, drivingAtEnd: false });
+    await DriveSense.stopCapture(undefined);
+    expect(mockNative.stopCapture!.mock.calls).toEqual([
+      ['at', 1_760_000_000_000, true],
+      ['dropped', 0, false],
+      ['now', 0, false],
+    ]);
   });
 
   test('an in-drive lock proof goes to native with its delay', async () => {
@@ -320,6 +332,11 @@ describe('bridge validation', () => {
     ['launchApp', ['waze']],
     ['launchApp', ['com..waze']],
     ['launchApp', [42]],
+    ['stopCapture', [{ drivingEndedAt: -1, drivingAtEnd: false }]],
+    ['stopCapture', [{ drivingEndedAt: Number.NaN, drivingAtEnd: false }]],
+    ['stopCapture', [{ drivingEndedAt: 1, drivingAtEnd: 'yes' }]],
+    ['stopCapture', [{ drivingEndedAt: 1 }]],
+    ['stopCapture', [null]],
     ['launchApp', ['com.evil.app']],
     ['launchApp', ['com.android.settings']],
     ['listInstalledApps', [['com.waze', 'com.evil.app']]],

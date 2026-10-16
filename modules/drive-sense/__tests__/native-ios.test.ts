@@ -176,7 +176,7 @@ describe('iOS drive-sense module (text)', () => {
     expect(ctrl).toMatch(/func startCapture\(mode newMode: String\) -> Bool \{\s*guard locationAuthorization != "none" else \{ return false \}/);
     // the motion feed runs only inside a capture
     expect(ctrl).toMatch(/private func beginCapture\([\s\S]*?ActivitySource\.startLive\(\)/);
-    expect(ctrl).toMatch(/func stopCapture\(\)[\s\S]*?ActivitySource\.stopLive\(\)/);
+    expect(ctrl).toMatch(/func stopCapture\(end: CaptureEnd\? = nil\)[\s\S]*?ActivitySource\.stopLive\(\)/);
     expect(ctrl.match(/ActivitySource\.startLive\(\)/g)).toHaveLength(1);
   });
 
@@ -244,7 +244,7 @@ describe('iOS drive-sense module (text)', () => {
     expect(src).toMatch(/struct DriveDisplayRecord: Record/);
     // review I1: a native stop (JS or the watchdog) ends the Live Activity too
     expect(src).toMatch(/static func postEnded\(\)[\s\S]{0,200}"ended": true/);
-    const stop = /func stopCapture\(\) \{[\s\S]*?\n {2}\}/.exec(code('CaptureController.swift'))?.[0] ?? '';
+    const stop = /func stopCapture\(end: CaptureEnd\? = nil\) \{[\s\S]*?\n {2}\}/.exec(code('CaptureController.swift'))?.[0] ?? '';
     expect(stop).toContain('DriveDisplayBridge.postEnded()');
   });
 
@@ -312,7 +312,7 @@ describe('iOS drive-sense module (text)', () => {
     expect(moduleCode()).toMatch(/AsyncFunction\("markLockProof"\) \{ \(delayMs: Double, promise: Promise\) in\s*LockProbe\.shared\.mark\(delayMs: delayMs\)\s*promise\.resolve\(nil\)\s*\}\.runOnQueue\(\.main\)/);
     const ctrl = code('CaptureController.swift');
     const begin = /private func beginCapture\(mode newMode: String\) \{[\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
-    const stop = /func stopCapture\(\) \{[\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
+    const stop = /func stopCapture\(end: CaptureEnd\? = nil\) \{[\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
     expect(begin).toMatch(/capturing = true[\s\S]*LockProbe\.shared\.captureRunning\(true\)/);
     expect(stop).toMatch(/capturing = false[\s\S]*LockProbe\.shared\.captureRunning\(false\)/);
     expect(ctrl).toMatch(/let lockSignal = PhoneState\.lockSignal\(\)\s*if lockSignal == "unreliable" \{ LockProbe\.shared\.passcodeGone\(\) \}/);
@@ -384,8 +384,15 @@ describe('iOS forgot-to-start reminder (text)', () => {
     const ctrl = code('CaptureController.swift');
     const begin = /private func beginCapture\([\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
     expect(begin).toContain('TripReminder.shared.onCaptureStarted()');
-    const stop = /func stopCapture\(\) \{[\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
-    expect(stop).toContain('TripReminder.shared.onCaptureEnded()');
+    const stop = /func stopCapture\(end: CaptureEnd\? = nil\) \{[\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
+    expect(stop).toContain('TripReminder.shared.onCaptureEnded(end)');
+    // the drive's end comes from JS (kind, endedAt, drivingAtEnd); the watchdog's stop passes none
+    expect(moduleCode()).toMatch(/AsyncFunction\("stopCapture"\) \{ \(kind: String, endedAt: Double, drivingAtEnd: Bool, promise: Promise\) in\s*CaptureController\.shared\.stopCapture\(end: CaptureEnd\.of\(kind, endedAt, drivingAtEnd\)\)\s*promise\.resolve\(nil\)/);
+    expect(ctrl).toMatch(/watchdog\.onExpire = \{ \[weak self\] in self\?\.stopCapture\(\) \}/);
+    const end = code('CaptureEnd.swift');
+    expect(end).toMatch(/case "dropped":\s*return CaptureEnd\(drivingEndedAt: nil, drivingAtEnd: drivingAtEnd\)/);
+    expect(end).toMatch(/case "at":\s*return endedAt\.isFinite && endedAt >= 0 \? CaptureEnd\(drivingEndedAt: endedAt, drivingAtEnd: drivingAtEnd\) : nil/);
+    expect(end).toMatch(/default:\s*return nil/);
     expect(ctrl.match(/TripReminder\./g)).toHaveLength(2);
   });
 
@@ -543,7 +550,7 @@ describe('iOS forgot-to-start reminder: one post, a stored state never overwritt
     // the refresh, the wake's motion read, the capture's start and end, and the claim (after its refresh)
     const fnBody = (fn: string) => new RegExp(`${fn.replace(/[()]/g, '\\$&')}[\\s\\S]*?\\n {2}\\}`).exec(r)?.[0] ?? '';
     after(fnBody('private func onWake()'), 'ActivitySource.recentAutomotive { motion in');
-    for (const fn of ['func refresh(', 'func onCaptureStarted()', 'func onCaptureEnded()']) after(fnBody(fn), 'motionWhileOn { motion in');
+    for (const fn of ['func refresh(', 'func onCaptureStarted()', 'func onCaptureEnded(']) after(fnBody(fn), 'motionWhileOn { motion in');
     const claim = /func claim\(_ token: String[\s\S]*?\n {2}\}/.exec(r)?.[0] ?? '';
     after(claim, 'refresh { _ in');
     expect(claim).toMatch(/TripReminderPolicy\.claim\(s0, token, Self\.nowMs\(\), self\.captureOpen, false\)/);
@@ -553,7 +560,8 @@ describe('iOS forgot-to-start reminder: one post, a stored state never overwritt
     after(stopped, 'TripReminderNotifier.post(token) { added in');
     // a drive's start and end fold the motion history in first, so a stale clock never ends a live session
     expect(r).toMatch(/TripReminderPolicy\.captureStarted\(folded, at\)/);
-    expect(r).toMatch(/TripReminderPolicy\.captureEnded\(folded, at, at\)/);
+    expect(r).toMatch(/let drivingEndedAt: Double\? = end == nil \? at : end\?\.drivingEndedAt, drivingAtEnd = end\?\.drivingAtEnd \?\? false/);
+    expect(r).toMatch(/TripReminderPolicy\.captureEnded\(folded, at, drivingEndedAt, drivingAtEnd: drivingAtEnd, vehicle: false\)/);
     expect(r).toMatch(/TripReminderPolicy\.foldMotion\(TripReminderPolicy\.clampTimes\(s0, at\), at, motion, false\)/);
     expect(r).toMatch(/TripReminderPolicy\.foldMotion\(TripReminderPolicy\.clampTimes\(s0, at\), at, motion, true\)/);
   });

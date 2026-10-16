@@ -126,8 +126,10 @@ class DriveSenseModule : Module() {
       }
     }
 
-    AsyncFunction("stopCapture") { promise: Promise ->
-      CaptureService.stopFromJs(context) { promise.resolve(null) }
+    // The drive's end for the reminder (README §2): kind "now" (nothing known), "dropped" (the drive
+    // was not kept) or "at" (its driving ended at endedAt), and whether the car was at driving speed.
+    AsyncFunction("stopCapture") { kind: String, endedAt: Double, drivingAtEnd: Boolean, promise: Promise ->
+      CaptureService.stopFromJs(context, CaptureEnd.of(kind, endedAt, drivingAtEnd)) { promise.resolve(null) }
     }
 
     AsyncFunction("setCaptureRate") { rate: String, promise: Promise ->

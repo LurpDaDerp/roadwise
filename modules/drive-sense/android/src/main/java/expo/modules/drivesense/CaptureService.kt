@@ -162,8 +162,8 @@ class CaptureService : Service() {
       main.postDelayed({ resolveStart(pending, "E_FGS_REFUSED") }, START_RESULT_TIMEOUT_MS)
     }
 
-    /** `stopCapture()`: idempotent; clears the capture-open flag even with no service running. */
-    fun stopFromJs(context: Context, done: () -> Unit) {
+    /** `stopCapture(end)`: idempotent; clears the capture-open flag even with no service running. */
+    fun stopFromJs(context: Context, end: CaptureEnd?, done: () -> Unit) {
       val inst = instance
       if (inst == null) {
         DriveSensePrefs.init(context).captureOpen = false
@@ -171,7 +171,7 @@ class CaptureService : Service() {
         return
       }
       inst.handler.post {
-        inst.endCapture(clearOpen = true)
+        inst.endCapture(clearOpen = true, end = end)
         done()
       }
     }
@@ -436,9 +436,9 @@ class CaptureService : Service() {
    * Stop GNSS, IMU, timers and rows; with [clearOpen] (JS stop, watchdog) also the flag and the
    * service. The headless JS task is stopped too — at once when [headlessNow] (the watchdog: JS is
    * not there), else after HEADLESS_GRACE_MS for it to finalize — so its wake lock never outlives
-   * the drive (review N2N3 I4).
+   * the drive (review N2N3 I4). [end]: what JS said about the drive's end, for the reminder.
    */
-  private fun endCapture(clearOpen: Boolean, headlessNow: Boolean = false) {
+  private fun endCapture(clearOpen: Boolean, headlessNow: Boolean = false, end: CaptureEnd? = null) {
     stopSources()
     scheduleHeadlessStop(this, if (headlessNow) 0L else HEADLESS_GRACE_MS)
     isCapturing = false
@@ -447,9 +447,9 @@ class CaptureService : Service() {
     captureStartedAt = null
     display = null
     if (clearOpen) prefs.captureOpen = false
-    // No forgot-to-start reminder for the next 10 min. Best effort: the service still stops below.
+    // The reminder's session takes the drive's end. Best effort: the service still stops below.
     try {
-      TripReminder.onCaptureEnded(this)
+      TripReminder.onCaptureEnded(this, end)
     } catch (_: Exception) {
       // the reminder's state stays as it was
     }

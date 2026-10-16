@@ -15,7 +15,7 @@
 // - **Background.** Each row first pumps the process's timers (`src/lib/timers.ts`): with the app
 //   in the Android background JS timers are paused, and the rows are what keeps the alert player
 //   and the DashPal link moving.
-import { parseActivity, parseRow } from '@drive-sense';
+import { parseActivity, parseRow, type CaptureEnd } from '@drive-sense';
 import { MERGE_GAP_S, scoreDrive, type DriveContext } from '@scoring';
 
 import { decisionFor } from '@/core/alerts/policy';
@@ -197,6 +197,20 @@ const noop = (): void => {};
 
 /** The local mirror of `profiles.units` (plan §10): 'km' shows km/h on the background display. */
 export const UNITS_KEY = 'units';
+
+/** The car counts as still driving at the end when its last driving-speed reading is at most this old then. */
+export const DRIVING_AT_END_MS = 15_000;
+
+/**
+ * What the reminder's session takes from a drive that closed at `at` (`stopCapture`'s end): its
+ * driving end (the cut where the car last moved, or the End tap), and whether the car was still at
+ * driving speed (two trusted readings of 10 mph or more, the second within `DRIVING_AT_END_MS`).
+ * A drive that is not kept passes null as its driving end.
+ */
+export function captureEndOf(session: Readonly<TripSession>, at: number, kept: boolean): CaptureEnd {
+  const drivingAtEnd = session.lastDroveAt !== null && at - session.lastDroveAt <= DRIVING_AT_END_MS;
+  return { drivingEndedAt: kept ? (session.endedAt ?? at) : null, drivingAtEnd };
+}
 export type DisplayUnit = 'mph' | 'km/h';
 
 /** A whole speed or limit in the display's unit; null stays null. */
@@ -218,6 +232,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   // --- host-owned state ---------------------------------------------------------------------------
   let booted = false;
   let captureOn = false;
+  /** The finalized drive's end for the next `stopCapture` (the reminder's session), or null. */
+  let captureEnd: CaptureEnd | null = null;
   let callActive = false;
   /** This drive's screen-switch signal (fixed at the Start tap or restored on adopt), and the phone. */
   let phoneSwitch: PhoneSwitchCtx = NO_SWITCH;
@@ -256,6 +272,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   async function onFinalize(session: Readonly<TripSession>): Promise<void> {
     if (!persist) return;
     const id = session.clientTripId;
+    const closedAt = now();
+    captureEnd = captureEndOf(session, closedAt, true);
     try {
       // The phone catches up to the dashcam (≤ 3 s) before the drive's facts are read.
       try {
@@ -273,6 +291,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       });
       const endCause = session.endCause ?? 'manual';
       if (isDropped(result)) {
+        captureEnd = captureEndOf(session, closedAt, false);
         lastFinalized = { clientTripId: id, ok: true, status: null, pointsNet: null, dropped: result.dropped, endCause, at: now() };
         // Home says why; no OS notification (nothing was earned or lost).
         await writeDropNotice(db, { clientTripId: id, cause: endCause, reason: result.dropped, at: now() }).catch((e: unknown) => report(e, 'dropNotice'));
@@ -485,8 +504,14 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     const want = status === 'recording';
     if (want === captureOn) return;
     try {
-      if (want) await source.startCapture('mounted');
-      else await source.stopCapture();
+      if (want) {
+        captureEnd = null;
+        await source.startCapture('mounted');
+      } else {
+        const end = captureEnd;
+        captureEnd = null;
+        await source.stopCapture(end ?? undefined);
+      }
       captureOn = want;
     } catch (e) {
       report(e, want ? 'startCapture' : 'stopCapture');

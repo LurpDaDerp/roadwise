@@ -240,6 +240,43 @@ function timeline(r: () => number): { trips: Trip[]; drives: Drive[] } {
   return { trips, drives };
 }
 
+describe('Android: a drive ended while the car drives on (no new IN_VEHICLE ENTER comes)', () => {
+  const ON = setEnabled(INITIAL, true);
+  const ev = (kind: TransitionKind, ts: number): Transition => ({ kind, ts });
+  /** The park 10 min after the end: EXIT, then STILL 20 s later, delivered 10 s after that. */
+  const park = (s: ReminderState, end: number) =>
+    onTransitions(s, [ev('vehicle-exit', end + 10 * M), ev('still-enter', end + 10 * M + 20 * S)], end + 10 * M + 30 * S, end, CALM_CTX, 'tok-park');
+
+  test('a session from before the drive: the park after the end reminds once', () => {
+    let s = onTransitions(ON, [ev('vehicle-enter', T0)], T0 + 5 * S, T0 - H, CALM_CTX, 'tok-x').state;
+    s = captureStarted(settle(s, T0 + M, false), T0 + M);
+    const end = T0 + 20 * M;
+    s = captureEnded(settle(s, end, true), end, end, true, true);
+    const r = park(s, end);
+    expect(r).toMatchObject({ effect: 'post', reason: 'ok' });
+    expect(r.state.session).toMatchObject({ reminded: true });
+    // the next stop in that session brings none
+    const again = onTransitions(r.state, [ev('vehicle-enter', end + 15 * M), ev('vehicle-exit', end + 20 * M), ev('still-enter', end + 20 * M + 10 * S)], end + 20 * M + 20 * S, end, CALM_CTX, 'tok-y');
+    expect(again).toMatchObject({ effect: 'refresh', reason: 'reminded' });
+  });
+
+  test('a drive started before any session (Start tapped in the driveway): the end opens one, and the park reminds', () => {
+    let s = captureStarted(ON, T0);
+    expect(s.session).toBeNull();
+    const end = T0 + 20 * M;
+    s = captureEnded(settle(s, end, true), end, end, true, true);
+    expect(park(s, end)).toMatchObject({ effect: 'post', reason: 'ok' });
+  });
+
+  test('a drive ended parked (not driving at the end) brings none at the next stop until driving is seen again', () => {
+    let s = onTransitions(ON, [ev('vehicle-enter', T0)], T0 + 5 * S, T0 - H, CALM_CTX, 'tok-x').state;
+    s = captureStarted(settle(s, T0 + M, false), T0 + M);
+    const end = T0 + 20 * M;
+    s = captureEnded(settle(s, end, true), end, end - 3 * M, false, true);
+    expect(park(s, end)).toMatchObject({ effect: 'none', reason: 'not-driven' });
+  });
+});
+
 describe('ground truth (Android): at most one reminder a true session, never during a drive, only after driving speed', () => {
   type Act = 'vehicle' | 'still' | 'walking';
   const enterOf: Record<Act, TransitionKind> = { vehicle: 'vehicle-enter', still: 'still-enter', walking: 'walking-enter' };

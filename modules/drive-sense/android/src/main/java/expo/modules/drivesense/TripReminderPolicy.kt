@@ -193,16 +193,24 @@ object TripReminderPolicy {
 
   /**
    * policy.ts `captureEnded`: the drive's driving end is the session's last driving moment; null (a
-   * drive that was not kept) leaves the clock as it was; left out, it is now.
+   * drive that was not kept) leaves the clock as it was; left out, it is now. [drivingAtEnd]: the
+   * car was at driving speed as the drive ended, so the session (opened now if there is none) has
+   * driven; [vehicle] (Android's own calls) marks it in the vehicle.
    */
-  fun captureEnded(s0: ReminderState, now: Long, drivingEndedAt: Long? = now): ReminderState {
+  fun captureEnded(s0: ReminderState, now: Long, drivingEndedAt: Long? = now, drivingAtEnd: Boolean = false, vehicle: Boolean = false): ReminderState {
     val s = s0.deepCopy()
     s.lastDriveEndAt = now
     val x = s.session
     if (x != null) {
-      x.drove = false
+      x.drove = drivingAtEnd
       x.lastNewsAt = maxOf(x.lastNewsAt, now)
       if (drivingEndedAt != null) x.lastDrivingAt = maxOf(x.lastDrivingAt, minOf(now, drivingEndedAt))
+      if (drivingAtEnd) {
+        x.lastDrivingAt = maxOf(x.lastDrivingAt, now)
+        x.inVehicle = x.inVehicle || vehicle
+      }
+    } else if (drivingAtEnd && s.enabled) {
+      s.session = newSession(now, now, vehicle).also { it.drove = true }
     }
     return s
   }
