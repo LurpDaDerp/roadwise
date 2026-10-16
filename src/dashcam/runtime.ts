@@ -13,6 +13,8 @@
 // (Android refuses a background start), retried at the next return to the front after a refusal.
 // The service's tick pumps the process timers, so a reconnect back-off fires with JS timers paused.
 // A runtime torn down (a handover) leaves the service as it is: the next one reads `running()`.
+// In the background with no drive recording the phone answers "cannot play" (the buzzer) unless the
+// service runs, since without it Android may freeze the process or refuse it audio focus.
 import type { AlertPlayer } from '@/core/alerts/player';
 import type { FeatureRow } from '@/core/engine/types';
 import type { Db } from '@/data/db/driver';
@@ -182,13 +184,29 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     }
   }
 
+  /**
+   * Android, RoadWise in the background with no drive recording: the phone can sound a DashPal alert
+   * only while the DashPal link service runs (it keeps the process running and gives it audio focus;
+   * a drive's capture service does the same while one records). Without it, "cannot": the buzzer.
+   */
+  function backgroundSoundHeld(h: DashcamHostView): boolean {
+    const port = deps.linkService;
+    if (deps.platform !== 'android' || !port || foreground || h.recording) return true;
+    try {
+      return port.running();
+    } catch (e) {
+      report(e, 'link service');
+      return false;
+    }
+  }
+
   const context = (): LinkContext => {
     const h = deps.host();
     return {
       recording: h.recording,
       driveOpen: h.driveOpen,
       foreground,
-      playerAvailable: h.playerAvailable,
+      playerAvailable: h.playerAvailable && backgroundSoundHeld(h),
       styleAllowsSound: deps.styleAllowsSound(),
       // Android has no call signal the app can rely on (plan §7.3): only iOS reports one.
       callActive: deps.platform === 'ios' && h.callActive,

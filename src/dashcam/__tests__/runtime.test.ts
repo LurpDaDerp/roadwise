@@ -334,7 +334,7 @@ describe('phone-first sound: the audio probe and the Android DashPal link servic
     return { port, calls, ticks, st, release: () => st.held.splice(0).forEach((f) => f()) };
   }
 
-  function svcRig(o: { platform?: 'ios' | 'android'; foreground?: boolean; service?: ReturnType<typeof fakeService>; audio?: () => { callActive: boolean; volume: number | null; headphones: boolean | null }; clock?: { t: number } } = {}) {
+  function svcRig(o: { platform?: 'ios' | 'android'; foreground?: boolean; service?: ReturnType<typeof fakeService>; audio?: () => { callActive: boolean; volume: number | null; headphones: boolean | null }; clock?: { t: number }; host?: { recording: boolean; driveOpen: boolean; playerAvailable: boolean; callActive: boolean } } = {}) {
     const platform = o.platform ?? 'android';
     const ble = createFakeBle();
     ble.addPeripheral({ id: PID, info: INFO });
@@ -358,7 +358,7 @@ describe('phone-first sound: the audio probe and the Android DashPal link servic
       db,
       player,
       transport: () => (transport ??= createBleTransport(ble, { platform, setTimer: () => 0, clearTimer: () => {} })),
-      host: () => ({ recording: false, driveOpen: false, playerAvailable: true, callActive: false }),
+      host: () => o.host ?? { recording: false, driveOpen: false, playerAvailable: true, callActive: false },
       styleAllowsSound: () => true,
       platform,
       appState,
@@ -565,5 +565,41 @@ describe('phone-first sound: the audio probe and the Android DashPal link servic
     expect(pump).toHaveBeenCalledTimes(1);
     pump.mockRestore();
     r.rt.dispose();
+  });
+
+  test('Android in the background with no drive recording: "can play" only while the link service runs (in front, or recording, it never matters); iOS never asks', async () => {
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const svc = fakeService();
+    svc.st.allowStart = false;
+    const host = { recording: false, driveOpen: false, playerAvailable: true, callActive: false };
+    const r = svcRig({ service: svc, host });
+    await r.rt.ready;
+    await flush();
+    expect(svc.st.running).toBe(false);
+    // In front: the app plays whatever the service does.
+    expect(r.rt.link.canPlay(true)).toBe(true);
+    // In the background (a headless restart, a refused start, the service killed): the buzzer.
+    r.appState.emit('background');
+    expect(r.rt.link.canPlay(true)).toBe(false);
+    // A drive recording keeps its own capture service: it can play.
+    host.recording = true;
+    host.driveOpen = true;
+    expect(r.rt.link.canPlay(true)).toBe(true);
+    // The drive finalizing (open, no longer recording) without the service: the buzzer.
+    host.recording = false;
+    expect(r.rt.link.canPlay(true)).toBe(false);
+    host.driveOpen = false;
+    svc.st.running = true;
+    expect(r.rt.link.canPlay(true)).toBe(true);
+    // A running() that throws reads as not running, and is reported.
+    svc.st.runningThrows = true;
+    expect(r.rt.link.canPlay(true)).toBe(false);
+    expect(r.errors.some((e) => e.startsWith('link service: running'))).toBe(true);
+    r.rt.dispose();
+    const ios = fakeService();
+    const r2 = svcRig({ platform: 'ios', service: ios, foreground: false });
+    await r2.rt.ready;
+    expect(r2.rt.link.canPlay(true)).toBe(true);
+    r2.rt.dispose();
   });
 });
