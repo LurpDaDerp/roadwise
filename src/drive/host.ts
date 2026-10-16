@@ -497,6 +497,19 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         })
       ),
       remover(
+        // Android's drive notification offers End drive while stopped: a manual end at the tap, with
+        // the same rules as the hold (cut after 2 min standing still, dropped if it never moved). A
+        // tap buffered from before this drive, or one landing while it is already closing, does nothing.
+        source.addListener('notificationAction', (a) => {
+          if (a.action !== 'endDrive') return;
+          void run(async () => {
+            const s = engine.snapshot();
+            if (s.status !== 'recording' || s.startedAt === null || !(a.ts >= s.startedAt)) return;
+            await engine.dispatch({ type: 'end', ts: now() });
+          }, 'notificationEnd');
+        })
+      ),
+      remover(
         source.addListener('call', (p) => {
           const ended = callActive && !p.active;
           callActive = p.active;

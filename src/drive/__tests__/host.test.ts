@@ -312,6 +312,53 @@ test('the automatic end: 15 min without movement ends the drive at its last move
   await h.host.stop({ endOpenTrip: false });
 });
 
+describe('the Android notification’s End drive', () => {
+  test('while recording it ends the drive by hand at the tap', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(30, { speedMps: 15 }));
+    await feed(h, rows(30, { speedMps: 0, t0: T0 + 30_000 }));
+    h.source.emit('notificationAction', { action: 'endDrive', ts: clock });
+    await h.host.untilIdle();
+    const trip = (await createTripsRepo(db).get(uuid(1)))!;
+    expect(trip).toMatchObject({ status: 'pending', end_cause: 'manual', ended_at: clock });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('after 3 min standing still it is cut at the last movement', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(30, { speedMps: 15 }));
+    await feed(h, rows(180, { speedMps: 0, t0: T0 + 30_000 }));
+    h.source.emit('notificationAction', { action: 'endDrive', ts: clock });
+    await h.host.untilIdle();
+    expect((await createTripsRepo(db).get(uuid(1)))!).toMatchObject({ end_cause: 'manual_still', ended_at: T0 + 30_000 });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('nothing while idle; a tap from before this drive is ignored; a second tap while closing finalizes once', async () => {
+    const h = build();
+    await h.host.boot();
+    h.source.emit('notificationAction', { action: 'endDrive', ts: clock });
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('idle');
+    await h.host.start();
+    await feed(h, rows(30, { speedMps: 15 }));
+    h.source.emit('notificationAction', { action: 'endDrive', ts: T0 - 1 });
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('recording');
+    h.source.emit('notificationAction', { action: 'endDrive', ts: clock });
+    h.source.emit('notificationAction', { action: 'endDrive', ts: clock });
+    await h.host.untilIdle();
+    expect(await createTripsRepo(db).count()).toBe(1);
+    expect(h.host.snapshot().status).toBe('idle');
+    expect(h.errors).toEqual([]);
+    await h.host.stop({ endOpenTrip: false });
+  });
+});
+
 describe('a drive that never moved is not kept', () => {
   test('the hold: end() says dropped, the display ends, the capture stops, Home gets the notice; no trip row is left', async () => {
     const h = build();
