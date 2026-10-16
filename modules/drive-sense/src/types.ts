@@ -41,8 +41,8 @@ export interface InstalledApp {
  * `audioOutputState()`: what a DashPal alert would play into right now (README §2). `callActive`:
  * a call is ringing or live (iOS `CXCallObserver`, a fresh read; Android the audio mode, as the
  * rows' `call` key reads it). `volume`: the media volume 0-1 (iOS `outputVolume`; Android the
- * music stream, 0 when muted), null when unknown. `headphones`: a wired, USB or LE-audio headset is
- * an output (iOS a `.headphones` route), null when unknown.
+ * music stream, 0 when muted), null when unknown. `headphones`: a wired, USB or (Android) LE-audio
+ * headset is an output (iOS a `.headphones` or `.usbAudio` route), null when unknown.
  */
 export interface AudioOutputState {
   callActive: boolean;

@@ -633,13 +633,13 @@ describe('iOS: DashPal alerts on the phone (README §2)', () => {
     expect([...declared].sort()).toEqual([...DRIVE_SENSE_SYNC_METHODS].sort());
   });
 
-  it('audioOutputState reads a fresh call, the output volume (0-1) and wired headphones as the route', () => {
+  it('audioOutputState reads a fresh call, the output volume (0-1) and wired or USB headphones as the route', () => {
     const src = moduleCode();
     expect(src).toMatch(/^import AVFoundation$/m);
     const fn = /Function\("audioOutputState"\) \{ \(\) -> \[String: Any\] in[\s\S]*?\n {4}\}/.exec(src)?.[0] ?? '';
     expect(fn).toMatch(/let session = AVAudioSession\.sharedInstance\(\)/);
     expect(fn).toMatch(/min\(max\(Double\(session\.outputVolume\), 0\), 1\)/);
-    expect(fn).toMatch(/session\.currentRoute\.outputs\.contains \{ \$0\.portType == \.headphones \}/);
+    expect(fn).toMatch(/session\.currentRoute\.outputs\.contains \{ \$0\.portType == \.headphones \|\| \$0\.portType == \.usbAudio \}/);
     expect(fn).toMatch(/"callActive": CallObserver\.anyCallActiveNow\(\), "volume": volume, "headphones": headphones/);
     expect(fn).not.toMatch(/bluetoothA2DP|bluetoothLE|carAudio|setActive|setCategory/);
   });

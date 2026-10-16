@@ -162,12 +162,13 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     }
 
     // DashPal alerts on the phone (README §2). What an alert would play into now, read fresh: a call
-    // (CXCallObserver), the output volume, and wired headphones as the route. Sync: the ALERT is
-    // answered in the same JS turn. Bluetooth (A2DP, LE), hearing aids and CarPlay are not headphones.
+    // (CXCallObserver), the output volume, and wired or USB headphones as the route. Sync: the ALERT
+    // is answered in the same JS turn. Bluetooth (A2DP, LE: on iPhone an LE output is a hearing
+    // aid), hearing aids and CarPlay are not headphones.
     Function("audioOutputState") { () -> [String: Any] in
       let session = AVAudioSession.sharedInstance()
       let volume = min(max(Double(session.outputVolume), 0), 1)
-      let headphones = session.currentRoute.outputs.contains { $0.portType == .headphones }
+      let headphones = session.currentRoute.outputs.contains { $0.portType == .headphones || $0.portType == .usbAudio }
       return ["callActive": CallObserver.anyCallActiveNow(), "volume": volume, "headphones": headphones]
     }
 
