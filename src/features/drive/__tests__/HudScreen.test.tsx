@@ -600,14 +600,19 @@ describe('DashPal (plan §7.10)', () => {
     expect(halo().burst).toMatchObject({ severity: 0.75, pulses: 3 });
   });
 
-  test('the no-face alert (sound 6): "Driver not visible" banner, a steady 0.35 halo, no burst', async () => {
+  test('the no-face alert (sound 6): "Driver not visible" banner, a burst, then a pulsing halo that reddens the longer it lasts', async () => {
     const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
     setActiveDashcam(rt);
-    await renderHud({ rowTs: T });
+    const h = await renderHud({ rowTs: T });
     await act(async () => rt.set({ link: { visual: visual({ tier: 2, sound: 6 }), held: held(6, 2) } }));
     expect(screen.getByTestId('hud-dashpal-alert')).toHaveTextContent(/Driver not visible/);
     expect(screen.getByTestId('hud-dashpal-alert').props.accessibilityLabel).toBe('DashPal: Driver not visible');
-    expect(halo()).toMatchObject({ mode: 'distraction', severity: 0.35, steady: true, pulsePeriodMs: 0, burst: null });
+    expect(halo()).toMatchObject({ mode: 'burst', severity: 0.5, burst: { pulses: 3 } });
+    await act(() => jest.advanceTimersByTime(10_000));
+    await h.update({ rowTs: T + 10_000 });
+    expect(halo()).toMatchObject({ mode: 'distraction', burst: null });
+    expect(halo().severity).toBeCloseTo(0.8, 6);
+    expect(halo().pulsePeriodMs).toBeGreaterThan(0);
   });
 
   test('an advisory chime: one amber pulse', async () => {

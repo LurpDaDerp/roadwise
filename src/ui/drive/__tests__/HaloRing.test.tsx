@@ -58,7 +58,6 @@ const speeding = (s: number): HaloVisual => ({
   pulseScale: 0.015 + 0.02 * s,
   flow: false,
   burst: null,
-  steady: false,
 });
 const burst = (key: string): HaloVisual => ({ ...HALO_CALM, mode: 'burst', colorSeverity: 1, flow: false, burst: { key, severity: 1, pulses: 3, until: Date.now() + 1500 } });
 
@@ -130,10 +129,9 @@ test('dimmed and calm: reduced strength, still flowing; a warning: full strength
   expect(mockTiming).toHaveBeenCalledWith(1, HALO_TIMINGS.layer);
 });
 
-test('driver not visible (steady): the clock stops, nothing moves', async () => {
-  const steady: HaloVisual = { ...HALO_CALM, mode: 'distraction', severity: 0.35, colorSeverity: 0.35, flow: false, steady: true };
-  await render(view(steady));
-  expect(mockSetActive.mock.calls).toEqual([[false]]);
+test('a distraction warning (driver not visible among them) runs the clock: it pulses', async () => {
+  await render(view({ ...speeding(0.5), mode: 'distraction' }));
+  expect(mockSetActive.mock.calls).toEqual([[true]]);
 });
 
 test('Reduce Motion: colours fade (250 ms), the clock never runs, a burst never pulses', async () => {

@@ -72,7 +72,7 @@ export function Halo({ visual, size, ring, palette, dimmed, reduceMotion, numera
     if (depth.get() > 0 || amp.get() > 0) pulsePhase.set((pulsePhase.get() + dt / Math.max(1, period.get())) % 1);
     if (flowOn.get() > 0) flowPhase.set((flowPhase.get() + dt / HALO_FLOW_MS) % 1);
   }, false);
-  // Nothing to advance while steady (driver not visible) or under Reduce Motion.
+  // Nothing to advance under Reduce Motion.
   const moving = !reduceMotion && (visual.flow || visual.pulsePeriodMs > 0);
   const setClock = clock.setActive;
   useEffect(() => {

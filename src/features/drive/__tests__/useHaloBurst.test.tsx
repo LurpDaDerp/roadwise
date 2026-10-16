@@ -89,13 +89,13 @@ describe('useHaloBurst', () => {
     seen = [];
   });
 
-  test('a speeding alert, driver not visible and a resend never burst; a hard brake does', async () => {
-    const r = await render(<Probe p={phone(T, T + 1500, 'speeding')} d={dashpal('1:1:0', T + 1500, 2, { sound: 6 })} now={T} />);
-    expect(seen.at(-1)).toBeNull();
-    await r.rerender(<Probe p={phone(T, T + 1500, 'speeding')} d={dashpal('2:1:0', T + 1500, 3, { resend: true })} now={T + 10} />);
+  test('a speeding alert and a resend never burst; a hard brake and driver not visible do', async () => {
+    const r = await render(<Probe p={phone(T, T + 1500, 'speeding')} d={dashpal('2:1:0', T + 1500, 3, { resend: true })} now={T} />);
     expect(seen.at(-1)).toBeNull();
     await r.rerender(<Probe p={phone(T + 20, T + 1520)} d={null} now={T + 20} />);
     expect(seen.at(-1)).toMatchObject({ key: `phone:hard_brake:${T + 20}`, severity: 1, pulses: 3 });
+    await r.rerender(<Probe p={null} d={dashpal('1:1:0', T + 1540, 2, { sound: 6 })} now={T + 40} />);
+    expect(seen.at(-1)).toMatchObject({ key: 'dashpal:1:1:0', pulses: 3 });
   });
 
   test('a flash that arrives while the app is in the background never bursts, also after it comes back', async () => {

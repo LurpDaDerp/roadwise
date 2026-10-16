@@ -7,8 +7,8 @@
 //   (minor 0.30–0.475, moderate 0.475–0.65, severe 0.65–1), held through a speed hovering at the line
 //   (`nextSpeedingHold`).
 // - Phone use: 0.65 once the pickup counts, rising to 1 at 30 s of use, until the episode closes.
-// - DashPal: a critical 0.80 + 0.07 per level + 0.02 per second (≤ 1); a warning 0.50 + 0.03 per
-//   second (≤ 0.80); driver-not-visible a steady 0.35; a continuous advisory 0.30.
+// - DashPal: a critical 0.80 + 0.07 per level + 0.02 per second (≤ 1); a warning, driver-not-visible
+//   among them, 0.50 + 0.03 per second (≤ 0.80); a continuous advisory 0.30.
 // The strongest wins. Colour: calm blue-white → yellow (0.30) → orange (0.55) → red (1), in OKLab.
 // Calm flows (light moving round the ring) and never pulses; any pulse means a warning, faster the
 // higher `s`. Sudden events burst: a few quick pulses (2.5 a second), then back.
@@ -159,18 +159,17 @@ export interface HeldDashpal {
   since: number;
 }
 
-/** DashPal's sound for "Driver not visible" (protocol sound 6). */
-export const NO_FACE_SOUND = 6;
-
-/** The held DashPal alert's severity; `steady` for driver-not-visible (colour, never a pulse). */
-export function dashpalSeverity(held: HeldDashpal | null, now: number): { s: number; steady: boolean } {
-  if (held === null) return { s: 0, steady: false };
-  if (held.sound === NO_FACE_SOUND) return { s: 0.35, steady: true };
+/**
+ * The held DashPal alert's severity, by its tier: the longer it lasts the redder (and the faster it
+ * pulses). Driver-not-visible (sound 6) is a warning (tier 2) like any other.
+ */
+export function dashpalSeverity(held: HeldDashpal | null, now: number): number {
+  if (held === null) return 0;
   const d = Math.max(0, now - held.since) / 1000;
   const level = Math.max(0, held.level);
-  if (held.tier >= 3) return { s: Math.min(1, Math.max(0.8, 0.8 + 0.07 * level + 0.02 * d)), steady: false };
-  if (held.tier === 2) return { s: Math.min(0.8, 0.5 + 0.03 * d), steady: false };
-  return { s: 0.3, steady: false };
+  if (held.tier >= 3) return Math.min(1, Math.max(0.8, 0.8 + 0.07 * level + 0.02 * d));
+  if (held.tier === 2) return Math.min(0.8, 0.5 + 0.03 * d);
+  return 0.3;
 }
 
 // ——— bursts ———
@@ -190,15 +189,15 @@ export type BurstSource =
 
 /**
  * What a flash bursts, or null: every phone alert except speeding is red × 3; a DashPal start or
- * level change is red × 3 (critical), orange-red × 3 (warning) or one amber pulse (advisory), never
- * for driver-not-visible or a reconnect's re-send.
+ * level change is red × 3 (critical), orange-red × 3 (warning, driver-not-visible included) or one
+ * amber pulse (advisory), never for a reconnect's re-send.
  */
 export function burstFor(src: BurstSource): { key: string; severity: number; pulses: 1 | 2 | 3; until: number } | null {
   if (src.kind === 'phone') {
     if (src.type === 'speeding') return null;
     return { key: `phone:${src.type}:${src.at}`, severity: 1, pulses: 3, until: src.until };
   }
-  if (src.sound === NO_FACE_SOUND || src.resend) return null;
+  if (src.resend) return null;
   const key = `dashpal:${src.key}`;
   if (src.tier >= 3) return { key, severity: 1, pulses: 3, until: src.until };
   if (src.tier === 2) return { key, severity: 0.75, pulses: 3, until: src.until };
@@ -238,8 +237,6 @@ export interface HaloVisual {
   flow: boolean;
   /** null under Reduce Motion (the burst is then its colour only) */
   burst: HaloBurst | null;
-  /** driver-not-visible: colour without a pulse */
-  steady: boolean;
 }
 
 export const HALO_CALM: HaloVisual = Object.freeze({
@@ -251,7 +248,6 @@ export const HALO_CALM: HaloVisual = Object.freeze({
   pulseScale: 0,
   flow: true,
   burst: null,
-  steady: false,
 });
 
 /** The sustained pulse at severity `s` > 0: about every 1.8 s at 0.30 down to every 0.8 s at 1. */
@@ -262,14 +258,12 @@ export function haloVisual(i: HaloInput): HaloVisual {
   if (i.status !== 'recording') return i.reduceMotion ? { ...HALO_CALM, flow: false } : HALO_CALM;
   const sSpeed = Math.min(1, Math.max(0, i.speeding));
   const sPhone = phoneSeverity(i.phoneUseSince, i.rowTs);
-  const dp = dashpalSeverity(i.held, i.now);
-  const distraction = Math.max(sPhone, dp.s);
+  const distraction = Math.max(sPhone, dashpalSeverity(i.held, i.now));
   const s = Math.max(sSpeed, distraction);
-  const steady = dp.steady && sSpeed === 0 && sPhone === 0;
   const bursting = i.burst !== null && i.now < i.burst.until;
   const mode: HaloMode = bursting ? 'burst' : distraction > 0 && distraction >= sSpeed ? 'distraction' : sSpeed > 0 ? 'speeding' : 'calm';
   const colorSeverity = bursting ? Math.max(s, i.burst!.severity) : s;
-  const pulsing = s > 0 && !steady && !i.reduceMotion;
+  const pulsing = s > 0 && !i.reduceMotion;
   return {
     mode,
     severity: s,
@@ -279,7 +273,6 @@ export function haloVisual(i: HaloInput): HaloVisual {
     pulseScale: pulsing ? 0.015 + 0.02 * s : 0,
     flow: s === 0 && !bursting && !i.reduceMotion,
     burst: bursting && !i.reduceMotion ? i.burst : null,
-    steady,
   };
 }
 

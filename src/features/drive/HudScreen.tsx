@@ -109,10 +109,9 @@ export type HudScreenProps = {
  * - Middle: the halo, a glowing ring with the speed inside it (white when calm, the halo's colour
  *   otherwise). Calm: light blue-white, light moving slowly round it. Over the limit: yellow, then
  *   orange, then red, pulsing faster the further over (held through a speed hovering at the line).
- *   Phone use and a DashPal alert: warmer and faster the more serious and the longer; driver not
- *   visible a steady amber. A hard brake, hard start, sharp turn, phone pickup or handling alert, and
- *   each DashPal alert start or step (not driver-not-visible, not a reconnect's re-send), pulse it
- *   quickly a few times. Rules in `src/ui/drive/halo.ts`; drawing in `HaloRing.tsx`.
+ *   Phone use and a DashPal alert (driver-not-visible included): warmer and faster the more serious
+ *   and the longer. A hard brake, hard start, sharp turn, phone pickup or handling alert, and each
+ *   DashPal alert start or step (not a reconnect's re-send), pulse it quickly a few times. Rules in `src/ui/drive/halo.ts`; drawing in `HaloRing.tsx`.
  * - Top band: for 1.5 s after an event (or a DashPal alert start or level change) its icon and one
  *   or two words, across the whole band (the DashPal chip steps aside); else a failed end, the points
  *   when they have no line of their own, or the weather line. Precedence: DashPal banner, the phone's

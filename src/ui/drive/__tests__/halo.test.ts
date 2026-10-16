@@ -143,21 +143,19 @@ describe('phone and DashPal severities (§4.2, §4.3)', () => {
   });
 
   const held = (sound: number, tier: number, level = 0, since = T) => ({ sound, tier, level, since });
-  test('driver not visible: a steady 0.35 at any age', () => {
-    expect(dashpalSeverity(held(6, 2), T)).toEqual({ s: 0.35, steady: true });
-    expect(dashpalSeverity(held(6, 2), T + 600_000)).toEqual({ s: 0.35, steady: true });
+  test('driver not visible is a warning: 0.50 rising 0.03 a second to 0.80, the longer it lasts', () => {
+    expect([0, 5000, 10_000, 600_000].map((d) => dashpalSeverity(held(6, 2), T + d))).toEqual([0.5, expect.closeTo(0.65, 6), expect.closeTo(0.8, 6), 0.8]);
   });
   test('critical: 0.80 + 0.07 per level + 0.02 per second, up to 1', () => {
-    expect([0, 1, 2, 3].map((l) => dashpalSeverity(held(3, 3, l), T).s)).toEqual([0.8, expect.closeTo(0.87, 6), expect.closeTo(0.94, 6), 1]);
-    expect(dashpalSeverity(held(2, 3), T + 10_000).s).toBeCloseTo(1, 6);
-    expect(dashpalSeverity(held(2, 3), T + 5000).s).toBeCloseTo(0.9, 6);
-    expect(dashpalSeverity(held(4, 3), T).steady).toBe(false);
+    expect([0, 1, 2, 3].map((l) => dashpalSeverity(held(3, 3, l), T))).toEqual([0.8, expect.closeTo(0.87, 6), expect.closeTo(0.94, 6), 1]);
+    expect(dashpalSeverity(held(2, 3), T + 10_000)).toBeCloseTo(1, 6);
+    expect(dashpalSeverity(held(2, 3), T + 5000)).toBeCloseTo(0.9, 6);
   });
   test('warning: 0.50 + 0.03 per second, up to 0.80; advisory continuous 0.30; none 0; a future since counts 0 s', () => {
-    expect([0, 5000, 10_000, 60_000].map((d) => dashpalSeverity(held(1, 2), T + d).s)).toEqual([0.5, expect.closeTo(0.65, 6), expect.closeTo(0.8, 6), 0.8]);
-    expect(dashpalSeverity(held(5, 1), T + 9000).s).toBe(0.3);
-    expect(dashpalSeverity(null, T)).toEqual({ s: 0, steady: false });
-    expect(dashpalSeverity(held(1, 2, 0, T + 60_000), T).s).toBe(0.5);
+    expect([0, 5000, 10_000, 60_000].map((d) => dashpalSeverity(held(1, 2), T + d))).toEqual([0.5, expect.closeTo(0.65, 6), expect.closeTo(0.8, 6), 0.8]);
+    expect(dashpalSeverity(held(5, 1), T + 9000)).toBe(0.3);
+    expect(dashpalSeverity(null, T)).toBe(0);
+    expect(dashpalSeverity(held(1, 2, 0, T + 60_000), T)).toBe(0.5);
   });
 });
 
@@ -168,12 +166,12 @@ describe('bursts (§4.6)', () => {
   test('a speeding alert never bursts', () => {
     expect(burstFor({ kind: 'phone', type: 'speeding', at: 5, until: 99 })).toBeNull();
   });
-  test('DashPal: critical red × 3, warning orange-red × 3, advisory one amber pulse; never for driver-not-visible or a resend', () => {
+  test('DashPal: critical red × 3, warning orange-red × 3 (driver-not-visible too), advisory one amber pulse; never for a resend', () => {
     const d = (tier: number, sound: number, resend = false) => burstFor({ kind: 'dashpal', key: 'k', sound, tier, resend, until: 99 });
     expect(d(3, 3)).toEqual({ key: 'dashpal:k', severity: 1, pulses: 3, until: 99 });
     expect(d(2, 1)).toEqual({ key: 'dashpal:k', severity: 0.75, pulses: 3, until: 99 });
     expect(d(1, 5)).toEqual({ key: 'dashpal:k', severity: 0.45, pulses: 1, until: 99 });
-    expect(d(2, 6)).toBeNull();
+    expect(d(2, 6)).toEqual({ key: 'dashpal:k', severity: 0.75, pulses: 3, until: 99 });
     expect(d(3, 3, true)).toBeNull();
   });
 });
@@ -201,7 +199,7 @@ describe('the visual (§4.4, §4.5)', () => {
   test('a sustained warning pulses by the formulas and stops the flow; every period at least 800 ms', () => {
     for (const s of [0.3, 0.5, 0.825, 1]) {
       const v = haloVisual(input({ speeding: s }));
-      expect(v).toMatchObject({ mode: 'speeding', severity: s, colorSeverity: s, flow: false, steady: false });
+      expect(v).toMatchObject({ mode: 'speeding', severity: s, colorSeverity: s, flow: false });
       expect(v.pulsePeriodMs).toBeCloseTo(2200 - 1400 * s, 6);
       expect(v.pulseDepth).toBeCloseTo(0.3 + 0.4 * s, 6);
       expect(v.pulseScale).toBeCloseTo(0.015 + 0.02 * s, 6);
@@ -217,12 +215,16 @@ describe('the visual (§4.4, §4.5)', () => {
     expect(haloVisual(input({ held: { sound: 3, tier: 3, level: 0, since: T } }))).toMatchObject({ mode: 'distraction', severity: 0.8 });
   });
 
-  test('driver not visible alone is steady: colour, no pulse, no flow; with anything else it pulses', () => {
+  test('driver not visible pulses like a warning, redder and faster the longer it lasts', () => {
     const nf = { sound: 6, tier: 2, level: 0, since: T };
-    expect(haloVisual(input({ held: nf }))).toMatchObject({ mode: 'distraction', severity: 0.35, steady: true, pulsePeriodMs: 0, pulseDepth: 0, pulseScale: 0, flow: false });
-    const both = haloVisual(input({ held: nf, speeding: 0.3 }));
-    expect(both).toMatchObject({ steady: false, severity: 0.35 });
-    expect(both.pulsePeriodMs).toBeGreaterThan(0);
+    const first = haloVisual(input({ held: nf }));
+    expect(first).toMatchObject({ mode: 'distraction', severity: 0.5, flow: false });
+    expect(first.pulsePeriodMs).toBeCloseTo(2200 - 1400 * 0.5, 6);
+    expect(first.pulseDepth).toBeGreaterThan(0);
+    expect(first.pulseScale).toBeGreaterThan(0);
+    const later = haloVisual(input({ held: nf, now: T + 10_000 }));
+    expect(later.severity).toBeCloseTo(0.8, 6);
+    expect(later.pulsePeriodMs).toBeLessThan(first.pulsePeriodMs);
   });
 
   test('a burst: its mode and colour while it lasts, then the sustained state again', () => {
