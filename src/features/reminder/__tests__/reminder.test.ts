@@ -115,9 +115,15 @@ describe('the Settings line', () => {
     expect(reminderLine(status({ state: 'unavailable' }), 'ios').disabled).toBe(true);
   });
 
-  test('the words promise only a note, never a drive started for you', () => {
+  test('the words: one note a trip at a stop, and a tap on it starts the drive; nothing starts one by itself, and no other limit is promised', () => {
+    expect(L.off).toBe("One note at a stop when you're driving with no drive recording. Tap it to start your drive.");
+    expect(L.onAndroid).toBe('On. Once a trip, without sound, usually as you park.');
+    expect(L.onIos).toBe('On. Once a trip, at a stop. If Driving Focus is on, allow RoadWise in it. If you swipe RoadWise away, it waits until you open it.');
+    expect(reminderCopy.step.body).toBe("Turn this on and RoadWise sends one note at a stop when you're driving with no drive recording. Tap it and your drive starts.");
+    expect(reminderCopy.step.bullets).toEqual(['Once a trip: a trip ends after 30 min without driving', 'Never while a drive is recording']);
+    expect(reminderCopy.step.android).toBe('Silent, and it usually shows as you park.');
     const all = JSON.stringify(reminderCopy).toLowerCase();
-    expect(all).toContain('never starts a drive');
-    expect(all).not.toMatch(/automatic|auto-start|starts recording|records for you/);
+    expect(all).not.toMatch(/automatic|auto-start|starts recording|records for you|by itself/);
+    expect(all).not.toMatch(/paused|resume|unused|ignor|an hour|2 a day|a day|quiet|not driving|goes quiet/);
   });
 });

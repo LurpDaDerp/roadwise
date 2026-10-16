@@ -1,8 +1,9 @@
 /**
  * Switching the optional forgot-to-start reminder (off by default). The reminder itself is native
- * (drive-sense) and only ever posts a notification that opens Home; nothing here, or there, starts
- * a drive. Turning it on is the driver's tap, and that tap is the only moment it asks the phone
- * for anything: motion, notifications, and on iOS While Using then "Always" (asked once).
+ * (drive-sense) and posts at most one notification a trip; nothing here, or there, starts a drive
+ * (a tap on the note is claimed and started by the notification host). Turning it on is the
+ * driver's tap, and that tap is the only moment it asks the phone for anything: motion,
+ * notifications, and on iOS While Using then "Always" (asked once).
  */
 import DriveSense, { type DriveSenseApi, type TripReminderStatus } from '@drive-sense';
 

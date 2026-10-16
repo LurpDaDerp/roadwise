@@ -23,8 +23,8 @@ export interface ReminderStepDeps {
  * The optional "Forgot to start?" step (after notifications). "Turn on" asks for what the reminder
  * still needs (on iOS, Location "Always") and turns it on; "Not now" asks nothing. Either way the
  * flow goes on, and it can be turned on later in Settings › Driving. Coming back to the step (or a
- * phone that cannot run it) shows where it stands, with Continue. The reminder only ever sends a
- * note that opens RoadWise; it never starts a drive.
+ * phone that cannot run it) shows where it stands, with Continue. The reminder sends one note a trip;
+ * a tap on it starts the drive (nothing starts one by itself).
  */
 export function ReminderStep({ ctx, onNext, onBack, deps = {} }: StepProps & { deps?: ReminderStepDeps }) {
   const th = useTheme();
