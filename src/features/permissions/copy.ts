@@ -164,7 +164,7 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx, opts: 
       return on ? 'Your DashPal can connect.' : "Your DashPal can't connect, so its alerts stay on its own buzzer.";
     case 'camera':
       if (state.kind === 'idle') return 'Asked when you scan a QR code.';
-      return on ? 'You can scan QR codes.' : "QR codes can't be scanned. You can still add friends by username.";
+      return on ? "You can scan QR codes: friend codes and your DashPal's pairing code." : "QR codes can't be scanned. Add friends by username, or type a DashPal's code.";
   }
 }
 

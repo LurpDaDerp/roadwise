@@ -61,7 +61,8 @@ test('Settings details by state and platform', () => {
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID_11)).toBe('Uses Location on this phone.');
   expect(rowDetail('bluetooth', m('denied'), ANDROID)).toBe("Your DashPal can't connect, so its alerts stay on its own buzzer.");
   expect(rowDetail('camera', { kind: 'idle' }, IOS)).toBe('Asked when you scan a QR code.');
-  expect(rowDetail('camera', m('denied'), ANDROID)).toBe("QR codes can't be scanned. You can still add friends by username.");
+  expect(rowDetail('camera', m('denied'), ANDROID)).toBe("QR codes can't be scanned. Add friends by username, or type a DashPal's code.");
+  expect(rowDetail('camera', { kind: 'granted' }, IOS)).toBe("You can scan QR codes: friend codes and your DashPal's pairing code.");
 });
 
 test('titles and the names the confirmation uses follow the platform', () => {
