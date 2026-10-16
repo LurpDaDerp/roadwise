@@ -3,7 +3,8 @@
  * the first-run gate, stats and recent drives, and the drive controls for Start.
  */
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState, type ScrollView } from 'react-native';
 
 import { useDataSource, useDb, useDriveCount, useRecentDrives, useStatSums } from '@/data/queries';
 import { useMySummary } from '@/data/server/summary';
@@ -11,6 +12,9 @@ import { clearDropNotice, readDropNotice, type DropNotice } from '@/drive/dropNo
 import { useDrive, useDriveControls } from '@/drive/useDrive';
 import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
 import { sinceDays } from '@/features/drives/format';
+import { homeCard } from '@/features/permissions/board';
+import { PermissionCard } from '@/features/permissions/PermissionCard';
+import { usePermissionBoard } from '@/features/permissions/usePermissionBoard';
 import {
   ALL_STATS_HREF,
   DRIVE_HISTORY_HREF,
@@ -72,6 +76,38 @@ export function HomeScreen() {
     void clearDropNotice(db).catch(() => {});
   };
 
+  // The permission card: whenever it has a row, Home opens at the top, so the driver sees it on
+  // every visit (focus, a return to the front, or the row appearing while Home is in view).
+  const board = usePermissionBoard();
+  const scrollRef = useRef<ScrollView>(null);
+  const hasRow = !recording && board.read !== null && homeCard(board.read, board.prefs, recording).row !== null;
+  const focused = useRef(false);
+  const showsRow = useRef(hasRow);
+  const toTop = useCallback(() => {
+    if (focused.current && showsRow.current) scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, []);
+  useEffect(() => {
+    showsRow.current = hasRow;
+    toTop();
+  }, [hasRow, toTop]);
+  const { refresh: refreshBoard } = board;
+  useFocusEffect(
+    useCallback(() => {
+      focused.current = true;
+      toTop();
+      void refreshBoard('focus');
+      return () => {
+        focused.current = false;
+      };
+    }, [toTop, refreshBoard])
+  );
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') toTop();
+    });
+    return () => sub.remove();
+  }, [toTop]);
+
   const onStart = async () => {
     if (starting) return;
     setStarting(true);
@@ -116,6 +152,8 @@ export function HomeScreen() {
         onLeagues={() => router.navigate(LEAGUES_HREF)}
         recording={recording}
         inProgress={<DriveInProgressBanner />}
+        permissions={<PermissionCard board={board} recording={recording} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}
+        scrollRef={scrollRef}
         refreshing={refreshing}
         onRefresh={() => {
           void summary.refetch();
@@ -123,6 +161,7 @@ export function HomeScreen() {
           void recent.refetch();
           void week.refetch();
           void month.refetch();
+          void board.refresh('shared');
         }}
       />
     </Screen>

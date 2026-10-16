@@ -1,5 +1,5 @@
 import type { StatSums } from '@scoring';
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { RefreshControl, ScrollView, View } from 'react-native';
 
 import { useUnits, useUnitsFromServer } from '@/data/queries/units';
@@ -44,6 +44,10 @@ export type HomeViewProps = {
    */
   recording?: boolean;
   inProgress?: ReactNode;
+  /** The permission card, right under the greeting (never while a drive records). */
+  permissions?: ReactNode;
+  /** Home's scroll, so it can return to the top when the permission card shows. */
+  scrollRef?: RefObject<ScrollView | null>;
 };
 
 /**
@@ -51,7 +55,7 @@ export type HomeViewProps = {
  * and the detail (stats, recent drives, challenges) sits between. Until 3 scored drives it shows
  * only the header, Start, a first-drive prompt and how it works.
  */
-export function HomeView(p: HomeViewProps) {
+export function HomeView({ scrollRef, ...p }: HomeViewProps) {
   const t = useTheme();
   const units = useUnits();
   // A fresh install, or another phone changed units: the local mirror follows the server.
@@ -64,6 +68,7 @@ export function HomeView(p: HomeViewProps) {
   return (
     <View style={{ flex: 1 }}>
       <ScrollView
+        ref={scrollRef}
         testID="home"
         contentContainerStyle={{ padding: t.space.lg, gap: t.space.xl }}
         refreshControl={p.onRefresh ? <RefreshControl refreshing={p.refreshing ?? false} onRefresh={p.onRefresh} /> : undefined}
@@ -71,7 +76,7 @@ export function HomeView(p: HomeViewProps) {
         <Text variant="title1" accessibilityRole="header">
           {name ? `Hey, ${name}` : 'Home'}
         </Text>
-        {p.recording ? p.inProgress : null}
+        {p.recording ? p.inProgress : p.permissions}
         <HomeHeader summary={p.summary} loading={p.summaryLoading} error={p.summaryError} onLeagues={p.onLeagues} onRetry={p.onRetrySummary} />
 
         {firstRun ? (

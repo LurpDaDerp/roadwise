@@ -1,4 +1,5 @@
 import { act, screen, waitFor } from '@testing-library/react-native';
+import { AppState, ScrollView, type AppStateStatus } from 'react-native';
 
 import { draw, drive as mockDrive, press, summary as mockSummary, sums as mockSums } from '@/features/drives/__fixtures__/drives';
 
@@ -8,7 +9,24 @@ import { HomeScreen } from '../HomeScreen';
 import { clearStartNotice, readStartNotice, showStartNotice } from '../startNotice';
 
 const mockRouter = { push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => true) };
-jest.mock('expo-router', () => ({ useRouter: () => mockRouter, useFocusEffect: jest.fn() }));
+// Focus runs its effect on mount (and again whenever the callback changes), as on a real focus.
+jest.mock('expo-router', () => {
+  const { useEffect } = jest.requireActual<typeof import('react')>('react');
+  return { useRouter: () => mockRouter, useFocusEffect: (fn: () => void | (() => void)) => useEffect(fn, [fn]) };
+});
+
+// The permission board: what the card would show is the test's to set.
+type MockBoard = { status: string; read: unknown; prefs: { hidden: string[]; toSettings: Record<string, string> }; refresh: jest.Mock; fix: jest.Mock; hide: jest.Mock; show: jest.Mock };
+let mockBoard: MockBoard;
+jest.mock('@/features/permissions/usePermissionBoard', () => ({ usePermissionBoard: () => mockBoard }));
+jest.mock('@/features/permissions/PermissionCard', () => {
+  const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
+  const { homeCard } = jest.requireActual<typeof import('@/features/permissions/board')>('@/features/permissions/board');
+  return {
+    PermissionCard: ({ board, recording }: { board: MockBoard; recording: boolean }) =>
+      board.read && homeCard(board.read as never, board.prefs as never, recording).row ? <Text testID="home-permissions">a permission row</Text> : null,
+  };
+});
 
 const mockOk = <T,>(data: T) => ({ data, isLoading: false, isError: false, isRefetching: false, refetch: jest.fn() });
 const mockStart = jest.fn();
@@ -40,8 +58,22 @@ jest.mock('@/features/drive/DriveInProgressBanner', () => {
   return { DriveInProgressBanner: () => <Text testID="drive-in-progress">Drive in progress</Text> };
 });
 
+function boardWith(read: unknown): MockBoard {
+  return { status: read ? 'ready' : 'loading', read, prefs: { hidden: [], toSettings: {} }, refresh: jest.fn(async () => {}), fix: jest.fn(async () => null), hide: jest.fn(), show: jest.fn() };
+}
+const ALL_ON = {
+  snapshot: { platform: 'ios', location: 'foreground', precise: true, locationCanAskAgain: true, locationServices: true, motion: 'granted', notifications: 'granted', notificationsCanAskAgain: true, batteryOptimization: 'exempt', lowPowerMode: false, checkedAt: 1 },
+  androidApi: null,
+  paired: false,
+  bluetooth: null,
+  camera: null,
+  reminder: null,
+};
+const MOTION_OFF = { ...ALL_ON, snapshot: { ...ALL_ON.snapshot, motion: 'denied' } };
+
 beforeEach(() => {
   jest.clearAllMocks();
+  mockBoard = boardWith(null);
   mockRecording = false;
   mockNotice = null;
   clearStartNotice();
@@ -163,5 +195,62 @@ describe('a tap on the forgot-to-start reminder that started no drive', () => {
     );
     expect(await screen.findByTestId('start-drive')).toBeOnTheScreen();
     expect(screen.queryByTestId('start-refusal')).toBeNull();
+  });
+});
+
+describe('the permission card', () => {
+  const scrollTo = () => (ScrollView.prototype as unknown as { scrollTo: jest.Mock }).scrollTo;
+  let appStateListeners: ((s: AppStateStatus) => void)[] = [];
+  beforeEach(() => {
+    appStateListeners = [];
+    jest.spyOn(AppState, 'addEventListener').mockImplementation((_t, fn) => {
+      appStateListeners.push(fn as (s: AppStateStatus) => void);
+      return { remove: () => {} } as never;
+    });
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  test('a row shows under the greeting and Home opens at the top on focus; the board is read (deduped) on focus', async () => {
+    mockBoard = boardWith(MOTION_OFF);
+    await draw(<HomeScreen />);
+    expect(screen.getByTestId('home-permissions')).toBeOnTheScreen();
+    expect(scrollTo()).toHaveBeenCalledWith({ y: 0, animated: false });
+    expect(mockBoard.refresh).toHaveBeenCalledWith('focus');
+  });
+
+  test('back in front with a row showing: Home returns to the top again', async () => {
+    mockBoard = boardWith(MOTION_OFF);
+    await draw(<HomeScreen />);
+    scrollTo().mockClear();
+    await act(async () => {
+      for (const fn of appStateListeners) fn('active');
+    });
+    expect(scrollTo()).toHaveBeenCalledWith({ y: 0, animated: false });
+  });
+
+  test('no row: Home keeps its place (no scroll), on focus and on return', async () => {
+    mockBoard = boardWith(ALL_ON);
+    await draw(<HomeScreen />);
+    await act(async () => {
+      for (const fn of appStateListeners) fn('active');
+    });
+    expect(screen.queryByTestId('home-permissions')).toBeNull();
+    expect(scrollTo()).not.toHaveBeenCalled();
+  });
+
+  test('while a drive records: no card and no scroll', async () => {
+    mockBoard = boardWith(MOTION_OFF);
+    mockRecording = true;
+    await draw(<HomeScreen />);
+    expect(screen.queryByTestId('home-permissions')).toBeNull();
+    expect(scrollTo()).not.toHaveBeenCalled();
+  });
+
+  test('pull to refresh reads the board again', async () => {
+    mockBoard = boardWith(MOTION_OFF);
+    await draw(<HomeScreen />);
+    const { refreshControl } = screen.getByTestId('home').props as { refreshControl: { props: { onRefresh: () => void } } };
+    await act(async () => refreshControl.props.onRefresh());
+    expect(mockBoard.refresh).toHaveBeenCalledWith('shared');
   });
 });

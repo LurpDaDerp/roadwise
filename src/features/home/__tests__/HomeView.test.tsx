@@ -1,4 +1,5 @@
 import { screen, within } from '@testing-library/react-native';
+import { Text } from 'react-native';
 
 import { draw, drive, NOW, press, summary, sums } from '@/features/drives/__fixtures__/drives';
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
@@ -151,6 +152,27 @@ describe('Start drive', () => {
     expect(screen.getByTestId('start-refusal')).toHaveTextContent(/RoadWise needs location to record a drive\./);
     expect(screen.getByText('Fix it')).toBeOnTheScreen();
     expect(screen.queryByText(/Pull over|stopped/)).toBeNull();
+  });
+});
+
+describe('the permission card slot', () => {
+  const card = <Text testID="perm-card">{"Location is off. Drives can't record."}</Text>;
+
+  test('right under the greeting, before the Safety Rating header', async () => {
+    await draw(<HomeView {...props({ permissions: card })} />);
+    const tree = JSON.stringify(screen.toJSON());
+    const greeting = tree.indexOf('Hey, lurp');
+    const row = tree.indexOf("Location is off. Drives can't record.");
+    const rating = tree.indexOf('Safety Rating');
+    expect(greeting).toBeGreaterThan(-1);
+    expect(row).toBeGreaterThan(greeting);
+    expect(rating).toBeGreaterThan(row);
+  });
+
+  test('not while a drive records (the in-progress strip takes the place)', async () => {
+    await draw(<HomeView {...props({ permissions: card, recording: true, inProgress: <Text testID="in-progress">Drive in progress</Text> })} />);
+    expect(screen.queryByTestId('perm-card')).toBeNull();
+    expect(screen.getByTestId('in-progress')).toBeOnTheScreen();
   });
 });
 

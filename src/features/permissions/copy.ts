@@ -43,7 +43,7 @@ export const permissionsCopy = {
     more: (n: number) => `${n} more`,
     seeAll: 'See all',
     moreLabel: (n: number) => (n === 1 ? '1 more permission needs a look. See all.' : `${n} more permissions need a look. See all.`),
-    swipe: 'Don’t remind me',
+    swipe: "Don't remind me",
     dismissAction: "Don't remind me again",
     confirmTitle: "Don't remind me again?",
     confirmMessage: (name: string) => `Home won't remind you about ${name} again. You can turn this back on in Profile › Settings › Permissions.`,

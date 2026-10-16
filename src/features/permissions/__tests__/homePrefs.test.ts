@@ -3,6 +3,8 @@ import { HOME_HIDDEN_KEY, HOME_TO_SETTINGS_KEY } from '@/core/permissions';
 
 import { hideOnHome, markToSettings, pruneToSettings, readHomePrefs, serial, showOnHome } from '../homePrefs';
 
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+
 function store(initial: Record<string, unknown> = {}) {
   const data = new Map<string, unknown>(Object.entries(initial));
   return {
@@ -104,4 +106,14 @@ test('serial runs in order and survives a failure', async () => {
   await expect(a).rejects.toThrow('x');
   expect(await b).toBe('b');
   expect(order).toEqual([1, 2]);
+});
+
+test("both keys are this account's on this phone: the handover wipe removes them, a plain sign-out keeps them", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- loaded here only, behind the supabase mock
+  const device = require('@/boot/device') as typeof import('@/boot/device');
+  for (const key of [HOME_HIDDEN_KEY, HOME_TO_SETTINGS_KEY]) {
+    expect(device.WIPE_KEEPS_SETTINGS).not.toContain(key);
+    expect(key.startsWith(device.WIPE_KEEPS_SETTINGS_PREFIX)).toBe(false);
+    expect(device.SIGN_OUT_SETTINGS).not.toContain(key);
+  }
 });
