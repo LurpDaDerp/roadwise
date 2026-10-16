@@ -28,8 +28,9 @@ started in the foreground running through the `location` background mode; Androi
 location foreground service.
 
 The one thing that runs with no drive open is the optional **forgot-to-start reminder** (§10), off
-by default: it notices a car trip natively and posts at most one notification, which only opens
-Home. It never starts a capture. It is the only user of significant-location wakes, of "Always"
+by default: it notices driving natively and posts at most one notification a session, with a
+one-use token. It never starts a capture: a tap on its note reaches JS, which claims the token
+(`claimReminderTap`) and only then starts the drive itself, through the Start Drive path. It is the only user of significant-location wakes, of "Always"
 location (iOS, asked only when the driver turns it on) and of the boot receiver (Android, enabled
 only while it is on).
 
@@ -59,7 +60,8 @@ only while it is on).
   no motion feed to JS while idle, and nothing ever starts a capture but `startCapture`. GPS 1 Hz
   only while capturing. IMU 25 Hz batched natively and reduced per second — never per sample to
   JS. No WorkManager jobs. With no drive open, only the forgot-to-start reminder (§10) runs, and
-  only while the driver has it on; it only notifies and reaches JS with nothing.
+  only while the driver has it on; it only notifies, and reaches JS with nothing but a tap on its
+  note (`reminderTap`, Android).
 
 ---
 
@@ -82,9 +84,11 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 | `getLastExitInfo()` | Android: the most recent of `ActivityManager.getHistoricalProcessExitReasons(pkg, 0, 1)` and the persisted watchdog record, as `ExitInfo` (mapping: `REASON_USER_REQUESTED`/`USER_STOPPED` → `user_stopped`, `LOW_MEMORY` → `low_memory`, `CRASH`/`CRASH_NATIVE` → `crash`, `ANR` → `anr`, watchdog stop → `watchdog`, a refused FGS start → `other`, anything else → `other`, unknown → `unknown`); `whileCapturing` from the persisted capture-open flag at that time. iOS: `null`. |
 | `isIgnoringBatteryOptimizations()` | Android: `PowerManager.isIgnoringBatteryOptimizations(packageName)` — whether the app is exempt from battery optimisation (permission health). **iOS: always `true`** — iOS has no equivalent per-app restriction, so there is nothing for the user to fix. |
 | `selfTest(vectorsJson)` | Runs the native extractor and (Android) gravity filter over golden vectors; resolves a JSON string (§8). Rejects `E_INVALID_INPUT` only if the vectors JSON cannot be parsed at all. |
-| `setTripReminder(enabled)` | The forgot-to-start reminder's switch (§10); resolves its `TripReminderStatus`. On: saved on even when something is missing (the status says what), every back-off and quiet cleared, the Android channel created, the wake started where allowed. Off: everything it kept is forgotten, its feed or wake stopped, its boot receiver disabled (Android), any notification taken down. Never starts a capture. |
+| `setTripReminder(enabled)` | The forgot-to-start reminder's switch (§10); resolves its `TripReminderStatus`. On: saved on even when something is missing (the status says what), the session kept, the Android channel created, the wake started where allowed. Off: everything it kept is forgotten, its feed or wake stopped, its boot receiver disabled (Android), any notification taken down. Never starts a capture. |
 | `getTripReminderStatus()` | The reminder's `TripReminderStatus` (§10), brought up to now first. |
 | `requestReminderLocation()` | iOS: the one "Always" request, from the driver's tap that turns the reminder on, only with While Using granted and only once ever (`always`/`whenInUse`/`denied`; no prompt → the current answer). Android: `notNeeded` (its reminder uses no location). |
+| `claimReminderTap(token)` | A tap on the reminder's note (§10): `true` once, for the live note's token, while the reminder is on, its session lasts (iOS: the motion history folded in first) and no drive is open; Android also within 2 min of the tap's hand-over. `true` spends the token and takes the note down. The token must match `REMINDER_TOKEN` (`[A-Za-z0-9-]{1,64}`) before it crosses. Never starts a capture: the caller starts the drive. |
+| `takeReminderTap()` | Android: the tap the phone handed RoadWise, once — `{ token, at }` (`at` = the hand-over time) — or `null`; it reads the launch intent itself when nothing is held. iOS: always `null` (its taps arrive through expo-notifications). |
 
 ### Errors
 
@@ -103,7 +107,7 @@ tests for one. Anything else a native method throws is a bug.
 Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 `getScreenState`, `getThermalState`, `requestMotionPermission`, `setDriveDisplay`,
 `getLastExitInfo` (`null` below Android 11), `isIgnoringBatteryOptimizations`, `setTripReminder`,
-`getTripReminderStatus`, `requestReminderLocation`.
+`getTripReminderStatus`, `requestReminderLocation`, `claimReminderTap`, `takeReminderTap`.
 
 ### `DriveSenseState`
 
@@ -131,6 +135,7 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 | `thermal` | `{ level, ts }` | a thermal-state change while capturing |
 | `notificationAction` | `{ action: 'endDrive', ts }` | Android: the notification's End drive action (offered only while `setDriveDisplay` says `stopped`) |
 | `call` | `{ active, ts }` | iOS only: `CXCallObserver` — a call started or ended |
+| `reminderTap` | `{}` | Android only: a tap on the forgot-to-start reminder's note was handed over (§10); read it with `takeReminderTap` |
 
 **Motion-activity mapping** (the `activity` event). The drive host acts only on `walking`/`running`
 ENTERs at confidence `medium` or above (never an `exit`), so these mappings decide whether walking
@@ -166,7 +171,7 @@ can end a trip; every other type is ignored.
 
   **One rule for the listener** (`ActivityTransitions.sync`): one PendingIntent whose request
   matches the tier — `capture` (the set above) while capturing; the reminder's `idle` (IN_VEHICLE
-  ENTER) or `trip` (IN_VEHICLE ENTER and EXIT, STILL ENTER, WALKING ENTER, RUNNING ENTER) while the
+  ENTER) or `session` (IN_VEHICLE ENTER and EXIT, STILL ENTER, WALKING ENTER, RUNNING ENTER) while the
   reminder is on with no drive open (§10); nothing otherwise — always with motion granted and Play
   services present. Every entry point calls it (module launch, a capture's begin and end,
   `onDestroy`, a motion grant, the reminder's switch, each reminder batch, the boot receiver). The
@@ -174,7 +179,8 @@ can end a trip; every other type is ignored.
   in the same boot is skipped, and the module launch and the boot receiver re-request anyway
   (`force`), so a registration the system dropped comes back. A transition that arrives when no
   tier wants the feed removes the registration and acts on nothing (C12 round 1). With no capture
-  running a batch goes to the reminder natively and nothing reaches JS.
+  running a batch goes to the reminder natively and nothing reaches JS; while capturing, after its
+  `activity` events, the same batch reaches the reminder as vehicle state only.
 
 **Buffering.** Every event emitted while **no JS listener for that event** is attached is
 buffered natively and delivered, in order, when the first listener for it attaches (Expo
@@ -653,97 +659,140 @@ instead. The fake follows this contract where host tests depend on it:
 
 The other controls (`emit`, `loadTrace`, `listenerCount`, `setLastExitInfo`,
 `setIgnoringBatteryOptimizations`, `transition`, `failCaptureSubscribe`, `strandSubscription`,
-`setTripReminderEnv`, `tripReminderOn`) are documented on `FakeControls` in `src/types.ts`;
-`driveSenseError(code, message)` builds a coded rejection for a hand-rolled stub. The fake's
-reminder runs the reference policy (`src/reminder/policy.ts`) for its switch and status.
+`setTripReminderEnv`, `tripReminderOn`, `postReminderForTest`, `tapReminderForTest`) are documented on
+`FakeControls` in `src/types.ts`; `driveSenseError(code, message)` builds a coded rejection for a
+hand-rolled stub. The fake's reminder runs the reference policy (`src/reminder/policy.ts`) for its
+switch, status, claim and (Android) the tap's one hand-over.
 
 ---
 
 ## 10. The forgot-to-start reminder
 
 Optional, **off by default**, switched on from an optional onboarding step or Settings › Driving
-(`setTripReminder`). With no drive open it notices a car trip natively, with no JS running, and
-posts **one** notification, "Want to record this drive?", whose tap opens RoadWise on Home (the
-driver taps Start Drive there) and whose one action, **"Not driving"**, only quiets it. **It never
-starts a capture**: no reminder file can reach a capture start (`__tests__/native-*.test.ts`), the
-capture tells the reminder when it starts and ends (one direction only), and the notification
-carries nothing that starts a drive (Android `roadwise://home`, iOS `url: /home`; both open `/`
-or `/home`).
+(`setTripReminder`). It works in **sessions**: a session is a stretch of driving, and it ends 30 min
+after its last driving moment (`SESSION_GAP_MS`); every driving moment starts the 30 min again, and
+an open drive counts as driving (a session never ends while a drive is open; the drive's driving
+end is a driving moment, a drive that was not kept leaves the clock alone). Each session gets **at
+most one** reminder, posted only **at a stop**, only after the car reached **driving speed with no
+drive open** in that session (and after the last drive ended), and never while a drive is open.
+Nothing else limits it: no daily cap, no spacing, no quiet or back-off, no wait after a drive, no
+minimum trip time, no check of calls, Low Power Mode or RoadWise being in front.
+
+The note says **"Forgot to start drive?"** / **"Tap here to start"**, has no buttons and no link, and
+carries a **one-use token** (a random UUID per note). **It never starts a capture**: no reminder file
+can reach a capture start (`__tests__/native-*.test.ts`) and the capture tells the reminder when it
+starts and ends (one direction only). A tap reaches JS (iOS: the notification response through
+expo-notifications, `data.kind === 'tripReminder'`, `data.reminderToken`; Android: the module reads
+`EXTRA_TAP` off the launch intent and hands it over once, `reminderTap` + `takeReminderTap`), and
+JS asks `claimReminderTap(token)`: true once, for the live note's token, while the reminder is on,
+its session lasts and no drive is open, and (Android) within 2 min of the tap's hand-over
+(`TAP_FRESH_MS`). True spends the token and takes the note down. Only after a true does JS start the
+drive, through the Start Drive button's own `host.start()` (`src/features/notifications/reminderTap.ts`).
+A refused start does not give the session another reminder.
+
+The note comes down when a drive starts (any way), when its session ends (Android: its system
+timeout falls at the session's end; iOS: the next time native code runs, and a tap until then is
+refused by the claim), when it is claimed, when the reminder is turned off, and (iOS) when the
+reminder loses "Always" or Precise Location. It is **not** taken down when the car moves on, when
+the driver walks off or when RoadWise comes to the front: there is one reminder a session, and it
+stays tappable.
 
 The policy is one pure reference, `src/reminder/policy.ts`, mirrored by `TripReminderPolicy.kt`
-(the shared rules and the transition batch) and `TripReminderPolicy.swift` /
-`TripReminderWakePolicy.swift` (the shared rules and the wake, fix and stop rules) under the same
-constant names and values; `src/reminder/vectors.ts` is the decision table. Jest runs every row
-against the reference; the self-test runs each row through the native mirror on the phone (below).
+(the shared rules, the tap's hand-over and claim, the transition batch, a capture batch and the
+note's timeout) and `TripReminderPolicy.swift` / `TripReminderWakePolicy.swift` (the shared rules,
+the claim, and the motion history, wake, look and stop) under the same constant names and values;
+`src/reminder/vectors.ts` is the decision table. Jest runs every row against the reference, and a
+ground-truth simulation (`__tests__/reminderPolicy.test.ts`: days of trips, red lights, parks and
+drives, delivered with each platform's delays, tier changes and replays) checks that no true
+session gets two reminders, none comes during a drive, and none comes without driving speed since
+the last drive; the self-test runs each row through the native mirror on the phone (below).
 
 **State** is native only (no JS settings key): Android `DriveSensePrefs.tripReminderJson`, iOS
 UserDefaults `drivesense.tripReminder` (and `drivesense.tripReminder.alwaysAsked`), both the
-`ReminderState` JSON of `policy.ts`. iOS decides and saves nothing while nothing is stored: a state
-that reads as missing (as it can before the first unlock after a reboot, or in a process iOS started
+`ReminderState` JSON of `policy.ts` (`v: 3`: `enabled`, `session`, `lastDriveEndAt`, `token`,
+`postedAt`, `tapSeen`, `tapAt`, `lookRestUntil`). A stored v2 (the reminder before sessions) keeps
+only its switch; anything unreadable is off. iOS decides and saves nothing while nothing is stored:
+a state that reads as missing (before the first unlock after a reboot, or in a process iOS started
 then) is never saved back as the default, and only turning the reminder on writes a first state.
+Stored times more than a day ahead are a clock change and become now.
 
 **Self-test.** The diagnostics self-test (§8) sends each row of `vectors.ts`, without its
 `expected`, as a `reminder` vector; `TripReminderSelfTest.kt` / `.swift` run it through the
-production `TripReminderPolicy` and answer the row's `actual`, and `diffReminderSelfTest`
+production policy and answer the row's `actual`, and `diffReminderSelfTest`
 (`src/reminder/selfTest.ts`) matches it against the row's `expected` with the matcher Jest runs over
-the reference. Android answers the iOS rows (the wake, fixes, stop, watch, the wake and session
-gates, a session's end) with `skipped`; iOS answers the activity-transition rows so. A skip of a row
-the platform has fails.
+the reference. Android answers the iOS rows (the wake and look gates, the motion history, the look's
+fixes, the held stop, a look's end, a claim without the hand-over check) with `skipped`; iOS answers
+Android's (the hand-over, a claim with the hand-over check, the transition batch, a capture batch,
+the note's timeout) so. A skip of a row the platform has fails.
 
 ### Android: activity recognition only
 
-No location. Tiers (§3): `idle` wakes the app only for IN_VEHICLE ENTER, which opens a trip;
-`trip` adds IN_VEHICLE EXIT, STILL ENTER and the walking/running ENTERs. Each batch is read whole,
-in time order, with IN_VEHICLE EXIT first among events of the same time (Play services stamps the
-EXIT of one activity and the ENTER of the next alike): a **stop** is a STILL ENTER at most 2 min
-after an IN_VEHICLE EXIT, it must be at most 45 s old on arrival, and nothing after it in the batch
-may say the driver drove on or walked off. The post is **silent** (channel `trip_reminder`, no
-sound, no vibration, category `recommendation`), because Android cannot tell a red light from
-parking: it often shows as the car parks. A post that does not show (the notification manager
-refuses it) is taken back: no quiet, no daily slot, no outcome. It is withdrawn on IN_VEHICLE ENTER
-(driving on), WALKING/RUNNING ENTER (walked off), a capture start, RoadWise coming to the front,
-"Not driving", or after 5 min (`setTimeoutAfter`); after driving on or walking off the post still
-waits for its outcome (a drive within 30 min, else a miss). The capture's calls into the reminder
-are best effort: a failure there never holds a capture or keeps the service in the foreground. The
-feed's request is skipped only when the same tier was requested in this boot
-(`Settings.Global.BOOT_COUNT`; where the phone does not give it, a stamp ahead of the boot clock).
-A trip closes 10 min out of the vehicle (one walking misread does not split it) or after 3 h
-with no news. `ReminderBootReceiver` (BOOT_COMPLETED, MY_PACKAGE_REPLACED; unexported, disabled in
-the manifest, enabled with `DONT_KILL_APP` only while the reminder is on, paused included) only
-re-subscribes. Known gaps: a Play services update or data clear can drop the registration with no
-broadcast (it comes back at the next app open); a force stop or an OEM "deep sleeping" list stops
-it until RoadWise is opened.
+No location. **Driving** is the phone reporting it is in a vehicle: each IN_VEHICLE ENTER and EXIT
+is a driving moment, and while the phone is in the vehicle the 30 min clock does not run.
+**Driving speed** (what a stop needs) is a live IN_VEHICLE ENTER timestamped after the last drive
+ended. A **stop** is a STILL ENTER at most 2 min after an IN_VEHICLE EXIT, at most 45 s old on
+arrival, with nothing after it in the same batch saying the driver walked off (WALKING/RUNNING
+ENTER) or drove on (IN_VEHICLE ENTER). Tiers (§3): `idle` (no session) asks only for IN_VEHICLE
+ENTER, which opens a session; `session` adds IN_VEHICLE EXIT, STILL ENTER and the walking/running
+ENTERs. Each batch is read whole: the replay (events before the request's stamp) as the state at
+the stamp, never a stop and never driving speed (a replayed ENTER says in the vehicle, a replayed
+STILL/WALKING/RUNNING says out of it); then each live event in time order, IN_VEHICLE EXIT first at
+the same time, each after deciding the session's end on its own time; then the end at arrival. An
+IN_VEHICLE ENTER while already in the vehicle, 30 min or more after the session's newest report, is
+a lost EXIT: the old session ends there and a new one opens. While a drive is open the capture's
+batches (after their `activity` events to JS) keep the vehicle state only: they never end a
+session, post, mark driving speed or touch the token. The note is **silent** (channel
+`trip_reminder`, no sound, no vibration, category `recommendation`) and usually shows as the car
+parks. Every post and every refresh sets a positive system timeout (`setTimeoutAfter`): the
+session's end out of the vehicle, 3 h after the latest batch while in it (`IN_VEHICLE_NOTE_MS`); a
+timeout not ahead cancels instead. A refresh never brings back a note that is no longer up. A post
+the notification manager refuses is taken back (the session may remind at its next stop). The tap
+opens the launcher activity with the token; the module removes the extra at once, ignores a
+relaunch from Recents (`FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY`), and hands a token over at most once
+(the last 8 handed over are kept, `TAP_SEEN_MAX`), so an activity recreated from its saved intent
+starts nothing. Warm taps come through `OnNewIntent` (MainActivity is singleTask), cold ones through
+the foreground hook (read before the reminder settles) or `takeReminderTap` itself. The feed's
+request is skipped only when the same tier was requested in this boot (`Settings.Global.BOOT_COUNT`;
+where the phone does not give it, a stamp ahead of the boot clock). `ReminderBootReceiver`
+(BOOT_COMPLETED, MY_PACKAGE_REPLACED; unexported, disabled in the manifest, enabled with
+`DONT_KILL_APP` only while the reminder is on) only re-subscribes; its replay repairs the vehicle
+state. Known gaps: a drive that ends while the car keeps moving brings no reminder for the rest of
+that session (only a new report of getting into a vehicle counts as driving again); a red light is
+rarely reported (catching lights would need background location); a Play services update or data
+clear can drop the registration with no broadcast (it comes back at the next app open); a force
+stop or an OEM "deep sleeping" list stops it until RoadWise is opened.
 
-### iOS: significant-location wake → motion check → bounded GPS session
+### iOS: significant-location wake → motion history → bounded GPS look
 
 While the reminder is on with "Always" and Precise Location, `startMonitoringSignificantLocationChanges`
 wakes (or relaunches) the app after a significant move; `TripReminderAppDelegate`
 (`appDelegateSubscribers`, `didFinishLaunching` only) restarts the monitor at every launch and adds
-the "Not driving" handler to expo-notifications' delegate list (it never sets the notification
-center's delegate). A wake first runs the cheap checks (off, paused, quiet, permissions, a drive
-open, 10 min after a drive, the daily cap, an hour since the last reminder, Low Power Mode,
-RoadWise in front), then reads the
-motion history (back to the trip's last car moment, 10 min to 3 h): a trip opens only on confident
-car motion from the last 2 min with the driver not on foot, and closes only after 10 min with no
-car motion in the history; a car run that began 10 min or more after the trip's last car moment
-(10 min with no confident car motion ends a run) is a new drive after a park and a new trip, even
-with no wake in between. A **GPS session** (its own `CLLocationManager`, ten-metre accuracy, every
-fix, never paused, no indicator) then looks for the first real stop: valid speed (accuracy
-≤ 2 m/s) of 10 mph seen first, then under 3 mph held 12 s by fix time; walking or running (not
-cycling) during the hold is an arrival (no post). While the walking and notification checks run,
-fixes still move the tracker: if one breaks the stop (3 mph or more), nothing posts and the session
-looks on. It lasts at most 10 min, ends after 3 min without 10 mph, runs at most twice a trip,
-10 min apart, and never outlives 15 min whatever check is in flight. A stop too early in the trip
-(under 90 s) or during a call waits for the next stop. After the post (sound, interruption level
-`.active`: a Focus holds it), the session watches with a 10 m filter: over 5 mph, or 30 m from the
-stop by a fix accurate to 20 m, with no walking → driven on (within 20 s: **unseen**, not a miss;
-the session ends, and the trip's second session, if it has one left and it starts an hour or more
-after the post, may remind once more); 30 m with walking → walked off (withdrawn; the post still waits for
-its outcome); 5 min, RoadWise in front, a capture start, the reminder off, or "Always" or Precise
-Location lost → withdrawn and done. When the back-off turns the reminder off during a wake, the
-wake stops with it. A wake whose background task iOS ends early does not hold the next wake. After
-a swipe-away iOS does not relaunch the app for location changes: the reminder waits until RoadWise
-is opened.
+no notification delegate (it never sets the notification center's delegate). iOS has no vehicle
+state: `inVehicle` stays false and a session ends by time. **Driving** is the end of a confident
+CoreMotion `automotive` stretch that is not `stationary` (a car standing still is neither driving
+nor a break; each activity lasts until the next begins, the newest until now), read from the last
+3 h of motion history (`IOS_MOTION_LOOKBACK_MS`, always the same window) at every wake, claim,
+status read, launch, return to the front, and a drive's start and end; and every GPS fix at 10 mph
+or more during a look. A car run that began 30 min or more after the session's last driving moment
+(only 30 min without moving car motion splits a run) is a new trip after a park: the old session
+ends. A wake first runs the cheap checks (off, permissions, a drive open), then reads the motion
+history; a session opens on moving car motion from the last 2 min with the driver not on foot. A
+**GPS look** (its own `CLLocationManager`, ten-metre accuracy, every fix, never paused, no
+indicator) starts only while the session has had no reminder, the car motion is fresh and the
+driver is not on foot, and not within 10 min of a look that ran its full 10 min with no stop
+(`IOS_LOOK_REST_MS`, battery). It looks for a stop: valid speed (accuracy ≤ 2 m/s) of 10 mph first,
+then under 3 mph held 12 s by fix time; walking or running (not cycling) during the hold is an
+arrival (no post). While the walking and notification checks run, fixes still move the tracker: if
+one breaks the stop (3 mph or more), nothing posts and the look looks again (10 mph first). It
+lasts at most 10 min, ends after 3 min without 10 mph, and never outlives 13 min whatever check is
+in flight; every held stop ends it. The look's 10 mph fixes are driving moments and its driving
+speed. The note has sound, interruption level `.active` (a Focus holds it), identifier
+`roadwise.tripReminder` (one note, replaced) and `userInfo` `{ kind: 'tripReminder', reminderToken }`;
+a note iOS refuses is taken back. GPS stays off for the rest of a session once its reminder is
+posted. Every async continuation (the wake's and claim's motion reads, the look's checks, the post's
+completion, a drive's start and end) reloads the stored state before it saves. A wake whose
+background task iOS ends early does not hold the next wake. After a swipe-away iOS does not relaunch
+the app for location changes: the reminder waits until RoadWise is opened.
 
 "Always" is asked by `requestReminderLocation` only from the turn-on tap, only with While Using
 already granted, and only once (resolving on a changed authorisation, on RoadWise active again
@@ -754,26 +803,16 @@ plus 1 s, on no prompt within 1 s, or after 60 s). Kept at While Using, the stat
 
 | Rule | Number |
 |---|---|
-| At most one reminder a trip (on iOS one more may follow an unseen one, from the trip's second GPS session, an hour or more later) | 1 (+1) |
-| Never while a drive is open, or for a trip a drive was open in | — |
-| None this soon after a drive ended | 10 min |
-| None this early in a trip | 90 s |
-| None while RoadWise is in front or during a call | — |
-| Quiet after a reminder that did not lead to a drive (lifted by a drive within 30 min, or an unseen one) | 4 h |
-| Reminders in any 24 h, unseen ones and ones that led to a drive included | 2 |
-| Least time between any two reminders, whatever became of the first (led to a drive, unseen, missed, "Not driving") | 1 h |
-| Withdrawn after | 5 min |
-| A drive started within this of a reminder = it helped (streak and back-off reset) | 30 min |
-| "Not driving" quiet | 12 h |
-| Unused in a row → pause; then again → pause; then again → off | 3 → 7 days, 3 → 28 days, 3 → off |
+| A session ends this long after its last driving moment (an open drive counts as driving) | 30 min |
+| Reminders a session | at most 1 |
+| Never while a drive is open; after a drive, driving speed with no drive open again, then a stop | — |
+| A stop: iOS under 3 mph held after 10 mph; Android STILL after leaving the vehicle | 12 s; 2 min |
+| A stop too old on arrival (Android) | 45 s |
+| A tap is claimed and started within this of its hand-over (Android natively; JS on both) | 2 min |
+| GPS look (iOS): at most / without 10 mph / rest after a full look | 10 min / 3 min / 10 min |
+| The note's timeout while the phone is in a vehicle (Android) | 3 h |
 
-A miss is a reminder with no drive within 30 min (walking off or driving on after it included), or
-"Not driving" on a reminder still waiting for its outcome ("Not driving" on one already counted
-only quiets it); (iOS) unseen is not. A Start Drive that did not follow a reminder does not reset the streak (it marks the trip
-recorded). While paused or quiet the feed or wake keeps running, so a pause ends without RoadWise
-being opened. Stored times more than a day ahead are a clock change and become now.
-
-`TripReminderStatus` (`getTripReminderStatus`): `state` `off` (`autoOff` true after the third
-back-off step) / `on` / `needs` (`missing`: `motion`, `notifications` — iOS: allowed with alerts,
-provisional is not enough —, `locationAlways`, `locationPrecise`) / `paused` (`pausedUntil`) /
-`unavailable` (no Play services; iOS: no motion activity or significant-change hardware).
+`TripReminderStatus` (`getTripReminderStatus`): `state` `off` / `on` / `needs` (`missing`:
+`motion`, `notifications` — iOS: allowed with alerts, provisional is not enough —,
+`locationAlways`, `locationPrecise`) / `unavailable` (no Play services; iOS: no motion activity or
+significant-change hardware); `enabled`, so a reminder still on can always be switched off.
