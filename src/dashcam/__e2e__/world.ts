@@ -789,6 +789,10 @@ export class World {
         optIn: () => phone.rt.optIn(),
         pair: (rec) => phone.rt.pair(rec),
         paired: () => phone.rt.state().link.paired,
+        keyRefused: (d) => {
+          const l = phone.rt.state().link;
+          return l.repairCause === 'unknown_phone' && l.paired?.dashcamId === d;
+        },
         stepAside: () => phone.rt.stepAside(),
         resumePaired: () => phone.rt.resumePaired(),
         secrets,

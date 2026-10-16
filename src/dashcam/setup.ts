@@ -123,6 +123,11 @@ export interface SetupDeps {
   pair(record: PairedDashcam): Promise<void>;
   /** The currently paired dashcam (re-pairing replaces it). */
   paired(): PairedDashcam | null;
+  /**
+   * The paired DashPal `dashcamId` refused this phone's key at its auto-connect's last session
+   * (R_UNKNOWN_PHONE: "Needs pairing again"): the dashcam no longer holds that key.
+   */
+  keyRefused(dashcamId: string): boolean;
   /** The paired dashcam's auto-connect steps aside while the pairing step uses the radio. */
   stepAside(): void;
   /** The paired dashcam's auto-connect again (a setup that did not pair, or a wait for the driver). */
@@ -440,13 +445,28 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
 
   // ——— the pairing on one candidate ———
 
-  /** This phone's earlier key with this DashPal (its pairing, else the orphan): `prev_id` with its proof. */
+  /**
+   * This phone's earlier key with this DashPal, the one the dashcam still holds: `prev_id` with its
+   * proof. Its pairing's key, else the orphan; the orphan first when the dashcam refused the
+   * pairing's key (a Set up again whose outcome stayed unknown was stored, and its prev_id deleted
+   * the old key's record there).
+   */
   async function previousKey(d: string): Promise<{ id: Uint8Array; kPair: Uint8Array } | null> {
     const own = await deps.secrets.readAuth().catch(() => null);
-    if (own?.dashcamId === d) return { id: hexBytes(own.phoneId), kPair: hexBytes(own.kPair) };
     const orphan = await deps.secrets.readOrphan().catch(() => null);
-    if (orphan?.dashcamId === d) return { id: hexBytes(orphan.phoneId), kPair: hexBytes(orphan.kPair) };
-    return null;
+    const ownHere = own?.dashcamId === d ? own : null;
+    const orphanHere = orphan?.dashcamId === d ? orphan : null;
+    const pick = orphanHere && (!ownHere || keyRefused(d)) ? orphanHere : ownHere;
+    return pick ? { id: hexBytes(pick.phoneId), kPair: hexBytes(pick.kPair) } : null;
+  }
+
+  function keyRefused(d: string): boolean {
+    try {
+      return deps.keyRefused(d);
+    } catch (e) {
+      report(e, 'keyRefused');
+      return false;
+    }
   }
 
   function freshId(): Uint8Array {

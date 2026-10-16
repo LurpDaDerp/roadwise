@@ -343,6 +343,13 @@ describe('the setup panel', () => {
     expect(base.isBusy()).toBe(false); // the setup screens read the drive context, not the mocked hooks
     base.notePhones?.('a4cf12b3c4d5', 2);
     expect(rt.log).toContain('notePhones:a4cf12b3c4d5:2');
+    // The key refused: R_UNKNOWN_PHONE at the paired DashPal's auto-connect, read live.
+    expect(base.keyRefused(PAIRED.dashcamId)).toBe(false);
+    rt.set({ link: { paired: PAIRED, lifecycle: 'needs_repair', repairCause: 'unknown_phone' } });
+    expect(base.keyRefused(PAIRED.dashcamId)).toBe(true);
+    expect(base.keyRefused('a4cf12b3c401')).toBe(false);
+    rt.set({ link: { repairCause: 'downgrade' } });
+    expect(base.keyRefused(PAIRED.dashcamId)).toBe(false);
     await act(async () => view.unmount());
     expect(s.cancelled()).toBe(1);
   });

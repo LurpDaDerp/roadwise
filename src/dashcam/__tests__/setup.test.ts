@@ -49,6 +49,8 @@ interface Rig {
   log: string[];
   clock: { t: number };
   sleeps: number[];
+  /** the paired DashPal's auto-connect: its last session with this phone's key was refused (R_UNKNOWN_PHONE) */
+  refused: { on: boolean };
   at(ms: number, fn: () => void): void;
   until(kind: SetupPhase['kind']): Promise<SetupPhase>;
   run(opts?: SetupStart): Promise<SetupPhase>;
@@ -95,6 +97,7 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
   const log: string[] = [];
   let busy = false;
   const driveFns = new Set<() => void>();
+  const refused = { on: false };
   const flow = createSetupFlow({
     platform,
     transport: () => t,
@@ -110,6 +113,7 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
       log.push(`pair:${r.dashcamId}`);
     },
     paired: () => o.previous ?? null,
+    keyRefused: (d) => refused.on && o.previous?.dashcamId === d,
     stepAside: () => {
       log.push('stepAside');
       t.setTarget(null);
@@ -142,6 +146,7 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
     log,
     clock,
     sleeps,
+    refused,
     at: (ms, fn) => void due.push({ at: clock.t + ms, fn }),
     async until(kind) {
       for (let i = 0; i < 400; i++) {
@@ -671,6 +676,55 @@ describe('the outcome of PAIR_FIN unknown', () => {
     expect(end).toMatchObject({ kind: 'failed', reason: 'error' });
     expect(await r.secrets.readPendingAuth()).toBeNull();
     expect((await r.secrets.readOrphan())?.dashcamId).toBe(camOf(0xd5));
+  });
+
+  describe('Set up again of the paired DashPal with an orphan for it', () => {
+    const same: PairedDashcam = { dashcamId: camOf(0xd5), peripheralId: idOf('android', 0xd5), name: 'DashPal-C4D5', pairedAt: 1, secure: true };
+    const prevOf = (cam: FakeDashcam) => toHex(cam.authWrites.filter((w) => w[0] === 0x10).at(-1)!.slice(10, 18));
+
+    test('its outcome stayed unknown and the old key is then refused (R_UNKNOWN_PHONE): the next Set up again proves the orphan, so its record is replaced, not added to', async () => {
+      const r = rig({ previous: same });
+      const cam = r.cams.get(0xd5)!;
+      expect((await withCode(r, (f) => f.scanned(link(0xd5)))).kind).toBe('done');
+      const old = (await r.secrets.readAuth())!;
+      // Set up again: the dashcam stores it (prev_id proven: the old record goes), its RESULT is lost, no reconnect.
+      cam.windowOpen = true;
+      dropAfterFin(r);
+      const write = r.ble.onWrite!;
+      r.ble.onWrite = (w) => {
+        if (w.characteristic === AUTH_CHAR && w.bytes[0] === 0x11) r.ble.connectMode.set(idOf('android', 0xd5), 'reject');
+        return write(w);
+      };
+      expect(await withCode(r, (f) => f.scanned(link(0xd5)))).toMatchObject({ kind: 'failed', reason: 'error' });
+      expect(prevOf(cam)).toBe(old.phoneId);
+      const orphan = (await r.secrets.readOrphan())!;
+      expect([...cam.phones.keys()]).toEqual([orphan.phoneId]);
+      expect((await r.secrets.readAuth())?.phoneId).toBe(old.phoneId);
+      // The auto-connect resumes with the old key: refused ("Needs pairing again").
+      r.refused.on = true;
+      r.ble.onWrite = write;
+      r.ble.connectMode.delete(idOf('android', 0xd5));
+      cam.windowOpen = true;
+      expect((await withCode(r, (f) => f.scanned(link(0xd5)))).kind).toBe('done');
+      expect(prevOf(cam)).toBe(orphan.phoneId);
+      expect(cam.phones.size).toBe(1);
+      expect([...cam.phones.keys()]).toEqual([(await r.secrets.readAuth())!.phoneId]);
+      expect(await r.secrets.readOrphan()).toBeNull();
+    });
+
+    test('the old key still works (not refused): it proves prev_id, not the orphan', async () => {
+      const r = rig({ previous: same });
+      const cam = r.cams.get(0xd5)!;
+      expect((await withCode(r, (f) => f.scanned(link(0xd5)))).kind).toBe('done');
+      const old = (await r.secrets.readAuth())!;
+      // An orphan the dashcam never stored.
+      await r.secrets.writeOrphan({ dashcamId: camOf(0xd5), phoneId: '0909090909090909', kPair: 'cd'.repeat(32) });
+      cam.windowOpen = true;
+      expect((await withCode(r, (f) => f.scanned(link(0xd5)))).kind).toBe('done');
+      expect(prevOf(cam)).toBe(old.phoneId);
+      expect(cam.phones.size).toBe(1);
+      expect(await r.secrets.readOrphan()).toBeNull();
+    });
   });
 });
 

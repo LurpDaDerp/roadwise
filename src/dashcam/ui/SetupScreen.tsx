@@ -114,6 +114,10 @@ export function SetupPanel({
       optIn: async () => runtime?.optIn(),
       pair: async (record) => runtime?.pair(record),
       paired: () => runtime?.state().link.paired ?? null,
+      keyRefused: (d) => {
+        const l = runtime?.state().link;
+        return l?.repairCause === 'unknown_phone' && l.paired?.dashcamId === d;
+      },
       stepAside: () => runtime?.stepAside(),
       resumePaired: async () => runtime?.resumePaired(),
       secrets: deps.secrets ?? dashpalSecrets,
