@@ -81,6 +81,10 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
       // list (both dedupe).
       NSBluetoothAlwaysUsageDescription: PERMISSION_COPY.bluetooth,
       UIBackgroundModes: ['bluetooth-central'],
+      // The driving screen's navigation button finds the navigation apps installed with
+      // canOpenURL, which answers false for any scheme not listed here. Exactly the iOS schemes of
+      // src/features/navigation/catalog.ts, in order (app-config.test.ts holds them equal).
+      LSApplicationQueriesSchemes: ['maps', 'comgooglemaps', 'waze', 'here-route', 'com.sygic.aura', 'tomtomgo', 'magicearth', 'osmandmaps', 'om', 'mapquest', 'yandexnavi'],
     },
     // Signing for the widget extension target (@bacons/apple-targets reads it). Set
     // EXPO_APPLE_TEAM_ID (EAS: an environment variable) or replace it with the team ID from Xcode.
