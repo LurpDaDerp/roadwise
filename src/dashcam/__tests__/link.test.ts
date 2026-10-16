@@ -7,7 +7,25 @@ import { createTripsRepo, migrate, type Db } from '@/data/db';
 
 import { cadenceMs } from '../alerts';
 import type { PairedDashcam } from '../keys';
-import { createDashcamLink, LATE_ALERT_MS, ROW_STATE_FLOOR_MS, type DashcamLink, type LinkContext } from '../link';
+import {
+  AUDIBLE_VOLUME_MIN,
+  audible,
+  createDashcamLink,
+  HOLD_AWAKE_EVERY_MS,
+  HOLD_AWAKE_MS,
+  LATE_ALERT_MS,
+  LATE_CRITICAL_ALERT_MS,
+  LIVE_OFFSET_MAX_AGE_MS,
+  nextLiveOffset,
+  PLAYER_RETRY_MS,
+  ROW_STATE_FLOOR_MS,
+  STATE_EVERY_CRITICAL_MS,
+  STATE_EVERY_MS,
+  usableLiveOffset,
+  type AudioOutputProbe,
+  type DashcamLink,
+  type LinkContext,
+} from '../link';
 import {
   decodeInfo,
   decodeRx,
@@ -90,6 +108,13 @@ interface Rig {
   advance(ms: number): void;
   settle(): Promise<void>;
   failWrites: boolean;
+  /** what the audio probe answers */
+  audio: AudioOutputProbe;
+  /** every probe read: `fresh` */
+  probes: boolean[];
+  /** every holdAwake call, with how many frames had been written before it */
+  holds: { ms: number; at: number; writesBefore: number }[];
+  holdThrows: boolean;
 }
 
 let db: Db;
@@ -124,6 +149,10 @@ function rig(over: { store?: Partial<DashcamStore>; delay?: (ms: number) => Prom
     wakes,
     paired,
     failWrites: false,
+    audio: { callActive: false, volume: null, headphones: null },
+    probes: [],
+    holds: [],
+    holdThrows: false,
     sent: (type) => writes.filter((w) => w.frame.type === type).map((w) => w.frame) as never,
     clear: () => {
       writes.length = 0;
@@ -159,6 +188,14 @@ function rig(over: { store?: Partial<DashcamStore>; delay?: (ms: number) => Prom
         await new Promise<void>((resolve) => setImmediate(resolve));
       }),
     timersPaused: over.timersPaused,
+    audioOutput: (fresh) => {
+      r.probes.push(fresh);
+      return { ...r.audio };
+    },
+    holdAwake: (ms) => {
+      r.holds.push({ ms, at: clock.t, writesBefore: writes.length });
+      if (r.holdThrows) throw new Error('wake lock');
+    },
     wake: (at) => wakes.push(at),
     onPaired: (c) => paired.push(c),
     onError: (e, c) => errors.push(`${c}: ${e instanceof Error ? e.message : String(e)}`),
@@ -719,7 +756,7 @@ describe('STATE (§3.2, §3.7)', () => {
     expect(last().flags).toBe(STATE_FLAG.CAN_PLAY | STATE_FLAG.BUZZER_TOO | STATE_FLAG.DRIVE_ACTIVE);
   });
 
-  test('row 4: no can_play under vibration-only, on a call, with the player unavailable, or in the background outside a drive', async () => {
+  test('row 4: no can_play under vibration-only, on a call (the host\'s or the probe\'s), with the player unavailable, a media volume under a quarter or headphones; in the background with no drive it can play', async () => {
     const r = rig();
     await connect(r);
     const can = () => {
@@ -733,13 +770,23 @@ describe('STATE (§3.2, §3.7)', () => {
     r.ctx.callActive = true;
     expect(can()).toBe(false);
     r.ctx.callActive = false;
+    r.audio.callActive = true;
+    expect(can()).toBe(false);
+    r.audio.callActive = false;
     r.ctx.playerAvailable = false;
     expect(can()).toBe(false);
     r.ctx.playerAvailable = true;
-    r.ctx.foreground = false;
+    r.audio.volume = 0.2;
     expect(can()).toBe(false);
-    r.ctx.recording = true;
+    r.audio.volume = 0.5;
+    r.audio.headphones = true;
+    expect(can()).toBe(false);
+    r.audio.headphones = false;
     expect(can()).toBe(true);
+    // Neither a drive nor RoadWise in front is needed any more.
+    r.ctx.foreground = false;
+    expect(r.link.canPlay()).toBe(true);
+    expect(r.link.canPlay(true)).toBe(true);
   });
 
   test('speed_valid only while recording, from a row ≤ 2 s old with a fix, speed ≥ 0 and accuracy ≤ 2 m/s', async () => {
@@ -1408,5 +1455,343 @@ describe('held alert', () => {
     r.rx(alert({ alertId: 70, route: 0 }));
     expect(r.link.snapshot().visual).toMatchObject({ resend: false });
     await r.settle();
+  });
+});
+
+describe('phone-first sound routing (BLE_PROTOCOL §1, §5)', () => {
+  let nextId = 900;
+  /** One routed ALERT, answered; then stopped, so it never stays playing into the next case. */
+  async function answer(r: Rig, o: Partial<Extract<TxFrame, { type: 'ALERT' }>> = {}): Promise<number | undefined> {
+    nextId += 1;
+    const id = nextId;
+    r.rx(alert({ alertId: id, uptimeMs: uptime(r), ...o }));
+    await r.settle();
+    const got = r.sent('ALERT_ACK').filter((a) => a.alertId === id);
+    r.rx({ type: 'ALERT_STOP', alertId: id, reason: 0 });
+    await r.settle();
+    return got.length === 1 ? got[0]!.outcome : undefined;
+  }
+  const statesIn = (r: Rig, from: number) => r.writes.filter((w) => w.frame.type === 'STATE' && w.at >= from);
+
+  test('(1) RoadWise in the background with no drive: STATE says can_play, and a routed ALERT is answered ACK(1) and played', async () => {
+    const r = rig();
+    await connect(r);
+    r.ctx.foreground = false;
+    // A flags change goes out in the quiet cadence, so the dashcam learns can_play from the background too.
+    r.ctx.styleAllowsSound = false;
+    r.advance(100);
+    expect(r.sent('STATE').at(-1)!.flags & STATE_FLAG.CAN_PLAY).toBe(0);
+    r.ctx.styleAllowsSound = true;
+    r.advance(100);
+    expect(r.sent('STATE').at(-1)!.flags & STATE_FLAG.CAN_PLAY).toBe(STATE_FLAG.CAN_PLAY);
+    r.clear();
+    r.rx(alert({ alertId: 7, uptimeMs: uptime(r) }));
+    await r.settle();
+    expect(r.sent('ALERT_ACK')).toEqual([{ type: 'ALERT_ACK', alertId: 7, outcome: 1 }]);
+    const played = r.player.played();
+    expect(played[0]).toMatchObject({ tone: 'dp_glance', acksBefore: 1 });
+    expect(played[0]!.silent).toBeUndefined();
+  });
+
+  test('(2)-(4) the fresh probe decides: a call, a media volume under a quarter, headphones and vibration-only answer ACK(0); an unknown volume or output plays', async () => {
+    const r = rig();
+    await connect(r);
+    r.ctx.foreground = false;
+    expect(AUDIBLE_VOLUME_MIN).toBe(0.25);
+    expect(await answer(r)).toBe(1);
+    r.audio.callActive = true;
+    expect(await answer(r)).toBe(0);
+    r.audio.callActive = false;
+    for (const [volume, outcome] of [
+      [0, 0],
+      [0.24, 0],
+      [0.25, 1],
+      [1, 1],
+      [null, 1],
+    ] as const) {
+      r.audio.volume = volume;
+      expect({ volume, ack: await answer(r) }).toEqual({ volume, ack: outcome });
+    }
+    for (const [headphones, outcome] of [
+      [true, 0],
+      [false, 1],
+      [null, 1],
+    ] as const) {
+      r.audio.headphones = headphones;
+      expect({ headphones, ack: await answer(r) }).toEqual({ headphones, ack: outcome });
+    }
+    r.ctx.styleAllowsSound = false;
+    expect(await answer(r)).toBe(0);
+    r.ctx.styleAllowsSound = true;
+    r.ctx.callActive = true; // the host's own (iOS) call signal still counts
+    expect(await answer(r)).toBe(0);
+  });
+
+  test('audible(): volume null or ≥ 0.25 and no headphones', () => {
+    expect(audible({ callActive: false, volume: null, headphones: null })).toBe(true);
+    expect(audible({ callActive: false, volume: 0.25, headphones: false })).toBe(true);
+    expect(audible({ callActive: false, volume: 0.2499, headphones: null })).toBe(false);
+    expect(audible({ callActive: false, volume: 1, headphones: true })).toBe(false);
+  });
+
+  test('(5) after a playback failure the phone answers ACK(0) for 30 s, then plays again', async () => {
+    const r = rig();
+    await connect(r);
+    r.link.playerUnavailable();
+    const failedAt = r.clock.t;
+    expect(await answer(r)).toBe(0);
+    r.clock.t = failedAt + PLAYER_RETRY_MS - 1;
+    expect(await answer(r)).toBe(0);
+    expect(r.sent('STATE').at(-1)!.flags & STATE_FLAG.CAN_PLAY).toBe(0);
+    r.clock.t = failedAt + PLAYER_RETRY_MS + 1;
+    expect(await answer(r)).toBe(1);
+    r.advance(1000);
+    expect(r.sent('STATE').at(-1)!.flags & STATE_FLAG.CAN_PLAY).toBe(STATE_FLAG.CAN_PLAY);
+  });
+
+  test('(6) a routed ALERT before the connection has any clock offset (no HELLO yet): ACK(0), shown only, counted late', async () => {
+    const r = rig();
+    expect(r.link.infoRead(info())).toBe(true);
+    r.link.linkUp(info());
+    r.advance(30);
+    r.clear();
+    r.rx(alert({ alertId: 3, uptimeMs: uptime(r) }));
+    await r.settle();
+    expect(r.sent('ALERT_ACK')).toEqual([{ type: 'ALERT_ACK', alertId: 3, outcome: 0 }]);
+    expect(r.player.played()).toEqual([expect.objectContaining({ silent: true })]);
+    expect(r.link.snapshot().counters.lateAlerts).toBe(1);
+    // A route-0 ALERT is never late: no ACK at all.
+    r.rx(alert({ alertId: 4, route: 0, uptimeMs: uptime(r) }));
+    await r.settle();
+    expect(r.sent('ALERT_ACK')).toHaveLength(1);
+  });
+
+  test('(7) the late rule on the live offset: a warning late after 750 ms, a critical after 400 ms', async () => {
+    const r = rig();
+    await connect(r);
+    const at = async (ms: number, tier: number) => {
+      const sentAt = uptime(r);
+      r.clock.t += ms;
+      return answer(r, { tier, sound: tier >= 3 ? 3 : 1, uptimeMs: sentAt });
+    };
+    expect(LATE_CRITICAL_ALERT_MS).toBe(400);
+    // The connection's offset is good to a few ms (5 ms echoes): 10 ms either side of each bound.
+    expect(await at(LATE_ALERT_MS - 10, 2)).toBe(1);
+    expect(await at(LATE_ALERT_MS + 10, 2)).toBe(0);
+    expect(await at(LATE_CRITICAL_ALERT_MS - 10, 3)).toBe(1);
+    expect(await at(LATE_CRITICAL_ALERT_MS + 10, 3)).toBe(0);
+    // A warning 600 ms late is still played; a critical that late is not.
+    expect(await at(600, 2)).toBe(1);
+    expect(await at(600, 3)).toBe(0);
+    expect(r.link.snapshot().counters.lateAlerts).toBe(3);
+  });
+
+  test('(7b) after 8 h asleep with the dashcam clock 1152 ms behind (40 ppm), an on-time ALERT is not called late; TIME_PINGs go out on that frame', async () => {
+    const r = rig();
+    await connect(r);
+    r.clock.t += 8 * 3_600_000; // suspended: no tick at all
+    r.clear();
+    expect(await answer(r, { uptimeMs: uptime(r) - 1152 })).toBe(1);
+    expect(r.sent('TIME_PING').length).toBeGreaterThanOrEqual(1);
+    expect(r.writes.findIndex((w) => w.frame.type === 'TIME_PING')).toBeGreaterThan(r.writes.findIndex((w) => w.frame.type === 'ALERT_ACK'));
+    expect(r.link.snapshot().counters.lateAlerts).toBe(0);
+  });
+
+  test('(7c) a live sample 11 min old (the resync pings went unanswered) is not used: the late rule is skipped and pings go out at once', async () => {
+    const r = rig();
+    await connect(r);
+    const t0 = r.clock.t;
+    // Ticks through the 10-min resync: its pings go out, the dashcam never answers them.
+    while (r.clock.t < t0 + 11 * 60_000) r.advance(1000);
+    r.clear();
+    const sentAt = uptime(r);
+    r.clock.t += 2000; // 2 s late by any offset
+    expect(await answer(r, { uptimeMs: sentAt })).toBe(1);
+    expect(r.sent('TIME_PING').length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('(7d)-(7e) the live offset: a newer sample with a slightly longer round trip replaces it, a much slower one does not; a clock gone back or an old one is unusable', () => {
+    const l0 = nextLiveOffset(null, 100, 40, 1000)!;
+    expect(l0).toEqual({ offsetMs: 100, rttMs: 40, at: 1000 });
+    // 5 min later: 60 ms (half 30) ≤ 20 + 300 s × 0.1 ms/s = 50 → replaced; 400 ms (half 200) → kept.
+    expect(nextLiveOffset(l0, 105, 60, 1000 + 300_000)).toEqual({ offsetMs: 105, rttMs: 60, at: 301_000 });
+    expect(nextLiveOffset(l0, 300, 400, 1000 + 300_000)).toBe(l0);
+    // The phone's clock went back: the new sample wins.
+    expect(nextLiveOffset(l0, 90, 400, 500)).toEqual({ offsetMs: 90, rttMs: 400, at: 500 });
+    expect(usableLiveOffset(l0, 1000 + LIVE_OFFSET_MAX_AGE_MS)).toBe(l0);
+    expect(usableLiveOffset(l0, 1000 + LIVE_OFFSET_MAX_AGE_MS + 1)).toBeNull();
+    expect(usableLiveOffset(l0, 999)).toBeNull();
+    expect(usableLiveOffset(null, 1000)).toBeNull();
+  });
+
+  test('(7f) the late rule follows the live offset while the stored row keeps the best round trip for event dating', async () => {
+    const r = rig();
+    await connect(r);
+    const best = await r.store.latestBoot(CAM, 0xdeadbeef);
+    expect(best?.rttMs).not.toBeNull();
+    const t0 = r.clock.t;
+    while (r.clock.t < t0 + 10 * 60_000 + 50) r.advance(100);
+    // The resync: the dashcam's clock has drifted 800 ms behind; slower echoes (40 ms) carry it.
+    const pings = r.sent('TIME_PING').filter((p) => p.epochMs >= t0 + 10 * 60_000 - 200);
+    expect(pings.length).toBeGreaterThanOrEqual(1);
+    for (const ping of pings) {
+      const backAt = ping.epochMs + 40;
+      r.clock.t = Math.max(r.clock.t, backAt);
+      r.rx({ type: 'TIME_ECHO', reqId: ping.reqId, uptimeMs: ping.epochMs + 20 - T0 + UP - 800 });
+    }
+    await r.settle();
+    // On time by the dashcam's own clock: the live offset sees it so; the old best offset would call it 800 ms late.
+    expect(await answer(r, { uptimeMs: uptime(r) - 800 })).toBe(1);
+    const stored = await r.store.latestBoot(CAM, 0xdeadbeef);
+    expect(stored).toMatchObject({ rttMs: best!.rttMs, offsetMs: best!.offsetMs });
+    expect(Math.abs(best!.offsetMs! - (T0 - UP))).toBeLessThanOrEqual(5);
+  });
+
+  test('(8) STATE cadence: every ≥ 900 ms in front; quiet in the background with no drive (only a flags change); every ≥ 900 ms while an alert sounds, ≥ 450 ms during a critical', async () => {
+    expect([STATE_EVERY_MS, STATE_EVERY_CRITICAL_MS]).toEqual([900, 450]);
+    const r = rig();
+    await connect(r);
+    let from = r.clock.t + 1;
+    for (let i = 0; i < 50; i++) r.advance(100);
+    let gaps = statesIn(r, from)
+      .slice(1)
+      .map((w, i) => w.at - statesIn(r, from)[i]!.at);
+    expect(gaps.length).toBeGreaterThanOrEqual(4);
+    for (const g of gaps) expect(g).toBeGreaterThanOrEqual(900);
+
+    // Background, no drive, nothing sounding: no STATE for a minute of ticks.
+    r.ctx.foreground = false;
+    from = r.clock.t + 1;
+    for (let i = 0; i < 600; i++) r.advance(100);
+    expect(statesIn(r, from)).toEqual([]);
+    // can_play flips (vibration only): exactly one STATE.
+    r.ctx.styleAllowsSound = false;
+    from = r.clock.t + 1;
+    for (let i = 0; i < 100; i++) r.advance(100);
+    expect(statesIn(r, from).map((w) => (w.frame as Extract<RxFrame, { type: 'STATE' }>).flags & STATE_FLAG.CAN_PLAY)).toEqual([0]);
+    r.ctx.styleAllowsSound = true;
+    r.advance(100);
+
+    // A warning sounding in the background: active again.
+    r.rx(alert({ alertId: 50, uptimeMs: uptime(r) }));
+    await r.settle();
+    from = r.clock.t + 1;
+    for (let i = 0; i < 50; i++) {
+      r.advance(100);
+      // The dashcam's STATUS every 500 ms to the routed phone keeps the alert from going stale.
+      if (i % 5 === 0) r.rx({ type: 'STATUS', uptimeMs: uptime(r), state: 3, flags: STATUS_FLAG.LIVE, fpsX10: 150, tempC: 40, bondCount: 1 });
+    }
+    const warn = statesIn(r, from);
+    gaps = warn.slice(1).map((w, i) => w.at - warn[i]!.at);
+    expect(gaps.length).toBeGreaterThanOrEqual(4);
+    for (const g of gaps) expect(g).toBeGreaterThanOrEqual(900);
+    r.rx({ type: 'ALERT_STOP', alertId: 50, reason: 0 });
+    await r.settle();
+
+    // A critical: every 450-500 ms (the ticks are 100 ms apart here).
+    r.rx(alert({ alertId: 51, sound: 3, tier: 3, uptimeMs: uptime(r) }));
+    await r.settle();
+    from = r.clock.t + 1;
+    for (let i = 0; i < 30; i++) {
+      r.advance(100);
+      r.rx({ type: 'STATUS', uptimeMs: uptime(r), state: 3, flags: STATUS_FLAG.LIVE, fpsX10: 150, tempC: 40, bondCount: 1 });
+    }
+    const crit = statesIn(r, from);
+    gaps = crit.slice(1).map((w, i) => w.at - crit[i]!.at);
+    expect(gaps.length).toBeGreaterThanOrEqual(4);
+    for (const g of gaps) {
+      expect(g).toBeGreaterThanOrEqual(450);
+      expect(g).toBeLessThanOrEqual(500);
+    }
+    r.rx({ type: 'ALERT_STOP', alertId: 51, reason: 0 });
+    await r.settle();
+    // Nothing sounding any more: quiet again.
+    from = r.clock.t + 1;
+    for (let i = 0; i < 100; i++) r.advance(100);
+    expect(statesIn(r, from)).toEqual([]);
+    // Quiet asks for no wake for a STATE (only the 10-min resync and what the alerts need).
+    expect(r.link.nextWakeAt()! - r.clock.t).toBeGreaterThan(60_000);
+  });
+
+  test('(8) quiet from the start: the first STATE after RESUME still goes out, then none', async () => {
+    const r = rig();
+    r.ctx.foreground = false;
+    await connect(r);
+    expect(r.sent('STATE')).toHaveLength(1);
+    for (let i = 0; i < 300; i++) r.advance(100);
+    expect(r.sent('STATE')).toHaveLength(1);
+  });
+
+  test('(9) a fresh probe for each new routed ALERT; ticks read the memo', async () => {
+    const r = rig();
+    await connect(r);
+    r.advance(1000);
+    r.probes.length = 0;
+    r.rx(alert({ alertId: 60, uptimeMs: uptime(r) }));
+    expect(r.probes[0]).toBe(true);
+    r.probes.length = 0;
+    r.advance(1000);
+    expect(r.probes.length).toBeGreaterThan(0);
+    expect(r.probes.every((f) => f === false)).toBe(true);
+    // A route-0 ALERT asks nothing fresh.
+    r.probes.length = 0;
+    r.rx(alert({ alertId: 61, route: 0, uptimeMs: uptime(r) }));
+    expect(r.probes.includes(true)).toBe(false);
+    await r.settle();
+  });
+
+  test('(9) a throwing probe is reported and reads as unknown (it plays)', async () => {
+    const r = rig();
+    await connect(r);
+    // The rig's probe reads r.audio: make that read throw.
+    Object.defineProperty(r, 'audio', {
+      get() {
+        throw new Error('probe failed');
+      },
+    });
+    expect(await answer(r)).toBe(1);
+    expect(r.errors.some((e) => e.startsWith('audioOutput:'))).toBe(true);
+  });
+
+  test('(11) holdAwake: before the ACK on every routed ALERT; at most once a second on frames while an alert sounds; never for a route-0 ALERT with nothing sounding; a throw is reported and the ALERT still answered', async () => {
+    expect([HOLD_AWAKE_MS, HOLD_AWAKE_EVERY_MS]).toEqual([5000, 1000]);
+    const r = rig();
+    await connect(r);
+    r.rx(alert({ alertId: 70, route: 0, uptimeMs: uptime(r) }));
+    await r.settle();
+    expect(r.holds).toEqual([]);
+    r.rx({ type: 'ALERT_STOP', alertId: 70, reason: 0 });
+    r.clear();
+    r.rx(alert({ alertId: 71, uptimeMs: uptime(r) }));
+    expect(r.holds).toHaveLength(1);
+    expect(r.holds[0]!.ms).toBe(HOLD_AWAKE_MS);
+    const ackAt = r.writes.findIndex((w) => w.frame.type === 'ALERT_ACK');
+    expect(ackAt).toBeGreaterThanOrEqual(r.holds[0]!.writesBefore);
+    expect(r.holds[0]!.writesBefore).toBe(0);
+    await r.settle();
+    // STATUS every 200 ms for 3 s while it sounds: renewed about once a second.
+    const first = r.holds[0]!.at;
+    for (let i = 0; i < 15; i++) {
+      r.clock.t += 200;
+      r.rx({ type: 'STATUS', uptimeMs: uptime(r), state: 3, flags: STATUS_FLAG.LIVE, fpsX10: 150, tempC: 40, bondCount: 1 });
+    }
+    const renewals = r.holds.slice(1).map((h) => h.at - first);
+    expect(renewals).toEqual([1000, 2000, 3000]);
+    // Stopped: frames hold nothing.
+    r.rx({ type: 'ALERT_STOP', alertId: 71, reason: 0 });
+    await r.settle();
+    const n = r.holds.length;
+    for (let i = 0; i < 10; i++) {
+      r.clock.t += 500;
+      r.rx({ type: 'STATUS', uptimeMs: uptime(r), state: 3, flags: STATUS_FLAG.LIVE, fpsX10: 150, tempC: 40, bondCount: 1 });
+    }
+    expect(r.holds).toHaveLength(n);
+    // A wake lock that throws: reported, the ALERT answered all the same.
+    r.holdThrows = true;
+    r.clear();
+    r.rx(alert({ alertId: 72, uptimeMs: uptime(r) }));
+    await r.settle();
+    expect(r.sent('ALERT_ACK')).toEqual([{ type: 'ALERT_ACK', alertId: 72, outcome: 1 }]);
+    expect(r.errors.some((e) => e.startsWith('holdAwake:'))).toBe(true);
   });
 });

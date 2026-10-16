@@ -7,9 +7,10 @@ type Status = { isLoaded?: boolean; playing?: boolean; didJustFinish: boolean };
 
 /**
  * How the next tone behaves: `finish` reports loaded then finished; `loadedOnly` reports loaded and
- * never finishes (only the port's fallback timer ends it).
+ * never finishes (only the port's fallback timer ends it); `never` reports nothing at all (a tone
+ * that never loads: the port's timers fail it).
  */
-export type ToneBehaviour = 'finish' | 'loadedOnly';
+export type ToneBehaviour = 'finish' | 'loadedOnly' | 'never';
 
 export const nativeAudio = {
   /** Behaviours for the next tones, in order; empty means `finish`. */
@@ -36,6 +37,7 @@ export function expoAudioMock() {
           return { remove: () => (listener = null) };
         },
         play: () => {
+          if (behaviour === 'never') return;
           queueMicrotask(() => {
             listener?.({ isLoaded: true, playing: true, didJustFinish: false });
             if (behaviour === 'finish') queueMicrotask(() => listener?.({ isLoaded: true, didJustFinish: true }));

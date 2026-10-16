@@ -4,16 +4,37 @@
 //
 // `tick(now)` runs on every drive row, every inbound frame and a 1 s timer while the app is in the
 // foreground (Android pauses JS timers in the background unless a headless task runs; rows keep
-// arriving during a drive). Each tick: STATE if ≥ 900 ms since the last one, ACKs batched ≤ 200 ms,
-// TIME_PINGs due, RESUME when due, the 3 s staleness stop, alert repeats, the HELLO retry. With JS
-// timers paused (`timersPaused`), every drive row sends STATE unless one went out in the last 300 ms
-// (the row's timer pump or a dashcam frame just sent it), so each row renews the lease once: an
+// arriving during a drive). Each tick: STATE when due, ACKs batched ≤ 200 ms, TIME_PINGs due, RESUME
+// when due, the 3 s staleness stop, alert repeats, the HELLO retry.
+//
+// Phone-first sound (BLE_PROTOCOL §1, §5): the dashcam routes every alert to its connected primary
+// phone, which answers ALERT_ACK(1) and plays it, or ALERT_ACK(0). The phone can play when its player
+// works, its alert style allows sound, no call is ringing or live (the host's signal and the audio
+// probe), the media volume is at least a quarter, no headphones are the output, and no playback
+// failed in the last 30 s, whether a drive is open or not and whether RoadWise is in front or not.
+//
+// STATE cadence. Active (RoadWise in front, a drive open or recording, or a DashPal alert sounding):
+// STATE when ≥ 900 ms since the last one (≥ 450 ms while a DashPal critical sounds, inside the
+// dashcam's 1.5 s quiet guard). With JS timers paused (`timersPaused`), every drive row sends STATE
+// unless one went out in the last 300 ms (the row's timer pump or a dashcam frame just sent it): an
 // Android row closes up to 1.5 s after its second, so rows come up to about 2.5 s apart, and the
-// 900 ms gate could stretch a renewal past the 3 s lease.
+// 900 ms gate could stretch the gap past the 3 s TTL. Quiet (otherwise): STATE only when its flags
+// change, plus the first one after RESUME, so a phone in range in the background is not woken every
+// 2 s by the dashcam's STATUS answering its STATE.
+//
+// Late ALERTs: a new routed ALERT handled more than 750 ms (tier 3: 400 ms) after its `uptime_ms`
+// is answered ALERT_ACK(0) and shown only (the dashcam's buzzer has it), judged only on a clock
+// offset measured on this connection in the last 10 minutes (the live offset, ranked with a 100-ppm
+// drift allowance). Without one the rule is skipped and TIME_PINGs go out at once; with no offset at
+// all (no HELLO yet on this connection) the ALERT is answered ALERT_ACK(0). The boot's best offset
+// (the lowest round trip ever, also from the stored row) still dates events.
+//
+// Android stays awake for an alert: `holdAwake(5 s)` runs first on every routed ALERT and on any
+// frame (at most once a second) while a DashPal alert sounds.
 //
 // Connection sequence after the transport subscribed to TX (§3.3): COMMAND 7 hello → HELLO →
-// TIME_PING ×3 (100 ms apart) → RESUME after the 3 echoes or 500 ms → STATE every second, TIME_PING
-// ×3 again every 10 min.
+// TIME_PING ×3 (100 ms apart) → RESUME after the 3 echoes or 500 ms → STATE as above, TIME_PING ×3
+// again every 10 min.
 //
 // Events (§3.6): persisted (INSERT OR IGNORE, a fresh v4 id) before they are acknowledged; the ACK
 // and RESUME cursor is the lowest seq at or above the boot's floor not yet stored. An event that
@@ -54,10 +75,12 @@ import { BOOT_GENERATION, type DashcamStore } from './store';
 // ——— timing (plan §3.3, §3.5, §3.7, §7.3) ———
 
 export const STATE_EVERY_MS = 900;
+/** While a DashPal critical sounds: STATE at least this often (the dashcam's quiet guard is 1.5 s). */
+export const STATE_EVERY_CRITICAL_MS = 450;
 /**
  * With JS timers paused, a row sends STATE unless one went out this recently: the row's own timer
  * pump (the wake) or a dashcam frame may have sent it a moment before, and a row sends one STATE at
- * most. 0.3 s plus the longest row gap (about 2.5 s) stays inside the 3 s lease.
+ * most. 0.3 s plus the longest row gap (about 2.5 s) stays inside the 3 s TTL.
  */
 export const ROW_STATE_FLOOR_MS = 300;
 export const ACK_BATCH_MS = 200;
@@ -66,12 +89,29 @@ export const PINGS_PER_SYNC = 3;
 export const RESUME_AFTER_MS = 500;
 export const RESYNC_EVERY_MS = 10 * 60_000;
 /**
- * A routed ALERT the phone handles this long after the dashcam sent it (by the boot's clock offset)
+ * A routed ALERT the phone handles this long after the dashcam sent it (by the live clock offset)
  * is at or past the dashcam's ACK deadline (`device.ble_ack_ms`, 750 by default, counted from a
  * later moment): the buzzer has it, so the phone shows it and answers ACK(0) instead of playing it
- * a second time. Erring early only leaves the sound to the buzzer.
+ * a second time. Erring early only leaves the sound to the buzzer. These mirror the dashcam's
+ * default deadlines (INFO carries no `ble_ack_ms`): with it set lower, a phone may start a warning
+ * the buzzer took and the ALERT_FALLBACK behind it stops it within a round trip; set higher, the
+ * phone gives up some alerts it could have played (the buzzer has them).
  */
 export const LATE_ALERT_MS = 750;
+/** The same for a critical (tier 3) alert: the dashcam waits `min(ble_ack_ms, 400)` for it. */
+export const LATE_CRITICAL_ALERT_MS = 400;
+/** The late rule uses an offset measured on this connection at most this long ago. */
+export const LIVE_OFFSET_MAX_AGE_MS = 10 * 60_000;
+/** The live offset's drift allowance (100 ppm): a newer sample may have a slightly longer round trip. */
+export const OFFSET_DRIFT_MS_PER_S = 0.1;
+/** After a playback failure the phone answers "cannot play" for this long (the buzzer plays). */
+export const PLAYER_RETRY_MS = 30_000;
+/** The media volume (0-1) below which a DashPal alert would not be heard: the buzzer plays it. */
+export const AUDIBLE_VOLUME_MIN = 0.25;
+/** Android: the wake lock a routed ALERT (or a frame while an alert sounds) holds, ms. */
+export const HOLD_AWAKE_MS = 5000;
+/** …renewed at most this often by frames while an alert sounds. */
+export const HOLD_AWAKE_EVERY_MS = 1000;
 /** A HELLO arriving later than this after its request gives no offset sample. */
 export const HELLO_OFFSET_MAX_MS = 1000;
 /** No HELLO this long after COMMAND 7: ask again. */
@@ -107,13 +147,13 @@ export interface LinkContext {
    * drive. An event arriving otherwise is stored as ignored.
    */
   driveOpen: boolean;
-  /** the app is in the foreground */
+  /** the app is in the foreground (the STATE cadence) */
   foreground: boolean;
   /** the alert player can sound (host `alertsAvailable`) */
   playerAvailable: boolean;
   /** the alert style is not vibration-only */
   styleAllowsSound: boolean;
-  /** a call is active (iOS; Android has no signal and reports false) */
+  /** the drive host's call signal (iOS rows); the audio probe reads a call on both platforms */
   callActive: boolean;
   /** "Also beep on DashPal" */
   buzzerToo: boolean;
@@ -146,6 +186,47 @@ export interface LinkSnapshot {
   counters: { badFrames: number; lateAlerts: number; stored: number; ignored: number; duplicates: number; orphanEvents: number; storeErrors: number };
 }
 
+/** What a DashPal alert would play into now (drive-sense `audioOutputState`). Null: unknown. */
+export interface AudioOutputProbe {
+  callActive: boolean;
+  volume: number | null;
+  headphones: boolean | null;
+}
+
+/** Nothing known about the output: no call, and nothing that blocks a sound. */
+export const AUDIO_UNKNOWN: AudioOutputProbe = { callActive: false, volume: null, headphones: null };
+
+/** The output would be heard: the media volume at least a quarter (or unknown) and no headphones. */
+export function audible(p: AudioOutputProbe): boolean {
+  return (p.volume === null || p.volume >= AUDIBLE_VOLUME_MIN) && p.headphones !== true;
+}
+
+/** A clock offset sample (epoch − uptime) taken on this connection, with its round trip and when. */
+export interface LiveOffset {
+  offsetMs: number;
+  rttMs: number;
+  at: number;
+}
+
+/**
+ * The live offset after a new sample: the sample is kept when there is none yet, when the phone's
+ * clock went back since the kept one, or when its half round trip is at most the kept one's plus the
+ * drift since that one was taken (`OFFSET_DRIFT_MS_PER_S`, 100 ppm), so a newer sample with a
+ * slightly longer round trip replaces an old one and a much slower one does not.
+ */
+export function nextLiveOffset(l: LiveOffset | null, offsetMs: number, rttMs: number, now: number): LiveOffset | null {
+  if (l === null || now < l.at || rttMs / 2 <= l.rttMs / 2 + ((now - l.at) / 1000) * OFFSET_DRIFT_MS_PER_S) {
+    return { offsetMs, rttMs, at: now };
+  }
+  return l;
+}
+
+/** The live offset the late rule may use: at most 10 min old, and the phone's clock not gone back since. */
+export function usableLiveOffset(l: LiveOffset | null, now: number): LiveOffset | null {
+  if (l === null || now < l.at || now - l.at > LIVE_OFFSET_MAX_AGE_MS) return null;
+  return l;
+}
+
 export interface LinkDeps {
   now(): number;
   store: Pick<DashcamStore, 'latestBoot' | 'ensureBoot' | 'offerOffset' | 'insertEvent' | 'cursor' | 'addCoverage'>;
@@ -162,6 +243,13 @@ export interface LinkDeps {
   wake?(at: number | null): void;
   /** Sleep `ms` (the drive-end catch-up wait). */
   delay(ms: number): Promise<void>;
+  /**
+   * The audio output now (call, media volume, headphones). `fresh`: read it now (a new routed
+   * ALERT); otherwise a read at most 500 ms old will do. Absent: unknown (never blocks a sound).
+   */
+  audioOutput?(fresh: boolean): AudioOutputProbe;
+  /** Android: keep the CPU awake for `ms` (sync; a wake lock renewed by each call). */
+  holdAwake?(ms: number): void;
   /**
    * JS timers do not fire now (Android in the background: the host pauses them unless a headless
    * task runs). The drive-end wait then does not wait at all, since a sleep might never end.
@@ -188,9 +276,11 @@ interface Session {
   cursor: number;
   /** the highest seq + 1 the dashcam has announced this boot */
   announcedNext: number;
-  /** best clock offset (epoch − uptime) of this boot, in memory */
+  /** best clock offset (epoch − uptime) of this boot, in memory (event dating; may come from the stored row) */
   offsetMs: number | null;
   rttMs: number | null;
+  /** the best offset sample taken on this connection, for the late rule (never the stored row) */
+  live: LiveOffset | null;
   pings: Map<number, number>;
   pingAt: number[];
   echoes: number;
@@ -198,6 +288,8 @@ interface Session {
   resyncAt: number | null;
   nextSyncAt: number;
   lastStateAt: number | null;
+  /** the flags of the last STATE sent (the quiet cadence sends on a change) */
+  lastStateFlags: number | null;
   lastFrameAt: number;
   ackDueAt: number | null;
   /** the cursor last sent in an ACK or STATE */
@@ -233,7 +325,8 @@ export interface DashcamLink {
   /** Drive end: wait ≤ 3 s for the phone to catch up, then stamp the sync time on the drive. */
   beforeFinalize(clientTripId: string, opts?: { dryRun?: boolean }): Promise<void>;
   command(op: number, arg?: number): Promise<boolean>;
-  canPlay(): boolean;
+  /** The phone can play a DashPal alert now; `fresh`: with the audio output read now. */
+  canPlay(fresh?: boolean): boolean;
   sendAlertAck(alertId: number, outcome: 0 | 1): void;
   playerUnavailable(): void;
   continuousAlertActive(): boolean;
@@ -273,6 +366,10 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
   let lastSnapshot: LinkSnapshot | null = null;
   /** the drive-end wait's sleeps, woken early by any tick or change */
   let napping: (() => void)[] = [];
+  /** after a playback failure the phone answers "cannot play" until then */
+  let failedUntil = 0;
+  /** the last `holdAwake` call (frames while an alert sounds renew it at most once a second) */
+  let lastHoldAt: number | null = null;
 
   function wakeNappers(): void {
     if (napping.length === 0) return;
@@ -289,7 +386,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     player: deps.player,
     now: () => deps.now(),
     sendAck: (alertId, outcome) => self.sendAlertAck(alertId, outcome),
-    canPlay: () => canPlay(),
+    canPlay: (fresh) => canPlay(fresh === true),
     onVisual: (v) => {
       visual = v;
     },
@@ -368,6 +465,16 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     }
   }
 
+  function holdAwake(now: number): void {
+    lastHoldAt = now;
+    if (!deps.holdAwake) return;
+    try {
+      deps.holdAwake(HOLD_AWAKE_MS);
+    } catch (e) {
+      report(e, 'holdAwake');
+    }
+  }
+
   function send(frame: RxFrame, opts: { withResponse: boolean; urgent?: boolean }): Promise<boolean> {
     return deps.write(encodeRx(frame), opts).then(
       () => true,
@@ -378,9 +485,27 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     );
   }
 
-  // ——— the STATE lease (§3.2, §3.7) ———
+  // ——— can play, STATE (§3.2, §5) ———
 
-  function canPlay(): boolean {
+  function probe(fresh: boolean): AudioOutputProbe {
+    if (!deps.audioOutput) return AUDIO_UNKNOWN;
+    try {
+      return deps.audioOutput(fresh) ?? AUDIO_UNKNOWN;
+    } catch (e) {
+      report(e, 'audioOutput');
+      return AUDIO_UNKNOWN;
+    }
+  }
+
+  /** The phone can play a DashPal alert now (whether a drive is open or RoadWise in front or not). */
+  function canPlayIn(c: LinkContext, fresh: boolean): boolean {
+    if (!c.playerAvailable || !c.styleAllowsSound || c.callActive) return false;
+    if (deps.now() < failedUntil) return false;
+    const p = probe(fresh);
+    return !p.callActive && audible(p);
+  }
+
+  function canPlay(fresh = false): boolean {
     let c: LinkContext;
     try {
       c = deps.context();
@@ -388,10 +513,21 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       report(e, 'context');
       return false;
     }
-    return (c.recording || c.foreground) && c.playerAvailable && c.styleAllowsSound && !c.callActive;
+    return canPlayIn(c, fresh);
   }
 
-  function stateFrame(now: number, s: Session): RxFrame {
+  /** STATE every 900 ms (450 ms during a critical) rather than on a change only (see the header). */
+  function isActive(): boolean {
+    try {
+      const c = deps.context();
+      return c.foreground || c.driveOpen || c.recording || alerts.playingAny();
+    } catch (e) {
+      report(e, 'context');
+      return true;
+    }
+  }
+
+  function stateFrame(now: number, s: Session): Extract<RxFrame, { type: 'STATE' }> {
     let c: LinkContext | null = null;
     try {
       c = deps.context();
@@ -399,7 +535,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       report(e, 'context');
     }
     let flags = 0;
-    if (c && (c.recording || c.foreground) && c.playerAvailable && c.styleAllowsSound && !c.callActive) flags |= STATE_FLAG.CAN_PLAY;
+    if (c && canPlayIn(c, false)) flags |= STATE_FLAG.CAN_PLAY;
     if (c?.buzzerToo) flags |= STATE_FLAG.BUZZER_TOO;
     if (c?.recording) flags |= STATE_FLAG.DRIVE_ACTIVE;
     let speedCms = 0;
@@ -472,21 +608,30 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
         s.resyncAt = null;
         sendResume(s, now);
       }
-      // STATE every second once resumed (carries the ACK too); once per row while timers are paused.
-      if (
-        s.phase === 'resumed' &&
-        (s.lastStateAt === null ||
-          now - s.lastStateAt >= STATE_EVERY_MS ||
-          now < s.lastStateAt ||
-          (fromRow && now - s.lastStateAt >= ROW_STATE_FLOOR_MS && timersPaused()))
-      ) {
-        s.lastStateAt = now;
-        const frame = stateFrame(now, s);
-        if (frame.type === 'STATE' && s.bootReady) {
-          s.ackSent = frame.ackSeq;
-          if (s.ackSent >= s.cursor) s.ackDueAt = null;
+      // STATE once resumed (it carries the ACK too): active, every 900 ms (450 ms during a critical)
+      // and once per row while timers are paused; quiet, when its flags change. The first one always.
+      if (s.phase === 'resumed') {
+        let frame: Extract<RxFrame, { type: 'STATE' }> | null = null;
+        let due = s.lastStateAt === null;
+        if (!due && s.lastStateAt !== null) {
+          if (isActive()) {
+            const every = alerts.playingCritical() ? STATE_EVERY_CRITICAL_MS : STATE_EVERY_MS;
+            due = now - s.lastStateAt >= every || now < s.lastStateAt || (fromRow && now - s.lastStateAt >= ROW_STATE_FLOOR_MS && timersPaused());
+          } else {
+            frame = stateFrame(now, s);
+            due = frame.flags !== s.lastStateFlags;
+          }
         }
-        void send(frame, { withResponse: false });
+        if (due) {
+          frame ??= stateFrame(now, s);
+          s.lastStateAt = now;
+          s.lastStateFlags = frame.flags;
+          if (s.bootReady) {
+            s.ackSent = frame.ackSeq;
+            if (s.ackSent >= s.cursor) s.ackDueAt = null;
+          }
+          void send(frame, { withResponse: false });
+        }
       }
       // Batched ACK.
       if (s.ackDueAt !== null && now >= s.ackDueAt && s.bootReady && s.wireBoot !== null) {
@@ -521,7 +666,8 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       if (s.phase === 'syncing' && s.resumeDueAt !== null && s.bootReady) times.push(s.resumeDueAt);
       if (s.phase === 'resumed' && s.resyncAt !== null && s.bootReady) times.push(s.resyncAt);
       if (s.phase === 'resumed') {
-        times.push((s.lastStateAt ?? 0) + STATE_EVERY_MS);
+        // Quiet: no STATE is ever due by time (a flags change comes with a tick of its own).
+        if (s.lastStateAt === null || isActive()) times.push((s.lastStateAt ?? 0) + (alerts.playingCritical() ? STATE_EVERY_CRITICAL_MS : STATE_EVERY_MS));
         times.push(s.nextSyncAt);
       }
       if (s.ackDueAt !== null && s.bootReady && s.wireBoot !== null) times.push(s.ackDueAt);
@@ -584,6 +730,14 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     });
   }
 
+  function offerLive(s: Session, offsetMs: number, rttMs: number, now: number): void {
+    s.live = nextLiveOffset(s.live, offsetMs, rttMs, now);
+  }
+
+  function liveOffset(s: Session, now: number): LiveOffset | null {
+    return usableLiveOffset(s.live, now);
+  }
+
   /** An offset sample (epoch − uptime) with its round trip: kept when it beats the best so far. */
   function offerOffset(s: Session, offsetMs: number, rttMs: number): void {
     if (s.rttMs === null || rttMs < s.rttMs) {
@@ -622,6 +776,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       s.bootReady = false;
       s.offsetMs = null;
       s.rttMs = null;
+      s.live = null;
       s.announcedNext = 0;
     }
     // An offset sample when the HELLO answers a request within 1 s. Its error can be the whole
@@ -634,6 +789,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     }
     s.helloRequestAt = null;
     s.helloRetryAt = null;
+    if (sample) offerLive(s, sample.offset, sample.rtt, now);
 
     if (sameBoot && s.phase !== 'hello') {
       // The answer to our RESUME (or a second hello): no new handshake.
@@ -702,6 +858,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       announcedNext: 0,
       offsetMs: null,
       rttMs: null,
+      live: null,
       pings: new Map(),
       pingAt: [],
       echoes: 0,
@@ -709,6 +866,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       resyncAt: null,
       nextSyncAt: now + RESYNC_EVERY_MS,
       lastStateAt: null,
+      lastStateFlags: null,
       lastFrameAt: now,
       ackDueAt: null,
       ackSent: -1,
@@ -882,6 +1040,11 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       s.lastFrameAt = now;
       heldStale = false;
       const f = decoded.frame;
+      // Android: the CPU stays up from a routed ALERT until 5 s after the last frame of a sounding
+      // alert, before anything else is done with the frame (the ACK and the first play included).
+      if ((f.type === 'ALERT' && f.route === 1) || (alerts.playingAny() && (lastHoldAt === null || now - lastHoldAt >= HOLD_AWAKE_EVERY_MS || now < lastHoldAt))) {
+        holdAwake(now);
+      }
       switch (f.type) {
         case 'HELLO':
           onHello(f, now);
@@ -894,11 +1057,25 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
           break;
         case 'ALERT': {
           const inherit = inheritFor(s, f, now);
-          if (f.route === 1 && !alerts.has(f.alertId) && s.offsetMs !== null && now - (s.offsetMs + f.uptimeMs) > LATE_ALERT_MS) {
-            counters.lateAlerts += 1;
-            alerts.onAlert({ ...f, route: 0 }, inherit);
-            self.sendAlertAck(f.alertId, 0);
-            break;
+          if (f.route === 1 && !alerts.has(f.alertId)) {
+            // No clock offset at all on this connection (no HELLO yet, a relaunched app): it can
+            // never be judged in time, so the buzzer takes it at once.
+            let late = s.offsetMs === null;
+            if (!late) {
+              const lo = liveOffset(s, now);
+              if (lo === null) {
+                // No live offset: the dashcam's deadline decides; measure again on this wake.
+                s.nextSyncAt = now;
+              } else {
+                late = now - (lo.offsetMs + f.uptimeMs) > (f.tier >= 3 ? LATE_CRITICAL_ALERT_MS : LATE_ALERT_MS);
+              }
+            }
+            if (late) {
+              counters.lateAlerts += 1;
+              alerts.onAlert({ ...f, route: 0 }, inherit);
+              self.sendAlertAck(f.alertId, 0);
+              break;
+            }
           }
           const ack = alerts.onAlert(f, inherit);
           // ALERT_ACK before playback starts (the first play runs after this returns).
@@ -917,6 +1094,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
           s.pings.delete(f.reqId);
           s.echoes += 1;
           offerOffset(s, Math.round((sentAt + now) / 2) - f.uptimeMs, now - sentAt);
+          offerLive(s, Math.round((sentAt + now) / 2) - f.uptimeMs, now - sentAt, now);
           break;
         }
         case 'PAIRED':
@@ -1014,6 +1192,8 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     },
 
     playerUnavailable() {
+      // A sound failed: "cannot play" for 30 s (ALERT_ACK(0) at once, the buzzer plays), then retry.
+      failedUntil = deps.now() + PLAYER_RETRY_MS;
       alerts.playerUnavailable();
     },
 
