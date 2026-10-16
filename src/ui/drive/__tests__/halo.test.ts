@@ -151,9 +151,9 @@ describe('phone and DashPal severities (§4.2, §4.3)', () => {
     expect(dashpalSeverity(held(2, 3), T + 10_000)).toBeCloseTo(1, 6);
     expect(dashpalSeverity(held(2, 3), T + 5000)).toBeCloseTo(0.9, 6);
   });
-  test('warning: 0.50 + 0.03 per second, up to 0.80; advisory continuous 0.30; none 0; a future since counts 0 s', () => {
+  test('warning: 0.50 + 0.03 per second, up to 0.80; advisory continuous 0.30 + 0.01 per second, up to 0.45 (below a warning); none 0; a future since counts 0 s', () => {
     expect([0, 5000, 10_000, 60_000].map((d) => dashpalSeverity(held(1, 2), T + d))).toEqual([0.5, expect.closeTo(0.65, 6), expect.closeTo(0.8, 6), 0.8]);
-    expect(dashpalSeverity(held(5, 1), T + 9000)).toBe(0.3);
+    expect([0, 9000, 15_000, 600_000].map((d) => dashpalSeverity(held(5, 1), T + d))).toEqual([0.3, expect.closeTo(0.39, 6), expect.closeTo(0.45, 6), 0.45]);
     expect(dashpalSeverity(null, T)).toBe(0);
     expect(dashpalSeverity(held(1, 2, 0, T + 60_000), T)).toBe(0.5);
   });

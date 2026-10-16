@@ -8,7 +8,8 @@
 //   (`nextSpeedingHold`).
 // - Phone use: 0.65 once the pickup counts, rising to 1 at 30 s of use, until the episode closes.
 // - DashPal: a critical 0.80 + 0.07 per level + 0.02 per second (≤ 1); a warning, driver-not-visible
-//   among them, 0.50 + 0.03 per second (≤ 0.80); a continuous advisory 0.30.
+//   among them, 0.50 + 0.03 per second (≤ 0.80); a continuous advisory 0.30 + 0.01 per second (≤ 0.45,
+//   below a warning's start).
 // The strongest wins. Colour: calm blue-white → yellow (0.30) → orange (0.55) → red (1), in OKLab.
 // Calm flows (light moving round the ring) and never pulses; any pulse means a warning, faster the
 // higher `s`. Sudden events burst: a few quick pulses (2.5 a second), then back.
@@ -169,7 +170,7 @@ export function dashpalSeverity(held: HeldDashpal | null, now: number): number {
   const level = Math.max(0, held.level);
   if (held.tier >= 3) return Math.min(1, Math.max(0.8, 0.8 + 0.07 * level + 0.02 * d));
   if (held.tier === 2) return Math.min(0.8, 0.5 + 0.03 * d);
-  return 0.3;
+  return Math.min(0.45, 0.3 + 0.01 * d);
 }
 
 // ——— bursts ———
