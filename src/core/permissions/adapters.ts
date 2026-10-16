@@ -9,6 +9,8 @@ import { Linking, PermissionsAndroid, Platform } from 'react-native';
 
 import type { ReminderLocationAnswer } from '@drive-sense';
 
+import { blockedDuringDrive } from '@/drive/leave';
+
 import { resolveDriveSense, type DriveSensePort } from './driveSensePort';
 import type {
   BatteryOptimization,
@@ -169,9 +171,17 @@ const lazyBattery: BatteryPort = {
   isLowPowerModeEnabledAsync: async () => (await import('expo-battery')).isLowPowerModeEnabledAsync(),
 };
 
+// Every Settings page RoadWise opens goes through here. During a drive it opens nothing and says
+// "End the drive first": leaving RoadWise mid-drive counts as phone use (src/drive/leave.ts).
 const rnLinking: LinkingPort = {
-  openSettings: () => Linking.openSettings(),
-  sendIntent: (action) => Linking.sendIntent(action),
+  openSettings: async () => {
+    if (blockedDuringDrive()) return;
+    await Linking.openSettings();
+  },
+  sendIntent: async (action) => {
+    if (blockedDuringDrive()) return;
+    await Linking.sendIntent(action);
+  },
 };
 
 const lazyBluetooth: BluetoothPort = {

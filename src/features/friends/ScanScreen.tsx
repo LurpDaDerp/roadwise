@@ -1,7 +1,9 @@
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Linking, View } from 'react-native';
+import { View } from 'react-native';
+
+import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 
 import { TopBar } from '@/features/settings/parts';
 import { parseAddLink, profileHref } from '@/features/social/links';
@@ -57,7 +59,7 @@ export function ScanScreen() {
         {permission.canAskAgain ? (
           <Button label={copy.allowCamera} icon="camera" onPress={() => void requestPermission()} testID="scan-allow" />
         ) : (
-          <Button label={copy.openSettings} variant="secondary" onPress={() => void Linking.openSettings()} testID="scan-settings" />
+          <Button label={copy.openSettings} variant="secondary" onPress={() => void defaultPermissionsAdapter().openAppSettings().catch(() => {})} testID="scan-settings" />
         )}
       </View>
     );

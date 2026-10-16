@@ -1,6 +1,7 @@
 import * as WebBrowser from 'expo-web-browser';
-import { Pressable, useWindowDimensions, View } from 'react-native';
+import { Platform, Pressable, useWindowDimensions, View } from 'react-native';
 
+import { blockedDuringDrive } from '@/drive/leave';
 import { Text, useTheme } from '@/ui';
 
 import type { LegalDocument, LegalState } from './legal';
@@ -21,10 +22,13 @@ const openInBrowser = (url: string): Promise<unknown> => WebBrowser.openBrowserA
 export function LegalLinks({
   legal,
   open = openInBrowser,
+  os = Platform.OS,
 }: {
   legal: LegalState;
   /** Injectable for tests; defaults to the in-app browser. */
   open?: (url: string) => Promise<unknown>;
+  /** Injectable for tests; defaults to this phone's. */
+  os?: string;
 }) {
   const th = useTheme();
   const { fontScale } = useWindowDimensions();
@@ -44,6 +48,9 @@ export function LegalLinks({
           accessibilityLabel={label}
           accessibilityHint={legalLinksCopy.opens}
           onPress={() => {
+            // On Android the browser opens outside RoadWise: not during a drive. On iPhone it
+            // opens over RoadWise, which stays on screen.
+            if (os === 'android' && blockedDuringDrive()) return;
             // A phone with no browser to hand is not a crash; the link simply does nothing.
             open(doc.url).catch(() => {});
           }}
