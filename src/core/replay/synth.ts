@@ -131,6 +131,15 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
+  /** The minor episode's 20 s at 41 mph, every over-limit row rating its speed at 3 m/s: no speeding event. */
+  'speeding-poor-speedacc': () => ({
+    name: 'speeding-poor-speedacc',
+    rows: drive(240, (i) => ({ speedMph: between(i, 60, 80) ? 41 : 34, speedAcc: between(i, 60, 80) ? 3 : 0.5 })),
+    limits: [posted(35)],
+    expected: [{ type: 'speeding', startsNear: at(60), absent: true }],
+    noEvents: true,
+  }),
+
   /** Speeding with a poor fix (hAcc 40 m): no speeding event. */
   'speeding-poor-gps': () => ({
     name: 'speeding-poor-gps',
@@ -155,6 +164,15 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     rows: drive(200, (i) => ({ speedMph: i >= 100 ? 25 : 35, aLonMin: i === 100 ? -0.45 : -0.02 })),
     limits: [posted(35)],
     expected: [{ type: 'hard_brake', startsNear: at(100), tier: 'minor' }],
+  }),
+
+  /** The confirmed brake's drive, the phone rating its speed at 3 m/s on the brake and the row after: the GNSS cannot confirm it. */
+  'hard-brake-poor-speedacc': () => ({
+    name: 'hard-brake-poor-speedacc',
+    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 25 : 35, aLonMin: i === 100 ? -0.45 : -0.02, speedAcc: i === 100 || i === 101 ? 3 : 0.5 })),
+    limits: [posted(35)],
+    expected: [{ type: 'hard_brake', startsNear: at(100), absent: true }],
+    noEvents: true,
   }),
 
   /** A 0.60 g brake the GNSS confirms (45 → 30 mph): severe. */
