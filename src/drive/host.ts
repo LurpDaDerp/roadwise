@@ -22,11 +22,12 @@ import { decisionFor } from '@/core/alerts/policy';
 import type { AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
 import { knownSpeed } from '@/core/detectors/common';
+import { LEAVE_WAIT_S, RESTART_GRACE_S } from '@/core/detectors/phoneSwitch';
 import type { AdoptedTrip, AlertEvent, EndCause, EngineSnapshot, EngineStatus, TripSession } from '@/core/engine/engine.types';
 import { closeDrive, isDropped, type DropReason } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
 import { createRecorder } from '@/core/engine/recorder';
-import type { FeatureRow } from '@/core/engine/types';
+import type { DetectorSuite, FeatureRow } from '@/core/engine/types';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { dashcamFinalizeDeps } from '@/dashcam/finalizeDeps';
 import { createTripsRepo, type Db, type TripStatus } from '@/data/db';
@@ -38,7 +39,8 @@ import { KMH_PER_MPH, metersToMiles, mpsToMph } from '@/lib/units';
 
 import type { DriveDisplay } from './display';
 import { clearDropNotice, writeDropNotice } from './dropNotice';
-import { detectorContext, isBusyStatus, NO_SWITCH, type PhoneSwitchCtx } from './policy';
+import { type LeaveState, readPhoneSwitch, writePhoneSwitch } from './phoneSwitchStore';
+import { detectorContext, isBusyStatus, NO_SWITCH, type PhoneSwitchCtx, switchSignalFor } from './policy';
 import type { DriveSource } from './source';
 import { createTicker, type Scheduler } from './ticks';
 
@@ -109,6 +111,17 @@ export interface DriveHost {
   sessionEnded(): Promise<void>;
   reportAlertsUnavailable(): void;
   reportAlertsAvailable(): void;
+  /**
+   * The navigation button is opening the navigation app (only while recording): from the next row
+   * until RoadWise is back in front, the rows are excused from screen switches (stamped
+   * `exempt: 'nav'`). If RoadWise has not left within `LEAVE_WAIT_S` of the last row seen at the
+   * tap (row clock), the exemption ends. Persisted, so a relaunch keeps it.
+   */
+  beginLeave(): void;
+  /** The navigation app did not open: the exemption ends at once. */
+  cancelLeave(): void;
+  /** A drive is recording (the "End the drive first" guard). */
+  recording(): boolean;
 }
 
 /**
@@ -188,6 +201,17 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   /** This drive's screen-switch signal (fixed at the Start tap or restored on adopt), and the phone. */
   let phoneSwitch: PhoneSwitchCtx = NO_SWITCH;
   let platform: 'ios' | 'android' = 'android';
+  /** The navigation button's exemption in progress, or null. */
+  let leave: LeaveState | null = null;
+  /** After an adopt (a process restart mid-drive): the home screen it left behind is excused, at most `RESTART_GRACE_S`. Never persisted. */
+  let restart: { firstTs: number | null } | null = null;
+  /** `ts` of the last row this host took in (the leave window's clock). */
+  let lastRowTs: number | null = null;
+  /** The drive's detector suite (its in-drive lock proof), and whether that proof went to native. */
+  let suite: DetectorSuite | null = null;
+  let proofWritten = false;
+  /** The drive's `drive.phoneSwitch` writes, in order; a failed one is reported and never blocks a row. */
+  let switchWrites: Promise<void> = Promise.resolve();
   let screenLocked = false;
   let lastFinalized: LastFinalized = null;
   let soundFailedThisDrive = false;
@@ -252,7 +276,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         if (persist) limits.prefetch(lat, lng, course);
       },
     },
-    createDetectors: () => createDetectors(newId),
+    createDetectors: () => (suite = createDetectors(newId)),
     ctx: () => detectorContext(callActive, phoneSwitch, platform),
     onAlert(alert: AlertEvent) {
       const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
@@ -386,6 +410,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       limits.resetTrip();
       startTripPending = false;
       deps.display?.end();
+      phoneSwitch = NO_SWITCH;
+      leave = null;
+      restart = null;
+      lastRowTs = null;
+      suite = null;
+      proofWritten = false;
     }
     publish();
     if (closed) afterClose();
@@ -459,13 +489,70 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   // --- native events -------------------------------------------------------------------------------
 
+  /** Persist the drive's switch state (fire and forget, in order). */
+  function persistSwitch(): void {
+    if (!persist) return;
+    const id = engine.snapshot().clientTripId;
+    if (id === null) return;
+    const value = { clientTripId: id, signal: phoneSwitch.signal, lockDelayMs: phoneSwitch.lockDelayMs, leave: leave === null ? null : { ...leave } };
+    switchWrites = switchWrites.then(() => writePhoneSwitch(db, value)).catch((e: unknown) => report(e, 'phoneSwitch'));
+  }
+
+  /**
+   * The exemption stamps (design §6.2), on the row clock, before the engine sees the row: the stamped
+   * row is what is stored and replayed. `restart` first: excused until RoadWise is in front, a lock or
+   * the screen off, or `RESTART_GRACE_S` of rows. Then the navigation button's: stamped until RoadWise
+   * is back in front after leaving; ended if it never left within `LEAVE_WAIT_S`.
+   */
+  function stamp(row: FeatureRow): void {
+    if (restart !== null) {
+      if (row.appForeground || !row.screenOn || row.locked) {
+        restart = null;
+      } else {
+        restart.firstTs ??= row.ts;
+        if (row.ts - restart.firstTs < RESTART_GRACE_S * 1000) row.exempt = 'restart';
+        else restart = null;
+      }
+    }
+    if (leave !== null) {
+      leave.sinceRowTs ??= row.ts;
+      if (!row.appForeground) {
+        row.exempt = 'nav';
+        if (!leave.left) {
+          leave.left = true;
+          persistSwitch();
+        }
+      } else if (leave.left || row.ts - leave.sinceRowTs > LEAVE_WAIT_S * 1000) {
+        // back in front (not stamped), or the navigation app never took the screen
+        leave = null;
+        persistSwitch();
+      } else {
+        row.exempt = 'nav';
+      }
+    }
+  }
+
+  /** iOS: the drive's first in-drive lock proof goes to native once, so later drives count switches from their start. */
+  function writeProof(): void {
+    if (proofWritten || suite === null || platform !== 'ios') return;
+    const proof = suite.lockProof();
+    if (proof === null) return;
+    proofWritten = true;
+    source.markLockProof?.(Math.min(proof.delayMs, 60_000))?.catch((e: unknown) => report(e, 'lockProof'));
+  }
+
   async function onRow(row: FeatureRow): Promise<void> {
     screenLocked = row.locked;
+    if (engine.snapshot().status === 'recording') {
+      lastRowTs = row.ts;
+      stamp(row);
+    }
     if (startTripPending && row.gnssValid) {
       startTripPending = false;
       if (persist) limits.startTrip(row.lat, row.lng, row.course);
     }
     await engine.dispatch({ type: 'row', row });
+    writeProof();
     if (deps.dashcam) {
       const snap = engine.snapshot();
       try {
@@ -549,6 +636,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         try {
           const state = await source.getState();
           captureOn = state.capturing;
+          platform = state.platform;
         } catch (e) {
           report(e, 'getState');
         }
@@ -559,7 +647,20 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
             report(e, 'context');
           }
           await readDisplayUnit();
+          // The drive's own switch signal and a navigation exemption in progress come back with it;
+          // another drive's (or none): no switch counts for the rest of this one.
+          let stored: Awaited<ReturnType<typeof readPhoneSwitch>> = null;
+          try {
+            stored = persist ? await readPhoneSwitch(db) : null;
+          } catch (e) {
+            report(e, 'phoneSwitch');
+          }
+          const own = stored !== null && stored.clientTripId === opts.adopt.session.clientTripId ? stored : null;
           await engine.dispatch({ type: 'adopt', trip: opts.adopt, ts: now() });
+          phoneSwitch = own === null ? NO_SWITCH : { signal: own.signal, lockDelayMs: own.lockDelayMs };
+          leave = own?.leave ?? null;
+          restart = { firstTs: null };
+          suite = opts.adopt.detectors;
           await deps.dashcam?.adopt(opts.adopt.session.clientTripId).catch((e: unknown) => report(e, 'dashcam'));
         }
         attachNative();
@@ -582,9 +683,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           result = { ok: false, reason: 'busy' };
           return;
         }
+        // The drive's screen-switch signal is fixed here, at the tap; unreadable: none counts.
+        let signal: PhoneSwitchCtx = NO_SWITCH;
         try {
           const state = await source.getState();
           captureOn = state.capturing;
+          platform = state.platform;
+          signal = switchSignalFor(state);
         } catch (e) {
           report(e, 'getState');
         }
@@ -599,6 +704,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         await engine.dispatch({ type: 'start', ts: at, continues: await continuesPrevious(at) });
         const id = engine.snapshot().clientTripId;
         if (id === null) return;
+        phoneSwitch = signal;
+        leave = null;
+        restart = null;
+        persistSwitch();
         try {
           await source.startCapture('mounted');
           captureOn = true;
@@ -701,6 +810,17 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       soundFailedThisDrive = false;
       publish();
     },
+    beginLeave() {
+      if (engine.snapshot().status !== 'recording') return;
+      leave = { sinceRowTs: lastRowTs, left: false };
+      persistSwitch();
+    },
+    cancelLeave() {
+      if (leave === null) return;
+      leave = null;
+      persistSwitch();
+    },
+    recording: () => engine.snapshot().status === 'recording',
   };
   return self;
 }

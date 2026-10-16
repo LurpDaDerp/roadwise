@@ -2,7 +2,9 @@
 // event subscription. `createFakeDriveSense()` satisfies it in tests.
 import DriveSense, { type DriveSenseApi } from '@drive-sense';
 
-export type DriveSource = Pick<DriveSenseApi, 'startCapture' | 'stopCapture' | 'getState' | 'addListener'>;
+export type DriveSource = Pick<DriveSenseApi, 'startCapture' | 'stopCapture' | 'getState' | 'addListener'> &
+  /** iOS: an in-drive lock proof written back, so later drives count screen switches from their start. */
+  Partial<Pick<DriveSenseApi, 'markLockProof'>>;
 
 /** The native module (every method rejects where it is absent: Jest, Expo Go, web). */
 export const nativeDriveSource: DriveSource = DriveSense;

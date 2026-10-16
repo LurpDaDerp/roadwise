@@ -12,10 +12,11 @@ import { rows, TZ } from '@/core/engine/__fixtures__/drives';
 import type { LimitSample } from '@/core/engine/types';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
-import { createEventsRepo, createQueueRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
+import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
 import { readDropNotice, writeDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, type DriveHost, type DriveState } from '@/drive/host';
+import { readPhoneSwitch, writePhoneSwitch } from '@/drive/phoneSwitchStore';
 import type { Scheduler } from '@/drive/ticks';
 import { metersToMiles } from '@/lib/units';
 
@@ -587,17 +588,255 @@ test('alerts go to the player as decisions (one speeding chime); a hands-free ca
   expect(await createEventsRepo(db).listByTrip(uuid(1))).toHaveLength(1);
 });
 
-test('an Android drive with navigation in front sounds no phone alert and stores no phone event', async () => {
-  const h = build();
-  await h.host.boot();
-  await h.host.start();
-  await feed(h, rows(120, { speedMps: 15, over: () => ({ locked: false, screenOn: true, appForeground: false }) }));
-  await feed(h, rows(3, { speedMps: 15, t0: T0 + 120_000 }));
-  const phone = (kind: string): boolean => kind === 'phone_pickup' || kind === 'phone_handling';
-  expect(h.player.delivered.filter((d) => phone(d.kind))).toEqual([]);
-  await h.host.stop({ endOpenTrip: true });
-  expect((await createEventsRepo(db).listByTrip(uuid(1))).filter((e) => phone(e.type))).toEqual([]);
-  expect(h.errors).toEqual([]);
+describe('screen switches and the navigation button (design §6, §12.3)', () => {
+  const AWAY = { locked: false, screenOn: true, appForeground: false } as const;
+  const FRONT = { locked: false, screenOn: true, appForeground: true } as const;
+  const IOS_LOCKED = { locked: true, screenOn: false, appForeground: false } as const;
+  const seg = (n: number, t0: number, over: Partial<ReturnType<typeof rows>[number]>) => rows(n, { speedMps: 15, t0, over: () => over });
+  const isPhone = (kind: string): boolean => kind === 'phone_pickup' || kind === 'phone_handling';
+  const phoneAlerts = (h: ReturnType<typeof build>) => h.player.delivered.filter((d) => isPhone(d.kind));
+  const phoneEvents = async (id = uuid(1)) => (await createEventsRepo(db).listByTrip(id)).filter((e) => isPhone(e.type));
+  /** The persisted writes are fire and forget: let them land. */
+  const flushWrites = async () => {
+    for (let i = 0; i < 20; i += 1) await new Promise<void>((r) => setImmediate(r));
+  };
+  const storedRows = async (id = uuid(1)) => (await createSamplesRepo(db).range(id, 0, Number.MAX_SAFE_INTEGER)).map((s) => JSON.parse(s.row_json) as ReturnType<typeof rows>[number]);
+
+  test('1. an Android drive with navigation opened from the button sounds no phone alert and stores no phone event; the rows carry the stamp', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, seg(2, T0, FRONT));
+    h.host.beginLeave();
+    await feed(h, seg(120, T0 + 2_000, AWAY));
+    expect(phoneAlerts(h)).toEqual([]);
+    await h.host.stop({ endOpenTrip: true });
+    expect(await phoneEvents()).toEqual([]);
+    const stored = await storedRows();
+    expect(stored.filter((r) => !r.appForeground).every((r) => r.exempt === 'nav')).toBe(true);
+    expect(stored.filter((r) => r.appForeground).some((r) => r.exempt !== undefined)).toBe(false);
+    expect(h.errors).toEqual([]);
+  });
+
+  test('2. back in front ends the exemption: the next departure counts', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, seg(2, T0, FRONT));
+    h.host.beginLeave();
+    await feed(h, seg(30, T0 + 2_000, AWAY));
+    await feed(h, seg(1, T0 + 32_000, FRONT));
+    await feed(h, seg(10, T0 + 33_000, AWAY));
+    expect(phoneAlerts(h).map((d) => d.kind)).toEqual(['phone_pickup']);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('3. an exemption whose app never took the screen ends 10 s after the tap', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, seg(2, T0, FRONT));
+    h.host.beginLeave();
+    await feed(h, seg(12, T0 + 2_000, FRONT));
+    await feed(h, seg(10, T0 + 14_000, AWAY));
+    expect(phoneAlerts(h).map((d) => d.kind)).toEqual(['phone_pickup']);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('4. the 10-s window is on the row clock, whatever the host clock says', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, seg(2, T0, FRONT));
+    h.host.beginLeave();
+    const list = [...seg(2, T0 + 2_000, FRONT), ...seg(30, T0 + 4_000, AWAY)];
+    h.source.loadTrace(list);
+    for (const r of list) {
+      clock = r.ts - 15_000; // the JS clock 15 s behind the rows
+      h.source.step();
+      await h.host.settled();
+    }
+    expect(phoneAlerts(h)).toEqual([]);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('5. cancelLeave after a failed launch: the departure is charged', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, seg(2, T0, FRONT));
+    h.host.beginLeave();
+    h.host.cancelLeave();
+    await feed(h, seg(10, T0 + 2_000, AWAY));
+    expect(phoneAlerts(h).map((d) => d.kind)).toEqual(['phone_pickup']);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('6. an Android drive with another app in front (no button): the pickup, the handling alert, a repeat, "Back to RoadWise", and the events stored', async () => {
+    const h = build({ voiceEnabled: () => true });
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, seg(2, T0, FRONT));
+    await feed(h, seg(120, T0 + 2_000, AWAY));
+    await feed(h, seg(3, T0 + 122_000, FRONT));
+    expect(phoneAlerts(h).map((d) => [d.kind, (d.ts - (T0 + 2_000)) / 1000, d.voice])).toEqual([
+      ['phone_pickup', 2, 'Back to RoadWise'],
+      ['phone_handling', 15, 'Back to RoadWise'],
+      ['phone_handling', 75, 'Back to RoadWise'],
+    ]);
+    await h.host.stop({ endOpenTrip: true });
+    expect((await phoneEvents()).map((e) => e.type).sort()).toEqual(['phone_handling', 'phone_pickup']);
+  });
+
+  test('7. the exemption and the signal survive a relaunch; back in front clears the stored exemption', async () => {
+    const a = build();
+    await a.host.boot();
+    await a.host.start();
+    await feed(a, seg(2, T0, FRONT));
+    a.host.beginLeave();
+    await feed(a, seg(1, T0 + 2_000, AWAY));
+    await flushWrites();
+    expect(await readPhoneSwitch(db)).toEqual({ clientTripId: uuid(1), signal: 'reliable', lockDelayMs: null, leave: { sinceRowTs: T0 + 1_000, left: true } });
+    // the process dies; the next one adopts the drive
+    const b = build();
+    await b.host.boot({ adopt: { session: createSession({ clientTripId: uuid(1), startedAt: T0 }), detectors: createDetectors(() => 'x') } });
+    await feed(b, seg(100, T0 + 3_000, AWAY));
+    expect(phoneAlerts(b)).toEqual([]);
+    await feed(b, seg(1, T0 + 103_000, FRONT));
+    await flushWrites();
+    expect((await readPhoneSwitch(db))?.leave).toBeNull();
+    await feed(b, seg(10, T0 + 104_000, AWAY));
+    expect(phoneAlerts(b).map((d) => d.kind)).toEqual(['phone_pickup']);
+    await b.host.stop({ endOpenTrip: true });
+  });
+
+  describe('8. the restart exemption after an adopt', () => {
+    const adopted = async () => {
+      await writePhoneSwitch(db, { clientTripId: uuid(1), signal: 'reliable', lockDelayMs: null, leave: null });
+      const h = build();
+      await h.host.boot({ adopt: { session: createSession({ clientTripId: uuid(1), startedAt: T0 - 120_000 }), detectors: createDetectors(() => 'x') } });
+      return h;
+    };
+    test('59 s on the home screen is excused; from 60 s it is an ordinary switch', async () => {
+      const h = await adopted();
+      await feed(h, seg(59, T0, AWAY));
+      expect(phoneAlerts(h)).toEqual([]);
+      await feed(h, seg(4, T0 + 59_000, AWAY));
+      expect(phoneAlerts(h).map((d) => [d.kind, (d.ts - T0) / 1000])).toEqual([['phone_pickup', 62]]);
+      await h.host.stop({ endOpenTrip: true });
+    });
+    test('RoadWise seen in front ends it at once', async () => {
+      const h = await adopted();
+      await feed(h, seg(1, T0, FRONT));
+      await feed(h, seg(5, T0 + 1_000, AWAY));
+      expect(phoneAlerts(h).map((d) => d.kind)).toEqual(['phone_pickup']);
+      await h.host.stop({ endOpenTrip: true });
+    });
+    test('a screen-off row ends it', async () => {
+      const h = await adopted();
+      await feed(h, seg(20, T0, AWAY));
+      await feed(h, seg(1, T0 + 20_000, { ...AWAY, screenOn: false }));
+      await feed(h, seg(5, T0 + 21_000, AWAY));
+      expect(phoneAlerts(h).map((d) => d.kind)).toEqual(['phone_pickup']);
+      await h.host.stop({ endOpenTrip: true });
+    });
+    test('an adopted drive whose signal was not kept counts no switch', async () => {
+      const h = build();
+      await h.host.boot({ adopt: { session: createSession({ clientTripId: uuid(1), startedAt: T0 - 120_000 }), detectors: createDetectors(() => 'x') } });
+      await feed(h, seg(120, T0, AWAY));
+      expect(phoneAlerts(h)).toEqual([]);
+      await h.host.stop({ endOpenTrip: true });
+    });
+  });
+
+  test('9. the switch signal from getState at the tap, persisted with the lock delay', async () => {
+    const cases = [
+      { platform: 'android', state: { lockSignal: 'reliable', lockProof: false, lockDelayMs: null }, want: { signal: 'reliable', lockDelayMs: null } },
+      { platform: 'ios', state: { lockSignal: 'unreliable', lockProof: false, lockDelayMs: null }, want: { signal: 'none', lockDelayMs: null } },
+      { platform: 'ios', state: { lockSignal: 'lagged', lockProof: true, lockDelayMs: 10_400 }, want: { signal: 'lagged', lockDelayMs: 10_400 } },
+      { platform: 'ios', state: { lockSignal: 'lagged', lockProof: false, lockDelayMs: null }, want: { signal: 'unproven', lockDelayMs: null } },
+    ] as const;
+    for (const c of cases) {
+      const source = createFakeDriveSense({ platform: c.platform, now: () => clock });
+      source.setState({ location: 'whenInUse', ...c.state });
+      const h = build({ source });
+      await h.host.boot();
+      const started = await h.host.start();
+      await flushWrites();
+      expect(await readPhoneSwitch(db)).toEqual({ clientTripId: started.ok ? started.clientTripId : '', ...c.want, leave: null });
+      await h.host.stop({ endOpenTrip: true });
+    }
+  });
+
+  test('10. an in-drive iPhone lock proof is written back once; the drive keeps its start signal, counts switches from then on, and the next drive starts proven', async () => {
+    const source = createFakeDriveSense({ platform: 'ios', now: () => clock, lockProof: false, lockDelayMs: null });
+    source.setState({ location: 'whenInUse', lockSignal: 'lagged' });
+    const h = { ...build({ source }), source };
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, seg(2, T0, FRONT));
+    await feed(h, seg(40, T0 + 2_000, AWAY)); // unproven: nothing
+    await feed(h, seg(5, T0 + 42_000, FRONT));
+    expect(phoneAlerts(h)).toEqual([]);
+    await feed(h, seg(10, T0 + 47_000, AWAY));
+    await feed(h, seg(10, T0 + 57_000, IOS_LOCKED)); // the report 10 s after leaving
+    await feed(h, seg(5, T0 + 67_000, FRONT));
+    await feed(h, seg(40, T0 + 72_000, AWAY));
+    expect(source.calls.filter((c) => c.startsWith('markLockProof'))).toEqual(['markLockProof:9000']);
+    expect(phoneAlerts(h).map((d) => d.kind)).toEqual(['phone_pickup', 'phone_handling']);
+    await flushWrites();
+    expect((await readPhoneSwitch(db))?.signal).toBe('unproven');
+    await h.host.stop({ endOpenTrip: true });
+    // the next drive
+    const next = build({ source });
+    await next.host.boot();
+    const started = await next.host.start();
+    await flushWrites();
+    expect(await readPhoneSwitch(db)).toEqual({ clientTripId: started.ok ? started.clientTripId : '', signal: 'lagged', lockDelayMs: 9_000, leave: null });
+    await next.host.stop({ endOpenTrip: true });
+  });
+
+  test('11. recording() is the guard: true while a drive records, false before and after; beginLeave outside a drive does nothing', async () => {
+    const h = build();
+    await h.host.boot();
+    expect(h.host.recording()).toBe(false);
+    h.host.beginLeave();
+    await h.host.start();
+    expect(h.host.recording()).toBe(true);
+    await flushWrites();
+    expect((await readPhoneSwitch(db))?.leave).toBeNull();
+    await h.host.end();
+    expect(h.host.recording()).toBe(false);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('13. a failed exemption write: the relaunch has no exemption to restore, the stamped rows stay exempt, later away rows are charged', async () => {
+    let failSettings = false;
+    const failing: Db = {
+      ...db,
+      execute: (sql: string, params?: unknown[]) => {
+        if (failSettings && sql.startsWith('INSERT OR REPLACE INTO settings')) return Promise.reject(new Error('disk full'));
+        return db.execute(sql, params as never);
+      },
+    } as Db;
+    const a = build({ db: failing });
+    await a.host.boot();
+    await a.host.start();
+    await feed(a, seg(2, T0, FRONT));
+    failSettings = true;
+    a.host.beginLeave();
+    await feed(a, seg(40, T0 + 2_000, AWAY));
+    await flushWrites();
+    expect(a.errors.some((e) => e.startsWith('phoneSwitch'))).toBe(true);
+    expect(phoneAlerts(a)).toEqual([]);
+    failSettings = false;
+    expect((await readPhoneSwitch(db))?.leave).toBeNull();
+    const b = build();
+    await b.host.boot({ adopt: { session: createSession({ clientTripId: uuid(1), startedAt: T0 }), detectors: createDetectors(() => 'x') } });
+    await feed(b, seg(70, T0 + 42_000, AWAY)); // excused 60 s as a restart, then charged
+    expect(phoneAlerts(b).map((d) => d.kind)).toEqual(['phone_pickup']);
+    await b.host.stop({ endOpenTrip: true });
+  });
 });
 
 test('an adopted drive (recovery after a restart) shows the driver’s units too', async () => {

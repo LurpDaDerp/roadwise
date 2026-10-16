@@ -35,6 +35,8 @@ import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { writeDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
+import { setLeaveSink } from '@/drive/leave';
+import { phoneSwitchFor } from '@/drive/phoneSwitchStore';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
 import { nativeDriveSource, type DriveSource } from '@/drive/source';
@@ -282,6 +284,9 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     recoverRecordingTrips(db, {
       createDetectors: () => createDetectors(newId),
       limits: { lookup: (lat, lng, course) => limits.lookupStored(lat, lng, course) },
+      // Screen switches replay with the drive's own signal (none when it was not kept).
+      phoneSwitch: (trip) => phoneSwitchFor(db, trip.client_trip_id),
+      platform: Platform.OS === 'ios' ? 'ios' : 'android',
       now,
       async adoptable(_trip: TripRow, lastRowTs: number | null) {
         try {
@@ -355,6 +360,8 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     });
     host = drive;
     setActiveDashcam(dc);
+    // The navigation button and the "End the drive first" guard reach this host.
+    setLeaveSink(drive);
     const adopt: AdoptedTrip | null = recovery.adopt;
     await drive.boot({ adopt });
     if (!drive.isBusy()) limits.resetTrip();
@@ -378,6 +385,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       }
     }
     const release = async (): Promise<void> => {
+      setLeaveSink(null);
       unmountDiagnostics();
       await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
       notifier?.detach();
