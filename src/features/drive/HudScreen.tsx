@@ -28,7 +28,7 @@ import {
 
 import { EventBanner, useAlertFlash } from './EventBanner';
 import { hudCopy } from './hudCopy';
-import { NAV_HIGHLIGHT_MS, NavigationButton } from './NavigationButton';
+import { navHighlight, NavigationButton } from './NavigationButton';
 import { StoppedPoints } from './StoppedPoints';
 import { inUnits, unitLabel, useHudUnits } from './useHudUnits';
 import { WeatherBanner } from './WeatherBanner';
@@ -134,8 +134,9 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const dashpal = useDashpalFlash();
   const dashpalChip = useDashpalChip();
   const nav = useNavigationButton(useOptionalDb());
-  // The button's warm-up highlight: the drive's rows are still under 30 s old (row clock).
-  const navWarmupOver = useDrive((s) => s.lastRowTs != null && s.startedAt != null && s.lastRowTs - s.startedAt >= NAV_HIGHLIGHT_MS);
+  const savedApp = nav.saved === null ? null : navAppById(nav.saved);
+  // The button's warm-up highlight: an app is saved and the drive's rows are still under 30 s old (row clock).
+  const navLit = useDrive((s) => s.status === 'recording' && navHighlight(savedApp !== null, s.startedAt, s.lastRowTs));
   // The dimmer stays off while either alert shows, and while the list of apps is open.
   const { dimmed, wake } = useDimmer(alert !== null || dashpal !== null || nav.picker !== null);
   // Android back closes the list first (before the drive screen's own swallow).
@@ -213,7 +214,6 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const speedColor = speeding ? tierColor(p, live.speedingTier!) : p.ink;
   const numeral = speedNumeralPt(Math.min(width, height));
   const busy = ending || live.status === 'finalizing';
-  const savedApp = nav.saved === null ? null : navAppById(nav.saved);
 
   return (
     <View testID="hud-screen" onTouchStart={wake} style={[styles.root, { backgroundColor: p.ground }]}>
@@ -290,7 +290,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             <NavigationButton
               caption={savedApp?.short ?? null}
               appLabel={savedApp?.label ?? null}
-              highlight={savedApp !== null && live.status === 'recording' && !navWarmupOver}
+              highlight={navLit}
               disabled={busy || live.status !== 'recording'}
               palette={p}
               onPress={() => void nav.press()}

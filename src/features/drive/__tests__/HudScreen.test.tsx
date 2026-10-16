@@ -18,9 +18,16 @@ jest.mock('expo-haptics', () => ({
 
 // The local settings mirror: `units` as WP9 writes it.
 let mockUnits: 'mi' | 'km' | null = null;
+// The saved navigation app (`navigation.app`), or null.
+let mockNavApp: string | null = null;
 const mockDb = {
   execute: jest.fn(async (_sql: string, params: unknown[]) => ({
-    rows: params[0] === 'units' && mockUnits !== null ? [{ value_json: JSON.stringify(mockUnits) }] : [],
+    rows:
+      params[0] === 'units' && mockUnits !== null
+        ? [{ value_json: JSON.stringify(mockUnits) }]
+        : params[0] === 'navigation.app' && mockNavApp !== null
+          ? [{ value_json: JSON.stringify(mockNavApp) }]
+          : [],
   })),
 };
 jest.mock('@/data/queries/context', () => ({ useDb: () => mockDb, useOptionalDb: () => mockDb }));
@@ -29,8 +36,11 @@ const T = 1_790_000_000_000;
 let mockLive: DriveLive;
 const mockEnd = jest.fn<Promise<{ clientTripId: string; dropped: 'no_movement' | 'no_gps' | null } | null>, []>();
 let mockLastFinalized: LastFinalized = null;
+/** The store's newest row time (the row clock), or null before any row. */
+let mockLastRowTs: number | null = null;
 jest.mock('@/drive/useDrive', () => ({
-  useDrive: <T,>(sel: (s: { lastFinalized: LastFinalized }) => T) => sel({ lastFinalized: mockLastFinalized }),
+  useDrive: <T,>(sel: (s: { lastFinalized: LastFinalized; status: DriveLive['status']; startedAt: number | null; lastRowTs: number | null }) => T) =>
+    sel({ lastFinalized: mockLastFinalized, status: mockLive.status, startedAt: mockLive.startedAt, lastRowTs: mockLastRowTs }),
   useDriveLive: () => mockLive,
   useDriveControls: () => ({ start: jest.fn(), end: mockEnd }),
   useDriveHost: () => ({ snapshot: () => ({ lastFinalized: mockLastFinalized }) }),
@@ -72,6 +82,8 @@ beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
   mockUnits = null;
+  mockNavApp = null;
+  mockLastRowTs = null;
   mockLastFinalized = null;
   mockEnd.mockResolvedValue({ clientTripId: 't1', dropped: null });
 });
@@ -403,6 +415,20 @@ describe('the navigation button (design §7.4, §8)', () => {
     await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
     await act(async () => {});
     expect(mockEnd).toHaveBeenCalledTimes(1);
+  });
+
+  test('with a saved app the highlight shows for the first 30 s of the drive on the row clock, and never once the drive is saving', async () => {
+    mockNavApp = 'waze';
+    mockLastRowTs = T + 29_000;
+    const h = await renderHud();
+    expect(screen.getByText('Waze')).toBeOnTheScreen();
+    expect(screen.getByTestId('hud-nav-highlight')).toBeOnTheScreen();
+    mockLastRowTs = T + 30_000;
+    await h.update({});
+    expect(screen.queryByTestId('hud-nav-highlight')).toBeNull();
+    mockLastRowTs = T + 5_000;
+    await h.update({ status: 'finalizing' });
+    expect(screen.queryByTestId('hud-nav-highlight')).toBeNull();
   });
 
   test('disabled while the drive is saving', async () => {
