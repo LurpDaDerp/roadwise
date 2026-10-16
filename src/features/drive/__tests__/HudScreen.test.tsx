@@ -62,6 +62,8 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
     weatherAlert: null,
     points: null,
     startedAt: T,
+    rowTs: null,
+    phoneUseSince: null,
     ...over,
   };
 }

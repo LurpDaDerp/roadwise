@@ -1,10 +1,10 @@
 // DashPal on the driving screen (plan §7.10): a small static chip, top right, while a DashPal is
-// paired (its dot says whether it is connected), and the alert chip for 1.5 s per DashPal ALERT
-// start or level change — never per repeat, never flashing. Copy and icons live here; the HUD
-// decides precedence.
+// paired (its dot says whether it is connected), the alert chip for 1.5 s per DashPal ALERT start or
+// level change — never per repeat, never flashing — and the held alert the halo shows for as long
+// as it lasts. Copy and icons live here; the HUD decides precedence.
 import { Ionicons } from '@expo/vector-icons';
 import type { Tier } from '@scoring';
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 
 import { ALERT_GLOW_MS } from '@/core/alerts/policy';
 import { Platform, StyleSheet, Text, View } from 'react-native';
@@ -12,7 +12,7 @@ import { Platform, StyleSheet, Text, View } from 'react-native';
 import { fontFamilies } from '@/ui/fonts';
 import { type HudPalette, tierColor } from '@/ui/drive';
 
-import type { DashcamVisual } from '../alerts';
+import type { DashcamVisual, HeldAlert } from '../alerts';
 import { dashpalCopy } from '../copy';
 import { SOUND } from '../protocol';
 import type { DashcamState } from '../runtime';
@@ -32,14 +32,19 @@ const ICON: Readonly<Record<number, keyof typeof Ionicons.glyphMap>> = {
 };
 
 const selectVisual = (s: DashcamState | null): DashcamVisual | null => s?.link.visual ?? null;
+const selectHeld = (s: DashcamState | null): HeldAlert | null => s?.link.held ?? null;
 const platform: 'ios' | 'android' = Platform.OS === 'ios' ? 'ios' : 'android';
 const selectChip = (s: DashcamState | null): DashcamStatus | null => (s?.link.paired ? dashcamStatus(s, platform) : null);
 
+/** A DashPal flash on screen, with the JS time it ends. */
+export type DashpalFlash = DashcamVisual & { until: number };
+
 /**
  * The DashPal alert to show now: each new start or level change for 1.5 s, then nothing. The one
- * standing when the screen mounts is shown only for what is left of its 1.5 s.
+ * standing when the screen mounts is shown only for what is left of its 1.5 s, and one 1.5 s old or
+ * more is never returned, not even for one render (no stale banner or halo burst on mount).
  */
-export function useDashpalFlash(now: () => number = Date.now): DashcamVisual | null {
+export function useDashpalFlash(now: () => number = Date.now): DashpalFlash | null {
   const visual = useDashcamSelector(selectVisual);
   const [expired, setExpired] = useState<string | null>(null);
   useEffect(() => {
@@ -49,7 +54,14 @@ export function useDashpalFlash(now: () => number = Date.now): DashcamVisual | n
     // `key` names the alert; `now` is fixed for the screen's life.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visual?.key]);
-  return visual && visual.key !== expired ? visual : null;
+  const flash = useMemo(() => (visual === null ? null : { ...visual, until: visual.at + ALERT_GLOW_MS }), [visual]);
+  if (flash === null || flash.key === expired || now() - flash.at >= ALERT_GLOW_MS) return null;
+  return flash;
+}
+
+/** The worst continuous DashPal alert held right now (null: none, no link, or a silent link). */
+export function useDashpalHeld(): HeldAlert | null {
+  return useDashcamSelector(selectHeld);
 }
 
 /** The paired dashcam's status for the chip, or null when none is paired. */

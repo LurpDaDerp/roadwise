@@ -57,6 +57,10 @@ export interface DriveLive {
   /** Non-null only while stopped (≤ 5 mph). */
   points: { total: number; sinceLastStop: number } | null;
   startedAt: number | null;
+  /** The newest row's time (the row clock), or null before any row. */
+  rowTs: number | null;
+  /** The confirmed phone episode's first use row while it is open (row clock), else null. */
+  phoneUseSince: number | null;
 }
 
 const selectLive = (s: DriveState) => ({
@@ -70,6 +74,8 @@ const selectLive = (s: DriveState) => ({
   lastAlert: s.lastAlert,
   points: s.points,
   startedAt: s.startedAt,
+  rowTs: s.lastRowTs,
+  phoneUseSince: s.phoneUseSince,
 });
 
 /** The weather leg: changes once per refetch distance, so the odometer never re-renders the HUD per row. */
