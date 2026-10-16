@@ -27,7 +27,7 @@ import {
 import type { DriveSenseApi, DriveSenseEvent, DriveSenseEvents, Subscription } from './types';
 
 export * from './types';
-export { MOCK_ROW_KEY, parseRow, REMINDER_TOKEN, resetUnknownRowKeys, unknownRowKeys } from './rowSchema';
+export { MOCK_ROW_KEY, parseActivity, parseRow, REMINDER_TOKEN, resetUnknownRowKeys, unknownRowKeys } from './rowSchema';
 export { createFakeDriveSense, driveSenseError } from './fake';
 export type { FakeOptions } from './fake';
 export { diffSelfTest, parseVectors } from './selfTest';

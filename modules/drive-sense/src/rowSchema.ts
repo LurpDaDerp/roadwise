@@ -12,6 +12,7 @@ import type {
   DriveSenseState,
   ExitInfo,
   FeatureRow,
+  MotionActivity,
   ReminderLocationAnswer,
   ReminderTap,
   ThermalLevel,
@@ -127,6 +128,31 @@ export function parseRow(raw: unknown): DriveSenseRow | null {
     row[key] = roundTo(row[key], ROW_DECIMALS[key]);
   }
   return row;
+}
+
+const ACTIVITY_TYPES: ReadonlySet<string> = new Set<MotionActivity['type']>(['automotive', 'walking', 'running', 'cycling', 'stationary', 'unknown']);
+const ACTIVITY_CONFIDENCES: ReadonlySet<string> = new Set<MotionActivity['confidence']>(['low', 'medium', 'high']);
+
+/**
+ * An `activity` payload as a fresh `MotionActivity`, or null when it is not one (README §3): a
+ * plain object whose `type` is one of the six, `confidence` one of the three and `ts` a safe,
+ * non-negative integer epoch ms. `exit` is kept only when it is exactly `true`; every other key is
+ * left out. Never throws.
+ */
+export function parseActivity(raw: unknown): MotionActivity | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  let type: unknown, confidence: unknown, ts: unknown, exit: unknown;
+  try {
+    ({ type, confidence, ts, exit } = raw as Record<string, unknown>);
+  } catch {
+    return null;
+  }
+  if (typeof type !== 'string' || !ACTIVITY_TYPES.has(type)) return null;
+  if (typeof confidence !== 'string' || !ACTIVITY_CONFIDENCES.has(confidence)) return null;
+  if (typeof ts !== 'number' || !Number.isSafeInteger(ts) || ts < 0) return null;
+  const out: MotionActivity = { type: type as MotionActivity['type'], confidence: confidence as MotionActivity['confidence'], ts };
+  if (exit === true) out.exit = true;
+  return out;
 }
 
 export const captureModeSchema = z.enum(['mounted', 'pocket', 'auto']);

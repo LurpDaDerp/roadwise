@@ -1,6 +1,6 @@
 /** @jest-environment node */
 // `parseRow` is the only gate between what native emits and M1's engine (R2's row contract).
-import { parseRow, resetUnknownRowKeys, ROW_DECIMALS, roundTo, unknownRowKeys } from '../src/rowSchema';
+import { parseActivity, parseRow, resetUnknownRowKeys, ROW_DECIMALS, roundTo, unknownRowKeys } from '../src/rowSchema';
 import type { FeatureRow } from '../src/types';
 import { sampleRows } from '../scripts/sampleRows';
 
@@ -187,5 +187,59 @@ describe('the mock-location flag', () => {
     resetUnknownRowKeys();
     expect(parseRow({ ...good, mock: true, future: 1 })).toEqual({ ...good, mock: true });
     expect(unknownRowKeys()).toBe(1);
+  });
+});
+
+// README §3: the `activity` payload, iOS (type, confidence, ts) and Android (plus `exit: true`).
+describe('parseActivity', () => {
+  test('accepts the iOS and Android shapes as fresh objects', () => {
+    const ios = { type: 'walking', confidence: 'medium', ts: 1_700_000_000_123 };
+    expect(parseActivity(ios)).toEqual(ios);
+    expect(parseActivity(ios)).not.toBe(ios);
+    const enter = { type: 'automotive', confidence: 'high', ts: 1_700_000_000_000 };
+    expect(parseActivity(enter)).toEqual(enter);
+    const exit = { type: 'running', confidence: 'high', ts: 1_700_000_000_000, exit: true };
+    expect(parseActivity(exit)).toEqual(exit);
+    for (const type of ['automotive', 'walking', 'running', 'cycling', 'stationary', 'unknown']) {
+      for (const confidence of ['low', 'medium', 'high']) expect(parseActivity({ type, confidence, ts: 0 })).toEqual({ type, confidence, ts: 0 });
+    }
+  });
+
+  test('keeps exit only when it is exactly true, and strips every other key', () => {
+    expect(parseActivity({ type: 'walking', confidence: 'high', ts: 5, exit: 1 })).toEqual({ type: 'walking', confidence: 'high', ts: 5 });
+    expect(parseActivity({ type: 'walking', confidence: 'high', ts: 5, exit: false })).not.toHaveProperty('exit');
+    expect(parseActivity({ type: 'walking', confidence: 'high', ts: 5, exit: 'true' })).not.toHaveProperty('exit');
+    expect(parseActivity({ type: 'walking', confidence: 'high', ts: 5, extra: 1, startDate: 3 })).toEqual({ type: 'walking', confidence: 'high', ts: 5 });
+  });
+
+  test.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['a number', 3],
+    ['a string', 'walking'],
+    ['an array', [{ type: 'walking', confidence: 'high', ts: 1 }]],
+    ['a bad type', { type: 'driving', confidence: 'high', ts: 1 }],
+    ['a missing type', { confidence: 'high', ts: 1 }],
+    ['a bad confidence', { type: 'walking', confidence: 'certain', ts: 1 }],
+    ['a missing confidence', { type: 'walking', ts: 1 }],
+    ['a fractional ts', { type: 'walking', confidence: 'high', ts: 1.5 }],
+    ['a negative ts', { type: 'walking', confidence: 'high', ts: -1 }],
+    ['a NaN ts', { type: 'walking', confidence: 'high', ts: Number.NaN }],
+    ['an unsafe ts', { type: 'walking', confidence: 'high', ts: 2 ** 60 }],
+    ['a string ts', { type: 'walking', confidence: 'high', ts: '1' }],
+    ['a missing ts', { type: 'walking', confidence: 'high' }],
+  ])('rejects %s', (_label, raw) => {
+    expect(parseActivity(raw)).toBeNull();
+  });
+
+  test('never throws, even on a hostile object', () => {
+    const hostile = Object.create(null) as Record<string, unknown>;
+    hostile.type = 'walking';
+    expect(() => parseActivity(hostile)).not.toThrow();
+    expect(parseActivity(hostile)).toBeNull();
+    const throwing = { confidence: 'high', ts: 1, get type(): string {
+      throw new Error('boom');
+    } };
+    expect(parseActivity(throwing)).toBeNull();
   });
 });

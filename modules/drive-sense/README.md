@@ -1,7 +1,7 @@
 # drive-sense — the native contract
 
 Local Expo module that records a drive the user started: 1 Hz GNSS, 25 Hz IMU reduced natively to
-one `FeatureRow` per second, motion activity (for the walking auto-end), phone state, the
+one `FeatureRow` per second, motion activity (for the drive's walking end), phone state, the
 background surface (Android notification / iOS Live Activity hand-off), and a few utilities. This README is **binding** for the Swift (`ios/`)
 and Kotlin (`android/`) implementations. The TypeScript sources are the machine-checked half of
 the same contract:
@@ -72,7 +72,7 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 
 | Method | Behaviour |
 |---|---|
-| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of the Android sticky restart** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: a `SecurityException` from the location foreground service → `E_PERMISSION`; any other refusal → `E_FGS_REFUSED`. iOS: a new capture emits `call { active: true }` once if a phone call is already in progress (later changes as they happen). Both platforms subscribe the motion-activity feed for the capture's life when `motion` is `granted`, **best effort** (Android: a `SecurityException` or missing Play services is logged and swallowed, never rejects `startCapture`, never stops the capture), so a walk can end the drive. Only ever called from a user's tap in the foreground. |
+| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of the Android sticky restart** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: a `SecurityException` from the location foreground service → `E_PERMISSION`; any other refusal → `E_FGS_REFUSED`. iOS: a new capture emits `call { active: true }` once if a phone call is already in progress (later changes as they happen). Both platforms subscribe the motion-activity feed for the capture's life when `motion` is `granted`, **best effort** (Android: a `SecurityException` or missing Play services is logged and swallowed, never rejects `startCapture`, never stops the capture), for the drive's walking end. Only ever called from a user's tap in the foreground. |
 | `stopCapture()` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service (its notification goes with it) and the capture's activity-transition subscription. Idempotent. |
 | `setCaptureRate(rate)` | `full` as above. `low`: coarse location (iOS `kCLLocationAccuracyHundredMeters`, `distanceFilter = 50`; Android `PRIORITY_BALANCED_POWER_ACCURACY` at 10 s), IMU stopped, and a row is emitted **only when a fix arrives** (IMU-absent encoding, §4). The process stays alive. iOS reads the phone state (`locked`/`screenOn`/`appForeground`, and `screen` changes) on each fix at `low` rather than polling at 1 Hz, so the low rate wakes nothing per second. Ignored (resolves) while not capturing. |
 | `getState()` | `DriveSenseState` (below). |
@@ -137,9 +137,11 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 | `call` | `{ active, ts }` | iOS only: `CXCallObserver` — a call started or ended |
 | `reminderTap` | `{}` | Android only: a tap on the forgot-to-start reminder's note was handed over (§10); read it with `takeReminderTap` |
 
-**Motion-activity mapping** (the `activity` event). The drive host acts only on `walking`/`running`
-ENTERs at confidence `medium` or above (never an `exit`), so these mappings decide whether walking
-can end a trip; every other type is ignored.
+**Motion-activity mapping** (the `activity` event). The host validates each payload with
+`parseActivity` (a bad one is dropped) and hands it to the engine, whose only use for it is the
+walking end (`src/core/engine/motion.ts`): a `walking`/`running` report at confidence `medium` or
+above is on foot, `low` leaves the state as it was, and an `exit` or any other type clears it. So
+these mappings decide whether walking can end a drive.
 
 - **iOS** (`CMMotionActivity`): confidence maps 1:1 (`.low` → `low`, `.medium` → `medium`,
   `.high` → `high`). Several flags can be set at once; `type` is the first set flag in this order:
@@ -161,9 +163,16 @@ can end a trip; every other type is ignored.
   | EXIT WALKING | `{ type: 'walking', confidence: 'high', exit: true }` |
   | EXIT RUNNING | `{ type: 'running', confidence: 'high', exit: true }` |
 
-  `exit: true` marks the END of a walk: the host never treats it as a walk. It acts on the ENTER
-  alone, at once (the engine ends the drive when the last speed is walking pace or the fix is
-  stale), and times nothing between an ENTER and its EXIT. iOS never sets `exit`.
+  `exit: true` marks the END of a walk: the engine never treats it as a walk, and it clears a
+  walk the ENTER began. iOS never sets `exit`.
+
+  **The walking end** (engine, row clock). W1: once the car has reached driving speed (two
+  consecutive rows with a known, trusted GPS speed of 10 mph or more), an on-foot report whose walk
+  began after that and that stays the latest report for 20 s ends the drive unless the last known
+  speed is 10 mph or more and under 60 s old, cut at the last movement at or before the walk began;
+  two driving-speed rows after a report cancel it. W2: before driving speed, an on-foot report
+  that stays the latest for 20 s ends a drive at least 10 min old (it is then dropped, never
+  driven). Without motion permission no reports come and neither applies.
 
   `ts` is the transition's `getElapsedRealTimeNanos()` converted with §7 "Time base" (an anchor
   read when the transition is received). Nothing is stored. `createFakeDriveSense` has no mapping
