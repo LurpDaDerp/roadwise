@@ -235,14 +235,16 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
     expect(t.det.lockProof()).toEqual({ delayMs: 9_000 });
   });
 
-  test('18. 40 s in another app: one pickup from the first away row, counted at age 15', () => {
+  test('18. 40 s in another app: one pickup from the first away row, counted at age 26 (15 s plus the 11-s cut)', () => {
     const t = trace(seq([10, front], [40, away], [10, front]), IOS);
     expect(pickups(t.events)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 40 })]);
-    expect(t.confirmed.indexOf(true)).toBe(10 + 14);
+    expect(t.confirmed.indexOf(true)).toBe(10 + 25);
   });
 
-  test('19. 14 s away is nothing on its own', () => {
+  test('19. 25 s away is nothing on its own; 26 s is a pickup of 26 s', () => {
     expect(run(seq([10, front], [14, away], [10, front]), IOS)).toEqual([]);
+    expect(run(seq([10, front], [25, away], [10, front]), IOS)).toEqual([]);
+    expect(pickups(run(seq([10, front], [26, away], [10, front]), IOS))).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 26 })]);
   });
 
   test('20. a switch, a lock pressed 20 s in, its report 10 s later: a pickup of 20 s', () => {
@@ -257,18 +259,21 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
       expect(t.confirmed.some(Boolean)).toBe(false);
       expect(t.events).toEqual([]);
     });
-    test.each([16, 17, 19, 25])('a = %i: counted at age 15, then dropped as a lock reported late', (a) => {
+    test.each([16, 17, 19, 25, 26])('a = %i (up to 25 away rows): never counted (no alert), nothing', (a) => {
       const t = lockAt(a);
-      expect(t.confirmed[10 + 14]).toBe(true);
+      expect(t.confirmed.some(Boolean)).toBe(false);
       expect(t.events).toEqual([]);
     });
-    test('a = 26 (kept 15): a pickup of 15 s, the boundary', () => {
-      expect(pickups(lockAt(26).events)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 15 })]);
+    test('a = 27 (26 away rows, kept 16): counted at age 26, a pickup of 16 s, the boundary', () => {
+      const t = lockAt(27);
+      expect(t.confirmed.indexOf(true)).toBe(10 + 25);
+      expect(pickups(t.events)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 16 })]);
     });
-    test('22. with a measured 13-s delay (cut 14 s): a = 28 is dropped, a = 29 kept as 15 s', () => {
+    test('22. with a measured 13-s delay (cut 14 s, counts at 29): a = 29 is nothing, a = 30 kept as 16 s', () => {
       const c = ctx({ switchSignal: 'lagged', platform: 'ios', lockDelayMs: 13_000 });
-      expect(lockAt(28, c).events).toEqual([]);
-      expect(pickups(lockAt(29, c).events)).toEqual([expect.objectContaining({ durationS: 15 })]);
+      expect(lockAt(29, c).confirmed.some(Boolean)).toBe(false);
+      expect(lockAt(29, c).events).toEqual([]);
+      expect(pickups(lockAt(30, c).events)).toEqual([expect.objectContaining({ durationS: 16 })]);
     });
   });
 
@@ -281,7 +286,7 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
     expect(t.active.slice(13, 23)).toEqual(Array(10).fill(false));
   });
 
-  test('24. a motion pickup, then a real switch of 30 s: held to age 15, then one episode, never mounted', () => {
+  test('24. a motion pickup, then a real switch of 30 s: held to age 26, then one episode, never mounted', () => {
     const e = run(seq([10, front], [3, { ...front, ...tapped }], [30, away], [10, front]), IOS);
     expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 33, measured: { mounted: false, speedMph: 35 } })]);
   });
@@ -340,12 +345,20 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
       const androidLocks = seq([40, front], [5, { ...away, screenOn: false, locked: true }], [20, front], [5, { ...away, screenOn: false, locked: true }], [20, front], [5, { ...away, screenOn: false, locked: true }], [20, front]);
       expect(run(androidLocks, ANDROID)).toEqual([]);
     });
-    test('a measured 11-s delay (cut 12 s) needs 14 rows; from 12 s (cut 13 s) no run under 15 s outlasts the cut', () => {
+    test('a measured 11-s delay (cut 12 s) needs 14 rows; 12 s (cut 13 s) 15 rows; 13 s (cut 14 s) 16 rows', () => {
       const delay = (ms: number) => ctx({ switchSignal: 'lagged', platform: 'ios', lockDelayMs: ms });
       expect(run(three(13), delay(11_000))).toEqual([]);
       expect(pickups(run(three(14), delay(11_000)))).toHaveLength(1);
       expect(run(three(14), delay(12_000))).toEqual([]);
-      expect(run(three(14), delay(13_000))).toEqual([]);
+      expect(pickups(run(three(15), delay(12_000)))).toHaveLength(1);
+      expect(run(three(15), delay(13_000))).toEqual([]);
+      expect(pickups(run(three(16), delay(13_000)))).toHaveLength(1);
+    });
+    test('three 25-s switches (each under the 26 s that count alone) are one pickup of 15 s; three of 26 s are three pickups', () => {
+      const t = trace(three(25), IOS);
+      expect(pickups(t.events)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 15 })]);
+      expect(handlingOf(t.events)).toEqual([]);
+      expect(pickups(run(three(26), IOS))).toHaveLength(3);
     });
     test('three ending in lock reports are nothing', () => {
       const locks = seq([10, front], [13, away], [3, locked], [10, front], [13, away], [3, locked], [10, front], [13, away], [3, locked], [5, front]);
@@ -393,6 +406,22 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
     test('Android is unchanged: an unlock into another app counts at 3 s', () => {
       const offRows = { ...away, screenOn: false, locked: true };
       expect(pickups(run(seq([10, front], [20, offRows], [10, away], [10, front]), ANDROID))).toEqual([expect.objectContaining({ startedAt: at(30), durationS: 10 })]);
+    });
+  });
+
+  describe('33. a lock pressed with RoadWise in front, the lock screen woken before iOS reports the lock (Face ID unlocks it): one run from the press to the late report', () => {
+    /** Proven by a first lock; then RoadWise leaves (the press) at row 30, `n` rows read away, then the report. */
+    const wokenEarly = (n: number) => trace(seq([10, front], [10, away], [5, locked], [5, front], [n, away], [20, locked], [10, front]), IOS);
+    test.each([11, 20, 23, 25])('n = %i (woken about 3 s after the press, lit until about 10 s before the report): never confirmed (no alert), nothing', (n) => {
+      const t = wokenEarly(n);
+      expect(t.confirmed.some(Boolean)).toBe(false);
+      expect(t.events).toEqual([]);
+    });
+    test('n = 26 (lit 15 s or more in all): confirmed at age 26 and charged up to the estimated press', () => {
+      const t = wokenEarly(26);
+      expect(t.confirmed.indexOf(true)).toBe(30 + 25);
+      expect(pickups(t.events)).toEqual([expect.objectContaining({ startedAt: at(30), durationS: 16 })]);
+      expect(handlingOf(t.events)).toHaveLength(1);
     });
   });
 

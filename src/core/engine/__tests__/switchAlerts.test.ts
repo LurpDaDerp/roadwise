@@ -81,12 +81,12 @@ test('2. an Android switch of 200 s: pickup at +2 s, handling at +15 s, then eve
   expect(new Set(alerts.map((a) => a.id)).size).toBe(1);
 });
 
-test('3. an iPhone switch: pickup at +14 s, handling at +24 s (10 s after the pickup alert), repeat at +84 s', async () => {
-  const { alerts } = await runDrive(rowsOf([10, front], [90, away], [10, front]), IOS);
+test('3. an iPhone switch: pickup at +25 s (it counts at 26 s), handling at +35 s (10 s after the pickup alert), repeat at +95 s', async () => {
+  const { alerts } = await runDrive(rowsOf([10, front], [100, away], [10, front]), IOS);
   expect(alerts.map((a) => [a.type, rel(a) - 10])).toEqual([
-    ['phone_pickup', 14],
-    ['phone_handling', 24],
-    ['phone_handling', 84],
+    ['phone_pickup', 25],
+    ['phone_handling', 35],
+    ['phone_handling', 95],
   ]);
 });
 
@@ -99,10 +99,12 @@ test('4. a motion pickup, then an iPhone lock with RoadWise in front: one pickup
   expect(lockAfter.session.events.map((e) => [e.type, e.durationS])).toEqual([['phone_pickup', 3]]);
 });
 
-test('5. an iPhone lock reported 15 s late from RoadWise in front: one pickup alert, no handling alert, nothing stored', async () => {
-  const { alerts, session } = await runDrive(rowsOf([10, front], [15, away], [40, locked]), IOS);
-  expect(alerts.map((a) => [a.type, rel(a) - 10])).toEqual([['phone_pickup', 14]]);
-  expect(session.events).toEqual([]);
+test('5. an iPhone lock reported 15 s or 25 s late from RoadWise in front: no alert, nothing stored', async () => {
+  for (const late of [15, 25]) {
+    const { alerts, session } = await runDrive(rowsOf([10, front], [late, away], [40, locked]), IOS);
+    expect(alerts).toEqual([]);
+    expect(session.events).toEqual([]);
+  }
 });
 
 test('6. a burst: one pickup alert on the third return, "Phone down", no handling alert', async () => {

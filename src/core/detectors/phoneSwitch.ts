@@ -6,14 +6,14 @@
 // - Android (`switchSignal: 'reliable'`): unlocked with its screen on. A lock or the screen going
 //   off is exact there, so it is never a switch.
 // - iPhone (`lagged` / `unproven`): not reported locked. iOS reports a lock only about 10 s late,
-//   so a switch counts only after 15 s, a lock report ends it and cuts it back to the estimated
-//   press (`lockCutMs`), and only a phone that has shown a lock in time counts at all (`proven`;
-//   the detector proves it in-drive too). Without a passcode (`none`) nothing is ever a switch.
-//   A lock undone before its report reads as a short switch, so an iPhone short switch counts toward
-//   a burst only when it outlasted the lock cut (`burstRunLong`). After a lock report, the phone
-//   reads as away as soon as it is unlocked outside RoadWise, a Face ID glance at the woken lock
-//   screen included, so such a run waits the lock cut longer before it counts (`iosRunMinS`) and
-//   never counts toward a burst.
+//   and the phone reads as unlocked while a lock screen a notification woke shows (Face ID unlocks
+//   it at a glance), so a switch counts only once it spans 15 s plus the lock cut (`iosRunMinS`,
+//   26 s with the usual delay), a lock report ends it and cuts it back to the estimated press
+//   (`lockCutMs`), and only a phone that has shown a lock in time counts at all (`proven`; the
+//   detector proves it in-drive too). Without a passcode (`none`) nothing is ever a switch. A lock
+//   undone before its report reads as a short switch, so an iPhone short switch counts toward a
+//   burst only when it outlasted the lock cut (`burstRunLong`); a run that began after a lock report
+//   (an unlock outside RoadWise, a Face ID glance at the woken lock screen included) never does.
 // - Excused: the host's stamps (`row.exempt`: the navigation button, the home screen a restart left
 //   behind), a call's own screen (below) and the warm-up.
 //
@@ -32,7 +32,7 @@ export type SwitchSignal = 'reliable' | 'lagged' | 'unproven' | 'none';
 
 /** An Android run counts once it spans this long (the third row at 1 Hz). */
 export const SWITCH_MIN_S_ANDROID = 3;
-/** An iPhone run counts once it spans this long with no lock report; a cut that leaves less drops it. */
+/** iPhone: a run counts once it spans this plus the lock cut (`iosRunMinS`); a cut that leaves less than this drops it. */
 export const SWITCH_MIN_S_IOS = 15;
 /** The lock-press-to-report delay assumed when the drive has no measured one, ms. */
 export const IOS_LOCK_DELAY_DEFAULT_MS = 10_000;
@@ -91,8 +91,8 @@ export const lockCutMs = (delayMs: number | null): number => clampLockDelay(dela
  * burst. Android: `BURST_MIN_RUN_S`. iPhone: it must also span more than the lock cut, because a lock
  * undone before iOS reports it (the phone locked and unlocked back into RoadWise within about 10 s)
  * gives exactly the rows of a short switch, and a lock is never a switch. With the default delay the
- * cut is 11 s, so 13 rows or more (under the 15 s that count on their own); with a measured delay of
- * 12 s or more no run under 15 s outlasts it, and bursts never count on that phone.
+ * cut is 11 s, so 13 to 25 rows (26 count on their own, `iosRunMinS`); a measured delay moves both
+ * ends by the same amount.
  */
 export function burstRunLong(signal: SwitchSignal, startTs: number, lastTs: number, delayMs: number | null): boolean {
   if (ageS(lastTs, startTs) < BURST_MIN_RUN_S) return false;
@@ -100,14 +100,15 @@ export function burstRunLong(signal: SwitchSignal, startTs: number, lastTs: numb
 }
 
 /**
- * iPhone: the span a run needs before it counts, seconds. `afterLock`: it began with the phone last
- * reported locked and RoadWise not in front since. iOS lets the phone read as unlocked while its lock
- * screen shows (Face ID unlocks it at a glance when a notification wakes it) and for about 10 s after
- * it sleeps again, so such a run waits `SWITCH_MIN_S_IOS` plus the lock cut (26 s with the usual
- * delay): a lock screen woken and slept again ends in a lock report before then and never counts. A
- * run that does count is still charged from its first row.
+ * iPhone: the span a run needs before it counts, seconds: `SWITCH_MIN_S_IOS` plus the lock cut (26 s
+ * with the usual delay, 31 s with a measured 15 s). iOS lets the phone read as unlocked while its
+ * lock screen shows (Face ID unlocks it at a glance when a notification wakes it) and for about 10 s
+ * after it sleeps again, whether the screen woke before iOS reported the lock (one run from the
+ * press) or after (a run from the unlock). Either way a lock screen woken and asleep again within
+ * 15 s ends in a lock report before then, so it never confirms and plays no alert. A run that does
+ * count is still charged from its first row.
  */
-export const iosRunMinS = (afterLock: boolean, delayMs: number | null): number => SWITCH_MIN_S_IOS + (afterLock ? lockCutMs(delayMs) / 1000 : 0);
+export const iosRunMinS = (delayMs: number | null): number => SWITCH_MIN_S_IOS + lockCutMs(delayMs) / 1000;
 
 /** What one row is, for screen switches. */
 export interface SwitchReading {

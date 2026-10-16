@@ -407,7 +407,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** iPhone: a lock report 17 s late: counted at 15 s, then recognised as a lock and dropped. */
+  /** iPhone: a lock report 17 s late: never counted (an iPhone switch counts at 26 s), so no alert and nothing charged. */
   'phone-switch-ios-slow-lock': () => ({
     name: 'phone-switch-ios-slow-lock',
     switchSignal: 'lagged',
@@ -418,7 +418,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** iPhone: 41 s in another app: one pickup from the first away row (it counts at 15 s). */
+  /** iPhone: 41 s in another app: one pickup from the first away row (it counts at 26 s). */
   'phone-switch-ios': () => ({
     name: 'phone-switch-ios',
     switchSignal: 'lagged',

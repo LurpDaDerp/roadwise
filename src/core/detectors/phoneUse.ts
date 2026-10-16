@@ -10,18 +10,19 @@
 //   (iOS cannot tell hands-free from handheld): `ctx.callActive` live, the row's `call` key in a
 //   rebuild too. Android motion is never suppressed by a call.
 // - **Screen switches** (`phoneSwitch.ts`): a run of away rows counts once it spans 3 s (Android) or
-//   15 s with no lock report (iPhone), from its first chargeable row (a valid fix within 50 m, a known
-//   speed, the car moving above 5 mph or stopped after having moved). Once counted, every away row
-//   is use whatever its fix or speed, so a stop or a GPS gap neither splits nor ends it; RoadWise
-//   back in front, a lock, the screen off or an excused row ends it. An iPhone run ended by a lock
-//   report is cut back to the estimated press; if less than 15 s is left it was a lock reported
-//   late, and nothing of it is kept. An iPhone run that begins after a lock report with RoadWise not
-//   in front since (an unlock outside RoadWise, a Face ID glance at the lock screen included) counts
-//   only once it spans 15 s plus the lock cut, and never toward a burst. A departure that joins an
-//   open pickup counts at once on Android; on iPhone it is held (neither use nor quiet) until it has
-//   lasted its minimum. Three short switches (2 s or more each, each ending back in RoadWise; on
-//   iPhone each longer than the lock cut, so a lock undone before its report never counts) within
-//   2 min are one pickup with no handling. A pickup with a switch in it is never `mounted`.
+//   15 s plus the lock cut with no lock report (iPhone, 26 s with the usual delay: a lock screen
+//   woken before or after the lock report reads as away), from its first chargeable row (a valid fix
+//   within 50 m, a known speed, the car moving above 5 mph or stopped after having moved). Once
+//   counted, every away row is use whatever its fix or speed, so a stop or a GPS gap neither splits
+//   nor ends it; RoadWise back in front, a lock, the screen off or an excused row ends it. An iPhone
+//   run ended by a lock report is cut back to the estimated press; if less than 15 s were left it
+//   would be a lock reported late, and nothing of it would be kept. An iPhone run that begins after a
+//   lock report with RoadWise not in front since (an unlock outside RoadWise, a Face ID glance at the
+//   lock screen included) never counts toward a burst. A departure that joins an open pickup counts
+//   at once on Android; on iPhone it is held (neither use nor quiet) until it has lasted its minimum.
+//   Three short switches (2 s or more each, each ending back in RoadWise; on iPhone each longer than
+//   the lock cut, so a lock undone before its report never counts) within 2 min are one pickup with
+//   no handling. A pickup with a switch in it is never `mounted`.
 //
 // The episode closes after two quiet rows. Its use time is from its start to its last use row:
 // past 15 s it adds one `phone_handling` event (moderate ≤ 30 s, severe beyond).
@@ -91,7 +92,7 @@ interface Run {
   counting: boolean;
   /** iPhone: it joined an open pickup and waits out its minimum. */
   held: boolean;
-  /** iPhone: it began after a lock report, RoadWise not in front since (`iosRunMinS`). */
+  /** iPhone: it began after a lock report, RoadWise not in front since: never a burst entry. */
   afterLock: boolean;
   /** The episode's `lastSwitchTs` and `mounted` as the run began, for a cut that drops it. */
   floorTs: number | null;
@@ -327,7 +328,7 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
         // 5. start counting
         if (!run.counting && evidenceOn(ctx)) {
           const age = ageS(row.ts, run.startTs);
-          const minS = ctx.switchSignal === 'reliable' ? SWITCH_MIN_S_ANDROID : iosRunMinS(run.afterLock, measuredDelayMs ?? ctx.lockDelayMs);
+          const minS = ctx.switchSignal === 'reliable' ? SWITCH_MIN_S_ANDROID : iosRunMinS(measuredDelayMs ?? ctx.lockDelayMs);
           if (openConfirmed()) {
             if (ctx.switchSignal === 'reliable' || age >= minS) {
               run.counting = true;

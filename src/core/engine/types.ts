@@ -127,13 +127,13 @@ export interface OpenEpisode {
   /** The tier so far (speeding: the current row's; phone: severe). */
   tier: Tier;
   startedAt: number;
-  /** Long enough to count as an incident (speeding 5 s / 3 s severe; phone 3 s, a switch 3 s / 15 s). */
+  /** Long enough to count as an incident (speeding 5 s / 3 s severe; phone 3 s, a switch 3 s / 26 s). */
   confirmed: boolean;
   /** Phone: the latest row of use so far (motion or a counting switch). Speeding never sets it. */
   lastUseAt?: number;
   /**
    * Phone: `switching` while a counted screen switch goes on, `hold` while an iPhone departure
-   * waits out its 15 s inside an open pickup, else null. Speeding never sets it.
+   * waits out its 26 s inside an open pickup, else null. Speeding never sets it.
    */
   phase?: 'switching' | 'hold' | null;
 }
