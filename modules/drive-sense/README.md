@@ -111,7 +111,7 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 `getScreenState`, `getThermalState`, `requestMotionPermission`, `setDriveDisplay`,
 `getLastExitInfo` (`null` below Android 11), `isIgnoringBatteryOptimizations`, `setTripReminder`,
 `getTripReminderStatus`, `requestReminderLocation`, `claimReminderTap`, `takeReminderTap`,
-`markLockProof`.
+`markLockProof`, `listInstalledApps`, `launchApp`.
 
 ### `DriveSenseState`
 
