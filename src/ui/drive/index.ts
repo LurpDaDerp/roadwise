@@ -32,3 +32,4 @@ export { SpeedReadout, type SpeedReadoutProps } from './SpeedReadout';
 export { SpeedSign, type SpeedSignProps } from './SpeedSign';
 export * from './halo';
 export { HALO_TIMINGS } from './haloMotion';
+export { Halo, type HaloProps } from './HaloRing';
