@@ -13,6 +13,7 @@ import { activeDashcam } from '@/dashcam/registry';
 import { createSettingsRepo, type Db } from '@/data/db';
 import { clearDeviceSecret } from '@/data/devices/deviceSecret';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
+import { DROP_NOTICE_KEY } from '@/drive/dropNotice';
 
 /** Where the owner is remembered. The wipe clears it too, and it is rewritten straight after. */
 export const LAST_USER_KEY = 'device.lastUserId';
@@ -54,7 +55,8 @@ export const WIPE_KEEPS_SETTINGS_PREFIX = 'dashcam.';
 
 /** The driver's own data a plain sign-out removes (the owner key stays, so a return restores from the server). */
 export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'dashcam_events', 'dashcam_boots', 'dashcam_coverage', 'trips'];
-export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones'];
+/** The zones, and the notice of a drive that was not kept (`src/drive/dropNotice.ts`). */
+export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones', DROP_NOTICE_KEY];
 
 /** How long a wipe waits for the drive summaries to be cancelled before going on without it. */
 export const CANCEL_SUMMARIES_TIMEOUT_MS = 2_000;

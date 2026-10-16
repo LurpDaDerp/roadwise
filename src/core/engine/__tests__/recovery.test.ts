@@ -3,6 +3,7 @@ import { createDetectors } from '@/core/detectors';
 import { T0 } from '@/core/detectors/__fixtures__/rows';
 import { rows, TZ, uuid } from '@/core/engine/__fixtures__/drives';
 import type { TripSession } from '@/core/engine/engine.types';
+import { closeDrive, isDropped } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
 import { recoverRecordingTrips } from '@/core/engine/recovery';
 import { rebuildFromSamples } from '@/core/engine/replay';
@@ -51,6 +52,7 @@ test('the newest recording drive is adopted when the capture still runs; older o
     finalize: async (s) => {
       finalized.push(s);
       await createTripsRepo(db).update(s.clientTripId, { status: 'pending' });
+      return 'finalized' as const;
     },
   });
   expect(result.adopt?.session.clientTripId).toBe(uuid(3));
@@ -133,6 +135,7 @@ test('an orphan is closed where the car last moved: at its last row + 1 s when k
   const finalize = async (s: Readonly<TripSession>) => {
     finalized.push(s);
     await trips.update(s.clientTripId, { status: 'pending' });
+    return 'finalized' as const;
   };
   // Killed at speed.
   await recording(uuid(1), 50, T0 - 7_200_000);
@@ -151,4 +154,28 @@ test('an orphan is closed where the car last moved: at its last row + 1 s when k
   expect(byId.get(uuid(1))).toMatchObject({ endCause: 'orphan', endedAt: T0 - 7_200_000 + 50_000, cut: true });
   expect(byId.get(uuid(2))).toMatchObject({ endCause: 'orphan', endedAt: T0 - 3_540_000, cut: true, rowsCount: 60 });
   expect(byId.get(uuid(3))).toMatchObject({ endCause: 'orphan', endedAt: T0 - 50_000_000 + 30_000, cut: true, rowsCount: 30 });
+});
+
+test('an orphan that never moved is dropped with closeDrive: trip, samples, events and coverage gone, nothing queued', async () => {
+  const trips = createTripsRepo(db);
+  await trips.insert({ client_trip_id: uuid(4), started_at: T0, tz: TZ, status: 'recording' }, T0);
+  await createSamplesRepo(db).appendMany(uuid(4), rows(120, { speedMps: 0 }).map((r) => ({ ts: r.ts, row: r })));
+  await db.execute('INSERT INTO dashcam_coverage (client_trip_id, moving_s, covered_s) VALUES (?, 0, 0)', [uuid(4)]);
+  const reasons: string[] = [];
+  const result = await recoverRecordingTrips(db, {
+    ...base(),
+    adoptable: async () => false,
+    finalize: async (s) => {
+      const r = await closeDrive(s, { db, tz: TZ, appVersion: '2.0.0', geocode: null, trimSeed: async () => '0'.repeat(64) });
+      if (!isDropped(r)) return 'finalized';
+      reasons.push(r.dropped);
+      return 'dropped';
+    },
+  });
+  expect(result).toMatchObject({ dropped: [uuid(4)], finalized: [], failed: [] });
+  expect(reasons).toEqual(['no_movement']);
+  expect(await trips.get(uuid(4))).toBeNull();
+  expect(await createSamplesRepo(db).count(uuid(4))).toBe(0);
+  expect((await db.execute('SELECT * FROM dashcam_coverage')).rows).toEqual([]);
+  expect((await db.execute('SELECT * FROM sync_queue')).rows).toEqual([]);
 });

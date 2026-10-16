@@ -1,9 +1,9 @@
 /** @jest-environment node */
 import { T0 } from '@/core/detectors/__fixtures__/rows';
 import { brakeEvent, closedSession, rows, speedingEvent, TZ, uuid } from '@/core/engine/__fixtures__/drives';
-import { finalizeTrip, INVALID_PAYLOAD_SYNC_ERROR, normaliseZone, sanitizeEvent } from '@/core/engine/finalize';
+import { closeDrive, dropReason, dropTrip, finalizeTrip, INVALID_PAYLOAD_SYNC_ERROR, isDropped, normaliseZone, sanitizeEvent } from '@/core/engine/finalize';
 import { PRIVACY_ZONES_KEY } from '@/core/engine/privacy';
-import { appendRow, closeAtLastMovement, createSession } from '@/core/engine/session';
+import { appendRow, closeAtLastMovement, closeSession, createSession } from '@/core/engine/session';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { FinalizeTripPayloadV3Schema, MAX_DRIVE_MS } from '@/data/sync/payload';
@@ -204,5 +204,61 @@ describe('a drive closed at its last movement', () => {
     expect(result.trip.status).toBe('pending');
     expect(result.payload).not.toBeNull();
     expect(FinalizeTripPayloadV3Schema.safeParse(result.payload).success).toBe(true);
+  });
+});
+
+describe('a drive that never moved is dropped (closeDrive)', () => {
+  const ID = '44444444-4444-4444-8444-444444444444';
+  async function recordingTrip(n: number, over: Parameters<typeof rows>[1] = {}) {
+    await createTripsRepo(db).insert({ client_trip_id: ID, started_at: T0, tz: TZ, status: 'recording' }, T0);
+    const list = rows(n, { speedMps: 0, ...over });
+    await createSamplesRepo(db).appendMany(ID, list.map((r) => ({ ts: r.ts, row: r })));
+    await createEventsRepo(db).insertMany([{ id: uuid(40), client_trip_id: ID, type: 'phone_pickup', tier: 'severe', started_at: T0 + 5000 }]);
+    await db.execute('INSERT INTO dashcam_coverage (client_trip_id, moving_s, covered_s) VALUES (?, 0, 0)', [ID]);
+    const s = createSession({ clientTripId: ID, startedAt: T0 });
+    for (const r of list) appendRow(s, r, false);
+    return s;
+  }
+
+  test('an automatic end of a drive that stood still removes the trip, samples, events and coverage; nothing is queued', async () => {
+    const s = await recordingTrip(60);
+    expect(dropReason(s)).toBe('no_movement');
+    const result = await closeDrive(closeAtLastMovement(s, 'stopped'), deps());
+    expect(result).toEqual({ dropped: 'no_movement', clientTripId: ID });
+    expect(await createTripsRepo(db).get(ID)).toBeNull();
+    expect(await createSamplesRepo(db).count(ID)).toBe(0);
+    expect(await createEventsRepo(db).listByTrip(ID)).toEqual([]);
+    expect((await db.execute('SELECT * FROM dashcam_coverage')).rows).toEqual([]);
+    expect((await db.execute('SELECT * FROM sync_queue')).rows).toEqual([]);
+  });
+
+  test('no valid fix at all is no_gps; a manual end of a never-moved drive is dropped too', async () => {
+    const s = await recordingTrip(60, { over: () => ({ gnssValid: false, speed: -1 }) });
+    expect(dropReason(s)).toBe('no_gps');
+    expect(await closeDrive(closeSession(s, T0 + 60_000, 'manual'), deps())).toEqual({ dropped: 'no_gps', clientTripId: ID });
+    expect(await createTripsRepo(db).get(ID)).toBeNull();
+  });
+
+  test('a drive that moved is kept (dropReason null) and finalized as before', async () => {
+    const s = createSession({ clientTripId: ID, startedAt: T0 });
+    for (const r of rows(60)) appendRow(s, r, false);
+    expect(dropReason(s)).toBeNull();
+    const result = await closeDrive(closeAtLastMovement(s, 'stopped'), deps());
+    expect(isDropped(result)).toBe(false);
+    expect((await createTripsRepo(db).get(ID))!.status).toBe('pending');
+  });
+
+  test('a second closeDrive after a drop neither throws nor inserts; dropTrip never deletes a finalized row', async () => {
+    const s = await recordingTrip(10);
+    const closed = closeAtLastMovement(s, 'stopped');
+    await closeDrive(closed, deps());
+    expect(await closeDrive(closed, deps())).toEqual({ dropped: 'no_movement', clientTripId: ID });
+    expect(await createTripsRepo(db).count()).toBe(0);
+    await createTripsRepo(db).insert({ client_trip_id: ID, started_at: T0, tz: TZ, status: 'pending' }, T0);
+    expect(await dropTrip(db, ID)).toBe(false);
+    expect((await createTripsRepo(db).get(ID))!.status).toBe('pending');
+    // closeDrive hands the stored drive back rather than deleting it.
+    const back = await closeDrive(closed, deps());
+    expect(isDropped(back)).toBe(false);
   });
 });

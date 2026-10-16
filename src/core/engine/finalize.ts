@@ -8,6 +8,7 @@
 //   4. ONE transaction replaces the events, updates the trip row (`pending`), queues the upload
 //      and purges the samples. It commits or it does not.
 // A payload the contract refuses is stored as `failed` (never uploaded, never left `recording`).
+// A drive that never moved is not finalized at all: `closeDrive` drops it (nothing stored or queued).
 //
 // DashPal (plan §8.4): before any of that, the dashcam's facts for the drive are read once (they
 // read the samples the transaction purges). Its candidates become severe `eyes_off` / `drowsy`
@@ -256,6 +257,53 @@ async function readZones(db: Db): Promise<PrivacyZone[]> {
     return [];
   }
 }
+
+/**
+ * Why a closed drive is not kept: `no_gps` when it never had a valid fix, `no_movement` when the
+ * car never moved (`session.ts` "Movement"), whatever ended it. Null: the drive is kept.
+ */
+export type DropReason = 'no_movement' | 'no_gps';
+
+export function dropReason(session: Pick<TripSession, 'moved' | 'validGnssRows'>): DropReason | null {
+  if (session.moved !== null) return null;
+  return session.validGnssRows === 0 ? 'no_gps' : 'no_movement';
+}
+
+/** A drive that was not kept: nothing stored, uploaded or scored. */
+export interface DroppedResult {
+  dropped: DropReason;
+  clientTripId: string;
+}
+
+/**
+ * Delete a drive that is not kept, in one transaction: its samples, events and DashPal coverage,
+ * then the trip row, but only while that row is still `recording` (a finalized drive is never
+ * deleted). Nothing is queued. Returns false when a finalized row stood in the way.
+ */
+export async function dropTrip(db: Db, clientTripId: string): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const trip = await createTripsRepo(db).get(clientTripId, tx);
+    if (trip !== null && trip.status !== 'recording') return false;
+    await tx.execute('DELETE FROM samples WHERE client_trip_id = ?', [clientTripId]);
+    await tx.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [clientTripId]);
+    await tx.execute('DELETE FROM dashcam_coverage WHERE client_trip_id = ?', [clientTripId]);
+    await tx.execute("DELETE FROM trips WHERE client_trip_id = ? AND status = 'recording'", [clientTripId]);
+    return true;
+  });
+}
+
+/**
+ * The end of every drive: one that never moved is dropped (`dropTrip`), any other is finalized
+ * (`finalizeTrip`). A retry after a drop finds nothing and drops again; a drive somehow already
+ * finalized under the same id is handed back as stored, never deleted.
+ */
+export async function closeDrive(session: Readonly<TripSession>, deps: FinalizeDeps): Promise<FinalizeResult | DroppedResult> {
+  const reason = dropReason(session);
+  if (reason !== null && (await dropTrip(deps.db, session.clientTripId))) return { dropped: reason, clientTripId: session.clientTripId };
+  return finalizeTrip(session, deps);
+}
+
+export const isDropped = (r: FinalizeResult | DroppedResult): r is DroppedResult => 'dropped' in r;
 
 export async function finalizeTrip(session: Readonly<TripSession>, deps: FinalizeDeps): Promise<FinalizeResult> {
   const { db } = deps;

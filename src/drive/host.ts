@@ -22,8 +22,8 @@ import { decisionFor } from '@/core/alerts/policy';
 import type { AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
 import { knownSpeed } from '@/core/detectors/common';
-import type { AdoptedTrip, AlertEvent, EngineSnapshot, EngineStatus, TripSession } from '@/core/engine/engine.types';
-import { finalizeTrip } from '@/core/engine/finalize';
+import type { AdoptedTrip, AlertEvent, EndCause, EngineSnapshot, EngineStatus, TripSession } from '@/core/engine/engine.types';
+import { closeDrive, isDropped, type DropReason } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
 import { createRecorder } from '@/core/engine/recorder';
 import type { FeatureRow } from '@/core/engine/types';
@@ -37,15 +37,19 @@ import { processTimers } from '@/lib/timers';
 import { KMH_PER_MPH, metersToMiles, mpsToMph } from '@/lib/units';
 
 import type { DriveDisplay } from './display';
+import { writeDropNotice } from './dropNotice';
 import { detectorContext, isBusyStatus, walkingReported } from './policy';
 import type { DriveSource } from './source';
 import { createTicker, type Scheduler } from './ticks';
 
 export type { DriveSource } from './source';
 
-/** The outcome of the last finalize, for the end flow and the summary notification. */
+/**
+ * The outcome of the last finalize, for the end flow and the summary notification. `dropped`: the
+ * drive was not kept (it never moved), so it has no row, status or points.
+ */
 export type LastFinalized =
-  | { clientTripId: string; ok: true; status: TripStatus; pointsNet: number | null; at: number }
+  | { clientTripId: string; ok: true; status: TripStatus | null; pointsNet: number | null; dropped: DropReason | null; endCause: EndCause; at: number }
   | { clientTripId: string; ok: false; at: number }
   | null;
 
@@ -77,8 +81,11 @@ export interface DriveHost {
   boot(opts?: { adopt?: AdoptedTrip | null }): Promise<void>;
   /** The user's Start Drive tap, at any speed. Refuses without location, while busy, or signed out. */
   start(): Promise<StartResult>;
-  /** The hold-to-end. Resolves once the drive is finalized; null when none was open. */
-  end(): Promise<{ clientTripId: string } | null>;
+  /**
+   * The hold-to-end. Resolves once the drive is finalized; null when none was open. `dropped`: that
+   * drive was not kept (whichever end closed it: this one or an automatic end it raced).
+   */
+  end(): Promise<{ clientTripId: string; dropped: DropReason | null } | null>;
   stop(opts: { endOpenTrip: boolean }): Promise<void>;
   isBusy(): boolean;
   captureActive(): boolean;
@@ -203,7 +210,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       } catch (e) {
         report(e, 'dashcam');
       }
-      const result = await finalizeTrip(session, {
+      const result = await closeDrive(session, {
         db,
         tz: tz(),
         now,
@@ -211,7 +218,14 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         context: async () => (await deps.context?.()) ?? null,
         ...dashcamFinalizeDeps(db),
       });
-      lastFinalized = { clientTripId: id, ok: true, status: result.trip.status, pointsNet: result.trip.points_net, at: now() };
+      const endCause = session.endCause ?? 'manual';
+      if (isDropped(result)) {
+        lastFinalized = { clientTripId: id, ok: true, status: null, pointsNet: null, dropped: result.dropped, endCause, at: now() };
+        // Home says why; no OS notification (nothing was earned or lost).
+        await writeDropNotice(db, { clientTripId: id, cause: endCause, reason: result.dropped, at: now() }).catch((e: unknown) => report(e, 'dropNotice'));
+      } else {
+        lastFinalized = { clientTripId: id, ok: true, status: result.trip.status, pointsNet: result.trip.points_net, dropped: null, endCause, at: now() };
+      }
       finalizedPending = true;
     } catch (error) {
       lastFinalized = { clientTripId: id, ok: false, at: now() };
@@ -579,7 +593,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       if (id === null) return null;
       await run(() => engine.dispatch({ type: 'end', ts: now() }), 'end');
       await self.untilIdle();
-      return { clientTripId: id };
+      const f = lastFinalized;
+      return { clientTripId: id, dropped: f !== null && f.ok && f.clientTripId === id ? f.dropped : null };
     },
 
     async stop({ endOpenTrip }) {

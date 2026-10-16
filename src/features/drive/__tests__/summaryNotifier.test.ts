@@ -36,14 +36,14 @@ test('a drive finalized while the app is not in front schedules "Drive ended —
   const { host, set } = hostStub({});
   const { p, scheduled } = port();
   const n = attachSummaryNotifier(host, { port: p, appState: { currentState: 'background' } });
-  set({ status: 'idle', lastFinalized: { clientTripId: 'abc', ok: true, status: 'pending', pointsNet: 120, at: 5 } });
+  set({ status: 'idle', lastFinalized: { clientTripId: 'abc', ok: true, status: 'pending', pointsNet: 120, dropped: null, endCause: 'stopped', at: 5 } });
   await n.settled();
   expect(scheduled).toHaveLength(1);
   expect(scheduled[0]).toMatchObject({ clientTripId: 'abc', title: 'Drive ended', body: 'See your points', url: '/drives/abc?fresh=1' });
   expect(summaryHref('abc')).toBe('/drives/abc?fresh=1');
   // The same outcome re-published is not announced twice; a later drive is.
   set({ status: 'idle' });
-  set({ lastFinalized: { clientTripId: 'def', ok: true, status: 'pending', pointsNet: null, at: 9 } });
+  set({ lastFinalized: { clientTripId: 'def', ok: true, status: 'pending', pointsNet: null, dropped: null, endCause: 'stopped', at: 9 } });
   await n.settled();
   expect(scheduled.map((r) => r.clientTripId)).toEqual(['abc', 'def']);
   n.detach();
@@ -53,7 +53,7 @@ test('nothing while the app shows the end flow, without permission, or for a fai
   const { host, set } = hostStub({});
   const { p, scheduled } = port();
   const n = attachSummaryNotifier(host, { port: p, appState: { currentState: 'active' } });
-  set({ lastFinalized: { clientTripId: 'abc', ok: true, status: 'pending', pointsNet: 1, at: 5 } });
+  set({ lastFinalized: { clientTripId: 'abc', ok: true, status: 'pending', pointsNet: 1, dropped: null, endCause: 'stopped', at: 5 } });
   await n.settled();
   expect(scheduled).toEqual([]);
   n.detach();
@@ -61,11 +61,24 @@ test('nothing while the app shows the end flow, without permission, or for a fai
   const denied = port(false);
   const b = hostStub({});
   const n2 = attachSummaryNotifier(b.host, { port: denied.p, appState: { currentState: 'background' } });
-  b.set({ lastFinalized: { clientTripId: 'abc', ok: true, status: 'pending', pointsNet: 1, at: 5 } });
+  b.set({ lastFinalized: { clientTripId: 'abc', ok: true, status: 'pending', pointsNet: 1, dropped: null, endCause: 'stopped', at: 5 } });
   b.set({ lastFinalized: { clientTripId: 'ghi', ok: false, at: 6 } });
   await n2.settled();
   expect(denied.scheduled).toEqual([]);
   n2.detach();
+});
+
+test('a drive that was not kept (dropped) schedules nothing, in the background too; a kept one after it still does', async () => {
+  const { host, set } = hostStub({});
+  const { p, scheduled } = port();
+  const n = attachSummaryNotifier(host, { port: p, appState: { currentState: 'background' } });
+  set({ status: 'idle', lastFinalized: { clientTripId: 'gone', ok: true, status: null, pointsNet: null, dropped: 'no_movement', endCause: 'stopped', at: 5 } });
+  await n.settled();
+  expect(scheduled).toEqual([]);
+  set({ lastFinalized: { clientTripId: 'kept', ok: true, status: 'pending', pointsNet: 3, dropped: null, endCause: 'manual', at: 9 } });
+  await n.settled();
+  expect(scheduled.map((r) => r.clientTripId)).toEqual(['kept']);
+  n.detach();
 });
 
 test('cancelDriveSummaries removes every scheduled summary (the handover wipe)', async () => {

@@ -182,10 +182,11 @@ export function createTripsRepo(db: Db) {
     checkpoint: (clientTripId: string, checkpointTs: number, now: number = Date.now(), on?: Db) =>
       update(clientTripId, { checkpoint_ts: checkpointTs }, now, on),
 
-    /** Takes the trip's events and samples with it (explicitly: foreign keys may be off in a device transaction). */
+    /** Takes the trip's events, samples and DashPal coverage with it (explicitly: foreign keys may be off in a device transaction). */
     async remove(clientTripId: string, on: Db = db): Promise<boolean> {
       await on.execute('DELETE FROM samples WHERE client_trip_id = ?', [clientTripId]);
       await on.execute('DELETE FROM trip_events WHERE client_trip_id = ?', [clientTripId]);
+      await on.execute('DELETE FROM dashcam_coverage WHERE client_trip_id = ?', [clientTripId]);
       const { changes } = await on.execute('DELETE FROM trips WHERE client_trip_id = ?', [clientTripId]);
       return changes > 0;
     },

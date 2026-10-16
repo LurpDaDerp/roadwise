@@ -49,12 +49,16 @@ test('list is newest first; listRecording and latestFinished pick the right rows
   expect(await trips.count()).toBe(3);
 });
 
-test('remove takes the trip with its events and samples', async () => {
+test('remove takes the trip with its events, samples and DashPal coverage', async () => {
   await trips.insert({ client_trip_id: 'a', started_at: T0, tz: 'UTC', status: 'recording' }, T0);
   await db.execute("INSERT INTO trip_events (id, client_trip_id, type, tier, started_at) VALUES ('e1', 'a', 'speeding', 'minor', 1)");
   await db.execute("INSERT INTO samples (client_trip_id, ts, row_json) VALUES ('a', 1, '{}')");
+  await db.execute("INSERT INTO dashcam_coverage (client_trip_id, moving_s, covered_s) VALUES ('a', 3, 2)");
+  // Foreign keys may be off in a device transaction: the coverage goes by hand, not by cascade.
+  await db.execute('PRAGMA foreign_keys = OFF');
   expect(await trips.remove('a')).toBe(true);
   expect((await db.execute('SELECT * FROM trip_events')).rows).toEqual([]);
   expect((await db.execute('SELECT * FROM samples')).rows).toEqual([]);
+  expect((await db.execute('SELECT * FROM dashcam_coverage')).rows).toEqual([]);
   expect(await trips.remove('a')).toBe(false);
 });

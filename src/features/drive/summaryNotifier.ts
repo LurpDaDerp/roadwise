@@ -117,7 +117,8 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
     if (f === seen || f === null) return;
     const fresh = seen === null || f.clientTripId !== seen.clientTripId || f.at !== seen.at;
     seen = f;
-    if (!fresh || !f.ok || f.status === 'failed') return;
+    // A drive that was not kept has no summary: Home carries its notice instead.
+    if (!fresh || !f.ok || f.status === 'failed' || f.dropped !== null) return;
     chain = chain.then(() => announce(f.clientTripId)).catch((e: unknown) => report(e, 'summary notification'));
   });
 

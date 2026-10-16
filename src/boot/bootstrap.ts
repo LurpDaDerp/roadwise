@@ -12,7 +12,7 @@ import { createExpoAlertPorts } from '@/core/alerts/adapters';
 import { createAlertPlayer, type AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
 import type { AdoptedTrip, TripSession } from '@/core/engine/engine.types';
-import { finalizeTrip, safeMilesEarlierToday } from '@/core/engine/finalize';
+import { closeDrive, isDropped, safeMilesEarlierToday } from '@/core/engine/finalize';
 import { recoverRecordingTrips, type RecoveryResult } from '@/core/engine/recovery';
 import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSupabaseSpeedLimitApi, type SpeedLimitApi, type SpeedLimitsSupabase } from '@/core/speedLimits/api';
@@ -33,6 +33,7 @@ import { dashcamFinalizeDeps } from '@/dashcam/finalizeDeps';
 import { setActiveDashcam } from '@/dashcam/registry';
 import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
+import { writeDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
@@ -260,9 +261,10 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     const today = dayKey(new Date(now()), currentZone());
     return { streak, safeMilesEarlierToday: await safeMilesEarlierToday(db, today, now()) };
   };
-  // Crash recovery finalizes with the drive's stored DashPal facts too (plan §7.7).
-  const finalizeDeps = (session: Readonly<TripSession>) =>
-    finalizeTrip(session, {
+  // Crash recovery finalizes with the drive's stored DashPal facts too (plan §7.7). An orphan that
+  // never moved is dropped, and Home says why (no OS notification).
+  const finalizeDeps = async (session: Readonly<TripSession>): Promise<'finalized' | 'dropped'> => {
+    const result = await closeDrive(session, {
       db,
       tz: currentZone(),
       now,
@@ -270,6 +272,10 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       context: async () => (await summaryContext()) ?? null,
       ...dashcamFinalizeDeps(db),
     });
+    if (!isDropped(result)) return 'finalized';
+    await writeDropNotice(db, { clientTripId: result.clientTripId, cause: 'orphan', reason: result.dropped, at: now() }).catch((e: unknown) => onError(e, 'dropNotice'));
+    return 'dropped';
+  };
 
   enter('recover');
   const recovery = await stage('recover', () =>
@@ -285,7 +291,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
           return false;
         }
       },
-      finalize: (session) => finalizeDeps(session).then(() => undefined),
+      finalize: finalizeDeps,
     })
   );
   for (const failure of recovery.failed) onError(failure.error, `recover ${failure.clientTripId}`);

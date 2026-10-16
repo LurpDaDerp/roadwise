@@ -14,6 +14,7 @@ import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
+import { readDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, type DriveHost, type DriveState } from '@/drive/host';
 import type { Scheduler } from '@/drive/ticks';
 import { metersToMiles } from '@/lib/units';
@@ -232,7 +233,7 @@ test('a drive: rows publish at most once each, the display updates on change, po
   expect(h.display.log.at(-1)).toMatch(/update 0\/35\/\d+/);
   clock = T0 + 124_000;
   const ended = await h.host.end();
-  expect(ended).toEqual({ clientTripId: uuid(1) });
+  expect(ended).toEqual({ clientTripId: uuid(1), dropped: null });
   expect(h.host.snapshot().status).toBe('idle');
   expect(h.host.snapshot().lastFinalized).toMatchObject({ clientTripId: uuid(1), ok: true, status: 'pending' });
   expect(h.source.calls.at(-1)).toBe('stopCapture');
@@ -309,6 +310,59 @@ test('the automatic end: 15 min without movement ends the drive at its last move
   expect(h.host.snapshot().status).toBe('idle');
   expect((await createTripsRepo(db).list())[0]!.client_trip_id).toBe(uuid(2));
   await h.host.stop({ endOpenTrip: false });
+});
+
+describe('a drive that never moved is not kept', () => {
+  test('the hold: end() says dropped, the display ends, the capture stops, Home gets the notice; no trip row is left', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(10, { speedMps: 0 }));
+    clock = T0 + 20_000;
+    expect(await h.host.end()).toEqual({ clientTripId: uuid(1), dropped: 'no_movement' });
+    expect(h.host.snapshot().lastFinalized).toMatchObject({ clientTripId: uuid(1), ok: true, status: null, pointsNet: null, dropped: 'no_movement', endCause: 'manual' });
+    expect(h.display.log.at(-1)).toBe('end');
+    expect(h.source.calls.at(-1)).toBe('stopCapture');
+    expect(await readDropNotice(db)).toEqual({ clientTripId: uuid(1), cause: 'manual', reason: 'no_movement', at: T0 + 20_000 });
+    expect(await createTripsRepo(db).get(uuid(1))).toBeNull();
+    expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the automatic end with no rows at all: dropped (no GPS) and the notice names the automatic end', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    clock = T0 + IDLE_END_S * 1000 + 1000;
+    expect(h.scheduler.fire()).toBe(1);
+    await h.host.untilIdle();
+    expect(h.host.snapshot().lastFinalized).toMatchObject({ dropped: 'no_gps', endCause: 'stopped' });
+    expect(await readDropNotice(db)).toMatchObject({ cause: 'stopped', reason: 'no_gps' });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('a hold that lands while an automatic drop finalizes returns dropped for that drive', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(3, { speedMps: 0 }));
+    clock = T0 + IDLE_END_S * 1000 + 1000;
+    h.scheduler.fire();
+    expect(await h.host.end()).toEqual({ clientTripId: uuid(1), dropped: 'no_movement' });
+    expect(h.host.snapshot().lastFinalized).toMatchObject({ endCause: 'stopped' });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('a kept drive’s end() says dropped: null and writes no notice', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(30, { speedMps: 15 }));
+    expect(await h.host.end()).toEqual({ clientTripId: uuid(1), dropped: null });
+    expect(h.host.snapshot().lastFinalized).toMatchObject({ dropped: null, status: 'pending', endCause: 'manual' });
+    expect(await readDropNotice(db)).toBeNull();
+    await h.host.stop({ endOpenTrip: false });
+  });
 });
 
 test('alerts go to the player as decisions (one speeding chime); a hands-free call suppresses phone events', async () => {

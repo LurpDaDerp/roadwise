@@ -15,6 +15,7 @@ import { DEVICE_TABLES, ensureDeviceOwner, hasDriverData, readDeviceOwner, wipeD
 import { createFakeDashcamRuntime } from '@/dashcam/__fixtures__/fakeRuntime';
 import { setActiveDashcam } from '@/dashcam/registry';
 import { INSTALL_ID_KEY, readInstallId } from '@/data/devices/installId';
+import { DROP_NOTICE_KEY, readDropNotice } from '@/drive/dropNotice';
 
 jest.mock('expo-notifications', () => ({}));
 const mockEnsureDrivePermissions = jest.fn(async (..._args: unknown[]) => ({ location: 'granted' as const, motion: 'undetermined' as const }));
@@ -115,6 +116,20 @@ test('a drive the previous process was recording is continued when the capture s
   await rt2.stop();
 });
 
+test('an orphan that never moved is dropped at launch and Home gets the notice (cause orphan); no OS notification', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  const trips = createTripsRepo(db);
+  await trips.insert({ client_trip_id: uuid(8), started_at: clock - 300_000, tz: TZ, status: 'recording' }, clock);
+  await createSamplesRepo(db).appendMany(uuid(8), rows(300, { t0: clock - 300_000, speedMps: 0 }).map((r) => ({ ts: r.ts, row: r })));
+  const rt = await bootstrapApp(deps().deps);
+  expect(rt.recovery).toMatchObject({ dropped: [uuid(8)], finalized: [] });
+  expect(await trips.get(uuid(8))).toBeNull();
+  expect(await readDropNotice(db)).toEqual({ clientTripId: uuid(8), cause: 'orphan', reason: 'no_movement', at: clock });
+  expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
+  await rt.stop();
+});
+
 test('the headless task keeps a continued drive alive and stops a capture with no drive behind it', async () => {
   const d = deps();
   const rt = await bootstrapApp(d.deps);
@@ -189,6 +204,7 @@ test('a plain sign-out with nothing owed wipes the drives and zones but keeps th
   await createTripsRepo(db).insert({ client_trip_id: uuid(1), started_at: T0, tz: TZ, status: 'scored', from_label: 'Home' }, T0);
   await createSettingsRepo(db).set('privacy.zones', [{ id: 'h', name: 'Home', lat: 1, lng: 1, radiusM: 300 }]);
   await createSettingsRepo(db).set(INSTALL_ID_KEY, 'install-keeps-1234');
+  await createSettingsRepo(db).set(DROP_NOTICE_KEY, { clientTripId: uuid(2), cause: 'stopped', reason: 'no_movement', at: T0 });
   for (const [status, key] of [['done', 'a'], ['failed', 'b'], ['pending', 'c']] as const) {
     await db.execute(
       "INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, next_attempt_at, created_at) VALUES ('trip.finalize', '{}', ?, ?, 0, 0)",
@@ -202,6 +218,7 @@ test('a plain sign-out with nothing owed wipes the drives and zones but keeps th
   expect(await createQueueRepo(db).countByStatus('failed')).toBe(0);
   expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
   expect(await createSettingsRepo(db).get('privacy.zones')).toBeNull();
+  expect(await createSettingsRepo(db).get(DROP_NOTICE_KEY)).toBeNull();
   expect(await readDeviceOwner(db)).toBe('user-1');
   expect(await readInstallId(createSettingsRepo(db))).toBe('install-keeps-1234');
   await rt.stop();

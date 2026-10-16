@@ -27,9 +27,10 @@ jest.mock('@/core/engine/finalize', () => {
   const actual = jest.requireActual<typeof import('@/core/engine/finalize')>('@/core/engine/finalize');
   return {
     ...actual,
-    finalizeTrip: (session: { clientTripId: string }, deps: Record<string, unknown>) => {
+    // Both call sites close a drive through closeDrive (it finalizes, or drops one that never moved).
+    closeDrive: (session: { clientTripId: string }, deps: Record<string, unknown>) => {
       finalizeCalls.push({ clientTripId: session.clientTripId, deps });
-      return actual.finalizeTrip(session as never, deps as never);
+      return actual.closeDrive(session as never, deps as never);
     },
   };
 });
