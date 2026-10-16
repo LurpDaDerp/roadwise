@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.PowerManager
@@ -29,6 +30,26 @@ class PhoneStateReceiver(private val context: Context, private val handler: Hand
       val info = ActivityManager.RunningAppProcessInfo()
       ActivityManager.getMyMemoryState(info)
       return info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+    }
+
+    /**
+     * The call state for the rows' bridge-only `call` key (README §1): `ring` while a call rings or
+     * dials, `live` while one is connected (a VoIP call counts only with the microphone in use: a
+     * VoIP app can leave the mode at IN_COMMUNICATION with no call), null with none. Needs no
+     * permission. The one Kotlin reading of the call state.
+     */
+    fun callState(context: Context): String? {
+      return try {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager? ?: return null
+        when (am.mode) {
+          AudioManager.MODE_RINGTONE -> "ring"
+          AudioManager.MODE_IN_CALL -> "live"
+          AudioManager.MODE_IN_COMMUNICATION -> if (am.activeRecordingConfigurations.isNotEmpty()) "live" else null
+          else -> null
+        }
+      } catch (_: Exception) {
+        null
+      }
     }
 
     /** NONE/LIGHT → nominal, MODERATE → fair, SEVERE → serious, CRITICAL and above → critical. */

@@ -40,6 +40,11 @@ export interface FeatureRow {
   handlingScore: number;
   locked: boolean;
   screenOn: boolean;
+  /**
+   * RoadWise is in front (Android: a started RoadWise activity, not sharing a phone-sized screen in
+   * split screen; iOS: the app is not in the background). Its absence while the phone is unlocked
+   * with its screen on is a screen switch (`detectors/phoneSwitch.ts`).
+   */
   appForeground: boolean;
   /**
    * The fix came from a mock provider (Android `Location.isMock()`, iOS 15+
@@ -47,6 +52,19 @@ export interface FeatureRow {
    * the key lack it, and absent reads as "not mock" (plan §6; WP7 adds it natively).
    */
   mock?: boolean;
+  /**
+   * A call during the row (bridge-only, like `mock`): `ring` while one rings or dials, `live` while
+   * one is connected; absent with none. A call's own screen is not a screen switch.
+   */
+  call?: 'ring' | 'live';
+  /**
+   * Stamped by the drive host before the row reaches the engine, never by native (`parseRow`
+   * strips it): `nav` while the navigation button's exemption runs, `restart` while the home
+   * screen a mid-drive process restart left behind is excused. Exempt rows are never a screen
+   * switch; motion use, speeding and harsh events read them as usual. Stored with the row, so a
+   * rebuild agrees.
+   */
+  exempt?: 'nav' | 'restart';
 }
 
 /** The speed limit the map layer believes applies to a row. */

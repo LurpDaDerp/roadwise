@@ -190,6 +190,29 @@ describe('the mock-location flag', () => {
   });
 });
 
+// README §1: `call` rides on the row payload while a call rings, dials or is connected.
+describe('the call state', () => {
+  test("'ring' and 'live' survive; absent when native did not send it; never counted as unknown", () => {
+    resetUnknownRowKeys();
+    expect(parseRow({ ...good, call: 'ring' })).toEqual({ ...good, call: 'ring' });
+    expect(parseRow({ ...good, call: 'live', mock: false })).toEqual({ ...good, call: 'live', mock: false });
+    expect(parseRow(good)).not.toHaveProperty('call');
+    expect(unknownRowKeys()).toBe(0);
+  });
+
+  test('any other value rejects the row', () => {
+    for (const call of [true, 'yes', 1, null, '', 'LIVE', undefined]) expect(parseRow({ ...good, call })).toBeNull();
+  });
+
+  test('a native `exempt` is stripped and counted: only the drive host stamps it', () => {
+    resetUnknownRowKeys();
+    expect(parseRow({ ...good, exempt: 'nav' })).toEqual(good);
+    expect(parseRow({ ...good, exempt: 'restart', call: 'live' })).toEqual({ ...good, call: 'live' });
+    expect(unknownRowKeys()).toBe(2);
+    resetUnknownRowKeys();
+  });
+});
+
 // README §3: the `activity` payload, iOS (type, confidence, ts) and Android (plus `exit: true`).
 describe('parseActivity', () => {
   test('accepts the iOS and Android shapes as fresh objects', () => {

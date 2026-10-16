@@ -653,6 +653,22 @@ describe('native-android: sensors and location (README §7, rev1: O8, I5)', () =
     expect(svc).toMatch(/emitRow\(out\.row, fix\.mock\)/);
     expect(svc).toMatch(/emitRow\(out\.row, fix\?\.mock \?: false\)/);
   });
+
+  it('rows carry the bridge-only call state from the audio mode: ring, live (VoIP only with the microphone in use), nothing with none', () => {
+    const fn = /fun callState\(context: Context\): String\? \{[\s\S]*?\n {4}\}/.exec(code(kt('PhoneStateReceiver')))?.[0] ?? '';
+    expect(fn).toMatch(/AudioManager\.MODE_RINGTONE -> "ring"/);
+    expect(fn).toMatch(/AudioManager\.MODE_IN_CALL -> "live"/);
+    expect(fn).toMatch(/AudioManager\.MODE_IN_COMMUNICATION -> if \(am\.activeRecordingConfigurations\.isNotEmpty\(\)\) "live" else null/);
+    expect(fn).toMatch(/else -> null/);
+    expect(fn).toMatch(/catch \(_: Exception\) \{\s*null\s*\}/);
+    const svc = code(kt('CaptureService'));
+    expect(svc).toMatch(/body\["mock"\] = mock\s*PhoneStateReceiver\.callState\(applicationContext\)\?\.let \{ body\["call"\] = it \}\s*EventBus\.emit\("row", body\)/);
+    expect(code(kt('Types'))).not.toMatch(/"call"/);
+    // One Kotlin reading of the call state: the audio-mode rules live in PhoneStateReceiver alone.
+    for (const f of readdirSync(KT_DIR).filter((x) => x.endsWith('.kt') && x !== 'PhoneStateReceiver.kt')) {
+      expect({ f, reads: /MODE_IN_CALL|MODE_RINGTONE|activeRecordingConfigurations/.test(code(read(join(KT_DIR, f)))) }).toEqual({ f, reads: false });
+    }
+  });
 });
 
 describe('native-android: the extraction port (README §7, §8)', () => {

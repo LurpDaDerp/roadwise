@@ -41,6 +41,16 @@ final class CallObserver: NSObject, CXCallObserverDelegate {
     observer?.calls.contains { !$0.hasEnded } ?? false
   }
 
+  /// Main thread, while capturing. The call state for the rows' bridge-only `call` key (README §1):
+  /// `"live"` while a call is connected, `"ring"` while one rings or dials, nil with none.
+  func state() -> String? {
+    dispatchPrecondition(condition: .onQueue(.main))
+    guard let calls = observer?.calls else { return nil }
+    if calls.contains(where: { $0.hasConnected && !$0.hasEnded }) { return "live" }
+    if calls.contains(where: { !$0.hasEnded }) { return "ring" }
+    return nil
+  }
+
   /// A fresh read for the forgot-to-start reminder's stop check (no drive open, so no observer
   /// runs). It emits nothing.
   static func anyCallActiveNow() -> Bool {

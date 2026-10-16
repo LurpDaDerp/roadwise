@@ -87,6 +87,15 @@ const ROW_KEYS: ReadonlySet<string> = new Set<string>([
  */
 export const MOCK_ROW_KEY = 'mock';
 
+/**
+ * The second bridge-only key: `call` (`ring` | `live`), present only while a call rings, dials or
+ * is connected (README §1). Split off and re-attached like `mock`; any other value rejects the
+ * row. `exempt` is never a bridge key: only the drive host stamps it, so a native one is stripped
+ * and counted like any unknown key.
+ */
+export const CALL_ROW_KEY = 'call';
+const CALL_VALUES: ReadonlySet<unknown> = new Set(['ring', 'live']);
+
 let unknownKeys = 0;
 /** Unknown row keys stripped since the last reset (diagnostics; C0 round 1, C0-m1). */
 export const unknownRowKeys = (): number => unknownKeys;
@@ -106,6 +115,7 @@ export function resetUnknownRowKeys(): void {
 export function parseRow(raw: unknown): DriveSenseRow | null {
   let input = raw;
   let mock: boolean | undefined;
+  let call: 'ring' | 'live' | undefined;
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
     const entries = Object.entries(raw);
     const m = (raw as Record<string, unknown>)[MOCK_ROW_KEY];
@@ -114,9 +124,14 @@ export function parseRow(raw: unknown): DriveSenseRow | null {
       if (typeof m !== 'boolean') return null;
       mock = m;
     }
-    const extra = entries.filter(([k]) => !ROW_KEYS.has(k) && k !== MOCK_ROW_KEY);
+    const c = (raw as Record<string, unknown>)[CALL_ROW_KEY];
+    if (CALL_ROW_KEY in raw) {
+      if (!CALL_VALUES.has(c)) return null;
+      call = c as 'ring' | 'live';
+    }
+    const extra = entries.filter(([k]) => !ROW_KEYS.has(k) && k !== MOCK_ROW_KEY && k !== CALL_ROW_KEY);
     if (extra.length > 0) unknownKeys += extra.length;
-    if (extra.length > 0 || mock !== undefined) {
+    if (extra.length > 0 || mock !== undefined || call !== undefined) {
       input = Object.fromEntries(entries.filter(([k]) => ROW_KEYS.has(k)));
     }
   }
@@ -124,6 +139,7 @@ export function parseRow(raw: unknown): DriveSenseRow | null {
   if (!parsed.success) return null;
   const row: DriveSenseRow = parsed.data;
   if (mock !== undefined) row.mock = mock;
+  if (call !== undefined) row.call = call;
   for (const key of Object.keys(ROW_DECIMALS) as (keyof typeof ROW_DECIMALS)[]) {
     row[key] = roundTo(row[key], ROW_DECIMALS[key]);
   }

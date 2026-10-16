@@ -256,11 +256,20 @@ describe('iOS drive-sense module (text)', () => {
     expect(code('ExtractMath.swift')).toMatch(/var mock: Bool = false/);
     expect(code('ExtractMath.swift')).not.toMatch(/"mock"/); // never in `payload`: the self-test rows stay the contract's keys
     const ctrl = code('CaptureController.swift');
-    expect(ctrl).toMatch(/var body = row\.payload\s*body\["mock"\] = mock\s*EventHub\.shared\.emit\("row", body\)/);
+    expect(ctrl).toMatch(/var body = row\.payload\s*body\["mock"\] = mock\s*if let c = calls\.state\(\) \{ body\["call"\] = c \}\s*EventHub\.shared\.emit\("row", body\)/);
     const pipe = code('RowPipeline.swift');
     expect(pipe).toMatch(/var onRow: \(\(ExtractedRow, Bool, Int\) -> Void\)\?/);
     expect(pipe).toMatch(/mock: fix\.mock\)/);
     expect(pipe).toMatch(/mock: fix\?\.mock \?\? false\)/);
+  });
+
+  it('rows carry the bridge-only call state: "live" for a connected call, "ring" for one ringing or dialing, nothing with none', () => {
+    const state = /func state\(\) -> String\? \{[\s\S]*?\n {2}\}/.exec(code('CallObserver.swift'))?.[0] ?? '';
+    expect(state).toMatch(/dispatchPrecondition\(condition: \.onQueue\(\.main\)\)/);
+    expect(state).toMatch(/guard let calls = observer\?\.calls else \{ return nil \}/);
+    expect(state).toMatch(/if calls\.contains\(where: \{ \$0\.hasConnected && !\$0\.hasEnded \}\) \{ return "live" \}\s*if calls\.contains\(where: \{ !\$0\.hasEnded \}\) \{ return "ring" \}\s*return nil/);
+    expect(state).not.toMatch(/emit/);
+    expect(code('ExtractMath.swift')).not.toMatch(/"call"/);
   });
 
   it('polls protected data for the lock state and reports the lock signal', () => {

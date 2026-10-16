@@ -176,13 +176,15 @@ final class CaptureController {
     }
   }
 
-  /// The `row` payload: the FeatureRow keys plus `mock` (v3, plan §6) — the window's fix was simulated.
+  /// The `row` payload: the FeatureRow keys plus the bridge-only `mock` (v3, plan §6: the window's
+  /// fix was simulated) and `call` ("ring" | "live", absent with no call: README §1).
   private func emitRow(_ row: ExtractedRow, mock: Bool, generation gen: Int) {
     watchdog.check()
     guard capturing, gen == generation else { return }
     lastRowTs = row.ts
     var body = row.payload
     body["mock"] = mock
+    if let c = calls.state() { body["call"] = c }
     EventHub.shared.emit("row", body)
   }
 

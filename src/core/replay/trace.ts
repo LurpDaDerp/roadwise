@@ -59,6 +59,8 @@ export const featureRowSchema: z.ZodType<FeatureRow> = z.strictObject({
   screenOn: z.boolean(),
   appForeground: z.boolean(),
   mock: z.boolean().optional(),
+  call: z.enum(['ring', 'live']).optional(),
+  exempt: z.enum(['nav', 'restart']).optional(),
 });
 
 export const limitEntrySchema: z.ZodType<LimitEntry> = z.strictObject({

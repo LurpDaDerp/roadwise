@@ -617,12 +617,16 @@ class CaptureService : Service() {
     emitRow(out.row, fix?.mock ?: false)
   }
 
-  /** The `row` payload: the FeatureRow keys plus `mock` (v3, plan §6) — the window's fix was mocked. */
+  /**
+   * The `row` payload: the FeatureRow keys plus the bridge-only `mock` (v3, plan §6: the window's
+   * fix was mocked) and `call` (`ring` | `live`, absent with no call: README §1).
+   */
   private fun emitRow(row: FeatureRow, mock: Boolean) {
     if (!row.isFinite()) return // never hand JS a NaN (README §1); parseRow would drop it anyway
     lastRowTs = row.ts
     val body = LinkedHashMap<String, Any?>(row.toMap())
     body["mock"] = mock
+    PhoneStateReceiver.callState(applicationContext)?.let { body["call"] = it }
     EventBus.emit("row", body)
   }
 }
