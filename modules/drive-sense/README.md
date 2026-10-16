@@ -166,11 +166,12 @@ these mappings decide whether walking can end a drive.
   `exit: true` marks the END of a walk: the engine never treats it as a walk, and it clears a
   walk the ENTER began. iOS never sets `exit`.
 
-  **The walking end** (engine, row clock). W1: once the car has reached driving speed (two
-  consecutive rows with a known, trusted GPS speed of 10 mph or more), an on-foot report whose walk
-  began after that and that stays the latest report for 20 s ends the drive unless the last known
-  speed is 10 mph or more and under 60 s old, cut at the last movement at or before the walk began;
-  two driving-speed rows after a report cancel it. W2: before driving speed, an on-foot report
+  **The walking end** (engine, row clock). A report counts only if its walk began after the car
+  was last at driving speed (two consecutive rows with a known, trusted GPS speed of 10 mph or
+  more): two such rows, the second at or after the walk began, void it for good, however late the
+  report arrives. W1: once the car has reached driving speed, such a report that stays the latest
+  report for 20 s ends the drive unless the last known speed is 10 mph or more and 60 s old or
+  less, cut at the last movement at or before the walk began. W2: before driving speed, an on-foot report
   that stays the latest for 20 s ends a drive at least 10 min old (it is then dropped, never
   driven). Without motion permission no reports come and neither applies.
 

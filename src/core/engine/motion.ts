@@ -2,10 +2,13 @@
 //
 // The OS activity classifier (iOS Motion & Fitness, Android Physical activity; optional) measures no
 // speed and no g-force. The engine uses it for one thing, the walking end (`machine.ts`):
-// - W1: once the car has reached driving speed (`session.droveAt`), an on-foot report whose walk
-//   began after that and that stays the latest report for `WALK_CONFIRM_MS` ends the drive, unless
-//   the last known speed is driving speed and under `WALK_STALE_FIX_MS` old; the drive is cut at the
-//   last movement at or before the walk began. Two driving rows after a report cancel it.
+// - A report counts only if its walk began after the car was last at driving speed
+//   (`session.lastDroveAt`): two driving rows in a row, the second at or after the walk began, void
+//   it for good, whenever the report arrives (before or after those rows).
+// - W1: once the car has reached driving speed (`session.droveAt`), such a report that stays the
+//   latest report for `WALK_CONFIRM_MS` ends the drive, unless the last known speed is driving speed
+//   and `WALK_STALE_FIX_MS` old or less; the drive is cut at the last movement at or before the walk
+//   began.
 // - W2: a drive that has not reached driving speed is ended by such a report only once it is
 //   `ON_FOOT_DROP_MS` old (and is then not kept).
 // Without the permission no reports come and neither rule ever applies.
@@ -20,7 +23,7 @@ export type FootReading = 'onFoot' | 'unsure' | 'clear';
 export const WALK_CONFIRM_MS = 20_000;
 /** W2: a drive that never reached driving speed is ended on foot only once it is this old. */
 export const ON_FOOT_DROP_MS = 600_000;
-/** The last known speed is no longer the car's once its row is this old (parked where there is no sky). */
+/** The last known speed is no longer the car's once its row is more than this old (parked where there is no sky). */
 export const WALK_STALE_FIX_MS = 60_000;
 /** S2: the shown speed is never zeroed at or above this. */
 export const STOP_DISPLAY_MAX_MPS = 3 * MPS_PER_MPH;
