@@ -278,10 +278,22 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     rw?.(false);
   }
 
+  /** Per setup connection (lowercase peripheral id): it found the AUTH characteristic. */
+  const authChar = new Map<string, boolean>();
+
   async function release(t: DashcamTransport, id: string | null): Promise<void> {
     if (id === null) return;
     await t.disconnect(id).catch((e: unknown) => report(e, 'disconnect'));
+    authChar.delete(id.toLowerCase());
     if (current === id) current = null;
+  }
+
+  /** A setup connection; resolves whether it found the AUTH characteristic (kept for a warmed link). */
+  async function connectSetup(t: DashcamTransport, id: string, opts?: { timeoutMs?: number }): Promise<boolean> {
+    current = id;
+    const { auth } = await t.setupConnect(id, opts);
+    authChar.set(id.toLowerCase(), auth);
+    return auth;
   }
 
   function drawKeys(): void {
@@ -473,12 +485,11 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       const shown = aim.d ? nameOf(aim.d) : (c.name ?? 'DashPal');
       if (!t.setupLinkUp(c.id)) set({ kind: 'connecting', name: shown, again: aim.again });
       let info: DashcamInfo | null;
-      let hasAuth = true;
+      let hasAuth: boolean;
       try {
-        if (!t.setupLinkUp(c.id)) {
-          current = c.id;
-          hasAuth = (await t.setupConnect(c.id)).auth;
-        }
+        // A connection still up (the Pair screen warmed it) keeps what its connect found.
+        if (t.setupLinkUp(c.id)) hasAuth = authChar.get(c.id.toLowerCase()) ?? true;
+        else hasAuth = await connectSetup(t, c.id);
         current = c.id;
         info = await t.readInfo(c.id);
       } catch (e) {
@@ -656,8 +667,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     while (!connected && deps.now() < until) {
       check();
       try {
-        current = c.id;
-        await t.setupConnect(c.id, { timeoutMs: Math.max(1000, until - deps.now()) });
+        await connectSetup(t, c.id, { timeoutMs: Math.max(1000, until - deps.now()) });
         connected = true;
         const info = await t.readInfo(c.id);
         if (info?.nonce && info.dashcamId === first.dashcamId) {
@@ -780,8 +790,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       const hits = await search(t, { d, suffix: null }, new Set());
       const hit = hits[0];
       if (!hit || cancelled) return null;
-      current = hit.id;
-      await t.setupConnect(hit.id);
+      await connectSetup(t, hit.id);
       const info = await t.readInfo(hit.id);
       if (!info || info.dashcamId !== d) {
         await release(t, hit.id);

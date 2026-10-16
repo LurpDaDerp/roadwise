@@ -356,6 +356,20 @@ describe('failures', () => {
     expect(end).toMatchObject({ kind: 'failed', reason: 'ios_forget_first' });
   });
 
+  test('iOS with no AUTH characteristic on a link’s warmed connection: Pair says ios_forget_first at once (no request written, no second connect)', async () => {
+    const r = rig({ platform: 'ios', cams: [{ last: 0xd5, noAuthChar: true }] });
+    await r.secrets.writePendingCode({ at: r.clock.t, dashcamId: camOf(0xd5), code: formatCode(S, 'label', { dashes: false }) });
+    const done = r.flow.start({ fromLink: { dashcamId: camOf(0xd5) } });
+    await r.until('confirm_link');
+    await flush();
+    expect(r.ble.calls.filter((c) => c.startsWith('connect'))).toHaveLength(1);
+    r.flow.confirm();
+    await done;
+    expect(r.flow.phase()).toMatchObject({ kind: 'failed', reason: 'ios_forget_first' });
+    expect(r.ble.calls.filter((c) => c.startsWith('connect'))).toHaveLength(1);
+    expect(r.ble.calls.some((c) => c.startsWith('write:') && c.endsWith(':0006'))).toBe(false);
+  });
+
   test('the key cannot be stored before PAIR_FIN: error, and PAIR_FIN is never sent', async () => {
     const r = rig();
     const set = r.store.set.bind(r.store);
