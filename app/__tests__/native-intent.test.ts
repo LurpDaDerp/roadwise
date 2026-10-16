@@ -1,3 +1,4 @@
+import { INSTALL_MARKER_KEY, startDashpalEarly, type MarkerStorage } from '@/dashcam/early';
 import { formatCode } from '@/dashcam/label';
 import { createDashpalSecrets, type DashpalSecrets } from '@/dashcam/secure';
 
@@ -89,6 +90,25 @@ test('with no link domain in this build, an https DashPal link is not ours (the 
   const s = memSecrets();
   expect(await redirectSystemPath({ path: `https://${DOMAIN}/dashpal#d=${CAM}&k=${CODE}`, initial: true }, { domain: '', secrets: s.secrets })).toBe('/');
   expect(await redirectSystemPath({ path: `roadwise://dashpal?d=${CAM}`, initial: true }, { domain: '', secrets: s.secrets })).toBe(`/dashpal?d=${CAM}`);
+});
+
+test('the label link that launched the first run after an install or update keeps its code: it is written after the install check, which would take it for a leftover', async () => {
+  const s = memSecrets();
+  const markers = new Map<string, string>();
+  const storage: MarkerStorage = {
+    getItem: async (k) => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return markers.get(k) ?? null;
+    },
+    setItem: async (k, v) => void markers.set(k, v),
+  };
+  const early = startDashpalEarly({ secrets: s.secrets, storage: () => storage, transport: () => { throw new Error('not started'); } });
+  const now = Date.now();
+  const route = redirectSystemPath({ path: `https://${DOMAIN}/dashpal#d=${CAM}&k=${CODE}`, initial: true }, { domain: DOMAIN, secrets: s.secrets, now: () => now });
+  expect(await early).toBe(false); // quarantined: nothing started
+  expect(await route).toBe(`/dashpal?d=${CAM}`);
+  expect(markers.get(INSTALL_MARKER_KEY)).toBe('1');
+  expect(await s.secrets.readPendingCode(now)).toEqual({ at: now, dashcamId: CAM, code: CODE });
 });
 
 test('the dev client launcher links pass untouched', async () => {

@@ -1,3 +1,4 @@
+import { afterInstallCheck } from '@/dashcam/early';
 import { formatCode, linkDomain, parseDashpalLink } from '@/dashcam/label';
 import { dashpalSecrets, type DashpalSecrets } from '@/dashcam/secure';
 
@@ -11,7 +12,8 @@ import { dashpalSecrets, type DashpalSecrets } from '@/dashcam/secure';
  * `roadwise://dashpal`) never takes its code into the router: the code goes to SecureStore
  * (`dashpal.pendingCode`, at most 12 h) and the route is `/dashpal?d=<dashcam id>`, which opens the
  * Pair screen (or waits for sign-in, onboarding or the end of a drive). A code that cannot be kept is
- * dropped: the driver scans it again. A link with a bad `d` or `k` opens the code step.
+ * dropped: the driver scans it again. A link with a bad `d` or `k` opens the code step. The code is
+ * written after this launch's install check (`early.ts`), which would otherwise take it for a leftover.
  */
 const ALLOWED = /^(add\/[^/?#]+|clan\/[^/?#]+|drives(\/[^/?#]+)?|auth\/callback)([?#].*)?$/;
 /** The shapes of a DashPal link, valid or not (`dashpal`, `dashpal/`, then a query or fragment). */
@@ -35,6 +37,7 @@ async function dashpalRoute(path: string, domain: string, secrets: DashpalSecret
   if (parts === 'not_a_code') return '/dashpal';
   if (parts.code) {
     try {
+      await afterInstallCheck();
       await secrets.writePendingCode({ at: now(), dashcamId: parts.d, code: formatCode(parts.code.S, parts.code.kind, { dashes: false }) });
     } catch {
       // not kept: the driver scans the code again at the code step

@@ -243,6 +243,16 @@ test('early start, no install marker (a fresh install, an iOS reinstall with Key
   expect(await startDashpalEarly({ storage: m.storage, transport: () => f.t })).toBe(true);
 });
 
+test('quarantine: a link code held from before this process goes; one written by this launch (the link that opened it) stays', async () => {
+  const now = Date.now();
+  await dashpalSecrets.writePendingCode({ at: now - 60_000, dashcamId: null, code: 'X' });
+  expect(await checkInstall({ storage: markers(null).storage, loadedAt: now - 1000 })).toBe('quarantined');
+  expect(mockStore.has(PENDING_CODE_SECURE_KEY)).toBe(false);
+  await dashpalSecrets.writePendingCode({ at: now, dashcamId: null, code: 'X' });
+  expect(await checkInstall({ storage: markers(null).storage, loadedAt: now - 1000 })).toBe('quarantined');
+  expect(await dashpalSecrets.readPendingCode(now)).toEqual({ at: now, dashcamId: null, code: 'X' });
+});
+
 test('quarantine: a pending key (an interrupted setup) is kept as the orphan when there is no pairing key', async () => {
   await dashpalSecrets.writePendingAuth(AUTH);
   expect(await checkInstall({ storage: markers(null).storage })).toBe('quarantined');
