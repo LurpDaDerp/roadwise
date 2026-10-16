@@ -98,6 +98,20 @@ test('the flow sits inside the pulse view (it scales with the ring); none under 
   expect(mockSetActive).toHaveBeenLastCalledWith(false);
 });
 
+test('Android texture: the pulse view is cached only while it pulses or bursts, never while the flow turns inside it', async () => {
+  const pulse = () => screen.getByTestId('hud-halo-pulse', HIDDEN).props.renderToHardwareTextureAndroid;
+  const flow = () => screen.getByTestId('hud-halo-flow', HIDDEN).props.renderToHardwareTextureAndroid;
+  const r = await render(view(HALO_CALM));
+  expect(pulse()).toBe(false);
+  expect(flow()).toBe(true);
+  await r.rerender(view(speeding(0.5)));
+  expect(pulse()).toBe(true);
+  await r.rerender(view(burst('phone:hard_brake:2')));
+  expect(pulse()).toBe(true);
+  await r.rerender(view({ ...speeding(0.5), pulsePeriodMs: 0, pulseDepth: 0, pulseScale: 0 }, { reduceMotion: true }));
+  expect(pulse()).toBe(false);
+});
+
 test('a severity wobbling within a tier for 10 rows restarts nothing: no burst, the clock started once', async () => {
   const r = await render(view(speeding(0.3)));
   for (let i = 0; i < 10; i += 1) await r.rerender(view(speeding(0.3 + (i % 3) * 0.04)));

@@ -145,6 +145,10 @@ export function Halo({ visual, size, height, ring, palette, dimmed, reduceMotion
   const ringProps = useAnimatedProps(() => ({ stroke: interpolateColor(colorS.get(), STOPS, ringColors, 'LAB') }));
   const numeralStyle = useAnimatedStyle(() => ({ color: interpolateColor(colorS.get(), STOPS, numeralColors, 'LAB') }));
 
+  // Android: cache the pulse view as a texture only while its own opacity and scale move and nothing
+  // inside it does (a pulse or a burst, the flow stopped). While calm the flow turns inside it every
+  // frame, which would redraw the texture each frame.
+  const pulseTexture = !reduceMotion && !visual.flow;
   const c = size / 2;
   return (
     <Animated.View testID="hud-halo-layer" pointerEvents="none" style={[{ width: size, height: ring ? size : (height ?? size) }, layerStyle]}>
@@ -156,7 +160,7 @@ export function Halo({ visual, size, height, ring, palette, dimmed, reduceMotion
           pointerEvents="none"
           style={StyleSheet.absoluteFill}
         >
-          <Animated.View testID="hud-halo-pulse" renderToHardwareTextureAndroid style={[StyleSheet.absoluteFill, pulseStyle]}>
+          <Animated.View testID="hud-halo-pulse" renderToHardwareTextureAndroid={pulseTexture} style={[StyleSheet.absoluteFill, pulseStyle]}>
             {LAYERS.map((i) => (
               <Animated.View key={i} style={[StyleSheet.absoluteFill, glowStyles[i]]}>
                 <Svg width={size} height={size}>
