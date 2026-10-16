@@ -1,4 +1,4 @@
-import { createDriveDisplay, DISPLAY_MIN_INTERVAL_MS, type DriveDisplayState } from '@/drive/display';
+import { createDriveDisplay, DISPLAY_KEEPALIVE_MS, DISPLAY_MIN_INTERVAL_MS, type DriveDisplayState } from '@/drive/display';
 
 const state = (over: Partial<DriveDisplayState> = {}): DriveDisplayState => ({ speed: 30, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: false, ...over });
 
@@ -73,4 +73,32 @@ test('tolerates missing sinks and a rejecting sink', () => {
   const bad = createDriveDisplay({ setDriveDisplay: () => Promise.reject(new Error('x')) }, { now: () => 0, platform: 'android', onError: (e) => errors.push(e) });
   bad.start(state());
   return new Promise((r) => setTimeout(r, 0)).then(() => expect(errors).toHaveLength(1));
+});
+
+test('an unchanged display is re-sent every 60 s (a long stop never goes stale); a change keeps the 3 s minimum; end resets', () => {
+  expect(DISPLAY_KEEPALIVE_MS).toBe(60_000);
+  let now = 0;
+  const { set } = sinks();
+  const d = createDriveDisplay({ setDriveDisplay: set }, { now: () => now, platform: 'android' });
+  const stopped = state({ speed: 0, stopped: true, points: 40, pointsDelta: 2 });
+  d.start(stopped);
+  expect(set).toHaveBeenCalledTimes(1);
+  now = 59_999;
+  d.update(stopped);
+  expect(set).toHaveBeenCalledTimes(1);
+  now = 60_000;
+  d.update(stopped);
+  expect(set).toHaveBeenCalledTimes(2);
+  now = 61_000;
+  d.update(state({ speed: 3, stopped: true, points: 40, pointsDelta: 2 }));
+  expect(set).toHaveBeenCalledTimes(2); // a change inside 3 s still waits
+  now = 63_000;
+  d.update(state({ speed: 3, stopped: true, points: 40, pointsDelta: 2 }));
+  expect(set).toHaveBeenCalledTimes(3);
+  d.end();
+  expect(set).toHaveBeenCalledTimes(4); // Android's final `ended` state
+  d.start(stopped);
+  now = 64_000;
+  d.update(stopped);
+  expect(set).toHaveBeenCalledTimes(5); // the new drive's start; the unchanged update waits
 });

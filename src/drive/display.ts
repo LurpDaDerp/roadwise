@@ -1,7 +1,9 @@
 // The background driving display (plan §6): `DriveSense.setDriveDisplay` reaches the Android
 // foreground notification and, on iOS, a running Live Activity; `LiveDrive.start`/`end` bound the
-// activity's life to the drive. This adapter throttles to one update per 3 s, sends only changes,
-// and tolerates either module being absent (a missing display must never affect a drive).
+// activity's life to the drive. This adapter throttles to one update per 3 s, sends only changes —
+// and an unchanged state again every 60 s, so a long stop never leaves the Live Activity stale (its
+// stale date is 2 min on) — and tolerates either module being absent (a missing display must never
+// affect a drive).
 import type { DriveDisplayState } from '@drive-sense';
 import type { LiveDriveApi, LiveDriveState } from '@live-drive';
 
@@ -20,6 +22,8 @@ export interface DisplaySinks {
 }
 
 export const DISPLAY_MIN_INTERVAL_MS = 3000;
+/** An unchanged display is re-sent this often (one update a minute at a stop). */
+export const DISPLAY_KEEPALIVE_MS = 60_000;
 
 const same = (a: DriveDisplayState | null, b: DriveDisplayState): boolean =>
   a !== null &&
@@ -58,7 +62,7 @@ export function createDriveDisplay(
 
   function send(state: DriveDisplayState, force: boolean): void {
     const now = deps.now();
-    if (!force && (same(last, state) || now - lastAt < minInterval)) return;
+    if (!force && (now - lastAt < minInterval || (same(last, state) && now - lastAt < DISPLAY_KEEPALIVE_MS))) return;
     last = state;
     lastAt = now;
     call(set === null ? null : () => set(state), deps.onError);
