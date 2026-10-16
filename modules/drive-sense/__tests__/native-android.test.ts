@@ -10,7 +10,7 @@ import * as CONSTANTS from '../src/extract/constants';
 import { REMINDER } from '../src/reminder/policy';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
-import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS } from '../src/types';
+import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS, DRIVE_SENSE_SYNC_METHODS } from '../src/types';
 
 // Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time. The root
 // tsconfig's `types` is ["jest"], so Node's own typings are not in the program — hence the local
@@ -66,6 +66,9 @@ describe('native-android: files the contract names exist, and no trip-detection 
     'TripReminderNotifier',
     'ReminderBootReceiver',
     'TripReminderSelfTest',
+    'DashpalLinkService',
+    'AlertWakeLock',
+    'AudioOutput',
   ];
   it.each(files)('%s.kt', (name) => {
     expect(existsSync(join(KT_DIR, `${name}.kt`))).toBe(true);
@@ -95,6 +98,16 @@ describe('native-android: the bridge surface (README §1)', () => {
   it('declares no AsyncFunction outside DRIVE_SENSE_METHODS, and none twice', () => {
     const declared = [...MODULE().matchAll(/AsyncFunction\("([^"]+)"\)/g)].map((x) => x[1]);
     expect([...declared].sort()).toEqual([...DRIVE_SENSE_METHODS].sort());
+  });
+
+  it.each([...DRIVE_SENSE_SYNC_METHODS])('Function("%s") is declared (sync, never an AsyncFunction)', (name) => {
+    expect(MODULE()).toMatch(new RegExp(`(?<!Async)Function\\("${name}"\\)`));
+    expect(MODULE()).not.toContain(`AsyncFunction("${name}")`);
+  });
+
+  it('declares no sync Function outside DRIVE_SENSE_SYNC_METHODS, and none twice', () => {
+    const declared = [...MODULE().matchAll(/(?<!Async)Function\("([^"]+)"\)/g)].map((x) => x[1]);
+    expect([...declared].sort()).toEqual([...DRIVE_SENSE_SYNC_METHODS].sort());
   });
 
   it('registers the module under the name the JS wrapper requires', () => {
@@ -131,6 +144,7 @@ describe('native-android: manifest (plan §1 decision 4: While Using only, no au
     'com.google.android.gms.permission.ACTIVITY_RECOGNITION',
     'android.permission.FOREGROUND_SERVICE',
     'android.permission.FOREGROUND_SERVICE_LOCATION',
+    'android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE',
     'android.permission.POST_NOTIFICATIONS',
     'android.permission.WAKE_LOCK',
     'android.permission.RECEIVE_BOOT_COMPLETED',
@@ -335,9 +349,10 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
     expect(src).not.toMatch(/ForgotToStart|TransitionStore|reminderEnabled|vehicleEnteredAt|captureRanInVehicle|lastReminderAt|queryMotionHistory|checkForgottenDrive/);
   });
 
-  it("two notification channels: the capture's (NotificationFactory) and the reminder's (TripReminderNotifier)", () => {
+  it("three notification channels: the capture's (NotificationFactory), the reminder's (TripReminderNotifier) and the DashPal link's (DashpalLinkService)", () => {
     const src = code(allKotlin());
-    expect(src.match(/\bNotificationChannel\(/g)).toHaveLength(2);
+    expect(src.match(/\bNotificationChannel\(/g)).toHaveLength(3);
+    expect(code(kt('DashpalLinkService'))).toMatch(/\bNotificationChannel\(CHANNEL_ID, "DashPal link", NotificationManager\.IMPORTANCE_LOW\)/);
     expect(code(kt('NotificationFactory'))).toMatch(/\bNotificationChannel\(/);
     expect(code(kt('TripReminderNotifier'))).toMatch(/\bNotificationChannel\(CHANNEL_ID, "Drive reminder", NotificationManager\.IMPORTANCE_DEFAULT\)/);
     expect(src).not.toMatch(/"reminders"/);
@@ -834,5 +849,133 @@ describe('native-android: RoadWise in front (AppVisibility)', () => {
   it('needs no lock proof: getState reports none, and markLockProof does nothing', () => {
     expect(MODULE()).toMatch(/"lockSignal" to "reliable",\s*"lockProof" to false,\s*"lockDelayMs" to null,/);
     expect(MODULE()).toMatch(/AsyncFunction\("markLockProof"\) \{ _: Double ->\s*Unit\s*\}/);
+  });
+});
+
+describe('native-android: DashPal alerts on the phone (README §2: the link service, the wake lock, the audio probe)', () => {
+  const SVC = () => code(kt('DashpalLinkService'));
+  const setFn = () => /fun set\(context: Context, state: String, onResult: \(String\) -> Unit\) \{[\s\S]*?\n {4}\}/.exec(SVC())?.[0] ?? '';
+
+  it('the manifest declares the link service as a connectedDevice foreground service, not exported', () => {
+    const m = /<service[^>]*android:name="\.DashpalLinkService"[^>]*>/.exec(MANIFEST());
+    expect(m).not.toBeNull();
+    expect(m![0]).toContain('android:foregroundServiceType="connectedDevice"');
+    expect(m![0]).toContain('android:exported="false"');
+  });
+
+  it('the module bridges the four DashPal calls to their objects', () => {
+    const src = MODULE();
+    expect(src).toMatch(/AsyncFunction\("setDashpalLink"\) \{ state: String, promise: Promise ->\s*DashpalLinkService\.set\(context, state\) \{ promise\.resolve\(it\) \}\s*\}/);
+    expect(src).toMatch(/Function\("audioOutputState"\) \{\s*AudioOutput\.state\(context\)\s*\}/);
+    expect(src).toMatch(/Function\("holdAwake"\) \{ ms: Int ->\s*AlertWakeLock\.hold\(context, ms\)\s*\}/);
+    expect(src).toMatch(/Function\("dashpalLinkRunning"\) \{\s*DashpalLinkService\.running\(\)\s*\}/);
+    // The tick is observed like every event (OnStartObserving over OBSERVED_EVENTS).
+    expect(src).toMatch(/OBSERVED_EVENTS = listOf\([^)]*"dashpalLinkTick"\)/);
+  });
+
+  it('a running service is updated through its instance only: the update path holds no start call', () => {
+    const set = setFn();
+    expect(set).not.toBe('');
+    const updateAt = set.indexOf('if (inst != null) {\n');
+    const startAt = set.indexOf('val inFlight');
+    expect(updateAt).toBeGreaterThan(0);
+    expect(startAt).toBeGreaterThan(updateAt);
+    const update = set.slice(updateAt, startAt);
+    expect(update).toMatch(/inst\.handler\.post \{ inst\.apply\(next\) \}/);
+    expect(update).toMatch(/onResult\("running"\)/);
+    expect(update).not.toMatch(/startForegroundService|startForeground|startService/);
+    // off stops a running instance (on its handler) and answers stopped; it never starts anything.
+    const off = set.slice(set.indexOf('if (next == "off") {'), updateAt);
+    expect(off).toMatch(/inst\.handler\.post \{ inst\.shutDown\(\) \}/);
+    expect(off).toMatch(/onResult\("stopped"\)/);
+    expect(off).not.toMatch(/startForegroundService|startForeground/);
+  });
+
+  it('a stopped service starts only after its prechecks, and every refusal is caught', () => {
+    const src = SVC();
+    const may = /private fun mayStart\(context: Context\): Boolean \{[\s\S]*?\n {4}\}/.exec(src)?.[0] ?? '';
+    expect(may).toMatch(/AppVisibility\.visible\(\) \|\|/);
+    expect(may).toMatch(/info\.importance == ActivityManager\.RunningAppProcessInfo\.IMPORTANCE_FOREGROUND/);
+    expect(may).toMatch(/Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.UPSIDE_DOWN_CAKE &&\s*ContextCompat\.checkSelfPermission\(context, Manifest\.permission\.BLUETOOTH_CONNECT\) != PackageManager\.PERMISSION_GRANTED/);
+    const set = setFn();
+    const start = set.slice(set.indexOf('val inFlight'));
+    expect(start.indexOf('if (!mayStart(ctx))')).toBeGreaterThan(0);
+    expect(start.indexOf('if (!mayStart(ctx))')).toBeLessThan(start.indexOf('ContextCompat.startForegroundService('));
+    expect(start).toMatch(/catch \(_: IllegalStateException\) \{[\s\S]*?resolve\("refused"\)/);
+    expect(start).toMatch(/catch \(_: SecurityException\) \{[\s\S]*?resolve\("refused"\)/);
+    // A start that never reports is refused after 10 s, for its own attempt only.
+    expect(src).toMatch(/START_RESULT_TIMEOUT_MS = 10_000L/);
+    expect(start).toMatch(/main\.postDelayed\(\{ if \(synchronized\(lock\) \{ attempt == mine \}\) resolve\("refused"\) \}, START_RESULT_TIMEOUT_MS\)/);
+  });
+
+  it('onStartCommand: in the foreground with the connectedDevice type before anything else, never sticky; a refusal stops it', () => {
+    const src = SVC();
+    const cmd = /override fun onStartCommand\(intent: Intent\?, flags: Int, startId: Int\): Int \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(cmd).toMatch(/ServiceInfo\.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0/);
+    expect(cmd).toMatch(/ServiceCompat\.startForeground\(this, NOTIFICATION_ID,/);
+    expect(cmd).toMatch(/catch \(_: SecurityException\) \{\s*resolve\("refused"\)\s*stopSelf\(\)/);
+    expect(cmd).toMatch(/catch \(_: IllegalStateException\) \{\s*resolve\("refused"\)\s*stopSelf\(\)/);
+    // Forgotten while the start was in flight: foreground first (Android requires it), then stopped.
+    expect(cmd.indexOf('ServiceCompat.startForeground(')).toBeLessThan(cmd.indexOf('if (wanted == "off")'));
+    expect(src).not.toMatch(/START_STICKY\b/);
+    expect(src).toMatch(/START_NOT_STICKY/);
+  });
+
+  it('the notification: id 7310, a silent low-importance channel, "DashPal" and its two texts, opens RoadWise', () => {
+    const src = SVC();
+    expect(src).toMatch(/NOTIFICATION_ID = 7310/);
+    expect(src).toMatch(/CHANNEL_ID = "dashpal_link"/);
+    expect(src).toMatch(/IMPORTANCE_LOW/);
+    expect(src).not.toMatch(/IMPORTANCE_MIN/);
+    expect(src).toMatch(/setSound\(null, null\)\s*enableVibration\(false\)\s*setShowBadge\(false\)/);
+    expect(src).toMatch(/TITLE = "DashPal"/);
+    expect(src).toMatch(/TEXT_CONNECTED = "Connected\. DashPal alerts play on this phone\."/);
+    expect(src).toMatch(/TEXT_WAITING = "Not connected\. DashPal plays its alerts itself\."/);
+    expect(src).toMatch(/setSmallIcon\(R\.drawable\.ic_drive_notification\)/);
+    expect(src).toMatch(/PendingIntent\.FLAG_IMMUTABLE/);
+    // A running service re-posts only with notifications allowed.
+    const apply = /fun apply\(next: String\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(apply).toMatch(/if \(NotificationManagerCompat\.from\(this\)\.areNotificationsEnabled\(\)\) \{[\s\S]*?notify\(NOTIFICATION_ID, build\(next\)\)/);
+  });
+
+  it('the reconnect tick: every 30 s while waiting only, to a listener only (never buffered)', () => {
+    const src = SVC();
+    expect(src).toMatch(/TICK_MS = 30_000L/);
+    const apply = /fun apply\(next: String\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(apply).toMatch(/handler\.removeCallbacks\(tick\)\s*if \(next == "waiting"\) handler\.postDelayed\(tick, TICK_MS\)/);
+    expect(src).toMatch(/EventBus\.emitLive\("dashpalLinkTick", emptyMap\(\)\)/);
+    expect(src).not.toMatch(/EventBus\.emit\(/);
+    const live = /fun emitLive\(name: String, body: Map<String, Any\?>\) \{[\s\S]*?\n {2}\}/.exec(code(kt('EventBus')))?.[0] ?? '';
+    expect(live).toMatch(/observed\.contains\(name\)/);
+    expect(live).not.toMatch(/buffer/);
+  });
+
+  it('the link service touches neither the capture nor any wake lock', () => {
+    expect(SVC()).not.toMatch(/CaptureService|startCapture|WakeLock/);
+    expect(code(kt('AlertWakeLock'))).not.toMatch(/DashpalLinkService|CaptureService/);
+  });
+
+  it('holdAwake: one partial wake lock, not reference counted, re-armed with a timeout clamped to 1-10 s', () => {
+    const src = code(kt('AlertWakeLock'));
+    expect(src).toMatch(/TAG = "RoadWise:DashPalAlert"/);
+    expect(src).toMatch(/PowerManager\.PARTIAL_WAKE_LOCK/);
+    expect(src).toMatch(/setReferenceCounted\(false\)/);
+    expect(src).toMatch(/MIN_MS = 1_000/);
+    expect(src).toMatch(/MAX_MS = 10_000/);
+    expect(src).toMatch(/wl\.acquire\(ms\.coerceIn\(MIN_MS, MAX_MS\)\.toLong\(\)\)/);
+    expect(src).not.toMatch(/\.release\(/);
+    expect(src).toMatch(/catch \(_: Exception\) \{\s*false\s*\}/);
+  });
+
+  it('audioOutputState: the one call reader, the media stream (0 when muted) and the four headphone outputs', () => {
+    const src = code(kt('AudioOutput'));
+    expect(src).toMatch(/"callActive" to \(PhoneStateReceiver\.callState\(context\) != null\)/);
+    expect(src).toMatch(/isStreamMute\(AudioManager\.STREAM_MUSIC\)\) \{\s*0\.0/);
+    expect(src).toMatch(/getStreamVolume\(AudioManager\.STREAM_MUSIC\)\.toDouble\(\) \/ max\)\.coerceIn\(0\.0, 1\.0\)/);
+    expect(src).toMatch(/getDevices\(AudioManager\.GET_DEVICES_OUTPUTS\)/);
+    for (const t of ['TYPE_WIRED_HEADSET', 'TYPE_WIRED_HEADPHONES', 'TYPE_USB_HEADSET']) expect(src).toContain(`AudioDeviceInfo.${t}`);
+    expect(src).toMatch(/Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.S && d\.type == AudioDeviceInfo\.TYPE_BLE_HEADSET/);
+    expect(src).not.toMatch(/TYPE_BLUETOOTH_A2DP|TYPE_HEARING_AID/);
+    expect(src).not.toMatch(/MODE_IN_CALL|MODE_RINGTONE|activeRecordingConfigurations/);
   });
 });

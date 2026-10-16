@@ -13,6 +13,7 @@
 // The module is a thin bridge: the capture core (`CaptureController`) and the event hub exist for
 // the whole process, and every method below runs on the main queue, where they live. Rejections
 // carry only the contract's `CodedError` codes.
+import AVFoundation
 import ExpoModulesCore
 import Foundation
 
@@ -21,7 +22,7 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     Name("DriveSense")
 
     // Keep this list identical to DRIVE_SENSE_EVENTS in src/types.ts and to DriveSenseModule.kt.
-    Events("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap")
+    Events("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")
 
     OnCreate {
       EventHub.shared.attach(self)
@@ -49,6 +50,9 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     // Android's: iOS hands a reminder tap to JS through expo-notifications and never emits it.
     OnStartObserving("reminderTap") { EventHub.shared.startObserving("reminderTap") }
     OnStopObserving("reminderTap") { EventHub.shared.stopObserving("reminderTap") }
+    // Android's (the DashPal link service's tick): iOS never emits it.
+    OnStartObserving("dashpalLinkTick") { EventHub.shared.startObserving("dashpalLinkTick") }
+    OnStopObserving("dashpalLinkTick") { EventHub.shared.stopObserving("dashpalLinkTick") }
 
     AsyncFunction("startCapture") { (mode: String, promise: Promise) in
       if CaptureController.shared.startCapture(mode: mode) {
@@ -155,6 +159,30 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
 
     AsyncFunction("launchApp") { (_: String, promise: Promise) in
       promise.resolve(false)
+    }
+
+    // DashPal alerts on the phone (README §2). What an alert would play into now, read fresh: a call
+    // (CXCallObserver), the output volume, and wired headphones as the route. Sync: the ALERT is
+    // answered in the same JS turn. Bluetooth (A2DP, LE), hearing aids and CarPlay are not headphones.
+    Function("audioOutputState") { () -> [String: Any] in
+      let session = AVAudioSession.sharedInstance()
+      let volume = min(max(Double(session.outputVolume), 0), 1)
+      let headphones = session.currentRoute.outputs.contains { $0.portType == .headphones }
+      return ["callActive": CallObserver.anyCallActiveNow(), "volume": volume, "headphones": headphones]
+    }
+
+    // Android's: an iOS app woken by a Bluetooth notification runs while it handles it.
+    Function("holdAwake") { (_: Int) -> Bool in
+      false
+    }
+
+    // Android's: iOS keeps no service for the DashPal link (bluetooth-central wakes the app).
+    Function("dashpalLinkRunning") { () -> Bool in
+      false
+    }
+
+    AsyncFunction("setDashpalLink") { (_: String, promise: Promise) in
+      promise.resolve("unsupported")
     }
 
     // Heavy: runs on the module's own async queue, never the main queue.

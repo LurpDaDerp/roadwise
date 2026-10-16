@@ -8,7 +8,7 @@ the same contract:
 
 | File | What it pins |
 |---|---|
-| `src/types.ts` | every API method, event, payload and state type; `DRIVE_SENSE_EVENTS`; `DRIVE_SENSE_METHODS` |
+| `src/types.ts` | every API method, event, payload and state type; `DRIVE_SENSE_EVENTS`; `DRIVE_SENSE_METHODS`; `DRIVE_SENSE_SYNC_METHODS` |
 | `src/rowSchema.ts` | what JS accepts from the bridge (`parseRow` and the result validators) |
 | `src/index.ts` | the JS wrapper: argument checks, result validation, `requireOptionalNativeModule` |
 | `src/fake.ts` | `createFakeDriveSense()` — the in-memory implementation every JS test runs against |
@@ -39,13 +39,18 @@ only while it is on).
 ## 1. Rules for both native modules
 
 - **Event names.** Declare exactly
-  `Events("activity", "row", "screen", "thermal", "notificationAction", "call")` —
+  `Events("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")` —
   keep this list **byte-identical** to `DRIVE_SENSE_EVENTS` in `src/types.ts` and to the other
-  platform's list (the native text tests compare them). `call` is emitted on iOS only, but both
-  platforms declare it.
+  platform's list (the native text tests compare them). `call` is emitted on iOS only,
+  `reminderTap` and `dashpalLinkTick` on Android only, but both platforms declare every one.
 - **Methods.** Every name in `DRIVE_SENSE_METHODS` is an `AsyncFunction("<name>")` on both
   platforms, even where it is a no-op. `addListener` is the Expo event emitter's, not a
   function you declare.
+- **Sync functions.** Every name in `DRIVE_SENSE_SYNC_METHODS` (`audioOutputState`, `holdAwake`,
+  `dashpalLinkRunning`) is a `Function("<name>")`, never an `AsyncFunction`, on both platforms: the
+  link answers a DashPal ALERT in the same JS turn it reads them, before the phone plays it. They
+  never throw natively; where the native module does not exist (Jest, Expo Go) the wrapper answers
+  the unknown value (no call, volume and headphones `null`; `false`; `false`).
 - **Integers.** Every epoch-ms value you send (`ts`, `captureStartedAt`, `lastRowTs`,
   `MotionActivity.ts`, `ExitInfo.ts`) is a whole number of milliseconds. JS
   rejects a fractional one (`parseRow` drops the row; the result validators reject the promise).
@@ -92,6 +97,10 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 | `markLockProof(delayMs)` | iOS: an in-drive lock proof (a lock reported `delayMs` after RoadWise left the screen, §5): kept as the phone's proof, with that delay, when `delayMs` ≤ 15 000; a longer one is ignored. Android: resolves with no effect. The wrapper accepts a finite `delayMs` of 0–60 000 only. |
 | `listInstalledApps(packages)` | The navigation button. **Android:** for each package, in the order given, `{ package, label }` when `getLaunchIntentForPackage` finds a launcher activity and the app is enabled; `label` is the app's own (`getApplicationLabel`). Only packages the module manifest's `<queries>` names are visible (API 30+ package visibility: exactly the catalogue's Android packages, `src/features/navigation/catalog.ts`; never `QUERY_ALL_PACKAGES`); any failure skips that package. **iOS:** always `[]` (navigation apps are found by URL scheme in JS). The wrapper accepts 1–32 package names (`com.example.app`). |
 | `launchApp(package)` | **Android:** opens the app with its launch intent plus `FLAG_ACTIVITY_NEW_TASK \| FLAG_ACTIVITY_RESET_TASK_IF_NEEDED`, as a launcher tap does, so a route in progress is resumed, not reset; resolves `true`, or `false` with no launch intent or when the start fails. **iOS:** always `false`. |
+| `setDashpalLink(state)` | DashPal alerts on the phone. **Android:** the DashPal link service, a `connectedDevice` foreground service (`DashpalLinkService`, notification id 7310 on the silent `dashpal_link` channel "DashPal link", `IMPORTANCE_LOW`: no sound, vibration or badge, a small status-bar icon; title **"DashPal"**, text **"Connected. DashPal alerts play on this phone."** for `connected`, **"Not connected. DashPal plays its alerts itself."** for `waiting`; a tap opens RoadWise), which keeps the process from being cached and frozen while a DashPal is paired, so the dashcam's frames reach JS in the background. `off`: a running service stops (its notification goes) → `stopped`; none running → `stopped`. A **running** service takes `waiting` or `connected` through its own instance (the notification text, the reconnect tick) → `running`: never a second start, so it works from the background. A **stopped** one starts only when a RoadWise activity is visible or the process is in front, and on Android 14+ `BLUETOOTH_CONNECT` is granted; otherwise, or when Android refuses the start, → `refused` (nothing started); else `running` once it is in the foreground (`refused` after 10 s without that). `START_NOT_STICKY`: a process Android ends comes back only when RoadWise is opened. While `waiting` it emits `dashpalLinkTick` every 30 s. It never touches a capture or a wake lock. **iOS:** `unsupported` (an ALERT wakes the app through `bluetooth-central`). Never rejects. |
+| `audioOutputState()` | **Sync.** What a DashPal alert would play into now, read fresh: `{ callActive, volume, headphones }` (`AudioOutputState`). iOS: `CXCallObserver` calls not ended, `AVAudioSession.outputVolume` (0-1), a `.headphones` output in the current route. Android: the call state the rows' `call` key reads (`PhoneStateReceiver.callState`), the music stream's volume over its maximum (0 when muted), and a wired headset or headphones, a USB headset or (API 31+) an LE-audio headset among the outputs. Bluetooth A2DP (a car, earbuds), hearing aids and CarPlay are not headphones. `null` for a value that cannot be read. |
+| `holdAwake(ms)` | **Sync.** **Android:** a partial wake lock (`RoadWise:DashPalAlert`, not reference counted) held for `ms` clamped to 1-10 s, each call re-arming its timeout; it always lapses by itself. `true` when held, `false` on any failure. **iOS:** `false` (an app woken by a Bluetooth notification runs while it handles it). The wrapper accepts an integer 1-10 000. |
+| `dashpalLinkRunning()` | **Sync.** Android: the DashPal link service is running now (JS reads it after a runtime rebuild or a refused call instead of assuming). iOS: `false`. |
 
 ### Errors
 
@@ -111,7 +120,7 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 `getScreenState`, `getThermalState`, `requestMotionPermission`, `setDriveDisplay`,
 `getLastExitInfo` (`null` below Android 11), `isIgnoringBatteryOptimizations`, `setTripReminder`,
 `getTripReminderStatus`, `requestReminderLocation`, `claimReminderTap`, `takeReminderTap`,
-`markLockProof`, `listInstalledApps`, `launchApp`.
+`markLockProof`, `listInstalledApps`, `launchApp`, `setDashpalLink`; the sync functions never throw.
 
 ### `DriveSenseState`
 
@@ -142,6 +151,7 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 | `notificationAction` | `{ action: 'endDrive', ts }` | Android: the notification's End drive action (offered only while `setDriveDisplay` says `stopped`) |
 | `call` | `{ active, ts }` | iOS only: `CXCallObserver` — a call started or ended |
 | `reminderTap` | `{}` | Android only: a tap on the forgot-to-start reminder's note was handed over (§10); read it with `takeReminderTap` |
+| `dashpalLinkTick` | `{}` | Android only: every 30 s while the DashPal link service runs `waiting`; JS pumps its timers with it (a reconnect back-off fires with JS timers paused). Sent only while a JS listener is attached, **never buffered** (the exception to Buffering below) |
 
 **Motion-activity mapping** (the `activity` event). The host validates each payload with
 `parseActivity` (a bad one is dropped) and hands it to the engine, whose only use for it is the

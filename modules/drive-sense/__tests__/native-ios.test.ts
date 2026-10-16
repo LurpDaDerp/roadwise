@@ -8,7 +8,7 @@ import * as CONSTANTS from '../src/extract/constants';
 import { REMINDER } from '../src/reminder/policy';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
-import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS } from '../src/types';
+import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS, DRIVE_SENSE_SYNC_METHODS } from '../src/types';
 
 // Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time. The root
 // tsconfig's `types` is ["jest"], so Node's own typings are not in the program — hence the local
@@ -619,5 +619,36 @@ describe('iOS forgot-to-start reminder: one post, a stored state never overwritt
     expect(st).toMatch(/TripReminderPolicy\.claim\(s, token, now, capturing, false\)/);
     expect([...read('TripReminderSelfTest.swift').matchAll(/^import (\w+)/gm)].map((m) => m[1])).toEqual(['Foundation']);
     expect(st).not.toMatch(/TripReminder\.shared|UserDefaults|TripReminderNotifier|CLLocationManager/);
+  });
+});
+
+describe('iOS: DashPal alerts on the phone (README §2)', () => {
+  it.each([...DRIVE_SENSE_SYNC_METHODS])('Function("%s") is declared (sync, never an AsyncFunction)', (name) => {
+    expect(moduleCode()).toMatch(new RegExp(`(?<!Async)Function\\("${name}"\\)`));
+    expect(moduleCode()).not.toContain(`AsyncFunction("${name}")`);
+  });
+
+  it('declares no sync Function outside DRIVE_SENSE_SYNC_METHODS, and none twice', () => {
+    const declared = [...moduleCode().matchAll(/(?<!Async)Function\("([^"]+)"\)/g)].map((x) => x[1]);
+    expect([...declared].sort()).toEqual([...DRIVE_SENSE_SYNC_METHODS].sort());
+  });
+
+  it('audioOutputState reads a fresh call, the output volume (0-1) and wired headphones as the route', () => {
+    const src = moduleCode();
+    expect(src).toMatch(/^import AVFoundation$/m);
+    const fn = /Function\("audioOutputState"\) \{ \(\) -> \[String: Any\] in[\s\S]*?\n {4}\}/.exec(src)?.[0] ?? '';
+    expect(fn).toMatch(/let session = AVAudioSession\.sharedInstance\(\)/);
+    expect(fn).toMatch(/min\(max\(Double\(session\.outputVolume\), 0\), 1\)/);
+    expect(fn).toMatch(/session\.currentRoute\.outputs\.contains \{ \$0\.portType == \.headphones \}/);
+    expect(fn).toMatch(/"callActive": CallObserver\.anyCallActiveNow\(\), "volume": volume, "headphones": headphones/);
+    expect(fn).not.toMatch(/bluetoothA2DP|bluetoothLE|carAudio|setActive|setCategory/);
+  });
+
+  it('holdAwake and dashpalLinkRunning answer false, setDashpalLink unsupported, and the tick is never emitted', () => {
+    const src = moduleCode();
+    expect(src).toMatch(/Function\("holdAwake"\) \{ \(_: Int\) -> Bool in\s*false\s*\}/);
+    expect(src).toMatch(/Function\("dashpalLinkRunning"\) \{ \(\) -> Bool in\s*false\s*\}/);
+    expect(src).toMatch(/AsyncFunction\("setDashpalLink"\) \{ \(_: String, promise: Promise\) in\s*promise\.resolve\("unsupported"\)\s*\}/);
+    expect(allCode()).not.toMatch(/emit\("dashpalLinkTick"/);
   });
 });

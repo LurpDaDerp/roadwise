@@ -18,7 +18,8 @@ import expo.modules.kotlin.modules.ModuleDefinition
 /**
  * drive-sense on Android. README.md in the module root is the binding contract and `src/types.ts`
  * its machine-checked half; `__tests__/native-android.test.ts` holds this file to both (the event
- * list, one `AsyncFunction` per `DRIVE_SENSE_METHODS` entry, the error codes).
+ * list, one `AsyncFunction` per `DRIVE_SENSE_METHODS` entry, one `Function` per
+ * `DRIVE_SENSE_SYNC_METHODS` entry, the error codes).
  *
  * v3 (plan §1 decision 4): a capture starts only from a JS `startCapture` (a user's tap in the
  * foreground). There is no arming, no activity-transition auto-start and no background location
@@ -31,7 +32,7 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class DriveSenseModule : Module() {
   companion object {
     /** Every event, for the per-event buffer flush (README §3). Same names as `Events(...)` below. */
-    private val OBSERVED_EVENTS = listOf("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap")
+    private val OBSERVED_EVENTS = listOf("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")
     private val MODES = setOf("mounted", "pocket", "auto")
 
     /** The reminder tap handed over and not yet taken by JS, with its hand-over time. Process-wide. */
@@ -72,7 +73,7 @@ class DriveSenseModule : Module() {
     Name("DriveSense")
 
     // Keep this list byte-identical to DRIVE_SENSE_EVENTS in src/types.ts and to DriveSenseModule.swift.
-    Events("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap")
+    Events("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")
 
     OnCreate {
       DriveSensePrefs.init(context)
@@ -276,6 +277,25 @@ class DriveSenseModule : Module() {
       } catch (_: Exception) {
         false
       }
+    }
+
+    // DashPal alerts on the phone (README §2). The DashPal link service: off, waiting or connected; a
+    // running service is updated through its instance, a stopped one starts only with RoadWise visible.
+    AsyncFunction("setDashpalLink") { state: String, promise: Promise ->
+      DashpalLinkService.set(context, state) { promise.resolve(it) }
+    }
+
+    // Sync (README §2): read or done in the same JS turn, before the phone answers a DashPal ALERT.
+    Function("audioOutputState") {
+      AudioOutput.state(context)
+    }
+
+    Function("holdAwake") { ms: Int ->
+      AlertWakeLock.hold(context, ms)
+    }
+
+    Function("dashpalLinkRunning") {
+      DashpalLinkService.running()
     }
 
     // iOS only (an in-drive lock proof); Android reports locks exactly.

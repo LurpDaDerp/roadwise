@@ -51,8 +51,8 @@ final class CallObserver: NSObject, CXCallObserverDelegate {
     return nil
   }
 
-  /// A fresh read for the forgot-to-start reminder's stop check (no drive open, so no observer
-  /// runs). It emits nothing.
+  /// A fresh read for `audioOutputState` (a DashPal alert with or without a drive open, so with or
+  /// without an observer running). It emits nothing.
   static func anyCallActiveNow() -> Bool {
     CXCallObserver().calls.contains { !$0.hasEnded }
   }

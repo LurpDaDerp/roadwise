@@ -37,6 +37,29 @@ export interface InstalledApp {
   label: string;
 }
 
+/**
+ * `audioOutputState()`: what a DashPal alert would play into right now (README §2). `callActive`:
+ * a call is ringing or live (iOS `CXCallObserver`, a fresh read; Android the audio mode, as the
+ * rows' `call` key reads it). `volume`: the media volume 0-1 (iOS `outputVolume`; Android the
+ * music stream, 0 when muted), null when unknown. `headphones`: a wired, USB or LE-audio headset is
+ * an output (iOS a `.headphones` route), null when unknown.
+ */
+export interface AudioOutputState {
+  callActive: boolean;
+  volume: number | null;
+  headphones: boolean | null;
+}
+
+/** The Android DashPal link service as JS asks for it (README §2 `setDashpalLink`). */
+export type DashpalLinkState = 'off' | 'waiting' | 'connected';
+
+/**
+ * `setDashpalLink(state)`: `running` (started, or a running service updated through its instance),
+ * `stopped` (`off`, or nothing was running), `refused` (not started: RoadWise not in front, Nearby
+ * devices not granted, or Android refused the start), `unsupported` (iOS).
+ */
+export type DashpalLinkResult = 'running' | 'stopped' | 'refused' | 'unsupported';
+
 export type CaptureMode = 'mounted' | 'pocket' | 'auto';
 /** rev1: I5 — `low` = coarse location, no IMU, rows only when a fix arrives. */
 export type CaptureRate = 'full' | 'low';
@@ -138,6 +161,12 @@ export type DriveSenseEvents = {
   call: { active: boolean; ts: number };
   /** Android only: a tap on the reminder's note was handed over; read it with `takeReminderTap`. */
   reminderTap: Record<string, never>;
+  /**
+   * Android only: the DashPal link service's 30-s tick while it waits for the DashPal (JS pumps its
+   * timers, so a reconnect back-off fires with JS timers paused). Sent only while a listener is
+   * attached; never buffered.
+   */
+  dashpalLinkTick: Record<string, never>;
 };
 
 export type DriveSenseEvent = keyof DriveSenseEvents;
@@ -155,6 +184,7 @@ export const DRIVE_SENSE_EVENTS = [
   'notificationAction',
   'call',
   'reminderTap',
+  'dashpalLinkTick',
 ] as const;
 
 /**
@@ -183,9 +213,20 @@ export const DRIVE_SENSE_METHODS = [
   'markLockProof',
   'listInstalledApps',
   'launchApp',
+  'setDashpalLink',
 ] as const;
 
 export type DriveSenseMethod = (typeof DRIVE_SENSE_METHODS)[number];
+
+/**
+ * The synchronous bridge functions (`Function("<name>")` in both native modules, never
+ * `AsyncFunction`): read or done in the same JS turn, because a DashPal ALERT must be answered
+ * before the phone plays it (README §2). Never throws natively; the wrapper answers the unknown
+ * value where the native module does not exist.
+ */
+export const DRIVE_SENSE_SYNC_METHODS = ['audioOutputState', 'holdAwake', 'dashpalLinkRunning'] as const;
+
+export type DriveSenseSyncMethod = (typeof DRIVE_SENSE_SYNC_METHODS)[number];
 
 /**
  * The `CodedError` codes a native method may reject with (README §2 "Errors"). Anything else a
@@ -301,6 +342,26 @@ export interface DriveSenseApi {
    * has no launch intent or the start failed. iOS: always false. Never rejects for a valid argument.
    */
   launchApp(packageName: string): Promise<boolean>;
+  /**
+   * Sync. What a DashPal alert would play into now (README §2): the call, the media volume and
+   * whether headphones are the output. Without the native module: no call, both unknown.
+   */
+  audioOutputState(): AudioOutputState;
+  /**
+   * Sync. Android: keeps the CPU awake for `ms` (a partial wake lock, clamped to 1-10 s natively,
+   * each call re-arming its timeout) while a DashPal alert is answered and played; true when held.
+   * iOS: false, nothing held. The wrapper accepts an integer 1-10 000.
+   */
+  holdAwake(ms: number): boolean;
+  /** Sync. Android: the DashPal link service is running now. iOS: false. */
+  dashpalLinkRunning(): boolean;
+  /**
+   * Android: the DashPal link service (README §2): `off` stops it; a running service takes the new
+   * state through its instance (never a second start); a stopped one starts only with RoadWise in
+   * front (and Nearby devices granted on Android 14+), else `refused`. iOS: `unsupported`. Never
+   * rejects for a valid argument.
+   */
+  setDashpalLink(state: DashpalLinkState): Promise<DashpalLinkResult>;
   addListener<E extends DriveSenseEvent>(
     event: E,
     fn: (payload: DriveSenseEvents[E]) => void
@@ -354,6 +415,21 @@ export interface FakeControls {
   setInstalledApps(apps: readonly InstalledApp[]): void;
   /** What `launchApp` answers for an installed app (default true); an app not installed is always false. */
   setLaunchResult(ok: boolean): void;
+  /** What `audioOutputState` answers (merged; default no call, volume and headphones unknown). */
+  setAudioOutput(s: Partial<AudioOutputState>): void;
+  /**
+   * Android: whether a stopped DashPal link service may start now (RoadWise in front, Nearby
+   * devices granted, Android allowing it); default true. A refused start leaves it stopped.
+   */
+  setDashpalLinkStartAllowed(allowed: boolean): void;
+  /** Android: the DashPal link service's state while it runs, else null (iOS: always null). */
+  readonly dashpalLink: DashpalLinkState | null;
+  /** Android: the process ends (the service with it); `dashpalLinkRunning()` reads false after. */
+  killDashpalLink(): void;
+  /** Android: the running service's 30-s tick while `waiting` (emits `dashpalLinkTick` to a listener). Returns whether it ticked. */
+  tickDashpalLink(): boolean;
+  /** Every `holdAwake(ms)` the fake took, in order (iOS ones included). */
+  readonly holdAwakeCalls: number[];
   /** Whether the reminder is switched on now. */
   readonly tripReminderOn: boolean;
   /** A note is up with `token` in a driven, live session, as a stop would have posted it (`now` defaults to the fake's clock). */

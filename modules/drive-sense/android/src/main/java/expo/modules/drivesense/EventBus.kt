@@ -88,6 +88,18 @@ object EventBus {
     }
   }
 
+  /**
+   * An event that only matters now (the DashPal link service's tick): sent while a JS listener for
+   * it is attached, else dropped. Never buffered, so nothing piles up while JS is away.
+   */
+  fun emitLive(name: String, body: Map<String, Any?>) {
+    synchronized(lock) {
+      val e = emitter?.get() ?: return
+      if (!observed.contains(name)) return
+      safeEmit(e, name, body)
+    }
+  }
+
   private fun flush(name: String) {
     synchronized(lock) {
       val e = emitter?.get() ?: return

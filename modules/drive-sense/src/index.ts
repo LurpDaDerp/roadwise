@@ -11,8 +11,11 @@
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import { z } from 'zod';
 import {
+  audioOutputSchema,
   captureModeSchema,
   captureRateSchema,
+  dashpalLinkResultSchema,
+  dashpalLinkStateSchema,
   driveDisplaySchema,
   exitInfoSchema,
   INSTALLED_APPS_MAX,
@@ -27,7 +30,7 @@ import {
   thermalLevelSchema,
   tripReminderStatusSchema,
 } from './rowSchema';
-import type { DriveSenseApi, DriveSenseEvent, DriveSenseEvents, Subscription } from './types';
+import type { AudioOutputState, DriveSenseApi, DriveSenseEvent, DriveSenseEvents, DriveSenseSyncMethod, Subscription } from './types';
 
 export * from './types';
 export { CALL_ROW_KEY, MOCK_ROW_KEY, parseActivity, parseRow, REMINDER_TOKEN, resetUnknownRowKeys, unknownRowKeys } from './rowSchema';
@@ -66,8 +69,12 @@ export type {
   Vec3,
 } from './extract/types';
 
+type AsyncMethod = Exclude<keyof DriveSenseApi, 'addListener' | DriveSenseSyncMethod>;
+
 type NativeModule = {
-  [K in Exclude<keyof DriveSenseApi, 'addListener'>]: (...args: never[]) => Promise<unknown>;
+  [K in AsyncMethod]: (...args: never[]) => Promise<unknown>;
+} & {
+  [K in DriveSenseSyncMethod]: (...args: never[]) => unknown;
 } & {
   addListener(event: string, fn: (payload: unknown) => void): Subscription;
 };
@@ -85,7 +92,7 @@ const fail = (method: string, what: string): Error => new Error(`DriveSense.${me
 
 /** Call `method` natively after checking its arguments, then validate the result. */
 async function call<T>(
-  method: Exclude<keyof DriveSenseApi, 'addListener'>,
+  method: AsyncMethod,
   args: readonly unknown[],
   argsOk: boolean,
   result: z.ZodType<T>
@@ -97,6 +104,26 @@ async function call<T>(
   if (!parsed.success) throw fail(method, `invalid result ${safeJson(raw)}`);
   return parsed.data;
 }
+
+/**
+ * A sync bridge function (`Function`, not `AsyncFunction`): its arguments checked, its result
+ * validated. Without the native module it answers `absent` (the unknown value) and never throws.
+ */
+function callSync<T>(method: DriveSenseSyncMethod, args: readonly unknown[], argsOk: boolean, result: z.ZodType<T>, absent: T): T {
+  if (!argsOk) throw fail(method, `invalid arguments ${safeJson(args)}`);
+  if (!native) return absent;
+  const fn = native[method] as (...a: readonly unknown[]) => unknown;
+  const raw = fn(...args);
+  const parsed = result.safeParse(raw);
+  if (!parsed.success) throw fail(method, `invalid result ${safeJson(raw)}`);
+  return parsed.data;
+}
+
+/** `audioOutputState()` with nothing known: no call, volume and headphones unknown (it never blocks a sound). */
+const AUDIO_UNKNOWN: AudioOutputState = { callActive: false, volume: null, headphones: null };
+
+/** `holdAwake` takes up to 10 s (native clamps to 1-10 s as well). */
+export const HOLD_AWAKE_MAX_MS = 10_000;
 
 function safeJson(v: unknown): string {
   try {
@@ -149,6 +176,11 @@ const DriveSense: DriveSenseApi = {
       installedAppsSchema
     ),
   launchApp: (packageName) => call('launchApp', [packageName], isPackageName(packageName), z.boolean()),
+  setDashpalLink: (state) => call('setDashpalLink', [state], ok(dashpalLinkStateSchema, state), dashpalLinkResultSchema),
+  audioOutputState: () => ({ ...callSync('audioOutputState', [], true, audioOutputSchema, AUDIO_UNKNOWN) }),
+  holdAwake: (ms) =>
+    callSync('holdAwake', [ms], typeof ms === 'number' && Number.isInteger(ms) && ms >= 1 && ms <= HOLD_AWAKE_MAX_MS, z.boolean(), false),
+  dashpalLinkRunning: () => callSync('dashpalLinkRunning', [], true, z.boolean(), false),
   addListener<E extends DriveSenseEvent>(
     event: E,
     fn: (payload: DriveSenseEvents[E]) => void

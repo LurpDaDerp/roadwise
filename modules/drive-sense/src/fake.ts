@@ -11,8 +11,11 @@ import { claim, INITIAL, newSession, posted, setEnabled, settle, statusOf, tapDe
 import { isReminderWireVector, referenceReminderOutput } from './reminder/selfTest';
 import { parseVectors } from './selfTest';
 import type {
+  AudioOutputState,
   CaptureMode,
   CaptureRate,
+  DashpalLinkResult,
+  DashpalLinkState,
   DriveDisplayState,
   DriveSenseApi,
   DriveSenseErrorCode,
@@ -93,6 +96,12 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   let launchOk = true;
   /** Android: the tap handed over and not yet taken (the module's hold). */
   let heldTap: ReminderTap | null = null;
+  /** What `audioOutputState` answers. */
+  let audioOutput: AudioOutputState = { callActive: false, volume: null, headphones: null };
+  /** Android: the DashPal link service's state while it runs (null: not running), and whether a start is allowed. */
+  let dashpalLink: DashpalLinkState | null = null;
+  let dashpalLinkStartAllowed = true;
+  const holdAwakeCalls: number[] = [];
   let queue: DriveSenseRow[] = [];
   const listeners = new Map<DriveSenseEvent, Set<Listener>>();
   let buffer: Buffered[] = [];
@@ -253,6 +262,36 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       command('launchApp', packageName);
       return resolve(platform === 'android' && launchOk && installedApps.some((a) => a.package === packageName));
     },
+    setDashpalLink(next: DashpalLinkState) {
+      command('setDashpalLink', next);
+      // README §2: iOS has no such service; `off` stops it; a running one is updated through its
+      // instance (never a second start); a stopped one starts only when allowed.
+      let result: DashpalLinkResult;
+      if (platform !== 'android') result = 'unsupported';
+      else if (next === 'off') {
+        dashpalLink = null;
+        result = 'stopped';
+      } else if (dashpalLink !== null) {
+        dashpalLink = next;
+        result = 'running';
+      } else if (dashpalLinkStartAllowed) {
+        dashpalLink = next;
+        result = 'running';
+      } else result = 'refused';
+      return resolve(result);
+    },
+    audioOutputState() {
+      query('audioOutputState');
+      return { ...audioOutput };
+    },
+    holdAwake(ms: number) {
+      holdAwakeCalls.push(ms);
+      return platform === 'android';
+    },
+    dashpalLinkRunning() {
+      query('dashpalLinkRunning');
+      return dashpalLink !== null;
+    },
     markLockProof(delayMs: number) {
       command('markLockProof', String(delayMs));
       // iOS keeps a proof of 15 s or less (LockProbe.record); Android has nothing to prove.
@@ -358,6 +397,31 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     setLaunchResult(ok) {
       launchOk = ok;
+    },
+    setAudioOutput(s) {
+      audioOutput = { ...audioOutput, ...s };
+    },
+    setDashpalLinkStartAllowed(allowed) {
+      dashpalLinkStartAllowed = allowed;
+    },
+    get dashpalLink() {
+      return dashpalLink;
+    },
+    killDashpalLink() {
+      dashpalLink = null;
+    },
+    tickDashpalLink() {
+      // Only while waiting, and only to a listener: the tick is never buffered (README §3).
+      if (dashpalLink !== 'waiting' || (listeners.get('dashpalLinkTick')?.size ?? 0) === 0) return false;
+      const send = () => {
+        for (const fn of [...(listeners.get('dashpalLinkTick') ?? [])]) fn({});
+      };
+      if (asyncDelivery) void Promise.resolve().then(send);
+      else send();
+      return true;
+    },
+    get holdAwakeCalls() {
+      return [...holdAwakeCalls];
     },
     get tripReminderOn() {
       return reminder.enabled;

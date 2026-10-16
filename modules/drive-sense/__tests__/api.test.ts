@@ -8,6 +8,7 @@
 import DriveSense, {
   DRIVE_SENSE_EVENTS,
   DRIVE_SENSE_METHODS,
+  DRIVE_SENSE_SYNC_METHODS,
   isDriveSenseError,
   type DriveSenseApi,
 } from '../src';
@@ -65,6 +66,10 @@ jest.mock('expo-modules-core', () => {
     markLockProof: jest.fn(async () => undefined),
     listInstalledApps: jest.fn(async () => [{ package: 'com.waze', label: 'Waze' }]),
     launchApp: jest.fn(async () => true),
+    setDashpalLink: jest.fn(async () => 'running'),
+    audioOutputState: jest.fn(() => ({ callActive: false, volume: 0.5, headphones: false })),
+    holdAwake: jest.fn(() => true),
+    dashpalLinkRunning: jest.fn(() => true),
     addListener: jest.fn(() => ({ remove })),
   };
   const control = { present: true, native, state, remove };
@@ -93,7 +98,7 @@ const mockState = control.state;
 
 beforeEach(() => jest.clearAllMocks());
 
-test('the seven event names are fixed, in order', () => {
+test('the eight event names are fixed, in order', () => {
   expect(DRIVE_SENSE_EVENTS).toEqual([
     'activity',
     'row',
@@ -102,15 +107,17 @@ test('the seven event names are fixed, in order', () => {
     'notificationAction',
     'call',
     'reminderTap',
+    'dashpalLinkTick',
   ]);
 });
 
 test('the method list names every bridged method of the API', () => {
-  const api: Record<(typeof DRIVE_SENSE_METHODS)[number], unknown> = DriveSense;
+  const api: Record<(typeof DRIVE_SENSE_METHODS)[number] | (typeof DRIVE_SENSE_SYNC_METHODS)[number], unknown> = DriveSense;
   expect(Object.keys(api).filter((k) => k !== 'addListener').sort()).toEqual(
-    [...DRIVE_SENSE_METHODS].sort()
+    [...DRIVE_SENSE_METHODS, ...DRIVE_SENSE_SYNC_METHODS].sort()
   );
-  expect(new Set(DRIVE_SENSE_METHODS).size).toBe(DRIVE_SENSE_METHODS.length);
+  const all = [...DRIVE_SENSE_METHODS, ...DRIVE_SENSE_SYNC_METHODS];
+  expect(new Set(all).size).toBe(all.length);
 });
 
 describe('every method goes to native with its arguments', () => {
@@ -187,6 +194,33 @@ describe('every method goes to native with its arguments', () => {
     expect(mockNative.launchApp).toHaveBeenCalledWith('com.waze');
     mockNative.listInstalledApps!.mockResolvedValueOnce([]);
     await expect(DriveSense.listInstalledApps(['net.osmand'])).resolves.toEqual([]);
+  });
+
+  test('the DashPal link service: a state goes to native, its result is checked', async () => {
+    await expect(DriveSense.setDashpalLink('waiting')).resolves.toBe('running');
+    expect(mockNative.setDashpalLink).toHaveBeenCalledWith('waiting');
+    mockNative.setDashpalLink!.mockResolvedValueOnce('unsupported');
+    await expect(DriveSense.setDashpalLink('off')).resolves.toBe('unsupported');
+    mockNative.setDashpalLink!.mockResolvedValueOnce('maybe');
+    await expect(DriveSense.setDashpalLink('connected')).rejects.toThrow('DriveSense.setDashpalLink: invalid result');
+    await expect(DriveSense.setDashpalLink('alerting' as never)).rejects.toThrow('invalid arguments');
+  });
+
+  test('the sync functions answer in the same turn, validated', () => {
+    expect(DriveSense.audioOutputState()).toEqual({ callActive: false, volume: 0.5, headphones: false });
+    mockNative.audioOutputState!.mockReturnValueOnce({ callActive: true, volume: null, headphones: null });
+    expect(DriveSense.audioOutputState()).toEqual({ callActive: true, volume: null, headphones: null });
+    for (const bad of [{ callActive: false, volume: 1.2, headphones: false }, { callActive: false, volume: 0.5 }, { callActive: false, volume: 0.5, headphones: false, extra: 1 }, null]) {
+      mockNative.audioOutputState!.mockReturnValueOnce(bad);
+      expect(() => DriveSense.audioOutputState()).toThrow('DriveSense.audioOutputState: invalid result');
+    }
+    expect(DriveSense.holdAwake(5000)).toBe(true);
+    expect(mockNative.holdAwake).toHaveBeenCalledWith(5000);
+    for (const bad of [0, 10_001, 1.5, NaN]) expect(() => DriveSense.holdAwake(bad)).toThrow('invalid arguments');
+    expect(mockNative.holdAwake).toHaveBeenCalledTimes(1);
+    expect(DriveSense.dashpalLinkRunning()).toBe(true);
+    mockNative.dashpalLinkRunning!.mockReturnValueOnce('yes');
+    expect(() => DriveSense.dashpalLinkRunning()).toThrow('invalid result');
   });
 
   test('a null exit info is passed through', async () => {
@@ -310,6 +344,13 @@ describe('without the native module (Jest, Expo Go, web)', () => {
     await expect(api.getState()).rejects.toThrow('DriveSense native module is not available');
     await expect(api.startCapture('mounted')).rejects.toThrow('not available');
     await expect(api.isIgnoringBatteryOptimizations()).rejects.toThrow('not available');
+    await expect(api.setDashpalLink('waiting')).rejects.toThrow('not available');
+  });
+
+  test('the sync functions answer the unknown value and never throw', () => {
+    expect(api.audioOutputState()).toEqual({ callActive: false, volume: null, headphones: null });
+    expect(api.holdAwake(5000)).toBe(false);
+    expect(api.dashpalLinkRunning()).toBe(false);
   });
 
   test('addListener returns an inert subscription', () => {

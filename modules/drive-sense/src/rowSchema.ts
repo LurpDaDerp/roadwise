@@ -7,6 +7,9 @@
 import { z } from 'zod';
 import { featureRowSchema } from '../../../src/core/replay/trace';
 import type {
+  AudioOutputState,
+  DashpalLinkResult,
+  DashpalLinkState,
   InstalledApp,
   DriveDisplayState,
   DriveSenseRow,
@@ -206,6 +209,15 @@ export const installedAppsSchema: z.ZodType<InstalledApp[]> = z.array(
 );
 
 export const screenStateSchema = z.strictObject({ locked: z.boolean(), on: z.boolean() });
+
+export const audioOutputSchema: z.ZodType<AudioOutputState> = z.strictObject({
+  callActive: z.boolean(),
+  volume: z.number().min(0).max(1).nullable(),
+  headphones: z.boolean().nullable(),
+});
+
+export const dashpalLinkStateSchema: z.ZodType<DashpalLinkState> = z.enum(['off', 'waiting', 'connected']);
+export const dashpalLinkResultSchema: z.ZodType<DashpalLinkResult> = z.enum(['running', 'stopped', 'refused', 'unsupported']);
 
 export const motionPermissionSchema = z.enum(['granted', 'denied', 'unavailable']);
 

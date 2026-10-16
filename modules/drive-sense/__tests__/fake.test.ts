@@ -528,3 +528,81 @@ describe('the forgot-to-start reminder (README "Forgot-to-start reminder")', () 
     expect(android.calls).toEqual(['requestReminderLocation', 'requestReminderLocation']);
   });
 });
+
+describe('DashPal alerts on the phone (README §2): the audio probe, the wake lock and the Android link service', () => {
+  test('audioOutputState answers what was set, merged, as a copy; unknown by default', () => {
+    const fake = createFakeDriveSense();
+    expect(fake.audioOutputState()).toEqual({ callActive: false, volume: null, headphones: null });
+    fake.setAudioOutput({ volume: 0.2 });
+    fake.setAudioOutput({ headphones: true });
+    const a = fake.audioOutputState();
+    expect(a).toEqual({ callActive: false, volume: 0.2, headphones: true });
+    a.volume = 1;
+    expect(fake.audioOutputState().volume).toBe(0.2);
+    expect(fake.queries).toEqual(['audioOutputState', 'audioOutputState', 'audioOutputState']);
+  });
+
+  test('holdAwake: held on Android, never on iOS; every call recorded', () => {
+    const android = createFakeDriveSense({ platform: 'android' });
+    const ios = createFakeDriveSense({ platform: 'ios' });
+    expect(android.holdAwake(5000)).toBe(true);
+    expect(android.holdAwake(5000)).toBe(true);
+    expect(ios.holdAwake(5000)).toBe(false);
+    expect(android.holdAwakeCalls).toEqual([5000, 5000]);
+    expect(ios.holdAwakeCalls).toEqual([5000]);
+  });
+
+  test('iOS: setDashpalLink is unsupported and nothing ever runs', async () => {
+    const fake = createFakeDriveSense({ platform: 'ios' });
+    await expect(fake.setDashpalLink('waiting')).resolves.toBe('unsupported');
+    expect(fake.dashpalLinkRunning()).toBe(false);
+    expect(fake.dashpalLink).toBeNull();
+  });
+
+  test('Android: a stopped service starts only when allowed; a running one is updated whatever; off stops it; a kill stops it', async () => {
+    const fake = createFakeDriveSense({ platform: 'android' });
+    fake.setDashpalLinkStartAllowed(false);
+    await expect(fake.setDashpalLink('waiting')).resolves.toBe('refused');
+    expect(fake.dashpalLinkRunning()).toBe(false);
+    fake.setDashpalLinkStartAllowed(true);
+    await expect(fake.setDashpalLink('waiting')).resolves.toBe('running');
+    expect(fake.dashpalLink).toBe('waiting');
+    // In the background a start would be refused, but the running service takes the update.
+    fake.setDashpalLinkStartAllowed(false);
+    await expect(fake.setDashpalLink('connected')).resolves.toBe('running');
+    expect(fake.dashpalLink).toBe('connected');
+    expect(fake.dashpalLinkRunning()).toBe(true);
+    await expect(fake.setDashpalLink('off')).resolves.toBe('stopped');
+    expect(fake.dashpalLinkRunning()).toBe(false);
+    await expect(fake.setDashpalLink('off')).resolves.toBe('stopped');
+    fake.setDashpalLinkStartAllowed(true);
+    await fake.setDashpalLink('waiting');
+    fake.killDashpalLink();
+    expect(fake.dashpalLinkRunning()).toBe(false);
+    expect(fake.calls.filter((c) => c.startsWith('setDashpalLink'))).toEqual([
+      'setDashpalLink:waiting',
+      'setDashpalLink:waiting',
+      'setDashpalLink:connected',
+      'setDashpalLink:off',
+      'setDashpalLink:off',
+      'setDashpalLink:waiting',
+    ]);
+  });
+
+  test("Android: the tick reaches a listener only while the service waits, and is never buffered", async () => {
+    const fake = createFakeDriveSense({ platform: 'android' });
+    const got: unknown[] = [];
+    expect(fake.tickDashpalLink()).toBe(false); // not running
+    await fake.setDashpalLink('waiting');
+    expect(fake.tickDashpalLink()).toBe(false); // no listener: dropped, not buffered
+    const sub = fake.addListener('dashpalLinkTick', (p) => got.push(p));
+    await flush();
+    expect(got).toEqual([]);
+    expect(fake.tickDashpalLink()).toBe(true);
+    expect(got).toEqual([{}]);
+    await fake.setDashpalLink('connected');
+    expect(fake.tickDashpalLink()).toBe(false);
+    sub.remove();
+    expect(got).toHaveLength(1);
+  });
+});

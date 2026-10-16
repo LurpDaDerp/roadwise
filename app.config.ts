@@ -113,7 +113,10 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => ({
     ...optional('googleServicesFile', googleServicesFile(projectRoot)),
     // Bluetooth (DashPal): BLUETOOTH_SCAN (neverForLocation) and BLUETOOTH_CONNECT on Android 12+,
     // BLUETOOTH/BLUETOOTH_ADMIN (maxSdkVersion 30) below, come from react-native-ble-manager's own
-    // manifest. No new foreground-service type: the drive's location service keeps the process alive.
+    // manifest. The DashPal link service (connectedDevice, with FOREGROUND_SERVICE_CONNECTED_DEVICE,
+    // both in the drive-sense module manifest) keeps the process alive while a DashPal is paired, so
+    // the phone plays the dashcam's alerts in the background; the drive's location service does so
+    // during a drive.
     permissions: ['android.permission.POST_NOTIFICATIONS', 'android.permission.VIBRATE'],
     // Every drive starts in the app and the forgot-to-start reminder uses activity recognition
     // only, so background ("all the time") location is never asked for, whatever a library's
