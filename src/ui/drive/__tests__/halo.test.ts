@@ -166,13 +166,16 @@ describe('bursts (§4.6)', () => {
   test('a speeding alert never bursts', () => {
     expect(burstFor({ kind: 'phone', type: 'speeding', at: 5, until: 99 })).toBeNull();
   });
-  test('DashPal: critical red × 3, warning orange-red × 3 (driver-not-visible too), advisory one amber pulse; never for a resend', () => {
+  test('DashPal: every start or step red × 3, whatever its tier (driver-not-visible and a phone-in-hand advisory too); never for a resend', () => {
     const d = (tier: number, sound: number, resend = false) => burstFor({ kind: 'dashpal', key: 'k', sound, tier, resend, until: 99 });
-    expect(d(3, 3)).toEqual({ key: 'dashpal:k', severity: 1, pulses: 3, until: 99 });
-    expect(d(2, 1)).toEqual({ key: 'dashpal:k', severity: 0.75, pulses: 3, until: 99 });
-    expect(d(1, 5)).toEqual({ key: 'dashpal:k', severity: 0.45, pulses: 1, until: 99 });
-    expect(d(2, 6)).toEqual({ key: 'dashpal:k', severity: 0.75, pulses: 3, until: 99 });
+    const red = { key: 'dashpal:k', severity: 1, pulses: 3, until: 99 };
+    expect(d(3, 3)).toEqual(red);
+    expect(d(2, 1)).toEqual(red);
+    expect(d(1, 4)).toEqual(red);
+    expect(d(1, 5)).toEqual(red);
+    expect(d(2, 6)).toEqual(red);
     expect(d(3, 3, true)).toBeNull();
+    expect(d(1, 4, true)).toBeNull();
   });
 });
 

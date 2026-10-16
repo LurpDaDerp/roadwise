@@ -586,7 +586,7 @@ describe('DashPal (plan §7.10)', () => {
     expect(halo().severity).toBeGreaterThanOrEqual(0.8);
   });
 
-  test('a held glance warning ramps from 0.50 to 0.80 over 10 s; a level change flashes and bursts orange-red', async () => {
+  test('a held glance warning ramps from 0.50 to 0.80 over 10 s; a level change flashes and bursts red', async () => {
     const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
     setActiveDashcam(rt);
     const h = await renderHud({ rowTs: T });
@@ -597,7 +597,8 @@ describe('DashPal (plan §7.10)', () => {
     expect(halo().severity).toBeCloseTo(0.8, 6);
     await act(async () => rt.set({ link: { visual: visual({ tier: 2, sound: 1, level: 1 }) } }));
     expect(screen.getByTestId('hud-dashpal-alert')).toHaveTextContent(/Eyes on the road/);
-    expect(halo().burst).toMatchObject({ severity: 0.75, pulses: 3 });
+    expect(halo().burst).toMatchObject({ severity: 1, pulses: 3 });
+    expect(halo().colorSeverity).toBe(1);
   });
 
   test('the no-face alert (sound 6): "Driver not visible" banner, a burst, then a pulsing halo that reddens the longer it lasts', async () => {
@@ -607,7 +608,7 @@ describe('DashPal (plan §7.10)', () => {
     await act(async () => rt.set({ link: { visual: visual({ tier: 2, sound: 6 }), held: held(6, 2) } }));
     expect(screen.getByTestId('hud-dashpal-alert')).toHaveTextContent(/Driver not visible/);
     expect(screen.getByTestId('hud-dashpal-alert').props.accessibilityLabel).toBe('DashPal: Driver not visible');
-    expect(halo()).toMatchObject({ mode: 'burst', severity: 0.5, burst: { pulses: 3 } });
+    expect(halo()).toMatchObject({ mode: 'burst', severity: 0.5, colorSeverity: 1, burst: { severity: 1, pulses: 3 } });
     await act(() => jest.advanceTimersByTime(10_000));
     await h.update({ rowTs: T + 10_000 });
     expect(halo()).toMatchObject({ mode: 'distraction', burst: null });
@@ -615,12 +616,12 @@ describe('DashPal (plan §7.10)', () => {
     expect(halo().pulsePeriodMs).toBeGreaterThan(0);
   });
 
-  test('an advisory chime: one amber pulse', async () => {
+  test('an advisory (a phone-in-hand chime): red three times too', async () => {
     const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
     setActiveDashcam(rt);
     await renderHud({ rowTs: T });
-    await act(async () => rt.set({ link: { visual: visual({ tier: 1, sound: 5 }) } }));
-    expect(halo().burst).toMatchObject({ severity: 0.45, pulses: 1 });
+    await act(async () => rt.set({ link: { visual: visual({ tier: 1, sound: 4 }) } }));
+    expect(halo().burst).toMatchObject({ severity: 1, pulses: 3 });
   });
 
   test('a reconnect re-send shows its banner but never bursts; a visual 5 s old at mount shows nothing', async () => {

@@ -188,9 +188,9 @@ export type BurstSource =
   | { kind: 'dashpal'; key: string; sound: number; tier: number; resend: boolean; until: number };
 
 /**
- * What a flash bursts, or null: every phone alert except speeding is red × 3; a DashPal start or
- * level change is red × 3 (critical), orange-red × 3 (warning, driver-not-visible included) or one
- * amber pulse (advisory), never for a reconnect's re-send.
+ * What a flash bursts, or null: every phone alert except speeding, and every DashPal alert start or
+ * level change (a distraction or drowsiness warning of any tier, driver-not-visible included), is
+ * red × 3; never a reconnect's re-send.
  */
 export function burstFor(src: BurstSource): { key: string; severity: number; pulses: 1 | 2 | 3; until: number } | null {
   if (src.kind === 'phone') {
@@ -198,10 +198,7 @@ export function burstFor(src: BurstSource): { key: string; severity: number; pul
     return { key: `phone:${src.type}:${src.at}`, severity: 1, pulses: 3, until: src.until };
   }
   if (src.resend) return null;
-  const key = `dashpal:${src.key}`;
-  if (src.tier >= 3) return { key, severity: 1, pulses: 3, until: src.until };
-  if (src.tier === 2) return { key, severity: 0.75, pulses: 3, until: src.until };
-  return { key, severity: 0.45, pulses: 1, until: src.until };
+  return { key: `dashpal:${src.key}`, severity: 1, pulses: 3, until: src.until };
 }
 
 // ——— the visual ———
