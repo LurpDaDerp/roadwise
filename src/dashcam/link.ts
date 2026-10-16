@@ -22,11 +22,16 @@
 // boot id the phone knows but whose next_seq is below what it stored is a different boot (a new
 // local generation). Inbound HELLO and EVENT frames are processed on one serial chain, so an event is
 // never stored before its boot is known; alert frames are handled at once.
+//
+// The HUD's halo (drive-screen design §5.3-5.4): `held` is the worst continuous alert the table
+// holds, null once no frame has come for 3 s (a silently dead link) and back with the next frame. A
+// link that drops keeps its continuous alerts aside for `RESEND_WINDOW_MS`: the reconnect's re-send
+// of the same alert (same boot, id, sound and tier) keeps its `since` and flashes as a resend.
 import type { AlertPlayer } from '@/core/alerts/player';
 import { knownSpeed } from '@/core/detectors/common';
 import type { FeatureRow } from '@/core/engine/types';
 
-import { createDashcamAlerts, STALE_MS, type DashcamVisual } from './alerts';
+import { createDashcamAlerts, STALE_MS, type ContinuingAlert, type DashcamVisual, type HeldAlert } from './alerts';
 import type { PairedDashcam } from './keys';
 import {
   COMMAND,
@@ -83,6 +88,8 @@ export const SPEED_ACC_MAX_MPS = 2;
 export const MOVING_MPS = 5 * 0.44704;
 /** At drive end, wait this long at most for the phone to catch up to the dashcam. */
 export const CATCH_UP_MS = 3000;
+/** A reconnect this soon after a drop carries the dropped link's continuous alerts over (their `since`). */
+export const RESEND_WINDOW_MS = 10_000;
 
 export type BluetoothState = 'unknown' | 'resetting' | 'unsupported' | 'unauthorized' | 'off' | 'on' | 'turning_on' | 'turning_off';
 
@@ -132,6 +139,8 @@ export interface LinkSnapshot {
   synced: boolean;
   /** the last ALERT start or level change, for the HUD and the banner */
   visual: DashcamVisual | null;
+  /** the worst continuous alert held, for the HUD's halo; null with no link or 3 s after its last frame */
+  held: HeldAlert | null;
   firmware: string | null;
   /** `ignored`: events stored as ignored (they arrived with no drive open); also in `stored` */
   counters: { badFrames: number; lateAlerts: number; stored: number; ignored: number; duplicates: number; orphanEvents: number; storeErrors: number };
@@ -246,6 +255,10 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
   let repairCause: RepairCause | null = null;
   let session: Session | null = null;
   let visual: DashcamVisual | null = null;
+  /** no frame for `STALE_MS` while an alert is held: `held` reads null until the next frame */
+  let heldStale = false;
+  /** the continuous alerts of the link that last dropped, for a reconnect's re-send */
+  let dropped: { boot: number; at: number; entries: ContinuingAlert[] } | null = null;
   let firmware: string | null = null;
   let disposed = false;
   let pingSeq = 0;
@@ -315,9 +328,24 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       status: session?.status ?? null,
       synced: synced(),
       visual,
+      held: session === null || heldStale ? null : alerts.held(),
       firmware,
       counters: { ...counters },
     };
+  }
+
+  /** What the reconnect's re-send of `f` inherits from the dropped link, if anything (taken once). */
+  function inheritFor(s: Session, f: { alertId: number; sound: number; tier: number }, now: number): { since: number; level: number } | undefined {
+    if (dropped === null) return undefined;
+    if (now - dropped.at > RESEND_WINDOW_MS || now < dropped.at) {
+      dropped = null;
+      return undefined;
+    }
+    if (s.wireBoot !== dropped.boot || alerts.has(f.alertId)) return undefined;
+    const i = dropped.entries.findIndex((e) => e.alertId === f.alertId && e.sound === f.sound && e.tier === f.tier);
+    if (i < 0) return undefined;
+    const [e] = dropped.entries.splice(i, 1);
+    return { since: e!.since, level: e!.level };
   }
 
   function changed(): void {
@@ -470,6 +498,12 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       }
       // 3 s with no frame: the phone stops a continuous alert (and owes ALERT_ACK(0)).
       if (alerts.playingAny() && now - s.lastFrameAt > STALE_MS) alerts.stale();
+      // ...and the halo lets go of the held alert until the next frame.
+      const stale = alerts.held() !== null && now - s.lastFrameAt > STALE_MS;
+      if (stale !== heldStale) {
+        heldStale = stale;
+        changed();
+      }
     }
     alerts.tick(now);
     armWake(now);
@@ -491,7 +525,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
         times.push(s.nextSyncAt);
       }
       if (s.ackDueAt !== null && s.bootReady && s.wireBoot !== null) times.push(s.ackDueAt);
-      if (alerts.playingAny()) times.push(s.lastFrameAt + STALE_MS + 1);
+      if (alerts.playingAny() || (!heldStale && alerts.held() !== null)) times.push(s.lastFrameAt + STALE_MS + 1);
     }
     const a = alerts.nextDueAt();
     if (a !== null) times.push(a);
@@ -577,8 +611,11 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     const s = session;
     if (!s) return;
     const sameBoot = s.wireBoot === h.bootId;
+    // A dashcam that rebooted since the drop: its alerts are new.
+    if (dropped !== null && dropped.boot !== h.bootId) dropped = null;
     if (s.wireBoot !== null && !sameBoot) {
       // A new boot while connected: the phone's alert table goes, the handshake starts over.
+      dropped = null;
       alerts.clear();
       s.phase = 'hello';
       s.bootKey = null;
@@ -791,8 +828,12 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     },
 
     linkDown() {
+      const s = session;
+      const entries = alerts.continuing();
+      dropped = s !== null && s.wireBoot !== null && entries.length > 0 ? { boot: s.wireBoot, at: deps.now(), entries } : null;
       session = null;
       connectingNow = false;
+      heldStale = false;
       alerts.clear();
       changed();
     },
@@ -817,6 +858,8 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       repairCause = cause;
       session = null;
       connectingNow = false;
+      dropped = null;
+      heldStale = false;
       alerts.clear();
       changed();
     },
@@ -828,12 +871,16 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       const decoded = decodeTx(bytes);
       if (!decoded.ok) {
         counters.badFrames += 1;
-        if (s) s.lastFrameAt = now;
+        if (s) {
+          s.lastFrameAt = now;
+          heldStale = false;
+        }
         changed();
         return;
       }
       if (!s) return;
       s.lastFrameAt = now;
+      heldStale = false;
       const f = decoded.frame;
       switch (f.type) {
         case 'HELLO':
@@ -846,13 +893,14 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
           onEvent(f, now);
           break;
         case 'ALERT': {
+          const inherit = inheritFor(s, f, now);
           if (f.route === 1 && !alerts.has(f.alertId) && s.offsetMs !== null && now - (s.offsetMs + f.uptimeMs) > LATE_ALERT_MS) {
             counters.lateAlerts += 1;
-            alerts.onAlert({ ...f, route: 0 });
+            alerts.onAlert({ ...f, route: 0 }, inherit);
             self.sendAlertAck(f.alertId, 0);
             break;
           }
-          const ack = alerts.onAlert(f);
+          const ack = alerts.onAlert(f, inherit);
           // ALERT_ACK before playback starts (the first play runs after this returns).
           if (ack !== null) self.sendAlertAck(f.alertId, ack);
           break;
@@ -889,6 +937,8 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       if ((next?.dashcamId ?? null) !== before) {
         repairCause = null;
         session = null;
+        dropped = null;
+        heldStale = false;
         alerts.clear();
       }
       changed();
@@ -993,6 +1043,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     dispose() {
       disposed = true;
       session = null;
+      dropped = null;
       wakeNappers();
       listeners.clear();
       alerts.clear();

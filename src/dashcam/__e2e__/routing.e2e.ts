@@ -45,6 +45,8 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
         [2500, 'dp_glance', false],
       ]);
       expect(a.rt.state().link.visual).toMatchObject({ alertId: alert.f.alertId, sound: GLANCE, onPhone: true });
+      // The halo holds it for as long as it lasts.
+      expect(a.rt.state().link.held).toMatchObject({ sound: GLANCE, tier: 2, level: 0 });
 
       await w.runTo(t0 + 3010);
       expect(w.buzzer(t0)).toEqual([{ at: t0 + 3000, line: 'PLAY cont 1 0' }]);
@@ -60,6 +62,7 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
       await w.advance(6000);
       expect(a.player.sounded(t1 + 1)).toEqual([]);
       expect(a.player.stops.some((s) => s >= t1)).toBe(true);
+      expect(a.rt.state().link.held).toBeNull();
     }));
 
   test('row 3: the phone never answers (suspended with a fresh lease): buzzer at the 750 ms deadline with ALERT_FALLBACK 1; the app, woken late, answers ACK(0) and never sounds it', () =>
@@ -206,10 +209,13 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
       const first = a.player.sounded(t0);
       expect(first[0]).toMatchObject({ at: t0, decision: { tone: 'dp_wake', voiceAlways: true } });
       expect(first[0]!.decision.voice).toBeDefined();
+      const held = a.rt.state().link.held;
+      expect(held).toMatchObject({ sound: WAKE, tier: 3, level: 0 });
       const t1 = w.W;
       await w.dashcam('SND 3 3 2');
       expect(w.txOf('ALERT', 1, t1).map((x) => [x.f.alertId, x.f.level, x.f.route])).toEqual([[alert.f.alertId, 2, 1]]);
       expect(w.buzzer(t1)).toEqual([{ at: t1, line: 'PLAY cont 3 2' }]);
+      expect(a.rt.state().link.held).toEqual({ ...held, level: 2 });
       await w.advance(3000);
       expect(w.rxOf('ALERT_ACK', 1, t0)).toHaveLength(1);
       // The level step speaks again; then wake repeats every 1.0 s start to start.
@@ -310,10 +316,13 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
       const alert = w.txOf('ALERT', 1, t0)[0]!;
       expect(w.rxOf('ALERT_ACK', 1, t0).map((x) => x.f.outcome)).toEqual([1]);
       await w.advance(1000);
+      const held = a.rt.state().link.held;
+      expect(held).toMatchObject({ sound: GLANCE, tier: 2, level: 0 });
       const t1 = w.W;
       await w.outOfRange(a);
       expect(w.buzzer(t1)).toEqual([{ at: t1, line: 'PLAY cont 1 0' }]);
       expect(a.rt.state().link.lifecycle).toBe('connecting');
+      expect(a.rt.state().link.held).toBeNull();
       await w.advance(2000);
       expect(a.player.sounded(t1)).toEqual([]);
       expect(a.player.stops).toContain(t1);
@@ -326,6 +335,10 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
       expect(names.slice(0, 3)).toEqual(['HELLO', 'STATUS', 'ALERT']);
       const again = w.txOf('ALERT', 1, t2);
       expect(again.map((x) => [x.f.alertId, x.f.route])).toEqual([[alert.f.alertId, 0]]);
+      // Back within 10 s on the same boot: the halo's ramp goes on (same since) and the re-send is no news.
+      expect(w.W - t1).toBeLessThan(10_000);
+      expect(a.rt.state().link.held).toEqual(held);
+      expect(a.rt.state().link.visual).toMatchObject({ alertId: alert.f.alertId, resend: true });
       await w.advance(3000);
       expect(w.rxOf('ALERT_ACK', 1, t2)).toEqual([]);
       expect(a.player.sounded(t2)).toEqual([]);
@@ -415,6 +428,7 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
         [10_000, 'dp_glance', null, false],
       ]);
       expect(a.rt.state().link.visual).toMatchObject({ alertId: alerts[0]!.f.alertId, sound: NO_FACE, onPhone: true });
+      expect(a.rt.state().link.held).toMatchObject({ sound: NO_FACE, tier: 2 });
       expect(a.rt.continuousAlertActive()).toBe(false);
 
       const t1 = w.W;

@@ -1290,3 +1290,123 @@ describe('coverage (§7.5)', () => {
     expect([...r.errors, ...r2.errors, ...r3.errors, ...r4.errors]).toEqual([]);
   });
 });
+
+// ——— the HUD halo's held alert (drive-screen design §5.3-5.4) ———
+
+describe('held alert', () => {
+  test('a continuous ALERT is held; a one-shot is not; ALERT_STOP lets go', async () => {
+    const r = rig();
+    await connect(r);
+    expect(r.link.snapshot().held).toBeNull();
+    r.rx(alert({ alertId: 40, sound: 5, tier: 1, mode: 0 }));
+    await r.settle();
+    expect(r.link.snapshot().held).toBeNull();
+    const at = r.clock.t;
+    r.rx(alert({ alertId: 41, sound: 1, tier: 2 }));
+    expect(r.link.snapshot().held).toEqual({ sound: 1, tier: 2, level: 0, since: at });
+    r.advance(1000);
+    r.rx(alert({ alertId: 41, sound: 1, tier: 2, level: 1 }));
+    expect(r.link.snapshot().held).toEqual({ sound: 1, tier: 2, level: 1, since: at });
+    r.rx({ type: 'ALERT_STOP', alertId: 41, reason: 0 });
+    expect(r.link.snapshot().held).toBeNull();
+    await r.settle();
+  });
+
+  test('3 s with no frame: held goes null (and a wake is asked for it); the next frame brings it back; a drop empties it', async () => {
+    const r = rig();
+    await connect(r);
+    r.rx(alert({ alertId: 50, sound: 1, tier: 2, route: 0 }));
+    await r.settle();
+    const last = r.clock.t;
+    expect(r.link.nextWakeAt()).toBeLessThanOrEqual(last + 3001);
+    r.advance(3000);
+    expect(r.link.snapshot().held).toMatchObject({ sound: 1 });
+    r.advance(1);
+    expect(r.link.snapshot().held).toBeNull();
+    r.rx({ type: 'STATUS', uptimeMs: uptime(r), state: 3, flags: 0, fpsX10: 150, tempC: 40, bondCount: 1 });
+    expect(r.link.snapshot().held).toMatchObject({ sound: 1, since: last });
+    r.link.linkDown();
+    expect(r.link.snapshot().held).toBeNull();
+    await r.settle();
+  });
+
+  test('a reconnect within 10 s on the same boot: the re-sent alert keeps its since and flashes as a resend', async () => {
+    const r = rig();
+    await connect(r);
+    const since = r.clock.t;
+    r.rx(alert({ alertId: 60, sound: 3, tier: 3, level: 1 }));
+    await r.settle();
+    r.advance(1000);
+    r.link.linkDown();
+    r.advance(4000);
+    await connect(r);
+    r.rx(alert({ alertId: 60, sound: 3, tier: 3, level: 1, route: 0 }));
+    expect(r.link.snapshot().held).toEqual({ sound: 3, tier: 3, level: 1, since });
+    expect(r.link.snapshot().visual).toMatchObject({ alertId: 60, resend: true });
+    await r.settle();
+  });
+
+  test('not a resend: after more than 10 s, after a dashcam reboot, for another alert id, or at a higher level', async () => {
+    // after 11 s
+    let r = rig();
+    await connect(r);
+    r.rx(alert({ alertId: 61, route: 0 }));
+    await r.settle();
+    r.link.linkDown();
+    r.advance(11_000);
+    await connect(r);
+    let at = r.clock.t;
+    r.rx(alert({ alertId: 61, route: 0 }));
+    expect(r.link.snapshot().held).toMatchObject({ since: at });
+    expect(r.link.snapshot().visual).toMatchObject({ resend: false });
+    await r.settle();
+
+    // a different boot
+    r = rig();
+    await connect(r);
+    r.rx(alert({ alertId: 62, route: 0 }));
+    await r.settle();
+    r.link.linkDown();
+    r.advance(2000);
+    await connect(r, { bootId: 0x1234 });
+    at = r.clock.t;
+    r.rx(alert({ alertId: 62, route: 0 }));
+    expect(r.link.snapshot().held).toMatchObject({ since: at });
+    expect(r.link.snapshot().visual).toMatchObject({ resend: false });
+    await r.settle();
+
+    // another id, then a higher level of the dropped one
+    r = rig();
+    await connect(r);
+    r.rx(alert({ alertId: 63, route: 0 }));
+    r.rx(alert({ alertId: 64, sound: 6, route: 0 }));
+    await r.settle();
+    r.link.linkDown();
+    r.advance(2000);
+    await connect(r);
+    r.rx(alert({ alertId: 65, route: 0 }));
+    expect(r.link.snapshot().visual).toMatchObject({ alertId: 65, resend: false });
+    r.rx(alert({ alertId: 63, level: 2, route: 0 }));
+    expect(r.link.snapshot().visual).toMatchObject({ alertId: 63, resend: false });
+    r.rx(alert({ alertId: 64, sound: 6, route: 0 }));
+    expect(r.link.snapshot().visual).toMatchObject({ alertId: 64, resend: true });
+    await r.settle();
+  });
+
+  test('a repair or a pairing change forgets the dropped alerts', async () => {
+    const r = rig();
+    await connect(r);
+    r.rx(alert({ alertId: 70, route: 0 }));
+    await r.settle();
+    r.link.linkDown();
+    r.link.needsRepair('bond_lost');
+    r.link.setPaired(PAIRED);
+    r.link.setPaired(null);
+    r.link.setPaired(PAIRED);
+    r.advance(1000);
+    await connect(r);
+    r.rx(alert({ alertId: 70, route: 0 }));
+    expect(r.link.snapshot().visual).toMatchObject({ resend: false });
+    await r.settle();
+  });
+});

@@ -14,6 +14,7 @@ export function linkSnapshot(over: Partial<LinkSnapshot> = {}): LinkSnapshot {
     status: null,
     synced: false,
     visual: null,
+    held: null,
     firmware: null,
     counters: { badFrames: 0, lateAlerts: 0, stored: 0, ignored: 0, duplicates: 0, orphanEvents: 0, storeErrors: 0 },
     ...over,
