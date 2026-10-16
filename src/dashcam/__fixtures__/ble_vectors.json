@@ -205,5 +205,396 @@
    {"desc": "INFO version 2", "hex": "0201010303a4cf12345678010100", "reason": "version"},
    {"desc": "INFO version 0", "hex": "0001010303a4cf12345678010100", "reason": "version"}
   ]
+ },
+ "v2": {
+  "notes": [
+   "Link v2 (docs/BLE_PROTOCOL.md sections 2.2 and 3.3), from fixed inputs through tests/dp_phone.py (tools/make_auth_vectors.py).",
+   "Every hex is the exact bytes, lowercase. mac is INFO's 6 bytes, most significant first. A pairing's random values are given (a, b, nc, np, nd, id_p); the dashcam's Nc is the one INFO showed before the request.",
+   "code: S || check byte as Crockford base32, 28 characters (the last 4 padding bits zero), shown in 7 groups of 4.",
+   "sealed: [ctr u32 LE][AES-128-GCM][tag 16], nonce [dir][0 x 7][ctr u32 LE], aad [0x02][dir]; dir 1 dashcam -> phone (k_dp), 2 phone -> dashcam (k_pd); the keys are the session section's.",
+   "sealed_invalid: accepted = the counters the receiver had accepted before (its replay window); expect bad | replay | ok."
+  ],
+  "link_version": 2,
+  "code": {
+   "label": {
+    "S": "000102030405060708090a0b0c0d0e0f",
+    "kind": "label",
+    "check": 12,
+    "text": "000G-40R4-0M30-E209-185G-R38E-1W60"
+   },
+   "once": {
+    "S": "624845a93ddc306b6a4d9aee25e13c29",
+    "kind": "once",
+    "check": 49,
+    "text": "C944-BA9X-VGR6-PTJD-KBQ2-BR9W-54RG"
+   },
+   "aliases": [
+    "000g-40r4-0m30-e209-185g-r38e-1w60",
+    "000G40R40M30E209185GR38E1W60",
+    "000G 40R4 0M30 E209 185G R38E 1W60",
+    "OOOG4OR4OM3OE2O9l85GR38ElW6O"
+   ],
+   "invalid": [
+    {
+     "text": "000G40R40M30E209185GR38E1W00",
+     "reason": "check byte of neither kind"
+    },
+    {
+     "text": "000G4UR40M30E209185GR38E1W60",
+     "reason": "U"
+    },
+    {
+     "text": "000G40R40M30E209185GR38E1W6",
+     "reason": "27 characters"
+    },
+    {
+     "text": "000G40R40M30E209185GR38E1W61",
+     "reason": "padding bits not zero"
+    }
+   ]
+  },
+  "link": {
+   "domain": "pair.example.com",
+   "valid": [
+    {
+     "url": "https://pair.example.com/dashpal#d=f412fa0c9e01&k=000G40R40M30E209185GR38E1W60",
+     "d": "f412fa0c9e01",
+     "S": "000102030405060708090a0b0c0d0e0f",
+     "kind": "label"
+    },
+    {
+     "url": "https://pair.example.com/dashpal#d=f412fa0c9e01&k=C944BA9XVGR6PTJDKBQ2BR9W54RG",
+     "d": "f412fa0c9e01",
+     "S": "624845a93ddc306b6a4d9aee25e13c29",
+     "kind": "once"
+    },
+    {
+     "url": "roadwise://dashpal?d=f412fa0c9e01",
+     "d": "f412fa0c9e01",
+     "S": null,
+     "kind": null
+    },
+    {
+     "url": "https://pair.example.com/dashpal",
+     "d": null,
+     "S": null,
+     "kind": null
+    }
+   ],
+   "invalid": [
+    "https://pair.example.com/dashpal#d=f412fa0c9e0&k=000G40R40M30E209185GR38E1W60",
+    "https://pair.example.com/dashpal#d=f412fa0c9e01&k=000G40R40M30E209185GR38E1W6",
+    "https://other.example.com/dashpal#d=f412fa0c9e01&k=000G40R40M30E209185GR38E1W60",
+    "https://pair.example.com/other#d=f412fa0c9e01&k=000G40R40M30E209185GR38E1W60"
+   ]
+  },
+  "info": {
+   "len": 30,
+   "valid": [
+    {
+     "desc": "keyed, pairing window open, no phone",
+     "hex": "0102020304f412fa0c9e01000005606162636465666768696a6b6c6d6e6f",
+     "fields": {
+      "ver": 1,
+      "proto_min": 2,
+      "proto_max": 2,
+      "fw_major": 3,
+      "fw_minor": 4,
+      "mac": "f412fa0c9e01",
+      "peer_bonded": 0,
+      "bond_count": 0,
+      "flags": 5,
+      "nc": "606162636465666768696a6b6c6d6e6f"
+     }
+    },
+    {
+     "desc": "keyed, another phone holds the setup claim, one phone",
+     "hex": "0102020304f412fa0c9e01000106a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+     "fields": {
+      "ver": 1,
+      "proto_min": 2,
+      "proto_max": 2,
+      "fw_major": 3,
+      "fw_minor": 4,
+      "mac": "f412fa0c9e01",
+      "peer_bonded": 0,
+      "bond_count": 1,
+      "flags": 6,
+      "nc": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+     }
+    },
+    {
+     "desc": "unkeyed, window closed",
+     "hex": "0102020304f412fa0c9e0100000000000000000000000000000000000000",
+     "fields": {
+      "ver": 1,
+      "proto_min": 2,
+      "proto_max": 2,
+      "fw_major": 3,
+      "fw_minor": 4,
+      "mac": "f412fa0c9e01",
+      "peer_bonded": 0,
+      "bond_count": 0,
+      "flags": 0,
+      "nc": "00000000000000000000000000000000"
+     }
+    }
+   ]
+  },
+  "x25519": {
+   "alice_priv": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+   "alice_pub": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+   "bob_priv": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+   "bob_pub": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+   "shared": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742"
+  },
+  "pair": {
+   "a": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+   "A": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254",
+   "b": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+   "B": "79a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a",
+   "nc": "606162636465666768696a6b6c6d6e6f",
+   "np": "707172737475767778797a7b7c7d7e7f",
+   "nd": "808182838485868788898a8b8c8d8e8f",
+   "id_p": "0102030405060708",
+   "pair_req": "10020102030405060708000000000000000000000000000000000000000000000000358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254707172737475767778797a7b7c7d7e7fb3556a709c090138009bfeba75301302",
+   "Z": "04c304fb1ca83cee75e206344231f33797e07d9929db670994b7c6fbeb1dc255",
+   "T_pair": "bad5371e85c2d6bf8bf9d53301ba360cb5dc97ebf75055a2225897b1ff83693f",
+   "K_pair": "cdc0ef2bf9ebc52c8afdc364d3ef3a92814a8fb0dfee709d7ea1389a89719bb5",
+   "k_conf": "ffbab8ce0d1b6566ddf352efb48343d2ca968889fa39cb59e3696fb941d14acd",
+   "proof_d": "75587892f78eb05aacf4b5b8cb4b732f",
+   "proof_p": "dd22c1cd9c0536df48a46de971cb68cd",
+   "pair_resp": "900279a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a808182838485868788898a8b8c8d8e8f75587892f78eb05aacf4b5b8cb4b732f",
+   "pair_fin": "1102dd22c1cd9c0536df48a46de971cb68cd",
+   "S": "000102030405060708090a0b0c0d0e0f",
+   "mac": "f412fa0c9e01",
+   "other_nc": {
+    "nc": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "pair_req": "10020102030405060708000000000000000000000000000000000000000000000000358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254707172737475767778797a7b7c7d7e7fdccc02bd25b8aabd4da0314df582ae25",
+    "against_nc": "606162636465666768696a6b6c6d6e6f",
+    "expect": "R_WRONG_CODE"
+   },
+   "prev_proven": {
+    "prev_id": "0102030405060708",
+    "prev_k_pair": "cdc0ef2bf9ebc52c8afdc364d3ef3a92814a8fb0dfee709d7ea1389a89719bb5",
+    "prev_proof": "30493cfe30b9c362ada87f15fcbc476b",
+    "id_p": "1112131415161718",
+    "pair_req": "10021112131415161718010203040506070830493cfe30b9c362ada87f15fcbc476b358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254707172737475767778797a7b7c7d7e7fb39ab887eb6b4680d0541e6534a5f473",
+    "expect": "replaces"
+   },
+   "prev_unproven": {
+    "prev_id": "0102030405060708",
+    "pair_req": "10022122232425262728010203040506070800000000000000000000000000000000358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254707172737475767778797a7b7c7d7e7f84197665c275f7080377409d63e13f51",
+    "expect": "new_phone"
+   },
+   "under_once": {
+    "S1": "624845a93ddc306b6a4d9aee25e13c29",
+    "pair_req": "10020102030405060708000000000000000000000000000000000000000000000000358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254707172737475767778797a7b7c7d7e7fdf5348959f97d07872fb85e1010208bc",
+    "pair_resp": "900279a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a808182838485868788898a8b8c8d8e8f0f452392c54f18b5d8d2dba53f189bdf",
+    "K_pair": "f255d21f259539d20439434a62457662ffde6a77934e4332aa830be171671b0c"
+   }
+  },
+  "session": {
+   "K_pair": "cdc0ef2bf9ebc52c8afdc364d3ef3a92814a8fb0dfee709d7ea1389a89719bb5",
+   "id_p": "0102030405060708",
+   "mac": "f412fa0c9e01",
+   "nc": "606162636465666768696a6b6c6d6e6f",
+   "np": "707172737475767778797a7b7c7d7e7f",
+   "nd": "808182838485868788898a8b8c8d8e8f",
+   "bid": "b4e7445aa3878aff",
+   "session_req": "2002b4e7445aa3878aff707172737475767778797a7b7c7d7e7f",
+   "T_s": "3ce6fe21227c4c86425c5b78c8827fe9b1ee3ade7c2076fad54c095e0ac4bb5c",
+   "k_dp": "61a09d074be4b817e041545a87a6a28f",
+   "k_pd": "5a2cdea5baad3e127df6903778c9b12f",
+   "k_conf": "e125a1231c3d3b96d1f694f6dea6321b",
+   "session_resp": "a002808182838485868788898a8b8c8d8e8f54b7760b88d3d243aa03bd90289abedd",
+   "session_fin": "21024641e088266f2fc5fdaaf30c9f8c2144",
+   "bid_other_nc": {
+    "nc": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "bid": "99f3a93682a0dfa4"
+   }
+  },
+  "result": [
+   {
+    "code": 0,
+    "name": "R_OK",
+    "hex": "e00200"
+   },
+   {
+    "code": 1,
+    "name": "R_NOT_NOW",
+    "hex": "e00201"
+   },
+   {
+    "code": 2,
+    "name": "R_UNKNOWN_PHONE",
+    "hex": "e00202"
+   },
+   {
+    "code": 3,
+    "name": "R_BUSY",
+    "hex": "e00203"
+   },
+   {
+    "code": 4,
+    "name": "R_WRONG_PROOF",
+    "hex": "e00204"
+   },
+   {
+    "code": 5,
+    "name": "R_WRONG_CODE",
+    "hex": "e00205"
+   },
+   {
+    "code": 6,
+    "name": "R_UNKEYED",
+    "hex": "e00206"
+   },
+   {
+    "code": 7,
+    "name": "R_ID_IN_USE",
+    "hex": "e00207"
+   },
+   {
+    "code": 8,
+    "name": "R_STORE_FAILED",
+    "hex": "e00208"
+   },
+   {
+    "code": 9,
+    "name": "R_MTU",
+    "hex": "e00209"
+   }
+  ],
+  "add_phone": {
+   "S1": "624845a93ddc306b6a4d9aee25e13c29",
+   "hex": "8801624845a93ddc306b6a4d9aee25e13c29"
+  },
+  "sealed": [
+   {
+    "desc": "HELLO ctr 0",
+    "dir": 1,
+    "key": "k_dp",
+    "ctr": 0,
+    "plain": "0101b979379e2a0000000000000040e20100",
+    "wire": "00000000d8118bd6c37da2f430b5ba2e70f97359f450956d1e2571e35943e5096f3ca3ed3c43"
+   },
+   {
+    "desc": "EVENT ctr 1",
+    "dir": 1,
+    "key": "k_dp",
+    "ctr": 1,
+    "plain": "0301070000003b2809002300038200230000",
+    "wire": "010000000363eb62c4b357067cfd3c11e32a4cb18311979061b92cce9afe3f86d849d8b0b8e5"
+   },
+   {
+    "desc": "HELLO ctr 300",
+    "dir": 1,
+    "key": "k_dp",
+    "ctr": 300,
+    "plain": "0101b979379e2a0000000000000040e20100",
+    "wire": "2c0100004133a199da33a7a79e14fd53159c63d04c033a1fc1080ee005a9f62b21a9e3cb3201"
+   },
+   {
+    "desc": "EVENT ctr 4294967294",
+    "dir": 1,
+    "key": "k_dp",
+    "ctr": 4294967294,
+    "plain": "0301070000003b2809002300038200230000",
+    "wire": "feffffff4f1c50d6a7f9c39d1f72a23d8cf48e5843e76de56c643830d143659cd8b086a3f052"
+   },
+   {
+    "desc": "COMMAND hello ctr 0",
+    "dir": 2,
+    "key": "k_pd",
+    "ctr": 0,
+    "plain": "86010700",
+    "wire": "00000000d403167f0e1cea63668f1b21f21d291adba9bb7d"
+   },
+   {
+    "desc": "STATE ctr 1",
+    "dir": 2,
+    "key": "k_pd",
+    "ctr": 1,
+    "plain": "81010d1eda0a9f05b979379e2a000000",
+    "wire": "0100000004738a5dbfe9c769dc19dca42bf44bb53784cabbf1b82bfeeaf355360b8354b9"
+   },
+   {
+    "desc": "ALERT_ACK ctr 300",
+    "dir": 2,
+    "key": "k_pd",
+    "ctr": 300,
+    "plain": "8301010001",
+    "wire": "2c0100002b23b639df549bdb5170836fcfbfb9a19b9702c35c"
+   },
+   {
+    "desc": "ADD_PHONE ctr 4294967294",
+    "dir": 2,
+    "key": "k_pd",
+    "ctr": 4294967294,
+    "plain": "8801624845a93ddc306b6a4d9aee25e13c29",
+    "wire": "feffffff94f697d54d2032a447055ad59ae350b78871804b51c1978fd0832ad8ab8dc7908ba0"
+   }
+  ],
+  "sealed_invalid": [
+   {
+    "desc": "a flipped tag bit",
+    "dir": 2,
+    "key": "k_pd",
+    "wire": "05000000c8cc709ef68ad95149b2b45f21cf7a869f7012ab26e03dc6dfb95c3dbe9d552e",
+    "expect": "bad"
+   },
+   {
+    "desc": "sealed with the other direction's key",
+    "dir": 2,
+    "key": "k_pd",
+    "wire": "06000000978c390d7794dfada7bb6248585bc6c81372523ffc375987dfc6f2e18f24680a",
+    "expect": "bad"
+   },
+   {
+    "desc": "the other direction byte",
+    "dir": 2,
+    "key": "k_pd",
+    "wire": "0700000011a3843fb78779f0b005c3701e5e9ead3113ca62799455153b6d6ecd65057176",
+    "expect": "bad"
+   },
+   {
+    "desc": "21 bytes",
+    "dir": 2,
+    "key": "k_pd",
+    "wire": "05000000c8cc709ef68ad95149b2b45f21cf7a869f",
+    "expect": "bad"
+   },
+   {
+    "desc": "a replayed counter",
+    "dir": 2,
+    "key": "k_pd",
+    "accepted": [
+     5
+    ],
+    "wire": "05000000c8cc709ef68ad95149b2b45f21cf7a869f7012ab26e03dc6dfb95c3dbe9d552f",
+    "expect": "replay"
+   },
+   {
+    "desc": "64 behind the highest",
+    "dir": 2,
+    "key": "k_pd",
+    "accepted": [
+     100
+    ],
+    "wire": "24000000f23104713c2e01c3daf11ba853e2f5b6a42cb1f43fedf201c4e1ed35b990eb22",
+    "expect": "replay"
+   },
+   {
+    "desc": "63 behind the highest, not seen: accepted",
+    "dir": 2,
+    "key": "k_pd",
+    "accepted": [
+     100
+    ],
+    "wire": "25000000b9695122ae2127ea57ddccf285403ab1b81d96f1ad40c4a8975f03838eef1911",
+    "expect": "ok"
+   }
+  ]
  }
 }
