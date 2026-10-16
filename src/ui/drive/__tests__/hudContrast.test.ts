@@ -2,6 +2,7 @@ import { contrastRatio, relativeLuminance } from '@/ui/contrast';
 import {
   HUD,
   HUD_CONTRAST_PAIRS,
+  HUD_GRAPHIC_PAIRS,
   HUD_LIT_KEYS,
   type HudPalette,
   hudLabelScale,
@@ -25,6 +26,10 @@ describe.each(palettes)('the %s HUD palette', (_name, p) => {
     expect(contrastRatio(p[fg], p[bg])).toBeGreaterThanOrEqual(7);
   });
 
+  test.each(HUD_GRAPHIC_PAIRS)('the graphic %s on %s holds at least 4.5:1', (fg, bg) => {
+    expect(contrastRatio(p[fg], p[bg])).toBeGreaterThanOrEqual(4.5);
+  });
+
   test('black print on every tier colour holds 7:1 (the alert chip)', () => {
     for (const tier of ['minor', 'moderate', 'severe'] as const) {
       expect(contrastRatio(p.ground, tierColor(p, tier))).toBeGreaterThanOrEqual(7);
@@ -43,7 +48,7 @@ describe.each(palettes)('the %s HUD palette', (_name, p) => {
 });
 
 test('every colour in both palettes is covered by at least one check', () => {
-  const checked = new Set<string>([...HUD_CONTRAST_PAIRS.flat(), 'signRing']);
+  const checked = new Set<string>([...HUD_CONTRAST_PAIRS.flat(), ...HUD_GRAPHIC_PAIRS.flat(), 'signRing']);
   for (const key of Object.keys(HUD.day)) expect(checked).toContain(key);
 });
 

@@ -2,12 +2,14 @@ import type { Tier } from '@scoring';
 
 /**
  * The driving screen's palette (DESIGN.md "HUD exception"). True black in every light, lit
- * numerals, a round speed-limit sign, and one colour per event tier for the edge glow — yellow,
- * orange, red, as on the drive summary — read peripherally as colour, never as motion. `night` is
- * the same palette dimmed and warmed for eyes adapted to an unlit road, with no pure white.
+ * numerals, a speed-limit sign, one colour per event tier — yellow, orange, red, as on the drive
+ * summary — for the alert chips, and the halo's own colours: a light blue-white calm ring, a
+ * saturated red end, and a white speed inside it. `night` is the same palette dimmed and warmed for
+ * eyes adapted to an unlit road, with no pure white; the halo is its one cool element.
  *
- * Every foreground/background pair holds at least 7:1 (`HUD_CONTRAST_PAIRS`, measured in
- * `__tests__/hudContrast.test.ts`). Literals only: the HUD's colours are its own.
+ * Every foreground/background pair holds at least 7:1 (`HUD_CONTRAST_PAIRS`) and every graphic at
+ * least 4.5:1 (`HUD_GRAPHIC_PAIRS`), measured in `__tests__/hudContrast.test.ts`. Literals only:
+ * the HUD's colours are its own.
  */
 export type HudPalette = {
   /** Screen ground: true black. */
@@ -20,10 +22,17 @@ export type HudPalette = {
   signFace: string;
   signInk: string;
   signRing: string;
-  /** Event tiers: the edge glow, the alert chip, and the speed numerals while speeding. */
+  /** Event tiers: the alert chips, and the halo's ramp stops (yellow 0.30, orange 0.55). */
   minor: string;
   moderate: string;
   severe: string;
+  /** The halo: its calm ring (light blue-white), its red end (a graphic), and the speed inside it. */
+  haloCalm: string;
+  haloSevere: string;
+  /** The speed numerals while the halo is calm (white by day, a dimmed neutral white at night). */
+  haloInk: string;
+  /** The unit label inside the halo. */
+  haloInkMuted: string;
   /** Points gained since the last stop. */
   gain: string;
   /** The End button's face and its ring track. */
@@ -41,6 +50,10 @@ const day: HudPalette = {
   minor: '#FFC300', // school-bus yellow
   moderate: '#FF9A45',
   severe: '#FF7070', // soft red, so black print reads on it
+  haloCalm: '#CFE6FF',
+  haloSevere: '#FF3B3B',
+  haloInk: '#F3F6FB',
+  haloInkMuted: '#A9BAD6',
   gain: '#5EE08A',
   chrome: '#001D3D',
   chromeEdge: '#003566',
@@ -56,6 +69,10 @@ const night: HudPalette = {
   minor: '#D99A30',
   moderate: '#E0884F',
   severe: '#EA7A7A',
+  haloCalm: '#A9BCD4',
+  haloSevere: '#D63A3A',
+  haloInk: '#D3D9E2',
+  haloInkMuted: '#9AA3B0',
   gain: '#4FBF78',
   chrome: '#00142B',
   chromeEdge: '#002A52',
@@ -84,7 +101,13 @@ export const HUD_CONTRAST_PAIRS: readonly (readonly [keyof HudPalette, keyof Hud
   ['gain', 'ground'],
   ['ink', 'chrome'],
   ['ink', 'chromeEdge'],
+  ['haloCalm', 'ground'],
+  ['haloInk', 'ground'],
+  ['haloInkMuted', 'ground'],
 ];
+
+/** [graphic, background] pairs that must hold ≥ 4.5:1 in both palettes (the halo's red end). */
+export const HUD_GRAPHIC_PAIRS: readonly (readonly [keyof HudPalette, keyof HudPalette])[] = [['haloSevere', 'ground']];
 
 /** The palette keys drawn lit on the ground, so the night set must dim each one. */
 export const HUD_LIT_KEYS: readonly (keyof HudPalette)[] = [
@@ -95,6 +118,10 @@ export const HUD_LIT_KEYS: readonly (keyof HudPalette)[] = [
   'moderate',
   'severe',
   'gain',
+  'haloCalm',
+  'haloSevere',
+  'haloInk',
+  'haloInkMuted',
 ];
 
 /** Speed numerals: fixed size (never Dynamic Type), sized to the screen's short side. */
@@ -125,6 +152,22 @@ export function speedNumeralPt(shortSide: number): number {
   const pt = Math.round(shortSide * 0.34);
   return Math.min(SPEED_NUMERAL_MAX_PT, Math.max(SPEED_NUMERAL_MIN_PT, pt));
 }
+
+/** The halo's square box at most, and the smallest box that still draws a ring (else bare numerals). */
+export const HALO_MAX_BOX_PT = 420;
+export const HALO_MIN_RING_BOX_PT = 220;
+/** The largest pulse scale (the burst): the glow is sized so that it still fits its box. */
+export const HALO_MAX_SCALE = 1.04;
+/** Calm: light goes once around the ring in this long. */
+export const HALO_FLOW_MS = 18_000;
+/** Dimmed and calm, the halo and the speed show at this strength (above the scrim). */
+export const HALO_DIM_OPACITY = 0.45;
+/** The speeding display hold lets go this many rows after the engine last reported a tier. */
+export const HALO_SPEED_HOLD_MAX_ROWS = 10;
+/** The halo's colour ramp: calm, yellow, orange, red at these severities. */
+export const HALO_RAMP_STOPS = [0, 0.3, 0.55, 1] as const;
+/** A burst: each pulse 400 ms (2.5 a second), opacity down to 0.25, scale up to 1.04. */
+export const HALO_BURST = { periodMs: 400, depth: 0.75, scale: 0.04 } as const;
 
 /** Small HUD labels follow Dynamic Type up to 2x and never shrink below their design size. */
 export function hudLabelScale(fontScale: number): number {
