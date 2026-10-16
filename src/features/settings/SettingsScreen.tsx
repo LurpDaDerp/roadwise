@@ -8,6 +8,7 @@ import { useDashcamState } from '@/dashcam/ui/useDashcam';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { useMySummary, type HeatmapVisibility, type LicenseStage } from '@/data/server/summary';
+import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
 import { ReminderRow, useTripReminder, type ReminderDeps } from '@/features/reminder';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, useTheme } from '@/ui';
 
@@ -121,6 +122,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
       <Section title={copy.driving}>
         <LinkRow icon="videocam-outline" title={copy.dashcam.title} subtitle={dashcam.label} onPress={() => router.push(SETTINGS_HREFS.dashcam)} testID="settings-dashcam" />
         <LinkRow icon="volume-high-outline" title={copy.alerts.title} subtitle={copy.alerts.subtitle} onPress={() => router.push(SETTINGS_HREFS.alerts)} testID="settings-alerts" />
+        <NavAppSettingRow db={db} />
         {reminder.status ? <ReminderRow status={reminder.status} onStatus={reminder.setStatus} deps={deps.reminder} /> : null}
         <LinkRow icon="shield-checkmark-outline" title={copy.permissions.title} subtitle={copy.permissions.subtitle} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-permissions" />
       </Section>
