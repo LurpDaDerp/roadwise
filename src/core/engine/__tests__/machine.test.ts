@@ -1,5 +1,3 @@
-import { AUTO_END_STOPPED_S } from '@scoring';
-
 import { createDetectors } from '@/core/detectors';
 import { limit, mph, row, seq, T0 } from '@/core/detectors/__fixtures__/rows';
 import type { AlertEvent, EngineDeps, EngineSnapshot, TripSession } from '@/core/engine/engine.types';
@@ -74,28 +72,7 @@ test('a drive starts only on `start` and ends on `end`, handing the finalizer on
   expect(h.engine.snapshot().clientTripId).toBe('id2');
 });
 
-test('stopped at or below 2 mph for 300 s ends the drive where it stopped; a row ≤ 5 mph is "stopped" for the points', async () => {
-  const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
-  await feed(h, seq([5, { speed: mph(30) }]));
-  const stopAt = T0 + 5000;
-  await feed(h, seq([AUTO_END_STOPPED_S - 1, (i) => ({ speed: mph(1), ts: stopAt + (i - 5) * 1000 })]));
-  expect(h.engine.snapshot()).toMatchObject({ status: 'recording', stopped: true, stoppedSinceTs: stopAt, lockedOut: false });
-  await feed(h, [row({ speed: mph(1), ts: stopAt + (AUTO_END_STOPPED_S - 1) * 1000 })]);
-  expect(h.engine.snapshot().status).toBe('idle');
-  expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: stopAt });
-});
-
-test('a tick past the deadline ends a stopped drive even with no row; a walking report ends a slow drive at once', async () => {
-  const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
-  await feed(h, seq([3, { speed: mph(1) }]));
-  await h.engine.dispatch({ type: 'tick', ts: T0 + 100_000 });
-  expect(h.engine.snapshot().status).toBe('recording');
-  await h.engine.dispatch({ type: 'tick', ts: T0 + AUTO_END_STOPPED_S * 1000 + 1 });
-  // Stopped from the first row: the drive ends where it started (never before start + 1 s).
-  expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: T0 + 1000 });
-
+test('a walking report ends a slow drive at once, cut at the last movement', async () => {
   const w = harness();
   await w.engine.dispatch({ type: 'start', ts: T0, continues: false });
   await feed(w, seq([3, { speed: mph(40) }]));
@@ -103,7 +80,7 @@ test('a tick past the deadline ends a stopped drive even with no row; a walking 
   expect(w.engine.snapshot().status).toBe('recording'); // a misfire at 40 mph is ignored
   await feed(w, seq([2, (i) => ({ speed: mph(2), ts: T0 + 3000 + i * 1000 })]));
   await w.engine.dispatch({ type: 'walking', ts: T0 + 9000 });
-  expect(w.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 3000 });
+  expect(w.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 3000, cut: true });
 });
 
 test('alerts: one chime per speeding episode, the pickup and the 15-s handling alert, instant events as they close', async () => {
@@ -147,26 +124,6 @@ test('checkpoints every 30 rows and clears the pending rows; a failed checkpoint
   expect(h.engine.session()?.checkpointTs).toBe(T0 + (2 * CHECKPOINT_ROWS - 1) * 1000);
 });
 
-test('a fix lost while moving, then a still phone with no sky: the stop clock starts after 30 s still and the drive ends', async () => {
-  const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
-  await feed(h, seq([10, { speed: mph(8) }]));
-  const still = (i: number) => ({ ts: T0 + 10_000 + i * 1000, gnssValid: false, speed: -1, gravityStability: 0.99, aLonMax: 0.01, aLonMin: -0.01, aLatMax: 0.01, aLatMin: -0.01, yawRateMax: 0.01, jerkMax: 0.01 });
-  await feed(h, seq([29, still]));
-  expect(h.engine.snapshot().stoppedSinceTs).toBeNull();
-  await feed(h, seq([1, (i) => still(29 + i)]));
-  expect(h.engine.snapshot().stoppedSinceTs).toBe(T0 + 10_000);
-  await feed(h, seq([AUTO_END_STOPPED_S, (i) => still(30 + i)]));
-  expect(h.engine.snapshot().status).toBe('idle');
-  expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: T0 + 10_000 });
-  // A phone that is moving (carried) with no fix does not count as still.
-  const m = harness();
-  await m.engine.dispatch({ type: 'start', ts: T0, continues: false });
-  await feed(m, seq([10, { speed: mph(8) }]));
-  await feed(m, seq([60, (i) => ({ ...still(i), handlingScore: 0.5 })]));
-  expect(m.engine.snapshot().stoppedSinceTs).toBeNull();
-});
-
 test('walking is accepted whatever the last speed once the last fix is over 60 s old', async () => {
   const h = harness();
   await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
@@ -175,7 +132,8 @@ test('walking is accepted whatever the last speed once the last fix is over 60 s
   expect(h.engine.snapshot().status).toBe('recording');
   await h.engine.dispatch({ type: 'walking', ts: T0 + 70_000 });
   expect(h.engine.snapshot().status).toBe('idle');
-  expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 70_000 });
+  // Cut back to the last movement (the fifth row at 8 mph), not the report.
+  expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 5000, cut: true });
 });
 
 test('a finalizer that throws is reported and the engine is idle again for the next drive', async () => {

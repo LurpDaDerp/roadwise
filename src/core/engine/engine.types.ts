@@ -10,8 +10,8 @@ import type { DetectedEvent, DetectorContext, DetectorSuite, FeatureRow, LimitSa
 /** idle → recording → finalizing → idle. Nothing starts a drive but `start`. */
 export type EngineStatus = 'idle' | 'recording' | 'finalizing';
 
-/** Why the drive closed. Local only; never uploaded. */
-export type EndCause = 'manual' | 'stopped' | 'walking' | 'orphan';
+/** Why the drive closed. Local only; never uploaded. `limit`: it reached `MAX_DRIVE_MS`. */
+export type EndCause = 'manual' | 'stopped' | 'walking' | 'orphan' | 'limit';
 
 export interface Fix {
   lat: number;
@@ -148,8 +148,8 @@ export interface EngineSnapshot {
   speedingTier: Tier | null;
   /** Known speed at or below 5 mph: points may show. */
   stopped: boolean;
-  /** epoch ms the current run at or below 2 mph began (the auto-end clock), or null. */
-  stoppedSinceTs: number | null;
+  /** epoch ms the drive ends by itself unless the car moves (`session.autoEndAt`); null unless recording. */
+  autoEndAt: number | null;
   distanceM: number;
   /** Recording at a last known speed above 5 mph: the UI shows only the End control. */
   lockedOut: boolean;
@@ -189,10 +189,11 @@ export type EngineEvent =
   /** `continues`: the phone's previous drive ended within `MERGE_GAP_S` (the host reads it at the tap). */
   | { type: 'start'; ts: number; continues: boolean }
   | { type: 'row'; row: FeatureRow }
-  /** The OS says the driver is walking: the drive ends where it last stopped. */
+  /** The OS says the driver is walking: the drive ends where the car last moved. */
   | { type: 'walking'; ts: number }
+  /** A manual end (the hold, the notification's End drive, sign-out): cut after 2 min standing still. */
   | { type: 'end'; ts: number }
-  /** The host's one timer: the auto-end deadline may have passed with no row. */
+  /** The host's one timer: the automatic end (`autoEndAt`) may have passed with no row. */
   | { type: 'tick'; ts: number }
   /** Continue a drive the previous process was recording. Applied only while idle. */
   | { type: 'adopt'; trip: AdoptedTrip; ts: number };

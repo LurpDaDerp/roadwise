@@ -2,33 +2,35 @@
 //
 //   idle → recording → finalizing → idle
 //
-// A drive starts only on `start` (the user's Start Drive tap, which the host has already checked
-// for speed and permissions). It ends on `end` (the hold-to-end), after `AUTO_END_STOPPED_S` at or
-// below 2 mph, or when the OS reports walking. A reducer over one explicit state, driven by 1 Hz
-// rows and a few events through a serialised `dispatch`; the only clock is the `ts` on what comes
-// in. Everything the engine wants done — persistence, sound, scoring — goes out through callbacks.
-import { AUTO_END_STOPPED_S, PHONE_MIN_MPH, type EventType, type Tier } from '@scoring';
+// A drive starts only on `start` (the user's Start Drive tap, at any speed; the host has already
+// checked permissions). It ends on `end` (the hold-to-end), by itself once the car has not moved for
+// `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the OS reports walking. Every end
+// but a prompt hold closes the drive where the car last moved (`closeAtLastMovement`): a manual end
+// `MANUAL_CUT_AFTER_S` or more after the idle clock's base is cut too, a sooner one ends at the tap.
+// A reducer over one explicit state, driven by 1 Hz rows and a few events through a serialised
+// `dispatch`; the only clock is the `ts` on what comes in. Everything the engine wants done —
+// persistence, sound, scoring — goes out through callbacks.
+import { PHONE_MIN_MPH, type EventType, type Tier } from '@scoring';
 
 import { knownSpeed, limitMphFor, MPS_PER_MPH, ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
+import { MAX_DRIVE_MS } from '@/data/sync/payload';
 
-import type { AdoptedTrip, EndCause, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
-import { appendRow, closeSession, createSession, noteWarmup, snapshotSession, stillWithoutFix } from './session';
+import type { AdoptedTrip, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
+import { appendRow, autoEndAt, closeAtLastMovement, closeSession, createSession, idleSince, noteWarmup, snapshotSession } from './session';
 import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
 /** Speed-limit tiles are prefetched once per this much distance, never per fix. */
 export const PREFETCH_EVERY_M = 1000;
 /** Rows between checkpoints (30 s at 1 Hz). */
 export const CHECKPOINT_ROWS = 30;
-/** At or below this the car counts as stopped for the auto-end. */
-export const AUTO_END_STOPPED_MPS = 2 * MPS_PER_MPH;
 /** At or below this (known) the points may show; above it the UI is locked out. */
 export const STOPPED_MPS = PHONE_MIN_MPH * MPS_PER_MPH;
 /** A walking report ends the drive only while the car was last known at or below this… */
 export const WALK_MAX_SPEED_MPS = 3 * MPS_PER_MPH;
 /** …or when the last valid fix is older than this (the car parked where there is no sky). */
 export const WALK_STALE_FIX_MS = 60_000;
-/** This long still with no fix (`stillWithoutFix`) starts the stop clock as a known stop would. */
-export const NO_FIX_STILL_S = 30;
+/** A manual end this long after the idle clock's base (the car standing still) is cut at the last movement. */
+export const MANUAL_CUT_AFTER_S = 120;
 /** The phone-handling alert, this long after the pickup. */
 export const HANDLING_ALERT_MS = 15_000;
 
@@ -49,9 +51,6 @@ export function createEngine(deps: EngineDeps): Engine {
   let lastKnownSpeedMps: number | null = null;
   /** `ts` of the last row with a known speed (a valid fix). */
   let lastKnownSpeedTs: number | null = null;
-  let stoppedSinceTs: number | null = null;
-  /** The first row of the current run of still, fix-less rows. */
-  let stillNoFixSinceTs: number | null = null;
   let prefetchedAtM: number | null = null;
   let lastAlert: EngineSnapshot['lastAlert'] = null;
   /** Episodes already alerted: one chime per speeding episode, one pickup and one handling alert per phone episode. */
@@ -105,7 +104,7 @@ export function createEngine(deps: EngineDeps): Engine {
       limitMph: seen?.limitMph ?? null,
       speedingTier: status === 'recording' && open !== null ? open.tier : null,
       stopped: status === 'recording' && speed !== null && speed <= STOPPED_MPS,
-      stoppedSinceTs: status === 'recording' ? stoppedSinceTs : null,
+      autoEndAt: status === 'recording' && session !== null ? autoEndAt(session) : null,
       distanceM: session?.distanceM ?? 0,
       lockedOut: status === 'recording' && (lastKnownSpeedMps ?? 0) > STOPPED_MPS,
       lastAlert,
@@ -118,8 +117,6 @@ export function createEngine(deps: EngineDeps): Engine {
     seen = null;
     lastKnownSpeedMps = null;
     lastKnownSpeedTs = null;
-    stoppedSinceTs = null;
-    stillNoFixSinceTs = null;
     prefetchedAtM = null;
     lastAlert = null;
     chimed = null;
@@ -195,21 +192,8 @@ export function createEngine(deps: EngineDeps): Engine {
     if (speed !== null) {
       lastKnownSpeedMps = speed;
       lastKnownSpeedTs = row.ts;
-      stillNoFixSinceTs = null;
-      if (speed <= AUTO_END_STOPPED_MPS) stoppedSinceTs ??= row.ts;
-      else stoppedSinceTs = null;
-    } else if (stillWithoutFix(row)) {
-      // No sky and a phone that is not moving (a garage, a covered car park): after NO_FIX_STILL_S
-      // the stop clock runs as it would on a known stop, from where the stillness began.
-      stillNoFixSinceTs ??= row.ts;
-      if (row.ts + ROW_MS - stillNoFixSinceTs >= NO_FIX_STILL_S * 1000) stoppedSinceTs ??= stillNoFixSinceTs;
-    } else {
-      stillNoFixSinceTs = null;
     }
-    if (stoppedSinceTs !== null && row.ts + ROW_MS - stoppedSinceTs >= AUTO_END_STOPPED_S * 1000) {
-      await finalize('stopped', stoppedSinceTs);
-      return;
-    }
+    if (await endIfDue(row.ts + ROW_MS)) return;
     if (s.rowsCount % CHECKPOINT_ROWS === 0) {
       try {
         await checkpoint(s);
@@ -222,10 +206,34 @@ export function createEngine(deps: EngineDeps): Engine {
   // --- finalizing -------------------------------------------------------------------------------
 
   /**
-   * Close the drive and hand it over exactly once. Whatever fails on the way, the engine returns
-   * to idle so the next drive is not lost with this one; the first failure is reported after.
+   * The automatic end, checked at `t` (a row's end or a tick): at `MAX_DRIVE_MS` (cause `limit`) or
+   * at `autoEndAt` (cause `stopped`), cut at the last movement. True when it ended the drive.
    */
-  async function finalize(cause: EndCause, endedAt: number): Promise<void> {
+  async function endIfDue(t: number): Promise<boolean> {
+    const s = session as TripSession;
+    if (t - s.startedAt >= MAX_DRIVE_MS) {
+      await finalize((open) => closeAtLastMovement(open, 'limit'));
+      return true;
+    }
+    if (t >= autoEndAt(s)) {
+      await finalize((open) => closeAtLastMovement(open, 'stopped'));
+      return true;
+    }
+    return false;
+  }
+
+  /** The hold (or any manual end) at `ts`: cut when the car had stood still `MANUAL_CUT_AFTER_S` or more. */
+  function closeManual(open: TripSession, ts: number): Readonly<TripSession> {
+    if (open.moved !== null && ts - idleSince(open) >= MANUAL_CUT_AFTER_S * 1000) return closeAtLastMovement(open, 'manual');
+    return closeSession(open, ts, 'manual');
+  }
+
+  /**
+   * Close the drive and hand it over exactly once. `close` turns the open session into the closed
+   * one, after the detectors' last events are in. Whatever fails on the way, the engine returns to
+   * idle so the next drive is not lost with this one; the first failure is reported after.
+   */
+  async function finalize(close: (open: TripSession) => Readonly<TripSession>): Promise<void> {
     const s = session as TripSession;
     const det = suite as DetectorSuite;
     setStatus('finalizing');
@@ -237,7 +245,7 @@ export function createEngine(deps: EngineDeps): Engine {
         failure = { err };
       }
       s.events.push(...det.flush());
-      await deps.onFinalize(closeSession(s, endedAt, cause));
+      await deps.onFinalize(close(s));
     } catch (err) {
       failure ??= { err };
     } finally {
@@ -288,6 +296,11 @@ export function createEngine(deps: EngineDeps): Engine {
         if (status !== 'recording') return;
         const s = session as TripSession;
         if (s.lastRowTs !== null && e.row.ts <= s.lastRowTs) return;
+        // A row that would carry the drive past `MAX_DRIVE_MS` is never taken in: the drive ends first.
+        if (e.row.ts + ROW_MS > s.startedAt + MAX_DRIVE_MS) {
+          await endIfDue(e.row.ts + ROW_MS);
+          return;
+        }
         await processRow(e.row);
         return;
       }
@@ -295,16 +308,15 @@ export function createEngine(deps: EngineDeps): Engine {
         if (status !== 'recording') return;
         const slow = (lastKnownSpeedMps ?? 0) <= WALK_MAX_SPEED_MPS;
         const staleFix = lastKnownSpeedTs === null || e.ts - lastKnownSpeedTs > WALK_STALE_FIX_MS;
-        if (slow || staleFix) await finalize('walking', stoppedSinceTs ?? e.ts);
+        if (slow || staleFix) await finalize((open) => closeAtLastMovement(open, 'walking'));
         return;
       }
       case 'end':
-        if (status === 'recording') await finalize('manual', e.ts);
+        // A drive already past its automatic end (no row or tick came since) ends as that end would.
+        if (status === 'recording' && !(await endIfDue(e.ts))) await finalize((open) => closeManual(open, e.ts));
         return;
       case 'tick':
-        if (status === 'recording' && stoppedSinceTs !== null && e.ts - stoppedSinceTs >= AUTO_END_STOPPED_S * 1000) {
-          await finalize('stopped', stoppedSinceTs);
-        }
+        if (status === 'recording') await endIfDue(e.ts);
         return;
     }
   }

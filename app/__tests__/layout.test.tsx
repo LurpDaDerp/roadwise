@@ -163,7 +163,7 @@ function driveState(over: Partial<DriveState> = {}): DriveState {
     limitMph: null,
     speedingTier: null,
     stopped: false,
-    stoppedSinceTs: null,
+    autoEndAt: null,
     distanceM: 0,
     lockedOut: false,
     lastAlert: null,

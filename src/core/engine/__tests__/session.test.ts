@@ -1,5 +1,6 @@
 import { mph, row, seq, T0 } from '@/core/detectors/__fixtures__/rows';
-import { appendRow, closeSession, createSession, durationSOf, GNSS_JUMP_MPS, noteWarmup } from '@/core/engine/session';
+import { appendRow, closeAtLastMovement, closeSession, createSession, cutEvents, durationSOf, GNSS_JUMP_MPS, noteWarmup } from '@/core/engine/session';
+import type { DetectedEvent } from '@/core/engine/types';
 
 const start = () => createSession({ clientTripId: 't1', startedAt: T0 });
 
@@ -122,5 +123,77 @@ describe('the warm-up (noteWarmup)', () => {
     expect(before).toEqual({ continues: false, decided: false, endsAt: T0 + 30_000 });
     expect(copy.warmup).toBe(before);
     expect(Object.isFrozen(s.warmup)).toBe(true);
+  });
+});
+
+describe('the cut at the last movement', () => {
+  const ev = (type: DetectedEvent['type'], startS: number, durationS: number, over: Partial<DetectedEvent> = {}): DetectedEvent => ({
+    id: `${type}-${startS}`,
+    type,
+    tier: 'minor',
+    startedAt: T0 + startS * 1000,
+    durationS,
+    measured: {},
+    ...over,
+  });
+  const CUT = T0 + 100_000;
+
+  test('cutEvents: a non-instant event starting at the cut goes, 1 ms before it stays (clamped); events before it are untouched', () => {
+    const before = ev('speeding', 10, 20);
+    const out = cutEvents([before, ev('speeding', 100, 5), ev('phone_pickup', 99.999, 10)], CUT);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toBe(before);
+    expect(out[1]).toMatchObject({ type: 'phone_pickup', durationS: expect.closeTo(0.001, 6) });
+  });
+
+  test('cutEvents: an instant event is kept when it starts before the cut + 2 s (finalize’s slack), its length untouched', () => {
+    const out = cutEvents([ev('hard_brake', 100, 1), ev('hard_accel', 101.999, 1), ev('hard_corner', 102, 1)], CUT);
+    expect(out.map((e) => e.type)).toEqual(['hard_brake', 'hard_accel']);
+    expect(out.map((e) => e.durationS)).toEqual([1, 1]);
+  });
+
+  test('cutEvents: crossing events end at the cut; a clipped handling event gets its units and tier again; one after the cut goes, its pickup stays', () => {
+    const out = cutEvents(
+      [
+        ev('speeding', 90, 30, { tier: 'moderate' }),
+        ev('phone_pickup', 73, 55, { tier: 'severe', stoppedInTraffic: true }),
+        ev('phone_handling', 88, 40, { tier: 'severe', units: 3 }),
+        ev('phone_handling', 80, 40, { tier: 'severe', units: 3 }),
+        ev('phone_handling', 100, 40, { tier: 'severe', units: 3 }),
+      ],
+      CUT
+    );
+    expect(out).toEqual([
+      expect.objectContaining({ type: 'speeding', durationS: 10, tier: 'moderate' }),
+      expect.objectContaining({ type: 'phone_pickup', durationS: 27, tier: 'severe', stoppedInTraffic: true }),
+      expect.objectContaining({ type: 'phone_handling', startedAt: T0 + 88_000, durationS: 12, units: 1, tier: 'moderate' }),
+      expect.objectContaining({ type: 'phone_handling', startedAt: T0 + 80_000, durationS: 20, units: 2, tier: 'severe' }),
+    ]);
+  });
+
+  test('closeAtLastMovement: the accumulators, track and events come back to the mark; the open session is untouched', () => {
+    const s = createSession({ clientTripId: 'x', startedAt: T0 });
+    const drive = seq([60, (i) => ({ speed: mph(30), lng: -122.4194 + i * 0.00015, ts: T0 + i * 1000 })]);
+    const parked = seq([300, (i) => ({ speed: 0.3, lat: 37.7749 + Math.sin(i) * 0.00005, lng: -122.4194 + 59 * 0.00015, ts: T0 + (60 + i) * 1000 })]);
+    for (const r of [...drive, ...parked]) appendRow(s, r, false);
+    s.events.push(ev('phone_pickup', 200, 10, { tier: 'severe' }), ev('speeding', 30, 10));
+    const before = { distanceM: s.distanceM, rows: s.rowsCount, track: s.track.length, events: s.events.length };
+    const closed = closeAtLastMovement(s, 'stopped');
+    expect(closed).toMatchObject({ endedAt: T0 + 60_000, endCause: 'stopped', cut: true, lastRowTs: T0 + 59_000, rowsCount: 60, validGnssRows: 60 });
+    expect(closed.distanceM).toBe(s.moved!.distanceM);
+    expect(closed.distanceM).toBeLessThan(before.distanceM);
+    expect(closed.track).toHaveLength(60);
+    expect(closed.lastFix).toEqual(s.moved!.lastFix);
+    expect(closed.events.map((e) => e.type)).toEqual(['speeding']);
+    expect(Object.isFrozen(closed)).toBe(true);
+    expect({ distanceM: s.distanceM, rows: s.rowsCount, track: s.track.length, events: s.events.length }).toEqual(before);
+    expect(s.cut).toBe(false);
+  });
+
+  test('closeAtLastMovement on a drive that never moved ends after its last row (never before start + 1 s), uncut', () => {
+    const s = createSession({ clientTripId: 'x', startedAt: T0 });
+    expect(closeAtLastMovement(s, 'stopped')).toMatchObject({ endedAt: T0 + 1000, cut: false, moved: null });
+    for (const r of seq([10, { speed: 0 }])) appendRow(s, r, false);
+    expect(closeAtLastMovement(s, 'walking')).toMatchObject({ endedAt: T0 + 10_000, endCause: 'walking', cut: false });
   });
 });

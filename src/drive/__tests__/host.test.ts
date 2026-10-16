@@ -3,7 +3,7 @@ import { createFakeDriveSense } from '@drive-sense';
 
 import { createDetectors } from '@/core/detectors';
 import { createSession } from '@/core/engine/session';
-import { AUTO_END_STOPPED_S } from '@scoring';
+import { IDLE_END_S } from '@scoring';
 
 import type { AlertDecision } from '@/core/alerts/types';
 import type { AlertPlayer } from '@/core/alerts/player';
@@ -16,6 +16,7 @@ import { createEventsRepo, createQueueRepo, createSettingsRepo, createTripsRepo,
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
 import { createDriveHost, type DriveHost, type DriveState } from '@/drive/host';
 import type { Scheduler } from '@/drive/ticks';
+import { metersToMiles } from '@/lib/units';
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
@@ -280,20 +281,22 @@ test('the background display follows the driver\'s units: km/h with speed and li
   await m.host.stop({ endOpenTrip: true });
 });
 
-test('auto-end: 300 s stopped ends the drive where it stopped (the one timer covers a lost fix); walking ends a slow drive', async () => {
+test('the automatic end: 15 min without movement ends the drive at its last movement (the one timer covers rows that stop coming); walking ends a slow drive', async () => {
   const h = build();
   await h.host.boot();
   await h.host.start();
   await feed(h, rows(60, { speedMps: 15 }));
   await feed(h, rows(5, { speedMps: 0, t0: T0 + 60_000 }));
-  expect(h.host.snapshot().stoppedSinceTs).toBe(T0 + 60_000);
-  // No more rows (a garage): the ticker's deadline fires.
-  clock = T0 + 60_000 + AUTO_END_STOPPED_S * 1000 + 2000;
+  expect(h.host.snapshot().autoEndAt).toBe(T0 + 60_000 + IDLE_END_S * 1000);
+  // No more rows (a garage): the ticker fires; one timer only.
+  clock = T0 + 60_000 + IDLE_END_S * 1000 + 1000;
   expect(h.scheduler.fire()).toBe(1);
   await h.host.untilIdle();
   expect(h.host.snapshot().status).toBe('idle');
   const trip = (await createTripsRepo(db).get(uuid(1)))!;
   expect(trip.ended_at).toBe(T0 + 60_000);
+  expect(trip.miles).toBeCloseTo(metersToMiles(59 * 15), 3);
+  expect(h.source.calls.at(-1)).toBe('stopCapture');
 
   await h.host.start();
   await feed(h, rows(40, { speedMps: 15, t0: clock }));

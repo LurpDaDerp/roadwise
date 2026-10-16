@@ -1,14 +1,12 @@
 // Crash recovery: a `recording` row left by a process that died. If the native capture is still
 // running for it (a sticky restart, a relaunch mid-drive) the drive is continued — the user
-// started it, nothing here starts anything. Otherwise it is finalized as it stood (an orphan),
-// or removed when nothing was ever recorded.
+// started it, nothing here starts anything. Otherwise it is finalized as an orphan, closed where the
+// car last moved (`closeAtLastMovement`), or removed when nothing was ever recorded.
 import { createTripsRepo, type Db, type TripRow } from '@/data/db';
-
-import { ROW_MS } from '@/core/detectors/common';
 
 import type { AdoptedTrip, TripSession } from './engine.types';
 import { rebuildFromSamples, type RebuildDeps } from './replay';
-import { closeSession } from './session';
+import { closeAtLastMovement } from './session';
 
 export interface RecoveryDeps extends RebuildDeps {
   /** Whether the drive may be continued: the capture still runs and its last row is recent. */
@@ -47,8 +45,7 @@ export async function recoverRecordingTrips(db: Db, deps: RecoveryDeps): Promise
         continue;
       }
       rebuilt.session.events.push(...rebuilt.detectors.flush());
-      const endedAt = (rebuilt.session.lastRowTs ?? trip.started_at) + ROW_MS;
-      await deps.finalize(closeSession(rebuilt.session, endedAt, 'orphan'));
+      await deps.finalize(closeAtLastMovement(rebuilt.session, 'orphan'));
       result.finalized.push(trip.client_trip_id);
     } catch (error) {
       result.failed.push({ clientTripId: trip.client_trip_id, error });

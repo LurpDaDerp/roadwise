@@ -1,14 +1,16 @@
 /** @jest-environment node */
 import { T0 } from '@/core/detectors/__fixtures__/rows';
-import { brakeEvent, closedSession, speedingEvent, TZ, uuid } from '@/core/engine/__fixtures__/drives';
+import { brakeEvent, closedSession, rows, speedingEvent, TZ, uuid } from '@/core/engine/__fixtures__/drives';
 import { finalizeTrip, INVALID_PAYLOAD_SYNC_ERROR, normaliseZone, sanitizeEvent } from '@/core/engine/finalize';
 import { PRIVACY_ZONES_KEY } from '@/core/engine/privacy';
+import { appendRow, closeAtLastMovement, createSession } from '@/core/engine/session';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
-import { FinalizeTripPayloadV3Schema } from '@/data/sync/payload';
+import { FinalizeTripPayloadV3Schema, MAX_DRIVE_MS } from '@/data/sync/payload';
 import { findFinalize } from '@/data/sync/queue';
 import { haversineMeters } from '@/lib/geo';
 import { decodeRuns } from '@/lib/polyline';
+import { metersToMiles } from '@/lib/units';
 
 let db: Db;
 beforeEach(async () => {
@@ -149,4 +151,58 @@ test('normaliseZone', () => {
   expect(normaliseZone('GMT+05:30')).toBe('UTC');
   expect(normaliseZone('')).toBe('UTC');
   expect(normaliseZone('Not/AZone')).toBe('UTC');
+});
+
+describe('a drive closed at its last movement', () => {
+  /** 600 rows at 15 m/s (9 km), then 300 parked rows jittering 10 m a second (3 km of drift) with phone use in them. */
+  function cutSession() {
+    const s = createSession({ clientTripId: '22222222-2222-4222-8222-222222222222', startedAt: T0 });
+    const drive = rows(600);
+    const end = drive.at(-1)!;
+    const parked = rows(300, { t0: T0 + 600_000, speedMps: 0.5 }).map((r, i) => ({ ...r, lng: end.lng + (i % 2 === 0 ? 10 : 0) / 75_000 }));
+    for (const r of [...drive, ...parked]) appendRow(s, r, false);
+    s.events.push(
+      // A pickup at 25 mph that ran 40 s into the stop: its handling (from +15 s) crosses the cut.
+      { id: uuid(11), type: 'phone_pickup', tier: 'severe', startedAt: T0 + 580_000, durationS: 60, measured: { speedMph: 25 } },
+      { id: uuid(12), type: 'phone_handling', tier: 'severe', startedAt: T0 + 595_000, durationS: 45, units: 3, measured: {} },
+      // Phone use well into the parked tail.
+      { id: uuid(13), type: 'phone_pickup', tier: 'severe', startedAt: T0 + 700_000, durationS: 30, stoppedInTraffic: true, measured: {} }
+    );
+    return { open: s, closed: closeAtLastMovement(s, 'stopped') };
+  }
+
+  test('the payload ends at the cut with the mark’s miles and no tail event; a clipped handling event keeps its recomputed units', async () => {
+    const { open, closed } = cutSession();
+    expect(closed.endedAt).toBe(T0 + 600_000);
+    const result = await finalizeTrip(closed, deps());
+    const payload = result.payload!;
+    expect(FinalizeTripPayloadV3Schema.safeParse(payload).success).toBe(true);
+    expect(payload.endedAt).toBe(T0 + 600_000);
+    expect(payload.miles).toBeCloseTo(metersToMiles(open.moved!.distanceM), 3);
+    expect(payload.miles).toBeLessThan(metersToMiles(open.distanceM));
+    expect(payload.events.map((e) => [e.id, e.durationS, e.units])).toEqual([
+      [uuid(11), 20, undefined],
+      [uuid(12), 5, 1],
+    ]);
+    expect(payload.events[1]!.tier).toBe('moderate');
+    expect((await createEventsRepo(db).listByTrip(closed.clientTripId)).map((e) => [e.id, e.units, e.tier])).toEqual([
+      [uuid(11), null, 'severe'],
+      [uuid(12), 1, 'moderate'],
+    ]);
+  });
+
+  test('a drive that reached the 12 h bound (cause limit) is stored pending with a payload the contract takes', async () => {
+    const s = createSession({ clientTripId: '33333333-3333-4333-8333-333333333333', startedAt: T0 });
+    // One fix a minute for 12 h, 900 m apart: the last movement 1 s before the bound.
+    for (let k = 0; k < 720; k += 1) {
+      appendRow(s, { ...rows(1, { t0: T0 + k * 60_000 })[0]!, lng: -122.3321 + (k * 900) / 75_000, speed: -1 }, false);
+    }
+    appendRow(s, { ...rows(1, { t0: T0 + MAX_DRIVE_MS - 1000 })[0]!, lng: -122.3321 + (720 * 900) / 75_000, speed: -1 }, false);
+    const closed = closeAtLastMovement(s, 'limit');
+    expect(closed.endedAt! - closed.startedAt).toBeLessThanOrEqual(MAX_DRIVE_MS);
+    const result = await finalizeTrip(closed, deps({ now: () => T0 + MAX_DRIVE_MS + 5000 }));
+    expect(result.trip.status).toBe('pending');
+    expect(result.payload).not.toBeNull();
+    expect(FinalizeTripPayloadV3Schema.safeParse(result.payload).success).toBe(true);
+  });
 });

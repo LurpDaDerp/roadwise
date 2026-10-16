@@ -10,14 +10,16 @@
 // is neither still nor carried holds the idle clock for up to an hour after the last movement,
 // without counting as movement. Nothing else is movement: a stop, walking pace, an isolated
 // reading, a still or carried phone, OS motion reports.
-import { MAX_H_ACC_M, NO_EVENTS_FIRST_S, PHONE_MIN_MPH } from '@scoring';
+import { IDLE_END_S, MAX_H_ACC_M, NO_EVENTS_FIRST_S, PHONE_MIN_MPH, type Tier } from '@scoring';
 
 import { knownSpeed, MPS_PER_MPH, ROW_MS, speedTrusted } from '@/core/detectors/common';
+import { HANDLING_FREE_S, HANDLING_SEVERE_S, HANDLING_UNIT_S } from '@/core/detectors/phoneUse';
+import { MAX_DRIVE_MS } from '@/data/sync/payload';
 import { haversineMeters } from '@/lib/geo';
 import { sunIsDown } from '@/lib/time';
 
 import type { EndCause, Fix, MotionTrack, MovementMark, TripSession } from './engine.types';
-import type { FeatureRow } from './types';
+import type { DetectedEvent, FeatureRow } from './types';
 
 /** Consecutive fixes implying a speed above this are GNSS noise, not distance. */
 export const GNSS_JUMP_MPS = 100;
@@ -41,6 +43,10 @@ export const WALK_BAND_MPH = Object.freeze({ min: 2, max: 5 });
 export const PED_SHARE = 1 / 3;
 /** Fix-less rows hold the idle clock only this long after the last movement (or the start). */
 export const FIXLESS_HOLD_MAX_S = 3600;
+/** A run of pace rows in progress delays the automatic end this long after its latest row. */
+export const IDLE_FAST_GRACE_MS = 5000;
+/** An instant event may start this long after the cut and still be kept (finalize's own slack). */
+export const CUT_INSTANT_SLACK_MS = 2000;
 /** A fix-less row reads as carried with handling, an unsteady gravity vector, or a turning phone. */
 export const CARRIED_HANDLING_MIN = 0.6;
 export const CARRIED_GRAVITY_MAX = 0.5;
@@ -110,6 +116,18 @@ export function holdsClock(session: Pick<TripSession, 'moved' | 'startedAt'>, ro
 /** Where the idle clock runs from: the last movement (or the start), or a later holding row's end. */
 export function idleSince(session: Pick<TripSession, 'moved' | 'startedAt' | 'motion'>): number {
   return Math.max(lastMovedAt(session) ?? session.startedAt, session.motion.heldUntil ?? Number.NEGATIVE_INFINITY);
+}
+
+/**
+ * When the drive ends by itself: `IDLE_END_S` after `idleSince`, but not while a run of pace rows
+ * may still become movement (until `IDLE_FAST_GRACE_MS` after its latest row), and never later
+ * than `MAX_DRIVE_MS` after the start. The engine's row check and its tick both use exactly this.
+ */
+export function autoEndAt(session: Pick<TripSession, 'moved' | 'startedAt' | 'motion'>): number {
+  const idle = idleSince(session) + IDLE_END_S * 1000;
+  const m = session.motion;
+  const grace = m.paceRun > 0 && m.lastPaceTs !== null ? m.lastPaceTs + ROW_MS + IDLE_FAST_GRACE_MS : Number.NEGATIVE_INFINITY;
+  return Math.min(session.startedAt + MAX_DRIVE_MS, Math.max(idle, grace));
 }
 
 const EMPTY_MOTION: Readonly<MotionTrack> = Object.freeze({
@@ -336,5 +354,72 @@ export function closeSession(session: TripSession, endedAt: number, cause: EndCa
   return snapshotSession({ ...session, endedAt: Math.round(end), endCause: cause });
 }
 
-export const durationSOf = (session: Pick<TripSession, 'startedAt' | 'endedAt'>): number =>
+const INSTANT = new Set<DetectedEvent['type']>(['hard_brake', 'hard_accel', 'hard_corner']);
+
+/**
+ * The events of a drive closed at `cutTs`, in input order: an instant event (brake, start, turn)
+ * is kept when it starts before `cutTs + CUT_INSTANT_SLACK_MS`; any other event starting at or
+ * after the cut is dropped, and one running across it ends there. A clipped phone-handling event
+ * gets its units and tier again from its new length (the detector's rule), so the time standing
+ * still costs nothing. Pure.
+ */
+export function cutEvents(events: readonly DetectedEvent[], cutTs: number): DetectedEvent[] {
+  const out: DetectedEvent[] = [];
+  for (const e of events) {
+    if (INSTANT.has(e.type)) {
+      if (e.startedAt < cutTs + CUT_INSTANT_SLACK_MS) out.push(e);
+      continue;
+    }
+    if (e.startedAt >= cutTs) continue;
+    if (e.startedAt + e.durationS * 1000 <= cutTs) {
+      out.push(e);
+      continue;
+    }
+    const durationS = (cutTs - e.startedAt) / 1000;
+    if (e.type !== 'phone_handling') {
+      out.push({ ...e, durationS });
+      continue;
+    }
+    const tier: Tier = HANDLING_FREE_S + durationS <= HANDLING_SEVERE_S ? 'moderate' : 'severe';
+    out.push({ ...e, durationS, tier, units: Math.max(1, Math.ceil(durationS / HANDLING_UNIT_S)) });
+  }
+  return out;
+}
+
+/**
+ * The drive closed where the car last moved (every automatic end, and a manual end after standing
+ * still): the accumulators come back to the mark, the track ends there and the events are cut
+ * (`cutEvents`), so the time standing still earns and costs nothing. A drive that never moved
+ * keeps what it has and ends after its last row; it is dropped, never stored. The open session is
+ * left as it was.
+ */
+export function closeAtLastMovement(session: TripSession, cause: EndCause): Readonly<TripSession> {
+  const mark = session.moved;
+  if (mark === null) {
+    const end = Math.max((session.lastRowTs ?? session.startedAt) + ROW_MS, session.startedAt + 1000);
+    return snapshotSession({ ...session, endedAt: Math.round(end), endCause: cause, cut: false });
+  }
+  const cutTs = mark.rowTs + ROW_MS;
+  return snapshotSession({
+    ...session,
+    endedAt: Math.round(Math.max(cutTs, session.startedAt + 1000)),
+    endCause: cause,
+    cut: true,
+    lastRowTs: mark.rowTs,
+    rowsCount: mark.rowsCount,
+    validGnssRows: mark.validGnssRows,
+    mockRows: mark.mockRows,
+    movingRows: mark.movingRows,
+    imuActiveRows: mark.imuActiveRows,
+    distanceM: mark.distanceM,
+    safeDistanceM: mark.safeDistanceM,
+    nightDistanceM: mark.nightDistanceM,
+    maxSpeedMps: mark.maxSpeedMps,
+    lastFix: mark.lastFix,
+    track: session.track.slice(0, mark.trackLength),
+    events: cutEvents(session.events, cutTs),
+  });
+}
+
+export const durationSOf =(session: Pick<TripSession, 'startedAt' | 'endedAt'>): number =>
   Math.max(0, ((session.endedAt ?? session.startedAt) - session.startedAt) / 1000);

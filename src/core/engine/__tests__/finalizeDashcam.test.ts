@@ -240,6 +240,42 @@ describe('finalizeTrip with DashPal facts', () => {
     ]);
   });
 
+  test('a drive cut at its last movement: an alert 10 s after the cut is not claimed (and not ignored), one 10 s before is; synced is judged at the cut', async () => {
+    const run = async (lastSyncedS: number) => {
+      db = await createSqlJsDb();
+      await migrate(db);
+      await createSettingsRepo(db).set('device.lastUserId', 'user-1');
+      await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: DEVICE, peripheralId: 'p-1', name: 'DashPal-7E', pairedAt: 1 });
+      await createTripsRepo(db).insert({ client_trip_id: TRIP, started_at: T0, tz: TZ, local_day: '2023-11-14', status: 'recording' }, T0);
+      const store = createDashcamStore(db);
+      const offset = T0 - 3_600_000;
+      await store.ensureBoot(DEVICE, 7, 0);
+      await store.offerOffset(DEVICE, 7, offset, 20);
+      await store.addCoverage(TRIP, 900, 880, at(lastSyncedS));
+      let seq = 0;
+      for (const sec of [990, 1010]) {
+        await db.execute('INSERT INTO samples (client_trip_id, ts, row_json) VALUES (?, ?, ?)', [TRIP, at(sec), JSON.stringify({ ts: at(sec), speed: 15, gnssValid: true })]);
+        await store.insertEvent({
+          dashcamId: DEVICE, bootKey: 7, seq, id: cid(200 + seq), ev: 0, name: 'X', tier: 3, audible: true, detail: 0,
+          tMs: at(sec) - offset, durDs: 20, value: 0, atMs: null, startedAtMs: null, receivedAtMs: at(sec) + 50, ignored: false,
+        });
+        seq += 1;
+      }
+      // The engine closed the drive at its last movement, 1000 s in (the tail after it is left out).
+      const cut = { ...session(), endedAt: at(1000), cut: true };
+      return finalizeTrip(cut, deps(dashcamFinalizeDeps(db).dashcamFacts));
+    };
+    const result = await run(975);
+    expect(result.payload!.endedAt).toBe(at(1000));
+    expect(result.payload!.events.map((e) => [e.id, e.type])).toEqual([[cid(200), 'drowsy']]);
+    expect(result.payload!.dashcam).toMatchObject({ synced: true });
+    expect((await db.execute('SELECT seq, client_trip_id, ignored FROM dashcam_events ORDER BY seq')).rows).toEqual([
+      { seq: 0, client_trip_id: TRIP, ignored: 0 },
+      { seq: 1, client_trip_id: null, ignored: 0 },
+    ]);
+    expect((await run(965)).payload!.dashcam).toMatchObject({ synced: false });
+  });
+
   test('a loader that throws leaves the drive a plain one', async () => {
     const result = await finalizeTrip(session(), deps(async () => Promise.reject(new Error('db busy'))));
     expect(result.trip.status).toBe('pending');

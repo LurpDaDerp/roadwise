@@ -18,8 +18,8 @@ export const SPEEDING_END_BUFFER_MPH = 2;
 export const NO_EVENTS_FIRST_S = 30;
 /** GPS accuracy worse than this (m) records no speeding and shows "—". */
 export const MAX_H_ACC_M = 20;
-/** A forgotten drive ends on its own after this long stopped. */
-export const AUTO_END_STOPPED_S = 300;
+/** A drive ends on its own after this long without the car moving, cut back to its last movement. */
+export const IDLE_END_S = 900;
 /** Ending then restarting within this gap and distance merges into one drive. */
 export const MERGE_GAP_S = 300;
 export const MERGE_DIST_M = 402;

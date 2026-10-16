@@ -10,7 +10,7 @@
 // - **One queue.** Every engine dispatch and the native command that follows it run on one serial
 //   chain; after each task the capture is reconciled with the engine's state.
 // - **Battery.** Nothing runs while idle: no timer, no read. While recording, one timeout at most
-//   (the auto-end deadline), the display throttled to one update per 3 s, the points estimate
+//   (the automatic end, re-armed lazily: `ticks.ts`), the display throttled to one update per 3 s, the points estimate
 //   computed once per stop, and the state published at most once per row.
 // - **Background.** Each row first pumps the process's timers (`src/lib/timers.ts`): with the app
 //   in the Android background JS timers are paused, and the rows are what keeps the alert player
@@ -405,7 +405,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (!booted) return;
     const s = engine.snapshot();
     await reconcileCapture(s.status);
-    ticker.update(s.status === 'recording' ? s.stoppedSinceTs : null);
+    ticker.update(s.status === 'recording' ? s.autoEndAt : null);
   }
 
   async function reconcileCapture(status: EngineStatus): Promise<void> {

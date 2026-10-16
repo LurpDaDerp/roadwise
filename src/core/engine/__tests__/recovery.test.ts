@@ -126,3 +126,29 @@ test('a rebuilt drive agrees with the live engine on movement: the mark (bar saf
   expect(rebuilt.warmup).toEqual(live!.warmup);
   expect(live!.moved!.rowTs).toBe(T0 + 159_000);
 });
+
+test('an orphan is closed where the car last moved: at its last row + 1 s when killed at speed, at the stop when parked; rows past 12 h are not replayed', async () => {
+  const trips = createTripsRepo(db);
+  const finalized: Readonly<TripSession>[] = [];
+  const finalize = async (s: Readonly<TripSession>) => {
+    finalized.push(s);
+    await trips.update(s.clientTripId, { status: 'pending' });
+  };
+  // Killed at speed.
+  await recording(uuid(1), 50, T0 - 7_200_000);
+  // Parked for 10 min after 60 s of driving.
+  await trips.insert({ client_trip_id: uuid(2), started_at: T0 - 3_600_000, tz: TZ, status: 'recording' }, T0);
+  const parked = [...rows(60, { t0: T0 - 3_600_000 }), ...rows(600, { t0: T0 - 3_540_000, speedMps: 0 })];
+  await createSamplesRepo(db).appendMany(uuid(2), parked.map((r) => ({ ts: r.ts, row: r })));
+  // Samples past 12 h (a clock jump): ignored by the replay.
+  await trips.insert({ client_trip_id: uuid(3), started_at: T0 - 50_000_000, tz: TZ, status: 'recording' }, T0);
+  const long = [...rows(30, { t0: T0 - 50_000_000 }), ...rows(30, { t0: T0 - 50_000_000 + 43_200_000 })];
+  await createSamplesRepo(db).appendMany(uuid(3), long.map((r) => ({ ts: r.ts, row: r })));
+
+  const result = await recoverRecordingTrips(db, { ...base(), adoptable: async () => false, finalize });
+  expect(result.failed).toEqual([]);
+  const byId = new Map(finalized.map((s) => [s.clientTripId, s]));
+  expect(byId.get(uuid(1))).toMatchObject({ endCause: 'orphan', endedAt: T0 - 7_200_000 + 50_000, cut: true });
+  expect(byId.get(uuid(2))).toMatchObject({ endCause: 'orphan', endedAt: T0 - 3_540_000, cut: true, rowsCount: 60 });
+  expect(byId.get(uuid(3))).toMatchObject({ endCause: 'orphan', endedAt: T0 - 50_000_000 + 30_000, cut: true, rowsCount: 30 });
+});
