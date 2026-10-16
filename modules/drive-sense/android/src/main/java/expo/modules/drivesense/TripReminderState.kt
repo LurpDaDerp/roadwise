@@ -5,41 +5,35 @@ import org.json.JSONObject
 
 /**
  * The reminder's [ReminderState] as the JSON kept in [DriveSensePrefs.tripReminderJson], with the
- * field names of `ReminderState` in `src/reminder/policy.ts` (`v: 2`). Anything unreadable is the
- * initial state (off): the reminder never guesses itself on.
+ * field names of `ReminderState` in `src/reminder/policy.ts` (`v: 3`). A stored v2 (the reminder
+ * before sessions) keeps only its switch. Anything unreadable is null, read as the initial state
+ * (off): the reminder never guesses itself on.
  */
 object TripReminderState {
   fun toJson(s: ReminderState): String {
     val o = JSONObject()
-      .put("v", 2)
+      .put("v", 3)
       .put("enabled", s.enabled)
-      .put("autoOff", s.autoOff)
-      .put("lastCaptureEndAt", s.lastCaptureEndAt)
-      .put("posts", JSONArray().also { a -> s.posts.forEach { a.put(it) } })
-      .put("pendingAt", s.pendingAt)
+      .put("lastDriveEndAt", s.lastDriveEndAt)
+      .put("token", s.token)
       .put("postedAt", s.postedAt)
-      .put("showing", s.showing)
-      .put("missStreak", s.missStreak)
-      .put("pauseLevel", s.pauseLevel)
-      .put("pausedUntil", s.pausedUntil)
-      .put("quietUntil", s.quietUntil)
-      .put("notDrivingUntil", s.notDrivingUntil)
-    val t = s.trip
-    if (t == null) {
-      o.put("trip", JSONObject.NULL)
+      .put("tapSeen", JSONArray().also { a -> s.tapSeen.forEach { a.put(it) } })
+      .put("tapAt", s.tapAt)
+      .put("lookRestUntil", s.lookRestUntil)
+    val x = s.session
+    if (x == null) {
+      o.put("session", JSONObject.NULL)
     } else {
       o.put(
-        "trip",
+        "session",
         JSONObject()
-          .put("startedAt", t.startedAt)
-          .put("lastVehicleAt", t.lastVehicleAt)
-          .put("inVehicle", t.inVehicle)
-          .put("vehicleExitAt", t.vehicleExitAt)
-          .put("recorded", t.recorded)
-          .put("reminded", t.reminded)
-          .put("retries", t.retries)
-          .put("sessions", t.sessions)
-          .put("lastSessionEndAt", t.lastSessionEndAt)
+          .put("startedAt", x.startedAt)
+          .put("lastDrivingAt", x.lastDrivingAt)
+          .put("lastNewsAt", x.lastNewsAt)
+          .put("inVehicle", x.inVehicle)
+          .put("vehicleExitAt", x.vehicleExitAt)
+          .put("drove", x.drove)
+          .put("reminded", x.reminded)
       )
     }
     return o.toString()
@@ -50,42 +44,44 @@ object TripReminderState {
     if (json.isNullOrEmpty()) return null
     return try {
       val o = JSONObject(json)
-      if (o.optInt("v", 0) != 2) return null
-      val postsJson = o.optJSONArray("posts") ?: JSONArray()
-      val posts = MutableList(postsJson.length()) { postsJson.getLong(it) }
-      val tj = o.optJSONObject("trip")
-      val trip = if (tj == null) {
-        null
-      } else {
-        ReminderTrip(
-          startedAt = tj.getLong("startedAt"),
-          lastVehicleAt = tj.getLong("lastVehicleAt"),
-          inVehicle = tj.getBoolean("inVehicle"),
-          vehicleExitAt = tj.getLong("vehicleExitAt"),
-          recorded = tj.getBoolean("recorded"),
-          reminded = tj.getBoolean("reminded"),
-          retries = tj.getInt("retries"),
-          sessions = tj.getInt("sessions"),
-          lastSessionEndAt = tj.getLong("lastSessionEndAt")
-        )
+      when (o.optInt("v", 0)) {
+        // The reminder before sessions: only whether it was on is kept (a paused one is on).
+        2 -> ReminderState(enabled = o.optBoolean("enabled", false))
+        3 -> v3(o)
+        else -> null
       }
-      ReminderState(
-        enabled = o.getBoolean("enabled"),
-        autoOff = o.getBoolean("autoOff"),
-        trip = trip,
-        lastCaptureEndAt = o.getLong("lastCaptureEndAt"),
-        posts = posts,
-        pendingAt = o.getLong("pendingAt"),
-        postedAt = o.getLong("postedAt"),
-        showing = o.getBoolean("showing"),
-        missStreak = o.getInt("missStreak").coerceAtLeast(0),
-        pauseLevel = o.getInt("pauseLevel").coerceIn(0, TripReminderPolicy.PAUSE_DAYS.size),
-        pausedUntil = o.getLong("pausedUntil"),
-        quietUntil = o.getLong("quietUntil"),
-        notDrivingUntil = o.getLong("notDrivingUntil")
-      )
     } catch (_: Exception) {
       null
     }
+  }
+
+  private fun v3(o: JSONObject): ReminderState {
+    val session = if (o.isNull("session")) {
+      null
+    } else {
+      val x = o.getJSONObject("session")
+      ReminderSession(
+        startedAt = x.getLong("startedAt"),
+        lastDrivingAt = x.getLong("lastDrivingAt"),
+        lastNewsAt = x.getLong("lastNewsAt"),
+        inVehicle = x.getBoolean("inVehicle"),
+        vehicleExitAt = x.getLong("vehicleExitAt"),
+        drove = x.getBoolean("drove"),
+        reminded = x.getBoolean("reminded")
+      )
+    }
+    val seen = o.getJSONArray("tapSeen")
+    val tapSeen = MutableList(seen.length()) { seen.getString(it) }
+    while (tapSeen.size > TripReminderPolicy.TAP_SEEN_MAX) tapSeen.removeAt(0)
+    return ReminderState(
+      enabled = o.getBoolean("enabled"),
+      session = session,
+      lastDriveEndAt = o.getLong("lastDriveEndAt"),
+      token = o.getString("token"),
+      postedAt = o.getLong("postedAt"),
+      tapSeen = tapSeen,
+      tapAt = o.getLong("tapAt"),
+      lookRestUntil = o.getLong("lookRestUntil")
+    )
   }
 }

@@ -1,6 +1,6 @@
 /**
  * Settings › Driving: the forgot-to-start reminder's switch, with one line saying what it does or
- * what it needs, and the one button that line calls for (Open Settings, or Resume now). Read on
+ * what it needs, and the one button that line calls for (Open Settings). Read on
  * every focus and whenever RoadWise comes back to the front (the driver may have changed a
  * permission). Where the native module is missing (Expo Go, tests) the row is not shown.
  */
@@ -16,7 +16,7 @@ import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionH
 import { Button, Text, ToggleRow, useTheme } from '@/ui';
 
 import { reminderCopy } from './copy';
-import { nativeReminder, readReminderStatus, resumeReminder, turnOffReminder, turnOnReminder, type ReminderNative } from './enable';
+import { nativeReminder, readReminderStatus, turnOffReminder, turnOnReminder, type ReminderNative } from './enable';
 import { reminderLine, type ReminderPlatform } from './line';
 
 export interface ReminderDeps {
@@ -95,10 +95,7 @@ export function ReminderRow({
 
   const adapter = () => deps.adapter ?? defaultPermissionsAdapter();
   const onToggle = (on: boolean) => void run(() => (on ? turnOnReminder(adapter(), native) : turnOffReminder(native)));
-  const onAction = () => {
-    if (line.action === 'resume') void run(() => resumeReminder(native));
-    else void adapter().openAppSettings().catch(() => setFailed(true));
-  };
+  const onAction = () => void adapter().openAppSettings().catch(() => setFailed(true));
 
   return (
     <View>
@@ -117,7 +114,7 @@ export function ReminderRow({
           <Button
             size="sm"
             variant="secondary"
-            label={line.action === 'resume' ? reminderCopy.resume : reminderCopy.openSettings}
+            label={reminderCopy.openSettings}
             onPress={onAction}
             disabled={busy}
             testID={`settings-reminder-${line.action}`}

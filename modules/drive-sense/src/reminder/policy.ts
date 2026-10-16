@@ -1,421 +1,340 @@
 // The forgot-to-start reminder's whole decision policy, as one pure reference (README "Forgot-to-start
 // reminder"). Native code mirrors it line for line: `android/.../TripReminderPolicy.kt` (the shared
-// part and the Android activity-transition part) and `ios/TripReminderPolicy.swift` (the shared part
-// and the iOS wake, fix and stop part), each under the SAME constant names with the SAME values
-// (`__tests__/native-*.test.ts` compare them). `vectors.ts` is the decision table: Jest runs every
-// row against this reference, and the on-device self-test runs each row its platform has through the
-// native mirror (`src/reminder/selfTest.ts`).
+// part and the Android activity-transition part) and `ios/TripReminderPolicy.swift` with
+// `ios/TripReminderWakePolicy.swift` (the shared part and the iOS wake, look and stop part), each
+// under the SAME constant names with the SAME values (`__tests__/native-*.test.ts` compare them).
+// `vectors.ts` is the decision table: Jest runs every row against this reference, and the on-device
+// self-test runs each row its platform has through the native mirror (`src/reminder/selfTest.ts`).
 //
-// The reminder only ever notifies. Nothing here, or in either mirror, starts a drive: the driver
-// taps the notification, RoadWise opens on Home, and the driver taps Start Drive there.
+// The rule is the SESSION: a stretch of driving that ends 30 min after its last driving moment
+// (every driving moment restarts the 30 min; an open drive counts as driving). A session gets at
+// most one reminder, posted only at a stop, only after the car reached driving speed with no drive
+// open (and after the last drive ended), and never while a drive is open. Nothing else limits it.
+//
+// The reminder never starts a drive by itself. Its note carries a one-use token; a tap that JS
+// claims (`claim`) is the only way the reminder leads to a drive, and JS then starts it through
+// the same path as the Start Drive tap.
 //
 // Pure module: no imports. Every time is epoch ms. Functions never mutate their arguments.
 
 export const REMINDER = {
   /** Under 3 mph = stopped (iOS). */
   STOP_MPS: 1.34,
-  /** Above 5 mph while the reminder shows = driving again (iOS). */
-  MOVE_MPS: 2.24,
-  /** 10 mph must be seen before a stop counts (iOS). */
+  /** 10 mph = driving speed (iOS). */
   IOS_DRIVING_MPS: 4.47,
   /** A fix's speed counts only with a speed accuracy at or under this (m/s). */
   SPEED_ACC_MAX_MPS: 2,
   /** Stopped this long, by fix time, is a stop (iOS). */
   STOP_HOLD_MS: 12_000,
-  /** Moved this far from the stop while the reminder shows = moved on (iOS). */
-  MOVED_AWAY_M: 30,
-  /** Only a fix this accurate (horizontal, m) can say the phone moved away from the stop (iOS). */
-  FIX_ACC_MAX_M: 20,
-  /** How far back the walking check looks when the phone moved away from the stop (iOS). */
-  WALK_CHECK_MS: 30_000,
-  /** Withdrawn by driving within this = unseen, not a miss (iOS). */
-  UNSEEN_MS: 20_000,
-  /** Posts a trip may have again after an unseen one. */
-  MAX_RETRIES_PER_TRIP: 1,
-  /** A STILL ENTER counts only this soon after an IN_VEHICLE EXIT (Android). */
+  /** 30 min without driving ends a session; also the lost-exit gap (Android). */
+  SESSION_GAP_MS: 1_800_000,
+  /** An Android note's timeout while the phone is in the vehicle, re-armed at each batch. */
+  IN_VEHICLE_NOTE_MS: 10_800_000,
+  /** A STILL ENTER counts as a stop only this soon after an IN_VEHICLE EXIT (Android). */
   STILL_AFTER_VEHICLE_MS: 120_000,
   /** A stop older than this when it arrives is not acted on (Android). */
   STALE_EVENT_MS: 45_000,
-  /** A trip must be this old before a stop reminds. */
-  MIN_IN_VEHICLE_MS: 90_000,
-  /** Out of the vehicle this long closes the trip. */
-  TRIP_GAP_MS: 600_000,
-  /** "In vehicle" with no news for this long closes the trip. */
-  MAX_TRIP_IDLE_MS: 10_800_000,
-  /** No reminder this soon after a drive ended. */
-  AFTER_DRIVE_MS: 600_000,
-  /** Quiet after a post, lifted if it led to a drive or went unseen. */
-  UNUSED_QUIET_MS: 14_400_000,
-  DAY_MS: 86_400_000,
-  /** Posts in any rolling 24 h, unseen ones included. */
-  DAILY_CAP: 2,
-  /** No post sooner than this after the last one, whatever became of it. */
-  POST_SPACING_MS: 3_600_000,
-  /** A reminder is withdrawn after this. */
-  TTL_MS: 300_000,
-  /** A drive started this soon after a post = the reminder helped. */
-  CONVERT_WINDOW_MS: 1_800_000,
-  /** Unused reminders in a row that take the next back-off step. */
-  MISS_LIMIT: 3,
-  /** "Not driving" = quiet this long. */
-  NOT_DRIVING_QUIET_MS: 43_200_000,
-  /** The newest car motion must be this recent to open a trip (iOS). */
+  /** Moving car motion this recent opens a session and starts a look (iOS). */
   AUTOMOTIVE_FRESH_MS: 120_000,
-  /** The motion history a wake reads: at least this far back… (iOS) */
-  IOS_MOTION_MIN_LOOKBACK_MS: 600_000,
-  /** …and at most this far back (iOS). */
-  IOS_MOTION_MAX_LOOKBACK_MS: 10_800_000,
-  /** One GPS session looks for a stop for at most this long (iOS). */
-  IOS_SESSION_MAX_MS: 600_000,
-  /** A session that has not seen 10 mph by then ends (iOS). */
-  IOS_SESSION_NO_DRIVE_MS: 180_000,
-  /** GPS sessions per trip (iOS). */
-  IOS_SESSIONS_PER_TRIP: 2,
-  /** A second session only this long after the first ended (iOS). */
-  IOS_SESSION_SPACING_MS: 600_000,
+  /** Every motion history read covers the last 3 h (iOS). */
+  IOS_MOTION_LOOKBACK_MS: 10_800_000,
+  /** One GPS look lasts at most this long (iOS). */
+  IOS_LOOK_MAX_MS: 600_000,
+  /** A look that has not seen 10 mph for this long ends (iOS). */
+  IOS_LOOK_NO_DRIVE_MS: 180_000,
+  /** After a look that ran its full 10 min with no stop, no look for this long (battery; iOS). */
+  IOS_LOOK_REST_MS: 600_000,
+  /** A tap is claimed and its drive started within this of its hand-over to RoadWise. */
+  TAP_FRESH_MS: 120_000,
+  /** Android: how many handed-over tokens are remembered, so none is handed over twice. */
+  TAP_SEEN_MAX: 8,
   /** A stored time further in the future than this is a clock change: it becomes now. */
   CLOCK_FUTURE_MS: 86_400_000,
 } as const;
 
-/** The back-off pauses, in days; the step after the last turns the reminder off. */
-export const PAUSE_DAYS = [7, 28] as const;
-
-/** The longest pause, 28 days: a stored pause end later than that is a clock change. */
-const MAX_PAUSE_MS = 28 * REMINDER.DAY_MS;
-
 const R = REMINDER;
 
-export interface ReminderTrip {
+/** One stretch of driving. `inVehicle`, `vehicleExitAt` and `lastNewsAt` are Android's; iOS keeps them false and 0. */
+export interface ReminderSession {
   startedAt: number;
-  /** The last moment the phone was known to be in the car. */
-  lastVehicleAt: number;
+  /** The last driving moment. */
+  lastDrivingAt: number;
+  /** Android: the newest report of any kind (the lost-exit rule). */
+  lastNewsAt: number;
+  /** Android: the phone reports being in a vehicle; the 30 min clock does not run meanwhile. */
   inVehicle: boolean;
   /** Android: the last IN_VEHICLE EXIT; 0 for none. */
   vehicleExitAt: number;
-  /** A drive was open in this trip. */
-  recorded: boolean;
-  /** This trip has had its reminder. */
+  /** Driving speed was reached with no drive open, after the last drive ended. */
+  drove: boolean;
+  /** This session has had its reminder. Never cleared inside the session. */
   reminded: boolean;
-  retries: number;
-  /** iOS GPS sessions used. */
-  sessions: number;
-  lastSessionEndAt: number;
 }
 
 export interface ReminderState {
-  v: 2;
+  v: 3;
   enabled: boolean;
-  /** Off because nine reminders in a row went unused. */
-  autoOff: boolean;
-  trip: ReminderTrip | null;
-  lastCaptureEndAt: number;
-  /** Post times in the last 24 h. */
-  posts: number[];
-  /** The post still waiting for its outcome; 0 for none. */
-  pendingAt: number;
+  session: ReminderSession | null;
+  lastDriveEndAt: number;
+  /** The one-use token of the note that is up; '' = no note. */
+  token: string;
   postedAt: number;
-  /** The notification is up. */
-  showing: boolean;
-  missStreak: number;
-  pauseLevel: number;
-  pausedUntil: number;
-  quietUntil: number;
-  notDrivingUntil: number;
+  /** Android: the tokens last handed to JS from a tap (newest last, at most TAP_SEEN_MAX). A token is handed over at most once. */
+  tapSeen: string[];
+  /** Android: when the live token's tap was handed over (0 = not yet). */
+  tapAt: number;
+  /** iOS: no GPS look before this (after a look that ran its full 10 min). */
+  lookRestUntil: number;
 }
 
 export const INITIAL: ReminderState = {
-  v: 2,
+  v: 3,
   enabled: false,
-  autoOff: false,
-  trip: null,
-  lastCaptureEndAt: 0,
-  posts: [],
-  pendingAt: 0,
+  session: null,
+  lastDriveEndAt: 0,
+  token: '',
   postedAt: 0,
-  showing: false,
-  missStreak: 0,
-  pauseLevel: 0,
-  pausedUntil: 0,
-  quietUntil: 0,
-  notDrivingUntil: 0,
+  tapSeen: [],
+  tapAt: 0,
+  lookRestUntil: 0,
 };
 
 /** What the phone says at the moment of a decision. */
 export interface ReminderCtx {
-  /** Everything the platform needs is granted (motion, notifications; iOS: Always, precise). */
+  /** Everything the platform needs is granted (Android: motion, Play services, notifications; iOS: Always, precise, motion, notifications). */
   permissionsOk: boolean;
   capturing: boolean;
-  appForeground: boolean;
-  inCall: boolean;
-  /** iOS Low Power Mode. */
-  lowPower: boolean;
   /** How old the stop was when it arrived (Android). */
   eventAgeMs: number;
-  /** The driver is on foot after the stop. */
+  /** The driver is on foot (Android: walked or drove on after the stop; iOS: on foot now, at the look gate). */
   onFoot: boolean;
-  /** How old the newest car motion is (iOS); Infinity for none. */
+  /** How old the newest moving car motion is (iOS look gate); Infinity for none. */
   automotiveAgeMs: number;
 }
 
 export const CALM_CTX: ReminderCtx = {
   permissionsOk: true,
   capturing: false,
-  appForeground: false,
-  inCall: false,
-  lowPower: false,
   eventAgeMs: 0,
   onFoot: false,
   automotiveAgeMs: 0,
 };
 
-export type GatePhase = 'wake' | 'session' | 'stop';
+export type GatePhase = 'wake' | 'look' | 'stop';
 
 export type GateReason =
   | 'ok'
   | 'off'
-  | 'paused'
-  | 'quiet'
   | 'permission'
   | 'capturing'
-  | 'no-trip'
-  | 'recorded'
+  | 'no-session'
   | 'reminded'
-  | 'after-drive'
-  | 'daily-cap'
-  | 'spacing'
-  | 'low-power'
-  | 'sessions'
-  | 'foreground'
+  | 'not-driven'
+  | 'resting'
   | 'not-fresh'
-  | 'too-soon'
-  | 'in-call'
   | 'stale'
   | 'on-foot';
 
-export type Outcome = 'converted' | 'unseen' | 'notDriving' | 'missed';
+const cloneSession = (x: ReminderSession | null): ReminderSession | null => (x ? { ...x } : null);
+const clone = (s: ReminderState): ReminderState => ({ ...s, session: cloneSession(s.session), tapSeen: [...s.tapSeen] });
 
-const clone = (s: ReminderState): ReminderState => ({ ...s, trip: s.trip ? { ...s.trip } : null, posts: [...s.posts] });
-
-export function newTrip(startedAt: number, lastVehicleAt: number = startedAt): ReminderTrip {
-  return {
-    startedAt,
-    lastVehicleAt,
-    inVehicle: true,
-    vehicleExitAt: 0,
-    recorded: false,
-    reminded: false,
-    retries: 0,
-    sessions: 0,
-    lastSessionEndAt: 0,
-  };
+export function newSession(startedAt: number, lastDrivingAt: number, inVehicle: boolean): ReminderSession {
+  return { startedAt, lastDrivingAt, lastNewsAt: lastDrivingAt, inVehicle, vehicleExitAt: 0, drove: false, reminded: false };
 }
 
 // ——— the shared rules (both mirrors) ———
 
-/** Posts in the 24 h up to `now`. */
-export const recentPosts = (s: ReminderState, now: number): number => s.posts.filter((p) => now - p < R.DAY_MS).length;
-
-/** A post went up less than an hour before `now` (converted, unseen, missed or "Not driving" alike). */
-export const tooSoonAfterPost = (s: ReminderState, now: number): boolean => s.posts.some((p) => now - p < R.POST_SPACING_MS);
-
-/**
- * Brings the state up to `now`: clamps clock jumps, drops posts older than a day, ends an expired
- * pause, closes a trip that is over, takes down a reminder past its 5 min, and counts a post with
- * no drive 30 min on as a miss.
- */
-export function settle(s0: ReminderState, now: number): ReminderState {
+/** A stored time more than a day ahead of `now` is a clock change: it becomes `now`. */
+export function clampTimes(s0: ReminderState, now: number): ReminderState {
   const s = clone(s0);
   const past = (t: number): number => (t > now + R.CLOCK_FUTURE_MS ? now : t);
-  s.lastCaptureEndAt = past(s.lastCaptureEndAt);
-  s.pendingAt = past(s.pendingAt);
+  s.lastDriveEndAt = past(s.lastDriveEndAt);
   s.postedAt = past(s.postedAt);
-  s.posts = s.posts.map(past).filter((p) => now - p < R.DAY_MS);
-  s.pausedUntil = Math.min(s.pausedUntil, now + MAX_PAUSE_MS);
-  s.quietUntil = Math.min(s.quietUntil, now + R.UNUSED_QUIET_MS);
-  s.notDrivingUntil = Math.min(s.notDrivingUntil, now + R.NOT_DRIVING_QUIET_MS);
-  if (s.pausedUntil !== 0 && now >= s.pausedUntil) s.pausedUntil = 0;
-  if (s.quietUntil !== 0 && now >= s.quietUntil) s.quietUntil = 0;
-  if (s.notDrivingUntil !== 0 && now >= s.notDrivingUntil) s.notDrivingUntil = 0;
-  const t = s.trip;
-  if (t) {
-    t.startedAt = past(t.startedAt);
-    t.lastVehicleAt = past(t.lastVehicleAt);
-    t.vehicleExitAt = past(t.vehicleExitAt);
-    t.lastSessionEndAt = past(t.lastSessionEndAt);
-    const idle = now - t.lastVehicleAt;
-    if ((!t.inVehicle && idle >= R.TRIP_GAP_MS) || idle >= R.MAX_TRIP_IDLE_MS) s.trip = null;
+  s.tapAt = past(s.tapAt);
+  s.lookRestUntil = past(s.lookRestUntil);
+  const x = s.session;
+  if (x) {
+    x.startedAt = past(x.startedAt);
+    x.lastDrivingAt = past(x.lastDrivingAt);
+    x.lastNewsAt = past(x.lastNewsAt);
+    x.vehicleExitAt = past(x.vehicleExitAt);
   }
-  if (s.showing && now - s.postedAt >= R.TTL_MS) s.showing = false;
-  if (s.pendingAt > 0 && now - s.pendingAt >= R.CONVERT_WINDOW_MS) resolveIn(s, 'missed', now);
   return s;
 }
 
 /**
- * The first reason not to remind now, checked in this order, or `ok`. `wake` is the cheap check
- * before any motion or GPS work (no trip yet); `session` adds the iOS GPS-session rules; `stop`
- * the rules for the stop itself.
+ * The session ends at `t` once it is 30 min past its last driving moment, out of the vehicle, with
+ * no drive open. Ending it drops the note's token (the caller takes the note down).
+ */
+export function endIfOver(s0: ReminderState, t: number, capturing: boolean): ReminderState {
+  const x = s0.session;
+  if (!x || capturing || x.inVehicle || t - x.lastDrivingAt < R.SESSION_GAP_MS) return s0;
+  return { ...clone(s0), session: null, token: '', tapAt: 0 };
+}
+
+/** Brings the state up to `now`: clock jumps clamped, a session that is over ended. */
+export function settle(s0: ReminderState, now: number, capturing: boolean): ReminderState {
+  return endIfOver(clampTimes(s0, now), now, capturing);
+}
+
+/**
+ * The first reason not to go on, in this order, or `ok`. `wake` is the cheap check before any
+ * motion or GPS work; `look` decides whether a GPS look may start (iOS); `stop` whether a stop
+ * reminds.
  */
 export function gate(s: ReminderState, ctx: ReminderCtx, now: number, phase: GatePhase): GateReason {
   if (!s.enabled) return 'off';
-  if (now < s.pausedUntil) return 'paused';
-  if (now < Math.max(s.quietUntil, s.notDrivingUntil)) return 'quiet';
   if (!ctx.permissionsOk) return 'permission';
   if (ctx.capturing) return 'capturing';
-  const t = s.trip;
-  if (phase !== 'wake') {
-    if (!t) return 'no-trip';
-    if (t.recorded) return 'recorded';
-    if (t.reminded) return 'reminded';
-  }
-  if (s.lastCaptureEndAt > 0 && now - s.lastCaptureEndAt < R.AFTER_DRIVE_MS) return 'after-drive';
-  if (recentPosts(s, now) >= R.DAILY_CAP) return 'daily-cap';
-  if (tooSoonAfterPost(s, now)) return 'spacing';
-  if (phase === 'wake') {
-    if (ctx.lowPower) return 'low-power';
-    if (ctx.appForeground) return 'foreground';
+  if (phase === 'wake') return 'ok';
+  const x = s.session;
+  if (!x) return 'no-session';
+  if (x.reminded) return 'reminded';
+  if (phase === 'look') {
+    if (now < s.lookRestUntil) return 'resting';
+    if (ctx.automotiveAgeMs > R.AUTOMOTIVE_FRESH_MS || ctx.onFoot) return 'not-fresh';
     return 'ok';
   }
-  if (!t) return 'no-trip';
-  if (phase === 'session') {
-    if (ctx.lowPower) return 'low-power';
-    if (t.sessions >= R.IOS_SESSIONS_PER_TRIP) return 'sessions';
-    if (t.lastSessionEndAt > 0 && now - t.lastSessionEndAt < R.IOS_SESSION_SPACING_MS) return 'sessions';
-    if (ctx.appForeground) return 'foreground';
-    if (ctx.automotiveAgeMs > R.AUTOMOTIVE_FRESH_MS) return 'not-fresh';
-    return 'ok';
-  }
-  if (now - t.startedAt < R.MIN_IN_VEHICLE_MS) return 'too-soon';
-  if (ctx.appForeground) return 'foreground';
-  if (ctx.inCall) return 'in-call';
+  if (!x.drove) return 'not-driven';
   if (ctx.eventAgeMs > R.STALE_EVENT_MS) return 'stale';
   if (ctx.onFoot) return 'on-foot';
   return 'ok';
 }
 
-function postedIn(s: ReminderState, now: number): void {
-  s.posts.push(now);
-  if (s.trip) s.trip.reminded = true;
-  s.pendingAt = now;
-  s.postedAt = now;
-  s.showing = true;
-  s.quietUntil = now + R.UNUSED_QUIET_MS;
-}
-
-/** The reminder went up. */
-export function posted(s0: ReminderState, now: number): ReminderState {
+/** The reminder went up with `token`: the session is reminded. */
+export function posted(s0: ReminderState, now: number, token: string): ReminderState {
   const s = clone(s0);
-  postedIn(s, now);
+  if (s.session) s.session.reminded = true;
+  s.token = token;
+  s.postedAt = now;
+  s.tapAt = 0;
   return s;
 }
 
-function missIn(s: ReminderState, now: number): void {
-  s.missStreak += 1;
-  if (s.missStreak < R.MISS_LIMIT) return;
-  s.missStreak = 0;
-  // A stored level out of range is read as the nearest real one.
-  s.pauseLevel = Math.min(Math.max(s.pauseLevel, 0), PAUSE_DAYS.length);
-  const days = PAUSE_DAYS[s.pauseLevel];
-  if (days !== undefined) {
-    s.pausedUntil = now + days * R.DAY_MS;
-    s.pauseLevel += 1;
-  } else {
-    s.enabled = false;
-    s.autoOff = true;
-    s.pausedUntil = 0;
-  }
+/** The note with `token` never showed: the post is taken back, and the session may remind at its next stop. */
+export function unposted(s0: ReminderState, token: string): ReminderState {
+  if (token === '' || s0.token !== token) return s0;
+  const s = clone(s0);
+  s.token = '';
+  s.tapAt = 0;
+  if (s.session) s.session.reminded = false;
+  return s;
 }
 
-function resolveIn(s: ReminderState, outcome: Outcome, now: number): void {
-  const pending = s.pendingAt > 0;
-  s.showing = false;
-  s.pendingAt = 0;
-  switch (outcome) {
-    case 'converted':
-      s.missStreak = 0;
-      s.pauseLevel = 0;
-      s.quietUntil = 0;
-      return;
-    case 'unseen':
-      s.quietUntil = 0;
-      if (s.trip && s.trip.retries < R.MAX_RETRIES_PER_TRIP) {
-        s.trip.retries += 1;
-        s.trip.reminded = false;
-      }
-      return;
-    case 'notDriving':
-      // Tapped on a note whose outcome is already counted (or with none waiting): quiet, no second miss.
-      s.notDrivingUntil = now + R.NOT_DRIVING_QUIET_MS;
-      if (pending) missIn(s, now);
-      return;
-    case 'missed':
-      missIn(s, now);
-      return;
-  }
+/** The note is gone (iOS: the reminder lost a permission it needs): its token goes; the session stays reminded. */
+export function noteGone(s0: ReminderState): ReminderState {
+  return { ...clone(s0), token: '', tapAt: 0 };
 }
 
 /**
- * What became of a post; every outcome takes the notification down. Walking off is not an outcome:
- * it only takes the note down, and the post still waits for a drive within 30 min (else a miss).
+ * Android: a tap's token read from an intent. A token handed over before (`tapSeen`) is not handed
+ * over again, whatever happened to the process. The live token's hand-over time is kept for the claim.
  */
-export function resolve(s0: ReminderState, outcome: Outcome, now: number): ReminderState {
+export function tapDelivered(s0: ReminderState, token: string, now: number): { state: ReminderState; delivered: boolean } {
+  if (s0.tapSeen.includes(token)) return { state: s0, delivered: false };
   const s = clone(s0);
-  resolveIn(s, outcome, now);
-  return s;
+  s.tapSeen = [...s.tapSeen, token].slice(-R.TAP_SEEN_MAX);
+  if (token !== '' && token === s.token) s.tapAt = now;
+  return { state: s, delivered: true };
 }
 
-/** A drive started: this trip is recorded, and a reminder posted in the last 30 min helped. */
+/**
+ * A tap JS asks to start a drive from. True only once, with the note's own token, while the reminder
+ * is on, its session lasts and no drive is open, and (Android, `requireDelivery`) within 2 min of the
+ * tap's hand-over. True consumes the token.
+ */
+export function claim(
+  s0: ReminderState,
+  token: string,
+  now: number,
+  capturing: boolean,
+  requireDelivery: boolean
+): { state: ReminderState; ok: boolean } {
+  const s = settle(s0, now, capturing);
+  const fresh = !requireDelivery || (s.tapAt > 0 && now - s.tapAt <= R.TAP_FRESH_MS);
+  const ok = s.enabled && token !== '' && token === s.token && s.session !== null && !capturing && fresh;
+  if (!ok) return { state: s, ok: false };
+  return { state: { ...clone(s), token: '', tapAt: 0 }, ok: true };
+}
+
+/** A drive started (any way): the note goes, and driving speed must be seen again after the drive. */
 export function captureStarted(s0: ReminderState, now: number): ReminderState {
   const s = clone(s0);
-  if (!s.trip) s.trip = newTrip(now);
-  s.trip.recorded = true;
-  if (s.pendingAt > 0 && now - s.pendingAt <= R.CONVERT_WINDOW_MS) resolveIn(s, 'converted', now);
-  s.showing = false;
-  return s;
-}
-
-/** A drive ended: none for 10 min, and the trip's car time ends here. */
-export function captureEnded(s0: ReminderState, now: number): ReminderState {
-  const s = clone(s0);
-  s.lastCaptureEndAt = now;
-  if (s.trip) {
-    s.trip.inVehicle = false;
-    s.trip.lastVehicleAt = now;
+  s.token = '';
+  s.tapAt = 0;
+  const x = s.session;
+  if (x) {
+    x.drove = false;
+    x.lastDrivingAt = Math.max(x.lastDrivingAt, now);
+    x.lastNewsAt = Math.max(x.lastNewsAt, now);
   }
   return s;
 }
 
-/** RoadWise came to the front: Home is on screen, so the notification goes. */
-export function appForeground(s0: ReminderState): ReminderState {
+/**
+ * A drive ended. Its driving end is the session's last driving moment: `drivingEndedAt` omitted =
+ * now; null (a drive that was not kept) = the session's clock is left as it was; a time = that time
+ * (never later than now). The vehicle state is left to the reports.
+ */
+export function captureEnded(s0: ReminderState, now: number, drivingEndedAt?: number | null): ReminderState {
   const s = clone(s0);
-  s.showing = false;
+  s.lastDriveEndAt = now;
+  const x = s.session;
+  if (x) {
+    x.drove = false;
+    x.lastNewsAt = Math.max(x.lastNewsAt, now);
+    if (drivingEndedAt !== null) x.lastDrivingAt = Math.max(x.lastDrivingAt, Math.min(now, drivingEndedAt ?? now));
+  }
   return s;
 }
 
-/** On clears every back-off and quiet; off forgets everything. */
+/** On keeps the session; off forgets everything. */
 export function setEnabled(s0: ReminderState, on: boolean): ReminderState {
   if (!on) return clone(INITIAL);
-  return {
-    ...clone(s0),
-    enabled: true,
-    autoOff: false,
-    pausedUntil: 0,
-    missStreak: 0,
-    pauseLevel: 0,
-    quietUntil: 0,
-    notDrivingUntil: 0,
-  };
+  return { ...clone(s0), enabled: true };
+}
+
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
+const isStr = (v: unknown): v is string => typeof v === 'string';
+
+function sessionOf(v: unknown): ReminderSession | null | undefined {
+  if (v === null) return null;
+  if (!isRec(v)) return undefined;
+  const { startedAt, lastDrivingAt, lastNewsAt, inVehicle, vehicleExitAt, drove, reminded } = v;
+  if (!isNum(startedAt) || !isNum(lastDrivingAt) || !isNum(lastNewsAt) || !isBool(inVehicle) || !isNum(vehicleExitAt) || !isBool(drove) || !isBool(reminded)) {
+    return undefined;
+  }
+  return { startedAt, lastDrivingAt, lastNewsAt, inVehicle, vehicleExitAt, drove, reminded };
+}
+
+/**
+ * The stored state: v3 as it is; v2 (the reminder before sessions) keeps only its switch; anything
+ * else (nothing, garbage, another version) is off.
+ */
+export function fromStored(json: unknown): ReminderState {
+  if (!isRec(json)) return clone(INITIAL);
+  if (json.v === 2) return { ...clone(INITIAL), enabled: json.enabled === true };
+  if (json.v !== 3) return clone(INITIAL);
+  const session = sessionOf(json.session);
+  const { enabled, lastDriveEndAt, token, postedAt, tapSeen, tapAt, lookRestUntil } = json;
+  if (session === undefined || !isBool(enabled) || !isNum(lastDriveEndAt) || !isStr(token) || !isNum(postedAt) || !Array.isArray(tapSeen) || !tapSeen.every(isStr) || !isNum(tapAt) || !isNum(lookRestUntil)) {
+    return clone(INITIAL);
+  }
+  return { v: 3, enabled, session, lastDriveEndAt, token, postedAt, tapSeen: (tapSeen as string[]).slice(-R.TAP_SEEN_MAX), tapAt, lookRestUntil };
 }
 
 // ——— Android: Activity Recognition transitions ———
 
 /** The Android activity-transition subscription. One PendingIntent; each request replaces the last. */
-export type TransitionTier = 'none' | 'capture' | 'idle' | 'trip';
+export type TransitionTier = 'none' | 'capture' | 'idle' | 'session';
 
 export function tier(s: ReminderState, capturing: boolean, transitionsOk: boolean): TransitionTier {
   if (!transitionsOk) return 'none';
   if (capturing) return 'capture';
   if (!s.enabled) return 'none';
-  return s.trip ? 'trip' : 'idle';
+  return s.session ? 'session' : 'idle';
 }
 
 export type TransitionKind = 'vehicle-enter' | 'vehicle-exit' | 'still-enter' | 'walking-enter' | 'running-enter';
@@ -425,87 +344,162 @@ export interface Transition {
   ts: number;
 }
 
+export type TransitionEffect = 'none' | 'post' | 'refresh' | 'withdraw';
+
 export interface TransitionResult {
   state: ReminderState;
-  effect: 'none' | 'post' | 'withdraw';
+  /** post: a new note (replacing any); withdraw: the batch dropped the note's token; refresh: a note is up (re-arm its timeout). */
+  effect: TransitionEffect;
   /** The stop's gate reason, when the batch held a stop. */
   reason?: GateReason;
+  /** When the note must be gone by (its system timeout); 0 or less than now = cancel instead. */
+  expiresAt: number;
 }
 
 /**
- * One delivered batch, read whole before acting. Events from before the subscription are a replay
- * and are dropped. Events with the same time are read EXIT first (Play services stamps the EXIT of
- * one activity and the ENTER of the next alike). A stop is a STILL ENTER at most 2 min after an
- * IN_VEHICLE EXIT; it reminds only if nothing after it in the batch says the driver walked off or
- * drove on. Driving on (IN_VEHICLE ENTER) or walking off takes a showing reminder down; the post
- * still waits for its outcome.
+ * An Android note's timeout: 3 h after `now` while the phone is in the vehicle, else the session's
+ * end. 0 with no session.
+ */
+export function noteExpiresAt(s: ReminderState, now: number): number {
+  const x = s.session;
+  if (!x) return 0;
+  return x.inVehicle ? now + R.IN_VEHICLE_NOTE_MS : x.lastDrivingAt + R.SESSION_GAP_MS;
+}
+
+const exitFirst = (e: Transition): number => (e.kind === 'vehicle-exit' ? 0 : 1);
+const byTime = (a: Transition, b: Transition): number => a.ts - b.ts || exitFirst(a) - exitFirst(b);
+
+/**
+ * The current activity Play services replays at each (re)subscribe, read as the state at
+ * `subscribedAt`: it never opens a session, never posts and never marks driving speed.
+ */
+function applyReplay(s: ReminderState, e: Transition, subscribedAt: number): void {
+  const x = s.session;
+  if (!x) return;
+  x.lastNewsAt = Math.max(x.lastNewsAt, subscribedAt);
+  if (e.kind === 'vehicle-enter') {
+    x.inVehicle = true;
+    x.lastDrivingAt = Math.max(x.lastDrivingAt, subscribedAt);
+  } else if (x.inVehicle) {
+    x.inVehicle = false;
+  }
+}
+
+/** The newest replayed event, or null. */
+function newestReplay(events: readonly Transition[], subscribedAt: number): Transition | null {
+  const replays = events.filter((e) => e.ts < subscribedAt).sort(byTime);
+  return replays.length > 0 ? replays[replays.length - 1]! : null;
+}
+
+/**
+ * One delivered batch with no drive open, read whole before acting. Events before `subscribedAt`
+ * are the replay (state only). Live events are read in time order, EXIT first at the same time,
+ * each after deciding the session's end on its own time. A stop is a STILL ENTER at most 2 min
+ * after an IN_VEHICLE EXIT; it reminds only if nothing later in the batch says the driver walked off
+ * or drove on, and only through the stop gate.
  */
 export function onTransitions(
   s0: ReminderState,
   events: readonly Transition[],
   arrival: number,
   subscribedAt: number,
-  ctx: ReminderCtx
+  ctx: ReminderCtx,
+  newToken: string
 ): TransitionResult {
-  const s = settle(s0, arrival);
-  let withdrew = false;
+  let s = clampTimes(s0, arrival);
+  const tokenBefore = s.token;
+  const cap = ctx.capturing;
+  const replay = newestReplay(events, subscribedAt);
+  if (replay) {
+    s = clone(endIfOver(s, subscribedAt, cap));
+    applyReplay(s, replay, subscribedAt);
+  }
   let stop: Transition | null = null;
+  let stopSession = 0;
   let afterStop = false;
-  const exitFirst = (e: Transition): number => (e.kind === 'vehicle-exit' ? 0 : 1);
-  const batch = events.filter((e) => e.ts >= subscribedAt).sort((a, b) => a.ts - b.ts || exitFirst(a) - exitFirst(b));
-  for (const e of batch) {
-    const t = s.trip;
+  for (const e of events.filter((x) => x.ts >= subscribedAt).sort(byTime)) {
+    s = clone(endIfOver(s, e.ts, cap));
+    const x = s.session;
     if (e.kind === 'vehicle-enter') {
-      if (s.showing) {
-        s.showing = false;
-        withdrew = true;
-      }
-      if (!t) {
-        s.trip = newTrip(e.ts);
+      const drove = e.ts > s.lastDriveEndAt;
+      if (!x) {
+        s.session = { ...newSession(e.ts, e.ts, true), drove };
+      } else if (x.inVehicle && e.ts - x.lastNewsAt >= R.SESSION_GAP_MS) {
+        // A lost EXIT: the old session ends here and a new one opens.
+        s = { ...s, session: { ...newSession(e.ts, e.ts, true), drove }, token: '', tapAt: 0 };
       } else {
-        t.inVehicle = true;
-        t.lastVehicleAt = Math.max(t.lastVehicleAt, e.ts);
+        x.inVehicle = true;
+        x.lastDrivingAt = Math.max(x.lastDrivingAt, e.ts);
+        x.lastNewsAt = Math.max(x.lastNewsAt, e.ts);
+        x.drove = x.drove || drove;
       }
       if (stop) afterStop = true;
     } else if (e.kind === 'vehicle-exit') {
-      if (t) {
-        if (t.inVehicle) {
-          t.inVehicle = false;
-          t.lastVehicleAt = Math.max(t.lastVehicleAt, e.ts);
-        }
-        t.vehicleExitAt = e.ts;
+      if (x) {
+        x.inVehicle = false;
+        x.lastDrivingAt = Math.max(x.lastDrivingAt, e.ts);
+        x.lastNewsAt = Math.max(x.lastNewsAt, e.ts);
+        x.vehicleExitAt = e.ts;
       }
     } else if (e.kind === 'walking-enter' || e.kind === 'running-enter') {
-      if (s.showing) {
-        s.showing = false;
-        withdrew = true;
-      }
-      if (t && t.inVehicle) {
-        t.inVehicle = false;
-        t.lastVehicleAt = Math.max(t.lastVehicleAt, e.ts);
+      if (x) {
+        if (x.inVehicle) {
+          x.inVehicle = false;
+          x.lastDrivingAt = Math.max(x.lastDrivingAt, e.ts);
+        }
+        x.lastNewsAt = Math.max(x.lastNewsAt, e.ts);
       }
       if (stop) afterStop = true;
-    } else if (e.kind === 'still-enter') {
-      if (t && !t.inVehicle && t.vehicleExitAt > 0 && e.ts >= t.vehicleExitAt && e.ts - t.vehicleExitAt <= R.STILL_AFTER_VEHICLE_MS) {
+    } else if (x) {
+      x.lastNewsAt = Math.max(x.lastNewsAt, e.ts);
+      if (!x.inVehicle && x.vehicleExitAt > 0 && e.ts >= x.vehicleExitAt && e.ts - x.vehicleExitAt <= R.STILL_AFTER_VEHICLE_MS) {
         stop = e;
+        stopSession = x.startedAt;
         afterStop = false;
       }
     }
   }
-  const effect = withdrew ? 'withdraw' : 'none';
-  if (!stop) return { state: s, effect };
-  const reason = gate(s, { ...ctx, eventAgeMs: arrival - stop.ts, onFoot: afterStop }, arrival, 'stop');
-  if (reason !== 'ok') return { state: s, effect, reason };
-  postedIn(s, arrival);
-  return { state: s, effect: 'post', reason };
+  s = endIfOver(s, arrival, cap);
+  let effect: TransitionEffect = tokenBefore !== '' && s.token === '' ? 'withdraw' : s.token !== '' ? 'refresh' : 'none';
+  let reason: GateReason | undefined;
+  if (stop && s.session && s.session.startedAt === stopSession) {
+    reason = gate(s, { ...ctx, eventAgeMs: arrival - stop.ts, onFoot: afterStop }, arrival, 'stop');
+    if (reason === 'ok') {
+      s = posted(s, arrival, newToken);
+      effect = 'post';
+    }
+  }
+  const out: TransitionResult = { state: s, effect, expiresAt: noteExpiresAt(s, arrival) };
+  if (reason !== undefined) out.reason = reason;
+  return out;
 }
 
-// ——— iOS: significant-location wake, motion check, GPS session ———
+/**
+ * A batch the capture's feed got while a drive is open: the vehicle state only. It never ends a
+ * session (a drive is open), never posts, never marks driving speed and never touches the token.
+ */
+export function foldCaptureTransitions(s0: ReminderState, events: readonly Transition[], subscribedAt: number): ReminderState {
+  if (!s0.session) return s0;
+  const s = clone(s0);
+  const x = s.session!;
+  const replay = newestReplay(events, subscribedAt);
+  if (replay) applyReplay(s, replay, subscribedAt);
+  for (const e of events.filter((v) => v.ts >= subscribedAt).sort(byTime)) {
+    x.lastNewsAt = Math.max(x.lastNewsAt, e.ts);
+    if (e.kind === 'vehicle-enter') x.inVehicle = true;
+    else if (e.kind === 'vehicle-exit' || e.kind === 'walking-enter' || e.kind === 'running-enter') x.inVehicle = false;
+  }
+  return s;
+}
+
+// ——— iOS: significant-location wake, motion history, GPS look ———
 
 /** One CoreMotion activity, reduced to what the reminder reads. */
 export interface Activity {
   start: number;
   automotive: boolean;
+  /** A car standing still (automotive + stationary) is not driving. */
+  stationary: boolean;
   /** walking, running or cycling */
   onFoot: boolean;
   /** confidence medium or high */
@@ -513,24 +507,18 @@ export interface Activity {
 }
 
 export interface MotionSummary {
-  /** End of the newest confident car stretch; 0 for none. */
+  /** End of the newest confident moving car stretch; 0 for none. */
   lastAutomotiveAt: number;
   /**
-   * Start of the current run of confident car stretches; 0 for none. A confident walk, run or ride
-   * ends a run, and so do 10 min (`TRIP_GAP_MS`) with no confident car motion.
+   * Start of the current run of moving car stretches; 0 for none. Only 30 min without moving car
+   * motion ends a run (a walk between two stretches does not: a session ends only by time).
    */
   automotiveSince: number;
   /** The newest activity is a confident walk, run or ride. */
   onFootNow: boolean;
 }
 
-/** How far back a wake reads the motion history: back to the trip's last car moment, 10 min to 3 h. */
-export function motionSince(s: ReminderState, now: number): number {
-  const lastVehicleAt = s.trip ? s.trip.lastVehicleAt : now;
-  return Math.max(now - R.IOS_MOTION_MAX_LOOKBACK_MS, Math.min(now - R.IOS_MOTION_MIN_LOOKBACK_MS, lastVehicleAt));
-}
-
-/** Each activity lasts until the next one starts (the newest until now). */
+/** Each activity lasts until the next one starts (the newest until now). A car standing still is neither driving nor a break. */
 export function summarizeActivities(list: readonly Activity[], now: number): MotionSummary {
   const sorted = [...list].sort((a, b) => a.start - b.start);
   let lastAutomotiveAt = 0;
@@ -540,64 +528,73 @@ export function summarizeActivities(list: readonly Activity[], now: number): Mot
     const a = sorted[i]!;
     const end = i + 1 < sorted.length ? sorted[i + 1]!.start : now;
     onFootNow = a.onFoot && a.confident;
-    if (a.automotive && a.confident) {
-      if (automotiveSince === 0 || (lastAutomotiveAt > 0 && a.start - lastAutomotiveAt >= R.TRIP_GAP_MS)) automotiveSince = a.start;
+    if (a.automotive && !a.stationary && a.confident) {
+      if (automotiveSince === 0 || a.start - lastAutomotiveAt >= R.SESSION_GAP_MS) automotiveSince = a.start;
       lastAutomotiveAt = end;
-    } else if (a.onFoot && a.confident) {
-      automotiveSince = 0;
     }
   }
   return { lastAutomotiveAt, automotiveSince, onFootNow };
 }
 
+/**
+ * The motion history folded into the session: a moving car run that began 30 min or more after
+ * the session's last driving moment ends it (a new trip after a park with no wake between);
+ * otherwise the newest moving car motion is a driving moment. Then the time rule.
+ */
+export function foldMotion(s0: ReminderState, now: number, m: MotionSummary, capturing: boolean): ReminderState {
+  let s = s0;
+  const x = s.session;
+  if (x) {
+    if (!capturing && m.automotiveSince > 0 && m.automotiveSince - x.lastDrivingAt >= R.SESSION_GAP_MS) {
+      s = { ...clone(s), session: null, token: '', tapAt: 0 };
+    } else if (m.lastAutomotiveAt > x.lastDrivingAt) {
+      s = clone(s);
+      s.session!.lastDrivingAt = m.lastAutomotiveAt;
+    }
+  }
+  return endIfOver(s, now, capturing);
+}
+
 export interface WakeResult {
   state: ReminderState;
-  effect: 'none' | 'start-session';
+  effect: 'none' | 'start-look';
   reason: GateReason;
+  /** The note's token went (its session ended): the caller takes the note down. */
+  dropped: boolean;
 }
 
 /**
- * A significant-location wake, after the motion check. A trip closes only after 10 min with no car
- * motion in the history (not merely a long gap between wakes), including a car run that began 10 min
- * or more after the trip's last car moment (a new drive after a park); a trip opens only on car
- * motion from the last 2 min with the driver not on foot. A GPS session starts only through the
- * session gate.
+ * A significant-location wake, after its motion history read. A session opens only on moving car
+ * motion from the last 2 min with the driver not on foot; a GPS look starts only through the look gate.
  */
 export function onWake(s0: ReminderState, now: number, motion: MotionSummary, ctx: ReminderCtx): WakeResult {
-  const s = settle(s0, now);
-  const pre = gate(s, ctx, now, 'wake');
-  if (pre !== 'ok') return { state: s, effect: 'none', reason: pre };
+  const c0 = clampTimes(s0, now);
+  const pre = gate(c0, ctx, now, 'wake');
+  if (pre !== 'ok') {
+    const s = endIfOver(c0, now, ctx.capturing);
+    return { state: s, effect: 'none', reason: pre, dropped: c0.token !== '' && s.token === '' };
+  }
+  let s = foldMotion(c0, now, motion, ctx.capturing);
   const a = motion.lastAutomotiveAt;
   const fresh = a > 0 && now - a <= R.AUTOMOTIVE_FRESH_MS && !motion.onFootNow;
-  const t = s.trip;
-  if (t) {
-    if (now - Math.max(t.lastVehicleAt, a) >= R.TRIP_GAP_MS || motion.automotiveSince - t.lastVehicleAt >= R.TRIP_GAP_MS) {
-      s.trip = null;
-    } else {
-      t.lastVehicleAt = Math.max(t.lastVehicleAt, a);
-      if (fresh) t.inVehicle = true;
-    }
+  if (!s.session && fresh) {
+    s = { ...clone(s), session: newSession(motion.automotiveSince > 0 ? motion.automotiveSince : a, a, false), lookRestUntil: 0 };
   }
-  if (!s.trip && fresh) s.trip = newTrip(motion.automotiveSince > 0 ? motion.automotiveSince : a, a);
-  const reason = gate(s, { ...ctx, automotiveAgeMs: a > 0 ? now - a : Infinity }, now, 'session');
-  if (reason !== 'ok' || !s.trip) return { state: s, effect: 'none', reason };
-  s.trip.sessions += 1;
-  return { state: s, effect: 'start-session', reason };
+  const reason = gate(s, { ...ctx, automotiveAgeMs: a > 0 ? now - a : Infinity, onFoot: motion.onFootNow }, now, 'look');
+  return { state: s, effect: reason === 'ok' ? 'start-look' : 'none', reason, dropped: c0.token !== '' && s.token === '' };
 }
 
-export interface SessionTracker {
-  /** The session began; it looks for a stop until IOS_SESSION_MAX_MS after this. */
+/** A bounded GPS look for a stop (iOS). */
+export interface LookTracker {
+  /** The look began; it lasts until IOS_LOOK_MAX_MS after this. */
   startedAt: number;
   /** Looking for a stop since (the 3 min no-drive rule). */
   seekSince: number;
   sawDriving: boolean;
+  /** The last fix at 10 mph or more; 0 for none. */
+  lastFastAt: number;
   /** The first stopped fix's time; 0 = not stopped. */
   stopStart: number;
-  stopLat: number;
-  stopLng: number;
-  /** The reminder is up and the session watches for the car moving on. */
-  watching: boolean;
-  postedAt: number;
 }
 
 export interface Fix {
@@ -606,64 +603,37 @@ export interface Fix {
   speed: number;
   /** m/s; negative = unknown */
   speedAcc: number;
-  /** horizontal accuracy, m; negative = unknown */
-  hAcc: number;
-  lat: number;
-  lng: number;
 }
 
-export type FixVerdict = 'none' | 'stopped' | 'no-drive' | 'session-max' | 'driving' | 'moved' | 'ttl';
+export type FixVerdict = 'none' | 'stopped' | 'no-drive' | 'look-max';
 
-export function newTracker(now: number): SessionTracker {
-  return { startedAt: now, seekSince: now, sawDriving: false, stopStart: 0, stopLat: 0, stopLng: 0, watching: false, postedAt: 0 };
+export function newLook(now: number): LookTracker {
+  return { startedAt: now, seekSince: now, sawDriving: false, lastFastAt: 0, stopStart: 0 };
 }
 
 /** Back to looking for the next stop: 10 mph must be seen again first. */
-export function seekAgain(tr: SessionTracker, now: number): SessionTracker {
-  return { ...tr, seekSince: now, sawDriving: false, stopStart: 0, watching: false, postedAt: 0 };
+export function seekAgain(tr: LookTracker, now: number): LookTracker {
+  return { ...tr, seekSince: now, sawDriving: false, stopStart: 0 };
 }
 
-/** The reminder went up: watch for the car moving on. */
-export function watchFrom(tr: SessionTracker, now: number): SessionTracker {
-  return { ...tr, watching: true, postedAt: now };
-}
-
-/** The session's clocks: 5 min while watching; 10 min, or 3 min without 10 mph, while looking. */
-export function sessionClock(tr: SessionTracker, now: number): FixVerdict {
-  if (tr.watching) return now - tr.postedAt >= R.TTL_MS ? 'ttl' : 'none';
-  if (now - tr.startedAt >= R.IOS_SESSION_MAX_MS) return 'session-max';
-  if (!tr.sawDriving && now - tr.seekSince >= R.IOS_SESSION_NO_DRIVE_MS) return 'no-drive';
+/** The look's clocks: 10 min at most; 3 min without 10 mph ends it. */
+export function lookClock(tr: LookTracker, now: number): FixVerdict {
+  if (now - tr.startedAt >= R.IOS_LOOK_MAX_MS) return 'look-max';
+  if (!tr.sawDriving && now - tr.seekSince >= R.IOS_LOOK_NO_DRIVE_MS) return 'no-drive';
   return 'none';
 }
 
-/** Metres between two points (equirectangular; exact enough at tens of metres). */
-export function metres(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const rad = Math.PI / 180;
-  const x = (lng2 - lng1) * rad * Math.cos(((lat1 + lat2) / 2) * rad);
-  const y = (lat2 - lat1) * rad;
-  return Math.sqrt(x * x + y * y) * 6_371_008.8;
-}
-
-/**
- * One GPS fix. Looking: 10 mph first, then under 3 mph held 12 s is a stop (a fix with no usable
- * speed neither makes nor breaks the hold). Watching: over 5 mph, or 30 m from the stop by a fix
- * accurate to 20 m, ends it.
- */
-export function onFix(tr0: SessionTracker, fix: Fix, now: number): { tracker: SessionTracker; verdict: FixVerdict } {
+/** One GPS fix: 10 mph first, then under 3 mph held 12 s is a stop (a fix with no usable speed neither makes nor breaks the hold). */
+export function onFix(tr0: LookTracker, fix: Fix, now: number): { tracker: LookTracker; verdict: FixVerdict } {
   const tr = { ...tr0 };
-  const clock = sessionClock(tr, now);
+  const clock = lookClock(tr, now);
   if (clock !== 'none') return { tracker: tr, verdict: clock };
   const valid = fix.speed >= 0 && fix.speedAcc >= 0 && fix.speedAcc <= R.SPEED_ACC_MAX_MPS;
-  if (tr.watching) {
-    if (valid && fix.speed > R.MOVE_MPS) return { tracker: tr, verdict: 'driving' };
-    const placed = fix.hAcc >= 0 && fix.hAcc <= R.FIX_ACC_MAX_M;
-    if (placed && metres(tr.stopLat, tr.stopLng, fix.lat, fix.lng) > R.MOVED_AWAY_M) return { tracker: tr, verdict: 'moved' };
-    return { tracker: tr, verdict: 'none' };
-  }
   if (!valid) return { tracker: tr, verdict: 'none' };
   if (fix.speed >= R.IOS_DRIVING_MPS) {
     tr.sawDriving = true;
     tr.stopStart = 0;
+    tr.lastFastAt = Math.max(tr.lastFastAt, fix.t);
     return { tracker: tr, verdict: 'none' };
   }
   if (!tr.sawDriving) return { tracker: tr, verdict: 'none' };
@@ -671,68 +641,45 @@ export function onFix(tr0: SessionTracker, fix: Fix, now: number): { tracker: Se
     tr.stopStart = 0;
     return { tracker: tr, verdict: 'none' };
   }
-  if (tr.stopStart === 0) {
-    tr.stopStart = fix.t;
-    tr.stopLat = fix.lat;
-    tr.stopLng = fix.lng;
-  }
+  if (tr.stopStart === 0) tr.stopStart = fix.t;
   return { tracker: tr, verdict: fix.t - tr.stopStart >= R.STOP_HOLD_MS ? 'stopped' : 'none' };
+}
+
+/** A look's last 10 mph fix is a driving moment. */
+function foldFast(s: ReminderState, lastFastAt: number): ReminderState {
+  const x = s.session;
+  if (!x || lastFastAt <= x.lastDrivingAt) return s;
+  const c = clone(s);
+  c.session!.lastDrivingAt = lastFastAt;
+  return c;
 }
 
 export interface StopResult {
   state: ReminderState;
-  /** post; arrival (walked off: no post, session ends); seek (look for the next stop); end */
-  effect: 'post' | 'arrival' | 'seek' | 'end';
+  /** post; arrival (walked off: no post, the session goes on); end (no post). Every outcome ends the look. */
+  effect: 'post' | 'arrival' | 'end';
   reason: GateReason;
 }
 
-/** A held stop. Walking during the hold is an arrival; a stop too early in the trip or during a call waits for the next one. */
-export function onStop(s0: ReminderState, ctx: ReminderCtx, now: number, walked: boolean): StopResult {
-  const s = clone(s0);
-  if (walked) {
-    if (s.trip) {
-      s.trip.inVehicle = false;
-      s.trip.lastVehicleAt = now;
-    }
-    return { state: s, effect: 'arrival', reason: 'on-foot' };
+/** A held stop after its checks. The look saw 10 mph (`lastFastAt`), with no drive open: driving speed. */
+export function onStop(s0: ReminderState, ctx: ReminderCtx, now: number, walked: boolean, token: string, lastFastAt: number): StopResult {
+  let s = endIfOver(foldFast(s0, lastFastAt), now, ctx.capturing);
+  if (walked) return { state: s, effect: 'arrival', reason: 'on-foot' };
+  if (s.session && lastFastAt > s.lastDriveEndAt && !ctx.capturing) {
+    s = clone(s);
+    s.session!.drove = true;
   }
   const reason = gate(s, { ...ctx, eventAgeMs: 0, onFoot: false }, now, 'stop');
-  if (reason === 'ok') {
-    postedIn(s, now);
-    return { state: s, effect: 'post', reason };
-  }
-  return { state: s, effect: reason === 'too-soon' || reason === 'in-call' ? 'seek' : 'end', reason };
+  if (reason === 'ok') return { state: posted(s, now, token), effect: 'post', reason };
+  return { state: s, effect: 'end', reason };
 }
 
-/** How a showing iOS reminder ended: the car drove on, the driver walked off, 5 min passed, or the session was cut short. */
-export type WatchEnd = 'driving' | 'arrival' | 'ttl' | 'ended';
+export type LookEnd = FixVerdict | 'ended';
 
-/**
- * The session always ends here. Driven on within 20 s is unseen: no miss, and the trip may take one
- * more reminder, but only an hour after this one, which is past this session's 5 min watch, so only
- * a later GPS session of the trip can post it. Walking off ends the trip's car time; the post still
- * waits for its outcome.
- */
-export function onWatchEnd(s0: ReminderState, how: WatchEnd, now: number): ReminderState {
-  const s = clone(s0);
-  s.showing = false;
-  if (how === 'driving' && now - s.postedAt < R.UNSEEN_MS) {
-    resolveIn(s, 'unseen', now);
-    return s;
-  }
-  if (how === 'arrival') {
-    if (s.trip) {
-      s.trip.inVehicle = false;
-      s.trip.lastVehicleAt = now;
-    }
-  }
-  return s;
-}
-
-/** A GPS session ended: the next one waits IOS_SESSION_SPACING_MS. */
-export function sessionEnded(s0: ReminderState, now: number): ReminderState {
-  const s = clone(s0);
-  if (s.trip) s.trip.lastSessionEndAt = now;
+/** A look ended: its last 10 mph fix folds in; one that ran its full 10 min rests the next for 10 min. */
+export function lookEnded(s0: ReminderState, now: number, lastFastAt: number, verdict: LookEnd): ReminderState {
+  const s = clone(foldFast(s0, lastFastAt));
+  if (verdict === 'look-max') s.lookRestUntil = now + R.IOS_LOOK_REST_MS;
   return s;
 }
 
@@ -742,20 +689,15 @@ export type TripReminderMissing = 'motion' | 'notifications' | 'locationAlways' 
 
 export interface TripReminderStatus {
   enabled: boolean;
-  state: 'off' | 'on' | 'needs' | 'paused' | 'unavailable';
-  /** Off because nine reminders in a row went unused. */
-  autoOff: boolean;
+  state: 'off' | 'on' | 'needs' | 'unavailable';
   /** What is missing; only for `needs`. */
   missing: TripReminderMissing[];
-  /** Only for `paused`. */
-  pausedUntil: number | null;
 }
 
-export function statusOf(s: ReminderState, now: number, available: boolean, missing: readonly TripReminderMissing[]): TripReminderStatus {
-  const base = { enabled: s.enabled, autoOff: s.autoOff, missing: [] as TripReminderMissing[], pausedUntil: null };
+export function statusOf(s: ReminderState, available: boolean, missing: readonly TripReminderMissing[]): TripReminderStatus {
+  const base = { enabled: s.enabled, missing: [] as TripReminderMissing[] };
   if (!available) return { ...base, state: 'unavailable' };
   if (!s.enabled) return { ...base, state: 'off' };
   if (missing.length > 0) return { ...base, state: 'needs', missing: [...missing] };
-  if (now < s.pausedUntil) return { ...base, state: 'paused', pausedUntil: s.pausedUntil };
   return { ...base, state: 'on' };
 }

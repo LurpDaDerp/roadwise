@@ -47,15 +47,19 @@ describe('the reminder self-test', () => {
 
   test('the matcher catches a drift of every row kind', () => {
     const first = (kind: ReminderVector['kind']) => REMINDER_VECTORS.find((v) => v.kind === kind)!;
+    const flip = (x: unknown) => !(x as boolean);
     const drifted: Record<ReminderVector['kind'], (a: ReminderActual) => ReminderActual> = {
       gate: (a) => ({ ...a, reason: 'ok-ish' }),
-      ops: (a) => ({ ...a, state: { ...(a.state as object), pendingAt: -1 } }),
+      ops: (a) => ({ ...a, state: { ...(a.state as object), token: 'drifted', session: null, enabled: !(a.state as { enabled: boolean }).enabled } }),
+      tap: (a) => ({ ...a, delivered: (a.delivered as boolean[]).map(flip) }),
+      claim: (a) => ({ ...a, ok: flip(a.ok) }),
       transitions: (a) => ({ ...a, effect: a.effect === 'post' ? 'none' : 'post' }),
-      wake: (a) => ({ ...a, reason: 'paused' }),
+      expires: (a) => ({ ...a, expiresAt: (a.expiresAt as number) + 1 }),
+      wake: (a) => ({ ...a, reason: 'resting-ish' }),
       summary: (a) => ({ summary: { ...(a.summary as object), onFootNow: !(a.summary as { onFootNow: boolean }).onFootNow } }),
-      fixes: (a) => ({ verdicts: [...(a.verdicts as string[]), 'none'] }),
+      fixes: (a) => ({ ...a, verdicts: [...(a.verdicts as string[]), 'none'] }),
       stop: (a) => ({ ...a, effect: 'end' === a.effect ? 'post' : 'end' }),
-      watchEnd: (a) => ({ ...a, state: { ...(a.state as object), showing: true } }),
+      stored: (a) => ({ ...a, state: { ...(a.state as object), v: 2 } }),
     };
     for (const kind of Object.keys(drifted) as ReminderVector['kind'][]) {
       const v = first(kind);
@@ -64,11 +68,18 @@ describe('the reminder self-test', () => {
     }
   });
 
-  test('null and missing match (Kotlin writes null, Swift leaves a nil trip out)', () => {
-    const v = REMINDER_VECTORS.find((r) => r.kind === 'wake' && r.expected.trip === null)!;
+  test('null and missing match (Kotlin writes null, Swift leaves a nil session out)', () => {
+    const v = REMINDER_VECTORS.find((r) => r.kind === 'wake' && r.expected.state?.session === null)!;
     const actual = runReminderRow(v) as { state: Record<string, unknown> };
-    const { trip: _trip, ...noTrip } = actual.state;
-    expect(matchReminderRow(v, { ...actual, state: noTrip })).toEqual([]);
+    const { session: _session, ...noSession } = actual.state;
+    expect(matchReminderRow(v, { ...actual, state: noSession })).toEqual([]);
+  });
+
+  test('a claim row checks its state only when it names one, and a transitions row its timeout only when it names one', () => {
+    const claimRow = REMINDER_VECTORS.find((r) => r.kind === 'claim' && r.expected.state === undefined)!;
+    expect(matchReminderRow(claimRow, { ok: (runReminderRow(claimRow) as { ok: boolean }).ok })).toEqual([]);
+    const tr = REMINDER_VECTORS.find((r) => r.kind === 'transitions' && r.expected.expiresAt !== undefined)!;
+    expect(matchReminderRow(tr, { ...runReminderRow(tr), expiresAt: 1 }).map((m) => m.path)).toEqual(['expiresAt']);
   });
 
   test.each(['android', 'ios'] as const)('%s: the reference with the other platform skipped passes', (platform) => {
@@ -79,16 +90,28 @@ describe('the reminder self-test', () => {
     expect(diff.results.some((r) => r.skipped)).toBe(true);
   });
 
-  test('each platform runs its own rules: Android the stop gate, the shared ops and the batch; iOS everything else', () => {
+  test('each platform runs its own rules: Android the stop gate, the shared ops, the hand-over, its claim, the batch, the timeout; iOS the gates, the shared ops, its claim, the wake, the look and the stop', () => {
     const runs = (p: string) => REMINDER_VECTORS.filter((v) => reminderRowRunsOn(v, p)).map((v) => v.kind);
-    expect(new Set(runs('android'))).toEqual(new Set(['gate', 'ops', 'transitions']));
-    expect(new Set(runs('ios'))).toEqual(new Set(['gate', 'ops', 'wake', 'summary', 'fixes', 'stop', 'watchEnd']));
+    expect(new Set(runs('android'))).toEqual(new Set(['gate', 'ops', 'tap', 'claim', 'transitions', 'expires', 'stored']));
+    expect(new Set(runs('ios'))).toEqual(new Set(['gate', 'ops', 'claim', 'wake', 'summary', 'fixes', 'stop', 'stored']));
+    for (const v of REMINDER_VECTORS) {
+      if (v.kind === 'gate') expect({ v: v.name, android: reminderRowRunsOn(v, 'android') }).toEqual({ v: v.name, android: v.phase === 'stop' });
+      if (v.kind === 'claim') {
+        expect({ v: v.name, android: reminderRowRunsOn(v, 'android'), ios: reminderRowRunsOn(v, 'ios') }).toEqual({ v: v.name, android: v.requireDelivery, ios: !v.requireDelivery });
+        if (v.requireDelivery) expect(v.motion).toBeNull();
+      }
+      if (v.kind === 'ops') {
+        const android = v.ops.every((o) => o.op !== 'lookEnded');
+        const ios = v.ops.every((o) => o.op !== 'captureTransitions');
+        expect({ v: v.name, android: reminderRowRunsOn(v, 'android'), ios: reminderRowRunsOn(v, 'ios') }).toEqual({ v: v.name, android, ios });
+      }
+    }
     // every row runs somewhere
     for (const v of REMINDER_VECTORS) expect({ v: v.name, runs: reminderRowRunsOn(v, 'android') || reminderRowRunsOn(v, 'ios') }).toEqual({ v: v.name, runs: true });
   });
 
   test('a drifted answer, a wrong skip, a missing row, an error and unusable output all fail', () => {
-    const name = 'android: [EXIT, STILL] in one batch posts';
+    const name = 'android: [EXIT, STILL] in a driven session posts, the note timing out at the session end';
     const drift = diffReminderSelfTest(REMINDER_VECTORS, nativeOutput('android', (n, r) => (n === name ? { ...r, actual: { ...(r.actual as object), effect: 'none' } } : r)));
     expect(drift.ok).toBe(false);
     expect(drift.results.find((r) => r.name === name)).toMatchObject({ ok: false, mismatches: [{ path: 'effect', expected: 'post', actual: 'none' }] });

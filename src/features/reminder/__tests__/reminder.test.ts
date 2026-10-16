@@ -8,15 +8,13 @@ import { createFakeDriveSense, type TripReminderStatus } from '@drive-sense';
 import { fakeAdapter, snap } from '@/features/permissions/__fixtures__/harness';
 
 import { reminderCopy } from '../copy';
-import { readReminderStatus, resumeReminder, turnOffReminder, turnOnReminder } from '../enable';
-import { pausedDay, reminderLine } from '../line';
+import { readReminderStatus, turnOffReminder, turnOnReminder } from '../enable';
+import { reminderLine } from '../line';
 
 const status = (over: Partial<TripReminderStatus> = {}): TripReminderStatus => ({
   enabled: true,
   state: 'on',
-  autoOff: false,
   missing: [],
-  pausedUntil: null,
   ...over,
 });
 
@@ -75,9 +73,9 @@ describe('turnOnReminder', () => {
     await expect(turnOnReminder(adapter, native)).resolves.toMatchObject({ enabled: true });
   });
 
-  test('off, resume and read go straight to native', async () => {
+  test('off and read go straight to native', async () => {
     const native = createFakeDriveSense({ platform: 'android' });
-    await resumeReminder(native);
+    await native.setTripReminder(true);
     await expect(readReminderStatus(native)).resolves.toMatchObject({ state: 'on' });
     await expect(turnOffReminder(native)).resolves.toMatchObject({ enabled: false, state: 'off' });
     expect(native.calls).toEqual(['setTripReminder:true', 'setTripReminder:false']);
@@ -89,7 +87,6 @@ describe('the Settings line', () => {
   const L = reminderCopy.lines;
   test.each([
     ['off', status({ enabled: false, state: 'off' }), 'android', L.off, null],
-    ['off after nine unused', status({ enabled: false, state: 'off', autoOff: true }), 'ios', L.autoOff, null],
     ['on, Android', status(), 'android', L.onAndroid, null],
     ['on, iPhone', status(), 'ios', L.onIos, null],
     ['unavailable', status({ enabled: false, state: 'unavailable' }), 'android', L.unavailable, null],
@@ -112,13 +109,6 @@ describe('the Settings line', () => {
     expect(reminderLine(status({ state: 'needs', missing: ['notifications', 'locationAlways'] }), 'ios').text).toBe(L.needsAlways);
     expect(reminderLine(status({ state: 'needs', missing: ['notifications', 'locationPrecise'] }), 'ios').text).toBe(L.needsPrecise);
     expect(reminderLine(status({ state: 'needs', missing: ['notifications'] }), 'ios').text).toBe(L.needsIosNotifications);
-  });
-
-  test('paused: until when, and Resume now', () => {
-    const until = Date.UTC(2026, 9, 22, 18, 0, 0);
-    const line = reminderLine(status({ state: 'paused', pausedUntil: until }), 'android');
-    expect(line).toEqual({ text: `Paused until ${pausedDay(until)}: the last 3 reminders went unused.`, action: 'resume', disabled: false });
-    expect(pausedDay(until)).toBe('Thu, Oct 22');
   });
 
   test('the unavailable switch is disabled', () => {

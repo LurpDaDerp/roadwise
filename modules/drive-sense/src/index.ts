@@ -33,7 +33,7 @@ export type { SelfTestDiff, VectorDiff, Mismatch } from './selfTest';
 export { extractSecond, initialExtractState } from './extract/extract';
 export { gravityFilter, initialGravityState, androidAccelToReference } from './extract/gravityFilter';
 export { runSelfTest, runVector } from './extract/vectors';
-export { PAUSE_DAYS, REMINDER } from './reminder/policy';
+export { REMINDER } from './reminder/policy';
 export {
   diffReminderSelfTest,
   matchReminderRow,

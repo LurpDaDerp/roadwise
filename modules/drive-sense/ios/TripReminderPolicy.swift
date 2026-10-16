@@ -1,289 +1,222 @@
 // The forgot-to-start reminder's policy on iOS: the Swift mirror of `src/reminder/policy.ts` (the
-// shared rules and the wake, fix and stop rules), under the same names with the same values
-// (`__tests__/native-ios.test.ts` compares the constants). Pure: Foundation only, no clock, no I/O.
-// `TripReminder` reads the phone and does what the result says. Nothing here starts a capture.
-// The wake, fix and stop rules are in TripReminderWakePolicy.swift.
+// shared rules and the claim; the wake, look and stop rules are in TripReminderWakePolicy.swift),
+// under the same names with the same values (`__tests__/native-ios.test.ts` compares the
+// constants). Pure: Foundation only, no clock, no I/O. `TripReminder` reads the phone and does
+// what the result says.
+//
+// The rule is the session: a stretch of driving that ends 30 min after its last driving moment (an
+// open drive counts as driving). At most one reminder a session, at a stop, after 10 mph with no
+// drive open, never while a drive is open. iOS has no vehicle state: `inVehicle` stays false. Nothing
+// here starts a capture: a tap's token is only ever claimed, and JS starts the drive.
 import Foundation
 
-struct ReminderTrip: Codable, Equatable {
+struct ReminderSession: Codable, Equatable {
   var startedAt: Double
-  var lastVehicleAt: Double
-  var inVehicle: Bool = true
-  var vehicleExitAt: Double = 0
-  var recorded: Bool = false
-  var reminded: Bool = false
-  var retries: Int = 0
-  var sessions: Int = 0
-  var lastSessionEndAt: Double = 0
+  var lastDrivingAt: Double
+  /// Android's (the lost-exit rule); kept so the stored shape is the reference's.
+  var lastNewsAt: Double
+  /// Android's; always false on iOS.
+  var inVehicle: Bool
+  var vehicleExitAt: Double
+  var drove: Bool
+  var reminded: Bool
 }
 
 struct ReminderState: Codable, Equatable {
-  var v: Int = 2
-  var enabled: Bool = false
-  var autoOff: Bool = false
-  var trip: ReminderTrip? = nil
-  var lastCaptureEndAt: Double = 0
-  var posts: [Double] = []
-  var pendingAt: Double = 0
+  var v: Int = 3
+  var enabled = false
+  var session: ReminderSession? = nil
+  var lastDriveEndAt: Double = 0
+  /// The one-use token of the note that is up; "" = no note.
+  var token = ""
   var postedAt: Double = 0
-  var showing: Bool = false
-  var missStreak: Int = 0
-  var pauseLevel: Int = 0
-  var pausedUntil: Double = 0
-  var quietUntil: Double = 0
-  var notDrivingUntil: Double = 0
+  /// Android's; kept so the stored shape is the reference's.
+  var tapSeen: [String] = []
+  var tapAt: Double = 0
+  /// No GPS look before this (after a look that ran its full 10 min).
+  var lookRestUntil: Double = 0
 }
 
 /// What the phone says at the moment of a decision.
 struct ReminderCtx {
   var permissionsOk = false
   var capturing = false
-  var appForeground = false
-  var inCall = false
-  var lowPower = false
   var eventAgeMs: Double = 0
   var onFoot = false
   var automotiveAgeMs: Double = 0
 }
 
-struct MotionSummary {
-  var lastAutomotiveAt: Double
-  var automotiveSince: Double
-  var onFootNow: Bool
-}
-
-struct ActivitySample {
-  var start: Double
-  var automotive: Bool
-  /// walking, running or cycling (the wake's "on foot now")
-  var onFoot: Bool
-  /// walking or running only (the stop hold's and the watch's "walked off")
-  var walking: Bool
-  var confident: Bool
-}
-
-struct ReminderFix {
-  var t: Double
-  var speed: Double
-  var speedAcc: Double
-  /// horizontal accuracy, m; negative = unknown
-  var hAcc: Double
-  var lat: Double
-  var lng: Double
-}
-
-struct SessionTracker {
-  var startedAt: Double
-  var seekSince: Double
-  var sawDriving = false
-  var stopStart: Double = 0
-  var stopLat: Double = 0
-  var stopLng: Double = 0
-  var watching = false
-  var postedAt: Double = 0
-}
-
 enum TripReminderPolicy {
   static let STOP_MPS: Double = 1.34
-  static let MOVE_MPS: Double = 2.24
   static let IOS_DRIVING_MPS: Double = 4.47
   static let SPEED_ACC_MAX_MPS: Double = 2
   static let STOP_HOLD_MS: Double = 12_000
-  static let MOVED_AWAY_M: Double = 30
-  static let FIX_ACC_MAX_M: Double = 20
-  static let WALK_CHECK_MS: Double = 30_000
-  static let UNSEEN_MS: Double = 20_000
-  static let MAX_RETRIES_PER_TRIP: Int = 1
+  static let SESSION_GAP_MS: Double = 1_800_000
+  static let IN_VEHICLE_NOTE_MS: Double = 10_800_000
   static let STILL_AFTER_VEHICLE_MS: Double = 120_000
   static let STALE_EVENT_MS: Double = 45_000
-  static let MIN_IN_VEHICLE_MS: Double = 90_000
-  static let TRIP_GAP_MS: Double = 600_000
-  static let MAX_TRIP_IDLE_MS: Double = 10_800_000
-  static let AFTER_DRIVE_MS: Double = 600_000
-  static let UNUSED_QUIET_MS: Double = 14_400_000
-  static let DAY_MS: Double = 86_400_000
-  static let DAILY_CAP: Int = 2
-  static let POST_SPACING_MS: Double = 3_600_000
-  static let TTL_MS: Double = 300_000
-  static let CONVERT_WINDOW_MS: Double = 1_800_000
-  static let MISS_LIMIT: Int = 3
-  static let NOT_DRIVING_QUIET_MS: Double = 43_200_000
   static let AUTOMOTIVE_FRESH_MS: Double = 120_000
-  static let IOS_MOTION_MIN_LOOKBACK_MS: Double = 600_000
-  static let IOS_MOTION_MAX_LOOKBACK_MS: Double = 10_800_000
-  static let IOS_SESSION_MAX_MS: Double = 600_000
-  static let IOS_SESSION_NO_DRIVE_MS: Double = 180_000
-  static let IOS_SESSIONS_PER_TRIP: Int = 2
-  static let IOS_SESSION_SPACING_MS: Double = 600_000
+  static let IOS_MOTION_LOOKBACK_MS: Double = 10_800_000
+  static let IOS_LOOK_MAX_MS: Double = 600_000
+  static let IOS_LOOK_NO_DRIVE_MS: Double = 180_000
+  static let IOS_LOOK_REST_MS: Double = 600_000
+  static let TAP_FRESH_MS: Double = 120_000
+  static let TAP_SEEN_MAX: Int = 8
   static let CLOCK_FUTURE_MS: Double = 86_400_000
-  /// The back-off pauses, in days; the step after the last turns the reminder off.
-  static let PAUSE_DAYS: [Double] = [7, 28]
-  private static let maxPauseMs: Double = 28 * DAY_MS
 
-  enum Outcome { case converted, unseen, notDriving, missed }
-  enum Phase { case wake, session, stop }
+  enum Phase { case wake, look, stop }
 
-  static func newTrip(_ startedAt: Double, _ lastVehicleAt: Double) -> ReminderTrip {
-    ReminderTrip(startedAt: startedAt, lastVehicleAt: lastVehicleAt)
+  static func newSession(_ startedAt: Double, _ lastDrivingAt: Double, inVehicle: Bool) -> ReminderSession {
+    ReminderSession(
+      startedAt: startedAt, lastDrivingAt: lastDrivingAt, lastNewsAt: lastDrivingAt,
+      inVehicle: inVehicle, vehicleExitAt: 0, drove: false, reminded: false
+    )
   }
 
-  static func recentPosts(_ s: ReminderState, _ now: Double) -> Int { s.posts.filter { now - $0 < DAY_MS }.count }
-
-  /// policy.ts `tooSoonAfterPost`: a post went up less than an hour before `now`, whatever became of it.
-  static func tooSoonAfterPost(_ s: ReminderState, _ now: Double) -> Bool { s.posts.contains { now - $0 < POST_SPACING_MS } }
-
-  /// policy.ts `settle`.
-  static func settle(_ s0: ReminderState, _ now: Double) -> ReminderState {
+  /// policy.ts `clampTimes`: a stored time more than a day ahead is a clock change.
+  static func clampTimes(_ s0: ReminderState, _ now: Double) -> ReminderState {
     var s = s0
     func past(_ t: Double) -> Double { t > now + CLOCK_FUTURE_MS ? now : t }
-    s.lastCaptureEndAt = past(s.lastCaptureEndAt)
-    s.pendingAt = past(s.pendingAt)
+    s.lastDriveEndAt = past(s.lastDriveEndAt)
     s.postedAt = past(s.postedAt)
-    s.posts = s.posts.map(past).filter { now - $0 < DAY_MS }
-    s.pausedUntil = min(s.pausedUntil, now + maxPauseMs)
-    s.quietUntil = min(s.quietUntil, now + UNUSED_QUIET_MS)
-    s.notDrivingUntil = min(s.notDrivingUntil, now + NOT_DRIVING_QUIET_MS)
-    if s.pausedUntil != 0 && now >= s.pausedUntil { s.pausedUntil = 0 }
-    if s.quietUntil != 0 && now >= s.quietUntil { s.quietUntil = 0 }
-    if s.notDrivingUntil != 0 && now >= s.notDrivingUntil { s.notDrivingUntil = 0 }
-    if var t = s.trip {
-      t.startedAt = past(t.startedAt)
-      t.lastVehicleAt = past(t.lastVehicleAt)
-      t.vehicleExitAt = past(t.vehicleExitAt)
-      t.lastSessionEndAt = past(t.lastSessionEndAt)
-      let idle = now - t.lastVehicleAt
-      s.trip = (!t.inVehicle && idle >= TRIP_GAP_MS) || idle >= MAX_TRIP_IDLE_MS ? nil : t
+    s.tapAt = past(s.tapAt)
+    s.lookRestUntil = past(s.lookRestUntil)
+    if var x = s.session {
+      x.startedAt = past(x.startedAt)
+      x.lastDrivingAt = past(x.lastDrivingAt)
+      x.lastNewsAt = past(x.lastNewsAt)
+      x.vehicleExitAt = past(x.vehicleExitAt)
+      s.session = x
     }
-    if s.showing && now - s.postedAt >= TTL_MS { s.showing = false }
-    if s.pendingAt > 0 && now - s.pendingAt >= CONVERT_WINDOW_MS { resolveIn(&s, .missed, now) }
     return s
   }
 
-  /// policy.ts `gate`: the first reason not to remind now, or "ok".
+  /// policy.ts `endIfOver`: 30 min past the last driving moment, no drive open. The token goes with it.
+  static func endIfOver(_ s0: ReminderState, _ t: Double, _ capturing: Bool) -> ReminderState {
+    guard let x = s0.session, !capturing, !x.inVehicle, t - x.lastDrivingAt >= SESSION_GAP_MS else { return s0 }
+    var s = s0
+    s.session = nil
+    s.token = ""
+    s.tapAt = 0
+    return s
+  }
+
+  /// policy.ts `settle`.
+  static func settle(_ s0: ReminderState, _ now: Double, _ capturing: Bool) -> ReminderState {
+    endIfOver(clampTimes(s0, now), now, capturing)
+  }
+
+  /// policy.ts `gate`: the first reason not to go on, or "ok".
   static func gate(_ s: ReminderState, _ ctx: ReminderCtx, _ now: Double, _ phase: Phase) -> String {
     if !s.enabled { return "off" }
-    if now < s.pausedUntil { return "paused" }
-    if now < max(s.quietUntil, s.notDrivingUntil) { return "quiet" }
     if !ctx.permissionsOk { return "permission" }
     if ctx.capturing { return "capturing" }
-    if phase != .wake {
-      guard let t = s.trip else { return "no-trip" }
-      if t.recorded { return "recorded" }
-      if t.reminded { return "reminded" }
-    }
-    if s.lastCaptureEndAt > 0 && now - s.lastCaptureEndAt < AFTER_DRIVE_MS { return "after-drive" }
-    if recentPosts(s, now) >= DAILY_CAP { return "daily-cap" }
-    if tooSoonAfterPost(s, now) { return "spacing" }
-    if phase == .wake {
-      if ctx.lowPower { return "low-power" }
-      if ctx.appForeground { return "foreground" }
+    if phase == .wake { return "ok" }
+    guard let x = s.session else { return "no-session" }
+    if x.reminded { return "reminded" }
+    if phase == .look {
+      if now < s.lookRestUntil { return "resting" }
+      if ctx.automotiveAgeMs > AUTOMOTIVE_FRESH_MS || ctx.onFoot { return "not-fresh" }
       return "ok"
     }
-    guard let t = s.trip else { return "no-trip" }
-    if phase == .session {
-      if ctx.lowPower { return "low-power" }
-      if t.sessions >= IOS_SESSIONS_PER_TRIP { return "sessions" }
-      if t.lastSessionEndAt > 0 && now - t.lastSessionEndAt < IOS_SESSION_SPACING_MS { return "sessions" }
-      if ctx.appForeground { return "foreground" }
-      if ctx.automotiveAgeMs > AUTOMOTIVE_FRESH_MS { return "not-fresh" }
-      return "ok"
-    }
-    if now - t.startedAt < MIN_IN_VEHICLE_MS { return "too-soon" }
-    if ctx.appForeground { return "foreground" }
-    if ctx.inCall { return "in-call" }
+    if !x.drove { return "not-driven" }
     if ctx.eventAgeMs > STALE_EVENT_MS { return "stale" }
     if ctx.onFoot { return "on-foot" }
     return "ok"
   }
 
-  static func postedIn(_ s: inout ReminderState, _ now: Double) {
-    s.posts.append(now)
-    s.trip?.reminded = true
-    s.pendingAt = now
-    s.postedAt = now
-    s.showing = true
-    s.quietUntil = now + UNUSED_QUIET_MS
-  }
-
-  private static func missIn(_ s: inout ReminderState, _ now: Double) {
-    s.missStreak += 1
-    if s.missStreak < MISS_LIMIT { return }
-    s.missStreak = 0
-    // A stored level out of range reads as the nearest real one.
-    s.pauseLevel = min(max(s.pauseLevel, 0), PAUSE_DAYS.count)
-    if s.pauseLevel < PAUSE_DAYS.count {
-      s.pausedUntil = now + PAUSE_DAYS[s.pauseLevel] * DAY_MS
-      s.pauseLevel += 1
-    } else {
-      s.enabled = false
-      s.autoOff = true
-      s.pausedUntil = 0
-    }
-  }
-
-  static func resolveIn(_ s: inout ReminderState, _ outcome: Outcome, _ now: Double) {
-    let pending = s.pendingAt > 0
-    s.showing = false
-    s.pendingAt = 0
-    switch outcome {
-    case .converted:
-      s.missStreak = 0
-      s.pauseLevel = 0
-      s.quietUntil = 0
-    case .unseen:
-      s.quietUntil = 0
-      if let t = s.trip, t.retries < MAX_RETRIES_PER_TRIP {
-        s.trip?.retries += 1
-        s.trip?.reminded = false
-      }
-    case .notDriving:
-      // A note whose outcome is already counted (or none waiting) gets the quiet, not a second miss.
-      s.notDrivingUntil = now + NOT_DRIVING_QUIET_MS
-      if pending { missIn(&s, now) }
-    case .missed:
-      missIn(&s, now)
-    }
-  }
-
-  static func resolve(_ s0: ReminderState, _ outcome: Outcome, _ now: Double) -> ReminderState {
+  /// policy.ts `posted`.
+  static func posted(_ s0: ReminderState, _ now: Double, _ token: String) -> ReminderState {
     var s = s0
-    resolveIn(&s, outcome, now)
+    s.session?.reminded = true
+    s.token = token
+    s.postedAt = now
+    s.tapAt = 0
     return s
   }
 
+  /// policy.ts `unposted`: the note with `token` never showed.
+  static func unposted(_ s0: ReminderState, _ token: String) -> ReminderState {
+    guard !token.isEmpty, s0.token == token else { return s0 }
+    var s = s0
+    s.token = ""
+    s.tapAt = 0
+    s.session?.reminded = false
+    return s
+  }
+
+  /// policy.ts `noteGone`: the note came down (a permission it needs went); the session stays reminded.
+  static func noteGone(_ s0: ReminderState) -> ReminderState {
+    var s = s0
+    s.token = ""
+    s.tapAt = 0
+    return s
+  }
+
+  /// policy.ts `claim`: true once, for the note's token, in a live session, no drive open.
+  static func claim(_ s0: ReminderState, _ token: String, _ now: Double, _ capturing: Bool, _ requireDelivery: Bool) -> (state: ReminderState, ok: Bool) {
+    var s = settle(s0, now, capturing)
+    let fresh = !requireDelivery || (s.tapAt > 0 && now - s.tapAt <= TAP_FRESH_MS)
+    let ok = s.enabled && !token.isEmpty && token == s.token && s.session != nil && !capturing && fresh
+    if !ok { return (s, false) }
+    s.token = ""
+    s.tapAt = 0
+    return (s, true)
+  }
+
+  /// policy.ts `captureStarted`.
   static func captureStarted(_ s0: ReminderState, _ now: Double) -> ReminderState {
     var s = s0
-    if s.trip == nil { s.trip = newTrip(now, now) }
-    s.trip?.recorded = true
-    if s.pendingAt > 0 && now - s.pendingAt <= CONVERT_WINDOW_MS { resolveIn(&s, .converted, now) }
-    s.showing = false
+    s.token = ""
+    s.tapAt = 0
+    if var x = s.session {
+      x.drove = false
+      x.lastDrivingAt = max(x.lastDrivingAt, now)
+      x.lastNewsAt = max(x.lastNewsAt, now)
+      s.session = x
+    }
     return s
   }
 
-  static func captureEnded(_ s0: ReminderState, _ now: Double) -> ReminderState {
+  /// policy.ts `captureEnded`: the drive's driving end (never later than now) is the session's last
+  /// driving moment; nil (a drive that was not kept) leaves the clock as it was. A caller with no
+  /// driving end passes `now`.
+  static func captureEnded(_ s0: ReminderState, _ now: Double, _ drivingEndedAt: Double?) -> ReminderState {
     var s = s0
-    s.lastCaptureEndAt = now
-    s.trip?.inVehicle = false
-    s.trip?.lastVehicleAt = now
+    s.lastDriveEndAt = now
+    if var x = s.session {
+      x.drove = false
+      x.lastNewsAt = max(x.lastNewsAt, now)
+      if let end = drivingEndedAt { x.lastDrivingAt = max(x.lastDrivingAt, min(now, end)) }
+      s.session = x
+    }
     return s
   }
 
-  static func appForeground(_ s0: ReminderState) -> ReminderState {
-    var s = s0
-    s.showing = false
-    return s
-  }
-
+  /// policy.ts `setEnabled`: on keeps the session; off forgets everything.
   static func setEnabled(_ s0: ReminderState, _ on: Bool) -> ReminderState {
     if !on { return ReminderState() }
     var s = s0
     s.enabled = true
-    s.autoOff = false
-    s.pausedUntil = 0
-    s.missStreak = 0
-    s.pauseLevel = 0
-    s.quietUntil = 0
-    s.notDrivingUntil = 0
+    return s
+  }
+
+  private struct StoredVersion: Decodable {
+    var v: Int?
+    var enabled: Bool?
+  }
+
+  /// policy.ts `fromStored`: v3 as it is; v2 (the reminder before sessions) keeps only its switch;
+  /// anything else is off.
+  static func fromStored(_ data: Data) -> ReminderState {
+    guard let probe = try? JSONDecoder().decode(StoredVersion.self, from: data) else { return ReminderState() }
+    if probe.v == 2 {
+      var s = ReminderState()
+      s.enabled = probe.enabled ?? false
+      return s
+    }
+    guard probe.v == 3, var s = try? JSONDecoder().decode(ReminderState.self, from: data), s.v == 3 else { return ReminderState() }
+    if s.tapSeen.count > TAP_SEEN_MAX { s.tapSeen = Array(s.tapSeen.suffix(TAP_SEEN_MAX)) }
     return s
   }
 }

@@ -206,12 +206,12 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     setTripReminder(enabled: boolean) {
       command('setTripReminder', String(enabled));
       reminder = setEnabled(reminder, enabled);
-      return resolve(statusOf(reminder, now(), reminderAvailable, reminderMissing));
+      return resolve(statusOf(reminder, reminderAvailable, reminderMissing));
     },
     getTripReminderStatus() {
       query('getTripReminderStatus');
-      reminder = settle(reminder, now());
-      return resolve(statusOf(reminder, now(), reminderAvailable, reminderMissing));
+      reminder = settle(reminder, now(), state.capturing);
+      return resolve(statusOf(reminder, reminderAvailable, reminderMissing));
     },
     requestReminderLocation() {
       command('requestReminderLocation');

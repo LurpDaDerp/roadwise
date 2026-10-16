@@ -44,7 +44,7 @@ jest.mock('@/features/drive/summaryNotifier', () => ({
   }),
 }));
 // The forgot-to-start reminder goes off at sign-out (no native module here: a stand-in).
-const mockReminderOff = jest.fn(async () => ({ enabled: false, state: 'off', autoOff: false, missing: [], pausedUntil: null }));
+const mockReminderOff = jest.fn(async () => ({ enabled: false, state: 'off', missing: [] }));
 jest.mock('@/features/reminder/enable', () => ({ turnOffReminder: () => mockReminderOff() }));
 jest.mock('@/data/supabase/profile', () => ({
   fetchProfile: jest.fn((userId: string) => new Promise((resolve, reject) => {

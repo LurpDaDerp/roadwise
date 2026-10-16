@@ -5,7 +5,7 @@
 // copy. The forgot-to-start reminder is held to "it only notifies" and to its policy mirror.
 // Behaviour is proven by the device build.
 import * as CONSTANTS from '../src/extract/constants';
-import { PAUSE_DAYS, REMINDER } from '../src/reminder/policy';
+import { REMINDER } from '../src/reminder/policy';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
 import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS } from '../src/types';
@@ -402,28 +402,29 @@ describe('iOS forgot-to-start reminder (text)', () => {
       [...src.matchAll(/static let ([A-Z][A-Z0-9_]*)(?:\s*:\s*\w+)?\s*=\s*([\d_.]+)/g)].map((m) => [m[1]!, Number(m[2]!.replace(/_/g, ''))] as const)
     );
     for (const [name, value] of Object.entries(REMINDER)) expect({ name, value: declared.get(name) }).toEqual({ name, value });
-    expect(src).toContain(`static let PAUSE_DAYS: [Double] = [${PAUSE_DAYS.join(', ')}]`);
-    const order = ['off', 'paused', 'quiet', 'permission', 'capturing', 'no-trip', 'recorded', 'reminded', 'after-drive', 'daily-cap', 'spacing'];
+    expect([...declared.keys()].sort()).toEqual(Object.keys(REMINDER).sort());
     const gate = /static func gate\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
-    const at = order.map((r) => gate.indexOf(`"${r}"`));
-    expect(at.every((i) => i > 0)).toBe(true);
-    expect([...at].sort((x, y) => x - y)).toEqual(at);
-    const stop = gate.slice(gate.indexOf('"too-soon"'));
-    const stopOrder = ['too-soon', 'foreground', 'in-call', 'stale', 'on-foot'].map((r) => stop.indexOf(`"${r}"`));
-    expect([...stopOrder].sort((x, y) => x - y)).toEqual(stopOrder);
-    // An hour between posts, whatever became of the last.
-    expect(src).toMatch(/static func tooSoonAfterPost\(_ s: ReminderState, _ now: Double\) -> Bool \{ s\.posts\.contains \{ now - \$0 < POST_SPACING_MS \} \}/);
-    expect(gate).toMatch(/return "daily-cap" \}\s*if tooSoonAfterPost\(s, now\) \{ return "spacing" \}/);
+    const inOrder = (order: string[]) => {
+      const at = order.map((r) => gate.indexOf(`"${r}"`));
+      expect({ order, found: at.every((i) => i > 0) }).toEqual({ order, found: true });
+      expect([...at].sort((x, y) => x - y)).toEqual(at);
+    };
+    // the stop gate and the look gate, in the reference's order; no limit besides the session rule
+    inOrder(['off', 'permission', 'capturing', 'no-session', 'reminded', 'not-driven', 'stale', 'on-foot']);
+    inOrder(['off', 'permission', 'capturing', 'no-session', 'reminded', 'resting', 'not-fresh']);
+    const both = src + code('TripReminderWakePolicy.swift');
+    expect(both).not.toMatch(/PAUSE_DAYS|DAILY_CAP|POST_SPACING|TTL_MS|UNUSED_QUIET|NOT_DRIVING|MIN_IN_VEHICLE|AFTER_DRIVE|lowPower|inCall|appForeground|"too-soon"|"foreground"|"in-call"|"paused"|"quiet"|"sessions"/);
+    // iOS has no vehicle state: nothing in the policy ever puts a session in the vehicle
+    for (const f of ['TripReminderPolicy.swift', 'TripReminderWakePolicy.swift']) {
+      expect({ f, sets: /inVehicle = true|inVehicle: true/.test(code(f)) }).toEqual({ f, sets: false });
+    }
+    expect(code('TripReminderWakePolicy.swift')).toContain('newSession(m.automotiveSince > 0 ? m.automotiveSince : a, a, inVehicle: false)');
+    // a car standing still is no car motion; only 30 min without it starts a new run
+    expect(code('TripReminderWakePolicy.swift')).toMatch(/if a\.automotive && !a\.stationary && a\.confident \{/);
+    // the stored state: v3; a v2 keeps only its switch
+    expect(src).toMatch(/if probe\.v == 2 \{\s*var s = ReminderState\(\)\s*s\.enabled = probe\.enabled \?\? false\s*return s\s*\}/);
   });
 
-  it('the session always ends when the watch ends: an unseen retry is an hour on at the soonest, so only a later session takes it', () => {
-    expect(code('TripReminderWakePolicy.swift')).toMatch(
-      /static func onWatchEnd\(_ s0: ReminderState, _ how: String, _ now: Double\) -> ReminderState \{[\s\S]*?resolveIn\(&s, \.unseen, now\)\s*return s\s*\}/
-    );
-    const watchEnded = /private func watchEnded\(_ how: String\) \{[\s\S]*?\n {2}\}/.exec(code('TripReminderSession.swift'))?.[0] ?? '';
-    expect(watchEnded).toMatch(/TripReminderNotifier\.remove\(\)\s*if tracker != nil, let s0 = loadState\(\) \{ saveState\(TripReminderPolicy\.onWatchEnd\(s0, how, Self\.nowMs\(\)\)\) \}\s*endSession\(\)\s*\}$/);
-    expect(watchEnded).not.toContain('seekAgain');
-  });
 });
 
 describe('iOS forgot-to-start reminder: one post, a stored state never overwritten by a missing read, bounded checks', () => {
@@ -481,11 +482,16 @@ describe('iOS forgot-to-start reminder: one post, a stored state never overwritt
   it('SelfTest hands each reminder row to TripReminderSelfTest, which runs the production policy for every iOS row kind', () => {
     expect(code('SelfTest.swift')).toMatch(/case "reminder":\s*results\.append\(TripReminderSelfTest\.result\(name, v\?\["inputs"\]\)\)/);
     const st = code('TripReminderSelfTest.swift');
-    for (const call of ['gate(', 'settle(', 'postedIn(', 'resolve(', 'captureStarted(', 'captureEnded(', 'appForeground(', 'setEnabled(', 'sessionEnded(', 'onWake(', 'summarize(', 'onFix(', 'onStop(', 'onWatchEnd(']) {
+    for (const call of ['gate(', 'settle(', 'posted(', 'unposted(', 'noteGone(', 'claim(', 'captureStarted(', 'captureEnded(', 'setEnabled(', 'lookEnded(', 'onWake(', 'summarize(', 'onFix(', 'onStop(', 'foldMotion(', 'fromStored(']) {
       expect({ call, used: st.includes(`TripReminderPolicy.${call}`) }).toEqual({ call, used: true });
     }
-    for (const kind of ['gate', 'ops', 'wake', 'summary', 'fixes', 'stop', 'watchEnd']) expect(st).toContain(`case "${kind}":`);
-    expect(st).toMatch(/if kind == "transitions" \{\s*out\["skipped"\]/);
+    for (const kind of ['gate', 'ops', 'claim', 'wake', 'summary', 'fixes', 'stop', 'stored']) expect(st).toContain(`case "${kind}":`);
+    // the same rows the JS diff expects iOS to skip
+    expect(st).toMatch(/case "tap", "transitions", "expires":\s*return "an Android rule"/);
+    expect(st).toMatch(/jsonBool\(row\["requireDelivery"\]\) == true \? "the hand-over check is Android's" : nil/);
+    expect(st).toMatch(/== "captureTransitions" \} \? "a capture batch is an Android rule" : nil/);
+    // the iOS claim: the motion history first, never the hand-over check
+    expect(st).toMatch(/TripReminderPolicy\.claim\(s, token, now, capturing, false\)/);
     expect([...read('TripReminderSelfTest.swift').matchAll(/^import (\w+)/gm)].map((m) => m[1])).toEqual(['Foundation']);
     expect(st).not.toMatch(/TripReminder\.shared|UserDefaults|TripReminderNotifier|CLLocationManager/);
   });

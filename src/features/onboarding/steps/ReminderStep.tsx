@@ -87,7 +87,7 @@ export function ReminderStep({ ctx, onNext, onBack, deps = {} }: StepProps & { d
           ))}
         </Card>
         {line && status ? (
-          <StatusLine tone={status.state === 'on' || status.state === 'paused' ? 'ok' : 'attention'} testID="reminder-line">
+          <StatusLine tone={status.state === 'on' ? 'ok' : 'attention'} testID="reminder-line">
             {line.text}
           </StatusLine>
         ) : null}

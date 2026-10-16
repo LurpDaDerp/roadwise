@@ -7,7 +7,7 @@
 // reminder (README "Forgot-to-start reminder") is held to "it only notifies": no reminder file
 // can reach a capture start, and its policy mirrors src/reminder/policy.ts.
 import * as CONSTANTS from '../src/extract/constants';
-import { PAUSE_DAYS, REMINDER } from '../src/reminder/policy';
+import { REMINDER } from '../src/reminder/policy';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
 import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS } from '../src/types';
@@ -411,16 +411,24 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
       [...src.matchAll(/const val ([A-Z][A-Z0-9_]*)\s*=\s*([\d_.]+)L?\b/g)].map((m) => [m[1]!, Number(m[2]!.replace(/_/g, ''))] as const)
     );
     for (const [name, value] of Object.entries(REMINDER)) expect({ name, value: declared.get(name) }).toEqual({ name, value });
-    expect(src).toMatch(new RegExp(`val PAUSE_DAYS = longArrayOf\\(${PAUSE_DAYS.map((d) => `${d}L`).join(', ')}\\)`));
-    // The stop gate's reasons, in the reference's order.
-    const order = ['off', 'paused', 'quiet', 'permission', 'capturing', 'no-trip', 'recorded', 'reminded', 'after-drive', 'daily-cap', 'spacing', 'too-soon', 'foreground', 'in-call', 'stale', 'on-foot', 'ok'];
+    expect([...declared.keys()].sort()).toEqual(Object.keys(REMINDER).sort());
+    // The stop gate's reasons, in the reference's order; no limit besides the session rule.
+    const order = ['off', 'permission', 'capturing', 'no-session', 'reminded', 'not-driven', 'stale', 'on-foot', 'ok'];
     const gate = /fun gateStop\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
-    // An hour between posts, whatever became of the last.
-    expect(src).toMatch(/fun tooSoonAfterPost\(s: ReminderState, now: Long\): Boolean = s\.posts\.any \{ now - it < POST_SPACING_MS \}/);
-    expect(gate).toMatch(/return "daily-cap"\s*if \(tooSoonAfterPost\(s, now\)\) return "spacing"/);
     const at = order.map((r) => gate.indexOf(`"${r}"`));
     expect(at.every((i) => i > 0)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(gate.match(/return "/g)).toHaveLength(order.length);
+    expect(src).not.toMatch(/PAUSE_DAYS|DAILY_CAP|POST_SPACING|TTL_MS|UNUSED_QUIET|NOT_DRIVING|MIN_IN_VEHICLE|AFTER_DRIVE|appForeground|inCall|"too-soon"|"foreground"|"in-call"|"paused"|"quiet"/);
+    // The session ends only by time out of the vehicle, never while a drive is open.
+    expect(src).toMatch(/if \(capturing \|\| x\.inVehicle \|\| t - x\.lastDrivingAt < SESSION_GAP_MS\) return s0/);
+    // Each live event first decides the session's end on its own time; a lost EXIT opens a new session.
+    expect(src).toMatch(/for \(e in events\.filter \{ it\.ts >= subscribedAt \}\.sortedWith\(BY_TIME\)\) \{\s*s = endIfOver\(s, e\.ts, cap\)/);
+    expect(src).toMatch(/x\.inVehicle && e\.ts - x\.lastNewsAt >= SESSION_GAP_MS/);
+    // A capture batch never posts and never marks driving speed.
+    const fold = /fun foldCaptureTransitions\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(fold).toMatch(/x\.inVehicle = false/);
+    expect(fold).not.toMatch(/posted|drove|token|endIfOver/);
   });
 });
 
@@ -638,8 +646,12 @@ describe('native-android: the reminder posts in one place, and its rules run in 
     );
   });
 
-  it('a stored pause level out of range is read back into range', () => {
-    expect(code(kt('TripReminderState'))).toMatch(/pauseLevel = o\.getInt\("pauseLevel"\)\.coerceIn\(0, TripReminderPolicy\.PAUSE_DAYS\.size\)/);
+  it('the stored state is v3; a stored v2 keeps only its switch; anything else is off', () => {
+    const st = code(kt('TripReminderState'));
+    expect(st).toMatch(/\.put\("v", 3\)/);
+    expect(st).toMatch(/2 -> ReminderState\(enabled = o\.optBoolean\("enabled", false\)\)\s*3 -> v3\(o\)\s*else -> null/);
+    expect(st).toMatch(/while \(tapSeen\.size > TripReminderPolicy\.TAP_SEEN_MAX\) tapSeen\.removeAt\(0\)/);
+    expect(st).not.toMatch(/pauseLevel|missStreak|"posts"|showing|quietUntil/);
   });
 
   it('the feed skips a re-request only for a registration from this boot', () => {
@@ -653,14 +665,18 @@ describe('native-android: the reminder posts in one place, and its rules run in 
   it('SelfTest hands each reminder row to TripReminderSelfTest, which runs the production policy for every Android row kind', () => {
     expect(code(kt('SelfTest'))).toMatch(/"reminder" -> TripReminderSelfTest\.result\(name, inputs\)/);
     const st = code(kt('TripReminderSelfTest'));
-    for (const call of ['gateStop(', 'onTransitions(', 'settle(', 'posted(', 'resolve(', 'captureStarted(', 'captureEnded(', 'appForeground(', 'setEnabled(']) {
+    for (const call of ['gateStop(', 'onTransitions(', 'settle(', 'posted(', 'unposted(', 'noteGone(', 'tapDelivered(', 'claim(', 'captureStarted(', 'captureEnded(', 'foldCaptureTransitions(', 'setEnabled(', 'noteExpiresAt(']) {
       expect({ call, used: st.includes(`TripReminderPolicy.${call}`) }).toEqual({ call, used: true });
     }
     expect(st).toMatch(/TripReminderState\.fromJson\(o\.toString\(\)\)/);
+    expect(st).toMatch(/TripReminderState\.fromJson\(text\) \?: ReminderState\(\)/);
     // the same rows the JS diff expects Android to skip
-    expect(st).toMatch(/"transitions" -> null\s*else -> "an iOS rule"/);
+    expect(st).toMatch(/"tap", "transitions", "expires", "stored" -> null\s*\/?\/?[^\n]*\n?\s*else -> "an iOS rule"/);
     expect(st).toMatch(/"gate" -> if \(row\.getString\("phase"\) == "stop"\) null/);
-    expect(st).toMatch(/getString\("op"\) == "sessionEnded"/);
+    expect(st).toMatch(/getString\("op"\) == "lookEnded"/);
+    expect(st).toMatch(/"claim" -> if \(row\.getBoolean\("requireDelivery"\) && row\.isNull\("motion"\)\) null/);
+    // the claim is the Android one, with the hand-over check
+    expect(st).toMatch(/row\.getBoolean\("requireDelivery"\)\s*\)\s*JSONObject\(\)\.put\("ok", r\.ok\)/);
     // nothing in it touches the phone
     expect(st).not.toMatch(/Context|DriveSensePrefs|TripReminderNotifier|ActivityTransitions/);
   });

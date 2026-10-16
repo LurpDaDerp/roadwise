@@ -415,7 +415,7 @@ describe('the forgot-to-start reminder (README "Forgot-to-start reminder")', () 
   test('off by default; on and off through the switch, logged; the status follows the phone', async () => {
     let now = 1_700_000_000_000;
     const fake = createFakeDriveSense({ platform: 'ios', now: () => now });
-    await expect(fake.getTripReminderStatus()).resolves.toEqual({ enabled: false, state: 'off', autoOff: false, missing: [], pausedUntil: null });
+    await expect(fake.getTripReminderStatus()).resolves.toEqual({ enabled: false, state: 'off', missing: [] });
     fake.setTripReminderEnv({ missing: ['locationAlways'] });
     await expect(fake.setTripReminder(true)).resolves.toMatchObject({ enabled: true, state: 'needs', missing: ['locationAlways'] });
     expect(fake.tripReminderOn).toBe(true);

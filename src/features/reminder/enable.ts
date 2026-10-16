@@ -42,11 +42,6 @@ export async function turnOnReminder(adapter: PermissionsAdapter, native: Remind
   return native.setTripReminder(true);
 }
 
-/** "Resume now" on a paused reminder: the pause and the quiet end. Asks the phone for nothing. */
-export function resumeReminder(native: ReminderNative = nativeReminder): Promise<TripReminderStatus> {
-  return native.setTripReminder(true);
-}
-
 /** Off: everything the reminder kept is forgotten and its wake stops. Settings, sign-out and the device wipe. */
 export function turnOffReminder(native: ReminderNative = nativeReminder): Promise<TripReminderStatus> {
   return native.setTripReminder(false);

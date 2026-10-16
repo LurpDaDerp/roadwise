@@ -6,10 +6,11 @@ import org.json.JSONObject
 /**
  * The forgot-to-start reminder's half of the on-device self-test (README §10 "Self-test"). Each
  * `reminder` vector carries one row of `src/reminder/vectors.ts` without its `expected`; this runs
- * it through the PRODUCTION [TripReminderPolicy] — never a copy — and answers the row's `actual`,
- * which `src/reminder/selfTest.ts` matches against the row's `expected`. Rows of the iOS-only rules
- * (the wake, the fixes, the stop, the watch, the wake and session gates, a session's end) are
- * answered `skipped`. Pure: nothing here touches the phone, the stored state or a notification.
+ * it through the PRODUCTION [TripReminderPolicy] and [TripReminderState] — never a copy — and
+ * answers the row's `actual`, which `src/reminder/selfTest.ts` matches against the row's `expected`.
+ * Rows of the iOS-only rules (the wake and look gates, the motion history, the look's fixes, the
+ * held stop, a look's end, a claim without the hand-over check) are answered `skipped`. Pure:
+ * nothing here touches the phone, the stored state or a notification.
  */
 object TripReminderSelfTest {
   private const val KIND = "reminder"
@@ -26,13 +27,14 @@ object TripReminderSelfTest {
   }
 
   private fun skipReason(row: JSONObject): String? = when (row.getString("kind")) {
-    "gate" -> if (row.getString("phase") == "stop") null else "the wake and session gates are iOS rules"
+    "gate" -> if (row.getString("phase") == "stop") null else "the wake and look gates are iOS rules"
     "ops" -> {
       val ops = row.getJSONArray("ops")
-      if ((0 until ops.length()).any { ops.getJSONObject(it).getString("op") == "sessionEnded" }) "a GPS session is an iOS rule" else null
+      if ((0 until ops.length()).any { ops.getJSONObject(it).getString("op") == "lookEnded" }) "a GPS look is an iOS rule" else null
     }
-    "transitions" -> null
-    // the wake, the fixes, the stop and the watch (the JS diff fails a skip of any row Android has)
+    "claim" -> if (row.getBoolean("requireDelivery") && row.isNull("motion")) null else "a claim without the hand-over check is iOS's"
+    "tap", "transitions", "expires", "stored" -> null
+    // the wake, the motion history, the fixes and the stop (the JS diff fails a skip of any row Android has)
     else -> "an iOS rule"
   }
 
@@ -42,18 +44,49 @@ object TripReminderSelfTest {
       TripReminderPolicy.gateStop(state(row.getJSONObject("state")), ctx(row.getJSONObject("ctx")), row.getLong("now"))
     )
     "ops" -> JSONObject().put("state", stateJson(ops(state(row.getJSONObject("state")), row.getJSONArray("ops"))))
+    "tap" -> {
+      var s = state(row.getJSONObject("state"))
+      val delivered = JSONArray()
+      val taps = row.getJSONArray("taps")
+      for (i in 0 until taps.length()) {
+        val t = taps.getJSONObject(i)
+        val r = TripReminderPolicy.tapDelivered(s, t.getString("token"), t.getLong("now"))
+        s = r.state
+        delivered.put(r.delivered)
+      }
+      JSONObject().put("delivered", delivered).put("state", stateJson(s))
+    }
+    "claim" -> {
+      val r = TripReminderPolicy.claim(
+        state(row.getJSONObject("state")),
+        row.getString("token"),
+        row.getLong("now"),
+        row.getBoolean("capturing"),
+        row.getBoolean("requireDelivery")
+      )
+      JSONObject().put("ok", r.ok).put("state", stateJson(r.state))
+    }
     "transitions" -> {
       val r = TripReminderPolicy.onTransitions(
         state(row.getJSONObject("state")),
         transitions(row.getJSONArray("events")),
         row.getLong("arrival"),
         row.getLong("subscribedAt"),
-        ctx(row.getJSONObject("ctx"))
+        ctx(row.getJSONObject("ctx")),
+        row.getString("newToken")
       )
       JSONObject()
         .put("effect", effect(r.effect))
         .put("reason", r.reason ?: JSONObject.NULL)
+        .put("expiresAt", r.expiresAt)
         .put("state", stateJson(r.state))
+    }
+    "expires" -> JSONObject().put("expiresAt", TripReminderPolicy.noteExpiresAt(state(row.getJSONObject("state")), row.getLong("now")))
+    "stored" -> {
+      // Read as the stored state is: a JSON object's text, anything else unreadable.
+      val raw = row.opt("stored")
+      val text = if (raw is JSONObject) raw.toString() else (raw?.toString() ?: "")
+      JSONObject().put("state", stateJson(TripReminderState.fromJson(text) ?: ReminderState()))
     }
     else -> throw IllegalArgumentException("not an Android row")
   }
@@ -63,12 +96,18 @@ object TripReminderSelfTest {
     for (i in 0 until ops.length()) {
       val o = ops.getJSONObject(i)
       s = when (val op = o.getString("op")) {
-        "settle" -> TripReminderPolicy.settle(s, o.getLong("now"))
-        "posted" -> TripReminderPolicy.posted(s, o.getLong("now"))
-        "resolve" -> TripReminderPolicy.resolve(s, outcome(o.getString("outcome")), o.getLong("now"))
+        "settle" -> TripReminderPolicy.settle(s, o.getLong("now"), o.getBoolean("capturing"))
+        "posted" -> TripReminderPolicy.posted(s, o.getLong("now"), o.getString("token"))
+        "unposted" -> TripReminderPolicy.unposted(s, o.getString("token"))
+        "noteGone" -> TripReminderPolicy.noteGone(s)
         "captureStarted" -> TripReminderPolicy.captureStarted(s, o.getLong("now"))
-        "captureEnded" -> TripReminderPolicy.captureEnded(s, o.getLong("now"))
-        "appForeground" -> TripReminderPolicy.appForeground(s)
+        // Left out = now; null = a drive that was not kept.
+        "captureEnded" -> when {
+          !o.has("drivingEndedAt") -> TripReminderPolicy.captureEnded(s, o.getLong("now"))
+          o.isNull("drivingEndedAt") -> TripReminderPolicy.captureEnded(s, o.getLong("now"), null)
+          else -> TripReminderPolicy.captureEnded(s, o.getLong("now"), o.getLong("drivingEndedAt"))
+        }
+        "captureTransitions" -> TripReminderPolicy.foldCaptureTransitions(s, transitions(o.getJSONArray("events")), o.getLong("subscribedAt"))
         "setEnabled" -> TripReminderPolicy.setEnabled(s, o.getBoolean("on"))
         else -> throw IllegalArgumentException("unknown op '$op'")
       }
@@ -78,15 +117,13 @@ object TripReminderSelfTest {
 
   /** A row's state, read by the same code that reads the stored one. */
   private fun state(o: JSONObject): ReminderState =
-    TripReminderState.fromJson(o.toString()) ?: throw IllegalArgumentException("the row's state is not a v2 ReminderState")
+    TripReminderState.fromJson(o.toString()) ?: throw IllegalArgumentException("the row's state is not a v3 ReminderState")
 
   private fun stateJson(s: ReminderState): JSONObject = JSONObject(TripReminderState.toJson(s))
 
   private fun ctx(o: JSONObject): ReminderCtx = ReminderCtx(
     permissionsOk = o.getBoolean("permissionsOk"),
     capturing = o.getBoolean("capturing"),
-    appForeground = o.getBoolean("appForeground"),
-    inCall = o.getBoolean("inCall"),
     eventAgeMs = o.getLong("eventAgeMs"),
     onFoot = o.getBoolean("onFoot")
   )
@@ -104,17 +141,10 @@ object TripReminderSelfTest {
     Transition(kind, e.getLong("ts"))
   }
 
-  private fun outcome(o: String): TripReminderPolicy.Outcome = when (o) {
-    "converted" -> TripReminderPolicy.Outcome.CONVERTED
-    "unseen" -> TripReminderPolicy.Outcome.UNSEEN
-    "notDriving" -> TripReminderPolicy.Outcome.NOT_DRIVING
-    "missed" -> TripReminderPolicy.Outcome.MISSED
-    else -> throw IllegalArgumentException("unknown outcome '$o'")
-  }
-
   private fun effect(e: TripReminderPolicy.Effect): String = when (e) {
     TripReminderPolicy.Effect.NONE -> "none"
     TripReminderPolicy.Effect.POST -> "post"
+    TripReminderPolicy.Effect.REFRESH -> "refresh"
     TripReminderPolicy.Effect.WITHDRAW -> "withdraw"
   }
 }

@@ -2,50 +2,50 @@ package expo.modules.drivesense
 
 /**
  * The forgot-to-start reminder's policy on Android: the Kotlin mirror of `src/reminder/policy.ts`
- * (the shared rules and the activity-transition batch), under the same names with the same values
- * (`__tests__/native-android.test.ts` compares the constants). Pure: no android.*, androidx.* or
- * org.json, no clock, no I/O. [TripReminder] reads the phone and does what the result says.
+ * (the shared rules, the tap's hand-over and claim, and the activity-transition batch), under the
+ * same names with the same values (`__tests__/native-android.test.ts` compares the constants). Pure:
+ * no android.*, androidx.* or org.json, no clock, no I/O. [TripReminder] reads the phone and does
+ * what the result says.
  *
- * The reminder only ever notifies. Nothing here starts a capture.
+ * The rule is the session: a stretch of driving that ends 30 min after its last driving moment (an
+ * open drive counts as driving). At most one reminder a session, at a stop, after driving speed with
+ * no drive open, never while a drive is open. Nothing here starts a capture: a tap's token is only
+ * ever claimed, and JS starts the drive.
  */
 
-data class ReminderTrip(
+/** One stretch of driving. `inVehicle`, `vehicleExitAt` and `lastNewsAt` are Android's. */
+data class ReminderSession(
   var startedAt: Long,
-  var lastVehicleAt: Long,
-  var inVehicle: Boolean = true,
+  var lastDrivingAt: Long,
+  var lastNewsAt: Long,
+  var inVehicle: Boolean,
   var vehicleExitAt: Long = 0L,
-  var recorded: Boolean = false,
-  var reminded: Boolean = false,
-  var retries: Int = 0,
-  var sessions: Int = 0,
-  var lastSessionEndAt: Long = 0L
+  var drove: Boolean = false,
+  var reminded: Boolean = false
 )
 
 data class ReminderState(
   var enabled: Boolean = false,
-  var autoOff: Boolean = false,
-  var trip: ReminderTrip? = null,
-  var lastCaptureEndAt: Long = 0L,
-  var posts: MutableList<Long> = mutableListOf(),
-  var pendingAt: Long = 0L,
+  var session: ReminderSession? = null,
+  var lastDriveEndAt: Long = 0L,
+  /** The one-use token of the note that is up; "" = no note. */
+  var token: String = "",
   var postedAt: Long = 0L,
-  var showing: Boolean = false,
-  var missStreak: Int = 0,
-  var pauseLevel: Int = 0,
-  var pausedUntil: Long = 0L,
-  var quietUntil: Long = 0L,
-  var notDrivingUntil: Long = 0L
+  /** The tokens last handed to JS from a tap, newest last. */
+  var tapSeen: MutableList<String> = mutableListOf(),
+  /** When the live token's tap was handed over; 0 = not yet. */
+  var tapAt: Long = 0L,
+  /** iOS only; kept so the stored shape is the reference's. */
+  var lookRestUntil: Long = 0L
 ) {
   /** A copy that shares nothing mutable with this one. */
-  fun deepCopy(): ReminderState = copy(trip = trip?.copy(), posts = posts.toMutableList())
+  fun deepCopy(): ReminderState = copy(session = session?.copy(), tapSeen = tapSeen.toMutableList())
 }
 
 /** What the phone says at the moment of a stop. */
 data class ReminderCtx(
   val permissionsOk: Boolean,
   val capturing: Boolean,
-  val appForeground: Boolean,
-  val inCall: Boolean,
   val eventAgeMs: Long = 0L,
   val onFoot: Boolean = false
 )
@@ -56,205 +56,162 @@ data class Transition(val kind: TransitionKind, val ts: Long)
 
 object TripReminderPolicy {
   const val STOP_MPS = 1.34
-  const val MOVE_MPS = 2.24
   const val IOS_DRIVING_MPS = 4.47
   const val SPEED_ACC_MAX_MPS = 2.0
   const val STOP_HOLD_MS = 12_000L
-  const val MOVED_AWAY_M = 30.0
-  const val FIX_ACC_MAX_M = 20.0
-  const val WALK_CHECK_MS = 30_000L
-  const val UNSEEN_MS = 20_000L
-  const val MAX_RETRIES_PER_TRIP = 1
+  const val SESSION_GAP_MS = 1_800_000L
+  const val IN_VEHICLE_NOTE_MS = 10_800_000L
   const val STILL_AFTER_VEHICLE_MS = 120_000L
   const val STALE_EVENT_MS = 45_000L
-  const val MIN_IN_VEHICLE_MS = 90_000L
-  const val TRIP_GAP_MS = 600_000L
-  const val MAX_TRIP_IDLE_MS = 10_800_000L
-  const val AFTER_DRIVE_MS = 600_000L
-  const val UNUSED_QUIET_MS = 14_400_000L
-  const val DAY_MS = 86_400_000L
-  const val DAILY_CAP = 2
-  const val POST_SPACING_MS = 3_600_000L
-  const val TTL_MS = 300_000L
-  const val CONVERT_WINDOW_MS = 1_800_000L
-  const val MISS_LIMIT = 3
-  const val NOT_DRIVING_QUIET_MS = 43_200_000L
   const val AUTOMOTIVE_FRESH_MS = 120_000L
-  const val IOS_MOTION_MIN_LOOKBACK_MS = 600_000L
-  const val IOS_MOTION_MAX_LOOKBACK_MS = 10_800_000L
-  const val IOS_SESSION_MAX_MS = 600_000L
-  const val IOS_SESSION_NO_DRIVE_MS = 180_000L
-  const val IOS_SESSIONS_PER_TRIP = 2
-  const val IOS_SESSION_SPACING_MS = 600_000L
+  const val IOS_MOTION_LOOKBACK_MS = 10_800_000L
+  const val IOS_LOOK_MAX_MS = 600_000L
+  const val IOS_LOOK_NO_DRIVE_MS = 180_000L
+  const val IOS_LOOK_REST_MS = 600_000L
+  const val TAP_FRESH_MS = 120_000L
+  const val TAP_SEEN_MAX = 8
   const val CLOCK_FUTURE_MS = 86_400_000L
 
-  /** The back-off pauses, in days; the step after the last turns the reminder off. */
-  val PAUSE_DAYS = longArrayOf(7L, 28L)
-  private const val MAX_PAUSE_MS = 28L * DAY_MS
+  enum class Tier { NONE, CAPTURE, IDLE, SESSION }
+  enum class Effect { NONE, POST, REFRESH, WITHDRAW }
 
-  enum class Tier { NONE, CAPTURE, IDLE, TRIP }
-  enum class Outcome { CONVERTED, UNSEEN, NOT_DRIVING, MISSED }
-  enum class Effect { NONE, POST, WITHDRAW }
+  class TransitionResult(val state: ReminderState, val effect: Effect, val reason: String?, val expiresAt: Long)
+  class TapResult(val state: ReminderState, val delivered: Boolean)
+  class ClaimResult(val state: ReminderState, val ok: Boolean)
 
-  class TransitionResult(val state: ReminderState, val effect: Effect, val reason: String?)
+  fun newSession(startedAt: Long, lastDrivingAt: Long, inVehicle: Boolean): ReminderSession =
+    ReminderSession(startedAt, lastDrivingAt, lastDrivingAt, inVehicle)
 
-  fun newTrip(startedAt: Long, lastVehicleAt: Long = startedAt): ReminderTrip = ReminderTrip(startedAt, lastVehicleAt)
-
-  fun recentPosts(s: ReminderState, now: Long): Int = s.posts.count { now - it < DAY_MS }
-
-  /** policy.ts `tooSoonAfterPost`: a post went up less than an hour before `now`, whatever became of it. */
-  fun tooSoonAfterPost(s: ReminderState, now: Long): Boolean = s.posts.any { now - it < POST_SPACING_MS }
-
-  /** policy.ts `settle`. */
-  fun settle(s0: ReminderState, now: Long): ReminderState {
+  /** policy.ts `clampTimes`: a stored time more than a day ahead is a clock change. */
+  fun clampTimes(s0: ReminderState, now: Long): ReminderState {
     val s = s0.deepCopy()
     fun past(t: Long): Long = if (t > now + CLOCK_FUTURE_MS) now else t
-    s.lastCaptureEndAt = past(s.lastCaptureEndAt)
-    s.pendingAt = past(s.pendingAt)
+    s.lastDriveEndAt = past(s.lastDriveEndAt)
     s.postedAt = past(s.postedAt)
-    s.posts = s.posts.map { past(it) }.filter { now - it < DAY_MS }.toMutableList()
-    s.pausedUntil = minOf(s.pausedUntil, now + MAX_PAUSE_MS)
-    s.quietUntil = minOf(s.quietUntil, now + UNUSED_QUIET_MS)
-    s.notDrivingUntil = minOf(s.notDrivingUntil, now + NOT_DRIVING_QUIET_MS)
-    if (s.pausedUntil != 0L && now >= s.pausedUntil) s.pausedUntil = 0L
-    if (s.quietUntil != 0L && now >= s.quietUntil) s.quietUntil = 0L
-    if (s.notDrivingUntil != 0L && now >= s.notDrivingUntil) s.notDrivingUntil = 0L
-    val t = s.trip
-    if (t != null) {
-      t.startedAt = past(t.startedAt)
-      t.lastVehicleAt = past(t.lastVehicleAt)
-      t.vehicleExitAt = past(t.vehicleExitAt)
-      t.lastSessionEndAt = past(t.lastSessionEndAt)
-      val idle = now - t.lastVehicleAt
-      if ((!t.inVehicle && idle >= TRIP_GAP_MS) || idle >= MAX_TRIP_IDLE_MS) s.trip = null
+    s.tapAt = past(s.tapAt)
+    s.lookRestUntil = past(s.lookRestUntil)
+    val x = s.session
+    if (x != null) {
+      x.startedAt = past(x.startedAt)
+      x.lastDrivingAt = past(x.lastDrivingAt)
+      x.lastNewsAt = past(x.lastNewsAt)
+      x.vehicleExitAt = past(x.vehicleExitAt)
     }
-    if (s.showing && now - s.postedAt >= TTL_MS) s.showing = false
-    if (s.pendingAt > 0L && now - s.pendingAt >= CONVERT_WINDOW_MS) resolveIn(s, Outcome.MISSED, now)
     return s
   }
+
+  /** policy.ts `endIfOver`: 30 min past the last driving moment, out of the vehicle, no drive open. */
+  fun endIfOver(s0: ReminderState, t: Long, capturing: Boolean): ReminderState {
+    val x = s0.session ?: return s0
+    if (capturing || x.inVehicle || t - x.lastDrivingAt < SESSION_GAP_MS) return s0
+    val s = s0.deepCopy()
+    s.session = null
+    s.token = ""
+    s.tapAt = 0L
+    return s
+  }
+
+  /** policy.ts `settle`. */
+  fun settle(s0: ReminderState, now: Long, capturing: Boolean): ReminderState = endIfOver(clampTimes(s0, now), now, capturing)
 
   /** policy.ts `gate(…, 'stop')`: the first reason not to remind at this stop, or "ok". */
   fun gateStop(s: ReminderState, ctx: ReminderCtx, now: Long): String {
     if (!s.enabled) return "off"
-    if (now < s.pausedUntil) return "paused"
-    if (now < maxOf(s.quietUntil, s.notDrivingUntil)) return "quiet"
     if (!ctx.permissionsOk) return "permission"
     if (ctx.capturing) return "capturing"
-    val t = s.trip ?: return "no-trip"
-    if (t.recorded) return "recorded"
-    if (t.reminded) return "reminded"
-    if (s.lastCaptureEndAt > 0L && now - s.lastCaptureEndAt < AFTER_DRIVE_MS) return "after-drive"
-    if (recentPosts(s, now) >= DAILY_CAP) return "daily-cap"
-    if (tooSoonAfterPost(s, now)) return "spacing"
-    if (now - t.startedAt < MIN_IN_VEHICLE_MS) return "too-soon"
-    if (ctx.appForeground) return "foreground"
-    if (ctx.inCall) return "in-call"
+    val x = s.session ?: return "no-session"
+    if (x.reminded) return "reminded"
+    if (!x.drove) return "not-driven"
     if (ctx.eventAgeMs > STALE_EVENT_MS) return "stale"
     if (ctx.onFoot) return "on-foot"
     return "ok"
   }
 
-  /** policy.ts `posted`: the reminder went up. */
-  fun posted(s0: ReminderState, now: Long): ReminderState {
+  /** policy.ts `posted`. */
+  fun posted(s0: ReminderState, now: Long, token: String): ReminderState {
     val s = s0.deepCopy()
-    postedIn(s, now)
-    return s
-  }
-
-  private fun postedIn(s: ReminderState, now: Long) {
-    s.posts.add(now)
-    s.trip?.reminded = true
-    s.pendingAt = now
+    s.session?.reminded = true
+    s.token = token
     s.postedAt = now
-    s.showing = true
-    s.quietUntil = now + UNUSED_QUIET_MS
-  }
-
-  private fun missIn(s: ReminderState, now: Long) {
-    s.missStreak += 1
-    if (s.missStreak < MISS_LIMIT) return
-    s.missStreak = 0
-    // A stored level out of range reads as the nearest real one.
-    s.pauseLevel = s.pauseLevel.coerceIn(0, PAUSE_DAYS.size)
-    if (s.pauseLevel < PAUSE_DAYS.size) {
-      s.pausedUntil = now + PAUSE_DAYS[s.pauseLevel] * DAY_MS
-      s.pauseLevel += 1
-    } else {
-      s.enabled = false
-      s.autoOff = true
-      s.pausedUntil = 0L
-    }
-  }
-
-  private fun resolveIn(s: ReminderState, outcome: Outcome, now: Long) {
-    val pending = s.pendingAt > 0L
-    s.showing = false
-    s.pendingAt = 0L
-    when (outcome) {
-      Outcome.CONVERTED -> {
-        s.missStreak = 0
-        s.pauseLevel = 0
-        s.quietUntil = 0L
-      }
-      Outcome.UNSEEN -> {
-        s.quietUntil = 0L
-        val t = s.trip
-        if (t != null && t.retries < MAX_RETRIES_PER_TRIP) {
-          t.retries += 1
-          t.reminded = false
-        }
-      }
-      Outcome.NOT_DRIVING -> {
-        // A note whose outcome is already counted (or none waiting) gets the quiet, not a second miss.
-        s.notDrivingUntil = now + NOT_DRIVING_QUIET_MS
-        if (pending) missIn(s, now)
-      }
-      Outcome.MISSED -> missIn(s, now)
-    }
-  }
-
-  fun resolve(s0: ReminderState, outcome: Outcome, now: Long): ReminderState {
-    val s = s0.deepCopy()
-    resolveIn(s, outcome, now)
+    s.tapAt = 0L
     return s
   }
 
+  /** policy.ts `unposted`: the note with [token] never showed. */
+  fun unposted(s0: ReminderState, token: String): ReminderState {
+    if (token.isEmpty() || s0.token != token) return s0
+    val s = s0.deepCopy()
+    s.token = ""
+    s.tapAt = 0L
+    s.session?.reminded = false
+    return s
+  }
+
+  /** policy.ts `noteGone`. */
+  fun noteGone(s0: ReminderState): ReminderState {
+    val s = s0.deepCopy()
+    s.token = ""
+    s.tapAt = 0L
+    return s
+  }
+
+  /** policy.ts `tapDelivered`: a token handed over before is never handed over again. */
+  fun tapDelivered(s0: ReminderState, token: String, now: Long): TapResult {
+    if (s0.tapSeen.contains(token)) return TapResult(s0, false)
+    val s = s0.deepCopy()
+    s.tapSeen.add(token)
+    while (s.tapSeen.size > TAP_SEEN_MAX) s.tapSeen.removeAt(0)
+    if (token.isNotEmpty() && token == s.token) s.tapAt = now
+    return TapResult(s, true)
+  }
+
+  /** policy.ts `claim`: true once, for the note's token, in a live session, no drive open, handed over within 2 min. */
+  fun claim(s0: ReminderState, token: String, now: Long, capturing: Boolean, requireDelivery: Boolean): ClaimResult {
+    val s = settle(s0, now, capturing)
+    val fresh = !requireDelivery || (s.tapAt > 0L && now - s.tapAt <= TAP_FRESH_MS)
+    val ok = s.enabled && token.isNotEmpty() && token == s.token && s.session != null && !capturing && fresh
+    if (!ok) return ClaimResult(s, false)
+    val c = s.deepCopy()
+    c.token = ""
+    c.tapAt = 0L
+    return ClaimResult(c, true)
+  }
+
+  /** policy.ts `captureStarted`. */
   fun captureStarted(s0: ReminderState, now: Long): ReminderState {
     val s = s0.deepCopy()
-    val t = s.trip ?: newTrip(now).also { s.trip = it }
-    t.recorded = true
-    if (s.pendingAt > 0L && now - s.pendingAt <= CONVERT_WINDOW_MS) resolveIn(s, Outcome.CONVERTED, now)
-    s.showing = false
-    return s
-  }
-
-  fun captureEnded(s0: ReminderState, now: Long): ReminderState {
-    val s = s0.deepCopy()
-    s.lastCaptureEndAt = now
-    val t = s.trip
-    if (t != null) {
-      t.inVehicle = false
-      t.lastVehicleAt = now
+    s.token = ""
+    s.tapAt = 0L
+    val x = s.session
+    if (x != null) {
+      x.drove = false
+      x.lastDrivingAt = maxOf(x.lastDrivingAt, now)
+      x.lastNewsAt = maxOf(x.lastNewsAt, now)
     }
     return s
   }
 
-  fun appForeground(s0: ReminderState): ReminderState {
+  /**
+   * policy.ts `captureEnded`: the drive's driving end is the session's last driving moment; null (a
+   * drive that was not kept) leaves the clock as it was; left out, it is now.
+   */
+  fun captureEnded(s0: ReminderState, now: Long, drivingEndedAt: Long? = now): ReminderState {
     val s = s0.deepCopy()
-    s.showing = false
+    s.lastDriveEndAt = now
+    val x = s.session
+    if (x != null) {
+      x.drove = false
+      x.lastNewsAt = maxOf(x.lastNewsAt, now)
+      if (drivingEndedAt != null) x.lastDrivingAt = maxOf(x.lastDrivingAt, minOf(now, drivingEndedAt))
+    }
     return s
   }
 
+  /** policy.ts `setEnabled`: on keeps the session; off forgets everything. */
   fun setEnabled(s0: ReminderState, on: Boolean): ReminderState {
     if (!on) return ReminderState()
     val s = s0.deepCopy()
     s.enabled = true
-    s.autoOff = false
-    s.pausedUntil = 0L
-    s.missStreak = 0
-    s.pauseLevel = 0
-    s.quietUntil = 0L
-    s.notDrivingUntil = 0L
     return s
   }
 
@@ -262,68 +219,137 @@ object TripReminderPolicy {
     if (!transitionsOk) return Tier.NONE
     if (capturing) return Tier.CAPTURE
     if (!s.enabled) return Tier.NONE
-    return if (s.trip != null) Tier.TRIP else Tier.IDLE
+    return if (s.session != null) Tier.SESSION else Tier.IDLE
   }
 
-  /** policy.ts `onTransitions`: one delivered batch, read whole before acting; at the same time, IN_VEHICLE EXIT first. */
-  fun onTransitions(s0: ReminderState, events: List<Transition>, arrival: Long, subscribedAt: Long, ctx: ReminderCtx): TransitionResult {
-    val s = settle(s0, arrival)
-    var withdrew = false
+  /** policy.ts `noteExpiresAt`: 3 h on while in the vehicle, else the session's end; 0 with no session. */
+  fun noteExpiresAt(s: ReminderState, now: Long): Long {
+    val x = s.session ?: return 0L
+    return if (x.inVehicle) now + IN_VEHICLE_NOTE_MS else x.lastDrivingAt + SESSION_GAP_MS
+  }
+
+  private val BY_TIME = compareBy<Transition>({ it.ts }, { if (it.kind == TransitionKind.VEHICLE_EXIT) 0 else 1 })
+
+  /** The replayed current activity, read as the state at [subscribedAt]: never a stop, never driving speed. */
+  private fun applyReplay(s: ReminderState, e: Transition, subscribedAt: Long) {
+    val x = s.session ?: return
+    x.lastNewsAt = maxOf(x.lastNewsAt, subscribedAt)
+    if (e.kind == TransitionKind.VEHICLE_ENTER) {
+      x.inVehicle = true
+      x.lastDrivingAt = maxOf(x.lastDrivingAt, subscribedAt)
+    } else if (x.inVehicle) {
+      x.inVehicle = false
+    }
+  }
+
+  private fun newestReplay(events: List<Transition>, subscribedAt: Long): Transition? =
+    events.filter { it.ts < subscribedAt }.sortedWith(BY_TIME).lastOrNull()
+
+  /** policy.ts `onTransitions`: one batch with no drive open, each live event after the session's end is decided on its own time. */
+  fun onTransitions(
+    s0: ReminderState,
+    events: List<Transition>,
+    arrival: Long,
+    subscribedAt: Long,
+    ctx: ReminderCtx,
+    newToken: String
+  ): TransitionResult {
+    var s = clampTimes(s0, arrival)
+    val tokenBefore = s.token
+    val cap = ctx.capturing
+    val replay = newestReplay(events, subscribedAt)
+    if (replay != null) {
+      s = endIfOver(s, subscribedAt, cap)
+      applyReplay(s, replay, subscribedAt)
+    }
     var stop: Transition? = null
+    var stopSession = 0L
     var afterStop = false
-    val batch = events.filter { it.ts >= subscribedAt }
-      .sortedWith(compareBy<Transition>({ it.ts }, { if (it.kind == TransitionKind.VEHICLE_EXIT) 0 else 1 }))
-    for (e in batch) {
-      val t = s.trip
+    for (e in events.filter { it.ts >= subscribedAt }.sortedWith(BY_TIME)) {
+      s = endIfOver(s, e.ts, cap)
+      val x = s.session
       when (e.kind) {
         TransitionKind.VEHICLE_ENTER -> {
-          if (s.showing) {
-            s.showing = false
-            withdrew = true
-          }
-          if (t == null) {
-            s.trip = newTrip(e.ts)
+          val drove = e.ts > s.lastDriveEndAt
+          if (x == null) {
+            s.session = newSession(e.ts, e.ts, true).also { it.drove = drove }
+          } else if (x.inVehicle && e.ts - x.lastNewsAt >= SESSION_GAP_MS) {
+            // A lost EXIT: the old session ends here and a new one opens.
+            s.session = newSession(e.ts, e.ts, true).also { it.drove = drove }
+            s.token = ""
+            s.tapAt = 0L
           } else {
-            t.inVehicle = true
-            t.lastVehicleAt = maxOf(t.lastVehicleAt, e.ts)
+            x.inVehicle = true
+            x.lastDrivingAt = maxOf(x.lastDrivingAt, e.ts)
+            x.lastNewsAt = maxOf(x.lastNewsAt, e.ts)
+            x.drove = x.drove || drove
           }
           if (stop != null) afterStop = true
         }
         TransitionKind.VEHICLE_EXIT -> {
-          if (t != null) {
-            if (t.inVehicle) {
-              t.inVehicle = false
-              t.lastVehicleAt = maxOf(t.lastVehicleAt, e.ts)
-            }
-            t.vehicleExitAt = e.ts
+          if (x != null) {
+            x.inVehicle = false
+            x.lastDrivingAt = maxOf(x.lastDrivingAt, e.ts)
+            x.lastNewsAt = maxOf(x.lastNewsAt, e.ts)
+            x.vehicleExitAt = e.ts
           }
         }
         TransitionKind.WALKING_ENTER, TransitionKind.RUNNING_ENTER -> {
-          if (s.showing) {
-            s.showing = false
-            withdrew = true
-          }
-          if (t != null && t.inVehicle) {
-            t.inVehicle = false
-            t.lastVehicleAt = maxOf(t.lastVehicleAt, e.ts)
+          if (x != null) {
+            if (x.inVehicle) {
+              x.inVehicle = false
+              x.lastDrivingAt = maxOf(x.lastDrivingAt, e.ts)
+            }
+            x.lastNewsAt = maxOf(x.lastNewsAt, e.ts)
           }
           if (stop != null) afterStop = true
         }
         TransitionKind.STILL_ENTER -> {
-          if (t != null && !t.inVehicle && t.vehicleExitAt > 0L && e.ts >= t.vehicleExitAt &&
-            e.ts - t.vehicleExitAt <= STILL_AFTER_VEHICLE_MS
-          ) {
-            stop = e
-            afterStop = false
+          if (x != null) {
+            x.lastNewsAt = maxOf(x.lastNewsAt, e.ts)
+            if (!x.inVehicle && x.vehicleExitAt > 0L && e.ts >= x.vehicleExitAt && e.ts - x.vehicleExitAt <= STILL_AFTER_VEHICLE_MS) {
+              stop = e
+              stopSession = x.startedAt
+              afterStop = false
+            }
           }
         }
       }
     }
-    val effect = if (withdrew) Effect.WITHDRAW else Effect.NONE
-    val st = stop ?: return TransitionResult(s, effect, null)
-    val reason = gateStop(s, ctx.copy(eventAgeMs = arrival - st.ts, onFoot = afterStop), arrival)
-    if (reason != "ok") return TransitionResult(s, effect, reason)
-    postedIn(s, arrival)
-    return TransitionResult(s, Effect.POST, reason)
+    s = endIfOver(s, arrival, cap)
+    var effect = when {
+      tokenBefore.isNotEmpty() && s.token.isEmpty() -> Effect.WITHDRAW
+      s.token.isNotEmpty() -> Effect.REFRESH
+      else -> Effect.NONE
+    }
+    var reason: String? = null
+    val st = stop
+    val open = s.session
+    if (st != null && open != null && open.startedAt == stopSession) {
+      reason = gateStop(s, ctx.copy(eventAgeMs = arrival - st.ts, onFoot = afterStop), arrival)
+      if (reason == "ok") {
+        s = posted(s, arrival, newToken)
+        effect = Effect.POST
+      }
+    }
+    return TransitionResult(s, effect, reason, noteExpiresAt(s, arrival))
+  }
+
+  /** policy.ts `foldCaptureTransitions`: a capture batch is the vehicle state only; it never ends, posts or marks driving speed. */
+  fun foldCaptureTransitions(s0: ReminderState, events: List<Transition>, subscribedAt: Long): ReminderState {
+    if (s0.session == null) return s0
+    val s = s0.deepCopy()
+    val x = s.session ?: return s
+    val replay = newestReplay(events, subscribedAt)
+    if (replay != null) applyReplay(s, replay, subscribedAt)
+    for (e in events.filter { it.ts >= subscribedAt }.sortedWith(BY_TIME)) {
+      x.lastNewsAt = maxOf(x.lastNewsAt, e.ts)
+      when (e.kind) {
+        TransitionKind.VEHICLE_ENTER -> x.inVehicle = true
+        TransitionKind.VEHICLE_EXIT, TransitionKind.WALKING_ENTER, TransitionKind.RUNNING_ENTER -> x.inVehicle = false
+        TransitionKind.STILL_ENTER -> {}
+      }
+    }
+    return s
   }
 }

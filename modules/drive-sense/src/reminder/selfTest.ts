@@ -5,31 +5,39 @@
 // same matcher Jest runs over this reference (`__tests__/reminderSelfTest.test.ts`), so a native
 // rule that drifts from the table fails on the phone.
 //
-// Android has the shared rules and the activity-transition batch; iOS the shared rules and the
-// wake, fix and stop rules. A row of the other platform's rules is answered `skipped`, and a skip
-// is accepted only for those rows.
+// Android has the shared rules, the tap's hand-over, the claim with its hand-over check, the
+// activity-transition batch and the note's timeout; iOS the shared rules, the claim after a motion
+// fold, and the wake, look and stop rules. A row of the other platform's rules is answered
+// `skipped`, and a skip is accepted only for those rows.
 import { z } from 'zod';
 
 import { MISMATCH_CAP, type Mismatch, type SelfTestDiff, type VectorDiff } from '../selfTest';
 import {
-  appForeground,
   captureEnded,
   captureStarted,
+  claim,
+  clampTimes,
+  foldCaptureTransitions,
+  foldMotion,
+  fromStored,
   gate,
+  lookEnded,
+  noteExpiresAt,
+  noteGone,
   onFix,
   onStop,
   onTransitions,
   onWake,
-  onWatchEnd,
   posted,
-  resolve,
-  sessionEnded,
   setEnabled,
   settle,
   summarizeActivities,
+  tapDelivered,
+  unposted,
   type FixVerdict,
+  type ReminderState,
 } from './policy';
-import type { ReminderVector } from './vectors';
+import type { ReminderOp, ReminderVector } from './vectors';
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
@@ -43,7 +51,7 @@ export interface ReminderWireVector {
   inputs: ReminderRowInputs;
 }
 
-/** What a row's run answers: `reason`, `state`, `effect`, `summary` or `verdicts`, by row kind. */
+/** What a row's run answers (`reason`, `state`, `effect`, `ok`, `delivered`, … by row kind). */
 export type ReminderActual = Record<string, unknown>;
 
 export function reminderWireVectors(rows: readonly ReminderVector[]): ReminderWireVector[] {
@@ -58,32 +66,61 @@ export function isReminderWireVector(v: unknown): v is ReminderWireVector {
   return typeof v === 'object' && v !== null && (v as { kind?: unknown }).kind === 'reminder';
 }
 
+function runOp(s: ReminderState, o: ReminderOp): ReminderState {
+  switch (o.op) {
+    case 'settle':
+      return settle(s, o.now, o.capturing);
+    case 'posted':
+      return posted(s, o.now, o.token);
+    case 'unposted':
+      return unposted(s, o.token);
+    case 'noteGone':
+      return noteGone(s);
+    case 'captureStarted':
+      return captureStarted(s, o.now);
+    case 'captureEnded':
+      // JSON keeps a null and drops an undefined, so the three cases survive the wire.
+      return 'drivingEndedAt' in o && o.drivingEndedAt !== undefined ? captureEnded(s, o.now, o.drivingEndedAt) : captureEnded(s, o.now);
+    case 'captureTransitions':
+      return foldCaptureTransitions(s, o.events, o.subscribedAt);
+    case 'setEnabled':
+      return setEnabled(s, o.on);
+    case 'lookEnded':
+      return lookEnded(s, o.now, o.lastFastAt, o.verdict);
+  }
+}
+
 /** The reference's answer to one row: what a correct native mirror answers. */
 export function runReminderRow(v: ReminderRowInputs): ReminderActual {
   switch (v.kind) {
     case 'gate':
       return { reason: gate(v.state, v.ctx, v.now, v.phase) };
-    case 'ops': {
+    case 'ops':
+      return { state: v.ops.reduce(runOp, v.state) };
+    case 'tap': {
       let s = v.state;
-      for (const o of v.ops) {
-        if (o.op === 'settle') s = settle(s, o.now);
-        else if (o.op === 'posted') s = posted(s, o.now);
-        else if (o.op === 'resolve') s = resolve(s, o.outcome, o.now);
-        else if (o.op === 'captureStarted') s = captureStarted(s, o.now);
-        else if (o.op === 'captureEnded') s = captureEnded(s, o.now);
-        else if (o.op === 'appForeground') s = appForeground(s);
-        else if (o.op === 'setEnabled') s = setEnabled(s, o.on);
-        else s = sessionEnded(s, o.now);
+      const delivered: boolean[] = [];
+      for (const t of v.taps) {
+        const r = tapDelivered(s, t.token, t.now);
+        s = r.state;
+        delivered.push(r.delivered);
       }
-      return { state: s };
+      return { delivered, state: s };
+    }
+    case 'claim': {
+      const s = v.motion ? foldMotion(clampTimes(v.state, v.now), v.now, v.motion, v.capturing) : v.state;
+      const r = claim(s, v.token, v.now, v.capturing, v.requireDelivery);
+      return { ok: r.ok, state: r.state };
     }
     case 'transitions': {
-      const r = onTransitions(v.state, v.events, v.arrival, v.subscribedAt, v.ctx);
-      return { effect: r.effect, reason: r.reason ?? null, state: r.state };
+      const r = onTransitions(v.state, v.events, v.arrival, v.subscribedAt, v.ctx, v.newToken);
+      return { effect: r.effect, reason: r.reason ?? null, expiresAt: r.expiresAt, state: r.state };
     }
+    case 'expires':
+      return { expiresAt: noteExpiresAt(v.state, v.now) };
     case 'wake': {
       const r = onWake(v.state, v.now, v.motion, v.ctx);
-      return { effect: r.effect, reason: r.reason, state: r.state };
+      return { effect: r.effect, reason: r.reason, dropped: r.dropped, state: r.state };
     }
     case 'summary':
       return { summary: summarizeActivities(v.activities, v.now) };
@@ -95,15 +132,14 @@ export function runReminderRow(v: ReminderRowInputs): ReminderActual {
         tr = r.tracker;
         verdicts.push(r.verdict);
       }
-      return { verdicts };
+      return { verdicts, lastFastAt: tr.lastFastAt };
     }
     case 'stop': {
-      const r = onStop(v.state, v.ctx, v.now, v.walked);
-      return { effect: r.effect, reason: r.reason };
+      const r = onStop(v.state, v.ctx, v.now, v.walked, v.token, v.lastFastAt);
+      return { effect: r.effect, reason: r.reason, state: r.state };
     }
-    case 'watchEnd': {
-      return { state: onWatchEnd(v.state, v.how, v.now) };
-    }
+    case 'stored':
+      return { state: fromStored(v.stored) };
   }
 }
 
@@ -137,37 +173,52 @@ function within(path: string, expected: unknown, actual: unknown, out: Mismatch[
 /** Where `actual` departs from the row's `expected`, field by field. */
 export function matchReminderRow(v: ReminderVector, actual: ReminderActual): Mismatch[] {
   const out: Mismatch[] = [];
+  /** A field the row checks only when it names it. */
+  const optional = (path: string, expected: unknown) => {
+    if (expected !== undefined) within(path, expected, actual[path], out);
+  };
   switch (v.kind) {
     case 'gate':
       within('reason', v.expected, actual.reason, out);
       break;
     case 'ops':
+    case 'stored':
       within('state', v.expected, actual.state, out);
+      break;
+    case 'tap':
+      within('delivered', v.expected.delivered, actual.delivered, out);
+      within('state', v.expected.state, actual.state, out);
+      break;
+    case 'claim':
+      within('ok', v.expected.ok, actual.ok, out);
+      optional('state', v.expected.state);
       break;
     case 'transitions':
       within('effect', v.expected.effect, actual.effect, out);
       within('reason', v.expected.reason, actual.reason, out);
-      if (v.expected.state) within('state', v.expected.state, actual.state, out);
+      optional('expiresAt', v.expected.expiresAt);
+      optional('state', v.expected.state);
       break;
-    case 'wake': {
+    case 'expires':
+      within('expiresAt', v.expected, actual.expiresAt, out);
+      break;
+    case 'wake':
       within('effect', v.expected.effect, actual.effect, out);
       within('reason', v.expected.reason, actual.reason, out);
-      const state = actual.state as { trip?: unknown } | null | undefined;
-      if (v.expected.trip !== undefined) within('state.trip', v.expected.trip, state?.trip, out);
+      optional('dropped', v.expected.dropped);
+      optional('state', v.expected.state);
       break;
-    }
     case 'summary':
       within('summary', v.expected, actual.summary, out);
       break;
     case 'fixes':
-      within('verdicts', v.expected, actual.verdicts, out);
+      within('verdicts', v.expected.verdicts, actual.verdicts, out);
+      optional('lastFastAt', v.expected.lastFastAt);
       break;
     case 'stop':
       within('effect', v.expected.effect, actual.effect, out);
       within('reason', v.expected.reason, actual.reason, out);
-      break;
-    case 'watchEnd':
-      within('state', v.expected.state, actual.state, out);
+      optional('state', v.expected.state);
       break;
   }
   return out;
@@ -176,11 +227,36 @@ export function matchReminderRow(v: ReminderVector, actual: ReminderActual): Mis
 /** Whether a platform's native policy has this row's rules (else it answers `skipped`). */
 export function reminderRowRunsOn(v: ReminderVector, platform: string): boolean {
   if (platform === 'android') {
-    if (v.kind === 'gate') return v.phase === 'stop';
-    if (v.kind === 'ops') return v.ops.every((o) => o.op !== 'sessionEnded');
-    return v.kind === 'transitions';
+    switch (v.kind) {
+      case 'gate':
+        return v.phase === 'stop';
+      case 'ops':
+        return v.ops.every((o) => o.op !== 'lookEnded');
+      case 'claim':
+        return v.requireDelivery && v.motion === null;
+      case 'tap':
+      case 'transitions':
+      case 'expires':
+      case 'stored':
+        return true;
+      default:
+        return false;
+    }
   }
-  if (platform === 'ios') return v.kind !== 'transitions';
+  if (platform === 'ios') {
+    switch (v.kind) {
+      case 'ops':
+        return v.ops.every((o) => o.op !== 'captureTransitions');
+      case 'claim':
+        return !v.requireDelivery;
+      case 'tap':
+      case 'transitions':
+      case 'expires':
+        return false;
+      default:
+        return true;
+    }
+  }
   return true;
 }
 

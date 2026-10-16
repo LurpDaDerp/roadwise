@@ -102,14 +102,14 @@ test('a perturbed native field is named by its path, with both values', async ()
 
 test('a native reminder rule that drifts from the table is named, and a skipped Android rule fails', async () => {
   const reminder = reminderOutput('android');
-  const posts = reminder.results.find((r) => r.name === 'android: [EXIT, STILL] in one batch posts')!;
+  const posts = reminder.results.find((r) => r.name === 'android: [EXIT, STILL] in a driven session posts, the note timing out at the session end')!;
   posts.actual = { ...(posts.actual as Record<string, unknown>), effect: 'none' };
   const stale = reminder.results.findIndex((r) => r.name === 'android: a stop 46 s old on arrival is stale');
   reminder.results[stale] = { name: 'android: a stop 46 s old on arrival is stale', kind: 'reminder', skipped: 'no' };
   await renderPanel(sourceAnswering(referenceOutput('android'), reminder));
   await fireEvent.press(screen.getByRole('button', { name: 'Run self-test' }));
   expect(await screen.findByText(`2 of ${N} vectors differ from the reference`)).toBeTruthy();
-  expect(screen.getByText('android: [EXIT, STILL] in one batch posts')).toBeTruthy();
+  expect(screen.getByText('android: [EXIT, STILL] in a driven session posts, the note timing out at the session end')).toBeTruthy();
   expect(screen.getByText('effect')).toBeTruthy();
   expect(screen.getByText('expected "post", native "none"')).toBeTruthy();
   expect(screen.getByText('skipped (no), but android has this rule')).toBeTruthy();

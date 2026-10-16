@@ -50,16 +50,12 @@ jest.mock('expo-modules-core', () => {
     setTripReminder: jest.fn(async (on: boolean) => ({
       enabled: on,
       state: on ? 'needs' : 'off',
-      autoOff: false,
       missing: on ? ['locationAlways'] : [],
-      pausedUntil: null,
     })),
     getTripReminderStatus: jest.fn(async () => ({
       enabled: true,
-      state: 'paused',
-      autoOff: false,
+      state: 'on',
       missing: [],
-      pausedUntil: 1_700_600_000_000,
     })),
     requestReminderLocation: jest.fn(async () => 'whenInUse'),
     addListener: jest.fn(() => ({ remove })),
@@ -154,12 +150,10 @@ describe('every method goes to native with its arguments', () => {
     await expect(DriveSense.setTripReminder(true)).resolves.toEqual({
       enabled: true,
       state: 'needs',
-      autoOff: false,
       missing: ['locationAlways'],
-      pausedUntil: null,
     });
     expect(mockNative.setTripReminder).toHaveBeenCalledWith(true);
-    await expect(DriveSense.getTripReminderStatus()).resolves.toMatchObject({ state: 'paused', pausedUntil: 1_700_600_000_000 });
+    await expect(DriveSense.getTripReminderStatus()).resolves.toEqual({ enabled: true, state: 'on', missing: [] });
     await expect(DriveSense.requestReminderLocation()).resolves.toBe('whenInUse');
   });
 
@@ -199,9 +193,11 @@ describe('bridge validation', () => {
     ['getLastExitInfo', { ts: 1, reason: 'bored', whileCapturing: true }],
     ['isIgnoringBatteryOptimizations', 'true'],
     ['selfTest', 42],
-    ['getTripReminderStatus', { enabled: true, state: 'snoozed', autoOff: false, missing: [], pausedUntil: null }],
-    ['getTripReminderStatus', { enabled: true, state: 'needs', autoOff: false, missing: ['camera'], pausedUntil: null }],
+    ['getTripReminderStatus', { enabled: true, state: 'snoozed', missing: [] }],
+    ['getTripReminderStatus', { enabled: true, state: 'paused', missing: [] }],
+    ['getTripReminderStatus', { enabled: true, state: 'needs', missing: ['camera'] }],
     ['getTripReminderStatus', { enabled: true, state: 'on', autoOff: false, missing: [] }],
+    ['getTripReminderStatus', { enabled: true, state: 'on', missing: [], pausedUntil: null }],
     ['requestReminderLocation', 'sometimes'],
   ] as const)('a malformed %s result rejects', async (method, bad) => {
     mockNative[method]!.mockResolvedValueOnce(bad);
