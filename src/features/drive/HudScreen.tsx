@@ -130,7 +130,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const p = hudPalette(night);
   const units = useHudUnits();
 
-  const alert = useAlertFlash(live.lastAlert);
+  const alert = useAlertFlash(live.lastAlert, live.rowTs);
   const dashpal = useDashpalFlash();
   const dashpalChip = useDashpalChip();
   const nav = useNavigationButton(useOptionalDb());

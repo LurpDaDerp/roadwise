@@ -80,7 +80,7 @@ function DashpalBannerView({ visual, palette }: { visual: DashcamVisual; palette
       style={[styles.banner, { backgroundColor: tierColor(palette, dashpalTier(visual.tier)) }]}
     >
       <Ionicons name={ICON[visual.sound] ?? 'videocam-outline'} size={28} color={palette.ground} />
-      <Text allowFontScaling={false} numberOfLines={1} style={[styles.words, { color: palette.ground }]}>
+      <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={[styles.words, { color: palette.ground }]}>
         {words}
       </Text>
     </View>
@@ -113,12 +113,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'center',
+    maxWidth: '100%',
     gap: 10,
     minHeight: 56,
     paddingHorizontal: 22,
     borderRadius: 28,
   },
-  words: { fontFamily: fontFamilies.fieldBold, fontSize: 28, lineHeight: 34 },
+  words: { fontFamily: fontFamilies.fieldBold, fontSize: 28, lineHeight: 34, flexShrink: 1 },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
