@@ -29,14 +29,12 @@ export const DASHPAL_SERVICE = dashpalUuid('0001');
 /** An empty service advertised instead of the DashPal one while the pairing window is open. */
 export const PAIRING_SERVICE = dashpalUuid('00f0');
 export const INFO_CHAR = dashpalUuid('0002');
+/** Kept so the later handles never move; the dashcam refuses every write to it (link v2). */
 export const IDENTIFY_CHAR = dashpalUuid('0003');
 export const TX_CHAR = dashpalUuid('0004');
 export const RX_CHAR = dashpalUuid('0005');
 /** The pairing and session handshakes (open; ./auth.ts). */
 export const AUTH_CHAR = dashpalUuid('0006');
-
-/** The IDENTIFY characteristic's one command byte. */
-export const IDENTIFY_BYTE = 0x01;
 
 // ——— frame types ———
 
@@ -585,9 +583,6 @@ export function encodeInfo(
   if (info.nonce) for (let i = 0; i < 16; i++) w.u8(info.nonce[i] ?? 0);
   return w.bytes;
 }
-
-/** This app speaks protocol v1: the dashcam must accept it. */
-export const speaksV1 = (info: DashcamInfo): boolean => info.protoMin <= PROTOCOL_VERSION && PROTOCOL_VERSION <= info.protoMax;
 
 /** The dashcam speaks this app's link (v2): its INFO `proto` range includes it. */
 export const speaksLink = (info: DashcamInfo): boolean => info.protoMin <= LINK_VERSION && LINK_VERSION <= info.protoMax;
