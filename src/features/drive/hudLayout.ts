@@ -16,6 +16,7 @@ import {
   HALO_MIN_RING_BOX_PT,
   haloGeometry,
   haloNumeralPt,
+  HUD_MIN_TARGET_PT,
   hudLabelScale,
   signSize,
   SPEED_UNIT_GAP_PT,
@@ -91,12 +92,15 @@ function signFor(units: 'mi' | 'km', rowH: number, slotW: number): { w: number; 
   return { w: s.width, h: s.height };
 }
 
+/** A bottom row's side slots (sign, navigation): a third of the row, or what End leaves them. */
+const sideSlotW = (rowW: number): number => Math.max(0, Math.min(rowW / 3, (rowW - END_BUTTON_PT) / 2 - 4));
+
 /**
  * The bottom row's items: sign start-aligned, End centred, navigation end-aligned, all centred
  * vertically. The side slots are a third of the row, or what End leaves them in a narrow window.
  */
 function rowItems(row: Rect, units: 'mi' | 'km'): { sign: Rect; end: Rect; nav: Rect } {
-  const sideW = Math.max(0, Math.min(row.w / 3, (row.w - END_BUTTON_PT) / 2 - 4));
+  const sideW = sideSlotW(row.w);
   const s = signFor(units, row.h, sideW);
   const navW = Math.min(HUD_NAV_W_PT, sideW);
   const mid = row.y + row.h / 2;
@@ -162,7 +166,8 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
     const colW = (frameW - 16) / 2;
     const B = Math.floor(Math.min(HALO_MAX_BOX_PT, colW, frameH));
     const rowSpace = frameH - HUD_BAND_PT - GAP - HUD_POINTS_LINE_PT - GAP;
-    if (B >= HALO_MIN_RING_BOX_PT && rowSpace >= END_BUTTON_PT && colW / 3 >= END_BUTTON_PT) {
+    // The right column holds the bottom row when its side slots take the 64 pt navigation circle.
+    if (B >= HALO_MIN_RING_BOX_PT && rowSpace >= END_BUTTON_PT && sideSlotW(colW) >= HUD_MIN_TARGET_PT) {
       const rx = left + colW + 16;
       const band: Rect = { x: rx, y: top, w: colW, h: HUD_BAND_PT };
       const rowH = Math.min(HUD_ROW_MAX_PT, rowSpace);

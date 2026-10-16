@@ -78,6 +78,22 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.row.x).toBeGreaterThan(l.halo.x + l.halo.w);
   });
 
+  test('a 360 × 640 Android turned, with the 3-button bar on the right (640 × 360, right 48): the ring, 272 pt', () => {
+    const l = L({ width: 640, height: 360, insets: { ...ZERO, right: 48 } });
+    expect(l).toMatchObject({ orientation: 'landscape', compact: false, halo: { w: 272, ring: true } });
+    expect(l.nav.w).toBeGreaterThanOrEqual(64);
+    expect(l.numeralPt2).toBeGreaterThanOrEqual(96);
+    const statusBar = L({ width: 640, height: 360, insets: { ...ZERO, top: 24, right: 48 } });
+    expect(statusBar).toMatchObject({ compact: false, halo: { ring: true } });
+    expect(L({ width: 600, height: 400 })).toMatchObject({ compact: false, halo: { w: 276, ring: true } });
+  });
+
+  test('landscape falls to compact only when the right column cannot hold End and two 64 pt slots', () => {
+    // colW = (width - 32 - 16) / 2; the side slots (colW - 96) / 2 - 4 >= 64 from colW 232
+    expect(L({ width: 512, height: 400 })).toMatchObject({ compact: false });
+    expect(L({ width: 510, height: 400 })).toMatchObject({ compact: true });
+  });
+
   test('a DashPal paired: an 88 pt chip slot at the band right; the line beside it, never under it', () => {
     const l = L({ width: 393, height: 852, chip: true });
     expect(l.chip).toEqual({ x: l.band.x + l.band.w - 88, y: l.band.y, w: 88, h: 56 });
@@ -98,6 +114,8 @@ describe('invariants across windows', () => {
       // (side insets only on a window as wide as a phone turned on its side)
       const side = h >= 568 ? ins.top : 0;
       cases.push({ w: h, h: w, ins: { top: 0, bottom: ins.bottom > 0 && h >= 568 ? 21 : 0, left: side, right: side }, chip: false, units: 'km' });
+      // an Android phone turned, its 3-button bar on one side, the status bar on top
+      if (h >= 568) cases.push({ w: h, h: w, ins: { top: 24, bottom: 0, left: 0, right: 48 }, chip: true, units: 'mi' });
     }
 
   test('End is always fully inside the window (every window from 280 × 320, both orientations, any insets)', () => {
@@ -189,9 +207,10 @@ describe('compact windows (§3.3)', () => {
     expect(compact).toBeGreaterThan(20);
   });
 
-  test('600 × 300: the box is the full width, the numerals large, the label 8 pt clear of End', () => {
-    const l = L({ width: 600, height: 300 });
-    expect(l.halo).toMatchObject({ x: 16, w: 568, ring: false });
+  test('412 × 300 (a third of a split screen): the box is the full width, the numerals large, the label 8 pt clear of End', () => {
+    const l = L({ width: 412, height: 300 });
+    expect(l.compact).toBe(true);
+    expect(l.halo).toMatchObject({ x: 16, w: 380, ring: false });
     expect(l.numeralPt2).toBe(126);
     const clear = l.end.y - readout(l, l.numeralPt2).labelBottom;
     expect(clear).toBeGreaterThanOrEqual(8);
@@ -209,10 +228,11 @@ describe('compact windows (§3.3)', () => {
     expect(l.numeralPt3).toBeLessThan(l.numeralPt2);
   });
 
-  test('a short wide window (600 × 300) is compact too, End inside', () => {
-    const l = L({ width: 600, height: 300 });
+  test('a short wide window (600 × 240) is compact too, End inside; at 600 × 300 a 272 pt ring fits', () => {
+    const l = L({ width: 600, height: 240 });
     expect(l.compact).toBe(true);
-    expect(inside(l.end, 600, 300)).toBe(true);
+    expect(inside(l.end, 600, 240)).toBe(true);
+    expect(L({ width: 600, height: 300 })).toMatchObject({ compact: false, halo: { w: 272, ring: true } });
   });
 
   test('a larger font scale grows the unit label and shrinks the numerals, never the halo', () => {
