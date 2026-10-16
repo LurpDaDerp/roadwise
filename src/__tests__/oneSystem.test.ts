@@ -1,7 +1,9 @@
 /**
  * Mechanical proof of "one permission system, one notification plumbing, and every drive started
- * by hand" (Task 19; rev1: C1, I3; plan §1 decision 4). Every source file under `src/` and `app/`
- * (tests and fixtures excluded) is read with its comments stripped, and:
+ * by hand: the Start Drive tap, or a tap on the forgot-to-start reminder's notification, which the
+ * notification-tap handler claims natively and then starts through the same Start Drive path;
+ * nothing automatic" (Task 19; rev1: C1, I3; plan §1 decision 4). Every source file under `src/`
+ * and `app/` (tests and fixtures excluded) is read with its comments stripped, and:
  *
  * - no file outside `src/core/permissions` names `requestForegroundPermissionsAsync`,
  *   `requestPermissionsAsync`, `requestMotionPermission` or `requestReminderLocation`;
@@ -11,11 +13,14 @@
  *   (`TaskManager`, `defineTask`, `registerTaskAsync`, `BackgroundFetch`), the old auto-record switch
  *   (`setAutoDetect`) or the old forgot-to-start reminder (`setForgotToStartReminder`,
  *   `checkForgottenDrive`); and `package.json` carries no background-task package. The optional
- *   forgot-to-start reminder lives in native code (drive-sense) and only notifies; JS only switches
- *   it and reads its status, from `src/features/reminder` alone;
- * - the reminder's own files can reach nothing that starts a drive, Home reads no link parameter
- *   (a notification or link opens Home and starts nothing), and no JS replaces the native
- *   notification categories (the reminder's "Not driving" action lives there);
+ *   forgot-to-start reminder lives in native code (drive-sense) and only notifies; JS switches it
+ *   and reads its status from `src/features/reminder` alone;
+ * - the reminder's own files can reach nothing that starts a drive; only the notification-tap
+ *   handler (`src/features/notifications/reminderTap.ts`) claims a reminder tap, only the
+ *   notification plumbing runs one, and that plumbing names nothing that starts a drive and imports
+ *   nothing of the drive but its types (it is handed the start); the start notice Home shows
+ *   carries words only; Home reads no link parameter (a notification or link opens Home and starts
+ *   nothing); and no JS sets notification categories (no RoadWise notification has buttons);
  * - only `src/features/notifications` names `setNotificationHandler` or
  *   `addNotificationResponseReceivedListener`;
  * - M3's interim detection screen, its `/detection` route and the auto-record route are gone.
@@ -83,6 +88,15 @@ export const REMINDER_NEVER_STARTS: readonly string[] = [
 /** Repo paths the reminder's files may not import, by any route: the drive, the drive screens, Home. */
 export const REMINDER_FORBIDDEN_MODULES: readonly string[] = ['src/drive', 'src/features/drive', 'src/features/home'];
 
+/** The notification plumbing, which runs a reminder tap with the start it is handed. */
+export const NOTIFICATION_FILES: readonly string[] = ['src/features/notifications/'];
+
+/** The one Home module the notification plumbing may import a value from: the start notice (words only). */
+export const NOTIFICATION_ALLOWED_MODULES: readonly string[] = ['src/features/home/startNotice'];
+
+/** The start notice Home shows when a reminder tap started no drive. */
+export const START_NOTICE_FILE = 'src/features/home/startNotice.ts';
+
 /** Every module specifier in `from '…'`, `import '…'`, `import('…')` and `require('…')`. */
 const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)(['"`])([^'"`]+)\1/g;
 
@@ -124,6 +138,30 @@ export const RULES: readonly Rule[] = [
     scope: REMINDER_FILES,
   },
   {
+    // A tap's token is claimed natively once, by the handler that then starts the drive.
+    name: 'only the notification-tap handler claims a reminder tap',
+    names: ['claimReminderTap', 'takeReminderTap'],
+    allowed: ['src/features/notifications/reminderTap.ts'],
+  },
+  {
+    name: 'a reminder tap starts a drive only through NotificationsHost',
+    names: ['startFromReminderTap', 'watchReminderTapIntents'],
+    allowed: NOTIFICATION_FILES,
+  },
+  {
+    // It is handed the Start Drive button's start (`startDrive`); it names no way to the drive itself.
+    name: 'the notification plumbing cannot reach the drive by itself',
+    names: REMINDER_NEVER_STARTS,
+    allowed: [],
+    scope: NOTIFICATION_FILES,
+  },
+  {
+    name: 'the start notice carries words only',
+    names: [...REMINDER_NEVER_STARTS, 'start', 'claimReminderTap'],
+    allowed: [],
+    scope: [START_NOTICE_FILE],
+  },
+  {
     // A notification tap or a link opens Home; Home starts nothing from what opened it.
     name: 'Home never reads a link parameter',
     names: ['useLocalSearchParams', 'useGlobalSearchParams', 'useSearchParams'],
@@ -131,7 +169,8 @@ export const RULES: readonly Rule[] = [
     scope: ['app/(tabs)/home.tsx', 'src/features/home/'],
   },
   {
-    // The native reminder registers its "Not driving" category; JS must not replace the set.
+    // No RoadWise notification has buttons: the forgot-to-start reminder's only action is its tap
+    // (PRODUCT.md). A category set from JS would add buttons nothing handles.
     name: 'no JS notification categories',
     names: ['setNotificationCategoryAsync'],
     allowed: [],
@@ -233,6 +272,9 @@ export function scan(files: Readonly<Record<string, string>>, rules: readonly Ru
   return found;
 }
 
+/** Whether `target` is `mod` or under it. */
+const within = (target: string, mod: string): boolean => target === mod || target.startsWith(`${mod}/`);
+
 /** The reminder files that import (statically, dynamically or by `require`, by alias or relative path) the drive, the drive screens or Home. */
 export function reminderImports(files: Readonly<Record<string, string>>): string[] {
   return Object.entries(files)
@@ -240,7 +282,31 @@ export function reminderImports(files: Readonly<Record<string, string>>): string
       if (!REMINDER_FILES.some((p) => file.startsWith(p))) return false;
       return [...stripComments(src).matchAll(SPECIFIER)].some((m) => {
         const target = resolveSpecifier(file, m[2] as string);
-        return target !== null && REMINDER_FORBIDDEN_MODULES.some((mod) => target === mod || target.startsWith(`${mod}/`));
+        return target !== null && REMINDER_FORBIDDEN_MODULES.some((mod) => within(target, mod));
+      });
+    })
+    .map(([file]) => file);
+}
+
+/** `import type …` and `export type … from` statements: erased at build, so they reach nothing at run time. */
+const TYPE_ONLY = /\b(?:import|export)\s+type\b[^;]*?\bfrom\s*(['"`])[^'"`]+\1/g;
+
+/**
+ * The notification files, and the start notice, that import a value (types are fine: they are
+ * erased) from the drive, the drive screens or Home (the start notice excepted, for the plumbing).
+ */
+export function notificationImports(files: Readonly<Record<string, string>>): string[] {
+  return Object.entries(files)
+    .filter(([file, src]) => {
+      const plumbing = NOTIFICATION_FILES.some((p) => file.startsWith(p));
+      if (!plumbing && file !== START_NOTICE_FILE) return false;
+      const code = stripComments(src).replace(TYPE_ONLY, '');
+      return [...code.matchAll(SPECIFIER)].some((m) => {
+        const target = resolveSpecifier(file, m[2] as string);
+        if (target === null) return false;
+        if (plumbing && NOTIFICATION_ALLOWED_MODULES.some((mod) => within(target, mod))) return false;
+        const forbidden = plumbing ? REMINDER_FORBIDDEN_MODULES : ['src/drive', 'src/features/drive'];
+        return forbidden.some((mod) => within(target, mod));
       });
     })
     .map(([file]) => file);
@@ -363,6 +429,49 @@ describe('the scanner (negative control)', () => {
     ]);
   });
 
+  test('the reminder tap rules: a claim only in the tap handler, a run only in the plumbing, nothing of the drive in the plumbing or the notice', () => {
+    const planted = {
+      'src/features/home/x.ts': "await DriveSense.claimReminderTap('tok');",
+      'src/features/reminder/t.ts': 'const tap = await DriveSense.takeReminderTap();',
+      'app/_layout.tsx': 'void startFromReminderTap(hold, deps); watchReminderTapIntents(f);',
+      'src/features/notifications/y.ts': 'const host = useDriveHost(); host.start();',
+      'src/features/notifications/z.tsx': '<StartDriveBar onStart={f} />',
+      'src/features/home/startNotice.ts': "await DriveSense.startCapture('mounted'); start();",
+      // fine: the tap handler claims, the plumbing runs it, the layout hands it the start
+      'src/features/notifications/reminderTap.ts': 'await native.claimReminderTap(token); await native.takeReminderTap();',
+      'src/features/notifications/NotificationsHost.tsx': 'startFromReminderTap(hold, { start: () => props.startDrive() }); watchReminderTapIntents(f);',
+      'app/(tabs)/ok.tsx': 'startDrive={() => host.start()}',
+    };
+    expect(scan(planted).map((v) => `${v.file}:${v.name}`)).toEqual([
+      'src/features/home/x.ts:claimReminderTap',
+      'src/features/reminder/t.ts:takeReminderTap',
+      'app/_layout.tsx:startFromReminderTap',
+      'app/_layout.tsx:watchReminderTapIntents',
+      'src/features/notifications/y.ts:useDriveHost',
+      'src/features/notifications/z.tsx:StartDriveBar',
+      'src/features/home/startNotice.ts:startCapture',
+      'src/features/home/startNotice.ts:start',
+    ]);
+    expect(
+      notificationImports({
+        'src/features/notifications/a.ts': "import { createDriveHost } from '@/drive/host';",
+        'src/features/notifications/b.ts': "import { useDrive } from '../../drive/useDrive';",
+        'src/features/notifications/c.ts': "const { HudScreen } = require('@/features/drive/HudScreen');",
+        'src/features/notifications/d.ts': "import { HomeScreen } from '@/features/home/HomeScreen';",
+        'src/features/home/startNotice.ts': "import { useDrive } from '@/drive/useDrive';",
+        // fine: types, the start notice, packages
+        'src/features/notifications/ok.ts': ["import type { StartResult } from '@/drive/host';", "import { showStartNotice } from '@/features/home/startNotice';", "import DriveSense from '@drive-sense';"].join('\n'),
+        'src/features/home/ok.ts': "import { useDrive } from '@/drive/useDrive';",
+      })
+    ).toEqual([
+      'src/features/notifications/a.ts',
+      'src/features/notifications/b.ts',
+      'src/features/notifications/c.ts',
+      'src/features/notifications/d.ts',
+      'src/features/home/startNotice.ts',
+    ]);
+  });
+
   test('a background-task package is found in package.json', () => {
     expect(forbiddenPackages({ dependencies: { 'expo-task-manager': '~1.0.0', expo: '55' } })).toEqual(['expo-task-manager']);
     expect(forbiddenPackages({ devDependencies: { 'expo-background-task': '1' }, optionalDependencies: { 'expo-background-fetch': '1' } })).toEqual([
@@ -418,6 +527,15 @@ describe('the repository', () => {
       expect.arrayContaining(['src/features/reminder/enable.ts', 'src/features/reminder/ReminderRow.tsx', 'src/features/onboarding/steps/ReminderStep.tsx'])
     );
     expect(reminderImports(files)).toEqual([]);
+  });
+
+  test('a reminder tap reaches the drive only as the start it is handed: the plumbing and the start notice import nothing of the drive but types', () => {
+    expect(Object.keys(files)).toEqual(
+      expect.arrayContaining([START_NOTICE_FILE, 'src/features/notifications/reminderTap.ts', 'src/features/notifications/NotificationsHost.tsx'])
+    );
+    expect(notificationImports(files)).toEqual([]);
+    // the root layout hands the host's own start to the plumbing
+    expect(stripComments(files['app/_layout.tsx'] ?? '')).toContain('const startDrive = useCallback(() => host.start(), [host]);');
   });
 
   test('package.json depends on no background-task package', () => {
