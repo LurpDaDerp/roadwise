@@ -463,6 +463,36 @@ describe('pairing mode, busy, retries', () => {
     expect(cam.authWrites.filter((x) => x[0] === 0x10)).toHaveLength(3);
   });
 
+  test('R_NOT_NOW after a pending answer, with the window timing out meanwhile: the claim is held, so the request goes again under it and pairs', async () => {
+    const r = rig();
+    const cam = r.cams.get(0xd5)!;
+    const w = r.ble.onWrite!;
+    let reqs = 0;
+    r.ble.onWrite = (x) => {
+      if (x.characteristic !== AUTH_CHAR || x.bytes[0] !== 0x10) return w(x);
+      reqs += 1;
+      if (reqs === 1) {
+        // The code tag checks (pending), the dashcam fails to compute its answer, and the window
+        // times out while the claim lives on.
+        cam.force.pair_req = R.NOT_NOW;
+        cam.pendingReads = 2;
+        cam.windowOpen = false;
+        return w(x);
+      }
+      // The fake has no claim: the live claim lets this request through with the window closed.
+      cam.windowOpen = true;
+      try {
+        return w(x);
+      } finally {
+        cam.windowOpen = false;
+      }
+    };
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end.kind).toBe('done');
+    expect(reqs).toBe(2);
+    expect(kinds(r)).not.toContain('press_button');
+  });
+
   test('with a named DashPal, a disconnect before the verdict: one reconnect and the request again; twice: error, never wrong_code', async () => {
     const r = rig();
     const id = idOf('android', 0xd5);

@@ -363,13 +363,17 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
 
   // ——— one AUTH exchange ———
 
-  /** The verdict of the last AUTH write: polled every 100 ms while pending, up to `ms`. */
-  async function verdict(t: DashcamTransport, id: string, ms: number): Promise<AuthRecord | 'fault' | 'timeout'> {
+  /**
+   * The verdict of the last AUTH write: polled every 100 ms while pending, up to `ms`. `onPending`:
+   * the dashcam answered pending (the code tag checked: the request took or holds the claim).
+   */
+  async function verdict(t: DashcamTransport, id: string, ms: number, onPending?: () => void): Promise<AuthRecord | 'fault' | 'timeout'> {
     const until = deps.now() + ms;
     for (;;) {
       check();
       const rec = await t.authRead(id);
       if (rec === 'fault' || rec.kind !== 'pending') return rec;
+      onPending?.();
       if (deps.now() >= until) return 'timeout';
       await deps.sleep(PAIR_POLL_MS);
     }
@@ -405,12 +409,16 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     let idRetried = false;
     let mtuRetried = false;
     let notNowRetries = 0;
-    /** the last time a request of ours was answered pending or with PAIR_RESP (we may hold the claim) */
+    /**
+     * When the request that took the claim on this connection was sent (its answer was pending or
+     * PAIR_RESP): the claim lasts 15 s from it, later requests never extend it, and a drop ends it.
+     */
     let claimedAt: number | null = null;
     let replaceAsked = false;
     let pressAsked = false;
     const holdsClaim = (): boolean => claimedAt !== null && deps.now() - claimedAt < CLAIM_MS;
     const linkFailed = async (): Promise<Attempt | null> => {
+      claimedAt = null; // the claim ends with its connection
       await release(t, c.id);
       if (reconnects++ < 1) return null;
       return named ? { kind: 'failed', reason: 'error' } : { kind: 'next', why: 'link' };
@@ -498,12 +506,16 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
         report(e, 'pair request');
         return { kind: 'failed', reason: 'error' };
       }
+      const sentAt = deps.now();
+      const claimed = (): void => {
+        claimedAt ??= sentAt;
+      };
       if ((await t.authWrite(c.id, req.bytes)) === 'fault') {
         const r = await linkFailed();
         if (r) return r;
         continue;
       }
-      const resp = await verdict(t, c.id, PAIR_RESP_MS);
+      const resp = await verdict(t, c.id, PAIR_RESP_MS, claimed);
       if (resp === 'fault' || !t.setupLinkUp(c.id)) {
         // A disconnect before the verdict was read: a link failure, never a wrong code.
         const r = await linkFailed();
@@ -549,7 +561,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
         }
       }
       if (resp.kind !== 'pair_resp') return { kind: 'failed', reason: 'error' };
-      claimedAt = deps.now();
+      claimed();
       const keys = pairKeys({ code: aim.code.S, mac: info.mac, nc: info.nonce, req: req.bytes, a: keysA.a, B: resp.B, Nd: resp.Nd });
       wipe(keysA.a);
       if (!keys || !proofOk(keys.proofD, resp.proofD)) {
