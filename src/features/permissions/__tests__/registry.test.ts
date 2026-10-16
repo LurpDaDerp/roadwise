@@ -135,10 +135,16 @@ describe("the reminder's need", () => {
     );
   });
 
-  it("Android: app-wide notifications off is only the notifications row; motion or precise needs aren't repeated", () => {
+  it('Android: app-wide notifications off is only the notifications row; the reminder row is not in use until they are on', () => {
     const off = board({ platform: 'android', notifications: 'denied' }, { reminder: reminder({ state: 'needs', missing: ['notifications'] }) });
-    expect(state('reminderAccess', off)).toEqual({ kind: 'granted' });
+    expect(state('reminderAccess', off)).toEqual({ kind: 'idle' });
     expect(state('notifications', off).kind).toBe('missing');
+    // Two reads that disagree (the reminder's taken before notifications were switched off): still not On.
+    expect(state('reminderAccess', board({ platform: 'android', notifications: 'denied' }, { reminder: reminder() }))).toEqual({ kind: 'idle' });
+    expect(state('reminderAccess', board({ platform: 'android', notifications: 'undetermined' }, { reminder: reminder() }))).toEqual({ kind: 'idle' });
+  });
+
+  it("Android: motion or precise needs aren't repeated", () => {
     expect(state('reminderAccess', board({ platform: 'android', motion: 'denied' }, { reminder: reminder({ state: 'needs', missing: ['motion'] }) }))).toEqual({
       kind: 'granted',
     });

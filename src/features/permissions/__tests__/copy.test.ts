@@ -54,6 +54,8 @@ test('Settings details by state and platform', () => {
   expect(rowDetail('reminderAccess', { kind: 'idle' }, IOS, { reminderOn: false })).toBe('Only for the forgot-to-start reminder, which is off.');
   expect(rowDetail('reminderAccess', { kind: 'idle' }, IOS, { reminderOn: true })).toBe('Allow Location first; the reminder then needs it set to Always.');
   expect(rowDetail('reminderAccess', m('denied', false, 'reminderChannel'), ANDROID)).toBe("The forgot-to-start reminder can't show its note.");
+  expect(rowDetail('reminderAccess', { kind: 'idle' }, ANDROID, { reminderOn: true })).toBe('Turn on Notifications first; the reminder then shows its note.');
+  expect(rowDetail('reminderAccess', { kind: 'idle' }, ANDROID, { reminderOn: false })).toBe('Only for the forgot-to-start reminder, which is off.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, IOS)).toBe('Used only with a paired DashPal.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID)).toBe('Used only with a paired DashPal.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID_11)).toBe('Uses Location on this phone.');

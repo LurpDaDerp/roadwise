@@ -125,8 +125,10 @@ function reminderAccessState(read: PermissionBoardRead): PermState {
     return read.snapshot.location === 'always' ? GRANTED : UNKNOWN;
   }
   // Android: only the reminder's own channel switched off is this row; app-wide notifications are
-  // the notifications row, and motion is the motion row.
-  if (needs.includes('notifications') && notificationsState(read).kind === 'granted') return missing('denied', false, 'reminderChannel');
+  // the notifications row (with them off no note can appear, so this row is not in use until they
+  // are on), and motion is the motion row.
+  if (notificationsState(read).kind !== 'granted') return IDLE;
+  if (needs.includes('notifications')) return missing('denied', false, 'reminderChannel');
   return GRANTED;
 }
 

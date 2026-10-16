@@ -155,6 +155,9 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx, opts: 
         if (state.kind === 'missing') return 'The reminder needs Location set to Always.';
         return opts.reminderOn ? 'Allow Location first; the reminder then needs it set to Always.' : 'Only for the forgot-to-start reminder, which is off.';
       }
+      if (state.kind === 'idle') {
+        return opts.reminderOn ? 'Turn on Notifications first; the reminder then shows its note.' : 'Only for the forgot-to-start reminder, which is off.';
+      }
       return on ? 'Drive reminder notifications can appear.' : "The forgot-to-start reminder can't show its note.";
     case 'bluetooth':
       if (state.kind === 'idle') return nearbyDevices(c) || ios ? 'Used only with a paired DashPal.' : 'Uses Location on this phone.';
