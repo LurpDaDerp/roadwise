@@ -772,8 +772,9 @@ state: `inVehicle` stays false and a session ends by time. **Driving** is the en
 CoreMotion `automotive` stretch that is not `stationary` (a car standing still is neither driving
 nor a break; each activity lasts until the next begins, the newest until now), read from the last
 3 h of motion history (`IOS_MOTION_LOOKBACK_MS`, always the same window) at every wake, claim,
-status read, launch, return to the front, and a drive's start and end; and every GPS fix at 10 mph
-or more during a look. A car run that began 30 min or more after the session's last driving moment
+status read, launch, return to the front, and a drive's start and end, but only while the reminder
+is on (off, `motionWhileOn` queries nothing and folds in an empty summary, which changes nothing as
+off has no session); and every GPS fix at 10 mph or more during a look. A car run that began 30 min or more after the session's last driving moment
 (only 30 min without moving car motion splits a run) is a new trip after a park: the old session
 ends. A wake first runs the cheap checks (off, permissions, a drive open), then reads the motion
 history; a session opens on moving car motion from the last 2 min with the driver not on foot. A

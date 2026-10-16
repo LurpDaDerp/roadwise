@@ -478,10 +478,9 @@ describe('iOS forgot-to-start reminder: one post, a stored state never overwritt
       expect({ open, reloads: load > -1 && load < save }).toEqual({ open, reloads: true });
     };
     // the refresh, the wake's motion read, the capture's start and end, and the claim (after its refresh)
-    for (const fn of ['func refresh(', 'private func onWake()', 'func onCaptureStarted()', 'func onCaptureEnded()']) {
-      const body = new RegExp(`${fn.replace(/[()]/g, '\\$&')}[\\s\\S]*?\\n {2}\\}`).exec(r)?.[0] ?? '';
-      after(body, 'ActivitySource.recentAutomotive { motion in');
-    }
+    const fnBody = (fn: string) => new RegExp(`${fn.replace(/[()]/g, '\\$&')}[\\s\\S]*?\\n {2}\\}`).exec(r)?.[0] ?? '';
+    after(fnBody('private func onWake()'), 'ActivitySource.recentAutomotive { motion in');
+    for (const fn of ['func refresh(', 'func onCaptureStarted()', 'func onCaptureEnded()']) after(fnBody(fn), 'motionWhileOn { motion in');
     const claim = /func claim\(_ token: String[\s\S]*?\n {2}\}/.exec(r)?.[0] ?? '';
     after(claim, 'refresh { _ in');
     expect(claim).toMatch(/TripReminderPolicy\.claim\(s0, token, Self\.nowMs\(\), self\.captureOpen, false\)/);
@@ -494,6 +493,24 @@ describe('iOS forgot-to-start reminder: one post, a stored state never overwritt
     expect(r).toMatch(/TripReminderPolicy\.captureEnded\(folded, at, at\)/);
     expect(r).toMatch(/TripReminderPolicy\.foldMotion\(TripReminderPolicy\.clampTimes\(s0, at\), at, motion, false\)/);
     expect(r).toMatch(/TripReminderPolicy\.foldMotion\(TripReminderPolicy\.clampTimes\(s0, at\), at, motion, true\)/);
+  });
+
+  it('the motion history is read only while the reminder is on: off, no query at all (a refresh, a drive start or end)', () => {
+    const r = code('TripReminder.swift');
+    const helper = /func motionWhileOn\(_ done: @escaping \(MotionSummary\) -> Void\) \{[\s\S]*?\n {2}\}/.exec(r)?.[0] ?? '';
+    expect(helper).toMatch(
+      /guard loadState\(\)\?\.enabled == true else \{\s*done\(MotionSummary\(lastAutomotiveAt: 0, automotiveSince: 0, onFootNow: false\)\)\s*return\s*\}\s*ActivitySource\.recentAutomotive\(done\)/
+    );
+    // the helper and the wake are the only reads; the wake reads only after its gate, which answers "off" first
+    expect(r.split('ActivitySource.recentAutomotive').length - 1).toBe(2);
+    const wake = /private func onWake\(\)[\s\S]*?\n {2}\}/.exec(r)?.[0] ?? '';
+    const gate = wake.indexOf('TripReminderPolicy.gate(s1, ctx, Self.nowMs(), .wake) == "ok"');
+    expect(gate).toBeGreaterThan(-1);
+    expect(wake.indexOf('ActivitySource.recentAutomotive')).toBeGreaterThan(gate);
+    expect(code('TripReminderPolicy.swift')).toMatch(/static func gate\([^)]*\) -> String \{\s*if !s\.enabled \{ return "off" \}/);
+    // off forgets the session, and the folds act only on a session, so the empty summary changes nothing
+    expect(code('TripReminderPolicy.swift')).toMatch(/static func setEnabled\([^)]*\) -> ReminderState \{\s*if !on \{ return ReminderState\(\) \}/);
+    expect(code('TripReminderWakePolicy.swift')).toMatch(/static func foldMotion\([^)]*\) -> ReminderState \{\s*var s = s0\s*if let x = s\.session \{/);
   });
 
   it('the wake off ends the look and takes a note still up down, its token gone', () => {

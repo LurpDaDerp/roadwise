@@ -104,15 +104,26 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
     return c
   }
 
-  /// Brings the stored state up to now: the motion history (empty without Motion & Fitness) folded
-  /// in, then the time rule. A note whose session ended comes down. `done` gets the saved state
-  /// (nil when nothing is stored).
+  /// The last 3 h of motion history, read only while the stored reminder is on. Off (also the state
+  /// a sign-out leaves) nothing is queried and `done` gets an empty summary at once: off has no
+  /// session, and the folds act only on a session, so it changes nothing. Answers on main.
+  func motionWhileOn(_ done: @escaping (MotionSummary) -> Void) {
+    guard loadState()?.enabled == true else {
+      done(MotionSummary(lastAutomotiveAt: 0, automotiveSince: 0, onFootNow: false))
+      return
+    }
+    ActivitySource.recentAutomotive(done)
+  }
+
+  /// Brings the stored state up to now: the motion history (empty without Motion & Fitness, or with
+  /// the reminder off) folded in, then the time rule. A note whose session ended comes down. `done`
+  /// gets the saved state (nil when nothing is stored).
   func refresh(_ done: @escaping (ReminderState?) -> Void = { _ in }) {
     guard loadState() != nil else {
       done(nil)
       return
     }
-    ActivitySource.recentAutomotive { motion in
+    motionWhileOn { motion in
       guard let s0 = self.loadState() else {
         done(nil)
         return
@@ -179,7 +190,7 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
     TripReminderNotifier.remove()
     let at = Self.nowMs()
     guard loadState() != nil else { return }
-    ActivitySource.recentAutomotive { motion in
+    motionWhileOn { motion in
       guard let s0 = self.loadState() else { return }
       let folded = TripReminderPolicy.foldMotion(TripReminderPolicy.clampTimes(s0, at), at, motion, false)
       self.saveState(TripReminderPolicy.captureStarted(folded, at))
@@ -187,12 +198,13 @@ final class TripReminder: NSObject, CLLocationManagerDelegate {
   }
 
   /// A drive ended: its end is the session's last driving moment. (The motion reads are answered in
-  /// order on one queue, so this lands after the start's.)
+  /// order on one queue, so this lands after the start's. With the reminder off nothing is read and
+  /// both steps run at once on a state with no session, so their order changes nothing.)
   func onCaptureEnded() {
     captureOpen = false
     let at = Self.nowMs()
     guard loadState() != nil else { return }
-    ActivitySource.recentAutomotive { motion in
+    motionWhileOn { motion in
       guard let s0 = self.loadState() else { return }
       let folded = TripReminderPolicy.foldMotion(TripReminderPolicy.clampTimes(s0, at), at, motion, true)
       self.saveState(TripReminderPolicy.captureEnded(folded, at, at))
