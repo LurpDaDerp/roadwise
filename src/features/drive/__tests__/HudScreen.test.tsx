@@ -33,6 +33,7 @@ jest.mock('@/drive/useDrive', () => ({
   useDrive: <T,>(sel: (s: { lastFinalized: LastFinalized }) => T) => sel({ lastFinalized: mockLastFinalized }),
   useDriveLive: () => mockLive,
   useDriveControls: () => ({ start: jest.fn(), end: mockEnd }),
+  useDriveHost: () => ({ snapshot: () => ({ lastFinalized: mockLastFinalized }) }),
 }));
 
 const p = HUD.day;
@@ -277,6 +278,28 @@ describe('hold to end', () => {
     await h.update({ status: 'idle', clientTripId: null });
     expect(mockRouter.replace).toHaveBeenCalledTimes(1);
     expect(mockRouter.replace).toHaveBeenCalledWith(HOME_HREF);
+  });
+
+  test('a hold that lands after the drive dropped itself, before this screen saw it go idle, goes Home', async () => {
+    // The engine is already idle with this drive dropped (end() finds no drive), but the screen
+    // still shows it recording, so the render-time drop id is stale.
+    await renderHud();
+    mockEnd.mockResolvedValue(null);
+    mockLastFinalized = drop('t1');
+    await fireEvent(screen.getByRole('button', { name: hudCopy.endLabel }), 'pressIn');
+    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
+    expect(mockRouter.replace).toHaveBeenCalledWith(HOME_HREF);
+  });
+
+  test('a hold that lands after the drive ended by itself and was kept goes to its summary', async () => {
+    await renderHud();
+    mockEnd.mockResolvedValue(null);
+    mockLastFinalized = { clientTripId: 't1', ok: true, status: null, pointsNet: 12, dropped: null, endCause: 'stopped', at: T };
+    await fireEvent(screen.getByRole('button', { name: hudCopy.endLabel }), 'pressIn');
+    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
+    expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
   });
 
   test('an older drive’s drop does not send this kept drive Home', async () => {

@@ -5,7 +5,7 @@ import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DashpalChip, DashpalHudBanner, dashpalTier, useDashpalChip, useDashpalFlash } from '@/dashcam/ui/HudDashpal';
-import { useDrive, useDriveControls, useDriveLive } from '@/drive/useDrive';
+import { useDrive, useDriveControls, useDriveHost, useDriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { sunIsDown } from '@/lib/time';
 import { fontFamilies } from '@/ui/fonts';
@@ -114,6 +114,7 @@ export type HudScreenProps = {
 export function HudScreen({ overlay = false }: HudScreenProps) {
   const live = useDriveLive();
   const controls = useDriveControls();
+  const host = useDriveHost();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -153,12 +154,19 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
     setEndFailed(false);
     try {
       const done = await controls.end();
-      leave(done?.dropped ? null : (done?.clientTripId ?? lastTripId.current));
+      if (done !== null) leave(done.dropped ? null : done.clientTripId);
+      else {
+        // No drive was open: it ended by itself between the hold and this screen's idle render (the
+        // idle effect below is held off by `ending`). Read the store now, not the render's drop id.
+        const id = lastTripId.current;
+        const f = host.snapshot().lastFinalized;
+        leave(id !== null && f !== null && f.ok && f.dropped !== null && f.clientTripId === id ? null : id);
+      }
     } catch {
       setEnding(false);
       setEndFailed(true);
     }
-  }, [ending, controls, leave]);
+  }, [ending, controls, host, leave]);
 
   // A drive that ends without the button (it ended by itself) still lands on its summary, or on
   // Home when it was not kept.
