@@ -263,7 +263,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
               size={numeral}
               speeding={speeding}
             />
-            <SpeedSign limit={inUnits(live.limitMph, units)} palette={p} />
+            <SpeedSign limit={inUnits(live.limitMph, units)} palette={p} units={units} height={116} />
           </View>
           {/* Twice guarded: the pipeline publishes points only while stopped, and the screen shows
               them only while the car is known to be stopped (a lost fix is not "stopped"). */}
