@@ -68,8 +68,12 @@ interface Episode {
   speedAtPickupMph: number | null;
   stoppedInTraffic: boolean;
   phase: 'switching' | 'hold' | null;
-  /** Three short switches: one pickup, no handling. */
+  /**
+   * Three short switches: one pickup of at most 15 s for them (no handling). `burstUntil`: the
+   * last one's end; use after it (a switch that joined the episode) adds its own seconds.
+   */
   burst: boolean;
+  burstUntil: number | null;
 }
 
 /** A stretch of consecutive away rows. */
@@ -105,6 +109,18 @@ export interface PhoneUseDetector extends Detector {
 const lastUse = (e: Episode): number | null =>
   e.lastMotionTs === null ? e.lastSwitchTs : e.lastSwitchTs === null ? e.lastMotionTs : Math.max(e.lastMotionTs, e.lastSwitchTs);
 
+/**
+ * The episode's use time, seconds: from its start to its last use row. A burst counts its short
+ * switches as at most `HANDLING_FREE_S` (one pickup, no handling), plus any use after the last one.
+ */
+function usedS(e: Episode): number | null {
+  const last = lastUse(e);
+  if (last === null) return null;
+  if (!e.burst || e.burstUntil === null) return (last - e.startedAt) / 1000 + 1;
+  const burstS = Math.min((e.burstUntil - e.startedAt) / 1000 + 1, HANDLING_FREE_S);
+  return burstS + Math.max(0, (last - e.burstUntil) / 1000);
+}
+
 export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
   let ep: Episode | null = null;
   /** The car has moved above 5 mph at some point of the drive. */
@@ -135,16 +151,15 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
     stoppedInTraffic: false,
     phase: null,
     burst: false,
+    burstUntil: null,
   });
 
   const close = (): DetectedEvent[] => {
     const e = ep;
     ep = null;
     if (e === null || !e.confirmed || e.ignored) return [];
-    const last = lastUse(e);
-    if (last === null) return [];
-    const usedS = (last - e.startedAt) / 1000 + 1;
-    const durationS = e.burst ? Math.min(usedS, HANDLING_FREE_S) : usedS;
+    const durationS = usedS(e);
+    if (durationS === null) return [];
     const measured: DetectedEvent['measured'] = { mounted: e.mounted };
     if (e.speedAtPickupMph !== null) measured.speedMph = round1(e.speedAtPickupMph);
     const pickup: DetectedEvent = {
@@ -216,6 +231,7 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
       ep.startedAt = Math.min(ep.startedAt, first.startTs);
     }
     ep.burst = true;
+    ep.burstUntil = lastEntry.endTs;
     ep.lastSwitchTs = lastEntry.endTs;
     ep.speedAtPickupMph = lastEntry.speedMph;
     ep.stoppedInTraffic = lastEntry.speedMph <= PHONE_MIN_MPH;
@@ -357,8 +373,9 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
     open() {
       if (ep === null || ep.ignored) return null;
       const out: OpenEpisode = { id: ep.id, type: 'phone_pickup', tier: 'severe', startedAt: ep.startedAt, confirmed: ep.confirmed, phase: ep.phase };
-      const last = lastUse(ep);
-      if (last !== null) out.lastUseAt = last;
+      // The use so far as the alerts read it (`lastUseAt − startedAt`): a burst's clamp included.
+      const used = usedS(ep);
+      if (used !== null) out.lastUseAt = ep.startedAt + (used - 1) * 1000;
       return out;
     },
     active: () => ep !== null && ep.confirmed && !ep.ignored && !(ep.phase === 'hold' && !motionNow),

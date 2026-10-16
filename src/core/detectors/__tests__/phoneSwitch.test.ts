@@ -202,6 +202,14 @@ describe('Android (switchSignal reliable)', () => {
       expect(run(parked)).toEqual([]);
     });
 
+    test('a long switch that joins the burst right after it adds its own time (the clamp covers only the short ones)', () => {
+      const rows = seq([10, front], [2, away], [3, front], [2, away], [3, front], [2, away], [1, front], [40, away], [5, front]);
+      const e = run(rows);
+      // the burst rows 10–21 count 12 s; the joined switch, rows 23–62, adds 41 s past row 21
+      expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 53 })]);
+      expect(handlingOf(e)).toEqual([expect.objectContaining({ durationS: 38, units: 3 })]);
+    });
+
     test('six short switches within 100 s: two pickups', () => {
       const unit = [[2, away], [3, front]] as const;
       const rows = seq([10, front], ...unit, ...unit, ...unit, [5, front], ...unit, ...unit, ...unit, [5, front]);
