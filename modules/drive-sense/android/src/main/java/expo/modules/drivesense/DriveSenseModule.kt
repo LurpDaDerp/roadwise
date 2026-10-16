@@ -145,6 +145,9 @@ class DriveSenseModule : Module() {
         "location" to DriveSensePermissions.location(ctx),
         "motion" to DriveSensePermissions.motion(ctx),
         "lockSignal" to "reliable",
+        // iOS's lock proof (README §5); Android reports locks exactly and needs none.
+        "lockProof" to false,
+        "lockDelayMs" to null,
         "captureWasOpen" to DriveSensePrefs.captureWasOpenAtProcessStart,
         "captureStartedAt" to (if (capturing) CaptureService.captureStartedAt else null),
         "lastRowTs" to CaptureService.lastRowTs
@@ -235,6 +238,11 @@ class DriveSenseModule : Module() {
     // True once, for the live note's token; JS starts the drive only after a true. Never a capture here.
     AsyncFunction("claimReminderTap") { token: String ->
       TripReminder.claim(context, token)
+    }
+
+    // iOS only (an in-drive lock proof); Android reports locks exactly.
+    AsyncFunction("markLockProof") { _: Double ->
+      Unit
     }
 
     AsyncFunction("getLastExitInfo") {

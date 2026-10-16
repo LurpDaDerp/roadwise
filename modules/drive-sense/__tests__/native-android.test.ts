@@ -814,4 +814,9 @@ describe('native-android: RoadWise in front (AppVisibility)', () => {
     expect(phone).not.toMatch(/getMyMemoryState|IMPORTANCE_FOREGROUND|ActivityManager/);
     expect(code(kt('CaptureService'))).toMatch(/EventBus\.emit\("row", body\)\s*main\.post \{ AppVisibility\.sample\(\) \}/);
   });
+
+  it('needs no lock proof: getState reports none, and markLockProof does nothing', () => {
+    expect(MODULE()).toMatch(/"lockSignal" to "reliable",\s*"lockProof" to false,\s*"lockDelayMs" to null,/);
+    expect(MODULE()).toMatch(/AsyncFunction\("markLockProof"\) \{ _: Double ->\s*Unit\s*\}/);
+  });
 });

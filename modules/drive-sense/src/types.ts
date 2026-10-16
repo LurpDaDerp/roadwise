@@ -79,6 +79,14 @@ export interface DriveSenseState {
    * 'lagged' with one (~10 s); Android 'reliable'.
    */
   lockSignal: 'reliable' | 'lagged' | 'unreliable';
+  /**
+   * iOS: this phone has shown a lock reported within 15 s of RoadWise leaving the screen (the lock
+   * probe, or an in-drive proof written back with `markLockProof`), so its screen switches can be
+   * told from locks. Cleared while there is no passcode. Android: always false (it needs none).
+   */
+  lockProof: boolean;
+  /** iOS: the delay (ms) measured with that proof, null before any. Android: null. */
+  lockDelayMs: number | null;
   /** rev1: I2 — a capture was open when the process last ended (persisted natively). */
   captureWasOpen: boolean;
   /** epoch ms (integer) the current capture started; null while not capturing */
@@ -166,6 +174,7 @@ export const DRIVE_SENSE_METHODS = [
   'requestReminderLocation',
   'claimReminderTap',
   'takeReminderTap',
+  'markLockProof',
 ] as const;
 
 export type DriveSenseMethod = (typeof DRIVE_SENSE_METHODS)[number];
@@ -267,6 +276,12 @@ export interface DriveSenseApi {
    * expo-notifications).
    */
   takeReminderTap(): Promise<ReminderTap | null>;
+  /**
+   * iOS: an in-drive lock proof (a lock reported `delayMs` after RoadWise left the screen): stored
+   * as the phone's proof when `delayMs` is 15 000 or less, so later drives count screen switches
+   * from their start. Android: resolves with no effect. Never rejects for a valid argument.
+   */
+  markLockProof(delayMs: number): Promise<void>;
   addListener<E extends DriveSenseEvent>(
     event: E,
     fn: (payload: DriveSenseEvents[E]) => void

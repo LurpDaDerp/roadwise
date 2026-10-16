@@ -52,6 +52,7 @@ describe('iOS drive-sense module (text)', () => {
       'Alignment.swift',
       'PhoneState.swift',
       'CallObserver.swift',
+      'LockProbe.swift',
       'Watchdog.swift',
       'Backup.swift',
       'TripReminder.swift',
@@ -163,7 +164,7 @@ describe('iOS drive-sense module (text)', () => {
     };
     only(/startMonitoringSignificantLocationChanges/, ['TripReminder.swift']);
     only(/requestAlwaysAuthorization/, ['TripReminderAccess.swift']);
-    only(/beginBackgroundTask/, ['TripReminder.swift']);
+    only(/beginBackgroundTask/, ['TripReminder.swift', 'LockProbe.swift']);
     only(/launchOptions/, ['TripReminderAppDelegate.swift']);
     only(/isProtectedDataAvailable/, ['PhoneState.swift']);
     const src = allCode();
@@ -276,6 +277,40 @@ describe('iOS drive-sense module (text)', () => {
     const src = code('PhoneState.swift');
     expect(src).toMatch(/appForeground: app\.applicationState != \.background\)/);
     expect(src).not.toMatch(/applicationState == \.active/);
+  });
+
+  it('the lock probe: passcode phones only, at most 20 background tasks of 16 s, a proof only within 15 s of leaving', () => {
+    const p = code('LockProbe.swift');
+    expect(p).toMatch(/static let LOCK_PROOF_MAX_MS = 15_000\.0/);
+    expect(p).toMatch(/static let PROBE_MAX_TRIES = 20\b/);
+    expect(p).toMatch(/static let PROBE_TASK_S = 16\.0/);
+    for (const key of ['"drivesense.lockProof"', '"drivesense.lockDelayMs"', '"drivesense.lockProbeTries"']) expect(p).toContain(key);
+    for (const n of ['didEnterBackgroundNotification', 'protectedDataWillBecomeUnavailableNotification', 'willEnterForegroundNotification']) {
+      expect(p).toMatch(new RegExp(`addObserver\\(forName: UIApplication\\.${n}, object: nil, queue: \\.main\\)`));
+    }
+    expect(p).toMatch(/guard self\.observers\.isEmpty else \{ return \}/);
+    // a background task only on a passcode phone not yet proven, one at a time, under the try cap
+    const left = /private func left\(\) \{[\s\S]*?\n {2}\}/.exec(p)?.[0] ?? '';
+    expect(left).toMatch(/leftAt = TimeBase\.nowEpochMs\(\)\s*guard !proven, PhoneState\.lockSignal\(\) == "lagged", task == \.invalid else \{ return \}/);
+    expect(left).toMatch(/guard tries < Self\.PROBE_MAX_TRIES else \{ return \}\s*defaults\.set\(tries \+ 1, forKey: Key\.tries\)/);
+    expect(left.indexOf('lockSignal() == "lagged"')).toBeLessThan(left.indexOf('beginBackgroundTask'));
+    expect(left).toMatch(/beginBackgroundTask\(withName: "drivesense\.lockProbe"\) \{ \[weak self\] in\s*self\?\.endTask\(\)\s*\}/);
+    expect(left).toMatch(/DispatchQueue\.main\.asyncAfter\(deadline: \.now\(\) \+ Self\.PROBE_TASK_S, execute: work\)/);
+    // the report measured from leaving; a return clears it; every path ends the task
+    expect(p).toMatch(/private func locked\(\) \{\s*if let at = leftAt \{\s*record\(TimeBase\.nowEpochMs\(\) - at\)\s*leftAt = nil\s*\}\s*endTask\(\)\s*\}/);
+    expect(p).toMatch(/private func back\(\) \{\s*leftAt = nil\s*endTask\(\)\s*\}/);
+    expect(p).toMatch(/guard delayMs\.isFinite, delayMs >= 0, delayMs <= Self\.LOCK_PROOF_MAX_MS else \{ return \}\s*defaults\.set\(true, forKey: Key\.proof\)/);
+    expect(p).toMatch(/endWork\?\.cancel\(\)[\s\S]*?UIApplication\.shared\.endBackgroundTask\(task\)\s*task = \.invalid/);
+    // no passcode: the proof, the delay and the counter go
+    expect(p).toMatch(/func passcodeGone\(\) \{[\s\S]*?removeObject\(forKey: Key\.proof\)\s*defaults\.removeObject\(forKey: Key\.delay\)\s*defaults\.removeObject\(forKey: Key\.tries\)/);
+    expect(p).not.toMatch(/isProtectedDataAvailable|springboard|lockcomplete/);
+    // started from the module (no app-delegate hook); getState clears it without a passcode and reports it
+    expect(moduleCode()).toMatch(/OnCreate \{\s*EventHub\.shared\.attach\(self\)\s*LockProbe\.shared\.start\(\)\s*\}/);
+    expect(moduleCode()).toMatch(/AsyncFunction\("markLockProof"\) \{ \(delayMs: Double, promise: Promise\) in\s*LockProbe\.shared\.mark\(delayMs: delayMs\)\s*promise\.resolve\(nil\)\s*\}\.runOnQueue\(\.main\)/);
+    const ctrl = code('CaptureController.swift');
+    expect(ctrl).toMatch(/let lockSignal = PhoneState\.lockSignal\(\)\s*if lockSignal == "unreliable" \{ LockProbe\.shared\.passcodeGone\(\) \}/);
+    expect(ctrl).toMatch(/"lockProof": LockProbe\.shared\.proven,/);
+    expect(ctrl).toMatch(/"lockDelayMs": LockProbe\.shared\.lockDelayMs\.map \{ NSNumber\(value: \$0\) as Any \} \?\? NSNull\(\),/);
   });
 
   it('polls protected data for the lock state and reports the lock signal', () => {

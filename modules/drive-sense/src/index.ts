@@ -103,6 +103,9 @@ function safeJson(v: unknown): string {
   }
 }
 
+/** `markLockProof` takes a delay up to a minute; native keeps it as a proof only at 15 s or less. */
+const MARK_LOCK_PROOF_MAX_MS = 60_000;
+
 const voidResult = z.union([z.undefined(), z.null()]).transform(() => undefined);
 const ok = <S extends z.ZodType>(schema: S, v: unknown) => schema.safeParse(v).success;
 
@@ -131,6 +134,8 @@ const DriveSense: DriveSenseApi = {
   claimReminderTap: (token) =>
     call('claimReminderTap', [token], typeof token === 'string' && REMINDER_TOKEN.test(token), z.boolean()),
   takeReminderTap: () => call('takeReminderTap', [], true, reminderTapSchema),
+  markLockProof: (delayMs) =>
+    call('markLockProof', [delayMs], typeof delayMs === 'number' && Number.isFinite(delayMs) && delayMs >= 0 && delayMs <= MARK_LOCK_PROOF_MAX_MS, voidResult),
   addListener<E extends DriveSenseEvent>(
     event: E,
     fn: (payload: DriveSenseEvents[E]) => void

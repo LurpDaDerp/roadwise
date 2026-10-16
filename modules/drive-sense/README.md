@@ -89,6 +89,7 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 | `requestReminderLocation()` | iOS: the one "Always" request, from the driver's tap that turns the reminder on, only with While Using granted and only once ever (`always`/`whenInUse`/`denied`; no prompt → the current answer). Android: `notNeeded` (its reminder uses no location). |
 | `claimReminderTap(token)` | A tap on the reminder's note (§10): `true` once, for the live note's token, while the reminder is on, its session lasts (iOS: the motion history folded in first) and no drive is open; Android also within 2 min of the tap's hand-over. `true` spends the token and takes the note down. The token must match `REMINDER_TOKEN` (`[A-Za-z0-9-]{1,64}`) before it crosses. Never starts a capture: the caller starts the drive. |
 | `takeReminderTap()` | Android: the tap the phone handed RoadWise, once — `{ token, at }` (`at` = the hand-over time) — or `null`; it reads the launch intent itself when nothing is held. iOS: always `null` (its taps arrive through expo-notifications). |
+| `markLockProof(delayMs)` | iOS: an in-drive lock proof (a lock reported `delayMs` after RoadWise left the screen, §5): kept as the phone's proof, with that delay, when `delayMs` ≤ 15 000; a longer one is ignored. Android: resolves with no effect. The wrapper accepts a finite `delayMs` of 0–60 000 only. |
 
 ### Errors
 
@@ -107,7 +108,8 @@ tests for one. Anything else a native method throws is a bug.
 Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 `getScreenState`, `getThermalState`, `requestMotionPermission`, `setDriveDisplay`,
 `getLastExitInfo` (`null` below Android 11), `isIgnoringBatteryOptimizations`, `setTripReminder`,
-`getTripReminderStatus`, `requestReminderLocation`, `claimReminderTap`, `takeReminderTap`.
+`getTripReminderStatus`, `requestReminderLocation`, `claimReminderTap`, `takeReminderTap`,
+`markLockProof`.
 
 ### `DriveSenseState`
 
@@ -119,6 +121,8 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 | `location` | the OS location authorisation. iOS: `authorizedAlways` → `always` (asked for only by `requestReminderLocation`, when the driver turns on the forgot-to-start reminder; a drive never needs it), `authorizedWhenInUse` → `whenInUse`, `notDetermined`/`denied`/`restricted` → `none`; reduced (approximate) accuracy reports its authorisation unchanged. Android: fine or coarse granted → `whenInUse`; neither → `none`. Android never reports `always`: the manifest declares no `ACCESS_BACKGROUND_LOCATION`. |
 | `motion` | iOS: `CMMotionActivityManager.isActivityAvailable()` false → `unavailable`, else `authorizationStatus()` `authorized` → `granted`, `denied`/`restricted` → `denied`, `notDetermined` → `undetermined`. Android: no Google Play services → `unavailable`; API < 29 → `granted` (install-time); else `ACTIVITY_RECOGNITION` granted → `granted`, requested and refused → `denied`, never requested → `undetermined` (persist a "requested once" flag to tell these apart) |
 | `lockSignal` | how far `locked` can be trusted: Android `reliable`; iOS `lagged` with a passcode, `unreliable` without (§5) |
+| `lockProof` | iOS: the lock probe (or `markLockProof`) has seen this phone report a lock within 15 s of RoadWise leaving the screen (§5); cleared, with the delay and the probe's try counter, whenever `getState` finds no passcode. Android: `false` (locks are exact there) |
+| `lockDelayMs` | iOS: the delay measured with that proof, integer ms, or `null` before any. Android: `null` |
 | `captureWasOpen` | the persisted capture-open flag was set when this process started — a capture was open when the previous process ended (rev1: I2). iOS clears the flag on read (no relaunch ever restarts a capture there), so it reports once |
 | `captureStartedAt` | integer epoch ms of the current capture's start; `null` while not capturing |
 | `lastRowTs` | `ts` of the last row emitted in this process; `null` before any |
@@ -258,6 +262,17 @@ m and m/s for GNSS, degrees clockwise from true north for `course`.
     and a locked phone is indistinguishable from an unlocked one in the background:
     `lockSignal: 'unreliable'` (`LAContext().canEvaluatePolicy(.deviceOwnerAuthentication)`
     false).
+  - **The lock probe** (`LockProbe.swift`, started from the module's `OnCreate`, no app-delegate
+    hook): it observes `didEnterBackground` (RoadWise left the screen, a lock included),
+    `protectedDataWillBecomeUnavailable` (the lock report) and `willEnterForeground`, on main. A
+    report within 15 s of leaving is the phone's **lock proof**, persisted in UserDefaults
+    (`drivesense.lockProof`, the delay in `drivesense.lockDelayMs`); a later one proves nothing and
+    is not kept. Outside a drive the app may be suspended before the report, so on a passcode phone
+    not yet proven each departure begins one finite background task (`drivesense.lockProbe`), ended
+    by the report, a return to the front or after 16 s, **at most 20 times per install**
+    (`drivesense.lockProbeTries`); without a passcode none runs and `getState` clears the proof,
+    the delay and the counter. During a drive the app is alive anyway, and the detector's own
+    in-drive proof is written back with `markLockProof`.
 - **Phone use reads none of this.** On both platforms the phone-use detector
   (`src/core/detectors/phoneUse.ts`) takes no lock, unlock or foreground-app evidence: pickups and
   handling come from motion alone (`handlingScore`). A navigation app (or any app) in front of a

@@ -188,6 +188,8 @@ export const stateSchema: z.ZodType<DriveSenseState> = z.strictObject({
   location: z.enum(['none', 'whenInUse', 'always']),
   motion: z.enum(['granted', 'denied', 'undetermined', 'unavailable']),
   lockSignal: z.enum(['reliable', 'lagged', 'unreliable']),
+  lockProof: z.boolean(),
+  lockDelayMs: z.number().int().nonnegative().nullable(),
   captureWasOpen: z.boolean(),
   captureStartedAt: epochMs.nullable(),
   lastRowTs: epochMs.nullable(),

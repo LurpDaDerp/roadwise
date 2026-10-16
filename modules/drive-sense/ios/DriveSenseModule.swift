@@ -25,6 +25,8 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
 
     OnCreate {
       EventHub.shared.attach(self)
+      // The screen-switch lock proof (README §5): observes leaving, the lock report and returning.
+      LockProbe.shared.start()
     }
 
     OnDestroy {
@@ -139,6 +141,12 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     AsyncFunction("takeReminderTap") { (promise: Promise) in
       promise.resolve(nil)
     }
+
+    // An in-drive lock proof (README §5): a lock reported within 15 s of RoadWise leaving the screen.
+    AsyncFunction("markLockProof") { (delayMs: Double, promise: Promise) in
+      LockProbe.shared.mark(delayMs: delayMs)
+      promise.resolve(nil)
+    }.runOnQueue(.main)
 
     // Heavy: runs on the module's own async queue, never the main queue.
     AsyncFunction("selfTest") { (vectorsJson: String, promise: Promise) in

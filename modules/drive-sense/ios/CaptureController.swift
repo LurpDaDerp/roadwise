@@ -191,6 +191,9 @@ final class CaptureController {
   // MARK: - State
 
   func state() -> [String: Any] {
+    let lockSignal = PhoneState.lockSignal()
+    // No passcode: a lock can never be told from a switch, and a proof from before means nothing now.
+    if lockSignal == "unreliable" { LockProbe.shared.passcodeGone() }
     return [
       "capturing": capturing,
       "rate": rate.map { $0 as Any } ?? NSNull(),
@@ -198,7 +201,9 @@ final class CaptureController {
       "platform": "ios",
       "location": locationAuthorization,
       "motion": ActivitySource.status(),
-      "lockSignal": PhoneState.lockSignal(),
+      "lockSignal": lockSignal,
+      "lockProof": LockProbe.shared.proven,
+      "lockDelayMs": LockProbe.shared.lockDelayMs.map { NSNumber(value: $0) as Any } ?? NSNull(),
       "captureWasOpen": captureWasOpen,
       "captureStartedAt": captureStartedAt.map { NSNumber(value: $0) as Any } ?? NSNull(),
       "lastRowTs": lastRowTs.map { NSNumber(value: $0) as Any } ?? NSNull(),

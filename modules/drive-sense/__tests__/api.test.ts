@@ -25,6 +25,8 @@ jest.mock('expo-modules-core', () => {
     location: 'always',
     motion: 'granted',
     lockSignal: 'lagged',
+    lockProof: true,
+    lockDelayMs: 10_500,
     captureWasOpen: false,
     captureStartedAt: null,
     lastRowTs: null,
@@ -60,6 +62,7 @@ jest.mock('expo-modules-core', () => {
     requestReminderLocation: jest.fn(async () => 'whenInUse'),
     claimReminderTap: jest.fn(async () => true),
     takeReminderTap: jest.fn(async () => ({ token: '9f1c2b7e-0d4a-4c1e-9a77-1b2c3d4e5f60', at: 1_700_000_000_000 })),
+    markLockProof: jest.fn(async () => undefined),
     addListener: jest.fn(() => ({ remove })),
   };
   const control = { present: true, native, state, remove };
@@ -168,6 +171,13 @@ describe('every method goes to native with its arguments', () => {
     await expect(DriveSense.takeReminderTap()).resolves.toBeNull();
   });
 
+  test('an in-drive lock proof goes to native with its delay', async () => {
+    await DriveSense.markLockProof(10_000);
+    await DriveSense.markLockProof(0);
+    await DriveSense.markLockProof(60_000);
+    expect(mockNative.markLockProof!.mock.calls).toEqual([[10_000], [0], [60_000]]);
+  });
+
   test('a null exit info is passed through', async () => {
     mockNative.getLastExitInfo!.mockResolvedValueOnce(null);
     await expect(DriveSense.getLastExitInfo()).resolves.toBeNull();
@@ -198,6 +208,10 @@ describe('bridge validation', () => {
     ['getState', { ...mockState(), platform: 'web' }],
     ['getState', { ...mockState(), captureStartedAt: 1.5 }],
     ['getState', { ...mockState(), extra: 1 }],
+    ['getState', { ...mockState(), lockProof: 'yes' }],
+    ['getState', { ...mockState(), lockDelayMs: 1.5 }],
+    ['getState', { ...mockState(), lockDelayMs: -1 }],
+    ['getState', (({ lockProof: _p, ...rest }) => rest)(mockState() as { lockProof: unknown })],
     ['getScreenState', { locked: 'yes', on: true }],
     ['getThermalState', 'hot'],
     ['requestMotionPermission', 'undetermined'],
@@ -239,6 +253,11 @@ describe('bridge validation', () => {
     ['claimReminderTap', ['tok a']],
     ['claimReminderTap', ['x'.repeat(65)]],
     ['claimReminderTap', [42]],
+    ['markLockProof', [-1]],
+    ['markLockProof', [60_001]],
+    ['markLockProof', [Number.NaN]],
+    ['markLockProof', [Number.POSITIVE_INFINITY]],
+    ['markLockProof', ['10000']],
   ] as const)('%s rejects bad arguments without calling native', async (method, args) => {
     const fn = DriveSense[method] as (...a: readonly unknown[]) => Promise<unknown>;
     await expect(fn(...args)).rejects.toThrow(`DriveSense.${method}`);

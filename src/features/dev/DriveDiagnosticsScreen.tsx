@@ -48,6 +48,9 @@ export const diagCopy = {
   lastRow: 'Last row',
   captureWasOpen: 'Capture open at last exit',
   lockSignal: 'Lock signal',
+  lockProof: 'Lock proof',
+  lockDelay: 'Lock delay',
+  ms: (v: number) => `${v} ms`,
   unknownRowKeys: 'Unknown row keys',
   platform: 'Platform',
   location: 'Location',
@@ -324,6 +327,8 @@ function SensingLines({ s }: { s: DriveSenseState }) {
       <Line label={diagCopy.lastRow} value={when(s.lastRowTs)} />
       <Line label={diagCopy.captureWasOpen} value={s.captureWasOpen ? diagCopy.yes : diagCopy.no} />
       <Line label={diagCopy.lockSignal} value={s.lockSignal} />
+      <Line label={diagCopy.lockProof} value={s.lockProof ? diagCopy.yes : diagCopy.no} testID="diag-lock-proof" />
+      <Line label={diagCopy.lockDelay} value={s.lockDelayMs === null ? '—' : diagCopy.ms(s.lockDelayMs)} testID="diag-lock-delay" />
       {/* C0 round 1 (review-C0r1 m2): keys a newer native build sent that this bundle does not know. */}
       <Line label={diagCopy.unknownRowKeys} value={String(unknownRowKeys())} testID="diag-unknown-row-keys" />
     </>

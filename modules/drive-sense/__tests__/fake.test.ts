@@ -239,6 +239,22 @@ test('every bridged method is implemented and logged', async () => {
   expect(fake.calls).toEqual(['requestMotionPermission', 'setDriveDisplay', 'selfTest']);
 });
 
+test('the lock proof: iOS proven with a 10 s delay by default, Android none; an in-drive proof of 15 s or less is kept on iOS only', async () => {
+  const ios = createFakeDriveSense();
+  expect(await ios.getState()).toMatchObject({ lockProof: true, lockDelayMs: 10_000 });
+  const fresh = createFakeDriveSense({ lockProof: false, lockDelayMs: null });
+  expect(await fresh.getState()).toMatchObject({ lockProof: false, lockDelayMs: null });
+  await fresh.markLockProof(15_001);
+  expect(await fresh.getState()).toMatchObject({ lockProof: false, lockDelayMs: null });
+  await fresh.markLockProof(11_400.4);
+  expect(await fresh.getState()).toMatchObject({ lockProof: true, lockDelayMs: 11_400 });
+  expect(fresh.calls).toEqual(['markLockProof:15001', 'markLockProof:11400.4']);
+  const android = createFakeDriveSense({ platform: 'android' });
+  expect(await android.getState()).toMatchObject({ lockProof: false, lockDelayMs: null });
+  await android.markLockProof(10_000);
+  expect(await android.getState()).toMatchObject({ lockProof: false, lockDelayMs: null });
+});
+
 test('platform defaults: iOS lagged lock signal and battery-optimisation true; Android reliable and false', async () => {
   const ios = createFakeDriveSense();
   expect((await ios.getState()).platform).toBe('ios');

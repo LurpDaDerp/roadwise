@@ -45,6 +45,10 @@ export interface FakeOptions {
    * device. Default false: `emit`/`step` call listeners before returning.
    */
   asyncDelivery?: boolean;
+  /** `getState().lockProof` at start; default true on iOS (a proven phone), false on Android. */
+  lockProof?: boolean;
+  /** `getState().lockDelayMs` at start; default 10 000 on iOS, null on Android. */
+  lockDelayMs?: number | null;
 }
 
 /** An Error carrying a drive-sense `code`, as an Expo `CodedError` does. */
@@ -64,6 +68,8 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     location: 'none',
     motion: 'undetermined',
     lockSignal: platform === 'ios' ? 'lagged' : 'reliable',
+    lockProof: opts.lockProof ?? platform === 'ios',
+    lockDelayMs: opts.lockDelayMs !== undefined ? opts.lockDelayMs : platform === 'ios' ? 10_000 : null,
     captureWasOpen: false,
     captureStartedAt: null,
     lastRowTs: null,
@@ -231,6 +237,12 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       const tap = heldTap;
       heldTap = null;
       return resolve(tap);
+    },
+    markLockProof(delayMs: number) {
+      command('markLockProof', String(delayMs));
+      // iOS keeps a proof of 15 s or less (LockProbe.record); Android has nothing to prove.
+      if (platform === 'ios' && delayMs >= 0 && delayMs <= 15_000) state = { ...state, lockProof: true, lockDelayMs: Math.round(delayMs) };
+      return resolve(undefined);
     },
     addListener<E extends DriveSenseEvent>(
       event: E,
