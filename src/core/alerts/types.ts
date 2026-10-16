@@ -54,4 +54,10 @@ export interface AlertDecision {
   holdSession?: true;
   /** Haptic only: no tone, no voice, the audio session untouched (the visual is the HUD's). */
   silent?: true;
+  /**
+   * The tone must have loaded or started playing this long (ms) after it was asked to play, or the
+   * play fails (a DashPal critical alert: the dashcam's buzzer then takes it within about a second
+   * instead of after the tone length plus its finish margin). Absent: only that longer bound.
+   */
+  startWithinMs?: number;
 }

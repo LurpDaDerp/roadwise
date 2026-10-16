@@ -549,3 +549,70 @@ describe("a tone that never loads is a failure, not a success (final re-review n
     }
   });
 });
+
+describe("startWithinMs: a DashPal critical whose tone does not start in time is a failure", () => {
+  let restoreOS: (() => void) | null = null;
+  beforeEach(() => {
+    restoreOS = jest.replaceProperty(mockPlatform, "OS", "ios").restore;
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    restoreOS?.();
+    restoreOS = null;
+  });
+  const outcomeOf = (p: Promise<void>) =>
+    p.then(
+      () => "resolved",
+      (e: unknown) => String(e),
+    );
+
+  it("no status by 500 ms: play rejects then, and the player is freed with both timers cleared", async () => {
+    const { audio } = await createExpoAlertPorts();
+    let settled = false;
+    const outcome = outcomeOf(audio.play(3, { volume: 1, tone: "dp_wake", startWithinMs: 500 })).then((o) => {
+      settled = true;
+      return o;
+    });
+    await jest.advanceTimersByTimeAsync(499);
+    expect(settled).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(await outcome).toContain("did not start");
+    expect(mockPlayers[0]!.remove).toHaveBeenCalled();
+    expect(mockPlayers[0]!.subscriptionRemoved).toBe(true);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it("a loaded status at 400 ms keeps it: it resolves on its finish, never at 500 ms", async () => {
+    const { audio } = await createExpoAlertPorts();
+    const outcome = outcomeOf(audio.play(3, { volume: 1, tone: "dp_wake", startWithinMs: 500 }));
+    await jest.advanceTimersByTimeAsync(400);
+    mockPlayers[0]!.listener!({ didJustFinish: false, isLoaded: true });
+    await jest.advanceTimersByTimeAsync(400);
+    mockPlayers[0]!.listener!({ didJustFinish: true, isLoaded: true });
+    expect(await outcome).toBe("resolved");
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it("without startWithinMs only the tone-length bound applies (no failure at 500 ms)", async () => {
+    const { audio } = await createExpoAlertPorts();
+    let settled = false;
+    const outcome = outcomeOf(audio.play(3, { volume: 1, tone: "dp_wake" })).then((o) => {
+      settled = true;
+      return o;
+    });
+    await jest.advanceTimersByTimeAsync(TONE_MS_BY_TONE.dp_wake + TONE_FINISH_MARGIN_MS - 1);
+    expect(settled).toBe(false);
+    await jest.advanceTimersByTimeAsync(2);
+    expect(await outcome).toContain("never loaded");
+  });
+
+  it("a stop before 500 ms resolves and clears both timers", async () => {
+    const { audio } = await createExpoAlertPorts();
+    const outcome = outcomeOf(audio.play(3, { volume: 1, tone: "dp_wake", startWithinMs: 500 }));
+    await jest.advanceTimersByTimeAsync(100);
+    await audio.stop();
+    expect(await outcome).toBe("resolved");
+    expect(jest.getTimerCount()).toBe(0);
+  });
+});

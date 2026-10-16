@@ -962,3 +962,37 @@ describe("DashPal decisions (tone, stillWanted, voiceAlways, holdSession, silent
     expect(r.calls).toEqual([]);
   });
 });
+
+describe("startWithinMs (a DashPal critical's start watchdog)", () => {
+  it("reaches the tone port with the item's tone; a decision without it passes none; a bad value is dropped", async () => {
+    const seen: unknown[] = [];
+    const r = rig({
+      audio: {
+        play: async (_level, opts) => {
+          seen.push({ ...opts });
+        },
+      },
+    });
+    const player = createAlertPlayer(r.deps);
+    await player.deliver(decision(3, { kind: "dashpal", tone: "dp_wake", startWithinMs: 500 }));
+    await player.deliver(decision(2, { id: "g", kind: "dashpal", tone: "dp_glance" }));
+    await player.deliver(decision(3, { id: "x", kind: "dashpal", tone: "dp_wake", startWithinMs: Number.NaN }));
+    await player.deliver(decision(3, { id: "z", kind: "dashpal", tone: "dp_wake", startWithinMs: 0 }));
+    expect(seen).toEqual([
+      { volume: TONE_GAIN[3], tone: "dp_wake", startWithinMs: 500 },
+      { volume: TONE_GAIN[2], tone: "dp_glance" },
+      { volume: TONE_GAIN[3], tone: "dp_wake" },
+      { volume: TONE_GAIN[3], tone: "dp_wake" },
+    ]);
+  });
+
+  it("a tone that did not start is a failure: onUnavailable, the session still released", async () => {
+    const r = rig({ audio: { play: () => Promise.reject(new Error("the alert tone did not start")) } });
+    let unavailable = 0;
+    await createAlertPlayer({ ...r.deps, onUnavailable: () => (unavailable += 1) }).deliver(
+      decision(3, { kind: "dashpal", tone: "dp_wake", startWithinMs: 500 }),
+    );
+    expect(unavailable).toBe(1);
+    expect(count(r.calls, "deactivate")).toBe(1);
+  });
+});

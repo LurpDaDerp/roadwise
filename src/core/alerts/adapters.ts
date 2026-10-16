@@ -252,7 +252,7 @@ export async function createExpoAlertPorts(opts: ExpoAlertPortOptions = {}): Pro
       }
     },
 
-    play(level, { volume, tone: which }) {
+    play(level, { volume, tone: which, startWithinMs }) {
       tone?.finish();
       return new Promise<void>((resolve, reject) => {
         let player: ExpoAudioPlayer;
@@ -274,6 +274,7 @@ export async function createExpoAlertPorts(opts: ExpoAlertPortOptions = {}): Pro
         const release = () => {
           settled = true;
           timers.clearTimeout(timer);
+          if (startTimer !== null) timers.clearTimeout(startTimer);
           subscription.remove();
           if (tone?.player === player) tone = null;
           try {
@@ -296,6 +297,17 @@ export async function createExpoAlertPorts(opts: ExpoAlertPortOptions = {}): Pro
           release();
           reject(new Error("the alert tone never loaded or played"));
         }, (which ? TONE_MS_BY_TONE[which] : TONE_MS[level]) + TONE_FINISH_MARGIN_MS);
+        // A DashPal critical must be heard at once: a tone that has neither loaded nor started by
+        // `startWithinMs` fails now, so the dashcam's buzzer takes it (a pumped timer, like the one
+        // above: in the Android background the next DashPal frame fires it).
+        const startTimer: unknown =
+          startWithinMs !== undefined && startWithinMs > 0
+            ? timers.setTimeout(() => {
+                if (settled || heard) return;
+                release();
+                reject(new Error("the alert tone did not start"));
+              }, startWithinMs)
+            : null;
         const subscription = player.addListener(
           "playbackStatusUpdate",
           (status) => {

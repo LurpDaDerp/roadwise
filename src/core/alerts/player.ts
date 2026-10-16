@@ -11,8 +11,10 @@
 //   default) does both. The voice switch still governs speech under `both` and `sound`.
 // - DashPal alerts (`src/dashcam/alerts.ts`): a decision may carry its own `tone`, a `stillWanted`
 //   read (dropped unstarted once the dashcam stopped the alert), `voiceAlways` (the wake line),
-//   `holdSession` (the session stays active between a continuous alert's repeats) and `silent`
-//   (haptic only: a routed-elsewhere alert, or a phone alert during a DashPal continuous one).
+//   `holdSession` (the session stays active between a continuous alert's repeats), `silent`
+//   (haptic only: a routed-elsewhere alert, or a phone alert during a DashPal continuous one) and
+//   `startWithinMs` (a DashPal critical: a tone not loaded or playing by then fails, so the
+//   dashcam's buzzer takes it at once).
 // - Feedback (`feedback`): a one-off nudge that is not a decision — the level-1 tone and a
 //   vibration at the strength it names, on the same rules (style, call) and never a voice.
 // - Audio session: level 1 honours the silent switch only when `l1RespectsSilentSwitch()` says so;
@@ -57,8 +59,11 @@ export type SessionKind = "respectSilent" | "playback";
 export interface AudioPort {
   /** Activate a session that ducks others; 'respectSilent' honours the silent switch, 'playback' does not. */
   activate(kind: SessionKind): Promise<void>;
-  /** Resolves when the tone finishes. `tone` replaces the level's own tone (a DashPal sound). */
-  play(level: AlertLevel, opts: { volume: number; tone?: AlertTone }): Promise<void>;
+  /**
+   * Resolves when the tone finishes. `tone` replaces the level's own tone (a DashPal sound).
+   * `startWithinMs`: rejects when the tone has neither loaded nor started playing by then.
+   */
+  play(level: AlertLevel, opts: { volume: number; tone?: AlertTone; startWithinMs?: number }): Promise<void>;
   stop(): Promise<void>;
   /** Deactivate so ducked audio returns to full volume. */
   deactivate(): Promise<void>;
@@ -191,6 +196,7 @@ interface Playable {
   voiceAlways?: boolean;
   holdSession?: boolean;
   silent?: boolean;
+  startWithinMs?: number;
 }
 
 interface Run {
@@ -368,8 +374,10 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         const kind: SessionKind = level === 1 ? sessionForL1() : "playback";
         const activated = await step(run, () => audio.activate(kind));
         const volume = (onCall ? TONE_GAIN_IN_CALL : TONE_GAIN)[level];
-        const tone = item.tone;
-        const played = await step(run, () => audio.play(level, tone ? { volume, tone } : { volume }));
+        const opts: { volume: number; tone?: AlertTone; startWithinMs?: number } = { volume };
+        if (item.tone) opts.tone = item.tone;
+        if (item.startWithinMs !== undefined) opts.startWithinMs = item.startWithinMs;
+        const played = await step(run, () => audio.play(level, opts));
         // Silent for the driver, and they must be able to see that; a sound that worked
         // clears an earlier mark.
         if (!activated || !played) unavailable();
@@ -410,6 +418,8 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
       if (decision.voiceAlways) item.voiceAlways = true;
       if (decision.holdSession) item.holdSession = true;
       if (decision.silent) item.silent = true;
+      const within = decision.startWithinMs;
+      if (within !== undefined && Number.isFinite(within) && within > 0) item.startWithinMs = within;
       return enqueue((run) => play(run, item));
     },
 
