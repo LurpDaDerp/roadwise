@@ -8,7 +8,9 @@
 // jump no car could make since the anchor, and not at the steady walking pace of someone on foot.
 // Each movement row records the mark (the session right after it). A fix-less row on a phone that
 // is neither still nor carried holds the idle clock for up to an hour after the last movement,
-// without counting as movement. Nothing else is movement: a stop, walking pace, an isolated
+// without counting as movement, and so does a crawl once the drive has reached driving speed: place
+// travel the walking-pace veto refused, made with the phone mostly not carried (a car creeping in a
+// queue, not a driver walking off with the phone). Nothing else is movement: a stop, walking pace, an isolated
 // reading, a still or carried phone, OS motion reports.
 //
 // Driving speed: two consecutive rows with a known, trusted GPS speed of 10 mph or more (`droveAt`).
@@ -44,8 +46,10 @@ export const PLACE_SETTLE_MS = 30_000;
 export const WALK_BAND_MPH = Object.freeze({ min: 2, max: 5 });
 /** Place movement is refused when at least this share of the known-speed rows since the anchor were at walking pace. */
 export const PED_SHARE = 1 / 3;
-/** Fix-less rows hold the idle clock only this long after the last movement (or the start). */
+/** Fix-less rows, and a crawl, hold the idle clock only this long after the last movement (or the start). */
 export const FIXLESS_HOLD_MAX_S = 3600;
+/** A crawl: place travel at walking pace with under this share of its known-speed rows from a carried phone. */
+export const CRAWL_CARRIED_SHARE = 1 / 3;
 /** A run of pace rows in progress delays the automatic end this long after its latest row. */
 export const IDLE_FAST_GRACE_MS = 5000;
 /** An instant event may start this long after the cut and still be kept (finalize's own slack). */
@@ -152,6 +156,7 @@ const EMPTY_MOTION: Readonly<MotionTrack> = Object.freeze({
   placePending: false,
   speedRows: 0,
   walkRows: 0,
+  carriedRows: 0,
   heldUntil: null,
   prevDrive: false,
 });
@@ -340,21 +345,27 @@ function noteMovement(session: TripSession, row: FeatureRow, prevFix: Fix | null
     m.anchor = Object.freeze({ lat: row.lat, lng: row.lng, hAcc: row.hAcc });
     m.speedRows = 0;
     m.walkRows = 0;
+    m.carriedRows = 0;
     m.placePending = false;
     anchoredNow = true;
   }
   // Place: two consecutive valid fixes past the threshold, unless the way there was at walking pace.
+  // At walking pace after the drive reached driving speed, with the phone mostly not carried, it is
+  // a crawl: the clock is held (within `FIXLESS_HOLD_MAX_S`) and the next 100 m measured from here.
+  let crawl = false;
   if (valid && !jump && !anchoredNow && m.anchor !== null) {
     const speed = knownSpeed(row);
     if (speed !== null) {
       m.speedRows += 1;
       const mph = speed / MPS_PER_MPH;
       if (mph > WALK_BAND_MPH.min && mph <= WALK_BAND_MPH.max) m.walkRows += 1;
+      if (carried(row)) m.carriedRows += 1;
     }
     const d = haversineMeters(m.anchor, here);
     if (d >= Math.max(MOVE_MIN_M, MOVE_HACC_FACTOR * (m.anchor.hAcc + row.hAcc))) {
       const onFoot = m.speedRows > 0 && m.walkRows >= m.speedRows * PED_SHARE;
       if (m.placePending && !onFoot) moved = true;
+      else if (m.placePending && session.droveAt !== null && m.carriedRows < m.speedRows * CRAWL_CARRIED_SHARE) crawl = true;
       else m.placePending = true;
     } else {
       m.placePending = false;
@@ -366,10 +377,18 @@ function noteMovement(session: TripSession, row: FeatureRow, prevFix: Fix | null
     m.placePending = false;
     m.speedRows = 0;
     m.walkRows = 0;
+    m.carriedRows = 0;
     m.heldUntil = null;
     const mark = markOf(session, row.ts);
     session.moved = mark;
     session.marks = Object.freeze([...session.marks.filter((k) => k.rowTs >= row.ts - MARK_KEEP_MS), mark]);
+  } else if (crawl) {
+    m.anchor = Object.freeze({ lat: row.lat, lng: row.lng, hAcc: row.hAcc });
+    m.placePending = false;
+    m.speedRows = 0;
+    m.walkRows = 0;
+    m.carriedRows = 0;
+    if (row.ts < (lastMovedAt(session) ?? session.startedAt) + FIXLESS_HOLD_MAX_S * 1000) m.heldUntil = row.ts + ROW_MS;
   } else if (holdsClock(session, row)) {
     m.heldUntil = row.ts + ROW_MS;
   }

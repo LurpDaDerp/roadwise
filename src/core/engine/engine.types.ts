@@ -78,7 +78,9 @@ export interface MotionTrack {
   /** Rows with a known speed since the anchor was set, and how many of them were at walking pace. */
   speedRows: number;
   walkRows: number;
-  /** End of the latest fix-less row that held the clock since the last movement. */
+  /** Of those, the rows from a carried phone (`session.carried`): a crawl needs few. */
+  carriedRows: number;
+  /** End of the latest row that held the clock since the last movement (fix-less, or a crawl). */
   heldUntil: number | null;
   /** The previous row was a driving row (`session.drivingRow`). */
   prevDrive: boolean;

@@ -204,6 +204,55 @@ test('(l) a 4 min tunnel at speed with no fix, then fixes 4 km on: still recordi
   expect(h.engine.session()!.moved!.rowTs).toBe(PARKED_AT + 244_000);
 });
 
+describe('(l2) a queue crawling at walking pace after driving speed (the walking-pace veto refuses its place travel)', () => {
+  /** 7 s stopped, 5 s at 3.5 mph (7.8 m a cycle, over a third of the rows at walking pace): about 100 m every 2.6 min. */
+  const jam = (minutes: number, over?: (i: number) => Partial<FeatureRow>): Seg[] => {
+    const out: Seg[] = [];
+    for (let k = 0; k < minutes * 5; k += 1) out.push({ n: 7, mps: 0, step: 0, ...(over ? { over } : {}) }, { n: 5, mps: mph(3.5), ...(over ? { over } : {}) });
+    return out;
+  };
+
+  test('25 min of crawl with the phone mounted keeps the drive open; a pickup in it is kept once the car drives on', async () => {
+    const h = await started();
+    const crawl = jam(25);
+    // a 10-s pickup 8 min into the queue
+    crawl.splice(80, 1, { n: 7, mps: 0, step: 0, over: () => handled });
+    await feed(h, path(T0, DRIVE, ...crawl));
+    expect(status(h)).toBe('recording');
+    expect(h.engine.session()!.moved!.rowTs).toBe(PARKED_AT - 1000); // the crawl itself is never movement
+    const queueEnd = h.engine.session()!.lastRowTs! + 1000;
+    await feed(h, path(queueEnd, DRIVE, PARKED(IDLE_END_S)));
+    const s = h.finalized[0]!;
+    expect(s).toMatchObject({ endCause: 'stopped', endedAt: queueEnd + 60_000, cut: true });
+    expect(s.events.filter((e) => e.type === 'phone_pickup')).toEqual([expect.objectContaining({ stoppedInTraffic: true })]);
+  });
+
+  test('a crawl before the car ever reached 10 mph holds nothing: the drive ends 900 s after the tap and is not moved', async () => {
+    const h = await started();
+    await feed(h, path(T0, ...jam(16)));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', moved: null, endedAt: T0 + IDLE_MS });
+  });
+
+  test('the same crawl with the phone carried (a driver walking off with it) holds nothing: ends 900 s after parking', async () => {
+    const h = await started();
+    await feed(h, path(T0, DRIVE, ...jam(16, () => ({ orientationDelta: 0.5 }))));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: PARKED_AT, cut: true });
+  });
+
+  test('an 80 min walk at 3.2 mph with the phone not carried (a shopping cart) holds the clock at most an hour after the last movement; cut there, no miles', async () => {
+    const h = await started();
+    const rows = path(T0, DRIVE, { n: 80 * 60, mps: mph(3.2) });
+    const at70 = rows.findIndex((r) => r.ts >= PARKED_AT + 70 * 60_000);
+    await feed(h, rows.slice(0, at70));
+    expect(status(h)).toBe('recording');
+    expect(h.engine.snapshot().autoEndAt).toBeLessThanOrEqual(PARKED_AT + 3600_000 + IDLE_MS);
+    await feed(h, rows.slice(at70));
+    const s = h.finalized[0]!;
+    expect(s).toMatchObject({ endCause: 'stopped', endedAt: PARKED_AT, cut: true });
+    expect(s.distanceM).toBe(s.moved!.distanceM);
+  });
+});
+
 test('(m) a drive that never moved ends 900 s after the tap with no mark', async () => {
   const h = await started();
   await feed(h, path(T0, PARKED(IDLE_END_S)));
