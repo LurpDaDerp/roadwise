@@ -6,9 +6,6 @@ import {
   HUD_LIT_KEYS,
   type HudPalette,
   hudLabelScale,
-  SPEED_NUMERAL_MAX_PT,
-  SPEED_NUMERAL_MIN_PT,
-  speedNumeralPt,
   tierColor,
 } from '@/ui/drive/hudTokens';
 
@@ -57,13 +54,6 @@ test('night mode has no pure white and dims every lit colour', () => {
   for (const key of HUD_LIT_KEYS) {
     expect(relativeLuminance(HUD.night[key])).toBeLessThan(relativeLuminance(HUD.day[key]));
   }
-});
-
-test('the speed numerals follow the short side within their bounds', () => {
-  expect(speedNumeralPt(390)).toBe(133);
-  expect(speedNumeralPt(100)).toBe(SPEED_NUMERAL_MIN_PT);
-  expect(speedNumeralPt(1000)).toBe(SPEED_NUMERAL_MAX_PT);
-  expect(speedNumeralPt(Number.NaN)).toBe(SPEED_NUMERAL_MIN_PT);
 });
 
 test('small HUD labels follow Dynamic Type between 1x and 2x', () => {

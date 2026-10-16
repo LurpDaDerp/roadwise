@@ -124,16 +124,6 @@ export const HUD_LIT_KEYS: readonly (keyof HudPalette)[] = [
   'haloInkMuted',
 ];
 
-/** Speed numerals: fixed size (never Dynamic Type), sized to the screen's short side. */
-export const SPEED_NUMERAL_MIN_PT = 96;
-export const SPEED_NUMERAL_MAX_PT = 168;
-/** The round limit sign. */
-export const SIGN_DIAMETER_PT = 116;
-export const SIGN_RING_PT = 11;
-export const SIGN_NUMERAL_PT = 50;
-/** The edge glow: a solid rim plus a soft inner glow. */
-export const GLOW_RIM_PT = 8;
-export const GLOW_BLUR_PT = 56;
 /** HUD touch targets (DESIGN.md: 64 pt in the car). */
 export const HUD_MIN_TARGET_PT = 64;
 /** The End button and its fill ring. */
@@ -145,13 +135,6 @@ export const HOLD_TO_END_MS = 500;
 export const DIM_AFTER_MS = 10_000;
 /** …under a black scrim this opaque. */
 export const DIM_SCRIM_OPACITY = 0.7;
-
-/** Speed numerals at a third of the screen's short side, within their bounds. */
-export function speedNumeralPt(shortSide: number): number {
-  if (!Number.isFinite(shortSide)) return SPEED_NUMERAL_MIN_PT;
-  const pt = Math.round(shortSide * 0.34);
-  return Math.min(SPEED_NUMERAL_MAX_PT, Math.max(SPEED_NUMERAL_MIN_PT, pt));
-}
 
 /** The halo's square box at most, and the smallest box that still draws a ring (else bare numerals). */
 export const HALO_MAX_BOX_PT = 420;

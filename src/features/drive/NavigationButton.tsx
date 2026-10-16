@@ -29,6 +29,7 @@ export const NavigationButton = memo(function NavigationButton({
   highlight,
   disabled,
   palette,
+  width = 96,
   onPress,
 }: {
   /** The saved app's short name (≤ 12 characters), or null for "Navigate". */
@@ -38,10 +39,12 @@ export const NavigationButton = memo(function NavigationButton({
   highlight: boolean;
   disabled: boolean;
   palette: HudPalette;
+  /** The slot's width (the screen's layout); the caption shrinks to fit it. */
+  width?: number;
   onPress(): void;
 }) {
   return (
-    <View style={styles.slot}>
+    <View style={[styles.slot, { width }]}>
       <Pressable
         testID="hud-nav"
         accessibilityRole="button"
@@ -61,7 +64,7 @@ export const NavigationButton = memo(function NavigationButton({
         <Ionicons name="navigate" size={28} color={palette.ink} />
         {highlight ? <View testID="hud-nav-highlight" pointerEvents="none" style={[styles.ring, { borderColor: palette.ink }]} /> : null}
       </Pressable>
-      <Text numberOfLines={1} allowFontScaling={false} style={[styles.caption, { color: palette.inkMuted }]}>
+      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false} style={[styles.caption, { color: palette.inkMuted, maxWidth: width }]}>
         {caption ?? navCopy.button}
       </Text>
     </View>
@@ -69,7 +72,7 @@ export const NavigationButton = memo(function NavigationButton({
 });
 
 const styles = StyleSheet.create({
-  slot: { alignItems: 'center', gap: 6, width: 96 },
+  slot: { alignItems: 'center', gap: 6 },
   button: {
     width: HUD_MIN_TARGET_PT,
     height: HUD_MIN_TARGET_PT,
@@ -87,5 +90,5 @@ const styles = StyleSheet.create({
     borderRadius: (HUD_MIN_TARGET_PT + 2 * RING_PT + 4) / 2,
     borderWidth: RING_PT,
   },
-  caption: { fontFamily: fontFamilies.label, fontSize: 15, maxWidth: 96 },
+  caption: { fontFamily: fontFamilies.label, fontSize: 15, lineHeight: 18 },
 });

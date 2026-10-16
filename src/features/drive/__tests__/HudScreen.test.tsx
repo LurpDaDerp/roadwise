@@ -3,10 +3,27 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { LastFinalized } from '@/drive/host';
 import type { DriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
-import { DIM_AFTER_MS, HOLD_TO_END_MS, HUD } from '@/ui/drive';
+import { DIM_AFTER_MS, HOLD_TO_END_MS, HUD, type HaloProps, type HaloVisual } from '@/ui/drive';
 
 import { hudCopy } from '../hudCopy';
 import { HudScreen } from '../HudScreen';
+
+// The halo renders for real; its props are kept so a test can read the visual it was given.
+const mockHalo: HaloProps[] = [];
+jest.mock('@/ui/drive/HaloRing', () => {
+  const actual = jest.requireActual('@/ui/drive/HaloRing');
+  return {
+    ...actual,
+    Halo: (props: HaloProps) => {
+      mockHalo.push(props);
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- inside the mock factory
+      return require('react').createElement(actual.Halo, props);
+    },
+  };
+});
+// The OS reduce-motion setting, as the screen reads it.
+let mockStill = false;
+jest.mock('@/ui/theme', () => ({ ...jest.requireActual('@/ui/theme'), useOsReduceMotion: () => mockStill }));
 
 const mockRouter = { replace: jest.fn(), push: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
@@ -47,8 +64,10 @@ jest.mock('@/drive/useDrive', () => ({
 }));
 
 const p = HUD.day;
-/** The glow is hidden from assistive tech, so queries must ask for hidden elements. */
+/** The halo ring is hidden from assistive tech, so queries for it must ask for hidden elements. */
 const HIDDEN = { includeHiddenElements: true };
+/** What the halo was last told to show. */
+const halo = (): HaloVisual => mockHalo.at(-1)!.visual;
 
 function live(over: Partial<DriveLive> = {}): DriveLive {
   return {
@@ -82,7 +101,10 @@ async function renderHud(over: Partial<DriveLive> = {}) {
 
 beforeEach(() => {
   jest.useFakeTimers();
+  jest.setSystemTime(T);
   jest.clearAllMocks();
+  mockHalo.length = 0;
+  mockStill = false;
   mockUnits = null;
   mockNavApp = null;
   mockLastRowTs = null;
@@ -92,7 +114,7 @@ beforeEach(() => {
 afterEach(() => jest.useRealTimers());
 
 describe('speed and limit', () => {
-  test('the speed sits next to the limit sign', async () => {
+  test('the speed sits inside the halo; the limit on its sign', async () => {
     await renderHud();
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('34');
     expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('35');
@@ -126,27 +148,69 @@ describe('speed and limit', () => {
   });
 });
 
-describe('edge glow while speeding', () => {
-  test('no glow while within the limit', async () => {
-    await renderHud();
-    expect(screen.queryByTestId('hud-glow', HIDDEN)).toBeNull();
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveStyle({ color: p.ink });
+describe('the halo while speeding (design §4.1)', () => {
+  // limit 35: T = 5, L + T = 40; one row per second on the row clock
+  async function drive(rows: Partial<DriveLive>[]) {
+    const h = await renderHud({ rowTs: T, ...rows[0] });
+    for (let i = 1; i < rows.length; i += 1) await h.update({ rowTs: T + i * 1000, ...rows[i] });
+    return h;
+  }
+
+  test('within the limit: calm, flowing, the speed white', async () => {
+    await renderHud({ rowTs: T });
+    expect(halo()).toMatchObject({ mode: 'calm', flow: true, pulsePeriodMs: 0 });
+    // the numerals take the halo's colour at severity 0: the halo white (#F3F6FB), through Reanimated
+    expect(p.haloInk).toBe('#F3F6FB');
+    expect(JSON.stringify(screen.getByTestId('hud-speed-numeral').props.style)).toMatch(/rgba\(243, 246(\.\d+)?, 251, 1\)/);
+    expect(screen.getByTestId('hud-halo', HIDDEN)).toBeTruthy();
   });
 
   test.each([
-    ['minor', p.minor],
-    ['moderate', p.moderate],
-    ['severe', p.severe],
-  ] as const)('%s: the edge and the numerals take the tier colour', async (tier, color) => {
-    await renderHud({ speedMph: 50, speedingTier: tier });
-    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: color });
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveStyle({ color });
+    ['minor', 40.1, 0.3035],
+    ['moderate', 47, 0.545],
+    ['severe', 55, 0.825],
+  ] as const)('%s at %s mph: speeding at about %s, pulsing, no flow', async (tier, speedMph, s) => {
+    await renderHud({ rowTs: T, speedMph, speedingTier: tier });
+    expect(halo().mode).toBe('speeding');
+    expect(halo().severity).toBeCloseTo(s, 4);
+    expect(halo().flow).toBe(false);
+    expect(halo().pulsePeriodMs).toBeCloseTo(2200 - 1400 * s, 3);
   });
 
-  test('the glow ends with the episode', async () => {
-    const h = await renderHud({ speedingTier: 'minor' });
-    await h.update({ speedingTier: null });
-    expect(screen.queryByTestId('hud-glow', HIDDEN)).toBeNull();
+  test('back under 38 mph: calm again on the 5th row', async () => {
+    await drive([{ speedMph: 47, speedingTier: 'moderate' }, ...Array(4).fill({ speedMph: 30, speedingTier: null })]);
+    expect(halo().mode).toBe('speeding');
+    await drive([{ speedMph: 47, speedingTier: 'moderate' }, ...Array(5).fill({ speedMph: 30, speedingTier: null })]);
+    expect(halo().mode).toBe('calm');
+  });
+
+  test('no flicker at the line: 75.1 / 74.9 against L + T = 75 for 30 rows enters once and never returns to calm; the scrim ignores it', async () => {
+    const rows = Array.from({ length: 30 }, (_, i) =>
+      i % 2 === 0 ? { speedMph: 75.1, limitMph: 65, speedingTier: 'minor' as const } : { speedMph: 74.9, limitMph: 65, speedingTier: null }
+    );
+    const h = await renderHud({ rowTs: T - 1000, speedMph: 70, limitMph: 65 });
+    expect(halo().mode).toBe('calm');
+    const modes: string[] = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      await h.update({ rowTs: T + i * 1000, ...rows[i] });
+      modes.push(halo().mode);
+      if (i === 12) await act(() => jest.advanceTimersByTime(DIM_AFTER_MS));
+    }
+    expect(modes.every((m) => m === 'speeding')).toBe(true);
+    expect(halo().severity).toBeGreaterThanOrEqual(0.3);
+    expect(halo().severity).toBeLessThanOrEqual(0.31);
+    // dimmed after 10 s without a touch, whatever the halo does
+    expect(screen.getByTestId('hud-dim')).toBeTruthy();
+  });
+
+  test('a speed with three digits takes the three-digit size', async () => {
+    mockUnits = 'km';
+    const h = await renderHud({ speedMph: 55 });
+    const two = Number(screen.getByTestId('hud-speed-numeral').props.style.flat?.(9).find((x: { fontSize?: number }) => x?.fontSize)?.fontSize ?? 0);
+    await h.update({ speedMph: 70 }); // 113 km/h
+    const three = Number(screen.getByTestId('hud-speed-numeral').props.style.flat?.(9).find((x: { fontSize?: number }) => x?.fontSize)?.fontSize ?? 0);
+    expect(three).toBeGreaterThan(0);
+    expect(three).toBeLessThan(two);
   });
 });
 
@@ -160,30 +224,50 @@ test('weather: a one-line banner only while an alert is active', async () => {
 });
 
 describe('event alerts', () => {
-  test('a new alert shows its words and a glow in its tier colour for 1.5 s, then is gone', async () => {
-    const h = await renderHud();
-    await h.update({ lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
+  test('a hard brake: its words for 1.5 s and a red burst of three pulses, then calm again', async () => {
+    const h = await renderHud({ rowTs: T });
+    await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
     expect(screen.getByTestId('hud-alert')).toHaveTextContent(/Hard brake/);
-    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.severe });
+    expect(halo()).toMatchObject({ mode: 'burst', colorSeverity: 1, burst: { key: `phone:hard_brake:${T + 1000}`, pulses: 3 } });
     await act(() => jest.advanceTimersByTime(1499));
     expect(screen.getByTestId('hud-alert')).toBeTruthy();
     await act(() => jest.advanceTimersByTime(1));
     expect(screen.queryByTestId('hud-alert')).toBeNull();
-    expect(screen.queryByTestId('hud-glow', HIDDEN)).toBeNull();
+    expect(halo().mode).toBe('calm');
   });
 
-  test('the alert glow outranks the speeding glow while it shows', async () => {
-    const h = await renderHud({ speedingTier: 'minor' });
-    await h.update({ lastAlert: { type: 'phone_pickup', tier: 'severe', at: T + 1000 } });
+  test('a phone pickup bursts, then the halo holds the distraction while the episode lasts', async () => {
+    const h = await renderHud({ rowTs: T, speedingTier: 'minor', speedMph: 41 });
+    await h.update({ rowTs: T + 1000, phoneUseSince: T - 1000, lastAlert: { type: 'phone_pickup', tier: 'severe', at: T + 1000 } });
     expect(screen.getByTestId('hud-alert')).toHaveTextContent(/Phone/);
-    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.severe });
+    expect(halo()).toMatchObject({ mode: 'burst', colorSeverity: 1 });
     await act(() => jest.advanceTimersByTime(1500));
-    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.minor });
+    expect(halo()).toMatchObject({ mode: 'distraction', severity: 0.65, burst: null });
+    await h.update({ rowTs: T + 31_000, phoneUseSince: T - 1000, speedingTier: null });
+    expect(halo().severity).toBeCloseTo(1, 6);
+    await h.update({ rowTs: T + 32_000, phoneUseSince: null });
+    expect(halo().mode).toBe('calm');
   });
 
-  test('the alert already standing when the screen opens is not replayed', async () => {
-    await renderHud({ lastAlert: { type: 'hard_brake', tier: 'minor', at: T } });
+  test('a speeding alert shows its words but never bursts', async () => {
+    const h = await renderHud({ rowTs: T });
+    await h.update({ rowTs: T + 1000, speedingTier: 'minor', speedMph: 41, lastAlert: { type: 'speeding', tier: 'minor', at: T + 1000 } });
+    expect(screen.getByTestId('hud-alert')).toBeTruthy();
+    expect(halo().mode).toBe('speeding');
+    expect(halo().burst).toBeNull();
+  });
+
+  test('the alert already standing when the screen opens is not replayed, and never bursts', async () => {
+    await renderHud({ rowTs: T, lastAlert: { type: 'hard_brake', tier: 'minor', at: T } });
     expect(screen.queryByTestId('hud-alert')).toBeNull();
+    expect(halo().mode).toBe('calm');
+  });
+
+  test('an alert raised while RoadWise was in the background (5 s old on the row clock) never shows or bursts', async () => {
+    const h = await renderHud({ rowTs: T });
+    await h.update({ rowTs: T + 6000, lastAlert: { type: 'hard_corner', tier: 'minor', at: T + 1000 } });
+    expect(screen.queryByTestId('hud-alert')).toBeNull();
+    expect(halo().mode).toBe('calm');
   });
 
   test('every alert is at most three words', () => {
@@ -348,6 +432,14 @@ describe('hold to end', () => {
 });
 
 describe('dimming', () => {
+  test('dimmed and calm: the halo gets dimmed and keeps flowing; it sits above the scrim', async () => {
+    await renderHud({ rowTs: T });
+    await act(() => jest.advanceTimersByTime(DIM_AFTER_MS + 1000));
+    expect(screen.getByTestId('hud-dim')).toBeTruthy();
+    expect(mockHalo.at(-1)!.dimmed).toBe(true);
+    expect(halo().flow).toBe(true);
+  });
+
   test('dims after 10 s without a touch; a tap undims', async () => {
     await renderHud();
     await act(() => jest.advanceTimersByTime(DIM_AFTER_MS - 1));
@@ -459,6 +551,7 @@ describe('DashPal (plan §7.10)', () => {
     resend: false,
     at: Date.now(),
   });
+  const held = (sound: number, tier: number, level = 0) => ({ sound, tier, level, since: Date.now() });
 
   test('no chip without a paired DashPal; a static chip whose dot follows the link when paired', async () => {
     setActiveDashcam(createFakeDashcamRuntime());
@@ -474,35 +567,72 @@ describe('DashPal (plan §7.10)', () => {
     expect(screen.getByTestId('hud-dashpal-dot-bad')).toBeTruthy();
   });
 
-  test('a DashPal alert: banner and glow for 1.5 s per start or level change; it outranks the phone event; a critical outranks its glow', async () => {
+  test('a DashPal alert: its banner for 1.5 s per start or level change, over the phone event; the chip steps aside; a critical bursts red', async () => {
     const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
     setActiveDashcam(rt);
-    const h = await renderHud({ speedingTier: 'minor' });
-    await h.update({ lastAlert: { type: 'hard_brake', tier: 'moderate', at: T + 1000 } });
-    await act(async () => rt.set({ link: { visual: visual({ tier: 3, sound: 3 }) } }));
+    const h = await renderHud({ rowTs: T, speedingTier: 'minor', speedMph: 41 });
+    expect(screen.getByTestId('hud-dashpal-chip')).toBeTruthy();
+    await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'moderate', at: T + 1000 } });
+    expect(screen.queryByTestId('hud-dashpal-chip')).toBeNull(); // the event banner takes the band
+    await act(async () => rt.set({ link: { visual: visual({ tier: 3, sound: 3 }), held: held(3, 3) } }));
     expect(screen.getByTestId('hud-dashpal-alert')).toHaveTextContent(/Wake up/);
     expect(screen.queryByTestId('hud-alert')).toBeNull();
-    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.severe });
+    expect(halo()).toMatchObject({ mode: 'burst', colorSeverity: 1, burst: { key: 'dashpal:1:0', pulses: 3 } });
     await act(() => jest.advanceTimersByTime(1500));
     expect(screen.queryByTestId('hud-dashpal-alert')).toBeNull();
-    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.minor });
-    // A level change flashes again; a warning's glow yields to a phone event's.
-    await act(async () => rt.set({ link: { visual: visual({ tier: 2, sound: 1, level: 1 }) } }));
-    expect(screen.getByTestId('hud-dashpal-alert')).toHaveTextContent(/Eyes on the road/);
-    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.moderate });
-    await h.update({ lastAlert: { type: 'phone_pickup', tier: 'severe', at: T + 5000 } });
-    expect(screen.getByTestId('hud-dashpal-alert')).toBeTruthy();
-    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.severe });
+    expect(screen.getByTestId('hud-dashpal-chip')).toBeTruthy();
+    // the critical still held: distraction at 0.80 and more
+    expect(halo().mode).toBe('distraction');
+    expect(halo().severity).toBeGreaterThanOrEqual(0.8);
   });
 
-  test('the no-face alert (sound 6) shows "Driver not visible" in the warning colour', async () => {
+  test('a held glance warning ramps from 0.50 to 0.80 over 10 s; a level change flashes and bursts orange-red', async () => {
     const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
     setActiveDashcam(rt);
-    await renderHud();
-    await act(async () => rt.set({ link: { visual: visual({ tier: 2, sound: 6 }) } }));
+    const h = await renderHud({ rowTs: T });
+    await act(async () => rt.set({ link: { held: held(1, 2) } }));
+    expect(halo()).toMatchObject({ mode: 'distraction', severity: 0.5 });
+    await act(() => jest.advanceTimersByTime(10_000));
+    await h.update({ rowTs: T + 10_000 });
+    expect(halo().severity).toBeCloseTo(0.8, 6);
+    await act(async () => rt.set({ link: { visual: visual({ tier: 2, sound: 1, level: 1 }) } }));
+    expect(screen.getByTestId('hud-dashpal-alert')).toHaveTextContent(/Eyes on the road/);
+    expect(halo().burst).toMatchObject({ severity: 0.75, pulses: 3 });
+  });
+
+  test('the no-face alert (sound 6): "Driver not visible" banner, a steady 0.35 halo, no burst', async () => {
+    const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
+    setActiveDashcam(rt);
+    await renderHud({ rowTs: T });
+    await act(async () => rt.set({ link: { visual: visual({ tier: 2, sound: 6 }), held: held(6, 2) } }));
     expect(screen.getByTestId('hud-dashpal-alert')).toHaveTextContent(/Driver not visible/);
     expect(screen.getByTestId('hud-dashpal-alert').props.accessibilityLabel).toBe('DashPal: Driver not visible');
-    expect(screen.getByTestId('hud-glow', HIDDEN)).toHaveStyle({ borderColor: p.moderate });
+    expect(halo()).toMatchObject({ mode: 'distraction', severity: 0.35, steady: true, pulsePeriodMs: 0, burst: null });
+  });
+
+  test('an advisory chime: one amber pulse', async () => {
+    const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
+    setActiveDashcam(rt);
+    await renderHud({ rowTs: T });
+    await act(async () => rt.set({ link: { visual: visual({ tier: 1, sound: 5 }) } }));
+    expect(halo().burst).toMatchObject({ severity: 0.45, pulses: 1 });
+  });
+
+  test('a reconnect re-send shows its banner but never bursts; a visual 5 s old at mount shows nothing', async () => {
+    const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
+    setActiveDashcam(rt);
+    await renderHud({ rowTs: T });
+    await act(async () => rt.set({ link: { visual: { ...visual({ tier: 3, sound: 3 }), resend: true } } }));
+    expect(screen.getByTestId('hud-dashpal-alert')).toBeTruthy();
+    expect(halo().burst).toBeNull();
+    await act(async () => setActiveDashcam(null));
+
+    const old = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected', visual: { ...visual({ tier: 3, sound: 3, id: 9 }), at: Date.now() - 5000 } } });
+    await act(async () => setActiveDashcam(old));
+    mockHalo.length = 0;
+    await renderHud({ rowTs: T });
+    expect(screen.queryByTestId('hud-dashpal-alert')).toBeNull();
+    expect(mockHalo.every((x) => x.visual.burst === null)).toBe(true);
   });
 
   test('never dims while a DashPal alert shows', async () => {
@@ -513,5 +643,43 @@ describe('DashPal (plan §7.10)', () => {
     await act(async () => rt.set({ link: { visual: visual({ tier: 2, sound: 2 }) } }));
     await act(() => jest.advanceTimersByTime(1000));
     expect(screen.queryByTestId('hud-dim')).toBeNull();
+  });
+});
+
+describe('layout, accessibility and Reduce Motion', () => {
+  test('the speed is reachable for screen readers on the full screen', async () => {
+    await renderHud({ speedMph: 34 });
+    expect(screen.getByLabelText(/Speed 34 miles per hour/)).toBeTruthy();
+  });
+
+  test('miles: the SPEED LIMIT sign; kilometres: the round sign', async () => {
+    await renderHud();
+    expect(screen.getByTestId('hud-limit-words')).toHaveTextContent('SPEEDLIMIT');
+    mockUnits = 'km';
+    await renderHud();
+    expect(screen.queryByTestId('hud-limit-words')).toBeNull();
+    expect(screen.getByTestId('hud-limit')).toHaveStyle({ borderColor: p.signRing });
+  });
+
+  test('the bottom row holds the sign, End and the navigation button', async () => {
+    await renderHud();
+    expect(screen.getByTestId('hud-limit')).toBeTruthy();
+    expect(screen.getByTestId('hud-end')).toBeTruthy();
+    expect(screen.getByTestId('hud-nav')).toBeTruthy();
+  });
+
+  test('Reduce Motion: no pulse, no flow, colours unchanged, a burst as colour only', async () => {
+    mockStill = true;
+    const h = await renderHud({ rowTs: T, speedMph: 55, speedingTier: 'severe' });
+    expect(halo()).toMatchObject({ mode: 'speeding', pulsePeriodMs: 0, flow: false });
+    expect(halo().colorSeverity).toBeCloseTo(0.825, 4);
+    await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
+    expect(halo()).toMatchObject({ mode: 'burst', colorSeverity: 1, burst: null });
+    expect(screen.queryByTestId('hud-halo-flow', HIDDEN)).toBeNull();
+  });
+
+  test('not recording (saving): calm whatever the signals', async () => {
+    await renderHud({ status: 'finalizing', rowTs: T, speedingTier: 'severe', speedMph: 90, phoneUseSince: T - 5000 });
+    expect(halo().mode).toBe('calm');
   });
 });
