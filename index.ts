@@ -1,3 +1,6 @@
+// The secure random source first (Hermes has no `crypto.getRandomValues`), before any module that
+// may load the DashPal link's cryptography (`src/dashcam/crypto.ts`).
+import 'react-native-get-random-values';
 import 'expo-router/entry';
 
 import { ensureRuntime } from '@/boot/controller';
