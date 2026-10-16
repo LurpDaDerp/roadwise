@@ -43,9 +43,11 @@ function memSecrets() {
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => true };
 let mockPath = '/home';
+let mockSegments: string[] = ['(tabs)', 'home'];
 jest.mock('expo-router', () => ({
   useRouter: () => mockRouter,
   usePathname: () => mockPath,
+  useSegments: () => mockSegments,
   useFocusEffect: () => {},
 }));
 const mockDrive = { busy: false, listeners: new Set<(s: { status: string }) => void>() };
@@ -61,7 +63,8 @@ jest.mock('@/drive/useDrive', () => ({
   useDriveHost: () => mockHost,
 }));
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
-jest.mock('@/data/supabase/session', () => ({ useSession: () => ({ session: null, profile: null }) }));
+const mockSession: { status: string; session: null; profile: unknown } = { status: 'signedIn', session: null, profile: { onboarded_at: '2026-01-01', username: 'maya' } };
+jest.mock('@/data/supabase/session', () => ({ useSession: () => mockSession }));
 
 // Imported after the mocks.
 /* eslint-disable import/first */
@@ -77,6 +80,9 @@ beforeEach(() => {
   mockRouter.replace.mockClear();
   mockDrive.busy = false;
   mockPath = '/home';
+  mockSegments = ['(tabs)', 'home'];
+  mockSession.status = 'signedIn';
+  mockSession.profile = { onboarded_at: '2026-01-01', username: 'maya' };
   mockCamera.permission = { granted: true, canAskAgain: true, status: 'granted' };
   mockCamera.request.mockClear();
 });
@@ -537,6 +543,22 @@ describe('a DashPal link (/dashpal?d=…)', () => {
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/settings/dashcam-setup?link=1'));
   });
 
+  it('signed out it is held for after sign-in (the dashcam id, never the code) and goes nowhere itself; while the session loads it waits', async () => {
+    mockSession.status = 'signedOut';
+    const w = await appWorld();
+    await w.render(<DashpalLink d="a4cf12b3c4d5" now={() => 5} />);
+    await waitFor(async () => expect(await w.settings.get(PENDING_SETUP_KEY)).toEqual({ at: 5, dashcamId: 'a4cf12b3c4d5', signIn: true }));
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    mockSession.status = 'loading';
+    const w2 = await appWorld();
+    await w2.render(<DashpalLink d="a4cf12b3c4d5" now={() => 5} />);
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    });
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(await w2.settings.get(PENDING_SETUP_KEY)).toBeNull();
+  });
+
   it('during a drive it is held (the dashcam id, never the code) and the app goes Home', async () => {
     mockDrive.busy = true;
     const w = await appWorld();
@@ -632,6 +654,53 @@ describe('the prompt host', () => {
     await w.render(<DashpalPromptHost deps={fastDeps()} />);
     await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith(setupHref({ link: 'a4cf12b3c4d5' })));
     expect(await w.settings.get(PENDING_SETUP_KEY)).toBeNull();
+  });
+
+  it('a link held through sign-in is replayed only once signed in with setup done, off the sign-in and onboarding screens, and only while its code is held', async () => {
+    const store = new Map<string, string>();
+    const secrets = createDashpalSecrets(() => ({
+      getItemAsync: async (k: string) => store.get(k) ?? null,
+      setItemAsync: async (k: string, v: string) => void store.set(k, v),
+      deleteItemAsync: async (k: string) => void store.delete(k),
+    }));
+    const held = { [PENDING_SETUP_KEY]: { at: 0, dashcamId: 'a4cf12b3c4d5', signIn: true } };
+    const settle = () =>
+      act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      });
+    setActiveDashcam(createFakeDashcamRuntime());
+    // signed out, on sign-in: kept
+    mockSession.status = 'signedOut';
+    mockSegments = ['(auth)', 'sign-in'];
+    const w = await appWorld({ settings: held });
+    await w.render(<DashpalPromptHost deps={{ ...fastDeps(), secrets }} />);
+    await settle();
+    expect(mockRouter.push).not.toHaveBeenCalled();
+    expect(await w.settings.get(PENDING_SETUP_KEY)).toEqual(held[PENDING_SETUP_KEY]);
+    // signed in with onboarding owed, inside onboarding: still kept
+    mockSession.status = 'signedIn';
+    mockSession.profile = { onboarded_at: null, username: null };
+    mockSegments = ['(onboarding)', 'start'];
+    const w2 = await appWorld({ settings: held });
+    await w2.render(<DashpalPromptHost deps={{ ...fastDeps(), secrets }} />);
+    await settle();
+    expect(mockRouter.push).not.toHaveBeenCalled();
+    expect(await w2.settings.get(PENDING_SETUP_KEY)).toEqual(held[PENDING_SETUP_KEY]);
+    // ready, on Home, its code held: the Pair screen
+    mockSession.profile = { onboarded_at: '2026-01-01', username: 'maya' };
+    mockSegments = ['(tabs)', 'home'];
+    await secrets.writePendingCode({ at: 0, dashcamId: 'a4cf12b3c4d5', code: 'C944BA9XVGR6PTJDKBQ2BR9W54RG' });
+    const w3 = await appWorld({ settings: held });
+    await w3.render(<DashpalPromptHost deps={{ ...fastDeps(), secrets, now: () => 10 }} />);
+    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith(setupHref({ link: 'a4cf12b3c4d5' })));
+    // its code gone (the onboarding step used it): dropped, nothing opens
+    mockRouter.push.mockClear();
+    store.clear();
+    const w4 = await appWorld({ settings: held });
+    await w4.render(<DashpalPromptHost deps={{ ...fastDeps(), secrets, now: () => 10 }} />);
+    await waitFor(async () => expect(await w4.settings.get(PENDING_SETUP_KEY)).toBeNull());
+    await settle();
+    expect(mockRouter.push).not.toHaveBeenCalled();
   });
 
   it('a held link older than 12 h is dropped', async () => {

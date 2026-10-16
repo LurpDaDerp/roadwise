@@ -6,8 +6,10 @@ import { SETTINGS_HREFS } from '@/features/settings/routes';
 import { isDashcamId } from '../protocol';
 
 /**
- * Settings: a DashPal link that arrived during a drive, `{ at, dashcamId }`, replayed when idle.
- * Never its code: that waits in SecureStore (`dashpal.pendingCode`).
+ * Settings: a DashPal link that arrived during a drive or while signed out, `{ at, dashcamId,
+ * signIn? }`, replayed once a drive is over and the driver is signed in with setup done. Never its
+ * code: that waits in SecureStore (`dashpal.pendingCode`). `signIn`: held through a sign-in, replayed
+ * only while its code is still held (the onboarding step may have used it).
  */
 export const PENDING_SETUP_KEY = 'dashcam.pendingSetup';
 export const PENDING_SETUP_MAX_AGE_MS = 12 * 60 * 60_000;

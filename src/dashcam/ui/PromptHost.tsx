@@ -1,4 +1,4 @@
-import { usePathname, useRouter } from 'expo-router';
+import { usePathname, useRouter, useSegments } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,8 +8,10 @@ import type { PermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import type { AppStateLike } from '@/data/foreground';
+import { useSession } from '@/data/supabase/session';
 import { isBusyStatus } from '@/drive/policy';
 import { useDrive, useDriveHost } from '@/drive/useDrive';
+import { profileGate } from '@/features/auth/authGuard';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { mpsToMph } from '@/lib/units';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
@@ -21,6 +23,7 @@ import { createDetector, snoozed, type Detector, type Found } from '../detector'
 import { SNOOZES_KEY } from '../keys';
 import { isDashcamId, PAIRING_SERVICE } from '../protocol';
 import type { DashcamRuntime, DashcamState } from '../runtime';
+import { dashpalSecrets, type DashpalSecrets } from '../secure';
 import { PENDING_SETUP_KEY, PENDING_SETUP_MAX_AGE_MS, setupHref } from './links';
 import { useDashcamRuntime, useDashcamSelector } from './useDashcam';
 
@@ -39,6 +42,7 @@ export interface PromptHostDeps {
   speedMph?: () => Promise<number | null>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  secrets?: DashpalSecrets;
 }
 
 /**
@@ -46,7 +50,8 @@ export interface PromptHostDeps {
  * - offers a DashPal found nearby in pairing mode (the detector's rules: opted in, Bluetooth already
  *   allowed, never while a drive is open or on the drive route, speed known under 3 mph, ≤ once per
  *   2 min), as a small non-blocking banner, dropped when a drive starts; "Not now" snoozes it 7 days;
- * - replays a DashPal link that came during a drive (its Pair screen), once the drive is over;
+ * - replays a DashPal link that came during a drive or while signed out (its Pair screen), once the
+ *   drive is over and the driver is signed in with setup done (outside sign-in and onboarding);
  * - shows a DashPal alert for 1.5 s per start or level change (the HUD shows its own).
  */
 export function DashpalPromptHost({ deps = {} }: { deps?: PromptHostDeps }) {
@@ -60,6 +65,10 @@ function PromptHostInner({ runtime, deps }: { runtime: DashcamRuntime; deps: Pro
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const pathname = usePathname() ?? '';
+  const segments = useSegments() as readonly string[];
+  const { status, profile } = useSession();
+  // Signed in with setup done, and on neither the sign-in nor the onboarding screens.
+  const appReady = status === 'signedIn' && profileGate(profile) === 'ready' && segments[0] !== '(auth)' && segments[0] !== '(onboarding)';
   const host = useDriveHost();
   const busy = useDrive((s) => isBusyStatus(s.status));
   const db = useDb();
@@ -138,15 +147,20 @@ function PromptHostInner({ runtime, deps }: { runtime: DashcamRuntime; deps: Pro
     [host]
   );
 
-  // A DashPal link that came during a drive, replayed once it is over.
+  // A DashPal link that came during a drive or while signed out, replayed once the app is ready.
   useEffect(() => {
-    if (busy || onDriveRoute(pathname)) return;
+    if (busy || onDriveRoute(pathname) || !appReady) return;
     let live = true;
     void (async () => {
-      const pending = await settings.get<{ at?: number; dashcamId?: unknown }>(PENDING_SETUP_KEY).catch(() => null);
+      const pending = await settings.get<{ at?: number; dashcamId?: unknown; signIn?: unknown }>(PENDING_SETUP_KEY).catch(() => null);
       if (!live || !pending) return;
       await settings.remove(PENDING_SETUP_KEY).catch(() => {});
       if (typeof pending.at !== 'number' || now() - pending.at > PENDING_SETUP_MAX_AGE_MS || host.isBusy()) return;
+      if (pending.signIn === true) {
+        // Held through a sign-in: only while its code is still held (onboarding may have used it).
+        const held = await (deps.secrets ?? dashpalSecrets).readPendingCode(now()).catch(() => null);
+        if (!live || !held || host.isBusy()) return;
+      }
       // The link's Pair screen (its code waits in SecureStore), or the code step for the bare link.
       router.push(setupHref({ link: isDashcamId(pending.dashcamId) ? pending.dashcamId : null }));
     })();
@@ -154,7 +168,7 @@ function PromptHostInner({ runtime, deps }: { runtime: DashcamRuntime; deps: Pro
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy, pathname, settings, router, host]);
+  }, [busy, pathname, settings, router, host, appReady]);
 
   // The alert banner: 1.5 s per start or level change (from when the dashcam raised it).
   useEffect(() => {
