@@ -32,11 +32,6 @@
         android:name=".ActivityTransitionReceiver"
         android:exported="false" />
 
-    <!-- The forgot-to-start reminder's "Not driving" action, through its explicit PendingIntent. -->
-    <receiver
-        android:name=".ReminderActionReceiver"
-        android:exported="false" />
-
     <!-- Disabled until the forgot-to-start reminder is turned on (TripReminder enables it with
          DONT_KILL_APP). System broadcasts reach an unexported receiver. It only re-subscribes. -->
     <receiver

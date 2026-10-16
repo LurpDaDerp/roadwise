@@ -62,7 +62,6 @@ describe('native-android: files the contract names exist, and no trip-detection 
     'TripReminderPolicy',
     'TripReminderState',
     'TripReminderNotifier',
-    'ReminderActionReceiver',
     'ReminderBootReceiver',
     'TripReminderSelfTest',
   ];
@@ -73,7 +72,7 @@ describe('native-android: files the contract names exist, and no trip-detection 
     expect(existsSync(join(MAIN, 'res', 'drawable', 'ic_drive_notification.xml'))).toBe(true);
   });
   // plan §1 decision 4
-  it.each(['BootReceiver', 'ForgotToStartReminder', 'TransitionStore'])('no %s.kt', (name) => {
+  it.each(['BootReceiver', 'ForgotToStartReminder', 'TransitionStore', 'ReminderActionReceiver'])('no %s.kt', (name) => {
     expect(existsSync(join(KT_DIR, `${name}.kt`))).toBe(false);
   });
 });
@@ -162,13 +161,13 @@ describe('native-android: manifest (plan §1 decision 4: While Using only, no au
     expect(m![0]).toContain('android:exported="false"');
   });
 
-  it("the receivers: the transitions feed and the reminder's two, none exported; the boot one disabled until the reminder is on", () => {
+  it("the receivers: the transitions feed and the reminder's boot one, none exported; the boot one disabled until the reminder is on", () => {
     const receivers = [...MANIFEST().matchAll(/<receiver[^>]*android:name="([^"]+)"[^>]*>/g)];
-    expect(receivers.map((r) => r[1])).toEqual(['.ActivityTransitionReceiver', '.ReminderActionReceiver', '.ReminderBootReceiver']);
+    expect(receivers.map((r) => r[1])).toEqual(['.ActivityTransitionReceiver', '.ReminderBootReceiver']);
     for (const r of receivers) expect(r[0]).toContain('android:exported="false"');
-    expect(receivers[2]![0]).toContain('android:enabled="false"');
+    expect(receivers[1]![0]).toContain('android:enabled="false"');
     expect(receivers[0]![0]).not.toContain('android:enabled');
-    expect(receivers[1]![0]).not.toContain('android:enabled');
+    expect(MANIFEST()).not.toMatch(/ReminderActionReceiver|NOT_DRIVING/);
   });
 });
 
@@ -180,7 +179,7 @@ describe('native-android: a capture starts only from JS (plan §1 decision 4)', 
   });
 
   // The forgot-to-start reminder only notifies.
-  it.each(['TripReminder', 'TripReminderPolicy', 'TripReminderState', 'TripReminderNotifier', 'ReminderActionReceiver', 'ReminderBootReceiver', 'TripReminderSelfTest'])(
+  it.each(['TripReminder', 'TripReminderPolicy', 'TripReminderState', 'TripReminderNotifier', 'ReminderBootReceiver', 'TripReminderSelfTest'])(
     '%s.kt can never start a capture nor reach JS',
     (name) => {
       const src = code(kt(name));
@@ -219,14 +218,14 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(src).toMatch(/requestActivityTransitionUpdates\(/);
   });
 
-  it('the tiers: the capture asks for IN_VEHICLE, WALKING and RUNNING (ENTER and EXIT); the reminder IN_VEHICLE ENTER when idle, and in a trip IN_VEHICLE ENTER and EXIT with the ENTERs of STILL, WALKING and RUNNING; never ON_FOOT', () => {
+  it('the tiers: the capture asks for IN_VEHICLE, WALKING and RUNNING (ENTER and EXIT); the reminder IN_VEHICLE ENTER when idle, and in a session IN_VEHICLE ENTER and EXIT with the ENTERs of STILL, WALKING and RUNNING; never ON_FOOT', () => {
     const src = code(kt('ActivityTransitionReceiver'));
     expect(src).toMatch(/CAPTURE_TYPES\s*=\s*listOf\(DetectedActivity\.IN_VEHICLE,\s*DetectedActivity\.WALKING,\s*DetectedActivity\.RUNNING\)/);
     const tiers = /fun transitions\(tier: TripReminderPolicy\.Tier\)[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
     expect(tiers).toMatch(/Tier\.NONE -> emptyList\(\)/);
     expect(tiers).toMatch(/Tier\.CAPTURE -> CAPTURE_TYPES\.flatMap \{ type -> listOf\(type to ENTER, type to EXIT\) \}/);
     expect(tiers).toMatch(/Tier\.IDLE -> listOf\(DetectedActivity\.IN_VEHICLE to ENTER\)\n/);
-    const trip = /Tier\.TRIP -> listOf\(([\s\S]*?)\)\n/.exec(tiers)?.[1] ?? '';
+    const trip = /Tier\.SESSION -> listOf\(([\s\S]*?)\)\n/.exec(tiers)?.[1] ?? '';
     expect(trip.split(',').map((x) => x.trim())).toEqual([
       'DetectedActivity.IN_VEHICLE to ENTER',
       'DetectedActivity.IN_VEHICLE to EXIT',
@@ -258,6 +257,15 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(on.indexOf('TripReminder.onTransitions(')).toBeGreaterThan(on.indexOf(capture) + capture.length - 1);
     expect(on).toMatch(/val pending = goAsync\(\)[\s\S]*ActivityTransitions\.sync\(context\) \{ pending\.finish\(\) \}/);
     expect(on).not.toMatch(/\.append\(|\.edit\(\)|prefs\.\w+\s*=/);
+    // While capturing, the reminder gets the batch as vehicle state only, after JS has its events,
+    // best effort, with the same replay stamp; it never posts from there.
+    const fold = capture.indexOf('TripReminder.onCaptureTransitions(context, batch, subscribedAt)');
+    expect(fold).toBeGreaterThan(capture.lastIndexOf('EventBus.emit("activity"'));
+    expect(capture.slice(capture.lastIndexOf("try {", fold), fold + 120)).toMatch(/try \{\s*TripReminder\.onCaptureTransitions\(context, batch, subscribedAt\)\s*\} catch \(e: Exception\)/);
+    const reminder = code(kt('TripReminder'));
+    const onCapture = /fun onCaptureTransitions\([\s\S]*?\n {2}\}/.exec(reminder)?.[0] ?? '';
+    expect(onCapture).toMatch(/TripReminderPolicy\.foldCaptureTransitions\(/);
+    expect(onCapture).not.toMatch(/post\(|Notifier/);
   });
 
   it('the feed follows the tier (capture, or the reminder while it is on), with motion and Play services; synced at every entry point, best effort', () => {
@@ -333,30 +341,50 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
     expect(src).not.toMatch(/"reminders"/);
   });
 
-  it('the notification: silent, withdrawn after TTL_MS, tap opens roadwise://home, one action "Not driving", nothing that starts a drive', () => {
+  it('the note: "Forgot to start drive?" / "Tap here to start", silent, no buttons; a tap opens RoadWise with the one-use token and nothing else', () => {
     const n = code(kt('TripReminderNotifier'));
     expect(n).toMatch(/const val CHANNEL_ID = "trip_reminder"/);
     expect(n).toMatch(/const val NOTIFICATION_ID = 7305/);
-    expect(n).toMatch(/const val TITLE = "Want to record this drive\?"/);
-    expect(n).toContain("when you're stopped and it's safe to open RoadWise and start your drive.");
-    expect(n.match(/addAction\(/g)).toHaveLength(1);
-    expect(n).toMatch(/addAction\(0, NOT_DRIVING, notDriving\(context\)\)/);
-    expect(n).toMatch(/const val NOT_DRIVING = "Not driving"/);
-    expect(n).not.toMatch(/"Start/);
-    // read raw: the comment stripper would take the URL's `//` for a comment
-    expect(kt('TripReminderNotifier')).toMatch(/val home = Intent\(Intent\.ACTION_VIEW, Uri\.parse\("roadwise:\/\/home"\)\)\s*\.setPackage\(context\.packageName\)/);
-    for (const s of ['setTimeoutAfter(TripReminderPolicy.TTL_MS)', 'setSilent(true)', 'setSound(null, null)', 'enableVibration(false)', 'CATEGORY_RECOMMENDATION', 'setOngoing(false)']) {
+    expect(n).toMatch(/const val TITLE = "Forgot to start drive\?"/);
+    expect(n).toMatch(/const val TEXT = "Tap here to start"/);
+    expect(n).toMatch(/const val EXTRA_TAP = "expo\.modules\.drivesense\.REMINDER_TAP"/);
+    expect(n).not.toMatch(/addAction\(|NOT_DRIVING|"Not driving"|ACTION_VIEW|Uri\.parse|getBroadcast|BigTextStyle/);
+    expect(kt('TripReminderNotifier')).not.toMatch(/roadwise:\/\//);
+    for (const s of ['setSilent(true)', 'setOnlyAlertOnce(true)', 'setSound(null, null)', 'enableVibration(false)', 'CATEGORY_RECOMMENDATION', 'setOngoing(false)', 'setAutoCancel(true)', 'setWhen(postedAt)', 'setShowWhen(true)', 'VISIBILITY_PUBLIC']) {
       expect(n).toContain(s);
     }
     expect(n).not.toMatch(/CATEGORY_REMINDER|setFullScreenIntent|setOngoing\(true\)|setSound\(Uri|DEFAULT_SOUND|DEFAULT_VIBRATE/);
-    // Both PendingIntents are immutable; the action goes to the unexported receiver.
-    expect(n.match(/PendingIntent\.FLAG_IMMUTABLE or PendingIntent\.FLAG_UPDATE_CURRENT/g)).toHaveLength(2);
-    expect(n).toMatch(/Intent\(context, ReminderActionReceiver::class\.java\)\.setAction\(ACTION_NOT_DRIVING\)/);
+    // The launcher activity, explicit, with the token; one immutable PendingIntent.
+    const open = /private fun open\([\s\S]*?\n {2}\}/.exec(n)?.[0] ?? '';
+    expect(open).toMatch(/context\.packageManager\.getLaunchIntentForPackage\(context\.packageName\) \?: return null/);
+    expect(open).toMatch(/launch\.putExtra\(EXTRA_TAP, token\)\.addFlags\(Intent\.FLAG_ACTIVITY_NEW_TASK\)/);
+    expect(n.match(/PendingIntent\.FLAG_IMMUTABLE or PendingIntent\.FLAG_UPDATE_CURRENT/g)).toHaveLength(1);
+    expect(n.match(/PendingIntent\.get\w+\(/g)).toEqual(['PendingIntent.getActivity(']);
   });
 
-  it('"Not driving" only quiets the reminder', () => {
-    const rx = code(kt('ReminderActionReceiver'));
-    expect(rx).toMatch(/if \(intent\.action != TripReminderNotifier\.ACTION_NOT_DRIVING\) return\s*DriveSensePrefs\.init\(context\)\s*TripReminder\.onNotDriving\(context\)\s*\}/);
+  it('every notify carries a positive system timeout: none goes out without one, and a timeout not ahead cancels instead', () => {
+    const n = code(kt('TripReminderNotifier'));
+    const build = /private fun build\([\s\S]*?\n {2}\}/.exec(n)?.[0] ?? '';
+    expect(build).toContain('.setTimeoutAfter(timeoutMs)');
+    expect(n.match(/setTimeoutAfter\(/g)).toHaveLength(1);
+    const notifies = [...n.matchAll(/\.notify\(/g)];
+    expect(notifies).toHaveLength(2);
+    for (const fn of ['post', 'refresh']) {
+      const body = new RegExp(`fun ${fn}\\(context: Context, token: String, postedAt: Long, timeoutMs: Long\\)[\\s\\S]*?\\n {2}\\}`).exec(n)?.[0] ?? '';
+      expect({ fn, guard: body.indexOf('if (timeoutMs <= 0L) {') }).not.toEqual({ fn, guard: -1 });
+      expect(body.indexOf('if (timeoutMs <= 0L) {')).toBeLessThan(body.indexOf('.notify('));
+      expect(body).toMatch(/nm\.notify\(NOTIFICATION_ID, note\)/);
+      expect(body).toMatch(/build\(context, token, postedAt, timeoutMs\)/);
+    }
+    // A refresh never brings back a note that is no longer up.
+    const refresh = /fun refresh\([\s\S]*?\n {2}\}/.exec(n)?.[0] ?? '';
+    expect(refresh.indexOf('if (!showing(context)) return')).toBeGreaterThan(-1);
+    expect(refresh.indexOf('if (!showing(context)) return')).toBeLessThan(refresh.indexOf('.notify('));
+    expect(n).toMatch(/manager\(context\)\?\.activeNotifications\?\.any \{ it\.id == NOTIFICATION_ID \}/);
+    // The timeout is the policy's: expiresAt − arrival.
+    const r = code(kt('TripReminder'));
+    expect(r).toMatch(/val timeout = r\.expiresAt - arrival/);
+    expect(r).toMatch(/TripReminderPolicy\.Effect\.REFRESH -> TripReminderNotifier\.refresh\(context, r\.state\.token, r\.state\.postedAt, timeout\)/);
   });
 
   it('the boot receiver only re-subscribes, under goAsync', () => {
@@ -379,11 +407,33 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
     expect(code(kt('TripReminder'))).toMatch(/ComponentName\(context, ReminderBootReceiver::class\.java\)/);
   });
 
-  it('the phone as the reminder reads it: RoadWise in front, a call (a VoIP mode counts only with the microphone in use)', () => {
+  it('the reminder reads no call and no app-in-front state any more: only the session rule decides', () => {
+    for (const f of ['TripReminder', 'TripReminderPolicy', 'TripReminderNotifier', 'ActivityTransitionReceiver']) {
+      expect({ f, reads: /AudioManager|getMyMemoryState|IMPORTANCE_FOREGROUND|MODE_IN_CALL|activeRecordingConfigurations/.test(code(kt(f))) }).toEqual({ f, reads: false });
+    }
     const r = code(kt('TripReminder'));
-    expect(r).toMatch(/info\.importance == ActivityManager\.RunningAppProcessInfo\.IMPORTANCE_FOREGROUND/);
-    expect(r).toMatch(/AudioManager\.MODE_IN_CALL, AudioManager\.MODE_RINGTONE -> true/);
-    expect(r).toMatch(/AudioManager\.MODE_IN_COMMUNICATION -> am\.activeRecordingConfigurations\.isNotEmpty\(\)/);
+    expect(r).toMatch(/private fun ctx\(context: Context\): ReminderCtx = ReminderCtx\(\s*permissionsOk = transitionsOk\(context\) && TripReminderNotifier\.enabled\(context\),\s*capturing = CaptureService\.isCapturing\s*\)/);
+    expect(r).not.toMatch(/onNotDriving|inCall|appInForeground|paused|autoOff/);
+  });
+
+  it("a tap's token: random per note, handed over once (persisted), claimed only with the hand-over check; the claim takes the note down when the token goes", () => {
+    const r = code(kt('TripReminder'));
+    expect(r).toMatch(/private fun newToken\(\): String = UUID\.randomUUID\(\)\.toString\(\)/);
+    expect(r).toMatch(/TripReminderPolicy\.onTransitions\(load\(context\), events, arrival, subscribedAt, ctx\(context\), newToken\(\)\)/);
+    const tap = /fun onTapIntent\([\s\S]*?\n {2}\}/.exec(r)?.[0] ?? '';
+    expect(tap).toMatch(/TripReminderPolicy\.tapDelivered\(load\(context\), token, now\)/);
+    expect(tap).toMatch(/if \(!r\.delivered\) return TapDelivery\(false, now\)\s*save\(context, r\.state\)/);
+    const claim = /fun claim\(context: Context, token: String\): Boolean \{[\s\S]*?\n {2}\}/.exec(r)?.[0] ?? '';
+    expect(claim).toMatch(/TripReminderPolicy\.claim\(s0, token, now\(\), CaptureService\.isCapturing, true\)/);
+    expect(claim).toMatch(/save\(context, r\.state\)/);
+    expect(claim).toMatch(/if \(s0\.token\.isNotEmpty\(\) && r\.state\.token\.isEmpty\(\)\) TripReminderNotifier\.cancel\(context\)/);
+    expect(claim).toMatch(/return r\.ok\s*\}$/);
+    // RoadWise in front keeps a live note (same name as before: the motion design pins it), re-syncs the feed.
+    const fg = /fun onAppForeground\([\s\S]*?\n {2}\}/.exec(r)?.[0] ?? '';
+    expect(fg).toContain('ActivityTransitions.sync(context)');
+    expect(fg).toContain('dropNoteIfNoToken(context, s)');
+    expect(fg).not.toMatch(/TripReminderNotifier\.cancel/);
+    expect(r).toMatch(/private fun dropNoteIfNoToken\(context: Context, s: ReminderState\) \{\s*if \(s\.token\.isEmpty\(\)\) TripReminderNotifier\.cancel\(context\)/);
   });
 
   it('a drive tells the reminder when it starts and ends (one direction only)', () => {
@@ -642,7 +692,7 @@ describe('native-android: the reminder posts in one place, and its rules run in 
   it("one post call in all the Kotlin: the policy's POST effect, and a post that never showed is taken back", () => {
     expect(code(allKotlin()).match(/TripReminderNotifier\.post\(/g)).toHaveLength(1);
     expect(code(kt('TripReminder'))).toMatch(
-      /TripReminderPolicy\.Effect\.POST -> if \(!TripReminderNotifier\.post\(context\)\) save\(context, unposted\(r\.state, arrival\)\)/
+      /TripReminderPolicy\.Effect\.POST ->\s*if \(!TripReminderNotifier\.post\(context, r\.state\.token, r\.state\.postedAt, timeout\)\) save\(context, TripReminderPolicy\.unposted\(r\.state, r\.state\.token\)\)/
     );
   });
 

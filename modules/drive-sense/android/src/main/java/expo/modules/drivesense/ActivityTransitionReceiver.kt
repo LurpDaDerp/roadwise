@@ -22,7 +22,8 @@ import com.google.android.gms.location.DetectedActivity
  * built in [ActivityTransitions].
  *
  * It never starts a capture (plan §1 decision 4). It serves two readers:
- * - during a capture, the walking auto-end: mapped `activity` events to JS;
+ * - during a capture, the walking auto-end: mapped `activity` events to JS; after those, the same
+ *   batch goes to the forgot-to-start reminder as vehicle state only (it never posts then);
  * - with no drive open, the optional forgot-to-start reminder ([TripReminder]), which reads the
  *   batch natively and at most posts one notification. Nothing reaches JS then.
  * A transition that arrives when neither wants the feed is a leftover registration and is removed.
@@ -45,6 +46,12 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
     val result = ActivityTransitionResult.extractResult(intent) ?: return
     val anchor = ClockAnchor.now()
     val arrival = System.currentTimeMillis()
+    // The request's stamp: whatever the request replayed happened before it.
+    val subscribedNanos = DriveSensePrefs.init(context).transitionsAtNanos
+    val subscribedAt = if (subscribedNanos > 0L) transitionTs(subscribedNanos, anchor, arrival) else 0L
+    val batch = result.transitionEvents.mapNotNull { e ->
+      reminderKind(e)?.let { Transition(it, transitionTs(e.elapsedRealTimeNanos, anchor, arrival)) }
+    }
 
     if (CaptureService.isCapturing) {
       // ENTERs, and the EXITs of the on-foot types, to JS in arrival order.
@@ -63,16 +70,18 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
           EventBus.emit("activity", linkedMapOf("type" to type, "confidence" to "high", "ts" to ts, "exit" to true))
         }
       }
+      // After JS has its events: the reminder keeps the vehicle state (state only, never a post),
+      // so its session is right when the drive ends. Best effort: it can never disturb the capture.
+      try {
+        TripReminder.onCaptureTransitions(context, batch, subscribedAt)
+      } catch (e: Exception) {
+        Log.w("DriveSense", "reminder capture batch not folded: ${e.javaClass.simpleName}")
+      }
       return
     }
 
     // No drive open: the forgot-to-start reminder reads the whole batch, then the feed is re-synced
-    // (a trip opening or closing changes what is asked for).
-    val subscribedNanos = DriveSensePrefs.init(context).transitionsAtNanos
-    val subscribedAt = if (subscribedNanos > 0L) transitionTs(subscribedNanos, anchor, arrival) else 0L
-    val batch = result.transitionEvents.mapNotNull { e ->
-      reminderKind(e)?.let { Transition(it, transitionTs(e.elapsedRealTimeNanos, anchor, arrival)) }
-    }
+    // (a session opening or ending changes what is asked for).
     val pending = goAsync()
     try {
       TripReminder.onTransitions(context, batch, arrival, subscribedAt)
@@ -129,14 +138,15 @@ object ActivityTransitions {
 
   /**
    * What each tier asks for, as (activity, transition). The reminder's idle set wakes the app only
-   * when a car trip starts; its trip set adds the stop (STILL ENTER), the car leaving (IN_VEHICLE
-   * EXIT) and the driver walking off. STILL is only ever asked for with ENTER.
+   * when the phone gets into a vehicle; its session set adds the stop (STILL ENTER), the car leaving
+   * (IN_VEHICLE EXIT, which also starts the session's 30 min) and the driver walking off. STILL is
+   * only ever asked for with ENTER.
    */
   fun transitions(tier: TripReminderPolicy.Tier): List<Pair<Int, Int>> = when (tier) {
     TripReminderPolicy.Tier.NONE -> emptyList()
     TripReminderPolicy.Tier.CAPTURE -> CAPTURE_TYPES.flatMap { type -> listOf(type to ENTER, type to EXIT) }
     TripReminderPolicy.Tier.IDLE -> listOf(DetectedActivity.IN_VEHICLE to ENTER)
-    TripReminderPolicy.Tier.TRIP -> listOf(
+    TripReminderPolicy.Tier.SESSION -> listOf(
       DetectedActivity.IN_VEHICLE to ENTER,
       DetectedActivity.IN_VEHICLE to EXIT,
       DetectedActivity.STILL to ENTER,
@@ -197,7 +207,8 @@ object ActivityTransitions {
         done()
         return
       }
-      // Stamped before the request: whatever the request replays happened before this and is dropped.
+      // Stamped before the request: whatever the request replays happened before this, and the
+      // reminder reads it as the state at the stamp (never a stop, never driving speed).
       prefs.transitionsTier = null
       prefs.transitionsAtNanos = nowNanos
       prefs.transitionsBoot = boot
