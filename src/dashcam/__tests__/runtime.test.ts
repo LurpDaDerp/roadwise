@@ -9,7 +9,9 @@ import { createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db
 import { createFakeBle, type FakeBle } from '../fakeTransport';
 import { BT_OPT_IN_KEY, BUZZER_TOO_KEY, ENABLED_SECURE_KEY, PAIRED_KEY, type PairedDashcam } from '../keys';
 import { decodeRx, encodeInfo, RX_CHAR } from '../protocol';
-import { createDashcamRuntime, MIN_MOVING_S, type DashcamRuntime } from '../runtime';
+import { processTimers } from '@/lib/timers';
+
+import { AUDIO_PROBE_MEMO_MS, createDashcamRuntime, linkServiceStateFor, MIN_MOVING_S, type DashcamRuntime, type LinkServicePort, type LinkServiceResult, type LinkServiceState } from '../runtime';
 import { PERIPHERAL_SECURE_KEY } from '../secure';
 import { createDashcamStore } from '../store';
 import { createBleTransport, type DashcamTransport } from '../transport';
@@ -295,4 +297,273 @@ test('a screen that created the transport before the settings were read: the alr
   expect(ble.calls.filter((c) => c.startsWith('disconnect'))).toHaveLength(0);
   expect(ble.writes.some((w) => decodeRx(w.bytes).ok && (decodeRx(w.bytes) as { frame: { type: string } }).frame.type === 'COMMAND')).toBe(true);
   rt.dispose();
+});
+
+describe('phone-first sound: the audio probe and the Android DashPal link service', () => {
+  function fakeService(o: { running?: boolean } = {}) {
+    const calls: LinkServiceState[] = [];
+    const ticks = new Set<() => void>();
+    const st = { running: o.running ?? false, allowStart: true, holding: false, held: [] as (() => void)[], runningThrows: false };
+    const port: LinkServicePort = {
+      set: (want) => {
+        calls.push(want);
+        return new Promise<LinkServiceResult>((resolve) => {
+          const finish = () => {
+            if (want === 'off') {
+              st.running = false;
+              resolve('stopped');
+            } else if (st.running) resolve('running');
+            else if (st.allowStart) {
+              st.running = true;
+              resolve('running');
+            } else resolve('refused');
+          };
+          if (st.holding) st.held.push(finish);
+          else finish();
+        });
+      },
+      running: () => {
+        if (st.runningThrows) throw new Error('running');
+        return st.running;
+      },
+      onTick: (fn) => {
+        ticks.add(fn);
+        return { remove: () => void ticks.delete(fn) };
+      },
+    };
+    return { port, calls, ticks, st, release: () => st.held.splice(0).forEach((f) => f()) };
+  }
+
+  function svcRig(o: { platform?: 'ios' | 'android'; foreground?: boolean; service?: ReturnType<typeof fakeService>; audio?: () => { callActive: boolean; volume: number | null; headphones: boolean | null }; clock?: { t: number } } = {}) {
+    const platform = o.platform ?? 'android';
+    const ble = createFakeBle();
+    ble.addPeripheral({ id: PID, info: INFO });
+    let transport: DashcamTransport | null = null;
+    const errors: string[] = [];
+    const listeners = new Set<(s: string) => void>();
+    const appState = {
+      currentState: o.foreground === false ? 'background' : 'active',
+      emit(s: string) {
+        appState.currentState = s;
+        for (const fn of [...listeners]) fn(s);
+      },
+      addEventListener: (_t: 'change', fn: (s: string) => void) => {
+        listeners.add(fn);
+        return { remove: () => void listeners.delete(fn) };
+      },
+    };
+    const clock = o.clock ?? { t: 1_791_600_000_000 };
+    const player: AlertPlayer = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
+    const rt = createDashcamRuntime({
+      db,
+      player,
+      transport: () => (transport ??= createBleTransport(ble, { platform, setTimer: () => 0, clearTimer: () => {} })),
+      host: () => ({ recording: false, driveOpen: false, playerAvailable: true, callActive: false }),
+      styleAllowsSound: () => true,
+      platform,
+      appState,
+      now: () => clock.t,
+      newId: () => '00000000-0000-4000-8000-000000000001',
+      setTimer: () => 0,
+      clearTimer: () => {},
+      setRepeat: () => 0,
+      clearRepeat: () => {},
+      onError: (e, ctx) => errors.push(`${ctx}: ${e instanceof Error ? e.message : String(e)}`),
+      ...(o.audio ? { audioOutput: o.audio } : {}),
+      ...(o.service ? { linkService: o.service.port } : {}),
+    });
+    return { rt, ble, appState, errors, clock };
+  }
+
+  test('the probe memo: two reads within 500 ms are one native read; a fresh read always reads; a throwing probe is reported and reads as unknown', async () => {
+    let reads = 0;
+    let fail = false;
+    const clock = { t: 1_791_600_000_000 };
+    const r = svcRig({
+      clock,
+      audio: () => {
+        reads += 1;
+        if (fail) throw new Error('no audio manager');
+        return { callActive: false, volume: 0.1, headphones: false };
+      },
+    });
+    await r.rt.ready;
+    expect(r.rt.link.canPlay()).toBe(false); // volume 0.1
+    clock.t += AUDIO_PROBE_MEMO_MS;
+    expect(r.rt.link.canPlay()).toBe(false);
+    expect(reads).toBe(1);
+    expect(r.rt.link.canPlay(true)).toBe(false);
+    expect(reads).toBe(2);
+    clock.t += AUDIO_PROBE_MEMO_MS + 1;
+    r.rt.link.canPlay();
+    expect(reads).toBe(3);
+    fail = true;
+    expect(r.rt.link.canPlay(true)).toBe(true); // unknown never blocks a sound
+    expect(r.errors.some((e) => e.startsWith('audio output: no audio manager'))).toBe(true);
+    r.rt.dispose();
+  });
+
+  test('the mapping: off with no DashPal or Bluetooth not allowed; connected while linked; waiting for everything else', () => {
+    expect(linkServiceStateFor(false, 'connected')).toBe('off');
+    expect(linkServiceStateFor(true, 'unpaired')).toBe('off');
+    expect(linkServiceStateFor(true, 'unauthorized')).toBe('off');
+    expect(linkServiceStateFor(true, 'connected')).toBe('connected');
+    for (const l of ['idle', 'connecting', 'bluetooth_off', 'needs_repair'] as const) expect(linkServiceStateFor(true, l)).toBe('waiting');
+  });
+
+  test('no DashPal: never started; iOS: never driven even when given a service', async () => {
+    const svc = fakeService();
+    const r = svcRig({ service: svc });
+    await r.rt.ready;
+    await flush();
+    expect(svc.calls).toEqual([]);
+    r.rt.dispose();
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const ios = fakeService();
+    const r2 = svcRig({ platform: 'ios', service: ios });
+    await r2.rt.ready;
+    await flush();
+    expect(ios.calls).toEqual([]);
+    expect(ios.ticks.size).toBe(0);
+    r2.rt.dispose();
+  });
+
+  test('paired, in front: started waiting, connected once linked; Bluetooth off and a repair keep it waiting; Bluetooth not allowed and forget stop it', async () => {
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const svc = fakeService();
+    const r = svcRig({ service: svc });
+    await r.rt.ready;
+    await flush();
+    expect(r.rt.state().link.lifecycle).toBe('connected');
+    expect(svc.calls).toEqual(['waiting', 'connected']);
+    expect(svc.st.running).toBe(true);
+    r.ble.setState('off');
+    await flush();
+    expect(r.rt.state().link.lifecycle).toBe('bluetooth_off');
+    expect(svc.calls.at(-1)).toBe('waiting');
+    r.ble.setState('on');
+    await flush();
+    expect(svc.calls.at(-1)).toBe('connected');
+    r.ble.setState('unauthorized');
+    await flush();
+    expect(r.rt.state().link.lifecycle).toBe('unauthorized');
+    expect(svc.calls.at(-1)).toBe('off');
+    expect(svc.st.running).toBe(false);
+    // Allowed again (in front): started; a repair keeps it waiting.
+    r.ble.setState('on');
+    await flush();
+    expect(svc.calls.at(-1)).toBe('connected');
+    r.rt.link.needsRepair('bond_lost');
+    await flush();
+    expect(r.rt.state().link.lifecycle).toBe('needs_repair');
+    expect(svc.calls.at(-1)).toBe('waiting');
+    expect(svc.st.running).toBe(true);
+    r.rt.dispose();
+  });
+
+  test('forget stops the service', async () => {
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const svc = fakeService();
+    const r = svcRig({ service: svc });
+    await r.rt.ready;
+    await flush();
+    await r.rt.forget();
+    await flush();
+    expect(svc.calls.at(-1)).toBe('off');
+    expect(svc.st.running).toBe(false);
+    r.rt.dispose();
+  });
+
+  test('in the background a running service is updated (link up) but a stopped one is not started until RoadWise is back in front', async () => {
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const svc = fakeService();
+    const r = svcRig({ service: svc, foreground: false });
+    await r.rt.ready;
+    await flush();
+    expect(r.rt.state().link.lifecycle).toBe('connected');
+    expect(svc.calls).toEqual([]);
+    r.appState.emit('active');
+    await flush();
+    expect(svc.calls).toEqual(['connected']);
+    r.appState.emit('background');
+    r.ble.setState('off');
+    await flush();
+    expect(svc.calls).toEqual(['connected', 'waiting']);
+    r.ble.setState('on');
+    await flush();
+    expect(svc.calls).toEqual(['connected', 'waiting', 'connected']);
+    r.rt.dispose();
+  });
+
+  test('a refused start is not retried on every change, only at the next return to the front', async () => {
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const svc = fakeService();
+    svc.st.allowStart = false;
+    const r = svcRig({ service: svc });
+    await r.rt.ready;
+    await flush();
+    expect(svc.calls).toEqual(['waiting']);
+    r.ble.setState('off');
+    r.ble.setState('on');
+    await flush();
+    expect(svc.calls).toEqual(['waiting']);
+    svc.st.allowStart = true;
+    r.appState.emit('background');
+    r.appState.emit('active');
+    await flush();
+    expect(svc.calls).toEqual(['waiting', 'connected']);
+    expect(svc.st.running).toBe(true);
+    r.rt.dispose();
+  });
+
+  test('one call in flight: changes meanwhile wait, and the newest state goes out when it settles; a rejection counts as refused and is reported', async () => {
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const svc = fakeService();
+    svc.st.holding = true;
+    const r = svcRig({ service: svc });
+    await r.rt.ready;
+    await flush();
+    expect(svc.calls).toEqual(['waiting']); // connected meanwhile: held back
+    svc.st.holding = false;
+    svc.release();
+    await flush();
+    expect(svc.calls).toEqual(['waiting', 'connected']);
+    r.rt.dispose();
+
+    const bad = fakeService();
+    bad.port.set = () => Promise.reject(new Error('bridge'));
+    const r2 = svcRig({ service: bad });
+    await r2.rt.ready;
+    await flush();
+    expect(r2.errors.some((e) => e.startsWith('link service: bridge'))).toBe(true);
+    r2.rt.dispose();
+  });
+
+  test('a runtime rebuilt in the background while the service runs updates it with no return to the front; a dispose never stops it', async () => {
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const svc = fakeService({ running: true });
+    const r = svcRig({ service: svc, foreground: false });
+    await r.rt.ready;
+    await flush();
+    expect(svc.calls.at(-1)).toBe('connected');
+    expect(svc.calls).not.toContain('off');
+    const n = svc.calls.length;
+    r.rt.dispose();
+    expect(svc.calls).toHaveLength(n);
+    expect(svc.st.running).toBe(true);
+    expect(svc.ticks.size).toBe(0);
+  });
+
+  test("the service's tick pumps the process timers (a connect back-off fires with JS timers paused)", async () => {
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const svc = fakeService();
+    const r = svcRig({ service: svc });
+    await r.rt.ready;
+    const pump = jest.spyOn(processTimers, 'pump');
+    expect(svc.ticks.size).toBe(1);
+    for (const t of svc.ticks) t();
+    expect(pump).toHaveBeenCalledTimes(1);
+    pump.mockRestore();
+    r.rt.dispose();
+  });
 });

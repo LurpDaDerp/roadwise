@@ -3,6 +3,16 @@
 // drive host and torn down with it (a handover builds a new one; the transport, a process
 // singleton, stays). The transport is created lazily: nothing touches Bluetooth for a driver with
 // no DashPal paired and no opt-in.
+//
+// Phone-first sound: the link reads the audio output (call, media volume, headphones) through
+// `audioOutput`, read fresh for each routed ALERT and otherwise at most every 500 ms. On Android the
+// runtime drives the DashPal link service (`linkService`, drive-sense `setDashpalLink`): `off` with
+// no DashPal paired or Bluetooth not allowed, `connected` while the link is up, `waiting` otherwise
+// (Bluetooth off, connecting, a repair: all things that can clear with RoadWise in the background).
+// A running service is updated from anywhere; a stopped one is started only with RoadWise in front
+// (Android refuses a background start), retried at the next return to the front after a refusal.
+// The service's tick pumps the process timers, so a reconnect back-off fires with JS timers paused.
+// A runtime torn down (a handover) leaves the service as it is: the next one reads `running()`.
 import type { AlertPlayer } from '@/core/alerts/player';
 import type { FeatureRow } from '@/core/engine/types';
 import type { Db } from '@/data/db/driver';
@@ -12,7 +22,7 @@ import { processTimers } from '@/lib/timers';
 
 import { loadDashcamTripFacts, type DashcamTripFacts } from './facts';
 import { asPaired, BT_OPT_IN_KEY, BUZZER_TOO_KEY, PAIRED_KEY, type PairedDashcam } from './keys';
-import { createDashcamLink, type DashcamLink, type LinkContext, type LinkSnapshot } from './link';
+import { AUDIO_UNKNOWN, createDashcamLink, type AudioOutputProbe, type DashcamLink, type LinkContext, type Lifecycle, type LinkSnapshot } from './link';
 import { COMMAND } from './protocol';
 import { writeDashpalEnabled, writeSecureTarget } from './secure';
 import { createDashcamStore, UNATTACHED_KEEP_MS } from './store';
@@ -65,6 +75,33 @@ export interface DashcamRuntime {
   dispose(): void;
 }
 
+/** The Android DashPal link service's state as the runtime asks for it. */
+export type LinkServiceState = 'off' | 'waiting' | 'connected';
+export type LinkServiceResult = 'running' | 'stopped' | 'refused' | 'unsupported';
+
+/** drive-sense's DashPal link service (Android only; omitted elsewhere). */
+export interface LinkServicePort {
+  set(state: LinkServiceState): Promise<LinkServiceResult>;
+  /** Sync: the service is running now. */
+  running(): boolean;
+  /** The service's 30-s tick while it waits. */
+  onTick(fn: () => void): { remove(): void };
+}
+
+/** A probe read this recently is reused for a tick (a routed ALERT always reads it fresh). */
+export const AUDIO_PROBE_MEMO_MS = 500;
+
+/**
+ * What the DashPal link service should be for this link (integration R3): off with no DashPal
+ * paired or Bluetooth not allowed (no retry can succeed), connected while the link is up, waiting
+ * otherwise (Bluetooth off, connecting, a repair can all clear with RoadWise in the background, and
+ * a stopped service could not be started again from there).
+ */
+export function linkServiceStateFor(paired: boolean, lifecycle: Lifecycle): LinkServiceState {
+  if (!paired || lifecycle === 'unpaired' || lifecycle === 'unauthorized') return 'off';
+  return lifecycle === 'connected' ? 'connected' : 'waiting';
+}
+
 export interface DashcamRuntimeDeps {
   db: Db;
   player: AlertPlayer;
@@ -82,6 +119,12 @@ export interface DashcamRuntimeDeps {
   setRepeat?: (fn: () => void, ms: number) => unknown;
   clearRepeat?: (h: unknown) => void;
   onError?: (e: unknown, ctx: string) => void;
+  /** The audio output now (drive-sense `audioOutputState`, sync). Absent: unknown. */
+  audioOutput?: () => AudioOutputProbe;
+  /** Android: hold the CPU awake for `ms` (drive-sense `holdAwake`, sync). */
+  holdAwake?: (ms: number) => void;
+  /** Android: the DashPal link service. */
+  linkService?: LinkServicePort;
 }
 
 /** "DashPal drive" so far: the server's rule, without the end-of-drive sync (plan §8.3). */
@@ -109,6 +152,27 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
   let repeat: unknown = null;
   let foreground = deps.appState?.currentState === 'active';
   const totals = new Map<string, { movingS: number; coveredS: number }>();
+  /** The last audio-output read, reused for `AUDIO_PROBE_MEMO_MS`. */
+  let probeMemo: { at: number; value: AudioOutputProbe } | null = null;
+  /** The link service: what it was last set to, a call in flight, and a refusal waiting for the front. */
+  const service = { sent: null as LinkServiceState | null, busy: false, refused: false, pairedId: null as string | null, unsupported: false };
+
+  function audioOutput(fresh: boolean): AudioOutputProbe {
+    const read = deps.audioOutput;
+    if (!read) return AUDIO_UNKNOWN;
+    const t = now();
+    const m = probeMemo;
+    if (!fresh && m !== null && t >= m.at && t - m.at <= AUDIO_PROBE_MEMO_MS) return m.value;
+    let value: AudioOutputProbe;
+    try {
+      value = read();
+    } catch (e) {
+      report(e, 'audio output');
+      value = AUDIO_UNKNOWN;
+    }
+    probeMemo = { at: t, value };
+    return value;
+  }
 
   function report(e: unknown, ctx: string): void {
     try {
@@ -171,6 +235,8 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     delay: (ms) => new Promise<void>((resolve) => setTimer(resolve, ms)),
     // Android pauses JS timers while the app is in the background (unless a headless task runs).
     timersPaused: () => deps.platform === 'android' && !foreground,
+    audioOutput: (fresh) => audioOutput(fresh),
+    ...(deps.holdAwake ? { holdAwake: deps.holdAwake } : {}),
     onChange: () => notify(),
     onError: (e, ctx) => report(e, `link ${ctx}`),
   });
@@ -181,6 +247,7 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
 
   function notify(): void {
     const s = state();
+    driveLinkService(s.link);
     for (const fn of [...listeners]) {
       try {
         fn(s);
@@ -188,6 +255,58 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
         report(e, 'subscriber');
       }
     }
+  }
+
+  /**
+   * The DashPal link service follows the link: one call at a time, a newer state sent when it
+   * settles. A running service is updated from anywhere; a stopped one only with RoadWise in front,
+   * and not again after a refusal until RoadWise is back in front (or the pairing changes).
+   */
+  function driveLinkService(snap: LinkSnapshot = link.snapshot()): void {
+    const port = deps.linkService;
+    if (!port || deps.platform !== 'android' || disposed || !loaded || service.unsupported || service.busy) return;
+    const pairedId = snap.paired?.dashcamId ?? null;
+    if (pairedId !== service.pairedId) {
+      service.pairedId = pairedId;
+      service.refused = false;
+    }
+    const want = linkServiceStateFor(snap.paired !== null, snap.lifecycle);
+    let running = false;
+    try {
+      running = port.running();
+    } catch (e) {
+      report(e, 'link service');
+    }
+    if (want === 'off') {
+      if (!running) {
+        service.sent = 'off';
+        return;
+      }
+    } else if (running) {
+      if (want === service.sent) return;
+    } else if (!foreground || service.refused) {
+      // A stopped service cannot be started from the background: the next return to the front does.
+      return;
+    }
+    service.busy = true;
+    void port.set(want).then(
+      (result) => settleLinkService(want, result),
+      (e: unknown) => {
+        report(e, 'link service');
+        settleLinkService(want, 'refused');
+      }
+    );
+  }
+
+  function settleLinkService(want: LinkServiceState, result: LinkServiceResult): void {
+    service.busy = false;
+    if (result === 'unsupported') {
+      service.unsupported = true;
+      return;
+    }
+    if (result === 'refused') service.refused = true;
+    else service.sent = want;
+    if (result !== 'refused') driveLinkService();
   }
 
   /** The 1 s tick while the app is in the foreground and a dashcam is paired (§7.3). */
@@ -201,10 +320,26 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
   }
 
   const appSub = deps.appState?.addEventListener('change', (s) => {
+    const wasForeground = foreground;
     foreground = s === 'active';
+    // Back in front: a refused start of the link service may now succeed.
+    if (foreground && !wasForeground) service.refused = false;
     syncRepeat();
     link.tick();
+    driveLinkService();
   });
+  // The link service's tick: fire the timers JS cannot fire in the background (a connect back-off).
+  const tickSub = (() => {
+    try {
+      if (deps.platform !== 'android') return undefined;
+      return deps.linkService?.onTick(() => {
+        if (!disposed) processTimers.pump();
+      });
+    } catch (e) {
+      report(e, 'link service tick');
+      return undefined;
+    }
+  })();
 
   /**
    * The link's pairing changed while the transport may already be linked (a screen created the
@@ -355,6 +490,8 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     dispose() {
       disposed = true;
       appSub?.remove();
+      // The link service outlives the runtime (a handover): the next runtime reads running().
+      tickSub?.remove();
       if (wakeTimer !== null) clearTimer(wakeTimer);
       wakeTimer = null;
       if (repeat !== null) clearRepeat(repeat);
