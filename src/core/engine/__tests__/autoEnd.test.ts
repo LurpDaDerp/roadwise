@@ -256,9 +256,33 @@ describe('(p) a manual end', () => {
     expect(closed.distanceM).toBe(closed.moved!.distanceM);
   });
 
-  test('a pickup 2 min after parking is dropped by the cut; the same pickup at a 1 min stop ended at 1:30 is kept', async () => {
-    const cutOne = await endAfter(600, [PARKED(120), PARKED(10, { over: () => handled }), PARKED(470)]);
-    expect(cutOne.events.filter((e) => e.type === 'phone_pickup')).toEqual([]);
+  test('phone use while standing still survives the cut: a pickup at a long red light, then End, keeps its penalty', async () => {
+    // 150 s stopped (a long light), 10 s of handling, End at 165 s: the miles and route end at the
+    // last movement, but the stopped-in-traffic pickup stays, and the drive runs to its end.
+    const closed = await endAfter(165, [PARKED(150), PARKED(10, { over: () => handled }), PARKED(5)]);
+    expect(closed).toMatchObject({ endCause: 'manual', cut: true });
+    expect(closed.distanceM).toBe(closed.moved!.distanceM);
+    const pickups = closed.events.filter((e) => e.type === 'phone_pickup');
+    expect(pickups).toEqual([expect.objectContaining({ startedAt: PARKED_AT + 150_000, durationS: 10, stoppedInTraffic: true })]);
+    expect(closed.endedAt).toBe(PARKED_AT + 160_000);
+    for (const e of closed.events) expect(e.startedAt + e.durationS * 1000).toBeLessThanOrEqual(closed.endedAt!);
+  });
+
+  test('handling in the tail is kept whole (not clipped to the cut), and the end never passes the tap', async () => {
+    const closed = await endAfter(600, [PARKED(120), PARKED(40, { over: () => handled }), PARKED(440)]);
+    const pickup = closed.events.find((e) => e.type === 'phone_pickup');
+    const handling = closed.events.find((e) => e.type === 'phone_handling');
+    expect(pickup).toMatchObject({ startedAt: PARKED_AT + 120_000, durationS: 40, stoppedInTraffic: true });
+    expect(handling).toMatchObject({ durationS: 25, tier: 'severe', units: 2 });
+    expect(closed.endedAt).toBe(PARKED_AT + 160_000);
+    // Handling still going at the tap: the drive ends at the tap, not after it.
+    const atTap = await endAfter(149.5, [PARKED(130), PARKED(20, { over: () => handled })]);
+    expect(atTap.events.some((e) => e.type === 'phone_pickup')).toBe(true);
+    expect(atTap.endedAt).toBe(PARKED_AT + 149_500);
+  });
+
+  test('with no phone use after it, a cut manual end ends at the last movement; a pickup at a 1 min stop ended at 1:30 is kept uncut', async () => {
+    expect(await endAfter(600)).toMatchObject({ cut: true, endedAt: PARKED_AT });
     const kept = await endAfter(90, [PARKED(60), PARKED(10, { over: () => handled }), PARKED(20)]);
     expect(kept.cut).toBe(false);
     expect(kept.events.filter((e) => e.type === 'phone_pickup')).toHaveLength(1);

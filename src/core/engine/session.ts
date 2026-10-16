@@ -355,6 +355,7 @@ export function closeSession(session: TripSession, endedAt: number, cause: EndCa
 }
 
 const INSTANT = new Set<DetectedEvent['type']>(['hard_brake', 'hard_accel', 'hard_corner']);
+const PHONE_USE = new Set<DetectedEvent['type']>(['phone_pickup', 'phone_handling']);
 
 /**
  * The events of a drive closed at `cutTs`, in input order: an instant event (brake, start, turn)
@@ -366,24 +367,21 @@ const INSTANT = new Set<DetectedEvent['type']>(['hard_brake', 'hard_accel', 'har
 export function cutEvents(events: readonly DetectedEvent[], cutTs: number): DetectedEvent[] {
   const out: DetectedEvent[] = [];
   for (const e of events) {
-    if (INSTANT.has(e.type)) {
-      if (e.startedAt < cutTs + CUT_INSTANT_SLACK_MS) out.push(e);
-      continue;
-    }
-    if (e.startedAt >= cutTs) continue;
-    if (e.startedAt + e.durationS * 1000 <= cutTs) {
-      out.push(e);
-      continue;
-    }
-    const durationS = (cutTs - e.startedAt) / 1000;
-    if (e.type !== 'phone_handling') {
-      out.push({ ...e, durationS });
-      continue;
-    }
-    const tier: Tier = HANDLING_FREE_S + durationS <= HANDLING_SEVERE_S ? 'moderate' : 'severe';
-    out.push({ ...e, durationS, tier, units: Math.max(1, Math.ceil(durationS / HANDLING_UNIT_S)) });
+    const kept = cutEvent(e, cutTs);
+    if (kept !== null) out.push(kept);
   }
   return out;
+}
+
+/** One event under `cutEvents`' rule: as it was, clipped, or null when the cut drops it. */
+function cutEvent(e: DetectedEvent, cutTs: number): DetectedEvent | null {
+  if (INSTANT.has(e.type)) return e.startedAt < cutTs + CUT_INSTANT_SLACK_MS ? e : null;
+  if (e.startedAt >= cutTs) return null;
+  if (e.startedAt + e.durationS * 1000 <= cutTs) return e;
+  const durationS = (cutTs - e.startedAt) / 1000;
+  if (e.type !== 'phone_handling') return { ...e, durationS };
+  const tier: Tier = HANDLING_FREE_S + durationS <= HANDLING_SEVERE_S ? 'moderate' : 'severe';
+  return { ...e, durationS, tier, units: Math.max(1, Math.ceil(durationS / HANDLING_UNIT_S)) };
 }
 
 /**
@@ -392,17 +390,35 @@ export function cutEvents(events: readonly DetectedEvent[], cutTs: number): Dete
  * (`cutEvents`), so the time standing still earns and costs nothing. A drive that never moved
  * keeps what it has and ends after its last row; it is dropped, never stored. The open session is
  * left as it was.
+ *
+ * `keepPhoneUseUntil` (a manual end, at its tap): phone pickups and handling are kept whole, the
+ * tail's included, and the drive ends after the last of them (never after the tap), so ending a
+ * drive at a long red light cannot erase phone use made there. The miles and route still end at
+ * the mark: standing still earns nothing.
  */
-export function closeAtLastMovement(session: TripSession, cause: EndCause): Readonly<TripSession> {
+export function closeAtLastMovement(session: TripSession, cause: EndCause, opts: { keepPhoneUseUntil?: number } = {}): Readonly<TripSession> {
   const mark = session.moved;
   if (mark === null) {
     const end = Math.max((session.lastRowTs ?? session.startedAt) + ROW_MS, session.startedAt + 1000);
     return snapshotSession({ ...session, endedAt: Math.round(end), endCause: cause, cut: false });
   }
   const cutTs = mark.rowTs + ROW_MS;
+  const keepUntil = opts.keepPhoneUseUntil;
+  let endedAt = Math.max(cutTs, session.startedAt + 1000);
+  // In input order: with `keepUntil`, phone use as recorded; everything else under the cut.
+  const events: DetectedEvent[] = [];
+  for (const e of session.events) {
+    if (keepUntil !== undefined && PHONE_USE.has(e.type)) {
+      events.push(e);
+      endedAt = Math.max(endedAt, Math.min(keepUntil, e.startedAt + e.durationS * 1000));
+      continue;
+    }
+    const kept = cutEvent(e, cutTs);
+    if (kept !== null) events.push(kept);
+  }
   return snapshotSession({
     ...session,
-    endedAt: Math.round(Math.max(cutTs, session.startedAt + 1000)),
+    endedAt: Math.round(endedAt),
     endCause: cause,
     cut: true,
     lastRowTs: mark.rowTs,
@@ -417,7 +433,7 @@ export function closeAtLastMovement(session: TripSession, cause: EndCause): Read
     maxSpeedMps: mark.maxSpeedMps,
     lastFix: mark.lastFix,
     track: session.track.slice(0, mark.trackLength),
-    events: cutEvents(session.events, cutTs),
+    events,
   });
 }
 

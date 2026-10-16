@@ -6,7 +6,8 @@
 // checked permissions). It ends on `end` (the hold-to-end), by itself once the car has not moved for
 // `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the OS reports walking. Every end
 // but a prompt hold closes the drive where the car last moved (`closeAtLastMovement`): a manual end
-// `MANUAL_CUT_AFTER_S` or more after the idle clock's base is cut too, a sooner one ends at the tap.
+// `MANUAL_CUT_AFTER_S` or more after the idle clock's base is cut too (its phone use kept whole), a
+// sooner one ends at the tap.
 // A reducer over one explicit state, driven by 1 Hz rows and a few events through a serialised
 // `dispatch`; the only clock is the `ts` on what comes in. Everything the engine wants done —
 // persistence, sound, scoring — goes out through callbacks.
@@ -222,9 +223,13 @@ export function createEngine(deps: EngineDeps): Engine {
     return false;
   }
 
-  /** The hold (or any manual end) at `ts`: cut when the car had stood still `MANUAL_CUT_AFTER_S` or more. */
+  /**
+   * The hold (or any manual end) at `ts`: cut when the car had stood still `MANUAL_CUT_AFTER_S` or
+   * more, with the phone use while standing still kept (a long red light, End, Start again must not
+   * erase a pickup made there).
+   */
   function closeManual(open: TripSession, ts: number): Readonly<TripSession> {
-    if (open.moved !== null && ts - idleSince(open) >= MANUAL_CUT_AFTER_S * 1000) return closeAtLastMovement(open, 'manual');
+    if (open.moved !== null && ts - idleSince(open) >= MANUAL_CUT_AFTER_S * 1000) return closeAtLastMovement(open, 'manual', { keepPhoneUseUntil: ts });
     return closeSession(open, ts, 'manual');
   }
 
