@@ -8,3 +8,12 @@ export type DriveSource = Pick<DriveSenseApi, 'startCapture' | 'stopCapture' | '
 
 /** The native module (every method rejects where it is absent: Jest, Expo Go, web). */
 export const nativeDriveSource: DriveSource = DriveSense;
+
+/**
+ * What the DashPal runtime needs from drive-sense: the audio output probe, the alert wake lock and
+ * the Android DashPal link service (and its tick). `createFakeDriveSense()` satisfies it in tests.
+ */
+export type DashpalNative = Pick<DriveSenseApi, 'audioOutputState' | 'holdAwake' | 'dashpalLinkRunning' | 'setDashpalLink' | 'addListener'>;
+
+/** The native module (the sync reads answer "unknown" where it is absent; the async call rejects). */
+export const nativeDashpal: DashpalNative = DriveSense;

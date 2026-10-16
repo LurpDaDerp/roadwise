@@ -39,7 +39,7 @@ import { setLeaveSink } from '@/drive/leave';
 import { phoneSwitchFor } from '@/drive/phoneSwitchStore';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
-import { nativeDriveSource, type DriveSource } from '@/drive/source';
+import { nativeDashpal, nativeDriveSource, type DashpalNative, type DriveSource } from '@/drive/source';
 import { deviceZone } from '@/lib/deviceZone';
 import { dayKey } from '@/lib/time';
 
@@ -71,6 +71,20 @@ export class BootstrapError extends Error {
 /** The Supabase client as the launch uses it: the runner's slice plus `rpc`. */
 export type BootSupabase = SyncSupabase & { rpc(fn: string, args?: Record<string, unknown>): PromiseLike<{ data: unknown; error: unknown }> };
 
+/** What the DashPal runtime is built from. */
+export interface DashcamArgs {
+  db: Db;
+  player: AlertPlayer;
+  host: () => DriveHost | undefined;
+  appState: ForegroundAppState;
+  now: () => number;
+  newId: () => string;
+  onError: (error: unknown, context: string) => void;
+  /** the alert ports loaded (the player can sound at all, with no drive open) */
+  alertsLoaded: boolean;
+  native: DashpalNative;
+}
+
 export interface BootstrapDeps {
   openDb?: () => Promise<Db>;
   supabase?: BootSupabase;
@@ -92,7 +106,9 @@ export interface BootstrapDeps {
    * The DashPal dashcam runtime (plan §7). Default: `createDashcamRuntime` over the process BLE
    * transport, which is only created once a dashcam is paired or setup runs. `null`: none.
    */
-  createDashcam?: ((args: { db: Db; player: AlertPlayer; host: () => DriveHost | undefined; appState: ForegroundAppState; now: () => number; newId: () => string; onError: (error: unknown, context: string) => void }) => DashcamRuntime) | null;
+  createDashcam?: ((args: DashcamArgs) => DashcamRuntime) | null;
+  /** drive-sense's DashPal side (audio probe, wake lock, Android link service). Default: the native module. */
+  dashpal?: DashpalNative;
   /** The diagnostics battery recorder, dev builds only. Default: `defaultDiagnostics`. `null`: none. */
   mountDiagnostics?: ((host: DriveHost, db: Db, onError: (error: unknown) => void) => () => void) | null;
   sessionTimeoutMs?: number;
@@ -324,7 +340,17 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     const makeDashcam = deps.createDashcam === undefined ? defaultDashcam : deps.createDashcam;
     if (makeDashcam) {
       try {
-        dashcam = makeDashcam({ db, player, host: () => host, appState, now, newId, onError: (error, context) => onError(error, `dashcam ${context}`) });
+        dashcam = makeDashcam({
+          db,
+          player,
+          host: () => host,
+          appState,
+          now,
+          newId,
+          onError: (error, context) => onError(error, `dashcam ${context}`),
+          alertsLoaded: alertsAvailable,
+          native: deps.dashpal ?? nativeDashpal,
+        });
       } catch (error) {
         onError(error, 'dashcam');
       }
@@ -528,9 +554,15 @@ function defaultSummaryNotifier(host: DriveHost, db: Db): { detach(): void; sett
 
 /**
  * The DashPal runtime over the process transport (created only when a dashcam is paired or setup
- * runs, so nothing touches Bluetooth for a driver without one).
+ * runs, so nothing touches Bluetooth for a driver without one). The phone plays DashPal alerts with
+ * or without a drive open: during a drive its player counts as available only while no sound failed
+ * this drive (the host's flag); with none open, whenever the alert ports loaded (a failure then
+ * holds the link's 30 s "cannot play" instead). On Android the runtime also drives the DashPal link
+ * service and the alert wake lock; iOS has neither (an ALERT wakes the app through bluetooth-central).
  */
-function defaultDashcam(args: { db: Db; player: AlertPlayer; host: () => DriveHost | undefined; appState: ForegroundAppState; now: () => number; newId: () => string; onError: (error: unknown, context: string) => void }): DashcamRuntime {
+export function defaultDashcam(args: DashcamArgs): DashcamRuntime {
+  const native = args.native;
+  const android = Platform.OS === 'android';
   return createDashcamRuntime({
     db: args.db,
     player: args.player,
@@ -541,14 +573,28 @@ function defaultDashcam(args: { db: Db; player: AlertPlayer; host: () => DriveHo
     },
     host: () => {
       const s = args.host()?.snapshot();
+      // Open from the Start Drive tap until finalize has finished (the drive-end catch-up included).
+      const driveOpen = s !== undefined && s.status !== 'idle' && !s.dryRun;
       return {
         recording: s?.status === 'recording',
-        // Open from the Start Drive tap until finalize has finished (the drive-end catch-up included).
-        driveOpen: s !== undefined && s.status !== 'idle' && !s.dryRun,
-        playerAvailable: s?.alertsAvailable ?? false,
+        driveOpen,
+        playerAvailable: driveOpen ? s.alertsAvailable : args.alertsLoaded,
         callActive: s?.callActive ?? false,
       };
     },
+    audioOutput: () => native.audioOutputState(),
+    ...(android
+      ? {
+          holdAwake: (ms: number) => {
+            native.holdAwake(ms);
+          },
+          linkService: {
+            set: (state) => native.setDashpalLink(state),
+            running: () => native.dashpalLinkRunning(),
+            onTick: (fn) => native.addListener('dashpalLinkTick', () => fn()),
+          },
+        }
+      : {}),
     styleAllowsSound: () => alertStylePref() !== 'vibration',
     platform: Platform.OS === 'ios' ? 'ios' : 'android',
     appState: args.appState,

@@ -4,6 +4,7 @@
 // those facts. (The payload's `dashcam` block and the candidate events are finalize's job, on the
 // scoring branch; here: the dependency reaches it and yields the stored facts.)
 import { createFakeDriveSense } from '@drive-sense';
+import { Platform } from 'react-native';
 
 import type { AlertPlayer } from '@/core/alerts/player';
 import { T0 } from '@/core/detectors/__fixtures__/rows';
@@ -17,10 +18,26 @@ import { bootstrapApp, startForegroundJobs, type BootSupabase } from '@/boot/boo
 import { activeDashcam } from '@/dashcam/registry';
 
 import type { DashcamTripFacts } from '../facts';
+import { createFakeBle } from '../fakeTransport';
 import { PAIRED_KEY } from '../keys';
+import { encodeInfo, encodeTx } from '../protocol';
 import { createDashcamStore } from '../store';
+import { createBleTransport, type DashcamTransport } from '../transport';
 
 jest.mock('expo-notifications', () => ({}));
+
+// The process transport, when a test hands one in (the BLE native module is absent in Jest).
+const mockTransportRef: { current: DashcamTransport | null } = { current: null };
+jest.mock('@/dashcam/transport', () => {
+  const actual = jest.requireActual<typeof import('@/dashcam/transport')>('@/dashcam/transport');
+  return {
+    ...actual,
+    getDashcamTransport: () => {
+      if (!mockTransportRef.current) throw new Error('no BLE native module in Jest');
+      return mockTransportRef.current;
+    },
+  };
+});
 
 const finalizeCalls: { clientTripId: string; deps: Record<string, unknown> }[] = [];
 jest.mock('@/core/engine/finalize', () => {
@@ -176,4 +193,100 @@ test('row 32: the foreground jobs prune DashPal events no drive claimed after 7 
   expect((await db.execute('SELECT seq FROM dashcam_events ORDER BY seq')).rows).toEqual([{ seq: 1 }, { seq: 2 }]);
   await jobs.stop();
   await rt.stop();
+});
+
+describe('phone-first sound wiring (bootstrap → the DashPal runtime → drive-sense)', () => {
+  let restoreOS: (() => void) | null = null;
+  afterEach(() => {
+    restoreOS?.();
+    restoreOS = null;
+    mockTransportRef.current = null;
+  });
+
+  async function android(paired: boolean) {
+    restoreOS = jest.replaceProperty(Platform, 'OS', 'android').restore;
+    await migrate(db);
+    if (paired) await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: 'A4:CF:12:B3:C4:D5', name: 'DashPal-C4D5', pairedAt: 1 });
+    const ble = createFakeBle();
+    ble.addPeripheral({ id: 'A4:CF:12:B3:C4:D5', info: encodeInfo({ ver: 1, protoMin: 1, protoMax: 1, fwMajor: 3, fwMinor: 3, mac: [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5], peerBonded: true, bondCount: 1, pairingOpen: false }) });
+    mockTransportRef.current = createBleTransport(ble, { platform: 'android', setTimer: () => 0, clearTimer: () => {} });
+    const native = createFakeDriveSense({ platform: 'android', now: () => clock });
+    const d = deps({ dashpal: native });
+    const rt = await bootstrapApp(d.deps);
+    await rt.dashcam!.ready;
+    for (let i = 0; i < 80; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    return { rt, native, ble, errors: d.errors };
+  }
+
+  test('with no drive open the player counts as available when the ports loaded, even after a sound failed; during a drive the host flag decides', async () => {
+    const { rt } = await android(false);
+    rt.drive.reportAlertsUnavailable();
+    expect(rt.dashcam!.link.canPlay(true)).toBe(true);
+    expect(await rt.drive.start()).toMatchObject({ ok: true });
+    expect(rt.dashcam!.link.canPlay(true)).toBe(true);
+    rt.drive.reportAlertsUnavailable();
+    expect(rt.dashcam!.link.canPlay(true)).toBe(false);
+    await rt.drive.end();
+    await rt.stop();
+  });
+
+  test('the ports did not load: no sound with or without a drive', async () => {
+    restoreOS = jest.replaceProperty(Platform, 'OS', 'android').restore;
+    const d = deps({
+      dashpal: createFakeDriveSense({ platform: 'android', now: () => clock }),
+      createPlayer: async () => {
+        throw new Error('no ports');
+      },
+    });
+    const rt = await bootstrapApp(d.deps);
+    await rt.dashcam!.ready;
+    expect(rt.dashcam!.link.canPlay(true)).toBe(false);
+    await rt.stop();
+  });
+
+  test('the audio probe is drive-sense audioOutputState: a quiet phone cannot play', async () => {
+    const { rt, native } = await android(false);
+    native.setAudioOutput({ volume: 0.1 });
+    expect(rt.dashcam!.link.canPlay(true)).toBe(false);
+    native.setAudioOutput({ volume: 0.8, headphones: true });
+    expect(rt.dashcam!.link.canPlay(true)).toBe(false);
+    native.setAudioOutput({ headphones: false, callActive: true });
+    expect(rt.dashcam!.link.canPlay(true)).toBe(false);
+    native.setAudioOutput({ callActive: false });
+    expect(rt.dashcam!.link.canPlay(true)).toBe(true);
+    expect(native.queries).toContain('audioOutputState');
+    await rt.stop();
+  });
+
+  test('Android with a DashPal paired: the link service runs (connected once linked), a routed ALERT takes the wake lock, the tick is subscribed; forget stops the service', async () => {
+    const { rt, native, ble, errors } = await android(true);
+    expect(rt.dashcam!.state().link.lifecycle).toBe('connected');
+    expect(native.dashpalLink).toBe('connected');
+    expect(native.calls.filter((c) => c.startsWith('setDashpalLink'))).toEqual(['setDashpalLink:waiting', 'setDashpalLink:connected']);
+    expect(native.listenerCount('dashpalLinkTick')).toBe(1);
+    ble.notify('A4:CF:12:B3:C4:D5', encodeTx({ type: 'ALERT', alertId: 5, sound: 1, tier: 2, level: 0, mode: 1, route: 1, uptimeMs: 1000 }));
+    expect(native.holdAwakeCalls).toEqual([5000]);
+    await rt.dashcam!.forget();
+    for (let i = 0; i < 40; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(native.dashpalLink).toBeNull();
+    expect(errors.filter((e) => e.includes('link service'))).toEqual([]);
+    await rt.stop();
+    // The runtime's teardown leaves no tick listener behind.
+    expect(native.listenerCount('dashpalLinkTick')).toBe(0);
+  });
+
+  test('iOS: no link service and no wake lock, the probe still decides', async () => {
+    restoreOS = jest.replaceProperty(Platform, 'OS', 'ios').restore;
+    await migrate(db);
+    await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: '7D3E1C20-4B6A-4E8F-9A21-0C6E5A7D2B10', name: 'DashPal-C4D5', pairedAt: 1 });
+    const native = createFakeDriveSense({ platform: 'ios', now: () => clock });
+    const rt = await bootstrapApp(deps({ dashpal: native }).deps);
+    await rt.dashcam!.ready;
+    for (let i = 0; i < 40; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(native.calls.filter((c) => c.startsWith('setDashpalLink'))).toEqual([]);
+    expect(native.listenerCount('dashpalLinkTick')).toBe(0);
+    native.setAudioOutput({ volume: 0 });
+    expect(rt.dashcam!.link.canPlay(true)).toBe(false);
+    await rt.stop();
+  });
 });
