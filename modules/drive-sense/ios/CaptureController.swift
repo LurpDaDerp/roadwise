@@ -4,7 +4,7 @@
 //
 // v3 (plan §1 decision 4): nothing of the capture runs between captures — no wakes, no motion
 // feed, no timers. (The optional forgot-to-start reminder, `TripReminder`, has its own wake and
-// only notifies; this class tells it when a capture starts and ends and never hears from it.)
+// never starts a capture; this class tells it when a capture starts and ends and never hears from it.)
 // GPS 1 Hz and IMU 25 Hz only while capturing at `full`; at `low` the IMU and the 1 s tick stop
 // and a row is emitted per coarse fix. A capture started in the foreground keeps running in the
 // background on While Using through the `location` background mode (app.config.ts).

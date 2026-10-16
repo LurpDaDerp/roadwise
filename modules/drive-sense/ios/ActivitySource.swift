@@ -71,11 +71,13 @@ enum ActivitySource {
 
   // MARK: - The forgot-to-start reminder's look-backs (no drive open; nothing reaches JS)
 
-  /// The motion history from `since` to now, summarized by the policy (`TripReminderPolicy.summarize`):
-  /// the newest confident car stretch and whether the driver is on foot now. Resolves on main.
-  static func recentAutomotive(since: Date, _ done: @escaping (MotionSummary) -> Void) {
+  /// The last 3 h of motion history (always the same window, so a long car stretch that began well
+  /// before the last wake is still seen), summarized by the policy (`TripReminderPolicy.summarize`):
+  /// the newest moving car stretch, the run it belongs to, and whether the driver is on foot now.
+  /// Resolves on main; empty without Motion & Fitness.
+  static func recentAutomotive(_ done: @escaping (MotionSummary) -> Void) {
     let now = Date()
-    lookBack(from: since, to: now) { list in
+    lookBack(from: now.addingTimeInterval(-TripReminderPolicy.IOS_MOTION_LOOKBACK_MS / 1000), to: now) { list in
       done(TripReminderPolicy.summarize(list, now.timeIntervalSince1970 * 1000))
     }
   }
@@ -98,6 +100,7 @@ enum ActivitySource {
         ActivitySample(
           start: a.startDate.timeIntervalSince1970 * 1000,
           automotive: a.automotive,
+          stationary: a.stationary,
           onFoot: a.walking || a.running || a.cycling,
           walking: a.walking || a.running,
           confident: a.confidence != .low

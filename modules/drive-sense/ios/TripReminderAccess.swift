@@ -5,61 +5,48 @@ import CoreMotion
 import Foundation
 
 extension TripReminder {
-  /// JS `setTripReminder`: on clears every back-off and quiet; off forgets everything and stops the wake.
+  /// JS `setTripReminder`: on keeps the session; off forgets everything and stops the wake.
   func setEnabled(_ on: Bool, _ done: @escaping ([String: Any]) -> Void) {
-    let now = Self.nowMs()
-    let s = TripReminderPolicy.setEnabled(TripReminderPolicy.settle(loadState() ?? ReminderState(), now), on)
+    let s = TripReminderPolicy.setEnabled(TripReminderPolicy.settle(loadState() ?? ReminderState(), Self.nowMs(), captureOpen), on)
     saveState(s)
-    TripReminderNotifier.remove()
-    endSession()
-    if on { TripReminderNotifier.registerCategory() }
+    if s.token.isEmpty { TripReminderNotifier.remove() }
+    if !on { endLook("ended") }
     syncWake(s)
     status(done)
   }
 
-  /// JS `getTripReminderStatus`: brought up to now, with what is missing.
+  /// JS `getTripReminderStatus`: brought up to now (motion folded in), with what is missing.
   func status(_ done: @escaping ([String: Any]) -> Void) {
-    let now = Self.nowMs()
-    var s = ReminderState()
-    if let s0 = loadState() {
-      s = TripReminderPolicy.settle(s0, now)
-      saveState(s)
-      // The back-off may just have turned it off: the wake stops with it.
-      if s.enabled != s0.enabled { syncWake(s) }
-    }
-    let always = slcManager.authorizationStatus == .authorizedAlways
-    let precise = slcManager.accuracyAuthorization == .fullAccuracy
-    let available = CMMotionActivityManager.isActivityAvailable() && CLLocationManager.significantLocationChangeMonitoringAvailable()
-    TripReminderNotifier.authorized { notificationsOk in
-      var missing: [String] = []
-      if ActivitySource.status() != "granted" { missing.append("motion") }
-      if !notificationsOk { missing.append("notifications") }
-      if !always {
-        missing.append("locationAlways")
-      } else if !precise {
-        missing.append("locationPrecise")
+    refresh { stored in
+      let s = stored ?? ReminderState()
+      let always = self.slcManager.authorizationStatus == .authorizedAlways
+      let precise = self.slcManager.accuracyAuthorization == .fullAccuracy
+      let available = CMMotionActivityManager.isActivityAvailable() && CLLocationManager.significantLocationChangeMonitoringAvailable()
+      TripReminderNotifier.authorized { notificationsOk in
+        var missing: [String] = []
+        if ActivitySource.status() != "granted" { missing.append("motion") }
+        if !notificationsOk { missing.append("notifications") }
+        if !always {
+          missing.append("locationAlways")
+        } else if !precise {
+          missing.append("locationPrecise")
+        }
+        let state: String
+        if !available {
+          state = "unavailable"
+        } else if !s.enabled {
+          state = "off"
+        } else if !missing.isEmpty {
+          state = "needs"
+        } else {
+          state = "on"
+        }
+        done([
+          "enabled": s.enabled,
+          "state": state,
+          "missing": state == "needs" ? missing : [String](),
+        ])
       }
-      let state: String
-      if !available {
-        state = "unavailable"
-      } else if !s.enabled {
-        state = "off"
-      } else if !missing.isEmpty {
-        state = "needs"
-      } else if now < s.pausedUntil {
-        state = "paused"
-      } else {
-        state = "on"
-      }
-      var pausedUntil: Any = NSNull()
-      if state == "paused" { pausedUntil = NSNumber(value: Int64(s.pausedUntil)) }
-      done([
-        "enabled": s.enabled,
-        "state": state,
-        "autoOff": s.autoOff,
-        "missing": state == "needs" ? missing : [String](),
-        "pausedUntil": pausedUntil,
-      ])
     }
   }
 
