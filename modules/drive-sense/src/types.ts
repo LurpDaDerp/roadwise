@@ -87,7 +87,8 @@ export interface ExitInfo {
 /**
  * What the background surface shows (plan §6): the Android foreground notification and, on iOS,
  * the Live Activity (forwarded natively when one is running). Callers throttle to ≤ 1 update per
- * 3 s and only on change. `null` speed or limit shows "—". `points` is shown only when non-null
+ * 3 s, send on change, and re-send an unchanged state every 60 s (the Live Activity's 2-min stale
+ * date). `null` speed or limit shows "—". `points` is shown only when non-null
  * (the host passes it only while stopped).
  */
 export interface DriveDisplayState {
