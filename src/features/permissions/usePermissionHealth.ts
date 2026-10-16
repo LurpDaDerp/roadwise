@@ -1,6 +1,4 @@
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo } from 'react';
-import { AppState } from 'react-native';
+import type { QueryClient } from '@tanstack/react-query';
 
 import {
   createPermissionsAdapter,
@@ -8,12 +6,7 @@ import {
   type PermissionsAdapter,
   type SettingsStore,
 } from '@/core/permissions';
-import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
-import type { AppStateLike } from '@/data/foreground';
-import { useDb } from '@/data/queries/context';
-import { useSession } from '@/data/supabase/session';
-
-import { healthRows, overall, type HealthRowModel } from './health';
+import type { SettingsRepo } from '@/data/db/settings';
 
 let sharedAdapter: PermissionsAdapter | null = null;
 
@@ -60,7 +53,7 @@ export interface PermissionHealthRead {
   snapshot: PermissionSnapshot;
 }
 
-/** Every reader of the phone's permissions shares this query, keyed by account. */
+/** Every reader of the phone's permissions (the board, `DeviceHost`) shares this query, keyed by account. */
 export const permissionHealthKey = (uid: string | null) => ['permissions', 'health', uid ?? ''] as const;
 
 /** One read of the phone; null when it can't be read. Never a prompt. */
@@ -99,62 +92,4 @@ export async function sharedPermissionSnapshot(
       })
     : await readPermissionHealth(adapter, settings);
   return read?.snapshot ?? null;
-}
-
-// ─── The hook ───────────────────────────────────────────────────────────────────────────────────
-
-export interface PermissionHealthDeps {
-  adapter?: PermissionsAdapter;
-  appState?: AppStateLike;
-}
-
-export type PermissionHealth =
-  | { status: 'loading'; refresh: () => Promise<void> }
-  | { status: 'error'; refresh: () => Promise<void> }
-  | {
-      status: 'ready';
-      snapshot: PermissionSnapshot;
-      rows: HealthRowModel[];
-      overall: 'ok' | 'attention' | 'broken';
-      refresh: () => Promise<void>;
-    };
-
-/**
- * The phone's permissions as rows. Read on mount, on every return to the front (a trip to Settings
- * shows on the way back) and on `refresh` — never on a timer.
- */
-export function usePermissionHealth(deps: PermissionHealthDeps = {}): PermissionHealth {
-  const adapter = deps.adapter ?? defaultPermissionsAdapter();
-  const appState = deps.appState ?? AppState;
-  const db = useDb();
-  const settings = useMemo(() => createSettingsRepo(db), [db]);
-  const userId = useSession().session?.user.id ?? null;
-  const queryClient = useQueryClient();
-  const key = useMemo(() => permissionHealthKey(userId), [userId]);
-
-  const query = useQuery({
-    queryKey: key,
-    queryFn: () => readPermissionHealth(adapter, settings),
-    staleTime: Infinity,
-    gcTime: 0,
-    retry: false,
-  });
-
-  const { refetch } = query;
-  useEffect(() => {
-    const sub = appState.addEventListener('change', (next) => {
-      if (next === 'active') void refetch({ cancelRefetch: false });
-    });
-    return () => sub.remove();
-  }, [appState, refetch]);
-
-  const refresh = useCallback(async () => {
-    await queryClient.refetchQueries({ queryKey: key, exact: true });
-  }, [queryClient, key]);
-
-  const read = query.data ?? null;
-  if (query.isFetched && read === null && !query.isFetching) return { status: 'error', refresh };
-  if (read === null) return { status: 'loading', refresh };
-  const rows = healthRows(read.snapshot);
-  return { status: 'ready', snapshot: read.snapshot, rows, overall: overall(rows), refresh };
 }

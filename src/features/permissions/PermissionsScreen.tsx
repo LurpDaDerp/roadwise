@@ -1,57 +1,35 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { View } from 'react-native';
 
-import { recordPrompt } from '@/core/permissions';
-import { createSettingsRepo } from '@/data/db/settings';
-import { useDb } from '@/data/queries/context';
 import { Section, TopBar } from '@/features/settings/parts';
 import { Banner, Card, Screen, Skeleton, Text, useTheme } from '@/ui';
 
-import { permissionsCopy as copy, rowDetail, rowTitle } from './copy';
-import type { Fix } from './health';
+import { fixFor, overall, settingsRows } from './board';
+import { permissionsCopy as copy, requestLabel, rowDetail, rowTitle, statusWord, type CopyCtx } from './copy';
 import { HealthRow } from './HealthRow';
-import {
-  defaultPermissionsAdapter,
-  markSettingsReturn,
-  usePermissionHealth,
-  type PermissionHealthDeps,
-} from './usePermissionHealth';
+import type { PermissionId } from './registry';
+import { usePermissionBoard, type PermissionBoardDeps } from './usePermissionBoard';
 
 /**
- * `/settings/permissions`: location (While Using only), precise location, motion and
- * notifications, each with what it means for a drive and one Fix. A Fix is the driver's own tap,
- * so it goes to the OS directly; back from Settings, the phone is read again.
+ * `/settings/permissions`: every permission RoadWise uses on this phone, in Home's order, each with
+ * its state, what it means, and its fix (the phone's prompt while it can still ask, otherwise its
+ * Settings page; Bluetooth and the camera only Settings). A permission hidden from Home offers Show
+ * on Home. A fix is the driver's own tap, so it goes to the phone directly; back from Settings, the
+ * phone is read again.
  */
-export function PermissionsScreen({ deps = {} }: { deps?: PermissionHealthDeps & { now?: () => number } }) {
+export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps }) {
   const th = useTheme();
-  const db = useDb();
-  const settings = useMemo(() => createSettingsRepo(db), [db]);
-  const adapter = deps.adapter ?? defaultPermissionsAdapter();
-  const health = usePermissionHealth({ ...deps, adapter });
-  const [busy, setBusy] = useState<Fix | null>(null);
+  const board = usePermissionBoard(deps);
+  const [busy, setBusy] = useState<PermissionId | null>(null);
   const [failed, setFailed] = useState(false);
-  const now = deps.now ?? Date.now;
 
-  const onFix = async (fix: Fix) => {
+  const onFix = async (id: PermissionId) => {
     if (busy) return;
-    setBusy(fix);
+    setBusy(id);
     setFailed(false);
     try {
-      if (fix === 'openSettings') {
-        await markSettingsReturn(settings, now());
-        await adapter.openAppSettings();
-      } else if (fix === 'requestLocation') {
-        await adapter.requestLocationForeground();
-        await recordPrompt(settings, 'location', now()).catch(() => {});
-      } else if (fix === 'requestMotion') {
-        await adapter.requestMotion();
-        await recordPrompt(settings, 'motion', now()).catch(() => {});
-      } else {
-        await adapter.requestNotifications();
-        await recordPrompt(settings, 'notifications', now()).catch(() => {});
-      }
-      await health.refresh();
+      await board.fix(id, { markReturn: true });
     } catch {
       setFailed(true);
     } finally {
@@ -59,43 +37,61 @@ export function PermissionsScreen({ deps = {} }: { deps?: PermissionHealthDeps &
     }
   };
 
+  const onShow = async (id: PermissionId) => {
+    setFailed(false);
+    try {
+      await board.show(id);
+    } catch {
+      setFailed(true);
+    }
+  };
+
   let body;
-  if (health.status === 'loading') {
+  if (board.status === 'loading') {
     body = (
       <Card accessibilityLabel={copy.loading}>
         <Skeleton width="60%" height={18} />
         <Skeleton width="90%" height={14} />
       </Card>
     );
-  } else if (health.status === 'error') {
+  } else if (board.status === 'error' || board.read === null) {
     body = (
       <Banner
         tone="danger"
         message={copy.readError}
-        action={{ label: copy.retry, onPress: () => void health.refresh() }}
+        action={{ label: copy.retry, onPress: () => void board.refresh('fresh') }}
         testID="permissions-read-error"
       />
     );
   } else {
-    const platform = health.snapshot.platform;
+    const read = board.read;
+    const ctx: CopyCtx = { platform: read.snapshot.platform, androidApi: read.androidApi };
+    const rows = settingsRows(read, board.prefs);
     body = (
       <>
         <Text variant="title3" testID="permissions-summary">
-          {copy.summary[health.overall]}
+          {copy.summary[overall(rows)]}
         </Text>
         <Section testID="permissions-rows">
-          {health.rows.map((r) => (
-            <HealthRow
-              key={r.id}
-              testID={`permission-${r.id}`}
-              title={rowTitle(r.id, platform)}
-              status={r.status}
-              detail={rowDetail(r.id, r.status)}
-              fix={r.fix}
-              busy={busy === r.fix}
-              onFix={(f) => void onFix(f)}
-            />
-          ))}
+          {rows.map((r) => {
+            const fix = fixFor(r.id, r.state, board.prefs);
+            const label = fix === null || r.state.kind !== 'missing' ? null : fix === 'request' ? requestLabel(r.id, r.state) : copy.openSettings;
+            return (
+              <HealthRow
+                key={r.id}
+                testID={`permission-${r.id}`}
+                title={rowTitle(r.id, ctx)}
+                word={statusWord(r.state)}
+                required={r.def.need === 'required'}
+                detail={rowDetail(r.id, r.state, ctx, { reminderOn: read.reminder?.enabled === true })}
+                fixLabel={label}
+                busy={busy === r.id}
+                onFix={() => void onFix(r.id)}
+                hiddenFromHome={r.hiddenFromHome}
+                onShowOnHome={() => void onShow(r.id)}
+              />
+            );
+          })}
         </Section>
       </>
     );

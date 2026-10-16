@@ -1,13 +1,18 @@
 /**
- * v3 permission health: While Using location, precise, motion and notifications; never Always.
- * And the screen: each Fix is one OS call on the tap, then the phone is read again.
+ * Settings › Permissions: every permission of this phone from the board, its fix (one OS call on
+ * the tap, then the phone read again; Settings where it can't ask), Show on Home for a hidden row,
+ * and the summary.
  */
 import { screen, waitFor } from '@testing-library/react-native';
 
-import { appWorld, clearQueryClients, fakeAdapter, fakeAppState, snap, T0, tap } from '../__fixtures__/harness';
-import { rowDetail } from '../copy';
-import { healthRows, overall } from '../health';
+import type { TripReminderStatus } from '@drive-sense';
+
+import { HOME_HIDDEN_KEY } from '@/core/permissions';
+import { PAIRED_KEY } from '@/dashcam/keys';
+
+import { appWorld, clearQueryClients, fakeAdapter, fakeAppState, snap, tap, type FakeAdapter } from '../__fixtures__/harness';
 import { PermissionsScreen } from '../PermissionsScreen';
+import type { PermissionBoardDeps } from '../usePermissionBoard';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 jest.mock('@/data/supabase/session', () => ({ useSession: () => ({ session: { user: { id: 'u1' } } }) }));
@@ -15,74 +20,141 @@ jest.mock('expo-router', () => ({ useRouter: () => ({ back: jest.fn(), push: jes
 
 afterEach(() => clearQueryClients());
 
-test('the motion row says what motion access does, and what a phone without it gets', () => {
-  expect(rowDetail('motion', 'ok')).toBe('A drive you forget to end stops when you walk away, and the reminder can notice a trip.');
-  expect(rowDetail('motion', 'off')).toBe('Without it, a forgotten drive ends after 15 min.');
-  expect(rowDetail('motion', 'attention')).toBe(rowDetail('motion', 'off'));
-  for (const s of ['ok', 'off'] as const) expect(rowDetail('motion', s).length).toBeLessThanOrEqual(100);
+const PAIRED = { dashcamId: 'a1b2c3d4e5f6', peripheralId: 'AA:BB', name: 'DashPal-E5F6', pairedAt: 1 };
+const OFF: TripReminderStatus = { enabled: false, state: 'off', missing: [] };
+
+function deps(adapter: FakeAdapter, reminder: TripReminderStatus | null = OFF): PermissionBoardDeps {
+  return {
+    adapter,
+    appState: fakeAppState(),
+    reminder: async () => {
+      if (reminder === null) throw new Error('no module');
+      return reminder;
+    },
+    androidApi: adapter.current.platform === 'android' ? 34 : null,
+    watchDashcam: () => () => {},
+    ensureChannels: async () => {},
+    requestDeviceSync: () => {},
+  };
+}
+
+async function open(adapter: FakeAdapter, opts: { reminder?: TripReminderStatus | null; settings?: Record<string, unknown> } = {}) {
+  const w = await appWorld({ settings: opts.settings });
+  await w.render(<PermissionsScreen deps={deps(adapter, opts.reminder === undefined ? OFF : opts.reminder)} />);
+  await screen.findByTestId('permissions-summary');
+  return w;
+}
+
+const ids = () => screen.queryAllByTestId(/^permission-[a-zA-Z]+$/).map((n) => String(n.props.testID).replace('permission-', ''));
+
+it('a Fix asks the OS once (While Using, never Always) and reads the phone again', async () => {
+  const adapter = fakeAdapter(snap({ location: 'undetermined', precise: null }));
+  await open(adapter);
+  expect(screen.getByTestId('permission-location-fix')).toHaveTextContent('Allow location');
+  await tap('permission-location-fix');
+  await waitFor(() => expect(screen.getByTestId('permission-location-status')).toHaveTextContent('On'));
+  expect(adapter.log.filter((c) => c.startsWith('request') || c.startsWith('open'))).toEqual(['requestLocationForeground']);
 });
 
-describe('healthRows', () => {
-  it('all on: every row ok, While Using is enough', () => {
-    const rows = healthRows(snap({ location: 'foreground' }));
-    expect(rows.map((r) => [r.id, r.status])).toEqual([
-      ['location', 'ok'],
-      ['precise', 'ok'],
-      ['motion', 'ok'],
-      ['notifications', 'ok'],
-    ]);
-    expect(overall(rows)).toBe('ok');
-  });
-
-  it('location not asked yet: one request; denied for good: Settings; either way drives are blocked', () => {
-    const ask = healthRows(snap({ location: 'undetermined', precise: null }));
-    expect(ask[0]).toEqual({ id: 'location', status: 'attention', fix: 'requestLocation' });
-    expect(ask.some((r) => r.id === 'precise')).toBe(false);
-    expect(overall(ask)).toBe('broken');
-    const denied = healthRows(snap({ location: 'denied', precise: null, locationCanAskAgain: false }));
-    expect(denied[0]).toEqual({ id: 'location', status: 'off', fix: 'openSettings' });
-  });
-
-  it('approximate location, motion off and notifications off each say how to fix', () => {
-    const rows = healthRows(
-      snap({ precise: false, motion: 'denied', notifications: 'denied', notificationsCanAskAgain: false })
-    );
-    expect(rows.find((r) => r.id === 'precise')).toEqual({ id: 'precise', status: 'attention', fix: 'openSettings' });
-    expect(rows.find((r) => r.id === 'motion')).toEqual({ id: 'motion', status: 'off', fix: 'openSettings' });
-    expect(rows.find((r) => r.id === 'notifications')).toEqual({ id: 'notifications', status: 'off', fix: 'openSettings' });
-    expect(overall(rows)).toBe('attention');
-  });
-
-  it('a phone without motion sensing has no motion row', () => {
-    expect(healthRows(snap({ motion: 'unavailable' })).some((r) => r.id === 'motion')).toBe(false);
-    expect(healthRows(snap({ motion: null })).some((r) => r.id === 'motion')).toBe(false);
-  });
+it('a row turned off for good opens Settings, stamping the "back from Settings" mark', async () => {
+  const adapter = fakeAdapter(snap({ platform: 'ios', motion: 'denied' }));
+  const w = await open(adapter);
+  expect(screen.getByTestId('permission-motion-fix')).toHaveTextContent('Open Settings');
+  await tap('permission-motion-fix');
+  await waitFor(() => expect(adapter.log).toContain('openAppSettings'));
+  expect(await w.settings.get('permissions.settingsReturnAck')).not.toBeNull();
 });
 
-describe('PermissionsScreen', () => {
-  it('a Fix asks the OS once (While Using, never Always) and reads the phone again', async () => {
-    const adapter = fakeAdapter(snap({ location: 'undetermined', precise: null }));
-    const w = await appWorld();
-    await w.render(<PermissionsScreen deps={{ adapter, appState: fakeAppState(), now: () => T0 }} />);
-    await tap('permission-location-fix');
-    await waitFor(() => expect(screen.getByTestId('permission-location-status')).toHaveTextContent('On'));
-    expect(adapter.log.filter((c) => c !== 'snapshot')).toEqual(['requestLocationForeground']);
-    expect(adapter.log).not.toContain('requestLocationAlways');
-  });
+it('an unreadable phone says so with a retry', async () => {
+  const adapter = fakeAdapter(snap());
+  adapter.failReads = true;
+  const w = await appWorld();
+  await w.render(<PermissionsScreen deps={deps(adapter)} />);
+  expect(await screen.findByTestId('permissions-read-error')).toBeOnTheScreen();
+});
 
-  it('a row turned off for good opens Settings', async () => {
-    const adapter = fakeAdapter(snap({ motion: 'denied' }));
-    const w = await appWorld();
-    await w.render(<PermissionsScreen deps={{ adapter, appState: fakeAppState(), now: () => T0 }} />);
-    await tap('permission-motion-fix');
-    await waitFor(() => expect(adapter.log).toContain('openAppSettings'));
-  });
+it('iOS lists the reminder row (Not in use while the reminder is off); Android lists it only with the reminder on', async () => {
+  await open(fakeAdapter(snap({ platform: 'ios' })));
+  expect(ids()).toEqual(['location', 'precise', 'motion', 'notifications', 'reminderAccess', 'bluetooth', 'camera']);
+  expect(screen.getByTestId('permission-reminderAccess-status')).toHaveTextContent('Not in use');
+  expect(screen.getByTestId('permission-reminderAccess-detail')).toHaveTextContent('Only for the forgot-to-start reminder, which is off.');
+  clearQueryClients();
+  await open(fakeAdapter(snap({ platform: 'android' })));
+  expect(ids()).not.toContain('reminderAccess');
+  clearQueryClients();
+  await open(fakeAdapter(snap({ platform: 'android' })), { reminder: { enabled: true, state: 'needs', missing: ['notifications'] } });
+  expect(screen.getByTestId('permission-reminderAccess-status')).toHaveTextContent('Off');
+  expect(screen.getByTestId('permission-reminderAccess-fix')).toHaveTextContent('Open Settings');
+});
 
-  it('an unreadable phone says so with a retry', async () => {
-    const adapter = fakeAdapter(snap());
-    adapter.failReads = true;
-    const w = await appWorld();
-    await w.render(<PermissionsScreen deps={{ adapter, appState: fakeAppState() }} />);
-    expect(await screen.findByTestId('permissions-read-error')).toBeOnTheScreen();
-  });
+it("iOS with the reminder module absent: Can't check", async () => {
+  await open(fakeAdapter(snap({ platform: 'ios' })), { reminder: null });
+  expect(screen.getByTestId('permission-reminderAccess-status')).toHaveTextContent("Can't check");
+});
+
+it('Bluetooth: Not in use without a pairing; Off with a pairing and the permission gone, fixed only in Settings', async () => {
+  await open(fakeAdapter(snap({ platform: 'android' })));
+  expect(screen.getByTestId('permission-bluetooth-status')).toHaveTextContent('Not in use');
+  expect(screen.queryByTestId('permission-bluetooth-fix')).toBeNull();
+  clearQueryClients();
+  const adapter = fakeAdapter(snap({ platform: 'android' }));
+  adapter.btPermission = 'undetermined';
+  await open(adapter, { settings: { [PAIRED_KEY]: PAIRED } });
+  expect(screen.getByTestId('permission-bluetooth-status')).toHaveTextContent('Off');
+  expect(screen.getByTestId('permission-bluetooth')).toBeOnTheScreen();
+  expect(screen.getByTestId('permission-bluetooth-fix')).toHaveTextContent('Open Settings');
+  await tap('permission-bluetooth-fix');
+  await waitFor(() => expect(adapter.log).toContain('openAppSettings'));
+  expect(adapter.log).not.toContain('requestBluetooth');
+});
+
+it('the camera: Not in use until a scanner asks, On, or Off with Open Settings (never a request)', async () => {
+  const adapter = fakeAdapter(snap());
+  await open(adapter);
+  expect(screen.getByTestId('permission-camera-status')).toHaveTextContent('Not in use');
+  clearQueryClients();
+  const on = fakeAdapter(snap());
+  on.cam = { access: 'granted', canAskAgain: true };
+  await open(on);
+  expect(screen.getByTestId('permission-camera-status')).toHaveTextContent('On');
+  clearQueryClients();
+  const off = fakeAdapter(snap());
+  off.cam = { access: 'denied', canAskAgain: true };
+  await open(off);
+  expect(screen.getByTestId('permission-camera-status')).toHaveTextContent('Off');
+  expect(screen.getByTestId('permission-camera-fix')).toHaveTextContent('Open Settings');
+});
+
+it('Hidden from Home with Show on Home only on a hidden row that is missing; Show on Home removes it', async () => {
+  const adapter = fakeAdapter(snap({ motion: 'denied', notifications: 'granted' }));
+  const w = await open(adapter, { settings: { [HOME_HIDDEN_KEY]: ['motion', 'notifications'] } });
+  expect(screen.getByTestId('permission-motion-hidden')).toHaveTextContent('Hidden from Home');
+  expect(screen.queryByTestId('permission-notifications-hidden')).toBeNull();
+  expect(screen.queryByTestId('permission-notifications-show')).toBeNull();
+  await tap('permission-motion-show');
+  await waitFor(() => expect(screen.queryByTestId('permission-motion-hidden')).toBeNull());
+  expect(await w.settings.get(HOME_HIDDEN_KEY)).toEqual(['notifications']);
+});
+
+it('the summary: ok with Not in use and Can\'t check rows; broken with Location Services or precise off; otherwise attention', async () => {
+  await open(fakeAdapter(snap({ precise: null })));
+  expect(screen.getByTestId('permissions-summary')).toHaveTextContent('Everything RoadWise needs is on');
+  clearQueryClients();
+  await open(fakeAdapter(snap({ platform: 'android', locationServices: false })));
+  expect(screen.getByTestId('permissions-summary')).toHaveTextContent("RoadWise can't record drives right now");
+  expect(screen.getByTestId('permission-location-fix')).toHaveTextContent('Turn on location');
+  clearQueryClients();
+  await open(fakeAdapter(snap({ precise: false })));
+  expect(screen.getByTestId('permissions-summary')).toHaveTextContent("RoadWise can't record drives right now");
+  clearQueryClients();
+  await open(fakeAdapter(snap({ notifications: 'denied', notificationsCanAskAgain: false })));
+  expect(screen.getByTestId('permissions-summary')).toHaveTextContent('A couple of things could be better');
+});
+
+it('a fix that fails says so', async () => {
+  const adapter = fakeAdapter(snap({ motion: 'undetermined' }));
+  (adapter.requestMotion as jest.Mock).mockRejectedValue(new Error('bridge'));
+  await open(adapter);
+  await tap('permission-motion-fix');
+  expect(await screen.findByTestId('permissions-action-error')).toHaveTextContent("That didn't work. Try again.", { exact: false });
 });

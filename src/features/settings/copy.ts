@@ -34,7 +34,7 @@ export const settingsCopy = {
     driving: 'Driving',
     dashcam: { title: 'DashPal' },
     alerts: { title: 'Alerts', subtitle: 'Voice, sound and vibration' },
-    permissions: { title: 'Permissions', subtitle: 'Location, motion and notifications' },
+    permissions: { title: 'Permissions', subtitle: 'What RoadWise can use on this phone' },
     privacy: 'Privacy',
     zones: { title: 'Privacy zones', subtitle: (n: number) => (n === 0 ? 'Hide routes near home or school' : `${n} of 3 set`) },
     heatmap: 'Heat map visibility',
