@@ -10,6 +10,9 @@
  * - Location is required. An undetermined permission is asked; a denied one is never asked again
  *   from here (§7.0 "Never re-prompt in a loop"). The caller shows the blocking
  *   explainer with Open Settings, and re-reads with `readLocationPermission` on the way back.
+ * - Precise Location and the phone's Location Services switch are read, never asked: an approximate
+ *   fix is kilometres wide and never counts, and with Location Services off nothing records. null
+ *   (could not be read) never blocks.
  * - Motion is asked once when undetermined and never blocks: a manual drive records without it.
  *   The Start Drive tap passes `askMotion: false`: it asks only for location, so a tap at speed
  *   never brings up a second dialog (motion is asked in onboarding, on Home and in Settings).
@@ -20,6 +23,7 @@ import {
   recordPrompt,
   type Grant,
   type LocationAccess,
+  type PermissionSnapshot,
   type PermissionsAdapter,
   type SettingsStore,
 } from '@/core/permissions';
@@ -29,6 +33,10 @@ export type MotionPermission = Grant;
 
 export interface DrivePermissions {
   location: 'granted' | 'denied';
+  /** Precise Location; null when it could not be read (or location is not granted). */
+  precise: boolean | null;
+  /** The phone's Location Services switch; null when it could not be read. */
+  services: boolean | null;
   motion: MotionPermission;
 }
 
@@ -79,11 +87,11 @@ export interface EnsureOptions {
 export async function ensureDrivePermissions(deps: PermissionDeps, opts: EnsureOptions = { askMotion: true }): Promise<DrivePermissions> {
   const adapter = adapterOf(deps);
   const now = deps.now ?? Date.now;
-  let snap;
+  let snap: PermissionSnapshot;
   try {
     snap = await adapter.snapshot();
   } catch {
-    return { location: 'denied', motion: 'undetermined' };
+    return { location: 'denied', precise: null, services: null, motion: 'undetermined' };
   }
 
   let location = asLocation(snap.location);
@@ -92,11 +100,18 @@ export async function ensureDrivePermissions(deps: PermissionDeps, opts: EnsureO
       const answer = await adapter.requestLocationForeground();
       await stamp(deps, 'location', now());
       location = asLocation(answer);
+      // The answer carries no accuracy: read it (and the switch) again.
+      if (location === 'granted') {
+        const before = snap;
+        snap = await adapter.snapshot().catch(() => ({ ...before, precise: null }));
+      }
     } catch {
       location = 'denied';
     }
   }
-  if (location !== 'granted') return { location: 'denied', motion: 'undetermined' };
+  const services = snap.locationServices;
+  if (location !== 'granted') return { location: 'denied', precise: null, services, motion: 'undetermined' };
+  const precise = snap.precise;
 
   // null: drive-sense could not be read (no native module) — motion is simply not there to use.
   let motion: MotionPermission = snap.motion ?? 'unavailable';
@@ -109,7 +124,7 @@ export async function ensureDrivePermissions(deps: PermissionDeps, opts: EnsureO
       motion = 'unavailable';
     }
   }
-  return { location: 'granted', motion };
+  return { location: 'granted', precise, services, motion };
 }
 
 /** The app's own page in the system Settings. */

@@ -76,12 +76,30 @@ export interface DriveState extends EngineSnapshot {
   role: 'driver';
 }
 
-export type StartResult = { ok: true; clientTripId: string } | { ok: false; reason: 'permission' | 'busy' | 'error' };
+/**
+ * Why a Start Drive tap started nothing: no location (`permission`), approximate location only
+ * (`precise`), the phone's Location Services off (`services`), a drive already open (`busy`), or
+ * not ready / signed out / a failure (`error`). Never the speed.
+ */
+export type StartRefusalReason = 'permission' | 'precise' | 'services' | 'busy' | 'error';
+
+export type StartResult = { ok: true; clientTripId: string } | { ok: false; reason: StartRefusalReason };
+
+/**
+ * What the tap reads before a drive can start: location (asked once if never answered), and,
+ * read only, Precise Location and the Location Services switch (null: could not be read, which
+ * never refuses).
+ */
+export interface DriveStartPermissions {
+  location: 'granted' | 'denied';
+  precise?: boolean | null;
+  services?: boolean | null;
+}
 
 export interface DriveHost {
   /** Attach to native events; continue `adopt` (a drive the previous process was recording). */
   boot(opts?: { adopt?: AdoptedTrip | null }): Promise<void>;
-  /** The user's Start Drive tap, at any speed. Refuses without location, while busy, or signed out. */
+  /** The user's Start Drive tap, at any speed. Refuses without location, Location Services or Precise Location, while busy, or signed out. */
   start(): Promise<StartResult>;
   /**
    * The hold-to-end. Resolves once the drive is finalized; null when none was open. `dropped`: that
@@ -151,8 +169,11 @@ export interface DriveHostDeps {
   tz: () => string;
   newId: () => string;
   appVersion: string;
-  /** Just-in-time permissions: While-Using location (required; asked when never answered). */
-  permissions?: () => Promise<{ location: 'granted' | 'denied' }>;
+  /**
+   * Just-in-time permissions: While-Using location (required; asked when never answered), then the
+   * Location Services switch and Precise Location (read only).
+   */
+  permissions?: () => Promise<DriveStartPermissions>;
   /** The cached summary context for the points estimate; null when nothing is cached. */
   context?: () => Promise<DriveContext | null>;
   voiceEnabled?: () => boolean;
@@ -673,6 +694,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       try {
         const perms = await deps.permissions?.();
         if (perms !== undefined && perms.location !== 'granted') return { ok: false, reason: 'permission' };
+        // With the switch off nothing records; approximate fixes are kilometres wide and never count.
+        if (perms?.services === false) return { ok: false, reason: 'services' };
+        if (perms?.precise === false) return { ok: false, reason: 'precise' };
       } catch (e) {
         report(e, 'permissions');
         return { ok: false, reason: 'permission' };

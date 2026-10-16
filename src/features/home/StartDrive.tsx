@@ -3,15 +3,18 @@ import { View } from 'react-native';
 
 import type { EndCause } from '@/core/engine/engine.types';
 import type { DropReason } from '@/core/engine/finalize';
+import type { StartRefusalReason } from '@/drive/host';
 import { Banner, Button, useTheme } from '@/ui';
 
-export type StartRefusal = 'permission' | 'busy' | 'error';
+export type StartRefusal = StartRefusalReason;
 
 /** What the line above Start says: a refused start, or a tap on a forgot-to-start reminder whose trip is over. */
 export type StartBanner = StartRefusal | 'reminder-expired';
 
 export const REFUSAL_COPY: Record<StartBanner, string> = {
   permission: 'RoadWise needs location to record a drive.',
+  precise: 'RoadWise needs Precise Location to record a drive.',
+  services: 'Location Services are off. Turn them on to record a drive.',
   busy: 'A drive is already running.',
   error: 'Couldn’t start the drive. Try again.',
   'reminder-expired': 'That reminder has expired. Tap Start Drive to record a drive.',
@@ -60,8 +63,8 @@ export function StartDriveBar({
   notice?: { message: string; onDismiss: () => void } | null;
 }) {
   const t = useTheme();
-  const action =
-    refusal === 'permission' ? { label: 'Fix it', onPress: onRefusalAction } : refusal === 'busy' ? { label: 'Open it', onPress: onRefusalAction } : undefined;
+  const fixable = refusal === 'permission' || refusal === 'precise' || refusal === 'services';
+  const action = fixable ? { label: 'Fix it', onPress: onRefusalAction } : refusal === 'busy' ? { label: 'Open it', onPress: onRefusalAction } : undefined;
   return (
     <View
       style={{

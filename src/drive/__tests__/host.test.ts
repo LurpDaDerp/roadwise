@@ -146,6 +146,30 @@ test('start: refuses without location, before boot, or while busy; otherwise sta
   await ok.host.stop({ endOpenTrip: true });
 });
 
+test.each([
+  ['Location Services off (Android: the permission still reads granted)', { location: 'granted', services: false, precise: true }, 'services'],
+  ['approximate location only', { location: 'granted', services: true, precise: false }, 'precise'],
+  ['both: Location Services are named first', { location: 'granted', services: false, precise: false }, 'services'],
+  ['no location, whatever else: location first', { location: 'denied', services: false, precise: false }, 'permission'],
+] as const)('start refuses with %s, and starts no capture', async (_label, perms, reason) => {
+  const h = build({ permissions: async () => perms });
+  await h.host.boot();
+  expect(await h.host.start()).toEqual({ ok: false, reason });
+  expect(h.source.calls).toEqual([]);
+  expect(h.host.snapshot().status).not.toBe('recording');
+});
+
+test.each([
+  ['precise unreadable', { location: 'granted', services: true, precise: null }],
+  ['the switch unreadable', { location: 'granted', services: null, precise: true }],
+  ['neither reported', { location: 'granted' }],
+] as const)('start goes through with %s (what cannot be read never refuses)', async (_label, perms) => {
+  const h = build({ permissions: async () => perms });
+  await h.host.boot();
+  expect(await h.host.start()).toMatchObject({ ok: true });
+  await h.host.stop({ endOpenTrip: true });
+});
+
 // Pins Start Drive at any speed (product spec, Starting and ending a drive): the tap reads no speed,
 // so whatever the car does next (no fix, stopped, 2.9, 3 or 60 mph) the drive is already open and
 // the first row at that speed simply follows. Change this test only together with the spec.

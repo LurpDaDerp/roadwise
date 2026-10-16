@@ -254,3 +254,42 @@ describe('the permission card', () => {
     expect(mockBoard.refresh).toHaveBeenCalledWith('shared');
   });
 });
+
+describe('a Start refused for Precise Location or Location Services', () => {
+  test.each([
+    ['precise', 'RoadWise needs Precise Location to record a drive.', 'precise'],
+    ['services', 'Location Services are off. Turn them on to record a drive.', 'location'],
+  ] as const)('%s: one line, and Fix it runs that row’s own fix', async (reason, line, id) => {
+    mockBoard = boardWith(ALL_ON);
+    mockBoard.fix.mockResolvedValue({ kind: 'opened' });
+    mockStart.mockResolvedValue({ ok: false, reason });
+    await draw(<HomeScreen />);
+    await press(screen.getByTestId('start-drive'));
+    expect(await screen.findByText(line)).toBeOnTheScreen();
+    expect(line.length).toBeLessThanOrEqual(60);
+    await press(screen.getByText('Fix it'));
+    await waitFor(() => expect(mockBoard.fix).toHaveBeenCalledWith(id));
+    expect(mockRouter.push).not.toHaveBeenCalled();
+  });
+
+  test('a fix that cannot run there (the board reads it as fine, or it fails) opens Settings › Permissions', async () => {
+    mockBoard = boardWith(ALL_ON);
+    mockBoard.fix.mockResolvedValue(null);
+    mockStart.mockResolvedValue({ ok: false, reason: 'precise' });
+    await draw(<HomeScreen />);
+    await press(screen.getByTestId('start-drive'));
+    await press(await screen.findByText('Fix it'));
+    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/(app)/settings/permissions'));
+    mockRouter.push.mockClear();
+    mockBoard.fix.mockRejectedValue(new Error('bridge'));
+    await press(screen.getByText('Fix it'));
+    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/(app)/settings/permissions'));
+  });
+
+  test('a reminder tap refused the same way shows the same line', async () => {
+    showStartNotice('services');
+    await draw(<HomeScreen />);
+    expect(await screen.findByText('Location Services are off. Turn them on to record a drive.')).toBeOnTheScreen();
+    expect(screen.getByText('Fix it')).toBeOnTheScreen();
+  });
+});

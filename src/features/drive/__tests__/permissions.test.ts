@@ -26,13 +26,14 @@ function memorySettings(initial: Record<string, unknown> = {}) {
   };
 }
 
-function snapshot(location: LocationAccess, motion: Grant | null): PermissionSnapshot {
+function snapshot(location: LocationAccess, motion: Grant | null, over: { precise?: boolean | null; services?: boolean | null } = {}): PermissionSnapshot {
+  const granted = location === 'foreground' || location === 'always';
   return {
     platform: 'ios',
     location,
-    precise: location === 'foreground' || location === 'always' ? true : null,
+    precise: granted ? (over.precise === undefined ? true : over.precise) : null,
     locationCanAskAgain: true,
-    locationServices: true,
+    locationServices: over.services === undefined ? true : over.services,
     motion,
     notifications: 'granted',
     notificationsCanAskAgain: true,
@@ -48,6 +49,8 @@ function deps(opts: {
   motion?: Grant | null;
   motionAnswer?: Grant | null;
   prompts?: Record<string, number>;
+  precise?: boolean | null;
+  services?: boolean | null;
 }) {
   let location = opts.location;
   let motion: Grant | null = opts.motion === undefined ? 'granted' : opts.motion;
@@ -56,7 +59,7 @@ function deps(opts: {
   const adapter = {
     snapshot: jest.fn(async () => {
       calls.push('snapshot');
-      return snapshot(location, motion);
+      return snapshot(location, motion, { precise: opts.precise, services: opts.services });
     }),
     requestLocationForeground: jest.fn(async () => {
       calls.push('location:request');
@@ -79,19 +82,19 @@ function deps(opts: {
 describe('ensureDrivePermissions', () => {
   test('already granted: no prompt of any kind', async () => {
     const { d, calls } = deps({ location: 'foreground', motion: 'granted' });
-    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', motion: 'granted' });
+    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', precise: true, services: true, motion: 'granted' });
     expect(calls).toEqual(['snapshot']);
   });
 
   test('Always counts as granted for a manual drive', async () => {
     const { d } = deps({ location: 'always', motion: 'granted' });
-    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', motion: 'granted' });
+    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', precise: true, services: true, motion: 'granted' });
   });
 
   test('undetermined location is asked once through the adapter; granted then goes on to motion', async () => {
     const { d, calls, settings } = deps({ location: 'undetermined', afterRequest: 'foreground', motion: 'undetermined' });
-    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', motion: 'granted' });
-    expect(calls).toEqual(['snapshot', 'location:request', 'motion:request']);
+    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', precise: true, services: true, motion: 'granted' });
+    expect(calls).toEqual(['snapshot', 'location:request', 'snapshot', 'motion:request']);
     // Both prompts are stamped, so the app's own later offers wait out the window.
     expect(settings.store.get(PROMPTS_KEY)).toEqual({ location: NOW, motion: NOW });
   });
@@ -114,7 +117,7 @@ describe('ensureDrivePermissions', () => {
       motion: 'undetermined',
       prompts: { motion: NOW - 86_400_000 },
     });
-    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', motion: 'granted' });
+    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', precise: true, services: true, motion: 'granted' });
     expect(calls).toContain('motion:request');
     expect(settings.store.get(PROMPTS_KEY)).toMatchObject({ motion: NOW });
   });
@@ -127,7 +130,7 @@ describe('ensureDrivePermissions', () => {
 
   test('denied location is never re-prompted and motion is not asked', async () => {
     const { d, adapter, calls } = deps({ location: 'denied' });
-    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'denied', motion: 'undetermined' });
+    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'denied', precise: null, services: true, motion: 'undetermined' });
     expect(adapter.requestLocationForeground).not.toHaveBeenCalled();
     expect(calls).toEqual(['snapshot']);
   });
@@ -141,37 +144,56 @@ describe('ensureDrivePermissions', () => {
 
   test('denied motion does not block and is never re-prompted', async () => {
     const { d, calls } = deps({ location: 'foreground', motion: 'denied' });
-    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', motion: 'denied' });
+    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', precise: true, services: true, motion: 'denied' });
     expect(calls).not.toContain('motion:request');
   });
 
   test('motion that cannot be checked (no drive-sense) counts as unavailable, not as a blocker', async () => {
     const { d } = deps({ location: 'foreground', motion: null });
-    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', motion: 'unavailable' });
+    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'granted', precise: true, services: true, motion: 'unavailable' });
   });
 
   test('a phone that cannot be read counts as denied: the explainer offers Settings, never a loop', async () => {
     const { d, adapter } = deps({ location: 'undetermined' });
     adapter.snapshot.mockRejectedValueOnce(new Error('bridge'));
-    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'denied', motion: 'undetermined' });
+    await expect(ensureDrivePermissions(d)).resolves.toEqual({ location: 'denied', precise: null, services: null, motion: 'undetermined' });
     expect(adapter.requestLocationForeground).not.toHaveBeenCalled();
   });
 
   test('the Start Drive tap (askMotion false): undetermined motion is read and never requested; undetermined location is still asked once', async () => {
     const { d, calls, adapter, settings } = deps({ location: 'undetermined', afterRequest: 'foreground', motion: 'undetermined' });
-    await expect(ensureDrivePermissions(d, { askMotion: false })).resolves.toEqual({ location: 'granted', motion: 'undetermined' });
+    await expect(ensureDrivePermissions(d, { askMotion: false })).resolves.toEqual({ location: 'granted', precise: true, services: true, motion: 'undetermined' });
     expect(adapter.requestMotion).not.toHaveBeenCalled();
     expect(adapter.requestLocationForeground).toHaveBeenCalledTimes(1);
-    expect(calls).toEqual(['snapshot', 'location:request']);
+    expect(calls).toEqual(['snapshot', 'location:request', 'snapshot']);
     expect(settings.store.get(PROMPTS_KEY)).toEqual({ location: NOW });
   });
 
   test('askMotion false with motion already answered leaves it as read', async () => {
     const granted = deps({ location: 'foreground', motion: 'granted' });
-    await expect(ensureDrivePermissions(granted.d, { askMotion: false })).resolves.toEqual({ location: 'granted', motion: 'granted' });
+    await expect(ensureDrivePermissions(granted.d, { askMotion: false })).resolves.toEqual({ location: 'granted', precise: true, services: true, motion: 'granted' });
     const denied = deps({ location: 'foreground', motion: 'denied' });
-    await expect(ensureDrivePermissions(denied.d, { askMotion: false })).resolves.toEqual({ location: 'granted', motion: 'denied' });
+    await expect(ensureDrivePermissions(denied.d, { askMotion: false })).resolves.toEqual({ location: 'granted', precise: true, services: true, motion: 'denied' });
     expect(denied.calls).toEqual(['snapshot']);
+  });
+
+  test('Precise Location and the Location Services switch are read, never asked', async () => {
+    const approx = deps({ location: 'foreground', precise: false });
+    await expect(ensureDrivePermissions(approx.d, { askMotion: false })).resolves.toEqual({ location: 'granted', precise: false, services: true, motion: 'granted' });
+    expect(approx.calls).toEqual(['snapshot']);
+    const off = deps({ location: 'foreground', services: false });
+    await expect(ensureDrivePermissions(off.d, { askMotion: false })).resolves.toMatchObject({ location: 'granted', services: false });
+    const unknown = deps({ location: 'foreground', precise: null, services: null });
+    await expect(ensureDrivePermissions(unknown.d, { askMotion: false })).resolves.toMatchObject({ precise: null, services: null });
+  });
+
+  test('a location granted at the tap reads Precise Location again (the answer has no accuracy); a failed re-read is unknown', async () => {
+    const approx = deps({ location: 'undetermined', afterRequest: 'foreground', precise: false });
+    await expect(ensureDrivePermissions(approx.d, { askMotion: false })).resolves.toMatchObject({ location: 'granted', precise: false });
+    expect(approx.calls).toEqual(['snapshot', 'location:request', 'snapshot']);
+    const failed = deps({ location: 'undetermined', afterRequest: 'foreground', precise: false });
+    failed.adapter.snapshot.mockImplementationOnce(async () => snapshot('undetermined', 'granted')).mockRejectedValueOnce(new Error('bridge'));
+    await expect(ensureDrivePermissions(failed.d, { askMotion: false })).resolves.toMatchObject({ location: 'granted', precise: null, services: true });
   });
 
   test('a request that throws is not recorded as a prompt and reads as denied', async () => {

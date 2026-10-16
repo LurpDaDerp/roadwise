@@ -34,7 +34,7 @@ import { setActiveDashcam } from '@/dashcam/registry';
 import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { writeDropNotice } from '@/drive/dropNotice';
-import { createDriveHost, playerInputs, type DriveHost } from '@/drive/host';
+import { createDriveHost, playerInputs, type DriveHost, type DriveStartPermissions } from '@/drive/host';
 import { setLeaveSink } from '@/drive/leave';
 import { phoneSwitchFor } from '@/drive/phoneSwitchStore';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
@@ -84,8 +84,8 @@ export interface BootstrapDeps {
   appConfig?: AppConfigSupabase;
   createPlayer?: (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer>;
   display?: DriveDisplay | null;
-  /** Just-in-time permissions for Start Drive. Default: `ensureDrivePermissions` (location only). */
-  permissions?: () => Promise<{ location: 'granted' | 'denied' }>;
+  /** Just-in-time permissions for Start Drive. Default: `ensureDrivePermissions` (asks for location only). */
+  permissions?: () => Promise<DriveStartPermissions>;
   voiceEnabled?: () => boolean;
   attachSummaryNotifier?: ((host: DriveHost, db: Db) => { detach(): void; settled?(): Promise<void> }) | null;
   /**
@@ -495,13 +495,13 @@ function defaultLimits(db: Db, deps: BootstrapDeps, now: () => number, onError: 
   });
 }
 
-function defaultPermissions(db: Db): () => Promise<{ location: 'granted' | 'denied' }> {
+function defaultPermissions(db: Db): () => Promise<DriveStartPermissions> {
   return async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the permission adapters
     const { ensureDrivePermissions } = require('@/features/drive/permissions') as typeof import('@/features/drive/permissions');
     // The tap asks only for location (needed to record at all), never for motion.
     const result = await ensureDrivePermissions({ settings: createSettingsRepo(db) }, { askMotion: false });
-    return { location: result.location };
+    return { location: result.location, precise: result.precise, services: result.services };
   };
 }
 

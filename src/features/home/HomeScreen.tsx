@@ -108,6 +108,24 @@ export function HomeScreen() {
     return () => sub.remove();
   }, [toTop]);
 
+  // Fix it on a refused Start: Precise Location and Location Services run that row's own fix (the
+  // phone's dialog where it has one, otherwise its Settings page); anything else, or a fix that
+  // could not run, opens Settings › Permissions.
+  const onRefusalAction = async () => {
+    if (shownRefusal === 'busy') {
+      router.push(DRIVE_HREF);
+      return;
+    }
+    if (shownRefusal === 'precise' || shownRefusal === 'services') {
+      try {
+        if ((await board.fix(shownRefusal === 'precise' ? 'precise' : 'location')) !== null) return;
+      } catch {
+        // The Permissions screen says where it stands.
+      }
+    }
+    router.push(PERMISSIONS_HREF);
+  };
+
   const onStart = async () => {
     if (starting) return;
     setStarting(true);
@@ -144,7 +162,7 @@ export function HomeScreen() {
         refusal={shownRefusal}
         dropNotice={dropped ? { message: dropCopy(dropped.cause, dropped.reason), onDismiss: dismissDropped } : null}
         onStart={() => void onStart()}
-        onRefusalAction={() => (shownRefusal === 'permission' ? router.push(PERMISSIONS_HREF) : router.push(DRIVE_HREF))}
+        onRefusalAction={() => void onRefusalAction()}
         onOpenDrive={(id) => router.push(driveSummaryHref(id))}
         onSeeAll={() => router.push(DRIVE_HISTORY_HREF)}
         onAllStats={() => router.push(ALL_STATS_HREF)}
