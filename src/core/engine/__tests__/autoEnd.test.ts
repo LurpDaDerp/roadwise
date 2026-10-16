@@ -230,11 +230,14 @@ test('(n) ticks: nothing at 899.999 s, the end at 900 s; a pace row on the deadl
   expect(g.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: PARKED_AT });
 });
 
-test('(o) a walking report on a drive that never moved closes it with no mark', async () => {
+test('(o) a walking report on a drive that never moved closes it at 10 min with no mark (the idle end is later)', async () => {
   const h = await started();
   await feed(h, path(T0, { n: 3, mps: mph(1), step: 0.4 }));
-  await h.engine.dispatch({ type: 'walking', ts: T0 + 3000 });
-  expect(h.finalized[0]).toMatchObject({ endCause: 'walking', moved: null, cut: false, endedAt: T0 + 3000 });
+  await h.engine.dispatch({ type: 'motion', activity: { type: 'walking', confidence: 'high', ts: T0 + 2000 }, ts: T0 + 3000 });
+  await h.engine.dispatch({ type: 'tick', ts: T0 + 599_999 });
+  expect(status(h)).toBe('recording');
+  await h.engine.dispatch({ type: 'tick', ts: T0 + 600_000 });
+  expect(h.finalized[0]).toMatchObject({ endCause: 'walking', moved: null, droveAt: null, cut: false, endedAt: T0 + 3000 });
 });
 
 describe('(p) a manual end', () => {

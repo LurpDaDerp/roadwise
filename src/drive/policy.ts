@@ -1,6 +1,4 @@
 // The pure rules the drive host applies.
-import type { MotionActivity } from '@drive-sense';
-
 import type { EngineStatus } from '@/core/engine/engine.types';
 import type { DetectorContext } from '@/core/engine/types';
 
@@ -13,9 +11,4 @@ export const isDrivingStatus = tripRecords;
 /** The per-row detector context from the call state. */
 export function detectorContext(callActive: boolean): Omit<DetectorContext, 'warmupEndsAt'> {
   return { callActive };
-}
-
-/** An OS motion update that says the driver is on foot (a confident walk or run, never an EXIT). */
-export function walkingReported(a: MotionActivity): boolean {
-  return (a.type === 'walking' || a.type === 'running') && a.confidence !== 'low' && a.exit !== true;
 }

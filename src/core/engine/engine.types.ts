@@ -3,6 +3,7 @@
 // Everything the engine knows about the outside world comes in through `EngineDeps` and
 // `EngineEvent`; everything it decides goes out through the `EngineDeps` callbacks and
 // `EngineSnapshot`. Time is only ever the `ts` on an event or a row.
+import type { MotionActivity } from '@drive-sense';
 import type { EventType, Tier } from '@scoring';
 
 import type { DetectedEvent, DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
@@ -151,7 +152,11 @@ export interface EngineSnapshot {
   clientTripId: string | null;
   startedAt: number | null;
   lastRowTs: number | null;
-  /** m/s; 0 when unknown — read `speedKnown` first (unknown is "—"). */
+  /**
+   * The speed to show, m/s: the known speed, or 0 while it is below its own accuracy rating and
+   * under 3 mph (`motion.shownSpeed`); 0 when unknown — read `speedKnown` first (unknown is "—").
+   * `stopped` and `lockedOut` read the raw speed.
+   */
   speedMps: number;
   /** The CURRENT row has a known speed. False before the first row and on every row that lost the fix. */
   speedKnown: boolean;
@@ -165,7 +170,7 @@ export interface EngineSnapshot {
   /** epoch ms the drive ends by itself unless the car moves (`session.autoEndAt`); null unless recording. */
   autoEndAt: number | null;
   distanceM: number;
-  /** Recording at a last known speed above 5 mph: the UI shows only the End control. */
+  /** Recording at a last known speed (`session.lastSpeed`) above 5 mph: the UI shows only the End control. */
   lockedOut: boolean;
   lastAlert: AlertEvent | null;
 }
@@ -203,8 +208,11 @@ export type EngineEvent =
   /** `continues`: the phone's previous drive ended within `MERGE_GAP_S` (the host reads it at the tap). */
   | { type: 'start'; ts: number; continues: boolean }
   | { type: 'row'; row: FeatureRow }
-  /** The OS says the driver is walking: the drive ends where the car last moved. */
-  | { type: 'walking'; ts: number }
+  /**
+   * An OS motion-activity report (`parseActivity`), for the walking end (`motion.ts`). `ts`: the
+   * host's clock at arrival, used only before the drive's first row.
+   */
+  | { type: 'motion'; activity: MotionActivity; ts: number }
   /** A manual end (the hold, the notification's End drive, sign-out): cut after 2 min standing still. */
   | { type: 'end'; ts: number }
   /** The host's one timer: the automatic end (`autoEndAt`) may have passed with no row. */

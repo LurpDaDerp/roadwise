@@ -72,15 +72,17 @@ test('a drive starts only on `start` and ends on `end`, handing the finalizer on
   expect(h.engine.snapshot().clientTripId).toBe('id2');
 });
 
-test('a walking report ends a slow drive at once, cut at the last movement', async () => {
+test('an on-foot report at 40 mph is cancelled by driving; one at a stop ends the drive 20 s after it arrives, cut at the last movement', async () => {
   const w = harness();
   await w.engine.dispatch({ type: 'start', ts: T0, continues: false });
   await feed(w, seq([3, { speed: mph(40) }]));
-  await w.engine.dispatch({ type: 'walking', ts: T0 + 3000 });
-  expect(w.engine.snapshot().status).toBe('recording'); // a misfire at 40 mph is ignored
-  await feed(w, seq([2, (i) => ({ speed: mph(2), ts: T0 + 3000 + i * 1000 })]));
-  await w.engine.dispatch({ type: 'walking', ts: T0 + 9000 });
-  expect(w.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 3000, cut: true });
+  await w.engine.dispatch({ type: 'motion', activity: { type: 'walking', confidence: 'high', ts: T0 + 2500 }, ts: T0 + 3000 });
+  await feed(w, seq([2, (i) => ({ speed: mph(40), ts: T0 + 3000 + i * 1000 })]));
+  await feed(w, seq([25, (i) => ({ speed: 0, ts: T0 + 5000 + i * 1000 })]));
+  expect(w.engine.snapshot().status).toBe('recording'); // the misfire at 40 mph was cancelled
+  await w.engine.dispatch({ type: 'motion', activity: { type: 'walking', confidence: 'high', ts: T0 + 29_000 }, ts: T0 + 30_000 });
+  await feed(w, seq([20, (i) => ({ speed: 0, ts: T0 + 30_000 + i * 1000 })]));
+  expect(w.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 5000, cut: true });
 });
 
 test('alerts: one chime per speeding episode, the pickup and the 15-s handling alert, instant events as they close', async () => {
@@ -122,18 +124,6 @@ test('checkpoints every 30 rows and clears the pending rows; a failed checkpoint
   expect(h.checkpoints[0]!.pending).toHaveLength(2 * CHECKPOINT_ROWS);
   expect(h.engine.session()?.pending).toHaveLength(0);
   expect(h.engine.session()?.checkpointTs).toBe(T0 + (2 * CHECKPOINT_ROWS - 1) * 1000);
-});
-
-test('walking is accepted whatever the last speed once the last fix is over 60 s old', async () => {
-  const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
-  await feed(h, seq([5, { speed: mph(8) }]));
-  await h.engine.dispatch({ type: 'walking', ts: T0 + 30_000 });
-  expect(h.engine.snapshot().status).toBe('recording');
-  await h.engine.dispatch({ type: 'walking', ts: T0 + 70_000 });
-  expect(h.engine.snapshot().status).toBe('idle');
-  // Cut back to the last movement (the fifth row at 8 mph), not the report.
-  expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 5000, cut: true });
 });
 
 test('a finalizer that throws is reported and the engine is idle again for the next drive', async () => {

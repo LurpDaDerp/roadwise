@@ -1,5 +1,5 @@
 import { autoEndDeadline, createTicker, TICK_MIN_DELAY_MS, TICK_SLACK_MS } from '@/drive/ticks';
-import { detectorContext, isBusyStatus, tripRecords, walkingReported } from '@/drive/policy';
+import { detectorContext, isBusyStatus, tripRecords } from '@/drive/policy';
 
 test('statuses', () => {
   expect(isBusyStatus('idle')).toBe(false);
@@ -12,14 +12,6 @@ test('statuses', () => {
 test('the detector context follows the call state', () => {
   expect(detectorContext(false)).toEqual({ callActive: false });
   expect(detectorContext(true)).toEqual({ callActive: true });
-});
-
-test('only a confident walk or run (not an exit) is a walking report', () => {
-  expect(walkingReported({ type: 'walking', confidence: 'high', ts: 1 })).toBe(true);
-  expect(walkingReported({ type: 'running', confidence: 'medium', ts: 1 })).toBe(true);
-  expect(walkingReported({ type: 'walking', confidence: 'low', ts: 1 })).toBe(false);
-  expect(walkingReported({ type: 'walking', confidence: 'high', ts: 1, exit: true })).toBe(false);
-  expect(walkingReported({ type: 'automotive', confidence: 'high', ts: 1 })).toBe(false);
 });
 
 /** A scheduler whose timers the test fires; each entry keeps its delay and whether it is still armed. */

@@ -15,7 +15,7 @@
 // - **Background.** Each row first pumps the process's timers (`src/lib/timers.ts`): with the app
 //   in the Android background JS timers are paused, and the rows are what keeps the alert player
 //   and the DashPal link moving.
-import { parseRow } from '@drive-sense';
+import { parseActivity, parseRow } from '@drive-sense';
 import { MERGE_GAP_S, scoreDrive, type DriveContext } from '@scoring';
 
 import { decisionFor } from '@/core/alerts/policy';
@@ -38,7 +38,7 @@ import { KMH_PER_MPH, metersToMiles, mpsToMph } from '@/lib/units';
 
 import type { DriveDisplay } from './display';
 import { clearDropNotice, writeDropNotice } from './dropNotice';
-import { detectorContext, isBusyStatus, walkingReported } from './policy';
+import { detectorContext, isBusyStatus } from './policy';
 import type { DriveSource } from './source';
 import { createTicker, type Scheduler } from './ticks';
 
@@ -491,9 +491,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         })
       ),
       remover(
-        source.addListener('activity', (a) => {
-          if (!walkingReported(a)) return;
-          void run(() => engine.dispatch({ type: 'walking', ts: now() }), 'activity');
+        // Every valid report goes to the engine, which reads it for the walking end alone
+        // (`core/engine/motion.ts`); a malformed payload is dropped. With motion not granted none come.
+        source.addListener('activity', (raw) => {
+          const activity = parseActivity(raw);
+          if (activity === null) return;
+          void run(() => engine.dispatch({ type: 'motion', activity, ts: now() }), 'activity');
         })
       ),
       remover(

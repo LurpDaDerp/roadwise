@@ -4,8 +4,9 @@
 //
 // A drive starts only on `start` (the user's Start Drive tap, at any speed; the host has already
 // checked permissions). It ends on `end` (the hold-to-end), by itself once the car has not moved for
-// `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the OS reports walking. Every end
-// but a prompt hold closes the drive where the car last moved (`closeAtLastMovement`): a manual end
+// `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the driver walks away (`motion`
+// reports; `motion.ts` W1/W2). Every end but a prompt hold closes the drive where the car last moved
+// (`closeAtLastMovement`; a walking end at or before the walk began): a manual end
 // `MANUAL_CUT_AFTER_S` or more after the idle clock's base is cut too (its phone use kept whole), a
 // sooner one ends at the tap.
 // A reducer over one explicit state, driven by 1 Hz rows and a few events through a serialised
@@ -16,8 +17,22 @@ import { PHONE_MIN_MPH, type EventType, type Tier } from '@scoring';
 import { knownSpeed, limitMphFor, MPS_PER_MPH, ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { MAX_DRIVE_MS } from '@/data/sync/payload';
 
+import type { MotionActivity } from '@drive-sense';
+
 import type { AdoptedTrip, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
-import { appendRow, autoEndAt, closeAtLastMovement, closeSession, createSession, idleSince, noteWarmup, snapshotSession } from './session';
+import { footReading, ON_FOOT_DROP_MS, shownSpeed, WALK_CONFIRM_MS, WALK_STALE_FIX_MS } from './motion';
+import {
+  appendRow,
+  autoEndAt,
+  closeAtLastMovement,
+  closeSession,
+  createSession,
+  DRIVING_SPEED_MPS,
+  drivingRow,
+  idleSince,
+  noteWarmup,
+  snapshotSession,
+} from './session';
 import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
 /** Speed-limit tiles are prefetched once per this much distance, never per fix. */
@@ -26,10 +41,6 @@ export const PREFETCH_EVERY_M = 1000;
 export const CHECKPOINT_ROWS = 30;
 /** At or below this (known) the points may show; above it the UI is locked out. */
 export const STOPPED_MPS = PHONE_MIN_MPH * MPS_PER_MPH;
-/** A walking report ends the drive only while the car was last known at or below this… */
-export const WALK_MAX_SPEED_MPS = 3 * MPS_PER_MPH;
-/** …or when the last valid fix is older than this (the car parked where there is no sky). */
-export const WALK_STALE_FIX_MS = 60_000;
 /** A manual end this long after the idle clock's base (the car standing still) is cut at the last movement. */
 export const MANUAL_CUT_AFTER_S = 120;
 /** The phone-handling alert, this long after the pickup. */
@@ -48,10 +59,11 @@ export function createEngine(deps: EngineDeps): Engine {
   let session: TripSession | null = null;
   let suite: DetectorSuite | null = null;
   let seen: Seen | null = null;
-  /** The last speed a valid fix reported this drive; the lockout holds on it through a dropout. */
-  let lastKnownSpeedMps: number | null = null;
-  /** `ts` of the last row with a known speed (a valid fix). */
-  let lastKnownSpeedTs: number | null = null;
+  /**
+   * The latest on-foot report still standing (`motion.ts`): `since` when the walk began, `at` when it
+   * arrived, both on the row clock. Null when none, or once cleared or cancelled by driving.
+   */
+  let foot: { since: number; at: number } | null = null;
   let prefetchedAtM: number | null = null;
   let lastAlert: EngineSnapshot['lastAlert'] = null;
   /** Episodes already alerted: one chime per speeding episode, one pickup and one handling alert per phone episode. */
@@ -99,7 +111,7 @@ export function createEngine(deps: EngineDeps): Engine {
       clientTripId: session?.clientTripId ?? null,
       startedAt: session?.startedAt ?? null,
       lastRowTs: row?.ts ?? null,
-      speedMps: Math.max(0, speed ?? 0),
+      speedMps: row === null || speed === null ? 0 : Math.max(0, shownSpeed(speed, row.speedAcc)),
       speedKnown: speed !== null,
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
       limitMph: seen?.limitMph ?? null,
@@ -107,7 +119,8 @@ export function createEngine(deps: EngineDeps): Engine {
       stopped: status === 'recording' && speed !== null && speed <= STOPPED_MPS,
       autoEndAt: status === 'recording' && session !== null ? autoEndAt(session) : null,
       distanceM: session?.distanceM ?? 0,
-      lockedOut: status === 'recording' && (lastKnownSpeedMps ?? 0) > STOPPED_MPS,
+      // The last known speed holds the lockout through a dropout, and after an adopt (the rebuilt session's).
+      lockedOut: status === 'recording' && (session?.lastSpeed?.mps ?? 0) > STOPPED_MPS,
       lastAlert,
     });
   }
@@ -116,8 +129,7 @@ export function createEngine(deps: EngineDeps): Engine {
     session = null;
     suite = null;
     seen = null;
-    lastKnownSpeedMps = null;
-    lastKnownSpeedTs = null;
+    foot = null;
     prefetchedAtM = null;
     lastAlert = null;
     chimed = null;
@@ -186,15 +198,14 @@ export function createEngine(deps: EngineDeps): Engine {
         alert(phone.id, 'phone_handling', 'moderate', row.ts);
       }
     }
+    const wasDriving = s.motion.prevDrive;
     appendRow(s, row, det.unsafe());
     maybePrefetch(row, s.distanceM);
 
-    const speed = knownSpeed(row);
-    if (speed !== null) {
-      lastKnownSpeedMps = speed;
-      lastKnownSpeedTs = row.ts;
-    }
     if (await endIfDue(row.ts + ROW_MS)) return;
+    // Two driving rows in a row: whatever the standing report said, the car is driving (a misread).
+    if (foot !== null && wasDriving && drivingRow(row)) foot = null;
+    if (await checkFoot(row.ts + ROW_MS)) return;
     if (s.rowsCount % CHECKPOINT_ROWS === 0) {
       try {
         await checkpoint(s);
@@ -221,6 +232,48 @@ export function createEngine(deps: EngineDeps): Engine {
       return true;
     }
     return false;
+  }
+
+  /**
+   * The walking end at `t` (row clock), once the standing on-foot report is `WALK_CONFIRM_MS` old.
+   * W1 (the car reached driving speed): unless the last known speed is driving speed and under
+   * `WALK_STALE_FIX_MS` old. W2 (it never did): only once the drive is `ON_FOOT_DROP_MS` old. Cut at
+   * the last movement at or before the walk began. True when it ended the drive.
+   */
+  async function checkFoot(t: number): Promise<boolean> {
+    if (foot === null || status !== 'recording') return false;
+    if (t - foot.at < WALK_CONFIRM_MS) return false;
+    const s = session as TripSession;
+    if (s.droveAt === null) {
+      if (t - s.startedAt < ON_FOOT_DROP_MS) return false;
+    } else {
+      const last = s.lastSpeed;
+      const carDriving = last !== null && last.mps >= DRIVING_SPEED_MPS && t - last.ts <= WALK_STALE_FIX_MS;
+      if (carDriving) return false;
+    }
+    const since = foot.since;
+    await finalize((open) => closeAtLastMovement(open, 'walking', { notAfter: since }));
+    return true;
+  }
+
+  /**
+   * An activity report; `ts` is the host's clock, used only before the drive's first row. Only while
+   * recording. Every time is on the row clock: the end of the latest row.
+   */
+  async function onMotion(a: MotionActivity, ts: number): Promise<void> {
+    if (status !== 'recording') return;
+    const s = session as TripSession;
+    const t = seen === null ? ts : seen.row.ts + ROW_MS;
+    const reading = footReading(a);
+    if (reading === 'clear') foot = null;
+    else if (reading === 'onFoot' && foot === null) {
+      const since = Math.min(Math.max(a.ts, s.startedAt), t);
+      // A walk that began before the car reached driving speed (a late or replayed report of the
+      // walk to the car) never ends a drive that has driven.
+      if (s.droveAt === null || since >= s.droveAt) foot = { since, at: t };
+    }
+    // A repeat on-foot report (a confidence change, walking to running) keeps the first one's times.
+    await checkFoot(t);
   }
 
   /**
@@ -264,6 +317,7 @@ export function createEngine(deps: EngineDeps): Engine {
 
   async function start(ts: number, continues: boolean): Promise<void> {
     if (status !== 'idle') return;
+    foot = null;
     const made = deps.createDetectors();
     session = createSession({ clientTripId: deps.newId(), startedAt: Math.round(ts), continues });
     suite = made;
@@ -286,6 +340,7 @@ export function createEngine(deps: EngineDeps): Engine {
       pending: trip.session.pending.slice(),
     };
     suite = trip.detectors;
+    foot = null;
     setStatus('recording');
   }
 
@@ -309,19 +364,15 @@ export function createEngine(deps: EngineDeps): Engine {
         await processRow(e.row);
         return;
       }
-      case 'walking': {
-        if (status !== 'recording') return;
-        const slow = (lastKnownSpeedMps ?? 0) <= WALK_MAX_SPEED_MPS;
-        const staleFix = lastKnownSpeedTs === null || e.ts - lastKnownSpeedTs > WALK_STALE_FIX_MS;
-        if (slow || staleFix) await finalize((open) => closeAtLastMovement(open, 'walking'));
+      case 'motion':
+        await onMotion(e.activity, e.ts);
         return;
-      }
       case 'end':
         // A drive already past its automatic end (no row or tick came since) ends as that end would.
         if (status === 'recording' && !(await endIfDue(e.ts))) await finalize((open) => closeManual(open, e.ts));
         return;
       case 'tick':
-        if (status === 'recording') await endIfDue(e.ts);
+        if (status === 'recording' && !(await endIfDue(e.ts))) await checkFoot(e.ts);
         return;
     }
   }

@@ -282,7 +282,7 @@ test('the background display follows the driver\'s units: km/h with speed and li
   await m.host.stop({ endOpenTrip: true });
 });
 
-test('the automatic end: 15 min without movement ends the drive at its last movement (the one timer covers rows that stop coming); walking ends a slow drive', async () => {
+test('the automatic end: 15 min without movement ends the drive at its last movement (the one timer covers rows that stop coming); walking away ends a driven drive', async () => {
   const h = build();
   await h.host.boot();
   await h.host.start();
@@ -300,16 +300,93 @@ test('the automatic end: 15 min without movement ends the drive at its last move
   expect(h.source.calls.at(-1)).toBe('stopCapture');
 
   await h.host.start();
-  await feed(h, rows(40, { speedMps: 15, t0: clock }));
-  h.source.emit('activity', { type: 'walking', confidence: 'high', ts: clock });
+  const t2 = clock;
+  await feed(h, rows(40, { speedMps: 15, t0: t2 }));
+  // A report after the fast rows (not a walk from before driving speed)…
+  h.source.emit('activity', { type: 'walking', confidence: 'high', ts: t2 + 40_000 });
   await h.host.settled();
-  expect(h.host.snapshot().status).toBe('recording'); // at 34 mph a walk report is a misfire
-  await feed(h, rows(3, { speedMps: 0.5, t0: clock + 40_000 }));
-  h.source.emit('activity', { type: 'walking', confidence: 'high', ts: clock + 43_000 });
+  // …that two more rows at 34 mph cancel (a misfire),
+  await feed(h, rows(2, { speedMps: 15, t0: t2 + 40_000 }));
+  // and a stop does not revive.
+  await feed(h, rows(25, { speedMps: 0.5, t0: t2 + 42_000 }));
+  expect(h.host.snapshot().status).toBe('recording');
+  // A real walk-off, reported after the row at +66 s, ends the drive 20 s later.
+  h.source.emit('activity', { type: 'walking', confidence: 'high', ts: t2 + 50_000 });
+  await h.host.settled();
+  await feed(h, rows(19, { speedMps: 0.5, t0: t2 + 67_000 }));
+  expect(h.host.snapshot().status).toBe('recording');
+  await feed(h, rows(1, { speedMps: 0.5, t0: t2 + 86_000 }));
   await h.host.untilIdle();
   expect(h.host.snapshot().status).toBe('idle');
-  expect((await createTripsRepo(db).list())[0]!.client_trip_id).toBe(uuid(2));
+  const second = (await createTripsRepo(db).get(uuid(2)))!;
+  // Cut at the last movement at or before the walk: the last fast row (+41 s) ends at +42 s.
+  expect(second).toMatchObject({ status: 'pending', end_cause: 'walking', ended_at: t2 + 42_000 });
   await h.host.stop({ endOpenTrip: false });
+});
+
+describe('motion activity reports reach the engine through parseActivity', () => {
+  test('the walk to the car as the feed’s first report (delivered on a microtask) never ends the drive that then drives', async () => {
+    const source = createFakeDriveSense({ platform: 'ios', now: () => clock, asyncDelivery: true });
+    source.setState({ location: 'whenInUse', motion: 'granted', lockSignal: 'reliable' });
+    const h = build({ source });
+    await h.host.boot();
+    await h.host.start();
+    h.source.emit('activity', { type: 'walking', confidence: 'medium', ts: T0 - 30_000 });
+    await Promise.resolve();
+    await h.host.settled();
+    await feed(h, rows(5, { speedMps: 0, t0: T0 }));
+    await feed(h, rows(60, { speedMps: 15, t0: T0 + 5000 }));
+    await feed(h, rows(60, { speedMps: 0, t0: T0 + 65_000 }));
+    expect(h.host.snapshot().status).toBe('recording');
+    expect(h.errors).toEqual([]);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('a malformed payload is dropped without a word; a valid one still counts', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 15 }));
+    await feed(h, rows(5, { speedMps: 0, t0: T0 + 60_000 }));
+    for (const bad of [null, 'walking', { type: 'walking', confidence: 'high' }, { type: 'walking', confidence: 'sure', ts: T0 + 62_000 }, { type: 'walk', confidence: 'high', ts: T0 + 62_000 }]) {
+      h.source.emit('activity', bad as never);
+    }
+    await h.host.settled();
+    await feed(h, rows(30, { speedMps: 0, t0: T0 + 65_000 }));
+    expect(h.host.snapshot().status).toBe('recording');
+    expect(h.errors).toEqual([]);
+    h.source.emit('activity', { type: 'running', confidence: 'high', ts: T0 + 62_000, extra: 1 } as never);
+    await h.host.settled();
+    await feed(h, rows(21, { speedMps: 0, t0: T0 + 95_000 }));
+    await h.host.untilIdle();
+    expect((await createTripsRepo(db).get(uuid(1)))!).toMatchObject({ end_cause: 'walking', ended_at: T0 + 60_000 });
+    expect(h.errors).toEqual([]);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('with motion not allowed no report comes, and the drive ends only by the 15 min rule', async () => {
+    const h = build();
+    h.source.setState({ location: 'whenInUse', motion: 'denied', lockSignal: 'reliable' });
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 15 }));
+    await feed(h, rows(120, { speedMps: 0, t0: T0 + 60_000 }));
+    expect(h.host.snapshot().status).toBe('recording');
+    expect(h.host.snapshot().autoEndAt).toBe(T0 + 60_000 + IDLE_END_S * 1000);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the background display shows 0 for a crawl below its own accuracy (S2), and the speed otherwise', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(1, { speedMps: 0.8, over: () => ({ speedAcc: 1 }) }));
+    expect(h.display.log.at(-1)).toMatch(/^update 0\//);
+    expect(h.host.snapshot()).toMatchObject({ speedMps: 0, speedKnown: true });
+    await feed(h, rows(1, { speedMps: 3, t0: T0 + 1000, over: () => ({ speedAcc: 1 }) }));
+    expect(h.host.snapshot().speedMps).toBe(3);
+    await h.host.stop({ endOpenTrip: false });
+  });
 });
 
 describe('the Android notification’s End drive', () => {
