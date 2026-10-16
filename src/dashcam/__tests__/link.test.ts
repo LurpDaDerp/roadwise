@@ -16,6 +16,7 @@ import {
   LATE_ALERT_MS,
   LATE_CRITICAL_ALERT_MS,
   LIVE_OFFSET_MAX_AGE_MS,
+  LIVE_OFFSET_WINDOW_MAX,
   nextLiveOffset,
   PLAYER_RETRY_MS,
   ROW_STATE_FLOOR_MS,
@@ -1611,17 +1612,40 @@ describe('phone-first sound routing (BLE_PROTOCOL §1, §5)', () => {
   });
 
   test('(7d)-(7e) the live offset: a newer sample with a slightly longer round trip replaces it, a much slower one does not; a clock gone back or an old one is unusable', () => {
-    const l0 = nextLiveOffset(null, 100, 40, 1000)!;
-    expect(l0).toEqual({ offsetMs: 100, rttMs: 40, at: 1000 });
+    const w0 = nextLiveOffset([], 100, 40, 1000);
+    const l0 = { offsetMs: 100, rttMs: 40, at: 1000 };
+    expect(w0).toEqual([l0]);
     // 5 min later: 60 ms (half 30) ≤ 20 + 300 s × 0.1 ms/s = 50 → replaced; 400 ms (half 200) → kept.
-    expect(nextLiveOffset(l0, 105, 60, 1000 + 300_000)).toEqual({ offsetMs: 105, rttMs: 60, at: 301_000 });
-    expect(nextLiveOffset(l0, 300, 400, 1000 + 300_000)).toBe(l0);
-    // The phone's clock went back: the new sample wins.
-    expect(nextLiveOffset(l0, 90, 400, 500)).toEqual({ offsetMs: 90, rttMs: 400, at: 500 });
-    expect(usableLiveOffset(l0, 1000 + LIVE_OFFSET_MAX_AGE_MS)).toBe(l0);
-    expect(usableLiveOffset(l0, 1000 + LIVE_OFFSET_MAX_AGE_MS + 1)).toBeNull();
-    expect(usableLiveOffset(l0, 999)).toBeNull();
-    expect(usableLiveOffset(null, 1000)).toBeNull();
+    expect(nextLiveOffset(w0, 105, 60, 1000 + 300_000)).toEqual([{ offsetMs: 105, rttMs: 60, at: 301_000 }]);
+    const slow = nextLiveOffset(w0, 300, 400, 1000 + 300_000);
+    expect(usableLiveOffset(slow, 1000 + 300_000)).toEqual(l0);
+    // The phone's clock went back: the new sample wins, and no older one is usable meanwhile.
+    expect(nextLiveOffset(w0, 90, 400, 500)).toEqual([{ offsetMs: 90, rttMs: 400, at: 500 }]);
+    expect(usableLiveOffset(w0, 1000 + LIVE_OFFSET_MAX_AGE_MS)).toEqual(l0);
+    expect(usableLiveOffset(w0, 1000 + LIVE_OFFSET_MAX_AGE_MS + 1)).toBeNull();
+    expect(usableLiveOffset(w0, 999)).toBeNull();
+    expect(usableLiveOffset([], 1000)).toBeNull();
+    // The window stays bounded.
+    let w = w0;
+    for (let i = 1; i <= 100; i++) w = nextLiveOffset(w, 100, 40 + i * 10, 1000 + i);
+    expect(w.length).toBeLessThanOrEqual(LIVE_OFFSET_WINDOW_MAX);
+    expect(usableLiveOffset(w, 1100)).toEqual(l0);
+  });
+
+  test('(7g) a fast sample ages out: the best slower sample of the last 10 min takes over, and a slower one after an expired sample is used at once', () => {
+    const min = 60_000;
+    // Front at 20 ms, then the background's wake-laden 200-300 ms echoes 9 and 10 min later.
+    let w = nextLiveOffset([], 100, 20, 0);
+    w = nextLiveOffset(w, 101, 300, 9 * min);
+    w = nextLiveOffset(w, 102, 200, 10 * min);
+    expect(usableLiveOffset(w, 10 * min)).toMatchObject({ rttMs: 20 });
+    // At 11 min the 20 ms sample is gone: the 200 ms one (it beats the 300 ms one) is the live offset.
+    expect(usableLiveOffset(w, 11 * min)).toMatchObject({ rttMs: 200, offsetMs: 102 });
+    expect(usableLiveOffset(w, 20 * min)).toMatchObject({ rttMs: 200 });
+    expect(usableLiveOffset(w, 20 * min + 1)).toBeNull();
+    // An 11-min-old 40 ms sample, then a 200 ms echo (an iPhone woken from the background): usable.
+    const old = nextLiveOffset([], 100, 40, 0);
+    expect(usableLiveOffset(nextLiveOffset(old, 103, 200, 11 * min), 11 * min)).toEqual({ offsetMs: 103, rttMs: 200, at: 11 * min });
   });
 
   test('(7f) the late rule follows the live offset while the stored row keeps the best round trip for event dating', async () => {

@@ -24,8 +24,8 @@
 //
 // Late ALERTs: a new routed ALERT handled more than 750 ms (tier 3: 400 ms) after its `uptime_ms`
 // is answered ALERT_ACK(0) and shown only (the dashcam's buzzer has it), judged only on a clock
-// offset measured on this connection in the last 10 minutes (the live offset, ranked with a 100-ppm
-// drift allowance). Without one the rule is skipped and TIME_PINGs go out at once; with no offset at
+// offset measured on this connection in the last 10 minutes (the live offset: the best of that
+// window's samples, ranked with a 100-ppm drift allowance). Without one the rule is skipped and TIME_PINGs go out at once; with no offset at
 // all (no HELLO yet on this connection) the ALERT is answered ALERT_ACK(0). The boot's best offset
 // (the lowest round trip ever, also from the stored row) still dates events.
 //
@@ -149,7 +149,7 @@ export interface LinkContext {
   driveOpen: boolean;
   /** the app is in the foreground (the STATE cadence) */
   foreground: boolean;
-  /** the alert player can sound (host `alertsAvailable`) */
+  /** the alert player can sound (the alert ports loaded; a failed sound is the link's own 30 s rule) */
   playerAvailable: boolean;
   /** the alert style is not vibration-only */
   styleAllowsSound: boolean;
@@ -208,23 +208,39 @@ export interface LiveOffset {
   at: number;
 }
 
+/** The most samples the live window holds (a bound only: pings come in bursts of 3, every 10 min). */
+export const LIVE_OFFSET_WINDOW_MAX = 32;
+
 /**
- * The live offset after a new sample: the sample is kept when there is none yet, when the phone's
- * clock went back since the kept one, or when its half round trip is at most the kept one's plus the
- * drift since that one was taken (`OFFSET_DRIFT_MS_PER_S`, 100 ppm), so a newer sample with a
- * slightly longer round trip replaces an old one and a much slower one does not.
+ * Sample `a` is at least as good as an older `b` now and stays so: its half round trip is at most
+ * `b`'s plus the drift since `b` was taken (`OFFSET_DRIFT_MS_PER_S`, 100 ppm), and it ages out later.
  */
-export function nextLiveOffset(l: LiveOffset | null, offsetMs: number, rttMs: number, now: number): LiveOffset | null {
-  if (l === null || now < l.at || rttMs / 2 <= l.rttMs / 2 + ((now - l.at) / 1000) * OFFSET_DRIFT_MS_PER_S) {
-    return { offsetMs, rttMs, at: now };
-  }
-  return l;
+function beats(a: LiveOffset, b: LiveOffset): boolean {
+  return a.rttMs / 2 <= b.rttMs / 2 + ((a.at - b.at) / 1000) * OFFSET_DRIFT_MS_PER_S;
 }
 
-/** The live offset the late rule may use: at most 10 min old, and the phone's clock not gone back since. */
-export function usableLiveOffset(l: LiveOffset | null, now: number): LiveOffset | null {
-  if (l === null || now < l.at || now - l.at > LIVE_OFFSET_MAX_AGE_MS) return null;
-  return l;
+/**
+ * The live window after a new sample: the connection's samples of the last 10 min that may still be
+ * the best one, oldest (and best) first. Samples older than 10 min leave; so does every sample the new
+ * one beats (a newer sample with a slightly longer round trip replaces an old one, a much slower one
+ * waits behind it and takes over when the old one ages out). The phone's clock gone back empties it.
+ */
+export function nextLiveOffset(w: readonly LiveOffset[], offsetMs: number, rttMs: number, now: number): LiveOffset[] {
+  const sample: LiveOffset = { offsetMs, rttMs, at: now };
+  const kept = w.some((l) => now < l.at) ? [] : w.filter((l) => now - l.at <= LIVE_OFFSET_MAX_AGE_MS);
+  while (kept.length > 0 && beats(sample, kept[kept.length - 1]!)) kept.pop();
+  if (kept.length >= LIVE_OFFSET_WINDOW_MAX) return kept;
+  kept.push(sample);
+  return kept;
+}
+
+/**
+ * The live offset the late rule may use: the best window sample at most 10 min old, none when the
+ * phone's clock went back since one was taken.
+ */
+export function usableLiveOffset(w: readonly LiveOffset[], now: number): LiveOffset | null {
+  if (w.some((l) => now < l.at)) return null;
+  return w.find((l) => now - l.at <= LIVE_OFFSET_MAX_AGE_MS) ?? null;
 }
 
 export interface LinkDeps {
@@ -279,8 +295,8 @@ interface Session {
   /** best clock offset (epoch − uptime) of this boot, in memory (event dating; may come from the stored row) */
   offsetMs: number | null;
   rttMs: number | null;
-  /** the best offset sample taken on this connection, for the late rule (never the stored row) */
-  live: LiveOffset | null;
+  /** this connection's recent offset samples, for the late rule (never the stored row) */
+  live: LiveOffset[];
   pings: Map<number, number>;
   pingAt: number[];
   echoes: number;
@@ -776,7 +792,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       s.bootReady = false;
       s.offsetMs = null;
       s.rttMs = null;
-      s.live = null;
+      s.live = [];
       s.announcedNext = 0;
     }
     // An offset sample when the HELLO answers a request within 1 s. Its error can be the whole
@@ -858,7 +874,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       announcedNext: 0,
       offsetMs: null,
       rttMs: null,
-      live: null,
+      live: [],
       pings: new Map(),
       pingAt: [],
       echoes: 0,
