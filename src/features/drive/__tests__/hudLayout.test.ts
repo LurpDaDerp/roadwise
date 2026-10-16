@@ -1,6 +1,6 @@
 // The driving screen's layout (drive-screen design §3, §5.12): worked phones, End always inside the
 // window, nothing overlapping, the numerals large enough.
-import { haloGeometry } from '@/ui/drive';
+import { DIGIT_ADVANCE_EM, DIGIT_HEIGHT_EM, haloGeometry, numeralLineHeight, unitLineHeight, unitTop } from '@/ui/drive';
 
 import { HUD_NAV_H_PT, HUD_NAV_W_PT, hudLayout, type HudLayout, type HudLayoutInput, type Rect } from '../hudLayout';
 
@@ -146,7 +146,58 @@ describe('invariants across windows', () => {
   });
 });
 
+/**
+ * Where the readout really draws (SpeedReadout: its box centred in the halo box, the digits optically
+ * centred in the box, the unit label hanging under them): the digits' top, the label's bottom.
+ */
+function readout(l: HudLayout, pt: number): { digitsTop: number; labelBottom: number } {
+  const cy = l.halo.y + l.halo.h / 2;
+  const boxTop = cy - numeralLineHeight(pt) / 2;
+  return { digitsTop: cy - (DIGIT_HEIGHT_EM / 2) * pt, labelBottom: boxTop + unitTop(pt) + unitLineHeight(l.unitPt) };
+}
+
 describe('compact windows (§3.3)', () => {
+  const compactWindows: [number, number, Partial<HudLayoutInput['insets']>][] = [
+    [600, 300, {}],
+    [412, 300, {}],
+    [568, 320, {}],
+    [500, 330, {}],
+    [640, 300, { top: 24, right: 48 }],
+    [300, 400, {}],
+    [280, 320, {}],
+    [320, 280, {}],
+  ];
+  for (let w = 280; w <= 700; w += 20) for (let h = 240; h <= 420; h += 10) compactWindows.push([w, h, {}]);
+  test.each([1, 1.3, 1.6, 2])('font scale %p: the digits stay under the band and the unit label above the bottom row; the numerals fit their box', (fontScale) => {
+    let compact = 0;
+    for (const [width, height, ins] of compactWindows) {
+      const l = L({ width, height, insets: { ...ZERO, ...ins }, fontScale });
+      if (!l.compact) continue;
+      compact += 1;
+      for (const [pt, digits] of [
+        [l.numeralPt2, 2],
+        [l.numeralPt3, 3],
+      ] as const) {
+        const r = readout(l, pt);
+        const at = `${width}x${height} ${JSON.stringify(ins)} @${fontScale} ${digits} digits`;
+        if (r.labelBottom > l.row.y + 1e-9) throw new Error(`label ${r.labelBottom} under the row ${l.row.y} at ${at}`);
+        if (r.labelBottom > l.end.y + 1e-9) throw new Error(`label over End at ${at}`);
+        if (r.digitsTop < l.band.y + l.band.h - 1e-9) throw new Error(`digits over the band at ${at}`);
+        if (digits * DIGIT_ADVANCE_EM * pt > l.halo.w + 1e-9) throw new Error(`${digits} digits wider than their box at ${at}`);
+      }
+    }
+    expect(compact).toBeGreaterThan(20);
+  });
+
+  test('600 × 300: the box is the full width, the numerals large, the label 8 pt clear of End', () => {
+    const l = L({ width: 600, height: 300 });
+    expect(l.halo).toMatchObject({ x: 16, w: 568, ring: false });
+    expect(l.numeralPt2).toBe(126);
+    const clear = l.end.y - readout(l, l.numeralPt2).labelBottom;
+    expect(clear).toBeGreaterThanOrEqual(8);
+    expect(clear).toBeLessThan(9);
+  });
+
   test('300 × 400: compact, no ring, the points in the band line, End pinned at the bottom', () => {
     const l = L({ width: 300, height: 400 });
     expect(l.compact).toBe(true);

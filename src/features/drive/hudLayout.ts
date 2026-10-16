@@ -7,8 +7,21 @@
 //   bigger bottom row (up to 128 pt: a bigger sign), then evenly above and below.
 // - Landscape: the halo on the left; the band, the points line and the bottom row on the right.
 // - Compact (a window too small for a 220 pt halo: split screen, a small freeform window): a 40 pt
-//   band, a 96 pt bottom row, bare numerals in between; End stays pinned to the bottom.
-import { END_BUTTON_PT, HALO_MAX_BOX_PT, HALO_MIN_RING_BOX_PT, haloGeometry, haloNumeralPt, hudLabelScale, signSize, SPEED_UNIT_PT } from '@/ui/drive';
+//   band, a 96 pt bottom row, bare numerals in between, the unit label under them inside the same
+//   space (never over the row); End stays pinned to the bottom.
+import {
+  DIGIT_HEIGHT_EM,
+  END_BUTTON_PT,
+  HALO_MAX_BOX_PT,
+  HALO_MIN_RING_BOX_PT,
+  haloGeometry,
+  haloNumeralPt,
+  hudLabelScale,
+  signSize,
+  SPEED_UNIT_GAP_PT,
+  SPEED_UNIT_PT,
+  unitLineHeight,
+} from '@/ui/drive';
 
 export interface Rect {
   x: number;
@@ -26,7 +39,10 @@ export interface HudLayout {
   line: Rect;
   /** inside the band, right: the DashPal chip's slot, when one is paired */
   chip: Rect | null;
-  /** the halo's square box; `ring` false: bare numerals */
+  /**
+   * the halo's square box; `ring` false: the bare numerals' box, the region's full width, with the
+   * digits centred in it and the unit label hanging just below it (still above the bottom row)
+   */
   halo: Rect & { ring: boolean };
   /** the points' own line under the halo, or 'line' (the band's line) */
   points: Rect | 'line';
@@ -173,10 +189,11 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
   const row: Rect = { x: left, y: bottom - END_BUTTON_PT, w: frameW, h: END_BUTTON_PT };
   const regionTop = top + HUD_COMPACT_BAND_PT + COMPACT_GAP;
   const regionH = Math.max(0, row.y - COMPACT_GAP - regionTop);
-  const side = Math.max(0, Math.min(frameW, regionH));
-  // Two digits are 1.07 em wide (three 1.6 em), plus a little air; the digits and the unit label
-  // under them take about 0.75 em plus the label.
-  const tall = (regionH - 6 - 0.92 * unitPt) / 0.75;
+  // The readout centres the digits in the box and hangs the label 6 pt under them, so the box is the
+  // region less the gap and the label, and the digits are at most its height.
+  const boxH = Math.max(0, regionH - SPEED_UNIT_GAP_PT - unitLineHeight(unitPt));
+  // Two digits are 1.07 em wide (three 1.6 em), plus a little air.
+  const tall = boxH / DIGIT_HEIGHT_EM;
   const pt2 = Math.max(1, Math.min(168, Math.floor(Math.min(frameW / 1.13, tall))));
   const pt3 = Math.max(1, Math.min(168, Math.floor(Math.min(frameW / 1.665, tall))));
   return {
@@ -184,7 +201,7 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
     compact: true,
     band,
     ...bandParts(band, i.chip),
-    halo: { x: left + (frameW - side) / 2, y: regionTop + (regionH - side) / 2, w: side, h: side, ring: false },
+    halo: { x: left, y: regionTop, w: frameW, h: boxH, ring: false },
     points: 'line',
     row,
     ...rowItems(row, i.units),

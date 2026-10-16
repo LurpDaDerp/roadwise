@@ -22,7 +22,16 @@ export {
   tierColor,
   type HudPalette,
 } from './hudTokens';
-export { numeralLineHeight, numeralShift, SPEED_UNIT_PT, SpeedReadout, type SpeedReadoutProps, unitTop } from './SpeedReadout';
+export {
+  numeralLineHeight,
+  numeralShift,
+  SPEED_UNIT_GAP_PT,
+  SPEED_UNIT_PT,
+  SpeedReadout,
+  type SpeedReadoutProps,
+  unitLineHeight,
+  unitTop,
+} from './SpeedReadout';
 export { R2_1_ASPECT, signSize, SpeedSign, type SpeedSignProps } from './SpeedSign';
 export * from './halo';
 export { HALO_TIMINGS } from './haloMotion';

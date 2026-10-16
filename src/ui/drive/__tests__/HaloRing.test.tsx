@@ -2,7 +2,7 @@
 // flow scales with the ring, nothing restarts on a target change, a burst plays once per key, and
 // Reduce Motion drops every movement.
 import { act, render, screen, within } from '@testing-library/react-native';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { HALO_CALM, type HaloVisual } from '../halo';
 import { HALO_TIMINGS } from '../haloMotion';
@@ -61,11 +61,12 @@ const speeding = (s: number): HaloVisual => ({
 });
 const burst = (key: string): HaloVisual => ({ ...HALO_CALM, mode: 'burst', colorSeverity: 1, flow: false, burst: { key, severity: 1, pulses: 3, until: Date.now() + 1500 } });
 
-function view(visual: HaloVisual, o: { dimmed?: boolean; reduceMotion?: boolean; ring?: boolean } = {}) {
+function view(visual: HaloVisual, o: { dimmed?: boolean; reduceMotion?: boolean; ring?: boolean; height?: number } = {}) {
   return (
     <Halo
       visual={visual}
       size={343}
+      height={o.height}
       ring={o.ring ?? true}
       palette={p}
       dimmed={o.dimmed ?? false}
@@ -148,6 +149,14 @@ test('no ring in a small window: the numerals alone, still in the halo colour', 
   await render(view(speeding(0.5), { ring: false }));
   expect(screen.queryByTestId('hud-halo', HIDDEN)).toBeNull();
   expect(screen.getByTestId('hud-speed-numeral')).toBeTruthy();
+});
+
+test('no ring: the numerals box takes its own height; with a ring the box stays square', async () => {
+  const layer = () => StyleSheet.flatten(screen.getByTestId('hud-halo-layer').props.style);
+  const r = await render(view(HALO_CALM, { ring: false, height: 90 }));
+  expect(layer()).toMatchObject({ width: 343, height: 90 });
+  await r.rerender(view(HALO_CALM, { ring: true, height: 90 }));
+  expect(layer()).toMatchObject({ width: 343, height: 343 });
 });
 
 test('unmounting mid-burst leaves no timer of its own behind', async () => {

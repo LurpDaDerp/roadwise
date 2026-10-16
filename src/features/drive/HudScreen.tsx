@@ -329,6 +329,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         <Halo
           visual={visual}
           size={layout.halo.w}
+          height={layout.halo.h}
           ring={layout.halo.ring}
           palette={p}
           dimmed={dimmed}

@@ -30,8 +30,12 @@ export const SPEED_UNIT_PT = 20;
 export const numeralLineHeight = (size: number): number => Math.round(1.2 * size);
 /** Moves the digits' centre (0.643 pt from the box top) onto the box centre (0.6 pt). */
 export const numeralShift = (size: number): number => -0.043 * size;
+/** The clear space between the digits and the unit label under them. */
+export const SPEED_UNIT_GAP_PT = 6;
 /** Where the unit label starts below the box top: under the digits, 6 pt clear. */
-export const unitTop = (size: number): number => numeralLineHeight(size) / 2 + (DIGIT_HEIGHT_EM / 2) * size + 6;
+export const unitTop = (size: number): number => numeralLineHeight(size) / 2 + (DIGIT_HEIGHT_EM / 2) * size + SPEED_UNIT_GAP_PT;
+/** The unit label's line height at `unitPt`. */
+export const unitLineHeight = (unitPt: number): number => Math.round(1.2 * unitPt);
 
 /**
  * The current speed, large and tabular so the number never shifts sideways as it changes. Its box is
@@ -63,7 +67,7 @@ function SpeedReadoutView({ speed, unit = 'mph', color, unitColor, size, numeral
           testID="hud-speed-unit"
           allowFontScaling={false}
           numberOfLines={1}
-          style={[styles.unit, { color: unitColor, fontSize: unitPt, lineHeight: Math.round(1.2 * unitPt) }]}
+          style={[styles.unit, { color: unitColor, fontSize: unitPt, lineHeight: unitLineHeight(unitPt) }]}
         >
           {unit}
         </Text>

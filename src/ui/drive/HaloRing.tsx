@@ -35,8 +35,10 @@ const LAYERS = [0, 1, 2, 3] as const;
 
 export type HaloProps = {
   visual: HaloVisual;
-  /** the halo's square box, pt */
+  /** the halo's square box, pt (with no ring: the numerals' box width) */
   size: number;
+  /** with no ring: the numerals' box height (default `size`) */
+  height?: number;
   /** false: bare numerals (a window too small for the ring) */
   ring: boolean;
   palette: HudPalette;
@@ -47,7 +49,7 @@ export type HaloProps = {
   numerals: (numeralStyle: AnimatedStyle<TextStyle>) => ReactNode;
 };
 
-export function Halo({ visual, size, ring, palette, dimmed, reduceMotion, numerals }: HaloProps) {
+export function Halo({ visual, size, height, ring, palette, dimmed, reduceMotion, numerals }: HaloProps) {
   const g = useMemo(() => haloGeometry(size), [size]);
   const stops = useMemo(() => glowStops(g), [g]);
   const ringColors = useMemo(() => [...ringRamp(palette)], [palette]);
@@ -145,7 +147,7 @@ export function Halo({ visual, size, ring, palette, dimmed, reduceMotion, numera
 
   const c = size / 2;
   return (
-    <Animated.View testID="hud-halo-layer" pointerEvents="none" style={[{ width: size, height: size }, layerStyle]}>
+    <Animated.View testID="hud-halo-layer" pointerEvents="none" style={[{ width: size, height: ring ? size : (height ?? size) }, layerStyle]}>
       {ring ? (
         <View
           testID="hud-halo"
