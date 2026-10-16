@@ -14,7 +14,7 @@ import { CodeEntry } from './CodeEntry';
 import { CodeScanner } from './CodeScanner';
 import type { SetupTarget } from './links';
 import { useDashcamRuntime } from './useDashcam';
-import { useDriveBusy } from './useDriveBusy';
+import { useDriveBusy, useDriveChanges } from './useDriveBusy';
 
 const copy = dashpalCopy.setup;
 
@@ -92,6 +92,7 @@ export function SetupPanel({
   const th = useTheme();
   const runtime = useDashcamRuntime();
   const isBusy = useDriveBusy();
+  const onDriveChange = useDriveChanges();
   const platform = deps.platform ?? (Platform.OS === 'ios' ? 'ios' : 'android');
   const now = deps.now ?? Date.now;
   const [phase, setPhase] = useState<SetupPhase>({ kind: 'idle' });
@@ -109,9 +110,11 @@ export function SetupPanel({
       transport: () => runtime?.transport() ?? null,
       requestBluetooth: () => adapter.requestBluetooth(),
       isBusy,
+      onDriveChange,
       optIn: async () => runtime?.optIn(),
       pair: async (record) => runtime?.pair(record),
       paired: () => runtime?.state().link.paired ?? null,
+      stepAside: () => runtime?.stepAside(),
       resumePaired: async () => runtime?.resumePaired(),
       secrets: deps.secrets ?? dashpalSecrets,
       notePhones: (dashcamId, phones) => runtime?.notePhones(dashcamId, phones),
@@ -121,7 +124,7 @@ export function SetupPanel({
     return (deps.flow ?? createSetupFlow)(base);
     // The flow starts over only on Try again or a new runtime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attempt, deps.adapter, deps.flow, deps.secrets, platform, runtime, isBusy]);
+  }, [attempt, deps.adapter, deps.flow, deps.secrets, platform, runtime, isBusy, onDriveChange]);
 
   useEffect(() => {
     const off = flow.subscribe((p) => {

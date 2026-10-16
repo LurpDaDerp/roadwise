@@ -94,17 +94,26 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
   const paired: PairedDashcam[] = [];
   const log: string[] = [];
   let busy = false;
+  const driveFns = new Set<() => void>();
   const flow = createSetupFlow({
     platform,
     transport: () => t,
     requestBluetooth: async () => o.access ?? 'granted',
     isBusy: () => busy,
+    onDriveChange: (fn) => {
+      driveFns.add(fn);
+      return () => void driveFns.delete(fn);
+    },
     optIn: async () => void log.push('optIn'),
     pair: async (r) => {
       paired.push(r);
       log.push(`pair:${r.dashcamId}`);
     },
     paired: () => o.previous ?? null,
+    stepAside: () => {
+      log.push('stepAside');
+      t.setTarget(null);
+    },
     resumePaired: async () => void log.push('resumePaired'),
     secrets,
     notePhones: (d, n) => void log.push(`notePhones:${d}:${n}`),
@@ -146,7 +155,10 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
       await flush();
       return flow.phase();
     },
-    setBusy: (v) => (busy = v),
+    setBusy: (v) => {
+      busy = v;
+      for (const fn of [...driveFns]) fn();
+    },
   };
   return r;
 }
@@ -639,7 +651,7 @@ describe('replacing, cancelling', () => {
     expect(kinds(r)).not.toContain('confirm_replace');
   });
 
-  test.each(['code', 'confirm_link', 'press_button', 'waiting_busy'] as const)('cancel at %s: no key kept, the held code deleted, the paired DashPal resumed', async (at) => {
+  test.each(['code', 'confirm_link', 'press_button', 'waiting_busy'] as const)('cancel at %s: no key kept, the held code deleted, the paired DashPal never stepped aside or resumed', async (at) => {
     const r = rig({ previous, cams: [{ last: 0xd5, windowOpen: at !== 'press_button' }] });
     if (at === 'waiting_busy') r.cams.get(0xd5)!.busy = true;
     if (at === 'confirm_link') await r.secrets.writePendingCode({ at: r.clock.t, dashcamId: camOf(0xd5), code: formatCode(S, 'label', { dashes: false }) });
@@ -661,8 +673,93 @@ describe('replacing, cancelling', () => {
     expect(r.flow.phase().kind).toBe('cancelled');
     expect(await r.secrets.readPendingAuth()).toBeNull();
     expect(await r.secrets.readPendingCode(r.clock.t)).toBeNull();
-    expect(r.log).toContain('resumePaired');
+    if (at === 'code' || at === 'confirm_link') {
+      // Waiting for the driver only: the paired DashPal's auto-connect was never touched.
+      expect(r.log).not.toContain('stepAside');
+      expect(r.log).not.toContain('resumePaired');
+    } else {
+      expect(r.log.filter((l) => l === 'stepAside' || l === 'resumePaired').at(-1)).toBe('resumePaired');
+    }
     expect(r.paired).toEqual([]);
+  });
+});
+
+describe('the paired DashPal while setup waits, and a drive opening', () => {
+  const same: PairedDashcam = { dashcamId: camOf(0xd5), peripheralId: idOf('android', 0xd5), name: 'DashPal-C4D5', pairedAt: 1, secure: true };
+  const other: PairedDashcam = { dashcamId: camOf(0x01), peripheralId: idOf('android', 0x01), name: 'DashPal-C401', pairedAt: 1, secure: true };
+  const target = (p: PairedDashcam) => ({ peripheralId: p.peripheralId, dashcamId: p.dashcamId, auth: { phoneId: '0102030405060708', kPair: '11'.repeat(32) } });
+  const aside = (r: Rig) => r.log.filter((l) => l === 'stepAside' || l === 'resumePaired');
+
+  test('waiting at the code step keeps the auto-connect; a drive opening ends the setup at once (busy), the auto-connect never touched', async () => {
+    const r = rig({ previous: same });
+    r.t.setTarget(target(same));
+    const done = r.flow.start();
+    await r.until('code');
+    expect(r.t.target()).not.toBeNull();
+    r.setBusy(true);
+    await done;
+    expect(r.flow.phase()).toEqual({ kind: 'busy' });
+    expect(r.t.target()?.dashcamId).toBe(same.dashcamId);
+    expect(aside(r)).toEqual([]);
+  });
+
+  test('a link for the paired DashPal: no pre-warm (its auto-connect keeps that link) while Pair shows; a drive opening ends it', async () => {
+    const r = rig({ previous: same });
+    r.t.setTarget(target(same));
+    await r.secrets.writePendingCode({ at: r.clock.t, dashcamId: same.dashcamId, code: formatCode(S, 'label', { dashes: false }) });
+    const done = r.flow.start({ fromLink: { dashcamId: same.dashcamId } });
+    await r.until('confirm_link');
+    await flush();
+    expect(r.t.target()).not.toBeNull();
+    expect(r.ble.calls.filter((c) => c.startsWith('scan:'))).toEqual([]);
+    r.setBusy(true);
+    await done;
+    expect(r.flow.phase()).toEqual({ kind: 'busy' });
+    expect(aside(r)).toEqual([]);
+  });
+
+  test('Pair on that link: the auto-connect steps aside for the pairing step only, and the setup pairs', async () => {
+    const r = rig({ previous: same });
+    r.t.setTarget(target(same));
+    await r.secrets.writePendingCode({ at: r.clock.t, dashcamId: same.dashcamId, code: formatCode(S, 'label', { dashes: false }) });
+    const done = r.flow.start({ fromLink: { dashcamId: same.dashcamId } });
+    await r.until('confirm_link');
+    r.flow.confirm();
+    await done;
+    expect(r.flow.phase().kind).toBe('done');
+    expect(aside(r)).toEqual(['stepAside']);
+  });
+
+  test('Replace asked: the auto-connect comes back while the driver decides; a drive opening ends the setup (busy)', async () => {
+    const r = rig({ previous: other });
+    const done = r.flow.start();
+    await r.until('code');
+    r.flow.scanned(link(0xd5));
+    await r.until('confirm_replace');
+    expect(aside(r)).toEqual(['stepAside', 'resumePaired']);
+    r.setBusy(true);
+    await done;
+    expect(r.flow.phase()).toEqual({ kind: 'busy' });
+    expect(aside(r)).toEqual(['stepAside', 'resumePaired']);
+    expect(r.cams.get(0xd5)!.authWrites).toEqual([]);
+  });
+
+  test('a drive opening while "press the button" is watched ends the setup at once, not after 60 s, and gives the auto-connect back', async () => {
+    const r = rig({ previous: same, cams: [{ last: 0xd5, windowOpen: false }] });
+    const done = r.flow.start();
+    let t0 = 0;
+    r.flow.subscribe((p) => {
+      if (p.kind !== 'press_button') return;
+      t0 = r.clock.t;
+      r.at(1000, () => r.setBusy(true));
+    });
+    await r.until('code');
+    r.flow.scanned(link(0xd5));
+    await done;
+    expect(kinds(r)).toContain('press_button');
+    expect(r.flow.phase()).toEqual({ kind: 'busy' });
+    expect(r.clock.t - t0).toBeLessThan(5000);
+    expect(aside(r)).toEqual(['stepAside', 'resumePaired']);
   });
 });
 

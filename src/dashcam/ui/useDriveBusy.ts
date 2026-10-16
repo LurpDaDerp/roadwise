@@ -9,3 +9,15 @@ export function useDriveBusy(): () => boolean {
   const ctx = useContext(DriveContext);
   return useCallback(() => ctx?.host.isBusy() ?? false, [ctx]);
 }
+
+/** Subscribe to the drive host's state changes (a drive opening); nothing where none is mounted. */
+export function useDriveChanges(): (fn: () => void) => () => void {
+  const ctx = useContext(DriveContext);
+  return useCallback(
+    (fn: () => void) => {
+      if (!ctx) return () => {};
+      return ctx.host.subscribe(() => fn());
+    },
+    [ctx]
+  );
+}

@@ -74,7 +74,9 @@ export interface DashcamRuntime {
   setBuzzerToo(on: boolean): Promise<void>;
   /** Save a pairing whose key is final in `dashpal.auth` and hand it to the auto-connect. */
   pair(record: PairedDashcam): Promise<void>;
-  /** The paired DashPal's auto-connect again (a setup that stepped it aside ended without a new pairing). */
+  /** The paired DashPal's auto-connect steps aside while a setup's pairing step uses the radio. */
+  stepAside(): void;
+  /** The paired DashPal's auto-connect again (a setup that stepped it aside ended without a new pairing, or waits for the driver). */
   resumePaired(): Promise<void>;
   /** COMMAND 4 if connected (the dashcam deletes this phone's record), cancel the connection, delete the key, clear the pairing. */
   forget(): Promise<void>;
@@ -580,6 +582,10 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
       notify();
       deps.onPairingChanged?.(record);
       await connectPaired(record, auth);
+    },
+
+    stepAside() {
+      getTransport()?.setTarget(null);
     },
 
     async resumePaired() {

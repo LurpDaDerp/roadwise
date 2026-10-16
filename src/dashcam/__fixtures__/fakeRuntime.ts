@@ -72,6 +72,9 @@ export function createFakeDashcamRuntime(initial: Partial<Omit<DashcamState, 'li
       log.push(`pair:${record.dashcamId}`);
       rt.set({ link: { ...state.link, paired: record, lifecycle: 'connecting' } });
     },
+    stepAside() {
+      log.push('stepAside');
+    },
     async resumePaired() {
       log.push('resumePaired');
     },

@@ -112,13 +112,20 @@ export interface SetupDeps {
   requestBluetooth(): Promise<BluetoothAccess>;
   /** The drive host is busy (a drive open or closing). */
   isBusy(): boolean;
+  /**
+   * The drive host's state changed (a drive may have opened): a wait for the driver reads `isBusy`
+   * again and the setup stops. Returns the unsubscribe.
+   */
+  onDriveChange(fn: () => void): () => void;
   /** Record the opt-in (settings + the launch flag). */
   optIn(): Promise<void>;
   /** Save the pairing (its key is final in SecureStore) and hand it to the auto-connect. */
   pair(record: PairedDashcam): Promise<void>;
   /** The currently paired dashcam (re-pairing replaces it). */
   paired(): PairedDashcam | null;
-  /** The paired dashcam's auto-connect again after a setup that did not pair. */
+  /** The paired dashcam's auto-connect steps aside while the pairing step uses the radio. */
+  stepAside(): void;
+  /** The paired dashcam's auto-connect again (a setup that did not pair, or a wait for the driver). */
   resumePaired(): Promise<void>;
   secrets: DashpalSecrets;
   /** This phone's own setup saw this phone count (the new-phone notice does not count it). */
@@ -211,6 +218,10 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
   let preferId: string | undefined;
   /** the phone's next X25519 key pair, drawn ahead (one per request) */
   let ready: { a: Uint8Array; A: Uint8Array } | null = null;
+  /** the paired DashPal's auto-connect is stepped aside (given back when setup ends without pairing) */
+  let stepped = false;
+  /** PAIR_FIN was sent: the dashcam may have stored the pairing, so a drive opening no longer stops it */
+  let finSent = false;
 
   function report(e: unknown, ctx: string): void {
     try {
@@ -231,9 +242,41 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     }
   }
 
+  /** A drive opened: setup stops (until PAIR_FIN; the few seconds after it end by themselves). */
+  const driveOpened = (): boolean => !finSent && deps.isBusy();
+  const stopNow = (): boolean => cancelled || driveOpened();
+
   const check = (): void => {
     if (cancelled) throw new Cancelled();
+    if (driveOpened()) throw new DriveOpen();
   };
+
+  /** The paired DashPal's auto-connect steps aside for the radio work (none paired: nothing to do). */
+  function stepAside(): void {
+    if (stepped || !deps.paired()) return;
+    deps.stepAside();
+    stepped = true;
+  }
+
+  /** The paired DashPal's auto-connect comes back. */
+  async function giveBack(): Promise<void> {
+    if (!stepped) return;
+    stepped = false;
+    await deps.resumePaired().catch((e: unknown) => report(e, 'resume'));
+  }
+
+  /** Every wait for the driver ends (Cancel, or a drive opened): the caller's check() says which. */
+  function wakeWaiters(): void {
+    const cw = codeWaiter;
+    codeWaiter = null;
+    cw?.(null);
+    const fw = confirmWaiter;
+    confirmWaiter = null;
+    fw?.(false);
+    const rw = replaceWaiter;
+    replaceWaiter = null;
+    rw?.(false);
+  }
 
   async function release(t: DashcamTransport, id: string | null): Promise<void> {
     if (id === null) return;
@@ -317,7 +360,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     drawKeys();
     const started = deps.now();
     try {
-      while (!cancelled) {
+      while (!stopNow()) {
         if (named && first !== null) break;
         const at = deps.now();
         if (at - started >= SEARCH_MS) break;
@@ -352,7 +395,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     });
     stopScan = session.stop;
     try {
-      while (!cancelled && !open && deps.now() < until) await deps.sleep(POLL_MS);
+      while (!stopNow() && !open && deps.now() < until) await deps.sleep(POLL_MS);
     } finally {
       stopScan = null;
       await session.stop();
@@ -463,9 +506,12 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       if (before && before.dashcamId !== info.dashcamId && !replaceAsked) {
         replaceAsked = true;
         set({ kind: 'confirm_replace', from: before.name, to: info.name });
+        // The driver's answer may take a while: the paired DashPal's link comes back meanwhile.
+        await giveBack();
         const yes = await waitYes('replace');
         check();
         if (!yes) throw new Cancelled();
+        stepAside();
         continue; // the link may have dropped meanwhile: INFO again
       }
       if (!info.pairingOpen && !holdsClaim()) {
@@ -588,6 +634,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       }
       check();
       set({ kind: 'finishing', name: info.name, again: aim.again });
+      finSent = true;
       const finWrite = await t.authWrite(c.id, pairFin(keys.proofP));
       const fin = finWrite === 'fault' ? 'fault' : await verdict(t, c.id, RESULT_MS);
       if (fin !== 'fault' && fin !== 'timeout' && fin.kind === 'result' && fin.code === R.OK) return finish(t, c, info, pending, false);
@@ -779,14 +826,24 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       if (running) return;
       running = true;
       cancelled = false;
+      finSent = false;
+      stepped = false;
       preferId = opts.preferId;
       preferred = opts.fromLink?.dashcamId ? nameOf(opts.fromLink.dashcamId) : null;
       let t: DashcamTransport | null = null;
-      let stepped = false;
       let result: SetupPhase | null = null;
       let warm: Promise<ScanHit | null> | null = null;
       let usedLink = false;
+      // A drive opening ends every wait for the driver at once (the paired DashPal's link comes back).
+      let offDrive: (() => void) | null = null;
       try {
+        offDrive = deps.onDriveChange(() => {
+          if (!driveOpened()) return;
+          wakeWaiters();
+          const stop = stopScan;
+          stopScan = null;
+          void stop?.().catch((e: unknown) => report(e, 'stopScan'));
+        });
         if (deps.isBusy()) throw new DriveOpen();
         set({ kind: 'permission' });
         await deps.optIn().catch((e: unknown) => report(e, 'optIn'));
@@ -802,12 +859,9 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
         if (!result && !t) result = { kind: 'unavailable' };
         if (!result && t) {
           await t.start().catch((e: unknown) => report(e, 'start'));
-          // The paired dashcam's auto-connect steps aside while setup runs (re-pairing it, or
-          // replacing it); a setup that does not pair gives it back.
-          if (deps.paired()) {
-            t.setTarget(null);
-            stepped = true;
-          }
+          // The paired dashcam's auto-connect stays on while setup waits for the driver (the code,
+          // Pair, Replace); it steps aside only for the radio work, and comes back when setup ends
+          // without pairing.
           let aim: Aim | null = null;
           if (opts.again) {
             aim = await storedCode();
@@ -819,7 +873,8 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
             if (aim) {
               usedLink = true;
               const tt = t;
-              if (aim.d) warm = prewarm(tt, aim.d);
+              // The paired DashPal itself is not warmed: its auto-connect holds that link meanwhile.
+              if (aim.d && aim.d !== deps.paired()?.dashcamId) warm = prewarm(tt, aim.d);
               set({ kind: 'confirm_link', name: aim.d ? nameOf(aim.d) : 'DashPal' });
               const yes = await waitYes('confirm');
               check();
@@ -832,7 +887,8 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
             check();
             if (!aim) throw new Cancelled();
           }
-          if (deps.isBusy()) throw new DriveOpen();
+          check();
+          stepAside();
           result = await pairWith(t, aim, warm);
         }
       } catch (e) {
@@ -842,11 +898,12 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
           result = { kind: 'failed', reason: 'error', name: null };
         }
       } finally {
+        offDrive?.();
         if (warm) await (warm as Promise<ScanHit | null>).catch(() => null);
         if (t && current) await release(t, current);
         if (result?.kind !== 'done') {
           await deps.secrets.deletePendingAuth().catch((e: unknown) => report(e, 'delete key'));
-          if (stepped) await deps.resumePaired().catch((e: unknown) => report(e, 'resume'));
+          await giveBack();
         }
         // A held link code is used once: done, failed or cancelled.
         if (usedLink || result?.kind === 'done' || result?.kind === 'failed' || cancelled) {
@@ -898,15 +955,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
 
     async cancel() {
       cancelled = true;
-      const cw = codeWaiter;
-      codeWaiter = null;
-      cw?.(null);
-      const fw = confirmWaiter;
-      confirmWaiter = null;
-      fw?.(false);
-      const rw = replaceWaiter;
-      replaceWaiter = null;
-      rw?.(false);
+      wakeWaiters();
       const stop = stopScan;
       stopScan = null;
       await stop?.().catch((e: unknown) => report(e, 'stopScan'));
