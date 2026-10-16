@@ -453,6 +453,29 @@ describe('a drive that never moved is not kept', () => {
     await h.host.stop({ endOpenTrip: false });
   });
 
+  test('a drive that moved but never reached driving speed (a jog at 8 mph) is dropped as not_driven, by hand or on foot', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 3.58 }));
+    clock = T0 + 60_000;
+    expect(await h.host.end()).toEqual({ clientTripId: uuid(1), dropped: 'not_driven' });
+    expect(await readDropNotice(db)).toEqual({ clientTripId: uuid(1), cause: 'manual', reason: 'not_driven', at: T0 + 60_000 });
+    expect(await createTripsRepo(db).get(uuid(1))).toBeNull();
+    // Started while walking to the car, then 10 min on foot with the walk reported: ended and dropped.
+    clock = T0 + 100_000;
+    await h.host.start();
+    h.source.emit('activity', { type: 'walking', confidence: 'high', ts: T0 + 90_000 });
+    await h.host.settled();
+    await feed(h, rows(600, { speedMps: 1.4, t0: T0 + 100_000 }));
+    await h.host.untilIdle();
+    expect(h.host.snapshot().lastFinalized).toMatchObject({ clientTripId: uuid(2), endCause: 'walking', dropped: 'no_movement' });
+    expect(await readDropNotice(db)).toMatchObject({ clientTripId: uuid(2), cause: 'walking' });
+    expect(await createTripsRepo(db).count()).toBe(0);
+    expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
   test('the automatic end with no rows at all: dropped (no GPS) and the notice names the automatic end', async () => {
     const h = build();
     await h.host.boot();

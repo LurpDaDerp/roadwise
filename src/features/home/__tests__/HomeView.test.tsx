@@ -115,6 +115,11 @@ describe('Start drive', () => {
   test.each([
     ['stopped', 'no_movement', 'Drive ended: the car didn’t move for 15 min, so it wasn’t saved.'],
     ['stopped', 'no_gps', 'Drive ended: there was no GPS signal, so it wasn’t saved.'],
+    ['stopped', 'not_driven', 'Drive ended: the car never reached driving speed, so it wasn’t saved.'],
+    ['limit', 'not_driven', 'Drive ended: the car never reached driving speed, so it wasn’t saved.'],
+    ['walking', 'not_driven', 'Drive ended: you walked away before driving, so it wasn’t saved.'],
+    ['manual', 'not_driven', 'The car never reached driving speed, so the drive wasn’t saved.'],
+    ['orphan', 'not_driven', 'A drive left open when RoadWise closed never reached driving speed, so it wasn’t saved.'],
     ['limit', 'no_movement', 'Drive ended: the car didn’t move for 15 min, so it wasn’t saved.'],
     ['limit', 'no_gps', 'Drive ended: there was no GPS signal, so it wasn’t saved.'],
     ['walking', 'no_movement', 'Drive ended: you walked away before driving, so it wasn’t saved.'],

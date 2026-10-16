@@ -8,7 +8,8 @@
 //   4. ONE transaction replaces the events, updates the trip row (`pending`), queues the upload
 //      and purges the samples. It commits or it does not.
 // A payload the contract refuses is stored as `failed` (never uploaded, never left `recording`).
-// A drive that never moved is not finalized at all: `closeDrive` drops it (nothing stored or queued).
+// A drive that never moved, or never reached driving speed, is not finalized at all: `closeDrive`
+// drops it (nothing stored or queued).
 //
 // DashPal (plan §8.4): before any of that, the dashcam's facts for the drive are read once (they
 // read the samples the transaction purges). Its candidates become severe `eyes_off` / `drowsy`
@@ -259,14 +260,17 @@ async function readZones(db: Db): Promise<PrivacyZone[]> {
 }
 
 /**
- * Why a closed drive is not kept: `no_gps` when it never had a valid fix, `no_movement` when the
- * car never moved (`session.ts` "Movement"), whatever ended it. Null: the drive is kept.
+ * Why a closed drive is not kept, whatever ended it: `no_gps` when it never had a valid fix,
+ * `no_movement` when the car never moved (`session.ts` "Movement"), `not_driven` when it moved but
+ * never reached driving speed (`session.droveAt`: two consecutive trusted readings of 10 mph or
+ * more), so a walk or a jog with a drive open earns nothing. Null: the drive is kept.
  */
-export type DropReason = 'no_movement' | 'no_gps';
+export type DropReason = 'no_movement' | 'no_gps' | 'not_driven';
 
-export function dropReason(session: Pick<TripSession, 'moved' | 'validGnssRows'>): DropReason | null {
-  if (session.moved !== null) return null;
-  return session.validGnssRows === 0 ? 'no_gps' : 'no_movement';
+export function dropReason(session: Pick<TripSession, 'moved' | 'validGnssRows' | 'droveAt'>): DropReason | null {
+  if (session.validGnssRows === 0) return 'no_gps';
+  if (session.moved === null) return 'no_movement';
+  return session.droveAt === null ? 'not_driven' : null;
 }
 
 /** A drive that was not kept: nothing stored, uploaded or scored. */
@@ -293,7 +297,8 @@ export async function dropTrip(db: Db, clientTripId: string): Promise<boolean> {
 }
 
 /**
- * The end of every drive: one that never moved is dropped (`dropTrip`), any other is finalized
+ * The end of every drive: one that never moved or never reached driving speed is dropped
+ * (`dropTrip`), any other is finalized
  * (`finalizeTrip`). A retry after a drop finds nothing and drops again; a drive somehow already
  * finalized under the same id is handed back as stored, never deleted.
  */

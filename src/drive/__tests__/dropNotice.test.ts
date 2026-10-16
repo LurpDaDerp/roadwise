@@ -12,6 +12,8 @@ beforeEach(async () => {
 test('the newest drop overwrites the last; clear removes it', async () => {
   expect(await readDropNotice(db)).toBeNull();
   await writeDropNotice(db, { clientTripId: 'a', cause: 'stopped', reason: 'no_movement', at: 1 });
+  expect(parseDropNotice({ clientTripId: 'b', cause: 'walking', reason: 'not_driven', at: 2 })).toEqual({ clientTripId: 'b', cause: 'walking', reason: 'not_driven', at: 2 });
+  expect(parseDropNotice({ clientTripId: 'b', cause: 'walking', reason: 'never_driven', at: 2 })).toBeNull();
   await writeDropNotice(db, { clientTripId: 'b', cause: 'orphan', reason: 'no_gps', at: 2 });
   expect(await readDropNotice(db)).toEqual({ clientTripId: 'b', cause: 'orphan', reason: 'no_gps', at: 2 });
   await clearDropNotice(db);

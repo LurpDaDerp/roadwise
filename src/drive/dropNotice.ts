@@ -16,7 +16,7 @@ export interface DropNotice {
 }
 
 const CAUSES: readonly EndCause[] = ['manual', 'stopped', 'walking', 'orphan', 'limit'];
-const REASONS: readonly DropReason[] = ['no_movement', 'no_gps'];
+const REASONS: readonly DropReason[] = ['no_movement', 'no_gps', 'not_driven'];
 
 /** A stored notice, or null when absent or not one. */
 export function parseDropNotice(raw: unknown): DropNotice | null {

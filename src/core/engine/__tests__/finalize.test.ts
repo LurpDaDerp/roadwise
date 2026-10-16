@@ -1,6 +1,7 @@
 /** @jest-environment node */
 import { T0 } from '@/core/detectors/__fixtures__/rows';
 import { brakeEvent, closedSession, rows, speedingEvent, TZ, uuid } from '@/core/engine/__fixtures__/drives';
+import type { TripSession } from '@/core/engine/engine.types';
 import { closeDrive, dropReason, dropTrip, finalizeTrip, INVALID_PAYLOAD_SYNC_ERROR, isDropped, normaliseZone, sanitizeEvent } from '@/core/engine/finalize';
 import { PRIVACY_ZONES_KEY } from '@/core/engine/privacy';
 import { appendRow, closeAtLastMovement, closeSession, createSession } from '@/core/engine/session';
@@ -237,6 +238,43 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
     expect(dropReason(s)).toBe('no_gps');
     expect(await closeDrive(closeSession(s, T0 + 60_000, 'manual'), deps())).toEqual({ dropped: 'no_gps', clientTripId: ID });
     expect(await createTripsRepo(db).get(ID)).toBeNull();
+  });
+
+  test('a drive that moved but never reached driving speed is not_driven and dropped, however it ended', async () => {
+    // 8 mph for 10 min (a run, or a crawl in a lot): movement on pace, never 10 mph.
+    const walk = rows(600, { speedMps: 3.58 });
+    for (const [label, close] of [
+      ['manual', (s: TripSession) => closeSession(s, T0 + 600_000, 'manual')],
+      ['stopped', (s: TripSession) => closeAtLastMovement(s, 'stopped')],
+      ['walking', (s: TripSession) => closeAtLastMovement(s, 'walking', { notAfter: T0 + 300_000 })],
+      ['orphan', (s: TripSession) => closeAtLastMovement(s, 'orphan')],
+    ] as const) {
+      await createTripsRepo(db).insert({ client_trip_id: ID, started_at: T0, tz: TZ, status: 'recording' }, T0);
+      const s = createSession({ clientTripId: ID, startedAt: T0 });
+      for (const r of walk) appendRow(s, r, false);
+      expect(s.moved).not.toBeNull();
+      expect(s.droveAt).toBeNull();
+      expect(dropReason(s)).toBe('not_driven');
+      expect([label, await closeDrive(close(s), deps())]).toEqual([label, { dropped: 'not_driven', clientTripId: ID }]);
+      expect(await createTripsRepo(db).get(ID)).toBeNull();
+    }
+    expect((await db.execute('SELECT * FROM sync_queue')).rows).toEqual([]);
+  });
+
+  test('driving speed needs trusted readings: 30 mph rows rated at 3 m/s are not_driven; at -1 (no rating) they count', () => {
+    const untrusted = createSession({ clientTripId: ID, startedAt: T0 });
+    for (const r of rows(60, { over: () => ({ speedAcc: 3 }) })) appendRow(untrusted, r, false);
+    expect(dropReason(untrusted)).toBe('not_driven');
+    expect(untrusted.droveAt).toBeNull();
+    const unrated = createSession({ clientTripId: ID, startedAt: T0 });
+    for (const r of rows(60, { over: () => ({ speedAcc: -1 }) })) appendRow(unrated, r, false);
+    expect(dropReason(unrated)).toBeNull();
+  });
+
+  test('no_gps outranks the rest, and no_movement outranks not_driven', () => {
+    expect(dropReason({ validGnssRows: 0, moved: null, droveAt: null })).toBe('no_gps');
+    expect(dropReason({ validGnssRows: 5, moved: null, droveAt: null })).toBe('no_movement');
+    expect(dropReason({ validGnssRows: 5, moved: null, droveAt: T0 })).toBe('no_movement');
   });
 
   test('a drive that moved is kept (dropReason null) and finalized as before', async () => {
