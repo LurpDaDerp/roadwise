@@ -42,7 +42,7 @@ test('rebuildFromSamples replays the durable rows into a session with no pending
   expect(await rebuildFromSamples(db, (await createTripsRepo(db).get(uuid(2)))!, base())).toBeNull();
 });
 
-test('a rebuilt session equals the live one on droveAt, lastSpeed, marks, moved and the movement state', async () => {
+test('a rebuilt session equals the live one on droveAt, lastDroveAt, lastSpeed, marks, moved and the movement state', async () => {
   // 40 rows parked, then 200 driving: the live engine's appendRow over the same rows.
   const list = rows(240, { over: (i) => (i < 40 ? { speed: 0 } : {}) });
   const trips = createTripsRepo(db);
@@ -53,6 +53,8 @@ test('a rebuilt session equals the live one on droveAt, lastSpeed, marks, moved 
   for (const r of list) appendRow(live, r, false);
   expect(rebuilt.droveAt).toBe(T0 + 41_000);
   expect(rebuilt.droveAt).toBe(live.droveAt);
+  expect(rebuilt.lastDroveAt).toBe(T0 + 239_000);
+  expect(rebuilt.lastDroveAt).toBe(live.lastDroveAt);
   expect(rebuilt.lastSpeed).toEqual(live.lastSpeed);
   expect(rebuilt.marks).toEqual(live.marks);
   expect(rebuilt.moved).toEqual(live.moved);

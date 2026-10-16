@@ -131,6 +131,12 @@ export interface TripSession {
    * GPS speed of 10 mph or more): the car reached driving speed. Null until then; never changes after.
    */
   droveAt: number | null;
+  /**
+   * `ts` of the latest row that completed two consecutive driving rows: the car was last at driving
+   * speed. Null until `droveAt`, which it equals at first. An on-foot report is void once it is
+   * later than the walk began (`machine.ts`).
+   */
+  lastDroveAt: number | null;
   /** The last known GPS speed (any accuracy) and its row `ts`; null before the first. */
   lastSpeed: Readonly<{ mps: number; ts: number }> | null;
   motion: Readonly<MotionTrack>;

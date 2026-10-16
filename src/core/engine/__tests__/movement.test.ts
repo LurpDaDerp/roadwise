@@ -235,9 +235,18 @@ describe('driving speed (droveAt), the last known speed and the kept marks', () 
     expect(run([fast(0, 0), carLike(1), fast(2, 10)]).droveAt).toBeNull();
   });
 
-  test('droveAt never changes once set, whatever follows', () => {
+  test('droveAt never changes once set, whatever follows; lastDroveAt follows the latest pair', () => {
     const s = run([fast(0, 0), fast(1, 5), at(2, 5, { speed: 0 }), fast(3, 10), fast(4, 15)]);
     expect(s.droveAt).toBe(T0 + 1000);
+    expect(s.lastDroveAt).toBe(T0 + 4000);
+    // One driving row after a stop is not a pair: lastDroveAt keeps the pair before it.
+    appendRow(s, at(5, 15, { speed: 0 }), false);
+    appendRow(s, fast(6, 20), false);
+    expect(s.lastDroveAt).toBe(T0 + 4000);
+    appendRow(s, fast(7, 25), false);
+    expect(s.lastDroveAt).toBe(T0 + 7000);
+    expect(run([fast(0, 0)]).lastDroveAt).toBeNull();
+    expect(run([fast(0, 0), fast(1, 5)]).lastDroveAt).toBe(T0 + 1000);
   });
 
   test('lastSpeed follows every known speed, any accuracy, and keeps through a fix-less row', () => {
@@ -278,9 +287,9 @@ describe('driving speed (droveAt), the last known speed and the kept marks', () 
     expect(motion.prevDrive).toBe(true);
   });
 
-  test('a fresh session has no marks, no droveAt, no lastSpeed, and prevDrive false', () => {
+  test('a fresh session has no marks, no droveAt, no lastDroveAt, no lastSpeed, and prevDrive false', () => {
     const s = createSession({ clientTripId: 'x', startedAt: T0 });
-    expect(s).toMatchObject({ marks: [], droveAt: null, lastSpeed: null, moved: null });
+    expect(s).toMatchObject({ marks: [], droveAt: null, lastDroveAt: null, lastSpeed: null, moved: null });
     expect(s.motion.prevDrive).toBe(false);
   });
 });

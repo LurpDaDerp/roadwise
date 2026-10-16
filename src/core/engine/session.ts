@@ -196,6 +196,7 @@ export function createSession(start: SessionStart): TripSession {
     moved: null,
     marks: NO_MARKS,
     droveAt: null,
+    lastDroveAt: null,
     lastSpeed: null,
     motion: EMPTY_MOTION,
     cut: false,
@@ -242,14 +243,17 @@ export function appendRow(session: TripSession, row: FeatureRow, unsafe: boolean
 }
 
 /**
- * The last known speed, and `droveAt` on the second of two consecutive driving rows. Replaces
- * `session.lastSpeed` and `session.motion`; never mutates either.
+ * The last known speed, and `droveAt` (the first) and `lastDroveAt` (the latest) on the second of
+ * two consecutive driving rows. Replaces `session.lastSpeed` and `session.motion`; never mutates either.
  */
 function noteDriving(session: TripSession, row: FeatureRow): void {
   const speed = knownSpeed(row);
   if (speed !== null) session.lastSpeed = Object.freeze({ mps: speed, ts: row.ts });
   const d = drivingRow(row);
-  if (session.droveAt === null && d && session.motion.prevDrive) session.droveAt = row.ts;
+  if (d && session.motion.prevDrive) {
+    if (session.droveAt === null) session.droveAt = row.ts;
+    session.lastDroveAt = row.ts;
+  }
   if (session.motion.prevDrive !== d) session.motion = Object.freeze({ ...session.motion, prevDrive: d });
 }
 
