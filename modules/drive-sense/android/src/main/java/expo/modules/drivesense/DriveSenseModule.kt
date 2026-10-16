@@ -242,12 +242,13 @@ class DriveSenseModule : Module() {
     }
 
     // The navigation button (README §2): which of these packages can be launched (installed, enabled,
-    // with a launcher activity), in the order given, with the app's own label. Only packages the
-    // manifest's <queries> names are visible; any failure skips that package.
+    // with a launcher activity), in the order given, with the app's own label. Only the navigation
+    // apps (NavPackages, the manifest's <queries>) are looked up; any failure skips that package.
     AsyncFunction("listInstalledApps") { packages: List<String> ->
       val pm = context.packageManager
       val out = ArrayList<Map<String, Any?>>()
       for (pkg in packages) {
+        if (pkg !in NavPackages.ALLOWED) continue
         try {
           if (pm.getLaunchIntentForPackage(pkg) == null) continue
           @Suppress("DEPRECATION")
@@ -261,12 +262,12 @@ class DriveSenseModule : Module() {
       out
     }
 
-    // Opens the app as a launcher tap does (a route in progress is resumed, not reset). False when it
-    // has no launch intent or the start fails.
+    // Opens the app as a launcher tap does (a route in progress is resumed, not reset). False for a
+    // package outside NavPackages, when it has no launch intent or the start fails.
     AsyncFunction("launchApp") { pkg: String ->
       try {
         val ctx = context
-        val intent = ctx.packageManager.getLaunchIntentForPackage(pkg)
+        val intent = if (pkg in NavPackages.ALLOWED) ctx.packageManager.getLaunchIntentForPackage(pkg) else null
         if (intent == null) {
           false
         } else {

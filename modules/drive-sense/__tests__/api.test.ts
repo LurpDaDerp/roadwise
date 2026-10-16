@@ -320,6 +320,9 @@ describe('bridge validation', () => {
     ['launchApp', ['waze']],
     ['launchApp', ['com..waze']],
     ['launchApp', [42]],
+    ['launchApp', ['com.evil.app']],
+    ['launchApp', ['com.android.settings']],
+    ['listInstalledApps', [['com.waze', 'com.evil.app']]],
   ] as const)('%s rejects bad arguments without calling native', async (method, args) => {
     const fn = DriveSense[method] as (...a: readonly unknown[]) => Promise<unknown>;
     await expect(fn(...args)).rejects.toThrow(`DriveSense.${method}`);

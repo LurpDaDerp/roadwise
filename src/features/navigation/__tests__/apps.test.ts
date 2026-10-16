@@ -1,6 +1,7 @@
 /** @jest-environment node */
 // The navigation apps (design §7.1-§7.3): the catalogue's invariants, the iOS and Android lists it
 // must equal, finding and opening an app on each platform, and the saved choice.
+import { NAV_APP_PACKAGES } from '@drive-sense';
 import type { ExpoConfig, ConfigContext } from 'expo/config';
 
 import appConfig from '../../../../app.config';
@@ -65,6 +66,10 @@ describe('the catalogue', () => {
     const manifest = readFileSync(join(__dirname, '..', '..', '..', '..', 'modules', 'drive-sense', 'android', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
     const queries = /<queries>([\s\S]*?)<\/queries>/.exec(manifest)?.[1] ?? '';
     expect([...queries.matchAll(/<package android:name="([^"]+)" \/>/g)].map((m) => m[1])).toEqual([...NAV_ANDROID_PACKAGES]);
+  });
+
+  test('Android: the bridge accepts exactly the catalogue packages, in order (any other is refused)', () => {
+    expect([...NAV_APP_PACKAGES]).toEqual([...NAV_ANDROID_PACKAGES]);
   });
 });
 

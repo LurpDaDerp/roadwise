@@ -30,6 +30,7 @@ import {
   thermalLevelSchema,
   tripReminderStatusSchema,
 } from './rowSchema';
+import { isNavAppPackage } from './navPackages';
 import type { AudioOutputState, DriveSenseApi, DriveSenseEvent, DriveSenseEvents, DriveSenseSyncMethod, Subscription } from './types';
 
 export * from './types';
@@ -42,6 +43,7 @@ export { extractSecond, initialExtractState } from './extract/extract';
 export { gravityFilter, initialGravityState, androidAccelToReference } from './extract/gravityFilter';
 export { runSelfTest, runVector } from './extract/vectors';
 export { REMINDER } from './reminder/policy';
+export { isNavAppPackage, NAV_APP_PACKAGES } from './navPackages';
 export {
   diffReminderSelfTest,
   matchReminderRow,
@@ -136,7 +138,8 @@ function safeJson(v: unknown): string {
 /** `markLockProof` takes a delay up to a minute; native keeps it as a proof only at 15 s or less. */
 const MARK_LOCK_PROOF_MAX_MS = 60_000;
 
-const isPackageName = (v: unknown): v is string => typeof v === 'string' && v.length <= 255 && PACKAGE_NAME.test(v);
+/** A well-formed package name that is one of the navigation apps (`navPackages.ts`). */
+const isPackageName = (v: unknown): v is string => typeof v === 'string' && v.length <= 255 && PACKAGE_NAME.test(v) && isNavAppPackage(v);
 
 const voidResult = z.union([z.undefined(), z.null()]).transform(() => undefined);
 const ok = <S extends z.ZodType>(schema: S, v: unknown) => schema.safeParse(v).success;

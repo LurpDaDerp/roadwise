@@ -7,6 +7,7 @@
 // reminder (README "Forgot-to-start reminder") is held to "it only notifies": no reminder file
 // can reach a capture start, and its policy mirrors src/reminder/policy.ts.
 import * as CONSTANTS from '../src/extract/constants';
+import { NAV_APP_PACKAGES } from '../src/navPackages';
 import { REMINDER } from '../src/reminder/policy';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
@@ -842,6 +843,13 @@ describe('native-android: RoadWise in front (AppVisibility)', () => {
     expect(launch).toMatch(/\(appContext\.currentActivity \?: ctx\)\.startActivity\(intent\)\s*true/);
     expect(launch).toMatch(/catch \(_: Exception\) \{\s*false\s*\}/);
     expect(MANIFEST()).toMatch(/<queries>[\s\S]*<package android:name="com\.waze" \/>[\s\S]*<\/queries>/);
+    // only the navigation apps: NavPackages equals the manifest's <queries> and the JS list, in order
+    expect(list).toMatch(/for \(pkg in packages\) \{\s*if \(pkg !in NavPackages\.ALLOWED\) continue\s*try \{/);
+    expect(launch).toMatch(/val intent = if \(pkg in NavPackages\.ALLOWED\) ctx\.packageManager\.getLaunchIntentForPackage\(pkg\) else null\s*if \(intent == null\) \{\s*false/);
+    const allowed = /val ALLOWED: Set<String> = setOf\(([\s\S]*?)\)/.exec(code(kt('NavPackages')))?.[1] ?? '';
+    const queries = /<queries>([\s\S]*?)<\/queries>/.exec(MANIFEST())?.[1] ?? '';
+    expect([...allowed.matchAll(/"([^"]+)"/g)].map((m) => m[1])).toEqual([...NAV_APP_PACKAGES]);
+    expect([...queries.matchAll(/<package android:name="([^"]+)" \/>/g)].map((m) => m[1])).toEqual([...NAV_APP_PACKAGES]);
     expect(MANIFEST()).not.toMatch(/<uses-permission[^>]*QUERY_ALL_PACKAGES/);
     expect(allKotlin()).not.toMatch(/QUERY_ALL_PACKAGES|getInstalledPackages|getInstalledApplications/);
   });
