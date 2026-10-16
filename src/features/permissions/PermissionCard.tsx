@@ -55,7 +55,7 @@ function PermissionCardBody({ board, read, row, more, onSeeAll }: { board: Permi
             accessibilityLabel={copy.moreLabel(more)}
             testID="home-permissions-more"
             style={({ pressed }) => ({
-              minHeight: 36,
+              minHeight: 44,
               paddingHorizontal: t.space.lg,
               flexDirection: 'row',
               alignItems: 'center',

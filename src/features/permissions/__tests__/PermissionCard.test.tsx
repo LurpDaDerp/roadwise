@@ -5,7 +5,7 @@
  */
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Alert, type AlertButton } from 'react-native';
+import { Alert, StyleSheet, type AlertButton } from 'react-native';
 
 import type { TripReminderStatus } from '@drive-sense';
 
@@ -90,6 +90,10 @@ test('one row with the exact line and Allow, plus "2 more · See all", which ope
   expect(screen.getByTestId('home-permissions-more').props.accessibilityLabel).toBe('2 more permissions need a look. See all.');
   fireEvent.press(screen.getByTestId('home-permissions-more'));
   expect(onSeeAll).toHaveBeenCalledTimes(1);
+  // Touch targets are 44 pt or more everywhere.
+  for (const id of ['home-permissions-more', 'home-permission-location']) {
+    expect(StyleSheet.flatten(screen.getByTestId(id).props.style).minHeight).toBeGreaterThanOrEqual(44);
+  }
   expect(screen.queryAllByTestId(/^home-permission-(location|motion|notifications)$/)).toHaveLength(1);
 });
 
