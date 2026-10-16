@@ -30,6 +30,8 @@ function makeDeps(
     lowPower?: boolean | Error;
     driveSense?: DriveSensePort | null;
     sendIntentFails?: boolean;
+    services?: boolean | Error;
+    enableProvider?: Error;
   } = {}
 ) {
   const calls: string[] = [];
@@ -52,6 +54,15 @@ function makeDeps(
         calls.push('location.requestForeground');
         if (opts.fgAfterRequest) fg = opts.fgAfterRequest;
         return fg;
+      },
+      async hasServicesEnabledAsync() {
+        calls.push('location.hasServices');
+        if (opts.services instanceof Error) throw opts.services;
+        return opts.services ?? true;
+      },
+      async enableNetworkProviderAsync() {
+        calls.push('location.enableNetworkProvider');
+        if (opts.enableProvider) throw opts.enableProvider;
       },
     },
     notifications: {
@@ -76,8 +87,8 @@ function makeDeps(
       async openSettings() {
         calls.push('linking.openSettings');
       },
-      async sendIntent(action: string) {
-        calls.push(`linking.sendIntent:${action}`);
+      async sendIntent(action: string, extras?: { key: string; value: unknown }[]) {
+        calls.push(`linking.sendIntent:${action}${extras ? `:${JSON.stringify(extras)}` : ''}`);
         if (opts.sendIntentFails) throw new Error('no activity');
       },
     },
@@ -113,6 +124,7 @@ describe('snapshot', () => {
       location: 'foreground',
       precise: false,
       locationCanAskAgain: false,
+      locationServices: true,
       motion: 'granted',
       notifications: 'undetermined',
       notificationsCanAskAgain: true,
@@ -126,7 +138,15 @@ describe('snapshot', () => {
   it('never prompts', async () => {
     const { deps, calls } = makeDeps('ios', { driveSense: withBattery(createFakeDriveSense()) });
     await createPermissionsAdapter(deps).snapshot();
-    expect(calls.filter((c) => c.includes('request'))).toEqual([]);
+    expect(calls.filter((c) => c.includes('request') || c.includes('enable'))).toEqual([]);
+  });
+
+  it("reads the phone's Location Services switch; an unreadable switch is null", async () => {
+    expect((await createPermissionsAdapter(makeDeps('android', { services: false }).deps).snapshot()).locationServices).toBe(false);
+    expect((await createPermissionsAdapter(makeDeps('ios', { services: true }).deps).snapshot()).locationServices).toBe(true);
+    const failing = await createPermissionsAdapter(makeDeps('ios', { services: new Error('x') }).deps).snapshot();
+    expect(failing.locationServices).toBeNull();
+    expect(failing.location).toBe('foreground');
   });
 
   it('always: background granted; iOS provisional notifications; iOS reads no battery optimisation', async () => {
@@ -291,6 +311,70 @@ describe('settings links', () => {
   });
 });
 
+describe('Location Services', () => {
+  it('Android: the Play-services dialog once, a refusal swallowed; iOS: nothing', async () => {
+    const a = makeDeps('android');
+    await createPermissionsAdapter(a.deps).requestLocationServices();
+    expect(a.calls).toEqual(['location.enableNetworkProvider']);
+    const refused = makeDeps('android', { enableProvider: new Error('declined') });
+    await expect(createPermissionsAdapter(refused.deps).requestLocationServices()).resolves.toBeUndefined();
+    expect(refused.calls).toEqual(['location.enableNetworkProvider']);
+    const i = makeDeps('ios');
+    await createPermissionsAdapter(i.deps).requestLocationServices();
+    expect(i.calls).toEqual([]);
+  });
+
+  it("the Location page on Android, falling back to the app's page; iOS opens the app's page", async () => {
+    const a = makeDeps('android');
+    await createPermissionsAdapter(a.deps).openLocationServicesSettings();
+    expect(a.calls).toEqual(['linking.sendIntent:android.settings.LOCATION_SOURCE_SETTINGS']);
+    const f = makeDeps('android', { sendIntentFails: true });
+    await createPermissionsAdapter(f.deps).openLocationServicesSettings();
+    expect(f.calls).toEqual(['linking.sendIntent:android.settings.LOCATION_SOURCE_SETTINGS', 'linking.openSettings']);
+    const i = makeDeps('ios');
+    await createPermissionsAdapter(i.deps).openLocationServicesSettings();
+    expect(i.calls).toEqual(['linking.openSettings']);
+  });
+});
+
+describe('notification channel page', () => {
+  const extras = JSON.stringify([
+    { key: 'android.provider.extra.APP_PACKAGE', value: 'app.roadwise' },
+    { key: 'android.provider.extra.CHANNEL_ID', value: 'trip_reminder' },
+  ]);
+
+  it('Android: the channel page of this app, with its package and the channel id', async () => {
+    const a = makeDeps('android');
+    await createPermissionsAdapter({ ...a.deps, androidPackage: () => 'app.roadwise' }).openNotificationChannelSettings('trip_reminder');
+    expect(a.calls).toEqual([`linking.sendIntent:android.settings.CHANNEL_NOTIFICATION_SETTINGS:${extras}`]);
+  });
+
+  it("falls back to the app's page when the intent fails or the package is unknown, and on iOS", async () => {
+    const f = makeDeps('android', { sendIntentFails: true });
+    await createPermissionsAdapter({ ...f.deps, androidPackage: () => 'app.roadwise' }).openNotificationChannelSettings('trip_reminder');
+    expect(f.calls).toEqual([`linking.sendIntent:android.settings.CHANNEL_NOTIFICATION_SETTINGS:${extras}`, 'linking.openSettings']);
+    const n = makeDeps('android');
+    await createPermissionsAdapter({ ...n.deps, androidPackage: () => null }).openNotificationChannelSettings('trip_reminder');
+    expect(n.calls).toEqual(['linking.openSettings']);
+    const i = makeDeps('ios');
+    await createPermissionsAdapter({ ...i.deps, androidPackage: () => 'app.roadwise' }).openNotificationChannelSettings('trip_reminder');
+    expect(i.calls).toEqual(['linking.openSettings']);
+  });
+});
+
+describe('camera (read only)', () => {
+  it('maps the three statuses and passes canAskAgain; anything else reads denied', async () => {
+    const read = async (status: string, canAskAgain: boolean) => {
+      const { deps } = makeDeps('ios');
+      return createPermissionsAdapter({ ...deps, camera: { getCameraPermissionsAsync: async () => ({ status, canAskAgain }) } }).camera();
+    };
+    expect(await read('granted', true)).toEqual({ access: 'granted', canAskAgain: true });
+    expect(await read('undetermined', true)).toEqual({ access: 'undetermined', canAskAgain: true });
+    expect(await read('denied', false)).toEqual({ access: 'denied', canAskAgain: false });
+    expect(await read('restricted', false)).toEqual({ access: 'denied', canAskAgain: false });
+  });
+});
+
 describe('requestAlwaysForReminder — the forgot-to-start reminder only', () => {
   it('iOS: the one Always request through drive-sense; Android: no location at all', async () => {
     const ds = createFakeDriveSense({ platform: 'ios' });
@@ -406,5 +490,29 @@ describe('Bluetooth (DashPal)', () => {
     expect(no.calls.some((c) => c.startsWith('request') || c.startsWith('bt.'))).toBe(false);
     const yes = bt('android', { level: 34, checks: { 'android.permission.BLUETOOTH_SCAN': true, 'android.permission.BLUETOOTH_CONNECT': true }, started: 'on' });
     expect(await yes.adapter.bluetooth()).toBe('granted');
+  });
+
+  it('the permission read never starts the radio: Android checks scan + connect (fine location on 11 and below)', async () => {
+    const both = { 'android.permission.BLUETOOTH_SCAN': true, 'android.permission.BLUETOOTH_CONNECT': true };
+    const yes = bt('android', { level: 31, checks: both });
+    expect(await yes.adapter.bluetoothPermission()).toBe('granted');
+    expect(yes.calls).toEqual(['check:android.permission.BLUETOOTH_SCAN', 'check:android.permission.BLUETOOTH_CONNECT']);
+    const one = bt('android', { level: 34, checks: { 'android.permission.BLUETOOTH_SCAN': true } });
+    expect(await one.adapter.bluetoothPermission()).toBe('undetermined');
+    const old = bt('android', { level: 30, checks: { 'android.permission.ACCESS_FINE_LOCATION': true } });
+    expect(await old.adapter.bluetoothPermission()).toBe('granted');
+    expect(old.calls).toEqual(['check:android.permission.ACCESS_FINE_LOCATION']);
+    for (const c of [...yes.calls, ...one.calls, ...old.calls]) expect(c.startsWith('bt.') || c.startsWith('request')).toBe(false);
+  });
+
+  it('iOS permission read: allowed or not (a radio switched off is still allowed), never creating the manager', async () => {
+    const none = bt('ios');
+    expect(await none.adapter.bluetoothPermission()).toBe('undetermined');
+    expect(none.calls).toEqual(['bt.radio']);
+    expect(await bt('ios', { radio: 'unauthorized' }).adapter.bluetoothPermission()).toBe('denied');
+    expect(await bt('ios', { radio: 'unsupported' }).adapter.bluetoothPermission()).toBe('unavailable');
+    expect(await bt('ios', { radio: 'on' }).adapter.bluetoothPermission()).toBe('granted');
+    expect(await bt('ios', { radio: 'off' }).adapter.bluetoothPermission()).toBe('granted');
+    expect(await bt('ios', { radio: 'turning_off' }).adapter.bluetoothPermission()).toBe('granted');
   });
 });

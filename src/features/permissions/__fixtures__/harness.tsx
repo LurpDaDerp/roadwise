@@ -10,7 +10,16 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 
-import type { BluetoothAccess, Grant, LocationAccess, PermissionSnapshot, PermissionsAdapter, Readiness } from '@/core/permissions';
+import type {
+  BluetoothAccess,
+  BluetoothPermission,
+  CameraAccess,
+  Grant,
+  LocationAccess,
+  PermissionSnapshot,
+  PermissionsAdapter,
+  Readiness,
+} from '@/core/permissions';
 import type { Db, DbResult } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
 import { DataProvider } from '@/data/queries/context';
@@ -23,6 +32,7 @@ export const snap = (over: Partial<PermissionSnapshot> = {}): PermissionSnapshot
   location: 'foreground',
   precise: true,
   locationCanAskAgain: true,
+  locationServices: true,
   motion: 'granted',
   notifications: 'granted',
   notificationsCanAskAgain: true,
@@ -39,6 +49,10 @@ export interface FakeAdapter extends PermissionsAdapter {
   failReads: boolean;
   /** What `bluetooth()` reads now; `requestBluetooth()` moves it to `answers.bluetooth` (default granted). */
   bt: BluetoothAccess;
+  /** What `bluetoothPermission()` reads now. */
+  btPermission: BluetoothPermission;
+  /** What `camera()` reads now. */
+  cam: CameraAccess;
 }
 
 export function fakeAdapter(
@@ -50,6 +64,8 @@ export function fakeAdapter(
     bluetooth?: BluetoothAccess;
     bluetoothNow?: BluetoothAccess;
     always?: 'always' | 'whenInUse' | 'denied';
+    /** `requestLocationServices()` turns Location Services on (the dialog accepted). */
+    servicesOnRequest?: boolean;
   } = {}
 ): FakeAdapter {
   const a: FakeAdapter = {
@@ -57,6 +73,8 @@ export function fakeAdapter(
     current: initial,
     failReads: false,
     bt: answers.bluetoothNow ?? 'undetermined',
+    btPermission: 'granted',
+    cam: { access: 'undetermined', canAskAgain: true },
     bluetooth: jest.fn(async () => {
       a.log.push('bluetooth');
       return a.bt;
@@ -100,6 +118,24 @@ export function fakeAdapter(
     }),
     openBatterySettings: jest.fn(async () => {
       a.log.push('openBatterySettings');
+    }),
+    requestLocationServices: jest.fn(async () => {
+      a.log.push('requestLocationServices');
+      if (answers.servicesOnRequest) a.current = { ...a.current, locationServices: true };
+    }),
+    openLocationServicesSettings: jest.fn(async () => {
+      a.log.push('openLocationServicesSettings');
+    }),
+    openNotificationChannelSettings: jest.fn(async (channelId: string) => {
+      a.log.push(`openNotificationChannelSettings:${channelId}`);
+    }),
+    camera: jest.fn(async () => {
+      a.log.push('camera');
+      return a.cam;
+    }),
+    bluetoothPermission: jest.fn(async () => {
+      a.log.push('bluetoothPermission');
+      return a.btPermission;
     }),
     readiness: jest.fn(async () => {
       a.log.push('readiness');

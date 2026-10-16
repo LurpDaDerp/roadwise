@@ -14,6 +14,8 @@ import { blockedDuringDrive } from '@/drive/leave';
 import { resolveDriveSense, type DriveSensePort } from './driveSensePort';
 import type {
   BatteryOptimization,
+  BluetoothPermission,
+  CameraAccess,
   Grant,
   LocationAccess,
   NotificationAccess,
@@ -33,6 +35,15 @@ export interface LocationPort {
   getForegroundPermissionsAsync(): Promise<LocationAnswer>;
   getBackgroundPermissionsAsync(): Promise<LocationAnswer>;
   requestForegroundPermissionsAsync(): Promise<LocationAnswer>;
+  /** The phone's Location Services switch. */
+  hasServicesEnabledAsync(): Promise<boolean>;
+  /** Android: Google Play services' "turn on device location" dialog (rejects when declined or absent). */
+  enableNetworkProviderAsync(): Promise<void>;
+}
+
+/** expo-camera's permission read (`PermissionResponse`), narrowed. No request: a scanner asks. */
+export interface CameraPort {
+  getCameraPermissionsAsync(): Promise<{ status: string; canAskAgain: boolean }>;
 }
 
 /** The fields of expo-notifications' `NotificationPermissionsStatus` this module reads. */
@@ -56,9 +67,15 @@ export interface BatteryPort {
   isLowPowerModeEnabledAsync(): Promise<boolean>;
 }
 
+/** One Android intent extra (React Native's `Linking.sendIntent`). */
+export interface IntentExtra {
+  key: string;
+  value: string | number | boolean;
+}
+
 export interface LinkingPort {
   openSettings(): Promise<void>;
-  sendIntent(action: string): Promise<void>;
+  sendIntent(action: string, extras?: IntentExtra[]): Promise<void>;
 }
 
 /**
@@ -102,6 +119,10 @@ export interface PermissionsAdapterDeps {
   androidPermissions?: AndroidPermissionsPort;
   /** Default: `Platform.Version` on Android. */
   androidApiLevel?: () => number;
+  /** Default: expo-camera, loaded on first use. */
+  camera?: CameraPort;
+  /** The Android application id, for a notification channel's page. Default: the Expo config's. */
+  androidPackage?: () => string | null;
 }
 
 export interface Readiness {
@@ -123,6 +144,22 @@ export interface PermissionsAdapter {
   openAppSettings(): Promise<void>;
   /** Android's battery-optimisation list; the app's Settings page where that is unavailable. */
   openBatterySettings(): Promise<void>;
+  /**
+   * Android: the Play-services dialog that turns Location Services on, on the driver's tap (it stays
+   * inside RoadWise). A refusal, or no Play services, is swallowed: the next read decides. iOS: nothing.
+   */
+  requestLocationServices(): Promise<void>;
+  /** Android: the phone's Location page; the app's own page where that is unavailable, and on iOS. */
+  openLocationServicesSettings(): Promise<void>;
+  /** Android: one notification channel's page for RoadWise; the app's own page where that fails, and on iOS. */
+  openNotificationChannelSettings(channelId: string): Promise<void>;
+  /** The camera permission, read only: never a prompt. */
+  camera(): Promise<CameraAccess>;
+  /**
+   * The Bluetooth permission alone, read only. Unlike `bluetooth()` it never starts the BLE manager
+   * and never reads the Android radio, so it is safe while no DashPal link runs.
+   */
+  bluetoothPermission(): Promise<BluetoothPermission>;
   readiness(): Promise<Readiness>;
   /** A read, never a prompt (iOS: `undetermined` until the DashPal manager exists). */
   bluetooth(): Promise<BluetoothAccess>;
@@ -142,6 +179,10 @@ export interface PermissionsAdapter {
 
 export const IGNORE_BATTERY_OPTIMIZATION_SETTINGS =
   'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS';
+export const LOCATION_SOURCE_SETTINGS = 'android.settings.LOCATION_SOURCE_SETTINGS';
+export const CHANNEL_NOTIFICATION_SETTINGS = 'android.settings.CHANNEL_NOTIFICATION_SETTINGS';
+export const EXTRA_APP_PACKAGE = 'android.provider.extra.APP_PACKAGE';
+export const EXTRA_CHANNEL_ID = 'android.provider.extra.CHANNEL_ID';
 
 /** iOS `IosAuthorizationStatus.PROVISIONAL`. */
 const IOS_PROVISIONAL = 3;
@@ -159,7 +200,25 @@ const lazyLocation: LocationPort = {
     (await import('expo-location')).getBackgroundPermissionsAsync(),
   requestForegroundPermissionsAsync: async () =>
     (await import('expo-location')).requestForegroundPermissionsAsync(),
+  hasServicesEnabledAsync: async () => (await import('expo-location')).hasServicesEnabledAsync(),
+  enableNetworkProviderAsync: async () => (await import('expo-location')).enableNetworkProviderAsync(),
 };
+
+const lazyCamera: CameraPort = {
+  getCameraPermissionsAsync: async () => (await import('expo-camera')).Camera.getCameraPermissionsAsync(),
+};
+
+/** The application id from the embedded Expo config; null when it is not there. */
+function expoAndroidPackage(): string | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: read only when a channel page opens
+    const Constants = (require('expo-constants') as typeof import('expo-constants')).default;
+    const pkg = Constants.expoConfig?.android?.package;
+    return typeof pkg === 'string' && pkg.length > 0 ? pkg : null;
+  } catch {
+    return null;
+  }
+}
 
 const lazyNotifications: NotificationsPort = {
   getPermissionsAsync: async () => (await import('expo-notifications')).getPermissionsAsync(),
@@ -178,9 +237,9 @@ const rnLinking: LinkingPort = {
     if (blockedDuringDrive()) return;
     await Linking.openSettings();
   },
-  sendIntent: async (action) => {
+  sendIntent: async (action, extras) => {
     if (blockedDuringDrive()) return;
-    await Linking.sendIntent(action);
+    await Linking.sendIntent(action, extras);
   },
 };
 
@@ -214,6 +273,8 @@ function defaultDeps(): PermissionsAdapterDeps {
     bluetooth: lazyBluetooth,
     androidPermissions: rnAndroidPermissions,
     androidApiLevel: () => (typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version) || 0),
+    camera: lazyCamera,
+    androidPackage: expoAndroidPackage,
   };
 }
 
@@ -252,6 +313,11 @@ function toPrecise(platform: PermissionPlatform, fg: LocationAnswer): boolean | 
   if (accuracy === 'full' || accuracy === 'fine') return true;
   if (accuracy === 'reduced' || accuracy === 'coarse') return false;
   return null;
+}
+
+function toCameraAccess(a: { status: string; canAskAgain: boolean }): CameraAccess {
+  const access = a.status === 'granted' ? 'granted' : a.status === 'undetermined' ? 'undetermined' : 'denied';
+  return { access, canAskAgain: a.canAskAgain };
 }
 
 function toNotificationAccess(a: NotificationAnswer): NotificationAccess {
@@ -297,6 +363,15 @@ export function createPermissionsAdapter(
     }
   }
 
+  /** null when the switch could not be read. */
+  async function readServices(): Promise<boolean | null> {
+    try {
+      return await deps.location.hasServicesEnabledAsync();
+    } catch {
+      return null;
+    }
+  }
+
   async function readLowPower(): Promise<boolean | null> {
     try {
       return await deps.battery.isLowPowerModeEnabledAsync();
@@ -308,12 +383,13 @@ export function createPermissionsAdapter(
   return {
     async snapshot() {
       const port = await deps.driveSense();
-      const [{ fg, bg }, notif, motion, batteryOptimization, lowPowerMode] = await Promise.all([
+      const [{ fg, bg }, notif, motion, batteryOptimization, lowPowerMode, locationServices] = await Promise.all([
         readLocation(),
         deps.notifications.getPermissionsAsync(),
         readMotion(port),
         readBattery(port),
         readLowPower(),
+        readServices(),
       ]);
       const location = toLocationAccess(fg, bg);
       return {
@@ -321,6 +397,7 @@ export function createPermissionsAdapter(
         location,
         precise: toPrecise(deps.platform, fg),
         locationCanAskAgain: location === 'foreground' && bg ? bg.canAskAgain : fg.canAskAgain,
+        locationServices,
         motion,
         notifications: toNotificationAccess(notif),
         notificationsCanAskAgain: notif.canAskAgain,
@@ -364,6 +441,56 @@ export function createPermissionsAdapter(
         }
       }
       await deps.linking.openSettings();
+    },
+
+    async requestLocationServices() {
+      if (deps.platform !== 'android') return;
+      try {
+        await deps.location.enableNetworkProviderAsync();
+      } catch {
+        // Declined, or no Play services: the read after the tap says where it stands.
+      }
+    },
+
+    async openLocationServicesSettings() {
+      if (deps.platform === 'android') {
+        try {
+          await deps.linking.sendIntent(LOCATION_SOURCE_SETTINGS);
+          return;
+        } catch {
+          // No such screen on this build: the app's own page.
+        }
+      }
+      await deps.linking.openSettings();
+    },
+
+    async openNotificationChannelSettings(channelId) {
+      const pkg = deps.platform === 'android' ? (deps.androidPackage ?? expoAndroidPackage)() : null;
+      if (pkg !== null) {
+        try {
+          await deps.linking.sendIntent(CHANNEL_NOTIFICATION_SETTINGS, [
+            { key: EXTRA_APP_PACKAGE, value: pkg },
+            { key: EXTRA_CHANNEL_ID, value: channelId },
+          ]);
+          return;
+        } catch {
+          // An OEM build without the channel page: the app's own page.
+        }
+      }
+      await deps.linking.openSettings();
+    },
+
+    async camera() {
+      return toCameraAccess(await (deps.camera ?? lazyCamera).getCameraPermissionsAsync());
+    },
+
+    async bluetoothPermission() {
+      if (deps.platform === 'ios') {
+        // `radio()` never creates the manager; the radio switched off still means allowed.
+        const access = fromRadio(await (deps.bluetooth ?? lazyBluetooth).radio());
+        return access === 'off' ? 'granted' : access;
+      }
+      return (await androidBluetoothGranted()) ? 'granted' : 'undetermined';
     },
 
     async readiness() {

@@ -32,6 +32,7 @@ function snapshot(location: LocationAccess, motion: Grant | null): PermissionSna
     location,
     precise: location === 'foreground' || location === 'always' ? true : null,
     locationCanAskAgain: true,
+    locationServices: true,
     motion,
     notifications: 'granted',
     notificationsCanAskAgain: true,

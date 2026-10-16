@@ -99,6 +99,22 @@ describe('Settings pages', () => {
     expect(sendIntent).toHaveBeenCalledTimes(1);
   });
 
+  test("the Android Location page and the reminder channel's page: nothing opens during a drive, one dialog each", async () => {
+    const s = sinkOf(true);
+    setLeaveSink(s);
+    const adapter = createPermissionsAdapter({ platform: 'android', androidPackage: () => 'app.roadwise' });
+    await adapter.openLocationServicesSettings();
+    await adapter.openNotificationChannelSettings('trip_reminder');
+    expect(sendIntent).not.toHaveBeenCalled();
+    expect(openSettings).not.toHaveBeenCalled();
+    expect(alert).toHaveBeenCalledTimes(2);
+    s.set(false);
+    await adapter.openLocationServicesSettings();
+    await adapter.openNotificationChannelSettings('trip_reminder');
+    expect(sendIntent).toHaveBeenCalledTimes(2);
+    expect(s.begin).not.toHaveBeenCalled();
+  });
+
   test('the friend-code scanner sends the driver to Settings through the adapter (so the guard applies)', () => {
     const src = readFileSync(join(__dirname, '..', '..', 'features', 'friends', 'ScanScreen.tsx'), 'utf8');
     expect(src).toMatch(/defaultPermissionsAdapter\(\)\.openAppSettings\(\)/);

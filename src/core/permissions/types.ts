@@ -27,6 +27,11 @@ export interface PermissionSnapshot {
    */
   locationCanAskAgain: boolean;
   /**
+   * The phone's own Location Services switch (every app's location). null when it could not be
+   * read. iOS reports location `denied` for every app while it is off; Android does not.
+   */
+  locationServices: boolean | null;
+  /**
    * null = could not be checked (drive-sense absent or its read failed) — "can't check", never
    * reported as `unavailable` (a statement about the device) and left out of the server report.
    */
@@ -39,6 +44,19 @@ export interface PermissionSnapshot {
   /** epoch ms, integer */
   checkedAt: number;
 }
+
+/** The camera, read only (it is asked only when a QR scanner opens). */
+export interface CameraAccess {
+  access: 'granted' | 'denied' | 'undetermined';
+  canAskAgain: boolean;
+}
+
+/**
+ * The Bluetooth permission alone, never the radio: iOS `granted` with the radio on or off;
+ * `undetermined` before the DashPal manager exists (iOS) or while Nearby devices is not granted
+ * (Android); `unavailable` with no Bluetooth LE.
+ */
+export type BluetoothPermission = 'granted' | 'denied' | 'undetermined' | 'unavailable';
 
 /** The permissions the 14-day prompt policy tracks. */
 export type PromptPermission = 'location' | 'motion' | 'notifications';
