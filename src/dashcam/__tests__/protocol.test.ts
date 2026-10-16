@@ -10,8 +10,10 @@ import {
   eventName,
   fromHex,
   isDashcamId,
+  INFO_FLAG,
+  LINK_VERSION,
   MAX_FRAME_BYTES,
-  speaksV1,
+  speaksLink,
   toHex,
   type RxFrame,
   type TxFrame,
@@ -41,6 +43,12 @@ interface InfoVector {
   dashcam_id: string;
   name: string;
 }
+interface InfoV2Vector {
+  desc: string;
+  hex: string;
+  fields: { ver: number; proto_min: number; proto_max: number; fw_major: number; fw_minor: number; mac: string; peer_bonded: number; bond_count: number; flags: number; nc: string };
+}
+const V2 = (vectors as unknown as { v2: { link_version: number; info: { len: number; valid: InfoV2Vector[] } } }).v2;
 const V = vectors as unknown as {
   version: number;
   max_frame_len: number;
@@ -143,7 +151,10 @@ test.each(V.info.valid.map((v) => [v.desc, v] as const))('INFO: %s — id, name 
   expect(info!.setupBusy).toBe(((v.fields.flags as number) & 2) === 2);
   expect(info!.fwMajor).toBe(v.fields.fw_major);
   expect(info!.fwMinor).toBe(v.fields.fw_minor);
-  expect(speaksV1(info!)).toBe(true);
+  // link v1 INFO (14 bytes, proto 1): read, never spoken by this app (link v2)
+  expect(speaksLink(info!)).toBe(false);
+  expect(info!.nonce).toBeNull();
+  expect(info!.keyed).toBe(false);
   expect(toHex(encodeInfo(info!))).toBe(v.hex);
 });
 
@@ -164,9 +175,35 @@ test('INFO flags bit 1 (another phone is setting the dashcam up) is in the vecto
   expect(encodeInfo({ ...base, pairingOpen: true, setupBusy: true }).at(-1)).toBe(3);
 });
 
-test('a protocol range without v1 is not spoken', () => {
-  const info = decodeInfo(fromHex(V.info.valid[0]!.hex))!;
-  expect(speaksV1({ ...info, protoMin: 2, protoMax: 3 })).toBe(false);
+test('the link version is the vectors’ (2)', () => {
+  expect(LINK_VERSION).toBe(V2.link_version);
+});
+
+test.each(V2.info.valid.map((v) => [v.desc, v] as const))('INFO v2: %s — 30 bytes with the keyed flag and this connection’s Nc; spoken; encodes back', (_d, v) => {
+  const bytes = fromHex(v.hex);
+  expect(bytes).toHaveLength(V2.info.len);
+  const info = decodeInfo(bytes)!;
+  expect(info.dashcamId).toBe(v.fields.mac);
+  expect([info.protoMin, info.protoMax, info.fwMajor, info.fwMinor]).toEqual([v.fields.proto_min, v.fields.proto_max, v.fields.fw_major, v.fields.fw_minor]);
+  expect(info.peerBonded).toBe(false);
+  expect(info.bondCount).toBe(v.fields.bond_count);
+  expect(info.pairingOpen).toBe((v.fields.flags & INFO_FLAG.PAIRING_OPEN) !== 0);
+  expect(info.setupBusy).toBe((v.fields.flags & INFO_FLAG.SETUP_BUSY) !== 0);
+  expect(info.keyed).toBe((v.fields.flags & INFO_FLAG.KEYED) !== 0);
+  expect(toHex(info.nonce!)).toBe(v.fields.nc);
+  expect(speaksLink(info)).toBe(true);
+  expect(toHex(encodeInfo(info))).toBe(v.hex);
+});
+
+test('a 14-byte INFO still decodes, with no Nc; a range without link v2 is not spoken', () => {
+  const v2 = decodeInfo(fromHex(V2.info.valid[0]!.hex))!;
+  const short = decodeInfo(fromHex(V2.info.valid[0]!.hex).slice(0, 14))!;
+  expect(short.nonce).toBeNull();
+  expect(short.keyed).toBe(true);
+  expect(decodeInfo(fromHex(V2.info.valid[0]!.hex).slice(0, 29))!.nonce).toBeNull();
+  expect(speaksLink({ ...v2, protoMin: 1, protoMax: 1 })).toBe(false);
+  expect(speaksLink({ ...v2, protoMin: 3, protoMax: 3 })).toBe(false);
+  expect(speaksLink({ ...v2, protoMin: 1, protoMax: 3 })).toBe(true);
 });
 
 test('encoders clamp out-of-range values instead of wrapping', () => {

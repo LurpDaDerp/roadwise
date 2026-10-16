@@ -1,5 +1,7 @@
-// The DashPal BLE protocol v1 codec (plan §3.1–3.2; the authoritative copy is the firmware's
+// The DashPal BLE frame codec (plan §3.1–3.2; the authoritative copy is the firmware's
 // `docs/BLE_PROTOCOL.md`, repeated in ./PROTOCOL.md). Pure: bytes in, typed frames out, and back.
+// The link is v2 (INFO `proto` 2): every frame travels sealed (./auth.ts) and the frame inside keeps
+// version byte 1.
 //
 // Rules every decoder here follows:
 // - little-endian; byte 0 = type, byte 1 = protocol version (1);
@@ -14,11 +16,15 @@
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_FRAME_BYTES = 20;
+/** The link version this app speaks (INFO `proto_min`..`proto_max` must include it). */
+export const LINK_VERSION = 2;
+/** The smallest ATT MTU a session works on (a 40-byte sealed notification needs 43). */
+export const SEAL_MIN_MTU = 43;
 
 /** `d5a1xxxx-7b3e-4c8a-9f21-0c6e5a7d2b10`, lowercase (both platforms report lowercase). */
 export const dashpalUuid = (short: string): string => `d5a1${short}-7b3e-4c8a-9f21-0c6e5a7d2b10`;
 
-/** Advertised while the pairing window is closed; holds the four characteristics. */
+/** Advertised while the pairing window is closed; holds the five characteristics. */
 export const DASHPAL_SERVICE = dashpalUuid('0001');
 /** An empty service advertised instead of the DashPal one while the pairing window is open. */
 export const PAIRING_SERVICE = dashpalUuid('00f0');
@@ -26,6 +32,8 @@ export const INFO_CHAR = dashpalUuid('0002');
 export const IDENTIFY_CHAR = dashpalUuid('0003');
 export const TX_CHAR = dashpalUuid('0004');
 export const RX_CHAR = dashpalUuid('0005');
+/** The pairing and session handshakes (open; ./auth.ts). */
+export const AUTH_CHAR = dashpalUuid('0006');
 
 /** The IDENTIFY characteristic's one command byte. */
 export const IDENTIFY_BYTE = 0x01;
@@ -75,9 +83,11 @@ export const RX_LEN: Readonly<Record<number, number>> = {
 };
 
 export const INFO_LEN = 14;
+/** The link v2 INFO: the first 14 bytes and the reader's connection nonce `Nc`. */
+export const INFO_LEN_V2 = 30;
 export const INFO_VERSION = 1;
 /** INFO `flags` bits. */
-export const INFO_FLAG = { PAIRING_OPEN: 0x01, SETUP_BUSY: 0x02 } as const;
+export const INFO_FLAG = { PAIRING_OPEN: 0x01, SETUP_BUSY: 0x02, KEYED: 0x04 } as const;
 
 /** Engine event ids, in the frozen `dms/alerts.py` `EventType` order. Append-only. */
 export const EVENT_NAMES: readonly string[] = [
@@ -313,13 +323,18 @@ export interface DashcamInfo {
   dashcamId: string;
   /** `DashPal-XXXX`: the last two MAC bytes, uppercase hex */
   name: string;
-  /** this link's peer is in the dashcam's bond store */
+  /** link v1's bond flag; always false on link v2 (no Bluetooth bonding) */
   peerBonded: boolean;
+  /** phones paired with the dashcam (0-4) */
   bondCount: number;
   /** INFO flags bit 0: the pairing window is open */
   pairingOpen: boolean;
   /** INFO flags bit 1: another link holds the setup claim (another phone is setting this dashcam up) */
   setupBusy: boolean;
+  /** INFO flags bit 2: the board has a pairing code */
+  keyed: boolean;
+  /** this connection's 16-byte nonce `Nc` (bytes 14-29); null from a shorter INFO */
+  nonce: number[] | null;
 }
 
 /** Why a frame was refused (the firmware's names). */
@@ -531,7 +546,7 @@ export function decodeRx(bytes: ArrayLike<number>): Decoded<RxFrame> {
 
 const hex2 = (n: number): string => n.toString(16).padStart(2, '0');
 
-/** The INFO read: ≥ 14 bytes (trailing ignored), `ver` 1. Null for anything else. */
+/** The INFO read: ≥ 14 bytes (trailing ignored), `ver` 1; `Nc` only from 30 bytes or more. Null for anything else. */
 export function decodeInfo(bytes: ArrayLike<number>): DashcamInfo | null {
   if (bytes.length < INFO_LEN) return null;
   const ver = u8(bytes, 0);
@@ -551,19 +566,31 @@ export function decodeInfo(bytes: ArrayLike<number>): DashcamInfo | null {
     bondCount: u8(bytes, 12),
     pairingOpen: (u8(bytes, 13) & INFO_FLAG.PAIRING_OPEN) !== 0,
     setupBusy: (u8(bytes, 13) & INFO_FLAG.SETUP_BUSY) !== 0,
+    keyed: (u8(bytes, 13) & INFO_FLAG.KEYED) !== 0,
+    nonce: bytes.length >= INFO_LEN_V2 ? Array.from({ length: 16 }, (_, i) => u8(bytes, 14 + i)) : null,
   };
 }
 
-/** The INFO bytes (the dashcam's side; tests and the e2e bench). `setupBusy` defaults to false. */
-export function encodeInfo(info: Omit<DashcamInfo, 'dashcamId' | 'name' | 'setupBusy'> & { setupBusy?: boolean }): number[] {
+/**
+ * The INFO bytes (the dashcam's side; tests). `setupBusy` and `keyed` default to false; with a
+ * `nonce` the 30-byte v2 INFO, else the 14 bytes.
+ */
+export function encodeInfo(
+  info: Omit<DashcamInfo, 'dashcamId' | 'name' | 'setupBusy' | 'keyed' | 'nonce'> & { setupBusy?: boolean; keyed?: boolean; nonce?: ArrayLike<number> | null }
+): number[] {
   const w = new Writer().u8(info.ver).u8(info.protoMin).u8(info.protoMax).u8(info.fwMajor).u8(info.fwMinor);
   for (let i = 0; i < 6; i++) w.u8(info.mac[i] ?? 0);
-  const flags = (info.pairingOpen ? INFO_FLAG.PAIRING_OPEN : 0) | (info.setupBusy ? INFO_FLAG.SETUP_BUSY : 0);
-  return w.u8(info.peerBonded ? 1 : 0).u8(info.bondCount).u8(flags).bytes;
+  const flags = (info.pairingOpen ? INFO_FLAG.PAIRING_OPEN : 0) | (info.setupBusy ? INFO_FLAG.SETUP_BUSY : 0) | (info.keyed ? INFO_FLAG.KEYED : 0);
+  w.u8(info.peerBonded ? 1 : 0).u8(info.bondCount).u8(flags);
+  if (info.nonce) for (let i = 0; i < 16; i++) w.u8(info.nonce[i] ?? 0);
+  return w.bytes;
 }
 
 /** This app speaks protocol v1: the dashcam must accept it. */
 export const speaksV1 = (info: DashcamInfo): boolean => info.protoMin <= PROTOCOL_VERSION && PROTOCOL_VERSION <= info.protoMax;
+
+/** The dashcam speaks this app's link (v2): its INFO `proto` range includes it. */
+export const speaksLink = (info: DashcamInfo): boolean => info.protoMin <= LINK_VERSION && LINK_VERSION <= info.protoMax;
 
 /** A lowercase 12-hex-char dashcam id. */
 export const isDashcamId = (s: unknown): s is string => typeof s === 'string' && /^[0-9a-f]{12}$/.test(s);
