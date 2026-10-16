@@ -282,6 +282,34 @@ describe('Settings › DashPal', () => {
   });
 });
 
+describe('Home: the new-phone card', () => {
+  it('shows while the notice waits (a DashPal paired), OK dismisses it; hidden during a drive or without the notice', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- after the mocks above
+    const { NewPhoneCard } = require('../ui/NewPhoneCard') as typeof import('../ui/NewPhoneCard');
+    const rt = createFakeDashcamRuntime({ newPhone: true, link: { lifecycle: 'connected', paired: PAIRED } });
+    setActiveDashcam(rt);
+    const w = await appWorld();
+    await w.render(<NewPhoneCard />);
+    expect(await screen.findByTestId('home-dashpal-new-phone')).toHaveTextContent(dashpalCopy.screen.newPhone, { exact: false });
+    await tap('home-dashpal-new-phone-ok');
+    expect(rt.log).toContain('dismissNewPhone');
+    expect(screen.queryByTestId('home-dashpal-new-phone')).toBeNull();
+  });
+
+  it.each([
+    ['during a drive', { newPhone: true, link: { lifecycle: 'connected' as const, paired: PAIRED } }, true],
+    ['with no DashPal paired', { newPhone: true, link: { lifecycle: 'unpaired' as const, paired: null } }, false],
+    ['with no notice waiting', { newPhone: false, link: { lifecycle: 'connected' as const, paired: PAIRED } }, false],
+  ])('nothing %s', async (_name, state, hidden) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- after the mocks above
+    const { NewPhoneCard } = require('../ui/NewPhoneCard') as typeof import('../ui/NewPhoneCard');
+    setActiveDashcam(createFakeDashcamRuntime(state));
+    const w = await appWorld();
+    await w.render(<NewPhoneCard hidden={hidden} />);
+    expect(screen.queryByTestId('home-dashpal-new-phone')).toBeNull();
+  });
+});
+
 describe('the setup panel', () => {
   const panel = (s: ReturnType<typeof scriptedFlow>, target: object = {}, platform: 'ios' | 'android' = 'ios') => (
     <SetupPanel target={target} deps={{ adapter: fakeAdapter(), platform, flow: s.make, secrets: memSecrets().secrets }} onClose={() => {}} />
@@ -328,8 +356,8 @@ describe('the setup panel', () => {
     expect(screen.getByTestId('setup-lost-phone')).toHaveTextContent(dashpalCopy.setup.lostPhone);
     await tap('setup-type-instead');
     await act(async () => {
-      fireEvent.changeText(screen.getByTestId('setup-code-input'), '000G-40R4-0M30-E209-185G-R38E-1W60');
-      fireEvent.changeText(screen.getByTestId('setup-name-input'), 'c4d5');
+      screen.getByTestId('setup-code-input').props.onChangeText('000G-40R4-0M30-E209-185G-R38E-1W60');
+      screen.getByTestId('setup-name-input').props.onChangeText('c4d5');
     });
     await tap('setup-code-submit');
     expect(s.answers.at(-1)).toBe('typed:000G-40R4-0M30-E209-185G-R38E-1W60:c4d5');

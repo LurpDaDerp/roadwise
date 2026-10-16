@@ -174,6 +174,18 @@ describe('the permission card slot', () => {
     expect(screen.queryByTestId('perm-card')).toBeNull();
     expect(screen.getByTestId('in-progress')).toBeOnTheScreen();
   });
+
+  test('the DashPal new-phone card sits under the permission card and above the Safety Rating header, never while a drive records', async () => {
+    const dashpal = <Text testID="dashpal-slot">A new phone was paired</Text>;
+    await draw(<HomeView {...props({ permissions: card, dashpal })} />);
+    const tree = JSON.stringify(screen.toJSON());
+    const row = tree.indexOf("Location is off. Drives can't record.");
+    const slot = tree.indexOf('A new phone was paired');
+    expect(slot).toBeGreaterThan(row);
+    expect(tree.indexOf('Safety Rating')).toBeGreaterThan(slot);
+    await draw(<HomeView {...props({ permissions: card, dashpal, recording: true, inProgress: <Text>Drive in progress</Text> })} />);
+    expect(screen.queryByTestId('dashpal-slot')).toBeNull();
+  });
 });
 
 test('the header says so when progress cannot load', async () => {

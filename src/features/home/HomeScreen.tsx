@@ -13,6 +13,7 @@ import { useDrive, useDriveControls } from '@/drive/useDrive';
 import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
 import { sinceDays } from '@/features/drives/format';
 import { homeCard } from '@/features/permissions/board';
+import { NewPhoneCard } from '@/dashcam/ui/NewPhoneCard';
 import { PermissionCard } from '@/features/permissions/PermissionCard';
 import { usePermissionBoard } from '@/features/permissions/usePermissionBoard';
 import {
@@ -172,6 +173,7 @@ export function HomeScreen() {
         recording={recording}
         inProgress={<DriveInProgressBanner />}
         permissions={<PermissionCard board={board} recording={recording} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}
+        dashpal={<NewPhoneCard hidden={recording} />}
         scrollRef={scrollRef}
         refreshing={refreshing}
         onRefresh={() => {
