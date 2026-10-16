@@ -291,7 +291,10 @@ describe('iOS drive-sense module (text)', () => {
     expect(p).toMatch(/guard self\.observers\.isEmpty else \{ return \}/);
     // a background task only on a passcode phone not yet proven, one at a time, under the try cap
     const left = /private func left\(\) \{[\s\S]*?\n {2}\}/.exec(p)?.[0] ?? '';
-    expect(left).toMatch(/leftAt = TimeBase\.nowEpochMs\(\)\s*guard !proven, PhoneState\.lockSignal\(\) == "lagged", task == \.invalid else \{ return \}/);
+    // a departure during a capture is measured (leftAt) but begins no task and uses no try
+    expect(left).toMatch(/leftAt = TimeBase\.nowEpochMs\(\)\s*guard !capturing, !proven, PhoneState\.lockSignal\(\) == "lagged", task == \.invalid else \{ return \}/);
+    expect(p).toMatch(/private var capturing = false/);
+    expect(p).toMatch(/func captureRunning\(_ running: Bool\) \{\s*dispatchPrecondition\(condition: \.onQueue\(\.main\)\)\s*capturing = running\s*\}/);
     expect(left).toMatch(/guard tries < Self\.PROBE_MAX_TRIES else \{ return \}\s*defaults\.set\(tries \+ 1, forKey: Key\.tries\)/);
     expect(left.indexOf('lockSignal() == "lagged"')).toBeLessThan(left.indexOf('beginBackgroundTask'));
     expect(left).toMatch(/beginBackgroundTask\(withName: "drivesense\.lockProbe"\) \{ \[weak self\] in\s*self\?\.endTask\(\)\s*\}/);
@@ -308,6 +311,10 @@ describe('iOS drive-sense module (text)', () => {
     expect(moduleCode()).toMatch(/OnCreate \{\s*EventHub\.shared\.attach\(self\)\s*LockProbe\.shared\.start\(\)\s*\}/);
     expect(moduleCode()).toMatch(/AsyncFunction\("markLockProof"\) \{ \(delayMs: Double, promise: Promise\) in\s*LockProbe\.shared\.mark\(delayMs: delayMs\)\s*promise\.resolve\(nil\)\s*\}\.runOnQueue\(\.main\)/);
     const ctrl = code('CaptureController.swift');
+    const begin = /private func beginCapture\(mode newMode: String\) \{[\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
+    const stop = /func stopCapture\(\) \{[\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
+    expect(begin).toMatch(/capturing = true[\s\S]*LockProbe\.shared\.captureRunning\(true\)/);
+    expect(stop).toMatch(/capturing = false[\s\S]*LockProbe\.shared\.captureRunning\(false\)/);
     expect(ctrl).toMatch(/let lockSignal = PhoneState\.lockSignal\(\)\s*if lockSignal == "unreliable" \{ LockProbe\.shared\.passcodeGone\(\) \}/);
     expect(ctrl).toMatch(/"lockProof": LockProbe\.shared\.proven,/);
     expect(ctrl).toMatch(/"lockDelayMs": LockProbe\.shared\.lockDelayMs\.map \{ NSNumber\(value: \$0\) as Any \} \?\? NSNull\(\),/);

@@ -93,6 +93,8 @@ final class CaptureController {
     watchdog.captureStarted(rowListening: EventHub.shared.isListening("row"))
     // The forgot-to-start reminder learns a drive is open (one direction only).
     TripReminder.shared.onCaptureStarted()
+    // The lock probe spends no background task or try while the drive keeps RoadWise running.
+    LockProbe.shared.captureRunning(true)
   }
 
   func stopCapture() {
@@ -114,6 +116,7 @@ final class CaptureController {
     DriveDisplayBridge.postEnded()
     // No forgot-to-start reminder for the next 10 min.
     TripReminder.shared.onCaptureEnded()
+    LockProbe.shared.captureRunning(false)
   }
 
   func setCaptureRate(_ newRate: String) {

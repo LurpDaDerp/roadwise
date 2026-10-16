@@ -9,8 +9,11 @@
 //
 // Outside a drive the app may be suspended before the report comes, so on a passcode phone that is
 // not proven yet each departure begins one finite background task, ended by the report, by a return
-// to the front or after 16 s, at most 20 times per install. Without a passcode nothing runs and the
-// proof is cleared (`passcodeGone`, from `getState`). Main thread only; no app-delegate hook.
+// to the front or after 16 s, at most 20 times per install. During a capture the drive keeps
+// RoadWise running in the background (`CaptureController` says so through `captureRunning`), so a
+// departure then is still measured but begins no task and uses none of the 20. Without a passcode
+// nothing runs and the proof is cleared (`passcodeGone`, from `getState`). Main thread only; no
+// app-delegate hook.
 import Foundation
 import UIKit
 
@@ -36,6 +39,8 @@ final class LockProbe {
   private var leftAt: Double?
   private var task: UIBackgroundTaskIdentifier = .invalid
   private var endWork: DispatchWorkItem?
+  /// A capture is running: RoadWise stays alive in the background, so no task is needed.
+  private var capturing = false
 
   private init() {}
 
@@ -70,6 +75,12 @@ final class LockProbe {
     record(delayMs)
   }
 
+  /// `CaptureController`, as a capture starts (true) and stops (false).
+  func captureRunning(_ running: Bool) {
+    dispatchPrecondition(condition: .onQueue(.main))
+    capturing = running
+  }
+
   /// No passcode now: the proof, the delay and the try counter go, so a passcode set later starts afresh.
   func passcodeGone() {
     dispatchPrecondition(condition: .onQueue(.main))
@@ -80,7 +91,7 @@ final class LockProbe {
 
   private func left() {
     leftAt = TimeBase.nowEpochMs()
-    guard !proven, PhoneState.lockSignal() == "lagged", task == .invalid else { return }
+    guard !capturing, !proven, PhoneState.lockSignal() == "lagged", task == .invalid else { return }
     let tries = defaults.integer(forKey: Key.tries)
     guard tries < Self.PROBE_MAX_TRIES else { return }
     defaults.set(tries + 1, forKey: Key.tries)
