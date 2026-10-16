@@ -22,6 +22,7 @@ import { createSettingsRepo } from '@/data/db/settings';
 import type { AppStateLike } from '@/data/foreground';
 import { processTimers } from '@/lib/timers';
 
+import { ensureInstallMarker } from './early';
 import { loadDashcamTripFacts, type DashcamTripFacts } from './facts';
 import { asPaired, BT_OPT_IN_KEY, BUZZER_TOO_KEY, PAIRED_KEY, type PairedDashcam } from './keys';
 import { AUDIO_UNKNOWN, createDashcamLink, type AudioOutputProbe, type DashcamLink, type LinkContext, type Lifecycle, type LinkSnapshot } from './link';
@@ -127,6 +128,8 @@ export interface DashcamRuntimeDeps {
   holdAwake?: (ms: number) => void;
   /** Android: the DashPal link service. */
   linkService?: LinkServicePort;
+  /** Write the install marker if missing (`early.ts`); default AsyncStorage. */
+  ensureInstallMarker?: () => Promise<void>;
 }
 
 /** "DashPal drive" so far: the server's rule, without the end-of-drive sync (plan §8.3). */
@@ -383,8 +386,14 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
 
   const ready = (async () => {
     try {
+      void (deps.ensureInstallMarker ?? ensureInstallMarker)().catch((e: unknown) => report(e, 'install marker'));
       const got = await settings.getMany([PAIRED_KEY, BUZZER_TOO_KEY, BT_OPT_IN_KEY]);
       const paired = asPaired(got[PAIRED_KEY]);
+      if (!paired && got[PAIRED_KEY] !== null && got[PAIRED_KEY] !== undefined) {
+        // A link v1 pairing (Bluetooth bonding), or an unreadable record: no DashPal speaks it, so
+        // it goes, with its SecureStore peripheral; the driver sets the DashPal up again.
+        await settings.remove(PAIRED_KEY).catch((e: unknown) => report(e, 'drop v1 pairing'));
+      }
       buzzerToo = got[BUZZER_TOO_KEY] === true;
       btOptIn = got[BT_OPT_IN_KEY] === true;
       loaded = true;

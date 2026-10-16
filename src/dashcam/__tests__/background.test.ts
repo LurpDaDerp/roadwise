@@ -25,7 +25,7 @@ jest.mock('expo-speech', () => jest.requireActual('@/core/alerts/__fixtures__/ex
 const T0 = 1_791_600_000_000;
 const UP = 3_600_000;
 const CAM = 'a4cf12b3c4d5';
-const PAIRED: PairedDashcam = { dashcamId: CAM, peripheralId: 'periph-1', name: 'DashPal-C4D5', pairedAt: T0 - 1 };
+const PAIRED: PairedDashcam = { dashcamId: CAM, peripheralId: 'periph-1', name: 'DashPal-C4D5', pairedAt: T0 - 1, secure: true };
 const TRIP = '11111111-1111-4111-8111-111111111111';
 const INFO = decodeInfo(
   encodeInfo({ ver: 1, protoMin: 1, protoMax: 1, fwMajor: 3, fwMinor: 3, mac: [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5], peerBonded: true, bondCount: 1, pairingOpen: false })

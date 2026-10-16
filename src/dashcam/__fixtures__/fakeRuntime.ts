@@ -4,7 +4,7 @@ import type { PairedDashcam } from '../keys';
 import type { DashcamRuntime, DashcamState } from '../runtime';
 import type { DashcamTransport } from '../transport';
 
-export const PAIRED: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'AA:BB:CC:DD:EE:FF', name: 'DashPal-C4D5', pairedAt: 1 };
+export const PAIRED: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'AA:BB:CC:DD:EE:FF', name: 'DashPal-C4D5', pairedAt: 1, secure: true };
 
 export function linkSnapshot(over: Partial<LinkSnapshot> = {}): LinkSnapshot {
   return {

@@ -43,7 +43,7 @@ import { BOOT_GENERATION, createDashcamStore, type DashcamStore } from '../store
 
 const T0 = 1_791_600_000_000;
 const CAM = 'a4cf12b3c4d5';
-const PAIRED: PairedDashcam = { dashcamId: CAM, peripheralId: 'periph-1', name: 'DashPal-C4D5', pairedAt: T0 - 1 };
+const PAIRED: PairedDashcam = { dashcamId: CAM, peripheralId: 'periph-1', name: 'DashPal-C4D5', pairedAt: T0 - 1, secure: true };
 const TRIP = '11111111-1111-4111-8111-111111111111';
 const MAC = [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5];
 const info = (over: Partial<Omit<DashcamInfo, 'dashcamId' | 'name'>> = {}): DashcamInfo =>

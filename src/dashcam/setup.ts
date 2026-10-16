@@ -248,7 +248,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       unsubscribe();
     }
     if (cancelled) return 'error';
-    const record: PairedDashcam = { dashcamId: info.dashcamId, peripheralId: c.id, name: info.name, pairedAt: deps.now() };
+    const record: PairedDashcam = { dashcamId: info.dashcamId, peripheralId: c.id, name: info.name, pairedAt: deps.now(), secure: true };
     // The setup connection goes; the auto-connect takes the dashcam back on its own (bonded now).
     await release(t, c.id);
     await deps.pair(record);

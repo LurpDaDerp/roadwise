@@ -20,7 +20,7 @@ jest.mock('expo-router', () => ({ useRouter: () => ({ back: jest.fn(), push: jes
 
 afterEach(() => clearQueryClients());
 
-const PAIRED = { dashcamId: 'a1b2c3d4e5f6', peripheralId: 'AA:BB', name: 'DashPal-E5F6', pairedAt: 1 };
+const PAIRED = { dashcamId: 'a1b2c3d4e5f6', peripheralId: 'AA:BB', name: 'DashPal-E5F6', pairedAt: 1, secure: true as const };
 const OFF: TripReminderStatus = { enabled: false, state: 'off', missing: [] };
 
 function deps(adapter: FakeAdapter, reminder: TripReminderStatus | null = OFF): PermissionBoardDeps {

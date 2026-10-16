@@ -23,7 +23,7 @@ const secure = SecureStore as unknown as { getItemAsync: jest.Mock; setItemAsync
 const CAM = 'a4cf12b3c4d5';
 const PID = 'AA:BB:CC:DD:EE:FF';
 const TRIP = '11111111-1111-4111-8111-111111111111';
-const PAIRED: PairedDashcam = { dashcamId: CAM, peripheralId: PID, name: 'DashPal-C4D5', pairedAt: 5 };
+const PAIRED: PairedDashcam = { dashcamId: CAM, peripheralId: PID, name: 'DashPal-C4D5', pairedAt: 5, secure: true };
 const INFO = encodeInfo({ ver: 1, protoMin: 1, protoMax: 1, fwMajor: 3, fwMinor: 3, mac: [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5], peerBonded: true, bondCount: 1, pairingOpen: false });
 
 const flush = async () => {
@@ -120,6 +120,18 @@ test('an opted-in phone without a pairing keeps the launch flag', async () => {
   await r.rt.ready;
   expect(secure.deleteItemAsync).not.toHaveBeenCalledWith(ENABLED_SECURE_KEY, undefined);
   expect(r.rt.state().btOptIn).toBe(true);
+});
+
+test('a link v1 pairing (no secure flag) is dropped at load with its SecureStore peripheral: the app is unpaired', async () => {
+  const { secure: _s, ...v1 } = PAIRED;
+  void _s;
+  await createSettingsRepo(db).set(PAIRED_KEY, v1);
+  const r = rig();
+  await r.rt.ready;
+  expect(r.rt.state().link.lifecycle).toBe('unpaired');
+  expect(await createSettingsRepo(db).get(PAIRED_KEY)).toBeNull();
+  expect(secure.deleteItemAsync).toHaveBeenCalledWith(PERIPHERAL_SECURE_KEY, undefined);
+  expect(r.transportCalls).toBe(0);
 });
 
 test('a paired dashcam: settings loaded, the transport started and connected, the 1 s tick only while in the foreground', async () => {

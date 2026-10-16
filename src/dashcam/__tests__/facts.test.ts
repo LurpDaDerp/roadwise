@@ -30,7 +30,7 @@ beforeEach(async () => {
   await migrate(db);
   n = 0;
   await createTripsRepo(db).insert({ client_trip_id: TRIP, started_at: T0, tz: 'UTC', status: 'recording' }, T0);
-  await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: 'p-1', name: 'DashPal-C4D5', pairedAt: 1 });
+  await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: 'p-1', name: 'DashPal-C4D5', pairedAt: 1, secure: true });
   const store = createDashcamStore(db);
   await store.ensureBoot(CAM, 7, 0);
   await store.offerOffset(CAM, 7, OFFSET, 20);

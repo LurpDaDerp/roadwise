@@ -582,7 +582,7 @@ export class World {
     const settings = createSettingsRepo(raw);
     const peripheralId = platform === 'ios' ? '7D3E1C20-4B6A-4E8F-9A21-0C6E5A7D2B10' : 'A4:CF:12:B3:C4:D5';
     if (o.paired) {
-      const rec: PairedDashcam = { dashcamId: CAM, peripheralId, name: NAME, pairedAt: this.now() };
+      const rec: PairedDashcam = { dashcamId: CAM, peripheralId, name: NAME, pairedAt: this.now(), secure: true };
       await settings.set(PAIRED_KEY, rec);
     }
     if (o.buzzerToo !== undefined) await settings.set('dashcam.buzzerToo', o.buzzerToo);

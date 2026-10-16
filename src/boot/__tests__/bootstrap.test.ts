@@ -237,7 +237,7 @@ test('a handover wipe takes the DashPal events, boots and coverage but keeps the
   await rt.stop();
   await createTripsRepo(db).insert({ client_trip_id: uuid(1), started_at: T0, tz: TZ, status: 'scored' }, T0);
   const settings = createSettingsRepo(db);
-  await settings.set('dashcam.paired', { dashcamId: 'a4cf12b3c4d5', peripheralId: 'p', name: 'DashPal-C4D5', pairedAt: 1 });
+  await settings.set('dashcam.paired', { dashcamId: 'a4cf12b3c4d5', peripheralId: 'p', name: 'DashPal-C4D5', pairedAt: 1, secure: true });
   await settings.set('dashcam.buzzerToo', true);
   await settings.set('dashcam.btOptIn', true);
   await settings.set('dashcam.snoozes', { x: 1 });
@@ -256,7 +256,7 @@ test('a handover wipe takes the DashPal events, boots and coverage but keeps the
   for (const table of ['dashcam_events', 'dashcam_boots', 'dashcam_coverage']) {
     expect((await db.execute(`SELECT COUNT(*) AS n FROM ${table}`)).rows).toEqual([{ n: 0 }]);
   }
-  expect(await settings.get('dashcam.paired')).toEqual({ dashcamId: 'a4cf12b3c4d5', peripheralId: 'p', name: 'DashPal-C4D5', pairedAt: 1 });
+  expect(await settings.get('dashcam.paired')).toEqual({ dashcamId: 'a4cf12b3c4d5', peripheralId: 'p', name: 'DashPal-C4D5', pairedAt: 1, secure: true });
   expect(await settings.get('dashcam.buzzerToo')).toBe(true);
   expect(await settings.get('dashcam.btOptIn')).toBe(true);
   expect(await settings.get('dashcam.snoozes')).toEqual({ x: 1 });

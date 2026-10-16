@@ -203,7 +203,7 @@ describe('finalizeTrip with DashPal facts', () => {
       db = await createSqlJsDb();
       await migrate(db);
       await createSettingsRepo(db).set('device.lastUserId', 'user-1');
-      await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: DEVICE, peripheralId: 'p-1', name: 'DashPal-7E', pairedAt: 1 });
+      await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: DEVICE, peripheralId: 'p-1', name: 'DashPal-7E', pairedAt: 1, secure: true });
       await createTripsRepo(db).insert({ client_trip_id: TRIP, started_at: T0, tz: TZ, local_day: '2023-11-14', status: 'recording' }, T0);
       const store = createDashcamStore(db);
       const offset = T0 - 3_600_000; // the dashcam booted an hour before the drive
@@ -245,7 +245,7 @@ describe('finalizeTrip with DashPal facts', () => {
       db = await createSqlJsDb();
       await migrate(db);
       await createSettingsRepo(db).set('device.lastUserId', 'user-1');
-      await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: DEVICE, peripheralId: 'p-1', name: 'DashPal-7E', pairedAt: 1 });
+      await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: DEVICE, peripheralId: 'p-1', name: 'DashPal-7E', pairedAt: 1, secure: true });
       await createTripsRepo(db).insert({ client_trip_id: TRIP, started_at: T0, tz: TZ, local_day: '2023-11-14', status: 'recording' }, T0);
       const store = createDashcamStore(db);
       const offset = T0 - 3_600_000;

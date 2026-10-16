@@ -115,7 +115,7 @@ test('row 41: crash mid-drive, then recovery finalizes the orphan with its store
   const started = clock - 600_000;
   await createTripsRepo(db).insert({ client_trip_id: uuid(5), started_at: started, tz: TZ, status: 'recording' }, clock);
   await createSamplesRepo(db).appendMany(uuid(5), rows(600, { t0: started }).map((r) => ({ ts: r.ts, row: r })));
-  await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: 'AA:BB', name: 'DashPal-C4D5', pairedAt: 1 });
+  await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: 'AA:BB', name: 'DashPal-C4D5', pairedAt: 1, secure: true });
   const store = createDashcamStore(db);
   for (let i = 0; i < 300; i++) await store.addCoverage(uuid(5), 1, i < 280 ? 1 : 0, null);
   await store.ensureBoot(CAM, 77, 0);
@@ -206,7 +206,7 @@ describe('phone-first sound wiring (bootstrap → the DashPal runtime → drive-
   async function android(paired: boolean, now: () => number = () => clock) {
     restoreOS = jest.replaceProperty(Platform, 'OS', 'android').restore;
     await migrate(db);
-    if (paired) await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: 'A4:CF:12:B3:C4:D5', name: 'DashPal-C4D5', pairedAt: 1 });
+    if (paired) await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: 'A4:CF:12:B3:C4:D5', name: 'DashPal-C4D5', pairedAt: 1, secure: true });
     const ble = createFakeBle();
     ble.addPeripheral({ id: 'A4:CF:12:B3:C4:D5', info: encodeInfo({ ver: 1, protoMin: 1, protoMax: 1, fwMajor: 3, fwMinor: 3, mac: [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5], peerBonded: true, bondCount: 1, pairingOpen: false }) });
     mockTransportRef.current = createBleTransport(ble, { platform: 'android', setTimer: () => 0, clearTimer: () => {} });
@@ -288,7 +288,7 @@ describe('phone-first sound wiring (bootstrap → the DashPal runtime → drive-
   test('iOS: no link service and no wake lock, the probe still decides', async () => {
     restoreOS = jest.replaceProperty(Platform, 'OS', 'ios').restore;
     await migrate(db);
-    await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: '7D3E1C20-4B6A-4E8F-9A21-0C6E5A7D2B10', name: 'DashPal-C4D5', pairedAt: 1 });
+    await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: '7D3E1C20-4B6A-4E8F-9A21-0C6E5A7D2B10', name: 'DashPal-C4D5', pairedAt: 1, secure: true });
     const native = createFakeDriveSense({ platform: 'ios', now: () => clock });
     const rt = await bootstrapApp(deps({ dashpal: native }).deps);
     await rt.dashcam!.ready;

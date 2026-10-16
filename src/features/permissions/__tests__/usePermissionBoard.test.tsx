@@ -27,7 +27,7 @@ afterEach(() => {
   setActiveDashcam(null);
 });
 
-const PAIRED = { dashcamId: 'a1b2c3d4e5f6', peripheralId: 'AA:BB', name: 'DashPal-E5F6', pairedAt: 1 };
+const PAIRED = { dashcamId: 'a1b2c3d4e5f6', peripheralId: 'AA:BB', name: 'DashPal-E5F6', pairedAt: 1, secure: true as const };
 
 function mount(w: AppWorld, deps: PermissionBoardDeps) {
   const wrapper = ({ children }: { children: ReactNode }) => (

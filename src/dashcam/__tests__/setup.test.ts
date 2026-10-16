@@ -134,7 +134,7 @@ test('the closest candidate first (RSSI ≥ −80); identify; "No" moves to the 
   r.flow.answer(true);
   await run;
   expect(r.flow.phase().kind).toBe('done');
-  expect(r.paired).toEqual([{ dashcamId: 'a4cf12b3c4d3', peripheralId: 'MID', name: 'DashPal-C4D3', pairedAt: expect.any(Number) }]);
+  expect(r.paired).toEqual([{ dashcamId: 'a4cf12b3c4d3', peripheralId: 'MID', name: 'DashPal-C4D3', pairedAt: expect.any(Number), secure: true }]);
   // FAR was never tried (too weak).
   expect(r.ble.calls.some((c) => c.includes('FAR'))).toBe(false);
   const from = r.ble.calls.indexOf('connect:MID') - 1;
@@ -172,7 +172,7 @@ test('Android re-pair of a dashcam the OS still holds a bond for: removeBond bef
 });
 
 describe('Android setup that finds the paired DashPal in pairing mode (its OS bond may still work)', () => {
-  const previous: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'P', name: 'DashPal-C4D5', pairedAt: 1 };
+  const previous: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'P', name: 'DashPal-C4D5', pairedAt: 1, secure: true };
   const steps = (r: Rig) => r.ble.calls.filter((c) => /Bond|^connect|^disconnect|0003/.test(c));
 
   test('the dashcam still holds this phone: "No" leaves the OS bond alone, and the pairing gets its auto-connect back', async () => {
@@ -253,7 +253,7 @@ test('iOS: the encrypted TX read is the pairing; a stale iOS bond says to forget
 });
 
 test('nothing in pairing mode within 15 s: "press its button 5 times"; the old pairing gets its auto-connect back', async () => {
-  const previous: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'OLD', name: 'DashPal-C4D5', pairedAt: 1 };
+  const previous: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'OLD', name: 'DashPal-C4D5', pairedAt: 1, secure: true };
   const r = rig({ previous });
   r.t.setTarget({ peripheralId: 'OLD', dashcamId: 'a4cf12b3c4d5' });
   await r.flow.start();
@@ -309,7 +309,7 @@ async function startWith(r: Rig, ids: string[]): Promise<{ run: Promise<void> }>
 }
 
 test('INFO says another phone is setting the dashcam up: no IDENTIFY (it would not beep); INFO re-read every 2 s for 8 s; then "another phone is setting up", released', async () => {
-  const previous: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'OLD', name: 'DashPal-C4D5', pairedAt: 1 };
+  const previous: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'OLD', name: 'DashPal-C4D5', pairedAt: 1, secure: true };
   const r = rig({ previous });
   r.t.setTarget({ peripheralId: 'OLD', dashcamId: 'a4cf12b3c4d5' });
   r.ble.addPeripheral({ id: 'B', info: info(0xe1, { setupBusy: true }) });
