@@ -167,6 +167,47 @@ describe('W1: after driving speed', () => {
     expect(status(h)).toBe('recording');
   });
 
+  test('6b. a report the car was at driving speed around: one driving row before it and one after cancel it', async () => {
+    const h = await started();
+    const fast = path(T0, 0, { n: 60, mps: mph(40) });
+    await feed(h, fast);
+    // The walk "began" at the report's arrival (the end of the row at T0 + 59 s); the next row is the
+    // second driving reading in a row after it began.
+    await report(h, act('walking', T0 + 60_000));
+    await feed(h, path(T0 + 60_000, metresAfter(fast), { n: 1, mps: mph(40) }, { n: 120, mps: 0 }));
+    expect(status(h)).toBe('recording');
+  });
+
+  test('6c. a late report stamped before later driving never ends the drive (as if it had come on time)', async () => {
+    const h = await started();
+    // 60 s at 30 mph, a 15 s light, 140 s at 30 mph, then a stop from T0 + 215 s.
+    const head = path(T0, 0, DRIVE, { n: 15, mps: 0 }, { n: 140, mps: mph(30) });
+    const stop = path(T0 + 215_000, metresAfter(head), { n: 120, mps: 0 });
+    await feed(h, head);
+    const driven = h.engine.session()!.distanceM;
+    await feed(h, stop.slice(0, 5));
+    // A misread stamped at the first light, arriving 5 s into the final stop.
+    await report(h, act('walking', T0 + 65_000));
+    await feed(h, stop.slice(5));
+    expect(status(h)).toBe('recording');
+    // A fresh report of a walk that began in the final stop ends it there, keeping all of the driving.
+    await report(h, act('walking', T0 + 330_000), T0 + 335_000);
+    await feed(h, path(T0 + 335_000, metresAfter(head), { n: 20, mps: 0 }));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 215_000, cut: true });
+    expect(h.finalized[0]!.distanceM).toBeCloseTo(driven, 6);
+  });
+
+  test('6d. a late report whose walk began after the last driving reading still ends the drive', async () => {
+    const h = await started();
+    const head = path(T0, 0, DRIVE, { n: 15, mps: 0 }, { n: 140, mps: mph(30) });
+    const stop = path(T0 + 215_000, metresAfter(head), { n: 60, mps: 0 });
+    await feed(h, [...head, ...stop.slice(0, 30)]);
+    // Stamped 1 s after the last driving reading (the row at T0 + 214 s), arriving 30 s later.
+    await report(h, act('walking', T0 + 215_000));
+    await feed(h, stop.slice(30, 50));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 215_000, cut: true });
+  });
+
   test('7. a misread at a red light (car stopped, fresh fix) ends 20 s after it arrives, cut at the last movement at or before it', async () => {
     const h = await started();
     const fast = path(T0, 0, { n: 60, mps: mph(40) });
@@ -202,9 +243,12 @@ describe('W1: after driving speed', () => {
     await report(h, act('walking', T0 - 10_000));
     await feed(h, path(T0 + 40_000, metresAfter(head), { n: 60, mps: 0 }));
     expect(status(h)).toBe('recording');
-    // Exactly at driving speed's row is not before it: that one counts.
+    // A walk that began at the reading that reached driving speed is void; only one after it counts.
     await report(h, act('walking', T0 + 1000));
-    await feed(h, path(T0 + 100_000, metresAfter(head), { n: 20, mps: 0 }));
+    await feed(h, path(T0 + 100_000, metresAfter(head), { n: 30, mps: 0 }));
+    expect(status(h)).toBe('recording');
+    await report(h, act('walking', T0 + 1001));
+    await feed(h, path(T0 + 130_000, metresAfter(head), { n: 20, mps: 0 }));
     expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 2000 });
   });
 

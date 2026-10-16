@@ -28,7 +28,6 @@ import {
   closeSession,
   createSession,
   DRIVING_SPEED_MPS,
-  drivingRow,
   idleSince,
   noteWarmup,
   snapshotSession,
@@ -198,13 +197,10 @@ export function createEngine(deps: EngineDeps): Engine {
         alert(phone.id, 'phone_handling', 'moderate', row.ts);
       }
     }
-    const wasDriving = s.motion.prevDrive;
     appendRow(s, row, det.unsafe());
     maybePrefetch(row, s.distanceM);
 
     if (await endIfDue(row.ts + ROW_MS)) return;
-    // Two driving rows in a row: whatever the standing report said, the car is driving (a misread).
-    if (foot !== null && wasDriving && drivingRow(row)) foot = null;
     if (await checkFoot(row.ts + ROW_MS)) return;
     if (s.rowsCount % CHECKPOINT_ROWS === 0) {
       try {
@@ -236,14 +232,23 @@ export function createEngine(deps: EngineDeps): Engine {
 
   /**
    * The walking end at `t` (row clock), once the standing on-foot report is `WALK_CONFIRM_MS` old.
-   * W1 (the car reached driving speed): unless the last known speed is driving speed and under
-   * `WALK_STALE_FIX_MS` old. W2 (it never did): only once the drive is `ON_FOOT_DROP_MS` old. Cut at
-   * the last movement at or before the walk began. True when it ended the drive.
+   * A report is void for good once the car has been at driving speed at or after the moment its
+   * walk began (`session.lastDroveAt` ≥ `since`: two driving rows in a row, the second at or after
+   * it), however late the report came: only a walk that began after the car was last at driving
+   * speed counts. W1 (the car reached driving speed): unless the last known speed
+   * is driving speed and `WALK_STALE_FIX_MS` old or less. W2 (it never did): only once the drive is
+   * `ON_FOOT_DROP_MS` old. Cut at the last movement at or before the walk began. True when it
+   * ended the drive.
    */
   async function checkFoot(t: number): Promise<boolean> {
     if (foot === null || status !== 'recording') return false;
-    if (t - foot.at < WALK_CONFIRM_MS) return false;
     const s = session as TripSession;
+    // The car drove after the walk began: whatever the report said, it was a misread (or the walk to the car).
+    if (s.lastDroveAt !== null && s.lastDroveAt >= foot.since) {
+      foot = null;
+      return false;
+    }
+    if (t - foot.at < WALK_CONFIRM_MS) return false;
     if (s.droveAt === null) {
       if (t - s.startedAt < ON_FOOT_DROP_MS) return false;
     } else {
@@ -267,10 +272,9 @@ export function createEngine(deps: EngineDeps): Engine {
     const reading = footReading(a);
     if (reading === 'clear') foot = null;
     else if (reading === 'onFoot' && foot === null) {
-      const since = Math.min(Math.max(a.ts, s.startedAt), t);
-      // A walk that began before the car reached driving speed (a late or replayed report of the
-      // walk to the car) never ends a drive that has driven.
-      if (s.droveAt === null || since >= s.droveAt) foot = { since, at: t };
+      // A walk that began before the car was last at driving speed (a late or replayed report of
+      // the walk to the car, or a misread the driving since contradicts) is void at once in `checkFoot`.
+      foot = { since: Math.min(Math.max(a.ts, s.startedAt), t), at: t };
     }
     // A repeat on-foot report (a confidence change, walking to running) keeps the first one's times.
     await checkFoot(t);
