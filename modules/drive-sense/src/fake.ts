@@ -7,7 +7,7 @@
 // - with `asyncDelivery: true` every event is delivered on a microtask, as the native bridge
 //   always does; the default is synchronous delivery, for step-by-step tests (review M4).
 import { runSelfTest } from './extract/vectors';
-import { INITIAL, setEnabled, settle, statusOf, type ReminderState } from './reminder/policy';
+import { claim, INITIAL, newSession, posted, setEnabled, settle, statusOf, tapDelivered, type ReminderState } from './reminder/policy';
 import { isReminderWireVector, referenceReminderOutput } from './reminder/selfTest';
 import { parseVectors } from './selfTest';
 import type {
@@ -23,6 +23,7 @@ import type {
   ExitInfo,
   FakeControls,
   ReminderLocationAnswer,
+  ReminderTap,
   Subscription,
   ThermalLevel,
   TripReminderMissing,
@@ -80,6 +81,8 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   let reminderAvailable = true;
   let reminderMissing: TripReminderMissing[] = [];
   let reminderLocation: ReminderLocationAnswer = platform === 'ios' ? 'always' : 'notNeeded';
+  /** Android: the tap handed over and not yet taken (the module's hold). */
+  let heldTap: ReminderTap | null = null;
   let queue: DriveSenseRow[] = [];
   const listeners = new Map<DriveSenseEvent, Set<Listener>>();
   let buffer: Buffered[] = [];
@@ -217,6 +220,18 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       command('requestReminderLocation');
       return resolve(reminderLocation);
     },
+    claimReminderTap(token: string) {
+      command('claimReminderTap');
+      const r = claim(reminder, token, now(), state.capturing, platform === 'android');
+      reminder = r.state;
+      return resolve(r.ok);
+    },
+    takeReminderTap() {
+      query('takeReminderTap');
+      const tap = heldTap;
+      heldTap = null;
+      return resolve(tap);
+    },
     addListener<E extends DriveSenseEvent>(
       event: E,
       fn: (payload: DriveSenseEvents[E]) => void
@@ -313,6 +328,19 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     get tripReminderOn() {
       return reminder.enabled;
+    },
+    postReminderForTest(token, at = now()) {
+      const session = { ...newSession(at - 10 * 60_000, at, false), drove: true };
+      reminder = posted({ ...reminder, session }, at, token);
+    },
+    tapReminderForTest(token) {
+      if (platform !== 'android') return false;
+      const r = tapDelivered(reminder, token, now());
+      if (!r.delivered) return false;
+      reminder = r.state;
+      heldTap = { token, at: r.state.token === token && r.state.tapAt > 0 ? r.state.tapAt : now() };
+      emitRaw('reminderTap', {});
+      return true;
     },
   };
   return api;

@@ -5,8 +5,10 @@
 // foreground) and runs in the background on While Using through the `location` background mode.
 // No arming and nothing that starts a capture by itself. The one thing that runs with no drive open
 // is the optional forgot-to-start reminder (`TripReminder`, off by default): it wakes on
-// significant-location changes and only ever posts a notification. It is the only user of "Always",
-// asked for only when the driver turns the reminder on.
+// significant-location changes and posts at most one note a session, with a one-use token. A tap
+// reaches JS through expo-notifications; JS claims the token here (`claimReminderTap`) and only then
+// starts the drive itself. It is the only user of "Always", asked for only when the driver turns the
+// reminder on.
 //
 // The module is a thin bridge: the capture core (`CaptureController`) and the event hub exist for
 // the whole process, and every method below runs on the main queue, where they live. Rejections
@@ -19,7 +21,7 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     Name("DriveSense")
 
     // Keep this list identical to DRIVE_SENSE_EVENTS in src/types.ts and to DriveSenseModule.kt.
-    Events("activity", "row", "screen", "thermal", "notificationAction", "call")
+    Events("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap")
 
     OnCreate {
       EventHub.shared.attach(self)
@@ -42,6 +44,9 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     OnStopObserving("notificationAction") { EventHub.shared.stopObserving("notificationAction") }
     OnStartObserving("call") { EventHub.shared.startObserving("call") }
     OnStopObserving("call") { EventHub.shared.stopObserving("call") }
+    // Android's: iOS hands a reminder tap to JS through expo-notifications and never emits it.
+    OnStartObserving("reminderTap") { EventHub.shared.startObserving("reminderTap") }
+    OnStopObserving("reminderTap") { EventHub.shared.stopObserving("reminderTap") }
 
     AsyncFunction("startCapture") { (mode: String, promise: Promise) in
       if CaptureController.shared.startCapture(mode: mode) {
@@ -111,7 +116,7 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     }
 
     // The optional forgot-to-start reminder (README "Forgot-to-start reminder"). It never starts a
-    // capture: it notifies, and the notification only opens Home.
+    // capture: JS claims a tap's token and starts the drive itself.
     AsyncFunction("setTripReminder") { (enabled: Bool, promise: Promise) in
       TripReminder.shared.setEnabled(enabled) { promise.resolve($0) }
     }.runOnQueue(.main)
@@ -124,6 +129,16 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     AsyncFunction("requestReminderLocation") { (promise: Promise) in
       TripReminder.shared.requestAlways { promise.resolve($0) }
     }.runOnQueue(.main)
+
+    // True once, for the note's token, while its session lasts (motion folded in) and no drive is open.
+    AsyncFunction("claimReminderTap") { (token: String, promise: Promise) in
+      TripReminder.shared.claim(token) { promise.resolve($0) }
+    }.runOnQueue(.main)
+
+    // iOS hands a reminder tap to JS through expo-notifications: nothing is ever held here.
+    AsyncFunction("takeReminderTap") { (promise: Promise) in
+      promise.resolve(nil)
+    }
 
     // Heavy: runs on the module's own async queue, never the main queue.
     AsyncFunction("selfTest") { (vectorsJson: String, promise: Promise) in

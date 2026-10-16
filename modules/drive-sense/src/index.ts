@@ -16,7 +16,9 @@ import {
   driveDisplaySchema,
   exitInfoSchema,
   motionPermissionSchema,
+  REMINDER_TOKEN,
   reminderLocationSchema,
+  reminderTapSchema,
   screenStateSchema,
   stateSchema,
   thermalLevelSchema,
@@ -25,7 +27,7 @@ import {
 import type { DriveSenseApi, DriveSenseEvent, DriveSenseEvents, Subscription } from './types';
 
 export * from './types';
-export { MOCK_ROW_KEY, parseRow, resetUnknownRowKeys, unknownRowKeys } from './rowSchema';
+export { MOCK_ROW_KEY, parseRow, REMINDER_TOKEN, resetUnknownRowKeys, unknownRowKeys } from './rowSchema';
 export { createFakeDriveSense, driveSenseError } from './fake';
 export type { FakeOptions } from './fake';
 export { diffSelfTest, parseVectors } from './selfTest';
@@ -126,6 +128,9 @@ const DriveSense: DriveSenseApi = {
     call('setTripReminder', [enabled], typeof enabled === 'boolean', tripReminderStatusSchema),
   getTripReminderStatus: () => call('getTripReminderStatus', [], true, tripReminderStatusSchema),
   requestReminderLocation: () => call('requestReminderLocation', [], true, reminderLocationSchema),
+  claimReminderTap: (token) =>
+    call('claimReminderTap', [token], typeof token === 'string' && REMINDER_TOKEN.test(token), z.boolean()),
+  takeReminderTap: () => call('takeReminderTap', [], true, reminderTapSchema),
   addListener<E extends DriveSenseEvent>(
     event: E,
     fn: (payload: DriveSenseEvents[E]) => void

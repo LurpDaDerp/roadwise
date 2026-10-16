@@ -13,6 +13,7 @@ import type {
   ExitInfo,
   FeatureRow,
   ReminderLocationAnswer,
+  ReminderTap,
   ThermalLevel,
   TripReminderStatus,
 } from './types';
@@ -177,3 +178,10 @@ export const tripReminderStatusSchema: z.ZodType<TripReminderStatus> = z.strictO
 });
 
 export const reminderLocationSchema: z.ZodType<ReminderLocationAnswer> = z.enum(['always', 'whenInUse', 'denied', 'notNeeded']);
+
+/** A reminder note's token: native makes it a UUID; anything else never crosses the bridge. */
+export const REMINDER_TOKEN = /^[A-Za-z0-9-]{1,64}$/;
+
+export const reminderTapSchema: z.ZodType<ReminderTap | null> = z
+  .strictObject({ token: z.string().regex(REMINDER_TOKEN), at: z.number().finite().positive() })
+  .nullable();

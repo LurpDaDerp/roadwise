@@ -6,10 +6,13 @@
 // sticky restart of a capture the user already started, under the watchdog).
 //
 // The one thing that runs with no drive open is the optional forgot-to-start reminder (off by
-// default; README "Forgot-to-start reminder"): it notices a car trip natively and posts at most one
-// notification, which only opens Home. JS switches it (`setTripReminder`) and reads its status; it
-// never starts a capture. On iOS it is the only reason the app asks for "Always" location, and only
-// when the driver turns it on (`requestReminderLocation`).
+// default; README "Forgot-to-start reminder"): it notices driving natively and posts at most one
+// notification a session, which carries a one-use token. JS switches it (`setTripReminder`) and
+// reads its status. It never starts a capture: a tap on its note reaches JS (iOS through
+// expo-notifications, Android through `takeReminderTap`), JS claims the token
+// (`claimReminderTap`) and only then starts the drive itself, through the Start Drive path. On iOS it
+// is the only reason the app asks for "Always" location, and only when the driver turns it on
+// (`requestReminderLocation`).
 import type { FeatureRow } from '../../../src/core/engine/types';
 import type { ExtractedRow } from './extract/types';
 import type { TripReminderMissing, TripReminderStatus } from './reminder/policy';
@@ -21,6 +24,12 @@ export type { FeatureRow, TripReminderMissing, TripReminderStatus };
  * driver kept While Using); Android `notNeeded` (its reminder uses no location).
  */
 export type ReminderLocationAnswer = 'always' | 'whenInUse' | 'denied' | 'notNeeded';
+
+/** A tap on the reminder's note as Android hands it to JS: its token, and when it was handed over (epoch ms). */
+export interface ReminderTap {
+  token: string;
+  at: number;
+}
 
 export type CaptureMode = 'mounted' | 'pocket' | 'auto';
 /** rev1: I5 — `low` = coarse location, no IMU, rows only when a fix arrives. */
@@ -112,6 +121,8 @@ export type DriveSenseEvents = {
   notificationAction: { action: 'endDrive'; ts: number };
   /** iOS only */
   call: { active: boolean; ts: number };
+  /** Android only: a tap on the reminder's note was handed over; read it with `takeReminderTap`. */
+  reminderTap: Record<string, never>;
 };
 
 export type DriveSenseEvent = keyof DriveSenseEvents;
@@ -128,6 +139,7 @@ export const DRIVE_SENSE_EVENTS = [
   'thermal',
   'notificationAction',
   'call',
+  'reminderTap',
 ] as const;
 
 /**
@@ -151,6 +163,8 @@ export const DRIVE_SENSE_METHODS = [
   'setTripReminder',
   'getTripReminderStatus',
   'requestReminderLocation',
+  'claimReminderTap',
+  'takeReminderTap',
 ] as const;
 
 export type DriveSenseMethod = (typeof DRIVE_SENSE_METHODS)[number];
@@ -228,9 +242,9 @@ export interface DriveSenseApi {
   selfTest(vectorsJson: string): Promise<string>;
   /**
    * The forgot-to-start reminder's switch (README "Forgot-to-start reminder"). On: saved on even
-   * when a permission is missing (the status says what), every back-off and quiet cleared, the
-   * Android channel created. Off: all of its state forgotten, its feed and wakes stopped, any
-   * notification taken down. Never rejects; never starts a capture.
+   * when a permission is missing (the status says what), the session kept, the Android channel
+   * created. Off: all of its state forgotten, its feed and wakes stopped, any notification taken
+   * down. Never rejects; never starts a capture.
    */
   setTripReminder(enabled: boolean): Promise<TripReminderStatus>;
   /** The reminder's status for Settings, brought up to now first. */
@@ -240,6 +254,18 @@ export interface DriveSenseApi {
    * on, with While Using already granted; never asked twice. Android: `notNeeded`.
    */
   requestReminderLocation(): Promise<ReminderLocationAnswer>;
+  /**
+   * A tap on the reminder's note: true once, for the note's own token, while the reminder is on, its
+   * session lasts and no drive is open (Android: within 2 min of the tap's hand-over). True spends
+   * the token and takes the note down. It never starts a capture: the caller starts the drive.
+   */
+  claimReminderTap(token: string): Promise<boolean>;
+  /**
+   * Android: the tap on the reminder's note the phone handed RoadWise, once (null when none is
+   * waiting; each token is handed over at most once). iOS: always null (its taps arrive through
+   * expo-notifications).
+   */
+  takeReminderTap(): Promise<ReminderTap | null>;
   addListener<E extends DriveSenseEvent>(
     event: E,
     fn: (payload: DriveSenseEvents[E]) => void
@@ -291,6 +317,14 @@ export interface FakeControls {
   setTripReminderEnv(env: { available?: boolean; missing?: TripReminderMissing[]; location?: ReminderLocationAnswer }): void;
   /** Whether the reminder is switched on now. */
   readonly tripReminderOn: boolean;
+  /** A note is up with `token` in a driven, live session, as a stop would have posted it (`now` defaults to the fake's clock). */
+  postReminderForTest(token: string, now?: number): void;
+  /**
+   * Android: a tap on the note with `token` reaches RoadWise, as the module reads it from the
+   * intent: handed over once (queued for `takeReminderTap` and announced with `reminderTap`); a
+   * token handed over before is dropped. Returns whether it was handed over. iOS: nothing (false).
+   */
+  tapReminderForTest(token: string): boolean;
   // ——— the native activity feed (README §3) ———
   /**
    * An OS motion-activity delivery as native makes it: an `activity` event only while the feed is

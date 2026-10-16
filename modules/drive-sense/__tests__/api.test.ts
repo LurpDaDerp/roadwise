@@ -58,6 +58,8 @@ jest.mock('expo-modules-core', () => {
       missing: [],
     })),
     requestReminderLocation: jest.fn(async () => 'whenInUse'),
+    claimReminderTap: jest.fn(async () => true),
+    takeReminderTap: jest.fn(async () => ({ token: '9f1c2b7e-0d4a-4c1e-9a77-1b2c3d4e5f60', at: 1_700_000_000_000 })),
     addListener: jest.fn(() => ({ remove })),
   };
   const control = { present: true, native, state, remove };
@@ -86,7 +88,7 @@ const mockState = control.state;
 
 beforeEach(() => jest.clearAllMocks());
 
-test('the six event names are fixed, in order', () => {
+test('the seven event names are fixed, in order', () => {
   expect(DRIVE_SENSE_EVENTS).toEqual([
     'activity',
     'row',
@@ -94,6 +96,7 @@ test('the six event names are fixed, in order', () => {
     'thermal',
     'notificationAction',
     'call',
+    'reminderTap',
   ]);
 });
 
@@ -157,6 +160,14 @@ describe('every method goes to native with its arguments', () => {
     await expect(DriveSense.requestReminderLocation()).resolves.toBe('whenInUse');
   });
 
+  test("the reminder's tap: claimed with its token, taken once as handed over", async () => {
+    await expect(DriveSense.claimReminderTap('9f1c2b7e-0d4a-4c1e-9a77-1b2c3d4e5f60')).resolves.toBe(true);
+    expect(mockNative.claimReminderTap).toHaveBeenCalledWith('9f1c2b7e-0d4a-4c1e-9a77-1b2c3d4e5f60');
+    await expect(DriveSense.takeReminderTap()).resolves.toEqual({ token: '9f1c2b7e-0d4a-4c1e-9a77-1b2c3d4e5f60', at: 1_700_000_000_000 });
+    mockNative.takeReminderTap!.mockResolvedValueOnce(null);
+    await expect(DriveSense.takeReminderTap()).resolves.toBeNull();
+  });
+
   test('a null exit info is passed through', async () => {
     mockNative.getLastExitInfo!.mockResolvedValueOnce(null);
     await expect(DriveSense.getLastExitInfo()).resolves.toBeNull();
@@ -199,9 +210,16 @@ describe('bridge validation', () => {
     ['getTripReminderStatus', { enabled: true, state: 'on', autoOff: false, missing: [] }],
     ['getTripReminderStatus', { enabled: true, state: 'on', missing: [], pausedUntil: null }],
     ['requestReminderLocation', 'sometimes'],
+    ['claimReminderTap', 'true'],
+    ['claimReminderTap', null],
+    ['takeReminderTap', { token: 'has space', at: 1 }],
+    ['takeReminderTap', { token: 'x'.repeat(65), at: 1 }],
+    ['takeReminderTap', { token: 'tok-a', at: 0 }],
+    ['takeReminderTap', { token: 'tok-a', at: 1, extra: true }],
+    ['takeReminderTap', { token: 'tok-a' }],
   ] as const)('a malformed %s result rejects', async (method, bad) => {
     mockNative[method]!.mockResolvedValueOnce(bad);
-    const args = method === 'selfTest' ? ['[]'] : [];
+    const args = method === 'selfTest' ? ['[]'] : method === 'claimReminderTap' ? ['tok-a'] : [];
     const call = (DriveSense[method] as (...a: unknown[]) => Promise<unknown>)(...args);
     await expect(call).rejects.toThrow(`DriveSense.${method}: invalid result`);
     expect(mockNative[method]).toHaveBeenCalledTimes(1);
@@ -217,6 +235,10 @@ describe('bridge validation', () => {
     ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, extra: 1 }]],
     ['selfTest', [{}]],
     ['setTripReminder', ['yes']],
+    ['claimReminderTap', ['']],
+    ['claimReminderTap', ['tok a']],
+    ['claimReminderTap', ['x'.repeat(65)]],
+    ['claimReminderTap', [42]],
   ] as const)('%s rejects bad arguments without calling native', async (method, args) => {
     const fn = DriveSense[method] as (...a: readonly unknown[]) => Promise<unknown>;
     await expect(fn(...args)).rejects.toThrow(`DriveSense.${method}`);

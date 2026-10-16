@@ -429,6 +429,58 @@ describe('the forgot-to-start reminder (README "Forgot-to-start reminder")', () 
     expect(fake.queries).toEqual(['getTripReminderStatus', 'getTripReminderStatus', 'getTripReminderStatus']);
   });
 
+  test("a tap on the note: Android hands it over once and claims it within 2 min, once; iOS hands nothing over", async () => {
+    let now = 1_700_000_000_000;
+    const android = createFakeDriveSense({ platform: 'android', now: () => now });
+    const announced = jest.fn();
+    android.addListener('reminderTap', announced);
+    await android.setTripReminder(true);
+    android.postReminderForTest('tok-a');
+    expect(android.tapReminderForTest('tok-a')).toBe(true);
+    expect(announced).toHaveBeenCalledTimes(1);
+    // the same token again (a recreated activity's saved intent): dropped
+    expect(android.tapReminderForTest('tok-a')).toBe(false);
+    expect(announced).toHaveBeenCalledTimes(1);
+    await expect(android.takeReminderTap()).resolves.toEqual({ token: 'tok-a', at: now });
+    await expect(android.takeReminderTap()).resolves.toBeNull();
+    await expect(android.claimReminderTap('tok-z')).resolves.toBe(false);
+    now += 2 * 60_000;
+    await expect(android.claimReminderTap('tok-a')).resolves.toBe(true);
+    await expect(android.claimReminderTap('tok-a')).resolves.toBe(false);
+
+    // handed over 2:01 before the claim: refused
+    android.postReminderForTest('tok-b');
+    android.tapReminderForTest('tok-b');
+    now += 2 * 60_000 + 1;
+    await expect(android.claimReminderTap('tok-b')).resolves.toBe(false);
+    // a drive open: refused
+    android.postReminderForTest('tok-c');
+    android.tapReminderForTest('tok-c');
+    android.setState({ location: 'whenInUse' });
+    await android.startCapture('mounted');
+    await expect(android.claimReminderTap('tok-c')).resolves.toBe(false);
+    expect(android.calls.filter((c) => c.startsWith('startCapture'))).toEqual(['startCapture:mounted']);
+
+    const ios = createFakeDriveSense({ platform: 'ios', now: () => now });
+    const iosAnnounced = jest.fn();
+    ios.addListener('reminderTap', iosAnnounced);
+    await ios.setTripReminder(true);
+    ios.postReminderForTest('tok-i');
+    expect(ios.tapReminderForTest('tok-i')).toBe(false);
+    expect(iosAnnounced).not.toHaveBeenCalled();
+    await expect(ios.takeReminderTap()).resolves.toBeNull();
+    // iOS claims with no hand-over check, once
+    await expect(ios.claimReminderTap('tok-i')).resolves.toBe(true);
+    await expect(ios.claimReminderTap('tok-i')).resolves.toBe(false);
+  });
+
+  test('a claim never starts a capture, and the reminder switched off refuses every claim', async () => {
+    const fake = createFakeDriveSense({ platform: 'ios' });
+    fake.postReminderForTest('tok-a');
+    await expect(fake.claimReminderTap('tok-a')).resolves.toBe(false);
+    expect(fake.calls).toEqual(['claimReminderTap']);
+  });
+
   test('the location answer: iOS always by default, Android notNeeded; settable', async () => {
     await expect(createFakeDriveSense({ platform: 'ios' }).requestReminderLocation()).resolves.toBe('always');
     const android = createFakeDriveSense({ platform: 'android' });

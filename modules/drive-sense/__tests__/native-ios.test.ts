@@ -390,6 +390,13 @@ describe('iOS forgot-to-start reminder (text)', () => {
     expect(active).not.toMatch(/TripReminderNotifier\.remove|endLook/);
   });
 
+  it("the tap: claimed on main through the reminder's own claim (motion folded in first); nothing is ever held or emitted on iOS", () => {
+    const m = moduleCode();
+    expect(m).toMatch(/AsyncFunction\("claimReminderTap"\) \{ \(token: String, promise: Promise\) in\s*TripReminder\.shared\.claim\(token\) \{ promise\.resolve\(\$0\) \}\s*\}\.runOnQueue\(\.main\)/);
+    expect(m).toMatch(/AsyncFunction\("takeReminderTap"\) \{ \(promise: Promise\) in\s*promise\.resolve\(nil\)\s*\}/);
+    expect(allCode()).not.toMatch(/emit\("reminderTap"/);
+  });
+
   it('"Always" is asked once, only from While Using, through the reminder; precise is required', () => {
     const a = code('TripReminderAccess.swift');
     expect(a).toMatch(/if current != \.authorizedWhenInUse \|\| defaults\.bool\(forKey: Key\.alwaysAsked\) \|\| alwaysPending != nil \{/);

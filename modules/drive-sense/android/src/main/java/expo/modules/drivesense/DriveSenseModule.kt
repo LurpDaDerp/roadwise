@@ -2,6 +2,7 @@ package expo.modules.drivesense
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
 import androidx.core.app.ActivityCompat
@@ -20,15 +21,21 @@ import expo.modules.kotlin.modules.ModuleDefinition
  *
  * v3 (plan §1 decision 4): a capture starts only from a JS `startCapture` (a user's tap in the
  * foreground). There is no arming, no activity-transition auto-start and no background location
- * permission. The optional forgot-to-start reminder ([TripReminder]) only notifies; JS switches it
- * and reads its status. Rejections are `CodedException`s with the contract codes only
+ * permission. The optional forgot-to-start reminder ([TripReminder]) never starts a capture either:
+ * a tap on its note opens RoadWise with the note's one-use token, this module hands the token to JS
+ * once (`reminderTap`, `takeReminderTap`), and JS claims it (`claimReminderTap`) before it starts
+ * the drive itself. Rejections are `CodedException`s with the contract codes only
  * (README §2 "Errors"); every other method never rejects.
  */
 class DriveSenseModule : Module() {
   companion object {
     /** Every event, for the per-event buffer flush (README §3). Same names as `Events(...)` below. */
-    private val OBSERVED_EVENTS = listOf("activity", "row", "screen", "thermal", "notificationAction", "call")
+    private val OBSERVED_EVENTS = listOf("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap")
     private val MODES = setOf("mounted", "pocket", "auto")
+
+    /** The reminder tap handed over and not yet taken by JS, with its hand-over time. Process-wide. */
+    private val tapLock = Any()
+    private var heldTap: Pair<String, Long>? = null
   }
 
   private val context: Context
@@ -38,11 +45,33 @@ class DriveSenseModule : Module() {
 
   private fun coded(code: String, message: String) = CodedException(code, message, null)
 
+  /**
+   * A tap on the reminder's note: the token comes off the intent at once (a later read of the same
+   * intent finds nothing), a relaunch from Recents is never a tap, and [TripReminder.onTapIntent]
+   * hands each token over at most once (an activity recreated from its saved intent starts nothing).
+   */
+  private fun readReminderTap(intent: Intent?) {
+    val i = intent ?: return
+    val token = i.getStringExtra(TripReminderNotifier.EXTRA_TAP) ?: return
+    i.removeExtra(TripReminderNotifier.EXTRA_TAP)
+    if ((i.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
+    val ctx = try {
+      context
+    } catch (_: Exception) {
+      return
+    }
+    val tap = TripReminder.onTapIntent(ctx, token)
+    if (tap.delivered) {
+      synchronized(tapLock) { heldTap = token to tap.at }
+      EventBus.emit("reminderTap", emptyMap())
+    }
+  }
+
   override fun definition() = ModuleDefinition {
     Name("DriveSense")
 
     // Keep this list byte-identical to DRIVE_SENSE_EVENTS in src/types.ts and to DriveSenseModule.swift.
-    Events("activity", "row", "screen", "thermal", "notificationAction", "call")
+    Events("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap")
 
     OnCreate {
       DriveSensePrefs.init(context)
@@ -53,14 +82,19 @@ class DriveSenseModule : Module() {
       TripReminder.onLaunch(context)
     }
 
-    // RoadWise is on screen: Home is visible, so a reminder still up comes down.
+    // RoadWise is on screen: a cold start's reminder tap is read first (before anything can settle
+    // the state), then the reminder settles and re-syncs its feed. A live note stays up.
     OnActivityEntersForeground {
       try {
+        readReminderTap(appContext.currentActivity?.intent)
         TripReminder.onAppForeground(context)
       } catch (_: Exception) {
         // no context yet: the next launch settles it
       }
     }
+
+    // A tap on the reminder's note with RoadWise already running (MainActivity is singleTask).
+    OnNewIntent { intent -> readReminderTap(intent) }
 
     OnDestroy {
       // The JS runtime is going away: nobody listens for rows any more (the watchdog's signal).
@@ -183,6 +217,20 @@ class DriveSenseModule : Module() {
     // Android uses no location for the reminder (activity recognition only).
     AsyncFunction("requestReminderLocation") {
       "notNeeded"
+    }
+
+    // The tap the phone handed RoadWise, once. A cold start whose foreground hook ran before this
+    // module existed is read here from the launch intent (a token handed over before is dropped).
+    AsyncFunction("takeReminderTap") {
+      val none = synchronized(tapLock) { heldTap == null }
+      if (none) readReminderTap(appContext.currentActivity?.intent)
+      val tap = synchronized(tapLock) { heldTap.also { heldTap = null } }
+      tap?.let { linkedMapOf<String, Any?>("token" to it.first, "at" to it.second) }
+    }
+
+    // True once, for the live note's token; JS starts the drive only after a true. Never a capture here.
+    AsyncFunction("claimReminderTap") { token: String ->
+      TripReminder.claim(context, token)
     }
 
     AsyncFunction("getLastExitInfo") {

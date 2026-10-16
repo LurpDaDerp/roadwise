@@ -450,7 +450,30 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
     expect(m).toMatch(/AsyncFunction\("setTripReminder"\) \{ enabled: Boolean ->\s*TripReminder\.setEnabled\(context, enabled\)/);
     expect(m).toMatch(/AsyncFunction\("getTripReminderStatus"\) \{\s*TripReminder\.status\(context\)/);
     expect(m).toMatch(/AsyncFunction\("requestReminderLocation"\) \{\s*"notNeeded"\s*\}/);
-    expect(m).toMatch(/OnActivityEntersForeground \{[\s\S]{0,80}TripReminder\.onAppForeground\(context\)/);
+    expect(m).toMatch(/OnActivityEntersForeground \{[\s\S]{0,160}TripReminder\.onAppForeground\(context\)/);
+  });
+
+  it("the module hands a tap's token to JS once: off the intent at once, never from Recents, only once handed over, and announced only then", () => {
+    const m = MODULE();
+    const read = /private fun readReminderTap\(intent: Intent\?\) \{[\s\S]*?\n {2}\}/.exec(m)?.[0] ?? '';
+    expect(read).toMatch(/val token = i\.getStringExtra\(TripReminderNotifier\.EXTRA_TAP\) \?: return\s*i\.removeExtra\(TripReminderNotifier\.EXTRA_TAP\)\s*if \(\(i\.flags and Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\) != 0\) return/);
+    expect(read.indexOf('removeExtra(')).toBeLessThan(read.indexOf('TripReminder.onTapIntent('));
+    expect(read.indexOf('FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY')).toBeLessThan(read.indexOf('TripReminder.onTapIntent('));
+    expect(read).toMatch(/val tap = TripReminder\.onTapIntent\(ctx, token\)\s*if \(tap\.delivered\) \{\s*synchronized\(tapLock\) \{ heldTap = token to tap\.at \}\s*EventBus\.emit\("reminderTap", emptyMap\(\)\)\s*\}/);
+    // the only reminderTap emit in all the Kotlin
+    expect(code(allKotlin()).match(/EventBus\.emit\("reminderTap"/g)).toHaveLength(1);
+    // warm (singleTask: a new intent), cold (the foreground hook, before the reminder settles), and the take itself
+    expect(m).toMatch(/OnNewIntent \{ intent -> readReminderTap\(intent\) \}/);
+    const fg = /OnActivityEntersForeground \{[\s\S]*?\n {4}\}/.exec(m)?.[0] ?? '';
+    expect(fg.indexOf('readReminderTap(appContext.currentActivity?.intent)')).toBeGreaterThan(-1);
+    expect(fg.indexOf('readReminderTap(appContext.currentActivity?.intent)')).toBeLessThan(fg.indexOf('TripReminder.onAppForeground(context)'));
+    const take = /AsyncFunction\("takeReminderTap"\) \{[\s\S]*?\n {4}\}/.exec(m)?.[0] ?? '';
+    expect(take).toMatch(/if \(none\) readReminderTap\(appContext\.currentActivity\?\.intent\)/);
+    expect(take).toMatch(/heldTap\.also \{ heldTap = null \}/);
+    expect(take).toMatch(/linkedMapOf<String, Any\?>\("token" to it\.first, "at" to it\.second\)/);
+    expect(m).toMatch(/AsyncFunction\("claimReminderTap"\) \{ token: String ->\s*TripReminder\.claim\(context, token\)\s*\}/);
+    // the module never starts a capture for a tap
+    expect(read + take).not.toMatch(/CaptureService|startCapture/);
   });
 
   it('TripReminderPolicy is pure and mirrors src/reminder/policy.ts', () => {
