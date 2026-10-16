@@ -400,7 +400,7 @@ describe('the prompt host', () => {
       const w = await appWorld();
       let t = 0;
       await w.render(<DashpalPromptHost deps={{ ...fastDeps(), now: () => t }} />);
-      await act(async () => rt.set({ link: { visual: { key: '7:0', alertId: 7, sound: 3, tier: 3, level: 0, onPhone: true, at: 0 } } }));
+      await act(async () => rt.set({ link: { visual: { key: '7:0', alertId: 7, sound: 3, tier: 3, level: 0, onPhone: true, at: 0, resend: false } } }));
       expect(screen.getByTestId('dashpal-alert-banner')).toHaveTextContent('DashPal: Wake up', { exact: false });
       t = 1500;
       await act(async () => {

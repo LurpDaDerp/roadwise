@@ -454,6 +454,7 @@ describe('DashPal (plan §7.10)', () => {
     tier: o.tier,
     level: o.level ?? 0,
     onPhone: true,
+    resend: false,
     at: Date.now(),
   });
 

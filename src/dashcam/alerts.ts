@@ -19,7 +19,11 @@
 //   continuous alert for `continuousActive`, so the phone's own event tones keep sounding.
 // - The phone stops a confirmed alert on its own (staleness, the player failing, the phone no
 //   longer able to play): it then sends ALERT_ACK(0) so the dashcam's buzzer takes over.
-// - Visual: one flash per ALERT start or level change (the HUD glows 1.5 s), never per repeat.
+// - Visual: one flash per ALERT start or level change (the HUD's banner and halo burst, 1.5 s), never
+//   per repeat. A reconnect's re-send of an alert the dropped link held flashes as `resend` (the HUD
+//   shows its banner but no burst) and keeps the alert's `since`.
+// - Held: the worst continuous alert the table holds, whoever sounds it (the HUD's halo shows it for
+//   as long as it lasts).
 //
 // Pure apart from the player and the clock: time is injected, `tick(now)` advances repeats.
 import type { AlertPlayer } from '@/core/alerts/player';
@@ -85,6 +89,31 @@ export interface DashcamVisual {
   /** the phone plays it (route 1, confirmed) */
   onPhone: boolean;
   at: number;
+  /**
+   * A reconnect's re-send of an alert the dropped link held, at a level no higher than it had: old
+   * news, so the HUD shows no burst for it.
+   */
+  resend: boolean;
+}
+
+/** A continuous DashPal alert the table holds, for the HUD's halo. */
+export interface HeldAlert {
+  sound: number;
+  tier: number;
+  level: number;
+  /** when the phone first learned of it (JS clock); kept through a level change and a short reconnect */
+  since: number;
+}
+
+/** A continuous alert as `continuing()` lists it (what a dropped link carries over). */
+export interface ContinuingAlert extends HeldAlert {
+  alertId: number;
+}
+
+/** What a reconnect's re-send inherits from the dropped link's entry for the same alert. */
+export interface AlertInherit {
+  since: number;
+  level: number;
 }
 
 /** Flashes so far in this JS process (outlives a runtime, as the root banner does). */
@@ -122,11 +151,17 @@ interface Entry {
   /** the first play (or the haptic for a visual-only alert) is still owed */
   firstOwed: boolean;
   escalated: boolean;
+  /** when the phone first learned of it (deps.now(), or inherited from a dropped link) */
+  since: number;
 }
 
 export interface DashcamAlertController {
-  /** An ALERT frame. Returns the ACK the link must send BEFORE playback starts (null: none). */
-  onAlert(frame: AlertFrame): 0 | 1 | null;
+  /**
+   * An ALERT frame. Returns the ACK the link must send BEFORE playback starts (null: none).
+   * `inherit`: the dropped link held this alert; a new entry keeps its `since` and flashes as a
+   * `resend` unless its level is higher.
+   */
+  onAlert(frame: AlertFrame, inherit?: AlertInherit): 0 | 1 | null;
   /** The table holds this alert (a re-send of it is a level change or a reconnect's visual copy). */
   has(alertId: number): boolean;
   onStop(alertId: number): void;
@@ -144,6 +179,10 @@ export interface DashcamAlertController {
   continuousActive(): boolean;
   /** The phone is sounding a DashPal alert right now. */
   playingAny(): boolean;
+  /** The worst continuous alert held (highest tier, then level, then earliest `since`), or null. */
+  held(): HeldAlert | null;
+  /** Every continuous alert held. */
+  continuing(): ContinuingAlert[];
   settled(): Promise<void>;
 }
 
@@ -177,10 +216,10 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
     }
   }
 
-  function flash(e: Entry): void {
+  function flash(e: Entry, resend = false): void {
     try {
       flashes += 1;
-      deps.onVisual?.({ key: `${flashes}:${e.id}:${e.level}`, alertId: e.id, sound: e.sound, tier: e.tier, level: e.level, onPhone: e.playing, at: deps.now() });
+      deps.onVisual?.({ key: `${flashes}:${e.id}:${e.level}`, alertId: e.id, sound: e.sound, tier: e.tier, level: e.level, onPhone: e.playing, at: deps.now(), resend });
     } catch (err) {
       report(err);
     }
@@ -283,7 +322,7 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
       return table.has(alertId);
     },
 
-    onAlert(f) {
+    onAlert(f, inherit) {
       const existing = table.get(f.alertId);
       if (existing) {
         // The same alert again: a level change (no new ACK), or the visual-only re-send after a
@@ -327,9 +366,10 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
         nextAt: null,
         firstOwed: true,
         escalated: false,
+        since: inherit?.since ?? deps.now(),
       };
       table.set(f.alertId, e);
-      flash(e);
+      flash(e, inherit !== undefined && f.level <= inherit.level);
       if (playing && f.tier >= 3) {
         // A dashcam critical preempts whatever the player is doing (a phone alert, another DashPal
         // item); its first play then starts as soon as that settles.
@@ -438,6 +478,19 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
     // The no-face alert leaves the phone's own alert tones on (it can last minutes).
     continuousActive: () => [...table.values()].some((e) => e.continuous && e.sound !== SOUND.NO_FACE),
     playingAny: () => [...table.values()].some((e) => e.playing),
+
+    held() {
+      let best: Entry | null = null;
+      for (const e of table.values()) {
+        if (!e.continuous) continue;
+        if (best === null || e.tier > best.tier || (e.tier === best.tier && (e.level > best.level || (e.level === best.level && e.since < best.since)))) best = e;
+      }
+      return best === null ? null : { sound: best.sound, tier: best.tier, level: best.level, since: best.since };
+    },
+
+    continuing() {
+      return [...table.values()].filter((e) => e.continuous).map((e) => ({ alertId: e.id, sound: e.sound, tier: e.tier, level: e.level, since: e.since }));
+    },
 
     async settled() {
       for (let i = 0; i < 50; i++) {

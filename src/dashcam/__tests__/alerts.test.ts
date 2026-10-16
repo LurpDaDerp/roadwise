@@ -216,3 +216,88 @@ describe('the no-face alert (sound 6)', () => {
     expect(r.delivered.at(-1)!.d.voice).toBe('Driver not visible');
   });
 });
+
+describe('held and since (the HUD halo, drive-screen design §5.3)', () => {
+  const player: AlertPlayer = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
+  const make = (now: () => number, visuals: import('../alerts').DashcamVisual[] = []) =>
+    createDashcamAlerts({ player, now, sendAck: () => {}, canPlay: () => true, onVisual: (v) => visuals.push(v) });
+  const frame = (o: { id: number; sound: number; tier: number; level?: number; mode?: 0 | 1; route?: 0 | 1 }) => ({
+    type: 'ALERT' as const,
+    alertId: o.id,
+    sound: o.sound,
+    tier: o.tier,
+    level: o.level ?? 0,
+    mode: o.mode ?? 1,
+    route: o.route ?? 1,
+    uptimeMs: 0,
+  });
+
+  test('a one-shot is never held; a continuous alert is, also on route 0 (the buzzer plays it)', async () => {
+    let now = 1000;
+    const c = make(() => now);
+    c.onAlert(frame({ id: 1, sound: 5, tier: 1, mode: 0 }));
+    expect(c.held()).toBeNull();
+    expect(c.continuing()).toEqual([]);
+    now = 2000;
+    c.onAlert(frame({ id: 2, sound: 1, tier: 2, route: 0 }));
+    expect(c.held()).toEqual({ sound: 1, tier: 2, level: 0, since: 2000 });
+    expect(c.continuing()).toEqual([{ alertId: 2, sound: 1, tier: 2, level: 0, since: 2000 }]);
+    await c.settled();
+  });
+
+  test('the worst wins: the higher tier, then the higher level, then the earlier since', async () => {
+    let now = 1000;
+    const c = make(() => now);
+    c.onAlert(frame({ id: 1, sound: 1, tier: 2, route: 0 }));
+    now = 2000;
+    c.onAlert(frame({ id: 2, sound: 6, tier: 2, route: 0 }));
+    expect(c.held()).toMatchObject({ sound: 1, since: 1000 }); // same tier and level: the earlier
+    c.onAlert(frame({ id: 2, sound: 6, tier: 2, level: 1, route: 0 }));
+    expect(c.held()).toMatchObject({ sound: 6, level: 1, since: 2000 }); // a higher level
+    now = 3000;
+    c.onAlert(frame({ id: 3, sound: 3, tier: 3, route: 0 }));
+    expect(c.held()).toEqual({ sound: 3, tier: 3, level: 0, since: 3000 }); // a higher tier
+    c.onStop(3);
+    expect(c.held()).toMatchObject({ sound: 6 });
+    c.clear();
+    expect(c.held()).toBeNull();
+    await c.settled();
+  });
+
+  test('since holds through a level change; a stop empties it', async () => {
+    let now = 1000;
+    const c = make(() => now);
+    c.onAlert(frame({ id: 4, sound: 3, tier: 3 }));
+    now = 5000;
+    c.onAlert(frame({ id: 4, sound: 3, tier: 3, level: 2 }));
+    expect(c.held()).toEqual({ sound: 3, tier: 3, level: 2, since: 1000 });
+    c.onStop(4);
+    expect(c.held()).toBeNull();
+    await c.settled();
+  });
+
+  test('the no-face alert is held as sound 6', async () => {
+    const c = make(() => 0);
+    c.onAlert(frame({ id: 9, sound: 6, tier: 2 }));
+    expect(c.held()).toMatchObject({ sound: 6, tier: 2 });
+    await c.settled();
+  });
+
+  test('inherit keeps since and flashes as a resend; a higher level than the dropped one, or no inherit, is news', async () => {
+    const now = 9000;
+    const visuals: import('../alerts').DashcamVisual[] = [];
+    const c = make(() => now, visuals);
+    c.onAlert(frame({ id: 1, sound: 1, tier: 2, route: 0 }), { since: 4000, level: 0 });
+    expect(c.held()).toMatchObject({ since: 4000 });
+    expect(visuals.at(-1)).toMatchObject({ alertId: 1, resend: true, at: 9000 });
+    c.onAlert(frame({ id: 2, sound: 3, tier: 3, level: 2, route: 0 }), { since: 5000, level: 1 });
+    expect(visuals.at(-1)).toMatchObject({ alertId: 2, resend: false });
+    expect(c.continuing().find((e) => e.alertId === 2)).toMatchObject({ since: 5000 });
+    c.onAlert(frame({ id: 3, sound: 2, tier: 3, route: 0 }));
+    expect(visuals.at(-1)).toMatchObject({ alertId: 3, resend: false });
+    // a level change of a resent alert is news
+    c.onAlert(frame({ id: 1, sound: 1, tier: 2, level: 1, route: 0 }));
+    expect(visuals.at(-1)).toMatchObject({ alertId: 1, level: 1, resend: false });
+    await c.settled();
+  });
+});
