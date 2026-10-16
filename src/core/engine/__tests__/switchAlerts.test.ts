@@ -47,7 +47,7 @@ async function runDrive(rows: FeatureRow[], ctx: Ctx) {
 }
 
 /** Rows from T0 at 1 Hz. */
-const rowsOf = (...segments: Parameters<typeof seq>) => seq(...segments);
+const rowsOf = seq;
 const voiceOf = (a: AlertEvent) => decisionFor(a, { voiceEnabled: true }).voice;
 
 test('the constants', () => {
