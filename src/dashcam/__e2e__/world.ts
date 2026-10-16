@@ -17,6 +17,15 @@
 // The IDENTIFY write goes to the simulator (`ID <conn> <byte>`, the firmware's `ble_link_on_identify`,
 // setup claim included): `ok` lets the write succeed, `busy` / `closed` fail it with ATT 0x80; each
 // outcome is recorded in `gatt`. The simulator's `CLAIM` lines say which link holds the setup claim.
+// Phone conditions for the phone-first sound routing (BLE_PROTOCOL §1, §5): `suspend` freezes a
+// phone outright (nothing runs, frames held: an Android app with no foreground service, a hung JS
+// thread); `sleep` is an iOS app suspended in the background (its timers stop; a frame wakes it
+// `wakeMs` later, and it runs while it handles frames and while a sound it started plays, then is
+// frozen again; timers due meanwhile fire at the next wake); `background` on Android pauses its JS
+// timers (only a frame or a row reaching it fires the due ones, as `processTimers.pump`); a sound in
+// the fake player is native (it ends on time while JS timers are paused). `dropStatus` discards the
+// dashcam's STATUS frames to a phone (negative tests), and each phone has an audio-output probe stub.
+//
 // What the simulator does not contain is modelled here, and only here, from the firmware's
 // `ble_gatt.c` (NimBLE glue): the INFO read (`peer_bonded`, `bond_count`, flags bit 0 the window,
 // bit 1 another link holds the claim), the bond store (which phones are bonded), the TX read that
@@ -71,6 +80,8 @@ export interface Played {
 export interface FakePlayer extends AlertPlayer {
   played: Played[];
   stops: number[];
+  /** a sound is playing now (it keeps an iOS app awake) */
+  busy(): boolean;
   /** items that made a sound (not dropped, not silent) */
   sounded(since?: number): Played[];
   /** haptic + visual only items */
@@ -83,7 +94,12 @@ interface Timer {
   seq: number;
   fn: () => void;
   owner: Phone | null;
+  /** a native timer of the phone's (a sound playing): it runs while JS timers are paused or asleep */
+  native: boolean;
 }
+
+/** How long a sleeping iOS app runs after it handled a frame (its JS settles within it). */
+export const HANDLE_MS = 50;
 
 export interface DbGate {
   re: RegExp | null;
@@ -139,6 +155,20 @@ export interface Phone {
   held: number[][];
   /** a silent link loss: nothing passes either way, no disconnect yet */
   blackholed: boolean;
+  /** what drive-sense `audioOutputState` answers */
+  audio: { callActive: boolean; volume: number | null; headphones: boolean | null };
+  /** Android: when the link held the alert wake lock */
+  holds: number[];
+  /** iOS asleep in the background: frames wake it after `wakeMs` */
+  asleep: { wakeMs: number } | null;
+  /** asleep: it runs until then (handling a frame) */
+  awakeUntil: number;
+  /** asleep: frames waiting for the wake under way */
+  waking: number[][] | null;
+  /** Android in the background: JS timers fire only from a frame or a row */
+  paused: boolean;
+  /** the world discards STATUS frames to this phone */
+  statusDropped: boolean;
   latency: { up: number; down: number };
   transport(): DashcamTransport;
   setup(): SetupFlow;
@@ -215,11 +245,25 @@ export class World {
     return this.bootAt + up;
   }
 
-  timer(ms: number, fn: () => void, owner: Phone | null): number {
+  timer(ms: number, fn: () => void, owner: Phone | null, native = false): number {
     this.timerSeq += 1;
-    const t: Timer = { id: this.timerSeq, at: this.W + Math.max(0, ms), seq: this.timerSeq, fn, owner };
+    const t: Timer = { id: this.timerSeq, at: this.W + Math.max(0, ms), seq: this.timerSeq, fn, owner, native };
     this.timers.push(t);
     return t.id;
+  }
+
+  /** A sleeping iOS app with nothing to do now: no frame being handled, no sound playing. */
+  private frozen(phone: Phone): boolean {
+    return phone.asleep !== null && this.W >= phone.awakeUntil && !phone.player.busy();
+  }
+
+  /** Whether `t` may fire now. */
+  private runnable(t: Timer): boolean {
+    const o = t.owner;
+    if (!o) return true;
+    if (o.suspended) return false;
+    if (t.native) return true;
+    return !o.paused && !this.frozen(o);
   }
 
   clearTimer(id: unknown): void {
@@ -229,7 +273,7 @@ export class World {
   private nextTimer(): Timer | null {
     let best: Timer | null = null;
     for (const t of this.timers) {
-      if (t.owner?.suspended) continue;
+      if (!this.runnable(t)) continue;
       if (!best || t.at < best.at || (t.at === best.at && t.seq < best.seq)) best = t;
     }
     return best;
@@ -347,13 +391,53 @@ export class World {
 
   private toPhone(phone: Phone, bytes: number[]): void {
     if (phone.blackholed) return;
+    // STATUS is type 0x02.
+    if (phone.statusDropped && bytes[0] === 0x02) return;
     const deliver = () => {
       if (phone.blackholed || !phone.ble.connected.has(phone.peripheralId)) return;
-      if (phone.suspended) phone.held.push(bytes);
-      else phone.ble.notify(phone.peripheralId, bytes);
+      if (phone.suspended) {
+        phone.held.push(bytes);
+        return;
+      }
+      if (phone.asleep && (phone.waking !== null || this.frozen(phone))) {
+        // iOS wakes the app for a notification of a subscribed characteristic, `wakeMs` later.
+        if (phone.waking === null) {
+          phone.waking = [];
+          this.timer(phone.asleep.wakeMs, () => this.wake(phone), null);
+        }
+        phone.waking.push(bytes);
+        return;
+      }
+      this.notify(phone, bytes);
     };
     if (phone.latency.down > 0) this.timer(phone.latency.down, deliver, null);
     else deliver();
+  }
+
+  /** Hand a frame to the phone's BLE stack (an Android phone in the background pumps its timers first). */
+  private notify(phone: Phone, bytes: number[]): void {
+    if (!phone.ble.connected.has(phone.peripheralId)) return;
+    if (phone.paused) this.pumpPhone(phone);
+    phone.ble.notify(phone.peripheralId, bytes);
+    if (phone.asleep) phone.awakeUntil = Math.max(phone.awakeUntil, this.W + HANDLE_MS);
+  }
+
+  private wake(phone: Phone): void {
+    const frames = phone.waking ?? [];
+    phone.waking = null;
+    if (!phone.asleep) return;
+    phone.awakeUntil = Math.max(phone.awakeUntil, this.W + HANDLE_MS);
+    for (const b of frames) this.notify(phone, b);
+  }
+
+  /** `processTimers.pump()`: fire the phone's JS timers already due, in due order. */
+  private pumpPhone(phone: Phone): void {
+    const due = this.timers.filter((t) => t.owner === phone && !t.native && t.at <= this.W).sort((a, b) => a.at - b.at || a.seq - b.seq);
+    for (const t of due) {
+      if (!this.timers.includes(t)) continue;
+      this.timers = this.timers.filter((x) => x !== t);
+      t.fn();
+    }
   }
 
   /** The link ends on the phone's side (a disconnect event). `toDashcam`: also tell the dashcam. */
@@ -536,6 +620,13 @@ export class World {
       held: [] as number[][],
       blackholed: false,
       latency: { up: o.latency?.up ?? 0, down: o.latency?.down ?? 0 },
+      audio: { callActive: false, volume: null, headphones: null },
+      holds: [] as number[],
+      asleep: null,
+      awakeUntil: 0,
+      waking: null,
+      paused: false,
+      statusDropped: false,
     } as unknown as Phone;
     phone.player = this.makePlayer(phone);
     this.wireBle(phone);
@@ -576,6 +667,14 @@ export class World {
       },
       clearRepeat: (h) => this.clearTimer((h as { id: number }).id),
       onError: (e, ctx) => phone.errors.push(`${ctx}: ${describe(e)}`),
+      audioOutput: () => ({ ...phone.audio }),
+      ...(platform === 'android'
+        ? {
+            holdAwake: () => {
+              phone.holds.push(this.W);
+            },
+          }
+        : {}),
     });
     phone.setup = () =>
       createSetupFlow({
@@ -603,6 +702,7 @@ export class World {
     const p: FakePlayer = {
       played,
       stops,
+      busy: () => current !== null,
       sounded: (since = 0) => played.filter((x) => x.at >= since && !x.dropped && !x.decision.silent),
       silent: (since = 0) => played.filter((x) => x.at >= since && !x.dropped && x.decision.silent === true),
       deliver: (d) => {
@@ -616,7 +716,7 @@ export class World {
             resolve();
           };
           current = done;
-          this.timer(ms, done, phone);
+          this.timer(ms, done, phone, true);
         });
       },
       stopCurrent: () => {
@@ -781,6 +881,37 @@ export class World {
     await this.settle();
   }
 
+  /** iOS puts the app in the background and suspends it: frames wake it `wakeMs` later. */
+  async sleep(phone: Phone, o: { wakeMs?: number } = {}): Promise<void> {
+    phone.appState.emit('background');
+    phone.asleep = { wakeMs: o.wakeMs ?? 150 };
+    phone.awakeUntil = this.W;
+    await this.settle();
+  }
+
+  /** Android: RoadWise goes to the background (the link service keeps it alive; JS timers pause). */
+  async background(phone: Phone): Promise<void> {
+    phone.appState.emit('background');
+    if (phone.platform === 'android') phone.paused = true;
+    await this.settle();
+  }
+
+  /** RoadWise back in front (awake, timers running). */
+  async foreground(phone: Phone): Promise<void> {
+    phone.asleep = null;
+    const frames = phone.waking ?? [];
+    phone.waking = null;
+    phone.paused = false;
+    for (const b of frames) this.notify(phone, b);
+    phone.appState.emit('active');
+    await this.settle();
+  }
+
+  /** The world discards the dashcam's STATUS frames to this phone (on) or stops doing so. */
+  dropStatus(phone: Phone, on: boolean): void {
+    phone.statusDropped = on;
+  }
+
   /** A silent link loss: nothing passes; neither side has noticed yet. */
   blackhole(phone: Phone): void {
     phone.blackholed = true;
@@ -854,6 +985,8 @@ export class World {
       screenOn: true,
       appForeground: true,
     };
+    // The host pumps the process timers on every row (Android in the background).
+    if (phone.paused) this.pumpPhone(phone);
     phone.rt.row(r, { clientTripId: phone.host.recording ? phone.tripId : null, recording: phone.host.recording, dryRun: false });
   }
 
@@ -861,7 +994,7 @@ export class World {
   async drive(phone: Phone, ms: number, speed: number): Promise<void> {
     const end = this.W + ms;
     while (this.W < end) {
-      if (!phone.suspended) this.row(phone, { speed });
+      if (!phone.suspended && !phone.asleep) this.row(phone, { speed });
       await this.runTo(Math.min(end, this.W + 1000));
     }
   }
@@ -869,7 +1002,7 @@ export class World {
   /** Bring a pre-paired phone's link up and through the handshake (HELLO, pings, RESUME, STATE). */
   async connected(phone: Phone, maxMs = 3000): Promise<void> {
     await this.until(() => phone.rt.state().link.lifecycle === 'connected' && phone.rt.state().link.synced, maxMs, `${phone.name} synced`);
-    // The first STATE (the lease) follows the RESUME.
+    // The first STATE follows the RESUME (whatever the cadence).
     await this.until(() => this.rxOf('STATE', phone.conn).length > 0, 2000, `${phone.name} STATE`);
   }
 }
@@ -898,7 +1031,7 @@ export async function scenario(o: WorldOptions, fn: (w: World) => Promise<void>)
   }
 }
 
-/** A dashcam with phone A bonded and paired, linked and synced (lease held from the first STATE). */
+/** A dashcam with phone A bonded and paired, linked and synced (its first STATE sent). */
 export async function linkedA(w: World, o: { platform?: 'ios' | 'android'; recording?: boolean; buzzerToo?: boolean } = {}): Promise<Phone> {
   const a = await w.addPhone({ name: 'A', conn: 1, paired: true, ...o });
   await w.connected(a);
