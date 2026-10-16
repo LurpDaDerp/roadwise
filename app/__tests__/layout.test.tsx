@@ -164,6 +164,7 @@ function driveState(over: Partial<DriveState> = {}): DriveState {
     limit: UNKNOWN_LIMIT,
     limitMph: null,
     speedingTier: null,
+    phoneUseSince: null,
     stopped: false,
     autoEndAt: null,
     distanceM: 0,

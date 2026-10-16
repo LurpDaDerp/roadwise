@@ -174,8 +174,13 @@ export interface EngineSnapshot {
   limit: LimitSample;
   /** The limit to show and judge against, whole mph; null → "—" (unknown, low-confidence or hAcc > 20 m). */
   limitMph: number | null;
-  /** The speeding tier of the current row's episode, for the edge glow. */
+  /** The speeding tier of the current row's episode, for the driving screen's halo. */
   speedingTier: Tier | null;
+  /**
+   * The confirmed phone episode's first use row (row clock), while it is open and recording; else
+   * null (before confirmation, a parking-lot episode, no episode). The halo's distraction ramp.
+   */
+  phoneUseSince: number | null;
   /** Known speed at or below 5 mph: points may show. */
   stopped: boolean;
   /** epoch ms the drive ends by itself unless the car moves (`session.autoEndAt`); null unless recording. */

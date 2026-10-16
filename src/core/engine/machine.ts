@@ -112,6 +112,7 @@ export function createEngine(deps: EngineDeps): Engine {
     const row = seen?.row ?? null;
     const speed = row === null ? null : knownSpeed(row);
     const open = suite?.openSpeeding() ?? null;
+    const phone = suite?.openPhone() ?? null;
     return Object.freeze({
       status,
       clientTripId: session?.clientTripId ?? null,
@@ -122,6 +123,7 @@ export function createEngine(deps: EngineDeps): Engine {
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
       limitMph: seen?.limitMph ?? null,
       speedingTier: status === 'recording' && open !== null ? open.tier : null,
+      phoneUseSince: status === 'recording' && phone !== null && phone.confirmed ? phone.startedAt : null,
       stopped: status === 'recording' && speed !== null && speed <= STOPPED_MPS,
       autoEndAt: status === 'recording' && session !== null ? autoEndAt(session) : null,
       distanceM: session?.distanceM ?? 0,
