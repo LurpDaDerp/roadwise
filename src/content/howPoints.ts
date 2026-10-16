@@ -84,7 +84,7 @@ export const RULES: RuleSection[] = [
     points: [
       'Lifting or handling your phone while driving is a phone pickup.',
       'Leaving RoadWise during a drive counts as phone use too: another app or the home screen, and on Android phones the app switcher and split screen. The time away counts as handling until you come back or lock your phone, which can wait until you’ve stopped.',
-      'Open your navigation app with the navigation button on the drive screen. That never costs points. Going back to it any other way does.',
+      'Open your navigation app with the navigation button on the drive screen. That never costs points. Once you lock your phone or come back to RoadWise, open it with the button again: going back to it any other way costs points.',
       'Locking your phone and the notification shade never count. A call’s own screen doesn’t count; once you’ve been back in RoadWise for 10 s of the connected call, leaving again does.',
       'On iPhone a switch counts once you come back to RoadWise after 15 s or more, or after about 26 s away (iOS reports a lock late, so a lock screen that lights up briefly for a message doesn’t count), and only once your iPhone has shown RoadWise it reports a lock in time (this needs a passcode). Several short switches in a row count as one pickup (on iPhone, ones of more than about 11 s, so a quick lock and unlock never counts).',
     ],

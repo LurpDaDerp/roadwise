@@ -35,7 +35,7 @@ test('phone use: leaving RoadWise is phone use too, the navigation button never 
   expect(RULES.map((r) => r.id).indexOf('phone')).toBe(1);
   expect(phone).toHaveLength(5);
   expect(phone[1]).toMatch(/^Leaving RoadWise during a drive counts as phone use too: another app or the home screen, and on Android phones the app switcher and split screen\. /);
-  expect(phone[2]).toBe('Open your navigation app with the navigation button on the drive screen. That never costs points. Going back to it any other way does.');
+  expect(phone[2]).toBe('Open your navigation app with the navigation button on the drive screen. That never costs points. Once you lock your phone or come back to RoadWise, open it with the button again: going back to it any other way costs points.');
   expect(phone[3]).toMatch(/^Locking your phone and the notification shade never count\./);
   expect(phone[3]).toMatch(/A call’s own screen doesn’t count; once you’ve been back in RoadWise for 10 s of the connected call, leaving again does\.$/);
   expect(phone[4]).toMatch(/^On iPhone a switch counts once you come back to RoadWise after 15 s or more, or after about 26 s away \(iOS reports a lock late, so a lock screen that lights up briefly for a message doesn’t count\), and only once/);

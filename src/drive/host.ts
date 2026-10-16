@@ -131,9 +131,9 @@ export interface DriveHost {
   reportAlertsAvailable(): void;
   /**
    * The navigation button is opening the navigation app (only while recording): from the next row
-   * until RoadWise is back in front, the rows are excused from screen switches (stamped
-   * `exempt: 'nav'`). If RoadWise has not left within `LEAVE_WAIT_S` of the last row seen at the
-   * tap (row clock), the exemption ends. Persisted, so a relaunch keeps it.
+   * until RoadWise is back in front, the phone locks or its screen goes off, the rows are excused
+   * from screen switches (stamped `exempt: 'nav'`). If RoadWise has not left within `LEAVE_WAIT_S`
+   * of the last row seen at the tap (row clock), the exemption ends. Persisted, so a relaunch keeps it.
    */
   beginLeave(): void;
   /** The navigation app did not open: the exemption ends at once. */
@@ -523,7 +523,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    * The exemption stamps (design §6.2), on the row clock, before the engine sees the row: the stamped
    * row is what is stored and replayed. `restart` first: excused until RoadWise is in front, a lock or
    * the screen off, or `RESTART_GRACE_S` of rows. Then the navigation button's: stamped until RoadWise
-   * is back in front after leaving; ended if it never left within `LEAVE_WAIT_S`.
+   * is back in front after leaving, the phone locks or its screen goes off; ended if it never left
+   * within `LEAVE_WAIT_S`.
    */
   function stamp(row: FeatureRow): void {
     if (restart !== null) {
@@ -537,7 +538,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
     if (leave !== null) {
       leave.sinceRowTs ??= row.ts;
-      if (!row.appForeground) {
+      if (row.locked || !row.screenOn) {
+        // A lock or the screen off ends it: what the driver unlocks into next is a switch like any
+        // other, so one tap never covers the rest of the drive (reopen the app with the button).
+        leave = null;
+        persistSwitch();
+      } else if (!row.appForeground) {
         row.exempt = 'nav';
         if (!leave.left) {
           leave.left = true;

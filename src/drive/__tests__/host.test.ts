@@ -667,6 +667,46 @@ describe('screen switches and the navigation button (design §6, §12.3)', () =>
     await h.host.stop({ endOpenTrip: true });
   });
 
+  test.each([
+    ['a lock', { locked: true, screenOn: false, appForeground: false }],
+    ['the screen off', { locked: false, screenOn: false, appForeground: false }],
+  ] as const)('3a. Android: %s ends the exemption: unlocking back into the navigation app (or any app) counts', async (_name, off) => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, seg(2, T0, FRONT));
+    h.host.beginLeave();
+    await feed(h, seg(30, T0 + 2_000, AWAY));
+    await feed(h, seg(10, T0 + 32_000, off));
+    expect(phoneAlerts(h)).toEqual([]);
+    await flushWrites();
+    expect((await readPhoneSwitch(db))?.leave).toBeNull();
+    await feed(h, seg(10, T0 + 42_000, AWAY));
+    expect(phoneAlerts(h).map((d) => d.kind)).toEqual(['phone_pickup']);
+    await h.host.stop({ endOpenTrip: true });
+    const stored = await storedRows();
+    expect(stored.filter((r) => r.ts < T0 + 32_000 && !r.appForeground).every((r) => r.exempt === 'nav')).toBe(true);
+    expect(stored.filter((r) => r.ts >= T0 + 32_000).some((r) => r.exempt !== undefined)).toBe(false);
+  });
+
+  test('3b. iPhone: the lock report ends the exemption; an unlock into another app counts once it has lasted 15 s plus the lock cut', async () => {
+    const source = createFakeDriveSense({ platform: 'ios', now: () => clock });
+    source.setState({ location: 'whenInUse', lockSignal: 'lagged' });
+    const h = { ...build({ source }), source };
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, seg(2, T0, FRONT));
+    h.host.beginLeave();
+    await feed(h, seg(60, T0 + 2_000, AWAY));
+    await feed(h, seg(20, T0 + 62_000, IOS_LOCKED));
+    expect(phoneAlerts(h)).toEqual([]);
+    await feed(h, seg(25, T0 + 82_000, AWAY));
+    expect(phoneAlerts(h)).toEqual([]);
+    await feed(h, seg(5, T0 + 107_000, AWAY));
+    expect(phoneAlerts(h).map((d) => d.kind)).toEqual(['phone_pickup']);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
   test('4. the 10-s window is on the row clock, whatever the host clock says', async () => {
     const h = build();
     await h.host.boot();
