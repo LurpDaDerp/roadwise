@@ -111,6 +111,8 @@ export interface LinkServicePort {
 
 /** A probe read this recently is reused for a tick (a routed ALERT always reads it fresh). */
 export const AUDIO_PROBE_MEMO_MS = 500;
+/** A pairing key read that failed at load is tried again this long after (and at each later chance). */
+export const KEY_RETRY_MS = 5000;
 
 /**
  * What the DashPal link service should be for this link (integration R3): off with no DashPal
@@ -215,6 +217,15 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
   let probeMemo: { at: number; value: AudioOutputProbe } | null = null;
   /** The link service: what it was last set to, a call in flight, and a refusal waiting for the front. */
   const service = { sent: null as LinkServiceState | null, busy: false, refused: false, pairedId: null as string | null, unsupported: false };
+  /**
+   * The pairing's key could not be read (a Keychain or Keystore error, not a missing key): the
+   * pairing stays and its auto-connect waits for a read that works (RoadWise back in front, a drive
+   * starting, a setup ending).
+   */
+  let keyUnread = false;
+  let keyRetrying = false;
+  /** a setup's pairing step holds the radio (`stepAside`): no key retry reconnects under it */
+  let aside = false;
 
   function audioOutput(fresh: boolean): AudioOutputProbe {
     const read = deps.audioOutput;
@@ -407,6 +418,7 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     if (foreground && !wasForeground) {
       service.refused = false;
       transport?.retryNow();
+      void retryKey();
     }
     syncRepeat();
     link.tick();
@@ -453,13 +465,47 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     await t.start();
   }
 
-  /** This pairing's key, or null when it has none on this phone (the record cannot be used). */
-  async function keyFor(paired: PairedDashcam): Promise<StoredAuth | null> {
-    const auth = await secrets.readAuth().catch((e: unknown) => {
+  /**
+   * This pairing's key; null when this phone has none for it (the record cannot be used);
+   * `unreadable` when the read itself failed (the key may well be there: the record stays).
+   */
+  async function keyFor(paired: PairedDashcam): Promise<StoredAuth | null | 'unreadable'> {
+    let auth: StoredAuth | null;
+    try {
+      auth = await secrets.readAuth();
+    } catch (e) {
       report(e, 'read key');
-      return null;
-    });
+      return 'unreadable';
+    }
     return auth && auth.dashcamId === paired.dashcamId ? auth : null;
+  }
+
+  /** A pairing found keyless after load: it goes, as at load (nothing can connect with it). */
+  async function dropKeyless(): Promise<void> {
+    await settings.remove(PAIRED_KEY).catch((e: unknown) => report(e, 'drop keyless pairing'));
+    await secrets.writeTarget(null).catch((e: unknown) => report(e, 'secure target'));
+    transport?.setTarget(null);
+    phonesEvent({ kind: 'reset' });
+    link.setPaired(null);
+    syncRepeat();
+    notify();
+    deps.onPairingChanged?.(null);
+  }
+
+  /** The key read that failed, again; it connects once the key reads (or drops a pairing found keyless). */
+  async function retryKey(): Promise<void> {
+    const paired = link.snapshot().paired;
+    if (!keyUnread || keyRetrying || aside || disposed || !paired) return;
+    keyRetrying = true;
+    try {
+      const key = await keyFor(paired);
+      if (key === 'unreadable' || !keyUnread || aside || disposed || link.snapshot().paired !== paired) return;
+      keyUnread = false;
+      if (key === null) await dropKeyless();
+      else await connectPaired(paired, key);
+    } finally {
+      keyRetrying = false;
+    }
   }
 
   const ready = (async () => {
@@ -474,7 +520,7 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
         await settings.remove(PAIRED_KEY).catch((e: unknown) => report(e, 'drop v1 pairing'));
       }
       const auth = paired ? await keyFor(paired) : null;
-      if (paired && !auth) {
+      if (paired && auth === null) {
         // A pairing whose key is not on this phone (a backup restored to a new phone: the key is
         // "this device only"): it cannot connect, so it goes; the driver sets the DashPal up here.
         await settings.remove(PAIRED_KEY).catch((e: unknown) => report(e, 'drop keyless pairing'));
@@ -487,7 +533,11 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
       link.setPaired(paired);
       reattach();
       syncRepeat();
-      if (paired) {
+      if (paired && auth === 'unreadable') {
+        // The record stays; the auto-connect waits for a key read that works.
+        keyUnread = true;
+        setTimer(() => void retryKey(), KEY_RETRY_MS);
+      } else if (paired && auth !== 'unreadable') {
         await connectPaired(paired, auth);
       } else {
         // Nobody to reconnect at launch: the transport attaches only when setup or the detector
@@ -516,7 +566,10 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
 
     row(row, drive) {
       // A drive starting: a reconnect that waits (a soft repair, a backoff) tries at once.
-      if (drive.recording && !lastRecording) transport?.retryNow();
+      if (drive.recording && !lastRecording) {
+        transport?.retryNow();
+        void retryKey();
+      }
       lastRecording = drive.recording;
       const verdict = link.row(row, drive);
       if (!verdict || drive.clientTripId === null) return;
@@ -570,7 +623,9 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
 
     async pair(record) {
       const auth = await keyFor(record);
-      if (!auth) throw new Error('no pairing key for this DashPal');
+      if (auth === null || auth === 'unreadable') throw new Error('no pairing key for this DashPal');
+      keyUnread = false;
+      aside = false;
       await settings.set(PAIRED_KEY, record);
       await settings.set(BT_OPT_IN_KEY, true);
       btOptIn = true;
@@ -585,19 +640,29 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     },
 
     stepAside() {
+      aside = true;
       getTransport()?.setTarget(null);
     },
 
     async resumePaired() {
+      aside = false;
       const paired = link.snapshot().paired;
       if (!paired) return;
-      await connectPaired(paired, await keyFor(paired));
+      const key = await keyFor(paired);
+      if (key === 'unreadable') {
+        keyUnread = true;
+        return;
+      }
+      keyUnread = false;
+      await connectPaired(paired, key);
     },
 
     async forget() {
       if (link.snapshot().lifecycle === 'connected') {
         await link.command(COMMAND.FORGET_ME).catch((e: unknown) => report(e, 'forget me'));
       }
+      keyUnread = false;
+      aside = false;
       transport?.setTarget(null);
       await settings.remove(PAIRED_KEY);
       await secrets.deleteAuth().catch((e: unknown) => report(e, 'delete key'));

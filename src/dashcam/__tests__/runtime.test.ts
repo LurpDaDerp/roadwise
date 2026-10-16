@@ -33,6 +33,8 @@ let db: Db;
 /** The phone's SecureStore (an in-memory one: the runtime reads its key from it). */
 const mem = new Map<string, string>();
 let secrets: DashpalSecrets;
+/** SecureStore reads fail (a Keychain or Keystore error) while set. */
+let readsFail = false;
 
 async function seedKey(dashcamId = CAM): Promise<void> {
   await secrets.writePendingAuth({ dashcamId, phoneId: PHONE_ID, kPair: K_PAIR, code: null });
@@ -43,8 +45,12 @@ beforeEach(async () => {
   db = await createSqlJsDb();
   await migrate(db);
   mem.clear();
+  readsFail = false;
   secrets = createDashpalSecrets(() => ({
-    getItemAsync: async (k: string) => mem.get(k) ?? null,
+    getItemAsync: async (k: string) => {
+      if (readsFail) throw new Error('User interaction is not allowed.');
+      return mem.get(k) ?? null;
+    },
     setItemAsync: async (k: string, v: string) => void mem.set(k, v),
     deleteItemAsync: async (k: string) => void mem.delete(k),
   }));
@@ -167,6 +173,70 @@ test('a pairing whose key is not on this phone (a backup restored to another pho
   const r2 = rig();
   await r2.rt.ready;
   expect(r2.rt.state().link.lifecycle).toBe('unpaired');
+});
+
+test('a key read that fails at launch keeps the pairing (no connect); RoadWise back in front reads it again and connects', async () => {
+  await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+  readsFail = true;
+  const r = rig();
+  await r.rt.ready;
+  await flush();
+  expect(await createSettingsRepo(db).get(PAIRED_KEY)).toEqual(PAIRED);
+  expect(mem.has(AUTH_SECURE_KEY)).toBe(true);
+  expect(r.rt.state().link).toMatchObject({ paired: PAIRED, lifecycle: 'idle' });
+  expect(r.ble.calls.some((c) => c.startsWith('connect'))).toBe(false);
+  // still failing: nothing changes
+  r.appState.emit('background');
+  r.appState.emit('active');
+  await flush();
+  expect(r.rt.state().link.paired).toEqual(PAIRED);
+  expect(r.ble.calls.some((c) => c.startsWith('connect'))).toBe(false);
+  readsFail = false;
+  r.appState.emit('background');
+  r.appState.emit('active');
+  await flush();
+  expect(r.rt.state().link.lifecycle).toBe('connected');
+  r.rt.dispose();
+});
+
+test('a key read that failed at launch: a drive starting reads it again; a key then found missing drops the pairing', async () => {
+  await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+  readsFail = true;
+  const r = rig();
+  await r.rt.ready;
+  readsFail = false;
+  r.rt.row(row(10), { clientTripId: TRIP, recording: true, dryRun: false });
+  await flush();
+  expect(r.rt.state().link.lifecycle).toBe('connected');
+  r.rt.dispose();
+
+  readsFail = true;
+  const r2 = rig();
+  await r2.rt.ready;
+  readsFail = false;
+  mem.delete(AUTH_SECURE_KEY);
+  r2.rt.row(row(10), { clientTripId: TRIP, recording: true, dryRun: false });
+  await flush();
+  expect(r2.rt.state().link.lifecycle).toBe('unpaired');
+  expect(await createSettingsRepo(db).get(PAIRED_KEY)).toBeNull();
+  r2.rt.dispose();
+});
+
+test('a key read that failed at launch is not retried under a setup’s pairing step; resumePaired reads it again', async () => {
+  await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+  readsFail = true;
+  const r = rig();
+  await r.rt.ready;
+  readsFail = false;
+  r.rt.stepAside();
+  r.appState.emit('background');
+  r.appState.emit('active');
+  await flush();
+  expect(r.ble.calls.some((c) => c.startsWith('connect'))).toBe(false);
+  await r.rt.resumePaired();
+  await flush();
+  expect(r.rt.state().link.lifecycle).toBe('connected');
+  r.rt.dispose();
 });
 
 test('a paired dashcam: settings loaded, the key read, the transport connected through a session, the 1 s tick only while in the foreground', async () => {
