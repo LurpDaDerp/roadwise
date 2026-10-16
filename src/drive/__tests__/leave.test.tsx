@@ -1,14 +1,17 @@
 // RoadWise opens nothing outside itself during a drive except the navigation app (design §6.6):
-// the Settings pages, the Android browser and the store say "End the drive first" while a drive
-// records, and open as usual outside one.
-import { fireEvent, render, screen } from '@testing-library/react-native';
+// the Settings pages, the Android browser, the store, the share sheets and the data export say
+// "End the drive first" while a drive records, and open as usual outside one.
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react-native';
 import { Alert, Linking } from 'react-native';
 
 import { createPermissionsAdapter } from '@/core/permissions/adapters';
 import { blockedDuringDrive, cancelLeaving, driveRecording, leaveCopy, noteLeaving, setLeaveSink, type LeaveSink } from '@/drive/leave';
 import { LegalLinks } from '@/features/auth/LegalLinks';
 import { UpdateRequiredScreen } from '@/features/auth/UpdateRequiredScreen';
+import { useExport } from '@/features/settings/exportFlow';
 import { ThemeProvider } from '@/ui/theme';
+
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 
 declare const __dirname: string;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the root tsconfig has no Node typings
@@ -100,6 +103,36 @@ describe('Settings pages', () => {
     const src = readFileSync(join(__dirname, '..', '..', 'features', 'friends', 'ScanScreen.tsx'), 'utf8');
     expect(src).toMatch(/defaultPermissionsAdapter\(\)\.openAppSettings\(\)/);
     expect(src).not.toMatch(/Linking/);
+  });
+});
+
+describe('share sheets and the data export', () => {
+  test('the export makes no request and opens no sheet or folder picker during a drive, one dialog; after End it runs', async () => {
+    const s = sinkOf(true);
+    setLeaveSink(s);
+    const exportData = jest.fn(async () => ({ ok: true as const, json: '{}' }));
+    const share = jest.fn(async (_json: string) => 'saved' as const);
+    const { result } = await renderHook(() => useExport({ exportData, share }));
+    await act(() => result.current.run());
+    expect(exportData).not.toHaveBeenCalled();
+    expect(share).not.toHaveBeenCalled();
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(result.current.state).toBe('idle');
+    s.set(false);
+    await act(() => result.current.run());
+    expect(share).toHaveBeenCalledWith('{}');
+    expect(result.current.state).toBe('saved');
+    expect(s.begin).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['clan invite', join('clan', 'ClanScreen.tsx'), /if \(blockedDuringDrive\(\)\) return;\s*void Share\.share\(/],
+    ['friend link', join('friends', 'AddFriendsScreen.tsx'), /if \(blockedDuringDrive\(\)\) return;\s*void Share\.share\(/],
+    ['drive card', join('drives', 'ShareCard.tsx'), /if \(blockedDuringDrive\(\)\) return;\s*setState\('busy'\);[\s\S]*?Sharing\.shareAsync\(/],
+  ])('the %s share asks the guard before the sheet opens', (_name, file, guard) => {
+    const src = readFileSync(join(__dirname, '..', '..', 'features', file), 'utf8');
+    expect(src).toMatch(guard);
+    expect(src.match(/Share\.share\(|Sharing\.shareAsync\(/g)).toHaveLength(1);
   });
 });
 

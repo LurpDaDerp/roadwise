@@ -5,6 +5,7 @@ import { forwardRef, useRef, useState } from 'react';
 import { Text as RNText, StyleSheet, View, type TextStyle } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
+import { blockedDuringDrive } from '@/drive/leave';
 import { formatRating } from '@/lib/rating';
 import { formatDistance, type Units } from '@/lib/units';
 import { Banner, Button, Sheet, Text, ThemeProvider, tokens, useTheme, type TypeVariant } from '@/ui';
@@ -131,6 +132,8 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
   const [state, setState] = useState<'idle' | 'busy' | 'error'>('idle');
 
   const share = async () => {
+    // A share target opens outside RoadWise: not during a drive (src/drive/leave.ts).
+    if (blockedDuringDrive()) return;
     setState('busy');
     try {
       if (!(await Sharing.isAvailableAsync())) throw new Error('sharing unavailable');

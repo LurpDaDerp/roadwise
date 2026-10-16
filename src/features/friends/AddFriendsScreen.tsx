@@ -5,6 +5,7 @@ import { Share, TextInput, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { useMySummary } from '@/data/server/summary';
+import { blockedDuringDrive } from '@/drive/leave';
 import { Section, TopBar } from '@/features/settings/parts';
 import { searchQuery, useSearchUsers } from '@/features/social/api';
 import { addLink, profileHref } from '@/features/social/links';
@@ -135,7 +136,11 @@ export function AddFriendsScreen({ debounceMs = SEARCH_DEBOUNCE_MS }: { debounce
               icon="share-outline"
               variant="ghost"
               size="md"
-              onPress={() => void Share.share({ message: copy.shareMessage(link) }).catch(() => {})}
+              onPress={() => {
+                // A share target opens outside RoadWise: not during a drive (src/drive/leave.ts).
+                if (blockedDuringDrive()) return;
+                void Share.share({ message: copy.shareMessage(link) }).catch(() => {});
+              }}
               testID="share-link"
             />
           </>

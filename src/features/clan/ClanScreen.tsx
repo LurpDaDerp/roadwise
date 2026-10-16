@@ -5,6 +5,7 @@ import { FlatList, RefreshControl, ScrollView, Share, View } from 'react-native'
 
 import { useUnits } from '@/data/queries/units';
 import { useSession } from '@/data/supabase/session';
+import { blockedDuringDrive } from '@/drive/leave';
 import { Button, Card, Chip, IconButton, ProgressRing, Screen, SectionHeader, Text, useTheme } from '@/ui';
 
 import {
@@ -139,6 +140,8 @@ function InviteCard({ clan }: { clan: MyClan['clan'] }) {
   if (!code) return null;
 
   const share = () => {
+    // A share target opens outside RoadWise: not during a drive (src/drive/leave.ts).
+    if (blockedDuringDrive()) return;
     void Share.share({ message: inviteMessage(clan.name, code) }).catch(() => {});
   };
   const newCode = async () => {

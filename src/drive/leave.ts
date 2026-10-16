@@ -4,8 +4,9 @@
 //   through this sink (`noteLeaving`) before it opens the navigation app, and takes it back
 //   (`cancelLeaving`) when the app did not open. The host stamps the rows until RoadWise is back.
 // - Every other way RoadWise itself would open something outside the app (a Settings page, a
-//   browser page that leaves the app, the store) is refused while a drive records: one dialog says
-//   "End the drive first" (`blockedDuringDrive`). Outside a drive nothing changes.
+//   browser page that leaves the app, the store, a share sheet and the data export) is refused while
+//   a drive records: one dialog says "End the drive first" (`blockedDuringDrive`). Outside a drive
+//   nothing changes.
 //
 // The sink is the drive host, registered by the bootstrap beside it; with none (no host yet, or
 // tests) nothing is noted and nothing is blocked.
