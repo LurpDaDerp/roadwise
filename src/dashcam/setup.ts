@@ -246,8 +246,12 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
   const driveOpened = (): boolean => !finSent && deps.isBusy();
   const stopNow = (): boolean => cancelled || driveOpened();
 
+  /**
+   * Cancel and a drive opening stop setup only until PAIR_FIN is sent: after it the dashcam may hold
+   * the pairing, so its outcome is settled (and the key kept as the orphan if it stays unknown).
+   */
   const check = (): void => {
-    if (cancelled) throw new Cancelled();
+    if (cancelled && !finSent) throw new Cancelled();
     if (driveOpened()) throw new DriveOpen();
   };
 
@@ -664,8 +668,8 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     await release(t, c.id);
     const until = deps.now() + FIN_RECONNECT_MS;
     let connected = false;
-    while (!connected && deps.now() < until) {
-      check();
+    // Cancelled: no reconnect; the key is kept as the orphan below.
+    while (!connected && !cancelled && deps.now() < until) {
       try {
         await connectSetup(t, c.id, { timeoutMs: Math.max(1000, until - deps.now()) });
         connected = true;

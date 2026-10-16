@@ -636,6 +636,29 @@ describe('the outcome of PAIR_FIN unknown', () => {
     expect(await r.secrets.readOrphan()).toBeNull();
   });
 
+  test('Cancel while finishing (PAIR_FIN sent, its RESULT not read): cancelled, the key kept as the orphan; the next setup replaces that record (prev_id)', async () => {
+    const r = rig();
+    const cam = r.cams.get(0xd5)!;
+    const write = r.ble.onWrite!;
+    r.ble.onWrite = (w) => {
+      if (w.characteristic === AUTH_CHAR && w.bytes[0] === 0x11) {
+        expect(r.flow.phase().kind).toBe('finishing');
+        void r.flow.cancel();
+      }
+      return write(w);
+    };
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end.kind).toBe('cancelled');
+    expect(cam.phones.size).toBe(1); // the dashcam stored it
+    const orphan = await r.secrets.readOrphan();
+    expect(orphan?.phoneId).toBe([...cam.phones.keys()][0]);
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    r.ble.onWrite = write;
+    cam.windowOpen = true;
+    expect((await withCode(r, (f) => f.scanned(link(0xd5)))).kind).toBe('done');
+    expect(cam.phones.size).toBe(1);
+  });
+
   test('no reconnect within 15 s: error, the key kept only as the orphan', async () => {
     const r = rig();
     dropAfterFin(r);
