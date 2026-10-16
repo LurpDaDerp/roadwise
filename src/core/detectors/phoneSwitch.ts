@@ -10,7 +10,10 @@
 //   press (`lockCutMs`), and only a phone that has shown a lock in time counts at all (`proven`;
 //   the detector proves it in-drive too). Without a passcode (`none`) nothing is ever a switch.
 //   A lock undone before its report reads as a short switch, so an iPhone short switch counts toward
-//   a burst only when it outlasted the lock cut (`burstRunLong`).
+//   a burst only when it outlasted the lock cut (`burstRunLong`). After a lock report, the phone
+//   reads as away as soon as it is unlocked outside RoadWise, a Face ID glance at the woken lock
+//   screen included, so such a run waits the lock cut longer before it counts (`iosRunMinS`) and
+//   never counts toward a burst.
 // - Excused: the host's stamps (`row.exempt`: the navigation button, the home screen a restart left
 //   behind), a call's own screen (below) and the warm-up.
 //
@@ -71,9 +74,6 @@ export const NO_SWITCH: PhoneSwitchCtx = Object.freeze({ signal: 'none', lockDel
 /** Android counts switches exactly; iPhone needs the lock checks; `none` never counts one. */
 export const isIosSignal = (signal: SwitchSignal): boolean => signal === 'lagged' || signal === 'unproven';
 
-/** The run's minimum span for a signal, seconds. */
-export const switchMinS = (signal: SwitchSignal): number => (signal === 'reliable' ? SWITCH_MIN_S_ANDROID : SWITCH_MIN_S_IOS);
-
 /** A row's age within a run that began at `startTs`, seconds: the first row is 1. */
 export const ageS = (ts: number, startTs: number): number => (ts - startTs) / 1000 + 1;
 
@@ -98,6 +98,16 @@ export function burstRunLong(signal: SwitchSignal, startTs: number, lastTs: numb
   if (ageS(lastTs, startTs) < BURST_MIN_RUN_S) return false;
   return signal === 'reliable' || lastTs - startTs > lockCutMs(delayMs);
 }
+
+/**
+ * iPhone: the span a run needs before it counts, seconds. `afterLock`: it began with the phone last
+ * reported locked and RoadWise not in front since. iOS lets the phone read as unlocked while its lock
+ * screen shows (Face ID unlocks it at a glance when a notification wakes it) and for about 10 s after
+ * it sleeps again, so such a run waits `SWITCH_MIN_S_IOS` plus the lock cut (26 s with the usual
+ * delay): a lock screen woken and slept again ends in a lock report before then and never counts. A
+ * run that does count is still charged from its first row.
+ */
+export const iosRunMinS = (afterLock: boolean, delayMs: number | null): number => SWITCH_MIN_S_IOS + (afterLock ? lockCutMs(delayMs) / 1000 : 0);
 
 /** What one row is, for screen switches. */
 export interface SwitchReading {

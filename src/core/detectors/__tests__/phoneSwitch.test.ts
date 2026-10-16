@@ -353,6 +353,49 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
     });
   });
 
+  describe('32. an unlock outside RoadWise after a lock report (a Face ID glance at the woken lock screen reads as away): it counts only from age 15 + the 11-s cut', () => {
+    /** RoadWise left (the lock press), the lock reported, then `n` rows unlocked outside RoadWise. */
+    type Seg = readonly [number, Partial<FeatureRow>];
+    const afterLock = (n: number, then: Seg = [10, front]) => seq([10, front], [10, away], [20, locked], [n, away], then);
+    test('a glance of 8 s and the 10-s grace, then the lock report again: never confirmed (no alert), nothing', () => {
+      const t = trace(afterLock(18, [20, locked]), IOS);
+      expect(t.confirmed.some(Boolean)).toBe(false);
+      expect(t.events).toEqual([]);
+    });
+    test('a glance of 15 s and the grace (25 rows), then the report: never confirmed, nothing', () => {
+      const t = trace(afterLock(25, [20, locked]), IOS);
+      expect(t.confirmed.some(Boolean)).toBe(false);
+      expect(t.events).toEqual([]);
+    });
+    test('unlocked into another app for 40 s: one pickup from its first row, confirmed at age 26', () => {
+      const t = trace(afterLock(40), IOS);
+      expect(pickups(t.events)).toEqual([expect.objectContaining({ startedAt: at(40), durationS: 40, measured: { mounted: false, speedMph: 35 } })]);
+      expect(t.confirmed.indexOf(true)).toBe(40 + 25);
+    });
+    test('the boundary: 25 rows then RoadWise is nothing, 26 is a pickup of 26 s', () => {
+      expect(run(afterLock(25), IOS)).toEqual([]);
+      expect(pickups(run(afterLock(26), IOS))).toEqual([expect.objectContaining({ startedAt: at(40), durationS: 26 })]);
+    });
+    test('a 13-s delay measured in the drive (cut 14 s): 28 rows are nothing, 29 a pickup', () => {
+      // the lock press at row 10, its report at row 24: 13 s measured, which replaces the context's
+      const slow = (n: number) => trace(seq([10, front], [14, away], [20, locked], [n, away], [10, front]), IOS);
+      expect(slow(28).det.lockProof()).toEqual({ delayMs: 13_000 });
+      expect(slow(28).events).toEqual([]);
+      expect(pickups(slow(29).events)).toEqual([expect.objectContaining({ startedAt: at(44), durationS: 29 })]);
+    });
+    test('a run after a lock never counts toward a burst; RoadWise in front in between clears the lock', () => {
+      const cycle: Seg[] = [[10, away], [3, locked], [13, away], [5, front]];
+      expect(run(seq([10, front], ...cycle, ...cycle, ...cycle), IOS)).toEqual([]);
+      // the same 13-s runs with RoadWise in front after each lock are a burst
+      const cleared: Seg[] = [[10, away], [3, locked], [1, front], [13, away], [5, front]];
+      expect(pickups(run(seq([10, front], ...cleared, ...cleared, ...cleared), IOS))).toHaveLength(1);
+    });
+    test('Android is unchanged: an unlock into another app counts at 3 s', () => {
+      const offRows = { ...away, screenOn: false, locked: true };
+      expect(pickups(run(seq([10, front], [20, offRows], [10, away], [10, front]), ANDROID))).toEqual([expect.objectContaining({ startedAt: at(30), durationS: 10 })]);
+    });
+  });
+
   test('without a passcode (none) nothing is a switch and nothing proves the phone', () => {
     const NONE = ctx({ switchSignal: 'none', platform: 'ios' });
     const t = trace(seq([10, front], [10, away], [20, locked], [10, front], [60, away], [10, front]), NONE);
