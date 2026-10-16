@@ -133,8 +133,8 @@ export interface TripSession {
   droveAt: number | null;
   /**
    * `ts` of the latest row that completed two consecutive driving rows: the car was last at driving
-   * speed. Null until `droveAt`, which it equals at first. An on-foot report is void once it is
-   * later than the walk began (`machine.ts`).
+   * speed. Null until `droveAt`, which it equals at first. An on-foot report is void once this is
+   * at or after the moment its walk began (`machine.ts`).
    */
   lastDroveAt: number | null;
   /** The last known GPS speed (any accuracy) and its row `ts`; null before the first. */
