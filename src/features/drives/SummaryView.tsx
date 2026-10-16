@@ -18,6 +18,7 @@ import {
   breakdownLines,
   canMarkNotDriving,
   celebrations,
+  endNote,
   isRemoved,
   notDrivingLabel,
   notDrivingRefusal,
@@ -195,6 +196,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
   const showBreakdown = state.kind === 'points' || state.kind === 'failed' || state.kind === 'pending';
   const notDrivingOk = canMarkNotDriving(drive, latestClientTripId, now);
   const refusal = notDrivingRefusal(drive);
+  const endedNote = endNote(drive);
 
   return (
     <View style={{ flex: 1 }}>
@@ -202,11 +204,21 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
         {/* 1. Title */}
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.sm }}>
           <IconButton icon="chevron-back" accessibilityLabel="Back" onPress={onBack} testID="back" style={{ marginLeft: -t.space.sm }} />
-          <View style={{ flex: 1 }} accessible accessibilityRole="header" accessibilityLabel={`${formatDay(drive.startedAt)}, ${formatTimeSpan(drive.startedAt, drive.endedAt)}, ${spokenRoute(drive)}`}>
+          <View
+            style={{ flex: 1 }}
+            accessible
+            accessibilityRole="header"
+            accessibilityLabel={`${formatDay(drive.startedAt)}, ${formatTimeSpan(drive.startedAt, drive.endedAt)}, ${spokenRoute(drive)}${endedNote ? `. ${endedNote}` : ''}`}
+          >
             <Text variant="title2">{formatDay(drive.startedAt)}</Text>
             <Text variant="subhead" tone="muted">
               {formatTimeSpan(drive.startedAt, drive.endedAt)} · {routeLine(drive)}
             </Text>
+            {endedNote ? (
+              <Text variant="footnote" tone="muted" testID="summary-end-note">
+                {endedNote}
+              </Text>
+            ) : null}
           </View>
         </View>
 

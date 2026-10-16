@@ -262,3 +262,17 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
     expect(isDropped(back)).toBe(false);
   });
 });
+
+test.each([
+  ['a manual end at the tap', 'manual', false, 'manual'],
+  ['a manual end cut after standing still', 'manual', true, 'manual_still'],
+  ['the automatic end', 'stopped', true, 'stopped'],
+  ['a walking end', 'walking', true, 'walking'],
+  ['the 12 h end', 'limit', true, 'limit'],
+  ['an orphan', 'orphan', true, 'orphan'],
+] as const)('%s stores end_cause %s/%s as %s (local only: never in the payload)', async (_label, cause, cut, stored) => {
+  const session = { ...closedSession(60), endCause: cause, cut };
+  const result = await finalizeTrip(session, deps());
+  expect(result.trip.end_cause).toBe(stored);
+  expect(JSON.stringify(result.payload)).not.toContain(stored);
+});

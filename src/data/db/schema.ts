@@ -251,3 +251,10 @@ export const SCHEMA_V6: readonly string[] = ['ALTER TABLE dashcam_events ADD COL
  * rebuilt after a relaunch (adopt, orphan) decides its warm-up the same way the live engine did.
  */
 export const SCHEMA_V7: readonly string[] = ['ALTER TABLE trips ADD COLUMN continues INTEGER NOT NULL DEFAULT 0'];
+
+/**
+ * V8 — `trips.end_cause`: what ended a drive this phone recorded (`manual`, `manual_still` for a
+ * manual end cut at the last movement, `stopped`, `walking`, `orphan`, `limit`), for the summary's
+ * end note. Local only, never uploaded; null on a drive hydrated from the server.
+ */
+export const SCHEMA_V8: readonly string[] = ['ALTER TABLE trips ADD COLUMN end_cause TEXT'];

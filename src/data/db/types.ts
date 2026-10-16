@@ -29,6 +29,10 @@ export const DISPUTE_STATUSES: readonly DisputeStatus[] = ['none', 'pending', 'a
 export const DISPUTE_REASONS = ['hazard', 'wrong_limit', 'mounted', 'camera_wrong'] as const;
 export type DisputeReason = (typeof DISPUTE_REASONS)[number];
 
+/** `EndCause` as stored: a manual end cut at the last movement is `manual_still`. */
+export const TRIP_END_CAUSES = ['manual', 'manual_still', 'stopped', 'walking', 'orphan', 'limit'] as const;
+export type TripEndCause = (typeof TRIP_END_CAUSES)[number];
+
 export interface TripRow {
   client_trip_id: string;
   started_at: number;
@@ -66,6 +70,8 @@ export interface TripRow {
   updated_at: number;
   /** 1: started within `MERGE_GAP_S` of the end of the phone's previous drive (no warm-up). */
   continues: Flag;
+  /** What ended it, on the phone that recorded it; null for a drive hydrated from the server. */
+  end_cause: TripEndCause | null;
 }
 
 export type NewTrip = Pick<TripRow, 'client_trip_id' | 'started_at' | 'tz' | 'status'> &

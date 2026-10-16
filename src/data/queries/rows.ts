@@ -4,7 +4,7 @@
  */
 import type { DriveBreakdown, EventType, StatSums, Tier } from '@scoring';
 
-import type { EventRow, TripRow, TripStatus } from '@/data/db/types';
+import type { EventRow, TripEndCause, TripRow, TripStatus } from '@/data/db/types';
 import { FinalizeTripResponseV3Schema, type FinalizeTripResponseV3 } from '@/data/sync/payload';
 
 export type DriveStatus = TripStatus;
@@ -54,6 +54,8 @@ export interface LocalDrive {
   mergedInto: string | null;
   /** Why the server last refused an action on this drive (e.g. a "Wasn't driving": `too_old`). */
   syncError: string | null;
+  /** What ended it, on the phone that recorded it (null otherwise). */
+  endCause: TripEndCause | null;
 }
 
 export interface LocalDriveEvent {
@@ -165,6 +167,7 @@ export function toLocalDrive(row: TripRow): LocalDrive {
     reason: row.reason,
     mergedInto: row.merged_into,
     syncError: row.sync_error,
+    endCause: row.end_cause,
   };
 }
 

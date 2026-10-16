@@ -64,7 +64,7 @@ test('row bridges: counts from events, filters on a drive view', () => {
   const d = toLocalDrive({
     client_trip_id: 'x', started_at: 1, ended_at: 2, tz: 'UTC', local_day: null, miles: 1, safe_miles: 1, night_miles: 0, duration_s: 1,
     start_lat: null, start_lng: null, end_lat: null, end_lng: null, polyline: null, from_label: 'Home', to_label: null, max_speed_mph: 0, integrity_json: null,
-    status: 'failed', points_net: null, estimate: 1, breakdown_json: null, clean: null, counts_json: 'not json', reason: null, merged_into: null, result_json: 'nope', server_id: null, sync_error: 'x', checkpoint_ts: null, created_at: 1, updated_at: 1, continues: 0,
+    status: 'failed', points_net: null, estimate: 1, breakdown_json: null, clean: null, counts_json: 'not json', reason: null, merged_into: null, result_json: 'nope', server_id: null, sync_error: 'x', checkpoint_ts: null, created_at: 1, updated_at: 1, continues: 0, end_cause: null,
   });
   expect(d).toMatchObject({ fromLabel: 'Home', result: null, counts: expect.objectContaining({ speeding: 0 }) });
   expect(matchesHistoryFilter(d, 'all')).toBe(false);

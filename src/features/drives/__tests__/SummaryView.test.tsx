@@ -5,6 +5,7 @@ import { tokens } from '@/ui/tokens';
 
 import { DAY, draw, drive, event, NOW, press, result } from '../__fixtures__/drives';
 import { SummaryView, type SummaryViewProps } from '../SummaryView';
+import { endNote } from '../summary';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
 jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn(async () => 'file:///card.png') }));
@@ -281,5 +282,25 @@ describe('final-review fixes', () => {
     expect(within(screen.getByTestId('share-card')).getByText('19.3 km')).toBeOnTheScreen();
     await draw(<SummaryView {...props({ drive: drive({ status: 'unscored', reason: 'too_short', pointsNet: null, result: null }) })} />);
     expect(screen.getByText(/Drives under 0.8 km/)).toBeOnTheScreen();
+  });
+});
+
+describe('the end note (this phone only)', () => {
+  test.each([
+    ['stopped', 'Ended on its own after 15 min without moving'],
+    ['walking', 'Ended on its own when you walked away'],
+    ['limit', 'Ended on its own at the 12-hour limit'],
+    ['manual_still', 'Ends where the car stopped; the time standing still before End isn’t counted'],
+  ] as const)('a drive ended %s says so under the title, and in the header label', async (endCause, line) => {
+    expect(endNote({ endCause })).toBe(line);
+    await draw(<SummaryView {...props({ drive: drive({ endCause }) })} />);
+    expect(screen.getByTestId('summary-end-note')).toHaveTextContent(line);
+    expect(screen.getByRole('header', { name: new RegExp(`${line.slice(0, 20)}`) })).toBeOnTheScreen();
+  });
+
+  test.each(['manual', 'orphan', null] as const)('none for %s (a hold at the tap, a drive left open, a drive from the server)', async (endCause) => {
+    expect(endNote({ endCause })).toBeNull();
+    await draw(<SummaryView {...props({ drive: drive({ endCause }) })} />);
+    expect(screen.queryByTestId('summary-end-note')).toBeNull();
   });
 });

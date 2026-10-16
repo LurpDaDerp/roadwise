@@ -2,7 +2,7 @@
  * What the drive summary derives from a drive before anything is drawn: the points state, the
  * itemized breakdown, the streak line, the celebration row and the report reasons. Pure.
  */
-import { ACHIEVEMENTS, isDashcamType, MULT_CAP, STREAK_MULT_CAP, type EventType } from '@scoring';
+import { ACHIEVEMENTS, IDLE_END_S, isDashcamType, MULT_CAP, STREAK_MULT_CAP, type EventType } from '@scoring';
 
 import { formatMultiplier } from '@/ui';
 
@@ -10,6 +10,27 @@ import { formatDistance, type Units } from '@/lib/units';
 
 import { eventName, formatClock, signedPoints } from './format';
 import type { LocalDrive, LocalDriveEvent } from './model';
+
+// ── End note ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Under the title, on the phone that recorded it: a drive that ended by itself says so, and so
+ * does one ended with End after standing still (it ends where the car stopped). Null otherwise.
+ */
+export function endNote(d: Pick<LocalDrive, 'endCause'>): string | null {
+  switch (d.endCause) {
+    case 'stopped':
+      return `Ended on its own after ${Math.round(IDLE_END_S / 60)} min without moving`;
+    case 'walking':
+      return 'Ended on its own when you walked away';
+    case 'limit':
+      return 'Ended on its own at the 12-hour limit';
+    case 'manual_still':
+      return 'Ends where the car stopped; the time standing still before End isn’t counted';
+    default:
+      return null;
+  }
+}
 
 // ── Points ──────────────────────────────────────────────────────────────────────────────
 

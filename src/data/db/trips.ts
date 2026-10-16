@@ -10,7 +10,7 @@ import {
   insertStatement,
   updateStatement,
 } from '@/data/db/row';
-import { TRIP_STATUSES, type Flag, type NewTrip, type TripPatch, type TripRow, type TripStatus } from '@/data/db/types';
+import { TRIP_END_CAUSES, TRIP_STATUSES, type Flag, type NewTrip, type TripEndCause, type TripPatch, type TripRow, type TripStatus } from '@/data/db/types';
 
 /** The writable columns, in schema order. Nothing outside this list can reach the SQL. */
 const COLUMNS = [
@@ -47,6 +47,7 @@ const COLUMNS = [
   'created_at',
   'updated_at',
   'continues',
+  'end_cause',
 ] as const;
 
 /** Every column except the primary key and `created_at`, which a patch must not move. */
@@ -56,6 +57,9 @@ const asFlagOrNull = (row: Record<string, unknown>, key: string): Flag | null =>
   const v = asNumberOrNull(row, key);
   return v === null ? null : v === 0 ? 0 : 1;
 };
+
+/** A stored end cause this build knows, else null (never a throw: the note is optional). */
+const endCauseOf = (v: string | null): TripEndCause | null => (TRIP_END_CAUSES as readonly string[]).includes(v ?? '') ? (v as TripEndCause) : null;
 
 export function toTripRow(row: Record<string, unknown>): TripRow {
   return {
@@ -92,6 +96,7 @@ export function toTripRow(row: Record<string, unknown>): TripRow {
     created_at: asNumber(row, 'created_at'),
     updated_at: asNumber(row, 'updated_at'),
     continues: asFlag(row, 'continues'),
+    end_cause: endCauseOf(asTextOrNull(row, 'end_cause')),
   };
 }
 

@@ -434,6 +434,8 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     counts_json: JSON.stringify(counts),
     reason: breakdown.scored ? null : (breakdown.reason ?? null),
     checkpoint_ts: null,
+    // Local only (the summary's end note); a manual end cut at the last movement is `manual_still`.
+    end_cause: session.endCause === null ? null : session.endCause === 'manual' && session.cut ? 'manual_still' : session.endCause,
   } as const;
 
   // 4. One transaction.
