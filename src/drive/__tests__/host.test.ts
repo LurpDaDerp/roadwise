@@ -618,6 +618,54 @@ describe('the drive end stopCapture hands the reminder', () => {
     expect(end!.drivingEndedAt).toBeLessThanOrEqual(T0 + 61_000);
   });
 
+  test('parked, then End within seconds: not at driving speed, however recent the last driving-speed reading', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 15 }));
+    await feed(h, rows(8, { speedMps: 0, t0: T0 + 60_000 }));
+    clock = T0 + 68_000;
+    await h.host.end();
+    expect(h.source.captureEnds.at(-1)).toMatchObject({ drivingAtEnd: false });
+    // Stopped only 2 s before the tap: still not driving on.
+    clock = T0 + 100_000;
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 15, t0: T0 + 100_000 }));
+    await feed(h, rows(2, { speedMps: 0, t0: T0 + 160_000 }));
+    clock = T0 + 162_000;
+    await h.host.end();
+    expect(h.source.captureEnds.at(-1)).toMatchObject({ drivingAtEnd: false });
+    // Slowed under 10 mph (one reading) before the tap: not driving on either.
+    clock = T0 + 200_000;
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 15, t0: T0 + 200_000 }));
+    await feed(h, rows(1, { speedMps: 3, t0: T0 + 260_000 }));
+    clock = T0 + 261_000;
+    await h.host.end();
+    expect(h.source.captureEnds.at(-1)).toMatchObject({ drivingAtEnd: false });
+    expect(h.source.captureEnds).toHaveLength(3);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('driving speed with no speed reading since: driving on only while that reading is at most 5 s old', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 15 }));
+    await feed(h, rows(3, { speedMps: 0, t0: T0 + 60_000, over: () => ({ gnssValid: false, speed: -1 }) }));
+    clock = T0 + 64_000; // the last reading (T0 + 59 s) is 5 s old
+    await h.host.end();
+    expect(h.source.captureEnds.at(-1)).toMatchObject({ drivingAtEnd: true });
+    clock = T0 + 100_000;
+    await h.host.start();
+    await feed(h, rows(60, { speedMps: 15, t0: T0 + 100_000 }));
+    await feed(h, rows(5, { speedMps: 0, t0: T0 + 160_000, over: () => ({ gnssValid: false, speed: -1 }) }));
+    clock = T0 + 165_000; // 6 s old
+    await h.host.end();
+    expect(h.source.captureEnds.at(-1)).toMatchObject({ drivingAtEnd: false });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
   test('ended 16 s after the last driving-speed reading: not at driving speed; a drive not kept passes no driving end', async () => {
     const h = build();
     await h.host.boot();

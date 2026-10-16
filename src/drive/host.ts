@@ -198,17 +198,20 @@ const noop = (): void => {};
 /** The local mirror of `profiles.units` (plan §10): 'km' shows km/h on the background display. */
 export const UNITS_KEY = 'units';
 
-/** The car counts as still driving at the end when its last driving-speed reading is at most this old then. */
-export const DRIVING_AT_END_MS = 15_000;
+/** The car counts as still driving at the end only when its latest speed reading is at most this old then. */
+export const DRIVING_AT_END_MS = 5_000;
 
 /**
  * What the reminder's session takes from a drive that closed at `at` (`stopCapture`'s end): its
  * driving end (the cut where the car last moved, or the End tap), and whether the car was still at
- * driving speed (two trusted readings of 10 mph or more, the second within `DRIVING_AT_END_MS`).
- * A drive that is not kept passes null as its driving end.
+ * driving speed as it ended: the drive's latest GPS speed reading is the second of two trusted
+ * readings of 10 mph or more in a row, and it is at most `DRIVING_AT_END_MS` old. A car that slowed
+ * under 10 mph or stopped before the End tap (any later speed reading) is not driving on, however
+ * recent its last driving-speed reading. A drive that is not kept passes null as its driving end.
  */
 export function captureEndOf(session: Readonly<TripSession>, at: number, kept: boolean): CaptureEnd {
-  const drivingAtEnd = session.lastDroveAt !== null && at - session.lastDroveAt <= DRIVING_AT_END_MS;
+  const last = session.lastDroveAt;
+  const drivingAtEnd = last !== null && session.lastSpeed !== null && session.lastSpeed.ts === last && at - last <= DRIVING_AT_END_MS;
   return { drivingEndedAt: kept ? (session.endedAt ?? at) : null, drivingAtEnd };
 }
 export type DisplayUnit = 'mph' | 'km/h';

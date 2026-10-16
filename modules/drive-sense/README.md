@@ -734,7 +734,9 @@ clock alone, and the watchdog's stop, which knows nothing of the drive, uses now
 **at most one** reminder, posted only **at a stop**, only after the car reached **driving speed with
 no drive open** in that session (and after the last drive ended; a drive ended with the car still at
 driving speed, `drivingAtEnd`, counts at once, opening a session if there is none, in the vehicle on
-Android), and never while a drive is open.
+Android), and never while a drive is open. JS sets `drivingAtEnd` only when the drive's latest GPS
+speed reading, at most 5 s before the end, is the second of two trusted readings in a row at 10 mph
+or more: a car that slowed under 10 mph or stopped before the End tap is not driving on.
 Nothing else limits it: no daily cap, no spacing, no quiet or back-off, no wait after a drive, no
 minimum trip time, no check of calls, Low Power Mode or RoadWise being in front.
 
