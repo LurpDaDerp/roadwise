@@ -3,8 +3,8 @@
 // One object wires the native capture module, the engine, the detectors, the speed-limit client,
 // the alert player, the background display and persistence together, and publishes one `DriveState`
 // for the UI. Rules:
-// - **Manual start only.** `start()` is the one way a drive begins: it refuses at or above 3 mph,
-//   asks for While-Using location and motion just in time, then starts the capture. Nothing here
+// - **Manual start only.** `start()` is the one way a drive begins: it asks for While-Using location
+//   just in time, then starts the capture, at any speed; nothing reads the speed on the tap. Nothing here
 //   starts a drive from a notification, a wake or a relaunch; `boot({ adopt })` only continues a
 //   drive the user already started (the previous process died recording it).
 // - **One queue.** Every engine dispatch and the native command that follows it run on one serial
@@ -37,7 +37,7 @@ import { processTimers } from '@/lib/timers';
 import { KMH_PER_MPH, metersToMiles, mpsToMph } from '@/lib/units';
 
 import type { DriveDisplay } from './display';
-import { detectorContext, isBusyStatus, isMoving, walkingReported } from './policy';
+import { detectorContext, isBusyStatus, walkingReported } from './policy';
 import type { DriveSource } from './source';
 import { createTicker, type Scheduler } from './ticks';
 
@@ -70,12 +70,12 @@ export interface DriveState extends EngineSnapshot {
   role: 'driver';
 }
 
-export type StartResult = { ok: true; clientTripId: string } | { ok: false; reason: 'moving' | 'permission' | 'busy' | 'error' };
+export type StartResult = { ok: true; clientTripId: string } | { ok: false; reason: 'permission' | 'busy' | 'error' };
 
 export interface DriveHost {
   /** Attach to native events; continue `adopt` (a drive the previous process was recording). */
   boot(opts?: { adopt?: AdoptedTrip | null }): Promise<void>;
-  /** The user's Start Drive tap. Refuses at ≥ 3 mph, without location, while busy, or signed out. */
+  /** The user's Start Drive tap, at any speed. Refuses without location, while busy, or signed out. */
   start(): Promise<StartResult>;
   /** The hold-to-end. Resolves once the drive is finalized; null when none was open. */
   end(): Promise<{ clientTripId: string } | null>;
@@ -126,10 +126,8 @@ export interface DriveHostDeps {
   tz: () => string;
   newId: () => string;
   appVersion: string;
-  /** Just-in-time permissions: While-Using location (required) and motion. */
+  /** Just-in-time permissions: While-Using location (required; asked when never answered). */
   permissions?: () => Promise<{ location: 'granted' | 'denied' }>;
-  /** One speed read on the tap (m/s, or null when no fresh fix). */
-  speedProbe?: () => Promise<number | null>;
   /** The cached summary context for the points estimate; null when nothing is cached. */
   context?: () => Promise<DriveContext | null>;
   voiceEnabled?: () => boolean;
@@ -525,13 +523,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         report(e, 'permissions');
         return { ok: false, reason: 'permission' };
       }
-      let speed: number | null = null;
-      try {
-        speed = (await deps.speedProbe?.()) ?? null;
-      } catch (e) {
-        report(e, 'speedProbe');
-      }
-      if (isMoving(speed)) return { ok: false, reason: 'moving' };
       let result: StartResult = { ok: false, reason: 'error' };
       await run(async () => {
         if (isBusyStatus(engine.snapshot().status)) {

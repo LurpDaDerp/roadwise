@@ -1,4 +1,4 @@
-import { currentSpeedMps, isMoving, MOVING_FIX_MAX_AGE_MS, type MovingDeps } from '@/features/drive/movingCheck';
+import { currentSpeedMps, MOVING_FIX_MAX_AGE_MS, type MovingDeps } from '@/features/drive/movingCheck';
 
 jest.mock('expo-location', () => ({ Accuracy: { High: 4 }, getLastKnownPositionAsync: jest.fn(), getCurrentPositionAsync: jest.fn() }));
 
@@ -29,10 +29,4 @@ test('an unknown or negative speed is null (never 0), and a fix that never arriv
   } finally {
     jest.useRealTimers();
   }
-});
-
-test('isMoving is the 3 mph line', () => {
-  expect(isMoving(1.0)).toBe(false);
-  expect(isMoving(1.5)).toBe(true);
-  expect(isMoving(null)).toBe(false);
 });

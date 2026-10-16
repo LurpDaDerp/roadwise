@@ -81,10 +81,8 @@ export interface BootstrapDeps {
   appConfig?: AppConfigSupabase;
   createPlayer?: (inputs: ReturnType<typeof playerInputs>) => Promise<AlertPlayer>;
   display?: DriveDisplay | null;
-  /** Just-in-time permissions for Start Drive. Default: `ensureDrivePermissions`. */
+  /** Just-in-time permissions for Start Drive. Default: `ensureDrivePermissions` (location only). */
   permissions?: () => Promise<{ location: 'granted' | 'denied' }>;
-  /** One speed read on the Start tap. Default: `currentSpeedMps` (expo-location). */
-  speedProbe?: () => Promise<number | null>;
   voiceEnabled?: () => boolean;
   attachSummaryNotifier?: ((host: DriveHost, db: Db) => { detach(): void; settled?(): Promise<void> }) | null;
   /**
@@ -333,7 +331,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       newId,
       appVersion,
       permissions: deps.permissions ?? defaultPermissions(db),
-      speedProbe: deps.speedProbe ?? defaultSpeedProbe,
       context: summaryContext,
       voiceEnabled: deps.voiceEnabled ?? defaultVoiceEnabled,
       appState,
@@ -488,15 +485,10 @@ function defaultPermissions(db: Db): () => Promise<{ location: 'granted' | 'deni
   return async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the permission adapters
     const { ensureDrivePermissions } = require('@/features/drive/permissions') as typeof import('@/features/drive/permissions');
-    const result = await ensureDrivePermissions({ settings: createSettingsRepo(db) });
+    // The tap asks only for location (needed to record at all), never for motion.
+    const result = await ensureDrivePermissions({ settings: createSettingsRepo(db) }, { askMotion: false });
     return { location: result.location };
   };
-}
-
-async function defaultSpeedProbe(): Promise<number | null> {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: expo-location
-  const { currentSpeedMps } = require('@/features/drive/movingCheck') as typeof import('@/features/drive/movingCheck');
-  return currentSpeedMps();
 }
 
 function defaultVoiceEnabled(): boolean {

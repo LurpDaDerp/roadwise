@@ -80,7 +80,6 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
       appVersion: '2.0.0',
       newId: () => uuid(99),
       permissions: async () => ({ location: 'granted' as const }),
-      speedProbe: async () => 0,
       attachSummaryNotifier: null,
       mountDiagnostics: null,
       mayDrain: () => false,

@@ -12,7 +12,7 @@
 // Pure module: no imports. Every time is epoch ms. Functions never mutate their arguments.
 
 export const REMINDER = {
-  /** Under 3 mph (`START_MAX_MPH`) = stopped (iOS). */
+  /** Under 3 mph = stopped (iOS). */
   STOP_MPS: 1.34,
   /** Above 5 mph while the reminder shows = driving again (iOS). */
   MOVE_MPS: 2.24,

@@ -15,7 +15,6 @@ import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
 import { createDriveHost, type DriveHost, type DriveState } from '@/drive/host';
-import { START_MAX_MPS } from '@/drive/policy';
 import type { Scheduler } from '@/drive/ticks';
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -105,7 +104,6 @@ function build(over: Partial<Parameters<typeof createDriveHost>[0]> = {}) {
     tz: () => TZ,
     newId: () => uuid((ids += 1)),
     appVersion: '2.0.0',
-    speedProbe: async () => 0,
     permissions: async () => ({ location: 'granted' }),
     context: async () => ({ streak: 4, safeMilesEarlierToday: 0 }),
     scheduler,
@@ -125,11 +123,9 @@ async function feed(h: { host: DriveHost; source: ReturnType<typeof createFakeDr
   }
 }
 
-test('start: refuses while moving, without location, before boot, or while busy; otherwise starts the capture and the drive', async () => {
-  const h = build({ speedProbe: async () => 2 });
+test('start: refuses without location, before boot, or while busy; otherwise starts the capture and the drive', async () => {
+  const h = build();
   expect(await h.host.start()).toEqual({ ok: false, reason: 'error' });
-  await h.host.boot();
-  expect(await h.host.start()).toEqual({ ok: false, reason: 'moving' });
   expect(h.source.calls).toEqual([]);
 
   const denied = build({ permissions: async () => ({ location: 'denied' }) });
@@ -147,25 +143,45 @@ test('start: refuses while moving, without location, before boot, or while busy;
   await ok.host.stop({ endOpenTrip: true });
 });
 
-// Pins the speed gate at Start Drive. The line is START_MAX_MPH (3 mph): at or above it the tap is
-// refused as 'moving'. An unknown speed (no fix within the probe's bound, or a probe that fails) is
-// NOT treated as moving, so the drive starts: that is the product rule (product spec, Starting and
-// ending a drive), so change this test only together with the spec.
-const SPEED_GATE: [string, () => Promise<number | null>, { ok: true } | { ok: false; reason: 'moving' }][] = [
-  ['an unknown speed (no fix in time)', async () => null, { ok: true }],
-  ['a speed probe that fails', () => Promise.reject(new Error('no fix')), { ok: true }],
-  ['stopped', async () => 0, { ok: true }],
-  ['just under 3 mph', async () => START_MAX_MPS - 0.01, { ok: true }],
-  ['exactly 3 mph', async () => START_MAX_MPS, { ok: false, reason: 'moving' }],
-  ['above 3 mph', async () => START_MAX_MPS + 1, { ok: false, reason: 'moving' }],
+// Pins Start Drive at any speed (product spec, Starting and ending a drive): the tap reads no speed,
+// so whatever the car does next (no fix, stopped, 2.9, 3 or 60 mph) the drive is already open and
+// the first row at that speed simply follows. Change this test only together with the spec.
+const START_ANY_SPEED: [string, number | null][] = [
+  ['an unknown speed (no fix)', null],
+  ['stopped', 0],
+  ['2.9 mph', 2.9 * 0.44704],
+  ['exactly 3 mph', 3 * 0.44704],
+  ['60 mph', 60 * 0.44704],
 ];
-test.each(SPEED_GATE)('start with %s', async (_label, speedProbe, expected) => {
-  const h = build({ speedProbe });
+test.each(START_ANY_SPEED)('start with %s', async (_label, speedMps) => {
+  const h = build();
   await h.host.boot();
   const result = await h.host.start();
-  expect(result).toMatchObject(expected);
-  expect(h.source.calls).toEqual(expected.ok ? ['startCapture:mounted'] : []);
-  expect(h.host.snapshot().status).toBe(expected.ok ? 'recording' : 'idle');
+  expect(result).toEqual({ ok: true, clientTripId: uuid(1) });
+  expect(h.source.calls).toEqual(['startCapture:mounted']);
+  expect(h.host.snapshot().status).toBe('recording');
+  await feed(
+    h,
+    rows(1, speedMps === null ? { speedMps: 0, over: () => ({ gnssValid: false, speed: -1 }) } : { speedMps })
+  );
+  expect(h.host.snapshot()).toMatchObject({ status: 'recording', speedKnown: speedMps !== null, lockedOut: speedMps !== null && speedMps > 5 * 0.44704 });
+  await h.host.stop({ endOpenTrip: true });
+});
+
+test('a start at 60 mph is locked out from its first row, with no dialog beyond the location check', async () => {
+  let asked = 0;
+  const h = build({
+    permissions: async () => {
+      asked += 1;
+      return { location: 'granted' };
+    },
+  });
+  await h.host.boot();
+  expect(await h.host.start()).toMatchObject({ ok: true });
+  expect(asked).toBe(1);
+  expect(h.host.snapshot().lockedOut).toBe(false);
+  await feed(h, rows(1, { speedMps: 60 * 0.44704 }));
+  expect(h.host.snapshot().lockedOut).toBe(true);
   await h.host.stop({ endOpenTrip: true });
 });
 

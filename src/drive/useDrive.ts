@@ -31,7 +31,7 @@ export function useDriveHost(): DriveHost {
 }
 
 export interface DriveControls {
-  /** Start Drive. Only from a user tap in the foreground; refuses (`moving`) at ≥ 3 mph. */
+  /** Start Drive. Only from a user tap; at any speed. */
   start(): Promise<StartResult>;
   /** End the drive; resolves once it is finalized. Navigation is the caller's job. */
   end(): Promise<{ clientTripId: string } | null>;

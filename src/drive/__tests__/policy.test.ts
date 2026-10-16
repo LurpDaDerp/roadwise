@@ -1,5 +1,5 @@
 import { autoEndDeadline, createTicker, TICK_SLACK_MS } from '@/drive/ticks';
-import { detectorContext, isBusyStatus, isMoving, START_MAX_MPS, tripRecords, walkingReported } from '@/drive/policy';
+import { detectorContext, isBusyStatus, tripRecords, walkingReported } from '@/drive/policy';
 
 test('statuses', () => {
   expect(isBusyStatus('idle')).toBe(false);
@@ -7,13 +7,6 @@ test('statuses', () => {
   expect(isBusyStatus('finalizing')).toBe(true);
   expect(tripRecords('recording')).toBe(true);
   expect(tripRecords('finalizing')).toBe(false);
-});
-
-test('a start is refused at or above 3 mph; an unknown speed lets it through', () => {
-  expect(START_MAX_MPS).toBeCloseTo(1.341, 3);
-  expect(isMoving(null)).toBe(false);
-  expect(isMoving(1.3)).toBe(false);
-  expect(isMoving(1.35)).toBe(true);
 });
 
 test('the detector context follows the call state', () => {

@@ -40,12 +40,15 @@ test('a successful start opens the driving screen', async () => {
   expect(mockStart).toHaveBeenCalledWith();
 });
 
-test('moving: nothing is recorded and Home says to pull over', async () => {
-  mockStart.mockResolvedValue({ ok: false, reason: 'moving' });
+test('no location: nothing is recorded, Home says location is needed and Fix it opens Permissions', async () => {
+  mockStart.mockResolvedValue({ ok: false, reason: 'permission' });
   await draw(<HomeScreen />);
   await press(screen.getByTestId('start-drive'));
-  expect(await screen.findByText(/Pull over to start a drive/)).toBeOnTheScreen();
+  expect(await screen.findByText('RoadWise needs location to record a drive.')).toBeOnTheScreen();
   expect(mockRouter.push).not.toHaveBeenCalled();
+  await press(screen.getByText('Fix it'));
+  expect(mockRouter.push).toHaveBeenCalledTimes(1);
+  expect(mockRouter.push).not.toHaveBeenCalledWith('/drive');
 });
 
 test('while a drive is recording, the in-progress strip replaces Start', async () => {

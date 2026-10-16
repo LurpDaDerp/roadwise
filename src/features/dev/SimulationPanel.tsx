@@ -218,7 +218,6 @@ export function createSimulation(opts: SimulationOptions): Simulation {
     player,
     now: vnow,
     appVersion: 'simulation',
-    speedProbe: async () => 0,
     tz: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     newId: () => `simulated-${(ids += 1)}`,
     persistence: 'none',

@@ -17,6 +17,8 @@ import { setActiveDashcam } from '@/dashcam/registry';
 import { INSTALL_ID_KEY, readInstallId } from '@/data/devices/installId';
 
 jest.mock('expo-notifications', () => ({}));
+const mockEnsureDrivePermissions = jest.fn(async (..._args: unknown[]) => ({ location: 'granted' as const, motion: 'undetermined' as const }));
+jest.mock('@/features/drive/permissions', () => ({ ensureDrivePermissions: (...args: unknown[]) => mockEnsureDrivePermissions(...args) }));
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
@@ -62,7 +64,6 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
       tz: TZ,
       appVersion: '2.0.0',
       permissions: async () => ({ location: 'granted' as const }),
-      speedProbe: async () => 0,
       attachSummaryNotifier: null,
       mountDiagnostics: null,
       mayDrain: () => false,
@@ -169,6 +170,16 @@ test('a launch signed out, then the owner signs in: Start Drive works without a 
   await rt.drive.signedInAgain();
   const started = await rt.drive.start();
   expect(started).toEqual({ ok: true, clientTripId: uuid(7) });
+  await rt.stop({ endOpenTrip: true });
+});
+
+test('the default Start Drive permissions ask only for location, never for motion', async () => {
+  const d = deps({ newId: () => uuid(8), permissions: undefined });
+  const rt = await bootstrapApp(d.deps);
+  mockEnsureDrivePermissions.mockClear();
+  expect(await rt.drive.start()).toEqual({ ok: true, clientTripId: uuid(8) });
+  expect(mockEnsureDrivePermissions).toHaveBeenCalledTimes(1);
+  expect(mockEnsureDrivePermissions.mock.calls[0]?.[1]).toEqual({ askMotion: false });
   await rt.stop({ endOpenTrip: true });
 });
 

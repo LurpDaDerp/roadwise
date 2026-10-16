@@ -18,8 +18,6 @@ export const SPEEDING_END_BUFFER_MPH = 2;
 export const NO_EVENTS_FIRST_S = 30;
 /** GPS accuracy worse than this (m) records no speeding and shows "—". */
 export const MAX_H_ACC_M = 20;
-/** Start Drive works only below this speed. */
-export const START_MAX_MPH = 3;
 /** A forgotten drive ends on its own after this long stopped. */
 export const AUTO_END_STOPPED_S = 300;
 /** Ending then restarting within this gap and distance merges into one drive. */

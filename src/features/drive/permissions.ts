@@ -11,6 +11,8 @@
  *   from here (§7.0 "Never re-prompt in a loop"). The caller shows the blocking
  *   explainer with Open Settings, and re-reads with `readLocationPermission` on the way back.
  * - Motion is asked once when undetermined and never blocks: a manual drive records without it.
+ *   The Start Drive tap passes `askMotion: false`: it asks only for location, so a tap at speed
+ *   never brings up a second dialog (motion is asked in onboarding, on Home and in Settings).
  * - Background location ("Always") is never asked for, anywhere.
  */
 import {
@@ -69,7 +71,12 @@ async function stamp(deps: PermissionDeps, permission: 'location' | 'motion', at
   await recordPrompt(deps.settings, permission, at).catch(() => {});
 }
 
-export async function ensureDrivePermissions(deps: PermissionDeps): Promise<DrivePermissions> {
+export interface EnsureOptions {
+  /** False: motion is read from the snapshot and never requested. */
+  askMotion: boolean;
+}
+
+export async function ensureDrivePermissions(deps: PermissionDeps, opts: EnsureOptions = { askMotion: true }): Promise<DrivePermissions> {
   const adapter = adapterOf(deps);
   const now = deps.now ?? Date.now;
   let snap;
@@ -93,7 +100,7 @@ export async function ensureDrivePermissions(deps: PermissionDeps): Promise<Driv
 
   // null: drive-sense could not be read (no native module) — motion is simply not there to use.
   let motion: MotionPermission = snap.motion ?? 'unavailable';
-  if (motion === 'undetermined') {
+  if (motion === 'undetermined' && opts.askMotion) {
     try {
       const answer = await adapter.requestMotion();
       await stamp(deps, 'motion', now());

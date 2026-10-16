@@ -111,9 +111,11 @@ describe('Start drive', () => {
     expect(screen.queryByTestId('dms-chip')).toBeNull();
   });
 
-  test('refused while moving: "Pull over to start a drive"', async () => {
-    await draw(<HomeView {...props({ refusal: 'moving' })} />);
-    expect(screen.getByTestId('start-refusal')).toHaveTextContent(/Pull over to start a drive/);
+  test('refused without location: one line, no speed wording', async () => {
+    await draw(<HomeView {...props({ refusal: 'permission' })} />);
+    expect(screen.getByTestId('start-refusal')).toHaveTextContent(/RoadWise needs location to record a drive\./);
+    expect(screen.getByText('Fix it')).toBeOnTheScreen();
+    expect(screen.queryByText(/Pull over|stopped/)).toBeNull();
   });
 });
 

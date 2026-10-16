@@ -2,11 +2,10 @@ import { View } from 'react-native';
 
 import { Banner, Button, useTheme } from '@/ui';
 
-export type StartRefusal = 'moving' | 'permission' | 'busy' | 'error';
+export type StartRefusal = 'permission' | 'busy' | 'error';
 
 export const REFUSAL_COPY: Record<StartRefusal, string> = {
-  moving: 'Pull over to start a drive. Start only works while you’re stopped.',
-  permission: 'RoadWise needs location and motion access to record a drive.',
+  permission: 'RoadWise needs location to record a drive.',
   busy: 'A drive is already running.',
   error: 'Couldn’t start the drive. Try again.',
 };
@@ -41,7 +40,7 @@ export function StartDriveBar({
         borderTopColor: t.colors.divider,
       }}
     >
-      {refusal ? <Banner tone={refusal === 'moving' ? 'warning' : 'danger'} message={REFUSAL_COPY[refusal]} action={action} testID="start-refusal" /> : null}
+      {refusal ? <Banner tone="danger" message={REFUSAL_COPY[refusal]} action={action} testID="start-refusal" /> : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
         <Button label="Start drive" icon="car-sport" size="lg" onPress={onStart} loading={starting} style={{ flex: 1 }} testID="start-drive" />
       </View>

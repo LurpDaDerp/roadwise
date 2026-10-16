@@ -156,6 +156,23 @@ describe('ensureDrivePermissions', () => {
     expect(adapter.requestLocationForeground).not.toHaveBeenCalled();
   });
 
+  test('the Start Drive tap (askMotion false): undetermined motion is read and never requested; undetermined location is still asked once', async () => {
+    const { d, calls, adapter, settings } = deps({ location: 'undetermined', afterRequest: 'foreground', motion: 'undetermined' });
+    await expect(ensureDrivePermissions(d, { askMotion: false })).resolves.toEqual({ location: 'granted', motion: 'undetermined' });
+    expect(adapter.requestMotion).not.toHaveBeenCalled();
+    expect(adapter.requestLocationForeground).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(['snapshot', 'location:request']);
+    expect(settings.store.get(PROMPTS_KEY)).toEqual({ location: NOW });
+  });
+
+  test('askMotion false with motion already answered leaves it as read', async () => {
+    const granted = deps({ location: 'foreground', motion: 'granted' });
+    await expect(ensureDrivePermissions(granted.d, { askMotion: false })).resolves.toEqual({ location: 'granted', motion: 'granted' });
+    const denied = deps({ location: 'foreground', motion: 'denied' });
+    await expect(ensureDrivePermissions(denied.d, { askMotion: false })).resolves.toEqual({ location: 'granted', motion: 'denied' });
+    expect(denied.calls).toEqual(['snapshot']);
+  });
+
   test('a request that throws is not recorded as a prompt and reads as denied', async () => {
     const { d, adapter, settings } = deps({ location: 'undetermined' });
     adapter.requestLocationForeground.mockRejectedValueOnce(new Error('E_LOCATION'));

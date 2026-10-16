@@ -1,16 +1,8 @@
 /**
- * Is the car moving when Start Drive is tapped? (spec: Start works only while stopped, under 3 mph.)
- *
- * One read, on a tap, in the foreground — never a watch. A last-known fix no older than 10 s
- * answers at once; otherwise one fresh fix is awaited for at most 2 s, so a driver in a garage is
- * not kept waiting. An unknown speed is `null`, never 0, and null lets the start through. Nothing
- * later undoes that start: the engine has no speed rule at start and never cancels a drive for
- * having begun on the move. Its lockout (a last known speed above 5 mph) only narrows the drive
- * screen to the End control once real speed arrives.
+ * One speed read for the DashPal nearby prompt (`src/dashcam/detector.ts`): a last-known fix no
+ * older than 10 s, else one fresh fix awaited at most 2 s; null when unknown. Never a watch.
  */
 import * as Location from 'expo-location';
-
-import { isMoving } from '@/drive/policy';
 
 export const MOVING_FIX_MAX_AGE_MS = 10_000;
 export const MOVING_FIX_TIMEOUT_MS = 2_000;
@@ -67,5 +59,3 @@ export async function currentSpeedMps(deps: MovingDeps = defaultDeps): Promise<n
   const fresh = await within(MOVING_FIX_TIMEOUT_MS, deps.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }));
   return speedOf(fresh);
 }
-
-export { isMoving };
