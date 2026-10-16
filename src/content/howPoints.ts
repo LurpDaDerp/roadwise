@@ -41,7 +41,7 @@ const everyMin = (s: number) => `every ${Math.round(s / 60)} min`;
 /** The three ideas the onboarding "how it works" step and Home's first-run card show. */
 export const HOW_IT_WORKS: { icon: IconName; title: string; body: string }[] = [
   { icon: 'car-sport-outline', title: 'Safe miles earn points', body: `${POINTS_PER_MILE} points for every safe mile you drive.` },
-  { icon: 'remove-circle-outline', title: 'Events cost points', body: 'Speeding, hard braking and phone pickups take points off.' },
+  { icon: 'remove-circle-outline', title: 'Events cost points', body: 'Speeding, phone use (leaving RoadWise mid-drive too) and hard braking take points off.' },
   { icon: 'flame-outline', title: 'Streaks multiply', body: `Every good drive grows your streak and boosts what you earn, up to ${x(STREAK_MULT_CAP)}.` },
 ];
 
@@ -55,8 +55,8 @@ export const PENALTIES: PenaltyRow[] = [
   { event: 'Hard braking', penalty: `−${BASE_PENALTY.hard_brake.minor} · severe −${BASE_PENALTY.hard_brake.severe}` },
   { event: 'Hard acceleration', penalty: `−${BASE_PENALTY.hard_accel.minor} · severe −${BASE_PENALTY.hard_accel.severe}` },
   { event: 'Hard cornering', penalty: `−${BASE_PENALTY.hard_corner.minor} · severe −${BASE_PENALTY.hard_corner.severe}` },
-  { event: 'Phone pickup', penalty: `−${BASE_PENALTY.phone_pickup} (−${BASE_PENALTY.phone_pickup_stopped} when stopped in traffic)` },
-  { event: 'Phone handling', penalty: `−${BASE_PENALTY.phone_handling_per_unit} for every extra 15 s` },
+  { event: 'Phone pickup or leaving RoadWise', penalty: `−${BASE_PENALTY.phone_pickup} (−${BASE_PENALTY.phone_pickup_stopped} when stopped in traffic)` },
+  { event: 'Phone handling or time away', penalty: `−${BASE_PENALTY.phone_handling_per_unit} for every extra 15 s` },
   { event: 'Eyes off road (DashPal)', penalty: `−${BASE_PENALTY.eyes_off}, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)}` },
   { event: 'Drowsy (DashPal)', penalty: `−${BASE_PENALTY.drowsy}, at most once ${everyMin(DASHCAM_DROWSY_GAP_S)}` },
 ];
@@ -75,6 +75,18 @@ export const RULES: RuleSection[] = [
       'A second event of the same kind costs ×1.25, and a third or more costs ×1.5.',
       'On very short drives, penalties are scaled down so one slip doesn’t hit as hard. They count fully from 3 mi.',
       `Drives under ${MIN_SCORED_MILES} mi aren't scored.`,
+    ],
+  },
+  {
+    id: 'phone',
+    title: 'Phone use',
+    icon: 'phone-portrait-outline',
+    points: [
+      'Lifting or handling your phone while driving is a phone pickup.',
+      'Leaving RoadWise during a drive counts as phone use too: another app, the home screen or the app switcher (and split screen on Android phones). The time away counts as handling until you come back or lock your phone, which can wait until you’ve stopped.',
+      'Open your navigation app with the navigation button on the drive screen. That never costs points. Going back to it any other way does.',
+      'Locking your phone and the notification shade never count. A call’s own screen doesn’t count; once you’re back in RoadWise during the call, leaving again does.',
+      'On iPhone a switch counts after 15 s, and only once your iPhone has shown RoadWise it reports a lock in time (this needs a passcode). Several short switches in a row count as one pickup.',
     ],
   },
   {

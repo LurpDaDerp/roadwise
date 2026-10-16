@@ -61,7 +61,7 @@ export const onboardingCopy = {
     body: 'Drive safely, earn points, keep your streak going.',
     rows: [
       { big: '+10', title: 'Safe miles earn points', body: '10 points for every mile without an event.' },
-      { big: '−', title: 'Events cost points', body: 'Speeding, phone pickups and hard braking take points off.' },
+      { big: '−', title: 'Events cost points', body: 'Speeding, phone use (leaving RoadWise mid-drive too) and hard braking take points off.' },
       { big: '×1.30', title: 'Streaks multiply', body: 'Each good drive grows your streak and boosts what you earn.' },
     ],
     continue: 'Got it',

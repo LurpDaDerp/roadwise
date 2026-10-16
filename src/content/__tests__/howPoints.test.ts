@@ -29,3 +29,25 @@ test('the DashPal section: what makes a DashPal drive, the events, and what they
 test('"DashPal got it wrong" has its own weekly quota', () => {
   expect(section('mistakes')).toContain('"DashPal got it wrong" is accepted right away too, up to 3 times a week, on top of those.');
 });
+
+test('phone use: leaving RoadWise is phone use too, the navigation button never costs points, and what never counts', () => {
+  const phone = section('phone');
+  expect(RULES.map((r) => r.id).indexOf('phone')).toBe(1);
+  expect(phone).toHaveLength(5);
+  expect(phone[1]).toMatch(/^Leaving RoadWise during a drive counts as phone use too/);
+  expect(phone[2]).toBe('Open your navigation app with the navigation button on the drive screen. That never costs points. Going back to it any other way does.');
+  expect(phone[3]).toMatch(/^Locking your phone and the notification shade never count\./);
+  expect(phone[4]).toMatch(/^On iPhone a switch counts after 15 s/);
+  expect(PENALTIES.find((p) => p.event === 'Phone pickup or leaving RoadWise')?.penalty).toBe('−40 (−20 when stopped in traffic)');
+  expect(PENALTIES.find((p) => p.event === 'Phone handling or time away')?.penalty).toBe('−10 for every extra 15 s');
+});
+
+test('the "how it works" card and the onboarding step name leaving RoadWise mid-drive', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the onboarding copy, beside the content it repeats
+  const { HOW_IT_WORKS } = require('@/content/howPoints') as typeof import('@/content/howPoints');
+  const line = 'Speeding, phone use (leaving RoadWise mid-drive too) and hard braking take points off.';
+  expect(HOW_IT_WORKS[1]?.body).toBe(line);
+  expect(line.length).toBe(86);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
+  expect(JSON.stringify(require('@/features/onboarding/copy'))).toContain(line);
+});
