@@ -85,6 +85,8 @@ const mockOwner: { uid: string | null; hasData: boolean } = { uid: null, hasData
 jest.mock('@/features/auth/AuthGate', () => ({
   AuthGate: ({ children }: { children: ReactNode }) => children,
 }));
+// The minimum-version gate the reminder tap's start gate reads (its own suite tests it).
+jest.mock('@/features/auth/version', () => ({ useUpdateStatus: () => 'ok' }));
 jest.mock('@/boot/device', () => ({
   readDeviceOwner: async () => mockOwner.uid,
   hasDriverData: async () => mockOwner.hasData,
@@ -137,7 +139,7 @@ jest.mock('@/data/queries', () => ({
 }));
 
 // Task 18's hosts are stand-ins here; their wiring is `layout-wiring.test.tsx`'s subject.
-jest.mock('@/features/notifications', () => ({ NotificationsHost: () => null }));
+jest.mock('@/features/notifications', () => ({ NotificationsHost: () => null, reminderStartGate: () => 'never' }));
 jest.mock('@/data/devices/DeviceHost', () => ({ DeviceHost: () => null }));
 
 // eslint-disable-next-line import/first -- after the mocks it depends on
@@ -185,6 +187,9 @@ function fakeRuntime(drive: Partial<DriveState>) {
     snapshot: () => current,
     subscribe: () => () => {},
     isBusy: () => false,
+    booted: () => true,
+    signedIn: () => true,
+    start: jest.fn(async () => ({ ok: false, reason: 'error' })),
     end: jest.fn(async () => null),
     suspendForSignOut: jest.fn(async () => {}),
     resumeAfterSignIn: jest.fn(async () => {}),

@@ -10,7 +10,7 @@ import { Text, useTheme } from '@/ui';
 
 import { HomeHeader } from './HomeHeader';
 import { ChallengesStrip, FirstRunCard, RecentDrives, StatsCard } from './HomeSections';
-import { StartDriveBar, type StartRefusal } from './StartDrive';
+import { StartDriveBar, type StartBanner } from './StartDrive';
 
 /** Scored drives before the stats card and the rest of Home appear. */
 export const FIRST_RUN_DRIVES = 3;
@@ -26,7 +26,7 @@ export type HomeViewProps = {
   week: StatSums | undefined;
   month: StatSums | undefined;
   starting: boolean;
-  refusal: StartRefusal | null;
+  refusal: StartBanner | null;
   /** The last drive was not kept: one line above Start until OK (a refusal outranks it). */
   dropNotice?: { message: string; onDismiss: () => void } | null;
   onStart: () => void;

@@ -7,10 +7,14 @@ import { Banner, Button, useTheme } from '@/ui';
 
 export type StartRefusal = 'permission' | 'busy' | 'error';
 
-export const REFUSAL_COPY: Record<StartRefusal, string> = {
+/** What the line above Start says: a refused start, or a tap on a forgot-to-start reminder whose trip is over. */
+export type StartBanner = StartRefusal | 'reminder-expired';
+
+export const REFUSAL_COPY: Record<StartBanner, string> = {
   permission: 'RoadWise needs location to record a drive.',
   busy: 'A drive is already running.',
   error: 'Couldn’t start the drive. Try again.',
+  'reminder-expired': 'That reminder has expired. Tap Start Drive to record a drive.',
 };
 
 const IDLE_MIN = Math.round(IDLE_END_S / 60);
@@ -35,8 +39,9 @@ export function dropCopy(cause: EndCause, reason: DropReason): string {
 }
 
 /**
- * The bottom-reachable Start drive button. A refused start says why in one line above the
- * button; nothing is recorded. With no refusal, a drive that was not kept says why there until OK.
+ * The bottom-reachable Start drive button. A refused start (the button's, or a tap on the
+ * forgot-to-start reminder's) says why in one line above the button; nothing is recorded. With no
+ * refusal, a drive that was not kept says why there until OK.
  */
 export function StartDriveBar({
   onStart,
@@ -47,7 +52,7 @@ export function StartDriveBar({
 }: {
   onStart: () => void;
   starting: boolean;
-  refusal: StartRefusal | null;
+  refusal: StartBanner | null;
   onRefusalAction: () => void;
   notice?: { message: string; onDismiss: () => void } | null;
 }) {
@@ -67,7 +72,7 @@ export function StartDriveBar({
       }}
     >
       {refusal ? (
-        <Banner tone="danger" message={REFUSAL_COPY[refusal]} action={action} testID="start-refusal" />
+        <Banner tone={refusal === 'reminder-expired' ? 'warning' : 'danger'} message={REFUSAL_COPY[refusal]} action={action} testID="start-refusal" />
       ) : notice ? (
         <Banner tone="info" message={notice.message} action={{ label: 'OK', onPress: notice.onDismiss }} testID="drive-dropped" />
       ) : null}

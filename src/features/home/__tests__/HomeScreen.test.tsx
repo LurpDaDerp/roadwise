@@ -1,8 +1,11 @@
-import { screen, waitFor } from '@testing-library/react-native';
+import { act, screen, waitFor } from '@testing-library/react-native';
 
 import { draw, drive as mockDrive, press, summary as mockSummary, sums as mockSums } from '@/features/drives/__fixtures__/drives';
 
+import { ThemeProvider } from '@/ui';
+
 import { HomeScreen } from '../HomeScreen';
+import { clearStartNotice, readStartNotice, showStartNotice } from '../startNotice';
 
 const mockRouter = { push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => true) };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter, useFocusEffect: jest.fn() }));
@@ -41,6 +44,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockRecording = false;
   mockNotice = null;
+  clearStartNotice();
 });
 
 describe('the notice of a drive that was not kept', () => {
@@ -103,4 +107,61 @@ test('while a drive is recording, the in-progress strip replaces Start', async (
   await draw(<HomeScreen />);
   expect(screen.getByTestId('drive-in-progress')).toBeOnTheScreen();
   expect(screen.queryByTestId('start-drive')).toBeNull();
+});
+
+describe('a tap on the forgot-to-start reminder that started no drive', () => {
+  test('a notice set before Home mounts shows in the refusal line, with Fix it for permission, until the next start', async () => {
+    showStartNotice('permission');
+    await draw(<HomeScreen />);
+    expect(await screen.findByText('RoadWise needs location to record a drive.')).toBeOnTheScreen();
+    await press(screen.getByText('Fix it'));
+    expect(mockRouter.push).toHaveBeenCalledTimes(1);
+    expect(mockRouter.push).not.toHaveBeenCalledWith('/drive');
+    mockStart.mockResolvedValue({ ok: true, clientTripId: 'x' });
+    await press(screen.getByTestId('start-drive'));
+    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/drive'));
+    expect(readStartNotice()).toBeNull();
+    expect(screen.queryByTestId('start-refusal')).toBeNull();
+  });
+
+  test('a notice set while Home is on screen shows at once; an expired reminder says so, with no button', async () => {
+    await draw(<HomeScreen />);
+    expect(screen.queryByTestId('start-refusal')).toBeNull();
+    await act(async () => showStartNotice('reminder-expired'));
+    expect(await screen.findByTestId('start-refusal')).toHaveTextContent(/That reminder has expired. Tap Start Drive to record a drive./);
+    expect(screen.queryByText('Fix it')).toBeNull();
+    expect(screen.queryByText('Open it')).toBeNull();
+  });
+
+  test('a newer notice outranks an older refused Start', async () => {
+    mockStart.mockResolvedValue({ ok: false, reason: 'busy' });
+    await draw(<HomeScreen />);
+    await press(screen.getByTestId('start-drive'));
+    expect(await screen.findByText('A drive is already running.')).toBeOnTheScreen();
+    await act(async () => showStartNotice('reminder-expired'));
+    expect(await screen.findByText('That reminder has expired. Tap Start Drive to record a drive.')).toBeOnTheScreen();
+  });
+
+  test('a drive that starts (by the reminder too) takes an old refused Start down', async () => {
+    mockStart.mockResolvedValue({ ok: false, reason: 'error' });
+    const view = await draw(<HomeScreen />);
+    await press(screen.getByTestId('start-drive'));
+    expect(await screen.findByTestId('start-refusal')).toBeOnTheScreen();
+    mockRecording = true;
+    await view.rerender(
+      <ThemeProvider scheme="light" reduceMotion>
+        <HomeScreen />
+      </ThemeProvider>
+    );
+    await waitFor(() => expect(screen.queryByTestId('start-refusal')).toBeNull());
+    // and it does not come back when the drive is over
+    mockRecording = false;
+    await view.rerender(
+      <ThemeProvider scheme="light" reduceMotion>
+        <HomeScreen />
+      </ThemeProvider>
+    );
+    expect(await screen.findByTestId('start-drive')).toBeOnTheScreen();
+    expect(screen.queryByTestId('start-refusal')).toBeNull();
+  });
 });

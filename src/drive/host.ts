@@ -94,6 +94,8 @@ export interface DriveHost {
   settled(): Promise<void>;
   snapshot(): DriveState;
   subscribe(fn: (s: DriveState) => void): () => void;
+  /** `boot` has run (and `stop` has not): until then `start` answers `error`. */
+  booted(): boolean;
   signedIn(): boolean;
   /** Sign-out: an open drive is ended and finalized under the current owner. */
   suspendForSignOut(): Promise<void>;
@@ -653,6 +655,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         listeners.delete(fn);
       };
     },
+    booted: () => booted,
     signedIn: () => !signedOut || signingOut,
 
     async suspendForSignOut() {

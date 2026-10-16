@@ -23,7 +23,8 @@ import {
 import { Screen } from '@/ui';
 
 import { HomeView } from './HomeView';
-import { dropCopy, type StartRefusal } from './StartDrive';
+import { dropCopy, type StartBanner } from './StartDrive';
+import { clearStartNotice, useStartNotice } from './startNotice';
 
 export function HomeScreen() {
   const router = useRouter();
@@ -37,7 +38,17 @@ export function HomeScreen() {
   // The status alone (not useDriveLive), so Home doesn't re-render on every 1 Hz drive tick.
   const recording = useDrive((d) => d.status === 'recording');
   const [starting, setStarting] = useState(false);
-  const [refusal, setRefusal] = useState<StartRefusal | null>(null);
+  const [refusal, setRefusal] = useState<StartBanner | null>(null);
+  // Why a tap on the forgot-to-start reminder started no drive: shown in the same line as a refused
+  // Start (it outranks an older one), until the next start.
+  const notice = useStartNotice();
+  const shownRefusal = notice ?? refusal;
+  // A drive that started any way (a tap on the reminder too) takes an old refusal down.
+  const [wasRecording, setWasRecording] = useState(recording);
+  if (wasRecording !== recording) {
+    setWasRecording(recording);
+    if (recording) setRefusal(null);
+  }
 
   // The notice of a drive that was not kept: read on focus and whenever a drive closes.
   const db = useDb();
@@ -65,6 +76,7 @@ export function HomeScreen() {
     if (starting) return;
     setStarting(true);
     setRefusal(null);
+    clearStartNotice();
     try {
       const res = await start();
       if (res.ok) {
@@ -93,10 +105,10 @@ export function HomeScreen() {
         week={week.data}
         month={month.data}
         starting={starting}
-        refusal={refusal}
+        refusal={shownRefusal}
         dropNotice={dropped ? { message: dropCopy(dropped.cause, dropped.reason), onDismiss: dismissDropped } : null}
         onStart={() => void onStart()}
-        onRefusalAction={() => (refusal === 'permission' ? router.push(PERMISSIONS_HREF) : router.push(DRIVE_HREF))}
+        onRefusalAction={() => (shownRefusal === 'permission' ? router.push(PERMISSIONS_HREF) : router.push(DRIVE_HREF))}
         onOpenDrive={(id) => router.push(driveSummaryHref(id))}
         onSeeAll={() => router.push(DRIVE_HISTORY_HREF)}
         onAllStats={() => router.push(ALL_STATS_HREF)}

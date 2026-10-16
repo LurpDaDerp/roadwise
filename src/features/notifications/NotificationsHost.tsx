@@ -9,6 +9,13 @@
  * that lands during a drive, or before the navigator is mounted, is held and replayed when the
  * drive's busy signal says it is over.
  *
+ * A tap on the forgot-to-start reminder is never routed as a link: its token is held (iOS: from the
+ * response; Android: handed over natively, `watchReminderTapIntents`) and run by
+ * `startFromReminderTap`, which claims it natively and only then starts the drive through
+ * `startDrive` — the Start Drive button's own start. It is tried on a new hold, on each change of
+ * the busy signal, and whenever `startGate` changes; a hold waits while the app is still starting
+ * (at most 2 min from the tap) and is dropped during setup, signed out or with an update required.
+ *
  * Battery (§3.5): no timer and no polling. The busy subscription fires with the drive host's state
  * changes; while nothing is held it returns after one boolean read.
  *
@@ -19,10 +26,22 @@ import * as Notifications from 'expo-notifications';
 import { router, type Href } from 'expo-router';
 import { useEffect, useLayoutEffect, useRef } from 'react';
 
+import type { ReminderTap } from '@drive-sense';
+
 import { useDataSource } from '@/data/queries';
+import type { StartResult } from '@/drive/host';
+import { clearStartNotice, showStartNotice } from '@/features/home/startNotice';
 
 import { ensureNotificationSetup } from './categories';
 import { installForegroundHandler } from './handler';
+import {
+  isReminderResponse,
+  reminderTokenOf,
+  startFromReminderTap,
+  watchReminderTapIntents,
+  type ReminderTapNative,
+  type StartGate,
+} from './reminderTap';
 import { handleResponse, replayPendingHref, type ResponseDeps } from './responses';
 
 export interface NotificationsHostProps {
@@ -32,10 +51,16 @@ export interface NotificationsHostProps {
   isBusy: () => boolean;
   /** Called on every change of the busy signal's source; returns the unsubscribe. */
   subscribeBusy: (listener: () => void) => () => void;
+  /** The Start Drive button's start: the only start a reminder tap may use. */
+  startDrive: () => Promise<StartResult>;
+  /** Whether a reminder tap may start a drive now (`reminderStartGate`). Read each render and per try. */
+  startGate: () => StartGate;
   /** The root navigator is mounted and can take a push. Defaults to true. */
   ready?: boolean;
   /** Where a route is opened. Defaults to `router.push`. */
   navigate?: (href: string) => void;
+  /** The reminder's native face (tests inject a fake). Defaults to the module. */
+  reminderNative?: ReminderTapNative;
   onError?: (e: unknown, ctx: string) => void;
 }
 
@@ -60,6 +85,43 @@ export function NotificationsHost(props: NotificationsHostProps): null {
   const replay = useRef<() => void>(() => {});
   /** Counts deferrals, so a replay that raced one runs again. */
   const deferrals = useRef(0);
+  /** The reminder tap waiting to run (the newest replaces an older one), and whether one is running. */
+  const heldTap = useRef<ReminderTap | null>(null);
+  const tapping = useRef(false);
+
+  /** Runs the held reminder tap once the gate allows; one run at a time. Reads only refs. */
+  const tryTap = useRef<() => void>(() => {});
+  useLayoutEffect(() => {
+    tryTap.current = () => {
+      const hold = heldTap.current;
+      if (hold === null || tapping.current) return;
+      const l = latest.current;
+      tapping.current = true;
+      startFromReminderTap(hold, {
+        start: () => latest.current.props.startDrive(),
+        navigate: l.props.navigate ?? defaultNavigate,
+        notice: showStartNotice,
+        gate: () => latest.current.props.startGate(),
+        now: latest.current.now,
+        native: l.props.reminderNative,
+        onError: l.props.onError,
+      })
+        .then((out) => {
+          // A drive is under way: an older line about a reminder that started none is spent.
+          if (out === 'started') clearStartNotice();
+          if (out !== 'waiting' && heldTap.current === hold) heldTap.current = null;
+        })
+        .catch((e: unknown) => {
+          if (heldTap.current === hold) heldTap.current = null;
+          latest.current.props.onError?.(e, 'notifications.reminder');
+        })
+        .finally(() => {
+          tapping.current = false;
+          // A newer tap arrived while this one ran.
+          if (heldTap.current !== null && heldTap.current !== hold) tryTap.current();
+        });
+    };
+  }, []);
 
   useEffect(() => {
     const report = (e: unknown, ctx: string) => latest.current.props.onError?.(e, ctx);
@@ -79,6 +141,11 @@ export function NotificationsHost(props: NotificationsHostProps): null {
       isRecording: () => latest.current.props.isRecording(),
     });
 
+    const hold = (tap: ReminderTap) => {
+      heldTap.current = tap;
+      tryTap.current();
+    };
+
     const seen = new Set<string>();
     const take = (r: Notifications.NotificationResponse | null) => {
       if (!r) return;
@@ -91,6 +158,12 @@ export function NotificationsHost(props: NotificationsHostProps): null {
       if (seen.has(key)) return;
       seen.add(key);
       Notifications.clearLastNotificationResponse();
+      // The reminder's own note: its token is held for a start, never opened as a link.
+      if (isReminderResponse(r)) {
+        const token = reminderTokenOf(r);
+        if (token !== null) hold({ token, at: latest.current.now() });
+        return;
+      }
       handleResponse(r, deps())
         .then((out) => {
           if (out.kind !== 'deferred') return;
@@ -104,9 +177,12 @@ export function NotificationsHost(props: NotificationsHostProps): null {
 
     const responses = Notifications.addNotificationResponseReceivedListener(take);
     take(Notifications.getLastNotificationResponse());
+    // Android hands a reminder tap over natively (once per token).
+    const unwatch = watchReminderTapIntents(hold, latest.current.props.reminderNative);
 
     return () => {
       responses.remove();
+      unwatch();
       uninstall();
     };
   }, []);
@@ -116,6 +192,8 @@ export function NotificationsHost(props: NotificationsHostProps): null {
     if (!ready) return;
     let replaying = false;
     const tryReplay = () => {
+      // A reminder tap waits on the same busy signal as a held link.
+      tryTap.current();
       if (replaying || !mayHavePending.current) return;
       const l = latest.current;
       if (l.props.isBusy()) return;
@@ -150,6 +228,12 @@ export function NotificationsHost(props: NotificationsHostProps): null {
       unsubscribe();
     };
   }, [ready, subscribeBusy]);
+
+  // A held reminder tap runs once the app can start a drive (signed in, set up, booted, idle).
+  const gate = props.startGate();
+  useEffect(() => {
+    tryTap.current();
+  }, [gate]);
 
   return null;
 }

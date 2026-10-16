@@ -96,6 +96,8 @@ jest.mock('@/ui/fonts', () => ({
 jest.mock('@/features/auth/AuthGate', () => ({
   AuthGate: ({ children }: { children: ReactNode }) => children,
 }));
+const mockUpdate = { status: 'ok' as 'ok' | 'required' | 'unknown' | null };
+jest.mock('@/features/auth/version', () => ({ useUpdateStatus: () => mockUpdate.status }));
 jest.mock('@/features/drive/LockoutGate', () => ({
   LockoutGate: ({ children }: { children: ReactNode }) => children,
 }));
@@ -207,6 +209,9 @@ function fakeHost(initial: DriveState['status'] = 'idle') {
   return {
     snapshot: () => current,
     isBusy: () => current.status !== 'idle',
+    booted: jest.fn(() => true),
+    signedIn: jest.fn(() => true),
+    start: jest.fn(async () => ({ ok: true as const, clientTripId: 'trip-1' })),
     subscribe: jest.fn((fn: (s: DriveState) => void) => {
       listeners.add(fn);
       return () => {
@@ -326,6 +331,28 @@ describe('one notification response listener (rev1: C1)', () => {
     await act(async () => mockController.set({ status: 'switching', runtime: null }));
     expect(host.listenerCount()).toBe(0);
     expect(mockNotifications.responseListeners.size).toBe(0);
+  });
+
+  test("a reminder tap's start gate reads the drive host (booted, signed in, idle); mounting starts nothing", async () => {
+    const { runtime, host } = await fakeRuntime();
+    await renderWith(runtime);
+    expect(host.booted).toHaveBeenCalled();
+    expect(host.signedIn).toHaveBeenCalled();
+    expect(host.start).not.toHaveBeenCalled();
+  });
+
+  test("a tap on the reminder whose token native does not claim (no native module here) never reaches host.start", async () => {
+    const { runtime, host } = await fakeRuntime();
+    await renderWith(runtime);
+    const tap = {
+      actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
+      notification: { date: 1, request: { identifier: 'roadwise.tripReminder', content: { data: { kind: 'tripReminder', reminderToken: 'tok-a' } } } },
+    };
+    await act(async () => {
+      for (const l of [...mockNotifications.responseListeners]) l(tap);
+    });
+    for (let i = 0; i < 6; i += 1) await act(async () => Promise.resolve());
+    expect(host.start).not.toHaveBeenCalled();
   });
 });
 
