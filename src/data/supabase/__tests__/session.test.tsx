@@ -9,6 +9,7 @@ import { DataProvider } from '@/data/queries/context';
 import { SessionProvider, registerBeforeSignOut, useSession } from '@/data/supabase/session';
 import { PENDING_TERMS_KEY } from '@/features/auth/pendingConsent';
 import { readProfileCache, writeProfileCache } from '@/features/auth/profileCache';
+import { readStartNotice, showStartNotice } from '@/features/home/startNotice';
 
 type AuthListener = (event: string, session: unknown) => void;
 type Gate<T> = { resolve?: (value: T) => void; reject?: (reason: unknown) => void };
@@ -173,10 +174,13 @@ test('signOut asks Supabase to end the session and clears it on the event', asyn
   await act(async () => { mockProfileGate.resolve?.(ava); });
   await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
 
+  showStartNotice('reminder-expired');
   await act(async () => { fireEvent.press(screen.getByText('sign out')); });
   // The session ends first; then the pending drive summaries are cancelled and the reminder goes off.
   expect(authCalls).toEqual(['signOut', 'cancelDriveSummaries']);
   expect(mockReminderOff).toHaveBeenCalled();
+  // Home's line about a reminder tap belongs to this driver: the next one never sees it.
+  expect(readStartNotice()).toBeNull();
 
   await act(async () => { emit('SIGNED_OUT', null); });
   await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());
@@ -529,6 +533,16 @@ describe('fix round 1', () => {
     mockReminderOff.mockClear();
     await act(async () => { emit('SIGNED_OUT', null); });
     expect(mockReminderOff).toHaveBeenCalledTimes(1);
+  });
+
+  test('a SIGNED_OUT the driver did not start (revoked, expired) takes Home’s reminder line down', async () => {
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await act(async () => { mockProfileGate.resolve?.(ava); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
+    showStartNotice('permission');
+    await act(async () => { emit('SIGNED_OUT', null); });
+    expect(readStartNotice()).toBeNull();
   });
 
   test('a launch that simply starts signed out keeps a tick waiting for its sign-in', async () => {

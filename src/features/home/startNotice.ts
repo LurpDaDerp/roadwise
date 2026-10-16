@@ -2,8 +2,9 @@
  * Why a tap on the forgot-to-start reminder did not start a drive, for Home to say: the same
  * refusal the Start Drive button shows, or that the reminder has expired. A tiny process-local store
  * (set by the notification-tap handler, read by Home with `useSyncExternalStore`), so the line
- * shows whether Home is already on screen or opens after the tap. It carries words only: it starts
- * nothing, reaches nothing of the drive, and is not a link parameter.
+ * shows whether Home is already on screen or opens after the tap. It stands until the next start
+ * or sign-out, as a refused Start Drive tap's line does. It carries words only: it starts nothing,
+ * reaches nothing of the drive, and is not a link parameter.
  */
 import { useSyncExternalStore } from 'react';
 
@@ -23,7 +24,7 @@ export function showStartNotice(n: StartNotice): void {
   emit();
 }
 
-/** Home took the notice into its own banner (or the driver started a drive): it is spent. */
+/** The driver started a drive (from Home or a reminder tap), or signed out: the notice is spent. */
 export function clearStartNotice(): void {
   if (current === null) return;
   current = null;

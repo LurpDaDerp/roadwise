@@ -6,6 +6,7 @@ import { useDb } from '@/data/queries/context';
 import { bindPendingTerms, clearTermsAccepted } from '@/features/auth/pendingConsent';
 import { readProfileCache, writeProfileCache } from '@/features/auth/profileCache';
 import { cancelDriveSummaries } from '@/features/drive/summaryNotifier';
+import { clearStartNotice } from '@/features/home/startNotice';
 import { turnOffReminder } from '@/features/reminder/enable';
 
 import { supabase } from './client';
@@ -294,12 +295,14 @@ export function SessionProvider({
     );
     const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
       // Every end of a session — the driver's own sign-out, a revoked or expired one — forgets a
-      // Terms tick not yet recorded (T17 security M-1) and turns the forgot-to-start reminder off.
+      // Terms tick not yet recorded (T17 security M-1), turns the forgot-to-start reminder off and
+      // takes Home's line about a reminder tap down (it was this driver's).
       // Only the event: a launch that simply starts signed out keeps a tick made on the sign-in
       // screen for the link it is waiting on.
       if (event === 'SIGNED_OUT') {
         void clearTermsAccepted(settings).catch(() => {});
         void turnOffReminder().catch(() => {});
+        clearStartNotice();
       }
       void load(next as Session | null);
     });
@@ -345,8 +348,10 @@ export function SessionProvider({
         await supabase.auth.signOut();
         // A summary scheduled for this driver's last drive must not fire once they have left (U3).
         void cancelDriveSummaries().catch(() => {});
-        // The forgot-to-start reminder goes off with the driver and forgets everything it kept.
+        // The forgot-to-start reminder goes off with the driver and forgets everything it kept, and
+        // Home's line about a reminder tap goes with them.
         void turnOffReminder().catch(() => {});
+        clearStartNotice();
         // A Terms acceptance ticked on this device and not yet recorded belongs to the driver who
         // ticked it; the next sign-in ticks for itself (T15 r2).
         void clearTermsAccepted(settings).catch(() => {});
