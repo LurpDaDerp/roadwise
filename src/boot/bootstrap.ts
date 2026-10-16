@@ -80,7 +80,7 @@ export interface DashcamArgs {
   now: () => number;
   newId: () => string;
   onError: (error: unknown, context: string) => void;
-  /** the alert ports loaded (the player can sound at all, with no drive open) */
+  /** the alert ports loaded (the player can sound at all; a failed sound is the link's 30 s rule) */
   alertsLoaded: boolean;
   native: DashpalNative;
 }
@@ -555,10 +555,11 @@ function defaultSummaryNotifier(host: DriveHost, db: Db): { detach(): void; sett
 /**
  * The DashPal runtime over the process transport (created only when a dashcam is paired or setup
  * runs, so nothing touches Bluetooth for a driver without one). The phone plays DashPal alerts with
- * or without a drive open: during a drive its player counts as available only while no sound failed
- * this drive (the host's flag); with none open, whenever the alert ports loaded (a failure then
- * holds the link's 30 s "cannot play" instead). On Android the runtime also drives the DashPal link
- * service and the alert wake lock; iOS has neither (an ALERT wakes the app through bluetooth-central).
+ * or without a drive open, and its player counts as available whenever the alert ports loaded: a
+ * sound that failed holds the link's 30 s "cannot play" and no longer. (The host's
+ * `alertsAvailable` stays set for the rest of a drive until a sound plays, and a DashPal alert
+ * refused for it could never clear it.) On Android the runtime also drives the DashPal link service
+ * and the alert wake lock; iOS has neither (an ALERT wakes the app through bluetooth-central).
  */
 export function defaultDashcam(args: DashcamArgs): DashcamRuntime {
   const native = args.native;
@@ -578,7 +579,7 @@ export function defaultDashcam(args: DashcamArgs): DashcamRuntime {
       return {
         recording: s?.status === 'recording',
         driveOpen,
-        playerAvailable: driveOpen ? s.alertsAvailable : args.alertsLoaded,
+        playerAvailable: args.alertsLoaded,
         callActive: s?.callActive ?? false,
       };
     },

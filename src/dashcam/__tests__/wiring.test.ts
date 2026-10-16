@@ -203,29 +203,39 @@ describe('phone-first sound wiring (bootstrap → the DashPal runtime → drive-
     mockTransportRef.current = null;
   });
 
-  async function android(paired: boolean) {
+  async function android(paired: boolean, now: () => number = () => clock) {
     restoreOS = jest.replaceProperty(Platform, 'OS', 'android').restore;
     await migrate(db);
     if (paired) await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: 'A4:CF:12:B3:C4:D5', name: 'DashPal-C4D5', pairedAt: 1 });
     const ble = createFakeBle();
     ble.addPeripheral({ id: 'A4:CF:12:B3:C4:D5', info: encodeInfo({ ver: 1, protoMin: 1, protoMax: 1, fwMajor: 3, fwMinor: 3, mac: [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5], peerBonded: true, bondCount: 1, pairingOpen: false }) });
     mockTransportRef.current = createBleTransport(ble, { platform: 'android', setTimer: () => 0, clearTimer: () => {} });
-    const native = createFakeDriveSense({ platform: 'android', now: () => clock });
-    const d = deps({ dashpal: native });
+    const native = createFakeDriveSense({ platform: 'android', now });
+    const d = deps({ dashpal: native, now });
     const rt = await bootstrapApp(d.deps);
     await rt.dashcam!.ready;
     for (let i = 0; i < 80; i++) await new Promise<void>((resolve) => setImmediate(resolve));
     return { rt, native, ble, errors: d.errors };
   }
 
-  test('with no drive open the player counts as available when the ports loaded, even after a sound failed; during a drive the host flag decides', async () => {
-    const { rt } = await android(false);
+  test('the player counts as available whenever the ports loaded, with or without a drive: a failed sound means "cannot play" for 30 s and no longer, also during a drive', async () => {
+    const t = { now: clock };
+    const { rt } = await android(false, () => t.now);
     rt.drive.reportAlertsUnavailable();
     expect(rt.dashcam!.link.canPlay(true)).toBe(true);
     expect(await rt.drive.start()).toMatchObject({ ok: true });
     expect(rt.dashcam!.link.canPlay(true)).toBe(true);
+    // A DashPal sound fails during the drive: the host's flag stays set for the rest of the drive
+    // (no DashPal sound plays to clear it), the link's rule holds 30 s.
     rt.drive.reportAlertsUnavailable();
+    rt.dashcam!.playerUnavailable();
+    expect(rt.drive.snapshot().alertsAvailable).toBe(false);
     expect(rt.dashcam!.link.canPlay(true)).toBe(false);
+    t.now += 30_000 - 1;
+    expect(rt.dashcam!.link.canPlay(true)).toBe(false);
+    t.now += 2;
+    expect(rt.drive.snapshot().alertsAvailable).toBe(false);
+    expect(rt.dashcam!.link.canPlay(true)).toBe(true);
     await rt.drive.end();
     await rt.stop();
   });
