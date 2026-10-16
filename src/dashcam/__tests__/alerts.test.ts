@@ -348,6 +348,32 @@ describe('phone-first routing: the can-play reads, critical items', () => {
     expect(r.c.playingAny()).toBe(false);
   });
 
+  test('a tick reads can-play only while something sounds (no needless probe)', async () => {
+    const r = make();
+    r.c.tick(0);
+    expect(r.reads).toEqual([]);
+    r.c.onAlert({ ...ALERT, alertId: 9, sound: 1, tier: 2, mode: 1, route: 0 });
+    r.c.tick(0);
+    expect(r.reads).toEqual([]);
+    r.c.onAlert({ ...ALERT, alertId: 10, sound: 1, tier: 2, mode: 1, route: 1 });
+    r.c.tick(0);
+    expect(r.reads).toEqual([true, false]);
+    await r.c.settled();
+  });
+
+  test('a canPlay that throws on a tick silences what plays (ACK(0))', async () => {
+    let fail = false;
+    const r = make(() => {
+      if (fail) throw new Error('probe');
+      return true;
+    });
+    r.c.onAlert({ ...ALERT, alertId: 11, sound: 1, tier: 2, mode: 1, route: 1 });
+    fail = true;
+    r.c.tick(0);
+    expect(r.acks).toEqual([[11, 0]]);
+    await r.c.settled();
+  });
+
   test('a canPlay that throws counts as cannot', () => {
     const r = make(() => {
       throw new Error('probe');

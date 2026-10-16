@@ -457,12 +457,15 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
 
     tick(now) {
       // A phone that can no longer play (a call began, the volume went down, headphones, a sound that
-      // failed): the dashcam's buzzer takes over.
+      // failed): the dashcam's buzzer takes over. Read only while something sounds (no needless probe).
       let can = true;
-      try {
-        can = deps.canPlay(false);
-      } catch (e) {
-        report(e);
+      if ([...table.values()].some((e) => e.playing)) {
+        try {
+          can = deps.canPlay(false);
+        } catch (e) {
+          report(e);
+          can = false;
+        }
       }
       if (!can) {
         let any = false;
