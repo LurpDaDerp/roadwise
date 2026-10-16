@@ -55,6 +55,8 @@ describe('native-android: files the contract names exist, and no trip-detection 
     'FeatureExtractor',
     'Alignment',
     'PhoneStateReceiver',
+    'AppVisibility',
+    'DriveSensePackage',
     'NotificationFactory',
     'ExitInfoReader',
     'EventBus',
@@ -768,5 +770,48 @@ describe('native-android: the reminder posts in one place, and its rules run in 
     expect(st).toMatch(/row\.getBoolean\("requireDelivery"\)\s*\)\s*JSONObject\(\)\.put\("ok", r\.ok\)/);
     // nothing in it touches the phone
     expect(st).not.toMatch(/Context|DriveSensePrefs|TripReminderNotifier|ActivityTransitions/);
+  });
+});
+
+// Screen switches (README §5): `appForeground` is RoadWise in front, not the process importance.
+describe('native-android: RoadWise in front (AppVisibility)', () => {
+  it('a Package found by autolinking registers AppVisibility at Application.onCreate', () => {
+    const pkg = read(join(KT_DIR, 'DriveSensePackage.kt'));
+    expect(pkg).toMatch(/^import expo\.modules\.core\.interfaces\.Package$/m);
+    expect(pkg).toMatch(/^import expo\.modules\.core\.interfaces\.ApplicationLifecycleListener$/m);
+    const src = code(pkg);
+    expect(src).toMatch(/class DriveSensePackage : Package \{/);
+    expect(src).toMatch(/override fun createApplicationLifecycleListeners\(context: Context\): List<ApplicationLifecycleListener> =/);
+    expect(src).toMatch(/override fun onCreate\(application: Application\) \{\s*AppVisibility\.register\(application\)\s*\}/);
+    // the late fallback in the module, seeded from the activity on screen
+    expect(MODULE()).toMatch(/\(context as\? Application\)\?\.let \{ AppVisibility\.registerLate\(it, appContext\.currentActivity\) \}/);
+  });
+
+  it('counts started activities, ignores a recreation, and reads split screen only on a phone-sized display', () => {
+    const v = code(kt('AppVisibility'));
+    expect(v).toMatch(/object AppVisibility : Application\.ActivityLifecycleCallbacks \{/);
+    expect(v).toMatch(/const val LARGE_SCREEN_DP = 600\b/);
+    expect(v).toMatch(/fun inFront\(\): Boolean = started > 0 && !multiWindow/);
+    expect(v).toMatch(/fun visible\(\): Boolean = started > 0/);
+    expect(v).toMatch(/@Volatile\s*private var started = 0/);
+    expect(v).toMatch(/@Volatile\s*private var multiWindow = false/);
+    expect(v.match(/registerActivityLifecycleCallbacks\(this\)/g)).toHaveLength(2);
+    expect(v).toMatch(/if \(registered\) return\s*registered = true/);
+    // split screen: the last started activity, on a display under 600 dp
+    expect(v).toMatch(/a\.isInMultiWindowMode &&\s*a\.resources\.configuration\.smallestScreenWidthDp < LARGE_SCREEN_DP/);
+    // a rotation or a fold: the stopped instance is being recreated and the new one does not count twice
+    const stopped = /override fun onActivityStopped\(activity: Activity\) \{[\s\S]*?\n {2}\}/.exec(v)?.[0] ?? '';
+    expect(stopped).toMatch(/if \(activity\.isChangingConfigurations\) \{\s*recreating = WeakReference\(activity\)\s*\} else \{\s*started = \(started - 1\)\.coerceAtLeast\(0\)\s*\}/);
+    const startedFn = /override fun onActivityStarted\(activity: Activity\) \{[\s\S]*?\n {2}\}/.exec(v)?.[0] ?? '';
+    expect(startedFn).toMatch(/if \(recreating != null\) \{\s*recreating = null\s*\} else \{\s*started \+= 1\s*\}/);
+    const destroyed = /override fun onActivityDestroyed\(activity: Activity\) \{[\s\S]*?\n {2}\}/.exec(v)?.[0] ?? '';
+    expect(destroyed).toMatch(/if \(recreating\?\.get\(\) === activity && !activity\.isChangingConfigurations\) \{\s*recreating = null\s*started = \(started - 1\)\.coerceAtLeast\(0\)\s*\}/);
+  });
+
+  it('the rows read it: appForeground delegates to inFront, and every emitted row re-samples split screen on main', () => {
+    const phone = code(kt('PhoneStateReceiver'));
+    expect(phone).toMatch(/fun appForeground\(\): Boolean = AppVisibility\.inFront\(\)/);
+    expect(phone).not.toMatch(/getMyMemoryState|IMPORTANCE_FOREGROUND|ActivityManager/);
+    expect(code(kt('CaptureService'))).toMatch(/EventBus\.emit\("row", body\)\s*main\.post \{ AppVisibility\.sample\(\) \}/);
   });
 });

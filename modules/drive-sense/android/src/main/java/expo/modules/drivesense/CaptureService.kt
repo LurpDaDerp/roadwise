@@ -628,5 +628,7 @@ class CaptureService : Service() {
     body["mock"] = mock
     PhoneStateReceiver.callState(applicationContext)?.let { body["call"] = it }
     EventBus.emit("row", body)
+    // Split screen is a configuration change, not a lifecycle callback: the next row reads a fresh sample.
+    main.post { AppVisibility.sample() }
   }
 }

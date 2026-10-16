@@ -4,7 +4,10 @@
 // with a passcode it turns false about 10 s after the side-button press (the file-protection
 // grace period), so `locked` lags the real lock (`lockSignal: 'lagged'`). Without a passcode it
 // never turns false, so a locked phone looks unlocked (`lockSignal: 'unreliable'`). The phone-use
-// detector takes no lock or unlock evidence on any platform: pickups come from motion.
+// detector reads these flags for screen switches (RoadWise not in front while the phone is in use),
+// and handles the lag itself (src/core/detectors/phoneSwitch.ts). `appForeground` is "RoadWise is on
+// screen": anything but `.background` (Notification Center, Control Center, Siri, a call banner, a
+// system alert and the app switcher make the app `.inactive` while it stays on screen).
 import Foundation
 import LocalAuthentication
 import UIKit
@@ -15,7 +18,7 @@ enum PhoneState {
     dispatchPrecondition(condition: .onQueue(.main))
     let app = UIApplication.shared
     let available = app.isProtectedDataAvailable
-    return PhoneSample(locked: !available, screenOn: available, appForeground: app.applicationState == .active)
+    return PhoneSample(locked: !available, screenOn: available, appForeground: app.applicationState != .background)
   }
 
   /// `lagged` with a passcode, `unreliable` without one.

@@ -1,6 +1,7 @@
 package expo.modules.drivesense
 
 import android.Manifest
+import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -76,6 +77,9 @@ class DriveSenseModule : Module() {
     OnCreate {
       DriveSensePrefs.init(context)
       EventBus.attach(emitter)
+      // RoadWise-in-front for the rows: DriveSensePackage registers it at Application.onCreate; this
+      // late registration runs only if that hook never did (seeded from the activity on screen now).
+      (context as? Application)?.let { AppVisibility.registerLate(it, appContext.currentActivity) }
       // The transitions feed: the capture's (walking auto-end) or the forgot-to-start reminder's.
       // At launch this settles the reminder and re-requests the feed it needs (a registration the
       // system dropped comes back), or removes one an earlier process or an older build left behind.

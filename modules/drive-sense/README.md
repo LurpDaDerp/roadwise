@@ -232,10 +232,25 @@ m and m/s for GNSS, degrees clockwise from true north for `course`.
 
 ## 5. Phone state
 
-- **Android**: `locked = KeyguardManager.isKeyguardLocked`, `screenOn = PowerManager.isInteractive`,
-  `appForeground` from the process importance; `lockSignal: 'reliable'`.
+- **`appForeground` is "RoadWise is in front"** (visible, and not sharing a phone screen).
+  - **Android:** `AppVisibility`, an `Application.ActivityLifecycleCallbacks` registered from
+    `Application.onCreate` by `DriveSensePackage` (an Expo `Package`, found by autolinking), before
+    any activity; the module's `OnCreate` registers late, seeded from the current activity, only if
+    that hook never ran. In front = at least one RoadWise activity *started* and not in split screen
+    on a display whose smallest width is under 600 dp. A dialog over RoadWise, the notification
+    shade, the assistant overlay, a chat bubble, a heads-up and another app's picture-in-picture
+    leave the activity started; Home, Recents and another app stop it. An activity stopped with
+    `isChangingConfigurations` (a rotation, a fold) is recreated and never counts as leaving. Split
+    screen is a configuration change, not a lifecycle callback, so the capture re-samples it on main
+    after every row (at most a row stale). Not the process importance: during a drive the capture's
+    foreground service holds the process at 125, so a paused-but-visible RoadWise would read as gone.
+    `AppVisibility.visible()` (any started activity, split screen included) is the plain visibility.
+  - **iOS:** `applicationState != .background`: Notification Center, Control Center, Siri, a call
+    banner, a system alert and the app switcher make the app `.inactive` while it stays on screen.
+- **Android**: `locked = KeyguardManager.isKeyguardLocked`, `screenOn = PowerManager.isInteractive`;
+  `lockSignal: 'reliable'`.
 - **iOS**: `UIApplication.isProtectedDataAvailable` polled at 1 Hz while capturing:
-  `locked = !available`, `screenOn = available`, `appForeground = applicationState == .active`.
+  `locked = !available`, `screenOn = available`.
   - With a passcode, protected data becomes unavailable about **10 s after** the side-button
     press (the file-protection grace period), so `locked` lags the real lock by ~10 s:
     `lockSignal: 'lagged'`.

@@ -1,6 +1,5 @@
 package expo.modules.drivesense
 
-import android.app.ActivityManager
 import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -14,7 +13,7 @@ import androidx.core.content.ContextCompat
 
 /**
  * Phone state while capturing (README §5): `locked = KeyguardManager.isKeyguardLocked`,
- * `screenOn = PowerManager.isInteractive`, `appForeground` from this process's importance.
+ * `screenOn = PowerManager.isInteractive`, `appForeground` = RoadWise in front ([AppVisibility]).
  * Registered dynamically only while capturing — `SCREEN_ON`/`SCREEN_OFF`/`USER_PRESENT` emit
  * `screen`, the thermal listener (API 29+) emits `thermal`. Android's lock signal is `reliable`.
  */
@@ -26,11 +25,12 @@ class PhoneStateReceiver(private val context: Context, private val handler: Hand
     fun screenOn(context: Context): Boolean =
       (context.getSystemService(Context.POWER_SERVICE) as PowerManager?)?.isInteractive ?: true
 
-    fun appForeground(): Boolean {
-      val info = ActivityManager.RunningAppProcessInfo()
-      ActivityManager.getMyMemoryState(info)
-      return info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
-    }
+    /**
+     * RoadWise in front: a started activity not sharing a phone screen in split screen. Not the
+     * process importance: during a drive the capture's foreground service holds the process at
+     * 125, so a RoadWise activity paused under a dialog would read as gone.
+     */
+    fun appForeground(): Boolean = AppVisibility.inFront()
 
     /**
      * The call state for the rows' bridge-only `call` key (README §1): `ring` while a call rings or

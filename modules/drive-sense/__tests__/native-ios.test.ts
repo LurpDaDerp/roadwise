@@ -272,6 +272,12 @@ describe('iOS drive-sense module (text)', () => {
     expect(code('ExtractMath.swift')).not.toMatch(/"call"/);
   });
 
+  it('appForeground is RoadWise on screen: anything but the background (an .inactive app is still on screen)', () => {
+    const src = code('PhoneState.swift');
+    expect(src).toMatch(/appForeground: app\.applicationState != \.background\)/);
+    expect(src).not.toMatch(/applicationState == \.active/);
+  });
+
   it('polls protected data for the lock state and reports the lock signal', () => {
     const src = code('PhoneState.swift');
     expect(src).toContain('isProtectedDataAvailable');
