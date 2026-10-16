@@ -1,7 +1,7 @@
 import type { AlertPlayer } from '@/core/alerts/player';
 import type { AlertDecision } from '@/core/alerts/types';
 
-import { cadenceMs, createDashcamAlerts, NO_FACE_VOICE_QUIET_MS, REPEAT_INTENSITY, SOUND_SPEC, specFor } from '../alerts';
+import { cadenceMs, createDashcamAlerts, CRITICAL_START_MS, NO_FACE_VOICE_QUIET_MS, REPEAT_INTENSITY, SOUND_SPEC, specFor } from '../alerts';
 
 test('levels, tones, voices and first-play strengths per sound (plan §7.8)', () => {
   expect(SOUND_SPEC).toEqual({
@@ -299,5 +299,110 @@ describe('held and since (the HUD halo, drive-screen design §5.3)', () => {
     c.onAlert(frame({ id: 1, sound: 1, tier: 2, level: 1, route: 0 }));
     expect(visuals.at(-1)).toMatchObject({ alertId: 1, level: 1, resend: false });
     await c.settled();
+  });
+});
+
+describe('phone-first routing: the can-play reads, critical items', () => {
+  const ALERT = { type: 'ALERT' as const, level: 0, uptimeMs: 0 };
+  function make(can: (fresh?: boolean) => boolean = () => true) {
+    const delivered: AlertDecision[] = [];
+    const reads: (boolean | undefined)[] = [];
+    const acks: [number, number][] = [];
+    const player: AlertPlayer = { deliver: async (d) => void delivered.push(d), stopCurrent: async () => {}, announce: async () => {} };
+    const c = createDashcamAlerts({
+      player,
+      now: () => 0,
+      sendAck: (id, o) => acks.push([id, o]),
+      canPlay: (fresh) => {
+        reads.push(fresh);
+        return can(fresh);
+      },
+    });
+    return { c, delivered, reads, acks };
+  }
+
+  test('a new routed ALERT reads can-play fresh; a tick reads the recent value; a route-0 ALERT or a level step reads nothing', async () => {
+    const r = make();
+    r.c.onAlert({ ...ALERT, alertId: 1, sound: 1, tier: 2, mode: 1, route: 1 });
+    expect(r.reads).toEqual([true]);
+    r.c.onAlert({ ...ALERT, alertId: 1, sound: 1, tier: 2, mode: 1, route: 1, level: 1 });
+    r.c.onAlert({ ...ALERT, alertId: 2, sound: 1, tier: 2, mode: 1, route: 0 });
+    expect(r.reads).toEqual([true]);
+    r.c.tick(0);
+    expect(r.reads).toEqual([true, false]);
+    await r.c.settled();
+  });
+
+  test('a fresh "cannot" answers ACK(0) and plays haptic only; a tick that finds "cannot" silences with ACK(0)', async () => {
+    let can = false;
+    const r = make(() => can);
+    expect(r.c.onAlert({ ...ALERT, alertId: 1, sound: 1, tier: 2, mode: 1, route: 1 })).toBe(0);
+    await r.c.settled();
+    expect(r.delivered.map((d) => d.silent ?? false)).toEqual([true]);
+    can = true;
+    expect(r.c.onAlert({ ...ALERT, alertId: 2, sound: 2, tier: 2, mode: 1, route: 1 })).toBe(1);
+    await r.c.settled();
+    can = false;
+    r.c.tick(0);
+    expect(r.acks).toEqual([[2, 0]]);
+    expect(r.c.playingAny()).toBe(false);
+  });
+
+  test('a canPlay that throws counts as cannot', () => {
+    const r = make(() => {
+      throw new Error('probe');
+    });
+    expect(r.c.onAlert({ ...ALERT, alertId: 1, sound: 3, tier: 3, mode: 1, route: 1 })).toBe(0);
+  });
+
+  test('playingCritical: a playing tier-3 entry only (not a warning, not a visual-only critical)', async () => {
+    const r = make();
+    r.c.onAlert({ ...ALERT, alertId: 1, sound: 1, tier: 2, mode: 1, route: 1 });
+    expect(r.c.playingAny()).toBe(true);
+    expect(r.c.playingCritical()).toBe(false);
+    r.c.onAlert({ ...ALERT, alertId: 2, sound: 3, tier: 3, mode: 1, route: 0 });
+    expect(r.c.playingCritical()).toBe(false);
+    r.c.onStop(2);
+    r.c.onAlert({ ...ALERT, alertId: 3, sound: 3, tier: 3, mode: 1, route: 1 });
+    expect(r.c.playingCritical()).toBe(true);
+    r.c.onFallback(3, 1);
+    expect(r.c.playingCritical()).toBe(false);
+    await r.c.settled();
+  });
+
+  test('a sounding critical item carries startWithinMs 500 (first play and repeats); a warning, a chime and a silent critical none', async () => {
+    let now = 0;
+    const delivered: AlertDecision[] = [];
+    const player: AlertPlayer = { deliver: async (d) => void delivered.push(d), stopCurrent: async () => {}, announce: async () => {} };
+    const c = createDashcamAlerts({ player, now: () => now, sendAck: () => {}, canPlay: () => true });
+    c.onAlert({ ...ALERT, alertId: 1, sound: 3, tier: 3, mode: 1, route: 1 });
+    await c.settled();
+    now = 1500;
+    c.tick(now);
+    await c.settled();
+    expect(delivered.map((d) => d.startWithinMs)).toEqual([CRITICAL_START_MS, CRITICAL_START_MS]);
+    expect(CRITICAL_START_MS).toBe(500);
+    c.clear();
+    delivered.length = 0;
+    c.onAlert({ ...ALERT, alertId: 2, sound: 1, tier: 2, mode: 1, route: 1 });
+    c.onAlert({ ...ALERT, alertId: 3, sound: 5, tier: 1, mode: 0, route: 1 });
+    c.onAlert({ ...ALERT, alertId: 4, sound: 3, tier: 3, mode: 1, route: 0 });
+    await c.settled();
+    expect(delivered.map((d) => [d.id.split(':')[1], d.startWithinMs])).toEqual(
+      expect.arrayContaining([
+        ['2', undefined],
+        ['3', undefined],
+        ['4', undefined],
+      ])
+    );
+  });
+
+  test('cause 4 (reserved: never sent) keeps the phone playing', async () => {
+    const r = make();
+    r.c.onAlert({ ...ALERT, alertId: 1, sound: 1, tier: 2, mode: 1, route: 1 });
+    r.c.onFallback(1, 4);
+    expect(r.c.playingAny()).toBe(true);
+    expect(r.acks).toEqual([]);
+    await r.c.settled();
   });
 });

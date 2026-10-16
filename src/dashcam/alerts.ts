@@ -2,10 +2,12 @@
 // an alert to it, and for how long.
 //
 // - `route = 1`: the link answers ALERT_ACK(1) before the first play when the phone can play now,
-//   else ALERT_ACK(0) and the alert is haptic + visual only. `route = 0`: haptic + visual only, never
-//   an ACK, never a sound.
+//   else ALERT_ACK(0) and the alert is haptic + visual only. "Can play" is read fresh for each new
+//   ALERT (`canPlay(true)`) and from a recent read on every tick (`canPlay(false)`).
+// - `route = 0`: haptic + visual only, never an ACK, never a sound.
 // - A continuous alert repeats until ALERT_STOP, ALERT_FALLBACK cause 1–3, a disconnect, or 3 s with
-//   no frame from the dashcam. Cause 4 (the buzzer joined) keeps it playing. One-shots play once.
+//   no frame from the dashcam. Cause 4 is reserved (the dashcam never sends it): it keeps playing.
+//   One-shots play once.
 // - Cadence, start to start and never faster than an item finishes: glance 2.5 s, drowsy 4 s, wake
 //   1.5 s at level 0, 1.25 s at level 1, 1.0 s from level 2; phone 2.5 s; no face 5 s.
 // - At most one DashPal item is queued or playing; the next repeat is scheduled once the previous
@@ -18,7 +20,8 @@
 //   play releases the audio session (music comes back between plays); and it does not count as a
 //   continuous alert for `continuousActive`, so the phone's own event tones keep sounding.
 // - The phone stops a confirmed alert on its own (staleness, the player failing, the phone no
-//   longer able to play): it then sends ALERT_ACK(0) so the dashcam's buzzer takes over.
+//   longer able to play): it then sends ALERT_ACK(0) so the dashcam's buzzer takes over. A
+//   critical (tier 3) item must start within `CRITICAL_START_MS` or it counts as a player failure.
 // - Visual: one flash per ALERT start or level change (the HUD's banner and halo burst, 1.5 s), never
 //   per repeat. A reconnect's re-send of an alert the dropped link held flashes as `resend` (the HUD
 //   shows its banner but no burst) and keeps the alert's `since`.
@@ -72,6 +75,12 @@ export function cadenceMs(sound: number, level: number): number {
 /** No frame from the dashcam for this long: the phone stops a continuous alert. */
 export const STALE_MS = 3000;
 
+/**
+ * A critical (tier 3) item's tone must have loaded or started playing this long after the play
+ * call, or the play fails (ALERT_ACK(0): the dashcam's buzzer takes it at once).
+ */
+export const CRITICAL_START_MS = 500;
+
 /** A no-face alert that starts within this long of the previous one ending is not spoken. */
 export const NO_FACE_VOICE_QUIET_MS = 60_000;
 
@@ -124,8 +133,11 @@ export interface DashcamAlertDeps {
   now: () => number;
   /** Send ALERT_ACK(outcome) for `alertId` (the link writes it at once). */
   sendAck(alertId: number, outcome: 0 | 1): void;
-  /** Read live: the phone can play sound now (the STATE `can_play` rule). */
-  canPlay(): boolean;
+  /**
+   * Read live: the phone can play sound now (the STATE `can_play` rule). `fresh`: read the audio
+   * output now (a new routed ALERT); otherwise a read at most 500 ms old will do (a tick).
+   */
+  canPlay(fresh?: boolean): boolean;
   onVisual?(v: DashcamVisual): void;
   onChange?(): void;
   onError?(e: unknown): void;
@@ -179,6 +191,8 @@ export interface DashcamAlertController {
   continuousActive(): boolean;
   /** The phone is sounding a DashPal alert right now. */
   playingAny(): boolean;
+  /** The phone is sounding a DashPal critical (tier 3) alert right now. */
+  playingCritical(): boolean;
   /** The worst continuous alert held (highest tier, then level, then earliest `since`), or null. */
   held(): HeldAlert | null;
   /** Every continuous alert held. */
@@ -280,6 +294,8 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
     }
     // The no-face alert releases the session after each play: music comes back between its plays.
     if (e.continuous && e.sound !== SOUND.NO_FACE) d.holdSession = true;
+    // A critical must be heard at once: a tone that does not start in time is a player failure.
+    if (e.tier >= 3) d.startWithinMs = CRITICAL_START_MS;
     return d;
   }
 
@@ -342,7 +358,7 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
       if (f.route === 1) {
         const can = (() => {
           try {
-            return deps.canPlay();
+            return deps.canPlay(true);
           } catch (e) {
             report(e);
             return false;
@@ -401,7 +417,7 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
         changed();
         return;
       }
-      // The dashcam took it over (no ACK in time, the phone said cannot, the lease lapsed): the
+      // The dashcam took it over (no ACK in time, the phone said cannot, the phone was lost): the
       // phone stops; it owes nothing.
       e.confirmed = false;
       silence(e, false);
@@ -440,11 +456,11 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
     },
 
     tick(now) {
-      // A phone that can no longer play (a call began, the app left the screen outside a drive):
-      // the dashcam's buzzer takes over.
+      // A phone that can no longer play (a call began, the volume went down, headphones, a sound that
+      // failed): the dashcam's buzzer takes over.
       let can = true;
       try {
-        can = deps.canPlay();
+        can = deps.canPlay(false);
       } catch (e) {
         report(e);
       }
@@ -478,6 +494,7 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
     // The no-face alert leaves the phone's own alert tones on (it can last minutes).
     continuousActive: () => [...table.values()].some((e) => e.continuous && e.sound !== SOUND.NO_FACE),
     playingAny: () => [...table.values()].some((e) => e.playing),
+    playingCritical: () => [...table.values()].some((e) => e.playing && e.tier >= 3),
 
     held() {
       let best: Entry | null = null;
