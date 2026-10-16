@@ -17,6 +17,7 @@ type Status = 'loading' | 'signedOut' | 'signedIn';
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
 const mockRefresh = jest.fn(async () => {});
+const mockParams: { current: Record<string, string> } = { current: {} };
 const mockWorld: {
   status: Status;
   profile: Record<string, unknown> | null;
@@ -54,7 +55,7 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: mockReplace, push: mockPush }),
   useSegments: () => mockWorld.segments,
   usePathname: () => mockWorld.pathname,
-  useGlobalSearchParams: () => ({}),
+  useGlobalSearchParams: () => mockParams.current,
 }));
 jest.mock('@/drive/useDrive', () => ({
   useDrive: (select: (s: { status: string }) => unknown) =>
@@ -235,6 +236,17 @@ describe('a deep link blocked by onboarding', () => {
     await waitFor(async () =>
       expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toEqual({ uid: 'u1', href: '/drives/t-123' })
     );
+  });
+
+  test('a DashPal link is held as its route with the dashcam id only (its code waits in SecureStore)', async () => {
+    mockParams.current = { d: 'F412FA0C9E01' };
+    try {
+      await mount({ status: 'signedIn', profile: OWED, profileSource: 'network', segments: ['(app)', 'dashpal'], pathname: '/dashpal' });
+      expect(mockReplace).toHaveBeenCalledWith('/(onboarding)/start');
+      await waitFor(async () => expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toEqual({ uid: 'u1', href: '/dashpal?d=f412fa0c9e01' }));
+    } finally {
+      mockParams.current = {};
+    }
   });
 
   test('anything else is not held', async () => {
