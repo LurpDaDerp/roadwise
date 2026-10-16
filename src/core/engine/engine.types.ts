@@ -79,6 +79,8 @@ export interface MotionTrack {
   walkRows: number;
   /** End of the latest fix-less row that held the clock since the last movement. */
   heldUntil: number | null;
+  /** The previous row was a driving row (`session.drivingRow`). */
+  prevDrive: boolean;
 }
 
 /**
@@ -118,6 +120,18 @@ export interface TripSession {
   warmup: Readonly<Warmup>;
   /** The latest movement (`session.ts`), or null while the car has not moved. */
   moved: Readonly<MovementMark> | null;
+  /**
+   * The movement marks of the last `MARK_KEEP_MS` before the newest, oldest first; `moved` is the
+   * last. Frozen and replaced, never mutated. The walking end cuts at one of them.
+   */
+  marks: readonly Readonly<MovementMark>[];
+  /**
+   * `ts` of the row that completed the drive's first two consecutive driving rows (a known, trusted
+   * GPS speed of 10 mph or more): the car reached driving speed. Null until then; never changes after.
+   */
+  droveAt: number | null;
+  /** The last known GPS speed (any accuracy) and its row `ts`; null before the first. */
+  lastSpeed: Readonly<{ mps: number; ts: number }> | null;
   motion: Readonly<MotionTrack>;
   /** Closed at its last movement (`closeAtLastMovement`): the tail after it is left out. */
   cut: boolean;

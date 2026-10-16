@@ -10,6 +10,9 @@
 // is neither still nor carried holds the idle clock for up to an hour after the last movement,
 // without counting as movement. Nothing else is movement: a stop, walking pace, an isolated
 // reading, a still or carried phone, OS motion reports.
+//
+// Driving speed: two consecutive rows with a known, trusted GPS speed of 10 mph or more (`droveAt`).
+// A drive that never reaches it is not kept; the walking end (`motion.ts`) keys on it too.
 import { IDLE_END_S, MAX_H_ACC_M, NO_EVENTS_FIRST_S, PHONE_MIN_MPH, type Tier } from '@scoring';
 
 import { knownSpeed, MPS_PER_MPH, ROW_MS, speedTrusted } from '@/core/detectors/common';
@@ -47,6 +50,10 @@ export const FIXLESS_HOLD_MAX_S = 3600;
 export const IDLE_FAST_GRACE_MS = 5000;
 /** An instant event may start this long after the cut and still be kept (finalize's own slack). */
 export const CUT_INSTANT_SLACK_MS = 2000;
+/** Driving speed: a known, trusted GPS speed of 10 mph or more (the forgot-to-start reminder's line too). */
+export const DRIVING_SPEED_MPS = 10 * MPS_PER_MPH;
+/** Movement marks kept behind the newest, for the walking end's cut at or before the walk. */
+export const MARK_KEEP_MS = 300_000;
 /** A fix-less row reads as carried with handling, an unsteady gravity vector, or a turning phone. */
 export const CARRIED_HANDLING_MIN = 0.6;
 export const CARRIED_GRAVITY_MAX = 0.5;
@@ -88,6 +95,12 @@ export function imuAbsent(row: FeatureRow): boolean {
 /** A phone being carried or handled (the harsh detector's spike and frame-reset lines). */
 export function carried(row: FeatureRow): boolean {
   return row.handlingScore >= CARRIED_HANDLING_MIN || row.gravityStability < CARRIED_GRAVITY_MAX || row.orientationDelta > CARRIED_ORIENT_RAD;
+}
+
+/** A row with a known, trusted GPS speed of `DRIVING_SPEED_MPS` or more. */
+export function drivingRow(row: FeatureRow): boolean {
+  const s = knownSpeed(row);
+  return s !== null && s >= DRIVING_SPEED_MPS && speedTrusted(row);
 }
 
 /** A row with a trusted GPS speed over `PHONE_MIN_MPH`. Walking pace never is one. */
@@ -140,7 +153,10 @@ const EMPTY_MOTION: Readonly<MotionTrack> = Object.freeze({
   speedRows: 0,
   walkRows: 0,
   heldUntil: null,
+  prevDrive: false,
 });
+
+const NO_MARKS: readonly Readonly<MovementMark>[] = Object.freeze([]);
 
 export interface SessionStart {
   clientTripId: string;
@@ -178,6 +194,9 @@ export function createSession(start: SessionStart): TripSession {
       endsAt: continues ? start.startedAt : start.startedAt + NO_EVENTS_FIRST_S * 1000,
     }),
     moved: null,
+    marks: NO_MARKS,
+    droveAt: null,
+    lastSpeed: null,
     motion: EMPTY_MOTION,
     cut: false,
   };
@@ -212,12 +231,26 @@ const imuActive = (row: FeatureRow): boolean =>
 
 /**
  * Append one row the machine has accepted. `unsafe`: a speeding or phone episode is active on this
- * row (its distance is not safe miles). The accumulators first, then the movement step.
+ * row (its distance is not safe miles). The accumulators first, then the movement step, then the
+ * driving-speed step.
  */
 export function appendRow(session: TripSession, row: FeatureRow, unsafe: boolean): void {
   const prevFix = session.lastFix;
   accumulate(session, row, unsafe);
   noteMovement(session, row, prevFix);
+  noteDriving(session, row);
+}
+
+/**
+ * The last known speed, and `droveAt` on the second of two consecutive driving rows. Replaces
+ * `session.lastSpeed` and `session.motion`; never mutates either.
+ */
+function noteDriving(session: TripSession, row: FeatureRow): void {
+  const speed = knownSpeed(row);
+  if (speed !== null) session.lastSpeed = Object.freeze({ mps: speed, ts: row.ts });
+  const d = drivingRow(row);
+  if (session.droveAt === null && d && session.motion.prevDrive) session.droveAt = row.ts;
+  if (session.motion.prevDrive !== d) session.motion = Object.freeze({ ...session.motion, prevDrive: d });
 }
 
 function accumulate(session: TripSession, row: FeatureRow, unsafe: boolean): void {
@@ -330,7 +363,9 @@ function noteMovement(session: TripSession, row: FeatureRow, prevFix: Fix | null
     m.speedRows = 0;
     m.walkRows = 0;
     m.heldUntil = null;
-    session.moved = markOf(session, row.ts);
+    const mark = markOf(session, row.ts);
+    session.moved = mark;
+    session.marks = Object.freeze([...session.marks.filter((k) => k.rowTs >= row.ts - MARK_KEEP_MS), mark]);
   } else if (holdsClock(session, row)) {
     m.heldUntil = row.ts + ROW_MS;
   }
@@ -385,6 +420,20 @@ function cutEvent(e: DetectedEvent, cutTs: number): DetectedEvent | null {
 }
 
 /**
+ * The mark a cut lands on: the latest movement, or with `notAfter` (the walking end: when the walk
+ * began) the latest kept mark at or before it, falling back to the oldest kept mark when every one
+ * is later (at most `MARK_KEEP_MS` of walking then stays in the drive).
+ */
+function cutMark(session: TripSession, notAfter: number | undefined): Readonly<MovementMark> | null {
+  if (notAfter === undefined || session.moved === null) return session.moved;
+  for (let i = session.marks.length - 1; i >= 0; i -= 1) {
+    const m = session.marks[i] as Readonly<MovementMark>;
+    if (m.rowTs <= notAfter) return m;
+  }
+  return session.marks[0] ?? session.moved;
+}
+
+/**
  * The drive closed where the car last moved (every automatic end, and a manual end after standing
  * still): the accumulators come back to the mark, the track ends there and the events are cut
  * (`cutEvents`), so the time standing still earns and costs nothing. A drive that never moved
@@ -395,9 +444,16 @@ function cutEvent(e: DetectedEvent, cutTs: number): DetectedEvent | null {
  * tail's included, and the drive ends after the last of them (never after the tap), so ending a
  * drive at a long red light cannot erase phone use made there. The miles and route still end at
  * the mark: standing still earns nothing.
+ *
+ * `notAfter` (the walking end, at the walk's start): the cut lands on the last movement at or
+ * before it (`cutMark`), so the walk's own distance and track are left out.
  */
-export function closeAtLastMovement(session: TripSession, cause: EndCause, opts: { keepPhoneUseUntil?: number } = {}): Readonly<TripSession> {
-  const mark = session.moved;
+export function closeAtLastMovement(
+  session: TripSession,
+  cause: EndCause,
+  opts: { keepPhoneUseUntil?: number; notAfter?: number } = {}
+): Readonly<TripSession> {
+  const mark = cutMark(session, opts.notAfter);
   if (mark === null) {
     const end = Math.max((session.lastRowTs ?? session.startedAt) + ROW_MS, session.startedAt + 1000);
     return snapshotSession({ ...session, endedAt: Math.round(end), endCause: cause, cut: false });

@@ -6,12 +6,15 @@ import {
   appendRow,
   carried,
   createSession,
+  DRIVING_SPEED_MPS,
+  drivingRow,
   FIXLESS_HOLD_MAX_S,
   holdsClock,
   idleSince,
   imuAbsent,
   isPaceRow,
   lastMovedAt,
+  MARK_KEEP_MS,
   PLACE_SETTLE_MS,
 } from '@/core/engine/session';
 import type { FeatureRow } from '@/core/engine/types';
@@ -202,5 +205,82 @@ describe('the mark', () => {
     appendRow(s, at(2, 26, { speed: mph(30) }), false);
     expect(s.moved).not.toBe(moved);
     expect(moved?.rowTs).toBe(T0 + 1000);
+  });
+});
+
+describe('driving speed (droveAt), the last known speed and the kept marks', () => {
+  const fast = (s: number, northM: number, over: Partial<FeatureRow> = {}) => at(s, northM, { speed: mph(12), ...over });
+
+  test('droveAt needs two consecutive driving rows and is the second one’s ts; one 12 mph spike is not enough', () => {
+    expect(run([fast(0, 0)]).droveAt).toBeNull();
+    expect(run([fast(0, 0), at(1, 1, { speed: 0 }), fast(2, 5)]).droveAt).toBeNull();
+    expect(run([fast(0, 0), fast(1, 5)]).droveAt).toBe(T0 + 1000);
+    expect(run([at(0, 0, { speed: 0 }), fast(1, 5), fast(2, 10)]).droveAt).toBe(T0 + 2000);
+  });
+
+  test('9.9 mph is not driving speed, exactly 10 mph is; unknown speed and a missing fix are not', () => {
+    expect(drivingRow(row({ speed: mph(9.9) }))).toBe(false);
+    expect(drivingRow(row({ speed: DRIVING_SPEED_MPS }))).toBe(true);
+    expect(drivingRow(row({ speed: -1 }))).toBe(false);
+    expect(drivingRow(row({ speed: mph(30), gnssValid: false }))).toBe(false);
+    expect(DRIVING_SPEED_MPS).toBeCloseTo(4.4704, 6);
+  });
+
+  test('a pair at speedAcc 3 (or NaN) never sets it; a pair at -1 (no rating) does', () => {
+    expect(drivingRow(row({ speed: mph(30), speedAcc: 3 }))).toBe(false);
+    expect(drivingRow(row({ speed: mph(30), speedAcc: Number.NaN }))).toBe(false);
+    expect(run([fast(0, 0, { speedAcc: 3 }), fast(1, 5, { speedAcc: 3 })]).droveAt).toBeNull();
+    expect(run([fast(0, 0, { speedAcc: -1 }), fast(1, 5, { speedAcc: -1 })]).droveAt).toBe(T0 + 1000);
+    // A fix-less row between two driving rows breaks the pair.
+    expect(run([fast(0, 0), carLike(1), fast(2, 10)]).droveAt).toBeNull();
+  });
+
+  test('droveAt never changes once set, whatever follows', () => {
+    const s = run([fast(0, 0), fast(1, 5), at(2, 5, { speed: 0 }), fast(3, 10), fast(4, 15)]);
+    expect(s.droveAt).toBe(T0 + 1000);
+  });
+
+  test('lastSpeed follows every known speed, any accuracy, and keeps through a fix-less row', () => {
+    const s = run([fast(0, 0), at(1, 1, { speed: mph(3), speedAcc: 4 })]);
+    expect(s.lastSpeed).toEqual({ mps: mph(3), ts: T0 + 1000 });
+    appendRow(s, carLike(2), false);
+    expect(s.lastSpeed).toEqual({ mps: mph(3), ts: T0 + 1000 });
+    expect(run([]).lastSpeed).toBeNull();
+    expect(run([carLike(0)]).lastSpeed).toBeNull();
+  });
+
+  test('marks keep 5 min behind the newest, oldest first, and moved is the last of them', () => {
+    const rows: FeatureRow[] = [];
+    for (let i = 0; i < 400; i += 1) rows.push(fast(i, i * 5));
+    const s = run(rows);
+    expect(MARK_KEEP_MS).toBe(300_000);
+    expect(s.moved).toBe(s.marks.at(-1));
+    expect(s.marks[0]!.rowTs).toBe(T0 + 399_000 - MARK_KEEP_MS);
+    expect(s.marks.map((m) => m.rowTs)).toEqual([...s.marks.map((m) => m.rowTs)].sort((a, b) => a - b));
+    expect(Object.isFrozen(s.marks)).toBe(true);
+    // A row that is no movement leaves the marks as they were.
+    const before = s.marks;
+    appendRow(s, at(400, 400 * 5 - 5, { speed: 0 }), false);
+    expect(s.marks).toBe(before);
+  });
+
+  test('appendRow replaces marks, motion and lastSpeed (never mutates the old objects)', () => {
+    const s = run([fast(0, 0), fast(1, 5)]);
+    const marks = s.marks;
+    const motion = s.motion;
+    const last = s.lastSpeed;
+    appendRow(s, fast(2, 10), false);
+    expect(s.marks).not.toBe(marks);
+    expect(marks).toHaveLength(1);
+    expect(s.motion).not.toBe(motion);
+    expect(s.lastSpeed).not.toBe(last);
+    expect(last).toEqual({ mps: mph(12), ts: T0 + 1000 });
+    expect(motion.prevDrive).toBe(true);
+  });
+
+  test('a fresh session has no marks, no droveAt, no lastSpeed, and prevDrive false', () => {
+    const s = createSession({ clientTripId: 'x', startedAt: T0 });
+    expect(s).toMatchObject({ marks: [], droveAt: null, lastSpeed: null, moved: null });
+    expect(s.motion.prevDrive).toBe(false);
   });
 });

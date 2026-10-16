@@ -7,6 +7,7 @@ import { closeDrive, isDropped } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
 import { recoverRecordingTrips } from '@/core/engine/recovery';
 import { rebuildFromSamples } from '@/core/engine/replay';
+import { appendRow, createSession } from '@/core/engine/session';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSamplesRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 
@@ -39,6 +40,23 @@ test('rebuildFromSamples replays the durable rows into a session with no pending
   expect(rebuilt.session.distanceM).toBeCloseTo(1485, 0);
   await recording(uuid(2), 0);
   expect(await rebuildFromSamples(db, (await createTripsRepo(db).get(uuid(2)))!, base())).toBeNull();
+});
+
+test('a rebuilt session equals the live one on droveAt, lastSpeed, marks, moved and the movement state', async () => {
+  // 40 rows parked, then 200 driving: the live engine's appendRow over the same rows.
+  const list = rows(240, { over: (i) => (i < 40 ? { speed: 0 } : {}) });
+  const trips = createTripsRepo(db);
+  await trips.insert({ client_trip_id: uuid(9), started_at: T0, tz: TZ, status: 'recording' }, T0);
+  await createSamplesRepo(db).appendMany(uuid(9), list.map((r) => ({ ts: r.ts, row: r })));
+  const rebuilt = (await rebuildFromSamples(db, (await trips.get(uuid(9)))!, base()))!.session;
+  const live = createSession({ clientTripId: uuid(9), startedAt: T0 });
+  for (const r of list) appendRow(live, r, false);
+  expect(rebuilt.droveAt).toBe(T0 + 41_000);
+  expect(rebuilt.droveAt).toBe(live.droveAt);
+  expect(rebuilt.lastSpeed).toEqual(live.lastSpeed);
+  expect(rebuilt.marks).toEqual(live.marks);
+  expect(rebuilt.moved).toEqual(live.moved);
+  expect(rebuilt.motion).toEqual(live.motion);
 });
 
 test('the newest recording drive is adopted when the capture still runs; older ones are finalized as orphans; empty ones removed', async () => {

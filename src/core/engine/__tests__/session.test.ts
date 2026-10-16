@@ -195,5 +195,34 @@ describe('the cut at the last movement', () => {
     expect(closeAtLastMovement(s, 'stopped')).toMatchObject({ endedAt: T0 + 1000, cut: false, moved: null });
     for (const r of seq([10, { speed: 0 }])) appendRow(s, r, false);
     expect(closeAtLastMovement(s, 'walking')).toMatchObject({ endedAt: T0 + 10_000, endCause: 'walking', cut: false });
+    expect(closeAtLastMovement(s, 'walking', { notAfter: T0 + 5000 })).toMatchObject({ endedAt: T0 + 10_000, cut: false });
+  });
+
+  test('closeAtLastMovement with notAfter cuts at the last movement at or before it', () => {
+    const s = createSession({ clientTripId: 'x', startedAt: T0 });
+    // 60 s at 30 mph (movement on every row from the second), then 60 s parked.
+    const drive = seq([60, (i) => ({ speed: mph(30), lng: -122.4194 + i * 0.00015, ts: T0 + i * 1000 })]);
+    const parked = seq([60, (i) => ({ speed: 0, lng: -122.4194 + 59 * 0.00015, ts: T0 + (60 + i) * 1000 })]);
+    for (const r of [...drive, ...parked]) appendRow(s, r, false);
+    // The walk began at +30.5 s: the mark of the row at +30 s.
+    const mid = closeAtLastMovement(s, 'walking', { notAfter: T0 + 30_500 });
+    expect(mid).toMatchObject({ endedAt: T0 + 31_000, lastRowTs: T0 + 30_000, rowsCount: 31, cut: true, endCause: 'walking' });
+    expect(mid.track).toHaveLength(31);
+    expect(mid.distanceM).toBeLessThan(s.moved!.distanceM);
+    // A walk that began after the last movement: the last movement, as without notAfter.
+    expect(closeAtLastMovement(s, 'walking', { notAfter: T0 + 100_000 })).toMatchObject({ endedAt: T0 + 60_000, lastRowTs: T0 + 59_000 });
+    // Exactly at a mark's row ts: that mark.
+    expect(closeAtLastMovement(s, 'walking', { notAfter: T0 + 20_000 })).toMatchObject({ endedAt: T0 + 21_000 });
+    // Before every kept mark: the oldest kept one (the first movement, row 1).
+    expect(closeAtLastMovement(s, 'walking', { notAfter: T0 - 5000 })).toMatchObject({ endedAt: T0 + 2000, lastRowTs: T0 + 1000 });
+    expect(s.cut).toBe(false);
+  });
+
+  test('closeAtLastMovement with notAfter older than every kept mark falls back to the oldest kept (5 min behind the newest)', () => {
+    const s = createSession({ clientTripId: 'x', startedAt: T0 });
+    const drive = seq([600, (i) => ({ speed: mph(30), lng: -122.4194 + i * 0.00015, ts: T0 + i * 1000 })]);
+    for (const r of drive) appendRow(s, r, false);
+    expect(s.marks[0]!.rowTs).toBe(T0 + 299_000);
+    expect(closeAtLastMovement(s, 'walking', { notAfter: T0 + 100_000 })).toMatchObject({ lastRowTs: T0 + 299_000, endedAt: T0 + 300_000 });
   });
 });
