@@ -326,11 +326,31 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
     expect(pickups(run(rows, ANDROID))).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 10 })]);
   });
 
-  test('31. bursts: three 6-s switches ending in RoadWise within 60 s are one pickup; three ending in lock reports are nothing', () => {
-    const back = seq([10, front], [6, away], [10, front], [6, away], [10, front], [6, away], [5, front]);
-    expect(pickups(run(back, IOS))).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 15 })]);
-    const locks = seq([10, front], [6, away], [3, locked], [10, front], [6, away], [3, locked], [10, front], [6, away], [3, locked], [5, front]);
-    expect(run(locks, IOS)).toEqual([]);
+  describe('31. bursts: a short switch counts toward one only when it outlasted the lock cut (a lock undone before its report never does)', () => {
+    const three = (n: number) => seq([10, front], [n, away], [10, front], [n, away], [10, front], [n, away], [5, front]);
+    test('three 13-s switches ending in RoadWise within 2 min are one pickup (span 12 s > the 11-s cut)', () => {
+      expect(pickups(run(three(13), IOS))).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 15, measured: { mounted: false, speedMph: 35 } })]);
+    });
+    test.each([2, 5, 6, 10, 12])('three %i-s runs ending in RoadWise (a lock and an unlock before iOS reports it reads the same): nothing', (n) => {
+      expect(run(three(n), IOS)).toEqual([]);
+    });
+    test('three locks undone within 5 s at a 40-s interval: nothing (iPhone), nothing (Android)', () => {
+      const rows = seq([40, front], [5, away], [20, front], [5, away], [20, front], [5, away], [20, front]);
+      expect(run(rows, IOS)).toEqual([]);
+      const androidLocks = seq([40, front], [5, { ...away, screenOn: false, locked: true }], [20, front], [5, { ...away, screenOn: false, locked: true }], [20, front], [5, { ...away, screenOn: false, locked: true }], [20, front]);
+      expect(run(androidLocks, ANDROID)).toEqual([]);
+    });
+    test('a measured 11-s delay (cut 12 s) needs 14 rows; from 12 s (cut 13 s) no run under 15 s outlasts the cut', () => {
+      const delay = (ms: number) => ctx({ switchSignal: 'lagged', platform: 'ios', lockDelayMs: ms });
+      expect(run(three(13), delay(11_000))).toEqual([]);
+      expect(pickups(run(three(14), delay(11_000)))).toHaveLength(1);
+      expect(run(three(14), delay(12_000))).toEqual([]);
+      expect(run(three(14), delay(13_000))).toEqual([]);
+    });
+    test('three ending in lock reports are nothing', () => {
+      const locks = seq([10, front], [13, away], [3, locked], [10, front], [13, away], [3, locked], [10, front], [13, away], [3, locked], [5, front]);
+      expect(run(locks, IOS)).toEqual([]);
+    });
   });
 
   test('without a passcode (none) nothing is a switch and nothing proves the phone', () => {

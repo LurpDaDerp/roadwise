@@ -9,6 +9,8 @@
 //   so a switch counts only after 15 s, a lock report ends it and cuts it back to the estimated
 //   press (`lockCutMs`), and only a phone that has shown a lock in time counts at all (`proven`;
 //   the detector proves it in-drive too). Without a passcode (`none`) nothing is ever a switch.
+//   A lock undone before its report reads as a short switch, so an iPhone short switch counts toward
+//   a burst only when it outlasted the lock cut (`burstRunLong`).
 // - Excused: the host's stamps (`row.exempt`: the navigation button, the home screen a restart left
 //   behind), a call's own screen (below) and the warm-up.
 //
@@ -43,7 +45,10 @@ export const CALL_TAIL_S = 5;
 export const CALL_AFTER_MAX_S = 60;
 /** After this many rows with RoadWise in front during a connected call, leaving again in it counts. */
 export const CALL_FRONT_SPENT_ROWS = 10;
-/** A short switch that ends back in RoadWise counts toward a burst when it lasted this long. */
+/**
+ * A short switch that ends back in RoadWise counts toward a burst when it lasted this long (Android;
+ * an iPhone one must also outlast the lock cut, `burstRunLong`).
+ */
 export const BURST_MIN_RUN_S = 2;
 /** This many short switches … */
 export const BURST_RUNS = 3;
@@ -80,6 +85,19 @@ export function clampLockDelay(delayMs: number | null): number {
 
 /** How far back from a lock report a counted iPhone switch is cut: the clamped delay plus one row, ms. */
 export const lockCutMs = (delayMs: number | null): number => clampLockDelay(delayMs) + ROW_MS;
+
+/**
+ * Whether a short run (first row `startTs`, last away row `lastTs`) is long enough to count toward a
+ * burst. Android: `BURST_MIN_RUN_S`. iPhone: it must also span more than the lock cut, because a lock
+ * undone before iOS reports it (the phone locked and unlocked back into RoadWise within about 10 s)
+ * gives exactly the rows of a short switch, and a lock is never a switch. With the default delay the
+ * cut is 11 s, so 13 rows or more (under the 15 s that count on their own); with a measured delay of
+ * 12 s or more no run under 15 s outlasts it, and bursts never count on that phone.
+ */
+export function burstRunLong(signal: SwitchSignal, startTs: number, lastTs: number, delayMs: number | null): boolean {
+  if (ageS(lastTs, startTs) < BURST_MIN_RUN_S) return false;
+  return signal === 'reliable' || lastTs - startTs > lockCutMs(delayMs);
+}
 
 /** What one row is, for screen switches. */
 export interface SwitchReading {

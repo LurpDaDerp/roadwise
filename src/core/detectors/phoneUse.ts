@@ -17,8 +17,9 @@
 //   report is cut back to the estimated press; if less than 15 s is left it was a lock reported
 //   late, and nothing of it is kept. A departure that joins an open pickup counts at once on
 //   Android; on iPhone it is held (neither use nor quiet) until it has lasted 15 s. Three short
-//   switches (2 s or more each, each ending back in RoadWise) within 2 min are one pickup with no
-//   handling. A pickup with a switch in it is never `mounted`.
+//   switches (2 s or more each, each ending back in RoadWise; on iPhone each longer than the lock cut,
+//   so a lock undone before its report never counts) within 2 min are one pickup with no handling. A
+//   pickup with a switch in it is never `mounted`.
 //
 // The episode closes after two quiet rows. Its use time is from its start to its last use row:
 // past 15 s it adds one `phone_handling` event (moderate ≤ 30 s, severe beyond).
@@ -28,9 +29,9 @@ import type { DetectedEvent, Detector, DetectorContext, FeatureRow, OpenEpisode 
 import { inWarmup, knownSpeedMph, mountedStable, round1, ROW_MS, rowEligible } from './common';
 import {
   ageS,
-  BURST_MIN_RUN_S,
   BURST_RUNS,
   BURST_WINDOW_S,
+  burstRunLong,
   clampLockDelay,
   createSwitchClassifier,
   isIosSignal,
@@ -211,7 +212,7 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
       !r.counting &&
       !r.held &&
       row.appForeground &&
-      ageS(r.lastTs, r.startTs) >= BURST_MIN_RUN_S &&
+      burstRunLong(ctx.switchSignal, r.startTs, r.lastTs, measuredDelayMs ?? ctx.lockDelayMs) &&
       r.firstChargeTs !== null &&
       r.chargeSpeed !== null &&
       evidenceOn(ctx) &&
