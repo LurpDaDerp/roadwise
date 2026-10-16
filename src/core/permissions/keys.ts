@@ -2,3 +2,9 @@
 
 /** `PromptHistory`: the last OS prompt per permission, for the 14-day rule (policy.ts). */
 export const PROMPTS_KEY = 'permissions.prompts';
+
+/** The permission ids the driver chose "Don't remind me again" for on Home (until Show on Home). */
+export const HOME_HIDDEN_KEY = 'permissions.homeHidden';
+
+/** Per permission id, the missing state a Home request had no visible effect on: its next tap opens Settings. */
+export const HOME_TO_SETTINGS_KEY = 'permissions.homeToSettings';
