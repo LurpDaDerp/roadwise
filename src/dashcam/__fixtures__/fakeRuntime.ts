@@ -2,6 +2,7 @@
 import type { LinkSnapshot } from '../link';
 import type { PairedDashcam } from '../keys';
 import type { DashcamRuntime, DashcamState } from '../runtime';
+import type { PairingCode } from '../label';
 import type { DashcamTransport } from '../transport';
 
 export const PAIRED: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'AA:BB:CC:DD:EE:FF', name: 'DashPal-C4D5', pairedAt: 1, secure: true };
@@ -26,11 +27,13 @@ export interface FakeDashcamRuntime extends DashcamRuntime {
   set(state: Partial<Omit<DashcamState, 'link'>> & { link?: Partial<LinkSnapshot> }): void;
   commandResult: boolean;
   transportValue: DashcamTransport | null;
+  /** what addPhone resolves with */
+  addPhoneResult: PairingCode | null;
 }
 
 export function createFakeDashcamRuntime(initial: Partial<Omit<DashcamState, 'link'>> & { link?: Partial<LinkSnapshot> } = {}): FakeDashcamRuntime {
   const listeners = new Set<(s: DashcamState) => void>();
-  let state: DashcamState = { buzzerToo: false, btOptIn: false, loaded: true, ...initial, link: linkSnapshot(initial.link) };
+  let state: DashcamState = { buzzerToo: false, btOptIn: false, loaded: true, newPhone: false, ...initial, link: linkSnapshot(initial.link) };
   const log: string[] = [];
   const rt: FakeDashcamRuntime = {
     log,
@@ -68,6 +71,21 @@ export function createFakeDashcamRuntime(initial: Partial<Omit<DashcamState, 'li
     async pair(record) {
       log.push(`pair:${record.dashcamId}`);
       rt.set({ link: { ...state.link, paired: record, lifecycle: 'connecting' } });
+    },
+    async resumePaired() {
+      log.push('resumePaired');
+    },
+    addPhoneResult: null,
+    async addPhone() {
+      log.push('addPhone');
+      return rt.addPhoneResult;
+    },
+    notePhones(dashcamId, phones) {
+      log.push(`notePhones:${dashcamId}:${phones}`);
+    },
+    async dismissNewPhone() {
+      log.push('dismissNewPhone');
+      rt.set({ newPhone: false });
     },
     async forget() {
       log.push('forget');

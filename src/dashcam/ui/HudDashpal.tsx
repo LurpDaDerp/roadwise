@@ -7,7 +7,7 @@ import type { Tier } from '@scoring';
 import { memo, useEffect, useMemo, useState } from 'react';
 
 import { ALERT_GLOW_MS } from '@/core/alerts/policy';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { fontFamilies } from '@/ui/fonts';
 import { type HudPalette, tierColor } from '@/ui/drive';
@@ -33,8 +33,7 @@ const ICON: Readonly<Record<number, keyof typeof Ionicons.glyphMap>> = {
 
 const selectVisual = (s: DashcamState | null): DashcamVisual | null => s?.link.visual ?? null;
 const selectHeld = (s: DashcamState | null): HeldAlert | null => s?.link.held ?? null;
-const platform: 'ios' | 'android' = Platform.OS === 'ios' ? 'ios' : 'android';
-const selectChip = (s: DashcamState | null): DashcamStatus | null => (s?.link.paired ? dashcamStatus(s, platform) : null);
+const selectChip = (s: DashcamState | null): DashcamStatus | null => (s?.link.paired ? dashcamStatus(s) : null);
 
 /** A DashPal flash on screen, with the JS time it ends. */
 export type DashpalFlash = DashcamVisual & { until: number };

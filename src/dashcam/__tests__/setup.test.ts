@@ -1,481 +1,639 @@
+// The link v2 setup flow (pairing v2 §9, §14.4, §15.2) on the real transport over the fake BLE
+// stack and fake dashcams, with a virtual clock: every path to "Connected", every failure, the
+// typed path's candidate loop, the key's life (pending before PAIR_FIN, final only on success,
+// orphaned when the outcome stays unknown), replacement, cancel, and the 10-s budget's rule that no
+// wait on the happy path is longer than 100 ms.
 import type { BluetoothAccess } from '@/core/permissions/adapters';
 
+import { createFakeDashcam, type FakeDashcam } from '../__fixtures__/fakeDashcam';
+import { R } from '../auth';
 import { createFakeBle, type FakeBle } from '../fakeTransport';
 import type { PairedDashcam } from '../keys';
-import { decodeRx, encodeInfo, encodeTx, IDENTIFY_CHAR, PAIRING_SERVICE, RX_CHAR, type DashcamInfo } from '../protocol';
-import { BUSY_POLL_MS, BUSY_RETRY_MS, CONFIRM_TIMEOUT_MS, createSetupFlow, type SetupFlow, type SetupPhase } from '../setup';
+import { dashpalLink, drawOnceCode, formatCode, type PairingCode } from '../label';
+import { AUTH_CHAR, DASHPAL_SERVICE, INFO_CHAR, PAIRING_SERVICE, toHex } from '../protocol';
+import { createDashpalSecrets, type DashpalSecrets } from '../secure';
+import { BUSY_WAIT_MS, createSetupFlow, PRESS_WAIT_MS, type SetupFlow, type SetupPhase, type SetupStart } from '../setup';
 import { createBleTransport, type DashcamTransport } from '../transport';
 
 const flush = async () => {
-  for (let i = 0; i < 40; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+  for (let i = 0; i < 60; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 };
 
-const MAC = (last: number) => [0xa4, 0xcf, 0x12, 0xb3, 0xc4, last];
-const info = (last: number, over: Partial<Omit<DashcamInfo, 'dashcamId' | 'name'>> = {}) =>
-  encodeInfo({ ver: 1, protoMin: 1, protoMax: 1, fwMajor: 3, fwMinor: 3, mac: MAC(last), peerBonded: false, bondCount: 0, pairingOpen: true, ...over });
+const DOMAIN = 'pair.example.com';
+const S = Uint8Array.from({ length: 16 }, (_, i) => i);
+const LABEL: PairingCode = { S, kind: 'label' };
+const macOf = (last: number) => [0xa4, 0xcf, 0x12, 0xb3, 0xc4, last];
+const camOf = (last: number) => toHex(macOf(last));
+const idOf = (platform: 'ios' | 'android', last: number) => (platform === 'android' ? macOf(last).map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(':') : `UUID-${last}`);
+
+jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: { linkDomain: 'pair.example.com' } } } }));
+
+interface CamSpec {
+  last: number;
+  S?: Uint8Array | null;
+  windowOpen?: boolean;
+  rssi?: number;
+  protoMax?: number;
+  noAuthChar?: boolean;
+}
 
 interface Rig {
   flow: SetupFlow;
   ble: FakeBle;
   t: DashcamTransport;
-  phases: string[];
+  cams: Map<number, FakeDashcam>;
+  secrets: DashpalSecrets;
+  store: Map<string, string>;
+  phases: SetupPhase[];
   paired: PairedDashcam[];
+  log: string[];
   clock: { t: number };
-  setBusy(v: boolean): void;
-  until(kind: SetupPhase['kind']): Promise<void>;
-  /** the sleeps the flow made (ms) */
   sleeps: number[];
-  /** End the confirm question's 110 s wait (it otherwise never ends on its own here). */
-  expireConfirm(): void;
+  at(ms: number, fn: () => void): void;
+  until(kind: SetupPhase['kind']): Promise<SetupPhase>;
+  run(opts?: SetupStart): Promise<SetupPhase>;
+  setBusy(v: boolean): void;
 }
 
-function rig(
-  o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previous?: PairedDashcam | null; preferId?: string; pairedCount?: number | null } = {}
-): Rig {
+function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previous?: PairedDashcam | null; cams?: CamSpec[] } = {}): Rig {
   const platform = o.platform ?? 'android';
   const ble = createFakeBle();
   const t = createBleTransport(ble, { platform, setTimer: () => 0, clearTimer: () => {} });
-  const clock = { t: 0 };
-  const phases: string[] = [];
-  const paired: PairedDashcam[] = [];
-  let busy = false;
-  // The dashcam answers COMMAND 5 with PAIRED.
-  ble.onWrite = (w) => {
-    if (w.characteristic !== RX_CHAR) return;
-    const d = decodeRx(w.bytes);
-    const count = o.pairedCount === undefined ? 1 : o.pairedCount;
-    if (d.ok && d.frame.type === 'COMMAND' && d.frame.op === 5 && count !== null) queueMicrotask(() => ble.notify(w.id, encodeTx({ type: 'PAIRED', bondCount: count })));
+  const cams = new Map<number, FakeDashcam>();
+  const specs = o.cams ?? [{ last: 0xd5 }];
+  for (const c of specs) {
+    const cam = createFakeDashcam({ ble, id: idOf(platform, c.last), mac: macOf(c.last), S: c.S === undefined ? S : c.S, windowOpen: c.windowOpen ?? true, protoMax: c.protoMax });
+    if (c.noAuthChar) ble.peripheral(idOf(platform, c.last))!.noAuthChar = true;
+    cams.set(c.last, cam);
+  }
+  // Advertising: every DashPal answers each scan (its pairing service while its window is open).
+  const scan = ble.scan.bind(ble);
+  ble.scan = async (opts) => {
+    await scan(opts);
+    queueMicrotask(() => {
+      for (const c of specs) {
+        const cam = cams.get(c.last)!;
+        ble.advertise({
+          id: idOf(platform, c.last),
+          rssi: c.rssi ?? -50,
+          advertising: { serviceUUIDs: [cam.windowOpen ? PAIRING_SERVICE : DASHPAL_SERVICE], localName: `DashPal-${camOf(c.last).slice(-4).toUpperCase()}` },
+        });
+      }
+    });
   };
+  const store = new Map<string, string>();
+  const secrets = createDashpalSecrets(() => ({
+    getItemAsync: async (k) => store.get(k) ?? null,
+    setItemAsync: async (k, v) => void store.set(k, v),
+    deleteItemAsync: async (k) => void store.delete(k),
+  }));
+  const clock = { t: 1_000_000 };
   const sleeps: number[] = [];
-  const long: (() => void)[] = [];
+  const due: { at: number; fn: () => void }[] = [];
+  const phases: SetupPhase[] = [];
+  const paired: PairedDashcam[] = [];
+  const log: string[] = [];
+  let busy = false;
   const flow = createSetupFlow({
     platform,
     transport: () => t,
     requestBluetooth: async () => o.access ?? 'granted',
     isBusy: () => busy,
-    optIn: async () => void phases.push('optIn'),
-    pair: async (r) => void paired.push(r),
+    optIn: async () => void log.push('optIn'),
+    pair: async (r) => {
+      paired.push(r);
+      log.push(`pair:${r.dashcamId}`);
+    },
     paired: () => o.previous ?? null,
+    resumePaired: async () => void log.push('resumePaired'),
+    secrets,
+    notePhones: (d, n) => void log.push(`notePhones:${d}:${n}`),
     now: () => clock.t,
     sleep: async (ms) => {
       sleeps.push(ms);
-      if (ms >= CONFIRM_TIMEOUT_MS) {
-        await new Promise<void>((resolve) => long.push(resolve));
-        return;
-      }
       clock.t += ms;
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      for (const d of due.splice(0).sort((a, b) => a.at - b.at)) {
+        if (d.at <= clock.t) d.fn();
+        else due.push(d);
+      }
+      await Promise.resolve();
     },
-    preferId: o.preferId,
+    onError: (e, ctx) => void log.push(`error:${ctx}:${e instanceof Error ? e.message : String(e)}`),
   });
-  flow.subscribe((p) => phases.push(p.kind));
-  return {
+  flow.subscribe((p) => phases.push(p));
+  const r: Rig = {
     flow,
     ble,
     t,
+    cams,
+    secrets,
+    store,
     phases,
     paired,
+    log,
     clock,
-    setBusy: (v) => (busy = v),
     sleeps,
-    expireConfirm: () => {
-      clock.t += CONFIRM_TIMEOUT_MS;
-      for (const fn of long.splice(0)) fn();
-    },
+    at: (ms, fn) => void due.push({ at: clock.t + ms, fn }),
     async until(kind) {
-      for (let i = 0; i < 400 && flow.phase().kind !== kind; i++) await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(flow.phase().kind).toBe(kind);
+      for (let i = 0; i < 400; i++) {
+        if (flow.phase().kind === kind) return flow.phase();
+        await flush();
+      }
+      throw new Error(`never reached ${kind}; phases: ${phases.map((p) => p.kind).join(' > ')}; log: ${log.join(' | ')}`);
     },
+    async run(opts) {
+      await flow.start(opts);
+      await flush();
+      return flow.phase();
+    },
+    setBusy: (v) => (busy = v),
   };
+  return r;
 }
 
-test('row 43: refused while a drive is open, before any permission or Bluetooth', async () => {
-  const r = rig();
-  r.setBusy(true);
-  await r.flow.start();
-  expect(r.phases).toEqual(['busy']);
-  expect(r.ble.calls).toEqual([]);
+const link = (last: number, code: PairingCode = LABEL) => dashpalLink(camOf(last), code, DOMAIN);
+const kinds = (r: Rig) => r.phases.map((p) => p.kind);
+
+/** Start the flow, wait for the code step, then hand it `act`. */
+async function withCode(r: Rig, act: (f: SetupFlow) => void, opts?: SetupStart): Promise<SetupPhase> {
+  const done = r.flow.start(opts);
+  await r.until('code');
+  act(r.flow);
+  await done;
+  await flush();
+  return r.flow.phase();
+}
+
+describe('the happy paths', () => {
+  test('the in-app scanner: search, connect, pair, session, PAIRED; the key final with the label code; no wait on the path over 100 ms', async () => {
+    const r = rig();
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end).toMatchObject({ kind: 'done', phones: 1, notAllYours: false, paired: { dashcamId: camOf(0xd5), name: 'DashPal-C4D5', secure: true } });
+    expect(kinds(r)).toEqual(['permission', 'code', 'searching', 'connecting', 'pairing', 'finishing', 'done']);
+    expect(r.sleeps.every((ms) => ms <= 100)).toBe(true);
+    const auth = (await r.secrets.readAuth())!;
+    expect(auth.dashcamId).toBe(camOf(0xd5));
+    expect(auth.code).toBe(formatCode(S, 'label', { dashes: false }));
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    // the dashcam holds this phone's key under its id
+    const cam = r.cams.get(0xd5)!;
+    expect(toHex(cam.phones.get(auth.phoneId)!)).toBe(auth.kPair);
+    expect(r.log).toContain(`notePhones:${camOf(0xd5)}:1`);
+    // the setup connection was released before the pairing went to the auto-connect
+    expect(r.ble.calls.lastIndexOf(`disconnect:${idOf('android', 0xd5)}`)).toBeGreaterThan(-1);
+    // INFO read again after PAIR_FIN (its Nc was redrawn) before the SESSION_REQ
+    const ops = r.ble.calls.filter((c) => c.endsWith(':0002') || c.endsWith(':0006'));
+    const fin = ops.findIndex((c, i) => c.startsWith('write') && c.endsWith(':0006') && i > 0 && ops.slice(0, i).filter((x) => x.startsWith('write') && x.endsWith(':0006')).length === 1);
+    expect(ops.slice(fin + 1, fin + 3)).toEqual([`read:${idOf('android', 0xd5)}:0006`, `read:${idOf('android', 0xd5)}:0002`]);
+  });
+
+  test('a link from the phone’s own camera: the Pair screen warms up the connection (search, connect, INFO) before the tap; the tap pairs', async () => {
+    const r = rig();
+    await r.secrets.writePendingCode({ at: r.clock.t, dashcamId: camOf(0xd5), code: formatCode(S, 'label', { dashes: false }) });
+    const done = r.flow.start({ fromLink: { dashcamId: camOf(0xd5) } });
+    expect(await r.until('confirm_link')).toEqual({ kind: 'confirm_link', name: 'DashPal-C4D5' });
+    await flush();
+    const before = [...r.ble.calls];
+    expect(before).toContain(`connect:${idOf('android', 0xd5)}`);
+    expect(before).toContain(`read:${idOf('android', 0xd5)}:0002`);
+    expect(before.some((c) => c.endsWith(':0006'))).toBe(false); // nothing sent before the tap
+    r.flow.confirm();
+    await done;
+    await flush();
+    expect(r.flow.phase()).toMatchObject({ kind: 'done' });
+    expect(r.ble.calls.filter((c) => c.startsWith('connect'))).toHaveLength(1); // the warmed connection was used
+    expect(await r.secrets.readPendingCode(r.clock.t)).toBeNull();
+  });
+
+  test('a held link code also opens its Pair screen when setup is opened from Settings or onboarding (a link held through sign-in)', async () => {
+    const r = rig();
+    await r.secrets.writePendingCode({ at: r.clock.t, dashcamId: camOf(0xd5), code: formatCode(S, 'label', { dashes: false }) });
+    const done = r.flow.start();
+    expect(await r.until('confirm_link')).toEqual({ kind: 'confirm_link', name: 'DashPal-C4D5' });
+    await r.flow.cancel();
+    await done;
+    expect(await r.secrets.readPendingCode(r.clock.t)).toBeNull();
+    // older than 12 h: the code step
+    const old = rig();
+    await old.secrets.writePendingCode({ at: old.clock.t - 12 * 60 * 60_000 - 1, dashcamId: camOf(0xd5), code: formatCode(S, 'label', { dashes: false }) });
+    void old.flow.start();
+    expect((await old.until('code')).kind).toBe('code');
+    await old.flow.cancel();
+  });
+
+  test('a held code for another DashPal, or none: the code step, preferring the link’s DashPal', async () => {
+    const r = rig();
+    await r.secrets.writePendingCode({ at: r.clock.t, dashcamId: camOf(0x11), code: formatCode(S, 'label', { dashes: false }) });
+    void r.flow.start({ fromLink: { dashcamId: camOf(0xd5) } });
+    expect(await r.until('code')).toEqual({ kind: 'code', error: null, noStoredCode: false, preferred: 'DashPal-C4D5' });
+    await r.flow.cancel();
+  });
+
+  test('Set up again with the stored label code skips the code step; without one it opens it, saying so', async () => {
+    const previous: PairedDashcam = { dashcamId: camOf(0xd5), peripheralId: idOf('android', 0xd5), name: 'DashPal-C4D5', pairedAt: 1, secure: true };
+    const r = rig({ previous });
+    await r.secrets.writePendingAuth({ dashcamId: camOf(0xd5), phoneId: '0102030405060708', kPair: 'ab'.repeat(32), code: formatCode(S, 'label', { dashes: false }) });
+    await r.secrets.finalizeAuth();
+    r.cams.get(0xd5)!.phones.set('0102030405060708', Uint8Array.from({ length: 32 }, () => 0xab));
+    const end = await r.run({ again: true });
+    expect(end.kind).toBe('done');
+    expect(kinds(r)).not.toContain('code');
+    expect(r.phases.find((p) => p.kind === 'searching')).toMatchObject({ again: true });
+    // the same phone replaced its own record by proving its old key: the count is unchanged
+    expect(r.cams.get(0xd5)!.phones.size).toBe(1);
+    expect(r.cams.get(0xd5)!.phones.has('0102030405060708')).toBe(false);
+
+    const once = rig({ previous });
+    await once.secrets.writePendingAuth({ dashcamId: camOf(0xd5), phoneId: '0102030405060708', kPair: 'ab'.repeat(32), code: null });
+    await once.secrets.finalizeAuth();
+    void once.flow.start({ again: true });
+    expect(await once.until('code')).toMatchObject({ noStoredCode: true });
+    await once.flow.cancel();
+  });
+
+  test('2 or more phones: notAllYours', async () => {
+    const r = rig();
+    r.cams.get(0xd5)!.phones.set('1111111111111111', new Uint8Array(32).fill(1));
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end).toMatchObject({ kind: 'done', phones: 2, notAllYours: true });
+  });
+
+  test('a one-time code pairs and is never stored', async () => {
+    const r = rig();
+    const once = drawOnceCode();
+    r.cams.get(0xd5)!.once = Uint8Array.from(once.S);
+    const end = await withCode(r, (f) => f.scanned(link(0xd5, once)));
+    expect(end.kind).toBe('done');
+    expect((await r.secrets.readAuth())?.code).toBeNull();
+  });
+
+  test('a lingering key or orphan for that DashPal proves prev_id; another DashPal’s does not', async () => {
+    const r = rig();
+    await r.secrets.writeOrphan({ dashcamId: camOf(0xd5), phoneId: '0909090909090909', kPair: 'cd'.repeat(32) });
+    r.cams.get(0xd5)!.phones.set('0909090909090909', new Uint8Array(32).fill(0xcd));
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end.kind).toBe('done');
+    const req = r.cams.get(0xd5)!.authWrites.find((w) => w[0] === 0x10)!;
+    expect(toHex(req.slice(10, 18))).toBe('0909090909090909');
+    expect(r.cams.get(0xd5)!.phones.size).toBe(1); // replaced, not added
+    expect(await r.secrets.readOrphan()).toBeNull();
+  });
 });
 
-test.each([
-  ['denied', 'denied'],
-  ['undetermined', 'denied'],
-  ['off', 'off'],
-  ['unavailable', 'unavailable'],
-] as const)('Bluetooth %s → %s, no scan', async (access, kind) => {
-  const r = rig({ access });
-  await r.flow.start();
-  expect(r.flow.phase().kind).toBe(kind);
-  expect(r.ble.calls.some((c) => c.startsWith('scan'))).toBe(false);
-  expect(r.phases).toContain('optIn');
-});
+describe('failures', () => {
+  test('not a DashPal code (the camera keeps looking), a typed code with a mistake', async () => {
+    const r = rig();
+    void r.flow.start();
+    await r.until('code');
+    r.flow.scanned('roadwise://add/someone');
+    expect(r.flow.phase()).toMatchObject({ kind: 'code', error: 'not_a_code' });
+    r.flow.scanned(`https://${DOMAIN}/dashpal#d=${camOf(0xd5)}`); // a link with no code
+    expect(r.flow.phase()).toMatchObject({ kind: 'code', error: 'not_a_code' });
+    r.flow.submitCode('000G-40R4-0M30-E209-185G-R38E-1W6U');
+    expect(r.flow.phase()).toMatchObject({ kind: 'code', error: 'bad_code' });
+    r.flow.submitCode(formatCode(S, 'label'), 'ZZZZ');
+    expect(r.flow.phase()).toMatchObject({ kind: 'code', error: 'bad_code' });
+    expect(r.ble.calls.some((c) => c.startsWith('connect'))).toBe(false);
+    await r.flow.cancel();
+  });
 
-test('the closest candidate first (RSSI ≥ −80); identify; "No" moves to the next; "Yes" bonds (Android: a stale OS bond dropped before the connect), hellos, confirms and saves', async () => {
-  const r = rig({ platform: 'android' });
-  r.ble.addPeripheral({ id: 'FAR', info: info(0xd1) });
-  r.ble.addPeripheral({ id: 'NEAR', info: info(0xd2), osBonded: true });
-  r.ble.addPeripheral({ id: 'MID', info: info(0xd3) });
-  const run = r.flow.start();
-  await r.until('scanning');
-  r.ble.advertise({ id: 'FAR', rssi: -85, advertising: { serviceUUIDs: [PAIRING_SERVICE] } });
-  r.ble.advertise({ id: 'MID', rssi: -70, advertising: { serviceUUIDs: [PAIRING_SERVICE] } });
-  r.ble.advertise({ id: 'NEAR', rssi: -60, advertising: { serviceUUIDs: [PAIRING_SERVICE] } });
-  await r.until('confirm');
-  expect(r.flow.phase()).toMatchObject({ candidate: { id: 'NEAR' } });
-  expect(r.ble.writes.at(-1)).toMatchObject({ id: 'NEAR', characteristic: IDENTIFY_CHAR, bytes: [1] });
-  r.flow.answer(false);
-  for (let i = 0; i < 400; i++) {
-    const p = r.flow.phase();
-    if (p.kind === 'confirm' && p.candidate.id === 'MID') break;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  expect(r.flow.phase()).toMatchObject({ kind: 'confirm', candidate: { id: 'MID' } });
-  expect(r.ble.calls).toContain('disconnect:NEAR');
-  r.flow.answer(true);
-  await run;
-  expect(r.flow.phase().kind).toBe('done');
-  expect(r.paired).toEqual([{ dashcamId: 'a4cf12b3c4d3', peripheralId: 'MID', name: 'DashPal-C4D3', pairedAt: expect.any(Number), secure: true }]);
-  // FAR was never tried (too weak).
-  expect(r.ble.calls.some((c) => c.includes('FAR'))).toBe(false);
-  const from = r.ble.calls.indexOf('connect:MID') - 1;
-  const mid = r.ble.calls.slice(from).filter((c) => c.includes('MID') || c === 'getBondedPeripherals');
-  expect(mid).toEqual([
-    'getBondedPeripherals',
-    'connect:MID',
-    'requestMTU:MID:247',
-    'retrieveServices:MID',
-    'read:MID:0002',
-    'write:MID:0003',
-    'createBond:MID',
-    'startNotification:MID:0004',
-    'write:MID:0005',
-    'write:MID:0005',
-    'disconnect:MID',
-  ]);
-  const commands = r.ble.writes.filter((w) => w.id === 'MID' && w.characteristic === RX_CHAR).map((w) => decodeRx(w.bytes));
-  expect(commands).toEqual([
-    { ok: true, frame: { type: 'COMMAND', op: 7, arg: 0 } },
-    { ok: true, frame: { type: 'COMMAND', op: 5, arg: 0 } },
-  ]);
-});
+  test('not found within 15 s', async () => {
+    const r = rig();
+    const end = await withCode(r, (f) => f.scanned(link(0x77)));
+    expect(end).toEqual({ kind: 'failed', reason: 'not_found', name: 'DashPal-C477' });
+  });
 
-test('Android re-pair of a dashcam the OS still holds a bond for: removeBond before the setup connect, then identify and createBond on that connection', async () => {
-  const r = rig({ platform: 'android' });
-  r.ble.addPeripheral({ id: 'P', info: info(0xd5), osBonded: true });
-  const run = r.flow.start();
-  await r.until('scanning');
-  r.ble.advertise({ id: 'P', rssi: -50, advertising: { serviceUUIDs: [PAIRING_SERVICE] } });
-  await r.until('confirm');
-  r.flow.answer(true);
-  await run;
-  expect(r.ble.calls.filter((c) => /Bond|connect|0003/.test(c))).toEqual(['getBondedPeripherals', 'removeBond:P', 'connect:P', 'write:P:0003', 'createBond:P', 'disconnect:P']);
-});
+  test('a wrong code for the named DashPal: wrong_code (and the dashcam ends that link)', async () => {
+    const r = rig();
+    const end = await withCode(r, (f) => f.scanned(link(0xd5, { S: new Uint8Array(16).fill(9), kind: 'label' })));
+    expect(end).toMatchObject({ kind: 'failed', reason: 'wrong_code' });
+    expect(r.cams.get(0xd5)!.phones.size).toBe(0);
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+  });
 
-describe('Android setup that finds the paired DashPal in pairing mode (its OS bond may still work)', () => {
-  const previous: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'P', name: 'DashPal-C4D5', pairedAt: 1, secure: true };
-  const steps = (r: Rig) => r.ble.calls.filter((c) => /Bond|^connect|^disconnect|0003/.test(c));
-
-  test('the dashcam still holds this phone: "No" leaves the OS bond alone, and the pairing gets its auto-connect back', async () => {
-    const r = rig({ platform: 'android', previous });
-    r.t.setTarget({ peripheralId: 'P', dashcamId: previous.dashcamId });
-    r.ble.addPeripheral({ id: 'P', info: info(0xd5, { peerBonded: true, bondCount: 1 }), osBonded: true });
-    const { run } = await startWith(r, ['P']);
-    await r.until('confirm');
-    r.flow.answer(false);
-    await run;
-    expect(r.flow.phase().kind).toBe('none_found');
-    expect(r.ble.calls.some((c) => c.startsWith('removeBond') || c === 'getBondedPeripherals')).toBe(false);
-    expect(await r.ble.getBondedPeripherals()).toEqual([{ id: 'P' }]);
-    expect(r.t.target()).toEqual({ peripheralId: 'P', dashcamId: previous.dashcamId });
+  test('a device that cannot prove the code: unverified, and nothing more is sent to it', async () => {
+    const r = rig();
+    r.cams.get(0xd5)!.badProof.pair = true;
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end).toMatchObject({ kind: 'failed', reason: 'unverified' });
+    expect(r.cams.get(0xd5)!.authWrites.map((w) => w[0])).toEqual([0x10]);
   });
 
   test.each([
-    ['cancel', async (r: Rig) => void (await r.flow.cancel())],
-    ['no answer in 110 s', async (r: Rig) => r.expireConfirm()],
-  ])('the dashcam still holds this phone: %s leaves the OS bond alone', async (_name, end) => {
-    const r = rig({ platform: 'android', previous });
-    r.ble.addPeripheral({ id: 'P', info: info(0xd5, { peerBonded: true, bondCount: 1 }), osBonded: true });
-    const { run } = await startWith(r, ['P']);
-    await r.until('confirm');
-    await end(r);
-    await run;
-    expect(r.ble.calls.some((c) => c.startsWith('removeBond'))).toBe(false);
-    expect(r.t.target()).toEqual({ peripheralId: 'P', dashcamId: previous.dashcamId });
+    ['an unkeyed board', { S: null }, 'no_key'],
+    ['firmware below link v2', { protoMax: 1 }, 'update_firmware'],
+  ] as const)('%s', async (_n, spec, reason) => {
+    const r = rig({ cams: [{ last: 0xd5, ...spec }] });
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end).toMatchObject({ kind: 'failed', reason });
   });
 
-  test('the dashcam still holds this phone: "Yes" bonds on the same connection with the bond it has', async () => {
-    const r = rig({ platform: 'android', previous });
-    r.ble.addPeripheral({ id: 'P', info: info(0xd5, { peerBonded: true, bondCount: 1 }), osBonded: true });
-    const { run } = await startWith(r, ['P']);
-    await r.until('confirm');
-    r.flow.answer(true);
-    await run;
-    expect(r.flow.phase()).toMatchObject({ kind: 'done', paired: { peripheralId: 'P' }, phones: 1, unexpected: false });
-    expect(steps(r)).toEqual(['connect:P', 'write:P:0003', 'createBond:P', 'disconnect:P']);
+  test('R_MTU twice: mtu; once on Android: the MTU asked again and paired', async () => {
+    const r = rig();
+    r.cams.get(0xd5)!.mtu = 23;
+    expect(await withCode(r, (f) => f.scanned(link(0xd5)))).toMatchObject({ kind: 'failed', reason: 'mtu' });
+    const once = rig();
+    once.cams.get(0xd5)!.force.pair_req = R.MTU;
+    expect(await withCode(once, (f) => f.scanned(link(0xd5)))).toMatchObject({ kind: 'done' });
+    expect(once.ble.calls.filter((c) => c.startsWith('requestMTU')).length).toBeGreaterThanOrEqual(2);
   });
 
-  test('INFO says the dashcam no longer holds this phone: the stale OS bond goes and the phone connects again, all before the identify', async () => {
-    const r = rig({ platform: 'android', previous });
-    r.ble.addPeripheral({ id: 'P', info: info(0xd5), osBonded: true });
-    const { run } = await startWith(r, ['P']);
-    await r.until('confirm');
-    r.flow.answer(true);
-    await run;
-    expect(r.flow.phase()).toMatchObject({ kind: 'done', paired: { peripheralId: 'P' } });
-    expect(steps(r)).toEqual(['connect:P', 'disconnect:P', 'getBondedPeripherals', 'removeBond:P', 'connect:P', 'write:P:0003', 'createBond:P', 'disconnect:P']);
+  test('iOS with no AUTH characteristic (an old bond cached the old table): ios_forget_first', async () => {
+    const r = rig({ platform: 'ios', cams: [{ last: 0xd5, noAuthChar: true }] });
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end).toMatchObject({ kind: 'failed', reason: 'ios_forget_first' });
+  });
+
+  test('the key cannot be stored before PAIR_FIN: error, and PAIR_FIN is never sent', async () => {
+    const r = rig();
+    const set = r.store.set.bind(r.store);
+    r.store.set = (k, v) => {
+      if (k === 'dashpal.authPending') throw new Error('keychain full');
+      return set(k, v);
+    };
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end).toMatchObject({ kind: 'failed', reason: 'error' });
+    expect(r.cams.get(0xd5)!.authWrites.map((w) => w[0])).toEqual([0x10]);
+    expect(r.cams.get(0xd5)!.phones.size).toBe(0);
+  });
+
+  test.each([R.WRONG_PROOF, R.STORE_FAILED, R.NOT_NOW])('PAIR_FIN answered %i: error, the pending key deleted, the previous pairing untouched', async (code) => {
+    const r = rig();
+    await r.secrets.writePendingAuth({ dashcamId: camOf(0x01), phoneId: '0101010101010101', kPair: 'ee'.repeat(32), code: null });
+    await r.secrets.finalizeAuth();
+    r.cams.get(0xd5)!.force.pair_fin = code;
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end).toMatchObject({ kind: 'failed', reason: 'error' });
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect((await r.secrets.readAuth())?.dashcamId).toBe(camOf(0x01));
+    expect(r.paired).toEqual([]);
+  });
+
+  test('a drive opens during setup: busy, nothing sent', async () => {
+    const r = rig();
+    const done = r.flow.start();
+    await r.until('code');
+    r.setBusy(true);
+    r.flow.scanned(link(0xd5));
+    await done;
+    expect(r.flow.phase()).toEqual({ kind: 'busy' });
+    const before = rig();
+    before.setBusy(true);
+    expect(await before.run()).toEqual({ kind: 'busy' });
+  });
+
+  test.each([
+    ['denied', 'denied'],
+    ['off', 'off'],
+    ['unavailable', 'unavailable'],
+  ] as const)('Bluetooth %s', async (access, kind) => {
+    const r = rig({ access });
+    expect((await r.run()).kind).toBe(kind);
   });
 });
 
-test('iOS: the encrypted TX read is the pairing; a stale iOS bond says to forget it in Settings first', async () => {
-  const ok = rig({ platform: 'ios' });
-  ok.ble.setState('on');
-  ok.ble.addPeripheral({ id: 'U1', info: info(0xd6) });
-  const run = ok.flow.start();
-  await ok.until('scanning');
-  ok.ble.advertise({ id: 'U1', rssi: -40, advertising: { serviceUUIDs: [PAIRING_SERVICE] } });
-  await ok.until('confirm');
-  ok.flow.answer(true);
-  await run;
-  expect(ok.flow.phase().kind).toBe('done');
-  expect(ok.ble.calls).toContain('read:U1:0004');
+describe('pairing mode, busy, retries', () => {
+  test('pairing mode closed: "press the button", watched up to 60 s; it opens at 5 s and pairing goes on by itself', async () => {
+    const r = rig({ cams: [{ last: 0xd5, windowOpen: false }] });
+    const done = r.flow.start();
+    await r.until('code');
+    r.at(5000, () => {
+      r.cams.get(0xd5)!.windowOpen = true;
+      r.ble.advertise({ id: idOf('android', 0xd5), rssi: -50, advertising: { serviceUUIDs: [PAIRING_SERVICE] } });
+    });
+    r.flow.scanned(link(0xd5));
+    await done;
+    await flush();
+    expect(r.flow.phase().kind).toBe('done');
+    expect(kinds(r)).toContain('press_button');
+  });
 
-  const stale = rig({ platform: 'ios' });
-  stale.ble.setState('on');
-  stale.ble.addPeripheral({ id: 'U2', info: info(0xd7), pairable: false });
-  const run2 = stale.flow.start();
-  await stale.until('scanning');
-  stale.ble.advertise({ id: 'U2', rssi: -40, advertising: { serviceUUIDs: [PAIRING_SERVICE] } });
-  await stale.until('confirm');
-  stale.flow.answer(true);
-  await run2;
-  expect(stale.flow.phase()).toEqual({ kind: 'failed', reason: 'ios_forget_first' });
-  expect(stale.paired).toEqual([]);
+  test('pairing mode never opens: window_timeout after 60 s', async () => {
+    const r = rig({ cams: [{ last: 0xd5, windowOpen: false }] });
+    const t0 = r.clock.t;
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end).toMatchObject({ kind: 'failed', reason: 'window_timeout' });
+    expect(r.clock.t - t0).toBeGreaterThanOrEqual(PRESS_WAIT_MS);
+  });
+
+  test('another phone is setting it up: INFO every second; cleared at 6 s pairs; busy throughout fails at 16 s', async () => {
+    const r = rig();
+    r.cams.get(0xd5)!.busy = true;
+    const done = r.flow.start();
+    await r.until('code');
+    r.at(6000, () => (r.cams.get(0xd5)!.busy = false));
+    r.flow.scanned(link(0xd5));
+    await done;
+    await flush();
+    expect(r.flow.phase().kind).toBe('done');
+    expect(kinds(r)).toContain('waiting_busy');
+
+    const stuck = rig();
+    stuck.cams.get(0xd5)!.busy = true;
+    const t0 = stuck.clock.t;
+    expect(await withCode(stuck, (f) => f.scanned(link(0xd5)))).toMatchObject({ kind: 'failed', reason: 'setup_busy' });
+    expect(stuck.clock.t - t0).toBeGreaterThanOrEqual(BUSY_WAIT_MS);
+  });
+
+  test('R_ID_IN_USE: a new id, sent again at once on the same Nc', async () => {
+    const r = rig();
+    r.cams.get(0xd5)!.force.pair_req = R.ID_IN_USE;
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end.kind).toBe('done');
+    const reqs = r.cams.get(0xd5)!.authWrites.filter((w) => w[0] === 0x10);
+    expect(reqs).toHaveLength(2);
+    expect(toHex(reqs[0]!.slice(2, 10))).not.toBe(toHex(reqs[1]!.slice(2, 10)));
+  });
+
+  test('R_NOT_NOW (the dashcam failed to compute its answer): INFO again, 300 ms, a new request, at most twice; then error', async () => {
+    const r = rig();
+    r.cams.get(0xd5)!.force.pair_req = R.NOT_NOW;
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end.kind).toBe('done');
+    expect(r.sleeps).toContain(300);
+
+    const always = rig();
+    const cam = always.cams.get(0xd5)!;
+    const w = always.ble.onWrite!;
+    always.ble.onWrite = (x) => {
+      if (x.characteristic === AUTH_CHAR && x.bytes[0] === 0x10) cam.force.pair_req = R.NOT_NOW;
+      return w(x);
+    };
+    expect(await withCode(always, (f) => f.scanned(link(0xd5)))).toMatchObject({ kind: 'failed', reason: 'error' });
+    expect(cam.authWrites.filter((x) => x[0] === 0x10)).toHaveLength(3);
+  });
+
+  test('with a named DashPal, a disconnect before the verdict: one reconnect and the request again; twice: error, never wrong_code', async () => {
+    const r = rig();
+    const id = idOf('android', 0xd5);
+    let drops = 1;
+    const read = r.ble.onRead!;
+    r.ble.onRead = (pid, ch) => {
+      if (ch === AUTH_CHAR && drops > 0 && r.cams.get(0xd5)!.authWrites.length > 0) {
+        drops -= 1;
+        r.ble.drop(pid);
+        throw { message: 'Device is not connected' };
+      }
+      return read(pid, ch);
+    };
+    expect((await withCode(r, (f) => f.scanned(link(0xd5)))).kind).toBe('done');
+    expect(r.ble.calls.filter((c) => c === `connect:${id}`)).toHaveLength(2);
+
+    const twice = rig();
+    const read2 = twice.ble.onRead!;
+    twice.ble.onRead = (pid, ch) => {
+      if (ch === AUTH_CHAR && twice.cams.get(0xd5)!.authWrites.length > 0) {
+        twice.ble.drop(pid);
+        throw { message: 'Device is not connected' };
+      }
+      return read2(pid, ch);
+    };
+    expect(await withCode(twice, (f) => f.scanned(link(0xd5)))).toMatchObject({ kind: 'failed', reason: 'error' });
+  });
 });
 
-test('nothing in pairing mode within 15 s: "press its button 5 times"; the old pairing gets its auto-connect back', async () => {
-  const previous: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'OLD', name: 'DashPal-C4D5', pairedAt: 1, secure: true };
-  const r = rig({ previous });
-  r.t.setTarget({ peripheralId: 'OLD', dashcamId: 'a4cf12b3c4d5' });
-  await r.flow.start();
-  expect(r.flow.phase().kind).toBe('none_found');
-  expect(r.clock.t).toBeGreaterThanOrEqual(15_000);
-  expect(r.t.target()).toEqual({ peripheralId: 'OLD', dashcamId: 'a4cf12b3c4d5' });
+describe('the typed code', () => {
+  const typed = formatCode(S, 'label');
+
+  test('without a name: every DashPal in pairing mode, strongest first; one with another code answers R_WRONG_CODE, the next pairs', async () => {
+    const r = rig({ cams: [{ last: 0x01, S: new Uint8Array(16).fill(7), rssi: -40 }, { last: 0x02, rssi: -60 }, { last: 0x03, rssi: -90 }] });
+    const end = await withCode(r, (f) => f.submitCode(typed));
+    expect(end).toMatchObject({ kind: 'done', paired: { dashcamId: camOf(0x02) } });
+    expect(r.cams.get(0x01)!.authWrites.map((w) => w[0])).toEqual([0x10]);
+    expect(r.cams.get(0x03)!.authWrites).toEqual([]); // too weak (below −80 dBm)
+  });
+
+  test('without a name: a device that answers but cannot prove the code is skipped, the next pairs', async () => {
+    const r = rig({ cams: [{ last: 0x01, rssi: -40 }, { last: 0x02, rssi: -60 }] });
+    r.cams.get(0x01)!.badProof.pair = true;
+    const end = await withCode(r, (f) => f.submitCode(typed));
+    expect(end).toMatchObject({ kind: 'done', paired: { dashcamId: camOf(0x02) } });
+  });
+
+  test('without a name: none matches: no_match; only proofs failed: unverified_nearby', async () => {
+    const r = rig({ cams: [{ last: 0x01, S: new Uint8Array(16).fill(7) }, { last: 0x02, S: new Uint8Array(16).fill(8) }] });
+    expect(await withCode(r, (f) => f.submitCode(typed))).toEqual({ kind: 'failed', reason: 'no_match', name: null });
+    const p = rig({ cams: [{ last: 0x01 }] });
+    p.cams.get(0x01)!.badProof.pair = true;
+    expect(await withCode(p, (f) => f.submitCode(typed))).toEqual({ kind: 'failed', reason: 'unverified_nearby', name: null });
+  });
+
+  test('with the name on the label: that DashPal only (iOS by its name, Android by its address)', async () => {
+    for (const platform of ['ios', 'android'] as const) {
+      const r = rig({ platform, cams: [{ last: 0x01, rssi: -40 }, { last: 0x02, rssi: -60 }] });
+      const end = await withCode(r, (f) => f.submitCode(typed, 'c402'));
+      expect(end).toMatchObject({ kind: 'done', paired: { dashcamId: camOf(0x02) } });
+      expect(r.cams.get(0x01)!.authWrites).toEqual([]);
+    }
+  });
 });
 
-test('a candidate that is not a v1 DashPal is skipped; the auto prompt’s dashcam is tried first', async () => {
-  const r = rig({ preferId: 'WEAK' });
-  r.ble.addPeripheral({ id: 'BAD', info: info(0xd8, { protoMin: 2, protoMax: 2 }) });
-  r.ble.addPeripheral({ id: 'WEAK', info: info(0xd9) });
-  const run = r.flow.start();
-  await r.until('scanning');
-  r.ble.advertise({ id: 'BAD', rssi: -40, advertising: { serviceUUIDs: [PAIRING_SERVICE] } });
-  r.ble.advertise({ id: 'WEAK', rssi: -75, advertising: { serviceUUIDs: [PAIRING_SERVICE] } });
-  await r.until('confirm');
-  expect(r.flow.phase()).toMatchObject({ candidate: { id: 'WEAK' } });
-  r.flow.answer(false);
-  await run;
-  // BAD was connected, refused (protocol), and released.
-  expect(r.ble.calls).toContain('disconnect:BAD');
-  expect(r.flow.phase().kind).toBe('none_found');
+describe('the outcome of PAIR_FIN unknown', () => {
+  function dropAfterFin(r: Rig): void {
+    const read = r.ble.onRead!;
+    let dropped = false;
+    r.ble.onRead = (pid, ch) => {
+      const cam = r.cams.get(0xd5)!;
+      if (!dropped && ch === AUTH_CHAR && cam.authWrites.at(-1)?.[0] === 0x11) {
+        dropped = true;
+        r.ble.drop(pid);
+        throw { message: 'Device is not connected' };
+      }
+      return read(pid, ch);
+    };
+  }
+
+  test('the dashcam stored it: one reconnect and a session with the new key finish the setup', async () => {
+    const r = rig();
+    dropAfterFin(r);
+    expect((await withCode(r, (f) => f.scanned(link(0xd5)))).kind).toBe('done');
+    expect(await r.secrets.readAuth()).not.toBeNull();
+  });
+
+  test('the dashcam did not store it (R_UNKNOWN_PHONE): error, the key deleted', async () => {
+    const r = rig();
+    dropAfterFin(r);
+    r.cams.get(0xd5)!.force.pair_fin = R.OK; // answered R_OK but stores nothing (the drop hides it)
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end).toMatchObject({ kind: 'failed', reason: 'error' });
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect(await r.secrets.readOrphan()).toBeNull();
+  });
+
+  test('no reconnect within 15 s: error, the key kept only as the orphan', async () => {
+    const r = rig();
+    dropAfterFin(r);
+    const write = r.ble.onWrite!;
+    r.ble.onWrite = (w) => {
+      if (w.characteristic === AUTH_CHAR && w.bytes[0] === 0x11) r.ble.connectMode.set(idOf('android', 0xd5), 'reject');
+      return write(w);
+    };
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end).toMatchObject({ kind: 'failed', reason: 'error' });
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect((await r.secrets.readOrphan())?.dashcamId).toBe(camOf(0xd5));
+  });
 });
 
-test('cancel mid-confirm releases the candidate and ends as cancelled', async () => {
-  const r = rig();
-  r.ble.addPeripheral({ id: 'C', info: info(0xda) });
-  const run = r.flow.start();
-  await r.until('scanning');
-  r.ble.advertise({ id: 'C', rssi: -50, advertising: { serviceUUIDs: [PAIRING_SERVICE] } });
-  await r.until('confirm');
-  await r.flow.cancel();
-  await run;
-  await flush();
-  expect(r.flow.phase().kind).toBe('cancelled');
-  expect(r.ble.calls).toContain('disconnect:C');
-  expect(r.paired).toEqual([]);
+describe('replacing, cancelling', () => {
+  const previous: PairedDashcam = { dashcamId: camOf(0x01), peripheralId: idOf('android', 0x01), name: 'DashPal-C401', pairedAt: 1, secure: true };
+
+  test('a different DashPal than the paired one: confirm_replace first; Replace pairs and replaces; Cancel keeps the previous pairing', async () => {
+    const r = rig({ previous });
+    const done = r.flow.start();
+    await r.until('code');
+    r.flow.scanned(link(0xd5));
+    expect(await r.until('confirm_replace')).toEqual({ kind: 'confirm_replace', from: 'DashPal-C401', to: 'DashPal-C4D5' });
+    expect(r.cams.get(0xd5)!.authWrites).toEqual([]);
+    r.flow.confirmReplace();
+    await done;
+    expect(r.flow.phase().kind).toBe('done');
+    expect(r.paired.map((p) => p.dashcamId)).toEqual([camOf(0xd5)]);
+
+    const c = rig({ previous });
+    const cdone = c.flow.start();
+    await c.until('code');
+    c.flow.scanned(link(0xd5));
+    await c.until('confirm_replace');
+    await c.flow.cancel();
+    await cdone;
+    expect(c.flow.phase().kind).toBe('cancelled');
+    expect(c.paired).toEqual([]);
+    expect(c.log).toContain('resumePaired');
+    expect(c.cams.get(0xd5)!.authWrites).toEqual([]);
+  });
+
+  test('the same DashPal again: no confirm_replace', async () => {
+    const r = rig({ previous: { ...previous, dashcamId: camOf(0xd5), peripheralId: idOf('android', 0xd5), name: 'DashPal-C4D5' } });
+    expect((await withCode(r, (f) => f.scanned(link(0xd5)))).kind).toBe('done');
+    expect(kinds(r)).not.toContain('confirm_replace');
+  });
+
+  test.each(['code', 'confirm_link', 'press_button', 'waiting_busy'] as const)('cancel at %s: no key kept, the held code deleted, the paired DashPal resumed', async (at) => {
+    const r = rig({ previous, cams: [{ last: 0xd5, windowOpen: at !== 'press_button' }] });
+    if (at === 'waiting_busy') r.cams.get(0xd5)!.busy = true;
+    if (at === 'confirm_link') await r.secrets.writePendingCode({ at: r.clock.t, dashcamId: camOf(0xd5), code: formatCode(S, 'label', { dashes: false }) });
+    const done = r.flow.start(at === 'confirm_link' ? { fromLink: { dashcamId: camOf(0xd5) } } : {});
+    if (at === 'code' || at === 'confirm_link') {
+      await r.until(at);
+      await r.flow.cancel();
+    } else {
+      await r.until('code');
+      r.flow.scanned(link(0xd5));
+      await r.until('confirm_replace');
+      // cancelled 2 s into the wait (virtual time)
+      r.at(2000, () => void r.flow.cancel());
+      r.flow.confirmReplace();
+    }
+    await done;
+    if (at === 'press_button' || at === 'waiting_busy') expect(kinds(r)).toContain(at);
+    await flush();
+    expect(r.flow.phase().kind).toBe('cancelled');
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect(await r.secrets.readPendingCode(r.clock.t)).toBeNull();
+    expect(r.log).toContain('resumePaired');
+    expect(r.paired).toEqual([]);
+  });
 });
 
-// ——— the setup claim (only the phone that made the dashcam beep can pair) ———
-
-const ATT_REFUSED = { domain: 'CBATTErrorDomain', code: 0x80, message: 'refused' };
-const identifies = (r: Rig, id: string) => r.ble.calls.filter((c) => c === `write:${id}:0003`).length;
-const infoReads = (r: Rig, id: string) => r.ble.calls.filter((c) => c === `read:${id}:0002`).length;
-
-/** Start the flow and advertise these dashcams (strongest first); `run` is the flow's end. */
-async function startWith(r: Rig, ids: string[]): Promise<{ run: Promise<void> }> {
-  const run = r.flow.start();
-  await r.until('scanning');
-  ids.forEach((id, i) => r.ble.advertise({ id, rssi: -40 - i * 5, advertising: { serviceUUIDs: [PAIRING_SERVICE] } }));
-  return { run };
-}
-
-test('INFO says another phone is setting the dashcam up: no IDENTIFY (it would not beep); INFO re-read every 2 s for 8 s; then "another phone is setting up", released', async () => {
-  const previous: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'OLD', name: 'DashPal-C4D5', pairedAt: 1, secure: true };
-  const r = rig({ previous });
-  r.t.setTarget({ peripheralId: 'OLD', dashcamId: 'a4cf12b3c4d5' });
-  r.ble.addPeripheral({ id: 'B', info: info(0xe1, { setupBusy: true }) });
-  await (await startWith(r, ['B'])).run;
-  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'setup_busy' });
-  expect(identifies(r, 'B')).toBe(0);
-  expect(r.sleeps.filter((ms) => ms === BUSY_POLL_MS)).toHaveLength(BUSY_RETRY_MS / BUSY_POLL_MS);
-  expect(infoReads(r, 'B')).toBe(1 + BUSY_RETRY_MS / BUSY_POLL_MS);
-  expect(r.ble.calls.lastIndexOf('disconnect:B')).toBeGreaterThan(r.ble.calls.lastIndexOf('read:B:0002'));
-  expect(r.phases).not.toContain('confirm');
-  // The old pairing gets its auto-connect back.
-  expect(r.t.target()).toEqual({ peripheralId: 'OLD', dashcamId: 'a4cf12b3c4d5' });
-});
-
-test("the claim clears within the 8 s (this phone's own earlier setup link went): identify, then the question", async () => {
-  const r = rig();
-  let reads = 0;
-  r.ble.addPeripheral({
-    id: 'B',
-    get info() {
-      reads += 1;
-      return info(0xe2, { setupBusy: reads < 3 });
-    },
-  } as never);
-  const { run } = await startWith(r, ['B']);
-  await r.until('confirm');
-  expect(identifies(r, 'B')).toBe(1);
-  expect(r.sleeps.filter((ms) => ms === BUSY_POLL_MS)).toHaveLength(2);
-  r.flow.answer(true);
-  await run;
-  expect(r.flow.phase()).toMatchObject({ kind: 'done' });
-});
-
-test('IDENTIFY refused (ATT 0x80) and INFO then says busy: watched every 2 s for 8 s, then "another phone is setting up"', async () => {
-  const r = rig();
-  let reads = 0;
-  r.ble.addPeripheral({
-    id: 'B',
-    get info() {
-      reads += 1;
-      return info(0xe3, { setupBusy: reads > 1 });
-    },
-  } as never);
-  r.ble.failNext('write', ATT_REFUSED);
-  await (await startWith(r, ['B'])).run;
-  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'setup_busy' });
-  expect(identifies(r, 'B')).toBe(1);
-  expect(r.sleeps.filter((ms) => ms === BUSY_POLL_MS)).toHaveLength(BUSY_RETRY_MS / BUSY_POLL_MS);
-});
-
-test('IDENTIFY refused and INFO not busy (the window closed): the next candidate, as before; none left → none found', async () => {
-  const r = rig();
-  r.ble.addPeripheral({ id: 'B', info: info(0xe4) });
-  r.ble.failNext('write', ATT_REFUSED);
-  await (await startWith(r, ['B'])).run;
-  expect(r.flow.phase()).toEqual({ kind: 'none_found' });
-  expect(r.sleeps.filter((ms) => ms === BUSY_POLL_MS)).toEqual([]);
-  expect(r.ble.calls).toContain('disconnect:B');
-});
-
-test('a busy dashcam and a free one: the free one is set up; "No" to it leaves only the busy one → "another phone is setting up"', async () => {
-  const r = rig();
-  r.ble.addPeripheral({ id: 'BUSY', info: info(0xe5, { setupBusy: true }) });
-  r.ble.addPeripheral({ id: 'FREE', info: info(0xe6) });
-  const { run } = await startWith(r, ['BUSY', 'FREE']);
-  await r.until('confirm');
-  expect(r.flow.phase()).toMatchObject({ candidate: { id: 'FREE' } });
-  expect(identifies(r, 'BUSY')).toBe(0);
-  r.flow.answer(false);
-  await run;
-  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'setup_busy' });
-});
-
-test('no answer within 110 s: the dashcam is released (its claim ends with the link) and setup fails', async () => {
-  const r = rig();
-  r.ble.addPeripheral({ id: 'Q', info: info(0xe7) });
-  const { run } = await startWith(r, ['Q']);
-  await r.until('confirm');
-  expect(r.sleeps).toContain(CONFIRM_TIMEOUT_MS);
-  r.expireConfirm();
-  await run;
-  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'error' });
-  expect(r.ble.calls.at(-1)).toBe('disconnect:Q');
-  expect(r.ble.calls.some((c) => c.startsWith('createBond') || c === 'read:Q:0004')).toBe(false);
-  // A late answer changes nothing.
-  r.flow.answer(true);
-  await flush();
-  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'error' });
-});
-
-test('an answer before the 110 s: the timeout firing later changes nothing', async () => {
-  const r = rig();
-  r.ble.addPeripheral({ id: 'Q', info: info(0xe8) });
-  const { run } = await startWith(r, ['Q']);
-  await r.until('confirm');
-  r.flow.answer(true);
-  await run;
-  expect(r.flow.phase()).toMatchObject({ kind: 'done' });
-  r.expireConfirm();
-  await flush();
-  expect(r.flow.phase()).toMatchObject({ kind: 'done' });
-});
-
-test.each([
-  ['a new phone, 1 phone paired before, PAIRED 2', { bondCount: 1 }, 2, false],
-  ['a new phone, 1 phone paired before, PAIRED 3 (someone else paired too)', { bondCount: 1 }, 3, true],
-  ['the first phone, PAIRED 1', { bondCount: 0 }, 1, false],
-  ['a re-pair (the dashcam held this phone), 2 before, PAIRED 2', { bondCount: 2, peerBonded: true }, 2, false],
-  ['a re-pair, 2 before, PAIRED 3', { bondCount: 2, peerBonded: true }, 3, true],
-  ['the store full: the oldest replaced, PAIRED 4', { bondCount: 4 }, 4, false],
-  ['PAIRED did not come', { bondCount: 1 }, null, false],
-] as const)('the bond count after pairing: %s', async (_d, over, pairedCount, unexpected) => {
-  const r = rig({ pairedCount });
-  r.ble.addPeripheral({ id: 'N', info: info(0xe9, over) });
-  const { run } = await startWith(r, ['N']);
-  await r.until('confirm');
-  r.flow.answer(true);
-  await run;
-  expect(r.flow.phase()).toMatchObject({ kind: 'done', phones: pairedCount, unexpected });
-});
-
-test.each(['ios', 'android'] as const)('the setup link dropped before "Yes" (%s): reconnect, identify again, then bond on that connection', async (platform) => {
-  const r = rig({ platform });
-  if (platform === 'ios') r.ble.setState('on');
-  r.ble.addPeripheral({ id: 'D', info: info(0xea) });
-  const { run } = await startWith(r, ['D']);
-  await r.until('confirm');
-  r.ble.drop('D');
-  const mark = r.ble.calls.length;
-  r.flow.answer(true);
-  await run;
-  expect(r.flow.phase()).toMatchObject({ kind: 'done' });
-  expect(identifies(r, 'D')).toBe(2);
-  const after = r.ble.calls.slice(mark).filter((c) => c === 'connect:D' || /^(read|write):D:000[234]$/.test(c) || c === 'createBond:D');
-  expect(after.slice(0, 4)).toEqual(['connect:D', 'read:D:0002', 'write:D:0003', platform === 'ios' ? 'read:D:0004' : 'createBond:D']);
-});
-
-test('the setup link dropped before "Yes" and another phone took the claim meanwhile: "another phone is setting up", no bond', async () => {
-  const r = rig();
-  let busy = false;
-  r.ble.addPeripheral({
-    id: 'D',
-    get info() {
-      return info(0xeb, { setupBusy: busy });
-    },
-  } as never);
-  const { run } = await startWith(r, ['D']);
-  await r.until('confirm');
-  r.ble.drop('D');
-  busy = true;
-  r.flow.answer(true);
-  await run;
-  expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'setup_busy' });
-  expect(r.ble.calls.some((c) => c.startsWith('createBond'))).toBe(false);
-  expect(r.ble.calls.at(-1)).toBe('disconnect:D');
-});
-
-test('cancel while waiting for a busy dashcam: cancelled, released, no IDENTIFY', async () => {
-  const r = rig();
-  r.ble.addPeripheral({ id: 'B', info: info(0xec, { setupBusy: true }) });
-  const { run } = await startWith(r, ['B']);
-  for (let i = 0; i < 400 && !r.sleeps.includes(BUSY_POLL_MS); i++) await new Promise<void>((resolve) => setImmediate(resolve));
-  await r.flow.cancel();
-  await run;
-  await flush();
-  expect(r.flow.phase().kind).toBe('cancelled');
-  expect(identifies(r, 'B')).toBe(0);
-  expect(r.ble.calls).toContain('disconnect:B');
-});
+void INFO_CHAR;

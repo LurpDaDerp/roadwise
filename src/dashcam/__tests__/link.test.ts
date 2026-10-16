@@ -1161,16 +1161,46 @@ describe('alerts (§3.5)', () => {
 // ——— lifecycle, repair, malformed ———
 
 describe('lifecycle', () => {
-  test('row 21: INFO peer_bonded = 0, or another dashcam: needs_repair, the encrypted attributes are never touched', () => {
+  test('INFO of another dashcam than the paired one is refused (the transport drops that connection and tries again); link v2 has no bond flag to check', () => {
     const r = rig();
-    expect(r.link.infoRead(info({ peerBonded: false }))).toBe(false);
-    expect(r.link.snapshot()).toMatchObject({ lifecycle: 'needs_repair', repairCause: 'peer_not_bonded' });
+    expect(r.link.infoRead(info({ peerBonded: false }))).toBe(true);
+    expect(r.link.snapshot().firmware).toBe('dms-core 3.3');
     const r2 = rig();
     expect(r2.link.infoRead(info({ mac: [0, 0, 0, 0, 0, 0xff] }))).toBe(false);
-    expect(r2.link.snapshot()).toMatchObject({ lifecycle: 'needs_repair', repairCause: 'wrong_dashcam' });
-    // a later successful link-up (re-paired) clears it
-    r2.link.linkUp(info());
-    expect(r2.link.snapshot().lifecycle).toBe('connected');
+    expect(r2.link.snapshot().lifecycle).not.toBe('needs_repair');
+  });
+
+  test('a soft repair (unknown_phone, downgrade) and a device that cannot prove itself (unverified) never stop anything; one link-up clears both', () => {
+    const r = rig();
+    r.link.needsRepair('unknown_phone');
+    expect(r.link.snapshot()).toMatchObject({ lifecycle: 'needs_repair', repairCause: 'unknown_phone' });
+    r.link.unverified();
+    expect(r.link.snapshot().lifecycle).toBe('needs_repair'); // the dashcam's own word first
+    r.link.linkUp(info());
+    expect(r.link.snapshot()).toMatchObject({ lifecycle: 'connected', repairCause: null });
+    r.link.linkDown();
+    r.link.unverified();
+    expect(r.link.snapshot().lifecycle).toBe('unverified');
+    r.link.needsRepair('downgrade');
+    expect(r.link.snapshot()).toMatchObject({ lifecycle: 'needs_repair', repairCause: 'downgrade' });
+    r.link.linkUp(info());
+    expect(r.link.snapshot().lifecycle).toBe('connected');
+    r.link.linkDown();
+    expect(r.link.snapshot().lifecycle).toBe('idle');
+    // a new pairing clears them too
+    r.link.unverified();
+    r.link.setPaired(null);
+    r.link.setPaired(PAIRED);
+    expect(r.link.snapshot().lifecycle).toBe('idle');
+  });
+
+  test('Bluetooth not allowed shows before a repair (nothing can be retried without it)', () => {
+    const r = rig();
+    r.link.needsRepair('unknown_phone');
+    r.link.setBluetooth('unauthorized');
+    expect(r.link.snapshot().lifecycle).toBe('unauthorized');
+    r.link.setBluetooth('off');
+    expect(r.link.snapshot().lifecycle).toBe('needs_repair');
   });
 
   test('row 22: Bluetooth off / not allowed; unpaired; connecting; idle', () => {
@@ -1447,7 +1477,7 @@ describe('held alert', () => {
     r.rx(alert({ alertId: 70, route: 0 }));
     await r.settle();
     r.link.linkDown();
-    r.link.needsRepair('bond_lost');
+    r.link.needsRepair('unknown_phone');
     r.link.setPaired(PAIRED);
     r.link.setPaired(null);
     r.link.setPaired(PAIRED);

@@ -1,10 +1,13 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 
 import type { PermissionsAdapter } from '@/core/permissions';
 import { dashpalCopy } from '@/dashcam/copy';
+import type { PairingCode } from '@/dashcam/label';
 import { COMMAND, SOUND } from '@/dashcam/protocol';
+import { AddPhoneSheet } from '@/dashcam/ui/AddPhoneSheet';
+import { setupHref } from '@/dashcam/ui/links';
 import { dashcamStatus } from '@/dashcam/ui/status';
 import { useDashcamRuntime, useDashcamState } from '@/dashcam/ui/useDashcam';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
@@ -17,26 +20,29 @@ const copy = dashpalCopy.screen;
 
 /**
  * `/settings/dashcam` (Settings › Driving › DashPal). Unpaired: what DashPal is and "Set up
- * DashPal". Paired: the link's status and its fix, how many phones are paired with the dashcam (its
- * STATUS bond count, while connected; from 2, how to remove one), "Also beep on DashPal", a test
- * sound, recalibrate, "Add another phone" (opens the dashcam's pairing window for 2 minutes, for one
- * phone) and "Forget DashPal".
+ * DashPal". Paired: the link's status and its fix (Set up again for a DashPal that no longer knows
+ * this phone or a device that cannot prove it is the DashPal), how many phones are paired with the
+ * dashcam (its STATUS count, while connected; from 2, how to remove one), the one-time notice of a
+ * phone this phone did not add, "Also beep on DashPal", a test sound, recalibrate, "Add another
+ * phone" (only while connected: opens the dashcam's pairing mode for one phone and shows a one-time
+ * code for 2 minutes) and "Forget DashPal".
  */
-export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAdapter; platform?: 'ios' | 'android' } }) {
+export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAdapter; now?: () => number } }) {
   const th = useTheme();
   const router = useRouter();
   const runtime = useDashcamRuntime();
   const state = useDashcamState();
-  const platform = deps.platform ?? (Platform.OS === 'ios' ? 'ios' : 'android');
-  const status = dashcamStatus(state, platform);
+  const status = dashcamStatus(state);
+  const now = deps.now ?? Date.now;
   const [notice, setNotice] = useState<{ tone: 'info' | 'warning'; message: string } | null>(null);
   const [confirmForget, setConfirmForget] = useState(false);
   const [working, setWorking] = useState(false);
+  const [sheet, setSheet] = useState<{ code: PairingCode; at: number } | null>(null);
   const paired = state?.link.paired ?? null;
   const connected = state?.link.lifecycle === 'connected';
   const phones = connected ? (state?.link.status?.bondCount ?? null) : null;
 
-  const command = async (op: number, arg: number, done?: string) => {
+  const command = async (op: number, arg: number) => {
     if (!runtime) return;
     setNotice(null);
     if (!connected) {
@@ -47,7 +53,23 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
     const ok = await runtime.command(op, arg).catch(() => false);
     setWorking(false);
     if (!ok) setNotice({ tone: 'warning', message: copy.commandFailed });
-    else if (done) setNotice({ tone: 'info', message: done });
+  };
+
+  const addPhone = async () => {
+    if (!runtime) return;
+    setNotice(null);
+    if (!connected) {
+      setNotice({ tone: 'warning', message: copy.addPhoneNeedsLink });
+      return;
+    }
+    setWorking(true);
+    const code = await runtime.addPhone().catch(() => null);
+    setWorking(false);
+    if (!code) {
+      setNotice({ tone: 'warning', message: copy.commandFailed });
+      return;
+    }
+    setSheet({ code, at: now() });
   };
 
   const forget = async () => {
@@ -56,10 +78,11 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
     setWorking(true);
     await runtime.forget().catch(() => {});
     setWorking(false);
-    setNotice(platform === 'ios' ? { tone: 'info', message: copy.forgetIos } : null);
+    setNotice(null);
   };
 
   const openSettings = () => void (deps.adapter ?? defaultPermissionsAdapter()).openAppSettings().catch(() => {});
+  const repairable = status.kind === 'needs_repair' || status.kind === 'unverified';
 
   return (
     <Screen scroll testID="dashcam-screen">
@@ -99,9 +122,15 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
                 {copy.phonesPairedHelp}
               </Text>
             ) : null}
+            {state?.newPhone ? (
+              <View style={{ gap: th.space.sm, marginTop: th.space.sm }}>
+                <Banner tone="warning" message={copy.newPhone} testID="dashcam-new-phone" />
+                <Button label={copy.newPhoneOk} variant="secondary" size="sm" onPress={() => void runtime?.dismissNewPhone()} testID="dashcam-new-phone-ok" />
+              </View>
+            ) : null}
             {status.kind === 'not_allowed' ? <Button label={copy.fix.openSettings} variant="secondary" size="sm" onPress={openSettings} testID="dashcam-open-settings" /> : null}
-            {status.kind === 'needs_repair' ? (
-              <Button label={copy.fix.setUpAgain} variant="secondary" size="sm" onPress={() => router.push(SETTINGS_HREFS.dashcamSetup)} testID="dashcam-repair" />
+            {repairable ? (
+              <Button label={copy.fix.setUpAgain} variant="secondary" size="sm" onPress={() => router.push(setupHref({ again: true }))} testID="dashcam-repair" />
             ) : null}
           </Card>
 
@@ -119,13 +148,20 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
             <View style={{ gap: th.space.sm }}>
               <Button label={copy.test} variant="secondary" disabled={working} onPress={() => void command(COMMAND.TEST_SOUND, SOUND.GLANCE)} testID="dashcam-test" />
               <Button label={copy.recalibrate} variant="secondary" disabled={working} onPress={() => void command(COMMAND.RECALIBRATE, 0)} testID="dashcam-recalibrate" />
-              <Button label={copy.addPhone} variant="secondary" disabled={working} onPress={() => void command(COMMAND.OPEN_PAIRING, 0, copy.addPhoneDone)} testID="dashcam-add-phone" />
+              <Button label={copy.addPhone} variant="secondary" disabled={working || !connected} onPress={() => void addPhone()} testID="dashcam-add-phone" />
+              {!connected ? (
+                <Text variant="footnote" tone="muted" testID="dashcam-add-phone-needs-link">
+                  {copy.addPhoneNeedsLink}
+                </Text>
+              ) : null}
               <Divider />
               <Button label={copy.forget} variant="destructive" disabled={working} onPress={() => setConfirmForget(true)} testID="dashcam-forget" />
             </View>
           </Card>
         </View>
       )}
+
+      {paired ? <AddPhoneSheet code={sheet?.code ?? null} dashcamId={paired.dashcamId} openedAt={sheet?.at ?? 0} onClose={() => setSheet(null)} now={now} /> : null}
 
       <Sheet visible={confirmForget} onClose={() => setConfirmForget(false)} title={copy.forgetConfirm.title} testID="dashcam-forget-sheet">
         <Text variant="body">{copy.forgetConfirm.body}</Text>

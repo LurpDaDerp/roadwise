@@ -48,6 +48,7 @@
 // holds, null once no frame has come for 3 s (a silently dead link) and back with the next frame. A
 // link that drops keeps its continuous alerts aside for `RESEND_WINDOW_MS`: the reconnect's re-send
 // of the same alert (same boot, id, sound and tier) keeps its `since` and flashes as a resend.
+import { addPhoneFrame } from './auth';
 import type { AlertPlayer } from '@/core/alerts/player';
 import { knownSpeed } from '@/core/detectors/common';
 import type { FeatureRow } from '@/core/engine/types';
@@ -133,9 +134,16 @@ export const RESEND_WINDOW_MS = 10_000;
 
 export type BluetoothState = 'unknown' | 'resetting' | 'unsupported' | 'unauthorized' | 'off' | 'on' | 'turning_on' | 'turning_off';
 
-export type Lifecycle = 'unpaired' | 'idle' | 'unauthorized' | 'bluetooth_off' | 'connecting' | 'connected' | 'needs_repair';
+/**
+ * `needs_repair`: the dashcam says it does not know this phone, or answers below link v2 (a soft
+ * repair: the transport keeps retrying). `unverified`: the device at the paired address failed to
+ * prove it is the DashPal three times in a row (retried too). Neither can be proven to come from
+ * the real DashPal, so neither stops the phone; one verified session clears both.
+ */
+export type Lifecycle = 'unpaired' | 'idle' | 'unauthorized' | 'bluetooth_off' | 'connecting' | 'connected' | 'needs_repair' | 'unverified';
 
-export type RepairCause = 'peer_not_bonded' | 'bond_lost' | 'wrong_dashcam' | 'reflashed';
+/** `unknown_phone`: R_UNKNOWN_PHONE (forgotten, wiped, evicted, reflashed); `downgrade`: INFO below link v2. */
+export type RepairCause = 'unknown_phone' | 'downgrade';
 
 /** What the phone is doing, read live each tick. */
 export interface LinkContext {
@@ -317,7 +325,7 @@ export interface DashcamLink {
   // transport side
   setBluetooth(state: BluetoothState): void;
   connecting(): void;
-  /** INFO was read. True: go on (subscribe, then `linkUp`); false: disconnect, no auto-reconnect. */
+  /** INFO was read. True: go on (the session, then `linkUp`); false: another DashPal than the paired one (dropped, retried). */
   infoRead(info: DashcamInfo): boolean;
   linkUp(info: DashcamInfo): void;
   linkDown(): void;
@@ -328,6 +336,8 @@ export interface DashcamLink {
    */
   restart(): void;
   needsRepair(cause: RepairCause): void;
+  /** Three failed verifications in a row (the transport keeps retrying). */
+  unverified(): void;
   frame(bytes: ArrayLike<number>): void;
   // app side
   setPaired(paired: PairedDashcam | null): void;
@@ -341,6 +351,8 @@ export interface DashcamLink {
   /** Drive end: wait ≤ 3 s for the phone to catch up, then stamp the sync time on the drive. */
   beforeFinalize(clientTripId: string, opts?: { dryRun?: boolean }): Promise<void>;
   command(op: number, arg?: number): Promise<boolean>;
+  /** ADD_PHONE with this one-time code (16 bytes): opens the dashcam's pairing window for it. */
+  addPhone(code: ArrayLike<number>): Promise<boolean>;
   /** The phone can play a DashPal alert now; `fresh`: with the audio output read now. */
   canPlay(fresh?: boolean): boolean;
   sendAlertAck(alertId: number, outcome: 0 | 1): void;
@@ -362,6 +374,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
   let bt: BluetoothState = 'unknown';
   let connectingNow = false;
   let repairCause: RepairCause | null = null;
+  let unverifiedNow = false;
   let session: Session | null = null;
   let visual: DashcamVisual | null = null;
   /** no frame for `STALE_MS` while an alert is held: `held` reads null until the next frame */
@@ -420,10 +433,11 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
 
   function lifecycle(): Lifecycle {
     if (!paired) return 'unpaired';
-    if (repairCause) return 'needs_repair';
     if (bt === 'unauthorized') return 'unauthorized';
-    if (bt === 'off' || bt === 'turning_off' || bt === 'unsupported') return 'bluetooth_off';
     if (session) return 'connected';
+    if (repairCause) return 'needs_repair';
+    if (unverifiedNow) return 'unverified';
+    if (bt === 'off' || bt === 'turning_off' || bt === 'unsupported') return 'bluetooth_off';
     if (connectingNow) return 'connecting';
     return 'idle';
   }
@@ -973,16 +987,8 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       // No pairing read yet (the runtime is still loading): the transport already checked the INFO
       // against its target; the link takes the link-up once it knows its pairing (a re-attach).
       if (!paired) return true;
-      if (info.dashcamId !== paired.dashcamId) {
-        self.needsRepair('wrong_dashcam');
-        return false;
-      }
-      if (!info.peerBonded) {
-        // The dashcam does not hold this phone's bond: touching an encrypted attribute now would
-        // raise the OS pairing dialog (possibly mid-drive). Stop; the driver re-pairs from Settings.
-        self.needsRepair('peer_not_bonded');
-        return false;
-      }
+      // Another DashPal than the paired one (the transport's target changed under it): not this link.
+      if (info.dashcamId !== paired.dashcamId) return false;
       changed();
       return true;
     },
@@ -994,6 +1000,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       const now = deps.now();
       connectingNow = false;
       repairCause = null;
+      unverifiedNow = false;
       session = freshSession(info, now);
       // CCCDs of bonded peers are restored silently: subscribing alone does not produce a HELLO.
       requestHello(session, now);
@@ -1026,6 +1033,11 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       requestHello(s, now);
       changed();
       armWake(now);
+    },
+
+    unverified() {
+      unverifiedNow = true;
+      changed();
     },
 
     needsRepair(cause) {
@@ -1130,6 +1142,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       paired = next;
       if ((next?.dashcamId ?? null) !== before) {
         repairCause = null;
+        unverifiedNow = false;
         session = null;
         dropped = null;
         heldStale = false;
@@ -1198,6 +1211,17 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     async command(op, arg = 0) {
       if (!session) return false;
       return send({ type: 'COMMAND', op, arg }, { withResponse: true });
+    },
+
+    async addPhone(code) {
+      if (!session) return false;
+      return deps.write(addPhoneFrame(code), { withResponse: true }).then(
+        () => true,
+        (e: unknown) => {
+          report(e, 'write ADD_PHONE');
+          return false;
+        }
+      );
     },
 
     canPlay,

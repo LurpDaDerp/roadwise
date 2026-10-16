@@ -1,8 +1,13 @@
 // A scriptable stand-in for react-native-ble-manager (the `BleApi` slice the transport uses), for
 // tests and the cross-repo link test (plan §9): the real transport and link run on it, a test plays
-// the dashcam (INFO, notifications, disconnects, restoration, advertising) and sees every write.
-import type { BleApi, BlePeripheralEvent, BleSub } from './transport';
-import { DASHPAL_SERVICE, INFO_CHAR, TX_CHAR } from './protocol';
+// the dashcam (INFO, AUTH, notifications, disconnects, restoration, advertising) and sees every write.
+// `__fixtures__/fakeDashcam.ts` plays a whole link v2 dashcam on top of it.
+//
+// As ble-manager 12.5.3 does: `removeBond` never settles unless the phone holds a bond with that
+// peripheral (its promise waits for a BONDED -> NONE broadcast), and a write that fails rejects with
+// a `status=N` text.
+import type { BleApi, BlePeripheralEvent, BleServicesInfo, BleSub } from './transport';
+import { AUTH_CHAR, DASHPAL_SERVICE, IDENTIFY_CHAR, INFO_CHAR, PAIRING_SERVICE, RX_CHAR, TX_CHAR } from './protocol';
 
 type Handler<T> = (e: T) => void;
 
@@ -10,12 +15,14 @@ export interface FakePeripheral {
   id: string;
   name?: string;
   rssi?: number;
-  /** what an INFO read returns */
+  /** what an INFO read returns (unless `onRead` answers it) */
   info?: number[];
   /** the OS holds a bond with it (Android `getBondedPeripherals`) */
   osBonded?: boolean;
-  /** iOS: an encrypted read succeeds (the pairing dialog was accepted) */
-  pairable?: boolean;
+  /** its table has no AUTH characteristic (a link v1 board, or a stale cache when `staleCache`) */
+  noAuthChar?: boolean;
+  /** Android's GATT cache is stale: AUTH appears only after `refreshCache` */
+  staleCache?: boolean;
 }
 
 export interface FakeWrite {
@@ -23,6 +30,7 @@ export interface FakeWrite {
   characteristic: string;
   bytes: number[];
   withResponse: boolean;
+  maxByteSize: number | undefined;
 }
 
 export type ConnectMode = 'resolve' | 'reject' | 'hang';
@@ -30,11 +38,15 @@ export type ConnectMode = 'resolve' | 'reject' | 'hang';
 export interface FakeBle extends BleApi {
   readonly calls: string[];
   readonly writes: FakeWrite[];
+  /** every scan's options */
+  readonly scans: { serviceUUIDs: string[]; seconds: number; scanMode?: number; matchMode?: number }[];
   readonly connected: Set<string>;
   /** How the next `connect` calls behave, per peripheral (default resolve). */
   connectMode: Map<string, ConnectMode>;
   /** An error the next call of this method (and characteristic, for read) rejects with. */
   failNext(method: string, error: unknown): void;
+  /** The next call of this method never settles. */
+  hangNext(method: string): void;
   setState(state: string): void;
   addPeripheral(p: FakePeripheral): void;
   peripheral(id: string): FakePeripheral | undefined;
@@ -50,15 +62,34 @@ export interface FakeBle extends BleApi {
   completeConnect(id: string): void;
   /** Sees every write; a promise it returns is awaited (a rejection fails the write, as an ATT error). */
   onWrite: ((w: FakeWrite) => void | Promise<void>) | null;
+  /** Answers a read (INFO, AUTH); `undefined` falls back to the peripheral's INFO or an empty value. */
+  onRead: ((id: string, characteristic: string) => number[] | undefined | Promise<number[] | undefined>) | null;
+  /** A connect resolved (the dashcam sees the link up). */
+  onConnect: ((id: string) => void) | null;
+  /** The phone disconnected (the dashcam sees the link down); not called for `drop`. */
+  onDisconnect: ((id: string) => void) | null;
   listenerCount(): number;
 }
+
+const TABLE = (auth: boolean): BleServicesInfo => ({
+  characteristics: [
+    { service: DASHPAL_SERVICE, characteristic: INFO_CHAR },
+    { service: DASHPAL_SERVICE, characteristic: IDENTIFY_CHAR },
+    { service: DASHPAL_SERVICE, characteristic: TX_CHAR },
+    { service: DASHPAL_SERVICE, characteristic: RX_CHAR },
+    ...(auth ? [{ service: DASHPAL_SERVICE, characteristic: AUTH_CHAR }] : []),
+    { service: PAIRING_SERVICE, characteristic: '' },
+  ].filter((c) => c.characteristic !== ''),
+});
 
 export function createFakeBle(): FakeBle {
   const calls: string[] = [];
   const writes: FakeWrite[] = [];
+  const scans: FakeBle['scans'] = [];
   const connected = new Set<string>();
   const peripherals = new Map<string, FakePeripheral>();
   const failures = new Map<string, unknown>();
+  const hangs = new Set<string>();
   const handlers = {
     state: new Set<Handler<{ state: string }>>(),
     disconnect: new Set<Handler<{ peripheral: string; status?: number; domain?: string; code?: number }>>(),
@@ -82,15 +113,30 @@ export function createFakeBle(): FakeBle {
     }
   }
 
+  /** A call that was told to hang: a promise that never settles. */
+  function hang(key: string): boolean {
+    if (!hangs.has(key)) return false;
+    hangs.delete(key);
+    return true;
+  }
+  const never = <T>(): Promise<T> => new Promise<T>(() => {});
+
   const fake: FakeBle = {
     calls,
     writes,
+    scans,
     connected,
     connectMode: new Map(),
     onWrite: null,
+    onRead: null,
+    onConnect: null,
+    onDisconnect: null,
 
     failNext(method, error) {
       failures.set(method, error);
+    },
+    hangNext(method) {
+      hangs.add(method);
     },
 
     async start(opts) {
@@ -103,6 +149,7 @@ export function createFakeBle(): FakeBle {
     },
     async scan(o) {
       calls.push(`scan:${o.serviceUUIDs.join(',')}:${o.seconds}`);
+      scans.push({ serviceUUIDs: [...o.serviceUUIDs], seconds: o.seconds, ...(o.scanMode !== undefined ? { scanMode: o.scanMode } : {}), ...(o.matchMode !== undefined ? { matchMode: o.matchMode } : {}) });
       fail('scan');
     },
     async stopScan() {
@@ -123,6 +170,7 @@ export function createFakeBle(): FakeBle {
           list.push({
             resolve: () => {
               connected.add(id);
+              fake.onConnect?.(id);
               resolve();
             },
             reject,
@@ -131,6 +179,7 @@ export function createFakeBle(): FakeBle {
         });
       }
       connected.add(id);
+      fake.onConnect?.(id);
       return Promise.resolve();
     },
     async disconnect(id) {
@@ -140,12 +189,21 @@ export function createFakeBle(): FakeBle {
         hanging.delete(id);
         for (const p of pending) p.reject(new Error(`Peripheral did disconnect: ${id}`));
       }
-      connected.delete(id);
+      const was = connected.delete(id);
+      if (was) fake.onDisconnect?.(id);
     },
     async retrieveServices(id) {
       calls.push(`retrieveServices:${id}`);
       fail('retrieveServices');
-      return {};
+      const p = peripherals.get(id);
+      return TABLE(!(p?.noAuthChar || p?.staleCache));
+    },
+    async refreshCache(id) {
+      calls.push(`refreshCache:${id}`);
+      fail('refreshCache');
+      const p = peripherals.get(id);
+      if (p?.staleCache) p.staleCache = false;
+      return true;
     },
     async requestMTU(id, mtu) {
       calls.push(`requestMTU:${id}:${mtu}`);
@@ -153,27 +211,28 @@ export function createFakeBle(): FakeBle {
     },
     async read(id, _service, characteristic) {
       calls.push(`read:${id}:${characteristic.slice(4, 8)}`);
+      if (hang(`read:${characteristic}`) || hang('read')) return never();
       fail(`read:${characteristic}`);
       fail('read');
+      const answered = await fake.onRead?.(id, characteristic);
+      if (answered !== undefined) return [...answered];
       const p = peripherals.get(id);
       if (characteristic === INFO_CHAR) return [...(p?.info ?? [])];
-      if (characteristic === TX_CHAR) {
-        if (p?.pairable === false) throw { code: 15, domain: 'CBATTErrorDomain', message: 'Encryption is insufficient.' };
-        return [];
-      }
       return [];
     },
-    async write(id, _service, characteristic, data) {
+    async write(id, _service, characteristic, data, maxByteSize) {
       calls.push(`write:${id}:${characteristic.slice(4, 8)}`);
+      if (hang(`write:${characteristic}`) || hang('write')) return never();
+      fail(`write:${characteristic}`);
       fail('write');
-      const w = { id, characteristic, bytes: [...data], withResponse: true };
+      const w = { id, characteristic, bytes: [...data], withResponse: true, maxByteSize };
       writes.push(w);
       await fake.onWrite?.(w);
     },
-    async writeWithoutResponse(id, _service, characteristic, data) {
+    async writeWithoutResponse(id, _service, characteristic, data, maxByteSize) {
       calls.push(`writeWithoutResponse:${id}:${characteristic.slice(4, 8)}`);
       fail('writeWithoutResponse');
-      const w = { id, characteristic, bytes: [...data], withResponse: false };
+      const w = { id, characteristic, bytes: [...data], withResponse: false, maxByteSize };
       writes.push(w);
       await fake.onWrite?.(w);
     },
@@ -181,15 +240,17 @@ export function createFakeBle(): FakeBle {
       calls.push(`startNotification:${id}:${characteristic.slice(4, 8)}`);
       fail('startNotification');
     },
-    async createBond(id) {
-      calls.push(`createBond:${id}`);
-      fail('createBond');
-      bondedAndroid.add(id);
-    },
-    async removeBond(id) {
+    removeBond(id) {
       calls.push(`removeBond:${id}`);
-      fail('removeBond');
+      // ble-manager resolves only on the BONDED -> NONE broadcast: with no bond it never settles.
+      if (!bondedAndroid.has(id)) return never();
+      try {
+        fail('removeBond');
+      } catch (e) {
+        return Promise.reject(e);
+      }
       bondedAndroid.delete(id);
+      return Promise.resolve();
     },
     async getBondedPeripherals() {
       calls.push('getBondedPeripherals');

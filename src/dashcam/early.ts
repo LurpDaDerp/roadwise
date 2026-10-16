@@ -77,7 +77,11 @@ export async function startDashpalEarly(
     if (!(await secrets.readEnabled())) return false;
     const transport = (deps.transport ?? getDashcamTransport)();
     const target = await secrets.readTarget();
-    if (target && transport.target() === null) transport.setTarget(target);
+    // The pairing key goes with the target: without it no session can be proven, so nothing connects.
+    const auth = target ? await secrets.readAuth() : null;
+    if (target && auth && auth.dashcamId === target.dashcamId && transport.target() === null) {
+      transport.setTarget({ ...target, auth: { phoneId: auth.phoneId, kPair: auth.kPair } });
+    }
     await transport.start();
     return true;
   } catch (e) {

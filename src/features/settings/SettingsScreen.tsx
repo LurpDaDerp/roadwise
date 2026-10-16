@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import { dashcamStatus } from '@/dashcam/ui/status';
 import { useDashcamState } from '@/dashcam/ui/useDashcam';
@@ -109,7 +109,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
       .catch(() => {});
   }, [serverUnits, units, settings]);
 
-  const dashcam = dashcamStatus(useDashcamState(), Platform.OS === 'ios' ? 'ios' : 'android');
+  const dashcam = dashcamStatus(useDashcamState());
 
   const shownUnits = edit.value('units', profile?.units) ?? units;
   const shownState = edit.value('state', profile?.state ?? '');

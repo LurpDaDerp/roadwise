@@ -20,11 +20,23 @@ import { activeDashcam } from '@/dashcam/registry';
 import type { DashcamTripFacts } from '../facts';
 import { createFakeBle } from '../fakeTransport';
 import { PAIRED_KEY } from '../keys';
-import { encodeInfo, encodeTx } from '../protocol';
+import { createFakeDashcam } from '../__fixtures__/fakeDashcam';
+import { encodeTx, fromHex } from '../protocol';
 import { createDashcamStore } from '../store';
 import { createBleTransport, type DashcamTransport } from '../transport';
 
 jest.mock('expo-notifications', () => ({}));
+
+// The phone's SecureStore: the DashPal runtime reads its pairing key there (a pairing without one
+// is dropped at load).
+const mockSecure = new Map<string, string>();
+jest.mock('expo-secure-store', () => ({
+  getItemAsync: async (k: string) => mockSecure.get(k) ?? null,
+  setItemAsync: async (k: string, v: string) => void mockSecure.set(k, v),
+  deleteItemAsync: async (k: string) => void mockSecure.delete(k),
+}));
+const PHONE_ID = '0102030405060708';
+const K_PAIR = '42'.repeat(32);
 
 // The process transport, when a test hands one in (the BLE native module is absent in Jest).
 const mockTransportRef: { current: DashcamTransport | null } = { current: null };
@@ -75,6 +87,8 @@ const clock = T0 + 10_000_000;
 beforeEach(async () => {
   db = await createSqlJsDb();
   finalizeCalls.length = 0;
+  mockSecure.clear();
+  mockSecure.set('dashpal.auth', JSON.stringify({ v: 2, dashcamId: CAM, phoneId: PHONE_ID, kPair: K_PAIR, code: null }));
 });
 
 function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
@@ -208,14 +222,14 @@ describe('phone-first sound wiring (bootstrap → the DashPal runtime → drive-
     await migrate(db);
     if (paired) await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: 'A4:CF:12:B3:C4:D5', name: 'DashPal-C4D5', pairedAt: 1, secure: true });
     const ble = createFakeBle();
-    ble.addPeripheral({ id: 'A4:CF:12:B3:C4:D5', info: encodeInfo({ ver: 1, protoMin: 1, protoMax: 1, fwMajor: 3, fwMinor: 3, mac: [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5], peerBonded: true, bondCount: 1, pairingOpen: false }) });
+    const cam = createFakeDashcam({ ble, id: 'A4:CF:12:B3:C4:D5', mac: [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5], S: null, phones: [{ id: Uint8Array.from(fromHex(PHONE_ID)), kPair: Uint8Array.from(fromHex(K_PAIR)) }] });
     mockTransportRef.current = createBleTransport(ble, { platform: 'android', setTimer: () => 0, clearTimer: () => {} });
     const native = createFakeDriveSense({ platform: 'android', now });
     const d = deps({ dashpal: native, now });
     const rt = await bootstrapApp(d.deps);
     await rt.dashcam!.ready;
     for (let i = 0; i < 80; i++) await new Promise<void>((resolve) => setImmediate(resolve));
-    return { rt, native, ble, errors: d.errors };
+    return { rt, native, ble, cam, errors: d.errors };
   }
 
   test('the player counts as available whenever the ports loaded, with or without a drive: a failed sound means "cannot play" for 30 s and no longer, also during a drive', async () => {
@@ -269,12 +283,12 @@ describe('phone-first sound wiring (bootstrap → the DashPal runtime → drive-
   });
 
   test('Android with a DashPal paired: the link service runs (connected once linked), a routed ALERT takes the wake lock, the tick is subscribed; forget stops the service', async () => {
-    const { rt, native, ble, errors } = await android(true);
+    const { rt, native, cam, errors } = await android(true);
     expect(rt.dashcam!.state().link.lifecycle).toBe('connected');
     expect(native.dashpalLink).toBe('connected');
     expect(native.calls.filter((c) => c.startsWith('setDashpalLink'))).toEqual(['setDashpalLink:waiting', 'setDashpalLink:connected']);
     expect(native.listenerCount('dashpalLinkTick')).toBe(1);
-    ble.notify('A4:CF:12:B3:C4:D5', encodeTx({ type: 'ALERT', alertId: 5, sound: 1, tier: 2, level: 0, mode: 1, route: 1, uptimeMs: 1000 }));
+    cam.notify(encodeTx({ type: 'ALERT', alertId: 5, sound: 1, tier: 2, level: 0, mode: 1, route: 1, uptimeMs: 1000 }));
     expect(native.holdAwakeCalls).toEqual([5000]);
     await rt.dashcam!.forget();
     for (let i = 0; i < 40; i++) await new Promise<void>((resolve) => setImmediate(resolve));

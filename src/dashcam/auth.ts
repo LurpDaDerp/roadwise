@@ -118,6 +118,8 @@ export interface PairInputs {
   idP: ArrayLike<number>;
   /** the phone's X25519 private scalar (32 bytes) */
   a: ArrayLike<number>;
+  /** its public key when already computed (drawn ahead of the request); else computed here */
+  A?: ArrayLike<number>;
   np: ArrayLike<number>;
   /** a record of this phone on that dashcam to replace: its id and its K_pair (proven by prev_proof) */
   prev?: { id: ArrayLike<number>; kPair: ArrayLike<number> } | null;
@@ -135,7 +137,7 @@ export function pairRequest(i: PairInputs): PairRequest {
   if (idP.every((b) => b === 0)) throw new Error('id_p must not be zero');
   const code = fixed('code', i.code, 16);
   const np = fixed('Np', i.np, 16);
-  const A = x25519Public(fixed('a', i.a, 32));
+  const A = i.A ? fixed('A', i.A, 32) : x25519Public(fixed('a', i.a, 32));
   const prevId = i.prev ? fixed('prev_id', i.prev.id, 8) : new Uint8Array(8);
   const prevProof = i.prev ? mac16(fixed('prev K_pair', i.prev.kPair, 32), LABEL.replace, mac, nc, idP) : new Uint8Array(16);
   const body = concat(idP, prevId, prevProof, A, np);

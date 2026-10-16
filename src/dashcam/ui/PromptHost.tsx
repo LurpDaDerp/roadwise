@@ -19,7 +19,7 @@ import type { DashcamVisual } from '../alerts';
 import { dashpalCopy } from '../copy';
 import { createDetector, snoozed, type Detector, type Found } from '../detector';
 import { SNOOZES_KEY } from '../keys';
-import { PAIRING_SERVICE } from '../protocol';
+import { isDashcamId, PAIRING_SERVICE } from '../protocol';
 import type { DashcamRuntime, DashcamState } from '../runtime';
 import { PENDING_SETUP_KEY, PENDING_SETUP_MAX_AGE_MS, setupHref } from './links';
 import { useDashcamRuntime, useDashcamSelector } from './useDashcam';
@@ -46,7 +46,7 @@ export interface PromptHostDeps {
  * - offers a DashPal found nearby in pairing mode (the detector's rules: opted in, Bluetooth already
  *   allowed, never while a drive is open or on the drive route, speed known under 3 mph, ≤ once per
  *   2 min), as a small non-blocking banner, dropped when a drive starts; "Not now" snoozes it 7 days;
- * - replays a `roadwise://dashpal` link that came during a drive, once the drive is over;
+ * - replays a DashPal link that came during a drive (its Pair screen), once the drive is over;
  * - shows a DashPal alert for 1.5 s per start or level change (the HUD shows its own).
  */
 export function DashpalPromptHost({ deps = {} }: { deps?: PromptHostDeps }) {
@@ -93,7 +93,7 @@ function PromptHostInner({ runtime, deps }: { runtime: DashcamRuntime; deps: Pro
       scan: async (o) => {
         const t = runtime.transport();
         if (!t) throw new Error('no Bluetooth transport');
-        return t.scan({ service: PAIRING_SERVICE, seconds: o.seconds, onHit: o.onHit });
+        return t.scan({ services: [PAIRING_SERVICE], seconds: o.seconds, onHit: o.onHit });
       },
       sleep: deps.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
     });
@@ -143,10 +143,12 @@ function PromptHostInner({ runtime, deps }: { runtime: DashcamRuntime; deps: Pro
     if (busy || onDriveRoute(pathname)) return;
     let live = true;
     void (async () => {
-      const pending = await settings.get<{ at?: number }>(PENDING_SETUP_KEY).catch(() => null);
+      const pending = await settings.get<{ at?: number; dashcamId?: unknown }>(PENDING_SETUP_KEY).catch(() => null);
       if (!live || !pending) return;
       await settings.remove(PENDING_SETUP_KEY).catch(() => {});
-      if (typeof pending.at === 'number' && now() - pending.at <= PENDING_SETUP_MAX_AGE_MS && !host.isBusy()) router.push(setupHref());
+      if (typeof pending.at !== 'number' || now() - pending.at > PENDING_SETUP_MAX_AGE_MS || host.isBusy()) return;
+      // The link's Pair screen (its code waits in SecureStore), or the code step for the bare link.
+      router.push(setupHref({ link: isDashcamId(pending.dashcamId) ? pending.dashcamId : null }));
     })();
     return () => {
       live = false;
@@ -187,7 +189,7 @@ function PromptHostInner({ runtime, deps }: { runtime: DashcamRuntime; deps: Pro
               size="sm"
               onPress={() => {
                 setOffer(null);
-                router.push(setupHref(offer.id));
+                router.push(setupHref({ found: offer.id }));
               }}
               testID="dashpal-offer-connect"
             />

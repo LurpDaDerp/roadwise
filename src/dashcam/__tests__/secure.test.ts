@@ -186,12 +186,25 @@ test('early start: nothing at all without the opt-in flag (no BLE manager, no pr
   expect(made).toBe(0);
 });
 
-test('early start: with the flag, the stored peripheral becomes the target and the manager starts', async () => {
+test('early start: with the flag, the stored peripheral and its key become the target and the manager starts', async () => {
   await writeDashpalEnabled(true);
   await writeSecureTarget({ peripheralId: 'P-1', dashcamId: 'a4cf12b3c4d5' });
+  await dashpalSecrets.writePendingAuth(AUTH);
+  await dashpalSecrets.finalizeAuth();
   const f = fakeTransport();
   expect(await startDashpalEarly({ storage: markers().storage, transport: () => f.t })).toBe(true);
   expect(f.log).toEqual(['target:P-1', 'start']);
+  expect(f.t.target()).toEqual({ peripheralId: 'P-1', dashcamId: 'a4cf12b3c4d5', auth: { phoneId: AUTH.phoneId, kPair: AUTH.kPair } });
+});
+
+test('early start: without this DashPal’s key the manager starts (a restore is settled) but nothing is targeted', async () => {
+  await writeDashpalEnabled(true);
+  await writeSecureTarget({ peripheralId: 'P-1', dashcamId: 'a4cf12b3c4d5' });
+  await dashpalSecrets.writePendingAuth({ ...AUTH, dashcamId: '0123456789ab' });
+  await dashpalSecrets.finalizeAuth();
+  const f = fakeTransport();
+  expect(await startDashpalEarly({ storage: markers().storage, transport: () => f.t })).toBe(true);
+  expect(f.log).toEqual(['start']);
 });
 
 test('early start: a failure is reported, never thrown', async () => {

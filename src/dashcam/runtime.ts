@@ -23,13 +23,15 @@ import type { AppStateLike } from '@/data/foreground';
 import { processTimers } from '@/lib/timers';
 
 import { ensureInstallMarker } from './early';
+import { drawOnceCode, type PairingCode } from './label';
+import { asPhonesRecord, nextPhones, type PhonesEvent, type PhonesRecord } from './newPhone';
 import { loadDashcamTripFacts, type DashcamTripFacts } from './facts';
-import { asPaired, BT_OPT_IN_KEY, BUZZER_TOO_KEY, PAIRED_KEY, type PairedDashcam } from './keys';
+import { asPaired, BT_OPT_IN_KEY, BUZZER_TOO_KEY, LAST_PHONES_KEY, PAIRED_KEY, type PairedDashcam } from './keys';
 import { AUDIO_UNKNOWN, createDashcamLink, type AudioOutputProbe, type DashcamLink, type LinkContext, type Lifecycle, type LinkSnapshot } from './link';
 import { COMMAND } from './protocol';
-import { writeDashpalEnabled, writeSecureTarget } from './secure';
+import { dashpalSecrets, type DashpalSecrets, type StoredAuth } from './secure';
 import { createDashcamStore, UNATTACHED_KEEP_MS } from './store';
-import type { DashcamTransport } from './transport';
+import type { DashcamTransport, TransportTarget } from './transport';
 
 /** The drive host as the dashcam reads it, live. */
 export interface DashcamHostView {
@@ -46,6 +48,8 @@ export interface DashcamState {
   btOptIn: boolean;
   /** the settings were read (before that, `link.paired` is null) */
   loaded: boolean;
+  /** "A new phone was paired with your DashPal" waits to be dismissed (`newPhone.ts`) */
+  newPhone: boolean;
 }
 
 export interface DashcamRuntime {
@@ -68,9 +72,21 @@ export interface DashcamRuntime {
   // ——— settings and pairing ———
   optIn(): Promise<void>;
   setBuzzerToo(on: boolean): Promise<void>;
+  /** Save a pairing whose key is final in `dashpal.auth` and hand it to the auto-connect. */
   pair(record: PairedDashcam): Promise<void>;
-  /** COMMAND 4 if connected, cancel the connection, Android removeBond, clear the pairing. */
+  /** The paired DashPal's auto-connect again (a setup that stepped it aside ended without a new pairing). */
+  resumePaired(): Promise<void>;
+  /** COMMAND 4 if connected (the dashcam deletes this phone's record), cancel the connection, delete the key, clear the pairing. */
   forget(): Promise<void>;
+  /**
+   * Add another phone: a fresh one-time code sent sealed in ADD_PHONE, which opens the dashcam's
+   * pairing window for it. Null when not connected or the write failed. The code is never stored.
+   */
+  addPhone(): Promise<PairingCode | null>;
+  /** This phone's own setup saw this phone count (no new-phone notice for it). */
+  notePhones(dashcamId: string, phones: number): void;
+  /** The new-phone notice was read. */
+  dismissNewPhone(): Promise<void>;
   command(op: number, arg?: number): Promise<boolean>;
   pruneUnattached(): Promise<number>;
   /** The dashcam tables were emptied (a sign-out or account wipe): a live link handshakes again. */
@@ -130,6 +146,10 @@ export interface DashcamRuntimeDeps {
   linkService?: LinkServicePort;
   /** Write the install marker if missing (`early.ts`); default AsyncStorage. */
   ensureInstallMarker?: () => Promise<void>;
+  /** The DashPal SecureStore entries (one store per phone in the e2e bench). */
+  secrets?: DashpalSecrets;
+  /** A pairing was saved or forgotten (the new-phone notice resets). */
+  onPairingChanged?: (paired: PairedDashcam | null) => void;
 }
 
 /** "DashPal drive" so far: the server's rule, without the end-of-drive sync (plan §8.3). */
@@ -145,6 +165,38 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
   const clearRepeat = deps.clearRepeat ?? ((h) => clearInterval(h as ReturnType<typeof setInterval>));
   const settings = createSettingsRepo(deps.db);
   const store = createDashcamStore(deps.db);
+  const secrets = deps.secrets ?? dashpalSecrets;
+  /** a drive was recording at the last row (a drive start retries a waiting reconnect at once) */
+  let lastRecording = false;
+  /** the new-phone record (`dashcam.lastPhones`) and its persistence chain */
+  let phones: PhonesRecord | null = null;
+  let phonesChain: Promise<void> = Promise.resolve();
+  /** the last STATUS phone count fed to the record (per connection) */
+  let fedStatusAt: number | null = null;
+
+  function phonesEvent(e: PhonesEvent): void {
+    const next = nextPhones(phones, e);
+    if (next === phones) return;
+    const changedNotice = (next?.notice ?? false) !== (phones?.notice ?? false);
+    phones = next;
+    const value = next;
+    phonesChain = phonesChain
+      .then(async () => {
+        if (value) await settings.set(LAST_PHONES_KEY, value);
+        else await settings.remove(LAST_PHONES_KEY);
+      })
+      .catch((err: unknown) => report(err, 'phones'));
+    if (changedNotice) notify();
+  }
+
+  /** Each sealed STATUS's phone count (the link is authenticated: these are the DashPal's own). */
+  function feedStatus(snap: LinkSnapshot): void {
+    const st = snap.status;
+    const paired = snap.paired;
+    if (!st || !paired || snap.lifecycle !== 'connected' || st.at === fedStatusAt) return;
+    fedStatusAt = st.at;
+    phonesEvent({ kind: 'count', dashcamId: paired.dashcamId, count: st.bondCount, now: now() });
+  }
   const listeners = new Set<(s: DashcamState) => void>();
   let buzzerToo = false;
   let btOptIn = false;
@@ -259,15 +311,20 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     audioOutput: (fresh) => audioOutput(fresh),
     ...(deps.holdAwake ? { holdAwake: deps.holdAwake } : {}),
     onChange: () => notify(),
+    onPaired: (count) => {
+      const paired = link.snapshot().paired;
+      if (paired) phonesEvent({ kind: 'count', dashcamId: paired.dashcamId, count, now: now() });
+    },
     onError: (e, ctx) => report(e, `link ${ctx}`),
   });
 
   function state(): DashcamState {
-    return { link: link.snapshot(), buzzerToo, btOptIn, loaded };
+    return { link: link.snapshot(), buzzerToo, btOptIn, loaded, newPhone: phones?.notice === true && phones.dashcamId === link.snapshot().paired?.dashcamId };
   }
 
   function notify(): void {
     const s = state();
+    feedStatus(s.link);
     driveLinkService(s.link);
     for (const fn of [...listeners]) {
       try {
@@ -343,8 +400,12 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
   const appSub = deps.appState?.addEventListener('change', (s) => {
     const wasForeground = foreground;
     foreground = s === 'active';
-    // Back in front: a refused start of the link service may now succeed.
-    if (foreground && !wasForeground) service.refused = false;
+    // Back in front: a refused start of the link service may now succeed, and a reconnect that waits
+    // (a soft repair, a backoff) tries at once (an iPhone outside a drive cannot fire its timers).
+    if (foreground && !wasForeground) {
+      service.refused = false;
+      transport?.retryNow();
+    }
     syncRepeat();
     link.tick();
     driveLinkService();
@@ -373,26 +434,49 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     detach = transport.attach(link);
   }
 
-  async function connectPaired(paired: PairedDashcam | null): Promise<void> {
-    if (!paired) {
+  const targetOf = (paired: PairedDashcam, auth: StoredAuth): TransportTarget => ({
+    peripheralId: paired.peripheralId,
+    dashcamId: paired.dashcamId,
+    auth: { phoneId: auth.phoneId, kPair: auth.kPair },
+  });
+
+  async function connectPaired(paired: PairedDashcam | null, auth: StoredAuth | null): Promise<void> {
+    if (!paired || !auth) {
       transport?.setTarget(null);
       return;
     }
     const t = getTransport();
     if (!t) return;
-    t.setTarget({ peripheralId: paired.peripheralId, dashcamId: paired.dashcamId });
+    t.setTarget(targetOf(paired, auth));
     await t.start();
+  }
+
+  /** This pairing's key, or null when it has none on this phone (the record cannot be used). */
+  async function keyFor(paired: PairedDashcam): Promise<StoredAuth | null> {
+    const auth = await secrets.readAuth().catch((e: unknown) => {
+      report(e, 'read key');
+      return null;
+    });
+    return auth && auth.dashcamId === paired.dashcamId ? auth : null;
   }
 
   const ready = (async () => {
     try {
       void (deps.ensureInstallMarker ?? ensureInstallMarker)().catch((e: unknown) => report(e, 'install marker'));
-      const got = await settings.getMany([PAIRED_KEY, BUZZER_TOO_KEY, BT_OPT_IN_KEY]);
-      const paired = asPaired(got[PAIRED_KEY]);
+      const got = await settings.getMany([PAIRED_KEY, BUZZER_TOO_KEY, BT_OPT_IN_KEY, LAST_PHONES_KEY]);
+      phones = asPhonesRecord(got[LAST_PHONES_KEY]);
+      let paired = asPaired(got[PAIRED_KEY]);
       if (!paired && got[PAIRED_KEY] !== null && got[PAIRED_KEY] !== undefined) {
         // A link v1 pairing (Bluetooth bonding), or an unreadable record: no DashPal speaks it, so
         // it goes, with its SecureStore peripheral; the driver sets the DashPal up again.
         await settings.remove(PAIRED_KEY).catch((e: unknown) => report(e, 'drop v1 pairing'));
+      }
+      const auth = paired ? await keyFor(paired) : null;
+      if (paired && !auth) {
+        // A pairing whose key is not on this phone (a backup restored to a new phone: the key is
+        // "this device only"): it cannot connect, so it goes; the driver sets the DashPal up here.
+        await settings.remove(PAIRED_KEY).catch((e: unknown) => report(e, 'drop keyless pairing'));
+        paired = null;
       }
       buzzerToo = got[BUZZER_TOO_KEY] === true;
       btOptIn = got[BT_OPT_IN_KEY] === true;
@@ -402,12 +486,12 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
       reattach();
       syncRepeat();
       if (paired) {
-        await connectPaired(paired);
+        await connectPaired(paired, auth);
       } else {
         // Nobody to reconnect at launch: the transport attaches only when setup or the detector
         // asks. Without an opt-in either, the next launch does not start the BLE manager.
-        if (!btOptIn) await writeDashpalEnabled(false).catch((e: unknown) => report(e, 'secure flag'));
-        await writeSecureTarget(null).catch((e: unknown) => report(e, 'secure target'));
+        if (!btOptIn) await secrets.writeEnabled(false).catch((e: unknown) => report(e, 'secure flag'));
+        await secrets.writeTarget(null).catch((e: unknown) => report(e, 'secure target'));
       }
     } catch (e) {
       loaded = true;
@@ -429,6 +513,9 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     transport: getTransport,
 
     row(row, drive) {
+      // A drive starting: a reconnect that waits (a soft repair, a backoff) tries at once.
+      if (drive.recording && !lastRecording) transport?.retryNow();
+      lastRecording = drive.recording;
       const verdict = link.row(row, drive);
       if (!verdict || drive.clientTripId === null) return;
       const t = totals.get(drive.clientTripId) ?? { movingS: 0, coveredS: 0 };
@@ -468,7 +555,7 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     async optIn() {
       await settings.set(BT_OPT_IN_KEY, true);
       btOptIn = true;
-      await writeDashpalEnabled(true).catch((e: unknown) => report(e, 'secure flag'));
+      await secrets.writeEnabled(true).catch((e: unknown) => report(e, 'secure flag'));
       notify();
     },
 
@@ -480,32 +567,63 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     },
 
     async pair(record) {
+      const auth = await keyFor(record);
+      if (!auth) throw new Error('no pairing key for this DashPal');
       await settings.set(PAIRED_KEY, record);
       await settings.set(BT_OPT_IN_KEY, true);
       btOptIn = true;
-      await writeDashpalEnabled(true).catch((e: unknown) => report(e, 'secure flag'));
-      await writeSecureTarget({ peripheralId: record.peripheralId, dashcamId: record.dashcamId }).catch((e: unknown) => report(e, 'secure target'));
+      await secrets.writeEnabled(true).catch((e: unknown) => report(e, 'secure flag'));
+      await secrets.writeTarget({ peripheralId: record.peripheralId, dashcamId: record.dashcamId }).catch((e: unknown) => report(e, 'secure target'));
+      if (phones && phones.dashcamId !== record.dashcamId) phonesEvent({ kind: 'reset' });
       link.setPaired(record);
       syncRepeat();
       notify();
-      await connectPaired(record);
+      deps.onPairingChanged?.(record);
+      await connectPaired(record, auth);
+    },
+
+    async resumePaired() {
+      const paired = link.snapshot().paired;
+      if (!paired) return;
+      await connectPaired(paired, await keyFor(paired));
     },
 
     async forget() {
-      const paired = link.snapshot().paired;
       if (link.snapshot().lifecycle === 'connected') {
         await link.command(COMMAND.FORGET_ME).catch((e: unknown) => report(e, 'forget me'));
       }
       transport?.setTarget(null);
-      if (paired && deps.platform === 'android') {
-        const t = getTransport();
-        await t?.removeBond(paired.peripheralId).catch((e: unknown) => report(e, 'removeBond'));
-      }
       await settings.remove(PAIRED_KEY);
-      await writeSecureTarget(null).catch((e: unknown) => report(e, 'secure target'));
+      await secrets.deleteAuth().catch((e: unknown) => report(e, 'delete key'));
+      await secrets.writeTarget(null).catch((e: unknown) => report(e, 'secure target'));
+      phonesEvent({ kind: 'reset' });
       link.setPaired(null);
       syncRepeat();
       notify();
+      deps.onPairingChanged?.(null);
+    },
+
+    async addPhone() {
+      const paired = link.snapshot().paired;
+      if (!paired || link.snapshot().lifecycle !== 'connected') return null;
+      const code = drawOnceCode();
+      // A rise within 3 min is this phone's own doing: marked before the window opens.
+      phonesEvent({ kind: 'own_add', dashcamId: paired.dashcamId, now: now() });
+      const ok = await link.addPhone(code.S);
+      if (!ok) {
+        code.S.fill(0);
+        return null;
+      }
+      return code;
+    },
+
+    notePhones(dashcamId, count) {
+      phonesEvent({ kind: 'own_setup', dashcamId, count });
+    },
+
+    async dismissNewPhone() {
+      phonesEvent({ kind: 'dismiss' });
+      await phonesChain;
     },
 
     command: (op, arg) => link.command(op, arg),
