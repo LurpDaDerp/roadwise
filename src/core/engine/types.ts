@@ -2,6 +2,8 @@
 // "Event detection", plan §2, §6).
 import type { DriveEvent, EventType, Tier } from '@scoring';
 
+import type { SwitchSignal } from '../detectors/phoneSwitch';
+
 /**
  * One second of fused sensing at 1 Hz: the GNSS fix, the IMU extremes over that second and the
  * phone-state signals. Accelerations are in g, speeds in m/s, angles in radians unless noted.
@@ -83,8 +85,17 @@ export interface DetectorContext {
    * start itself for a restart (`TripSession.warmup`).
    */
   warmupEndsAt: number;
-  /** A hands-free call is active (where the native signal exists): phone events are suppressed. */
+  /**
+   * A call is active (the iOS CallKit observer, live only): phone motion is not counted. The rows'
+   * own `call` key does the same on iPhone, live and rebuilt alike (`phoneUse.ts`).
+   */
   callActive: boolean;
+  /** How this drive tells a screen switch from a lock (`phoneSwitch.ts`), fixed at the Start tap. */
+  switchSignal: SwitchSignal;
+  /** iOS: the lock-report delay measured before the drive (ms), or null; Android null. */
+  lockDelayMs: number | null;
+  /** The phone that recorded the drive. */
+  platform: 'ios' | 'android';
 }
 
 /** What the detector measured; shown on the summary and sent with the event (plan §3). */
@@ -116,8 +127,15 @@ export interface OpenEpisode {
   /** The tier so far (speeding: the current row's; phone: severe). */
   tier: Tier;
   startedAt: number;
-  /** Long enough to count as an incident (speeding 5 s / 3 s severe; phone 3 s). */
+  /** Long enough to count as an incident (speeding 5 s / 3 s severe; phone 3 s, a switch 3 s / 15 s). */
   confirmed: boolean;
+  /** Phone: the latest row of use so far (motion or a counting switch). Speeding never sets it. */
+  lastUseAt?: number;
+  /**
+   * Phone: `switching` while a counted screen switch goes on, `hold` while an iPhone departure
+   * waits out its 15 s inside an open pickup, else null. Speeding never sets it.
+   */
+  phase?: 'switching' | 'hold' | null;
 }
 
 /** Every detector behind one `push`/`flush`, plus what the engine reads per row. */
@@ -128,4 +146,9 @@ export interface DetectorSuite extends Detector {
   openPhone(): OpenEpisode | null;
   /** A speeding or phone episode is active on the latest row: its distance is not safe miles. */
   unsafe(): boolean;
+  /**
+   * iPhone: the latest in-drive lock proof (a lock reported within 15 s of RoadWise leaving the
+   * screen), with its delay `row.ts − left − one row`, ms; null before any.
+   */
+  lockProof(): { delayMs: number } | null;
 }

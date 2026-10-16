@@ -5,6 +5,7 @@ import { createSpeedingDetector } from './speeding';
 
 export { createHarshDetector } from './harsh';
 export { createPhoneUseDetector, type PhoneUseDetector } from './phoneUse';
+export type { SwitchSignal } from './phoneSwitch';
 export { createSpeedingDetector, type SpeedingDetector } from './speeding';
 
 /**
@@ -21,5 +22,6 @@ export function createDetectors(newId: () => string): DetectorSuite {
     openSpeeding: () => speeding.open(),
     openPhone: () => phone.open(),
     unsafe: () => speeding.active() || phone.active(),
+    lockProof: () => phone.lockProof(),
   };
 }

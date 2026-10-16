@@ -2,8 +2,8 @@ import { createPhoneUseDetector } from '@/core/detectors/phoneUse';
 import { counterIds, ctx, drive, mph, only, seq, T0 } from '@/core/detectors/__fixtures__/rows';
 
 const handled = { handlingScore: 0.9, gravityStability: 0.6, orientationDelta: 0.2 };
-/** A navigation app in front: unlocked, screen on, RoadWise in the background. */
-const navigation = { locked: false, screenOn: true, appForeground: false };
+/** A navigation app opened with the navigation button: unlocked, screen on, RoadWise in the background, the rows stamped. */
+const navigation = { locked: false, screenOn: true, appForeground: false, exempt: 'nav' } as const;
 
 describe('phone pickup and handling (spec event table, "Rules against false positives")', () => {
   test('8 s of handling at 35 mph is one pickup of 8 s (−40), no handling event', () => {
@@ -49,7 +49,7 @@ describe('phone pickup and handling (spec event table, "Rules against false posi
     expect(drive(createPhoneUseDetector(counterIds()), poor).all).toEqual([]);
   });
 
-  test('an unlocked screen with another app in front (navigation) is not phone use', () => {
+  test('a navigation app opened with the navigation button is not phone use', () => {
     const rows = seq([10, { speed: mph(35) }], [120, { speed: mph(35), ...navigation }], [10, { speed: mph(35) }]);
     expect(drive(createPhoneUseDetector(counterIds()), rows).all).toEqual([]);
   });
@@ -61,7 +61,7 @@ describe('phone pickup and handling (spec event table, "Rules against false posi
     expect(drive(createPhoneUseDetector(counterIds()), rows).all).toEqual([]);
   });
 
-  test('handling the phone with another app in front is still a pickup', () => {
+  test('handling the phone over a navigation app opened with the button is still a pickup', () => {
     const nav = { speed: mph(35), ...navigation };
     const rows = seq([10, nav], [8, { ...nav, ...handled }], [10, nav]);
     const e = only(drive(createPhoneUseDetector(counterIds()), rows).all);

@@ -61,7 +61,14 @@ export function runTrace(trace: Trace): TraceResult {
   const suite = createDetectors(counterIds());
   const base = trace.rows[0]?.ts ?? 0;
   // A drive started stopped at the first row: the 30 s warm-up.
-  const ctx: DetectorContext = { warmupEndsAt: base + NO_EVENTS_FIRST_S * 1000, callActive: trace.callActive === true };
+  const switchSignal = trace.switchSignal ?? 'reliable';
+  const ctx: DetectorContext = {
+    warmupEndsAt: base + NO_EVENTS_FIRST_S * 1000,
+    callActive: trace.callActive === true,
+    switchSignal,
+    lockDelayMs: trace.lockDelayMs ?? null,
+    platform: trace.platform ?? (switchSignal === 'lagged' || switchSignal === 'unproven' ? 'ios' : 'android'),
+  };
   const events: DetectedEvent[] = [];
   for (const row of trace.rows) events.push(...suite.push(row, limitAt(trace.limits, row.ts), ctx));
   events.push(...suite.flush());

@@ -275,15 +275,15 @@ m and m/s for GNSS, degrees clockwise from true north for `course`.
     (`drivesense.lockProbeTries`); without a passcode none runs and `getState` clears the proof,
     the delay and the counter. During a drive the app is alive anyway, and the detector's own
     in-drive proof is written back with `markLockProof`.
-- **Phone use reads none of this.** On both platforms the phone-use detector
-  (`src/core/detectors/phoneUse.ts`) takes no lock, unlock or foreground-app evidence: pickups and
-  handling come from motion alone (`handlingScore`). A navigation app (or any app) in front of a
-  phone that stays still in its mount is never phone use. Using a phone without moving it much, in
-  its mount or held steadily in the hand, is not detected, and handling time counts only while the
-  phone moves. Neither platform offers a better signal: iOS has no public lock signal and no way for
-  an app to see which app is in front, and on Android the foreground app would need Usage access
-  (`PACKAGE_USAGE_STATS`), which the app does not ask for. `locked`, `screenOn`, `appForeground` and
-  `lockSignal` stay in the rows and `getState()` for the drive state and the diagnostics screen.
+- **Phone use reads these flags for screen switches** (`src/core/detectors/phoneSwitch.ts`,
+  `phoneUse.ts`): RoadWise not in front (`appForeground` false) while the phone is in use is a
+  screen switch, unless the row is excused (the drive host's `exempt` stamp, a call's own screen from
+  the row's `call` key, the warm-up). Android: unlocked with its screen on, exact. iPhone: not
+  reported `locked`; because the report lags about 10 s, a switch counts only after 15 s, a lock
+  report cuts it back to the estimated press, and only a phone with a lock proof (above) counts at
+  all; `lockSignal: 'unreliable'` never does. Motion (`handlingScore`) is the other evidence, whatever
+  app is in front. Which app is in front is never read: iOS offers no way to, and on Android it would
+  take Usage access (`PACKAGE_USAGE_STATS`), which the app does not ask for.
 
 ---
 

@@ -100,7 +100,7 @@ async function replay(s: Scenario, list: EngineEvent[]): Promise<{ finalized: Re
     newId: () => `id${(n += 1)}`,
     limits: { lookup: () => s.limitFor(current), prefetch: () => {} },
     createDetectors: () => createDetectors(() => `e${(n += 1)}`),
-    ctx: () => ({ callActive: s.callActive }),
+    ctx: () => ({ callActive: s.callActive, switchSignal: 'reliable', lockDelayMs: null, platform: 'android' }),
     onAlert: () => {},
     onCheckpoint: async () => {},
     onFinalize: async (closed) => {

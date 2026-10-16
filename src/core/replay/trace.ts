@@ -86,6 +86,12 @@ export const traceSchema = z.strictObject({
   name: z.string().min(1),
   /** A hands-free call is active for the whole trace. */
   callActive: z.boolean().optional(),
+  /** The drive's screen-switch signal (default `reliable`: an Android phone). */
+  switchSignal: z.enum(['reliable', 'lagged', 'unproven', 'none']).optional(),
+  /** iOS: the lock delay measured before the drive, ms (default none). */
+  lockDelayMs: z.number().int().nonnegative().nullable().optional(),
+  /** The phone (default `android`, or `ios` for an iPhone-only signal). */
+  platform: z.enum(['ios', 'android']).optional(),
   rows: z.array(featureRowSchema).min(1),
   limits: z.array(limitEntrySchema),
   expected: z.array(expectationSchema),

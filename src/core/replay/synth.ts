@@ -63,8 +63,11 @@ const unknown = (fromTs: number) => ({ fromTs, limitMps: null, source: 'unknown'
 const at = (i: number): number => T0 + i * 1000;
 const between = (i: number, a: number, b: number): boolean => i >= a && i < b;
 
-/** A navigation app (or any other app) in front: unlocked, screen on, RoadWise in the background. */
-const NAVIGATION_IN_FRONT = { locked: false, screenOn: true, appForeground: false } as const;
+/**
+ * The navigation app opened with the navigation button: unlocked, screen on, RoadWise in the
+ * background, and every row stamped with the button's exemption by the host.
+ */
+const NAVIGATION_IN_FRONT = { locked: false, screenOn: true, appForeground: false, exempt: 'nav' } as const;
 
 export const TRACE_BUILDERS: Record<string, () => Trace> = {
   /** A clean commute at the limit: nothing fires. */
@@ -290,8 +293,9 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
   }),
 
   /**
-   * A navigation app in front the whole drive: unlocked, screen on, RoadWise in the background, the
-   * phone steady in its mount with road shake, potholes, a GPS gap and a stop: no phone use.
+   * The navigation app, opened with the navigation button, in front the whole drive: unlocked,
+   * screen on, RoadWise in the background, the phone steady in its mount with road shake, potholes,
+   * a GPS gap and a stop: no phone use.
    */
   'phone-navigation-in-front': () => ({
     name: 'phone-navigation-in-front',
@@ -310,7 +314,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** The phone lifted and handled for 10 s with a navigation app in front: a pickup. */
+  /** The phone lifted and handled for 10 s over the navigation app opened with the button: a pickup (motion counts there too). */
   'phone-handled-over-navigation': () => ({
     name: 'phone-handled-over-navigation',
     rows: drive(200, (i) => ({

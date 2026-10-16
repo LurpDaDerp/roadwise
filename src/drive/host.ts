@@ -38,7 +38,7 @@ import { KMH_PER_MPH, metersToMiles, mpsToMph } from '@/lib/units';
 
 import type { DriveDisplay } from './display';
 import { clearDropNotice, writeDropNotice } from './dropNotice';
-import { detectorContext, isBusyStatus } from './policy';
+import { detectorContext, isBusyStatus, NO_SWITCH, type PhoneSwitchCtx } from './policy';
 import type { DriveSource } from './source';
 import { createTicker, type Scheduler } from './ticks';
 
@@ -185,6 +185,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let booted = false;
   let captureOn = false;
   let callActive = false;
+  /** This drive's screen-switch signal (fixed at the Start tap or restored on adopt), and the phone. */
+  let phoneSwitch: PhoneSwitchCtx = NO_SWITCH;
+  let platform: 'ios' | 'android' = 'android';
   let screenLocked = false;
   let lastFinalized: LastFinalized = null;
   let soundFailedThisDrive = false;
@@ -250,7 +253,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       },
     },
     createDetectors: () => createDetectors(newId),
-    ctx: () => detectorContext(callActive),
+    ctx: () => detectorContext(callActive, phoneSwitch, platform),
     onAlert(alert: AlertEvent) {
       const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
       // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.

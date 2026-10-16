@@ -127,7 +127,7 @@ test('a rebuilt drive agrees with the live engine on movement: the mark (bar saf
     newId: () => uuid(7),
     limits: { lookup: () => ({ limitMps: 35 * 0.44704, source: 'posted', matchConfidence: 1, parallelRoads: false }), prefetch: () => {} },
     createDetectors: () => createDetectors(() => 'x'),
-    ctx: () => ({ callActive: true }),
+    ctx: () => ({ callActive: true, switchSignal: 'reliable', lockDelayMs: null, platform: 'android' }),
     onAlert: () => {},
     onCheckpoint: async () => {},
     onFinalize: async () => {},
