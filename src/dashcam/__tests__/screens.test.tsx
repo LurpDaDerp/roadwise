@@ -559,6 +559,25 @@ describe('a DashPal link (/dashpal?d=…)', () => {
     expect(await w2.settings.get(PENDING_SETUP_KEY)).toBeNull();
   });
 
+  it('the DashPal already paired with no link code held (onboarding’s DashPal step used it): Home; with its code held: the Pair screen (Set up again)', async () => {
+    const store = new Map<string, string>();
+    const secrets = createDashpalSecrets(() => ({
+      getItemAsync: async (k: string) => store.get(k) ?? null,
+      setItemAsync: async (k: string, v: string) => void store.set(k, v),
+      deleteItemAsync: async (k: string) => void store.delete(k),
+    }));
+    setActiveDashcam(createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } }));
+    const w = await appWorld();
+    await w.render(<DashpalLink d={PAIRED.dashcamId} now={() => 5} secrets={secrets} />);
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
+    expect(mockRouter.replace).not.toHaveBeenCalledWith(setupHref({ link: PAIRED.dashcamId }));
+    mockRouter.replace.mockClear();
+    await secrets.writePendingCode({ at: 5, dashcamId: PAIRED.dashcamId, code: 'C944BA9XVGR6PTJDKBQ2BR9W54RG' });
+    const w2 = await appWorld();
+    await w2.render(<DashpalLink d={PAIRED.dashcamId} now={() => 5} secrets={secrets} />);
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith(setupHref({ link: PAIRED.dashcamId })));
+  });
+
   it('during a drive it is held (the dashcam id, never the code) and the app goes Home', async () => {
     mockDrive.busy = true;
     const w = await appWorld();

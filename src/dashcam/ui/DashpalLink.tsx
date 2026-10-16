@@ -7,7 +7,9 @@ import { useSession } from '@/data/supabase/session';
 import { useDriveHost } from '@/drive/useDrive';
 
 import { isDashcamId } from '../protocol';
+import { dashpalSecrets, type DashpalSecrets } from '../secure';
 import { PENDING_SETUP_KEY, setupHref } from './links';
+import { useDashcamRuntime } from './useDashcam';
 
 /**
  * `/dashpal[?d=<dashcam id>]`: a DashPal link (the label's QR code read by the phone's own camera;
@@ -15,11 +17,13 @@ import { PENDING_SETUP_KEY, setupHref } from './links';
  * screen, or, while a drive is open, holds the link (`PENDING_SETUP_KEY`: `{at, dashcamId}`, never
  * the code) and goes Home; the prompt host replays it once the drive is over. Signed out, it is held
  * the same way (`signIn: true`) while the route guard shows sign-in, and replayed after it. It waits
- * for the session to be read first.
+ * for the session to be read first. The DashPal already paired, with no code of a link held (the
+ * route held through onboarding, whose DashPal step paired it): Home, nothing to set up.
  */
-export function DashpalLink({ d, now = Date.now }: { d?: string | null; now?: () => number }) {
+export function DashpalLink({ d, now = Date.now, secrets = dashpalSecrets }: { d?: string | null; now?: () => number; secrets?: DashpalSecrets }) {
   const router = useRouter();
   const host = useDriveHost();
+  const runtime = useDashcamRuntime();
   const { status } = useSession();
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
@@ -39,12 +43,20 @@ export function DashpalLink({ d, now = Date.now }: { d?: string | null; now?: ()
         if (live) router.replace('/');
         return;
       }
+      if (dashcamId !== null && runtime?.state().link.paired?.dashcamId === dashcamId) {
+        const held = await secrets.readPendingCode(now()).catch(() => null);
+        if (!live) return;
+        if (!held) {
+          router.replace('/');
+          return;
+        }
+      }
       if (live) router.replace(setupHref({ link: dashcamId }));
     })();
     return () => {
       live = false;
     };
-  }, [host, settings, router, now, dashcamId, status]);
+  }, [host, settings, router, now, dashcamId, status, runtime, secrets]);
 
   return null;
 }
