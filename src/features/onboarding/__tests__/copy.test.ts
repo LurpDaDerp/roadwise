@@ -31,4 +31,14 @@ describe('onboarding copy', () => {
   it.each(all.map((s) => [s]))('%p makes no banned promise', (s) => {
     for (const banned of BANNED_COPY) expect(s).not.toMatch(banned);
   });
+
+  it('says what motion access is for (the walking end and the reminder) and that speed and braking need none', () => {
+    expect(onboardingCopy.motion.body).toBe(
+      'Lets RoadWise tell when you walk away from your car, so a drive you forgot to end stops where you parked, and lets the optional forgot-to-start reminder notice a trip. Speed and braking are measured either way.'
+    );
+    expect(onboardingCopy.motion.denied).toBe(
+      'Motion access is off. Drives still record; one you forget to end stops after the car hasn’t moved for 15 min. You can turn it on in Settings.'
+    );
+    for (const s of strings(onboardingCopy.motion)) expect(s).not.toMatch(/hard braking|detect/i);
+  });
 });

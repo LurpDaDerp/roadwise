@@ -1,4 +1,9 @@
+import { IDLE_END_S } from '@scoring';
+
 import type { StepId } from './flow';
+
+/** The automatic end's minutes (product spec v3 "Ending on its own"), so the words follow the rule. */
+const IDLE_MIN = Math.round(IDLE_END_S / 60);
 
 /**
  * Every string the onboarding stepper prints, in one table. Voice: second person, plain words.
@@ -95,14 +100,13 @@ export const onboardingCopy = {
   },
   motion: {
     title: { ios: 'Motion & Fitness', android: 'Physical activity' },
-    body: "RoadWise uses motion to detect hard braking and to notice when you've stopped driving.",
+    body: 'Lets RoadWise tell when you walk away from your car, so a drive you forgot to end stops where you parked, and lets the optional forgot-to-start reminder notice a trip. Speed and braking are measured either way.',
     allow: 'Allow motion access',
     notNow: 'Not now',
     continue: 'Continue',
     openSettings: 'Open Settings',
     allowed: 'Motion access is allowed.',
-    denied:
-      'Motion access is off, so drives may not end on their own. You can turn it on in Settings.',
+    denied: `Motion access is off. Drives still record; one you forget to end stops after the car hasn’t moved for ${IDLE_MIN} min. You can turn it on in Settings.`,
     unavailable: "Your phone didn't let us ask here. You can turn it on in Settings.",
     cantCheck: "We couldn't check motion access on this phone.",
     failed: "Your phone didn't answer. Try again.",

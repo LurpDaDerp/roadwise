@@ -2,6 +2,8 @@
  * The permission screen's words. Each line says only what the reading supports and what it means
  * for recording a drive; nothing nags.
  */
+import { IDLE_END_S } from '@scoring';
+
 import type { PermissionPlatform } from '@/core/permissions';
 
 import type { Fix, RowId, RowStatus } from './health';
@@ -48,7 +50,9 @@ export function rowDetail(id: RowId, status: RowStatus): string {
     case 'precise':
       return status === 'ok' ? 'Speed and distance are measured accurately.' : 'Approximate location makes speed and miles rough.';
     case 'motion':
-      return status === 'ok' ? 'Catches hard braking and notices when your drive is over.' : "Without it, drives may not end on their own.";
+      return status === 'ok'
+        ? 'A drive you forget to end stops when you walk away, and the reminder can notice a trip.'
+        : `Without it, a forgotten drive ends after ${Math.round(IDLE_END_S / 60)} min.`;
     case 'notifications':
       return status === 'ok' ? 'Your weekly recap, league results and friend requests can reach you.' : "You won't get your weekly recap or league results.";
   }

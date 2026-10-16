@@ -25,7 +25,8 @@ export function googleServicesFile(
 /** The permission strings, in plain words. A drive needs location only "While Using". */
 export const PERMISSION_COPY = {
   location: 'RoadWise uses your location to measure speed and miles during a drive you start.',
-  motion: "RoadWise uses motion to detect hard braking and when you've stopped driving.",
+  motion:
+    'RoadWise uses motion activity to tell when you walk away from your car, so a drive you forgot to end stops where you parked, and so the optional forgot-to-start reminder can notice a trip.',
   camera: 'RoadWise uses the camera only to scan friend QR codes — video never leaves your phone.',
   bluetooth: 'RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts on your phone and add its events to your drives.',
 } as const;

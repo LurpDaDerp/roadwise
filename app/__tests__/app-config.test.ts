@@ -151,6 +151,13 @@ describe('permissions (v3)', () => {
     }
   });
 
+  test('the Motion & Fitness string says what motion activity is for, and claims no braking or speed', () => {
+    expect(PERMISSION_COPY.motion).toBe(
+      'RoadWise uses motion activity to tell when you walk away from your car, so a drive you forgot to end stops where you parked, and so the optional forgot-to-start reminder can notice a trip.'
+    );
+    expect(PERMISSION_COPY.motion).not.toMatch(/brak|speed|detect/i);
+  });
+
   test('the deep link scheme stays roadwise', () => {
     expect(build().scheme).toBe('roadwise');
   });

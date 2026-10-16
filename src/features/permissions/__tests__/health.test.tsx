@@ -5,6 +5,7 @@
 import { screen, waitFor } from '@testing-library/react-native';
 
 import { appWorld, clearQueryClients, fakeAdapter, fakeAppState, snap, T0, tap } from '../__fixtures__/harness';
+import { rowDetail } from '../copy';
 import { healthRows, overall } from '../health';
 import { PermissionsScreen } from '../PermissionsScreen';
 
@@ -13,6 +14,13 @@ jest.mock('@/data/supabase/session', () => ({ useSession: () => ({ session: { us
 jest.mock('expo-router', () => ({ useRouter: () => ({ back: jest.fn(), push: jest.fn(), canGoBack: () => true }) }));
 
 afterEach(() => clearQueryClients());
+
+test('the motion row says what motion access does, and what a phone without it gets', () => {
+  expect(rowDetail('motion', 'ok')).toBe('A drive you forget to end stops when you walk away, and the reminder can notice a trip.');
+  expect(rowDetail('motion', 'off')).toBe('Without it, a forgotten drive ends after 15 min.');
+  expect(rowDetail('motion', 'attention')).toBe(rowDetail('motion', 'off'));
+  for (const s of ['ok', 'off'] as const) expect(rowDetail('motion', s).length).toBeLessThanOrEqual(100);
+});
 
 describe('healthRows', () => {
   it('all on: every row ok, While Using is enough', () => {
