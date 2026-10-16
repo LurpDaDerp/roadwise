@@ -69,6 +69,13 @@ const between = (i: number, a: number, b: number): boolean => i >= a && i < b;
  */
 const NAVIGATION_IN_FRONT = { locked: false, screenOn: true, appForeground: false, exempt: 'nav' } as const;
 
+/** Another app in front of an unlocked phone, reached any other way than the navigation button: a screen switch. */
+const OTHER_APP = { locked: false, screenOn: true, appForeground: false } as const;
+/** RoadWise in front of an unlocked phone with its screen on. */
+const ROADWISE = { locked: false, screenOn: true, appForeground: true } as const;
+/** iPhone: the lock report (protected data gone) with RoadWise in the background. */
+const IOS_LOCKED = { locked: true, screenOn: false, appForeground: false } as const;
+
 export const TRACE_BUILDERS: Record<string, () => Trace> = {
   /** A clean commute at the limit: nothing fires. */
   'clean-commute': () => ({
@@ -324,6 +331,101 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     })),
     limits: [posted(35)],
     expected: [{ type: 'phone_pickup', startsNear: at(100), durationMin: 9, durationMax: 11 }],
+  }),
+
+  /** Android: 41 s in another app at 35 mph: one pickup from the first away row, and handling past 15 s. */
+  'phone-switch-android': () => ({
+    name: 'phone-switch-android',
+    rows: drive(240, (i) => (between(i, 100, 141) ? OTHER_APP : ROADWISE)),
+    limits: [posted(35)],
+    expected: [
+      { type: 'phone_pickup', startsNear: at(100), durationMin: 40, durationMax: 42 },
+      { type: 'phone_handling', startsNear: at(115), tier: 'severe' },
+    ],
+  }),
+
+  /** A counted switch through a 6-s GPS gap is one pickup, not two. */
+  'phone-switch-gps-gap': () => ({
+    name: 'phone-switch-gps-gap',
+    rows: drive(240, (i) => {
+      if (!between(i, 100, 160)) return ROADWISE;
+      if (between(i, 120, 126)) return { ...OTHER_APP, gnssValid: false, hAcc: 9999, speedAcc: -1, course: -1, speedMph: 35, speed: -1 };
+      return OTHER_APP;
+    }),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), durationMin: 59, durationMax: 61 }],
+  }),
+
+  /** Android: RoadWise not in front while the phone is locked with its screen off: never a switch. */
+  'phone-switch-locked': () => ({
+    name: 'phone-switch-locked',
+    rows: drive(240, (i) => (between(i, 100, 161) ? { locked: true, screenOn: false, appForeground: false } : ROADWISE)),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** The dialer in front through a 61-s call: the call's own screen, not a switch. */
+  'phone-switch-call': () => ({
+    name: 'phone-switch-call',
+    rows: drive(240, (i) => (between(i, 100, 161) ? { ...OTHER_APP, call: 'live' as const } : ROADWISE)),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** Another app in front while parked before the car ever moved, kept as it pulls away: charged from the first second above 5 mph. */
+  'phone-switch-parked-start': () => ({
+    name: 'phone-switch-parked-start',
+    rows: drive(200, (i) => ({ ...(i < 90 ? OTHER_APP : ROADWISE), speedMph: i < 60 ? 0 : 35 })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(60), durationMin: 29, durationMax: 31, stoppedInTraffic: false }],
+  }),
+
+  /**
+   * Android: three 2-s switches (each too short to count alone) with 4 s back in RoadWise between
+   * them: one pickup at the third return, from the first one's start, no handling.
+   */
+  'phone-switch-burst': () => ({
+    name: 'phone-switch-burst',
+    rows: drive(240, (i) => (between(i, 100, 102) || between(i, 106, 108) || between(i, 112, 114) ? OTHER_APP : ROADWISE)),
+    limits: [posted(35)],
+    expected: [
+      { type: 'phone_pickup', startsNear: at(100), durationMin: 14, durationMax: 14 },
+      { type: 'phone_handling', startsNear: at(100), absent: true },
+    ],
+  }),
+
+  /** iPhone: the side button pressed with RoadWise in front; its lock report 10 s later: not a switch. */
+  'phone-switch-ios-lock': () => ({
+    name: 'phone-switch-ios-lock',
+    switchSignal: 'lagged',
+    platform: 'ios',
+    rows: drive(240, (i) => (between(i, 100, 110) ? OTHER_APP : i >= 110 && i < 200 ? IOS_LOCKED : ROADWISE)),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** iPhone: a lock report 17 s late: counted at 15 s, then recognised as a lock and dropped. */
+  'phone-switch-ios-slow-lock': () => ({
+    name: 'phone-switch-ios-slow-lock',
+    switchSignal: 'lagged',
+    platform: 'ios',
+    rows: drive(240, (i) => (between(i, 100, 117) ? OTHER_APP : i >= 117 && i < 200 ? IOS_LOCKED : ROADWISE)),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** iPhone: 41 s in another app: one pickup from the first away row (it counts at 15 s). */
+  'phone-switch-ios': () => ({
+    name: 'phone-switch-ios',
+    switchSignal: 'lagged',
+    platform: 'ios',
+    rows: drive(240, (i) => (between(i, 100, 141) ? OTHER_APP : ROADWISE)),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), durationMin: 40, durationMax: 42 }],
   }),
 
   /** The limit is unknown for a stretch: speed there is not judged. */
