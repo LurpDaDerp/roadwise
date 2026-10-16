@@ -9,6 +9,33 @@ import { tokens, type ColorSet, type Elevation, type HudSet, type TypeScale } fr
 const useReducedMotion: () => boolean =
   typeof Reanimated.useReducedMotion === 'function' ? Reanimated.useReducedMotion : () => false;
 
+/**
+ * The OS reduce-motion setting (iOS Reduce Motion, Android "Remove animations"), live: Reanimated's
+ * synchronous read for the first frame, then the AccessibilityInfo read and its change events, so a
+ * change made mid-drive applies at the next render. Usable outside a ThemeProvider (the driving
+ * screen gates its own motion with it).
+ */
+export function useOsReduceMotion(): boolean {
+  const initial = useReducedMotion();
+  const [still, setStill] = useState(initial);
+  useEffect(() => {
+    let live = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((on) => {
+        if (live) setStill(on);
+      })
+      .catch(() => {});
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', (on: boolean) => {
+      if (live) setStill(on);
+    });
+    return () => {
+      live = false;
+      sub.remove();
+    };
+  }, []);
+  return still;
+}
+
 export type Theme = {
   scheme: 'light' | 'dark';
   colors: ColorSet;
@@ -38,22 +65,9 @@ export function ThemeProvider({
   const system = useColorScheme();
   const scheme = forced ?? (system === 'dark' ? 'dark' : 'light');
   // Reanimated reads the setting synchronously, so the first frame after launch already knows;
-  // the AccessibilityInfo subscription below keeps it current.
-  const initialStill = useReducedMotion();
-  const [osStill, setReduceMotion] = useState(initialStill);
+  // the AccessibilityInfo subscription keeps it current.
+  const osStill = useOsReduceMotion();
   const reduceMotion = forcedStill ?? osStill;
-
-  useEffect(() => {
-    let live = true;
-    AccessibilityInfo.isReduceMotionEnabled().then((on) => {
-      if (live) setReduceMotion(on);
-    });
-    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
-    return () => {
-      live = false;
-      sub.remove();
-    };
-  }, []);
 
   const value = useMemo<Theme>(
     () => ({
