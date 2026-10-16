@@ -13,8 +13,8 @@
 //   read (dropped unstarted once the dashcam stopped the alert), `voiceAlways` (the wake line),
 //   `holdSession` (the session stays active between a continuous alert's repeats), `silent`
 //   (haptic only: a routed-elsewhere alert, or a phone alert during a DashPal continuous one) and
-//   `startWithinMs` (a DashPal critical: a tone not loaded or playing by then fails, so the
-//   dashcam's buzzer takes it at once).
+//   `startWithinMs` (a DashPal critical: an audio session not active by then, or then a tone not
+//   loaded or playing by then, fails, so the dashcam's buzzer takes it at once).
 // - Feedback (`feedback`): a one-off nudge that is not a decision — the level-1 tone and a
 //   vibration at the strength it names, on the same rules (style, call) and never a voice.
 // - Audio session: level 1 honours the silent switch only when `l1RespectsSilentSwitch()` says so;
@@ -267,12 +267,12 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
    * false when the step failed (a rejection or a timeout), true otherwise — a step the driver
    * stopped, or an activation that fell back to the audible playback session, is not a failure.
    */
-  async function bounded(fn: () => Promise<void>, run?: Run): Promise<boolean> {
+  async function bounded(fn: () => Promise<void>, run?: Run, timeoutMs: number = STEP_TIMEOUT_MS): Promise<boolean> {
     let timer: unknown;
     const timeout = new Promise<never>((_, reject) => {
       timer = timers.setTimeout(
         () => reject(new Error("alert player: step timed out")),
-        STEP_TIMEOUT_MS,
+        timeoutMs,
       );
     });
     try {
@@ -294,9 +294,9 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
     }
   }
 
-  async function step(run: Run, fn: () => Promise<void>): Promise<boolean> {
+  async function step(run: Run, fn: () => Promise<void>, timeoutMs?: number): Promise<boolean> {
     if (run.stopped) return true;
-    return bounded(fn, run);
+    return bounded(fn, run, timeoutMs);
   }
 
   function enqueue(task: (run: Run) => Promise<void>): Promise<void> {
@@ -372,24 +372,32 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
       try {
         const onCall = read(() => deps.callActive(), false);
         const kind: SessionKind = level === 1 ? sessionForL1() : "playback";
-        const activated = await step(run, () => audio.activate(kind));
-        const volume = (onCall ? TONE_GAIN_IN_CALL : TONE_GAIN)[level];
-        const opts: { volume: number; tone?: AlertTone; startWithinMs?: number } = { volume };
-        if (item.tone) opts.tone = item.tone;
-        if (item.startWithinMs !== undefined) opts.startWithinMs = item.startWithinMs;
-        const played = await step(run, () => audio.play(level, opts));
-        // Silent for the driver, and they must be able to see that; a sound that worked
-        // clears an earlier mark.
-        if (!activated || !played) unavailable();
-        else if (!run.stopped) available();
-        const key = item.voice;
-        if (
-          level >= 2 &&
-          key &&
-          !onCall &&
-          (item.voiceAlways === true || read(() => deps.voiceEnabled(), true))
-        ) {
-          await step(run, () => voice.speak(key, { volume: VOICE_GAIN }));
+        // An item that must start at once (a DashPal critical) gives the activation the same short
+        // bound as the tone's start, and a failed or slow activation fails it there and then (the
+        // dashcam's buzzer takes it), so it never waits out the 5 s step bound in silence.
+        const startWithin = item.startWithinMs;
+        const activated = await step(run, () => audio.activate(kind), startWithin);
+        if (!activated && startWithin !== undefined) {
+          unavailable();
+        } else {
+          const volume = (onCall ? TONE_GAIN_IN_CALL : TONE_GAIN)[level];
+          const opts: { volume: number; tone?: AlertTone; startWithinMs?: number } = { volume };
+          if (item.tone) opts.tone = item.tone;
+          if (startWithin !== undefined) opts.startWithinMs = startWithin;
+          const played = await step(run, () => audio.play(level, opts));
+          // Silent for the driver, and they must be able to see that; a sound that worked
+          // clears an earlier mark.
+          if (!activated || !played) unavailable();
+          else if (!run.stopped) available();
+          const key = item.voice;
+          if (
+            level >= 2 &&
+            key &&
+            !onCall &&
+            (item.voiceAlways === true || read(() => deps.voiceEnabled(), true))
+          ) {
+            await step(run, () => voice.speak(key, { volume: VOICE_GAIN }));
+          }
         }
         // A continuous DashPal alert keeps the session (and the ducking) between repeats; a stop
         // releases it.

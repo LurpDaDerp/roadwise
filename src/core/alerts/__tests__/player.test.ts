@@ -995,4 +995,73 @@ describe("startWithinMs (a DashPal critical's start watchdog)", () => {
     expect(unavailable).toBe(1);
     expect(count(r.calls, "deactivate")).toBe(1);
   });
+
+  it("an activation that stalls fails the item at its start bound, not the 5 s step bound, and the tone is never asked for", async () => {
+    jest.useFakeTimers();
+    try {
+      const r = rig({
+        audio: {
+          activate: (kind: SessionKind) => {
+            r.calls.push(`activate:${kind}`);
+            return new Promise<void>(() => {});
+          },
+        },
+      });
+      let unavailableAt: number | null = null;
+      const t0 = Date.now();
+      const done = createAlertPlayer({ ...r.deps, onUnavailable: () => (unavailableAt = Date.now() - t0) }).deliver(
+        decision(3, { kind: "dashpal", tone: "dp_wake", startWithinMs: 500 }),
+      );
+      await jest.advanceTimersByTimeAsync(499);
+      expect(unavailableAt).toBeNull();
+      await jest.advanceTimersByTimeAsync(2);
+      expect(unavailableAt).toBe(500);
+      await jest.advanceTimersByTimeAsync(STEP_TIMEOUT_MS);
+      await done;
+      expect(r.calls.some((c) => c.startsWith("play:"))).toBe(false);
+      expect(r.calls.some((c) => c.startsWith("speak:"))).toBe(false);
+      expect(count(r.calls, "deactivate")).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("an activation that is refused fails a start-bound item at once; one that fell back to the playback session still plays", async () => {
+    const refused = rig({ audio: { activate: () => Promise.reject(new Error("refused")) } });
+    let unavailable = 0;
+    await createAlertPlayer({ ...refused.deps, onUnavailable: () => (unavailable += 1) }).deliver(
+      decision(3, { kind: "dashpal", tone: "dp_wake", startWithinMs: 500 }),
+    );
+    expect(unavailable).toBe(1);
+    expect(refused.calls.some((c) => c.startsWith("play:"))).toBe(false);
+    const fell = rig({ audio: { activate: () => Promise.reject(Object.assign(new Error("mode"), { fellBack: true })) } });
+    let fellUnavailable = 0;
+    await createAlertPlayer({ ...fell.deps, onUnavailable: () => (fellUnavailable += 1) }).deliver(
+      decision(3, { kind: "dashpal", tone: "dp_wake", startWithinMs: 500 }),
+    );
+    expect(fellUnavailable).toBe(0);
+    expect(fell.calls).toContain(`play:3@${TONE_GAIN[3]}`);
+  });
+
+  it("without a start bound a slow activation still plays (the 5 s step bound only)", async () => {
+    jest.useFakeTimers();
+    try {
+      const r = rig({
+        audio: {
+          activate: (kind: SessionKind) => {
+            r.calls.push(`activate:${kind}`);
+            return new Promise<void>((resolve) => setTimeout(resolve, 1500));
+          },
+        },
+      });
+      let unavailable = 0;
+      const done = createAlertPlayer({ ...r.deps, onUnavailable: () => (unavailable += 1) }).deliver(decision(3));
+      await jest.advanceTimersByTimeAsync(2000);
+      await done;
+      expect(unavailable).toBe(0);
+      expect(r.calls).toContain(`play:3@${TONE_GAIN[3]}`);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
