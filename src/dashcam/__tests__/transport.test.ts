@@ -13,6 +13,7 @@ import { AUTH_CHAR, DASHPAL_SERVICE, decodeRx, encodeRx, encodeTx, PAIRING_SERVI
 import {
   BACKOFF_MAX_MS,
   createBleTransport,
+  IOS_FAULT_RETRY_MAX_MS,
   IOS_MTU_WAIT_MS,
   RESTORE_ID,
   SEAL_FAIL_MAX,
@@ -517,6 +518,63 @@ test('a connect call that errors backs off 1 → 2 → 4 … → 30 s', async ()
   r.ble.connectMode.set(PID, 'resolve');
   await r.clock.advance(30_000);
   expect(r.t.linked()).toBe(true);
+});
+
+test('iOS: a transport fault backs off 1 → 2 → 4 → 8 s and stays at 8 s (inside the time iOS gives after a Bluetooth event)', async () => {
+  const r = rig('ios');
+  r.ble.connectMode.set(PID, 'reject');
+  await up(r, 'ios');
+  expect(connects(r)).toBe(1);
+  for (const w of [1000, 2000, 4000, 8000, 8000, 8000]) {
+    await r.clock.advance(w - 1);
+    const before = connects(r);
+    await r.clock.advance(1);
+    expect(connects(r)).toBe(before + 1);
+  }
+  expect(IOS_FAULT_RETRY_MAX_MS).toBe(8000);
+  // a session that fails as a fault (R_NOT_NOW) is capped too
+  const s = rig('ios');
+  for (let i = 0; i < 6; i++) s.cam.force.session_req = R.NOT_NOW;
+  await up(s, 'ios');
+  for (const w of [1000, 2000, 4000, 8000, 8000]) {
+    s.cam.force.session_req = R.NOT_NOW;
+    const before = connects(s);
+    await s.clock.advance(w);
+    expect(connects(s)).toBe(before + 1);
+  }
+  r.ble.connectMode.set(PID, 'resolve');
+  await r.clock.advance(8000);
+  expect(r.t.linked()).toBe(true);
+});
+
+test('a disconnect during the handshake: iOS asks for the pending connect again at once (no timer); Android reconnects with the backoff', async () => {
+  for (const platform of ['ios', 'android'] as const) {
+    const r = rig(platform);
+    let drops = 3;
+    const write = r.ble.onWrite!;
+    r.ble.onWrite = (w) => {
+      if (drops > 0 && w.characteristic === AUTH_CHAR && w.bytes[0] === 0x20) {
+        drops -= 1;
+        r.ble.drop(PID);
+        throw { message: 'Device is not connected' };
+      }
+      return write(w);
+    };
+    await up(r, platform);
+    if (platform === 'ios') {
+      // three drops in a row, each followed by a pending connect at once; no time passed
+      expect(connects(r)).toBe(4);
+      expect(r.t.linked()).toBe(true);
+    } else {
+      expect(connects(r)).toBe(1);
+      await r.clock.advance(1000);
+      expect(connects(r)).toBe(2);
+      await r.clock.advance(2000);
+      expect(connects(r)).toBe(3);
+      await r.clock.advance(4000);
+      expect(r.t.linked()).toBe(true);
+    }
+  }
 });
 
 test('Bluetooth off drops the link and stops connecting; on again reconnects', async () => {

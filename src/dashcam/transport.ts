@@ -22,8 +22,12 @@
 // starts (`retryNow`), until a verified session clears it. A wrong dashcam proof, another `mac`, or
 // (iOS) no AUTH characteristic is a failed verification: disconnect, the usual backoff (1 -> 30 s), and
 // after 3 in a row `unverified`, still retrying. A non-zero ATT status on an AUTH write, a GATT error,
-// a timeout or a disconnect before a verdict is read is a transport fault: disconnect and back off;
-// never a verdict. The backoff resets only when a session is up.
+// a timeout or a connect that errors is a transport fault: disconnect and back off (1 -> 30 s; iOS at
+// most 8 s, inside the ~10 s iOS gives RoadWise after a Bluetooth event, since a later JS timer may
+// never fire outside a drive); never a verdict. A disconnect before a verdict is read is a link
+// failure too: Android reconnects with the backoff, iOS asks for its pending connect again at once
+// (the pending connect is the wait, and CoreBluetooth wakes RoadWise when the DashPal is reachable).
+// The backoff resets only when a session is up.
 //
 // Connecting: iOS keeps a pending connect by peripheral id (it never times out); Android re-issues
 // `connect(id, { autoconnect: true })` after every disconnect (ble-manager closes the GATT on
@@ -183,6 +187,8 @@ export const RESTORE_ID = 'roadwise.dashpal.central';
 export const MTU = 247;
 export const BACKOFF_MIN_MS = 1000;
 export const BACKOFF_MAX_MS = 30_000;
+/** iOS: a transport fault's retry waits at most this long (inside iOS's ~10 s after a Bluetooth event). */
+export const IOS_FAULT_RETRY_MAX_MS = 8000;
 /** A soft repair's first retry, then every `SOFT_REPAIR_EVERY_MS`. */
 export const SOFT_REPAIR_FIRST_MS = 30_000;
 export const SOFT_REPAIR_EVERY_MS = 60_000;
@@ -482,12 +488,17 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     armConnect(Math.max(1, delayMs));
   }
 
-  /** A transport fault: disconnect, back off (1 -> 30 s). Never a verdict. */
-  function fault(t: TransportTarget, ctx: string, e?: unknown): void {
-    report(e ?? new Error(ctx), ctx);
+  /** The next transport fault's wait: the backoff (1 -> 30 s), at most 8 s on iOS. */
+  function faultWait(): number {
     const wait = backoffMs;
     backoffMs = Math.min(BACKOFF_MAX_MS, backoffMs * 2);
-    dropAndRetry(t, wait, ctx);
+    return platform === 'ios' ? Math.min(IOS_FAULT_RETRY_MAX_MS, wait) : wait;
+  }
+
+  /** A transport fault: disconnect, back off (1 -> 30 s; iOS at most 8 s). Never a verdict. */
+  function fault(t: TransportTarget, ctx: string, e?: unknown): void {
+    report(e ?? new Error(ctx), ctx);
+    dropAndRetry(t, faultWait(), ctx);
   }
 
   /** The dashcam does not know this phone, or speaks an older link: retried slowly, never halted. */
@@ -551,15 +562,17 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
         conn = 'down';
         // Close a half-open GATT before the next try (Android 133 practice).
         api.disconnect(t.peripheralId, true).catch(() => {});
-        const wait = backoffMs;
-        backoffMs = Math.min(BACKOFF_MAX_MS, backoffMs * 2);
-        armConnect(wait);
+        armConnect(faultWait());
       }
     );
   }
 
   async function onConnected(t: TransportTarget, o: { maybeUp: boolean }): Promise<void> {
     const id = t.peripheralId;
+    // This connect attempt only: a later one (iOS asks again at once after a drop mid-handshake)
+    // makes this handshake stale, and nothing it finds then touches the new connection.
+    const mine = attempt;
+    const gone = (): boolean => tgt !== t || attempt !== mine;
     conn = 'setting_up';
     endSession();
     try {
@@ -571,7 +584,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
         await gatt('refreshCache', () => api.refreshCache!(id)).catch((e: unknown) => report(e, 'refreshCache'));
         services = await gatt('retrieveServices', () => api.retrieveServices(id));
       }
-      if (tgt !== t) return;
+      if (gone()) return;
       if (!hasAuthChar(services)) {
         // iOS has no cache refresh and, with no bonding, no Service Changed: it may never find AUTH.
         if (platform === 'ios') verifyFailed(t, 'auth_char_missing');
@@ -579,7 +592,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
         return;
       }
       const info = decodeInfo(await gatt('read INFO', () => api.read(id, DASHPAL_SERVICE, INFO_CHAR)));
-      if (tgt !== t) return;
+      if (gone()) return;
       if (!info) throw new Error('INFO unreadable');
       if (info.dashcamId !== t.dashcamId) {
         verifyFailed(t, 'INFO mac mismatch');
@@ -593,8 +606,8 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
         fault(t, 'the link refused this DashPal');
         return;
       }
-      const outcome = await bounded(runSession(id, info, t.auth, { maybeUp: o.maybeUp, alive: () => tgt === t && conn === 'setting_up' }), SESSION_MS, 'session');
-      if (tgt !== t || conn !== 'setting_up') {
+      const outcome = await bounded(runSession(id, info, t.auth, { maybeUp: o.maybeUp, alive: () => !gone() && conn === 'setting_up' }), SESSION_MS, 'session');
+      if (gone() || conn !== 'setting_up') {
         if (outcome.kind === 'up') outcome.sealer.dispose();
         return;
       }
@@ -614,7 +627,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       sealer = outcome.sealer;
       sealFails = 0;
       await gatt('startNotification', () => api.startNotification(id, DASHPAL_SERVICE, TX_CHAR));
-      if (tgt !== t || conn !== 'setting_up') return;
+      if (gone() || conn !== 'setting_up') return;
       conn = 'up';
       linkInfo = info;
       backoffMs = BACKOFF_MIN_MS;
@@ -624,7 +637,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       sink?.linkUp(info);
       flush();
     } catch (e) {
-      if (tgt !== t) return;
+      if (gone()) return;
       fault(t, 'link setup', e);
     }
   }
@@ -692,11 +705,10 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
         // GATT was closed).
         armConnect(0);
       } else if (prev === 'setting_up') {
-        // Before a verdict was read: a plain link failure, with the backoff.
+        // Before a verdict was read: a plain link failure. iOS: the pending connect again at once (it
+        // is the wait; a timer may never fire outside a drive); Android: with the backoff.
         markDown();
-        const wait = backoffMs;
-        backoffMs = Math.min(BACKOFF_MAX_MS, backoffMs * 2);
-        armConnect(wait);
+        armConnect(platform === 'ios' ? 0 : faultWait());
       } else if (prev === 'down' && retryTimer === null) {
         armConnect(backoffMs);
       }
