@@ -240,3 +240,38 @@ describe('the DashPal link domain', () => {
     expect(c.extra).not.toHaveProperty('linkDomain');
   });
 });
+
+// App Store Connect rejects an upload whose "required reason" API use has no declared reason
+// (ITMS-91053). The declared categories follow what the native Swift sources actually call.
+describe('iOS privacy manifest', () => {
+  const ROOT_DIR = path.join(__dirname, '..', '..');
+  const IOS_DIR = path.join(ROOT_DIR, 'modules', 'drive-sense', 'ios');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- a Node read in a test
+  const { readdirSync } = require('node:fs') as { readdirSync(dir: string): string[] };
+  const swift = readdirSync(IOS_DIR)
+    .filter((f) => f.endsWith('.swift'))
+    .map((f) => fs.readFileSync(path.join(IOS_DIR, f), 'utf8'))
+    .join('\n');
+  const declared = () =>
+    Object.fromEntries(
+      (build().ios?.privacyManifests?.NSPrivacyAccessedAPITypes ?? []).map((t) => [
+        t.NSPrivacyAccessedAPIType,
+        t.NSPrivacyAccessedAPITypeReasons,
+      ])
+    );
+
+  test('UserDefaults (app-only, CA92.1) and system boot time (elapsed time, 35F9.1) are declared', () => {
+    expect(declared()).toEqual({
+      NSPrivacyAccessedAPICategoryUserDefaults: ['CA92.1'],
+      NSPrivacyAccessedAPICategorySystemBootTime: ['35F9.1'],
+    });
+  });
+
+  test('the declared categories match what drive-sense Swift calls', () => {
+    expect(swift).toMatch(/UserDefaults\.standard/);
+    expect(swift).toMatch(/systemUptime/);
+    // An app-group suite would need reason 1C8F.1, and these categories need their own entries.
+    expect(swift).not.toMatch(/UserDefaults\(suiteName/);
+    expect(swift).not.toMatch(/creationDate|modificationDate|attributesOfItem|volumeAvailableCapacity|activeInputModes|mach_absolute_time/);
+  });
+});

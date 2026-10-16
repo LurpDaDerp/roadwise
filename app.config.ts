@@ -106,6 +106,17 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       ...optional('appleTeamId', process.env.EXPO_APPLE_TEAM_ID),
       // The DashPal label's Universal Link (the Associated Domains capability on the bundle id).
       ...optional('associatedDomains', linkDomain ? [`applinks:${linkDomain}`] : undefined),
+      // The app's privacy manifest: the "required reason" APIs drive-sense's Swift calls
+      // (UserDefaults.standard in CaptureController, LockProbe and TripReminder, read and written by
+      // this app only; ProcessInfo.systemUptime in TimeBase, to time events within the app). App Store
+      // Connect rejects an upload without them (ITMS-91053). app/__tests__/app-config.test.ts holds
+      // this list to the APIs the Swift sources use.
+      privacyManifests: {
+        NSPrivacyAccessedAPITypes: [
+          { NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryUserDefaults', NSPrivacyAccessedAPITypeReasons: ['CA92.1'] },
+          { NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategorySystemBootTime', NSPrivacyAccessedAPITypeReasons: ['35F9.1'] },
+        ],
+      },
     },
     android: {
       package: 'com.lurp.safedrive',
