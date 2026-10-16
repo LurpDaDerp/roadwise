@@ -271,13 +271,14 @@ describeSim('DashPal events (firmware ring ↔ app store)', () => {
       await t.write([0x86, 0x01, 0x07, 0x00, 0xaa, 0xbb], { withResponse: true });
       await w.settle();
       expect(w.tx(1, t0).map((x) => x.f.type).slice(0, 2)).toEqual(['HELLO', 'STATUS']);
-      // Dashcam → phone (injected: the firmware never sends these): short, unknown, version 2.
+      // Dashcam → phone (injected, sealed on the session: the firmware never sends these): short,
+      // unknown, version 2.
       const before = a.rt.state().link.counters.badFrames;
-      a.ble.notify(a.peripheralId, [0x03, 0x01, 0x00]);
-      a.ble.notify(a.peripheralId, [0x7f, 0x01, 0, 0, 0, 0]);
-      a.ble.notify(a.peripheralId, [0x02, 0x02, 0, 0, 0, 0, 3, 0, 0, 0, 1]);
+      w.injectTx(a, [0x03, 0x01, 0x00]);
+      w.injectTx(a, [0x7f, 0x01, 0, 0, 0, 0]);
+      w.injectTx(a, [0x02, 0x02, 0, 0, 0, 0, 3, 0, 0, 0, 1]);
       // A STATUS with three trailing bytes is taken.
-      a.ble.notify(a.peripheralId, [0x02, 0x01, 0, 0, 0, 0, 3, 0x48, 0xa0, 30, 1, 0xde, 0xad, 0xbe]);
+      w.injectTx(a, [0x02, 0x01, 0, 0, 0, 0, 3, 0x48, 0xa0, 30, 1, 0xde, 0xad, 0xbe]);
       await w.settle();
       expect(a.rt.state().link.counters.badFrames - before).toBe(3);
       expect(a.rt.state().link.status).toMatchObject({ state: 3, flags: 0x48, fpsX10: 0xa0, tempC: 30, bondCount: 1 });

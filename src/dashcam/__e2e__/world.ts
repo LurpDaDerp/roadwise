@@ -3,10 +3,18 @@
 //
 // Phone side, per phone: `createFakeBle()` → `createBleTransport` → `createDashcamRuntime` (which
 // builds the real `createDashcamLink` with its alert controller) over a migrated sql.js database
-// (the real SQLite engine) and a recording alert player; `createSetupFlow` for pairing.
-// Wiring: every RX write goes to the simulator as `RX <conn> <hex>`; every `TX <conn> <hex>` the
-// simulator prints is handed to that phone through `ble.notify`. Connects and disconnects become
-// `C` / `D` lines; the simulator's `TERM` (the dashcam ends a link) becomes `D` + a dropped link.
+// (the real SQLite engine), a recording alert player and the phone's own SecureStore (an in-memory
+// one per phone: its pairing key lives there); `createSetupFlow` for pairing.
+// Wiring (link v2, docs/BLE_PROTOCOL.md §2.2, §3.3, §9): the INFO read is `INFO <conn>`, an AUTH write
+// `AW <conn> <hex>` (ATT 00, or 80 for a malformed one: the write fails), an AUTH read `AR <conn>`;
+// every RX write goes to the simulator sealed as `RX <conn> <wire>`; every `TX <conn> <wire> <plain>`
+// the simulator prints is handed to that phone sealed (the wire), and the assertions read the plain
+// frame. Connects and disconnects become `C` / `D` lines; the simulator's `TERM` (the dashcam ends a
+// link) becomes `D` + a dropped link.
+//
+// A wiretap (the bench only, from the handshake it carries and the phone's own key) derives each
+// session's phone → dashcam key, so `rx()` can still read the frames a phone wrote (`RXP` log lines;
+// the simulator never sees them).
 //
 // One clock: world time `W` (ms). The phones read epoch `EPOCH0 + W` (link, transport, setup and
 // player all take it injected; nothing runs on real timers), and the simulator's uptime is
@@ -14,9 +22,12 @@
 // at every phone timer; each step sends `T`, delivers what came out, runs the due timers and lets
 // the promise chains (sql.js included) drain.
 //
-// The IDENTIFY write goes to the simulator (`ID <conn> <byte>`, the firmware's `ble_link_on_identify`,
-// setup claim included): `ok` lets the write succeed, `busy` / `closed` fail it with ATT 0x80; each
-// outcome is recorded in `gatt`. The simulator's `CLAIM` lines say which link holds the setup claim.
+// The dashcam has a pairing code (`S`, `--label`) and the identity address `MAC`. A phone in
+// `bonded` has its pairing stored on the dashcam at boot (`--phone <id>:<key>`, the key derived from
+// its name); `addPhone({ paired: true })` gives the app that same pairing (SQLite record + its key in
+// the phone's SecureStore). A reboot keeps every stored pairing whose key a phone of the bench holds
+// (NVS survives a reboot).
+//
 // Phone conditions for the phone-first sound routing (BLE_PROTOCOL §1, §5): `suspend` freezes a
 // phone outright (nothing runs, frames held: an Android app with no foreground service, a hung JS
 // thread); `sleep` is an iOS app suspended in the background (its timers stop; a frame wakes it
@@ -25,35 +36,22 @@
 // timers (only a frame or a row reaching it fires the due ones, as `processTimers.pump`); a sound in
 // the fake player is native (it ends on time while JS timers are paused). `dropStatus` discards the
 // dashcam's STATUS frames to a phone (negative tests), and each phone has an audio-output probe stub.
-//
-// What the simulator does not contain is modelled here, and only here, from the firmware's
-// `ble_gatt.c` (NimBLE glue): the INFO read (`peer_bonded`, `bond_count`, flags bit 0 the window,
-// bit 1 another link holds the claim), the bond store (which phones are bonded), the TX read that
-// makes iOS pair and Android `createBond` (both become `BOND`), Android `removeBond` dropping a live
-// link, and advertising (the pairing service while the window is open).
+// What the simulator does not contain is modelled here: advertising (the pairing service while the
+// window is open).
 import type { AlertPlayer } from '@/core/alerts/player';
 import type { AlertDecision } from '@/core/alerts/types';
 import type { FeatureRow } from '@/core/engine/types';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 
+import { DIR_DP, DIR_PD, openRaw, proofOk, sealRaw, sessionKeys } from '../auth';
+import { sha256, utf8 } from '../crypto';
 import { createFakeBle, type FakeBle } from '../fakeTransport';
+import { formatCode } from '../label';
 import { PAIRED_KEY, type PairedDashcam } from '../keys';
-import {
-  DASHPAL_SERVICE,
-  decodeRx,
-  decodeTx,
-  encodeInfo,
-  fromHex,
-  IDENTIFY_CHAR,
-  PAIRING_SERVICE,
-  RX_CHAR,
-  toHex,
-  TX_CHAR,
-  type RxFrame,
-  type TxFrame,
-} from '../protocol';
+import { AUTH_CHAR, DASHPAL_SERVICE, decodeRx, decodeTx, fromHex, INFO_CHAR, PAIRING_SERVICE, RX_CHAR, toHex, type RxFrame, type TxFrame } from '../protocol';
 import { createDashcamRuntime, type DashcamRuntime } from '../runtime';
+import { AUTH_PENDING_SECURE_KEY, AUTH_SECURE_KEY, createDashpalSecrets, type DashpalSecrets } from '../secure';
 import { createSetupFlow, type SetupFlow } from '../setup';
 import { createBleTransport, type DashcamTransport } from '../transport';
 import { SimProcess } from './sim';
@@ -65,10 +63,17 @@ export const MAC = [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5];
 export const CAM = 'a4cf12b3c4d5';
 export const NAME = 'DashPal-C4D5';
 export const TRIP_PREFIX = '11111111-1111-4111-8111-';
+/** The dashcam's pairing code (its label). */
+export const LABEL_S = Uint8Array.from({ length: 16 }, (_, i) => 0x30 + i);
 
 /** Tone lengths the fake player takes (ms), as `scripts/make-tones.js` renders them. */
 const TONE_MS: Record<string, number> = { dp_glance: 440, dp_drowsy: 940, dp_wake: 760, dp_phone: 360 };
 const LEVEL_MS: Record<number, number> = { 1: 180, 2: 300, 3: 880 };
+
+/** A phone's pairing with the bench's dashcam, derived from its name: its id there and its key. */
+export function phoneKey(name: string): { id: string; kPair: string } {
+  return { id: toHex(sha256(utf8(`phone id ${name}`)).slice(0, 8)), kPair: toHex(sha256(utf8(`phone key ${name}`))) };
+}
 
 export interface Played {
   at: number;
@@ -125,6 +130,17 @@ export interface LogLine {
   line: string;
 }
 
+/** The wiretap's view of one connection's handshake. */
+interface Tap {
+  np: number[] | null;
+  resp: { nd: number[]; proofD: number[] } | null;
+  /** the session's phone → dashcam key, once a session is up */
+  kpd: Uint8Array | null;
+  /** the session's dashcam → phone key, and the highest TX counter seen (for `injectTx`) */
+  kdp: Uint8Array | null;
+  txCtr: number;
+}
+
 export interface Phone {
   name: string;
   conn: number;
@@ -136,6 +152,9 @@ export interface Phone {
   rawDb: Db;
   gate: DbGate;
   rt: DashcamRuntime;
+  /** the phone's SecureStore (its pairing key), and its raw entries */
+  secrets: DashpalSecrets;
+  secureStore: Map<string, string>;
   player: FakePlayer;
   /** the drive host; `driveOpen` (the drive is open, finalize included) follows `recording` when unset */
   host: { recording: boolean; driveOpen?: boolean; playerAvailable: boolean; callActive: boolean };
@@ -145,10 +164,8 @@ export interface Phone {
   errors: string[];
   /** the dashcam sees this phone connected */
   simConnected: boolean;
-  /** the dashcam treats this phone's link as authorized (encrypted, bonded) */
-  authorized: boolean;
-  /** Android removed the OS bond: the phone has no keys to encrypt with until a new bond */
-  osKeysLost: boolean;
+  /** the wiretap of the current connection */
+  tap: Tap;
   /** iOS suspended the app: its timers stop and notifications wait */
   suspended: boolean;
   /** frames held while suspended */
@@ -169,6 +186,10 @@ export interface Phone {
   paused: boolean;
   /** the world discards STATUS frames to this phone */
   statusDropped: boolean;
+  /** every RX frame this phone wrote, in clear (the wiretap; also those a dead link swallowed) */
+  sent: { at: number; bytes: number[] }[];
+  /** iOS state restoration pending: the next start hands the kept connection back */
+  restoring: boolean;
   latency: { up: number; down: number };
   transport(): DashcamTransport;
   setup(): SetupFlow;
@@ -177,17 +198,16 @@ export interface Phone {
 export interface WorldOptions {
   /** hex, like the device's; random when omitted */
   bootId?: string;
-  /** phones (by name) whose bonds the dashcam holds at boot; none opens the pairing window */
+  /** phones (by name) whose pairings the dashcam holds at boot; none opens the pairing window */
   bonded?: string[];
   ackMs?: number;
+  /** the dashcam has no pairing code (an unkeyed board) */
+  unkeyed?: boolean;
+  /** another identity address than `MAC` (a device answering at the paired address that is not the DashPal) */
+  mac?: string;
 }
 
-const bootArgs = (o: { bootId?: string; bonds: number; ackMs?: number }): string[] => [
-  ...(o.bootId ? ['--boot-id', o.bootId] : []),
-  '--bonds',
-  String(o.bonds),
-  ...(o.ackMs !== undefined ? ['--ack-ms', String(o.ackMs)] : []),
-];
+const fresh = (): Tap => ({ np: null, resp: null, kpd: null, kdp: null, txCtr: -1 });
 
 let uuidN = 0;
 const newUuid = (): string => {
@@ -202,29 +222,37 @@ export class World {
   /** world time the current simulator booted */
   bootAt = 0;
   sim: SimProcess;
-  bootId = '';
   readonly log: LogLine[] = [];
-  /** what the GATT model did (INFO reads, IDENTIFY writes), from ble_gatt.c's rules */
-  readonly gatt: { at: number; phone: string; what: string }[] = [];
   readonly phones: Phone[] = [];
-  /** phones (by name) in the dashcam's bond store */
-  readonly bonds = new Set<string>();
   windowOpen = false;
   /** the link holding the setup claim (the simulator's `CLAIM` lines) */
   claimConn: number | null = null;
+  private readonly opts: WorldOptions;
   private timers: Timer[] = [];
   private timerSeq = 0;
   private pending: Pending[] = [];
   private closed = false;
 
-  private constructor(sim: SimProcess) {
+  private constructor(sim: SimProcess, opts: WorldOptions) {
     this.sim = sim;
+    this.opts = opts;
+  }
+
+  private static args(o: WorldOptions, phones: { id: string; kPair: string }[]): string[] {
+    return [
+      ...(o.bootId ? ['--boot-id', o.bootId] : []),
+      ...(o.ackMs !== undefined ? ['--ack-ms', String(o.ackMs)] : []),
+      ...(o.unkeyed ? [] : ['--label', toHex(LABEL_S)]),
+      '--mac',
+      o.mac ?? CAM,
+      ...phones.flatMap((p) => ['--phone', `${p.id}:${p.kPair}`]),
+    ];
   }
 
   static async create(o: WorldOptions = {}): Promise<World> {
-    const bonded = o.bonded ?? [];
-    const w = new World(new SimProcess(bootArgs({ bootId: o.bootId, bonds: bonded.length, ackMs: o.ackMs })));
-    for (const b of bonded) w.bonds.add(b);
+    const bonded = (o.bonded ?? []).map(phoneKey);
+    const w = new World(new SimProcess(World.args(o, bonded)), o);
+    w.windowOpen = bonded.length === 0;
     await w.simLine('T 0');
     return w;
   }
@@ -366,21 +394,30 @@ export class World {
     this.pending.push({ line, after });
   }
 
+  /** A request line answered by the simulator (INFO, AW, AR): resolves with its answer line. */
+  private ask(line: string, answer: string): Promise<string> {
+    return new Promise<string>((resolve) => {
+      this.enqueue(line, (out) => resolve(out.find((l) => l.startsWith(answer)) ?? ''));
+    });
+  }
+
   private handleOut(out: string[]): void {
     for (const line of out) {
       this.log.push({ at: this.W, uptime: this.uptime(), dir: 'out', line });
       const p = line.split(' ');
+      const phone = p[1] !== undefined ? this.phones.find((x) => x.conn === Number(p[1])) : undefined;
       if (p[0] === 'TX') {
-        const phone = this.phones.find((x) => x.conn === Number(p[1]));
-        if (phone) this.toPhone(phone, fromHex(p[2] ?? ''));
-      } else if (p[0] === 'TERM') {
-        const phone = this.phones.find((x) => x.conn === Number(p[1]));
-        if (p[2] === 'unpair' || p[2] === 'forget') {
-          if (phone) this.bonds.delete(phone.name);
+        if (phone) {
+          const wire = fromHex(p[2] ?? '');
+          phone.tap.txCtr = Math.max(phone.tap.txCtr, ((wire[0] ?? 0) | ((wire[1] ?? 0) << 8) | ((wire[2] ?? 0) << 16) | ((wire[3] ?? 0) << 24)) >>> 0);
+          this.toPhone(phone, wire, p[3] ?? '');
         }
+      } else if (p[0] === 'TERM') {
         // NimBLE terminates the link; its disconnect event reaches ble_link (and the phone).
         if (!phone || phone.simConnected) this.enqueue(`D ${p[1]}`);
         if (phone) this.endLink(phone, false);
+      } else if (p[0] === 'AUTH' && phone && (p[2] === 'up' || p[2] === 'rekey')) {
+        this.tapSession(phone);
       } else if (p[0] === 'WINDOW') {
         this.windowOpen = p[1] === '1';
       } else if (p[0] === 'CLAIM') {
@@ -389,10 +426,35 @@ export class World {
     }
   }
 
-  private toPhone(phone: Phone, bytes: number[]): void {
+  /** The wiretap: the session's phone → dashcam key, from the handshake and the phone's own key. */
+  private tapSession(phone: Phone): void {
+    const t = phone.tap;
+    t.kpd = null;
+    t.kdp = null;
+    t.txCtr = -1;
+    if (!t.np || !t.resp) return;
+    for (const key of [AUTH_SECURE_KEY, AUTH_PENDING_SECURE_KEY]) {
+      const raw = phone.secureStore.get(key);
+      if (!raw) continue;
+      try {
+        const a = JSON.parse(raw) as { phoneId: string; kPair: string };
+        const k = sessionKeys(fromHex(a.kPair), MAC, fromHex(a.phoneId), t.np, t.resp.nd);
+        if (proofOk(k.proofD, Uint8Array.from(t.resp.proofD))) {
+          t.kpd = k.k_pd;
+          t.kdp = k.k_dp;
+          return;
+        }
+      } catch {
+        // not a key
+      }
+    }
+  }
+
+  /** A sealed TX frame to the phone; `plain` is its frame in clear (the simulator prints both). */
+  private toPhone(phone: Phone, bytes: number[], plain: string): void {
     if (phone.blackholed) return;
     // STATUS is type 0x02.
-    if (phone.statusDropped && bytes[0] === 0x02) return;
+    if (phone.statusDropped && plain.startsWith('02')) return;
     const deliver = () => {
       if (phone.blackholed || !phone.ble.connected.has(phone.peripheralId)) return;
       if (phone.suspended) {
@@ -444,23 +506,45 @@ export class World {
   private endLink(phone: Phone, toDashcam: boolean): void {
     if (toDashcam && phone.simConnected) this.enqueue(`D ${phone.conn}`);
     phone.simConnected = false;
-    phone.authorized = false;
+    phone.tap = fresh();
     if (phone.ble.connected.has(phone.peripheralId)) phone.ble.drop(phone.peripheralId);
   }
 
-  /** The dashcam reboots: a new simulator (new random boot id unless given), bonds kept (NVS). */
+  /** The dashcam's stored pairings whose keys a phone of the bench holds (to carry over a reboot). */
+  private async storedPairings(): Promise<{ id: string; kPair: string }[]> {
+    const out = await this.simLine('PHONES');
+    const ids = (out.find((l) => l.startsWith('PHONES '))?.split(' ').slice(2) ?? []).filter((s) => s.length === 16);
+    const known = new Map<string, string>();
+    for (const name of this.opts.bonded ?? []) known.set(phoneKey(name).id, phoneKey(name).kPair);
+    for (const ph of this.phones) {
+      for (const key of [AUTH_SECURE_KEY, AUTH_PENDING_SECURE_KEY]) {
+        const raw = ph.secureStore.get(key);
+        if (!raw) continue;
+        try {
+          const a = JSON.parse(raw) as { phoneId: string; kPair: string };
+          known.set(a.phoneId, a.kPair);
+        } catch {
+          // not a key
+        }
+      }
+    }
+    return ids.filter((id) => known.has(id)).map((id) => ({ id, kPair: known.get(id)! }));
+  }
+
+  /** The dashcam reboots: a new simulator (new random boot id unless given), its pairings kept (NVS). */
   async reboot(o: { bootId?: string; gapMs?: number } = {}): Promise<void> {
     await this.settle();
+    const keep = await this.storedPairings();
     for (const phone of this.phones) {
       phone.simConnected = false;
-      phone.authorized = false;
+      phone.tap = fresh();
       if (phone.ble.connected.has(phone.peripheralId)) phone.ble.drop(phone.peripheralId);
     }
     this.sim.close();
     this.W += o.gapMs ?? 0;
     this.bootAt = this.W;
-    this.sim = new SimProcess(bootArgs({ bootId: o.bootId, bonds: this.bonds.size }));
-    this.windowOpen = false;
+    this.sim = new SimProcess(World.args({ ...this.opts, bootId: o.bootId }, keep));
+    this.windowOpen = keep.length === 0;
     this.claimConn = null;
     await this.simLine('T 0');
     await this.settle();
@@ -493,13 +577,13 @@ export class World {
     return this.after(since).filter((l) => l.dir === 'out');
   }
 
-  /** Frames the dashcam notified (to `conn`, or all). */
+  /** Frames the dashcam notified (to `conn`, or all), read in clear. */
   tx(conn?: number, since: Since = 0): { at: number; conn: number; f: TxFrame }[] {
     const got: { at: number; conn: number; f: TxFrame }[] = [];
     for (const l of this.out(since)) {
       const p = l.line.split(' ');
       if (p[0] !== 'TX' || (conn !== undefined && Number(p[1]) !== conn)) continue;
-      const d = decodeTx(fromHex(p[2] ?? ''));
+      const d = decodeTx(fromHex(p[3] ?? ''));
       if (!d.ok) throw new Error(`the simulator sent an undecodable frame: ${l.line} (${d.reason})`);
       got.push({ at: l.at, conn: Number(p[1]), f: d.frame });
     }
@@ -510,13 +594,13 @@ export class World {
     return this.tx(conn, since).filter((x) => x.f.type === type) as never;
   }
 
-  /** Frames the phones wrote that reached the dashcam. */
+  /** Frames the phones wrote that reached the dashcam, read in clear through the wiretap. */
   rx(conn?: number, since: Since = 0): { at: number; conn: number; f: RxFrame }[] {
     const got: { at: number; conn: number; f: RxFrame }[] = [];
     for (const l of this.after(since)) {
       if (l.dir !== 'in') continue;
       const p = l.line.split(' ');
-      if (p[0] !== 'RX' || (conn !== undefined && Number(p[1]) !== conn)) continue;
+      if (p[0] !== 'RXP' || (conn !== undefined && Number(p[1]) !== conn)) continue;
       const d = decodeRx(fromHex(p[2] ?? ''));
       if (d.ok) got.push({ at: l.at, conn: Number(p[1]), f: d.frame });
     }
@@ -554,13 +638,17 @@ export class World {
     name: string;
     conn: number;
     platform?: 'ios' | 'android';
-    /** the app holds the pairing (and the dashcam the bond when the phone is in `bonded`) */
+    /** the app holds the pairing (its record and its key; the dashcam holds it when the phone is in `bonded`) */
     paired?: boolean;
     recording?: boolean;
     buzzerToo?: boolean;
     db?: Db;
     /** one-way delays (ms), from the first connect */
     latency?: { up: number; down: number };
+    /** the phone's SecureStore entries (a relaunch keeps them) */
+    secureStore?: Map<string, string>;
+    /** iOS state restoration: the OS kept this connection up and hands it back at start (no new connect) */
+    restoredLink?: boolean;
   }): Promise<Phone> {
     const platform = o.platform ?? 'ios';
     const raw = o.db ?? (await createSqlJsDb());
@@ -581,9 +669,19 @@ export class World {
     if (!o.db) await createTripsRepo(raw).insert({ client_trip_id: tripId, started_at: this.now(), tz: 'UTC', status: 'recording' }, this.now());
     const settings = createSettingsRepo(raw);
     const peripheralId = platform === 'ios' ? '7D3E1C20-4B6A-4E8F-9A21-0C6E5A7D2B10' : 'A4:CF:12:B3:C4:D5';
-    if (o.paired) {
+    const secureStore = o.secureStore ?? new Map<string, string>();
+    const secrets = createDashpalSecrets(() => ({
+      getItemAsync: async (k) => secureStore.get(k) ?? null,
+      setItemAsync: async (k, v) => void secureStore.set(k, v),
+      deleteItemAsync: async (k) => void secureStore.delete(k),
+    }));
+    if (o.paired && !o.secureStore) {
       const rec: PairedDashcam = { dashcamId: CAM, peripheralId, name: NAME, pairedAt: this.now(), secure: true };
       await settings.set(PAIRED_KEY, rec);
+      const k = phoneKey(o.name);
+      // paired from the label: the phone keeps its code for Set up again
+      await secrets.writePendingAuth({ dashcamId: CAM, phoneId: k.id, kPair: k.kPair, code: formatCode(LABEL_S, 'label', { dashes: false }) });
+      await secrets.finalizeAuth();
     }
     if (o.buzzerToo !== undefined) await settings.set('dashcam.buzzerToo', o.buzzerToo);
     const ble = createFakeBle();
@@ -608,14 +706,15 @@ export class World {
       db,
       rawDb: raw,
       gate,
+      secrets,
+      secureStore,
       host: { recording: o.recording ?? false, playerAvailable: true, callActive: false },
       style: { sound: true },
       appState,
       tripId,
       errors: [] as string[],
       simConnected: false,
-      authorized: false,
-      osKeysLost: false,
+      tap: fresh(),
       suspended: false,
       held: [] as number[][],
       blackholed: false,
@@ -627,6 +726,8 @@ export class World {
       waking: null,
       paused: false,
       statusDropped: false,
+      restoring: o.restoredLink === true,
+      sent: [] as { at: number; bytes: number[] }[],
     } as unknown as Phone;
     phone.player = this.makePlayer(phone);
     this.wireBle(phone);
@@ -668,6 +769,8 @@ export class World {
       clearRepeat: (h) => this.clearTimer((h as { id: number }).id),
       onError: (e, ctx) => phone.errors.push(`${ctx}: ${describe(e)}`),
       audioOutput: () => ({ ...phone.audio }),
+      secrets,
+      ensureInstallMarker: async () => {},
       ...(platform === 'android'
         ? {
             holdAwake: () => {
@@ -685,9 +788,14 @@ export class World {
         optIn: () => phone.rt.optIn(),
         pair: (rec) => phone.rt.pair(rec),
         paired: () => phone.rt.state().link.paired,
+        resumePaired: () => phone.rt.resumePaired(),
+        secrets,
+        notePhones: (d, n) => phone.rt.notePhones(d, n),
         now: () => this.now(),
         sleep: (ms) => new Promise<void>((resolve) => this.timer(ms, resolve, phone)),
-        onError: (e, ctx) => phone.errors.push(`setup ${ctx}: ${describe(e)}`),
+        onError: (e, ctx) => {
+          phone.errors.push(`setup ${ctx}: ${describe(e)}`);
+        },
       });
     this.phones.push(phone);
     await phone.rt.ready;
@@ -731,141 +839,105 @@ export class World {
     return p;
   }
 
-  /** The fake BLE stack's edges, joined to the simulator and the GATT model. */
+  /** The fake BLE stack's edges, joined to the simulator (INFO, AUTH, RX, connects) and advertising. */
   private wireBle(phone: Phone): void {
     const ble = phone.ble;
     const conn = phone.conn;
-    const infoBytes = () =>
-      encodeInfo({
-        ver: 1,
-        protoMin: 1,
-        protoMax: 1,
-        fwMajor: 3,
-        fwMinor: 3,
-        mac: MAC,
-        peerBonded: this.bonds.has(phone.name),
-        bondCount: this.bonds.size,
-        pairingOpen: this.windowOpen,
-        setupBusy: this.claimConn !== null && this.claimConn !== conn,
-      });
-    ble.addPeripheral({
-      id: phone.peripheralId,
-      name: NAME,
-      rssi: -55,
-      get info() {
-        return infoBytes();
-      },
-    } as never);
+    ble.addPeripheral({ id: phone.peripheralId, name: NAME, rssi: -55 });
 
     const origStart = ble.start.bind(ble);
     ble.start = async (opts) => {
       await origStart(opts);
       // iOS reports the powered-on state through the state event once the manager exists.
       if (phone.platform === 'ios') queueMicrotask(() => ble.setState('on'));
-    };
-
-    const origConnect = ble.connect.bind(ble);
-    ble.connect = (id, opts) =>
-      origConnect(id, opts).then(() => {
-        // The link is up at the dashcam: a bonded phone that still has its keys encrypts at once
-        // (authorized).
-        const bonded = this.bonds.has(phone.name) && !phone.osKeysLost;
+      // iOS state restoration: the kept connection comes back during start (the dashcam still has it).
+      if (phone.restoring) {
+        phone.restoring = false;
         phone.simConnected = true;
-        phone.authorized = bonded;
-        this.enqueue(`C ${conn} ${bonded ? 1 : 0} ${bonded ? 1 : 0}`);
-      });
-
-    const origDisconnect = ble.disconnect.bind(ble);
-    ble.disconnect = (id, force) => {
-      if (phone.simConnected) {
-        phone.simConnected = false;
-        phone.authorized = false;
-        this.enqueue(`D ${conn}`);
+        ble.restore([phone.peripheralId]);
       }
-      return origDisconnect(id, force);
     };
 
+    // The link is up at the dashcam: a new connection (its own Nc).
+    ble.onConnect = (id) => {
+      if (id !== phone.peripheralId) return;
+      phone.simConnected = true;
+      phone.tap = fresh();
+      this.enqueue(`C ${conn}`);
+    };
+    // The phone ends the connection.
+    ble.onDisconnect = (id) => {
+      if (id !== phone.peripheralId || !phone.simConnected) return;
+      phone.simConnected = false;
+      phone.tap = fresh();
+      this.enqueue(`D ${conn}`);
+    };
+
+    ble.onRead = async (id, characteristic) => {
+      if (id !== phone.peripheralId) return undefined;
+      if (!phone.simConnected || phone.blackholed) throw { message: 'Device is not connected' };
+      if (characteristic === INFO_CHAR) return fromHex((await this.ask(`INFO ${conn}`, `INFO ${conn} `)).split(' ')[2] ?? '');
+      if (characteristic === AUTH_CHAR) {
+        const hex = (await this.ask(`AR ${conn}`, `AR ${conn} `)).split(' ')[2] ?? '';
+        const b = fromHex(hex);
+        if (b[0] === 0xa0 && b.length === 34) phone.tap.resp = { nd: b.slice(2, 18), proofD: b.slice(18, 34) };
+        return b;
+      }
+      return undefined;
+    };
+
+    // The DashPal advertises all the time (the pairing service while its window is open): while a
+    // scan runs, the phone hears it every 100 ms, from 200 ms after the scan starts.
+    let scanGen = 0;
     const origScan = ble.scan.bind(ble);
     ble.scan = async (o) => {
       await origScan(o);
-      this.timer(
-        200,
-        () =>
-          ble.advertise({
-            id: phone.peripheralId,
-            name: NAME,
-            rssi: -55,
-            advertising: { serviceUUIDs: [this.windowOpen ? PAIRING_SERVICE : DASHPAL_SERVICE], localName: NAME, isConnectable: true },
-          }),
-        phone
-      );
+      scanGen += 1;
+      const gen = scanGen;
+      const end = this.W + o.seconds * 1000;
+      const advert = () => {
+        if (gen !== scanGen || this.W > end) return;
+        ble.advertise({
+          id: phone.peripheralId,
+          name: NAME,
+          rssi: -55,
+          advertising: { serviceUUIDs: [this.windowOpen ? PAIRING_SERVICE : DASHPAL_SERVICE], localName: NAME, isConnectable: true },
+        });
+        this.timer(100, advert, phone, true);
+      };
+      this.timer(200, advert, phone, true);
+    };
+    const origStop = ble.stopScan.bind(ble);
+    ble.stopScan = async () => {
+      scanGen += 1;
+      await origStop();
     };
 
-    const origRead = ble.read.bind(ble);
-    ble.read = async (id, service, characteristic) => {
-      if (characteristic === TX_CHAR && phone.simConnected && !phone.authorized) {
-        // iOS: Insufficient Encryption makes the OS pair; the new bond then reaches the firmware. A
-        // refused bond is deleted and the link terminated, so the read fails with the disconnect
-        // (modelled as CBError 7; what iOS reports there is unmeasured).
-        if (!(await this.bond(phone))) throw { domain: 'CBErrorDomain', code: 7, message: 'The specified device has disconnected from us.' };
+    ble.onWrite = async (w) => {
+      if (w.characteristic === RX_CHAR && phone.tap.kpd) {
+        const o = openRaw(phone.tap.kpd, DIR_PD, w.bytes);
+        if (o) phone.sent.push({ at: this.W, bytes: Array.from(o.frame) });
       }
-      return origRead(id, service, characteristic);
-    };
-
-    const origRemoveBond = ble.removeBond.bind(ble);
-    ble.removeBond = async (id) => {
-      // Android: removing the bond of a connected device drops the link (and the claim with it), and
-      // the phone has no keys for the dashcam until a new bond.
-      if (phone.simConnected) this.endLink(phone, true);
-      phone.osKeysLost = true;
-      return origRemoveBond(id);
-    };
-
-    const origCreateBond = ble.createBond.bind(ble);
-    ble.createBond = async (id) => {
-      // Already bonded and encrypted with keys the dashcam holds: ble-manager resolves at once.
-      if (phone.simConnected && phone.authorized) return origCreateBond(id);
-      if (!phone.simConnected || !(await this.bond(phone))) throw new Error('Bond failed (the dashcam removed it)');
-      phone.osKeysLost = false;
-      return origCreateBond(id);
-    };
-
-    ble.onWrite = (w) => {
-      if (!phone.simConnected || phone.blackholed) return;
+      if (!phone.simConnected || phone.blackholed) {
+        if (w.characteristic === AUTH_CHAR) throw { message: 'Device is not connected' };
+        return;
+      }
       if (w.characteristic === RX_CHAR) {
         const line = `RX ${conn} ${toHex(w.bytes)}`;
-        if (phone.latency.up > 0) this.timer(phone.latency.up, () => phone.simConnected && this.enqueue(line), null);
-        else this.enqueue(line);
-      } else if (w.characteristic === IDENTIFY_CHAR) {
-        // ble_gatt.c CHR_IDENTIFY → ble_link_on_identify: busy and closed are ATT 0x80.
-        return new Promise<void>((resolve, reject) => {
-          this.enqueue(`ID ${conn} ${w.bytes[0] ?? 0}`, (out) => {
-            const answer = out.find((l) => l.startsWith(`ID ${conn} `))?.split(' ')[2] ?? 'none';
-            if (answer === 'ok') {
-              if (w.bytes[0] === 1) this.gatt.push({ at: this.W, phone: phone.name, what: 'identify' });
-              resolve();
-              return;
-            }
-            this.gatt.push({ at: this.W, phone: phone.name, what: `identify refused (${answer}, 0x80)` });
-            reject({ domain: 'CBATTErrorDomain', code: 0x80, message: 'refused' });
-          });
-        });
+        const after = () => {
+          const k = phone.tap.kpd;
+          const o = k ? openRaw(k, DIR_PD, w.bytes) : null;
+          if (o) this.log.push({ at: this.W, uptime: this.uptime(), dir: 'in', line: `RXP ${conn} ${toHex(o.frame)}` });
+        };
+        if (phone.latency.up > 0) this.timer(phone.latency.up, () => phone.simConnected && this.enqueue(line, after), null);
+        else this.enqueue(line, after);
+      } else if (w.characteristic === AUTH_CHAR) {
+        if (w.bytes[0] === 0x20 && w.bytes.length === 26) phone.tap.np = w.bytes.slice(10, 26);
+        const st = (await this.ask(`AW ${conn} ${toHex(w.bytes)}`, `AW ${conn} `)).split(' ')[2];
+        // ble-manager reports a failed write as a `status=N` text.
+        if (st !== '00') throw { message: `Error writing characteristic status=${st === '80' ? 128 : st}` };
       }
     };
-  }
-
-  /** A pairing completed on the phone's link: the firmware accepts it (window open) or not. */
-  private bond(phone: Phone): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      this.enqueue(`BOND ${phone.conn}`, (out) => {
-        const ok = out.includes('PLAY once 6') && !out.includes(`TERM ${phone.conn} unpair`);
-        if (ok) {
-          this.bonds.add(phone.name);
-          phone.authorized = true;
-        }
-        resolve(ok);
-      });
-    });
   }
 
   // ——— phone conditions ———
@@ -910,6 +982,18 @@ export class World {
   /** The world discards the dashcam's STATUS frames to this phone (on) or stops doing so. */
   dropStatus(phone: Phone, on: boolean): void {
     phone.statusDropped = on;
+  }
+
+  /**
+   * A frame the firmware never sends (a malformed one), sealed as the dashcam seals on this phone's
+   * session and handed to the phone. It takes the counters after the dashcam's last one, which the
+   * dashcam reuses next (the phone drops those as replays): use it at the end of a test.
+   */
+  injectTx(phone: Phone, frame: number[]): void {
+    const k = phone.tap.kdp;
+    if (!k) throw new Error(`${phone.name} has no session to seal for`);
+    phone.tap.txCtr += 1;
+    phone.ble.notify(phone.peripheralId, Array.from(sealRaw(k, DIR_DP, phone.tap.txCtr, frame)));
   }
 
   /** A silent link loss: nothing passes; neither side has noticed yet. */
@@ -958,6 +1042,23 @@ export class World {
     phone.suspended = true; // nothing of the dead process runs again
     this.phones.splice(this.phones.indexOf(phone), 1);
     await this.settle();
+  }
+
+  /**
+   * iOS relaunches RoadWise with the connection kept (state restoration): the old process is gone
+   * (its runtime, keys in memory and timers), the dashcam still holds the link and its session; the
+   * new process gets the connection back at start and proves its key again on it.
+   */
+  async relaunch(phone: Phone): Promise<Phone> {
+    phone.gate.queue.length = 0;
+    phone.gate.re = null;
+    phone.rt.dispose();
+    this.timers = this.timers.filter((t) => t.owner !== phone);
+    phone.suspended = true; // the old process runs nothing more; its frames go nowhere
+    this.phones.splice(this.phones.indexOf(phone), 1);
+    const next = await this.addPhone({ name: phone.name, conn: phone.conn, platform: phone.platform, db: phone.rawDb, secureStore: phone.secureStore, restoredLink: true });
+    await this.settle();
+    return next;
   }
 
   /** A drive row from the phone's recorder (speed m/s; GNSS valid unless said). */
@@ -1031,7 +1132,7 @@ export async function scenario(o: WorldOptions, fn: (w: World) => Promise<void>)
   }
 }
 
-/** A dashcam with phone A bonded and paired, linked and synced (its first STATE sent). */
+/** A dashcam with phone A paired (on both sides), linked and synced (its first STATE sent). */
 export async function linkedA(w: World, o: { platform?: 'ios' | 'android'; recording?: boolean; buzzerToo?: boolean } = {}): Promise<Phone> {
   const a = await w.addPhone({ name: 'A', conn: 1, paired: true, ...o });
   await w.connected(a);

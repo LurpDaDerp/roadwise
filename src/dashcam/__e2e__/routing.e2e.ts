@@ -501,7 +501,7 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
       expect(plays.length).toBeGreaterThan(0);
       expect(plays.at(-1)!.at).toBeLessThanOrEqual(lastFrame + 3000);
       // It tried to hand the alert back (lost on the dead link).
-      const acks0 = a.ble.writes.filter((x) => x.bytes[0] === 0x83 && x.bytes[4] === 0);
+      const acks0 = a.sent.filter((x) => x.bytes[0] === 0x83 && x.bytes[4] === 0);
       expect(acks0).toHaveLength(1);
       await w.advance(2000);
       expect(a.player.sounded(lastFrame + 3001)).toEqual([]);
