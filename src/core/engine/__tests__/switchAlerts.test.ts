@@ -107,6 +107,15 @@ test('5. an iPhone lock reported 15 s or 25 s late from RoadWise in front: no al
   }
 });
 
+test('5b. an iPhone switch of 20 s that ends back in RoadWise: no alert while away, one pickup alert on the return, "Phone down"; a pickup of 20 s and 5 s of handling', async () => {
+  const { alerts, session } = await runDrive(rowsOf([10, front], [20, away], [10, front]), IOS);
+  expect(alerts.map((a) => [a.type, rel(a), voiceOf(a)])).toEqual([['phone_pickup', 30, 'Phone down']]);
+  expect(session.events.map((e) => [e.type, e.durationS])).toEqual([
+    ['phone_pickup', 20],
+    ['phone_handling', 5],
+  ]);
+});
+
 test('6. a burst: one pickup alert on the third return, "Phone down", no handling alert', async () => {
   const { alerts, session } = await runDrive(rowsOf([10, front], [2, away], [3, front], [2, away], [3, front], [2, away], [10, front]), ANDROID);
   expect(alerts.map((a) => [a.type, rel(a), voiceOf(a)])).toEqual([['phone_pickup', 22, 'Phone down']]);

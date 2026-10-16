@@ -18,8 +18,11 @@
 //   run ended by a lock report is cut back to the estimated press; if less than 15 s were left it
 //   would be a lock reported late, and nothing of it would be kept. An iPhone run that begins after a
 //   lock report with RoadWise not in front since (an unlock outside RoadWise, a Face ID glance at the
-//   lock screen included) never counts toward a burst. A departure that joins an open pickup counts
-//   at once on Android; on iPhone it is held (neither use nor quiet) until it has lasted its minimum.
+//   lock screen included) never counts toward a burst. Any other iPhone run that ends back in
+//   RoadWise (a woken lock screen that goes dark ends in a lock report instead) counts on the return
+//   once it spanned 15 s and outlasted the lock cut, charged from its first chargeable row (a held
+//   one joins the open pickup). A departure that joins an open pickup counts at once on Android; on
+//   iPhone it is held (neither use nor quiet) until it has lasted its minimum or ends that way.
 //   Three short switches (2 s or more each, each ending back in RoadWise; on iPhone each longer than
 //   the lock cut, so a lock undone before its report never counts) within 2 min are one pickup with
 //   no handling. A pickup with a switch in it is never `mounted`.
@@ -88,6 +91,8 @@ interface Run {
   /** The run's first chargeable row and its speed: where a pickup it opens starts. */
   firstChargeTs: number | null;
   chargeSpeed: number | null;
+  /** The speed of its latest away row with a known one (the stop speed of a run counted on its return). */
+  lastSpeed: number | null;
   /** The run is phone use from here on. */
   counting: boolean;
   /** iPhone: it joined an open pickup and waits out its minimum. */
@@ -216,6 +221,33 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
       if (last === null || last < ep.startedAt) ep = null; // no use left: dropped, no event
       return;
     }
+    if (countsOnReturn(r, row, ctx)) {
+      // iPhone: back in RoadWise, so not a woken lock screen going dark (that ends in a lock report):
+      // the run counts now, as it would have at 15 s without the lock cut's wait.
+      if (r.held) {
+        if (ep === null) return;
+      } else {
+        if (r.firstChargeTs === null) return;
+        if (ep !== null && ep.ignored) ep = null; // parking-lot use: dropped silently
+        const fresh = ep === null || !ep.confirmed;
+        if (ep === null) {
+          ep = newEpisode(r.firstChargeTs, true);
+        } else {
+          ep.confirmed = true;
+          ep.startedAt = Math.min(ep.startedAt, r.firstChargeTs);
+        }
+        if (fresh) {
+          const speed = (r.lastSpeed ?? r.chargeSpeed) as number;
+          ep.speedAtPickupMph = speed;
+          ep.stoppedInTraffic = speed <= PHONE_MIN_MPH;
+        }
+      }
+      ep.lastSwitchTs = Math.max(ep.lastSwitchTs ?? r.lastTs, r.lastTs);
+      ep.mounted = false;
+      ep.quiet = 0;
+      bursts = [];
+      return;
+    }
     const short =
       !r.counting &&
       !r.held &&
@@ -246,6 +278,23 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
     ep.speedAtPickupMph = lastEntry.speedMph;
     ep.stoppedInTraffic = lastEntry.speedMph <= PHONE_MIN_MPH;
     ep.mounted = false;
+  }
+
+  /**
+   * iPhone: a run not yet counting that ends with RoadWise back in front (never after a lock report
+   * with RoadWise not in front since) and spanned `SWITCH_MIN_S_IOS` and more than the lock cut (a
+   * lock undone before its report is shorter).
+   */
+  function countsOnReturn(r: Run, row: FeatureRow, ctx: DetectorContext): boolean {
+    return (
+      !r.counting &&
+      !r.afterLock &&
+      isIosSignal(ctx.switchSignal) &&
+      row.appForeground &&
+      evidenceOn(ctx) &&
+      ageS(r.lastTs, r.startTs) >= SWITCH_MIN_S_IOS &&
+      burstRunLong(ctx.switchSignal, r.startTs, r.lastTs, measuredDelayMs ?? ctx.lockDelayMs)
+    );
   }
 
   /** Switch evidence counts on this drive: Android, or an iPhone that has shown a lock in time. */
@@ -312,6 +361,7 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
             lastTs: row.ts,
             firstChargeTs: null,
             chargeSpeed: null,
+            lastSpeed: null,
             counting: false,
             held: false,
             afterLock: isIosSignal(ctx.switchSignal) && lockedAway,
@@ -325,6 +375,7 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
           run.firstChargeTs = row.ts;
           run.chargeSpeed = speedMph;
         }
+        if (speedMph !== null) run.lastSpeed = speedMph;
         // 5. start counting
         if (!run.counting && evidenceOn(ctx)) {
           const age = ageS(row.ts, run.startTs);
