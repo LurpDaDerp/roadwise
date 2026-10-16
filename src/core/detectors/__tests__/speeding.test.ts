@@ -93,3 +93,34 @@ describe('speeding (spec "Speeding threshold")', () => {
     expect(det.active()).toBe(false);
   });
 });
+
+describe('speeding reads only trusted speeds (speed accuracy 2 m/s or better, or unrated)', () => {
+  const over = (acc: number) => seq([10, { speed: mph(34) }], [20, { speed: mph(46), speedAcc: acc }], [10, { speed: mph(34) }]);
+
+  test('20 s over the limit at speedAcc 3 is no event; at -1, 1.5 and exactly 2 it is one', () => {
+    expect(drive(createSpeedingDetector(counterIds()), over(3), L35).all).toEqual([]);
+    expect(drive(createSpeedingDetector(counterIds()), over(2.01), L35).all).toEqual([]);
+    expect(drive(createSpeedingDetector(counterIds()), over(Number.NaN), L35).all).toEqual([]);
+    for (const a of [-1, 1.5, 2]) expect(only(drive(createSpeedingDetector(counterIds()), over(a), L35).all)).toMatchObject({ durationS: 20 });
+  });
+
+  test('an unconfirmed episode is dropped by one untrusted row', () => {
+    const rows = seq([3, { speed: mph(46) }], [1, { speed: mph(46), speedAcc: 3 }], [3, { speed: mph(46) }], [10, { speed: mph(30) }]);
+    expect(drive(createSpeedingDetector(counterIds()), rows, L35).all).toEqual([]);
+  });
+
+  test('a confirmed episode whose rows turn untrusted ends after SPEEDING_END_S, as on a poor fix', () => {
+    const rows = seq([8, { speed: mph(46) }], [20, { speed: mph(46), speedAcc: 5 }], [10, { speed: mph(30) }]);
+    const det = createSpeedingDetector(counterIds());
+    const { pushed, all } = drive(det, rows, L35);
+    expect(only(all)).toMatchObject({ durationS: 8, startedAt: T0 });
+    // Closed on the fifth untrusted row (rows 8..12), not held open by them.
+    expect(pushed.findIndex((p) => p.length > 0)).toBe(12);
+  });
+
+  test('open() is null on an untrusted row: the HUD tier follows', () => {
+    const det = createSpeedingDetector(counterIds());
+    det.push(seq([1, { speed: mph(46), speedAcc: 3 }])[0]!, L35, ctx());
+    expect(det.open()).toBeNull();
+  });
+});

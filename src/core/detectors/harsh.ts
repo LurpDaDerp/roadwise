@@ -2,7 +2,8 @@
 // false positives") from the per-second IMU extremes:
 // - braking ≥ 0.40 g (severe ≥ 0.55) and acceleration ≥ 0.35 g (severe ≥ 0.50) count only when
 //   the GNSS speed changed to match (a drop, or a rise, of at least `GNSS_CONFIRM_G` over a second
-//   inside or right after the episode);
+//   inside or right after the episode), read only from two fixes whose speed the phone rates at
+//   2 m/s or better (`speedTrusted`);
 // - cornering ≥ 0.40 g (severe ≥ 0.55) counts only when the GNSS course rate × speed makes that
 //   much lateral acceleration plausible;
 // - a phone sliding or dropping — an orientation spike or a lost gravity reference within two
@@ -12,7 +13,7 @@
 import { HARD_ACCEL_G, HARD_BRAKE_G, HARD_CORNER_G, PHONE_MIN_MPH, type Tier } from '@scoring';
 
 import type { DetectedEvent, Detector, FeatureRow } from '../engine/types';
-import { G_MPS2, knownSpeed, knownSpeedMph, round1, round2, rowEligible } from './common';
+import { G_MPS2, knownSpeed, knownSpeedMph, round1, round2, rowEligible, speedTrusted } from './common';
 
 type Kind = 'hard_brake' | 'hard_accel' | 'hard_corner';
 const KINDS: readonly Kind[] = ['hard_brake', 'hard_accel', 'hard_corner'];
@@ -77,11 +78,15 @@ export function createHarshDetector(newId: () => string): Detector {
   let pending: Episode[] = [];
   let lastSpikeTs: number | null = null;
 
-  /** Evidence this row carries about the second it covers (needs the previous valid fix). */
+  /**
+   * Evidence this row carries about the second it covers: needs the previous valid fix, and both
+   * speeds trusted (an untrusted speed confirms nothing).
+   */
   function evidence(row: FeatureRow): { deltaG: number | null; lateralG: number | null } {
     const speed = knownSpeed(row);
     const before = prev === null ? null : knownSpeed(prev);
     if (prev === null || speed === null || before === null) return { deltaG: null, lateralG: null };
+    if (!speedTrusted(row) || !speedTrusted(prev)) return { deltaG: null, lateralG: null };
     const dtMs = row.ts - prev.ts;
     if (dtMs <= 0 || dtMs > MAX_FIX_GAP_MS) return { deltaG: null, lateralG: null };
     const dtS = dtMs / 1000;

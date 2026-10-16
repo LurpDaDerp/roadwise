@@ -74,3 +74,36 @@ describe('hard cornering (spec: sideways force, plausibility by GPS course rate 
     expect(only(drive(createHarshDetector(counterIds()), rows).all).tier).toBe('severe');
   });
 });
+
+describe('the GPS confirmation reads only trusted speeds (speed accuracy 2 m/s or better, or unrated)', () => {
+  const brake = (acc: (i: number) => number) =>
+    seq([10, (i) => ({ speed: mph(35), speedAcc: acc(i) })], [1, (i) => ({ speed: mph(25), aLonMin: -0.45, speedAcc: acc(i) })], [10, (i) => ({ speed: mph(25), speedAcc: acc(i) })]);
+
+  test('a confirmed 0.45 g brake is an event at 0.5, at exactly 2 and with no rating (-1)', () => {
+    for (const a of [0.5, 2, -1]) expect(only(drive(createHarshDetector(counterIds()), brake(() => a)).all).type).toBe('hard_brake');
+  });
+
+  test('the same rows with speedAcc 3 on the two confirming rows are no event', () => {
+    expect(drive(createHarshDetector(counterIds()), brake((i) => (i === 9 || i === 10 ? 3 : 0.5))).all).toEqual([]);
+    // One untrusted side of the pair is enough to refuse it.
+    expect(drive(createHarshDetector(counterIds()), brake((i) => (i === 9 ? 3 : 0.5))).all).toEqual([]);
+    expect(drive(createHarshDetector(counterIds()), brake((i) => (i === 10 ? Number.NaN : 0.5))).all).toEqual([]);
+  });
+
+  test('an untrusted peak row confirms nothing: both pairs that could vouch for it include it', () => {
+    // The drop lands on the row after the peak (10 → 11), but row 10's speed is untrusted.
+    const rows = seq([10, { speed: mph(45) }], [1, { speed: mph(45), aLonMin: -0.6, speedAcc: 3 }], [10, { speed: mph(30) }]);
+    expect(drive(createHarshDetector(counterIds()), rows).all).toEqual([]);
+    // A trusted drop two rows on is outside the episode's one-row window.
+    const late = seq([10, { speed: mph(45) }], [1, { speed: mph(45), aLonMin: -0.6, speedAcc: 3 }], [1, { speed: mph(45) }], [10, { speed: mph(30) }]);
+    expect(drive(createHarshDetector(counterIds()), late).all).toEqual([]);
+    // The same rows all trusted: severe.
+    const trusted = seq([10, { speed: mph(45) }], [1, { speed: mph(45), aLonMin: -0.6 }], [10, { speed: mph(30) }]);
+    expect(only(drive(createHarshDetector(counterIds()), trusted).all).tier).toBe('severe');
+  });
+
+  test('a corner on untrusted speeds is no event', () => {
+    const rows = seq([10, { speed: mph(30), speedAcc: 3 }], [1, { speed: mph(30), course: 135, aLatMax: 0.45, speedAcc: 3 }], [10, { speed: mph(30), course: 135, speedAcc: 3 }]);
+    expect(drive(createHarshDetector(counterIds()), rows).all).toEqual([]);
+  });
+});

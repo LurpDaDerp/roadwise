@@ -1,5 +1,6 @@
 // Speeding episodes (product spec v3 "Speeding threshold"): speed beyond L + T(L) on a usable fix
 // with an actionable limit, continuously for 5 s (3 s once severe) before it counts as an incident.
+// A speed the phone rates worse than 2 m/s (`speedTrusted`) is no usable row, like a poor fix.
 // Before that confirmation any row back under L + T drops the episode — five scattered blips are
 // not an incident. Once confirmed, one continuous episode is one incident, tiered by its peak; it
 // ends after 5 s back under L + T − 2 mph (hovering in that 2-mph buffer neither extends nor ends
@@ -7,7 +8,7 @@
 import { speedTier, speedTolerance, SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, SPEEDING_MIN_S, type Tier } from '@scoring';
 
 import type { DetectedEvent, Detector, OpenEpisode } from '../engine/types';
-import { knownSpeedMph, limitMphFor, round1, rowEligible } from './common';
+import { knownSpeedMph, limitMphFor, round1, rowEligible, speedTrusted } from './common';
 
 const RANK: Record<Tier, number> = { minor: 0, moderate: 1, severe: 2 };
 const worse = (a: Tier, b: Tier): Tier => (RANK[a] >= RANK[b] ? a : b);
@@ -57,7 +58,7 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
     push(row, limit, ctx) {
       const limitMph = limitMphFor(row, limit);
       const speedMph = knownSpeedMph(row);
-      const usable = limitMph !== null && speedMph !== null && rowEligible(row, ctx);
+      const usable = limitMph !== null && speedMph !== null && speedTrusted(row) && rowEligible(row, ctx);
       const tier = usable ? speedTier(speedMph, limitMph) : null;
 
       if (tier !== null && usable) {
