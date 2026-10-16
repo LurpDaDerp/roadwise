@@ -280,9 +280,11 @@ m and m/s for GNSS, degrees clockwise from true north for `course`.
   screen switch, unless the row is excused (the drive host's `exempt` stamp, a call's own screen from
   the row's `call` key, the warm-up). Android: unlocked with its screen on, exact. iPhone: not
   reported `locked`; because the report lags about 10 s (and a lock screen a notification wakes
-  reads as unlocked once Face ID sees the driver), a switch counts only after 15 s plus the lock
-  delay and a second (26 s with the usual delay), a lock report cuts it back to the estimated press,
-  and only a phone with a lock proof (above) counts at all; `lockSignal: 'unreliable'` never does.
+  reads as unlocked once Face ID sees the driver), a switch counts while away only after 15 s plus
+  the lock delay and a second (26 s with the usual delay), or when RoadWise is back in front after
+  15 s or more that also outlasted the lock delay and a second (a woken lock screen that goes dark
+  ends in a lock report instead; not a run that began after a lock report), a lock report cuts it
+  back to the estimated press, and only a phone with a lock proof (above) counts at all; `lockSignal: 'unreliable'` never does.
   Motion (`handlingScore`) is the other evidence, whatever app is in front. Which app is in front is never read: iOS offers no way to, and on Android it would
   take Usage access (`PACKAGE_USAGE_STATS`), which the app does not ask for.
 
