@@ -1194,6 +1194,19 @@ describe('lifecycle', () => {
     expect(r.link.snapshot().lifecycle).toBe('idle');
   });
 
+  test('Set up again of the same DashPal (a new pairedAt) clears its repair and unverified state before any reconnect', () => {
+    const r = rig();
+    r.link.needsRepair('unknown_phone');
+    r.link.setPaired({ ...PAIRED }); // the same record again (a load): the repair stays
+    expect(r.link.snapshot().lifecycle).toBe('needs_repair');
+    r.link.setPaired({ ...PAIRED, pairedAt: PAIRED.pairedAt + 5000 });
+    expect(r.link.snapshot()).toMatchObject({ lifecycle: 'idle', repairCause: null });
+    r.link.unverified();
+    expect(r.link.snapshot().lifecycle).toBe('unverified');
+    r.link.setPaired({ ...PAIRED, pairedAt: PAIRED.pairedAt + 9000 });
+    expect(r.link.snapshot().lifecycle).toBe('idle');
+  });
+
   test('Bluetooth not allowed shows before a repair (nothing can be retried without it)', () => {
     const r = rig();
     r.link.needsRepair('unknown_phone');

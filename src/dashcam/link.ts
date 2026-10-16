@@ -1138,8 +1138,14 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     },
 
     setPaired(next) {
-      const before = paired?.dashcamId ?? null;
+      const was = paired;
+      const before = was?.dashcamId ?? null;
       paired = next;
+      if (next !== null && was !== null && next.dashcamId === before && next.pairedAt !== was.pairedAt) {
+        // A new pairing with the same DashPal (Set up again): the old key's repair is settled.
+        repairCause = null;
+        unverifiedNow = false;
+      }
       if ((next?.dashcamId ?? null) !== before) {
         repairCause = null;
         unverifiedNow = false;
