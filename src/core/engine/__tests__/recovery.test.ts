@@ -72,3 +72,20 @@ test('with no capture running, the newest drive is finalized too; a failing fina
   expect(result.adopt).toBeNull();
   expect(result.failed.map((f) => f.clientTripId)).toEqual([uuid(3)]);
 });
+
+test('a rebuilt drive decides its warm-up as the live engine did: a stored restart has none, a moving start ends it at its first row', async () => {
+  const trips = createTripsRepo(db);
+  await trips.insert({ client_trip_id: uuid(1), started_at: T0, tz: TZ, status: 'recording', continues: 1 }, T0);
+  await createSamplesRepo(db).appendMany(uuid(1), rows(10, { speedMps: 0 }).map((r) => ({ ts: r.ts, row: r })));
+  const restart = (await rebuildFromSamples(db, (await trips.get(uuid(1)))!, base()))!;
+  expect(restart.session.warmup).toEqual({ continues: true, decided: true, endsAt: T0 });
+
+  await recording(uuid(2), 10, T0 - 2000);
+  const moving = (await rebuildFromSamples(db, (await trips.get(uuid(2)))!, base()))!;
+  expect(moving.session.warmup).toEqual({ continues: false, decided: true, endsAt: T0 - 2000 });
+
+  await trips.insert({ client_trip_id: uuid(3), started_at: T0, tz: TZ, status: 'recording' }, T0);
+  await createSamplesRepo(db).appendMany(uuid(3), rows(10, { speedMps: 0 }).map((r) => ({ ts: r.ts, row: r })));
+  const stopped = (await rebuildFromSamples(db, (await trips.get(uuid(3)))!, base()))!;
+  expect(stopped.session.warmup).toEqual({ continues: false, decided: true, endsAt: T0 + 30_000 });
+});

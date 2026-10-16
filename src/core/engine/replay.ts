@@ -5,7 +5,7 @@ import { createSamplesRepo, type Db, type TripRow } from '@/data/db';
 import { UNKNOWN_LIMIT } from '@/core/detectors/common';
 
 import type { AdoptedTrip } from './engine.types';
-import { appendRow, createSession } from './session';
+import { appendRow, createSession, noteWarmup } from './session';
 import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
 export interface RebuildDeps {
@@ -21,9 +21,8 @@ export interface RebuildDeps {
 export async function rebuildFromSamples(db: Db, trip: TripRow, deps: RebuildDeps): Promise<AdoptedTrip | null> {
   const stored = await createSamplesRepo(db).range(trip.client_trip_id, 0, Number.MAX_SAFE_INTEGER);
   if (stored.length === 0) return null;
-  const session = createSession({ clientTripId: trip.client_trip_id, startedAt: trip.started_at });
+  const session = createSession({ clientTripId: trip.client_trip_id, startedAt: trip.started_at, continues: trip.continues === 1 });
   const detectors = deps.createDetectors();
-  const ctx: DetectorContext = { tripStartedAt: trip.started_at, callActive: false };
   for (const sample of stored) {
     let row: FeatureRow;
     try {
@@ -33,6 +32,8 @@ export async function rebuildFromSamples(db: Db, trip: TripRow, deps: RebuildDep
     }
     if (session.lastRowTs !== null && row.ts <= session.lastRowTs) continue;
     const limit = (await deps.limits.lookup(row.lat, row.lng, row.course)) ?? UNKNOWN_LIMIT;
+    noteWarmup(session, row);
+    const ctx: DetectorContext = { warmupEndsAt: session.warmup.endsAt, callActive: false };
     const closed = detectors.push(row, limit, ctx);
     session.events.push(...closed);
     appendRow(session, row, detectors.unsafe());

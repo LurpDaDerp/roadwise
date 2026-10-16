@@ -44,7 +44,7 @@ describe('phone pickup and handling (spec event table, "Rules against false posi
   test('a hands-free call suppresses phone events; so does the warm-up and a poor fix', () => {
     const rows = seq([10, { speed: mph(35) }], [10, { speed: mph(35), ...handled }], [10, { speed: mph(35) }]);
     expect(drive(createPhoneUseDetector(counterIds()), rows, undefined, ctx({ callActive: true })).all).toEqual([]);
-    expect(drive(createPhoneUseDetector(counterIds()), rows, undefined, ctx({ tripStartedAt: T0 })).all).toEqual([]);
+    expect(drive(createPhoneUseDetector(counterIds()), rows, undefined, ctx({ warmupEndsAt: T0 + 30_000 })).all).toEqual([]);
     const poor = seq([10, { speed: mph(35) }], [10, { speed: mph(35), hAcc: 40, ...handled }], [10, { speed: mph(35) }]);
     expect(drive(createPhoneUseDetector(counterIds()), poor).all).toEqual([]);
   });

@@ -59,8 +59,12 @@ export interface LimitSample {
 }
 
 export interface DetectorContext {
-  /** epoch ms the drive started: no events in its first `NO_EVENTS_FIRST_S` (spec). */
-  tripStartedAt: number;
+  /**
+   * epoch ms before which no event starts: `NO_EVENTS_FIRST_S` after the Start tap for a drive
+   * that starts stopped, the first trusted reading over 5 mph for one started while moving, the
+   * start itself for a restart (`TripSession.warmup`).
+   */
+  warmupEndsAt: number;
   /** A hands-free call is active (where the native signal exists): phone events are suppressed. */
   callActive: boolean;
 }

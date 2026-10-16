@@ -11,7 +11,7 @@ export const tripRecords = (status: EngineStatus): boolean => status === 'record
 export const isDrivingStatus = tripRecords;
 
 /** The per-row detector context from the call state. */
-export function detectorContext(callActive: boolean): Omit<DetectorContext, 'tripStartedAt'> {
+export function detectorContext(callActive: boolean): Omit<DetectorContext, 'warmupEndsAt'> {
   return { callActive };
 }
 

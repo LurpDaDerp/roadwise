@@ -35,6 +35,7 @@ export function createRecorder(db: Db, opts: RecorderOptions): Recorder {
             tz: opts.tz,
             local_day: dayKey(new Date(session.startedAt), opts.tz),
             status: 'recording',
+            continues: session.warmup.continues ? 1 : 0,
           },
           stamp,
           tx

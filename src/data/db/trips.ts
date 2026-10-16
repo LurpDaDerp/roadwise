@@ -46,6 +46,7 @@ const COLUMNS = [
   'checkpoint_ts',
   'created_at',
   'updated_at',
+  'continues',
 ] as const;
 
 /** Every column except the primary key and `created_at`, which a patch must not move. */
@@ -90,6 +91,7 @@ export function toTripRow(row: Record<string, unknown>): TripRow {
     checkpoint_ts: asNumberOrNull(row, 'checkpoint_ts'),
     created_at: asNumber(row, 'created_at'),
     updated_at: asNumber(row, 'updated_at'),
+    continues: asFlag(row, 'continues'),
   };
 }
 
@@ -157,6 +159,15 @@ export function createTripsRepo(db: Db) {
     async count(): Promise<number> {
       const { rows } = await db.execute('SELECT count(*) AS n FROM trips');
       return asNumber(rows[0] ?? {}, 'n');
+    },
+
+    /**
+     * When the phone's most recent closed drive ended (merged ones included: they were driven too),
+     * or null. A drive started within `MERGE_GAP_S` of it has no warm-up.
+     */
+    async lastEndedAt(): Promise<number | null> {
+      const { rows } = await db.execute("SELECT MAX(ended_at) AS t FROM trips WHERE status != 'recording' AND ended_at IS NOT NULL");
+      return asNumberOrNull(rows[0] ?? {}, 't');
     },
 
     /** The latest drive that is not merged away or still recording (the "Wasn't driving" target). */

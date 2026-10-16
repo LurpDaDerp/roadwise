@@ -1,6 +1,8 @@
 // The replay harness: feed a trace through the real detector suite and check what came out.
 // `runTrace` never asserts anything itself; it returns the events and a list of human-readable
 // failures, so a Jest test can print exactly what the detectors did.
+import { NO_EVENTS_FIRST_S } from '@scoring';
+
 import { createDetectors } from '../detectors';
 import type { DetectedEvent, DetectorContext } from '../engine/types';
 import type { Expectation, Trace } from './trace';
@@ -58,7 +60,8 @@ function checkExpectation(exp: Expectation, events: readonly DetectedEvent[], ba
 export function runTrace(trace: Trace): TraceResult {
   const suite = createDetectors(counterIds());
   const base = trace.rows[0]?.ts ?? 0;
-  const ctx: DetectorContext = { tripStartedAt: base, callActive: trace.callActive === true };
+  // A drive started stopped at the first row: the 30 s warm-up.
+  const ctx: DetectorContext = { warmupEndsAt: base + NO_EVENTS_FIRST_S * 1000, callActive: trace.callActive === true };
   const events: DetectedEvent[] = [];
   for (const row of trace.rows) events.push(...suite.push(row, limitAt(trace.limits, row.ts), ctx));
   events.push(...suite.flush());

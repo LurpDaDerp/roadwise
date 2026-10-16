@@ -1,5 +1,5 @@
 import { mph, row, seq, T0 } from '@/core/detectors/__fixtures__/rows';
-import { appendRow, closeSession, createSession, durationSOf, GNSS_JUMP_MPS } from '@/core/engine/session';
+import { appendRow, closeSession, createSession, durationSOf, GNSS_JUMP_MPS, noteWarmup } from '@/core/engine/session';
 
 const start = () => createSession({ clientTripId: 't1', startedAt: T0 });
 
@@ -64,4 +64,63 @@ test('closeSession stamps the end (never before the start) and the cause; the op
   expect(s.endedAt).toBeNull();
   expect(Object.isFrozen(closed)).toBe(true);
   expect(durationSOf({ startedAt: T0, endedAt: T0 + 90_500 })).toBe(90.5);
+});
+
+describe('the warm-up (noteWarmup)', () => {
+  const at = (s: number, over: Parameters<typeof row>[0] = {}) => row({ ts: T0 + s * 1000, ...over });
+
+  test('a drive that starts stopped keeps its 30 s; one that is a restart has none', () => {
+    const stopped = createSession({ clientTripId: 'a', startedAt: T0 });
+    expect(stopped.warmup).toEqual({ continues: false, decided: false, endsAt: T0 + 30_000 });
+    noteWarmup(stopped, at(1, { speed: 0 }));
+    expect(stopped.warmup).toEqual({ continues: false, decided: true, endsAt: T0 + 30_000 });
+    const restart = createSession({ clientTripId: 'b', startedAt: T0, continues: true });
+    expect(restart.warmup).toEqual({ continues: true, decided: true, endsAt: T0 });
+    noteWarmup(restart, at(1, { speed: 0 }));
+    expect(restart.warmup.endsAt).toBe(T0);
+  });
+
+  test('the first trusted reading over 5 mph ends it there; at exactly 5 mph it does not', () => {
+    const moving = createSession({ clientTripId: 'a', startedAt: T0 });
+    noteWarmup(moving, at(2, { speed: mph(40) }));
+    expect(moving.warmup).toEqual({ continues: false, decided: true, endsAt: T0 + 2000 });
+    noteWarmup(moving, at(3, { speed: 0 }));
+    expect(moving.warmup.endsAt).toBe(T0 + 2000);
+    const five = createSession({ clientTripId: 'b', startedAt: T0 });
+    noteWarmup(five, at(2, { speed: mph(5) }));
+    expect(five.warmup).toMatchObject({ decided: true, endsAt: T0 + 30_000 });
+    // Decided at a stop: a later reading at speed does not shorten it.
+    noteWarmup(five, at(5, { speed: mph(40) }));
+    expect(five.warmup.endsAt).toBe(T0 + 30_000);
+  });
+
+  test('undecided until a trusted known speed: no fix, an unknown speed or an untrusted one (speedAcc 3) decide nothing', () => {
+    const s = createSession({ clientTripId: 'a', startedAt: T0 });
+    noteWarmup(s, at(1, { gnssValid: false, speed: -1 }));
+    noteWarmup(s, at(2, { speed: -1 }));
+    noteWarmup(s, at(3, { speed: mph(40), speedAcc: 3 }));
+    expect(s.warmup).toEqual({ continues: false, decided: false, endsAt: T0 + 30_000 });
+    noteWarmup(s, at(4, { speed: mph(40), speedAcc: -1 }));
+    expect(s.warmup).toEqual({ continues: false, decided: true, endsAt: T0 + 4000 });
+  });
+
+  test('a reading at 30 s or later never shortens it; a buffered row from before the tap ends it at the start', () => {
+    const late = createSession({ clientTripId: 'a', startedAt: T0 });
+    noteWarmup(late, at(31, { speed: mph(40) }));
+    expect(late.warmup).toEqual({ continues: false, decided: true, endsAt: T0 + 30_000 });
+    const early = createSession({ clientTripId: 'b', startedAt: T0 });
+    noteWarmup(early, at(-1, { speed: mph(40) }));
+    expect(early.warmup.endsAt).toBe(T0);
+  });
+
+  test('the warm-up object is replaced, never mutated (an adopted copy keeps its own)', () => {
+    const s = createSession({ clientTripId: 'a', startedAt: T0 });
+    const before = s.warmup;
+    const copy = { ...s };
+    noteWarmup(s, at(2, { speed: mph(40) }));
+    expect(s.warmup).not.toBe(before);
+    expect(before).toEqual({ continues: false, decided: false, endsAt: T0 + 30_000 });
+    expect(copy.warmup).toBe(before);
+    expect(Object.isFrozen(s.warmup)).toBe(true);
+  });
 });

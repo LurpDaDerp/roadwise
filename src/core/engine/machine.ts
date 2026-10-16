@@ -12,7 +12,7 @@ import { AUTO_END_STOPPED_S, PHONE_MIN_MPH, type EventType, type Tier } from '@s
 import { knownSpeed, limitMphFor, MPS_PER_MPH, ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
 
 import type { AdoptedTrip, EndCause, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
-import { appendRow, closeSession, createSession, snapshotSession } from './session';
+import { appendRow, closeSession, createSession, noteWarmup, snapshotSession } from './session';
 import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
 /** Speed-limit tiles are prefetched once per this much distance, never per fix. */
@@ -181,7 +181,8 @@ export function createEngine(deps: EngineDeps): Engine {
     const limit = deps.limits.lookup(row.lat, row.lng, row.course) ?? UNKNOWN_LIMIT;
     seen = { row, limit, limitMph: limitMphFor(row, limit) };
     touch();
-    const ctx: DetectorContext = { ...deps.ctx(), tripStartedAt: s.startedAt };
+    noteWarmup(s, row);
+    const ctx: DetectorContext = { ...deps.ctx(), warmupEndsAt: s.warmup.endsAt };
     const closed = det.push(row, limit, ctx);
     for (const e of closed) {
       s.events.push(e);
@@ -267,10 +268,10 @@ export function createEngine(deps: EngineDeps): Engine {
 
   // --- events -----------------------------------------------------------------------------------
 
-  async function start(ts: number): Promise<void> {
+  async function start(ts: number, continues: boolean): Promise<void> {
     if (status !== 'idle') return;
     const made = deps.createDetectors();
-    session = createSession({ clientTripId: deps.newId(), startedAt: Math.round(ts) });
+    session = createSession({ clientTripId: deps.newId(), startedAt: Math.round(ts), continues });
     suite = made;
     setStatus('recording');
     // The trip row exists from the first second: a process death before the first checkpoint
@@ -297,7 +298,7 @@ export function createEngine(deps: EngineDeps): Engine {
   async function reduce(e: EngineEvent): Promise<void> {
     switch (e.type) {
       case 'start':
-        await start(e.ts);
+        await start(e.ts, e.continues);
         return;
       case 'adopt':
         adopt(e.trip);

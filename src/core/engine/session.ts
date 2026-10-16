@@ -1,8 +1,8 @@
 // The per-drive accumulators: miles, safe miles, night miles, the track, integrity counters.
 // Pure functions over a mutable `TripSession`; nothing here reads a clock.
-import { PHONE_MIN_MPH } from '@scoring';
+import { NO_EVENTS_FIRST_S, PHONE_MIN_MPH } from '@scoring';
 
-import { knownSpeed, MPS_PER_MPH } from '@/core/detectors/common';
+import { knownSpeed, MPS_PER_MPH, speedTrusted } from '@/core/detectors/common';
 import { haversineMeters } from '@/lib/geo';
 import { sunIsDown } from '@/lib/time';
 
@@ -17,9 +17,12 @@ export const IMU_ACTIVE_MIN = 0.03;
 export interface SessionStart {
   clientTripId: string;
   startedAt: number;
+  /** A restart within `MERGE_GAP_S` of the previous drive's end: no warm-up. Default false. */
+  continues?: boolean;
 }
 
 export function createSession(start: SessionStart): TripSession {
+  const continues = start.continues === true;
   return {
     clientTripId: start.clientTripId,
     startedAt: start.startedAt,
@@ -41,7 +44,32 @@ export function createSession(start: SessionStart): TripSession {
     events: [],
     pending: [],
     checkpointTs: null,
+    warmup: Object.freeze({
+      continues,
+      decided: continues,
+      endsAt: continues ? start.startedAt : start.startedAt + NO_EVENTS_FIRST_S * 1000,
+    }),
   };
+}
+
+/**
+ * Decide the warm-up on a row, before the detectors see it (live and in the replay alike). The
+ * first row with a trusted known speed decides: over `PHONE_MIN_MPH` (a start made while moving)
+ * the warm-up ends at that row; at or under it the 30 s stand. After 30 s nothing changes it.
+ * Replaces `session.warmup`; never mutates the old object.
+ */
+export function noteWarmup(session: TripSession, row: FeatureRow): void {
+  const w = session.warmup;
+  if (w.decided) return;
+  if (row.ts >= session.startedAt + NO_EVENTS_FIRST_S * 1000) {
+    session.warmup = Object.freeze({ ...w, decided: true });
+    return;
+  }
+  const speed = knownSpeed(row);
+  if (speed === null || !speedTrusted(row)) return;
+  // A row from before the tap (a buffered first row) never opens events before the drive itself.
+  const endsAt = speed > PHONE_MIN_MPH * MPS_PER_MPH && row.ts < w.endsAt ? Math.max(session.startedAt, row.ts) : w.endsAt;
+  session.warmup = Object.freeze({ ...w, decided: true, endsAt });
 }
 
 const imuActive = (row: FeatureRow): boolean =>

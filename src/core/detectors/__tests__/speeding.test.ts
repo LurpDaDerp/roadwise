@@ -43,7 +43,7 @@ describe('speeding (spec "Speeding threshold")', () => {
 
   test('no event in the first 30 s, with a poor fix (hAcc > 20 m), or without an actionable limit', () => {
     const fast = seq([40, { speed: mph(55) }], [10, { speed: mph(30) }]);
-    const young = ctx({ tripStartedAt: T0 });
+    const young = ctx({ warmupEndsAt: T0 + 30_000 });
     const { all } = drive(createSpeedingDetector(counterIds()), fast, L35, young);
     // Only the rows from +30 s count: 10 over rows.
     expect(only(all).durationS).toBe(10);

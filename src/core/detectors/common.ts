@@ -1,5 +1,5 @@
 // Small pure helpers every detector shares. Nothing here touches the platform.
-import { MAX_H_ACC_M, NO_EVENTS_FIRST_S } from '@scoring';
+import { MAX_H_ACC_M } from '@scoring';
 
 import type { DetectorContext, FeatureRow, LimitSample } from '../engine/types';
 
@@ -28,6 +28,17 @@ export const UNKNOWN_LIMIT: LimitSample = Object.freeze({
  */
 export function knownSpeed(row: FeatureRow): number | null {
   return row.gnssValid && row.speed >= 0 ? row.speed : null;
+}
+
+/** A GPS speed accuracy (m/s) worse than this does not let a speed decide anything that needs trust. */
+export const SPEED_ACC_MAX_MPS = 2;
+
+/**
+ * The speed's own accuracy is good enough to trust it: 2 m/s or better, or not reported at all
+ * (`-1`, a phone that gives no speed accuracy).
+ */
+export function speedTrusted(row: FeatureRow): boolean {
+  return row.speedAcc === -1 || (row.speedAcc >= 0 && row.speedAcc <= SPEED_ACC_MAX_MPS);
 }
 
 /** The row's speed in mph, or null when unknown. */
@@ -64,9 +75,9 @@ export function limitMphFor(row: FeatureRow, limit: LimitSample): number | null 
   return v > 0 ? v : null;
 }
 
-/** No events in the first `NO_EVENTS_FIRST_S` of a drive (spec "Rules against false positives"). */
+/** No events before the drive's warm-up ends (spec "Rules against false positives"; `session.noteWarmup`). */
 export function inWarmup(row: FeatureRow, ctx: DetectorContext): boolean {
-  return row.ts - ctx.tripStartedAt < NO_EVENTS_FIRST_S * 1000;
+  return row.ts < ctx.warmupEndsAt;
 }
 
 /** Whether a row may start or extend an event at all: past the warm-up and on a usable fix. */

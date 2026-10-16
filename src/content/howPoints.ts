@@ -18,6 +18,7 @@ import {
   DISPUTE_AUTO_PER_WEEK,
   LEVEL_STEP,
   MAX_FREEZES,
+  MERGE_GAP_S,
   MIN_SCORED_MILES,
   MULT_CAP,
   NO_EVENTS_FIRST_S,
@@ -93,7 +94,7 @@ export const RULES: RuleSection[] = [
     points: [
       `A drive is a DashPal drive when your DashPal watched you for at least ${Math.round(DASHCAM_MIN_COVERAGE * 100)}% of the time you were moving (at least ${DASHCAM_MIN_MOVING_S / 60} min) and your phone had caught up with it by the end of the drive.`,
       `DashPal can flag eyes off the road with no look back, or slumping out of view at speed (−${BASE_PENALTY.eyes_off}, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)}) and drowsiness (−${BASE_PENALTY.drowsy}, at most once ${everyMin(DASHCAM_DROWSY_GAP_S)}).`,
-      `They count only at ${DASHCAM_MIN_MPH} mph or more with a good GPS fix, and never in a drive’s first ${NO_EVENTS_FIRST_S} s.`,
+      `They count only at ${DASHCAM_MIN_MPH} mph or more with a good GPS fix, and never in the first ${NO_EVENTS_FIRST_S} s of a drive started while stopped, unless it started within ${MERGE_GAP_S / 60} min of your last drive ending.`,
       `DashPal may alarm below ${DASHCAM_MIN_MPH} mph; those alarms cost no points.`,
       'DashPal events never lower your Safety Rating or break a clean drive. They do cost points, like any event.',
     ],

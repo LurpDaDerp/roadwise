@@ -16,7 +16,7 @@
 //   in the Android background JS timers are paused, and the rows are what keeps the alert player
 //   and the DashPal link moving.
 import { parseRow } from '@drive-sense';
-import { scoreDrive, type DriveContext } from '@scoring';
+import { MERGE_GAP_S, scoreDrive, type DriveContext } from '@scoring';
 
 import { decisionFor } from '@/core/alerts/policy';
 import type { AlertPlayer } from '@/core/alerts/player';
@@ -29,7 +29,7 @@ import { createRecorder } from '@/core/engine/recorder';
 import type { FeatureRow } from '@/core/engine/types';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { dashcamFinalizeDeps } from '@/dashcam/finalizeDeps';
-import type { Db, TripStatus } from '@/data/db';
+import { createTripsRepo, type Db, type TripStatus } from '@/data/db';
 import { createSettingsRepo } from '@/data/db/settings';
 import { emitDataChanged } from '@/data/events';
 import type { AppStateLike } from '@/data/foreground';
@@ -420,6 +420,21 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
+  /**
+   * The phone's previous drive ended within `MERGE_GAP_S` of this tap (a restart): the new drive has
+   * no warm-up, so End then Start never buys 30 s without events. Unreadable: false.
+   */
+  async function continuesPrevious(at: number): Promise<boolean> {
+    if (!persist) return false;
+    try {
+      const last = await createTripsRepo(db).lastEndedAt();
+      return last !== null && at - last <= MERGE_GAP_S * 1000;
+    } catch (e) {
+      report(e, 'continues');
+      return false;
+    }
+  }
+
   // --- native events -------------------------------------------------------------------------------
 
   async function onRow(row: FeatureRow): Promise<void> {
@@ -542,7 +557,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           pointsCtx = { streak: 0, safeMilesEarlierToday: 0 };
         }
         await readDisplayUnit();
-        await engine.dispatch({ type: 'start', ts: now() });
+        const at = now();
+        await engine.dispatch({ type: 'start', ts: at, continues: await continuesPrevious(at) });
         const id = engine.snapshot().clientTripId;
         if (id === null) return;
         try {

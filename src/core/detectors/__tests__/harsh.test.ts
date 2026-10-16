@@ -43,7 +43,7 @@ describe('hard braking / acceleration (spec event table, "confirmed by GPS")', (
 
   test('nothing in the first 30 s or on a poor fix', () => {
     const rows = peakDrive({ aLonMin: -0.45 }, 10, 10, mph(35), mph(25));
-    expect(drive(createHarshDetector(counterIds()), rows, undefined, ctx({ tripStartedAt: T0 })).all).toEqual([]);
+    expect(drive(createHarshDetector(counterIds()), rows, undefined, ctx({ warmupEndsAt: T0 + 30_000 })).all).toEqual([]);
     const poor = peakDrive({ aLonMin: -0.45, hAcc: 30 }, 10, 10, mph(35), mph(25));
     expect(drive(createHarshDetector(counterIds()), poor).all).toEqual([]);
   });

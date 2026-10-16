@@ -11,7 +11,7 @@
 //
 // DashPal (plan §8.4): before any of that, the dashcam's facts for the drive are read once (they
 // read the samples the transaction purges). Its candidates become severe `eyes_off` / `drowsy`
-// events under the scoring rules (after the first 30 s, at 10 mph or more on a good fix, an eyes-off
+// events under the scoring rules (once the drive's warm-up is over, at 10 mph or more on a good fix, an eyes-off
 // beside a phone event dropped, at most one drowsy per 10 min and one eyes-off per 5 min), and its
 // seconds become the payload's `dashcam` block, from which the estimate derives the DashPal bonus
 // exactly as the server does.
@@ -134,7 +134,8 @@ const candidateDuration = (c: DashcamCandidate): number => (Number.isFinite(c.du
 
 /**
  * The scored DashPal events of a drive from the dashcam's candidates (plan §8.4), in time order:
- * kept only when they start at least `NO_EVENTS_FIRST_S` into the drive and by its end, at a known
+ * kept only when they start once the drive's warm-up is over (`warmupEndsAt`; default
+ * `NO_EVENTS_FIRST_S` after the start) and by its end, at a known
  * GPS speed of `DASHCAM_MIN_MPH` or more (an unknown speed drops it); an eyes-off whose span comes
  * within `DASHCAM_PHONE_OVERLAP_S` of an active phone pickup or handling event is dropped (the
  * phone already charged that look); then at most one drowsy per `DASHCAM_DROWSY_GAP_S` and one
@@ -143,10 +144,10 @@ const candidateDuration = (c: DashcamCandidate): number => (Number.isFinite(c.du
  */
 export function dashcamEvents(
   candidates: readonly DashcamCandidate[],
-  trip: { startedAt: number; endedAt: number },
+  trip: { startedAt: number; endedAt: number; warmupEndsAt?: number },
   driveEvents: readonly Pick<DriveEvent, 'id' | 'type' | 'startedAt' | 'durationS' | 'status'>[]
 ): DetectedEvent[] {
-  const earliest = trip.startedAt + NO_EVENTS_FIRST_S * 1000;
+  const earliest = trip.warmupEndsAt ?? trip.startedAt + NO_EVENTS_FIRST_S * 1000;
   const slack = DASHCAM_PHONE_OVERLAP_S * 1000;
   const taken = new Set(driveEvents.map((e) => e.id));
   const phone = driveEvents
@@ -279,7 +280,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     };
   }
   if (existing === null) {
-    await trips.insert({ client_trip_id: id, started_at: startedAt, tz, local_day: localDay, status: 'recording' }, now());
+    await trips.insert({ client_trip_id: id, started_at: startedAt, tz, local_day: localDay, status: 'recording', continues: session.warmup.continues ? 1 : 0 }, now());
   }
 
   // 0. What the DashPal dashcam saw: read before the transaction below purges the samples.
@@ -295,7 +296,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const [fromLabel, toLabel] = await Promise.all([labelFor(session.firstFix, zones, geocode), labelFor(session.lastFix, zones, geocode)]);
 
   const phoneEvents = session.events.filter((e) => e.startedAt < endedAt + 2000).map((e) => sanitizeEvent(e, startedAt, endedAt));
-  const fromDashcam = dashcamEvents(facts?.events ?? [], { startedAt, endedAt }, phoneEvents).map((e) => sanitizeEvent(e, startedAt, endedAt));
+  const fromDashcam = dashcamEvents(facts?.events ?? [], { startedAt, endedAt, warmupEndsAt: session.warmup.endsAt }, phoneEvents).map((e) => sanitizeEvent(e, startedAt, endedAt));
   const cleaned = [...phoneEvents, ...fromDashcam]
     .sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1))
     .slice(0, MAX_EVENTS);

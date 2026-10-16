@@ -244,3 +244,10 @@ export const SCHEMA_V5: readonly string[] = [
  * flag stands; a replayed copy never changes it.
  */
 export const SCHEMA_V6: readonly string[] = ['ALTER TABLE dashcam_events ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0'];
+
+/**
+ * V7 — `trips.continues`: 1 when the drive was started within `MERGE_GAP_S` of the end of the
+ * phone's previous drive, so it has no 30 s warm-up. Stored with the trip's first row, so a drive
+ * rebuilt after a relaunch (adopt, orphan) decides its warm-up the same way the live engine did.
+ */
+export const SCHEMA_V7: readonly string[] = ['ALTER TABLE trips ADD COLUMN continues INTEGER NOT NULL DEFAULT 0'];

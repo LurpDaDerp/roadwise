@@ -185,6 +185,33 @@ test('a start at 60 mph is locked out from its first row, with no dialog beyond 
   await h.host.stop({ endOpenTrip: true });
 });
 
+test.each([
+  ['a scored drive ended 299 s before', 'scored', 299_000, true],
+  ['a scored drive ended 300 s before', 'scored', 300_000, true],
+  ['a scored drive ended 301 s before', 'scored', 301_000, false],
+  ['a merged drive ended 60 s before (it was driven too)', 'merged', 60_000, true],
+  ['a drive still recording (an orphan) "ended" 60 s before', 'recording', 60_000, false],
+] as const)('a start after %s: whether it is a restart (no warm-up) is stored on the trip row', async (_label, status, agoMs, continues) => {
+  await createTripsRepo(db).insert({ client_trip_id: uuid(50), started_at: T0 - 3_600_000, ended_at: T0 - agoMs, tz: TZ, status }, T0);
+  const h = build();
+  await h.host.boot();
+  const started = await h.host.start();
+  expect(started.ok).toBe(true);
+  const id = started.ok ? started.clientTripId : '';
+  expect((await createTripsRepo(db).get(id))!.continues).toBe(continues ? 1 : 0);
+  await feed(h, rows(1, { speedMps: 0 }));
+  await h.host.end();
+  await h.host.stop({ endOpenTrip: false });
+});
+
+test('a first drive on the phone is no restart', async () => {
+  const h = build();
+  await h.host.boot();
+  const started = await h.host.start();
+  expect((await createTripsRepo(db).get(started.ok ? started.clientTripId : ''))!.continues).toBe(0);
+  await h.host.stop({ endOpenTrip: true });
+});
+
 test('a drive: rows publish at most once each, the display updates on change, points show only while stopped, end finalizes and queues', async () => {
   const h = build();
   await h.host.boot();

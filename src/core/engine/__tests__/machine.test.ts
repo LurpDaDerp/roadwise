@@ -4,6 +4,7 @@ import { createDetectors } from '@/core/detectors';
 import { limit, mph, row, seq, T0 } from '@/core/detectors/__fixtures__/rows';
 import type { AlertEvent, EngineDeps, EngineSnapshot, TripSession } from '@/core/engine/engine.types';
 import { CHECKPOINT_ROWS, createEngine, stillWithoutFix } from '@/core/engine/machine';
+import { createSession } from '@/core/engine/session';
 import type { FeatureRow } from '@/core/engine/types';
 
 interface Harness {
@@ -56,7 +57,7 @@ test('a drive starts only on `start` and ends on `end`, handing the finalizer on
   const h = harness();
   await feed(h, [row({}, 0)]);
   expect(h.engine.snapshot().status).toBe('idle');
-  await h.engine.dispatch({ type: 'start', ts: T0 });
+  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
   expect(h.engine.snapshot()).toMatchObject({ status: 'recording', clientTripId: 'id1', startedAt: T0 });
   await feed(h, seq([5, { speed: mph(30) }]));
   expect(h.engine.snapshot()).toMatchObject({ speedKnown: true, limitMph: 35, lockedOut: true, stopped: false });
@@ -69,13 +70,13 @@ test('a drive starts only on `start` and ends on `end`, handing the finalizer on
   expect(h.checkpoints[0]).toMatchObject({ clientTripId: 'id1', rowsCount: 0, pending: [] });
   expect(h.snapshots.map((s) => s.status)).toEqual(expect.arrayContaining(['recording', 'finalizing', 'idle']));
   // A second start is a new drive with a fresh id; the old one changes nothing.
-  await h.engine.dispatch({ type: 'start', ts: T0 + 6000 });
+  await h.engine.dispatch({ type: 'start', ts: T0 + 6000, continues: false });
   expect(h.engine.snapshot().clientTripId).toBe('id2');
 });
 
 test('stopped at or below 2 mph for 300 s ends the drive where it stopped; a row ≤ 5 mph is "stopped" for the points', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0 });
+  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
   await feed(h, seq([5, { speed: mph(30) }]));
   const stopAt = T0 + 5000;
   await feed(h, seq([AUTO_END_STOPPED_S - 1, (i) => ({ speed: mph(1), ts: stopAt + (i - 5) * 1000 })]));
@@ -87,7 +88,7 @@ test('stopped at or below 2 mph for 300 s ends the drive where it stopped; a row
 
 test('a tick past the deadline ends a stopped drive even with no row; a walking report ends a slow drive at once', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0 });
+  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
   await feed(h, seq([3, { speed: mph(1) }]));
   await h.engine.dispatch({ type: 'tick', ts: T0 + 100_000 });
   expect(h.engine.snapshot().status).toBe('recording');
@@ -96,7 +97,7 @@ test('a tick past the deadline ends a stopped drive even with no row; a walking 
   expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: T0 + 1000 });
 
   const w = harness();
-  await w.engine.dispatch({ type: 'start', ts: T0 });
+  await w.engine.dispatch({ type: 'start', ts: T0, continues: false });
   await feed(w, seq([3, { speed: mph(40) }]));
   await w.engine.dispatch({ type: 'walking', ts: T0 + 3000 });
   expect(w.engine.snapshot().status).toBe('recording'); // a misfire at 40 mph is ignored
@@ -107,7 +108,7 @@ test('a tick past the deadline ends a stopped drive even with no row; a walking 
 
 test('alerts: one chime per speeding episode, the pickup and the 15-s handling alert, instant events as they close', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0 });
+  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
   await feed(h, after(10, { speed: mph(47) }));
   await feed(h, seq([10, (i) => ({ speed: mph(30), ts: T0 + 41_000 + i * 1000 })]));
   expect(h.alerts.filter((a) => a.type === 'speeding')).toHaveLength(1);
@@ -133,7 +134,7 @@ test('alerts: one chime per speeding episode, the pickup and the 15-s handling a
 
 test('checkpoints every 30 rows and clears the pending rows; a failed checkpoint keeps them for the next', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0 });
+  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
   h.checkpoints.length = 0;
   h.checkpointFails = 1;
   await feed(h, seq([CHECKPOINT_ROWS, { speed: mph(30) }]));
@@ -148,7 +149,7 @@ test('checkpoints every 30 rows and clears the pending rows; a failed checkpoint
 
 test('a fix lost while moving, then a still phone with no sky: the stop clock starts after 30 s still and the drive ends', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0 });
+  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
   await feed(h, seq([10, { speed: mph(8) }]));
   const still = (i: number) => ({ ts: T0 + 10_000 + i * 1000, gnssValid: false, speed: -1, gravityStability: 0.99, aLonMax: 0.01, aLonMin: -0.01, aLatMax: 0.01, aLatMin: -0.01, yawRateMax: 0.01, jerkMax: 0.01 });
   await feed(h, seq([29, still]));
@@ -160,7 +161,7 @@ test('a fix lost while moving, then a still phone with no sky: the stop clock st
   expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: T0 + 10_000 });
   // A phone that is moving (carried) with no fix does not count as still.
   const m = harness();
-  await m.engine.dispatch({ type: 'start', ts: T0 });
+  await m.engine.dispatch({ type: 'start', ts: T0, continues: false });
   await feed(m, seq([10, { speed: mph(8) }]));
   await feed(m, seq([60, (i) => ({ ...still(i), handlingScore: 0.5 })]));
   expect(m.engine.snapshot().stoppedSinceTs).toBeNull();
@@ -168,7 +169,7 @@ test('a fix lost while moving, then a still phone with no sky: the stop clock st
 
 test('walking is accepted whatever the last speed once the last fix is over 60 s old', async () => {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0 });
+  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
   await feed(h, seq([5, { speed: mph(8) }]));
   await h.engine.dispatch({ type: 'walking', ts: T0 + 30_000 });
   expect(h.engine.snapshot().status).toBe('recording');
@@ -180,7 +181,7 @@ test('walking is accepted whatever the last speed once the last fix is over 60 s
 test('a finalizer that throws is reported and the engine is idle again for the next drive', async () => {
   const h = harness();
   h.finalizeFails = true;
-  await h.engine.dispatch({ type: 'start', ts: T0 });
+  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
   await feed(h, seq([2, { speed: mph(30) }]));
   await h.engine.dispatch({ type: 'end', ts: T0 + 2000 });
   expect(h.engine.snapshot().status).toBe('idle');
@@ -199,32 +200,65 @@ test('adopt continues a rebuilt drive only while idle; stale and duplicate rows 
 });
 
 function createDetectorsSession(): TripSession {
-  return {
-    clientTripId: 'x',
-    startedAt: T0,
-    endedAt: null,
-    endCause: null,
-    lastRowTs: null,
-    rowsCount: 0,
-    validGnssRows: 0,
-    mockRows: 0,
-    movingRows: 0,
-    imuActiveRows: 0,
-    distanceM: 0,
-    safeDistanceM: 0,
-    nightDistanceM: 0,
-    maxSpeedMps: 0,
-    firstFix: null,
-    lastFix: null,
-    track: [],
-    events: [],
-    pending: [],
-    checkpointTs: null,
-  };
+  return createSession({ clientTripId: 'x', startedAt: T0 });
 }
 
 test('stillWithoutFix: a still phone with no fix', () => {
   expect(stillWithoutFix(row({ gnssValid: false, gravityStability: 0.99 }))).toBe(true);
   expect(stillWithoutFix(row({ gnssValid: false, gravityStability: 0.99, aLonMax: 0.2 }))).toBe(false);
   expect(stillWithoutFix(row({ gnssValid: true }))).toBe(false);
+});
+
+describe('the warm-up in a live drive (Start Drive at any speed)', () => {
+  const handled = { handlingScore: 0.9, gravityStability: 0.5, orientationDelta: 0.2 };
+  const at = (fromS: number, n: number, over: Partial<FeatureRow>) => seq([n, (i) => ({ ...over, ts: T0 + (fromS + i) * 1000 })]);
+  async function drive(continues: boolean, rows: FeatureRow[]): Promise<Readonly<TripSession>> {
+    const h = harness();
+    await h.engine.dispatch({ type: 'start', ts: T0, continues });
+    await feed(h, rows);
+    await h.engine.dispatch({ type: 'end', ts: T0 + 60_000 });
+    return h.finalized[0]!;
+  }
+  const types = (s: Readonly<TripSession>) => s.events.map((e) => e.type);
+
+  test('a start at 40 mph: three handling rows at +10 s are a pickup', async () => {
+    const s = await drive(false, [...at(0, 10, { speed: mph(40) }), ...at(10, 3, { speed: mph(40), ...handled }), ...at(13, 5, { speed: mph(40) })]);
+    expect(s.warmup).toMatchObject({ decided: true, endsAt: T0 });
+    expect(types(s)).toEqual(['phone_pickup']);
+  });
+
+  test('the same rows on a stopped start (first reading 0 mph) are inside the 30 s: no pickup', async () => {
+    const s = await drive(false, [...at(0, 5, { speed: 0 }), ...at(5, 5, { speed: mph(40) }), ...at(10, 3, { speed: mph(40), ...handled }), ...at(13, 5, { speed: mph(40) })]);
+    expect(s.warmup).toMatchObject({ decided: true, endsAt: T0 + 30_000 });
+    expect(types(s)).toEqual([]);
+  });
+
+  test('a restart (continues) that starts stopped: three handling rows at 35 mph at +5 s are a pickup', async () => {
+    const s = await drive(true, [...at(0, 2, { speed: 0 }), ...at(2, 3, { speed: mph(35) }), ...at(5, 3, { speed: mph(35), ...handled }), ...at(8, 5, { speed: mph(35) })]);
+    expect(s.warmup).toMatchObject({ continues: true, endsAt: T0 });
+    expect(types(s)).toEqual(['phone_pickup']);
+  });
+
+  test('speeding counts from the first trusted reading of a moving start, and only after 30 s on a stopped one', async () => {
+    const moving = await drive(false, [...at(0, 20, { speed: mph(55) }), ...at(20, 10, { speed: mph(30) })]);
+    expect(moving.events.filter((e) => e.type === 'speeding').map((e) => [e.startedAt, e.durationS])).toEqual([[T0, 20]]);
+    const stopped = await drive(false, [...at(0, 1, { speed: 0 }), ...at(1, 39, { speed: mph(55) }), ...at(40, 10, { speed: mph(30) })]);
+    expect(stopped.events.filter((e) => e.type === 'speeding').map((e) => [e.startedAt, e.durationS])).toEqual([[T0 + 30_000, 10]]);
+  });
+
+  test('a hard brake 10 s into a moving start counts; on a stopped start it does not', async () => {
+    const brake = (lead: FeatureRow[]) => [
+      ...lead,
+      ...at(5, 5, { speed: mph(35) }),
+      ...at(10, 1, { speed: mph(25), aLonMin: -0.5 }),
+      ...at(11, 5, { speed: mph(25) }),
+    ];
+    expect(types(await drive(false, brake(at(0, 5, { speed: mph(35) }))))).toEqual(['hard_brake']);
+    expect(types(await drive(false, brake(at(0, 5, { speed: 0 }))))).toEqual([]);
+  });
+
+  test('an untrusted first reading (speedAcc 3) decides nothing; the next trusted one does', async () => {
+    const s = await drive(false, [...at(0, 3, { speed: mph(40), speedAcc: 3 }), ...at(3, 10, { speed: mph(40) })]);
+    expect(s.warmup).toMatchObject({ decided: true, endsAt: T0 + 3000 });
+  });
 });

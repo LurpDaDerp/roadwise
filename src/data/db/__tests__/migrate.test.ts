@@ -2,7 +2,7 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
-import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
 const TABLES = [
   'schema_version',
@@ -38,11 +38,11 @@ test('creates every v3 and v5 table and index, and nothing of v2', async () => {
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
-test('records the schema version it reached (6)', async () => {
+test('records the schema version it reached (7)', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
-  expect(CURRENT_SCHEMA_VERSION).toBe(6);
+  expect(CURRENT_SCHEMA_VERSION).toBe(7);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 6 }]);
+  expect(rows).toEqual([{ version: 7 }]);
 });
 
 test('is idempotent', async () => {
@@ -51,7 +51,7 @@ test('is idempotent', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
   expect(await names(db, 'table')).toEqual(tables);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 6 }]);
+  expect(rows).toEqual([{ version: 7 }]);
 });
 
 test('the v3 trips table carries the v3 columns', async () => {
@@ -138,10 +138,22 @@ test('a v5 database steps up to v6: every stored DashPal event stays and counts 
      VALUES ('a4cf12b3c4d5', 7, 0, 'id-0', 0, 'MICROSLEEP', 3, 1, 0, 100, 5, 1.5, 1)`
   );
 
-  await expect(migrate(db)).resolves.toBe(6);
+  await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
   expect((await db.execute('SELECT id, ignored FROM dashcam_events')).rows).toEqual([{ id: 'id-0', ignored: 0 }]);
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
+});
+
+test('a v6 database steps up to v7: every stored drive stays and does not continue a previous one (continues 0)', async () => {
+  for (const statement of [...SCHEMA_V1, ...SCHEMA_V2, ...SCHEMA_V3, ...SCHEMA_V4, ...SCHEMA_V5, ...SCHEMA_V6]) await db.execute(statement);
+  await db.execute(SCHEMA_VERSION_TABLE);
+  await db.execute('INSERT INTO schema_version (version) VALUES (6)');
+  await db.execute("INSERT INTO trips (client_trip_id, started_at, tz, status, created_at, updated_at) VALUES ('t1', 1, 'UTC', 'recording', 1, 1)");
+
+  await expect(migrate(db)).resolves.toBe(7);
+
+  expect((await db.execute('SELECT client_trip_id, continues FROM trips')).rows).toEqual([{ client_trip_id: 't1', continues: 0 }]);
+  expect((await columns(db, 'trips')).at(-1)).toBe('continues');
 });
 
 test('dashcam rows: an event dedupes on (dashcam, boot, seq) and its id is unique; a deleted trip unstamps its events and drops its coverage', async () => {

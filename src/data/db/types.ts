@@ -64,6 +64,8 @@ export interface TripRow {
   checkpoint_ts: number | null;
   created_at: number;
   updated_at: number;
+  /** 1: started within `MERGE_GAP_S` of the end of the phone's previous drive (no warm-up). */
+  continues: Flag;
 }
 
 export type NewTrip = Pick<TripRow, 'client_trip_id' | 'started_at' | 'tz' | 'status'> &

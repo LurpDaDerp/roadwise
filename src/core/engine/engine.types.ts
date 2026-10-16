@@ -26,6 +26,19 @@ export interface TrackPoint extends Fix {
 }
 
 /**
+ * When the drive's events start counting (spec "Rules against false positives"). Replaced, never
+ * mutated (`noteWarmup`).
+ */
+export interface Warmup {
+  /** The drive started within `MERGE_GAP_S` of the end of the phone's previous drive: no warm-up. */
+  continues: boolean;
+  /** The first trusted speed reading has been seen, or the 30 s are over: `endsAt` is final. */
+  decided: boolean;
+  /** epoch ms; rows before it start no event. */
+  endsAt: number;
+}
+
+/**
  * One drive as the engine accumulates it. Mutable while open; the finalizer receives a frozen
  * copy once.
  */
@@ -59,6 +72,7 @@ export interface TripSession {
   pending: FeatureRow[];
   /** `ts` of the last durable row. */
   checkpointTs: number | null;
+  warmup: Readonly<Warmup>;
 }
 
 /** An alert the engine raised: the alert layer plays it, the HUD glows for 1.5 s. */
@@ -106,8 +120,8 @@ export interface EngineDeps {
   };
   /** A fresh detector suite for each drive. */
   createDetectors(): DetectorSuite;
-  /** The per-row detector context minus `tripStartedAt`, which the engine knows. */
-  ctx(): Omit<DetectorContext, 'tripStartedAt'>;
+  /** The per-row detector context minus `warmupEndsAt`, which the engine knows. */
+  ctx(): Omit<DetectorContext, 'warmupEndsAt'>;
   onAlert(alert: AlertEvent): void;
   /** Every `CHECKPOINT_ROWS` rows and before finalize. Owns persistence; a rejection leaves the rows pending. */
   onCheckpoint(session: Readonly<TripSession>): Promise<void>;
@@ -124,7 +138,8 @@ export interface AdoptedTrip {
 }
 
 export type EngineEvent =
-  | { type: 'start'; ts: number }
+  /** `continues`: the phone's previous drive ended within `MERGE_GAP_S` (the host reads it at the tap). */
+  | { type: 'start'; ts: number; continues: boolean }
   | { type: 'row'; row: FeatureRow }
   /** The OS says the driver is walking: the drive ends where it last stopped. */
   | { type: 'walking'; ts: number }

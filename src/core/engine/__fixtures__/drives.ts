@@ -51,7 +51,7 @@ export function closedSession(n: number, events: DetectedEvent[] = [], opts: Dri
   const list = rows(n, opts);
   const det = createDetectors(() => 'x');
   list.forEach((r, i) => {
-    det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, { tripStartedAt: t0, callActive: false });
+    det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, { warmupEndsAt: t0 + 30_000, callActive: false });
     appendRow(session, r, opts.unsafeRows?.(i) ?? false);
   });
   session.events.push(...events);

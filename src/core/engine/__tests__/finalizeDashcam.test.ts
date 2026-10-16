@@ -120,6 +120,17 @@ describe('finalizeTrip with DashPal facts', () => {
     expect(result.payload!.events.map((e) => e.id)).toEqual([cid(6)]);
   });
 
+  test('the warm-up is the drive’s own: a candidate 5 s in is scored when the warm-up ended at 2 s (a start while moving), not on a stopped start', async () => {
+    const loader = async () => facts({ events: [cand(1, 'drowsy', 5), cand(2, 'eyes_off', 1)] });
+    const moving = { ...session(), warmup: Object.freeze({ continues: false, decided: true, endsAt: at(2) }) };
+    expect((await finalizeTrip(moving, deps(loader))).payload!.events.map((e) => e.id)).toEqual([cid(1)]);
+    await db.execute('DELETE FROM trips');
+    await db.execute('DELETE FROM sync_queue');
+    expect((await finalizeTrip(session(), deps(loader))).payload!.events).toEqual([]);
+    expect(dashcamEvents([cand(1, 'drowsy', 5)], { startedAt: T0, endedAt: at(100), warmupEndsAt: T0 }, []).map((e) => e.id)).toEqual([cid(1)]);
+    expect(dashcamEvents([cand(1, 'drowsy', 5)], { startedAt: T0, endedAt: at(100) }, [])).toEqual([]);
+  });
+
   test('row 35: an eyes-off within 5 s of a phone pickup is dropped (the phone already charged it); a drowsy there is kept', async () => {
     // the pickup spans 600–605 s; ±5 s → 595–610 s
     const result = await finalizeTrip(
