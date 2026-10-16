@@ -100,7 +100,10 @@ export interface DriveHost {
   resumeAfterSignIn(): Promise<void>;
   signedInAgain(opts?: { initial?: boolean }): Promise<void>;
   signOutCompleted(): void;
-  /** The session ended, whoever ended it: an open drive is finalized under the device's owner. */
+  /**
+   * The session ended, whoever ended it (every sign-out, forced or not, and one the server ended):
+   * an open drive is finalized under the device's owner, then Home's drop notice comes down.
+   */
   sessionEnded(): Promise<void>;
   reportAlertsUnavailable(): void;
   reportAlertsAvailable(): void;
@@ -675,6 +678,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     },
     async sessionEnded() {
       if (!signingOut && !signedOut) await self.suspendForSignOut();
+      // Sign-out takes the notice down, also when the wipe did not run (uploads still owed).
+      if (persist) await clearDropNotice(db).catch((e: unknown) => report(e, 'dropNotice'));
       self.signOutCompleted();
     },
     reportAlertsUnavailable() {

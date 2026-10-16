@@ -414,6 +414,49 @@ describe('a drive that never moved is not kept', () => {
     await h.host.stop({ endOpenTrip: true });
   });
 
+  test('every sign-out takes the notice down: a forced one with uploads owed, and one the server ended', async () => {
+    // The driver's own sign-out (forced or not) ends the session after recording stops; the
+    // SIGNED_OUT that follows reaches the host as sessionEnded, whether or not the wipe ran.
+    await writeDropNotice(db, { clientTripId: 'old', cause: 'stopped', reason: 'no_movement', at: T0 - 1000 });
+    const own = build();
+    await own.host.boot();
+    await own.host.suspendForSignOut();
+    expect(await readDropNotice(db)).not.toBeNull(); // the driver may still back out here
+    await own.host.sessionEnded();
+    expect(await readDropNotice(db)).toBeNull();
+    await own.host.stop({ endOpenTrip: false });
+
+    // A session the driver did not end (revoked or expired): only sessionEnded.
+    await writeDropNotice(db, { clientTripId: 'old', cause: 'stopped', reason: 'no_movement', at: T0 - 1000 });
+    const server = build();
+    await server.host.boot();
+    await server.host.sessionEnded();
+    expect(await readDropNotice(db)).toBeNull();
+    await server.host.stop({ endOpenTrip: false });
+  });
+
+  test('a drive dropped by the sign-out itself leaves no notice behind', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(5, { speedMps: 0 }));
+    await h.host.suspendForSignOut();
+    expect(h.host.snapshot().lastFinalized).toMatchObject({ dropped: 'no_movement' });
+    await h.host.sessionEnded();
+    expect(await readDropNotice(db)).toBeNull();
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('a sign-out the driver backs out of keeps the notice', async () => {
+    await writeDropNotice(db, { clientTripId: 'old', cause: 'stopped', reason: 'no_movement', at: T0 - 1000 });
+    const h = build();
+    await h.host.boot();
+    await h.host.suspendForSignOut();
+    await h.host.resumeAfterSignIn();
+    expect(await readDropNotice(db)).not.toBeNull();
+    await h.host.stop({ endOpenTrip: false });
+  });
+
   test('a kept drive’s end() says dropped: null and writes no notice', async () => {
     const h = build();
     await h.host.boot();
