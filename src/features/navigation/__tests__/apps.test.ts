@@ -51,6 +51,7 @@ describe('the catalogue', () => {
     expect(NAV_APPS.map((a) => a.label)).toEqual([
       'Apple Maps', 'Google Maps', 'Waze', 'Navigation for Google Maps Go', 'HERE WeGo', 'Sygic', 'TomTom GO', 'Magic Earth', 'OsmAnd', 'Organic Maps', 'MapQuest', 'Yandex Navigator',
     ]);
+    for (const a of NAV_APPS) expect(a.short.length).toBeLessThanOrEqual(12);
     expect(navAppById('waze')?.label).toBe('Waze');
     expect(navAppById('citymapper')).toBeNull();
   });

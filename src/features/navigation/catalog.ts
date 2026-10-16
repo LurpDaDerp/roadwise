@@ -21,6 +21,8 @@ export type NavAppId =
 export interface NavAppEntry {
   id: NavAppId;
   label: string;
+  /** The navigation button's caption: at most 12 characters. */
+  short: string;
   /** The URL scheme the iPhone app answers (opened as `scheme://`), or null when it has no iPhone app. */
   iosScheme: string | null;
   /** Android packages, the first installed one wins; empty when it has no Android app. */
@@ -28,18 +30,18 @@ export interface NavAppEntry {
 }
 
 export const NAV_APPS: readonly NavAppEntry[] = [
-  { id: 'apple_maps', label: 'Apple Maps', iosScheme: 'maps', androidPackages: [] },
-  { id: 'google_maps', label: 'Google Maps', iosScheme: 'comgooglemaps', androidPackages: ['com.google.android.apps.maps'] },
-  { id: 'waze', label: 'Waze', iosScheme: 'waze', androidPackages: ['com.waze'] },
-  { id: 'google_maps_go_nav', label: 'Navigation for Google Maps Go', iosScheme: null, androidPackages: ['com.google.android.apps.navlite'] },
-  { id: 'here', label: 'HERE WeGo', iosScheme: 'here-route', androidPackages: ['com.here.app.maps'] },
-  { id: 'sygic', label: 'Sygic', iosScheme: 'com.sygic.aura', androidPackages: ['com.sygic.aura'] },
-  { id: 'tomtom', label: 'TomTom GO', iosScheme: 'tomtomgo', androidPackages: ['com.tomtom.gplay.navapp'] },
-  { id: 'magic_earth', label: 'Magic Earth', iosScheme: 'magicearth', androidPackages: ['com.generalmagic.magicearth'] },
-  { id: 'osmand', label: 'OsmAnd', iosScheme: 'osmandmaps', androidPackages: ['net.osmand.plus', 'net.osmand'] },
-  { id: 'organic_maps', label: 'Organic Maps', iosScheme: 'om', androidPackages: ['app.organicmaps'] },
-  { id: 'mapquest', label: 'MapQuest', iosScheme: 'mapquest', androidPackages: ['com.mapquest.android.ace'] },
-  { id: 'yandex_navi', label: 'Yandex Navigator', iosScheme: 'yandexnavi', androidPackages: ['ru.yandex.yandexnavi'] },
+  { id: 'apple_maps', label: 'Apple Maps', short: 'Apple Maps', iosScheme: 'maps', androidPackages: [] },
+  { id: 'google_maps', label: 'Google Maps', short: 'Google Maps', iosScheme: 'comgooglemaps', androidPackages: ['com.google.android.apps.maps'] },
+  { id: 'waze', label: 'Waze', short: 'Waze', iosScheme: 'waze', androidPackages: ['com.waze'] },
+  { id: 'google_maps_go_nav', label: 'Navigation for Google Maps Go', short: 'Maps Go', iosScheme: null, androidPackages: ['com.google.android.apps.navlite'] },
+  { id: 'here', label: 'HERE WeGo', short: 'HERE WeGo', iosScheme: 'here-route', androidPackages: ['com.here.app.maps'] },
+  { id: 'sygic', label: 'Sygic', short: 'Sygic', iosScheme: 'com.sygic.aura', androidPackages: ['com.sygic.aura'] },
+  { id: 'tomtom', label: 'TomTom GO', short: 'TomTom GO', iosScheme: 'tomtomgo', androidPackages: ['com.tomtom.gplay.navapp'] },
+  { id: 'magic_earth', label: 'Magic Earth', short: 'Magic Earth', iosScheme: 'magicearth', androidPackages: ['com.generalmagic.magicearth'] },
+  { id: 'osmand', label: 'OsmAnd', short: 'OsmAnd', iosScheme: 'osmandmaps', androidPackages: ['net.osmand.plus', 'net.osmand'] },
+  { id: 'organic_maps', label: 'Organic Maps', short: 'Organic Maps', iosScheme: 'om', androidPackages: ['app.organicmaps'] },
+  { id: 'mapquest', label: 'MapQuest', short: 'MapQuest', iosScheme: 'mapquest', androidPackages: ['com.mapquest.android.ace'] },
+  { id: 'yandex_navi', label: 'Yandex Navigator', short: 'Yandex', iosScheme: 'yandexnavi', androidPackages: ['ru.yandex.yandexnavi'] },
 ];
 
 /** Every iOS scheme, in order (app.config.ts lists exactly these). */

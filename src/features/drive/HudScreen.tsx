@@ -1,18 +1,23 @@
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { BackHandler, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DashpalChip, DashpalHudBanner, dashpalTier, useDashpalChip, useDashpalFlash } from '@/dashcam/ui/HudDashpal';
+import { useOptionalDb } from '@/data/queries/context';
 import { useDrive, useDriveControls, useDriveHost, useDriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
+import { navAppById } from '@/features/navigation/catalog';
+import { NavAppPicker } from '@/features/navigation/NavAppPicker';
+import { useNavigationButton } from '@/features/navigation/useNavigationButton';
 import { sunIsDown } from '@/lib/time';
 import { fontFamilies } from '@/ui/fonts';
 import {
   DIM_AFTER_MS,
   DIM_SCRIM_OPACITY,
   EdgeGlow,
+  END_BUTTON_PT,
   HoldButton,
   hudPalette,
   SpeedReadout,
@@ -23,6 +28,7 @@ import {
 
 import { EventBanner, useAlertFlash } from './EventBanner';
 import { hudCopy } from './hudCopy';
+import { NAV_HIGHLIGHT_MS, NavigationButton } from './NavigationButton';
 import { StoppedPoints } from './StoppedPoints';
 import { inUnits, unitLabel, useHudUnits } from './useHudUnits';
 import { WeatherBanner } from './WeatherBanner';
@@ -103,7 +109,9 @@ export type HudScreenProps = {
  *   phone's event, then a DashPal warning or advisory, then speeding.
  * - Top: the weather line, only while an alert covers the area.
  * - Stopped only: the points total and the change since the last stop.
- * - Bottom: hold-to-end — the only control, live at any speed. Every other touch only undims.
+ * - Bottom: hold-to-end in the middle and the navigation button on the right: the only two
+ *   controls live at any speed (and, the first time, the navigation button's list of apps, shown in
+ *   a panel above them, never a route). Every other touch only undims.
  * - After 10 s without a touch a dark scrim dims everything (the speed stays faintly readable);
  *   never while an alert glow shows.
  *
@@ -125,8 +133,22 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const alert = useAlertFlash(live.lastAlert);
   const dashpal = useDashpalFlash();
   const dashpalChip = useDashpalChip();
-  // The dimmer stays off while either alert shows.
-  const { dimmed, wake } = useDimmer(alert !== null || dashpal !== null);
+  const nav = useNavigationButton(useOptionalDb());
+  // The button's warm-up highlight: the drive's rows are still under 30 s old (row clock).
+  const navWarmupOver = useDrive((s) => s.lastRowTs != null && s.startedAt != null && s.lastRowTs - s.startedAt >= NAV_HIGHLIGHT_MS);
+  // The dimmer stays off while either alert shows, and while the list of apps is open.
+  const { dimmed, wake } = useDimmer(alert !== null || dashpal !== null || nav.picker !== null);
+  // Android back closes the list first (before the drive screen's own swallow).
+  const pickerOpen = nav.picker !== null;
+  const closePicker = nav.close;
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      closePicker();
+      return true;
+    });
+    return () => sub.remove();
+  }, [pickerOpen, closePicker]);
 
   // Where the drive goes once it is over: its summary, fresh, or Home when there was none (a drive
   // that was not kept has no summary; Home says why).
@@ -191,6 +213,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const speedColor = speeding ? tierColor(p, live.speedingTier!) : p.ink;
   const numeral = speedNumeralPt(Math.min(width, height));
   const busy = ending || live.status === 'finalizing';
+  const savedApp = nav.saved === null ? null : navAppById(nav.saved);
 
   return (
     <View testID="hud-screen" onTouchStart={wake} style={[styles.root, { backgroundColor: p.ground }]}>
@@ -250,6 +273,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         </View>
 
         <View style={styles.bottom}>
+          <View style={styles.side} />
           <HoldButton
             testID="hud-end"
             label={busy ? hudCopy.ending : hudCopy.end}
@@ -262,8 +286,46 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             disabled={busy}
             onHold={() => void onEnd()}
           />
+          <View style={styles.side}>
+            <NavigationButton
+              caption={savedApp?.short ?? null}
+              appLabel={savedApp?.label ?? null}
+              highlight={savedApp !== null && live.status === 'recording' && !navWarmupOver}
+              disabled={busy || live.status !== 'recording'}
+              palette={p}
+              onPress={() => void nav.press()}
+            />
+          </View>
         </View>
       </View>
+
+      {nav.picker !== null ? (
+        <View
+          testID="hud-nav-panel"
+          style={[
+            styles.panel,
+            {
+              top: insets.top + 12,
+              left: insets.left + 16,
+              right: insets.right + 16,
+              // Above the bottom row: End stays reachable while the list is open.
+              bottom: insets.bottom + 16 + END_BUTTON_PT + 16,
+              backgroundColor: p.chrome,
+              borderColor: p.chromeEdge,
+            },
+          ]}
+        >
+          <NavAppPicker
+            apps={nav.picker.apps}
+            mode={nav.picker.mode}
+            missingLabel={nav.picker.missingLabel}
+            driveLine
+            colors={{ surface: p.chrome, ink: p.ink, muted: p.inkMuted, edge: p.chromeEdge }}
+            onChoose={(app) => void nav.choose(app)}
+            onClose={nav.close}
+          />
+        </View>
+      ) : null}
 
       {dimmed ? (
         <View
@@ -285,6 +347,8 @@ const styles = StyleSheet.create({
   chip: { position: 'absolute', zIndex: 1 },
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 28 },
   gauges: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24 },
-  bottom: { alignItems: 'center', justifyContent: 'center' },
+  bottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  side: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  panel: { position: 'absolute', zIndex: 2, borderRadius: 20, borderWidth: 1, padding: 16 },
   note: { fontFamily: fontFamilies.fieldBold, fontSize: 26, lineHeight: 32 },
 });

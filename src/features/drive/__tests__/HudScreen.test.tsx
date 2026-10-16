@@ -365,9 +365,50 @@ describe('dimming', () => {
   });
 });
 
-test('End is the only control on the screen', async () => {
+test('End and the navigation button are the only controls on the screen', async () => {
   await renderHud({ weatherAlert: 'Dense fog', points: { total: 5, sinceLastStop: 0 }, stopped: true });
-  expect(screen.getAllByRole('button')).toHaveLength(1);
+  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav']);
+});
+
+describe('the navigation button (design §7.4, §8)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the RN module the default port uses, after the mocks
+  const { Linking } = require('react-native') as typeof import('react-native');
+  beforeEach(() => {
+    jest.spyOn(Linking, 'canOpenURL').mockImplementation(async (url: string) => url === 'waze://' || url === 'maps://');
+    jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
+  });
+
+  test('it shows while moving, with "Navigate" and no highlight when no app is saved', async () => {
+    await renderHud({ speedMph: 60 });
+    expect(screen.getByTestId('hud-nav')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Choose a navigation app' })).toBeOnTheScreen();
+    expect(screen.getByText('Navigate')).toBeOnTheScreen();
+    expect(screen.queryByTestId('hud-nav-highlight')).toBeNull();
+  });
+
+  test('the first tap at 60 mph opens the list of installed apps over the HUD; End still ends the drive with it open', async () => {
+    await renderHud({ speedMph: 60 });
+    await fireEvent.press(screen.getByTestId('hud-nav'));
+    await act(async () => {});
+    expect(screen.getByTestId('nav-picker')).toBeOnTheScreen();
+    expect(screen.getByText('Select default navigation app')).toBeOnTheScreen();
+    expect(screen.getByText('Opening it with this button never costs points. Leaving RoadWise any other way during a drive does.')).toBeOnTheScreen();
+    expect(screen.getByTestId('nav-picker-row-apple_maps')).toBeOnTheScreen();
+    expect(screen.getByTestId('nav-picker-row-waze')).toBeOnTheScreen();
+    // the screen does not dim under the list
+    await act(() => jest.advanceTimersByTime(DIM_AFTER_MS + 1000));
+    expect(screen.queryByTestId('hud-dim')).toBeNull();
+    const end = screen.getByRole('button', { name: hudCopy.endLabel });
+    await fireEvent(end, 'pressIn');
+    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    await act(async () => {});
+    expect(mockEnd).toHaveBeenCalledTimes(1);
+  });
+
+  test('disabled while the drive is saving', async () => {
+    await renderHud({ status: 'finalizing' });
+    expect(screen.getByTestId('hud-nav').props.accessibilityState).toMatchObject({ disabled: true });
+  });
 });
 
 describe('DashPal (plan §7.10)', () => {
