@@ -687,9 +687,14 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       if (!connected) await deps.sleep(500);
     }
     // Maybe stored, maybe not: kept only as the orphan, which proves prev_id at the next setup.
-    await deps.secrets.writeOrphan({ dashcamId: pending.dashcamId, phoneId: pending.phoneId, kPair: pending.kPair }).catch((e: unknown) => report(e, 'orphan'));
+    await keepOrphan(pending);
     await deps.secrets.deletePendingAuth().catch((e: unknown) => report(e, 'delete key'));
     return { kind: 'failed', reason: 'error' };
+  }
+
+  /** A key the dashcam may hold, kept only to prove prev_id at the next setup. */
+  async function keepOrphan(pending: StoredAuth): Promise<void> {
+    await deps.secrets.writeOrphan({ dashcamId: pending.dashcamId, phoneId: pending.phoneId, kPair: pending.kPair }).catch((e: unknown) => report(e, 'orphan'));
   }
 
   /** The pairing is stored at the dashcam: a first session, hello, pair confirm, PAIRED; then saved. */
@@ -725,7 +730,16 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     }
     const record: PairedDashcam = { dashcamId: info0.dashcamId, peripheralId: c.id, name: info0.name, pairedAt: deps.now(), secure: true };
     await release(t, c.id);
-    const final = await deps.secrets.finalizeAuth();
+    let final: StoredAuth | null;
+    try {
+      final = await deps.secrets.finalizeAuth();
+    } catch (e) {
+      // The dashcam stored this pairing but the key could not be made final: it is kept as the
+      // orphan, which proves prev_id at the next setup (that record is then replaced, not added to).
+      report(e, 'finalize key');
+      await keepOrphan(pending);
+      return { kind: 'failed', reason: 'error' };
+    }
     if (!final) return { kind: 'failed', reason: 'error' };
     await deps.pair(record);
     await deps.secrets.deleteOrphan().catch((e: unknown) => report(e, 'delete orphan'));

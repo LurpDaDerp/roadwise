@@ -616,6 +616,26 @@ describe('the outcome of PAIR_FIN unknown', () => {
     expect(await r.secrets.readOrphan()).toBeNull();
   });
 
+  test('PAIR_FIN answered R_OK but the key cannot be made final: error, the key kept as the orphan; the next setup replaces that record (prev_id)', async () => {
+    const r = rig();
+    const finalize = r.secrets.finalizeAuth;
+    r.secrets.finalizeAuth = async () => {
+      throw new Error('errSecInteractionNotAllowed');
+    };
+    const end = await withCode(r, (f) => f.scanned(link(0xd5)));
+    expect(end).toMatchObject({ kind: 'failed', reason: 'error' });
+    const cam = r.cams.get(0xd5)!;
+    const orphan = await r.secrets.readOrphan();
+    expect(orphan?.dashcamId).toBe(camOf(0xd5));
+    expect([...cam.phones.keys()]).toEqual([orphan!.phoneId]);
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    r.secrets.finalizeAuth = finalize;
+    cam.windowOpen = true;
+    expect((await withCode(r, (f) => f.scanned(link(0xd5)))).kind).toBe('done');
+    expect(cam.phones.size).toBe(1);
+    expect(await r.secrets.readOrphan()).toBeNull();
+  });
+
   test('no reconnect within 15 s: error, the key kept only as the orphan', async () => {
     const r = rig();
     dropAfterFin(r);
