@@ -41,6 +41,14 @@ jest.mock('expo-notifications', () => ({
   setNotificationHandler: () => {},
 }));
 
+const mockRouter = { push: jest.fn(), navigate: jest.fn() };
+// read lazily: the factory runs at import time, before this file's consts are set
+jest.mock('expo-router', () => ({
+  get router() {
+    return mockRouter;
+  },
+}));
+
 const T = 1_760_000_000_000;
 const TOKEN = 'tok-a';
 
@@ -69,10 +77,17 @@ async function mount(o: { platform?: 'ios' | 'android'; gate?: StartGate; start?
   const startDrive = jest.fn(async (): Promise<StartResult> => o.start ?? { ok: true, clientTripId: 'trip-1' });
   const navigate = jest.fn();
   let gate: StartGate = o.gate ?? 'yes';
+  const busyListeners = new Set<() => void>();
+  const subscribeBusy = (fn: () => void) => {
+    busyListeners.add(fn);
+    return () => {
+      busyListeners.delete(fn);
+    };
+  };
   const props = () => ({
-    isRecording: () => false,
-    isBusy: () => false,
-    subscribeBusy: () => () => {},
+    isRecording: () => gate === 'driving',
+    isBusy: () => gate === 'driving' || gate === 'closing',
+    subscribeBusy,
     startDrive,
     startGate: () => gate,
     navigate,
@@ -108,6 +123,13 @@ async function mount(o: { platform?: 'ios' | 'android'; gate?: StartGate; start?
       await settle();
     },
     advance: (ms: number) => (now += ms),
+    /** The drive host published a state (every change during a drive). */
+    fireBusy: async () => {
+      await act(async () => {
+        for (const fn of [...busyListeners]) fn();
+      });
+      await settle();
+    },
   };
 }
 
@@ -170,6 +192,74 @@ test('a tap waiting more than 2 min is expired: no claim, no start, Home says so
   expect(h.startDrive).not.toHaveBeenCalled();
   expect(h.navigate.mock.calls).toEqual([['/home']]);
   expect(readStartNotice()).toBe('reminder-expired');
+});
+
+test('a tap while a drive records opens the drive screen and is spent: no claim, no start, no notice, nothing more when the drive ends after 2 min', async () => {
+  const h = await mount({ gate: 'driving' });
+  await act(async () => mockNotifications.listener!(reminderResponse()));
+  await h.settle();
+  expect(h.navigate.mock.calls).toEqual([['/drive']]);
+  // the drive publishes its state all along, then closes and ends
+  h.advance(2 * 60_000 + 1);
+  await h.fireBusy();
+  await h.setGate('closing');
+  await h.fireBusy();
+  await h.setGate('yes');
+  await h.fireBusy();
+  expect(h.claims()).toBe(0);
+  expect(h.startDrive).not.toHaveBeenCalled();
+  expect(h.navigate.mock.calls).toEqual([['/drive']]);
+  expect(readStartNotice()).toBeNull();
+});
+
+test('a tap held while the app is still starting, which then finds a drive under way: the drive screen, never Home or "expired"', async () => {
+  mockNotifications.last = reminderResponse();
+  const h = await mount({ gate: 'wait' });
+  h.advance(2 * 60_000 + 1);
+  await h.setGate('driving');
+  await h.fireBusy();
+  await h.setGate('yes');
+  await h.fireBusy();
+  expect(h.claims()).toBe(0);
+  expect(h.startDrive).not.toHaveBeenCalled();
+  expect(h.navigate.mock.calls).toEqual([['/drive']]);
+  expect(readStartNotice()).toBeNull();
+});
+
+test('a tap while a drive closes does nothing, then or after the drive ends', async () => {
+  const h = await mount({ gate: 'closing' });
+  await act(async () => mockNotifications.listener!(reminderResponse()));
+  await h.settle();
+  await h.setGate('yes');
+  await h.fireBusy();
+  expect(h.claims()).toBe(0);
+  expect(h.startDrive).not.toHaveBeenCalled();
+  expect(h.navigate).not.toHaveBeenCalled();
+  expect(readStartNotice()).toBeNull();
+});
+
+test('without an injected navigate, a reminder tap routes with router.navigate (onto a drive screen already showing, never a second one)', async () => {
+  mockRouter.push.mockClear();
+  mockRouter.navigate.mockClear();
+  const native = createFakeDriveSense({ platform: 'ios', now: () => T });
+  await native.setTripReminder(true);
+  native.postReminderForTest(TOKEN);
+  await render(
+    <DataProvider db={db} now={() => T}>
+      <NotificationsHost
+        isRecording={() => true}
+        isBusy={() => true}
+        subscribeBusy={() => () => {}}
+        startDrive={jest.fn()}
+        startGate={() => 'driving'}
+        reminderNative={native}
+      />
+    </DataProvider>
+  );
+  await act(async () => mockNotifications.listener!(reminderResponse()));
+  for (let i = 0; i < 6; i += 1) await act(async () => Promise.resolve());
+  expect(mockRouter.navigate.mock.calls).toEqual([['/drive']]);
+  expect(mockRouter.push).not.toHaveBeenCalled();
 });
 
 test('a refused start lands on Home with the refusal, and the session stays reminded (a second tap is expired)', async () => {

@@ -21,6 +21,7 @@ import { DataProvider } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
 import { registerBeforeSignOut, SessionProvider, useSession } from '@/data/supabase/session';
 import { DriveProvider } from '@/drive/DriveProvider';
+import { tripRecords } from '@/drive/policy';
 import { AuthGate } from '@/features/auth/AuthGate';
 import { profileGate } from '@/features/auth/authGuard';
 import { useUpdateStatus } from '@/features/auth/version';
@@ -47,7 +48,8 @@ const controller = runtimeController;
  *   Foreground banners stay hidden for the whole of a drive, not only while recording (T5 review).
  *   U3's summary notifier stays attached by the runtime itself (bootstrap), not here. A tap on the
  *   forgot-to-start reminder starts a drive through `startDrive` — the Start Drive button's own
- *   `host.start()` — once the gate says the app can (signed in, set up, no update owed, booted, idle).
+ *   `host.start()` — once the gate says the app can (signed in, set up, no update owed, booted, idle);
+ *   a tap while a drive is under way opens the drive screen (recording) or does nothing (closing).
  */
 function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean }) {
   const host = runtime.drive;
@@ -66,6 +68,7 @@ function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean 
         hostBooted: host.booted(),
         hostSignedIn: host.signedIn(),
         hostBusy: host.isBusy(),
+        hostRecording: tripRecords(host.snapshot().status),
       }),
     [ready, status, update, profile, host]
   );

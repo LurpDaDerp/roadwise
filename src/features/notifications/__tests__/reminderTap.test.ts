@@ -68,6 +68,7 @@ describe('the start gate', () => {
     hostBooted: true,
     hostSignedIn: true,
     hostBusy: false,
+    hostRecording: false,
     ...over,
   });
   test.each([
@@ -83,7 +84,13 @@ describe('the start gate', () => {
     ['setup still owed', facts({ profile: 'onboarding' }), 'never'],
     ['the host not booted', facts({ hostBooted: false }), 'wait'],
     ['the host still signed out (a sign-in this process has not caught up with)', facts({ hostSignedIn: false }), 'wait'],
-    ['a drive closing', facts({ hostBusy: true }), 'wait'],
+    ['a drive recording', facts({ hostBusy: true, hostRecording: true }), 'driving'],
+    ['a drive closing', facts({ hostBusy: true }), 'closing'],
+    // a drive under way comes before every other rule, as a relaunch into an open drive does
+    ['a drive recording, the session still loading', facts({ hostBusy: true, hostRecording: true, session: 'loading' }), 'driving'],
+    ['a drive recording, the profile not known yet', facts({ hostBusy: true, hostRecording: true, profile: 'unknown' }), 'driving'],
+    ['a drive recording, an update required', facts({ hostBusy: true, hostRecording: true, update: 'required' }), 'driving'],
+    ['a drive recording, the navigator not mounted yet', facts({ hostBusy: true, hostRecording: true, ready: false }), 'wait'],
   ] as const)('%s → %s', (_n, f, gate) => {
     expect(reminderStartGate(f)).toBe(gate);
   });
@@ -180,6 +187,26 @@ describe('startFromReminderTap', () => {
     expect(h.log).toEqual([]);
     expect(h.hrefs).toEqual([]);
     expect(h.notices).toEqual([]);
+  });
+
+  test('a drive recording: the drive screen, no claim, no start, no notice, even when the hold is older than 2 min', async () => {
+    for (const now of [T, T + REMINDER.TAP_FRESH_MS + 1]) {
+      const h = harness({ gate: 'driving', now });
+      await expect(startFromReminderTap(hold(), h.deps)).resolves.toBe('busy');
+      expect(h.log).toEqual([]);
+      expect(h.hrefs).toEqual(['/drive']);
+      expect(h.notices).toEqual([]);
+    }
+  });
+
+  test('a drive closing: nothing at all (its summary or Home follows), even when the hold is older than 2 min', async () => {
+    for (const now of [T, T + REMINDER.TAP_FRESH_MS + 1]) {
+      const h = harness({ gate: 'closing', now });
+      await expect(startFromReminderTap(hold(), h.deps)).resolves.toBe('busy');
+      expect(h.log).toEqual([]);
+      expect(h.hrefs).toEqual([]);
+      expect(h.notices).toEqual([]);
+    }
   });
 
   test('held 2:00 still runs; 2:00.001 is expired with no claim, even while the app is still starting', async () => {

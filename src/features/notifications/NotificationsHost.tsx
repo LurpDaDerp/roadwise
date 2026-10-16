@@ -15,6 +15,9 @@
  * `startDrive` — the Start Drive button's own start. It is tried on a new hold, on each change of
  * the busy signal, and whenever `startGate` changes; a hold waits while the app is still starting
  * (at most 2 min from the tap) and is dropped during setup, signed out or with an update required.
+ * A drive under way spends it at once: the drive screen while it records, nothing while it closes.
+ * The tap's routes go through `router.navigate`, so a tap while the drive screen shows never stacks
+ * a second one on it.
  *
  * Battery (§3.5): no timer and no polling. The busy subscription fires with the drive host's state
  * changes; while nothing is held it returns after one boolean read.
@@ -65,6 +68,8 @@ export interface NotificationsHostProps {
 }
 
 const defaultNavigate = (href: string) => router.push(href as Href);
+/** A reminder tap's route: onto the screen already showing it rather than a second copy of it. */
+const defaultTapNavigate = (href: string) => router.navigate(href as Href);
 
 const responseKey = (r: Notifications.NotificationResponse) =>
   `${r.notification.request.identifier}@${r.notification.date}#${r.actionIdentifier}`;
@@ -99,7 +104,7 @@ export function NotificationsHost(props: NotificationsHostProps): null {
       tapping.current = true;
       startFromReminderTap(hold, {
         start: () => latest.current.props.startDrive(),
-        navigate: l.props.navigate ?? defaultNavigate,
+        navigate: l.props.navigate ?? defaultTapNavigate,
         notice: showStartNotice,
         gate: () => latest.current.props.startGate(),
         now: latest.current.now,
