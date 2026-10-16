@@ -7,6 +7,7 @@
 import { z } from 'zod';
 import { featureRowSchema } from '../../../src/core/replay/trace';
 import type {
+  InstalledApp,
   DriveDisplayState,
   DriveSenseRow,
   DriveSenseState,
@@ -194,6 +195,15 @@ export const stateSchema: z.ZodType<DriveSenseState> = z.strictObject({
   captureStartedAt: epochMs.nullable(),
   lastRowTs: epochMs.nullable(),
 });
+
+/** An Android package name (`com.example.app`): at least two segments, each starting with a letter. */
+export const PACKAGE_NAME = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
+/** `listInstalledApps` takes at most this many packages at once. */
+export const INSTALLED_APPS_MAX = 32;
+
+export const installedAppsSchema: z.ZodType<InstalledApp[]> = z.array(
+  z.strictObject({ package: z.string().regex(PACKAGE_NAME), label: z.string().max(200) })
+);
 
 export const screenStateSchema = z.strictObject({ locked: z.boolean(), on: z.boolean() });
 

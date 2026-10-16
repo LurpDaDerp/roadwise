@@ -255,6 +255,28 @@ test('the lock proof: iOS proven with a 10 s delay by default, Android none; an 
   expect(await android.getState()).toMatchObject({ lockProof: false, lockDelayMs: null });
 });
 
+test('navigation apps: Android finds the installed ones in the order asked and launches them; iOS answers none', async () => {
+  const android = createFakeDriveSense({ platform: 'android' });
+  await expect(android.listInstalledApps(['com.waze'])).resolves.toEqual([]);
+  android.setInstalledApps([
+    { package: 'com.waze', label: 'Waze' },
+    { package: 'net.osmand', label: 'OsmAnd' },
+  ]);
+  await expect(android.listInstalledApps(['net.osmand.plus', 'net.osmand', 'com.waze'])).resolves.toEqual([
+    { package: 'net.osmand', label: 'OsmAnd' },
+    { package: 'com.waze', label: 'Waze' },
+  ]);
+  await expect(android.launchApp('com.waze')).resolves.toBe(true);
+  await expect(android.launchApp('com.google.android.apps.maps')).resolves.toBe(false);
+  android.setLaunchResult(false);
+  await expect(android.launchApp('com.waze')).resolves.toBe(false);
+  expect(android.calls).toEqual(['launchApp:com.waze', 'launchApp:com.google.android.apps.maps', 'launchApp:com.waze']);
+  const ios = createFakeDriveSense();
+  ios.setInstalledApps([{ package: 'com.waze', label: 'Waze' }]);
+  await expect(ios.listInstalledApps(['com.waze'])).resolves.toEqual([]);
+  await expect(ios.launchApp('com.waze')).resolves.toBe(false);
+});
+
 test('platform defaults: iOS lagged lock signal and battery-optimisation true; Android reliable and false', async () => {
   const ios = createFakeDriveSense();
   expect((await ios.getState()).platform).toBe('ios');

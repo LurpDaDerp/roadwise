@@ -17,6 +17,24 @@
        enabled only while the reminder is on). It starts nothing. -->
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+  <!-- The navigation button (README §2): the navigation apps RoadWise may find and open, by package
+       (API 30+ package visibility). Exactly the Android packages of src/features/navigation/catalog.ts;
+       never QUERY_ALL_PACKAGES. -->
+  <queries>
+    <package android:name="com.google.android.apps.maps" />
+    <package android:name="com.waze" />
+    <package android:name="com.google.android.apps.navlite" />
+    <package android:name="com.here.app.maps" />
+    <package android:name="com.sygic.aura" />
+    <package android:name="com.tomtom.gplay.navapp" />
+    <package android:name="com.generalmagic.magicearth" />
+    <package android:name="net.osmand.plus" />
+    <package android:name="net.osmand" />
+    <package android:name="app.organicmaps" />
+    <package android:name="com.mapquest.android.ace" />
+    <package android:name="ru.yandex.yandexnavi" />
+  </queries>
+
   <application>
     <service
         android:name=".CaptureService"

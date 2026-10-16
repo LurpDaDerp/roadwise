@@ -63,6 +63,8 @@ jest.mock('expo-modules-core', () => {
     claimReminderTap: jest.fn(async () => true),
     takeReminderTap: jest.fn(async () => ({ token: '9f1c2b7e-0d4a-4c1e-9a77-1b2c3d4e5f60', at: 1_700_000_000_000 })),
     markLockProof: jest.fn(async () => undefined),
+    listInstalledApps: jest.fn(async () => [{ package: 'com.waze', label: 'Waze' }]),
+    launchApp: jest.fn(async () => true),
     addListener: jest.fn(() => ({ remove })),
   };
   const control = { present: true, native, state, remove };
@@ -178,6 +180,15 @@ describe('every method goes to native with its arguments', () => {
     expect(mockNative.markLockProof!.mock.calls).toEqual([[10_000], [0], [60_000]]);
   });
 
+  test('navigation apps: listed and launched by package', async () => {
+    await expect(DriveSense.listInstalledApps(['com.google.android.apps.maps', 'com.waze'])).resolves.toEqual([{ package: 'com.waze', label: 'Waze' }]);
+    expect(mockNative.listInstalledApps).toHaveBeenCalledWith(['com.google.android.apps.maps', 'com.waze']);
+    await expect(DriveSense.launchApp('com.waze')).resolves.toBe(true);
+    expect(mockNative.launchApp).toHaveBeenCalledWith('com.waze');
+    mockNative.listInstalledApps!.mockResolvedValueOnce([]);
+    await expect(DriveSense.listInstalledApps(['net.osmand'])).resolves.toEqual([]);
+  });
+
   test('a null exit info is passed through', async () => {
     mockNative.getLastExitInfo!.mockResolvedValueOnce(null);
     await expect(DriveSense.getLastExitInfo()).resolves.toBeNull();
@@ -231,9 +242,16 @@ describe('bridge validation', () => {
     ['takeReminderTap', { token: 'tok-a', at: 0 }],
     ['takeReminderTap', { token: 'tok-a', at: 1, extra: true }],
     ['takeReminderTap', { token: 'tok-a' }],
+    ['listInstalledApps', [{ package: 'com.waze' }]],
+    ['listInstalledApps', [{ package: 'not a package', label: 'X' }]],
+    ['listInstalledApps', [{ package: 'com.waze', label: 'Waze', icon: 'x' }]],
+    ['listInstalledApps', null],
+    ['launchApp', 'true'],
+    ['launchApp', null],
   ] as const)('a malformed %s result rejects', async (method, bad) => {
     mockNative[method]!.mockResolvedValueOnce(bad);
-    const args = method === 'selfTest' ? ['[]'] : method === 'claimReminderTap' ? ['tok-a'] : [];
+    const args =
+      method === 'selfTest' ? ['[]'] : method === 'claimReminderTap' ? ['tok-a'] : method === 'listInstalledApps' ? [['com.waze']] : method === 'launchApp' ? ['com.waze'] : [];
     const call = (DriveSense[method] as (...a: unknown[]) => Promise<unknown>)(...args);
     await expect(call).rejects.toThrow(`DriveSense.${method}: invalid result`);
     expect(mockNative[method]).toHaveBeenCalledTimes(1);
@@ -258,6 +276,16 @@ describe('bridge validation', () => {
     ['markLockProof', [Number.NaN]],
     ['markLockProof', [Number.POSITIVE_INFINITY]],
     ['markLockProof', ['10000']],
+    ['listInstalledApps', [[]]],
+    ['listInstalledApps', [['com.waze', '']]],
+    ['listInstalledApps', [['waze']]],
+    ['listInstalledApps', [['com.waze; rm']]],
+    ['listInstalledApps', [Array.from({ length: 33 }, (_, i) => `com.app${i}.x`)]],
+    ['listInstalledApps', ['com.waze']],
+    ['launchApp', ['']],
+    ['launchApp', ['waze']],
+    ['launchApp', ['com..waze']],
+    ['launchApp', [42]],
   ] as const)('%s rejects bad arguments without calling native', async (method, args) => {
     const fn = DriveSense[method] as (...a: readonly unknown[]) => Promise<unknown>;
     await expect(fn(...args)).rejects.toThrow(`DriveSense.${method}`);

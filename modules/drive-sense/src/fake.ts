@@ -22,6 +22,7 @@ import type {
   DriveSenseState,
   ExitInfo,
   FakeControls,
+  InstalledApp,
   ReminderLocationAnswer,
   ReminderTap,
   Subscription,
@@ -87,6 +88,9 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   let reminderAvailable = true;
   let reminderMissing: TripReminderMissing[] = [];
   let reminderLocation: ReminderLocationAnswer = platform === 'ios' ? 'always' : 'notNeeded';
+  /** Android: the apps installed on the phone, and what a launch of one answers. */
+  let installedApps: InstalledApp[] = [];
+  let launchOk = true;
   /** Android: the tap handed over and not yet taken (the module's hold). */
   let heldTap: ReminderTap | null = null;
   let queue: DriveSenseRow[] = [];
@@ -238,6 +242,17 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       heldTap = null;
       return resolve(tap);
     },
+    listInstalledApps(packages: readonly string[]) {
+      query('listInstalledApps');
+      // iOS finds navigation apps by URL scheme in JS: native answers none.
+      if (platform !== 'android') return resolve([]);
+      const found = packages.flatMap((p) => installedApps.filter((a) => a.package === p).slice(0, 1));
+      return resolve(found.map((a) => ({ ...a })));
+    },
+    launchApp(packageName: string) {
+      command('launchApp', packageName);
+      return resolve(platform === 'android' && launchOk && installedApps.some((a) => a.package === packageName));
+    },
     markLockProof(delayMs: number) {
       command('markLockProof', String(delayMs));
       // iOS keeps a proof of 15 s or less (LockProbe.record); Android has nothing to prove.
@@ -337,6 +352,12 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       if (env.available !== undefined) reminderAvailable = env.available;
       if (env.missing !== undefined) reminderMissing = [...env.missing];
       if (env.location !== undefined) reminderLocation = env.location;
+    },
+    setInstalledApps(apps) {
+      installedApps = apps.map((a) => ({ ...a }));
+    },
+    setLaunchResult(ok) {
+      launchOk = ok;
     },
     get tripReminderOn() {
       return reminder.enabled;

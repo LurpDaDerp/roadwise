@@ -148,6 +148,15 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
       promise.resolve(nil)
     }.runOnQueue(.main)
 
+    // Android's (the navigation button): iOS finds and opens navigation apps by URL scheme from JS.
+    AsyncFunction("listInstalledApps") { (_: [String], promise: Promise) in
+      promise.resolve([[String: Any]]())
+    }
+
+    AsyncFunction("launchApp") { (_: String, promise: Promise) in
+      promise.resolve(false)
+    }
+
     // Heavy: runs on the module's own async queue, never the main queue.
     AsyncFunction("selfTest") { (vectorsJson: String, promise: Promise) in
       do {

@@ -31,6 +31,12 @@ export interface ReminderTap {
   at: number;
 }
 
+/** An installed app `listInstalledApps` found: its package and its own label. */
+export interface InstalledApp {
+  package: string;
+  label: string;
+}
+
 export type CaptureMode = 'mounted' | 'pocket' | 'auto';
 /** rev1: I5 — `low` = coarse location, no IMU, rows only when a fix arrives. */
 export type CaptureRate = 'full' | 'low';
@@ -175,6 +181,8 @@ export const DRIVE_SENSE_METHODS = [
   'claimReminderTap',
   'takeReminderTap',
   'markLockProof',
+  'listInstalledApps',
+  'launchApp',
 ] as const;
 
 export type DriveSenseMethod = (typeof DRIVE_SENSE_METHODS)[number];
@@ -282,6 +290,17 @@ export interface DriveSenseApi {
    * from their start. Android: resolves with no effect. Never rejects for a valid argument.
    */
   markLockProof(delayMs: number): Promise<void>;
+  /**
+   * Android: which of `packages` are installed, enabled and launchable, in the order given, each
+   * with the app's own label (only packages the manifest's `<queries>` names are visible). iOS:
+   * always `[]` (navigation apps are found by URL scheme in JS). Never rejects for valid arguments.
+   */
+  listInstalledApps(packages: readonly string[]): Promise<InstalledApp[]>;
+  /**
+   * Android: opens the app as a launcher tap would (a route in progress is resumed); false when it
+   * has no launch intent or the start failed. iOS: always false. Never rejects for a valid argument.
+   */
+  launchApp(packageName: string): Promise<boolean>;
   addListener<E extends DriveSenseEvent>(
     event: E,
     fn: (payload: DriveSenseEvents[E]) => void
@@ -331,6 +350,10 @@ export interface FakeControls {
    * answers (default: iOS `always`, Android `notNeeded`).
    */
   setTripReminderEnv(env: { available?: boolean; missing?: TripReminderMissing[]; location?: ReminderLocationAnswer }): void;
+  /** Android: the apps `listInstalledApps` finds (by package; others are not installed). Default none. */
+  setInstalledApps(apps: readonly InstalledApp[]): void;
+  /** What `launchApp` answers for an installed app (default true); an app not installed is always false. */
+  setLaunchResult(ok: boolean): void;
   /** Whether the reminder is switched on now. */
   readonly tripReminderOn: boolean;
   /** A note is up with `token` in a driven, live session, as a stop would have posted it (`now` defaults to the fake's clock). */

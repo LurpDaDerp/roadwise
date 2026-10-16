@@ -313,6 +313,12 @@ describe('iOS drive-sense module (text)', () => {
     expect(ctrl).toMatch(/"lockDelayMs": LockProbe\.shared\.lockDelayMs\.map \{ NSNumber\(value: \$0\) as Any \} \?\? NSNull\(\),/);
   });
 
+  it('navigation apps are found and opened by URL scheme in JS: the native list is empty and a launch is false', () => {
+    expect(moduleCode()).toMatch(/AsyncFunction\("listInstalledApps"\) \{ \(_: \[String\], promise: Promise\) in\s*promise\.resolve\(\[\[String: Any\]\]\(\)\)\s*\}/);
+    expect(moduleCode()).toMatch(/AsyncFunction\("launchApp"\) \{ \(_: String, promise: Promise\) in\s*promise\.resolve\(false\)\s*\}/);
+    expect(allCode()).not.toMatch(/canOpenURL|openURL|UIApplication\.shared\.open\(/);
+  });
+
   it('polls protected data for the lock state and reports the lock signal', () => {
     const src = code('PhoneState.swift');
     expect(src).toContain('isProtectedDataAvailable');

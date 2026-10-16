@@ -240,6 +240,44 @@ class DriveSenseModule : Module() {
       TripReminder.claim(context, token)
     }
 
+    // The navigation button (README §2): which of these packages can be launched (installed, enabled,
+    // with a launcher activity), in the order given, with the app's own label. Only packages the
+    // manifest's <queries> names are visible; any failure skips that package.
+    AsyncFunction("listInstalledApps") { packages: List<String> ->
+      val pm = context.packageManager
+      val out = ArrayList<Map<String, Any?>>()
+      for (pkg in packages) {
+        try {
+          if (pm.getLaunchIntentForPackage(pkg) == null) continue
+          @Suppress("DEPRECATION")
+          val info = pm.getApplicationInfo(pkg, 0)
+          if (!info.enabled) continue
+          out.add(linkedMapOf("package" to pkg, "label" to pm.getApplicationLabel(info).toString()))
+        } catch (_: Exception) {
+          // not installed or not visible: not listed
+        }
+      }
+      out
+    }
+
+    // Opens the app as a launcher tap does (a route in progress is resumed, not reset). False when it
+    // has no launch intent or the start fails.
+    AsyncFunction("launchApp") { pkg: String ->
+      try {
+        val ctx = context
+        val intent = ctx.packageManager.getLaunchIntentForPackage(pkg)
+        if (intent == null) {
+          false
+        } else {
+          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+          (appContext.currentActivity ?: ctx).startActivity(intent)
+          true
+        }
+      } catch (_: Exception) {
+        false
+      }
+    }
+
     // iOS only (an in-drive lock proof); Android reports locks exactly.
     AsyncFunction("markLockProof") { _: Double ->
       Unit

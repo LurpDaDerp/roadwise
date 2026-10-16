@@ -15,7 +15,10 @@ import {
   captureRateSchema,
   driveDisplaySchema,
   exitInfoSchema,
+  INSTALLED_APPS_MAX,
+  installedAppsSchema,
   motionPermissionSchema,
+  PACKAGE_NAME,
   REMINDER_TOKEN,
   reminderLocationSchema,
   reminderTapSchema,
@@ -106,6 +109,8 @@ function safeJson(v: unknown): string {
 /** `markLockProof` takes a delay up to a minute; native keeps it as a proof only at 15 s or less. */
 const MARK_LOCK_PROOF_MAX_MS = 60_000;
 
+const isPackageName = (v: unknown): v is string => typeof v === 'string' && v.length <= 255 && PACKAGE_NAME.test(v);
+
 const voidResult = z.union([z.undefined(), z.null()]).transform(() => undefined);
 const ok = <S extends z.ZodType>(schema: S, v: unknown) => schema.safeParse(v).success;
 
@@ -136,6 +141,14 @@ const DriveSense: DriveSenseApi = {
   takeReminderTap: () => call('takeReminderTap', [], true, reminderTapSchema),
   markLockProof: (delayMs) =>
     call('markLockProof', [delayMs], typeof delayMs === 'number' && Number.isFinite(delayMs) && delayMs >= 0 && delayMs <= MARK_LOCK_PROOF_MAX_MS, voidResult),
+  listInstalledApps: (packages) =>
+    call(
+      'listInstalledApps',
+      [Array.isArray(packages) ? [...packages] : packages],
+      Array.isArray(packages) && packages.length > 0 && packages.length <= INSTALLED_APPS_MAX && packages.every(isPackageName),
+      installedAppsSchema
+    ),
+  launchApp: (packageName) => call('launchApp', [packageName], isPackageName(packageName), z.boolean()),
   addListener<E extends DriveSenseEvent>(
     event: E,
     fn: (payload: DriveSenseEvents[E]) => void

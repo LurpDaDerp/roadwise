@@ -815,6 +815,22 @@ describe('native-android: RoadWise in front (AppVisibility)', () => {
     expect(code(kt('CaptureService'))).toMatch(/EventBus\.emit\("row", body\)\s*main\.post \{ AppVisibility\.sample\(\) \}/);
   });
 
+  it('navigation apps: listed by explicit <queries> packages (never QUERY_ALL_PACKAGES), opened like a launcher tap', () => {
+    const list = /AsyncFunction\("listInstalledApps"\) \{ packages: List<String> ->[\s\S]*?\n {4}\}/.exec(MODULE())?.[0] ?? '';
+    expect(list).toMatch(/if \(pm\.getLaunchIntentForPackage\(pkg\) == null\) continue/);
+    expect(list).toMatch(/if \(!info\.enabled\) continue/);
+    expect(list).toMatch(/"label" to pm\.getApplicationLabel\(info\)\.toString\(\)/);
+    expect(list).toMatch(/catch \(_: Exception\) \{/);
+    const launch = /AsyncFunction\("launchApp"\) \{ pkg: String ->[\s\S]*?\n {4}\}/.exec(MODULE())?.[0] ?? '';
+    expect(launch).toMatch(/getLaunchIntentForPackage\(pkg\)/);
+    expect(launch).toMatch(/intent\.addFlags\(Intent\.FLAG_ACTIVITY_NEW_TASK or Intent\.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED\)/);
+    expect(launch).toMatch(/\(appContext\.currentActivity \?: ctx\)\.startActivity\(intent\)\s*true/);
+    expect(launch).toMatch(/catch \(_: Exception\) \{\s*false\s*\}/);
+    expect(MANIFEST()).toMatch(/<queries>[\s\S]*<package android:name="com\.waze" \/>[\s\S]*<\/queries>/);
+    expect(MANIFEST()).not.toMatch(/<uses-permission[^>]*QUERY_ALL_PACKAGES/);
+    expect(allKotlin()).not.toMatch(/QUERY_ALL_PACKAGES|getInstalledPackages|getInstalledApplications/);
+  });
+
   it('needs no lock proof: getState reports none, and markLockProof does nothing', () => {
     expect(MODULE()).toMatch(/"lockSignal" to "reliable",\s*"lockProof" to false,\s*"lockDelayMs" to null,/);
     expect(MODULE()).toMatch(/AsyncFunction\("markLockProof"\) \{ _: Double ->\s*Unit\s*\}/);
