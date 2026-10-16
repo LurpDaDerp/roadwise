@@ -151,7 +151,7 @@ export const STATUS_FLAG = {
 
 /**
  * ALERT `sound`. NO_FACE (6): the driver's face out of view while the phone reports the car moving;
- * continuous, tier 2, never joined by the buzzer, silent on both outputs while no phone is live.
+ * continuous, tier 2, silent on both outputs while no phone is live.
  * COMMAND 6 (test sound) takes 1–5 only.
  */
 export const SOUND = { GLANCE: 1, DROWSY: 2, WAKE: 3, PHONE: 4, CHIME: 5, NO_FACE: 6 } as const;
@@ -159,8 +159,12 @@ export type AlertSound = 1 | 2 | 3 | 4 | 5 | 6;
 
 /** ALERT_STOP `reason`. */
 export const STOP_REASON = { CLEARED: 0, SUPERSEDED: 1, MUTED: 2 } as const;
-/** ALERT_FALLBACK `cause`. */
-export const FALLBACK_CAUSE = { NO_ACK: 1, CANNOT: 2, LEASE: 3, ESCALATION: 4 } as const;
+/**
+ * ALERT_FALLBACK `cause`: 1 no ACK in time, 2 the phone said cannot, 3 the phone was lost (another
+ * primary, a disconnect, a fresh STATE without can_play, the phone gone quiet, its hello again),
+ * 4 reserved: the dashcam never sends it, and a phone that gets it keeps playing.
+ */
+export const FALLBACK_CAUSE = { NO_ACK: 1, CANNOT: 2, LOST: 3, ESCALATION: 4 } as const;
 
 /** STATE `flags` bits. */
 export const STATE_FLAG = { CAN_PLAY: 1 << 0, BUZZER_TOO: 1 << 1, DRIVE_ACTIVE: 1 << 2, SPEED_VALID: 1 << 3 } as const;
@@ -181,7 +185,7 @@ export const ACK_OUTCOME = { CANNOT: 0, PLAYING: 1 } as const;
 
 /** STATE `local_min` when the phone does not know the local time. */
 export const LOCAL_MIN_UNKNOWN = 0xffff;
-/** The lease lifetime the phone asks for, in 0.1 s. */
+/** How long a STATE counts as fresh at the dashcam, in 0.1 s (it clamps 10-50). */
 export const STATE_TTL_DS = 30;
 
 // ——— decoded shapes ———

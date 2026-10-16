@@ -581,7 +581,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     tickAt(nowArg ?? deps.now(), false);
   }
 
-  /** One tick; `fromRow`: a drive row's, which renews the lease at once while timers are paused. */
+  /** One tick; `fromRow`: a drive row's, which sends STATE at once while timers are paused. */
   function tickAt(now: number, fromRow: boolean): void {
     wakeNappers();
     if (disposed) return;
