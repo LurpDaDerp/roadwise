@@ -603,6 +603,7 @@
    "v2.session, v2.sealed, v2.sealed_invalid, v2.x25519 apply unchanged to v3; v2.result's codes 0-4 and 7-9 too.",
    "v2.code, v2.link, v2.pair, v2.add_phone and v2.info describe link v2 only; v2 is frozen (sha256 pinned).",
    "schema/valid/invalid follow the top-level notes; a v3 codec knows the top-level schema plus this one.",
+   "pair.replace: prev_proof = HMAC(prev_K_pair, 'DPv3 replace' || mac || nc || id_p || prev_id || A || np)[0..16]; its relay entries carry that proof behind another A (and np): unproven, a new phone.",
    "view: VIEW notifications, dir 3 under k_dp of session_after_pair."
   ],
   "link_version": 3,
@@ -720,9 +721,27 @@
     "prev_id": "0102030405060708",
     "prev_K_pair": "bc320dc75ca2a27c37009c06a640e5f79bcb437a411cedc6589f9b4ce73b9664",
     "id_p": "1112131415161718",
-    "prev_proof": "c9b466a555febbd13cd09706f9fa2300",
-    "pair_open": "120211121314151617180102030405060708c9b466a555febbd13cd09706f9fa2300358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254707172737475767778797a7b7c7d7e7f",
-    "expect": "replaces at commit"
+    "prev_proof": "e746668eb06cc84b0d3f047c5c140d92",
+    "pair_open": "120211121314151617180102030405060708e746668eb06cc84b0d3f047c5c140d92358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254707172737475767778797a7b7c7d7e7f",
+    "expect": "replaces at commit",
+    "relay": [
+     {
+      "desc": "the relay's own key pair behind the owner's prev_proof, the owner's Np",
+      "a": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+      "A": "6b3ee67463583cbe3dc08fe9d0765c2666ff5210dd527c9d8705e44927c80d55",
+      "np": "707172737475767778797a7b7c7d7e7f",
+      "pair_open": "120211121314151617180102030405060708e746668eb06cc84b0d3f047c5c140d926b3ee67463583cbe3dc08fe9d0765c2666ff5210dd527c9d8705e44927c80d55707172737475767778797a7b7c7d7e7f",
+      "expect": "a new phone: the record of prev_id stays"
+     },
+     {
+      "desc": "the relay's own key pair and its own Np behind the owner's prev_proof",
+      "a": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+      "A": "6b3ee67463583cbe3dc08fe9d0765c2666ff5210dd527c9d8705e44927c80d55",
+      "np": "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "pair_open": "120211121314151617180102030405060708e746668eb06cc84b0d3f047c5c140d926b3ee67463583cbe3dc08fe9d0765c2666ff5210dd527c9d8705e44927c80d55f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "expect": "a new phone: the record of prev_id stays"
+     }
+    ]
    },
    "bad_key": {
     "A": "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",

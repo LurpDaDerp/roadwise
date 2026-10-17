@@ -224,9 +224,11 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
     conn.nc = random(16);
     const prevId = b.slice(10, 18);
     const prevProof = b.slice(18, 34);
-    const prevKey = phones.get(toHex(prevId));
-    const prevOk = !prevId.every((x) => x === 0) && prevKey !== undefined && ctEqual(mac16(prevKey, utf8('DPv3 replace'), mac, nc, idP), prevProof);
     const A = b.slice(34, 66);
+    const np = b.slice(66, PAIR_OPEN_LEN);
+    const prevKey = phones.get(toHex(prevId));
+    // The proof covers the rest of the request: a relay's own A or Np behind a phone's proof is a new phone.
+    const prevOk = !prevId.every((x) => x === 0) && prevKey !== undefined && ctEqual(mac16(prevKey, utf8('DPv3 replace'), mac, nc, idP, prevId, A, np), prevProof);
     const priv = random(32);
     const B = x25519Public(priv);
     const nd = random(16);

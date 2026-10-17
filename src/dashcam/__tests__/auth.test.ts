@@ -256,7 +256,10 @@ interface V3Auth {
   pair: {
     a: Hex; A: Hex; b: Hex; B: Hex; nc: Hex; np: Hex; nd: Hex; id_p: Hex; mac: Hex; pair_open: Hex; Z: Hex; T_pair: Hex; K_pair: Hex; k_conf: Hex;
     proof_d: Hex; proof_p: Hex; pair_resp: Hex; pair_fin: Hex;
-    replace: { prev_id: Hex; prev_K_pair: Hex; id_p: Hex; prev_proof: Hex; pair_open: Hex; expect: string };
+    replace: {
+      prev_id: Hex; prev_K_pair: Hex; id_p: Hex; prev_proof: Hex; pair_open: Hex; expect: string;
+      relay: { desc: string; a: Hex; A: Hex; np: Hex; pair_open: Hex; expect: string }[];
+    };
     bad_key: { A: Hex; pair_open: Hex; expect: string };
   };
   session_after_pair: {
@@ -325,6 +328,23 @@ describe('pairing (link v3: PAIR_OPEN, no code)', () => {
     expect(proofOf({ a: new Uint8Array(32).fill(0x5a) })).not.toBe(own); // a relay's own key pair
     expect(proofOf({ np: new Uint8Array(16).fill(0x5a) })).not.toBe(own); // or its own Np
     expect(proofOf({ prev: { id: new Uint8Array(8).fill(0x5a), kPair: prev.kPair } })).not.toBe(own); // or another prev_id
+  });
+
+  test('the relay vectors: the owner’s prev_proof behind the relay’s own A (and Np) is not the proof of that request, which only the owner can make', () => {
+    const r = P3.replace;
+    const prev = { id: b(r.prev_id), kPair: b(r.prev_K_pair) };
+    expect(r.relay.length).toBeGreaterThan(0);
+    for (const v of r.relay) {
+      const bytes = b(v.pair_open);
+      expect(bytes).toHaveLength(PAIR_OPEN_LEN);
+      expect(toHex(bytes.slice(18, 34))).toBe(r.prev_proof); // the owner's proof, carried over
+      expect(toHex(bytes.slice(34, 66))).toBe(v.A);
+      expect(toHex(x25519Public(b(v.a)))).toBe(v.A);
+      const real = pairOpen({ ...base, idP: b(r.id_p), prev, a: b(v.a), np: b(v.np) });
+      expect(toHex(real.bytes.slice(34))).toBe(toHex(bytes.slice(34))); // the same request ...
+      expect(toHex(real.bytes.slice(18, 34))).not.toBe(r.prev_proof); // ... needs another proof
+      expect(v.expect).toMatch(/new phone/);
+    }
   });
 
   test('a low-order A: the vector’s PAIR_OPEN, which the dashcam answers R_BAD_KEY', () => {

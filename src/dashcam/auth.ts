@@ -6,7 +6,8 @@
 // SESSION_RESP `[0xA0][2][Nd 16][proof_d 16]` or RESULT `[0xE0][2][code]`.
 //
 // Pairing, with no shared secret: PAIR_OPEN `[0x12][2][id_p 8][prev_id 8][prev_proof 16][A 32][Np 16]` with
-//   prev_proof = HMAC(K_pair of prev_id, "DPv3 replace" || mac || Nc || id_p)[0..16] (zero for none)
+//   prev_proof = HMAC(K_pair of prev_id, "DPv3 replace" || mac || Nc || id_p || prev_id || A || Np)[0..16] (zero for
+//   none): the rest of the request in its order, so it proves that one request only (a relay cannot carry it to its own key)
 //   T_pair = SHA-256("DPv3 pair" || mac || Nc || PAIR_OPEN[2..82] || B || Nd)
 //   OKM = HKDF(salt = Nc || Nd, IKM = X25519(a, B), info = T_pair, 64): K_pair = OKM[0..32], k_conf = OKM[32..64]
 //   proof_d = HMAC(k_conf, "DPv3 dashcam" || T_pair)[0..16], proof_p = HMAC(k_conf, "DPv3 phone" || T_pair)[0..16]
@@ -156,7 +157,7 @@ export function pairOpen(i: PairOpenInputs): PairRequest {
   const np = fixed('Np', i.np, 16);
   const A = i.A ? fixed('A', i.A, 32) : x25519Public(fixed('a', i.a, 32));
   const prevId = i.prev ? fixed('prev_id', i.prev.id, 8) : new Uint8Array(8);
-  const prevProof = i.prev ? mac16(fixed('prev K_pair', i.prev.kPair, 32), LABEL_V3.replace, mac, nc, idP) : new Uint8Array(16);
+  const prevProof = i.prev ? mac16(fixed('prev K_pair', i.prev.kPair, 32), LABEL_V3.replace, mac, nc, idP, prevId, A, np) : new Uint8Array(16);
   return { bytes: concat([AUTH_MSG.PAIR_OPEN, AUTH_VERSION], idP, prevId, prevProof, A, np), A };
 }
 
