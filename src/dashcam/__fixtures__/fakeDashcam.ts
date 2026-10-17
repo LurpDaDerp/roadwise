@@ -1,7 +1,8 @@
 // A link v3 DashPal played on the fake BLE stack (`../fakeTransport.ts`), for the transport and
 // setup unit tests: INFO with this connection's Nc, the AUTH handshakes (one-tap pairing with
 // PAIR_OPEN, the provisional phone under a setup hold, sessions with the blinded id over the stored
-// phones and the provisional one), sealed TX and RX, COMMAND 3, 4, 5, 7, 8, 9 and 10 (query), and
+// phones and the provisional one), sealed TX and RX, COMMAND 3, 4, 5, 7, 8, 9, 10 and 11 (the
+// aiming stream's start, stop and query, and its acknowledgements; images sent by the test), and
 // switches a test flips to force each verdict. The firmware's own rules are exercised end to end by
 // the e2e suites against the real `ble_sim`; this keeps the unit tests fast and deterministic.
 import {
@@ -90,6 +91,15 @@ export interface FakeDashcam {
   notify(frame: TxFrame | number[]): void;
   /** a VIEW record, sealed in direction 3 on the up connection */
   notifyView(record: number[]): void;
+  /**
+   * The aiming stream: `on` while started; `refuse` answers a start with VIEW_STATE(0, that reason);
+   * `acks` the COMMAND 11 frames; `starts` / `stops` the COMMAND 10 starts and stops received.
+   */
+  view: { on: boolean; refuse: number | null; acks: number[]; starts: number; stops: number };
+  /** An image as the dashcam's VIEW records (`frame` 1-255), cut for `mtu`; sent only while the stream is on. */
+  sendImage(frame: number, jpeg: number[], mtu?: number): void;
+  /** A VIEW_STATE stop of a running stream for a gate (moving 2, drive 3, …). */
+  stopView(reason: number): void;
   /** raw bytes on TX (a replay, junk) */
   notifyRaw(bytes: number[]): void;
   /** the last sealed TX wire (to replay it) */
@@ -120,10 +130,11 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
   let c: Conn | null = null;
   let last: number[] | null = null;
 
-  /** The hold undone: the provisional phone forgotten, the window open again. */
+  /** The hold undone: the provisional phone forgotten, the window open again, the stream stopped. */
   function undo(): void {
     self.prov = null;
     self.windowOpen = true;
+    self.view.on = false;
   }
 
   const self: FakeDashcam = {
@@ -171,8 +182,23 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
         setupBusy: self.busy,
         nonce: c?.nc ?? new Uint8Array(16),
       }),
+    view: { on: false, refuse: null, acks: [], starts: 0, stops: 0 },
+    sendImage(frame, jpeg, mtu = 247) {
+      if (!self.view.on) return;
+      const n = mtu - 3 - 20 - 8;
+      for (let off = 0; off < jpeg.length; off += n) {
+        const data = jpeg.slice(off, off + n);
+        self.notifyView([0x01, 0x01, frame, 0, jpeg.length & 0xff, jpeg.length >> 8, off & 0xff, off >> 8, ...data]);
+      }
+    },
+    stopView(reason) {
+      if (!self.view.on) return;
+      self.view.on = false;
+      self.notify({ type: 'VIEW_STATE', on: 0, reason, leftS: 600 });
+    },
     expire() {
       if (!self.prov) return;
+      self.stopView(9);
       self.notify({ type: 'SETUP_RESULT', op: 9, code: R.EXPIRED, bondCount: phones.size });
       undo();
     },
@@ -341,6 +367,7 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
       self.notify({ type: 'SETUP_RESULT', op: 8, code: forced, bondCount: phones.size });
       return;
     }
+    self.stopView(9);
     store(p);
     self.notify({ type: 'SETUP_RESULT', op: 8, code: R.OK, bondCount: phones.size });
   }
@@ -387,8 +414,25 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
           self.notify({ type: 'SETUP_RESULT', op: 9, code: R.NOT_NOW, bondCount: phones.size });
         }
         break;
-      case 10:
+      case 10: {
+        const refusal = !holds ? 9 : self.commandWindow ? 1 : d.frame.arg === 1 ? self.view.refuse : null;
         if (d.frame.arg === 2) self.notify({ type: 'VIEW_STATE', on: holds && !self.commandWindow ? 1 : 0, reason: !holds ? 9 : self.commandWindow ? 1 : 0, leftS: 600 });
+        else if (d.frame.arg === 1) {
+          self.view.starts += 1;
+          if (refusal !== null) self.notify({ type: 'VIEW_STATE', on: 0, reason: refusal, leftS: 600 });
+          else {
+            self.view.on = true;
+            self.notify({ type: 'VIEW_STATE', on: 1, reason: 0, leftS: 600 });
+          }
+        } else if (d.frame.arg === 0) {
+          self.view.stops += 1;
+          self.view.on = false;
+          self.notify({ type: 'VIEW_STATE', on: 0, reason: 0, leftS: 600 });
+        }
+        break;
+      }
+      case 11:
+        self.view.acks.push(d.frame.arg);
         break;
       default:
         break;
@@ -404,7 +448,10 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
   const prevDisconnect = o.ble.onDisconnect;
   o.ble.onDisconnect = (id) => {
     prevDisconnect?.(id);
-    if (id === o.id) c = null;
+    if (id !== o.id) return;
+    c = null;
+    // A stream stops silently with its connection.
+    self.view.on = false;
   };
   const prevRead = o.ble.onRead;
   o.ble.onRead = (id, characteristic) => {

@@ -5,7 +5,10 @@
 // checked, PAIR_FIN; the DashPal holds the new phone provisionally under a setup hold (no other
 // phone can pair meanwhile) and plays its chime; a first session proves the key on the same
 // connection, and the phone sends its state (no "can play", a speed only from a fresh location
-// sample). After the aiming steps, Next commits the hold (COMMAND 8): only then does the DashPal
+// sample). Screen 2 says how to aim DashPal; Start opens screen 3, the DashPal camera's live picture
+// (COMMAND 10, VIEW records reassembled in memory, AIM frames), handed to the screen through
+// `onViewFrame` and `onAim` only, never through `phase`; leaving screen 3 (Next, Cancel, a drive,
+// RoadWise leaving the front) stops it. Next commits the hold (COMMAND 8): only then does the DashPal
 // store the phone, and only then does this phone keep the key. Cancel undoes a hold on both sides
 // (COMMAND 9: the DashPal forgets the provisional phone and is ready to pair again).
 //
@@ -32,13 +35,17 @@ import {
   STATE_FLAG,
   STATE_TTL_DS,
   toHex,
+  viewReason,
   type AdvState,
+  type AimFrame,
   type DashcamInfo,
   type SetupResultFrame,
+  type ViewReason,
 } from './protocol';
 import type { DashpalSecrets, StoredAuth } from './secure';
 import { createSetupSpeed, type SetupSpeed } from './setupSpeed';
 import { isIosBondLoss, type DashcamTransport, type ScanHit } from './transport';
+import { createViewAssembler } from './view';
 
 /** Search mode: the scan for DashPals in pairing mode, and its stop after the first one heard. */
 export const SEARCH_MS = 15_000;
@@ -75,6 +82,13 @@ export const HOLD_RECONNECT_MS = 45_000;
 /** The setup hold's 10 minutes (the DashPal's `BLE_HOLD_MAX_MS`), and the countdown's last minute. */
 export const HOLD_MAX_MS = 600_000;
 export const HOLD_WARN_MS = 60_000;
+/** Screen 3: no image this long after Start, or this long after the last one: stalled (Start sent again, every 3 s). */
+export const AIM_FIRST_MS = 4000;
+export const AIM_STALL_MS = 3000;
+/** Stalled this long: refused as `camera`. */
+export const AIM_GIVE_UP_MS = 15_000;
+/** The refusals Try again can help with (the others show only Next). */
+export const AIM_RETRY: readonly ViewReason[] = ['moving', 'busy', 'camera', 'no_state', 'memory'];
 /** iOS: an R_MTU waits this long before the request is sent again. */
 export const IOS_MTU_WAIT_MS = 300;
 /** How often the loops look at what they heard. */
@@ -122,6 +136,12 @@ export type SetupPhase =
   | { kind: 'connected'; name: string }
   /** Screen 2. `aimAllowed`: false when the window came from Add another phone; `holdLeftS` in the hold's last minute. */
   | { kind: 'instructions'; aimAllowed: boolean; holdLeftS: number | null; reconnecting: boolean }
+  /**
+   * Screen 3, the live picture: `starting` until the first image, `live`, `stalled` (no image for a
+   * while; Start sent again), `refused` (`reason`: the DashPal's, or `camera` after 15 s stalled).
+   * Never an image or an AIM value: those go to `onViewFrame` / `onAim` only.
+   */
+  | { kind: 'aim'; status: AimStatus; reason: ViewReason | null; holdLeftS: number | null; reconnecting: boolean }
   /** After Next. `reconnecting`: the link was lost while finishing (Cancel stays then: the reconnect may take 45 s). */
   | { kind: 'finishing'; reconnecting?: boolean }
   /** `phones`: the count after the commit; `notAllYours`: 2 or more; `aimedElsewhere`: no aiming here (Add another phone). */
@@ -129,6 +149,8 @@ export type SetupPhase =
   | { kind: 'failed'; reason: SetupFailure; name: string | null; retry: SetupRetry }
   | { kind: 'stopping' }
   | { kind: 'cancelled' };
+
+export type AimStatus = 'starting' | 'live' | 'stalled' | 'refused';
 
 export interface SetupDeps {
   platform: 'ios' | 'android';
@@ -158,6 +180,8 @@ export interface SetupDeps {
   speed?(): SetupSpeed;
   /** Local time of day in minutes (default: the phone's clock). */
   localMinute?(now: number): number;
+  /** RoadWise came to the front (true) or left it (false: inactive or background). Returns the unsubscribe. */
+  onAppState?(fn: (active: boolean) => void): () => void;
   now(): number;
   sleep(ms: number): Promise<void>;
   random?(n: number): Uint8Array;
@@ -179,8 +203,14 @@ export interface SetupFlow {
   pick(id: string): void;
   /** Screen 1's Pair. */
   pair(): void;
-  /** Screen 2's Next: commit the setup. */
+  /** Screen 2's Start, and Try again on a refusal it can help with: the live picture. */
+  startAim(): void;
+  /** Screen 2's or screen 3's Next: stop the picture and commit the setup. */
   next(): void;
+  /** Screen 3's images (JPEG bytes, in memory only), while the picture runs. Returns the unsubscribe. */
+  onViewFrame(fn: (jpeg: Uint8Array) => void): () => void;
+  /** Screen 3's AIM frames; null when the picture stops (no reading). Returns the unsubscribe. */
+  onAim(fn: (a: AimFrame | null) => void): () => void;
   /** Try again on a failure (what it does: the failure's `retry`). */
   retry(): Promise<void>;
   /** Stop setup: undoes a pairing already made, on both sides. While the commit is answered it waits for the answer: done stands, anything else is undone. */
@@ -238,8 +268,10 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
   let cancelled = false;
   let lastOpts: SetupStart = {};
   let stopScan: (() => Promise<void>) | null = null;
-  /** the driver's pending choice (Pair, a pick, Next): resolved with it, or null when the wait ends */
-  let waiter: { kind: 'pair' | 'pick' | 'next'; resolve: (v: string | null) => void } | null = null;
+  /** the driver's pending choice (Pair, a pick): resolved with it, or null when the wait ends */
+  let waiter: { kind: 'pair' | 'pick'; resolve: (v: string | null) => void } | null = null;
+  /** screens 2 and 3: the driver's Start (or Try again) or Next, until the loop takes it */
+  let tap: 'start' | 'next' | null = null;
   /** the paired DashPal's auto-connect is stepped aside (given back when setup ends without pairing) */
   let stepped = false;
   /** Cancel came while the commit was answered (the screen left): a commit that does not go through is undone */
@@ -262,6 +294,24 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
   let expired = false;
   let results: SetupResultFrame[] = [];
   let speed: SetupSpeed | null = null;
+
+  // ——— screen 3's picture (memory only) ———
+  const assembler = createViewAssembler();
+  const frameListeners = new Set<(jpeg: Uint8Array) => void>();
+  const aimListeners = new Set<(a: AimFrame | null) => void>();
+  /** the phone asked for the picture and takes its records and AIM frames */
+  let aimWanted = false;
+  /** the DashPal said the stream is on (since the phone's last start) */
+  let streamOn = false;
+  /** the DashPal refused or stopped the stream since the phone's last start */
+  let viewRefusal: ViewReason | null = null;
+  let aimStartedAt = 0;
+  let lastImageAt: number | null = null;
+  let stalledAt: number | null = null;
+  let lastStartAt = 0;
+  /** RoadWise is in the front; `resumeAim`: the picture stopped when it left, to start again when it is back */
+  let appActive = true;
+  let resumeAim = false;
 
   function report(e: unknown, ctx: string): void {
     try {
@@ -308,13 +358,13 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     w?.resolve(null);
   }
 
-  function waitFor(kind: 'pair' | 'pick' | 'next'): Promise<string | null> {
+  function waitFor(kind: 'pair' | 'pick'): Promise<string | null> {
     return new Promise<string | null>((resolve) => {
       waiter = { kind, resolve };
     });
   }
 
-  function answer(kind: 'pair' | 'pick' | 'next', v: string): void {
+  function answer(kind: 'pair' | 'pick', v: string): void {
     if (waiter?.kind !== kind) return;
     const w = waiter;
     waiter = null;
@@ -360,13 +410,46 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       if (f.reason === 1) aimAllowed = false;
       else if (f.on === 1) aimAllowed = true;
       if (phase.kind === 'instructions' && phase.aimAllowed !== aimAllowed) set({ ...phase, aimAllowed });
+      // Only the answers to this phone's own start count (the query's on 1 says only that it would start).
+      if (aimWanted) {
+        streamOn = f.on === 1;
+        if (f.on === 0 && f.reason !== 0) viewRefusal = viewReason(f.reason);
+      }
+    } else if (f.type === 'AIM') {
+      if (aimWanted) emitAim(f);
     }
   }
 
-  async function command(op: number, arg = 0): Promise<boolean> {
+  function emitAim(a: AimFrame | null): void {
+    for (const fn of [...aimListeners]) {
+      try {
+        fn(a);
+      } catch (e) {
+        report(e, 'aim listener');
+      }
+    }
+  }
+
+  /** One opened VIEW record: an image completed goes to the screen; finished images are acknowledged. */
+  function onRecord(rec: number[]): void {
+    if (!aimWanted) return;
+    const r = assembler.put(rec);
+    for (const f of r.acks) void command(COMMAND.VIEW_ACK, f, { withResponse: false });
+    if (!r.image) return;
+    lastImageAt = deps.now();
+    for (const fn of [...frameListeners]) {
+      try {
+        fn(r.image.jpeg);
+      } catch (e) {
+        report(e, 'view listener');
+      }
+    }
+  }
+
+  async function command(op: number, arg = 0, o: { withResponse?: boolean } = {}): Promise<boolean> {
     if (!t || !cand || !sessionUp) return false;
     try {
-      await t.writeSealed(cand.id, encodeRx({ type: 'COMMAND', op, arg }));
+      await t.writeSealed(cand.id, encodeRx({ type: 'COMMAND', op, arg }), o);
       return true;
     } catch (e) {
       report(e, `COMMAND ${op}`);
@@ -398,11 +481,93 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
   /** One look while the hold lasts: the STATE when due, the countdown in the hold's last minute. */
   function pump(): void {
     if (sessionUp && (lastStateAt === null || deps.now() - lastStateAt >= SETUP_STATE_MS)) sendState();
-    if (holdAt !== null && phase.kind === 'instructions') {
+    if (holdAt !== null && (phase.kind === 'instructions' || phase.kind === 'aim')) {
       const left = HOLD_MAX_MS - (deps.now() - holdAt);
       const s = left < HOLD_WARN_MS ? Math.max(0, Math.ceil(left / 1000)) : null;
       if (s !== phase.holdLeftS) set({ ...phase, holdLeftS: s });
     }
+  }
+
+  // ——— screen 3: the live picture ———
+
+  function setAim(status: AimStatus, reason: ViewReason | null = null): void {
+    if (phase.kind === 'aim') {
+      if (phase.status !== status || phase.reason !== reason) set({ ...phase, status, reason });
+    } else set({ kind: 'aim', status, reason, holdLeftS: phase.kind === 'instructions' ? phase.holdLeftS : null, reconnecting: false });
+  }
+
+  /** COMMAND 10 arg 1; a stream that is not on numbers its images from 1 again, so the finished ones are forgotten. */
+  async function askStart(): Promise<void> {
+    if (!streamOn) assembler.start();
+    lastStartAt = deps.now();
+    await command(COMMAND.AIM, AIM_ARG.START);
+  }
+
+  /** Start (or Try again): VIEW notifications to the assembler, then COMMAND 10 arg 1; `starting` until the first image. */
+  async function startStream(): Promise<void> {
+    if (!t || !cand) return;
+    viewRefusal = null;
+    lastImageAt = null;
+    stalledAt = null;
+    streamOn = false;
+    aimStartedAt = deps.now();
+    aimWanted = true;
+    setAim('starting');
+    try {
+      await t.subscribeView(cand.id, onRecord);
+    } catch (e) {
+      report(e, 'subscribe view');
+    }
+    await askStart();
+  }
+
+  /** The picture stops: COMMAND 10 arg 0 (`send`, with the link up), VIEW notifications off, the open images zeroed, no reading. */
+  async function stopStream(o: { send: boolean }): Promise<void> {
+    if (!aimWanted) return;
+    aimWanted = false;
+    streamOn = false;
+    lastImageAt = null;
+    assembler.wipe();
+    emitAim(null);
+    if (o.send) await command(COMMAND.AIM, AIM_ARG.STOP);
+    if (t && cand) await t.unsubscribeView(cand.id).catch((e: unknown) => report(e, 'unsubscribe view'));
+  }
+
+  /** One look at the picture: a refusal, the first image, a stall (Start again), giving up. */
+  async function watchAim(): Promise<void> {
+    if (!aimWanted || phase.kind !== 'aim') return;
+    const now = deps.now();
+    if (viewRefusal) {
+      const reason = viewRefusal;
+      await stopStream({ send: false });
+      setAim('refused', reason);
+      return;
+    }
+    const since = lastImageAt ?? aimStartedAt;
+    if (phase.status === 'stalled' && stalledAt !== null && lastImageAt !== null && lastImageAt > stalledAt) {
+      stalledAt = null;
+      setAim('live');
+    } else if (phase.status === 'starting' && lastImageAt !== null) setAim('live');
+    else if (phase.status !== 'stalled' && now - since >= (lastImageAt === null ? AIM_FIRST_MS : AIM_STALL_MS)) {
+      stalledAt = now;
+      setAim('stalled');
+      await askStart();
+    } else if (phase.status === 'stalled' && stalledAt !== null) {
+      if (now - stalledAt >= AIM_GIVE_UP_MS) {
+        await stopStream({ send: true });
+        setAim('refused', 'camera');
+      } else if (now - lastStartAt >= AIM_STALL_MS) await askStart();
+    }
+  }
+
+  /** RoadWise left the front on screen 3: the picture stops at once, to start again when it is back. */
+  function onAppState(active: boolean): void {
+    appActive = active;
+    if (active || !aimWanted) return;
+    resumeAim = true;
+    void stopStream({ send: true }).then(() => {
+      if (phase.kind === 'aim') setAim('starting');
+    });
   }
 
   /** Poll (pumping) until `done` holds or `ms` has passed; false on the timeout. */
@@ -758,7 +923,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     const c = cand!;
     const key = pending;
     if (!key) throw new Failed('lost');
-    if (phase.kind === 'instructions' || phase.kind === 'connecting' || phase.kind === 'finishing') set({ ...phase, reconnecting: true });
+    if (phase.kind === 'instructions' || phase.kind === 'aim' || phase.kind === 'connecting' || phase.kind === 'finishing') set({ ...phase, reconnecting: true });
     const until = deps.now() + HOLD_RECONNECT_MS;
     while (deps.now() < until) {
       check();
@@ -769,7 +934,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
           const s = await tt.startSession(c.id, got, { phoneId: key.phoneId, kPair: key.kPair });
           if (s.kind === 'up') {
             await sessionStarted();
-            if (phase.kind === 'instructions' || phase.kind === 'connecting' || phase.kind === 'finishing') set({ ...phase, reconnecting: false });
+            if (phase.kind === 'instructions' || phase.kind === 'aim' || phase.kind === 'connecting' || phase.kind === 'finishing') set({ ...phase, reconnecting: false });
             return;
           }
           if (s.kind === 'unknown_phone') {
@@ -794,23 +959,42 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     throw new Failed('lost');
   }
 
-  /** Screen 2 until Next: the STATE cadence, the countdown, a lost link, the hold running out. */
+  /**
+   * Screens 2 and 3 until Next: Start (and Try again) opens the picture, Next stops it; the STATE
+   * cadence, the countdown, the picture's watch, RoadWise leaving the front, a lost link (screen 3
+   * starts its picture again once reconnected) and the hold running out.
+   */
   async function waitNext(): Promise<void> {
+    tap = null;
     set({ kind: 'instructions', aimAllowed, holdLeftS: null, reconnecting: false });
-    let tapped = false;
-    void waitFor('next').then((v) => {
-      if (v !== null) tapped = true;
-    });
     for (;;) {
       check();
       if (expired) await expire();
-      if (tapped) return;
+      const tapped = tap;
+      tap = null;
+      if (tapped === 'next') {
+        await stopStream({ send: linkUp() });
+        return;
+      }
       if (!linkUp()) {
+        const aiming = aimWanted || resumeAim;
+        await stopStream({ send: false });
         await release();
         await reconnectHold();
+        resumeAim = aiming;
+        if (resumeAim && phase.kind === 'aim') setAim('starting');
         continue;
       }
+      if (tapped === 'start') {
+        resumeAim = false;
+        if (appActive) await startStream();
+        else resumeAim = true;
+      } else if (resumeAim && appActive && phase.kind === 'aim') {
+        resumeAim = false;
+        await startStream();
+      }
       pump();
+      await watchAim();
       await deps.sleep(POLL_MS);
     }
   }
@@ -924,6 +1108,8 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
    * still hold the key: it is kept as the orphan.
    */
   async function undo(): Promise<void> {
+    resumeAim = false;
+    await stopStream({ send: linkUp() });
     stopSpeed();
     const key = pending;
     let reached = false;
@@ -957,6 +1143,14 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     expired = false;
     results = [];
     shownName = 'DashPal';
+    tap = null;
+    aimWanted = false;
+    streamOn = false;
+    viewRefusal = null;
+    lastImageAt = null;
+    stalledAt = null;
+    resumeAim = false;
+    assembler.start();
   }
 
   /** Run one segment of the setup to its end (a phase that waits for nothing, or a failure). */
@@ -973,6 +1167,8 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       stopScan = null;
       void stop?.().catch((e: unknown) => report(e, 'stopScan'));
     });
+    appActive = true;
+    const offApp = deps.onAppState?.(onAppState) ?? (() => {});
     try {
       try {
         result = await body();
@@ -1003,6 +1199,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     } finally {
       cancelAfter = false;
       offDrive();
+      offApp();
       running = false;
     }
     if (result.kind !== 'done' && !(result.kind === 'failed' && (result.retry === 'commit' || result.retry === 'resume'))) {
@@ -1087,7 +1284,20 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
 
     pick: (id) => answer('pick', id),
     pair: () => answer('pair', 'pair'),
-    next: () => answer('next', 'next'),
+    startAim() {
+      if ((phase.kind === 'instructions' && phase.aimAllowed) || (phase.kind === 'aim' && phase.status === 'refused' && phase.reason !== null && AIM_RETRY.includes(phase.reason))) tap = 'start';
+    },
+    next() {
+      if (phase.kind === 'instructions' || phase.kind === 'aim') tap = 'next';
+    },
+    onViewFrame(fn) {
+      frameListeners.add(fn);
+      return () => void frameListeners.delete(fn);
+    },
+    onAim(fn) {
+      aimListeners.add(fn);
+      return () => void aimListeners.delete(fn);
+    },
 
     async retry() {
       if (running || phase.kind !== 'failed') return;

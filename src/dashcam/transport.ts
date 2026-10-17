@@ -175,7 +175,8 @@ export interface DashcamTransport {
   subscribeView(peripheralId: string, onRecord: (record: number[]) => void): Promise<void>;
   /** The listener goes and `stopNotification` on VIEW. */
   unsubscribeView(peripheralId: string): Promise<void>;
-  writeSealed(peripheralId: string, bytes: number[]): Promise<void>;
+  /** One sealed frame to the setup connection's RX (with response unless `withResponse` is false: the aiming picture's acknowledgements). */
+  writeSealed(peripheralId: string, bytes: number[], opts?: { withResponse?: boolean }): Promise<void>;
   disconnect(peripheralId: string): Promise<void>;
 }
 
@@ -1026,13 +1027,16 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       await gatt('stopNotification', () => api.stopNotification(peripheralId, DASHPAL_SERVICE, VIEW_CHAR)).catch((e: unknown) => report(e, 'stopNotification'));
     },
 
-    async writeSealed(peripheralId, bytes) {
-      await gatt('write', () => {
+    async writeSealed(peripheralId, bytes, opts = {}) {
+      const withResponse = opts.withResponse !== false;
+      await gatt(withResponse ? 'write' : 'writeWithoutResponse', () => {
         const s = setupSealers.get(peripheralId);
         if (!s) return Promise.reject(new Error('no session on this setup connection'));
         const wire = s.seal(bytes);
         if (wire === 'spent') return Promise.reject(new Error('the session ran out of counters'));
-        return api.write(peripheralId, DASHPAL_SERVICE, RX_CHAR, Array.from(wire), RX_MAX_BYTES);
+        return withResponse
+          ? api.write(peripheralId, DASHPAL_SERVICE, RX_CHAR, Array.from(wire), RX_MAX_BYTES)
+          : api.writeWithoutResponse(peripheralId, DASHPAL_SERVICE, RX_CHAR, Array.from(wire), RX_MAX_BYTES);
       });
     },
 

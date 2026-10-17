@@ -697,6 +697,12 @@ test('setup: a session on the setup connection, then sealed writes and frames th
   await flush();
   expect(r.cam.received).toEqual([{ type: 'COMMAND', op: 5, arg: 0 }]);
   expect(got).toEqual([[8, 1, 1]]);
+  expect(r.ble.calls.filter((c) => c.startsWith('write')).at(-1)).toBe(`write:${PID}:0005`);
+  // The aiming picture's acknowledgements go without response, sealed in turn.
+  await r.t.writeSealed(PID, encodeRx({ type: 'COMMAND', op: 11, arg: 4 }), { withResponse: false });
+  await flush();
+  expect(r.ble.calls.at(-1)).toBe(`writeWithoutResponse:${PID}:0005`);
+  expect(r.cam.received.at(-1)).toEqual({ type: 'COMMAND', op: 11, arg: 4 });
   off();
   // an unknown phone, and no session at all
   r.cam.phones.clear();

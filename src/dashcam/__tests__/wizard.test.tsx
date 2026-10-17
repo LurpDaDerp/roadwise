@@ -55,7 +55,10 @@ function scriptedFlow() {
     start: async (opts) => void starts.push(opts ?? {}),
     pick: (id) => void answers.push(`pick:${id}`),
     pair: () => void answers.push('pair'),
+    startAim: () => void answers.push('startAim'),
     next: () => void answers.push('next'),
+    onViewFrame: () => () => {},
+    onAim: () => () => {},
     retry: async () => void answers.push('retry'),
     cancel: async () => void (cancelled += 1),
   };

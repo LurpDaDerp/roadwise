@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import type { PermissionsAdapter } from '@/core/permissions';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
@@ -53,6 +53,11 @@ export function useSetupFlow({ start, deps = {}, active = true, onPhase }: { sta
       resumePaired: async () => runtime?.resumePaired(),
       secrets: deps.secrets ?? dashpalSecrets,
       notePhones: (dashcamId, phones) => runtime?.notePhones(dashcamId, phones),
+      // Screen 3's picture stops when RoadWise leaves the front and starts again when it is back.
+      onAppState: (fn) => {
+        const sub = AppState.addEventListener('change', (s) => fn(s === 'active'));
+        return () => sub.remove();
+      },
       now,
       sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     };

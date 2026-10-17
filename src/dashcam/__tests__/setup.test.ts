@@ -11,7 +11,7 @@ import { createFakeBle, type FakeBle } from '../fakeTransport';
 import type { PairedDashcam } from '../keys';
 import { AUTH_CHAR, DASHPAL_SERVICE, PAIRING_NEW, PAIRING_OPEN, PAIRING_SETUP, STATE_FLAG, toHex, type RxFrame } from '../protocol';
 import { createDashpalSecrets, type DashpalSecrets } from '../secure';
-import { BUSY_WAIT_MS, createSetupFlow, HOLD_MAX_MS, HOLD_RECONNECT_MS, PRESS_WAIT_MS, type SetupFlow, type SetupPhase, type SetupStart } from '../setup';
+import { AIM_FIRST_MS, AIM_GIVE_UP_MS, AIM_STALL_MS, BUSY_WAIT_MS, createSetupFlow, HOLD_MAX_MS, HOLD_RECONNECT_MS, PRESS_WAIT_MS, type SetupFlow, type SetupPhase, type SetupStart } from '../setup';
 import type { SetupSpeed } from '../setupSpeed';
 import { createBleTransport, type DashcamTransport } from '../transport';
 
@@ -52,6 +52,8 @@ interface Rig {
   at(ms: number, fn: () => void): void;
   until(kind: SetupPhase['kind'], max?: number): Promise<SetupPhase>;
   setBusy(v: boolean): void;
+  /** RoadWise comes to the front (true) or leaves it (false) */
+  setActive(v: boolean): void;
   cam(last?: number): FakeDashcam;
   /** COMMAND ops the dashcam received, in order */
   ops(last?: number): number[];
@@ -104,6 +106,7 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
   const log: string[] = [];
   let busy = false;
   const driveFns = new Set<() => void>();
+  const appFns = new Set<(active: boolean) => void>();
   const refused = { on: false };
   const speed = { cms: null as number | null, started: 0, stopped: 0 };
   const fakeSpeed = (): SetupSpeed => ({
@@ -136,6 +139,10 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
     notePhones: (d, n) => void log.push(`notePhones:${d}:${n}`),
     speed: fakeSpeed,
     localMinute: () => 600,
+    onAppState: (fn) => {
+      appFns.add(fn);
+      return () => void appFns.delete(fn);
+    },
     now: () => clock.t,
     sleep: async (ms) => {
       sleeps.push(ms);
@@ -176,6 +183,9 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
     setBusy: (v) => {
       busy = v;
       for (const fn of [...driveFns]) fn();
+    },
+    setActive: (v) => {
+      for (const fn of [...appFns]) fn(v);
     },
     cam,
     ops: (last = 0xd5) => cam(last).received.filter((f): f is Extract<RxFrame, { type: 'COMMAND' }> => f.type === 'COMMAND').map((f) => f.op),
@@ -833,5 +843,232 @@ describe('screen 1’s outcomes', () => {
     expect(toHex(r.cam().authWrites.find((w) => w[0] === 0x12)!.slice(10, 18))).toBe('0909090909090909');
     expect(r.cam().phones.size).toBe(1);
     expect(await r.secrets.readOrphan()).toBeNull();
+  });
+});
+
+describe('screen 3: the live picture', () => {
+  const ID = idOf('android', 0xd5);
+  const jpeg = (len: number, seed: number) => Array.from({ length: len }, (_, i) => (i * 31 + seed * 7) & 0xff);
+  /** Every COMMAND 8, 9, 10 and 11 the dashcam received, as `op:arg`. */
+  const aimOps = (r: Rig) =>
+    r
+      .cam()
+      .received.filter((f): f is Extract<RxFrame, { type: 'COMMAND' }> => f.type === 'COMMAND' && f.op >= 8 && f.op <= 11)
+      .map((f) => `${f.op}:${f.arg}`);
+  const aimPhase = (r: Rig) => r.flow.phase() as Extract<SetupPhase, { kind: 'aim' }>;
+  const rigs: Rig[] = [];
+  const make = (o?: Parameters<typeof rig>[0]) => {
+    const r = rig(o);
+    rigs.push(r);
+    return r;
+  };
+  // A flow left on screen 3 by a failed expectation would loop on its virtual clock forever.
+  afterEach(async () => {
+    for (const r of rigs.splice(0)) if (!END.includes(r.flow.phase().kind)) await r.flow.cancel();
+  });
+
+  /** One macrotask at a time (the flow's virtual clock moves one sleep a step) until `cond`. */
+  async function waitUntil(r: Rig, cond: () => boolean, what: string): Promise<void> {
+    for (let i = 0; i < 50_000; i++) {
+      if (cond()) return;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    throw new Error(`never: ${what}; phases: ${kinds(r).join(' > ')}`);
+  }
+
+  /** Paired and on screen 2, then Start, up to the DashPal's stream on: the listeners record what screen 3 is handed. */
+  async function toAim(r: Rig) {
+    const frames: number[][] = [];
+    const aims: (number | null)[] = [];
+    r.flow.onViewFrame((j) => void frames.push(Array.from(j)));
+    r.flow.onAim((a) => void aims.push(a ? a.score : null));
+    await setUp(r, {}, { next: false });
+    r.flow.startAim();
+    await waitUntil(r, () => r.flow.phase().kind === 'aim' && (r.cam().view.on || aimPhase(r).status === 'refused'), 'the stream on');
+    return { frames, aims };
+  }
+
+  test('Start: starting, the images (each acknowledged once, without response) and AIM frames reach the screen, live; Next stops it, then commits', async () => {
+    const r = make();
+    const seen = await toAim(r);
+    expect(r.flow.phase()).toEqual({ kind: 'aim', status: 'starting', reason: null, holdLeftS: null, reconnecting: false });
+    expect(r.ble.calls).toContain(`startNotification:${ID}:0007`);
+    r.cam().sendImage(1, jpeg(3000, 1));
+    r.cam().notify({ type: 'AIM', seq: 1, score: 96, hint: 0, flags: 7, iod: 60, yaw: -8, pitch: 5 });
+    await waitUntil(r, () => aimPhase(r).status === 'live', 'live');
+    r.cam().sendImage(2, jpeg(2900, 2), 185);
+    await waitUntil(r, () => r.cam().view.acks.length === 2, 'two acknowledgements');
+    expect(seen.frames).toEqual([jpeg(3000, 1), jpeg(2900, 2)]);
+    expect(seen.aims).toEqual([96]);
+    expect(r.cam().view.acks).toEqual([1, 2]);
+    expect(r.ble.calls.filter((c) => c === `writeWithoutResponse:${ID}:0005`)).toHaveLength(2);
+    r.flow.next();
+    expect(await untilEnd(r)).toMatchObject({ kind: 'done', aimedElsewhere: false });
+    expect(aimOps(r)).toEqual(['10:2', '10:1', '11:1', '11:2', '10:0', '8:0']);
+    expect(r.ble.calls).toContain(`stopNotification:${ID}:0007`);
+    expect(seen.aims.at(-1)).toBeNull();
+    expect([...new Set(kinds(r))]).toEqual(['permission', 'search', 'confirm', 'connecting', 'connected', 'instructions', 'aim', 'finishing', 'done']);
+  });
+
+  test('the picture never enters a phase: no image byte or AIM value in any of them', async () => {
+    const r = make();
+    const seen = await toAim(r);
+    r.cam().sendImage(1, Array.from({ length: 500 }, () => 0xab));
+    r.cam().notify({ type: 'AIM', seq: 1, score: 77, hint: 6, flags: 3, iod: 140, yaw: 3, pitch: 4 });
+    await waitUntil(r, () => seen.frames.length === 1 && seen.aims.length === 1, 'the image and the AIM');
+    r.flow.next();
+    await untilEnd(r);
+    for (const p of r.phases) expect(JSON.stringify(p)).not.toMatch(/171|jpeg|"score"|"hint"|"iod"|"yaw"/);
+  });
+
+  test('no image 4 s after Start: stalled and Start again; an image: live; no image 3 s: stalled; 15 s stalled: refused camera, stopped; Try again starts it again', async () => {
+    const r = make();
+    await toAim(r);
+    const t0 = r.clock.t;
+    await waitUntil(r, () => aimPhase(r).status === 'stalled', 'stalled');
+    expect(r.clock.t - t0).toBeGreaterThanOrEqual(AIM_FIRST_MS - 100);
+    await waitUntil(r, () => r.cam().view.starts === 2, 'Start again');
+    r.cam().sendImage(1, jpeg(400, 1));
+    await waitUntil(r, () => aimPhase(r).status === 'live', 'live');
+    const t1 = r.clock.t;
+    await waitUntil(r, () => aimPhase(r).status === 'stalled', 'stalled again');
+    expect(r.clock.t - t1).toBeGreaterThanOrEqual(AIM_STALL_MS - 100);
+    const t2 = r.clock.t;
+    await waitUntil(r, () => aimPhase(r).status === 'refused', 'refused');
+    expect(r.clock.t - t2).toBeGreaterThanOrEqual(AIM_GIVE_UP_MS);
+    expect(r.flow.phase()).toMatchObject({ kind: 'aim', status: 'refused', reason: 'camera' });
+    // Start again while stalled, every 3 s; then the stop.
+    expect(r.cam().view.starts).toBeGreaterThanOrEqual(6);
+    await waitUntil(r, () => r.cam().view.stops === 1, 'the stop');
+    expect(r.cam().view.on).toBe(false);
+    expect(r.ble.calls).toContain(`stopNotification:${ID}:0007`);
+    const starts = r.cam().view.starts;
+    r.flow.startAim();
+    await waitUntil(r, () => r.cam().view.starts === starts + 1, 'Try again');
+    expect(r.flow.phase()).toMatchObject({ kind: 'aim', status: 'starting', reason: null });
+  });
+
+  test.each([
+    [2, 'moving', true],
+    [3, 'drive', false],
+    [4, 'budget', false],
+    [5, 'busy', true],
+    [6, 'camera', true],
+    [7, 'memory', true],
+    [8, 'no_state', true],
+    [10, 'mtu', false],
+  ] as const)('a start refused %i: refused %s, Try again %s', async (code, reason, retry) => {
+    const r = make();
+    r.cam().view.refuse = code;
+    await toAim(r);
+    await waitUntil(r, () => aimPhase(r).status === 'refused', 'refused');
+    expect(r.flow.phase()).toMatchObject({ kind: 'aim', status: 'refused', reason });
+    r.cam().view.refuse = null;
+    r.flow.startAim();
+    await idle(r, 300);
+    expect(r.cam().view.starts).toBe(retry ? 2 : 1);
+    if (retry) expect(r.cam().view.on).toBe(true);
+    else expect(r.flow.phase()).toMatchObject({ status: 'refused', reason });
+    // Next finishes from any of them.
+    r.flow.next();
+    expect(await untilEnd(r)).toMatchObject({ kind: 'done' });
+  });
+
+  test('a running picture stopped for a gate (the car moving): refused moving; images after it are not shown', async () => {
+    const r = make();
+    const seen = await toAim(r);
+    r.cam().sendImage(1, jpeg(300, 1));
+    await waitUntil(r, () => seen.frames.length === 1, 'the image');
+    r.cam().stopView(2);
+    await waitUntil(r, () => aimPhase(r).status === 'refused', 'refused');
+    expect(r.flow.phase()).toMatchObject({ kind: 'aim', status: 'refused', reason: 'moving' });
+    r.cam().view.on = true;
+    r.cam().sendImage(2, jpeg(300, 2));
+    await idle(r, 200);
+    expect(seen.frames).toHaveLength(1);
+    expect(seen.aims.at(-1)).toBeNull();
+  });
+
+  test('Start on a DashPal the other phone aimed (Add another phone) does nothing: Next finishes', async () => {
+    const r = make({ cams: [{ last: 0xd5, phones: [{ id: Uint8Array.from([1, 1, 1, 1, 1, 1, 1, 1]), kPair: new Uint8Array(32).fill(1) }] }] });
+    r.cam().commandWindow = true;
+    await setUp(r, {}, { next: false });
+    await idle(r, 200);
+    r.flow.startAim();
+    await idle(r, 200);
+    expect(r.flow.phase()).toMatchObject({ kind: 'instructions', aimAllowed: false });
+    expect(r.cam().view.starts).toBe(0);
+    r.flow.next();
+    expect(await untilEnd(r)).toMatchObject({ kind: 'done', aimedElsewhere: true });
+  });
+
+  test('Cancel on screen 3: the picture stops (COMMAND 10 arg 0), then COMMAND 9; nothing is kept', async () => {
+    const r = make();
+    const seen = await toAim(r);
+    r.cam().sendImage(1, jpeg(300, 1));
+    await waitUntil(r, () => seen.frames.length === 1, 'the image');
+    await r.flow.cancel();
+    expect(await r.until('cancelled')).toEqual({ kind: 'cancelled' });
+    expect(aimOps(r).slice(-2)).toEqual(['10:0', '9:0']);
+    expect(seen.aims.at(-1)).toBeNull();
+    expect(r.cam().prov).toBeNull();
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+  });
+
+  test('a drive opening on screen 3: the picture stops, the setup is undone, busy', async () => {
+    const r = make();
+    await toAim(r);
+    r.setBusy(true);
+    expect(await untilEnd(r)).toEqual({ kind: 'busy' });
+    expect(aimOps(r).slice(-2)).toEqual(['10:0', '9:0']);
+    expect(r.cam().view.on).toBe(false);
+  });
+
+  test('RoadWise leaving the front stops the picture at once and shows nothing it sends meanwhile; back in front, it starts again and numbers from 1', async () => {
+    const r = make();
+    const seen = await toAim(r);
+    r.cam().sendImage(1, jpeg(300, 1));
+    await waitUntil(r, () => seen.frames.length === 1, 'the image');
+    r.setActive(false);
+    await waitUntil(r, () => !r.cam().view.on, 'the stop');
+    expect(r.flow.phase()).toMatchObject({ kind: 'aim', status: 'starting' });
+    expect(seen.aims.at(-1)).toBeNull();
+    const starts = r.cam().view.starts;
+    await idle(r, 10_000);
+    expect(r.cam().view.starts).toBe(starts); // no stall restarts while away
+    r.setActive(true);
+    await waitUntil(r, () => r.cam().view.on, 'started again');
+    expect(r.cam().view.starts).toBe(starts + 1);
+    // The new stream numbers from 1 again: shown, not taken for the earlier frame 1.
+    r.cam().sendImage(1, jpeg(300, 9));
+    await waitUntil(r, () => seen.frames.length === 2, 'the new image');
+    expect(seen.frames).toEqual([jpeg(300, 1), jpeg(300, 9)]);
+    await waitUntil(r, () => aimPhase(r).status === 'live', 'live');
+  });
+
+  test('the link drops on screen 3: Reconnecting…, then a session under the new key and the picture starts again', async () => {
+    const r = make();
+    await toAim(r);
+    const starts = r.cam().view.starts;
+    r.ble.connectMode.set(ID, 'reject');
+    r.ble.drop(ID);
+    await waitUntil(r, () => aimPhase(r).reconnecting, 'reconnecting');
+    r.ble.connectMode.delete(ID);
+    await waitUntil(r, () => !aimPhase(r).reconnecting && r.cam().view.on, 'started again');
+    expect(r.flow.phase()).toMatchObject({ kind: 'aim', reconnecting: false });
+    expect(r.cam().view.starts).toBeGreaterThan(starts);
+    r.flow.next();
+    expect(await untilEnd(r)).toMatchObject({ kind: 'done' });
+  });
+
+  test('the hold’s last minute counts down on screen 3 too; its end is expired', async () => {
+    const r = make();
+    await toAim(r);
+    // The picture's own watch is not the subject: the clock jumps to 30 s before the hold's end.
+    r.clock.t += HOLD_MAX_MS - 30_000;
+    await waitUntil(r, () => aimPhase(r).holdLeftS !== null, 'the countdown');
+    expect(aimPhase(r).holdLeftS).toBeLessThanOrEqual(31);
+    r.cam().expire();
+    expect(await untilEnd(r)).toMatchObject({ kind: 'failed', reason: 'expired' });
   });
 });
