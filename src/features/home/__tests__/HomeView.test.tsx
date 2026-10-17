@@ -105,12 +105,34 @@ describe('first run', () => {
 });
 
 describe('Start drive', () => {
-  test('starts from the gold button, with no DMS chip beside it', async () => {
+  test('starts from the Start drive capsule at the foot of the drive card, with no DMS chip beside it', async () => {
     const p = props();
     await draw(<HomeView {...p} />);
-    await press(screen.getByTestId('start-drive'));
+    expect(within(screen.getByTestId('home-header')).getByTestId('start-drive')).toBeOnTheScreen();
+    await press(screen.getByRole('button', { name: 'Start drive' }));
     expect(p.onStart).toHaveBeenCalled();
     expect(screen.queryByTestId('dms-chip')).toBeNull();
+  });
+
+  test('busy while a start is under way, and gone while a drive records', async () => {
+    await draw(<HomeView {...props({ starting: true })} />);
+    expect(screen.getByTestId('start-drive')).toBeDisabled();
+    await draw(<HomeView {...props({ recording: true, inProgress: <Text testID="in-progress">Drive in progress</Text> })} />);
+    expect(screen.queryByTestId('start-drive')).toBeNull();
+    expect(screen.getByTestId('home-header')).toBeOnTheScreen();
+  });
+
+  test('Start stays on the card while progress loads or fails', async () => {
+    await draw(<HomeView {...props({ summary: undefined, summaryLoading: true })} />);
+    expect(screen.getByTestId('start-drive')).toBeOnTheScreen();
+    expect(screen.queryByTestId('home-progress')).toBeNull();
+  });
+
+  test('the avatar beside the greeting opens Profile', async () => {
+    const onProfile = jest.fn();
+    await draw(<HomeView {...props({ onProfile })} />);
+    await press(screen.getByRole('button', { name: 'Profile' }));
+    expect(onProfile).toHaveBeenCalled();
   });
 
   test.each([

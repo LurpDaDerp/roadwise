@@ -1,14 +1,15 @@
 import { IDLE_END_S } from '@scoring';
-import { View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { ActivityIndicator, Pressable, View } from 'react-native';
 
 import type { EndCause } from '@/core/engine/engine.types';
 import type { DropReason } from '@/core/engine/finalize';
 import type { StartRefusalReason } from '@/drive/host';
-import { Banner, Button, useTheme } from '@/ui';
+import { Banner, Text, useTheme } from '@/ui';
 
 export type StartRefusal = StartRefusalReason;
 
-/** What the line above Start says: a refused start, or a tap on a forgot-to-start reminder whose trip is over. */
+/** What the line under the drive card says: a refused start, or a tap on a forgot-to-start reminder whose trip is over. */
 export type StartBanner = StartRefusal | 'reminder-expired';
 
 export const REFUSAL_COPY: Record<StartBanner, string> = {
@@ -45,46 +46,74 @@ export function dropCopy(cause: EndCause, reason: DropReason): string {
 }
 
 /**
- * The bottom-reachable Start drive button. A refused start (the button's, or a tap on the
- * forgot-to-start reminder's) says why in one line above the button; nothing is recorded. With no
- * refusal, a drive that was not kept says why there until OK.
+ * Start drive, the hero action at the foot of Home's drive card: a paper capsule across the scene
+ * with an ink disc at its end carrying the car. One tap starts a drive; while the start is under
+ * way the disc spins and the capsule says it is busy.
  */
-export function StartDriveBar({
-  onStart,
-  starting,
+export function StartDriveButton({ onStart, starting }: { onStart: () => void; starting: boolean }) {
+  const t = useTheme();
+  const c = t.colors;
+  return (
+    <Pressable
+      testID="start-drive"
+      accessibilityRole="button"
+      accessibilityLabel="Start drive"
+      accessibilityState={{ busy: starting, disabled: starting }}
+      disabled={starting}
+      onPress={onStart}
+      style={({ pressed }) => ({
+        minHeight: 60,
+        borderRadius: t.radius.pill,
+        borderCurve: 'continuous',
+        backgroundColor: pressed ? c.primaryPressed : c.primary,
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingLeft: t.space.xl,
+        paddingRight: 6,
+        paddingVertical: 6,
+        gap: t.space.md,
+        transform: [{ scale: pressed && !starting ? 0.98 : 1 }],
+        boxShadow: '0px 8px 24px rgba(0, 0, 0, 0.28)',
+      })}
+    >
+      <Text variant="headline" style={{ flex: 1, color: c.onPrimary, fontSize: 18 }} numberOfLines={2}>
+        Start drive
+      </Text>
+      <View
+        style={{
+          width: 48,
+          height: 48,
+          borderRadius: 24,
+          backgroundColor: c.onPrimary,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {starting ? <ActivityIndicator color={c.primary} /> : <Ionicons name="car-sport" size={t.size.iconLg - 4} color={c.primary} />}
+      </View>
+    </Pressable>
+  );
+}
+
+/**
+ * The line under the drive card: a refused start (the button's, or a tap on the forgot-to-start
+ * reminder's) says why, with its fix; with no refusal, a drive that was not kept says why until OK.
+ * Nothing is recorded either way.
+ */
+export function StartNotice({
   refusal,
   onRefusalAction,
   notice,
 }: {
-  onStart: () => void;
-  starting: boolean;
   refusal: StartBanner | null;
   onRefusalAction: () => void;
   notice?: { message: string; onDismiss: () => void } | null;
 }) {
-  const t = useTheme();
   const fixable = refusal === 'permission' || refusal === 'precise' || refusal === 'services';
   const action = fixable ? { label: 'Fix it', onPress: onRefusalAction } : refusal === 'busy' ? { label: 'Open it', onPress: onRefusalAction } : undefined;
-  return (
-    <View
-      style={{
-        gap: t.space.sm,
-        paddingHorizontal: t.space.lg,
-        paddingTop: t.space.md,
-        paddingBottom: t.space.md,
-        backgroundColor: t.colors.bg,
-        borderTopWidth: 1,
-        borderTopColor: t.colors.divider,
-      }}
-    >
-      {refusal ? (
-        <Banner tone={refusal === 'reminder-expired' ? 'warning' : 'danger'} message={REFUSAL_COPY[refusal]} action={action} testID="start-refusal" />
-      ) : notice ? (
-        <Banner tone="info" message={notice.message} action={{ label: 'OK', onPress: notice.onDismiss }} testID="drive-dropped" />
-      ) : null}
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
-        <Button label="Start drive" icon="car-sport" size="lg" onPress={onStart} loading={starting} style={{ flex: 1 }} testID="start-drive" />
-      </View>
-    </View>
-  );
+  if (refusal) {
+    return <Banner tone={refusal === 'reminder-expired' ? 'warning' : 'danger'} message={REFUSAL_COPY[refusal]} action={action} testID="start-refusal" />;
+  }
+  if (notice) return <Banner tone="info" message={notice.message} action={{ label: 'OK', onPress: notice.onDismiss }} testID="drive-dropped" />;
+  return null;
 }
