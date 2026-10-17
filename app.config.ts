@@ -135,8 +135,16 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       // manifest declares. The camera never records sound. expo-screen-capture (the DashPal aiming
       // picture kept out of screenshots, FLAG_SECURE) declares photo access for a screenshot
       // listener RoadWise never adds: blocked. Its DETECT_SCREEN_CAPTURE stays (an install-time
-      // permission its Android 14 callback needs).
-      blockedPermissions: ['android.permission.ACCESS_BACKGROUND_LOCATION', 'android.permission.RECORD_AUDIO', 'android.permission.READ_MEDIA_IMAGES'],
+      // permission its Android 14 callback needs). Shared storage (Android 12 and older, declared by
+      // expo-file-system, expo-image and expo-screen-capture) is blocked too: the data export goes
+      // to the app's cache or a folder the driver picks (the system picker needs no permission).
+      blockedPermissions: [
+        'android.permission.ACCESS_BACKGROUND_LOCATION',
+        'android.permission.RECORD_AUDIO',
+        'android.permission.READ_MEDIA_IMAGES',
+        'android.permission.READ_EXTERNAL_STORAGE',
+        'android.permission.WRITE_EXTERNAL_STORAGE',
+      ],
     },
     extra: { eas: { projectId: EAS_PROJECT_ID } },
     plugins: [
@@ -170,7 +178,7 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
           isAndroidMotionActivityEnabled: true,
         },
       ],
-      // QR codes: friend codes and a DashPal's pairing code. No microphone, on either platform.
+      // QR codes: friend codes only. No microphone, on either platform.
       [
         'expo-camera',
         { cameraPermission: PERMISSION_COPY.camera, microphonePermission: false, recordAudioAndroid: false },

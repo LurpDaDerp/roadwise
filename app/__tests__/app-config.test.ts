@@ -131,6 +131,10 @@ describe('permissions (v3)', () => {
 
   test('Android never gets photo access: expo-screen-capture only keeps the aiming picture out of screenshots', () => {
     expect(build().android?.blockedPermissions).toContain('android.permission.READ_MEDIA_IMAGES');
+    // Nor shared storage on Android 12 and older (expo-file-system, expo-image and expo-screen-capture declare it).
+    expect(build().android?.blockedPermissions).toEqual(
+      expect.arrayContaining(['android.permission.READ_EXTERNAL_STORAGE', 'android.permission.WRITE_EXTERNAL_STORAGE'])
+    );
     // Its Android 14 screen-capture callback needs this install-time permission: never blocked.
     expect(build().android?.blockedPermissions).not.toContain('android.permission.DETECT_SCREEN_CAPTURE');
   });
