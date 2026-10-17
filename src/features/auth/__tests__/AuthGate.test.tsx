@@ -238,17 +238,6 @@ describe('a deep link blocked by onboarding', () => {
     );
   });
 
-  test('a DashPal link is held as its route with the dashcam id only (its code waits in SecureStore)', async () => {
-    mockParams.current = { d: 'F412FA0C9E01' };
-    try {
-      await mount({ status: 'signedIn', profile: OWED, profileSource: 'network', segments: ['(app)', 'dashpal'], pathname: '/dashpal' });
-      expect(mockReplace).toHaveBeenCalledWith('/(onboarding)/start');
-      await waitFor(async () => expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toEqual({ uid: 'u1', href: '/dashpal?d=f412fa0c9e01' }));
-    } finally {
-      mockParams.current = {};
-    }
-  });
-
   test('anything else is not held', async () => {
     await mount({ status: 'signedIn', profile: OWED, profileSource: 'network', segments: ['(tabs)', 'leagues'], pathname: '/stats' });
     expect(mockReplace).toHaveBeenCalledWith('/(onboarding)/start');

@@ -9,8 +9,6 @@ import {
   createDashpalSecrets,
   dashpalSecrets,
   ORPHAN_SECURE_KEY,
-  PENDING_CODE_MAX_AGE_MS,
-  PENDING_CODE_SECURE_KEY,
   readDashpalEnabled,
   readSecureTarget,
   writeDashpalEnabled,
@@ -67,8 +65,6 @@ test('the key entries are this-device-only after the first unlock', async () => 
   await dashpalSecrets.finalizeAuth();
   await dashpalSecrets.readAuth();
   await dashpalSecrets.writeOrphan(AUTH);
-  await dashpalSecrets.writePendingCode({ at: 5, dashcamId: null, code: 'X' });
-  await dashpalSecrets.readPendingCode(5);
   expect(mockCalls.length).toBeGreaterThan(5);
   expect(mockCalls.some((c) => c[1] === AUTH_SECURE_KEY)).toBe(true);
   expect(mockCalls.every((c) => opt(c) === 'after-first-unlock-this-device-only')).toBe(true);
@@ -114,20 +110,6 @@ test('the orphan keeps only the dashcam, the phone id and the key', async () => 
   expect(await dashpalSecrets.readOrphan()).toEqual({ dashcamId: AUTH.dashcamId, phoneId: AUTH.phoneId, kPair: AUTH.kPair });
   await dashpalSecrets.deleteOrphan();
   expect(await dashpalSecrets.readOrphan()).toBeNull();
-});
-
-test('a held link code lasts 12 h: an older one, one from the future or junk is deleted and reads as none', async () => {
-  const at = 1_000_000;
-  await dashpalSecrets.writePendingCode({ at, dashcamId: 'a4cf12b3c4d5', code: 'C944BA9XVGR6PTJDKBQ2BR9W54RG' });
-  expect(await dashpalSecrets.readPendingCode(at + PENDING_CODE_MAX_AGE_MS)).toEqual({ at, dashcamId: 'a4cf12b3c4d5', code: 'C944BA9XVGR6PTJDKBQ2BR9W54RG' });
-  expect(await dashpalSecrets.readPendingCode(at + PENDING_CODE_MAX_AGE_MS + 1)).toBeNull();
-  expect(mockStore.has(PENDING_CODE_SECURE_KEY)).toBe(false);
-  await dashpalSecrets.writePendingCode({ at, dashcamId: null, code: 'X' });
-  expect(await dashpalSecrets.readPendingCode(at - 1)).toBeNull();
-  mockStore.set(PENDING_CODE_SECURE_KEY, JSON.stringify({ at, dashcamId: 'NOT', code: 'X' }));
-  expect(await dashpalSecrets.readPendingCode(at)).toBeNull();
-  mockStore.set(PENDING_CODE_SECURE_KEY, 'junk');
-  expect(await dashpalSecrets.readPendingCode(at)).toBeNull();
 });
 
 test('a store without the accessibility constants gets no options (the platform default)', async () => {
@@ -236,7 +218,6 @@ test('early start, no install marker (a fresh install, an iOS reinstall with Key
   await writeSecureTarget({ peripheralId: 'P-1', dashcamId: 'a4cf12b3c4d5' });
   await dashpalSecrets.writePendingAuth(AUTH);
   await dashpalSecrets.finalizeAuth();
-  await dashpalSecrets.writePendingCode({ at: 1, dashcamId: null, code: 'X' });
   const m = markers(null);
   const f = fakeTransport();
   let made = 0;
@@ -246,21 +227,10 @@ test('early start, no install marker (a fresh install, an iOS reinstall with Key
   expect(await readSecureTarget()).toBeNull();
   expect(await dashpalSecrets.readAuth()).toBeNull();
   expect(await dashpalSecrets.readOrphan()).toEqual({ dashcamId: AUTH.dashcamId, phoneId: AUTH.phoneId, kPair: AUTH.kPair });
-  expect(mockStore.has(PENDING_CODE_SECURE_KEY)).toBe(false);
   expect(m.store.get(INSTALL_MARKER_KEY)).toBe('1');
   // the next launch finds the marker: the early start runs again once the driver opted in again
   await writeDashpalEnabled(true);
   expect(await startDashpalEarly({ storage: m.storage, transport: () => f.t })).toBe(true);
-});
-
-test('quarantine: a link code held from before this process goes; one written by this launch (the link that opened it) stays', async () => {
-  const now = Date.now();
-  await dashpalSecrets.writePendingCode({ at: now - 60_000, dashcamId: null, code: 'X' });
-  expect(await checkInstall({ storage: markers(null).storage, loadedAt: now - 1000 })).toBe('quarantined');
-  expect(mockStore.has(PENDING_CODE_SECURE_KEY)).toBe(false);
-  await dashpalSecrets.writePendingCode({ at: now, dashcamId: null, code: 'X' });
-  expect(await checkInstall({ storage: markers(null).storage, loadedAt: now - 1000 })).toBe('quarantined');
-  expect(await dashpalSecrets.readPendingCode(now)).toEqual({ at: now, dashcamId: null, code: 'X' });
 });
 
 test('quarantine: a pending key (an interrupted setup) is kept as the orphan when there is no pairing key', async () => {

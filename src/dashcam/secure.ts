@@ -12,8 +12,6 @@
 // - `dashpal.orphan`: `{dashcamId, phoneId, kPair}`, a key left from before (an iOS reinstall, a
 //   commit whose answer never came); never used for a session, only to prove `prev_id` when this
 //   phone next sets up that DashPal.
-// - `dashpal.pendingCode`: `{at, dashcamId, code}`, a label link's code held until setup can open
-//   (12 h), so the code never enters router state or SQLite.
 // The key entries are "this device only": never in a backup, never on another phone.
 import { isDashcamId } from './protocol';
 import { ENABLED_SECURE_KEY } from './keys';
@@ -22,9 +20,6 @@ export const PERIPHERAL_SECURE_KEY = 'dashpal.peripheral';
 export const AUTH_SECURE_KEY = 'dashpal.auth';
 export const AUTH_PENDING_SECURE_KEY = 'dashpal.authPending';
 export const ORPHAN_SECURE_KEY = 'dashpal.orphan';
-export const PENDING_CODE_SECURE_KEY = 'dashpal.pendingCode';
-/** A held link's code is used within this long of its arrival (the drive-hold rule, `ui/links.ts`). */
-export const PENDING_CODE_MAX_AGE_MS = 12 * 60 * 60_000;
 
 export interface SecureStoreLike {
   getItemAsync(key: string, opts?: unknown): Promise<string | null>;
@@ -68,14 +63,6 @@ export interface OrphanAuth {
   kPair: string;
 }
 
-export interface PendingCode {
-  at: number;
-  /** the link's dashcam id, when it named one */
-  dashcamId: string | null;
-  /** the code text as the link carried it */
-  code: string;
-}
-
 const isHex = (s: unknown, n: number): s is string => typeof s === 'string' && s.length === n && /^[0-9a-f]+$/.test(s);
 
 function parseJson(raw: string | null): Record<string, unknown> | null {
@@ -116,10 +103,6 @@ export interface DashpalSecrets {
   readOrphan(): Promise<OrphanAuth | null>;
   writeOrphan(o: OrphanAuth): Promise<void>;
   deleteOrphan(): Promise<void>;
-  /** A held link's code, when it is at most 12 h old (an older one is deleted and reads as none). */
-  readPendingCode(now: number): Promise<PendingCode | null>;
-  writePendingCode(p: PendingCode): Promise<void>;
-  deletePendingCode(): Promise<void>;
 }
 
 export function createDashpalSecrets(store: () => SecureStoreLike = secureStore): DashpalSecrets {
@@ -161,20 +144,6 @@ export function createDashpalSecrets(store: () => SecureStoreLike = secureStore)
     readOrphan: async () => asOrphan(parseJson(await get(ORPHAN_SECURE_KEY, deviceOnly))),
     writeOrphan: (o) => set(ORPHAN_SECURE_KEY, JSON.stringify({ dashcamId: o.dashcamId, phoneId: o.phoneId, kPair: o.kPair }), deviceOnly),
     deleteOrphan: () => del(ORPHAN_SECURE_KEY, deviceOnly),
-    async readPendingCode(now) {
-      const v = parseJson(await get(PENDING_CODE_SECURE_KEY, deviceOnly));
-      if (!v) return null;
-      const at = typeof v.at === 'number' && Number.isFinite(v.at) ? v.at : null;
-      const code = typeof v.code === 'string' && v.code.length > 0 && v.code.length <= 64 ? v.code : null;
-      const dashcamId = v.dashcamId === null || v.dashcamId === undefined ? null : isDashcamId(v.dashcamId) ? v.dashcamId : undefined;
-      if (at === null || code === null || dashcamId === undefined || now < at || now - at > PENDING_CODE_MAX_AGE_MS) {
-        await del(PENDING_CODE_SECURE_KEY, deviceOnly).catch(() => {});
-        return null;
-      }
-      return { at, dashcamId, code };
-    },
-    writePendingCode: (p) => set(PENDING_CODE_SECURE_KEY, JSON.stringify({ at: p.at, dashcamId: p.dashcamId, code: p.code }), deviceOnly),
-    deletePendingCode: () => del(PENDING_CODE_SECURE_KEY, deviceOnly),
   };
   return self;
 }

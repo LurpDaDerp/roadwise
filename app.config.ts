@@ -27,7 +27,7 @@ export const PERMISSION_COPY = {
   location: 'RoadWise uses your location to measure speed and miles during a drive you start.',
   motion:
     'RoadWise uses motion activity to tell when you walk away from your car, so a drive you forgot to end stops where you parked, and so the optional forgot-to-start reminder can notice a trip.',
-  camera: "RoadWise uses the camera only to scan QR codes: friend codes and your DashPal's pairing code. Nothing is recorded.",
+  camera: "RoadWise uses the camera only to scan QR codes: your friends' codes. Nothing is recorded.",
   bluetooth: 'RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts on your phone and add its events to your drives.',
 } as const;
 
@@ -38,26 +38,12 @@ export const PERMISSION_COPY = {
 export const REMINDER_LOCATION_COPY =
   'Only if you turn on the forgot-to-start reminder: RoadWise notices when a car trip starts with no drive recording, and sends one note at your next stop. Your location stays on your phone.';
 
-/**
- * The DashPal label link's domain (`https://<domain>/dashpal#…`, pairing v2 §4.2): an App Link /
- * Universal Link only this signed app opens. Set `DASHPAL_LINK_DOMAIN` at build time (EAS: an
- * environment variable) to a domain that serves `/.well-known/apple-app-site-association` and
- * `/.well-known/assetlinks.json` for this app; it must equal the firmware's
- * `CONFIG_DMS_LINK_DOMAIN` that prints the labels. Unset or not a hostname: undefined, and the build
- * declares no associated domain and no App Link (the in-app scanner then reads the app's own links only).
- */
-export function linkDomainOf(env: Record<string, string | undefined> = process.env): string | undefined {
-  const d = (env.DASHPAL_LINK_DOMAIN ?? '').trim().toLowerCase();
-  return /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(d) ? d : undefined;
-}
-
 /** `{ [key]: value }`, or nothing when the value is undefined (the key is left out entirely). */
 function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
   return value === undefined ? {} : ({ [key]: value } as { [P in K]?: V });
 }
 
 export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
-  const linkDomain = linkDomainOf();
   return {
     ...config,
     name: 'RoadWise',
@@ -104,8 +90,6 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       // Signing for the widget extension target (@bacons/apple-targets reads it). Set
       // EXPO_APPLE_TEAM_ID (EAS: an environment variable) or replace it with the team ID from Xcode.
       ...optional('appleTeamId', process.env.EXPO_APPLE_TEAM_ID),
-      // The DashPal label's Universal Link (the Associated Domains capability on the bundle id).
-      ...optional('associatedDomains', linkDomain ? [`applinks:${linkDomain}`] : undefined),
       // The app's privacy manifest: the "required reason" APIs drive-sense's Swift calls
       // (UserDefaults.standard in CaptureController, LockProbe and TripReminder, read and written by
       // this app only; ProcessInfo.systemUptime in TimeBase, to time events within the app). App Store
@@ -150,15 +134,8 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       // only, so background ("all the time") location is never asked for, whatever a library's
       // manifest declares. The camera never records sound.
       blockedPermissions: ['android.permission.ACCESS_BACKGROUND_LOCATION', 'android.permission.RECORD_AUDIO'],
-      // The DashPal label's App Link: verified against assetlinks.json, so only this signed app opens it.
-      ...optional(
-        'intentFilters',
-        linkDomain
-          ? [{ action: 'VIEW', autoVerify: true, data: [{ scheme: 'https', host: linkDomain, pathPrefix: '/dashpal' }], category: ['BROWSABLE', 'DEFAULT'] }]
-          : undefined
-      ),
     },
-    extra: { eas: { projectId: EAS_PROJECT_ID }, ...optional('linkDomain', linkDomain) },
+    extra: { eas: { projectId: EAS_PROJECT_ID } },
     plugins: [
       'expo-router',
       'expo-apple-authentication',

@@ -22,22 +22,6 @@ Every EAS command is run as `npx eas-cli@24.7.0 …` (the CLI is deliberately no
 
 `eas.json` still refuses any CLI below 24.
 
-### The DashPal label link domain
-
-The QR code on a DashPal's label is `https://<domain>/dashpal#…`, a Universal Link / App Link only
-this signed app opens. A build declares it only when `DASHPAL_LINK_DOMAIN` is set at build time (an
-EAS environment variable on every profile that should open labels); unset, the build declares no
-associated domain and no App Link, and a phone's own camera pointed at the label opens nothing (the
-in-app scanner still reads the code). The domain needs, served over HTTPS with no redirect:
-
-- `/.well-known/apple-app-site-association`: `applinks` for `<Team ID>.com.lurp.safedrive`, path `/dashpal`;
-- `/.well-known/assetlinks.json`: `delegate_permission/common.handle_all_urls` for package
-  `com.lurp.safedrive` with the SHA-256 of the release signing certificate (the Play app-signing key
-  for store builds, and the EAS keystore's for internal ones).
-
-It must equal the firmware's `CONFIG_DMS_LINK_DOMAIN` that prints the labels
-(`tools/provision_dashpal.py --domain` in the firmware repo refuses a mismatch).
-
 ## Over-the-air updates (release notes)
 
 The runtime version is the **native fingerprint** (`runtimeVersion: { policy: 'fingerprint' }` in

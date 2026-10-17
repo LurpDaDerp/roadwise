@@ -1,21 +1,42 @@
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Platform, View } from 'react-native';
 
 import type { PermissionsAdapter } from '@/core/permissions';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { TopBar } from '@/features/settings/parts';
+import { SETTINGS_HREFS } from '@/features/settings/routes';
 import { Banner, Button, Card, Screen, Text, useTheme } from '@/ui';
 
 import { dashpalCopy } from '../copy';
 import { dashpalSecrets, type DashpalSecrets } from '../secure';
 import { createSetupFlow, type SetupDeps, type SetupFailure, type SetupFlow, type SetupPhase } from '../setup';
-import type { SetupTarget } from './links';
 import { useDashcamRuntime } from './useDashcam';
 import { useDriveBusy, useDriveChanges } from './useDriveBusy';
 
 const copy = dashpalCopy.setup;
 const wiz = dashpalCopy.wizard;
+
+/** What the setup route opens on: a DashPal the nearby prompt found, or Set up again of the paired one. */
+export interface SetupTarget {
+  found?: string;
+  again?: boolean;
+}
+
+/** The setup href for a target. */
+export function setupHref(target: SetupTarget = {}): Href {
+  const q: string[] = [];
+  if (target.found) q.push(`found=${encodeURIComponent(target.found)}`);
+  if (target.again) q.push('again=1');
+  return (q.length > 0 ? `${String(SETTINGS_HREFS.dashcamSetup)}?${q.join('&')}` : SETTINGS_HREFS.dashcamSetup) as Href;
+}
+
+/** The setup route's params as a target (the inverse of `setupHref`). */
+export function setupTargetOf(params: { found?: string | string[]; again?: string | string[] }): SetupTarget {
+  const one = (v: string | string[] | undefined): string | undefined => (typeof v === 'string' && v.length > 0 ? v : undefined);
+  const found = one(params.found);
+  return { ...(found ? { found } : {}), ...(one(params.again) === '1' ? { again: true } : {}) };
+}
 
 export interface SetupPanelDeps {
   adapter?: PermissionsAdapter;

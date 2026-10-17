@@ -26,7 +26,6 @@ const mockCamera = {
   permission: { granted: true, canAskAgain: true, status: 'granted' } as { granted: boolean; canAskAgain: boolean; status: string } | null,
   request: jest.fn(async () => {}),
 };
-jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: { linkDomain: 'pair.example.com' } } } }));
 
 function memSecrets() {
   const store = new Map<string, string>();
@@ -70,8 +69,6 @@ jest.mock('@/data/supabase/session', () => ({ useSession: () => mockSession }));
 import { DashcamScreen } from '@/features/settings/DashcamScreen';
 import { DashcamStep } from '@/features/onboarding/steps/DashcamStep';
 import { SetupPanel } from '../ui/SetupScreen';
-import { DashpalLink } from '../ui/DashpalLink';
-import { PENDING_SETUP_KEY, setupHref } from '../ui/links';
 /* eslint-enable import/first */
 
 beforeEach(() => {
@@ -185,7 +182,7 @@ describe('Settings › DashPal', () => {
     await act(async () => rt.set({ link: { lifecycle: 'needs_repair', repairCause: 'unknown_phone' } }));
     expect(screen.getByTestId('dashcam-fix')).toHaveTextContent(dashpalCopy.screen.fix.needsRepair);
     await tap('dashcam-repair');
-    expect(mockRouter.push).toHaveBeenLastCalledWith(setupHref({ again: true }));
+    expect(mockRouter.push).toHaveBeenLastCalledWith('/settings/dashcam-setup?again=1');
     await act(async () => rt.set({ link: { lifecycle: 'unverified', repairCause: null } }));
     await tap('dashcam-repair');
     expect(mockRouter.push).toHaveBeenLastCalledWith('/settings/dashcam-setup?again=1');
@@ -481,10 +478,10 @@ describe('the onboarding step', () => {
   });
 
   it.each([
-    ['ios', null, 'Setting it up asks for the camera, to scan its code, and Bluetooth.'],
-    ['android', 31, 'Setting it up asks for the camera, to scan its code, and Nearby devices (Bluetooth).'],
-    ['android', 34, 'Setting it up asks for the camera, to scan its code, and Nearby devices (Bluetooth).'],
-    ['android', 30, 'Setting it up asks for the camera, to scan its code, and uses Location to find it.'],
+    ['ios', null, 'Setting it up asks for Bluetooth.'],
+    ['android', 31, 'Setting it up asks for Nearby devices (Bluetooth).'],
+    ['android', 34, 'Setting it up asks for Nearby devices (Bluetooth).'],
+    ['android', 30, 'Setting it up uses Location to find it.'],
   ] as const)('the step says what setting it up asks for (%s, API %s)', async (platform, api, line) => {
     const w = await appWorld();
     await w.render(<DashcamStep ctx={{ platform, hasUsername: true }} onNext={jest.fn()} deps={{ adapter: fakeAdapter() }} api={api} secrets={memSecrets().secrets} />);
@@ -507,205 +504,11 @@ describe('the onboarding step', () => {
   });
 });
 
-describe('a DashPal link (/dashpal?d=…)', () => {
-  it('opens the setup on that DashPal’s Pair screen when no drive is open; a bad id opens the code step', async () => {
-    const w = await appWorld();
-    await w.render(<DashpalLink d="A4CF12B3C4D5" now={() => 5} />);
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith(setupHref({ link: 'a4cf12b3c4d5' })));
-    expect(mockRouter.replace).toHaveBeenCalledWith('/settings/dashcam-setup?link=a4cf12b3c4d5');
-    expect(await w.settings.get(PENDING_SETUP_KEY)).toBeNull();
-    mockRouter.replace.mockClear();
-    const w2 = await appWorld();
-    await w2.render(<DashpalLink d="nope" now={() => 5} />);
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/settings/dashcam-setup?link=1'));
-  });
-
-  it('signed out it is held for after sign-in (the dashcam id, never the code) and goes nowhere itself; while the session loads it waits', async () => {
-    mockSession.status = 'signedOut';
-    const w = await appWorld();
-    await w.render(<DashpalLink d="a4cf12b3c4d5" now={() => 5} />);
-    await waitFor(async () => expect(await w.settings.get(PENDING_SETUP_KEY)).toEqual({ at: 5, dashcamId: 'a4cf12b3c4d5', signIn: true }));
-    expect(mockRouter.replace).not.toHaveBeenCalled();
-    mockSession.status = 'loading';
-    const w2 = await appWorld();
-    await w2.render(<DashpalLink d="a4cf12b3c4d5" now={() => 5} />);
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
-    });
-    expect(mockRouter.replace).not.toHaveBeenCalled();
-    expect(await w2.settings.get(PENDING_SETUP_KEY)).toBeNull();
-  });
-
-  it('the DashPal already paired with no link code held (onboarding’s DashPal step used it): Home; with its code held: the Pair screen (Set up again)', async () => {
-    const store = new Map<string, string>();
-    const secrets = createDashpalSecrets(() => ({
-      getItemAsync: async (k: string) => store.get(k) ?? null,
-      setItemAsync: async (k: string, v: string) => void store.set(k, v),
-      deleteItemAsync: async (k: string) => void store.delete(k),
-    }));
-    setActiveDashcam(createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } }));
-    const w = await appWorld();
-    await w.render(<DashpalLink d={PAIRED.dashcamId} now={() => 5} secrets={secrets} />);
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
-    expect(mockRouter.replace).not.toHaveBeenCalledWith(setupHref({ link: PAIRED.dashcamId }));
-    mockRouter.replace.mockClear();
-    await secrets.writePendingCode({ at: 5, dashcamId: PAIRED.dashcamId, code: 'C944BA9XVGR6PTJDKBQ2BR9W54RG' });
-    const w2 = await appWorld();
-    await w2.render(<DashpalLink d={PAIRED.dashcamId} now={() => 5} secrets={secrets} />);
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith(setupHref({ link: PAIRED.dashcamId })));
-  });
-
-  it('during a drive it is held (the dashcam id, never the code) and the app goes Home', async () => {
-    mockDrive.busy = true;
-    const w = await appWorld();
-    await w.render(<DashpalLink d="a4cf12b3c4d5" now={() => 5} />);
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
-    expect(await w.settings.get(PENDING_SETUP_KEY)).toEqual({ at: 5, dashcamId: 'a4cf12b3c4d5' });
-  });
-});
-
 describe('the prompt host', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- after the mocks above
   const { DashpalPromptHost } = require('../ui/PromptHost') as typeof import('../ui/PromptHost');
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
-  const { SNOOZES_KEY } = require('../keys') as typeof import('../keys');
 
-  function scanningRuntime(hits: { id: string; rssi: number }[]) {
-    const rt = createFakeDashcamRuntime({ btOptIn: true });
-    rt.transportValue = {
-      scan: async (o: { onHit(h: { id: string; name: string | null; rssi: number; adv: string | null }): void }) => {
-        for (const h of hits) o.onHit({ id: h.id, name: `DashPal-${h.id}`, rssi: h.rssi, adv: 'new' });
-        return { stop: async () => {} };
-      },
-    } as never;
-    return rt;
-  }
-
-  const fastDeps = (adapter = fakeAdapter(undefined, { bluetoothNow: 'granted' })) => {
-    let t = 0;
-    return {
-      adapter,
-      speedMph: async () => 0,
-      now: () => t,
-      sleep: async (ms: number) => {
-        t += ms;
-      },
-      appState: { addEventListener: () => ({ remove: () => {} }) },
-    };
-  };
-
-  it('row 23: offers a nearby DashPal on a tab; Connect opens the setup for it', async () => {
-    setActiveDashcam(scanningRuntime([{ id: 'X1', rssi: -50 }]));
-    const w = await appWorld();
-    await w.render(<DashpalPromptHost deps={fastDeps()} />);
-    expect(await screen.findByTestId('dashpal-offer')).toBeOnTheScreen();
-    expect(screen.getByText(dashpalCopy.prompt.found('DashPal-X1'))).toBeOnTheScreen();
-    await tap('dashpal-offer-connect');
-    expect(mockRouter.push).toHaveBeenCalledWith(setupHref({ found: 'X1' }));
-    expect(screen.queryByTestId('dashpal-offer')).toBeNull();
-  });
-
-  it('row 23: a drive starting drops the offer', async () => {
-    setActiveDashcam(scanningRuntime([{ id: 'X5', rssi: -50 }]));
-    const w = await appWorld();
-    await w.render(<DashpalPromptHost deps={fastDeps()} />);
-    expect(await screen.findByTestId('dashpal-offer')).toBeOnTheScreen();
-    await act(async () => {
-      mockDrive.busy = true;
-      for (const fn of [...mockDrive.listeners]) fn({ status: 'recording' });
-    });
-    expect(screen.queryByTestId('dashpal-offer')).toBeNull();
-  });
-
-  it('Not now writes the snooze', async () => {
-    setActiveDashcam(scanningRuntime([{ id: 'X2', rssi: -50 }]));
-    const w = await appWorld();
-    await w.render(<DashpalPromptHost deps={fastDeps()} />);
-    await tap('dashpal-offer-not-now');
-    await waitFor(async () => expect(Object.keys((await w.settings.get<Record<string, number>>(SNOOZES_KEY)) ?? {})).toEqual(['X2']));
-    expect(screen.queryByTestId('dashpal-offer')).toBeNull();
-  });
-
-  it('row 23: never on the drive route, never with Bluetooth not yet allowed (no prompt is made)', async () => {
-    mockPath = '/drive';
-    setActiveDashcam(scanningRuntime([{ id: 'X3', rssi: -50 }]));
-    const w = await appWorld();
-    await w.render(<DashpalPromptHost deps={fastDeps()} />);
-    await act(async () => {});
-    expect(screen.queryByTestId('dashpal-offer')).toBeNull();
-
-    mockPath = '/home';
-    const adapter = fakeAdapter(undefined, { bluetoothNow: 'undetermined' });
-    await act(async () => setActiveDashcam(scanningRuntime([{ id: 'X4', rssi: -50 }])));
-    const w2 = await appWorld();
-    await w2.render(<DashpalPromptHost deps={fastDeps(adapter)} />);
-    await act(async () => {});
-    expect(screen.queryByTestId('dashpal-offer')).toBeNull();
-    expect(adapter.log).toEqual(['bluetooth']);
-  });
-
-  it('a DashPal link held during a drive is replayed once the drive is over: its Pair screen', async () => {
-    setActiveDashcam(createFakeDashcamRuntime());
-    const w = await appWorld({ settings: { [PENDING_SETUP_KEY]: { at: 0, dashcamId: 'a4cf12b3c4d5' } } });
-    await w.render(<DashpalPromptHost deps={fastDeps()} />);
-    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith(setupHref({ link: 'a4cf12b3c4d5' })));
-    expect(await w.settings.get(PENDING_SETUP_KEY)).toBeNull();
-  });
-
-  it('a link held through sign-in is replayed only once signed in with setup done, off the sign-in and onboarding screens, and only while its code is held', async () => {
-    const store = new Map<string, string>();
-    const secrets = createDashpalSecrets(() => ({
-      getItemAsync: async (k: string) => store.get(k) ?? null,
-      setItemAsync: async (k: string, v: string) => void store.set(k, v),
-      deleteItemAsync: async (k: string) => void store.delete(k),
-    }));
-    const held = { [PENDING_SETUP_KEY]: { at: 0, dashcamId: 'a4cf12b3c4d5', signIn: true } };
-    const settle = () =>
-      act(async () => {
-        await new Promise<void>((resolve) => setTimeout(resolve, 20));
-      });
-    setActiveDashcam(createFakeDashcamRuntime());
-    // signed out, on sign-in: kept
-    mockSession.status = 'signedOut';
-    mockSegments = ['(auth)', 'sign-in'];
-    const w = await appWorld({ settings: held });
-    await w.render(<DashpalPromptHost deps={{ ...fastDeps(), secrets }} />);
-    await settle();
-    expect(mockRouter.push).not.toHaveBeenCalled();
-    expect(await w.settings.get(PENDING_SETUP_KEY)).toEqual(held[PENDING_SETUP_KEY]);
-    // signed in with onboarding owed, inside onboarding: still kept
-    mockSession.status = 'signedIn';
-    mockSession.profile = { onboarded_at: null, username: null };
-    mockSegments = ['(onboarding)', 'start'];
-    const w2 = await appWorld({ settings: held });
-    await w2.render(<DashpalPromptHost deps={{ ...fastDeps(), secrets }} />);
-    await settle();
-    expect(mockRouter.push).not.toHaveBeenCalled();
-    expect(await w2.settings.get(PENDING_SETUP_KEY)).toEqual(held[PENDING_SETUP_KEY]);
-    // ready, on Home, its code held: the Pair screen
-    mockSession.profile = { onboarded_at: '2026-01-01', username: 'maya' };
-    mockSegments = ['(tabs)', 'home'];
-    await secrets.writePendingCode({ at: 0, dashcamId: 'a4cf12b3c4d5', code: 'C944BA9XVGR6PTJDKBQ2BR9W54RG' });
-    const w3 = await appWorld({ settings: held });
-    await w3.render(<DashpalPromptHost deps={{ ...fastDeps(), secrets, now: () => 10 }} />);
-    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith(setupHref({ link: 'a4cf12b3c4d5' })));
-    // its code gone (the onboarding step used it): dropped, nothing opens
-    mockRouter.push.mockClear();
-    store.clear();
-    const w4 = await appWorld({ settings: held });
-    await w4.render(<DashpalPromptHost deps={{ ...fastDeps(), secrets, now: () => 10 }} />);
-    await waitFor(async () => expect(await w4.settings.get(PENDING_SETUP_KEY)).toBeNull());
-    await settle();
-    expect(mockRouter.push).not.toHaveBeenCalled();
-  });
-
-  it('a held link older than 12 h is dropped', async () => {
-    setActiveDashcam(createFakeDashcamRuntime());
-    const w = await appWorld({ settings: { [PENDING_SETUP_KEY]: { at: -12 * 60 * 60_000 - 1, dashcamId: 'a4cf12b3c4d5' } } });
-    await w.render(<DashpalPromptHost deps={fastDeps()} />);
-    await waitFor(async () => expect(await w.settings.get(PENDING_SETUP_KEY)).toBeNull());
-    expect(mockRouter.push).not.toHaveBeenCalled();
-  });
+  const fastDeps = () => ({ appState: { addEventListener: () => ({ remove: () => {} }) } });
 
   it('shows a DashPal alert off the HUD for 1.5 s per start or level change', async () => {
     jest.useFakeTimers();

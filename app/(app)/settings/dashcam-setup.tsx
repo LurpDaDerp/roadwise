@@ -1,13 +1,9 @@
 import { useLocalSearchParams } from 'expo-router';
 
-import { setupTargetOf } from '@/dashcam/ui/links';
-import { SetupScreen } from '@/dashcam/ui/SetupScreen';
+import { SetupScreen, setupTargetOf } from '@/dashcam/ui/SetupScreen';
 
-/**
- * `/settings/dashcam-setup[?found=<peripheral>][&link=<dashcam id>][&again=1]`: scan or type a
- * DashPal's pairing code and pair (a link's Pair screen; Set up again with the stored code).
- */
+/** `/settings/dashcam-setup[?found=<peripheral>][&again=1]`: set up a DashPal with one tap (Set up again: the paired one). */
 export default function DashcamSetupRoute() {
-  const params = useLocalSearchParams<{ found?: string | string[]; link?: string | string[]; again?: string | string[] }>();
+  const params = useLocalSearchParams<{ found?: string | string[]; again?: string | string[] }>();
   return <SetupScreen target={setupTargetOf(params)} />;
 }

@@ -9,7 +9,7 @@ This lists the open-source software and data that ship inside the RoadWise app b
 
 | Component | Version | Licence | Ships in |
 |---|---|---|---|
-| AndroidX CameraX (`androidx.camera:*`) | 1.6.0 | Apache-2.0 | Android (`expo-camera`, friend and DashPal QR codes) |
+| AndroidX CameraX (`androidx.camera:*`) | 1.6.0 | Apache-2.0 | Android (`expo-camera`, friend QR codes) |
 | Google Play services location (`com.google.android.gms:play-services-location`) | 21.3.0 | Android SDK License (Google Play services terms) | Android (`modules/drive-sense`) |
 | Expo Modules Core | SDK 57 | MIT | every build |
 

@@ -5,7 +5,7 @@
  */
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
-import appConfig, { googleServicesFile, linkDomainOf, PERMISSION_COPY, REMINDER_LOCATION_COPY } from '../../app.config';
+import appConfig, { googleServicesFile, PERMISSION_COPY, REMINDER_LOCATION_COPY } from '../../app.config';
 
 // Local shapes: the app's tsconfig carries no Node types.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the same module app.config reads
@@ -136,13 +136,14 @@ describe('permissions (v3)', () => {
     expect(manifest).toContain('<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />');
   });
 
-  test('the camera is for QR codes only (friend codes and a DashPal’s pairing code), with no microphone', () => {
+  test('the camera is for friends’ QR codes only, with no microphone', () => {
     expect(plugin('expo-camera')).toEqual({
       cameraPermission: PERMISSION_COPY.camera,
       microphonePermission: false,
       recordAudioAndroid: false,
     });
-    expect(PERMISSION_COPY.camera).toBe("RoadWise uses the camera only to scan QR codes: friend codes and your DashPal's pairing code. Nothing is recorded.");
+    expect(PERMISSION_COPY.camera).toBe("RoadWise uses the camera only to scan QR codes: your friends' codes. Nothing is recorded.");
+    expect(PERMISSION_COPY.camera).not.toMatch(/dashpal/i);
   });
 
   test('the strings are plain and mention nothing v3 removed', () => {
@@ -206,38 +207,20 @@ describe('Bluetooth (DashPal)', () => {
   });
 });
 
-// The DashPal label link (pairing v2 §4.2): an https App Link / Universal Link on the build's link
-// domain, so only this signed app opens it; none of it without a domain.
-describe('the DashPal link domain', () => {
-  const saved = process.env.DASHPAL_LINK_DOMAIN;
-  afterEach(() => {
-    if (saved === undefined) delete process.env.DASHPAL_LINK_DOMAIN;
-    else process.env.DASHPAL_LINK_DOMAIN = saved;
-  });
-
-  test('a hostname only (trimmed, lower case); anything else is no domain', () => {
-    expect(linkDomainOf({ DASHPAL_LINK_DOMAIN: ' Pair.Example.com ' })).toBe('pair.example.com');
-    for (const bad of [undefined, '', 'localhost', 'https://pair.example.com', 'pair.example.com/dashpal', 'a..b']) {
-      expect(linkDomainOf({ DASHPAL_LINK_DOMAIN: bad })).toBeUndefined();
-    }
-  });
-
-  test('set: the iOS associated domain, the Android App Link filter (autoVerify, https, /dashpal) and extra.linkDomain', () => {
+// No DashPal link: the app declares no associated domain, no App Link and no link domain.
+describe('no DashPal link', () => {
+  test('no associated domain, no App Link intent filter, no extra.linkDomain, whatever the environment says', () => {
+    const saved = process.env.DASHPAL_LINK_DOMAIN;
     process.env.DASHPAL_LINK_DOMAIN = 'pair.example.com';
-    const c = build();
-    expect(c.ios?.associatedDomains).toEqual(['applinks:pair.example.com']);
-    expect(c.android?.intentFilters).toEqual([
-      { action: 'VIEW', autoVerify: true, data: [{ scheme: 'https', host: 'pair.example.com', pathPrefix: '/dashpal' }], category: ['BROWSABLE', 'DEFAULT'] },
-    ]);
-    expect(c.extra?.linkDomain).toBe('pair.example.com');
-  });
-
-  test('unset: none of them (the same config, and fingerprint, as before)', () => {
-    delete process.env.DASHPAL_LINK_DOMAIN;
-    const c = build();
-    expect(c.ios).not.toHaveProperty('associatedDomains');
-    expect(c.android).not.toHaveProperty('intentFilters');
-    expect(c.extra).not.toHaveProperty('linkDomain');
+    try {
+      const c = build();
+      expect(c.ios).not.toHaveProperty('associatedDomains');
+      expect(c.android).not.toHaveProperty('intentFilters');
+      expect(c.extra).not.toHaveProperty('linkDomain');
+    } finally {
+      if (saved === undefined) delete process.env.DASHPAL_LINK_DOMAIN;
+      else process.env.DASHPAL_LINK_DOMAIN = saved;
+    }
   });
 });
 

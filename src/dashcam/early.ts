@@ -11,38 +11,12 @@
 // it). When it is missing, the leftover entries are quarantined: the launch flag and the peripheral
 // go, the pairing key moves to `dashpal.orphan` (used only to prove `prev_id` at the next setup of
 // that DashPal), the marker is written and nothing starts. When AsyncStorage cannot be read, nothing
-// starts early either (bootstrap sets the target from SQLite as usual). A link's held code goes only
-// when it is older than this process: the label link that launched the app (the first launch after
-// an install or update) is kept, and `+native-intent` writes its code only after the check
-// (`afterInstallCheck`). With the marker present, the pending key of a setup the app died in
-// (`dashpal.authPending`) is deleted.
+// starts early either (bootstrap sets the target from SQLite as usual). With the marker present, the
+// pending key of a setup the app died in (`dashpal.authPending`) is deleted.
 import { getDashcamTransport, type DashcamTransport } from './transport';
 import { dashpalSecrets, type DashpalSecrets } from './secure';
 
 export const INSTALL_MARKER_KEY = 'dashpal.install';
-/** The longest a link waits for this launch's install check before it writes its code anyway. */
-export const INSTALL_CHECK_WAIT_MS = 2000;
-
-/** When this process loaded the module: a held link code from before it is a leftover. */
-const LOADED_AT = Date.now();
-/** This launch's install check (set by `startDashpalEarly`, which `index.ts` calls at module load). */
-let installCheck: Promise<unknown> = Promise.resolve();
-
-/** Resolves once this launch's install check has finished, or after `ms` at most. Never rejects. */
-export function afterInstallCheck(ms: number = INSTALL_CHECK_WAIT_MS): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  return Promise.race([
-    installCheck.then(
-      () => {},
-      () => {}
-    ),
-    new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, ms);
-    }),
-  ]).finally(() => {
-    if (timer !== null) clearTimeout(timer);
-  });
-}
 
 /** The slice of AsyncStorage the marker uses. */
 export interface MarkerStorage {
@@ -60,11 +34,8 @@ function asyncStorage(): MarkerStorage {
  * first launch of a build with link v2), so the leftover DashPal entries were set aside. `unknown`:
  * AsyncStorage could not be read.
  */
-export async function checkInstall(
-  deps: { secrets?: DashpalSecrets; storage?: () => MarkerStorage; loadedAt?: number } = {}
-): Promise<'present' | 'quarantined' | 'unknown'> {
+export async function checkInstall(deps: { secrets?: DashpalSecrets; storage?: () => MarkerStorage } = {}): Promise<'present' | 'quarantined' | 'unknown'> {
   const secrets = deps.secrets ?? dashpalSecrets;
-  const loadedAt = deps.loadedAt ?? LOADED_AT;
   let storage: MarkerStorage;
   let marker: string | null;
   try {
@@ -83,9 +54,6 @@ export async function checkInstall(
   if (left) await secrets.writeOrphan({ dashcamId: left.dashcamId, phoneId: left.phoneId, kPair: left.kPair }).catch(() => {});
   await secrets.deleteAuth().catch(() => {});
   await secrets.deletePendingAuth().catch(() => {});
-  // A link's code from before this process goes; the one of the link that launched it stays.
-  const held = await secrets.readPendingCode(Date.now()).catch(() => null);
-  if (held && held.at < loadedAt) await secrets.deletePendingCode().catch(() => {});
   await storage.setItem(INSTALL_MARKER_KEY, '1').catch(() => {});
   return 'quarantined';
 }
@@ -105,10 +73,7 @@ export async function startDashpalEarly(
 ): Promise<boolean> {
   try {
     const secrets = deps.secrets ?? dashpalSecrets;
-    // Set before the first await: a link handled meanwhile waits for it (`afterInstallCheck`).
-    const check = checkInstall({ secrets, storage: deps.storage });
-    installCheck = check;
-    if ((await check) !== 'present') return false;
+    if ((await checkInstall({ secrets, storage: deps.storage })) !== 'present') return false;
     // A setup the app did not live to finish: its key goes (the DashPal undoes a pairing that was
     // not committed by itself, 60 s after the phone went away).
     if (await secrets.readPendingAuth().catch(() => null)) await secrets.deletePendingAuth().catch(() => {});

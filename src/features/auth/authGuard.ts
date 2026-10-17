@@ -158,20 +158,14 @@ const ADD_LINK = /^\/add\/([A-Za-z0-9_]{3,20})$/;
 const CLAN_LINK = /^\/clan\/([A-Za-z0-9]{8})$/;
 export const CLAN_JOIN_HREF = /^\/clan\/join\?code=([A-Z0-9]{8})$/;
 const CLAN_JOIN_LOOSE = /^\/clan\/join\?code=([A-Za-z0-9]{8})$/;
-/**
- * A DashPal pairing-code link's route (`+native-intent` already moved its code to SecureStore, so
- * the held value never carries one): `/dashpal` or `/dashpal?d=<12 hex>`, lower case.
- */
-export const DASHPAL_HREF = /^\/dashpal(\?d=[0-9a-f]{12})?$/;
-const DASHPAL_LOOSE = /^\/dashpal(\?d=[0-9a-fA-F]{12})?$/;
 
 /**
  * The deep links the onboarding gate holds for later (`onboarding.pendingHref`): the shapes the
- * notification router allows (Task 5), plus a friend's profile, a clan invite and a DashPal's
- * pairing-code link (its route only), which a new driver is the most likely to open before setup.
+ * notification router allows (Task 5), plus a friend's profile and a clan invite, which a new
+ * driver is the most likely to open before setup.
  * Anchored, and normalised to one form each, so a held value can only ever be one of these screens.
  */
-export const PENDING_HREF_ALLOWLIST: readonly RegExp[] = [...ALLOWED_HREFS, PROFILE_HREF, CLAN_JOIN_HREF, DASHPAL_HREF];
+export const PENDING_HREF_ALLOWLIST: readonly RegExp[] = [...ALLOWED_HREFS, PROFILE_HREF, CLAN_JOIN_HREF];
 
 export function pendingHrefFor(pathname: unknown): string | null {
   if (typeof pathname !== 'string') return null;
@@ -180,8 +174,6 @@ export function pendingHrefFor(pathname: unknown): string | null {
   if (add) return `/u/${add[1]!.toLowerCase()}`;
   const clan = CLAN_LINK.exec(pathname) ?? CLAN_JOIN_LOOSE.exec(pathname);
   if (clan) return `/clan/join?code=${clan[1]!.toUpperCase()}`;
-  const path: string = pathname;
-  if (DASHPAL_LOOSE.test(path)) return path.toLowerCase();
   return null;
 }
 

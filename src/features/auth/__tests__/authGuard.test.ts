@@ -186,10 +186,10 @@ describe('pendingHrefFor (the deep links a gate may hold)', () => {
     ['/u/a', null],
     ['/u/maya?x=1', null],
     ['/clan/join?code=ABCD2345&x=1', null],
-    // A DashPal link's route (never its code: that waits in SecureStore).
-    ['/dashpal', '/dashpal'],
-    ['/dashpal?d=f412fa0c9e01', '/dashpal?d=f412fa0c9e01'],
-    ['/dashpal?d=F412FA0C9E01', '/dashpal?d=f412fa0c9e01'],
+    // There is no DashPal link to hold.
+    ['/dashpal', null],
+    ['/dashpal?d=f412fa0c9e01', null],
+    ['/dashpal?d=F412FA0C9E01', null],
     ['/dashpal?d=f412fa0c9e01&k=000G40R40M30E209185GR38E1W60', null],
     ['/dashpal?k=000G40R40M30E209185GR38E1W60', null],
     ['/dashpal#d=f412fa0c9e01&k=000G40R40M30E209185GR38E1W60', null],

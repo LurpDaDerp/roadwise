@@ -6,7 +6,7 @@ import type { PermissionsAdapter } from '@/core/permissions';
 import { dashpalCopy } from '@/dashcam/copy';
 import { COMMAND, SOUND } from '@/dashcam/protocol';
 import { AddPhoneSheet } from '@/dashcam/ui/AddPhoneSheet';
-import { setupHref } from '@/dashcam/ui/links';
+import { setupHref } from '@/dashcam/ui/SetupScreen';
 import { dashcamStatus } from '@/dashcam/ui/status';
 import { useDashcamRuntime, useDashcamState } from '@/dashcam/ui/useDashcam';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';

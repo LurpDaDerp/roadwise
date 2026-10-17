@@ -37,11 +37,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const { status, session, profile, profileSource, refreshProfile } = useSession();
   const segments = useSegments();
   const pathname = usePathname();
-  // A clan invite lands on `/clan/join` with its code as a search param, a DashPal link on
-  // `/dashpal` with its dashcam id: hold the whole link.
-  const { code, d } = useGlobalSearchParams<{ code?: string; d?: string }>();
-  const linkPath =
-    pathname === '/clan/join' && typeof code === 'string' ? `${pathname}?code=${code}` : pathname === '/dashpal' && typeof d === 'string' ? `${pathname}?d=${d}` : pathname;
+  // A clan invite lands on `/clan/join` with its code as a search param: hold the whole link.
+  const { code } = useGlobalSearchParams<{ code?: string }>();
+  const linkPath = pathname === '/clan/join' && typeof code === 'string' ? `${pathname}?code=${code}` : pathname;
   const router = useRouter();
   const host = useDriveHost();
   const driveStatus = useDrive((s) => s.status);
