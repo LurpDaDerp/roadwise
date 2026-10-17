@@ -613,8 +613,10 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
         verifyFailed(t, 'INFO mac mismatch');
         return;
       }
-      if (linkMismatch(info) !== null) {
-        softRepair(t, 'downgrade');
+      const mismatch = linkMismatch(info);
+      if (mismatch !== null) {
+        // Firmware older than link v3 needs a firmware update; newer firmware needs a newer app.
+        softRepair(t, mismatch === 'firmware' ? 'downgrade' : 'update_app');
         return;
       }
       if (sink && !sink.infoRead(info)) {

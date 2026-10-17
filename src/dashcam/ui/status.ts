@@ -14,6 +14,7 @@ export type DashcamStatusKind =
   | 'not_allowed'
   | 'needs_repair'
   | 'downgrade'
+  | 'update_app'
   | 'unverified';
 
 export interface DashcamStatus {
@@ -32,9 +33,9 @@ export function dashcamStatus(state: DashcamState | null): DashcamStatus {
   if (!link || !link.paired) return { kind: 'unpaired', label: dashpalCopy.settingsRow.subtitle.unpaired, fix: null, dot: 'warn' };
   switch (link.lifecycle) {
     case 'needs_repair':
-      return link.repairCause === 'downgrade'
-        ? { kind: 'downgrade', label: s.status.downgrade, fix: s.fix.downgrade, dot: 'bad' }
-        : { kind: 'needs_repair', label: s.status.needsRepair, fix: s.fix.needsRepair, dot: 'bad' };
+      if (link.repairCause === 'downgrade') return { kind: 'downgrade', label: s.status.downgrade, fix: s.fix.downgrade, dot: 'bad' };
+      if (link.repairCause === 'update_app') return { kind: 'update_app', label: s.status.updateApp, fix: s.fix.updateApp, dot: 'bad' };
+      return { kind: 'needs_repair', label: s.status.needsRepair, fix: s.fix.needsRepair, dot: 'bad' };
     case 'unverified':
       return { kind: 'unverified', label: s.status.unverified, fix: s.fix.unverified, dot: 'warn' };
     case 'unauthorized':

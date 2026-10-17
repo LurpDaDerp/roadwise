@@ -21,6 +21,7 @@ export const dashpalCopy = {
       notAllowed: 'Bluetooth not allowed',
       needsRepair: 'Needs pairing again',
       downgrade: 'Update DashPal',
+      updateApp: 'Update RoadWise',
       unverified: 'Can’t verify DashPal',
     },
     fix: {
@@ -29,6 +30,7 @@ export const dashpalCopy = {
       notAllowed: 'Allow Bluetooth for RoadWise in Settings to connect to your DashPal.',
       needsRepair: 'Your DashPal no longer knows this phone (after a firmware update, 10 presses of its button, or when it made room for a fifth phone). Set it up again.',
       downgrade: 'This DashPal’s firmware is older than its pairing. Update its firmware; your phone keeps checking.',
+      updateApp: 'This DashPal’s firmware is newer than this version of RoadWise. Update RoadWise; your phone keeps checking.',
       unverified: 'Something nearby answers as your DashPal but can’t prove it. Your phone keeps trying; if this lasts, set it up again.',
       openSettings: 'Open Settings',
       setUpAgain: 'Set up again',

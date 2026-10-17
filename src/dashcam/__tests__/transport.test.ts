@@ -249,6 +249,27 @@ test('R_UNKNOWN_PHONE: a soft repair, never a halt: retried at 30 s, then every 
   expect(r.k.log.at(-1)).toBe('up:DashPal-C4D5');
 });
 
+test('INFO above link v3 (newer firmware): a soft repair asking for an app update, not a firmware one; retried', async () => {
+  const r = rig('android');
+  const info = r.cam.info.bind(r.cam);
+  let newer = true;
+  r.cam.info = () => {
+    const b = info();
+    if (newer) {
+      b[1] = 4;
+      b[2] = 4;
+    }
+    return b;
+  };
+  await up(r);
+  expect(r.k.log).toContain('repair:update_app');
+  expect(r.k.log).not.toContain('repair:downgrade');
+  expect(r.ble.writes.filter((w) => w.characteristic === AUTH_CHAR)).toEqual([]);
+  newer = false;
+  await r.clock.advance(SOFT_REPAIR_FIRST_MS);
+  expect(r.t.linked()).toBe(true);
+});
+
 test('INFO below link v3: a soft repair (downgrade), retried', async () => {
   const r = rig('android');
   r.cam.protoMax = 2;

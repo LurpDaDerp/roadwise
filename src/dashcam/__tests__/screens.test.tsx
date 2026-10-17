@@ -171,6 +171,16 @@ describe('Settings › DashPal', () => {
     expect(screen.queryByTestId('dashcam-repair')).toBeNull();
   });
 
+  it('a newer firmware answering: "Update RoadWise" with its fix, never the firmware one', async () => {
+    setActiveDashcam(createFakeDashcamRuntime({ link: { lifecycle: 'needs_repair', repairCause: 'update_app', paired: PAIRED } }));
+    const w = await appWorld();
+    await w.render(<DashcamScreen deps={{ adapter: fakeAdapter() }} />);
+    expect(await screen.findByTestId('dashcam-status')).toHaveTextContent('Update RoadWise');
+    expect(screen.getByTestId('dashcam-fix')).toHaveTextContent(dashpalCopy.screen.fix.updateApp);
+    expect(screen.getByTestId('dashcam-fix')).not.toHaveTextContent('firmware is older');
+    expect(screen.queryByTestId('dashcam-repair')).toBeNull();
+  });
+
   it('not allowed opens Settings; needs pairing again and can’t verify set up again (with the stored code)', async () => {
     const adapter = fakeAdapter();
     const rt = createFakeDashcamRuntime({ link: { lifecycle: 'unauthorized', paired: PAIRED } });

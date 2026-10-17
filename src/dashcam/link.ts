@@ -134,15 +134,18 @@ export const RESEND_WINDOW_MS = 10_000;
 export type BluetoothState = 'unknown' | 'resetting' | 'unsupported' | 'unauthorized' | 'off' | 'on' | 'turning_on' | 'turning_off';
 
 /**
- * `needs_repair`: the dashcam says it does not know this phone, or answers below link v2 (a soft
+ * `needs_repair`: the dashcam says it does not know this phone, or does not speak link v3 (a soft
  * repair: the transport keeps retrying). `unverified`: the device at the paired address failed to
  * prove it is the DashPal three times in a row (retried too). Neither can be proven to come from
  * the real DashPal, so neither stops the phone; one verified session clears both.
  */
 export type Lifecycle = 'unpaired' | 'idle' | 'unauthorized' | 'bluetooth_off' | 'connecting' | 'connected' | 'needs_repair' | 'unverified';
 
-/** `unknown_phone`: R_UNKNOWN_PHONE (forgotten, wiped, evicted, reflashed); `downgrade`: INFO below link v2. */
-export type RepairCause = 'unknown_phone' | 'downgrade';
+/**
+ * `unknown_phone`: R_UNKNOWN_PHONE (forgotten, wiped, evicted, reflashed); `downgrade`: INFO below
+ * link v3 (the firmware is older); `update_app`: INFO above link v3 (this app is older).
+ */
+export type RepairCause = 'unknown_phone' | 'downgrade' | 'update_app';
 
 /** What the phone is doing, read live each tick. */
 export interface LinkContext {
