@@ -5,7 +5,7 @@
 // builds the real `createDashcamLink` with its alert controller) over a migrated sql.js database
 // (the real SQLite engine), a recording alert player and the phone's own SecureStore (an in-memory
 // one per phone: its pairing key lives there); `createSetupFlow` for pairing.
-// Wiring (link v2, docs/BLE_PROTOCOL.md §2.2, §3.3, §9): the INFO read is `INFO <conn>`, an AUTH write
+// Wiring (link v3, docs/BLE_PROTOCOL.md §2.2, §3.3, §9): the INFO read is `INFO <conn>`, an AUTH write
 // `AW <conn> <hex>` (ATT 00, or 80 for a malformed one: the write fails), an AUTH read `AR <conn>`;
 // every RX write goes to the simulator sealed as `RX <conn> <wire>`; every `TX <conn> <wire> <plain>`
 // the simulator prints is handed to that phone sealed (the wire), and the assertions read the plain
@@ -22,11 +22,12 @@
 // at every phone timer; each step sends `T`, delivers what came out, runs the due timers and lets
 // the promise chains (sql.js included) drain.
 //
-// The dashcam has a pairing code (`S`, `--label`) and the identity address `MAC`. A phone in
-// `bonded` has its pairing stored on the dashcam at boot (`--phone <id>:<key>`, the key derived from
-// its name); `addPhone({ paired: true })` gives the app that same pairing (SQLite record + its key in
-// the phone's SecureStore). A reboot keeps every stored pairing whose key a phone of the bench holds
-// (NVS survives a reboot).
+// The dashcam has the identity address `MAC` and no pairing code (link v3 pairs with one tap). A
+// phone in `bonded` has its pairing stored on the dashcam at boot (`--phone <id>:<key>`, the key
+// derived from its name); `addPhone({ paired: true })` gives the app that same pairing (SQLite
+// record + its key in the phone's SecureStore). A reboot keeps every stored pairing whose key a
+// phone of the bench holds (NVS survives a reboot). A phone's setup reports the speed
+// `setupSpeed.cms` in its STATE (null: none, as without a fresh location sample).
 //
 // Phone conditions for the phone-first sound routing (BLE_PROTOCOL §1, §5): `suspend` freezes a
 // phone outright (nothing runs, frames held: an Android app with no foreground service, a hung JS
@@ -36,8 +37,9 @@
 // timers (only a frame or a row reaching it fires the due ones, as `processTimers.pump`); a sound in
 // the fake player is native (it ends on time while JS timers are paused). `dropStatus` discards the
 // dashcam's STATUS frames to a phone (negative tests), and each phone has an audio-output probe stub.
-// What the simulator does not contain is modelled here: advertising (the pairing service while the
-// window is open).
+// What the simulator does not contain is modelled here: advertising, with the service the
+// simulator's `ADV` lines name (0001 closed, 00f0 open with no phone, 00f1 being set up, 00f2 open
+// with phones).
 import type { AlertPlayer } from '@/core/alerts/player';
 import type { AlertDecision } from '@/core/alerts/types';
 import type { FeatureRow } from '@/core/engine/types';
@@ -48,7 +50,7 @@ import { DIR_DP, DIR_PD, openRaw, proofOk, sealRaw, sessionKeys } from '../auth'
 import { sha256, utf8 } from '../crypto';
 import { createFakeBle, type FakeBle } from '../fakeTransport';
 import { PAIRED_KEY, type PairedDashcam } from '../keys';
-import { AUTH_CHAR, DASHPAL_SERVICE, decodeRx, decodeTx, fromHex, INFO_CHAR, PAIRING_NEW, RX_CHAR, toHex, type RxFrame, type TxFrame } from '../protocol';
+import { AUTH_CHAR, dashpalUuid, decodeRx, decodeTx, fromHex, INFO_CHAR, RX_CHAR, toHex, type RxFrame, type TxFrame } from '../protocol';
 import { createDashcamRuntime, type DashcamRuntime } from '../runtime';
 import { AUTH_PENDING_SECURE_KEY, AUTH_SECURE_KEY, createDashpalSecrets, type DashpalSecrets } from '../secure';
 import { createSetupFlow, type SetupFlow } from '../setup';
@@ -62,8 +64,6 @@ export const MAC = [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5];
 export const CAM = 'a4cf12b3c4d5';
 export const NAME = 'DashPal-C4D5';
 export const TRIP_PREFIX = '11111111-1111-4111-8111-';
-/** The dashcam's pairing code (its label). */
-export const LABEL_S = Uint8Array.from({ length: 16 }, (_, i) => 0x30 + i);
 
 /** Tone lengths the fake player takes (ms), as `scripts/make-tones.js` renders them. */
 const TONE_MS: Record<string, number> = { dp_glance: 440, dp_drowsy: 940, dp_wake: 760, dp_phone: 360 };
@@ -190,6 +190,8 @@ export interface Phone {
   /** iOS state restoration pending: the next start hands the kept connection back */
   restoring: boolean;
   latency: { up: number; down: number };
+  /** the speed its setup reports (cm/s), or null: none */
+  setupSpeed: { cms: number | null };
   transport(): DashcamTransport;
   setup(): SetupFlow;
 }
@@ -200,8 +202,6 @@ export interface WorldOptions {
   /** phones (by name) whose pairings the dashcam holds at boot; none opens the pairing window */
   bonded?: string[];
   ackMs?: number;
-  /** the dashcam has no pairing code (an unkeyed board) */
-  unkeyed?: boolean;
   /** another identity address than `MAC` (a device answering at the paired address that is not the DashPal) */
   mac?: string;
 }
@@ -224,8 +224,12 @@ export class World {
   readonly log: LogLine[] = [];
   readonly phones: Phone[] = [];
   windowOpen = false;
+  /** the advertised service's suffix (the simulator's `ADV` lines) */
+  adv = '0001';
   /** the link holding the setup claim (the simulator's `CLAIM` lines) */
   claimConn: number | null = null;
+  /** the setup hold's link as the last `HOLD` line named it (null: no hold) */
+  holdConn: number | null = null;
   private readonly opts: WorldOptions;
   private timers: Timer[] = [];
   private timerSeq = 0;
@@ -241,7 +245,6 @@ export class World {
     return [
       ...(o.bootId ? ['--boot-id', o.bootId] : []),
       ...(o.ackMs !== undefined ? ['--ack-ms', String(o.ackMs)] : []),
-      ...(o.unkeyed ? [] : ['--label', toHex(LABEL_S)]),
       '--mac',
       o.mac ?? CAM,
       ...phones.flatMap((p) => ['--phone', `${p.id}:${p.kPair}`]),
@@ -252,6 +255,7 @@ export class World {
     const bonded = (o.bonded ?? []).map(phoneKey);
     const w = new World(new SimProcess(World.args(o, bonded)), o);
     w.windowOpen = bonded.length === 0;
+    w.adv = bonded.length === 0 ? '00f0' : '0001';
     await w.simLine('T 0');
     return w;
   }
@@ -421,6 +425,10 @@ export class World {
         this.windowOpen = p[1] === '1';
       } else if (p[0] === 'CLAIM') {
         this.claimConn = p[1] === '-' ? null : Number(p[1]);
+      } else if (p[0] === 'ADV' && p[1]) {
+        this.adv = p[1];
+      } else if (p[0] === 'HOLD' && p.length === 2) {
+        this.holdConn = p[1] === '-' ? null : Number(p[1]);
       }
     }
   }
@@ -544,7 +552,9 @@ export class World {
     this.bootAt = this.W;
     this.sim = new SimProcess(World.args({ ...this.opts, bootId: o.bootId }, keep));
     this.windowOpen = keep.length === 0;
+    this.adv = keep.length === 0 ? '00f0' : '0001';
     this.claimConn = null;
+    this.holdConn = null;
     await this.simLine('T 0');
     await this.settle();
   }
@@ -726,6 +736,7 @@ export class World {
       statusDropped: false,
       restoring: o.restoredLink === true,
       sent: [] as { at: number; bytes: number[] }[],
+      setupSpeed: { cms: null as number | null },
     } as unknown as Phone;
     phone.player = this.makePlayer(phone);
     this.wireBle(phone);
@@ -795,6 +806,8 @@ export class World {
         resumePaired: () => phone.rt.resumePaired(),
         secrets,
         notePhones: (d, n) => phone.rt.notePhones(d, n),
+        speed: () => ({ start: async () => {}, speedCms: () => phone.setupSpeed.cms, stop: () => {} }),
+        localMinute: () => 600,
         now: () => this.now(),
         sleep: (ms) => new Promise<void>((resolve) => this.timer(ms, resolve, phone)),
         onError: (e, ctx) => {
@@ -890,8 +903,8 @@ export class World {
       return undefined;
     };
 
-    // The DashPal advertises all the time (the pairing service while its window is open): while a
-    // scan runs, the phone hears it every 100 ms, from 200 ms after the scan starts.
+    // The DashPal advertises all the time (the service the simulator's `ADV` names): while a scan
+    // runs, the phone hears it every 100 ms, from 200 ms after the scan starts.
     let scanGen = 0;
     const origScan = ble.scan.bind(ble);
     ble.scan = async (o) => {
@@ -905,7 +918,7 @@ export class World {
           id: phone.peripheralId,
           name: NAME,
           rssi: -55,
-          advertising: { serviceUUIDs: [this.windowOpen ? PAIRING_NEW : DASHPAL_SERVICE], localName: NAME, isConnectable: true },
+          advertising: { serviceUUIDs: [dashpalUuid(this.adv)], localName: NAME, isConnectable: true },
         });
         this.timer(100, advert, phone, true);
       };
