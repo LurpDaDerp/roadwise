@@ -9,8 +9,10 @@
 // `AW <conn> <hex>` (ATT 00, or 80 for a malformed one: the write fails), an AUTH read `AR <conn>`;
 // every RX write goes to the simulator sealed as `RX <conn> <wire>`; every `TX <conn> <wire> <plain>`
 // the simulator prints is handed to that phone sealed (the wire), and the assertions read the plain
-// frame. Connects and disconnects become `C` / `D` lines; the simulator's `TERM` (the dashcam ends a
-// link) becomes `D` + a dropped link.
+// frame; every `VX <conn> <wire> <record>` (the setup's aiming picture) is that phone's VIEW
+// notification. Connects (with the phone's ATT MTU, 247 unless it says otherwise) and disconnects
+// become `C` / `D` lines; the simulator's `TERM` (the dashcam ends a link) becomes `D` + a dropped
+// link.
 //
 // A wiretap (the bench only, from the handshake it carries and the phone's own key) derives each
 // session's phone → dashcam key, so `rx()` can still read the frames a phone wrote (`RXP` log lines;
@@ -192,6 +194,8 @@ export interface Phone {
   latency: { up: number; down: number };
   /** the speed its setup reports (cm/s), or null: none */
   setupSpeed: { cms: number | null };
+  /** the ATT MTU its connections get (`C <conn> <mtu>`) */
+  mtu: number;
   transport(): DashcamTransport;
   setup(): SetupFlow;
 }
@@ -415,6 +419,9 @@ export class World {
           phone.tap.txCtr = Math.max(phone.tap.txCtr, ((wire[0] ?? 0) | ((wire[1] ?? 0) << 8) | ((wire[2] ?? 0) << 16) | ((wire[3] ?? 0) << 24)) >>> 0);
           this.toPhone(phone, wire, p[3] ?? '');
         }
+      } else if (p[0] === 'VX') {
+        // The aiming picture's records arrive on VIEW, as the dashcam sealed them.
+        if (phone && !phone.blackholed && !phone.suspended && phone.ble.connected.has(phone.peripheralId)) phone.ble.notifyView(phone.peripheralId, fromHex(p[2] ?? ''));
       } else if (p[0] === 'TERM') {
         // NimBLE terminates the link; its disconnect event reaches ble_link (and the phone).
         if (!phone || phone.simConnected) this.enqueue(`D ${p[1]}`);
@@ -658,6 +665,8 @@ export class World {
     secureStore?: Map<string, string>;
     /** iOS state restoration: the OS kept this connection up and hands it back at start (no new connect) */
     restoredLink?: boolean;
+    /** its connections' ATT MTU (default 247) */
+    mtu?: number;
   }): Promise<Phone> {
     const platform = o.platform ?? 'ios';
     const raw = o.db ?? (await createSqlJsDb());
@@ -737,6 +746,7 @@ export class World {
       restoring: o.restoredLink === true,
       sent: [] as { at: number; bytes: number[] }[],
       setupSpeed: { cms: null as number | null },
+      mtu: o.mtu ?? 247,
     } as unknown as Phone;
     phone.player = this.makePlayer(phone);
     this.wireBle(phone);
@@ -808,6 +818,7 @@ export class World {
         notePhones: (d, n) => phone.rt.notePhones(d, n),
         speed: () => ({ start: async () => {}, speedCms: () => phone.setupSpeed.cms, stop: () => {} }),
         localMinute: () => 600,
+        onAppState: (fn) => phone.appState.addEventListener('change', (st) => fn(st === 'active')).remove,
         now: () => this.now(),
         sleep: (ms) => new Promise<void>((resolve) => this.timer(ms, resolve, phone)),
         onError: (e, ctx) => {
@@ -880,7 +891,7 @@ export class World {
       if (id !== phone.peripheralId) return;
       phone.simConnected = true;
       phone.tap = fresh();
-      this.enqueue(`C ${conn}`);
+      this.enqueue(phone.mtu === 247 ? `C ${conn}` : `C ${conn} ${phone.mtu}`);
     };
     // The phone ends the connection.
     ble.onDisconnect = (id) => {

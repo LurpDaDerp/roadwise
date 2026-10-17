@@ -3,8 +3,11 @@
 // and runtime against the firmware's link and auth cores in the simulator: one-tap pairing with no
 // code, the setup hold (the provisional phone, the advertised services, the known stop), its commit
 // on Next, its undo on Cancel, on the phone's absence and on 5 or 10 presses, a reconnect under the
-// new key during the hold, Set up again with prev_id, Add another phone, and the session rules kept
-// from link v2. A scripted raw phone plays the second phone, the spoofs and the injector, built on
+// new key during the hold, Set up again with prev_id, Add another phone, the session rules kept
+// from link v2, and the setup's aiming picture (§3.4, §3.5): VIEW records reassembled byte for byte
+// at each MTU, the 2 images unacknowledged at most, AIM frames, the dash-dot LED, and the stream
+// refused or stopped while the car moves, in a drive, after Add another phone, when RoadWise leaves
+// the front and on Next and Cancel. A scripted raw phone plays the second phone, the spoofs and the injector, built on
 // the app's own auth.ts.
 import { blindedId, DIR_PD, pairFin, pairKeysV3, pairOpen, parseAuthRecord, R, sealRaw, sessionFin, sessionKeys, sessionRequest } from '../auth';
 import { randomBytes } from '../crypto';
@@ -427,5 +430,183 @@ describeSim('DashPal pairing v3 (firmware simulator ↔ app setup flow)', () => 
       expect(await phonesLine(w)).toBe('PHONES 0');
       expect(await p.secrets.readAuth()).toBeNull();
       expect(await p.secrets.readPendingAuth()).toBeNull();
+    }));
+});
+
+// ——— the setup's aiming picture (BLE_PROTOCOL §3.4, §3.5) ———
+
+/** The simulator's stand-in JPEG for image `frame` (ff d8, (i*31 + frame*7) & 0xff, ff d9). */
+const standIn = (len: number, frame: number): number[] =>
+  Array.from({ length: len }, (_, i) => (i < 2 ? [0xff, 0xd8][i]! : i >= len - 2 ? [0xff, 0xd9][i - (len - 2)]! : (i * 31 + frame * 7) & 0xff));
+
+/** Paired and on screen 2, the picture's listeners recording, then Start (`start: false`: not yet). */
+async function toAim(w: World, p: Phone, o: { start?: boolean } = {}) {
+  const r = await setUp(w, p, {}, { next: false });
+  expect(r.end.kind).toBe('instructions');
+  const frames: number[][] = [];
+  const aims: (number | null)[] = [];
+  r.flow.onViewFrame((j) => void frames.push(Array.from(j)));
+  r.flow.onAim((a) => void aims.push(a ? a.score : null));
+  if (o.start !== false) r.flow.startAim();
+  return { ...r, frames, aims };
+}
+
+const aimOf = (flow: SetupFlow) => flow.phase() as Extract<SetupPhase, { kind: 'aim' }>;
+const viewq = async (w: World): Promise<string[]> => ((await w.dashcam('VIEWQ')).find((l) => l.startsWith('VIEWS')) ?? '').split(' ');
+
+describeSim('DashPal aiming picture (firmware simulator ↔ app setup flow)', () => {
+  test.each([
+    ['android', 247],
+    ['ios', 185],
+    ['android', 100],
+  ] as const)('Start streams the picture (%s, MTU %i): VIEW records reassembled byte for byte and acknowledged, at most 2 images unacknowledged, AIM frames decoded, the dash-dot LED; Next stops it, then commits', (platform, mtu) =>
+    scenario({ bootId: BOOT, bonded: [] }, async (w) => {
+      const p = await w.addPhone({ name: 'P', conn: 1, platform, mtu });
+      const a = await toAim(w, p);
+      await w.until(() => w.lines('VIEW 1 on').length === 1, 3000, 'the stream on');
+      expect(w.lines('LED aim 1')).toHaveLength(1);
+      expect(aimOf(a.flow)).toMatchObject({ kind: 'aim', status: 'starting' });
+      // One image of 2900 bytes, cut for this MTU, reassembled and acknowledged.
+      await w.dashcam('VIEWF 2900');
+      await w.until(() => a.frames.length === 1, 3000, 'the first image');
+      expect(a.frames[0]).toEqual(standIn(2900, 1));
+      const records = w.lines('VX 1 ').map((l) => fromHex(l.line.split(' ')[3]!));
+      expect(records.length).toBe(Math.ceil(2900 / (mtu - 31)));
+      expect(records.every((rec) => rec.length - 8 <= mtu - 31)).toBe(true);
+      await w.until(() => w.rxOf('COMMAND', 1).some((c) => c.f.op === COMMAND.VIEW_ACK && c.f.arg === 1), 2000, 'its acknowledgement');
+      await w.until(() => aimOf(a.flow).status === 'live', 1000, 'live');
+      expect(await viewq(w)).toEqual(['VIEWS', '1', '1', '0', '1', expect.stringMatching(/^\d+$/)]);
+      // AIM: the engine's result reaches the screen.
+      await w.dashcam('AIMF 96 0 7 60 -8 5');
+      await w.until(() => a.aims.includes(96), 2000, 'the AIM frame');
+      // The phone's acknowledgements held up: never more than 2 images out.
+      p.latency.up = 1200;
+      for (let k = 0; k < 3; k++) {
+        await w.advance(300);
+        await w.dashcam('VIEWF 2900');
+      }
+      await w.advance(100);
+      const q = await viewq(w);
+      expect(Number(q[3])).toBe(2);
+      expect(Number(q[4])).toBe(3);
+      p.latency.up = 0;
+      await w.until(() => a.frames.length === 3, 5000, 'two more images');
+      expect(a.frames[1]).toEqual(standIn(2900, 2));
+      // Next: the stream stops before the commit.
+      const t0 = w.mark();
+      a.flow.next();
+      expect(await setupTo(w, a.flow, END)).toMatchObject({ kind: 'done', aimedElsewhere: false });
+      const off = w.lines('VIEW 1 off 0', t0)[0];
+      const commit = w.lines('COMMIT 1 ', t0)[0];
+      expect(off).toBeDefined();
+      expect(commit).toBeDefined();
+      expect(off!.at).toBeLessThanOrEqual(commit!.at);
+      expect(w.lines('LED aim 0', t0)).toHaveLength(1);
+      expect(a.aims.at(-1)).toBeNull();
+      // Nothing more after it.
+      const n = a.frames.length;
+      await w.dashcam('VIEWF 2900');
+      await w.advance(500);
+      expect(a.frames).toHaveLength(n);
+      expect(p.errors).toEqual([]);
+    }));
+
+  test('the car moving: a start is refused (moving, Try again); a running picture stops when the phone reports 5 km/h; Next still finishes', () =>
+    scenario({ bootId: BOOT, bonded: [] }, async (w) => {
+      const p = await w.addPhone({ name: 'P', conn: 1, platform: 'android' });
+      p.setupSpeed.cms = 150;
+      const a = await toAim(w, p, { start: false });
+      await w.advance(1000); // a STATE with the speed
+      a.flow.startAim();
+      await w.until(() => aimOf(a.flow)?.status === 'refused', 3000, 'refused');
+      expect(aimOf(a.flow)).toMatchObject({ status: 'refused', reason: 'moving' });
+      expect(w.lines('VIEW 1 on')).toHaveLength(0);
+      // Stopped: Try again starts it; moving again stops it.
+      p.setupSpeed.cms = null;
+      await w.advance(1000);
+      a.flow.startAim();
+      await w.until(() => w.lines('VIEW 1 on').length === 1, 3000, 'the stream on');
+      p.setupSpeed.cms = 150;
+      await w.until(() => w.lines('VIEW 1 off 2').length === 1, 3000, 'stopped for moving');
+      await w.until(() => aimOf(a.flow).status === 'refused', 1000, 'refused');
+      expect(aimOf(a.flow)).toMatchObject({ reason: 'moving' });
+      expect(w.lines('LED aim 0')).toHaveLength(1);
+      a.flow.next();
+      expect(await setupTo(w, a.flow, END)).toMatchObject({ kind: 'done' });
+    }));
+
+  test('a drive open on another phone: the picture is refused (drive), with Next only', () =>
+    scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
+      const phoneA = await linkedA(w, { recording: true });
+      await w.advance(1500);
+      await w.dashcam('PAIRWIN 1');
+      const b = await w.addPhone({ name: 'B', conn: 2, platform: 'android' });
+      const a = await toAim(w, b);
+      await w.until(() => aimOf(a.flow)?.status === 'refused', 5000, 'refused');
+      expect(aimOf(a.flow)).toMatchObject({ reason: 'drive' });
+      expect(w.lines('VIEW 2 on')).toHaveLength(0);
+      const starts = w.rxOf('COMMAND', 2).filter((c) => c.f.op === COMMAND.AIM && c.f.arg === 1).length;
+      a.flow.startAim();
+      await w.advance(500);
+      expect(w.rxOf('COMMAND', 2).filter((c) => c.f.op === COMMAND.AIM && c.f.arg === 1)).toHaveLength(starts);
+      a.flow.next();
+      expect(await setupTo(w, a.flow, END)).toMatchObject({ kind: 'done', phones: 2 });
+      void phoneA;
+    }));
+
+  test('Add another phone: the DashPal never streams to the phone it added (not allowed), and Start does nothing', () =>
+    scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
+      const phoneA = await linkedA(w);
+      await phoneA.rt.addPhone();
+      await w.until(() => w.adv === '00f2', 2000, 'pairing open with phones');
+      const b = await w.addPhone({ name: 'B', conn: 2, platform: 'android' });
+      const a = await toAim(w, b, { start: false });
+      await w.until(() => a.flow.phase().kind === 'instructions' && !(a.flow.phase() as { aimAllowed: boolean }).aimAllowed, 2000, 'aiming not allowed');
+      a.flow.startAim();
+      await w.advance(500);
+      expect(w.rxOf('COMMAND', 2).filter((c) => c.f.op === COMMAND.AIM && c.f.arg === 1)).toHaveLength(0);
+      expect(w.lines('VIEW 2 on')).toHaveLength(0);
+      expect(await viewq(w)).toEqual(['VIEWS', '0', '-', '0', '0', expect.stringMatching(/^\d+$/)]);
+      a.flow.next();
+      expect(await setupTo(w, a.flow, END)).toMatchObject({ kind: 'done', aimedElsewhere: true });
+    }));
+
+  test('RoadWise leaving the front stops the picture (the phone says so first); back in front it starts again, numbering from 1', () =>
+    scenario({ bootId: BOOT, bonded: [] }, async (w) => {
+      const p = await w.addPhone({ name: 'P', conn: 1, platform: 'ios' });
+      const a = await toAim(w, p);
+      await w.until(() => w.lines('VIEW 1 on').length === 1, 3000, 'the stream on');
+      await w.dashcam('VIEWF 1200');
+      await w.until(() => a.frames.length === 1, 3000, 'the first image');
+      p.appState.emit('inactive');
+      await w.until(() => w.lines('VIEW 1 off 0').length === 1, 2000, 'stopped by the phone');
+      expect(w.lines('LED aim 0')).toHaveLength(1);
+      await w.dashcam('VIEWF 1200');
+      await w.advance(500);
+      expect(a.frames).toHaveLength(1);
+      p.appState.emit('active');
+      await w.until(() => w.lines('VIEW 1 on').length === 2, 3000, 'on again');
+      await w.dashcam('VIEWF 1200');
+      await w.until(() => a.frames.length === 2, 3000, 'the new stream’s first image');
+      expect(a.frames[1]).toEqual(standIn(1200, 1));
+      await a.flow.cancel();
+      await setupTo(w, a.flow, ['cancelled']);
+      expect(w.lines('UNDO ')).toHaveLength(1);
+    }));
+
+  test('Cancel on screen 3: the picture stops, then the setup is undone on both sides', () =>
+    scenario({ bootId: BOOT, bonded: [] }, async (w) => {
+      const p = await w.addPhone({ name: 'P', conn: 1, platform: 'android' });
+      const a = await toAim(w, p);
+      await w.until(() => w.lines('VIEW 1 on').length === 1, 3000, 'the stream on');
+      const t0 = w.mark();
+      await a.flow.cancel();
+      await setupTo(w, a.flow, ['cancelled']);
+      await w.until(() => w.lines('UNDO ', t0).length === 1, 3000, 'undone');
+      const off = w.lines('VIEW 1 off', t0)[0]!;
+      expect(off.line).toBe('VIEW 1 off 0');
+      expect(off.at).toBeLessThanOrEqual(w.lines('UNDO ', t0)[0]!.at);
+      expect(await phonesLine(w)).toBe('PHONES 0');
+      expect(w.adv).toBe('00f0');
     }));
 });
