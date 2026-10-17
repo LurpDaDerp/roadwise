@@ -2,6 +2,7 @@ import {
   classify,
   createDetector,
   DETECT_EVERY_MS,
+  DETECT_MIN_GAP_MS,
   DETECT_PULL_EVERY_MS,
   DETECT_SCAN_SECONDS,
   SNOOZE_MS,
@@ -155,6 +156,62 @@ test('leaving Home mid-scan, or abort(), stops the scan', async () => {
   a.hits.push(hit('A', -40));
   expect(await a.d.check()).toEqual({ kind: 'skipped', why: 'interrupted' });
   expect(a.stopped()).toBeGreaterThanOrEqual(1);
+});
+
+test('a scan cut short does not use up the minute: Home in view again 10 s after it started scans again (sooner is too soon)', async () => {
+  let leave = true;
+  const r = rig({
+    sleep: async (ms) => {
+      r.clock.t += ms;
+      if (leave) r.state.home = false;
+    },
+  });
+  r.hits.push(hit('A', -40));
+  const startedAt = r.clock.t;
+  expect(await r.d.check()).toEqual({ kind: 'skipped', why: 'interrupted' });
+  leave = false;
+  r.state.home = true;
+  r.clock.t = startedAt + DETECT_MIN_GAP_MS - 1;
+  expect(await r.d.check()).toEqual({ kind: 'skipped', why: 'too soon' });
+  r.clock.t = startedAt + DETECT_MIN_GAP_MS;
+  expect(await r.d.check()).toMatchObject({ kind: 'found', found: { id: 'A' } });
+  expect(r.scans).toHaveLength(2);
+  // A scan that ran to its end does count: the next one waits the minute.
+  r.clock.t += DETECT_MIN_GAP_MS;
+  expect(await r.d.check()).toEqual({ kind: 'skipped', why: 'too soon' });
+  expect(DETECT_MIN_GAP_MS).toBe(10_000);
+});
+
+test('Home left and back while a check still waits for its reads: no scan opens for the left one, and the new one scans once it has ended', async () => {
+  let ready: (v: boolean) => void = () => {};
+  let asked = 0;
+  const r = rig({
+    bluetoothReady: () => {
+      asked += 1;
+      return asked === 1 ? new Promise<boolean>((resolve) => (ready = resolve)) : Promise.resolve(true);
+    },
+  });
+  r.hits.push(hit('A', -40));
+  const first = r.d.check();
+  r.state.home = false;
+  await r.d.abort();
+  r.state.home = true;
+  const second = r.d.check();
+  ready(true);
+  expect(await first).toEqual({ kind: 'skipped', why: 'interrupted' });
+  expect(await second).toMatchObject({ kind: 'found', found: { id: 'A' } });
+  expect(r.scans).toHaveLength(1);
+});
+
+test('a check while one scans (not cut short): already scanning', async () => {
+  let release: () => void = () => {};
+  const r = rig({ sleep: () => new Promise<void>((resolve) => (release = () => resolve())) });
+  const first = r.d.check();
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(await r.d.check()).toEqual({ kind: 'skipped', why: 'already scanning' });
+  r.clock.t += DETECT_SCAN_SECONDS * 1000;
+  release();
+  expect((await first).kind).toBe('none');
 });
 
 test('snoozed(): 7 days for this one; expired entries are dropped', () => {

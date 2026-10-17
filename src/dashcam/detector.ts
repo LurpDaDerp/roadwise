@@ -3,7 +3,8 @@
 //
 // An 8 s scan for the pairing services `00f0` (no phone paired) and `00f2` (phones paired, pairing
 // open) when Home comes into view, when RoadWise returns to the front with Home showing, and on pull
-// to refresh: at most once per minute (pull to refresh at most once per 10 s), and only when: opted
+// to refresh: at most once per minute (pull to refresh at most once per 10 s; a scan cut short does
+// not count, but no scan starts within 10 s of the last start), and only when: opted
 // in; Bluetooth already allowed and on (read, never asked); no drive open or closing; Home showing
 // and RoadWise in front; a speed probe under 3 mph (unknown speed blocks); no setup open; the paired
 // DashPal not connected. What a hit offers (`classify`): a DashPal with no phone paired (`new`), or
@@ -16,6 +17,11 @@ export const DETECT_SCAN_SECONDS = 8;
 export const DETECT_EVERY_MS = 60_000;
 /** Pull to refresh may scan again this soon after the last scan. */
 export const DETECT_PULL_EVERY_MS = 10_000;
+/**
+ * No scan starts sooner than this after the last start, whatever asks (a scan cut short included):
+ * Android refuses a sixth scan start within 30 s.
+ */
+export const DETECT_MIN_GAP_MS = 10_000;
 export const DETECT_MAX_MPH = 3;
 export const DETECT_MIN_RSSI = -80;
 export const SNOOZE_MS = 7 * 24 * 60 * 60_000;
@@ -86,10 +92,14 @@ export interface Detector {
 }
 
 export function createDetector(deps: DetectorDeps): Detector {
+  /** The start of the last scan that ran to its end (the once-a-minute limit). */
   let lastScanAt: number | null = null;
-  let running = false;
+  /** The start of the last scan, cut short or not (the 10 s floor). */
+  let lastStartAt: number | null = null;
+  let current: Promise<DetectOutcome> | null = null;
   let aborted = false;
   let stop: (() => Promise<void>) | null = null;
+  const within = (at: number | null, ms: number, now: number): boolean => at !== null && now - at < ms && now >= at;
 
   /** The gates that need no I/O, re-checked after every wait. */
   function blocked(): string | null {
@@ -101,57 +111,74 @@ export function createDetector(deps: DetectorDeps): Detector {
     return null;
   }
 
+  async function check(opts: { pull?: boolean } = {}): Promise<DetectOutcome> {
+    while (current) {
+      if (!aborted) return { kind: 'skipped', why: 'already scanning' };
+      // A check being cut short (Home left and back while it waited): look again once it has ended.
+      await current.catch(() => undefined);
+    }
+    const run = runCheck(opts);
+    current = run;
+    void run
+      .finally(() => {
+        if (current === run) current = null;
+      })
+      .catch(() => undefined);
+    return run;
+  }
+
+  async function runCheck(opts: { pull?: boolean }): Promise<DetectOutcome> {
+    const now = deps.now();
+    const every = opts.pull ? DETECT_PULL_EVERY_MS : DETECT_EVERY_MS;
+    if (within(lastScanAt, every, now) || within(lastStartAt, DETECT_MIN_GAP_MS, now)) return { kind: 'skipped', why: 'too soon' };
+    const gate = blocked();
+    if (gate) return { kind: 'skipped', why: gate };
+    aborted = false;
+    try {
+      if (!(await deps.bluetoothReady().catch(() => false))) return { kind: 'skipped', why: 'bluetooth not ready' };
+      const mph = await deps.speedMph().catch(() => null);
+      if (mph === null || mph >= DETECT_MAX_MPH) return { kind: 'skipped', why: 'moving or speed unknown' };
+      const again = blocked();
+      if (again) return { kind: 'skipped', why: again };
+      const snoozes = await deps.snoozes().catch(() => ({}) as Record<string, number>);
+      if (aborted || blocked() !== null) return { kind: 'skipped', why: 'interrupted' };
+      const startedAt = deps.now();
+      lastStartAt = startedAt;
+      const paired = deps.paired();
+      const connected = deps.pairedConnected();
+      let best: Found | null = null;
+      const session = await deps.scan({
+        services: DETECT_SERVICES,
+        seconds: DETECT_SCAN_SECONDS,
+        onHit: (hit) => {
+          if (hit.rssi < DETECT_MIN_RSSI || !hit.adv) return;
+          const kind = classify(hit.adv, hit.id, paired, connected);
+          if (!kind) return;
+          const until = snoozes[hit.id];
+          if (typeof until === 'number' && until > deps.now()) return;
+          if (!best || hit.rssi > best.rssi) {
+            const name = hit.name ?? (kind === 'again' ? paired?.name : null) ?? 'DashPal';
+            best = { id: hit.id, name, rssi: hit.rssi, kind, adv: hit.adv };
+          }
+        },
+      });
+      stop = session.stop;
+      const end = deps.now() + DETECT_SCAN_SECONDS * 1000;
+      while (!aborted && deps.now() < end && blocked() === null) await deps.sleep(250);
+      await session.stop().catch((e: unknown) => deps.onError?.(e, 'stopScan'));
+      stop = null;
+      if (aborted || blocked() !== null) return { kind: 'skipped', why: 'interrupted' };
+      lastScanAt = startedAt;
+      const found = best as Found | null;
+      return found ? { kind: 'found', found } : { kind: 'none' };
+    } catch (e) {
+      deps.onError?.(e, 'detect');
+      return { kind: 'skipped', why: 'error' };
+    }
+  }
+
   return {
-    async check(opts = {}) {
-      if (running) return { kind: 'skipped', why: 'already scanning' };
-      const now = deps.now();
-      const every = opts.pull ? DETECT_PULL_EVERY_MS : DETECT_EVERY_MS;
-      if (lastScanAt !== null && now - lastScanAt < every && now >= lastScanAt) return { kind: 'skipped', why: 'too soon' };
-      const gate = blocked();
-      if (gate) return { kind: 'skipped', why: gate };
-      running = true;
-      aborted = false;
-      try {
-        if (!(await deps.bluetoothReady().catch(() => false))) return { kind: 'skipped', why: 'bluetooth not ready' };
-        const mph = await deps.speedMph().catch(() => null);
-        if (mph === null || mph >= DETECT_MAX_MPH) return { kind: 'skipped', why: 'moving or speed unknown' };
-        const again = blocked();
-        if (again) return { kind: 'skipped', why: again };
-        const snoozes = await deps.snoozes().catch(() => ({}) as Record<string, number>);
-        lastScanAt = deps.now();
-        const paired = deps.paired();
-        const connected = deps.pairedConnected();
-        let best: Found | null = null;
-        const session = await deps.scan({
-          services: DETECT_SERVICES,
-          seconds: DETECT_SCAN_SECONDS,
-          onHit: (hit) => {
-            if (hit.rssi < DETECT_MIN_RSSI || !hit.adv) return;
-            const kind = classify(hit.adv, hit.id, paired, connected);
-            if (!kind) return;
-            const until = snoozes[hit.id];
-            if (typeof until === 'number' && until > deps.now()) return;
-            if (!best || hit.rssi > best.rssi) {
-              const name = hit.name ?? (kind === 'again' ? paired?.name : null) ?? 'DashPal';
-              best = { id: hit.id, name, rssi: hit.rssi, kind, adv: hit.adv };
-            }
-          },
-        });
-        stop = session.stop;
-        const end = deps.now() + DETECT_SCAN_SECONDS * 1000;
-        while (!aborted && deps.now() < end && blocked() === null) await deps.sleep(250);
-        await session.stop().catch((e: unknown) => deps.onError?.(e, 'stopScan'));
-        stop = null;
-        if (aborted || blocked() !== null) return { kind: 'skipped', why: 'interrupted' };
-        const found = best as Found | null;
-        return found ? { kind: 'found', found } : { kind: 'none' };
-      } catch (e) {
-        deps.onError?.(e, 'detect');
-        return { kind: 'skipped', why: 'error' };
-      } finally {
-        running = false;
-      }
-    },
+    check,
 
     async abort() {
       aborted = true;
