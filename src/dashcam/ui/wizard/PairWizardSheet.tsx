@@ -221,6 +221,8 @@ export function PairWizardSheet({
     <WizardFrame
       visible={visible}
       step={step}
+      stepIndex={n}
+      stepCount={STEP_COUNT}
       cancel={cancellable}
       onRequestCancel={requestCancel}
       dimmed={confirming}

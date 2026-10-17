@@ -120,7 +120,8 @@ const back = () =>
   act(async () => {
     fireEvent(screen.getByTestId('wizard-modal', HIDDEN), 'requestClose');
   });
-const stepText = () => screen.getByTestId('wizard-step-number', HIDDEN);
+/** The header's step, as it is named (the pills themselves carry no text to match). */
+const stepText = (): string => screen.getByTestId('wizard-step-number', HIDDEN).props.accessibilityLabel ?? '';
 
 beforeEach(() => {
   outcomes.length = 0;
@@ -145,7 +146,8 @@ describe('the steps', () => {
     await s.to({ kind: 'search', until: 1 });
     expect(screen.getByTestId('wizard-search-title')).toHaveTextContent('Looking for your DashPal…');
     expect(screen.getByTestId('wizard-search-body')).toHaveTextContent(wiz.search.body);
-    expect(stepText()).toHaveTextContent('');
+    expect(stepText()).toBe('');
+    expect(screen.getByTestId('wizard-step-number', HIDDEN)).toHaveTextContent('');
     await s.to({
       kind: 'choose',
       candidates: [
@@ -156,7 +158,7 @@ describe('the steps', () => {
     expect(screen.getByTestId('wizard-choose-title')).toHaveTextContent('Which DashPal is yours?');
     expect(screen.getByTestId('wizard-pick-P1')).toHaveTextContent('DashPal-0001 · New');
     expect(screen.getByTestId('wizard-pick-P2')).toHaveTextContent('DashPal-0002 · Has phones paired');
-    expect(stepText()).toHaveTextContent('');
+    expect(stepText()).toBe('');
     await tap('wizard-pick-P2');
     expect(s.answers).toEqual(['pick:P2']);
   });
@@ -171,7 +173,9 @@ describe('the steps', () => {
     expect(screen.getByTestId('wizard-confirm-body')).toHaveTextContent('Check that this is the DashPal in your car. Its light flashes quickly while it’s ready to pair.');
     expect(screen.getByTestId('wizard-confirm-note')).toHaveTextContent(wiz.confirm.note);
     expect(screen.queryByTestId('wizard-confirm-replaces')).toBeNull();
-    expect(stepText()).toHaveTextContent(`Step 1 of ${STEP_COUNT}`);
+    expect(stepText()).toBe(`Step 1 of ${STEP_COUNT}`);
+    // The header shows the step as ink pills, hidden from the screen reader (the title names the step).
+    expect(screen.getByTestId('wizard-step-number', HIDDEN)).toHaveTextContent(`1/${STEP_COUNT}`);
     await tap('wizard-pair');
     expect(s.answers).toEqual(['pair']);
 
@@ -190,7 +194,7 @@ describe('the steps', () => {
     expect(screen.getByTestId('wizard-spinner')).toBeOnTheScreen();
     expect(screen.getByTestId('wizard-connect-title')).toHaveTextContent('Connecting to DashPal-C4D5…');
     expect(screen.getByTestId('wizard-connect-body')).toHaveTextContent('Other phones can’t pair with it while you set it up.');
-    expect(stepText()).toHaveTextContent(`Step 1 of ${STEP_COUNT}`);
+    expect(stepText()).toBe(`Step 1 of ${STEP_COUNT}`);
     expect(say).toHaveBeenLastCalledWith('Connecting to DashPal-C4D5');
     expect(haptics.notificationAsync).not.toHaveBeenCalled();
     await s.to({ kind: 'connected', name: 'DashPal-C4D5' });
@@ -211,14 +215,14 @@ describe('the steps', () => {
     const s = await open();
     await s.to(phase);
     expect(screen.getByTestId('wizard-connect-title')).toHaveTextContent(text);
-    expect(stepText()).toHaveTextContent(`Step 1 of ${STEP_COUNT}`);
+    expect(stepText()).toBe(`Step 1 of ${STEP_COUNT}`);
     expect(screen.getByTestId('wizard-cancel')).toBeOnTheScreen();
   });
 
   it(`screen 2: “Step 2 of ${STEP_COUNT}”, the time left in the hold’s last minute, a lost link reconnecting, and Start`, async () => {
     const s = await open();
     await s.to({ kind: 'instructions', aimAllowed: true, holdLeftS: null, reconnecting: false });
-    expect(stepText()).toHaveTextContent(`Step 2 of ${STEP_COUNT}`);
+    expect(stepText()).toBe(`Step 2 of ${STEP_COUNT}`);
     expect(screen.queryByTestId('wizard-hold-left')).toBeNull();
     await s.to({ kind: 'instructions', aimAllowed: true, holdLeftS: 42, reconnecting: true });
     expect(screen.getByTestId('wizard-hold-left')).toHaveTextContent('Finish setup within 0:42');
@@ -248,7 +252,7 @@ describe('the steps', () => {
     await s.to({ kind: 'instructions', aimAllowed: false, holdLeftS: null, reconnecting: false });
     expect(screen.getByTestId('wizard-instructions-aimed-elsewhere')).toHaveTextContent('Your other phone already aimed DashPal.');
     expect(screen.queryByTestId('wizard-instructions-steps')).toBeNull();
-    expect(stepText()).toHaveTextContent('');
+    expect(stepText()).toBe('');
     await tap('wizard-next');
     expect(s.answers).toEqual(['next']);
   });
@@ -279,7 +283,7 @@ describe('the steps', () => {
   it(`screen 3: “Step 3 of ${STEP_COUNT}”, the picture with Next; Cancel says DashPal will be unpaired; a refusal Try again can help with starts it again`, async () => {
     const s = await open();
     await s.to({ kind: 'aim', status: 'starting', reason: null, holdLeftS: null, reconnecting: false });
-    expect(stepText()).toHaveTextContent(`Step 3 of ${STEP_COUNT}`);
+    expect(stepText()).toBe(`Step 3 of ${STEP_COUNT}`);
     expect(screen.getByTestId('wizard-aim-title').props.accessibilityLabel).toBe(`Step 3 of ${STEP_COUNT}. Aim DashPal`);
     expect(screen.getByTestId('aim-video')).toBeOnTheScreen();
     expect(screen.getByTestId('aim-hint')).toHaveTextContent('Starting the camera…');
@@ -327,7 +331,7 @@ describe('the steps', () => {
     expect(screen.getByTestId('wizard-connect-title')).toHaveTextContent('Finishing…');
     expect(screen.getByTestId('wizard-connect-body')).toHaveTextContent('Reconnecting…');
     expect(say).toHaveBeenLastCalledWith('Reconnecting…');
-    expect(stepText()).toHaveTextContent('');
+    expect(stepText()).toBe('');
     await tap('wizard-cancel');
     expect(screen.getByTestId('wizard-cancel-confirm-body')).toHaveTextContent('DashPal will be unpaired from this phone and ready to pair again.');
     await tap('wizard-cancel-stop');
@@ -346,7 +350,7 @@ describe('the steps', () => {
     expect(screen.queryByTestId('wizard-done-phones')).toBeNull();
     expect(screen.queryByTestId('wizard-done-not-all-yours')).toBeNull();
     expect(screen.queryByTestId('wizard-cancel')).toBeNull();
-    expect(stepText()).toHaveTextContent('');
+    expect(stepText()).toBe('');
     expect(say).toHaveBeenCalledWith('DashPal is ready');
     expect(haptics.notificationAsync).toHaveBeenCalledWith('success');
     await s.to({ kind: 'done', paired: PAIRED, phones: 3, notAllYours: true, aimedElsewhere: true });

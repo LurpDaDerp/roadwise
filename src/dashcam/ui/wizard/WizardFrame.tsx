@@ -3,7 +3,7 @@ import { Modal, Pressable, ScrollView, View, type GestureResponderEvent } from '
 import Animated, { LinearTransition, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Text, useTheme } from '@/ui';
+import { StepDots, Text, useTheme } from '@/ui';
 
 import { dashpalCopy } from '../../copy';
 
@@ -15,10 +15,12 @@ export const SWIPE_CANCEL_PT = 40;
 export const BODY_RESIZE_MS = 260;
 
 /**
- * The setup's bottom sheet, local to the wizard so it can be restyled on its own: a scrim, a panel
- * that springs up (no slide under Reduce Motion) with a grabber, a header with Cancel on the left and
- * the step number in the middle, and a body whose height follows its step. The scrim, Android back
- * and a downward swipe on the grabber all call `onRequestCancel` (the sheet decides: ask, or close).
+ * The setup's bottom sheet, in the app's BottomSheet look (a floating rounded panel over a scrim,
+ * a grabber, ink step pills) but with the setup's own rules: the panel springs up (no slide under
+ * Reduce Motion), the header has Cancel on the left as a paper capsule and the step pills in the
+ * middle, and the body's height follows its step. The scrim, Android back and a downward swipe on
+ * the grabber all call `onRequestCancel` (the sheet decides: ask, or close); the panel follows a
+ * swipe down and springs back, since closing always asks first.
  * `cancel` false hides Cancel (done, finishing); `overlay` (the confirmation) renders under the body,
  * which dims and goes inert meanwhile (`dimmed`). A body taller than the panel's 92% scrolls, and the
  * confirmation keeps its full height, so its buttons always stay on screen.
@@ -26,6 +28,8 @@ export const BODY_RESIZE_MS = 260;
 export function WizardFrame({
   visible,
   step,
+  stepIndex = null,
+  stepCount = 0,
   cancel = true,
   onRequestCancel,
   overlay,
@@ -33,7 +37,11 @@ export function WizardFrame({
   children,
 }: {
   visible: boolean;
+  /** The step's spoken name ("Step 1 of 3"), or null. */
   step: string | null;
+  /** The step's number (1-based) for the pills, or null for none. */
+  stepIndex?: number | null;
+  stepCount?: number;
   cancel?: boolean;
   onRequestCancel(): void;
   overlay?: ReactNode;
@@ -57,9 +65,16 @@ export function WizardFrame({
   const touchStart = (e: GestureResponderEvent) => {
     swipeFrom.current = e.nativeEvent.pageY;
   };
+  // The panel follows the finger down (not up) and springs back on release.
+  const touchMove = (e: GestureResponderEvent) => {
+    const from = swipeFrom.current;
+    if (from === null || th.reduceMotion) return;
+    rise.set(Math.max(0, e.nativeEvent.pageY - from));
+  };
   const touchEnd = (e: GestureResponderEvent) => {
     const from = swipeFrom.current;
     swipeFrom.current = null;
+    if (!th.reduceMotion) rise.set(withSpring(0, th.motion.spring.gentle));
     if (from !== null && e.nativeEvent.pageY - from >= SWIPE_CANCEL_PT) onRequestCancel();
   };
 
@@ -79,27 +94,33 @@ export function WizardFrame({
           style={[
             {
               maxHeight: '92%',
+              marginHorizontal: th.space.sm,
+              marginBottom: th.space.sm,
               backgroundColor: th.colors.surface,
-              borderTopLeftRadius: th.radius.xl,
-              borderTopRightRadius: th.radius.xl,
+              borderRadius: th.radius.xl,
               borderCurve: 'continuous',
-              paddingBottom: Math.max(insets.bottom, th.space.lg),
+              borderWidth: th.scheme === 'dark' ? 1 : 0,
+              borderColor: th.colors.divider,
+              paddingBottom: Math.max(insets.bottom - th.space.sm, th.space.lg),
               boxShadow: th.elevation.overlay,
+              overflow: 'hidden',
             },
             panelStyle,
           ]}
         >
           <View
             onTouchStart={touchStart}
+            onTouchMove={touchMove}
             onTouchEnd={touchEnd}
+            onTouchCancel={touchEnd}
             accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
             style={{ height: 28, alignItems: 'center', justifyContent: 'center' }}
             testID="wizard-grabber"
           >
-            <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: th.colors.border }} />
+            <View style={{ width: 44, height: 5, borderRadius: 3, backgroundColor: th.colors.border }} />
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: th.size.touch, paddingHorizontal: th.space.sm }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: th.size.touch, paddingHorizontal: th.space.md }}>
             <View style={{ flex: 1, alignItems: 'flex-start' }}>
               {cancel ? (
                 <Pressable
@@ -107,18 +128,32 @@ export function WizardFrame({
                   accessibilityLabel={copy.cancelLabel}
                   onPress={onRequestCancel}
                   hitSlop={8}
-                  style={({ pressed }) => ({ minHeight: th.size.touch, minWidth: th.size.touch, justifyContent: 'center', paddingHorizontal: th.space.sm, opacity: pressed ? 0.6 : 1 })}
+                  style={({ pressed }) => ({ minHeight: th.size.touch, minWidth: th.size.touch, justifyContent: 'center', opacity: pressed ? 0.6 : 1 })}
                   testID="wizard-cancel"
                 >
-                  <Text variant="headline" tone="accent">
+                  {/* A paper capsule with a hairline (the secondary button's look), its 44 pt target around it. */}
+                  <View
+                    style={{
+                      minHeight: 36,
+                      justifyContent: 'center',
+                      paddingHorizontal: th.space.md,
+                      borderRadius: th.radius.pill,
+                      borderWidth: 1,
+                      borderColor: th.colors.border,
+                      backgroundColor: th.colors.surface,
+                    }}
+                  >
+                    <Text variant="subhead" style={{ fontWeight: '600' }}>
                     {copy.cancel}
-                  </Text>
+                    </Text>
+                  </View>
                 </Pressable>
               ) : null}
             </View>
-            <Text variant="footnote" tone="muted" testID="wizard-step-number" accessibilityElementsHidden importantForAccessibility="no">
-              {step ?? ''}
-            </Text>
+            {/* The pills are not read out: each step's title says where the driver is. */}
+            <View testID="wizard-step-number" accessibilityLabel={step ?? undefined} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+              {stepIndex !== null && stepCount > 0 ? <StepDots count={stepCount} current={stepIndex - 1} /> : null}
+            </View>
             <View style={{ flex: 1 }} />
           </View>
           {/* The body shrinks to the panel's 92% and scrolls; the confirmation keeps its height under it. */}
