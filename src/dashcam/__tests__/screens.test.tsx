@@ -8,11 +8,12 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 import { useState } from 'react';
 import { Pressable } from 'react-native';
 
+import type { AppStateLike } from '@/data/foreground';
 import { appWorld, clearQueryClients, fakeAdapter, tap } from '@/features/permissions/__fixtures__/harness';
 
 import { createFakeDashcamRuntime, PAIRED } from '../__fixtures__/fakeRuntime';
 import { dashpalCopy } from '../copy';
-import { SNOOZE_MS, DETECT_PULL_EVERY_MS } from '../detector';
+import { SNOOZE_MS, DETECT_EVERY_MS, DETECT_PULL_EVERY_MS } from '../detector';
 import { SNOOZES_KEY } from '../keys';
 import { PAIRING_NEW, PAIRING_OPEN } from '../protocol';
 import { setActiveDashcam } from '../registry';
@@ -357,11 +358,12 @@ describe('Home: the card of a DashPal ready to pair', () => {
   function nearby(hits: ScanHit[], state: Parameters<typeof createFakeDashcamRuntime>[0] = {}) {
     const rt = createFakeDashcamRuntime({ btOptIn: true, ...state });
     const scans: string[][] = [];
+    const stops = { n: 0 };
     rt.transportValue = {
       scan: async (o: { services: string[]; onHit(h: ScanHit): void }) => {
         scans.push(o.services);
         for (const h of hits) o.onHit(h);
-        return { stop: async () => {} };
+        return { stop: async () => void (stops.n += 1) };
       },
     } as unknown as DashcamTransport;
     setActiveDashcam(rt);
@@ -372,12 +374,28 @@ describe('Home: the card of a DashPal ready to pair', () => {
       adapter: fakeAdapter(undefined, { bluetoothNow: 'granted' }),
       speedMph: async () => 0,
       now: () => clock.t,
-      sleep: async (ms: number) => void (clock.t += ms),
-      appState: { currentState: 'active', addEventListener: () => ({ remove: () => {} }) },
+      sleep: (async (ms: number) => void (clock.t += ms)) as (ms: number) => Promise<void>,
+      appState: { currentState: 'active', addEventListener: () => ({ remove: () => {} }) } as AppStateLike,
     };
-    return { rt, scans, clock, deps, flow };
+    return { rt, scans, stops, clock, deps, flow };
   }
   const NEW: ScanHit = { id: 'P-1A2B', name: 'DashPal-1A2B', rssi: -50, adv: 'new' };
+
+  /** RoadWise's AppState, moved by the test. */
+  function movingAppState() {
+    const fns = new Set<(s: string) => void>();
+    return {
+      currentState: 'active',
+      addEventListener: (_type: 'change', fn: (s: string) => void) => {
+        fns.add(fn);
+        return { remove: () => void fns.delete(fn) };
+      },
+      to: (s: string) =>
+        act(async () => {
+          for (const fn of [...fns]) fn(s);
+        }),
+    };
+  }
 
   it('a DashPal with no phone paired nearby: “Pair DashPal-1A2B?” · “A new DashPal is nearby.”, one button that opens the setup sheet on it', async () => {
     const n = nearby([NEW, { id: 'P-FAR', name: 'DashPal-FFFF', rssi: -90, adv: 'new' }]);
@@ -469,6 +487,51 @@ describe('Home: the card of a DashPal ready to pair', () => {
     await act(async () => {});
     expect(n.scans).toEqual([]);
     expect(n.deps.adapter.log).toEqual(['bluetooth']);
+  });
+
+  it('RoadWise back in front with Home showing looks again (a minute after the last scan); sooner it does not', async () => {
+    const hits: ScanHit[] = [NEW];
+    const n = nearby(hits);
+    const app = movingAppState();
+    n.deps.appState = app;
+    const w = await appWorld();
+    await w.render(<HomeDashpal deps={n.deps} />);
+    expect(await screen.findByTestId('home-dashpal-pair')).toBeOnTheScreen();
+    expect(n.scans).toHaveLength(1);
+    hits.length = 0;
+    await app.to('background');
+    await app.to('active');
+    expect(n.scans).toHaveLength(1);
+    expect(screen.getByTestId('home-dashpal-pair')).toBeOnTheScreen();
+    n.clock.t += DETECT_EVERY_MS;
+    await app.to('background');
+    await app.to('active');
+    await waitFor(() => expect(screen.queryByTestId('home-dashpal-pair')).toBeNull());
+    expect(n.scans).toHaveLength(2);
+  });
+
+  it('RoadWise leaving the front stops a scan in progress, and what it heard offers no card', async () => {
+    const n = nearby([NEW]);
+    const app = movingAppState();
+    n.deps.appState = app;
+    let waiting: (() => void) | null = null;
+    n.deps.sleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        waiting = () => {
+          n.clock.t += ms;
+          resolve();
+        };
+      });
+    const w = await appWorld();
+    await w.render(<HomeDashpal deps={n.deps} />);
+    await waitFor(() => expect(waiting).not.toBeNull());
+    expect(n.scans).toHaveLength(1);
+    expect(n.stops.n).toBe(0);
+    await app.to('background');
+    expect(n.stops.n).toBe(1);
+    await act(async () => waiting?.());
+    await act(async () => {});
+    expect(screen.queryByTestId('home-dashpal-pair')).toBeNull();
   });
 
   it('pull to refresh looks again (10 s after the last scan); a scan that no longer hears it takes the card down', async () => {

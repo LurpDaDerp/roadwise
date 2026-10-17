@@ -207,7 +207,7 @@ test('a check while one scans (not cut short): already scanning', async () => {
   let release: () => void = () => {};
   const r = rig({ sleep: () => new Promise<void>((resolve) => (release = () => resolve())) });
   const first = r.d.check();
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(() => resolve()));
   expect(await r.d.check()).toEqual({ kind: 'skipped', why: 'already scanning' });
   r.clock.t += DETECT_SCAN_SECONDS * 1000;
   release();
