@@ -1,4 +1,3 @@
-import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 
@@ -6,29 +5,29 @@ import type { PermissionsAdapter } from '@/core/permissions';
 import { dashpalCopy } from '@/dashcam/copy';
 import { COMMAND, SOUND } from '@/dashcam/protocol';
 import { AddPhoneSheet } from '@/dashcam/ui/AddPhoneSheet';
-import { setupHref } from '@/dashcam/ui/SetupScreen';
 import { dashcamStatus } from '@/dashcam/ui/status';
 import { useDashcamRuntime, useDashcamState } from '@/dashcam/ui/useDashcam';
+import { PairWizardSheet } from '@/dashcam/ui/wizard/PairWizardSheet';
+import type { SetupFlowDeps } from '@/dashcam/ui/wizard/useSetupFlow';
+import type { SetupStart } from '@/dashcam/setup';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { Banner, Button, Card, Divider, Screen, Sheet, Text, ToggleRow, useTheme } from '@/ui';
 
 import { TopBar } from './parts';
-import { SETTINGS_HREFS } from './routes';
 
 const copy = dashpalCopy.screen;
 
 /**
  * `/settings/dashcam` (Settings › Driving › DashPal). Unpaired: what DashPal is and "Set up
- * DashPal". Paired: the link's status and its fix (Set up again for a DashPal that no longer knows
+ * DashPal" (the setup sheet, looking for a DashPal in pairing mode). Paired: the link's status and its fix (Set up again for a DashPal that no longer knows
  * this phone or a device that cannot prove it is the DashPal), how many phones are paired with the
  * dashcam (its STATUS count, while connected; from 2, how to remove one), the one-time notice of a
  * phone this phone did not add, "Also beep on DashPal", a test sound, recalibrate, "Add another
  * phone" (only while connected: opens the dashcam's pairing mode for one phone for 2 minutes, with
  * the time left) and "Forget DashPal".
  */
-export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAdapter; now?: () => number } }) {
+export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAdapter; now?: () => number; setup?: SetupFlowDeps } }) {
   const th = useTheme();
-  const router = useRouter();
   const runtime = useDashcamRuntime();
   const state = useDashcamState();
   const status = dashcamStatus(state);
@@ -37,6 +36,8 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
   const [confirmForget, setConfirmForget] = useState(false);
   const [working, setWorking] = useState(false);
   const [sheet, setSheet] = useState<{ at: number } | null>(null);
+  /** the setup sheet: search mode (Set up DashPal) or the paired DashPal (Set up again) */
+  const [setup, setSetup] = useState<SetupStart | null>(null);
   const paired = state?.link.paired ?? null;
   const connected = state?.link.lifecycle === 'connected';
   const phones = connected ? (state?.link.status?.bondCount ?? null) : null;
@@ -95,7 +96,7 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
               {copy.intro}
             </Text>
           </Card>
-          <Button label={copy.setUp} onPress={() => router.push(SETTINGS_HREFS.dashcamSetup)} testID="dashcam-setup" />
+          <Button label={copy.setUp} onPress={() => setSetup({})} testID="dashcam-setup" />
         </View>
       ) : (
         <View style={{ gap: th.space.lg }}>
@@ -129,7 +130,7 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
             ) : null}
             {status.kind === 'not_allowed' ? <Button label={copy.fix.openSettings} variant="secondary" size="sm" onPress={openSettings} testID="dashcam-open-settings" /> : null}
             {repairable ? (
-              <Button label={copy.fix.setUpAgain} variant="secondary" size="sm" onPress={() => router.push(setupHref({ again: true }))} testID="dashcam-repair" />
+              <Button label={copy.fix.setUpAgain} variant="secondary" size="sm" onPress={() => setSetup({ again: true })} testID="dashcam-repair" />
             ) : null}
           </Card>
 
@@ -160,6 +161,7 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
         </View>
       )}
 
+      <PairWizardSheet start={setup} onClose={() => setSetup(null)} deps={{ adapter: deps.adapter, ...deps.setup }} />
       {paired ? <AddPhoneSheet openedAt={sheet?.at ?? null} onClose={() => setSheet(null)} now={now} /> : null}
 
       <Sheet visible={confirmForget} onClose={() => setConfirmForget(false)} title={copy.forgetConfirm.title} testID="dashcam-forget-sheet">

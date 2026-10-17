@@ -59,11 +59,14 @@ function scriptedFlow() {
     retry: async () => void answers.push('retry'),
     cancel: async () => void (cancelled += 1),
   };
+  const bases: SetupDeps[] = [];
   return {
-    make: (_base: SetupDeps) => {
+    make: (base: SetupDeps) => {
       made += 1;
+      bases.push(base);
       return { ...flow };
     },
+    bases,
     answers,
     starts,
     made: () => made,
@@ -376,6 +379,34 @@ describe('the steps', () => {
     const s = await open();
     await s.to({ kind: 'cancelled' });
     expect(outcomes).toEqual(['closed']);
+  });
+});
+
+describe('the flow’s wiring', () => {
+  it('reads the drive host, the runtime and the paired DashPal’s refused key live; closing the sheet cancels the flow', async () => {
+    const rt = createFakeDashcamRuntime();
+    setActiveDashcam(rt);
+    const s = scriptedFlow();
+    const w = await appWorld();
+    await w.render(<Host s={s} />);
+    const base = s.bases[s.bases.length - 1]!;
+    expect(base.isBusy()).toBe(false); // no drive host mounted: never busy
+    base.notePhones?.('a4cf12b3c4d5', 2);
+    expect(rt.log).toContain('notePhones:a4cf12b3c4d5:2');
+    expect(base.keyRefused(PAIRED.dashcamId)).toBe(false);
+    rt.set({ link: { paired: PAIRED, lifecycle: 'needs_repair', repairCause: 'unknown_phone' } });
+    expect(base.keyRefused(PAIRED.dashcamId)).toBe(true);
+    expect(base.keyRefused('a4cf12b3c401')).toBe(false);
+    rt.set({ link: { repairCause: 'downgrade' } });
+    expect(base.keyRefused(PAIRED.dashcamId)).toBe(false);
+    expect(base.paired()).toEqual(PAIRED);
+    base.stepAside();
+    await base.resumePaired();
+    expect(rt.log).toEqual(expect.arrayContaining(['stepAside', 'resumePaired']));
+    expect(s.cancelled()).toBe(0);
+    await tap('wizard-cancel');
+    await tap('wizard-cancel-stop');
+    expect(s.cancelled()).toBe(1);
   });
 });
 

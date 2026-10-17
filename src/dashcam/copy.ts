@@ -63,8 +63,6 @@ export const dashpalCopy = {
   },
 
   setup: {
-    title: 'Set up DashPal',
-    busy: 'Finish your drive first.',
     permission: 'RoadWise needs Bluetooth to find your DashPal.',
     denied: 'Bluetooth isn’t allowed for RoadWise. Allow it in Settings, then try again.',
     off: 'Turn Bluetooth on, then try again.',
@@ -168,7 +166,6 @@ export const dashpalCopy = {
           : 'Setting it up uses Location to find it.',
     find: 'Find my DashPal',
     notNow: 'Not now',
-    continue: 'Continue',
   },
 
   /** The in-app banner for a DashPal alert (HUD and other screens): the spoken words. */
