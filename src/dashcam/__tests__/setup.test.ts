@@ -437,6 +437,45 @@ describe('Cancel, on both sides', () => {
     expect(await r.secrets.readPendingAuth()).toBeNull();
   });
 
+  test('while PAIR_FIN is answered: the DashPal already holds the phone, so it reconnects under the new key and sends COMMAND 9; the DashPal is ready to pair again at once', async () => {
+    const r = rig();
+    const w0 = r.ble.onWrite!;
+    r.ble.onWrite = (w) => {
+      if (w.characteristic === AUTH_CHAR && w.bytes[0] === 0x11) void r.flow.cancel();
+      return w0(w);
+    };
+    void r.flow.start();
+    await r.until('confirm');
+    r.flow.pair();
+    expect(await untilEnd(r)).toEqual({ kind: 'cancelled' });
+    expect(r.ops().at(-1)).toBe(9);
+    expect(r.cam().prov).toBeNull();
+    expect(r.cam().windowOpen).toBe(true);
+    expect(r.cam().phones.size).toBe(0);
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect(await r.secrets.readAuth()).toBeNull();
+    expect(await r.secrets.readOrphan()).toBeNull();
+  });
+
+  test('while PAIR_FIN is answered and the DashPal is out of reach: no orphan kept, the key gone (the DashPal undoes its hold by itself)', async () => {
+    const r = rig();
+    const w0 = r.ble.onWrite!;
+    r.ble.onWrite = (w) => {
+      if (w.characteristic === AUTH_CHAR && w.bytes[0] === 0x11) {
+        void r.flow.cancel();
+        r.ble.connectMode.set(w.id, 'reject');
+      }
+      return w0(w);
+    };
+    void r.flow.start();
+    await r.until('confirm');
+    r.flow.pair();
+    expect(await untilEnd(r)).toEqual({ kind: 'cancelled' });
+    expect(r.ops()).toEqual([]);
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect(await r.secrets.readOrphan()).toBeNull();
+  });
+
   test('while the commit is answered, Cancel does nothing: the commit decides', async () => {
     const r = rig();
     await setUp(r, {}, { next: false });

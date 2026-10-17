@@ -1132,8 +1132,10 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
   /**
    * Whatever the DashPal holds for this setup is undone, the connection released and the key gone:
    * COMMAND 9 on a live hold; after a commit that went unanswered (stored or still held), COMMAND 4
-   * under the setup's key, reconnecting once for it. Only a DashPal that could not be reached may
-   * still hold the key: it is kept as the orphan.
+   * under the setup's key, reconnecting once for it. Stopped while PAIR_FIN's verdict is read (the
+   * DashPal may already hold the phone, with no session yet), it reconnects once under the new key
+   * for COMMAND 9 too. Only a DashPal that could not be reached may still hold the key: after a
+   * commit it is kept as the orphan; a hold the DashPal undoes by itself a minute later.
    */
   async function undo(): Promise<void> {
     resumeAim = false;
@@ -1141,8 +1143,11 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     stopSpeed();
     const key = pending;
     let reached = false;
-    if (stage === 'commit' && key && !linkUp()) reached = (await reconnectToUndo(key)) === 'unknown';
-    if ((stage === 'hold' || stage === 'commit') && linkUp()) {
+    if ((stage === 'commit' || stage === 'fin') && key && !linkUp()) {
+      const got = await reconnectToUndo(key);
+      if (stage === 'commit') reached = got === 'unknown';
+    }
+    if ((stage === 'hold' || stage === 'commit' || stage === 'fin') && linkUp()) {
       results = [];
       // COMMAND 4 forgets a stored phone and, from the hold's connection, cancels the hold as 9 does.
       if (await command(stage === 'commit' ? COMMAND.FORGET_ME : COMMAND.SETUP_CANCEL)) {
