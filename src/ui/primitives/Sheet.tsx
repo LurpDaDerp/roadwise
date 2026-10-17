@@ -95,6 +95,7 @@ export function BottomSheet({
   }
 
   const still = t.reduceMotion;
+  const leaving = mounted && !visible;
   useEffect(() => {
     if (visible) {
       fade.value = withTiming(1, { duration: t.motion.base });
@@ -165,7 +166,14 @@ export function BottomSheet({
       navigationBarTranslucent
       onRequestClose={close}
     >
-      <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: 'flex-end' }}>
+      <KeyboardAvoidingView
+        behavior="padding"
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        // A sheet on its way out can no longer be touched or read.
+        pointerEvents={leaving ? 'none' : 'auto'}
+        accessibilityElementsHidden={leaving}
+        importantForAccessibility={leaving ? 'no-hide-descendants' : 'auto'}
+      >
         <Animated.View
           style={[{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: t.colors.scrim }, scrim]}
         >
