@@ -1,15 +1,15 @@
-// The link v2 transport on the fake BLE stack and the fake dashcam (pairing v2 §8, §15.2): the
+// The link v3 transport on the fake BLE stack and the fake dashcam: the
 // connect order, the session on every connection, sealed frames both ways, the soft repair and the
 // failed verifications that never halt, transport faults that are never verdicts, iOS restore,
-// Android's paused timers, and the setup operations.
+// Android's paused timers, and the setup operations (the aiming picture's VIEW records included).
 import { createPausableTimerBase } from '@/lib/__fixtures__/pausableTimers';
 import { createPumpedTimers } from '@/lib/timers';
 
 import { createFakeDashcam, type FakeDashcam } from '../__fixtures__/fakeDashcam';
-import { DIR_DP, DIR_PD, openRaw, R, sealRaw } from '../auth';
+import { DIR_DP, DIR_PD, openRaw, R, sealRaw, sealView } from '../auth';
 import { createFakeBle, type FakeBle } from '../fakeTransport';
 import type { BluetoothState, RepairCause } from '../link';
-import { AUTH_CHAR, DASHPAL_SERVICE, decodeRx, encodeRx, encodeTx, PAIRING_NEW, RX_CHAR, toHex, type DashcamInfo } from '../protocol';
+import { AUTH_CHAR, DASHPAL_SERVICE, decodeRx, encodeRx, encodeTx, PAIRING_NEW, PAIRING_OPEN, PAIRING_SETUP, RX_CHAR, toHex, VIEW_CHAR, type DashcamInfo } from '../protocol';
 import {
   BACKOFF_MAX_MS,
   createBleTransport,
@@ -634,15 +634,18 @@ test('frames that opened before a link was attached are buffered and delivered a
 test('setup: the scans pass low latency and aggressive matching (fast); the nearby prompt keeps the default', async () => {
   const r = rig('android');
   const hits: string[] = [];
-  const a = await r.t.scan({ services: [PAIRING_NEW, DASHPAL_SERVICE], seconds: 15, fast: true, onHit: (h) => hits.push(`${h.id}:${h.pairing}`) });
+  const a = await r.t.scan({ services: [PAIRING_NEW, PAIRING_SETUP, PAIRING_OPEN, DASHPAL_SERVICE], seconds: 15, fast: true, onHit: (h) => hits.push(`${h.id}:${h.adv}`) });
   r.ble.advertise({ id: 'X', rssi: -60, advertising: { serviceUUIDs: ['d5a10099-7b3e-4c8a-9f21-0c6e5a7d2b10'] } });
   r.ble.advertise({ id: PID, rssi: -55, advertising: { serviceUUIDs: [DASHPAL_SERVICE.toUpperCase()], localName: 'DashPal-C4D5' } });
+  r.ble.advertise({ id: 'N', rssi: -55, advertising: { serviceUUIDs: [PAIRING_NEW] } });
+  r.ble.advertise({ id: 'H', rssi: -55, advertising: { serviceUUIDs: [PAIRING_SETUP] } });
+  r.ble.advertise({ id: 'O', rssi: -55, advertising: { serviceUUIDs: [PAIRING_OPEN.toUpperCase()] } });
   await a.stop();
   const b = await r.t.scan({ services: [PAIRING_NEW], seconds: 15, onHit: () => {} });
   await b.stop();
-  expect(hits).toEqual([`${PID}:false`]);
+  expect(hits).toEqual([`${PID}:closed`, 'N:new', 'H:setup', 'O:open']);
   expect(r.ble.scans).toEqual([
-    { serviceUUIDs: [PAIRING_NEW, DASHPAL_SERVICE], seconds: 15, scanMode: 2, matchMode: 1 },
+    { serviceUUIDs: [PAIRING_NEW, PAIRING_SETUP, PAIRING_OPEN, DASHPAL_SERVICE], seconds: 15, scanMode: 2, matchMode: 1 },
     { serviceUUIDs: [PAIRING_NEW], seconds: 15 },
   ]);
 });
@@ -650,7 +653,7 @@ test('setup: the scans pass low latency and aggressive matching (fast); the near
 test('setup connect with no OS bond never calls removeBond (it would never settle); with a bond listed, it is removed once first', async () => {
   const r = rig('android');
   const before = r.clock.now();
-  expect(await r.t.setupConnect(PID)).toEqual({ auth: true });
+  expect(await r.t.setupConnect(PID)).toEqual({ auth: true, view: true });
   expect(r.clock.now()).toBe(before);
   expect(r.ble.calls.filter((c) => /Bond/.test(c))).toEqual(['getBondedPeripherals']);
   await r.t.disconnect(PID);
@@ -723,4 +726,71 @@ test('the sealed frames are those of the shared format (the dashcam opens what t
   expect(openRaw(k, DIR_PD, w)?.ctr).toBe(7);
   expect(openRaw(k, DIR_DP, w)).toBeNull();
   void authOps;
+});
+
+describe('the aiming picture on a setup connection (VIEW)', () => {
+  /** A setup connection with a session up; the dashcam's VIEW key from the wiretap of its handshake. */
+  async function viewRig() {
+    const r = rig('android');
+    await r.t.setupConnect(PID);
+    const info = (await r.t.readInfo(PID))!;
+    expect(await r.t.startSession(PID, info, TARGET.auth)).toMatchObject({ kind: 'up' });
+    // the dashcam's side of the session: its k_dp seals the records
+    return { r, kdp: r.cam.conn()!.kdp! };
+  }
+
+  test('subscribeView starts VIEW notifications and hands each opened record to its listener; replays and TX frames on VIEW are dropped', async () => {
+    const { r, kdp } = await viewRig();
+    const got: number[][] = [];
+    await r.t.subscribeView(PID, (rec) => got.push(rec));
+    expect(r.ble.calls).toContain(`startNotification:${PID}:0007`);
+    const rec = [1, 1, 1, 0, 3, 0, 0, 0, 0xff, 0xd8, 0xd9];
+    const w0 = Array.from(sealView(kdp, 0, rec));
+    r.ble.notifyView(PID, w0);
+    r.ble.notifyView(PID, w0);
+    r.ble.notifyView(PID, Array.from(sealRaw(kdp, DIR_DP, 1, [8, 1, 1])));
+    r.ble.notifyView(PID, Array.from(sealView(kdp, 1, rec)));
+    expect(got).toEqual([rec, rec]);
+    // a VIEW record on TX never reaches the frame handler
+    const frames: number[][] = [];
+    await r.t.subscribeSealed(PID, (b) => frames.push(b));
+    r.ble.notify(PID, Array.from(sealView(kdp, 2, rec)));
+    expect(frames).toEqual([]);
+  });
+
+  test('with no listener nothing is kept; unsubscribeView stops the notifications', async () => {
+    const { r, kdp } = await viewRig();
+    const got: number[][] = [];
+    r.ble.notifyView(PID, Array.from(sealView(kdp, 0, [1, 1, 1, 0, 1, 0, 0, 0, 7])));
+    await r.t.subscribeView(PID, (rec) => got.push(rec));
+    expect(got).toEqual([]);
+    await r.t.unsubscribeView(PID);
+    expect(r.ble.calls).toContain(`stopNotification:${PID}:0007`);
+    r.ble.notifyView(PID, Array.from(sealView(kdp, 1, [1, 1, 1, 0, 1, 0, 0, 0, 7])));
+    expect(got).toEqual([]);
+  });
+
+  test('32 VIEW records that do not open end the setup connection', async () => {
+    const { r } = await viewRig();
+    await r.t.subscribeView(PID, () => {});
+    const junk = new Uint8Array(16).fill(9);
+    for (let i = 0; i < SEAL_FAIL_MAX - 1; i++) r.ble.notifyView(PID, Array.from(sealView(junk, i, [1, 2, 3])));
+    expect(r.t.setupLinkUp(PID)).toBe(true);
+    r.ble.notifyView(PID, Array.from(sealView(junk, 99, [1, 2, 3])));
+    await flush();
+    expect(r.ble.calls).toContain(`disconnect:${PID}`);
+  });
+
+  test('a cache without VIEW: Android refreshes it once; the answer says what was found', async () => {
+    const r = rig('android');
+    r.ble.peripheral(PID)!.staleCache = true;
+    expect(await r.t.setupConnect(PID)).toEqual({ auth: true, view: true });
+    expect(r.ble.calls.filter((c) => c.startsWith('refreshCache'))).toHaveLength(1);
+    await r.t.disconnect(PID);
+    const old = rig('android');
+    old.ble.peripheral(PID)!.noViewChar = true;
+    expect(await old.t.setupConnect(PID)).toEqual({ auth: true, view: false });
+    expect(old.ble.calls.filter((c) => c.startsWith('refreshCache'))).toHaveLength(1);
+    expect(VIEW_CHAR.slice(4, 8)).toBe('0007');
+  });
 });

@@ -1,5 +1,5 @@
-// The DashPal byte pipe over react-native-ble-manager 12.5.3 (plan §3.3, §7.4; link v2: pairing v2
-// §8). The only module that imports ble-manager, and only lazily (`getDashcamTransport`): its module
+// The DashPal byte pipe over react-native-ble-manager 12.5.3 (plan §3.3, §7.4; link v3,
+// docs/BLE_PROTOCOL.md §2-§4). The only module that imports ble-manager, and only lazily (`getDashcamTransport`): its module
 // constructor throws where the native module is missing (Jest, Expo Go). Everything else here runs
 // on an injected `BleApi`, so the reconnect, restore, session and write-queue rules are tested
 // against a fake.
@@ -12,12 +12,12 @@
 // There is no Bluetooth bonding: every connection proves the pairing key on both sides
 // (docs/BLE_PROTOCOL.md §2.2) and every frame travels sealed (§3.3). After a connect: Android
 // `requestMTU(247)`, `retrieveServices` (no AUTH characteristic: Android refreshes its cache once),
-// read INFO (`mac`, link v2, this connection's `Nc`), then SESSION_REQ / SESSION_RESP (the dashcam's
+// read INFO (`mac`, link v3, this connection's `Nc`), then SESSION_REQ / SESSION_RESP (the dashcam's
 // proof checked) / SESSION_FIN / RESULT, all within 5 s; then subscribe to TX and the link asks for
 // HELLO. Nothing sealed is ever sent before the dashcam proved itself. Each handshake step waits on a
 // native callback only, so it completes with JS timers paused (Android in the background).
 //
-// Results (§8.2): R_UNKNOWN_PHONE or INFO below link v2 is a soft repair (`needs_repair`): never a
+// Results (§8.2): R_UNKNOWN_PHONE or an INFO that does not speak link v3 is a soft repair (`needs_repair`): never a
 // halt, retried in 30 s and then every 60 s, or at once when RoadWise comes to the front or a drive
 // starts (`retryNow`), until a verified session clears it. A wrong dashcam proof, another `mac`, or
 // (iOS) no AUTH characteristic is a failed verification: disconnect, the usual backoff (1 -> 30 s), and
@@ -37,7 +37,7 @@ import { processTimers } from '@/lib/timers';
 
 import { createSealer, parseAuthRecord, proofOk, R, sessionFin, sessionKeys, sessionRequest, type AuthRecord, type Sealer } from './auth';
 import { randomBytes, wipe } from './crypto';
-import { AUTH_CHAR, DASHPAL_SERVICE, INFO_CHAR, PAIRING_NEW, RX_CHAR, TX_CHAR, decodeInfo, fromHex, linkMismatch, type DashcamInfo } from './protocol';
+import { advOf, AUTH_CHAR, DASHPAL_SERVICE, INFO_CHAR, RX_CHAR, TX_CHAR, VIEW_CHAR, decodeInfo, fromHex, linkMismatch, type AdvState, type DashcamInfo } from './protocol';
 import type { BluetoothState, RepairCause } from './link';
 
 export interface BleSub {
@@ -73,6 +73,7 @@ export interface BleApi {
   write(id: string, service: string, characteristic: string, data: number[], maxByteSize?: number): Promise<void>;
   writeWithoutResponse(id: string, service: string, characteristic: string, data: number[], maxByteSize?: number): Promise<void>;
   startNotification(id: string, service: string, characteristic: string): Promise<void>;
+  stopNotification(id: string, service: string, characteristic: string): Promise<void>;
   removeBond(id: string): Promise<void>;
   getBondedPeripherals(): Promise<{ id: string }[]>;
   onDidUpdateState(cb: (e: { state: string }) => void): BleSub;
@@ -90,7 +91,7 @@ export interface TransportSink {
   infoRead(info: DashcamInfo): boolean;
   linkUp(info: DashcamInfo): void;
   linkDown(): void;
-  /** A soft repair: the dashcam says it does not know this phone, or answers below link v2. Retried. */
+  /** A soft repair: the dashcam says it does not know this phone, or does not speak link v3. Retried. */
   needsRepair(cause: RepairCause): void;
   /** Three verifications in a row failed (a device at the paired address that cannot prove it is the DashPal). Retried. */
   unverified(): void;
@@ -101,7 +102,8 @@ export interface ScanHit {
   id: string;
   name: string | null;
   rssi: number;
-  pairing: boolean;
+  /** what its advertised service says: closed, new (no phone paired, window open), setup (a setup live), open (phones paired, window open) */
+  adv: AdvState | null;
 }
 
 /** This phone's key with the paired DashPal (`dashpal.auth`): its id there and the pairing key, hex. */
@@ -149,9 +151,10 @@ export interface DashcamTransport {
   /**
    * Connect for setup. Android: an OS bond with this peripheral (left from link v1) is removed first,
    * only when the phone lists one (ble-manager's removeBond never settles without a bond). Resolves
-   * with whether the AUTH characteristic was found (Android refreshes its cache once first).
+   * with whether the AUTH and VIEW characteristics were found (Android refreshes its cache once
+   * first when either is missing).
    */
-  setupConnect(peripheralId: string, opts?: { timeoutMs?: number }): Promise<{ auth: boolean }>;
+  setupConnect(peripheralId: string, opts?: { timeoutMs?: number }): Promise<{ auth: boolean; view: boolean }>;
   /** The setup connection to this peripheral is still up (no disconnect since `setupConnect`). */
   setupLinkUp(peripheralId: string): boolean;
   readInfo(peripheralId: string): Promise<DashcamInfo | null>;
@@ -164,6 +167,14 @@ export interface DashcamTransport {
   /** The session handshake on a setup connection (after a stored pairing): its sealer is kept for it. */
   startSession(peripheralId: string, info: DashcamInfo, auth: SessionAuth): Promise<SessionOutcome>;
   subscribeSealed(peripheralId: string, onFrame: (bytes: number[]) => void): Promise<() => void>;
+  /**
+   * The setup connection's aiming picture: `startNotification` on VIEW, each record opened under
+   * the session (direction 3, its own replay window) and handed to `onRecord`. One listener; with
+   * none, records are dropped (never buffered).
+   */
+  subscribeView(peripheralId: string, onRecord: (record: number[]) => void): Promise<void>;
+  /** The listener goes and `stopNotification` on VIEW. */
+  unsubscribeView(peripheralId: string): Promise<void>;
   writeSealed(peripheralId: string, bytes: number[]): Promise<void>;
   disconnect(peripheralId: string): Promise<void>;
 }
@@ -233,11 +244,12 @@ export function isIosBondLoss(err: unknown): boolean {
   return false;
 }
 
-/** The services answer lists the AUTH characteristic. */
-function hasAuthChar(services: unknown): boolean {
+/** The services answer lists this characteristic. */
+function hasChar(services: unknown, uuid: string): boolean {
   const list = (services as BleServicesInfo | null)?.characteristics;
-  return Array.isArray(list) && list.some((c) => typeof c?.characteristic === 'string' && same(c.characteristic, AUTH_CHAR));
+  return Array.isArray(list) && list.some((c) => typeof c?.characteristic === 'string' && same(c.characteristic, uuid));
 }
+const hasAuthChar = (services: unknown): boolean => hasChar(services, AUTH_CHAR);
 
 class TimeoutError extends Error {
   constructor(what: string) {
@@ -279,6 +291,9 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
   const setupLinks = new Set<string>();
   const setupSealers = new Map<string, Sealer>();
   const setupFrames = new Map<string, (bytes: number[]) => void>();
+  /** the aiming picture's listener per setup connection, and the records that failed to open there */
+  const setupViews = new Map<string, (record: number[]) => void>();
+  const setupFails = new Map<string, number>();
   let scanHit: ((e: BlePeripheralEvent) => void) | null = null;
 
   function report(e: unknown, ctx: string): void {
@@ -691,6 +706,8 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       pump();
       const lower = e.peripheral.toLowerCase();
       setupLinks.delete(lower);
+      setupFails.delete(lower);
+      for (const id of [...setupViews.keys()]) if (same(id, e.peripheral)) setupViews.delete(id);
       const ss = [...setupSealers.entries()].find(([id]) => same(id, e.peripheral));
       if (ss) {
         ss[1].dispose();
@@ -716,12 +733,17 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     });
     api.onDidUpdateValueForCharacteristic((e) => {
       pump();
+      if (same(e.characteristic, VIEW_CHAR)) {
+        onSetupView(e.peripheral, e.value);
+        return;
+      }
       if (!same(e.characteristic, TX_CHAR)) return;
       const setup = [...setupFrames.entries()].find(([id]) => same(id, e.peripheral));
       if (setup) {
         const s = [...setupSealers.entries()].find(([id]) => same(id, e.peripheral))?.[1];
         const r = s?.open(e.value);
         if (r?.ok) setup[1](r.frame);
+        else if (r && r.why === 'bad') setupFailed(e.peripheral);
         return;
       }
       const t = tgt;
@@ -731,6 +753,28 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     api.onDiscoverPeripheral((e) => {
       scanHit?.(e);
     });
+  }
+
+  /** A setup connection's record or frame did not open: 32 in one session end that connection. */
+  function setupFailed(peripheral: string): void {
+    const lower = peripheral.toLowerCase();
+    const n = (setupFails.get(lower) ?? 0) + 1;
+    setupFails.set(lower, n);
+    if (n < SEAL_FAIL_MAX) return;
+    report(new Error('too many setup frames that did not open'), 'setup seal');
+    setupFails.delete(lower);
+    api.disconnect(peripheral, true).catch((err: unknown) => report(err, 'disconnect (setup seal)'));
+  }
+
+  /** A VIEW notification: opened under the setup session and handed to its listener; nothing without one. */
+  function onSetupView(peripheral: string, value: number[]): void {
+    const listener = [...setupViews.entries()].find(([id]) => same(id, peripheral))?.[1];
+    if (!listener) return;
+    const s = [...setupSealers.entries()].find(([id]) => same(id, peripheral))?.[1];
+    if (!s) return;
+    const r = s.openView(value);
+    if (r.ok) listener(r.frame);
+    else if (r.why === 'bad') setupFailed(peripheral);
   }
 
   /** iOS restored these: keep the paired one (a session again on the kept connection), cancel the rest. */
@@ -892,7 +936,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       scanHit = (e) => {
         const advertised = (e.advertising?.serviceUUIDs ?? []).map((u) => u.toLowerCase());
         if (!advertised.some((u) => wanted.includes(u))) return;
-        onHit({ id: e.id, name: e.advertising?.localName ?? e.name ?? null, rssi: e.rssi, pairing: advertised.includes(PAIRING_NEW) });
+        onHit({ id: e.id, name: e.advertising?.localName ?? e.name ?? null, rssi: e.rssi, adv: advOf(advertised) });
       };
       await api.scan({ serviceUUIDs: services, seconds, allowDuplicates: false, ...(fast ? { scanMode: 2, matchMode: 1 } : {}) });
       return {
@@ -923,11 +967,12 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       setupLinks.add(peripheralId.toLowerCase());
       if (platform === 'android') await gatt('requestMTU', () => api.requestMTU(peripheralId, MTU)).catch((e: unknown) => report(e, 'requestMTU'));
       let services = await gatt('retrieveServices', () => api.retrieveServices(peripheralId));
-      if (!hasAuthChar(services) && platform === 'android' && api.refreshCache) {
+      const complete = (s: unknown): boolean => hasAuthChar(s) && hasChar(s, VIEW_CHAR);
+      if (!complete(services) && platform === 'android' && api.refreshCache) {
         await gatt('refreshCache', () => api.refreshCache!(peripheralId)).catch((e: unknown) => report(e, 'refreshCache'));
         services = await gatt('retrieveServices', () => api.retrieveServices(peripheralId));
       }
-      return { auth: hasAuthChar(services) };
+      return { auth: hasAuthChar(services), view: hasChar(services, VIEW_CHAR) };
     },
 
     setupLinkUp: (peripheralId) => setupLinks.has(peripheralId.toLowerCase()),
@@ -955,6 +1000,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       if (outcome.kind === 'up') {
         setupSealers.get(peripheralId)?.dispose();
         setupSealers.set(peripheralId, outcome.sealer);
+        setupFails.delete(lower);
       }
       return outcome;
     },
@@ -965,6 +1011,17 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       return () => {
         setupFrames.delete(peripheralId);
       };
+    },
+
+    async subscribeView(peripheralId, onRecord) {
+      setupViews.set(peripheralId, onRecord);
+      await gatt('startNotification', () => api.startNotification(peripheralId, DASHPAL_SERVICE, VIEW_CHAR));
+    },
+
+    async unsubscribeView(peripheralId) {
+      setupViews.delete(peripheralId);
+      if (!setupLinks.has(peripheralId.toLowerCase())) return;
+      await gatt('stopNotification', () => api.stopNotification(peripheralId, DASHPAL_SERVICE, VIEW_CHAR)).catch((e: unknown) => report(e, 'stopNotification'));
     },
 
     async writeSealed(peripheralId, bytes) {
@@ -979,6 +1036,8 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
 
     async disconnect(peripheralId) {
       setupFrames.delete(peripheralId);
+      setupViews.delete(peripheralId);
+      setupFails.delete(peripheralId.toLowerCase());
       setupLinks.delete(peripheralId.toLowerCase());
       setupSealers.get(peripheralId)?.dispose();
       setupSealers.delete(peripheralId);

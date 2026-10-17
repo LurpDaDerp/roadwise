@@ -33,7 +33,7 @@ function rig(over: Partial<DetectorDeps> = {}) {
   return { d: createDetector(deps), clock, scans, state, hits, hit: (h: ScanHit) => onHit?.(h), stopped: () => stopped };
 }
 
-const hit = (id: string, rssi: number, pairing = true): ScanHit => ({ id, name: `DashPal-${id}`, rssi, pairing });
+const hit = (id: string, rssi: number, pairing = true): ScanHit => ({ id, name: `DashPal-${id}`, rssi, adv: pairing ? 'new' : 'closed' });
 
 test('row 23: finds the strongest DashPal in pairing mode (RSSI ≥ −80) after a 10 s scan', async () => {
   const r = rig();

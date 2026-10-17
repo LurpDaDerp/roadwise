@@ -603,8 +603,8 @@ describe('the prompt host', () => {
   function scanningRuntime(hits: { id: string; rssi: number }[]) {
     const rt = createFakeDashcamRuntime({ btOptIn: true });
     rt.transportValue = {
-      scan: async (o: { onHit(h: { id: string; name: string | null; rssi: number; pairing: boolean }): void }) => {
-        for (const h of hits) o.onHit({ id: h.id, name: `DashPal-${h.id}`, rssi: h.rssi, pairing: true });
+      scan: async (o: { onHit(h: { id: string; name: string | null; rssi: number; adv: string | null }): void }) => {
+        for (const h of hits) o.onHit({ id: h.id, name: `DashPal-${h.id}`, rssi: h.rssi, adv: 'new' });
         return { stop: async () => {} };
       },
     } as never;

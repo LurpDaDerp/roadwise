@@ -371,7 +371,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
           if (first === null && matches(hit, aim)) first = hit;
           return;
         }
-        if (hit.rssi < MIN_RSSI || !hit.pairing) return;
+        if (hit.rssi < MIN_RSSI || (hit.adv !== 'new' && hit.adv !== 'open')) return;
         const prev = found.get(hit.id);
         if (!prev || hit.rssi > prev.rssi) found.set(hit.id, hit);
         firstAt ??= deps.now();
@@ -411,7 +411,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       seconds: PRESS_WAIT_MS / 1000,
       fast: true,
       onHit: (hit) => {
-        if (sameId(hit.id, id) && hit.pairing) open = true;
+        if (sameId(hit.id, id) && (hit.adv === 'new' || hit.adv === 'open')) open = true;
       },
     });
     stopScan = session.stop;

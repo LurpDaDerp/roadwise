@@ -87,7 +87,7 @@ export function createDetector(deps: DetectorDeps): Detector {
         const session = await deps.scan({
           seconds: DETECT_SCAN_SECONDS,
           onHit: (hit) => {
-            if (!hit.pairing || hit.rssi < DETECT_MIN_RSSI) return;
+            if (hit.adv !== 'new' || hit.rssi < DETECT_MIN_RSSI) return;
             if (paired !== null && hit.id.toLowerCase() === paired.toLowerCase()) return;
             const until = snoozes[hit.id];
             if (typeof until === 'number' && until > deps.now()) return;

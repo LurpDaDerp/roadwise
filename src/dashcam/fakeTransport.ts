@@ -7,7 +7,7 @@
 // peripheral (its promise waits for a BONDED -> NONE broadcast), and a write that fails rejects with
 // a `status=N` text.
 import type { BleApi, BlePeripheralEvent, BleServicesInfo, BleSub } from './transport';
-import { AUTH_CHAR, DASHPAL_SERVICE, IDENTIFY_CHAR, INFO_CHAR, PAIRING_NEW, RX_CHAR, TX_CHAR } from './protocol';
+import { AUTH_CHAR, DASHPAL_SERVICE, IDENTIFY_CHAR, INFO_CHAR, PAIRING_NEW, PAIRING_OPEN, PAIRING_SETUP, RX_CHAR, TX_CHAR, VIEW_CHAR } from './protocol';
 
 type Handler<T> = (e: T) => void;
 
@@ -23,6 +23,8 @@ export interface FakePeripheral {
   noAuthChar?: boolean;
   /** Android's GATT cache is stale: AUTH appears only after `refreshCache` */
   staleCache?: boolean;
+  /** its table has no VIEW characteristic (a stale cache from before link v3 when `staleCache`) */
+  noViewChar?: boolean;
 }
 
 export interface FakeWrite {
@@ -52,6 +54,8 @@ export interface FakeBle extends BleApi {
   peripheral(id: string): FakePeripheral | undefined;
   /** The dashcam sends a TX notification. */
   notify(id: string, bytes: number[]): void;
+  /** The dashcam sends a VIEW notification. */
+  notifyView(id: string, bytes: number[]): void;
   /** The link drops (a disconnect event with these fields). */
   drop(id: string, e?: { status?: number; domain?: string; code?: number }): void;
   /** iOS state restoration hands these back. */
@@ -71,14 +75,17 @@ export interface FakeBle extends BleApi {
   listenerCount(): number;
 }
 
-const TABLE = (auth: boolean): BleServicesInfo => ({
+const TABLE = (auth: boolean, view: boolean): BleServicesInfo => ({
   characteristics: [
     { service: DASHPAL_SERVICE, characteristic: INFO_CHAR },
     { service: DASHPAL_SERVICE, characteristic: IDENTIFY_CHAR },
     { service: DASHPAL_SERVICE, characteristic: TX_CHAR },
     { service: DASHPAL_SERVICE, characteristic: RX_CHAR },
     ...(auth ? [{ service: DASHPAL_SERVICE, characteristic: AUTH_CHAR }] : []),
+    ...(view ? [{ service: DASHPAL_SERVICE, characteristic: VIEW_CHAR }] : []),
     { service: PAIRING_NEW, characteristic: '' },
+    { service: PAIRING_SETUP, characteristic: '' },
+    { service: PAIRING_OPEN, characteristic: '' },
   ].filter((c) => c.characteristic !== ''),
 });
 
@@ -196,7 +203,7 @@ export function createFakeBle(): FakeBle {
       calls.push(`retrieveServices:${id}`);
       fail('retrieveServices');
       const p = peripherals.get(id);
-      return TABLE(!(p?.noAuthChar || p?.staleCache));
+      return TABLE(!(p?.noAuthChar || p?.staleCache), !(p?.noViewChar || p?.staleCache || p?.noAuthChar));
     },
     async refreshCache(id) {
       calls.push(`refreshCache:${id}`);
@@ -240,6 +247,10 @@ export function createFakeBle(): FakeBle {
       calls.push(`startNotification:${id}:${characteristic.slice(4, 8)}`);
       fail('startNotification');
     },
+    async stopNotification(id, _service, characteristic) {
+      calls.push(`stopNotification:${id}:${characteristic.slice(4, 8)}`);
+      fail('stopNotification');
+    },
     removeBond(id) {
       calls.push(`removeBond:${id}`);
       // ble-manager resolves only on the BONDED -> NONE broadcast: with no bond it never settles.
@@ -273,6 +284,9 @@ export function createFakeBle(): FakeBle {
     peripheral: (id) => peripherals.get(id),
     notify(id, bytes) {
       for (const fn of [...handlers.value]) fn({ peripheral: id, characteristic: TX_CHAR, service: DASHPAL_SERVICE, value: [...bytes] });
+    },
+    notifyView(id, bytes) {
+      for (const fn of [...handlers.value]) fn({ peripheral: id, characteristic: VIEW_CHAR, service: DASHPAL_SERVICE, value: [...bytes] });
     },
     drop(id, e = {}) {
       connected.delete(id);
