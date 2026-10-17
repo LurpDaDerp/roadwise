@@ -9,7 +9,7 @@ import { createFakeDashcam, type FakeDashcam } from '../__fixtures__/fakeDashcam
 import { DIR_DP, DIR_PD, openRaw, R, sealRaw } from '../auth';
 import { createFakeBle, type FakeBle } from '../fakeTransport';
 import type { BluetoothState, RepairCause } from '../link';
-import { AUTH_CHAR, DASHPAL_SERVICE, decodeRx, encodeRx, encodeTx, PAIRING_SERVICE, RX_CHAR, toHex, type DashcamInfo } from '../protocol';
+import { AUTH_CHAR, DASHPAL_SERVICE, decodeRx, encodeRx, encodeTx, PAIRING_NEW, RX_CHAR, toHex, type DashcamInfo } from '../protocol';
 import {
   BACKOFF_MAX_MS,
   createBleTransport,
@@ -250,13 +250,13 @@ test('R_UNKNOWN_PHONE: a soft repair, never a halt: retried at 30 s, then every 
   expect(r.k.log.at(-1)).toBe('up:DashPal-C4D5');
 });
 
-test('INFO below link v2: a soft repair (downgrade), retried', async () => {
+test('INFO below link v3: a soft repair (downgrade), retried', async () => {
   const r = rig('android');
-  r.cam.protoMax = 1;
+  r.cam.protoMax = 2;
   await up(r);
   expect(r.k.log).toContain('repair:downgrade');
   expect(r.ble.writes.filter((w) => w.characteristic === AUTH_CHAR)).toEqual([]);
-  r.cam.protoMax = 2;
+  r.cam.protoMax = 3;
   await r.clock.advance(SOFT_REPAIR_FIRST_MS);
   expect(r.t.linked()).toBe(true);
 });
@@ -634,16 +634,16 @@ test('frames that opened before a link was attached are buffered and delivered a
 test('setup: the scans pass low latency and aggressive matching (fast); the nearby prompt keeps the default', async () => {
   const r = rig('android');
   const hits: string[] = [];
-  const a = await r.t.scan({ services: [PAIRING_SERVICE, DASHPAL_SERVICE], seconds: 15, fast: true, onHit: (h) => hits.push(`${h.id}:${h.pairing}`) });
+  const a = await r.t.scan({ services: [PAIRING_NEW, DASHPAL_SERVICE], seconds: 15, fast: true, onHit: (h) => hits.push(`${h.id}:${h.pairing}`) });
   r.ble.advertise({ id: 'X', rssi: -60, advertising: { serviceUUIDs: ['d5a10099-7b3e-4c8a-9f21-0c6e5a7d2b10'] } });
   r.ble.advertise({ id: PID, rssi: -55, advertising: { serviceUUIDs: [DASHPAL_SERVICE.toUpperCase()], localName: 'DashPal-C4D5' } });
   await a.stop();
-  const b = await r.t.scan({ services: [PAIRING_SERVICE], seconds: 15, onHit: () => {} });
+  const b = await r.t.scan({ services: [PAIRING_NEW], seconds: 15, onHit: () => {} });
   await b.stop();
   expect(hits).toEqual([`${PID}:false`]);
   expect(r.ble.scans).toEqual([
-    { serviceUUIDs: [PAIRING_SERVICE, DASHPAL_SERVICE], seconds: 15, scanMode: 2, matchMode: 1 },
-    { serviceUUIDs: [PAIRING_SERVICE], seconds: 15 },
+    { serviceUUIDs: [PAIRING_NEW, DASHPAL_SERVICE], seconds: 15, scanMode: 2, matchMode: 1 },
+    { serviceUUIDs: [PAIRING_NEW], seconds: 15 },
   ]);
 });
 

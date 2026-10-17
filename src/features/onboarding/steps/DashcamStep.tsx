@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Platform, View } from 'react-native';
 
 import { dashpalCopy } from '@/dashcam/copy';
-import { nameOf } from '@/dashcam/label';
+import { nameOf } from '@/dashcam/protocol';
 import { dashpalSecrets, type DashpalSecrets } from '@/dashcam/secure';
 import type { SetupPhase } from '@/dashcam/setup';
 import { SetupPanel, type SetupPanelDeps } from '@/dashcam/ui/SetupScreen';

@@ -1,7 +1,6 @@
-// The DashPal BLE frame codec (plan §3.1–3.2; the authoritative copy is the firmware's
-// `docs/BLE_PROTOCOL.md`, repeated in ./PROTOCOL.md). Pure: bytes in, typed frames out, and back.
-// The link is v2 (INFO `proto` 2): every frame travels sealed (./auth.ts) and the frame inside keeps
-// version byte 1.
+// The DashPal BLE frame codec (the authoritative copy is the firmware's `docs/BLE_PROTOCOL.md`,
+// repeated in ./PROTOCOL.md). Pure: bytes in, typed frames out, and back. The link is v3 (INFO
+// `proto` 3): every frame travels sealed (./auth.ts) and the frame inside keeps version byte 1.
 //
 // Rules every decoder here follows:
 // - little-endian; byte 0 = type, byte 1 = protocol version (1);
@@ -17,24 +16,46 @@
 export const PROTOCOL_VERSION = 1;
 export const MAX_FRAME_BYTES = 20;
 /** The link version this app speaks (INFO `proto_min`..`proto_max` must include it). */
-export const LINK_VERSION = 2;
+export const LINK_VERSION = 3;
 /** The smallest ATT MTU a session works on (a 40-byte sealed notification needs 43). */
 export const SEAL_MIN_MTU = 43;
 
 /** `d5a1xxxx-7b3e-4c8a-9f21-0c6e5a7d2b10`, lowercase (both platforms report lowercase). */
 export const dashpalUuid = (short: string): string => `d5a1${short}-7b3e-4c8a-9f21-0c6e5a7d2b10`;
 
-/** Advertised while the pairing window is closed; holds the five characteristics. */
+/** Advertised while the pairing window is closed and no setup is live; holds the six characteristics. */
 export const DASHPAL_SERVICE = dashpalUuid('0001');
-/** An empty service advertised instead of the DashPal one while the pairing window is open. */
-export const PAIRING_SERVICE = dashpalUuid('00f0');
+/**
+ * Empty services advertised instead of it: the window open with no phone paired ("new"), a setup
+ * claim or hold live ("setup"), the window open with phones paired ("open").
+ */
+export const PAIRING_NEW = dashpalUuid('00f0');
+export const PAIRING_SETUP = dashpalUuid('00f1');
+export const PAIRING_OPEN = dashpalUuid('00f2');
 export const INFO_CHAR = dashpalUuid('0002');
-/** Kept so the later handles never move; the dashcam refuses every write to it (link v2). */
+/** Kept so the later handles never move; the dashcam refuses every write to it. */
 export const IDENTIFY_CHAR = dashpalUuid('0003');
 export const TX_CHAR = dashpalUuid('0004');
 export const RX_CHAR = dashpalUuid('0005');
 /** The pairing and session handshakes (open; ./auth.ts). */
 export const AUTH_CHAR = dashpalUuid('0006');
+/** The setup's aiming picture: notify only, records sealed in direction 3, only to the setup hold's connection. */
+export const VIEW_CHAR = dashpalUuid('0007');
+
+/** What a DashPal's advertised service says about it. */
+export type AdvState = 'closed' | 'new' | 'setup' | 'open';
+
+/** The state an advert's service UUIDs name (the first DashPal one), or null for none. */
+export function advOf(uuids: readonly string[] | null | undefined): AdvState | null {
+  for (const raw of uuids ?? []) {
+    const u = raw.toLowerCase();
+    if (u === PAIRING_NEW) return 'new';
+    if (u === PAIRING_SETUP) return 'setup';
+    if (u === PAIRING_OPEN) return 'open';
+    if (u === DASHPAL_SERVICE) return 'closed';
+  }
+  return null;
+}
 
 // ——— frame types ———
 
@@ -47,6 +68,10 @@ export const TX_TYPE = {
   ALERT_FALLBACK: 0x06,
   TIME_ECHO: 0x07,
   PAIRED: 0x08,
+  // 0x09 is never used
+  AIM: 0x0a,
+  VIEW_STATE: 0x0b,
+  SETUP_RESULT: 0x0c,
 } as const;
 
 export const RX_TYPE = {
@@ -68,6 +93,9 @@ export const TX_LEN: Readonly<Record<number, number>> = {
   [TX_TYPE.ALERT_FALLBACK]: 5,
   [TX_TYPE.TIME_ECHO]: 8,
   [TX_TYPE.PAIRED]: 3,
+  [TX_TYPE.AIM]: 9,
+  [TX_TYPE.VIEW_STATE]: 6,
+  [TX_TYPE.SETUP_RESULT]: 5,
 };
 
 /** The v1 length of each phone → dashcam frame type, header included. */
@@ -81,11 +109,11 @@ export const RX_LEN: Readonly<Record<number, number>> = {
 };
 
 export const INFO_LEN = 14;
-/** The link v2 INFO: the first 14 bytes and the reader's connection nonce `Nc`. */
+/** The full INFO: the first 14 bytes and the reader's connection nonce `Nc`. */
 export const INFO_LEN_V2 = 30;
 export const INFO_VERSION = 1;
-/** INFO `flags` bits. */
-export const INFO_FLAG = { PAIRING_OPEN: 0x01, SETUP_BUSY: 0x02, KEYED: 0x04 } as const;
+/** INFO `flags` bits (bits 2-7 are written 0 and ignored). */
+export const INFO_FLAG = { PAIRING_OPEN: 0x01, SETUP_BUSY: 0x02 } as const;
 
 /** Engine event ids, in the frozen `dms/alerts.py` `EventType` order. Append-only. */
 export const EVENT_NAMES: readonly string[] = [
@@ -186,7 +214,24 @@ export const COMMAND = {
   PAIR_CONFIRM: 5,
   TEST_SOUND: 6,
   HELLO: 7,
+  /** commit the setup hold: SETUP_RESULT(8, …) */
+  SETUP_DONE: 8,
+  /** undo the setup hold: SETUP_RESULT(9, …), then the connection ends 1 s later */
+  SETUP_CANCEL: 9,
+  /** the aiming stream (`arg`: AIM_ARG) */
+  AIM: 10,
+  /** an aiming image is complete or given up (`arg`: its frame number) */
+  VIEW_ACK: 11,
 } as const;
+
+/** COMMAND 10 `arg`. */
+export const AIM_ARG = { STOP: 0, START: 1, QUERY: 2 } as const;
+
+/** VIEW_STATE `reason`: why the aiming stream is refused or stopped (0: on, or stopped by the phone). */
+export const VIEW_REASONS = ['ok', 'not_allowed', 'moving', 'drive', 'budget', 'busy', 'camera', 'memory', 'no_state', 'hold_ended', 'mtu'] as const;
+export type ViewReason = (typeof VIEW_REASONS)[number];
+/** A VIEW_STATE reason's name; a code this app does not know reads as `camera` (not ready). */
+export const viewReason = (code: number): ViewReason => VIEW_REASONS[code] ?? 'camera';
 
 /** ALERT_ACK `outcome`. */
 export const ACK_OUTCOME = { CANNOT: 0, PLAYING: 1 } as const;
@@ -265,7 +310,42 @@ export interface Paired {
   bondCount: number;
 }
 
-export type TxFrame = Hello | Status | DashcamEventFrame | AlertFrame | AlertStop | AlertFallback | TimeEcho | Paired;
+/** The aiming score of the newest camera frame (the setup's aiming stream only). */
+export interface AimFrame {
+  type: 'AIM';
+  /** camera frame counter mod 256 */
+  seq: number;
+  /** 0-100 (a receiver clamps above 100) */
+  score: number;
+  /** the hint code (0 good … 13 too dark) */
+  hint: number;
+  /** bit 0 face, bit 1 fully in frame, bit 2 good */
+  flags: number;
+  /** the eye distance × 500, saturating at 255 */
+  iod: number;
+  /** degrees */
+  yaw: number;
+  pitch: number;
+}
+
+/** The aiming stream's state: `on` 1 on or still on, 0 stopped or refused; `leftS` the seconds it may still run. */
+export interface ViewStateFrame {
+  type: 'VIEW_STATE';
+  on: number;
+  reason: number;
+  leftS: number;
+}
+
+/** The answer to COMMAND 8 (commit) or 9 (cancel), and the setup hold's expiry (9, R_EXPIRED). */
+export interface SetupResultFrame {
+  type: 'SETUP_RESULT';
+  op: number;
+  code: number;
+  /** the phones stored after it */
+  bondCount: number;
+}
+
+export type TxFrame = Hello | Status | DashcamEventFrame | AlertFrame | AlertStop | AlertFallback | TimeEcho | Paired | AimFrame | ViewStateFrame | SetupResultFrame;
 
 export interface StateFrame {
   type: 'STATE';
@@ -321,16 +401,14 @@ export interface DashcamInfo {
   dashcamId: string;
   /** `DashPal-XXXX`: the last two MAC bytes, uppercase hex */
   name: string;
-  /** link v1's bond flag; always false on link v2 (no Bluetooth bonding) */
+  /** link v1's bond flag; always false since link v2 (no Bluetooth bonding) */
   peerBonded: boolean;
-  /** phones paired with the dashcam (0-4) */
+  /** phones paired with the dashcam (0-4), plus 1 for a provisional phone while a setup hold lasts */
   bondCount: number;
-  /** INFO flags bit 0: the pairing window is open */
+  /** INFO flags bit 0: the pairing window is open (also while a setup hold lasts) */
   pairingOpen: boolean;
-  /** INFO flags bit 1: another link holds the setup claim (another phone is setting this dashcam up) */
+  /** INFO flags bit 1: another link holds the setup claim or the setup hold (another phone is setting this dashcam up) */
   setupBusy: boolean;
-  /** INFO flags bit 2: the board has a pairing code */
-  keyed: boolean;
   /** this connection's 16-byte nonce `Nc` (bytes 14-29); null from a shorter INFO */
   nonce: number[] | null;
 }
@@ -460,6 +538,12 @@ export function decodeTx(bytes: ArrayLike<number>): Decoded<TxFrame> {
       return { ok: true, frame: { type: 'TIME_ECHO', reqId: u16(b, 2), uptimeMs: u32(b, 4) } };
     case TX_TYPE.PAIRED:
       return { ok: true, frame: { type: 'PAIRED', bondCount: u8(b, 2) } };
+    case TX_TYPE.AIM:
+      return { ok: true, frame: { type: 'AIM', seq: u8(b, 2), score: u8(b, 3), hint: u8(b, 4), flags: u8(b, 5), iod: u8(b, 6), yaw: i8(b, 7), pitch: i8(b, 8) } };
+    case TX_TYPE.VIEW_STATE:
+      return { ok: true, frame: { type: 'VIEW_STATE', on: u8(b, 2), reason: u8(b, 3), leftS: u16(b, 4) } };
+    case TX_TYPE.SETUP_RESULT:
+      return { ok: true, frame: { type: 'SETUP_RESULT', op: u8(b, 2), code: u8(b, 3), bondCount: u8(b, 4) } };
     default:
       return { ok: false, reason: 'type' };
   }
@@ -492,6 +576,12 @@ export function encodeTx(f: TxFrame): number[] {
       return header(TX_TYPE.TIME_ECHO).u16(f.reqId).u32(f.uptimeMs).bytes;
     case 'PAIRED':
       return header(TX_TYPE.PAIRED).u8(f.bondCount).bytes;
+    case 'AIM':
+      return header(TX_TYPE.AIM).u8(f.seq).u8(f.score).u8(f.hint).u8(f.flags).u8(f.iod).i8(f.yaw).i8(f.pitch).bytes;
+    case 'VIEW_STATE':
+      return header(TX_TYPE.VIEW_STATE).u8(f.on).u8(f.reason).u16(f.leftS).bytes;
+    case 'SETUP_RESULT':
+      return header(TX_TYPE.SETUP_RESULT).u8(f.op).u8(f.code).u8(f.bondCount).bytes;
   }
 }
 
@@ -564,28 +654,35 @@ export function decodeInfo(bytes: ArrayLike<number>): DashcamInfo | null {
     bondCount: u8(bytes, 12),
     pairingOpen: (u8(bytes, 13) & INFO_FLAG.PAIRING_OPEN) !== 0,
     setupBusy: (u8(bytes, 13) & INFO_FLAG.SETUP_BUSY) !== 0,
-    keyed: (u8(bytes, 13) & INFO_FLAG.KEYED) !== 0,
     nonce: bytes.length >= INFO_LEN_V2 ? Array.from({ length: 16 }, (_, i) => u8(bytes, 14 + i)) : null,
   };
 }
 
 /**
- * The INFO bytes (the dashcam's side; tests). `setupBusy` and `keyed` default to false; with a
- * `nonce` the 30-byte v2 INFO, else the 14 bytes.
+ * The INFO bytes (the dashcam's side; tests). `setupBusy` defaults to false; with a `nonce` the
+ * 30-byte INFO, else the 14 bytes.
  */
-export function encodeInfo(
-  info: Omit<DashcamInfo, 'dashcamId' | 'name' | 'setupBusy' | 'keyed' | 'nonce'> & { setupBusy?: boolean; keyed?: boolean; nonce?: ArrayLike<number> | null }
-): number[] {
+export function encodeInfo(info: Omit<DashcamInfo, 'dashcamId' | 'name' | 'setupBusy' | 'nonce'> & { setupBusy?: boolean; nonce?: ArrayLike<number> | null }): number[] {
   const w = new Writer().u8(info.ver).u8(info.protoMin).u8(info.protoMax).u8(info.fwMajor).u8(info.fwMinor);
   for (let i = 0; i < 6; i++) w.u8(info.mac[i] ?? 0);
-  const flags = (info.pairingOpen ? INFO_FLAG.PAIRING_OPEN : 0) | (info.setupBusy ? INFO_FLAG.SETUP_BUSY : 0) | (info.keyed ? INFO_FLAG.KEYED : 0);
+  const flags = (info.pairingOpen ? INFO_FLAG.PAIRING_OPEN : 0) | (info.setupBusy ? INFO_FLAG.SETUP_BUSY : 0);
   w.u8(info.peerBonded ? 1 : 0).u8(info.bondCount).u8(flags);
   if (info.nonce) for (let i = 0; i < 16; i++) w.u8(info.nonce[i] ?? 0);
   return w.bytes;
 }
 
-/** The dashcam speaks this app's link (v2): its INFO `proto` range includes it. */
-export const speaksLink = (info: DashcamInfo): boolean => info.protoMin <= LINK_VERSION && LINK_VERSION <= info.protoMax;
+/**
+ * Whether the dashcam speaks this app's link (v3): null when its INFO `proto` range includes it;
+ * `firmware` when the DashPal is older (update its firmware), `app` when it is newer (update RoadWise).
+ */
+export function linkMismatch(info: Pick<DashcamInfo, 'protoMin' | 'protoMax'>): 'firmware' | 'app' | null {
+  if (info.protoMax < LINK_VERSION) return 'firmware';
+  if (info.protoMin > LINK_VERSION) return 'app';
+  return null;
+}
+
+/** `DashPal-XXXX`: the last 4 hex characters of the dashcam id, upper case. */
+export const nameOf = (dashcamId: string): string => `DashPal-${dashcamId.slice(-4).toUpperCase()}`;
 
 /** A lowercase 12-hex-char dashcam id. */
 export const isDashcamId = (s: unknown): s is string => typeof s === 'string' && /^[0-9a-f]{12}$/.test(s);

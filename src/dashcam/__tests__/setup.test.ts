@@ -10,7 +10,7 @@ import { R } from '../auth';
 import { createFakeBle, type FakeBle } from '../fakeTransport';
 import type { PairedDashcam } from '../keys';
 import { dashpalLink, drawOnceCode, formatCode, type PairingCode } from '../label';
-import { AUTH_CHAR, DASHPAL_SERVICE, INFO_CHAR, PAIRING_SERVICE, toHex } from '../protocol';
+import { AUTH_CHAR, DASHPAL_SERVICE, INFO_CHAR, PAIRING_NEW, toHex } from '../protocol';
 import { createDashpalSecrets, type DashpalSecrets } from '../secure';
 import { BUSY_WAIT_MS, createSetupFlow, PRESS_WAIT_MS, type SetupFlow, type SetupPhase, type SetupStart } from '../setup';
 import { createBleTransport, type DashcamTransport } from '../transport';
@@ -78,7 +78,7 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
         ble.advertise({
           id: idOf(platform, c.last),
           rssi: c.rssi ?? -50,
-          advertising: { serviceUUIDs: [cam.windowOpen ? PAIRING_SERVICE : DASHPAL_SERVICE], localName: `DashPal-${camOf(c.last).slice(-4).toUpperCase()}` },
+          advertising: { serviceUUIDs: [cam.windowOpen ? PAIRING_NEW : DASHPAL_SERVICE], localName: `DashPal-${camOf(c.last).slice(-4).toUpperCase()}` },
         });
       }
     });
@@ -337,8 +337,7 @@ describe('failures', () => {
   });
 
   test.each([
-    ['an unkeyed board', { S: null }, 'no_key'],
-    ['firmware below link v2', { protoMax: 1 }, 'update_firmware'],
+    ['firmware below link v3', { protoMax: 2 }, 'update_firmware'],
   ] as const)('%s', async (_n, spec, reason) => {
     const r = rig({ cams: [{ last: 0xd5, ...spec }] });
     const end = await withCode(r, (f) => f.scanned(link(0xd5)));
@@ -430,7 +429,7 @@ describe('pairing mode, busy, retries', () => {
     await r.until('code');
     r.at(5000, () => {
       r.cams.get(0xd5)!.windowOpen = true;
-      r.ble.advertise({ id: idOf('android', 0xd5), rssi: -50, advertising: { serviceUUIDs: [PAIRING_SERVICE] } });
+      r.ble.advertise({ id: idOf('android', 0xd5), rssi: -50, advertising: { serviceUUIDs: [PAIRING_NEW] } });
     });
     r.flow.scanned(link(0xd5));
     await done;

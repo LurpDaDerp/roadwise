@@ -23,8 +23,8 @@ import type { BluetoothAccess } from '@/core/permissions/adapters';
 import { pairFin, pairKeys, pairRequest, proofOk, R, type AuthRecord } from './auth';
 import { randomBytes, wipe, x25519Public } from './crypto';
 import type { PairedDashcam } from './keys';
-import { formatCode, nameOf, parseCode, parseDashpalLink, type PairingCode } from './label';
-import { COMMAND, DASHPAL_SERVICE, decodeTx, encodeRx, PAIRING_SERVICE, speaksLink, toHex, type DashcamInfo } from './protocol';
+import { formatCode, parseCode, parseDashpalLink, type PairingCode } from './label';
+import { COMMAND, DASHPAL_SERVICE, decodeTx, encodeRx, linkMismatch, nameOf, PAIRING_NEW, toHex, type DashcamInfo } from './protocol';
 import type { DashpalSecrets, StoredAuth } from './secure';
 import { isIosBondLoss, type DashcamTransport, type ScanHit } from './transport';
 
@@ -362,7 +362,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     let first: ScanHit | null = null;
     let firstAt: number | null = null;
     const session = await t.scan({
-      services: named ? [DASHPAL_SERVICE, PAIRING_SERVICE] : [PAIRING_SERVICE],
+      services: named ? [DASHPAL_SERVICE, PAIRING_NEW] : [PAIRING_NEW],
       seconds: SEARCH_MS / 1000,
       fast: true,
       onHit: (hit) => {
@@ -407,7 +407,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     set({ kind: 'press_button', name, until });
     let open = false;
     const session = await t.scan({
-      services: [PAIRING_SERVICE],
+      services: [PAIRING_NEW],
       seconds: PRESS_WAIT_MS / 1000,
       fast: true,
       onHit: (hit) => {
@@ -534,8 +534,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
         await release(t, c.id);
         return { kind: 'next', why: 'link' };
       }
-      if (!speaksLink(info)) return { kind: 'failed', reason: 'update_firmware' };
-      if (!info.keyed) return { kind: 'failed', reason: 'no_key' };
+      if (linkMismatch(info) !== null) return { kind: 'failed', reason: 'update_firmware' };
       if (!hasAuth) return { kind: 'failed', reason: deps.platform === 'ios' ? 'ios_forget_first' : 'error' };
       if (!info.nonce) return { kind: 'failed', reason: 'error' };
       if (before && before.dashcamId !== info.dashcamId && !replaceAsked) {
@@ -628,7 +627,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
             // The dashcam could not compute its answer, or the window closed: INFO decides
             // (docs/BLE_PROTOCOL.md §4).
             const now = await t.readInfo(c.id).catch(() => null);
-            if (now && now.keyed && !now.setupBusy && (now.pairingOpen || holdsClaim()) && notNowRetries < NOT_NOW_RETRIES) {
+            if (now && !now.setupBusy && (now.pairingOpen || holdsClaim()) && notNowRetries < NOT_NOW_RETRIES) {
               notNowRetries += 1;
               await deps.sleep(NOT_NOW_RETRY_MS);
               continue;

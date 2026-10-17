@@ -21,7 +21,7 @@ import type { DashcamVisual } from '../alerts';
 import { dashpalCopy } from '../copy';
 import { createDetector, snoozed, type Detector, type Found } from '../detector';
 import { SNOOZES_KEY } from '../keys';
-import { isDashcamId, PAIRING_SERVICE } from '../protocol';
+import { isDashcamId, PAIRING_NEW } from '../protocol';
 import type { DashcamRuntime, DashcamState } from '../runtime';
 import { dashpalSecrets, type DashpalSecrets } from '../secure';
 import { PENDING_SETUP_KEY, PENDING_SETUP_MAX_AGE_MS, setupHref } from './links';
@@ -102,7 +102,7 @@ function PromptHostInner({ runtime, deps }: { runtime: DashcamRuntime; deps: Pro
       scan: async (o) => {
         const t = runtime.transport();
         if (!t) throw new Error('no Bluetooth transport');
-        return t.scan({ services: [PAIRING_SERVICE], seconds: o.seconds, onHit: o.onHit });
+        return t.scan({ services: [PAIRING_NEW], seconds: o.seconds, onHit: o.onHit });
       },
       sleep: deps.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
     });

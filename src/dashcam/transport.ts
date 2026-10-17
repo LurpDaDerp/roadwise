@@ -37,7 +37,7 @@ import { processTimers } from '@/lib/timers';
 
 import { createSealer, parseAuthRecord, proofOk, R, sessionFin, sessionKeys, sessionRequest, type AuthRecord, type Sealer } from './auth';
 import { randomBytes, wipe } from './crypto';
-import { AUTH_CHAR, DASHPAL_SERVICE, INFO_CHAR, PAIRING_SERVICE, RX_CHAR, TX_CHAR, decodeInfo, fromHex, speaksLink, type DashcamInfo } from './protocol';
+import { AUTH_CHAR, DASHPAL_SERVICE, INFO_CHAR, PAIRING_NEW, RX_CHAR, TX_CHAR, decodeInfo, fromHex, linkMismatch, type DashcamInfo } from './protocol';
 import type { BluetoothState, RepairCause } from './link';
 
 export interface BleSub {
@@ -598,7 +598,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
         verifyFailed(t, 'INFO mac mismatch');
         return;
       }
-      if (!speaksLink(info)) {
+      if (linkMismatch(info) !== null) {
         softRepair(t, 'downgrade');
         return;
       }
@@ -892,7 +892,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       scanHit = (e) => {
         const advertised = (e.advertising?.serviceUUIDs ?? []).map((u) => u.toLowerCase());
         if (!advertised.some((u) => wanted.includes(u))) return;
-        onHit({ id: e.id, name: e.advertising?.localName ?? e.name ?? null, rssi: e.rssi, pairing: advertised.includes(PAIRING_SERVICE) });
+        onHit({ id: e.id, name: e.advertising?.localName ?? e.name ?? null, rssi: e.rssi, pairing: advertised.includes(PAIRING_NEW) });
       };
       await api.scan({ serviceUUIDs: services, seconds, allowDuplicates: false, ...(fast ? { scanMode: 2, matchMode: 1 } : {}) });
       return {

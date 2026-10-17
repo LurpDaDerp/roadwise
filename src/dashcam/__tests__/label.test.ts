@@ -1,8 +1,8 @@
 // The pairing code's text and link, against the shared vectors (v2.code, v2.link) and the rules of
 // docs/BLE_PROTOCOL.md §2 Security.
 import vectors from '../__fixtures__/ble_vectors.json';
-import { checkByte, dashpalLink, drawOnceCode, formatCode, nameOf, normaliseDomain, parseCode, parseDashpalLink } from '../label';
-import { fromHex, toHex } from '../protocol';
+import { checkByte, dashpalLink, drawOnceCode, formatCode, normaliseDomain, parseCode, parseDashpalLink } from '../label';
+import { fromHex, nameOf, toHex } from '../protocol';
 
 interface CodeVec {
   S: string;

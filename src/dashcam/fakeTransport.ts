@@ -7,7 +7,7 @@
 // peripheral (its promise waits for a BONDED -> NONE broadcast), and a write that fails rejects with
 // a `status=N` text.
 import type { BleApi, BlePeripheralEvent, BleServicesInfo, BleSub } from './transport';
-import { AUTH_CHAR, DASHPAL_SERVICE, IDENTIFY_CHAR, INFO_CHAR, PAIRING_SERVICE, RX_CHAR, TX_CHAR } from './protocol';
+import { AUTH_CHAR, DASHPAL_SERVICE, IDENTIFY_CHAR, INFO_CHAR, PAIRING_NEW, RX_CHAR, TX_CHAR } from './protocol';
 
 type Handler<T> = (e: T) => void;
 
@@ -78,7 +78,7 @@ const TABLE = (auth: boolean): BleServicesInfo => ({
     { service: DASHPAL_SERVICE, characteristic: TX_CHAR },
     { service: DASHPAL_SERVICE, characteristic: RX_CHAR },
     ...(auth ? [{ service: DASHPAL_SERVICE, characteristic: AUTH_CHAR }] : []),
-    { service: PAIRING_SERVICE, characteristic: '' },
+    { service: PAIRING_NEW, characteristic: '' },
   ].filter((c) => c.characteristic !== ''),
 });
 

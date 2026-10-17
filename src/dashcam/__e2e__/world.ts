@@ -49,7 +49,7 @@ import { sha256, utf8 } from '../crypto';
 import { createFakeBle, type FakeBle } from '../fakeTransport';
 import { formatCode } from '../label';
 import { PAIRED_KEY, type PairedDashcam } from '../keys';
-import { AUTH_CHAR, DASHPAL_SERVICE, decodeRx, decodeTx, fromHex, INFO_CHAR, PAIRING_SERVICE, RX_CHAR, toHex, type RxFrame, type TxFrame } from '../protocol';
+import { AUTH_CHAR, DASHPAL_SERVICE, decodeRx, decodeTx, fromHex, INFO_CHAR, PAIRING_NEW, RX_CHAR, toHex, type RxFrame, type TxFrame } from '../protocol';
 import { createDashcamRuntime, type DashcamRuntime } from '../runtime';
 import { AUTH_PENDING_SECURE_KEY, AUTH_SECURE_KEY, createDashpalSecrets, type DashpalSecrets } from '../secure';
 import { createSetupFlow, type SetupFlow } from '../setup';
@@ -907,7 +907,7 @@ export class World {
           id: phone.peripheralId,
           name: NAME,
           rssi: -55,
-          advertising: { serviceUUIDs: [this.windowOpen ? PAIRING_SERVICE : DASHPAL_SERVICE], localName: NAME, isConnectable: true },
+          advertising: { serviceUUIDs: [this.windowOpen ? PAIRING_NEW : DASHPAL_SERVICE], localName: NAME, isConnectable: true },
         });
         this.timer(100, advert, phone, true);
       };

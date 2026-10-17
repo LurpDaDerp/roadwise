@@ -94,9 +94,6 @@ export function parseCode(text: string): PairingCode | null {
   return null;
 }
 
-/** `DashPal-XXXX`: the last 4 hex characters of the dashcam id, upper case. */
-export const nameOf = (dashcamId: string): string => `DashPal-${dashcamId.slice(-4).toUpperCase()}`;
-
 /** A hostname as the build's link domain (lowercase), or '' when it is not one. */
 export function normaliseDomain(domain: unknown): string {
   if (typeof domain !== 'string') return '';

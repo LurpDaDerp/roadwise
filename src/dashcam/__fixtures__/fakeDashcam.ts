@@ -109,7 +109,7 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
     busy: false,
     once: null,
     mtu: 247,
-    protoMax: o.protoMax ?? 2,
+    protoMax: o.protoMax ?? 3,
     force: {},
     badProof: { pair: false, session: false },
     pendingReads: 0,
@@ -129,16 +129,15 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
     info: () =>
       encodeInfo({
         ver: 1,
-        protoMin: Math.min(2, self.protoMax),
+        protoMin: Math.min(3, self.protoMax),
         protoMax: self.protoMax,
         fwMajor: 3,
-        fwMinor: 4,
+        fwMinor: 5,
         mac: o.mac,
         peerBonded: false,
         bondCount: phones.size,
         pairingOpen: self.windowOpen,
         setupBusy: self.busy,
-        keyed: o.S !== null,
         nonce: c?.nc ?? new Uint8Array(16),
       }),
   };
