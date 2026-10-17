@@ -34,7 +34,7 @@ export function ProfileScreen() {
   return (
     <ScrollView
       testID="profile-screen"
-      style={{ flex: 1, backgroundColor: th.colors.bg }}
+      style={{ flex: 1 }}
       contentContainerStyle={{ padding: th.space.lg, paddingTop: th.space.lg + insets.top, gap: th.space.xl }}
       refreshControl={
         <RefreshControl

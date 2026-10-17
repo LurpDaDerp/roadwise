@@ -9,8 +9,12 @@ export type IconButtonProps = {
   /** Required: an icon-only control has nothing else to speak. */
   accessibilityLabel: string;
   onPress: () => void;
-  /** `plain` bare glyph · `tinted` faint accent disc · `filled` gold disc. Default `plain`. */
-  variant?: 'plain' | 'tinted' | 'filled';
+  /**
+   * `plain` bare glyph · `tinted` faint accent disc · `filled` ink disc (paper in dark) ·
+   * `surface` a raised paper disc with a soft shadow (back, close, share over a page or a scene).
+   * Default `plain`.
+   */
+  variant?: 'plain' | 'tinted' | 'filled' | 'surface';
   /** Visual diameter; the touch target never drops below 44. Default 44. */
   size?: number;
   disabled?: boolean;
@@ -32,8 +36,8 @@ export function IconButton({
 }: IconButtonProps) {
   const t = useTheme();
   const c = t.colors;
-  const fg = variant === 'filled' ? c.onPrimary : c.accent;
-  const bg = variant === 'filled' ? c.primary : variant === 'tinted' ? c.accentFaint : 'transparent';
+  const fg = variant === 'filled' ? c.onPrimary : variant === 'surface' ? c.text : c.accent;
+  const bg = { filled: c.primary, tinted: c.accentFaint, surface: c.surface, plain: 'transparent' }[variant];
   const slop = Math.max(0, (t.size.touch - size) / 2);
 
   return (
@@ -52,6 +56,9 @@ export function IconButton({
           height: size,
           borderRadius: size / 2,
           backgroundColor: bg,
+          borderWidth: variant === 'surface' && t.scheme === 'dark' ? 1 : 0,
+          borderColor: c.border,
+          boxShadow: variant === 'surface' ? t.elevation.card : undefined,
           alignItems: 'center',
           justifyContent: 'center',
           opacity: disabled ? 0.5 : pressed ? 0.7 : 1,

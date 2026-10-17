@@ -3,7 +3,7 @@ import { View } from 'react-native';
 
 import { loadMaps, regionFor } from '@/features/settings/maps';
 import { decodeRuns } from '@/lib/polyline';
-import { Text, useTheme } from '@/ui';
+import { Text, useTheme, withAlpha } from '@/ui';
 
 import { profileCopy } from './copy';
 
@@ -51,7 +51,8 @@ export function RouteHeatMap({ polylines, height = 360, testID }: { polylines: r
     );
   }
 
-  const ink = th.scheme === 'dark' ? 'rgba(255, 195, 0, 0.35)' : 'rgba(0, 53, 102, 0.28)';
+  // The sky's accent, translucent, so overlapping drives build up into heat.
+  const ink = withAlpha(th.colors.accent, th.scheme === 'dark' ? 0.4 : 0.3);
   return (
     <View
       testID={testID}

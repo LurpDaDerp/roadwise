@@ -19,7 +19,7 @@ export type ButtonSize = 'sm' | 'md' | 'lg' | 'hud';
 export type ButtonProps = {
   label: string;
   onPress: () => void;
-  /** `primary` is the gold action — one per screen. Default `primary`. */
+  /** `primary` is the ink capsule (paper in dark), the one thing to do next on a screen. Default `primary`. */
   variant?: ButtonVariant;
   /** sm 36 (+hit slop to 44) · md 48 · lg 56 · hud 64. Default `lg`. */
   size?: ButtonSize;
@@ -35,7 +35,7 @@ export type ButtonProps = {
 
 export const BUTTON_MIN_HEIGHT = { sm: 36, md: 48, lg: 56, hud: 64 } as const;
 
-/** A capsule. Gold for the one thing to do next; quieter variants for everything else. */
+/** A capsule. Ink for the one thing to do next; quieter variants for everything else. */
 export function Button({
   label,
   onPress,
@@ -85,13 +85,13 @@ export function Button({
           borderCurve: 'continuous',
           backgroundColor: {
             primary: pressed ? c.primaryPressed : c.primary,
-            secondary: pressed ? c.border : c.surfaceRaised,
+            secondary: pressed ? c.surfaceRaised : c.surface,
             ghost: pressed ? c.accentFaint : 'transparent',
             destructive: c.danger,
           }[variant],
-          // `secondary` fills with `surfaceRaised`, all but invisible on `bg`, so a 1.5 pt rule
-          // that clears 3:1 on the background is what makes it a button at all.
-          borderWidth: variant === 'secondary' ? 1.5 : 0,
+          // `secondary` is a paper capsule, all but invisible on paper, so a hairline rule that
+          // clears 3:1 on the background is what makes it a button at all.
+          borderWidth: variant === 'secondary' ? 1 : 0,
           borderColor: c.borderStrong,
           opacity: inactive ? 0.5 : 1,
           transform: [{ scale: pressed && !inactive ? 0.97 : 1 }],

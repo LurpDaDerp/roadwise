@@ -109,9 +109,9 @@ export function TopBar({ title }: { title: string }) {
   const t = useTheme();
   const router = useRouter();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.xs, marginLeft: -t.space.sm }}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
       {router.canGoBack() ? (
-        <IconButton icon="chevron-back" accessibilityLabel={clanCopy.back} onPress={() => router.back()} />
+        <IconButton icon="chevron-back" accessibilityLabel={clanCopy.back} onPress={() => router.back()} variant="surface" />
       ) : null}
       <Text variant="title2" accessibilityRole="header" style={{ flex: 1 }}>
         {title}

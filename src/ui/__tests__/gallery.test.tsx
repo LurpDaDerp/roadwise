@@ -35,3 +35,17 @@ test('the gallery switches theme and reduce motion', async () => {
   await fireEvent.press(screen.getByRole('switch', { name: 'Reduce motion' }));
   expect(screen.getByRole('switch', { name: 'Reduce motion' })).toBeChecked();
 });
+
+test('the gallery previews any hour with any weather: the page sky, its weather layer and a scene card', async () => {
+  await render(
+    <SafeAreaProvider>
+      <UiGallery />
+    </SafeAreaProvider>
+  );
+  expect(screen.getByTestId('sky-backdrop', { includeHiddenElements: true })).toBeOnTheScreen();
+  expect(screen.queryByTestId('sky-ambient', { includeHiddenElements: true })).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: 'dusk' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'rain' }));
+  expect(screen.getByRole('button', { name: 'dusk' })).toBeSelected();
+  expect(screen.getByTestId('sky-ambient', { includeHiddenElements: true })).toBeOnTheScreen();
+});

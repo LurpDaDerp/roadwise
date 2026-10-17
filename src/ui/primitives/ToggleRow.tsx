@@ -64,7 +64,7 @@ export function ToggleRow({
         value={value}
         onValueChange={onValueChange}
         disabled={disabled}
-        trackColor={{ true: t.colors.primary, false: t.colors.border }}
+        trackColor={{ true: t.colors.accent, false: t.colors.border }}
         ios_backgroundColor={t.colors.border}
         thumbColor="#FFFFFF"
       />

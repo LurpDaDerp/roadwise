@@ -18,7 +18,7 @@ export type SegmentedControlProps<V extends string> = {
 };
 
 /**
- * Two to four equal segments on a raised track; the selected one sits on a sliding surface thumb
+ * Two to four equal segments on a raised track; the selected one sits on a sliding ink thumb
  * (snappy spring; jumps under reduce motion). Each segment is a tab for VoiceOver.
  */
 export function SegmentedControl<V extends string>({
@@ -63,7 +63,7 @@ export function SegmentedControl<V extends string>({
           padding: pad,
           borderRadius: t.radius.pill,
           backgroundColor: t.colors.surfaceRaised,
-          minHeight: 44,
+          minHeight: 48,
         },
         style,
       ]}
@@ -79,7 +79,7 @@ export function SegmentedControl<V extends string>({
               left: pad,
               width: segW,
               borderRadius: t.radius.pill,
-              backgroundColor: t.scheme === 'dark' ? t.colors.primary : t.colors.surface,
+              backgroundColor: t.colors.primary,
               boxShadow: t.elevation.card,
             },
             thumb,
@@ -109,11 +109,7 @@ export function SegmentedControl<V extends string>({
               adjustsFontSizeToFit
               style={{
                 fontWeight: selected ? '700' : '500',
-                color: selected
-                  ? t.scheme === 'dark'
-                    ? t.colors.onPrimary
-                    : t.colors.text
-                  : t.colors.textMuted,
+                color: selected ? t.colors.onPrimary : t.colors.textMuted,
               }}
             >
               {s.label}

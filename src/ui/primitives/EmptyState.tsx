@@ -49,7 +49,7 @@ export function EmptyState({ title, body, icon, action, illustration, testID }: 
             marginBottom: t.space.xs,
           }}
         >
-          <Ionicons name={icon} size={36} color={t.scheme === 'dark' ? t.colors.gold : t.colors.accent} />
+          <Ionicons name={icon} size={36} color={t.colors.accent} />
         </View>
       ) : null}
       <Text variant="title2" style={{ textAlign: 'center' }}>

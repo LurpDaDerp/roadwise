@@ -28,6 +28,10 @@ import { Text } from '../primitives/Text';
 import { TIER_ORDER, TierBadge } from '../primitives/TierBadge';
 import { ToggleRow } from '../primitives/ToggleRow';
 import { TrendArrow } from '../primitives/TrendArrow';
+import type { SkyMood } from '../sky/palette';
+import type { SkyPhase } from '../sky/phase';
+import { SkyBackdrop } from '../sky/SkyBackdrop';
+import type { WeatherKind } from '../sky/weather';
 
 const TYPE_RAMP: TypeVariant[] = [
   'hero',
@@ -195,7 +199,7 @@ function Body() {
         <Card>
           <Text variant="title3">Plain card</Text>
           <Text variant="subhead" tone="muted">
-            White with a soft navy shadow in light; prussian with a hairline in dark.
+            Paper white with a soft shadow in light; charcoal with a hairline in dark.
           </Text>
         </Card>
         <Card variant="raised">
@@ -325,16 +329,42 @@ function Body() {
   );
 }
 
+const PHASES: SkyPhase[] = ['night', 'dawn', 'day', 'dusk'];
+const KINDS: WeatherKind[] = ['clear', 'cloudy', 'fog', 'rain', 'snow', 'storm'];
+
+/** A window onto the page sky and a scene card, for the mood picked above. */
+function SkyPreview() {
+  const t = useTheme();
+  return (
+    <View style={{ height: 260, borderRadius: t.radius.card, borderCurve: 'continuous', overflow: 'hidden', borderWidth: 1, borderColor: t.colors.border }}>
+      <SkyBackdrop height={260} />
+      <View style={{ padding: t.space.lg, gap: t.space.md }}>
+        <Text variant="title1">Hey, maya</Text>
+        <Card variant="hero" style={{ minHeight: 150 }}>
+          <Text variant="label" tone="muted">
+            Safety Rating
+          </Text>
+          <Text variant="display">92</Text>
+        </Card>
+      </View>
+    </View>
+  );
+}
+
 /**
- * Every primitive in one scroll, under a light/dark switch and a reduce-motion switch. Reached
- * at `/(app)/dev/ui` in development and diagnostics builds only.
+ * Every primitive in one scroll, under a light/dark switch, a reduce-motion switch and a sky
+ * picker (any time of day with any weather, blended as the live app blends it). Reached at
+ * `/(app)/dev/ui` in development and diagnostics builds only.
  */
 export function UiGallery({ initialScheme = 'light' }: { initialScheme?: 'light' | 'dark' }) {
   const [scheme, setScheme] = useState<'light' | 'dark'>(initialScheme);
   const [still, setStill] = useState(false);
+  const [phase, setPhase] = useState<SkyPhase | null>(null);
+  const [kind, setKind] = useState<WeatherKind>('clear');
+  const mood: SkyMood | null = phase ? { phase, glow: phase === 'dawn' || phase === 'dusk' ? 1 : 0, weather: { kind, intensity: 'moderate' } } : null;
 
   return (
-    <ThemeProvider scheme={scheme} reduceMotion={still}>
+    <ThemeProvider scheme={mood ? undefined : scheme} mood={mood} reduceMotion={still}>
       <Screen scroll>
         <Text variant="title1" accessibilityRole="header">
           Design system
@@ -346,9 +376,23 @@ export function UiGallery({ initialScheme = 'light' }: { initialScheme?: 'light'
             { value: 'dark', label: 'Dark' },
           ]}
           value={scheme}
-          onChange={setScheme}
+          onChange={(s) => {
+            setPhase(null);
+            setScheme(s);
+          }}
         />
         <Chip label="Reduce motion" role="switch" selected={still} onPress={() => setStill(!still)} />
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {PHASES.map((p) => (
+            <Chip key={p} label={p} selected={phase === p} onPress={() => setPhase(phase === p ? null : p)} />
+          ))}
+        </View>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {KINDS.map((k) => (
+            <Chip key={k} label={k} selected={kind === k} onPress={() => setKind(k)} />
+          ))}
+        </View>
+        <SkyPreview />
         <Body />
       </Screen>
     </ThemeProvider>

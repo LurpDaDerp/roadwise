@@ -1,6 +1,12 @@
 export { contrastRatio, relativeLuminance } from './contrast';
 export { fontFamilies, useAppFonts } from './fonts';
-export { ThemeProvider, useTheme, type Theme } from './theme';
+export { SceneScope, ThemeProvider, useTheme, type Theme } from './theme';
+export { mix, withAlpha } from './sky/color';
+export { SkyBackdrop } from './sky/SkyBackdrop';
+export { SkyScene } from './sky/SkyScene';
+export type { SkyColors, SkyMood } from './sky/palette';
+export type { SkyPhase } from './sky/phase';
+export type { WeatherKind } from './sky/weather';
 export {
   tokens,
   type ColorSet,
@@ -47,7 +53,8 @@ export {
   type Segment,
   type SegmentedControlProps,
 } from './primitives/SegmentedControl';
-export { Sheet, type SheetProps } from './primitives/Sheet';
+export { BottomSheet, Sheet, type SheetProps } from './primitives/Sheet';
+export { StepDots, StepTransition } from './primitives/StepTransition';
 export { Skeleton } from './primitives/Skeleton';
 export {
   HEALTH_LABEL,

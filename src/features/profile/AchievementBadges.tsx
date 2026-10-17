@@ -21,7 +21,7 @@ export function AchievementMedal({ id, unlocked, size = 52 }: { id: AchievementI
         borderRadius: size / 2,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: unlocked ? th.colors.primary : th.colors.surfaceRaised,
+        backgroundColor: unlocked ? th.colors.gold : th.colors.surfaceRaised,
         borderWidth: unlocked ? 0 : 2,
         borderColor: th.colors.border,
         borderStyle: unlocked ? 'solid' : 'dashed',
@@ -30,7 +30,7 @@ export function AchievementMedal({ id, unlocked, size = 52 }: { id: AchievementI
       <Ionicons
         name={unlocked ? ACHIEVEMENT_ICON[id] : 'lock-closed'}
         size={Math.round(size * 0.46)}
-        color={unlocked ? th.colors.onPrimary : th.colors.textSubtle}
+        color={unlocked ? th.colors.onGold : th.colors.textSubtle}
       />
     </View>
   );

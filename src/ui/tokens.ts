@@ -3,12 +3,13 @@ import type { TextStyle } from 'react-native';
 import { fontFamilies } from './fonts';
 
 /**
- * RoadWise v3 tokens: navy and gold, played loud.
+ * RoadWise tokens: paper and ink, lit by the sky.
  *
- * The ground is the repo's navy (ink-black #000814, prussian #001D3D, regal #003566) and gold
- * (#FFC300 / #FFD60A) is the one colour that means "go": the primary action, the streak flame,
- * the gold league tier. Around it sit two families of signal colour that always arrive with a
- * glyph or a word, never alone:
+ * The ground is plain: off-white paper and near-black ink in light, the reverse in dark, and the
+ * primary action is an ink (or paper) capsule. Colour comes from the sky: the accent and the
+ * backdrop follow the time of day and the weather (`src/ui/sky/`). Gold stays for rewards only
+ * (the streak flame, the gold tier, unlocked achievements). Around them sit two families of
+ * signal colour that always arrive with a glyph or a word, never alone:
  *
  * - `signal` — event severity and stat health: clean (green) · minor (yellow) · moderate (orange)
  *   · severe (red). Each has a `fill` for large areas with its own `onFill` ink, a `text` variant
@@ -57,17 +58,19 @@ export type ColorSet = {
   textMuted: string;
   textSubtle: string;
   textInverse: string;
-  /** Interactive tint for links, icons, selected states: navy in light, gold in dark. */
+  /** Interactive tint for links, icons, progress and selected states: the sky's colour (time of day and weather). */
   accent: string;
   /** Text on an `accent` fill. */
   accentText: string;
   accentFaint: string;
-  /** The gold primary action, in both schemes. */
+  /** The primary action: ink black in light, paper white in dark. */
   primary: string;
   primaryPressed: string;
   onPrimary: string;
   /** Brand gold as a highlight (flame, gold tier, sparkle). Not for small text in light mode. */
   gold: string;
+  /** Ink on a gold fill. */
+  onGold: string;
   danger: string;
   dangerFaint: string;
   warning: string;
@@ -142,88 +145,95 @@ export type Elevation = {
   overlay: string | undefined;
 };
 
+/**
+ * The neutral grounds: paper white and ink black. These two sets are the theme with no sky (tests,
+ * the gallery, the first frame before the sky is read). The live theme starts from the same
+ * neutrals and swaps in the time-of-day and weather accent (`src/ui/sky/palette.ts`).
+ */
 const light: ColorSet = {
-  bg: '#EEF3F9',
-  bgElevated: '#F6F9FC',
+  bg: '#F4F4F2',
+  bgElevated: '#FAFAF9',
   surface: '#FFFFFF',
-  surfaceRaised: '#E4ECF5',
-  border: '#C6D3E2',
-  borderStrong: '#5E7690',
-  divider: '#DCE5EF',
-  text: '#001D3D',
-  textMuted: '#3D5470',
-  textSubtle: '#566B84',
+  surfaceRaised: '#ECECE9',
+  border: '#DCDCD8',
+  borderStrong: '#77777C',
+  divider: '#E7E7E4',
+  text: '#111113',
+  textMuted: '#4A4A4F',
+  textSubtle: '#5D5D62',
   textInverse: '#FFFFFF',
-  accent: '#003566',
-  accentText: '#FFD60A',
-  accentFaint: '#E3ECF6',
-  primary: '#FFC300',
-  primaryPressed: '#F0B400',
-  onPrimary: '#001D3D',
+  accent: '#1F5AD6',
+  accentText: '#FFFFFF',
+  accentFaint: '#E6EEFC',
+  primary: '#111113',
+  primaryPressed: '#2C2C30',
+  onPrimary: '#FFFFFF',
   gold: '#FFC300',
+  onGold: '#111113',
   danger: '#C21F33',
   dangerFaint: '#FDE4E7',
-  warning: '#B04A00',
+  warning: '#AD4800',
   warningFaint: '#FFEBDB',
   success: '#0A7A43',
   successFaint: '#E3F6EC',
   info: '#1B5E8C',
   infoFaint: '#E2EEF7',
-  scrim: 'rgba(0, 8, 20, 0.55)',
+  scrim: 'rgba(10, 10, 12, 0.5)',
   signal: {
-    clean: { fill: '#14A35A', onFill: '#001D3D', text: '#0A7A43', faint: '#E3F6EC' },
-    minor: { fill: '#F5CF00', onFill: '#001D3D', text: '#7A6300', faint: '#FFF6CC' },
-    moderate: { fill: '#F07400', onFill: '#001D3D', text: '#B04A00', faint: '#FFEBDB' },
+    clean: { fill: '#14A35A', onFill: '#111113', text: '#0A7A43', faint: '#E3F6EC' },
+    minor: { fill: '#F5CF00', onFill: '#111113', text: '#735D00', faint: '#FFF6CC' },
+    moderate: { fill: '#F07400', onFill: '#111113', text: '#AD4800', faint: '#FFEBDB' },
     severe: { fill: '#E0283F', onFill: '#FFFFFF', text: '#C21F33', faint: '#FDE4E7' },
   },
   tier: {
-    bronze: { face: ['#D9844A', '#A85A24'], ink: '#2B1400', text: '#9A4F1C' },
+    bronze: { face: ['#D9844A', '#A85A24'], ink: '#2B1400', text: '#934B19' },
     silver: { face: ['#D5DDE6', '#97A5B6'], ink: '#1B2735', text: '#56657A' },
-    gold: { face: ['#FFCB1F', '#D99A00'], ink: '#2E2100', text: '#7A5A00' },
-    platinum: { face: ['#5FE3D2', '#1FA595'], ink: '#00302B', text: '#0B7366' },
+    gold: { face: ['#FFCB1F', '#D99A00'], ink: '#2E2100', text: '#755600' },
+    platinum: { face: ['#5FE3D2', '#1FA595'], ink: '#00302B', text: '#0A6E62' },
     diamond: { face: ['#A9C6FF', '#7B86FF'], ink: '#0B1550', text: '#4A4BD0' },
   },
   avatar: ['#FFC300', '#4FD1C5', '#7FB2FF', '#B79CFF', '#FF8FA3', '#FF9F43', '#5EE08A', '#A9BCD2'],
-  avatarInk: '#001D3D',
-  freeze: '#1B6FB0',
+  avatarInk: '#111113',
+  freeze: '#1B6CAB',
   stamp: '#7A5C00',
   stampFaint: '#FFF4CC',
-  sheen: ['#CFDCEB', '#FFD60A', '#FFC300'],
+  sheen: ['#E7E7E4', '#FFD60A', '#FFC300'],
 };
 
 const dark: ColorSet = {
-  bg: '#000814',
-  bgElevated: '#001D3D',
-  surface: '#001D3D',
-  surfaceRaised: '#003566',
-  border: '#1C4370',
-  borderStrong: '#6F88A5',
-  divider: '#0E2F55',
-  text: '#F2F6FB',
-  textMuted: '#A9BCD2',
-  textSubtle: '#8FA4BD',
-  textInverse: '#000814',
-  accent: '#FFC300',
-  accentText: '#000814',
-  accentFaint: '#2A2608',
-  primary: '#FFC300',
-  primaryPressed: '#E6AF00',
-  onPrimary: '#000814',
+  bg: '#0B0B0D',
+  bgElevated: '#141416',
+  surface: '#161618',
+  surfaceRaised: '#222226',
+  border: '#303035',
+  borderStrong: '#808088',
+  divider: '#232327',
+  text: '#F4F4F2',
+  textMuted: '#B4B4BA',
+  textSubtle: '#A0A0A7',
+  textInverse: '#111113',
+  accent: '#93A9FF',
+  accentText: '#111113',
+  accentFaint: '#23283D',
+  primary: '#F4F4F2',
+  primaryPressed: '#D9D9D5',
+  onPrimary: '#111113',
   gold: '#FFC300',
+  onGold: '#111113',
   danger: '#FF7A8A',
-  dangerFaint: '#3A1222',
+  dangerFaint: '#3A1620',
   warning: '#FF9A45',
-  warningFaint: '#3A2210',
+  warningFaint: '#36220F',
   success: '#4BE08F',
-  successFaint: '#0B3326',
+  successFaint: '#0E2E20',
   info: '#7CC0F5',
-  infoFaint: '#0A2E4F',
-  scrim: 'rgba(0, 4, 10, 0.7)',
+  infoFaint: '#0F2A40',
+  scrim: 'rgba(0, 0, 0, 0.66)',
   signal: {
-    clean: { fill: '#2FD67B', onFill: '#000814', text: '#4BE08F', faint: '#0B3326' },
-    minor: { fill: '#FFE14A', onFill: '#000814', text: '#FFE14A', faint: '#332E08' },
-    moderate: { fill: '#FF8C2E', onFill: '#000814', text: '#FF9A45', faint: '#3A2210' },
-    severe: { fill: '#FF5468', onFill: '#000814', text: '#FF7A8A', faint: '#3A1222' },
+    clean: { fill: '#2FD67B', onFill: '#111113', text: '#4BE08F', faint: '#0E2E20' },
+    minor: { fill: '#FFE14A', onFill: '#111113', text: '#FFE14A', faint: '#302A0A' },
+    moderate: { fill: '#FF8C2E', onFill: '#111113', text: '#FF9A45', faint: '#36220F' },
+    severe: { fill: '#FF5468', onFill: '#111113', text: '#FF7A8A', faint: '#3A1620' },
   },
   tier: {
     bronze: { face: ['#D9844A', '#A85A24'], ink: '#2B1400', text: '#F0A06A' },
@@ -233,11 +243,11 @@ const dark: ColorSet = {
     diamond: { face: ['#A9C6FF', '#7B86FF'], ink: '#0B1550', text: '#A9C2FF' },
   },
   avatar: ['#FFC300', '#4FD1C5', '#7FB2FF', '#B79CFF', '#FF8FA3', '#FF9F43', '#5EE08A', '#A9BCD2'],
-  avatarInk: '#001D3D',
+  avatarInk: '#111113',
   freeze: '#8FD3FF',
   stamp: '#FFD60A',
   stampFaint: '#332B05',
-  sheen: ['#003566', '#FFC300', '#FFD60A'],
+  sheen: ['#222226', '#FFC300', '#FFD60A'],
 };
 
 const hud: HudSet = {
@@ -303,11 +313,11 @@ const type: TypeScale = {
 
 const elevation: Record<'light' | 'dark', Elevation> = {
   light: {
-    card: '0px 1px 2px rgba(0, 29, 61, 0.06), 0px 4px 14px rgba(0, 29, 61, 0.07)',
-    raised: '0px 6px 20px rgba(0, 29, 61, 0.14)',
-    overlay: '0px -6px 28px rgba(0, 8, 20, 0.18)',
+    card: '0px 1px 2px rgba(17, 17, 19, 0.04), 0px 8px 24px rgba(17, 17, 19, 0.06)',
+    raised: '0px 12px 32px rgba(17, 17, 19, 0.14)',
+    overlay: '0px -8px 40px rgba(17, 17, 19, 0.16)',
   },
-  dark: { card: undefined, raised: '0px 6px 20px rgba(0, 0, 0, 0.45)', overlay: undefined },
+  dark: { card: undefined, raised: '0px 12px 32px rgba(0, 0, 0, 0.55)', overlay: undefined },
 };
 
 export const tokens = {
@@ -315,7 +325,7 @@ export const tokens = {
   type,
   elevation,
   space: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, xxxl: 48 },
-  radius: { sm: 8, md: 12, lg: 16, card: 20, xl: 24, pill: 999 },
+  radius: { sm: 10, md: 14, lg: 20, card: 28, xl: 32, pill: 999 },
   /** Hit targets and icon sizes. 44 is the floor for anything tappable. */
   size: { touch: 44, touchLg: 56, hud: 64, iconSm: 16, icon: 20, iconLg: 28 },
   motion: {

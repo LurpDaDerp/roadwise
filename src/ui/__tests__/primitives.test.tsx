@@ -7,6 +7,7 @@ import { Card } from '@/ui/primitives/Card';
 import { Screen } from '@/ui/primitives/Screen';
 import { Skeleton } from '@/ui/primitives/Skeleton';
 import { Text } from '@/ui/primitives/Text';
+import { plainBundle } from '@/ui/sky/palette';
 import { ThemeProvider } from '@/ui/theme';
 import { tokens } from '@/ui/tokens';
 
@@ -27,15 +28,16 @@ test('a hero card renders its children over the navy gradient, and the legacy li
   expect(screen.getByText('Legacy')).toBeOnTheScreen();
 });
 
-test('children of a hero card draw with the dark palette even in light mode', async () => {
+test('children of a hero (scene) card draw with the scene palette, white ink, even in light mode', async () => {
   await render(
     <ThemeProvider scheme="light">
       <Card variant="hero">
-        <Text>On navy</Text>
+        <Text>On the scene</Text>
       </Card>
     </ThemeProvider>
   );
-  expect(screen.getByText('On navy')).toHaveStyle({ color: tokens.color.dark.text });
+  expect(screen.getByText('On the scene')).toHaveStyle({ color: plainBundle('light').onScene.text });
+  expect(plainBundle('light').onScene.text).toBe('#FFFFFF');
 });
 
 test('a banner exposes its message as text, not colour alone', async () => {

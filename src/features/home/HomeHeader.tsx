@@ -1,4 +1,5 @@
-import { Pressable, View } from 'react-native';
+import type { ReactNode } from 'react';
+import { Pressable, ScrollView, View } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
 import type { MySummary } from '@/data/server/summary';
@@ -73,9 +74,45 @@ function Rating({ progress }: { progress: MySummary['progress'] }) {
   );
 }
 
+/** The league in the card's corner: a round paper button holding the tier badge, the rank under it. */
+function LeagueButton({ league, onLeagues }: { league: MySummary['league']; onLeagues: () => void }) {
+  const t = useTheme();
+  return (
+    <Pressable
+      onPress={onLeagues}
+      testID="league-badge"
+      accessibilityRole="button"
+      accessibilityLabel={`${TIER_LABEL[league.tier]} league${league.rank ? `, rank ${league.rank} of ${league.size}` : ''}`}
+      accessibilityHint="Opens Leagues"
+      hitSlop={t.space.sm}
+      style={({ pressed }) => ({ alignItems: 'center', gap: t.space.xs, opacity: pressed ? 0.8 : 1, minWidth: t.size.touch })}
+    >
+      <View
+        style={{
+          width: 64,
+          height: 64,
+          borderRadius: 32,
+          backgroundColor: t.colors.surfaceRaised,
+          borderWidth: 1,
+          borderColor: t.colors.divider,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <TierBadge tier={league.tier} size="md" showLabel={false} />
+      </View>
+      <Text variant="label" tone="muted">
+        {TIER_LABEL[league.tier]}
+      </Text>
+      <Text variant="headline">{league.rank ? `#${league.rank}` : '—'}</Text>
+    </Pressable>
+  );
+}
+
 /**
- * The top of Home: how am I doing, at a glance. Safety Rating big (or how far from ranked),
- * then points, level, streak with its multiplier, freezes, and the league badge with rank.
+ * Home's drive card, the screen's hero: the hour's sky with the Safety Rating big (or how far from
+ * ranked) and the league in the corner, and Start drive across its foot. While progress loads or
+ * fails the card says so; Start stays in it either way.
  */
 export function HomeHeader({
   summary,
@@ -83,98 +120,128 @@ export function HomeHeader({
   error,
   onLeagues,
   onRetry,
+  start,
 }: {
   summary: MySummary | undefined;
   loading: boolean;
   error: boolean;
   onLeagues: () => void;
   onRetry: () => void;
+  /** Start drive, at the foot of the card (absent while a drive records). */
+  start?: ReactNode;
 }) {
   const t = useTheme();
 
-  if (!summary) {
-    return (
-      <Card variant="hero" testID="home-header">
-        {loading || !error ? (
-          <View style={{ gap: t.space.md }} testID="home-header-loading">
-            <Skeleton width={120} height={14} />
-            <Skeleton width={160} height={56} />
-            <Skeleton width="100%" height={44} />
-          </View>
-        ) : (
-          <View style={{ gap: t.space.md }} testID="home-header-error">
-            <Text variant="headline">{"Couldn't load your progress"}</Text>
-            <Text variant="subhead" tone="muted">
-              Your drives still record. Check your connection and try again.
-            </Text>
-            <Button label="Try again" variant="secondary" size="sm" onPress={onRetry} style={{ alignSelf: 'flex-start' }} />
-          </View>
-        )}
-      </Card>
-    );
-  }
-
-  const p = summary.progress;
-  const lg = summary.league;
-  const toNext = p.level_next === null ? null : Math.max(0, p.level_next - p.lifetime);
-  const streakState = p.at_risk ? 'atRisk' : 'active';
+  const top = !summary ? (
+    loading || !error ? (
+      <View style={{ gap: t.space.md }} testID="home-header-loading">
+        <Skeleton width={120} height={14} />
+        <Skeleton width={160} height={56} />
+      </View>
+    ) : (
+      <View style={{ gap: t.space.md }} testID="home-header-error">
+        <Text variant="headline">{"Couldn't load your progress"}</Text>
+        <Text variant="subhead" tone="muted">
+          Your drives still record. Check your connection and try again.
+        </Text>
+        <Button label="Try again" variant="secondary" size="sm" onPress={onRetry} style={{ alignSelf: 'flex-start' }} />
+      </View>
+    )
+  ) : (
+    <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: t.space.md }}>
+      <View style={{ flex: 1 }}>
+        <Rating progress={summary.progress} />
+      </View>
+      <LeagueButton league={summary.league} onLeagues={onLeagues} />
+    </View>
+  );
 
   return (
-    <Card variant="hero" testID="home-header">
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: t.space.md }}>
-        <View style={{ flex: 1 }}>
-          <Rating progress={p} />
-        </View>
-        <Pressable
-          onPress={onLeagues}
-          testID="league-badge"
-          accessibilityRole="button"
-          accessibilityLabel={`${TIER_LABEL[lg.tier]} league${lg.rank ? `, rank ${lg.rank} of ${lg.size}` : ''}`}
-          accessibilityHint="Opens Leagues"
-          hitSlop={t.space.sm}
-          style={({ pressed }) => ({ alignItems: 'center', gap: t.space.xs, opacity: pressed ? 0.8 : 1, minWidth: t.size.touch })}
-        >
-          <TierBadge tier={lg.tier} size="lg" showLabel={false} />
-          <Text variant="label" tone="muted">
-            {TIER_LABEL[lg.tier]}
-          </Text>
-          <Text variant="headline">{lg.rank ? `#${lg.rank}` : '—'}</Text>
-        </Pressable>
-      </View>
+    <Card variant="hero" testID="home-header" style={{ minHeight: start ? 280 : 200 }}>
+      {top}
+      <View style={{ flex: 1, minHeight: t.space.xl }} />
+      {start}
+    </Card>
+  );
+}
 
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.lg, paddingTop: t.space.sm }}>
-        <View accessible accessibilityLabel={`${formatPointsValue(p.points)} points`} style={{ minWidth: 88 }}>
-          <Text variant="stat" testID="home-points">
+/** One stat pill in the progress row: paper, round-ended, the number in the display face. */
+function StatPill({ children, accessibilityLabel, testID }: { children: ReactNode; accessibilityLabel?: string; testID?: string }) {
+  const t = useTheme();
+  return (
+    <View
+      testID={testID}
+      accessible={!!accessibilityLabel}
+      accessibilityLabel={accessibilityLabel}
+      style={{
+        minHeight: 56,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: t.space.sm,
+        paddingHorizontal: t.space.lg,
+        paddingVertical: t.space.sm,
+        borderRadius: t.radius.pill,
+        borderCurve: 'continuous',
+        backgroundColor: t.colors.surface,
+        borderWidth: t.scheme === 'dark' ? 1 : 0,
+        borderColor: t.colors.divider,
+        boxShadow: t.elevation.card,
+      }}
+    >
+      {children}
+    </View>
+  );
+}
+
+/**
+ * The progress row under the greeting, in pills that scroll sideways: the streak with its
+ * multiplier, freezes, points and the level with its bar. The at-risk line follows when the
+ * streak needs a clean drive.
+ */
+export function ProgressStrip({ summary }: { summary: MySummary }) {
+  const t = useTheme();
+  const p = summary.progress;
+  const toNext = p.level_next === null ? null : Math.max(0, p.level_next - p.lifetime);
+  const streakState = p.at_risk ? 'atRisk' : 'active';
+  return (
+    <View style={{ gap: t.space.sm }} testID="home-progress">
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={{ marginHorizontal: -t.space.lg, overflow: 'visible' }}
+        contentContainerStyle={{ gap: t.space.sm, paddingHorizontal: t.space.lg, paddingVertical: t.space.xs }}
+      >
+        <StatPill>
+          <StreakFlame count={p.streak} multiplier={p.next_mult} state={streakState} testID="home-streak" />
+        </StatPill>
+        <StatPill>
+          <FreezeCount count={p.freezes} testID="home-freezes" />
+        </StatPill>
+        <StatPill accessibilityLabel={`${formatPointsValue(p.points)} points`}>
+          <Text variant="title2" testID="home-points" style={{ fontVariant: ['tabular-nums'] }}>
             {formatPointsValue(p.points)}
           </Text>
           <Text variant="label" tone="muted">
             Points
           </Text>
-        </View>
-        <View
-          accessible
-          accessibilityLabel={`Level ${p.level}${toNext === null ? ', top level' : `, ${toNext} points to level ${p.level + 1}`}`}
-          style={{ flex: 1, minWidth: 120, gap: t.space.xs }}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: t.space.xs }}>
-            <Text variant="stat">Lvl {p.level}</Text>
-            <Text variant="footnote" tone="muted">
-              {toNext === null ? 'Top level' : `${formatPointsValue(toNext)} to ${p.level + 1}`}
-            </Text>
+        </StatPill>
+        <StatPill accessibilityLabel={`Level ${p.level}${toNext === null ? ', top level' : `, ${toNext} points to level ${p.level + 1}`}`}>
+          <View style={{ gap: t.space.xs, minWidth: 112 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: t.space.xs }}>
+              <Text variant="title3">Lvl {p.level}</Text>
+              <Text variant="footnote" tone="muted">
+                {toNext === null ? 'Top level' : `${formatPointsValue(toNext)} to ${p.level + 1}`}
+              </Text>
+            </View>
+            <ProgressBar value={levelProgress(p)} accessibilityLabel={`Level ${p.level} progress`} height={6} />
           </View>
-          <ProgressBar value={levelProgress(p)} accessibilityLabel={`Level ${p.level} progress`} height={6} />
-        </View>
-      </View>
-
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: t.space.md }}>
-        <StreakFlame count={p.streak} multiplier={p.next_mult} state={streakState} testID="home-streak" />
-        <FreezeCount count={p.freezes} testID="home-freezes" />
-      </View>
+        </StatPill>
+      </ScrollView>
       {p.at_risk ? (
         <Text variant="footnote" tone="warning" testID="home-at-risk">
           Streak at risk: make your next drive clean to keep it.
         </Text>
       ) : null}
-    </Card>
+    </View>
   );
 }

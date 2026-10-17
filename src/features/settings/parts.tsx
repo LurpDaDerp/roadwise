@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Children, type ComponentProps, type ReactNode } from 'react';
-import { Pressable, View } from 'react-native';
+import { View } from 'react-native';
 
-import { Card, Divider, ListRow, Text, useFontScale, useTheme } from '@/ui';
+import { Card, Divider, IconButton, ListRow, Text, useFontScale, useTheme } from '@/ui';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -18,26 +18,9 @@ export function TopBar({ title, trailing, testID }: { title: string; trailing?: 
   const router = useRouter();
   const canGoBack = router.canGoBack();
   return (
-    <View testID={testID} style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.sm, minHeight: th.size.touch }}>
+    <View testID={testID} style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.md, minHeight: th.size.touch }}>
       {canGoBack ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          onPress={() => router.back()}
-          hitSlop={th.space.sm}
-          testID="top-bar-back"
-          style={({ pressed }) => ({
-            minWidth: th.size.touch,
-            minHeight: th.size.touch,
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginLeft: -th.space.sm,
-            borderRadius: th.radius.pill,
-            backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
-          })}
-        >
-          <Ionicons name="chevron-back" size={th.size.iconLg} color={th.colors.accent} />
-        </Pressable>
+        <IconButton icon="chevron-back" accessibilityLabel="Back" onPress={() => router.back()} variant="surface" testID="top-bar-back" />
       ) : null}
       <Text variant="title2" accessibilityRole="header" style={{ flex: 1 }}>
         {title}
@@ -95,8 +78,7 @@ export function RowIcon({ name, tone = 'accent' }: { name: IconName; tone?: 'acc
       style={{
         width: box,
         height: box,
-        borderRadius: th.radius.sm,
-        borderCurve: 'continuous',
+        borderRadius: box / 2,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: tone === 'danger' ? th.colors.dangerFaint : th.colors.accentFaint,

@@ -24,6 +24,7 @@ import {
   HOW_POINTS_WORK_HREF,
   LEAGUES_HREF,
   PERMISSIONS_HREF,
+  PROFILE_HREF,
 } from '@/features/drives/routes';
 import { Screen } from '@/ui';
 
@@ -152,7 +153,7 @@ export function HomeScreen() {
   const [pulls, setPulls] = useState(0);
 
   return (
-    <Screen padded={false} bottomInset={false}>
+    <Screen padded={false} bottomInset={false} sky>
       <HomeView
         summary={summary.data}
         summaryLoading={summary.isLoading}
@@ -172,6 +173,7 @@ export function HomeScreen() {
         onAllStats={() => router.push(ALL_STATS_HREF)}
         onHowPoints={() => router.push(HOW_POINTS_WORK_HREF)}
         onLeagues={() => router.navigate(LEAGUES_HREF)}
+        onProfile={() => router.navigate(PROFILE_HREF)}
         recording={recording}
         inProgress={<DriveInProgressBanner />}
         permissions={<PermissionCard board={board} recording={recording} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}

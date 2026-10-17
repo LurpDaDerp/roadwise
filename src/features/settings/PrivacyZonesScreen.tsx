@@ -5,7 +5,7 @@ import { Alert, TextInput, View } from 'react-native';
 import { createPermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
-import { Banner, Button, Chip, EmptyState, IconButton, ListRow, Screen, Sheet, Text, useFontScale, useTheme } from '@/ui';
+import { Banner, Button, Chip, EmptyState, IconButton, ListRow, Screen, Sheet, Text, useFontScale, useTheme, withAlpha } from '@/ui';
 
 import { settingsCopy } from './copy';
 import { loadMaps, US_REGION } from './maps';
@@ -358,7 +358,7 @@ function ZoneEditor({
                     center={{ latitude: draft.lat as number, longitude: draft.lng as number }}
                     radius={draft.radiusM}
                     strokeColor={th.colors.accent}
-                    fillColor={th.scheme === 'dark' ? 'rgba(255, 195, 0, 0.18)' : 'rgba(0, 53, 102, 0.16)'}
+                    fillColor={withAlpha(th.colors.accent, th.scheme === 'dark' ? 0.22 : 0.16)}
                     strokeWidth={2}
                   />
                 ) : null}

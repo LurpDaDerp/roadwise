@@ -29,6 +29,9 @@ import { LockoutGate } from '@/features/drive/LockoutGate';
 import { NotificationsHost, reminderStartGate } from '@/features/notifications';
 import { syncNotificationPrefs } from '@/features/settings/notifications/sync';
 import { ThemeProvider } from '@/ui';
+import { appSkyPorts } from '@/ui/sky/ports';
+import { SkyChrome } from '@/ui/sky/SkyChrome';
+import { useSkyMood } from '@/ui/sky/useSkyMood';
 import { FONT_WAIT_MS, shouldRender, useAppFonts } from '@/ui/fonts';
 
 // Hold the splash until the licence faces are in memory: the first frame of RoadWise has to be
@@ -93,6 +96,9 @@ function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean 
 
 export default function RootLayout() {
   const { loaded, error } = useAppFonts();
+  // The sky the theme wears: the sun at the phone's last known position and the weather there.
+  // Read from the first render, behind the splash, so the first frame already has it.
+  const mood = useSkyMood(appSkyPorts);
   const [timedOut, setTimedOut] = useState(false);
   // The record: SQLite opened and migrated, the interrupted drive recovered or adopted, the drive
   // host started, the sync runner started (`src/boot/bootstrap.ts`). The controller owns it: the
@@ -218,7 +224,8 @@ export default function RootLayout() {
     return (
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          <ThemeProvider>
+          <ThemeProvider mood={mood}>
+            <SkyChrome />
             <SwitchingAccounts />
           </ThemeProvider>
         </SafeAreaProvider>
@@ -230,7 +237,8 @@ export default function RootLayout() {
     return (
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          <ThemeProvider>
+          <ThemeProvider mood={mood}>
+            <SkyChrome />
             <BootstrapFailed
               retrying={state.status === 'booting'}
               onRetry={() => void controller.ensureRuntime().catch(() => {})}
@@ -244,7 +252,8 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <ThemeProvider>
+        <ThemeProvider mood={mood}>
+          <SkyChrome />
           <QueryClientProvider client={runtime.queryClient}>
             <DataProvider db={runtime.db}>
               <DriveProvider host={runtime.drive}>

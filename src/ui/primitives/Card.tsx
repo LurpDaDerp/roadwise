@@ -1,25 +1,29 @@
-import { LinearGradient } from 'expo-linear-gradient';
 import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { ThemeProvider, useTheme } from '../theme';
+import { SkyScene } from '../sky/SkyScene';
+import { SceneScope, useTheme } from '../theme';
 
 export type CardVariant = 'plain' | 'raised' | 'hero' | 'outline' | 'license';
 
 export type CardProps = {
   children: ReactNode;
   /**
-   * - `plain` (default): the surface card. Light: white with a soft navy shadow. Dark: prussian with a hairline.
+   * - `plain` (default): the surface card. Light: paper white with a soft shadow. Dark: a
+   *   charcoal face with a hairline.
    * - `raised`: one step up (surfaceRaised) — a card inside a sheet, a selected tile.
-   * - `hero`: the navy brand card for the one headline block on a screen (Home header, summary
-   *   points). A regal-to-prussian navy gradient in both schemes; its children render under the
-   *   dark palette automatically, so any primitive inside reads correctly.
+   * - `hero`: the scene card for the one headline block on a screen (Home's drive card, the
+   *   summary points, a league or profile header): the sky's deep gradient for this hour and
+   *   weather, with a road over low hills. Its children render under the scene palette
+   *   automatically (white ink, repaired to AA on every stop), so any primitive inside reads.
    * - `outline`: no fill, a strong rule. Placeholders, "add" slots.
    * - `license`: @deprecated alias of `hero`, kept so v2 screens compile.
    */
   variant?: CardVariant;
-  /** Default true: 16 pt padding and 12 pt gap between children. */
+  /** Default true: 16 pt padding (20 on a hero) and 12 pt gap between children. */
   padded?: boolean;
+  /** Draw the hero's road silhouette (default true). Off for a short hero where it would crowd the text. */
+  road?: boolean;
   /** Makes the whole card one button. Give it an `accessibilityLabel` that says what it opens. */
   onPress?: () => void;
   accessibilityLabel?: string;
@@ -29,14 +33,12 @@ export type CardProps = {
   testID?: string;
 };
 
-/** The hero card's fixed navy gradient, independent of scheme. */
-export const HERO_CARD_GRADIENT = ['#003566', '#001D3D'] as const;
-
-/** A chunky rounded card. Never nest one card inside another; group with `Divider` or `ListRow`. */
+/** A big rounded card. Never nest one card inside another; group with `Divider` or `ListRow`. */
 export function Card({
   children,
   variant = 'plain',
   padded = true,
+  road = true,
   onPress,
   accessibilityLabel,
   accessibilityHint,
@@ -50,7 +52,7 @@ export function Card({
   const face: ViewStyle = {
     borderRadius: t.radius.card,
     borderCurve: 'continuous',
-    padding: padded ? t.space.lg : 0,
+    padding: padded ? (v === 'hero' ? t.space.lg + t.space.xs : t.space.lg) : 0,
     gap: padded ? t.space.md : 0,
     overflow: 'hidden',
     ...{
@@ -66,9 +68,8 @@ export function Card({
         boxShadow: t.elevation.raised,
       },
       hero: {
-        backgroundColor: HERO_CARD_GRADIENT[1],
-        borderWidth: dark ? 1 : 0,
-        borderColor: t.colors.border,
+        backgroundColor: t.sky.scene[2],
+        borderWidth: 0,
         boxShadow: t.elevation.raised,
       },
       outline: {
@@ -83,16 +84,8 @@ export function Card({
   const body =
     v === 'hero' ? (
       <>
-        <LinearGradient
-          pointerEvents="none"
-          colors={HERO_CARD_GRADIENT}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={StyleSheet.absoluteFill}
-        />
-        <ThemeProvider scheme="dark" reduceMotion={t.reduceMotion}>
-          {children}
-        </ThemeProvider>
+        <SkyScene road={road} />
+        <SceneScope>{children}</SceneScope>
       </>
     ) : (
       children

@@ -4,6 +4,8 @@ import type { LastFinalized } from '@/drive/host';
 import type { DriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { DIM_AFTER_MS, HOLD_TO_END_MS, HUD, type HaloProps, type HaloVisual } from '@/ui/drive';
+import type { SkyMood } from '@/ui/sky/palette';
+import { ThemeProvider } from '@/ui/theme';
 
 import { hudCopy } from '../hudCopy';
 import { HudScreen } from '../HudScreen';
@@ -687,5 +689,59 @@ describe('layout, accessibility and Reduce Motion', () => {
   test('not recording (saving): calm whatever the signals', async () => {
     await renderHud({ status: 'finalizing', rowTs: T, speedingTier: 'severe', speedMph: 90, phoneUseSince: T - 5000 });
     expect(halo().mode).toBe('calm');
+  });
+});
+
+// Jest compiles this suite to CommonJS, so `__dirname` is real at run time.
+declare const __dirname: string;
+
+describe('the sky theme stays off the driving screen', () => {
+  const STORM_AT_DUSK: SkyMood = { phase: 'dusk', glow: 1, weather: { kind: 'storm', intensity: 'heavy' } };
+  const RAIN_BY_DAY: SkyMood = { phase: 'day', glow: 0, weather: { kind: 'rain', intensity: 'heavy' } };
+
+  test.each([
+    ['a storm at dusk', STORM_AT_DUSK],
+    ['heavy rain by day', RAIN_BY_DAY],
+  ])('under %s: no backdrop, no weather layer, and the speed reads in the HUD palette exactly as without a sky', async (_name, mood) => {
+    mockLive = live();
+    const plain = await render(<HudScreen />);
+    await act(async () => {});
+    const bare = screen.getByTestId('hud-speed-numeral', HIDDEN).props.style;
+    await plain.rerender(
+      <ThemeProvider mood={mood}>
+        <HudScreen />
+      </ThemeProvider>
+    );
+    await act(async () => {});
+    expect(screen.queryByTestId('sky-backdrop', HIDDEN)).toBeNull();
+    expect(screen.queryByTestId('sky-ambient', HIDDEN)).toBeNull();
+    expect(screen.getByTestId('hud-speed-numeral', HIDDEN).props.style).toEqual(bare);
+    expect(halo().mode).toBe('calm');
+  });
+
+  test('no driving-screen source reaches for the sky theme', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- a Node read in a test
+    const fs = require('node:fs') as {
+      readdirSync(dir: string, opts: { withFileTypes: true }): { name: string; isDirectory(): boolean }[];
+      readFileSync(file: string, enc: 'utf8'): string;
+    };
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- a Node read in a test
+    const path = require('node:path') as { join(...parts: string[]): string };
+    const root = path.join(__dirname, '..', '..', '..', '..');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (e.name !== '__tests__') walk(full);
+        } else if (/\.tsx?$/.test(e.name)) files.push(full);
+      }
+    };
+    for (const dir of ['src/features/drive', 'src/ui/drive', 'app/drive']) walk(path.join(root, dir));
+    expect(files.length).toBeGreaterThan(10);
+    for (const f of files) {
+      const src = fs.readFileSync(f, 'utf8');
+      expect({ file: f, sky: /ui\/sky|SkyBackdrop|SkyScene|useSkyMood|sky-ambient/.test(src) }).toEqual({ file: f, sky: false });
+    }
   });
 });
