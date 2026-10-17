@@ -74,13 +74,23 @@ test.each([
   ['setup open', { setup: true }],
   ['paired dashcam connected', { connected: true, paired: PAIRED_VIEW }],
   ['bluetooth not ready', { ready: false }],
-  ['moving or speed unknown', { mph: 3 }],
-  ['moving or speed unknown', { mph: null }],
+  ['moving', { mph: 3 }],
 ] as const)('never scans when %s', async (why, change) => {
   const r = rig();
   Object.assign(r.state, change);
   expect(await r.d.check()).toEqual({ kind: 'skipped', why });
   expect(r.scans).toEqual([]);
+});
+
+test('an unknown speed (indoors, no fix with a speed) still scans: only a known 3 mph or more holds it', async () => {
+  const r = rig();
+  Object.assign(r.state, { mph: null });
+  r.hits.push(hit('A', -60));
+  expect(await r.d.check()).toEqual({ kind: 'found', found: { id: 'A', name: 'DashPal-A', rssi: -60, kind: 'new', adv: 'new' } });
+  Object.assign(r.state, { mph: 2.9 });
+  r.clock.t += DETECT_EVERY_MS;
+  expect((await r.d.check()).kind).toBe('found');
+  expect(r.scans).toHaveLength(2);
 });
 
 test('at most one scan a minute; pull to refresh may scan again 10 s after the last one', async () => {

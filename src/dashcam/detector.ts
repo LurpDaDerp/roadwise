@@ -6,7 +6,8 @@
 // to refresh: at most once per minute (pull to refresh at most once per 10 s; a scan cut short does
 // not count, but no scan starts within 10 s of the last start), and only when: opted
 // in; Bluetooth already allowed and on (read, never asked); no drive open or closing; Home showing
-// and RoadWise in front; a speed probe under 3 mph (unknown speed blocks); no setup open; the paired
+// and RoadWise in front; no speed probe of 3 mph or more (an unknown speed, as indoors, does not block:
+// a drive open already does); no setup open; the paired
 // DashPal not connected. What a hit offers (`classify`): a DashPal with no phone paired (`new`), or
 // this phone's own DashPal once it no longer knows this phone (`again`); at −80 dBm or stronger, not
 // snoozed ("Not now", 7 days), the strongest one. Pure apart from its injected reads.
@@ -137,7 +138,7 @@ export function createDetector(deps: DetectorDeps): Detector {
     try {
       if (!(await deps.bluetoothReady().catch(() => false))) return { kind: 'skipped', why: 'bluetooth not ready' };
       const mph = await deps.speedMph().catch(() => null);
-      if (mph === null || mph >= DETECT_MAX_MPH) return { kind: 'skipped', why: 'moving or speed unknown' };
+      if (mph !== null && mph >= DETECT_MAX_MPH) return { kind: 'skipped', why: 'moving' };
       const again = blocked();
       if (again) return { kind: 'skipped', why: again };
       const snoozes = await deps.snoozes().catch(() => ({}) as Record<string, number>);
