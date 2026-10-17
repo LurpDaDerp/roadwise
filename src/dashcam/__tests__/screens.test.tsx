@@ -397,6 +397,29 @@ describe('Home: the card of a DashPal ready to pair', () => {
     expect(mockRouter.push).not.toHaveBeenCalled();
   });
 
+  it('a drive starting while the sheet is open: the cards go, the sheet stays and its flow is not torn down (it says “Finish your drive first.”)', async () => {
+    const n = nearby([NEW]);
+    const w = await appWorld();
+    function Driving() {
+      const [hidden, setHidden] = useState(false);
+      return (
+        <>
+          <HomeDashpal deps={n.deps} hidden={hidden} />
+          <Pressable testID="drive" onPress={() => setHidden(true)} />
+        </>
+      );
+    }
+    await w.render(<Driving />);
+    await tap('home-dashpal-pair-open');
+    await n.flow.to({ kind: 'instructions', aimAllowed: true, holdLeftS: null, reconnecting: false });
+    await tap('drive');
+    expect(screen.queryByTestId('home-dashpal-pair')).toBeNull();
+    expect(screen.getByTestId('wizard-sheet')).toBeOnTheScreen();
+    expect(n.flow.cancelled()).toBe(0);
+    await n.flow.to({ kind: 'busy' });
+    expect(screen.getByTestId('wizard-sheet')).toHaveTextContent(dashpalCopy.wizard.failed.busy, { exact: false });
+  });
+
   it('Not now (the ✕ or the screen reader’s action) hides it and snoozes that DashPal for 7 days', async () => {
     const n = nearby([NEW]);
     const w = await appWorld();

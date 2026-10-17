@@ -46,7 +46,11 @@ export type HomeViewProps = {
   inProgress?: ReactNode;
   /** The permission card, right under the greeting (never while a drive records). */
   permissions?: ReactNode;
-  /** The DashPal new-phone card, under the permission card (never while a drive records). */
+  /**
+   * Home's DashPal slot (the new-phone card and the card of a DashPal ready to pair), under the
+   * permission card. It stays mounted while a drive records: it hides its own cards then, and a
+   * setup sheet it opened stays to say the drive stopped it.
+   */
   dashpal?: ReactNode;
   /** Home's scroll, so it can return to the top when the permission card shows. */
   scrollRef?: RefObject<ScrollView | null>;
@@ -79,7 +83,7 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
           {name ? `Hey, ${name}` : 'Home'}
         </Text>
         {p.recording ? p.inProgress : p.permissions}
-        {p.recording ? null : p.dashpal}
+        {p.dashpal}
         <HomeHeader summary={p.summary} loading={p.summaryLoading} error={p.summaryError} onLeagues={p.onLeagues} onRetry={p.onRetrySummary} />
 
         {firstRun ? (

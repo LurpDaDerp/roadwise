@@ -175,7 +175,7 @@ describe('the permission card slot', () => {
     expect(screen.getByTestId('in-progress')).toBeOnTheScreen();
   });
 
-  test('the DashPal new-phone card sits under the permission card and above the Safety Rating header, never while a drive records', async () => {
+  test('the DashPal slot sits under the permission card and above the Safety Rating header, and stays while a drive records (it hides its own cards; a setup sheet it opened stays)', async () => {
     const dashpal = <Text testID="dashpal-slot">A new phone was paired</Text>;
     await draw(<HomeView {...props({ permissions: card, dashpal })} />);
     const tree = JSON.stringify(screen.toJSON());
@@ -184,7 +184,7 @@ describe('the permission card slot', () => {
     expect(slot).toBeGreaterThan(row);
     expect(tree.indexOf('Safety Rating')).toBeGreaterThan(slot);
     await draw(<HomeView {...props({ permissions: card, dashpal, recording: true, inProgress: <Text>Drive in progress</Text> })} />);
-    expect(screen.queryByTestId('dashpal-slot')).toBeNull();
+    expect(screen.getByTestId('dashpal-slot')).toBeOnTheScreen();
   });
 });
 
