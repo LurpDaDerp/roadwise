@@ -68,7 +68,7 @@ export function StreakFlame({
       : state === 'frozen'
         ? c.infoFaint
         : lit
-          ? c.primary
+          ? c.gold
           : c.surfaceRaised;
   const glyphColor =
     state === 'atRisk'
@@ -76,7 +76,7 @@ export function StreakFlame({
       : state === 'frozen'
         ? c.freeze
         : lit
-          ? c.onPrimary
+          ? c.onGold
           : c.textSubtle;
   const glyph = state === 'frozen' ? 'snow' : lit ? 'flame' : 'flame-outline';
 

@@ -35,8 +35,8 @@ export function Pill({ label, tone = 'neutral', icon, emphasis = 'soft', accessi
     bg = emphasis === 'solid' ? c.accent : c.accentFaint;
     fg = emphasis === 'solid' ? c.accentText : c.accent;
   } else if (tone === 'gold') {
-    bg = emphasis === 'solid' ? c.primary : c.accentFaint;
-    fg = emphasis === 'solid' ? c.onPrimary : t.scheme === 'dark' ? c.gold : c.accent;
+    bg = emphasis === 'solid' ? c.gold : c.accentFaint;
+    fg = emphasis === 'solid' ? c.onGold : t.scheme === 'dark' ? c.gold : c.accent;
   } else if (tone === 'info') {
     bg = emphasis === 'solid' ? c.info : c.infoFaint;
     fg = emphasis === 'solid' ? c.textInverse : c.info;

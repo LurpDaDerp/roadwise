@@ -23,8 +23,8 @@ export type ChipProps = {
 };
 
 /**
- * A capsule toggle. Selected chips go gold with a glyph, so "on" never rides on colour alone.
- * 36 pt tall with hit slop to the 44 pt floor.
+ * A capsule toggle. Selected chips fill with ink (paper in dark) and carry a glyph, so "on" never
+ * rides on colour alone. 40 pt tall with hit slop to the 44 pt floor.
  */
 export function Chip({
   label,
@@ -53,18 +53,18 @@ export function Chip({
       }
       disabled={disabled}
       onPress={onPress}
-      hitSlop={4}
+      hitSlop={2}
       style={({ pressed }) => [
         {
-          minHeight: 36,
+          minHeight: 40,
           flexDirection: 'row',
           alignItems: 'center',
           alignSelf: 'flex-start',
           gap: t.space.xs + 2,
-          paddingHorizontal: t.space.md + 2,
+          paddingHorizontal: t.space.lg,
           borderRadius: t.radius.pill,
           backgroundColor: selected ? (pressed ? c.primaryPressed : c.primary) : pressed ? c.surfaceRaised : c.surface,
-          borderWidth: 1.5,
+          borderWidth: 1,
           borderColor: selected ? c.primary : c.borderStrong,
           opacity: disabled ? 0.5 : 1,
         },
