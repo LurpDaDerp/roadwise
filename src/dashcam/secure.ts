@@ -5,14 +5,13 @@
 // - `dashpal.enabled`: start the BLE manager at launch (written at opt-in and pairing).
 // - `dashpal.peripheral`: `{peripheralId, dashcamId}`, the paired peripheral to keep connected.
 // - `dashpal.auth`: this phone's pairing key with the paired DashPal, `{v: 2, dashcamId, phoneId
-//   (16 hex), kPair (64 hex), code (the label code's 28 characters, kept only for a pairing made from
-//   the label, for Set up again; never shown) | null}`.
+//   (16 hex), kPair (64 hex)}` (a `code` field an older build wrote is ignored).
 // - `dashpal.authPending`: the key of a pairing under way, written before PAIR_FIN; it replaces
-//   `dashpal.auth` only once the setup has finished, so a failed or cancelled setup leaves the
-//   previous pairing as it was.
+//   `dashpal.auth` only once the DashPal has committed the setup, so a failed or cancelled setup
+//   leaves the previous pairing as it was.
 // - `dashpal.orphan`: `{dashcamId, phoneId, kPair}`, a key left from before (an iOS reinstall, a
-//   PAIR_FIN whose outcome stayed unknown); never used for a session, only to prove `prev_id` when
-//   this phone next sets up that DashPal.
+//   commit whose answer never came); never used for a session, only to prove `prev_id` when this
+//   phone next sets up that DashPal.
 // - `dashpal.pendingCode`: `{at, dashcamId, code}`, a label link's code held until setup can open
 //   (12 h), so the code never enters router state or SQLite.
 // The key entries are "this device only": never in a backup, never on another phone.
@@ -61,8 +60,6 @@ export interface StoredAuth {
   phoneId: string;
   /** the 32-byte pairing key, 64 lowercase hex */
   kPair: string;
-  /** the label code (28 characters, no dashes) when this pairing used it; null for a one-time code */
-  code: string | null;
 }
 
 export interface OrphanAuth {
@@ -80,7 +77,6 @@ export interface PendingCode {
 }
 
 const isHex = (s: unknown, n: number): s is string => typeof s === 'string' && s.length === n && /^[0-9a-f]+$/.test(s);
-const isCodeText = (s: unknown): s is string => typeof s === 'string' && /^[0-9A-Z]{28}$/.test(s);
 
 function parseJson(raw: string | null): Record<string, unknown> | null {
   if (!raw) return null;
@@ -95,7 +91,7 @@ function parseJson(raw: string | null): Record<string, unknown> | null {
 function asAuth(v: Record<string, unknown> | null): StoredAuth | null {
   if (!v || v.v !== 2 || !isDashcamId(v.dashcamId) || !isHex(v.phoneId, 16) || !isHex(v.kPair, 64)) return null;
   if (/^0+$/.test(v.phoneId)) return null;
-  return { dashcamId: v.dashcamId, phoneId: v.phoneId, kPair: v.kPair, code: isCodeText(v.code) ? v.code : null };
+  return { dashcamId: v.dashcamId, phoneId: v.phoneId, kPair: v.kPair };
 }
 
 function asOrphan(v: Record<string, unknown> | null): OrphanAuth | null {
@@ -139,7 +135,7 @@ export function createDashpalSecrets(store: () => SecureStoreLike = secureStore)
     const s = store();
     await s.deleteItemAsync(key, keyOpts(s));
   };
-  const authJson = (a: StoredAuth): string => JSON.stringify({ v: 2, dashcamId: a.dashcamId, phoneId: a.phoneId, kPair: a.kPair, code: a.code });
+  const authJson = (a: StoredAuth): string => JSON.stringify({ v: 2, dashcamId: a.dashcamId, phoneId: a.phoneId, kPair: a.kPair });
 
   const self: DashpalSecrets = {
     readEnabled: async () => (await get(ENABLED_SECURE_KEY, options)) === '1',

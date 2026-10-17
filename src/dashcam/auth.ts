@@ -21,7 +21,7 @@
 import { concat, ctEqual, gcmOpen, gcmSeal, hkdfSha256, hmacSha256, sha256, utf8, wipe, x25519Public, x25519Shared } from './crypto';
 
 export const AUTH_VERSION = 2;
-export const AUTH_MSG = { PAIR_REQ: 0x10, PAIR_FIN: 0x11, PAIR_OPEN: 0x12, SESSION_REQ: 0x20, SESSION_FIN: 0x21 } as const;
+export const AUTH_MSG = { PAIR_FIN: 0x11, PAIR_OPEN: 0x12, SESSION_REQ: 0x20, SESSION_FIN: 0x21 } as const;
 export const AUTH_RECORD = { PENDING: 0x00, PAIR_RESP: 0x90, SESSION_RESP: 0xa0, RESULT: 0xe0 } as const;
 
 /** RESULT codes (never ATT statuses). */
@@ -31,8 +31,6 @@ export const R = {
   UNKNOWN_PHONE: 0x02,
   BUSY: 0x03,
   WRONG_PROOF: 0x04,
-  WRONG_CODE: 0x05,
-  UNKEYED: 0x06,
   ID_IN_USE: 0x07,
   STORE_FAILED: 0x08,
   MTU: 0x09,
@@ -44,7 +42,6 @@ export const R = {
 export type ResultCode = (typeof R)[keyof typeof R];
 
 export const PAIR_OPEN_LEN = 82;
-export const PAIR_REQ_LEN = 98;
 export const PAIR_RESP_LEN = 66;
 export const SESSION_REQ_LEN = 26;
 export const SESSION_RESP_LEN = 34;
@@ -64,10 +61,8 @@ export const REPLAY_WINDOW = 64;
 /** The last counter a sender may use: at 2^32 - 1 it ends the connection instead. */
 export const CTR_LAST = 0xfffffffe;
 
+/** The session's labels (link v2's, unchanged in v3). */
 const LABEL = {
-  pairReq: utf8('DPv2 pair-req'),
-  replace: utf8('DPv2 replace'),
-  pair: utf8('DPv2 pair'),
   dashcam: utf8('DPv2 dashcam'),
   phone: utf8('DPv2 phone'),
   id: utf8('DPv2 id'),
@@ -120,42 +115,10 @@ export const resultRecord = (code: number): Uint8Array => Uint8Array.from([AUTH_
 
 // ——— pairing ———
 
-export interface PairInputs {
-  /** the label code S or the window's one-time code S1 (16 bytes) */
-  code: Uint8Array;
-  /** INFO's 6 mac bytes, most significant first */
-  mac: ArrayLike<number>;
-  /** the link's Nc, from the INFO read just before */
-  nc: ArrayLike<number>;
-  /** this phone's new id (8 bytes, not all zero) */
-  idP: ArrayLike<number>;
-  /** the phone's X25519 private scalar (32 bytes) */
-  a: ArrayLike<number>;
-  /** its public key when already computed (drawn ahead of the request); else computed here */
-  A?: ArrayLike<number>;
-  np: ArrayLike<number>;
-  /** a record of this phone on that dashcam to replace: its id and its K_pair (proven by prev_proof) */
-  prev?: { id: ArrayLike<number>; kPair: ArrayLike<number> } | null;
-}
-
+/** A PAIR_OPEN and the phone's public key in it. */
 export interface PairRequest {
   bytes: Uint8Array;
   A: Uint8Array;
-}
-
-export function pairRequest(i: PairInputs): PairRequest {
-  const mac = fixed('mac', i.mac, 6);
-  const nc = fixed('Nc', i.nc, 16);
-  const idP = fixed('id_p', i.idP, 8);
-  if (idP.every((b) => b === 0)) throw new Error('id_p must not be zero');
-  const code = fixed('code', i.code, 16);
-  const np = fixed('Np', i.np, 16);
-  const A = i.A ? fixed('A', i.A, 32) : x25519Public(fixed('a', i.a, 32));
-  const prevId = i.prev ? fixed('prev_id', i.prev.id, 8) : new Uint8Array(8);
-  const prevProof = i.prev ? mac16(fixed('prev K_pair', i.prev.kPair, 32), LABEL.replace, mac, nc, idP) : new Uint8Array(16);
-  const body = concat(idP, prevId, prevProof, A, np);
-  const tag = mac16(code, LABEL.pairReq, mac, nc, body);
-  return { bytes: concat([AUTH_MSG.PAIR_REQ, AUTH_VERSION], body, tag), A };
 }
 
 export interface PairKeys {
@@ -166,26 +129,7 @@ export interface PairKeys {
   proofP: Uint8Array;
 }
 
-/**
- * The keys of a pairing from the phone's request and the dashcam's PAIR_RESP, or null when the
- * dashcam's key is refused (a low-order point). The caller checks `proofD` against the response.
- */
-export function pairKeys(i: { code: Uint8Array; mac: ArrayLike<number>; nc: ArrayLike<number>; req: Uint8Array; a: ArrayLike<number>; B: Uint8Array; Nd: Uint8Array }): PairKeys | null {
-  const z = x25519Shared(fixed('a', i.a, 32), fixed('B', i.B, 32));
-  if (!z) return null;
-  if (i.req.length !== PAIR_REQ_LEN) throw new Error('PAIR_REQ must be 98 bytes');
-  const t = sha256(LABEL.pair, fixed('mac', i.mac, 6), fixed('Nc', i.nc, 16), i.req.slice(2, 82), i.B, fixed('Nd', i.Nd, 16));
-  const okm = hkdfSha256(fixed('code', i.code, 16), z, t, 64);
-  wipe(z);
-  const K_pair = okm.slice(0, 32);
-  const k_conf = okm.slice(32, 64);
-  wipe(okm);
-  return { T_pair: t, K_pair, k_conf, proofD: mac16(k_conf, LABEL.dashcam, t), proofP: mac16(k_conf, LABEL.phone, t) };
-}
-
 export const pairFin = (proofP: Uint8Array): Uint8Array => concat([AUTH_MSG.PAIR_FIN, AUTH_VERSION], fixed('proof_p', proofP, 16));
-
-// ——— pairing, link v3 ———
 
 export interface PairOpenInputs {
   /** INFO's 6 mac bytes, most significant first */

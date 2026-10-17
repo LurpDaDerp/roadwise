@@ -1,81 +1,109 @@
-// Setting up a DashPal (pairing v2 §9, §14.4): only on the driver's explicit action, never while a
-// drive is open. The driver scans the code under the DashPal's mount (or on its box card) in
-// RoadWise, opens its label link with the phone's own camera (then taps Pair), or types the code.
-// The phone finds that DashPal, proves the code (a PAIR_REQ tag bound to the dashcam's fresh Nc),
-// agrees a key with it by X25519, checks the dashcam's own proof, stores the key, and proves the key
-// in a first session on the same connection; the DashPal plays its paired chime and reports how many
-// phones it has. No system pairing dialog, no beep question, no typing on the scan path.
+// Setting up a DashPal (link v3, docs/BLE_PROTOCOL.md §2-§4): only on the driver's explicit action,
+// never while a drive is open. There is no code: the driver picks the DashPal (the Home card, Set up
+// again, or a search for one in pairing mode), sees it with Pair, and taps Pair once. Only then the
+// phone connects and pairs: PAIR_OPEN with a fresh X25519 key, the dashcam's key confirmation
+// checked, PAIR_FIN; the DashPal holds the new phone provisionally under a setup hold (no other
+// phone can pair meanwhile) and plays its chime; a first session proves the key on the same
+// connection, and the phone sends its state (no "can play", a speed only from a fresh location
+// sample). After the aiming steps, Next commits the hold (COMMAND 8): only then does the DashPal
+// store the phone, and only then does this phone keep the key. Cancel undoes a hold on both sides
+// (COMMAND 9: the DashPal forgets the provisional phone and is ready to pair again).
 //
-// With Bluetooth already allowed and the DashPal in pairing mode, the steps from the scan (or the
-// Pair tap) to "Connected" are each bounded so the whole usually takes a few seconds and is built to
-// finish within 10 s: the search stops at the first advert of the named DashPal (Android scans in
-// low-latency mode), the phone's key pair is drawn while it searches, and a link opened from outside
-// finds, connects and reads INFO while its Pair button shows (the tap then only sends the request).
-// Typing the code, or a DashPal not yet in pairing mode, takes longer.
-//
-// Every result of the dashcam travels in the AUTH read value; a non-zero write status, a GATT error
-// or a disconnect before a verdict is read is a link failure (one reconnect, then the next candidate
-// or "That didn't work"), never "wrong code". Setting up a different DashPal than the paired one asks
-// first (`confirm_replace`), and a failed or cancelled setup leaves the previous pairing in place.
-// UI-free: the screen renders `phase` and calls the actions.
+// Every result of the dashcam travels in the AUTH read value or a sealed SETUP_RESULT; a non-zero
+// write status, a GATT error or a disconnect before a verdict is read is a link failure (one
+// reconnect before PAIR_FIN; during the hold, reconnecting under the new key for up to 45 s), never a
+// verdict. A failed or cancelled setup leaves the previous pairing in place. UI-free: the screen
+// renders `phase` and calls the actions.
 import type { BluetoothAccess } from '@/core/permissions/adapters';
 
-import { pairFin, pairKeys, pairRequest, proofOk, R, type AuthRecord } from './auth';
+import { pairFin, pairKeysV3, pairOpen, proofOk, R, type AuthRecord } from './auth';
 import { randomBytes, wipe, x25519Public } from './crypto';
 import type { PairedDashcam } from './keys';
-import { formatCode, parseCode, parseDashpalLink, type PairingCode } from './label';
-import { COMMAND, DASHPAL_SERVICE, decodeTx, encodeRx, linkMismatch, nameOf, PAIRING_NEW, toHex, type DashcamInfo } from './protocol';
+import {
+  AIM_ARG,
+  COMMAND,
+  decodeTx,
+  encodeRx,
+  linkMismatch,
+  LOCAL_MIN_UNKNOWN,
+  nameOf,
+  PAIRING_NEW,
+  PAIRING_OPEN,
+  STATE_FLAG,
+  STATE_TTL_DS,
+  toHex,
+  type AdvState,
+  type DashcamInfo,
+  type SetupResultFrame,
+} from './protocol';
 import type { DashpalSecrets, StoredAuth } from './secure';
+import { createSetupSpeed, type SetupSpeed } from './setupSpeed';
 import { isIosBondLoss, type DashcamTransport, type ScanHit } from './transport';
 
-/** The search for the named DashPal (or, typed with no name, for any in pairing mode). */
+/** Search mode: the scan for DashPals in pairing mode, and its stop after the first one heard. */
 export const SEARCH_MS = 15_000;
-/** Typed with no name: stop listening this long after the first DashPal heard. */
-export const SCAN_SETTLE_MS = 4000;
+export const SCAN_SETTLE_MS = 3000;
 export const MIN_RSSI = -80;
-/** Watching for pairing mode to open after "Press the DashPal's button 5 times". */
+/** Watching for pairing mode to open after "Press the DashPal's button 5 times" (Set up again). */
 export const PRESS_WAIT_MS = 60_000;
 /** Another phone setting the DashPal up: INFO again every second, for this long. */
 export const BUSY_POLL_MS = 1000;
 export const BUSY_WAIT_MS = 16_000;
+export const SETUP_CONNECT_TIMEOUT_MS = 10_000;
 /** AUTH read polls while a pairing answer is computed. */
 export const PAIR_POLL_MS = 100;
 export const PAIR_RESP_MS = 3000;
 /** A RESULT after a FIN. */
 export const RESULT_MS = 1000;
-/** The phone's own wait before a new PAIR_REQ after R_NOT_NOW, and the most of them per connection. */
+/** The phone's own wait before a new PAIR_OPEN after R_NOT_NOW, and the most of them per connection. */
 export const NOT_NOW_RETRY_MS = 300;
 export const NOT_NOW_RETRIES = 2;
 /** A claim lasts 15 s from its first request at the dashcam. */
 export const CLAIM_MS = 15_000;
-/** The link dropped after PAIR_FIN, before its RESULT: one reconnect within this long. */
-export const FIN_RECONNECT_MS = 15_000;
 /** Waiting for PAIRED after COMMAND 5. */
 export const PAIRED_WAIT_MS = 3000;
+/** The spinner shows at least this long, then the check mark this long. */
+export const MIN_SPINNER_MS = 600;
+export const CHECK_HOLD_MS = 900;
+/** The setup's STATE cadence. */
+export const SETUP_STATE_MS = 900;
+/** Waiting for SETUP_RESULT after COMMAND 8, and after COMMAND 9. */
+export const SETUP_RESULT_MS = 2000;
+export const CANCEL_WAIT_MS = 1500;
+/** The hold's phone away: the phone reconnects for this long (inside the DashPal's 60 s). */
+export const HOLD_RECONNECT_MS = 45_000;
+/** The setup hold's 10 minutes (the DashPal's `BLE_HOLD_MAX_MS`), and the countdown's last minute. */
+export const HOLD_MAX_MS = 600_000;
+export const HOLD_WARN_MS = 60_000;
 /** iOS: an R_MTU waits this long before the request is sent again. */
 export const IOS_MTU_WAIT_MS = 300;
-/** How often the search loops look at what they heard (no wait on the path is longer than 100 ms). */
+/** How often the loops look at what they heard. */
 export const POLL_MS = 50;
 
 export interface Candidate {
   id: string;
   name: string | null;
   rssi: number;
+  adv: AdvState | null;
 }
 
 export type SetupFailure =
   | 'not_found'
-  | 'window_timeout'
+  | 'window_closed'
   | 'setup_busy'
-  | 'wrong_code'
-  | 'no_match'
   | 'unverified'
-  | 'unverified_nearby'
-  | 'no_key'
   | 'update_firmware'
+  | 'update_app'
   | 'mtu'
   | 'ios_forget_first'
+  | 'lost'
+  | 'expired'
+  | 'save_failed'
+  | 'none_nearby'
   | 'error';
+
+/** What Try again does: start over, finish a setup whose commit went unanswered, send the commit again, or nothing. */
+export type SetupRetry = 'restart' | 'resume' | 'commit' | 'none';
 
 export type SetupPhase =
   | { kind: 'idle' }
@@ -84,25 +112,21 @@ export type SetupPhase =
   | { kind: 'denied' }
   | { kind: 'off' }
   | { kind: 'unavailable' }
-  /**
-   * The code step: the camera (or typing). `error`: the last scan or typed text was refused;
-   * `noStoredCode`: Set up again on a phone that has no label code; `preferred`: the DashPal a link
-   * named.
-   */
-  | { kind: 'code'; error: 'not_a_code' | 'bad_code' | null; noStoredCode: boolean; preferred: string | null }
-  /** A link opened from outside: "Set up DashPal-XXXX" with Pair (the connection warms up meanwhile). */
-  | { kind: 'confirm_link'; name: string }
-  /** Setting up a different DashPal than the paired one: Replace or Cancel. */
-  | { kind: 'confirm_replace'; from: string; to: string }
-  | { kind: 'searching'; name: string | null; again: boolean }
+  | { kind: 'search'; until: number }
+  | { kind: 'choose'; candidates: Candidate[] }
   | { kind: 'press_button'; name: string; until: number }
+  /** Screen 1: the DashPal with Pair. `replaces`: the paired DashPal this one replaces on this phone. */
+  | { kind: 'confirm'; name: string; mode: 'new' | 'open' | 'again'; replaces: string | null }
   | { kind: 'waiting_busy'; name: string; until: number }
-  | { kind: 'connecting'; name: string; again: boolean }
-  | { kind: 'pairing'; name: string; again: boolean }
-  | { kind: 'finishing'; name: string; again: boolean }
-  /** `phones`: PAIRED's phone count (null when it did not come); `notAllYours`: 2 or more phones. */
-  | { kind: 'done'; paired: PairedDashcam; phones: number | null; notAllYours: boolean }
-  | { kind: 'failed'; reason: SetupFailure; name: string | null }
+  | { kind: 'connecting'; name: string; reconnecting: boolean }
+  | { kind: 'connected'; name: string }
+  /** Screen 2. `aimAllowed`: false when the window came from Add another phone; `holdLeftS` in the hold's last minute. */
+  | { kind: 'instructions'; aimAllowed: boolean; holdLeftS: number | null; reconnecting: boolean }
+  | { kind: 'finishing' }
+  /** `phones`: the count after the commit; `notAllYours`: 2 or more; `aimedElsewhere`: no aiming here (Add another phone). */
+  | { kind: 'done'; paired: PairedDashcam; phones: number | null; notAllYours: boolean; aimedElsewhere: boolean }
+  | { kind: 'failed'; reason: SetupFailure; name: string | null; retry: SetupRetry }
+  | { kind: 'stopping' }
   | { kind: 'cancelled' };
 
 export interface SetupDeps {
@@ -112,29 +136,27 @@ export interface SetupDeps {
   requestBluetooth(): Promise<BluetoothAccess>;
   /** The drive host is busy (a drive open or closing). */
   isBusy(): boolean;
-  /**
-   * The drive host's state changed (a drive may have opened): a wait for the driver reads `isBusy`
-   * again and the setup stops. Returns the unsubscribe.
-   */
+  /** The drive host's state changed (a drive may have opened). Returns the unsubscribe. */
   onDriveChange(fn: () => void): () => void;
   /** Record the opt-in (settings + the launch flag). */
   optIn(): Promise<void>;
   /** Save the pairing (its key is final in SecureStore) and hand it to the auto-connect. */
   pair(record: PairedDashcam): Promise<void>;
-  /** The currently paired dashcam (re-pairing replaces it). */
+  /** The currently paired dashcam (a setup of another one replaces it). */
   paired(): PairedDashcam | null;
-  /**
-   * The paired DashPal `dashcamId` refused this phone's key at its auto-connect's last session
-   * (R_UNKNOWN_PHONE: "Needs pairing again"): the dashcam no longer holds that key.
-   */
+  /** The paired DashPal refused this phone's key at its auto-connect's last session (R_UNKNOWN_PHONE). */
   keyRefused(dashcamId: string): boolean;
-  /** The paired dashcam's auto-connect steps aside while the pairing step uses the radio. */
+  /** The paired dashcam's auto-connect steps aside while the setup uses the radio (from the Pair tap). */
   stepAside(): void;
-  /** The paired dashcam's auto-connect again (a setup that did not pair, or a wait for the driver). */
+  /** The paired dashcam's auto-connect again (a setup that did not pair). */
   resumePaired(): Promise<void>;
   secrets: DashpalSecrets;
   /** This phone's own setup saw this phone count (the new-phone notice does not count it). */
   notePhones?(dashcamId: string, phones: number): void;
+  /** The car's speed for the setup's STATE (default: a location watch while setup runs). */
+  speed?(): SetupSpeed;
+  /** Local time of day in minutes (default: the phone's clock). */
+  localMinute?(now: number): number;
   now(): number;
   sleep(ms: number): Promise<void>;
   random?(n: number): Uint8Array;
@@ -142,11 +164,9 @@ export interface SetupDeps {
 }
 
 export interface SetupStart {
-  /** a peripheral the nearby prompt found (tried first among the unnamed) */
-  preferId?: string;
-  /** a link opened from outside (named this DashPal): its code is read from `dashpal.pendingCode` */
-  fromLink?: { dashcamId: string | null };
-  /** Set up again: the stored label code of this phone's pairing, else the code step */
+  /** a DashPal the Home card offered */
+  target?: { peripheralId: string; name: string | null; adv: AdvState | null };
+  /** Set up again: the paired DashPal */
   again?: boolean;
 }
 
@@ -154,31 +174,20 @@ export interface SetupFlow {
   phase(): SetupPhase;
   subscribe(fn: (p: SetupPhase) => void): () => void;
   start(opts?: SetupStart): Promise<void>;
-  /** The in-app scanner read a QR code. */
-  scanned(text: string): void;
-  /** The typed code and the optional name on the label (its 4 characters after `DashPal-`). */
-  submitCode(text: string, name?: string): void;
-  /** Pair on "Set up DashPal-XXXX" (a link). */
-  confirm(): void;
-  /** Replace on "Replace DashPal-AAAA with DashPal-BBBB?". */
-  confirmReplace(): void;
+  /** "Which DashPal is yours?": this one. */
+  pick(id: string): void;
+  /** Screen 1's Pair. */
+  pair(): void;
+  /** Screen 2's Next: commit the setup. */
+  next(): void;
+  /** Try again on a failure (what it does: the failure's `retry`). */
+  retry(): Promise<void>;
+  /** Stop setup: undoes a pairing already made, on both sides. Ignored while the commit is answered. */
   cancel(): Promise<void>;
 }
 
-/** What the pairing step is aimed at. */
-interface Aim {
-  code: PairingCode;
-  /** the dashcam id, when the code came with one (a link, a scan) */
-  d: string | null;
-  /** typed: the 4 characters of the name on the label */
-  suffix: string | null;
-  again: boolean;
-}
-
-type Attempt =
-  | { kind: 'done'; paired: PairedDashcam; phones: number | null }
-  | { kind: 'next'; why: 'wrong_code' | 'proof' | 'link' }
-  | { kind: 'failed'; reason: SetupFailure };
+/** Where the setup stands with the DashPal (what Cancel has to undo). */
+type Stage = 'pre' | 'claim' | 'fin' | 'hold' | 'commit';
 
 class Cancelled extends Error {
   constructor() {
@@ -195,6 +204,16 @@ class DriveOpen extends Error {
   }
 }
 
+class Failed extends Error {
+  constructor(
+    readonly reason: SetupFailure,
+    readonly retry: SetupRetry = 'restart'
+  ) {
+    super(`setup failed: ${reason}`);
+    this.name = 'Failed';
+  }
+}
+
 const sameId = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 /** An Android peripheral id is the MAC (`A4:CF:…`). */
 const macOfId = (id: string): string => id.replace(/[:-]/g, '').toLowerCase();
@@ -205,28 +224,41 @@ function hexBytes(hex: string): Uint8Array {
   return out;
 }
 
+const defaultLocalMinute = (at: number): number => {
+  const d = new Date(at);
+  return d.getHours() * 60 + d.getMinutes();
+};
+
 export function createSetupFlow(deps: SetupDeps): SetupFlow {
   const random = deps.random ?? randomBytes;
   let phase: SetupPhase = { kind: 'idle' };
   const listeners = new Set<(p: SetupPhase) => void>();
-  let cancelled = false;
   let running = false;
-  /** the setup connection in use */
-  let current: string | null = null;
+  let cancelled = false;
+  let lastOpts: SetupStart = {};
   let stopScan: (() => Promise<void>) | null = null;
-  /** a pending choice: the code (scan or typed), Pair, Replace */
-  let codeWaiter: ((aim: Aim | null) => void) | null = null;
-  let confirmWaiter: ((yes: boolean) => void) | null = null;
-  let replaceWaiter: ((yes: boolean) => void) | null = null;
-  let preferred: string | null = null;
-  let noStoredCode = false;
-  let preferId: string | undefined;
-  /** the phone's next X25519 key pair, drawn ahead (one per request) */
-  let ready: { a: Uint8Array; A: Uint8Array } | null = null;
+  /** the driver's pending choice (Pair, a pick, Next): resolved with it, or null when the wait ends */
+  let waiter: { kind: 'pair' | 'pick' | 'next'; resolve: (v: string | null) => void } | null = null;
   /** the paired DashPal's auto-connect is stepped aside (given back when setup ends without pairing) */
   let stepped = false;
-  /** PAIR_FIN was sent: the dashcam may have stored the pairing, so a drive opening no longer stops it */
-  let finSent = false;
+
+  // ——— the setup under way ———
+  let t: DashcamTransport | null = null;
+  let cand: Candidate | null = null;
+  let shownName = 'DashPal';
+  let stage: Stage = 'pre';
+  let info: DashcamInfo | null = null;
+  let pending: StoredAuth | null = null;
+  /** a session is up on the setup connection (sealed writes work) */
+  let sessionUp = false;
+  let unsubscribe: (() => void) | null = null;
+  let holdAt: number | null = null;
+  let lastStateAt: number | null = null;
+  let phones: number | null = null;
+  let aimAllowed = true;
+  let expired = false;
+  let results: SetupResultFrame[] = [];
+  let speed: SetupSpeed | null = null;
 
   function report(e: unknown, ctx: string): void {
     try {
@@ -247,145 +279,174 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     }
   }
 
-  /** A drive opened: setup stops (until PAIR_FIN; the few seconds after it end by themselves). */
-  const driveOpened = (): boolean => !finSent && deps.isBusy();
-  const stopNow = (): boolean => cancelled || driveOpened();
+  /** A drive opened: setup stops (until COMMAND 8 is sent; its answer ends the setup by itself). */
+  const driveOpened = (): boolean => stage !== 'commit' && deps.isBusy();
 
-  /**
-   * Cancel and a drive opening stop setup only until PAIR_FIN is sent: after it the dashcam may hold
-   * the pairing, so its outcome is settled (and the key kept as the orphan if it stays unknown).
-   */
   const check = (): void => {
-    if (cancelled && !finSent) throw new Cancelled();
+    if (cancelled) throw new Cancelled();
     if (driveOpened()) throw new DriveOpen();
   };
 
-  /** The paired DashPal's auto-connect steps aside for the radio work (none paired: nothing to do). */
   function stepAside(): void {
     if (stepped || !deps.paired()) return;
     deps.stepAside();
     stepped = true;
   }
 
-  /** The paired DashPal's auto-connect comes back. */
   async function giveBack(): Promise<void> {
     if (!stepped) return;
     stepped = false;
     await deps.resumePaired().catch((e: unknown) => report(e, 'resume'));
   }
 
-  /** Every wait for the driver ends (Cancel, or a drive opened): the caller's check() says which. */
-  function wakeWaiters(): void {
-    const cw = codeWaiter;
-    codeWaiter = null;
-    cw?.(null);
-    const fw = confirmWaiter;
-    confirmWaiter = null;
-    fw?.(false);
-    const rw = replaceWaiter;
-    replaceWaiter = null;
-    rw?.(false);
+  function wake(): void {
+    const w = waiter;
+    waiter = null;
+    w?.resolve(null);
   }
 
-  /** Per setup connection (lowercase peripheral id): it found the AUTH characteristic. */
-  const authChar = new Map<string, boolean>();
-
-  async function release(t: DashcamTransport, id: string | null): Promise<void> {
-    if (id === null) return;
-    await t.disconnect(id).catch((e: unknown) => report(e, 'disconnect'));
-    authChar.delete(id.toLowerCase());
-    if (current === id) current = null;
+  function waitFor(kind: 'pair' | 'pick' | 'next'): Promise<string | null> {
+    return new Promise<string | null>((resolve) => {
+      waiter = { kind, resolve };
+    });
   }
 
-  /** A setup connection; resolves whether it found the AUTH characteristic (kept for a warmed link). */
-  async function connectSetup(t: DashcamTransport, id: string, opts?: { timeoutMs?: number }): Promise<boolean> {
-    current = id;
-    const { auth } = await t.setupConnect(id, opts);
-    authChar.set(id.toLowerCase(), auth);
-    return auth;
+  function answer(kind: 'pair' | 'pick' | 'next', v: string): void {
+    if (waiter?.kind !== kind) return;
+    const w = waiter;
+    waiter = null;
+    w.resolve(v);
   }
 
-  function drawKeys(): void {
-    if (ready) return;
-    try {
-      const a = random(32);
-      ready = { a, A: x25519Public(a) };
-    } catch (e) {
-      report(e, 'key pair');
+  const linkUp = (): boolean => t !== null && cand !== null && sessionUp && t.setupLinkUp(cand.id);
+
+  async function release(): Promise<void> {
+    unsubscribe?.();
+    unsubscribe = null;
+    sessionUp = false;
+    lastStateAt = null;
+    if (t && cand) await t.disconnect(cand.id).catch((e: unknown) => report(e, 'disconnect'));
+  }
+
+  function stopSpeed(): void {
+    speed?.stop();
+    speed = null;
+  }
+
+  async function deletePending(): Promise<void> {
+    pending = null;
+    await deps.secrets.deletePendingAuth().catch((e: unknown) => report(e, 'delete key'));
+  }
+
+  /** A key the dashcam may hold (a commit whose answer never came), kept only to prove prev_id at the next setup. */
+  async function keepOrphan(p: StoredAuth): Promise<void> {
+    await deps.secrets.writeOrphan({ dashcamId: p.dashcamId, phoneId: p.phoneId, kPair: p.kPair }).catch((e: unknown) => report(e, 'orphan'));
+  }
+
+  // ——— the setup's own state, frames and STATE ———
+
+  function onFrame(bytes: number[]): void {
+    const d = decodeTx(bytes);
+    if (!d.ok) return;
+    const f = d.frame;
+    if (f.type === 'PAIRED') phones = f.bondCount;
+    else if (f.type === 'SETUP_RESULT') {
+      if (f.op === 9 && f.code === R.EXPIRED) expired = true;
+      else results.push(f);
+    } else if (f.type === 'VIEW_STATE') {
+      if (f.reason === 1) aimAllowed = false;
+      else if (f.on === 1) aimAllowed = true;
+      if (phase.kind === 'instructions' && phase.aimAllowed !== aimAllowed) set({ ...phase, aimAllowed });
     }
   }
 
-  function takeKeys(): { a: Uint8Array; A: Uint8Array } {
-    const k = ready;
-    ready = null;
-    if (k) return k;
-    const a = random(32);
-    return { a, A: x25519Public(a) };
+  async function command(op: number, arg = 0): Promise<boolean> {
+    if (!t || !cand || !sessionUp) return false;
+    try {
+      await t.writeSealed(cand.id, encodeRx({ type: 'COMMAND', op, arg }));
+      return true;
+    } catch (e) {
+      report(e, `COMMAND ${op}`);
+      return false;
+    }
   }
 
-  // ——— waiting for the driver ———
-
-  function waitCode(): Promise<Aim | null> {
-    return new Promise<Aim | null>((resolve) => {
-      codeWaiter = resolve;
-    });
+  function localMinute(now: number): number {
+    try {
+      const m = (deps.localMinute ?? defaultLocalMinute)(now);
+      return Number.isInteger(m) && m >= 0 && m <= 1439 ? m : LOCAL_MIN_UNKNOWN;
+    } catch {
+      return LOCAL_MIN_UNKNOWN;
+    }
   }
 
-  function waitYes(kind: 'confirm' | 'replace'): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      if (kind === 'confirm') confirmWaiter = resolve;
-      else replaceWaiter = resolve;
-    });
+  /** The setup's STATE: never `can_play`; `drive_active` from the drive host; a speed only from a fresh sample. */
+  function sendState(): void {
+    if (!t || !cand || !sessionUp) return;
+    const now = deps.now();
+    const cms = speed?.speedCms() ?? null;
+    const flags = (deps.isBusy() ? STATE_FLAG.DRIVE_ACTIVE : 0) | (cms !== null ? STATE_FLAG.SPEED_VALID : 0);
+    lastStateAt = now;
+    t.writeSealed(cand.id, encodeRx({ type: 'STATE', flags, ttlDs: STATE_TTL_DS, speedCms: cms ?? 0, localMin: localMinute(now), bootId: 0, ackSeq: 0 })).catch((e: unknown) =>
+      report(e, 'STATE')
+    );
   }
 
-  function codePhase(error: 'not_a_code' | 'bad_code' | null): void {
-    set({ kind: 'code', error, noStoredCode, preferred });
+  /** One look while the hold lasts: the STATE when due, the countdown in the hold's last minute. */
+  function pump(): void {
+    if (sessionUp && (lastStateAt === null || deps.now() - lastStateAt >= SETUP_STATE_MS)) sendState();
+    if (holdAt !== null && phase.kind === 'instructions') {
+      const left = HOLD_MAX_MS - (deps.now() - holdAt);
+      const s = left < HOLD_WARN_MS ? Math.max(0, Math.ceil(left / 1000)) : null;
+      if (s !== phase.holdLeftS) set({ ...phase, holdLeftS: s });
+    }
+  }
+
+  /** Poll (pumping) until `done` holds or `ms` has passed; false on the timeout. */
+  async function pollUntil(done: () => boolean, ms: number): Promise<boolean> {
+    const until = deps.now() + ms;
+    for (;;) {
+      check();
+      pump();
+      if (done()) return true;
+      if (deps.now() >= until) return false;
+      await deps.sleep(POLL_MS);
+    }
+  }
+
+  /** The session on the setup connection is up: frames, hello and the STATE cadence. */
+  async function sessionStarted(): Promise<void> {
+    sessionUp = true;
+    unsubscribe?.();
+    unsubscribe = await t!.subscribeSealed(cand!.id, onFrame);
+    await command(COMMAND.HELLO);
+    sendState();
   }
 
   // ——— finding the DashPal ———
 
-  /** Does this advert name the DashPal we look for? */
-  function matches(hit: ScanHit, aim: { d: string | null; suffix: string | null }): boolean {
-    if (aim.d) return deps.platform === 'android' ? macOfId(hit.id) === aim.d : hit.name === nameOf(aim.d);
-    if (aim.suffix) return deps.platform === 'android' ? macOfId(hit.id).endsWith(aim.suffix.toLowerCase()) : hit.name === `DashPal-${aim.suffix.toUpperCase()}`;
-    return false;
-  }
-
-  /**
-   * Named (a dashcam id or a label name): the first advert of it, in or out of pairing mode, within
-   * `SEARCH_MS`. Unnamed (typed): DashPals in pairing mode at −80 dBm or stronger, strongest first,
-   * listening until 4 s after the first one. The key pair is drawn meanwhile.
-   */
-  async function search(t: DashcamTransport, aim: { d: string | null; suffix: string | null }, skip: Set<string>): Promise<ScanHit[]> {
-    const named = aim.d !== null || aim.suffix !== null;
-    const found = new Map<string, ScanHit>();
-    let first: ScanHit | null = null;
+  async function search(tt: DashcamTransport): Promise<Candidate[]> {
+    const found = new Map<string, Candidate>();
     let firstAt: number | null = null;
-    const session = await t.scan({
-      services: named ? [DASHPAL_SERVICE, PAIRING_NEW] : [PAIRING_NEW],
+    const until = deps.now() + SEARCH_MS;
+    set({ kind: 'search', until });
+    const session = await tt.scan({
+      services: [PAIRING_NEW, PAIRING_OPEN],
       seconds: SEARCH_MS / 1000,
       fast: true,
-      onHit: (hit) => {
-        if (skip.has(hit.id.toLowerCase())) return;
-        if (named) {
-          if (first === null && matches(hit, aim)) first = hit;
-          return;
-        }
+      onHit: (hit: ScanHit) => {
         if (hit.rssi < MIN_RSSI || (hit.adv !== 'new' && hit.adv !== 'open')) return;
         const prev = found.get(hit.id);
-        if (!prev || hit.rssi > prev.rssi) found.set(hit.id, hit);
+        if (!prev || hit.rssi > prev.rssi) found.set(hit.id, { id: hit.id, name: hit.name, rssi: hit.rssi, adv: hit.adv });
         firstAt ??= deps.now();
       },
     });
     stopScan = session.stop;
-    drawKeys();
-    const started = deps.now();
     try {
-      while (!stopNow()) {
-        if (named && first !== null) break;
+      while (!cancelled && !driveOpened()) {
         const at = deps.now();
-        if (at - started >= SEARCH_MS) break;
-        if (!named && firstAt !== null && at - firstAt >= SCAN_SETTLE_MS) break;
+        if (at >= until) break;
+        if (firstAt !== null && at - firstAt >= SCAN_SETTLE_MS) break;
         await deps.sleep(POLL_MS);
       }
     } finally {
@@ -393,21 +454,16 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       await session.stop();
     }
     check();
-    const hit: ScanHit | null = first;
-    if (named) return hit ? [hit] : [];
-    const list = [...found.values()].sort((a, b) => b.rssi - a.rssi);
-    const i = preferId ? list.findIndex((c) => sameId(c.id, preferId!)) : -1;
-    if (i > 0) list.unshift(...list.splice(i, 1));
-    return list;
+    return [...found.values()].sort((a, b) => b.rssi - a.rssi);
   }
 
-  /** Pairing mode not open: watch the DashPal advertise the pairing service, up to 60 s. */
-  async function watchPairing(t: DashcamTransport, id: string, name: string): Promise<boolean> {
+  /** Pairing mode not open (Set up again): watch the DashPal advertise a pairing service, up to 60 s. */
+  async function watchPairing(tt: DashcamTransport, id: string, name: string): Promise<boolean> {
     const until = deps.now() + PRESS_WAIT_MS;
     set({ kind: 'press_button', name, until });
     let open = false;
-    const session = await t.scan({
-      services: [PAIRING_NEW],
+    const session = await tt.scan({
+      services: [PAIRING_NEW, PAIRING_OPEN],
       seconds: PRESS_WAIT_MS / 1000,
       fast: true,
       onHit: (hit) => {
@@ -416,7 +472,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     });
     stopScan = session.stop;
     try {
-      while (!stopNow() && !open && deps.now() < until) await deps.sleep(POLL_MS);
+      while (!cancelled && !driveOpened() && !open && deps.now() < until) await deps.sleep(POLL_MS);
     } finally {
       stopScan = null;
       await session.stop();
@@ -425,17 +481,13 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     return open;
   }
 
-  // ——— one AUTH exchange ———
+  // ——— the pairing ———
 
-  /**
-   * The verdict of the last AUTH write: polled every 100 ms while pending, up to `ms`. `onPending`:
-   * the dashcam answered pending (the code tag checked: the request took or holds the claim).
-   */
-  async function verdict(t: DashcamTransport, id: string, ms: number, onPending?: () => void): Promise<AuthRecord | 'fault' | 'timeout'> {
+  async function verdict(id: string, ms: number, onPending?: () => void): Promise<AuthRecord | 'fault' | 'timeout'> {
     const until = deps.now() + ms;
     for (;;) {
       check();
-      const rec = await t.authRead(id);
+      const rec = await t!.authRead(id);
       if (rec === 'fault' || rec.kind !== 'pending') return rec;
       onPending?.();
       if (deps.now() >= until) return 'timeout';
@@ -443,30 +495,24 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     }
   }
 
-  // ——— the pairing on one candidate ———
-
   /**
    * This phone's earlier key with this DashPal, the one the dashcam still holds: `prev_id` with its
    * proof. Its pairing's key, else the orphan; the orphan first when the dashcam refused the
-   * pairing's key (a Set up again whose outcome stayed unknown was stored, and its prev_id deleted
-   * the old key's record there).
+   * pairing's key.
    */
   async function previousKey(d: string): Promise<{ id: Uint8Array; kPair: Uint8Array } | null> {
     const own = await deps.secrets.readAuth().catch(() => null);
     const orphan = await deps.secrets.readOrphan().catch(() => null);
     const ownHere = own?.dashcamId === d ? own : null;
     const orphanHere = orphan?.dashcamId === d ? orphan : null;
-    const pick = orphanHere && (!ownHere || keyRefused(d)) ? orphanHere : ownHere;
-    return pick ? { id: hexBytes(pick.phoneId), kPair: hexBytes(pick.kPair) } : null;
-  }
-
-  function keyRefused(d: string): boolean {
+    let refused = false;
     try {
-      return deps.keyRefused(d);
+      refused = deps.keyRefused(d);
     } catch (e) {
       report(e, 'keyRefused');
-      return false;
     }
+    const pick = orphanHere && (!ownHere || refused) ? orphanHere : ownHere;
+    return pick ? { id: hexBytes(pick.phoneId), kPair: hexBytes(pick.kPair) } : null;
   }
 
   function freshId(): Uint8Array {
@@ -476,387 +522,502 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     }
   }
 
+  /** The dashcam id this candidate must have, when the phone knows it before INFO. */
+  function expectedId(c: Candidate, mode: 'new' | 'open' | 'again'): string | null {
+    if (mode === 'again') return deps.paired()?.dashcamId ?? null;
+    return deps.platform === 'android' ? macOfId(c.id) : null;
+  }
+
   /**
-   * Connect to `c`, check INFO, and pair. `named`: a link, a scan or a typed name named this DashPal
-   * (a wrong code or proof ends the setup); unnamed (typed, no name): the caller moves to the next
-   * candidate.
+   * After the Pair tap: connect, check INFO, PAIR_OPEN … PAIR_FIN, the first session, hello,
+   * PAIRED and the aiming query; on return the setup hold stands and the session is up.
    */
-  async function attempt(t: DashcamTransport, c: Candidate, aim: Aim, named: boolean): Promise<Attempt> {
-    const before = deps.paired();
+  async function connectAndPair(mode: 'new' | 'open' | 'again'): Promise<void> {
+    const tt = t!;
+    const c = cand!;
+    const spinnerFrom = deps.now();
+    set({ kind: 'connecting', name: shownName, reconnecting: false });
     let reconnects = 0;
     let idP = freshId();
     let idRetried = false;
     let mtuRetried = false;
     let notNowRetries = 0;
-    /**
-     * When the request that took the claim on this connection was sent (its answer was pending or
-     * PAIR_RESP): the claim lasts 15 s from it, later requests never extend it, and a drop ends it.
-     */
-    let claimedAt: number | null = null;
-    let replaceAsked = false;
     let pressAsked = false;
+    /** when the request that took the claim was sent: the claim lasts 15 s from it */
+    let claimedAt: number | null = null;
     const holdsClaim = (): boolean => claimedAt !== null && deps.now() - claimedAt < CLAIM_MS;
-    const linkFailed = async (): Promise<Attempt | null> => {
-      claimedAt = null; // the claim ends with its connection
-      await release(t, c.id);
-      if (reconnects++ < 1) return null;
-      return named ? { kind: 'failed', reason: 'error' } : { kind: 'next', why: 'link' };
+    const linkFailed = async (): Promise<void> => {
+      claimedAt = null;
+      stage = 'pre';
+      await release();
+      if (reconnects++ >= 1) throw new Failed('not_found');
     };
+    const want = expectedId(c, mode);
 
     for (;;) {
       check();
-      // ——— connect and INFO ———
-      const shown = aim.d ? nameOf(aim.d) : (c.name ?? 'DashPal');
-      if (!t.setupLinkUp(c.id)) set({ kind: 'connecting', name: shown, again: aim.again });
-      let info: DashcamInfo | null;
       let hasAuth: boolean;
+      let got: DashcamInfo | null;
       try {
-        // A connection still up (the Pair screen warmed it) keeps what its connect found.
-        if (t.setupLinkUp(c.id)) hasAuth = authChar.get(c.id.toLowerCase()) ?? true;
-        else hasAuth = await connectSetup(t, c.id);
-        current = c.id;
-        info = await t.readInfo(c.id);
+        if (!tt.setupLinkUp(c.id)) {
+          const r = await tt.setupConnect(c.id, { timeoutMs: SETUP_CONNECT_TIMEOUT_MS });
+          hasAuth = r.auth;
+        } else hasAuth = true;
+        got = await tt.readInfo(c.id);
       } catch (e) {
         report(e, 'connect');
-        if (deps.platform === 'ios' && isIosBondLoss(e)) return { kind: 'failed', reason: 'ios_forget_first' };
-        const r = await linkFailed();
-        if (r) return r;
+        check();
+        if (deps.platform === 'ios' && isIosBondLoss(e)) throw new Failed('ios_forget_first', 'none');
+        await linkFailed();
         continue;
       }
       check();
-      if (!info) {
-        const r = await linkFailed();
-        if (r) return r;
+      if (!got) {
+        await linkFailed();
         continue;
       }
-      if (aim.d && info.dashcamId !== aim.d) {
-        // Another DashPal under the same name (iOS, 1 in 65 536): not this one.
-        await release(t, c.id);
-        return { kind: 'next', why: 'link' };
+      if (want !== null && got.dashcamId !== want) {
+        await release();
+        throw new Failed('not_found');
       }
-      if (linkMismatch(info) !== null) return { kind: 'failed', reason: 'update_firmware' };
-      if (!hasAuth) return { kind: 'failed', reason: deps.platform === 'ios' ? 'ios_forget_first' : 'error' };
-      if (!info.nonce) return { kind: 'failed', reason: 'error' };
-      if (before && before.dashcamId !== info.dashcamId && !replaceAsked) {
-        replaceAsked = true;
-        set({ kind: 'confirm_replace', from: before.name, to: info.name });
-        // The driver's answer may take a while: the paired DashPal's link comes back meanwhile.
-        await giveBack();
-        const yes = await waitYes('replace');
-        check();
-        if (!yes) throw new Cancelled();
-        stepAside();
-        continue; // the link may have dropped meanwhile: INFO again
+      const mismatch = linkMismatch(got);
+      if (mismatch) {
+        await release();
+        throw new Failed(mismatch === 'firmware' ? 'update_firmware' : 'update_app', 'none');
       }
-      if (!info.pairingOpen && !holdsClaim()) {
-        if (pressAsked) return { kind: 'failed', reason: 'window_timeout' };
+      if (!hasAuth) {
+        await release();
+        throw new Failed(deps.platform === 'ios' ? 'ios_forget_first' : 'error', deps.platform === 'ios' ? 'none' : 'restart');
+      }
+      if (!got.nonce) throw new Failed('error');
+      info = got;
+      shownName = got.name;
+      if (!got.pairingOpen && !holdsClaim()) {
+        if (mode !== 'again' || pressAsked) {
+          await release();
+          throw new Failed('window_closed');
+        }
         pressAsked = true;
-        await release(t, c.id);
-        if (!(await watchPairing(t, c.id, info.name))) return { kind: 'failed', reason: 'window_timeout' };
+        await release();
+        if (!(await watchPairing(tt, c.id, got.name))) throw new Failed('window_closed');
+        set({ kind: 'connecting', name: shownName, reconnecting: false });
         continue;
       }
-      if (info.setupBusy && !holdsClaim()) {
+      if (got.setupBusy && !holdsClaim()) {
         const until = deps.now() + BUSY_WAIT_MS;
-        set({ kind: 'waiting_busy', name: info.name, until });
-        let busy: DashcamInfo | null = info;
+        set({ kind: 'waiting_busy', name: got.name, until });
+        let busy: DashcamInfo | null = got;
         while (busy?.setupBusy && deps.now() < until) {
           await deps.sleep(BUSY_POLL_MS);
           check();
-          busy = await t.readInfo(c.id).catch(() => null);
+          busy = await tt.readInfo(c.id).catch(() => null);
         }
         if (!busy) {
-          const r = await linkFailed();
-          if (r) return r;
+          await linkFailed();
           continue;
         }
-        if (busy.setupBusy) return { kind: 'failed', reason: 'setup_busy' };
-        continue; // INFO again (pairing mode may have closed when the other phone paired)
+        if (busy.setupBusy) {
+          await release();
+          throw new Failed('setup_busy');
+        }
+        set({ kind: 'connecting', name: shownName, reconnecting: false });
+        continue; // INFO again (the window may have closed when the other phone finished)
       }
-      if (deps.isBusy()) throw new DriveOpen();
 
-      // ——— PAIR_REQ ———
-      set({ kind: 'pairing', name: info.name, again: aim.again });
-      const prev = await previousKey(info.dashcamId);
-      const keysA = takeKeys();
+      // ——— PAIR_OPEN ———
+      const prev = await previousKey(got.dashcamId);
+      const a = random(32);
       const np = random(16);
-      let req;
+      let open;
       try {
-        req = pairRequest({ code: aim.code.S, mac: info.mac, nc: info.nonce, idP, a: keysA.a, A: keysA.A, np, prev });
+        open = pairOpen({ mac: got.mac, nc: got.nonce, idP, a, A: x25519Public(a), np, prev });
       } catch (e) {
-        report(e, 'pair request');
-        return { kind: 'failed', reason: 'error' };
+        report(e, 'pair open');
+        throw new Failed('error');
       }
       const sentAt = deps.now();
       const claimed = (): void => {
         claimedAt ??= sentAt;
       };
-      if ((await t.authWrite(c.id, req.bytes)) === 'fault') {
-        const r = await linkFailed();
-        if (r) return r;
+      stage = 'claim';
+      if ((await tt.authWrite(c.id, open.bytes)) === 'fault') {
+        await linkFailed();
         continue;
       }
-      const resp = await verdict(t, c.id, PAIR_RESP_MS, claimed);
-      if (resp === 'fault' || !t.setupLinkUp(c.id)) {
-        // A disconnect before the verdict was read: a link failure, never a wrong code.
-        const r = await linkFailed();
-        if (r) return r;
+      const resp = await verdict(c.id, PAIR_RESP_MS, claimed);
+      if (resp === 'fault' || !tt.setupLinkUp(c.id)) {
+        await linkFailed();
         continue;
       }
-      if (resp === 'timeout') return { kind: 'failed', reason: 'error' };
+      if (resp === 'timeout') throw new Failed('error');
       if (resp.kind === 'result') {
         switch (resp.code) {
-          case R.WRONG_CODE:
-            await release(t, c.id);
-            return named ? { kind: 'failed', reason: 'wrong_code' } : { kind: 'next', why: 'wrong_code' };
           case R.BUSY:
-            continue; // INFO shows the claim: the busy wait
-          case R.UNKEYED:
-            return { kind: 'failed', reason: 'no_key' };
+            continue; // INFO shows it: the busy wait
           case R.ID_IN_USE:
-            if (idRetried) return { kind: 'failed', reason: 'error' };
+            if (idRetried) throw new Failed('error');
             idRetried = true;
             idP = freshId();
             continue; // the same Nc: this check does not redraw it
           case R.MTU:
-            if (mtuRetried) return { kind: 'failed', reason: 'mtu' };
+            if (mtuRetried) throw new Failed('mtu');
             mtuRetried = true;
-            if (deps.platform === 'android') await t.requestMtu(c.id);
+            if (deps.platform === 'android') await tt.requestMtu(c.id);
             else await deps.sleep(IOS_MTU_WAIT_MS);
             continue;
           case R.NOT_NOW: {
-            // The dashcam could not compute its answer, or the window closed: INFO decides
-            // (docs/BLE_PROTOCOL.md §4).
-            const now = await t.readInfo(c.id).catch(() => null);
+            // The dashcam could not compute its answer, or the window closed: INFO decides.
+            const now = await tt.readInfo(c.id).catch(() => null);
             if (now && !now.setupBusy && (now.pairingOpen || holdsClaim()) && notNowRetries < NOT_NOW_RETRIES) {
               notNowRetries += 1;
               await deps.sleep(NOT_NOW_RETRY_MS);
               continue;
             }
-            if (now && !now.pairingOpen && !holdsClaim() && !pressAsked) continue; // the press-button step
-            if (now && !now.pairingOpen && pressAsked) return { kind: 'failed', reason: 'window_timeout' };
-            return { kind: 'failed', reason: 'error' };
+            if (now && !now.pairingOpen && !holdsClaim()) continue; // closed: Set up again asks for the button
+            throw new Failed('error');
           }
           default:
-            return { kind: 'failed', reason: 'error' };
+            throw new Failed('error');
         }
       }
-      if (resp.kind !== 'pair_resp') return { kind: 'failed', reason: 'error' };
+      if (resp.kind !== 'pair_resp') throw new Failed('error');
       claimed();
-      const keys = pairKeys({ code: aim.code.S, mac: info.mac, nc: info.nonce, req: req.bytes, a: keysA.a, B: resp.B, Nd: resp.Nd });
-      wipe(keysA.a);
+      const keys = pairKeysV3({ mac: got.mac, nc: got.nonce, open: open.bytes, a, B: resp.B, Nd: resp.Nd });
+      wipe(a);
       if (!keys || !proofOk(keys.proofD, resp.proofD)) {
-        // A device that answered but cannot prove the code: send it nothing more.
-        await release(t, c.id);
-        return named ? { kind: 'failed', reason: 'unverified' } : { kind: 'next', why: 'proof' };
+        // Something answered that cannot confirm the key: send it nothing more.
+        await release();
+        throw new Failed('unverified', 'restart');
       }
 
       // ——— the key, then PAIR_FIN ———
-      const pending: StoredAuth = {
-        dashcamId: info.dashcamId,
-        phoneId: toHex(idP),
-        kPair: toHex(keys.K_pair),
-        code: aim.code.kind === 'label' ? formatCode(aim.code.S, 'label', { dashes: false }) : null,
-      };
+      const key: StoredAuth = { dashcamId: got.dashcamId, phoneId: toHex(idP), kPair: toHex(keys.K_pair) };
       wipe(keys.K_pair);
       wipe(keys.k_conf);
       try {
-        await deps.secrets.writePendingAuth(pending);
+        await deps.secrets.writePendingAuth(key);
       } catch (e) {
-        // No key stored: PAIR_FIN is not sent (the claim ends by itself; nothing is stored there).
+        // No key stored: PAIR_FIN is not sent (the claim ends by itself).
         report(e, 'store key');
-        return { kind: 'failed', reason: 'error' };
+        await release();
+        throw new Failed('error');
       }
+      pending = key;
       check();
-      set({ kind: 'finishing', name: info.name, again: aim.again });
-      finSent = true;
-      const finWrite = await t.authWrite(c.id, pairFin(keys.proofP));
-      const fin = finWrite === 'fault' ? 'fault' : await verdict(t, c.id, RESULT_MS);
-      if (fin !== 'fault' && fin !== 'timeout' && fin.kind === 'result' && fin.code === R.OK) return finish(t, c, info, pending, false);
-      if (fin !== 'fault' && fin !== 'timeout' && fin.kind === 'result' && t.setupLinkUp(c.id)) {
-        // R_WRONG_PROOF, R_STORE_FAILED or R_NOT_NOW: nothing was stored.
-        await deps.secrets.deletePendingAuth().catch((e: unknown) => report(e, 'delete key'));
-        return { kind: 'failed', reason: 'error' };
+      stage = 'fin';
+      const finWrite = await tt.authWrite(c.id, pairFin(keys.proofP));
+      const fin = finWrite === 'fault' ? 'fault' : await verdict(c.id, RESULT_MS);
+      if (fin !== 'fault' && fin !== 'timeout' && fin.kind === 'result' && fin.code === R.OK) {
+        stage = 'hold';
+        holdAt = deps.now();
+        // INFO again: the PAIR_OPEN redrew this connection's Nc.
+        const again = await tt.readInfo(c.id).catch(() => null);
+        const s = again?.nonce && again.dashcamId === got.dashcamId ? await tt.startSession(c.id, again, { phoneId: key.phoneId, kPair: key.kPair }) : null;
+        if (s?.kind === 'up') await sessionStarted();
+        else {
+          report(new Error(`first session: ${s?.kind ?? 'no INFO'}`), 'session');
+          await release();
+          await reconnectHold();
+        }
+      } else if (fin !== 'fault' && fin !== 'timeout' && fin.kind === 'result' && tt.setupLinkUp(c.id)) {
+        // R_WRONG_PROOF or R_NOT_NOW: nothing is held.
+        stage = 'pre';
+        await deletePending();
+        await release();
+        throw new Failed('error');
+      } else {
+        // The link dropped before the RESULT was read: maybe held. Reconnect under the new key.
+        stage = 'hold';
+        holdAt = deps.now();
+        await release();
+        await reconnectHold();
       }
-      // The link dropped before the RESULT was read: the outcome is unknown.
-      return finUnknown(t, c, info, pending);
+      break;
     }
+
+    // ——— the hold stands: PAIRED, the aiming query, the check mark ———
+    if (await command(COMMAND.PAIR_CONFIRM)) await pollUntil(() => phones !== null, PAIRED_WAIT_MS);
+    await command(COMMAND.AIM, AIM_ARG.QUERY);
+    await pollUntil(() => deps.now() - spinnerFrom >= MIN_SPINNER_MS, MIN_SPINNER_MS);
+    set({ kind: 'connected', name: shownName });
+    await pollUntil(() => false, CHECK_HOLD_MS);
   }
 
-  /** PAIR_FIN's RESULT was not read: reconnect once (≤ 15 s) and try a session with the pending key. */
-  async function finUnknown(t: DashcamTransport, c: Candidate, first: DashcamInfo, pending: StoredAuth): Promise<Attempt> {
-    await release(t, c.id);
-    const until = deps.now() + FIN_RECONNECT_MS;
-    let connected = false;
-    // Cancelled: no reconnect; the key is kept as the orphan below.
-    while (!connected && !cancelled && deps.now() < until) {
+  /**
+   * The hold's connection was lost: reconnect and run a session under the new key, up to 45 s.
+   * R_UNKNOWN_PHONE: the hold was undone (failed `lost`, the key deleted). No session in time:
+   * failed `lost`, the key deleted, or kept (`keepKey`: a commit went unanswered) for Try again.
+   */
+  async function reconnectHold(o: { keepKey?: boolean } = {}): Promise<void> {
+    const tt = t!;
+    const c = cand!;
+    const key = pending;
+    if (!key) throw new Failed('lost');
+    if (phase.kind === 'instructions' || phase.kind === 'connecting') set({ ...phase, reconnecting: true });
+    const until = deps.now() + HOLD_RECONNECT_MS;
+    while (deps.now() < until) {
+      check();
       try {
-        await connectSetup(t, c.id, { timeoutMs: Math.max(1000, until - deps.now()) });
-        connected = true;
-        const info = await t.readInfo(c.id);
-        if (info?.nonce && info.dashcamId === first.dashcamId) {
-          const s = await t.startSession(c.id, info, { phoneId: pending.phoneId, kPair: pending.kPair });
-          if (s.kind === 'up') return finish(t, c, info, pending, true);
+        if (!tt.setupLinkUp(c.id)) await tt.setupConnect(c.id, { timeoutMs: Math.max(1000, Math.min(SETUP_CONNECT_TIMEOUT_MS, until - deps.now())) });
+        const got = await tt.readInfo(c.id);
+        if (got?.nonce && got.dashcamId === key.dashcamId) {
+          const s = await tt.startSession(c.id, got, { phoneId: key.phoneId, kPair: key.kPair });
+          if (s.kind === 'up') {
+            await sessionStarted();
+            if (phase.kind === 'instructions' || phase.kind === 'connecting') set({ ...phase, reconnecting: false });
+            return;
+          }
           if (s.kind === 'unknown_phone') {
-            // Nothing was stored: the key goes.
-            await deps.secrets.deletePendingAuth().catch((e: unknown) => report(e, 'delete key'));
-            await release(t, c.id);
-            return { kind: 'failed', reason: 'error' };
+            // The hold was undone (or never made): nothing is kept.
+            stage = 'pre';
+            await release();
+            await deletePending();
+            throw new Failed('lost');
           }
         }
       } catch (e) {
-        report(e, 'reconnect after PAIR_FIN');
+        if (e instanceof Failed || e instanceof Cancelled || e instanceof DriveOpen) throw e;
+        report(e, 'reconnect');
       }
-      await release(t, c.id);
-      if (!connected) await deps.sleep(500);
+      await release();
+      check();
+      await deps.sleep(500);
     }
-    // Maybe stored, maybe not: kept only as the orphan, which proves prev_id at the next setup.
-    await keepOrphan(pending);
-    await deps.secrets.deletePendingAuth().catch((e: unknown) => report(e, 'delete key'));
-    return { kind: 'failed', reason: 'error' };
+    if (o.keepKey) throw new Failed('lost', 'resume');
+    stage = 'pre';
+    await deletePending();
+    throw new Failed('lost');
   }
 
-  /** A key the dashcam may hold, kept only to prove prev_id at the next setup. */
-  async function keepOrphan(pending: StoredAuth): Promise<void> {
-    await deps.secrets.writeOrphan({ dashcamId: pending.dashcamId, phoneId: pending.phoneId, kPair: pending.kPair }).catch((e: unknown) => report(e, 'orphan'));
+  /** Screen 2 until Next: the STATE cadence, the countdown, a lost link, the hold running out. */
+  async function waitNext(): Promise<void> {
+    set({ kind: 'instructions', aimAllowed, holdLeftS: null, reconnecting: false });
+    let tapped = false;
+    void waitFor('next').then((v) => {
+      if (v !== null) tapped = true;
+    });
+    for (;;) {
+      check();
+      if (expired) await expire();
+      if (tapped) return;
+      if (!linkUp()) {
+        await release();
+        await reconnectHold();
+        continue;
+      }
+      pump();
+      await deps.sleep(POLL_MS);
+    }
   }
 
-  /** The pairing is stored at the dashcam: a first session, hello, pair confirm, PAIRED; then saved. */
-  async function finish(t: DashcamTransport, c: Candidate, info0: DashcamInfo, pending: StoredAuth, sessionUp: boolean): Promise<Attempt> {
-    const got: { phones: number | null } = { phones: null };
-    let unsubscribe: (() => void) | null = null;
-    try {
-      let up = sessionUp;
-      if (!up) {
-        // INFO again: the PAIR_REQ redrew this connection's Nc.
-        const info = await t.readInfo(c.id);
-        if (info?.nonce && info.dashcamId === info0.dashcamId) {
-          const s = await t.startSession(c.id, info, { phoneId: pending.phoneId, kPair: pending.kPair });
-          up = s.kind === 'up';
-          if (!up) report(new Error(`first session: ${s.kind}`), 'session');
-        }
+  /** The DashPal ran out the hold's 10 minutes and undid it: nothing is kept. */
+  async function expire(): Promise<never> {
+    stage = 'pre';
+    await release();
+    await deletePending();
+    throw new Failed('expired');
+  }
+
+  /** Next: COMMAND 8 and its SETUP_RESULT; the pairing kept only on R_OK. */
+  async function commit(): Promise<SetupPhase> {
+    set({ kind: 'finishing' });
+    for (let attempt = 0; ; attempt++) {
+      check();
+      if (expired) await expire();
+      if (!linkUp()) {
+        // The link is down: reconnect under the new key (after COMMAND 8 was sent, its outcome is unknown).
+        set({ kind: 'connecting', name: shownName, reconnecting: true });
+        await release();
+        await reconnectHold({ keepKey: stage === 'commit' });
+        set({ kind: 'finishing' });
       }
-      if (up) {
-        unsubscribe = await t.subscribeSealed(c.id, (bytes) => {
-          const d = decodeTx(bytes);
-          if (d.ok && d.frame.type === 'PAIRED') got.phones = d.frame.bondCount;
-        });
-        await t.writeSealed(c.id, encodeRx({ type: 'COMMAND', op: COMMAND.HELLO, arg: 0 }));
-        await t.writeSealed(c.id, encodeRx({ type: 'COMMAND', op: COMMAND.PAIR_CONFIRM, arg: 0 }));
-        const until = deps.now() + PAIRED_WAIT_MS;
-        while (got.phones === null && deps.now() < until) await deps.sleep(POLL_MS);
+      results = [];
+      const sent = await command(COMMAND.SETUP_DONE);
+      if (sent) stage = 'commit';
+      const answered = sent ? await pollUntil(() => results.some((r) => r.op === 8) || expired || !linkUp(), SETUP_RESULT_MS) : false;
+      const r = results.find((x) => x.op === 8);
+      if (r?.code === R.OK) return finalize(r.bondCount);
+      if (r?.code === R.STORE_FAILED) {
+        stage = 'hold';
+        throw new Failed('save_failed', 'commit');
       }
-    } catch (e) {
-      // The pairing is stored at the dashcam: the auto-connect proves it again by itself.
-      report(e, 'finish');
-    } finally {
-      unsubscribe?.();
+      if (expired) await expire();
+      if (!linkUp()) continue;
+      if (attempt === 0 && (!answered || !r || r.code === R.NOT_NOW)) {
+        await deps.sleep(500);
+        continue;
+      }
+      // Answered R_NOT_NOW (or nothing) twice with the link up: undo it and start over.
+      stage = 'hold';
+      throw new Failed('error');
     }
-    const record: PairedDashcam = { dashcamId: info0.dashcamId, peripheralId: c.id, name: info0.name, pairedAt: deps.now(), secure: true };
-    await release(t, c.id);
+  }
+
+  async function finalize(count: number): Promise<SetupPhase> {
+    const key = pending!;
+    const d = info?.dashcamId ?? key.dashcamId;
+    const record: PairedDashcam = { dashcamId: d, peripheralId: cand!.id, name: info?.name ?? nameOf(d), pairedAt: deps.now(), secure: true };
+    stopSpeed();
+    await release();
     let final: StoredAuth | null;
     try {
       final = await deps.secrets.finalizeAuth();
     } catch (e) {
-      // The dashcam stored this pairing but the key could not be made final: it is kept as the
-      // orphan, which proves prev_id at the next setup (that record is then replaced, not added to).
+      // The dashcam stored this pairing but the key could not be made final: kept as the orphan,
+      // which proves prev_id at the next setup (that record is then replaced, not added to).
       report(e, 'finalize key');
-      await keepOrphan(pending);
-      return { kind: 'failed', reason: 'error' };
+      await keepOrphan(key);
+      await deletePending();
+      stage = 'pre';
+      throw new Failed('error');
     }
-    if (!final) return { kind: 'failed', reason: 'error' };
+    stage = 'pre';
+    pending = null;
+    if (!final) throw new Failed('error');
     await deps.pair(record);
+    stepped = false;
     await deps.secrets.deleteOrphan().catch((e: unknown) => report(e, 'delete orphan'));
-    if (got.phones !== null) {
-      try {
-        deps.notePhones?.(record.dashcamId, got.phones);
-      } catch (e) {
-        report(e, 'notePhones');
-      }
+    try {
+      deps.notePhones?.(record.dashcamId, count);
+    } catch (e) {
+      report(e, 'notePhones');
     }
-    return { kind: 'done', paired: record, phones: got.phones };
-  }
-
-  /** Try the candidates `hits` in order; null: none left. */
-  async function tryHits(t: DashcamTransport, hits: ScanHit[], aim: Aim, named: boolean, skip: Set<string>, seen: { proof: boolean; code: boolean }): Promise<SetupPhase | null> {
-    const name = aim.d ? nameOf(aim.d) : aim.suffix ? `DashPal-${aim.suffix.toUpperCase()}` : null;
-    for (const hit of hits) {
-      check();
-      const c: Candidate = { id: hit.id, name: hit.name, rssi: hit.rssi };
-      const r = await attempt(t, c, aim, named);
-      if (r.kind === 'done') return { kind: 'done', paired: r.paired, phones: r.phones, notAllYours: r.phones !== null && r.phones >= 2 };
-      if (r.kind === 'failed') return { kind: 'failed', reason: r.reason, name };
-      await release(t, c.id);
-      skip.add(c.id.toLowerCase());
-      if (r.why === 'proof') seen.proof = true;
-      if (r.why === 'wrong_code') seen.code = true;
-    }
-    return null;
-  }
-
-  /** The pairing step for a known code: find, connect and pair (typed with no name: each candidate). */
-  async function pairWith(t: DashcamTransport, aim: Aim, warm: Promise<ScanHit | null> | null): Promise<SetupPhase> {
-    const named = aim.d !== null || aim.suffix !== null;
-    const name = aim.d ? nameOf(aim.d) : aim.suffix ? `DashPal-${aim.suffix.toUpperCase()}` : null;
-    const skip = new Set<string>();
-    const seen = { proof: false, code: false };
-    const warmed = warm ? await warm : null;
-    check();
-    if (warmed) {
-      const r = await tryHits(t, [warmed], aim, named, skip, seen);
-      if (r) return r;
-    }
-    set({ kind: 'searching', name, again: aim.again });
-    // Named: a candidate under its name that was not the DashPal (iOS) is skipped and the search goes on.
-    for (let round = 0; round < (named ? 2 : 1); round++) {
-      const hits = await search(t, aim, skip);
-      if (hits.length === 0) break;
-      const r = await tryHits(t, hits, aim, named, skip, seen);
-      if (r) return r;
-    }
-    if (named) return { kind: 'failed', reason: 'not_found', name };
-    if (seen.proof) return { kind: 'failed', reason: 'unverified_nearby', name: null };
-    return { kind: 'failed', reason: seen.code ? 'no_match' : 'not_found', name: null };
+    return { kind: 'done', paired: record, phones: count, notAllYours: count >= 2, aimedElsewhere: !aimAllowed };
   }
 
   /**
-   * A link's Pair screen: find, connect and read INFO while the button shows (the tap then only
-   * sends the request). Resolves with the DashPal's advert, or null.
+   * Whatever the DashPal holds for this setup is undone (COMMAND 9 on a live hold), the connection
+   * released and the key gone; after a commit that went unanswered the key is kept as the orphan.
    */
-  async function prewarm(t: DashcamTransport, d: string): Promise<ScanHit | null> {
-    try {
-      const hits = await search(t, { d, suffix: null }, new Set());
-      const hit = hits[0];
-      if (!hit || cancelled) return null;
-      await connectSetup(t, hit.id);
-      const info = await t.readInfo(hit.id);
-      if (!info || info.dashcamId !== d) {
-        await release(t, hit.id);
-        return null;
+  async function undo(): Promise<void> {
+    stopSpeed();
+    if (stage === 'hold' && linkUp()) {
+      results = [];
+      if (await command(COMMAND.SETUP_CANCEL)) {
+        const until = deps.now() + CANCEL_WAIT_MS;
+        while (!results.some((r) => r.op === 9) && deps.now() < until && linkUp()) await deps.sleep(POLL_MS);
       }
-      return hit;
-    } catch (e) {
-      report(e, 'pre-warm');
-      if (current) await release(t, current);
-      return null;
     }
+    await release();
+    const key = pending;
+    if (stage === 'commit' && key) await keepOrphan(key);
+    if (stage !== 'pre' || key) await deletePending();
+    stage = 'pre';
+    holdAt = null;
   }
 
-  /** The code of this phone's own pairing for Set up again, when it paired from the label. */
-  async function storedCode(): Promise<Aim | null> {
+  function resetSetup(): void {
+    cand = null;
+    info = null;
+    pending = null;
+    stage = 'pre';
+    sessionUp = false;
+    holdAt = null;
+    lastStateAt = null;
+    phones = null;
+    aimAllowed = true;
+    expired = false;
+    results = [];
+    shownName = 'DashPal';
+  }
+
+  /** Run one segment of the setup to its end (a phase that waits for nothing, or a failure). */
+  async function runSegment(body: () => Promise<SetupPhase>): Promise<void> {
+    if (running) return;
+    running = true;
+    cancelled = false;
+    let result: SetupPhase;
+    const offDrive = deps.onDriveChange(() => {
+      if (!driveOpened()) return;
+      wake();
+      const stop = stopScan;
+      stopScan = null;
+      void stop?.().catch((e: unknown) => report(e, 'stopScan'));
+    });
+    try {
+      result = await body();
+    } catch (e) {
+      if (e instanceof DriveOpen) {
+        await undo();
+        result = { kind: 'busy' };
+      } else if (e instanceof Cancelled) {
+        await undo();
+        result = { kind: 'cancelled' };
+      } else if (e instanceof Failed) {
+        // A failure that Try again resumes keeps the hold (and the key); any other undoes it.
+        if (e.retry !== 'commit' && e.retry !== 'resume') await undo();
+        result = { kind: 'failed', reason: e.reason, name: shownName === 'DashPal' ? null : shownName, retry: e.retry };
+      } else {
+        report(e, 'setup');
+        await undo();
+        result = { kind: 'failed', reason: 'error', name: null, retry: 'restart' };
+      }
+    } finally {
+      offDrive();
+      running = false;
+    }
+    if (result.kind !== 'done' && !(result.kind === 'failed' && (result.retry === 'commit' || result.retry === 'resume'))) {
+      stopSpeed();
+      await giveBack();
+    }
+    set(result);
+  }
+
+  async function fresh(opts: SetupStart): Promise<SetupPhase> {
+    resetSetup();
+    if (deps.isBusy()) throw new DriveOpen();
+    set({ kind: 'permission' });
+    await deps.optIn().catch((e: unknown) => report(e, 'optIn'));
+    const access = await deps.requestBluetooth().catch((e: unknown) => {
+      report(e, 'requestBluetooth');
+      return 'undetermined' as const;
+    });
+    check();
+    if (access === 'denied' || access === 'undetermined') return { kind: 'denied' };
+    if (access === 'off') return { kind: 'off' };
+    if (access === 'unavailable') return { kind: 'unavailable' };
+    t = deps.transport();
+    if (!t) return { kind: 'unavailable' };
+    await t.start().catch((e: unknown) => report(e, 'start'));
+    check();
+
+    // ——— which DashPal ———
     const paired = deps.paired();
-    const own = await deps.secrets.readAuth().catch(() => null);
-    if (!paired || !own || own.dashcamId !== paired.dashcamId || !own.code) return null;
-    const code = parseCode(own.code);
-    return code && code.kind === 'label' ? { code, d: paired.dashcamId, suffix: null, again: true } : null;
-  }
+    let c: Candidate;
+    if (opts.again) {
+      if (!paired) throw new Failed('not_found');
+      c = { id: paired.peripheralId, name: paired.name, rssi: 0, adv: null };
+    } else if (opts.target) {
+      c = { id: opts.target.peripheralId, name: opts.target.name, rssi: 0, adv: opts.target.adv };
+    } else {
+      const hits = await search(t);
+      if (hits.length === 0) throw new Failed('none_nearby');
+      if (hits.length === 1) c = hits[0]!;
+      else {
+        set({ kind: 'choose', candidates: hits });
+        const id = await waitFor('pick');
+        check();
+        const chosen = id === null ? undefined : hits.find((h) => sameId(h.id, id));
+        if (!chosen) throw new Cancelled();
+        c = chosen;
+      }
+    }
+    cand = c;
+    const isPaired = paired !== null && (sameId(c.id, paired.peripheralId) || (deps.platform === 'android' && macOfId(c.id) === paired.dashcamId));
+    const mode: 'new' | 'open' | 'again' = opts.again || isPaired ? 'again' : c.adv === 'open' ? 'open' : 'new';
+    shownName = mode === 'again' && paired ? paired.name : (c.name ?? (deps.platform === 'android' ? nameOf(macOfId(c.id)) : 'DashPal'));
 
-  /** The code a link held in SecureStore, for this dashcam (≤ 12 h). */
-  async function heldCode(dashcamId: string | null): Promise<Aim | null> {
-    const held = await deps.secrets.readPendingCode(deps.now()).catch(() => null);
-    if (!held) return null;
-    if (dashcamId !== null && held.dashcamId !== null && held.dashcamId !== dashcamId) return null;
-    const code = parseCode(held.code);
-    return code ? { code, d: held.dashcamId ?? dashcamId, suffix: null, again: false } : null;
+    // ——— screen 1: the DashPal and Pair; nothing is sent before the tap ———
+    set({ kind: 'confirm', name: shownName, mode, replaces: paired && !isPaired ? paired.name : null });
+    const tap = await waitFor('pair');
+    check();
+    if (tap === null) throw new Cancelled();
+    stepAside();
+    speed = (deps.speed ?? (() => createSetupSpeed()))();
+    void speed.start().catch((e: unknown) => report(e, 'speed'));
+    await connectAndPair(mode);
+    await waitNext();
+    return commit();
   }
 
   const flow: SetupFlow = {
@@ -870,144 +1031,54 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
 
     async start(opts = {}) {
       if (running) return;
-      running = true;
-      cancelled = false;
-      finSent = false;
+      lastOpts = opts;
       stepped = false;
-      preferId = opts.preferId;
-      preferred = opts.fromLink?.dashcamId ? nameOf(opts.fromLink.dashcamId) : null;
-      let t: DashcamTransport | null = null;
-      let result: SetupPhase | null = null;
-      let warm: Promise<ScanHit | null> | null = null;
-      let usedLink = false;
-      // A drive opening ends every wait for the driver at once (the paired DashPal's link comes back).
-      let offDrive: (() => void) | null = null;
-      try {
-        offDrive = deps.onDriveChange(() => {
-          if (!driveOpened()) return;
-          wakeWaiters();
-          const stop = stopScan;
-          stopScan = null;
-          void stop?.().catch((e: unknown) => report(e, 'stopScan'));
-        });
-        if (deps.isBusy()) throw new DriveOpen();
-        set({ kind: 'permission' });
-        await deps.optIn().catch((e: unknown) => report(e, 'optIn'));
-        const access = await deps.requestBluetooth().catch((e: unknown) => {
-          report(e, 'requestBluetooth');
-          return 'undetermined' as const;
-        });
-        check();
-        if (access === 'denied' || access === 'undetermined') result = { kind: 'denied' };
-        else if (access === 'off') result = { kind: 'off' };
-        else if (access === 'unavailable') result = { kind: 'unavailable' };
-        else t = deps.transport();
-        if (!result && !t) result = { kind: 'unavailable' };
-        if (!result && t) {
-          await t.start().catch((e: unknown) => report(e, 'start'));
-          // The paired dashcam's auto-connect stays on while setup waits for the driver (the code,
-          // Pair, Replace); it steps aside only for the radio work, and comes back when setup ends
-          // without pairing.
-          let aim: Aim | null = null;
-          if (opts.again) {
-            aim = await storedCode();
-            if (!aim) noStoredCode = true;
-          } else {
-            // A link's code held in SecureStore (≤ 12 h): its Pair screen, whichever way setup was
-            // opened (the link itself, or Settings and onboarding after a sign-in held it).
-            aim = await heldCode(opts.fromLink?.dashcamId ?? null);
-            if (aim) {
-              usedLink = true;
-              const tt = t;
-              // The paired DashPal itself is not warmed: its auto-connect holds that link meanwhile.
-              if (aim.d && aim.d !== deps.paired()?.dashcamId) warm = prewarm(tt, aim.d);
-              set({ kind: 'confirm_link', name: aim.d ? nameOf(aim.d) : 'DashPal' });
-              const yes = await waitYes('confirm');
-              check();
-              if (!yes) throw new Cancelled();
-            }
-          }
-          if (!aim) {
-            codePhase(null);
-            aim = await waitCode();
-            check();
-            if (!aim) throw new Cancelled();
-          }
-          check();
-          stepAside();
-          result = await pairWith(t, aim, warm);
-        }
-      } catch (e) {
-        if (e instanceof DriveOpen) result = { kind: 'busy' };
-        else if (!(e instanceof Cancelled)) {
-          report(e, 'setup');
-          result = { kind: 'failed', reason: 'error', name: null };
-        }
-      } finally {
-        offDrive?.();
-        if (warm) await (warm as Promise<ScanHit | null>).catch(() => null);
-        if (t && current) await release(t, current);
-        if (result?.kind !== 'done') {
-          await deps.secrets.deletePendingAuth().catch((e: unknown) => report(e, 'delete key'));
-          await giveBack();
-        }
-        // A held link code is used once: done, failed or cancelled.
-        if (usedLink || result?.kind === 'done' || result?.kind === 'failed' || cancelled) {
-          await deps.secrets.deletePendingCode().catch((e: unknown) => report(e, 'delete held code'));
-        }
-        running = false;
-      }
-      if (result?.kind === 'done') return set(result);
-      if (cancelled) return set({ kind: 'cancelled' });
-      if (result) set(result);
+      await runSegment(() => fresh(opts));
     },
 
-    scanned(text) {
-      if (phase.kind !== 'code' || !codeWaiter) return;
-      const parts = parseDashpalLink(text);
-      if (parts === 'not_a_code' || !parts.code) {
-        codePhase('not_a_code');
+    pick: (id) => answer('pick', id),
+    pair: () => answer('pair', 'pair'),
+    next: () => answer('next', 'next'),
+
+    async retry() {
+      if (running || phase.kind !== 'failed') return;
+      const kind = phase.retry;
+      if (kind === 'none') return;
+      if (kind === 'restart') {
+        await flow.start(lastOpts);
         return;
       }
-      const w = codeWaiter;
-      codeWaiter = null;
-      w({ code: parts.code, d: parts.d, suffix: null, again: false });
-    },
-
-    submitCode(text, name) {
-      if (phase.kind !== 'code' || !codeWaiter) return;
-      const code = parseCode(text);
-      const suffix = (name ?? '').trim().replace(/^dashpal-/i, '');
-      if (!code || (suffix.length > 0 && !/^[0-9a-fA-F]{4}$/.test(suffix))) {
-        codePhase('bad_code');
-        return;
-      }
-      const w = codeWaiter;
-      codeWaiter = null;
-      w({ code, d: null, suffix: suffix.length > 0 ? suffix.toUpperCase() : null, again: false });
-    },
-
-    confirm() {
-      const w = confirmWaiter;
-      confirmWaiter = null;
-      w?.(true);
-    },
-
-    confirmReplace() {
-      const w = replaceWaiter;
-      replaceWaiter = null;
-      w?.(true);
+      // The hold may still stand: send the commit again (after a reconnect for an unanswered one).
+      await runSegment(async () => {
+        if (kind === 'resume') {
+          stage = 'commit';
+          set({ kind: 'connecting', name: shownName, reconnecting: true });
+          await release();
+          await reconnectHold({ keepKey: true });
+        }
+        return commit();
+      });
     },
 
     async cancel() {
-      cancelled = true;
-      wakeWaiters();
-      const stop = stopScan;
-      stopScan = null;
-      await stop?.().catch((e: unknown) => report(e, 'stopScan'));
-      const t = deps.transport();
-      if (t && current) await release(t, current);
-      if (!running) set({ kind: 'cancelled' });
+      if (running && phase.kind === 'finishing') return; // the commit's answer decides (≤ 2 s)
+      if (running) {
+        cancelled = true;
+        if (stage !== 'pre') set({ kind: 'stopping' });
+        wake();
+        const stop = stopScan;
+        stopScan = null;
+        await stop?.().catch((e: unknown) => report(e, 'stopScan'));
+        if (stage === 'pre' || stage === 'claim') await release();
+        return;
+      }
+      if (phase.kind === 'done' || phase.kind === 'cancelled') return;
+      // Not running (a failure that kept the hold, or nothing under way): undo and close.
+      if (stage !== 'pre' || pending) set({ kind: 'stopping' });
+      await undo();
+      stopSpeed();
+      await giveBack();
+      set({ kind: 'cancelled' });
     },
   };
   return flow;

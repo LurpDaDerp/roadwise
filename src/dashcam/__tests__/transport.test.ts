@@ -29,7 +29,6 @@ const CAM = 'a4cf12b3c4d5';
 const MAC = [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5];
 const PHONE_ID = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]);
 const K = new Uint8Array(32).fill(0x42);
-const S = Uint8Array.from({ length: 16 }, (_, i) => i);
 const TARGET: TransportTarget = { peripheralId: PID, dashcamId: CAM, auth: { phoneId: toHex(PHONE_ID), kPair: toHex(K) } };
 
 function timers() {
@@ -95,7 +94,7 @@ interface Rig {
 
 function rig(platform: 'ios' | 'android' = 'android', o: { known?: boolean } = {}): Rig {
   const ble: FakeBle = createFakeBle();
-  const cam = createFakeDashcam({ ble, id: PID, mac: MAC, S, phones: o.known === false ? [] : [{ id: PHONE_ID, kPair: K }] });
+  const cam = createFakeDashcam({ ble, id: PID, mac: MAC, phones: o.known === false ? [] : [{ id: PHONE_ID, kPair: K }] });
   const clock = timers();
   const errors: string[] = [];
   const t: DashcamTransport = createBleTransport(ble, {
@@ -281,7 +280,7 @@ test('a wrong dashcam proof three times in a row: unverified, still retrying wit
 test('another mac at the paired address three times: unverified; the session is never attempted', async () => {
   const ble = createFakeBle();
   const other = [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd6];
-  createFakeDashcam({ ble, id: PID, mac: other, S, phones: [{ id: PHONE_ID, kPair: K }] });
+  createFakeDashcam({ ble, id: PID, mac: other, phones: [{ id: PHONE_ID, kPair: K }] });
   const clock = timers();
   const t = createBleTransport(ble, { platform: 'android', now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
   const k = sink();
@@ -468,7 +467,7 @@ test('iOS restore: the paired DashPal kept connected gets a session on the kept 
 
 test('Android in the background: the handshake completes with JS timers paused (it waits on native callbacks only)', async () => {
   const ble: FakeBle = createFakeBle();
-  createFakeDashcam({ ble, id: PID, mac: MAC, S, phones: [{ id: PHONE_ID, kPair: K }] });
+  createFakeDashcam({ ble, id: PID, mac: MAC, phones: [{ id: PHONE_ID, kPair: K }] });
   const base = createPausableTimerBase();
   const pumped = createPumpedTimers(base);
   const t = createBleTransport(ble, { platform: 'android', now: base.now, setTimer: (fn, ms) => pumped.setTimeout(fn, ms), clearTimer: (h) => pumped.clearTimeout(h) });
@@ -483,7 +482,7 @@ test('Android in the background: the handshake completes with JS timers paused (
 
 test('with JS timers paused a soft-repair retry fires from a pump (the link service tick, a row, a BLE event) once due', async () => {
   const ble: FakeBle = createFakeBle();
-  const cam = createFakeDashcam({ ble, id: PID, mac: MAC, S, phones: [] });
+  const cam = createFakeDashcam({ ble, id: PID, mac: MAC, phones: [] });
   const base = createPausableTimerBase();
   const pumped = createPumpedTimers(base);
   const t = createBleTransport(ble, { platform: 'android', now: base.now, setTimer: (fn, ms) => pumped.setTimeout(fn, ms), clearTimer: (h) => pumped.clearTimeout(h), pump: () => pumped.pump() });

@@ -43,7 +43,7 @@ beforeEach(() => {
   mockCalls.length = 0;
 });
 
-const AUTH: StoredAuth = { dashcamId: 'a4cf12b3c4d5', phoneId: '0102030405060708', kPair: 'ab'.repeat(32), code: '000G40R40M30E209185GR38E1W60' };
+const AUTH: StoredAuth = { dashcamId: 'a4cf12b3c4d5', phoneId: '0102030405060708', kPair: 'ab'.repeat(32) };
 const opt = (c: unknown[]): unknown => (c[2] as { keychainAccessible?: unknown } | undefined)?.keychainAccessible;
 
 test('the launch flag and the peripheral: after the first unlock; values round-trip; junk reads as absent', async () => {
@@ -87,9 +87,6 @@ test('a pairing key: pending until the setup finishes, then it replaces the prev
   await dashpalSecrets.deletePendingAuth();
   expect(await dashpalSecrets.finalizeAuth()).toBeNull();
   expect(await dashpalSecrets.readAuth()).toEqual(old);
-  // a one-time-code pairing keeps no code
-  await dashpalSecrets.writePendingAuth({ ...AUTH, code: null });
-  expect((await dashpalSecrets.finalizeAuth())?.code).toBeNull();
   for (const junk of [
     'nope',
     '[]',
@@ -102,8 +99,11 @@ test('a pairing key: pending until the setup finishes, then it replaces the prev
     mockStore.set(AUTH_SECURE_KEY, junk);
     expect(await dashpalSecrets.readAuth()).toBeNull();
   }
-  mockStore.set(AUTH_SECURE_KEY, JSON.stringify({ ...AUTH, v: 2, code: 'not-a-code' }));
-  expect((await dashpalSecrets.readAuth())?.code).toBeNull();
+  // a key an older build stored with its label code still reads; the code is not kept
+  mockStore.set(AUTH_SECURE_KEY, JSON.stringify({ ...AUTH, v: 2, code: '000G40R40M30E209185GR38E1W60' }));
+  expect(await dashpalSecrets.readAuth()).toEqual(AUTH);
+  await dashpalSecrets.writePendingAuth(AUTH);
+  expect(mockStore.get('dashpal.authPending')).not.toContain('code');
   await dashpalSecrets.deleteAuth();
   expect(mockStore.has(AUTH_SECURE_KEY)).toBe(false);
 });

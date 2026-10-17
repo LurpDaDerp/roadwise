@@ -15,10 +15,8 @@ import {
   openRaw,
   PAIR_OPEN_LEN,
   pairFin,
-  pairKeys,
   pairKeysV3,
   pairOpen,
-  pairRequest,
   parseAuthRecord,
   proofOk,
   R,
@@ -56,7 +54,6 @@ interface V2 {
 }
 const V = (vectors as unknown as { v2: V2 }).v2;
 const b = (h: Hex): Uint8Array => Uint8Array.from(fromHex(h));
-const P = V.pair;
 const S = V.session;
 
 describe('X25519 (RFC 7748 §6.1)', () => {
@@ -73,77 +70,6 @@ describe('X25519 (RFC 7748 §6.1)', () => {
     one[0] = 1;
     expect(x25519Shared(b(V.x25519.alice_priv), one)).toBeNull();
     expect(x25519Shared(b(V.x25519.alice_priv), new Uint8Array(31))).toBeNull();
-  });
-});
-
-describe('pairing', () => {
-  const base = { code: b(P.S), mac: b(P.mac), nc: b(P.nc), idP: b(P.id_p), a: b(P.a), np: b(P.np) };
-
-  test('PAIR_REQ, the keys from PAIR_RESP, the proofs and PAIR_FIN', () => {
-    const req = pairRequest(base);
-    expect(toHex(req.A)).toBe(P.A);
-    expect(toHex(req.bytes)).toBe(P.pair_req);
-    const resp = parseAuthRecord(b(P.pair_resp));
-    expect(resp.kind).toBe('pair_resp');
-    if (resp.kind !== 'pair_resp') return;
-    expect(toHex(resp.B)).toBe(P.B);
-    expect(toHex(resp.Nd)).toBe(P.nd);
-    const k = pairKeys({ code: base.code, mac: base.mac, nc: base.nc, req: req.bytes, a: base.a, B: resp.B, Nd: resp.Nd })!;
-    expect(toHex(x25519Shared(b(P.a), b(P.B))!)).toBe(P.Z);
-    expect(toHex(k.T_pair)).toBe(P.T_pair);
-    expect(toHex(k.K_pair)).toBe(P.K_pair);
-    expect(toHex(k.k_conf)).toBe(P.k_conf);
-    expect(toHex(k.proofD)).toBe(P.proof_d);
-    expect(proofOk(k.proofD, resp.proofD)).toBe(true);
-    expect(toHex(k.proofP)).toBe(P.proof_p);
-    expect(toHex(pairFin(k.proofP))).toBe(P.pair_fin);
-  });
-
-  test('a wrong dashcam proof is refused (one flipped bit), and the wrong code gives other keys', () => {
-    const req = pairRequest(base);
-    const resp = parseAuthRecord(b(P.pair_resp));
-    if (resp.kind !== 'pair_resp') throw new Error('vector');
-    const k = pairKeys({ code: base.code, mac: base.mac, nc: base.nc, req: req.bytes, a: base.a, B: resp.B, Nd: resp.Nd })!;
-    const bad = Uint8Array.from(resp.proofD);
-    bad[5] = bad[5]! ^ 0x01;
-    expect(proofOk(k.proofD, bad)).toBe(false);
-    const other = pairKeys({ code: new Uint8Array(16).fill(9), mac: base.mac, nc: base.nc, req: req.bytes, a: base.a, B: resp.B, Nd: resp.Nd })!;
-    expect(proofOk(other.proofD, resp.proofD)).toBe(false);
-    // the dashcam's key refused
-    expect(pairKeys({ code: base.code, mac: base.mac, nc: base.nc, req: req.bytes, a: base.a, B: new Uint8Array(32), Nd: resp.Nd })).toBeNull();
-  });
-
-  test('the same request over another Nc has another tag (the dashcam answers R_WRONG_CODE to the first one there)', () => {
-    const other = pairRequest({ ...base, nc: b(P.other_nc.nc) });
-    expect(toHex(other.bytes)).toBe(P.other_nc.pair_req);
-    expect(toHex(other.bytes)).not.toBe(P.pair_req);
-    expect(P.other_nc.expect).toBe('R_WRONG_CODE');
-  });
-
-  test('a proven prev_id (prev_proof under its key, bound to the new id) and an unproven one', () => {
-    const proven = pairRequest({ ...base, idP: b(P.prev_proven.id_p), prev: { id: b(P.prev_proven.prev_id), kPair: b(P.prev_proven.prev_k_pair) } });
-    expect(toHex(proven.bytes)).toBe(P.prev_proven.pair_req);
-    expect(toHex(proven.bytes.slice(18, 34))).toBe(P.prev_proven.prev_proof);
-    // The unproven vector carries prev_id with a zero proof: a new phone at the dashcam.
-    const unproven = b(P.prev_unproven.pair_req);
-    expect(toHex(unproven.slice(10, 18))).toBe(P.prev_unproven.prev_id);
-    expect(unproven.slice(18, 34).every((x) => x === 0)).toBe(true);
-  });
-
-  test('a request under the one-time code, and its keys', () => {
-    const req = pairRequest({ ...base, code: b(P.under_once.S1) });
-    expect(toHex(req.bytes)).toBe(P.under_once.pair_req);
-    const resp = parseAuthRecord(b(P.under_once.pair_resp));
-    if (resp.kind !== 'pair_resp') throw new Error('vector');
-    const k = pairKeys({ code: b(P.under_once.S1), mac: base.mac, nc: base.nc, req: req.bytes, a: base.a, B: resp.B, Nd: resp.Nd })!;
-    expect(proofOk(k.proofD, resp.proofD)).toBe(true);
-    expect(toHex(k.K_pair)).toBe(P.under_once.K_pair);
-  });
-
-  test('inputs of the wrong size and a zero id are refused before anything is built', () => {
-    expect(() => pairRequest({ ...base, idP: new Uint8Array(8) })).toThrow();
-    expect(() => pairRequest({ ...base, nc: new Uint8Array(15) })).toThrow();
-    expect(() => pairRequest({ ...base, code: new Uint8Array(17) })).toThrow();
   });
 });
 
@@ -173,7 +99,8 @@ describe('session', () => {
 });
 
 describe('the AUTH read value', () => {
-  test.each(V.result)('RESULT $name', (r) => {
+  // v2's codes 5 and 6 (its pairing code) are reserved and never sent in v3
+  test.each(V.result.filter((r) => r.code !== 5 && r.code !== 6))('RESULT $name', (r) => {
     expect(toHex(resultRecord(r.code))).toBe(r.hex);
     expect(parseAuthRecord(b(r.hex))).toEqual({ kind: 'result', code: r.code });
     expect((R as Record<string, number>)[r.name.slice(2)]).toBe(r.code);

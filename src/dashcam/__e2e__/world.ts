@@ -47,7 +47,6 @@ import { createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db
 import { DIR_DP, DIR_PD, openRaw, proofOk, sealRaw, sessionKeys } from '../auth';
 import { sha256, utf8 } from '../crypto';
 import { createFakeBle, type FakeBle } from '../fakeTransport';
-import { formatCode } from '../label';
 import { PAIRED_KEY, type PairedDashcam } from '../keys';
 import { AUTH_CHAR, DASHPAL_SERVICE, decodeRx, decodeTx, fromHex, INFO_CHAR, PAIRING_NEW, RX_CHAR, toHex, type RxFrame, type TxFrame } from '../protocol';
 import { createDashcamRuntime, type DashcamRuntime } from '../runtime';
@@ -679,8 +678,7 @@ export class World {
       const rec: PairedDashcam = { dashcamId: CAM, peripheralId, name: NAME, pairedAt: this.now(), secure: true };
       await settings.set(PAIRED_KEY, rec);
       const k = phoneKey(o.name);
-      // paired from the label: the phone keeps its code for Set up again
-      await secrets.writePendingAuth({ dashcamId: CAM, phoneId: k.id, kPair: k.kPair, code: formatCode(LABEL_S, 'label', { dashes: false }) });
+      await secrets.writePendingAuth({ dashcamId: CAM, phoneId: k.id, kPair: k.kPair });
       await secrets.finalizeAuth();
     }
     if (o.buzzerToo !== undefined) await settings.set('dashcam.buzzerToo', o.buzzerToo);

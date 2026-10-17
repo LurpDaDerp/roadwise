@@ -108,10 +108,10 @@ function scriptedFlow() {
       started += 1;
       starts.push(opts ?? {});
     },
-    scanned: (text) => void answers.push(`scanned:${text}`),
-    submitCode: (text, name) => void answers.push(`typed:${text}:${name ?? ''}`),
-    confirm: () => void answers.push('confirm'),
-    confirmReplace: () => void answers.push('replace'),
+    pick: (id) => void answers.push(`pick:${id}`),
+    pair: () => void answers.push('pair'),
+    next: () => void answers.push('next'),
+    retry: async () => void answers.push('retry'),
     cancel: async () => void (cancelled += 1),
   };
   const bases: SetupDeps[] = [];
@@ -334,14 +334,14 @@ describe('the setup panel', () => {
     expect(screen.getByTestId('setup-phase-busy')).toHaveTextContent(dashpalCopy.setup.busy);
   });
 
-  it('the flow gets the live busy read, the runtime, the target (found, link, again); cancel on unmount', async () => {
+  it('the flow gets the live busy read, the runtime, the target (found, again); cancel on unmount', async () => {
     const rt = createFakeDashcamRuntime();
     setActiveDashcam(rt);
     const s = scriptedFlow();
     const w = await appWorld();
-    const view = await w.render(panel(s, { found: 'PERIPH-9', link: 'a4cf12b3c4d5', again: true }, 'android'));
+    const view = await w.render(panel(s, { found: 'PERIPH-9', again: true }, 'android'));
     expect(s.started()).toBe(1);
-    expect(s.starts[0]).toEqual({ preferId: 'PERIPH-9', fromLink: { dashcamId: 'a4cf12b3c4d5' }, again: true });
+    expect(s.starts[0]).toEqual({ target: { peripheralId: 'PERIPH-9', name: null, adv: 'new' }, again: true });
     const base = s.bases[0]!;
     mockDrive.busy = true;
     expect(base.isBusy()).toBe(false); // the setup screens read the drive context, not the mocked hooks
@@ -358,88 +358,35 @@ describe('the setup panel', () => {
     expect(s.cancelled()).toBe(1);
   });
 
-  it('the code step: the camera (QR only) hands every code to the flow; a refused one says so; Type the code instead; the lost-phone line', async () => {
+  it('screen 1: “Pair DashPal-XXXX?” with Pair (no code anywhere); a different DashPal says it replaces the paired one; a choice of two', async () => {
     setActiveDashcam(createFakeDashcamRuntime());
     const s = scriptedFlow();
     const w = await appWorld();
     await w.render(panel(s));
-    await s.to({ kind: 'code', error: null, noStoredCode: false, preferred: null });
-    const camera = screen.getByTestId('setup-camera');
-    expect(camera.props.barcodeScannerSettings).toEqual({ barcodeTypes: ['qr'] });
-    await act(async () => camera.props.onBarcodeScanned({ data: 'roadwise://add/someone' }));
-    expect(s.answers).toEqual(['scanned:roadwise://add/someone']);
-    await s.to({ kind: 'code', error: 'not_a_code', noStoredCode: false, preferred: null });
-    expect(screen.getByTestId('setup-rejected-not_a_code')).toHaveTextContent(dashpalCopy.setup.notACode, { exact: false });
-    expect(screen.getByTestId('setup-lost-phone')).toHaveTextContent(dashpalCopy.setup.lostPhone);
-    await tap('setup-type-instead');
-    await act(async () => {
-      screen.getByTestId('setup-code-input').props.onChangeText('000G-40R4-0M30-E209-185G-R38E-1W60');
-      screen.getByTestId('setup-name-input').props.onChangeText('c4d5');
-    });
-    await tap('setup-code-submit');
-    expect(s.answers.at(-1)).toBe('typed:000G-40R4-0M30-E209-185G-R38E-1W60:c4d5');
-    await s.to({ kind: 'code', error: 'bad_code', noStoredCode: false, preferred: null });
-    expect(screen.getByTestId('setup-rejected-bad_code')).toHaveTextContent(dashpalCopy.setup.badCode, { exact: false });
-    await tap('setup-scan-instead');
-    expect(screen.getByTestId('setup-camera')).toBeOnTheScreen();
-  });
-
-  it('the camera not allowed: the line to allow it, Open Settings when the phone cannot ask again; typing still works', async () => {
-    setActiveDashcam(createFakeDashcamRuntime());
-    mockCamera.permission = { granted: false, canAskAgain: false, status: 'denied' };
-    const adapter = fakeAdapter();
-    const s = scriptedFlow();
-    const w = await appWorld();
-    await w.render(<SetupPanel deps={{ adapter, platform: 'ios', flow: s.make, secrets: memSecrets().secrets }} onClose={() => {}} />);
-    await s.to({ kind: 'code', error: null, noStoredCode: false, preferred: null });
-    expect(screen.getByTestId('setup-camera-denied')).toHaveTextContent(dashpalCopy.setup.cameraDenied, { exact: false });
-    await tap('setup-camera-settings');
-    expect(adapter.log).toContain('openAppSettings');
-    expect(mockCamera.request).not.toHaveBeenCalled();
-    await tap('setup-type-instead');
-    expect(screen.getByTestId('setup-code-input')).toBeOnTheScreen();
-  });
-
-  it('the camera never asked yet: asked once when the scanner opens', async () => {
-    setActiveDashcam(createFakeDashcamRuntime());
-    mockCamera.permission = { granted: false, canAskAgain: true, status: 'undetermined' };
-    const s = scriptedFlow();
-    const w = await appWorld();
-    await w.render(panel(s));
-    await s.to({ kind: 'code', error: null, noStoredCode: false, preferred: null });
-    expect(mockCamera.request).toHaveBeenCalledTimes(1);
-  });
-
-  it('Set up again with no stored code says to scan the label or use Add another phone', async () => {
-    setActiveDashcam(createFakeDashcamRuntime());
-    const s = scriptedFlow();
-    const w = await appWorld();
-    await w.render(panel(s));
-    await s.to({ kind: 'code', error: null, noStoredCode: true, preferred: null });
-    expect(screen.getByTestId('setup-no-stored-code')).toHaveTextContent(dashpalCopy.setup.noStoredCode, { exact: false });
-  });
-
-  it('a link: "Set up DashPal-XXXX" with Pair; a different DashPal: Replace … with …?', async () => {
-    setActiveDashcam(createFakeDashcamRuntime());
-    const s = scriptedFlow();
-    const w = await appWorld();
-    await w.render(panel(s));
-    await s.to({ kind: 'confirm_link', name: 'DashPal-C4D5' });
-    expect(screen.getByTestId('setup-phase-confirm_link')).toHaveTextContent('Set up DashPal-C4D5');
+    await s.to({ kind: 'confirm', name: 'DashPal-C4D5', mode: 'new', replaces: null });
+    expect(screen.getByTestId('setup-phase-confirm')).toHaveTextContent('Pair DashPal-C4D5?');
     await tap('setup-pair');
-    await s.to({ kind: 'confirm_replace', from: 'DashPal-AAAA', to: 'DashPal-C4D5' });
-    expect(screen.getByTestId('setup-phase-confirm_replace')).toHaveTextContent('Replace DashPal-AAAA with DashPal-C4D5?');
-    expect(screen.getByTestId('setup-extra')).toHaveTextContent('Your phone stops connecting to DashPal-AAAA.');
-    await tap('setup-replace');
-    expect(s.answers).toEqual(['confirm', 'replace']);
+    await s.to({ kind: 'confirm', name: 'DashPal-C4D5', mode: 'new', replaces: 'DashPal-AAAA' });
+    expect(screen.getByTestId('setup-extra')).toHaveTextContent('This replaces DashPal-AAAA on this phone.', { exact: false });
+    await s.to({ kind: 'confirm', name: 'DashPal-C4D5', mode: 'again', replaces: null });
+    expect(screen.getByTestId('setup-phase-confirm')).toHaveTextContent('Set up DashPal-C4D5 again');
+    await s.to({
+      kind: 'choose',
+      candidates: [
+        { id: 'P1', name: 'DashPal-0001', rssi: -40, adv: 'new' },
+        { id: 'P2', name: 'DashPal-0002', rssi: -60, adv: 'open' },
+      ],
+    });
+    expect(screen.getByTestId('setup-phase-choose')).toHaveTextContent('Which DashPal is yours?');
+    await tap('setup-pick-P2');
+    expect(s.answers).toEqual(['pair', 'pick:P2']);
   });
 
   it.each([
-    [{ kind: 'searching', name: 'DashPal-C4D5', again: false }, 'Looking for DashPal-C4D5…'],
-    [{ kind: 'searching', name: null, again: false }, 'Looking for your DashPal…'],
-    [{ kind: 'connecting', name: 'DashPal-C4D5', again: false }, 'Connecting to DashPal-C4D5…'],
-    [{ kind: 'connecting', name: 'DashPal-C4D5', again: true }, 'Setting up DashPal-C4D5 again…'],
-    [{ kind: 'pairing', name: 'DashPal-C4D5', again: false }, 'Pairing…'],
+    [{ kind: 'search', until: 1 }, 'Looking for your DashPal…'],
+    [{ kind: 'connecting', name: 'DashPal-C4D5', reconnecting: false }, 'Connecting to DashPal-C4D5…'],
+    [{ kind: 'connecting', name: 'DashPal-C4D5', reconnecting: true }, 'Reconnecting…'],
+    [{ kind: 'connected', name: 'DashPal-C4D5' }, 'Connected'],
     [{ kind: 'press_button', name: 'DashPal-C4D5', until: 1 }, 'Press the DashPal’s button 5 times.'],
     [{ kind: 'waiting_busy', name: 'DashPal-C4D5', until: 1 }, 'Another phone is setting up this DashPal. Waiting…'],
   ] as const)('%o says "%s", with Cancel', async (phase, text) => {
@@ -452,50 +399,69 @@ describe('the setup panel', () => {
     expect(screen.getByTestId('setup-cancel')).toBeOnTheScreen();
   });
 
-  it('done: one phone says nothing more; 2 or more says how many and "Not all yours?"', async () => {
+  it('after the pairing: Next finishes; the hold’s last minute says how long is left; Cancel stops the setup', async () => {
     setActiveDashcam(createFakeDashcamRuntime());
     const s = scriptedFlow();
     const w = await appWorld();
     await w.render(panel(s));
-    await s.to({ kind: 'done', paired: PAIRED, phones: 1, notAllYours: false });
-    expect(screen.getByTestId('setup-phase-done')).toHaveTextContent('Connected to DashPal-C4D5.');
+    await s.to({ kind: 'instructions', aimAllowed: true, holdLeftS: 42, reconnecting: false });
+    expect(screen.getByTestId('setup-extra')).toHaveTextContent('Finish setup within 0:42');
+    await tap('setup-next');
+    expect(s.answers).toEqual(['next']);
+    await tap('setup-cancel');
+    expect(s.cancelled()).toBe(1);
+  });
+
+  it('done: one phone says nothing more; 2 or more says how many and "Not all yours?"; Add another phone says the other phone aimed it', async () => {
+    setActiveDashcam(createFakeDashcamRuntime());
+    const s = scriptedFlow();
+    const w = await appWorld();
+    await w.render(panel(s));
+    await s.to({ kind: 'done', paired: PAIRED, phones: 1, notAllYours: false, aimedElsewhere: false });
+    expect(screen.getByTestId('setup-phase-done')).toHaveTextContent('DashPal is ready');
+    expect(screen.getByTestId('setup-extra')).toHaveTextContent('DashPal-C4D5 connects by itself whenever it’s on and nearby.');
     expect(screen.queryByTestId('setup-phones')).toBeNull();
     expect(screen.queryByTestId('setup-not-all-yours')).toBeNull();
-    await s.to({ kind: 'done', paired: PAIRED, phones: null, notAllYours: false });
-    expect(screen.queryByTestId('setup-phones')).toBeNull();
-    await s.to({ kind: 'done', paired: PAIRED, phones: 3, notAllYours: true });
+    await s.to({ kind: 'done', paired: PAIRED, phones: 3, notAllYours: true, aimedElsewhere: true });
     expect(screen.getByTestId('setup-phones')).toHaveTextContent('3 phones are paired with this DashPal.');
-    expect(screen.getByTestId('setup-not-all-yours')).toHaveTextContent(dashpalCopy.setup.notAllYours, { exact: false });
+    expect(screen.getByTestId('setup-not-all-yours')).toHaveTextContent(dashpalCopy.wizard.done.notAllYours, { exact: false });
+    expect(screen.getByTestId('setup-aimed-elsewhere')).toHaveTextContent('Your other phone already aimed it.');
   });
 
   it.each([
-    ['not_found', 'DashPal-C4D5', 'Couldn’t find DashPal-C4D5. Make sure it’s on and nearby.'],
-    ['window_timeout', null, dashpalCopy.setup.windowTimeout],
-    ['setup_busy', null, dashpalCopy.setup.busyElsewhere],
-    ['wrong_code', null, dashpalCopy.setup.wrongCode],
-    ['no_match', null, dashpalCopy.setup.noMatch],
-    ['unverified', null, dashpalCopy.setup.unverified],
-    ['unverified_nearby', null, dashpalCopy.setup.unverifiedNearby],
-    ['no_key', null, dashpalCopy.setup.noKey],
-    ['update_firmware', null, dashpalCopy.setup.updateFirmware],
-    ['mtu', null, dashpalCopy.setup.mtu],
-    ['ios_forget_first', null, dashpalCopy.setup.iosForgetFirst],
-    ['error', null, dashpalCopy.setup.failed],
-  ] as const)('failed %s says so, and Try again restarts the flow', async (reason, name, text) => {
+    ['not_found', 'DashPal-C4D5', 'restart', 'Couldn’t reach DashPal-C4D5. Make sure it’s on and nearby.'],
+    ['none_nearby', null, 'restart', dashpalCopy.wizard.failed.none_nearby],
+    ['window_closed', 'DashPal-C4D5', 'restart', 'DashPal-C4D5 isn’t ready to pair anymore. Press its button 5 times, then try again.'],
+    ['setup_busy', null, 'restart', dashpalCopy.wizard.failed.setup_busy],
+    ['unverified', null, 'restart', dashpalCopy.wizard.failed.unverified],
+    ['update_firmware', null, 'none', dashpalCopy.wizard.failed.update_firmware],
+    ['update_app', null, 'none', dashpalCopy.wizard.failed.update_app],
+    ['mtu', null, 'restart', dashpalCopy.wizard.failed.mtu],
+    ['ios_forget_first', null, 'none', dashpalCopy.wizard.failed.ios_forget_first],
+    ['lost', 'DashPal-C4D5', 'resume', 'Lost the connection to DashPal-C4D5. Try again.'],
+    ['expired', null, 'restart', 'Setup took too long. Try again.'],
+    ['save_failed', null, 'commit', 'DashPal couldn’t save the pairing. Try again.'],
+    ['error', null, 'restart', dashpalCopy.wizard.failed.error],
+  ] as const)('failed %s says so; Try again does what the failure says', async (reason, name, retry, text) => {
     setActiveDashcam(createFakeDashcamRuntime());
     const s = scriptedFlow();
     const w = await appWorld();
     await w.render(panel(s));
-    await s.to({ kind: 'failed', reason, name });
+    await s.to({ kind: 'failed', reason, name, retry });
     expect(screen.getByTestId('setup-phase-failed')).toHaveTextContent(text);
-    if (reason === 'not_found') expect(screen.getByTestId('setup-extra')).toHaveTextContent(dashpalCopy.setup.notFoundTwoPhones);
+    if (retry === 'none') {
+      expect(screen.queryByTestId('setup-retry')).toBeNull();
+      return;
+    }
     await tap('setup-retry');
-    await waitFor(() => expect(s.started()).toBe(2));
+    if (retry === 'restart') await waitFor(() => expect(s.started()).toBe(2));
+    else expect(s.answers).toEqual(['retry']);
   });
 
-  it('no screen ever renders a label code (the setup copy carries none)', () => {
-    const text = JSON.stringify(dashpalCopy).split(dashpalCopy.setup.codePlaceholder).join('');
+  it('no screen ever renders a pairing code (the setup copy carries none)', () => {
+    const text = JSON.stringify(dashpalCopy.wizard);
     expect(text).not.toMatch(/[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}/);
+    expect(text).not.toMatch(/\bcode\b/i);
   });
 });
 

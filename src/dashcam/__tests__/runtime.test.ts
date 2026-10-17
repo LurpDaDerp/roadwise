@@ -22,7 +22,6 @@ const TRIP = '11111111-1111-4111-8111-111111111111';
 const PAIRED: PairedDashcam = { dashcamId: CAM, peripheralId: PID, name: 'DashPal-C4D5', pairedAt: 5, secure: true };
 const PHONE_ID = '0102030405060708';
 const K_PAIR = '42'.repeat(32);
-const S = Uint8Array.from({ length: 16 }, (_, i) => i);
 
 const flush = async () => {
   for (let i = 0; i < 120; i++) await new Promise<void>((resolve) => setImmediate(resolve));
@@ -36,7 +35,7 @@ let secrets: DashpalSecrets;
 let readsFail = false;
 
 async function seedKey(dashcamId = CAM): Promise<void> {
-  await secrets.writePendingAuth({ dashcamId, phoneId: PHONE_ID, kPair: K_PAIR, code: null });
+  await secrets.writePendingAuth({ dashcamId, phoneId: PHONE_ID, kPair: K_PAIR });
   await secrets.finalizeAuth();
 }
 
@@ -58,7 +57,7 @@ beforeEach(async () => {
 
 /** A link v2 DashPal that knows this phone (unless `known: false`). */
 function dashcam(ble: FakeBle, o: { known?: boolean } = {}): FakeDashcam {
-  return createFakeDashcam({ ble, id: PID, mac: MAC, S, phones: o.known === false ? [] : [{ id: Uint8Array.from(fromHex(PHONE_ID)), kPair: Uint8Array.from(fromHex(K_PAIR)) }] });
+  return createFakeDashcam({ ble, id: PID, mac: MAC, phones: o.known === false ? [] : [{ id: Uint8Array.from(fromHex(PHONE_ID)), kPair: Uint8Array.from(fromHex(K_PAIR)) }] });
 }
 
 interface Rig {

@@ -222,7 +222,7 @@ describe('phone-first sound wiring (bootstrap → the DashPal runtime → drive-
     await migrate(db);
     if (paired) await createSettingsRepo(db).set(PAIRED_KEY, { dashcamId: CAM, peripheralId: 'A4:CF:12:B3:C4:D5', name: 'DashPal-C4D5', pairedAt: 1, secure: true });
     const ble = createFakeBle();
-    const cam = createFakeDashcam({ ble, id: 'A4:CF:12:B3:C4:D5', mac: [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5], S: null, phones: [{ id: Uint8Array.from(fromHex(PHONE_ID)), kPair: Uint8Array.from(fromHex(K_PAIR)) }] });
+    const cam = createFakeDashcam({ ble, id: 'A4:CF:12:B3:C4:D5', mac: [0xa4, 0xcf, 0x12, 0xb3, 0xc4, 0xd5], phones: [{ id: Uint8Array.from(fromHex(PHONE_ID)), kPair: Uint8Array.from(fromHex(K_PAIR)) }] });
     mockTransportRef.current = createBleTransport(ble, { platform: 'android', setTimer: () => 0, clearTimer: () => {} });
     const native = createFakeDriveSense({ platform: 'android', now });
     const d = deps({ dashpal: native, now });
