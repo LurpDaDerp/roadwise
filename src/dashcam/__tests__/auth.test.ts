@@ -17,6 +17,7 @@ import {
   pairFin,
   pairKeysV3,
   pairOpen,
+  type PairOpenInputs,
   parseAuthRecord,
   proofOk,
   R,
@@ -313,6 +314,17 @@ describe('pairing (link v3: PAIR_OPEN, no code)', () => {
     const open = pairOpen({ ...base, idP: b(r.id_p), prev: { id: b(r.prev_id), kPair: b(r.prev_K_pair) } });
     expect(toHex(open.bytes)).toBe(r.pair_open);
     expect(toHex(open.bytes.slice(18, 34))).toBe(r.prev_proof);
+  });
+
+  test('prev_proof binds the request it travels in: with another A or Np behind it, the captured proof is not the proof of that request', () => {
+    const r = P3.replace;
+    const prev = { id: b(r.prev_id), kPair: b(r.prev_K_pair) };
+    const proofOf = (o: Partial<PairOpenInputs>): string => toHex(pairOpen({ ...base, idP: b(r.id_p), prev, ...o }).bytes.slice(18, 34));
+    const own = proofOf({});
+    expect(proofOf({})).toBe(own); // the same request: the same proof
+    expect(proofOf({ a: new Uint8Array(32).fill(0x5a) })).not.toBe(own); // a relay's own key pair
+    expect(proofOf({ np: new Uint8Array(16).fill(0x5a) })).not.toBe(own); // or its own Np
+    expect(proofOf({ prev: { id: new Uint8Array(8).fill(0x5a), kPair: prev.kPair } })).not.toBe(own); // or another prev_id
   });
 
   test('a low-order A: the vector’s PAIR_OPEN, which the dashcam answers R_BAD_KEY', () => {

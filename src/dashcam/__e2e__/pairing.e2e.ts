@@ -9,8 +9,8 @@
 // refused or stopped while the car moves, in a drive, after Add another phone, when RoadWise leaves
 // the front and on Next and Cancel. A scripted raw phone plays the second phone, the spoofs and the injector, built on
 // the app's own auth.ts.
-import { blindedId, DIR_PD, pairFin, pairKeysV3, pairOpen, parseAuthRecord, R, sealRaw, sessionFin, sessionKeys, sessionRequest } from '../auth';
-import { randomBytes } from '../crypto';
+import { blindedId, DIR_PD, pairFin, pairKeysV3, pairOpen, parseAuthRecord, proofOk, R, sealRaw, sessionFin, sessionKeys, sessionRequest } from '../auth';
+import { randomBytes, x25519Public } from '../crypto';
 import { COMMAND, decodeInfo, encodeRx, fromHex, STATE_FLAG, toHex } from '../protocol';
 import type { SetupFlow, SetupPhase, SetupStart } from '../setup';
 import { describeSim } from './suite';
@@ -258,6 +258,36 @@ describeSim('DashPal pairing v3 (firmware simulator ↔ app setup flow)', () => 
       expect(auth.phoneId).not.toBe(old);
       expect(await phonesLine(w)).toBe(`PHONES 1 ${auth.phoneId}`);
       await w.connected(a, 10_000);
+    }));
+
+  test('a relay with its own key behind the owner’s prev_proof (the owner’s PAIR_OPEN seen in flight over the real Nc): it pairs as a new phone, and the owner’s record stays', () =>
+    scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
+      await w.dashcam('PRESS5');
+      expect(w.adv).toBe('00f2');
+      const x = rawPhone(w, 5);
+      await x.connect();
+      const info = await x.info();
+      const owner = phoneKey('A');
+      const prev = { id: Uint8Array.from(fromHex(owner.id)), kPair: Uint8Array.from(fromHex(owner.kPair)) };
+      const idP = randomBytes(8);
+      // the owner's Set up again request, as the relay saw it (never delivered)
+      const captured = pairOpen({ mac: info.mac, nc: info.nonce!, idP, a: randomBytes(32), np: randomBytes(16), prev }).bytes;
+      const a = randomBytes(32);
+      const req = Uint8Array.from([...captured.slice(0, 34), ...x25519Public(a), ...captured.slice(66)]);
+      await x.write(req);
+      const resp = parseAuthRecord(await x.read());
+      if (resp.kind !== 'pair_resp') throw new Error(`PAIR_OPEN answered ${JSON.stringify(resp)}`);
+      const keys = pairKeysV3({ mac: info.mac, nc: info.nonce!, open: req, a, B: resp.B, Nd: resp.Nd })!;
+      expect(proofOk(keys.proofD, resp.proofD)).toBe(true);
+      await x.write(pairFin(keys.proofP));
+      expect(parseAuthRecord(await x.read())).toEqual({ kind: 'result', code: R.OK }); // it pairs, as anyone in range may
+      const s = await x.session(idP, keys.K_pair);
+      expect(s.resp).toEqual({ kind: 'result', code: R.OK });
+      const rx = (ctr: number, op: number) => w.dashcam(`RX 5 ${toHex(sealRaw(s.keys!.k_pd, DIR_PD, ctr, encodeRx({ type: 'COMMAND', op, arg: 0 })))}`);
+      await rx(0, COMMAND.HELLO);
+      await rx(1, COMMAND.SETUP_DONE);
+      expect(w.lines(`COMMIT 5 ${toHex(idP)}`)).toHaveLength(1);
+      expect(await phonesLine(w)).toBe(`PHONES 2 ${owner.id} ${toHex(idP)}`); // a new phone: the owner's record stays
     }));
 
   test('Set up again with pairing mode closed: “Press the DashPal’s button 5 times”, and setup goes on by itself once it opens', () =>
