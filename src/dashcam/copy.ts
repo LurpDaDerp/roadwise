@@ -81,6 +81,7 @@ export const dashpalCopy = {
     },
     cancel: 'Cancel',
     cancelLabel: 'Cancel setup',
+    close: 'Close',
     step: (i: number, n: number) => `Step ${i} of ${n}`,
     search: {
       title: 'Looking for your DashPal…',

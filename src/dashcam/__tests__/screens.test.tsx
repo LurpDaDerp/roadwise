@@ -354,18 +354,20 @@ describe('Home: the card of a DashPal ready to pair', () => {
     } as unknown as DashcamTransport;
     setActiveDashcam(rt);
     const clock = { t: 5_000_000 };
+    const flow = scriptedFlow();
     const deps = {
+      setup: { adapter: fakeAdapter(), platform: 'ios' as const, flow: flow.make, secrets: memSecrets().secrets },
       adapter: fakeAdapter(undefined, { bluetoothNow: 'granted' }),
       speedMph: async () => 0,
       now: () => clock.t,
       sleep: async (ms: number) => void (clock.t += ms),
       appState: { currentState: 'active', addEventListener: () => ({ remove: () => {} }) },
     };
-    return { rt, scans, clock, deps };
+    return { rt, scans, clock, deps, flow };
   }
   const NEW: ScanHit = { id: 'P-1A2B', name: 'DashPal-1A2B', rssi: -50, adv: 'new' };
 
-  it('a DashPal with no phone paired nearby: “Pair DashPal-1A2B?” · “A new DashPal is nearby.”, one button that opens setup', async () => {
+  it('a DashPal with no phone paired nearby: “Pair DashPal-1A2B?” · “A new DashPal is nearby.”, one button that opens the setup sheet on it', async () => {
     const n = nearby([NEW, { id: 'P-FAR', name: 'DashPal-FFFF', rssi: -90, adv: 'new' }]);
     const w = await appWorld();
     await w.render(<HomeDashpal deps={n.deps} />);
@@ -377,8 +379,10 @@ describe('Home: the card of a DashPal ready to pair', () => {
     expect(button.props.accessibilityHint).toBe('Opens setup');
     expect(button.props.accessibilityActions).toEqual([{ name: 'notNow', label: 'Not now' }]);
     await tap('home-dashpal-pair-open');
-    expect(mockRouter.push).toHaveBeenLastCalledWith('/settings/dashcam-setup?found=P-1A2B');
+    expect(n.flow.starts).toEqual([{ target: { peripheralId: 'P-1A2B', name: 'DashPal-1A2B', adv: 'new' } }]);
+    expect(screen.getByTestId('wizard-sheet')).toBeOnTheScreen();
     expect(screen.queryByTestId('home-dashpal-pair')).toBeNull();
+    expect(mockRouter.push).not.toHaveBeenCalled();
   });
 
   it('Not now (the ✕ or the screen reader’s action) hides it and snoozes that DashPal for 7 days', async () => {
@@ -398,14 +402,15 @@ describe('Home: the card of a DashPal ready to pair', () => {
     expect(screen.queryByTestId('home-dashpal-pair')).toBeNull();
   });
 
-  it('this phone’s DashPal that no longer knows it: “Set up DashPal-C4D5 again?” · “It no longer knows this phone.”, opening Set up again', async () => {
+  it('this phone’s DashPal that no longer knows it: “Set up DashPal-C4D5 again?” · “It no longer knows this phone.”, opening the setup sheet’s Set up again', async () => {
     const n = nearby([{ id: PAIRED.peripheralId, name: null, rssi: -60, adv: 'open' }], { link: { lifecycle: 'needs_repair', paired: PAIRED, repairCause: 'unknown_phone' } });
     const w = await appWorld();
     await w.render(<HomeDashpal deps={n.deps} />);
     expect(await screen.findByTestId('home-dashpal-pair-title')).toHaveTextContent('Set up DashPal-C4D5 again?');
     expect(screen.getByTestId('home-dashpal-pair-subtitle')).toHaveTextContent('It no longer knows this phone.');
     await tap('home-dashpal-pair-open');
-    expect(mockRouter.push).toHaveBeenLastCalledWith('/settings/dashcam-setup?again=1');
+    expect(n.flow.starts).toEqual([{ again: true }]);
+    expect(screen.getByTestId('wizard-sheet')).toBeOnTheScreen();
   });
 
   it.each([

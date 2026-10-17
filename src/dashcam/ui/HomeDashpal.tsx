@@ -1,4 +1,4 @@
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
@@ -14,11 +14,13 @@ import { mpsToMph } from '@/lib/units';
 import { createDetector, snoozed, type Detector, type Found } from '../detector';
 import { SNOOZES_KEY } from '../keys';
 import type { DashcamRuntime, DashcamState } from '../runtime';
+import type { SetupStart } from '../setup';
 import { NewPhoneCard } from './NewPhoneCard';
 import { PairCard } from './PairCard';
 import { isSetupOpen } from './setupOpen';
-import { setupHref } from './SetupScreen';
 import { useDashcamRuntime, useDashcamSelector } from './useDashcam';
+import { PairWizardSheet } from './wizard/PairWizardSheet';
+import type { SetupFlowDeps } from './wizard/useSetupFlow';
 
 export interface HomeDashpalDeps {
   adapter?: PermissionsAdapter;
@@ -26,27 +28,31 @@ export interface HomeDashpalDeps {
   speedMph?: () => Promise<number | null>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** the setup sheet's own deps (tests) */
+  setup?: SetupFlowDeps;
 }
 
 /**
  * Home's DashPal slot: the one-time new-phone card, and under it the card of a DashPal ready to pair
  * nearby (`../detector.ts`: looked for when Home comes into view, when RoadWise returns to the front
- * on Home, and on pull to refresh, `pull` counting the pulls). Hidden while a drive records.
+ * on Home, and on pull to refresh, `pull` counting the pulls), which opens the setup sheet on that
+ * DashPal. The cards hide while a drive records; an open sheet stays (setup says it stopped).
  */
 export function HomeDashpal({ hidden = false, pull = 0, deps = {} }: { hidden?: boolean; pull?: number; deps?: HomeDashpalDeps }) {
   const runtime = useDashcamRuntime();
+  const [setup, setSetup] = useState<SetupStart | null>(null);
   return (
     <>
       <NewPhoneCard hidden={hidden} />
-      {runtime && !hidden ? <PairOffer runtime={runtime} pull={pull} deps={deps} /> : null}
+      {runtime && !hidden ? <PairOffer runtime={runtime} pull={pull} deps={deps} onOpen={setSetup} /> : null}
+      {runtime ? <PairWizardSheet start={setup} onClose={() => setSetup(null)} deps={deps.setup} /> : null}
     </>
   );
 }
 
 const selectConnected = (s: DashcamState | null): boolean => s?.link.paired !== null && s?.link.lifecycle === 'connected';
 
-function PairOffer({ runtime, pull, deps }: { runtime: DashcamRuntime; pull: number; deps: HomeDashpalDeps }) {
-  const router = useRouter();
+function PairOffer({ runtime, pull, deps, onOpen }: { runtime: DashcamRuntime; pull: number; deps: HomeDashpalDeps; onOpen(start: SetupStart): void }) {
   const host = useDriveHost();
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
@@ -150,7 +156,7 @@ function PairOffer({ runtime, pull, deps }: { runtime: DashcamRuntime; pull: num
 
   const open = (f: Found) => {
     setFound(null);
-    router.push(setupHref(f.kind === 'again' ? { again: true } : { found: f.id }));
+    onOpen(f.kind === 'again' ? { again: true } : { target: { peripheralId: f.id, name: f.name, adv: f.adv } });
   };
 
   // Nothing else is offered while the paired DashPal is connected.
