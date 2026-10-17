@@ -62,7 +62,7 @@ const Ctx = createContext<Theme | null>(null);
 /** How long a change of sky takes to blend in (light ⇄ dark included). */
 export const SKY_BLEND_MS = 2400;
 /** The blend repaints at most this often: smooth to the eye without re-rendering every frame. */
-export const BLEND_FRAME_MS = 33;
+export const BLEND_FRAME_MS = 50;
 /** The first sky after launch lands at once (it is behind the splash); later changes blend. */
 const SETTLE_MS = 1500;
 

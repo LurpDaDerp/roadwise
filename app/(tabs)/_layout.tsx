@@ -3,6 +3,7 @@ import { Tabs, useIsFocused } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { View, type ColorValue } from 'react-native';
 
+import { useDrive } from '@/drive/useDrive';
 import { t } from '@/i18n';
 import { SkyBackdrop, useTheme } from '@/ui';
 import { FloatingTabBar, type FloatingTabBarProps } from '@/ui/nav/FloatingTabBar';
@@ -18,15 +19,17 @@ function tabIcon(outline: IconName, filled: IconName) {
 /**
  * The signed-in shell: Home · Leagues · Clan · Profile over the page's sky, with the floating
  * pill tab bar. Driving is a full-screen flow outside it (and draws none of the sky). The sky's
- * weather layer runs only while this shell is in front.
+ * weather layer runs only while this shell is in front and no drive is recording.
  */
 export default function TabsLayout() {
   const th = useTheme();
   const focused = useIsFocused();
+  // Nothing moves behind Home while a drive records, even with the driver back on the tabs.
+  const recording = useDrive((d) => d.status === 'recording');
 
   return (
     <View style={{ flex: 1, backgroundColor: th.colors.bg }}>
-      <SkyBackdrop active={focused} />
+      <SkyBackdrop active={focused && !recording} />
       <Tabs
         tabBar={(props) => <FloatingTabBar {...(props as unknown as FloatingTabBarProps)} />}
         screenOptions={{
