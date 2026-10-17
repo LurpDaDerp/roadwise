@@ -13,7 +13,10 @@ import { ProgressBar } from '@/ui/primitives/ProgressBar';
 import { ProgressRing } from '@/ui/primitives/ProgressRing';
 import { SectionHeader } from '@/ui/primitives/SectionHeader';
 import { SegmentedControl } from '@/ui/primitives/SegmentedControl';
-import { Sheet } from '@/ui/primitives/Sheet';
+import { BottomSheet, Sheet } from '@/ui/primitives/Sheet';
+import { StepDots, StepTransition } from '@/ui/primitives/StepTransition';
+import { Button } from '@/ui/primitives/Button';
+import { Text } from '@/ui/primitives/Text';
 import { StatTile } from '@/ui/primitives/StatTile';
 import { StreakFlame } from '@/ui/primitives/StreakFlame';
 import { TierBadge } from '@/ui/primitives/TierBadge';
@@ -247,6 +250,113 @@ test('Sheet shows its title and closes from the close button', async () => {
   expect(screen.getByText('Report this event')).toBeOnTheScreen();
   await fireEvent.press(screen.getAllByRole('button', { name: 'Close' }).at(-1)!);
   expect(onClose).toHaveBeenCalled();
+});
+
+describe('BottomSheet', () => {
+  test('a grabber, a header title, content and a pinned footer action; the panel is modal for the screen reader', async () => {
+    const onDone = jest.fn();
+    await wrap(
+      <BottomSheet visible title="Set up DashPal" subtitle="Step 1" onClose={jest.fn()} footer={<Button label="Next" onPress={onDone} />} testID="sheet">
+        <Text>Body</Text>
+      </BottomSheet>
+    );
+    expect(screen.getByTestId('sheet-grabber', { includeHiddenElements: true })).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Set up DashPal' })).toBeOnTheScreen();
+    expect(screen.getByText('Step 1')).toBeOnTheScreen();
+    expect(screen.getByTestId('sheet').props.accessibilityViewIsModal).toBe(true);
+    await fireEvent.press(screen.getByRole('button', { name: 'Next' }));
+    expect(onDone).toHaveBeenCalled();
+  });
+
+  test('closes from the close button, the screen reader escape and Android back; not when not dismissible', async () => {
+    const onClose = jest.fn();
+    const view = await wrap(
+      <BottomSheet visible title="Sort" onClose={onClose} testID="sheet">
+        <Text>Body</Text>
+      </BottomSheet>
+    );
+    await fireEvent.press(screen.getByRole('button', { name: 'Close' }));
+    await fireEvent(screen.getByTestId('sheet'), 'accessibilityEscape');
+    expect(onClose).toHaveBeenCalledTimes(2);
+
+    const stuck = jest.fn();
+    await view.rerender(
+      <SafeAreaProvider>
+        <ThemeProvider scheme="light" reduceMotion>
+          <BottomSheet visible title="Pairing" onClose={stuck} dismissible={false} testID="sheet">
+            <Text>Body</Text>
+          </BottomSheet>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    );
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+    await fireEvent(screen.getByTestId('sheet'), 'accessibilityEscape');
+    expect(stuck).not.toHaveBeenCalled();
+  });
+
+  test('a drag down on the grabber past the threshold closes; a short one does not', async () => {
+    const onClose = jest.fn();
+    await wrap(
+      <BottomSheet visible title="Sort" onClose={onClose} testID="sheet">
+        <Text>Body</Text>
+      </BottomSheet>
+    );
+    const handle = screen.getByTestId('sheet-handle');
+    const at = (pageY: number, timestamp: number) => ({ nativeEvent: { pageY, timestamp } });
+    await fireEvent(handle, 'touchStart', at(100, 0));
+    await fireEvent(handle, 'responderMove', at(140, 200));
+    await fireEvent(handle, 'responderRelease', at(140, 220));
+    expect(onClose).not.toHaveBeenCalled();
+    await fireEvent(handle, 'touchStart', at(100, 1000));
+    await fireEvent(handle, 'responderMove', at(260, 1300));
+    await fireEvent(handle, 'responderRelease', at(260, 1320));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test('it leaves after its exit, and the old name still works', async () => {
+    const view = await wrap(
+      <Sheet visible title="Report" onClose={jest.fn()}>
+        <Text>Reasons</Text>
+      </Sheet>
+    );
+    expect(screen.getByText('Reasons')).toBeOnTheScreen();
+    await view.rerender(
+      <SafeAreaProvider>
+        <ThemeProvider scheme="light" reduceMotion>
+          <Sheet visible={false} title="Report" onClose={jest.fn()}>
+            <Text>Reasons</Text>
+          </Sheet>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    );
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+    expect(screen.queryByText('Reasons')).toBeNull();
+  });
+});
+
+test('StepTransition shows the current step; StepDots speaks the position', async () => {
+  const view = await wrap(
+    <>
+      <StepDots count={4} current={1} testID="dots" />
+      <StepTransition step="code" index={1}>
+        <Text>Scan the code</Text>
+      </StepTransition>
+    </>
+  );
+  expect(screen.getByLabelText('Step 2 of 4')).toBeOnTheScreen();
+  expect(screen.getByText('Scan the code')).toBeOnTheScreen();
+  await view.rerender(
+    <SafeAreaProvider>
+      <ThemeProvider scheme="light" reduceMotion>
+        <StepTransition step="pair" index={2}>
+          <Text>Pairing</Text>
+        </StepTransition>
+      </ThemeProvider>
+    </SafeAreaProvider>
+  );
+  expect(screen.getByText('Pairing')).toBeOnTheScreen();
 });
 
 test('a pill or trend inside an element that speaks it is not a second TalkBack stop', async () => {
