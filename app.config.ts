@@ -132,8 +132,11 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       permissions: ['android.permission.POST_NOTIFICATIONS', 'android.permission.VIBRATE'],
       // Every drive starts in the app and the forgot-to-start reminder uses activity recognition
       // only, so background ("all the time") location is never asked for, whatever a library's
-      // manifest declares. The camera never records sound.
-      blockedPermissions: ['android.permission.ACCESS_BACKGROUND_LOCATION', 'android.permission.RECORD_AUDIO'],
+      // manifest declares. The camera never records sound. expo-screen-capture (the DashPal aiming
+      // picture kept out of screenshots, FLAG_SECURE) declares photo access for a screenshot
+      // listener RoadWise never adds: blocked. Its DETECT_SCREEN_CAPTURE stays (an install-time
+      // permission its Android 14 callback needs).
+      blockedPermissions: ['android.permission.ACCESS_BACKGROUND_LOCATION', 'android.permission.RECORD_AUDIO', 'android.permission.READ_MEDIA_IMAGES'],
     },
     extra: { eas: { projectId: EAS_PROJECT_ID } },
     plugins: [

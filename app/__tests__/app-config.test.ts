@@ -129,6 +129,12 @@ describe('permissions (v3)', () => {
     );
   });
 
+  test('Android never gets photo access: expo-screen-capture only keeps the aiming picture out of screenshots', () => {
+    expect(build().android?.blockedPermissions).toContain('android.permission.READ_MEDIA_IMAGES');
+    // Its Android 14 screen-capture callback needs this install-time permission: never blocked.
+    expect(build().android?.blockedPermissions).not.toContain('android.permission.DETECT_SCREEN_CAPTURE');
+  });
+
   test("the boot permission comes from drive-sense's manifest only (the reminder's boot receiver), not the app config", () => {
     expect(build().android?.permissions).not.toContain('android.permission.RECEIVE_BOOT_COMPLETED');
     const ROOT_DIR = path.join(__dirname, '..', '..');
