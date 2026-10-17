@@ -150,7 +150,7 @@ export function HomeScreen() {
   const refreshing = summary.isRefetching || recent.isRefetching;
 
   return (
-    <Screen padded={false} bottomInset={false}>
+    <Screen padded={false} bottomInset={false} sky>
       <HomeView
         summary={summary.data}
         summaryLoading={summary.isLoading}

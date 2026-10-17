@@ -20,6 +20,7 @@ export function Screen({
   scroll = false,
   padded = true,
   bottomInset = true,
+  sky = false,
   testID,
 }: {
   children: ReactNode;
@@ -27,6 +28,8 @@ export function Screen({
   padded?: boolean;
   /** Clear the home indicator. Off inside the tab bar, which owns that inset. */
   bottomInset?: boolean;
+  /** A tab screen: no ground of its own, so the sky drawn behind the tabs shows through. */
+  sky?: boolean;
   /** Lands on the content container, the element that carries the padding. */
   testID?: string;
 }) {
@@ -43,7 +46,7 @@ export function Screen({
 
   return (
     <SafeAreaView
-      style={{ flex: 1, backgroundColor: t.colors.bg }}
+      style={{ flex: 1, backgroundColor: sky ? 'transparent' : t.colors.bg }}
       edges={['top', 'left', 'right']}
     >
       {scroll ? (

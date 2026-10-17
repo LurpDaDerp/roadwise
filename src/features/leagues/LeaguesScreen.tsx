@@ -22,7 +22,7 @@ export function LeaguesScreen({ initial = 'friends' }: { initial?: LeaguesSegmen
   const [segment, setSegment] = useState<LeaguesSegment>(initial);
 
   return (
-    <Screen padded={false} bottomInset={false} testID="leagues-screen">
+    <Screen padded={false} bottomInset={false} sky testID="leagues-screen">
       <View style={{ paddingHorizontal: t.space.lg, paddingTop: t.space.lg, gap: t.space.md }}>
         <Text variant="title1" accessibilityRole="header">
           {leaguesCopy.title}

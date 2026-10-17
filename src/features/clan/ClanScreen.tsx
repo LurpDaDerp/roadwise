@@ -302,7 +302,7 @@ export function ClanScreen() {
   }
 
   return (
-    <Screen padded={false} bottomInset={false} testID="clan-screen">
+    <Screen padded={false} bottomInset={false} sky testID="clan-screen">
       <View style={{ paddingHorizontal: t.space.lg, paddingTop: t.space.lg }}>
         <Text variant="title1" accessibilityRole="header">
           {copy.title}
