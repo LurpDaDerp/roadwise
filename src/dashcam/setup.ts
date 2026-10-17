@@ -182,7 +182,7 @@ export interface SetupFlow {
   next(): void;
   /** Try again on a failure (what it does: the failure's `retry`). */
   retry(): Promise<void>;
-  /** Stop setup: undoes a pairing already made, on both sides. Ignored while the commit is answered. */
+  /** Stop setup: undoes a pairing already made, on both sides. While the commit is answered it waits for the answer: done stands, anything else is undone. */
   cancel(): Promise<void>;
 }
 
@@ -241,6 +241,8 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
   let waiter: { kind: 'pair' | 'pick' | 'next'; resolve: (v: string | null) => void } | null = null;
   /** the paired DashPal's auto-connect is stepped aside (given back when setup ends without pairing) */
   let stepped = false;
+  /** Cancel came while the commit was answered (the screen left): a commit that does not go through is undone */
+  let cancelAfter = false;
 
   // ——— the setup under way ———
   let t: DashcamTransport | null = null;
@@ -926,6 +928,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     if (running) return;
     running = true;
     cancelled = false;
+    cancelAfter = false;
     let result: SetupPhase;
     const offDrive = deps.onDriveChange(() => {
       if (!driveOpened()) return;
@@ -935,24 +938,34 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       void stop?.().catch((e: unknown) => report(e, 'stopScan'));
     });
     try {
-      result = await body();
-    } catch (e) {
-      if (e instanceof DriveOpen) {
-        await undo();
-        result = { kind: 'busy' };
-      } else if (e instanceof Cancelled) {
+      try {
+        result = await body();
+      } catch (e) {
+        if (e instanceof DriveOpen) {
+          await undo();
+          result = { kind: 'busy' };
+        } else if (e instanceof Cancelled) {
+          await undo();
+          result = { kind: 'cancelled' };
+        } else if (e instanceof Failed) {
+          // A failure that Try again resumes keeps the hold (and the key); any other undoes it.
+          if (e.retry !== 'commit' && e.retry !== 'resume') await undo();
+          result = { kind: 'failed', reason: e.reason, name: shownName === 'DashPal' ? null : shownName, retry: e.retry };
+        } else {
+          report(e, 'setup');
+          await undo();
+          result = { kind: 'failed', reason: 'error', name: null, retry: 'restart' };
+        }
+      }
+      if (cancelAfter && result.kind === 'failed' && (result.retry === 'commit' || result.retry === 'resume')) {
+        // Cancelled while the commit was answered (the driver left the screen): nobody is left to
+        // tap Try again, so a commit that did not go through is undone like any other cancel.
+        set({ kind: 'stopping' });
         await undo();
         result = { kind: 'cancelled' };
-      } else if (e instanceof Failed) {
-        // A failure that Try again resumes keeps the hold (and the key); any other undoes it.
-        if (e.retry !== 'commit' && e.retry !== 'resume') await undo();
-        result = { kind: 'failed', reason: e.reason, name: shownName === 'DashPal' ? null : shownName, retry: e.retry };
-      } else {
-        report(e, 'setup');
-        await undo();
-        result = { kind: 'failed', reason: 'error', name: null, retry: 'restart' };
       }
     } finally {
+      cancelAfter = false;
       offDrive();
       running = false;
     }
@@ -1061,7 +1074,11 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     },
 
     async cancel() {
-      if (running && phase.kind === 'finishing') return; // the commit's answer decides (≤ 2 s)
+      if (running && phase.kind === 'finishing') {
+        // The commit's answer decides (≤ 2 s): done stands; anything else is then undone.
+        cancelAfter = true;
+        return;
+      }
       if (running) {
         cancelled = true;
         if (stage !== 'pre') set({ kind: 'stopping' });

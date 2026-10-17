@@ -436,6 +436,31 @@ describe('Cancel, on both sides', () => {
     r.flow.next();
     expect(await untilEnd(r)).toMatchObject({ kind: 'done' });
   });
+
+  test('leaving the screen while the commit is answered, and the commit fails: undone on both sides, the speed watch stopped, the paired DashPal resumed', async () => {
+    const r = rig({ previous: previousOf(0x01) });
+    await setUp(r, { target: { peripheralId: idOf('android', 0xd5), name: 'DashPal-C4D5', adv: 'new' } }, { next: false });
+    r.cam().commit = R.STORE_FAILED;
+    const w0 = r.ble.onWrite!;
+    let left = false;
+    r.ble.onWrite = (w) => {
+      if (!left && r.flow.phase().kind === 'finishing') {
+        left = true;
+        void r.flow.cancel();
+      }
+      return w0(w);
+    };
+    r.flow.next();
+    expect(await untilEnd(r)).toEqual({ kind: 'cancelled' });
+    expect(left).toBe(true);
+    expect(r.ops().at(-1)).toBe(9);
+    expect(r.cam().prov).toBeNull();
+    expect(r.cam().windowOpen).toBe(true);
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect(r.speed.stopped).toBeGreaterThan(0);
+    expect(r.log).toContain('resumePaired');
+    expect(r.ble.calls).toContain(`disconnect:${idOf('android', 0xd5)}`);
+  });
 });
 
 describe('a drive opening', () => {
