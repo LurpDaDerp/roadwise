@@ -280,7 +280,8 @@ describeSim('DashPal pairing v3 (firmware simulator ↔ app setup flow)', () => 
       const b = await w.addPhone({ name: 'B', conn: 2, platform: 'android' });
       const r = await setUp(w, b);
       expect(r.at.confirm).toBeDefined();
-      expect(r.end).toMatchObject({ kind: 'done', phones: 2, notAllYours: true });
+      // The simulator refuses the aiming stream in a window that COMMAND 3 opened (VIEW_STATE not_allowed).
+      expect(r.end).toMatchObject({ kind: 'done', phones: 2, notAllYours: true, aimedElsewhere: true });
       await w.until(() => a.rt.state().link.status?.bondCount === 2, 5000, 'A sees 2 phones');
       expect(a.rt.state().newPhone).toBe(false);
     }));
