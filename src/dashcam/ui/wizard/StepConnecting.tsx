@@ -19,7 +19,7 @@ export type ConnectingView =
   | { kind: 'connected'; name: string }
   | { kind: 'press_button'; name: string }
   | { kind: 'waiting_busy'; name: string }
-  | { kind: 'finishing' };
+  | { kind: 'finishing'; reconnecting: boolean };
 
 function words(v: ConnectingView): { title: string; body: string | null } {
   switch (v.kind) {
@@ -32,7 +32,7 @@ function words(v: ConnectingView): { title: string; body: string | null } {
     case 'waiting_busy':
       return { title: copy.waitingBusy, body: null };
     case 'finishing':
-      return { title: copy.finishing, body: null };
+      return { title: copy.finishing, body: v.reconnecting ? copy.connecting.reconnecting : null };
   }
 }
 
@@ -40,19 +40,21 @@ function words(v: ConnectingView): { title: string; body: string | null } {
  * Screen 1 after the Pair tap: a spinner while the phone connects and pairs ("Connecting to
  * DashPal-XXXX…", other phones held off meanwhile), then a check mark with "Connected" and a success
  * haptic. Set up again's "Press the DashPal's button 5 times.", the wait for another phone's setup
- * and "Finishing…" show here too. Each change is said to a screen reader.
+ * and "Finishing…" (with "Reconnecting…" under it while a lost link reconnects) show here too. Each
+ * change is said to a screen reader.
  */
 export function StepConnecting({ view, step }: { view: ConnectingView; step: string | null }) {
   const th = useTheme();
   const { title, body } = words(view);
   const done = view.kind === 'connected';
 
+  const said = view.kind === 'connecting' && !view.reconnecting ? title.replace(/…$/, '') : view.kind === 'finishing' && view.reconnecting && body ? body : title;
   useEffect(() => {
-    announce(view.kind === 'connecting' && !view.reconnecting ? title.replace(/…$/, '') : title);
+    announce(said);
     if (done) void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     // Once per text: the same words set again are not said again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, done]);
+  }, [said, done]);
 
   return (
     <View style={{ gap: th.space.md, alignItems: 'center', paddingVertical: th.space.lg }} testID={`wizard-connect-${view.kind}`}>

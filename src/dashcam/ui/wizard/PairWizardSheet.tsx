@@ -114,7 +114,8 @@ export function PairWizardSheet({
 
   const n = stepNumber(phase);
   const step = n !== null ? copy.step(n, STEP_COUNT) : null;
-  const cancellable = phase.kind !== 'done' && phase.kind !== 'finishing' && phase.kind !== 'stopping';
+  // While finishing only a reconnect (up to 45 s) can be cancelled; otherwise the commit's answer decides (≤ 2 s).
+  const cancellable = phase.kind !== 'done' && phase.kind !== 'stopping' && (phase.kind !== 'finishing' || phase.reconnecting === true);
 
   const requestCancel = () => {
     if (confirming) {
@@ -172,9 +173,11 @@ export function PairWizardSheet({
       body = <StepInstructions aimAllowed={phase.aimAllowed} holdLeftS={phase.holdLeftS} reconnecting={phase.reconnecting} step={step} onNext={() => flow.next()} />;
       break;
     case 'finishing':
+      body = <StepConnecting view={{ kind: 'finishing', reconnecting: phase.reconnecting === true }} step={null} />;
+      break;
     case 'stopping':
     case 'cancelled':
-      body = <StepConnecting view={{ kind: 'finishing' }} step={null} />;
+      body = <StepConnecting view={{ kind: 'finishing', reconnecting: false }} step={null} />;
       break;
     case 'done':
       body = <StepDone paired={phase.paired} phones={phase.phones} notAllYours={phase.notAllYours} aimedElsewhere={phase.aimedElsewhere} onDone={() => onClose('done')} />;

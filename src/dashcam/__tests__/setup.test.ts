@@ -592,6 +592,7 @@ describe('the hold: a lost link, its end, the commit’s outcomes', () => {
         r.ble.drop(idOf('android', 0xd5));
       }
     };
+    const from = r.phases.length;
     r.flow.next();
     expect(await untilEnd(r)).toMatchObject({ kind: 'failed', reason: 'lost', retry: 'resume' });
     expect(await r.secrets.readPendingAuth()).not.toBeNull();
@@ -599,6 +600,10 @@ describe('the hold: a lost link, its end, the commit’s outcomes', () => {
     await r.flow.retry();
     expect(await untilEnd(r)).toMatchObject({ kind: 'done' });
     expect(await r.secrets.readAuth()).not.toBeNull();
+    // After Next the setup reads as finishing, reconnecting meanwhile: never screen 1's connecting again.
+    const after = r.phases.slice(from);
+    expect(after.map((p) => p.kind)).not.toContain('connecting');
+    expect(after).toContainEqual({ kind: 'finishing', reconnecting: true });
   });
 
   test('Cancel after an unanswered commit: the key is kept only as the orphan (the next setup proves it as prev_id)', async () => {
@@ -668,7 +673,8 @@ describe('the hold: a lost link, its end, the commit’s outcomes', () => {
       void r.flow.cancel();
     });
     expect(await untilEnd(r)).toEqual({ kind: 'cancelled' });
-    expect(at).toMatchObject({ kind: 'connecting', reconnecting: true });
+    // Still finishing (no step 1 again), and the reconnect is cancelled at once.
+    expect(at).toEqual({ kind: 'finishing', reconnecting: true });
     expect(r.ops()).toContain(4);
     expect(r.cam().phones.size).toBe(0);
     expect(await r.secrets.readPendingAuth()).toBeNull();

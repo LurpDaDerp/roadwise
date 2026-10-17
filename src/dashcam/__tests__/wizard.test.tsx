@@ -282,6 +282,26 @@ describe('the steps', () => {
     expect(outcomes).toEqual([]);
   });
 
+  it('a link lost while finishing: still “Finishing…”, with “Reconnecting…” under it and no step number; Cancel stays for the reconnect and says DashPal will be unpaired', async () => {
+    const say = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
+    const s = await open();
+    await s.to({ kind: 'instructions', aimAllowed: true, holdLeftS: null, reconnecting: false });
+    await tap('wizard-next');
+    await s.to({ kind: 'finishing' });
+    await s.to({ kind: 'finishing', reconnecting: true });
+    expect(screen.getByTestId('wizard-connect-finishing')).toBeOnTheScreen();
+    expect(screen.getByTestId('wizard-connect-title')).toHaveTextContent('Finishing…');
+    expect(screen.getByTestId('wizard-connect-body')).toHaveTextContent('Reconnecting…');
+    expect(say).toHaveBeenLastCalledWith('Reconnecting…');
+    expect(stepText()).toHaveTextContent('');
+    await tap('wizard-cancel');
+    expect(screen.getByTestId('wizard-cancel-confirm-body')).toHaveTextContent('DashPal will be unpaired from this phone and ready to pair again.');
+    await tap('wizard-cancel-stop');
+    expect(outcomes).toEqual(['closed']);
+    expect(s.cancelled()).toBe(1);
+    say.mockRestore();
+  });
+
   it('done: a check mark, “DashPal is ready”, from 2 phones how many and “Not all yours?”, no Cancel; Done, back or the scrim close', async () => {
     const say = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
     const s = await open();

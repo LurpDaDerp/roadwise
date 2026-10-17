@@ -122,7 +122,8 @@ export type SetupPhase =
   | { kind: 'connected'; name: string }
   /** Screen 2. `aimAllowed`: false when the window came from Add another phone; `holdLeftS` in the hold's last minute. */
   | { kind: 'instructions'; aimAllowed: boolean; holdLeftS: number | null; reconnecting: boolean }
-  | { kind: 'finishing' }
+  /** After Next. `reconnecting`: the link was lost while finishing (Cancel stays then: the reconnect may take 45 s). */
+  | { kind: 'finishing'; reconnecting?: boolean }
   /** `phones`: the count after the commit; `notAllYours`: 2 or more; `aimedElsewhere`: no aiming here (Add another phone). */
   | { kind: 'done'; paired: PairedDashcam; phones: number | null; notAllYours: boolean; aimedElsewhere: boolean }
   | { kind: 'failed'; reason: SetupFailure; name: string | null; retry: SetupRetry }
@@ -757,7 +758,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     const c = cand!;
     const key = pending;
     if (!key) throw new Failed('lost');
-    if (phase.kind === 'instructions' || phase.kind === 'connecting') set({ ...phase, reconnecting: true });
+    if (phase.kind === 'instructions' || phase.kind === 'connecting' || phase.kind === 'finishing') set({ ...phase, reconnecting: true });
     const until = deps.now() + HOLD_RECONNECT_MS;
     while (deps.now() < until) {
       check();
@@ -768,7 +769,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
           const s = await tt.startSession(c.id, got, { phoneId: key.phoneId, kPair: key.kPair });
           if (s.kind === 'up') {
             await sessionStarted();
-            if (phase.kind === 'instructions' || phase.kind === 'connecting') set({ ...phase, reconnecting: false });
+            if (phase.kind === 'instructions' || phase.kind === 'connecting' || phase.kind === 'finishing') set({ ...phase, reconnecting: false });
             return;
           }
           if (s.kind === 'unknown_phone') {
@@ -830,7 +831,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       if (expired) await expire();
       if (!linkUp()) {
         // The link is down: reconnect under the new key (after COMMAND 8 was sent, its outcome is unknown).
-        set({ kind: 'connecting', name: shownName, reconnecting: true });
+        set({ kind: 'finishing', reconnecting: true });
         await release();
         await reconnectHold({ keepKey: stage === 'commit' });
         set({ kind: 'finishing' });
@@ -1100,7 +1101,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       await runSegment(async () => {
         if (kind === 'resume') {
           stage = 'commit';
-          set({ kind: 'connecting', name: shownName, reconnecting: true });
+          set({ kind: 'finishing', reconnecting: true });
           await release();
           await reconnectHold({ keepKey: true });
         }
@@ -1109,8 +1110,9 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     },
 
     async cancel() {
-      if (running && phase.kind === 'finishing') {
-        // The commit's answer decides (≤ 2 s): done stands; anything else is then undone.
+      if (running && phase.kind === 'finishing' && !phase.reconnecting) {
+        // The commit's answer decides (≤ 2 s): done stands; anything else is then undone. A reconnect
+        // while finishing (up to 45 s) is cancelled like any other.
         cancelAfter = true;
         return;
       }
