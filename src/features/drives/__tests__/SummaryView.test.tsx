@@ -1,7 +1,7 @@
 import { screen, within } from '@testing-library/react-native';
 
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
-import { tokens } from '@/ui/tokens';
+import { plainBundle } from '@/ui/sky/palette';
 
 import { DAY, draw, drive, event, NOW, press, result } from '../__fixtures__/drives';
 import { SummaryView, type SummaryViewProps } from '../SummaryView';
@@ -64,12 +64,12 @@ test('an event outside the map (privacy zone) says so when tapped', async () => 
   expect(screen.getByTestId('map-highlight-caption')).toHaveTextContent(/isn't on the map/);
 });
 
-test('a negative drive shows red points with a true minus', async () => {
+test('a negative drive shows red points with a true minus, in the scene card red kept at AA on its sky', async () => {
   const r = result({ net: -44 });
   await draw(<SummaryView {...props({ drive: drive({ pointsNet: -44, result: r }) })} />);
   const pts = screen.getByLabelText('Points this drive: −44 points');
   expect(pts).toBeOnTheScreen();
-  expect(within(pts).getByText('−44')).toHaveStyle({ color: tokens.color.dark.danger });
+  expect(within(pts).getByText('−44')).toHaveStyle({ color: plainBundle('light').onScene.danger });
 });
 
 test('an offline estimate is labelled and explains the missing breakdown', async () => {

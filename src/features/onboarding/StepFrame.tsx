@@ -1,8 +1,7 @@
-import { Ionicons } from '@expo/vector-icons';
 import { createContext, useContext, type ReactNode } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 
-import { Button, Screen, Text, useTheme } from '@/ui';
+import { Button, IconButton, Screen, Text, useTheme } from '@/ui';
 
 import { onboardingCopy } from './copy';
 import type { StepPosition } from './flow';
@@ -72,23 +71,7 @@ export function StepFrame({
             }}
           >
             {onBack ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={onboardingCopy.frame.back}
-                onPress={onBack}
-                hitSlop={th.space.xs}
-                style={({ pressed }) => ({
-                  minWidth: TARGET,
-                  minHeight: TARGET,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginLeft: -th.space.sm,
-                  borderRadius: th.radius.pill,
-                  backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
-                })}
-              >
-                <Ionicons name="chevron-back" size={26} color={th.colors.accent} />
-              </Pressable>
+              <IconButton icon="chevron-back" accessibilityLabel={onboardingCopy.frame.back} onPress={onBack} variant="surface" size={TARGET} />
             ) : null}
             {at ? (
               <Text
@@ -116,10 +99,10 @@ export function StepFrame({
                   key={i}
                   style={{
                     flex: 1,
-                    height: i < at.index ? 3 : StyleSheet.hairlineWidth * 2,
+                    height: 6,
                     alignSelf: 'center',
                     borderRadius: th.radius.pill,
-                    backgroundColor: i < at.index ? th.colors.accent : th.colors.borderStrong,
+                    backgroundColor: i < at.index ? th.colors.primary : th.colors.border,
                   }}
                 />
               ))}

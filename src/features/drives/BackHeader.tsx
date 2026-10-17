@@ -17,8 +17,8 @@ export function BackHeader({
 }) {
   const t = useTheme();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
-      <IconButton icon="chevron-back" accessibilityLabel="Back" onPress={onBack} testID="back" style={{ marginLeft: -t.space.sm }} />
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+      <IconButton icon="chevron-back" accessibilityLabel="Back" onPress={onBack} testID="back" variant="surface" />
       <View style={{ flex: 1 }}>
         <Text variant="title2" accessibilityRole="header" numberOfLines={2}>
           {title}

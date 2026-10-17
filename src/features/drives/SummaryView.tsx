@@ -202,8 +202,8 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={{ padding: t.space.lg, gap: t.space.lg }} testID="drive-summary">
         {/* 1. Title */}
-        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.sm }}>
-          <IconButton icon="chevron-back" accessibilityLabel="Back" onPress={onBack} testID="back" style={{ marginLeft: -t.space.sm }} />
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.md }}>
+          <IconButton icon="chevron-back" accessibilityLabel="Back" onPress={onBack} testID="back" variant="surface" />
           <View
             style={{ flex: 1 }}
             accessible

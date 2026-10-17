@@ -93,8 +93,9 @@ describe('StepFrame', () => {
     const style = [back.props.style]
       .flat(Infinity)
       .reduce((a: object, s: object) => ({ ...a, ...s }), {});
-    expect(style.minHeight).toBeGreaterThanOrEqual(44);
-    expect(style.minWidth).toBeGreaterThanOrEqual(44);
+    // A round button: its drawn size is its touch target.
+    expect(style.minHeight ?? style.height).toBeGreaterThanOrEqual(44);
+    expect(style.minWidth ?? style.width).toBeGreaterThanOrEqual(44);
   });
 
   it('adds an optional secondary action under the primary', async () => {
