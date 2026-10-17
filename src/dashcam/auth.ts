@@ -50,9 +50,6 @@ export const SESSION_REQ_LEN = 26;
 export const SESSION_RESP_LEN = 34;
 export const FIN_LEN = 18;
 export const RESULT_LEN = 3;
-/** ADD_PHONE `[0x88][1][code 16]`: a frame of the sealed link (RX), not of AUTH. */
-export const ADD_PHONE_TYPE = 0x88;
-export const ADD_PHONE_LEN = 18;
 
 /** dashcam -> phone, phone -> dashcam, the aiming picture's VIEW records (dashcam -> phone) */
 export const DIR_DP = 0x01;
@@ -272,11 +269,6 @@ export const sessionFin = (proofP: Uint8Array): Uint8Array => concat([AUTH_MSG.S
 
 /** The dashcam's proof checked in constant time. */
 export const proofOk = (expected: Uint8Array, got: Uint8Array): boolean => got.length === 16 && ctEqual(expected, got);
-
-// ——— ADD_PHONE ———
-
-/** ADD_PHONE `[0x88][1][code 16]`, the one-time code for the window it opens (sent sealed). */
-export const addPhoneFrame = (S1: ArrayLike<number>): number[] => [ADD_PHONE_TYPE, 1, ...fixed('one-time code', S1, 16)];
 
 // ——— sealed frames ———
 

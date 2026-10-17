@@ -289,11 +289,6 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
     const opened = openRaw(conn.kpd, DIR_PD, wire);
     if (!opened || !acceptCounter(conn.rx, opened.ctr)) return;
     const frame = Array.from(opened.frame);
-    if (frame[0] === 0x88 && frame.length >= 18) {
-      self.once = Uint8Array.from(frame.slice(2, 18));
-      self.windowOpen = true;
-      return;
-    }
     const d = decodeRx(frame);
     if (!d.ok) return;
     self.received.push(d.frame);
@@ -303,6 +298,8 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
       self.notify({ type: 'STATUS', uptimeMs: 1000, state: 3, flags: 0, fpsX10: 150, tempC: 40, bondCount: phones.size });
     } else if (d.frame.op === 5) {
       self.notify({ type: 'PAIRED', bondCount: phones.size });
+    } else if (d.frame.op === 3) {
+      self.windowOpen = true;
     } else if (d.frame.op === 4 && conn.phone) {
       phones.delete(conn.phone);
     }

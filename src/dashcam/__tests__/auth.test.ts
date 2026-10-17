@@ -4,7 +4,6 @@
 import vectors from '../__fixtures__/ble_vectors.json';
 import {
   acceptCounter,
-  addPhoneFrame,
   AUTH_MSG,
   blindedId,
   createSealer,
@@ -185,13 +184,6 @@ describe('the AUTH read value', () => {
     for (const bad of [[], [0, 0], [0xe0, 2], [0xe0, 1, 0], [0x90, 2, 1], [0xa0, 3, ...new Array(32).fill(0)], [0x55]]) {
       expect(parseAuthRecord(bad)).toEqual({ kind: 'bad' });
     }
-  });
-});
-
-describe('ADD_PHONE', () => {
-  test('the one-time code as its 18-byte frame', () => {
-    expect(toHex(addPhoneFrame(b(V.add_phone.S1)))).toBe(V.add_phone.hex);
-    expect(() => addPhoneFrame(new Uint8Array(15))).toThrow();
   });
 });
 

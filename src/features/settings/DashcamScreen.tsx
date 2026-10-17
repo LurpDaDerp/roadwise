@@ -4,7 +4,6 @@ import { View } from 'react-native';
 
 import type { PermissionsAdapter } from '@/core/permissions';
 import { dashpalCopy } from '@/dashcam/copy';
-import type { PairingCode } from '@/dashcam/label';
 import { COMMAND, SOUND } from '@/dashcam/protocol';
 import { AddPhoneSheet } from '@/dashcam/ui/AddPhoneSheet';
 import { setupHref } from '@/dashcam/ui/links';
@@ -24,8 +23,8 @@ const copy = dashpalCopy.screen;
  * this phone or a device that cannot prove it is the DashPal), how many phones are paired with the
  * dashcam (its STATUS count, while connected; from 2, how to remove one), the one-time notice of a
  * phone this phone did not add, "Also beep on DashPal", a test sound, recalibrate, "Add another
- * phone" (only while connected: opens the dashcam's pairing mode for one phone and shows a one-time
- * code for 2 minutes) and "Forget DashPal".
+ * phone" (only while connected: opens the dashcam's pairing mode for one phone for 2 minutes, with
+ * the time left) and "Forget DashPal".
  */
 export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAdapter; now?: () => number } }) {
   const th = useTheme();
@@ -37,7 +36,7 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
   const [notice, setNotice] = useState<{ tone: 'info' | 'warning'; message: string } | null>(null);
   const [confirmForget, setConfirmForget] = useState(false);
   const [working, setWorking] = useState(false);
-  const [sheet, setSheet] = useState<{ code: PairingCode; at: number } | null>(null);
+  const [sheet, setSheet] = useState<{ at: number } | null>(null);
   const paired = state?.link.paired ?? null;
   const connected = state?.link.lifecycle === 'connected';
   const phones = connected ? (state?.link.status?.bondCount ?? null) : null;
@@ -63,13 +62,13 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
       return;
     }
     setWorking(true);
-    const code = await runtime.addPhone().catch(() => null);
+    const opened = await runtime.addPhone().catch(() => null);
     setWorking(false);
-    if (!code) {
+    if (!opened) {
       setNotice({ tone: 'warning', message: copy.commandFailed });
       return;
     }
-    setSheet({ code, at: now() });
+    setSheet({ at: opened.openedAt });
   };
 
   const forget = async () => {
@@ -161,7 +160,7 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
         </View>
       )}
 
-      {paired ? <AddPhoneSheet code={sheet?.code ?? null} dashcamId={paired.dashcamId} openedAt={sheet?.at ?? 0} onClose={() => setSheet(null)} now={now} /> : null}
+      {paired ? <AddPhoneSheet openedAt={sheet?.at ?? null} onClose={() => setSheet(null)} now={now} /> : null}
 
       <Sheet visible={confirmForget} onClose={() => setConfirmForget(false)} title={copy.forgetConfirm.title} testID="dashcam-forget-sheet">
         <Text variant="body">{copy.forgetConfirm.body}</Text>

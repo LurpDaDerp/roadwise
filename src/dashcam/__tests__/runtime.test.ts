@@ -9,8 +9,7 @@ import { createPumpedTimers, processTimers } from '@/lib/timers';
 import { createFakeDashcam, type FakeDashcam } from '../__fixtures__/fakeDashcam';
 import { createFakeBle, type FakeBle } from '../fakeTransport';
 import { BT_OPT_IN_KEY, BUZZER_TOO_KEY, ENABLED_SECURE_KEY, LAST_PHONES_KEY, PAIRED_KEY, type PairedDashcam } from '../keys';
-import { parseCode, formatCode } from '../label';
-import { decodeRx, encodeTx, fromHex, RX_CHAR, toHex } from '../protocol';
+import { decodeRx, encodeTx, fromHex, RX_CHAR } from '../protocol';
 import { AUDIO_PROBE_MEMO_MS, createDashcamRuntime, linkServiceStateFor, MIN_MOVING_S, type DashcamRuntime, type LinkServicePort, type LinkServiceResult, type LinkServiceState } from '../runtime';
 import { AUTH_SECURE_KEY, createDashpalSecrets, PERIPHERAL_SECURE_KEY, type DashpalSecrets } from '../secure';
 import { createDashcamStore } from '../store';
@@ -342,15 +341,14 @@ describe('Add another phone and the new-phone notice', () => {
   }
   const status = (bondCount: number) => encodeTx({ type: 'STATUS', uptimeMs: 1, state: 3, flags: 0, fpsX10: 150, tempC: 30, bondCount });
 
-  test('Add another phone: a one-time code sent sealed in ADD_PHONE (the dashcam opens its window for it); never stored', async () => {
+  test('Add another phone: COMMAND 3 sealed (the dashcam opens its window for one phone), no code; it resolves with when it was sent', async () => {
     const r = await connected();
-    const code = await r.rt.addPhone();
-    expect(code?.kind).toBe('once');
-    expect(parseCode(formatCode(code!.S, 'once'))?.kind).toBe('once');
+    r.cam.windowOpen = false;
+    const t0 = r.clock.t;
+    expect(await r.rt.addPhone()).toEqual({ openedAt: t0 });
     await flush();
-    expect(toHex(r.cam.once!)).toBe(toHex(code!.S));
+    expect(r.cam.received.filter((f) => f.type === 'COMMAND').map((f) => (f as { op: number }).op)).toContain(3);
     expect(r.cam.windowOpen).toBe(true);
-    expect([...mem.values()].some((v) => v.includes(toHex(code!.S)))).toBe(false);
     r.rt.dispose();
   });
 

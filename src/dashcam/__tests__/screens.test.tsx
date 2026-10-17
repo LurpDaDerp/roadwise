@@ -11,7 +11,6 @@ import { SETTINGS_HREFS } from '@/features/settings/routes';
 
 import { createFakeDashcamRuntime, PAIRED } from '../__fixtures__/fakeRuntime';
 import { dashpalCopy } from '../copy';
-import { drawOnceCode, formatCode } from '../label';
 import { setActiveDashcam } from '../registry';
 import { createDashpalSecrets } from '../secure';
 import type { SetupDeps, SetupFlow, SetupPhase } from '../setup';
@@ -208,26 +207,31 @@ describe('Settings › DashPal', () => {
     expect(screen.queryByTestId('dashcam-notice')).toBeNull();
   });
 
-  it('Add another phone: a sheet with the one-time code’s QR code, the 2:00 countdown and Show code; never the label code; closing it wipes the code', async () => {
+  it('Add another phone: a sheet with the 2:00 countdown and where to set it up on the other phone; no QR code and no code', async () => {
     const rt = createFakeDashcamRuntime({ link: { lifecycle: 'connected', paired: PAIRED, status: { state: 3, flags: 0, fpsX10: 200, tempC: 40, bondCount: 1, at: 1 } } });
-    const code = drawOnceCode();
-    const text = formatCode(code.S, 'once');
-    rt.addPhoneResult = code;
+    const t = 50_000;
+    rt.addPhoneResult = { openedAt: t };
     setActiveDashcam(rt);
-    let t = 50_000;
     const w = await appWorld();
     await w.render(<DashcamScreen deps={{ adapter: fakeAdapter(), now: () => t }} />);
     await tap('dashcam-add-phone');
     expect(rt.log).toEqual(['addPhone']);
-    expect(await screen.findByTestId('add-phone-qr')).toBeOnTheScreen();
-    expect(screen.getByTestId('add-phone-left')).toHaveTextContent(dashpalCopy.screen.addPhoneSheet.left('2:00'));
-    expect(screen.queryByTestId('add-phone-code')).toBeNull();
-    await tap('add-phone-show-code');
-    expect(screen.getByTestId('add-phone-code')).toHaveTextContent(text);
-    t += 1000;
-    await tap('add-phone-done');
-    expect(code.S.every((b) => b === 0)).toBe(true);
+    expect(await screen.findByTestId('add-phone-left')).toHaveTextContent(dashpalCopy.screen.addPhoneSheet.left('2:00'));
+    expect(screen.getByTestId('add-phone-body')).toHaveTextContent('On the other phone, open RoadWise › Settings › DashPal › Set up DashPal.');
     expect(screen.queryByTestId('add-phone-qr')).toBeNull();
+    expect(screen.queryByTestId('add-phone-code')).toBeNull();
+    await tap('add-phone-done');
+    expect(screen.queryByTestId('add-phone-left')).toBeNull();
+  });
+
+  it('Add another phone after its 2 minutes: “Pairing has closed. Open it again to add a phone.”', async () => {
+    const rt = createFakeDashcamRuntime({ link: { lifecycle: 'connected', paired: PAIRED, status: { state: 3, flags: 0, fpsX10: 200, tempC: 40, bondCount: 1, at: 1 } } });
+    rt.addPhoneResult = { openedAt: 1000 };
+    setActiveDashcam(rt);
+    const w = await appWorld();
+    await w.render(<DashcamScreen deps={{ adapter: fakeAdapter(), now: () => 1000 + 120_000 }} />);
+    await tap('dashcam-add-phone');
+    expect(await screen.findByTestId('add-phone-ended')).toHaveTextContent(dashpalCopy.screen.addPhoneSheet.ended);
   });
 
   it('Add another phone needs the link: disabled and saying so while not connected; a refused send says it did not reach', async () => {

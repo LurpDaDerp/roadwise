@@ -14,7 +14,8 @@
 // starts early either (bootstrap sets the target from SQLite as usual). A link's held code goes only
 // when it is older than this process: the label link that launched the app (the first launch after
 // an install or update) is kept, and `+native-intent` writes its code only after the check
-// (`afterInstallCheck`).
+// (`afterInstallCheck`). With the marker present, the pending key of a setup the app died in
+// (`dashpal.authPending`) is deleted.
 import { getDashcamTransport, type DashcamTransport } from './transport';
 import { dashpalSecrets, type DashpalSecrets } from './secure';
 
@@ -108,6 +109,9 @@ export async function startDashpalEarly(
     const check = checkInstall({ secrets, storage: deps.storage });
     installCheck = check;
     if ((await check) !== 'present') return false;
+    // A setup the app did not live to finish: its key goes (the DashPal undoes a pairing that was
+    // not committed by itself, 60 s after the phone went away).
+    if (await secrets.readPendingAuth().catch(() => null)) await secrets.deletePendingAuth().catch(() => {});
     if (!(await secrets.readEnabled())) return false;
     const transport = (deps.transport ?? getDashcamTransport)();
     const target = await secrets.readTarget();

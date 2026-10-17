@@ -39,10 +39,9 @@ export const dashpalCopy = {
     addPhone: 'Add another phone',
     addPhoneSheet: {
       title: 'Add another phone',
-      body: 'On the other phone, open RoadWise › Set up DashPal and scan this code. It works only while pairing is open.',
+      body: 'On the other phone, open RoadWise › Settings › DashPal › Set up DashPal.',
       left: (time: string) => `Pairing is open for ${time}`,
       ended: 'Pairing has closed. Open it again to add a phone.',
-      showCode: 'Show code',
       done: 'Done',
     },
     addPhoneNeedsLink: 'Connect to your DashPal first.',

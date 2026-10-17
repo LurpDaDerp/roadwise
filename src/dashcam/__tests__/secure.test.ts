@@ -207,6 +207,16 @@ test('early start: without this DashPal’s key the manager starts (a restore is
   expect(f.log).toEqual(['start']);
 });
 
+test('early start: the pending key of a setup the app died in is deleted; the finished pairing stays', async () => {
+  await dashpalSecrets.writePendingAuth(AUTH);
+  await dashpalSecrets.finalizeAuth();
+  await dashpalSecrets.writePendingAuth({ ...AUTH, phoneId: '0909090909090909' });
+  const f = fakeTransport();
+  expect(await startDashpalEarly({ storage: markers().storage, transport: () => f.t })).toBe(false);
+  expect(await dashpalSecrets.readPendingAuth()).toBeNull();
+  expect((await dashpalSecrets.readAuth())?.phoneId).toBe(AUTH.phoneId);
+});
+
 test('early start: a failure is reported, never thrown', async () => {
   await writeDashpalEnabled(true);
   const errors: unknown[] = [];

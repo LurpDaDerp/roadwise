@@ -48,7 +48,6 @@
 // holds, null once no frame has come for 3 s (a silently dead link) and back with the next frame. A
 // link that drops keeps its continuous alerts aside for `RESEND_WINDOW_MS`: the reconnect's re-send
 // of the same alert (same boot, id, sound and tier) keeps its `since` and flashes as a resend.
-import { addPhoneFrame } from './auth';
 import type { AlertPlayer } from '@/core/alerts/player';
 import { knownSpeed } from '@/core/detectors/common';
 import type { FeatureRow } from '@/core/engine/types';
@@ -351,8 +350,6 @@ export interface DashcamLink {
   /** Drive end: wait ≤ 3 s for the phone to catch up, then stamp the sync time on the drive. */
   beforeFinalize(clientTripId: string, opts?: { dryRun?: boolean }): Promise<void>;
   command(op: number, arg?: number): Promise<boolean>;
-  /** ADD_PHONE with this one-time code (16 bytes): opens the dashcam's pairing window for it. */
-  addPhone(code: ArrayLike<number>): Promise<boolean>;
   /** The phone can play a DashPal alert now; `fresh`: with the audio output read now. */
   canPlay(fresh?: boolean): boolean;
   sendAlertAck(alertId: number, outcome: 0 | 1): void;
@@ -1217,17 +1214,6 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     async command(op, arg = 0) {
       if (!session) return false;
       return send({ type: 'COMMAND', op, arg }, { withResponse: true });
-    },
-
-    async addPhone(code) {
-      if (!session) return false;
-      return deps.write(addPhoneFrame(code), { withResponse: true }).then(
-        () => true,
-        (e: unknown) => {
-          report(e, 'write ADD_PHONE');
-          return false;
-        }
-      );
     },
 
     canPlay,

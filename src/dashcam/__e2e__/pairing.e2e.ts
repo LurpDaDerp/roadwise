@@ -3,7 +3,7 @@
 // transport and runtime against the firmware's auth core in the simulator (the pairing code, the
 // claim, the records, sessions on every connection, sealed frames). A scripted raw phone plays the
 // strangers, the spoofs and the injector, built on the app's own auth.ts.
-import { addPhoneFrame, blindedId, pairFin, pairKeys, pairRequest, parseAuthRecord, sealRaw, sessionFin, sessionKeys, sessionRequest, DIR_PD } from '../auth';
+import { blindedId, pairFin, pairKeys, pairRequest, parseAuthRecord, sealRaw, sessionFin, sessionKeys, sessionRequest, DIR_PD } from '../auth';
 import { randomBytes } from '../crypto';
 import { formatCode, type PairingCode } from '../label';
 import { decodeInfo, encodeRx, fromHex, toHex } from '../protocol';
@@ -158,28 +158,6 @@ describeSim('DashPal pairing v2 (firmware simulator ↔ app setup flow)', () => 
       const term = w.lines('TERM 5 claim')[0]!;
       expect(term.at - claimAt).toBeGreaterThanOrEqual(15_000);
       expect(term.at - claimAt).toBeLessThan(15_200);
-    }));
-
-  test('Add another phone: A sends a one-time code sealed in ADD_PHONE; B pairs under it (no label code kept); A sees 2 phones and no new-phone notice; the code is useless after its window', () =>
-    scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
-      const a = await linkedA(w);
-      const code = (await a.rt.addPhone())!;
-      expect(code.kind).toBe('once');
-      await w.until(() => w.windowOpen, 2000, 'window open');
-      const b = await w.addPhone({ name: 'B', conn: 2, platform: 'android' });
-      const r = await pairByScan(w, b, link(code));
-      expect(r.end).toMatchObject({ kind: 'done', phones: 2, notAllYours: true });
-      expect((await b.secrets.readAuth())?.code).toBeNull();
-      expect(w.lines('PAIRED 2')).toHaveLength(1);
-      await w.until(() => a.rt.state().link.status?.bondCount === 2, 5000, 'A sees 2 phones');
-      expect(a.rt.state().newPhone).toBe(false);
-      // a third phone with the same one-time code once its window has closed: refused (B leaves first:
-      // the dashcam takes 2 connections at most)
-      await w.crash(b);
-      const c = rawPhone(w, 3);
-      await w.dashcam('PAIRWIN 1'); // a later window (by 5 presses): the one-time code is not armed in it
-      await c.connect();
-      expect((await c.pair(Uint8Array.from(code.S))).resp).toEqual({ kind: 'result', code: 5 });
     }));
 
   test('a code holder’s prev_id with no proof of its key is a new phone: A’s record and session stay, the count rises, and A shows the new-phone notice', () =>
@@ -382,12 +360,4 @@ describeSim('DashPal pairing v2 (firmware simulator ↔ app setup flow)', () => 
       expect(w.log.some((l) => l.dir === 'in' && l.line.startsWith('AW'))).toBe(false);
     }));
 
-  test('ADD_PHONE from a connection that is not authenticated never reaches the dashcam’s link', () =>
-    scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
-      const x = rawPhone(w, 5);
-      await x.connect();
-      const k = new Uint8Array(16).fill(1);
-      await w.dashcam(`RX 5 ${toHex(sealRaw(k, DIR_PD, 0, addPhoneFrame(randomBytes(16))))}`);
-      expect(w.lines('WINDOW 1')).toEqual([]);
-    }));
 });

@@ -23,7 +23,6 @@ import type { AppStateLike } from '@/data/foreground';
 import { processTimers } from '@/lib/timers';
 
 import { ensureInstallMarker } from './early';
-import { drawOnceCode, type PairingCode } from './label';
 import { asPhonesRecord, nextPhones, type PhonesEvent, type PhonesRecord } from './newPhone';
 import { loadDashcamTripFacts, type DashcamTripFacts } from './facts';
 import { asPaired, BT_OPT_IN_KEY, BUZZER_TOO_KEY, LAST_PHONES_KEY, PAIRED_KEY, type PairedDashcam } from './keys';
@@ -81,10 +80,10 @@ export interface DashcamRuntime {
   /** COMMAND 4 if connected (the dashcam deletes this phone's record), cancel the connection, delete the key, clear the pairing. */
   forget(): Promise<void>;
   /**
-   * Add another phone: a fresh one-time code sent sealed in ADD_PHONE, which opens the dashcam's
-   * pairing window for it. Null when not connected or the write failed. The code is never stored.
+   * Add another phone: COMMAND 3, which opens the dashcam's pairing window for 2 minutes, for one
+   * phone (no code). `openedAt` when it was sent; null when not connected or the write failed.
    */
-  addPhone(): Promise<PairingCode | null>;
+  addPhone(): Promise<{ openedAt: number } | null>;
   /** This phone's own setup saw this phone count (no new-phone notice for it). */
   notePhones(dashcamId: string, phones: number): void;
   /** The new-phone notice was read. */
@@ -677,15 +676,14 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     async addPhone() {
       const paired = link.snapshot().paired;
       if (!paired || link.snapshot().lifecycle !== 'connected') return null;
-      const code = drawOnceCode();
       // A rise within 3 min is this phone's own doing: marked before the window opens.
-      phonesEvent({ kind: 'own_add', dashcamId: paired.dashcamId, now: now() });
-      const ok = await link.addPhone(code.S);
-      if (!ok) {
-        code.S.fill(0);
-        return null;
-      }
-      return code;
+      const openedAt = now();
+      phonesEvent({ kind: 'own_add', dashcamId: paired.dashcamId, now: openedAt });
+      const ok = await link.command(COMMAND.OPEN_PAIRING).catch((e: unknown) => {
+        report(e, 'open pairing');
+        return false;
+      });
+      return ok ? { openedAt } : null;
     },
 
     notePhones(dashcamId, count) {

@@ -2,7 +2,6 @@
 import type { LinkSnapshot } from '../link';
 import type { PairedDashcam } from '../keys';
 import type { DashcamRuntime, DashcamState } from '../runtime';
-import type { PairingCode } from '../label';
 import type { DashcamTransport } from '../transport';
 
 export const PAIRED: PairedDashcam = { dashcamId: 'a4cf12b3c4d5', peripheralId: 'AA:BB:CC:DD:EE:FF', name: 'DashPal-C4D5', pairedAt: 1, secure: true };
@@ -28,7 +27,7 @@ export interface FakeDashcamRuntime extends DashcamRuntime {
   commandResult: boolean;
   transportValue: DashcamTransport | null;
   /** what addPhone resolves with */
-  addPhoneResult: PairingCode | null;
+  addPhoneResult: { openedAt: number } | null;
 }
 
 export function createFakeDashcamRuntime(initial: Partial<Omit<DashcamState, 'link'>> & { link?: Partial<LinkSnapshot> } = {}): FakeDashcamRuntime {

@@ -1,15 +1,13 @@
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
-import QRCode from 'react-native-qrcode-svg';
 
 import { Button, Sheet, Text, useTheme } from '@/ui';
 
 import { dashpalCopy } from '../copy';
-import { dashpalLink, formatCode, linkDomain, type PairingCode } from '../label';
 
 const copy = dashpalCopy.screen.addPhoneSheet;
 
-/** The one-time code's window on the dashcam: ADD_PHONE opens it for 120 s. */
+/** COMMAND 3 opens the dashcam's pairing window for 120 s, for one phone. */
 export const ADD_PHONE_WINDOW_MS = 120_000;
 
 const mmss = (ms: number): string => {
@@ -18,45 +16,23 @@ const mmss = (ms: number): string => {
 };
 
 /**
- * Add another phone: the one-time code the dashcam accepts for 2 minutes, as a QR code of its link
- * for the other phone to scan (in RoadWise or with its own camera), with the time left and Show code
- * for typing. Only the one-time code is ever shown here, never the DashPal's label code. The code
- * lives only in this sheet: closing it, or the 2 minutes ending, wipes it. With no link domain in
- * this build there is no QR code, only the code to type.
+ * Add another phone: the dashcam's pairing window is open for 2 minutes, for one phone. The sheet
+ * says where to set it up on the other phone and how long pairing stays open, then that it closed.
+ * There is no code: the other phone sets the DashPal up with one tap while the window is open.
  */
-export function AddPhoneSheet({
-  code,
-  dashcamId,
-  openedAt,
-  onClose,
-  now = Date.now,
-  domain = linkDomain(),
-}: {
-  code: PairingCode | null;
-  dashcamId: string;
-  openedAt: number;
-  onClose(): void;
-  now?: () => number;
-  domain?: string;
-}) {
+export function AddPhoneSheet({ openedAt, onClose, now = Date.now }: { openedAt: number | null; onClose(): void; now?: () => number }) {
   const th = useTheme();
-  const close = () => {
-    code?.S.fill(0);
-    onClose();
-  };
   return (
-    <Sheet visible={code !== null} onClose={close} title={copy.title} testID="dashcam-add-phone-sheet">
-      {code ? <AddPhoneBody key={openedAt} code={code} dashcamId={dashcamId} openedAt={openedAt} now={now} domain={domain} /> : null}
-      <Button label={copy.done} variant="ghost" onPress={close} testID="add-phone-done" style={{ marginTop: th.space.sm }} />
+    <Sheet visible={openedAt !== null} onClose={onClose} title={copy.title} testID="dashcam-add-phone-sheet">
+      {openedAt !== null ? <AddPhoneBody key={openedAt} openedAt={openedAt} now={now} /> : null}
+      <Button label={copy.done} variant="ghost" onPress={onClose} testID="add-phone-done" style={{ marginTop: th.space.sm }} />
     </Sheet>
   );
 }
 
-function AddPhoneBody({ code, dashcamId, openedAt, now, domain }: { code: PairingCode; dashcamId: string; openedAt: number; now: () => number; domain: string }) {
+function AddPhoneBody({ openedAt, now }: { openedAt: number; now: () => number }) {
   const th = useTheme();
   const [left, setLeft] = useState(() => ADD_PHONE_WINDOW_MS - (now() - openedAt));
-  const [showCode, setShowCode] = useState(false);
-  const ended = left <= 0;
 
   useEffect(() => {
     const timer = setInterval(() => setLeft(ADD_PHONE_WINDOW_MS - (now() - openedAt)), 1000);
@@ -65,39 +41,21 @@ function AddPhoneBody({ code, dashcamId, openedAt, now, domain }: { code: Pairin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (ended) code.S.fill(0);
-  }, [code, ended]);
-
-  if (ended) {
+  if (left <= 0) {
     return (
       <Text variant="body" testID="add-phone-ended">
         {copy.ended}
       </Text>
     );
   }
-  const text = formatCode(code.S, 'once');
-  const link = domain.length > 0 ? dashpalLink(dashcamId, code, domain) : null;
   return (
     <View style={{ gap: th.space.md, alignItems: 'center' }}>
-      {link ? (
-        <View style={{ padding: th.space.md, backgroundColor: '#FFFFFF', borderRadius: th.radius.card }} testID="add-phone-qr">
-          <QRCode value={link} size={200} color="#001D3D" backgroundColor="#FFFFFF" ecl="M" />
-        </View>
-      ) : null}
       <Text variant="headline" testID="add-phone-left">
         {copy.left(mmss(left))}
       </Text>
-      <Text variant="subhead" tone="muted" style={{ textAlign: 'center' }}>
+      <Text variant="subhead" tone="muted" style={{ textAlign: 'center' }} testID="add-phone-body">
         {copy.body}
       </Text>
-      {showCode || !link ? (
-        <Text variant="headline" selectable style={{ textAlign: 'center' }} testID="add-phone-code">
-          {text}
-        </Text>
-      ) : (
-        <Button label={copy.showCode} variant="secondary" onPress={() => setShowCode(true)} testID="add-phone-show-code" />
-      )}
     </View>
   );
 }
