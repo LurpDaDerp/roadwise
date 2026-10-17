@@ -558,13 +558,14 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
 
     for (;;) {
       check();
-      let hasAuth: boolean;
+      /** AUTH and VIEW both found (after Android's one cache refresh) */
+      let hasChars: boolean;
       let got: DashcamInfo | null;
       try {
         if (!tt.setupLinkUp(c.id)) {
           const r = await tt.setupConnect(c.id, { timeoutMs: SETUP_CONNECT_TIMEOUT_MS });
-          hasAuth = r.auth;
-        } else hasAuth = true;
+          hasChars = r.auth && r.view;
+        } else hasChars = true;
         got = await tt.readInfo(c.id);
       } catch (e) {
         report(e, 'connect');
@@ -587,7 +588,8 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
         await release();
         throw new Failed(mismatch === 'firmware' ? 'update_firmware' : 'update_app', 'none');
       }
-      if (!hasAuth) {
+      if (!hasChars) {
+        // A stale service table: iOS has no cache refresh (forget the device first); Android already refreshed once.
         await release();
         throw new Failed(deps.platform === 'ios' ? 'ios_forget_first' : 'error', deps.platform === 'ios' ? 'none' : 'restart');
       }

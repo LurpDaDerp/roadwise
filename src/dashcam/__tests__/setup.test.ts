@@ -31,6 +31,7 @@ interface CamSpec {
   protoMax?: number;
   protoMin?: number;
   noAuthChar?: boolean;
+  noViewChar?: boolean;
   phones?: { id: Uint8Array; kPair: Uint8Array }[];
 }
 
@@ -74,6 +75,7 @@ function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previo
       };
     }
     if (c.noAuthChar) ble.peripheral(idOf(platform, c.last))!.noAuthChar = true;
+    if (c.noViewChar) ble.peripheral(idOf(platform, c.last))!.noViewChar = true;
     cams.set(c.last, cam);
   }
   // Advertising: every DashPal answers each scan with the service its state names.
@@ -797,6 +799,15 @@ describe('screen 1’s outcomes', () => {
   test('iOS with no AUTH characteristic: ios_forget_first', async () => {
     const r = rig({ platform: 'ios', cams: [{ last: 0xd5, noAuthChar: true }] });
     expect(await setUp(r)).toMatchObject({ kind: 'failed', reason: 'ios_forget_first' });
+  });
+
+  test.each([
+    ['ios', 'ios_forget_first', 'none'],
+    ['android', 'error', 'restart'],
+  ] as const)('no VIEW characteristic (%s, after the cache refresh on Android): %s, nothing sent', async (platform, reason, retry) => {
+    const r = rig({ platform, cams: [{ last: 0xd5, noViewChar: true }] });
+    expect(await setUp(r)).toMatchObject({ kind: 'failed', reason, retry });
+    expect(r.cam().authWrites).toEqual([]);
   });
 
   test.each([
