@@ -53,7 +53,6 @@ export function StepConnecting({ view, step }: { view: ConnectingView; step: str
     announce(said);
     if (done) void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     // Once per text: the same words set again are not said again.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [said, done]);
 
   return (
