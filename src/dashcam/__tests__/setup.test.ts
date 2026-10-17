@@ -1046,6 +1046,49 @@ describe('screen 3: the live picture', () => {
     await waitUntil(r, () => aimPhase(r).status === 'live', 'live');
   });
 
+  /** The fake BLE stack's `op` settles only `n` macrotasks after it is called (a GATT queue backed up). */
+  function slow(r: Rig, op: 'write' | 'startNotification', n: number): void {
+    const real = r.ble[op].bind(r.ble) as (...a: unknown[]) => Promise<void>;
+    (r.ble as unknown as Record<string, unknown>)[op] = async (...a: unknown[]) => {
+      for (let i = 0; i < n; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+      return real(...a);
+    };
+  }
+  const viewCalls = (r: Rig) => r.ble.calls.filter((c) => c === `startNotification:${ID}:0007` || c === `stopNotification:${ID}:0007`).map((c) => c.split(':')[0]);
+
+  test('RoadWise back in front while its stop is still being written: the stop, then the start, and the picture shows', async () => {
+    const r = make();
+    const seen = await toAim(r);
+    slow(r, 'write', 8);
+    r.setActive(false);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    r.setActive(true);
+    await waitUntil(r, () => r.cam().view.stops === 1 && r.cam().view.on && aimOps(r).at(-1) === '10:1', 'stopped, then started again');
+    await idle(r, 300);
+    expect(viewCalls(r)).toEqual(['startNotification', 'stopNotification', 'startNotification']);
+    r.cam().sendImage(1, jpeg(300, 3));
+    await waitUntil(r, () => seen.frames.length === 1, 'the image');
+    await waitUntil(r, () => aimPhase(r).status === 'live', 'live');
+  });
+
+  test('RoadWise leaving the front while Start subscribes: no COMMAND 10 arg 1 reaches the DashPal while it is away; back in front, it starts', async () => {
+    const r = make();
+    await setUp(r, {}, { next: false });
+    slow(r, 'startNotification', 8);
+    r.flow.startAim();
+    await waitUntil(r, () => r.ble.calls.includes(`startNotification:${ID}:0007`) || r.flow.phase().kind === 'aim', 'Start');
+    r.setActive(false);
+    await idle(r, 5000);
+    expect(r.cam().view.on).toBe(false);
+    expect(r.cam().view.starts).toBe(0);
+    expect(viewCalls(r).at(-1)).toBe('stopNotification');
+    r.setActive(true);
+    await waitUntil(r, () => r.cam().view.on, 'started on return');
+    expect(r.cam().view.starts).toBe(1);
+    expect(viewCalls(r).at(-1)).toBe('startNotification');
+  });
+
   test('the link drops on screen 3: Reconnecting…, then a session under the new key and the picture starts again', async () => {
     const r = make();
     await toAim(r);

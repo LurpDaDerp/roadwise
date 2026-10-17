@@ -312,6 +312,9 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
   /** RoadWise is in the front; `resumeAim`: the picture stopped when it left, to start again when it is back */
   let appActive = true;
   let resumeAim = false;
+  /** the picture's subscribe, start, stop and unsubscribe, one after another; `aimGen` names the newest start or stop */
+  let aimIo: Promise<void> = Promise.resolve();
+  let aimGen = 0;
 
   function report(e: unknown, ctx: string): void {
     try {
@@ -496,16 +499,31 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     } else set({ kind: 'aim', status, reason, holdLeftS: phase.kind === 'instructions' ? phase.holdLeftS : null, reconnecting: false });
   }
 
-  /** COMMAND 10 arg 1; a stream that is not on numbers its images from 1 again, so the finished ones are forgotten. */
+  /** COMMAND 10 arg 1 (not once the picture was stopped or RoadWise left the front); a stream that is not on numbers its images from 1 again, so the finished ones are forgotten. */
   async function askStart(): Promise<void> {
+    if (!aimWanted || !appActive) return;
     if (!streamOn) assembler.start();
     lastStartAt = deps.now();
     await command(COMMAND.AIM, AIM_ARG.START);
   }
 
-  /** Start (or Try again): VIEW notifications to the assembler, then COMMAND 10 arg 1; `starting` until the first image. */
+  /** The picture's BLE steps run in the order asked, never two at once. */
+  function aimStep(run: () => Promise<void>): Promise<void> {
+    const p = aimIo.then(run);
+    aimIo = p.catch((e: unknown) => report(e, 'aim'));
+    return aimIo;
+  }
+
+  /**
+   * Start (or Try again): VIEW notifications to the assembler, then COMMAND 10 arg 1; `starting`
+   * until the first image. A stop asked meanwhile wins: the start's steps left are dropped.
+   */
   async function startStream(): Promise<void> {
     if (!t || !cand) return;
+    if (!appActive) {
+      resumeAim = true;
+      return;
+    }
     viewRefusal = null;
     lastImageAt = null;
     stalledAt = null;
@@ -513,15 +531,22 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     aimStartedAt = deps.now();
     aimWanted = true;
     setAim('starting');
-    try {
-      await t.subscribeView(cand.id, onRecord);
-    } catch (e) {
-      report(e, 'subscribe view');
-    }
-    await askStart();
+    const gen = ++aimGen;
+    await aimStep(async () => {
+      if (gen !== aimGen || !t || !cand) return;
+      try {
+        await t.subscribeView(cand.id, onRecord);
+      } catch (e) {
+        report(e, 'subscribe view');
+      }
+      if (gen === aimGen) await askStart();
+    });
   }
 
-  /** The picture stops: COMMAND 10 arg 0 (`send`, with the link up), VIEW notifications off, the open images zeroed, no reading. */
+  /**
+   * The picture stops: at once no reading and the open images zeroed; then, after any start still
+   * under way, COMMAND 10 arg 0 (`send`, with the link up) and VIEW notifications off.
+   */
   async function stopStream(o: { send: boolean }): Promise<void> {
     if (!aimWanted) return;
     aimWanted = false;
@@ -529,8 +554,11 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     lastImageAt = null;
     assembler.wipe();
     emitAim(null);
-    if (o.send) await command(COMMAND.AIM, AIM_ARG.STOP);
-    if (t && cand) await t.unsubscribeView(cand.id).catch((e: unknown) => report(e, 'unsubscribe view'));
+    ++aimGen;
+    await aimStep(async () => {
+      if (o.send) await command(COMMAND.AIM, AIM_ARG.STOP);
+      if (t && cand) await t.unsubscribeView(cand.id).catch((e: unknown) => report(e, 'unsubscribe view'));
+    });
   }
 
   /** One look at the picture: a refusal, the first image, a stall (Start again), giving up. */
@@ -1145,6 +1173,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     shownName = 'DashPal';
     tap = null;
     aimWanted = false;
+    aimGen += 1;
     streamOn = false;
     viewRefusal = null;
     lastImageAt = null;
