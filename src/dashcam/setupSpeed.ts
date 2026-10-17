@@ -1,16 +1,22 @@
 // The car's speed for a DashPal setup's STATE (docs/BLE_PROTOCOL.md §4: `speed_valid` only from a
 // fresh location sample). While the setup sheet is open, and only when foreground location is
-// already allowed (a read, never a prompt), it watches the phone's position once a second; a
-// sample counts while it is at most 2 s old and its speed accuracy is 2 m/s or better (or not
-// rated: expo-location does not report one on every platform). Never a remembered value: no sample, an old one or a refused permission is no speed, and
-// the DashPal then takes the car as stopped while it is being set up.
+// already allowed (a read, never a prompt), it watches the phone's position once a second. A sample
+// counts while it is at most 2 s old and its fix is rated within 20 m (a drive's fix limit).
+// expo-location reports no speed accuracy on any platform, so a speed is never known to be better
+// than the 2 m/s a phone standing still can read: under 2 m/s it is a stop (0). Never a remembered
+// value: no sample, an old one, a poor or unrated fix or a refused permission is no speed, and the
+// DashPal then takes the car as stopped while it is being set up.
 
 export const SPEED_FRESH_MS = 2000;
-export const SPEED_ACC_MAX_MPS = 2;
+/** The fix's horizontal accuracy (m) a sample needs: `MAX_H_ACC_M`, a drive's valid fix. */
+export const SPEED_H_ACC_MAX_M = 20;
+/** A speed under this (m/s) is read as a stop: an unrated GPS speed this low can't be told from standing still. */
+export const SPEED_STOP_FLOOR_MPS = 2;
 
 export interface SpeedSample {
   timestamp: number;
-  coords: { speed: number | null; speedAccuracy?: number | null };
+  /** `accuracy`: the fix's horizontal accuracy in metres (null: not rated) */
+  coords: { speed: number | null; accuracy: number | null };
 }
 
 export interface SetupSpeedDeps {
@@ -24,7 +30,7 @@ export interface SetupSpeedDeps {
 export interface SetupSpeed {
   /** Start watching (only with foreground location already allowed). Never throws. */
   start(): Promise<void>;
-  /** The speed of a fresh, accurate sample in cm/s, or null. */
+  /** The speed of a fresh sample with a good fix in cm/s (0 under 2 m/s), or null. */
   speedCms(): number | null;
   stop(): void;
 }
@@ -34,7 +40,7 @@ function defaultDeps(): SetupSpeedDeps {
   const Location = require('expo-location') as typeof import('expo-location');
   return {
     getForegroundPermissionsAsync: () => Location.getForegroundPermissionsAsync(),
-    watchPositionAsync: (opts, cb) => Location.watchPositionAsync(opts, (l) => cb({ timestamp: l.timestamp, coords: { speed: l.coords.speed, speedAccuracy: (l.coords as { speedAccuracy?: number | null }).speedAccuracy ?? null } })),
+    watchPositionAsync: (opts, cb) => Location.watchPositionAsync(opts, (l) => cb({ timestamp: l.timestamp, coords: { speed: l.coords.speed, accuracy: l.coords.accuracy } })),
     accuracyHigh: Location.Accuracy.High,
     now: () => Date.now(),
   };
@@ -66,11 +72,11 @@ export function createSetupSpeed(depsIn?: SetupSpeedDeps): SetupSpeed {
       if (!s || !deps) return null;
       const age = deps.now() - s.timestamp;
       const speed = s.coords.speed;
-      const acc = s.coords.speedAccuracy;
+      const acc = s.coords.accuracy;
       if (age < 0 || age > SPEED_FRESH_MS) return null;
       if (typeof speed !== 'number' || !Number.isFinite(speed) || speed < 0) return null;
-      if (typeof acc === 'number' && Number.isFinite(acc) && acc > SPEED_ACC_MAX_MPS) return null;
-      return Math.round(speed * 100);
+      if (typeof acc !== 'number' || !Number.isFinite(acc) || acc < 0 || acc > SPEED_H_ACC_MAX_M) return null;
+      return speed < SPEED_STOP_FLOOR_MPS ? 0 : Math.round(speed * 100);
     },
     stop() {
       stopped = true;
