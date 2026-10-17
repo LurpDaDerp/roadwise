@@ -1,6 +1,7 @@
 export { contrastRatio, relativeLuminance } from './contrast';
 export { fontFamilies, useAppFonts } from './fonts';
 export { SceneScope, ThemeProvider, useTheme, type Theme } from './theme';
+export { mix, withAlpha } from './sky/color';
 export { SkyBackdrop } from './sky/SkyBackdrop';
 export { SkyScene } from './sky/SkyScene';
 export type { SkyColors, SkyMood } from './sky/palette';

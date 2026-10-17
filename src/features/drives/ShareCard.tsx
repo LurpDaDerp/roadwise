@@ -8,7 +8,7 @@ import { captureRef } from 'react-native-view-shot';
 import { blockedDuringDrive } from '@/drive/leave';
 import { formatRating } from '@/lib/rating';
 import { formatDistance, type Units } from '@/lib/units';
-import { Banner, Button, Sheet, Text, ThemeProvider, tokens, useTheme, type TypeVariant } from '@/ui';
+import { Banner, Button, SceneScope, Sheet, Text, tokens, useTheme, type TypeVariant } from '@/ui';
 
 import { formatDay, formatDuration, signedPoints } from './format';
 import type { Runs } from './route';
@@ -30,8 +30,8 @@ export type ShareCardData = {
   units: Units;
 };
 
-const GOLD = tokens.color.dark.primary;
-const NAVY = ['#003566', '#001D3D'] as const;
+/** Gold, the reward colour, carries the route and the clean badge on the card. */
+const GOLD = tokens.color.dark.gold;
 const W = 320;
 const H = 400;
 
@@ -73,16 +73,18 @@ function Fact({ label, value, testID }: { label: string; value: string; testID?:
 }
 
 /**
- * The Strava-style image: the (already privacy-trimmed) route in gold on navy, distance, time,
- * points, Safety Rating and a clean badge. It never shows a speed.
+ * The Strava-style image: the (already privacy-trimmed) route in gold on the hour's sky (the same
+ * scene as the app's hero cards), distance, time, points, Safety Rating and a clean badge. It
+ * never shows a speed.
  */
 export const ShareCard = forwardRef<View, { data: ShareCardData }>(function ShareCard({ data }, ref) {
+  const scene = useTheme().sky.scene;
   return (
-    <ThemeProvider scheme="dark">
-      <View ref={ref} collapsable={false} testID="share-card" style={{ width: W, height: H, borderRadius: 24, overflow: 'hidden', padding: 20 }}>
-        <LinearGradient colors={NAVY} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+    <SceneScope>
+      <View ref={ref} collapsable={false} testID="share-card" style={{ width: W, height: H, borderRadius: 28, overflow: 'hidden', padding: 20 }}>
+        <LinearGradient colors={scene} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={StyleSheet.absoluteFill} />
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <CardText variant="title3" style={{ color: GOLD, fontStyle: 'italic' }}>
+          <CardText variant="title3" style={{ fontStyle: 'italic' }}>
             RoadWise
           </CardText>
           <CardText variant="footnote" tone="muted">
@@ -107,8 +109,8 @@ export const ShareCard = forwardRef<View, { data: ShareCardData }>(function Shar
                 backgroundColor: GOLD,
               }}
             >
-              <Ionicons name="checkmark-circle" size={14} color={tokens.color.dark.onPrimary} />
-              <CardText variant="label" style={{ color: tokens.color.dark.onPrimary }}>
+              <Ionicons name="checkmark-circle" size={14} color={tokens.color.dark.onGold} />
+              <CardText variant="label" style={{ color: tokens.color.dark.onGold }}>
                 Clean drive
               </CardText>
             </View>
@@ -121,7 +123,7 @@ export const ShareCard = forwardRef<View, { data: ShareCardData }>(function Shar
           <Fact label="Safety Rating" value={formatRating(data.safetyRating, data.ranked)} testID="share-rating" />
         </View>
       </View>
-    </ThemeProvider>
+    </SceneScope>
   );
 });
 

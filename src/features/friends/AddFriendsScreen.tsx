@@ -125,7 +125,7 @@ export function AddFriendsScreen({ debounceMs = SEARCH_DEBOUNCE_MS }: { debounce
               accessibilityLabel={`${copy.myCode}: ${me}`}
               style={{ padding: th.space.md, backgroundColor: '#FFFFFF', borderRadius: th.radius.lg }}
             >
-              <QRCode value={link} size={200} color="#001D3D" backgroundColor="#FFFFFF" ecl="M" />
+              <QRCode value={link} size={200} color="#111113" backgroundColor="#FFFFFF" ecl="M" />
             </View>
             <Text variant="headline">{`@${me}`}</Text>
             <Text variant="subhead" tone="muted" style={{ textAlign: 'center' }}>
