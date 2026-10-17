@@ -20,7 +20,8 @@ export const BODY_RESIZE_MS = 260;
  * the step number in the middle, and a body whose height follows its step. The scrim, Android back
  * and a downward swipe on the grabber all call `onRequestCancel` (the sheet decides: ask, or close).
  * `cancel` false hides Cancel (done, finishing); `overlay` (the confirmation) renders under the body,
- * which dims and goes inert meanwhile (`dimmed`).
+ * which dims and goes inert meanwhile (`dimmed`). A body taller than the panel's 92% scrolls, and the
+ * confirmation keeps its full height, so its buttons always stay on screen.
  */
 export function WizardFrame({
   visible,
@@ -120,8 +121,15 @@ export function WizardFrame({
             </Text>
             <View style={{ flex: 1 }} />
           </View>
-          <View>
-            <ScrollView bounces={false} keyboardShouldPersistTaps="handled" style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: th.space.lg, paddingTop: th.space.sm }}>
+          {/* The body shrinks to the panel's 92% and scrolls; the confirmation keeps its height under it. */}
+          <View style={{ flexShrink: 1 }} testID="wizard-body-frame">
+            <ScrollView
+              bounces={false}
+              keyboardShouldPersistTaps="handled"
+              style={{ flexGrow: 0, flexShrink: 1 }}
+              contentContainerStyle={{ paddingHorizontal: th.space.lg, paddingTop: th.space.sm }}
+              testID="wizard-scroll"
+            >
               <Animated.View
                 layout={th.reduceMotion ? undefined : LinearTransition.duration(BODY_RESIZE_MS)}
                 pointerEvents={dimmed ? 'none' : 'auto'}

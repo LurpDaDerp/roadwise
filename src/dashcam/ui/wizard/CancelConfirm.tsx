@@ -18,7 +18,7 @@ export const CONFIRM_FADE_MS = 150;
 export function CancelConfirm({ paired, onStop, onKeep }: { paired: boolean; onStop(): void; onKeep(): void }) {
   const th = useTheme();
   return (
-    <Animated.View entering={FadeIn.duration(CONFIRM_FADE_MS)} accessibilityViewIsModal testID="wizard-cancel-confirm">
+    <Animated.View entering={FadeIn.duration(CONFIRM_FADE_MS)} accessibilityViewIsModal style={{ flexShrink: 0 }} testID="wizard-cancel-confirm">
       <View
         style={{
           marginHorizontal: th.space.lg,

@@ -3,9 +3,9 @@
  * confirmation (and the scrim, Android back and a swipe down on the grabber doing the same), no
  * Cancel on done, the title taking the screen reader's focus, the announcements and Reduce Motion.
  */
-import { act, fireEvent, screen } from '@testing-library/react-native';
+import { act, fireEvent, screen, within } from '@testing-library/react-native';
 import { useState } from 'react';
-import { AccessibilityInfo } from 'react-native';
+import { AccessibilityInfo, StyleSheet } from 'react-native';
 
 import { appWorld, clearQueryClients, fakeAdapter, tap } from '@/features/permissions/__fixtures__/harness';
 import { ThemeProvider } from '@/ui';
@@ -480,6 +480,23 @@ describe('Cancel', () => {
     expect(screen.getByTestId('wizard-body').props.pointerEvents).toBe('auto');
     await tap('wizard-cancel');
     expect(screen.getByTestId('wizard-cancel-confirm')).toBeOnTheScreen();
+  });
+  it('a step taller than the sheet scrolls inside it, and the question keeps its full height under it, so Stop setup and Keep setting up stay on screen', async () => {
+    const s = await open();
+    await s.to({ kind: 'instructions', aimAllowed: true, holdLeftS: 42, reconnecting: true });
+    await tap('wizard-cancel');
+    // The panel is capped at 92% of the screen: the body's frame and its scroll view give way to it…
+    const frame = screen.getByTestId('wizard-body-frame', HIDDEN);
+    expect(StyleSheet.flatten(frame.props.style).flexShrink).toBe(1);
+    const scroll = within(frame).getByTestId('wizard-scroll', HIDDEN);
+    expect(StyleSheet.flatten(scroll.props.style)).toMatchObject({ flexGrow: 0, flexShrink: 1 });
+    expect(within(scroll).getByTestId('wizard-body', HIDDEN)).toBeOnTheScreen();
+    // …and the question, under the scroll view and outside it, does not.
+    const question = within(frame).getByTestId('wizard-cancel-confirm');
+    expect(within(scroll).queryByTestId('wizard-cancel-confirm')).toBeNull();
+    expect(StyleSheet.flatten(question.props.style).flexShrink ?? 0).toBe(0);
+    expect(within(question).getByTestId('wizard-cancel-stop')).toBeOnTheScreen();
+    expect(within(question).getByTestId('wizard-cancel-keep')).toBeOnTheScreen();
   });
 });
 
