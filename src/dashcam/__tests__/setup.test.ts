@@ -621,6 +621,69 @@ describe('the hold: a lost link, its end, the commit’s outcomes', () => {
     expect(await r.secrets.readPendingAuth()).toBeNull();
     expect(await r.secrets.readOrphan()).toEqual({ dashcamId: key.dashcamId, phoneId: key.phoneId, kPair: key.kPair });
   });
+
+  /** Next with the commit stored but unanswered and the link lost, reconnects refused until `reachable()`. */
+  async function unansweredCommit(r: Rig): Promise<{ reachable(): void }> {
+    await setUp(r, {}, { next: false });
+    r.cam().commit = 'silent';
+    const w0 = r.ble.onWrite!;
+    let dropped = false;
+    r.ble.onWrite = async (w) => {
+      await w0(w);
+      if (!dropped && r.cam().prov === null && r.cam().phones.size === 1) {
+        dropped = true;
+        r.ble.connectMode.set(idOf('android', 0xd5), 'reject');
+        r.ble.drop(idOf('android', 0xd5));
+      }
+    };
+    r.flow.next();
+    return { reachable: () => void r.ble.connectMode.delete(idOf('android', 0xd5)) };
+  }
+
+  test('Close after an unanswered commit, the DashPal in reach again: a session under the kept key and COMMAND 4, so the DashPal forgets the phone; nothing is kept on the phone', async () => {
+    const r = rig();
+    const u = await unansweredCommit(r);
+    expect(await untilEnd(r)).toMatchObject({ kind: 'failed', reason: 'lost', retry: 'resume' });
+    expect(r.cam().phones.size).toBe(1);
+    u.reachable();
+    await r.flow.cancel();
+    expect(r.flow.phase()).toEqual({ kind: 'cancelled' });
+    expect(r.ops().at(-1)).toBe(4);
+    expect(r.cam().phones.size).toBe(0);
+    expect(r.cam().prov).toBeNull();
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect(await r.secrets.readOrphan()).toBeNull();
+    expect(await r.secrets.readAuth()).toBeNull();
+  });
+
+  test('Cancel while reconnecting after an unanswered commit: the DashPal forgets the phone (COMMAND 4); nothing is kept', async () => {
+    const r = rig();
+    const u = await unansweredCommit(r);
+    let at: SetupPhase | null = null;
+    r.at(3000, () => {
+      at = r.flow.phase();
+      u.reachable();
+      void r.flow.cancel();
+    });
+    expect(await untilEnd(r)).toEqual({ kind: 'cancelled' });
+    expect(at).toMatchObject({ kind: 'connecting', reconnecting: true });
+    expect(r.ops()).toContain(4);
+    expect(r.cam().phones.size).toBe(0);
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect(await r.secrets.readOrphan()).toBeNull();
+  });
+
+  test('Close after an unanswered commit, the DashPal not knowing the key: nothing to undo and nothing kept', async () => {
+    const r = rig();
+    const u = await unansweredCommit(r);
+    await untilEnd(r);
+    r.cam().phones.clear();
+    u.reachable();
+    await r.flow.cancel();
+    expect(r.flow.phase()).toEqual({ kind: 'cancelled' });
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect(await r.secrets.readOrphan()).toBeNull();
+  });
 });
 
 describe('screen 1’s outcomes', () => {

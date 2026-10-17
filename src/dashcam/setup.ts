@@ -888,21 +888,54 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
   }
 
   /**
-   * Whatever the DashPal holds for this setup is undone (COMMAND 9 on a live hold), the connection
-   * released and the key gone; after a commit that went unanswered the key is kept as the orphan.
+   * After a commit whose answer never came, with the link down: one reconnect and a session under
+   * the setup's key, so the undo can reach the DashPal. `unknown`: it holds nothing under this key.
+   * Never checks for a cancel (it runs for one).
+   */
+  async function reconnectToUndo(key: StoredAuth): Promise<'up' | 'unknown' | 'away'> {
+    const tt = t;
+    const c = cand;
+    if (!tt || !c) return 'away';
+    await release();
+    try {
+      await tt.setupConnect(c.id, { timeoutMs: SETUP_CONNECT_TIMEOUT_MS });
+      const got = await tt.readInfo(c.id);
+      if (!got?.nonce || got.dashcamId !== key.dashcamId) return 'away';
+      const s = await tt.startSession(c.id, got, { phoneId: key.phoneId, kPair: key.kPair });
+      if (s.kind === 'unknown_phone') return 'unknown';
+      if (s.kind !== 'up') return 'away';
+      sessionUp = true;
+      unsubscribe?.();
+      unsubscribe = await tt.subscribeSealed(c.id, onFrame);
+      return 'up';
+    } catch (e) {
+      report(e, 'undo reconnect');
+      return 'away';
+    }
+  }
+
+  /**
+   * Whatever the DashPal holds for this setup is undone, the connection released and the key gone:
+   * COMMAND 9 on a live hold; after a commit that went unanswered (stored or still held), COMMAND 4
+   * under the setup's key, reconnecting once for it. Only a DashPal that could not be reached may
+   * still hold the key: it is kept as the orphan.
    */
   async function undo(): Promise<void> {
     stopSpeed();
-    if (stage === 'hold' && linkUp()) {
+    const key = pending;
+    let reached = false;
+    if (stage === 'commit' && key && !linkUp()) reached = (await reconnectToUndo(key)) === 'unknown';
+    if ((stage === 'hold' || stage === 'commit') && linkUp()) {
       results = [];
-      if (await command(COMMAND.SETUP_CANCEL)) {
+      // COMMAND 4 forgets a stored phone and, from the hold's connection, cancels the hold as 9 does.
+      if (await command(stage === 'commit' ? COMMAND.FORGET_ME : COMMAND.SETUP_CANCEL)) {
+        reached = true;
         const until = deps.now() + CANCEL_WAIT_MS;
         while (!results.some((r) => r.op === 9) && deps.now() < until && linkUp()) await deps.sleep(POLL_MS);
       }
     }
     await release();
-    const key = pending;
-    if (stage === 'commit' && key) await keepOrphan(key);
+    if (stage === 'commit' && key && !reached) await keepOrphan(key);
     if (stage !== 'pre' || key) await deletePending();
     stage = 'pre';
     holdAt = null;
