@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { dashpalCopy } from '../../copy';
 import type { SetupPhase, SetupStart } from '../../setup';
 import { CancelConfirm } from './CancelConfirm';
+import { StepAim } from './StepAim';
 import { StepChoose } from './StepChoose';
 import { StepConfirm } from './StepConfirm';
 import { StepConnecting } from './StepConnecting';
@@ -17,8 +18,8 @@ import { WizardFrame } from './WizardFrame';
 
 const copy = dashpalCopy.wizard;
 
-/** The numbered steps: 1 the DashPal and Pair (and connecting), 2 how to aim it. */
-export const STEP_COUNT = 2;
+/** The numbered steps: 1 the DashPal and Pair (and connecting), 2 how to aim it, 3 the live picture. */
+export const STEP_COUNT = 3;
 
 /** The step number a phase shows in the header, or null (search, choose, outcomes, finishing, done, aiming skipped). */
 export function stepNumber(p: SetupPhase): number | null {
@@ -32,6 +33,8 @@ export function stepNumber(p: SetupPhase): number | null {
     case 'instructions':
       // A DashPal the other phone aimed (Add another phone) has no aiming step: no number.
       return p.aimAllowed ? 2 : null;
+    case 'aim':
+      return 3;
     default:
       return null;
   }
@@ -67,6 +70,7 @@ export function holdsPairing(p: SetupPhase): boolean {
   switch (p.kind) {
     case 'connected':
     case 'instructions':
+    case 'aim':
     case 'finishing':
       return true;
     case 'connecting':
@@ -170,7 +174,30 @@ export function PairWizardSheet({
       body = <StepConnecting view={{ kind: phase.kind, name: phase.name }} step={step} />;
       break;
     case 'instructions':
-      body = <StepInstructions aimAllowed={phase.aimAllowed} holdLeftS={phase.holdLeftS} reconnecting={phase.reconnecting} step={step} onNext={() => flow.next()} />;
+      body = (
+        <StepInstructions
+          aimAllowed={phase.aimAllowed}
+          holdLeftS={phase.holdLeftS}
+          reconnecting={phase.reconnecting}
+          step={step}
+          onStart={() => flow.startAim()}
+          onNext={() => flow.next()}
+        />
+      );
+      break;
+    case 'aim':
+      body = (
+        <StepAim
+          status={phase.status}
+          reason={phase.reason}
+          holdLeftS={phase.holdLeftS}
+          reconnecting={phase.reconnecting}
+          step={step}
+          flow={flow}
+          onRetry={() => flow.startAim()}
+          onNext={() => flow.next()}
+        />
+      );
       break;
     case 'finishing':
       body = <StepConnecting view={{ kind: 'finishing', reconnecting: phase.reconnecting === true }} step={null} />;

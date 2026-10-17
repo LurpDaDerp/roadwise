@@ -215,7 +215,7 @@ describe('the steps', () => {
     expect(screen.getByTestId('wizard-cancel')).toBeOnTheScreen();
   });
 
-  it(`screen 2: “Step 2 of ${STEP_COUNT}”, the time left in the hold’s last minute, a lost link reconnecting, and Next`, async () => {
+  it(`screen 2: “Step 2 of ${STEP_COUNT}”, the time left in the hold’s last minute, a lost link reconnecting, and Start`, async () => {
     const s = await open();
     await s.to({ kind: 'instructions', aimAllowed: true, holdLeftS: null, reconnecting: false });
     expect(stepText()).toHaveTextContent(`Step 2 of ${STEP_COUNT}`);
@@ -223,8 +223,9 @@ describe('the steps', () => {
     await s.to({ kind: 'instructions', aimAllowed: true, holdLeftS: 42, reconnecting: true });
     expect(screen.getByTestId('wizard-hold-left')).toHaveTextContent('Finish setup within 0:42');
     expect(screen.getByTestId('wizard-reconnecting')).toHaveTextContent('Reconnecting…');
-    await tap('wizard-next');
-    expect(s.answers).toEqual(['next']);
+    expect(screen.queryByTestId('wizard-next')).toBeNull();
+    await tap('wizard-start');
+    expect(s.answers).toEqual(['startAim']);
   });
 
   it('screen 2 explains how to aim DashPal: its title, the three numbered lines ending with the normal driving position, the privacy line', async () => {
@@ -238,7 +239,7 @@ describe('the steps', () => {
     });
     expect(wiz.instructions.steps[2]).toMatch(/normal driving position/);
     expect(screen.getByTestId('wizard-instructions-privacy')).toHaveTextContent(wiz.instructions.privacy);
-    expect(screen.getByTestId('wizard-next')).toHaveTextContent('Next');
+    expect(screen.getByTestId('wizard-start')).toHaveTextContent('Start');
     expect(screen.queryByTestId('wizard-instructions-aimed-elsewhere')).toBeNull();
   });
 
@@ -275,6 +276,35 @@ describe('the steps', () => {
     expect(onStart).not.toHaveBeenCalled();
   });
 
+  it(`screen 3: “Step 3 of ${STEP_COUNT}”, the picture with Next; Cancel says DashPal will be unpaired; a refusal Try again can help with starts it again`, async () => {
+    const s = await open();
+    await s.to({ kind: 'aim', status: 'starting', reason: null, holdLeftS: null, reconnecting: false });
+    expect(stepText()).toHaveTextContent(`Step 3 of ${STEP_COUNT}`);
+    expect(screen.getByTestId('wizard-aim-title').props.accessibilityLabel).toBe(`Step 3 of ${STEP_COUNT}. Aim DashPal`);
+    expect(screen.getByTestId('aim-video')).toBeOnTheScreen();
+    expect(screen.getByTestId('aim-hint')).toHaveTextContent('Starting the camera…');
+    await s.to({ kind: 'aim', status: 'refused', reason: 'moving', holdLeftS: 42, reconnecting: true });
+    expect(screen.getByTestId('wizard-aim-refused')).toHaveTextContent('Stop the car to aim DashPal.');
+    expect(screen.getByTestId('wizard-hold-left')).toHaveTextContent('Finish setup within 0:42');
+    expect(screen.getByTestId('wizard-reconnecting')).toHaveTextContent('Reconnecting…');
+    await tap('wizard-aim-retry');
+    await tap('wizard-aim-next');
+    expect(s.answers).toEqual(['startAim', 'next']);
+    await tap('wizard-cancel');
+    expect(screen.getByTestId('wizard-cancel-confirm-body')).toHaveTextContent('DashPal will be unpaired from this phone and ready to pair again.');
+    await tap('wizard-cancel-stop');
+    expect(outcomes).toEqual(['closed']);
+    expect(s.cancelled()).toBe(1);
+  });
+
+  it('screen 3 is its own step: it slides in after screen 2', async () => {
+    const s = await open();
+    await s.to({ kind: 'instructions', aimAllowed: true, holdLeftS: null, reconnecting: false });
+    expect(screen.getByTestId('wizard-step-instructions')).toBeOnTheScreen();
+    await s.to({ kind: 'aim', status: 'starting', reason: null, holdLeftS: null, reconnecting: false });
+    expect(screen.getByTestId('wizard-step-aim')).toBeOnTheScreen();
+  });
+
   it('finishing: “Finishing…” with no Cancel; back and the scrim wait for the answer', async () => {
     const s = await open();
     await s.to({ kind: 'finishing' });
@@ -288,8 +318,9 @@ describe('the steps', () => {
   it('a link lost while finishing: still “Finishing…”, with “Reconnecting…” under it and no step number; Cancel stays for the reconnect and says DashPal will be unpaired', async () => {
     const say = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
     const s = await open();
-    await s.to({ kind: 'instructions', aimAllowed: true, holdLeftS: null, reconnecting: false });
-    await tap('wizard-next');
+    await s.to({ kind: 'aim', status: 'live', reason: null, holdLeftS: null, reconnecting: false });
+    await tap('wizard-aim-next');
+    expect(s.answers).toEqual(['next']);
     await s.to({ kind: 'finishing' });
     await s.to({ kind: 'finishing', reconnecting: true });
     expect(screen.getByTestId('wizard-connect-finishing')).toBeOnTheScreen();
