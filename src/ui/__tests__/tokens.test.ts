@@ -1,6 +1,6 @@
 import { contrastRatio } from '@/ui/contrast';
-import { HERO_CARD_GRADIENT } from '@/ui/primitives/Card';
 import { progressColor, progressTrack } from '@/ui/primitives/progress';
+import { plainBundle } from '@/ui/sky/palette';
 import { tokens, type LeagueTier, type Signal } from '@/ui/tokens';
 
 const AA = 4.5;
@@ -98,8 +98,8 @@ describe.each(schemes)('%s scheme', (s) => {
   });
 
   test('a selected segment reads on its thumb, an unselected one on the track', () => {
-    const thumb = s === 'dark' ? c.primary : c.surface;
-    const label = s === 'dark' ? c.onPrimary : c.text;
+    const thumb = c.primary;
+    const label = c.onPrimary;
     expectContrast(label, thumb, AA, 'selected segment');
     expectContrast(c.textMuted, c.surfaceRaised, AA, 'unselected segment');
   });
@@ -109,9 +109,10 @@ describe.each(schemes)('%s scheme', (s) => {
   });
 });
 
-test('the hero card is navy in both schemes and carries the dark palette', () => {
-  const d = tokens.color.dark;
-  for (const stop of HERO_CARD_GRADIENT) {
+test.each(schemes)('the %s scene card carries its scene palette at AA on every stop', (s) => {
+  const b = plainBundle(s);
+  const d = b.onScene;
+  for (const stop of b.sky.scene) {
     for (const ink of [d.text, d.textMuted, d.textSubtle, d.accent])
       expectContrast(ink, stop, AA, `hero ink ${ink}`);
     for (const sig of signals) expectContrast(d.signal[sig].text, stop, AA, `hero ${sig}`);

@@ -194,7 +194,8 @@ function sceneColors(scene: [string, string, string], accent: string): ColorSet 
     bgElevated: mid,
     surface: mix(mid, '#000000', 0.25),
     surfaceRaised: mix(mid, '#FFFFFF', 0.14),
-    border: mix(mid, '#FFFFFF', 0.26),
+    // Tracks and rules sit darker than the scene, so a light mark on them still clears 3:1.
+    border: mix(scene[2], '#000000', 0.4),
     borderStrong: mix(mid, '#FFFFFF', 0.6),
     divider: mix(mid, '#FFFFFF', 0.16),
     ...SCENE_INK,
