@@ -13,7 +13,7 @@ import { useDrive, useDriveControls } from '@/drive/useDrive';
 import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
 import { sinceDays } from '@/features/drives/format';
 import { homeCard } from '@/features/permissions/board';
-import { NewPhoneCard } from '@/dashcam/ui/NewPhoneCard';
+import { HomeDashpal } from '@/dashcam/ui/HomeDashpal';
 import { PermissionCard } from '@/features/permissions/PermissionCard';
 import { usePermissionBoard } from '@/features/permissions/usePermissionBoard';
 import {
@@ -148,6 +148,8 @@ export function HomeScreen() {
   };
 
   const refreshing = summary.isRefetching || recent.isRefetching;
+  // Pull to refresh also looks for a DashPal ready to pair (the slot counts the pulls).
+  const [pulls, setPulls] = useState(0);
 
   return (
     <Screen padded={false} bottomInset={false}>
@@ -173,7 +175,7 @@ export function HomeScreen() {
         recording={recording}
         inProgress={<DriveInProgressBanner />}
         permissions={<PermissionCard board={board} recording={recording} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}
-        dashpal={<NewPhoneCard hidden={recording} />}
+        dashpal={<HomeDashpal hidden={recording} pull={pulls} />}
         scrollRef={scrollRef}
         refreshing={refreshing}
         onRefresh={() => {
@@ -183,6 +185,7 @@ export function HomeScreen() {
           void week.refetch();
           void month.refetch();
           void board.refresh('shared');
+          setPulls((n) => n + 1);
         }}
       />
     </Screen>

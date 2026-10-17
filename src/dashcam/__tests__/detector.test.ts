@@ -1,26 +1,47 @@
-import { createDetector, DETECT_EVERY_MS, SNOOZE_MS, snoozed, type DetectorDeps } from '../detector';
+import {
+  classify,
+  createDetector,
+  DETECT_EVERY_MS,
+  DETECT_PULL_EVERY_MS,
+  DETECT_SCAN_SECONDS,
+  SNOOZE_MS,
+  snoozed,
+  type DetectorDeps,
+  type PairedView,
+} from '../detector';
+import { PAIRING_NEW, PAIRING_OPEN, type AdvState } from '../protocol';
 import type { ScanHit } from '../transport';
 
 function rig(over: Partial<DetectorDeps> = {}) {
   const clock = { t: 1_000_000 };
-  const scans: number[] = [];
+  const scans: { seconds: number; services: readonly string[] }[] = [];
   let onHit: ((h: ScanHit) => void) | null = null;
   let stopped = 0;
   const hits: ScanHit[] = [];
-  const state = { optIn: true, busy: false, driveRoute: false, setup: false, connected: false, ready: true, mph: 0 as number | null, snoozes: {} as Record<string, number>, paired: null as string | null };
+  const state = {
+    optIn: true,
+    busy: false,
+    home: true,
+    setup: false,
+    connected: false,
+    ready: true,
+    mph: 0 as number | null,
+    snoozes: {} as Record<string, number>,
+    paired: null as PairedView | null,
+  };
   const deps: DetectorDeps = {
     now: () => clock.t,
     btOptIn: () => state.optIn,
     bluetoothReady: async () => state.ready,
     isBusy: () => state.busy,
-    onDriveRoute: () => state.driveRoute,
+    onHome: () => state.home,
     speedMph: async () => state.mph,
-    setupRunning: () => state.setup,
-    pairedPeripheralId: () => state.paired,
+    setupOpen: () => state.setup,
+    paired: () => state.paired,
     pairedConnected: () => state.connected,
     snoozes: async () => state.snoozes,
     scan: async (o) => {
-      scans.push(o.seconds);
+      scans.push({ seconds: o.seconds, services: o.services });
       onHit = o.onHit;
       for (const h of hits) o.onHit(h);
       return { stop: async () => void (stopped += 1) };
@@ -33,51 +54,77 @@ function rig(over: Partial<DetectorDeps> = {}) {
   return { d: createDetector(deps), clock, scans, state, hits, hit: (h: ScanHit) => onHit?.(h), stopped: () => stopped };
 }
 
-const hit = (id: string, rssi: number, pairing = true): ScanHit => ({ id, name: `DashPal-${id}`, rssi, adv: pairing ? 'new' : 'closed' });
+const hit = (id: string, rssi: number, adv: AdvState | null = 'new', name: string | null = `DashPal-${id}`): ScanHit => ({ id, name, rssi, adv });
+const PAIRED_VIEW: PairedView = { peripheralId: 'OWN', name: 'DashPal-C4D5', unknownPhone: false };
 
-test('row 23: finds the strongest DashPal in pairing mode (RSSI ≥ −80) after a 10 s scan', async () => {
+test('an 8 s scan for the new and open pairing services finds the strongest DashPal with no phone paired (RSSI ≥ −80)', async () => {
   const r = rig();
-  r.hits.push(hit('A', -70), hit('B', -50), hit('C', -90), hit('D', -40, false));
-  expect(await r.d.check()).toEqual({ kind: 'found', found: { id: 'B', name: 'DashPal-B', rssi: -50 } });
-  expect(r.scans).toEqual([10]);
+  r.hits.push(hit('A', -70), hit('B', -50), hit('C', -90), hit('D', -40, 'closed'), hit('E', -30, 'open'), hit('F', -20, 'setup'), hit('G', -10, null));
+  expect(await r.d.check()).toEqual({ kind: 'found', found: { id: 'B', name: 'DashPal-B', rssi: -50, kind: 'new', adv: 'new' } });
+  expect(r.scans).toEqual([{ seconds: DETECT_SCAN_SECONDS, services: [PAIRING_NEW, PAIRING_OPEN] }]);
+  expect(DETECT_SCAN_SECONDS).toBe(8);
   expect(r.stopped()).toBe(1);
 });
 
 test.each([
   ['not opted in', { optIn: false }],
   ['drive open', { busy: true }],
-  ['drive route', { driveRoute: true }],
-  ['setup running', { setup: true }],
-  ['paired dashcam connected', { connected: true }],
+  ['not on Home', { home: false }],
+  ['setup open', { setup: true }],
+  ['paired dashcam connected', { connected: true, paired: PAIRED_VIEW }],
   ['bluetooth not ready', { ready: false }],
   ['moving or speed unknown', { mph: 3 }],
   ['moving or speed unknown', { mph: null }],
-] as const)('row 23: never scans when %s', async (why, change) => {
+] as const)('never scans when %s', async (why, change) => {
   const r = rig();
   Object.assign(r.state, change);
   expect(await r.d.check()).toEqual({ kind: 'skipped', why });
   expect(r.scans).toEqual([]);
 });
 
-test('at most one scan per 2 minutes', async () => {
+test('at most one scan a minute; pull to refresh may scan again 10 s after the last one', async () => {
   const r = rig();
   expect((await r.d.check()).kind).toBe('none');
-  r.clock.t += DETECT_EVERY_MS - 10_001; // the scan itself took 10 s
+  const scanTook = DETECT_SCAN_SECONDS * 1000;
+  r.clock.t += DETECT_PULL_EVERY_MS - scanTook - 1;
+  expect(await r.d.check({ pull: true })).toEqual({ kind: 'skipped', why: 'too soon' });
+  r.clock.t += 1;
+  expect((await r.d.check({ pull: true })).kind).toBe('none');
+  r.clock.t += DETECT_EVERY_MS - scanTook - 1;
   expect(await r.d.check()).toEqual({ kind: 'skipped', why: 'too soon' });
   r.clock.t += 1;
   expect((await r.d.check()).kind).toBe('none');
-  expect(r.scans).toHaveLength(2);
+  expect(r.scans).toHaveLength(3);
+  expect(DETECT_EVERY_MS).toBe(60_000);
 });
 
-test('a snoozed dashcam and the paired one (in pairing mode for another phone) are not offered', async () => {
+test('a snoozed DashPal is not offered; one whose snooze ran out is', async () => {
   const r = rig();
-  r.state.snoozes = { A: r.clock.t + 1000 };
-  r.state.paired = 'b';
+  r.state.snoozes = { A: r.clock.t + 1000, B: r.clock.t - 1 };
   r.hits.push(hit('A', -40), hit('B', -45));
-  expect(await r.d.check()).toEqual({ kind: 'none' });
+  expect(await r.d.check()).toEqual({ kind: 'found', found: { id: 'B', name: 'DashPal-B', rssi: -45, kind: 'new', adv: 'new' } });
 });
 
-test('row 23: a drive starting mid-scan drops it (no prompt)', async () => {
+test('this phone’s own DashPal: again when it advertises no phone paired, or pairing open after it refused this phone’s key; never new', async () => {
+  const r = rig();
+  r.state.paired = PAIRED_VIEW;
+  r.hits.push(hit('own', -60, 'new', null));
+  expect(await r.d.check()).toEqual({ kind: 'found', found: { id: 'own', name: 'DashPal-C4D5', rssi: -60, kind: 'again', adv: 'new' } });
+
+  expect(classify('open', 'OWN', PAIRED_VIEW, false)).toBeNull();
+  expect(classify('open', 'OWN', { ...PAIRED_VIEW, unknownPhone: true }, false)).toBe('again');
+  expect(classify('closed', 'OWN', { ...PAIRED_VIEW, unknownPhone: true }, false)).toBeNull();
+  expect(classify('setup', 'OWN', { ...PAIRED_VIEW, unknownPhone: true }, false)).toBeNull();
+});
+
+test('another DashPal: new only with no phone paired, and nothing while the paired one is connected', () => {
+  expect(classify('new', 'X', null, false)).toBe('new');
+  expect(classify('open', 'X', null, false)).toBeNull();
+  expect(classify('new', 'X', PAIRED_VIEW, false)).toBe('new');
+  expect(classify('new', 'X', PAIRED_VIEW, true)).toBeNull();
+});
+
+test('a drive starting mid-scan drops it (no card)', async () => {
   const r = rig({
     sleep: async () => {
       r.clock.t += 250;
@@ -87,6 +134,27 @@ test('row 23: a drive starting mid-scan drops it (no prompt)', async () => {
   r.hits.push(hit('A', -40));
   expect(await r.d.check()).toEqual({ kind: 'skipped', why: 'interrupted' });
   expect(r.stopped()).toBe(1);
+});
+
+test('leaving Home mid-scan, or abort(), stops the scan', async () => {
+  const r = rig({
+    sleep: async () => {
+      r.clock.t += 250;
+      r.state.home = false;
+    },
+  });
+  r.hits.push(hit('A', -40));
+  expect(await r.d.check()).toEqual({ kind: 'skipped', why: 'interrupted' });
+
+  const a = rig({
+    sleep: async () => {
+      a.clock.t += 250;
+      await a.d.abort();
+    },
+  });
+  a.hits.push(hit('A', -40));
+  expect(await a.d.check()).toEqual({ kind: 'skipped', why: 'interrupted' });
+  expect(a.stopped()).toBeGreaterThanOrEqual(1);
 });
 
 test('snoozed(): 7 days for this one; expired entries are dropped', () => {

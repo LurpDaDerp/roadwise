@@ -5,15 +5,21 @@
  * or the camera until "Find my DashPal"), the prompt host and the label link's deferral.
  */
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { useState } from 'react';
+import { Pressable } from 'react-native';
 
 import { appWorld, clearQueryClients, fakeAdapter, tap } from '@/features/permissions/__fixtures__/harness';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
 
 import { createFakeDashcamRuntime, PAIRED } from '../__fixtures__/fakeRuntime';
 import { dashpalCopy } from '../copy';
+import { SNOOZE_MS, DETECT_PULL_EVERY_MS } from '../detector';
+import { SNOOZES_KEY } from '../keys';
+import { PAIRING_NEW, PAIRING_OPEN } from '../protocol';
 import { setActiveDashcam } from '../registry';
 import { createDashpalSecrets } from '../secure';
 import type { SetupDeps, SetupFlow, SetupPhase } from '../setup';
+import type { DashcamTransport, ScanHit } from '../transport';
 
 jest.mock('expo-camera', () => {
   const { View } = jest.requireActual<typeof import('react-native')>('react-native');
@@ -42,12 +48,16 @@ function memSecrets() {
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => true };
 let mockPath = '/home';
 let mockSegments: string[] = ['(tabs)', 'home'];
-jest.mock('expo-router', () => ({
-  useRouter: () => mockRouter,
-  usePathname: () => mockPath,
-  useSegments: () => mockSegments,
-  useFocusEffect: () => {},
-}));
+// Focus runs its effect on mount, as on a real focus.
+jest.mock('expo-router', () => {
+  const { useEffect } = jest.requireActual<typeof import('react')>('react');
+  return {
+    useRouter: () => mockRouter,
+    usePathname: () => mockPath,
+    useSegments: () => mockSegments,
+    useFocusEffect: (fn: () => void | (() => void)) => useEffect(fn, [fn]),
+  };
+});
 const mockDrive = { busy: false, listeners: new Set<(s: { status: string }) => void>() };
 const mockHost = {
   isBusy: () => mockDrive.busy,
@@ -324,6 +334,123 @@ describe('Home: the new-phone card', () => {
     const w = await appWorld();
     await w.render(<NewPhoneCard hidden={hidden} />);
     expect(screen.queryByTestId('home-dashpal-new-phone')).toBeNull();
+  });
+});
+
+describe('Home: the card of a DashPal ready to pair', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- after the mocks above
+  const { HomeDashpal } = require('../ui/HomeDashpal') as typeof import('../ui/HomeDashpal');
+
+  /** A runtime whose transport hears `hits` on every scan; a clock the scan's waits move. */
+  function nearby(hits: ScanHit[], state: Parameters<typeof createFakeDashcamRuntime>[0] = {}) {
+    const rt = createFakeDashcamRuntime({ btOptIn: true, ...state });
+    const scans: string[][] = [];
+    rt.transportValue = {
+      scan: async (o: { services: string[]; onHit(h: ScanHit): void }) => {
+        scans.push(o.services);
+        for (const h of hits) o.onHit(h);
+        return { stop: async () => {} };
+      },
+    } as unknown as DashcamTransport;
+    setActiveDashcam(rt);
+    const clock = { t: 5_000_000 };
+    const deps = {
+      adapter: fakeAdapter(undefined, { bluetoothNow: 'granted' }),
+      speedMph: async () => 0,
+      now: () => clock.t,
+      sleep: async (ms: number) => void (clock.t += ms),
+      appState: { currentState: 'active', addEventListener: () => ({ remove: () => {} }) },
+    };
+    return { rt, scans, clock, deps };
+  }
+  const NEW: ScanHit = { id: 'P-1A2B', name: 'DashPal-1A2B', rssi: -50, adv: 'new' };
+
+  it('a DashPal with no phone paired nearby: “Pair DashPal-1A2B?” · “A new DashPal is nearby.”, one button that opens setup', async () => {
+    const n = nearby([NEW, { id: 'P-FAR', name: 'DashPal-FFFF', rssi: -90, adv: 'new' }]);
+    const w = await appWorld();
+    await w.render(<HomeDashpal deps={n.deps} />);
+    expect(await screen.findByTestId('home-dashpal-pair-title')).toHaveTextContent('Pair DashPal-1A2B?');
+    expect(screen.getByTestId('home-dashpal-pair-subtitle')).toHaveTextContent('A new DashPal is nearby.');
+    expect(n.scans).toEqual([[PAIRING_NEW, PAIRING_OPEN]]);
+    const button = screen.getByTestId('home-dashpal-pair-open');
+    expect(button.props.accessibilityLabel).toBe('Pair DashPal-1A2B?');
+    expect(button.props.accessibilityHint).toBe('Opens setup');
+    expect(button.props.accessibilityActions).toEqual([{ name: 'notNow', label: 'Not now' }]);
+    await tap('home-dashpal-pair-open');
+    expect(mockRouter.push).toHaveBeenLastCalledWith('/settings/dashcam-setup?found=P-1A2B');
+    expect(screen.queryByTestId('home-dashpal-pair')).toBeNull();
+  });
+
+  it('Not now (the ✕ or the screen reader’s action) hides it and snoozes that DashPal for 7 days', async () => {
+    const n = nearby([NEW]);
+    const w = await appWorld();
+    await w.render(<HomeDashpal deps={n.deps} />);
+    await tap('home-dashpal-pair-not-now');
+    expect(screen.queryByTestId('home-dashpal-pair')).toBeNull();
+    await waitFor(async () => expect(await w.settings.get(SNOOZES_KEY)).toEqual({ 'P-1A2B': n.clock.t + SNOOZE_MS }));
+
+    const m = nearby([NEW]);
+    const v = await appWorld();
+    await v.render(<HomeDashpal deps={m.deps} />);
+    await act(async () => {
+      fireEvent(await screen.findByTestId('home-dashpal-pair-open'), 'accessibilityAction', { nativeEvent: { actionName: 'notNow' } });
+    });
+    expect(screen.queryByTestId('home-dashpal-pair')).toBeNull();
+  });
+
+  it('this phone’s DashPal that no longer knows it: “Set up DashPal-C4D5 again?” · “It no longer knows this phone.”, opening Set up again', async () => {
+    const n = nearby([{ id: PAIRED.peripheralId, name: null, rssi: -60, adv: 'open' }], { link: { lifecycle: 'needs_repair', paired: PAIRED, repairCause: 'unknown_phone' } });
+    const w = await appWorld();
+    await w.render(<HomeDashpal deps={n.deps} />);
+    expect(await screen.findByTestId('home-dashpal-pair-title')).toHaveTextContent('Set up DashPal-C4D5 again?');
+    expect(screen.getByTestId('home-dashpal-pair-subtitle')).toHaveTextContent('It no longer knows this phone.');
+    await tap('home-dashpal-pair-open');
+    expect(mockRouter.push).toHaveBeenLastCalledWith('/settings/dashcam-setup?again=1');
+  });
+
+  it.each([
+    ['during a drive', { hidden: true }, {}],
+    ['before the driver asked for DashPal', {}, { btOptIn: false }],
+    ['while the paired DashPal is connected', {}, { link: { lifecycle: 'connected' as const, paired: PAIRED } }],
+  ])('no card and no scan %s', async (_name, props, state) => {
+    const n = nearby([NEW], state);
+    const w = await appWorld();
+    await w.render(<HomeDashpal deps={n.deps} {...props} />);
+    await act(async () => {});
+    expect(screen.queryByTestId('home-dashpal-pair')).toBeNull();
+    expect(n.scans).toEqual([]);
+  });
+
+  it('Bluetooth not yet allowed: no scan and no prompt', async () => {
+    const n = nearby([NEW]);
+    n.deps.adapter = fakeAdapter();
+    const w = await appWorld();
+    await w.render(<HomeDashpal deps={n.deps} />);
+    await act(async () => {});
+    expect(n.scans).toEqual([]);
+    expect(n.deps.adapter.log).toEqual(['bluetooth']);
+  });
+
+  it('pull to refresh looks again (10 s after the last scan); a scan that no longer hears it takes the card down', async () => {
+    const hits: ScanHit[] = [NEW];
+    const n = nearby(hits);
+    const w = await appWorld();
+    function Pulling() {
+      const [pulls, setPulls] = useState(0);
+      return (
+        <>
+          <HomeDashpal deps={n.deps} pull={pulls} />
+          <Pressable testID="pull" onPress={() => setPulls((k) => k + 1)} />
+        </>
+      );
+    }
+    await w.render(<Pulling />);
+    expect(await screen.findByTestId('home-dashpal-pair')).toBeOnTheScreen();
+    hits.length = 0;
+    n.clock.t += DETECT_PULL_EVERY_MS;
+    await tap('pull');
+    await waitFor(() => expect(screen.queryByTestId('home-dashpal-pair')).toBeNull());
+    expect(n.scans).toHaveLength(2);
   });
 });
 

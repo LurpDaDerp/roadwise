@@ -11,6 +11,7 @@ import { Banner, Button, Card, Screen, Text, useTheme } from '@/ui';
 import { dashpalCopy } from '../copy';
 import { dashpalSecrets, type DashpalSecrets } from '../secure';
 import { createSetupFlow, type SetupDeps, type SetupFailure, type SetupFlow, type SetupPhase } from '../setup';
+import { markSetupOpen } from './setupOpen';
 import { useDashcamRuntime } from './useDashcam';
 import { useDriveBusy, useDriveChanges } from './useDriveBusy';
 
@@ -109,6 +110,8 @@ export function SetupPanel({
   const [phase, setPhase] = useState<SetupPhase>({ kind: 'idle' });
   const [attempt, setAttempt] = useState(0);
   const { found, again } = target;
+  // Home's card never scans while a setup is on screen.
+  useEffect(() => markSetupOpen(), []);
 
   const flow = useMemo(() => {
     void attempt;
