@@ -19,13 +19,42 @@ const copy = dashpalCopy.wizard.aim;
 /** How often the screen looks whether its AIM reading went stale. */
 export const AIM_STALE_CHECK_MS = 250;
 
-/** The two picture layers: the newest image loads in the back one, which becomes the front once loaded. */
+/**
+ * The two picture layers: an image loads in the back one, which becomes the front once loaded. While
+ * the back one is still loading, the newest image waits in `next` (replacing an older one waiting
+ * there) and loads once the back one is shown, so a phone that decodes slower than images arrive
+ * still shows a new picture each time one has loaded.
+ */
 interface Layers {
   a: string | null;
   b: string | null;
   front: 'a' | 'b';
+  loading: boolean;
+  next: string | null;
 }
-const EMPTY: Layers = { a: null, b: null, front: 'a' };
+const EMPTY: Layers = { a: null, b: null, front: 'a', loading: false, next: null };
+const backOf = (l: Layers): 'a' | 'b' => (l.front === 'a' ? 'b' : 'a');
+
+/**
+ * A new image: into the back layer, or to wait while the back layer is still loading. The same
+ * picture as the front one changes nothing, and the one the back layer already holds is shown at
+ * once (an unchanged source would never report a load).
+ */
+function layersWithImage(l: Layers, uri: string): Layers {
+  if (l.loading) return { ...l, next: uri };
+  if (uri === l[l.front]) return l;
+  const back = backOf(l);
+  if (l[back] === uri) return { ...l, front: back };
+  return { ...l, [back]: uri, loading: true };
+}
+
+/** The back layer finished (loaded, or failed: then it is not shown); the waiting image loads next. */
+function layersSettled(l: Layers, key: 'a' | 'b', uri: string, loaded: boolean): Layers {
+  if (key !== backOf(l) || l[key] !== uri || !l.loading) return l;
+  const shown: Layers = loaded ? { ...l, front: key, loading: false } : { ...l, loading: false };
+  if (shown.next === null) return shown;
+  return layersWithImage({ ...shown, next: null }, shown.next);
+}
 
 /** RoadWise is not in the front (the app switcher, a call, the home screen). */
 const away = (s: string | null | undefined): boolean => s === 'inactive' || s === 'background';
@@ -49,12 +78,12 @@ export function AimView({ flow, status }: { flow: Pick<SetupFlow, 'onViewFrame' 
   const latch = useRef(createGoodLatch());
   const announcer = useRef(createAimAnnouncer());
 
-  // The images: the newest goes to the back layer (replacing one still loading there).
+  // The images: each goes to the back layer, or waits there while the back one is still loading.
   useEffect(
     () =>
       flow.onViewFrame((jpeg) => {
         const uri = jpegDataUri(jpeg);
-        setLayers((l) => (l.front === 'a' ? { ...l, b: uri } : { ...l, a: uri }));
+        setLayers((l) => layersWithImage(l, uri));
       }),
     [flow]
   );
@@ -114,8 +143,6 @@ export function AimView({ flow, status }: { flow: Pick<SetupFlow, 'onViewFrame' 
   const live = status === 'live' || status === 'stalled';
   const fresh = live ? aim : null;
   const line = status === 'starting' ? copy.starting : status === 'stalled' ? copy.stalled : aimLine(fresh);
-  const back = layers.front === 'a' ? 'b' : 'a';
-
   const layer = (key: 'a' | 'b') => {
     const uri = layers[key];
     if (uri === null) return null;
@@ -127,9 +154,8 @@ export function AimView({ flow, status }: { flow: Pick<SetupFlow, 'onViewFrame' 
         cachePolicy="none"
         transition={0}
         contentFit="cover"
-        onLoad={() => {
-          if (key === back) setLayers((l) => (l[key] === uri ? { ...l, front: key } : l));
-        }}
+        onLoad={() => setLayers((l) => layersSettled(l, key, uri, true))}
+        onError={() => setLayers((l) => layersSettled(l, key, uri, false))}
         style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, opacity: isFront ? (status === 'stalled' ? 0.5 : 1) : 0, transform: [{ scaleX: -1 }] }}
         accessibilityElementsHidden
         importantForAccessibility="no"

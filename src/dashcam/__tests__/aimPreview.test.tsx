@@ -133,13 +133,68 @@ describe('the picture', () => {
     expect(opacity('b')).toBe(0);
     await act(async () => fireEvent(layer('b'), 'load'));
     expect(opacity('b')).toBe(1);
-    // The next image goes to the other layer, hidden until it loads; a newer one meanwhile replaces it.
+    // The next image goes to the other layer, hidden until it loads.
     await f.image(img(2));
     expect(layer('a').props.source).toEqual({ uri: jpegDataUri(img(2)) });
     expect(opacity('a')).toBe(0);
+    await act(async () => fireEvent(layer('a'), 'load'));
+    expect([opacity('a'), opacity('b')]).toEqual([1, 0]);
+  });
+
+  it('a phone that decodes slower than images arrive: the loading image is never replaced, the newest waits and loads once it is shown', async () => {
+    const f = feed();
+    await show(<Screen f={f} />);
+    const img = (n: number) => [0xff, 0xd8, n, 0xff, 0xd9];
+    const layer = (k: 'a' | 'b') => screen.getByTestId(`aim-layer-${k}`, { includeHiddenElements: true });
+    const opacity = (k: 'a' | 'b') => StyleSheet.flatten(layer(k).props.style).opacity;
+    const uri = (k: 'a' | 'b') => (layer(k).props.source as { uri: string }).uri;
+    // The first image is still loading when two more arrive: it stays, the newest of them waits.
+    await f.image(img(1));
+    await f.image(img(2));
     await f.image(img(3));
-    expect(layer('a').props.source).toEqual({ uri: jpegDataUri(img(3)) });
-    expect(layer('b').props.source).toEqual({ uri: jpegDataUri(img(1)) });
+    expect(uri('b')).toBe(jpegDataUri(img(1)));
+    expect(screen.queryByTestId('aim-layer-a', { includeHiddenElements: true })).toBeNull();
+    await act(async () => fireEvent(layer('b'), 'load'));
+    expect(opacity('b')).toBe(1);
+    expect(uri('a')).toBe(jpegDataUri(img(3)));
+    expect(opacity('a')).toBe(0);
+    // Again while image 3 loads; then it is shown and image 5 loads behind it.
+    await f.image(img(4));
+    await f.image(img(5));
+    expect(uri('a')).toBe(jpegDataUri(img(3)));
+    await act(async () => fireEvent(layer('a'), 'load'));
+    expect([opacity('a'), opacity('b')]).toEqual([1, 0]);
+    expect(uri('b')).toBe(jpegDataUri(img(5)));
+    await act(async () => fireEvent(layer('b'), 'load'));
+    expect([opacity('a'), opacity('b')]).toEqual([0, 1]);
+    // An image that fails to decode is never shown, and the next one still loads.
+    await f.image(img(6));
+    await act(async () => fireEvent(layer('a'), 'error'));
+    expect([opacity('a'), opacity('b')]).toEqual([0, 1]);
+    await f.image(img(7));
+    expect(uri('a')).toBe(jpegDataUri(img(7)));
+    await act(async () => fireEvent(layer('a'), 'load'));
+    expect(opacity('a')).toBe(1);
+  });
+
+  it('the same picture again (a still or covered lens) never stalls the layers', async () => {
+    const f = feed();
+    await show(<Screen f={f} />);
+    const img = (n: number) => [0xff, 0xd8, n, 0xff, 0xd9];
+    const layer = (k: 'a' | 'b') => screen.getByTestId(`aim-layer-${k}`, { includeHiddenElements: true });
+    const opacity = (k: 'a' | 'b') => StyleSheet.flatten(layer(k).props.style).opacity;
+    const uri = (k: 'a' | 'b') => (layer(k).props.source as { uri: string }).uri;
+    await f.image(img(1));
+    await act(async () => fireEvent(layer('b'), 'load'));
+    await f.image(img(2));
+    await act(async () => fireEvent(layer('a'), 'load'));
+    // Image 1 again: the back layer already holds it, so it is shown without a load.
+    await f.image(img(1));
+    expect([opacity('a'), opacity('b')]).toEqual([0, 1]);
+    // Image 1 once more: nothing changes, and a new image still loads.
+    await f.image(img(1));
+    await f.image(img(8));
+    expect(uri('a')).toBe(jpegDataUri(img(8)));
     await act(async () => fireEvent(layer('a'), 'load'));
     expect([opacity('a'), opacity('b')]).toEqual([1, 0]);
   });
