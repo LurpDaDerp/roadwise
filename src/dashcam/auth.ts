@@ -1,26 +1,27 @@
-// The link v2 handshakes and sealed frames, phone side (docs/BLE_PROTOCOL.md §2.2, §3.3). Pure:
-// bytes in, bytes out; randomness is passed in, so the shared vectors reproduce every byte.
+// The link v3 handshakes and sealed frames, phone side (docs/BLE_PROTOCOL.md §2.2, §3.3, §3.4).
+// Pure: bytes in, bytes out; randomness is passed in, so the shared vectors reproduce every byte.
 //
 // AUTH (0006) carries the handshakes. Every well-formed write is answered ATT 0 and its verdict is
 // the AUTH read value: `[0x00]` pending, PAIR_RESP `[0x90][2][B 32][Nd 16][proof_d 16]`,
 // SESSION_RESP `[0xA0][2][Nd 16][proof_d 16]` or RESULT `[0xE0][2][code]`.
 //
-// Pairing: PAIR_REQ `[0x10][2][id_p 8][prev_id 8][prev_proof 16][A 32][Np 16][tag 16]` with
-//   tag        = HMAC(code, "DPv2 pair-req" || mac || Nc || id_p || prev_id || prev_proof || A || Np)[0..16]
-//   prev_proof = HMAC(K_pair of prev_id, "DPv2 replace" || mac || Nc || id_p)[0..16] (zero for none)
-//   T_pair = SHA-256("DPv2 pair" || mac || Nc || id_p || prev_id || prev_proof || A || Np || B || Nd)
-//   OKM = HKDF(salt = code, IKM = X25519(a, B), info = T_pair, 64): K_pair = OKM[0..32], k_conf = OKM[32..64]
-//   proof_d = HMAC(k_conf, "DPv2 dashcam" || T_pair)[0..16], proof_p = HMAC(k_conf, "DPv2 phone" || T_pair)[0..16]
-//   PAIR_FIN `[0x11][2][proof_p 16]`.
+// Pairing, with no shared secret: PAIR_OPEN `[0x12][2][id_p 8][prev_id 8][prev_proof 16][A 32][Np 16]` with
+//   prev_proof = HMAC(K_pair of prev_id, "DPv3 replace" || mac || Nc || id_p)[0..16] (zero for none)
+//   T_pair = SHA-256("DPv3 pair" || mac || Nc || PAIR_OPEN[2..82] || B || Nd)
+//   OKM = HKDF(salt = Nc || Nd, IKM = X25519(a, B), info = T_pair, 64): K_pair = OKM[0..32], k_conf = OKM[32..64]
+//   proof_d = HMAC(k_conf, "DPv3 dashcam" || T_pair)[0..16], proof_p = HMAC(k_conf, "DPv3 phone" || T_pair)[0..16]
+//   PAIR_FIN `[0x11][2][proof_p 16]`. The proofs confirm the key; they do not tell which device answered.
 // Session: SESSION_REQ `[0x20][2][bid 8][Np 16]`, bid = HMAC(K_pair, "DPv2 id" || mac || Nc)[0..8];
 //   T_s = SHA-256("DPv2 session" || mac || id_p || Np || Nd); OKM = HKDF(salt = Np || Nd, IKM = K_pair,
-//   info = T_s, 48): k_dp, k_pd, k_conf; the proofs as above over T_s; SESSION_FIN `[0x21][2][proof_p 16]`.
+//   info = T_s, 48): k_dp, k_pd, k_conf; the proofs as above over T_s ("DPv2" labels);
+//   SESSION_FIN `[0x21][2][proof_p 16]`.
 // Sealed frame: `[ctr u32 LE][AES-128-GCM of the frame][tag 16]`, nonce `[dir][0 x 7][ctr u32 LE]`,
-//   aad `[0x02][dir]`; dir 1 dashcam -> phone (k_dp), 2 phone -> dashcam (k_pd).
+//   aad `[0x02][dir]`; dir 1 dashcam -> phone (k_dp), 2 phone -> dashcam (k_pd), 3 the aiming
+//   picture's VIEW records (k_dp, 1-488 bytes, a counter and replay window of their own).
 import { concat, ctEqual, gcmOpen, gcmSeal, hkdfSha256, hmacSha256, sha256, utf8, wipe, x25519Public, x25519Shared } from './crypto';
 
 export const AUTH_VERSION = 2;
-export const AUTH_MSG = { PAIR_REQ: 0x10, PAIR_FIN: 0x11, SESSION_REQ: 0x20, SESSION_FIN: 0x21 } as const;
+export const AUTH_MSG = { PAIR_REQ: 0x10, PAIR_FIN: 0x11, PAIR_OPEN: 0x12, SESSION_REQ: 0x20, SESSION_FIN: 0x21 } as const;
 export const AUTH_RECORD = { PENDING: 0x00, PAIR_RESP: 0x90, SESSION_RESP: 0xa0, RESULT: 0xe0 } as const;
 
 /** RESULT codes (never ATT statuses). */
@@ -35,9 +36,14 @@ export const R = {
   ID_IN_USE: 0x07,
   STORE_FAILED: 0x08,
   MTU: 0x09,
+  /** PAIR_OPEN's `A` refused (a low-order point): the connection is condemned */
+  BAD_KEY: 0x0a,
+  /** SETUP_RESULT only: the setup hold ran out with its phone connected */
+  EXPIRED: 0x0b,
 } as const;
 export type ResultCode = (typeof R)[keyof typeof R];
 
+export const PAIR_OPEN_LEN = 82;
 export const PAIR_REQ_LEN = 98;
 export const PAIR_RESP_LEN = 66;
 export const SESSION_REQ_LEN = 26;
@@ -48,12 +54,15 @@ export const RESULT_LEN = 3;
 export const ADD_PHONE_TYPE = 0x88;
 export const ADD_PHONE_LEN = 18;
 
-/** dashcam -> phone, phone -> dashcam */
+/** dashcam -> phone, phone -> dashcam, the aiming picture's VIEW records (dashcam -> phone) */
 export const DIR_DP = 0x01;
 export const DIR_PD = 0x02;
+export const DIR_VIEW = 0x03;
 export const SEAL_OVERHEAD = 20;
 export const SEALED_MIN = 22;
 export const SEALED_MAX = 40;
+/** The longest VIEW record (MTU 512 − 3 − 20 − 1, the firmware's limit). */
+export const VIEW_RECORD_MAX = 488;
 export const REPLAY_WINDOW = 64;
 /** The last counter a sender may use: at 2^32 - 1 it ends the connection instead. */
 export const CTR_LAST = 0xfffffffe;
@@ -66,6 +75,13 @@ const LABEL = {
   phone: utf8('DPv2 phone'),
   id: utf8('DPv2 id'),
   session: utf8('DPv2 session'),
+};
+
+const LABEL_V3 = {
+  replace: utf8('DPv3 replace'),
+  pair: utf8('DPv3 pair'),
+  dashcam: utf8('DPv3 dashcam'),
+  phone: utf8('DPv3 phone'),
 };
 
 const mac16 = (key: Uint8Array, ...parts: ArrayLike<number>[]): Uint8Array => hmacSha256(key, ...parts).slice(0, 16);
@@ -172,6 +188,57 @@ export function pairKeys(i: { code: Uint8Array; mac: ArrayLike<number>; nc: Arra
 
 export const pairFin = (proofP: Uint8Array): Uint8Array => concat([AUTH_MSG.PAIR_FIN, AUTH_VERSION], fixed('proof_p', proofP, 16));
 
+// ——— pairing, link v3 ———
+
+export interface PairOpenInputs {
+  /** INFO's 6 mac bytes, most significant first */
+  mac: ArrayLike<number>;
+  /** the link's Nc, from the INFO read just before */
+  nc: ArrayLike<number>;
+  /** this phone's new id (8 bytes, not all zero) */
+  idP: ArrayLike<number>;
+  /** the phone's X25519 private scalar (32 bytes) */
+  a: ArrayLike<number>;
+  /** its public key when already computed; else computed here */
+  A?: ArrayLike<number>;
+  np: ArrayLike<number>;
+  /** a record of this phone on that dashcam to replace: its id and its K_pair (proven by prev_proof) */
+  prev?: { id: ArrayLike<number>; kPair: ArrayLike<number> } | null;
+}
+
+/** PAIR_OPEN (82 bytes): one tap, no code. */
+export function pairOpen(i: PairOpenInputs): PairRequest {
+  const mac = fixed('mac', i.mac, 6);
+  const nc = fixed('Nc', i.nc, 16);
+  const idP = fixed('id_p', i.idP, 8);
+  if (idP.every((b) => b === 0)) throw new Error('id_p must not be zero');
+  const np = fixed('Np', i.np, 16);
+  const A = i.A ? fixed('A', i.A, 32) : x25519Public(fixed('a', i.a, 32));
+  const prevId = i.prev ? fixed('prev_id', i.prev.id, 8) : new Uint8Array(8);
+  const prevProof = i.prev ? mac16(fixed('prev K_pair', i.prev.kPair, 32), LABEL_V3.replace, mac, nc, idP) : new Uint8Array(16);
+  return { bytes: concat([AUTH_MSG.PAIR_OPEN, AUTH_VERSION], idP, prevId, prevProof, A, np), A };
+}
+
+/**
+ * The keys of a v3 pairing from the phone's PAIR_OPEN and the dashcam's PAIR_RESP, or null when the
+ * dashcam's key is refused (a low-order point). `nc` is the Nc the PAIR_OPEN was made over. The
+ * caller checks `proofD` against the response.
+ */
+export function pairKeysV3(i: { mac: ArrayLike<number>; nc: ArrayLike<number>; open: Uint8Array; a: ArrayLike<number>; B: Uint8Array; Nd: Uint8Array }): PairKeys | null {
+  if (i.open.length !== PAIR_OPEN_LEN) throw new Error('PAIR_OPEN must be 82 bytes');
+  const nc = fixed('Nc', i.nc, 16);
+  const nd = fixed('Nd', i.Nd, 16);
+  const z = x25519Shared(fixed('a', i.a, 32), fixed('B', i.B, 32));
+  if (!z) return null;
+  const t = sha256(LABEL_V3.pair, fixed('mac', i.mac, 6), nc, i.open.slice(2, PAIR_OPEN_LEN), i.B, nd);
+  const okm = hkdfSha256(concat(nc, nd), z, t, 64);
+  wipe(z);
+  const K_pair = okm.slice(0, 32);
+  const k_conf = okm.slice(32, 64);
+  wipe(okm);
+  return { T_pair: t, K_pair, k_conf, proofD: mac16(k_conf, LABEL_V3.dashcam, t), proofP: mac16(k_conf, LABEL_V3.phone, t) };
+}
+
 // ——— session ———
 
 /** The blinded session id: never the same twice for one phone, unreadable without K_pair. */
@@ -232,6 +299,12 @@ export function sealRaw(key: Uint8Array, dir: number, ctr: number, frame: ArrayL
   return concat(head, gcmSeal(key, nonceOf(dir, ctr), aadOf(dir), Uint8Array.from(frame)));
 }
 
+/** Seal one VIEW record (1-488 bytes) at `ctr`, direction 3 (the dashcam's side: tests and fakes). */
+export function sealView(key: Uint8Array, ctr: number, record: ArrayLike<number>): Uint8Array {
+  if (record.length < 1 || record.length > VIEW_RECORD_MAX) throw new Error('a VIEW record is 1-488 bytes');
+  return concat(nonceOf(DIR_VIEW, ctr).slice(8, 12), gcmSeal(key, nonceOf(DIR_VIEW, ctr), aadOf(DIR_VIEW), Uint8Array.from(record)));
+}
+
 /** Open a sealed frame: its counter and frame, or null when it is short or its tag does not verify. */
 export function openRaw(key: Uint8Array, dir: number, wire: ArrayLike<number>): { ctr: number; frame: Uint8Array } | null {
   if (wire.length < SEALED_MIN) return null;
@@ -285,6 +358,11 @@ export interface Sealer {
   seal(frame: ArrayLike<number>): Uint8Array | 'spent';
   open(wire: ArrayLike<number>): OpenResult;
   /**
+   * Open a VIEW notification (direction 3, the aiming picture's records) under the session's receive
+   * key, with a replay window of its own (the dashcam counts VIEW apart from TX).
+   */
+  openView(wire: ArrayLike<number>): OpenResult;
+  /**
    * A re-handshake's keys once the dashcam's proof checked: received frames try them first (the
    * dashcam switches when its FIN verifies) and the current key after; sending stays on the current.
    */
@@ -301,7 +379,11 @@ export interface Sealer {
 interface RecvKey {
   key: Uint8Array;
   window: ReplayWindow;
+  /** VIEW records' own window (their counter restarts with every key) */
+  view: ReplayWindow;
 }
+
+const recvKey = (key: ArrayLike<number>): RecvKey => ({ key: Uint8Array.from(key), window: newWindow(), view: newWindow() });
 
 /**
  * The phone's sealer for one session: k_pd out (dir 2), k_dp in (dir 1). `firstCounter` (tests only,
@@ -310,16 +392,16 @@ interface RecvKey {
 export function createSealer(keys: SealerKeys, opts: { firstCounter?: number } = {}): Sealer {
   let send: Uint8Array = Uint8Array.from(keys.send);
   let ctr = opts.firstCounter ?? 0;
-  let recv: RecvKey = { key: Uint8Array.from(keys.recv), window: newWindow() };
+  let recv: RecvKey = recvKey(keys.recv);
   /** a staged or committed newer receive key, tried first */
   let newer: RecvKey | null = null;
   let staged: SealerKeys | null = null;
   let committed = false;
 
-  function tryKey(k: RecvKey, wire: ArrayLike<number>): OpenResult | null {
-    const o = openRaw(k.key, DIR_DP, wire);
+  function tryKey(k: RecvKey, wire: ArrayLike<number>, dir: number = DIR_DP): OpenResult | null {
+    const o = openRaw(k.key, dir, wire);
     if (!o) return null;
-    if (!acceptCounter(k.window, o.ctr)) return { ok: false, why: 'replay' };
+    if (!acceptCounter(dir === DIR_VIEW ? k.view : k.window, o.ctr)) return { ok: false, why: 'replay' };
     return { ok: true, frame: Array.from(o.frame) };
   }
 
@@ -346,6 +428,9 @@ export function createSealer(keys: SealerKeys, opts: { firstCounter?: number } =
       }
       return tryKey(recv, wire) ?? { ok: false, why: 'bad' };
     },
+    openView(wire) {
+      return (newer ? tryKey(newer, wire, DIR_VIEW) : null) ?? tryKey(recv, wire, DIR_VIEW) ?? { ok: false, why: 'bad' };
+    },
     stage(next) {
       if (newer && committed) {
         // An earlier re-handshake's R_OK was read: the dashcam is on its keys, which become current.
@@ -359,7 +444,7 @@ export function createSealer(keys: SealerKeys, opts: { firstCounter?: number } =
         wipe(staged.recv);
       }
       staged = { send: Uint8Array.from(next.send), recv: Uint8Array.from(next.recv) };
-      newer = { key: Uint8Array.from(next.recv), window: newWindow() };
+      newer = recvKey(next.recv);
       committed = false;
     },
     commit() {

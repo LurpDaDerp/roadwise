@@ -1,27 +1,35 @@
-// The phone's link v2 handshakes and sealed frames, byte for byte against the shared vectors
-// (`v2`, written by the firmware's tools/make_auth_vectors.py and reproduced there by mbedTLS).
+// The phone's handshakes and sealed frames, byte for byte against the shared vectors (`v2` frozen,
+// `v3` the link this app speaks; written by the firmware's tools/make_auth_vectors.py and reproduced
+// there by mbedTLS).
 import vectors from '../__fixtures__/ble_vectors.json';
 import {
   acceptCounter,
   addPhoneFrame,
+  AUTH_MSG,
   blindedId,
   createSealer,
   CTR_LAST,
   DIR_DP,
   DIR_PD,
+  DIR_VIEW,
   newWindow,
   openRaw,
+  PAIR_OPEN_LEN,
   pairFin,
   pairKeys,
+  pairKeysV3,
+  pairOpen,
   pairRequest,
   parseAuthRecord,
   proofOk,
   R,
   resultRecord,
   sealRaw,
+  sealView,
   sessionFin,
   sessionKeys,
   sessionRequest,
+  VIEW_RECORD_MAX,
 } from '../auth';
 import { x25519Public, x25519Shared } from '../crypto';
 import { decodeInfo, fromHex, toHex } from '../protocol';
@@ -321,3 +329,147 @@ describe('the v2 INFO vectors', () => {
   });
 });
 
+
+// ——— link v3 ———
+
+interface V3Auth {
+  pair: {
+    a: Hex; A: Hex; b: Hex; B: Hex; nc: Hex; np: Hex; nd: Hex; id_p: Hex; mac: Hex; pair_open: Hex; Z: Hex; T_pair: Hex; K_pair: Hex; k_conf: Hex;
+    proof_d: Hex; proof_p: Hex; pair_resp: Hex; pair_fin: Hex;
+    replace: { prev_id: Hex; prev_K_pair: Hex; id_p: Hex; prev_proof: Hex; pair_open: Hex; expect: string };
+    bad_key: { A: Hex; pair_open: Hex; expect: string };
+  };
+  session_after_pair: {
+    K_pair: Hex; id_p: Hex; mac: Hex; nc: Hex; np: Hex; nd: Hex; bid: Hex; session_req: Hex; T_s: Hex; k_dp: Hex; k_pd: Hex; k_conf: Hex; session_resp: Hex; session_fin: Hex;
+  };
+  results: { code: number; name: string; hex: Hex }[];
+  view: {
+    sealed: { desc: string; dir: number; key: 'k_dp'; ctr: number; record: Hex; wire: Hex }[];
+    sealed_invalid: { desc: string; dir: number; key: 'k_dp'; wire: Hex; accepted?: number[]; expect: 'bad' | 'replay' }[];
+  };
+}
+const V3 = (vectors as unknown as { v3: V3Auth }).v3;
+const P3 = V3.pair;
+const S3 = V3.session_after_pair;
+
+describe('pairing (link v3: PAIR_OPEN, no code)', () => {
+  const base = { mac: b(P3.mac), nc: b(P3.nc), idP: b(P3.id_p), a: b(P3.a), np: b(P3.np) };
+
+  test('PAIR_OPEN, the keys from PAIR_RESP (HKDF salted with Nc || Nd), the proofs and PAIR_FIN', () => {
+    const open = pairOpen(base);
+    expect(toHex(open.A)).toBe(P3.A);
+    expect(toHex(open.bytes)).toBe(P3.pair_open);
+    expect(open.bytes).toHaveLength(PAIR_OPEN_LEN);
+    const resp = parseAuthRecord(b(P3.pair_resp));
+    if (resp.kind !== 'pair_resp') throw new Error('vector');
+    expect(toHex(resp.B)).toBe(P3.B);
+    expect(toHex(resp.Nd)).toBe(P3.nd);
+    const k = pairKeysV3({ mac: base.mac, nc: base.nc, open: open.bytes, a: base.a, B: resp.B, Nd: resp.Nd })!;
+    expect(toHex(x25519Shared(b(P3.a), b(P3.B))!)).toBe(P3.Z);
+    expect(toHex(k.T_pair)).toBe(P3.T_pair);
+    expect(toHex(k.K_pair)).toBe(P3.K_pair);
+    expect(toHex(k.k_conf)).toBe(P3.k_conf);
+    expect(toHex(k.proofD)).toBe(P3.proof_d);
+    expect(proofOk(k.proofD, resp.proofD)).toBe(true);
+    expect(toHex(k.proofP)).toBe(P3.proof_p);
+    expect(toHex(pairFin(k.proofP))).toBe(P3.pair_fin);
+  });
+
+  test('a changed B or Nd fails the dashcam proof (key confirmation); a refused B gives no keys', () => {
+    const open = pairOpen(base);
+    const resp = parseAuthRecord(b(P3.pair_resp));
+    if (resp.kind !== 'pair_resp') throw new Error('vector');
+    const nd = Uint8Array.from(resp.Nd);
+    nd[0] = nd[0]! ^ 1;
+    const k = pairKeysV3({ mac: base.mac, nc: base.nc, open: open.bytes, a: base.a, B: resp.B, Nd: nd })!;
+    expect(proofOk(k.proofD, resp.proofD)).toBe(false);
+    const other = pairKeysV3({ mac: base.mac, nc: base.nc, open: open.bytes, a: base.a, B: x25519Public(new Uint8Array(32).fill(5)), Nd: resp.Nd })!;
+    expect(proofOk(other.proofD, resp.proofD)).toBe(false);
+    expect(pairKeysV3({ mac: base.mac, nc: base.nc, open: open.bytes, a: base.a, B: new Uint8Array(32), Nd: resp.Nd })).toBeNull();
+    expect(() => pairKeysV3({ mac: base.mac, nc: base.nc, open: open.bytes.slice(0, 81), a: base.a, B: resp.B, Nd: resp.Nd })).toThrow();
+  });
+
+  test('replacing a record: prev_proof under its key, bound to the new id and this Nc', () => {
+    const r = P3.replace;
+    const open = pairOpen({ ...base, idP: b(r.id_p), prev: { id: b(r.prev_id), kPair: b(r.prev_K_pair) } });
+    expect(toHex(open.bytes)).toBe(r.pair_open);
+    expect(toHex(open.bytes.slice(18, 34))).toBe(r.prev_proof);
+  });
+
+  test('a low-order A: the vector’s PAIR_OPEN, which the dashcam answers R_BAD_KEY', () => {
+    const bk = P3.bad_key;
+    const bytes = b(bk.pair_open);
+    expect(bytes).toHaveLength(PAIR_OPEN_LEN);
+    expect(bytes[0]).toBe(AUTH_MSG.PAIR_OPEN);
+    expect(toHex(bytes.slice(34, 66))).toBe(bk.A);
+    expect(x25519Shared(b(P3.b), b(bk.A))).toBeNull();
+    expect(bk.expect).toBe('R_BAD_KEY');
+  });
+
+  test('inputs of the wrong size and a zero id are refused before anything is built', () => {
+    expect(() => pairOpen({ ...base, idP: new Uint8Array(8) })).toThrow();
+    expect(() => pairOpen({ ...base, nc: new Uint8Array(15) })).toThrow();
+    expect(() => pairOpen({ ...base, np: new Uint8Array(17) })).toThrow();
+  });
+
+  test('the session right after a pairing, under its new key (the v2 session labels)', () => {
+    expect(S3.K_pair).toBe(P3.K_pair);
+    expect(toHex(sessionRequest(b(S3.K_pair), b(S3.mac), b(S3.nc), b(S3.np)))).toBe(S3.session_req);
+    expect(toHex(blindedId(b(S3.K_pair), b(S3.mac), b(S3.nc)))).toBe(S3.bid);
+    const k = sessionKeys(b(S3.K_pair), b(S3.mac), b(S3.id_p), b(S3.np), b(S3.nd));
+    expect([toHex(k.T_s), toHex(k.k_dp), toHex(k.k_pd), toHex(k.k_conf)]).toEqual([S3.T_s, S3.k_dp, S3.k_pd, S3.k_conf]);
+    const resp = parseAuthRecord(b(S3.session_resp));
+    if (resp.kind !== 'session_resp') throw new Error('vector');
+    expect(proofOk(k.proofD, resp.proofD)).toBe(true);
+    expect(toHex(sessionFin(k.proofP))).toBe(S3.session_fin);
+  });
+
+  test.each(V3.results)('RESULT $name ($code)', (r) => {
+    expect(toHex(resultRecord(r.code))).toBe(r.hex);
+    expect(parseAuthRecord(b(r.hex))).toEqual({ kind: 'result', code: r.code });
+    expect((R as Record<string, number>)[r.name.slice(2)]).toBe(r.code);
+  });
+});
+
+describe('VIEW records (direction 3)', () => {
+  const kdp = b(S3.k_dp);
+
+  test.each(V3.view.sealed)('$desc seals to the vector and opens back', (v) => {
+    expect(v.dir).toBe(DIR_VIEW);
+    expect(toHex(sealView(kdp, v.ctr, b(v.record)))).toBe(v.wire);
+    const o = openRaw(kdp, DIR_VIEW, b(v.wire))!;
+    expect(o.ctr).toBe(v.ctr);
+    expect(toHex(o.frame)).toBe(v.record);
+  });
+
+  test.each(V3.view.sealed_invalid)('$desc: $expect', (v) => {
+    const w = newWindow();
+    for (const c of v.accepted ?? []) expect(acceptCounter(w, c)).toBe(true);
+    const o = openRaw(kdp, DIR_VIEW, b(v.wire));
+    if (v.expect === 'bad') {
+      expect(o).toBeNull();
+      return;
+    }
+    expect(o).not.toBeNull();
+    expect(acceptCounter(w, o!.ctr)).toBe(false);
+  });
+
+  test('a record is 1-488 bytes', () => {
+    expect(sealView(kdp, 0, new Uint8Array(VIEW_RECORD_MAX))).toHaveLength(VIEW_RECORD_MAX + 20);
+    expect(() => sealView(kdp, 0, new Uint8Array(VIEW_RECORD_MAX + 1))).toThrow();
+    expect(() => sealView(kdp, 0, [])).toThrow();
+  });
+
+  test('the sealer opens VIEW records under its receive key with a replay window of their own; a TX frame never opens as VIEW, nor VIEW as TX', () => {
+    const s = createSealer({ send: b(S3.k_pd), recv: kdp });
+    const first = V3.view.sealed[0]!;
+    // a TX frame at the same counter does not use up the VIEW counter
+    expect(s.open(sealRaw(kdp, DIR_DP, first.ctr, [1, 1, 2, 3]))).toEqual({ ok: true, frame: [1, 1, 2, 3] });
+    expect(s.openView(b(first.wire))).toEqual({ ok: true, frame: Array.from(b(first.record)) });
+    expect(s.openView(b(first.wire))).toEqual({ ok: false, why: 'replay' });
+    expect(s.open(b(first.wire))).toEqual({ ok: false, why: 'bad' });
+    expect(s.openView(sealRaw(kdp, DIR_DP, 9, [1, 1, 2, 3]))).toEqual({ ok: false, why: 'bad' });
+    expect(s.openView(new Uint8Array(21))).toEqual({ ok: false, why: 'bad' });
+    for (const v of V3.view.sealed.slice(1)) expect(s.openView(b(v.wire)).ok).toBe(true);
+  });
+});
