@@ -20,7 +20,7 @@ const copy = dashpalCopy.wizard;
 /** The numbered steps: 1 the DashPal and Pair (and connecting), 2 how to aim it. */
 export const STEP_COUNT = 2;
 
-/** The step number a phase shows in the header, or null (search, choose, outcomes, finishing, done). */
+/** The step number a phase shows in the header, or null (search, choose, outcomes, finishing, done, aiming skipped). */
 export function stepNumber(p: SetupPhase): number | null {
   switch (p.kind) {
     case 'confirm':
@@ -30,7 +30,8 @@ export function stepNumber(p: SetupPhase): number | null {
     case 'connected':
       return 1;
     case 'instructions':
-      return 2;
+      // A DashPal the other phone aimed (Add another phone) has no aiming step: no number.
+      return p.aimAllowed ? 2 : null;
     default:
       return null;
   }
@@ -168,7 +169,7 @@ export function PairWizardSheet({
       body = <StepConnecting view={{ kind: phase.kind, name: phase.name }} step={step} />;
       break;
     case 'instructions':
-      body = <StepInstructions holdLeftS={phase.holdLeftS} reconnecting={phase.reconnecting} step={step} onNext={() => flow.next()} />;
+      body = <StepInstructions aimAllowed={phase.aimAllowed} holdLeftS={phase.holdLeftS} reconnecting={phase.reconnecting} step={step} onNext={() => flow.next()} />;
       break;
     case 'finishing':
     case 'stopping':

@@ -16,6 +16,7 @@ import { setActiveDashcam } from '../registry';
 import { createDashpalSecrets } from '../secure';
 import type { SetupDeps, SetupFlow, SetupPhase, SetupStart } from '../setup';
 import { PairWizardSheet, STEP_COUNT } from '../ui/wizard/PairWizardSheet';
+import { StepInstructions } from '../ui/wizard/StepInstructions';
 import { STEP_SETTLED_MS } from '../ui/wizard/StepTransition';
 import { SWIPE_CANCEL_PT } from '../ui/wizard/WizardFrame';
 
@@ -218,6 +219,54 @@ describe('the steps', () => {
     expect(screen.getByTestId('wizard-reconnecting')).toHaveTextContent('Reconnecting…');
     await tap('wizard-next');
     expect(s.answers).toEqual(['next']);
+  });
+
+  it('screen 2 explains how to aim DashPal: its title, the three numbered lines ending with the normal driving position, the privacy line', async () => {
+    const s = await open();
+    await s.to({ kind: 'instructions', aimAllowed: true, holdLeftS: null, reconnecting: false });
+    expect(screen.getByTestId('wizard-instructions-title')).toHaveTextContent('Aim DashPal at your face');
+    expect(screen.getByTestId('wizard-instructions-title').props.accessibilityLabel).toBe(`Step 2 of ${STEP_COUNT}. Aim DashPal at your face`);
+    wiz.instructions.steps.forEach((line, i) => {
+      expect(screen.getByTestId(`wizard-instructions-step-${i + 1}`)).toHaveTextContent(`${i + 1}${line}`);
+      expect(screen.getByTestId(`wizard-instructions-step-${i + 1}`).props.accessibilityLabel).toBe(`${i + 1}. ${line}`);
+    });
+    expect(wiz.instructions.steps[2]).toMatch(/normal driving position/);
+    expect(screen.getByTestId('wizard-instructions-privacy')).toHaveTextContent(wiz.instructions.privacy);
+    expect(screen.getByTestId('wizard-next')).toHaveTextContent('Next');
+    expect(screen.queryByTestId('wizard-instructions-aimed-elsewhere')).toBeNull();
+  });
+
+  it('a DashPal the other phone aimed (Add another phone): it says so, with Next, and no step number', async () => {
+    const s = await open();
+    await s.to({ kind: 'instructions', aimAllowed: false, holdLeftS: null, reconnecting: false });
+    expect(screen.getByTestId('wizard-instructions-aimed-elsewhere')).toHaveTextContent('Your other phone already aimed DashPal.');
+    expect(screen.queryByTestId('wizard-instructions-steps')).toBeNull();
+    expect(stepText()).toHaveTextContent('');
+    await tap('wizard-next');
+    expect(s.answers).toEqual(['next']);
+  });
+
+  it('screen 2 with an aiming picture to start: Start starts it', async () => {
+    const w = await appWorld();
+    const onStart = jest.fn();
+    const onNext = jest.fn();
+    await w.render(<StepInstructions aimAllowed holdLeftS={null} reconnecting={false} step="Step 2 of 3" onStart={onStart} onNext={onNext} />);
+    expect(screen.getByTestId('wizard-start')).toHaveTextContent('Start');
+    expect(screen.queryByTestId('wizard-next')).toBeNull();
+    await tap('wizard-start');
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onNext).not.toHaveBeenCalled();
+  });
+
+  it('screen 2 never starts a picture for a DashPal the other phone aimed: Next', async () => {
+    const w = await appWorld();
+    const onStart = jest.fn();
+    const onNext = jest.fn();
+    await w.render(<StepInstructions aimAllowed={false} holdLeftS={null} reconnecting={false} step={null} onStart={onStart} onNext={onNext} />);
+    expect(screen.queryByTestId('wizard-start')).toBeNull();
+    await tap('wizard-next');
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(onStart).not.toHaveBeenCalled();
   });
 
   it('finishing: “Finishing…” with no Cancel; back and the scrim wait for the answer', async () => {

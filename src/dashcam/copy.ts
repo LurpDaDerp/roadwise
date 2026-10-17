@@ -117,6 +117,7 @@ export const dashpalCopy = {
       privacy: 'The picture goes only to this phone, encrypted. It’s never saved, and it stops when you leave this step. DashPal’s light blinks dash-dot while it sends it.',
       start: 'Start',
       nextSkip: 'Next',
+      aimedElsewhere: 'Your other phone already aimed DashPal.',
     },
     finishing: 'Finishing…',
     done: {
