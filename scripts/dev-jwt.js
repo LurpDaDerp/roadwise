@@ -80,9 +80,11 @@ function mint(secret, apiUrl) {
 }
 
 async function ensureUser(apiUrl, serviceKey) {
+  // A secret key (sb_secret_…) is not a JWT and goes on `apikey` alone; the gateway turns it into
+  // the service role. Only a legacy service_role JWT is also sent as the bearer.
   const headers = {
     apikey: serviceKey,
-    Authorization: `Bearer ${serviceKey}`,
+    ...(serviceKey.startsWith('eyJ') ? { Authorization: `Bearer ${serviceKey}` } : {}),
     'Content-Type': 'application/json',
   };
   const existing = await fetch(`${apiUrl}/auth/v1/admin/users/${sub}`, { headers });
@@ -112,12 +114,12 @@ async function ensureUser(apiUrl, serviceKey) {
 (async () => {
   let secret = process.env.SUPABASE_JWT_SECRET;
   let apiUrl = process.env.SUPABASE_URL || 'http://127.0.0.1:54321';
-  let serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  let serviceKey = process.env.SUPABASE_SECRET_KEY;
   if (!secret || has('--ensure-user') || !process.env.SUPABASE_URL) {
     const s = status();
     secret = secret || s.JWT_SECRET;
     apiUrl = process.env.SUPABASE_URL || s.API_URL || apiUrl;
-    serviceKey = serviceKey || s.SERVICE_ROLE_KEY || s.SECRET_KEY;
+    serviceKey = serviceKey || s.SECRET_KEY || s.SERVICE_ROLE_KEY;
   }
   // The effective URL decides, whatever env or the status output said: nothing is minted for, or
   // written to, a project that is not on this machine.

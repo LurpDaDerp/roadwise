@@ -18,7 +18,7 @@ const mockAuth = {
   getSession: jest.fn(),
 };
 jest.mock('@supabase/supabase-js', () => ({ createClient: jest.fn(() => ({ auth: mockAuth })) }));
-jest.mock('@/lib/env', () => ({ env: { supabaseUrl: 'https://example.supabase.co', supabaseAnonKey: 'anon' } }));
+jest.mock('@/lib/env', () => ({ env: { supabaseUrl: 'https://example.supabase.co', supabasePublishableKey: 'sb_publishable_test' } }));
 jest.mock('@/data/supabase/largeSecureStore', () => ({ LargeSecureStore: class {} }));
 jest.mock('react-native-get-random-values', () => ({}));
 

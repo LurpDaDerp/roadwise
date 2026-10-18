@@ -8,7 +8,7 @@ describe('env', () => {
 
   test('throws a readable error when url missing', () => {
     delete process.env.EXPO_PUBLIC_SUPABASE_URL;
-    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'k';
+    process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY = 'k';
     // The message has to name the variable: "expected string, received undefined" tells nobody
     // which of the six keys to go and set.
     expect(() => require('@/lib/env')).toThrow(/EXPO_PUBLIC_SUPABASE_URL/);
@@ -16,14 +16,14 @@ describe('env', () => {
 
   test('parses when present', () => {
     process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://x.supabase.co';
-    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'k';
+    process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY = 'k';
     expect(require('@/lib/env').env.supabaseUrl).toBe('https://x.supabase.co');
   });
 
   describe('diagnostics flag', () => {
     beforeEach(() => {
       process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://x.supabase.co';
-      process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'k';
+      process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY = 'k';
     });
 
     test('is off when unset', () => {

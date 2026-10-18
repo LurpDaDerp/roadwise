@@ -8,7 +8,7 @@ import { env } from '@/lib/env';
 import { LargeSecureStore } from './largeSecureStore';
 import type { Database } from './types';
 
-export const supabase = createClient<Database>(env.supabaseUrl, env.supabaseAnonKey, {
+export const supabase = createClient<Database>(env.supabaseUrl, env.supabasePublishableKey, {
   auth: {
     storage: new LargeSecureStore(),
     autoRefreshToken: true,

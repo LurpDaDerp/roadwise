@@ -7,7 +7,7 @@
 // Authentication (ruling T2 concern 1, condition 4; task-2-report "fix round 1"). The ONLY
 // credential is `X-Sweep-Signature: <ts>.<sig>`: `sig` is the lower-case hex HMAC-SHA256, keyed by
 // the UTF-8 bytes of `PUSH_SENDER_HMAC_KEY` (the Vault secret `push_sender_hmac_key`, ≥ 32 bytes,
-// never the service-role key or the JWT secret), over `'push-sender-sweep:' || ts`, with `ts` in
+// never the secret key, a legacy service-role key or the JWT secret), over `'push-sender-sweep:' || ts`, with `ts` in
 // unix seconds within ±120 s. It is checked by `_shared/sweep_auth.ts` in constant time before anything else — before the
 // method, before any database call — and a missing, malformed, stale or wrong header is a 401
 // `{ code: 'unauthorized' }`. The header is never logged. The gateway's JWT check is off for this
