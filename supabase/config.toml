@@ -20,7 +20,10 @@ max_rows = 1000
 # `postgres` are reachable through the Data API roles (`anon`, `authenticated`, `service_role`)
 # without explicit GRANTs, matching the cloud default. Set to `false` to require explicit GRANTs
 # instead. Left unset, a fresh project falls back to `true`.
-# auto_expose_new_tables = true
+# Off, as on every hosted project from 2026-10-30 (and every new one since 2026-05-30): nothing in
+# `public` is reachable through the Data API without the explicit GRANT its migration makes, so the
+# local stack and the tests see the same privileges production does.
+auto_expose_new_tables = false
 
 [api.tls]
 # Enable HTTPS endpoints locally using a self-signed certificate.
@@ -433,5 +436,17 @@ additional_redirect_urls = ["roadwise://auth/callback"]
 [remotes.production.auth.email]
 enable_confirmations = true
 
+# Native Sign in with Apple only (expo-apple-authentication + signInWithIdToken): the client id is
+# the App ID and no Services ID or secret is needed.
 [remotes.production.auth.external.apple]
 enabled = true
+client_id = "com.lurp.safedrive"
+
+# Native Google sign-in (expo-auth-session id token + signInWithIdToken). client_id is every OAuth
+# client id, comma-separated, the web one first; the iOS client cannot pass a nonce, hence the skip.
+# The ids come from the root .env (never committed) when `supabase config push` runs. No client
+# secret: it is needed only for the web OAuth redirect flow, which the app never uses.
+[remotes.production.auth.external.google]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
+skip_nonce_check = true

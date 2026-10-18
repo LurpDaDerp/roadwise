@@ -53,7 +53,7 @@ begin new.updated_at = now(); return new; end $$;
 create or replace function public.require_service_role(p_fn text) returns void
 language plpgsql stable set search_path = public as $$
 begin
-  if auth.role() is distinct from 'service_role' then
+  if (select auth.jwt() ->> 'role') is distinct from 'service_role' then
     raise exception '% requires the service role', p_fn using errcode = 'insufficient_privilege';
   end if;
 end $$;
@@ -589,6 +589,9 @@ create policy app_config_public on public.app_config for select to anon, authent
 -- ---------------------------------------------------------------------------
 revoke all on public.profiles, public.consents, public.devices, public.device_league_claims, public.progress,
   public.rate_limits, public.app_config from anon, authenticated;
+-- the server side (the secret key's service_role) is granted explicitly: Supabase no longer does it by default
+grant select, insert, update, delete on public.profiles, public.consents, public.devices, public.device_league_claims, public.progress,
+  public.rate_limits, public.app_config to service_role;
 -- flagged is moderation state: never shown to its owner
 grant select (id, username, license_stage, units, state, heatmap_visibility, league_eligible, onboarded_at, created_at, updated_at)
   on public.profiles to authenticated;
@@ -608,6 +611,7 @@ revoke all on function public.accept_terms(text) from public, anon, authenticate
 revoke all on function public.complete_onboarding(text, text) from public, anon, authenticated;
 revoke all on function public.update_profile(text, text, text, text) from public, anon, authenticated;
 revoke all on function public.register_device(text, text, text) from public, anon, authenticated;
+grant execute on function public.require_service_role(text) to service_role;
 grant execute on function public.take_rate_limit(uuid, text, interval, int) to service_role;
 grant execute on function public.check_username(text) to authenticated;
 grant execute on function public.claim_username(text) to authenticated;

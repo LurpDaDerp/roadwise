@@ -470,6 +470,8 @@ alter table public.job_leases enable row level security;
 create policy notification_prefs_select_own on public.notification_prefs for select to authenticated using (user_id = (select auth.uid()));
 
 revoke all on public.notification_prefs, public.inbox, public.push_deliveries, public.job_leases from anon, authenticated;
+-- the server side (the secret key's service_role) is granted explicitly: Supabase no longer does it by default
+grant select, insert, update, delete on public.notification_prefs, public.inbox, public.push_deliveries, public.job_leases to service_role;
 grant select on public.notification_prefs to authenticated;
 
 revoke all on function public.get_notification_prefs() from public, anon, authenticated;

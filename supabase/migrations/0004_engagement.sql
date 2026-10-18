@@ -212,4 +212,6 @@ alter table public.weekly_challenges enable row level security;
 create policy user_achievements_select_own on public.user_achievements for select to authenticated using (user_id = (select auth.uid()));
 
 revoke all on public.user_achievements, public.challenge_templates, public.weekly_challenges from anon, authenticated;
+-- the server side (the secret key's service_role) is granted explicitly: Supabase no longer does it by default
+grant select, insert, update, delete on public.user_achievements, public.challenge_templates, public.weekly_challenges to service_role;
 grant select on public.user_achievements to authenticated;

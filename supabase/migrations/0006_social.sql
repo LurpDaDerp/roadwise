@@ -813,6 +813,8 @@ alter table public.clans enable row level security;
 alter table public.clan_members enable row level security;
 
 revoke all on public.friend_requests, public.friendships, public.blocks, public.reports, public.clans, public.clan_members from anon, authenticated;
+-- the server side (the secret key's service_role) is granted explicitly: Supabase no longer does it by default
+grant select, insert, update, delete on public.friend_requests, public.friendships, public.blocks, public.reports, public.clans, public.clan_members to service_role;
 
 revoke all on function public.clan_member_gone() from public, anon, authenticated;
 revoke all on function public.clan_leader_required() from public, anon, authenticated;

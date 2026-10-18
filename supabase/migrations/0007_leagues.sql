@@ -256,6 +256,8 @@ end $$;
 alter table public.league_groups enable row level security;
 alter table public.league_members enable row level security;
 revoke all on public.league_groups, public.league_members from anon, authenticated;
+-- the server side (the secret key's service_role) is granted explicitly: Supabase no longer does it by default
+grant select, insert, update, delete on public.league_groups, public.league_members to service_role;
 
 revoke all on function public.get_my_league() from public, anon, authenticated;
 revoke all on function public.get_friends_board(text) from public, anon, authenticated;

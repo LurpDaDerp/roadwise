@@ -299,6 +299,8 @@ alter table public.map_feedback enable row level security;
 alter table public.points_ledger enable row level security;
 
 revoke all on public.trips, public.trip_events, public.event_disputes, public.map_feedback, public.points_ledger from anon, authenticated;
+-- the server side (the secret key's service_role) is granted explicitly: Supabase no longer does it by default
+grant select, insert, update, delete on public.trips, public.trip_events, public.event_disputes, public.map_feedback, public.points_ledger to service_role;
 
 revoke all on function public.list_my_drives(timestamptz, int) from public, anon, authenticated;
 revoke all on function public.get_my_stat_sums(timestamptz) from public, anon, authenticated;
