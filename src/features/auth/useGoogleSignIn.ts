@@ -1,6 +1,10 @@
+import { sha256 } from '@noble/hashes/sha2';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 import { exchangeCodeAsync } from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
+import { getRandomBytes } from 'expo-crypto';
 import * as WebBrowser from 'expo-web-browser';
+import { useState } from 'react';
 import { Platform } from 'react-native';
 
 import { supabase } from '@/data/supabase/client';
@@ -16,6 +20,13 @@ export function useGoogleSignIn(): { signIn: () => Promise<void>; ready: boolean
   });
   const configured = !!platformClientId;
 
+  // A fresh nonce per sign-in screen: Google bakes its SHA-256 into the id token and Supabase checks
+  // the raw value against it, so a token lifted from another sign-in cannot be replayed here.
+  const [nonce] = useState(() => {
+    const raw = bytesToHex(getRandomBytes(32));
+    return { raw, hashed: bytesToHex(sha256(utf8ToBytes(raw))) };
+  });
+
   const [request, , promptAsync] = Google.useIdTokenAuthRequest({
     // expo-auth-session throws an invariant when this platform's client id is `undefined`, which
     // would take the whole sign-in screen down on a build where Google is not configured yet. An
@@ -27,6 +38,7 @@ export function useGoogleSignIn(): { signIn: () => Promise<void>; ready: boolean
     // The hook would otherwise trade the code for a token inside its own effect, where a failure
     // has nowhere to go and a second exchange of a spent code is a race away. `signIn` owns it.
     shouldAutoExchangeCode: false,
+    extraParams: { nonce: nonce.hashed },
   });
 
   /** Google hands installed apps an authorisation code; the id token is one exchange further on. */
@@ -62,6 +74,7 @@ export function useGoogleSignIn(): { signIn: () => Promise<void>; ready: boolean
     const { error } = await supabase.auth.signInWithIdToken({
       provider: 'google',
       token: await idTokenFrom(result.params),
+      nonce: nonce.raw,
     });
     if (error) throw error;
   }

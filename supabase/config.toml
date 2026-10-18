@@ -443,10 +443,11 @@ enabled = true
 client_id = "com.lurp.safedrive"
 
 # Native Google sign-in (expo-auth-session id token + signInWithIdToken). client_id is every OAuth
-# client id, comma-separated, the web one first; the iOS client cannot pass a nonce, hence the skip.
+# client id, comma-separated, the web one first. The app sends a hashed nonce with every request and
+# the raw one to Supabase, so the nonce check stays on.
 # The ids come from the root .env (never committed) when `supabase config push` runs. No client
 # secret: it is needed only for the web OAuth redirect flow, which the app never uses.
 [remotes.production.auth.external.google]
 enabled = true
 client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
-skip_nonce_check = true
+skip_nonce_check = false
