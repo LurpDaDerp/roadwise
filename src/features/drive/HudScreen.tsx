@@ -302,6 +302,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           ink={p.ink}
           ring={p.ink}
           track={p.chromeEdge}
+          size={layout.end.w}
           disabled={busy}
           onHold={() => void onEnd()}
         />

@@ -56,6 +56,16 @@ test('night mode has no pure white and dims every lit colour', () => {
   }
 });
 
+test('the night print and sign are neutral greys (no warm cast), the sign a near-white', () => {
+  const spread = (hex: string) => {
+    const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    return Math.max(...c) - Math.min(...c);
+  };
+  for (const key of ['ink', 'inkMuted', 'signFace'] as const) expect(spread(HUD.night[key])).toBeLessThanOrEqual(16);
+  expect(relativeLuminance(HUD.night.signFace)).toBeGreaterThan(0.7);
+  expect(HUD.day.signFace).toBe('#FFFFFF');
+});
+
 test('small HUD labels follow Dynamic Type between 1x and 2x', () => {
   expect(hudLabelScale(0.8)).toBe(1);
   expect(hudLabelScale(1.5)).toBe(1.5);

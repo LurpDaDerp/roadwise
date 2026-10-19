@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import * as Haptics from 'expo-haptics';
 
 import { HoldButton } from '@/ui/drive/HoldButton';
-import { HOLD_TO_END_MS, HUD_MIN_TARGET_PT } from '@/ui/drive/hudTokens';
+import { END_BUTTON_PT, HOLD_TO_END_MS, HUD_MIN_TARGET_PT } from '@/ui/drive/hudTokens';
 
 jest.mock('expo-haptics', () => ({
   impactAsync: jest.fn(async () => {}),
@@ -95,4 +95,13 @@ test('the target is at least the in-car 64 pt', async () => {
   const style = screen.getByTestId('hold').props.style as { width: number; height: number };
   expect(style.width).toBeGreaterThanOrEqual(HUD_MIN_TARGET_PT);
   expect(style.height).toBeGreaterThanOrEqual(HUD_MIN_TARGET_PT);
+});
+
+test('End is 112 pt by default, its word 24 pt', async () => {
+  expect(END_BUTTON_PT).toBe(112);
+  await renderButton();
+  const style = screen.getByTestId('hold').props.style as { width: number; height: number };
+  expect([style.width, style.height]).toEqual([112, 112]);
+  const word = screen.getByText('End');
+  expect(word).toHaveStyle({ fontSize: 24 });
 });

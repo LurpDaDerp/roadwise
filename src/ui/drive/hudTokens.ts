@@ -4,8 +4,9 @@ import type { Tier } from '@scoring';
  * The driving screen's palette (DESIGN.md "HUD exception"). True black in every light, lit
  * numerals, a speed-limit sign, one colour per event tier — yellow, orange, red, as on the drive
  * summary — for the alert chips, and the halo's own colours: a light blue-white calm ring, a
- * saturated red end, and a white speed inside it. `night` is the same palette dimmed and warmed for
- * eyes adapted to an unlit road, with no pure white; the halo is its one cool element.
+ * saturated red end, and a white speed inside it. `night` is the same palette dimmed for eyes adapted
+ * to an unlit road: neutral greys and a near-white sign, no pure white, nothing warmed. Yellow is
+ * the minor tier's alone: no other mark on the screen wears it.
  *
  * Every foreground/background pair holds at least 7:1 (`HUD_CONTRAST_PAIRS`) and every graphic at
  * least 4.5:1 (`HUD_GRAPHIC_PAIRS`), measured in `__tests__/hudContrast.test.ts`. Literals only:
@@ -61,9 +62,9 @@ const day: HudPalette = {
 
 const night: HudPalette = {
   ground: '#000000',
-  ink: '#E8CDBB',
-  inkMuted: '#B79E8F',
-  signFace: '#D4B8A6',
+  ink: '#E0E3E8',
+  inkMuted: '#A9AEB6',
+  signFace: '#E6E6E6', // a near-white, dimmer than day's
   signInk: '#000000',
   signRing: '#9E2433',
   minor: '#D99A30',
@@ -126,8 +127,8 @@ export const HUD_LIT_KEYS: readonly (keyof HudPalette)[] = [
 
 /** HUD touch targets (DESIGN.md: 64 pt in the car). */
 export const HUD_MIN_TARGET_PT = 64;
-/** The End button and its fill ring. */
-export const END_BUTTON_PT = 96;
+/** The End button and its fill ring (the largest that leaves a 280 pt window two 64 pt side slots). */
+export const END_BUTTON_PT = 112;
 export const END_RING_PT = 6;
 /** Hold-to-end (spec: a 0.5 s ring). */
 export const HOLD_TO_END_MS = 500;

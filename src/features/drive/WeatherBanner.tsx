@@ -16,7 +16,8 @@ function WeatherBannerView({ label, palette: p }: { label: string; palette: HudP
       accessibilityLabel={hudCopy.weatherLabel(label)}
       style={[styles.bar, { backgroundColor: p.chrome, borderColor: p.chromeEdge }]}
     >
-      <Ionicons name="warning" size={20} color={p.minor} />
+      {/* The print's ink, not a tier colour: yellow on this screen means speeding or an event. */}
+      <Ionicons testID="hud-weather-icon" name="warning" size={20} color={p.ink} />
       <Text allowFontScaling={false} numberOfLines={1} style={[styles.text, { color: p.ink }]}>
         {label}
       </Text>

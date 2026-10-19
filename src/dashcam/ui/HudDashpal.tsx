@@ -89,7 +89,8 @@ function DashpalBannerView({ visual, palette }: { visual: DashcamVisual; palette
 export const DashpalHudBanner = memo(DashpalBannerView);
 
 function DashpalChipView({ status, palette }: { status: DashcamStatus; palette: HudPalette }) {
-  const dot = status.dot === 'ok' ? palette.gain : status.dot === 'bad' ? palette.severe : palette.minor;
+  // Not yet linked is a quiet grey, not the minor tier's yellow (that is speeding and events only).
+  const dot = status.dot === 'ok' ? palette.gain : status.dot === 'bad' ? palette.severe : palette.inkMuted;
   return (
     <View
       testID="hud-dashpal-chip"

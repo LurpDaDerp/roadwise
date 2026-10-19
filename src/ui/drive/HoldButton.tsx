@@ -132,7 +132,7 @@ export function HoldButton({
           { width: inner, height: inner, borderRadius: inner / 2, backgroundColor: face, opacity: disabled ? 0.5 : 1 },
         ]}
       >
-        <Text allowFontScaling={false} numberOfLines={1} style={[styles.label, { color: ink }]}>
+        <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={[styles.label, { color: ink }]}>
           {label}
         </Text>
       </View>
@@ -140,7 +140,8 @@ export function HoldButton({
   );
 }
 
-const LABEL_PT = 22;
+/** The printed word: 24 pt on the 94 pt face of the default size, shrinking only to fit a smaller one. */
+const LABEL_PT = 24;
 
 const styles = StyleSheet.create({
   face: { alignItems: 'center', justifyContent: 'center' },

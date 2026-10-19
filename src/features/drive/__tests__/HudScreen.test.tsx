@@ -221,6 +221,9 @@ test('weather: a one-line banner only while an alert is active', async () => {
   expect(screen.queryByTestId('hud-weather')).toBeNull();
   await h.update({ weatherAlert: 'Icy rain' });
   expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Icy rain/);
+  // Yellow is speeding and events only: the weather icon wears the print's ink.
+  expect(screen.getByTestId('hud-weather-icon', HIDDEN)).toHaveStyle({ color: p.ink });
+  expect(screen.getByTestId('hud-weather-icon', HIDDEN)).not.toHaveStyle({ color: p.minor });
   await h.update({ weatherAlert: null });
   expect(screen.queryByTestId('hud-weather')).toBeNull();
 });
@@ -325,6 +328,12 @@ describe('hold to end', () => {
     expect(mockEnd).not.toHaveBeenCalled();
     expect(mockRouter.replace).not.toHaveBeenCalled();
     expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+  });
+
+  test('End is the layout’s 112 pt button', async () => {
+    await renderHud();
+    const style = screen.getByTestId('hud-end').props.style as { width: number; height: number };
+    expect([style.width, style.height]).toEqual([112, 112]);
   });
 
   test('a full hold ends the drive and lands on its fresh summary', async () => {
@@ -588,6 +597,8 @@ describe('DashPal (plan §7.10)', () => {
     expect(screen.getByTestId('hud-dashpal-dot-ok')).toBeTruthy();
     await act(async () => rt.set({ link: { lifecycle: 'connecting' } }));
     expect(screen.getByTestId('hud-dashpal-dot-warn')).toBeTruthy();
+    // Not yet linked is a quiet grey dot, never the minor tier's yellow.
+    expect(screen.getByTestId('hud-dashpal-dot-warn', HIDDEN)).toHaveStyle({ backgroundColor: p.inkMuted });
     await act(async () => rt.set({ link: { lifecycle: 'needs_repair' } }));
     expect(screen.getByTestId('hud-dashpal-dot-bad')).toBeTruthy();
   });

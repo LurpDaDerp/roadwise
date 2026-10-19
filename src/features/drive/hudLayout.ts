@@ -4,11 +4,13 @@
 // - Portrait: the top band (56 pt; with a DashPal paired its right 88 pt are the chip's slot), the
 //   halo in the middle, a bottom row of three equal slots (sign · End · navigation). Spare height
 //   goes to a points line under the halo (so the halo never moves when the car stops), then to a
-//   bigger bottom row (up to 128 pt: a bigger sign), then evenly above and below.
+//   bigger bottom row (up to 144 pt: a bigger sign), then evenly above and below.
 // - Landscape: the halo on the left; the band, the points line and the bottom row on the right.
 // - Compact (a window too small for a 220 pt halo: split screen, a small freeform window): a 40 pt
-//   band, a 96 pt bottom row, bare numerals in between, the unit label under them inside the same
-//   space (never over the row); End stays pinned to the bottom.
+//   band, a bottom row as tall as End, bare numerals in between, the unit label under them inside the
+//   same space (never over the row); End stays pinned to the bottom. End is 112 pt everywhere except
+//   a compact window too short for it and a readable speed (a small split screen at a large font),
+//   where it gives back up to 16 pt.
 import {
   DIGIT_HEIGHT_EM,
   END_BUTTON_PT,
@@ -73,12 +75,16 @@ export const HUD_BAND_PT = 56;
 export const HUD_COMPACT_BAND_PT = 40;
 export const HUD_CHIP_SLOT_PT = 88;
 export const HUD_POINTS_LINE_PT = 46;
-export const HUD_ROW_MAX_PT = 128;
+export const HUD_ROW_MAX_PT = 144;
 /** The navigation button's slot: the 64 pt circle and its one-line caption. */
 export const HUD_NAV_W_PT = 96;
 export const HUD_NAV_H_PT = 88;
 const GAP = 12;
 const COMPACT_GAP = 8;
+/** A compact window's End never shrinks under this… */
+const COMPACT_END_MIN_PT = 96;
+/** …and shrinks only to keep the digits at least this tall (48 pt numerals). */
+const COMPACT_DIGITS_MIN_PT = 34;
 const ROUND_SIGN_MAX_PT = 116;
 
 /** The sign for a slot `slotW` wide in a row `rowH` tall. */
@@ -93,20 +99,20 @@ function signFor(units: 'mi' | 'km', rowH: number, slotW: number): { w: number; 
 }
 
 /** A bottom row's side slots (sign, navigation): a third of the row, or what End leaves them. */
-const sideSlotW = (rowW: number): number => Math.max(0, Math.min(rowW / 3, (rowW - END_BUTTON_PT) / 2 - 4));
+const sideSlotW = (rowW: number, endPt = END_BUTTON_PT): number => Math.max(0, Math.min(rowW / 3, (rowW - endPt) / 2 - 4));
 
 /**
  * The bottom row's items: sign start-aligned, End centred, navigation end-aligned, all centred
  * vertically. The side slots are a third of the row, or what End leaves them in a narrow window.
  */
-function rowItems(row: Rect, units: 'mi' | 'km'): { sign: Rect; end: Rect; nav: Rect } {
-  const sideW = sideSlotW(row.w);
+function rowItems(row: Rect, units: 'mi' | 'km', endPt = END_BUTTON_PT): { sign: Rect; end: Rect; nav: Rect } {
+  const sideW = sideSlotW(row.w, endPt);
   const s = signFor(units, row.h, sideW);
   const navW = Math.min(HUD_NAV_W_PT, sideW);
   const mid = row.y + row.h / 2;
   return {
     sign: { x: row.x, y: mid - s.h / 2, w: s.w, h: s.h },
-    end: { x: row.x + row.w / 2 - END_BUTTON_PT / 2, y: mid - END_BUTTON_PT / 2, w: END_BUTTON_PT, h: END_BUTTON_PT },
+    end: { x: row.x + row.w / 2 - endPt / 2, y: mid - endPt / 2, w: endPt, h: endPt },
     nav: { x: row.x + row.w - navW, y: mid - HUD_NAV_H_PT / 2, w: navW, h: HUD_NAV_H_PT },
   };
 }
@@ -191,7 +197,9 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
 
   // Compact: no ring; End pinned to the bottom whatever is left for the numerals.
   const band: Rect = { x: left, y: top, w: frameW, h: HUD_COMPACT_BAND_PT };
-  const row: Rect = { x: left, y: bottom - END_BUTTON_PT, w: frameW, h: END_BUTTON_PT };
+  const room = frameH - HUD_COMPACT_BAND_PT - 2 * COMPACT_GAP - SPEED_UNIT_GAP_PT - unitLineHeight(unitPt) - COMPACT_DIGITS_MIN_PT;
+  const endPt = Math.max(COMPACT_END_MIN_PT, Math.min(END_BUTTON_PT, Math.floor(room)));
+  const row: Rect = { x: left, y: bottom - endPt, w: frameW, h: endPt };
   const regionTop = top + HUD_COMPACT_BAND_PT + COMPACT_GAP;
   const regionH = Math.max(0, row.y - COMPACT_GAP - regionTop);
   // The readout centres the digits in the box and hangs the label 6 pt under them, so the box is the
@@ -209,7 +217,7 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
     halo: { x: left, y: regionTop, w: frameW, h: boxH, ring: false },
     points: 'line',
     row,
-    ...rowItems(row, i.units),
+    ...rowItems(row, i.units, endPt),
     numeralPt2: pt2,
     numeralPt3: pt3,
     unitPt,
