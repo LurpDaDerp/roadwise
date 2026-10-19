@@ -42,6 +42,16 @@ test('the Leaderboards tab has two boards: Friends and Global, no league', async
   expect(callsTo('get_my_league')).toEqual([]);
 });
 
+test('the title and the pull-to-refresh spinner of both boards are white on the sky', async () => {
+  wire();
+  await renderScreen(<LeaguesScreen />);
+  expect(screen.getByRole('header', { name: 'Leaderboards' })).toHaveStyle({ color: '#FFFFFF' });
+  const tint = (el: { props: unknown }) => (el.props as { refreshControl: { props: { tintColor: string } } }).refreshControl.props.tintColor;
+  expect(tint(await screen.findByTestId('friends-board'))).toBe('#FFFFFF');
+  await fireEvent.press(screen.getByRole('tab', { name: 'Global' }));
+  expect(tint(await screen.findByTestId('global-board'))).toBe('#FFFFFF');
+});
+
 describe('Friends (default)', () => {
   test('weekly points board, your row marked, rows open profiles', async () => {
     wire();

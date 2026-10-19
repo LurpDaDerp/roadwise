@@ -78,7 +78,7 @@ export function FriendsBoard() {
       contentContainerStyle={{ padding: t.space.lg }}
       ItemSeparatorComponent={RowSeparator}
       ListHeaderComponent={header}
-      refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.colors.accent} />}
+      refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.onSky.text} />}
       renderItem={({ item }) => (
         <BoardRow
           rank={item.rank}

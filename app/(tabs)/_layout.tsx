@@ -24,12 +24,13 @@ function tabIcon(outline: IconName, filled: IconName) {
 export default function TabsLayout() {
   const th = useTheme();
   const focused = useIsFocused();
-  // Nothing moves behind Home while a drive records, even with the driver back on the tabs.
+  // Nothing moves behind Home while a drive records, even with the driver back on the tabs; the
+  // status bar still follows the sky whenever the tabs are in front.
   const recording = useDrive((d) => d.status === 'recording');
 
   return (
     <View style={{ flex: 1, backgroundColor: th.colors.bg }}>
-      <SkyBackdrop active={focused && !recording} />
+      <SkyBackdrop active={focused && !recording} front={focused} />
       <Tabs
         tabBar={(props) => <FloatingTabBar {...(props as unknown as FloatingTabBarProps)} />}
         screenOptions={{

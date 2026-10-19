@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { View } from 'react-native';
 
-import { Screen, SegmentedControl, Text, useTheme } from '@/ui';
+import { Screen, ScreenTitle, SegmentedControl, useTheme } from '@/ui';
 
 import { leaguesCopy } from './copy';
 import { FriendsBoard } from './FriendsBoard';
@@ -25,9 +25,7 @@ export function LeaguesScreen({ initial = 'friends' }: { initial?: LeaguesSegmen
   return (
     <Screen padded={false} bottomInset={false} sky testID="leagues-screen">
       <View style={{ paddingHorizontal: t.space.lg, paddingTop: t.space.lg, gap: t.space.md }}>
-        <Text variant="title1" accessibilityRole="header">
-          {leaguesCopy.title}
-        </Text>
+        <ScreenTitle testID="leagues-title">{leaguesCopy.title}</ScreenTitle>
         <SegmentedControl
           segments={SEGMENTS}
           value={segment}

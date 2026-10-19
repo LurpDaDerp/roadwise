@@ -154,7 +154,7 @@ export function GlobalBoard() {
         ListEmptyComponent={
           <EmptyState icon="earth" title={copy.emptyTitle} body={copy.emptyBody(units)} testID="global-empty" />
         }
-        refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.colors.accent} />}
+        refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.onSky.text} />}
         renderItem={({ item }) => (
           <BoardRow
             rank={item.rank}
