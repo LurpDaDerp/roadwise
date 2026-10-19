@@ -58,8 +58,8 @@ function confirm(title: string, body: string | undefined, yes: string, no: strin
 
 /**
  * `/u/<username>`: another driver's public card, the friend button for where the two of you are,
- * their 30-day stats when you're friends or clanmates, their heat map only if they share it with
- * you, and Report / Block. Not found and blocked look the same.
+ * their 30-day stats when you're friends, their heat map only if they share it with you, and
+ * Report / Block. Not found and blocked look the same.
  */
 export function PublicProfileScreen({ username }: { username: string }) {
   const th = useTheme();
@@ -67,7 +67,7 @@ export function PublicProfileScreen({ username }: { username: string }) {
   const profile = useProfile(username);
   const action = useServerAction();
   const [menu, setMenu] = useState(false);
-  const [reporting, setReporting] = useState<'user' | 'clan' | null>(null);
+  const [reporting, setReporting] = useState(false);
   const p = profile.data;
 
   const relate = async (a: RelationAction) => {
@@ -114,9 +114,7 @@ export function PublicProfileScreen({ username }: { username: string }) {
         level={p.level}
         safetyRating={p.safety_rating}
         ranked={p.ranked}
-        tier={p.league_tier}
         streak={p.streak}
-        clanName={p.clan?.name ?? null}
       />
       {action.error ? <Banner tone="danger" message={action.error} testID="relationship-error" /> : null}
       <RelationshipButtons rel={p.relationship} pending={action.pending !== null} onPress={(a) => void relate(a)} />
@@ -130,16 +128,10 @@ export function PublicProfileScreen({ username }: { username: string }) {
       {p.can_view_heatmap && others ? <MemberHeatmap userId={p.user_id} /> : null}
 
       <Sheet visible={menu} onClose={() => setMenu(false)} title={p.username} testID="profile-menu">
-        <Button label={copy.report} icon="flag-outline" variant="secondary" onPress={() => { setMenu(false); setReporting('user'); }} testID="profile-report" />
-        {p.clan ? (
-          <Button label={copy.reportClan(p.clan.name)} icon="flag-outline" variant="secondary" onPress={() => { setMenu(false); setReporting('clan'); }} testID="profile-report-clan" />
-        ) : null}
+        <Button label={copy.report} icon="flag-outline" variant="secondary" onPress={() => { setMenu(false); setReporting(true); }} testID="profile-report" />
         <Button label={copy.block} icon="ban-outline" variant="destructive" onPress={() => void block()} testID="profile-block" />
       </Sheet>
-      <ReportSheet visible={reporting === 'user'} onClose={() => setReporting(null)} kind="user" targetId={p.user_id} name={p.username} />
-      {p.clan ? (
-        <ReportSheet visible={reporting === 'clan'} onClose={() => setReporting(null)} kind="clan" targetId={p.clan.id} name={copy.clan(p.clan.name)} />
-      ) : null}
+      <ReportSheet visible={reporting} onClose={() => setReporting(false)} targetId={p.user_id} name={p.username} />
     </Screen>
   );
 }

@@ -1,4 +1,4 @@
-/** The Profile tab, public profile, achievements and heat map words. Usernames only, ever. */
+/** The Profile tab, public profile, achievements and heat map privacy words. Usernames only, ever. */
 export const profileCopy = {
   tab: 'Profile',
   level: (n: number) => `Level ${n}`,
@@ -8,8 +8,9 @@ export const profileCopy = {
   unranked: 'Unranked',
   unrankedMiles: (progress: string) => `${progress} to rank`,
   streak: 'Streak',
-  league: 'League',
   points: 'Points',
+  freezes: 'Freezes',
+  freezesHeld: (held: number, max: number) => `${held} of ${max}`,
   loadError: "Couldn't load your profile.",
   retry: 'Try again',
 
@@ -24,7 +25,7 @@ export const profileCopy = {
   rows: {
     friends: { title: 'Friends', subtitle: 'Add by username or QR code' },
     requests: (n: number) => (n === 1 ? '1 request' : `${n} requests`),
-    heatmap: { title: 'Heat map', subtitle: 'The roads you drive most' },
+    heatmap: { title: 'Heat map', subtitle: 'Who can see your routes' },
     how: { title: 'How points work', subtitle: 'Miles, events, streaks and levels' },
     settings: { title: 'Settings', subtitle: 'Privacy, alerts, notifications' },
     account: { title: 'Account', subtitle: 'Sign out, export or delete' },
@@ -33,15 +34,13 @@ export const profileCopy = {
 
   heatmap: {
     title: 'Heat map',
-    privacy:
-      'Built from your own drives on this phone. Routes inside your privacy zones and the first and last quarter mile of every drive are always left out.',
+    intro: 'Your heat map shows the roads you drive most. You can see yours in Analytics.',
     visibility: 'Who can see it',
-    visibilityHint: 'Only me is the default. Clan or Friends lets them see it on your profile.',
-    empty: 'Nothing here yet',
-    emptyBody: 'Your heat map fills in as you drive. The roads you take most glow brightest.',
-    noMap: "Maps aren't available in this build.",
-    drives: (n: number) => (n === 1 ? '1 drive' : `${n} drives`),
+    visibilityHint: 'Only me is the default. Friends see it on your profile.',
     zones: 'Privacy zones',
+    zonesSubtitle: 'Hide routes near home or school',
+    privacy: 'Routes in your privacy zones and the first and last quarter mile of every drive are always left out.',
+    noMap: "Maps aren't available in this build.",
   },
 
   achievementHints: {
@@ -70,14 +69,11 @@ export const profileCopy = {
     report: 'Report',
     block: 'Block',
     blockTitle: (u: string) => `Block ${u}?`,
-    blockBody:
-      "They won't be able to find you, add you or invite you to a clan, and you won't see each other on boards. You can unblock them in Settings.",
+    blockBody: "They won't be able to find you or add you, and you won't see each other on boards. You can unblock them in Settings.",
     cancel: 'Cancel',
     stats: 'Last 30 days',
     statsEmpty: 'No drives in the last 30 days.',
     heatmap: 'Heat map',
-    clan: (name: string) => `Clan ${name}`,
-    reportClan: (name: string) => `Report clan ${name}`,
     reportTitle: (u: string) => `Report ${u}`,
     reportIntro: 'What’s wrong? Reports are private. They never learn who sent one.',
     reportReasons: {

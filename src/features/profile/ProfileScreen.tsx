@@ -6,7 +6,7 @@ import { useMySummary } from '@/data/server/summary';
 import { useFriends } from '@/features/social/api';
 import { LinkRow, Section } from '@/features/settings/parts';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
-import { Banner, Card, Pill, SectionHeader, Skeleton, Text, useTheme } from '@/ui';
+import { Banner, Card, Pill, ScreenTitle, SectionHeader, Skeleton, useTheme } from '@/ui';
 
 import { AchievementBadges } from './AchievementBadges';
 import { profileCopy as copy } from './copy';
@@ -19,8 +19,10 @@ export const PROFILE_HREFS = {
 } as const;
 
 /**
- * The Profile tab: the public card (what others see), the five achievements, then everything about
- * you and your account — friends, heat map, how points work, settings, account and blocked users.
+ * The Profile tab: the public card (what others see, plus your points and freezes), the five
+ * achievements, then everything about you and your account: friends, who can see your heat map, how
+ * points work, settings, account and blocked users. It sits on the page sky, so the title uses the
+ * white sky ink and the pull-to-refresh spinner does too.
  */
 export function ProfileScreen() {
   const th = useTheme();
@@ -40,13 +42,13 @@ export function ProfileScreen() {
         <RefreshControl
           refreshing={summary.isRefetching}
           onRefresh={() => void Promise.all([summary.refetch(), friends.refetch()])}
-          tintColor={th.colors.accent}
+          tintColor={th.onSky.text}
         />
       }
     >
-      <Text variant="title1" accessibilityRole="header">
+      <ScreenTitle onSky testID="profile-title">
         {copy.tab}
-      </Text>
+      </ScreenTitle>
 
       {data && data.profile.username ? (
         <ProfileHeader
@@ -55,15 +57,16 @@ export function ProfileScreen() {
           level={data.progress.level}
           safetyRating={data.progress.safety_rating}
           ranked={data.progress.ranked}
-          tier={data.league.tier ?? data.progress.league_tier}
           streak={data.progress.streak}
           own={{
+            points: data.progress.points,
             lifetime: data.progress.lifetime,
             levelFloor: data.progress.level_floor,
             levelNext: data.progress.level_next,
             miles30d: data.progress.miles_30d,
             nextMult: data.progress.next_mult,
             atRisk: data.progress.at_risk,
+            freezes: data.progress.freezes,
           }}
         />
       ) : summary.isError ? (

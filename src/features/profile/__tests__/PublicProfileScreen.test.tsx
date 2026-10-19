@@ -171,20 +171,12 @@ describe('moderation', () => {
     expect(await screen.findByTestId('report-sent')).toBeOnTheScreen();
   });
 
-  it('their clan can be reported too', async () => {
+  it('the menu reports only the driver, even when the server still sends an old clan', async () => {
     await show(profile({ clan: { id: 'c-owls', name: 'Night Owls' } }));
     await tap('profile-more');
-    await tap('profile-report-clan');
-    await tap('report-harassment');
-    await waitFor(() =>
-      expect(mockRpc).toHaveBeenCalledWith('report_target', { p_kind: 'clan', p_target_id: 'c-owls', p_reason: 'harassment', p_note: '' })
-    );
-  });
-
-  it('no clan, no clan report', async () => {
-    await show(profile());
-    await tap('profile-more');
+    expect(screen.getByTestId('profile-report')).toBeOnTheScreen();
     expect(screen.queryByTestId('profile-report-clan')).toBeNull();
+    expect(screen.queryByText(/clan/i)).toBeNull();
   });
 
   it('not found (or blocked) is one friendly empty state', async () => {
@@ -194,7 +186,19 @@ describe('moderation', () => {
   });
 });
 
-describe('what friends and clanmates see', () => {
+describe('what friends see', () => {
+  it('the card has no league tier and no clan name', async () => {
+    await show(profile({ league_tier: 'gold', clan: { id: 'c-owls', name: 'Night Owls' } }));
+    expect(await screen.findByTestId('profile-username')).toHaveTextContent('swift_fox');
+    expect(screen.getByTestId('profile-level')).toHaveTextContent(/^Level 4$/);
+    expect(screen.getByLabelText('Safety Rating 91')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Streak 6')).toBeOnTheScreen();
+    expect(screen.queryByText(/gold|league|clan|night owls/i)).toBeNull();
+    // Points and freezes are only on your own card.
+    expect(screen.queryByTestId('profile-points')).toBeNull();
+    expect(screen.queryByTestId('profile-freezes')).toBeNull();
+  });
+
   it('stats only when allowed', async () => {
     mockRpc.mockImplementation(async (fn: string) => {
       if (fn === 'get_profile') return profile({ relationship: 'friend', can_view_stats: true });

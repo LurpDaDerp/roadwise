@@ -10,19 +10,17 @@ import { REPORT_REASONS, useServerAction, type ReportReason } from './api';
 const copy = profileCopy.public;
 
 /**
- * Report a driver (or a clan): one tap on a reason sends it (`report_target`). Reports are private;
- * the sheet thanks the reporter and closes.
+ * Report a driver: one tap on a reason sends it (`report_target` with kind `'user'`). Reports are
+ * private; the sheet thanks the reporter and closes.
  */
 export function ReportSheet({
   visible,
   onClose,
-  kind,
   targetId,
   name,
 }: {
   visible: boolean;
   onClose: () => void;
-  kind: 'user' | 'clan';
   targetId: string;
   name: string;
 }) {
@@ -31,7 +29,7 @@ export function ReportSheet({
   const [sent, setSent] = useState(false);
 
   const send = async (reason: ReportReason) => {
-    const ok = await action.run('report_target', { p_kind: kind, p_target_id: targetId, p_reason: reason, p_note: '' });
+    const ok = await action.run('report_target', { p_kind: 'user', p_target_id: targetId, p_reason: reason, p_note: '' });
     if (ok) setSent(true);
   };
 

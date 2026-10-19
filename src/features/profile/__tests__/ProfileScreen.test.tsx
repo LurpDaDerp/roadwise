@@ -1,14 +1,16 @@
 /**
- * The Profile tab and achievements: the public card from `get_my_summary`, the five achievements
- * locked or unlocked, the entries, and the progress hints.
+ * The Profile tab and achievements: the public card from `get_my_summary` (Safety Rating, streak,
+ * points and freezes; no league), the five achievements locked or unlocked, the entries, the
+ * progress hints, and the heat map row's privacy-only screen.
  */
-import { screen } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react-native';
 
 import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
 
 import { achievementViews } from '../achievements';
 import { AchievementsScreen } from '../AchievementsScreen';
 import { profileCopy } from '../copy';
+import { HeatmapScreen } from '../HeatmapScreen';
 import { PROFILE_HREFS, ProfileScreen } from '../ProfileScreen';
 
 const mockRpc = jest.fn();
@@ -27,11 +29,13 @@ jest.mock('expo-router', () => {
   };
 });
 
-const summary = (over: { ranked?: boolean; achievements?: string[] } = {}) => ({
-  profile: { user_id: 'me', username: 'swift_fox', units: 'mi', heatmap_visibility: 'only_me' },
+const summary = (
+  over: { ranked?: boolean; achievements?: string[]; freezes?: number; points?: number; heatmap?: string } = {}
+) => ({
+  profile: { user_id: 'me', username: 'swift_fox', units: 'mi', heatmap_visibility: over.heatmap ?? 'only_me' },
   progress: {
-    points: 820, lifetime: 900, level: 3, level_floor: 750, level_next: 1500, streak: 7, at_risk: false,
-    next_mult: 1.16, freezes: 2, clean_run: 1, freeze_progress: 0, phone_free_run: 12,
+    points: over.points ?? 820, lifetime: 900, level: 3, level_floor: 750, level_next: 1500, streak: 7, at_risk: false,
+    next_mult: 1.16, freezes: over.freezes ?? 2, clean_run: 1, freeze_progress: 0, phone_free_run: 12,
     safety_rating: over.ranked === false ? 88 : 92.4, ranked: over.ranked ?? true, miles_30d: 14.6,
     clean_miles_30d: 10, rating_trend: 1.2, league_tier: 'silver',
   },
@@ -55,7 +59,10 @@ it('shows the public card, the achievements and a badge for friend requests', as
   const w = await appWorld();
   await w.render(<ProfileScreen />);
   expect(await screen.findByTestId('profile-username')).toHaveTextContent('swift_fox');
+  expect(screen.getByTestId('profile-level')).toHaveTextContent('Level 3');
+  expect(screen.getByText('600 pts to level 4')).toBeOnTheScreen();
   expect(screen.getByLabelText('Safety Rating 92')).toBeOnTheScreen();
+  expect(screen.getByLabelText('Streak 7')).toBeOnTheScreen();
   expect(screen.getByTestId('achievement-first_drive-unlocked')).toBeOnTheScreen();
   expect(screen.getByTestId('achievement-streak_10-unlocked')).toBeOnTheScreen();
   expect(screen.getByTestId('achievement-clean_100-locked')).toBeOnTheScreen();
@@ -89,4 +96,78 @@ it('the achievements screen lists all five with their state', async () => {
   await w.render(<AchievementsScreen />);
   expect(await screen.findByText(profileCopy.achievements.count(1, 5))).toBeOnTheScreen();
   expect(screen.getByTestId('achievement-hint-streak_10')).toHaveTextContent('Your streak is 7. Reach 10.');
+});
+
+const NO_FRIENDS = { friends: [], incoming: [], outgoing: [] };
+
+it('the card shows points and freezes (N of 3), and no league', async () => {
+  answerRpc(mockRpc, { get_my_summary: summary({ points: 12345, freezes: 2 }), list_friends: NO_FRIENDS });
+  const w = await appWorld();
+  await w.render(<ProfileScreen />);
+  expect(await screen.findByTestId('profile-points')).toHaveTextContent(/12,345/);
+  expect(screen.getByLabelText('Points 12,345')).toBeOnTheScreen();
+  expect(screen.getByTestId('profile-freezes')).toHaveTextContent(/2 of 3/);
+  expect(screen.getByLabelText('Freezes 2 of 3')).toBeOnTheScreen();
+  expect(screen.queryByText(/league/i)).toBeNull();
+  expect(screen.queryByText(/silver/i)).toBeNull();
+  expect(screen.queryByText(/clan/i)).toBeNull();
+});
+
+it.each([
+  [0, '0 of 3'],
+  [3, '3 of 3'],
+])('freezes always show: %i held reads "%s"', async (freezes, text) => {
+  answerRpc(mockRpc, { get_my_summary: summary({ freezes }), list_friends: NO_FRIENDS });
+  const w = await appWorld();
+  await w.render(<ProfileScreen />);
+  expect(await screen.findByTestId('profile-freezes')).toHaveTextContent(new RegExp(text));
+});
+
+it('the title is a header on the sky', async () => {
+  answerRpc(mockRpc, { get_my_summary: summary(), list_friends: NO_FRIENDS });
+  const w = await appWorld();
+  await w.render(<ProfileScreen />);
+  expect(await screen.findByTestId('profile-title')).toHaveTextContent(profileCopy.tab);
+  expect(screen.getByRole('header', { name: profileCopy.tab })).toBeOnTheScreen();
+});
+
+describe('the heat map row opens who can see it', () => {
+  it('has the visibility choice, the zones link and the privacy note, and no map', async () => {
+    answerRpc(mockRpc, { get_my_summary: summary(), update_profile: {} });
+    const w = await appWorld();
+    await w.render(<HeatmapScreen />);
+    expect(await screen.findByTestId('heatmap-screen')).toBeOnTheScreen();
+    expect(screen.getByTestId('heatmap-intro')).toHaveTextContent(profileCopy.heatmap.intro);
+    expect(screen.getByTestId('heatmap-privacy')).toHaveTextContent(profileCopy.heatmap.privacy);
+    expect(screen.getByTestId('heatmap-visibility-hint')).toHaveTextContent('Only me is the default. Friends see it on your profile.');
+    expect(screen.queryByTestId('heatmap-map')).toBeNull();
+    expect(screen.queryByTestId('heatmap-empty')).toBeNull();
+    expect(screen.queryByText(/clan/i)).toBeNull();
+    await tap('heatmap-zones');
+    expect(mockRouter.push).toHaveBeenLastCalledWith('/settings/privacy-zones');
+  });
+
+  it('offers Only me and Friends, shows the saved choice, and saves a change', async () => {
+    answerRpc(mockRpc, { get_my_summary: summary({ heatmap: 'friends' }), update_profile: {} });
+    const w = await appWorld();
+    await w.render(<HeatmapScreen />);
+    const control = within(await screen.findByTestId('heatmap-visibility'));
+    await waitFor(() => expect(control.getByRole('tab', { name: 'Friends' })).toBeSelected());
+    expect(control.getAllByRole('tab').map((t) => t.props.accessibilityLabel)).toEqual(['Only me', 'Friends']);
+    await act(async () => {
+      fireEvent.press(control.getByRole('tab', { name: 'Only me' }));
+    });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_heatmap_visibility: 'only_me' }));
+    expect(control.getByRole('tab', { name: 'Only me' })).toBeSelected();
+  });
+
+  it('a saved clan setting shows as Only me, as the server treats it', async () => {
+    answerRpc(mockRpc, { get_my_summary: summary({ heatmap: 'clan' }) });
+    const w = await appWorld();
+    await w.render(<HeatmapScreen />);
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('get_my_summary', undefined));
+    const control = within(await screen.findByTestId('heatmap-visibility'));
+    await waitFor(() => expect(control.getByRole('tab', { name: 'Only me' })).toBeSelected());
+    expect(control.getByRole('tab', { name: 'Friends' })).not.toBeSelected();
+  });
 });
