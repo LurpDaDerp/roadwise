@@ -4,6 +4,7 @@ export const analyticsCopy = {
   error: "Couldn't load your drives.",
   radar: {
     rating: 'Safety Rating',
+    outOf: '/100',
     window: 'Last 30 days',
     noScore: 'no score yet',
   },

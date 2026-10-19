@@ -99,7 +99,7 @@ const shown = (s: number | null): string => (s === null ? '—' : String(s));
 /** The whole radar for a screen reader: the rating, then every axis. */
 export function radarLabel(rating: number | null, scores: AxisScores): string {
   const axes = AXES.map((a) => `${a.label} ${scores[a.key] === null ? 'no data' : scores[a.key]}`).join(', ');
-  const head = rating === null ? `${analyticsCopy.radar.rating}, ${analyticsCopy.radar.noScore}` : `${analyticsCopy.radar.rating} ${rating}`;
+  const head = rating === null ? `${analyticsCopy.radar.rating}, ${analyticsCopy.radar.noScore}` : `${analyticsCopy.radar.rating} ${rating} out of 100`;
   return `${head}. ${axes}.`;
 }
 
@@ -121,6 +121,7 @@ export function RadarCard({ rating, scores }: { rating: number | null; scores: A
       .map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)
       .join(' ');
   const shownRating = rating === null ? '—' : String(Math.round(rating));
+  const halo = { textShadowColor: t.colors.surface, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6 };
 
   return (
     <Card testID="analytics-radar">
@@ -146,9 +147,11 @@ export function RadarCard({ rating, scores }: { rating: number | null; scores: A
             strokeWidth={2}
             strokeLinejoin="round"
           />
+          {/* No dot for an axis with no score: it would only pile up under the centre number. */}
           {values.map((s, i) => {
-            const p = radarPoint(i, n, (Math.max(0, Math.min(100, s ?? 0)) / 100) * r, c);
-            return <Circle key={AXES[i]!.key} cx={p.x} cy={p.y} r={3} fill={t.colors.text} />;
+            if (s === null) return null;
+            const p = radarPoint(i, n, (Math.max(0, Math.min(100, s)) / 100) * r, c);
+            return <Circle key={AXES[i]!.key} cx={p.x} cy={p.y} r={3} fill={t.colors.text} testID={`radar-dot-${AXES[i]!.key}`} />;
           })}
         </Svg>
         {AXES.map((a, i) => {
@@ -170,10 +173,18 @@ export function RadarCard({ rating, scores }: { rating: number | null; scores: A
           );
         })}
         <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' }}>
-          <Text variant="display" testID="radar-rating">
-            {shownRating}
-          </Text>
-          <Text variant="caption" tone="muted">
+          {/* A halo in the card's colour keeps the shape's lines from running through the glyphs. */}
+          <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
+            <Text variant="display" testID="radar-rating" style={halo}>
+              {shownRating}
+            </Text>
+            {rating === null ? null : (
+              <Text variant="footnote" tone="muted" testID="radar-out-of" style={halo}>
+                {analyticsCopy.radar.outOf}
+              </Text>
+            )}
+          </View>
+          <Text variant="caption" tone="muted" style={halo}>
             {analyticsCopy.radar.rating}
           </Text>
         </View>

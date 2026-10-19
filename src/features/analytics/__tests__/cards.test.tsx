@@ -38,7 +38,11 @@ describe('RadarCard', () => {
   test('the Safety Rating sits in the middle as a whole number, with every axis and its score around it', async () => {
     await draw(<RadarCard rating={92.4} scores={SCORES} />);
     expect(screen.getByTestId('radar-rating')).toHaveTextContent('92');
+    expect(screen.getByTestId('radar-out-of')).toHaveTextContent('/100');
     expect(screen.getByText('Safety Rating')).toBeOnTheScreen();
+    // a card-coloured halo keeps the shape's lines out of the centre number
+    expect(screen.getByTestId('radar-rating')).toHaveStyle({ textShadowColor: light.surface });
+    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(6);
     for (const [label, score] of [
       ['Speeding', '88'],
       ['Braking', '72'],
@@ -55,7 +59,7 @@ describe('RadarCard', () => {
 
   test('one summary label for a screen reader lists the rating and every axis', async () => {
     await draw(<RadarCard rating={92.4} scores={SCORES} />);
-    const label = 'Safety Rating 92. Speeding 88, Braking 72, Acceleration 95, Cornering 100, Phone use 60, Clean drives 50.';
+    const label = 'Safety Rating 92 out of 100. Speeding 88, Braking 72, Acceleration 95, Cornering 100, Phone use 60, Clean drives 50.';
     expect(screen.getByLabelText(label)).toBeOnTheScreen();
     expect(screen.getByLabelText(label).props.accessibilityRole).toBe('image');
   });
@@ -63,7 +67,10 @@ describe('RadarCard', () => {
   test('no rating and no data: dashes everywhere, the shape folds to the centre', async () => {
     await draw(<RadarCard rating={null} scores={NO_SCORES} />);
     expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
+    expect(screen.queryByTestId('radar-out-of')).toBeNull();
     expect(screen.getAllByText('—')).toHaveLength(7);
+    // no dots pile up under the dash for axes with no score
+    expect(screen.queryAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(0);
     expect(radarLabel(null, NO_SCORES)).toBe(
       'Safety Rating, no score yet. Speeding no data, Braking no data, Acceleration no data, Cornering no data, Phone use no data, Clean drives no data.'
     );
