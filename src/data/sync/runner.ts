@@ -22,7 +22,7 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
 import type { EventRow, QueueItem, TripRow, TripStatus } from '@/data/db/types';
 import { emitDataChanged, onDataChanged } from '@/data/events';
-import { countEvents } from '@/data/queries/rows';
+import { countEvents, parseResult } from '@/data/queries/rows';
 import { isSyncKind } from '@/data/sync/kinds';
 import { FinalizeTripPayloadV3Schema, FinalizeTripResponseV3Schema, type FinalizeTripResponseV3, type DriveBreakdownWire } from '@/data/sync/payload';
 import { deviceOwnerIs, SESSION_UID_KEY, TripActionSchema, type TripAction } from '@/data/sync/queue';
@@ -261,6 +261,9 @@ export async function applyDisputeResult(
       if (penalty !== e.penalty) await events.update(e.id, { penalty }, tx);
     }
   }
+  // the summary reads its gains from the stored server answer: keep it in step with the re-score
+  // (a removed event can add the clean bonus), so Earned minus the deductions is still the total
+  const prior = result.breakdown ? parseResult(trip.result_json) : null;
   await trips.update(
     action.clientTripId,
     {
@@ -269,6 +272,7 @@ export async function applyDisputeResult(
       clean: trip.status === 'scored' ? (activeCount === 0 ? 1 : 0) : trip.clean,
       counts_json: JSON.stringify(countEvents(remaining)),
       ...(result.breakdown ? { breakdown_json: JSON.stringify(result.breakdown) } : {}),
+      ...(prior && result.breakdown ? { result_json: JSON.stringify({ ...prior, breakdown: result.breakdown, net: result.net }) } : {}),
     },
     now,
     tx

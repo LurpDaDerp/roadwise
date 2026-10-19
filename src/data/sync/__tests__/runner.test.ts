@@ -8,6 +8,8 @@ import { createFakeAppState, createFakeSupabase, functionsFetchError, functionsH
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import type { FinalizeTripResponseV3 } from '@/data/sync/payload';
 import { emitDataChanged } from '@/data/events';
+import { toLocalDrive, toLocalDriveEvent } from '@/data/queries/rows';
+import { receipt } from '@/features/drives/summary';
 import { createSyncRunner, FOREIGN_OWNER_RETRY_MS, joinPolylines, NO_SESSION_RETRY_MS } from '@/data/sync/runner';
 import { encodePolyline, splitRuns } from '@/lib/polyline';
 
@@ -278,6 +280,35 @@ test('drive actions: a report goes pending, the server’s acceptance removes th
   await r2.drainOnce();
   await r2.stop();
   expect(await createEventsRepo(db).get(uuid(2))).toMatchObject({ dispute_status: 'rejected', status: 'active', dispute_message: expect.stringContaining('reason') });
+});
+
+test('an accepted report that leaves the drive clean refreshes the stored answer, so Earned minus the deductions is the total', async () => {
+  await finalized(uuid(10), T0, uuid(1));
+  const sync = createFakeSupabase({ invoke: () => invokeOk(response(uuid(10))) });
+  const r = runner(sync);
+  await r.start();
+  await r.drainOnce();
+  await r.stop();
+  await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db });
+  // the server re-scores: with no event left the clean bonus applies, so gains go up too
+  const rescored = { ...response(uuid(10)).breakdown, cleanBonus: 25 as const, gains: 149, events: [], penalties: 0, net: 149, ratingPenalty: 0, activeEventCount: 0 };
+  const accepting = createFakeSupabase({
+    invoke: () =>
+      invokeOk({ tripId: uuid(77), eventId: uuid(1), status: 'accepted', rejectReason: null, net: 149, delta: 43, quotaLeft: 2, breakdown: rescored, progress: { points: 1, lifetime: 1, level: 1, levelUp: false, safetyRating: null, ranked: false } }),
+  });
+  const r2 = runner(accepting);
+  await r2.start();
+  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+  expect(await r2.drainOnce()).toMatchObject({ done: 1 });
+  await r2.stop();
+  const trip = (await createTripsRepo(db).get(uuid(10)))!;
+  expect(JSON.parse(trip.result_json!)).toMatchObject({ net: 149, breakdown: { gains: 149, cleanBonus: 25, events: [] }, streak: { after: 6 } });
+  const events = (await createEventsRepo(db).listByTrip(uuid(10))).map(toLocalDriveEvent);
+  const shown = receipt(toLocalDrive(trip), events);
+  const active = shown.deductions.filter((l) => l.value !== 'Removed').reduce((a, l) => a + (l.cost ?? 0), 0);
+  expect(shown.earned! - active).toBe(shown.total);
+  expect(shown.total).toBe(149);
+  expect(shown.detail).toContain('Clean bonus +25');
 });
 
 test('"wasn’t driving": optimistic locally, confirmed by the server, or put back when refused', async () => {
