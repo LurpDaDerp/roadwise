@@ -5,6 +5,7 @@ import { StyleSheet, View, type TextStyle, type ViewStyle } from 'react-native';
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
 import { draw, drive, HOUR, NOW, press } from '@/features/drives/__fixtures__/drives';
 import { setMapsForTests, type MapsModule } from '@/features/settings/maps';
+import { contrastRatio, mix } from '@/ui';
 import { ThemeProvider } from '@/ui/theme';
 import { tokens } from '@/ui/tokens';
 
@@ -324,9 +325,26 @@ describe('WhenYouDriveCard', () => {
     expect(screen.queryByText('3a')).toBeNull();
     expect(screen.getAllByText('S')).toHaveLength(2);
     expect(screen.getByTestId('grid-0-4')).toHaveStyle({ backgroundColor: light.text });
-    expect(screen.getByTestId('grid-0-0')).toHaveStyle({ backgroundColor: light.surfaceRaised });
+    expect(screen.getByTestId('grid-0-0')).toHaveStyle({ backgroundColor: 'transparent', borderWidth: 1, borderColor: light.border });
     expect(screen.getByTestId('analytics-grid-busiest')).toHaveTextContent('Busiest: Mon 12p–3p');
     expect(screen.getByLabelText('When you drive. 3 drives. Busiest: Monday 12p–3p, 2 drives.')).toBeOnTheScreen();
+  });
+
+  test('at large text the ticks span two columns each and never truncate, and the weekday column widens', async () => {
+    setWindow(320, 568, 2);
+    await draw(<WhenYouDriveCard grid={driveGrid(list, null)} />);
+    for (const tick of ['12a', '6a', '12p', '6p']) {
+      const el = screen.getByTestId(`grid-tick-${tick}`);
+      expect(el.props.numberOfLines).toBeUndefined();
+      expect(flat(el).flex).toBe(2);
+    }
+    expect(Number(flat(screen.getByTestId('grid-day-0')).width)).toBeGreaterThanOrEqual(tokens.type.caption.fontSize * 2);
+  });
+
+  test('a one-drive cell stands at 3:1 against the card in both schemes', () => {
+    for (const c of [tokens.color.light, tokens.color.dark]) {
+      expect(contrastRatio(mix(c.surface, c.text, cellAlpha(1, 10)), c.surface)).toBeGreaterThanOrEqual(3);
+    }
   });
 
   test('no drives in the range: a short line, no grid', async () => {
@@ -339,7 +357,7 @@ describe('WhenYouDriveCard', () => {
     expect(bandSpan(7)).toBe('9p–12a');
     expect(cellAlpha(0, 3)).toBe(0);
     expect(cellAlpha(3, 3)).toBe(1);
-    expect(cellAlpha(1, 3)).toBeGreaterThan(0.18);
+    expect(cellAlpha(1, 3)).toBeGreaterThan(0.45);
     expect(busiest(driveGrid([], null))).toBeNull();
   });
 });

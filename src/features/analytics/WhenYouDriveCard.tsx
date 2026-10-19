@@ -1,15 +1,19 @@
 import { View } from 'react-native';
 
-import { Card, Text, useTheme, withAlpha } from '@/ui';
+import { Card, Text, useFontScale, useTheme, withAlpha } from '@/ui';
 
 import { analyticsCopy } from './copy';
 import { BAND_LABELS, BAND_TICKS, WEEKDAY_LABELS, type DriveGrid } from './model';
+import { sizeAt } from './textSize';
 
 const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 const WEEKDAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 const CELL_H = 20;
 const GAP = 4;
+/** The weekday column at 1×; it widens with the text so a large "M" or "W" is never clipped. */
 const LABEL_COL = 16;
+/** The ticks fall on every other band, so each tick spans two columns. */
+const BANDS_PER_TICK = 2;
 
 /** The busiest weekday × band (the earliest on a tie), or null for an empty grid. */
 export function busiest(grid: DriveGrid): { day: number; band: number; count: number } | null {
@@ -24,8 +28,14 @@ export function busiest(grid: DriveGrid): { day: number; band: number; count: nu
 /** "3p–6p" for band 5. */
 export const bandSpan = (band: number): string => `${BAND_LABELS[band]}–${BAND_LABELS[(band + 1) % BAND_LABELS.length]}`;
 
-/** How strong a cell's ink is: nothing for no drives, then a faint to full ramp up to the busiest. */
-export const cellAlpha = (count: number, max: number): number => (count <= 0 || max <= 0 ? 0 : 0.18 + 0.82 * (count / max));
+/**
+ * How strong a cell's ink is: nothing for no drives, then a ramp up to the busiest that starts
+ * dark enough for a one-drive cell to stand at 3:1 against the card. Empty cells are an outline
+ * as well, so they differ by shape and not only by shade.
+ */
+export const CELL_ALPHA_MIN = 0.45;
+export const cellAlpha = (count: number, max: number): number =>
+  count <= 0 || max <= 0 ? 0 : CELL_ALPHA_MIN + (1 - CELL_ALPHA_MIN) * (count / max);
 
 /**
  * When the range's drives start: weekdays down the side (Monday first), 3-hour bands across,
@@ -33,6 +43,7 @@ export const cellAlpha = (count: number, max: number): number => (count <= 0 || 
  */
 export function WhenYouDriveCard({ grid }: { grid: DriveGrid }) {
   const t = useTheme();
+  const labelCol = Math.max(LABEL_COL, Math.ceil(sizeAt('caption', useFontScale()).fontSize * 1.1));
   const top = busiest(grid);
   const spoken = top
     ? `${analyticsCopy.grid.title}. ${grid.total} ${grid.total === 1 ? 'drive' : 'drives'}. ${analyticsCopy.grid.busiest}: ${WEEKDAY_NAMES[top.day]} ${bandSpan(top.band)}, ${top.count} ${top.count === 1 ? 'drive' : 'drives'}.`
@@ -51,7 +62,7 @@ export function WhenYouDriveCard({ grid }: { grid: DriveGrid }) {
         <View accessible accessibilityRole="image" accessibilityLabel={spoken} style={{ gap: GAP }}>
           {grid.cells.map((row, day) => (
             <View key={day} style={{ flexDirection: 'row', alignItems: 'center', gap: GAP }}>
-              <Text variant="caption" tone="muted" style={{ width: LABEL_COL, textAlign: 'center' }}>
+              <Text variant="caption" tone="muted" style={{ width: labelCol, textAlign: 'center' }} testID={`grid-day-${day}`}>
                 {WEEKDAY_LABELS[day]}
               </Text>
               {row.map((count, band) => {
@@ -65,7 +76,9 @@ export function WhenYouDriveCard({ grid }: { grid: DriveGrid }) {
                       height: CELL_H,
                       borderRadius: 5,
                       borderCurve: 'continuous',
-                      backgroundColor: a > 0 ? withAlpha(t.colors.text, a) : t.colors.surfaceRaised,
+                      backgroundColor: a > 0 ? withAlpha(t.colors.text, a) : 'transparent',
+                      borderWidth: a > 0 ? 0 : 1,
+                      borderColor: t.colors.border,
                     }}
                   />
                 );
@@ -73,10 +86,10 @@ export function WhenYouDriveCard({ grid }: { grid: DriveGrid }) {
             </View>
           ))}
           <View style={{ flexDirection: 'row', gap: GAP }}>
-            <View style={{ width: LABEL_COL }} />
-            {BAND_LABELS.map((b) => (
-              <Text key={b} variant="caption" tone="muted" numberOfLines={1} style={{ flex: 1 }}>
-                {(BAND_TICKS as readonly string[]).includes(b) ? b : ''}
+            <View style={{ width: labelCol }} />
+            {BAND_TICKS.map((b) => (
+              <Text key={b} variant="caption" tone="muted" style={{ flex: BANDS_PER_TICK }} testID={`grid-tick-${b}`}>
+                {b}
               </Text>
             ))}
           </View>
