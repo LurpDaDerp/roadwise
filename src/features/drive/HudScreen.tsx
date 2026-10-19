@@ -1,3 +1,4 @@
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -146,8 +147,18 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const { width, height, fontScale } = useWindowDimensions();
   const reduceMotion = useOsReduceMotion();
   const night = useHudNight();
-  const p = hudPalette(night);
-  const b = hudButtonColors(useOptionalTheme(), p, night);
+  const theme = useOptionalTheme();
+  // The hour's sky, deepened for the road (its own day or night set), under everything; its panels
+  // take a deeper shade of it. Outside a theme the HUD stays on true black.
+  const sky = theme === null ? null : theme.sky.hud[night ? 'night' : 'day'];
+  const base = hudPalette(night);
+  const p = sky === null ? base : { ...base, ground: sky.stops[1], chrome: sky.chrome, chromeEdge: sky.chromeEdge };
+  const b = hudButtonColors(theme, p, night);
+  // The list of navigation apps wears the app's own sheet colours, as it does in Settings.
+  const sheet =
+    theme === null
+      ? { surface: p.chrome, ink: p.ink, muted: p.inkMuted, edge: p.chromeEdge }
+      : { surface: theme.colors.surface, ink: theme.colors.text, muted: theme.colors.textMuted, edge: theme.colors.border };
   const units = useHudUnits();
 
   const alert = useAlertFlash(live.lastAlert, live.rowTs);
@@ -267,6 +278,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
   return (
     <View testID="hud-screen" onTouchStart={wake} style={[styles.root, { backgroundColor: p.ground }]}>
+      {sky !== null ? <LinearGradient testID="hud-sky" pointerEvents="none" colors={sky.stops} style={StyleSheet.absoluteFill} /> : null}
       {/* The band: an alert banner across all of it, else the line (and the chip beside it). */}
       <View style={[styles.abs, styles.centred, at(layout.band)]}>
         {dashpal !== null ? (
@@ -392,8 +404,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
               left: insets.left + 16,
               right: insets.right + 16,
               bottom: Math.max(0, height - layout.end.y + 8),
-              backgroundColor: p.chrome,
-              borderColor: p.chromeEdge,
+              backgroundColor: sheet.surface,
+              borderColor: sheet.edge,
             },
           ]}
         >
@@ -403,7 +415,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             missingLabel={nav.picker.missingLabel}
             selected={nav.picker.mode === 'change' ? nav.saved : null}
             driveLine
-            colors={{ surface: p.chrome, ink: p.ink, muted: p.inkMuted, edge: p.chromeEdge }}
+            colors={sheet}
             onChoose={(app) => void nav.choose(app)}
             onClose={nav.close}
           />

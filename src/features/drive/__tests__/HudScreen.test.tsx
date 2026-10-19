@@ -7,7 +7,7 @@ import { State } from 'react-native-gesture-handler';
 import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
 
 import { DIM_AFTER_MS, END_SWIPE_H_PT, HUD, HUD_MIN_TARGET_PT, type HaloProps, type HaloVisual } from '@/ui/drive';
-import type { SkyMood } from '@/ui/sky/palette';
+import { skyBundle, type SkyMood } from '@/ui/sky/palette';
 import { ThemeProvider } from '@/ui/theme';
 
 import { hudCopy } from '../hudCopy';
@@ -652,6 +652,22 @@ describe('the navigation button (design §7.4, §8)', () => {
     expect(screen.queryByTestId('hud-nav-highlight')).toBeNull();
   });
 
+  test("under a sky the list wears the app's own sheet colours, as in Settings", async () => {
+    const mood: SkyMood = { phase: 'day', glow: 0, weather: { kind: 'clear', intensity: 'moderate' } };
+    mockLive = live({ speedMph: 60 });
+    await render(
+      <ThemeProvider mood={mood}>
+        <HudScreen />
+      </ThemeProvider>
+    );
+    await act(async () => {});
+    await fireEvent.press(screen.getByTestId('hud-nav'));
+    await act(async () => {});
+    const c = skyBundle(mood).colors;
+    expect(screen.getByTestId('hud-nav-panel')).toHaveStyle({ backgroundColor: c.surface, borderColor: c.border });
+    expect(screen.getByText('Select default navigation app')).toHaveStyle({ color: c.text });
+  });
+
   test('the first tap at 60 mph opens the list of installed apps over the HUD; End still ends the drive with it open', async () => {
     await renderHud({ speedMph: 60 });
     await fireEvent.press(screen.getByTestId('hud-nav'));
@@ -909,14 +925,14 @@ describe('layout, accessibility and Reduce Motion', () => {
 // Jest compiles this suite to CommonJS, so `__dirname` is real at run time.
 declare const __dirname: string;
 
-describe('the sky theme stays off the driving screen', () => {
+describe("the driving screen wears the hour's sky, still", () => {
   const STORM_AT_DUSK: SkyMood = { phase: 'dusk', glow: 1, weather: { kind: 'storm', intensity: 'heavy' } };
   const RAIN_BY_DAY: SkyMood = { phase: 'day', glow: 0, weather: { kind: 'rain', intensity: 'heavy' } };
 
   test.each([
     ['a storm at dusk', STORM_AT_DUSK],
     ['heavy rain by day', RAIN_BY_DAY],
-  ])('under %s: no backdrop, no weather layer, and the speed reads in the HUD palette exactly as without a sky', async (_name, mood) => {
+  ])('under %s: its deepened sky as a gradient, no moving weather layer, and the speed in the HUD palette exactly as without a sky', async (_name, mood) => {
     mockLive = live();
     const plain = await render(<HudScreen />);
     await act(async () => {});
@@ -927,13 +943,22 @@ describe('the sky theme stays off the driving screen', () => {
       </ThemeProvider>
     );
     await act(async () => {});
+    // the gradient holds its colours as processed ARGB numbers
+    const argb = (hex: string) => 0xff000000 + parseInt(hex.slice(1), 16);
+    expect(screen.getByTestId('hud-sky', HIDDEN).props.colors).toEqual(skyBundle(mood).sky.hud.day.stops.map(argb));
     expect(screen.queryByTestId('sky-backdrop', HIDDEN)).toBeNull();
     expect(screen.queryByTestId('sky-ambient', HIDDEN)).toBeNull();
     expect(screen.getByTestId('hud-speed-numeral', HIDDEN).props.style).toEqual(bare);
     expect(halo().mode).toBe('calm');
   });
 
-  test('no driving-screen source reaches for the sky theme', () => {
+  test('outside a theme it stays on true black', async () => {
+    await renderHud();
+    expect(screen.queryByTestId('hud-sky', HIDDEN)).toBeNull();
+    expect(screen.getByTestId('hud-screen')).toHaveStyle({ backgroundColor: HUD.day.ground });
+  });
+
+  test('no driving-screen source draws the moving sky (its weather layer, the scene) or reads the mood itself', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- a Node read in a test
     const fs = require('node:fs') as {
       readdirSync(dir: string, opts: { withFileTypes: true }): { name: string; isDirectory(): boolean }[];

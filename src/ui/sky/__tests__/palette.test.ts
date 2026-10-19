@@ -3,6 +3,7 @@ import { ensureContrast, ensureGround, lerpDeep, mix, opaque, over, parseColor }
 import { defaultMood, plainBundle, skyBundle, skyVeils, type SkyMood } from '@/ui/sky/palette';
 import type { SkyPhase } from '@/ui/sky/phase';
 import type { WeatherKind } from '@/ui/sky/weather';
+import { HUD } from '@/ui/drive/hudTokens';
 import { tokens } from '@/ui/tokens';
 
 const AA = 4.5;
@@ -143,6 +144,29 @@ test('the painted sky looks like its hour: blue by day, near-black navy at night
   // Overcast greys the hour away: little difference between the channels.
   const grey = rgb(skyBundle({ phase: 'day', glow: 0, weather: { kind: 'cloudy', intensity: 'moderate' } }).sky.backdrop[0]);
   expect(grey.b - grey.r).toBeLessThan(day.b - day.r);
+});
+
+test("the driving screen's sky, in both HUD palettes: its print at 7:1, its alert colours at AA and the halo's red end at 3:1 on every stop and panel", () => {
+  for (const m of [...moods, ...lightCloud]) {
+    const hud = skyBundle(m).sky.hud;
+    for (const [which, p] of [['day', HUD.day], ['night', HUD.night]] as const) {
+      const sky = hud[which];
+      expect(sky.stops).toHaveLength(3);
+      for (const g of [...sky.stops, sky.chrome]) {
+        for (const ink of [p.ink, p.inkMuted, p.haloInk, p.haloInkMuted]) expectContrast(ink, g, 7, `${name(m)} ${which} ink`);
+        for (const t of [p.minor, p.moderate, p.severe]) expectContrast(t, g, AA, `${name(m)} ${which} tier`);
+        expectContrast(p.haloSevere, g, 3, `${name(m)} ${which} halo red`);
+      }
+      expectContrast(p.ink, sky.chromeEdge, 7, `${name(m)} ${which} ink on chrome edge`);
+    }
+  }
+});
+
+test("the driving screen's sky follows the hour and the weather", () => {
+  const tops = new Set(moods.map((m) => skyBundle(m).sky.hud.day.stops[0]));
+  expect(tops.size).toBe(moods.length);
+  const day = parseColor(skyBundle({ phase: 'day', glow: 0, weather: { kind: 'clear', intensity: 'moderate' } }).sky.hud.day.stops[2]);
+  expect(day.b).toBeGreaterThan(day.r + 40);
 });
 
 test('every mood has its own accent: the weather and the hour both show', () => {

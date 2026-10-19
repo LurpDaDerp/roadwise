@@ -1,4 +1,5 @@
 import { contrastRatio } from '../contrast';
+import { HUD, type HudPalette } from '../drive/hudTokens';
 import { tokens, type ColorSet, type Signal } from '../tokens';
 import { ensureContrast, ensureGround, mix, opaque, over, withAlpha } from './color';
 import { PHASE_SCHEME, type Scheme, type SkyPhase } from './phase';
@@ -51,6 +52,21 @@ export type SkyColors = {
   wash: string;
   /** The scene card gradient (top-left → bottom-right); white text reads on every stop at AA. */
   scene: [string, string, string];
+  /** The driving screen's sky, for its day and its night palette ({@link HudSky}). */
+  hud: { day: HudSky; night: HudSky };
+};
+
+/**
+ * The driving screen's sky: the hour's sky deepened until the HUD's print reads on every stop at
+ * 7:1, its alert colours at AA and the halo's red end at 3:1. Still: no weather layer moves on it.
+ */
+export type HudSky = {
+  /** Top to bottom. */
+  stops: SkyStops;
+  /** Panels and chips on it (the weather banner, the DashPal chip): a deeper shade of the sky. */
+  chrome: string;
+  /** Their quiet edges. */
+  chromeEdge: string;
 };
 
 export type SkyBundle = {
@@ -238,6 +254,15 @@ function layers(phase: SkyPhase, scheme: Scheme, w: SkyWeather) {
   }
 }
 
+/** The driving screen's sky for one HUD palette (see {@link HudSky}). */
+function hudSky(stops: SkyStops, p: HudPalette): HudSky {
+  const text = [p.ink, p.inkMuted, p.haloInk, p.haloInkMuted];
+  const fix = (g: string) =>
+    ensureGround(ensureGround(ensureGround(g, text, 7, '#000000'), [p.minor, p.moderate, p.severe], AA, '#000000'), [p.haloSevere], 3, '#000000');
+  const deep = stops.map((st) => fix(mix(st, '#000000', 0.25))) as SkyStops;
+  return { stops: deep, chrome: fix(mix(deep[1], '#000000', 0.4)), chromeEdge: ensureGround(mix(deep[1], '#FFFFFF', 0.14), [p.ink], 7, '#000000') };
+}
+
 function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
   const { phase, weather } = mood;
   const paint = rawPaint(mood, scheme);
@@ -271,6 +296,7 @@ function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
     disc: withAlpha('#F2F4FF', moon),
     ...veil,
     scene,
+    hud: { day: hudSky(paint.stops, HUD.day), night: hudSky(paint.stops, HUD.night) },
   };
 }
 
