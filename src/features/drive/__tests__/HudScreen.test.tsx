@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { LastFinalized } from '@/drive/host';
 import type { DriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
-import { DIM_AFTER_MS, HOLD_TO_END_MS, HUD, type HaloProps, type HaloVisual } from '@/ui/drive';
+import { DIM_AFTER_MS, HOLD_TO_END_MS, HUD, HUD_MIN_TARGET_PT, type HaloProps, type HaloVisual } from '@/ui/drive';
 import type { SkyMood } from '@/ui/sky/palette';
 import { ThemeProvider } from '@/ui/theme';
 
@@ -216,16 +216,88 @@ describe('the halo while speeding (design §4.1)', () => {
   });
 });
 
-test('weather: a one-line banner only while an alert is active', async () => {
-  const h = await renderHud();
-  expect(screen.queryByTestId('hud-weather')).toBeNull();
-  await h.update({ weatherAlert: 'Icy rain' });
-  expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Icy rain/);
-  // Yellow is speeding and events only: the weather icon wears the print's ink.
-  expect(screen.getByTestId('hud-weather-icon', HIDDEN)).toHaveStyle({ color: p.ink });
-  expect(screen.getByTestId('hud-weather-icon', HIDDEN)).not.toHaveStyle({ color: p.minor });
-  await h.update({ weatherAlert: null });
-  expect(screen.queryByTestId('hud-weather')).toBeNull();
+describe('the dangerous-weather banner (plan D14)', () => {
+  const ICE = { kind: 'freezing_rain', gustMph: null, visibilityM: null } as const;
+  const GUSTS = { kind: 'strong_wind', gustMph: 52, visibilityM: null } as const;
+
+  test('only while an alert is active: a yellow outline, the warning glyph in yellow, the title; the line is spoken', async () => {
+    const h = await renderHud();
+    expect(screen.queryByTestId('hud-weather')).toBeNull();
+    await h.update({ weatherAlert: ICE });
+    expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Freezing rain/);
+    expect(screen.getByTestId('hud-weather')).toHaveStyle({ borderColor: p.minor, backgroundColor: p.chrome });
+    expect(screen.getByTestId('hud-weather-icon', HIDDEN)).toHaveStyle({ color: p.minor });
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Freezing rain. Rain is freezing on the road. Slow down, brake gently.');
+    // While moving, the line is never drawn: one to three words is all a moving driver reads.
+    expect(screen.queryByText(/Slow down/)).toBeNull();
+    expect(screen.getByText('Freezing rain').props.children.split(' ').length).toBeLessThanOrEqual(3);
+    await h.update({ weatherAlert: null });
+    expect(screen.queryByTestId('hud-weather')).toBeNull();
+  });
+
+  test('the HUD warning yellow holds AAA on the banner in both palettes', async () => {
+    const { contrastRatio } = jest.requireActual<typeof import('@/ui/contrast')>('@/ui/contrast');
+    for (const pal of [HUD.day, HUD.night]) {
+      expect(contrastRatio(pal.minor, pal.chrome)).toBeGreaterThanOrEqual(7);
+      expect(contrastRatio(pal.ink, pal.chrome)).toBeGreaterThanOrEqual(7);
+    }
+  });
+
+  test('gusts in the driver units, spoken', async () => {
+    mockUnits = 'km';
+    await renderHud({ weatherAlert: GUSTS });
+    expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Strong winds/);
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Strong winds. Gusts to 84 km/h. Keep both hands on the wheel.');
+  });
+
+  test('no ✕ while moving; stopped (≤ 5 mph), the ✕ hides it for the rest of the drive', async () => {
+    const h = await renderHud({ weatherAlert: ICE, speedMph: 30, stopped: false });
+    expect(screen.queryByTestId('hud-weather-close')).toBeNull();
+    await h.update({ speedMph: 3, stopped: true });
+    const close = screen.getByRole('button', { name: 'Hide weather alert' });
+    expect(close).toHaveProp('accessibilityHint', 'Hides it for the rest of this drive.');
+    // The drawn disc is small, the touch target is the HUD's 64 pt.
+    const slop = close.props.hitSlop as number;
+    expect(34 + 2 * slop).toBeGreaterThanOrEqual(HUD_MIN_TARGET_PT);
+    await act(async () => {
+      fireEvent.press(close);
+    });
+    expect(screen.queryByTestId('hud-weather')).toBeNull();
+    // Moving again, a fresh answer with the same danger: still hidden.
+    await h.update({ speedMph: 40, stopped: false, weatherAlert: { ...ICE } });
+    expect(screen.queryByTestId('hud-weather')).toBeNull();
+    // A different danger shows.
+    await h.update({ weatherAlert: GUSTS });
+    expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Strong winds/);
+    // The next drive starts with nothing hidden.
+    await h.update({ clientTripId: 't2', weatherAlert: ICE });
+    expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Freezing rain/);
+  });
+
+  test('stopped with points and no line of their own: weather keeps the line until hidden, then the points take it', async () => {
+    // A compact window (short and wide): the points share the band's line.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the hook behind react-native's export
+    const dims = require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
+    jest.spyOn(dims, 'default').mockReturnValue({ width: 400, height: 300, scale: 2, fontScale: 1 });
+    await renderHud({ weatherAlert: ICE, stopped: true, speedMph: 0, points: { total: 40, sinceLastStop: 5 } });
+    expect(screen.getByTestId('hud-weather')).toBeTruthy();
+    expect(screen.queryByTestId('hud-points')).toBeNull();
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('hud-weather-close'));
+    });
+    expect(screen.queryByTestId('hud-weather')).toBeNull();
+    expect(screen.getByTestId('hud-points')).toBeTruthy();
+    jest.restoreAllMocks();
+  });
+
+  test('an event banner still takes the band for its 1.5 s', async () => {
+    const h = await renderHud({ weatherAlert: ICE, rowTs: T });
+    await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
+    expect(screen.getByTestId('hud-alert')).toBeTruthy();
+    expect(screen.queryByTestId('hud-weather')).toBeNull();
+    await act(() => jest.advanceTimersByTime(1500));
+    expect(screen.getByTestId('hud-weather')).toBeTruthy();
+  });
 });
 
 describe('event alerts', () => {
@@ -505,9 +577,12 @@ describe('dimming', () => {
   });
 });
 
-test('End and the navigation button are the only controls on the screen', async () => {
-  await renderHud({ weatherAlert: 'Dense fog', points: { total: 5, sinceLastStop: 0 }, stopped: true });
+test('while moving, End and the navigation button are the only controls on the screen; stopped, the weather ✕ joins them', async () => {
+  const fog = { kind: 'dense_fog', gustMph: null, visibilityM: 150 } as const;
+  const h = await renderHud({ weatherAlert: fog, speedMph: 45, stopped: false });
   expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav']);
+  await h.update({ speedMph: 0, stopped: true, points: { total: 5, sinceLastStop: 0 } });
+  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-weather-close']);
 });
 
 describe('the navigation button (design §7.4, §8)', () => {

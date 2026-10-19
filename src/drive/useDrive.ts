@@ -6,7 +6,8 @@ import type { DropReason } from '@/core/engine/finalize';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
-import { useWeatherHazard, WEATHER_REFETCH_DISTANCE_M, weatherLabel } from '@/features/drive/weather';
+import { useDriveWeather, WEATHER_REFETCH_DISTANCE_M } from '@/features/drive/weather';
+import type { DangerAlert } from '@/features/weather/danger';
 import { mpsToMph } from '@/lib/units';
 
 import { DriveContext, type DriveContextValue } from './DriveProvider';
@@ -53,7 +54,8 @@ export interface DriveLive {
   speedingTier: Tier | null;
   stopped: boolean;
   lastAlert: { type: EventType; tier: Tier; at: number } | null;
-  weatherAlert: string | null;
+  /** The dangerous-weather alert near the car (plan D14), or null. */
+  weatherAlert: DangerAlert | null;
   /** Non-null only while stopped (≤ 5 mph). */
   points: { total: number; sinceLastStop: number } | null;
   startedAt: number | null;
@@ -85,12 +87,12 @@ const selectWeatherLeg = (s: DriveState) => Math.floor(s.distanceM / WEATHER_REF
 export function useDriveLive(): DriveLive {
   const live = useDrive(selectLive);
   const leg = useDrive(selectWeatherLeg);
-  const hazard = useWeatherHazard(live.status === 'recording', leg * WEATHER_REFETCH_DISTANCE_M);
+  const weatherAlert = useDriveWeather(live.status === 'recording', leg * WEATHER_REFETCH_DISTANCE_M);
   const lastAlert = useMemo(
     () => (live.lastAlert === null ? null : { type: live.lastAlert.type, tier: live.lastAlert.tier, at: live.lastAlert.at }),
     [live.lastAlert]
   );
-  return { ...live, lastAlert, weatherAlert: hazard === null ? null : weatherLabel(hazard) };
+  return { ...live, lastAlert, weatherAlert };
 }
 
 /** A stable callback to start a drive, for Home's button. */

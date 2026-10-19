@@ -11,6 +11,7 @@ import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { navAppById } from '@/features/navigation/catalog';
 import { NavAppPicker } from '@/features/navigation/NavAppPicker';
 import { useNavigationButton } from '@/features/navigation/useNavigationButton';
+import type { DangerKind } from '@/features/weather/danger';
 import { sunIsDown } from '@/lib/time';
 import { fontFamilies } from '@/ui/fonts';
 import { useOsReduceMotion } from '@/ui/theme';
@@ -113,9 +114,10 @@ export type HudScreenProps = {
  *   and the longer. A hard brake, hard start, sharp turn, phone pickup or handling alert, and each
  *   DashPal alert start or step (not a reconnect's re-send), pulse it quickly a few times. Rules in `src/ui/drive/halo.ts`; drawing in `HaloRing.tsx`.
  * - Top band: for 1.5 s after an event (or a DashPal alert start or level change) its icon and one
- *   or two words, across the whole band (the DashPal chip steps aside); else a failed end, the points
- *   when they have no line of their own, or the weather line. Precedence: DashPal banner, the phone's
- *   event, a failed end, the points, weather. With a DashPal paired, a small static chip top right.
+ *   or two words, across the whole band (the DashPal chip steps aside); else a failed end, the
+ *   dangerous-weather banner (its ✕ only while stopped; hidden for the rest of the drive once
+ *   dismissed), or the points when they have no line of their own. Precedence: DashPal banner, the
+ *   phone's event, a failed end, weather, the points. With a DashPal paired, a small static chip top right.
  * - Stopped only: the points total and the change since the last stop, under the halo when there is
  *   room (so the halo never moves), else in the band.
  * - Bottom row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres),
@@ -247,6 +249,15 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const bannerUp = dashpal !== null || alert !== null;
   const showPoints = live.stopped && live.points !== null;
   const pointsView = showPoints ? <StoppedPoints total={live.points!.total} change={live.points!.sinceLastStop} palette={p} /> : null;
+  // A weather alert the driver hid (stopped, with its ✕) stays hidden for the rest of this drive.
+  const [hiddenWeather, setHiddenWeather] = useState<{ trip: string | null; kinds: readonly DangerKind[] }>({ trip: null, kinds: [] });
+  const weather = live.weatherAlert;
+  const weatherShown = weather !== null && !(hiddenWeather.trip === live.clientTripId && hiddenWeather.kinds.includes(weather.kind)) ? weather : null;
+  const hideWeather = useCallback(() => {
+    if (weather === null) return;
+    const trip = live.clientTripId;
+    setHiddenWeather((h) => ({ trip, kinds: h.trip === trip ? [...h.kinds, weather.kind] : [weather.kind] }));
+  }, [weather, live.clientTripId]);
 
   return (
     <View testID="hud-screen" onTouchStart={wake} style={[styles.root, { backgroundColor: p.ground }]}>
@@ -272,10 +283,10 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             >
               {hudCopy.endFailed}
             </Text>
+          ) : weatherShown !== null ? (
+            <WeatherBanner alert={weatherShown} units={units} palette={p} canDismiss={live.stopped} onDismiss={hideWeather} />
           ) : layout.points === 'line' && pointsView !== null ? (
             pointsView
-          ) : live.weatherAlert !== null ? (
-            <WeatherBanner label={live.weatherAlert} palette={p} />
           ) : null}
         </View>
       ) : null}

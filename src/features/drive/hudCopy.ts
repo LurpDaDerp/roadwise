@@ -25,7 +25,6 @@ export const hudCopy = {
     eyes_off: 'Eyes up',
     drowsy: 'Take a break',
   } satisfies Record<EventType, string>,
-  weatherLabel: (words: string) => `Weather alert: ${words}`,
   points: {
     unit: 'pts',
     label: (total: string, change: string) => `${total} points, ${change} since your last stop`,
