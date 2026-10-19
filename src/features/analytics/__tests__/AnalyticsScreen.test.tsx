@@ -12,8 +12,9 @@ const mockRouter = { push: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 
 let mockRating: number | null = 92.4;
+let mockRanked = true;
 jest.mock('@/data/server/summary', () => ({
-  useMySummary: () => ({ data: mockSummary({ progress: { safety_rating: mockRating } }), isLoading: false, isError: false }),
+  useMySummary: () => ({ data: mockSummary({ progress: { safety_rating: mockRating, ranked: mockRanked } }), isLoading: false, isError: false }),
 }));
 
 // Ten drives, one every 30 hours: 6 in the last week, all 10 in the last month.
@@ -24,6 +25,7 @@ jest.mock('../useAnalytics', () => ({ useAnalytics: (range: 'day' | 'week' | 'mo
 beforeEach(() => {
   jest.clearAllMocks();
   mockRating = 92.4;
+  mockRanked = true;
   mockData = (range) => mockAnalytics(mockDrives(10, 30), range);
 });
 
@@ -64,6 +66,13 @@ test('the radar centre is the server Safety Rating, whole and bold', async () =>
 
 test('no Safety Rating yet: a dash', async () => {
   mockRating = null;
+  await draw(<AnalyticsScreen />);
+  expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
+});
+
+test('unranked (under 25 mi): a dash, as on Home and Profile', async () => {
+  mockRating = 88;
+  mockRanked = false;
   await draw(<AnalyticsScreen />);
   expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
 });
