@@ -19,6 +19,7 @@ import {
   rangeStart,
   routeLines,
   scoredSince,
+  trend,
   windowStart,
   windowSums,
   type CoachWindow,
@@ -26,6 +27,7 @@ import {
   type MapPoint,
   type PersonalBests,
   type Range,
+  type Trend,
   type WindowSums,
 } from './model';
 
@@ -62,6 +64,8 @@ export interface AnalyticsData {
   sums: WindowSums;
   /** The range's drives by weekday × 3-hour band. */
   grid: DriveGrid;
+  /** The range's Score, Events and Points over time (the Trend card). */
+  trend: Trend;
   /** The range's scored drives, newest first (the Drives list; its length matches `sums.drives`). */
   drives: LocalDrive[];
   /** Every scored drive's route, all time, one line per privacy run (no "Wasn't driving" trips). */
@@ -79,8 +83,12 @@ export function useAnalytics(range: Range): AnalyticsData {
   const at = now();
   const coachSince = windowStart(at, COACH_DAYS);
   const sinceMs = rangeStart(at, range);
+  // The trend's axis ends with the current hour (the same window), so it recomputes once an hour, not every render.
+  const hourEnd = windowStart(at, 0) + 3_599_999;
   const all = useScoredDrives(null);
   const events = useWindowEvents(coachSince);
+  // The trend's Score needs the range's own events (a month shares the 30-day key; a year reads more).
+  const rangeEvents = useWindowEvents(sinceMs);
 
   const drives = all.data;
   // Until the events are in, nothing is scored: drives with no events yet would read as perfect.
@@ -93,6 +101,7 @@ export function useAnalytics(range: Range): AnalyticsData {
     const list = drives ?? [];
     return { sums: windowSums(list, sinceMs), grid: driveGrid(list, sinceMs), drives: scoredSince(list, sinceMs) };
   }, [drives, sinceMs]);
+  const trendData = useMemo(() => trend(drives ?? [], rangeEvents.data ?? null, range, hourEnd), [drives, rangeEvents.data, range, hourEnd]);
   // The map draws the same drives as every other card: scored ones, not "Wasn't driving".
   const map = useMemo(() => {
     const routes = routeLines((drives ?? []).flatMap((d) => (d.polyline ? [d.polyline] : [])));
@@ -101,12 +110,14 @@ export function useAnalytics(range: Range): AnalyticsData {
 
   const { refetch: refetchAll } = all;
   const { refetch: refetchEvents } = events;
+  const { refetch: refetchRangeEvents } = rangeEvents;
   const refetch = useMemo(
     () => () => {
       void refetchAll();
       void refetchEvents();
+      void refetchRangeEvents();
     },
-    [refetchAll, refetchEvents]
+    [refetchAll, refetchEvents, refetchRangeEvents]
   );
 
   return {
@@ -115,9 +126,10 @@ export function useAnalytics(range: Range): AnalyticsData {
     coaching,
     bests,
     ...windowed,
+    trend: trendData,
     ...map,
     loading: all.isLoading || events.isLoading,
-    error: all.isError || events.isError,
+    error: all.isError || events.isError || rangeEvents.isError,
     refetch,
   };
 }

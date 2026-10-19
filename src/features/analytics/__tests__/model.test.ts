@@ -27,6 +27,9 @@ import {
   routeLines,
   scoredSince,
   showsTip,
+  trend,
+  trendDirection,
+  trendRange,
   weekdayIndex,
   windowStart,
   windowSums,
@@ -396,5 +399,127 @@ describe('trip map', () => {
     expect(fitRegion([{ latitude: NaN, longitude: 1 }])).toBeNull();
     expect(fitLines([])).toBeNull();
     expect(fitLines([[{ latitude: 1, longitude: 2 }], [{ latitude: 3, longitude: 4 }]])).toMatchObject({ latitude: 3, longitude: 4 });
+  });
+});
+
+describe('trend', () => {
+  // A Wednesday noon, local time.
+  const NOW = new Date(2026, 9, 14, 12, 0).getTime();
+  const at = (day: number, h: number, m = 0) => new Date(2026, 9, day, h, m).getTime();
+  const brakes = (n: number) => ({ ...EMPTY_COUNTS, hardBrake: n });
+
+  test('a week is a point per local day with drives: Score on the rating’s scale, events per 100 mi, points per drive', () => {
+    const tue1 = drive({ startedAt: at(13, 8), miles: 10, pointsNet: 100, counts: brakes(1) });
+    const tue2 = drive({ startedAt: at(13, 17), miles: 10, pointsNet: 50, counts: { ...EMPTY_COUNTS, speeding: 1, pickups: 1, handlingS: 30 } });
+    const fri = drive({ startedAt: at(9, 9), miles: 20, pointsNet: 120 });
+    const old = drive({ startedAt: at(6, 9), miles: 50, pointsNet: 999 });
+    const events = [
+      ev({ type: 'hard_brake', tier: 'severe', startedAt: at(13, 8, 10) }),
+      ev({ type: 'speeding', tier: 'moderate', startedAt: at(13, 17, 5), durationS: 40 }),
+      ev({ type: 'phone_pickup', startedAt: at(13, 17, 9) }),
+      // DashPal never counts toward the rating; a removed event counts nothing.
+      ev({ type: 'drowsy', tier: 'severe', startedAt: at(13, 17, 12) }),
+      ev({ type: 'hard_brake', tier: 'severe', startedAt: at(9, 9, 5), status: 'removed' }),
+    ];
+    const t = trend([tue2, tue1, fri, old], events, 'week', NOW);
+    expect(t.step).toBe('day');
+    // A rolling week touches 8 local days: last Wednesday afternoon through today.
+    expect(t.ticks.map((k) => k.label)).toEqual(['W', 'T', 'F', 'S', 'S', 'M', 'T', 'W']);
+    expect(t.ticks[0]!.x).toBe(0);
+    expect(t.ticks[7]!.x).toBe(1);
+    const p = events.slice(0, 3).reduce((sum, e) => sum + ratingPenalty(e), 0);
+    expect(t.series.score).toEqual([
+      { x: 2 / 7, value: 100, when: 'on Friday' },
+      { x: 6 / 7, value: Math.round(safetyRating(p, 20).rating!), when: 'on Tuesday' },
+    ]);
+    expect(t.series.score[1]!.value).toBeLessThan(100);
+    // Tuesday: a brake, a speeding and a pickup over 20 mi; handling time is not a count.
+    expect(t.series.events.map((q) => q.value)).toEqual([0, 15]);
+    expect(t.series.points.map((q) => q.value)).toEqual([120, 75]);
+  });
+
+  test('today, last week’s same weekday, and a drive at midnight keep its events', () => {
+    const lastWed = drive({ startedAt: at(7, 15), miles: 4 });
+    const today = drive({ startedAt: at(14, 7), miles: 4 });
+    // Started Monday 23:50: its event at 00:10 still counts on Monday.
+    const late = drive({ startedAt: at(12, 23, 50), miles: 5 });
+    const events = [ev({ type: 'hard_brake', tier: 'severe', startedAt: at(13, 0, 10) }), ev({ type: 'hard_brake', startedAt: at(1, 0) })];
+    const t = trend([today, late, lastWed], events, 'week', NOW);
+    expect(t.series.points.map((q) => q.when)).toEqual(['last Wednesday', 'on Monday', 'today']);
+    expect(t.series.score.map((q) => q.value)).toEqual([100, Math.round(safetyRating(ratingPenalty(events[0]!), 5).rating!), 100]);
+  });
+
+  test('Score waits for the events; a slot with no miles has Points only', () => {
+    const t = trend([drive({ startedAt: at(13, 8), miles: 6 }), drive({ startedAt: at(11, 8), miles: 0, pointsNet: -20 })], null, 'week', NOW);
+    expect(t.series.score).toEqual([]);
+    expect(t.series.events).toHaveLength(1);
+    expect(t.series.points.map((q) => q.value)).toEqual([-20, 100]);
+    expect(trend([], [], 'week', NOW).series).toEqual({ score: [], events: [], points: [] });
+  });
+
+  test('unscored drives and drives before the range stay out', () => {
+    const t = trend(
+      [drive({ startedAt: at(13, 8), status: 'unscored', pointsNet: null }), drive({ startedAt: at(13, 9), status: 'not_driving', pointsNet: null }), drive({ startedAt: new Date(2026, 8, 1, 9).getTime() })],
+      [],
+      'month',
+      NOW
+    );
+    expect(t.series.points).toEqual([]);
+  });
+
+  test('a day is a point per drive, placed by its start time, with 6-hour marks', () => {
+    const t = trend([drive({ startedAt: at(14, 8, 15), pointsNet: 40 }), drive({ startedAt: at(13, 18) })], [], 'day', NOW);
+    expect(t.step).toBe('drive');
+    expect(t.ticks).toEqual([
+      { x: 0, label: '12p' },
+      { x: 0.25, label: '6p' },
+      { x: 0.5, label: '12a' },
+      { x: 0.75, label: '6a' },
+      { x: 1, label: '12p' },
+    ]);
+    expect(t.series.points).toEqual([
+      { x: 0.25, value: 100, when: 'at 6:00 PM' },
+      { x: (20.25 * HOUR) / DAY, value: 40, when: 'at 8:15 AM' },
+    ]);
+  });
+
+  test('a month is a point per Monday-first week', () => {
+    const t = trend([drive({ startedAt: at(13, 8) }), drive({ startedAt: at(12, 8) }), drive({ startedAt: new Date(2026, 8, 20, 9).getTime() })], [], 'month', NOW);
+    expect(t.step).toBe('week');
+    expect(t.ticks.map((k) => k.label)).toEqual(['Sep 14', 'Sep 21', 'Sep 28', 'Oct 5', 'Oct 12']);
+    expect(t.series.points.map((q) => [q.x, q.when])).toEqual([
+      [0, 'in the week of Sep 14'],
+      [1, 'in the week of Oct 12'],
+    ]);
+  });
+
+  test('a year is a point per month; the two months that share a name say their year', () => {
+    const t = trend([drive({ startedAt: at(13, 8) }), drive({ startedAt: new Date(2026, 2, 3).getTime() }), drive({ startedAt: new Date(2025, 9, 20).getTime() })], [], 'year', NOW);
+    expect(t.step).toBe('month');
+    expect(t.ticks.map((k) => k.label).join('')).toBe('ONDJFMAMJJASO');
+    expect(t.series.points.map((q) => [q.x, q.when])).toEqual([
+      [0, 'in October 2025'],
+      [5 / 12, 'in March'],
+      [1, 'in October 2026'],
+    ]);
+  });
+
+  test('range: Score is 0–100; Events and Points pad their spread, Events never below 0', () => {
+    expect(trendRange('score', [40, 90])).toEqual({ lo: 0, hi: 100 });
+    expect(trendRange('events', [1, 3])).toEqual({ lo: 0.5, hi: 3.5 });
+    expect(trendRange('events', [0, 10])).toEqual({ lo: 0, hi: 11.5 });
+    expect(trendRange('points', [100, 300])).toEqual({ lo: 70, hi: 330 });
+    expect(trendRange('points', [50, 50])).toEqual({ lo: 45, hi: 55 });
+    expect(trendRange('events', [])).toEqual({ lo: 0, hi: 1 });
+  });
+
+  test('direction: the least-squares change across the points, steady under 5 % of the range', () => {
+    const pts = (...v: number[]) => v.map((value, i) => ({ x: i / Math.max(1, v.length - 1), value }));
+    expect(trendDirection(pts(60, 70, 80), 100)).toBe('up');
+    expect(trendDirection(pts(80, 70, 60), 100)).toBe('down');
+    expect(trendDirection(pts(80, 82, 81), 100)).toBe('steady');
+    // One low point in the middle does not make a trend.
+    expect(trendDirection(pts(90, 40, 90), 100)).toBe('steady');
+    expect(trendDirection(pts(90), 100)).toBe('steady');
   });
 });

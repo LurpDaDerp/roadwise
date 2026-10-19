@@ -7,7 +7,7 @@
  * five penalty axes add up to the rating over the same 30 days: 100 − rating = Σ (100 − axis),
  * before clamping. Local data includes pending estimates; the server rating stays authoritative.
  */
-import { ratingPenalty, type DriveEvent, type EventType } from '@scoring';
+import { ratingPenalty, safetyRating, type DriveEvent, type EventType } from '@scoring';
 
 import { isScoredDrive, type LocalDrive } from '@/data/queries/rows';
 import type { Region } from '@/features/settings/maps';
@@ -321,6 +321,210 @@ export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null
   out.avgMiles = out.drives > 0 ? out.miles / out.drives : null;
   out.avgPoints = out.drives > 0 ? out.points / out.drives : null;
   return out;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Trend
+
+export type TrendKind = 'score' | 'events' | 'points';
+export const TREND_KINDS: readonly TrendKind[] = ['score', 'events', 'points'];
+
+/**
+ * What one point of the trend stands for, per range: each drive of the day, each day of the
+ * week, each week (Monday first) of the month and each month of the year. A month reads as weeks:
+ * one day's score swings on a single short drive, and 30 daily dots are noise, not a trend.
+ */
+export type TrendStep = 'drive' | 'day' | 'week' | 'month';
+export const TREND_STEP: Record<Range, TrendStep> = { day: 'drive', week: 'day', month: 'week', year: 'month' };
+
+export interface TrendPoint {
+  /** Across the chart: 0 is the range's first slot (or its start, by drive), 1 the latest (now). */
+  x: number;
+  value: number;
+  /** When, for a screen reader: "at 8:15 AM", "on Tuesday", "today", "in the week of Sep 22", "in March". */
+  when: string;
+}
+
+export interface TrendTick {
+  x: number;
+  label: string;
+}
+
+export interface Trend {
+  step: TrendStep;
+  /** Every slot's tick (by day, week or month), or the 6-hour marks of a day; the chart thins them to fit. */
+  ticks: TrendTick[];
+  /**
+   * Per series, one point per slot that has drives, oldest first; a slot with none has no point,
+   * so the line joins the slots that do. Score stays empty until the range's events are in.
+   */
+  series: Record<TrendKind, TrendPoint[]>;
+}
+
+export const EMPTY_TREND: Trend = Object.freeze({ step: 'day', ticks: [], series: { score: [], events: [], points: [] } });
+
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] as const;
+/** "8:15 AM", local time. */
+const clock = (ts: number): string => new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(ts));
+/** "Sep 22". */
+const monthDay = (d: Date): string => `${MONTH_NAMES[d.getMonth()]!.slice(0, 3)} ${d.getDate()}`;
+const HOUR_TICK = ['12a', '6a', '12p', '6p'] as const;
+
+/** The first instant of the local day, Monday-first week or month holding `ts`. */
+function slotStart(ts: number, step: Exclude<TrendStep, 'drive'>): Date {
+  const d = new Date(ts);
+  if (step === 'month') return new Date(d.getFullYear(), d.getMonth(), 1);
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  if (step === 'week') day.setDate(day.getDate() - weekdayIndex(ts));
+  return day;
+}
+
+function nextSlot(d: Date, step: Exclude<TrendStep, 'drive'>): Date {
+  if (step === 'month') return new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + (step === 'week' ? 7 : 1));
+}
+
+interface Slot {
+  start: number;
+  x: number;
+  tick: string;
+  when: string;
+}
+
+/** The range's calendar slots, oldest first: every local day, week or month it touches. */
+function calendarSlots(sinceMs: number, now: number, step: Exclude<TrendStep, 'drive'>): Slot[] {
+  const starts: Date[] = [];
+  for (let d = slotStart(sinceMs, step); d.getTime() <= now; d = nextSlot(d, step)) starts.push(d);
+  const n = starts.length;
+  const today = slotStart(now, 'day').getTime();
+  // A year touches 13 months: the two that share a name say their year.
+  const monthCount = new Map<number, number>();
+  for (const d of starts) monthCount.set(d.getMonth(), (monthCount.get(d.getMonth()) ?? 0) + 1);
+  return starts.map((d, i) => {
+    const x = n === 1 ? 1 : i / (n - 1);
+    const start = d.getTime();
+    if (step === 'day') {
+      const name = WEEKDAY_NAMES[d.getDay()]!;
+      // A week touches 8 days: the oldest shares today's weekday.
+      const when = start === today ? 'today' : today - start >= 6.5 * DAY_MS ? `last ${name}` : `on ${name}`;
+      return { start, x, tick: WEEKDAY_LABELS[weekdayIndex(start)]!, when };
+    }
+    if (step === 'week') return { start, x, tick: monthDay(d), when: `in the week of ${monthDay(d)}` };
+    const name = MONTH_NAMES[d.getMonth()]!;
+    return { start, x, tick: name[0]!, when: `in ${name}${(monthCount.get(d.getMonth()) ?? 0) > 1 ? ` ${d.getFullYear()}` : ''}` };
+  });
+}
+
+/** The local 12a / 6a / 12p / 6p marks inside a day range, placed by time. */
+function hourTicks(sinceMs: number, now: number): TrendTick[] {
+  const out: TrendTick[] = [];
+  const s = new Date(sinceMs);
+  for (let d = new Date(s.getFullYear(), s.getMonth(), s.getDate()); d.getTime() <= now; d = new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours() + 6)) {
+    if (d.getTime() >= sinceMs) out.push({ x: (d.getTime() - sinceMs) / (now - sinceMs), label: HOUR_TICK[Math.floor(d.getHours() / 6)]! });
+  }
+  return out;
+}
+
+const round1 = (v: number): number => Math.round(v * 10) / 10;
+
+/**
+ * The range's trend, per series, from the same scored drives as the cards and the active events of
+ * those drives (`readWindowEvents(db, sinceMs)`; null while they load).
+ *
+ * - Score: the Safety Rating's own formula over the slot's drives, clamp(100 − 10 · P / miles),
+ *   where P is the rating penalty of their events (`ratingPenalty`: base penalties, DashPal never
+ *   counts), as a whole number. Over 30 days of drives it is the rating; the radar's axes split
+ *   the same P.
+ * - Events: speeding, hard brakes, hard starts, sharp turns and pickups per 100 miles, from the
+ *   drives' counts like the window's numbers (phone handling is a time, not a count). 1 decimal.
+ * - Points: net points per drive, whole.
+ *
+ * An event belongs to the drive it happened in: the latest drive started at or before it (drives
+ * never overlap). A slot with no miles has no Score or Events point.
+ */
+export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent[] | null, range: Range, now: number): Trend {
+  const sinceMs = rangeStart(now, range);
+  const step = TREND_STEP[range];
+  const list = scoredSince(drives, sinceMs).sort((a, b) => a.startedAt - b.startedAt);
+  const slots: Slot[] =
+    step === 'drive'
+      ? list.map((d) => ({ start: d.startedAt, x: clamp((d.startedAt - sinceMs) / (now - sinceMs), 0, 1), tick: '', when: `at ${clock(d.startedAt)}` }))
+      : calendarSlots(sinceMs, now, step);
+  const ticks = step === 'drive' ? hourTicks(sinceMs, now) : slots.map((s) => ({ x: s.x, label: s.tick }));
+
+  const acc = slots.map(() => ({ drives: 0, miles: 0, points: 0, events: 0, penalty: 0 }));
+  // The slot of each drive: its own (by drive), else the latest slot started at or before it.
+  const slotOf = list.map((d, i) => {
+    if (step === 'drive') return i;
+    let k = 0;
+    while (k + 1 < slots.length && slots[k + 1]!.start <= d.startedAt) k += 1;
+    return k;
+  });
+  list.forEach((d, i) => {
+    const a = acc[slotOf[i]!]!;
+    a.drives += 1;
+    a.miles += d.miles;
+    a.points += d.pointsNet ?? 0;
+    a.events += d.counts.speeding + d.counts.hardBrake + d.counts.hardAccel + d.counts.hardCorner + d.counts.pickups;
+  });
+  if (events !== null && list.length > 0) {
+    const sorted = [...events].sort((a, b) => a.startedAt - b.startedAt);
+    let j = -1;
+    for (const e of sorted) {
+      if (e.status === 'removed') continue;
+      while (j + 1 < list.length && list[j + 1]!.startedAt <= e.startedAt) j += 1;
+      if (j >= 0) acc[slotOf[j]!]!.penalty += ratingPenalty(e);
+    }
+  }
+
+  const series: Trend['series'] = { score: [], events: [], points: [] };
+  slots.forEach((s, i) => {
+    const a = acc[i]!;
+    if (a.drives === 0) return;
+    const at = { x: s.x, when: s.when };
+    if (a.miles > 0) {
+      if (events !== null) series.score.push({ ...at, value: Math.round(safetyRating(a.penalty, a.miles).rating ?? 100) });
+      series.events.push({ ...at, value: round1((a.events / a.miles) * 100) });
+    }
+    series.points.push({ ...at, value: Math.round(a.points / a.drives) });
+  });
+  return { step, ticks, series };
+}
+
+/**
+ * The chart's value range per series: Score is always 0–100; Events and Points pad the data by
+ * 15 % of its spread (at least 0.5 events or 5 points each way), and Events never dips below 0.
+ */
+export function trendRange(kind: TrendKind, values: readonly number[]): { lo: number; hi: number } {
+  if (kind === 'score' || values.length === 0) return kind === 'score' ? { lo: 0, hi: 100 } : { lo: 0, hi: 1 };
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const pad = Math.max((max - min) * 0.15, kind === 'events' ? 0.5 : 5);
+  return { lo: kind === 'events' ? Math.max(0, min - pad) : min - pad, hi: max + pad };
+}
+
+export type TrendDirection = 'up' | 'down' | 'steady';
+
+/**
+ * Which way the line leans: the least-squares slope across the points, as the change it makes
+ * from the first point to the last. Under 5 % of the chart's range (`span`) reads as steady.
+ */
+export function trendDirection(points: readonly Pick<TrendPoint, 'x' | 'value'>[], span: number): TrendDirection {
+  if (points.length < 2) return 'steady';
+  const n = points.length;
+  const mx = points.reduce((s, p) => s + p.x, 0) / n;
+  const my = points.reduce((s, p) => s + p.value, 0) / n;
+  let num = 0;
+  let den = 0;
+  for (const p of points) {
+    num += (p.x - mx) * (p.value - my);
+    den += (p.x - mx) ** 2;
+  }
+  if (den === 0) return 'steady';
+  const change = (num / den) * (points[n - 1]!.x - points[0]!.x);
+  if (Math.abs(change) < 0.05 * span) return 'steady';
+  return change > 0 ? 'up' : 'down';
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -80,9 +80,21 @@ test('useAnalytics: range sums, grid and list; all-time bests and routes; 30-day
   expect(result.current.routes).toHaveLength(4);
   expect(result.current.region).toMatchObject({ latitude: 47.62, longitude: -122.3 });
 
+  // The trend: one point per day with drives; today's two severe brakes over 5 mi
+  // (100 − 10·50/5) take its Score to the floor.
+  expect(result.current.trend.step).toBe('day');
+  expect(result.current.trend.series.points.map((p) => [p.when, p.value])).toEqual([
+    ['on Sunday', 50],
+    ['today', 20],
+  ]);
+  expect(result.current.trend.series.score.map((p) => p.value)).toEqual([100, 0]);
+
   await rerender({ range: 'year' });
   await waitFor(() => expect(result.current.sums.drives).toBe(4));
   expect(result.current.range).toBe('year');
+  // A year reads its own events (past the 30-day window): Score by month, July and October.
+  await waitFor(() => expect(result.current.trend.series.score).toHaveLength(2));
+  expect(result.current.trend.series.score.map((p) => p.when)).toEqual(['in July', 'in October 2026']);
 });
 
 test('while the window’s events are still loading, nothing is scored: drives alone never read as perfect', async () => {

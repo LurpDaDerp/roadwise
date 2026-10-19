@@ -1,7 +1,7 @@
 import { drive, NOW } from '@/features/drives/__fixtures__/drives';
 import type { LocalDrive } from '@/features/drives/model';
 
-import { coach, driveGrid, fitLines, personalBests, rangeStart, scoredSince, windowSums, type AxisScores, type Range } from '../model';
+import { coach, driveGrid, fitLines, personalBests, rangeStart, scoredSince, trend, windowSums, type AxisScores, type Range } from '../model';
 import type { AnalyticsData } from '../useAnalytics';
 
 export { NOW };
@@ -35,6 +35,8 @@ export function analytics(list: readonly LocalDrive[], range: Range = 'week', ov
     bests: personalBests(list),
     sums: windowSums(list, sinceMs),
     grid: driveGrid(list, sinceMs),
+    // No events: every Score point reads 100.
+    trend: trend(list, [], range, NOW),
     drives: scoredSince(list, sinceMs),
     routes,
     region: fitLines(routes),
