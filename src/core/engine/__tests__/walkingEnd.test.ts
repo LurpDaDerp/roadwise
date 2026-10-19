@@ -397,11 +397,11 @@ describe('15. S2: the shown speed', () => {
     return h.engine.snapshot();
   }
 
-  test('0 while the speed is below its own accuracy and under 3 mph; the raw speed otherwise', async () => {
+  test('a drive opens at 0 under 3 mph whatever the rating (`displaySpeed.ts`); the speed from 3 mph', async () => {
     expect(await shown({ speed: 0.8, speedAcc: 1.0 })).toMatchObject({ speedMps: 0, speedKnown: true, stopped: true });
-    expect((await shown({ speed: 0.8, speedAcc: 0.5 })).speedMps).toBe(0.8);
+    expect((await shown({ speed: 0.8, speedAcc: 0.5 })).speedMps).toBe(0);
+    expect((await shown({ speed: 0.8, speedAcc: -1 })).speedMps).toBe(0);
     expect((await shown({ speed: 1.5, speedAcc: 3.0 })).speedMps).toBe(1.5);
-    expect((await shown({ speed: 0.8, speedAcc: -1 })).speedMps).toBe(0.8);
     expect(await shown({ speed: -1, gnssValid: false })).toMatchObject({ speedMps: 0, speedKnown: false });
   });
 

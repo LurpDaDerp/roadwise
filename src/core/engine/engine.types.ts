@@ -166,12 +166,14 @@ export interface EngineSnapshot {
   startedAt: number | null;
   lastRowTs: number | null;
   /**
-   * The speed to show, m/s: the known speed, or 0 while it is below its own accuracy rating and
-   * under 3 mph (`motion.shownSpeed`); a row that lost its fix holds the last one for up to 3 s
-   * (`motion.SPEED_HOLD_MS`); 0 when unknown — read `speedKnown` first (unknown is "—").
+   * The speed to show as of the row, m/s (`displaySpeed.ts`): the fix led along the acceleration,
+   * 0 for a car standing still or creeping under 3 mph, the last one held flat for up to 3 s when a
+   * row lost its fix; 0 when unknown — read `speedKnown` first (unknown is "—").
    * `stopped` and `lockedOut` read the raw speed.
    */
   speedMps: number;
+  /** The acceleration (m/s²) the screen carries `speedMps` on with until the next row; 0 when cruising, held or 0. */
+  speedAccelMps2: number;
   /** There is a speed to show: the current row's, or one held from up to 3 s before. False before the first row and once the fix has been gone longer. */
   speedKnown: boolean;
   limit: LimitSample;

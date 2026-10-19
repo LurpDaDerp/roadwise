@@ -14,8 +14,6 @@
 // Without the permission no reports come and neither rule ever applies.
 import type { MotionActivity } from '@drive-sense';
 
-import { MPS_PER_MPH } from '@/core/detectors/common';
-
 /** What one report says: on foot, nothing either way (a low-confidence walk), or not on foot. */
 export type FootReading = 'onFoot' | 'unsure' | 'clear';
 
@@ -25,10 +23,6 @@ export const WALK_CONFIRM_MS = 20_000;
 export const ON_FOOT_DROP_MS = 600_000;
 /** The last known speed is no longer the car's once its row is more than this old (parked where there is no sky). */
 export const WALK_STALE_FIX_MS = 60_000;
-/** S2: the shown speed is never zeroed at or above this. */
-export const STOP_DISPLAY_MAX_MPS = 3 * MPS_PER_MPH;
-/** S3: a row that lost its fix keeps showing the last known speed while that is this recent (row clock). */
-export const SPEED_HOLD_MS = 3_000;
 
 /**
  * A walking or running report at medium confidence or more is on foot; at low confidence it says
@@ -38,13 +32,4 @@ export function footReading(a: MotionActivity): FootReading {
   if (a.exit === true) return 'clear';
   if (a.type === 'walking' || a.type === 'running') return a.confidence === 'low' ? 'unsure' : 'onFoot';
   return 'clear';
-}
-
-/**
- * S2, the speed to show (m/s): 0 while the GPS speed is below its own accuracy rating and under
- * 3 mph (a phone standing still reads a little speed); else the speed. An unrated speed (`-1`) is
- * shown as it is. Display only: nothing scores or ends a drive on it.
- */
-export function shownSpeed(speedMps: number, speedAcc: number): number {
-  return speedAcc >= 0 && speedMps < Math.min(speedAcc, STOP_DISPLAY_MAX_MPS) ? 0 : speedMps;
 }

@@ -20,7 +20,8 @@ import { MAX_DRIVE_MS } from '@/data/sync/payload';
 import type { MotionActivity } from '@drive-sense';
 
 import type { AdoptedTrip, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
-import { footReading, ON_FOOT_DROP_MS, shownSpeed, SPEED_HOLD_MS, WALK_CONFIRM_MS, WALK_STALE_FIX_MS } from './motion';
+import { nextDisplaySpeed, type DisplaySpeed } from './displaySpeed';
+import { footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS, WALK_STALE_FIX_MS } from './motion';
 import {
   appendRow,
   autoEndAt,
@@ -62,8 +63,8 @@ export function createEngine(deps: EngineDeps): Engine {
   let session: TripSession | null = null;
   let suite: DetectorSuite | null = null;
   let seen: Seen | null = null;
-  /** S3: the last shown speed (m/s) and its row's time, held through a row or two that lost the fix. */
-  let held: { mps: number; ts: number } | null = null;
+  /** The speed the screen shows, as of the last row (`displaySpeed.ts`). */
+  let shown: DisplaySpeed | null = null;
   /**
    * The latest on-foot report still standing (`motion.ts`): `since` when the walk began, `at` when it
    * arrived, both on the row clock. Null when none, or once cleared or cancelled by driving.
@@ -113,9 +114,6 @@ export function createEngine(deps: EngineDeps): Engine {
   function snapshot(): EngineSnapshot {
     const row = seen?.row ?? null;
     const speed = row === null ? null : knownSpeed(row);
-    // S3: a row without a fix shows the last known speed while it is SPEED_HOLD_MS old or less.
-    const shown =
-      row === null ? null : speed !== null ? Math.max(0, shownSpeed(speed, row.speedAcc)) : held !== null && row.ts - held.ts <= SPEED_HOLD_MS ? held.mps : null;
     const open = suite?.openSpeeding() ?? null;
     const phone = suite?.openPhone() ?? null;
     return Object.freeze({
@@ -123,7 +121,8 @@ export function createEngine(deps: EngineDeps): Engine {
       clientTripId: session?.clientTripId ?? null,
       startedAt: session?.startedAt ?? null,
       lastRowTs: row?.ts ?? null,
-      speedMps: shown ?? 0,
+      speedMps: shown?.mps ?? 0,
+      speedAccelMps2: shown?.accel ?? 0,
       speedKnown: shown !== null,
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
       limitMph: seen?.limitMph ?? null,
@@ -142,7 +141,7 @@ export function createEngine(deps: EngineDeps): Engine {
     session = null;
     suite = null;
     seen = null;
-    held = null;
+    shown = null;
     foot = null;
     prefetchedAtM = null;
     lastAlert = null;
@@ -187,8 +186,7 @@ export function createEngine(deps: EngineDeps): Engine {
     const det = suite as DetectorSuite;
     const limit = deps.limits.lookup(row.lat, row.lng, row.course) ?? UNKNOWN_LIMIT;
     seen = { row, limit, limitMph: limitMphFor(row, limit) };
-    const known = knownSpeed(row);
-    if (known !== null) held = { mps: Math.max(0, shownSpeed(known, row.speedAcc)), ts: row.ts };
+    shown = nextDisplaySpeed(shown, row, knownSpeed(row));
     touch();
     noteWarmup(s, row);
     const ctx: DetectorContext = { ...deps.ctx(), warmupEndsAt: s.warmup.endsAt };

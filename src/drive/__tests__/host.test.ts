@@ -404,7 +404,7 @@ describe('motion activity reports reach the engine through parseActivity', () =>
     await h.host.stop({ endOpenTrip: false });
   });
 
-  test('the background display shows 0 for a crawl below its own accuracy (S2), and the speed otherwise', async () => {
+  test('the background display shows 0 for a crawl below its own accuracy (S2), and the speed, led along its rise, otherwise', async () => {
     const h = build();
     await h.host.boot();
     await h.host.start();
@@ -412,7 +412,10 @@ describe('motion activity reports reach the engine through parseActivity', () =>
     expect(h.display.log.at(-1)).toMatch(/^update 0\//);
     expect(h.host.snapshot()).toMatchObject({ speedMps: 0, speedKnown: true });
     await feed(h, rows(1, { speedMps: 3, t0: T0 + 1000, over: () => ({ speedAcc: 1 }) }));
-    expect(h.host.snapshot().speedMps).toBe(3);
+    // Rising from 0.8 m/s: the fix is led half a second along that rise (S1).
+    const s = h.host.snapshot();
+    expect(s.speedAccelMps2).toBeGreaterThan(0);
+    expect(s.speedMps).toBeCloseTo(3 + s.speedAccelMps2 * 0.5, 9);
     await h.host.stop({ endOpenTrip: false });
   });
 });

@@ -1,7 +1,6 @@
 import type { MotionActivity } from '@drive-sense';
 
-import { mph } from '@/core/detectors/__fixtures__/rows';
-import { footReading, ON_FOOT_DROP_MS, shownSpeed, STOP_DISPLAY_MAX_MPS, WALK_CONFIRM_MS, WALK_STALE_FIX_MS } from '@/core/engine/motion';
+import { footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS, WALK_STALE_FIX_MS } from '@/core/engine/motion';
 
 const a = (type: MotionActivity['type'], confidence: MotionActivity['confidence'], exit?: true): MotionActivity => ({ type, confidence, ts: 1, ...(exit ? { exit } : {}) });
 
@@ -35,25 +34,4 @@ test('the walking-end constants', () => {
   expect(WALK_CONFIRM_MS).toBe(20_000);
   expect(ON_FOOT_DROP_MS).toBe(600_000);
   expect(WALK_STALE_FIX_MS).toBe(60_000);
-  expect(STOP_DISPLAY_MAX_MPS).toBeCloseTo(mph(3), 9);
-});
-
-describe('shownSpeed (S2: display only)', () => {
-  test('0 while the speed is below its own accuracy and under 3 mph', () => {
-    expect(shownSpeed(0.8, 1.0)).toBe(0);
-    expect(shownSpeed(1.2, 2.5)).toBe(0);
-  });
-  test('the speed when it is at or above its accuracy', () => {
-    expect(shownSpeed(0.8, 0.5)).toBe(0.8);
-    expect(shownSpeed(1.0, 1.0)).toBe(1.0);
-  });
-  test('never zeroed at or above 3 mph, whatever the accuracy', () => {
-    expect(shownSpeed(1.5, 3.0)).toBe(1.5);
-    expect(shownSpeed(STOP_DISPLAY_MAX_MPS, 9)).toBe(STOP_DISPLAY_MAX_MPS);
-    expect(shownSpeed(STOP_DISPLAY_MAX_MPS - 0.01, 9)).toBe(0);
-  });
-  test('an unrated speed (-1) is shown as it is; so is 0', () => {
-    expect(shownSpeed(0.8, -1)).toBe(0.8);
-    expect(shownSpeed(0, 1)).toBe(0);
-  });
 });
