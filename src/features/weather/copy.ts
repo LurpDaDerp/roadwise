@@ -1,7 +1,8 @@
 /**
  * The words of a dangerous-weather alert (plan D14), on Home and on the driving screen: a title of
- * one to three words and one short line that says what is happening and what to do (about 60
- * characters at most). Numbers are in the driver's units.
+ * one to three words, one short line that says what is happening and what to do (about 60
+ * characters at most), and the driving screen's warning: what to do, in four words at most.
+ * Numbers are in the driver's units.
  */
 import { KMH_PER_MPH, type Units } from '@/lib/units';
 
@@ -21,6 +22,23 @@ export const WEATHER_TITLES: Readonly<Record<DangerKind, string>> = {
   thunderstorm: 'Thunderstorm',
   heavy_rain: 'Heavy rain',
   strong_wind: 'Strong winds',
+};
+
+/** The driving screen's warning under the title: the line's "what to do", at a glance. */
+export const WEATHER_ACTIONS: Readonly<Record<DangerKind, string>> = {
+  blizzard: 'Stay off the road',
+  freezing_rain: 'Slow down, brake gently',
+  black_ice: 'Slow down, brake gently',
+  freezing_drizzle: 'Slow down, brake gently',
+  hail: 'Pull over safely',
+  high_wind: 'Hands on the wheel',
+  heavy_snow: 'Slow down, leave room',
+  freezing_fog: 'Slow down, low beams',
+  dense_fog: 'Slow down, low beams',
+  low_visibility: 'Slow down, low beams',
+  thunderstorm: 'Slow down',
+  heavy_rain: 'Slow down',
+  strong_wind: 'Hands on the wheel',
 };
 
 const HANDS = 'Keep both hands on the wheel.';
@@ -68,6 +86,8 @@ export function weatherLine(a: DangerAlert, units: Units): string {
 }
 
 export const weatherTitle = (a: DangerAlert): string => WEATHER_TITLES[a.kind];
+
+export const weatherAction = (a: DangerAlert): string => WEATHER_ACTIONS[a.kind];
 
 /** What a screen reader hears for the whole alert. */
 export const weatherLabel = (a: DangerAlert, units: Units): string => `Weather alert. ${weatherTitle(a)}. ${weatherLine(a, units)}`;

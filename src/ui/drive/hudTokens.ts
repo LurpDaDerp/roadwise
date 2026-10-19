@@ -102,6 +102,7 @@ export const HUD_CONTRAST_PAIRS: readonly (readonly [keyof HudPalette, keyof Hud
   ['severe', 'ground'],
   ['gain', 'ground'],
   ['ink', 'chrome'],
+  ['inkMuted', 'chrome'],
   ['ink', 'chromeEdge'],
   ['haloCalm', 'ground'],
   ['haloInk', 'ground'],

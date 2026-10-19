@@ -8,7 +8,9 @@ import type { SkyMood } from '@/ui/sky/palette';
 import { ThemeProvider } from '@/ui/theme';
 
 import { hudCopy } from '../hudCopy';
+import { hudLayout } from '../hudLayout';
 import { HudScreen } from '../HudScreen';
+import { weatherBannerPt } from '../WeatherBanner';
 
 // The halo renders for real; its props are kept so a test can read the visual it was given.
 const mockHalo: HaloProps[] = [];
@@ -220,7 +222,7 @@ describe('the dangerous-weather banner (plan D14)', () => {
   const ICE = { kind: 'freezing_rain', gustMph: null, visibilityM: null } as const;
   const GUSTS = { kind: 'strong_wind', gustMph: 52, visibilityM: null } as const;
 
-  test('only while an alert is active: a yellow outline, the warning glyph in yellow, the title; the line is spoken', async () => {
+  test('only while an alert is active: a yellow outline, the warning glyph in yellow, the title and the warning; the line is spoken', async () => {
     const h = await renderHud();
     expect(screen.queryByTestId('hud-weather')).toBeNull();
     await h.update({ weatherAlert: ICE });
@@ -228,8 +230,13 @@ describe('the dangerous-weather banner (plan D14)', () => {
     expect(screen.getByTestId('hud-weather')).toHaveStyle({ borderColor: p.minor, backgroundColor: p.chrome });
     expect(screen.getByTestId('hud-weather-icon', HIDDEN)).toHaveStyle({ color: p.minor });
     expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Freezing rain. Rain is freezing on the road. Slow down, brake gently.');
-    // While moving, the line is never drawn: one to three words is all a moving driver reads.
-    expect(screen.queryByText(/Slow down/)).toBeNull();
+    // Under the title, the warning in quiet print, one line, fixed size; the full line is only spoken.
+    const action = screen.getByTestId('hud-weather-action');
+    expect(action).toHaveTextContent('Slow down, brake gently');
+    expect(action).toHaveStyle({ color: p.inkMuted, fontSize: 15 });
+    expect(action).toHaveProp('allowFontScaling', false);
+    expect(action).toHaveProp('numberOfLines', 1);
+    expect(screen.queryByText(/Rain is freezing/)).toBeNull();
     expect(screen.getByText('Freezing rain').props.children.split(' ').length).toBeLessThanOrEqual(3);
     await h.update({ weatherAlert: null });
     expect(screen.queryByTestId('hud-weather')).toBeNull();
@@ -240,13 +247,35 @@ describe('the dangerous-weather banner (plan D14)', () => {
     for (const pal of [HUD.day, HUD.night]) {
       expect(contrastRatio(pal.minor, pal.chrome)).toBeGreaterThanOrEqual(7);
       expect(contrastRatio(pal.ink, pal.chrome)).toBeGreaterThanOrEqual(7);
+      expect(contrastRatio(pal.inkMuted, pal.chrome)).toBeGreaterThanOrEqual(7);
     }
+  });
+
+  test('its two lines fit the top band, full (56 pt) and compact (40 pt), so it never reaches the halo or the row', () => {
+    const insets = { top: 0, bottom: 0, left: 0, right: 0 };
+    const full = hudLayout({ width: 375, height: 667, insets, fontScale: 1, chip: false, units: 'mi' });
+    const compact = hudLayout({ width: 400, height: 300, insets, fontScale: 1, chip: false, units: 'mi' });
+    expect(full.compact).toBe(false);
+    expect(compact.compact).toBe(true);
+    expect(weatherBannerPt(false)).toBeLessThanOrEqual(full.line.h);
+    expect(weatherBannerPt(true)).toBeLessThanOrEqual(compact.line.h);
+  });
+
+  test('a compact window takes the smaller type', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the hook behind react-native's export
+    const dims = require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
+    jest.spyOn(dims, 'default').mockReturnValue({ width: 400, height: 300, scale: 2, fontScale: 1 });
+    await renderHud({ weatherAlert: ICE });
+    expect(screen.getByTestId('hud-weather-action')).toHaveStyle({ fontSize: 13 });
+    expect(screen.getByText('Freezing rain')).toHaveStyle({ fontSize: 16 });
+    jest.restoreAllMocks();
   });
 
   test('gusts in the driver units, spoken', async () => {
     mockUnits = 'km';
     await renderHud({ weatherAlert: GUSTS });
     expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Strong winds/);
+    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Hands on the wheel');
     expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Strong winds. Gusts to 84 km/h. Keep both hands on the wheel.');
   });
 

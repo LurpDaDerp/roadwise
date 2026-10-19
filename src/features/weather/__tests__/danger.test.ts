@@ -1,6 +1,6 @@
 import { KMH_PER_MPH } from '@/lib/units';
 
-import { WEATHER_TITLES, weatherLabel, weatherLine, weatherTitle } from '../copy';
+import { WEATHER_ACTIONS, WEATHER_TITLES, weatherAction, weatherLabel, weatherLine, weatherTitle } from '../copy';
 import { DANGER_ORDER, dangerAt, dangerFrom, isDangerKind, moreSevere, type DangerAlert, type DangerKind } from '../danger';
 import type { WeatherReading, WeatherSample } from '../openMeteo';
 import { ICE, QUARTER_MILE_M, RATE, WIND } from '../thresholds';
@@ -174,6 +174,20 @@ describe('the words', () => {
         }
       }
     }
+  });
+
+  test('every warning is four words at most, with no end stop, and agrees with its line', () => {
+    for (const kind of DANGER_ORDER) {
+      const action = WEATHER_ACTIONS[kind];
+      expect(action.split(' ').length).toBeLessThanOrEqual(4);
+      expect(action).not.toMatch(/[.!—]$/);
+      expect(weatherAction(alert(kind))).toBe(action);
+    }
+    expect(weatherAction(alert('blizzard'))).toBe('Stay off the road');
+    expect(weatherAction(alert('black_ice'))).toBe('Slow down, brake gently');
+    expect(weatherLine(alert('freezing_rain'), 'mi')).toContain(weatherAction(alert('freezing_rain')));
+    expect(weatherLine(alert('dense_fog'), 'mi')).toContain(weatherAction(alert('dense_fog')));
+    expect(weatherLine(alert('strong_wind'), 'mi')).toContain(weatherAction(alert('strong_wind')).toLowerCase());
   });
 
   test('wind in the driver units', () => {

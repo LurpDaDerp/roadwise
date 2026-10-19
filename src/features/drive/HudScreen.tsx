@@ -285,7 +285,14 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
               {hudCopy.endFailed}
             </Text>
           ) : weatherShown !== null ? (
-            <WeatherBanner alert={weatherShown} units={units} palette={p} canDismiss={live.stopped} onDismiss={hideWeather} />
+            <WeatherBanner
+              alert={weatherShown}
+              units={units}
+              palette={p}
+              compact={layout.compact}
+              canDismiss={live.stopped}
+              onDismiss={hideWeather}
+            />
           ) : layout.points === 'line' && pointsView !== null ? (
             pointsView
           ) : null}
