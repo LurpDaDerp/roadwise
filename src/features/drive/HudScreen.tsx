@@ -165,7 +165,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   }, [pickerOpen, closePicker]);
 
   // Where the drive goes once it is over: its summary, fresh, or Home when there was none (a drive
-  // that was not kept has no summary; Home says why).
+  // that was not kept has no summary; Home says why). Home is the one under the drive: `dismissTo`
+  // pops back to the tabs already in the stack (and selects Home), never a second copy of them.
   const droppedId = useDrive((d) => (d.lastFinalized !== null && d.lastFinalized.ok && d.lastFinalized.dropped !== null ? d.lastFinalized.clientTripId : null));
   const lastTripId = useRef<string | null>(live.clientTripId);
   useEffect(() => {
@@ -176,7 +177,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
     (clientTripId: string | null) => {
       if (overlay || navigated.current) return;
       navigated.current = true;
-      router.replace(clientTripId ? driveSummaryHref(clientTripId, true) : HOME_HREF);
+      if (clientTripId !== null) router.replace(driveSummaryHref(clientTripId, true));
+      else router.dismissTo(HOME_HREF);
     },
     [overlay, router]
   );

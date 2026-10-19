@@ -41,7 +41,7 @@ jest.mock('expo-notifications', () => ({
   setNotificationHandler: () => {},
 }));
 
-const mockRouter = { push: jest.fn(), navigate: jest.fn() };
+const mockRouter = { push: jest.fn(), navigate: jest.fn(), dismissTo: jest.fn(), canDismiss: jest.fn(() => false) };
 // read lazily: the factory runs at import time, before this file's consts are set
 jest.mock('expo-router', () => ({
   get router() {
@@ -260,6 +260,51 @@ test('without an injected navigate, a reminder tap routes with router.navigate (
   for (let i = 0; i < 6; i += 1) await act(async () => Promise.resolve());
   expect(mockRouter.navigate.mock.calls).toEqual([['/drive']]);
   expect(mockRouter.push).not.toHaveBeenCalled();
+});
+
+describe('without an injected navigate, a reminder tap that lands on Home returns to the Home already open', () => {
+  async function refusedTap() {
+    const native = createFakeDriveSense({ platform: 'ios', now: () => T });
+    await native.setTripReminder(true);
+    native.postReminderForTest(TOKEN);
+    await render(
+      <DataProvider db={db} now={() => T}>
+        <NotificationsHost
+          isRecording={() => false}
+          isBusy={() => false}
+          subscribeBusy={() => () => {}}
+          startDrive={jest.fn(async () => ({ ok: false as const, reason: 'permission' as const }))}
+          startGate={() => 'yes'}
+          reminderNative={native}
+        />
+      </DataProvider>
+    );
+    await act(async () => mockNotifications.listener!(reminderResponse()));
+    for (let i = 0; i < 6; i += 1) await act(async () => Promise.resolve());
+  }
+
+  beforeEach(() => {
+    mockRouter.push.mockClear();
+    mockRouter.navigate.mockClear();
+    mockRouter.dismissTo.mockClear();
+    mockRouter.canDismiss.mockReset();
+  });
+
+  test('a screen above the tabs: dismissTo Home (pops back to them), never a second Home', async () => {
+    mockRouter.canDismiss.mockReturnValue(true);
+    await refusedTap();
+    expect(mockRouter.dismissTo.mock.calls).toEqual([['/home']]);
+    expect(mockRouter.navigate).not.toHaveBeenCalled();
+    expect(mockRouter.push).not.toHaveBeenCalled();
+  });
+
+  test('only the tabs open: a plain navigate (a tab switch; popping is not a tabs action)', async () => {
+    mockRouter.canDismiss.mockReturnValue(false);
+    await refusedTap();
+    expect(mockRouter.navigate.mock.calls).toEqual([['/home']]);
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    expect(mockRouter.push).not.toHaveBeenCalled();
+  });
 });
 
 test('a refused start lands on Home with the refusal, and the session stays reminded (a second tap is expired)', async () => {

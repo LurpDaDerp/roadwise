@@ -27,7 +27,7 @@ jest.mock('@/ui/drive/HaloRing', () => {
 let mockStill = false;
 jest.mock('@/ui/theme', () => ({ ...jest.requireActual('@/ui/theme'), useOsReduceMotion: () => mockStill }));
 
-const mockRouter = { replace: jest.fn(), push: jest.fn(), navigate: jest.fn() };
+const mockRouter = { replace: jest.fn(), push: jest.fn(), navigate: jest.fn(), dismissTo: jest.fn() };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 jest.mock('expo-location', () => ({ getLastKnownPositionAsync: jest.fn(async () => null) }));
 jest.mock('expo-haptics', () => ({
@@ -324,6 +324,7 @@ describe('hold to end', () => {
     await act(() => jest.advanceTimersByTime(2000));
     expect(mockEnd).not.toHaveBeenCalled();
     expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
   });
 
   test('a full hold ends the drive and lands on its fresh summary', async () => {
@@ -338,6 +339,7 @@ describe('hold to end', () => {
       pathname: '/(app)/drives/[clientTripId]',
       params: { clientTripId: 't1', fresh: '1' },
     });
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
   });
 
   test('with no drive to end it goes Home', async () => {
@@ -345,7 +347,8 @@ describe('hold to end', () => {
     await renderHud({ status: 'idle', clientTripId: null });
     await fireEvent(screen.getByRole('button', { name: hudCopy.endLabel }), 'pressIn');
     await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
-    expect(mockRouter.replace).toHaveBeenCalledWith(HOME_HREF);
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
   });
 
   test('a drive that auto-ends lands on its summary once', async () => {
@@ -355,6 +358,7 @@ describe('hold to end', () => {
     await h.update({ status: 'idle', clientTripId: null });
     expect(mockRouter.replace).toHaveBeenCalledTimes(1);
     expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
   });
 
   const drop = (clientTripId: string): LastFinalized => ({ clientTripId, ok: true, status: null, pointsNet: null, dropped: 'no_movement', endCause: 'stopped', at: T });
@@ -365,8 +369,9 @@ describe('hold to end', () => {
     mockLastFinalized = drop('t1');
     await h.update({ status: 'idle', clientTripId: null });
     await h.update({ status: 'idle', clientTripId: null });
-    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
-    expect(mockRouter.replace).toHaveBeenCalledWith(HOME_HREF);
+    expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
   });
 
   test('a hold that ends a drive that was not kept (or lands during its automatic drop) goes Home once', async () => {
@@ -376,8 +381,22 @@ describe('hold to end', () => {
     await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
     mockLastFinalized = drop('t1');
     await h.update({ status: 'idle', clientTripId: null });
-    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
-    expect(mockRouter.replace).toHaveBeenCalledWith(HOME_HREF);
+    expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  test('a dropped drive pops back to the Home already under the drive: dismissTo once, never replace', async () => {
+    // replace would push a second tabs navigator over the first; dismissTo returns to it.
+    mockEnd.mockResolvedValue({ clientTripId: 't1', dropped: 'no_gps' });
+    await renderHud();
+    await fireEvent(screen.getByRole('button', { name: hudCopy.endLabel }), 'pressIn');
+    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith('/(tabs)/home');
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(mockRouter.push).not.toHaveBeenCalled();
+    expect(mockRouter.navigate).not.toHaveBeenCalled();
   });
 
   test('a hold that lands after the drive dropped itself, before this screen saw it go idle, goes Home', async () => {
@@ -388,8 +407,9 @@ describe('hold to end', () => {
     mockLastFinalized = drop('t1');
     await fireEvent(screen.getByRole('button', { name: hudCopy.endLabel }), 'pressIn');
     await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
-    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
-    expect(mockRouter.replace).toHaveBeenCalledWith(HOME_HREF);
+    expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
   });
 
   test('a hold that lands after the drive ended by itself and was kept goes to its summary', async () => {
@@ -400,6 +420,7 @@ describe('hold to end', () => {
     await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
     expect(mockRouter.replace).toHaveBeenCalledTimes(1);
     expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
   });
 
   test('an older drive’s drop does not send this kept drive Home', async () => {
@@ -407,6 +428,7 @@ describe('hold to end', () => {
     const h = await renderHud();
     await h.update({ status: 'idle', clientTripId: null });
     expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
   });
 
   test('a failed end says "Hold again" and lets the driver hold again', async () => {
@@ -418,6 +440,7 @@ describe('hold to end', () => {
     expect(screen.getByTestId('hud-end-failed')).toHaveTextContent(hudCopy.endFailed);
     expect(hudCopy.endFailed.split(/\s+/).length).toBeLessThanOrEqual(3);
     expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
     expect(end).not.toBeDisabled();
 
     await fireEvent(end, 'pressOut');

@@ -17,7 +17,8 @@
  * (at most 2 min from the tap) and is dropped during setup, signed out or with an update required.
  * A drive under way spends it at once: the drive screen while it records, nothing while it closes.
  * The tap's routes go through `router.navigate`, so a tap while the drive screen shows never stacks
- * a second one on it.
+ * a second one on it; Home goes through `router.dismissTo` when a screen sits above the tabs, so it
+ * returns to the Home already in the stack instead of opening a second one.
  *
  * Battery (§3.5): no timer and no polling. The busy subscription fires with the drive host's state
  * changes; while nothing is held it returns after one boolean read.
@@ -39,6 +40,7 @@ import { ensureNotificationSetup } from './categories';
 import { installForegroundHandler } from './handler';
 import {
   isReminderResponse,
+  REMINDER_HOME_HREF,
   reminderTokenOf,
   startFromReminderTap,
   watchReminderTapIntents,
@@ -68,8 +70,15 @@ export interface NotificationsHostProps {
 }
 
 const defaultNavigate = (href: string) => router.push(href as Href);
-/** A reminder tap's route: onto the screen already showing it rather than a second copy of it. */
-const defaultTapNavigate = (href: string) => router.navigate(href as Href);
+/**
+ * A reminder tap's route: onto the screen already showing it rather than a second copy of it. Home
+ * pops back to the tabs under whatever is open (and selects Home); with nothing above them, popping
+ * is not a tabs action, so it is a plain navigate (a tab switch).
+ */
+const defaultTapNavigate = (href: string) => {
+  if (href === REMINDER_HOME_HREF && router.canDismiss()) router.dismissTo(href as Href);
+  else router.navigate(href as Href);
+};
 
 const responseKey = (r: Notifications.NotificationResponse) =>
   `${r.notification.request.identifier}@${r.notification.date}#${r.actionIdentifier}`;

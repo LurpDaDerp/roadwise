@@ -1,9 +1,10 @@
 import { screen } from '@testing-library/react-native';
 
 import { draw, drive as mockDrive, event as mockEvent, press, summary as mockSummary } from '../__fixtures__/drives';
-import { DriveSummaryScreen } from '../screens';
+import { HOME_HREF } from '../routes';
+import { DriveHistoryScreen, DriveSummaryScreen } from '../screens';
 
-const mockRouter = { push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => true) };
+const mockRouter = { push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), dismissTo: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => true) };
 let mockParams: Record<string, string> = { clientTripId: 'a1' };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter, useLocalSearchParams: () => mockParams }));
 
@@ -61,4 +62,13 @@ test('loading shows placeholders', async () => {
   mockDetail = undefined;
   await draw(<DriveSummaryScreen />);
   expect(screen.getByTestId('summary-loading')).toBeOnTheScreen();
+});
+
+test('an empty history’s "Go to Home" pops back to the Home already open, never a second one', async () => {
+  await draw(<DriveHistoryScreen />);
+  await press(screen.getByText('Go to Home'));
+  expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
+  expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+  expect(mockRouter.replace).not.toHaveBeenCalled();
+  expect(mockRouter.push).not.toHaveBeenCalled();
 });

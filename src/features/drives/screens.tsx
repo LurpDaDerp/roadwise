@@ -41,7 +41,7 @@ export function DriveHistoryScreen() {
         onFilter={setFilter}
         onOpen={(id) => router.push(driveSummaryHref(id))}
         onBack={back}
-        onHome={() => router.replace(HOME_HREF)}
+        onHome={() => router.dismissTo(HOME_HREF)}
         onRefresh={() => void q.refetch()}
         refreshing={q.isRefetching}
         now={Math.floor(now() / 3_600_000) * 3_600_000}

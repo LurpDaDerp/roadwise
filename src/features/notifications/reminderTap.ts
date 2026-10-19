@@ -30,7 +30,9 @@ import type { StartNotice } from '@/features/home/startNotice';
 /** The reminder note's identifier on iOS (one note, replaced). */
 export const REMINDER_NOTIFICATION_ID = 'roadwise.tripReminder';
 
-const HOME = '/home';
+/** Where a tap that starts no drive lands (the host returns to the Home already open). */
+export const REMINDER_HOME_HREF = '/home';
+const HOME = REMINDER_HOME_HREF;
 const DRIVE = '/drive';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
