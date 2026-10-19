@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react-native';
+import { AppState, type AppStateStatus } from 'react-native';
 
 import { okJson, openMeteoBody } from '@/features/weather/__fixtures__/openMeteo';
 
@@ -101,6 +102,41 @@ describe('useDriveWeather: at the start, then every 15 min or 20 km, only while 
     await flush();
     expect(mockFetch).not.toHaveBeenCalled();
     expect(result.current).toBeNull();
+  });
+
+  test('in the background nothing is asked; a tick missed there is asked on the return to the front, once', async () => {
+    const listeners: ((s: AppStateStatus) => void)[] = [];
+    jest.spyOn(AppState, 'addEventListener').mockImplementation((_t, fn) => {
+      listeners.push(fn as (s: AppStateStatus) => void);
+      return { remove: () => {} } as never;
+    });
+    const original = Object.getOwnPropertyDescriptor(AppState, 'currentState');
+    let current: AppStateStatus = 'active';
+    Object.defineProperty(AppState, 'currentState', { get: () => current, configurable: true });
+    try {
+      await renderHook(() => useDriveWeather(true, 0, { fetch: mockFetch }));
+      await flush();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      current = 'background';
+      await act(async () => {
+        jest.advanceTimersByTime(WEATHER_REFRESH_MS * 2);
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      current = 'active';
+      await act(async () => {
+        for (const l of listeners) l('active');
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      // nothing was missed since: another return asks nothing
+      await act(async () => {
+        for (const l of listeners) l('active');
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      if (original) Object.defineProperty(AppState, 'currentState', original);
+      else delete (AppState as { currentState?: unknown }).currentState;
+      jest.restoreAllMocks();
+    }
   });
 
   test('the drive ends: no alert', async () => {

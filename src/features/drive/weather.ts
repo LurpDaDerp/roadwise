@@ -1,5 +1,6 @@
 import * as Location from 'expo-location';
 import { useEffect, useState } from 'react';
+import { AppState } from 'react-native';
 
 import { dangerFrom, type DangerAlert } from '@/features/weather/danger';
 import { fetchWeather, type FetchLike } from '@/features/weather/openMeteo';
@@ -8,8 +9,9 @@ import { fetchWeather, type FetchLike } from '@/features/weather/openMeteo';
  * The driving screen's weather: the dangerous-weather alert (plan D14, `src/features/weather`),
  * judged from Open-Meteo at the phone's position rounded to about 10 km. Asked only while the drive
  * records: once at the start, then every 15 min, and again after each 20 km of the trip's own
- * odometer, never faster. Everything fails silently: no position, no network, a slow answer or a
- * malformed body all mean "no alert".
+ * odometer, never faster. Never while RoadWise is in the background (the driver in a navigation
+ * app sees no banner): an ask that fell due there is made on the return to the front. Everything
+ * fails silently: no position, no network, a slow answer or a malformed body all mean "no alert".
  */
 
 export const WEATHER_REFRESH_MS = 15 * 60_000;
@@ -39,15 +41,25 @@ export function useDriveWeather(active: boolean, distanceM: number, deps: { fetc
   useEffect(() => {
     if (!active) return;
     let live = true;
+    let missed = false;
     const refresh = async () => {
+      if (AppState.currentState === 'background') {
+        missed = true;
+        return;
+      }
+      missed = false;
       const next = await driveWeatherAlert({ fetch: doFetch });
       if (live) setAlert((prev) => (sameAlert(prev, next) ? prev : next));
     };
     void refresh();
     const timer = setInterval(() => void refresh(), WEATHER_REFRESH_MS);
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active' && missed) void refresh();
+    });
     return () => {
       live = false;
       clearInterval(timer);
+      sub.remove();
     };
   }, [active, leg, doFetch]);
 
