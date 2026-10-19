@@ -197,8 +197,8 @@ password_requirements = ""
 # rp_origins = ["http://127.0.0.1:3000"]
 
 [auth.rate_limit]
-# Number of emails that can be sent per hour. Requires auth.email.smtp to be enabled.
-email_sent = 2
+# Number of emails that can be sent per hour (high locally, so testing the emailed code never stalls).
+email_sent = 100
 # Number of SMS messages that can be sent per hour. Requires auth.sms to be enabled.
 sms_sent = 30
 # Number of anonymous sign-ins that can be made per hour per IP address. Requires enable_anonymous_sign_ins = true.
@@ -233,7 +233,7 @@ max_frequency = "1s"
 # Number of characters used in the email OTP.
 otp_length = 6
 # Number of seconds before the email OTP expires (defaults to 1 hour).
-otp_expiry = 3600
+otp_expiry = 900
 
 # Use a production-ready SMTP server
 # [auth.email.smtp]
@@ -244,6 +244,16 @@ otp_expiry = 3600
 # pass = "env(SENDGRID_API_KEY)"
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
+
+# Sign-in is an emailed 6-digit code typed into the app: a first sign-in is sent the "confirmation"
+# template and a returning one the "magic_link" template, so both carry the code and no link.
+[auth.email.template.magic_link]
+subject = "{{ .Token }} is your RoadWise sign-in code"
+content_path = "./supabase/templates/sign-in-code.html"
+
+[auth.email.template.confirmation]
+subject = "{{ .Token }} is your RoadWise sign-in code"
+content_path = "./supabase/templates/sign-in-code.html"
 
 # Uncomment to customize email template
 # [auth.email.template.invite]
@@ -423,18 +433,37 @@ enabled = true
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":180,\"commaStyle\":\"trailing\"}"
 
 # Hosted project overrides. The [auth] values above are LOCAL ONLY (a 127.0.0.1 site_url, email
-# confirmations off, Apple disabled, magic links for diagnostics). `supabase db push` never reads
-# this file, but `supabase config push` after `supabase link` would carry those values to the hosted
-# project; this stanza is what it sends instead. Replace project_id with the production ref.
+# confirmations off, Apple and Google disabled). `supabase db push` never reads this file, but
+# `supabase config push` after `supabase link` would carry those values to the hosted project; this
+# stanza is what it sends instead. `supabase config diff` previews the push without changing anything.
 [remotes.production]
-project_id = "productionprojectref"
+project_id = "cjcpotetcslpscsbkdnj"
 
 [remotes.production.auth]
 site_url = "https://roadwise.app"
-additional_redirect_urls = ["roadwise://auth/callback"]
+# Sign-in is a code typed into the app, so no link ever has to land anywhere.
+additional_redirect_urls = []
 
+# New projects start with 8-digit email codes and a 60 s gap between sends; the app takes 6 digits.
 [remotes.production.auth.email]
 enable_confirmations = true
+otp_length = 6
+otp_expiry = 900
+max_frequency = "60s"
+
+# What the hosted project already runs, so `supabase config push` changes sign-in only: these local
+# values (MFA off, a smaller pooler, no analytics buckets) must not reach it.
+[remotes.production.auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+[remotes.production.db.pooler]
+default_pool_size = 15
+max_client_conn = 200
+
+[remotes.production.storage.analytics]
+enabled = true
+max_namespaces = 10
 
 # Native Sign in with Apple only (expo-apple-authentication + signInWithIdToken): the client id is
 # the App ID and no Services ID or secret is needed.
