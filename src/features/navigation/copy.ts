@@ -3,7 +3,7 @@
 export const navCopy = {
   pickerTitle: 'Select default navigation app',
   /** Under the title, on the driving screen only. */
-  driveLine: 'Opening it with this button never costs points. Leaving RoadWise any other way during a drive does.',
+  driveLine: 'Opening it here never costs points. Leaving RoadWise any other way does.',
   gone: (app: string) => `${app} isn't on this phone any more.`,
   failed: (app: string) => `${app} didn't open.`,
   empty: 'No navigation app found on this phone.',

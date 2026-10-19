@@ -57,13 +57,13 @@ export const settingsCopy = {
       on: 'Alerts say a short phrase, like “Hard brake”, after the tone.',
       off: 'Alerts play a tone only. Nothing is spoken.',
     },
-    tonesStay: 'Warning tones always play. This only switches the spoken words.',
+    tonesStay: 'Warning tones play either way.',
     test: {
       label: 'Play a test alert',
-      hint: 'Plays the warning tone, then the voice line if it is on',
+      hint: "Plays the warning tone, then the voice if it's on",
       playing: 'Playing',
       busy: 'You can test the sound when you’re not on a drive.',
-      failed: "The test alert couldn't play. Check that your phone isn't muted, then try again.",
+      failed: "The test alert didn't play. Make sure your phone isn't muted and try again.",
     },
     saveError: "Couldn't save that setting. Try again.",
   },
@@ -71,7 +71,7 @@ export const settingsCopy = {
   zones: {
     title: 'Privacy zones',
     intro:
-      'Routes inside a zone are hidden on your maps, share cards and heat map. Use them for places like home or school.',
+      'Routes inside a zone are hidden on your maps, share cards and heat map. Good for home or school.',
     local: 'Zones stay on this phone. They’re never uploaded.',
     trim: 'The first and last quarter mile of every drive is always hidden too.',
     add: 'Add a zone',

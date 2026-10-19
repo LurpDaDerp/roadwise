@@ -607,7 +607,7 @@ describe('the navigation button (design §7.4, §8)', () => {
     await act(async () => {});
     expect(screen.getByTestId('nav-picker')).toBeOnTheScreen();
     expect(screen.getByText('Select default navigation app')).toBeOnTheScreen();
-    expect(screen.getByText('Opening it with this button never costs points. Leaving RoadWise any other way during a drive does.')).toBeOnTheScreen();
+    expect(screen.getByText('Opening it here never costs points. Leaving RoadWise any other way does.')).toBeOnTheScreen();
     expect(screen.getByTestId('nav-picker-row-apple_maps')).toBeOnTheScreen();
     expect(screen.getByTestId('nav-picker-row-waze')).toBeOnTheScreen();
     // the screen does not dim under the list

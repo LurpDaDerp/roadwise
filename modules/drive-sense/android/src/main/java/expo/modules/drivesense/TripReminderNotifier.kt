@@ -39,7 +39,7 @@ object TripReminderNotifier {
       val nm = manager(context) ?: return
       if (nm.getNotificationChannel(CHANNEL_ID) != null) return
       val channel = NotificationChannel(CHANNEL_ID, "Drive reminder", NotificationManager.IMPORTANCE_DEFAULT).apply {
-        description = "A silent note when you're driving with no drive recording"
+        description = "A silent note when you drive without recording"
         setSound(null, null)
         enableVibration(false)
         setShowBadge(false)

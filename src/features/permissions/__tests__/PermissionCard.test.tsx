@@ -145,7 +145,7 @@ test('a swipe asks "Don\'t remind me again?" naming the permission; Cancel and a
   });
   const [title, message, buttons, options] = lastAlert();
   expect(title).toBe("Don't remind me again?");
-  expect(message).toBe("Home won't remind you about Motion & Fitness again. You can turn this back on in Profile › Settings › Permissions.");
+  expect(message).toBe("Home won't remind you about Motion & Fitness again. Turn it back on in Profile › Settings › Permissions.");
   expect(buttons.map((b) => [b.text, b.style])).toEqual([
     ['Cancel', 'cancel'],
     ["Don't remind me", 'destructive'],

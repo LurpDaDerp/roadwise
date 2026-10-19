@@ -155,7 +155,7 @@ class DashpalLinkService : Service() {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager? ?: return
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
         val channel = NotificationChannel(CHANNEL_ID, "DashPal link", NotificationManager.IMPORTANCE_LOW).apply {
-          description = "Shown while RoadWise stays ready to play your DashPal's alerts"
+          description = "Shown while RoadWise is ready to play your DashPal's alerts"
           setSound(null, null)
           enableVibration(false)
           setShowBadge(false)

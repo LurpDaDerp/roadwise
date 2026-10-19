@@ -40,7 +40,7 @@ test('Home lines', () => {
 });
 
 test('the motion lines say what motion access does (one source per surface)', () => {
-  expect(rowDetail('motion', { kind: 'granted' }, IOS)).toBe('A drive you forget to end stops when you walk away, and the reminder can notice a trip.');
+  expect(rowDetail('motion', { kind: 'granted' }, IOS)).toBe('A drive you forget to end stops when you walk away. The reminder uses it too.');
   expect(rowDetail('motion', m('denied', true), ANDROID)).toBe('Without it, a forgotten drive ends after 15 min.');
   expect(rowDetail('motion', m('notYet', true), IOS)).toBe('Without it, a forgotten drive ends after 15 min.');
   expect(rowDetail('motion', m('denied'), IOS)).toBe('Without it, a forgotten drive ends after 15 min. Also check Privacy & Security › Motion & Fitness.');
@@ -48,21 +48,21 @@ test('the motion lines say what motion access does (one source per surface)', ()
 
 test('Settings details by state and platform', () => {
   expect(rowDetail('location', m('servicesOff'), IOS)).toBe('Location Services are off. Turn them on in Settings › Privacy & Security › Location Services.');
-  expect(rowDetail('location', m('servicesOff', true, 'locationServices'), ANDROID)).toBe("Location Services are off for this phone, so drives can't record.");
+  expect(rowDetail('location', m('servicesOff', true, 'locationServices'), ANDROID)).toBe("Location Services are off, so drives can't record.");
   expect(rowDetail('precise', m('denied'), IOS)).toBe('Approximate location is too rough to record a drive.');
   expect(rowDetail('precise', { kind: 'unknown' }, IOS)).toBe("RoadWise couldn't check this on this phone.");
   expect(rowDetail('reminderAccess', { kind: 'idle' }, IOS, { reminderOn: false })).toBe('Only for the forgot-to-start reminder, which is off.');
-  expect(rowDetail('reminderAccess', { kind: 'idle' }, IOS, { reminderOn: true })).toBe('Allow Location first; the reminder then needs it set to Always.');
-  expect(rowDetail('reminderAccess', m('denied', false, 'reminderChannel'), ANDROID)).toBe("The forgot-to-start reminder can't show its note.");
-  expect(rowDetail('reminderAccess', { kind: 'idle' }, ANDROID, { reminderOn: true })).toBe('Turn on Notifications first; the reminder then shows its note.');
+  expect(rowDetail('reminderAccess', { kind: 'idle' }, IOS, { reminderOn: true })).toBe('Allow Location first, then set it to Always for the reminder.');
+  expect(rowDetail('reminderAccess', m('denied', false, 'reminderChannel'), ANDROID)).toBe("The forgot-to-start reminder can't show.");
+  expect(rowDetail('reminderAccess', { kind: 'idle' }, ANDROID, { reminderOn: true })).toBe('Turn on Notifications first so the reminder can show.');
   expect(rowDetail('reminderAccess', { kind: 'idle' }, ANDROID, { reminderOn: false })).toBe('Only for the forgot-to-start reminder, which is off.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, IOS)).toBe('Used only with a paired DashPal.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID)).toBe('Used only with a paired DashPal.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID_11)).toBe('Uses Location on this phone.');
-  expect(rowDetail('bluetooth', m('denied'), ANDROID)).toBe("Your DashPal can't connect, so its alerts stay on its own buzzer.");
+  expect(rowDetail('bluetooth', m('denied'), ANDROID)).toBe("Your DashPal can't connect, so it plays its alerts itself.");
   expect(rowDetail('camera', { kind: 'idle' }, IOS)).toBe('Asked when you scan a QR code.');
   expect(rowDetail('camera', m('denied'), ANDROID)).toBe("QR codes can't be scanned. Add friends by username.");
-  expect(rowDetail('camera', { kind: 'granted' }, IOS)).toBe('You can scan QR codes: friend codes.');
+  expect(rowDetail('camera', { kind: 'granted' }, IOS)).toBe('You can scan friend QR codes.');
 });
 
 test('titles and the names the confirmation uses follow the platform', () => {
@@ -78,7 +78,7 @@ test('titles and the names the confirmation uses follow the platform', () => {
   expect(permissionName('motion', IOS)).toBe('Motion & Fitness');
   expect(permissionName('bluetooth', ANDROID)).toBe('Nearby devices');
   expect(permissionsCopy.home.confirmMessage('Motion & Fitness')).toBe(
-    "Home won't remind you about Motion & Fitness again. You can turn this back on in Profile › Settings › Permissions."
+    "Home won't remind you about Motion & Fitness again. Turn it back on in Profile › Settings › Permissions."
   );
 });
 

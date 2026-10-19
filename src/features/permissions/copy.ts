@@ -32,7 +32,7 @@ export const permissionsCopy = {
     broken: "RoadWise can't record drives right now",
   },
   never:
-    'A drive uses location only while it records. Location “Always” is asked for only on iPhone, and only if you turn on the forgot-to-start reminder.',
+    'RoadWise uses location only while a drive records. On iPhone it asks for “Always” only if you turn on the forgot-to-start reminder.',
   status: { on: 'On', notYet: 'Needs a look', off: 'Off', idle: 'Not in use', unknown: "Can't check" },
   openSettings: 'Open Settings',
   hiddenFromHome: 'Hidden from Home',
@@ -46,7 +46,7 @@ export const permissionsCopy = {
     swipe: "Don't remind me",
     dismissAction: "Don't remind me again",
     confirmTitle: "Don't remind me again?",
-    confirmMessage: (name: string) => `Home won't remind you about ${name} again. You can turn this back on in Profile › Settings › Permissions.`,
+    confirmMessage: (name: string) => `Home won't remind you about ${name} again. Turn it back on in Profile › Settings › Permissions.`,
     cancel: 'Cancel',
     confirm: "Don't remind me",
   },
@@ -137,34 +137,34 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx, opts: 
   switch (id) {
     case 'location':
       if (state.kind === 'missing' && state.reason === 'servicesOff') {
-        return ios ? 'Location Services are off. Turn them on in Settings › Privacy & Security › Location Services.' : "Location Services are off for this phone, so drives can't record.";
+        return ios ? 'Location Services are off. Turn them on in Settings › Privacy & Security › Location Services.' : "Location Services are off, so drives can't record.";
       }
       return on ? 'RoadWise can measure speed and miles on your drives.' : "Without it, RoadWise can't record drives.";
     case 'precise':
       return on ? 'Speed and distance are measured accurately.' : 'Approximate location is too rough to record a drive.';
     case 'motion': {
-      if (on) return 'A drive you forget to end stops when you walk away, and the reminder can notice a trip.';
+      if (on) return 'A drive you forget to end stops when you walk away. The reminder uses it too.';
       const line = `Without it, a forgotten drive ends after ${IDLE_MIN} min.`;
       return ios && state.kind === 'missing' && state.reason === 'denied' ? `${line} Also check Privacy & Security › Motion & Fitness.` : line;
     }
     case 'notifications':
-      return on ? 'Reminders, drive results, your weekly recap and friend requests can reach you.' : "You won't get reminders, drive results or your weekly recap.";
+      return on ? "You'll get reminders, drive results, your weekly recap and friend requests." : "You won't get reminders, drive results or your weekly recap.";
     case 'reminderAccess':
       if (ios) {
-        if (on) return 'The forgot-to-start reminder can notice a drive with RoadWise closed.';
+        if (on) return 'The forgot-to-start reminder works even with RoadWise closed.';
         if (state.kind === 'missing') return 'The reminder needs Location set to Always.';
-        return opts.reminderOn ? 'Allow Location first; the reminder then needs it set to Always.' : 'Only for the forgot-to-start reminder, which is off.';
+        return opts.reminderOn ? 'Allow Location first, then set it to Always for the reminder.' : 'Only for the forgot-to-start reminder, which is off.';
       }
       if (state.kind === 'idle') {
-        return opts.reminderOn ? 'Turn on Notifications first; the reminder then shows its note.' : 'Only for the forgot-to-start reminder, which is off.';
+        return opts.reminderOn ? 'Turn on Notifications first so the reminder can show.' : 'Only for the forgot-to-start reminder, which is off.';
       }
-      return on ? 'Drive reminder notifications can appear.' : "The forgot-to-start reminder can't show its note.";
+      return on ? 'Drive reminder notifications can appear.' : "The forgot-to-start reminder can't show.";
     case 'bluetooth':
       if (state.kind === 'idle') return nearbyDevices(c) || ios ? 'Used only with a paired DashPal.' : 'Uses Location on this phone.';
-      return on ? 'Your DashPal can connect.' : "Your DashPal can't connect, so its alerts stay on its own buzzer.";
+      return on ? 'Your DashPal can connect.' : "Your DashPal can't connect, so it plays its alerts itself.";
     case 'camera':
       if (state.kind === 'idle') return 'Asked when you scan a QR code.';
-      return on ? 'You can scan QR codes: friend codes.' : "QR codes can't be scanned. Add friends by username.";
+      return on ? 'You can scan friend QR codes.' : "QR codes can't be scanned. Add friends by username.";
   }
 }
 
