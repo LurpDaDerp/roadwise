@@ -57,6 +57,17 @@ test('a clean drive says "No deductions" and keeps the clean bonus in the detail
   expect(screen.getByTestId('receipt-total')).toHaveProp('accessibilityLabel', 'Total, plus 172 points');
 });
 
+test('a DashPal drive shows the multiplier arrow and says "to" aloud', async () => {
+  const base = result();
+  const r = result({ breakdown: { ...base.breakdown, dashcamMult: 1.25, mult: 1.5 } });
+  await draw(<SummaryView {...props({ drive: drive({ result: r }) })} />);
+  expect(screen.getByTestId('receipt-detail')).toHaveTextContent('Safe miles 11.8 mi × 10 · Streak ×1.20 · DashPal ×1.25 → ×1.50 (cap)');
+  expect(screen.getByTestId('receipt-earned')).toHaveProp(
+    'accessibilityLabel',
+    expect.stringMatching(/Streak ×1\.20 · DashPal ×1\.25 to ×1\.50 \(cap\)$/)
+  );
+});
+
 test('more than five deductions: five show, then "Show more" reveals the rest', async () => {
   const many = Array.from({ length: 7 }, (_, i) => event({ id: `m${i}`, startedAt: NOW - 2 * HOUR + (i + 1) * 60_000 }));
   await draw(<SummaryView {...props({ events: many })} />);

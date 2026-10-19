@@ -18,6 +18,9 @@ function DashedRule() {
   );
 }
 
+/** A screen reader reads "→" as "right arrow"; the multiplier line says "to" instead. */
+const spokenArrow = (s: string): string => s.replace(/ → /g, ' to ');
+
 function EarnedRow({ earned, detail }: { earned: number; detail: readonly string[] }) {
   const t = useTheme();
   const color = earned > 0 ? t.colors.signal.clean.text : t.colors.textMuted;
@@ -25,7 +28,7 @@ function EarnedRow({ earned, detail }: { earned: number; detail: readonly string
     <View
       testID="receipt-earned"
       accessible
-      accessibilityLabel={`Earned, ${spokenPoints(earned)}${detail.length > 0 ? `. ${detail.join(', ')}` : ''}`}
+      accessibilityLabel={`Earned, ${spokenPoints(earned)}${detail.length > 0 ? `. ${detail.map(spokenArrow).join(', ')}` : ''}`}
       style={{ gap: 2, paddingBottom: t.space.sm }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: t.space.md }}>
@@ -90,7 +93,7 @@ function DeductionLine({ line, selected, onSelect, onReport }: { line: ReceiptLi
             accessibilityRole="button"
             accessibilityLabel={`Report ${line.label} at ${line.time}`}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 16 }}
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+            style={({ pressed }) => ({ paddingVertical: t.space.xs, opacity: pressed ? 0.6 : 1 })}
           >
             <Text variant="footnote" tone="accent" style={{ fontWeight: '600', textDecorationLine: 'underline' }}>
               Report
