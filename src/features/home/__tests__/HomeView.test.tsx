@@ -163,17 +163,17 @@ describe('Start drive', () => {
     ['stopped', 'no_gps', 'Drive ended: there was no GPS signal, so it wasn’t saved.'],
     ['stopped', 'not_driven', 'Drive ended: the car never reached driving speed, so it wasn’t saved.'],
     ['limit', 'not_driven', 'Drive ended: the car never reached driving speed, so it wasn’t saved.'],
-    ['walking', 'not_driven', 'Drive ended: you walked away before driving, so it wasn’t saved.'],
+    ['walking', 'not_driven', 'You walked away before driving, so the drive wasn’t saved.'],
     ['manual', 'not_driven', 'The car never reached driving speed, so the drive wasn’t saved.'],
-    ['orphan', 'not_driven', 'A drive left open when RoadWise closed never reached driving speed, so it wasn’t saved.'],
+    ['orphan', 'not_driven', 'RoadWise closed during a drive that never reached driving speed, so it wasn’t saved.'],
     ['limit', 'no_movement', 'Drive ended: the car didn’t move for 15 min, so it wasn’t saved.'],
     ['limit', 'no_gps', 'Drive ended: there was no GPS signal, so it wasn’t saved.'],
-    ['walking', 'no_movement', 'Drive ended: you walked away before driving, so it wasn’t saved.'],
-    ['walking', 'no_gps', 'Drive ended: you walked away before driving, so it wasn’t saved.'],
+    ['walking', 'no_movement', 'You walked away before driving, so the drive wasn’t saved.'],
+    ['walking', 'no_gps', 'You walked away before driving, so the drive wasn’t saved.'],
     ['manual', 'no_movement', 'The car never moved, so the drive wasn’t saved.'],
     ['manual', 'no_gps', 'There was no GPS signal, so the drive wasn’t saved.'],
-    ['orphan', 'no_movement', 'A drive left open when RoadWise closed never moved, so it wasn’t saved.'],
-    ['orphan', 'no_gps', 'A drive left open when RoadWise closed had no GPS signal, so it wasn’t saved.'],
+    ['orphan', 'no_movement', 'RoadWise closed during a drive that never moved, so it wasn’t saved.'],
+    ['orphan', 'no_gps', 'RoadWise closed during a drive with no GPS signal, so it wasn’t saved.'],
   ] as const)('a drive not kept (%s, %s) says why above Start, in at most 90 characters', async (cause, reason, line) => {
     expect(dropCopy(cause, reason)).toBe(line);
     expect(line.length).toBeLessThanOrEqual(90);

@@ -10,10 +10,10 @@ import type { LocalDriveEvent } from './model';
 import { REPORT_LABEL, reportReasons, type ReportReason } from './summary';
 
 const REASON_HELP: Record<ReportReason, string> = {
-  hazard: 'Braking hard for something in the road is the right move. Accepted right away, up to 3 times a week.',
-  wrong_limit: "If the posted limit didn't match, we'll take it off and fix the map. Accepted right away, up to 3 times a week.",
-  mounted: 'Taps on a phone in a mount don’t count. We check this against what the phone saw.',
-  camera_wrong: `If your DashPal flagged something that didn’t happen, we’ll take it off. Accepted right away, up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of your other reports.`,
+  hazard: 'Braking for something in the road was the right call. Removed right away, up to 3 times a week.',
+  wrong_limit: "If the posted limit didn't match, we'll fix the map and take it off right away, up to 3 times a week.",
+  mounted: 'Taps on a mounted phone don’t count. We check what the phone saw.',
+  camera_wrong: `If DashPal flagged something that didn’t happen, we’ll take it off right away, up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of your other reports.`,
   not_driving: 'Someone else was driving. This takes the whole drive off, not just this event.',
 };
 

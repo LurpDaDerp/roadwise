@@ -74,7 +74,7 @@ export function DriveSummaryScreen() {
         ) : (
           <EmptyState
             title={detail.isError ? "Couldn't open this drive" : 'Drive not found'}
-            body={detail.isError ? 'Something went wrong reading it. Try again in a moment.' : "This drive isn't on this phone."}
+            body={detail.isError ? 'Something went wrong. Try again in a moment.' : "This drive isn't on this phone."}
             icon="car-outline"
             action={{ label: 'Back', onPress: back }}
           />

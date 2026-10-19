@@ -34,19 +34,19 @@ export const profileCopy = {
 
   heatmap: {
     title: 'Heat map',
-    intro: 'Your heat map shows the roads you drive most. You can see yours in Analytics.',
+    intro: 'Your heat map shows the roads you drive most. See it in Analytics.',
     visibility: 'Who can see it',
     visibilityHint: 'Only me is the default. Friends see it on your profile.',
     zones: 'Privacy zones',
     zonesSubtitle: 'Hide routes near home or school',
-    privacy: 'Routes in your privacy zones and the first and last quarter mile of every drive are always left out.',
+    privacy: 'It never shows routes in your privacy zones or the first and last quarter mile of a drive.',
     noMap: "Maps aren't available in this build.",
   },
 
   achievementHints: {
     first_drive: 'Finish a drive of half a mile or more.',
     clean_100: 'Drive 100 miles with zero events.',
-    perfect_week: '3 or more drives in one week, every one with zero events.',
+    perfect_week: '3 or more drives in one week, all with zero events.',
     phone_free_25: (run: number) => `${run} of 25 drives in a row without picking up your phone.`,
     streak_10: (streak: number) => `Your streak is ${streak}. Reach 10.`,
   },
@@ -69,7 +69,7 @@ export const profileCopy = {
     report: 'Report',
     block: 'Block',
     blockTitle: (u: string) => `Block ${u}?`,
-    blockBody: "They won't be able to find you or add you, and you won't see each other on boards. You can unblock them in Settings.",
+    blockBody: "They can't find or add you, and you won't see each other on boards. You can unblock them in Settings.",
     cancel: 'Cancel',
     stats: 'Last 30 days',
     statsEmpty: 'No drives in the last 30 days.',

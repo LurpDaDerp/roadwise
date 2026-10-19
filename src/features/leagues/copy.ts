@@ -33,7 +33,7 @@ export const leaguesCopy = {
     sheetTitle: 'Pick a state',
     notEligibleTitle: (u: Units) => `Drive ${formatDistance(GLOBAL_MIN_MILES, u, { digits: 0 })} in 30 days to join`,
     notEligibleBody: (u: Units) =>
-      `The global board ranks Safety Rating among drivers with ${formatDistance(GLOBAL_MIN_MILES, u, { digits: 0, spoken: true })} or more in the last 30 days.`,
+      `The global board ranks drivers by Safety Rating once they drive ${formatDistance(GLOBAL_MIN_MILES, u, { digits: 0, spoken: true })} in 30 days.`,
     notInState: 'You’re not on this state’s board.',
     rank: 'Your rank',
     rating: 'Your Safety Rating',

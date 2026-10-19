@@ -49,7 +49,7 @@ export type SummaryViewProps = {
 };
 
 const NOT_SCORED_WHY: Record<string, string> = {
-  spoofed: "This drive's location data didn't look right, so it wasn't scored.",
+  spoofed: "This drive's location didn't look right, so it wasn't scored.",
   implausible: "Something about this drive didn't add up, so it wasn't scored.",
 };
 

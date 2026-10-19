@@ -28,7 +28,7 @@ export function endNote(d: Pick<LocalDrive, 'endCause'>): string | null {
     case 'limit':
       return 'Ended on its own at the 12-hour limit';
     case 'manual_still':
-      return 'Ends where the car stopped; phone use before End still counts';
+      return 'Ends where the car stopped. Phone use before End still counts';
     default:
       return null;
   }

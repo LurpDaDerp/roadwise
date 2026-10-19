@@ -89,7 +89,7 @@ function Legend() {
 export function highlightCaption(e: LocalDriveEvent): string {
   const what = `${eventName(e.type, e.tier)} at ${formatClock(e.startedAt)}`;
   return e.lat === null || e.lng === null
-    ? `${what} happened in a privacy zone or the trimmed ends, so it isn't on the map.`
+    ? `${what} is hidden for privacy, so it isn't on the map.`
     : `Circled on the map: ${what}`;
 }
 

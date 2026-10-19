@@ -15,7 +15,7 @@ export const friendsCopy = {
   level: (n: number) => `Level ${n}`,
   rating: (r: number | null) => (r === null ? UNRANKED : `Safety Rating ${formatRating(r, true)}`),
   empty: 'No friends yet',
-  emptyBody: 'Add friends by username or with your QR code, then race them on the friends board.',
+  emptyBody: 'Add friends by username or QR code, then race them on the friends board.',
   loadError: "Couldn't load your friends.",
   retry: 'Try again',
 

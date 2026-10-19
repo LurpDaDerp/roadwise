@@ -356,7 +356,7 @@ describe('the end note (this phone only)', () => {
     ['stopped', 'Ended on its own after 15 min without moving'],
     ['walking', 'Ended on its own when you walked away'],
     ['limit', 'Ended on its own at the 12-hour limit'],
-    ['manual_still', 'Ends where the car stopped; phone use before End still counts'],
+    ['manual_still', 'Ends where the car stopped. Phone use before End still counts'],
   ] as const)('a drive ended %s says so under the title, and in the header label', async (endCause, line) => {
     expect(endNote({ endCause })).toBe(line);
     await draw(<SummaryView {...props({ drive: drive({ endCause }) })} />);

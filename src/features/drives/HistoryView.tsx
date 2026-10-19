@@ -94,7 +94,7 @@ export function HistoryView({ drives, loading, error, filter, onFilter, onOpen, 
       );
     }
     if (drives === undefined && error) {
-      return <EmptyState title="Couldn't load your drives" body="Something went wrong reading this phone's drives. Try again in a moment." icon="alert-circle-outline" />;
+      return <EmptyState title="Couldn't load your drives" body="Something went wrong. Try again in a moment." icon="alert-circle-outline" />;
     }
     const e = EMPTY[filter];
     return (

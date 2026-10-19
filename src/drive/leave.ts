@@ -23,7 +23,7 @@ export interface LeaveSink {
 
 export const leaveCopy = {
   title: 'End the drive first',
-  body: 'This opens outside RoadWise, and leaving RoadWise during a drive counts as phone use.',
+  body: 'This opens outside RoadWise. Leaving during a drive counts as phone use.',
   ok: 'OK',
 } as const;
 

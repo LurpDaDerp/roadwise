@@ -67,7 +67,7 @@ describe('the sink', () => {
     setLeaveSink(sinkOf(true));
     expect(blockedDuringDrive()).toBe(true);
     expect(alert).toHaveBeenCalledTimes(1);
-    expect(alert).toHaveBeenCalledWith('End the drive first', 'This opens outside RoadWise, and leaving RoadWise during a drive counts as phone use.', [{ text: 'OK' }]);
+    expect(alert).toHaveBeenCalledWith('End the drive first', 'This opens outside RoadWise. Leaving during a drive counts as phone use.', [{ text: 'OK' }]);
     expect(leaveCopy.title).toBe('End the drive first');
   });
 });

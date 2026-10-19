@@ -18,7 +18,7 @@ export const REFUSAL_COPY: Record<StartBanner, string> = {
   services: 'Location Services are off. Turn them on to record a drive.',
   busy: 'A drive is already running.',
   error: 'Couldn’t start the drive. Try again.',
-  'reminder-expired': 'That reminder has expired. Tap Start Drive to record a drive.',
+  'reminder-expired': 'That reminder has expired. Tap Start Drive instead.',
 };
 
 const IDLE_MIN = Math.round(IDLE_END_S / 60);
@@ -27,15 +27,15 @@ const IDLE_MIN = Math.round(IDLE_END_S / 60);
 export function dropCopy(cause: EndCause, reason: DropReason): string {
   switch (cause) {
     case 'walking':
-      return 'Drive ended: you walked away before driving, so it wasn’t saved.';
+      return 'You walked away before driving, so the drive wasn’t saved.';
     case 'manual':
       if (reason === 'no_gps') return 'There was no GPS signal, so the drive wasn’t saved.';
       return reason === 'not_driven' ? 'The car never reached driving speed, so the drive wasn’t saved.' : 'The car never moved, so the drive wasn’t saved.';
     case 'orphan':
-      if (reason === 'no_gps') return 'A drive left open when RoadWise closed had no GPS signal, so it wasn’t saved.';
+      if (reason === 'no_gps') return 'RoadWise closed during a drive with no GPS signal, so it wasn’t saved.';
       return reason === 'not_driven'
-        ? 'A drive left open when RoadWise closed never reached driving speed, so it wasn’t saved.'
-        : 'A drive left open when RoadWise closed never moved, so it wasn’t saved.';
+        ? 'RoadWise closed during a drive that never reached driving speed, so it wasn’t saved.'
+        : 'RoadWise closed during a drive that never moved, so it wasn’t saved.';
     case 'stopped':
     case 'limit':
       if (reason === 'no_gps') return 'Drive ended: there was no GPS signal, so it wasn’t saved.';

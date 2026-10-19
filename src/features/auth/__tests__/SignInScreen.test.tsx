@@ -187,7 +187,7 @@ test('answers a rejected sign-in in place, in a live region', async () => {
   await tick();
   await fireEvent.press(screen.getByRole('button', APPLE));
   const alert = await screen.findByRole('alert');
-  expect(alert).toHaveTextContent('Sign-in did not work. Try again.');
+  expect(alert).toHaveTextContent("Couldn't sign in. Try again.");
   // The reason goes to the Metro log, where whoever is setting the app up can read it.
   expect(warn).toHaveBeenCalledWith('[sign-in] apple:', expect.any(Error));
   warn.mockRestore();
@@ -282,7 +282,7 @@ describe('creating an account with an email and password', () => {
     ['weak_password', 'That password is too weak. Use at least 8 characters.'],
     ['rate_limited', 'Too many tries. Try again in a minute.'],
     ['confirm_email', 'Check your email to confirm your account, then sign in.'],
-    ['error', 'Sign-in did not work. Try again.'],
+    ['error', "Couldn't sign in. Try again."],
   ] as const)('a refused registration (%s) says so in place and claims nothing', async (result, words) => {
     mockRegister.mockResolvedValueOnce(result);
     await mount();
@@ -325,7 +325,7 @@ describe('signing in with an email and password', () => {
   test.each([
     ['invalid', "That email and password don't match. Check them and try again."],
     ['rate_limited', 'Too many tries. Try again in a minute.'],
-    ['error', 'Sign-in did not work. Try again.'],
+    ['error', "Couldn't sign in. Try again."],
   ] as const)('a refused sign-in (%s) says so in place', async (result, words) => {
     mockSignInPassword.mockResolvedValueOnce(result);
     await toSignIn();

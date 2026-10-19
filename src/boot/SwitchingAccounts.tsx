@@ -4,7 +4,7 @@ import { Screen, Text, useTheme } from '@/ui';
 
 export const switchingCopy = {
   title: 'Setting this phone up for you',
-  body: 'The last driver signed out, so their drives are being cleared.',
+  body: "Clearing the last driver's drives.",
 } as const;
 
 /**
