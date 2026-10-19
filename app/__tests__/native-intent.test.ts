@@ -7,13 +7,15 @@ test.each([
   ['roadwise://clan/ABCD2345', '/clan/ABCD2345'],
   ['roadwise:///clan/ABCD2345', '/clan/ABCD2345'],
   ['roadwise://drives/0f8fad5b-d9cb-469f-a165-70867728950e?fresh=1', '/drives/0f8fad5b-d9cb-469f-a165-70867728950e?fresh=1'],
-  ['roadwise://auth/callback#access_token=x', '/auth/callback#access_token=x'],
   ['/clan/ABCD2345', '/clan/ABCD2345'],
 ])('%s passes as %s', async (path, expected) => expect(await go(path)).toBe(expected));
 
 test.each([
   'roadwise://drive',
   'roadwise://drive?start=1',
+  // Sign-in is a code typed into the app: no link signs anyone in.
+  'roadwise://auth/callback#access_token=x',
+  'roadwise://auth/callback?code=x',
   // Home, and nothing a parameter could start: no link ever starts a drive.
   'roadwise://home',
   'roadwise:///home',

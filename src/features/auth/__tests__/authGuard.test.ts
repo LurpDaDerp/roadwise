@@ -74,7 +74,6 @@ describe('resolveStart', () => {
 describe('resolveGate', () => {
   const SEGMENTS: string[][] = [
     ['(auth)', 'sign-in'],
-    ['auth', 'callback'],
     ['(tabs)', 'home'],
     ['(tabs)', 'leagues'],
     ['(app)', 'drives'],
@@ -132,23 +131,19 @@ describe('resolveGate', () => {
     ['signedOut', 'unknown', 'ok', ['(onboarding)', '[step]'], '/(auth)/sign-in'],
     ['signedOut', 'unknown', 'ok', ['(app)', 'drives'], '/(auth)/sign-in'],
     ['signedOut', 'unknown', 'ok', ['(auth)', 'sign-in'], null],
-    ['signedOut', 'unknown', 'ok', ['auth', 'callback'], null],
-    // Profile unknown: stay put, except off the sign-in screen and the callback.
+    // Profile unknown: stay put, except off the sign-in screen.
     ['signedIn', 'unknown', 'ok', ['(tabs)', 'home'], null],
     ['signedIn', 'unknown', 'ok', ['(onboarding)', '[step]'], null],
     ['signedIn', 'unknown', 'ok', ['(auth)', 'sign-in'], '/'],
-    ['signedIn', 'unknown', 'ok', ['auth', 'callback'], '/'],
-    // Onboarding owed: from anywhere outside onboarding, including the callback.
+    // Onboarding owed: from anywhere outside onboarding.
     ['signedIn', 'onboarding', 'ok', ['(tabs)', 'home'], '/(onboarding)/start'],
     ['signedIn', 'onboarding', 'ok', ['(tabs)', 'leagues'], '/(onboarding)/start'],
     ['signedIn', 'onboarding', 'ok', ['(app)', 'drives'], '/(onboarding)/start'],
     ['signedIn', 'onboarding', 'ok', ['(auth)', 'sign-in'], '/(onboarding)/start'],
-    ['signedIn', 'onboarding', 'ok', ['auth', 'callback'], '/(onboarding)/start'],
-    ['signedIn', 'onboarding', 'unknown', ['auth', 'callback'], '/(onboarding)/start'],
+    ['signedIn', 'onboarding', 'unknown', ['(auth)', 'sign-in'], '/(onboarding)/start'],
     ['signedIn', 'onboarding', 'ok', ['(onboarding)', '[step]'], null],
-    // Ready: out of the sign-in screen, the callback and onboarding; otherwise stay.
+    // Ready: out of the sign-in screen and onboarding; otherwise stay.
     ['signedIn', 'ready', 'ok', ['(auth)', 'sign-in'], '/(tabs)/home'],
-    ['signedIn', 'ready', 'ok', ['auth', 'callback'], '/(tabs)/home'],
     ['signedIn', 'ready', 'ok', ['(onboarding)', '[step]'], '/(tabs)/home'],
     ['signedIn', 'ready', 'ok', ['(tabs)', 'leagues'], null],
     ['signedIn', 'ready', 'unknown', ['(app)', 'drives'], null],

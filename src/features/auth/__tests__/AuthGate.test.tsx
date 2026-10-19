@@ -130,13 +130,11 @@ const cases: [Status, Record<string, unknown> | null, string[], string | null][]
   // Signing out, or a session expiring, cannot leave anyone inside the app.
   ['signedOut', null, ['(tabs)', 'home'], '/(auth)/sign-in'],
   ['signedOut', null, ['(auth)', 'sign-in'], null],
-  ['signedOut', null, ['auth', 'callback'], null],
-  // Signed in and onboarded: out of the sign-in screens and the landing pad.
+  // Signed in and onboarded: out of the sign-in screens.
   ['signedIn', READY, ['(auth)', 'sign-in'], '/(tabs)/home'],
-  ['signedIn', READY, ['auth', 'callback'], '/(tabs)/home'],
   ['signedIn', READY, ['(tabs)', 'leagues'], null],
-  // Setup owed: the callback can no longer skip it (M0 M-13), nor can the tabs.
-  ['signedIn', OWED, ['auth', 'callback'], '/(onboarding)/start'],
+  // Setup owed: neither the sign-in screen nor the tabs can skip it (M0 M-13).
+  ['signedIn', OWED, ['(auth)', 'sign-in'], '/(onboarding)/start'],
   ['signedIn', OWED, ['(tabs)', 'home'], '/(onboarding)/start'],
   ['signedIn', OWED, ['(onboarding)', '[step]'], null],
   // No profile yet: off the sign-in screens to the launch router.

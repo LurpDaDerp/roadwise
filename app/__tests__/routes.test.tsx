@@ -17,7 +17,6 @@ const V3_ROUTES = [
   'index.tsx',
   'update-required.tsx',
   '(auth)/sign-in.tsx',
-  'auth/callback.tsx',
   '(onboarding)/[step].tsx',
   '(tabs)/_layout.tsx',
   '(tabs)/home.tsx',

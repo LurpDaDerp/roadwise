@@ -129,25 +129,20 @@ export function resolveGate(
   if (status === 'loading') return null;
 
   const inAuthGroup = segments[0] === '(auth)';
-  // `app/auth/callback.tsx` sits outside the group: it is a deep-link landing pad (diagnostics
-  // builds' magic link), not a screen anyone should be left on once its session has arrived.
-  const onCallback = segments[0] === 'auth' && segments[1] === 'callback';
   const inOnboarding = segments[0] === '(onboarding)';
 
-  // Every magic-link landing starts signed out, and the exchange is a network round trip away.
-  if (status === 'signedOut') return inAuthGroup || onCallback ? null : SIGN_IN;
+  if (status === 'signedOut') return inAuthGroup ? null : SIGN_IN;
 
   switch (gate) {
     // The profile is not known yet (a first launch whose read failed). Stay put, but not on a
     // sign-in screen: the launch router holds the frame and offers the retry.
     case 'unknown':
-      return inAuthGroup || onCallback ? '/' : null;
-    // From anywhere outside onboarding — the tabs, the app stack, the sign-in screen and the
-    // callback alike.
+      return inAuthGroup ? '/' : null;
+    // From anywhere outside onboarding — the tabs, the app stack and the sign-in screen alike.
     case 'onboarding':
       return inOnboarding ? null : ONBOARDING_START;
     case 'ready':
-      return inAuthGroup || onCallback || inOnboarding ? HOME : null;
+      return inAuthGroup || inOnboarding ? HOME : null;
   }
 }
 
