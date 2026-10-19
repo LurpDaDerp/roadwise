@@ -4,7 +4,6 @@ import type { FlowContext, StepId } from './flow';
 import { ClanStep } from './steps/ClanStep';
 import { DashcamStep } from './steps/DashcamStep';
 import { HowStep } from './steps/HowStep';
-import { LicenseStep } from './steps/LicenseStep';
 import { LocationStep } from './steps/LocationStep';
 import { MotionStep } from './steps/MotionStep';
 import { NotificationsStep } from './steps/NotificationsStep';
@@ -26,7 +25,6 @@ export interface StepProps {
 /** Every step id to the component that renders it. The last (clan) finishes onboarding itself. */
 export const STEP_REGISTRY: Readonly<Record<StepId, ComponentType<StepProps>>> = {
   username: UsernameStep,
-  license: LicenseStep,
   how: HowStep,
   motion: MotionStep,
   location: LocationStep,

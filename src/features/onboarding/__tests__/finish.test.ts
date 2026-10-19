@@ -30,18 +30,18 @@ function deps(over: Partial<FinishDeps> = {}) {
     refreshProfile: jest.fn(async () => {
       log.push('refresh');
     }),
-    complete: jest.fn(async (stage: string, version: string) => {
-      log.push(`complete:${stage}:${version}`);
+    complete: jest.fn(async (version: string) => {
+      log.push(`complete:${version}`);
     }),
     ...over,
   };
   return d;
 }
 
-test('completes onboarding with the license stage and terms version, refreshes, then goes Home', async () => {
+test('completes onboarding with the terms version, refreshes, then goes Home', async () => {
   const d = deps();
-  await finishOnboarding(d, 'intermediate');
-  expect(d.log).toEqual([`complete:intermediate:${TERMS_VERSION}`, 'refresh', 'replace:/(tabs)/home']);
+  await finishOnboarding(d);
+  expect(d.log).toEqual([`complete:${TERMS_VERSION}`, 'refresh', 'replace:/(tabs)/home']);
   expect(await settings.get(ONBOARDING_STEP_KEY)).toBeNull();
   expect(await settings.get(ONBOARDING_PLAN_KEY)).toBeNull();
 });
@@ -49,7 +49,7 @@ test('completes onboarding with the license stage and terms version, refreshes, 
 test('a link held for this account is opened instead of Home, then cleared', async () => {
   await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u1', href: '/drives/t-1' });
   const d = deps();
-  await finishOnboarding(d, 'permit');
+  await finishOnboarding(d);
   expect(d.log.at(-1)).toBe('replace:/drives/t-1');
   expect(await settings.get(ONBOARDING_PENDING_HREF_KEY)).toBeNull();
 });
@@ -57,19 +57,19 @@ test('a link held for this account is opened instead of Home, then cleared', asy
 test('a link held for another account is never opened', async () => {
   await settings.set(ONBOARDING_PENDING_HREF_KEY, { uid: 'u2', href: '/drives/t-1' });
   const d = deps();
-  await finishOnboarding(d, 'full');
+  await finishOnboarding(d);
   expect(d.log.at(-1)).toBe('replace:/(tabs)/home');
 });
 
 test('a failed call navigates nowhere and clears nothing, so it can be tried again', async () => {
   const d = deps({ complete: jest.fn(async () => Promise.reject(new Error('offline'))) });
-  await expect(finishOnboarding(d, 'full')).rejects.toThrow('offline');
+  await expect(finishOnboarding(d)).rejects.toThrow('offline');
   expect(d.router.replace).not.toHaveBeenCalled();
   expect(await settings.get(ONBOARDING_STEP_KEY)).toBe('clan');
 });
 
 test('no signed-in account: rejects before calling anything', async () => {
   const d = deps({ userId: null });
-  await expect(finishOnboarding(d, 'full')).rejects.toThrow();
+  await expect(finishOnboarding(d)).rejects.toThrow();
   expect(d.complete).not.toHaveBeenCalled();
 });

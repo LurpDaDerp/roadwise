@@ -1,5 +1,5 @@
 /**
- * The settings screens: the root (the forgot-to-start reminder, units, license, state), alerts (voice off by default,
+ * The settings screens: the root (the forgot-to-start reminder, units, state), alerts (voice off by default,
  * style, test), account (export, delete, sign out) and delete account. Device settings are an
  * in-memory table; the server, session and drive state are stand-ins.
  */
@@ -53,7 +53,6 @@ const SUMMARY = {
   profile: {
     user_id: 'me',
     username: 'swift_fox',
-    license_stage: 'permit',
     units: 'mi',
     state: null,
     heatmap_visibility: 'only_me',
@@ -197,14 +196,11 @@ describe('Settings', () => {
     await waitFor(async () => expect(await w.settings.get(UNITS_KEY)).toBe('km'));
   });
 
-  it('license stage and state go through update_profile', async () => {
+  it('the state goes through update_profile, and there is no license setting', async () => {
     const w = await appWorld();
     await w.render(<SettingsScreen />);
-    await screen.findByTestId('settings-license');
-    await act(async () => {
-      fireEvent.press(screen.getByRole('tab', { name: 'Full' }));
-    });
-    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_license_stage: 'full' }));
+    await screen.findByTestId('settings-state');
+    expect(screen.queryByTestId('settings-license')).toBeNull();
     await tap('settings-state');
     await act(async () => {
       fireEvent.press(await screen.findByRole('radio', { name: 'Ohio' }));

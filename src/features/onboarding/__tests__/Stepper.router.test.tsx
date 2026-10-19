@@ -27,10 +27,6 @@ jest.mock('../steps/UsernameStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { UsernameStep: (p: object) => <StubStep {...p} step="username" /> };
 });
-jest.mock('../steps/LicenseStep', () => {
-  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
-  return { LicenseStep: (p: object) => <StubStep {...p} step="license" /> };
-});
 jest.mock('../steps/HowStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { HowStep: (p: object) => <StubStep {...p} step="how" /> };
@@ -174,7 +170,7 @@ describe('the stepper under a covering screen', () => {
     await app;
     await act(async () => {});
 
-    expect(app.getPathname()).toBe('/license');
+    expect(app.getPathname()).toBe('/how');
   });
 
   test('start does not resume under a covering screen, and resumes once it is focused again', async () => {
@@ -189,6 +185,6 @@ describe('the stepper under a covering screen', () => {
 
     await back();
     await act(async () => {});
-    expect(app.getPathname()).toBe('/license');
+    expect(app.getPathname()).toBe('/how');
   });
 });

@@ -345,7 +345,7 @@ describe('leaving onboarding with a held link (T14 review, ruling 1)', () => {
           mockWorld.profile = READY;
         },
         complete: async () => ({}),
-      }, 'permit');
+      });
     });
     await view.rerender(gate());
     await act(async () => {});
@@ -365,7 +365,7 @@ describe('leaving onboarding with a held link (T14 review, ruling 1)', () => {
           mockWorld.profile = READY;
         },
         complete: async () => ({}),
-      }, 'permit');
+      });
     });
     await view.rerender(gate());
     await act(async () => {});
@@ -395,7 +395,7 @@ describe('leaving onboarding with a held link (T14 review, ruling 1)', () => {
         gateMovedFirst = replaced();
       },
       complete: async () => ({}),
-    }, 'permit');
+    });
     // The gate itself answered the ready profile inside onboarding, with the held link.
     expect(gateMovedFirst).toEqual(['/drives']);
     await view.rerender(gate());

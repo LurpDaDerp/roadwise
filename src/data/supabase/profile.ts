@@ -9,12 +9,10 @@ type Tables = Database['public']['Tables'];
 export type Profile = Omit<Tables['profiles']['Row'], 'flagged'>;
 export type Consent = Tables['consents']['Row'];
 
-export type LicenseStage = 'permit' | 'intermediate' | 'full';
 export type HeatmapVisibility = 'only_me' | 'clan' | 'friends';
 
 /** What `update_profile` accepts (backend-interface §5). A `null` state clears it. */
 export interface ProfilePatch {
-  license_stage?: LicenseStage | null;
   units?: 'mi' | 'km';
   state?: string | null;
   heatmap_visibility?: HeatmapVisibility;
@@ -32,7 +30,7 @@ export interface ConsentInsert {
  * would also name `flagged`, and Postgres then refuses the whole read: nobody could sign in.
  */
 export const PROFILE_COLUMNS =
-  'id, username, license_stage, units, state, heatmap_visibility, league_eligible, onboarded_at, created_at, updated_at';
+  'id, username, units, state, heatmap_visibility, league_eligible, onboarded_at, created_at, updated_at';
 
 /** The owner's own row (RLS: owner-read). */
 export async function fetchProfile(userId: string): Promise<Profile> {
@@ -44,7 +42,6 @@ export async function fetchProfile(userId: string): Promise<Profile> {
 /** The only write path for `profiles`: the `update_profile` RPC, then the row read back. */
 export async function updateOwnProfile(userId: string, patch: ProfilePatch): Promise<Profile> {
   const args: Record<string, unknown> = {};
-  if (patch.license_stage !== undefined) args.p_license_stage = patch.license_stage;
   if (patch.units !== undefined) args.p_units = patch.units;
   if (patch.state !== undefined) args.p_state = patch.state ?? '';
   if (patch.heatmap_visibility !== undefined) args.p_heatmap_visibility = patch.heatmap_visibility;

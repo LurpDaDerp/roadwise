@@ -99,6 +99,6 @@ describe('app/(onboarding)/[step]', () => {
     mockParams = { step: 'username' };
     mockProfile = { id: 'user-1', username: 'swift_fox' };
     await renderRoute();
-    expect(screen.getByTestId('redirect')).toHaveTextContent('/(onboarding)/license');
+    expect(screen.getByTestId('redirect')).toHaveTextContent('/(onboarding)/how');
   });
 });

@@ -18,7 +18,6 @@ export const onboardingCopy = {
   /** The name each step goes by in its title until the step itself is built. */
   stepTitles: {
     username: 'Pick a username',
-    license: 'Your license',
     how: 'How it works',
     motion: 'Motion',
     location: 'Location',
@@ -44,17 +43,6 @@ export const onboardingCopy = {
     },
     checkFailed: "Couldn't check that name. Try again.",
     claim: 'Claim username',
-  },
-  license: {
-    title: 'Your license',
-    body: 'So we know where you are on the road. You can change it later in Settings.',
-    options: {
-      permit: { title: "Learner's permit", body: 'You drive with a supervising adult.' },
-      intermediate: { title: 'Intermediate', body: 'A provisional or junior license.' },
-      full: { title: 'Full license', body: 'No restrictions.' },
-    },
-    continue: 'Continue',
-    saveFailed: "Couldn't save that. Try again.",
   },
   how: {
     title: 'How it works',

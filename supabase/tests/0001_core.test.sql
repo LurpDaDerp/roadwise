@@ -119,21 +119,21 @@ select is(public.check_username('av'), '{"available": false, "reason": "length"}
 select is(public.check_username('ava-1'), '{"available": false, "reason": "characters"}'::jsonb, 'a hyphen is refused');
 select is(public.check_username('admin'), '{"available": false, "reason": "reserved"}'::jsonb, 'reserved names are refused');
 select is(public.check_username('sh1t_head'), '{"available": false, "reason": "not_allowed"}'::jsonb, 'profanity is refused');
-select throws_ok($$ select public.complete_onboarding('permit', '2026-10') $$, '22023', 'pick a username first', 'onboarding needs a username');
+select throws_ok($$ select public.complete_onboarding('2026-10') $$, '22023', 'pick a username first', 'onboarding needs a username');
 select lives_ok($$ select public.claim_username('Ava_1') $$, 'A claims a username');
 select is((select username::text from public.profiles where id = '00000000-0000-0000-0000-000000000001'), 'ava_1', 'stored lower-cased');
 select throws_ok($$ select public.claim_username('f_u_c_k') $$, '22023', 'username must be 3 to 20 letters, digits or underscores', 'a profane username is refused on claim');
 select lives_ok($$ select public.claim_username('AVA_1') $$, 'claiming your own username again is a no-op');
-select throws_ok($$ select public.complete_onboarding('learner', '2026-10') $$, '22023', 'license_stage must be permit, intermediate or full', 'bad license stage');
-select throws_ok($$ select public.complete_onboarding('permit', 'v 1') $$, '22023', 'version must be 1 to 32 characters', 'bad terms version');
-select lives_ok($$ select public.complete_onboarding('permit', '2026-10') $$, 'A completes onboarding');
-select is((select row(license_stage, onboarded_at is not null)::text from public.profiles where id = '00000000-0000-0000-0000-000000000001'), row('permit', true)::text, 'stage and onboarded_at set');
+select throws_ok($$ select public.complete_onboarding('v 1') $$, '22023', 'version must be 1 to 32 characters', 'bad terms version');
+select lives_ok($$ select public.complete_onboarding('2026-10') $$, 'A completes onboarding');
+select is((select onboarded_at is not null from public.profiles where id = '00000000-0000-0000-0000-000000000001'), true, 'onboarded_at set');
+select hasnt_column('public', 'profiles', 'license_stage', 'profiles keeps no license stage');
 select is((select count(*)::int from public.consents where user_id = '00000000-0000-0000-0000-000000000001' and kind = 'terms_13_plus' and version = '2026-10'), 1, 'the consent row is recorded once');
 select lives_ok($$ select public.accept_terms('2026-10') $$, 'accepting the same version again');
 select is((select count(*)::int from public.consents), 1, 'does not duplicate it');
 select throws_ok($$ select public.update_profile(p_state := 'wa') $$, '22023', 'state must be a two-letter US state code', 'state must be upper-case');
 select lives_ok($$ select public.update_profile(p_units := 'km', p_state := 'WA', p_heatmap_visibility := 'friends') $$, 'A updates profile fields');
-select is((select row(units, state, heatmap_visibility, license_stage)::text from public.profiles where id = '00000000-0000-0000-0000-000000000001'), row('km', 'WA', 'friends', 'permit')::text, 'fields updated, others untouched');
+select is((select row(units, state, heatmap_visibility)::text from public.profiles where id = '00000000-0000-0000-0000-000000000001'), row('km', 'WA', 'friends')::text, 'fields updated');
 select lives_ok($$ select public.update_profile(p_state := '') $$, 'an empty state clears it');
 select is((select state from public.profiles where id = '00000000-0000-0000-0000-000000000001'), null, 'state cleared');
 

@@ -12,7 +12,7 @@ export {
   type ExportResult,
 } from './api';
 export { BlockedScreen } from './BlockedScreen';
-export { LICENSE_LABEL, settingsCopy, VISIBILITY_LABEL } from './copy';
+export { settingsCopy, VISIBILITY_LABEL } from './copy';
 export { DeleteAccountScreen, type DeleteAccountDeps } from './DeleteAccountScreen';
 export { ExportMessage, useExport, type ExportDeps } from './exportFlow';
 export { exportFileName, shareExport, type ExportShareOutcome } from './exportShare';

@@ -13,9 +13,7 @@ import { friendlyError } from '@/features/social/errors';
 import { Card, Text, useFontScale, useTheme } from '@/ui';
 
 import { onboardingCopy } from '../copy';
-import { finishOnboarding, type LicenseStage } from '../finish';
-import { onboardingHref } from '../flow';
-import { isLicenseStage, readLicense } from '../state';
+import { finishOnboarding } from '../finish';
 import type { StepProps } from '../stepRegistry';
 import { StepFrame } from '../StepFrame';
 
@@ -30,8 +28,8 @@ interface ClanPreview {
 
 /**
  * The optional last step: an invite code is previewed (`preview_clan`), then joined (`join_clan`),
- * or skipped. Either way setup finishes here (`finishOnboarding` → `complete_onboarding`) with the
- * license stage picked earlier, and the driver lands on Home.
+ * or skipped. Either way setup finishes here (`finishOnboarding` → `complete_onboarding`) and the
+ * driver lands on Home.
  */
 export function ClanStep({ onBack }: StepProps) {
   const th = useTheme();
@@ -39,7 +37,7 @@ export function ClanStep({ onBack }: StepProps) {
   const router = useRouter();
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
-  const { session, profile, refreshProfile } = useSession();
+  const { session, refreshProfile } = useSession();
   const [code, setCode] = useState('');
   const [preview, setPreview] = useState<ClanPreview | null>(null);
   const [busy, setBusy] = useState<'find' | 'join' | 'skip' | null>(null);
@@ -59,16 +57,8 @@ export function ClanStep({ onBack }: StepProps) {
     };
   }, [settings, uid]);
 
-  const finish = async (): Promise<void> => {
-    const saved = await readLicense(settings).catch(() => null);
-    const fromProfile = (profile as { license_stage?: unknown } | null)?.license_stage;
-    const stage: LicenseStage | null = saved ?? (isLicenseStage(fromProfile) ? fromProfile : null);
-    if (stage === null) {
-      router.replace(onboardingHref('license'));
-      return;
-    }
-    await finishOnboarding({ settings, userId: session?.user.id ?? null, router, refreshProfile }, stage);
-  };
+  const finish = (): Promise<void> =>
+    finishOnboarding({ settings, userId: session?.user.id ?? null, router, refreshProfile });
 
   const run = async (what: 'find' | 'join' | 'skip', work: () => Promise<void>) => {
     if (busy) return;

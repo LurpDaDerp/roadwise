@@ -7,12 +7,12 @@ import { dashcamStatus } from '@/dashcam/ui/status';
 import { useDashcamState } from '@/dashcam/ui/useDashcam';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
-import { useMySummary, type HeatmapVisibility, type LicenseStage } from '@/data/server/summary';
+import { useMySummary, type HeatmapVisibility } from '@/data/server/summary';
 import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
 import { ReminderRow, useTripReminder, type ReminderDeps } from '@/features/reminder';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, useTheme } from '@/ui';
 
-import { LICENSE_SHORT, settingsCopy, VISIBILITY_SEGMENTS } from './copy';
+import { settingsCopy, VISIBILITY_SEGMENTS } from './copy';
 
 import { readUnits, writeUnits, type Units } from './localPrefs';
 import { LinkRow, RowIcon, Section, TopBar } from './parts';
@@ -23,7 +23,6 @@ import { stateName, US_STATES } from './usStates';
 
 const copy = settingsCopy.root;
 
-const LICENSE_SEGMENTS = (['permit', 'intermediate', 'full'] as const).map((v) => ({ value: v, label: LICENSE_SHORT[v] }));
 const UNIT_SEGMENTS = [
   { value: 'mi' as const, label: 'Miles' },
   { value: 'km' as const, label: 'Kilometers' },
@@ -139,13 +138,6 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
       </Section>
 
       <Section title={copy.you}>
-        <SegmentRow<LicenseStage>
-          title={copy.license}
-          value={edit.value('license_stage', profile?.license_stage)}
-          segments={LICENSE_SEGMENTS}
-          onChange={(v) => void edit.save('license_stage', v)}
-          testID="settings-license"
-        />
         <SegmentRow<Units> title={copy.units} value={shownUnits} segments={UNIT_SEGMENTS} onChange={(v) => void onUnits(v)} testID="settings-units" />
         <ListRow
           title={copy.state.title}

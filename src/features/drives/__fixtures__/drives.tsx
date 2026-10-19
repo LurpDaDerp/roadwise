@@ -115,7 +115,6 @@ export function summary(over: { progress?: Partial<MySummary['progress']>; leagu
     profile: {
       user_id: 'u1',
       username: 'lurp',
-      license_stage: 'intermediate',
       units: 'mi',
       state: null,
       heatmap_visibility: 'only_me',

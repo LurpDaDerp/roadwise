@@ -1,7 +1,6 @@
 /**
- * The v3 steps WP9 builds: username (live check with a friendly reason, then claim), license
- * (kept on the phone so a restart resumes with it), how it works, and the optional clan code that
- * finishes onboarding either way.
+ * The v3 steps WP9 builds: username (live check with a friendly reason, then claim), how it works,
+ * and the optional clan code that finishes onboarding either way.
  */
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
@@ -10,10 +9,9 @@ import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissi
 
 import { onboardingCopy } from '../copy';
 import type { FlowContext } from '../flow';
-import { ONBOARDING_LICENSE_KEY, ONBOARDING_PENDING_HREF_KEY, readLicense } from '../state';
+import { ONBOARDING_PENDING_HREF_KEY } from '../state';
 import { ClanStep } from '../steps/ClanStep';
 import { HowStep } from '../steps/HowStep';
-import { LicenseStep } from '../steps/LicenseStep';
 import { localCheck, normaliseUsername, UsernameStep } from '../steps/UsernameStep';
 
 const mockRpc = jest.fn();
@@ -24,14 +22,14 @@ jest.mock('@/data/server/rpc', () => {
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 const mockSession = {
   session: { user: { id: 'u1' } },
-  profile: { username: null as string | null, license_stage: null as string | null },
+  profile: { username: null as string | null },
   refreshProfile: jest.fn(async () => {}),
 };
 jest.mock('@/data/supabase/session', () => ({ useSession: () => mockSession }));
 const mockRouter = { replace: jest.fn(), push: jest.fn(), back: jest.fn(), canGoBack: () => false };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
-const mockFinish = jest.fn(async (_deps: unknown, _stage: string) => {});
-jest.mock('../finish', () => ({ finishOnboarding: (deps: unknown, stage: string) => mockFinish(deps, stage) }));
+const mockFinish = jest.fn(async (_deps: unknown) => {});
+jest.mock('../finish', () => ({ finishOnboarding: (deps: unknown) => mockFinish(deps) }));
 
 const ctx: FlowContext = { platform: 'ios', hasUsername: false };
 const copy = onboardingCopy;
@@ -41,7 +39,7 @@ beforeEach(() => {
   mockFinish.mockClear();
   mockRouter.replace.mockClear();
   mockSession.refreshProfile.mockClear();
-  mockSession.profile = { username: null, license_stage: null };
+  mockSession.profile = { username: null };
 });
 afterEach(() => clearQueryClients());
 
@@ -130,26 +128,6 @@ describe('username', () => {
   });
 });
 
-describe('license', () => {
-  it('Continue waits for a choice, and the choice is kept for the last step', async () => {
-    const onNext = jest.fn();
-    const w = await appWorld();
-    await w.render(<LicenseStep ctx={ctx} onNext={onNext} />);
-    expect(await screen.findByTestId('license-continue')).toBeDisabled();
-    await tap('license-intermediate');
-    await tap('license-continue');
-    await waitFor(() => expect(onNext).toHaveBeenCalled());
-    expect(await readLicense(w.settings)).toBe('intermediate');
-  });
-
-  it('after a restart the saved choice is still picked', async () => {
-    const w = await appWorld({ settings: { [ONBOARDING_LICENSE_KEY]: 'full' } });
-    await w.render(<LicenseStep ctx={ctx} onNext={jest.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('license-full').props.accessibilityState.checked).toBe(true));
-    expect(screen.getByTestId('license-continue')).toBeEnabled();
-  });
-});
-
 describe('how it works', () => {
   it('is one screen: miles earn, events cost, streaks multiply', async () => {
     const onNext = jest.fn();
@@ -162,17 +140,16 @@ describe('how it works', () => {
 });
 
 describe('clan (optional, last)', () => {
-  it('Skip finishes with the saved license stage', async () => {
-    const w = await appWorld({ settings: { [ONBOARDING_LICENSE_KEY]: 'permit' } });
+  it('Skip finishes onboarding without joining anything', async () => {
+    const w = await appWorld();
     await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
     await tap('clan-skip');
     await waitFor(() => expect(mockFinish).toHaveBeenCalledTimes(1));
-    expect(mockFinish.mock.calls[0]?.[1]).toBe('permit');
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
   it('an invite link tapped before setup fills in its code', async () => {
-    const w = await appWorld({ settings: { [ONBOARDING_LICENSE_KEY]: 'full', [ONBOARDING_PENDING_HREF_KEY]: { uid: 'u1', href: '/clan/join?code=ABCD2345' } } });
+    const w = await appWorld({ settings: { [ONBOARDING_PENDING_HREF_KEY]: { uid: 'u1', href: '/clan/join?code=ABCD2345' } } });
     await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
     await waitFor(() => expect(screen.getByTestId('clan-code')).toHaveProp('value', 'ABCD2345'));
   });
@@ -182,7 +159,7 @@ describe('clan (optional, last)', () => {
       preview_clan: { name: 'Night Owls', banner: 'navy', member_count: 12, full: false },
       join_clan: { id: 'c1', name: 'Night Owls' },
     });
-    const w = await appWorld({ settings: { [ONBOARDING_LICENSE_KEY]: 'full' } });
+    const w = await appWorld();
     await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
     expect(await screen.findByTestId('clan-find')).toBeDisabled();
     await act(async () => {
@@ -198,7 +175,7 @@ describe('clan (optional, last)', () => {
 
   it('a full clan can be seen but not joined; a wrong code says so', async () => {
     answerRpc(mockRpc, { preview_clan: { name: 'Packed', banner: 'gold', member_count: 30, full: true } });
-    const w = await appWorld({ settings: { [ONBOARDING_LICENSE_KEY]: 'full' } });
+    const w = await appWorld();
     await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
     await act(async () => {
       fireEvent.changeText(await screen.findByTestId('clan-code'), 'ABCD2345');
@@ -215,11 +192,4 @@ describe('clan (optional, last)', () => {
     expect(await screen.findByTestId('clan-error')).toHaveTextContent('No clan has that code. Check it and try again.');
   });
 
-  it('with no license stage on record it goes back to that step instead of finishing', async () => {
-    const w = await appWorld();
-    await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
-    await tap('clan-skip');
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/license'));
-    expect(mockFinish).not.toHaveBeenCalled();
-  });
 });

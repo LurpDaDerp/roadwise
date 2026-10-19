@@ -2,19 +2,7 @@
  * The settings screens' own words. Plain, short, second person; each consequence is said before
  * the control that causes it, and only what the app and the server actually do.
  */
-import type { HeatmapVisibility, LicenseStage } from '@/data/server/summary';
-
-export const LICENSE_LABEL: Record<LicenseStage, string> = {
-  permit: "Learner's permit",
-  intermediate: 'Intermediate',
-  full: 'Full license',
-};
-
-export const LICENSE_SHORT: Record<LicenseStage, string> = {
-  permit: 'Permit',
-  intermediate: 'Intermediate',
-  full: 'Full',
-};
+import type { HeatmapVisibility } from '@/data/server/summary';
 
 export const VISIBILITY_LABEL: Record<HeatmapVisibility, string> = {
   only_me: 'Only me',
@@ -40,7 +28,6 @@ export const settingsCopy = {
     heatmap: 'Heat map visibility',
     heatmapFooter: 'Who can see the map of roads you drive most. Only me is the default.',
     you: 'You',
-    license: 'License stage',
     units: 'Units',
     state: { title: 'US state', subtitle: 'For the state filter on the global board', none: 'Not set' },
     notifications: { title: 'Notifications', subtitle: 'Weekly recap, leagues, friends' },

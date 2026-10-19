@@ -8,7 +8,6 @@ import { type UseQueryResult } from '@tanstack/react-query';
 
 import { useServerQuery } from './useServerQuery';
 
-export type LicenseStage = 'permit' | 'intermediate' | 'full';
 export type LeagueTier = 'bronze' | 'silver' | 'gold' | 'platinum' | 'diamond';
 export type HeatmapVisibility = 'only_me' | 'clan' | 'friends';
 
@@ -16,7 +15,6 @@ export interface MySummary {
   profile: {
     user_id: string;
     username: string | null;
-    license_stage: LicenseStage | null;
     units: 'mi' | 'km';
     state: string | null;
     heatmap_visibility: HeatmapVisibility;

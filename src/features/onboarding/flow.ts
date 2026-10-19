@@ -1,7 +1,7 @@
 import type { Href } from 'expo-router';
 
 /**
- * The onboarding flow: username → license → how it works → motion → location → notifications →
+ * The onboarding flow: username → how it works → motion → location → notifications →
  * forgot-to-start reminder (optional) → DashPal (optional) → clan (optional) → Home.
  *
  * Every step has one fixed place in `STEP_IDS`; the context only decides which of them this driver
@@ -15,7 +15,6 @@ import type { Href } from 'expo-router';
 /** Canonical order. Adding a step means adding it here and in the registry. */
 export const STEP_IDS = [
   'username',
-  'license',
   'how',
   'motion',
   'location',

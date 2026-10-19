@@ -14,10 +14,6 @@ jest.mock('../steps/UsernameStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { UsernameStep: (p: object) => <StubStep {...p} step="username" /> };
 });
-jest.mock('../steps/LicenseStep', () => {
-  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
-  return { LicenseStep: (p: object) => <StubStep {...p} step="license" /> };
-});
 jest.mock('../steps/HowStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { HowStep: (p: object) => <StubStep {...p} step="how" /> };
@@ -91,7 +87,7 @@ describe('OnboardingStepper', () => {
   it('sends a known step that is not in this flow to the step it resumes at', async () => {
     // The username was just claimed: the context no longer lists the step, so it moves on.
     await renderStepper('username', ctx());
-    expect(screen.getByTestId('redirect')).toHaveTextContent('/(onboarding)/license');
+    expect(screen.getByTestId('redirect')).toHaveTextContent('/(onboarding)/how');
   });
 
   it('holds a skeleton while the context is loading, without redirecting', async () => {
@@ -123,12 +119,12 @@ describe('OnboardingStepper', () => {
         <OnboardingStepper step="start" ctx={ctx()} settings={settings} />
       </ThemeProvider>
     );
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/license'));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(onboarding)/how'));
   });
 
   it('renders the registered step with its position and saves it for a later resume', async () => {
     await renderStepper('motion', ctx());
-    expect(screen.getByText('Step 3 of 8')).toBeOnTheScreen();
+    expect(screen.getByText('Step 2 of 7')).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Motion' })).toBeOnTheScreen();
     await waitFor(async () => expect(await readSavedStep(settings)).toBe('motion'));
   });
@@ -143,7 +139,7 @@ describe('OnboardingStepper', () => {
   });
 
   it('offers no Back on the first step', async () => {
-    await renderStepper('license', ctx());
+    await renderStepper('how', ctx());
     expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
     await act(async () => {});
   });
@@ -159,13 +155,13 @@ describe('OnboardingStepper', () => {
         };
       });
 
-    const view = await renderStepper('how', ctx());
+    const view = await renderStepper('motion', ctx());
     expect(listeners.at(-1)?.()).toBe(true);
-    expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/license');
+    expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/how');
 
     await view.rerender(
       <ThemeProvider>
-        <OnboardingStepper step="license" ctx={ctx()} settings={settings} />
+        <OnboardingStepper step="how" ctx={ctx()} settings={settings} />
       </ThemeProvider>
     );
     mockRouter.replace.mockClear();
@@ -177,22 +173,23 @@ describe('OnboardingStepper', () => {
 
   it('keeps the count steady as the username drops out of the flow', async () => {
     const view = await renderStepper('username', ctx({ hasUsername: false }));
-    expect(screen.getByText('Step 1 of 9')).toBeOnTheScreen();
+    expect(screen.getByText('Step 1 of 8')).toBeOnTheScreen();
     const at = (step: StepId, c: FlowContext) =>
       view.rerender(
         <ThemeProvider>
           <OnboardingStepper step={step} ctx={c} settings={settings} />
         </ThemeProvider>
       );
-    await at('license', ctx());
-    expect(screen.getByText('Step 2 of 9')).toBeOnTheScreen();
+    await at('how', ctx());
+    expect(screen.getByText('Step 2 of 8')).toBeOnTheScreen();
     await act(async () => {});
   });
 
   it('carries the saved count across a restart, through start', async () => {
-    // A plan saved before the reminder and DashPal steps existed: they join the count, which never runs backwards.
-    const PLAN: StepId[] = ['username', 'license', 'how', 'motion', 'location', 'notifications', 'clan'];
-    const NOW: StepId[] = ['username', 'license', 'how', 'motion', 'location', 'notifications', 'reminder', 'dashcam', 'clan'];
+    // A plan saved by an older build, with a retired step (license) and before the reminder and DashPal
+    // steps existed: the retired id drops out, the new steps join the count.
+    const PLAN = ['username', 'license', 'how', 'motion', 'location', 'notifications', 'clan'] as StepId[];
+    const NOW: StepId[] = ['username', 'how', 'motion', 'location', 'notifications', 'reminder', 'dashcam', 'clan'];
     await saveStep(settings, 'location');
     await savePlan(settings, PLAN);
     const view = await renderStepper('start', ctx());
@@ -202,7 +199,7 @@ describe('OnboardingStepper', () => {
         <OnboardingStepper step="location" ctx={ctx()} settings={settings} />
       </ThemeProvider>
     );
-    expect(screen.getByText('Step 5 of 9')).toBeOnTheScreen();
+    expect(screen.getByText('Step 4 of 8')).toBeOnTheScreen();
     await waitFor(async () => expect(await readSavedPlan(settings)).toEqual(NOW));
   });
 

@@ -5,11 +5,10 @@
  */
 import { useCallback, useState } from 'react';
 
-import type { HeatmapVisibility, LicenseStage } from '@/data/server/summary';
+import type { HeatmapVisibility } from '@/data/server/summary';
 import { useServerAction } from '@/features/social/api';
 
 export interface ProfileFields {
-  license_stage: LicenseStage;
   units: 'mi' | 'km';
   /** Two-letter code, or '' to clear. */
   state: string;

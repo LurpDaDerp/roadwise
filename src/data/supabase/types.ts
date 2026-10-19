@@ -601,7 +601,6 @@ export type Database = {
           heatmap_visibility: string
           id: string
           league_eligible: boolean
-          license_stage: string | null
           onboarded_at: string | null
           state: string | null
           units: string
@@ -614,7 +613,6 @@ export type Database = {
           heatmap_visibility?: string
           id: string
           league_eligible?: boolean
-          license_stage?: string | null
           onboarded_at?: string | null
           state?: string | null
           units?: string
@@ -627,7 +625,6 @@ export type Database = {
           heatmap_visibility?: string
           id?: string
           league_eligible?: boolean
-          license_stage?: string | null
           onboarded_at?: string | null
           state?: string | null
           units?: string
@@ -1126,7 +1123,7 @@ export type Database = {
       }
       claim_username: { Args: { p: string }; Returns: undefined }
       complete_onboarding: {
-        Args: { p_license_stage: string; p_terms_version: string }
+        Args: { p_terms_version: string }
         Returns: undefined
       }
       create_clan: { Args: { p_banner: string; p_name: string }; Returns: Json }
@@ -1241,7 +1238,6 @@ export type Database = {
       update_profile: {
         Args: {
           p_heatmap_visibility?: string
-          p_license_stage?: string
           p_state?: string
           p_units?: string
         }
