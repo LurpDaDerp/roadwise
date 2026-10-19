@@ -33,6 +33,25 @@ export const analyticsCopy = {
     cleanDrives: 'Clean drives',
     avgPoints: 'Avg points',
   },
+  trend: {
+    title: 'Trend',
+    /** Names the series picker for a screen reader. */
+    picker: 'Trend series',
+    score: 'Score',
+    events: 'Events',
+    points: 'Points',
+    notEnough: 'Not enough drives yet',
+    /** What a screen reader calls each series and its step ("Score by day"). */
+    spoken: {
+      score: 'Score',
+      events: (distance: string) => `Events per 100 ${distance}`,
+      points: 'Points per drive',
+    },
+    by: { drive: 'by drive', day: 'by day', week: 'by week', month: 'by month' },
+    lowest: 'Lowest',
+    latest: 'latest',
+    direction: { up: 'trending up', down: 'trending down', steady: 'holding steady' },
+  },
   grid: {
     title: 'When you drive',
     empty: 'No drives yet',

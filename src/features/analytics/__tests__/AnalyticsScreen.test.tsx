@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react-native';
+import { screen, within } from '@testing-library/react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
 
 import { draw, press, summary as mockSummary } from '@/features/drives/__fixtures__/drives';
@@ -91,6 +91,20 @@ test('the range starts on Week and switching it re-reads everything below it', a
   expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, 10');
   expect(screen.getByLabelText('Time range')).toBeOnTheScreen();
   for (const r of ['Day', 'Week', 'Month', 'Year']) expect(screen.getByRole('tab', { name: r })).toBeOnTheScreen();
+});
+
+test('the trend card sits between Driving and Phone & points and follows the range', async () => {
+  await draw(<AnalyticsScreen />);
+  const cards = within(screen.getByTestId('analytics-metrics')).getAllByTestId(/^metrics-(driving|trend|events|phone)$/);
+  expect(cards.map((c) => c.props.testID)).toEqual(['metrics-driving', 'metrics-trend', 'metrics-phone']);
+  expect(screen.getByTestId('metrics-trend-title')).toHaveTextContent('Trend');
+  expect(screen.getByRole('tab', { name: 'Score' })).toBeSelected();
+  // Six drives 30 hours apart in the week: one point per day that has one.
+  expect(screen.getByTestId('trend-chart-box').props.accessibilityLabel).toMatch(/^Score by day\. /);
+  await press(screen.getByRole('tab', { name: 'Month' }));
+  expect(screen.getByTestId('trend-chart-box').props.accessibilityLabel).toMatch(/^Score by week\. /);
+  await press(screen.getByRole('tab', { name: 'Points' }));
+  expect(screen.getByTestId('trend-chart-box').props.accessibilityLabel).toMatch(/^Points per drive by week\. /);
 });
 
 test('a drive in the list opens its summary page', async () => {

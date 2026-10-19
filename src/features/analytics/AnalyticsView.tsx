@@ -44,7 +44,7 @@ export function AnalyticsView({ data, rating, range, onRange, onOpenDrive }: Ana
           <SummaryCard coaching={data.coaching.coaching} />
           <BestsCard bests={data.bests} onOpen={onOpenDrive} />
           <SegmentedControl accessibilityLabel={analyticsCopy.range} segments={SEGMENTS} value={range} onChange={onRange} testID="analytics-range" />
-          <MetricsCards sums={data.sums} />
+          <MetricsCards sums={data.sums} trend={data.trend} />
           <WhenYouDriveCard grid={data.grid} />
           <TripsMapCard routes={data.routes} region={data.region} />
           <DrivesCard drives={data.drives} rangeKey={range} onOpen={onOpenDrive} />
