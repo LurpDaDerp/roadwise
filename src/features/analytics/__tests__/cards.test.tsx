@@ -403,6 +403,10 @@ describe('DrivesCard', () => {
     expect(screen.getByTestId('analytics-drives-toggle').props.accessibilityState).toMatchObject({ expanded: true });
     expect(screen.getByText('Mon, Oct 5 · 2:00 PM')).toBeOnTheScreen();
     expect(screen.getAllByText('12.0 mi · 24 min · +132 pts · 1 event')).toHaveLength(3);
+    // Rows wrap rather than cut the points and events off at large text.
+    for (const id of ['analytics-drive-when', 'analytics-drive-line']) {
+      for (const el of screen.getAllByTestId(id)) expect(el.props.numberOfLines).toBeUndefined();
+    }
     await press(screen.getByTestId('analytics-drive-d1'));
     expect(onOpen).toHaveBeenCalledWith('d1');
   });

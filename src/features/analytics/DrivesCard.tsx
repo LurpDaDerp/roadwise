@@ -53,11 +53,12 @@ function Row({ drive, onPress }: { drive: LocalDrive; onPress: () => void }) {
         backgroundColor: pressed ? t.colors.surfaceRaised : 'transparent',
       })}
     >
+      {/* Both lines wrap at large text: the points and events at the end of the line still show. */}
       <View style={{ flex: 1, gap: 2 }}>
-        <Text variant="headline" numberOfLines={1}>
+        <Text variant="headline" testID="analytics-drive-when">
           {when}
         </Text>
-        <Text variant="footnote" tone="muted" numberOfLines={1}>
+        <Text variant="footnote" tone="muted" testID="analytics-drive-line">
           {line.text}
         </Text>
       </View>
