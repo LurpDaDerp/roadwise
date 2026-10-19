@@ -12,16 +12,17 @@ import { HUD_MIN_TARGET_PT, type HudPalette } from '@/ui/drive';
 export const WEATHER_CLOSE_PT = 34;
 
 const OUTLINE_PT = 2;
+const BAR_MIN_PT = 40;
 /** The two lines' type: the full band (56 pt), and a compact window's 40 pt band. */
 const TYPE = {
   full: { title: 20, titleLine: 24, action: 15, actionLine: 18, pad: 3 },
   compact: { title: 16, titleLine: 19, action: 13, actionLine: 16, pad: 0 },
 } as const;
 
-/** The banner's height at most: its two lines, padding and outline (the band must hold it). */
+/** The banner's height at most: its two lines, padding and outline, or its floor (the band must hold it). */
 export function weatherBannerPt(compact: boolean): number {
   const t = TYPE[compact ? 'compact' : 'full'];
-  return t.titleLine + t.actionLine + 2 * t.pad + 2 * OUTLINE_PT;
+  return Math.max(BAR_MIN_PT, t.titleLine + t.actionLine + 2 * t.pad + 2 * OUTLINE_PT);
 }
 
 /**
@@ -102,7 +103,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     maxWidth: '100%',
     gap: 10,
-    minHeight: 40,
+    minHeight: BAR_MIN_PT,
     paddingLeft: 14,
     paddingRight: 6,
     borderRadius: 22,
