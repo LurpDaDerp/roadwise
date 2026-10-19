@@ -49,7 +49,7 @@ export const onboardingCopy = {
     body: 'Drive safely, earn points, keep your streak going.',
     rows: [
       { big: '+10', title: 'Safe miles earn points', body: '10 points for every mile without an event.' },
-      { big: '−', title: 'Events cost points', body: 'Speeding, phone use (leaving RoadWise mid-drive too) and hard braking take points off.' },
+      { big: '−', title: 'Events cost points', body: 'Speeding, hard braking and phone use (even leaving RoadWise mid-drive) cost points.' },
       { big: '×1.30', title: 'Streaks multiply', body: 'Each good drive grows your streak and boosts what you earn.' },
     ],
     continue: 'Got it',
@@ -62,7 +62,7 @@ export const onboardingCopy = {
   location: {
     title: 'Measure your drives',
     body: 'RoadWise uses precise location to measure speed and miles during a drive you start.',
-    promise: 'During drives you start, and for the optional forgot-to-start reminder only if you turn it on · Never sold',
+    promise: 'During drives you start, and for the forgot-to-start reminder if you turn it on · Never sold',
     allow: 'Allow location',
     notNow: 'Not now',
     continue: 'Continue',
@@ -75,13 +75,13 @@ export const onboardingCopy = {
   },
   motion: {
     title: { ios: 'Motion & Fitness', android: 'Physical activity' },
-    body: 'Lets RoadWise tell when you walk away from your car, so a drive you forgot to end stops where you parked, and lets the optional forgot-to-start reminder notice a trip. Speed and braking are measured either way.',
+    body: 'Lets RoadWise stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it too. Speed and braking are measured either way.',
     allow: 'Allow motion access',
     notNow: 'Not now',
     continue: 'Continue',
     openSettings: 'Open Settings',
     allowed: 'Motion access is allowed.',
-    denied: `Motion access is off. Drives still record; one you forget to end stops after the car hasn’t moved for ${IDLE_MIN} min. You can turn it on in Settings.`,
+    denied: `Motion access is off. Drives still record, and one you forget to end stops after ${IDLE_MIN} min parked. You can turn it on in Settings.`,
     unavailable: "Your phone didn't let us ask here. You can turn it on in Settings.",
     cantCheck: "We couldn't check motion access on this phone.",
     failed: "Your phone didn't answer. Try again.",

@@ -116,11 +116,11 @@ describe('the Settings line', () => {
   });
 
   test('the words: one note a trip at a stop, and a tap on it starts the drive; nothing starts one by itself, and no other limit is promised', () => {
-    expect(L.off).toBe("One note at a stop when you're driving with no drive recording. Tap it to start your drive.");
+    expect(L.off).toBe('Reminds you at a stop if you forgot to start a drive. One tap starts it.');
     expect(L.onAndroid).toBe('On. Once a trip, without sound, usually as you park.');
-    expect(L.onIos).toBe('On. Once a trip, at a stop. If Driving Focus is on, allow RoadWise in it. If you swipe RoadWise away, it waits until you open it.');
-    expect(reminderCopy.step.body).toBe("Turn this on and RoadWise sends one note at a stop when you're driving with no drive recording. Tap it and your drive starts.");
-    expect(reminderCopy.step.bullets).toEqual(['Once a trip: a trip ends after 30 min without driving', 'Never while a drive is recording']);
+    expect(L.onIos).toBe('On. Once a trip, at a stop. Allow RoadWise in Driving Focus. If you swipe RoadWise away, it waits until you reopen the app.');
+    expect(reminderCopy.step.body).toBe('If you forget to start a drive, RoadWise reminds you at a stop. Tap the reminder to start it.');
+    expect(reminderCopy.step.bullets).toEqual(['One reminder a trip', 'Never while a drive is recording']);
     expect(reminderCopy.step.android).toBe('Silent, and it usually shows as you park.');
     const all = JSON.stringify(reminderCopy).toLowerCase();
     expect(all).not.toMatch(/automatic|auto-start|starts recording|records for you|by itself/);

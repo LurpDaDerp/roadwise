@@ -152,7 +152,7 @@ describe('permissions (v3)', () => {
       microphonePermission: false,
       recordAudioAndroid: false,
     });
-    expect(PERMISSION_COPY.camera).toBe("RoadWise uses the camera only to scan QR codes: your friends' codes. Nothing is recorded.");
+    expect(PERMISSION_COPY.camera).toBe("RoadWise uses the camera only to scan your friends' QR codes. Nothing is recorded.");
     expect(PERMISSION_COPY.camera).not.toMatch(/dashpal/i);
   });
 
@@ -165,7 +165,7 @@ describe('permissions (v3)', () => {
 
   test('the Motion & Fitness string says what motion activity is for, and claims no braking or speed', () => {
     expect(PERMISSION_COPY.motion).toBe(
-      'RoadWise uses motion activity to tell when you walk away from your car, so a drive you forgot to end stops where you parked, and so the optional forgot-to-start reminder can notice a trip.'
+      'RoadWise uses motion activity to stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it too.'
     );
     expect(PERMISSION_COPY.motion).not.toMatch(/brak|speed|detect/i);
   });

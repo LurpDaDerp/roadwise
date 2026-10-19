@@ -41,7 +41,7 @@ const everyMin = (s: number) => `every ${Math.round(s / 60)} min`;
 /** The three ideas the onboarding "how it works" step and Home's first-run card show. */
 export const HOW_IT_WORKS: { icon: IconName; title: string; body: string }[] = [
   { icon: 'car-sport-outline', title: 'Safe miles earn points', body: `${POINTS_PER_MILE} points for every safe mile you drive.` },
-  { icon: 'remove-circle-outline', title: 'Events cost points', body: 'Speeding, phone use (leaving RoadWise mid-drive too) and hard braking take points off.' },
+  { icon: 'remove-circle-outline', title: 'Events cost points', body: 'Speeding, hard braking and phone use (even leaving RoadWise mid-drive) cost points.' },
   { icon: 'flame-outline', title: 'Streaks multiply', body: `Every good drive grows your streak and boosts what you earn, up to ${x(STREAK_MULT_CAP)}.` },
 ];
 
@@ -73,7 +73,7 @@ export const RULES: RuleSection[] = [
       `Finish a drive of ${CLEAN_BONUS_MIN_MILES} mi or more with zero events for a +${CLEAN_BONUS} clean-drive bonus. DashPal events don’t count against it.`,
       'Each event takes points off (see the list below).',
       'A second event of the same kind costs ×1.25, and a third or more costs ×1.5.',
-      'On very short drives, penalties are scaled down so one slip doesn’t hit as hard. They count fully from 3 mi.',
+      'Penalties are smaller on very short drives and count fully from 3 mi.',
       `Drives under ${MIN_SCORED_MILES} mi aren't scored.`,
     ],
   },
@@ -83,10 +83,10 @@ export const RULES: RuleSection[] = [
     icon: 'phone-portrait-outline',
     points: [
       'Lifting or handling your phone while driving is a phone pickup.',
-      'Leaving RoadWise during a drive counts as phone use too: another app or the home screen, and on Android phones the app switcher and split screen. The time away counts as handling until you come back or lock your phone, which can wait until you’ve stopped.',
-      'Open your navigation app with the navigation button on the drive screen. That never costs points. Once you lock your phone or come back to RoadWise, open it with the button again: going back to it any other way costs points.',
-      'Locking your phone and the notification shade never count. A call’s own screen doesn’t count; once you’ve been back in RoadWise for 10 s of the connected call, leaving again does.',
-      'On iPhone a switch counts once you come back to RoadWise after 15 s or more, or after about 26 s away (iOS reports a lock late, so a lock screen that lights up briefly for a message doesn’t count). One that began with an unlock outside RoadWise, or that a call cuts short, counts only after about 26 s. Switches count only once your iPhone has shown RoadWise it reports a lock in time (this needs a passcode). Several short switches in a row count as one pickup (on iPhone, ones of more than about 11 s, so a quick lock and unlock never counts).',
+      'Leaving RoadWise mid-drive counts as phone use too: another app, the home screen, and on Android the app switcher or split screen. Time away counts as handling until you come back or lock your phone, which can wait until you’ve stopped.',
+      'The navigation button on the drive screen opens your navigation app and never costs points. If you lock your phone or come back to RoadWise, use the button again to reopen it. Going back any other way costs points.',
+      'Locking your phone and the notification shade never count. Nor does a call’s own screen, but once you’re back in RoadWise for 10 s of the call, leaving again counts.',
+      'On iPhone a switch counts once you’ve been away 15 s or more, or about 26 s if it began with an unlock outside RoadWise or a call cut it short. A message lighting up the lock screen, or a quick lock and unlock, never counts. Switches count only once RoadWise can tell when your iPhone locks, which needs a passcode. Several short switches in a row count as one pickup (on iPhone, ones over about 11 s).',
     ],
   },
   {
@@ -104,9 +104,9 @@ export const RULES: RuleSection[] = [
     title: 'DashPal dashcam',
     icon: 'videocam-outline',
     points: [
-      `A drive is a DashPal drive when your DashPal watched you for at least ${Math.round(DASHCAM_MIN_COVERAGE * 100)}% of the time you were moving (at least ${DASHCAM_MIN_MOVING_S / 60} min) and your phone had caught up with it by the end of the drive.`,
-      `DashPal can flag eyes off the road with no look back, or slumping out of view at speed (−${BASE_PENALTY.eyes_off}, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)}) and drowsiness (−${BASE_PENALTY.drowsy}, at most once ${everyMin(DASHCAM_DROWSY_GAP_S)}).`,
-      `They count only at ${DASHCAM_MIN_MPH} mph or more with a good GPS fix, and never in the first ${NO_EVENTS_FIRST_S} s of a drive started while stopped, unless it started within ${MERGE_GAP_S / 60} min of your last drive ending.`,
+      `It’s a DashPal drive when DashPal watched you for at least ${Math.round(DASHCAM_MIN_COVERAGE * 100)}% of your time moving (at least ${DASHCAM_MIN_MOVING_S / 60} min) and your phone caught up with it by the end.`,
+      `DashPal flags eyes off the road, including slumping out of view at speed (−${BASE_PENALTY.eyes_off}, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)}), and drowsiness (−${BASE_PENALTY.drowsy}, at most once ${everyMin(DASHCAM_DROWSY_GAP_S)}).`,
+      `They count only at ${DASHCAM_MIN_MPH} mph or more with good GPS, and not in the first ${NO_EVENTS_FIRST_S} s of a drive you started while stopped (unless your last drive ended within ${MERGE_GAP_S / 60} min).`,
       `DashPal may alarm below ${DASHCAM_MIN_MPH} mph; those alarms cost no points.`,
       'DashPal events never lower your Safety Rating or break a clean drive. They do cost points, like any event.',
     ],
@@ -118,7 +118,7 @@ export const RULES: RuleSection[] = [
     points: [
       `Your first ${DAILY_FULL_MILES} safe miles each day earn full points.`,
       `From ${DAILY_FULL_MILES} to ${DAILY_HALF_MILES} mi they earn half, and nothing after that.`,
-      'Driving around just for points doesn’t pay. Driving well does.',
+      'Driving around just for points doesn’t pay.',
     ],
   },
   {
@@ -127,7 +127,7 @@ export const RULES: RuleSection[] = [
     icon: 'flame-outline',
     points: [
       'Streaks count drives, not days. Every scored drive with positive points adds 1.',
-      'A negative drive uses a freeze if you have one. Your streak holds, it just doesn’t grow that time.',
+      'A negative drive uses a freeze if you have one, so your streak holds but doesn’t grow.',
       'With no freeze, your streak is at risk: make your next drive clean (zero events) to save it, or it resets to 0.',
       `You start with 2 freezes and get 2 more every 30 days, holding up to ${MAX_FREEZES}.`,
       'Earn one for 5 clean drives in a row, and one for every 3 weekly challenges you finish.',
@@ -149,7 +149,7 @@ export const RULES: RuleSection[] = [
     icon: 'shield-checkmark-outline',
     points: [
       'Your Safety Rating is a score from 0 to 100 for how safely you drove over the last 30 days.',
-      'It counts penalty points per 100 miles, with no streaks or multipliers, so it measures your driving and nothing else.',
+      'It’s based on penalty points per 100 miles. Streaks and multipliers don’t affect it.',
       'One hard brake every 20 mi works out to about 95. One phone pickup every 10 mi drops it to 60.',
       `You need ${RANKED_MIN_MILES} mi in the last 30 days to get a rating on the boards.`,
     ],

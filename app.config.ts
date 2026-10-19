@@ -26,8 +26,8 @@ export function googleServicesFile(
 export const PERMISSION_COPY = {
   location: 'RoadWise uses your location to measure speed and miles during a drive you start.',
   motion:
-    'RoadWise uses motion activity to tell when you walk away from your car, so a drive you forgot to end stops where you parked, and so the optional forgot-to-start reminder can notice a trip.',
-  camera: "RoadWise uses the camera only to scan QR codes: your friends' codes. Nothing is recorded.",
+    'RoadWise uses motion activity to stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it too.',
+  camera: "RoadWise uses the camera only to scan your friends' QR codes. Nothing is recorded.",
   bluetooth: 'RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts on your phone and add its events to your drives.',
 } as const;
 
@@ -36,7 +36,7 @@ export const PERMISSION_COPY = {
  * reminder (onboarding or Settings › Driving); nothing else in the app uses Always.
  */
 export const REMINDER_LOCATION_COPY =
-  'Only if you turn on the forgot-to-start reminder: RoadWise notices when a car trip starts with no drive recording, and sends one note at your next stop. Your location stays on your phone.';
+  'Only if you turn on the forgot-to-start reminder: RoadWise reminds you at your next stop if you forgot to start a drive. Your location stays on your phone.';
 
 /** `{ [key]: value }`, or nothing when the value is undefined (the key is left out entirely). */
 function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
