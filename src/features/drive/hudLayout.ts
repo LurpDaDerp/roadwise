@@ -2,8 +2,8 @@
 // pure function, so "End is always on screen" and "nothing overlaps" are tests, not hopes.
 //
 // - Portrait: a top row (the sign at its left, the navigation button at its right), the 56 pt band
-//   under it (with a DashPal paired its right 88 pt are the chip's slot), the halo in the middle and
-//   the End swipe across the bottom. Spare height goes to a points line under the halo (so the halo
+//   under it (with a DashPal paired its right 88 pt are the chip's slot), the halo straight under
+//   the band and the End swipe across the bottom. Spare height goes to a points line under the halo (so the halo
 //   never moves when the car stops), then to a taller top row (up to 144 pt: a bigger sign), then
 //   evenly above and below the halo.
 // - Landscape: the halo on the left; the top row, the band, the points line and End on the right.
@@ -159,7 +159,9 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
       slack -= rowH - HUD_ROW_MIN_PT;
       const row: Rect = { x: left, y: top, w: frameW, h: rowH };
       const band: Rect = { x: left, y: top + rowH + GAP, w: frameW, h: HUD_BAND_PT };
-      const groupTop = band.y + HUD_BAND_PT + GAP + slack / 2;
+      // The halo sits right under the band (its glow fades well inside its box); the gap it would
+      // leave goes under the points line instead.
+      const groupTop = band.y + HUD_BAND_PT + slack / 2;
       const g = haloGeometry(B);
       return {
         orientation,
