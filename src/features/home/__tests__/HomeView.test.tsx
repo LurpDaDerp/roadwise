@@ -273,7 +273,8 @@ describe('the streak card', () => {
     expect(within(c).getByTestId('home-streak-card-freezes', { includeHiddenElements: true })).toBeTruthy();
     expect(within(c).getByLabelText(left)).toBeOnTheScreen();
     expect(within(c).queryByLabelText(`${freezes} of 3 freezes held`)).toBeNull();
-    await press(within(c).getByLabelText('Dismiss'));
+    expect(within(c).getByRole('button', { name: 'Hide streak news' })).toHaveProp('accessibilityHint', 'Hides the news from this drive.');
+    await press(within(c).getByLabelText('Hide streak news'));
     expect(onDismissStreak).toHaveBeenCalledTimes(1);
   });
 

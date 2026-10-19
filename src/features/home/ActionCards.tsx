@@ -74,7 +74,13 @@ export function StreakCard({ outcome, freezes, onDismiss }: { outcome: StreakNew
             </Text>
           </View>
         </View>
-        <IconButton icon="close" accessibilityLabel="Dismiss" onPress={onDismiss} testID="home-streak-card-dismiss" />
+        <IconButton
+          icon="close"
+          accessibilityLabel="Hide streak news"
+          accessibilityHint="Hides the news from this drive."
+          onPress={onDismiss}
+          testID="home-streak-card-dismiss"
+        />
       </View>
     </Card>
   );
