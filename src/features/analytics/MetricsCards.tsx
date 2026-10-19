@@ -19,7 +19,7 @@ interface MetricGroup {
   cells: { key: string; caption: string; metric: Metric }[];
 }
 
-/** The range's twelve numbers in three groups of four: totals, event counts and per-drive averages. */
+/** The range's twelve numbers in three groups of four: totals, event counts and two per-drive averages. */
 export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
   return [
     {
