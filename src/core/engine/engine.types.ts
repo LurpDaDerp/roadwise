@@ -167,11 +167,12 @@ export interface EngineSnapshot {
   lastRowTs: number | null;
   /**
    * The speed to show, m/s: the known speed, or 0 while it is below its own accuracy rating and
-   * under 3 mph (`motion.shownSpeed`); 0 when unknown — read `speedKnown` first (unknown is "—").
+   * under 3 mph (`motion.shownSpeed`); a row that lost its fix holds the last one for up to 3 s
+   * (`motion.SPEED_HOLD_MS`); 0 when unknown — read `speedKnown` first (unknown is "—").
    * `stopped` and `lockedOut` read the raw speed.
    */
   speedMps: number;
-  /** The CURRENT row has a known speed. False before the first row and on every row that lost the fix. */
+  /** There is a speed to show: the current row's, or one held from up to 3 s before. False before the first row and once the fix has been gone longer. */
   speedKnown: boolean;
   limit: LimitSample;
   /** The limit to show and judge against, whole mph; null → "—" (unknown, low-confidence or hAcc > 20 m). */

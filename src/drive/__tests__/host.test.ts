@@ -279,8 +279,11 @@ test('points clear the moment the stop is no longer confirmed, even with the fix
   await feed(h, rows(3, { speedMps: 0, t0: T0 + 60_000 }));
   expect(h.host.snapshot().points).not.toBeNull();
   expect(h.display.log.at(-1)).toMatch(/update 0\/35\/\d+$/);
-  // Pulling away under a bridge: no fix, so no known speed — and no points on any surface.
-  await feed(h, rows(3, { speedMps: 15, t0: T0 + 63_000, over: () => ({ gnssValid: false, speed: -1, hAcc: -1 }) }));
+  // Pulling away under a bridge: no fix, so not stopped and no points at once; the shown speed holds
+  // for 3 s (S3), then there is no known speed either.
+  await feed(h, rows(1, { speedMps: 15, t0: T0 + 63_000, over: () => ({ gnssValid: false, speed: -1, hAcc: -1 }) }));
+  expect(h.host.snapshot()).toMatchObject({ speedKnown: true, speedMps: 0, stopped: false, points: null });
+  await feed(h, rows(3, { speedMps: 15, t0: T0 + 64_000, over: () => ({ gnssValid: false, speed: -1, hAcc: -1 }) }));
   const snap = h.host.snapshot();
   expect(snap).toMatchObject({ speedKnown: false, stopped: false, points: null });
   expect(h.display.log.at(-1)).toBe('update null/null/null'); // no fix: no speed, no limit, no points

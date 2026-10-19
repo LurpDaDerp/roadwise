@@ -27,6 +27,8 @@ export const ON_FOOT_DROP_MS = 600_000;
 export const WALK_STALE_FIX_MS = 60_000;
 /** S2: the shown speed is never zeroed at or above this. */
 export const STOP_DISPLAY_MAX_MPS = 3 * MPS_PER_MPH;
+/** S3: a row that lost its fix keeps showing the last known speed while that is this recent (row clock). */
+export const SPEED_HOLD_MS = 3_000;
 
 /**
  * A walking or running report at medium confidence or more is on foot; at low confidence it says
