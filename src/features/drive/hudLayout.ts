@@ -2,8 +2,8 @@
 // pure function, so "End is always on screen" and "nothing overlaps" are tests, not hopes.
 //
 // - Portrait: a top row (the sign at its left, the navigation button at its right), the 56 pt band
-//   under it (with a DashPal paired its right 88 pt are the chip's slot), the halo straight under
-//   the band and the End swipe across the bottom. Spare height goes to a points line under the halo (so the halo
+//   under it (with a DashPal paired its right 88 pt are the chip's slot), the halo under the
+//   band (its box 20 pt into the band's foot) and the End swipe across the bottom. Spare height goes to a points line under the halo (so the halo
 //   never moves when the car stops), then to a taller top row (up to 144 pt: a bigger sign), then
 //   evenly above and below the halo.
 // - Landscape: the halo on the left; the top row, the band, the points line and End on the right.
@@ -77,6 +77,8 @@ export interface HudLayoutInput {
 export const HUD_BAND_PT = 56;
 export const HUD_CHIP_SLOT_PT = 88;
 export const HUD_POINTS_LINE_PT = 46;
+/** How far the portrait halo's box rides up into the band's foot. */
+export const HUD_HALO_LIFT_PT = 20;
 /** The top row: at least the navigation slot and a little air, at most 144 pt (a bigger sign). */
 export const HUD_ROW_MIN_PT = 96;
 export const HUD_ROW_MAX_PT = 144;
@@ -159,9 +161,9 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
       slack -= rowH - HUD_ROW_MIN_PT;
       const row: Rect = { x: left, y: top, w: frameW, h: rowH };
       const band: Rect = { x: left, y: top + rowH + GAP, w: frameW, h: HUD_BAND_PT };
-      // The halo sits right under the band (its glow fades well inside its box); the gap it would
-      // leave goes under the points line instead.
-      const groupTop = band.y + HUD_BAND_PT + slack / 2;
+      // The halo's box rides up into the band's foot (only the glow's faint edge reaches it; the lit
+      // ring stays under the band); the room it leaves goes under the points line instead.
+      const groupTop = band.y + HUD_BAND_PT - HUD_HALO_LIFT_PT + slack / 2;
       const g = haloGeometry(B);
       return {
         orientation,

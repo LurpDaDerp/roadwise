@@ -9,13 +9,14 @@ const L = (o: Partial<HudLayoutInput> & { width: number; height: number }): HudL
 
 const inside = (r: Rect, w: number, h: number) => r.x >= -1e-9 && r.y >= -1e-9 && r.x + r.w <= w + 1e-9 && r.y + r.h <= h + 1e-9;
 const overlap = (a: Rect, b: Rect) => a.x < b.x + b.w - 1e-9 && b.x < a.x + a.w - 1e-9 && a.y < b.y + b.h - 1e-9 && b.y < a.y + a.h - 1e-9;
-/** A rect meets the halo's circle (its box's inscribed circle). */
+/** A rect meets the halo's lit ring (its outer edge at rest). */
 function hitsCircle(r: Rect, halo: Rect): boolean {
   const cx = halo.x + halo.w / 2;
   const cy = halo.y + halo.h / 2;
   const nx = Math.max(r.x, Math.min(cx, r.x + r.w));
   const ny = Math.max(r.y, Math.min(cy, r.y + r.h));
-  return (nx - cx) ** 2 + (ny - cy) ** 2 < (halo.w / 2) ** 2 - 1e-6;
+  const g = haloGeometry(halo.w);
+  return (nx - cx) ** 2 + (ny - cy) ** 2 < (g.r + g.W / 2) ** 2 - 1e-6;
 }
 
 describe('worked phones (§3.1, §3.2)', () => {
@@ -34,7 +35,8 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.sign.x).toBe(l.row.x);
     expect(l.nav.x + l.nav.w).toBe(l.row.x + l.row.w);
     expect(l.band.y).toBeGreaterThanOrEqual(l.row.y + l.row.h);
-    expect(l.halo.y).toBeGreaterThanOrEqual(l.band.y + l.band.h);
+    // the halo's box rides 20 pt into the band's foot; its lit ring stays under the band
+    expect(l.halo.y).toBe(l.band.y + l.band.h - 20);
     expect(l.end).toEqual({ x: 16, y: 852 - 34 - 16 - 76, w: 361, h: 76 });
     expect(l.end.y).toBeGreaterThanOrEqual(l.halo.y + l.halo.h);
   });
