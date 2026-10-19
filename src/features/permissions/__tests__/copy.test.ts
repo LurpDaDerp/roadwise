@@ -40,7 +40,7 @@ test('Home lines', () => {
 });
 
 test('the motion lines say what motion access does (one source per surface)', () => {
-  expect(rowDetail('motion', { kind: 'granted' }, IOS)).toBe('A drive you forget to end stops when you walk away. The reminder uses it too.');
+  expect(rowDetail('motion', { kind: 'granted' }, IOS)).toBe('A forgotten drive stops when you walk away, and the reminder can spot trips.');
   expect(rowDetail('motion', m('denied', true), ANDROID)).toBe('Without it, a forgotten drive ends after 15 min.');
   expect(rowDetail('motion', m('notYet', true), IOS)).toBe('Without it, a forgotten drive ends after 15 min.');
   expect(rowDetail('motion', m('denied'), IOS)).toBe('Without it, a forgotten drive ends after 15 min. Also check Privacy & Security › Motion & Fitness.');
@@ -53,8 +53,8 @@ test('Settings details by state and platform', () => {
   expect(rowDetail('precise', { kind: 'unknown' }, IOS)).toBe("RoadWise couldn't check this on this phone.");
   expect(rowDetail('reminderAccess', { kind: 'idle' }, IOS, { reminderOn: false })).toBe('Only for the forgot-to-start reminder, which is off.');
   expect(rowDetail('reminderAccess', { kind: 'idle' }, IOS, { reminderOn: true })).toBe('Allow Location first, then set it to Always for the reminder.');
-  expect(rowDetail('reminderAccess', m('denied', false, 'reminderChannel'), ANDROID)).toBe("The forgot-to-start reminder can't show.");
-  expect(rowDetail('reminderAccess', { kind: 'idle' }, ANDROID, { reminderOn: true })).toBe('Turn on Notifications first so the reminder can show.');
+  expect(rowDetail('reminderAccess', m('denied', false, 'reminderChannel'), ANDROID)).toBe("The forgot-to-start reminder can't appear.");
+  expect(rowDetail('reminderAccess', { kind: 'idle' }, ANDROID, { reminderOn: true })).toBe('Turn on Notifications first so the reminder can appear.');
   expect(rowDetail('reminderAccess', { kind: 'idle' }, ANDROID, { reminderOn: false })).toBe('Only for the forgot-to-start reminder, which is off.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, IOS)).toBe('Used only with a paired DashPal.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID)).toBe('Used only with a paired DashPal.');
@@ -78,7 +78,7 @@ test('titles and the names the confirmation uses follow the platform', () => {
   expect(permissionName('motion', IOS)).toBe('Motion & Fitness');
   expect(permissionName('bluetooth', ANDROID)).toBe('Nearby devices');
   expect(permissionsCopy.home.confirmMessage('Motion & Fitness')).toBe(
-    "Home won't remind you about Motion & Fitness again. Turn it back on in Profile › Settings › Permissions."
+    "Home won't remind you about Motion & Fitness again. You can undo this in Profile › Settings › Permissions."
   );
 });
 

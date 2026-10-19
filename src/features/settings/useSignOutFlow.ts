@@ -7,8 +7,8 @@ export const signOutCheckCopy = {
   title: 'Sign out?',
   unsentDeletes: (n: number) =>
     n === 1
-      ? "1 drive or report hasn't uploaded yet. It'll upload next time you sign in on this phone."
-      : `${n} drives or reports haven't uploaded yet. They'll upload next time you sign in on this phone.`,
+      ? "1 drive or report hasn't uploaded yet. If you sign out, it uploads next time you sign in on this phone."
+      : `${n} drives or reports haven't uploaded yet. If you sign out, they upload next time you sign in on this phone.`,
   unknown:
     "We couldn't check if everything uploaded. Anything left uploads next time you sign in on this phone.",
   cancel: 'Cancel',
