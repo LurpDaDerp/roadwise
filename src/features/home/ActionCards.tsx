@@ -61,8 +61,14 @@ export function StreakCard({ outcome, freezes, onDismiss }: { outcome: StreakNew
           <Text variant="headline" testID="home-streak-card-title">
             {STREAK_TITLE[outcome]}
           </Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: t.space.sm }}>
-            <FreezeCount count={freezes} testID="home-streak-card-freezes" />
+          <View
+            accessible
+            accessibilityLabel={freezesLeft(freezes)}
+            style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: t.space.sm }}
+          >
+            <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+              <FreezeCount count={freezes} testID="home-streak-card-freezes" />
+            </View>
             <Text variant="subhead" tone="muted" testID="home-streak-card-left">
               {freezesLeft(freezes)}
             </Text>

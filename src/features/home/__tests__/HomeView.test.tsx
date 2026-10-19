@@ -269,7 +269,10 @@ describe('the streak card', () => {
     const c = screen.getByTestId('home-streak-card');
     expect(within(c).getByText(title)).toBeOnTheScreen();
     expect(within(c).getByText(left)).toBeOnTheScreen();
-    expect(within(c).getByLabelText(`${freezes} of 3 freezes held`)).toBeOnTheScreen();
+    // the flakes are drawn, and a screen reader hears the freezes once, as the words
+    expect(within(c).getByTestId('home-streak-card-freezes', { includeHiddenElements: true })).toBeTruthy();
+    expect(within(c).getByLabelText(left)).toBeOnTheScreen();
+    expect(within(c).queryByLabelText(`${freezes} of 3 freezes held`)).toBeNull();
     await press(within(c).getByLabelText('Dismiss'));
     expect(onDismissStreak).toHaveBeenCalledTimes(1);
   });

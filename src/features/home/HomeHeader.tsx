@@ -94,7 +94,14 @@ function RatingBadge({ progress, onPress }: { progress: Progress; onPress: () =>
           tone="accent"
           accessibilityLabel={ranked ? 'Safety Rating' : 'Distance toward a Safety Rating'}
         >
-          <Text variant="stat" testID="rating-value">
+          <Text
+            variant="stat"
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.6}
+            style={{ maxWidth: 72 - 2 * 5 - 4, textAlign: 'center' }}
+            testID="rating-value"
+          >
             {value}
           </Text>
         </ProgressRing>
