@@ -41,6 +41,12 @@ describe('onboarding state', () => {
     expect(await readSavedStep(s)).toBeNull();
   });
 
+  it('reads the retired last step, the clan step, as the last step, so a resume finishes instead of starting over', async () => {
+    const s = await settings();
+    await s.set(ONBOARDING_STEP_KEY, 'clan');
+    expect(await readSavedStep(s)).toBe('dashcam');
+  });
+
   it('saves the count of the walk beside the step, dropping ids this build does not know', async () => {
     const s = await settings();
     expect(ONBOARDING_PLAN_KEY).toBe('onboarding.plan');

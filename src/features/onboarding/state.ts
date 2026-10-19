@@ -16,9 +16,14 @@ export const ONBOARDING_PLAN_KEY = 'onboarding.plan';
  */
 export const ONBOARDING_PENDING_HREF_KEY = 'onboarding.pendingHref';
 
-/** The last step shown, or null. A value this build does not know (a retired step) reads as none. */
+/**
+ * The last step shown, or null. A value this build does not know (a retired step) reads as none,
+ * except the retired last step, 'clan': a driver saved there resumes at the last step instead of
+ * walking the whole flow again.
+ */
 export async function readSavedStep(settings: SettingsRepo): Promise<StepId | null> {
   const value = await settings.get<unknown>(ONBOARDING_STEP_KEY);
+  if (value === 'clan') return 'dashcam';
   return isStepId(value) ? value : null;
 }
 
