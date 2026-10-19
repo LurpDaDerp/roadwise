@@ -3,7 +3,7 @@
 //   idle → recording → finalizing → idle
 //
 // A drive starts only on `start` (the user's Start Drive tap, at any speed; the host has already
-// checked permissions). It ends on `end` (the hold-to-end), by itself once the car has not moved for
+// checked permissions). It ends on `end` (the swipe-to-end), by itself once the car has not moved for
 // `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the driver walks away (`motion`
 // reports; `motion.ts` W1/W2). Every end but a prompt hold closes the drive where the car last moved
 // (`closeAtLastMovement`; a walking end at or before the walk began): a manual end
@@ -307,7 +307,7 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   /**
-   * The hold (or any manual end) at `ts`: cut when the car had stood still `MANUAL_CUT_AFTER_S` or
+   * The End swipe (or any manual end) at `ts`: cut when the car had stood still `MANUAL_CUT_AFTER_S` or
    * more, with the phone use while standing still kept (a long red light, End, Start again must not
    * erase a pickup made there).
    */

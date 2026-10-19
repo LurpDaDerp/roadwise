@@ -37,7 +37,7 @@ export type HudPalette = {
   haloInkMuted: string;
   /** Points gained since the last stop. */
   gain: string;
-  /** The End button's face and its ring track. */
+  /** The End swipe's capsule, and quiet edges (the navigation list's panel). */
   chrome: string;
   chromeEdge: string;
 };
@@ -129,11 +129,9 @@ export const HUD_LIT_KEYS: readonly (keyof HudPalette)[] = [
 
 /** HUD touch targets (DESIGN.md: 64 pt in the car). */
 export const HUD_MIN_TARGET_PT = 64;
-/** The End button and its fill ring (the largest that leaves a 280 pt window two 64 pt side slots). */
-export const END_BUTTON_PT = 112;
-export const END_RING_PT = 6;
-/** Hold-to-end (spec: a 0.5 s ring). */
-export const HOLD_TO_END_MS = 500;
+/** The End swipe: a capsule this tall (its knob the 64 pt target), as wide as its column up to the cap. */
+export const END_SWIPE_H_PT = 76;
+export const END_SWIPE_MAX_W_PT = 420;
 /** The screen dims after this long without a touch… */
 export const DIM_AFTER_MS = 10_000;
 /** …under a black scrim this opaque. */

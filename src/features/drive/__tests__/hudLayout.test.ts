@@ -1,6 +1,6 @@
 // The driving screen's layout (drive-screen design §3, §5.12): worked phones, End always inside the
 // window, nothing overlapping, the numerals large enough.
-import { DIGIT_ADVANCE_EM, DIGIT_HEIGHT_EM, haloGeometry, numeralLineHeight, unitLineHeight, unitTop } from '@/ui/drive';
+import { DIGIT_ADVANCE_EM, DIGIT_HEIGHT_EM, haloGeometry, numeralLineHeight, SPEED_UNIT_GAP_PT, unitLineHeight, unitTop } from '@/ui/drive';
 
 import { HUD_NAV_H_PT, HUD_NAV_W_PT, hudLayout, type HudLayout, type HudLayoutInput, type Rect } from '../hudLayout';
 
@@ -19,22 +19,32 @@ function hitsCircle(r: Rect, halo: Rect): boolean {
 }
 
 describe('worked phones (§3.1, §3.2)', () => {
-  test('iPhone SE 375 × 667 (status bar 20): halo 343, its own points line, a 138 pt row, the R2-1 at 110 × 138', () => {
+  test('iPhone SE 375 × 667 (status bar 20): halo 343, the points in the band line, a 108 pt top row, the R2-1 at 86 × 108', () => {
     const l = L({ width: 375, height: 667, insets: { ...ZERO, top: 20 } });
     expect(l).toMatchObject({ orientation: 'portrait', compact: false });
     expect(l.halo.w).toBe(343);
-    expect(l.points).not.toBe('line');
-    expect(l.row.h).toBe(138);
-    expect([l.sign.w, l.sign.h]).toEqual([110, 138]);
+    expect(l.points).toBe('line');
+    expect(l.row).toMatchObject({ y: 32, h: 108 });
+    expect([l.sign.w, l.sign.h]).toEqual([86, 108]);
     expect(l.numeralPt2).toBe(157);
   });
 
-  test('360 × 640 Android (24 / 48): halo 328, the points in the band line, a 132 pt row', () => {
+  test('top to bottom: the top row (sign left, navigation right), the band, the halo, End across the foot', () => {
+    const l = L({ width: 393, height: 852, insets: { ...ZERO, top: 59, bottom: 34 } });
+    expect(l.sign.x).toBe(l.row.x);
+    expect(l.nav.x + l.nav.w).toBe(l.row.x + l.row.w);
+    expect(l.band.y).toBeGreaterThanOrEqual(l.row.y + l.row.h);
+    expect(l.halo.y).toBeGreaterThanOrEqual(l.band.y + l.band.h);
+    expect(l.end).toEqual({ x: 16, y: 852 - 34 - 16 - 76, w: 361, h: 76 });
+    expect(l.end.y).toBeGreaterThanOrEqual(l.halo.y + l.halo.h);
+  });
+
+  test('360 × 640 Android (24 / 48): halo 276, the points in the band line, a 96 pt top row', () => {
     const l = L({ width: 360, height: 640, insets: { ...ZERO, top: 24, bottom: 48 } });
-    expect(l.halo.w).toBe(328);
+    expect(l.halo.w).toBe(276);
     expect(l.points).toBe('line');
-    expect(l.row.h).toBe(132);
-    expect(l.numeralPt2).toBe(150);
+    expect(l.row.h).toBe(96);
+    expect(l.numeralPt2).toBe(126);
   });
 
   test('iPhone 13 mini, 15 and 15 Pro Max: halos 343, 361 and 398', () => {
@@ -42,40 +52,42 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(L({ width: 393, height: 852, insets: { ...ZERO, top: 59, bottom: 34 } }).halo.w).toBe(361);
     const max = L({ width: 430, height: 932, insets: { ...ZERO, top: 59, bottom: 34 } });
     expect(max.halo.w).toBe(398);
+    expect(max.row.h).toBe(144);
     expect(max.numeralPt2).toBe(168);
   });
 
-  test('a narrow window (280 wide): the side slots are what End leaves; the navigation circle still fits', () => {
+  test('a narrow window (280 wide): the side slots are a third of the row; the navigation circle still fits', () => {
     const l = L({ width: 280, height: 600 });
-    expect(l.end.w).toBe(112);
-    expect(l.nav.w).toBeCloseTo(64, 6);
-    expect(l.sign.w).toBeLessThanOrEqual(64);
+    expect(l.end.w).toBe(248);
+    expect(l.nav.w).toBeCloseTo(248 / 3, 6);
+    expect(l.sign.w).toBeLessThanOrEqual(248 / 3);
   });
 
-  test('320 × 568: halo 288, the sign slot-limited to 84 × 105 (4 pt clear of End)', () => {
+  test('320 × 568: halo 256, a 96 pt top row and the R2-1 at 77 × 96', () => {
     const l = L({ width: 320, height: 568, insets: { ...ZERO, top: 20 } });
-    expect(l.halo.w).toBe(288);
-    expect(l.row.h).toBe(144);
-    expect([l.sign.w, l.sign.h]).toEqual([84, 105]);
+    expect(l.halo.w).toBe(256);
+    expect(l.row.h).toBe(96);
+    expect([l.sign.w, l.sign.h]).toEqual([77, 96]);
   });
 
-  test('km: the round sign at most 116 pt, fitted to its slot', () => {
+  test('km: the round sign at most 116 pt, fitted to its row', () => {
     const l = L({ width: 375, height: 667, units: 'km' });
-    expect([l.sign.w, l.sign.h]).toEqual([111, 111]);
+    expect([l.sign.w, l.sign.h]).toEqual([114, 114]);
     const big = L({ width: 430, height: 932, units: 'km' });
     expect([big.sign.w, big.sign.h]).toEqual([116, 116]);
     const small = L({ width: 320, height: 568, units: 'km' });
-    expect([small.sign.w, small.sign.h]).toEqual([84, 84]);
+    expect([small.sign.w, small.sign.h]).toEqual([96, 96]);
   });
 
-  test('iPhone SE landscape 667 × 375: the halo left (309), band, points and a 144 pt row right; slots 103', () => {
+  test('iPhone SE landscape 667 × 375: the halo left (309); the top row, band, points and End right', () => {
     const l = L({ width: 667, height: 375 });
     expect(l).toMatchObject({ orientation: 'landscape', compact: false });
     expect(l.halo.w).toBe(309);
-    expect(l.row.h).toBe(144);
-    expect(l.row.w / 3).toBeCloseTo(103.2, 1);
+    expect(l.row.h).toBe(121);
     expect(l.points).not.toBe('line');
     expect(l.row.x).toBeGreaterThan(l.halo.x + l.halo.w);
+    expect(l.end.x).toBe(l.row.x);
+    expect(l.end.y + l.end.h).toBe(375 - 16);
   });
 
   test('a 360 × 640 Android turned, with the 3-button bar on the right (640 × 360, right 48): the ring, 272 pt', () => {
@@ -84,14 +96,14 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.nav.w).toBeGreaterThanOrEqual(64);
     expect(l.numeralPt2).toBeGreaterThanOrEqual(96);
     const statusBar = L({ width: 640, height: 360, insets: { ...ZERO, top: 24, right: 48 } });
-    expect(statusBar).toMatchObject({ compact: false, halo: { ring: true } });
+    expect(statusBar).toMatchObject({ compact: false, halo: { ring: true }, points: 'line' });
     expect(L({ width: 600, height: 400 })).toMatchObject({ compact: false, halo: { w: 276, ring: true } });
   });
 
-  test('landscape falls to compact only when the right column cannot hold End and two 64 pt slots', () => {
-    // colW = (width - 32 - 16) / 2; the side slots (colW - 112) / 2 - 4 >= 64 from colW 248
-    expect(L({ width: 544, height: 400 })).toMatchObject({ compact: false });
-    expect(L({ width: 542, height: 400 })).toMatchObject({ compact: true });
+  test('landscape falls to compact only when the left column cannot hold a 220 pt ring', () => {
+    // colW = (width - 32 - 16) / 2 >= 220 from width 488
+    expect(L({ width: 488, height: 400 })).toMatchObject({ compact: false });
+    expect(L({ width: 486, height: 400 })).toMatchObject({ compact: true });
   });
 
   test('a DashPal paired: an 88 pt chip slot at the band right; the line beside it, never under it', () => {
@@ -118,15 +130,16 @@ describe('invariants across windows', () => {
       if (h >= 568) cases.push({ w: h, h: w, ins: { top: 24, bottom: 0, left: 0, right: 48 }, chip: true, units: 'mi' });
     }
 
-  test('End is always fully inside the window (every window from 280 × 320, both orientations, any insets), 112 pt (96 to 112 when compact)', () => {
+  test('End is always fully inside the window (every window from 280 × 320, both orientations, any insets), 76 pt tall (64 to 76 when compact), its knob a 64 pt target', () => {
     for (const c of cases) {
       const l = L({ width: c.w, height: c.h, insets: c.ins, chip: c.chip, units: c.units });
       if (!inside(l.end, c.w, c.h)) throw new Error(`End outside ${c.w}x${c.h} ${JSON.stringify(c.ins)}: ${JSON.stringify(l.end)}`);
       if (l.compact) {
-        expect(l.end.w).toBeGreaterThanOrEqual(96);
-        expect(l.end.w).toBeLessThanOrEqual(112);
-      } else expect(l.end.w).toBe(112);
-      expect(l.end.h).toBe(l.end.w);
+        expect(l.end.h).toBeGreaterThanOrEqual(64);
+        expect(l.end.h).toBeLessThanOrEqual(76);
+      } else expect(l.end.h).toBe(76);
+      expect(l.end.w).toBeGreaterThanOrEqual(200);
+      expect(l.end.w).toBeLessThanOrEqual(420);
     }
   });
 
@@ -145,6 +158,13 @@ describe('invariants across windows', () => {
           if (overlap(items[a]![1], items[b]![1])) throw new Error(`${items[a]![0]} meets ${items[b]![0]} at ${c.w}x${c.h}`);
       if (l.halo.ring) for (const [name, r] of items) if (hitsCircle(r, l.halo)) throw new Error(`${name} meets the halo at ${c.w}x${c.h}`);
       if (l.chip) expect(overlap(l.chip, l.line)).toBe(false);
+      // the sign and the nav rect sit in the top row, above the band and (in portrait) the halo; End is the lowest thing
+      expect(l.sign.y).toBeGreaterThanOrEqual(l.row.y - 1e-9);
+      expect(l.sign.y + l.sign.h).toBeLessThanOrEqual(l.row.y + l.row.h + 1e-9);
+      if (l.orientation === 'portrait') {
+        expect(l.halo.y).toBeGreaterThanOrEqual(l.row.y + l.row.h - 1e-9);
+        expect(l.end.y).toBeGreaterThanOrEqual(l.halo.y + l.halo.h - 1e-9);
+      }
       // the nav rect holds the 64 pt circle and its caption, within the row
       expect(l.nav.w).toBeGreaterThanOrEqual(64);
       expect(l.nav.w).toBeLessThanOrEqual(HUD_NAV_W_PT);
@@ -190,11 +210,13 @@ describe('compact windows (§3.3)', () => {
     [320, 280, {}],
   ];
   for (let w = 280; w <= 700; w += 20) for (let h = 240; h <= 420; h += 10) compactWindows.push([w, h, {}]);
-  test.each([1, 1.3, 1.6, 2])('font scale %p: the digits stay under the band and the unit label above the bottom row; the numerals fit their box', (fontScale) => {
+  test.each([1, 1.3, 1.6, 2])('font scale %p: the digits stay under the top row and the unit label above End; the numerals fit their box', (fontScale) => {
     let compact = 0;
     for (const [width, height, ins] of compactWindows) {
       const l = L({ width, height, insets: { ...ZERO, ...ins }, fontScale });
       if (!l.compact) continue;
+      // Too short for the top row, a 64 pt End and the label alone (280 x 240 at 2x): nothing readable fits.
+      if (l.end.y - 8 - (l.row.y + l.row.h + 8) < SPEED_UNIT_GAP_PT + unitLineHeight(l.unitPt)) continue;
       compact += 1;
       for (const [pt, digits] of [
         [l.numeralPt2, 2],
@@ -202,21 +224,22 @@ describe('compact windows (§3.3)', () => {
       ] as const) {
         const r = readout(l, pt);
         const at = `${width}x${height} ${JSON.stringify(ins)} @${fontScale} ${digits} digits`;
-        if (r.labelBottom > l.row.y + 1e-9) throw new Error(`label ${r.labelBottom} under the row ${l.row.y} at ${at}`);
-        if (r.labelBottom > l.end.y + 1e-9) throw new Error(`label over End at ${at}`);
-        if (r.digitsTop < l.band.y + l.band.h - 1e-9) throw new Error(`digits over the band at ${at}`);
+        if (r.labelBottom > l.end.y + 1e-9) throw new Error(`label ${r.labelBottom} over End ${l.end.y} at ${at}`);
+        if (r.digitsTop < l.row.y + l.row.h - 1e-9) throw new Error(`digits over the top row at ${at}`);
         if (digits * DIGIT_ADVANCE_EM * pt > l.halo.w + 1e-9) throw new Error(`${digits} digits wider than their box at ${at}`);
       }
     }
     expect(compact).toBeGreaterThan(20);
   });
 
-  test('412 × 300 (a third of a split screen): the box is the full width, the numerals large, the label 8 pt clear of End', () => {
+  test('412 × 300 (a third of a split screen): the box is the full width, the band between the sign and navigation, the label 8 pt clear of End', () => {
     const l = L({ width: 412, height: 300 });
     expect(l.compact).toBe(true);
     expect(l.halo).toMatchObject({ x: 16, w: 380, ring: false });
-    expect(l.end.w).toBe(112);
-    expect(l.numeralPt2).toBe(103);
+    expect(l.end).toMatchObject({ w: 380, h: 76 });
+    expect(l.band.x).toBeGreaterThanOrEqual(l.sign.x + l.sign.w);
+    expect(l.band.x + l.band.w).toBeLessThanOrEqual(l.nav.x);
+    expect(l.numeralPt2).toBe(86);
     const clear = l.end.y - readout(l, l.numeralPt2).labelBottom;
     expect(clear).toBeGreaterThanOrEqual(8);
     expect(clear).toBeLessThan(9);
@@ -227,23 +250,22 @@ describe('compact windows (§3.3)', () => {
     expect(l.compact).toBe(true);
     expect(l.halo.ring).toBe(false);
     expect(l.points).toBe('line');
-    expect(l.band.h).toBe(40);
-    expect(l.end.y).toBe(400 - 16 - 112);
+    expect(l.row.h).toBe(88);
+    expect(l.end.y).toBe(400 - 16 - 76);
     expect(l.numeralPt2).toBeGreaterThan(0);
     expect(l.numeralPt3).toBeLessThan(l.numeralPt2);
   });
 
-  test('a compact window too short for a 112 pt End and readable numerals gives End back up to 16 pt, never under 96', () => {
+  test('a compact window too short for a 76 pt End and readable numerals gives End back, never under 64', () => {
     const tiny = L({ width: 280, height: 240, fontScale: 2 });
     expect(tiny.compact).toBe(true);
-    expect(tiny.end.w).toBe(96);
-    expect(tiny.row.h).toBe(96);
+    expect(tiny.end.h).toBe(64);
     expect(tiny.end.y + tiny.end.h).toBe(240 - 16);
-    const between = L({ width: 412, height: 252 });
+    const between = L({ width: 412, height: 262 });
     expect(between.compact).toBe(true);
-    expect(between.end.w).toBeGreaterThan(96);
-    expect(between.end.w).toBeLessThan(112);
-    expect(L({ width: 412, height: 300 }).end.w).toBe(112);
+    expect(between.end.h).toBeGreaterThan(64);
+    expect(between.end.h).toBeLessThan(76);
+    expect(L({ width: 412, height: 300 }).end.h).toBe(76);
   });
 
   test('a short wide window (600 × 240) is compact too, End inside; at 600 × 300 a 272 pt ring fits', () => {

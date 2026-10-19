@@ -14,13 +14,13 @@ import { useNavigationButton } from '@/features/navigation/useNavigationButton';
 import type { DangerKind } from '@/features/weather/danger';
 import { sunIsDown } from '@/lib/time';
 import { fontFamilies } from '@/ui/fonts';
+import { SwipeButton } from '@/ui';
 import { useOsReduceMotion } from '@/ui/theme';
 import {
   DIM_AFTER_MS,
   DIM_SCRIM_OPACITY,
   Halo,
   haloVisual,
-  HoldButton,
   hudPalette,
   nextSpeedingHold,
   SPEEDING_HOLD_NONE,
@@ -113,19 +113,20 @@ export type HudScreenProps = {
  *   Phone use and a DashPal alert (driver-not-visible included): warmer and faster the more serious
  *   and the longer. A hard brake, hard start, sharp turn, phone pickup or handling alert, and each
  *   DashPal alert start or step (not a reconnect's re-send), pulse it quickly a few times. Rules in `src/ui/drive/halo.ts`; drawing in `HaloRing.tsx`.
- * - Top band: for 1.5 s after an event (or a DashPal alert start or level change) its icon and one
+ * - Top row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres) on
+ *   the left and the navigation button on the right. The navigation button's list of apps shows in
+ *   a panel under the row, never a route: on a tap while no app is saved, or on a long press at any
+ *   time (to change the saved app, or to pick one).
+ * - Band, under the top row: for 1.5 s after an event (or a DashPal alert start or level change) its icon and one
  *   or two words, across the whole band (the DashPal chip steps aside); else a failed end, the
  *   dangerous-weather banner (its ✕ live at any speed; hidden for the rest of the drive once
  *   dismissed), or the points when they have no line of their own. Precedence: DashPal banner, the
  *   phone's event, a failed end, weather, the points. With a DashPal paired, a small static chip top right.
  * - Stopped only: the points total and the change since the last stop, under the halo when there is
  *   room (so the halo never moves), else in the band.
- * - Bottom row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres),
- *   hold-to-end in the middle and the navigation button on the right. End, the navigation button
- *   and the weather banner's ✕ are the only touch targets while moving. The navigation button's
- *   list of apps shows in a panel above them, never a route: on a tap while no app is saved, or on
- *   a long press at any time (to change the saved app, or to pick one). Every other touch only
- *   undims.
+ * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive.
+ *   End, the navigation button and the weather banner's ✕ are the only touch targets while moving.
+ *   Every other touch only undims.
  * - After 10 s without a touch a dark scrim dims everything, never while an alert banner shows; the
  *   halo and the speed stay above it, at reduced strength and still flowing while calm, at full
  *   strength while warning.
@@ -188,7 +189,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   );
 
   const [ending, setEnding] = useState(false);
-  // A failed end says so (one line at the top) until the next hold.
+  // A failed end says so (one line in the band) until the next swipe.
   const [endFailed, setEndFailed] = useState(false);
   const onEnd = useCallback(async () => {
     if (ending) return;
@@ -198,7 +199,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
       const done = await controls.end();
       if (done !== null) leave(done.dropped ? null : done.clientTripId);
       else {
-        // No drive was open: it ended by itself between the hold and this screen's idle render (the
+        // No drive was open: it ended by itself between the swipe and this screen's idle render (the
         // idle effect below is held off by `ending`). Read the store now, not the render's drop id.
         const id = lastTripId.current;
         const f = host.snapshot().lastFinalized;
@@ -263,7 +264,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
   return (
     <View testID="hud-screen" onTouchStart={wake} style={[styles.root, { backgroundColor: p.ground }]}>
-      {/* The top band: an alert banner across all of it, else the line (and the chip beside it). */}
+      {/* The band: an alert banner across all of it, else the line (and the chip beside it). */}
       <View style={[styles.abs, styles.centred, at(layout.band)]}>
         {dashpal !== null ? (
           <DashpalHudBanner visual={dashpal} palette={p} />
@@ -312,19 +313,23 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         <SpeedSign limit={inUnits(live.limitMph, units)} palette={p} units={units} height={layout.sign.h} />
       </View>
       <View style={[styles.abs, styles.centred, at(layout.end)]}>
-        <HoldButton
-          testID="hud-end"
-          label={busy ? hudCopy.ending : hudCopy.end}
-          accessibilityLabel={hudCopy.endLabel}
-          accessibilityHint={hudCopy.endHint}
-          face={p.chrome}
-          ink={p.ink}
-          ring={p.ink}
-          track={p.chromeEdge}
-          size={layout.end.w}
-          disabled={busy}
-          onHold={() => void onEnd()}
-        />
+        <View style={{ width: layout.end.w }}>
+          <SwipeButton
+            testID="hud-end"
+            accessibilityLabel={hudCopy.endLabel}
+            accessibilityHint={hudCopy.endHint}
+            icon="stop"
+            colors={{ track: p.chrome, fill: p.haloCalm, knob: p.ink, knobInk: p.chrome, hint: p.inkMuted }}
+            height={layout.end.h}
+            busy={busy}
+            onSwipe={() => void onEnd()}
+            label={
+              <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit style={[styles.endLabel, { color: p.ink }]}>
+                {busy ? hudCopy.ending : hudCopy.end}
+              </Text>
+            }
+          />
+        </View>
       </View>
       <View style={[styles.abs, styles.centred, at(layout.nav)]}>
         <NavigationButton
@@ -377,11 +382,11 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           style={[
             styles.panel,
             {
-              top: insets.top + 12,
+              // Under the top row and above End: both stay reachable while the list is open.
+              top: layout.row.y + layout.row.h + 8,
               left: insets.left + 16,
               right: insets.right + 16,
-              // Above the bottom row: End stays reachable while the list is open.
-              bottom: Math.max(0, height - layout.row.y + 8),
+              bottom: Math.max(0, height - layout.end.y + 8),
               backgroundColor: p.chrome,
               borderColor: p.chromeEdge,
             },
@@ -418,4 +423,5 @@ const styles = StyleSheet.create({
   centred: { alignItems: 'center', justifyContent: 'center' },
   panel: { position: 'absolute', zIndex: 2, borderRadius: 20, borderWidth: 1, padding: 16 },
   note: { fontFamily: fontFamilies.fieldBold, fontSize: 26, lineHeight: 32 },
+  endLabel: { fontFamily: fontFamilies.fieldBold, fontSize: 24, lineHeight: 29, letterSpacing: 0.5 },
 });

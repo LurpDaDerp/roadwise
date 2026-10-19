@@ -14,7 +14,7 @@ export const KEEP_AWAKE_TAG = 'roadwise-drive';
  * The drive's hold on the app, wrapped around the root `Stack`. It renders its children unchanged
  * and, while a drive records:
  * - keeps the screen awake, whatever route shows;
- * - swallows Android back on the driving screen, so a drive is left only through hold-to-end;
+ * - swallows Android back on the driving screen, so a drive is left only through swipe-to-end;
  * - while the car moves (`lockedOut`), brings the driving screen back if another route is on top
  *   of it (a notification tap mid-drive): nothing but End, the navigation button (with its list
  *   of apps, part of the driving screen) and the weather banner's ✕ takes a touch while moving.

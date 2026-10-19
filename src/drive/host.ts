@@ -102,7 +102,7 @@ export interface DriveHost {
   /** The user's Start Drive tap, at any speed. Refuses without location, Location Services or Precise Location, while busy, or signed out. */
   start(): Promise<StartResult>;
   /**
-   * The hold-to-end. Resolves once the drive is finalized; null when none was open. `dropped`: that
+   * The swipe-to-end. Resolves once the drive is finalized; null when none was open. `dropped`: that
    * drive was not kept (whichever end closed it: this one or an automatic end it raced).
    */
   end(): Promise<{ clientTripId: string; dropped: DropReason | null } | null>;
@@ -651,7 +651,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       ),
       remover(
         // Android's drive notification offers End drive while stopped: a manual end at the tap, with
-        // the same rules as the hold (cut after 2 min standing still, dropped if it never moved). A
+        // the same rules as the swipe (cut after 2 min standing still, dropped if it never moved). A
         // tap buffered from before this drive, or one landing while it is already closing, does nothing.
         source.addListener('notificationAction', (a) => {
           if (a.action !== 'endDrive') return;

@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { interpolate, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
@@ -39,7 +39,7 @@ export type SwipeButtonProps = {
 
 /** How far (of the knob's full travel) a swipe must reach to count. */
 export const SWIPE_COMMIT = 0.85;
-/** After a swipe whose action never reports busy, the knob slides home after this long. */
+/** After a swipe, the knob slides home this long after its action is (or stops being) not busy. */
 export const SWIPE_SETTLE_MS = 800;
 const PAD = 6;
 const SPRING = { damping: 18, stiffness: 220, mass: 0.6 } as const;
@@ -52,8 +52,8 @@ const SPRING = { damping: 18, stiffness: 220, mass: 0.6 } as const;
  * nothing, so a knock or a brush cannot fire it. The drag runs on the UI thread. A screen reader's
  * double-tap is a deliberate act, so the `activate` action fires straight away.
  *
- * While `busy` the knob stays at the end with a spinner; when `busy` clears (the action failed) it
- * springs home. A swipe whose action never goes busy slides home after `SWIPE_SETTLE_MS`.
+ * While `busy` the knob stays at the end with a spinner. When `busy` clears (the action failed), or
+ * when a swipe's action never goes busy, it springs home after `SWIPE_SETTLE_MS`.
  */
 export function SwipeButton({
   label,
@@ -71,9 +71,8 @@ export function SwipeButton({
   const x = useSharedValue(0);
   const travel = useSharedValue(0);
   const armed = useSharedValue(false);
-  const busyRef = useRef(busy);
-  busyRef.current = busy;
-  const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Swipes so far: the one just made waits a moment for its action to go busy before sliding home.
+  const [swipes, setSwipes] = useState(0);
   const inactive = busy || disabled;
 
   const home = useCallback(() => {
@@ -87,25 +86,23 @@ export function SwipeButton({
   const commit = useCallback(() => {
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     onSwipe();
-    if (settle.current !== null) clearTimeout(settle.current);
-    settle.current = setTimeout(() => {
-      settle.current = null;
-      if (!busyRef.current) home();
-    }, SWIPE_SETTLE_MS);
-  }, [onSwipe, home]);
+    setSwipes((n) => n + 1);
+  }, [onSwipe]);
 
-  useEffect(
-    () => () => {
-      if (settle.current !== null) clearTimeout(settle.current);
-    },
-    []
-  );
-
-  // Busy holds the knob at the end; its clearing (a failed action) sends it home.
+  // Busy holds the knob at the end. Not busy, it goes home: after a swipe, once the action has had a
+  // moment to go busy (or, having failed, to stop being busy).
   useEffect(() => {
-    if (busy) x.set(withTiming(travel.get(), { duration: 160 }));
-    else home();
-  }, [busy, x, travel, home]);
+    if (busy) {
+      x.set(withTiming(travel.get(), { duration: 160 }));
+      return;
+    }
+    if (swipes === 0) {
+      home();
+      return;
+    }
+    const timer = setTimeout(home, SWIPE_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [busy, swipes, x, travel, home]);
 
   const pan = useMemo(
     () =>

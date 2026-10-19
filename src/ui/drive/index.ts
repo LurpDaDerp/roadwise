@@ -1,8 +1,8 @@
-export { HoldButton, type HoldButtonProps } from './HoldButton';
 export {
   DIM_AFTER_MS,
   DIM_SCRIM_OPACITY,
-  END_BUTTON_PT,
+  END_SWIPE_H_PT,
+  END_SWIPE_MAX_W_PT,
   HALO_BURST,
   HALO_DIM_OPACITY,
   HALO_FLOW_MS,
@@ -11,7 +11,6 @@ export {
   HALO_MIN_RING_BOX_PT,
   HALO_RAMP_STOPS,
   HALO_SPEED_HOLD_MAX_ROWS,
-  HOLD_TO_END_MS,
   HUD,
   HUD_CONTRAST_PAIRS,
   HUD_GRAPHIC_PAIRS,

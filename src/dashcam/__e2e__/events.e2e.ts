@@ -312,7 +312,7 @@ function startDrive(w: World, p: Phone): number {
 }
 
 /**
- * The hold-to-end: the engine finalizes (no longer recording, the drive still open through the
+ * The swipe-to-end: the engine finalizes (no longer recording, the drive still open through the
  * catch-up and the facts), the link catches up (at most 3 s), the facts are read; then the drive is
  * closed. Samples at 15 m/s every second stand in for the drive's rows, for the GPS speed gate.
  */

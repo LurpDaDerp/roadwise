@@ -231,7 +231,7 @@ export type EngineEvent =
    * host's clock at arrival, used only before the drive's first row.
    */
   | { type: 'motion'; activity: MotionActivity; ts: number }
-  /** A manual end (the hold, the notification's End drive, sign-out): cut after 2 min standing still. */
+  /** A manual end (the End swipe, the notification's End drive, sign-out): cut after 2 min standing still. */
   | { type: 'end'; ts: number }
   /** The host's one timer: the automatic end (`autoEndAt`) may have passed with no row. */
   | { type: 'tick'; ts: number }

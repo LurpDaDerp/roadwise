@@ -7,13 +7,13 @@ import type { Href } from 'expo-router';
  * hints) may be full sentences: they are heard, not read.
  */
 export const hudCopy = {
-  end: 'End',
+  end: 'End drive',
   ending: 'Saving',
   endLabel: 'End drive',
-  endHint: 'Touch and hold to end the drive.',
+  endHint: 'Swipe right to end the drive.',
   /** After End failed: two words while moving; the full sentence is spoken. */
-  endFailed: 'Hold again',
-  endFailedLabel: "Couldn't end the drive. Hold End again.",
+  endFailed: 'Swipe again',
+  endFailedLabel: "Couldn't end the drive. Swipe End again.",
   /** The alert chip at the top, one per event type. */
   alert: {
     speeding: 'Speeding',

@@ -3,7 +3,10 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { LastFinalized } from '@/drive/host';
 import type { DriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
-import { DIM_AFTER_MS, HOLD_TO_END_MS, HUD, HUD_MIN_TARGET_PT, type HaloProps, type HaloVisual } from '@/ui/drive';
+import { State } from 'react-native-gesture-handler';
+import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
+
+import { DIM_AFTER_MS, END_SWIPE_H_PT, HUD, HUD_MIN_TARGET_PT, type HaloProps, type HaloVisual } from '@/ui/drive';
 import type { SkyMood } from '@/ui/sky/palette';
 import { ThemeProvider } from '@/ui/theme';
 
@@ -34,8 +37,15 @@ jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 jest.mock('expo-location', () => ({ getLastKnownPositionAsync: jest.fn(async () => null) }));
 jest.mock('expo-haptics', () => ({
   impactAsync: jest.fn(async () => {}),
+  notificationAsync: jest.fn(async () => {}),
   ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+  NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
 }));
+
+/** The End swipe, carried all the way (a screen reader's activate: the drag itself is `SwipeButton`'s test). */
+async function swipeEnd(end = screen.getByRole('button', { name: hudCopy.endLabel })) {
+  await fireEvent(end, 'accessibilityAction', { nativeEvent: { actionName: 'activate' } });
+}
 
 // The local settings mirror: `units` as WP9 writes it.
 let mockUnits: 'mi' | 'km' | null = null;
@@ -422,30 +432,50 @@ describe('points', () => {
   });
 });
 
-describe('hold to end', () => {
-  test('letting go early cancels: the drive goes on', async () => {
+describe('swipe to end', () => {
+  test('a tap, or a swipe let go short of the end, does nothing: the drive goes on', async () => {
     await renderHud();
     const end = screen.getByRole('button', { name: hudCopy.endLabel });
-    await fireEvent(end, 'pressIn');
-    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS - 50));
-    await fireEvent(end, 'pressOut');
+    await fireEvent(end, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 300, height: END_SWIPE_H_PT } } });
+    await fireEvent.press(end).catch(() => {});
+    await act(() =>
+      fireGestureHandler(getByGestureTestId('hud-end-pan'), [
+        { state: State.BEGAN, translationX: 0 },
+        { state: State.ACTIVE, translationX: 120 },
+        { state: State.END, translationX: 120 },
+      ])
+    );
     await act(() => jest.advanceTimersByTime(2000));
     expect(mockEnd).not.toHaveBeenCalled();
     expect(mockRouter.replace).not.toHaveBeenCalled();
     expect(mockRouter.dismissTo).not.toHaveBeenCalled();
   });
 
-  test('End is the layout’s 112 pt button', async () => {
+  test('a swipe all the way ends the drive', async () => {
     await renderHud();
-    const style = screen.getByTestId('hud-end').props.style as { width: number; height: number };
-    expect([style.width, style.height]).toEqual([112, 112]);
+    const end = screen.getByRole('button', { name: hudCopy.endLabel });
+    await fireEvent(end, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 300, height: END_SWIPE_H_PT } } });
+    await act(() =>
+      fireGestureHandler(getByGestureTestId('hud-end-pan'), [
+        { state: State.BEGAN, translationX: 0 },
+        { state: State.ACTIVE, translationX: 150 },
+        { state: State.ACTIVE, translationX: 300 },
+        { state: State.END, translationX: 300 },
+      ])
+    );
+    await act(() => jest.advanceTimersByTime(20));
+    expect(mockEnd).toHaveBeenCalledTimes(1);
   });
 
-  test('a full hold ends the drive and lands on its fresh summary', async () => {
+  test('End is the layout’s 76 pt capsule across the foot of the screen', async () => {
+    await renderHud();
+    expect(screen.getByTestId('hud-end')).toHaveStyle({ height: END_SWIPE_H_PT });
+  });
+
+  test('a full swipe ends the drive and lands on its fresh summary', async () => {
     await renderHud({ speedMph: 60 });
     const end = screen.getByRole('button', { name: hudCopy.endLabel });
-    await fireEvent(end, 'pressIn');
-    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    await swipeEnd(end);
     expect(mockEnd).toHaveBeenCalledTimes(1);
     expect(mockRouter.replace).toHaveBeenCalledTimes(1);
     expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
@@ -459,8 +489,7 @@ describe('hold to end', () => {
   test('with no drive to end it goes Home', async () => {
     mockEnd.mockResolvedValue(null);
     await renderHud({ status: 'idle', clientTripId: null });
-    await fireEvent(screen.getByRole('button', { name: hudCopy.endLabel }), 'pressIn');
-    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    await swipeEnd();
     expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
     expect(mockRouter.replace).not.toHaveBeenCalled();
   });
@@ -491,8 +520,7 @@ describe('hold to end', () => {
   test('a hold that ends a drive that was not kept (or lands during its automatic drop) goes Home once', async () => {
     mockEnd.mockResolvedValue({ clientTripId: 't1', dropped: 'no_movement' });
     const h = await renderHud();
-    await fireEvent(screen.getByRole('button', { name: hudCopy.endLabel }), 'pressIn');
-    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    await swipeEnd();
     mockLastFinalized = drop('t1');
     await h.update({ status: 'idle', clientTripId: null });
     expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
@@ -504,8 +532,7 @@ describe('hold to end', () => {
     // replace would push a second tabs navigator over the first; dismissTo returns to it.
     mockEnd.mockResolvedValue({ clientTripId: 't1', dropped: 'no_gps' });
     await renderHud();
-    await fireEvent(screen.getByRole('button', { name: hudCopy.endLabel }), 'pressIn');
-    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    await swipeEnd();
     expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
     expect(mockRouter.dismissTo).toHaveBeenCalledWith('/(tabs)/home');
     expect(mockRouter.replace).not.toHaveBeenCalled();
@@ -519,8 +546,7 @@ describe('hold to end', () => {
     await renderHud();
     mockEnd.mockResolvedValue(null);
     mockLastFinalized = drop('t1');
-    await fireEvent(screen.getByRole('button', { name: hudCopy.endLabel }), 'pressIn');
-    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    await swipeEnd();
     expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
     expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
     expect(mockRouter.replace).not.toHaveBeenCalled();
@@ -530,8 +556,7 @@ describe('hold to end', () => {
     await renderHud();
     mockEnd.mockResolvedValue(null);
     mockLastFinalized = { clientTripId: 't1', ok: true, status: null, pointsNet: 12, dropped: null, endCause: 'stopped', at: T };
-    await fireEvent(screen.getByRole('button', { name: hudCopy.endLabel }), 'pressIn');
-    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    await swipeEnd();
     expect(mockRouter.replace).toHaveBeenCalledTimes(1);
     expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
     expect(mockRouter.dismissTo).not.toHaveBeenCalled();
@@ -545,21 +570,18 @@ describe('hold to end', () => {
     expect(mockRouter.dismissTo).not.toHaveBeenCalled();
   });
 
-  test('a failed end says "Hold again" and lets the driver hold again', async () => {
+  test('a failed end says "Swipe again" and lets the driver swipe again', async () => {
     mockEnd.mockRejectedValueOnce(new Error('busy'));
     await renderHud();
     const end = screen.getByRole('button', { name: hudCopy.endLabel });
-    await fireEvent(end, 'pressIn');
-    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    await swipeEnd(end);
     expect(screen.getByTestId('hud-end-failed')).toHaveTextContent(hudCopy.endFailed);
     expect(hudCopy.endFailed.split(/\s+/).length).toBeLessThanOrEqual(3);
     expect(mockRouter.replace).not.toHaveBeenCalled();
     expect(mockRouter.dismissTo).not.toHaveBeenCalled();
     expect(end).not.toBeDisabled();
 
-    await fireEvent(end, 'pressOut');
-    await fireEvent(end, 'pressIn');
-    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    await swipeEnd(end);
     expect(screen.queryByTestId('hud-end-failed')).toBeNull();
     expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
   });
@@ -649,8 +671,7 @@ describe('the navigation button (design §7.4, §8)', () => {
     await act(() => jest.advanceTimersByTime(DIM_AFTER_MS + 1000));
     expect(screen.queryByTestId('hud-dim')).toBeNull();
     const end = screen.getByRole('button', { name: hudCopy.endLabel });
-    await fireEvent(end, 'pressIn');
-    await act(() => jest.advanceTimersByTime(HOLD_TO_END_MS));
+    await swipeEnd(end);
     await act(async () => {});
     expect(mockEnd).toHaveBeenCalledTimes(1);
   });
@@ -868,7 +889,7 @@ describe('layout, accessibility and Reduce Motion', () => {
     expect(screen.getByTestId('hud-limit')).toHaveStyle({ borderColor: p.signRing });
   });
 
-  test('the bottom row holds the sign, End and the navigation button', async () => {
+  test('the top row holds the sign and the navigation button; End is at the bottom', async () => {
     await renderHud();
     expect(screen.getByTestId('hud-limit')).toBeTruthy();
     expect(screen.getByTestId('hud-end')).toBeTruthy();
