@@ -6,7 +6,8 @@ import type { Tier } from '@scoring';
  * summary — for the alert chips, and the halo's own colours: a light blue-white calm ring, a
  * saturated red end, and a white speed inside it. `night` is the same palette dimmed for eyes adapted
  * to an unlit road: neutral greys and a near-white sign, no pure white, nothing warmed. Yellow is
- * the minor tier's alone: no other mark on the screen wears it.
+ * the minor tier's, and the dangerous-weather banner's outline and glyph (always with its title and
+ * a warning glyph, so colour never carries it alone); no other mark on the screen wears it.
  *
  * Every foreground/background pair holds at least 7:1 (`HUD_CONTRAST_PAIRS`) and every graphic at
  * least 4.5:1 (`HUD_GRAPHIC_PAIRS`), measured in `__tests__/hudContrast.test.ts`. Literals only:

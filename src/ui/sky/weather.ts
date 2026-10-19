@@ -3,7 +3,7 @@
  * reduced to one of six kinds. Decoration only: nothing in RoadWise depends on it.
  *
  * - The position is rounded to one decimal (about 10 km) before it leaves the phone, the same
- *   rounding the driving screen's National Weather Service request uses.
+ *   rounding the dangerous-weather alerts use (`@/features/weather`).
  * - One answer serves 30 min for the same rounded place; it is kept on the phone so a cold launch
  *   paints the right sky at once.
  * - Every failure (no network, a slow answer, a malformed body) is silent and reads as `clear`,
