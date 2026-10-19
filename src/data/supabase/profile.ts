@@ -5,7 +5,8 @@ import type { Database } from './types';
 
 type Tables = Database['public']['Tables'];
 
-export type Profile = Tables['profiles']['Row'];
+/** `flagged` is moderation state: the server never shows it to its owner. */
+export type Profile = Omit<Tables['profiles']['Row'], 'flagged'>;
 export type Consent = Tables['consents']['Row'];
 
 export type LicenseStage = 'permit' | 'intermediate' | 'full';
@@ -26,9 +27,16 @@ export interface ConsentInsert {
   version: string;
 }
 
+/**
+ * Every `profiles` column the owner may read (migration 0001 grants them by name). `select('*')`
+ * would also name `flagged`, and Postgres then refuses the whole read: nobody could sign in.
+ */
+export const PROFILE_COLUMNS =
+  'id, username, license_stage, units, state, heatmap_visibility, league_eligible, onboarded_at, created_at, updated_at';
+
 /** The owner's own row (RLS: owner-read). */
 export async function fetchProfile(userId: string): Promise<Profile> {
-  const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+  const { data, error } = await supabase.from('profiles').select(PROFILE_COLUMNS).eq('id', userId).single();
   if (error) throw error;
   return data;
 }
