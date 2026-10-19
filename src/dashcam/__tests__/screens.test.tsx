@@ -198,7 +198,7 @@ describe('Settings › DashPal', () => {
     await w.render(<DashcamScreen deps={{ adapter: fakeAdapter() }} />);
     expect(await screen.findByTestId('dashcam-status')).toHaveTextContent('Update RoadWise');
     expect(screen.getByTestId('dashcam-fix')).toHaveTextContent(dashpalCopy.screen.fix.updateApp);
-    expect(screen.getByTestId('dashcam-fix')).not.toHaveTextContent('firmware is older');
+    expect(screen.getByTestId('dashcam-fix')).not.toHaveTextContent(dashpalCopy.screen.fix.downgrade);
     expect(screen.queryByTestId('dashcam-repair')).toBeNull();
   });
 
