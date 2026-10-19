@@ -1,7 +1,9 @@
 // The driving screen's navigation button (product spec v3 "Driving screen · Navigation"): a 64-pt
 // round button with the saved app's short name, or "Navigate". Live at any speed. For the first
 // 30 s of a drive (row clock) it wears a static accent ring when an app is saved, so a driver who
-// came from the navigation app goes back through it.
+// came from the navigation app goes back through it. Once an app is saved, a long press (500 ms)
+// opens the list again to change it; screen readers get the same as the "Change navigation app"
+// action.
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { memo } from 'react';
@@ -16,6 +18,8 @@ import { HUD_MIN_TARGET_PT, type HudPalette } from '@/ui/drive';
 /** The highlight shows while the drive is younger than this on the row clock. */
 export const NAV_HIGHLIGHT_MS = NO_EVENTS_FIRST_S * 1000;
 const RING_PT = 4;
+/** The long press that reopens the list (the platform's standard hold). */
+export const NAV_LONG_PRESS_MS = 500;
 
 /** Whether the button wears its highlight: an app is saved and the drive's rows are under 30 s old. */
 export function navHighlight(saved: boolean, startedAt: number | null, lastRowTs: number | null): boolean {
@@ -31,6 +35,7 @@ export const NavigationButton = memo(function NavigationButton({
   palette,
   width = 96,
   onPress,
+  onLongPress,
 }: {
   /** The saved app's short name (≤ 12 characters), or null for "Navigate". */
   caption: string | null;
@@ -42,20 +47,38 @@ export const NavigationButton = memo(function NavigationButton({
   /** The slot's width (the screen's layout); the caption shrinks to fit it. */
   width?: number;
   onPress(): void;
+  /** Change the saved app (given only once one is saved). */
+  onLongPress?: () => void;
 }) {
+  const canChange = onLongPress !== undefined && appLabel !== null && !disabled;
+  const buzz = () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
   return (
     <View style={[styles.slot, { width }]}>
       <Pressable
         testID="hud-nav"
         accessibilityRole="button"
         accessibilityLabel={appLabel === null ? navCopy.chooseLabel : navCopy.openLabel(appLabel)}
+        accessibilityHint={canChange ? navCopy.changeHint : undefined}
+        accessibilityActions={canChange ? [{ name: 'change', label: navCopy.changeLabel }] : undefined}
+        onAccessibilityAction={(e) => {
+          if (canChange && e.nativeEvent.actionName === 'change') onLongPress?.();
+        }}
         accessibilityState={{ disabled }}
         disabled={disabled}
         hitSlop={8}
+        delayLongPress={NAV_LONG_PRESS_MS}
         onPress={() => {
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+          buzz();
           onPress();
         }}
+        onLongPress={
+          canChange
+            ? () => {
+                buzz();
+                onLongPress?.();
+              }
+            : undefined
+        }
         style={({ pressed }) => [
           styles.button,
           { backgroundColor: palette.chrome, borderColor: palette.chromeEdge, opacity: disabled ? 0.5 : pressed ? 0.8 : 1 },

@@ -4,6 +4,8 @@
 //   Choosing one saves it and opens it.
 // - Later taps: the saved app opens directly. Gone (uninstalled): the saved choice is cleared and the
 //   list shows again, saying so. It did not open: the list shows, saying so.
+// - A long press (or the screen reader's "Change navigation app") once an app is saved: the same
+//   list, the saved app marked. Choosing one saves it as the new default and opens it.
 // - Every open tells the drive host first (`noteLeaving`): leaving RoadWise this way is the one
 //   screen switch that is never phone use. An open that fails takes it back (`cancelLeaving`).
 // - A tap while an open is in flight is ignored (at most 3 s). It works at any speed.
@@ -19,13 +21,15 @@ import { clearNavApp, readNavApp, writeNavApp } from './prefs';
 /** An open that has not settled by then is taken as done (the host's 10-s window still guards it). */
 export const NAV_OPEN_TIMEOUT_MS = 3_000;
 
-export type NavPicker = { mode: 'first' | 'gone' | 'failed'; apps: InstalledNavApp[]; missingLabel?: string } | null;
+export type NavPicker = { mode: 'first' | 'gone' | 'failed' | 'change'; apps: InstalledNavApp[]; missingLabel?: string } | null;
 
 export interface NavigationButton {
   /** The saved app, for the caption and the highlight; null when none. */
   saved: NavAppId | null;
   picker: NavPicker;
   press(): Promise<void>;
+  /** The long press: the list again to pick a new default (a plain press when none is saved). */
+  change(): Promise<void>;
   choose(app: InstalledNavApp): Promise<void>;
   close(): void;
 }
@@ -92,6 +96,19 @@ export function useNavigationButton(db: Db | null, port: NavAppsPort = defaultNa
     }
   }, [db, port, leaveTo, show]);
 
+  const change = useCallback(async () => {
+    if (busy.current) return;
+    const id = db === null ? null : await readNavApp(db).catch(() => null);
+    if (id === null) return press();
+    if (busy.current) return;
+    busy.current = true;
+    try {
+      show({ mode: 'change', apps: await listInstalledNavApps(port) });
+    } finally {
+      busy.current = false;
+    }
+  }, [db, port, press, show]);
+
   const choose = useCallback(
     async (app: InstalledNavApp) => {
       if (busy.current) return;
@@ -114,5 +131,5 @@ export function useNavigationButton(db: Db | null, port: NavAppsPort = defaultNa
 
   const close = useCallback(() => show(null), [show]);
 
-  return { saved, picker, press, choose, close };
+  return { saved, picker, press, change, choose, close };
 }

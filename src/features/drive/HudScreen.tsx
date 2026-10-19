@@ -121,9 +121,10 @@ export type HudScreenProps = {
  * - Stopped only: the points total and the change since the last stop, under the halo when there is
  *   room (so the halo never moves), else in the band.
  * - Bottom row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres),
- *   hold-to-end in the middle and the navigation button on the right: the only two controls live at
- *   any speed (and, the first time, the navigation button's list of apps, shown in a panel above
- *   them, never a route). Every other touch only undims.
+ *   hold-to-end in the middle and the navigation button on the right: the only two controls live
+ *   while moving (stopped, the weather banner's ✕ too). The navigation button's list of apps shows
+ *   in a panel above them, never a route: on the first tap, or on a long press to change the saved
+ *   app. Every other touch only undims.
  * - After 10 s without a touch a dark scrim dims everything, never while an alert banner shows; the
  *   halo and the speed stay above it, at reduced strength and still flowing while calm, at full
  *   strength while warning.
@@ -327,6 +328,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           palette={p}
           width={layout.nav.w}
           onPress={() => void nav.press()}
+          onLongPress={savedApp !== null ? () => void nav.change() : undefined}
         />
       </View>
 
@@ -382,6 +384,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             apps={nav.picker.apps}
             mode={nav.picker.mode}
             missingLabel={nav.picker.missingLabel}
+            selected={nav.picker.mode === 'change' ? nav.saved : null}
             driveLine
             colors={{ surface: p.chrome, ink: p.ink, muted: p.inkMuted, edge: p.chromeEdge }}
             onChoose={(app) => void nav.choose(app)}

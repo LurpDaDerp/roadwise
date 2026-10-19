@@ -1,10 +1,10 @@
 // The navigation button's flow (design §7.4) and its warm-up highlight (§8.4).
-import { act, render, renderHook, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react-native';
 
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, migrate, type Db } from '@/data/db';
 import { setLeaveSink } from '@/drive/leave';
-import { NAV_HIGHLIGHT_MS, NavigationButton, navHighlight } from '@/features/drive/NavigationButton';
+import { NAV_HIGHLIGHT_MS, NAV_LONG_PRESS_MS, NavigationButton, navHighlight } from '@/features/drive/NavigationButton';
 import type { NavAppsPort } from '@/features/navigation/apps';
 import { NAV_APP_KEY, readNavApp, writeNavApp } from '@/features/navigation/prefs';
 import { useNavigationButton } from '@/features/navigation/useNavigationButton';
@@ -132,6 +132,69 @@ test('Android: listed by package and launched', async () => {
   await act(() => result.current.choose(result.current.picker!.apps[0]!));
   expect(launched).toEqual(['com.google.android.apps.maps']);
   expect(log).toEqual(['beginLeave']);
+});
+
+describe('changing the saved app (the long press)', () => {
+  test('lists the installed apps with nothing opened; choosing one saves it as the new default and opens it', async () => {
+    await writeNavApp(db, 'waze');
+    const { result } = await mount(iosPort(['waze://', 'comgooglemaps://']));
+    await act(() => result.current.change());
+    expect(result.current.picker).toEqual({ mode: 'change', apps: [expect.objectContaining({ id: 'google_maps' }), expect.objectContaining({ id: 'waze' })] });
+    expect(log).toEqual([]);
+    await act(() => result.current.choose(result.current.picker!.apps[0]!));
+    expect(log).toEqual(['beginLeave', 'open comgooglemaps://']);
+    expect(result.current.picker).toBeNull();
+    expect(result.current.saved).toBe('google_maps');
+    expect(await readNavApp(db)).toBe('google_maps');
+  });
+
+  test('closing the list keeps the saved app', async () => {
+    await writeNavApp(db, 'waze');
+    const { result } = await mount(iosPort(['waze://', 'comgooglemaps://']));
+    await act(() => result.current.change());
+    await act(async () => result.current.close());
+    expect(result.current.picker).toBeNull();
+    expect(await readNavApp(db)).toBe('waze');
+    expect(log).toEqual([]);
+  });
+
+  test('nothing saved: it is a plain first tap', async () => {
+    const { result } = await mount(iosPort(['waze://']));
+    await act(() => result.current.change());
+    expect(result.current.picker?.mode).toBe('first');
+  });
+});
+
+describe('the button', () => {
+  const props = { caption: 'Waze', appLabel: 'Waze', highlight: false, disabled: false, palette: HUD.day };
+
+  test('a tap opens; a 500 ms hold changes the app; the screen reader gets a "Change navigation app" action and a hint', async () => {
+    const onPress = jest.fn();
+    const onLongPress = jest.fn();
+    await render(<NavigationButton {...props} onPress={onPress} onLongPress={onLongPress} />);
+    const button = screen.getByRole('button', { name: 'Open Waze' });
+    expect(NAV_LONG_PRESS_MS).toBe(500);
+    expect(button).toHaveProp('accessibilityHint', 'Touch and hold to change the navigation app.');
+    expect(button).toHaveProp('accessibilityActions', [{ name: 'change', label: 'Change navigation app' }]);
+    await fireEvent.press(button);
+    expect(onPress).toHaveBeenCalledTimes(1);
+    expect(onLongPress).not.toHaveBeenCalled();
+    await fireEvent(button, 'longPress');
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+    await fireEvent(button, 'accessibilityAction', { nativeEvent: { actionName: 'change' } });
+    expect(onLongPress).toHaveBeenCalledTimes(2);
+    expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  test('no saved app, or disabled: no hold action and no hint', async () => {
+    await render(<NavigationButton {...props} caption={null} appLabel={null} onPress={() => {}} onLongPress={() => {}} />);
+    const first = screen.getByRole('button', { name: 'Choose a navigation app' });
+    expect(first.props.accessibilityActions).toBeUndefined();
+    expect(first.props.accessibilityHint).toBeUndefined();
+    expect(first.props.onLongPress).toBeUndefined();
+    await render(<NavigationButton {...props} disabled onPress={() => {}} onLongPress={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Open Waze' }).props.accessibilityActions).toBeUndefined();
+  });
 });
 
 describe('the warm-up highlight', () => {

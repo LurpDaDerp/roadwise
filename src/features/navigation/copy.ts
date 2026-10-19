@@ -15,6 +15,9 @@ export const navCopy = {
   button: 'Navigate',
   openLabel: (app: string) => `Open ${app}`,
   chooseLabel: 'Choose a navigation app',
+  /** The long press, and the screen reader's action for it (once an app is saved). */
+  changeLabel: 'Change navigation app',
+  changeHint: 'Touch and hold to change the navigation app.',
   settings: {
     title: 'Navigation app',
     notSet: 'Not set',

@@ -634,6 +634,45 @@ describe('the navigation button (design §7.4, §8)', () => {
     expect(screen.queryByTestId('hud-nav-highlight')).toBeNull();
   });
 
+  test('with a saved app, a long press at 60 mph reopens the list with it marked; choosing another saves it and opens it', async () => {
+    mockNavApp = 'waze';
+    await renderHud({ speedMph: 60 });
+    const button = screen.getByRole('button', { name: 'Open Waze' });
+    expect(button).toHaveProp('accessibilityHint', 'Touch and hold to change the navigation app.');
+    await fireEvent(button, 'longPress');
+    await act(async () => {});
+    expect(Linking.openURL).not.toHaveBeenCalled();
+    expect(screen.getByText('Select default navigation app')).toBeOnTheScreen();
+    expect(screen.getByTestId('nav-picker-row-waze')).toHaveProp('accessibilityState', { selected: true });
+    expect(screen.getByTestId('nav-picker-row-apple_maps')).toHaveProp('accessibilityState', { selected: false });
+    await fireEvent.press(screen.getByTestId('nav-picker-row-apple_maps'));
+    await act(async () => {});
+    expect(Linking.openURL).toHaveBeenCalledWith('maps://');
+    expect(screen.queryByTestId('nav-picker')).toBeNull();
+    expect(mockDb.execute).toHaveBeenCalledWith(expect.stringContaining('INSERT'), ['navigation.app', JSON.stringify('apple_maps')]);
+    expect(screen.getByRole('button', { name: 'Open Apple Maps' })).toBeOnTheScreen();
+  });
+
+  test('the screen reader action "Change navigation app" does the same; a tap still opens the saved app', async () => {
+    mockNavApp = 'waze';
+    await renderHud({ speedMph: 60 });
+    const button = screen.getByRole('button', { name: 'Open Waze' });
+    expect(button).toHaveProp('accessibilityActions', [{ name: 'change', label: 'Change navigation app' }]);
+    await fireEvent(button, 'accessibilityAction', { nativeEvent: { actionName: 'change' } });
+    await act(async () => {});
+    expect(screen.getByTestId('nav-picker')).toBeOnTheScreen();
+    await fireEvent.press(screen.getByTestId('nav-picker-close'));
+    await fireEvent.press(screen.getByRole('button', { name: 'Open Waze' }));
+    await act(async () => {});
+    expect(Linking.openURL).toHaveBeenCalledWith('waze://');
+    expect(screen.queryByTestId('nav-picker')).toBeNull();
+  });
+
+  test('no saved app: no long-press action (the first tap picks one)', async () => {
+    await renderHud({ speedMph: 60 });
+    expect(screen.getByTestId('hud-nav').props.accessibilityActions).toBeUndefined();
+  });
+
   test('disabled while the drive is saving', async () => {
     await renderHud({ status: 'finalizing' });
     expect(screen.getByTestId('hud-nav').props.accessibilityState).toMatchObject({ disabled: true });

@@ -32,12 +32,12 @@ export function NavAppPicker({
   onClose,
 }: {
   apps: readonly InstalledNavApp[];
-  mode: 'first' | 'gone' | 'failed' | 'settings';
+  mode: 'first' | 'gone' | 'failed' | 'change' | 'settings';
   /** The app the gone / failed line names. */
   missingLabel?: string;
   /** The line about points (the driving screen only). */
   driveLine: boolean;
-  /** The saved app, marked (Settings). */
+  /** The saved app, marked (Settings, and the driving screen's long press). */
   selected?: NavAppId | null;
   colors: NavPickerColors;
   onChoose(app: InstalledNavApp): void;
