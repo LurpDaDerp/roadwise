@@ -57,7 +57,7 @@ test('the title and the pull-to-refresh spinner of both boards are white on the 
 type Node = { props: { style?: unknown }; parent: Node | null };
 function ground(el: Node): string | undefined {
   for (let n: Node | null = el; n; n = n.parent) {
-    const bg = StyleSheet.flatten(n.props.style as object)?.backgroundColor as string | undefined;
+    const bg = (StyleSheet.flatten(n.props.style as object) as { backgroundColor?: string } | undefined)?.backgroundColor;
     if (bg !== undefined && bg !== 'transparent') return bg;
   }
   return undefined;
