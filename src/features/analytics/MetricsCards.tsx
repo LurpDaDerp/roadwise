@@ -19,7 +19,7 @@ interface MetricGroup {
   cells: { key: string; caption: string; metric: Metric }[];
 }
 
-/** The range's twelve numbers in three groups of four. */
+/** The range's twelve numbers in three groups of four: totals, event counts and per-drive averages. */
 export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
   return [
     {
@@ -28,7 +28,7 @@ export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
       cells: [
         { key: 'drives', caption: m.drives, metric: countMetric(s.drives) },
         { key: 'distance', caption: m.distance, metric: distanceMetric(s.miles, units) },
-        { key: 'time', caption: m.driveTime, metric: timeMetric(s.durationS) },
+        { key: 'avg-drive', caption: m.avgDrive, metric: distanceMetric(s.avgMiles, units) },
         { key: 'speed', caption: m.avgSpeed, metric: speedMetric(s.avgMph, units) },
       ],
     },
@@ -49,7 +49,7 @@ export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
         { key: 'pickups', caption: m.pickups, metric: countMetric(s.pickups) },
         { key: 'phone-time', caption: m.phoneTime, metric: timeMetric(s.handlingS) },
         { key: 'clean', caption: m.cleanDrives, metric: percentMetric(s.cleanPct) },
-        { key: 'points', caption: m.points, metric: pointsMetric(s.points) },
+        { key: 'avg-points', caption: m.avgPoints, metric: pointsMetric(s.avgPoints) },
       ],
     },
   ];

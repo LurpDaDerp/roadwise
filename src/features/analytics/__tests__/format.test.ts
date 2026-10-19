@@ -5,6 +5,7 @@ test('distance: one decimal under 100, whole numbers with separators above, in t
   expect(distanceMetric(10, 'km')).toMatchObject({ value: '16.1', unit: 'km', spoken: '16.1 kilometers' });
   expect(distanceMetric(1204.4, 'mi')).toMatchObject({ value: '1,204' });
   expect(distanceMetric(0, 'mi').value).toBe('0.0');
+  expect(distanceMetric(null, 'km')).toEqual({ value: '—', unit: 'km', spoken: 'no data' });
 });
 
 test('time: minutes under an hour, tenths of hours under ten, whole hours after', () => {
@@ -25,4 +26,6 @@ test('speed, counts, percent and points', () => {
   expect(pointsMetric(243)).toEqual({ value: '+243', unit: 'pts', spoken: 'plus 243 points' });
   expect(pointsMetric(-40)).toMatchObject({ value: '−40', spoken: 'minus 40 points' });
   expect(pointsMetric(0)).toMatchObject({ value: '0', spoken: '0 points' });
+  expect(pointsMetric(44.6)).toMatchObject({ value: '+45', spoken: 'plus 45 points' });
+  expect(pointsMetric(null)).toEqual({ value: '—', unit: 'pts', spoken: 'no data' });
 });

@@ -199,22 +199,22 @@ describe('BestsCard', () => {
 });
 
 describe('MetricsCards', () => {
-  test('three cards of four: Driving, Events, Phone & points', async () => {
+  test('three cards of four: Driving, Events, Phone & points, with per-drive averages', async () => {
     const sums = windowSums(drives(4), null);
     await draw(<MetricsCards sums={sums} />);
     for (const title of ['Driving', 'Events', 'Phone & points']) expect(screen.getByText(title)).toBeOnTheScreen();
     expect(metricGroups(sums, 'mi').map((g) => g.cells.map((c) => c.caption))).toEqual([
-      ['Drives', 'Distance', 'Drive time', 'Avg speed'],
+      ['Drives', 'Distance', 'Avg drive', 'Avg speed'],
       ['Speeding', 'Hard brakes', 'Hard starts', 'Sharp turns'],
-      ['Pickups', 'Phone time', 'Clean drives', 'Points'],
+      ['Pickups', 'Phone time', 'Clean drives', 'Avg points'],
     ]);
     expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('4');
     expect(screen.getByTestId('metric-distance-value')).toHaveTextContent('48.0 mi');
-    expect(screen.getByTestId('metric-time-value')).toHaveTextContent('1.6 h');
+    expect(screen.getByTestId('metric-avg-drive-value')).toHaveTextContent('12.0 mi');
     expect(screen.getByTestId('metric-speed-value')).toHaveTextContent('30 mph');
     expect(screen.getByTestId('metric-brakes-value')).toHaveTextContent('4');
     expect(screen.getByTestId('metric-clean-value')).toHaveTextContent('0 %');
-    expect(screen.getByTestId('metric-points-value')).toHaveTextContent('+528 pts');
+    expect(screen.getByTestId('metric-avg-points-value')).toHaveTextContent('+132 pts');
     expect(screen.getByLabelText('Distance, 48.0 miles')).toBeOnTheScreen();
   });
 
@@ -222,7 +222,10 @@ describe('MetricsCards', () => {
     await draw(<MetricsCards sums={EMPTY_WINDOW} />);
     expect(screen.getByTestId('metric-speed-value')).toHaveTextContent('— mph');
     expect(screen.getByTestId('metric-clean-value')).toHaveTextContent('— %');
-    expect(screen.getByTestId('metric-points-value')).toHaveTextContent('0 pts');
+    expect(screen.getByTestId('metric-avg-points-value')).toHaveTextContent('— pts');
+    expect(screen.getByLabelText('Avg points, no data')).toBeOnTheScreen();
+    // a zero-drive range from real data reads the same: no NaN or Infinity
+    for (const c of metricGroups(windowSums([], null), 'km').flatMap((g) => g.cells)) expect(c.metric.value).not.toMatch(/NaN|Infinity/);
   });
 
   /**
@@ -234,10 +237,16 @@ describe('MetricsCards', () => {
   const cellsIn = (row: El) => within(row).getAllByTestId(/^metric-(?!.*-(value|caption)$)[a-z-]+$/);
   function drawnHeight(): number {
     const cards = (['driving', 'events', 'phone'] as const).map((key) => {
+    expect(screen.getByLabelText('Avg drive, 12.0 miles')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Avg points, plus 132 points')).toBeOnTheScreen();
+    expect(metricGroups(sums, 'km')[0]!.cells[2]!.metric).toMatchObject({ value: '19.3', unit: 'km' });
       const card = flat(screen.getByTestId(`metrics-${key}`));
       const gap = Number(card.gap ?? 0);
       const title = Number(flat(screen.getByTestId(`metrics-${key}-title`)).lineHeight);
       const rows = screen.getAllByTestId(new RegExp(`^metrics-${key}-row-`));
+    expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('0');
+    expect(screen.getByTestId('metric-distance-value')).toHaveTextContent('0.0 mi');
+    expect(screen.getByTestId('metric-avg-drive-value')).toHaveTextContent('— mi');
       const rowsH = rows.reduce((sum, row) => {
         const tallest = Math.max(
           ...cellsIn(row).map((cell) => {

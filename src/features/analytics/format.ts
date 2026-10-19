@@ -14,8 +14,9 @@ export interface Metric {
 
 const DASH = '—';
 
-/** "12.4 mi" under 100, "1,204 km" from 100 up. */
-export function distanceMetric(miles: number, units: Units): Metric {
+/** "12.4 mi" under 100, "1,204 km" from 100 up; a dash with no drives. */
+export function distanceMetric(miles: number | null, units: Units): Metric {
+  if (miles === null || !Number.isFinite(miles)) return { value: DASH, unit: units, spoken: 'no data' };
   const v = distanceIn(Math.max(0, miles), units);
   const value = v >= 100 ? Math.round(v).toLocaleString('en-US') : (Math.round(v * 10) / 10).toFixed(1);
   return { value, unit: units, spoken: `${value} ${distanceWord(units)}` };
@@ -53,8 +54,9 @@ export function percentMetric(pct: number | null): Metric {
   return { value: String(pct), unit: '%', spoken: `${pct} percent` };
 }
 
-/** "+243 pts" / "−40 pts" / "0 pts". */
-export function pointsMetric(n: number): Metric {
+/** "+243 pts" / "−40 pts" / "0 pts"; a dash with no drives. */
+export function pointsMetric(n: number | null): Metric {
+  if (n === null || !Number.isFinite(n)) return { value: DASH, unit: 'pts', spoken: 'no data' };
   const value = formatPointsValue(n, true);
   const r = Math.round(n);
   return { value, unit: 'pts', spoken: r > 0 ? `plus ${r} points` : r < 0 ? `minus ${Math.abs(r)} points` : '0 points' };

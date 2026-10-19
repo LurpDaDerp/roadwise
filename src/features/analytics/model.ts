@@ -273,6 +273,10 @@ export const EMPTY_WINDOW: WindowSums = Object.freeze({
   handlingS: 0,
   cleanDrives: 0,
   cleanPct: null,
+  /** Distance per drive; null with no drives. */
+  avgMiles: number | null;
+  /** Net points per drive; null with no drives. */
+  avgPoints: number | null;
   points: 0,
 });
 
@@ -289,6 +293,8 @@ export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null
     out.speeding += d.counts.speeding;
     out.hardBrake += d.counts.hardBrake;
     out.hardAccel += d.counts.hardAccel;
+  avgMiles: null,
+  avgPoints: null,
     out.hardCorner += d.counts.hardCorner;
     out.pickups += d.counts.pickups;
     out.handlingS += d.counts.handlingS;
@@ -312,6 +318,8 @@ export interface PersonalBests {
   /** Most net points in one drive. */
   mostPoints: Best | null;
   /** Longest clean drive, in miles. */
+  out.avgMiles = out.drives > 0 ? out.miles / out.drives : null;
+  out.avgPoints = out.drives > 0 ? out.points / out.drives : null;
   longestClean: Best | null;
   /** Longest drive with no pickup and no handling, in miles. */
   longestPhoneFree: Best | null;

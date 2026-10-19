@@ -22,7 +22,7 @@ export const analyticsCopy = {
     phone: 'Phone & points',
     drives: 'Drives',
     distance: 'Distance',
-    driveTime: 'Drive time',
+    avgDrive: 'Avg drive',
     avgSpeed: 'Avg speed',
     speeding: 'Speeding',
     hardBrakes: 'Hard brakes',
@@ -31,7 +31,7 @@ export const analyticsCopy = {
     pickups: 'Pickups',
     phoneTime: 'Phone time',
     cleanDrives: 'Clean drives',
-    points: 'Points',
+    avgPoints: 'Avg points',
   },
   grid: {
     title: 'When you drive',

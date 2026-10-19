@@ -219,7 +219,7 @@ describe('windows', () => {
     expect(rangeStart(now, 'year')).toBe(windowStart(now, 365));
   });
 
-  test('sums scored drives in the window; DashPal counts stay out; avg speed and clean share', () => {
+  test('sums scored drives in the window; DashPal counts stay out; avg speed, clean share and per-drive averages', () => {
     const since = 1_000;
     const drives = [
       drive({ startedAt: 2_000, miles: 10, durationS: 1800, pointsNet: 120, clean: true, counts: { ...EMPTY_COUNTS, eyesOff: 3, drowsy: 1 } }),
@@ -253,8 +253,8 @@ describe('windows', () => {
     expect(windowSums(drives, null).drives).toBe(3);
   });
 
-  test('an empty window has no average speed and no clean share', () => {
-    expect(windowSums([], 0)).toMatchObject({ drives: 0, avgMph: null, cleanPct: null, points: 0 });
+  test('an empty window has no averages and no clean share', () => {
+    expect(windowSums([], 0)).toMatchObject({ drives: 0, avgMph: null, cleanPct: null, points: 0, avgMiles: null, avgPoints: null });
   });
 
   test('scoredSince keeps scored and pending-with-points drives in the window, in order', () => {
@@ -284,6 +284,8 @@ describe('personal bests', () => {
     expect(personalBests([])).toEqual({ mostPoints: null, longestClean: null, longestPhoneFree: null });
     const dirty = drive({ clean: false, counts: { ...EMPTY_COUNTS, pickups: 2 }, pointsNet: null, status: 'pending' });
     expect(personalBests([dirty])).toEqual({ mostPoints: null, longestClean: null, longestPhoneFree: null });
+      avgMiles: 7.5,
+      avgPoints: 45,
   });
 });
 
