@@ -439,6 +439,9 @@ minimum_password_length = 8
 # A new account is signed in at once: no confirmation email, so registering needs no mail delivery.
 [remotes.production.auth.email]
 enable_confirmations = false
+# Held at what the project already runs, so the push changes nothing else about email.
+max_frequency = "60s"
+otp_length = 8
 
 # What the hosted project already runs, so `supabase config push` changes sign-in only: these local
 # values (MFA off, a smaller pooler, no analytics buckets) must not reach it.
