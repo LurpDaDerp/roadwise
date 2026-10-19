@@ -12,6 +12,8 @@ export const queryKeys = {
   statSums: (sinceMs: number | null) => ['stats', sinceMs] as const,
   driveCount: () => ['driveCount'] as const,
   routes: (sinceMs: number | null) => ['routes', sinceMs] as const,
+  windowEvents: (sinceMs: number | null) => ['stats', 'events', sinceMs] as const,
+  scoredDrives: (sinceMs: number | null) => ['stats', 'drives', sinceMs] as const,
 };
 
 /** Every root the data layer owns; a change event refreshes them all. */

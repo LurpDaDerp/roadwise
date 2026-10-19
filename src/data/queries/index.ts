@@ -1,3 +1,4 @@
+export { readScoredDrives, readWindowEvents, toDriveEvent, useScoredDrives, useWindowEvents } from '@/data/queries/analytics';
 export { createQueryClient, DEFAULT_GC_MS, DEFAULT_STALE_MS } from '@/data/queries/client';
 export { DataProvider, MissingDataProviderError, useDataSource, useDb, type DataSource } from '@/data/queries/context';
 export {
