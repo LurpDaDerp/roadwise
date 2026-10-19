@@ -53,7 +53,7 @@ beforeEach(async () => {
   ]);
 });
 
-// Let every read land first (a range reads three queries), so none re-renders a hook after its test.
+// Let every read land first (a year reads three queries), so none re-renders a hook after its test.
 afterEach(async () => {
   await waitFor(() => expect(client.isFetching()).toBe(0));
   client.clear();
@@ -99,6 +99,26 @@ test('useAnalytics: range sums, grid and list; all-time bests and routes; 30-day
   // A year reads its own events (past the 30-day window): Score by month, July and October.
   await waitFor(() => expect(result.current.trend.series.score).toHaveLength(2));
   expect(result.current.trend.series.score.map((p) => p.when)).toEqual(['in July', 'in October 2026']);
+});
+
+test('a wider range never scores its older drives with the last range’s events: the Score waits for its own', async () => {
+  // Trip 4 (100 days ago, July) had a severe brake: 100 − 10·25/30 = 91.7 → 92.
+  await seedEvents(db, [{ id: uuid(23), client_trip_id: uuid(4), type: 'hard_brake', tier: 'severe', started_at: NOW - 100 * DAY + 1 }]);
+  const julyScores: number[] = [];
+  const { result, rerender } = await renderHook(
+    ({ range }: { range: 'week' | 'year' }) => {
+      const data = useAnalytics(range);
+      if (range === 'year') for (const p of data.trend.series.score) if (p.when === 'in July') julyScores.push(p.value);
+      return data;
+    },
+    { wrapper: wrapperFor(db, client, now), initialProps: { range: 'week' } }
+  );
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  await rerender({ range: 'year' });
+  await waitFor(() => expect(result.current.trend.series.score).toHaveLength(2));
+  expect(result.current.trend.series.score[0]).toMatchObject({ when: 'in July', value: 92 });
+  // Every render drew July at its true Score, never the perfect 100 the week's events alone give.
+  expect(new Set(julyScores)).toEqual(new Set([92]));
 });
 
 test('while the window’s events are still loading, nothing is scored: drives alone never read as perfect', async () => {

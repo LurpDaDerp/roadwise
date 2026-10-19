@@ -87,8 +87,12 @@ export function useAnalytics(range: Range): AnalyticsData {
   const hourEnd = windowStart(at, 0) + 3_599_999;
   const all = useScoredDrives(null);
   const events = useWindowEvents(coachSince);
-  // The trend's Score needs the range's own events (a month shares the 30-day key; a year reads more).
-  const rangeEvents = useWindowEvents(sinceMs);
+  // The trend's Score needs every event of the range: the 30-day window's cover a day, week or
+  // month (the same query); a year reads its own.
+  const rangeEvents = useWindowEvents(range === 'year' ? sinceMs : coachSince);
+  // A new window holds the last one's events until its own land, and a shorter window's would
+  // leave a year's older drives looking perfect: the Score waits for the window's own events.
+  const trendEvents = rangeEvents.isPlaceholderData ? null : (rangeEvents.data ?? null);
 
   const drives = all.data;
   // Until the events are in, nothing is scored: drives with no events yet would read as perfect.
@@ -101,7 +105,7 @@ export function useAnalytics(range: Range): AnalyticsData {
     const list = drives ?? [];
     return { sums: windowSums(list, sinceMs), grid: driveGrid(list, sinceMs), drives: scoredSince(list, sinceMs) };
   }, [drives, sinceMs]);
-  const trendData = useMemo(() => trend(drives ?? [], rangeEvents.data ?? null, range, hourEnd), [drives, rangeEvents.data, range, hourEnd]);
+  const trendData = useMemo(() => trend(drives ?? [], trendEvents, range, hourEnd), [drives, trendEvents, range, hourEnd]);
   // The map draws the same drives as every other card: scored ones, not "Wasn't driving".
   const map = useMemo(() => {
     const routes = routeLines((drives ?? []).flatMap((d) => (d.polyline ? [d.polyline] : [])));

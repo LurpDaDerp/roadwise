@@ -430,7 +430,8 @@ const round1 = (v: number): number => Math.round(v * 10) / 10;
 
 /**
  * The range's trend, per series, from the same scored drives as the cards and the active events of
- * those drives (`readWindowEvents(db, sinceMs)`; null while they load).
+ * those drives (`readWindowEvents` from the range's start or earlier: an event before the range's
+ * first drive is left out; null while they load).
  *
  * - Score: the Safety Rating's own formula over the slot's drives, clamp(100 − 10 · P / miles),
  *   where P is the rating penalty of their events (`ratingPenalty`: base penalties, DashPal never
