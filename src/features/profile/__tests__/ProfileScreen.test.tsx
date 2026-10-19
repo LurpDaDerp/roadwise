@@ -6,6 +6,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react-native';
 
 import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
+import { analyticsCopy } from '@/features/analytics/copy';
 
 import { achievementViews } from '../achievements';
 import { AchievementsScreen } from '../AchievementsScreen';
@@ -163,6 +164,8 @@ describe('the heat map row opens who can see it', () => {
     await w.render(<HeatmapScreen />);
     expect(await screen.findByTestId('heatmap-screen')).toBeOnTheScreen();
     expect(screen.getByTestId('heatmap-intro')).toHaveTextContent(profileCopy.heatmap.intro);
+    // it names the Analytics card by its own title
+    expect(profileCopy.heatmap.intro).toContain(analyticsCopy.map.title);
     expect(screen.getByTestId('heatmap-privacy')).toHaveTextContent(profileCopy.heatmap.privacy);
     expect(screen.getByTestId('heatmap-visibility-hint')).toHaveTextContent('Only me is the default. Friends see it on your profile.');
     expect(screen.queryByTestId('heatmap-map')).toBeNull();

@@ -34,7 +34,7 @@ export const profileCopy = {
 
   heatmap: {
     title: 'Heat map',
-    intro: 'Your heat map shows the roads you drive most. See it in Analytics.',
+    intro: 'See All trips in Analytics for the roads you drive most.',
     visibility: 'Who can see it',
     visibilityHint: 'Only me is the default. Friends see it on your profile.',
     zones: 'Privacy zones',
