@@ -3,7 +3,7 @@ import { Text } from 'react-native';
 
 import { draw, drive, NOW, press, summary, sums } from '@/features/drives/__fixtures__/drives';
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
-import { Screen } from '@/ui';
+import { contrastRatio, Screen } from '@/ui';
 import { tokens } from '@/ui/tokens';
 
 import { HomeView, type HomeViewProps } from '../HomeView';
@@ -311,6 +311,20 @@ describe('on the sky', () => {
     expect(screen.getByRole('header', { name: 'Hey, lurp' })).toHaveStyle({ color: '#FFFFFF' });
     const { refreshControl } = screen.getByTestId('home').props as { refreshControl: { props: { tintColor: string } } };
     expect(refreshControl.props.tintColor).toBe('#FFFFFF');
+  });
+
+  test('the at-risk line sits on a paper ground in the page warning ink, so it reads wherever the fade falls', async () => {
+    const s = summary();
+    await draw(
+      <Screen sky padded={false}>
+        <HomeView {...props({ summary: { ...s, progress: { ...s.progress, at_risk: true } } })} />
+      </Screen>
+    );
+    const c = tokens.color.light;
+    expect(screen.getByTestId('home-at-risk-line')).toHaveStyle({ backgroundColor: c.surface });
+    expect(screen.getByTestId('home-at-risk')).toHaveStyle({ color: c.warning });
+    expect(contrastRatio(c.warning, c.surface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(tokens.color.dark.warning, tokens.color.dark.surface)).toBeGreaterThanOrEqual(4.5);
   });
 });
 

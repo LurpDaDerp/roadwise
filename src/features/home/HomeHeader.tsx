@@ -13,10 +13,8 @@ import {
   ProgressBar,
   ProgressRing,
   Skeleton,
-  SkyScope,
   StreakFlame,
   Text,
-  useOnSky,
   useTheme,
 } from '@/ui';
 
@@ -205,12 +203,11 @@ function StatPill({ children, accessibilityLabel, testID }: { children: ReactNod
 
 /**
  * The progress row under the greeting: two paper pills, the streak with its multiplier and your
- * points. The at-risk line follows when the streak needs a clean drive; it sits on the sky, so
- * it takes the sky's ink there.
+ * points. The at-risk line follows when the streak needs a clean drive, on its own paper ground:
+ * on a short phone or at large text it reaches the sky's fade, where no ink is repaired.
  */
 export function ProgressStrip({ summary }: { summary: MySummary }) {
   const t = useTheme();
-  const onSky = useOnSky();
   const p = summary.progress;
   const streakState = p.at_risk ? 'atRisk' : 'active';
   const atRisk = p.at_risk ? <AtRiskLine /> : null;
@@ -234,7 +231,7 @@ export function ProgressStrip({ summary }: { summary: MySummary }) {
           </Text>
         </StatPill>
       </ScrollView>
-      {atRisk && onSky ? <SkyScope>{atRisk}</SkyScope> : atRisk}
+      {atRisk}
     </View>
   );
 }
@@ -242,9 +239,25 @@ export function ProgressStrip({ summary }: { summary: MySummary }) {
 function AtRiskLine() {
   const t = useTheme();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.xs }}>
+    <View
+      testID="home-at-risk-line"
+      style={{
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: t.space.xs,
+        paddingHorizontal: t.space.md,
+        paddingVertical: t.space.sm,
+        borderRadius: t.radius.lg,
+        borderCurve: 'continuous',
+        backgroundColor: t.colors.surface,
+        borderWidth: t.scheme === 'dark' ? 1 : 0,
+        borderColor: t.colors.divider,
+        boxShadow: t.elevation.card,
+      }}
+    >
       <Ionicons name="warning" size={t.size.iconSm} color={t.colors.warning} accessible={false} />
-      <Text variant="footnote" tone="warning" testID="home-at-risk" style={{ flex: 1 }}>
+      <Text variant="footnote" tone="warning" testID="home-at-risk" style={{ flexShrink: 1 }}>
         Streak at risk: make your next drive clean to keep it.
       </Text>
     </View>
