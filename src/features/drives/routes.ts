@@ -6,11 +6,9 @@ import type { Href } from 'expo-router';
 
 export const HOME_HREF: Href = '/(tabs)/home';
 export const ANALYTICS_HREF: Href = '/(tabs)/analytics';
-export const LEAGUES_HREF: Href = '/(tabs)/leagues';
 export const PROFILE_HREF: Href = '/(tabs)/profile';
 export const DRIVE_HREF: Href = '/drive';
 export const DRIVE_HISTORY_HREF: Href = '/(app)/drives';
-export const ALL_STATS_HREF: Href = '/(app)/stats';
 export const HOW_POINTS_WORK_HREF: Href = '/(app)/how-points-work';
 export const PERMISSIONS_HREF: Href = '/(app)/settings/permissions';
 

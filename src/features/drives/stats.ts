@@ -1,6 +1,6 @@
 /**
- * Stat formatting shared by the Home stats card and All stats. Values and colours come from
- * `statsFrom` / `statColor` in @scoring; this only words and rounds them.
+ * Stat formatting for the Home stats card and a friend's 30-day stats. Values and colours come
+ * from `statsFrom` / `statColor` in @scoring; this only words and rounds them.
  */
 import { statsFrom, type Stat, type StatId, type StatSums } from '@scoring';
 
@@ -19,14 +19,6 @@ export const STAT_LABEL: Record<StatId, string> = {
   miles: 'Miles',
   duration: 'Time on the road',
   night_miles: 'Night miles',
-};
-
-/** One-line explanations for All stats. */
-export const STAT_HINT: Partial<Record<StatId, string>> = {
-  speeding: 'Speeding incidents',
-  harsh: 'Braking, acceleration and cornering',
-  clean: 'Drives with zero events',
-  handling: 'Time spent holding your phone',
 };
 
 export const EMPTY_SUMS: StatSums = {
@@ -81,20 +73,6 @@ export function formatRate(stat: Stat, units: Units = 'mi'): { value: string; un
   }
 }
 
-/** The total as shown: "3" events, "12 of 15" clean drives, "4.5" min, "312" mi. */
-export function formatTotal(stat: Stat, sums: StatSums, units: Units = 'mi'): { value: string; unit: string } {
-  switch (stat.unit) {
-    case 'per_100_mi':
-      return { value: String(stat.total), unit: stat.total === 1 ? 'time' : 'times' };
-    case 'pct':
-      return { value: `${sums.cleanDrives} of ${sums.drives}`, unit: sums.drives === 1 ? 'drive' : 'drives' };
-    case 'min_per_h':
-      return { value: oneDp(stat.total), unit: 'min' };
-    default:
-      return formatRate(stat, units);
-  }
-}
-
 /** Clean % is the one stat where higher is better. */
 export const higherIsBetter = (id: StatId): boolean => id === 'clean';
 
@@ -139,12 +117,3 @@ export function homeStats(week: StatSums, month: StatSums, units: Units = 'mi'):
   });
   return { stats, window: useWeek ? '7d' : '30d' };
 }
-
-export type StatGroup = { title: string; ids: StatId[] };
-
-/** All stats, in the spec table's order, in three groups. */
-export const STAT_GROUPS: StatGroup[] = [
-  { title: 'Headline', ids: ['speeding', 'pickups', 'harsh', 'clean'] },
-  { title: 'In detail', ids: ['hard_brake', 'hard_accel', 'hard_corner', 'handling'] },
-  { title: 'On the road', ids: ['miles', 'duration', 'night_miles'] },
-];

@@ -27,7 +27,6 @@ const V3_ROUTES = [
   'drive/index.tsx',
   '(app)/drives/index.tsx',
   '(app)/drives/[clientTripId].tsx',
-  '(app)/stats.tsx',
   '(app)/how-points-work.tsx',
   '(app)/u/[username].tsx',
   '(app)/add/[username].tsx',
@@ -66,6 +65,7 @@ const REMOVED = [
   '(app)/settings/dms-setup.tsx',
   '(tabs)/clan.tsx',
   '(app)/clan',
+  '(app)/stats.tsx',
 ];
 
 test.each(V3_ROUTES)('%s exists', (file) => expect(exists(file)).toBe(true));

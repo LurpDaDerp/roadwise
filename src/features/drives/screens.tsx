@@ -7,17 +7,15 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 
-import { useDataSource, useDb, useDriveDetail, useDriveHistory, useRecentDrives, useStatSums } from '@/data/queries';
+import { useDataSource, useDb, useDriveDetail, useDriveHistory, useRecentDrives } from '@/data/queries';
 import { useMySummary } from '@/data/server/summary';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import { EmptyState, Screen, Skeleton, useTheme } from '@/ui';
 
 import { BackHeader } from './BackHeader';
-import { sinceDays } from './format';
 import { HistoryView } from './HistoryView';
 import type { HistoryFilter } from './model';
 import { driveSummaryHref, HOME_HREF } from './routes';
-import { StatsView } from './StatsView';
 import { SummaryView } from './SummaryView';
 
 function useBack() {
@@ -107,24 +105,6 @@ export function DriveSummaryScreen() {
           const outcome = await markNotDriving(drive.clientTripId, { db, queryClient: qc });
           if (outcome === 'missing') throw new Error('drive not found');
         }}
-      />
-    </Screen>
-  );
-}
-
-export function AllStatsScreen() {
-  const back = useBack();
-  const { now } = useDataSource();
-  const month = useStatSums(sinceDays(now(), 30));
-  const all = useStatSums(null);
-  return (
-    <Screen padded={false}>
-      <StatsView
-        month={month.data}
-        all={all.data}
-        loading={month.isLoading || all.isLoading}
-        error={month.isError || all.isError}
-        onBack={back}
       />
     </Screen>
   );
