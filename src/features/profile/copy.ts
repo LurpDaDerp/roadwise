@@ -73,7 +73,6 @@ export const profileCopy = {
     cancel: 'Cancel',
     stats: 'Last 30 days',
     statsEmpty: 'No drives in the last 30 days.',
-    heatmap: 'Heat map',
     reportTitle: (u: string) => `Report ${u}`,
     reportIntro: 'What’s wrong? Reports are private. They never learn who sent one.',
     reportReasons: {

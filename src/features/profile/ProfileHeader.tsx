@@ -1,17 +1,25 @@
-import type { ReactNode } from 'react';
-import { View } from 'react-native';
+import type { ReactNode } from "react";
+import { View } from "react-native";
 
-import { RANKED_MIN_MILES } from '@scoring';
+import { MAX_FREEZES, RANKED_MIN_MILES } from "@scoring";
 
-import { useUnits } from '@/data/queries/units';
-import { formatRating } from '@/lib/rating';
-import { formatDistanceProgress } from '@/lib/units';
-import { Avatar, Card, Divider, formatPointsValue, FreezeCount, ProgressBar, StreakFlame, Text, useFontScale, useTheme } from '@/ui';
+import { useUnits } from "@/data/queries/units";
+import { formatRating } from "@/lib/rating";
+import { formatDistanceProgress } from "@/lib/units";
+import {
+  Avatar,
+  Card,
+  Divider,
+  formatPointsValue,
+  FreezeCount,
+  ProgressBar,
+  StreakFlame,
+  Text,
+  useFontScale,
+  useTheme,
+} from "@/ui";
 
-import { profileCopy as copy } from './copy';
-
-/** Most freezes a driver can hold. */
-export const MAX_FREEZES = 3;
+import { profileCopy as copy } from "./copy";
 
 export interface ProfileHeaderProps {
   username: string;
@@ -38,25 +46,58 @@ export interface ProfileHeaderProps {
  * that matter: Safety Rating (or Unranked) and streak, plus points and freezes on your own card.
  * The same card, without your own extras, is what friends see on `/u/<username>`.
  */
-export function ProfileHeader({ username, level, safetyRating, ranked, streak, own, testID }: ProfileHeaderProps) {
+export function ProfileHeader({
+  username,
+  level,
+  safetyRating,
+  ranked,
+  streak,
+  own,
+  testID,
+}: ProfileHeaderProps) {
   const th = useTheme();
   const scale = useFontScale();
   const stack = scale > 1.35;
   const units = useUnits();
   const rated = ranked && safetyRating !== null;
   const ratingText = formatRating(safetyRating, ranked);
-  const span = own && own.levelNext !== null ? own.levelNext - own.levelFloor : 0;
-  const levelProgress = own && span > 0 ? Math.min(1, Math.max(0, (own.lifetime - own.levelFloor) / span)) : 1;
-  const toNext = own && own.levelNext !== null ? copy.toNext(Math.max(0, own.levelNext - own.lifetime), level + 1) : copy.maxLevel;
+  const span =
+    own && own.levelNext !== null ? own.levelNext - own.levelFloor : 0;
+  const levelProgress =
+    own && span > 0
+      ? Math.min(1, Math.max(0, (own.lifetime - own.levelFloor) / span))
+      : 1;
+  const toNext =
+    own && own.levelNext !== null
+      ? copy.toNext(Math.max(0, own.levelNext - own.lifetime), level + 1)
+      : copy.maxLevel;
   const freezes = own ? Math.max(0, Math.min(own.freezes, MAX_FREEZES)) : 0;
-  const row = { flexDirection: stack ? 'column' : 'row', gap: th.space.lg, alignItems: stack ? 'flex-start' : 'flex-end' } as const;
+  const toRank =
+    own && !rated
+      ? copy.unrankedMiles(
+          formatDistanceProgress(own.miles30d, RANKED_MIN_MILES, units).text,
+        )
+      : null;
+  const row = {
+    flexDirection: stack ? "column" : "row",
+    gap: th.space.lg,
+    alignItems: stack ? "flex-start" : "flex-end",
+  } as const;
 
   return (
     <Card variant="hero" testID={testID}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.lg }}>
+      <View
+        style={{ flexDirection: "row", alignItems: "center", gap: th.space.lg }}
+      >
         <Avatar username={username} size="xl" />
         <View style={{ flex: 1, gap: th.space.xs }}>
-          <Text variant="title1" numberOfLines={1} adjustsFontSizeToFit accessibilityRole="header" testID="profile-username">
+          <Text
+            variant="title1"
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            accessibilityRole="header"
+            testID="profile-username"
+          >
             {username}
           </Text>
           <Text variant="headline" tone="muted" testID="profile-level">
@@ -67,7 +108,12 @@ export function ProfileHeader({ username, level, safetyRating, ranked, streak, o
 
       {own ? (
         <View style={{ gap: th.space.xs }}>
-          <ProgressBar value={levelProgress} tone="accent" accessibilityLabel={copy.level(level)} accessibilityValueText={toNext} />
+          <ProgressBar
+            value={levelProgress}
+            tone="accent"
+            accessibilityLabel={copy.level(level)}
+            accessibilityValueText={toNext}
+          />
           <Text variant="footnote" tone="muted">
             {toNext}
           </Text>
@@ -81,14 +127,33 @@ export function ProfileHeader({ username, level, safetyRating, ranked, streak, o
           <Stat
             stack={stack}
             wide
-            label={rated || !own ? copy.rating : copy.unrankedMiles(formatDistanceProgress(own.miles30d, RANKED_MIN_MILES, units).text)}
-            accessibilityLabel={rated ? `${copy.rating} ${ratingText}` : `${copy.rating}: ${copy.unranked}`}
+            label={toRank ?? copy.rating}
+            accessibilityLabel={
+              rated
+                ? `${copy.rating} ${ratingText}`
+                : toRank
+                  ? `${copy.rating}: ${copy.unranked}, ${toRank}`
+                  : `${copy.rating}: ${copy.unranked}`
+            }
             testID="profile-rating"
           >
-            {rated ? <Text variant="display">{ratingText}</Text> : <Text variant="title2">{copy.unranked}</Text>}
+            {rated ? (
+              <Text variant="display">{ratingText}</Text>
+            ) : (
+              <Text variant="title2">{copy.unranked}</Text>
+            )}
           </Stat>
-          <Stat stack={stack} label={copy.streak} accessibilityLabel={`${copy.streak} ${streak}`} testID="profile-streak">
-            <StreakFlame count={streak} multiplier={own?.nextMult} state={own?.atRisk ? 'atRisk' : 'active'} />
+          <Stat
+            stack={stack}
+            label={copy.streak}
+            accessibilityLabel={`${copy.streak} ${streak}`}
+            testID="profile-streak"
+          >
+            <StreakFlame
+              count={streak}
+              multiplier={own?.nextMult}
+              state={own?.atRisk ? "atRisk" : "active"}
+            />
           </Stat>
         </View>
 
@@ -101,7 +166,15 @@ export function ProfileHeader({ username, level, safetyRating, ranked, streak, o
               accessibilityLabel={`${copy.points} ${formatPointsValue(own.points)}`}
               testID="profile-points"
             >
-              <Text variant="stat">{formatPointsValue(own.points)}</Text>
+              <Text
+                variant="stat"
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+                testID="profile-points-value"
+              >
+                {formatPointsValue(own.points)}
+              </Text>
             </Stat>
             <Stat
               stack={stack}
@@ -109,9 +182,24 @@ export function ProfileHeader({ username, level, safetyRating, ranked, streak, o
               accessibilityLabel={`${copy.freezes} ${copy.freezesHeld(freezes, MAX_FREEZES)}`}
               testID="profile-freezes"
             >
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.sm, minHeight: th.type.stat.lineHeight }}>
+              {/* Wraps so "N of 3" drops under the snowflakes when the column is narrow (320 pt, large text). */}
+              <View
+                testID="profile-freezes-row"
+                style={{
+                  flexDirection: "row",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  columnGap: th.space.sm,
+                  rowGap: th.space.xs,
+                  minHeight: th.type.stat.lineHeight,
+                }}
+              >
                 <FreezeCount count={freezes} max={MAX_FREEZES} />
-                <Text variant="title3" style={{ fontVariant: ['tabular-nums'] }}>
+                <Text
+                  variant="title3"
+                  numberOfLines={1}
+                  style={{ flexShrink: 1, fontVariant: ["tabular-nums"] }}
+                >
                   {copy.freezesHeld(freezes, MAX_FREEZES)}
                 </Text>
               </View>
@@ -142,7 +230,16 @@ function Stat({
 }) {
   const th = useTheme();
   return (
-    <View style={{ flex: stack ? undefined : wide ? 1.2 : 1, gap: th.space.xs }} accessible accessibilityLabel={accessibilityLabel} testID={testID}>
+    <View
+      style={{
+        flex: stack ? undefined : wide ? 1.2 : 1,
+        minWidth: 0,
+        gap: th.space.xs,
+      }}
+      accessible
+      accessibilityLabel={accessibilityLabel}
+      testID={testID}
+    >
       {children}
       <Text variant="label" tone="muted">
         {label}
