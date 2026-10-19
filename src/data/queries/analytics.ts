@@ -3,7 +3,7 @@
  * the `stats` root, so the change event that refreshes every stat refreshes these too.
  */
 import type { DriveEvent } from '@scoring';
-import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, type UseQueryResult } from '@tanstack/react-query';
 
 import type { Db } from '@/data/db/driver';
 import { toEventRow } from '@/data/db/events';
@@ -55,14 +55,17 @@ export async function readScoredDrives(db: Db, sinceMs: number | null): Promise<
   return rows.map((row) => toLocalDrive(toTripRow(row))).filter(isScoredDrive);
 }
 
-/** Active events of the window's scored drives (the radar's penalty sums). */
+/**
+ * Active events of the window's scored drives (the radar's penalty sums). The window's start moves
+ * every hour, which is a new key: the last answer stays until the new one lands.
+ */
 export function useWindowEvents(sinceMs: number | null): UseQueryResult<DriveEvent[]> {
   const { db } = useDataSource();
-  return useQuery({ queryKey: queryKeys.windowEvents(sinceMs), queryFn: () => readWindowEvents(db, sinceMs) });
+  return useQuery({ queryKey: queryKeys.windowEvents(sinceMs), queryFn: () => readWindowEvents(db, sinceMs), placeholderData: keepPreviousData });
 }
 
-/** Scored drives in the window, newest first; null: all time (personal bests). */
+/** Scored drives in the window, newest first; null: all time (personal bests). Held across a new window like the events. */
 export function useScoredDrives(sinceMs: number | null): UseQueryResult<LocalDrive[]> {
   const { db } = useDataSource();
-  return useQuery({ queryKey: queryKeys.scoredDrives(sinceMs), queryFn: () => readScoredDrives(db, sinceMs) });
+  return useQuery({ queryKey: queryKeys.scoredDrives(sinceMs), queryFn: () => readScoredDrives(db, sinceMs), placeholderData: keepPreviousData });
 }

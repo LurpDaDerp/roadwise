@@ -85,6 +85,23 @@ test('useAnalytics: range sums, grid and list; all-time bests and routes; 30-day
   expect(result.current.range).toBe('year');
 });
 
+test('while the window’s events are still loading, nothing is scored: drives alone never read as perfect', async () => {
+  const queries = jest.requireActual<typeof import('@/data/queries/analytics')>('@/data/queries/analytics');
+  const spy = jest.spyOn(queries, 'useWindowEvents').mockReturnValue({ data: undefined, isLoading: true, isError: false, refetch: jest.fn() } as never);
+  try {
+    const { result } = await renderHook(() => useAnalytics('week'), { wrapper: wrapperFor(db, client, now) });
+    await waitFor(() => expect(result.current.drives).toHaveLength(2));
+    expect(result.current.coaching.totals.drives).toBe(0);
+    expect(Object.values(result.current.coaching.scores).some((s) => s === 100)).toBe(false);
+    expect(result.current.coaching.coaching?.level).not.toBe('good');
+    const coach = await renderHook(() => useCoaching(), { wrapper: wrapperFor(db, client, now) });
+    await waitFor(() => expect(coach.result.current.loading).toBe(true));
+    expect(coach.result.current.totals.drives).toBe(0);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
 test('a sync refreshes the analytics data', async () => {
   const { result } = await renderHook(() => useAnalytics('week'), { wrapper: wrapperFor(db, client, now) });
   await waitFor(() => expect(result.current.loading).toBe(false));

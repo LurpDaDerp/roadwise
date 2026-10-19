@@ -42,7 +42,11 @@ export function useCoaching(): CoachingData {
   const sinceMs = windowStart(now(), COACH_DAYS);
   const drives = useScoredDrives(sinceMs);
   const events = useWindowEvents(sinceMs);
-  const result = useMemo(() => coachWindow(drives.data ?? [], events.data ?? [], sinceMs), [drives.data, events.data, sinceMs]);
+  // Until the events are in, nothing is scored: drives with no events yet would read as perfect.
+  const result = useMemo(
+    () => coachWindow(events.data ? (drives.data ?? []) : [], events.data ?? [], sinceMs),
+    [drives.data, events.data, sinceMs]
+  );
   return { ...result, sinceMs, loading: drives.isLoading || events.isLoading, error: drives.isError || events.isError };
 }
 
@@ -79,7 +83,11 @@ export function useAnalytics(range: Range): AnalyticsData {
   const events = useWindowEvents(coachSince);
 
   const drives = all.data;
-  const coaching = useMemo(() => coachWindow(drives ?? [], events.data ?? [], coachSince), [drives, events.data, coachSince]);
+  // Until the events are in, nothing is scored: drives with no events yet would read as perfect.
+  const coaching = useMemo(
+    () => coachWindow(events.data ? (drives ?? []) : [], events.data ?? [], coachSince),
+    [drives, events.data, coachSince]
+  );
   const bests = useMemo(() => personalBests(drives ?? []), [drives]);
   const windowed = useMemo(() => {
     const list = drives ?? [];
