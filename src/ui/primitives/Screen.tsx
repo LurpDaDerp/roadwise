@@ -53,6 +53,7 @@ export function Screen({
         <ScrollView
           contentContainerStyle={content}
           keyboardShouldPersistTaps="handled"
+          automaticallyAdjustKeyboardInsets
           showsVerticalScrollIndicator={false}
           testID={testID}
         >

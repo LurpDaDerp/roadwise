@@ -5,10 +5,18 @@ import { Platform, Pressable, TextInput, useWindowDimensions, View } from 'react
 import { useAppConfig } from '@/data/config/appConfig';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
+import { useSession } from '@/data/supabase/session';
+import { onboardingCopy } from '@/features/onboarding/copy';
+import { localCheck, normaliseUsername } from '@/features/onboarding/steps/UsernameStep';
 import { t } from '@/i18n';
 import { Button, Screen, Text, useTheme } from '@/ui';
 
-import { CODE_LENGTH, sendEmailCode, verifyEmailCode } from './emailCode';
+import {
+  claimChosenUsername,
+  PASSWORD_MIN,
+  registerWithPassword,
+  signInWithPassword,
+} from './emailPassword';
 import { legalState } from './legal';
 import { LegalLinks } from './LegalLinks';
 import { clearTermsAccepted, markTermsAccepted, startSignInVisit } from './pendingConsent';
@@ -21,14 +29,13 @@ export const signInCopy = {
   attest: "I'm 13 or older and agree to the Terms and Privacy Policy",
   needsTick: 'Check the box above first.',
   saveFailed: "Couldn't save that. Try again.",
-  rateLimited: 'Too many sign-in emails. Try again in a minute.',
-  tooManyTries: 'Too many tries. Try again in a minute.',
+  rateLimited: 'Too many tries. Try again in a minute.',
 } as const;
 
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * The one sign-in screen: Sign in with Apple, Google, or an emailed 6-digit code, behind one
+ * The one sign-in screen: Sign in with Apple, Google, or an email and password, behind one
  * required checkbox. Nothing asks for an age or a birth date; the tick is the attestation, sent
  * after sign-in (`accept_terms`).
  */
@@ -38,6 +45,7 @@ export function SignInScreen() {
   const scale = Math.min(fontScale, 2);
   const apple = useAppleSignIn();
   const google = useGoogleSignIn();
+  const { refreshProfile } = useSession();
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
   const { config } = useAppConfig();
@@ -46,11 +54,12 @@ export function SignInScreen() {
   const [agreed, setAgreed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [email, setEmail] = useState('');
-  const [stage, setStage] = useState<'email' | 'code'>('email');
-  const [code, setCode] = useState('');
-  const [resent, setResent] = useState(false);
+  const [mode, setMode] = useState<'create' | 'signIn'>('create');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'apple' | 'google' | 'email' | 'verify' | null>(null);
+  const [busy, setBusy] = useState<'apple' | 'google' | 'email' | null>(null);
 
   // Every visit starts unticked, and a tick left from an earlier visit is dropped.
   useEffect(() => {
@@ -77,12 +86,15 @@ export function SignInScreen() {
   };
 
   // One sign-in at a time: a second tap while a sheet is opening would stack two of them.
-  const run = (key: 'apple' | 'google' | 'email' | 'verify', fn: () => Promise<unknown>) => async () => {
+  const run = (key: 'apple' | 'google' | 'email', fn: () => Promise<unknown>) => async () => {
     setError(null);
     setBusy(key);
     try {
       await fn();
-    } catch {
+    } catch (e) {
+      // The screen says only that it failed; the reason (a provider switched off on the server, a
+      // client id that does not match) is in the Metro log for whoever is setting the app up.
+      if (__DEV__) console.warn('[sign-in] ' + key + ':', e);
       setError(t('signIn.errorGeneric'));
     } finally {
       setBusy(null);
@@ -92,37 +104,55 @@ export function SignInScreen() {
   const showApple = Platform.OS === 'ios' || apple.available;
   const locked = !agreed || busy !== null;
   const lockedHint = agreed ? undefined : signInCopy.needsTick;
-  const canSend = EMAIL_SHAPE.test(email.trim());
-  const canVerify = code.length === CODE_LENGTH;
+  const creating = mode === 'create';
+  const nameCheck = localCheck(username);
+  const nameOk = nameCheck === null;
+  const passwordOk = password.length >= PASSWORD_MIN;
+  const mismatch = creating && confirm.length > 0 && confirm !== password;
+  const canSubmit = !EMAIL_SHAPE.test(email.trim())
+    ? false
+    : creating
+      ? nameOk && passwordOk && confirm === password
+      : password.length > 0;
 
-  const requestCode = (again: boolean) =>
-    run('email', async () => {
-      const result = await sendEmailCode(email);
-      if (result === 'sent') {
-        setStage('code');
-        setCode('');
-        setResent(again);
-      } else {
-        setError(result === 'rate_limited' ? signInCopy.rateLimited : t('signIn.errorGeneric'));
+  const submit = run('email', async () => {
+    if (!creating) {
+      const result = await signInWithPassword(email, password);
+      if (result !== 'ok') {
+        setError(
+          result === 'invalid'
+            ? t('signIn.credentialsInvalid')
+            : result === 'rate_limited'
+              ? signInCopy.rateLimited
+              : t('signIn.errorGeneric')
+        );
       }
-    });
-  // A good code makes a session; `AuthGate` moves on from there, so nothing more happens here.
-  const verify = run('verify', async () => {
-    const result = await verifyEmailCode(email, code);
-    if (result === 'ok') return;
+      return;
+    }
+    const result = await registerWithPassword(email, password);
+    if (result === 'ok') {
+      // The name is claimed before the profile is read again, so setup finds it already taken and
+      // skips its own username step.
+      if (await claimChosenUsername(username)) await refreshProfile().catch(() => {});
+      return;
+    }
     setError(
-      result === 'invalid'
-        ? t('signIn.codeInvalid')
-        : result === 'rate_limited'
-          ? signInCopy.tooManyTries
-          : t('signIn.errorGeneric')
+      result === 'exists'
+        ? t('signIn.emailTaken')
+        : result === 'weak_password'
+          ? t('signIn.passwordWeak')
+          : result === 'rate_limited'
+            ? signInCopy.rateLimited
+            : result === 'confirm_email'
+              ? t('signIn.confirmEmail')
+              : t('signIn.errorGeneric')
     );
   });
-  const changeEmail = () => {
+  const switchMode = () => {
     setError(null);
-    setStage('email');
-    setCode('');
-    setResent(false);
+    setMode(creating ? 'signIn' : 'create');
+    setPassword('');
+    setConfirm('');
   };
   const inputStyle = {
     minHeight: 48 * scale,
@@ -207,73 +237,92 @@ export function SignInScreen() {
         />
       </View>
 
-      <View style={{ gap: th.space.sm }} testID="email-code">
-        {stage === 'email' ? (
+      <View style={{ gap: th.space.sm }} testID="email-password">
+        <TextInput
+          accessibilityLabel={t('signIn.emailLabel')}
+          placeholder={t('signIn.emailLabel')}
+          placeholderTextColor={th.colors.textMuted}
+          value={email}
+          onChangeText={setEmail}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="email-address"
+          inputMode="email"
+          textContentType="emailAddress"
+          autoComplete="email"
+          style={inputStyle}
+        />
+        {creating ? (
           <>
             <TextInput
-              accessibilityLabel={t('signIn.emailLabel')}
-              placeholder={t('signIn.emailLabel')}
+              accessibilityLabel={t('signIn.usernameLabel')}
+              accessibilityHint={onboardingCopy.username.rules}
+              placeholder={t('signIn.usernameLabel')}
               placeholderTextColor={th.colors.textMuted}
-              value={email}
-              onChangeText={setEmail}
+              value={username}
+              onChangeText={(v) => setUsername(normaliseUsername(v))}
               autoCapitalize="none"
               autoCorrect={false}
-              keyboardType="email-address"
-              inputMode="email"
-              textContentType="emailAddress"
-              autoComplete="email"
+              spellCheck={false}
+              maxLength={24}
+              textContentType="username"
+              autoComplete="username-new"
               style={inputStyle}
             />
-            <Button
-              label={t('signIn.emailSend')}
-              variant="secondary"
-              onPress={requestCode(false)}
-              loading={busy === 'email'}
-              disabled={!canSend || locked}
-              accessibilityHint={lockedHint}
-            />
-          </>
-        ) : (
-          <>
-            <Text variant="callout" accessibilityLiveRegion="polite">
-              {t('signIn.codeSent', { email: email.trim() })}
-            </Text>
-            <TextInput
-              accessibilityLabel={t('signIn.codeLabel')}
-              placeholder={t('signIn.codeLabel')}
-              placeholderTextColor={th.colors.textMuted}
-              value={code}
-              onChangeText={(v) => setCode(v.replace(/\D/g, '').slice(0, CODE_LENGTH))}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="number-pad"
-              inputMode="numeric"
-              textContentType="oneTimeCode"
-              autoComplete="one-time-code"
-              style={inputStyle}
-            />
-            <Button
-              label={t('signIn.codeVerify')}
-              onPress={verify}
-              loading={busy === 'verify'}
-              disabled={!canVerify || locked}
-              accessibilityHint={lockedHint}
-            />
-            {resent ? (
-              <Text variant="callout" tone="accent" accessibilityLiveRegion="polite">
-                {t('signIn.codeResent')}
+            {nameCheck?.state === 'invalid' ? (
+              <Text variant="footnote" tone="danger">
+                {onboardingCopy.username.reasons[nameCheck.reason]}
               </Text>
             ) : null}
-            <Button
-              label={t('signIn.codeResend')}
-              variant="ghost"
-              onPress={requestCode(true)}
-              loading={busy === 'email'}
-              disabled={locked}
-            />
-            <Button label={t('signIn.codeChange')} variant="ghost" onPress={changeEmail} disabled={busy !== null} />
           </>
-        )}
+        ) : null}
+        <TextInput
+          accessibilityLabel={t('signIn.passwordLabel')}
+          placeholder={t('signIn.passwordLabel')}
+          placeholderTextColor={th.colors.textMuted}
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          textContentType={creating ? 'newPassword' : 'password'}
+          autoComplete={creating ? 'new-password' : 'current-password'}
+          style={inputStyle}
+        />
+        {creating ? (
+          <>
+            <TextInput
+              accessibilityLabel={t('signIn.passwordConfirmLabel')}
+              placeholder={t('signIn.passwordConfirmLabel')}
+              placeholderTextColor={th.colors.textMuted}
+              value={confirm}
+              onChangeText={setConfirm}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="newPassword"
+              autoComplete="new-password"
+              style={inputStyle}
+            />
+            <Text variant="footnote" tone={mismatch || (password.length > 0 && !passwordOk) ? 'danger' : 'muted'}>
+              {mismatch ? t('signIn.passwordMismatch') : t('signIn.passwordRule')}
+            </Text>
+          </>
+        ) : null}
+        <Button
+          label={creating ? t('signIn.createAccount') : t('signIn.emailSignIn')}
+          variant="secondary"
+          onPress={submit}
+          loading={busy === 'email'}
+          disabled={!canSubmit || locked}
+          accessibilityHint={lockedHint}
+        />
+        <Button
+          label={creating ? t('signIn.modeSignIn') : t('signIn.modeCreate')}
+          variant="ghost"
+          onPress={switchMode}
+          disabled={busy !== null}
+        />
       </View>
 
       {error ? (

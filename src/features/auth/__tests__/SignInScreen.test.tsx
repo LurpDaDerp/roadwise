@@ -11,10 +11,15 @@ import { ThemeProvider } from '@/ui/theme';
 // reference sits in a function body that only runs once the module has finished evaluating.
 const mockAppleSignIn = jest.fn(async () => {});
 const mockGoogleSignIn = jest.fn(async () => {});
-const mockSend = jest.fn(async (_email: string) => 'sent' as 'sent' | 'rate_limited' | 'error');
-const mockVerify = jest.fn(
-  async (_email: string, _code: string) => 'ok' as 'ok' | 'invalid' | 'rate_limited' | 'error'
+const mockRegister = jest.fn(
+  async (_email: string, _password: string) =>
+    'ok' as 'ok' | 'confirm_email' | 'exists' | 'weak_password' | 'rate_limited' | 'error'
 );
+const mockSignInPassword = jest.fn(
+  async (_email: string, _password: string) => 'ok' as 'ok' | 'invalid' | 'rate_limited' | 'error'
+);
+const mockClaim = jest.fn(async (_username: string) => true);
+const mockRefreshProfile = jest.fn(async () => {});
 const mockWorld = { googleReady: true };
 const mockConfig: { config: AppConfig; ready: boolean } = {
   config: { ...CONFIG_DEFAULTS, fetchedAt: null },
@@ -31,10 +36,14 @@ jest.mock('@/features/auth/useGoogleSignIn', () => ({
     ready: mockWorld.googleReady,
   }),
 }));
-jest.mock('@/features/auth/emailCode', () => ({
-  ...jest.requireActual('@/features/auth/emailCode'),
-  sendEmailCode: (email: string) => mockSend(email),
-  verifyEmailCode: (email: string, code: string) => mockVerify(email, code),
+jest.mock('@/features/auth/emailPassword', () => ({
+  ...jest.requireActual('@/features/auth/emailPassword'),
+  registerWithPassword: (email: string, password: string) => mockRegister(email, password),
+  signInWithPassword: (email: string, password: string) => mockSignInPassword(email, password),
+  claimChosenUsername: (username: string) => mockClaim(username),
+}));
+jest.mock('@/data/supabase/session', () => ({
+  useSession: () => ({ refreshProfile: mockRefreshProfile }),
 }));
 // The consent helpers import the app client; nothing here reaches the network.
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -70,8 +79,10 @@ beforeEach(() => {
   mockConfig.ready = true;
   mockAppleSignIn.mockReset().mockResolvedValue(undefined);
   mockGoogleSignIn.mockReset().mockResolvedValue(undefined);
-  mockSend.mockReset().mockResolvedValue('sent');
-  mockVerify.mockReset().mockResolvedValue('ok');
+  mockRegister.mockReset().mockResolvedValue('ok');
+  mockSignInPassword.mockReset().mockResolvedValue('ok');
+  mockClaim.mockReset().mockResolvedValue(true);
+  mockRefreshProfile.mockReset().mockResolvedValue(undefined);
   mockMarkTermsAccepted.mockReset().mockResolvedValue(undefined);
   executed.length = 0;
 });
@@ -92,16 +103,13 @@ const tick = async () => {
 
 const APPLE = { name: 'Continue with Apple' };
 const GOOGLE = { name: 'Continue with Google' };
-const EMAIL = { name: 'Email me a code' };
-const VERIFY = { name: 'Sign in' };
-const RESEND = { name: 'Send a new code' };
-const CHANGE = { name: 'Use a different email' };
+const REGISTER = { name: 'Create account' };
 
-test('shows Apple, Google and the email code, in every build', async () => {
+test('shows Apple, Google and email registration, in every build', async () => {
   await mount();
   expect(screen.getByRole('button', APPLE)).toBeTruthy();
   expect(screen.getByRole('button', GOOGLE)).toBeTruthy();
-  expect(screen.getByRole('button', EMAIL)).toBeTruthy();
+  expect(screen.getByRole('button', REGISTER)).toBeTruthy();
   expect(screen.getByLabelText('Email')).toBeTruthy();
 });
 
@@ -126,16 +134,19 @@ test('starts unticked, and every way in is disabled until it is ticked', async (
   await mount();
   expect(screen.getByRole('checkbox')).not.toBeChecked();
   await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
-  for (const name of [APPLE, GOOGLE, EMAIL]) {
+  await fireEvent.changeText(screen.getByLabelText('Username'), 'ava_01');
+  await fireEvent.changeText(screen.getByLabelText('Password'), 'correct horse');
+  await fireEvent.changeText(screen.getByLabelText('Confirm password'), 'correct horse');
+  for (const name of [APPLE, GOOGLE, REGISTER]) {
     expect(screen.getByRole('button', name)).toBeDisabled();
     await fireEvent.press(screen.getByRole('button', name));
   }
   expect(mockAppleSignIn).not.toHaveBeenCalled();
   expect(mockGoogleSignIn).not.toHaveBeenCalled();
-  expect(mockSend).not.toHaveBeenCalled();
+  expect(mockRegister).not.toHaveBeenCalled();
 
   await tick();
-  for (const name of [APPLE, GOOGLE, EMAIL]) expect(screen.getByRole('button', name)).toBeEnabled();
+  for (const name of [APPLE, GOOGLE, REGISTER]) expect(screen.getByRole('button', name)).toBeEnabled();
   expect(mockMarkTermsAccepted).toHaveBeenCalledTimes(1);
 });
 
@@ -170,12 +181,16 @@ test('a save that fails leaves it unticked and says so', async () => {
 });
 
 test('answers a rejected sign-in in place, in a live region', async () => {
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
   mockAppleSignIn.mockRejectedValueOnce(new Error('no identity token'));
   await mount();
   await tick();
   await fireEvent.press(screen.getByRole('button', APPLE));
   const alert = await screen.findByRole('alert');
   expect(alert).toHaveTextContent('Sign-in did not work. Try again.');
+  // The reason goes to the Metro log, where whoever is setting the app up can read it.
+  expect(warn).toHaveBeenCalledWith('[sign-in] apple:', expect.any(Error));
+  warn.mockRestore();
   expect(alert.props.accessibilityLiveRegion).toBe('polite');
 });
 
@@ -186,106 +201,147 @@ test('leaves Google unarmed until its client id is configured', async () => {
   expect(screen.getByRole('button', GOOGLE)).toBeDisabled();
 });
 
-describe('the emailed code', () => {
-  const askForCode = async (email = 'ava@example.com') => {
-    await mount();
-    await tick();
-    await fireEvent.changeText(screen.getByLabelText('Email'), email);
-    await fireEvent.press(screen.getByRole('button', EMAIL));
+describe('creating an account with an email and password', () => {
+  const REGISTER = { name: 'Create account' };
+  const fill = async (over: Partial<Record<'email' | 'username' | 'password' | 'confirm', string>> = {}) => {
+    const v = { email: 'ava@example.com', username: 'ava_01', password: 'correct horse', confirm: 'correct horse', ...over };
+    await fireEvent.changeText(screen.getByLabelText('Email'), v.email);
+    await fireEvent.changeText(screen.getByLabelText('Username'), v.username);
+    await fireEvent.changeText(screen.getByLabelText('Password'), v.password);
+    await fireEvent.changeText(screen.getByLabelText('Confirm password'), v.confirm);
   };
-  const typeCode = (code: string) => fireEvent.changeText(screen.getByLabelText('6-digit code'), code);
 
-  test('a malformed address cannot be sent', async () => {
+  test('registration is the first thing shown: email, username, password and the password again', async () => {
+    await mount();
+    for (const label of ['Email', 'Username', 'Password', 'Confirm password']) {
+      expect(screen.getByLabelText(label)).toBeTruthy();
+    }
+    expect(screen.getByLabelText('Password').props.secureTextEntry).toBe(true);
+    expect(screen.getByLabelText('Confirm password').props.secureTextEntry).toBe(true);
+    expect(screen.getByRole('button', REGISTER)).toBeTruthy();
+  });
+
+  test('Create account stays off until every field is good and the two passwords match', async () => {
     await mount();
     await tick();
-    for (const bad of ['', 'ava', 'ava@', 'ava@example', 'a va@example.com']) {
-      await fireEvent.changeText(screen.getByLabelText('Email'), bad);
-      expect(screen.getByRole('button', EMAIL)).toBeDisabled();
+    expect(screen.getByRole('button', REGISTER)).toBeDisabled();
+    await fill();
+    expect(screen.getByRole('button', REGISTER)).toBeEnabled();
+
+    for (const bad of [
+      { email: 'ava@example' },
+      { username: 'av' },
+      { username: 'ava-01' },
+      { password: 'short', confirm: 'short' },
+      { confirm: 'correct horsE' },
+      { confirm: '' },
+    ]) {
+      await fill(bad);
+      expect(screen.getByRole('button', REGISTER)).toBeDisabled();
     }
-    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
-    expect(screen.getByRole('button', EMAIL)).toBeEnabled();
   });
 
-  test('step one asks for a code, then step two asks for the six digits', async () => {
-    await askForCode(' ava@example.com ');
-    expect(mockSend).toHaveBeenCalledWith(' ava@example.com ');
-    expect(await screen.findByText('We emailed a 6-digit code to ava@example.com.')).toBeOnTheScreen();
-    expect(screen.queryByLabelText('Email')).toBeNull();
-    expect(screen.getByRole('button', VERIFY)).toBeDisabled();
+  test('says when the two passwords differ, and what a username may hold', async () => {
+    await mount();
+    await fill({ confirm: 'correct horsE', username: 'Av a!' });
+    expect(screen.getByText("The passwords don't match.")).toBeOnTheScreen();
+    expect(screen.getByLabelText('Username').props.value).toBe('ava!');
+    expect(screen.getByText('Only letters, numbers and underscores.')).toBeOnTheScreen();
   });
 
-  test('the code field keeps digits only, at most six, and arms Sign in on the sixth', async () => {
-    await askForCode();
-    await screen.findByLabelText('6-digit code');
-    await typeCode('12a-3 4');
-    expect(screen.getByLabelText('6-digit code').props.value).toBe('1234');
-    expect(screen.getByRole('button', VERIFY)).toBeDisabled();
-    await typeCode('12345678');
-    expect(screen.getByLabelText('6-digit code').props.value).toBe('123456');
-    expect(screen.getByRole('button', VERIFY)).toBeEnabled();
+  test('the username is typed as the server stores it: lower case, no spaces', async () => {
+    await mount();
+    await fireEvent.changeText(screen.getByLabelText('Username'), 'Ava 01');
+    expect(screen.getByLabelText('Username').props.value).toBe('ava01');
   });
 
-  test('a good code signs in with the address and the code, and shows no error', async () => {
-    await askForCode();
-    await screen.findByLabelText('6-digit code');
-    await typeCode('123456');
-    await fireEvent.press(screen.getByRole('button', VERIFY));
-    await waitFor(() => expect(mockVerify).toHaveBeenCalledWith('ava@example.com', '123456'));
+  test('registers, then claims the username and reads the profile again', async () => {
+    await mount();
+    await tick();
+    await fill({ email: ' Ava@Example.com ' });
+    await fireEvent.press(screen.getByRole('button', REGISTER));
+    await waitFor(() => expect(mockRefreshProfile).toHaveBeenCalledTimes(1));
+    expect(mockRegister).toHaveBeenCalledWith(' Ava@Example.com ', 'correct horse');
+    expect(mockClaim).toHaveBeenCalledWith('ava_01');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  test('a wrong or expired code says so, in place, and can be retyped', async () => {
-    mockVerify.mockResolvedValueOnce('invalid');
-    await askForCode();
-    await screen.findByLabelText('6-digit code');
-    await typeCode('000000');
-    await fireEvent.press(screen.getByRole('button', VERIFY));
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent("That code didn't work or has expired. Check it, or send a new one.");
-    expect(screen.getByLabelText('6-digit code').props.value).toBe('000000');
-    expect(screen.getByRole('button', VERIFY)).toBeEnabled();
+  test('a username that could not be claimed leaves it to setup, with no error here', async () => {
+    mockClaim.mockResolvedValueOnce(false);
+    await mount();
+    await tick();
+    await fill();
+    await fireEvent.press(screen.getByRole('button', REGISTER));
+    await waitFor(() => expect(mockClaim).toHaveBeenCalled());
+    expect(mockRefreshProfile).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  test('too many tries, and any other failure, each have their own line', async () => {
-    mockVerify.mockResolvedValueOnce('rate_limited').mockResolvedValueOnce('error');
-    await askForCode();
-    await screen.findByLabelText('6-digit code');
-    await typeCode('123456');
-    await fireEvent.press(screen.getByRole('button', VERIFY));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Too many tries. Try again in a minute.');
-    await fireEvent.press(screen.getByRole('button', VERIFY));
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Sign-in did not work. Try again.'));
+  test.each([
+    ['exists', 'That email already has an account. Sign in instead.'],
+    ['weak_password', 'That password is too weak. Use at least 8 characters.'],
+    ['rate_limited', 'Too many tries. Try again in a minute.'],
+    ['confirm_email', 'Check your email to confirm your account, then sign in.'],
+    ['error', 'Sign-in did not work. Try again.'],
+  ] as const)('a refused registration (%s) says so in place and claims nothing', async (result, words) => {
+    mockRegister.mockResolvedValueOnce(result);
+    await mount();
+    await tick();
+    await fill();
+    await fireEvent.press(screen.getByRole('button', REGISTER));
+    expect(await screen.findByRole('alert')).toHaveTextContent(words);
+    expect(mockClaim).not.toHaveBeenCalled();
   });
+});
 
-  test('a new code can be asked for, and says it is on its way', async () => {
-    await askForCode();
-    await screen.findByLabelText('6-digit code');
-    await typeCode('123456');
-    await fireEvent.press(screen.getByRole('button', RESEND));
-    expect(await screen.findByText('A new code is on its way.')).toBeOnTheScreen();
-    expect(mockSend).toHaveBeenCalledTimes(2);
-    expect(screen.getByLabelText('6-digit code').props.value).toBe('');
-  });
+describe('signing in with an email and password', () => {
+  const SIGN_IN = { name: 'Sign in with email' };
+  const toSignIn = async () => {
+    await mount();
+    await tick();
+    await fireEvent.press(screen.getByRole('button', { name: 'Have an account? Sign in' }));
+  };
 
-  test('a different email goes back to step one with the address kept for editing', async () => {
-    await askForCode();
-    await screen.findByLabelText('6-digit code');
-    await fireEvent.press(screen.getByRole('button', CHANGE));
-    expect((await screen.findByLabelText('Email')).props.value).toBe('ava@example.com');
-    expect(screen.queryByLabelText('6-digit code')).toBeNull();
-  });
-
-  test('a refused burst of emails says to wait, and stays on step one', async () => {
-    mockSend.mockResolvedValueOnce('rate_limited');
-    await askForCode();
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('Too many sign-in emails. Try again in a minute.');
+  test('shows only email and password, and no username or second password', async () => {
+    await toSignIn();
     expect(screen.getByLabelText('Email')).toBeTruthy();
+    expect(screen.getByLabelText('Password')).toBeTruthy();
+    expect(screen.queryByLabelText('Username')).toBeNull();
+    expect(screen.queryByLabelText('Confirm password')).toBeNull();
+    expect(screen.getByRole('button', { name: 'New here? Create an account' })).toBeTruthy();
   });
 
-  test('an email that could not be sent says sign-in did not work', async () => {
-    mockSend.mockResolvedValueOnce('error');
-    await askForCode();
-    expect(await screen.findByRole('alert')).toHaveTextContent('Sign-in did not work. Try again.');
+  test('signs in with the address and password, and shows no error', async () => {
+    await toSignIn();
+    expect(screen.getByRole('button', SIGN_IN)).toBeDisabled();
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.changeText(screen.getByLabelText('Password'), 'correct horse');
+    await fireEvent.press(screen.getByRole('button', SIGN_IN));
+    await waitFor(() => expect(mockSignInPassword).toHaveBeenCalledWith('ava@example.com', 'correct horse'));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(mockClaim).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['invalid', "That email and password don't match. Check them and try again."],
+    ['rate_limited', 'Too many tries. Try again in a minute.'],
+    ['error', 'Sign-in did not work. Try again.'],
+  ] as const)('a refused sign-in (%s) says so in place', async (result, words) => {
+    mockSignInPassword.mockResolvedValueOnce(result);
+    await toSignIn();
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.changeText(screen.getByLabelText('Password'), 'wrong');
+    await fireEvent.press(screen.getByRole('button', SIGN_IN));
+    expect(await screen.findByRole('alert')).toHaveTextContent(words);
+  });
+
+  test('switching back and forth keeps the email and drops the passwords', async () => {
+    await toSignIn();
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.changeText(screen.getByLabelText('Password'), 'secret-pass');
+    await fireEvent.press(screen.getByRole('button', { name: 'New here? Create an account' }));
+    expect(screen.getByLabelText('Email').props.value).toBe('ava@example.com');
+    expect(screen.getByLabelText('Password').props.value).toBe('');
+    expect(screen.getByLabelText('Confirm password')).toBeTruthy();
   });
 });
