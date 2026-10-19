@@ -22,7 +22,7 @@ export function FirstRunCard({ driveCount }: { driveCount: number }) {
           <Text variant="title3">{driveCount === 0 ? 'Take your first drive' : `${left} more ${left === 1 ? 'drive' : 'drives'} to unlock your stats`}</Text>
           <Text variant="subhead" tone="muted">
             {driveCount === 0
-              ? 'Tap Start drive before you pull out. Put your phone down and go.'
+              ? 'Swipe Start drive before you pull out. Put your phone down and go.'
               : 'Keep it up. Your driving stats show up here after 3 drives.'}
           </Text>
         </View>

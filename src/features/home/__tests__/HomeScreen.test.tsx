@@ -1,7 +1,7 @@
 import { act, screen, waitFor } from '@testing-library/react-native';
 import { AppState, ScrollView, type AppStateStatus } from 'react-native';
 
-import { draw, drive as mockDrive, press, result as mockResult, summary as mockSummary, sums as mockSums } from '@/features/drives/__fixtures__/drives';
+import { draw, drive as mockDrive, press, result as mockResult, summary as mockSummary, sums as mockSums, swipe } from '@/features/drives/__fixtures__/drives';
 import type { LocalDrive } from '@/features/drives/model';
 
 import { ThemeProvider } from '@/ui';
@@ -126,11 +126,11 @@ describe('the notice of a drive that was not kept', () => {
     mockStart.mockResolvedValue({ ok: false, reason: 'busy' });
     await draw(<HomeScreen />);
     expect(await screen.findByTestId('drive-dropped')).toBeOnTheScreen();
-    await press(screen.getByTestId('start-drive'));
+    await swipe(screen.getByTestId('start-drive'));
     expect(await screen.findByTestId('start-refusal')).toBeOnTheScreen();
     expect(screen.queryByTestId('drive-dropped')).toBeNull();
     mockStart.mockResolvedValue({ ok: true, clientTripId: 'x' });
-    await press(screen.getByTestId('start-drive'));
+    await swipe(screen.getByTestId('start-drive'));
     await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/drive'));
     expect(screen.queryByTestId('drive-dropped')).toBeNull();
     expect(screen.queryByTestId('start-refusal')).toBeNull();
@@ -140,7 +140,7 @@ describe('the notice of a drive that was not kept', () => {
 test('a successful start opens the driving screen', async () => {
   mockStart.mockResolvedValue({ ok: true, clientTripId: 'x' });
   await draw(<HomeScreen />);
-  await press(screen.getByTestId('start-drive'));
+  await swipe(screen.getByTestId('start-drive'));
   await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/drive'));
   expect(mockStart).toHaveBeenCalledWith();
 });
@@ -148,7 +148,7 @@ test('a successful start opens the driving screen', async () => {
 test('no location: nothing is recorded, Home says location is needed and Fix it opens Permissions', async () => {
   mockStart.mockResolvedValue({ ok: false, reason: 'permission' });
   await draw(<HomeScreen />);
-  await press(screen.getByTestId('start-drive'));
+  await swipe(screen.getByTestId('start-drive'));
   expect(await screen.findByText('RoadWise needs location to record a drive.')).toBeOnTheScreen();
   expect(mockRouter.push).not.toHaveBeenCalled();
   await press(screen.getByText('Fix it'));
@@ -172,7 +172,7 @@ describe('a tap on the forgot-to-start reminder that started no drive', () => {
     expect(mockRouter.push).toHaveBeenCalledTimes(1);
     expect(mockRouter.push).not.toHaveBeenCalledWith('/drive');
     mockStart.mockResolvedValue({ ok: true, clientTripId: 'x' });
-    await press(screen.getByTestId('start-drive'));
+    await swipe(screen.getByTestId('start-drive'));
     await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/drive'));
     expect(readStartNotice()).toBeNull();
     expect(screen.queryByTestId('start-refusal')).toBeNull();
@@ -182,7 +182,7 @@ describe('a tap on the forgot-to-start reminder that started no drive', () => {
     await draw(<HomeScreen />);
     expect(screen.queryByTestId('start-refusal')).toBeNull();
     await act(async () => showStartNotice('reminder-expired'));
-    expect(await screen.findByTestId('start-refusal')).toHaveTextContent(/That reminder has expired. Tap Start drive instead./);
+    expect(await screen.findByTestId('start-refusal')).toHaveTextContent(/That reminder has expired. Swipe Start drive instead./);
     expect(screen.queryByText('Fix it')).toBeNull();
     expect(screen.queryByText('Open it')).toBeNull();
   });
@@ -190,16 +190,16 @@ describe('a tap on the forgot-to-start reminder that started no drive', () => {
   test('a newer notice outranks an older refused Start', async () => {
     mockStart.mockResolvedValue({ ok: false, reason: 'busy' });
     await draw(<HomeScreen />);
-    await press(screen.getByTestId('start-drive'));
+    await swipe(screen.getByTestId('start-drive'));
     expect(await screen.findByText('A drive is already running.')).toBeOnTheScreen();
     await act(async () => showStartNotice('reminder-expired'));
-    expect(await screen.findByText('That reminder has expired. Tap Start drive instead.')).toBeOnTheScreen();
+    expect(await screen.findByText('That reminder has expired. Swipe Start drive instead.')).toBeOnTheScreen();
   });
 
   test('a drive that starts (by the reminder too) takes an old refused Start down', async () => {
     mockStart.mockResolvedValue({ ok: false, reason: 'error' });
     const view = await draw(<HomeScreen />);
-    await press(screen.getByTestId('start-drive'));
+    await swipe(screen.getByTestId('start-drive'));
     expect(await screen.findByTestId('start-refusal')).toBeOnTheScreen();
     mockRecording = true;
     await view.rerender(
@@ -293,7 +293,7 @@ describe('a Start refused for Precise Location or Location Services', () => {
     mockBoard.fix.mockResolvedValue({ kind: 'opened' });
     mockStart.mockResolvedValue({ ok: false, reason });
     await draw(<HomeScreen />);
-    await press(screen.getByTestId('start-drive'));
+    await swipe(screen.getByTestId('start-drive'));
     expect(await screen.findByText(line)).toBeOnTheScreen();
     expect(line.length).toBeLessThanOrEqual(60);
     await press(screen.getByText('Fix it'));
@@ -306,7 +306,7 @@ describe('a Start refused for Precise Location or Location Services', () => {
     mockBoard.fix.mockResolvedValue(null);
     mockStart.mockResolvedValue({ ok: false, reason: 'precise' });
     await draw(<HomeScreen />);
-    await press(screen.getByTestId('start-drive'));
+    await swipe(screen.getByTestId('start-drive'));
     await press(await screen.findByText('Fix it'));
     await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/(app)/settings/permissions'));
     mockRouter.push.mockClear();

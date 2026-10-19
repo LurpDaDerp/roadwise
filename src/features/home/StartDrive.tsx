@@ -1,11 +1,10 @@
 import { IDLE_END_S } from '@scoring';
-import { Ionicons } from '@expo/vector-icons';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { View } from 'react-native';
 
 import type { EndCause } from '@/core/engine/engine.types';
 import type { DropReason } from '@/core/engine/finalize';
 import type { StartRefusalReason } from '@/drive/host';
-import { Banner, Text, useTheme } from '@/ui';
+import { Banner, SwipeButton, Text, useTheme } from '@/ui';
 
 export type StartRefusal = StartRefusalReason;
 
@@ -18,7 +17,7 @@ export const REFUSAL_COPY: Record<StartBanner, string> = {
   services: 'Location Services are off. Turn them on to record a drive.',
   busy: 'A drive is already running.',
   error: 'Couldn’t start the drive. Try again.',
-  'reminder-expired': 'That reminder has expired. Tap Start drive instead.',
+  'reminder-expired': 'That reminder has expired. Swipe Start drive instead.',
 };
 
 const IDLE_MIN = Math.round(IDLE_END_S / 60);
@@ -46,52 +45,32 @@ export function dropCopy(cause: EndCause, reason: DropReason): string {
 }
 
 /**
- * Start drive, the hero action at the foot of Home's drive card: a paper capsule across the scene
- * with an ink disc at its end carrying the car. One tap starts a drive; while the start is under
- * way the disc spins and the capsule says it is busy.
+ * Start drive, the hero action at the foot of Home's drive card: an ink capsule across the scene
+ * with a paper disc at its left carrying the car and the words to its right. The driver swipes the
+ * car right to start, opening the sky's accent behind it, with a success haptic as it lands; a tap
+ * does nothing. While the start is under way the disc sits at the end and spins.
  */
 export function StartDriveButton({ onStart, starting }: { onStart: () => void; starting: boolean }) {
   const t = useTheme();
   const c = t.colors;
   return (
-    <Pressable
-      testID="start-drive"
-      accessibilityRole="button"
-      accessibilityLabel="Start drive"
-      accessibilityState={{ busy: starting, disabled: starting }}
-      disabled={starting}
-      onPress={onStart}
-      style={({ pressed }) => ({
-        minHeight: 60,
-        borderRadius: t.radius.pill,
-        borderCurve: 'continuous',
-        backgroundColor: pressed ? c.primaryPressed : c.primary,
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingLeft: t.space.xl,
-        paddingRight: 6,
-        paddingVertical: 6,
-        gap: t.space.md,
-        transform: [{ scale: pressed && !starting ? 0.98 : 1 }],
-        boxShadow: '0px 8px 24px rgba(0, 0, 0, 0.28)',
-      })}
-    >
-      <Text variant="headline" style={{ flex: 1, color: c.onPrimary, fontSize: 18 }} numberOfLines={2}>
-        Start drive
-      </Text>
-      <View
-        style={{
-          width: 48,
-          height: 48,
-          borderRadius: 24,
-          backgroundColor: c.onPrimary,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        {starting ? <ActivityIndicator color={c.primary} /> : <Ionicons name="car-sport" size={t.size.iconLg - 4} color={c.primary} />}
-      </View>
-    </Pressable>
+    <View style={{ borderRadius: t.radius.pill, boxShadow: '0px 8px 24px rgba(0, 0, 0, 0.28)' }}>
+      <SwipeButton
+        testID="start-drive"
+        accessibilityLabel="Start drive"
+        accessibilityHint="Swipe right to start a drive."
+        icon="car-sport"
+        colors={{ track: c.primary, fill: c.accent, knob: c.onPrimary, knobInk: c.primary, hint: c.onPrimary }}
+        height={64}
+        busy={starting}
+        onSwipe={onStart}
+        label={
+          <Text variant="headline" style={{ color: c.onPrimary, fontSize: 18 }} numberOfLines={1}>
+            Start drive
+          </Text>
+        }
+      />
+    </View>
   );
 }
 

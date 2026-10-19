@@ -58,6 +58,13 @@ export { BottomSheet, Sheet, type SheetProps } from './primitives/Sheet';
 export { StepDots, StepTransition } from './primitives/StepTransition';
 export { Skeleton } from './primitives/Skeleton';
 export {
+  SWIPE_COMMIT,
+  SWIPE_SETTLE_MS,
+  SwipeButton,
+  type SwipeButtonColors,
+  type SwipeButtonProps,
+} from './primitives/SwipeButton';
+export {
   HEALTH_LABEL,
   HEALTH_SIGNAL,
   StatTile,

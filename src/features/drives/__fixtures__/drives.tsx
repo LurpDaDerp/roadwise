@@ -164,3 +164,8 @@ export const draw = (ui: ReactElement) =>
 export async function press(el: Parameters<typeof fireEvent.press>[0]): Promise<void> {
   await fireEvent.press(el);
 }
+
+/** A swipe control's deliberate act, as a screen reader's double-tap gives it (the gesture itself is `SwipeButton`'s own test). */
+export async function swipe(el: Parameters<typeof fireEvent>[0]): Promise<void> {
+  await fireEvent(el, 'accessibilityAction', { nativeEvent: { actionName: 'activate' } });
+}

@@ -17,7 +17,7 @@ const FILTERS: { value: Exclude<HistoryFilter, 'all'>; label: string; icon: 'che
 ];
 
 const EMPTY: Record<HistoryFilter, { title: string; body: string }> = {
-  all: { title: 'No drives yet', body: 'Tap Start drive on Home before you pull out. Every drive shows up here.' },
+  all: { title: 'No drives yet', body: 'Swipe Start drive on Home before you pull out. Every drive shows up here.' },
   clean: { title: 'No clean drives yet', body: 'A drive with zero events counts as clean. Your next one could be it.' },
   negative: { title: 'No negative drives', body: 'Nice. None of your drives went below zero.' },
   passenger: { title: 'No passenger drives', body: "Drives you mark as “Wasn't driving” show up here." },

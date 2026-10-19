@@ -1,7 +1,7 @@
 import { screen, within } from '@testing-library/react-native';
 import { Text } from 'react-native';
 
-import { draw, drive, NOW, press, summary, sums } from '@/features/drives/__fixtures__/drives';
+import { draw, drive, NOW, press, summary, sums, swipe } from '@/features/drives/__fixtures__/drives';
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
 import { contrastRatio, Screen } from '@/ui';
 import { tokens } from '@/ui/tokens';
@@ -128,11 +128,13 @@ describe('first run', () => {
 });
 
 describe('Start drive', () => {
-  test('starts from the Start drive capsule at the foot of the drive card, with no DMS chip beside it', async () => {
+  test('starts from a swipe of the Start drive capsule at the foot of the drive card, never a tap, with no DMS chip beside it', async () => {
     const p = props();
     await draw(<HomeView {...p} />);
     expect(within(screen.getByTestId('home-header')).getByTestId('start-drive')).toBeOnTheScreen();
-    await press(screen.getByRole('button', { name: 'Start drive' }));
+    await press(screen.getByRole('button', { name: 'Start drive' })).catch(() => {});
+    expect(p.onStart).not.toHaveBeenCalled();
+    await swipe(screen.getByRole('button', { name: 'Start drive' }));
     expect(p.onStart).toHaveBeenCalled();
     expect(screen.queryByTestId('dms-chip')).toBeNull();
   });
