@@ -25,7 +25,7 @@ import { useGoogleSignIn } from './useGoogleSignIn';
 
 export const signInCopy = {
   title: 'Welcome to RoadWise',
-  body: 'Drive safely, earn points and climb the leagues with your friends.',
+  body: 'Drive safely, earn points and climb the leaderboards with your friends.',
   attest: "I'm 13 or older and agree to the Terms and Privacy Policy",
   needsTick: 'Check the box above first.',
   saveFailed: "Couldn't save that. Try again.",

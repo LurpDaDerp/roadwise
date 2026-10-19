@@ -39,7 +39,10 @@ export function DashcamStep({
   const leave = () => {
     if (leaving.current) return;
     leaving.current = true;
-    onNext();
+    // The last step: a failed finish keeps the driver here, free to press again.
+    void Promise.resolve(onNext()).then((left) => {
+      if (left === false) leaving.current = false;
+    });
   };
 
   return (

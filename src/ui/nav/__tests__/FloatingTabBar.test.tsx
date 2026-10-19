@@ -5,11 +5,13 @@ import { FloatingTabBar, type FloatingTabBarProps } from '@/ui/nav/FloatingTabBa
 import { ThemeProvider } from '@/ui/theme';
 
 function props(index: number, emit = jest.fn(() => ({ defaultPrevented: false }))) {
-  const routes = ['home', 'leagues', 'clan', 'profile'].map((name) => ({ key: `${name}-k`, name }));
+  // The shell's tabs: Home · Analytics · Leaderboards (route `leagues`) · Profile.
+  const TITLES: Record<string, string> = { home: 'Home', analytics: 'Analytics', leagues: 'Leaderboards', profile: 'Profile' };
+  const routes = Object.keys(TITLES).map((name) => ({ key: `${name}-k`, name }));
   const descriptors = Object.fromEntries(
     routes.map((r) => [
       r.key,
-      { options: { title: r.name[0]!.toUpperCase() + r.name.slice(1), tabBarIcon: ({ focused }: { focused: boolean }) => <Text>{focused ? '●' : '○'}</Text> } },
+      { options: { title: TITLES[r.name], tabBarIcon: ({ focused }: { focused: boolean }) => <Text>{focused ? '●' : '○'}</Text> } },
     ])
   );
   const navigate = jest.fn();
@@ -18,14 +20,15 @@ function props(index: number, emit = jest.fn(() => ({ defaultPrevented: false })
 }
 
 test('four tabs, each spoken by name with its selected state', async () => {
-  const { p } = props(1);
+  const { p } = props(2);
   await render(
     <ThemeProvider scheme="light" reduceMotion>
       <FloatingTabBar {...p} />
     </ThemeProvider>
   );
   expect(screen.getAllByRole('tab')).toHaveLength(4);
-  expect(screen.getByRole('tab', { name: 'Leagues' })).toBeSelected();
+  expect(screen.getAllByRole('tab').map((t) => t.props.accessibilityLabel)).toEqual(['Home', 'Analytics', 'Leaderboards', 'Profile']);
+  expect(screen.getByRole('tab', { name: 'Leaderboards' })).toBeSelected();
   expect(screen.getByRole('tab', { name: 'Home' })).not.toBeSelected();
 });
 
@@ -36,8 +39,8 @@ test('a tap moves to another tab; a tap on the current tab only emits the press 
       <FloatingTabBar {...p} />
     </ThemeProvider>
   );
-  await fireEvent.press(screen.getByRole('tab', { name: 'Clan' }));
-  expect(navigate).toHaveBeenCalledWith('clan', undefined);
+  await fireEvent.press(screen.getByRole('tab', { name: 'Analytics' }));
+  expect(navigate).toHaveBeenCalledWith('analytics', undefined);
   await fireEvent.press(screen.getByRole('tab', { name: 'Home' }));
   expect(navigate).toHaveBeenCalledTimes(1);
   expect(emit).toHaveBeenCalledWith({ type: 'tabPress', target: 'home-k', canPreventDefault: true });

@@ -46,7 +46,7 @@ describe('onboarding copy', () => {
     expect(onboardingCopy.location.body).toBe('RoadWise uses precise location to measure speed and miles during a drive you start.');
     expect(onboardingCopy.location.approximate).toBe("Location is set to approximate, so drives can't record. Turn on Precise Location in Settings.");
     expect(onboardingCopy.notifications.body).toBe(
-      'Get your forgot-to-start reminder, your Sunday recap, your league results, and a heads-up when a friend adds you.'
+      'Get your forgot-to-start reminder, your Sunday recap, and a heads-up when a friend adds you.'
     );
   });
 });

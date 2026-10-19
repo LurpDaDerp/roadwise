@@ -1,11 +1,13 @@
-import { Redirect, useFocusEffect, useRouter, type Href } from 'expo-router';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { Redirect, useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, View } from 'react-native';
 
 import type { SettingsRepo } from '@/data/db/settings';
+import { useSession } from '@/data/supabase/session';
 import { Screen, Skeleton, useTheme } from '@/ui';
 
 import { onboardingCopy } from './copy';
+import { finishOnboarding } from './finish';
 import {
   isInFlow,
   isStepId,
@@ -20,14 +22,7 @@ import {
 } from './flow';
 import { readSavedPlan, readSavedStep, savePlan, saveStep } from './state';
 import { STEP_REGISTRY } from './stepRegistry';
-import { StepPositionProvider } from './StepFrame';
-
-/**
- * Where the stepper leaves the flow after the last step. The last step calls `finishOnboarding`
- * itself (WP9), which marks the profile onboarded and honours a pending
- * deep link.
- */
-const AFTER_LAST_STEP = '/(tabs)/home' as Href;
+import { StepFinishProvider, StepPositionProvider, type StepFinishState } from './StepFrame';
 
 /**
  * The steps passed this session, so "Step n of total" survives a step being replaced by the next.
@@ -55,6 +50,10 @@ export function resetSessionPlan(): void {
  * Forward and Back both `replace`: the stack holds one onboarding screen, so neither a swipe nor
  * the Android back button can walk back into the claimed username step. The Android
  * back button is mapped onto Back and left to the system where there is no Back.
+ *
+ * Past the last step the stepper finishes onboarding (`finishOnboarding`): the account is marked
+ * onboarded and the driver lands on Home, or on a link held from before setup. While that runs the
+ * step's buttons wait; when it fails the frame says so and the step can be pressed again.
  *
  * Nothing here reroutes out of onboarding on its own; leaving the flow (and never doing so while a
  * drive records, I10) is the gate's job (Task 17).
@@ -114,6 +113,8 @@ function ActiveStep({
   settings: SettingsRepo;
 }) {
   const router = useRouter();
+  const { session, refreshProfile } = useSession();
+  const userId = session?.user.id ?? null;
   // A step calls onNext after its own writes and `refreshProfile`; the newest context decides.
   const latest = useRef(ctx);
   useLayoutEffect(() => {
@@ -134,10 +135,28 @@ function ActiveStep({
     void savePlan(settings, plan).catch(() => {});
   }, [settings, step, plan]);
 
-  const onNext = useCallback(() => {
+  const [finish, setFinish] = useState<StepFinishState>({ busy: false, error: null });
+  const finishing = useRef(false);
+
+  const onNext = useCallback(async (): Promise<boolean> => {
     const next = nextStep(latest.current, step);
-    router.replace(next ? onboardingHref(next) : AFTER_LAST_STEP);
-  }, [router, step]);
+    if (next) {
+      router.replace(onboardingHref(next));
+      return true;
+    }
+    if (finishing.current) return false;
+    finishing.current = true;
+    setFinish({ busy: true, error: null });
+    try {
+      await finishOnboarding({ settings, userId, router, refreshProfile });
+      return true;
+    } catch {
+      setFinish({ busy: false, error: onboardingCopy.frame.finishFailed });
+      return false;
+    } finally {
+      finishing.current = false;
+    }
+  }, [router, step, settings, userId, refreshProfile]);
 
   const back = previousStep(ctx, step);
   const onBack = useMemo(
@@ -163,7 +182,9 @@ function ActiveStep({
   const Step = STEP_REGISTRY[step];
   return (
     <StepPositionProvider value={position}>
-      <Step ctx={ctx} onNext={onNext} onBack={onBack} />
+      <StepFinishProvider value={finish}>
+        <Step ctx={ctx} onNext={onNext} onBack={onBack} />
+      </StepFinishProvider>
     </StepPositionProvider>
   );
 }

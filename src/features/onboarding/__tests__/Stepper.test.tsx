@@ -38,10 +38,12 @@ jest.mock('../steps/DashcamStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { DashcamStep: (p: object) => <StubStep {...p} step="dashcam" /> };
 });
-jest.mock('../steps/ClanStep', () => {
-  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
-  return { ClanStep: (p: object) => <StubStep {...p} step="clan" /> };
-});
+const mockFinish = jest.fn<Promise<void>, [unknown]>(() => Promise.resolve());
+jest.mock('../finish', () => ({ finishOnboarding: (deps: unknown) => mockFinish(deps) }));
+const mockRefreshProfile = jest.fn(() => Promise.resolve());
+jest.mock('@/data/supabase/session', () => ({
+  useSession: () => ({ session: { user: { id: 'user-1' } }, refreshProfile: mockRefreshProfile }),
+}));
 
 const mockRouter = { replace: jest.fn(), push: jest.fn(), back: jest.fn() };
 jest.mock('expo-router', () => {
@@ -64,6 +66,7 @@ let settings: SettingsRepo;
 beforeEach(async () => {
   settings = createSettingsRepo(await createTestDb());
   mockRouter.replace.mockClear();
+  mockFinish.mockReset().mockResolvedValue(undefined);
   resetSessionPlan();
 });
 
@@ -124,7 +127,7 @@ describe('OnboardingStepper', () => {
 
   it('renders the registered step with its position and saves it for a later resume', async () => {
     await renderStepper('motion', ctx());
-    expect(screen.getByText('Step 2 of 7')).toBeOnTheScreen();
+    expect(screen.getByText('Step 2 of 6')).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Motion' })).toBeOnTheScreen();
     await waitFor(async () => expect(await readSavedStep(settings)).toBe('motion'));
   });
@@ -173,7 +176,7 @@ describe('OnboardingStepper', () => {
 
   it('keeps the count steady as the username drops out of the flow', async () => {
     const view = await renderStepper('username', ctx({ hasUsername: false }));
-    expect(screen.getByText('Step 1 of 8')).toBeOnTheScreen();
+    expect(screen.getByText('Step 1 of 7')).toBeOnTheScreen();
     const at = (step: StepId, c: FlowContext) =>
       view.rerender(
         <ThemeProvider>
@@ -181,15 +184,15 @@ describe('OnboardingStepper', () => {
         </ThemeProvider>
       );
     await at('how', ctx());
-    expect(screen.getByText('Step 2 of 8')).toBeOnTheScreen();
+    expect(screen.getByText('Step 2 of 7')).toBeOnTheScreen();
     await act(async () => {});
   });
 
   it('carries the saved count across a restart, through start', async () => {
-    // A plan saved by an older build, with a retired step (license) and before the reminder and DashPal
-    // steps existed: the retired id drops out, the new steps join the count.
+    // A plan saved by an older build, with retired steps (license, clan) and before the reminder and
+    // DashPal steps existed: the retired ids drop out, the new steps join the count.
     const PLAN = ['username', 'license', 'how', 'motion', 'location', 'notifications', 'clan'] as StepId[];
-    const NOW: StepId[] = ['username', 'how', 'motion', 'location', 'notifications', 'reminder', 'dashcam', 'clan'];
+    const NOW: StepId[] = ['username', 'how', 'motion', 'location', 'notifications', 'reminder', 'dashcam'];
     await saveStep(settings, 'location');
     await savePlan(settings, PLAN);
     const view = await renderStepper('start', ctx());
@@ -199,14 +202,40 @@ describe('OnboardingStepper', () => {
         <OnboardingStepper step="location" ctx={ctx()} settings={settings} />
       </ThemeProvider>
     );
-    expect(screen.getByText('Step 4 of 8')).toBeOnTheScreen();
+    expect(screen.getByText('Step 4 of 7')).toBeOnTheScreen();
     await waitFor(async () => expect(await readSavedPlan(settings)).toEqual(NOW));
   });
 
-  it('leaves the flow for Home after the last step', async () => {
-    await renderStepper('clan', ctx());
+  it('finishes onboarding after the last step', async () => {
+    await renderStepper('dashcam', ctx());
     await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
-    expect(mockRouter.replace).toHaveBeenLastCalledWith('/(tabs)/home');
-    await act(async () => {});
+    await waitFor(() => expect(mockFinish).toHaveBeenCalledTimes(1));
+    expect(mockFinish).toHaveBeenCalledWith(
+      expect.objectContaining({ settings, userId: 'user-1', router: mockRouter, refreshProfile: mockRefreshProfile })
+    );
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('onboarding-finish-error')).toBeNull();
+  });
+
+  it('says so when finishing fails, and finishes on the next press', async () => {
+    mockFinish.mockRejectedValueOnce(new Error('offline'));
+    await renderStepper('dashcam', ctx());
+    await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByTestId('onboarding-finish-error')).toHaveTextContent(
+      "Couldn't finish setting up. Check your connection and try again."
+    );
+    await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(mockFinish).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId('onboarding-finish-error')).toBeNull());
+  });
+
+  it('runs one finish at a time', async () => {
+    let release: () => void = () => {};
+    mockFinish.mockImplementationOnce(() => new Promise<void>((r) => (release = r)));
+    await renderStepper('dashcam', ctx());
+    await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
+    expect(mockFinish).toHaveBeenCalledTimes(1);
+    await act(async () => release());
   });
 });

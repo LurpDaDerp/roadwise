@@ -3,7 +3,7 @@
  * style, test), account (export, delete, sign out) and delete account. Device settings are an
  * in-memory table; the server, session and drive state are stand-ins.
  */
-import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react-native';
 
 import { createFakeDriveSense } from '@drive-sense';
 
@@ -206,6 +206,23 @@ describe('Settings', () => {
       fireEvent.press(await screen.findByRole('radio', { name: 'Ohio' }));
     });
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_state: 'OH' }));
+  });
+
+  it('heat map visibility offers Only me and Friends; a saved clan setting shows as Friends', async () => {
+    answerRpc(mockRpc, {
+      get_my_summary: { ...SUMMARY, profile: { ...SUMMARY.profile, heatmap_visibility: 'clan' } },
+      update_profile: {},
+    });
+    const w = await appWorld();
+    await w.render(<SettingsScreen />);
+    const control = within(await screen.findByTestId('settings-heatmap-visibility'));
+    await waitFor(() => expect(control.getByRole('tab', { name: 'Friends' })).toBeSelected());
+    expect(control.getAllByRole('tab').map((t) => t.props.accessibilityLabel)).toEqual(['Only me', 'Friends']);
+    expect(screen.queryByText('Clan')).toBeNull();
+    await act(async () => {
+      fireEvent.press(control.getByRole('tab', { name: 'Only me' }));
+    });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_heatmap_visibility: 'only_me' }));
   });
 
   it('Driving › DashPal opens the DashPal screen and says "Set up your dashcam" until one is paired', async () => {

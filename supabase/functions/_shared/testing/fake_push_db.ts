@@ -149,13 +149,13 @@ export function fakePushDb(opts: FakePushDbOptions = {}): FakePushDb {
   return { db, calls, outcomes, receipts };
 }
 
-/** A claimable league-result item with an all-defaults ctx; override what a test is about. */
+/** A claimable weekly-recap item with an all-defaults ctx; override what a test is about. */
 export function pushItem(overrides: Partial<PushItem> = {}, ctx: Partial<PushItem['ctx']> = {}): PushItem {
   const base: PushItem = {
     inboxId: crypto.randomUUID(),
     userId: '11111111-1111-4111-8111-111111111111',
-    kind: 'league_result',
-    payload: { week: '2026-W40', result: 'promoted', final_rank: 3, tier: 'bronze', new_tier: 'silver', week_points: 410 },
+    kind: 'weekly_recap',
+    payload: { week: '2026-W40', rating: 91.7, rating_delta: 1.2, streak: 4, drives: 5, week_points: 420, best_drive_net: 167 },
     createdAt: 0,
     ctx: {
       tz: 'America/Los_Angeles',

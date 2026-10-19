@@ -2,7 +2,7 @@ import type { Href } from 'expo-router';
 
 /**
  * The onboarding flow: username → how it works → motion → location → notifications →
- * forgot-to-start reminder (optional) → DashPal (optional) → clan (optional) → Home.
+ * forgot-to-start reminder (optional) → DashPal (optional) → Home.
  *
  * Every step has one fixed place in `STEP_IDS`; the context only decides which of them this driver
  * walks. Navigation works on that canonical order rather than on a list index, so a step the context
@@ -21,7 +21,6 @@ export const STEP_IDS = [
   'notifications',
   'reminder',
   'dashcam',
-  'clan',
 ] as const;
 
 export type StepId = (typeof STEP_IDS)[number];
@@ -82,7 +81,7 @@ export function previousStep(ctx: FlowContext, current: StepId): StepId | null {
  */
 export function resumeStep(ctx: FlowContext, saved: StepId | null): StepId {
   const steps = stepsFor(ctx);
-  const first = steps[0] ?? 'clan';
+  const first = steps[0] ?? 'dashcam';
   if (saved === null || GATE_STEPS.has(first)) return first;
   return steps.find((id) => ORDER[id] >= ORDER[saved]) ?? steps.at(-1) ?? first;
 }

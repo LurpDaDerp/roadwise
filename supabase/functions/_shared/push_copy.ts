@@ -1,9 +1,12 @@
-// The three pushes v3 sends (plan §4 "Push/outbox"): what each inbox payload must hold, how
-// long it stays worth sending, and the words. Copy is plain, short, second person; it never names
+// The pushes RoadWise sends (plan §4 "Push/outbox"): what each inbox payload must hold, how long
+// it stays worth sending, and the words. Copy is plain, short, second person; it never names
 // another user (a friend request says only that one arrived) and never states a speed.
+//
+// The app has no leagues: a `league_result` the database still queues is not a kind here, so
+// push-sender skips it (`unknown_type`), and the weekly recap says nothing about a league.
 import { z } from 'zod';
 
-export const PUSH_KINDS = ['weekly_recap', 'league_result', 'friend_request'] as const;
+export const PUSH_KINDS = ['weekly_recap', 'friend_request'] as const;
 export type PushKind = (typeof PUSH_KINDS)[number];
 
 const DAY_MS = 86_400_000;
@@ -11,14 +14,12 @@ const DAY_MS = 86_400_000;
 /** How long after creation an item is still worth pushing; older is skipped as `stale`. */
 export const TTL_MS: Record<PushKind, number> = {
   weekly_recap: 2 * DAY_MS,
-  league_result: 3 * DAY_MS,
   friend_request: 7 * DAY_MS,
 };
 
 /** Where a tap lands (plan §7). */
 export const URLS: Record<PushKind, string> = {
   weekly_recap: '/home',
-  league_result: '/leagues',
   friend_request: '/friends',
 };
 
@@ -34,19 +35,8 @@ export const PayloadSchemas = {
       drives: z.number().int().min(0),
       week_points: z.number().int(),
       best_drive_net: z.number().int().nullable(),
-      league: z.object({ rank: z.number().int().min(1), tier: z.string(), size: z.number().int().min(0) }).nullable().optional(),
-      last_result: z.object({ week: z.string(), result: z.enum(['promoted', 'stayed', 'demoted']), final_rank: z.number().int().min(1), tier: z.string() }).nullable().optional(),
     })
-    .loose(),
-  league_result: z
-    .object({
-      week: z.string(),
-      result: z.enum(['promoted', 'stayed', 'demoted']),
-      final_rank: z.number().int().min(1),
-      tier: z.string(),
-      new_tier: z.string(),
-      week_points: z.number().int(),
-    })
+    // Extra fields (the league rank the database still adds) are allowed and never said.
     .loose(),
   friend_request: z.object({}).loose(),
 };
@@ -59,7 +49,6 @@ export interface PushCopy {
 
 export const isPushKind = (kind: string): kind is PushKind => (PUSH_KINDS as readonly string[]).includes(kind);
 
-const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /** The words for one item, or null when the payload is not what the kind needs (nothing true to say). */
@@ -67,7 +56,7 @@ export function renderPush(kind: PushKind, payload: unknown): PushCopy | null {
   if (kind === 'weekly_recap') {
     const p = PayloadSchemas.weekly_recap.safeParse(payload);
     if (!p.success) return null;
-    const { rating, rating_delta, streak, drives, week_points, best_drive_net, league, last_result } = p.data;
+    const { rating, rating_delta, streak, drives, week_points, best_drive_net } = p.data;
     const ratingPart =
       rating === null
         ? 'Not ranked yet.'
@@ -75,32 +64,11 @@ export function renderPush(kind: PushKind, payload: unknown): PushCopy | null {
           ? `Safety Rating ${Math.round(rating)}.`
           : `Safety Rating ${Math.round(rating)} (${rating_delta > 0 ? 'up' : 'down'} ${Math.round(Math.abs(rating_delta))}).`;
     const bestPart = best_drive_net === null || best_drive_net === undefined ? '' : ` Best drive ${best_drive_net >= 0 ? '+' : ''}${best_drive_net}.`;
-    const leaguePart = league
-      ? ` #${league.rank} in ${cap(league.tier)}.`
-      : last_result
-        ? last_result.result === 'promoted'
-          ? ` Last week: promoted from ${cap(last_result.tier)}.`
-          : last_result.result === 'demoted'
-            ? ` Last week: moved down from ${cap(last_result.tier)}.`
-            : ` Last week: #${last_result.final_rank} in ${cap(last_result.tier)}.`
-        : '';
     return {
       title: 'Your week in review',
-      body: `${plural(drives, 'drive', 'drives')}, ${week_points >= 0 ? '+' : ''}${week_points} points.${bestPart} ${ratingPart} Streak ${streak}.${leaguePart}`,
+      body: `${plural(drives, 'drive', 'drives')}, ${week_points >= 0 ? '+' : ''}${week_points} points.${bestPart} ${ratingPart} Streak ${streak}.`,
       url: URLS.weekly_recap,
     };
-  }
-  if (kind === 'league_result') {
-    const p = PayloadSchemas.league_result.safeParse(payload);
-    if (!p.success) return null;
-    const { result, final_rank, tier, new_tier } = p.data;
-    const body =
-      result === 'promoted'
-        ? `You finished #${final_rank} in ${cap(tier)} and moved up to ${cap(new_tier)}.`
-        : result === 'demoted'
-          ? `You finished #${final_rank} in ${cap(tier)}. Next week starts in ${cap(new_tier)}.`
-          : `You finished #${final_rank} in ${cap(tier)}. A new week starts now.`;
-    return { title: 'League results are in', body, url: URLS.league_result };
   }
   const p = PayloadSchemas.friend_request.safeParse(payload);
   if (!p.success) return null;

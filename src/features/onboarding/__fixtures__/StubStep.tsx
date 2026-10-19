@@ -12,7 +12,7 @@ export function StubStep({ step, onNext, onBack }: StepProps & { step: StepId })
     <StepFrame
       title={onboardingCopy.stepTitles[step]}
       onBack={onBack}
-      primary={{ label: 'Continue', onPress: onNext }}
+      primary={{ label: 'Continue', onPress: () => void onNext() }}
     />
   );
 }

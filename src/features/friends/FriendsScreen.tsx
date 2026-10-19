@@ -63,7 +63,7 @@ export function FriendsScreen() {
                   <ListRow
                     title={c.username}
                     subtitle={subtitle(c)}
-                    leading={<Avatar username={c.username} size="md" tier={c.league_tier} />}
+                    leading={<Avatar username={c.username} size="md" />}
                     onPress={() => open(c.username)}
                     accessory="none"
                     testID={`incoming-${c.username}`}
@@ -104,7 +104,7 @@ export function FriendsScreen() {
                   key={c.user_id}
                   title={c.username}
                   subtitle={subtitle(c)}
-                  leading={<Avatar username={c.username} size="md" tier={c.league_tier} />}
+                  leading={<Avatar username={c.username} size="md" />}
                   onPress={() => open(c.username)}
                   testID={`friend-${c.username}`}
                 />

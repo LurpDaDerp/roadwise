@@ -54,7 +54,7 @@ export function stepHour(hhmm: string, dir: -1 | 1): string {
   return `${String((next + 24) % 24).padStart(2, '0')}:00`;
 }
 
-const KINDS = ['weekly_recap', 'leagues', 'social'] as const;
+const KINDS = ['weekly_recap', 'social'] as const;
 
 function useOsAccess(os: OsNotificationsPort, appState: AppStateLike) {
   const [access, setAccess] = useState<NotificationAccess | null>(null);
@@ -72,7 +72,7 @@ function useOsAccess(os: OsNotificationsPort, appState: AppStateLike) {
 }
 
 /**
- * `/settings/notifications`: weekly recap, league results and friend requests, quiet hours, and
+ * `/settings/notifications`: weekly recap and friend requests, quiet hours, and
  * what the phone itself allows. Every change saves as it is made and shows as made while it saves;
  * a failure puts it back and says so.
  */

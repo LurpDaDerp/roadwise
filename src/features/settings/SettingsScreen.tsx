@@ -12,7 +12,7 @@ import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
 import { ReminderRow, useTripReminder, type ReminderDeps } from '@/features/reminder';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, useTheme } from '@/ui';
 
-import { settingsCopy, VISIBILITY_SEGMENTS } from './copy';
+import { settingsCopy, shownVisibility, VISIBILITY_SEGMENTS } from './copy';
 
 import { readUnits, writeUnits, type Units } from './localPrefs';
 import { LinkRow, RowIcon, Section, TopBar } from './parts';
@@ -130,7 +130,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
         <LinkRow icon="location-outline" title={copy.zones.title} subtitle={copy.zones.subtitle(zoneCount)} onPress={() => router.push(SETTINGS_HREFS.privacyZones)} testID="settings-zones" />
         <SegmentRow<HeatmapVisibility>
           title={copy.heatmap}
-          value={edit.value('heatmap_visibility', profile?.heatmap_visibility)}
+          value={shownVisibility(edit.value('heatmap_visibility', profile?.heatmap_visibility))}
           segments={VISIBILITY_SEGMENTS}
           onChange={(v) => void edit.save('heatmap_visibility', v)}
           testID="settings-heatmap-visibility"

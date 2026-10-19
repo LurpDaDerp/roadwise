@@ -149,40 +149,21 @@ export function resolveGate(
 /** A friend link's landing (`roadwise://add/<name>` → `/u/<name>`). */
 const PROFILE_HREF = /^\/u\/([a-z0-9_]{3,20})$/;
 const ADD_LINK = /^\/add\/([A-Za-z0-9_]{3,20})$/;
-/** A clan invite: `roadwise://clan/<code>`, or its landing `/clan/join?code=<code>`. */
-const CLAN_LINK = /^\/clan\/([A-Za-z0-9]{8})$/;
-export const CLAN_JOIN_HREF = /^\/clan\/join\?code=([A-Z0-9]{8})$/;
-const CLAN_JOIN_LOOSE = /^\/clan\/join\?code=([A-Za-z0-9]{8})$/;
 
 /**
  * The deep links the onboarding gate holds for later (`onboarding.pendingHref`): the shapes the
- * notification router allows (Task 5), plus a friend's profile and a clan invite, which a new
- * driver is the most likely to open before setup.
+ * notification router allows (Task 5), plus a friend's profile, which a new driver is the most
+ * likely to open before setup.
  * Anchored, and normalised to one form each, so a held value can only ever be one of these screens.
  */
-export const PENDING_HREF_ALLOWLIST: readonly RegExp[] = [...ALLOWED_HREFS, PROFILE_HREF, CLAN_JOIN_HREF];
+export const PENDING_HREF_ALLOWLIST: readonly RegExp[] = [...ALLOWED_HREFS, PROFILE_HREF];
 
 export function pendingHrefFor(pathname: unknown): string | null {
   if (typeof pathname !== 'string') return null;
-  if (isAllowedHref(pathname) || PROFILE_HREF.test(pathname) || CLAN_JOIN_HREF.test(pathname)) return pathname;
+  if (isAllowedHref(pathname) || PROFILE_HREF.test(pathname)) return pathname;
   const add = ADD_LINK.exec(pathname);
   if (add) return `/u/${add[1]!.toLowerCase()}`;
-  const clan = CLAN_LINK.exec(pathname) ?? CLAN_JOIN_LOOSE.exec(pathname);
-  if (clan) return `/clan/join?code=${clan[1]!.toUpperCase()}`;
   return null;
-}
-
-/** The invite code a held clan link carries, for the onboarding clan step to prefill; else null. */
-export function heldClanCode(href: string | null): string | null {
-  return href === null ? null : (CLAN_JOIN_HREF.exec(href)?.[1] ?? null);
-}
-
-/**
- * Where setup ends for a held link: the link itself, except a clan invite, which the clan step has
- * already offered (prefilled) — opening it again after a join would only say "already in a clan".
- */
-export function exitHref(href: string | null): string | null {
-  return href !== null && heldClanCode(href) === null ? href : null;
 }
 
 /**

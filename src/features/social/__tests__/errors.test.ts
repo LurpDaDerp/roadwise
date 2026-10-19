@@ -8,7 +8,7 @@ describe('friendlyError', () => {
   it.each([
     ['too many requests', '42501', 'Slow down a little, then try again in a minute.'],
     ['username is taken', '23505', 'Someone already has that username. Try another.'],
-    ['this clan is full', '42501', 'That clan is full. Clans max out at 30 drivers.'],
+    ['not friends', 'P0001', "You're not friends anymore."],
     ['you have reached the friend limit', '42501', "You've hit the 200-friend limit. Remove someone to add someone new."],
   ])('maps the server’s %p', (message, code, line) => {
     expect(friendlyError(new RpcError(message, code))).toBe(line);

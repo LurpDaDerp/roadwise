@@ -22,6 +22,7 @@ export interface PublicCard {
   level: number;
   safety_rating: number | null;
   ranked: boolean;
+  /** Still sent by the server; the app shows no league tier. */
   league_tier: LeagueTier;
   streak: number;
 }
@@ -30,6 +31,7 @@ export type Relationship = 'self' | 'friend' | 'incoming' | 'outgoing' | 'none';
 
 export interface PublicProfile extends PublicCard {
   achievements: string[];
+  /** Still sent by the server; the app shows no clan. */
   clan: { id: string; name: string } | null;
   relationship: Relationship;
   can_view_stats: boolean;

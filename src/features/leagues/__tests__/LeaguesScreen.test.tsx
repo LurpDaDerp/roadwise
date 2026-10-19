@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react-native';
 
-import { friendRow, globalBoard, league, leagueMember } from '../__fixtures__/data';
+import { friendRow, globalBoard } from '../__fixtures__/data';
 import { callsTo, renderScreen, resetHarness, respond, router, rpcError } from '../__fixtures__/harness';
 import { LeaguesScreen } from '../LeaguesScreen';
 import { FRIENDS_ADD_HREF, profileHref } from '../routes';
@@ -10,10 +10,6 @@ jest.mock('@/data/supabase/session', () => jest.requireActual('@/features/league
 jest.mock('expo-router', () => jest.requireActual('@/features/leagues/__fixtures__/harness').routerModule);
 
 afterEach(resetHarness);
-
-const HOUR = 3_600_000;
-/** ends_at so the countdown reads "Ends in 2d 4h" whatever the wall clock says. */
-const endsIn2d4h = () => new Date(Date.now() + 52 * HOUR + 30 * 60_000).toISOString();
 
 const friends = [
   friendRow('amy', { rank: 1, value: 420 }),
@@ -29,18 +25,29 @@ const friendsRating = [
 function wire(over: Record<string, unknown> = {}) {
   respond({
     get_friends_board: (a: Record<string, unknown>) => (a.p_metric === 'rating' ? friendsRating : friends),
-    get_my_league: league({ ends_at: endsIn2d4h() }),
     get_global_board: globalBoard(),
     ...over,
   });
 }
 
-describe('Friends & clan (default)', () => {
+test('the Leaderboards tab has two boards: Friends and Global, no league', async () => {
+  wire();
+  await renderScreen(<LeaguesScreen />);
+  expect(screen.getByRole('header', { name: 'Leaderboards' })).toBeOnTheScreen();
+  expect(screen.getAllByRole('tab')).toHaveLength(2);
+  expect(screen.getByRole('tab', { name: 'Friends' })).toBeOnTheScreen();
+  expect(screen.getByRole('tab', { name: 'Global' })).toBeOnTheScreen();
+  expect(screen.queryByRole('tab', { name: 'League' })).toBeNull();
+  await screen.findByTestId('friend-row-amy');
+  expect(callsTo('get_my_league')).toEqual([]);
+});
+
+describe('Friends (default)', () => {
   test('weekly points board, your row marked, rows open profiles', async () => {
     wire();
     await renderScreen(<LeaguesScreen />);
     expect(await screen.findByTestId('friend-row-amy')).toBeOnTheScreen();
-    expect(screen.getByRole('tab', { name: 'Friends & clan' })).toBeSelected();
+    expect(screen.getByRole('tab', { name: 'Friends' })).toBeSelected();
     expect(callsTo('get_friends_board')).toEqual([{ p_metric: 'week' }]);
     expect(screen.getByLabelText(/^Number 2, maya, You, Level 2, 300 points$/)).toBeOnTheScreen();
     expect(within(screen.getByTestId('friend-row-amy')).getByText('420')).toBeOnTheScreen();
@@ -92,62 +99,6 @@ describe('Friends & clan (default)', () => {
     wire();
     await fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByTestId('friend-row-amy')).toBeOnTheScreen();
-  });
-});
-
-describe('League', () => {
-  const open = async () => {
-    await renderScreen(<LeaguesScreen />);
-    await fireEvent.press(screen.getByRole('tab', { name: 'League' }));
-  };
-
-  test('placed: tier, countdown, zones with labelled lines, your rank', async () => {
-    const members = league().members.map((m) => (m.rank === 4 ? leagueMember(4, { is_me: true, drives: 2, username: 'maya' }) : m));
-    wire({ get_my_league: league({ ends_at: endsIn2d4h(), members }) });
-    await open();
-    expect(await screen.findByText('Gold league')).toBeOnTheScreen();
-    expect(screen.getByText('Ends in 2d 4h', { includeHiddenElements: true })).toBeOnTheScreen();
-    expect(screen.getByLabelText('League week ends in 2 days 4 hours')).toBeOnTheScreen();
-    expect(screen.getByTestId('league-rules')).toHaveTextContent('Top 7 move up · Bottom 5 move down · 3 drives to move up');
-    expect(screen.getByTestId('league-drives-left')).toHaveTextContent('Moving up needs 3 drives this week (1 to go).');
-    expect(screen.getByText('#4')).toBeOnTheScreen();
-    expect(screen.getByTestId('zone-up')).toHaveTextContent(/Moves up/);
-    expect(screen.getByLabelText(/^Number 7, driver7, .*moves up$/)).toBeOnTheScreen();
-    // a top spot short of the drive minimum is not marked as moving up
-    expect(screen.getByLabelText(/^Number 4, maya, You, Level 3 · 2 drives · needs 1 more drive, 960 points$/)).toBeOnTheScreen();
-    expect(screen.getByLabelText(/^Number 8, driver8, Level 3 · 4 drives, 920 points$/)).toBeOnTheScreen();
-  });
-
-  test('the demotion zone is labelled at the bottom of a full group', async () => {
-    wire();
-    await open();
-    await screen.findByText('Gold league');
-    expect(await screen.findByTestId('zone-down')).toHaveTextContent(/Moves down/);
-    expect(screen.getByLabelText(/^Number 26, driver26, .*moves down$/)).toBeOnTheScreen();
-  });
-
-  test('unplaced: drive this week to join', async () => {
-    wire({ get_my_league: league({ ends_at: endsIn2d4h(), placed: false, group_id: null, members: [], size: 0 }) });
-    await open();
-    expect(await screen.findByText('Drive this week to join a Gold league')).toBeOnTheScreen();
-    expect(screen.queryByTestId('zone-up')).toBeNull();
-  });
-
-  test('a phone whose league slot belongs to another account', async () => {
-    wire({ get_my_league: league({ eligible: false, placed: false, members: [], size: 0 }) });
-    await open();
-    expect(await screen.findByText('Leagues are one account per phone')).toBeOnTheScreen();
-  });
-
-  test("last week's result", async () => {
-    wire({
-      get_my_league: league({
-        ends_at: endsIn2d4h(),
-        last_result: { week: '2026-W40', result: 'promoted', final_rank: 2, tier: 'silver' },
-      }),
-    });
-    await open();
-    expect(await screen.findByTestId('last-result')).toHaveTextContent(/You finished #2 last week and moved up to Gold!/);
   });
 });
 

@@ -54,7 +54,7 @@ beforeEach(() => mockRpc.mockReset());
 afterEach(() => clearQueryClients());
 
 it('sends only the changed field and the zone', () => {
-  expect(prefsArgs({ leagues: false }, 'America/Chicago')).toEqual({ p_leagues: false, p_tz: 'America/Chicago' });
+  expect(prefsArgs({ social: false }, 'America/Chicago')).toEqual({ p_social: false, p_tz: 'America/Chicago' });
   expect(prefsArgs({ quiet_start: '21:00', social: undefined }, null)).toEqual({ p_quiet_start: '21:00' });
 });
 
@@ -99,9 +99,18 @@ it('a failed save puts the switch back and says so', async () => {
     set_notification_prefs: new RpcError('quiet hours must be HH:MM', '22023'),
   });
   await show();
-  await tap('prefs-leagues');
+  await tap('prefs-social');
   expect(await screen.findByTestId('prefs-save-error')).toBeOnTheScreen();
-  expect(screen.getByTestId('prefs-leagues').props.value).toBe(true);
+  expect(screen.getByTestId('prefs-social').props.value).toBe(true);
+});
+
+it('offers the weekly recap and friend requests, and no league switch', async () => {
+  answerRpc(mockRpc, { get_notification_prefs: DEFAULTS });
+  await show();
+  expect(await screen.findByTestId('prefs-weekly_recap')).toBeOnTheScreen();
+  expect(screen.getByTestId('prefs-social')).toBeOnTheScreen();
+  expect(screen.queryByTestId('prefs-leagues')).toBeNull();
+  expect(screen.queryByText(/league/i)).toBeNull();
 });
 
 it('says when the phone itself has notifications off', async () => {

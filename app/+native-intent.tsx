@@ -1,12 +1,12 @@
 /**
  * Every link the OS hands the app passes through here first. Only the app's own link shapes go
- * through — a friend link (`add/`), a clan invite (`clan/`) and a drive summary (`drives/`);
+ * through — a friend link (`add/`) and a drive summary (`drives/`);
  * anything else, `roadwise://drive` above all (and any `dashpal` path), opens Home. Nothing a link
  * can open starts a drive (plan §1.4).
  */
-const ALLOWED = /^(add\/[^/?#]+|clan\/[^/?#]+|drives(\/[^/?#]+)?)([?#].*)?$/;
+const ALLOWED = /^(add\/[^/?#]+|drives(\/[^/?#]+)?)([?#].*)?$/;
 
-/** `roadwise://clan/ABC`, `roadwise:///clan/ABC`, `/clan/ABC` → `clan/ABC`. */
+/** `roadwise://add/maya`, `roadwise:///add/maya`, `/add/maya` → `add/maya`. */
 function appPath(path: string): string {
   return path.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^\/+/, '');
 }

@@ -18,11 +18,6 @@ const KNOWN: readonly (readonly [string, string])[] = [
   ['username is taken', 'Someone already has that username. Try another.'],
   ['username must be 3 to 20 letters, digits or underscores', 'Use 3 to 20 letters, numbers or underscores.'],
   ['username must be 3 to 20 characters', 'Use 3 to 20 letters, numbers or underscores.'],
-  ['clan not found', 'No clan has that code. Check it and try again.'],
-  ['this clan is full', 'That clan is full. Clans max out at 30 drivers.'],
-  ['you are already in a clan', "You're already in a clan."],
-  ['you cannot join this clan', "You can't join this clan."],
-  ['code must be 8 characters', 'Clan codes are 8 letters and numbers.'],
   ['unknown report reason', 'Pick a reason for the report.'],
 ];
 

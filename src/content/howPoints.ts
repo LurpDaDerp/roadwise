@@ -155,14 +155,12 @@ export const RULES: RuleSection[] = [
     ],
   },
   {
-    id: 'leagues',
-    title: 'Leagues',
+    id: 'boards',
+    title: 'Leaderboards',
     icon: 'trophy-outline',
     points: [
-      'Each week you’re in a league of 30 drivers in your tier, ranked by points earned that week.',
-      'Weeks run Monday to Monday. The top 7 move up a tier and the bottom 5 move down. You need 3 drives to move up.',
-      'Tiers go Bronze, Silver, Gold, Platinum, Diamond.',
-      'The global board ranks Safety Rating instead, for drivers with 100 mi or more in 30 days.',
+      'The Friends board ranks you and your friends by points this week, or by Safety Rating.',
+      'The global board ranks Safety Rating, for drivers with 100 mi or more in 30 days.',
       'Weekly challenges (3 a week) are worth +100 points each.',
     ],
   },

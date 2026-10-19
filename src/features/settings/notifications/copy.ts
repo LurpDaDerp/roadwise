@@ -8,11 +8,6 @@ export const notificationSettingsCopy = {
       on: 'Sunday evening: your week in review.',
       off: 'No Sunday recap.',
     },
-    leagues: {
-      title: 'League results',
-      on: 'When your weekly league finishes.',
-      off: 'No league results. You can still check Leagues.',
-    },
     social: {
       title: 'Friend requests',
       on: 'When someone adds you as a friend.',

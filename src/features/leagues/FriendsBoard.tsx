@@ -20,7 +20,7 @@ import { FRIENDS_ADD_HREF, profileHref } from './routes';
 
 const copy = leaguesCopy;
 
-/** Friends & clan: you, your friends and your clanmates, by week points or Safety Rating. */
+/** Friends: you and your friends, by week points or Safety Rating. */
 export function FriendsBoard() {
   const t = useTheme();
   const router = useRouter();

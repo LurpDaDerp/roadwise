@@ -1,5 +1,5 @@
 /**
- * The three pushes v3 sends and their quiet hours, over `get_notification_prefs` /
+ * The pushes RoadWise sends and their quiet hours, over `get_notification_prefs` /
  * `set_notification_prefs` (`supabase/migrations/0005_push.sql`). A save sends only the fields
  * that changed (null means "unchanged" on the server) plus this phone's time zone, so quiet hours
  * are read in the zone the driver is in.
@@ -9,6 +9,7 @@ import { deviceZone } from '@/lib/deviceZone';
 
 export interface NotificationPrefs {
   weekly_recap: boolean;
+  /** Still stored by the server; no switch shows it and no league pushes are sent. */
   leagues: boolean;
   social: boolean;
   quiet_enabled: boolean;

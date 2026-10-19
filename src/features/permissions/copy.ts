@@ -148,7 +148,7 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx, opts: 
       return ios && state.kind === 'missing' && state.reason === 'denied' ? `${line} Also check Privacy & Security › Motion & Fitness.` : line;
     }
     case 'notifications':
-      return on ? 'Reminders, drive results, your weekly recap and league results can reach you.' : "You won't get reminders, drive results or your weekly recap.";
+      return on ? 'Reminders, drive results, your weekly recap and friend requests can reach you.' : "You won't get reminders, drive results or your weekly recap.";
     case 'reminderAccess':
       if (ios) {
         if (on) return 'The forgot-to-start reminder can notice a drive with RoadWise closed.';

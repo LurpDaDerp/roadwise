@@ -1,4 +1,4 @@
-import { useGlobalSearchParams, usePathname, useRouter, useSegments, type Href } from 'expo-router';
+import { usePathname, useRouter, useSegments, type Href } from 'expo-router';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { AppState } from 'react-native';
 
@@ -12,7 +12,6 @@ import {
   HOME,
   ONBOARDING_START,
   driveFacts,
-  exitHref,
   pendingHrefFor,
   profileGate,
   readPendingHref,
@@ -37,9 +36,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const { status, session, profile, profileSource, refreshProfile } = useSession();
   const segments = useSegments();
   const pathname = usePathname();
-  // A clan invite lands on `/clan/join` with its code as a search param: hold the whole link.
-  const { code } = useGlobalSearchParams<{ code?: string }>();
-  const linkPath = pathname === '/clan/join' && typeof code === 'string' ? `${pathname}?code=${code}` : pathname;
   const router = useRouter();
   const host = useDriveHost();
   const driveStatus = useDrive((s) => s.status);
@@ -96,9 +92,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
     // A deep link that arrived while setup is owed is held (allowlisted) and opened when
     // onboarding finishes, instead of Home.
     if (to === ONBOARDING_START) {
-      const href = pendingHrefFor(linkPath);
+      const href = pendingHrefFor(pathname);
       if (href !== null) holdFor(href);
-      if (userId !== null) void savePendingHref(settings, linkPath, userId).catch(() => {});
+      if (userId !== null) void savePendingHref(settings, pathname, userId).catch(() => {});
     }
     // Setup has just finished while the driver is still inside onboarding: the held link has one
     // owner, this gate, so a render landing between `finishOnboarding`'s refresh and its own
@@ -106,14 +102,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (to === HOME && gate === 'ready' && inOnboarding) {
       const mine = held.current;
       held.current = null;
-      const href = mine !== null && status === 'signedIn' && mine.uid === userId ? exitHref(mine.href) : null;
+      const href = mine !== null && status === 'signedIn' && mine.uid === userId ? mine.href : null;
       if (href !== null) void settings.remove(ONBOARDING_PENDING_HREF_KEY).catch(() => {});
       router.replace((href ?? HOME) as Href);
       return;
     }
     router.replace(to as Href);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `holdFor` reads `userId`, listed here
-  }, [status, gate, update, segments, busy, tripOpen, router, linkPath, settings, inOnboarding, userId]);
+  }, [status, gate, update, segments, busy, tripOpen, router, pathname, settings, inOnboarding, userId]);
 
   // The sign-in attestation, once per signed-in session. A failure (offline, or the server is not
   // ready) is retried on the next change of profile, and on the next launch.

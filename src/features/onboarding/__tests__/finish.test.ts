@@ -12,8 +12,8 @@ let settings: SettingsRepo;
 
 beforeEach(async () => {
   settings = createSettingsRepo(await createTestDb());
-  await settings.set(ONBOARDING_STEP_KEY, 'clan');
-  await settings.set(ONBOARDING_PLAN_KEY, ['location', 'clan']);
+  await settings.set(ONBOARDING_STEP_KEY, 'dashcam');
+  await settings.set(ONBOARDING_PLAN_KEY, ['location', 'dashcam']);
 });
 
 function deps(over: Partial<FinishDeps> = {}) {
@@ -65,7 +65,7 @@ test('a failed call navigates nowhere and clears nothing, so it can be tried aga
   const d = deps({ complete: jest.fn(async () => Promise.reject(new Error('offline'))) });
   await expect(finishOnboarding(d)).rejects.toThrow('offline');
   expect(d.router.replace).not.toHaveBeenCalled();
-  expect(await settings.get(ONBOARDING_STEP_KEY)).toBe('clan');
+  expect(await settings.get(ONBOARDING_STEP_KEY)).toBe('dashcam');
 });
 
 test('no signed-in account: rejects before calling anything', async () => {

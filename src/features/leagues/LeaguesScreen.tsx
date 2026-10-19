@@ -6,17 +6,18 @@ import { Screen, SegmentedControl, Text, useTheme } from '@/ui';
 import { leaguesCopy } from './copy';
 import { FriendsBoard } from './FriendsBoard';
 import { GlobalBoard } from './GlobalBoard';
-import { LeagueBoard } from './LeagueBoard';
 
-export type LeaguesSegment = 'friends' | 'league' | 'global';
+export type LeaguesSegment = 'friends' | 'global';
 
 const SEGMENTS = [
   { value: 'friends', label: leaguesCopy.segments.friends },
-  { value: 'league', label: leaguesCopy.segments.league },
   { value: 'global', label: leaguesCopy.segments.global },
 ] as const;
 
-/** The Leagues tab: Friends & clan (default) · League · Global. */
+/**
+ * The Leaderboards tab (route `/leagues`): Friends (default) · Global, ranked by weekly points or
+ * the Safety Rating.
+ */
 export function LeaguesScreen({ initial = 'friends' }: { initial?: LeaguesSegment }) {
   const t = useTheme();
   const [segment, setSegment] = useState<LeaguesSegment>(initial);
@@ -37,7 +38,6 @@ export function LeaguesScreen({ initial = 'friends' }: { initial?: LeaguesSegmen
       </View>
       <View style={{ flex: 1 }}>
         {segment === 'friends' ? <FriendsBoard /> : null}
-        {segment === 'league' ? <LeagueBoard /> : null}
         {segment === 'global' ? <GlobalBoard /> : null}
       </View>
     </Screen>

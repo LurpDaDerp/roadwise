@@ -14,6 +14,7 @@ export const onboardingCopy = {
     stepOf: (index: number, total: number) => `Step ${index} of ${total}`,
     back: 'Back',
     loading: 'Loading',
+    finishFailed: "Couldn't finish setting up. Check your connection and try again.",
   },
   /** The name each step goes by in its title until the step itself is built. */
   stepTitles: {
@@ -24,11 +25,10 @@ export const onboardingCopy = {
     notifications: 'Notifications',
     reminder: 'Forgot to start?',
     dashcam: 'DashPal',
-    clan: 'Join a clan',
   } satisfies Record<StepId, string>,
   username: {
     title: 'Pick a username',
-    body: 'This is what friends and leagues see. No real names, ever.',
+    body: 'This is what friends see. No real names, ever.',
     label: 'Username',
     placeholder: 'swift_fox',
     rules: '3 to 20 letters, numbers or underscores.',
@@ -53,18 +53,6 @@ export const onboardingCopy = {
       { big: '×1.30', title: 'Streaks multiply', body: 'Each good drive grows your streak and boosts what you earn.' },
     ],
     continue: 'Got it',
-  },
-  clan: {
-    title: 'Got a clan code?',
-    body: "Join your friends' clan with their 8-character invite code. You can also do this later from the Clan tab.",
-    label: 'Clan code',
-    placeholder: 'ABCD2345',
-    find: 'Find clan',
-    join: (name: string) => `Join ${name}`,
-    skip: 'Skip for now',
-    members: (n: number) => `${n} of 30 drivers`,
-    full: "This clan is full, so you can't join right now.",
-    finishFailed: "Couldn't finish setting up. Check your connection and try again.",
   },
   /** What the permission steps share. */
   permissions: {
@@ -101,11 +89,10 @@ export const onboardingCopy = {
   /** The examples are the server's own push copy (`supabase/functions/_shared/push_copy.ts`). */
   notifications: {
     title: 'Notifications',
-    body: 'Get your forgot-to-start reminder, your Sunday recap, your league results, and a heads-up when a friend adds you.',
+    body: 'Get your forgot-to-start reminder, your Sunday recap, and a heads-up when a friend adds you.',
     examples: 'Examples',
     previews: [
       { id: 'weekly_recap', title: 'Your week in review', body: '4 drives, +312 points. Safety Rating 92.4 (up 1.2). Streak 6.' },
-      { id: 'league_result', title: 'League results are in', body: 'You finished #3 in Silver and moved up to Gold.' },
       { id: 'friend_request', title: 'New friend request', body: 'Someone wants to add you as a friend.' },
     ],
     allow: 'Allow notifications',

@@ -45,18 +45,18 @@ describe('onboarding state', () => {
     const s = await settings();
     expect(ONBOARDING_PLAN_KEY).toBe('onboarding.plan');
     expect(await readSavedPlan(s)).toEqual([]);
-    await savePlan(s, ['username', 'location', 'clan']);
-    expect(await readSavedPlan(s)).toEqual(['username', 'location', 'clan']);
-    await s.set(ONBOARDING_PLAN_KEY, ['username', 'retired-step', 7, 'clan']);
-    expect(await readSavedPlan(s)).toEqual(['username', 'clan']);
+    await savePlan(s, ['username', 'location', 'dashcam']);
+    expect(await readSavedPlan(s)).toEqual(['username', 'location', 'dashcam']);
+    await s.set(ONBOARDING_PLAN_KEY, ['username', 'retired-step', 7, 'clan', 'dashcam']);
+    expect(await readSavedPlan(s)).toEqual(['username', 'dashcam']);
     await s.set(ONBOARDING_PLAN_KEY, 'username');
     expect(await readSavedPlan(s)).toEqual([]);
   });
 
   it('clears the saved step and the pending link together', async () => {
     const s = await settings();
-    await saveStep(s, 'clan');
-    await savePlan(s, ['location', 'clan']);
+    await saveStep(s, 'dashcam');
+    await savePlan(s, ['location', 'dashcam']);
     await s.set(ONBOARDING_PENDING_HREF_KEY, '/drives/abc');
     await s.set('units', 'imperial');
     await clearOnboardingState(s);

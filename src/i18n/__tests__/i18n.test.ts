@@ -11,6 +11,7 @@ test('every string is non-empty', () => {
   expect(empty).toEqual([]);
 });
 test('carries the v3 tab and drive keys', () => {
-  expect(t('tabs.leagues')).toBe('Leagues');
+  expect(t('tabs.analytics')).toBe('Analytics');
+  expect(t('tabs.leaderboards')).toBe('Leaderboards');
   expect(t('alert.recording')).toBe('Recording');
 });

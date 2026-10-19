@@ -4,16 +4,24 @@
  */
 import type { HeatmapVisibility } from '@/data/server/summary';
 
+/** A saved `'clan'` (from when clans existed) reads as Friends. */
 export const VISIBILITY_LABEL: Record<HeatmapVisibility, string> = {
   only_me: 'Only me',
-  clan: 'Clan',
+  clan: 'Friends',
   friends: 'Friends',
 };
 
-export const VISIBILITY_SEGMENTS = (['only_me', 'clan', 'friends'] as const).map((value) => ({
+/** The choices offered: Only me · Friends. */
+export const VISIBILITY_SEGMENTS = (['only_me', 'friends'] as const).map((value) => ({
   value,
   label: VISIBILITY_LABEL[value],
 }));
+
+/** The segment a saved visibility shows as: a saved `'clan'` shows as Friends. */
+export function shownVisibility(v: HeatmapVisibility | null | undefined): 'only_me' | 'friends' | null {
+  if (v === undefined || v === null) return null;
+  return v === 'only_me' ? 'only_me' : 'friends';
+}
 
 export const settingsCopy = {
   title: 'Settings',
@@ -30,7 +38,7 @@ export const settingsCopy = {
     you: 'You',
     units: 'Units',
     state: { title: 'US state', subtitle: 'For the state filter on the global board', none: 'Not set' },
-    notifications: { title: 'Notifications', subtitle: 'Weekly recap, leagues, friends' },
+    notifications: { title: 'Notifications', subtitle: 'Weekly recap, friends' },
     saveError: "That didn't save. Check your connection and try again.",
   },
 
@@ -129,7 +137,7 @@ export const settingsCopy = {
     consequences: [
       'Your profile, username and drives',
       'Your points, level, streak, freezes and achievements',
-      'Your league history, friends and clan membership',
+      'Your friends and blocked list',
       'Your notification settings and devices on our servers',
     ],
     exportFirst: 'Want a copy first? Export your data before you delete.',
@@ -149,7 +157,7 @@ export const settingsCopy = {
 
   blocked: {
     title: 'Blocked users',
-    intro: 'People you block can’t find you, add you or invite you to a clan, and you won’t see each other on boards.',
+    intro: 'People you block can’t find you or add you, and you won’t see each other on boards.',
     empty: 'Nobody blocked',
     emptyBody: 'You can block someone from their profile.',
     unblock: 'Unblock',

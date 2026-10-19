@@ -1,5 +1,5 @@
 /**
- * Screen harness for the Leagues and Clan suites: a fresh QueryClient, the theme, and doubles for
+ * Screen harness for the Leaderboards suites: a fresh QueryClient, the theme, and doubles for
  * the three seams a screen touches — the RPC helper, the session, and expo-router. Each suite
  * wires them with (Jest hoists `jest.mock` per file, so the factories `require` this module):
  *

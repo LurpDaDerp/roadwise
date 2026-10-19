@@ -1,8 +1,8 @@
 /**
  * Narrow invalidation for server queries (`useServerQuery`, keys `['server', uid, root, …]`).
  *
- * Invalidating the whole `['server']` root refetched every mounted observer — the league, clan and
- * friends tabs stay mounted — after each drive and each social write. Instead a write names the
+ * Invalidating the whole `['server']` root refetched every mounted observer — the boards and
+ * friends screens stay mounted — after each drive and each social write. Instead a write names the
  * roots it moves: those refetch if on screen. A settled drive refetches only the summary and marks
  * the boards stale, so they refetch the next time their screen gains focus.
  */
@@ -10,11 +10,8 @@ import type { Query, QueryClient } from '@tanstack/react-query';
 
 export type ServerRoot =
   | 'summary'
-  | 'league'
   | 'friends-board'
   | 'global-board'
-  | 'clan'
-  | 'clan-preview'
   | 'friends'
   | 'profile'
   | 'search'
@@ -24,7 +21,6 @@ export type ServerRoot =
   | 'notificationPrefs';
 
 const FRIENDSHIP: readonly ServerRoot[] = ['friends', 'profile', 'search', 'friends-board', 'memberStats', 'heatmap'];
-const CLAN: readonly ServerRoot[] = ['clan', 'clan-preview', 'friends-board', 'profile', 'memberStats', 'heatmap'];
 
 /** What each server write moves. `'all'` for writes that reach every board (blocks); `[]` for none. */
 const WRITE_ROOTS: Readonly<Record<string, readonly ServerRoot[] | 'all'>> = {
@@ -36,17 +32,10 @@ const WRITE_ROOTS: Readonly<Record<string, readonly ServerRoot[] | 'all'>> = {
   unblock_user: 'all',
   report_target: [],
   update_profile: ['summary', 'profile', 'global-board', 'heatmap'],
-  create_clan: CLAN,
-  join_clan: CLAN,
-  leave_clan: CLAN,
-  set_member_role: ['clan'],
-  transfer_leadership: ['clan'],
-  remove_member: CLAN,
-  regenerate_clan_code: ['clan'],
 };
 
 /** Roots a settled drive or drive action moves, besides the summary. */
-const AFTER_DRIVE_STALE: readonly ServerRoot[] = ['league', 'friends-board', 'global-board', 'clan', 'profile', 'memberStats', 'heatmap'];
+const AFTER_DRIVE_STALE: readonly ServerRoot[] = ['friends-board', 'global-board', 'profile', 'memberStats', 'heatmap'];
 
 function inRoots(roots: readonly ServerRoot[]) {
   return (q: Query): boolean => q.queryKey[0] === 'server' && roots.includes(q.queryKey[2] as ServerRoot);

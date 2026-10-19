@@ -11,6 +11,16 @@ const PositionContext = createContext<StepPosition | null>(null);
 /** The stepper route provides the position, so a step renders its frame without threading it. */
 export const StepPositionProvider = PositionContext.Provider;
 
+/** Finishing onboarding after the last step: the buttons wait while it runs, and a failure shows. */
+export interface StepFinishState {
+  busy: boolean;
+  error: string | null;
+}
+
+const FinishContext = createContext<StepFinishState>({ busy: false, error: null });
+
+export const StepFinishProvider = FinishContext.Provider;
+
 export interface StepAction {
   label: string;
   onPress: () => void;
@@ -58,6 +68,7 @@ export function StepFrame({
   const th = useTheme();
   const fromStepper = useContext(PositionContext);
   const at = position ?? fromStepper;
+  const finish = useContext(FinishContext);
 
   return (
     <Screen scroll testID={testID}>
@@ -121,10 +132,15 @@ export function StepFrame({
       </View>
 
       <View style={{ gap: th.space.sm }}>
+        {finish.error ? (
+          <Text variant="callout" tone="danger" accessibilityRole="alert" testID="onboarding-finish-error">
+            {finish.error}
+          </Text>
+        ) : null}
         <Button
           label={primary.label}
           onPress={primary.onPress}
-          disabled={primary.disabled}
+          disabled={primary.disabled || finish.busy}
           loading={primary.loading}
           testID={primary.testID}
         />
@@ -132,7 +148,7 @@ export function StepFrame({
           <Button
             label={secondary.label}
             onPress={secondary.onPress}
-            disabled={secondary.disabled}
+            disabled={secondary.disabled || finish.busy}
             loading={secondary.loading}
             testID={secondary.testID}
             variant="ghost"

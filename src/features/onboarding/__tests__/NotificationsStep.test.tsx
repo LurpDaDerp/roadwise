@@ -57,11 +57,11 @@ async function renderStep(
   return { ...w, onNext, ensureChannels, requestDeviceSync };
 }
 
-test('the examples are the three pushes v3 sends, worded as the server words them', async () => {
-  expect(copy.previews.map((p) => p.id)).toEqual(['weekly_recap', 'league_result', 'friend_request']);
+test('the examples are pushes the server sends, worded as the server words them', async () => {
+  expect(copy.previews.map((p) => p.id)).toEqual(['weekly_recap', 'friend_request']);
   await renderStep('ios', fakeAdapter(snap({ platform: 'ios', notifications: 'undetermined' })));
   expect(await screen.findByText('Your week in review')).toBeOnTheScreen();
-  expect(screen.getByText('League results are in')).toBeOnTheScreen();
+  expect(screen.queryByText(/league/i)).toBeNull();
   expect(screen.getByText('Someone wants to add you as a friend.')).toBeOnTheScreen();
 });
 

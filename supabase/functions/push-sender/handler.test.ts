@@ -119,8 +119,8 @@ const SECRETS = [
   TOKEN_A,
   TOKEN_B,
   'aaaaaaaaaaaaaaaaaaaaaa',
-  'League results are in',
-  'moved up to Silver',
+  'Your week in review',
+  'Best drive +167',
   'expo-access',
 ];
 
@@ -220,9 +220,9 @@ Deno.test('happy path: every token gets the rendered message, outcomes record th
   assertEquals(h.expoCalls[0].body, [
     {
       to: TOKEN_A,
-      title: 'League results are in',
-      body: 'You finished #3 in Bronze and moved up to Silver.',
-      data: { inboxId: a.inboxId, url: '/leagues' },
+      title: 'Your week in review',
+      body: '5 drives, +420 points. Best drive +167. Safety Rating 92 (up 1). Streak 4.',
+      data: { inboxId: a.inboxId, url: '/home' },
       sound: 'default',
       priority: 'default',
       channelId: 'updates',

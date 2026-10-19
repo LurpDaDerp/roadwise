@@ -1,16 +1,16 @@
 /**
  * The v3 steps WP9 builds: username (live check with a friendly reason, then claim), how it works,
- * and the optional clan code that finishes onboarding either way.
+ * and the optional DashPal step, the last, whose way out finishes onboarding (through the stepper).
  */
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
+import { createDashpalSecrets } from '@/dashcam/secure';
 import { RpcError } from '@/data/server/rpc';
-import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
+import { answerRpc, appWorld, clearQueryClients, fakeAdapter, tap } from '@/features/permissions/__fixtures__/harness';
 
 import { onboardingCopy } from '../copy';
 import type { FlowContext } from '../flow';
-import { ONBOARDING_PENDING_HREF_KEY } from '../state';
-import { ClanStep } from '../steps/ClanStep';
+import { DashcamStep } from '../steps/DashcamStep';
 import { HowStep } from '../steps/HowStep';
 import { localCheck, normaliseUsername, UsernameStep } from '../steps/UsernameStep';
 
@@ -28,15 +28,12 @@ const mockSession = {
 jest.mock('@/data/supabase/session', () => ({ useSession: () => mockSession }));
 const mockRouter = { replace: jest.fn(), push: jest.fn(), back: jest.fn(), canGoBack: () => false };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
-const mockFinish = jest.fn(async (_deps: unknown) => {});
-jest.mock('../finish', () => ({ finishOnboarding: (deps: unknown) => mockFinish(deps) }));
 
 const ctx: FlowContext = { platform: 'ios', hasUsername: false };
 const copy = onboardingCopy;
 
 beforeEach(() => {
   mockRpc.mockReset();
-  mockFinish.mockClear();
   mockRouter.replace.mockClear();
   mockSession.refreshProfile.mockClear();
   mockSession.profile = { username: null };
@@ -139,57 +136,38 @@ describe('how it works', () => {
   });
 });
 
-describe('clan (optional, last)', () => {
-  it('Skip finishes onboarding without joining anything', async () => {
+describe('DashPal (optional, last)', () => {
+  const secrets = () => {
+    const store = new Map<string, string>();
+    return createDashpalSecrets(() => ({
+      getItemAsync: async (k: string) => store.get(k) ?? null,
+      setItemAsync: async (k: string, v: string) => void store.set(k, v),
+      deleteItemAsync: async (k: string) => void store.delete(k),
+    }));
+  };
+  const render = async (onNext: () => Promise<boolean>) => {
     const w = await appWorld();
-    await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
-    await tap('clan-skip');
-    await waitFor(() => expect(mockFinish).toHaveBeenCalledTimes(1));
-    expect(mockRpc).not.toHaveBeenCalled();
+    await w.render(
+      <DashcamStep ctx={{ ...ctx, hasUsername: true }} onNext={onNext} deps={{ adapter: fakeAdapter() }} secrets={secrets()} />
+    );
+  };
+
+  it('Not now leaves once, even pressed twice while finishing runs', async () => {
+    let release: (left: boolean) => void = () => {};
+    const onNext = jest.fn(() => new Promise<boolean>((r) => (release = r)));
+    await render(onNext);
+    await tap('dashcam-not-now');
+    await tap('dashcam-not-now');
+    expect(onNext).toHaveBeenCalledTimes(1);
+    await act(async () => release(true));
   });
 
-  it('an invite link tapped before setup fills in its code', async () => {
-    const w = await appWorld({ settings: { [ONBOARDING_PENDING_HREF_KEY]: { uid: 'u1', href: '/clan/join?code=ABCD2345' } } });
-    await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('clan-code')).toHaveProp('value', 'ABCD2345'));
+  it('a failed finish keeps the step, and Not now tries again', async () => {
+    const onNext = jest.fn<Promise<boolean>, []>().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    await render(onNext);
+    await tap('dashcam-not-now');
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    await tap('dashcam-not-now');
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(2));
   });
-
-  it('a code is previewed, then joined, then onboarding finishes', async () => {
-    answerRpc(mockRpc, {
-      preview_clan: { name: 'Night Owls', banner: 'navy', member_count: 12, full: false },
-      join_clan: { id: 'c1', name: 'Night Owls' },
-    });
-    const w = await appWorld();
-    await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
-    expect(await screen.findByTestId('clan-find')).toBeDisabled();
-    await act(async () => {
-      fireEvent.changeText(screen.getByTestId('clan-code'), 'roadwise://clan/abcd2345');
-    });
-    await tap('clan-find');
-    expect(mockRpc).toHaveBeenCalledWith('preview_clan', { p_code: 'ABCD2345' });
-    expect(await screen.findByText(copy.clan.members(12))).toBeOnTheScreen();
-    await tap('clan-join');
-    await waitFor(() => expect(mockFinish).toHaveBeenCalledTimes(1));
-    expect(mockRpc).toHaveBeenCalledWith('join_clan', { p_code: 'ABCD2345' });
-  });
-
-  it('a full clan can be seen but not joined; a wrong code says so', async () => {
-    answerRpc(mockRpc, { preview_clan: { name: 'Packed', banner: 'gold', member_count: 30, full: true } });
-    const w = await appWorld();
-    await w.render(<ClanStep ctx={{ ...ctx, hasUsername: true }} onNext={jest.fn()} />);
-    await act(async () => {
-      fireEvent.changeText(await screen.findByTestId('clan-code'), 'ABCD2345');
-    });
-    await tap('clan-find');
-    expect(await screen.findByTestId('clan-full')).toBeOnTheScreen();
-    expect(screen.queryByTestId('clan-join')).toBeNull();
-
-    answerRpc(mockRpc, { preview_clan: new RpcError('clan not found', 'P0002') });
-    await act(async () => {
-      fireEvent.changeText(screen.getByTestId('clan-code'), 'ZZZZ2345');
-    });
-    await tap('clan-find');
-    expect(await screen.findByTestId('clan-error')).toHaveTextContent('No clan has that code. Check it and try again.');
-  });
-
 });

@@ -4,14 +4,17 @@ const go = (path: string) => redirectSystemPath({ path, initial: true });
 
 test.each([
   ['roadwise://add/maya_16', '/add/maya_16'],
-  ['roadwise://clan/ABCD2345', '/clan/ABCD2345'],
-  ['roadwise:///clan/ABCD2345', '/clan/ABCD2345'],
+  ['roadwise:///add/maya_16', '/add/maya_16'],
   ['roadwise://drives/0f8fad5b-d9cb-469f-a165-70867728950e?fresh=1', '/drives/0f8fad5b-d9cb-469f-a165-70867728950e?fresh=1'],
-  ['/clan/ABCD2345', '/clan/ABCD2345'],
+  ['/add/maya_16', '/add/maya_16'],
 ])('%s passes as %s', async (path, expected) => expect(await go(path)).toBe(expected));
 
 test.each([
   'roadwise://drive',
+  // Clan invites are gone with clans: an old invite link opens Home.
+  'roadwise://clan/ABCD2345',
+  'roadwise:///clan/ABCD2345',
+  '/clan/ABCD2345',
   'roadwise://drive?start=1',
   // Sign-in is a code typed into the app: no link signs anyone in.
   'roadwise://auth/callback#access_token=x',

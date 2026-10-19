@@ -17,7 +17,6 @@ type Status = 'loading' | 'signedOut' | 'signedIn';
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
 const mockRefresh = jest.fn(async () => {});
-const mockParams: { current: Record<string, string> } = { current: {} };
 const mockWorld: {
   status: Status;
   profile: Record<string, unknown> | null;
@@ -55,7 +54,6 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: mockReplace, push: mockPush }),
   useSegments: () => mockWorld.segments,
   usePathname: () => mockWorld.pathname,
-  useGlobalSearchParams: () => mockParams.current,
 }));
 jest.mock('@/drive/useDrive', () => ({
   useDrive: (select: (s: { status: string }) => unknown) =>
@@ -327,7 +325,7 @@ describe('leaving onboarding with a held link (T14 review, ruling 1)', () => {
       profile: OWED,
       profileSource: 'network',
       segments: ['(onboarding)', '[step]'],
-      pathname: '/clan',
+      pathname: '/dashcam',
     });
     await act(async () => {});
     return view;
@@ -441,7 +439,7 @@ describe('round 2 (T14 r1 review)', () => {
     expect(mockReplace).toHaveBeenCalledWith('/(onboarding)/start');
     await act(async () => {});
     // A signs out while an onboarding screen is still showing; the handover wipe empties settings.
-    Object.assign(mockWorld, { status: 'signedOut', profile: null, profileSource: null, segments: ['(onboarding)', '[step]'], pathname: '/clan' });
+    Object.assign(mockWorld, { status: 'signedOut', profile: null, profileSource: null, segments: ['(onboarding)', '[step]'], pathname: '/dashcam' });
     await view.rerender(gate());
     await settings.remove(ONBOARDING_PENDING_HREF_KEY);
     // B signs in, already set up, still on that onboarding screen.
@@ -463,7 +461,7 @@ describe('round 2 (T14 r1 review)', () => {
       pathname: '/drives',
     });
     await act(async () => {});
-    Object.assign(mockWorld, { segments: ['(onboarding)', '[step]'], pathname: '/clan' });
+    Object.assign(mockWorld, { segments: ['(onboarding)', '[step]'], pathname: '/dashcam' });
     await view.rerender(gate());
     await settings.remove(ONBOARDING_PENDING_HREF_KEY);
     mockReplace.mockClear();

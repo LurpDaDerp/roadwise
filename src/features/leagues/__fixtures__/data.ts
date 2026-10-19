@@ -1,32 +1,5 @@
 /** Board fixtures shaped like the server's JSON, for the model and screen suites. */
-import type { FriendsBoardRow, GlobalBoard, LeagueMember, MyLeague } from '../api';
-
-export const leagueMember = (rank: number, over: Partial<LeagueMember> = {}): LeagueMember => ({
-  rank,
-  user_id: `u${rank}`,
-  username: `driver${rank}`,
-  level: 3,
-  week_points: 1000 - rank * 10,
-  drives: 4,
-  is_me: false,
-  ...over,
-});
-
-export const league = (over: Partial<MyLeague> = {}): MyLeague => ({
-  week: '2026-W41',
-  ends_at: '2026-10-12T04:00:00.000Z',
-  tier: 'gold',
-  eligible: true,
-  placed: true,
-  group_id: 'g1',
-  members: Array.from({ length: 30 }, (_, i) => leagueMember(i + 1)),
-  size: 30,
-  promote: 7,
-  demote: 5,
-  min_drives_to_promote: 3,
-  last_result: null,
-  ...over,
-});
+import type { FriendsBoardRow, GlobalBoard } from '../api';
 
 export const friendRow = (username: string, over: Partial<FriendsBoardRow> = {}): FriendsBoardRow => ({
   rank: 1,

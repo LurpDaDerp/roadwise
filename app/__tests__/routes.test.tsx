@@ -20,8 +20,8 @@ const V3_ROUTES = [
   '(onboarding)/[step].tsx',
   '(tabs)/_layout.tsx',
   '(tabs)/home.tsx',
+  '(tabs)/analytics.tsx',
   '(tabs)/leagues.tsx',
-  '(tabs)/clan.tsx',
   '(tabs)/profile.tsx',
   'drive/_layout.tsx',
   'drive/index.tsx',
@@ -34,9 +34,6 @@ const V3_ROUTES = [
   '(app)/friends/index.tsx',
   '(app)/friends/add.tsx',
   '(app)/friends/scan.tsx',
-  '(app)/clan/create.tsx',
-  '(app)/clan/join.tsx',
-  '(app)/clan/manage.tsx',
   '(app)/heatmap.tsx',
   '(app)/achievements.tsx',
   '(app)/settings/index.tsx',
@@ -67,6 +64,8 @@ const REMOVED = [
   'drive/end.tsx',
   '(app)/settings/dms.tsx',
   '(app)/settings/dms-setup.tsx',
+  '(tabs)/clan.tsx',
+  '(app)/clan',
 ];
 
 test.each(V3_ROUTES)('%s exists', (file) => expect(exists(file)).toBe(true));

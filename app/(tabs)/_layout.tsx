@@ -17,7 +17,7 @@ function tabIcon(outline: IconName, filled: IconName) {
 }
 
 /**
- * The signed-in shell: Home · Leagues · Clan · Profile over the page's sky, with the floating
+ * The signed-in shell: Home · Analytics · Leaderboards · Profile over the page's sky, with the floating
  * pill tab bar. Driving is a full-screen flow outside it (and draws none of the sky). The sky's
  * weather layer runs only while this shell is in front and no drive is recording.
  */
@@ -38,8 +38,14 @@ export default function TabsLayout() {
         }}
       >
         <Tabs.Screen name="home" options={{ title: t('tabs.home'), tabBarIcon: tabIcon('home-outline', 'home') }} />
-        <Tabs.Screen name="leagues" options={{ title: t('tabs.leagues'), tabBarIcon: tabIcon('trophy-outline', 'trophy') }} />
-        <Tabs.Screen name="clan" options={{ title: t('tabs.clan'), tabBarIcon: tabIcon('people-outline', 'people') }} />
+        <Tabs.Screen
+          name="analytics"
+          options={{ title: t('tabs.analytics'), tabBarIcon: tabIcon('analytics-outline', 'analytics') }}
+        />
+        <Tabs.Screen
+          name="leagues"
+          options={{ title: t('tabs.leaderboards'), tabBarIcon: tabIcon('trophy-outline', 'trophy') }}
+        />
         <Tabs.Screen
           name="profile"
           options={{ title: t('tabs.profile'), tabBarIcon: tabIcon('person-circle-outline', 'person-circle') }}

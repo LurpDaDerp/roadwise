@@ -51,10 +51,10 @@ jest.mock('../steps/DashcamStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { DashcamStep: (p: object) => <StubStep {...p} step="dashcam" /> };
 });
-jest.mock('../steps/ClanStep', () => {
-  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
-  return { ClanStep: (p: object) => <StubStep {...p} step="clan" /> };
-});
+jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+jest.mock('@/data/supabase/session', () => ({
+  useSession: () => ({ session: { user: { id: 'user-1' } }, refreshProfile: () => Promise.resolve() }),
+}));
 
 const ADULT: FlowContext = { platform: 'android', hasUsername: true };
 

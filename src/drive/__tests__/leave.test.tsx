@@ -142,7 +142,6 @@ describe('share sheets and the data export', () => {
   });
 
   test.each([
-    ['clan invite', join('clan', 'ClanScreen.tsx'), /if \(blockedDuringDrive\(\)\) return;\s*void Share\.share\(/],
     ['friend link', join('friends', 'AddFriendsScreen.tsx'), /if \(blockedDuringDrive\(\)\) return;\s*void Share\.share\(/],
     ['drive card', join('drives', 'ShareCard.tsx'), /if \(blockedDuringDrive\(\)\) return;\s*setState\('busy'\);[\s\S]*?Sharing\.shareAsync\(/],
   ])('the %s share asks the guard before the sheet opens', (_name, file, guard) => {

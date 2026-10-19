@@ -16,10 +16,10 @@ function ctx(over: Partial<FlowContext> = {}): FlowContext {
   return { platform: 'ios', hasUsername: false, ...over };
 }
 
-const AFTER_USERNAME = ['how', 'motion', 'location', 'notifications', 'reminder', 'dashcam', 'clan'];
+const AFTER_USERNAME = ['how', 'motion', 'location', 'notifications', 'reminder', 'dashcam'];
 
 describe('stepsFor', () => {
-  it('is the v3 order: username → how → motion → location → notifications → reminder → DashPal → clan', () => {
+  it('is the v3 order: username → how → motion → location → notifications → reminder → DashPal', () => {
     expect(STEP_IDS).toEqual(['username', ...AFTER_USERNAME]);
     expect(stepsFor(ctx())).toEqual(['username', ...AFTER_USERNAME]);
     expect(stepsFor(ctx({ platform: 'android' }))).toEqual(['username', ...AFTER_USERNAME]);
@@ -37,8 +37,7 @@ describe('navigation', () => {
     expect(nextStep(ctx({ hasUsername: true }), 'username')).toBe('how');
     expect(nextStep(ctx(), 'notifications')).toBe('reminder');
     expect(nextStep(ctx(), 'reminder')).toBe('dashcam');
-    expect(nextStep(ctx(), 'dashcam')).toBe('clan');
-    expect(nextStep(ctx(), 'clan')).toBeNull();
+    expect(nextStep(ctx(), 'dashcam')).toBeNull();
   });
 
   it('goes back, but never into or out of the username step', () => {
@@ -46,7 +45,6 @@ describe('navigation', () => {
     expect(previousStep(ctx(), 'how')).toBeNull();
     expect(previousStep(ctx({ hasUsername: true }), 'how')).toBeNull();
     expect(previousStep(ctx(), 'motion')).toBe('how');
-    expect(previousStep(ctx(), 'clan')).toBe('dashcam');
     expect(previousStep(ctx(), 'dashcam')).toBe('reminder');
     expect(previousStep(ctx(), 'reminder')).toBe('notifications');
   });
@@ -64,24 +62,24 @@ describe('the step count', () => {
   it('keeps steps passed this session, so the count never runs backwards', () => {
     const plan = sessionPlan(ctx({ hasUsername: true }), 'how', ['username']);
     expect(plan).toEqual(['username', ...AFTER_USERNAME]);
-    expect(stepPosition(plan, 'how')).toEqual({ index: 2, total: 8 });
+    expect(stepPosition(plan, 'how')).toEqual({ index: 2, total: 7 });
   });
 
   it('an unknown step counts as the first', () => {
-    expect(stepPosition([], 'clan')).toEqual({ index: 1, total: 1 });
+    expect(stepPosition([], 'dashcam')).toEqual({ index: 1, total: 1 });
   });
 });
 
 describe('ids and hrefs', () => {
   it('knows its own ids only', () => {
     expect(isStepId('motion')).toBe(true);
-    for (const old of ['terms', 'profile', 'guardian', 'not-eligible', 'auto-detect', 'family', 'ready', 7]) {
+    for (const old of ['terms', 'profile', 'guardian', 'not-eligible', 'auto-detect', 'family', 'ready', 'clan', 7]) {
       expect(isStepId(old)).toBe(false);
     }
   });
 
   it('builds the stepper route', () => {
     expect(onboardingHref('start')).toBe('/(onboarding)/start');
-    expect(onboardingHref('clan')).toBe('/(onboarding)/clan');
+    expect(onboardingHref('dashcam')).toBe('/(onboarding)/dashcam');
   });
 });

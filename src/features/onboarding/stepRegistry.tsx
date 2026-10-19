@@ -1,7 +1,6 @@
 import type { ComponentType } from 'react';
 
 import type { FlowContext, StepId } from './flow';
-import { ClanStep } from './steps/ClanStep';
 import { DashcamStep } from './steps/DashcamStep';
 import { HowStep } from './steps/HowStep';
 import { LocationStep } from './steps/LocationStep';
@@ -15,14 +14,17 @@ import { UsernameStep } from './steps/UsernameStep';
  * the stepper through context), calls `onNext` when it is done — after any write it makes and any
  * `refreshProfile` it needs, since the next step is chosen from the newest context — and shows
  * Back only when `onBack` is given.
+ *
+ * After the last step `onNext` finishes onboarding. Its promise says whether the driver left the
+ * step: false when finishing failed (the frame then says so and the step can be pressed again).
  */
 export interface StepProps {
   ctx: FlowContext;
-  onNext(): void;
+  onNext(): void | Promise<boolean>;
   onBack?: () => void;
 }
 
-/** Every step id to the component that renders it. The last (clan) finishes onboarding itself. */
+/** Every step id to the component that renders it. */
 export const STEP_REGISTRY: Readonly<Record<StepId, ComponentType<StepProps>>> = {
   username: UsernameStep,
   how: HowStep,
@@ -31,5 +33,4 @@ export const STEP_REGISTRY: Readonly<Record<StepId, ComponentType<StepProps>>> =
   notifications: NotificationsStep,
   reminder: ReminderStep,
   dashcam: DashcamStep,
-  clan: ClanStep,
 };
