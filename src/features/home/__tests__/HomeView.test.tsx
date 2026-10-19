@@ -204,7 +204,7 @@ describe('the action items', () => {
   const card = <Text testID="perm-card">{"Location is off. Drives can't record."}</Text>;
   const weather = <Text testID="weather-slot">Dense fog</Text>;
   const dashpal = <Text testID="dashpal-slot">A new phone was paired</Text>;
-  const fair = { level: 'fair' as const, axis: 'speeding' as const, title: 'Watch your speed', tip: 'Ease off a little over the limit.' };
+  const fair = { level: 'fair' as const, axis: 'speeding' as const, title: 'Watch your speed', tip: 'Ease off a little over the limit.', also: [] };
 
   test('directly under the drive card, in order: weather, streak, permission, DashPal, tip; then stats, and How it works last', async () => {
     await draw(
@@ -286,7 +286,7 @@ describe('the streak card', () => {
 
 describe('the coaching tip card', () => {
   test.each(['fair', 'poor'] as const)('%s: the level icon at the left, the title and the tip; it opens Analytics', async (level) => {
-    const p = props({ coaching: { level, axis: 'phone', title: 'Phone down while driving', tip: 'Put the phone away before you pull out.' } });
+    const p = props({ coaching: { level, axis: 'phone', title: 'Phone down while driving', tip: 'Put the phone away before you pull out.', also: [] } });
     await draw(<HomeView {...p} />);
     const label = `${level === 'fair' ? 'Fair' : 'Poor'}. Phone down while driving. Put the phone away before you pull out.`;
     expect(screen.getByTestId(`home-tip-${level}`)).toBeOnTheScreen();
@@ -295,9 +295,9 @@ describe('the coaching tip card', () => {
   });
 
   test('not when driving is good, or with too little driving to judge', async () => {
-    await draw(<HomeView {...props({ coaching: { level: 'good', axis: null, title: 'Driving well', tip: 'Smooth driving lately. Keep it up.' } })} />);
+    await draw(<HomeView {...props({ coaching: { level: 'good', axis: null, title: 'Driving well', tip: 'Smooth driving lately. Keep it up.', also: [] } })} />);
     expect(screen.queryByTestId('home-tip')).toBeNull();
-    await draw(<HomeView {...props({ coaching: { level: null, axis: null, title: 'Tips are on the way', tip: 'Drive a few more times to get tips here.' } })} />);
+    await draw(<HomeView {...props({ coaching: { level: null, axis: null, title: 'Tips are on the way', tip: 'Drive a few more times to get tips here.', also: [] } })} />);
     expect(screen.queryByTestId('home-tip')).toBeNull();
   });
 });

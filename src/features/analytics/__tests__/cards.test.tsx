@@ -147,6 +147,24 @@ describe('SummaryCard', () => {
     expect(screen.getByText('Phone down while driving')).toBeOnTheScreen();
     expect(screen.getByText('Put the phone away before you pull out.')).toBeOnTheScreen();
     expect(screen.getByTestId('analytics-summary-icon')).toHaveStyle({ color: light.warning });
+    expect(screen.getByLabelText('Fair. Phone down while driving. Put the phone away before you pull out. Also watch: Braking, fair.')).toBeOnTheScreen();
+  });
+
+  test('the other weak areas sit under the tip as small level icons with their names, weakest first', async () => {
+    const c = coach({ ...SCORES, braking: 72, speeding: 55, phone: 40 }, { drives: 4, miles: 48 });
+    await draw(<SummaryCard coaching={c} />);
+    const row = screen.getByTestId('analytics-summary-also');
+    expect(StyleSheet.flatten(row.props.style)).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });
+    expect(within(row).getByText('Speeding')).toBeOnTheScreen();
+    expect(within(row).getByText('Braking')).not.toHaveProp('numberOfLines');
+    expect(screen.getByTestId('analytics-summary-also-speeding-icon')).toHaveStyle({ color: light.danger, fontSize: tokens.size.iconSm });
+    expect(screen.getByTestId('analytics-summary-also-braking-icon')).toHaveStyle({ color: light.warning, fontSize: tokens.size.iconSm });
+    expect(screen.getByLabelText(/Also watch: Speeding, poor\. Braking, fair\.$/)).toBeOnTheScreen();
+  });
+
+  test('no row when nothing else needs watching', async () => {
+    await draw(<SummaryCard coaching={coach({ ...SCORES, braking: 90 }, { drives: 4, miles: 48 })} />);
+    expect(screen.queryByTestId('analytics-summary-also')).toBeNull();
     expect(screen.getByLabelText('Fair. Phone down while driving. Put the phone away before you pull out.')).toBeOnTheScreen();
   });
 
@@ -216,10 +234,16 @@ describe('MetricsCards', () => {
     expect(screen.getByTestId('metric-clean-value')).toHaveTextContent('0 %');
     expect(screen.getByTestId('metric-avg-points-value')).toHaveTextContent('+132 pts');
     expect(screen.getByLabelText('Distance, 48.0 miles')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Avg drive, 12.0 miles')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Avg points, plus 132 points')).toBeOnTheScreen();
+    expect(metricGroups(sums, 'km')[0]!.cells[2]!.metric).toMatchObject({ value: '19.3', unit: 'km' });
   });
 
   test('an empty range reads as zeros and dashes', async () => {
     await draw(<MetricsCards sums={EMPTY_WINDOW} />);
+    expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('0');
+    expect(screen.getByTestId('metric-distance-value')).toHaveTextContent('0.0 mi');
+    expect(screen.getByTestId('metric-avg-drive-value')).toHaveTextContent('— mi');
     expect(screen.getByTestId('metric-speed-value')).toHaveTextContent('— mph');
     expect(screen.getByTestId('metric-clean-value')).toHaveTextContent('— %');
     expect(screen.getByTestId('metric-avg-points-value')).toHaveTextContent('— pts');
@@ -237,16 +261,10 @@ describe('MetricsCards', () => {
   const cellsIn = (row: El) => within(row).getAllByTestId(/^metric-(?!.*-(value|caption)$)[a-z-]+$/);
   function drawnHeight(): number {
     const cards = (['driving', 'events', 'phone'] as const).map((key) => {
-    expect(screen.getByLabelText('Avg drive, 12.0 miles')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Avg points, plus 132 points')).toBeOnTheScreen();
-    expect(metricGroups(sums, 'km')[0]!.cells[2]!.metric).toMatchObject({ value: '19.3', unit: 'km' });
       const card = flat(screen.getByTestId(`metrics-${key}`));
       const gap = Number(card.gap ?? 0);
       const title = Number(flat(screen.getByTestId(`metrics-${key}-title`)).lineHeight);
       const rows = screen.getAllByTestId(new RegExp(`^metrics-${key}-row-`));
-    expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('0');
-    expect(screen.getByTestId('metric-distance-value')).toHaveTextContent('0.0 mi');
-    expect(screen.getByTestId('metric-avg-drive-value')).toHaveTextContent('— mi');
       const rowsH = rows.reduce((sum, row) => {
         const tallest = Math.max(
           ...cellsIn(row).map((cell) => {

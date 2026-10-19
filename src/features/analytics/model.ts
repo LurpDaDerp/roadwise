@@ -159,7 +159,15 @@ export interface Coaching {
   axis: AxisKey | null;
   title: string;
   tip: string;
+  /**
+   * The other penalty axes that are fair or poor, weakest first (ties in radar order), at most
+   * `COACH_ALSO_MAX`. Empty when the result is good or there is no advice. The clean-drive share
+   * never appears here: it follows from the penalty axes, as in the main choice.
+   */
+  also: { axis: AxisKey; level: Level }[];
 }
+
+export const COACH_ALSO_MAX = 2;
 
 /**
  * The advice for a window. The weakest penalty axis decides (ties go to the earlier axis in radar
@@ -168,7 +176,7 @@ export interface Coaching {
  */
 export function coach(scores: AxisScores, window: { drives: number; miles: number }): Coaching {
   if (window.drives < COACH_MIN_DRIVES || window.miles < COACH_MIN_MILES) {
-    return { level: null, axis: null, title: NO_DATA_TITLE, tip: NO_DATA_TIP };
+    return { level: null, axis: null, title: NO_DATA_TITLE, tip: NO_DATA_TIP, also: [] };
   }
   let axis: AxisKey | null = null;
   let score: number | null = null;
@@ -183,10 +191,17 @@ export function coach(scores: AxisScores, window: { drives: number; miles: numbe
     axis = 'clean';
     score = scores.clean;
   }
-  if (axis === null || score === null) return { level: null, axis: null, title: NO_DATA_TITLE, tip: NO_DATA_TIP };
+  if (axis === null || score === null) return { level: null, axis: null, title: NO_DATA_TITLE, tip: NO_DATA_TIP, also: [] };
   const level = levelFor(score);
-  if (level === 'good') return { level, axis: null, title: GOOD_TITLE, tip: GOOD_TIP };
-  return { level, axis, title: AXIS_TITLE[axis], tip: AXIS_TIP[axis] };
+  if (level === 'good') return { level, axis: null, title: GOOD_TITLE, tip: GOOD_TIP, also: [] };
+  const also = PENALTY_AXES.flatMap((key) => {
+    const s = scores[key];
+    return key !== axis && s !== null && levelFor(s) !== 'good' ? [{ axis: key, score: s }] : [];
+  })
+    .sort((a, b) => a.score - b.score)
+    .slice(0, COACH_ALSO_MAX)
+    .map((a) => ({ axis: a.axis, level: levelFor(a.score) }));
+  return { level, axis, title: AXIS_TITLE[axis], tip: AXIS_TIP[axis], also };
 }
 
 /** Home shows the tip card only when there is something to work on. */
@@ -258,6 +273,10 @@ export interface WindowSums {
   cleanPct: number | null;
   /** Net points of the window's drives (estimates included). */
   points: number;
+  /** Distance per drive; null with no drives. */
+  avgMiles: number | null;
+  /** Net points per drive; null with no drives. */
+  avgPoints: number | null;
 }
 
 export const EMPTY_WINDOW: WindowSums = Object.freeze({
@@ -273,11 +292,9 @@ export const EMPTY_WINDOW: WindowSums = Object.freeze({
   handlingS: 0,
   cleanDrives: 0,
   cleanPct: null,
-  /** Distance per drive; null with no drives. */
-  avgMiles: number | null;
-  /** Net points per drive; null with no drives. */
-  avgPoints: number | null;
   points: 0,
+  avgMiles: null,
+  avgPoints: null,
 });
 
 /**
@@ -293,8 +310,6 @@ export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null
     out.speeding += d.counts.speeding;
     out.hardBrake += d.counts.hardBrake;
     out.hardAccel += d.counts.hardAccel;
-  avgMiles: null,
-  avgPoints: null,
     out.hardCorner += d.counts.hardCorner;
     out.pickups += d.counts.pickups;
     out.handlingS += d.counts.handlingS;
@@ -303,6 +318,8 @@ export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null
   }
   out.avgMph = out.durationS > 0 ? out.miles / (out.durationS / 3600) : null;
   out.cleanPct = out.drives > 0 ? Math.round((out.cleanDrives / out.drives) * 100) : null;
+  out.avgMiles = out.drives > 0 ? out.miles / out.drives : null;
+  out.avgPoints = out.drives > 0 ? out.points / out.drives : null;
   return out;
 }
 
@@ -318,8 +335,6 @@ export interface PersonalBests {
   /** Most net points in one drive. */
   mostPoints: Best | null;
   /** Longest clean drive, in miles. */
-  out.avgMiles = out.drives > 0 ? out.miles / out.drives : null;
-  out.avgPoints = out.drives > 0 ? out.points / out.drives : null;
   longestClean: Best | null;
   /** Longest drive with no pickup and no handling, in miles. */
   longestPhoneFree: Best | null;

@@ -163,7 +163,7 @@ describe('levels and coaching', () => {
 
   test('the weakest penalty axis decides; ties go to radar order', () => {
     const c = coach(scores({ braking: 70, phone: 55, cornering: 55 }), { drives: 5, miles: 50 });
-    expect(c).toEqual({ level: 'poor', axis: 'cornering', title: expect.any(String), tip: AXIS_TIP.cornering });
+    expect(c).toEqual({ level: 'poor', axis: 'cornering', title: expect.any(String), tip: AXIS_TIP.cornering, also: expect.any(Array) });
     expect(coach(scores({ speeding: 75 }), { drives: 3, miles: 10 })).toMatchObject({ level: 'fair', axis: 'speeding', tip: AXIS_TIP.speeding });
   });
 
@@ -173,7 +173,42 @@ describe('levels and coaching', () => {
   });
 
   test('all good is a compliment', () => {
-    expect(coach(scores({ speeding: 80 }), { drives: 5, miles: 50 })).toEqual({ level: 'good', axis: null, title: expect.any(String), tip: GOOD_TIP });
+    expect(coach(scores({ speeding: 80 }), { drives: 5, miles: 50 })).toEqual({ level: 'good', axis: null, title: expect.any(String), tip: GOOD_TIP, also: [] });
+  });
+
+  test('also: the other fair or poor penalty axes, weakest first, ties in radar order', () => {
+    const c = coach(scores({ speeding: 75, braking: 65, phone: 40, cornering: 85 }), { drives: 5, miles: 50 });
+    expect(c.axis).toBe('phone');
+    expect(c.also).toEqual([
+      { axis: 'braking', level: 'fair' },
+      { axis: 'speeding', level: 'fair' },
+    ]);
+    expect(coach(scores({ phone: 55, braking: 70, cornering: 55 }), { drives: 5, miles: 50 }).also).toEqual([
+      { axis: 'phone', level: 'poor' },
+      { axis: 'braking', level: 'fair' },
+    ]);
+  });
+
+  test('also: at most two, never the main axis, empty with nothing else to watch', () => {
+    const c = coach(scores({ speeding: 50, braking: 55, accel: 58, cornering: 59, phone: 30 }), { drives: 5, miles: 50 });
+    expect(c.axis).toBe('phone');
+    expect(c.also).toEqual([
+      { axis: 'speeding', level: 'poor' },
+      { axis: 'braking', level: 'poor' },
+    ]);
+    expect(coach(scores({ braking: 70 }), { drives: 5, miles: 50 }).also).toEqual([]);
+    expect(coach(scores({ braking: 70, phone: null }), { drives: 5, miles: 50 }).also).toEqual([]);
+  });
+
+  test('also: the clean-drive share never joins in', () => {
+    expect(coach(scores({ braking: 70, clean: 20 }), { drives: 5, miles: 50 }).also).toEqual([]);
+    expect(coach(scores({ clean: 40 }), { drives: 5, miles: 50 })).toMatchObject({ axis: 'clean', also: [] });
+  });
+
+  test('also: empty when good or without enough driving', () => {
+    expect(coach(scores(), { drives: 5, miles: 50 }).also).toEqual([]);
+    expect(coach(scores({ phone: 10, braking: 10 }), { drives: 2, miles: 50 }).also).toEqual([]);
+    expect(coach(scores({ speeding: null, braking: null, accel: null, cornering: null, phone: null, clean: null }), { drives: 5, miles: 50 }).also).toEqual([]);
   });
 
   test('fewer than 3 drives or 10 miles: no advice', () => {
@@ -249,6 +284,8 @@ describe('windows', () => {
       cleanDrives: 1,
       cleanPct: 50,
       points: 90,
+      avgMiles: 7.5,
+      avgPoints: 45,
     });
     expect(windowSums(drives, null).drives).toBe(3);
   });
@@ -284,8 +321,6 @@ describe('personal bests', () => {
     expect(personalBests([])).toEqual({ mostPoints: null, longestClean: null, longestPhoneFree: null });
     const dirty = drive({ clean: false, counts: { ...EMPTY_COUNTS, pickups: 2 }, pointsNet: null, status: 'pending' });
     expect(personalBests([dirty])).toEqual({ mostPoints: null, longestClean: null, longestPhoneFree: null });
-      avgMiles: 7.5,
-      avgPoints: 45,
   });
 });
 
