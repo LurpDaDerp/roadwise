@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { Text } from 'react-native';
+import { useEffect } from 'react';
+import { StyleSheet, Text } from 'react-native';
 import { getAnimatedStyle } from 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { StyleSheet } from 'react-native';
 
 import { Screen } from '@/ui/primitives/Screen';
 import { SkyBackdrop } from '@/ui/sky/SkyBackdrop';
@@ -12,9 +12,13 @@ import { ThemeProvider } from '@/ui/theme';
 const hidden = { includeHiddenElements: true };
 const metrics = { frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, left: 0, right: 0, bottom: 34 } };
 
-let focus: (name: string) => void = () => {};
+const shellFocus: { to: (name: string) => void } = { to: () => {} };
+const focus = (name: string) => shellFocus.to(name);
 function Focus() {
-  focus = useSkyFocus();
+  const to = useSkyFocus();
+  useEffect(() => {
+    shellFocus.to = to;
+  }, [to]);
   return null;
 }
 
