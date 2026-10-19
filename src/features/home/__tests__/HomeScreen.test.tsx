@@ -1,7 +1,8 @@
 import { act, screen, waitFor } from '@testing-library/react-native';
 import { AppState, ScrollView, type AppStateStatus } from 'react-native';
 
-import { draw, drive as mockDrive, press, summary as mockSummary, sums as mockSums } from '@/features/drives/__fixtures__/drives';
+import { draw, drive as mockDrive, press, result as mockResult, summary as mockSummary, sums as mockSums } from '@/features/drives/__fixtures__/drives';
+import type { LocalDrive } from '@/features/drives/model';
 
 import { ThemeProvider } from '@/ui';
 
@@ -32,13 +33,31 @@ const mockOk = <T,>(data: T) => ({ data, isLoading: false, isError: false, isRef
 const mockStart = jest.fn();
 const mockDbHandle = {};
 
+let mockRecent: LocalDrive[] = [];
 jest.mock('@/data/queries', () => ({
   useDataSource: () => ({ now: () => Date.now() }),
   useDb: () => mockDbHandle,
   useDriveCount: () => mockOk(12),
-  useRecentDrives: () => mockOk([mockDrive()]),
+  useRecentDrives: () => mockOk(mockRecent),
   useStatSums: () => mockOk(mockSums()),
 }));
+// The device settings (the streak card's dismissal), in memory.
+const mockSettings = new Map<string, unknown>();
+jest.mock('@/data/db/settings', () => ({
+  createSettingsRepo: () => ({
+    get: async (k: string) => mockSettings.get(k) ?? null,
+    set: async (k: string, v: unknown) => {
+      mockSettings.set(k, v);
+    },
+  }),
+}));
+// The 30-day coaching behind the tip card.
+let mockCoaching: { level: string | null; axis: string | null; title: string; tip: string } = { level: 'good', axis: null, title: 'Driving well', tip: 'Smooth driving lately. Keep it up.' };
+jest.mock('@/features/analytics/useAnalytics', () => ({ useCoaching: () => ({ coaching: mockCoaching }) }));
+jest.mock('@/features/weather/HomeWeatherAlert', () => {
+  const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
+  return { HomeWeatherAlert: () => <Text testID="home-weather">weather</Text> };
+});
 jest.mock('@/data/server/summary', () => ({ useMySummary: () => mockOk(mockSummary()) }));
 let mockRecording = false;
 jest.mock('@/drive/useDrive', () => ({
@@ -73,6 +92,9 @@ const MOTION_OFF = { ...ALL_ON, snapshot: { ...ALL_ON.snapshot, motion: 'denied'
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockRecent = [mockDrive()];
+  mockSettings.clear();
+  mockCoaching = { level: 'good', axis: null, title: 'Driving well', tip: 'Smooth driving lately. Keep it up.' };
   mockBoard = boardWith(null);
   mockRecording = false;
   mockNotice = null;
@@ -298,5 +320,61 @@ describe('a Start refused for Precise Location or Location Services', () => {
     await draw(<HomeScreen />);
     expect(await screen.findByText('Location Services are off. Turn them on to record a drive.')).toBeOnTheScreen();
     expect(screen.getByText('Fix it')).toBeOnTheScreen();
+  });
+});
+
+describe('Analytics and the action items', () => {
+  test('the Safety Rating badge, "All stats" and the tip card open the Analytics tab', async () => {
+    mockCoaching = { level: 'poor', axis: 'speeding', title: 'Watch your speed', tip: 'Ease off a little over the limit.' };
+    await draw(<HomeScreen />);
+    await press(screen.getByTestId('rating-badge'));
+    expect(mockRouter.navigate).toHaveBeenLastCalledWith('/(tabs)/analytics');
+    await press(screen.getByText('All stats'));
+    expect(mockRouter.navigate).toHaveBeenLastCalledWith('/(tabs)/analytics');
+    await press(screen.getByTestId('home-tip'));
+    expect(mockRouter.navigate).toHaveBeenLastCalledWith('/(tabs)/analytics');
+    expect(mockRouter.navigate).toHaveBeenCalledTimes(3);
+    expect(mockRouter.push).not.toHaveBeenCalled();
+  });
+
+  test('no tip card while driving is good', async () => {
+    await draw(<HomeScreen />);
+    expect(screen.queryByTestId('home-tip')).toBeNull();
+  });
+
+  test('the dangerous-weather card has its slot on Home (its order is pinned in the HomeView tests)', async () => {
+    await draw(<HomeScreen />);
+    expect(screen.getByTestId('home-weather')).toBeOnTheScreen();
+  });
+});
+
+describe('the streak card', () => {
+  const lost = (id: string) => mockDrive({ clientTripId: id, result: mockResult({ streak: { before: 6, after: 0, outcome: 'reset', nextMult: 1, atRisk: false, freezes: 0, freezeEarned: false } }) });
+  const saved = (id: string) => mockDrive({ clientTripId: id, result: mockResult({ streak: { before: 6, after: 6, outcome: 'freeze_used', nextMult: 1.1, atRisk: false, freezes: 1, freezeEarned: false } }) });
+
+  test('the latest drive lost the streak: the card shows until ✕, and stays away (stored by drive)', async () => {
+    mockRecent = [lost('t1'), mockDrive({ clientTripId: 'older' })];
+    const view = await draw(<HomeScreen />);
+    expect(await screen.findByText('Streak lost')).toBeOnTheScreen();
+    expect(screen.getByText('2 freezes left')).toBeOnTheScreen();
+    await press(screen.getByTestId('home-streak-card-dismiss'));
+    expect(screen.queryByTestId('home-streak-card')).toBeNull();
+    await waitFor(() => expect(mockSettings.get('home.streakCard.dismissed')).toBe('t1'));
+    await view.unmount();
+    await draw(<HomeScreen />);
+    await act(async () => {});
+    expect(screen.queryByTestId('home-streak-card')).toBeNull();
+  });
+
+  test('a newer drive with news shows again after an older dismissal; one that grew the streak takes it down', async () => {
+    mockSettings.set('home.streakCard.dismissed', 't1');
+    mockRecent = [saved('t2'), lost('t1')];
+    const view = await draw(<HomeScreen />);
+    expect(await screen.findByText('A freeze saved your streak')).toBeOnTheScreen();
+    await view.unmount();
+    mockRecent = [mockDrive({ clientTripId: 't3' }), saved('t2')];
+    await draw(<HomeScreen />);
+    await act(async () => {});
+    expect(screen.queryByTestId('home-streak-card')).toBeNull();
   });
 });

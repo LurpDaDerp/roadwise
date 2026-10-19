@@ -3,6 +3,7 @@ import { Text } from 'react-native';
 
 import { draw, drive, NOW, press, summary, sums } from '@/features/drives/__fixtures__/drives';
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
+import { Screen } from '@/ui';
 import { tokens } from '@/ui/tokens';
 
 import { HomeView, type HomeViewProps } from '../HomeView';
@@ -25,28 +26,49 @@ const props = (over: Partial<HomeViewProps> = {}): HomeViewProps => ({
   onSeeAll: jest.fn(),
   onAllStats: jest.fn(),
   onHowPoints: jest.fn(),
-  onLeagues: jest.fn(),
+  onAnalytics: jest.fn(),
   ...over,
 });
 
 describe('the full Home', () => {
-  test('header: rating with trend, points, level, streak, freezes and league rank', async () => {
+  test('header: two pills (streak and points), the level on the drive card and the Safety Rating badge in its corner', async () => {
     const p = props();
     await draw(<HomeView {...p} />);
     expect(screen.getByText('Hey, lurp')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Safety Rating 92 out of 100, up 1.5 this week')).toBeOnTheScreen();
-    expect(screen.getByLabelText('1,240 points')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Level 4, 1000 points to level 5')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Streak 11 drives, multiplier 1.22')).toBeOnTheScreen();
-    expect(screen.getByLabelText('2 of 3 freezes held')).toBeOnTheScreen();
-    await press(screen.getByLabelText('Gold league, rank 4 of 30'));
-    expect(p.onLeagues).toHaveBeenCalled();
+    const strip = screen.getByTestId('home-progress');
+    expect(within(strip).getByLabelText('Streak 11 drives, multiplier 1.22')).toBeOnTheScreen();
+    expect(within(strip).getByLabelText('1,240 points')).toBeOnTheScreen();
+    // No freezes pill and no level pill: the level lives on the drive card.
+    expect(screen.queryByLabelText('2 of 3 freezes held')).toBeNull();
+    expect(within(strip).queryByText(/Lvl/)).toBeNull();
+    const card = screen.getByTestId('home-header');
+    expect(within(card).getByLabelText('Level 4, 1,000 points to level 5')).toBeOnTheScreen();
+    expect(within(card).getByTestId('level-value')).toHaveTextContent('4');
+    expect(within(card).getByText('1,000 pts to level 5')).toBeOnTheScreen();
+    expect(within(card).getByLabelText('Level 4 progress')).toBeOnTheScreen();
+    // The badge where the league was: the whole rating, and it opens Analytics.
+    const badge = within(card).getByLabelText('Safety Rating 92 out of 100');
+    expect(within(card).getByTestId('rating-value')).toHaveTextContent('92');
+    expect(screen.queryByTestId('league-badge')).toBeNull();
+    expect(screen.queryByText(/league/i)).toBeNull();
+    await press(badge);
+    expect(p.onAnalytics).toHaveBeenCalledTimes(1);
   });
 
-  test('an unranked driver sees how far from a rating they are', async () => {
-    await draw(<HomeView {...props({ summary: summary({ progress: { ranked: false, safety_rating: null, miles_30d: 12.7 } }) })} />);
+  test('at the top level the card says so', async () => {
+    await draw(<HomeView {...props({ summary: summary({ progress: { level: 50, level_floor: 306_250, level_next: null, lifetime: 310_000 } }) })} />);
+    expect(screen.getByLabelText('Level 50, top level')).toBeOnTheScreen();
+    expect(screen.getByText('Top level')).toBeOnTheScreen();
+  });
+
+  test('an unranked driver sees a dash in the badge, with Unranked and how far to go', async () => {
+    const p = props({ summary: summary({ progress: { ranked: false, safety_rating: null, miles_30d: 12.7 } }) });
+    await draw(<HomeView {...p} />);
+    expect(screen.getByTestId('rating-value')).toHaveTextContent('—');
     expect(screen.getByText('Unranked')).toBeOnTheScreen();
-    expect(screen.getByText('12/25 mi to get ranked')).toBeOnTheScreen();
+    expect(screen.getByText('12/25 mi')).toBeOnTheScreen();
+    await press(screen.getByLabelText('Safety Rating: unranked. 12 of 25 miles in the last 30 days to get ranked'));
+    expect(p.onAnalytics).toHaveBeenCalled();
   });
 
   test('stats card: 4 stats coloured by band, with arrows vs 30 days', async () => {
@@ -88,6 +110,7 @@ describe('first run', () => {
     expect(screen.getByTestId('home-header')).toBeOnTheScreen();
     expect(screen.getByTestId('start-drive')).toBeOnTheScreen();
     expect(screen.getByText('Take your first drive')).toBeOnTheScreen();
+    expect(within(screen.getByTestId('first-run')).queryByTestId('how-it-works')).toBeNull();
     expect(screen.getByTestId('how-it-works')).toBeOnTheScreen();
     expect(screen.queryByTestId('stats-card')).toBeNull();
     expect(screen.queryByTestId('recent-drives')).toBeNull();
@@ -177,36 +200,114 @@ describe('Start drive', () => {
   });
 });
 
-describe('the permission card slot', () => {
+describe('the action items', () => {
   const card = <Text testID="perm-card">{"Location is off. Drives can't record."}</Text>;
+  const weather = <Text testID="weather-slot">Dense fog</Text>;
+  const dashpal = <Text testID="dashpal-slot">A new phone was paired</Text>;
+  const fair = { level: 'fair' as const, axis: 'speeding' as const, title: 'Watch your speed', tip: 'Ease off a little over the limit.' };
 
-  test('right under the greeting, before the Safety Rating header', async () => {
-    await draw(<HomeView {...props({ permissions: card })} />);
+  test('directly under the drive card, in order: weather, streak, permission, DashPal, tip; then stats, and How it works last', async () => {
+    await draw(
+      <HomeView
+        {...props({ weather, permissions: card, dashpal, coaching: fair, streakNews: { clientTripId: 'a', outcome: 'reset' }, onDismissStreak: jest.fn() })}
+      />
+    );
     const tree = JSON.stringify(screen.toJSON());
-    const greeting = tree.indexOf('Hey, lurp');
-    const row = tree.indexOf("Location is off. Drives can't record.");
-    const rating = tree.indexOf('Safety Rating');
-    expect(greeting).toBeGreaterThan(-1);
-    expect(row).toBeGreaterThan(greeting);
-    expect(rating).toBeGreaterThan(row);
+    const at = (s: string) => {
+      const i = tree.indexOf(s);
+      expect(i).toBeGreaterThan(-1);
+      return i;
+    };
+    const order = [
+      at('Hey, lurp'),
+      at('1,240'),
+      at('Start drive'),
+      at('Dense fog'),
+      at('Streak lost'),
+      at("Location is off. Drives can't record."),
+      at('A new phone was paired'),
+      at('Watch your speed'),
+      at('Last 7 days'),
+      at('Recent drives'),
+      at('Weekly challenges'),
+      at('How it works'),
+    ];
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
-  test('not while a drive records (the in-progress strip takes the place)', async () => {
+  test('the permission card is not shown while a drive records (the in-progress strip shows under the greeting)', async () => {
     await draw(<HomeView {...props({ permissions: card, recording: true, inProgress: <Text testID="in-progress">Drive in progress</Text> })} />);
     expect(screen.queryByTestId('perm-card')).toBeNull();
     expect(screen.getByTestId('in-progress')).toBeOnTheScreen();
+    const tree = JSON.stringify(screen.toJSON());
+    expect(tree.indexOf('Drive in progress')).toBeGreaterThan(tree.indexOf('Hey, lurp'));
+    expect(tree.indexOf('Drive in progress')).toBeLessThan(tree.indexOf('1,240'));
   });
 
-  test('the DashPal slot sits under the permission card and above the Safety Rating header, and stays while a drive records (it hides its own cards; a setup sheet it opened stays)', async () => {
-    const dashpal = <Text testID="dashpal-slot">A new phone was paired</Text>;
-    await draw(<HomeView {...props({ permissions: card, dashpal })} />);
-    const tree = JSON.stringify(screen.toJSON());
-    const row = tree.indexOf("Location is off. Drives can't record.");
-    const slot = tree.indexOf('A new phone was paired');
-    expect(slot).toBeGreaterThan(row);
-    expect(tree.indexOf('Safety Rating')).toBeGreaterThan(slot);
+  test('the DashPal slot stays while a drive records (it hides its own cards; a setup sheet it opened stays)', async () => {
     await draw(<HomeView {...props({ permissions: card, dashpal, recording: true, inProgress: <Text>Drive in progress</Text> })} />);
     expect(screen.getByTestId('dashpal-slot')).toBeOnTheScreen();
+  });
+
+  test('How it works is last for a first-run driver too', async () => {
+    await draw(<HomeView {...props({ driveCount: 1, recent: [drive()], weather })} />);
+    const tree = JSON.stringify(screen.toJSON());
+    expect(tree.indexOf('How it works')).toBeGreaterThan(tree.indexOf('Recent drives'));
+    expect(tree.indexOf('How it works')).toBeGreaterThan(tree.indexOf('1 more drive'));
+  });
+});
+
+describe('the streak card', () => {
+  test.each([
+    ['reset', 2, 'Streak lost', '2 freezes left'],
+    ['reset', 0, 'Streak lost', 'No freezes left'],
+    ['freeze_used', 1, 'A freeze saved your streak', '1 freeze left'],
+    ['freeze_used', 3, 'A freeze saved your streak', '3 freezes left'],
+  ] as const)('%s with %i freezes: "%s" / "%s", with the flakes', async (outcome, freezes, title, left) => {
+    const onDismissStreak = jest.fn();
+    await draw(<HomeView {...props({ summary: summary({ progress: { freezes } }), streakNews: { clientTripId: 'a', outcome }, onDismissStreak })} />);
+    const c = screen.getByTestId('home-streak-card');
+    expect(within(c).getByText(title)).toBeOnTheScreen();
+    expect(within(c).getByText(left)).toBeOnTheScreen();
+    expect(within(c).getByLabelText(`${freezes} of 3 freezes held`)).toBeOnTheScreen();
+    await press(within(c).getByLabelText('Dismiss'));
+    expect(onDismissStreak).toHaveBeenCalledTimes(1);
+  });
+
+  test('no news: no card', async () => {
+    await draw(<HomeView {...props({ streakNews: null })} />);
+    expect(screen.queryByTestId('home-streak-card')).toBeNull();
+  });
+});
+
+describe('the coaching tip card', () => {
+  test.each(['fair', 'poor'] as const)('%s: the level icon at the left, the title and the tip; it opens Analytics', async (level) => {
+    const p = props({ coaching: { level, axis: 'phone', title: 'Phone down while driving', tip: 'Put the phone away before you pull out.' } });
+    await draw(<HomeView {...p} />);
+    const label = `${level === 'fair' ? 'Fair' : 'Poor'}. Phone down while driving. Put the phone away before you pull out.`;
+    expect(screen.getByTestId(`home-tip-${level}`)).toBeOnTheScreen();
+    await press(screen.getByLabelText(label));
+    expect(p.onAnalytics).toHaveBeenCalledTimes(1);
+  });
+
+  test('not when driving is good, or with too little driving to judge', async () => {
+    await draw(<HomeView {...props({ coaching: { level: 'good', axis: null, title: 'Driving well', tip: 'Smooth driving lately. Keep it up.' } })} />);
+    expect(screen.queryByTestId('home-tip')).toBeNull();
+    await draw(<HomeView {...props({ coaching: { level: null, axis: null, title: 'Tips are on the way', tip: 'Drive a few more times to get tips here.' } })} />);
+    expect(screen.queryByTestId('home-tip')).toBeNull();
+  });
+});
+
+describe('on the sky', () => {
+  test('the greeting is a header in the white sky ink, and pull to refresh spins in it', async () => {
+    await draw(
+      <Screen sky padded={false}>
+        <HomeView {...props({ onRefresh: jest.fn() })} />
+      </Screen>
+    );
+    expect(screen.getByRole('header', { name: 'Hey, lurp' })).toHaveStyle({ color: '#FFFFFF' });
+    const { refreshControl } = screen.getByTestId('home').props as { refreshControl: { props: { tintColor: string } } };
+    expect(refreshControl.props.tintColor).toBe('#FFFFFF');
   });
 });
 
@@ -232,7 +333,8 @@ describe('final-review fixes', () => {
     const s = summary();
     await draw(<HomeView {...props({ summary: { ...s, progress: { ...s.progress, ranked: false, safety_rating: null, miles_30d: 12 } } })} />);
     expect(screen.getAllByText('per 100 km').length).toBeGreaterThan(0);
-    expect(screen.getByText('19/40 km to get ranked')).toBeOnTheScreen();
+    expect(screen.getByText('19/40 km')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Safety Rating: unranked. 19 of 40 kilometers in the last 30 days to get ranked')).toBeOnTheScreen();
   });
 
   test('the rating is a whole number', async () => {

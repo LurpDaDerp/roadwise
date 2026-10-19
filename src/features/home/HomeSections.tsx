@@ -9,37 +9,42 @@ import { HowItWorksList } from '@/features/howPoints/HowPointsScreen';
 import { Card, Divider, ProgressRing, SectionHeader, StatTile, Text, useTheme } from '@/ui';
 
 /** The first-run prompt: "Take your first drive", or how many more until stats unlock. */
-export function FirstRunCard({ driveCount, onHowPoints }: { driveCount: number; onHowPoints: () => void }) {
+export function FirstRunCard({ driveCount }: { driveCount: number }) {
   const t = useTheme();
   const left = Math.max(0, 3 - driveCount);
   return (
-    <>
-      <Card testID="first-run">
-        <View style={{ flexDirection: 'row', gap: t.space.md, alignItems: 'center' }}>
-          <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.accentFaint }}>
-            <Ionicons name="car-sport" size={t.size.iconLg} color={t.colors.accent} />
-          </View>
-          <View style={{ flex: 1, gap: 2 }}>
-            <Text variant="title3">{driveCount === 0 ? 'Take your first drive' : `${left} more ${left === 1 ? 'drive' : 'drives'} to unlock your stats`}</Text>
-            <Text variant="subhead" tone="muted">
-              {driveCount === 0
-                ? 'Tap Start drive before you pull out. Put your phone down and go.'
-                : 'Keep it up. Your driving stats show up here after 3 drives.'}
-            </Text>
-          </View>
+    <Card testID="first-run">
+      <View style={{ flexDirection: 'row', gap: t.space.md, alignItems: 'center' }}>
+        <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.accentFaint }}>
+          <Ionicons name="car-sport" size={t.size.iconLg} color={t.colors.accent} />
         </View>
-      </Card>
-      <View style={{ gap: t.space.sm }}>
-        <SectionHeader title="How it works" action={{ label: 'All the rules', onPress: onHowPoints }} />
-        <Card testID="how-it-works">
-          <HowItWorksList />
-        </Card>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text variant="title3">{driveCount === 0 ? 'Take your first drive' : `${left} more ${left === 1 ? 'drive' : 'drives'} to unlock your stats`}</Text>
+          <Text variant="subhead" tone="muted">
+            {driveCount === 0
+              ? 'Tap Start drive before you pull out. Put your phone down and go.'
+              : 'Keep it up. Your driving stats show up here after 3 drives.'}
+          </Text>
+        </View>
       </View>
-    </>
+    </Card>
   );
 }
 
-/** Home's four stats with arrows against your own 30 days. */
+/** How it works, last on Home for every driver, with "All the rules" into How points work. */
+export function HowItWorks({ onHowPoints }: { onHowPoints: () => void }) {
+  const t = useTheme();
+  return (
+    <View style={{ gap: t.space.sm }}>
+      <SectionHeader title="How it works" action={{ label: 'All the rules', onPress: onHowPoints }} />
+      <Card testID="how-it-works">
+        <HowItWorksList />
+      </Card>
+    </View>
+  );
+}
+
+/** Home's four stats with arrows against your own 30 days; "All stats" opens Analytics. */
 export function StatsCard({ stats, window, onAllStats }: { stats: readonly HomeStat[]; window: '7d' | '30d'; onAllStats: () => void }) {
   const t = useTheme();
   const rows = [stats.slice(0, 2), stats.slice(2, 4)];
@@ -96,10 +101,10 @@ export function RecentDrives({ drives, onOpen, onSeeAll }: { drives: readonly Lo
 
 type Challenge = MySummary['challenges'][number];
 
-/** This week's three challenges as a sideways strip. */
 /** Completed challenges per Freeze (server: `freeze_progress` 0..2, the third grants one). */
 export const CHALLENGES_PER_FREEZE = 3;
 
+/** This week's three challenges as a sideways strip. */
 export function ChallengesStrip({ challenges, freezeProgress }: { challenges: readonly Challenge[]; freezeProgress?: number }) {
   const t = useTheme();
   if (challenges.length === 0) return null;

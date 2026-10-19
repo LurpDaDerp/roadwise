@@ -1,6 +1,7 @@
 /**
  * Home wired to its data: the server summary for the header and challenges, local drives for
- * the first-run gate, stats and recent drives, and the drive controls for Start.
+ * the first-run gate, stats, recent drives and the streak card, the 30-day coaching for the tip
+ * card, and the drive controls for Start.
  */
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -10,6 +11,7 @@ import { useDataSource, useDb, useDriveCount, useRecentDrives, useStatSums } fro
 import { useMySummary } from '@/data/server/summary';
 import { clearDropNotice, readDropNotice, type DropNotice } from '@/drive/dropNotice';
 import { useDrive, useDriveControls } from '@/drive/useDrive';
+import { useCoaching } from '@/features/analytics/useAnalytics';
 import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
 import { sinceDays } from '@/features/drives/format';
 import { homeCard } from '@/features/permissions/board';
@@ -17,20 +19,21 @@ import { HomeDashpal } from '@/dashcam/ui/HomeDashpal';
 import { PermissionCard } from '@/features/permissions/PermissionCard';
 import { usePermissionBoard } from '@/features/permissions/usePermissionBoard';
 import {
-  ALL_STATS_HREF,
+  ANALYTICS_HREF,
   DRIVE_HISTORY_HREF,
   DRIVE_HREF,
   driveSummaryHref,
   HOW_POINTS_WORK_HREF,
-  LEAGUES_HREF,
   PERMISSIONS_HREF,
   PROFILE_HREF,
 } from '@/features/drives/routes';
+import { HomeWeatherAlert } from '@/features/weather/HomeWeatherAlert';
 import { Screen } from '@/ui';
 
 import { HomeView } from './HomeView';
 import { dropCopy, type StartBanner } from './StartDrive';
 import { clearStartNotice, useStartNotice } from './startNotice';
+import { useStreakCard } from './useStreakCard';
 
 export function HomeScreen() {
   const router = useRouter();
@@ -40,6 +43,8 @@ export function HomeScreen() {
   const recent = useRecentDrives(5);
   const week = useStatSums(sinceDays(now(), 7));
   const month = useStatSums(sinceDays(now(), 30));
+  const { coaching } = useCoaching();
+  const streak = useStreakCard(recent.data);
   const { start } = useDriveControls();
   // The status alone (not useDriveLive), so Home doesn't re-render on every 1 Hz drive tick.
   const recording = useDrive((d) => d.status === 'recording');
@@ -170,12 +175,16 @@ export function HomeScreen() {
         onRefusalAction={() => void onRefusalAction()}
         onOpenDrive={(id) => router.push(driveSummaryHref(id))}
         onSeeAll={() => router.push(DRIVE_HISTORY_HREF)}
-        onAllStats={() => router.push(ALL_STATS_HREF)}
+        onAllStats={() => router.navigate(ANALYTICS_HREF)}
         onHowPoints={() => router.push(HOW_POINTS_WORK_HREF)}
-        onLeagues={() => router.navigate(LEAGUES_HREF)}
+        onAnalytics={() => router.navigate(ANALYTICS_HREF)}
         onProfile={() => router.navigate(PROFILE_HREF)}
         recording={recording}
         inProgress={<DriveInProgressBanner />}
+        weather={<HomeWeatherAlert />}
+        streakNews={streak.news}
+        onDismissStreak={streak.dismiss}
+        coaching={coaching}
         permissions={<PermissionCard board={board} recording={recording} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}
         dashpal={<HomeDashpal hidden={recording} pull={pulls} />}
         scrollRef={scrollRef}

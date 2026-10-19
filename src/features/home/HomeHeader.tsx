@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import type { ReactNode } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 
@@ -9,123 +10,125 @@ import {
   Button,
   Card,
   formatPointsValue,
-  FreezeCount,
   ProgressBar,
+  ProgressRing,
   Skeleton,
+  SkyScope,
   StreakFlame,
   Text,
-  TierBadge,
-  TIER_LABEL,
-  TrendArrow,
+  useOnSky,
   useTheme,
-  type TrendDirection,
 } from '@/ui';
 
 import { RANKED_MIN_MILES } from '@scoring';
 
-/** Rating change over 7 days → an arrow; under 0.1 reads as no change. Null → no arrow. */
-export function ratingTrend(delta: number | null): TrendDirection | null {
-  if (delta === null || !Number.isFinite(delta)) return null;
-  if (Math.abs(delta) < 0.1) return 'flat';
-  return delta > 0 ? 'up' : 'down';
-}
+type Progress = MySummary['progress'];
 
 /** Share of the way from this level's floor to the next (1 at the cap). */
-export function levelProgress(p: Pick<MySummary['progress'], 'lifetime' | 'level_floor' | 'level_next'>): number {
+export function levelProgress(p: Pick<Progress, 'lifetime' | 'level_floor' | 'level_next'>): number {
   if (p.level_next === null) return 1;
   const span = p.level_next - p.level_floor;
   return span > 0 ? (p.lifetime - p.level_floor) / span : 0;
 }
 
-function Rating({ progress }: { progress: MySummary['progress'] }) {
+/** Points still to earn for the next level; null at the top level. */
+export function pointsToNext(p: Pick<Progress, 'lifetime' | 'level_next'>): number | null {
+  return p.level_next === null ? null : Math.max(0, p.level_next - p.lifetime);
+}
+
+/** The card's main block: the level big, how far to the next one, and the bar toward it. */
+function LevelBlock({ progress }: { progress: Progress }) {
   const t = useTheme();
-  const units = useUnits();
-  const trend = ratingTrend(progress.rating_trend);
-  if (!progress.ranked || progress.safety_rating === null) {
-    const toRank = formatDistanceProgress(progress.miles_30d, RANKED_MIN_MILES, units);
-    return (
-      <View style={{ gap: t.space.xs }} testID="rating-unranked" accessible accessibilityLabel={`Safety Rating: unranked. ${toRank.done} of ${toRank.target} ${distanceWord(units)} in the last 30 days to get ranked`}>
-        <Text variant="label" tone="muted">
-          Safety Rating
-        </Text>
-        <Text variant="display">Unranked</Text>
-        <Text variant="subhead" tone="muted">
-          {toRank.text} to get ranked
-        </Text>
-        <ProgressBar value={toRank.done / toRank.target} accessibilityLabel="Distance toward a Safety Rating" height={6} style={{ maxWidth: 200 }} />
-      </View>
-    );
-  }
-  const rating = formatRating(progress.safety_rating, true);
-  const delta = progress.rating_trend ?? 0;
-  const trendWords = trend === null ? '' : trend === 'flat' ? ', no change this week' : `, ${trend} ${Math.abs(delta).toFixed(1)} this week`;
+  const toNext = pointsToNext(progress);
+  const next = progress.level + 1;
+  const line = toNext === null ? 'Top level' : `${formatPointsValue(toNext)} pts to level ${next}`;
   return (
-    <View style={{ gap: t.space.xs }} testID="rating" accessible accessibilityLabel={`Safety Rating ${rating} out of 100${trendWords}`}>
+    <View
+      style={{ gap: t.space.xs }}
+      testID="level"
+      accessible
+      accessibilityLabel={`Level ${progress.level}${toNext === null ? ', top level' : `, ${formatPointsValue(toNext)} points to level ${next}`}`}
+    >
       <Text variant="label" tone="muted">
-        Safety Rating
+        Level
       </Text>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
-        <Text variant="hero" testID="rating-value">
-          {rating}
-        </Text>
-        {trend ? <TrendArrow direction={trend} better="up" accessible={false} testID={`rating-trend-${trend}`} /> : null}
-      </View>
+      <Text variant="hero" testID="level-value">
+        {progress.level}
+      </Text>
+      <Text variant="subhead" tone="muted" testID="level-next">
+        {line}
+      </Text>
+      <ProgressBar value={levelProgress(progress)} accessibilityLabel={`Level ${progress.level} progress`} height={6} style={{ maxWidth: 200 }} />
     </View>
   );
 }
 
-/** The league in the card's corner: a round paper button holding the tier badge, the rank under it. */
-function LeagueButton({ league, onLeagues }: { league: MySummary['league']; onLeagues: () => void }) {
+/**
+ * The Safety Rating in the card's corner: a ring round the whole number (the rating out of 100),
+ * or "—" with how far from ranked. One tap opens Analytics.
+ */
+function RatingBadge({ progress, onPress }: { progress: Progress; onPress: () => void }) {
   const t = useTheme();
+  const units = useUnits();
+  const ranked = progress.ranked && progress.safety_rating !== null;
+  const toRank = formatDistanceProgress(progress.miles_30d, RANKED_MIN_MILES, units);
+  const value = ranked ? formatRating(progress.safety_rating, true) : '—';
+  const label = ranked
+    ? `Safety Rating ${value} out of 100`
+    : `Safety Rating: unranked. ${toRank.done} of ${toRank.target} ${distanceWord(units)} in the last 30 days to get ranked`;
   return (
     <Pressable
-      onPress={onLeagues}
-      testID="league-badge"
+      onPress={onPress}
+      testID="rating-badge"
       accessibilityRole="button"
-      accessibilityLabel={`${TIER_LABEL[league.tier]} league${league.rank ? `, rank ${league.rank} of ${league.size}` : ''}`}
-      accessibilityHint="Opens Leagues"
+      accessibilityLabel={label}
+      accessibilityHint="Opens Analytics"
       hitSlop={t.space.sm}
-      style={({ pressed }) => ({ alignItems: 'center', gap: t.space.xs, opacity: pressed ? 0.8 : 1, minWidth: t.size.touch })}
+      style={({ pressed }) => ({ alignItems: 'center', gap: t.space.xs, opacity: pressed ? 0.8 : 1, minWidth: t.size.touch, maxWidth: 104 })}
     >
-      <View
-        style={{
-          width: 64,
-          height: 64,
-          borderRadius: 32,
-          backgroundColor: t.colors.surfaceRaised,
-          borderWidth: 1,
-          borderColor: t.colors.divider,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <TierBadge tier={league.tier} size="md" showLabel={false} />
+      <View style={{ borderRadius: 36, backgroundColor: t.colors.surfaceRaised }}>
+        <ProgressRing
+          value={ranked ? (progress.safety_rating ?? 0) / 100 : toRank.target > 0 ? toRank.done / toRank.target : 0}
+          size={72}
+          strokeWidth={5}
+          tone="accent"
+          accessibilityLabel={ranked ? 'Safety Rating' : 'Distance toward a Safety Rating'}
+        >
+          <Text variant="stat" testID="rating-value">
+            {value}
+          </Text>
+        </ProgressRing>
       </View>
-      <Text variant="label" tone="muted">
-        {TIER_LABEL[league.tier]}
+      <Text variant="label" tone="muted" style={{ textAlign: 'center' }} testID={ranked ? 'rating' : 'rating-unranked'}>
+        {ranked ? 'Safety Rating' : 'Unranked'}
       </Text>
-      <Text variant="headline">{league.rank ? `#${league.rank}` : '—'}</Text>
+      {ranked ? null : (
+        <Text variant="caption" tone="muted" style={{ textAlign: 'center' }} testID="rating-to-rank">
+          {toRank.text}
+        </Text>
+      )}
     </Pressable>
   );
 }
 
 /**
- * Home's drive card, the screen's hero: the hour's sky with the Safety Rating big (or how far from
- * ranked) and the league in the corner, and Start drive across its foot. While progress loads or
- * fails the card says so; Start stays in it either way.
+ * Home's drive card, the screen's hero: the hour's sky with your level big and the bar to the
+ * next, the Safety Rating in the corner (it opens Analytics), and Start drive across its foot.
+ * While progress loads or fails the card says so; Start stays in it either way.
  */
 export function HomeHeader({
   summary,
   loading,
   error,
-  onLeagues,
+  onRating,
   onRetry,
   start,
 }: {
   summary: MySummary | undefined;
   loading: boolean;
   error: boolean;
-  onLeagues: () => void;
+  /** The Safety Rating badge opens Analytics. */
+  onRating: () => void;
   onRetry: () => void;
   /** Start drive, at the foot of the card (absent while a drive records). */
   start?: ReactNode;
@@ -150,9 +153,9 @@ export function HomeHeader({
   ) : (
     <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: t.space.md }}>
       <View style={{ flex: 1 }}>
-        <Rating progress={summary.progress} />
+        <LevelBlock progress={summary.progress} />
       </View>
-      <LeagueButton league={summary.league} onLeagues={onLeagues} />
+      <RatingBadge progress={summary.progress} onPress={onRating} />
     </View>
   );
 
@@ -194,15 +197,16 @@ function StatPill({ children, accessibilityLabel, testID }: { children: ReactNod
 }
 
 /**
- * The progress row under the greeting, in pills that scroll sideways: the streak with its
- * multiplier, freezes, points and the level with its bar. The at-risk line follows when the
- * streak needs a clean drive.
+ * The progress row under the greeting: two paper pills, the streak with its multiplier and your
+ * points. The at-risk line follows when the streak needs a clean drive; it sits on the sky, so
+ * it takes the sky's ink there.
  */
 export function ProgressStrip({ summary }: { summary: MySummary }) {
   const t = useTheme();
+  const onSky = useOnSky();
   const p = summary.progress;
-  const toNext = p.level_next === null ? null : Math.max(0, p.level_next - p.lifetime);
   const streakState = p.at_risk ? 'atRisk' : 'active';
+  const atRisk = p.at_risk ? <AtRiskLine /> : null;
   return (
     <View style={{ gap: t.space.sm }} testID="home-progress">
       <ScrollView
@@ -214,9 +218,6 @@ export function ProgressStrip({ summary }: { summary: MySummary }) {
         <StatPill>
           <StreakFlame count={p.streak} multiplier={p.next_mult} state={streakState} testID="home-streak" />
         </StatPill>
-        <StatPill>
-          <FreezeCount count={p.freezes} testID="home-freezes" />
-        </StatPill>
         <StatPill accessibilityLabel={`${formatPointsValue(p.points)} points`}>
           <Text variant="title2" testID="home-points" style={{ fontVariant: ['tabular-nums'] }}>
             {formatPointsValue(p.points)}
@@ -225,23 +226,20 @@ export function ProgressStrip({ summary }: { summary: MySummary }) {
             Points
           </Text>
         </StatPill>
-        <StatPill accessibilityLabel={`Level ${p.level}${toNext === null ? ', top level' : `, ${toNext} points to level ${p.level + 1}`}`}>
-          <View style={{ gap: t.space.xs, minWidth: 112 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: t.space.xs }}>
-              <Text variant="title3">Lvl {p.level}</Text>
-              <Text variant="footnote" tone="muted">
-                {toNext === null ? 'Top level' : `${formatPointsValue(toNext)} to ${p.level + 1}`}
-              </Text>
-            </View>
-            <ProgressBar value={levelProgress(p)} accessibilityLabel={`Level ${p.level} progress`} height={6} />
-          </View>
-        </StatPill>
       </ScrollView>
-      {p.at_risk ? (
-        <Text variant="footnote" tone="warning" testID="home-at-risk">
-          Streak at risk: make your next drive clean to keep it.
-        </Text>
-      ) : null}
+      {atRisk && onSky ? <SkyScope>{atRisk}</SkyScope> : atRisk}
+    </View>
+  );
+}
+
+function AtRiskLine() {
+  const t = useTheme();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.xs }}>
+      <Ionicons name="warning" size={t.size.iconSm} color={t.colors.warning} accessible={false} />
+      <Text variant="footnote" tone="warning" testID="home-at-risk" style={{ flex: 1 }}>
+        Streak at risk: make your next drive clean to keep it.
+      </Text>
     </View>
   );
 }

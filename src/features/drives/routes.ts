@@ -5,6 +5,7 @@
 import type { Href } from 'expo-router';
 
 export const HOME_HREF: Href = '/(tabs)/home';
+export const ANALYTICS_HREF: Href = '/(tabs)/analytics';
 export const LEAGUES_HREF: Href = '/(tabs)/leagues';
 export const PROFILE_HREF: Href = '/(tabs)/profile';
 export const DRIVE_HREF: Href = '/drive';
