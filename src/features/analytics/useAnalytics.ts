@@ -7,7 +7,6 @@ import { useMemo } from 'react';
 
 import type { LocalDrive } from '@/data/queries/rows';
 import { useDataSource } from '@/data/queries/context';
-import { useRoutePolylines } from '@/data/queries/drives';
 import { useScoredDrives, useWindowEvents } from '@/data/queries/analytics';
 import type { Region } from '@/features/settings/maps';
 
@@ -61,7 +60,7 @@ export interface AnalyticsData {
   grid: DriveGrid;
   /** The range's scored drives, newest first (the Drives list; its length matches `sums.drives`). */
   drives: LocalDrive[];
-  /** Every listed drive's route, all time, one line per privacy run. */
+  /** Every scored drive's route, all time, one line per privacy run (no "Wasn't driving" trips). */
   routes: MapPoint[][];
   /** Where the trip map opens (`fitRegion`); null with no routes. */
   region: Region | null;
@@ -78,7 +77,6 @@ export function useAnalytics(range: Range): AnalyticsData {
   const sinceMs = rangeStart(at, range);
   const all = useScoredDrives(null);
   const events = useWindowEvents(coachSince);
-  const polylines = useRoutePolylines(null);
 
   const drives = all.data;
   const coaching = useMemo(() => coachWindow(drives ?? [], events.data ?? [], coachSince), [drives, events.data, coachSince]);
@@ -87,21 +85,20 @@ export function useAnalytics(range: Range): AnalyticsData {
     const list = drives ?? [];
     return { sums: windowSums(list, sinceMs), grid: driveGrid(list, sinceMs), drives: scoredSince(list, sinceMs) };
   }, [drives, sinceMs]);
+  // The map draws the same drives as every other card: scored ones, not "Wasn't driving".
   const map = useMemo(() => {
-    const routes = routeLines(polylines.data ?? []);
+    const routes = routeLines((drives ?? []).flatMap((d) => (d.polyline ? [d.polyline] : [])));
     return { routes, region: fitLines(routes) };
-  }, [polylines.data]);
+  }, [drives]);
 
   const { refetch: refetchAll } = all;
   const { refetch: refetchEvents } = events;
-  const { refetch: refetchRoutes } = polylines;
   const refetch = useMemo(
     () => () => {
       void refetchAll();
       void refetchEvents();
-      void refetchRoutes();
     },
-    [refetchAll, refetchEvents, refetchRoutes]
+    [refetchAll, refetchEvents]
   );
 
   return {
@@ -111,8 +108,8 @@ export function useAnalytics(range: Range): AnalyticsData {
     bests,
     ...windowed,
     ...map,
-    loading: all.isLoading || events.isLoading || polylines.isLoading,
-    error: all.isError || events.isError || polylines.isError,
+    loading: all.isLoading || events.isLoading,
+    error: all.isError || events.isError,
     refetch,
   };
 }

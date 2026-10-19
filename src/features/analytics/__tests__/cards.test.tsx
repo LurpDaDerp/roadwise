@@ -1,6 +1,6 @@
-import { screen } from '@testing-library/react-native';
+import { screen, within } from '@testing-library/react-native';
 import type { ComponentType, ReactNode } from 'react';
-import { View } from 'react-native';
+import { StyleSheet, View, type TextStyle, type ViewStyle } from 'react-native';
 
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
 import { draw, drive, HOUR, NOW, press } from '@/features/drives/__fixtures__/drives';
@@ -11,19 +11,27 @@ import { tokens } from '@/ui/tokens';
 import { drives, NO_SCORES, SCORES } from '../__fixtures__/analytics';
 import { BestsCard } from '../BestsCard';
 import { DRIVES_PAGE, DrivesCard, driveLine } from '../DrivesCard';
-import { metricGroups, MetricsCards, metricsBlockHeight } from '../MetricsCards';
+import { metricGroups, metricsBlockHeight, MetricsCards, metricsLayout, METRICS_MAX_SHARE } from '../MetricsCards';
 import { coach, driveGrid, EMPTY_WINDOW, fitLines, personalBests, windowSums, type MapPoint } from '../model';
-import { radarLabel, radarPoint, radarPolygon, RadarCard } from '../RadarCard';
+import { RADAR_LABEL_MAX_SCALE, radarGeometry, radarLabel, radarPoint, radarPolygon, RadarCard } from '../RadarCard';
 import { SummaryCard } from '../SummaryCard';
 import { TripsMapCard } from '../TripsMapCard';
 import { bandSpan, busiest, cellAlpha, WhenYouDriveCard } from '../WhenYouDriveCard';
 
 const light = tokens.color.light;
 
+const mockWindow = jest.fn(() => ({ width: 390, height: 844, scale: 3, fontScale: 1 }));
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({ __esModule: true, default: () => mockWindow() }));
+const setWindow = (width: number, height: number, fontScale = 1) => mockWindow.mockReturnValue({ width, height, scale: 3, fontScale });
+
 afterEach(() => {
   resetUnitsForTests();
   setMapsForTests(undefined);
+  setWindow(390, 844);
 });
+
+type El = ReturnType<typeof screen.getByTestId>;
+const flat = (el: El): ViewStyle & TextStyle => StyleSheet.flatten(el.props.style) ?? {};
 
 describe('RadarCard', () => {
   test('the Safety Rating sits in the middle as a whole number, with every axis and its score around it', async () => {
@@ -70,6 +78,52 @@ describe('RadarCard', () => {
     expect(radarPoint(3, 6, 50, c).y).toBeCloseTo(150);
     expect(radarPolygon([100, 50, 0, 0, 0, 0], 100, c).split(' ')[0]).toBe('100.0,0.0');
     expect(radarPolygon([140, 50, 0, 0, 0, 0], 100, c).split(' ')[0]).toBe('100.0,0.0');
+  });
+
+  const overlaps = (a: { left: number; top: number; width: number; height: number }, b: typeof a) =>
+    a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height;
+
+  test.each([
+    [326, 1],
+    [256, 1],
+    [326, RADAR_LABEL_MAX_SCALE],
+    [256, RADAR_LABEL_MAX_SCALE],
+  ])('labels sit wholly outside the hexagon and inside the chart (width %d, text %d×)', (width, scale) => {
+    const g = radarGeometry(width, scale);
+    const pts = Array.from({ length: 6 }, (_, i) => radarPoint(i, 6, g.r, g.c));
+    const hex = {
+      minX: Math.min(...pts.map((p) => p.x)),
+      maxX: Math.max(...pts.map((p) => p.x)),
+      minY: Math.min(...pts.map((p) => p.y)),
+      maxY: Math.max(...pts.map((p) => p.y)),
+    };
+    const [top, upRight, downRight, bottom, downLeft, upLeft] = g.labels;
+    expect(top!.top + top!.height).toBeLessThanOrEqual(hex.minY - 1);
+    expect(bottom!.top).toBeGreaterThanOrEqual(hex.maxY + 1);
+    for (const b of [upRight!, downRight!]) {
+      expect(b.left).toBeGreaterThanOrEqual(hex.maxX + 1);
+      expect(b.align).toBe('left');
+    }
+    for (const b of [downLeft!, upLeft!]) {
+      expect(b.left + b.width).toBeLessThanOrEqual(hex.minX - 1);
+      expect(b.align).toBe('right');
+    }
+    for (const b of g.labels) {
+      expect(b.left).toBeGreaterThanOrEqual(0);
+      expect(b.top).toBeGreaterThanOrEqual(0);
+      expect(b.left + b.width).toBeLessThanOrEqual(g.width);
+      expect(b.top + b.height).toBeLessThanOrEqual(g.height);
+    }
+    for (let i = 0; i < 6; i++) for (let j = i + 1; j < 6; j++) expect(overlaps(g.labels[i]!, g.labels[j]!)).toBe(false);
+  });
+
+  test('the drawn labels follow the geometry and stop growing at 1.3× text', async () => {
+    setWindow(390, 844, 2);
+    await draw(<RadarCard rating={80} scores={SCORES} />);
+    const box = radarGeometry(390 - 4 * tokens.space.lg, RADAR_LABEL_MAX_SCALE).labels[2]!;
+    expect(flat(screen.getByTestId('radar-axis-accel'))).toMatchObject({ left: box.left, top: box.top, width: box.width, height: box.height });
+    expect(flat(screen.getByText('Acceleration')).fontSize).toBeCloseTo(tokens.type.caption.fontSize * RADAR_LABEL_MAX_SCALE);
+    expect(flat(screen.getByText('95')).fontSize).toBeCloseTo(tokens.type.subhead.fontSize * RADAR_LABEL_MAX_SCALE);
   });
 
   test('the chart ink is monotone: the page ink, no signal colours', async () => {
@@ -163,12 +217,77 @@ describe('MetricsCards', () => {
     expect(screen.getByTestId('metric-points-value')).toHaveTextContent('0 pts');
   });
 
-  test('the whole metrics block takes at most three quarters of a 390 × 844 window', () => {
-    const window = { width: 390, height: 844 };
-    expect(metricsBlockHeight(1)).toBeLessThanOrEqual(window.height * 0.75);
-    // A cell has room for "1,204 mi" in the display face: half the card's inner width.
-    const cell = (window.width - 4 * tokens.space.lg - tokens.space.lg) / 2;
-    expect(cell).toBeGreaterThanOrEqual(150);
+  /**
+   * The block's height as drawn, read off the rendered tree: each card's padding, its title's line,
+   * and per row the card gap plus the tallest cell (number line + cell gap + caption line); then the
+   * gaps between the cards. The lines are the rendered `lineHeight`s, so this follows whatever sizes
+   * and spacing the cards actually use.
+   */
+  const cellsIn = (row: El) => within(row).getAllByTestId(/^metric-(?!.*-(value|caption)$)[a-z-]+$/);
+  function drawnHeight(): number {
+    const cards = (['driving', 'events', 'phone'] as const).map((key) => {
+      const card = flat(screen.getByTestId(`metrics-${key}`));
+      const gap = Number(card.gap ?? 0);
+      const title = Number(flat(screen.getByTestId(`metrics-${key}-title`)).lineHeight);
+      const rows = screen.getAllByTestId(new RegExp(`^metrics-${key}-row-`));
+      const rowsH = rows.reduce((sum, row) => {
+        const tallest = Math.max(
+          ...cellsIn(row).map((cell) => {
+            const id = String(cell.props.testID);
+            const value = Number(flat(screen.getByTestId(`${id}-value`)).lineHeight);
+            const caption = Number(flat(screen.getByTestId(`${id}-caption`)).lineHeight);
+            return value + Number(flat(cell).gap ?? 0) + caption;
+          })
+        );
+        return sum + gap + tallest;
+      }, 0);
+      return Number(card.padding ?? 0) * 2 + title + rowsH;
+    });
+    const blockGap = Number(flat(screen.getByTestId('analytics-metrics')).gap ?? 0);
+    return cards.reduce((a, b) => a + b, 0) + blockGap * (cards.length - 1);
+  }
+
+  test.each([
+    ['390 × 844', 390, 844, 1],
+    ['375 × 667 (iPhone SE)', 375, 667, 1],
+    ['360 × 740', 360, 740, 1],
+    ['360 × 640', 360, 640, 1],
+    ['390 × 844 at 1.3× text', 390, 844, 1.3],
+    ['390 × 844 at 2× text', 390, 844, 2],
+    ['375 × 667 at 2× text', 375, 667, 2],
+    ['360 × 640 at 3× text', 360, 640, 3],
+  ])('the whole metrics block takes at most three quarters of a %s window', async (_name, width, height, fontScale) => {
+    setWindow(width, height, fontScale);
+    await draw(<MetricsCards sums={windowSums(drives(4), null)} />);
+    const drawn = drawnHeight();
+    expect(drawn).toBeLessThanOrEqual(height * METRICS_MAX_SHARE);
+    // The layout model agrees with what was drawn.
+    expect(metricsBlockHeight(metricsLayout(height, Math.min(fontScale, 2)))).toBeCloseTo(drawn, 5);
+    expect(screen.getAllByTestId(/^metric-[a-z-]+-value$/)).toHaveLength(12);
+  });
+
+  test('standard 2 × 2 cards on a tall phone, tighter 2 × 2 on a short one, one row of four at large text', async () => {
+    expect(metricsLayout(844, 1)).toMatchObject({ name: 'grid', perRow: 2, textScale: 1 });
+    expect(metricsBlockHeight(metricsLayout(844, 1))).toBe(576);
+    expect(metricsLayout(667, 1)).toMatchObject({ name: 'compact', perRow: 2, textScale: 1 });
+    expect(metricsBlockHeight(metricsLayout(667, 1))).toBe(496);
+    expect(metricsLayout(844, 2)).toMatchObject({ name: 'row', perRow: 4, textScale: 2 });
+    // Too tall even as a row: the block's text stops growing where it fits, never below 1×.
+    const capped = metricsLayout(640, 2);
+    expect(capped).toMatchObject({ name: 'row' });
+    expect(capped.textScale).toBeLessThan(2);
+    expect(capped.textScale).toBeGreaterThanOrEqual(1);
+    expect(metricsBlockHeight(capped)).toBeLessThanOrEqual(480);
+
+    setWindow(390, 844, 2);
+    await draw(<MetricsCards sums={EMPTY_WINDOW} />);
+    expect(screen.getAllByTestId(/^metrics-driving-row-/)).toHaveLength(1);
+    expect(cellsIn(screen.getByTestId('metrics-driving-row-0'))).toHaveLength(4);
+  });
+
+  test('at 390 × 844 a 2 × 2 cell has room for "1,204 mi" in the display face', () => {
+    // Half the card's inner width, less the gap between the two cells.
+    expect((390 - 4 * tokens.space.lg - tokens.space.lg) / 2).toBeGreaterThanOrEqual(150);
   });
 });
 
@@ -259,7 +378,8 @@ describe('DrivesCard', () => {
     const onOpen = jest.fn();
     await draw(<DrivesCard drives={drives(3)} rangeKey="week" onOpen={onOpen} />);
     const toggle = screen.getByTestId('analytics-drives-toggle');
-    expect(toggle).toHaveAccessibleName('Drives · 3');
+    expect(toggle).toHaveAccessibleName('Drives, 3');
+    expect(screen.getByText('Drives · 3')).toBeOnTheScreen();
     expect(toggle.props.accessibilityState).toMatchObject({ expanded: false });
     expect(screen.queryByTestId('analytics-drives-list')).toBeNull();
     await press(toggle);
@@ -303,7 +423,11 @@ describe('DrivesCard', () => {
 
   test('no drives in the range: the header says so and does not open', async () => {
     await draw(<DrivesCard drives={[]} rangeKey="day" onOpen={jest.fn()} />);
-    expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives · 0');
+    const header = screen.getByTestId('analytics-drives-toggle');
+    expect(header).toHaveAccessibleName('Drives, none yet');
+    expect(header.props.accessibilityRole).toBe('header');
+    expect(header.props.accessibilityState?.disabled).not.toBe(true);
+    expect(screen.getByText('Drives · 0')).toBeOnTheScreen();
     expect(screen.getByTestId('analytics-drives-empty')).toHaveTextContent('No drives yet');
     await press(screen.getByTestId('analytics-drives-toggle'));
     expect(screen.queryByTestId('analytics-drives-list')).toBeNull();

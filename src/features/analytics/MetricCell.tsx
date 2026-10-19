@@ -1,4 +1,4 @@
-import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 
 import { Text, useTheme } from '@/ui';
 
@@ -6,13 +6,15 @@ import type { Metric } from './format';
 
 /**
  * One number with its unit in small print and a one-to-three word caption under it, read as one
- * element ("Distance, 48.2 miles"). Pass `onPress` to make it a button.
+ * element ("Distance, 48.2 miles"). Pass `onPress` to make it a button, and `text` to draw the
+ * number, unit and caption at sizes other than the stat, footnote and label styles' own.
  */
 export function MetricCell({
   caption,
   metric,
   onPress,
   hint,
+  text,
   style,
   testID,
 }: {
@@ -20,19 +22,20 @@ export function MetricCell({
   metric: Metric;
   onPress?: () => void;
   hint?: string;
+  text?: { stat?: TextStyle; unit?: TextStyle; label?: TextStyle };
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }) {
   const t = useTheme();
   const body = (
     <>
-      <Text variant="stat" numberOfLines={1} adjustsFontSizeToFit testID={testID ? `${testID}-value` : undefined}>
+      <Text variant="stat" numberOfLines={1} adjustsFontSizeToFit style={text?.stat} testID={testID ? `${testID}-value` : undefined}>
         {metric.value}
         {metric.unit ? (
-          <Text variant="footnote" tone="muted">{` ${metric.unit}`}</Text>
+          <Text variant="footnote" tone="muted" style={text?.unit}>{` ${metric.unit}`}</Text>
         ) : null}
       </Text>
-      <Text variant="label" tone="muted" numberOfLines={1} adjustsFontSizeToFit>
+      <Text variant="label" tone="muted" numberOfLines={1} adjustsFontSizeToFit style={text?.label} testID={testID ? `${testID}-caption` : undefined}>
         {caption}
       </Text>
     </>

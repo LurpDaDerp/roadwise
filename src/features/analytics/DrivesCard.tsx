@@ -85,17 +85,17 @@ export function DrivesCard({ drives, rangeKey, onOpen }: { drives: readonly Loca
       <Pressable
         testID="analytics-drives-toggle"
         onPress={canOpen ? () => setOpen((o) => !o) : undefined}
-        disabled={!canOpen}
-        accessibilityRole="button"
-        accessibilityLabel={title}
-        accessibilityState={{ expanded: canOpen ? open : undefined, disabled: !canOpen }}
+        // With nothing to open it is only the card's heading, read as "Drives, none yet".
+        accessibilityRole={canOpen ? 'button' : 'header'}
+        accessibilityLabel={c.spoken(count)}
+        accessibilityState={canOpen ? { expanded: open } : undefined}
         style={({ pressed }) => ({
           flexDirection: 'row',
           alignItems: 'center',
           gap: t.space.md,
           padding: t.space.lg,
           minHeight: t.size.touch,
-          opacity: pressed ? 0.7 : 1,
+          opacity: pressed && canOpen ? 0.7 : 1,
         })}
       >
         <Text variant="title3" style={{ flex: 1 }}>

@@ -1,20 +1,21 @@
-import { View } from 'react-native';
+import { useWindowDimensions, View } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
 import type { Units } from '@/lib/units';
-import { Card, Text, tokens, useTheme } from '@/ui';
+import { Card, Text, tokens, useFontScale } from '@/ui';
 
 import { analyticsCopy } from './copy';
 import { countMetric, distanceMetric, percentMetric, pointsMetric, speedMetric, timeMetric, type Metric } from './format';
 import { METRIC_CELL_GAP, MetricCell } from './MetricCell';
 import type { WindowSums } from './model';
+import { sizeAt } from './textSize';
 
 const m = analyticsCopy.metrics;
 
 interface MetricGroup {
   key: 'driving' | 'events' | 'phone';
   title: string;
-  /** Four cells, read as two rows of two. */
+  /** Four cells, read as two rows of two (or one row of four in the densest layout). */
   cells: { key: string; caption: string; metric: Metric }[];
 }
 
@@ -54,39 +55,102 @@ export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
   ];
 }
 
-/** Between the three cards. */
-const BLOCK_GAP = tokens.space.md;
+/** The user's rule: the metrics block never takes more than this share of the window's height. */
+export const METRICS_MAX_SHARE = 0.75;
+
+/** How the three cards are drawn. The block picks the first that fits; see {@link metricsLayout}. */
+export interface MetricsLayout {
+  name: 'grid' | 'compact' | 'row';
+  /** Cells per row: 2 (two rows of two) or 4 (one row of four). */
+  perRow: 2 | 4;
+  /** Card padding, and the gap between a card's title and its rows (and between rows). */
+  pad: number;
+  gap: number;
+  /** Between cells in a row. */
+  colGap: number;
+  /** Between the three cards. */
+  blockGap: number;
+  /** The number's size at 1× (the display face either way). */
+  stat: { fontSize: number; lineHeight: number };
+  /** The Dynamic Type multiple the block's text is drawn at (each style still stops at its own cap). */
+  textScale: number;
+}
+
+const { space, type } = tokens;
+
+/** The standard cards: stat-size numbers, 16 pt padding. */
+const GRID: Omit<MetricsLayout, 'textScale'> = {
+  name: 'grid',
+  perRow: 2,
+  pad: space.lg,
+  gap: space.md,
+  colGap: space.lg,
+  blockGap: space.md,
+  stat: { fontSize: type.stat.fontSize, lineHeight: type.stat.lineHeight },
+};
+/** Shorter windows: title2-size numbers, 12 pt padding. */
+const COMPACT: Omit<MetricsLayout, 'textScale'> = {
+  name: 'compact',
+  perRow: 2,
+  pad: space.md,
+  gap: space.sm,
+  colGap: space.md,
+  blockGap: space.sm,
+  stat: { fontSize: type.title2.fontSize, lineHeight: type.title2.lineHeight },
+};
+/** The shortest windows and the largest text: each card is one row of four. */
+const ROW: Omit<MetricsLayout, 'textScale'> = { ...COMPACT, name: 'row', perRow: 4, colGap: space.sm };
+
+/** The block's height in a layout: three cards of a title and one or two rows of number-over-caption cells. */
+export function metricsBlockHeight(l: MetricsLayout): number {
+  const cell = sizeAt('stat', l.textScale, l.stat).lineHeight + METRIC_CELL_GAP + sizeAt('label', l.textScale).lineHeight;
+  const rows = 4 / l.perRow;
+  // The card's gap sits between its title and each row.
+  const card = l.pad * 2 + sizeAt('title3', l.textScale).lineHeight + rows * (l.gap + cell);
+  return card * 3 + l.blockGap * 2;
+}
 
 /**
- * The metrics block's height at a Dynamic Type multiple, from the same type, spacing and card
- * metrics the cards draw with: three cards of a title and two rows of number-over-caption cells.
- * The user's rule is that the block never takes more than three quarters of the window's height
- * on a phone (checked at 390 × 844 in the tests).
+ * The densest layout the block needs to stay within three quarters of the window's height at the
+ * reader's text size: the standard 2 × 2 cards, then tighter 2 × 2 cards, then one row of four.
+ * When even the row is too tall (very large text on a short phone), the block's text stops growing
+ * at the largest size that fits (never below 1×).
  */
-export function metricsBlockHeight(fontScale = 1): number {
-  const { type, space } = tokens;
-  const line = (v: keyof typeof type) => type[v].lineHeight * Math.min(fontScale, type[v].maxScale ?? 2);
-  const cell = line('stat') + METRIC_CELL_GAP + line('label');
-  // Card: 16 pt padding top and bottom, 12 pt between its title and the two rows, and between rows.
-  const card = space.lg * 2 + line('title3') + space.md + cell + space.md + cell;
-  return card * 3 + BLOCK_GAP * 2;
+export function metricsLayout(windowHeight: number, fontScale: number): MetricsLayout {
+  const limit = windowHeight * METRICS_MAX_SHARE;
+  for (const base of [GRID, COMPACT, ROW]) {
+    const l = { ...base, textScale: fontScale };
+    if (metricsBlockHeight(l) <= limit) return l;
+  }
+  for (let s = Math.floor(fontScale * 20) / 20; s > 1; s = Math.round((s - 0.05) * 100) / 100) {
+    const l = { ...ROW, textScale: s };
+    if (metricsBlockHeight(l) <= limit) return l;
+  }
+  return { ...ROW, textScale: Math.min(fontScale, 1) };
 }
 
 /** Three compact cards ("Driving", "Events", "Phone & points"), each a 2 × 2 grid of numbers. */
 export function MetricsCards({ sums }: { sums: WindowSums }) {
-  const t = useTheme();
   const units = useUnits();
+  const { height } = useWindowDimensions();
+  const l = metricsLayout(height, useFontScale());
+  const text = {
+    title: sizeAt('title3', l.textScale),
+    stat: sizeAt('stat', l.textScale, l.stat),
+    unit: sizeAt('footnote', l.textScale),
+    label: sizeAt('label', l.textScale),
+  };
   return (
-    <View style={{ gap: BLOCK_GAP }} testID="analytics-metrics">
+    <View style={{ gap: l.blockGap }} testID="analytics-metrics">
       {metricGroups(sums, units).map((g) => (
-        <Card key={g.key} testID={`metrics-${g.key}`}>
-          <Text variant="title3" accessibilityRole="header">
+        <Card key={g.key} padded={false} style={{ padding: l.pad, gap: l.gap }} testID={`metrics-${g.key}`}>
+          <Text variant="title3" accessibilityRole="header" style={text.title} testID={`metrics-${g.key}-title`}>
             {g.title}
           </Text>
-          {[g.cells.slice(0, 2), g.cells.slice(2, 4)].map((row, i) => (
-            <View key={i} style={{ flexDirection: 'row', gap: t.space.lg }}>
+          {(l.perRow === 4 ? [g.cells] : [g.cells.slice(0, 2), g.cells.slice(2, 4)]).map((row, i) => (
+            <View key={i} style={{ flexDirection: 'row', gap: l.colGap }} testID={`metrics-${g.key}-row-${i}`}>
               {row.map((c) => (
-                <MetricCell key={c.key} caption={c.caption} metric={c.metric} style={{ flex: 1 }} testID={`metric-${c.key}`} />
+                <MetricCell key={c.key} caption={c.caption} metric={c.metric} text={text} style={{ flex: 1 }} testID={`metric-${c.key}`} />
               ))}
             </View>
           ))}

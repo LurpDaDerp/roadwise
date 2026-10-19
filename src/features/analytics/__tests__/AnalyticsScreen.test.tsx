@@ -73,13 +73,13 @@ test('the range starts on Week and switching it re-reads everything below it', a
   expect(mockUseAnalytics).toHaveBeenLastCalledWith('week');
   expect(screen.getByRole('tab', { name: 'Week' })).toBeSelected();
   expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('6');
-  expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives · 6');
+  expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, 6');
 
   await press(screen.getByRole('tab', { name: 'Month' }));
   expect(mockUseAnalytics).toHaveBeenLastCalledWith('month');
   expect(screen.getByRole('tab', { name: 'Month' })).toBeSelected();
   expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('10');
-  expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives · 10');
+  expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, 10');
   expect(screen.getByLabelText('Time range')).toBeOnTheScreen();
   for (const r of ['Day', 'Week', 'Month', 'Year']) expect(screen.getByRole('tab', { name: r })).toBeOnTheScreen();
 });

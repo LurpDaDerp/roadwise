@@ -44,6 +44,8 @@ beforeEach(async () => {
     trip(2, 3),
     trip(3, 10, { miles: 8, points_net: 140 }),
     trip(4, 100, { miles: 30, points_net: 90 }),
+    // "Wasn't driving": counted nowhere, drawn nowhere.
+    trip(5, 2, { status: 'not_driving', points_net: null }),
   ]);
   await seedEvents(db, [
     { id: uuid(21), client_trip_id: uuid(1), type: 'hard_brake', tier: 'severe', started_at: NOW - 0.5 * DAY },

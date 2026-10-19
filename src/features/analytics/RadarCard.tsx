@@ -1,18 +1,25 @@
 import { useWindowDimensions, View } from 'react-native';
 import Svg, { Circle, Line, Polygon } from 'react-native-svg';
 
-import { Card, Text, useTheme, withAlpha } from '@/ui';
+import { Card, Text, tokens, useFontScale, useTheme, withAlpha } from '@/ui';
 
 import { analyticsCopy } from './copy';
 import { AXES, type AxisScores } from './model';
+import { sizeAt } from './textSize';
 
 /** Grid rings, as a share of the full score. */
 export const RADAR_RINGS = [0.25, 0.5, 0.75, 1] as const;
-/** The chart never grows past this, so the labels stay near it on a tablet. */
-export const RADAR_MAX = 320;
-/** Room kept outside the hexagon for each axis's name and score. */
-const LABEL_ROOM = 42;
-const LABEL_W = 84;
+/** The hexagon's radius stays within these, so it reads on a small phone and stays near its labels on a big one. */
+export const RADAR_R_MIN = 56;
+export const RADAR_R_MAX = 110;
+/** The axis labels follow Dynamic Type up to this multiple; past it they would crowd the chart. */
+export const RADAR_LABEL_MAX_SCALE = 1.3;
+/** Between a vertex and its label. */
+const LABEL_GAP = 6;
+/** A side label's width ("Acceleration" at 12 pt; longer names shrink to fit). */
+const SIDE_LABEL_W = 72;
+/** The top and bottom labels' width, centred on their vertex. */
+const END_LABEL_W = 120;
 
 export interface Pt {
   x: number;
@@ -35,6 +42,58 @@ export function radarPolygon(scores: readonly (number | null)[], r: number, c: P
     .join(' ');
 }
 
+export interface RadarLabelBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  align: 'left' | 'center' | 'right';
+}
+
+export interface RadarGeometry {
+  width: number;
+  height: number;
+  r: number;
+  c: Pt;
+  /** One box per axis, in `AXES` order, each wholly outside the hexagon. */
+  labels: RadarLabelBox[];
+}
+
+/**
+ * The chart's box for a given width and label text scale. Each axis's name-over-score label sits
+ * outside its vertex: above the top one, below the bottom one, and beside the four side ones
+ * (left-aligned on the right, right-aligned on the left), so no label crosses a ring or the shape.
+ * The radius is what the side labels leave of the width; the height is what the top and bottom
+ * labels need.
+ */
+export function radarGeometry(width: number, labelScale: number, n: number = AXES.length): RadarGeometry {
+  const { caption, subhead } = tokens.type;
+  const labelH = (caption.lineHeight + subhead.lineHeight) * labelScale;
+  const half = width / 2;
+  // The side vertices sit cos 30° × r out from the centre.
+  const reach = Math.cos(Math.PI / 6);
+  const r = Math.max(RADAR_R_MIN, Math.min(RADAR_R_MAX, (half - LABEL_GAP - SIDE_LABEL_W) / reach));
+  const height = Math.ceil(2 * (r + LABEL_GAP + labelH));
+  const c = { x: half, y: height / 2 };
+  const sideW = Math.min(SIDE_LABEL_W, half - LABEL_GAP - reach * r);
+  const labels = Array.from({ length: n }, (_, i): RadarLabelBox => {
+    const p = radarPoint(i, n, r, c);
+    if (Math.abs(p.x - c.x) < 1) {
+      const above = p.y < c.y;
+      return { left: p.x - END_LABEL_W / 2, top: above ? p.y - LABEL_GAP - labelH : p.y + LABEL_GAP, width: END_LABEL_W, height: labelH, align: 'center' };
+    }
+    const right = p.x > c.x;
+    return {
+      left: right ? p.x + LABEL_GAP : p.x - LABEL_GAP - sideW,
+      top: p.y - labelH / 2,
+      width: sideW,
+      height: labelH,
+      align: right ? 'left' : 'right',
+    };
+  });
+  return { width, height, r, c, labels };
+}
+
 const shown = (s: number | null): string => (s === null ? '—' : String(s));
 
 /** The whole radar for a screen reader: the rating, then every axis. */
@@ -51,11 +110,10 @@ export function radarLabel(rating: number | null, scores: AxisScores): string {
  */
 export function RadarCard({ rating, scores }: { rating: number | null; scores: AxisScores }) {
   const t = useTheme();
-  const { width } = useWindowDimensions();
+  const { width: windowWidth } = useWindowDimensions();
+  const labelScale = useFontScale(RADAR_LABEL_MAX_SCALE);
   // The screen gutter and the card's padding on both sides.
-  const size = Math.max(200, Math.min(RADAR_MAX, width - 4 * t.space.lg));
-  const c = { x: size / 2, y: size / 2 };
-  const r = size / 2 - LABEL_ROOM;
+  const { width, height, r, c, labels } = radarGeometry(Math.max(240, windowWidth - 4 * t.space.lg), labelScale);
   const n = AXES.length;
   const values = AXES.map((a) => scores[a.key]);
   const ring = (k: number) =>
@@ -70,9 +128,9 @@ export function RadarCard({ rating, scores }: { rating: number | null; scores: A
         accessible
         accessibilityRole="image"
         accessibilityLabel={radarLabel(rating === null ? null : Math.round(rating), scores)}
-        style={{ width: size, height: size, alignSelf: 'center' }}
+        style={{ width, height, alignSelf: 'center' }}
       >
-        <Svg width={size} height={size}>
+        <Svg width={width} height={height}>
           {RADAR_RINGS.map((k) => (
             <Polygon key={k} points={ring(k)} fill="none" stroke={t.colors.divider} strokeWidth={k === 1 ? 1.5 : 1} />
           ))}
@@ -94,18 +152,18 @@ export function RadarCard({ rating, scores }: { rating: number | null; scores: A
           })}
         </Svg>
         {AXES.map((a, i) => {
-          const along = Math.abs(Math.sin(-Math.PI / 2 + (i * 2 * Math.PI) / n));
-          const p = radarPoint(i, n, r + 14 + 8 * along, c);
+          const box = labels[i]!;
+          const items = box.align === 'left' ? 'flex-start' : box.align === 'right' ? 'flex-end' : 'center';
           return (
             <View
               key={a.key}
               testID={`radar-axis-${a.key}`}
-              style={{ position: 'absolute', width: LABEL_W, left: p.x - LABEL_W / 2, top: p.y - 18, alignItems: 'center' }}
+              style={{ position: 'absolute', left: box.left, top: box.top, width: box.width, height: box.height, alignItems: items, justifyContent: 'center' }}
             >
-              <Text variant="caption" tone="muted" numberOfLines={1} adjustsFontSizeToFit>
+              <Text variant="caption" tone="muted" numberOfLines={1} adjustsFontSizeToFit style={[sizeAt('caption', labelScale), { textAlign: box.align }]}>
                 {a.label}
               </Text>
-              <Text variant="subhead" style={{ fontWeight: '700' }} numberOfLines={1}>
+              <Text variant="subhead" numberOfLines={1} adjustsFontSizeToFit style={[sizeAt('subhead', labelScale), { fontWeight: '700', textAlign: box.align }]}>
                 {shown(scores[a.key])}
               </Text>
             </View>

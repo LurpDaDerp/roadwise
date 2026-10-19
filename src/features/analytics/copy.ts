@@ -45,6 +45,8 @@ export const analyticsCopy = {
   },
   drives: {
     title: 'Drives',
+    /** The header for a screen reader, without the middle dot. */
+    spoken: (n: number) => (n === 0 ? 'Drives, none yet' : `Drives, ${n}`),
     empty: 'No drives yet',
     showMore: 'Show more',
     clean: 'Clean',
