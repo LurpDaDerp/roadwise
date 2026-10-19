@@ -123,8 +123,9 @@ export type HudScreenProps = {
  * - Bottom row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres),
  *   hold-to-end in the middle and the navigation button on the right. End, the navigation button
  *   and the weather banner's ✕ are the only touch targets while moving. The navigation button's
- *   list of apps shows in a panel above them, never a route: on the first tap, or on a long press
- *   to change the saved app. Every other touch only undims.
+ *   list of apps shows in a panel above them, never a route: on a tap while no app is saved, or on
+ *   a long press at any time (to change the saved app, or to pick one). Every other touch only
+ *   undims.
  * - After 10 s without a touch a dark scrim dims everything, never while an alert banner shows; the
  *   halo and the speed stay above it, at reduced strength and still flowing while calm, at full
  *   strength while warning.
@@ -334,7 +335,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           palette={p}
           width={layout.nav.w}
           onPress={() => void nav.press()}
-          onLongPress={savedApp !== null ? () => void nav.change() : undefined}
+          onLongPress={() => void nav.change()}
         />
       </View>
 

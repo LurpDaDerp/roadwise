@@ -5,7 +5,8 @@
 // - Later taps: the saved app opens directly. Gone (uninstalled): the saved choice is cleared and the
 //   list shows again, saying so. It did not open: the list shows, saying so.
 // - A long press (or the screen reader's "Change navigation app") once an app is saved: the same
-//   list, the saved app marked. Choosing one saves it as the new default and opens it.
+//   list, the saved app marked. Choosing one saves it as the new default and opens it. With nothing
+//   saved, a long press is a first tap: the list.
 // - Every open tells the drive host first (`noteLeaving`): leaving RoadWise this way is the one
 //   screen switch that is never phone use. An open that fails takes it back (`cancelLeaving`).
 // - A tap while an open is in flight is ignored (at most 3 s). It works at any speed.

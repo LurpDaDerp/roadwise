@@ -186,14 +186,23 @@ describe('the button', () => {
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 
-  test('no saved app, or disabled: no hold action and no hint', async () => {
-    await render(<NavigationButton {...props} caption={null} appLabel={null} onPress={() => {}} onLongPress={() => {}} />);
+  test('no saved app: the hold still opens the list, with no "change" action or hint (a tap already does)', async () => {
+    const onPress = jest.fn();
+    const onLongPress = jest.fn();
+    await render(<NavigationButton {...props} caption={null} appLabel={null} onPress={onPress} onLongPress={onLongPress} />);
     const first = screen.getByRole('button', { name: 'Choose a navigation app' });
     expect(first.props.accessibilityActions).toBeUndefined();
     expect(first.props.accessibilityHint).toBeUndefined();
-    expect(first.props.onLongPress).toBeUndefined();
+    await fireEvent(first, 'longPress');
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+    expect(onPress).not.toHaveBeenCalled();
+  });
+
+  test('disabled: no hold and no action', async () => {
     await render(<NavigationButton {...props} disabled onPress={() => {}} onLongPress={() => {}} />);
-    expect(screen.getByRole('button', { name: 'Open Waze' }).props.accessibilityActions).toBeUndefined();
+    const button = screen.getByRole('button', { name: 'Open Waze' });
+    expect(button.props.accessibilityActions).toBeUndefined();
+    expect(button.props.onLongPress).toBeUndefined();
   });
 });
 

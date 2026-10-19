@@ -1,9 +1,9 @@
 // The driving screen's navigation button (product spec v3 "Driving screen · Navigation"): a 64-pt
 // round button with the saved app's short name, or "Navigate". Live at any speed. For the first
 // 30 s of a drive (row clock) it wears a static accent ring when an app is saved, so a driver who
-// came from the navigation app goes back through it. Once an app is saved, a long press (500 ms)
-// opens the list again to change it; screen readers get the same as the "Change navigation app"
-// action.
+// came from the navigation app goes back through it. A tap opens the saved app, or the list when
+// none is saved. A long press (500 ms) always opens the list: to change the saved app, or to pick
+// one; screen readers get the change as the "Change navigation app" action once an app is saved.
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { memo } from 'react';
@@ -47,10 +47,11 @@ export const NavigationButton = memo(function NavigationButton({
   /** The slot's width (the screen's layout); the caption shrinks to fit it. */
   width?: number;
   onPress(): void;
-  /** Change the saved app (given only once one is saved). */
+  /** The long press: the list, to change the saved app or, with none saved, to pick one. */
   onLongPress?: () => void;
 }) {
-  const canChange = onLongPress !== undefined && appLabel !== null && !disabled;
+  const canHold = onLongPress !== undefined && !disabled;
+  const canChange = canHold && appLabel !== null;
   const buzz = () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
   return (
     <View style={[styles.slot, { width }]}>
@@ -72,7 +73,7 @@ export const NavigationButton = memo(function NavigationButton({
           onPress();
         }}
         onLongPress={
-          canChange
+          canHold
             ? () => {
                 buzz();
                 onLongPress?.();

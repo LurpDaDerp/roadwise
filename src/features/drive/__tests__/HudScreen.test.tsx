@@ -703,9 +703,25 @@ describe('the navigation button (design §7.4, §8)', () => {
     expect(screen.queryByTestId('nav-picker')).toBeNull();
   });
 
-  test('no saved app: no long-press action (the first tap picks one)', async () => {
+  test('no saved app: a long press opens the list too (no "change" action); choosing saves it, and the next tap opens it directly', async () => {
     await renderHud({ speedMph: 60 });
-    expect(screen.getByTestId('hud-nav').props.accessibilityActions).toBeUndefined();
+    const button = screen.getByRole('button', { name: 'Choose a navigation app' });
+    expect(button.props.accessibilityActions).toBeUndefined();
+    await fireEvent(button, 'longPress');
+    await act(async () => {});
+    expect(screen.getByText('Select default navigation app')).toBeOnTheScreen();
+    expect(screen.getByTestId('nav-picker-row-waze')).toHaveProp('accessibilityState', { selected: false });
+    expect(Linking.openURL).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByTestId('nav-picker-row-waze'));
+    await act(async () => {});
+    expect(Linking.openURL).toHaveBeenCalledWith('waze://');
+    expect(mockDb.execute).toHaveBeenCalledWith(expect.stringContaining('INSERT'), ['navigation.app', JSON.stringify('waze')]);
+    expect(screen.queryByTestId('nav-picker')).toBeNull();
+    mockNavApp = 'waze';
+    await fireEvent.press(screen.getByRole('button', { name: 'Open Waze' }));
+    await act(async () => {});
+    expect(Linking.openURL).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('nav-picker')).toBeNull();
   });
 
   test('disabled while the drive is saving', async () => {
