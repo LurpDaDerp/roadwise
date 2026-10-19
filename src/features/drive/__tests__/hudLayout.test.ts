@@ -2,7 +2,7 @@
 // window, nothing overlapping, the numerals large enough.
 import { DIGIT_ADVANCE_EM, DIGIT_HEIGHT_EM, haloGeometry, numeralLineHeight, SPEED_UNIT_GAP_PT, unitLineHeight, unitTop } from '@/ui/drive';
 
-import { HUD_NAV_H_PT, HUD_NAV_W_PT, hudLayout, type HudLayout, type HudLayoutInput, type Rect } from '../hudLayout';
+import { HUD_COMPACT_NAV_H_PT, HUD_NAV_H_PT, HUD_NAV_W_PT, hudLayout, type HudLayout, type HudLayoutInput, type Rect } from '../hudLayout';
 
 const ZERO = { top: 0, bottom: 0, left: 0, right: 0 };
 const L = (o: Partial<HudLayoutInput> & { width: number; height: number }): HudLayout => hudLayout({ insets: ZERO, fontScale: 1, chip: false, units: 'mi', ...o });
@@ -20,14 +20,14 @@ function hitsCircle(r: Rect, halo: Rect): boolean {
 }
 
 describe('worked phones (§3.1, §3.2)', () => {
-  test('iPhone SE 375 × 667 (status bar 20): halo 343 as near the centre as fits, the points in the band line, a 96 pt top row, the R2-1 at 77 × 96', () => {
+  test('iPhone SE 375 × 667 (status bar 20): halo 339 as near the centre as fits, the points in the band line, a 112 pt top row, the R2-1 at 90 × 112', () => {
     const l = L({ width: 375, height: 667, insets: { ...ZERO, top: 20 } });
     expect(l).toMatchObject({ orientation: 'portrait', compact: false });
-    expect(l.halo.w).toBe(343);
+    expect(l.halo.w).toBe(339);
     expect(l.points).toBe('line');
-    expect(l.row).toMatchObject({ y: 32, h: 96 });
-    expect([l.sign.w, l.sign.h]).toEqual([77, 96]);
-    expect(l.numeralPt2).toBe(157);
+    expect(l.row).toMatchObject({ y: 32, h: 112 });
+    expect([l.sign.w, l.sign.h]).toEqual([90, 112]);
+    expect(l.numeralPt2).toBe(156);
   });
 
   test('top to bottom: the top row (sign left, navigation right), the band, the halo, End across the foot', () => {
@@ -42,12 +42,12 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.end.y).toBeGreaterThanOrEqual(l.halo.y + l.halo.h);
   });
 
-  test('360 × 640 Android (24 / 48): halo 276, the points in the band line, a 96 pt top row', () => {
+  test('360 × 640 Android (24 / 48): halo 260, the points in the band line, a 112 pt top row', () => {
     const l = L({ width: 360, height: 640, insets: { ...ZERO, top: 24, bottom: 48 } });
-    expect(l.halo.w).toBe(276);
+    expect(l.halo.w).toBe(260);
     expect(l.points).toBe('line');
-    expect(l.row.h).toBe(96);
-    expect(l.numeralPt2).toBe(126);
+    expect(l.row.h).toBe(112);
+    expect(l.numeralPt2).toBe(118);
   });
 
   test('iPhone 13 mini, 15 and 15 Pro Max: halos 343, 361 and 398', () => {
@@ -66,16 +66,16 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.sign.w).toBeLessThanOrEqual(248 / 3);
   });
 
-  test('320 × 568: halo 256, a 96 pt top row and the R2-1 at 77 × 96', () => {
+  test('320 × 568: halo 240, a 112 pt top row and the R2-1 at 90 × 112', () => {
     const l = L({ width: 320, height: 568, insets: { ...ZERO, top: 20 } });
-    expect(l.halo.w).toBe(256);
-    expect(l.row.h).toBe(96);
-    expect([l.sign.w, l.sign.h]).toEqual([77, 96]);
+    expect(l.halo.w).toBe(240);
+    expect(l.row.h).toBe(112);
+    expect([l.sign.w, l.sign.h]).toEqual([90, 112]);
   });
 
   test('km: the round sign at most 116 pt, fitted to its row', () => {
     const l = L({ width: 375, height: 667, units: 'km' });
-    expect([l.sign.w, l.sign.h]).toEqual([105, 105]);
+    expect([l.sign.w, l.sign.h]).toEqual([112, 112]);
     const big = L({ width: 430, height: 932, units: 'km' });
     expect([big.sign.w, big.sign.h]).toEqual([116, 116]);
     const small = L({ width: 320, height: 568, units: 'km' });
@@ -171,7 +171,8 @@ describe('invariants across windows', () => {
       // the nav rect holds the 64 pt circle and its caption, within the row
       expect(l.nav.w).toBeGreaterThanOrEqual(64);
       expect(l.nav.w).toBeLessThanOrEqual(HUD_NAV_W_PT);
-      expect(l.nav.h).toBe(HUD_NAV_H_PT);
+      // the 80 pt circle's slot, or the 64 pt one's in a compact window or a short landscape row
+      expect(l.compact ? [HUD_COMPACT_NAV_H_PT] : l.orientation === 'portrait' ? [HUD_NAV_H_PT] : [HUD_NAV_H_PT, HUD_COMPACT_NAV_H_PT]).toContain(l.nav.h);
       expect(l.nav.y).toBeGreaterThanOrEqual(l.row.y - 1e-9);
       expect(l.nav.y + l.nav.h).toBeLessThanOrEqual(l.row.y + l.row.h + 1e-9);
     }

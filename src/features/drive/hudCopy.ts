@@ -27,8 +27,7 @@ export const hudCopy = {
   } satisfies Record<EventType, string>,
   points: {
     unit: 'pts',
-    since: 'since last stop',
-    label: (total: string, change: string) => `${total} points, ${change} since your last stop`,
+    label: (total: string) => `${total} points`,
   },
   banner: {
     title: 'Drive in progress',

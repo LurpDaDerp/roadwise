@@ -10,6 +10,8 @@ import { NAV_APP_KEY, readNavApp, writeNavApp } from '@/features/navigation/pref
 import { useNavigationButton } from '@/features/navigation/useNavigationButton';
 import { HUD } from '@/ui/drive';
 
+const COLORS = { paper: '#FFFFFF', ink: '#111113', accent: '#1F5AD6' };
+
 jest.mock('expo-haptics', () => ({ impactAsync: jest.fn(async () => {}), ImpactFeedbackStyle: { Light: 'light' } }));
 
 let db: Db;
@@ -166,7 +168,7 @@ describe('changing the saved app (the long press)', () => {
 });
 
 describe('the button', () => {
-  const props = { caption: 'Waze', appLabel: 'Waze', highlight: false, disabled: false, palette: HUD.day };
+  const props = { caption: 'Waze', appLabel: 'Waze', highlight: false, disabled: false, palette: HUD.day, colors: COLORS };
 
   test('a tap opens; a 500 ms hold changes the app; the screen reader gets a "Change navigation app" action and a hint', async () => {
     const onPress = jest.fn();
@@ -198,6 +200,13 @@ describe('the button', () => {
     expect(onPress).not.toHaveBeenCalled();
   });
 
+  test('an 80 pt paper circle with an ink glyph; 64 pt in a compact slot', async () => {
+    await render(<NavigationButton {...props} onPress={() => {}} />);
+    expect(screen.getByTestId('hud-nav')).toHaveStyle({ width: 80, height: 80, backgroundColor: COLORS.paper });
+    await render(<NavigationButton {...props} height={88} onPress={() => {}} />);
+    expect(screen.getByTestId('hud-nav')).toHaveStyle({ width: 64, height: 64 });
+  });
+
   test('disabled: no hold and no action', async () => {
     await render(<NavigationButton {...props} disabled onPress={() => {}} onLongPress={() => {}} />);
     const button = screen.getByRole('button', { name: 'Open Waze' });
@@ -218,11 +227,11 @@ describe('the warm-up highlight', () => {
   });
 
   test('the ring renders only when asked, with the caption and the spoken label', async () => {
-    await render(<NavigationButton caption="Waze" appLabel="Waze" highlight disabled={false} palette={HUD.day} onPress={() => {}} />);
-    expect(screen.getByTestId('hud-nav-highlight')).toBeOnTheScreen();
+    await render(<NavigationButton caption="Waze" appLabel="Waze" highlight disabled={false} palette={HUD.day} colors={COLORS} onPress={() => {}} />);
+    expect(screen.getByTestId('hud-nav-highlight')).toHaveStyle({ borderColor: COLORS.accent });
     expect(screen.getByRole('button', { name: 'Open Waze' })).toBeOnTheScreen();
     expect(screen.getByText('Waze')).toBeOnTheScreen();
-    await render(<NavigationButton caption={null} appLabel={null} highlight={false} disabled={false} palette={HUD.day} onPress={() => {}} />);
+    await render(<NavigationButton caption={null} appLabel={null} highlight={false} disabled={false} palette={HUD.day} colors={COLORS} onPress={() => {}} />);
     expect(screen.queryByTestId('hud-nav-highlight')).toBeNull();
   });
 });

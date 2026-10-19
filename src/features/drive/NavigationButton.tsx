@@ -1,6 +1,7 @@
-// The driving screen's navigation button (product spec v3 "Driving screen · Navigation"): a 64-pt
-// round button with the saved app's short name, or "Navigate". Live at any speed. For the first
-// 30 s of a drive (row clock) it wears a static accent ring when an app is saved, so a driver who
+// The driving screen's navigation button (product spec v3 "Driving screen · Navigation"): an 80-pt
+// round paper button (64 pt at least in a narrow slot) with the saved app's short name, or
+// "Navigate". Live at any speed. For the first 30 s of a drive (row clock) it wears a static ring in
+// the sky's accent when an app is saved, so a driver who
 // came from the navigation app goes back through it. A tap opens the saved app, or the list when
 // none is saved. A long press (500 ms) always opens the list: to change the saved app, or to pick
 // one; screen readers get the change as the "Change navigation app" action once an app is saved.
@@ -13,11 +14,16 @@ import { NO_EVENTS_FIRST_S } from '@scoring';
 
 import { navCopy } from '@/features/navigation/copy';
 import { fontFamilies } from '@/ui/fonts';
-import { HUD_MIN_TARGET_PT, type HudPalette } from '@/ui/drive';
+import type { HudPalette } from '@/ui/drive';
+
+import type { HudButtonColors } from './hudButtons';
+import { HUD_NAV_BUTTON_PT, HUD_NAV_H_PT, HUD_NAV_W_PT } from './hudLayout';
 
 /** The highlight shows while the drive is younger than this on the row clock. */
 export const NAV_HIGHLIGHT_MS = NO_EVENTS_FIRST_S * 1000;
 const RING_PT = 4;
+/** The caption's line and the gap above it. */
+const CAPTION_PT = 24;
 /** The long press that reopens the list (the platform's standard hold). */
 export const NAV_LONG_PRESS_MS = 500;
 
@@ -33,7 +39,9 @@ export const NavigationButton = memo(function NavigationButton({
   highlight,
   disabled,
   palette,
-  width = 96,
+  colors,
+  width = HUD_NAV_W_PT,
+  height = HUD_NAV_H_PT,
   onPress,
   onLongPress,
 }: {
@@ -44,14 +52,19 @@ export const NavigationButton = memo(function NavigationButton({
   highlight: boolean;
   disabled: boolean;
   palette: HudPalette;
+  /** The button's paper, ink and accent (the app's, following the sky). */
+  colors: HudButtonColors;
   /** The slot's width (the screen's layout); the caption shrinks to fit it. */
   width?: number;
+  /** The slot's height: the circle is what it leaves above the caption, at most 80 pt. */
+  height?: number;
   onPress(): void;
   /** The long press: the list, to change the saved app or, with none saved, to pick one. */
   onLongPress?: () => void;
 }) {
   const canHold = onLongPress !== undefined && !disabled;
   const canChange = canHold && appLabel !== null;
+  const d = Math.min(HUD_NAV_BUTTON_PT, width, height - CAPTION_PT);
   const buzz = () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
   return (
     <View style={[styles.slot, { width }]}>
@@ -82,11 +95,11 @@ export const NavigationButton = memo(function NavigationButton({
         }
         style={({ pressed }) => [
           styles.button,
-          { backgroundColor: palette.chrome, borderColor: palette.chromeEdge, opacity: disabled ? 0.5 : pressed ? 0.8 : 1 },
+          { width: d, height: d, borderRadius: d / 2, backgroundColor: colors.paper, opacity: disabled ? 0.5 : pressed ? 0.8 : 1 },
         ]}
       >
-        <Ionicons name="navigate" size={28} color={palette.ink} />
-        {highlight ? <View testID="hud-nav-highlight" pointerEvents="none" style={[styles.ring, { borderColor: palette.ink }]} /> : null}
+        <Ionicons name="navigate" size={Math.round(d * 0.42)} color={colors.ink} />
+        {highlight ? <View testID="hud-nav-highlight" pointerEvents="none" style={[styles.ring, { borderRadius: (d + 2 * RING_PT + 4) / 2, borderColor: colors.accent }]} /> : null}
       </Pressable>
       <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false} style={[styles.caption, { color: palette.inkMuted, maxWidth: width }]}>
         {caption ?? navCopy.button}
@@ -97,21 +110,13 @@ export const NavigationButton = memo(function NavigationButton({
 
 const styles = StyleSheet.create({
   slot: { alignItems: 'center', gap: 6 },
-  button: {
-    width: HUD_MIN_TARGET_PT,
-    height: HUD_MIN_TARGET_PT,
-    borderRadius: HUD_MIN_TARGET_PT / 2,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  button: { alignItems: 'center', justifyContent: 'center' },
   ring: {
     position: 'absolute',
     top: -RING_PT - 2,
     left: -RING_PT - 2,
     right: -RING_PT - 2,
     bottom: -RING_PT - 2,
-    borderRadius: (HUD_MIN_TARGET_PT + 2 * RING_PT + 4) / 2,
     borderWidth: RING_PT,
   },
   caption: { fontFamily: fontFamilies.label, fontSize: 15, lineHeight: 18 },

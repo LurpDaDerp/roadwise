@@ -217,3 +217,8 @@ export function useTheme(): Theme {
   if (!t) throw new Error('useTheme outside ThemeProvider');
   return t;
 }
+
+/** The theme, or null outside a ThemeProvider (the driving screen renders with or without one). */
+export function useOptionalTheme(): Theme | null {
+  return useContext(Ctx);
+}

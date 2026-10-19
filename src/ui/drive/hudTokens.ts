@@ -35,7 +35,7 @@ export type HudPalette = {
   haloInk: string;
   /** The unit label inside the halo. */
   haloInkMuted: string;
-  /** Points gained since the last stop. */
+  /** A good state: the DashPal chip's connected dot. */
   gain: string;
   /** The End swipe's capsule, and quiet edges (the navigation list's panel). */
   chrome: string;

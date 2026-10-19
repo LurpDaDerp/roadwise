@@ -15,7 +15,7 @@ import type { DangerKind } from '@/features/weather/danger';
 import { sunIsDown } from '@/lib/time';
 import { fontFamilies } from '@/ui/fonts';
 import { SwipeButton } from '@/ui';
-import { useOsReduceMotion } from '@/ui/theme';
+import { useOptionalTheme, useOsReduceMotion } from '@/ui/theme';
 import {
   DIM_AFTER_MS,
   DIM_SCRIM_OPACITY,
@@ -32,6 +32,7 @@ import {
 } from '@/ui/drive';
 
 import { EventBanner, useAlertFlash } from './EventBanner';
+import { hudButtonColors } from './hudButtons';
 import { hudCopy } from './hudCopy';
 import { hudLayout, type Rect } from './hudLayout';
 import { navHighlight, NavigationButton } from './NavigationButton';
@@ -122,9 +123,10 @@ export type HudScreenProps = {
  *   dangerous-weather banner (its ✕ live at any speed; hidden for the rest of the drive once
  *   dismissed), or the points when they have no line of their own. Precedence: DashPal banner, the
  *   phone's event, a failed end, weather, the points. With a DashPal paired, a small static chip top right.
- * - Stopped only: the points total and the change since the last stop, under the halo when there is
+ * - Stopped only: the points total ("pts"), under the halo when there is
  *   room (so the halo never moves), else in the band.
  * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive.
+ *   End and the navigation button wear the app's paper, ink and sky accent (`hudButtonColors`).
  *   End, the navigation button and the weather banner's ✕ are the only touch targets while moving.
  *   Every other touch only undims.
  * - After 10 s without a touch a dark scrim dims everything, never while an alert banner shows; the
@@ -145,6 +147,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const reduceMotion = useOsReduceMotion();
   const night = useHudNight();
   const p = hudPalette(night);
+  const b = hudButtonColors(useOptionalTheme(), p, night);
   const units = useHudUnits();
 
   const alert = useAlertFlash(live.lastAlert, live.rowTs);
@@ -251,7 +254,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const numeralPt = speedDigits(speed) >= 3 ? layout.numeralPt3 : layout.numeralPt2;
   const bannerUp = dashpal !== null || alert !== null;
   const showPoints = live.stopped && live.points !== null;
-  const pointsView = showPoints ? <StoppedPoints total={live.points!.total} change={live.points!.sinceLastStop} palette={p} /> : null;
+  const pointsView = showPoints ? <StoppedPoints total={live.points!.total} palette={p} /> : null;
   // A weather alert the driver hid (with its ✕, at any speed) stays hidden for the rest of this drive.
   const [hiddenWeather, setHiddenWeather] = useState<{ trip: string | null; kinds: readonly DangerKind[] }>({ trip: null, kinds: [] });
   const weather = live.weatherAlert;
@@ -319,12 +322,12 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             accessibilityLabel={hudCopy.endLabel}
             accessibilityHint={hudCopy.endHint}
             icon="stop"
-            colors={{ track: p.chrome, fill: p.haloCalm, knob: p.ink, knobInk: p.chrome, hint: p.inkMuted }}
+            colors={{ track: b.paper, fill: b.accent, knob: b.ink, knobInk: b.paper, hint: b.ink }}
             height={layout.end.h}
             busy={busy}
             onSwipe={() => void onEnd()}
             label={
-              <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit style={[styles.endLabel, { color: p.ink }]}>
+              <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit style={[styles.endLabel, { color: b.ink }]}>
                 {busy ? hudCopy.ending : hudCopy.end}
               </Text>
             }
@@ -338,7 +341,9 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           highlight={navLit}
           disabled={busy || live.status !== 'recording'}
           palette={p}
+          colors={b}
           width={layout.nav.w}
+          height={layout.nav.h}
           onPress={() => void nav.press()}
           onLongPress={() => void nav.change()}
         />

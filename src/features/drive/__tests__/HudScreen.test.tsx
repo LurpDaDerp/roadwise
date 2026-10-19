@@ -403,18 +403,12 @@ describe('points', () => {
     expect(screen.queryByTestId('hud-points')).toBeNull();
   });
 
-  test('when stopped: the total and a green gain since the last stop', async () => {
+  test('when stopped: the total and "pts", nothing about the change since the last stop', async () => {
     const h = await renderHud();
     await h.update({ stopped: true, speedMph: 0, points: { total: 1234, sinceLastStop: 12 } });
-    expect(screen.getByTestId('hud-points')).toHaveTextContent(/1,234/);
-    expect(screen.getByTestId('hud-points-change')).toHaveTextContent('+12');
-    expect(screen.getByTestId('hud-points-change')).toHaveStyle({ color: p.gain });
-  });
-
-  test('a loss shows red with a true minus sign', async () => {
-    await renderHud({ stopped: true, speedMph: 0, points: { total: 980, sinceLastStop: -8 } });
-    expect(screen.getByTestId('hud-points-change')).toHaveTextContent('−8');
-    expect(screen.getByTestId('hud-points-change')).toHaveStyle({ color: p.severe });
+    expect(screen.getByTestId('hud-points')).toHaveTextContent('1,234 pts');
+    expect(screen.getByLabelText('1,234 points')).toBeOnTheScreen();
+    expect(screen.queryByText(/\+12/)).toBeNull();
   });
 
   test('pulling away from a stop with the speed unknown hides the points', async () => {
