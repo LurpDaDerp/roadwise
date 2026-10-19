@@ -17,7 +17,7 @@ import { Pill } from '../primitives/Pill';
 import { PointsCounter } from '../primitives/PointsCounter';
 import { ProgressBar } from '../primitives/ProgressBar';
 import { ProgressRing } from '../primitives/ProgressRing';
-import { Screen } from '../primitives/Screen';
+import { Screen, ScreenTitle } from '../primitives/Screen';
 import { SectionHeader } from '../primitives/SectionHeader';
 import { SegmentedControl } from '../primitives/SegmentedControl';
 import { Sheet } from '../primitives/Sheet';
@@ -332,19 +332,27 @@ function Body() {
 const PHASES: SkyPhase[] = ['night', 'dawn', 'day', 'dusk'];
 const KINDS: WeatherKind[] = ['clear', 'cloudy', 'fog', 'rain', 'snow', 'storm'];
 
-/** A window onto the page sky and a scene card, for the mood picked above. */
+/**
+ * A window onto the top of a tab screen for the mood picked above: the page sky with its weather,
+ * the title and a line in the white sky ink, a paper pill, and a scene card.
+ */
 function SkyPreview() {
   const t = useTheme();
   return (
-    <View style={{ height: 260, borderRadius: t.radius.card, borderCurve: 'continuous', overflow: 'hidden', borderWidth: 1, borderColor: t.colors.border }}>
-      <SkyBackdrop height={260} />
+    <View style={{ height: 320, borderRadius: t.radius.card, borderCurve: 'continuous', overflow: 'hidden', borderWidth: 1, borderColor: t.colors.border }}>
+      <SkyBackdrop height={320} front={false} />
       <View style={{ padding: t.space.lg, gap: t.space.md }}>
-        <Text variant="title1">Hey, maya</Text>
+        <ScreenTitle onSky trailing={<Avatar username="maya" size="md" />}>
+          Hey, maya
+        </ScreenTitle>
+        <Text variant="subhead" tone="onSkyMuted">
+          3-day streak. Drive today to keep it.
+        </Text>
         <Card variant="hero" style={{ minHeight: 150 }}>
           <Text variant="label" tone="muted">
-            Safety Rating
+            Level
           </Text>
-          <Text variant="display">92</Text>
+          <Text variant="display">7</Text>
         </Card>
       </View>
     </View>

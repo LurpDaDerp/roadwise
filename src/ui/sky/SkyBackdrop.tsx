@@ -1,4 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
@@ -13,29 +14,62 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
-import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, Ellipse, RadialGradient, Rect, Stop } from 'react-native-svg';
 
+import { relativeLuminance } from '../contrast';
 import { useTheme } from '../theme';
-import { parseColor } from './color';
+import { opaque, parseColor, withAlpha } from './color';
 import type { SkyMood } from './palette';
 import type { WeatherIntensity, WeatherKind } from './weather';
 
+/** How much of the window the painted sky covers, from the top, before it has faded into the page. */
+export const SKY_BAND = 0.45;
 /**
- * The page's sky, drawn behind the tab screens: the hour's tint fading into the page ground, a
- * sun or moon halo in the top corner, and a light ambient layer for the weather (falling rain or
- * snow, drifting cloud or fog, a slow storm glow, twinkling stars on a clear night).
+ * Where the backdrop's colours sit down the band: the three text-safe stops, the horizon band, then
+ * the page ground. Titles and the greeting sit in the top half, where every stop reads white at AA.
+ */
+export const SKY_LOCATIONS = [0, 0.3, 0.58, 0.8, 1] as const;
+/** A storm's lightning wash: a long quiet gap, then a soft rise and a slower fall. Never a flash. */
+export const STORM_WASH = { gapMs: 8000, upMs: 700, downMs: 1400 } as const;
+
+/**
+ * The page's sky, drawn behind the tab screens the way the iOS Weather app paints its backgrounds:
+ * the hour's sky across the top of the window (deep azure by day, indigo to rose at dawn, deep blue
+ * to magenta at dusk, navy with stars at night, slate under cloud) fading through a lighter band
+ * near the horizon into the page ground, a soft sun or moon glow in the top-right corner, and a
+ * weather layer (soft drifting clouds, low fog bands, thin slanted rain, swaying snow, a storm's
+ * slow lightning wash, twinkling stars).
  *
  * Rules it keeps:
  * - Behind everything, never over content; nothing in it is touchable or spoken.
- * - Text keeps AA on the tint (the palette repairs it). Particles are thin, translucent, and
- *   thinned out over the left side where the screen titles sit.
+ * - Text drawn straight on it uses the white `onSky` inks, which read at AA on every stop and
+ *   through every cloud or haze that can drift over it (the palette repairs the stops for that).
+ *   Particles are thinned over the left side, where titles sit.
  * - Never on the driving screen: the drive route has its own HUD and draws none of this.
- * - It runs only while its screen is in front (`active`); under Reduce Motion it holds still.
+ * - The weather layer runs only while its screen is in front (`active`); under Reduce Motion it
+ *   holds still. The status bar turns light over the sky while the sky is in front (`front`,
+ *   default `active`) and falls back to the scheme's when it is not.
  * - Every loop runs on the UI thread; nothing re-renders React per frame.
  */
-export function SkyBackdrop({ height = 360, active = true }: { height?: number; active?: boolean }) {
+export function SkyBackdrop({
+  height,
+  active = true,
+  front,
+}: {
+  /** The painted band's height. Defaults to {@link SKY_BAND} of the window. */
+  height?: number;
+  /** The weather layer moves (its screen is in front and no drive records). */
+  active?: boolean;
+  /** The sky is the screen in front, so the status bar sits on it. Defaults to `active`; false in a preview. */
+  front?: boolean;
+}) {
   const t = useTheme();
+  const { height: windowHeight } = useWindowDimensions();
+  const h = height ?? Math.round(windowHeight * SKY_BAND);
   const s = t.sky;
+  const onTop = front ?? active;
+  const lightBar = relativeLuminance(opaque(s.backdrop[0])) < 0.18;
   return (
     <View
       testID="sky-backdrop"
@@ -45,41 +79,54 @@ export function SkyBackdrop({ height = 360, active = true }: { height?: number; 
       style={[StyleSheet.absoluteFill, { backgroundColor: t.colors.bg }]}
     >
       <LinearGradient
-        colors={[s.top, s.horizon, t.colors.bg]}
-        locations={[0, 0.5, 1]}
-        style={{ position: 'absolute', top: 0, left: 0, right: 0, height }}
+        colors={[s.backdrop[0], s.backdrop[1], s.backdrop[2], s.horizon, t.colors.bg]}
+        locations={SKY_LOCATIONS}
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, height: h }}
       />
-      <Halo />
-      {t.mood && active ? <Ambient mood={t.mood} height={height} still={t.reduceMotion} /> : null}
+      {parseColor(s.cover).a > 0 ? (
+        <LinearGradient
+          colors={[s.cover, withAlpha(s.cover, 0)]}
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, height: h * 0.75 }}
+        />
+      ) : null}
+      <Glow />
+      {t.mood && active ? <Ambient mood={t.mood} height={h} still={t.reduceMotion} /> : null}
+      {onTop ? <StatusBar style={lightBar ? 'light' : 'dark'} animated /> : null}
     </View>
   );
 }
 
-/** The sun or moon: a soft halo and a disc low in the top-right corner, under the avatar. */
-function Halo() {
+/** The sun's soft glow (or the moon and its glow), in the top-right corner behind the avatar. */
+function Glow() {
   const t = useTheme();
   const { width } = useWindowDimensions();
-  const size = Math.min(320, width * 0.8);
+  const insets = useSafeAreaInsets();
   const halo = parseColor(t.sky.halo);
   const disc = parseColor(t.sky.disc);
-  const haloHex = `rgb(${halo.r}, ${halo.g}, ${halo.b})`;
-  const discHex = `rgb(${disc.r}, ${disc.g}, ${disc.b})`;
+  if (halo.a <= 0 && disc.a <= 0) return null;
+  const size = Math.min(440, width * 1.1);
+  const haloRgb = `rgb(${halo.r}, ${halo.g}, ${halo.b})`;
+  const discRgb = `rgb(${disc.r}, ${disc.g}, ${disc.b})`;
   return (
-    <Svg width={size} height={size} style={{ position: 'absolute', top: -size * 0.42, right: -size * 0.32 }}>
+    <Svg
+      width={size}
+      height={size}
+      style={{ position: 'absolute', left: width - 56 - size / 2, top: insets.top + 34 - size / 2 }}
+    >
       <Defs>
         <RadialGradient id="sky-halo" cx="50%" cy="50%" r="50%">
-          <Stop offset="0" stopColor={haloHex} stopOpacity={halo.a} />
-          <Stop offset="0.35" stopColor={haloHex} stopOpacity={halo.a * 0.45} />
-          <Stop offset="1" stopColor={haloHex} stopOpacity={0} />
+          <Stop offset="0" stopColor={haloRgb} stopOpacity={halo.a} />
+          <Stop offset="0.4" stopColor={haloRgb} stopOpacity={halo.a * 0.45} />
+          <Stop offset="1" stopColor={haloRgb} stopOpacity={0} />
         </RadialGradient>
-        <RadialGradient id="sky-disc" cx="50%" cy="50%" r="50%">
-          <Stop offset="0" stopColor={discHex} stopOpacity={disc.a} />
-          <Stop offset="0.16" stopColor={discHex} stopOpacity={disc.a} />
-          <Stop offset="0.2" stopColor={discHex} stopOpacity={0} />
+        <RadialGradient id="sky-moon" cx="50%" cy="50%" r="50%">
+          <Stop offset="0" stopColor={discRgb} stopOpacity={disc.a} />
+          <Stop offset="0.07" stopColor={discRgb} stopOpacity={disc.a} />
+          <Stop offset="0.095" stopColor={discRgb} stopOpacity={0} />
         </RadialGradient>
       </Defs>
-      <Rect x="0" y="0" width={size} height={size} fill="url(#sky-halo)" />
-      <Rect x="0" y="0" width={size} height={size} fill="url(#sky-disc)" />
+      {halo.a > 0 ? <Rect x="0" y="0" width={size} height={size} fill="url(#sky-halo)" /> : null}
+      {disc.a > 0 ? <Rect x="0" y="0" width={size} height={size} fill="url(#sky-moon)" /> : null}
     </Svg>
   );
 }
@@ -94,17 +141,32 @@ function seeded(seed: number) {
   };
 }
 
-const COUNT: Record<WeatherKind, Record<WeatherIntensity, number>> = {
+type Counts = Record<WeatherIntensity, number>;
+
+/** Cloud puffs (fog: haze bands) per kind; none under a clear sky. */
+const PUFFS: Record<WeatherKind, Counts> = {
   clear: { light: 0, moderate: 0, heavy: 0 },
-  cloudy: { light: 2, moderate: 3, heavy: 3 },
-  fog: { light: 3, moderate: 3, heavy: 4 },
-  rain: { light: 8, moderate: 13, heavy: 18 },
-  snow: { light: 10, moderate: 16, heavy: 22 },
-  storm: { light: 14, moderate: 16, heavy: 20 },
+  cloudy: { light: 3, moderate: 4, heavy: 5 },
+  fog: { light: 3, moderate: 4, heavy: 5 },
+  rain: { light: 2, moderate: 3, heavy: 3 },
+  snow: { light: 2, moderate: 2, heavy: 3 },
+  storm: { light: 3, moderate: 3, heavy: 4 },
 };
 
+/** Rain streaks or snowflakes per kind. */
+const FALLING: Record<WeatherKind, Counts> = {
+  clear: { light: 0, moderate: 0, heavy: 0 },
+  cloudy: { light: 0, moderate: 0, heavy: 0 },
+  fog: { light: 0, moderate: 0, heavy: 0 },
+  rain: { light: 24, moderate: 36, heavy: 52 },
+  snow: { light: 16, moderate: 26, heavy: 36 },
+  storm: { light: 30, moderate: 40, heavy: 52 },
+};
+
+const STARS = 44;
+
 /** Particles thin out toward the left, where titles and greetings sit. */
-const fadeLeft = (x: number, width: number) => (x < width * 0.45 ? 0.35 + (0.65 * x) / (width * 0.45) : 1);
+const fadeLeft = (x: number, width: number) => (x < width * 0.45 ? 0.5 + (0.5 * Math.max(0, x)) / (width * 0.45) : 1);
 
 function Ambient({ mood, height, still }: { mood: SkyMood; height: number; still: boolean }) {
   const { kind, intensity } = mood.weather;
@@ -117,17 +179,19 @@ function Ambient({ mood, height, still }: { mood: SkyMood; height: number; still
       testID="sky-ambient"
       entering={FadeIn.duration(1600)}
       exiting={FadeOut.duration(1200)}
-      style={[StyleSheet.absoluteFill, { height }]}
+      style={{ position: 'absolute', top: 0, left: 0, right: 0, height, overflow: 'hidden' }}
     >
       {stars ? <Stars height={height} still={still} /> : null}
-      {kind === 'rain' || kind === 'storm' ? <Rain count={COUNT[kind][intensity]} height={height} still={still} /> : null}
-      {kind === 'storm' ? <StormGlow height={height} still={still} /> : null}
-      {kind === 'snow' ? <Snow count={COUNT.snow[intensity]} height={height} still={still} /> : null}
-      {kind === 'cloudy' || kind === 'fog' ? <Drift fog={kind === 'fog'} count={COUNT[kind][intensity]} height={height} still={still} /> : null}
+      {kind === 'fog' ? <Fog count={PUFFS.fog[intensity]} height={height} still={still} /> : null}
+      {kind !== 'fog' && PUFFS[kind][intensity] > 0 ? <Clouds count={PUFFS[kind][intensity]} height={height} still={still} /> : null}
+      {kind === 'rain' || kind === 'storm' ? <Rain count={FALLING[kind][intensity]} height={height} still={still} /> : null}
+      {kind === 'snow' ? <Snow count={FALLING.snow[intensity]} height={height} still={still} /> : null}
+      {kind === 'storm' ? <StormWash height={height} still={still} /> : null}
     </Animated.View>
   );
 }
 
+/** A looping shared value; under Reduce Motion it holds at 0.5 and no animation starts. */
 function useLoop(still: boolean, start: (v: { value: number }) => void, deps: readonly unknown[]) {
   const v = useSharedValue(0);
   useEffect(() => {
@@ -143,16 +207,141 @@ function useLoop(still: boolean, start: (v: { value: number }) => void, deps: re
   return v;
 }
 
+/** Soft volumetric clouds: puffs of radial-gradient lobes in two layers drifting at their own pace. */
+function Clouds({ count, height, still }: { count: number; height: number; still: boolean }) {
+  const { width } = useWindowDimensions();
+  const puffs = useMemo(() => {
+    const rnd = seeded(113 + count);
+    return Array.from({ length: count }, (_, i) => {
+      const near = i % 2 === 1;
+      const w = width * (near ? 0.75 + rnd() * 0.35 : 0.5 + rnd() * 0.25);
+      return {
+        x: -width * 0.25 + rnd() * width * 0.95,
+        y: near ? height * (0.12 + rnd() * 0.3) : rnd() * height * 0.25,
+        w,
+        h: w * 0.45,
+        ms: near ? 45_000 + rnd() * 15_000 : 70_000 + rnd() * 20_000,
+        travel: near ? 40 + rnd() * 25 : 18 + rnd() * 12,
+        depth: near ? 1 : 0.7,
+      };
+    });
+  }, [count, width, height]);
+  return (
+    <>
+      {puffs.map((p, i) => (
+        <Puff key={i} id={i} {...p} still={still} width={width} />
+      ))}
+    </>
+  );
+}
+
+function Puff({
+  id,
+  x,
+  y,
+  w,
+  h,
+  ms,
+  travel,
+  depth,
+  still,
+  width,
+}: {
+  id: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  ms: number;
+  travel: number;
+  depth: number;
+  still: boolean;
+  width: number;
+}) {
+  const t = useTheme();
+  const c = parseColor(t.sky.cloud);
+  const rgb = `rgb(${c.r}, ${c.g}, ${c.b})`;
+  const v = useLoop(still, (sv) => {
+    sv.value = withRepeat(withTiming(1, { duration: ms, easing: Easing.inOut(Easing.sin) }), -1, true);
+  }, [ms]);
+  const style = useAnimatedStyle(() => ({ transform: [{ translateX: (v.value - 0.5) * 2 * travel }] }));
+  const grad = `sky-puff-${id}`;
+  // Lobes overlap at full strength inside the drawing, and the whole puff is faded as one, so a
+  // cloud is never denser than the palette's cloud colour (the ground the text was repaired for).
+  const lobes: [number, number, number, number][] = [
+    [100, 70, 96, 28],
+    [64, 56, 40, 32],
+    [108, 44, 46, 40],
+    [146, 58, 36, 30],
+  ];
+  return (
+    <Animated.View
+      style={[{ position: 'absolute', left: x, top: y, width: w, height: h, opacity: c.a * depth * fadeLeft(x + w / 2, width) }, style]}
+    >
+      <Svg width="100%" height="100%" viewBox="0 0 200 100" preserveAspectRatio="none">
+        <Defs>
+          <RadialGradient id={grad} cx="50%" cy="50%" r="50%">
+            <Stop offset="0" stopColor={rgb} stopOpacity={1} />
+            <Stop offset="0.55" stopColor={rgb} stopOpacity={0.85} />
+            <Stop offset="1" stopColor={rgb} stopOpacity={0} />
+          </RadialGradient>
+        </Defs>
+        {lobes.map(([cx, cy, rx, ry], i) => (
+          <Ellipse key={i} cx={cx} cy={cy} rx={rx} ry={ry} fill={`url(#${grad})`} />
+        ))}
+      </Svg>
+    </Animated.View>
+  );
+}
+
+/** Fog: wide, soft haze bands low in the sky, drifting slowly sideways. */
+function Fog({ count, height, still }: { count: number; height: number; still: boolean }) {
+  const { width } = useWindowDimensions();
+  const bands = useMemo(() => {
+    const rnd = seeded(211 + count);
+    return Array.from({ length: count }, (_, i) => ({
+      x: -width * 0.3 + rnd() * width * 0.1,
+      y: height * (0.3 + (0.5 * i) / Math.max(1, count - 1)) - 50,
+      h: 80 + rnd() * 40,
+      ms: 50_000 + rnd() * 20_000,
+      travel: 30 + rnd() * 30,
+    }));
+  }, [count, width, height]);
+  return (
+    <>
+      {bands.map((b, i) => (
+        <Band key={i} {...b} w={width * 1.6} still={still} />
+      ))}
+    </>
+  );
+}
+
+function Band({ x, y, w, h, ms, travel, still }: { x: number; y: number; w: number; h: number; ms: number; travel: number; still: boolean }) {
+  const t = useTheme();
+  const haze = t.sky.cloud;
+  const v = useLoop(still, (sv) => {
+    sv.value = withRepeat(withTiming(1, { duration: ms, easing: Easing.inOut(Easing.sin) }), -1, true);
+  }, [ms]);
+  const style = useAnimatedStyle(() => ({ transform: [{ translateX: (v.value - 0.5) * 2 * travel }] }));
+  return (
+    <Animated.View style={[{ position: 'absolute', left: x, top: y, width: w, height: h }, style]}>
+      <LinearGradient colors={[withAlpha(haze, 0), haze, withAlpha(haze, 0)]} style={StyleSheet.absoluteFill} />
+    </Animated.View>
+  );
+}
+
+/** Rain: thin, long, slanted streaks, many of them. */
 function Rain({ count, height, still }: { count: number; height: number; still: boolean }) {
   const { width } = useWindowDimensions();
   const drops = useMemo(() => {
     const rnd = seeded(7 + count);
     return Array.from({ length: count }, () => ({
-      x: rnd() * width,
-      len: 12 + rnd() * 12,
-      ms: 900 + rnd() * 700,
-      delay: rnd() * 1400,
+      x: rnd() * width * 1.1,
+      len: 28 + rnd() * 28,
+      ms: 550 + rnd() * 350,
+      delay: rnd() * 1200,
       start: rnd(),
+      dim: 0.6 + rnd() * 0.4,
     }));
   }, [count, width]);
   return (
@@ -164,36 +353,58 @@ function Rain({ count, height, still }: { count: number; height: number; still: 
   );
 }
 
-function Drop({ x, len, ms, delay, start, height, still, width }: { x: number; len: number; ms: number; delay: number; start: number; height: number; still: boolean; width: number }) {
+function Drop({
+  x,
+  len,
+  ms,
+  delay,
+  start,
+  dim,
+  height,
+  still,
+  width,
+}: {
+  x: number;
+  len: number;
+  ms: number;
+  delay: number;
+  start: number;
+  dim: number;
+  height: number;
+  still: boolean;
+  width: number;
+}) {
   const t = useTheme();
   const v = useLoop(still, (sv) => {
     sv.value = withDelay(delay, withRepeat(withTiming(1, { duration: ms, easing: Easing.linear }), -1, false));
   }, [delay, ms]);
   const style = useAnimatedStyle(() => {
     const p = still ? start : v.value;
-    return { transform: [{ translateY: -len + p * (height + len) }, { translateX: -p * 18 }, { rotate: '12deg' }] };
+    return { transform: [{ translateY: -len + p * (height + len) }, { translateX: -p * 30 }, { rotate: '14deg' }] };
   });
   return (
     <Animated.View
       style={[
-        { position: 'absolute', top: 0, left: x, width: 1.5, height: len, borderRadius: 1, backgroundColor: t.sky.particle, opacity: fadeLeft(x, width) },
+        { position: 'absolute', top: 0, left: x, width: 1, height: len, borderRadius: 0.5, backgroundColor: t.sky.particle, opacity: dim * fadeLeft(x, width) },
         style,
       ]}
     />
   );
 }
 
+/** Snow: soft flakes of a few sizes, falling slowly with a sway. */
 function Snow({ count, height, still }: { count: number; height: number; still: boolean }) {
   const { width } = useWindowDimensions();
   const flakes = useMemo(() => {
     const rnd = seeded(31 + count);
     return Array.from({ length: count }, () => ({
       x: rnd() * width,
-      size: 3 + rnd() * 3,
-      ms: 7000 + rnd() * 5000,
+      size: 2.5 + rnd() * 3.5,
+      ms: 8000 + rnd() * 5000,
       delay: rnd() * 6000,
-      sway: 6 + rnd() * 10,
+      sway: 8 + rnd() * 10,
       start: rnd(),
+      dim: 0.55 + rnd() * 0.45,
     }));
   }, [count, width]);
   return (
@@ -205,7 +416,29 @@ function Snow({ count, height, still }: { count: number; height: number; still: 
   );
 }
 
-function Flake({ x, size, ms, delay, sway, start, height, still, width }: { x: number; size: number; ms: number; delay: number; sway: number; start: number; height: number; still: boolean; width: number }) {
+function Flake({
+  x,
+  size,
+  ms,
+  delay,
+  sway,
+  start,
+  dim,
+  height,
+  still,
+  width,
+}: {
+  x: number;
+  size: number;
+  ms: number;
+  delay: number;
+  sway: number;
+  start: number;
+  dim: number;
+  height: number;
+  still: boolean;
+  width: number;
+}) {
   const t = useTheme();
   const v = useLoop(still, (sv) => {
     sv.value = withDelay(delay, withRepeat(withTiming(1, { duration: ms, easing: Easing.linear }), -1, false));
@@ -217,22 +450,32 @@ function Flake({ x, size, ms, delay, sway, start, height, still, width }: { x: n
   return (
     <Animated.View
       style={[
-        { position: 'absolute', top: 0, left: x, width: size, height: size, borderRadius: size / 2, backgroundColor: t.sky.particle, opacity: fadeLeft(x, width) },
+        {
+          position: 'absolute',
+          top: 0,
+          left: x,
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: t.sky.particle,
+          opacity: dim * fadeLeft(x, width),
+        },
         style,
       ]}
     />
   );
 }
 
+/** A clear night: many small stars twinkling at their own pace. */
 function Stars({ height, still }: { height: number; still: boolean }) {
   const { width } = useWindowDimensions();
   const stars = useMemo(() => {
     const rnd = seeded(97);
-    return Array.from({ length: 16 }, () => ({
-      x: width * 0.3 + rnd() * width * 0.7,
-      y: rnd() * height * 0.6,
-      size: 1.5 + rnd() * 1.5,
-      ms: 2400 + rnd() * 2600,
+    return Array.from({ length: STARS }, () => ({
+      x: rnd() * width,
+      y: rnd() * height * 0.75,
+      size: 1 + rnd() * 1.2,
+      ms: 2200 + rnd() * 3000,
       delay: rnd() * 2000,
     }));
   }, [width, height]);
@@ -250,7 +493,7 @@ function Star({ x, y, size, ms, delay, still }: { x: number; y: number; size: nu
   const v = useLoop(still, (sv) => {
     sv.value = withDelay(delay, withRepeat(withTiming(1, { duration: ms, easing: Easing.inOut(Easing.sin) }), -1, true));
   }, [delay, ms]);
-  const style = useAnimatedStyle(() => ({ opacity: 0.3 + 0.6 * v.value }));
+  const style = useAnimatedStyle(() => ({ opacity: 0.2 + 0.7 * v.value }));
   return (
     <Animated.View
       style={[{ position: 'absolute', left: x, top: y, width: size, height: size, borderRadius: size / 2, backgroundColor: t.sky.particle }, style]}
@@ -258,58 +501,27 @@ function Star({ x, y, size, ms, delay, still }: { x: number; y: number; size: nu
   );
 }
 
-/** Cloud or fog: big soft shapes drifting slowly sideways. */
-function Drift({ fog, count, height, still }: { fog: boolean; count: number; height: number; still: boolean }) {
-  const { width } = useWindowDimensions();
-  const shapes = useMemo(() => {
-    const rnd = seeded(fog ? 211 : 113);
-    return Array.from({ length: count }, (_, i) => ({
-      x: -width * 0.2 + rnd() * width * 0.8,
-      y: fog ? height * (0.15 + i * 0.22) : rnd() * height * 0.45,
-      w: fog ? width * 1.4 : width * (0.5 + rnd() * 0.35),
-      h: fog ? 46 + rnd() * 24 : 70 + rnd() * 40,
-      ms: 40_000 + rnd() * 30_000,
-      travel: 30 + rnd() * 40,
-    }));
-  }, [fog, count, width, height]);
-  return (
-    <>
-      {shapes.map((s, i) => (
-        <Puff key={i} {...s} still={still} />
-      ))}
-    </>
-  );
-}
-
-function Puff({ x, y, w, h, ms, travel, still }: { x: number; y: number; w: number; h: number; ms: number; travel: number; still: boolean }) {
-  const t = useTheme();
-  const v = useLoop(still, (sv) => {
-    sv.value = withRepeat(withTiming(1, { duration: ms, easing: Easing.inOut(Easing.sin) }), -1, true);
-  }, [ms]);
-  const style = useAnimatedStyle(() => ({ transform: [{ translateX: (v.value - 0.5) * 2 * travel }] }));
-  return (
-    <Animated.View
-      style={[{ position: 'absolute', left: x, top: y, width: w, height: h, borderRadius: h / 2, backgroundColor: t.sky.particle }, style]}
-    />
-  );
-}
-
-/** A storm's slow brightening: about 2.5 s up and down every 10 s, never a flash. */
-function StormGlow({ height, still }: { height: number; still: boolean }) {
+/**
+ * A storm's lightning: the top of the sky brightens softly and fades, once every ten seconds or so.
+ * The ramps are long (never a flash), and at its peak the wash is no brighter than the palette's
+ * `wash`, which the backdrop was repaired to carry white text through.
+ */
+function StormWash({ height, still }: { height: number; still: boolean }) {
   const t = useTheme();
   const v = useLoop(still, (sv) => {
     sv.value = withRepeat(
-      withSequence(withDelay(7000, withTiming(1, { duration: 1300, easing: Easing.inOut(Easing.sin) })), withTiming(0, { duration: 1300, easing: Easing.inOut(Easing.sin) })),
+      withSequence(
+        withDelay(STORM_WASH.gapMs, withTiming(1, { duration: STORM_WASH.upMs, easing: Easing.inOut(Easing.sin) })),
+        withTiming(0, { duration: STORM_WASH.downMs, easing: Easing.inOut(Easing.sin) })
+      ),
       -1,
       false
     );
   }, []);
   const style = useAnimatedStyle(() => ({ opacity: still ? 0 : v.value }));
-  // Light grounds brighten and dark grounds barely lift, so the glow never costs text contrast.
-  const glow = t.scheme === 'light' ? 'rgba(255, 255, 255, 0.55)' : 'rgba(200, 185, 255, 0.08)';
   return (
-    <Animated.View style={[{ position: 'absolute', top: 0, left: 0, right: 0, height: height * 0.6 }, style]}>
-      <LinearGradient colors={[glow, 'transparent']} style={StyleSheet.absoluteFill} />
+    <Animated.View style={[{ position: 'absolute', top: 0, left: 0, right: 0, height: height * 0.8 }, style]}>
+      <LinearGradient colors={[t.sky.wash, withAlpha(t.sky.wash, 0)]} style={StyleSheet.absoluteFill} />
     </Animated.View>
   );
 }

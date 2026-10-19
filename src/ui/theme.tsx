@@ -43,6 +43,11 @@ export type Theme = {
   colors: ColorSet;
   /** The palette for content drawn on a scene card (`Card variant="hero"`): always dark. */
   onScene: ColorSet;
+  /**
+   * The palette for text drawn straight on the page sky (a tab screen's title, Home's greeting):
+   * white inks at AA on every backdrop stop. Use `Text tone="onSky"`, `ScreenTitle` or `SkyScope`.
+   */
+  onSky: ColorSet;
   /** The sky: backdrop, scene card and ambient colours for the current mood. */
   sky: SkyColors;
   /** The time of day and weather the theme is wearing; null when pinned (tests, gallery). */
@@ -117,6 +122,7 @@ function buildTheme(bundle: SkyBundle, mood: SkyMood | null, reduceMotion: boole
     scheme: bundle.scheme,
     colors: bundle.colors,
     onScene: bundle.onScene,
+    onSky: bundle.onSky,
     sky: bundle.sky,
     mood,
     hud: tokens.color.hud,
@@ -187,6 +193,20 @@ export function SceneScope({ children }: { children: ReactNode }) {
   const parent = useTheme();
   const value = useMemo<Theme>(
     () => ({ ...parent, scheme: 'dark', colors: parent.onScene, elevation: tokens.elevation.dark }),
+    [parent]
+  );
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+}
+
+/**
+ * Children drawn straight on the page sky with no card under them (a header row of text and icon
+ * buttons): the parent's theme with the white `onSky` palette, so every primitive inside reads on
+ * the sky. Paper cards never go inside one; they keep the page palette.
+ */
+export function SkyScope({ children }: { children: ReactNode }) {
+  const parent = useTheme();
+  const value = useMemo<Theme>(
+    () => ({ ...parent, scheme: 'dark', colors: parent.onSky, elevation: tokens.elevation.dark }),
     [parent]
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

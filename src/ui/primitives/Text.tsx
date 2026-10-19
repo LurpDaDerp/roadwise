@@ -12,7 +12,10 @@ export type TextTone =
   | 'danger'
   | 'success'
   | 'warning'
-  | 'onPrimary';
+  | 'onPrimary'
+  /** White ink for text drawn straight on the page sky (a tab screen's title, Home's greeting). */
+  | 'onSky'
+  | 'onSkyMuted';
 
 /** Dynamic Type follows the system up to this multiple, never past it. */
 export const MAX_FONT_SCALE = 2;
@@ -46,6 +49,8 @@ export function Text({ variant = 'body', tone = 'default', style, ...rest }: App
     success: t.colors.success,
     warning: t.colors.warning,
     onPrimary: t.colors.onPrimary,
+    onSky: t.onSky.text,
+    onSkyMuted: t.onSky.textMuted,
   }[tone];
 
   // Spread the optional properties in only when they are set: a bare `fontWeight: undefined` in

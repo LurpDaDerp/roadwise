@@ -44,6 +44,8 @@ test('the gallery previews any hour with any weather: the page sky, its weather 
   );
   expect(screen.getByTestId('sky-backdrop', { includeHiddenElements: true })).toBeOnTheScreen();
   expect(screen.queryByTestId('sky-ambient', { includeHiddenElements: true })).toBeNull();
+  // The preview's greeting sits on the sky in the white sky ink.
+  expect(screen.getByRole('header', { name: 'Hey, maya' })).toHaveStyle({ color: '#FFFFFF' });
   await fireEvent.press(screen.getByRole('button', { name: 'dusk' }));
   await fireEvent.press(screen.getByRole('button', { name: 'rain' }));
   expect(screen.getByRole('button', { name: 'dusk' })).toBeSelected();

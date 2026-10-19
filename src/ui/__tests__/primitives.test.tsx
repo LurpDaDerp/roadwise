@@ -4,11 +4,11 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { Banner } from '@/ui/primitives/Banner';
 import { Card } from '@/ui/primitives/Card';
-import { Screen } from '@/ui/primitives/Screen';
+import { Screen, ScreenTitle } from '@/ui/primitives/Screen';
 import { Skeleton } from '@/ui/primitives/Skeleton';
 import { Text } from '@/ui/primitives/Text';
 import { plainBundle } from '@/ui/sky/palette';
-import { ThemeProvider } from '@/ui/theme';
+import { SkyScope, ThemeProvider } from '@/ui/theme';
 import { tokens } from '@/ui/tokens';
 
 const wrap = (ui: ReactElement) => render(<ThemeProvider>{ui}</ThemeProvider>);
@@ -93,4 +93,42 @@ test('a tab screen opts out of the bottom inset because the tab bar owns it', as
     </Screen>
   );
   expect(screen.getByTestId('screen')).toHaveStyle({ paddingBottom: tokens.space.lg });
+});
+
+test('a sky screen title draws in the white sky ink; a plain screen title in the page ink', async () => {
+  const sky = plainBundle('light').onSky;
+  await wrapOnPhone(
+    <>
+      <Screen sky bottomInset={false} title="Analytics">
+        <Text>body</Text>
+      </Screen>
+      <Screen>
+        <ScreenTitle>Settings</ScreenTitle>
+      </Screen>
+    </>
+  );
+  expect(screen.getByRole('header', { name: 'Analytics' })).toHaveStyle({ color: '#FFFFFF' });
+  expect(sky.text).toBe('#FFFFFF');
+  expect(screen.getByRole('header', { name: 'Settings' })).toHaveStyle({ color: tokens.color.light.text });
+});
+
+test('text on the sky outside a sky screen: ScreenTitle onSky, the onSky tones and a SkyScope', async () => {
+  const sky = plainBundle('light').onSky;
+  await render(
+    <ThemeProvider scheme="light">
+      <ScreenTitle onSky trailing={<Text>avatar</Text>}>
+        Profile
+      </ScreenTitle>
+      <Text tone="onSky">Hey, maya</Text>
+      <Text tone="onSkyMuted">3-day streak</Text>
+      <SkyScope>
+        <Text tone="muted">In scope</Text>
+      </SkyScope>
+    </ThemeProvider>
+  );
+  expect(screen.getByRole('header', { name: 'Profile' })).toHaveStyle({ color: sky.text });
+  expect(screen.getByText('avatar')).toBeOnTheScreen();
+  expect(screen.getByText('Hey, maya')).toHaveStyle({ color: sky.text });
+  expect(screen.getByText('3-day streak')).toHaveStyle({ color: sky.textMuted });
+  expect(screen.getByText('In scope')).toHaveStyle({ color: sky.textMuted });
 });

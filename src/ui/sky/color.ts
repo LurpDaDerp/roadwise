@@ -80,12 +80,26 @@ export function ensureContrast(fg: string, on: readonly string[], min: number): 
   return mix(fg, toward, hi);
 }
 
+/** A translucent `layer` laid over an opaque `ground`: the opaque colour the eye sees. */
+export function over(ground: string, layer: string): string {
+  const l = parseColor(layer);
+  return mix(opaque(ground), formatColor({ ...l, a: 1 }), l.a);
+}
+
 /**
  * A ground (`bg`) pulled toward `toward` until `fg` reads on it at `min`:1: the reverse of
- * `ensureContrast`, for tinted backgrounds that text sits on.
+ * `ensureContrast`, for tinted backgrounds that text sits on. `layers` are translucent washes that
+ * can lie over the ground (cloud, haze), stacked in order: the ink has to read through them too.
  */
-export function ensureGround(ground: string, inks: readonly string[], min: number, toward: string): string {
-  const ok = (g: string) => inks.every((i) => contrastRatio(i, g) >= min);
+export function ensureGround(
+  ground: string,
+  inks: readonly string[],
+  min: number,
+  toward: string,
+  layers: readonly string[] = []
+): string {
+  const reads = (g: string) => inks.every((i) => contrastRatio(i, g) >= min);
+  const ok = (g: string) => reads(g) && (layers.length === 0 || reads(layers.reduce(over, g)));
   if (ok(ground)) return ground;
   let lo = 0;
   let hi = 1;

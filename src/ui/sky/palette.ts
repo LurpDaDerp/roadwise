@@ -1,17 +1,21 @@
 import { contrastRatio } from '../contrast';
 import { tokens, type ColorSet, type Signal } from '../tokens';
-import { ensureContrast, ensureGround, mix, withAlpha } from './color';
+import { ensureContrast, ensureGround, mix, opaque, withAlpha } from './color';
 import { PHASE_SCHEME, type Scheme, type SkyPhase } from './phase';
 import { CLEAR, type SkyWeather, type WeatherKind } from './weather';
 
 /**
- * The sky theme: the neutral paper / ink grounds with colour from the time of day and the weather.
+ * The sky theme: the neutral paper / ink grounds, with the hour's sky painted behind the top of
+ * the tab screens the way the iOS Weather app paints its backgrounds.
  *
- * The phase picks the scheme and a base hue (day blue, dawn coral, dusk ember, night moonlight);
- * the weather pulls that hue toward its own (slate for cloud, sage for fog, teal for rain, ice for
- * snow, violet for a storm) and tints the backdrop. Every colour that carries text or a mark is
- * repaired to AA against the grounds it sits on, so any mix, and any blend between two of them,
- * stays readable. Pure functions: the provider calls `skyBundle(mood)` and interpolates bundles.
+ * The phase picks the scheme (cards and chrome) and a sky (deep azure by day, indigo to rose at
+ * dawn, deep blue to magenta at dusk, navy at night); the weather pulls that sky toward its own
+ * (slate for cloud, pale haze for fog, steel for rain, cold blue-grey for snow, violet-slate for a
+ * storm). Text drawn straight on the sky uses the white `onSky` inks, and every backdrop stop is
+ * repaired until those inks read at AA through the cloud and haze that can drift over it. Every
+ * other colour that carries text or a mark is repaired to AA against the grounds it sits on, so
+ * any mix, and any blend between two of them, stays readable. Pure functions: the provider calls
+ * `skyBundle(mood)` and interpolates bundles.
  */
 
 export type SkyMood = {
@@ -21,21 +25,28 @@ export type SkyMood = {
   weather: SkyWeather;
 };
 
+/** The backdrop's text-safe stops, top to bottom. Every mood has the same count, so blends lerp. */
+export type SkyStops = [string, string, string];
+
 export type SkyColors = {
-  /** The backdrop's top colour, fading into `bg` (text reads on it at AA). */
-  top: string;
-  /** A warm band low in the backdrop at dawn and dusk; equals `top` otherwise. */
+  /** The page sky, top to bottom; the white `onSky` inks read on every stop at AA. */
+  backdrop: SkyStops;
+  /** The bright band low in the backdrop (peach at dawn, orange at dusk) before it fades into `bg`. No text sits on it. */
   horizon: string;
-  /** The sun or moon's halo (translucent). */
+  /** The sun's or moon's glow (translucent), in the top-right corner. */
   halo: string;
-  /** The sun or moon disc (translucent); fully transparent under heavy weather. */
+  /** The moon's disc (translucent); fully transparent by day and under cloud. */
   disc: string;
-  /** Particles and drifting shapes in the backdrop (translucent). */
+  /** A soft grey cover across the top under overcast, rain, snow and storms (transparent when clear). */
+  cover: string;
+  /** Cloud puffs and fog bands at their densest (translucent). */
+  cloud: string;
+  /** Rain streaks, snowflakes and stars (translucent). */
   particle: string;
+  /** A storm's slow lightning wash at its peak (transparent unless a storm). */
+  wash: string;
   /** The scene card gradient (top-left → bottom-right); white text reads on every stop at AA. */
   scene: [string, string, string];
-  /** A soft glow drawn in the scene card's corner (translucent). */
-  sceneGlow: string;
 };
 
 export type SkyBundle = {
@@ -43,6 +54,8 @@ export type SkyBundle = {
   colors: ColorSet;
   /** The palette for anything drawn on a scene card (always dark). */
   onScene: ColorSet;
+  /** The palette for text drawn straight on the page sky (titles, the greeting): white inks. */
+  onSky: ColorSet;
   sky: SkyColors;
 };
 
@@ -62,7 +75,7 @@ const WEATHER_ACCENT: Readonly<Record<Scheme, Record<Exclude<WeatherKind, 'clear
   dark: { cloudy: '#AAB8CE', fog: '#A6C3B9', rain: '#62C9E3', snow: '#B6DCFF', storm: '#B9A1FF' },
 };
 
-/** How far the weather pulls (0 keeps the phase hue). */
+/** How far the weather pulls the accent and the page tint (0 keeps the phase hue). */
 export const WEATHER_WEIGHT: Readonly<Record<WeatherKind, number>> = {
   clear: 0,
   cloudy: 0.6,
@@ -72,146 +85,208 @@ export const WEATHER_WEIGHT: Readonly<Record<WeatherKind, number>> = {
   storm: 0.75,
 };
 
-/** The backdrop's sky tint per phase. */
-const PHASE_SKY: Readonly<Record<SkyPhase, string>> = {
+/** How far the weather pulls the painted sky: overcast greys most of the hour's colour away. */
+const SKY_WEIGHT: Readonly<Record<WeatherKind, number>> = {
+  clear: 0,
+  cloudy: 0.8,
+  fog: 0.85,
+  rain: 0.85,
+  snow: 0.8,
+  storm: 0.9,
+};
+
+/** The page ground's whisper of the hour, per phase. */
+const PHASE_TINT: Readonly<Record<SkyPhase, string>> = {
   day: '#C9DDFF',
   dawn: '#FFD2B6',
   dusk: '#4A2236',
   night: '#172149',
 };
 
-const WEATHER_SKY: Readonly<Record<Scheme, Record<Exclude<WeatherKind, 'clear'>, string>>> = {
+const WEATHER_TINT: Readonly<Record<Scheme, Record<Exclude<WeatherKind, 'clear'>, string>>> = {
   light: { cloudy: '#D2D7DF', fog: '#DDE2DE', rain: '#BCD1DB', snow: '#E4EDF7', storm: '#C9C0E3' },
   dark: { cloudy: '#252A34', fog: '#27302F', rain: '#11303B', snow: '#24324A', storm: '#22183E' },
 };
 
-/** The warm band at dawn and dusk. */
-const HORIZON: Readonly<Record<SkyPhase, string | null>> = {
-  dawn: '#FFC39A',
-  dusk: '#7C2F3A',
-  day: null,
-  night: null,
+/** A painted sky: three stops top to bottom and the band near the horizon. */
+type Paint = { stops: SkyStops; horizon: string };
+
+/** The clear sky per phase, modelled on the iOS Weather backgrounds (before the AA repair). */
+const PHASE_PAINT: Readonly<Record<SkyPhase, Paint>> = {
+  day: { stops: ['#1A5CC4', '#2B72D0', '#3F88DA'], horizon: '#86B9EC' },
+  dawn: { stops: ['#2B4489', '#5E4F8E', '#9A5A80'], horizon: '#F0A36E' },
+  dusk: { stops: ['#1C2660', '#4A2F6E', '#8E3F6C'], horizon: '#E8875A' },
+  night: { stops: ['#060A1C', '#0E1534', '#1B2452'], horizon: '#2A3566' },
 };
 
-/** Scene card stops per phase (before the weather and the AA repair). */
-const PHASE_SCENE: Readonly<Record<SkyPhase, [string, string, string]>> = {
-  day: ['#4D8DF2', '#2A5FC4', '#16357A'],
-  dawn: ['#EE8F67', '#B04E6A', '#46254F'],
-  dusk: ['#F2844C', '#99345A', '#2B1636'],
-  night: ['#2D3C7C', '#18214D', '#0A0E24'],
-};
-
-const WEATHER_SCENE: Readonly<Record<Exclude<WeatherKind, 'clear'>, [string, string, string]>> = {
-  cloudy: ['#7A879C', '#4D596D', '#29303F'],
-  fog: ['#8D9C97', '#5D6C68', '#313A38'],
-  rain: ['#4B7A91', '#2B546A', '#142B39'],
-  snow: ['#91A9C8', '#58739A', '#2A3B55'],
-  storm: ['#594C93', '#342A65', '#160E32'],
+/** The weather's sky, by the light of day (day, dawn) and in the dark (dusk, night). */
+const WEATHER_PAINT: Readonly<Record<Scheme, Record<Exclude<WeatherKind, 'clear'>, Paint>>> = {
+  light: {
+    cloudy: { stops: ['#4E5F73', '#5F6F82', '#768595'], horizon: '#A3AEBA' },
+    fog: { stops: ['#6F7A82', '#7E888E', '#8E979C'], horizon: '#BCC2C5' },
+    rain: { stops: ['#33404F', '#3E4B5A', '#56626F'], horizon: '#7E8995' },
+    snow: { stops: ['#5B7189', '#6B8199', '#8397AD'], horizon: '#BCCAD8' },
+    storm: { stops: ['#25263A', '#2E3046', '#3E4158'], horizon: '#5C5E7A' },
+  },
+  dark: {
+    cloudy: { stops: ['#1B2029', '#252B35', '#343B47'], horizon: '#414856' },
+    fog: { stops: ['#22272B', '#2D3338', '#3A4045'], horizon: '#4C5257' },
+    rain: { stops: ['#0F141B', '#161D26', '#232B35'], horizon: '#2E3742' },
+    snow: { stops: ['#1C2533', '#263142', '#344157'], horizon: '#48556C' },
+    storm: { stops: ['#141522', '#1C1E2E', '#2A2C40'], horizon: '#3B3D56' },
+  },
 };
 
 /** Ink used on scene cards. */
 const SCENE_INK = { text: '#FFFFFF', textMuted: '#D8D8DE', textSubtle: '#C6C6CE' } as const;
 
-const SIGNALS: readonly Signal[] = ['clean', 'minor', 'moderate', 'severe'];
+/** Ink used straight on the page sky: white, with cool near-whites for secondary text. */
+const SKY_INK = { text: '#FFFFFF', textMuted: '#EDF1F7', textSubtle: '#E6EAF1' } as const;
 
-const weatherPull = (w: SkyWeather) => WEATHER_WEIGHT[w.kind];
+const SIGNALS: readonly Signal[] = ['clean', 'minor', 'moderate', 'severe'];
 
 /** The accent before repair: the phase hue pulled toward the weather's. */
 function rawAccent(phase: SkyPhase, scheme: Scheme, w: SkyWeather): string {
   const base = PHASE_ACCENT[phase];
   if (w.kind === 'clear') return base;
-  return mix(base, WEATHER_ACCENT[scheme][w.kind], weatherPull(w));
+  return mix(base, WEATHER_ACCENT[scheme][w.kind], WEATHER_WEIGHT[w.kind]);
 }
 
-function skyColors(mood: SkyMood, scheme: Scheme, c: ColorSet): SkyColors {
-  const { phase, weather } = mood;
+/** The painted sky for a mood before repair: the phase's sky pulled toward the weather's. */
+function rawPaint(mood: SkyMood, scheme: Scheme): Paint {
+  const base = PHASE_PAINT[mood.phase];
+  const kind = mood.weather.kind;
+  let paint = base;
+  if (kind !== 'clear') {
+    const pull = WEATHER_PAINT[scheme][kind];
+    paint = {
+      stops: base.stops.map((s, i) => mix(s, pull.stops[i] ?? s, SKY_WEIGHT[kind])) as SkyStops,
+      horizon: mix(base.horizon, pull.horizon, SKY_WEIGHT[kind]),
+    };
+  }
+  // The warm band is strongest at sunrise and sunset and never quite leaves the twilight hour.
+  if (mood.phase !== 'dawn' && mood.phase !== 'dusk') return paint;
+  return { ...paint, horizon: mix(paint.stops[2], paint.horizon, Math.max(0.4, mood.glow)) };
+}
+
+/** The weather layer's translucent colours: what can drift over the sky, per kind and scheme. */
+function layers(phase: SkyPhase, scheme: Scheme, w: SkyWeather) {
   const light = scheme === 'light';
-  const tint =
-    weather.kind === 'clear' ? PHASE_SKY[phase] : mix(PHASE_SKY[phase], WEATHER_SKY[scheme][weather.kind], weatherPull(weather));
-  const inks = [c.text, c.textMuted, c.textSubtle, c.accent];
-  const away = light ? '#FFFFFF' : '#000000';
-  const top = ensureGround(mix(c.bg, tint, light ? 0.85 : 0.9), inks, AA, away);
-  const band = HORIZON[phase];
-  const horizon = band ? ensureGround(mix(top, band, 0.55 * Math.max(0.4, mood.glow)), inks, AA, away) : top;
+  const none = 'rgba(255, 255, 255, 0)';
+  switch (w.kind) {
+    case 'clear':
+      return {
+        cover: none,
+        cloud: none,
+        particle: phase === 'night' ? 'rgba(255, 255, 255, 0.85)' : 'rgba(255, 255, 255, 0.5)',
+        wash: none,
+      };
+    case 'cloudy':
+      return {
+        cover: light ? 'rgba(196, 205, 216, 0.08)' : 'rgba(150, 160, 175, 0.08)',
+        cloud: light ? 'rgba(158, 170, 186, 0.2)' : 'rgba(140, 150, 166, 0.16)',
+        particle: none,
+        wash: none,
+      };
+    case 'fog':
+      return {
+        cover: light ? 'rgba(200, 206, 210, 0.08)' : 'rgba(160, 168, 172, 0.08)',
+        cloud: light ? 'rgba(168, 176, 182, 0.22)' : 'rgba(150, 158, 163, 0.16)',
+        particle: none,
+        wash: none,
+      };
+    case 'rain':
+      return {
+        cover: light ? 'rgba(150, 162, 176, 0.08)' : 'rgba(110, 122, 138, 0.08)',
+        cloud: light ? 'rgba(136, 148, 164, 0.16)' : 'rgba(115, 127, 144, 0.14)',
+        particle: light ? 'rgba(214, 228, 244, 0.42)' : 'rgba(170, 196, 225, 0.34)',
+        wash: none,
+      };
+    case 'snow':
+      return {
+        cover: light ? 'rgba(200, 210, 224, 0.08)' : 'rgba(165, 178, 198, 0.08)',
+        cloud: light ? 'rgba(166, 180, 198, 0.18)' : 'rgba(160, 172, 192, 0.14)',
+        particle: 'rgba(255, 255, 255, 0.85)',
+        wash: none,
+      };
+    case 'storm':
+      return {
+        cover: light ? 'rgba(16, 16, 28, 0.24)' : 'rgba(8, 8, 16, 0.26)',
+        cloud: light ? 'rgba(110, 110, 140, 0.2)' : 'rgba(100, 100, 132, 0.14)',
+        particle: light ? 'rgba(205, 214, 235, 0.38)' : 'rgba(170, 176, 215, 0.3)',
+        wash: light ? 'rgba(214, 208, 255, 0.12)' : 'rgba(200, 192, 255, 0.1)',
+      };
+  }
+}
 
-  const covered = weather.kind === 'clear' ? 1 : weather.kind === 'snow' ? 0.5 : weather.kind === 'cloudy' ? 0.35 : 0.2;
-  const haloBase = { day: '#FFFFFF', dawn: '#FFD9B0', dusk: '#FF9A5E', night: '#C8D6FF' }[phase];
-  const haloAlpha = { day: 0.85, dawn: 0.85, dusk: 0.26, night: 0.12 }[phase];
-  const discBase = { day: '#FFFFFF', dawn: '#FFE7CC', dusk: '#FFB27E', night: '#E9EEFF' }[phase];
-  const discAlpha = { day: 0.95, dawn: 0.95, dusk: 0.55, night: 0.6 }[phase];
+function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
+  const { phase, weather } = mood;
+  const paint = rawPaint(mood, scheme);
+  const veil = layers(phase, scheme, weather);
+  const inks = [SKY_INK.text, SKY_INK.textMuted, SKY_INK.textSubtle];
+  // The ink has to read on the bare sky and through every wash that can drift over it.
+  const over = [veil.cover, veil.cloud, veil.wash];
+  const backdrop = paint.stops.map((s) => ensureGround(s, inks, AA, '#000000', over)) as SkyStops;
 
-  const particle = (() => {
-    switch (weather.kind) {
-      case 'rain':
-        return light ? 'rgba(30, 70, 100, 0.22)' : 'rgba(165, 210, 235, 0.24)';
-      case 'storm':
-        return light ? 'rgba(60, 40, 120, 0.22)' : 'rgba(200, 185, 255, 0.22)';
-      case 'snow':
-        return light ? 'rgba(110, 140, 185, 0.45)' : 'rgba(255, 255, 255, 0.7)';
-      case 'cloudy':
-        return light ? 'rgba(255, 255, 255, 0.7)' : 'rgba(255, 255, 255, 0.05)';
-      case 'fog':
-        return light ? 'rgba(255, 255, 255, 0.6)' : 'rgba(210, 222, 216, 0.07)';
-      case 'clear':
-        return phase === 'night' ? 'rgba(255, 255, 255, 0.8)' : light ? 'rgba(255, 255, 255, 0.5)' : 'rgba(255, 210, 170, 0.12)';
-    }
-  })();
+  const clear = weather.kind === 'clear';
+  const haloBase = { day: '#FFF6DC', dawn: '#FFD9B0', dusk: '#FFB07A', night: '#C8D6FF' }[phase];
+  const haloAlpha = { day: 0.34, dawn: 0.3, dusk: 0.22, night: 0.14 }[phase];
+  const covered = clear ? 1 : weather.kind === 'cloudy' && weather.intensity === 'light' ? 0.35 : 0;
+  const moon = phase === 'night' ? (clear ? 0.9 : weather.kind === 'cloudy' ? 0.22 : 0) : 0;
 
-  const baseScene = PHASE_SCENE[phase];
-  const pull = weather.kind === 'clear' ? 0 : weatherPull(weather) * 0.9;
+  // The scene card is the same sky, a little deeper: brightest top-left, darkest bottom-right.
   const sceneInks = [SCENE_INK.text, SCENE_INK.textMuted, SCENE_INK.textSubtle];
-  const scene = baseScene.map((stop, i) => {
-    const w = weather.kind === 'clear' ? stop : mix(stop, WEATHER_SCENE[weather.kind][i] ?? stop, pull);
-    return ensureGround(w, sceneInks, AA, '#000000');
-  }) as [string, string, string];
-  const sceneGlow = withAlpha(
-    weather.kind === 'clear' ? discBase : mix(discBase, '#FFFFFF', 0.5),
-    weather.kind === 'clear' ? 0.32 : 0.16
-  );
+  const [top, mid, low] = paint.stops;
+  const scene = [mix(low, '#000000', 0.1), mix(mid, '#000000', 0.2), mix(top, '#000000', 0.32)].map((s) =>
+    ensureGround(s, sceneInks, AA, '#000000')
+  ) as [string, string, string];
 
   return {
-    top,
-    horizon,
+    backdrop,
+    horizon: opaque(paint.horizon),
     halo: withAlpha(haloBase, haloAlpha * covered),
-    disc: withAlpha(discBase, weather.kind === 'clear' ? discAlpha : weather.kind === 'cloudy' ? discAlpha * 0.35 : 0),
-    particle,
+    disc: withAlpha('#F2F4FF', moon),
+    ...veil,
     scene,
-    sceneGlow,
   };
 }
 
-/** The palette drawn on a scene card: dark, with surfaces lifted from the scene itself. */
-function sceneColors(scene: [string, string, string], accent: string): ColorSet {
+/**
+ * A white-ink palette lifted from the grounds it sits on (a scene card's stops, or the page sky's):
+ * dark, with surfaces drawn from the grounds themselves, every ink and signal at AA on each.
+ */
+function inkColors(grounds: readonly string[], ink: { text: string; textMuted: string; textSubtle: string }, accent: string): ColorSet {
   const d = tokens.color.dark;
-  const mid = scene[1];
+  const mid = grounds[1] ?? grounds[0]!;
+  const deep = grounds[grounds.length - 1]!;
   const signal = Object.fromEntries(
-    SIGNALS.map((s) => [s, { ...d.signal[s], text: ensureContrast(d.signal[s].text, scene, AA) }])
+    SIGNALS.map((s) => [s, { ...d.signal[s], text: ensureContrast(d.signal[s].text, grounds, AA) }])
   ) as ColorSet['signal'];
-  const sceneAccent = ensureContrast(accent, scene, AA);
+  const inkAccent = ensureContrast(accent, grounds, AA);
   return {
     ...d,
-    bg: scene[2],
+    bg: deep,
     bgElevated: mid,
     surface: mix(mid, '#000000', 0.25),
     surfaceRaised: mix(mid, '#FFFFFF', 0.14),
-    // Tracks and rules sit darker than the scene, so a light mark on them still clears 3:1.
-    border: mix(scene[2], '#000000', 0.4),
+    // Tracks and rules sit darker than the ground, so a light mark on them still clears 3:1.
+    border: mix(deep, '#000000', 0.4),
     borderStrong: mix(mid, '#FFFFFF', 0.6),
     divider: mix(mid, '#FFFFFF', 0.16),
-    ...SCENE_INK,
+    ...ink,
     textInverse: '#111113',
-    accent: sceneAccent,
-    accentText: contrastRatio('#111113', sceneAccent) >= contrastRatio('#FFFFFF', sceneAccent) ? '#111113' : '#FFFFFF',
-    accentFaint: mix(mid, sceneAccent, 0.2),
+    accent: inkAccent,
+    accentText: contrastRatio('#111113', inkAccent) >= contrastRatio('#FFFFFF', inkAccent) ? '#111113' : '#FFFFFF',
+    accentFaint: mix(mid, inkAccent, 0.2),
     primary: '#FFFFFF',
     primaryPressed: '#E4E4E1',
     onPrimary: '#111113',
     signal,
-    warning: ensureContrast(d.warning, scene, AA),
-    danger: ensureContrast(d.danger, scene, AA),
-    success: ensureContrast(d.success, scene, AA),
-    info: ensureContrast(d.info, scene, AA),
-    freeze: ensureContrast(d.freeze, scene, AA),
+    warning: ensureContrast(d.warning, grounds, AA),
+    danger: ensureContrast(d.danger, grounds, AA),
+    success: ensureContrast(d.success, grounds, AA),
+    info: ensureContrast(d.info, grounds, AA),
+    freeze: ensureContrast(d.freeze, grounds, AA),
   };
 }
 
@@ -221,7 +296,8 @@ export function skyBundle(mood: SkyMood): SkyBundle {
   const base = tokens.color[scheme];
   const light = scheme === 'light';
   // A whisper of the sky in the page ground, so pushed screens belong to the same hour.
-  const tint = mood.weather.kind === 'clear' ? PHASE_SKY[mood.phase] : mix(PHASE_SKY[mood.phase], WEATHER_SKY[scheme][mood.weather.kind], weatherPull(mood.weather));
+  const kind = mood.weather.kind;
+  const tint = kind === 'clear' ? PHASE_TINT[mood.phase] : mix(PHASE_TINT[mood.phase], WEATHER_TINT[scheme][kind], WEATHER_WEIGHT[kind]);
   const bg = mix(base.bg, tint, light ? 0.1 : 0.12);
   const raw = rawAccent(mood.phase, scheme, mood.weather);
   const faint = mix(base.surface, raw, light ? 0.12 : 0.2);
@@ -229,8 +305,14 @@ export function skyBundle(mood: SkyMood): SkyBundle {
   const accent = ensureContrast(raw, grounds, AA);
   const accentText = contrastRatio('#FFFFFF', accent) >= contrastRatio('#111113', accent) ? '#FFFFFF' : '#111113';
   const colors: ColorSet = { ...base, bg, accent, accentText, accentFaint: faint };
-  const sky = skyColors(mood, scheme, colors);
-  return { scheme, colors, onScene: sceneColors(sky.scene, accent), sky };
+  const sky = skyColors(mood, scheme);
+  return {
+    scheme,
+    colors,
+    onScene: inkColors(sky.scene, SCENE_INK, accent),
+    onSky: inkColors(sky.backdrop, SKY_INK, accent),
+    sky,
+  };
 }
 
 /** The mood the app wears with no sky information: clear day in light, clear night in dark. */

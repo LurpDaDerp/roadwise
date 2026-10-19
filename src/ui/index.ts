@@ -1,6 +1,6 @@
 export { contrastRatio, relativeLuminance } from './contrast';
 export { fontFamilies, useAppFonts } from './fonts';
-export { SceneScope, ThemeProvider, useTheme, type Theme } from './theme';
+export { SceneScope, SkyScope, ThemeProvider, useTheme, type Theme } from './theme';
 export { mix, withAlpha } from './sky/color';
 export { SkyBackdrop } from './sky/SkyBackdrop';
 export { SkyScene } from './sky/SkyScene';
@@ -46,7 +46,7 @@ export {
 export { ProgressBar, type ProgressBarProps } from './primitives/ProgressBar';
 export { ProgressRing, type ProgressRingProps } from './primitives/ProgressRing';
 export type { ProgressTone } from './primitives/progress';
-export { Screen } from './primitives/Screen';
+export { Screen, ScreenTitle, useOnSky } from './primitives/Screen';
 export { SectionHeader, type SectionHeaderProps } from './primitives/SectionHeader';
 export {
   SegmentedControl,
