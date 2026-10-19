@@ -22,9 +22,9 @@ export function googleServicesFile(
   return exists(local) ? './google-services.json' : undefined;
 }
 
-/** The permission strings, in plain words. A drive needs location only "While Using". */
+/** The permission strings, in plain words. A drive needs location only "While Using"; Home and the sky read the rough area for the weather. */
 export const PERMISSION_COPY = {
-  location: 'RoadWise uses your location to measure speed and miles during a drive you start.',
+  location: 'RoadWise measures speed and miles on drives you start, and checks local weather.',
   motion:
     'RoadWise uses motion activity to stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it to notice a trip.',
   camera: "RoadWise uses the camera only to scan your friends' QR codes. Nothing is recorded.",

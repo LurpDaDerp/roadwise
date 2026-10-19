@@ -43,7 +43,7 @@ describe('onboarding copy', () => {
   });
 
   it('says why each permission is asked, in one line where it is asked', () => {
-    expect(onboardingCopy.location.body).toBe('RoadWise uses precise location to measure speed and miles during a drive you start.');
+    expect(onboardingCopy.location.body).toBe('RoadWise uses precise location on drives you start, and to check local weather.');
     expect(onboardingCopy.location.approximate).toBe("Location is set to approximate, so drives can't record. Turn on Precise Location in Settings.");
     expect(onboardingCopy.notifications.body).toBe(
       'Get your forgot-to-start reminder, your Sunday recap, and a heads-up when a friend adds you.'

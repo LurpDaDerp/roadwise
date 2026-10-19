@@ -170,6 +170,10 @@ describe('permissions (v3)', () => {
     expect(PERMISSION_COPY.motion).not.toMatch(/brak|speed|detect/i);
   });
 
+  test('the location string names every use: drives you start and the local weather (Home’s alert and the sky)', () => {
+    expect(PERMISSION_COPY.location).toBe('RoadWise measures speed and miles on drives you start, and checks local weather.');
+  });
+
   test('the deep link scheme stays roadwise', () => {
     expect(build().scheme).toBe('roadwise');
   });

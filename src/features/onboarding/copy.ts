@@ -61,8 +61,8 @@ export const onboardingCopy = {
   },
   location: {
     title: 'Measure your drives',
-    body: 'RoadWise uses precise location to measure speed and miles during a drive you start.',
-    promise: 'During drives you start, and for the forgot-to-start reminder only if you turn it on · Never sold',
+    body: 'RoadWise uses precise location on drives you start, and to check local weather.',
+    promise: 'Drives you start, local weather, and the forgot-to-start reminder if you turn it on · Never sold',
     allow: 'Allow location',
     notNow: 'Not now',
     continue: 'Continue',

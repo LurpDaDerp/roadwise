@@ -51,7 +51,7 @@ test('the primer says why in plain words, and nothing is asked before the tap', 
   const adapter = fakeAdapter(snap({ platform: 'ios', location: 'undetermined', precise: null }));
   await renderStep('ios', adapter);
   expect(await screen.findByText(copy.body)).toBeOnTheScreen();
-  expect(copy.body).toBe('RoadWise uses precise location to measure speed and miles during a drive you start.');
+  expect(copy.body).toBe('RoadWise uses precise location on drives you start, and to check local weather.');
   expect(requests(adapter)).toEqual([]);
 });
 
