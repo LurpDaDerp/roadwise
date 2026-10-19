@@ -28,15 +28,14 @@ export function weatherBannerPt(compact: boolean): number {
 /**
  * The dangerous-weather banner at the top of the driving screen (plan D14): a yellow outline, the
  * warning glyph, the alert's title (one to three words) and under it the warning, what to do in
- * four words at most. The full line is spoken with it. Its ✕ shows only while stopped (≤ 5 mph):
- * while moving, End and the navigation button are the only controls that take a touch.
+ * four words at most. The full line is spoken with it. Its ✕ shows and takes a touch at any speed,
+ * moving or stopped: with End and the navigation button, the only touch targets while moving.
  */
 function WeatherBannerView({
   alert,
   units,
   palette: p,
   compact,
-  canDismiss,
   onDismiss,
 }: {
   alert: DangerAlert;
@@ -44,8 +43,6 @@ function WeatherBannerView({
   palette: HudPalette;
   /** A compact window's 40 pt band: smaller type. */
   compact: boolean;
-  /** The car is stopped: the ✕ shows. */
-  canDismiss: boolean;
   onDismiss(): void;
 }) {
   const slop = (HUD_MIN_TARGET_PT - WEATHER_CLOSE_PT) / 2;
@@ -77,19 +74,17 @@ function WeatherBannerView({
           </Text>
         </View>
       </View>
-      {canDismiss ? (
-        <Pressable
-          testID="hud-weather-close"
-          accessibilityRole="button"
-          accessibilityLabel={weatherCopy.dismiss}
-          accessibilityHint={weatherCopy.dismissDriveHint}
-          hitSlop={slop}
-          onPress={onDismiss}
-          style={({ pressed }) => [styles.close, { borderColor: p.chromeEdge, opacity: pressed ? 0.7 : 1 }]}
-        >
-          <Ionicons name="close" size={22} color={p.ink} />
-        </Pressable>
-      ) : null}
+      <Pressable
+        testID="hud-weather-close"
+        accessibilityRole="button"
+        accessibilityLabel={weatherCopy.dismiss}
+        accessibilityHint={weatherCopy.dismissDriveHint}
+        hitSlop={slop}
+        onPress={onDismiss}
+        style={({ pressed }) => [styles.close, { borderColor: p.chromeEdge, opacity: pressed ? 0.7 : 1 }]}
+      >
+        <Ionicons name="close" size={22} color={p.ink} />
+      </Pressable>
     </View>
   );
 }

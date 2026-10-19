@@ -10,7 +10,7 @@ import { ThemeProvider } from '@/ui/theme';
 import { hudCopy } from '../hudCopy';
 import { hudLayout } from '../hudLayout';
 import { HudScreen } from '../HudScreen';
-import { weatherBannerPt } from '../WeatherBanner';
+import { WEATHER_CLOSE_PT, weatherBannerPt } from '../WeatherBanner';
 
 // The halo renders for real; its props are kept so a test can read the visual it was given.
 const mockHalo: HaloProps[] = [];
@@ -251,7 +251,7 @@ describe('the dangerous-weather banner (plan D14)', () => {
     }
   });
 
-  test('its two lines fit the top band, full (56 pt) and compact (40 pt), so it never reaches the halo or the row', () => {
+  test('its two lines and the ✕ fit the top band, full (56 pt) and compact (40 pt), so it never reaches the halo or the row', () => {
     const insets = { top: 0, bottom: 0, left: 0, right: 0 };
     const full = hudLayout({ width: 375, height: 667, insets, fontScale: 1, chip: false, units: 'mi' });
     const compact = hudLayout({ width: 400, height: 300, insets, fontScale: 1, chip: false, units: 'mi' });
@@ -259,14 +259,17 @@ describe('the dangerous-weather banner (plan D14)', () => {
     expect(compact.compact).toBe(true);
     expect(weatherBannerPt(false)).toBeLessThanOrEqual(full.line.h);
     expect(weatherBannerPt(true)).toBeLessThanOrEqual(compact.line.h);
+    // The ✕'s disc sits inside the banner's outline at its smallest.
+    expect(WEATHER_CLOSE_PT).toBeLessThanOrEqual(weatherBannerPt(true) - 4);
   });
 
   test('a compact window takes the smaller type', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- the hook behind react-native's export
     const dims = require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
     jest.spyOn(dims, 'default').mockReturnValue({ width: 400, height: 300, scale: 2, fontScale: 1 });
-    await renderHud({ weatherAlert: ICE });
+    await renderHud({ weatherAlert: ICE, speedMph: 60, stopped: false });
     expect(screen.getByTestId('hud-weather-action')).toHaveStyle({ fontSize: 13 });
+    expect(screen.getByTestId('hud-weather-close')).toBeOnTheScreen();
     expect(screen.getByText('Freezing rain')).toHaveStyle({ fontSize: 16 });
     jest.restoreAllMocks();
   });
@@ -279,11 +282,12 @@ describe('the dangerous-weather banner (plan D14)', () => {
     expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Strong winds. Gusts to 84 km/h. Keep both hands on the wheel.');
   });
 
-  test('no ✕ while moving; stopped (≤ 5 mph), the ✕ hides it for the rest of the drive', async () => {
-    const h = await renderHud({ weatherAlert: ICE, speedMph: 30, stopped: false });
-    expect(screen.queryByTestId('hud-weather-close')).toBeNull();
-    await h.update({ speedMph: 3, stopped: true });
+  test('the ✕ shows and works at any speed, and hides it for the rest of the drive', async () => {
+    const h = await renderHud({ weatherAlert: ICE, speedMph: 3, stopped: true });
+    expect(screen.getByRole('button', { name: 'Hide weather alert' })).toBeOnTheScreen();
+    await h.update({ speedMph: 70, stopped: false });
     const close = screen.getByRole('button', { name: 'Hide weather alert' });
+    expect(close).not.toBeDisabled();
     expect(close).toHaveProp('accessibilityHint', 'Hides it for the rest of this drive.');
     // The drawn disc is small, the touch target is the HUD's 64 pt.
     const slop = close.props.hitSlop as number;
@@ -606,10 +610,12 @@ describe('dimming', () => {
   });
 });
 
-test('while moving, End and the navigation button are the only controls on the screen; stopped, the weather ✕ joins them', async () => {
+test('while moving, End, the navigation button and the weather ✕ are the only controls on the screen, the same as stopped', async () => {
   const fog = { kind: 'dense_fog', gustMph: null, visibilityM: 150 } as const;
-  const h = await renderHud({ weatherAlert: fog, speedMph: 45, stopped: false });
+  const h = await renderHud({ speedMph: 45, stopped: false });
   expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav']);
+  await h.update({ weatherAlert: fog });
+  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-weather-close']);
   await h.update({ speedMph: 0, stopped: true, points: { total: 5, sinceLastStop: 0 } });
   expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-weather-close']);
 });
