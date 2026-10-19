@@ -105,6 +105,8 @@ describe('the card', () => {
     const c = tokens.color.light;
     expect(card).toHaveStyle({ borderColor: c.signal.minor.fill, borderWidth: 2, backgroundColor: c.surface, borderRadius: 28 });
     expect(screen.getByTestId('home-weather-alert-icon', { includeHiddenElements: true })).toHaveStyle({ color: c.signal.minor.text });
+    // sizes come from the scale: a touch-size disc around a large glyph
+    expect(screen.getByTestId('home-weather-alert-icon', { includeHiddenElements: true })).toHaveStyle({ fontSize: tokens.size.iconLg });
     expect(screen.getByTestId('home-weather-alert-title')).toHaveTextContent('Dense fog');
     expect(screen.getByTestId('home-weather-alert-line')).toHaveTextContent('Visibility 600 ft. Slow down, low beams on.');
     expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Dense fog. Visibility 600 ft. Slow down, low beams on.');

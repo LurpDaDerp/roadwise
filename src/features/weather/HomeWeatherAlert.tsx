@@ -55,15 +55,15 @@ export function WeatherAlertCard({ alert, units, onDismiss }: { alert: DangerAle
       >
         <View
           style={{
-            width: 44,
-            height: 44,
-            borderRadius: 22,
+            width: t.size.touch,
+            height: t.size.touch,
+            borderRadius: t.size.touch / 2,
             backgroundColor: yellow.faint,
             alignItems: 'center',
             justifyContent: 'center',
           }}
         >
-          <Ionicons testID="home-weather-alert-icon" name="warning" size={24} color={yellow.text} />
+          <Ionicons testID="home-weather-alert-icon" name="warning" size={t.size.iconLg} color={yellow.text} />
         </View>
         <View style={{ flex: 1, gap: t.space.xs }}>
           <Text variant="headline" testID="home-weather-alert-title">
