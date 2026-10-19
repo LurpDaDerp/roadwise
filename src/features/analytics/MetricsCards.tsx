@@ -101,9 +101,16 @@ const COMPACT: Omit<MetricsLayout, 'textScale'> = {
 /** The shortest windows and the largest text: each card is one row of four. */
 const ROW: Omit<MetricsLayout, 'textScale'> = { ...COMPACT, name: 'row', perRow: 4, colGap: space.sm };
 
+/**
+ * How many lines a caption may take in a layout: two in the narrow cells of a row of four (they
+ * wrap rather than shrink), one in the wider 2 × 2 cells.
+ */
+export const captionLines = (l: Pick<MetricsLayout, 'perRow'>): 1 | 2 => (l.perRow === 4 ? 2 : 1);
+
 /** The block's height in a layout: three cards of a title and one or two rows of number-over-caption cells. */
 export function metricsBlockHeight(l: MetricsLayout): number {
-  const cell = sizeAt('stat', l.textScale, l.stat).lineHeight + METRIC_CELL_GAP + sizeAt('label', l.textScale).lineHeight;
+  const cell =
+    sizeAt('stat', l.textScale, l.stat).lineHeight + METRIC_CELL_GAP + captionLines(l) * sizeAt('label', l.textScale).lineHeight;
   const rows = 4 / l.perRow;
   // The card's gap sits between its title and each row.
   const card = l.pad * 2 + sizeAt('title3', l.textScale).lineHeight + rows * (l.gap + cell);
@@ -150,7 +157,15 @@ export function MetricsCards({ sums }: { sums: WindowSums }) {
           {(l.perRow === 4 ? [g.cells] : [g.cells.slice(0, 2), g.cells.slice(2, 4)]).map((row, i) => (
             <View key={i} style={{ flexDirection: 'row', gap: l.colGap }} testID={`metrics-${g.key}-row-${i}`}>
               {row.map((c) => (
-                <MetricCell key={c.key} caption={c.caption} metric={c.metric} text={text} style={{ flex: 1 }} testID={`metric-${c.key}`} />
+                <MetricCell
+                  key={c.key}
+                  caption={c.caption}
+                  metric={c.metric}
+                  text={text}
+                  captionLines={captionLines(l)}
+                  style={{ flex: 1 }}
+                  testID={`metric-${c.key}`}
+                />
               ))}
             </View>
           ))}

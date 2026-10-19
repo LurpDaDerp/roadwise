@@ -235,7 +235,8 @@ describe('MetricsCards', () => {
           ...cellsIn(row).map((cell) => {
             const id = String(cell.props.testID);
             const value = Number(flat(screen.getByTestId(`${id}-value`)).lineHeight);
-            const caption = Number(flat(screen.getByTestId(`${id}-caption`)).lineHeight);
+            const captionEl = screen.getByTestId(`${id}-caption`);
+            const caption = Number(flat(captionEl).lineHeight) * Number(captionEl.props.numberOfLines ?? 1);
             return value + Number(flat(cell).gap ?? 0) + caption;
           })
         );
@@ -283,6 +284,22 @@ describe('MetricsCards', () => {
     await draw(<MetricsCards sums={EMPTY_WINDOW} />);
     expect(screen.getAllByTestId(/^metrics-driving-row-/)).toHaveLength(1);
     expect(cellsIn(screen.getByTestId('metrics-driving-row-0'))).toHaveLength(4);
+  });
+
+  test('large text never draws a number or caption smaller than 1×: the row of four wraps its captions to two lines, and every fit has a floor', async () => {
+    setWindow(390, 844, 2);
+    await draw(<MetricsCards sums={windowSums(drives(4), null)} />);
+    for (const el of screen.getAllByTestId(/^metric-[a-z-]+-caption$/)) {
+      expect(el.props).toMatchObject({ numberOfLines: 2, minimumFontScale: 0.85 });
+      // 14 pt label at 2×, floored at 0.85: still above the 14 pt it is at 1×
+      expect(Number(flat(el).fontSize) * Number(el.props.minimumFontScale)).toBeGreaterThan(tokens.type.label.fontSize);
+    }
+    for (const el of screen.getAllByTestId(/^metric-[a-z-]+-value$/)) expect(el.props.minimumFontScale).toBe(0.7);
+    setWindow(390, 844, 1);
+    await draw(<MetricsCards sums={windowSums(drives(4), null)} />);
+    expect(screen.getByTestId('metric-clean-caption').props.numberOfLines).toBe(1);
+    await draw(<BestsCard bests={personalBests([])} onOpen={jest.fn()} />);
+    expect(screen.getByTestId('best-clean-caption').props).toMatchObject({ numberOfLines: 2, minimumFontScale: 0.85 });
   });
 
   test('at 390 × 844 a 2 × 2 cell has room for "1,204 mi" in the display face', () => {
