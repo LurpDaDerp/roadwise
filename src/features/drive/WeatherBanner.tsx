@@ -13,7 +13,7 @@ export const WEATHER_CLOSE_PT = 34;
 
 const OUTLINE_PT = 2;
 const BAR_MIN_PT = 40;
-/** The two lines' type: the full band (56 pt), and a compact window's 40 pt band. */
+/** The two lines' type: the full band (56 pt), and a compact window's narrow band between the sign and the navigation button. */
 const TYPE = {
   full: { title: 20, titleLine: 24, action: 15, actionLine: 18, pad: 3 },
   compact: { title: 16, titleLine: 19, action: 13, actionLine: 16, pad: 0 },
@@ -41,7 +41,7 @@ function WeatherBannerView({
   alert: DangerAlert;
   units: Units;
   palette: HudPalette;
-  /** A compact window's 40 pt band: smaller type. */
+  /** A compact window's narrow band: smaller type. */
   compact: boolean;
   onDismiss(): void;
 }) {
