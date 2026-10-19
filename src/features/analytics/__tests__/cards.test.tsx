@@ -1,0 +1,311 @@
+import { screen } from '@testing-library/react-native';
+import type { ComponentType, ReactNode } from 'react';
+import { View } from 'react-native';
+
+import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
+import { draw, drive, HOUR, NOW, press } from '@/features/drives/__fixtures__/drives';
+import { setMapsForTests, type MapsModule } from '@/features/settings/maps';
+import { ThemeProvider } from '@/ui/theme';
+import { tokens } from '@/ui/tokens';
+
+import { drives, NO_SCORES, SCORES } from '../__fixtures__/analytics';
+import { BestsCard } from '../BestsCard';
+import { DRIVES_PAGE, DrivesCard, driveLine } from '../DrivesCard';
+import { metricGroups, MetricsCards, metricsBlockHeight } from '../MetricsCards';
+import { coach, driveGrid, EMPTY_WINDOW, fitLines, personalBests, windowSums, type MapPoint } from '../model';
+import { radarLabel, radarPoint, radarPolygon, RadarCard } from '../RadarCard';
+import { SummaryCard } from '../SummaryCard';
+import { TripsMapCard } from '../TripsMapCard';
+import { bandSpan, busiest, cellAlpha, WhenYouDriveCard } from '../WhenYouDriveCard';
+
+const light = tokens.color.light;
+
+afterEach(() => {
+  resetUnitsForTests();
+  setMapsForTests(undefined);
+});
+
+describe('RadarCard', () => {
+  test('the Safety Rating sits in the middle as a whole number, with every axis and its score around it', async () => {
+    await draw(<RadarCard rating={92.4} scores={SCORES} />);
+    expect(screen.getByTestId('radar-rating')).toHaveTextContent('92');
+    expect(screen.getByText('Safety Rating')).toBeOnTheScreen();
+    for (const [label, score] of [
+      ['Speeding', '88'],
+      ['Braking', '72'],
+      ['Acceleration', '95'],
+      ['Cornering', '100'],
+      ['Phone use', '60'],
+      ['Clean drives', '50'],
+    ]) {
+      expect(screen.getByText(label!)).toBeOnTheScreen();
+      expect(screen.getByText(score!)).toBeOnTheScreen();
+    }
+    expect(screen.getByText('Last 30 days')).toBeOnTheScreen();
+  });
+
+  test('one summary label for a screen reader lists the rating and every axis', async () => {
+    await draw(<RadarCard rating={92.4} scores={SCORES} />);
+    const label = 'Safety Rating 92. Speeding 88, Braking 72, Acceleration 95, Cornering 100, Phone use 60, Clean drives 50.';
+    expect(screen.getByLabelText(label)).toBeOnTheScreen();
+    expect(screen.getByLabelText(label).props.accessibilityRole).toBe('image');
+  });
+
+  test('no rating and no data: dashes everywhere, the shape folds to the centre', async () => {
+    await draw(<RadarCard rating={null} scores={NO_SCORES} />);
+    expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
+    expect(screen.getAllByText('—')).toHaveLength(7);
+    expect(radarLabel(null, NO_SCORES)).toBe(
+      'Safety Rating, no score yet. Speeding no data, Braking no data, Acceleration no data, Cornering no data, Phone use no data, Clean drives no data.'
+    );
+    expect(radarPolygon([null, null, null, null, null, null], 100, { x: 150, y: 150 })).toBe(Array(6).fill('150.0,150.0').join(' '));
+  });
+
+  test('geometry: the first axis points straight up, the hexagon runs clockwise', () => {
+    const c = { x: 100, y: 100 };
+    expect(radarPoint(0, 6, 50, c)).toEqual({ x: 100, y: 50 });
+    const p1 = radarPoint(1, 6, 50, c);
+    expect(p1.x).toBeGreaterThan(100);
+    expect(p1.y).toBeCloseTo(75);
+    expect(radarPoint(3, 6, 50, c).y).toBeCloseTo(150);
+    expect(radarPolygon([100, 50, 0, 0, 0, 0], 100, c).split(' ')[0]).toBe('100.0,0.0');
+    expect(radarPolygon([140, 50, 0, 0, 0, 0], 100, c).split(' ')[0]).toBe('100.0,0.0');
+  });
+
+  test('the chart ink is monotone: the page ink, no signal colours', async () => {
+    await draw(<RadarCard rating={80} scores={SCORES} />);
+    expect(screen.getByTestId('radar-rating')).toHaveStyle({ color: light.text });
+    expect(screen.getByText('Speeding')).toHaveStyle({ color: light.textMuted });
+  });
+});
+
+describe('SummaryCard', () => {
+  test('a weak axis: its level icon in its colour, the title and the tip, with the level word spoken', async () => {
+    await draw(<SummaryCard coaching={coach(SCORES, { drives: 4, miles: 48 })} />);
+    expect(screen.getByText('Phone down while driving')).toBeOnTheScreen();
+    expect(screen.getByText('Put the phone away before you pull out.')).toBeOnTheScreen();
+    expect(screen.getByTestId('analytics-summary-icon')).toHaveStyle({ color: light.warning });
+    expect(screen.getByLabelText('Fair. Phone down while driving. Put the phone away before you pull out.')).toBeOnTheScreen();
+  });
+
+  test('good driving gets a compliment and a green check', async () => {
+    const good = { speeding: 95, braking: 90, accel: 99, cornering: 100, phone: 100, clean: 90 };
+    await draw(<SummaryCard coaching={coach(good, { drives: 5, miles: 40 })} />);
+    expect(screen.getByText('Driving well')).toBeOnTheScreen();
+    expect(screen.getByText('Smooth driving lately. Keep it up.')).toBeOnTheScreen();
+    expect(screen.getByTestId('analytics-summary-icon')).toHaveStyle({ color: light.success });
+    expect(screen.getByLabelText('Good. Driving well. Smooth driving lately. Keep it up.')).toBeOnTheScreen();
+  });
+
+  test('not enough driving yet: a short wait line, no level', async () => {
+    await draw(<SummaryCard coaching={coach(NO_SCORES, { drives: 0, miles: 0 })} />);
+    expect(screen.getByLabelText('Tips are on the way. Drive a few more times to get tips here.')).toBeOnTheScreen();
+  });
+});
+
+describe('BestsCard', () => {
+  const list = [
+    drive({ clientTripId: 'big', pointsNet: 310, miles: 9, clean: false }),
+    drive({ clientTripId: 'long', pointsNet: 120, miles: 31.24, clean: true, counts: { ...drive().counts, hardBrake: 0 } }),
+    drive({ clientTripId: 'phone', pointsNet: 80, miles: 18, counts: { ...drive().counts, pickups: 2 } }),
+  ];
+
+  test('one row of three, each opening its drive', async () => {
+    const onOpen = jest.fn();
+    await draw(<BestsCard bests={personalBests(list)} onOpen={onOpen} />);
+    expect(screen.getByText('Personal bests')).toBeOnTheScreen();
+    expect(screen.getByTestId('best-points-value')).toHaveTextContent('+310 pts');
+    expect(screen.getByTestId('best-clean-value')).toHaveTextContent('31.2 mi');
+    expect(screen.getByTestId('best-phone-free-value')).toHaveTextContent('31.2 mi');
+    expect(screen.getByLabelText('Most points, plus 310 points')).toBeOnTheScreen();
+    await press(screen.getByTestId('best-points'));
+    expect(onOpen).toHaveBeenCalledWith('big');
+  });
+
+  test('in kilometres when the driver uses them', async () => {
+    publishUnits('km');
+    await draw(<BestsCard bests={personalBests(list)} onOpen={jest.fn()} />);
+    expect(screen.getByTestId('best-clean-value')).toHaveTextContent('50.3 km');
+  });
+
+  test('no drives yet: dashes, nothing to press', async () => {
+    await draw(<BestsCard bests={personalBests([])} onOpen={jest.fn()} />);
+    expect(screen.getAllByText('—')).toHaveLength(3);
+    expect(screen.getByTestId('best-points').props.accessibilityRole).toBeUndefined();
+    expect(screen.getByLabelText('Phone-free, none yet')).toBeOnTheScreen();
+  });
+});
+
+describe('MetricsCards', () => {
+  test('three cards of four: Driving, Events, Phone & points', async () => {
+    const sums = windowSums(drives(4), null);
+    await draw(<MetricsCards sums={sums} />);
+    for (const title of ['Driving', 'Events', 'Phone & points']) expect(screen.getByText(title)).toBeOnTheScreen();
+    expect(metricGroups(sums, 'mi').map((g) => g.cells.map((c) => c.caption))).toEqual([
+      ['Drives', 'Distance', 'Drive time', 'Avg speed'],
+      ['Speeding', 'Hard brakes', 'Hard starts', 'Sharp turns'],
+      ['Pickups', 'Phone time', 'Clean drives', 'Points'],
+    ]);
+    expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('4');
+    expect(screen.getByTestId('metric-distance-value')).toHaveTextContent('48.0 mi');
+    expect(screen.getByTestId('metric-time-value')).toHaveTextContent('1.6 h');
+    expect(screen.getByTestId('metric-speed-value')).toHaveTextContent('30 mph');
+    expect(screen.getByTestId('metric-brakes-value')).toHaveTextContent('4');
+    expect(screen.getByTestId('metric-clean-value')).toHaveTextContent('0 %');
+    expect(screen.getByTestId('metric-points-value')).toHaveTextContent('+528 pts');
+    expect(screen.getByLabelText('Distance, 48.0 miles')).toBeOnTheScreen();
+  });
+
+  test('an empty range reads as zeros and dashes', async () => {
+    await draw(<MetricsCards sums={EMPTY_WINDOW} />);
+    expect(screen.getByTestId('metric-speed-value')).toHaveTextContent('— mph');
+    expect(screen.getByTestId('metric-clean-value')).toHaveTextContent('— %');
+    expect(screen.getByTestId('metric-points-value')).toHaveTextContent('0 pts');
+  });
+
+  test('the whole metrics block takes at most three quarters of a 390 × 844 window', () => {
+    const window = { width: 390, height: 844 };
+    expect(metricsBlockHeight(1)).toBeLessThanOrEqual(window.height * 0.75);
+    // A cell has room for "1,204 mi" in the display face: half the card's inner width.
+    const cell = (window.width - 4 * tokens.space.lg - tokens.space.lg) / 2;
+    expect(cell).toBeGreaterThanOrEqual(150);
+  });
+});
+
+describe('WhenYouDriveCard', () => {
+  // NOW is Monday 15:00: these start Monday 14:00 (12p band) twice and Sunday 23:00 (9p band) once.
+  const list = [
+    drive({ clientTripId: 'a', startedAt: NOW - HOUR }),
+    drive({ clientTripId: 'b', startedAt: NOW - HOUR - 60_000 }),
+    drive({ clientTripId: 'c', startedAt: NOW - 16 * HOUR }),
+  ];
+
+  test('weekday rows by 3-hour columns, shaded by count in the page ink, with the busiest slot', async () => {
+    const grid = driveGrid(list, null);
+    await draw(<WhenYouDriveCard grid={grid} />);
+    expect(screen.getByText('When you drive')).toBeOnTheScreen();
+    for (const tick of ['12a', '6a', '12p', '6p']) expect(screen.getByText(tick)).toBeOnTheScreen();
+    expect(screen.queryByText('3a')).toBeNull();
+    expect(screen.getAllByText('S')).toHaveLength(2);
+    expect(screen.getByTestId('grid-0-4')).toHaveStyle({ backgroundColor: light.text });
+    expect(screen.getByTestId('grid-0-0')).toHaveStyle({ backgroundColor: light.surfaceRaised });
+    expect(screen.getByTestId('analytics-grid-busiest')).toHaveTextContent('Busiest: Mon 12p–3p');
+    expect(screen.getByLabelText('When you drive. 3 drives. Busiest: Monday 12p–3p, 2 drives.')).toBeOnTheScreen();
+  });
+
+  test('no drives in the range: a short line, no grid', async () => {
+    await draw(<WhenYouDriveCard grid={driveGrid([], null)} />);
+    expect(screen.getByTestId('analytics-grid-empty')).toHaveTextContent('No drives yet');
+    expect(screen.queryByTestId('grid-0-0')).toBeNull();
+  });
+
+  test('helpers', () => {
+    expect(bandSpan(7)).toBe('9p–12a');
+    expect(cellAlpha(0, 3)).toBe(0);
+    expect(cellAlpha(3, 3)).toBe(1);
+    expect(cellAlpha(1, 3)).toBeGreaterThan(0.18);
+    expect(busiest(driveGrid([], null))).toBeNull();
+  });
+});
+
+describe('TripsMapCard', () => {
+  const lines: MapPoint[][] = [
+    [
+      { latitude: 40.7, longitude: -74 },
+      { latitude: 40.71, longitude: -74.01 },
+    ],
+    [
+      { latitude: 40.72, longitude: -74.02 },
+      { latitude: 40.73, longitude: -74.03 },
+    ],
+  ];
+
+  function fakeMaps(seen: { region?: unknown; scroll?: unknown; zoom?: unknown }): MapsModule {
+    const MapView = ({ children, initialRegion, scrollEnabled, zoomEnabled }: { children?: ReactNode; initialRegion?: unknown; scrollEnabled?: boolean; zoomEnabled?: boolean }) => {
+      Object.assign(seen, { region: initialRegion, scroll: scrollEnabled, zoom: zoomEnabled });
+      return <View testID="map-view">{children}</View>;
+    };
+    const Polyline = () => <View testID="polyline" />;
+    return { default: MapView as unknown as ComponentType, Polyline } as unknown as MapsModule;
+  }
+
+  test('every trip on a pan-and-zoom map opened on the fitted region', async () => {
+    const seen: { region?: unknown; scroll?: unknown; zoom?: unknown } = {};
+    setMapsForTests(fakeMaps(seen));
+    const region = fitLines(lines);
+    await draw(<TripsMapCard routes={lines} region={region} />);
+    expect(screen.getByText('All trips')).toBeOnTheScreen();
+    expect(screen.getByTestId('trips-map', { includeHiddenElements: true })).toHaveStyle({ height: 320 });
+    expect(screen.getAllByTestId('polyline', { includeHiddenElements: true })).toHaveLength(2);
+    expect(seen).toEqual({ region, scroll: true, zoom: true });
+  });
+
+  test('no maps module: one plain line instead', async () => {
+    setMapsForTests(null);
+    await draw(<TripsMapCard routes={lines} region={fitLines(lines)} />);
+    expect(screen.getByTestId('trips-map-nomap')).toHaveTextContent("Maps aren't available in this build.");
+    expect(screen.queryByTestId('trips-map', { includeHiddenElements: true })).toBeNull();
+  });
+
+  test('no trips yet', async () => {
+    setMapsForTests(fakeMaps({}));
+    await draw(<TripsMapCard routes={[]} region={null} />);
+    expect(screen.getByTestId('trips-map-empty')).toHaveTextContent('No trips yet');
+  });
+});
+
+describe('DrivesCard', () => {
+  test('closed at first; opens to the range’s drives titled by date and time', async () => {
+    const onOpen = jest.fn();
+    await draw(<DrivesCard drives={drives(3)} rangeKey="week" onOpen={onOpen} />);
+    const toggle = screen.getByTestId('analytics-drives-toggle');
+    expect(toggle).toHaveAccessibleName('Drives · 3');
+    expect(toggle.props.accessibilityState).toMatchObject({ expanded: false });
+    expect(screen.queryByTestId('analytics-drives-list')).toBeNull();
+    await press(toggle);
+    expect(screen.getByTestId('analytics-drives-toggle').props.accessibilityState).toMatchObject({ expanded: true });
+    expect(screen.getByText('Mon, Oct 5 · 2:00 PM')).toBeOnTheScreen();
+    expect(screen.getAllByText('12.0 mi · 24 min · +132 pts · 1 event')).toHaveLength(3);
+    await press(screen.getByTestId('analytics-drive-d1'));
+    expect(onOpen).toHaveBeenCalledWith('d1');
+  });
+
+  test('ten rows, then Show more adds ten at a time; a new range starts over', async () => {
+    const list = drives(25, 5);
+    const { rerender } = await draw(<DrivesCard drives={list} rangeKey="week" onOpen={jest.fn()} />);
+    await press(screen.getByTestId('analytics-drives-toggle'));
+    expect(screen.getAllByTestId(/^analytics-drive-d/)).toHaveLength(DRIVES_PAGE);
+    await press(screen.getByTestId('analytics-drives-more'));
+    expect(screen.getAllByTestId(/^analytics-drive-d/)).toHaveLength(20);
+    await press(screen.getByTestId('analytics-drives-more'));
+    expect(screen.getAllByTestId(/^analytics-drive-d/)).toHaveLength(25);
+    expect(screen.queryByTestId('analytics-drives-more')).toBeNull();
+    await rerender(
+      <ThemeProvider scheme="light" reduceMotion>
+        <DrivesCard drives={list} rangeKey="month" onOpen={jest.fn()} />
+      </ThemeProvider>
+    );
+    expect(screen.getAllByTestId(/^analytics-drive-d/)).toHaveLength(DRIVES_PAGE);
+  });
+
+  test('a row reads as one button with the whole line in words', async () => {
+    await draw(<DrivesCard drives={drives(1)} rangeKey="week" onOpen={jest.fn()} />);
+    await press(screen.getByTestId('analytics-drives-toggle'));
+    expect(screen.getByTestId('analytics-drive-d0')).toHaveAccessibleName('Mon, Oct 5 · 2:00 PM, 12.0 miles, 24 minutes, plus 132 points, 1 event');
+  });
+
+  test('clean, eventless and estimated lines', () => {
+    const none = { ...drive().counts, hardBrake: 0 };
+    expect(driveLine(drive({ clean: true, counts: none }), 'mi').text).toBe('12.0 mi · 24 min · +132 pts · Clean');
+    expect(driveLine(drive({ clean: false, counts: none }), 'mi').text).toBe('12.0 mi · 24 min · +132 pts · No events');
+    expect(driveLine(drive({ estimate: true }), 'km').text).toBe('19.3 km · 24 min · +132 pts est. · 1 event');
+  });
+
+  test('no drives in the range: the header says so and does not open', async () => {
+    await draw(<DrivesCard drives={[]} rangeKey="day" onOpen={jest.fn()} />);
+    expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives · 0');
+    expect(screen.getByTestId('analytics-drives-empty')).toHaveTextContent('No drives yet');
+    await press(screen.getByTestId('analytics-drives-toggle'));
+    expect(screen.queryByTestId('analytics-drives-list')).toBeNull();
+  });
+});
