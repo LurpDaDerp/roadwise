@@ -1,5 +1,5 @@
 /**
- * React Query over a server RPC, for data only the server has (summary, boards, clan, friends).
+ * React Query over a server RPC, for data only the server has (summary, boards, friends).
  *
  * Keys are scoped by the signed-in user so a different account never paints the last one's
  * cache. The app's QueryClient never refetches on focus (its local-SQLite queries don't need it),

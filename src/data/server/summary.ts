@@ -1,6 +1,7 @@
 /**
- * `get_my_summary`: the signed-in driver's profile, progress, league placement, weekly
- * challenges and achievements — the Home header, Profile card and Leagues badge all read it.
+ * `get_my_summary`: the signed-in driver's profile, progress, weekly challenges and achievements
+ * (the server still sends a league placement, which the app no longer shows). Home's drive card and
+ * the Profile card read it.
  * It refetches when a drive upload or drive action settles and after a profile edit
  * (`./invalidate.ts`).
  */

@@ -1,8 +1,8 @@
 /**
  * The Android notification channels this app posts to.
  *
- * Two: `trips` (the local drive summary) and `updates` (the pushes the server sends: weekly recap,
- * league result, friend request; `ANDROID_CHANNEL` in supabase/functions/_shared/push_copy.ts).
+ * Two: `trips` (the local drive summary) and `updates` (the pushes the server sends: weekly recap
+ * and friend requests; `ANDROID_CHANNEL` in supabase/functions/_shared/push_copy.ts).
  * The native foreground-service channel is created and owned by the native module; nothing here
  * touches it.
  *
