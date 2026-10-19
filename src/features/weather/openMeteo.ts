@@ -1,16 +1,17 @@
 /**
  * The weather that dangerous-weather alerts read (plan D14): Open-Meteo's forecast API
  * (api.open-meteo.com, free, no key; the same third party the sky theme already asks), with the
- * conditions now and for the next 2 hours, and the rain of the last 3 hours (for black ice).
+ * conditions now and for the next 2 hours, the rain of the last 3 hours (black ice, water standing
+ * on the road) and the snow of the last 6 (snow on the road).
  *
  * - The position is rounded to one decimal (about 10 km) before it leaves the phone: fine enough
  *   for the weather, too coarse to say where the driver is.
  * - One request, aborted after 5 s. Every failure (no network, a slow answer, a malformed body)
  *   is `null`, which callers treat as "nothing to say".
  * - Wind comes back in mph so the thresholds read as the NWS writes them; precipitation in mm,
- *   snowfall in cm, visibility in metres (Open-Meteo's units).
+ *   snowfall in cm, visibility in metres (Open-Meteo's units); `is_day` says whether it is light.
  */
-import { ICE, LOOKAHEAD_HOURS } from './thresholds';
+import { ICE, LOOKAHEAD_HOURS, PAST_HOURS, SNOW_ROAD } from './thresholds';
 
 /** One moment of weather. Rates are per hour; any field the model lacks is null. */
 export type WeatherSample = {
@@ -27,6 +28,8 @@ export type WeatherSample = {
   windMph: number | null;
   gustMph: number | null;
   visibilityM: number | null;
+  /** Daylight (Open-Meteo's `is_day`): false after dark. */
+  isDay: boolean | null;
 };
 
 export type WeatherReading = {
@@ -34,11 +37,13 @@ export type WeatherReading = {
   samples: WeatherSample[];
   /** Rain and showers over the last `ICE.lookbackHours`, mm. */
   recentRainMm: number;
+  /** Snowfall over the last `SNOW_ROAD.lookbackHours`, cm. */
+  recentSnowCm: number;
 };
 
 export const OPEN_METEO_TIMEOUT_MS = 5_000;
 
-const VARS = 'weather_code,temperature_2m,precipitation,rain,showers,snowfall,wind_speed_10m,wind_gusts_10m,visibility';
+const VARS = 'weather_code,temperature_2m,precipitation,rain,showers,snowfall,wind_speed_10m,wind_gusts_10m,visibility,is_day';
 
 /** One decimal: about 11 km of latitude. */
 export function roundCoord(v: number): number {
@@ -50,7 +55,7 @@ export function weatherUrl(lat: number, lng: number): string {
   const lo = roundCoord(lng).toFixed(1);
   return (
     `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}` +
-    `&current=${VARS}&hourly=${VARS}&past_hours=${ICE.lookbackHours}&forecast_hours=${LOOKAHEAD_HOURS + 1}` +
+    `&current=${VARS}&hourly=${VARS}&past_hours=${PAST_HOURS}&forecast_hours=${LOOKAHEAD_HOURS + 1}` +
     '&wind_speed_unit=mph&timeformat=unixtime'
   );
 }
@@ -58,6 +63,7 @@ export function weatherUrl(lat: number, lng: number): string {
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const sum = (a: number | null, b: number | null): number | null => (a === null && b === null ? null : (a ?? 0) + (b ?? 0));
 const scaled = (v: number | null, k: number): number | null => (v === null ? null : v * k);
+const day = (v: unknown): boolean | null => (v === 1 ? true : v === 0 ? false : null);
 
 type Block = Record<string, unknown>;
 
@@ -73,6 +79,7 @@ function sampleOf(time: number, at: (key: string) => unknown, perHour: number): 
     windMph: num(at('wind_speed_10m')),
     gustMph: num(at('wind_gusts_10m')),
     visibilityM: num(at('visibility')),
+    isDay: day(at('is_day')),
   };
 }
 
@@ -93,25 +100,31 @@ export function parseWeather(body: unknown): WeatherReading | null {
   const samples = [sampleOf(now, (k) => c[k], perHour)];
 
   let recentRainMm = 0;
+  let recentSnowCm = 0;
   const hourly = (body as { hourly?: unknown }).hourly;
   const h = hourly && typeof hourly === 'object' ? (hourly as Record<string, unknown>) : {};
   const times = Array.isArray(h.time) ? h.time : [];
   const ahead = now + LOOKAHEAD_HOURS * 3600;
-  const since = now - ICE.lookbackHours * 3600;
+  const rainSince = now - ICE.lookbackHours * 3600;
+  const snowSince = now - SNOW_ROAD.lookbackHours * 3600;
   let currentCounted = false;
   times.forEach((raw, i) => {
     const t = num(raw);
     if (t === null) return;
     const at = (k: string) => (Array.isArray(h[k]) ? (h[k] as unknown[])[i] : null);
     if (t > now && t <= ahead) samples.push(sampleOf(t, at, 1));
-    else if (t > since && t <= now) {
-      recentRainMm += sum(num(at('rain')), num(at('showers'))) ?? 0;
+    else if (t > snowSince && t <= now) {
+      if (t > rainSince) recentRainMm += sum(num(at('rain')), num(at('showers'))) ?? 0;
+      recentSnowCm += num(at('snowfall')) ?? 0;
       if (t === now) currentCounted = true;
     }
   });
   // The quarter hour since the last hourly stamp is not in any hourly sum yet.
-  if (!currentCounted) recentRainMm += sum(num(c.rain), num(c.showers)) ?? 0;
-  return { samples, recentRainMm };
+  if (!currentCounted) {
+    recentRainMm += sum(num(c.rain), num(c.showers)) ?? 0;
+    recentSnowCm += num(c.snowfall) ?? 0;
+  }
+  return { samples, recentRainMm, recentSnowCm };
 }
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;

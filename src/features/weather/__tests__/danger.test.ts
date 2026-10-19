@@ -3,11 +3,11 @@ import { KMH_PER_MPH } from '@/lib/units';
 import { WEATHER_ACTIONS, WEATHER_TITLES, weatherAction, weatherLabel, weatherLine, weatherTitle } from '../copy';
 import { DANGER_ORDER, dangerAt, dangerFrom, isDangerKind, moreSevere, type DangerAlert, type DangerKind } from '../danger';
 import type { WeatherReading, WeatherSample } from '../openMeteo';
-import { ICE, QUARTER_MILE_M, RATE, WIND } from '../thresholds';
+import { ICE, NIGHT_RAIN, QUARTER_MILE_M, RATE, SNOW_ROAD, STANDING_WATER, WIND } from '../thresholds';
 
 const T = 1_790_000_000;
 
-/** A calm, mild, clear moment; each test changes only what it is about. */
+/** A calm, mild, clear moment by day; each test changes only what it is about. */
 function sample(over: Partial<WeatherSample> = {}): WeatherSample {
   return {
     time: T,
@@ -19,11 +19,14 @@ function sample(over: Partial<WeatherSample> = {}): WeatherSample {
     windMph: 5,
     gustMph: 10,
     visibilityM: 20_000,
+    isDay: true,
     ...over,
   };
 }
 
-const at = (over: Partial<WeatherSample>, recentRainMm = 0): DangerKind | null => dangerAt(sample(over), recentRainMm);
+const at = (over: Partial<WeatherSample>, recentRainMm = 0, recentSnowCm = 0): DangerKind | null =>
+  dangerAt(sample(over), recentRainMm, recentSnowCm);
+const reading = (samples: WeatherSample[], recentRainMm = 0, recentSnowCm = 0): WeatherReading => ({ samples, recentRainMm, recentSnowCm });
 
 describe('nothing dangerous: no alert', () => {
   test.each<[string, Partial<WeatherSample>]>([
@@ -35,9 +38,24 @@ describe('nothing dangerous: no alert', () => {
     ['a breezy day just under a Wind Advisory', { windMph: 25, gustMph: WIND.advisoryGustMph - 0.1 }],
     ['mist with fair visibility', { code: 45, visibilityM: 1500 }],
     ['cold and dry', { tempC: -12 }],
-    ['every field unknown', { code: null, tempC: null, rainMmH: null, precipMmH: null, snowCmH: null, windMph: null, gustMph: null, visibilityM: null }],
+    ['every field unknown', { code: null, tempC: null, rainMmH: null, precipMmH: null, snowCmH: null, windMph: null, gustMph: null, visibilityM: null, isDay: null }],
+    ['a drizzle at night', { code: 51, rainMmH: 0.4, precipMmH: 0.4, isDay: false }],
+    ['light rain at night, just under moderate', { code: 61, rainMmH: NIGHT_RAIN.rainMmH - 0.1, precipMmH: NIGHT_RAIN.rainMmH - 0.1, isDay: false }],
+    ['moderate rain by day', { code: 63, rainMmH: 5, precipMmH: 5 }],
+    ['a thunderstorm with only a sprinkle', { code: 95, rainMmH: 1, precipMmH: 1 }],
+    ['rime fog that can still be seen through', { code: 48, tempC: -2, visibilityM: 2000 }],
   ])('%s', (_name, over) => {
     expect(at(over)).toBeNull();
+  });
+
+  test('a wet road by day after a modest rain: no alert', () => {
+    expect(at({ code: 3 }, STANDING_WATER.rainMm - 0.1)).toBeNull();
+    expect(at({ code: 61, rainMmH: 1.5, precipMmH: 1.5 }, 8)).toBeNull();
+  });
+
+  test('a dusting of snow, or snow that has had time to melt: no alert', () => {
+    expect(at({ tempC: -3 }, 0, SNOW_ROAD.snowCm - 0.1)).toBeNull();
+    expect(at({ tempC: SNOW_ROAD.maxTempC + 0.1 }, 0, 6)).toBeNull();
   });
 });
 
@@ -49,9 +67,11 @@ describe('each danger at its cited threshold (and not just below it)', () => {
     expect(at({ code: 57 })).toBe('freezing_drizzle');
   });
 
-  test('thunderstorm (WMO 95/97) and hail (WMO 96/99)', () => {
-    expect(at({ code: 95 })).toBe('thunderstorm');
-    expect(at({ code: 97 })).toBe('thunderstorm');
+  test('thunderstorm (WMO 95/97) with at least moderate rain (2.6 mm an hour); hail (WMO 96/99)', () => {
+    expect(at({ code: 95, rainMmH: RATE.moderateRainMmH })).toBe('thunderstorm');
+    expect(at({ code: 97, rainMmH: 4 })).toBe('thunderstorm');
+    expect(at({ code: 95, rainMmH: RATE.moderateRainMmH - 0.01 })).toBeNull();
+    expect(at({ code: 95, rainMmH: null })).toBeNull();
     expect(at({ code: 96 })).toBe('hail');
     expect(at({ code: 99 })).toBe('hail');
   });
@@ -97,10 +117,11 @@ describe('each danger at its cited threshold (and not just below it)', () => {
     expect(at({ code: 61, rainMmH: 2, precipMmH: 2, visibilityM: 300 })).toBe('low_visibility');
   });
 
-  test('freezing fog: rime fog (WMO 48) at or below 0 °C, or dense fog below freezing', () => {
-    expect(at({ code: 48, tempC: 0 })).toBe('freezing_fog');
-    expect(at({ code: 48, tempC: null })).toBe('freezing_fog');
-    expect(at({ code: 48, tempC: 0.1 })).toBeNull();
+  test('freezing fog: fog cutting visibility to 1/4 mile at or below 0 °C (rime fog when the temperature is unknown)', () => {
+    expect(at({ code: 48, tempC: 0, visibilityM: QUARTER_MILE_M })).toBe('freezing_fog');
+    expect(at({ code: 48, tempC: null, visibilityM: 300 })).toBe('freezing_fog');
+    expect(at({ code: 48, tempC: 0, visibilityM: QUARTER_MILE_M + 1 })).toBeNull();
+    expect(at({ code: 48, tempC: 0, visibilityM: null })).toBeNull();
     expect(at({ code: 48, tempC: 1, visibilityM: 200 })).toBe('dense_fog');
     expect(at({ code: 45, tempC: -1, visibilityM: 200 })).toBe('freezing_fog');
     // Fog below freezing that can still be seen through: no alert.
@@ -113,12 +134,54 @@ describe('each danger at its cited threshold (and not just below it)', () => {
     expect(at({ tempC: ICE.freezingC + 0.1 }, 5)).toBeNull();
     expect(at({ tempC: -1, rainMmH: ICE.wetRoadMm })).toBe('black_ice');
   });
+
+  test('rain at night: moderate rain (2.6 mm an hour) or more after dark', () => {
+    expect(at({ code: 63, rainMmH: NIGHT_RAIN.rainMmH, precipMmH: NIGHT_RAIN.rainMmH, isDay: false })).toBe('rain_at_night');
+    expect(at({ code: 80, rainMmH: 5, isDay: false })).toBe('rain_at_night');
+    // The same rain by day, or when day and night are unknown: no alert.
+    expect(at({ code: 63, rainMmH: 5, isDay: true })).toBeNull();
+    expect(at({ code: 63, rainMmH: 5, isDay: null })).toBeNull();
+    // Heavier rain at night is heavy rain.
+    expect(at({ rainMmH: RATE.heavyRainMmH, isDay: false })).toBe('heavy_rain');
+  });
+
+  test('standing water: 19 mm (0.75 in) of rain in the last 3 hours, even once it has eased', () => {
+    expect(STANDING_WATER).toEqual({ rainMm: 19, lookbackHours: 3 });
+    expect(at({ code: 3 }, STANDING_WATER.rainMm)).toBe('standing_water');
+    expect(at({ code: 3 }, STANDING_WATER.rainMm - 0.01)).toBeNull();
+    // Still pouring: heavy rain names it; below freezing: black ice.
+    expect(at({ rainMmH: 12 }, 30)).toBe('heavy_rain');
+    expect(at({ tempC: -1 }, 30)).toBe('black_ice');
+    // At night it outranks rain at night.
+    expect(at({ rainMmH: 4, isDay: false }, 25)).toBe('standing_water');
+  });
+
+  test('snow on the road: 2.5 cm (1 in) of snow in the last 6 hours, air at or below 1 °C', () => {
+    expect(SNOW_ROAD).toEqual({ snowCm: 2.5, maxTempC: 1, lookbackHours: 6 });
+    expect(at({ tempC: SNOW_ROAD.maxTempC }, 0, SNOW_ROAD.snowCm)).toBe('snow_on_road');
+    expect(at({ tempC: -6, code: 71, snowCmH: 0.3 }, 0, 4)).toBe('snow_on_road');
+    expect(at({ tempC: null }, 0, 10)).toBeNull();
+    // Still falling hard: heavy snow names it.
+    expect(at({ tempC: -3, code: 75, snowCmH: 3 }, 0, 8)).toBe('heavy_snow');
+  });
 });
 
 describe('the most severe wins', () => {
-  test('the order: blizzard first, strong winds last', () => {
+  test('the order: blizzard first, rain at night last', () => {
     expect(DANGER_ORDER[0]).toBe('blizzard');
-    expect(DANGER_ORDER.at(-1)).toBe('strong_wind');
+    expect(DANGER_ORDER.at(-1)).toBe('rain_at_night');
+    expect(DANGER_ORDER.slice(DANGER_ORDER.indexOf('heavy_snow'))).toEqual([
+      'heavy_snow',
+      'snow_on_road',
+      'freezing_fog',
+      'dense_fog',
+      'low_visibility',
+      'thunderstorm',
+      'heavy_rain',
+      'standing_water',
+      'strong_wind',
+      'rain_at_night',
+    ]);
     expect(moreSevere('freezing_rain', 'heavy_rain')).toBe(true);
     expect(moreSevere('heavy_rain', 'freezing_rain')).toBe(false);
     expect(moreSevere('strong_wind', null)).toBe(true);
@@ -131,30 +194,40 @@ describe('the most severe wins', () => {
   });
 
   test('across now and the next 2 hours: a later, worse danger beats a milder one now', () => {
-    const reading: WeatherReading = {
-      samples: [sample({ gustMph: 48 }), sample({ time: T + 3600, gustMph: 52 }), sample({ time: T + 7200, code: 67, tempC: -1 })],
-      recentRainMm: 0,
-    };
-    expect(dangerFrom(reading)).toEqual<DangerAlert>({ kind: 'freezing_rain', gustMph: null, visibilityM: null });
+    const r = reading([sample({ gustMph: 48 }), sample({ time: T + 3600, gustMph: 52 }), sample({ time: T + 7200, code: 67, tempC: -1 })]);
+    expect(dangerFrom(r)).toEqual<DangerAlert>({ kind: 'freezing_rain', gustMph: null, visibilityM: null });
   });
 
   test('the wind alert carries the strongest gust, the fog alert the lowest visibility', () => {
     expect(
-      dangerFrom({ samples: [sample({ gustMph: 48 }), sample({ time: T + 3600, gustMph: 55.6 })], recentRainMm: 0 })
+      dangerFrom(reading([sample({ gustMph: 48 }), sample({ time: T + 3600, gustMph: 55.6 })]))
     ).toEqual({ kind: 'strong_wind', gustMph: 55.6, visibilityM: null });
     expect(
-      dangerFrom({ samples: [sample({ code: 45, visibilityM: 300 }), sample({ time: T + 3600, code: 45, visibilityM: 120 })], recentRainMm: 0 })
+      dangerFrom(reading([sample({ code: 45, visibilityM: 300 }), sample({ time: T + 3600, code: 45, visibilityM: 120 })]))
     ).toEqual({ kind: 'dense_fog', gustMph: null, visibilityM: 120 });
   });
 
   test('no reading, or nothing dangerous in it: null', () => {
     expect(dangerFrom(null)).toBeNull();
-    expect(dangerFrom({ samples: [sample(), sample({ time: T + 3600 })], recentRainMm: 0 })).toBeNull();
-    expect(dangerFrom({ samples: [], recentRainMm: 3 })).toBeNull();
+    expect(dangerFrom(reading([sample(), sample({ time: T + 3600 })]))).toBeNull();
+    expect(dangerFrom(reading([], 30, 10))).toBeNull();
+  });
+
+  test('the reading carries the recent snow and rain to every moment', () => {
+    expect(dangerFrom(reading([sample({ tempC: -2 }), sample({ time: T + 3600, tempC: -1 })], 0, 3))).toEqual({
+      kind: 'snow_on_road',
+      gustMph: null,
+      visibilityM: null,
+    });
+    expect(dangerFrom(reading([sample(), sample({ time: T + 3600, rainMmH: 4, isDay: false })], 20))?.kind).toBe('standing_water');
+    expect(dangerFrom(reading([sample(), sample({ time: T + 3600, rainMmH: 4, isDay: false })]))?.kind).toBe('rain_at_night');
   });
 
   test('isDangerKind guards a stored value', () => {
     expect(isDangerKind('dense_fog')).toBe(true);
+    expect(isDangerKind('rain_at_night')).toBe(true);
+    expect(isDangerKind('standing_water')).toBe(true);
+    expect(isDangerKind('snow_on_road')).toBe(true);
     expect(isDangerKind('tornado')).toBe(false);
     expect(isDangerKind(null)).toBe(false);
   });
@@ -188,6 +261,24 @@ describe('the words', () => {
     expect(weatherLine(alert('freezing_rain'), 'mi')).toContain(weatherAction(alert('freezing_rain')));
     expect(weatherLine(alert('dense_fog'), 'mi')).toContain(weatherAction(alert('dense_fog')));
     expect(weatherLine(alert('strong_wind'), 'mi')).toContain(weatherAction(alert('strong_wind')).toLowerCase());
+    for (const kind of ['snow_on_road', 'standing_water', 'rain_at_night'] as const) {
+      expect(weatherLine(alert(kind), 'mi')).toContain(weatherAction(alert(kind)));
+    }
+  });
+
+  test('the new dangers read plainly', () => {
+    expect([weatherTitle(alert('rain_at_night')), weatherLine(alert('rain_at_night'), 'mi')]).toEqual([
+      'Rain at night',
+      'Rain in the dark hides the lines. Slow down, leave room.',
+    ]);
+    expect([weatherTitle(alert('standing_water')), weatherLine(alert('standing_water'), 'km')]).toEqual([
+      'Standing water',
+      'Water pooling on the road. Slow down, avoid puddles.',
+    ]);
+    expect([weatherTitle(alert('snow_on_road')), weatherLine(alert('snow_on_road'), 'mi')]).toEqual([
+      'Snowy roads',
+      'Fresh snow on the road. Slow down, brake gently.',
+    ]);
   });
 
   test('wind in the driver units', () => {

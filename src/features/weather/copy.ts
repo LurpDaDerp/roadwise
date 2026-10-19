@@ -16,12 +16,15 @@ export const WEATHER_TITLES: Readonly<Record<DangerKind, string>> = {
   hail: 'Hail',
   high_wind: 'High winds',
   heavy_snow: 'Heavy snow',
+  snow_on_road: 'Snowy roads',
   freezing_fog: 'Freezing fog',
   dense_fog: 'Dense fog',
   low_visibility: 'Low visibility',
   thunderstorm: 'Thunderstorm',
   heavy_rain: 'Heavy rain',
+  standing_water: 'Standing water',
   strong_wind: 'Strong winds',
+  rain_at_night: 'Rain at night',
 };
 
 /** The driving screen's warning under the title: the line's "what to do", at a glance. */
@@ -33,12 +36,15 @@ export const WEATHER_ACTIONS: Readonly<Record<DangerKind, string>> = {
   hail: 'Pull over safely',
   high_wind: 'Hands on the wheel',
   heavy_snow: 'Slow down, leave room',
+  snow_on_road: 'Slow down, brake gently',
   freezing_fog: 'Slow down, low beams',
   dense_fog: 'Slow down, low beams',
   low_visibility: 'Slow down, low beams',
   thunderstorm: 'Slow down',
   heavy_rain: 'Slow down',
+  standing_water: 'Slow down, avoid puddles',
   strong_wind: 'Hands on the wheel',
+  rain_at_night: 'Slow down, leave room',
 };
 
 const HANDS = 'Keep both hands on the wheel.';
@@ -73,6 +79,8 @@ export function weatherLine(a: DangerAlert, units: Units): string {
       return a.gustMph === null ? `Strong, steady wind. ${HANDS}` : `${gusts(a.gustMph, units)}. ${HANDS}`;
     case 'heavy_snow':
       return 'Snow is piling up fast. Slow down, leave more room.';
+    case 'snow_on_road':
+      return `Fresh snow on the road. ${ICE}`;
     case 'freezing_fog':
       return `Fog is icing the road. ${LOW_BEAMS}`;
     case 'dense_fog':
@@ -82,6 +90,10 @@ export function weatherLine(a: DangerAlert, units: Units): string {
       return 'Lightning and downpours nearby. Slow down.';
     case 'heavy_rain':
       return 'Water on the road. Slow down to avoid hydroplaning.';
+    case 'standing_water':
+      return 'Water pooling on the road. Slow down, avoid puddles.';
+    case 'rain_at_night':
+      return 'Rain in the dark hides the lines. Slow down, leave room.';
   }
 }
 
