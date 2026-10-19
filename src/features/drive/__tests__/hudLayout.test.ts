@@ -20,13 +20,13 @@ function hitsCircle(r: Rect, halo: Rect): boolean {
 }
 
 describe('worked phones (§3.1, §3.2)', () => {
-  test('iPhone SE 375 × 667 (status bar 20): halo 343, the points in the band line, a 108 pt top row, the R2-1 at 86 × 108', () => {
+  test('iPhone SE 375 × 667 (status bar 20): halo 343 as near the centre as fits, the points in the band line, a 96 pt top row, the R2-1 at 77 × 96', () => {
     const l = L({ width: 375, height: 667, insets: { ...ZERO, top: 20 } });
     expect(l).toMatchObject({ orientation: 'portrait', compact: false });
     expect(l.halo.w).toBe(343);
     expect(l.points).toBe('line');
-    expect(l.row).toMatchObject({ y: 32, h: 108 });
-    expect([l.sign.w, l.sign.h]).toEqual([86, 108]);
+    expect(l.row).toMatchObject({ y: 32, h: 96 });
+    expect([l.sign.w, l.sign.h]).toEqual([77, 96]);
     expect(l.numeralPt2).toBe(157);
   });
 
@@ -35,8 +35,9 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.sign.x).toBe(l.row.x);
     expect(l.nav.x + l.nav.w).toBe(l.row.x + l.row.w);
     expect(l.band.y).toBeGreaterThanOrEqual(l.row.y + l.row.h);
-    // the halo's box rides 20 pt into the band's foot; its lit ring stays under the band
-    expect(l.halo.y).toBe(l.band.y + l.band.h - 20);
+    // the halo centred on the screen; its lit ring clears the band
+    expect(l.halo.y + l.halo.h / 2).toBe(852 / 2);
+    expect(hitsCircle(l.band, l.halo)).toBe(false);
     expect(l.end).toEqual({ x: 16, y: 852 - 34 - 16 - 76, w: 361, h: 76 });
     expect(l.end.y).toBeGreaterThanOrEqual(l.halo.y + l.halo.h);
   });
@@ -74,7 +75,7 @@ describe('worked phones (§3.1, §3.2)', () => {
 
   test('km: the round sign at most 116 pt, fitted to its row', () => {
     const l = L({ width: 375, height: 667, units: 'km' });
-    expect([l.sign.w, l.sign.h]).toEqual([114, 114]);
+    expect([l.sign.w, l.sign.h]).toEqual([105, 105]);
     const big = L({ width: 430, height: 932, units: 'km' });
     expect([big.sign.w, big.sign.h]).toEqual([116, 116]);
     const small = L({ width: 320, height: 568, units: 'km' });

@@ -19,7 +19,7 @@ const m = tokens.motion;
 
 /**
  * The points, shown only while stopped (the parent renders this only when `points` is non-null):
- * the running total and the change since the last stop. A gain is green with one brief pulse; a
+ * the running total and the change since the last stop, labelled as such. A gain is green with one brief pulse; a
  * loss is red with one small shake; reduce motion keeps the colour and drops the movement. It
  * plays when it appears and whenever the change moves while still stopped — never while moving,
  * because it does not exist then.
@@ -65,9 +65,12 @@ function StoppedPointsView({ total, change, palette: p }: { total: number; chang
         {totalText}
         <Text style={[styles.unit, { color: p.inkMuted }]}> {hudCopy.points.unit}</Text>
       </Text>
-      <Animated.View style={motion}>
-        <Text testID="hud-points-change" allowFontScaling={false} style={[styles.change, { color: changeColor }]}>
-          {changeText}
+      <Animated.View style={[styles.changeBox, motion]}>
+        <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit>
+          <Text testID="hud-points-change" style={[styles.change, { color: changeColor }]}>
+            {changeText}
+          </Text>
+          <Text style={[styles.since, { color: p.inkMuted }]}> {hudCopy.points.since}</Text>
         </Text>
       </Animated.View>
     </View>
@@ -80,5 +83,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center', gap: 14 },
   total: { fontFamily: fontFamilies.numeralsBold, fontSize: 40, lineHeight: 46, fontVariant: ['tabular-nums'] },
   unit: { fontFamily: fontFamilies.field, fontSize: 20 },
+  changeBox: { flexShrink: 1 },
   change: { fontFamily: fontFamilies.numeralsBold, fontSize: 32, lineHeight: 38, fontVariant: ['tabular-nums'] },
+  since: { fontFamily: fontFamilies.field, fontSize: 16 },
 });

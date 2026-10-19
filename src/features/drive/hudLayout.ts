@@ -2,10 +2,10 @@
 // pure function, so "End is always on screen" and "nothing overlaps" are tests, not hopes.
 //
 // - Portrait: a top row (the sign at its left, the navigation button at its right), the 56 pt band
-//   under it (with a DashPal paired its right 88 pt are the chip's slot), the halo under the
-//   band (its box 20 pt into the band's foot) and the End swipe across the bottom. Spare height goes to a points line under the halo (so the halo
-//   never moves when the car stops), then to a taller top row (up to 144 pt: a bigger sign), then
-//   evenly above and below the halo.
+//   under it (with a DashPal paired its right 88 pt are the chip's slot), the halo centred
+//   on the screen (as near as the shortest top row and End allow) and the End swipe across the
+//   bottom. The top row takes the height above the band (up to 144 pt: a bigger sign); a points line
+//   sits under the halo when it fits above End (so the halo never moves when the car stops).
 // - Landscape: the halo on the left; the top row, the band, the points line and End on the right.
 // - Compact (a window too small for a 220 pt halo: split screen, a small freeform window): an 88 pt
 //   top row with the band between the sign and the navigation button, bare numerals in the middle,
@@ -77,8 +77,6 @@ export interface HudLayoutInput {
 export const HUD_BAND_PT = 56;
 export const HUD_CHIP_SLOT_PT = 88;
 export const HUD_POINTS_LINE_PT = 46;
-/** How far the portrait halo's box rides up into the band's foot. */
-export const HUD_HALO_LIFT_PT = 20;
 /** The top row: at least the navigation slot and a little air, at most 144 pt (a bigger sign). */
 export const HUD_ROW_MIN_PT = 96;
 export const HUD_ROW_MAX_PT = 144;
@@ -154,27 +152,29 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
     const region = frameH - HUD_ROW_MIN_PT - GAP - HUD_BAND_PT - GAP - GAP - END_SWIPE_H_PT;
     const B = Math.floor(Math.min(HALO_MAX_BOX_PT, frameW, region));
     if (B >= HALO_MIN_RING_BOX_PT) {
-      let slack = region - B;
-      const pointsLine = slack >= HUD_POINTS_LINE_PT + GAP;
-      if (pointsLine) slack -= HUD_POINTS_LINE_PT + GAP;
-      const rowH = Math.min(HUD_ROW_MAX_PT, HUD_ROW_MIN_PT + slack);
-      slack -= rowH - HUD_ROW_MIN_PT;
+      const g = haloGeometry(B);
+      // The lit ring's outer edge at rest; the band clears it by a gap (only the glow's faint edge
+      // reaches past it).
+      const ringR = g.r + g.W / 2;
+      const end = endAt(left, frameW, bottom);
+      // The halo centred on the screen, held between the shortest top row and End.
+      const highest = top + HUD_ROW_MIN_PT + GAP + HUD_BAND_PT + GAP + ringR - B / 2;
+      const lowest = end.y - GAP - B;
+      const haloY = Math.min(lowest, Math.max(highest, height / 2 - B / 2));
+      const rowH = Math.max(HUD_ROW_MIN_PT, Math.min(HUD_ROW_MAX_PT, Math.floor(haloY + B / 2 - ringR - GAP - HUD_BAND_PT - GAP - top)));
+      const pointsLine = haloY + B + GAP + HUD_POINTS_LINE_PT + GAP <= end.y;
       const row: Rect = { x: left, y: top, w: frameW, h: rowH };
       const band: Rect = { x: left, y: top + rowH + GAP, w: frameW, h: HUD_BAND_PT };
-      // The halo's box rides up into the band's foot (only the glow's faint edge reaches it; the lit
-      // ring stays under the band); the room it leaves goes under the points line instead.
-      const groupTop = band.y + HUD_BAND_PT - HUD_HALO_LIFT_PT + slack / 2;
-      const g = haloGeometry(B);
       return {
         orientation,
         compact: false,
         band,
         ...bandParts(band, i.chip),
-        halo: { x: left + (frameW - B) / 2, y: groupTop, w: B, h: B, ring: true },
-        points: pointsLine ? { x: left, y: groupTop + B + GAP, w: frameW, h: HUD_POINTS_LINE_PT } : 'line',
+        halo: { x: left + (frameW - B) / 2, y: haloY, w: B, h: B, ring: true },
+        points: pointsLine ? { x: left, y: haloY + B + GAP, w: frameW, h: HUD_POINTS_LINE_PT } : 'line',
         row,
         ...rowItems(row, i.units),
-        end: endAt(left, frameW, bottom),
+        end,
         numeralPt2: haloNumeralPt(g.rc, 2, unitPt),
         numeralPt3: haloNumeralPt(g.rc, 3, unitPt),
         unitPt,
