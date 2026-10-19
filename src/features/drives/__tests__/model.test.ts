@@ -9,7 +9,9 @@ import {
   multiplierText,
   notDrivingLabel,
   pointsState,
+  receipt,
   reportReasons,
+  spokenPoints,
   streakLine,
 } from '../summary';
 
@@ -195,6 +197,43 @@ describe('summary', () => {
     const { lines, note } = breakdownLines(drive({ result: null, status: 'pending', estimate: true, pointsNet: 30 }), [event({ disputeStatus: 'accepted' })]);
     expect(lines.map((l) => l.value)).toEqual(['Removed', '+30']);
     expect(note).toMatch(/once this drive is scored/);
+  });
+
+  test('the receipt: Earned is the gross gains, one deduction per event, the total is the net', () => {
+    const r = receipt(drive(), [event()]);
+    expect(r.earned).toBe(142);
+    expect(r.detail).toEqual(['Safe miles 11.8 mi × 10', 'Streak ×1.20']);
+    expect(r.deductions.map((l) => [l.label, l.value, l.cost, l.tone])).toEqual([['Hard brake · Minor', '−10', 10, 'loss']]);
+    expect(r.total).toBe(132);
+    expect(r.note).toBeNull();
+  });
+
+  test('the receipt detail keeps the daily cap, the clean bonus, km and the DashPal multiplier', () => {
+    const b = drive().result!.breakdown;
+    const d = drive({ result: { ...drive().result!, breakdown: { ...b, safeMiles: 14, cleanBonus: 25, dashcamMult: 1.25, mult: 1.5 } } });
+    expect(receipt(d, [], 'km').detail).toEqual(['Safe miles 11.8 mi (19.0 km) × 10 (daily cap)', 'Clean bonus +25', 'Streak ×1.20 · DashPal ×1.25 → ×1.50 (cap)']);
+  });
+
+  test('without a server breakdown, Earned is the total plus the known costs, and unknown while any is missing', () => {
+    const est = drive({ result: null, status: 'pending', estimate: true, pointsNet: 30 });
+    expect(receipt(est, [event({ penalty: 15 }), event({ id: 'e2', disputeStatus: 'accepted' })])).toMatchObject({ earned: 45, detail: [], total: 30, note: expect.stringMatching(/once this drive is scored/) });
+    expect(receipt(est, [event({ penalty: null })]).earned).toBeNull();
+    expect(receipt(drive({ result: null, status: 'pending', pointsNet: null }), [event()])).toMatchObject({ earned: null, total: null });
+  });
+
+  test('the receipt lists deductions oldest first and marks a removed one', () => {
+    const r = receipt(drive(), [event({ id: 'late', startedAt: NOW }), event({ id: 'gone', removed: true })]);
+    expect(r.deductions.map((l) => [l.event.id, l.value, l.cost, l.tone])).toEqual([
+      ['gone', 'Removed', 0, 'neutral'],
+      ['late', '−10', 10, 'loss'],
+    ]);
+  });
+
+  test('spoken points carry the sign in words', () => {
+    expect(spokenPoints(142)).toBe('plus 142 points');
+    expect(spokenPoints(-1)).toBe('minus 1 point');
+    expect(spokenPoints(-1240)).toBe('minus 1,240 points');
+    expect(spokenPoints(0)).toBe('0 points');
   });
 
   test('the streak line covers growth, freezes and risk', () => {

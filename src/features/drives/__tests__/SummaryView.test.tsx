@@ -3,7 +3,7 @@ import { screen, within } from '@testing-library/react-native';
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
 import { plainBundle } from '@/ui/sky/palette';
 
-import { DAY, draw, drive, event, NOW, press, result } from '../__fixtures__/drives';
+import { DAY, draw, drive, event, HOUR, NOW, press, result } from '../__fixtures__/drives';
 import { SummaryView, type SummaryViewProps } from '../SummaryView';
 import { endNote } from '../summary';
 
@@ -25,28 +25,74 @@ const props = (over: Partial<SummaryViewProps> = {}): SummaryViewProps => ({
   ...over,
 });
 
-test('the breakdown is collapsed by default and expands in place', async () => {
+test('the receipt lists what was earned, each deduction and the total, open from the start', async () => {
   await draw(<SummaryView {...props()} />);
-  expect(screen.getByLabelText('Points earned: +132 points')).toBeOnTheScreen();
-  const toggle = screen.getByTestId('breakdown-toggle');
-  expect(toggle).toBeCollapsed();
-  expect(screen.queryByTestId('breakdown')).toBeNull();
+  expect(screen.getByLabelText('Points this drive: +132 points')).toBeOnTheScreen();
+  expect(screen.queryByTestId('breakdown-toggle')).toBeNull();
+  const r = screen.getByTestId('receipt');
 
-  await press(toggle);
-  expect(screen.getByTestId('breakdown-toggle')).toBeExpanded();
-  const list = screen.getByTestId('breakdown');
-  expect(within(list).getByText('Safe miles: 11.8 mi × 10')).toBeOnTheScreen();
-  expect(within(list).getByText('Multiplier: streak ×1.20')).toBeOnTheScreen();
-  expect(within(list).getByText('Hard brake · Minor')).toBeOnTheScreen();
-  expect(within(list).getByText('Net total')).toBeOnTheScreen();
+  const earned = within(r).getByTestId('receipt-earned');
+  expect(earned).toHaveProp('accessibilityLabel', 'Earned, plus 142 points. Safe miles 11.8 mi × 10, Streak ×1.20');
+  expect(within(earned).getByText('+142')).toHaveStyle({ color: plainBundle('light').colors.signal.clean.text });
+  expect(within(earned).getByText('Earned')).toBeOnTheScreen();
+  expect(within(r).getByTestId('receipt-detail')).toHaveTextContent('Safe miles 11.8 mi × 10 · Streak ×1.20');
 
-  await press(screen.getByTestId('breakdown-toggle'));
-  expect(screen.queryByTestId('breakdown')).toBeNull();
+  const line = within(r).getByTestId('event-e1');
+  expect(line).toHaveProp('accessibilityLabel', expect.stringMatching(/^Hard brake · Minor at .+, minus 10 points$/));
+  expect(within(line).getByText('−10')).toHaveStyle({ color: plainBundle('light').colors.signal.severe.text });
+  expect(within(r).queryByTestId('receipt-none')).toBeNull();
+
+  const total = within(r).getByTestId('receipt-total');
+  expect(total).toHaveProp('accessibilityLabel', 'Total, plus 132 points');
+  expect(within(total).getByText('+132')).toHaveStyle({ color: plainBundle('light').colors.text });
+});
+
+test('a clean drive says "No deductions" and keeps the clean bonus in the detail', async () => {
+  const base = result();
+  const r = result({ breakdown: { ...base.breakdown, cleanBonus: 25, gains: 172, events: [], penalties: 0, net: 172 }, net: 172 });
+  const counts = { speeding: 0, pickups: 0, handlingS: 0, hardBrake: 0, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 0 };
+  await draw(<SummaryView {...props({ drive: drive({ pointsNet: 172, clean: true, counts, result: r }), events: [] })} />);
+  expect(screen.getByTestId('receipt-none')).toHaveTextContent('No deductions');
+  expect(screen.getByTestId('receipt-detail')).toHaveTextContent('Safe miles 11.8 mi × 10 · Clean bonus +25 · Streak ×1.20');
+  expect(screen.getByTestId('receipt-total')).toHaveProp('accessibilityLabel', 'Total, plus 172 points');
+});
+
+test('more than five deductions: five show, then "Show more" reveals the rest', async () => {
+  const many = Array.from({ length: 7 }, (_, i) => event({ id: `m${i}`, startedAt: NOW - 2 * HOUR + (i + 1) * 60_000 }));
+  await draw(<SummaryView {...props({ events: many })} />);
+  expect(screen.getByTestId('event-m4')).toBeOnTheScreen();
+  expect(screen.queryByTestId('event-m5')).toBeNull();
+  const more = screen.getByTestId('receipt-more');
+  expect(more).toHaveTextContent(/Show more/);
+  expect(more).toHaveProp('accessibilityHint', 'Shows 2 more deductions');
+
+  await press(more);
+  expect(screen.getByTestId('event-m5')).toBeOnTheScreen();
+  expect(screen.getByTestId('event-m6')).toBeOnTheScreen();
+  expect(screen.getByTestId('receipt-more')).toHaveTextContent(/Show less/);
+
+  await press(screen.getByTestId('receipt-more'));
+  expect(screen.queryByTestId('event-m6')).toBeNull();
+});
+
+test('exactly five deductions need no "Show more"', async () => {
+  const five = Array.from({ length: 5 }, (_, i) => event({ id: `f${i}` }));
+  await draw(<SummaryView {...props({ events: five })} />);
+  expect(screen.getByTestId('event-f4')).toBeOnTheScreen();
+  expect(screen.queryByTestId('receipt-more')).toBeNull();
+});
+
+test('an event taken off by a report stays on the receipt, struck through, as "Removed"', async () => {
+  await draw(<SummaryView {...props({ events: [event({ disputeStatus: 'accepted' })] })} />);
+  const line = screen.getByTestId('event-e1');
+  expect(line).toHaveProp('accessibilityLabel', expect.stringMatching(/, removed$/));
+  expect(within(line).getByText('Removed')).toHaveStyle({ color: plainBundle('light').colors.textMuted });
+  expect(within(line).getByText('Hard brake · Minor')).toHaveStyle({ textDecorationLine: 'line-through' });
+  expect(screen.getByTestId('dispute-e1')).toHaveTextContent('Report accepted · points returned');
 });
 
 test('tapping an event line selects it and circles it on the map', async () => {
   await draw(<SummaryView {...props()} />);
-  await press(screen.getByTestId('breakdown-toggle'));
   expect(screen.queryByTestId('map-highlight-caption')).toBeNull();
 
   await press(screen.getByTestId('event-e1'));
@@ -59,7 +105,6 @@ test('tapping an event line selects it and circles it on the map', async () => {
 
 test('an event outside the map (privacy zone) says so when tapped', async () => {
   await draw(<SummaryView {...props({ events: [event({ lat: null, lng: null })] })} />);
-  await press(screen.getByTestId('breakdown-toggle'));
   await press(screen.getByTestId('event-e1'));
   expect(screen.getByTestId('map-highlight-caption')).toHaveTextContent(/isn't on the map/);
 });
@@ -72,18 +117,34 @@ test('a negative drive shows red points with a true minus, in the scene card red
   expect(within(pts).getByText('−44')).toHaveStyle({ color: plainBundle('light').onScene.danger });
 });
 
-test('an offline estimate is labelled and explains the missing breakdown', async () => {
+test('an offline estimate is labelled, earns the total plus its deductions, and explains the missing detail', async () => {
   await draw(<SummaryView {...props({ drive: drive({ status: 'pending', estimate: true, pointsNet: 40, result: null }) })} />);
   expect(screen.getByTestId('estimate')).toBeOnTheScreen();
   expect(screen.getByText('Estimate')).toBeOnTheScreen();
-  await press(screen.getByTestId('breakdown-toggle'));
+  expect(screen.getByTestId('receipt-earned')).toHaveProp('accessibilityLabel', 'Earned, plus 50 points');
+  expect(screen.queryByTestId('receipt-detail')).toBeNull();
+  expect(screen.getByTestId('receipt-total')).toHaveProp('accessibilityLabel', 'Total, plus 40 points');
   expect(screen.getByText('The full breakdown shows up once this drive is scored.')).toBeOnTheScreen();
+});
+
+test('a drive still uploading lists its events to report, without Earned or a total', async () => {
+  await draw(<SummaryView {...props({ drive: drive({ status: 'pending', pointsNet: null, result: null }), events: [event({ penalty: null })] })} />);
+  expect(screen.getByTestId('state-pending')).toBeOnTheScreen();
+  expect(screen.queryByTestId('receipt-earned')).toBeNull();
+  expect(screen.queryByTestId('receipt-total')).toBeNull();
+  expect(screen.getByTestId('event-e1')).toHaveProp('accessibilityLabel', expect.stringMatching(/points not known yet$/));
+  expect(screen.getByTestId('report-e1')).toBeOnTheScreen();
+});
+
+test('a drive still uploading with no events shows no receipt', async () => {
+  await draw(<SummaryView {...props({ drive: drive({ status: 'pending', pointsNet: null, result: null }), events: [] })} />);
+  expect(screen.queryByTestId('receipt')).toBeNull();
 });
 
 test('a too-short drive says so instead of points', async () => {
   await draw(<SummaryView {...props({ drive: drive({ status: 'unscored', reason: 'too_short', pointsNet: 0, result: null }), events: [] })} />);
   expect(screen.getByText('Too short to score')).toBeOnTheScreen();
-  expect(screen.queryByTestId('breakdown-toggle')).toBeNull();
+  expect(screen.queryByTestId('receipt')).toBeNull();
 });
 
 test('the streak line and anything unlocked show under the points', async () => {
@@ -103,16 +164,14 @@ describe('DashPal', () => {
   test('a DashPal drive names both multipliers and shows the DashPal tile', async () => {
     await draw(<SummaryView {...props({ drive: drive({ pointsNet: 167, result: dashpalResult() }) })} />);
     expect(screen.getByTestId('counter-dashpal')).toHaveProp('accessibilityLabel', 'DashPal events: 0, none');
-    await press(screen.getByTestId('breakdown-toggle'));
-    expect(within(screen.getByTestId('breakdown')).getByText('Multiplier: streak ×1.20 · DashPal ×1.25 → ×1.50 (cap)')).toBeOnTheScreen();
+    expect(within(screen.getByTestId('receipt')).getByText(/Streak ×1.20 · DashPal ×1.25 → ×1.50 \(cap\)$/)).toBeOnTheScreen();
   });
 
   test('a DashPal event is itemised and counted on the DashPal tile', async () => {
     const counts = { speeding: 0, pickups: 0, handlingS: 0, hardBrake: 1, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 1 };
     await draw(<SummaryView {...props({ drive: drive({ counts }), events: [event(), drowsy] })} />);
     expect(screen.getByTestId('counter-dashpal')).toHaveProp('accessibilityLabel', 'DashPal events: 1');
-    await press(screen.getByTestId('breakdown-toggle'));
-    expect(within(screen.getByTestId('breakdown')).getByText('Drowsy · DashPal')).toBeOnTheScreen();
+    expect(within(screen.getByTestId('receipt')).getByText('Drowsy · DashPal')).toBeOnTheScreen();
   });
 
   test('a drive without DashPal has no DashPal tile', async () => {
@@ -123,7 +182,6 @@ describe('DashPal', () => {
   test('a DashPal event offers "DashPal got it wrong" and "wasn\'t driving", and reports camera_wrong', async () => {
     const p = props({ events: [drowsy] });
     await draw(<SummaryView {...p} />);
-    await press(screen.getByTestId('breakdown-toggle'));
     await press(screen.getByTestId('report-d1'));
     expect(screen.getByTestId('reason-camera_wrong')).toBeOnTheScreen();
     expect(screen.getByTestId('reason-not_driving')).toBeOnTheScreen();
@@ -139,7 +197,6 @@ describe('Report', () => {
   const open = async (e = event()) => {
     const p = props({ events: [e] });
     await draw(<SummaryView {...p} />);
-    await press(screen.getByTestId('breakdown-toggle'));
     await press(screen.getByTestId(`report-${e.id}`));
     return p;
   };
@@ -182,7 +239,6 @@ describe('Report', () => {
 
   test('an event already reported shows its status instead of the link', async () => {
     await draw(<SummaryView {...props({ events: [event({ disputeStatus: 'pending' })] })} />);
-    await press(screen.getByTestId('breakdown-toggle'));
     expect(screen.queryByTestId('report-e1')).toBeNull();
     expect(screen.getByTestId('dispute-e1')).toHaveTextContent(/Report sent/);
   });
@@ -214,7 +270,6 @@ describe("Wasn't driving", () => {
 
   test("where it is not offered, Report leaves out \"I wasn't driving\"", async () => {
     await draw(<SummaryView {...props({ latestClientTripId: 'newer' })} />);
-    await press(screen.getByTestId('breakdown-toggle'));
     await press(screen.getByTestId('report-e1'));
     expect(screen.getByTestId('reason-hazard')).toBeOnTheScreen();
     expect(screen.queryByTestId('reason-not_driving')).toBeNull();

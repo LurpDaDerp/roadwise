@@ -38,7 +38,6 @@ beforeEach(() => {
 test('the summary reads the drive and the uses left, and reports through the drive actions', async () => {
   await draw(<DriveSummaryScreen />);
   expect(screen.getByTestId('not-driving')).toHaveTextContent("Wasn't driving (1 left this month)");
-  await press(screen.getByTestId('breakdown-toggle'));
   await press(screen.getByTestId('report-e1'));
   await press(screen.getByTestId('reason-hazard'));
   await press(screen.getByTestId('report-send'));

@@ -1,6 +1,7 @@
 /**
  * What the drive summary derives from a drive before anything is drawn: the points state, the
- * itemized breakdown, the streak line, the celebration row and the report reasons. Pure.
+ * points receipt (and the itemized breakdown it is built from), the streak line, the celebration
+ * row and the report reasons. Pure.
  */
 import { ACHIEVEMENTS, IDLE_END_S, isDashcamType, MULT_CAP, STREAK_MULT_CAP, type EventType } from '@scoring';
 
@@ -94,7 +95,7 @@ export type LineTone = 'gain' | 'loss' | 'neutral';
 
 export type BreakdownLine =
   | { kind: 'miles' | 'bonus' | 'mult' | 'net'; key: string; label: string; value: string; tone: LineTone }
-  | { kind: 'event'; key: string; label: string; value: string; tone: LineTone; event: LocalDriveEvent; time: string };
+  | { kind: 'event'; key: string; label: string; value: string; tone: LineTone; event: LocalDriveEvent; time: string; cost: number | null };
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
@@ -155,27 +156,95 @@ export function breakdownLines(
     });
   }
 
-  const sorted = [...events].sort((x, y) => x.startedAt - y.startedAt);
-  for (const e of sorted) {
-    const p = penaltyOf(e, d);
-    lines.push({
-      kind: 'event',
-      key: `event-${e.id}`,
-      label: eventName(e.type, e.tier),
-      time: formatClock(e.startedAt),
-      value: isRemoved(e) ? 'Removed' : p === null ? '—' : signedPoints(-p),
-      tone: isRemoved(e) || p === 0 ? 'neutral' : 'loss',
-      event: e,
-    });
-  }
+  for (const line of eventLines(d, events)) lines.push(line);
 
-  const net = d.pointsNet ?? b?.net ?? null;
+  const net = netOf(d);
   if (net !== null) {
     lines.push({ kind: 'net', key: 'net', label: 'Net total', value: signedPoints(net), tone: net < 0 ? 'loss' : net > 0 ? 'gain' : 'neutral' });
   }
 
-  const note = b ? null : 'The full breakdown shows up once this drive is scored.';
-  return { lines, note };
+  return { lines, note: b ? null : NO_BREAKDOWN_NOTE };
+}
+
+const NO_BREAKDOWN_NOTE = 'The full breakdown shows up once this drive is scored.';
+
+/** The drive's net points: the phone's number, else the server breakdown's, else unknown. */
+const netOf = (d: LocalDrive): number | null => d.pointsNet ?? d.result?.breakdown.net ?? null;
+
+/** One line per event, oldest first: what it cost, "Removed" once a report took it off, "—" while unknown. */
+function eventLines(d: LocalDrive, events: readonly LocalDriveEvent[]): Extract<BreakdownLine, { kind: 'event' }>[] {
+  return [...events]
+    .sort((x, y) => x.startedAt - y.startedAt)
+    .map((e) => {
+      const p = penaltyOf(e, d);
+      return {
+        kind: 'event',
+        key: `event-${e.id}`,
+        label: eventName(e.type, e.tier),
+        time: formatClock(e.startedAt),
+        value: isRemoved(e) ? 'Removed' : p === null ? '—' : signedPoints(-p),
+        tone: isRemoved(e) || p === 0 ? 'neutral' : 'loss',
+        event: e,
+        cost: p,
+      };
+    });
+}
+
+// ── Receipt ─────────────────────────────────────────────────────────────────────────────
+
+/** Deduction lines the receipt shows before "Show more". */
+export const RECEIPT_MAX_LINES = 5;
+
+export type ReceiptLine = Extract<BreakdownLine, { kind: 'event' }>;
+
+export type Receipt = {
+  /** Gross points: safe miles plus any clean bonus, times the multiplier. Null while unknown. */
+  earned: number | null;
+  /** How `earned` was made, in short parts ("Safe miles 11.8 mi × 10", "Streak ×1.20"). Empty without a server breakdown. */
+  detail: string[];
+  /** One line per event, oldest first. */
+  deductions: ReceiptLine[];
+  /** Net points. Null while unknown. */
+  total: number | null;
+  /** Why the detail is missing (an offline estimate, a drive still uploading). */
+  note: string | null;
+};
+
+/**
+ * The summary's points receipt: Earned (gross gains), one deduction per event, and the total.
+ * With a server breakdown, Earned is its gains. Without one (an offline estimate) it is the total
+ * plus every active event's cost, when all of those are known; otherwise it is left out.
+ */
+export function receipt(d: LocalDrive, events: readonly LocalDriveEvent[], units: Units = 'mi'): Receipt {
+  const b = d.result?.breakdown ?? null;
+  const deductions = eventLines(d, events);
+  const total = netOf(d);
+  if (b && b.scored) {
+    const capNote = b.creditedMiles + 1e-9 < b.safeMiles ? ' (daily cap)' : '';
+    const kmNote = units === 'km' ? ` (${formatDistance(b.creditedMiles, 'km')})` : '';
+    const mult = multiplierText(b.streakMult, b.dashcamMult, b.mult);
+    const detail = [`Safe miles ${round1(b.creditedMiles)} mi${kmNote} × 10${capNote}`];
+    if (b.cleanBonus > 0) detail.push(`Clean bonus ${signedPoints(b.cleanBonus)}`);
+    detail.push(mult.charAt(0).toUpperCase() + mult.slice(1));
+    return { earned: b.gains, detail, deductions, total, note: null };
+  }
+  let earned: number | null = null;
+  if (total !== null) {
+    const costs = events.filter((e) => !isRemoved(e)).map((e) => penaltyOf(e, d));
+    if (costs.every((p) => p !== null)) {
+      const sum = total + costs.reduce<number>((a, p) => a + (p ?? 0), 0);
+      earned = sum >= 0 ? sum : null;
+    }
+  }
+  return { earned, detail: [], deductions, total, note: NO_BREAKDOWN_NOTE };
+}
+
+/** "plus 142 points", "minus 10 points", "0 points": a signed amount for a screen reader. */
+export function spokenPoints(n: number): string {
+  const r = Math.round(n);
+  const abs = Math.abs(r).toLocaleString('en-US');
+  const unit = Math.abs(r) === 1 ? 'point' : 'points';
+  return r > 0 ? `plus ${abs} ${unit}` : r < 0 ? `minus ${abs} ${unit}` : `0 ${unit}`;
 }
 
 // ── Streak ──────────────────────────────────────────────────────────────────────────────

@@ -7,15 +7,14 @@ import { useUnits } from '@/data/queries/units';
 import { formatDistance, type Units } from '@/lib/units';
 import { Button, Card, IconButton, Pill, PointsCounter, StreakFlame, Text, useTheme } from '@/ui';
 
-import { BreakdownList, BreakdownToggle } from './Breakdown';
 import { EVENT_ICON, formatDay, formatDuration, formatTimeSpan, routeLine, spokenDuration, spokenRoute, TIER_SIGNAL, worseTier } from './format';
 import type { LocalDrive, LocalDriveEvent } from './model';
+import { Receipt } from './Receipt';
 import { NotDrivingSheet, ReportSheet } from './ReportSheet';
 import { decodeRoute } from './route';
 import { RouteMap } from './RouteMap';
 import { ShareSheet } from './ShareCard';
 import {
-  breakdownLines,
   canMarkNotDriving,
   celebrations,
   endNote,
@@ -23,6 +22,7 @@ import {
   notDrivingLabel,
   notDrivingRefusal,
   pointsState,
+  receipt,
   streakLine,
   type PointsState,
   type ReportReason,
@@ -72,7 +72,7 @@ function PointsBlock({ state, drive, fresh, units, onOpenDrive }: { state: Point
         <View style={{ gap: t.space.xs }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: t.space.sm }}>
             <Text variant="label" tone="muted">
-              {state.value < 0 ? 'Points this drive' : 'Points earned'}
+              Points this drive
             </Text>
             {state.estimate ? (
               <Pill label="Estimate" tone="info" icon="cloud-offline-outline" testID="estimate" />
@@ -86,7 +86,7 @@ function PointsBlock({ state, drive, fresh, units, onOpenDrive }: { state: Point
             react={fresh}
             size="hero"
             signed
-            label={state.value < 0 ? 'Points this drive' : 'Points earned'}
+            label="Points this drive"
             testID="summary-points"
           />
           {state.estimate ? (
@@ -179,21 +179,22 @@ function CounterTile({ counter }: { counter: Counter }) {
 export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating, ranked = false, latestClientTripId, now, onBack, onOpenDrive, onReport, onNotDriving }: SummaryViewProps) {
   const t = useTheme();
   const units = useUnits();
-  const [open, setOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reporting, setReporting] = useState<string | null>(null);
   const [confirmNotDriving, setConfirmNotDriving] = useState(false);
   const [sharing, setSharing] = useState(false);
 
   const state = pointsState(drive);
-  const { lines, note } = useMemo(() => breakdownLines(drive, events, units), [drive, events, units]);
+  const points = useMemo(() => receipt(drive, events, units), [drive, events, units]);
   const streak = streakLine(drive);
   const party = celebrations(drive);
   const runs = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
   const selected = events.find((e) => e.id === selectedId) ?? null;
   const reportEvent = events.find((e) => e.id === reporting) ?? null;
   const net = state.kind === 'points' ? state.value : null;
-  const showBreakdown = state.kind === 'points' || state.kind === 'failed' || state.kind === 'pending';
+  const showReceipt =
+    (state.kind === 'points' || state.kind === 'failed' || state.kind === 'pending') &&
+    (points.earned !== null || points.total !== null || points.deductions.length > 0);
   const notDrivingOk = canMarkNotDriving(drive, latestClientTripId, now);
   const refusal = notDrivingRefusal(drive);
   const endedNote = endNote(drive);
@@ -222,19 +223,12 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
           </View>
         </View>
 
-        {/* 2. Points, 3. Breakdown */}
+        {/* 2. Points, 3. The points receipt */}
         <Card variant="hero">
           <PointsBlock state={state} drive={drive} fresh={fresh} units={units} onOpenDrive={onOpenDrive} />
-          {showBreakdown && (lines.length > 0 || note) ? <BreakdownToggle open={open} onPress={() => setOpen((v) => !v)} /> : null}
         </Card>
-        {open ? (
-          <BreakdownList
-            lines={lines}
-            note={note}
-            selectedId={selectedId}
-            onSelect={(id) => setSelectedId((cur) => (cur === id ? null : id))}
-            onReport={setReporting}
-          />
+        {showReceipt ? (
+          <Receipt receipt={points} selectedId={selectedId} onSelect={(id) => setSelectedId((cur) => (cur === id ? null : id))} onReport={setReporting} />
         ) : null}
 
         {/* 4. Streak line (+ anything unlocked) */}
