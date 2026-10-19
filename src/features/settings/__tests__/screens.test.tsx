@@ -208,7 +208,7 @@ describe('Settings', () => {
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_state: 'OH' }));
   });
 
-  it('heat map visibility offers Only me and Friends; a saved clan setting shows as Friends', async () => {
+  it('heat map visibility offers Only me and Friends; a saved clan setting shows as Only me', async () => {
     answerRpc(mockRpc, {
       get_my_summary: { ...SUMMARY, profile: { ...SUMMARY.profile, heatmap_visibility: 'clan' } },
       update_profile: {},
@@ -216,13 +216,14 @@ describe('Settings', () => {
     const w = await appWorld();
     await w.render(<SettingsScreen />);
     const control = within(await screen.findByTestId('settings-heatmap-visibility'));
-    await waitFor(() => expect(control.getByRole('tab', { name: 'Friends' })).toBeSelected());
+    await waitFor(() => expect(control.getByRole('tab', { name: 'Only me' })).toBeSelected());
+    expect(control.getByRole('tab', { name: 'Friends' })).not.toBeSelected();
     expect(control.getAllByRole('tab').map((t) => t.props.accessibilityLabel)).toEqual(['Only me', 'Friends']);
     expect(screen.queryByText('Clan')).toBeNull();
     await act(async () => {
-      fireEvent.press(control.getByRole('tab', { name: 'Only me' }));
+      fireEvent.press(control.getByRole('tab', { name: 'Friends' }));
     });
-    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_heatmap_visibility: 'only_me' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_heatmap_visibility: 'friends' }));
   });
 
   it('Driving › DashPal opens the DashPal screen and says "Set up your dashcam" until one is paired', async () => {

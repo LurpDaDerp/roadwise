@@ -1,5 +1,6 @@
 -- 0006_social: search and profiles behind blocks, the friend flow and its cap, blocks, reports,
--- clans (names, codes, size, roles, hand-over, deletion), heat map visibility, member stats.
+-- clans (names, codes, size, roles, hand-over, deletion; called as the owner since 0012), heat map
+-- visibility, member stats.
 create extension if not exists pgtap with schema extensions;
 
 begin;
@@ -13,7 +14,7 @@ insert into auth.users (id, email) values
 update public.profiles set username = 'ava', onboarded_at = now() where id = '00000000-0000-0000-0000-000000000001';
 update public.profiles set username = 'ben', onboarded_at = now() where id = '00000000-0000-0000-0000-000000000002';
 update public.profiles set username = 'cat', onboarded_at = now(), heatmap_visibility = 'friends' where id = '00000000-0000-0000-0000-000000000003';
-update public.profiles set username = 'dan', onboarded_at = now(), heatmap_visibility = 'clan' where id = '00000000-0000-0000-0000-000000000004';
+update public.profiles set username = 'dan', onboarded_at = now(), heatmap_visibility = 'only_me' where id = '00000000-0000-0000-0000-000000000004';
 insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, safe_miles, night_miles, duration_s, scored, points_net, polyline, clean)
   select u, gen_random_uuid(), now() - interval '2 days', now() - interval '2 days' + interval '20 minutes', current_date, private.league_week(now()), 'America/New_York', 5, 5, 0, 1200, true, 50, 'poly-' || u, true
   from unnest(array['00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000004']::uuid[]) u;
@@ -57,7 +58,7 @@ select is(public.get_profile('ava') -> 'can_view_stats', 'true'::jsonb, 'friends
 select pg_temp.as_user(1);
 select is(public.get_member_stats('00000000-0000-0000-0000-000000000003') ->> 'drives', '1', 'A reads her friend''s 30-day stats');
 select is(public.get_heatmap('00000000-0000-0000-0000-000000000003'), '[{"polyline": "poly-00000000-0000-0000-0000-000000000003"}]'::jsonb, 'cat shares her heat map with friends');
-select throws_ok($$ select public.get_heatmap('00000000-0000-0000-0000-000000000004') $$, 'P0002', 'profile not found', 'dan shares with his clan only');
+select throws_ok($$ select public.get_heatmap('00000000-0000-0000-0000-000000000004') $$, 'P0002', 'profile not found', 'dan keeps his heat map to himself');
 select is(public.send_friend_request('00000000-0000-0000-0000-000000000002'), '{"status": "requested"}'::jsonb, 'A asks ben');
 select pg_temp.as_user(2);
 select lives_ok($$ select public.respond_friend_request('00000000-0000-0000-0000-000000000001', false) $$, 'ben declines');
@@ -113,8 +114,10 @@ select is((select count(*)::int from generate_series(1, 10) i, lateral (select p
 select throws_ok($$ select public.report_target('user', '00000000-0000-0000-0000-000000000002', 'harassment', '') $$, '42501', 'too many requests', 'the eleventh in a day is refused');
 
 -- ---------------------------------------------------------------------------
--- clans
+-- clans (dormant: since 0012 their RPCs are server-only, so this section calls them as the
+-- database owner, still as each user through the JWT claims)
 -- ---------------------------------------------------------------------------
+reset role;
 select throws_ok($$ select public.create_clan('Sh1t Crew', 'navy') $$, '22023', 'name must be 3 to 24 characters', 'a profane clan name is refused');
 select throws_ok($$ select public.create_clan('Night Owls', 'rainbow') $$, '22023', 'unknown banner', 'an unknown banner is refused');
 create temporary table clan as select public.create_clan('Night Owls', 'navy') as c;
@@ -150,36 +153,26 @@ select is(public.get_my_clan(), null, 'dan is out');
 select throws_ok($$ select public.join_clan('ZZZZZZZZ') $$, 'P0002', 'clan not found', 'and cannot rejoin by a wrong code');
 select pg_temp.as_user(1);
 select lives_ok($$ select public.transfer_leadership('00000000-0000-0000-0000-000000000002') $$, 'ava hands leadership to ben');
-reset role;
 select is((select array_agg(role order by role) from public.clan_members), array['coleader', 'leader'], 'ava is co-leader, ben leader');
-set local role authenticated;
 select pg_temp.as_user(2);
 select lives_ok($$ select public.leave_clan() $$, 'the leader leaves');
-reset role;
 select is((select role from public.clan_members where user_id = '00000000-0000-0000-0000-000000000001'), 'leader', 'the longest-serving co-leader is promoted');
-set local role authenticated;
 select pg_temp.as_user(2);
 select throws_ok($$ select public.leave_clan() $$, 'P0002', 'you are not in a clan', 'leaving twice is an error');
 
 -- a full clan: 29 more members then the 31st is refused; a blocked member keeps you out
-reset role;
 insert into public.clan_members (clan_id, user_id, role) select (select id from public.clans), u.id, 'member' from auth.users u where u.email like 'f%@example.com' limit 28;
 insert into public.blocks (blocker_id, blocked_id) values ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000004');
 create temporary table code as select invite_code from public.clans;
-grant select on code to authenticated;
-set local role authenticated;
 select pg_temp.as_user(2);
 select lives_ok($$ select public.join_clan((select invite_code from code)) $$, 'the 30th member joins');
 select pg_temp.as_user(3);
 select throws_ok($$ select public.join_clan((select invite_code from code)) $$, '42501', 'this clan is full', 'the 31st is refused');
-reset role;
 delete from public.clan_members where user_id = '00000000-0000-0000-0000-000000000002';
-set local role authenticated;
 select pg_temp.as_user(4);
 select throws_ok($$ select public.join_clan((select invite_code from code)) $$, '42501', 'you cannot join this clan', 'a user blocked by a member cannot join');
 select pg_temp.as_user(1);
 select is((select count(*)::int from jsonb_array_elements(public.get_my_clan() -> 'members')), 29, 'the leader sees 29 members (none blocked among them)');
-reset role;
 
 -- leader hand-over on account delete, then the empty clan goes
 delete from auth.users where id = '00000000-0000-0000-0000-000000000001';

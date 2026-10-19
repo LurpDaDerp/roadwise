@@ -4,10 +4,10 @@
  */
 import type { HeatmapVisibility } from '@/data/server/summary';
 
-/** A saved `'clan'` (from when clans existed) reads as Friends. */
+/** A saved `'clan'` (from when clans existed) reads as Only me: the server keeps it private. */
 export const VISIBILITY_LABEL: Record<HeatmapVisibility, string> = {
   only_me: 'Only me',
-  clan: 'Friends',
+  clan: 'Only me',
   friends: 'Friends',
 };
 
@@ -17,10 +17,13 @@ export const VISIBILITY_SEGMENTS = (['only_me', 'friends'] as const).map((value)
   label: VISIBILITY_LABEL[value],
 }));
 
-/** The segment a saved visibility shows as: a saved `'clan'` shows as Friends. */
+/**
+ * The segment a saved visibility shows as. Anything but `'friends'` (a saved `'clan'` included)
+ * shows as Only me, so the screen never says more people can see the map than the server allows.
+ */
 export function shownVisibility(v: HeatmapVisibility | null | undefined): 'only_me' | 'friends' | null {
   if (v === undefined || v === null) return null;
-  return v === 'only_me' ? 'only_me' : 'friends';
+  return v === 'friends' ? 'friends' : 'only_me';
 }
 
 export const settingsCopy = {
