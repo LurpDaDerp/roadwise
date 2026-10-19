@@ -1,6 +1,6 @@
 import { contrastRatio, relativeLuminance } from '@/ui/contrast';
 import { ensureContrast, ensureGround, lerpDeep, mix, opaque, over, parseColor } from '@/ui/sky/color';
-import { defaultMood, plainBundle, skyBundle, type SkyMood } from '@/ui/sky/palette';
+import { defaultMood, plainBundle, skyBundle, skyVeils, type SkyMood } from '@/ui/sky/palette';
 import type { SkyPhase } from '@/ui/sky/phase';
 import type { WeatherKind } from '@/ui/sky/weather';
 import { tokens } from '@/ui/tokens';
@@ -11,7 +11,9 @@ const kinds: WeatherKind[] = ['clear', 'cloudy', 'fog', 'rain', 'snow', 'storm']
 const moods: SkyMood[] = phases.flatMap((phase) =>
   kinds.map((kind) => ({ phase, glow: phase === 'dawn' || phase === 'dusk' ? 1 : 0, weather: { kind, intensity: 'moderate' as const } }))
 );
-const name = (m: SkyMood) => `${m.phase}/${m.weather.kind}`;
+// Light cloud lets the sun's glow through (dimmed), so it is checked too.
+const lightCloud: SkyMood[] = phases.map((phase) => ({ phase, glow: 1, weather: { kind: 'cloudy', intensity: 'light' } }));
+const name = (m: SkyMood) => `${m.phase}/${m.weather.kind}/${m.weather.intensity}`;
 
 function expectContrast(fg: string, bg: string, min: number, what: string) {
   const r = contrastRatio(opaque(fg), opaque(bg));
@@ -43,7 +45,7 @@ describe('colour helpers', () => {
   });
 });
 
-describe.each(moods.map((m) => [name(m), m] as const))('%s', (_n, mood) => {
+describe.each([...moods, ...lightCloud].map((m) => [name(m), m] as const))('%s', (_n, mood) => {
   const b = skyBundle(mood);
   const c = b.colors;
   const grounds = { bg: c.bg, surface: c.surface, surfaceRaised: c.surfaceRaised };
@@ -67,15 +69,19 @@ describe.each(moods.map((m) => [name(m), m] as const))('%s', (_n, mood) => {
     for (const t of Object.values(c.tier)) expectContrast(t.text, c.bg, AA, 'tier name on bg');
   });
 
-  test('the white sky inks, the sky accent and signals read on every backdrop stop, bare and under cloud, haze and a storm wash', () => {
+  test('the white sky inks, the sky accent and signals read on every backdrop stop, bare and under the cover, the sun glow, cloud, haze and a storm wash', () => {
     const s = b.onSky;
     expect(s.text).toBe('#FFFFFF');
+    const veils = skyVeils(b.sky);
+    expect(veils).toEqual([b.sky.cover, b.sky.halo, b.sky.cloud, b.sky.wash]);
     for (const stop of b.sky.backdrop) {
-      const veiled = [b.sky.cover, b.sky.cloud, b.sky.wash].reduce(over, stop);
-      for (const g of [stop, veiled])
+      // Every partial stack too: the glow alone, the glow under cloud, and so on.
+      const stacks = veils.map((_v, i) => veils.slice(0, i + 1).reduce(over, stop));
+      for (const g of [stop, over(stop, b.sky.halo), ...stacks]) {
         for (const ink of [s.text, s.textMuted, s.textSubtle]) expectContrast(ink, g, AA, `sky ink ${ink} on ${g}`);
-      for (const ink of [s.accent, s.warning, s.danger, s.success, s.freeze]) expectContrast(ink, stop, AA, `sky mark ${ink}`);
-      for (const sig of Object.values(s.signal)) expectContrast(sig.text, stop, AA, 'sky signal');
+        for (const ink of [s.accent, s.warning, s.danger, s.success, s.info, s.freeze]) expectContrast(ink, g, AA, `sky mark ${ink} on ${g}`);
+        for (const sig of Object.values(s.signal)) expectContrast(sig.text, g, AA, `sky signal on ${g}`);
+      }
     }
   });
 
@@ -92,7 +98,10 @@ describe.each(moods.map((m) => [name(m), m] as const))('%s', (_n, mood) => {
     } else {
       expect(alpha(b.sky.cover)).toBeGreaterThan(0);
       expect(alpha(b.sky.cloud)).toBeGreaterThan(0);
-      expect(alpha(b.sky.halo)).toBe(0);
+      // Light cloud lets a dimmed sun or moon glow through; anything heavier hides it.
+      const clearHalo = alpha(skyBundle({ ...mood, weather: { kind: 'clear', intensity: 'moderate' } }).sky.halo);
+      if (mood.weather.kind === 'cloudy' && mood.weather.intensity === 'light') expect(alpha(b.sky.halo)).toBeLessThan(clearHalo);
+      else expect(alpha(b.sky.halo)).toBe(0);
     }
     expect(alpha(b.sky.wash) > 0).toBe(mood.weather.kind === 'storm');
   });
@@ -159,16 +168,19 @@ describe('blending', () => {
     expect(lerpDeep(a, b, 0.75).s).toBe('dark');
   });
 
-  test('a blend between any two moods keeps the white sky inks at AA on the backdrop all the way', () => {
-    for (let i = 0; i < moods.length; i++) {
-      const from = skyBundle(moods[i]!);
-      const to = skyBundle(moods[(i + 5) % moods.length]!);
-      for (const t of [0.25, 0.5, 0.75]) {
-        const m = lerpDeep(from, to, t);
-        for (const stop of m.sky.backdrop)
-          for (const ink of [m.onSky.text, m.onSky.textMuted, m.onSky.textSubtle]) expectContrast(ink, stop, AA, `blended sky ${t}`);
+  test('a blend between any two moods keeps the white sky inks at AA on the backdrop all the way, bare and under its veils', () => {
+    const all = [...moods, ...lightCloud].map((m) => skyBundle(m));
+    for (const from of all)
+      for (const to of all) {
+        if (from === to) continue;
+        for (const t of [0.25, 0.5, 0.75]) {
+          const sky = lerpDeep(from.sky, to.sky, t);
+          const ink = lerpDeep(from.onSky, to.onSky, t);
+          for (const stop of sky.backdrop)
+            for (const g of [stop, skyVeils(sky).reduce(over, stop)])
+              for (const i of [ink.text, ink.textMuted, ink.textSubtle]) expectContrast(i, g, AA, `blended sky ${t}`);
+        }
       }
-    }
   });
 
   test('a blend between two moods of the same scheme keeps text and links at AA all the way', () => {

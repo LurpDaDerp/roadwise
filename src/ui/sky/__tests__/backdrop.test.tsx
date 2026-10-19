@@ -1,8 +1,11 @@
 import { act, render, screen } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { StyleSheet } from 'react-native';
+
+import { parseColor } from '@/ui/sky/color';
 import { SkyBackdrop, STORM_WASH } from '@/ui/sky/SkyBackdrop';
-import type { SkyMood } from '@/ui/sky/palette';
+import { skyBundle, type SkyMood } from '@/ui/sky/palette';
 import type { WeatherKind } from '@/ui/sky/weather';
 import { ThemeProvider } from '@/ui/theme';
 
@@ -44,6 +47,19 @@ test.each(['cloudy', 'fog', 'rain', 'snow', 'storm'] as const)('%s weather draws
   expect(screen.getByTestId('sky-backdrop', hidden)).toBeOnTheScreen();
   expect(screen.getByTestId('sky-ambient', hidden)).toBeOnTheScreen();
   expect(withRepeat).toHaveBeenCalled();
+});
+
+test.each([
+  ['cloudy', 'sky-clouds'],
+  ['rain', 'sky-clouds'],
+  ['storm', 'sky-clouds'],
+  ['fog', 'sky-fog'],
+] as const)('%s: every puff or band sits in one group faded to the cloud alpha, so overlaps never get denser', async (kind, id) => {
+  const m = mood('day', kind);
+  await sky(m, { still: true });
+  const layer = screen.getByTestId(id, hidden);
+  expect(layer.props.needsOffscreenAlphaCompositing).toBe(true);
+  expect(StyleSheet.flatten(layer.props.style).opacity).toBe(parseColor(skyBundle(m).sky.cloud).a);
 });
 
 test('a clear night twinkles; a clear day has only the sun glow and no weather layer', async () => {

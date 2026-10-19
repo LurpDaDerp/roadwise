@@ -1,6 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, type ReactNode } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
   cancelAnimation,
@@ -44,8 +44,10 @@ export const STORM_WASH = { gapMs: 8000, upMs: 700, downMs: 1400 } as const;
  * Rules it keeps:
  * - Behind everything, never over content; nothing in it is touchable or spoken.
  * - Text drawn straight on it uses the white `onSky` inks, which read at AA on every stop and
- *   through every cloud or haze that can drift over it (the palette repairs the stops for that).
- *   Particles are thinned over the left side, where titles sit.
+ *   through everything drawn over it (the palette repairs the stops against `skyVeils`). For that
+ *   to hold, nothing here is denser than its palette colour: the glow peaks at `halo`, and all the
+ *   cloud puffs (or fog bands) sit in one group faded to `cloud`, so where they overlap the layer
+ *   is still no denser than `cloud`. Particles are thinned over the left side, where titles sit.
  * - Never on the driving screen: the drive route has its own HUD and draws none of this.
  * - The weather layer runs only while its screen is in front (`active`); under Reduce Motion it
  *   holds still. The status bar turns light over the sky while the sky is in front (`front`,
@@ -116,7 +118,7 @@ function Glow() {
       <Defs>
         <RadialGradient id="sky-halo" cx="50%" cy="50%" r="50%">
           <Stop offset="0" stopColor={haloRgb} stopOpacity={halo.a} />
-          <Stop offset="0.4" stopColor={haloRgb} stopOpacity={halo.a * 0.45} />
+          <Stop offset="0.45" stopColor={haloRgb} stopOpacity={halo.a * 0.6} />
           <Stop offset="1" stopColor={haloRgb} stopOpacity={0} />
         </RadialGradient>
         <RadialGradient id="sky-moon" cx="50%" cy="50%" r="50%">
@@ -207,6 +209,21 @@ function useLoop(still: boolean, start: (v: { value: number }) => void, deps: re
   return v;
 }
 
+/**
+ * The cloud layer: puffs (or fog bands) drawn at full strength inside one group, and the group
+ * faded to the palette's `cloud` alpha as a whole. Composited offscreen, so overlapping puffs
+ * saturate inside the group instead of stacking: the layer is never denser than `cloud`, the
+ * density the backdrop's stops were repaired to carry white text through.
+ */
+function CloudLayer({ testID, children }: { testID: string; children: ReactNode }) {
+  const t = useTheme();
+  return (
+    <View testID={testID} needsOffscreenAlphaCompositing style={[StyleSheet.absoluteFill, { opacity: parseColor(t.sky.cloud).a }]}>
+      {children}
+    </View>
+  );
+}
+
 /** Soft volumetric clouds: puffs of radial-gradient lobes in two layers drifting at their own pace. */
 function Clouds({ count, height, still }: { count: number; height: number; still: boolean }) {
   const { width } = useWindowDimensions();
@@ -227,11 +244,11 @@ function Clouds({ count, height, still }: { count: number; height: number; still
     });
   }, [count, width, height]);
   return (
-    <>
+    <CloudLayer testID="sky-clouds">
       {puffs.map((p, i) => (
         <Puff key={i} id={i} {...p} still={still} width={width} />
       ))}
-    </>
+    </CloudLayer>
   );
 }
 
@@ -266,8 +283,7 @@ function Puff({
   }, [ms]);
   const style = useAnimatedStyle(() => ({ transform: [{ translateX: (v.value - 0.5) * 2 * travel }] }));
   const grad = `sky-puff-${id}`;
-  // Lobes overlap at full strength inside the drawing, and the whole puff is faded as one, so a
-  // cloud is never denser than the palette's cloud colour (the ground the text was repaired for).
+  // Lobes overlap at full strength inside the drawing; the cloud layer fades every puff as one.
   const lobes: [number, number, number, number][] = [
     [100, 70, 96, 28],
     [64, 56, 40, 32],
@@ -276,7 +292,7 @@ function Puff({
   ];
   return (
     <Animated.View
-      style={[{ position: 'absolute', left: x, top: y, width: w, height: h, opacity: c.a * depth * fadeLeft(x + w / 2, width) }, style]}
+      style={[{ position: 'absolute', left: x, top: y, width: w, height: h, opacity: depth * fadeLeft(x + w / 2, width) }, style]}
     >
       <Svg width="100%" height="100%" viewBox="0 0 200 100" preserveAspectRatio="none">
         <Defs>
@@ -308,17 +324,18 @@ function Fog({ count, height, still }: { count: number; height: number; still: b
     }));
   }, [count, width, height]);
   return (
-    <>
+    <CloudLayer testID="sky-fog">
       {bands.map((b, i) => (
         <Band key={i} {...b} w={width * 1.6} still={still} />
       ))}
-    </>
+    </CloudLayer>
   );
 }
 
 function Band({ x, y, w, h, ms, travel, still }: { x: number; y: number; w: number; h: number; ms: number; travel: number; still: boolean }) {
   const t = useTheme();
-  const haze = t.sky.cloud;
+  // Full strength here: the cloud layer fades all the bands as one.
+  const haze = opaque(t.sky.cloud);
   const v = useLoop(still, (sv) => {
     sv.value = withRepeat(withTiming(1, { duration: ms, easing: Easing.inOut(Easing.sin) }), -1, true);
   }, [ms]);

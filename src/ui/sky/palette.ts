@@ -1,6 +1,6 @@
 import { contrastRatio } from '../contrast';
 import { tokens, type ColorSet, type Signal } from '../tokens';
-import { ensureContrast, ensureGround, mix, opaque, withAlpha } from './color';
+import { ensureContrast, ensureGround, mix, opaque, over, withAlpha } from './color';
 import { PHASE_SCHEME, type Scheme, type SkyPhase } from './phase';
 import { CLEAR, type SkyWeather, type WeatherKind } from './weather';
 
@@ -12,7 +12,8 @@ import { CLEAR, type SkyWeather, type WeatherKind } from './weather';
  * dawn, deep blue to magenta at dusk, navy at night); the weather pulls that sky toward its own
  * (slate for cloud, pale haze for fog, steel for rain, cold blue-grey for snow, violet-slate for a
  * storm). Text drawn straight on the sky uses the white `onSky` inks, and every backdrop stop is
- * repaired until those inks read at AA through the cloud and haze that can drift over it. Every
+ * repaired until those inks read at AA through everything the backdrop can lay over it (the cover,
+ * the sun's glow, cloud and haze, a storm's wash: see {@link skyVeils}). Every
  * other colour that carries text or a mark is repaired to AA against the grounds it sits on, so
  * any mix, and any blend between two of them, stays readable. Pure functions: the provider calls
  * `skyBundle(mood)` and interpolates bundles.
@@ -33,13 +34,16 @@ export type SkyColors = {
   backdrop: SkyStops;
   /** The bright band low in the backdrop (peach at dawn, orange at dusk) before it fades into `bg`. No text sits on it. */
   horizon: string;
-  /** The sun's or moon's glow (translucent), in the top-right corner. */
+  /** The sun's or moon's glow (translucent) at its core, in the top-right corner. */
   halo: string;
   /** The moon's disc (translucent); fully transparent by day and under cloud. */
   disc: string;
   /** A soft grey cover across the top under overcast, rain, snow and storms (transparent when clear). */
   cover: string;
-  /** Cloud puffs and fog bands at their densest (translucent). */
+  /**
+   * The cloud layer at its densest (translucent): every puff, or every fog band, is drawn inside one
+   * group faded to this alpha, so where they overlap the layer is still no denser than this.
+   */
   cloud: string;
   /** Rain streaks, snowflakes and stars (translucent). */
   particle: string;
@@ -60,6 +64,11 @@ export type SkyBundle = {
 };
 
 const AA = 4.5;
+/**
+ * The backdrop's repair target: AA plus a little headroom, because a blend between two skies also
+ * fades their veils in and out, and that mix can sit a hair brighter than either end.
+ */
+const SKY_AA = AA + 0.1;
 
 /** The phase's own accent. Light phases carry a deep hue, dark phases a luminous one. */
 const PHASE_ACCENT: Readonly<Record<SkyPhase, string>> = {
@@ -145,6 +154,15 @@ const SKY_INK = { text: '#FFFFFF', textMuted: '#EDF1F7', textSubtle: '#E6EAF1' }
 
 const SIGNALS: readonly Signal[] = ['clean', 'minor', 'moderate', 'severe'];
 
+/**
+ * Everything the backdrop can lay over a stop, at its densest and in the order it is drawn: the
+ * cover, the sun's or moon's glow, the cloud layer, then a storm's wash. Stars, rain and snow are
+ * specks that pass; they are left out.
+ */
+export function skyVeils(s: Pick<SkyColors, 'cover' | 'halo' | 'cloud' | 'wash'>): string[] {
+  return [s.cover, s.halo, s.cloud, s.wash];
+}
+
 /** The accent before repair: the phase hue pulled toward the weather's. */
 function rawAccent(phase: SkyPhase, scheme: Scheme, w: SkyWeather): string {
   const base = PHASE_ACCENT[phase];
@@ -172,7 +190,8 @@ function rawPaint(mood: SkyMood, scheme: Scheme): Paint {
 /** The weather layer's translucent colours: what can drift over the sky, per kind and scheme. */
 function layers(phase: SkyPhase, scheme: Scheme, w: SkyWeather) {
   const light = scheme === 'light';
-  const none = 'rgba(255, 255, 255, 0)';
+  // Transparent black, not white: a blend toward a veil that is absent must not whiten the veil.
+  const none = 'rgba(0, 0, 0, 0)';
   switch (w.kind) {
     case 'clear':
       return {
@@ -223,16 +242,20 @@ function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
   const { phase, weather } = mood;
   const paint = rawPaint(mood, scheme);
   const veil = layers(phase, scheme, weather);
-  const inks = [SKY_INK.text, SKY_INK.textMuted, SKY_INK.textSubtle];
-  // The ink has to read on the bare sky and through every wash that can drift over it.
-  const over = [veil.cover, veil.cloud, veil.wash];
-  const backdrop = paint.stops.map((s) => ensureGround(s, inks, AA, '#000000', over)) as SkyStops;
 
   const clear = weather.kind === 'clear';
   const haloBase = { day: '#FFF6DC', dawn: '#FFD9B0', dusk: '#FFB07A', night: '#C8D6FF' }[phase];
-  const haloAlpha = { day: 0.34, dawn: 0.3, dusk: 0.22, night: 0.14 }[phase];
+  // The glow's core sits beside the title row, so it stays faint enough for white text to read
+  // through it without darkening the sky much (the repair below counts it).
+  const haloAlpha = { day: 0.12, dawn: 0.14, dusk: 0.18, night: 0.14 }[phase];
   const covered = clear ? 1 : weather.kind === 'cloudy' && weather.intensity === 'light' ? 0.35 : 0;
+  const halo = withAlpha(haloBase, haloAlpha * covered);
   const moon = phase === 'night' ? (clear ? 0.9 : weather.kind === 'cloudy' ? 0.22 : 0) : 0;
+
+  // The ink has to read on the bare sky and through everything that can lie over it.
+  const inks = [SKY_INK.text, SKY_INK.textMuted, SKY_INK.textSubtle];
+  const veils = skyVeils({ ...veil, halo });
+  const backdrop = paint.stops.map((s) => ensureGround(s, inks, SKY_AA, '#000000', veils)) as SkyStops;
 
   // The scene card is the same sky, a little deeper: brightest top-left, darkest bottom-right.
   const sceneInks = [SCENE_INK.text, SCENE_INK.textMuted, SCENE_INK.textSubtle];
@@ -244,7 +267,7 @@ function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
   return {
     backdrop,
     horizon: opaque(paint.horizon),
-    halo: withAlpha(haloBase, haloAlpha * covered),
+    halo,
     disc: withAlpha('#F2F4FF', moon),
     ...veil,
     scene,
@@ -253,16 +276,23 @@ function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
 
 /**
  * A white-ink palette lifted from the grounds it sits on (a scene card's stops, or the page sky's):
- * dark, with surfaces drawn from the grounds themselves, every ink and signal at AA on each.
+ * dark, with surfaces drawn from the grounds themselves, every ink and signal at AA on each, and on
+ * any extra ground in `also` (the page sky's stops under its veils).
  */
-function inkColors(grounds: readonly string[], ink: { text: string; textMuted: string; textSubtle: string }, accent: string): ColorSet {
+function inkColors(
+  grounds: readonly string[],
+  ink: { text: string; textMuted: string; textSubtle: string },
+  accent: string,
+  also: readonly string[] = []
+): ColorSet {
   const d = tokens.color.dark;
   const mid = grounds[1] ?? grounds[0]!;
   const deep = grounds[grounds.length - 1]!;
+  const marks = [...grounds, ...also];
   const signal = Object.fromEntries(
-    SIGNALS.map((s) => [s, { ...d.signal[s], text: ensureContrast(d.signal[s].text, grounds, AA) }])
+    SIGNALS.map((s) => [s, { ...d.signal[s], text: ensureContrast(d.signal[s].text, marks, AA) }])
   ) as ColorSet['signal'];
-  const inkAccent = ensureContrast(accent, grounds, AA);
+  const inkAccent = ensureContrast(accent, marks, AA);
   return {
     ...d,
     bg: deep,
@@ -282,11 +312,11 @@ function inkColors(grounds: readonly string[], ink: { text: string; textMuted: s
     primaryPressed: '#E4E4E1',
     onPrimary: '#111113',
     signal,
-    warning: ensureContrast(d.warning, grounds, AA),
-    danger: ensureContrast(d.danger, grounds, AA),
-    success: ensureContrast(d.success, grounds, AA),
-    info: ensureContrast(d.info, grounds, AA),
-    freeze: ensureContrast(d.freeze, grounds, AA),
+    warning: ensureContrast(d.warning, marks, AA),
+    danger: ensureContrast(d.danger, marks, AA),
+    success: ensureContrast(d.success, marks, AA),
+    info: ensureContrast(d.info, marks, AA),
+    freeze: ensureContrast(d.freeze, marks, AA),
   };
 }
 
@@ -310,7 +340,7 @@ export function skyBundle(mood: SkyMood): SkyBundle {
     scheme,
     colors,
     onScene: inkColors(sky.scene, SCENE_INK, accent),
-    onSky: inkColors(sky.backdrop, SKY_INK, accent),
+    onSky: inkColors(sky.backdrop, SKY_INK, accent, sky.backdrop.map((s) => skyVeils(sky).reduce(over, s))),
     sky,
   };
 }
