@@ -17,8 +17,8 @@ test('the multipliers name the DashPal x1.25 and the x1.50 cap', () => {
 
 test('the DashPal section: what makes a DashPal drive, the events, and what they never touch', () => {
   expect(section('dashpal')).toEqual([
-    'It’s a DashPal drive when DashPal watched you for at least 80% of your time moving (at least 1 min) and your phone caught up with it by the end.',
-    'DashPal flags eyes off the road, including slumping out of view at speed (−40, at most once every 5 min), and drowsiness (−50, at most once every 10 min).',
+    'A drive is a DashPal drive when DashPal watched you for at least 80% of your time moving (at least 1 min) and your phone caught up with it by the end.',
+    'DashPal flags eyes off the road with no look back, or slumping out of view at speed (−40, at most once every 5 min), and drowsiness (−50, at most once every 10 min).',
     'They count only at 10 mph or more with good GPS, and not in the first 30 s of a drive you started while stopped (unless your last drive ended within 5 min).',
     'DashPal may alarm below 10 mph; those alarms cost no points.',
     'DashPal events never lower your Safety Rating or break a clean drive. They do cost points, like any event.',
@@ -38,7 +38,7 @@ test('phone use: leaving RoadWise is phone use too, the navigation button never 
   expect(phone[2]).toBe('The navigation button on the drive screen opens your navigation app and never costs points. If you lock your phone or come back to RoadWise, use the button again to reopen it. Going back any other way costs points.');
   expect(phone[3]).toMatch(/^Locking your phone and the notification shade never count\./);
   expect(phone[3]).toMatch(/Nor does a call’s own screen, but once you’re back in RoadWise for 10 s of the call, leaving again counts\.$/);
-  expect(phone[4]).toMatch(/^On iPhone a switch counts once you’ve been away 15 s or more, or about 26 s if it began with an unlock outside RoadWise or a call cut it short\. A message lighting up the lock screen, or a quick lock and unlock, never counts\. Switches count only once/);
+  expect(phone[4]).toMatch(/^On iPhone a switch counts once you come back to RoadWise after 15 s or more, or once you’ve been away about 26 s\. One that began with an unlock outside RoadWise, or that a call cut short, needs about 26 s\. A message lighting up the lock screen, or a quick lock and unlock, never counts\. Switches count only once/);
   expect(phone[4]).toMatch(/Several short switches in a row count as one pickup \(on iPhone, ones over about 11 s\)\.$/);
   expect(PENALTIES.find((p) => p.event === 'Phone pickup or leaving RoadWise')?.penalty).toBe('−40 (−20 when stopped in traffic)');
   expect(PENALTIES.find((p) => p.event === 'Phone handling or time away')?.penalty).toBe('−10 for every extra 15 s');

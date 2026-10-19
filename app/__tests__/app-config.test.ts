@@ -165,7 +165,7 @@ describe('permissions (v3)', () => {
 
   test('the Motion & Fitness string says what motion activity is for, and claims no braking or speed', () => {
     expect(PERMISSION_COPY.motion).toBe(
-      'RoadWise uses motion activity to stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it too.'
+      'RoadWise uses motion activity to stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it to notice a trip.'
     );
     expect(PERMISSION_COPY.motion).not.toMatch(/brak|speed|detect/i);
   });

@@ -34,7 +34,7 @@ describe('onboarding copy', () => {
 
   it('says what motion access is for (the walking end and the reminder) and that speed and braking need none', () => {
     expect(onboardingCopy.motion.body).toBe(
-      'Lets RoadWise stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it too. Speed and braking are measured either way.'
+      'Lets RoadWise stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it to notice a trip. Speed and braking are measured either way.'
     );
     expect(onboardingCopy.motion.denied).toBe(
       'Motion access is off. Drives still record, and one you forget to end stops after 15 min parked. You can turn it on in Settings.'

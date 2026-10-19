@@ -86,7 +86,7 @@ export const RULES: RuleSection[] = [
       'Leaving RoadWise mid-drive counts as phone use too: another app, the home screen, and on Android the app switcher or split screen. Time away counts as handling until you come back or lock your phone, which can wait until you’ve stopped.',
       'The navigation button on the drive screen opens your navigation app and never costs points. If you lock your phone or come back to RoadWise, use the button again to reopen it. Going back any other way costs points.',
       'Locking your phone and the notification shade never count. Nor does a call’s own screen, but once you’re back in RoadWise for 10 s of the call, leaving again counts.',
-      'On iPhone a switch counts once you’ve been away 15 s or more, or about 26 s if it began with an unlock outside RoadWise or a call cut it short. A message lighting up the lock screen, or a quick lock and unlock, never counts. Switches count only once RoadWise can tell when your iPhone locks, which needs a passcode. Several short switches in a row count as one pickup (on iPhone, ones over about 11 s).',
+      'On iPhone a switch counts once you come back to RoadWise after 15 s or more, or once you’ve been away about 26 s. One that began with an unlock outside RoadWise, or that a call cut short, needs about 26 s. A message lighting up the lock screen, or a quick lock and unlock, never counts. Switches count only once RoadWise can tell when your iPhone locks, which needs a passcode. Several short switches in a row count as one pickup (on iPhone, ones over about 11 s).',
     ],
   },
   {
@@ -104,8 +104,8 @@ export const RULES: RuleSection[] = [
     title: 'DashPal dashcam',
     icon: 'videocam-outline',
     points: [
-      `It’s a DashPal drive when DashPal watched you for at least ${Math.round(DASHCAM_MIN_COVERAGE * 100)}% of your time moving (at least ${DASHCAM_MIN_MOVING_S / 60} min) and your phone caught up with it by the end.`,
-      `DashPal flags eyes off the road, including slumping out of view at speed (−${BASE_PENALTY.eyes_off}, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)}), and drowsiness (−${BASE_PENALTY.drowsy}, at most once ${everyMin(DASHCAM_DROWSY_GAP_S)}).`,
+      `A drive is a DashPal drive when DashPal watched you for at least ${Math.round(DASHCAM_MIN_COVERAGE * 100)}% of your time moving (at least ${DASHCAM_MIN_MOVING_S / 60} min) and your phone caught up with it by the end.`,
+      `DashPal flags eyes off the road with no look back, or slumping out of view at speed (−${BASE_PENALTY.eyes_off}, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)}), and drowsiness (−${BASE_PENALTY.drowsy}, at most once ${everyMin(DASHCAM_DROWSY_GAP_S)}).`,
       `They count only at ${DASHCAM_MIN_MPH} mph or more with good GPS, and not in the first ${NO_EVENTS_FIRST_S} s of a drive you started while stopped (unless your last drive ended within ${MERGE_GAP_S / 60} min).`,
       `DashPal may alarm below ${DASHCAM_MIN_MPH} mph; those alarms cost no points.`,
       'DashPal events never lower your Safety Rating or break a clean drive. They do cost points, like any event.',

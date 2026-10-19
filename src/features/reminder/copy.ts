@@ -8,7 +8,7 @@ export const reminderCopy = {
   lines: {
     off: 'Reminds you at a stop if you forgot to start a drive. One tap starts it.',
     onAndroid: 'On. Once a trip, without sound, usually as you park.',
-    onIos: 'On. Once a trip, at a stop. Allow RoadWise in Driving Focus. If you swipe RoadWise away, it waits until you reopen the app.',
+    onIos: 'On. Once a trip, at a stop. If Driving Focus is on, allow RoadWise in it. If you swipe RoadWise away, it waits until you open it.',
     needsAndroid: (what: string) => `On, but it needs ${what}.`,
     needsAlways: 'On, but it needs Location set to Always (Settings › RoadWise › Location).',
     needsPrecise: 'On, but it needs Precise Location turned on.',

@@ -62,7 +62,7 @@ export const onboardingCopy = {
   location: {
     title: 'Measure your drives',
     body: 'RoadWise uses precise location to measure speed and miles during a drive you start.',
-    promise: 'During drives you start, and for the forgot-to-start reminder if you turn it on · Never sold',
+    promise: 'During drives you start, and for the forgot-to-start reminder only if you turn it on · Never sold',
     allow: 'Allow location',
     notNow: 'Not now',
     continue: 'Continue',
@@ -75,7 +75,7 @@ export const onboardingCopy = {
   },
   motion: {
     title: { ios: 'Motion & Fitness', android: 'Physical activity' },
-    body: 'Lets RoadWise stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it too. Speed and braking are measured either way.',
+    body: 'Lets RoadWise stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it to notice a trip. Speed and braking are measured either way.',
     allow: 'Allow motion access',
     notNow: 'Not now',
     continue: 'Continue',
