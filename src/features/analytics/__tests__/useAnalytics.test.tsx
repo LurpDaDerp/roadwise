@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react-native';
+import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { QueryClient } from '@tanstack/react-query';
 
 import { uuid } from '@/core/engine/__fixtures__/drives';
@@ -53,7 +53,11 @@ beforeEach(async () => {
   ]);
 });
 
-afterEach(() => client.clear());
+// Let every read land first (a range reads three queries), so none re-renders a hook after its test.
+afterEach(async () => {
+  await waitFor(() => expect(client.isFetching()).toBe(0));
+  client.clear();
+});
 
 test('useCoaching: the last 30 days’ scores and advice', async () => {
   const { result } = await renderHook(() => useCoaching(), { wrapper: wrapperFor(db, client, now) });
@@ -100,16 +104,25 @@ test('useAnalytics: range sums, grid and list; all-time bests and routes; 30-day
 test('while the window’s events are still loading, nothing is scored: drives alone never read as perfect', async () => {
   const queries = jest.requireActual<typeof import('@/data/queries/analytics')>('@/data/queries/analytics');
   const spy = jest.spyOn(queries, 'useWindowEvents').mockReturnValue({ data: undefined, isLoading: true, isError: false, refetch: jest.fn() } as never);
+  // Both hooks unmount before the spy goes: a late query landing would otherwise re-render them
+  // with the real hook, which has a different number of hooks inside.
+  const mounted: { unmount(): void }[] = [];
   try {
-    const { result } = await renderHook(() => useAnalytics('week'), { wrapper: wrapperFor(db, client, now) });
+    const analytics = await renderHook(() => useAnalytics('week'), { wrapper: wrapperFor(db, client, now) });
+    mounted.push(analytics);
+    const { result } = analytics;
     await waitFor(() => expect(result.current.drives).toHaveLength(2));
     expect(result.current.coaching.totals.drives).toBe(0);
     expect(Object.values(result.current.coaching.scores).some((s) => s === 100)).toBe(false);
     expect(result.current.coaching.coaching?.level).not.toBe('good');
+    // Nor does the trend's Score: it waits for the range's events too.
+    expect(result.current.trend.series.score).toEqual([]);
     const coach = await renderHook(() => useCoaching(), { wrapper: wrapperFor(db, client, now) });
+    mounted.push(coach);
     await waitFor(() => expect(coach.result.current.loading).toBe(true));
     expect(coach.result.current.totals.drives).toBe(0);
   } finally {
+    for (const m of mounted) await act(() => m.unmount());
     spy.mockRestore();
   }
 });

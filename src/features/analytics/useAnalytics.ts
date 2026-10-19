@@ -128,7 +128,7 @@ export function useAnalytics(range: Range): AnalyticsData {
     ...windowed,
     trend: trendData,
     ...map,
-    loading: all.isLoading || events.isLoading,
+    loading: all.isLoading || events.isLoading || rangeEvents.isLoading,
     error: all.isError || events.isError || rangeEvents.isError,
     refetch,
   };
