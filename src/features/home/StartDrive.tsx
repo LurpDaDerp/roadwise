@@ -18,7 +18,7 @@ export const REFUSAL_COPY: Record<StartBanner, string> = {
   services: 'Location Services are off. Turn them on to record a drive.',
   busy: 'A drive is already running.',
   error: 'Couldn’t start the drive. Try again.',
-  'reminder-expired': 'That reminder has expired. Tap Start Drive instead.',
+  'reminder-expired': 'That reminder has expired. Tap Start drive instead.',
 };
 
 const IDLE_MIN = Math.round(IDLE_END_S / 60);

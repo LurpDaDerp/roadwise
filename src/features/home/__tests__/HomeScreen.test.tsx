@@ -182,7 +182,7 @@ describe('a tap on the forgot-to-start reminder that started no drive', () => {
     await draw(<HomeScreen />);
     expect(screen.queryByTestId('start-refusal')).toBeNull();
     await act(async () => showStartNotice('reminder-expired'));
-    expect(await screen.findByTestId('start-refusal')).toHaveTextContent(/That reminder has expired. Tap Start Drive instead./);
+    expect(await screen.findByTestId('start-refusal')).toHaveTextContent(/That reminder has expired. Tap Start drive instead./);
     expect(screen.queryByText('Fix it')).toBeNull();
     expect(screen.queryByText('Open it')).toBeNull();
   });
@@ -193,7 +193,7 @@ describe('a tap on the forgot-to-start reminder that started no drive', () => {
     await press(screen.getByTestId('start-drive'));
     expect(await screen.findByText('A drive is already running.')).toBeOnTheScreen();
     await act(async () => showStartNotice('reminder-expired'));
-    expect(await screen.findByText('That reminder has expired. Tap Start Drive instead.')).toBeOnTheScreen();
+    expect(await screen.findByText('That reminder has expired. Tap Start drive instead.')).toBeOnTheScreen();
   });
 
   test('a drive that starts (by the reminder too) takes an old refused Start down', async () => {
