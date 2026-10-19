@@ -74,6 +74,16 @@ it('shows the public card, the achievements and a badge for friend requests', as
   expect(mockRouter.push.mock.calls.map((c) => c[0])).toEqual([PROFILE_HREFS.friends, PROFILE_HREFS.heatmap, '/settings/blocked']);
 });
 
+it('scrolls below the status bar: the list sits inside a top safe area, with no inset padding of its own', async () => {
+  answerRpc(mockRpc, { get_my_summary: summary(), list_friends: { friends: [], incoming: [], outgoing: [] } });
+  const w = await appWorld();
+  await w.render(<ProfileScreen />);
+  await screen.findByTestId('profile-username');
+  const area = screen.getByTestId('profile-safe-area');
+  expect(area.props.edges).toMatchObject({ top: 'additive' });
+  expect(within(area).getByTestId('profile-screen')).toBeOnTheScreen();
+});
+
 it('unranked says how far there is to go', async () => {
   answerRpc(mockRpc, { get_my_summary: summary({ ranked: false }), list_friends: { friends: [], incoming: [], outgoing: [] } });
   const w = await appWorld();
