@@ -10,10 +10,21 @@ import type { DangerKind } from '../danger';
 import { HomeWeatherAlert } from '../HomeWeatherAlert';
 import { HOME_WEATHER_REFRESH_MS, WEATHER_DISMISSED_KEY, type DismissStore, type WeatherPorts } from '../useWeatherAlert';
 
-// Focus runs its effect on mount (and again whenever the callback changes), as on a real focus.
+// Focus runs its effect on mount (and again whenever the callback changes), as on a real focus;
+// `mockFocus.blur()` runs its cleanup, as another screen coming to the front does.
+const mockFocus = { blur: () => {} };
 jest.mock('expo-router', () => {
   const { useEffect } = jest.requireActual<typeof import('react')>('react');
-  return { useFocusEffect: (fn: () => void | (() => void)) => useEffect(fn, [fn]) };
+  return {
+    useFocusEffect: (fn: () => void | (() => void)) =>
+      useEffect(() => {
+        const cleanup = fn();
+        mockFocus.blur = () => {
+          if (typeof cleanup === 'function') cleanup();
+        };
+        return cleanup;
+      }, [fn]),
+  };
 });
 
 // The local settings table, as the default dismissal store and the units read it.
@@ -138,6 +149,15 @@ describe('asked on focus and on return to the front, at most every 15 min', () =
     clock += 1;
     await foreground();
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  test('a return to the front while Home is not the screen in front (another tab, a drive) asks nothing', async () => {
+    await show();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    mockFocus.blur();
+    clock += HOME_WEATHER_REFRESH_MS;
+    await foreground();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   test('a danger that starts shows on the next ask; one that ends goes', async () => {

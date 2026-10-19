@@ -141,14 +141,21 @@ export function useWeatherAlert(ports: WeatherPorts = defaultWeatherPorts, injec
     }
   }, [reconcile]);
 
+  // A return to the front asks only while Home is the screen in front: never under another tab or
+  // a recording drive, where nobody would see the card.
+  const focused = useRef(false);
   useFocusEffect(
     useCallback(() => {
+      focused.current = true;
       void refresh();
+      return () => {
+        focused.current = false;
+      };
     }, [refresh])
   );
   useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') void refresh();
+      if (s === 'active' && focused.current) void refresh();
     });
     return () => sub.remove();
   }, [refresh]);
