@@ -3,10 +3,11 @@ import { useMemo, useState } from 'react';
 import { FlatList, RefreshControl, View } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
-import { Chip, EmptyState, formatPointsValue, Text, useTheme } from '@/ui';
+import { Card, Chip, EmptyState, formatPointsValue, useTheme } from '@/ui';
 
 import { useFriendsBoard, type FriendsMetric } from './api';
 import {
+  BoardNote,
   BoardRow,
   ListSkeleton,
   LoadFailed,
@@ -93,19 +94,17 @@ export function FriendsBoard() {
       )}
       ListFooterComponent={
         <View style={{ gap: t.space.lg, paddingTop: t.space.lg }}>
-          {anyUnranked ? (
-            <Text variant="footnote" tone="muted">
-              {copy.friends.unrankedNote(units)}
-            </Text>
-          ) : null}
+          {anyUnranked ? <BoardNote>{copy.friends.unrankedNote(units)}</BoardNote> : null}
           {rows.length <= 1 ? (
-            <EmptyState
-              icon="people"
-              title={copy.friends.emptyTitle}
-              body={copy.friends.emptyBody}
-              action={{ label: copy.friends.emptyAction, onPress: () => router.push(FRIENDS_ADD_HREF) }}
-              testID="friends-empty"
-            />
+            <Card padded={false}>
+              <EmptyState
+                icon="people"
+                title={copy.friends.emptyTitle}
+                body={copy.friends.emptyBody}
+                action={{ label: copy.friends.emptyAction, onPress: () => router.push(FRIENDS_ADD_HREF) }}
+                testID="friends-empty"
+              />
+            </Card>
           ) : null}
         </View>
       }

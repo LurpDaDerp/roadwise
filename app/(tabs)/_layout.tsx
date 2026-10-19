@@ -5,7 +5,7 @@ import { View, type ColorValue } from 'react-native';
 
 import { useDrive } from '@/drive/useDrive';
 import { t } from '@/i18n';
-import { SkyBackdrop, useTheme } from '@/ui';
+import { SkyBackdrop, SkyScrollProvider, useSkyFocus, useTheme } from '@/ui';
 import { FloatingTabBar, type FloatingTabBarProps } from '@/ui/nav/FloatingTabBar';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
@@ -22,7 +22,17 @@ function tabIcon(outline: IconName, filled: IconName) {
  * weather layer runs only while this shell is in front and no drive is recording.
  */
 export default function TabsLayout() {
+  return (
+    <SkyScrollProvider>
+      <Shell />
+    </SkyScrollProvider>
+  );
+}
+
+function Shell() {
   const th = useTheme();
+  // the sky follows the scroll of the tab in front
+  const skyFocus = useSkyFocus();
   const focused = useIsFocused();
   // Nothing moves behind Home while a drive records, even with the driver back on the tabs; the
   // status bar still follows the sky whenever the tabs are in front.
@@ -37,6 +47,7 @@ export default function TabsLayout() {
           headerShown: false,
           sceneStyle: { backgroundColor: 'transparent' },
         }}
+        screenListeners={({ route }) => ({ focus: () => skyFocus(route.name) })}
       >
         <Tabs.Screen name="home" options={{ title: t('tabs.home'), tabBarIcon: tabIcon('home-outline', 'home') }} />
         <Tabs.Screen

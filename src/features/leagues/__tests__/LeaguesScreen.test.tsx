@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 
 import { friendRow, globalBoard } from '../__fixtures__/data';
 import { callsTo, renderScreen, resetHarness, respond, router, rpcError } from '../__fixtures__/harness';
@@ -50,6 +51,36 @@ test('the title and the pull-to-refresh spinner of both boards are white on the 
   expect(tint(await screen.findByTestId('friends-board'))).toBe('#FFFFFF');
   await fireEvent.press(screen.getByRole('tab', { name: 'Global' }));
   expect(tint(await screen.findByTestId('global-board'))).toBe('#FFFFFF');
+});
+
+/** The nearest fill behind an element: the boards sit on the sky, so text needs a paper ground. */
+type Node = { props: { style?: unknown }; parent: Node | null };
+function ground(el: Node): string | undefined {
+  for (let n: Node | null = el; n; n = n.parent) {
+    const bg = StyleSheet.flatten(n.props.style as object)?.backgroundColor as string | undefined;
+    if (bg !== undefined && bg !== 'transparent') return bg;
+  }
+  return undefined;
+}
+
+test('notes and empty states on the boards sit on a paper card, never on the open sky', async () => {
+  wire({ get_friends_board: (a: Record<string, unknown>) => (a.p_metric === 'rating' ? [friendRow('maya', { is_me: true, value: null, ranked: false })] : [friendRow('maya', { is_me: true })]) });
+  await renderScreen(<LeaguesScreen />);
+  expect(ground(await screen.findByTestId('friends-empty'))).toBe('#FFFFFF');
+  await fireEvent.press(screen.getByTestId('metric-rating'));
+  expect(ground(await screen.findByText(/^Unranked drivers need/))).toBe('#FFFFFF');
+  wire({ get_global_board: globalBoard({ me: { rank: null, percentile: null, eligible: true, safety_rating: 80 }, top: [] }) });
+  await fireEvent.press(screen.getByRole('tab', { name: 'Global' }));
+  expect(ground(await screen.findByTestId('global-not-in-state'))).toBe('#FFFFFF');
+  expect(ground(screen.getByTestId('global-empty'))).toBe('#FFFFFF');
+});
+
+test('a failed load and a not-eligible card sit on paper too', async () => {
+  wire({ get_friends_board: rpcError('boom'), get_global_board: globalBoard({ me: { rank: null, percentile: null, eligible: false, safety_rating: 80 } }) });
+  await renderScreen(<LeaguesScreen />);
+  expect(ground(await screen.findByTestId('load-failed'))).toBe('#FFFFFF');
+  await fireEvent.press(screen.getByRole('tab', { name: 'Global' }));
+  expect(ground(await screen.findByTestId('global-not-eligible'))).toBe('#FFFFFF');
 });
 
 describe('Friends (default)', () => {

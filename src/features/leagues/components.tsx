@@ -1,11 +1,12 @@
 /**
  * Pieces the boards share: a leaderboard row, load failure and loading states, and pull to
- * refresh.
+ * refresh. The boards scroll under a fixed header, so their lists sit on the sky behind the tabs:
+ * anything with text has a paper ground (a card or a row tile), never the open sky.
  */
 import { useCallback, useState } from 'react';
 import { Pressable, View, type ViewStyle } from 'react-native';
 
-import { Avatar, Button, EmptyState, Pill, Skeleton, Text, tokens, useTheme } from '@/ui';
+import { Avatar, Button, Card, EmptyState, Pill, Skeleton, Text, tokens, useTheme } from '@/ui';
 
 import { leaguesCopy } from './copy';
 
@@ -38,13 +39,15 @@ export function RowSeparator() {
 
 export function LoadFailed({ onRetry, title, body }: { onRetry: () => void; title?: string; body?: string }) {
   return (
-    <EmptyState
-      icon="cloud-offline-outline"
-      title={title ?? copy.loadFailed.title}
-      body={body ?? copy.loadFailed.body}
-      action={{ label: copy.loadFailed.retry, onPress: onRetry }}
-      testID="load-failed"
-    />
+    <Card padded={false}>
+      <EmptyState
+        icon="cloud-offline-outline"
+        title={title ?? copy.loadFailed.title}
+        body={body ?? copy.loadFailed.body}
+        action={{ label: copy.loadFailed.retry, onPress: onRetry }}
+        testID="load-failed"
+      />
+    </Card>
   );
 }
 
@@ -60,13 +63,20 @@ export function ListSkeleton({ rows = 6 }: { rows?: number }) {
   );
 }
 
+/** A note on a board, on its own paper ground (the board sits on the sky). */
+export function BoardNote({ children, testID }: { children: string; testID?: string }) {
+  return (
+    <Card>
+      <Text variant="footnote" tone="muted" testID={testID}>
+        {children}
+      </Text>
+    </Card>
+  );
+}
+
 /** A quiet line when a background refresh failed but the last board is still on screen. */
 export function RefreshFailedNote() {
-  return (
-    <Text variant="footnote" tone="muted" testID="refresh-failed">
-      {copy.refreshFailed}
-    </Text>
-  );
+  return <BoardNote testID="refresh-failed">{copy.refreshFailed}</BoardNote>;
 }
 
 export function RetryButton({ onPress }: { onPress: () => void }) {

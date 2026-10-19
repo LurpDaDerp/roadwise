@@ -1,12 +1,13 @@
 import { useRouter, type Href } from 'expo-router';
-import { RefreshControl, ScrollView, View } from 'react-native';
+import { RefreshControl, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useMySummary } from '@/data/server/summary';
 import { useFriends } from '@/features/social/api';
 import { LinkRow, Section } from '@/features/settings/parts';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
-import { Banner, Card, Pill, ScreenTitle, SectionHeader, Skeleton, useTheme } from '@/ui';
+import { Banner, Card, Pill, ScreenTitle, SectionHeader, Skeleton, useSkyScrollHandler, useTheme } from '@/ui';
 
 import { AchievementBadges } from './AchievementBadges';
 import { profileCopy as copy } from './copy';
@@ -32,11 +33,15 @@ export function ProfileScreen() {
   const friends = useFriends();
   const data = summary.data;
   const requests = friends.data?.incoming.length ?? 0;
+  // the sky behind the tabs scrolls with Profile
+  const onScroll = useSkyScrollHandler();
 
   return (
-    <ScrollView
+    <Animated.ScrollView
       testID="profile-screen"
       style={{ flex: 1 }}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
       contentContainerStyle={{ padding: th.space.lg, paddingTop: th.space.lg + insets.top, gap: th.space.xl }}
       refreshControl={
         <RefreshControl
@@ -108,6 +113,6 @@ export function ProfileScreen() {
         <LinkRow icon="person-circle-outline" title={copy.rows.account.title} subtitle={copy.rows.account.subtitle} onPress={() => router.push(SETTINGS_HREFS.account)} testID="profile-account" />
         <LinkRow icon="ban-outline" title={copy.rows.blocked.title} subtitle={copy.rows.blocked.subtitle} onPress={() => router.push(SETTINGS_HREFS.blocked)} testID="profile-blocked" />
       </Section>
-    </ScrollView>
+    </Animated.ScrollView>
   );
 }

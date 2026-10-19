@@ -10,6 +10,7 @@ import { Card, Chip, Divider, EmptyState, ListRow, Sheet, Text, useTheme } from 
 
 import { useGlobalBoard, type GlobalBoard as Board } from './api';
 import {
+  BoardNote,
   BoardRow,
   ListSkeleton,
   LoadFailed,
@@ -29,7 +30,7 @@ function MeCard({ me }: { me: Board['me'] }) {
   const units = useUnits();
   if (!me.eligible) {
     return (
-      <Card variant="outline" testID="global-not-eligible">
+      <Card testID="global-not-eligible">
         <Text variant="title3" accessibilityRole="header">
           {copy.notEligibleTitle(units)}
         </Text>
@@ -40,11 +41,7 @@ function MeCard({ me }: { me: Board['me'] }) {
     );
   }
   if (me.percentile === null || me.rank === null) {
-    return (
-      <Text variant="callout" tone="muted" testID="global-not-in-state">
-        {copy.notInState}
-      </Text>
-    );
+    return <BoardNote testID="global-not-in-state">{copy.notInState}</BoardNote>;
   }
   return (
     <Card variant="hero" testID="global-me">
@@ -152,7 +149,9 @@ export function GlobalBoard() {
           </View>
         }
         ListEmptyComponent={
-          <EmptyState icon="earth" title={copy.emptyTitle} body={copy.emptyBody(units)} testID="global-empty" />
+          <Card padded={false}>
+            <EmptyState icon="earth" title={copy.emptyTitle} body={copy.emptyBody(units)} testID="global-empty" />
+          </Card>
         }
         refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.onSky.text} />}
         renderItem={({ item }) => (

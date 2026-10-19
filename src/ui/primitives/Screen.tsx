@@ -1,7 +1,9 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import { ScrollView, View, type ViewStyle } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useSkyScrollHandler } from '../sky/scroll';
 import { useTheme } from '../theme';
 import { Text } from './Text';
 
@@ -102,7 +104,11 @@ export function Screen({
         style={{ flex: 1, backgroundColor: sky ? 'transparent' : t.colors.bg }}
         edges={['top', 'left', 'right']}
       >
-        {scroll ? (
+        {scroll && sky ? (
+          <SkyScroll content={content} testID={testID}>
+            {body}
+          </SkyScroll>
+        ) : scroll ? (
           <ScrollView
             contentContainerStyle={content}
             keyboardShouldPersistTaps="handled"
@@ -119,5 +125,23 @@ export function Screen({
         )}
       </SafeAreaView>
     </OnSky.Provider>
+  );
+}
+
+/** A sky screen's scroll view: the sky behind the tabs scrolls with it (see `sky/scroll`). */
+function SkyScroll({ content, testID, children }: { content: ViewStyle; testID?: string; children: ReactNode }) {
+  const onScroll = useSkyScrollHandler();
+  return (
+    <Animated.ScrollView
+      contentContainerStyle={content}
+      keyboardShouldPersistTaps="handled"
+      automaticallyAdjustKeyboardInsets
+      showsVerticalScrollIndicator={false}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
+      testID={testID}
+    >
+      {children}
+    </Animated.ScrollView>
   );
 }

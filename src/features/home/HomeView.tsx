@@ -1,13 +1,14 @@
 import type { StatSums } from '@scoring';
 import type { ReactNode, RefObject } from 'react';
 import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 
 import { useUnits, useUnitsFromServer } from '@/data/queries/units';
 import type { MySummary } from '@/data/server/summary';
 import type { LocalDrive } from '@/features/drives/model';
 import { homeStats } from '@/features/drives/stats';
 import { showsTip, type Coaching, type Level } from '@/features/analytics/model';
-import { Avatar, ScreenTitle, useOnSky, useTheme } from '@/ui';
+import { Avatar, ScreenTitle, useOnSky, useSkyScrollHandler, useTheme } from '@/ui';
 
 import { CoachTipCard, StreakCard, type StreakNews } from './ActionCards';
 import { HomeHeader, ProgressStrip } from './HomeHeader';
@@ -88,11 +89,15 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
   const stats = full && p.week && p.month ? homeStats(p.week, p.month, units) : null;
   const name = p.summary?.profile.username;
   const tip = p.coaching && showsTip(p.coaching) ? (p.coaching as Coaching & { level: Level }) : null;
+  // the sky behind the tabs scrolls with Home
+  const onScroll = useSkyScrollHandler();
 
   return (
     <View style={{ flex: 1 }}>
-      <ScrollView
+      <Animated.ScrollView
         ref={scrollRef}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
         testID="home"
         contentContainerStyle={{ paddingHorizontal: t.space.lg, paddingTop: t.space.md, paddingBottom: t.space.xxl, gap: t.space.xl }}
         refreshControl={
@@ -156,7 +161,7 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
         ) : null}
 
         <HowItWorks onHowPoints={p.onHowPoints} />
-      </ScrollView>
+      </Animated.ScrollView>
     </View>
   );
 }

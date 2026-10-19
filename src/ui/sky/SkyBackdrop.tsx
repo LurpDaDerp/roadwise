@@ -21,6 +21,7 @@ import { relativeLuminance } from '../contrast';
 import { useTheme } from '../theme';
 import { opaque, parseColor, withAlpha } from './color';
 import type { SkyMood } from './palette';
+import { useSkyOffset } from './scroll';
 import type { WeatherIntensity, WeatherKind } from './weather';
 
 /** How much of the window the painted sky covers, from the top, before it has faded into the page. */
@@ -52,6 +53,9 @@ export const STORM_WASH = { gapMs: 8000, upMs: 700, downMs: 1400 } as const;
  * - The weather layer runs only while its screen is in front (`active`); under Reduce Motion it
  *   holds still. The status bar turns light over the sky while the sky is in front (`front`,
  *   default `active`) and falls back to the scheme's when it is not.
+ * - It scrolls with the tab in front (see `./scroll`): the band moves up as the content does, so
+ *   page-ink text that rests below the fade never rides up onto the sky. A fixed strip of the
+ *   sky's top stays under the status bar, so its light icons always sit on the sky.
  * - Every loop runs on the UI thread; nothing re-renders React per frame.
  */
 export function SkyBackdrop({
@@ -72,6 +76,9 @@ export function SkyBackdrop({
   const s = t.sky;
   const onTop = front ?? active;
   const lightBar = relativeLuminance(opaque(s.backdrop[0])) < 0.18;
+  const insets = useSafeAreaInsets();
+  const offset = useSkyOffset();
+  const follow = useAnimatedStyle(() => ({ transform: [{ translateY: offset ? -Math.max(0, offset.value) : 0 }] }));
   return (
     <View
       testID="sky-backdrop"
@@ -80,21 +87,39 @@ export function SkyBackdrop({
       importantForAccessibility="no-hide-descendants"
       style={[StyleSheet.absoluteFill, { backgroundColor: t.colors.bg }]}
     >
+      <Animated.View testID="sky-band" style={[StyleSheet.absoluteFill, follow]}>
+        <Painted height={h} />
+        <Glow />
+        {t.mood && active ? <Ambient mood={t.mood} height={h} still={t.reduceMotion} /> : null}
+      </Animated.View>
+      {insets.top > 0 ? (
+        <View testID="sky-status-strip" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, overflow: 'hidden' }}>
+          <Painted height={h} />
+        </View>
+      ) : null}
+      {onTop ? <StatusBar style={lightBar ? 'light' : 'dark'} animated /> : null}
+    </View>
+  );
+}
+
+/** The painted gradient (backdrop stops, horizon, page ground) and the cloud cover over it. */
+function Painted({ height }: { height: number }) {
+  const t = useTheme();
+  const s = t.sky;
+  return (
+    <>
       <LinearGradient
         colors={[s.backdrop[0], s.backdrop[1], s.backdrop[2], s.horizon, t.colors.bg]}
         locations={SKY_LOCATIONS}
-        style={{ position: 'absolute', top: 0, left: 0, right: 0, height: h }}
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, height }}
       />
       {parseColor(s.cover).a > 0 ? (
         <LinearGradient
           colors={[s.cover, withAlpha(s.cover, 0)]}
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, height: h * 0.75 }}
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, height: height * 0.75 }}
         />
       ) : null}
-      <Glow />
-      {t.mood && active ? <Ambient mood={t.mood} height={h} still={t.reduceMotion} /> : null}
-      {onTop ? <StatusBar style={lightBar ? 'light' : 'dark'} animated /> : null}
-    </View>
+    </>
   );
 }
 
