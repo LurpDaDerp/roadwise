@@ -19,7 +19,7 @@ import { releaseDevice } from '@/data/devices/register';
 import { callRpc } from '@/data/server/rpc';
 import { DataProvider } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
-import { registerBeforeSignOut, SessionProvider, useSession } from '@/data/supabase/session';
+import { registerAfterSignOut, registerBeforeSignOut, SessionProvider, useSession } from '@/data/supabase/session';
 import { setDisplayLook } from '@/drive/displayLook';
 import { DriveProvider } from '@/drive/DriveProvider';
 import { tripRecords } from '@/drive/policy';
@@ -183,8 +183,9 @@ export default function RootLayout() {
     };
   }, [runtime]);
 
-  // Before the session ends at sign-out (inside the sign-out's 2 s budget): the server forgets this
-  // install's push token, and — with nothing left to upload — the driver's drives and privacy zones
+  // Before the session ends at sign-out (inside the sign-out's 2 s budget) the server forgets this
+  // install's push token. Once it has really ended (never when Supabase could not end it, offline
+  // with an expired token) and with nothing left to upload, the driver's drives and privacy zones
   // leave the phone. Both read what they need at task start and never hold the sign-out.
   useEffect(() => {
     if (runtime === null) return;
@@ -193,7 +194,7 @@ export default function RootLayout() {
       const deviceId = await readInstallId(settings);
       await releaseDevice({ rpc: callRpc, settings, deviceId });
     });
-    const offWipe = registerBeforeSignOut(async () => {
+    const offWipe = registerAfterSignOut(async () => {
       if ((await runtime.runner.owed()) === 0) await wipeForSignOut(runtime.db);
     });
     return () => {

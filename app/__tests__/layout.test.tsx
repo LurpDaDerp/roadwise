@@ -134,6 +134,7 @@ jest.mock('@/data/supabase/session', () => ({
   },
   useSession: () => ({ status: 'signedIn', profile: mockProfile.current }),
   registerBeforeSignOut: () => () => {},
+  registerAfterSignOut: () => () => {},
 }));
 jest.mock('@/data/queries', () => ({
   ...jest.requireActual('@/data/queries'),

@@ -147,6 +147,8 @@ const mockSessionStore = {
     for (const l of [...mockSessionStore.listeners]) l();
   },
   tasks: new Set<() => unknown>(),
+  /** Of those, the ones that run only once the session has really ended. */
+  after: new Set<() => unknown>(),
 };
 jest.mock('@/data/supabase/session', () => {
   const { useSyncExternalStore: useStore } = jest.requireActual<typeof import('react')>('react');
@@ -168,6 +170,14 @@ jest.mock('@/data/supabase/session', () => {
       mockSessionStore.tasks.add(task);
       return () => {
         mockSessionStore.tasks.delete(task);
+      };
+    },
+    registerAfterSignOut: (task: () => unknown) => {
+      mockSessionStore.tasks.add(task);
+      mockSessionStore.after.add(task);
+      return () => {
+        mockSessionStore.tasks.delete(task);
+        mockSessionStore.after.delete(task);
       };
     },
   };
@@ -256,6 +266,7 @@ beforeEach(() => {
   mockNotifications.receivedListeners.clear();
   mockSessionStore.uid = 'u1';
   mockSessionStore.tasks.clear();
+  mockSessionStore.after.clear();
   mockSupabase.sessionUid = 'u1';
   mockHosts.device = [];
 });
@@ -423,6 +434,11 @@ describe('before sign-out: the device is released, then the local data wiped (pl
     await runAll();
     expect(mockWipeForSignOut).toHaveBeenCalledTimes(1);
     expect(mockWipeForSignOut).toHaveBeenCalledWith(db);
+    // Only once the session has really ended: a sign-out Supabase could not finish keeps the drives.
+    mockWipeForSignOut.mockClear();
+    for (const task of [...mockSessionStore.after]) await task();
+    expect(mockWipeForSignOut).toHaveBeenCalledTimes(1);
+    expect(mockSessionStore.after.size).toBe(1);
   });
 
   test('work still owed to the server: nothing is wiped, so it can upload after the next sign-in', async () => {

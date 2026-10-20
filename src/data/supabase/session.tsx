@@ -18,11 +18,18 @@ type Status = 'loading' | 'signedOut' | 'signedIn';
 export type SignOutFlushResult = { sent: number; left: number };
 
 /**
- * `signedOut: false` means nothing was ended: the flush left deletes unsent (`unsentDeletes`, or
- * `null` when the flush itself failed and the count is unknown). The caller names that to the
- * driver and, if they still want to, calls `signOut({ force: true })`.
+ * `signedOut: false` means nothing was ended:
+ * - `unsentDeletes`: the flush left deletes unsent (`null` when the flush itself failed and the
+ *   count is unknown). The caller names that to the driver and, if they still want to, calls
+ *   `signOut({ force: true })`.
+ * - `failed`: Supabase could not end the session (offline with an expired access token, so it can
+ *   neither refresh nor revoke it) and the driver is still signed in. Recording is armed again and
+ *   nothing of theirs was removed; the caller says so and the driver tries again.
  */
-export type SignOutOutcome = { signedOut: true } | { signedOut: false; unsentDeletes: number | null };
+export type SignOutOutcome =
+  | { signedOut: true }
+  | { signedOut: false; unsentDeletes: number | null }
+  | { signedOut: false; failed: true };
 
 /**
  * Where `profile` came from: this session's read of the server, or the device's cache of the last
@@ -42,6 +49,7 @@ export type BeforeSignOutTask = () => Promise<unknown> | unknown;
 export const BEFORE_SIGN_OUT_BUDGET_MS = 2_000;
 
 const beforeSignOut = new Set<BeforeSignOutTask>();
+const afterSignOut = new Set<BeforeSignOutTask>();
 
 /**
  * Registers `task` to run on every sign-out the driver goes through with, after the drive has
@@ -56,8 +64,23 @@ export function registerBeforeSignOut(task: BeforeSignOutTask): () => void {
   };
 }
 
+/**
+ * Registers `task` to run once a sign-out has really ended the session (never when it could not),
+ * under the same rules and the same kind of 2-second budget as `registerBeforeSignOut`. For work
+ * that must not happen to a driver who is still signed in: emptying the phone of their drives.
+ */
+export function registerAfterSignOut(task: BeforeSignOutTask): () => void {
+  afterSignOut.add(task);
+  return () => {
+    afterSignOut.delete(task);
+  };
+}
+
 async function runBeforeSignOut(budgetMs: number = BEFORE_SIGN_OUT_BUDGET_MS): Promise<void> {
-  const tasks = [...beforeSignOut];
+  await runBudgeted([...beforeSignOut], budgetMs);
+}
+
+async function runBudgeted(tasks: BeforeSignOutTask[], budgetMs: number = BEFORE_SIGN_OUT_BUDGET_MS): Promise<void> {
   if (tasks.length === 0) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const budget = new Promise<void>((resolve) => {
@@ -93,9 +116,24 @@ type Ctx = {
    */
   refreshProfile: () => Promise<void>;
   registerBeforeSignOut: typeof registerBeforeSignOut;
+  registerAfterSignOut: typeof registerAfterSignOut;
 };
 
 const SessionCtx = createContext<Ctx | null>(null);
+
+/**
+ * After a sign-out that reported an error: whether a session is still stored. Supabase removes it
+ * on most errors (a revoked or unknown token), but not when it could not even load it (an expired
+ * access token it cannot refresh offline); a read that fails that way still means signed in.
+ */
+async function stillSignedIn(): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    return data.session !== null || error !== null;
+  } catch {
+    return true;
+  }
+}
 
 /**
  * A request that never settles would otherwise pin the app to 'loading' for the life of the
@@ -345,7 +383,15 @@ export function SessionProvider({
         // Still signed in: whatever must reach the server under this session goes now (the push
         // token), all of it inside one 2-second budget, none of it able to hold the sign-out.
         await runBeforeSignOut();
-        await supabase.auth.signOut();
+        const { error: signOutError } = await supabase.auth.signOut();
+        if (signOutError && (await stillSignedIn())) {
+          // Nothing ended (offline with an expired token): the driver keeps their session, so the
+          // drive host arms again rather than refusing Start Drive until a relaunch.
+          await recording?.resume().catch(() => {});
+          return { signedOut: false, failed: true };
+        }
+        // Their drives and zones leave the phone only now that the session really ended.
+        await runBudgeted([...afterSignOut]);
         // A summary scheduled for this driver's last drive must not fire once they have left (U3).
         void cancelDriveSummaries().catch(() => {});
         // The forgot-to-start reminder goes off with the driver and forgets everything it kept, and
@@ -359,6 +405,7 @@ export function SessionProvider({
       },
       refreshProfile: () => refreshRef.current(),
       registerBeforeSignOut,
+      registerAfterSignOut,
     }),
     [status, session, profile, profileSource, flushBeforeSignOut, recording, settings]
   );

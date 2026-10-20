@@ -6,7 +6,7 @@ import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
 import { createSettingsRepo } from '@/data/db/settings';
 import { DataProvider } from '@/data/queries/context';
-import { SessionProvider, registerBeforeSignOut, useSession } from '@/data/supabase/session';
+import { SessionProvider, registerAfterSignOut, registerBeforeSignOut, useSession, type SignOutOutcome } from '@/data/supabase/session';
 import { PENDING_TERMS_KEY } from '@/features/auth/pendingConsent';
 import { readProfileCache, writeProfileCache } from '@/features/auth/profileCache';
 import { readStartNotice, showStartNotice } from '@/features/home/startNotice';
@@ -28,13 +28,15 @@ const mockProfileQueue: Gate<unknown>[] = [];
 // Recorded rather than held as a jest.fn: the factory below is hoisted above these declarations,
 // so it must not read one of them as a value at definition time.
 const authCalls: string[] = [];
+// What `auth.signOut` answers: null (ended), or the error Supabase reports when it could not end it.
+const mockSignOutError: { current: unknown } = { current: null };
 
 jest.mock('@/data/supabase/client', () => ({
   supabase: {
     auth: {
       getSession: jest.fn(() => new Promise((resolve, reject) => { mockSessionGate.resolve = resolve; mockSessionGate.reject = reject; })),
       onAuthStateChange: jest.fn((cb: AuthListener) => { listeners.push(cb); return { data: { subscription: { unsubscribe: jest.fn() } } }; }),
-      signOut: jest.fn(async () => { authCalls.push('signOut'); return { error: null }; }),
+      signOut: jest.fn(async () => { authCalls.push('signOut'); return { error: mockSignOutError.current }; }),
     },
   },
 }));
@@ -84,6 +86,7 @@ beforeEach(async () => {
   profileCalls.length = 0;
   mockProfileQueue.length = 0;
   authCalls.length = 0;
+  mockSignOutError.current = null;
   delete mockSessionGate.resolve;
   delete mockSessionGate.reject;
   delete mockProfileGate.resolve;
@@ -270,6 +273,56 @@ describe('sign-out stops recording (final review I3)', () => {
     await signedInWith({ recording });
     await act(async () => { fireEvent.press(screen.getByText('sign out')); });
     expect(authCalls).toEqual(['signOut', 'cancelDriveSummaries']);
+  });
+});
+
+describe('a sign-out Supabase could not finish (offline, the access token expired)', () => {
+  const unregister: (() => void)[] = [];
+  afterEach(() => unregister.splice(0).forEach((u) => u()));
+
+  test('the driver stays signed in, recording arms again, the after-sign-out work never runs, and the caller is told', async () => {
+    const after = jest.fn(async () => { authCalls.push('wipe'); });
+    unregister.push(registerAfterSignOut(after));
+    const recording = {
+      stop: jest.fn(async () => { authCalls.push('stopRecording'); }),
+      resume: jest.fn(async () => { authCalls.push('resumeRecording'); }),
+    };
+    let outcome: SignOutOutcome | null = null;
+    function Out() {
+      const s = useSession();
+      return <Text onPress={() => { void s.signOut().then((o) => { outcome = o; }); }}>out</Text>;
+    }
+    await render(<DataProvider db={db}><SessionProvider recording={recording} flushBeforeSignOut={async () => ({ sent: 0, left: 0 })}><Probe /><Out /></SessionProvider></DataProvider>);
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await act(async () => { mockProfileGate.resolve?.(ava); });
+    mockSignOutError.current = { name: 'AuthRetryableFetchError', status: 0 };
+    await act(async () => { fireEvent.press(screen.getByText('out')); });
+    // The check reads the stored session again: still there.
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await waitFor(() => expect(outcome).toEqual({ signedOut: false, failed: true }));
+    expect(authCalls).toEqual(['stopRecording', 'signOut', 'resumeRecording']);
+    expect(after).not.toHaveBeenCalled();
+  });
+
+  test('an error after which no session is left is a sign-out like any other: the after-sign-out work runs', async () => {
+    const after = jest.fn(async () => { authCalls.push('wipe'); });
+    unregister.push(registerAfterSignOut(after));
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await act(async () => { mockProfileGate.resolve?.(ava); });
+    mockSignOutError.current = { name: 'AuthApiError', status: 500 };
+    await act(async () => { fireEvent.press(screen.getByText('sign out')); });
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: null }, error: null } as never); });
+    await waitFor(() => expect(authCalls).toEqual(['signOut', 'wipe', 'cancelDriveSummaries']));
+  });
+
+  test('a sign-out that ends the session runs the after-sign-out work after it', async () => {
+    unregister.push(registerAfterSignOut(async () => { authCalls.push('wipe'); }));
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await act(async () => { mockProfileGate.resolve?.(ava); });
+    await act(async () => { fireEvent.press(screen.getByText('sign out')); });
+    expect(authCalls).toEqual(['signOut', 'wipe', 'cancelDriveSummaries']);
   });
 });
 
