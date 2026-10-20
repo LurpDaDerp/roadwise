@@ -22,6 +22,7 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
 import type { EventRow, QueueItem, TripRow, TripStatus } from '@/data/db/types';
 import { emitDataChanged, onDataChanged } from '@/data/events';
+import { applyServerDrive, readServerDrive } from '@/data/hydrate/restore';
 import { countEvents, parseResult } from '@/data/queries/rows';
 import { isSyncKind } from '@/data/sync/kinds';
 import { FinalizeTripPayloadV3Schema, FinalizeTripResponseV3Schema, type FinalizeTripResponseV3, type DriveBreakdownWire } from '@/data/sync/payload';
@@ -42,6 +43,13 @@ export const FOREIGN_OWNER_RETRY_MS = 60 * 60_000;
 export const NO_SESSION_RETRY_MS = 60_000;
 export const DEFAULT_BATCH = 10;
 export const MAX_ROUNDS = 20;
+
+/**
+ * What `trip-actions` answers an action it already holds: a retry of a "Wasn't driving" or a report
+ * whose first answer was lost. Not a refusal: the action went through, so the device keeps what it
+ * shows and reads the drive back from the server.
+ */
+export const ALREADY_APPLIED: ReadonlySet<string> = new Set(['already_marked', 'already_not_driving', 'already_disputed']);
 
 /** The refusals the user can act on; anything else is shown as "couldn't send". */
 export const DISPUTE_REFUSALS: Readonly<Record<string, string>> = {
@@ -65,6 +73,8 @@ export interface SyncSupabase {
   functions: {
     invoke(name: string, options: { body: unknown }): Promise<{ data: unknown; error: unknown }>;
   };
+  /** Reads the server's copy of a drive after an action it already holds (`list_my_drives`). */
+  rpc?(fn: string, args?: Record<string, unknown>): PromiseLike<{ data: unknown; error: unknown }>;
 }
 
 export interface SyncRunnerDeps {
@@ -349,6 +359,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const body = action.action === 'not_driving' ? { action: 'not_driving', clientTripId: action.clientTripId } : action;
     const res = await invoke(ACTIONS_FUNCTION, body);
     if (!res.ok) {
+      if (res.failure.kind === 'terminal' && ALREADY_APPLIED.has(res.failure.code)) return alreadyApplied(uid, action, res.failure.code);
       if (res.failure.kind === 'terminal') await undoAction(uid, action, res.failure.code);
       return failureOutcome(res.failure);
     }
@@ -364,6 +375,47 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       await trips.update(action.clientTripId, { status: 'not_driving', points_net: 0, estimate: 0, clean: null, server_id: result.data.tripId }, now(), tx);
     });
     return written ? { kind: 'done' } : { kind: 'release', untilMs: now() + FOREIGN_OWNER_RETRY_MS };
+  }
+
+  /**
+   * The server already holds this action (a 409 for a retry whose first answer was lost). Nothing is
+   * undone: the drive is read back from the server and its answer written in. "Wasn't driving" is
+   * settled either way (the local drive already says so); a report whose outcome cannot be read yet
+   * stays pending and is tried again.
+   */
+  async function alreadyApplied(uid: string, action: TripAction, code: string): Promise<Outcome> {
+    let synced = false;
+    try {
+      synced = await resyncDrive(uid, action);
+    } catch (error) {
+      report(error, 'sync resync drive');
+    }
+    if (synced || action.action === 'not_driving') return { kind: 'done' };
+    return { kind: 'retry', error: code };
+  }
+
+  /** The server's copy of the action's drive, written in (fenced). False when it could not be read. */
+  async function resyncDrive(uid: string, action: TripAction): Promise<boolean> {
+    const rpc = supabase.rpc?.bind(supabase);
+    if (!rpc) return false;
+    const trip = await trips.get(action.clientTripId);
+    if (trip === null) return false;
+    const call = async (fn: string, args?: Record<string, unknown>): Promise<unknown> => {
+      const { data, error } = await rpc(fn, args);
+      if (error) throw error instanceof Error ? error : new Error(`${fn} failed`);
+      return data;
+    };
+    const server = await readServerDrive(call, action.clientTripId, trip.started_at);
+    if (server === null) return false;
+    return fenced(uid, async (tx) => {
+      await applyServerDrive(tx, server, now());
+      if (action.action !== 'dispute') return;
+      // The server settles a report at once: one it holds that left the event active was turned down.
+      const event = (await events.listByTrip(action.clientTripId, tx)).find((e) => e.id === action.eventId);
+      if (event && event.status === 'active' && event.dispute_status === 'pending') {
+        await events.update(action.eventId, { dispute_status: 'rejected', dispute_message: null }, tx);
+      }
+    });
   }
 
   /** The server refused for good: the optimistic `pending` is resolved to a rejection the user can read. */

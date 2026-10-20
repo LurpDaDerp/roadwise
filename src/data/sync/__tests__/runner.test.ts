@@ -375,6 +375,104 @@ test('"wasn’t driving": optimistic locally, confirmed by the server, or put ba
   await r2.stop();
 });
 
+/** The server's copy of a local drive as `list_my_drives` lists it. */
+async function serverCopy(clientTripId: string, over: Record<string, unknown> = {}, eventStatus: 'active' | 'removed' = 'active') {
+  const trip = (await createTripsRepo(db).get(clientTripId))!;
+  const events = await createEventsRepo(db).listByTrip(clientTripId);
+  return {
+    tripId: uuid(77),
+    clientTripId,
+    startedAt: trip.started_at,
+    endedAt: trip.ended_at,
+    tz: trip.tz,
+    localDay: trip.local_day,
+    miles: trip.miles,
+    safeMiles: trip.safe_miles,
+    nightMiles: 0,
+    durationS: trip.duration_s,
+    polyline: null,
+    scored: true,
+    reason: null,
+    notDriving: false,
+    clean: false,
+    pointsNet: 106,
+    breakdown: null,
+    result: { net: 106 },
+    events: events.map((e) => ({ id: e.id, type: e.type, tier: e.tier, startedAt: e.started_at, durationS: e.duration_s, penalty: eventStatus === 'removed' ? 0 : 15, status: eventStatus })),
+    ...over,
+  };
+}
+
+describe('an action the server already holds (409: a retry whose first answer was lost) is never undone', () => {
+  test('"wasn’t driving": the drive stays marked, the item settles, and the server’s copy is read back', async () => {
+    await finalized(uuid(10));
+    await db.execute('DELETE FROM sync_queue');
+    await markNotDriving(uuid(10), { db });
+    const copy = await serverCopy(uuid(10), { notDriving: true, pointsNet: 0 });
+    const supabase = createFakeSupabase({ invoke: () => functionsHttpError(409, { code: 'already_marked' }), rpc: () => ({ data: [copy], error: null }) });
+    const r = runner(supabase);
+    await r.start();
+    await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+    expect(await r.drainOnce()).toMatchObject({ done: 1, failed: 0 });
+    expect(supabase.rpcs[0]!.fn).toBe('list_my_drives');
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', points_net: 0, server_id: uuid(77), sync_error: null });
+    expect(await r.owed()).toBe(0);
+    await r.stop();
+  });
+
+  test('"wasn’t driving" with no way to read the server back still settles and keeps the mark (the newer code too)', async () => {
+    await finalized(uuid(10));
+    await db.execute('DELETE FROM sync_queue');
+    await markNotDriving(uuid(10), { db });
+    const supabase = createFakeSupabase({ invoke: () => functionsHttpError(409, { code: 'already_not_driving' }), rpc: () => ({ data: null, error: new Error('offline') }) });
+    const r = runner(supabase);
+    await r.start();
+    await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+    expect(await r.drainOnce()).toMatchObject({ done: 1 });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving' });
+    await r.stop();
+  });
+
+  test('a report: the server’s outcome is read back (removed reads as accepted, still active as turned down)', async () => {
+    await finalized(uuid(10), T0, uuid(1));
+    await db.execute('DELETE FROM sync_queue');
+    await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db });
+    const accepted = await serverCopy(uuid(10), { pointsNet: 121, clean: true }, 'removed');
+    const supabase = createFakeSupabase({ invoke: () => functionsHttpError(409, { code: 'already_disputed' }), rpc: () => ({ data: [accepted], error: null }) });
+    const r = runner(supabase);
+    await r.start();
+    await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+    expect(await r.drainOnce()).toMatchObject({ done: 1 });
+    expect(await createEventsRepo(db).get(uuid(1))).toMatchObject({ dispute_status: 'accepted', status: 'removed', penalty: 0 });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ points_net: 121, clean: 1 });
+    await r.stop();
+
+    await finalized(uuid(11), T0 + 5_000_000, uuid(2));
+    await db.execute('DELETE FROM sync_queue');
+    await reportEvent(uuid(11), uuid(2), 'hazard', { db });
+    const turnedDown = await serverCopy(uuid(11));
+    const r2 = runner(createFakeSupabase({ invoke: () => functionsHttpError(409, { code: 'already_disputed' }), rpc: () => ({ data: [turnedDown], error: null }) }));
+    await r2.start();
+    await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+    await r2.drainOnce();
+    expect(await createEventsRepo(db).get(uuid(2))).toMatchObject({ dispute_status: 'rejected', status: 'active' });
+    await r2.stop();
+  });
+
+  test('a report whose outcome cannot be read yet stays pending and is tried again, never shown as refused', async () => {
+    await finalized(uuid(10), T0, uuid(1));
+    await db.execute('DELETE FROM sync_queue');
+    await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db });
+    const r = runner(createFakeSupabase({ invoke: () => functionsHttpError(409, { code: 'already_disputed' }), rpc: () => ({ data: [], error: null }) }));
+    await r.start();
+    await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+    expect(await r.drainOnce()).toMatchObject({ failed: 0, deferred: 1 });
+    expect(await createEventsRepo(db).get(uuid(1))).toMatchObject({ dispute_status: 'pending' });
+    expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
+    await r.stop();
+  });
+});
+
 test('the runner wakes on the enqueue change event and on foreground', async () => {
   jest.useFakeTimers();
   try {

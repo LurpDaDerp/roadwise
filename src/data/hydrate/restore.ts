@@ -153,6 +153,71 @@ export function toEventRows(d: ServerDrive): NewEvent[] {
 }
 
 /**
+ * The server's copy of one drive, or null when the server does not list it. Read from
+ * `list_my_drives` just after the drive's start, so the page holds it near its top.
+ */
+export async function readServerDrive(
+  rpc: RestoreDeps['rpc'],
+  clientTripId: string,
+  startedAt: number
+): Promise<ServerDrive | null> {
+  const raw = await rpc('list_my_drives', { p_limit: 10, p_before: new Date(startedAt + 1_000).toISOString() });
+  const rows = z.array(z.unknown()).safeParse(raw);
+  if (!rows.success) throw new Error('list_my_drives did not answer with a list');
+  for (const row of rows.data) {
+    const parsed = ServerDriveSchema.safeParse(row);
+    if (parsed.success && parsed.data.clientTripId === clientTripId) return parsed.data;
+  }
+  return null;
+}
+
+/**
+ * Bring a drive the device holds in line with the server's copy: its status, points, breakdown and
+ * result, and each of its events' status and penalty (an event the server removed was taken off
+ * by an accepted report). Local-only facts (labels, the route as recorded, the end note) stay.
+ * Runs on a transaction handle; a drive the device does not hold is left alone.
+ */
+export async function applyServerDrive(tx: Db, d: ServerDrive, now: number): Promise<void> {
+  const trips = createTripsRepo(tx);
+  const events = createEventsRepo(tx);
+  const local = await trips.get(d.clientTripId, tx);
+  if (local === null) return;
+  const row = toTripRow(d);
+  await trips.update(
+    d.clientTripId,
+    {
+      status: row.status,
+      points_net: row.points_net ?? null,
+      estimate: 0,
+      ...(row.breakdown_json ? { breakdown_json: row.breakdown_json } : {}),
+      clean: row.clean ?? null,
+      reason: row.reason ?? null,
+      ...(row.result_json ? { result_json: row.result_json } : {}),
+      server_id: d.tripId,
+      sync_error: null,
+    },
+    now,
+    tx
+  );
+  const held = new Set((await events.listByTrip(d.clientTripId, tx)).map((e) => e.id));
+  for (const e of d.events) {
+    if (!held.has(e.id)) continue;
+    const removed = e.status === 'removed';
+    await events.update(
+      e.id,
+      {
+        status: removed ? 'removed' : 'active',
+        penalty: e.penalty ?? null,
+        ...(removed ? { dispute_status: 'accepted' as const, dispute_message: null } : {}),
+      },
+      tx
+    );
+  }
+  const remaining = await events.listByTrip(d.clientTripId, tx);
+  await trips.update(d.clientTripId, { counts_json: JSON.stringify(countEvents(remaining)) }, now, tx);
+}
+
+/**
  * Restore every drive of `uid` the device does not hold yet. Idempotent per row (an existing id is
  * kept). Skipped once `uid`'s restore has run to the end; rejects with `RestoreAbandonedError` when
  * the device or session changed hands mid-way (the rows already written stay, and are announced).
