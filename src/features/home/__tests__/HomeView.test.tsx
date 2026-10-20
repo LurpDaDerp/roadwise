@@ -76,7 +76,7 @@ describe('the full Home', () => {
     await draw(<HomeView {...props()} />);
     const card = screen.getByTestId('stats-card');
     expect(within(card).getByText('Last 7 days')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Speeding, 6.0 per 100 mi, Needs work, Up, worse vs your 30-day average')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Speeding events, 6.0 per 100 mi, Needs work, Up, worse vs your 30-day average')).toBeOnTheScreen();
     expect(screen.getByLabelText('Phone pickups, 0.0 per 100 mi, Good, Down, better vs your 30-day average')).toBeOnTheScreen();
     expect(screen.getByLabelText('Clean drives, 50 %, Okay, Down, worse vs your 30-day average')).toBeOnTheScreen();
     expect(within(card).getByText(/^6.0/)).toHaveStyle({ color: tokens.color.light.signal.severe.text });
@@ -85,7 +85,7 @@ describe('the full Home', () => {
   test('with no drive in 7 days the card shows 30 days without arrows', async () => {
     await draw(<HomeView {...props({ week: sums({ drives: 0, miles: 0 }) })} />);
     expect(screen.getByText('Last 30 days')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Speeding, 1.0 per 100 mi, Good')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Speeding events, 1.0 per 100 mi, Good')).toBeOnTheScreen();
   });
 
   test('recent drives, weekly challenges, and links out', async () => {

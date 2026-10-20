@@ -8,7 +8,7 @@ import { distanceIn, per100In, per100Label, type Units } from '@/lib/units';
 import type { StatHealth, TrendDirection } from '@/ui';
 
 export const STAT_LABEL: Record<StatId, string> = {
-  speeding: 'Speeding',
+  speeding: 'Speeding events',
   pickups: 'Phone pickups',
   harsh: 'Harsh driving',
   clean: 'Clean drives',
