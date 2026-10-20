@@ -654,7 +654,13 @@ function cliTarget(url) {
 }
 
 /** One SQL statement through `supabase db query`; returns the rows. */
-function runSql(target, sql) {
+/**
+ * Runs one statement through `supabase db query` and returns its rows. A statement that returns
+ * rows must come back with them: when the CLI prints no JSON (not logged in, not linked, an older
+ * CLI, a prompt) the error carries what it did print. A DO block (`rows: false`) answers only its
+ * command tag.
+ */
+function runSql(target, sql, { rows: wantRows = true } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'seed-demo-'));
   const file = path.join(dir, 'q.sql');
   fs.writeFileSync(file, sql, 'utf8');
@@ -671,11 +677,13 @@ function runSql(target, sql) {
   } catch {
     parsed = null;
   }
-  // A statement with no rows (a DO block) answers its command tag, not JSON.
-  if (r.status === 0 && parsed === null) return [];
+  const printed = () => `${out}\n${r.stderr ?? ''}`.trim() || String(r.error ?? 'no output');
+  if (r.status === 0 && parsed === null && !wantRows) return [];
   if (r.status !== 0 || parsed === null || parsed._tag === 'Error') {
-    const why = parsed?.error?.message ?? (`${out}\n${r.stderr ?? ''}`.trim() || String(r.error ?? 'no output'));
-    throw new Error(`supabase db query failed: ${why}`);
+    throw new Error(`supabase db query (${target.flag}) failed: ${parsed?.error?.message ?? printed()}`);
+  }
+  if (wantRows && !(parsed.rows?.length > 0)) {
+    throw new Error(`supabase db query (${target.flag}) returned no rows for \`${sql.slice(0, 80)}\`. The CLI printed:\n${printed()}`);
   }
   return (parsed.rows ?? []).map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, typeof v === 'string' && /^[[{]/.test(v) ? JSON.parse(v) : v])));
 }
@@ -729,9 +737,10 @@ async function main() {
 
   // The current league week has not ended: its drives can complete weekly challenges, so they are
   // scored against the server's own context, one at a time.
-  const [{ week_start: weekStartRaw }] = runSql(target, 'select private.week_start(now()) as week_start');
-  const weekStart = Date.parse(weekStartRaw);
-  if (!Number.isFinite(weekStart)) throw new Error(`could not read the week start (${weekStartRaw})`);
+  // As epoch ms: the hosted and local databases print timestamps differently.
+  const [{ ms: weekStartRaw }] = runSql(target, 'select (extract(epoch from private.week_start(now())) * 1000)::bigint as ms');
+  const weekStart = Number(weekStartRaw);
+  if (!Number.isFinite(weekStart) || weekStart <= 0) throw new Error(`could not read the week start (${weekStartRaw})`);
   console.log(`Seeding ${DEMO_EMAIL} on the ${target.label} database (${url})`);
 
   // 1. A fresh account. The old one goes with all its rows (they cascade from auth.users). It is
@@ -769,7 +778,7 @@ async function main() {
   let sent = 0;
   const flush = () => {
     if (batch.length === 0) return;
-    runSql(target, batchSql(userId, batch));
+    runSql(target, batchSql(userId, batch), { rows: false });
     sent += batch.length;
     process.stdout.write(`  stored ${sent}/${drives.length} drives\r`);
     batch = [];
@@ -806,6 +815,7 @@ async function main() {
   const g = summary.progress;
   const expect = summarize(drives, Date.now());
   console.log(`  list_my_drives: ${restored} drives`);
+  if (restored !== drives.length) throw new Error(`stored ${drives.length} drives but the app would restore ${restored}`);
   console.log(
     `  Safety Rating ${g.safety_rating} (${g.ranked ? 'ranked' : 'unranked'}, ${g.miles_30d} mi in 30 days), level ${g.level}, ` +
       `${g.points} points (${g.lifetime} lifetime), streak ${g.streak}, ${g.freezes} freezes`
