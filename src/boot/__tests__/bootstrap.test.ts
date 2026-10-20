@@ -9,9 +9,9 @@ import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db } from '@/data/db';
 import { createFakeAppState, createFakeSupabase, invokeOk } from '@/data/sync/__fixtures__/fakes';
-import { bootstrapApp, flushBeforeSignOut, type BootSupabase } from '@/boot/bootstrap';
+import { bootstrapApp, flushBeforeSignOut, startForegroundJobs, type BootSupabase } from '@/boot/bootstrap';
 import { createDriveHeadlessTask } from '@/boot/headless';
-import { DEVICE_TABLES, ensureDeviceOwner, hasDriverData, readDeviceOwner, wipeDevice, wipeForSignOut } from '@/boot/device';
+import { DEVICE_TABLES, ensureDeviceOwner, hasDriverData, readDeviceOwner, rememberDeviceOwner, wipeDevice, wipeForSignOut } from '@/boot/device';
 import { createFakeDashcamRuntime } from '@/dashcam/__fixtures__/fakeRuntime';
 import { setActiveDashcam } from '@/dashcam/registry';
 import { INSTALL_ID_KEY, readInstallId } from '@/data/devices/installId';
@@ -259,6 +259,32 @@ test('restore: the owner’s drives come from the server under the owner’s ses
   await rt.stop();
   await expect(rt.restore()).rejects.toThrow('restore abandoned');
   expect(await createTripsRepo(db).count()).toBe(0);
+});
+
+test('a phone first opened signed out restores the driver’s drives at their sign-in, not at the next relaunch; a sign-out that emptied the phone restores again', async () => {
+  const supabase = createFakeSupabase({ uid: null, rpc: () => ({ data: [serverDrive(1)], error: null }) });
+  const rt = await bootstrapApp(deps({ supabase: supabase as unknown as BootSupabase }).deps);
+  expect(rt.owner).toBe('signed-out');
+  const errors: string[] = [];
+  const jobs = await startForegroundJobs(rt, { appState: createFakeAppState('active'), onError: (_e, context) => errors.push(context) });
+  for (let i = 0; i < 20; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+  // Signed out on a phone nobody owns: nothing restored, nothing marked done, no request.
+  expect(supabase.rpcs).toHaveLength(0);
+  expect(errors).toContain('foreground job restore');
+
+  // The sign-in: the owner watch records the owner, then the layout runs the restore now.
+  supabase.setUid('user-1');
+  await rememberDeviceOwner(db, 'user-1');
+  expect(await jobs.runNow()).toBe(true);
+  expect(await createTripsRepo(db).get(uuid(1))).not.toBeNull();
+
+  // Sign out (nothing owed: the drives leave the phone), then the same driver signs back in.
+  await wipeForSignOut(db);
+  expect(await createTripsRepo(db).count()).toBe(0);
+  expect(await jobs.runNow()).toBe(true);
+  expect(await createTripsRepo(db).get(uuid(1))).not.toBeNull();
+  await jobs.stop();
+  await rt.stop();
 });
 
 test('flushBeforeSignOut drains once and reports what is still owed', async () => {

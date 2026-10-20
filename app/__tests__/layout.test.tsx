@@ -79,7 +79,7 @@ jest.mock('@/ui/fonts', () => ({
   useAppFonts: () => ({ loaded: true, error: null }),
 }));
 
-const mockHandover: { fire: ((uid: string) => void) | null } = { fire: null };
+const mockHandover: { fire: ((uid: string) => void) | null; signIn: ((uid: string) => void) | null } = { fire: null, signIn: null };
 const mockOwner: { uid: string | null; hasData: boolean } = { uid: null, hasData: false };
 // The layout's subject is its own wiring, not the auth gate's routing (tested in its own suite).
 jest.mock('@/features/auth/AuthGate', () => ({
@@ -92,10 +92,12 @@ jest.mock('@/boot/device', () => ({
   hasDriverData: async () => mockOwner.hasData,
 }));
 jest.mock('@/boot/ownerWatch', () => ({
-  watchDeviceOwner: (_db: unknown, deps: { onHandover: (uid: string) => void }) => {
+  watchDeviceOwner: (_db: unknown, deps: { onHandover: (uid: string) => void; onOwnerSignIn?: (uid: string) => void }) => {
     mockHandover.fire = deps.onHandover;
+    mockHandover.signIn = deps.onOwnerSignIn ?? null;
     return () => {
       mockHandover.fire = null;
+      mockHandover.signIn = null;
     };
   },
 }));
@@ -290,6 +292,15 @@ describe('the root layout', () => {
     await act(async () => mockController.set({ status: 'switching', runtime: null }));
     expect(screen.queryByTestId('lockout-underlay')).toBeNull();
     expect(screen.getByText('Setting this phone up for you')).toBeTruthy();
+  });
+
+  test("the owner's sign-in restores their drives now, through the live runtime's foreground jobs", async () => {
+    await renderReady();
+    mockController.runNow.mockClear();
+    expect(mockHandover.signIn).not.toBeNull();
+    await act(async () => mockHandover.signIn?.('user-a'));
+    expect(mockController.runNow).toHaveBeenCalledTimes(1);
+    expect(mockController.rebuild).not.toHaveBeenCalled();
   });
 
   test('a failed launch offers a retry that asks the controller again', async () => {

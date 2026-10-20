@@ -36,6 +36,12 @@ export interface OwnerWatchDeps {
    * new launch wipes on it without reading the session again (security review H2 I-1 a).
    */
   onHandover: (uid: string) => void;
+  /**
+   * A sign-in (`SIGNED_IN`) by this device's owner, or the first sign-in on an empty device once it
+   * is recorded as the owner's. The runtime stays; what a sign-in owes the driver runs now (their
+   * drives restored from the server, uploads that waited for a session sent).
+   */
+  onOwnerSignIn?: (uid: string) => void;
   onError?: (error: unknown, context: string) => void;
 }
 
@@ -54,15 +60,22 @@ export interface OwnerWatchDeps {
 export function watchDeviceOwner(db: Db, deps: OwnerWatchDeps): () => void {
   let live = true;
 
-  const check = async (uid: string | null): Promise<void> => {
+  const check = async (event: string, uid: string | null): Promise<void> => {
     if (uid === null) return;
+    const signIn = (): void => {
+      if (live && event === 'SIGNED_IN') deps.onOwnerSignIn?.(uid);
+    };
     const owner = await readDeviceOwner(db);
-    if (owner === uid) return;
+    if (owner === uid) {
+      signIn();
+      return;
+    }
     // An unowned device is adopted only when it is empty (security review C-1): a database with
     // trips or queued work on it and no owner recorded is a pre-branch device holding somebody
     // else's drives, not a fresh one. Raise the handover and let the rebuild empty it.
     if (owner === null && !(await hasDriverData(db))) {
       await rememberDeviceOwner(db, uid);
+      signIn();
       return;
     }
     if (!live) return;
@@ -75,8 +88,8 @@ export function watchDeviceOwner(db: Db, deps: OwnerWatchDeps): () => void {
     if (live) deps.onHandover(uid);
   };
 
-  const { data } = deps.supabase.auth.onAuthStateChange((_event, session) => {
-    void check(session?.user.id ?? null).catch((error: unknown) => {
+  const { data } = deps.supabase.auth.onAuthStateChange((event, session) => {
+    void check(event, session?.user.id ?? null).catch((error: unknown) => {
       // A settings read that fails must not take the app down, and must not raise a false
       // handover either: the launch check runs again at the next cold start.
       deps.onError?.(error, 'owner watch');

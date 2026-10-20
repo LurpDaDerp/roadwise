@@ -142,9 +142,15 @@ export default function RootLayout() {
 
   // Bound to the runtime, so a rebuild replaces the watch with the new one's rather than stacking
   // a second: the cleanup unsubscribes before the next effect subscribes.
+  // A sign-in by the owner (or the first sign-in on an empty phone) keeps this runtime, so what a
+  // launch would have done for them runs now: their drives are restored from the server (a fresh
+  // install, or a sign-out that emptied the phone) without waiting for a relaunch.
   useEffect(() => {
     if (runtime === null) return;
-    return watchDeviceOwner(runtime.db, { supabase, onHandover: handover });
+    const onOwnerSignIn = () => {
+      void controller.foregroundJobs()?.runNow();
+    };
+    return watchDeviceOwner(runtime.db, { supabase, onHandover: handover, onOwnerSignIn });
   }, [runtime, handover]);
 
   // A session end — the driver's sign-out, or one they did not start (a revoked or expired

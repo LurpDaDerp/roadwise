@@ -12,6 +12,7 @@
 import { activeDashcam } from '@/dashcam/registry';
 import { createSettingsRepo, type Db } from '@/data/db';
 import { clearDeviceSecret } from '@/data/devices/deviceSecret';
+import { RESTORED_AT_KEY } from '@/data/hydrate/restore';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { DROP_NOTICE_KEY } from '@/drive/dropNotice';
 
@@ -55,8 +56,12 @@ export const WIPE_KEEPS_SETTINGS_PREFIX = 'dashcam.';
 
 /** The driver's own data a plain sign-out removes (the owner key stays, so a return restores from the server). */
 export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'dashcam_events', 'dashcam_boots', 'dashcam_coverage', 'trips'];
-/** The zones, and the notice of a drive that was not kept (`src/drive/dropNotice.ts`). */
-export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones', DROP_NOTICE_KEY];
+/**
+ * The zones, the notice of a drive that was not kept (`src/drive/dropNotice.ts`), and the record
+ * that this driver's restore ran to the end: their drives just left the phone, so the next sign-in
+ * restores them again.
+ */
+export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones', DROP_NOTICE_KEY, RESTORED_AT_KEY];
 
 /** How long a wipe waits for the drive summaries to be cancelled before going on without it. */
 export const CANCEL_SUMMARIES_TIMEOUT_MS = 2_000;
