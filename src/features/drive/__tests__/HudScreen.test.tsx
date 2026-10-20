@@ -149,10 +149,10 @@ describe('speed and limit', () => {
     expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('56');
   });
 
-  test('km: an unknown limit is still "—"', async () => {
+  test('km: an unknown limit is still "-"', async () => {
     mockUnits = 'km';
     await renderHud({ limitMph: null });
-    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('—');
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('-');
   });
 
   test('the speed moves on once a row and holds still between rows', async () => {
@@ -164,10 +164,10 @@ describe('speed and limit', () => {
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('33');
   });
 
-  test('an unknown speed or limit is "—"', async () => {
+  test('an unknown speed or limit is "-"', async () => {
     await renderHud({ speedMph: null, limitMph: null });
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('—');
-    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('—');
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('-');
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('-');
   });
 });
 
@@ -423,7 +423,7 @@ describe('points', () => {
   test('pulling away from a stop with the speed unknown hides the points', async () => {
     const h = await renderHud({ stopped: true, speedMph: 0, points: { total: 10, sinceLastStop: 1 } });
     expect(screen.getByTestId('hud-points')).toBeTruthy();
-    // The fix drops as the car pulls away: not stopped, speed "—", stale points still published.
+    // The fix drops as the car pulls away: not stopped, speed "-", stale points still published.
     await h.update({ stopped: false, speedMph: null });
     expect(screen.queryByTestId('hud-points')).toBeNull();
   });

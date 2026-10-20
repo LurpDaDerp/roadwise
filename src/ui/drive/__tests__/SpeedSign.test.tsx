@@ -1,5 +1,5 @@
 // The speed-limit sign (drive-screen design §3.4): the US R2-1 "SPEED LIMIT" rectangle in miles, the
-// round red-ringed sign in kilometres, "—" when the limit is unknown, never Dynamic Type.
+// round red-ringed sign in kilometres, "-" when the limit is unknown, never Dynamic Type.
 import { render, screen } from '@testing-library/react-native';
 
 import { HUD } from '@/ui/drive/hudTokens';
@@ -26,10 +26,10 @@ describe('miles: the R2-1 rectangle', () => {
     expect(screen.getByTestId('hud-limit-value')).toHaveStyle({ fontSize: 44 });
   });
 
-  test('unknown: SPEED LIMIT —', async () => {
+  test('unknown: SPEED LIMIT -', async () => {
     await render(<SpeedSign limit={null} palette={p} units="mi" height={120} />);
     expect(screen.getByTestId('hud-limit-words')).toBeTruthy();
-    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('—');
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('-');
     expect(screen.getByLabelText('Speed limit unknown')).toBeTruthy();
   });
 });
@@ -47,9 +47,9 @@ describe('kilometres: the round sign', () => {
     expect(signSize('km', 114)).toEqual({ width: 114, height: 114 });
   });
 
-  test('unknown: "—"', async () => {
+  test('unknown: "-"', async () => {
     await render(<SpeedSign limit={null} palette={p} units="km" height={100} />);
-    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('—');
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('-');
     expect(screen.getByLabelText('Speed limit unknown')).toBeTruthy();
   });
 });

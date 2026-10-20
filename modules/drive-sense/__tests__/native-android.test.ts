@@ -535,13 +535,13 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
 });
 
 describe('native-android: the background surface (plan §6) — the foreground notification', () => {
-  it('title "Driving", "34 mph · limit 35" with "—" for unknowns, points line only with points', () => {
+  it('title "Driving", "34 mph · limit 35" with "-" for unknowns, points line only with points', () => {
     const src = code(kt('NotificationFactory'));
     expect(src).toMatch(/const val TITLE = "Driving"/);
     expect(src).toMatch(/setContentTitle\(TITLE\)/);
     expect(src).toMatch(/"\$speed · limit \$limit"/);
-    expect(src).toMatch(/\?: "— \$\{d\.unit\}"/);
-    expect(src).toMatch(/\?: "—"/);
+    expect(src).toMatch(/\?: "- \$\{d\.unit\}"/);
+    expect(src).toMatch(/\?: "-"/);
     expect(src).toMatch(/val points = d\.points \?: return null/);
     expect(src).toMatch(/pointsLine\(d\)\?\.let \{ builder\.setSubText\(it\) \}/);
     // the total only

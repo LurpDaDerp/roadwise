@@ -39,9 +39,9 @@ describe('SpeedReadout', () => {
     expect(numeralLineHeight(97)).toBe(116);
   });
 
-  test('unknown speed is "—", never 0', async () => {
+  test('unknown speed is "-", never 0', async () => {
     await render(<SpeedReadout speed={null} color={p.ink} unitColor={p.inkMuted} size={120} />);
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('—');
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('-');
     expect(screen.getByLabelText('Speed unknown')).toBeTruthy();
   });
 });

@@ -343,7 +343,7 @@ export function haloNumeralPt(rc: number, digits: number, unitPt: number): numbe
   return 1;
 }
 
-/** How many numerals a shown speed has ("—" counts as two). */
+/** How many numerals a shown speed has ("-" counts as two). */
 export const speedDigits = (speed: number | null): number => (speed === null ? 2 : Math.max(2, String(Math.abs(Math.round(speed))).length));
 
 /** The burst's own rhythm (every pulse 400 ms: 2.5 a second, under three flashes a second). */

@@ -157,8 +157,8 @@ describe('live-drive: the widget extension target', () => {
     expect(src).not.toMatch(/points|DynamicIslandExpandedRegion\(\.bottom\)/i);
     expect(src).toContain('SpeedBlock(speed: state.speed, unit: state.unit, size: 52)');
     expect(src).toContain('LimitSign(limit: state.limit, size: 56)');
-    // "—" for an unknown speed or limit
-    expect(src).toMatch(/guard let v = v, v\.isFinite else \{ return "—" \}/);
+    // "-" for an unknown speed or limit
+    expect(src).toMatch(/guard let v = v, v\.isFinite else \{ return "-" \}/);
     // the palette
     expect(src).toMatch(/red: 0 \/ 255, green: 29 \/ 255, blue: 61 \/ 255/);
     expect(src).toMatch(/red: 255 \/ 255, green: 195 \/ 255, blue: 0 \/ 255/);

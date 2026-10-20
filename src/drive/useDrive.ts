@@ -48,7 +48,7 @@ export function useDriveControls(): DriveControls {
 export interface DriveLive {
   status: 'idle' | 'recording' | 'finalizing';
   clientTripId: string | null;
-  /** The speed to show as of the newest row; null → show "—". */
+  /** The speed to show as of the newest row; null → show "-". */
   speedMph: number | null;
   limitMph: number | null;
   speedingTier: Tier | null;

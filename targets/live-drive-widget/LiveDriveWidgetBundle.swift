@@ -40,7 +40,7 @@ extension Color {
 enum Format {
   /// "34", or "—" when unknown.
   static func speed(_ v: Double?) -> String {
-    guard let v = v, v.isFinite else { return "—" }
+    guard let v = v, v.isFinite else { return "-" }
     return String(Int(v.rounded()))
   }
 }

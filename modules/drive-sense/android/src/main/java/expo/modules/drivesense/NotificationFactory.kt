@@ -44,8 +44,8 @@ object NotificationFactory {
 
   /** "34 mph · limit 35"; "—" where unknown. */
   fun text(d: DriveDisplay): String {
-    val speed = d.speed?.let { "${Math.round(it)} ${d.unit}" } ?: "— ${d.unit}"
-    val limit = d.limit?.let { "${Math.round(it)}" } ?: "—"
+    val speed = d.speed?.let { "${Math.round(it)} ${d.unit}" } ?: "- ${d.unit}"
+    val limit = d.limit?.let { "${Math.round(it)}" } ?: "-"
     return "$speed · limit $limit"
   }
 

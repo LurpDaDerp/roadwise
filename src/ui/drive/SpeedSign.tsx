@@ -7,7 +7,7 @@ import { fontFamilies } from '../fonts';
 import type { HudPalette } from './hudTokens';
 
 export type SpeedSignProps = {
-  /** The limit in the driver's units, whole; null (unknown, low-confidence or a poor fix) prints "—". */
+  /** The limit in the driver's units, whole; null (unknown, low-confidence or a poor fix) prints "-". */
   limit: number | null;
   palette: HudPalette;
   /** Miles: the US white "SPEED LIMIT" rectangle (R2-1). Kilometres: the round red-ringed sign. */
@@ -27,7 +27,7 @@ export function signSize(units: 'mi' | 'km', height: number): { width: number; h
 /**
  * The speed limit as a real sign, so it is spotted at a glance: in miles the US white rectangle
  * with "SPEED LIMIT" over the number, in kilometres the round white face in a red ring. An unknown
- * limit keeps the sign and prints "—": a wrong limit shown confidently is worse than none. A sign
+ * limit keeps the sign and prints "-": a wrong limit shown confidently is worse than none. A sign
  * graphic, so its print holds its size under Dynamic Type like a real sign would; it never moves
  * or changes colour.
  */

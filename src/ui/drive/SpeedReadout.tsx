@@ -9,7 +9,7 @@ import { DIGIT_HEIGHT_EM } from './halo';
 import { hudLabelScale } from './hudTokens';
 
 export type SpeedReadoutProps = {
-  /** The whole-number speed in `unit`, or null for "—". */
+  /** The whole-number speed in `unit`, or null for "-". */
   speed: number | null;
   /** Default mph. */
   unit?: 'mph' | 'km/h';

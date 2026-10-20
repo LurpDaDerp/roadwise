@@ -31,7 +31,7 @@ export const en = {
   'common.retry': 'Try again',
   'common.cancel': 'Cancel',
   'common.done': 'Done',
-  'common.unknown': '—',
+  'common.unknown': '-',
   // In-drive voice phrases (§8.8: audio first, ≤ 3 words — the break suggestion is the exception).
   'alert.easeOff': 'Ease off',
   'alert.slowDown': 'Slow down',
