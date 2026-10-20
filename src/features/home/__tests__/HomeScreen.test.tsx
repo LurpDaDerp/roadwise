@@ -324,16 +324,14 @@ describe('a Start refused for Precise Location or Location Services', () => {
 });
 
 describe('Analytics and the action items', () => {
-  test('the Safety Rating badge, "All stats" and the tip card open the Analytics tab', async () => {
+  test('"All stats" and the tip card open the Analytics tab', async () => {
     mockCoaching = { level: 'poor', axis: 'speeding', title: 'Watch your speed', tip: 'Ease off a little over the limit.' };
     await draw(<HomeScreen />);
-    await press(screen.getByTestId('rating-badge'));
-    expect(mockRouter.navigate).toHaveBeenLastCalledWith('/(tabs)/analytics');
     await press(screen.getByText('All stats'));
     expect(mockRouter.navigate).toHaveBeenLastCalledWith('/(tabs)/analytics');
     await press(screen.getByTestId('home-tip'));
     expect(mockRouter.navigate).toHaveBeenLastCalledWith('/(tabs)/analytics');
-    expect(mockRouter.navigate).toHaveBeenCalledTimes(3);
+    expect(mockRouter.navigate).toHaveBeenCalledTimes(2);
     expect(mockRouter.push).not.toHaveBeenCalled();
   });
 

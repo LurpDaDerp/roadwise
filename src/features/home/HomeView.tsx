@@ -130,7 +130,6 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
             summary={p.summary}
             loading={p.summaryLoading}
             error={p.summaryError}
-            onRating={p.onAnalytics}
             onRetry={p.onRetrySummary}
             start={p.recording ? undefined : <StartDriveButton onStart={p.onStart} starting={p.starting} />}
           />
