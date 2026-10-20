@@ -1,10 +1,10 @@
 // v3 detection thresholds and game constants (product spec v3, plan §2). Shared by the device's
 // detectors, the server's re-validation and the screens, so every number lives here once.
 
-/** Hard braking, in g: minor from 0.40, severe from 0.55 (confirmed by a GPS speed drop). */
-export const HARD_BRAKE_G = { minor: 0.4, severe: 0.55 } as const;
-/** Hard acceleration, in g. */
-export const HARD_ACCEL_G = { minor: 0.35, severe: 0.5 } as const;
+/** Hard braking, in g: minor from 0.30, severe from 0.45 (confirmed by a GPS speed drop). */
+export const HARD_BRAKE_G = { minor: 0.3, severe: 0.45 } as const;
+/** Hard acceleration, in g: minor from 0.28, severe from 0.40. */
+export const HARD_ACCEL_G = { minor: 0.28, severe: 0.4 } as const;
 /** Hard cornering (sideways force), in g. */
 export const HARD_CORNER_G = { minor: 0.4, severe: 0.55 } as const;
 /** Phone pickups count only while moving above this speed. */

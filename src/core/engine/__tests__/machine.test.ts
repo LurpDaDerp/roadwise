@@ -88,7 +88,8 @@ test('an on-foot report at 40 mph is cancelled by driving; one at a stop ends th
 test('alerts: one chime per speeding episode, the pickup and the 15-s handling alert, instant events as they close', async () => {
   const h = harness();
   await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
-  await feed(h, after(10, { speed: mph(47) }));
+  // Forward extremes on the first rows: the axis is learned, so the 47 → 30 mph step is not a GPS-only brake.
+  await feed(h, after(10, { speed: mph(47), aLonMax: 0.02, aLonMin: -0.02 }));
   await feed(h, seq([10, (i) => ({ speed: mph(30), ts: T0 + 41_000 + i * 1000 })]));
   expect(h.alerts.filter((a) => a.type === 'speeding')).toHaveLength(1);
   expect(h.alerts[0]).toMatchObject({ type: 'speeding', tier: 'moderate' });
@@ -101,7 +102,7 @@ test('alerts: one chime per speeding episode, the pickup and the 15-s handling a
   expect(phone[1]!.at - phone[0]!.at).toBeGreaterThanOrEqual(15_000 - 2000);
   // A confirmed brake is told on the row that releases it.
   await feed(h, seq([5, (i) => ({ speed: mph(35), ts: T0 + 74_000 + i * 1000 })]));
-  await feed(h, [row({ speed: mph(25), aLonMin: -0.5, ts: T0 + 79_000 }), ...seq([4, (i) => ({ speed: mph(25), ts: T0 + 80_000 + i * 1000 })])]);
+  await feed(h, [row({ speed: mph(25), aLonMin: -0.35, ts: T0 + 79_000 }), ...seq([4, (i) => ({ speed: mph(25), ts: T0 + 80_000 + i * 1000 })])]);
   expect(h.alerts.at(-1)).toMatchObject({ type: 'hard_brake', tier: 'minor' });
   expect(h.engine.snapshot().lastAlert?.type).toBe('hard_brake');
   await h.engine.dispatch({ type: 'end', ts: T0 + 90_000 });

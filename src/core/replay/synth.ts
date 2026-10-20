@@ -168,10 +168,10 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** A 0.45 g brake the GNSS confirms (35 → 25 mph in a second): one minor hard brake. */
+  /** A 0.35 g brake the GNSS confirms (35 → 25 mph in a second): one minor hard brake. */
   'hard-brake-confirmed': () => ({
     name: 'hard-brake-confirmed',
-    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 25 : 35, aLonMin: i === 100 ? -0.45 : -0.02 })),
+    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 25 : 35, aLonMin: i === 100 ? -0.35 : -0.02 })),
     limits: [posted(35)],
     expected: [{ type: 'hard_brake', startsNear: at(100), tier: 'minor' }],
   }),
@@ -179,7 +179,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
   /** The confirmed brake's drive, the phone rating its speed at 3 m/s on the brake and the row after: the GNSS cannot confirm it. */
   'hard-brake-poor-speedacc': () => ({
     name: 'hard-brake-poor-speedacc',
-    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 25 : 35, aLonMin: i === 100 ? -0.45 : -0.02, speedAcc: i === 100 || i === 101 ? 3 : 0.5 })),
+    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 25 : 35, aLonMin: i === 100 ? -0.35 : -0.02, speedAcc: i === 100 || i === 101 ? 3 : 0.5 })),
     limits: [posted(35)],
     expected: [{ type: 'hard_brake', startsNear: at(100), absent: true }],
     noEvents: true,
@@ -202,10 +202,10 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** A 0.40 g acceleration the GNSS confirms (20 → 30 mph): one minor hard accel. */
+  /** A 0.32 g acceleration the GNSS confirms (20 → 30 mph): one minor hard accel. */
   'hard-accel-confirmed': () => ({
     name: 'hard-accel-confirmed',
-    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 30 : 20, aLonMax: i === 100 ? 0.4 : 0.02 })),
+    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 30 : 20, aLonMax: i === 100 ? 0.32 : 0.02 })),
     limits: [posted(35)],
     expected: [{ type: 'hard_accel', startsNear: at(100), tier: 'minor' }],
   }),

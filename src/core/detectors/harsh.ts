@@ -1,9 +1,13 @@
 // Hard braking, hard acceleration and hard cornering (product spec v3 event table, "Rules against
 // false positives") from the per-second IMU extremes:
-// - braking ≥ 0.40 g (severe ≥ 0.55) and acceleration ≥ 0.35 g (severe ≥ 0.50) count only when
+// - braking ≥ 0.30 g (severe ≥ 0.45) and acceleration ≥ 0.28 g (severe ≥ 0.40) count only when
 //   the GNSS speed changed to match (a drop, or a rise, of at least `GNSS_CONFIRM_G` over a second
 //   inside or right after the episode), read only from two fixes whose speed the phone rates at
 //   2 m/s or better (`speedTrusted`);
+// - until the phone has learned the car's forward axis (no row this drive has had forward
+//   extremes), the GNSS speed change itself stands in for them, from two fixes rated at
+//   `GNSS_ONLY_ACC_MAX_MPS` or better: a second's mean is never above its peak, so it can only
+//   under-read, and a change past `GNSS_ONLY_MAX_G` is a jump in the fix;
 // - cornering ≥ 0.40 g (severe ≥ 0.55) counts only when the GNSS course rate × speed makes that
 //   much lateral acceleration plausible;
 // - a phone sliding or dropping — an orientation spike or a lost gravity reference within two
@@ -19,7 +23,11 @@ type Kind = 'hard_brake' | 'hard_accel' | 'hard_corner';
 const KINDS: readonly Kind[] = ['hard_brake', 'hard_accel', 'hard_corner'];
 
 /** The GNSS Δspeed over a second that confirms an IMU extreme (1 Hz averaging halves a peak). */
-export const GNSS_CONFIRM_G = 0.15;
+export const GNSS_CONFIRM_G = 0.1;
+/** Before the forward axis is learned, a GNSS Δspeed counts on its own only from fixes rated this well (m/s). */
+export const GNSS_ONLY_ACC_MAX_MPS = 1;
+/** A GNSS Δspeed past this in a second is a jump in the fix, not the car, and stands in for nothing. */
+export const GNSS_ONLY_MAX_G = 1;
 /** The course-rate estimate must reach this share of the IMU's lateral peak. */
 export const CORNER_PLAUSIBLE_SHARE = 0.4;
 /** Cornering is judged only at or above this speed; below it the course is noise. */
@@ -51,12 +59,27 @@ const THRESHOLDS: Record<Kind, { minor: number; severe: number }> = {
   hard_corner: HARD_CORNER_G,
 };
 
-function peakOf(kind: Kind, row: FeatureRow): number | null {
+interface Evidence {
+  deltaG: number | null;
+  lateralG: number | null;
+  /** Both fixes are rated within `GNSS_ONLY_ACC_MAX_MPS`, so `deltaG` may stand in for the IMU. */
+  gnssOnly: boolean;
+}
+
+/** The forward axis is not learned (yet): the IMU reports no forward extremes at all. */
+const axisUnknown = (row: FeatureRow): boolean => row.aLonMax === 0 && row.aLonMin === 0;
+
+const wellRated = (row: FeatureRow): boolean => row.speedAcc >= 0 && row.speedAcc <= GNSS_ONLY_ACC_MAX_MPS;
+
+/** `gnss`: the GNSS Δspeed (g) standing in for the forward IMU, or null. */
+function peakOf(kind: Kind, row: FeatureRow, gnss: number | null): number | null {
   switch (kind) {
     case 'hard_brake':
-      return -row.aLonMin >= HARD_BRAKE_G.minor ? -row.aLonMin : null;
+      if (-row.aLonMin >= HARD_BRAKE_G.minor) return -row.aLonMin;
+      return gnss !== null && -gnss >= HARD_BRAKE_G.minor ? -gnss : null;
     case 'hard_accel':
-      return row.aLonMax >= HARD_ACCEL_G.minor ? row.aLonMax : null;
+      if (row.aLonMax >= HARD_ACCEL_G.minor) return row.aLonMax;
+      return gnss !== null && gnss >= HARD_ACCEL_G.minor ? gnss : null;
     case 'hard_corner': {
       const lateral = Math.max(Math.abs(row.aLatMax), Math.abs(row.aLatMin));
       return lateral >= HARD_CORNER_G.minor ? lateral : null;
@@ -77,27 +100,30 @@ export function createHarshDetector(newId: () => string): Detector {
   const open: Record<Kind, Episode | null> = { hard_brake: null, hard_accel: null, hard_corner: null };
   let pending: Episode[] = [];
   let lastSpikeTs: number | null = null;
+  /** A row this drive has had forward extremes: the axis is learned, and the GNSS no longer stands in. */
+  let axisSeen = false;
 
   /**
    * Evidence this row carries about the second it covers: needs the previous valid fix, and both
    * speeds trusted (an untrusted speed confirms nothing).
    */
-  function evidence(row: FeatureRow): { deltaG: number | null; lateralG: number | null } {
+  function evidence(row: FeatureRow): Evidence {
+    const none: Evidence = { deltaG: null, lateralG: null, gnssOnly: false };
     const speed = knownSpeed(row);
     const before = prev === null ? null : knownSpeed(prev);
-    if (prev === null || speed === null || before === null) return { deltaG: null, lateralG: null };
-    if (!speedTrusted(row) || !speedTrusted(prev)) return { deltaG: null, lateralG: null };
+    if (prev === null || speed === null || before === null) return none;
+    if (!speedTrusted(row) || !speedTrusted(prev)) return none;
     const dtMs = row.ts - prev.ts;
-    if (dtMs <= 0 || dtMs > MAX_FIX_GAP_MS) return { deltaG: null, lateralG: null };
+    if (dtMs <= 0 || dtMs > MAX_FIX_GAP_MS) return none;
     const dtS = dtMs / 1000;
     const deltaG = (speed - before) / dtS / G_MPS2;
     // Lateral acceleration from the turn: v × ω, with ω the course rate.
     const omega = (Math.abs(courseDelta(prev.course, row.course)) * Math.PI) / 180 / dtS;
     const lateralG = ((speed + before) / 2) * omega / G_MPS2;
-    return { deltaG, lateralG };
+    return { deltaG, lateralG, gnssOnly: wellRated(row) && wellRated(prev) };
   }
 
-  function confirms(ep: Episode, ev: { deltaG: number | null; lateralG: number | null }): boolean {
+  function confirms(ep: Episode, ev: Evidence): boolean {
     switch (ep.kind) {
       case 'hard_brake':
         return ev.deltaG !== null && -ev.deltaG >= GNSS_CONFIRM_G;
@@ -122,9 +148,11 @@ export function createHarshDetector(newId: () => string): Detector {
       const ev = evidence(row);
       const speedMph = knownSpeedMph(row);
       const eligible = rowEligible(row, ctx);
+      if (!axisUnknown(row)) axisSeen = true;
+      const gnss = !axisSeen && ev.gnssOnly && ev.deltaG !== null && Math.abs(ev.deltaG) <= GNSS_ONLY_MAX_G ? ev.deltaG : null;
 
       for (const kind of KINDS) {
-        const peak = eligible ? peakOf(kind, row) : null;
+        const peak = eligible ? peakOf(kind, row, gnss) : null;
         const cornerTooSlow = kind === 'hard_corner' && (speedMph === null || speedMph < CORNER_MIN_MPH);
         const signal = peak !== null && !cornerTooSlow;
         const ep = open[kind];

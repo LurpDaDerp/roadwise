@@ -30,8 +30,8 @@ test('the 5 launch achievements, each with a title and description', () => {
 });
 
 test('detection thresholds match the spec', () => {
-  expect(HARD_BRAKE_G).toEqual({ minor: 0.4, severe: 0.55 });
-  expect(HARD_ACCEL_G).toEqual({ minor: 0.35, severe: 0.5 });
+  expect(HARD_BRAKE_G).toEqual({ minor: 0.3, severe: 0.45 });
+  expect(HARD_ACCEL_G).toEqual({ minor: 0.28, severe: 0.4 });
   expect(HARD_CORNER_G).toEqual({ minor: 0.4, severe: 0.55 });
   expect(SPEEDING_MIN_S).toEqual({ default: 5, severe: 3 });
   expect(MIN_SCORED_MILES).toBe(0.5);

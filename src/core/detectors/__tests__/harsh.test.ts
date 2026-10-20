@@ -8,18 +8,18 @@ function peakDrive(peak: Partial<FeatureRow>, before: number, after: number, spe
 }
 
 describe('hard braking / acceleration (spec event table, "confirmed by GPS")', () => {
-  test('a 0.45 g brake with a matching GNSS drop is one minor hard brake, told on the row after the 2-s hold', () => {
-    const rows = peakDrive({ aLonMin: -0.45 }, 10, 10, mph(35), mph(25));
+  test('a 0.35 g brake with a matching GNSS drop is one minor hard brake, told on the row after the 2-s hold', () => {
+    const rows = peakDrive({ aLonMin: -0.35 }, 10, 10, mph(35), mph(25));
     const { pushed, all } = drive(createHarshDetector(counterIds()), rows);
     const e = only(all);
     expect(e).toMatchObject({ type: 'hard_brake', tier: 'minor', startedAt: T0 + 10_000, durationS: 1 });
-    expect(e.measured).toEqual({ peakG: 0.45, speedMph: 25 });
+    expect(e.measured).toEqual({ peakG: 0.35, speedMph: 25 });
     // Released once the 2-s veto window has passed, never on the peak row itself.
     expect(pushed[10]).toEqual([]);
     expect(pushed.findIndex((p) => p.length > 0)).toBeGreaterThan(11);
   });
 
-  test('0.55 g and up is severe; the GNSS drop may land on the row after the peak', () => {
+  test('0.45 g and up is severe; the GNSS drop may land on the row after the peak', () => {
     const rows = seq([10, { speed: mph(45) }], [1, { speed: mph(45), aLonMin: -0.6 }], [10, { speed: mph(30) }]);
     expect(only(drive(createHarshDetector(counterIds()), rows).all).tier).toBe('severe');
   });
@@ -29,8 +29,8 @@ describe('hard braking / acceleration (spec event table, "confirmed by GPS")', (
     expect(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.5 }, 10, 10)).all).toEqual([]);
   });
 
-  test('a 0.40 g acceleration with a matching GNSS rise is a minor hard accel; 0.50 g severe', () => {
-    expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.4 }, 10, 10, mph(20), mph(30))).all)).toMatchObject({ type: 'hard_accel', tier: 'minor' });
+  test('a 0.30 g acceleration with a matching GNSS rise is a minor hard accel; 0.40 g and up severe', () => {
+    expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.3 }, 10, 10, mph(20), mph(30))).all)).toMatchObject({ type: 'hard_accel', tier: 'minor' });
     expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.52 }, 10, 10, mph(20), mph(32))).all).tier).toBe('severe');
   });
 
@@ -104,6 +104,33 @@ describe('the GPS confirmation reads only trusted speeds (speed accuracy 2 m/s o
 
   test('a corner on untrusted speeds is no event', () => {
     const rows = seq([10, { speed: mph(30), speedAcc: 3 }], [1, { speed: mph(30), course: 135, aLatMax: 0.45, speedAcc: 3 }], [10, { speed: mph(30), course: 135, speedAcc: 3 }]);
+    expect(drive(createHarshDetector(counterIds()), rows).all).toEqual([]);
+  });
+});
+
+describe('before the forward axis is learned, the GPS speed change stands in for the IMU', () => {
+  // The fixture rows report no forward extremes (aLonMax = aLonMin = 0) unless told to.
+  test('a well-rated 35 → 25 mph drop in a second (0.46 g) is a severe hard brake; 35 → 28 mph (0.32 g) a minor one', () => {
+    const severe = seq([10, { speed: mph(35) }], [10, { speed: mph(25) }]);
+    expect(only(drive(createHarshDetector(counterIds()), severe).all)).toMatchObject({ type: 'hard_brake', tier: 'severe', startedAt: T0 + 10_000 });
+    const minor = seq([10, { speed: mph(35) }], [10, { speed: mph(28) }]);
+    expect(only(drive(createHarshDetector(counterIds()), minor).all)).toMatchObject({ type: 'hard_brake', tier: 'minor' });
+  });
+
+  test('a well-rated 20 → 27 mph rise in a second (0.32 g) is a hard accel', () => {
+    const rows = seq([10, { speed: mph(20) }], [10, { speed: mph(27) }]);
+    expect(only(drive(createHarshDetector(counterIds()), rows).all)).toMatchObject({ type: 'hard_accel', tier: 'minor' });
+  });
+
+  test('a gentle change, a speed rated worse than 1 m/s or unrated, or a jump past 1 g is nothing', () => {
+    expect(drive(createHarshDetector(counterIds()), seq([10, { speed: mph(35) }], [10, { speed: mph(31) }])).all).toEqual([]);
+    expect(drive(createHarshDetector(counterIds()), seq([10, { speed: mph(35), speedAcc: 1.5 }], [10, { speed: mph(25), speedAcc: 1.5 }])).all).toEqual([]);
+    expect(drive(createHarshDetector(counterIds()), seq([10, { speed: mph(35), speedAcc: -1 }], [10, { speed: mph(25), speedAcc: -1 }])).all).toEqual([]);
+    expect(drive(createHarshDetector(counterIds()), seq([10, { speed: mph(10) }], [10, { speed: mph(40) }])).all).toEqual([]);
+  });
+
+  test('once a row has had forward extremes, only the IMU counts', () => {
+    const rows = seq([5, { speed: mph(35) }], [1, { speed: mph(35), aLonMax: 0.02, aLonMin: -0.02 }], [5, { speed: mph(35) }], [10, { speed: mph(25) }]);
     expect(drive(createHarshDetector(counterIds()), rows).all).toEqual([]);
   });
 });
