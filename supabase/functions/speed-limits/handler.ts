@@ -10,6 +10,11 @@
 //        half-good 200. `truncated` is passed through as the database set it.
 //        `Cache-Control: private, max-age=` up to the batch's earliest tile expiry, at most a day
 //        (ruling B2-I1), and gzip when the request accepts it.
+//        The road layer fills itself (migration 0013, fill.ts): a tile whose 0.1° cell is not yet
+//        loaded from OpenStreetMap is answered as it stands, flagged `filling` with an expiry
+//        `FILLING_EXPIRY_MS` away, so the device asks again in seconds; the cell (and any cell
+//        within 1.5 km of the tile) is fetched in the background meanwhile. A point request claims
+//        its cell the same way.
 //   POST PointRequest → PointResponse, in §4.4's order: the candidates around the point go through
 //        `matchLimit` (the device's matcher, byte for byte); a match with a limit answers. Otherwise,
 //        with the AWS client configured, the point inside a state whose open data is loaded, and
@@ -39,7 +44,7 @@ import {
 import { asPgError } from '../_shared/pg.ts';
 import { nearestOnPolyline, type LatLng } from '../_shared/speedLimits/geometry';
 import { MATCH, matchLimit, type Candidate, type MatchResult } from '../_shared/speedLimits/match';
-import { parseTileKey, tileBounds } from '../_shared/speedLimits/tiles';
+import { parseTileKey, tileBounds, type TileXY } from '../_shared/speedLimits/tiles';
 import {
   PointRequestSchema,
   PointResponseSchema,
@@ -49,6 +54,7 @@ import {
   type PointResponse,
 } from '../_shared/speedLimits/wire';
 import type { RoutesClient, SpanLimit } from './aws.ts';
+import type { OsmFill } from './fill.ts';
 
 /**
  * Every rate-limit budget this function spends, in one place (B1 security audit; rulings B2 M-1,
@@ -144,6 +150,8 @@ export const TILE_RPC_TIMEOUT_MS = 5_000;
 export const MAX_BODY_BYTES = 1_024;
 /** The longest a batch may sit in an HTTP cache (rev1: O12), whatever its tiles' expiry. */
 export const TILE_MAX_AGE_S = 86_400;
+/** A tile whose cell is still filling expires this soon, so the device asks for it again. */
+export const FILLING_EXPIRY_MS = 25_000;
 
 /**
  * The batch's `Cache-Control` (ruling B2-I1): never cached past the earliest tile expiry in it, so
@@ -276,6 +284,8 @@ export interface SpeedLimitsDeps {
   db: SpeedLimitsDb;
   /** Null when the three AWS secrets are not all set: no fallback, `fallback: null`. */
   routes: RoutesClient | null;
+  /** The self-filling road layer (fill.ts); null or absent leaves the tables as they are. */
+  fill?: OsmFill | null;
   log?: SpeedLogger;
   /** For the route's ends and the cache TTL; `Math.random` by default. */
   random?: () => number;
@@ -421,7 +431,10 @@ async function tiles(req: Request, run: Run): Promise<Outcome> {
     };
   }
 
-  const raw = await deps.db.tiles(parsed.data);
+  // The fill's claims run beside the tile query: they decide nothing about this batch's rows,
+  // only whether each tile is flagged filling. `ensure` never throws.
+  const boxes = parsed.data.map((k) => tileBounds(parseTileKey(k) as TileXY));
+  const [raw, filling] = await Promise.all([deps.db.tiles(parsed.data), deps.fill ? deps.fill.ensure(boxes) : Promise.resolve(null)]);
   // A point lookup can reach AWS only inside coverage (ruling B2 F2), so the batch promises the
   // fallback only when the client is configured and some requested tile overlaps a coverage box.
   const fallback = deps.routes && parsed.data.some(tileInCoverage) ? 'aws' : null;
@@ -440,9 +453,15 @@ async function tiles(req: Request, run: Run): Promise<Outcome> {
     });
     return { res: json(500, { code: 'invalid_tiles' }), outcome: 'invalid_tiles', source: null };
   }
-  const cacheControl = tileCacheControl(checked.data.tiles.map((t) => t.expiresAt), (deps.now ?? Date.now)());
-  const res = await jsonEncoded(req, 200, checked.data, { 'cache-control': cacheControl });
-  return { res, outcome: 'served', source: null };
+  // A tile whose cell is still loading is sent as it stands, flagged, and expires in seconds.
+  const nowMs = (deps.now ?? Date.now)();
+  const tiles = checked.data.tiles.map((t, i) =>
+    filling?.[i] ? { ...t, filling: true, expiresAt: Math.min(t.expiresAt, nowMs + FILLING_EXPIRY_MS) } : t
+  );
+  const body = { ...checked.data, tiles };
+  const cacheControl = tileCacheControl(tiles.map((t) => t.expiresAt), nowMs);
+  const res = await jsonEncoded(req, 200, body, { 'cache-control': cacheControl });
+  return { res, outcome: filling?.some(Boolean) ? 'served_filling' : 'served', source: null };
 }
 
 async function point(req: Request, run: Run): Promise<Outcome> {
@@ -472,7 +491,11 @@ async function point(req: Request, run: Run): Promise<Outcome> {
     };
   }
 
-  const candidates = await deps.db.candidates(lat, lng, radiusM);
+  // The point's cell is claimed for the fill beside the query (its answer is for later requests).
+  const [candidates] = await Promise.all([
+    deps.db.candidates(lat, lng, radiusM),
+    deps.fill ? deps.fill.ensure([{ minLat: lat, maxLat: lat, minLng: lng, maxLng: lng }]) : Promise.resolve(null),
+  ]);
   const match = matchLimit(heading, candidates);
   if (match.source === 'posted' || match.source === 'cached') return answer(toAnswer(match), 'matched');
 
