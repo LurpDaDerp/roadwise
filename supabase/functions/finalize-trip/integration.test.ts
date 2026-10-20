@@ -1,4 +1,4 @@
-// Integration: the real handlers against the local stack (migrations 0001–0009) over the real
+// Integration: the real handlers against the local stack (migrations 0001–0016) over the real
 // engine. Runs only when FUNCTIONS_IT_DB_URL is readable — `npm run functions:test` has no env
 // permission and skips it; run it with
 //
@@ -101,8 +101,14 @@ Deno.test({
       // the itemised list the device shows now sums to the net: one hard brake left at its first-of-type penalty
       assertEquals(d.breakdown.events, [{ id: EVENT_B, penalty: 10 }]);
       assertEquals([d.breakdown.net, d.breakdown.penalties], [138, 10]);
+      // a repeat (the first answer was lost) answers what the first did and credits nothing again (0016)
       const twice = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), deps);
-      assertEquals([twice.status, (await twice.json()).code], [409, 'already_disputed']);
+      assertEquals([twice.status, await twice.json()], [200, d]);
+      const [{ points: afterRepeat }] = await sql`select points from public.progress where user_id = ${USER}::uuid`;
+      assertEquals(afterRepeat, 138);
+      // the same event for another reason is still refused
+      const other = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'wrong_limit' }), deps);
+      assertEquals([other.status, (await other.json()).code], [409, 'already_disputed']);
       const mismatch = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT_B, reason: 'wrong_limit' }), deps);
       assertEquals([mismatch.status, (await mismatch.json()).code], [400, 'reason_mismatch']);
 
@@ -112,7 +118,7 @@ Deno.test({
       const ndBody = await nd.json();
       assertEquals([ndBody.action, ndBody.notDrivingLeft, ndBody.progress.points, ndBody.progress.lifetime, ndBody.progress.streak], ['not_driving', 1, 0, 0, 0]);
       const second_nd = await handleTripAction(post('trip-actions', { action: 'not_driving', clientTripId: TRIP }), deps);
-      assertEquals([second_nd.status, (await second_nd.json()).code], [409, 'already_marked']);
+      assertEquals([second_nd.status, await second_nd.json()], [200, ndBody]);
       const [{ s }] = await sql`select coalesce(sum(amount), 0)::int as s from public.points_ledger where user_id = ${USER}::uuid`;
       assertEquals(s, 0);
       assert(r1.tripId !== TRIP);

@@ -4,7 +4,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(84);
+select plan(90);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -132,8 +132,18 @@ select is((select array[a ->> 'status', a ->> 'delta', a -> 'progress' ->> 'poin
   'the delta is credited to points and lifetime and the rating refreshed');
 select is((select row(status, penalty)::text from public.trip_events where client_event_id = '22222222-2222-4222-8222-222222222222'), row('removed', 0)::text, 'the event is removed');
 select is((select row(points_net, n_events, clean, rating_penalty)::text from public.trips where client_trip_id = '11111111-1111-4111-8111-111111111111'), row(210, 0, true, 0)::text, 'the trip is re-scored and now clean');
-select throws_ok($$ select private.dispute_context('00000000-0000-0000-0000-000000000001', '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', 'hazard') $$,
-  '42501', 'already disputed', 'an event is disputed once');
+-- a repeat (the first answer was lost) answers the stored outcome and writes nothing (0016)
+select is((select private.dispute_context('00000000-0000-0000-0000-000000000001', '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', 'hazard')
+  - 'tripId' - 'clientTripId'),
+  '{"reason": "hazard", "scored": true, "oldNet": 210, "status": "accepted", "eventId": "22222222-2222-4222-8222-222222222222", "rescore": null, "quotaLeft": 2, "rejectReason": null}'::jsonb,
+  'a repeated dispute reads the stored decision with nothing to re-score');
+select is(private.apply_dispute(jsonb_build_object('user', '00000000-0000-0000-0000-000000000001', 'tripId', (select d ->> 'tripId' from d1),
+  'eventId', '22222222-2222-4222-8222-222222222222', 'reason', 'hazard', 'status', 'accepted')), (select a from a1),
+  'and apply_dispute answers exactly what the first one did');
+select is((select row(points, lifetime)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(210, 210)::text, 'nothing is credited twice');
+select is((select count(*)::int from public.points_ledger where kind = 'drive_adjust'), 1, 'one adjustment in the ledger');
+select throws_ok($$ select private.dispute_context('00000000-0000-0000-0000-000000000001', '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', 'wrong_limit') $$,
+  '42501', 'already disputed', 'the same event for another reason is still refused');
 
 -- quota: 3 accepted hazard/wrong_limit per league week
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', '44444444-4444-4444-8444-444444444444', pg_temp.t0() + interval '60 minutes', 10, 4, 10,
@@ -149,6 +159,8 @@ select is((select private.dispute_context('00000000-0000-0000-0000-000000000001'
 select private.apply_dispute(jsonb_build_object('user', '00000000-0000-0000-0000-000000000001', 'tripId', (select id from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444'),
   'eventId', 'a1a1a1a1-0000-4000-8000-000000000003', 'reason', 'hazard', 'status', 'rejected', 'rejectReason', 'quota'));
 select is((select row(status, penalty)::text from public.trip_events where client_event_id = 'a1a1a1a1-0000-4000-8000-000000000003'), row('active', 10)::text, 'a rejected dispute leaves the event active');
+select is((select private.dispute_context('00000000-0000-0000-0000-000000000001', '44444444-4444-4444-8444-444444444444', 'a1a1a1a1-0000-4000-8000-000000000003', 'hazard')) ->> 'rejectReason', 'quota',
+  'a repeated rejected dispute reads its rejection again');
 delete from public.event_disputes where client_event_id = 'a1a1a1a1-0000-4000-8000-000000000003';
 select is((private.apply_dispute(jsonb_build_object('user', '00000000-0000-0000-0000-000000000001', 'tripId', (select id from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444'),
   'eventId', 'a1a1a1a1-0000-4000-8000-000000000003', 'reason', 'hazard', 'status', 'accepted', 'breakdown', '{"net": 100, "ratingPenalty": 0, "events": [], "activeEventCount": 3}'::jsonb, 'net', 100))) - 'progress' - 'tripId' - 'breakdown',
@@ -181,8 +193,10 @@ select is((select n -> 'progress' from nd), '{"level": 1, "atRisk": false, "poin
 select is((select n ->> 'notDrivingLeft' from nd), '1', 'one use left this month');
 select is((select row(not_driving, points_net, not_driving_at = now())::text from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444'), row(true, 0, true)::text, 'the trip is marked');
 select is((select sum(amount)::int from public.points_ledger where trip_id = (select id from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444')), 0, 'its ledger nets to zero');
-select throws_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '44444444-4444-4444-8444-444444444444') $$,
-  '42501', 'already marked as not driving', 'marking twice is refused');
+select is(private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '44444444-4444-4444-8444-444444444444'), (select n from nd),
+  'marking twice answers what the first did (0016)');
+select is((select row(points, lifetime, (select count(*) from public.points_ledger l where l.user_id = '00000000-0000-0000-0000-000000000001' and l.kind = 'revert'))::text
+  from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(210, 210, 2)::text, 'and reverts nothing twice');
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', '55555555-5555-4555-8555-555555555555', pg_temp.t0() + interval '80 minutes', 10, 2, 20, '[]');
 select lives_ok($$ select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '55555555-5555-4555-8555-555555555555') $$, 'the second use this month');
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', '66666666-6666-4666-8666-666666666666', pg_temp.t0() + interval '100 minutes', 10, 2, 20, '[]');

@@ -6,8 +6,9 @@
 // function maps the request to one engine
 // transaction, re-scores an accepted dispute with the shared scorer from the stored input and
 // context (streak never re-evaluated), and turns the writers' fixed refusals into codes the device
-// can show. Each action is one request from the device's queue; the writers refuse a repeat
-// (`already_marked`, `already_disputed`) rather than apply it twice.
+// can show. Each action is one request from the device's queue, retried when its answer was lost:
+// the writers answer a repeat with what the first one did (0016), never applying it twice, and
+// refuse a dispute of an already disputed event for another reason (`already_disputed`).
 import type { ApplyDisputeEnvelope, Engine } from '../_shared/engine.ts';
 import { EngineContractError } from '../_shared/engine.ts';
 import {

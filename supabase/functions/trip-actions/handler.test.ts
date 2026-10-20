@@ -160,6 +160,17 @@ Deno.test('dispute rejected: recorded without a re-score; the reason comes back'
   assertEquals([e.status, e.rejectReason, e.breakdown, e.net], ['rejected', 'quota', undefined, undefined]);
 });
 
+Deno.test('a repeated accepted dispute (0016: the context comes back with nothing to re-score) is not re-scored; the stored outcome passes through', async () => {
+  const stored = { tripId: TRIP_ID, eventId: EVENT, status: 'accepted', rejectReason: null, quotaLeft: 2, net: 132, delta: 13, breakdown: null,
+    progress: { points: 132, lifetime: 142, level: 1, levelUp: false, safetyRating: 92, ranked: false } };
+  const h = harness({ disputeContext: { ...disputeAccepted, quotaLeft: 2, rescore: null }, applyDispute: () => stored });
+  const res = await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), h.deps);
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { action: 'dispute', clientTripId: TRIP, ...stored });
+  const e = h.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
+  assertEquals([e.status, e.breakdown, e.net], ['accepted', undefined, undefined]);
+});
+
 Deno.test("the writers' fixed refusals become codes; everything else maps as usual", async () => {
   const cases: [PgError, number, string][] = [
     [new PgError('P0002', 'trip not found'), 404, 'not_found'],
