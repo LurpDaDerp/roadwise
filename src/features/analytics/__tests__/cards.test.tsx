@@ -17,7 +17,7 @@ import { metricGroups, metricsBlockHeight, MetricsCards, metricsLayout, METRICS_
 import { AXES, coach, driveGrid, EMPTY_TREND, EMPTY_WINDOW, fitLines, personalBests, trend, windowSums, type MapPoint } from '../model';
 import { axisAt, RADAR_LABEL_MAX_SCALE, radarGeometry, radarLabel, radarPoint, radarPolygon, RadarCard } from '../RadarCard';
 import { SummaryCard } from '../SummaryCard';
-import { chartBoxHeight, monotonePath, PLOT_EDGE, plotPoint, trendLabel, trendValue, visibleTicks } from '../TrendCard';
+import { AXIS_GAP, axisTicks, axisWidth, chartBoxHeight, monotonePath, PLOT_EDGE, plotPoint, trendLabel, trendValue, visibleTicks } from '../TrendCard';
 import { TripsMapCard } from '../TripsMapCard';
 import { bandSpan, busiest, cellAlpha, WhenYouDriveCard } from '../WhenYouDriveCard';
 
@@ -613,6 +613,19 @@ describe('TrendCard', () => {
     await press(screen.getByRole('tab', { name: 'Points' }));
     expect(screen.getByTestId('trend-chart-box')).toHaveAccessibleName('Points per drive by day. Lowest plus 90 on Sunday, latest plus 150, trending up.');
     expect(screen.getByTestId('trend-latest', { includeHiddenElements: true })).toHaveTextContent('+150 pts');
+  });
+
+  test('a Y axis down the left labels the three guides, top to bottom, for each series', async () => {
+    await draw(<MetricsCards sums={windowSums(list, null)} trend={data} />);
+    const labels = () => screen.getAllByTestId('trend-y-label', { includeHiddenElements: true }).map((t) => t.props.children);
+    expect(labels()).toEqual(['100', '50', '0']);
+    await press(screen.getByRole('tab', { name: 'Points' }));
+    // +90 and +150, padded by 15 % of the spread (9): 81 to 159.
+    expect(labels()).toEqual(['+159', '+120', '+81']);
+    expect(axisTicks('events', 0, 2.5)).toEqual(['2.5', '1.3', '0.0']);
+    expect(axisTicks('events', 0, 14)).toEqual(['14', '7.0', '0.0']);
+    // The plot is what the axis leaves of the card's inside.
+    expect(axisWidth(['+159', '+120', '+81'], 12)).toBe(Math.ceil(4 * 12 * 0.6) + AXIS_GAP);
   });
 
   test('in kilometres, Events read per 100 km', async () => {

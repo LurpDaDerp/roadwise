@@ -20,6 +20,8 @@ const PICKER_PAD = 3;
 export const TICK_GAP = 4;
 /** Room inside the plot's edges, so the end dots and the line's caps are never clipped. */
 export const PLOT_EDGE = 6;
+/** Between the Y axis's labels and the plot. */
+export const AXIS_GAP = 6;
 
 // ---------------------------------------------------------------------------------------------
 // Heights (the metrics block's layout counts the card with these)
@@ -33,8 +35,7 @@ export const trendHeaderHeight = (l: Pick<MetricsLayout, 'textScale' | 'fontScal
   Math.max(sizeAt('title3', l.textScale).lineHeight, pickerHeight(l.fontScale));
 
 /** The chart's box: the plot, then a line of tick labels. The short "not enough drives" line keeps the same box, so nothing jumps. */
-export const chartBoxHeight = (l: Pick<MetricsLayout, 'plot' | 'textScale'>): number =>
-  l.plot + TICK_GAP + sizeAt('caption', l.textScale).lineHeight;
+export const chartBoxHeight = (l: Pick<MetricsLayout, 'plot' | 'textScale'>): number => l.plot + TICK_GAP + sizeAt('caption', l.textScale).lineHeight;
 
 /** The whole card: padding, the header row and the chart, with the card's gap between them. */
 export const trendCardHeight = (l: Pick<MetricsLayout, 'pad' | 'gap' | 'plot' | 'textScale' | 'fontScale'>): number =>
@@ -97,8 +98,7 @@ export function visibleTicks(ticks: readonly TrendTick[], plotWidth: number, lab
 }
 
 /** A tick label's width, roughly: the caption face runs about 0.6 em a character, plus a little air. */
-const tickWidth = (ticks: readonly TrendTick[], fontSize: number): number =>
-  Math.max(1, ...ticks.map((t) => t.label.length)) * fontSize * 0.6 + 8;
+const tickWidth = (ticks: readonly TrendTick[], fontSize: number): number => Math.max(1, ...ticks.map((t) => t.label.length)) * fontSize * 0.6 + 8;
 
 // ---------------------------------------------------------------------------------------------
 // Words
@@ -114,6 +114,20 @@ export function trendValue(kind: TrendKind, v: number, units: Units): Metric {
   return { value: formatPointsValue(v, true), unit: 'pts', spoken: r > 0 ? `plus ${r}` : r < 0 ? `minus ${Math.abs(r)}` : '0' };
 }
 
+/** A Y axis label: the series' number alone ("100", "2.5", "+120"); the unit is on the latest value. */
+export function axisValue(kind: TrendKind, v: number): string {
+  if (kind === 'score') return String(Math.round(v));
+  if (kind === 'events') return Math.abs(v) >= 10 ? String(Math.round(v)) : v.toFixed(1);
+  return formatPointsValue(v, true);
+}
+
+/** The Y axis: the values at the three guides, top to bottom (the range's top, middle and bottom). */
+export const axisTicks = (kind: TrendKind, lo: number, hi: number): string[] => [hi, (lo + hi) / 2, lo].map((v) => axisValue(kind, v));
+
+/** The Y axis's width: its widest label (about 0.6 em a character) and the gap to the plot. */
+export const axisWidth = (labels: readonly string[], fontSize: number): number =>
+  Math.ceil(Math.max(1, ...labels.map((s) => s.length)) * fontSize * 0.6) + AXIS_GAP;
+
 /** Events are counted per 100 mi; in km they read per 100 km. */
 export const seriesIn = (kind: TrendKind, points: readonly TrendPoint[], units: Units): TrendPoint[] =>
   kind === 'events' ? points.map((p) => ({ ...p, value: Math.round(per100In(p.value, units) * 10) / 10 })) : [...points];
@@ -124,7 +138,10 @@ export function trendLabel(kind: TrendKind, points: readonly TrendPoint[], step:
   const name = kind === 'events' ? c.spoken.events(distanceWord(units)) : c.spoken[kind];
   const low = points.reduce((a, b) => (b.value < a.value ? b : a));
   const last = points[points.length - 1]!;
-  const { lo, hi } = trendRange(kind, points.map((p) => p.value));
+  const { lo, hi } = trendRange(
+    kind,
+    points.map((p) => p.value)
+  );
   const dir = c.direction[trendDirection(points, hi - lo)];
   return `${name} ${c.by[step]}. ${c.lowest} ${trendValue(kind, low.value, units).spoken} ${low.when}, ${c.latest} ${trendValue(kind, last.value, units).spoken}, ${dir}.`;
 }
@@ -143,18 +160,24 @@ export interface TrendCardProps {
 
 /**
  * The range over time: a Score / Events / Points picker beside the title, one monotone line in the
- * page ink with a dot per point (the latest labelled), thin guides at the bottom, middle and top
- * of the range and a few short ticks. Fewer than two points
- * read "Not enough drives yet" in the chart's place.
+ * page ink with a dot per point (the latest labelled with its unit), thin guides at the bottom,
+ * middle and top of the range with their values down a Y axis on the left, and a few short ticks
+ * under it. Fewer than two points read "Not enough drives yet" in the chart's place.
  */
 export function TrendCard({ trend, units, layout: l, width, text }: TrendCardProps) {
   const t = useTheme();
   const [kind, setKind] = useState<TrendKind>('score');
   const points = seriesIn(kind, trend.series[kind], units);
-  const { lo, hi } = trendRange(kind, points.map((p) => p.value));
-  const plotW = Math.max(1, width);
+  const { lo, hi } = trendRange(
+    kind,
+    points.map((p) => p.value)
+  );
   const box = chartBoxHeight(l);
   const tick = sizeAt('caption', l.textScale);
+  const yLabels = axisTicks(kind, lo, hi);
+  const axisW = axisWidth(yLabels, tick.fontSize);
+  // The plot is what the Y axis leaves of the card's inside.
+  const plotW = Math.max(1, width - axisW);
   const latest = sizeAt('subhead', l.textScale);
   const xy = points.map((p) => plotPoint(p, plotW, l.plot, lo, hi));
   const last = xy[xy.length - 1];
@@ -190,52 +213,77 @@ export function TrendCard({ trend, units, layout: l, width, text }: TrendCardPro
           accessible
           accessibilityRole="image"
           accessibilityLabel={trendLabel(kind, points, trend.step, units)}
-          style={{ height: box, width: plotW }}
+          style={{ height: box, width: axisW + plotW, flexDirection: 'row' }}
           testID="trend-chart-box"
         >
-          <Svg width={plotW} height={l.plot} testID="trend-chart">
-            {guides.map((y, i) => (
-              <Line key={i} x1={0} x2={plotW} y1={y} y2={y} stroke={t.colors.divider} strokeWidth={i === 2 ? 1.5 : 1} />
-            ))}
-            <Path d={monotonePath(xy)} fill="none" stroke={t.colors.text} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" testID="trend-line" />
-            {xy.map((p, i) => (
-              <Circle key={i} cx={p.x} cy={p.y} r={i === xy.length - 1 ? 4 : 3} fill={t.colors.text} testID="trend-dot" />
-            ))}
-          </Svg>
-          {last && lastValue ? (
-            <View
-              pointerEvents="none"
-              style={{
-                position: 'absolute',
-                top: Math.max(0, Math.min(l.plot - latest.lineHeight, last.y < l.plot / 2 ? last.y + 8 : last.y - 8 - latest.lineHeight)),
-                ...(last.x > plotW / 2 ? { right: plotW - last.x } : { left: last.x }),
-                flexDirection: 'row',
-                alignItems: 'baseline',
-              }}
-            >
-              <Text variant="subhead" style={[latest, { fontWeight: '700' }, halo]} testID="trend-latest">
-                {lastValue.value}
-                {lastValue.unit ? <Text variant="caption" tone="muted" style={[tick, halo]}>{` ${lastValue.unit}`}</Text> : null}
-              </Text>
-            </View>
-          ) : null}
-          {ticks.map((k) => {
-            const x = PLOT_EDGE + k.x * (plotW - 2 * PLOT_EDGE);
-            const left = Math.max(0, Math.min(plotW - tickW, x - tickW / 2));
-            const align = left === 0 && x - tickW / 2 < 0 ? 'left' : left === plotW - tickW && x + tickW / 2 > plotW ? 'right' : 'center';
-            return (
+          <View style={{ width: axisW, height: l.plot }} testID="trend-y-axis">
+            {yLabels.map((label, i) => (
               <Text
-                key={`${k.x}-${k.label}`}
+                key={i}
                 variant="caption"
                 tone="muted"
                 numberOfLines={1}
-                style={[tick, { position: 'absolute', top: l.plot + TICK_GAP, left, width: tickW, textAlign: align }]}
-                testID="trend-tick"
+                style={[
+                  tick,
+                  {
+                    position: 'absolute',
+                    right: AXIS_GAP,
+                    top: Math.max(0, Math.min(l.plot - tick.lineHeight, guides[i]! - tick.lineHeight / 2)),
+                    textAlign: 'right',
+                    fontVariant: ['tabular-nums'],
+                  },
+                ]}
+                testID="trend-y-label"
               >
-                {k.label}
+                {label}
               </Text>
-            );
-          })}
+            ))}
+          </View>
+          <View style={{ width: plotW, height: box }}>
+            <Svg width={plotW} height={l.plot} testID="trend-chart">
+              {guides.map((y, i) => (
+                <Line key={i} x1={0} x2={plotW} y1={y} y2={y} stroke={t.colors.divider} strokeWidth={i === 2 ? 1.5 : 1} />
+              ))}
+              <Path d={monotonePath(xy)} fill="none" stroke={t.colors.text} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" testID="trend-line" />
+              {xy.map((p, i) => (
+                <Circle key={i} cx={p.x} cy={p.y} r={i === xy.length - 1 ? 4 : 3} fill={t.colors.text} testID="trend-dot" />
+              ))}
+            </Svg>
+            {last && lastValue ? (
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  top: Math.max(0, Math.min(l.plot - latest.lineHeight, last.y < l.plot / 2 ? last.y + 8 : last.y - 8 - latest.lineHeight)),
+                  ...(last.x > plotW / 2 ? { right: plotW - last.x } : { left: last.x }),
+                  flexDirection: 'row',
+                  alignItems: 'baseline',
+                }}
+              >
+                <Text variant="subhead" style={[latest, { fontWeight: '700' }, halo]} testID="trend-latest">
+                  {lastValue.value}
+                  {lastValue.unit ? <Text variant="caption" tone="muted" style={[tick, halo]}>{` ${lastValue.unit}`}</Text> : null}
+                </Text>
+              </View>
+            ) : null}
+            {ticks.map((k) => {
+              const x = PLOT_EDGE + k.x * (plotW - 2 * PLOT_EDGE);
+              const left = Math.max(0, Math.min(plotW - tickW, x - tickW / 2));
+              const align = left === 0 && x - tickW / 2 < 0 ? 'left' : left === plotW - tickW && x + tickW / 2 > plotW ? 'right' : 'center';
+              return (
+                <Text
+                  key={`${k.x}-${k.label}`}
+                  variant="caption"
+                  tone="muted"
+                  numberOfLines={1}
+                  style={[tick, { position: 'absolute', top: l.plot + TICK_GAP, left, width: tickW, textAlign: align }]}
+                  testID="trend-tick"
+                >
+                  {k.label}
+                </Text>
+              );
+            })}
+          </View>
         </View>
       )}
     </Card>
