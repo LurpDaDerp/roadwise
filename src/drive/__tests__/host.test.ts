@@ -55,7 +55,7 @@ function fakeDisplay(): DriveDisplay & { log: string[]; states: DriveDisplayStat
   return {
     log,
     states,
-    start: (s: DriveDisplayState) => log.push(`start ${s.speed}`),
+    start: (s: DriveDisplayState) => log.push(`start ${s.speed}/${s.limit}${s.stopped ? ' stopped' : ''}`),
     update: (s: DriveDisplayState) => {
       states.push(s);
       log.push(`update ${s.speed}/${s.limit}/${s.points}${s.unit === 'km/h' ? ' km/h' : ''}`);
@@ -148,7 +148,8 @@ test('start: refuses without location, before boot, or while busy; otherwise sta
   expect(started).toEqual({ ok: true, clientTripId: uuid(1) });
   expect(ok.source.calls).toEqual(['startCapture:mounted']);
   expect(ok.host.snapshot()).toMatchObject({ status: 'recording', lockedOut: false, points: null, dryRun: false });
-  expect(ok.display.log[0]).toBe('start null');
+  // The lock screen starts on the drive's own speed (0 before the first fix), never "-".
+  expect(ok.display.log[0]).toBe('start 0/null stopped');
   expect(await ok.host.start()).toEqual({ ok: false, reason: 'busy' });
   await ok.host.stop({ endOpenTrip: true });
 });
@@ -376,7 +377,7 @@ test('the background display follows the driver\'s units: km/h with speed and li
   const h = build();
   await h.host.boot();
   await h.host.start();
-  expect(h.display.log[0]).toBe('start null');
+  expect(h.display.log[0]).toBe('start 0/null stopped');
   await feed(h, rows(5, { speedMps: 15 }));
   // 15 m/s = 33.6 mph = 54 km/h; the 35 mph limit reads 56 km/h.
   expect(h.display.log.at(-1)).toBe('update 54/56/null km/h');
@@ -1084,7 +1085,7 @@ test('an adopted drive (recovery after a restart) shows the driver’s units too
   const h = build();
   await h.host.boot({ adopt: { session, detectors: createDetectors(() => 'x') } });
   expect(h.host.snapshot().status).toBe('recording');
-  expect(h.display.log[0]).toBe('start null');
+  expect(h.display.log[0]).toBe('start 0/null stopped');
   await feed(h, rows(5, { speedMps: 15 }));
   expect(h.display.log.at(-1)).toBe('update 54/56/null km/h');
   await h.host.stop({ endOpenTrip: true });

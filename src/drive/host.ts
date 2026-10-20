@@ -37,7 +37,7 @@ import type { AppStateLike } from '@/data/foreground';
 import { processTimers } from '@/lib/timers';
 import { KMH_PER_MPH, metersToMiles, mpsToMph } from '@/lib/units';
 
-import type { DriveDisplay } from './display';
+import type { DriveDisplay, DriveDisplayState } from './display';
 import { clearDropNotice, writeDropNotice } from './dropNotice';
 import { type LeaveState, readPhoneSwitch, writePhoneSwitch } from './phoneSwitchStore';
 import { detectorContext, isBusyStatus, NO_SWITCH, type PhoneSwitchCtx, switchSignalFor } from './policy';
@@ -420,17 +420,21 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     wasStopped = s.stopped;
   }
 
-  function display(s: EngineSnapshot): void {
-    if (!deps.display || s.status !== 'recording') return;
-    deps.display.update({
-      speed: s.speedKnown ? inDisplayUnit(mpsToMph(s.speedMps), displayUnit) : null,
+  /** What the background surfaces show for `s`: the speed (0 while it is unknown) and the limit only. */
+  function displayState(s: EngineSnapshot): DriveDisplayState {
+    return {
+      speed: inDisplayUnit(s.speedKnown ? mpsToMph(s.speedMps) : 0, displayUnit),
       limit: inDisplayUnit(s.limitMph, displayUnit),
       unit: displayUnit,
-      // The background surfaces show the speed and the limit only.
       points: null,
       pointsDelta: null,
       stopped: s.stopped,
-    });
+    };
+  }
+
+  function display(s: EngineSnapshot): void {
+    if (!deps.display || s.status !== 'recording') return;
+    deps.display.update(displayState(s));
   }
 
   engine.subscribe((s) => {
@@ -447,7 +451,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       lastStopTotal = 0;
       wasStopped = false;
       startTripPending = true;
-      deps.display?.start({ speed: null, limit: null, unit: displayUnit, points: null, pointsDelta: null, stopped: true });
+      // The drive's own speed and limit from the first state (0 before the first fix), never "-": the
+      // display then holds this state for its 3-s throttle.
+      deps.display?.start({ ...displayState(s), stopped: s.lastRowTs === null || s.stopped });
     }
     updatePoints(s);
     display(s);
