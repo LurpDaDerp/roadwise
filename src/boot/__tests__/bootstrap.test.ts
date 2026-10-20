@@ -16,6 +16,9 @@ import { createFakeDashcamRuntime } from '@/dashcam/__fixtures__/fakeRuntime';
 import { setActiveDashcam } from '@/dashcam/registry';
 import { INSTALL_ID_KEY, readInstallId } from '@/data/devices/installId';
 import { DROP_NOTICE_KEY, readDropNotice } from '@/drive/dropNotice';
+import { QueryClient } from '@tanstack/react-query';
+import { subscribeInvalidation } from '@/data/queries/invalidate';
+import { queryKeys } from '@/data/queries/keys';
 
 jest.mock('expo-notifications', () => ({}));
 const mockEnsureDrivePermissions = jest.fn(async (..._args: unknown[]) => ({ location: 'granted' as const, motion: 'undetermined' as const }));
@@ -284,6 +287,22 @@ test('a phone first opened signed out restores the driver’s drives at their si
   expect(await jobs.runNow()).toBe(true);
   expect(await createTripsRepo(db).get(uuid(1))).not.toBeNull();
   await jobs.stop();
+  await rt.stop();
+});
+
+test('every wipe tells the cache: drive lists and stats cached before a sign-out or a deleted account are read again from the empty phone', async () => {
+  const d = deps();
+  const rt = await bootstrapApp(d.deps);
+  const qc = new QueryClient();
+  const off = subscribeInvalidation(qc);
+  for (const wipe of [() => wipeForSignOut(db), () => wipeDevice(db)]) {
+    qc.setQueryData(queryKeys.recentDrives(5), [{ clientTripId: uuid(1) }]);
+    expect(qc.getQueryState(queryKeys.recentDrives(5))?.isInvalidated).toBe(false);
+    await wipe();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(qc.getQueryState(queryKeys.recentDrives(5))?.isInvalidated).toBe(true);
+  }
+  off();
   await rt.stop();
 });
 

@@ -12,7 +12,9 @@
 import { activeDashcam } from '@/dashcam/registry';
 import { createSettingsRepo, type Db } from '@/data/db';
 import { clearDeviceSecret } from '@/data/devices/deviceSecret';
+import { emitDataChanged } from '@/data/events';
 import { RESTORED_AT_KEY } from '@/data/hydrate/restore';
+import { publishUnits } from '@/data/queries/units';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { DROP_NOTICE_KEY } from '@/drive/dropNotice';
 
@@ -135,6 +137,11 @@ export async function wipeDevice(db: Db, _deps: DeviceOwnerDeps = {}): Promise<v
       }
     }
   });
+  // Screens still mounted (a deletion's, a sign-up straight after it in the same process) read the
+  // empty phone, not the cache of the account that left; the units go back to the default with
+  // the setting that held them.
+  emitDataChanged({ source: 'wipe' });
+  publishUnits('mi');
   restartDashcamLink();
 }
 
@@ -151,6 +158,8 @@ export async function wipeForSignOut(db: Db): Promise<void> {
     // Finished queue items still carry the drives' payloads; what is still owed stays for the next sign-in.
     await tx.execute("DELETE FROM sync_queue WHERE status IN ('done', 'failed')");
   });
+  // The cached lists and stats would otherwise show the drives that just left until they went stale.
+  emitDataChanged({ source: 'wipe' });
   restartDashcamLink();
 }
 

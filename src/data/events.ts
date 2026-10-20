@@ -24,8 +24,8 @@
  * and the rest still hear the event, so an invalidation bug cannot fail the drain that fired it.
  */
 
-/** What moved the rows. */
-export type ChangeSource = 'enqueue' | 'sync' | 'hydrate' | 'finalize';
+/** What moved the rows. `wipe`: a sign-out, a handover or a deleted account emptied the phone. */
+export type ChangeSource = 'enqueue' | 'sync' | 'hydrate' | 'finalize' | 'wipe';
 
 /** What a drain pass settled — the counts a `sync` change carries. */
 export type SyncApplied = Readonly<{ done: number; failed: number; deferred: number }>;
