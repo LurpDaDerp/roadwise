@@ -118,7 +118,7 @@ export const settingsCopy = {
     signingOut: 'Signing out',
     export: {
       title: 'Export my data',
-      body: 'A copy of everything RoadWise keeps about you, in one file.',
+      body: 'A copy of your data, in one file.',
       action: 'Export my data',
       working: 'Preparing your data',
       failed: "Couldn't export your data. Check your connection and try again.",
@@ -129,7 +129,7 @@ export const settingsCopy = {
     },
     delete: {
       title: 'Delete account',
-      body: 'Permanently delete your account and everything RoadWise keeps about you.',
+      body: 'Permanently delete your account and your data.',
     },
   },
 
