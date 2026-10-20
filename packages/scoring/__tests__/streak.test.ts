@@ -39,6 +39,19 @@ describe('applyStreak — transitions', () => {
     expect(r.state).toEqual({ streak: 5, atRisk: true, freezes: 0, cleanRun: 0 });
   });
 
+  test('with the streak at 0, a net-negative drive spends no freeze and puts nothing at risk', () => {
+    const r = applyStreak(s({ streak: 0, freezes: 2, cleanRun: 3 }), negative);
+    expect(r).toEqual({ state: { streak: 0, atRisk: false, freezes: 2, cleanRun: 0 }, outcome: 'none', freezeEarned: false });
+    const none = applyStreak(s({ streak: 0, freezes: 0 }), negative);
+    expect([none.outcome, none.state.atRisk]).toEqual(['none', false]);
+  });
+
+  test('a streak of 0 left marked at risk is not at risk: events never "reset" it, a clean drive just grows it', () => {
+    const r = applyStreak(s({ streak: 0, atRisk: true, freezes: 2 }), negative);
+    expect(r).toEqual({ state: { streak: 0, atRisk: false, freezes: 2, cleanRun: 0 }, outcome: 'none', freezeEarned: false });
+    expect(applyStreak(s({ streak: 0, atRisk: true }), clean)).toMatchObject({ outcome: 'grew', state: { streak: 1, atRisk: false } });
+  });
+
   test('at risk, then a zero-event drive restores and grows the streak', () => {
     const r = applyStreak(s({ freezes: 0, atRisk: true }), clean);
     expect(r.outcome).toBe('restored');

@@ -29,11 +29,12 @@ export function applyStreak(
 ): StreakResult {
   if (!d.scored) return { state, outcome: 'none', freezeEarned: false };
 
-  const next: StreakState = { ...state };
+  // A streak of 0 has nothing to protect: never at risk, and a freeze is never spent on it.
+  const next: StreakState = { ...state, atRisk: state.atRisk && state.streak > 0 };
   const clean = d.activeEventCount === 0;
   let outcome: StreakOutcome;
 
-  if (state.atRisk) {
+  if (next.atRisk) {
     next.atRisk = false;
     if (clean) {
       next.streak = state.streak + 1;
@@ -46,7 +47,9 @@ export function applyStreak(
     next.streak = state.streak + 1;
     outcome = 'grew';
   } else if (d.net < 0) {
-    if (state.freezes > 0) {
+    if (state.streak <= 0) {
+      outcome = 'none';
+    } else if (state.freezes > 0) {
       next.freezes = state.freezes - 1;
       outcome = 'freeze_used';
     } else {

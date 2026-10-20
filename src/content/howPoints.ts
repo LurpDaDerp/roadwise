@@ -127,7 +127,7 @@ export const RULES: RuleSection[] = [
     icon: 'flame-outline',
     points: [
       'Streaks count drives, not days. Every scored drive with positive points adds 1.',
-      'A negative drive uses a freeze if you have one, so your streak holds but doesn’t grow.',
+      'A negative drive uses a freeze if you have one, so your streak holds but doesn’t grow. A streak of 0 never uses one.',
       'With no freeze, your streak is at risk: make your next drive clean (zero events) to save it, or it resets to 0.',
       `You start with 2 freezes and get 2 more every 30 days, holding up to ${MAX_FREEZES}.`,
       'Earn one for 5 clean drives in a row, and one for every 3 weekly challenges you finish.',
