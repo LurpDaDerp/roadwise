@@ -5,16 +5,21 @@ import {
   MAX_EDGE_BYTES,
   MAX_ELEMENT_BYTES,
   MAX_REPLY_BYTES,
+  OVERPASS_DE,
   OVERPASS_ENDPOINTS,
   OVERPASS_USER_AGENT,
+  OverpassBudgetSpent,
+  OverpassHeldBack,
   OverpassRefused,
   OverpassRemark,
   OverpassTooLarge,
   overpassQuery,
   parseMaxspeed,
   parseOneway,
+  PRIVATE_COFFEE,
   streamElements,
   toWayRow,
+  userAgent,
   type WayRow,
 } from './overpass.ts';
 
@@ -58,7 +63,9 @@ Deno.test('the query names the twelve classes anchored, the cell bbox south,west
     '[out:json][timeout:90];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](47.6,-122.4,47.7,-122.3);out geom;'
   );
   assertEquals(HIGHWAY_CLASSES.length, 12);
-  assertEquals(OVERPASS_ENDPOINTS, ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter']);
+  // private.coffee first (no rate limit), the main instance as the fallback (fill.ts holds it to its policy)
+  assertEquals(OVERPASS_ENDPOINTS, ['https://overpass.private.coffee/api/interpreter', 'https://overpass-api.de/api/interpreter']);
+  assertEquals([PRIVATE_COFFEE, OVERPASS_DE], OVERPASS_ENDPOINTS);
 });
 
 // --- maxspeed ---
@@ -344,4 +351,56 @@ Deno.test('fetchWays never retries an oversized reply on another mirror', async 
   ]);
   await assertRejects(() => collect(fetchWays(CELL, { fetch })), OverpassTooLarge);
   assertEquals(calls.length, 1);
+});
+
+// --- the usage policies' hooks ---
+
+Deno.test('the User-Agent names the app, and the operator contact when one is configured', () => {
+  assertEquals(OVERPASS_USER_AGENT, 'RoadWise/1.0 (speed-limit road layer; Supabase edge function; OSM data under ODbL)');
+  assertEquals(userAgent(null), OVERPASS_USER_AGENT);
+  assertEquals(userAgent('ops@example.org'), 'RoadWise/1.0 (speed-limit road layer; Supabase edge function; OSM data under ODbL; contact: ops@example.org)');
+});
+
+Deno.test('a gate that holds a mirror back skips it unasked; holding all back throws OverpassHeldBack; a refusal is reported to it', async () => {
+  const seen: string[] = [];
+  const refusedLog: [string, number][] = [];
+  const gate = (allowed: (url: string) => boolean) => ({
+    allow: (url: string) => {
+      seen.push(url);
+      return Promise.resolve(allowed(url));
+    },
+    megabyte: () => Promise.resolve(true),
+    refused: (url: string, status: number) => void refusedLog.push([url, status]),
+  });
+  const good = () => ok(reply([way(1, { highway: 'primary' })]));
+  const skipFirst = fetcher([good]);
+  assertEquals((await collect(fetchWays(CELL, { fetch: skipFirst.fetch, gate: gate((u) => u !== PRIVATE_COFFEE) }))).length, 1);
+  assertEquals(skipFirst.calls.map((c) => c.url), [OVERPASS_DE]);
+
+  const none = fetcher([]);
+  await assertRejects(() => collect(fetchWays(CELL, { fetch: none.fetch, gate: gate(() => false) })), OverpassHeldBack);
+  assertEquals(none.calls.length, 0);
+
+  const busy = fetcher([() => new Response('busy', { status: 429 }), good]);
+  await collect(fetchWays(CELL, { fetch: busy.fetch, gate: gate(() => true) }));
+  assertEquals(refusedLog, [[PRIVATE_COFFEE, 429]]);
+});
+
+Deno.test('the byte hook is asked once per MiB; a no cancels the read with OverpassBudgetSpent, and no other mirror is tried', async () => {
+  // Five ways with a 300 KB name each: about 1.5 MiB, so exactly one MiB boundary is crossed.
+  const big = reply([1, 2, 3, 4, 5].map((id) => way(id, { highway: 'residential', name: 'x'.repeat(300_000) })));
+  let asked = 0;
+  const yes = fetcher([() => ok(big)]);
+  const rows = await collect(
+    fetchWays(CELL, { fetch: yes.fetch, gate: { allow: () => Promise.resolve(true), megabyte: () => Promise.resolve(++asked > 0), refused: () => undefined } })
+  );
+  assertEquals(rows.length, 5);
+  assertEquals(asked, 1);
+
+  const no = fetcher([() => ok(big), () => ok(big)]);
+  await assertRejects(
+    () => collect(fetchWays(CELL, { fetch: no.fetch, gate: { allow: () => Promise.resolve(true), megabyte: () => Promise.resolve(false), refused: () => undefined } })),
+    OverpassBudgetSpent
+  );
+  assertEquals(no.calls.length, 1);
 });

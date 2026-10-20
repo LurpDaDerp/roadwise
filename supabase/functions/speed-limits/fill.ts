@@ -32,7 +32,7 @@ import { asPgError } from '../_shared/pg.ts';
 import type { BBox } from '../_shared/speedLimits/geometry';
 import { FILL_CELL_DEG } from '../_shared/speedLimits/tiles';
 import type { SpeedLogger } from './handler.ts';
-import { fetchWays, type Fetch, type WayRow } from './overpass.ts';
+import { fetchWays, OVERPASS_DE, OverpassHeldBack, type Fetch, type MirrorGate, type WayRow } from './overpass.ts';
 
 export const CELL_DEG = FILL_CELL_DEG;
 /** A tile within this distance of its cell's edge also claims the cell(s) over that edge. */
@@ -58,6 +58,17 @@ export const OVERPASS_BUDGET = { key: 'overpass_fill', window: '1 minute', max: 
  * unloaded country and still leaves the shared budget to everyone else.
  */
 export const CLAIM_BUDGET = { key: 'overpass_claim', window: '1 hour', max: 40 } as const;
+/**
+ * overpass-api.de's usage policy (wiki.openstreetmap.org/wiki/Overpass_API) asks an app in regular
+ * use for about 1/100 of its 10,000 queries and 1 GB a day, and no two queries at once. As the
+ * fallback it gets at most 100 queries and 10 MiB a day app-wide, and one start per 2 minutes
+ * (longer than the 100 s abort, so never two at once).
+ */
+export const OVERPASS_DE_QUERIES = { key: 'overpass_de_queries', window: '1 day', max: 100 } as const;
+export const OVERPASS_DE_MIB = { key: 'overpass_de_mib', window: '1 day', max: 10 } as const;
+export const OVERPASS_DE_START = { key: 'overpass_de_start', window: '2 minutes', max: 1 } as const;
+/** A mirror that refused (429, 406, 504, …) is not asked again from this isolate for this long (policy: 30 s or more). */
+export const REFUSED_COOLDOWN_MS = 60_000;
 
 const M_PER_DEG = 111_320;
 const DEG = Math.PI / 180;
@@ -187,6 +198,8 @@ export interface OsmFillDeps {
   log?: SpeedLogger;
   fetch?: Fetch;
   now?: () => number;
+  /** The operator's contact for the User-Agent (`OVERPASS_CONTACT`), as private.coffee's terms ask. */
+  contact?: string | null;
 }
 
 export interface OsmFill {
@@ -214,6 +227,30 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
   const filling = new Map<string, number>();
   /** One fill at a time in this isolate. */
   let queue: Promise<void> = Promise.resolve();
+  /** Mirrors that refused, by when they may be asked again. */
+  const cooling = new Map<string, number>();
+
+  const take = (b: { key: string; window: string; max: number }): Promise<boolean> =>
+    db.takeGlobalRateLimit(b.key, b.window, b.max).catch((err: unknown) => {
+      log.error('speed-limits osm fill budget check failed', { error: errorText(err) });
+      return false;
+    });
+
+  /** The mirrors' usage policies (overpass.ts): the main instance's daily budgets, a cool-off after any refusal. */
+  const gate: MirrorGate = {
+    async allow(url) {
+      const until = cooling.get(url);
+      if (until !== undefined && until > now()) return false;
+      if (url !== OVERPASS_DE) return true;
+      return (await take(OVERPASS_DE_START)) && (await take(OVERPASS_DE_QUERIES));
+    },
+    megabyte(url) {
+      return url === OVERPASS_DE ? take(OVERPASS_DE_MIB) : Promise.resolve(true);
+    },
+    refused(url) {
+      cooling.set(url, now() + REFUSED_COOLDOWN_MS);
+    },
+  };
 
   async function finish(cell: Cell, outcome: FillOutcome, ways: number): Promise<void> {
     try {
@@ -244,7 +281,7 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
         let batch: WayRow[] = [];
         let streamError: unknown = null;
         try {
-          for await (const way of fetchWays(cellBounds(cell), { fetch: deps.fetch })) {
+          for await (const way of fetchWays(cellBounds(cell), { fetch: deps.fetch, gate, contact: deps.contact })) {
             batch.push(way);
             if (batch.length >= UPSERT_BATCH) {
               ways += await db.upsertWays(batch);
@@ -260,7 +297,10 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
         outcome = 'done';
       }
     } catch (err) {
-      log.error('speed-limits osm fill failed', { error: errorText(err), ways });
+      // Every mirror held back by its policy before anything arrived: nothing went wrong with the
+      // cell, so it is released (claimable again) rather than failed.
+      if (err instanceof OverpassHeldBack && ways === 0) outcome = 'released';
+      else log.error('speed-limits osm fill failed', { error: errorText(err), ways });
     }
     await finish(cell, outcome, ways);
     log.info('speed-limits osm fill', { outcome: outcome === 'done' ? 'filled' : outcome === 'released' ? 'budget_spent' : 'failed', ways, ms: now() - started });

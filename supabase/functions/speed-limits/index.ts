@@ -27,6 +27,8 @@ const background = (work: Promise<void>): void => {
   if (runtime?.waitUntil) runtime.waitUntil(work);
   else void work;
 };
-const fill = createOsmFill({ db: createOsmFillDb(client), background, log: console });
+// Optional: who to contact about this app's Overpass use, sent in the User-Agent (private.coffee's terms).
+const contact = Deno.env.get('OVERPASS_CONTACT')?.trim() || null;
+const fill = createOsmFill({ db: createOsmFillDb(client), background, log: console, contact });
 
 Deno.serve((req) => handleSpeedLimits(req, { verifyJwt, db, routes, fill }));

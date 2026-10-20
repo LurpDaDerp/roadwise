@@ -18,13 +18,17 @@ import {
   MAX_LAT,
   MAX_LOOKAHEAD_CELLS,
   OVERPASS_BUDGET,
+  OVERPASS_DE_MIB,
+  OVERPASS_DE_QUERIES,
+  OVERPASS_DE_START,
+  REFUSED_COOLDOWN_MS,
   type Cell,
   type ClaimStatus,
   type FillOutcome,
   type OsmFillDb,
   UPSERT_BATCH,
 } from './fill.ts';
-import { OVERPASS_ENDPOINTS, overpassQuery, type WayRow } from './overpass.ts';
+import { OVERPASS_DE, OVERPASS_ENDPOINTS, overpassQuery, PRIVATE_COFFEE, type WayRow } from './overpass.ts';
 
 const T0 = 1_760_000_000_000;
 const UID = '00000000-0000-4000-8000-000000000001';
@@ -105,6 +109,8 @@ interface Harness {
   finishes: { cell: Cell; outcome: FillOutcome; ways: number }[];
   batches: WayRow[][];
   budgets: number;
+  /** The app-wide budget keys taken, in order. */
+  globalKeys: string[];
   userBudgets: { userId: string; key: string; window: string; max: number }[];
   background: Promise<void>[];
   fetches: { url: string; body: string }[];
@@ -126,6 +132,8 @@ const body = (text: string) =>
 function harness(opts: {
   claim?: (cell: Cell) => ClaimStatus;
   budget?: boolean;
+  /** Per key, overriding `budget`. */
+  global?: (key: string) => boolean;
   userBudget?: boolean;
   answers?: ((url: string) => Response | Promise<Response>)[];
 } = {}) {
@@ -134,6 +142,7 @@ function harness(opts: {
     finishes: [],
     batches: [],
     budgets: 0,
+    globalKeys: [],
     userBudgets: [],
     background: [],
     fetches: [],
@@ -156,9 +165,10 @@ function harness(opts: {
         h.batches.push([...ways]);
         return Promise.resolve(ways.length);
       },
-      takeGlobalRateLimit: () => {
+      takeGlobalRateLimit: (key) => {
         h.budgets += 1;
-        return Promise.resolve(opts.budget ?? true);
+        h.globalKeys.push(key);
+        return Promise.resolve(opts.global ? opts.global(key) : (opts.budget ?? true));
       },
     },
   };
@@ -406,4 +416,55 @@ Deno.test("the device's fill cell (the warm-up's) is the server's cell, edges in
   for (const [lat, lng] of [[47.6062, -122.3321], [47.7, -122.3], [-33.8688, 151.2093], [0, 0], [0.1, -0.1], [64.99999, -147.7]]) {
     assertEquals(fillCellKey(lat, lng), cellKey(cellOf(lat, lng)));
   }
+});
+
+// --- the Overpass instances' usage policies ---
+
+Deno.test("overpass-api.de's regular-use policy as budgets: 100 queries and 10 MiB a day, one start per 2 minutes; 60 s off after a refusal", () => {
+  assertEquals(OVERPASS_DE_QUERIES, { key: 'overpass_de_queries', window: '1 day', max: 100 });
+  assertEquals(OVERPASS_DE_MIB, { key: 'overpass_de_mib', window: '1 day', max: 10 });
+  assertEquals(OVERPASS_DE_START, { key: 'overpass_de_start', window: '2 minutes', max: 1 });
+  assertEquals(REFUSED_COOLDOWN_MS, 60_000);
+});
+
+Deno.test('private.coffee answering costs only the app-wide fill budget; the main instance is never asked', async () => {
+  const h = harness({ claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done') });
+  await h.fill.ensure([TILE], UID);
+  await h.fill.settled();
+  assertEquals(h.fetches.map((f) => f.url), [PRIVATE_COFFEE]);
+  assertEquals(h.globalKeys, [OVERPASS_BUDGET.key]);
+});
+
+Deno.test('a 429 from private.coffee falls back to the main instance under its budgets, and private.coffee rests 60 s', async () => {
+  const h = harness({
+    claim: () => 'claimed',
+    answers: [
+      () => new Response('busy', { status: 429 }),
+      () => new Response(body(replyOf([1])), { status: 200 }),
+      () => new Response(body(replyOf([2])), { status: 200 }),
+      () => new Response(body(replyOf([3])), { status: 200 }),
+    ],
+  });
+  await h.fill.ensure([TILE], UID); // SEATTLE, then its look-ahead SOUTH
+  await h.fill.settled();
+  // SEATTLE: private.coffee refuses, the main instance answers; SOUTH: private.coffee is resting, so the main instance alone
+  assertEquals(h.fetches.map((f) => f.url), [PRIVATE_COFFEE, OVERPASS_DE, OVERPASS_DE]);
+  assertEquals(h.globalKeys, [
+    OVERPASS_BUDGET.key, OVERPASS_DE_START.key, OVERPASS_DE_QUERIES.key,
+    OVERPASS_BUDGET.key, OVERPASS_DE_START.key, OVERPASS_DE_QUERIES.key,
+  ]);
+  assertEquals(h.finishes.map((f) => f.outcome), ['done', 'done']);
+});
+
+Deno.test('with private.coffee refusing and the main instance over its daily budget, the cell is released (claimable again), not failed', async () => {
+  const h = harness({
+    claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done'),
+    global: (key) => key !== OVERPASS_DE_QUERIES.key,
+    answers: [() => new Response('busy', { status: 429 })],
+  });
+  await h.fill.ensure([TILE], UID);
+  await h.fill.settled();
+  assertEquals(h.fetches.map((f) => f.url), [PRIVATE_COFFEE]);
+  assertEquals(h.finishes, [{ cell: SEATTLE, outcome: 'released', ways: 0 }]);
+  assertEquals(h.logs.filter((l) => l.level === 'error').length, 0);
 });

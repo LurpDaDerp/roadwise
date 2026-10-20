@@ -10,16 +10,25 @@
 //     `remark` after a partial `elements` array. The stream throws `OverpassRemark` at the end of
 //     such a body, so a caller that already stored the partial batches still marks the cell failed
 //     and it is fetched again later.
-//   * The public mirrors are shared by everyone: a descriptive User-Agent, a hard abort, and the
-//     caller's app-wide budget (`take_global_rate_limit`) keep this a polite client. The second
-//     mirror is tried only when the first refused or failed before sending any element.
+//   * The public instances are shared by everyone, and each has a usage policy (fill.ts keeps to
+//     them through a `MirrorGate`): private.coffee's (free, no rate limit, a User-Agent naming the
+//     project and a contact, notice before more than 10 requests a second or 10 at once) makes it
+//     the first choice; overpass-api.de's (for an app's regular use, about 1/100 of 10,000 queries
+//     and 1 GB a day, no two queries at once, 30 s off after a 429) makes it the fallback, held to
+//     that. The second is tried only when the first refused, was held back, or failed before
+//     sending any element.
 import type { BBox } from '../_shared/speedLimits/geometry';
 
-export const OVERPASS_ENDPOINTS: readonly string[] = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-];
-export const OVERPASS_USER_AGENT = 'RoadWise speed-limits fill (Supabase edge function; OSM data under ODbL)';
+/** https://overpass.private.coffee — free, no rate limit. */
+export const PRIVATE_COFFEE = 'https://overpass.private.coffee/api/interpreter';
+/** https://overpass-api.de — the main instance, a fallback held to its regular-use policy. */
+export const OVERPASS_DE = 'https://overpass-api.de/api/interpreter';
+export const OVERPASS_ENDPOINTS: readonly string[] = [PRIVATE_COFFEE, OVERPASS_DE];
+export const OVERPASS_USER_AGENT = 'RoadWise/1.0 (speed-limit road layer; Supabase edge function; OSM data under ODbL)';
+
+/** The User-Agent, with the operator's contact when one is configured (`OVERPASS_CONTACT`). */
+export const userAgent = (contact?: string | null): string =>
+  contact ? `${OVERPASS_USER_AGENT.slice(0, -1)}; contact: ${contact})` : OVERPASS_USER_AGENT;
 /** The query's own server-side limit, and the client's abort a little past it. */
 export const OVERPASS_TIMEOUT_S = 90;
 export const OVERPASS_ABORT_MS = 100_000;
@@ -132,6 +141,22 @@ export class OverpassRemark extends Error {
   }
 }
 
+/** The gate held every remaining mirror back (a policy budget spent, or a mirror cooling off). */
+export class OverpassHeldBack extends Error {
+  constructor() {
+    super('overpass mirrors held back by their usage policy');
+    this.name = 'OverpassHeldBack';
+  }
+}
+
+/** A mirror's byte budget ran out mid-reply: the reader is cancelled. */
+export class OverpassBudgetSpent extends Error {
+  constructor() {
+    super('overpass byte budget spent');
+    this.name = 'OverpassBudgetSpent';
+  }
+}
+
 /** The mirror answered with a status that is not a reply (429, 504, …), before any element. */
 export class OverpassRefused extends Error {
   constructor(readonly status: number) {
@@ -158,6 +183,7 @@ export const MAX_REPLY_BYTES = 64 * 1024 * 1024;
 export const MAX_ELEMENT_BYTES = 512 * 1024;
 /** The text before the `elements` array and after it (the remark): both are a few hundred bytes. */
 export const MAX_EDGE_BYTES = 64 * 1024;
+const MIB = 1024 * 1024;
 
 /**
  * The objects of the reply's top-level `elements` array, one at a time, from a body of any chunking.
@@ -166,7 +192,11 @@ export const MAX_EDGE_BYTES = 64 * 1024;
  * one chunk. After the array, the rest of the body is read for a `remark`. Every buffer and the
  * whole body are capped (`OverpassTooLarge`).
  */
-export async function* streamElements(body: ReadableStream<Uint8Array>): AsyncGenerator<unknown, void, undefined> {
+export async function* streamElements(
+  body: ReadableStream<Uint8Array>,
+  /** Called each time another MiB has arrived; false cancels the read (`OverpassBudgetSpent`). */
+  onMegabyte?: () => Promise<boolean>
+): AsyncGenerator<unknown, void, undefined> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
@@ -179,6 +209,7 @@ export async function* streamElements(body: ReadableStream<Uint8Array>): AsyncGe
   let pos = 0;
   let closed = false;
   let bytes = 0;
+  let mib = 0;
   const tooLarge = async (what: OverpassTooLarge['what']): Promise<never> => {
     await reader.cancel().catch(() => undefined);
     throw new OverpassTooLarge(what);
@@ -188,6 +219,13 @@ export async function* streamElements(body: ReadableStream<Uint8Array>): AsyncGe
     if (chunk.value) {
       bytes += chunk.value.byteLength;
       if (bytes > MAX_REPLY_BYTES) await tooLarge('reply');
+      while (onMegabyte && bytes > (mib + 1) * MIB) {
+        mib += 1;
+        if (!(await onMegabyte())) {
+          await reader.cancel().catch(() => undefined);
+          throw new OverpassBudgetSpent();
+        }
+      }
     }
     return chunk;
   };
@@ -269,6 +307,16 @@ export async function* streamElements(body: ReadableStream<Uint8Array>): AsyncGe
 
 export type Fetch = (input: string, init: RequestInit) => Promise<Response>;
 
+/** A caller's say over which mirror may be used, and how much (fill.ts holds the usage policies). */
+export interface MirrorGate {
+  /** May this mirror be asked now? A yes may spend a budget. */
+  allow(url: string): Promise<boolean>;
+  /** Another MiB arrived from this mirror; false stops the read. */
+  megabyte(url: string): Promise<boolean>;
+  /** The mirror refused (429, 406, 504, …). */
+  refused(url: string, status: number): void;
+}
+
 /**
  * Every drivable way of the box, as upsert rows, from the first mirror that answers. A mirror that
  * refuses (any non-2xx) or fails before its first element is skipped for the next; a failure after
@@ -276,26 +324,32 @@ export type Fetch = (input: string, init: RequestInit) => Promise<Response>;
  */
 export async function* fetchWays(
   box: BBox,
-  opts: { fetch?: Fetch; endpoints?: readonly string[]; abortMs?: number } = {}
+  opts: { fetch?: Fetch; endpoints?: readonly string[]; abortMs?: number; gate?: MirrorGate; contact?: string | null } = {}
 ): AsyncGenerator<WayRow, void, undefined> {
   const doFetch = opts.fetch ?? fetch;
   const endpoints = opts.endpoints ?? OVERPASS_ENDPOINTS;
+  const gate = opts.gate;
   const query = overpassQuery(box);
   let lastError: unknown = new Error('no overpass endpoint configured');
   for (const url of endpoints) {
     let yielded = false;
+    if (gate && !(await gate.allow(url))) {
+      lastError = new OverpassHeldBack();
+      continue;
+    }
     try {
       const res = await doFetch(url, {
         method: 'POST',
-        headers: { 'user-agent': OVERPASS_USER_AGENT, accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+        headers: { 'user-agent': userAgent(opts.contact), accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ data: query }).toString(),
         signal: AbortSignal.timeout(opts.abortMs ?? OVERPASS_ABORT_MS),
       });
       if (!res.ok || !res.body) {
         await res.body?.cancel();
+        gate?.refused(url, res.status);
         throw new OverpassRefused(res.status);
       }
-      for await (const el of streamElements(res.body)) {
+      for await (const el of streamElements(res.body, gate ? () => gate.megabyte(url) : undefined)) {
         const row = toWayRow(el);
         if (row) {
           yielded = true;
@@ -306,7 +360,7 @@ export async function* fetchWays(
     } catch (err) {
       // Partial data in hand, or a reply past its size cap (another mirror would send the same):
       // the caller marks the cell failed. Only a refusal or a failure before any element moves on.
-      if (yielded || err instanceof OverpassTooLarge) throw err;
+      if (yielded || err instanceof OverpassTooLarge || err instanceof OverpassBudgetSpent) throw err;
       lastError = err;
     }
   }
