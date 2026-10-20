@@ -6,8 +6,9 @@
 //   on the screen (as near as the shortest top row and End allow) and the End swipe across the
 //   bottom. The top row takes the height above the band (up to 144 pt: a bigger sign); a points line
 //   sits under the halo when it fits above End (so the halo never moves when the car stops).
-// - Landscape: the halo on the left; the top row, the band, the points line and End on the right
-//   (a top row too short for the 80 pt navigation circle takes the 64 pt one).
+// - Landscape: three columns over the End swipe across the bottom: the sign on the left (the band
+//   above it), the halo in the middle, the navigation button on the right (the points line above
+//   it), the sign and the button level with the halo's centre.
 // - Compact (a window too small for a 220 pt halo: split screen, a small freeform window): an 88 pt
 //   top row (the navigation circle back at 64 pt) with the band between the sign and the navigation button, bare numerals in the middle,
 //   the unit label under them inside the same space (never over End); End stays pinned to the
@@ -58,6 +59,8 @@ export interface HudLayout {
   nav: Rect;
   /** the End swipe across the bottom */
   end: Rect;
+  /** the navigation button's list of apps: never over the button or End */
+  panel: Rect;
   /** the speed numerals for one or two digits, and for three */
   numeralPt2: number;
   numeralPt3: number;
@@ -137,6 +140,12 @@ function bandParts(band: Rect, chip: boolean): { line: Rect; chip: Rect | null }
   };
 }
 
+/** The navigation list's panel between the top row and End, across the frame. */
+function panelUnder(row: Rect, end: Rect): Rect {
+  const y = row.y + row.h + 8;
+  return { x: row.x, y, w: row.w, h: Math.max(0, end.y - 8 - y) };
+}
+
 const num = (v: number, d = 0): number => (Number.isFinite(v) ? v : d);
 
 export function hudLayout(i: HudLayoutInput): HudLayout {
@@ -179,37 +188,46 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
         row,
         ...rowItems(row, i.units),
         end,
+        panel: panelUnder(row, end),
         numeralPt2: haloNumeralPt(g.rc, 2, unitPt),
         numeralPt3: haloNumeralPt(g.rc, 3, unitPt),
         unitPt,
       };
     }
   } else {
-    const colW = (frameW - 16) / 2;
-    const B = Math.floor(Math.min(HALO_MAX_BOX_PT, colW, frameH));
-    // The right column: the top row, the band, the points line when there is room, End at the foot.
-    const avail = frameH - GAP - HUD_BAND_PT - GAP - GAP - END_SWIPE_H_PT;
-    const pointsLine = avail - HUD_POINTS_LINE_PT - GAP >= HUD_ROW_MIN_PT;
-    const rowSpace = pointsLine ? avail - HUD_POINTS_LINE_PT - GAP : avail;
-    // A row too short for the 80 pt navigation circle takes the 64 pt one.
-    const navH = rowSpace >= HUD_ROW_MIN_PT ? HUD_NAV_H_PT : HUD_COMPACT_NAV_H_PT;
-    // It holds the top row when its side slots take the 64 pt navigation circle.
-    if (B >= HALO_MIN_RING_BOX_PT && rowSpace >= navH + 8 && colW / 3 >= HUD_MIN_TARGET_PT) {
-      const rx = left + colW + 16;
-      const rowH = Math.min(HUD_ROW_MAX_PT, rowSpace);
-      const row: Rect = { x: rx, y: top, w: colW, h: rowH };
-      const band: Rect = { x: rx, y: top + rowH + GAP, w: colW, h: HUD_BAND_PT };
+    // End across the foot; above it the halo in the middle, each side column at least the 96 pt
+    // navigation slot wide.
+    const end = endAt(left, frameW, bottom);
+    const above = end.y - GAP - top;
+    const B = Math.floor(Math.min(HALO_MAX_BOX_PT, above, frameW - 2 * (HUD_NAV_W_PT + 16)));
+    const side = (frameW - B - 32) / 2;
+    if (B >= HALO_MIN_RING_BOX_PT) {
       const g = haloGeometry(B);
+      const haloY = top + (above - B) / 2;
+      const mid = haloY + B / 2;
+      const rx = left + frameW - side;
+      // Left: the band at the top, the sign under it, level with the halo's centre (as tall as
+      // that allows, at most 144 pt).
+      const band: Rect = { x: left, y: top, w: side, h: HUD_BAND_PT };
+      const s = signFor(i.units, Math.min(HUD_ROW_MAX_PT, 2 * (mid - (top + HUD_BAND_PT + GAP))), side);
+      const sign: Rect = { x: left + (side - s.w) / 2, y: mid - s.h / 2, w: s.w, h: s.h };
+      // Right: the navigation button level with the halo's centre, the points line above it when it fits.
+      const navW = Math.min(HUD_NAV_W_PT, side);
+      const nav: Rect = { x: rx + (side - navW) / 2, y: mid - HUD_NAV_H_PT / 2, w: navW, h: HUD_NAV_H_PT };
+      const pointsLine = top + HUD_POINTS_LINE_PT + GAP <= nav.y;
       return {
         orientation,
         compact: false,
         band,
         ...bandParts(band, i.chip),
-        halo: { x: left + (colW - B) / 2, y: top + (frameH - B) / 2, w: B, h: B, ring: true },
-        points: pointsLine ? { x: rx, y: band.y + HUD_BAND_PT + GAP, w: colW, h: HUD_POINTS_LINE_PT } : 'line',
-        row,
-        ...rowItems(row, i.units, Infinity, navH),
-        end: endAt(rx, colW, bottom),
+        halo: { x: left + side + 16, y: haloY, w: B, h: B, ring: true },
+        points: pointsLine ? { x: rx, y: top, w: side, h: HUD_POINTS_LINE_PT } : 'line',
+        row: { x: left, y: top, w: frameW, h: above },
+        sign,
+        nav,
+        end,
+        // Over the sign and the halo: the navigation button and End stay reachable beside and under it.
+        panel: { x: left, y: top, w: rx - 16 - left, h: end.y - 8 - top },
         numeralPt2: haloNumeralPt(g.rc, 2, unitPt),
         numeralPt3: haloNumeralPt(g.rc, 3, unitPt),
         unitPt,
@@ -243,6 +261,7 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
     row,
     ...rowItems(row, i.units, HUD_NAV_W_PT, HUD_COMPACT_NAV_H_PT),
     end,
+    panel: panelUnder(row, end),
     numeralPt2: pt2,
     numeralPt3: pt3,
     unitPt,

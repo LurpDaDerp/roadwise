@@ -124,8 +124,10 @@ export type HudScreenProps = {
  *   dangerous-weather banner (its ✕ live at any speed; hidden for the rest of the drive once
  *   dismissed), or the points when they have no line of their own. Precedence: DashPal banner, the
  *   phone's event, a failed end, weather, the points. With a DashPal paired, a small static chip top right.
- * - Stopped only: the points total ("pts"), under the halo when there is
- *   room (so the halo never moves), else in the band.
+ * - Stopped only: the points total ("pts"), fading in and out, under the halo when there is
+ *   room (so the halo never moves; in landscape above the navigation button), else in the band.
+ * - Landscape: the sign left of the halo (the band above it), the navigation button right of it,
+ *   End across the bottom.
  * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive.
  *   End and the navigation button wear the app's paper, ink and sky accent (`hudButtonColors`).
  *   End, the navigation button and the weather banner's ✕ are the only touch targets while moving.
@@ -311,7 +313,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
               alert={weatherShown}
               units={units}
               palette={p}
-              compact={layout.compact}
+              compact={layout.compact || layout.orientation === 'landscape'}
               onDismiss={hideWeather}
             />
           ) : layout.points === 'line' && pointsView !== null ? (
@@ -327,7 +329,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
       {/* Twice guarded: the pipeline publishes points only while stopped, and the screen shows
           them only while the car is known to be stopped (a lost fix is not "stopped"). */}
-      {layout.points !== 'line' && pointsView !== null ? <View style={[styles.abs, styles.centred, at(layout.points)]}>{pointsView}</View> : null}
+      {layout.points !== 'line' ? <View style={[styles.abs, styles.centred, at(layout.points)]}>{pointsView}</View> : null}
 
       <View style={[styles.abs, styles.centred, at(layout.sign)]}>
         <SpeedSign limit={inUnits(live.limitMph, units)} palette={p} units={units} height={layout.sign.h} />
@@ -404,11 +406,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           style={[
             styles.panel,
             {
-              // Under the top row and above End: both stay reachable while the list is open.
-              top: layout.row.y + layout.row.h + 8,
-              left: insets.left + 16,
-              right: insets.right + 16,
-              bottom: Math.max(0, height - layout.end.y + 8),
+              // Never over the navigation button or End: both stay reachable while the list is open.
+              ...at(layout.panel),
               backgroundColor: sheet.surface,
               borderColor: sheet.edge,
             },
