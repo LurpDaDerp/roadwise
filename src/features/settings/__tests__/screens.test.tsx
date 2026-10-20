@@ -345,6 +345,16 @@ describe('Delete account', () => {
     expect(wipe).not.toHaveBeenCalled();
   });
 
+  it('the keyboard never hides the field or the button: the page lifts above it and keeps taps', async () => {
+    const w = await appWorld();
+    await w.render(<DeleteAccountScreen deps={{ remove: async () => ({ ok: true as const }), wipe: async () => {} }} />);
+    const avoider = await screen.findByTestId('delete-keyboard-avoider');
+    expect(within(avoider).getByTestId('delete-confirm')).toBeOnTheScreen();
+    const scroll = screen.getByTestId('delete-scroll');
+    expect(scroll.props.keyboardShouldPersistTaps).toBe('handled');
+    expect(scroll.props.automaticallyAdjustKeyboardInsets).toBe(true);
+  });
+
   it('never during a drive', async () => {
     mockDrive.status = 'recording';
     const remove = jest.fn(async () => ({ ok: true as const }));
