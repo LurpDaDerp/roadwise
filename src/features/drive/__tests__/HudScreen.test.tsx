@@ -88,7 +88,6 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
     status: 'recording',
     clientTripId: 't1',
     speedMph: 34,
-    speedAccelMph: 0,
     limitMph: 35,
     speedingTier: null,
     stopped: false,
@@ -156,24 +155,13 @@ describe('speed and limit', () => {
     expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('—');
   });
 
-  test('between rows the speed moves on along its acceleration four times a second, for at most a second', async () => {
-    const h = await renderHud({ speedMph: 40, speedAccelMph: -8, rowTs: T });
+  test('the speed moves on once a row and holds still between rows', async () => {
+    const h = await renderHud({ speedMph: 40, rowTs: T });
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('40');
-    await act(() => jest.advanceTimersByTime(500));
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('36');
-    await act(() => jest.advanceTimersByTime(2000));
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('32');
-    // The next row starts from its own speed.
-    await h.update({ speedMph: 33, speedAccelMph: 0, rowTs: T + 1000 });
+    await act(() => jest.advanceTimersByTime(900));
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('40');
+    await h.update({ speedMph: 33, rowTs: T + 1000 });
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('33');
-    await act(() => jest.advanceTimersByTime(1000));
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('33');
-  });
-
-  test('a car slowing to a stop between rows lands on 0, never below', async () => {
-    await renderHud({ speedMph: 3, speedAccelMph: -6, rowTs: T });
-    await act(() => jest.advanceTimersByTime(1000));
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('0');
   });
 
   test('an unknown speed or limit is "—"', async () => {

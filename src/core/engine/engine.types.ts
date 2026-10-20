@@ -172,8 +172,6 @@ export interface EngineSnapshot {
    * `stopped` and `lockedOut` read the raw speed.
    */
   speedMps: number;
-  /** The acceleration (m/s²) the screen carries `speedMps` on with until the next row; 0 when cruising, held or 0. */
-  speedAccelMps2: number;
   /** There is a speed to show: the current row's, or one held from up to 3 s before. False before the first row and once the fix has been gone longer. */
   speedKnown: boolean;
   limit: LimitSample;

@@ -50,8 +50,6 @@ export interface DriveLive {
   clientTripId: string | null;
   /** The speed to show as of the newest row; null → show "—". */
   speedMph: number | null;
-  /** The acceleration (mph/s) the screen carries `speedMph` on with until the next row; 0 when cruising. */
-  speedAccelMph: number;
   limitMph: number | null;
   speedingTier: Tier | null;
   stopped: boolean;
@@ -72,7 +70,6 @@ const selectLive = (s: DriveState) => ({
   clientTripId: s.clientTripId,
   // Tenths, not whole mph: the HUD rounds once in the driver's unit (km/h would round twice).
   speedMph: s.speedKnown ? Math.round(mpsToMph(s.speedMps) * 10) / 10 : null,
-  speedAccelMph: s.speedKnown ? Math.round(mpsToMph(s.speedAccelMps2) * 10) / 10 : 0,
   limitMph: s.limitMph,
   speedingTier: s.speedingTier,
   stopped: s.stopped,

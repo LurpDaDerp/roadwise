@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -39,8 +39,7 @@ import { hudLayout, type Rect } from './hudLayout';
 import { navHighlight, NavigationButton } from './NavigationButton';
 import { StoppedPoints } from './StoppedPoints';
 import { useHaloBurst } from './useHaloBurst';
-import { useCarriedSpeed } from './useCarriedSpeed';
-import { inUnits, unitLabel, useHudUnits, type HudUnits } from './useHudUnits';
+import { inUnits, unitLabel, useHudUnits } from './useHudUnits';
 import { WeatherBanner } from './WeatherBanner';
 
 /** How often the HUD re-reads the sun (the night palette follows sunset within a few minutes). */
@@ -262,6 +261,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   });
 
   const layout = hudLayout({ width, height, insets, fontScale, chip: dashpalChip !== null, units });
+  const speed = inUnits(live.speedMph, units);
   const bannerUp = dashpal !== null || alert !== null;
   const showPoints = live.stopped && live.points !== null;
   const pointsView = showPoints ? <StoppedPoints total={live.points!.total} palette={p} /> : null;
@@ -379,13 +379,10 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           dimmed={dimmed}
           reduceMotion={reduceMotion}
           numerals={(numeralStyle) => (
-            <CarriedReadout
-              speedMph={live.speedMph}
-              accelMph={live.speedAccelMph}
-              rowTs={live.rowTs}
-              units={units}
-              pt2={layout.numeralPt2}
-              pt3={layout.numeralPt3}
+            <SpeedReadout
+              speed={speed}
+              unit={unitLabel(units)}
+              size={speedDigits(speed) >= 3 ? layout.numeralPt3 : layout.numeralPt2}
               color={p.haloInk}
               unitColor={p.haloInkMuted}
               numeralStyle={numeralStyle}
@@ -425,30 +422,6 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
       ) : null}
     </View>
   );
-}
-
-/**
- * The speed inside the halo, carried on between rows (`useCarriedSpeed`): its own component, so the
- * 4 Hz ticks re-render the numerals and nothing else.
- */
-function CarriedReadout({
-  speedMph,
-  accelMph,
-  rowTs,
-  units,
-  pt2,
-  pt3,
-  ...rest
-}: {
-  speedMph: number | null;
-  accelMph: number;
-  rowTs: number | null;
-  units: HudUnits;
-  pt2: number;
-  pt3: number;
-} & Omit<ComponentProps<typeof SpeedReadout>, 'speed' | 'unit' | 'size'>) {
-  const speed = inUnits(useCarriedSpeed(speedMph, accelMph, rowTs), units);
-  return <SpeedReadout speed={speed} unit={unitLabel(units)} size={speedDigits(speed) >= 3 ? pt3 : pt2} {...rest} />;
 }
 
 /**

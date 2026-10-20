@@ -122,7 +122,6 @@ export function createEngine(deps: EngineDeps): Engine {
       startedAt: session?.startedAt ?? null,
       lastRowTs: row?.ts ?? null,
       speedMps: shown?.mps ?? 0,
-      speedAccelMps2: shown?.accel ?? 0,
       speedKnown: shown !== null,
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
       limitMph: seen?.limitMph ?? null,
