@@ -46,17 +46,30 @@ describe('the full Home', () => {
     expect(within(card).getByTestId('level-value')).toHaveTextContent('4');
     expect(within(card).getByText('1,000 pts to level 5')).toBeOnTheScreen();
     expect(within(card).getByLabelText('Level 4 progress')).toBeOnTheScreen();
-    // No league and no Safety Rating on the card: the rating lives in Analytics.
+    // The badge where the league was: the whole rating, and it opens Analytics.
+    const badge = within(card).getByLabelText('Safety Rating 92 out of 100');
+    expect(within(card).getByTestId('rating-value')).toHaveTextContent('92');
     expect(screen.queryByTestId('league-badge')).toBeNull();
     expect(screen.queryByText(/league/i)).toBeNull();
-    expect(within(card).queryByTestId('rating-badge')).toBeNull();
-    expect(within(card).queryByText(/Safety Rating|Unranked/)).toBeNull();
+    await press(badge);
+    expect(p.onAnalytics).toHaveBeenCalledTimes(1);
   });
 
   test('at the top level the card says so', async () => {
     await draw(<HomeView {...props({ summary: summary({ progress: { level: 50, level_floor: 306_250, level_next: null, lifetime: 310_000 } }) })} />);
     expect(screen.getByLabelText('Level 50, top level')).toBeOnTheScreen();
     expect(screen.getByText('Top level')).toBeOnTheScreen();
+  });
+
+  test('under 25 mi in 30 days the badge shows a dash and how far to go, never "Unranked"', async () => {
+    const p = props({ summary: summary({ progress: { ranked: false, safety_rating: null, miles_30d: 12.7 } }) });
+    await draw(<HomeView {...p} />);
+    expect(screen.getByTestId('rating-value')).toHaveTextContent('—');
+    expect(screen.getByTestId('rating')).toHaveTextContent('Safety Rating');
+    expect(screen.queryByText(/rank/i)).toBeNull();
+    expect(screen.getByText('12/25 mi')).toBeOnTheScreen();
+    await press(screen.getByLabelText('Safety Rating: none yet. 12 of 25 miles in the last 30 days to get one'));
+    expect(p.onAnalytics).toHaveBeenCalled();
   });
 
   test('stats card: 4 stats coloured by band, with arrows vs 30 days', async () => {
@@ -336,10 +349,18 @@ describe('final-review fixes', () => {
     expect(screen.getByTestId('challenges-freeze')).toHaveTextContent(/2\/3 toward a Freeze/);
   });
 
-  test('km: the stats card reads per 100 km', async () => {
+  test('km: the stats card reads per 100 km and the unranked line converts', async () => {
     publishUnits('km');
     const s = summary();
     await draw(<HomeView {...props({ summary: { ...s, progress: { ...s.progress, ranked: false, safety_rating: null, miles_30d: 12 } } })} />);
     expect(screen.getAllByText('per 100 km').length).toBeGreaterThan(0);
+    expect(screen.getByText('19/40 km')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Safety Rating: none yet. 19 of 40 kilometers in the last 30 days to get one')).toBeOnTheScreen();
+  });
+
+  test('the rating is a whole number', async () => {
+    const s = summary();
+    await draw(<HomeView {...props({ summary: { ...s, progress: { ...s.progress, safety_rating: 91.7, ranked: true } } })} />);
+    expect(screen.getByTestId('rating-value')).toHaveTextContent('92');
   });
 });

@@ -1,18 +1,24 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { ReactNode } from 'react';
-import { ScrollView, View } from 'react-native';
+import { Pressable, ScrollView, View } from 'react-native';
 
+import { useUnits } from '@/data/queries/units';
 import type { MySummary } from '@/data/server/summary';
+import { formatRating } from '@/lib/rating';
+import { distanceWord, formatDistanceProgress } from '@/lib/units';
 import {
   Button,
   Card,
   formatPointsValue,
   ProgressBar,
+  ProgressRing,
   Skeleton,
   StreakFlame,
   Text,
   useTheme,
 } from '@/ui';
+
+import { RANKED_MIN_MILES } from '@scoring';
 
 type Progress = MySummary['progress'];
 
@@ -56,20 +62,78 @@ function LevelBlock({ progress }: { progress: Progress }) {
 }
 
 /**
+ * The Safety Rating in the card's corner: a ring round the whole number (the rating out of 100),
+ * or "—" with the distance still to drive before there is one. One tap opens Analytics.
+ */
+function RatingBadge({ progress, onPress }: { progress: Progress; onPress: () => void }) {
+  const t = useTheme();
+  const units = useUnits();
+  const ranked = progress.ranked && progress.safety_rating !== null;
+  const toRank = formatDistanceProgress(progress.miles_30d, RANKED_MIN_MILES, units);
+  const value = ranked ? formatRating(progress.safety_rating, true) : '—';
+  const label = ranked
+    ? `Safety Rating ${value} out of 100`
+    : `Safety Rating: none yet. ${toRank.done} of ${toRank.target} ${distanceWord(units)} in the last 30 days to get one`;
+  return (
+    <Pressable
+      onPress={onPress}
+      testID="rating-badge"
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint="Opens Analytics"
+      hitSlop={t.space.sm}
+      style={({ pressed }) => ({ alignItems: 'center', gap: t.space.xs, opacity: pressed ? 0.8 : 1, minWidth: t.size.touch, maxWidth: 104 })}
+    >
+      <View style={{ borderRadius: 36, backgroundColor: t.colors.surfaceRaised }}>
+        <ProgressRing
+          value={ranked ? (progress.safety_rating ?? 0) / 100 : toRank.target > 0 ? toRank.done / toRank.target : 0}
+          size={72}
+          strokeWidth={5}
+          tone="accent"
+          accessibilityLabel={ranked ? 'Safety Rating' : 'Distance toward a Safety Rating'}
+        >
+          <Text
+            variant="stat"
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.6}
+            style={{ maxWidth: 72 - 2 * 5 - 4, textAlign: 'center' }}
+            testID="rating-value"
+          >
+            {value}
+          </Text>
+        </ProgressRing>
+      </View>
+      <Text variant="label" tone="muted" style={{ textAlign: 'center' }} testID="rating">
+        Safety Rating
+      </Text>
+      {ranked ? null : (
+        <Text variant="caption" tone="muted" style={{ textAlign: 'center' }} testID="rating-to-rank">
+          {toRank.text}
+        </Text>
+      )}
+    </Pressable>
+  );
+}
+
+/**
  * Home's drive card, the screen's hero: the hour's sky with your level big and the bar to the
- * next, and Start drive across its foot.
+ * next, the Safety Rating in the corner (it opens Analytics), and Start drive across its foot.
  * While progress loads or fails the card says so; Start stays in it either way.
  */
 export function HomeHeader({
   summary,
   loading,
   error,
+  onRating,
   onRetry,
   start,
 }: {
   summary: MySummary | undefined;
   loading: boolean;
   error: boolean;
+  /** The Safety Rating badge opens Analytics. */
+  onRating: () => void;
   onRetry: () => void;
   /** Start drive, at the foot of the card (absent while a drive records). */
   start?: ReactNode;
@@ -92,7 +156,12 @@ export function HomeHeader({
       </View>
     )
   ) : (
-    <LevelBlock progress={summary.progress} />
+    <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: t.space.md }}>
+      <View style={{ flex: 1 }}>
+        <LevelBlock progress={summary.progress} />
+      </View>
+      <RatingBadge progress={summary.progress} onPress={onRating} />
+    </View>
   );
 
   return (
