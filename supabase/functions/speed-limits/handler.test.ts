@@ -251,11 +251,11 @@ Deno.test('a matched posted road answers posted with the matcher confidence, and
   assertEquals(h.rpc[1].args, { p_lat: 47.6062, p_lng: -122.315, p_radius_m: 25 });
 });
 
-Deno.test('an untagged way with no AWS configured is unknown with confidence 0, and tiles say fallback null', async () => {
+Deno.test('an untagged way with no AWS configured answers its class default (statutory, residential 25) at the road match confidence, and tiles say fallback null', async () => {
   const h = harness({ candidates: [untaggedRow], routes: null });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
-  assertEquals(await res.json(), { source: 'unknown', limitMph: null, matchConfidence: 0, parallelRoads: false, provider: null });
+  assertEquals(await res.json(), { source: 'statutory', limitMph: 25, matchConfidence: 0.95, parallelRoads: false, provider: 'osm' });
   assertEquals(fns(h), ['take_rate_limit', 'speed_limit_candidates']);
 
   const tiles = await handleSpeedLimits(get(tilesQuery(TILE_KEYS)), h.deps);
@@ -350,10 +350,11 @@ Deno.test('a limit change just behind the car: the car span answers, not Spans[0
   assert(!h.rpc.some((c) => c.fn === 'put_limits_cache'));
   assertEquals(h.infos.at(-1)?.outcome, 'aws_parallel_uncached');
 
-  // With an untagged OSM way under the car, both spans join it and disagree: unknown, never 25.
+  // With an untagged OSM way under the car, both spans join it and disagree: no cached answer, only
+  // the way's own class default.
   const withRoad = harness({ candidates: [untaggedRow], routes });
   const r = await (await handleSpeedLimits(post(UNTAGGED_POINT), withRoad.deps)).json();
-  assertEquals(r.source, 'unknown');
+  assertEquals(r.source, 'statutory');
   assert(!withRoad.rpc.some((c) => c.fn === 'put_limits_cache'));
 });
 
@@ -439,7 +440,7 @@ Deno.test('the coverage list is pinned to Washington', () => {
   );
 });
 
-Deno.test('a spent global AWS budget is unknown without calling AWS', async () => {
+Deno.test('a spent global AWS budget answers the class default without calling AWS', async () => {
   const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
   const h = harness({
     candidates: [untaggedRow],
@@ -448,12 +449,12 @@ Deno.test('a spent global AWS budget is unknown without calling AWS', async () =
   });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
-  assertEquals((await res.json()).source, 'unknown');
+  assertEquals((await res.json()).source, 'statutory');
   assertEquals(routes.calls.length, 0);
   assertEquals(h.infos.at(-1)?.outcome, 'global_rate_limited');
 });
 
-Deno.test('the global budget check fails closed: an error there is unknown without calling AWS', async () => {
+Deno.test('the global budget check fails closed: an error there answers the class default without calling AWS', async () => {
   const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
   const h = harness({
     candidates: [untaggedRow],
@@ -462,7 +463,7 @@ Deno.test('the global budget check fails closed: an error there is unknown witho
   });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
-  assertEquals((await res.json()).source, 'unknown');
+  assertEquals((await res.json()).source, 'statutory');
   assertEquals(routes.calls.length, 0);
 });
 
@@ -486,25 +487,25 @@ Deno.test('with no open-data road at all, an AWS leg under the car answers cache
   assertEquals(fns(h).at(-1), 'put_limits_cache');
 });
 
-Deno.test('an AWS failure is unknown 200, with nothing cached', async () => {
+Deno.test('an AWS failure is the class default, 200, with nothing cached', async () => {
   const routes = stubRoutes(() => Promise.reject(new Error('aws routes answered 500')));
   const h = harness({ candidates: [untaggedRow], routes });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
-  assertEquals(await res.json(), { source: 'unknown', limitMph: null, matchConfidence: 0, parallelRoads: false, provider: null });
+  assertEquals(await res.json(), { source: 'statutory', limitMph: 25, matchConfidence: 0.95, parallelRoads: false, provider: 'osm' });
   assert(!fns(h).includes('put_limits_cache'));
   assertEquals(h.infos.at(-1)?.outcome, 'aws_failed');
 });
 
-Deno.test('AWS without a limit is unknown, with nothing cached', async () => {
+Deno.test('AWS without a limit is the class default, with nothing cached', async () => {
   const routes = stubRoutes(() => Promise.resolve(null));
   const h = harness({ candidates: [untaggedRow], routes });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
-  assertEquals((await res.json()).source, 'unknown');
+  assertEquals((await res.json()).source, 'statutory');
   assert(!fns(h).includes('put_limits_cache'));
 });
 
-Deno.test('a spent AWS budget is unknown without calling AWS', async () => {
+Deno.test('a spent AWS budget answers the class default without calling AWS', async () => {
   const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
   const h = harness({
     candidates: [untaggedRow],
@@ -513,14 +514,14 @@ Deno.test('a spent AWS budget is unknown without calling AWS', async () => {
   });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
-  assertEquals((await res.json()).source, 'unknown');
+  assertEquals((await res.json()).source, 'statutory');
   assertEquals(routes.calls.length, 0);
   // the user's refusal never reaches the global row
   assertEquals(fns(h), ['take_rate_limit', 'speed_limit_candidates', 'take_rate_limit']);
   assert(!fns(h).includes('take_global_rate_limit'));
 });
 
-Deno.test('a failed budget check is unknown without calling AWS, never a 5xx', async () => {
+Deno.test('a failed budget check answers the class default without calling AWS, never a 5xx', async () => {
   const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG }));
   const h = harness({
     candidates: [untaggedRow],
@@ -529,25 +530,25 @@ Deno.test('a failed budget check is unknown without calling AWS, never a 5xx', a
   });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
   assertEquals(res.status, 200);
-  assertEquals((await res.json()).source, 'unknown');
+  assertEquals((await res.json()).source, 'statutory');
   assertEquals(routes.calls.length, 0);
 });
 
-Deno.test('an AWS leg that snapped to another road (40 m away) is unknown and not cached', async () => {
+Deno.test('an AWS leg that snapped to another road (40 m away) leaves the class default and is not cached', async () => {
   const offset = 40 / (111_320 * Math.cos(47.606 * Math.PI / 180));
   const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: NORTH_LEG.map((p) => ({ ...p, lng: p.lng + offset })) }));
   const h = harness({ candidates: [untaggedRow], routes });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
-  assertEquals((await res.json()).source, 'unknown');
+  assertEquals((await res.json()).source, 'statutory');
   assert(!fns(h).includes('put_limits_cache'));
 });
 
-Deno.test('an AWS leg across the car course is unknown and not cached', async () => {
+Deno.test('an AWS leg across the car course leaves the class default and is not cached', async () => {
   const east: LatLng[] = [{ lat: 47.606, lng: -122.3201 }, { lat: 47.606, lng: -122.318 }];
   const routes = stubRoutes(() => Promise.resolve({ mph: 45, leg: east }));
   const h = harness({ candidates: [untaggedRow], routes });
   const res = await handleSpeedLimits(post(UNTAGGED_POINT), h.deps);
-  assertEquals((await res.json()).source, 'unknown');
+  assertEquals((await res.json()).source, 'statutory');
   assert(!fns(h).includes('put_limits_cache'));
 });
 
@@ -833,7 +834,7 @@ Deno.test('logs carry requestId, route, outcome and source only: no coordinate, 
     assertMatch(String(line.requestId), /^[0-9a-f-]{36}$/);
   }
   assertEquals(h.infos.map((l) => [l.route, l.outcome, l.source]), [
-    ['point', 'aws_failed', 'unknown'],
+    ['point', 'aws_failed', 'statutory'],
     ['point', 'invalid', null],
     ['tiles', 'served', null],
     ['tiles', 'invalid', null],

@@ -175,7 +175,11 @@ export interface EngineSnapshot {
   /** There is a speed to show: the current row's, or one held from up to 3 s before. False before the first row and once the fix has been gone longer. */
   speedKnown: boolean;
   limit: LimitSample;
-  /** The limit to show and judge against, whole mph; null → "—" (unknown, low-confidence or hAcc > 20 m). */
+  /**
+   * The limit the sign shows, whole mph: a posted limit or, on a road with none, its class default
+   * (`limit.source` says `statutory`; shown, never scored); null → "—" (unknown, low-confidence or
+   * hAcc > 20 m). The detectors judge against the posted limits alone (`limitMphFor`).
+   */
   limitMph: number | null;
   /** The speeding tier of the current row's episode, for the driving screen's halo. */
   speedingTier: Tier | null;

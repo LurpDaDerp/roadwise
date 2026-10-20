@@ -359,7 +359,9 @@ const toAnswer = (m: MatchResult): PointResponse =>
     ? unknownAnswer(m.parallelRoads)
     : m.source === 'posted'
       ? { source: 'posted', limitMph: m.limitMph, matchConfidence: m.matchConfidence, parallelRoads: m.parallelRoads, provider: m.provider }
-      : { source: 'cached', limitMph: m.limitMph, matchConfidence: m.matchConfidence, parallelRoads: m.parallelRoads, provider: 'aws' };
+      : m.source === 'statutory'
+        ? { source: 'statutory', limitMph: m.limitMph, matchConfidence: m.matchConfidence, parallelRoads: m.parallelRoads, provider: 'osm' }
+        : { source: 'cached', limitMph: m.limitMph, matchConfidence: m.matchConfidence, parallelRoads: m.parallelRoads, provider: 'aws' };
 
 /** True when the request's Accept-Encoding allows gzip (a `q=0` refuses it). */
 export function acceptsGzip(req: Request): boolean {
@@ -472,9 +474,11 @@ async function point(req: Request, run: Run): Promise<Outcome> {
 
   const candidates = await deps.db.candidates(lat, lng, radiusM);
   const match = matchLimit(heading, candidates);
-  if (match.source !== 'unknown') return answer(toAnswer(match), 'matched');
+  if (match.source === 'posted' || match.source === 'cached') return answer(toAnswer(match), 'matched');
 
-  const unknown = (outcome: string) => answer(unknownAnswer(match.parallelRoads), outcome);
+  // Nothing posted here: AWS may know the road's limit. When it cannot answer, the road's class
+  // default (`statutory`, when the matcher established the road) is the answer, else `unknown`.
+  const unknown = (outcome: string) => answer(toAnswer(match), outcome);
   if (!deps.routes) return unknown('no_fallback');
   // More roads within reach than the matcher considers (its ambiguous cut): an AWS answer would be
   // flagged ambiguous too, and so never cached (review r6 n1). Answer the ambiguity, spend nothing.

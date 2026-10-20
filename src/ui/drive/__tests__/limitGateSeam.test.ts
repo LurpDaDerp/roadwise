@@ -1,11 +1,12 @@
 // The cross-seam test: the driving screen's limit sign shows a limit exactly when the app acts on
-// it. The sign prints `useDriveLive().limitMph`, which the engine computes with `limitMphFor` (the
-// row's fix and the matched limit); the speeding detector records events against exactly the same
-// limits. Inputs are the speed-limit matcher's real outputs, built by running `matchLimit` on
+// it, plus a confident road-class default, which is shown and never scored. The sign prints
+// `useDriveLive().limitMph`, which the engine computes with `limitShownMph` (the row's fix and the
+// matched limit); the speeding detector records events against `limitMphFor`'s limits, the same
+// set less the defaults. Inputs are the speed-limit matcher's real outputs, built by running `matchLimit` on
 // candidate sets that produce each routine confidence band, then turned into a `LimitSample` the way
 // the device client does (`client.ts` `toSample`, plus its truncated-tile cap). If either side
 // drifts from the other, a row of this table fails.
-import { limitActionable, limitMphFor } from '@/core/detectors/common';
+import { limitActionable, limitMphFor, limitShown, limitShownMph } from '@/core/detectors/common';
 import { createSpeedingDetector } from '@/core/detectors/speeding';
 import { counterIds, ctx, drive, mph, row, seq } from '@/core/detectors/__fixtures__/rows';
 import type { LimitSample } from '@/core/engine/types';
@@ -47,18 +48,21 @@ interface Row {
   source: LimitSample['source'];
   /** What the sign should do: the product decision behind Ruling U1-I1. */
   shown: boolean;
+  /** Whether the speeding detector may record against it: shown, less the class defaults. */
+  scored: boolean;
 }
 
 const osmNear = matched(cand('osm', 'osm:1', 35, 5));
 
 const TABLE: Row[] = [
-  { name: 'OSM tagged, near (0.95)', sample: osmNear, match: 0.95, source: 'posted', shown: true },
+  { name: 'OSM tagged, near (0.95)', sample: osmNear, match: 0.95, source: 'posted', shown: true, scored: true },
   {
     name: 'OSM tagged, beyond 10 m (0.85)',
     sample: matched(cand('osm', 'osm:1', 35, 15)),
     match: 0.85,
     source: 'posted',
     shown: true,
+    scored: true,
   },
   {
     name: 'HPMS fill, near (0.85)',
@@ -66,6 +70,7 @@ const TABLE: Row[] = [
     match: 0.85,
     source: 'posted',
     shown: true,
+    scored: true,
   },
   {
     name: 'HPMS fill, beyond 10 m (0.75)',
@@ -73,6 +78,7 @@ const TABLE: Row[] = [
     match: 0.75,
     source: 'posted',
     shown: true,
+    scored: true,
   },
   {
     name: 'AWS cache filling an untagged OSM road (0.7)',
@@ -80,6 +86,7 @@ const TABLE: Row[] = [
     match: 0.7,
     source: 'cached',
     shown: true,
+    scored: true,
   },
   {
     name: 'AWS cache with no OSM road (0.7)',
@@ -87,6 +94,7 @@ const TABLE: Row[] = [
     match: 0.7,
     source: 'cached',
     shown: true,
+    scored: true,
   },
   {
     name: 'motorway ramp (0.65)',
@@ -94,6 +102,7 @@ const TABLE: Row[] = [
     match: 0.65,
     source: 'posted',
     shown: false,
+    scored: false,
   },
   {
     name: 'HPMS fill on a ramp (0.55)',
@@ -101,6 +110,7 @@ const TABLE: Row[] = [
     match: 0.55,
     source: 'posted',
     shown: false,
+    scored: false,
   },
   {
     name: 'parallel roads (0.6)',
@@ -108,6 +118,7 @@ const TABLE: Row[] = [
     match: 0.6,
     source: 'posted',
     shown: false,
+    scored: false,
   },
   {
     name: 'truncated tile nearby (capped to 0.6)',
@@ -115,17 +126,27 @@ const TABLE: Row[] = [
     match: 0.6,
     source: 'posted',
     shown: false,
+    scored: false,
   },
   {
-    // The matcher never produces `statutory`; the type allows it, and v3's gate (`limitActionable`)
-    // treats a confident one like any known limit, so both sides must agree on that too.
+    // An untagged road's class default: the sign shows it (the road is certain), nothing scores it
+    // (the number is assumed).
     name: 'statutory default at a confident match',
-    sample: { ...osmNear, source: 'statutory' },
+    sample: matched(cand('osm', 'osm:1', null, 5, 'residential')),
     match: 0.95,
     source: 'statutory',
     shown: true,
+    scored: false,
   },
-  { name: 'unknown (no road)', sample: matched(), match: 0, source: 'unknown', shown: false },
+  {
+    name: 'statutory default beside a parallel road (0.6)',
+    sample: matched(cand('osm', 'osm:1', null, 5, 'residential'), cand('osm', 'osm:2', 35, 8, 'residential')),
+    match: 0.6,
+    source: 'statutory',
+    shown: false,
+    scored: false,
+  },
+  { name: 'unknown (no road)', sample: matched(), match: 0, source: 'unknown', shown: false, scored: false },
 ];
 
 /** Does the real speeding detector record a sustained, clear speeding episode under `l`? */
@@ -138,21 +159,31 @@ function detectorRecords(l: LimitSample): boolean {
 }
 
 describe('limit sign ⇔ speeding is recorded, over the matcher’s real outputs', () => {
-  test.each(TABLE)('$name', ({ sample, match, source, shown }) => {
+  test.each(TABLE)('$name', ({ sample, match, source, shown, scored }) => {
     // The input is what the matcher and client really produce.
     expect(sample.source).toBe(source);
     expect(sample.matchConfidence).toBeCloseTo(match, 10);
 
-    const signShown = limitMphFor(row({ hAcc: 5 }), sample) !== null;
+    const signShown = limitShownMph(row({ hAcc: 5 }), sample) !== null;
     expect(signShown).toBe(shown);
-    expect(signShown).toBe(limitActionable(sample));
-    // End to end through the real detector: an event is recorded exactly where the sign is drawn.
-    expect(detectorRecords(sample)).toBe(signShown);
+    expect(signShown).toBe(limitShown(sample));
+    const judged = limitMphFor(row({ hAcc: 5 }), sample) !== null;
+    expect(judged).toBe(scored);
+    expect(judged).toBe(limitActionable(sample));
+    // End to end through the real detector: an event is recorded exactly where the app judges.
+    expect(detectorRecords(sample)).toBe(judged);
+    // Scoring never goes past the sign, and only a default sits between the two.
+    if (judged) expect(signShown).toBe(true);
+    if (signShown && !judged) expect(sample.source).toBe('statutory');
   });
 
   test('a poor fix shows "—" even on a confident limit', () => {
     expect(limitMphFor(row({ hAcc: 30 }), osmNear)).toBeNull();
     expect(limitMphFor(row({ gnssValid: false }), osmNear)).toBeNull();
     expect(limitMphFor(row({ hAcc: 5 }), osmNear)).toBe(35);
+    const statutory = matched(cand('osm', 'osm:1', null, 5, 'residential'));
+    expect(limitShownMph(row({ hAcc: 30 }), statutory)).toBeNull();
+    expect(limitShownMph(row({ hAcc: 5 }), statutory)).toBe(25);
+    expect(limitMphFor(row({ hAcc: 5 }), statutory)).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { type Candidate, MATCH, matchLimit, type MatchResult } from '@/core/speedLimits/match';
+import { type Candidate, DEFAULT_LIMIT_MPH, defaultLimitMph, MATCH, matchLimit, type MatchResult } from '@/core/speedLimits/match';
 
 let seq = 0;
 const cand = (over: Partial<Candidate> = {}): Candidate => ({
@@ -161,11 +161,19 @@ describe('matchLimit — parallel roads', () => {
 });
 
 describe('matchLimit — untagged roads and HPMS', () => {
-  it('an untagged OSM road with nothing else is unknown — never a guess', () => {
-    expect(matchLimit(90, [cand({ limitMph: null, highway: 'residential' })])).toEqual({
-      ...UNKNOWN,
+  it("an untagged OSM road with nothing else is its class default, statutory, at the road match's confidence", () => {
+    expect(matchLimit(90, [cand({ key: 'osm:7', limitMph: null, highway: 'residential' })])).toEqual({
+      limitMph: 25,
+      source: 'statutory',
+      matchConfidence: 0.95,
       parallelRoads: false,
+      provider: 'osm',
+      key: 'osm:7',
     });
+  });
+
+  it('an untagged road of a class with no default is unknown — never a guess', () => {
+    expect(matchLimit(90, [cand({ limitMph: null, highway: 'service' })])).toEqual({ ...UNKNOWN, parallelRoads: false });
   });
 
   it('an untagged nearest road does not borrow a farther road’s limit', () => {
@@ -204,7 +212,7 @@ describe('matchLimit — untagged roads and HPMS', () => {
       cand({ limitMph: null, highway: 'residential', distanceM: 2 }),
       cand({ provider: 'hpms', limitMph: 30, highway: 'hpms', distanceM: 17.01 }),
     ]);
-    expect(r.source).toBe('unknown');
+    expect(r).toMatchObject({ source: 'statutory', limitMph: 25 });
   });
 
   it('an untagged lane does not take the HPMS limit of the arterial beside it', () => {
@@ -223,16 +231,16 @@ describe('matchLimit — untagged roads and HPMS', () => {
       cand({ limitMph: null, highway: 'residential', distanceM: 2 }),
       cand({ provider: 'hpms', limitMph: 30, highway: 'hpms', distanceM: 3, bearingDeg: 0 }),
     ]);
-    expect(r.source).toBe('unknown');
+    expect(r).toMatchObject({ source: 'statutory', limitMph: 25 });
   });
 
-  it('two joining HPMS sections that disagree are unknown', () => {
+  it('two joining HPMS sections that disagree leave the class default', () => {
     const r = matchLimit(90, [
       cand({ limitMph: null, highway: 'residential', distanceM: 2 }),
       cand({ provider: 'hpms', limitMph: 30, highway: 'hpms', distanceM: 3 }),
       cand({ provider: 'hpms', limitMph: 40, highway: 'hpms', distanceM: 4 }),
     ]);
-    expect(r.source).toBe('unknown');
+    expect(r).toMatchObject({ source: 'statutory', limitMph: 25 });
   });
 
   it('HPMS never overrides a posted OSM limit', () => {
@@ -249,9 +257,58 @@ describe('matchLimit — untagged roads and HPMS', () => {
     );
   });
 
-  it('an out-of-range limit on a candidate counts as untagged', () => {
-    expect(matchLimit(90, [cand({ limitMph: 90 })]).source).toBe('unknown');
-    expect(matchLimit(90, [cand({ limitMph: 32.5 })]).source).toBe('unknown');
+  it('an out-of-range limit on a candidate counts as untagged (the class default, 40 for secondary)', () => {
+    expect(matchLimit(90, [cand({ limitMph: 90 })])).toMatchObject({ source: 'statutory', limitMph: 40 });
+    expect(matchLimit(90, [cand({ limitMph: 32.5 })])).toMatchObject({ source: 'statutory', limitMph: 40 });
+  });
+});
+
+describe('matchLimit — class defaults (statutory)', () => {
+  it('pins the default table, mph by highway class', () => {
+    expect(DEFAULT_LIMIT_MPH).toEqual({
+      motorway: 65,
+      motorway_link: 45,
+      trunk: 55,
+      trunk_link: 40,
+      primary: 45,
+      primary_link: 35,
+      secondary: 40,
+      secondary_link: 30,
+      tertiary: 35,
+      tertiary_link: 30,
+      unclassified: 30,
+      residential: 25,
+    });
+    expect(defaultLimitMph('residential')).toBe(25);
+    expect(defaultLimitMph('service')).toBeNull();
+    expect(defaultLimitMph('toString')).toBeNull();
+    expect(defaultLimitMph('')).toBeNull();
+  });
+
+  it.each(Object.entries(DEFAULT_LIMIT_MPH))('an untagged %s is its default %i', (highway, mph) => {
+    expect(matchLimit(90, [cand({ limitMph: null, highway })])).toMatchObject({ source: 'statutory', limitMph: mph, provider: 'osm' });
+  });
+
+  it('carries the road match’s own confidence: 0.85 beyond 10 m, 0.65 on a ramp, 0.6 beside a parallel road', () => {
+    expect(matchLimit(90, [cand({ limitMph: null, highway: 'residential', distanceM: 15 })]).matchConfidence).toBe(0.85);
+    expect(matchLimit(90, [cand({ limitMph: null, highway: 'primary_link', distanceM: 2 })])).toMatchObject({ limitMph: 35, matchConfidence: 0.65 });
+    const r = matchLimit(90, [
+      cand({ key: 'osm:a', limitMph: null, highway: 'residential', distanceM: 2 }),
+      cand({ key: 'osm:b', limitMph: 35, highway: 'residential', distanceM: 8 }),
+    ]);
+    expect(r).toMatchObject({ source: 'statutory', limitMph: 25, matchConfidence: 0.6, parallelRoads: true, key: 'osm:a' });
+  });
+
+  it('is the last resort: a posted limit, a joining HPMS section and a joining cache segment all beat it', () => {
+    const untagged = cand({ key: 'osm:u', limitMph: null, highway: 'residential', distanceM: 2 });
+    expect(matchLimit(90, [untagged, cand({ provider: 'hpms', limitMph: 30, highway: 'hpms', distanceM: 3 })])).toMatchObject({ source: 'posted', limitMph: 30 });
+    expect(matchLimit(90, [untagged, cand({ provider: 'aws', limitMph: 30, highway: 'aws', distanceM: 3 })])).toMatchObject({ source: 'cached', limitMph: 30 });
+    expect(matchLimit(90, [cand({ key: 'osm:p', limitMph: 20, highway: 'residential', distanceM: 2 })])).toMatchObject({ source: 'posted', limitMph: 20 });
+  });
+
+  it('a default never comes from a road that fails the heading or distance test', () => {
+    expect(matchLimit(90, [cand({ limitMph: null, highway: 'residential', bearingDeg: 0 })]).source).toBe('unknown');
+    expect(matchLimit(90, [cand({ limitMph: null, highway: 'residential', distanceM: 25.01 })]).source).toBe('unknown');
   });
 });
 
@@ -298,7 +355,7 @@ describe('matchLimit — the AWS cache', () => {
       cand({ limitMph: null, highway: 'residential', distanceM: 1 }),
       cand({ provider: 'aws', limitMph: 45, highway: 'aws', distanceM: 16.01 }),
     ]);
-    expect(r.source).toBe('unknown');
+    expect(r).toMatchObject({ source: 'statutory', limitMph: 25 });
   });
 });
 
@@ -324,7 +381,7 @@ describe('MatchResult (type level)', () => {
 });
 
 describe('matchLimit — invariants', () => {
-  it('never produces statutory, never a limit with unknown, confidence always in 0..1 (R17, honesty)', () => {
+  it('statutory only as an OSM class default, never a limit with unknown, confidence always in 0..1 (honesty)', () => {
     // Deterministic pseudo-random candidate sets.
     let s = 12345;
     const rnd = (): number => ((s = (s * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
@@ -342,7 +399,10 @@ describe('matchLimit — invariants', () => {
       );
       const course = pick([null, -1, rnd() * 360] as const);
       const r = matchLimit(course, cs);
-      expect(r.source).not.toBe('statutory');
+      if (r.source === 'statutory') {
+        expect(r.provider).toBe('osm');
+        expect(Object.values(DEFAULT_LIMIT_MPH)).toContain(r.limitMph);
+      }
       expect(r.matchConfidence).toBeGreaterThanOrEqual(0);
       expect(r.matchConfidence).toBeLessThanOrEqual(1);
       if (r.source === 'unknown') {

@@ -14,7 +14,7 @@
 // persistence, sound, scoring — goes out through callbacks.
 import { PHONE_MIN_MPH, type EventType, type Tier } from '@scoring';
 
-import { knownSpeed, limitMphFor, MPS_PER_MPH, ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
+import { knownSpeed, limitShownMph, MPS_PER_MPH, ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { MAX_DRIVE_MS } from '@/data/sync/payload';
 
 import type { MotionActivity } from '@drive-sense';
@@ -184,7 +184,9 @@ export function createEngine(deps: EngineDeps): Engine {
     const s = session as TripSession;
     const det = suite as DetectorSuite;
     const limit = deps.limits.lookup(row.lat, row.lng, row.course) ?? UNKNOWN_LIMIT;
-    seen = { row, limit, limitMph: limitMphFor(row, limit) };
+    // The sign's number: a posted limit or a confident class default. The detectors judge the row
+    // against `limit` themselves (`limitMphFor`), which refuses a default.
+    seen = { row, limit, limitMph: limitShownMph(row, limit) };
     shown = nextDisplaySpeed(shown, row, knownSpeed(row));
     touch();
     noteWarmup(s, row);

@@ -6,20 +6,27 @@
 //
 // The rules this file exists to keep:
 //
-// - **Battery (§3.5, R7).** A lookup never touches the network. The network is used by exactly
-//   two calls: `startTrip` (one batch) and `prefetch` (one batch per call — the engine calls it once
-//   per `PREFETCH_EVERY_M` = 1000 m). A batch asks only for the prefetch tiles that are neither in
-//   memory nor fresh in SQLite, so a commute already cached costs nothing. On top of that, at most
-//   one point lookup per prefetch window, and only when the server has said a fallback exists
-//   (`fallback: 'aws'`) — without the AWS key it could only ever answer "unknown". Offline: no
-//   requests at all. Nothing here runs a timer.
+// - **Battery (§3.5, R7).** A lookup never touches the network, with one bounded exception below.
+//   The network is used by exactly two calls: `startTrip` (one batch) and `prefetch` (one batch per
+//   call — the engine calls it once per `PREFETCH_EVERY_M` = 1000 m). A batch asks only for the
+//   prefetch tiles that are neither in memory nor fresh in SQLite, so a commute already cached costs
+//   nothing. On top of that, at most one point lookup per prefetch window, and only when the server
+//   has said a fallback exists (`fallback: 'aws'`) — without the AWS key it could only ever answer
+//   "unknown". Offline: no requests at all. Nothing here runs a timer.
+//   The exception: a tile the server sent `filling` (its area is being loaded from OpenStreetMap
+//   right now) expires `FILLING_RETRY_MS` after it arrived, and the first lookup on it after that
+//   asks for that one tile again, at most `FILLING_RETRIES_MAX` times per tile per trip — so the
+//   sign fills in within a minute of the first drive through a new area instead of a kilometre
+//   later. A filled tile answers with its full expiry and the retries stop.
 // - **Memory (rev1: I7).** At most `MEMORY_TILES` decoded tiles (`store.ts`), each decoded once
 //   whether it came from the network or SQLite; recovery's `lookupStored` shares the same LRU and
 //   reads each tile from SQLite once, not once per row.
-// - **Honesty (§13.2, rev1: I8).** No limit is ever guessed or carried past its road. A row
+// - **Honesty (§13.2, rev1: I8).** No posted limit is ever guessed or carried past its road. A row
 //   without a valid fix is null; a lookup whose tile is not in memory is null (and loads it from
-//   SQLite for the next row); a loaded tile with no established road is `unknown`. The one
-//   carry-over: stopped (valid fix, no course, under 2 m/s) within 30 m of the last match.
+//   SQLite for the next row); a loaded tile with no established road is `unknown`; an established
+//   road with no posted limit is its class default, `statutory` (the matcher's table), which the
+//   sign shows and nothing scores. The one carry-over: stopped (valid fix, no course, under 2 m/s)
+//   within 30 m of the last match. A server point answer (posted or cached) beats a default.
 // - **Confidence.** `matchConfidence` is the matcher's, unaltered — with one exception: a match
 //   near a tile the server truncated is capped at `TRUNCATED_CONFIDENCE_CAP` (0.6). The server cuts
 //   a dense tile by road class (minor classes first), not by place, so the car's own road can be
@@ -71,6 +78,10 @@ export const TRUNCATED_CONFIDENCE_CAP = 0.6;
  * every kilometre would re-download the same cut tile; a day lets a server-side fix arrive.
  */
 export const TRUNCATED_TILE_TTL_MS = 24 * 3600 * 1000;
+/** A tile the server is still filling is kept this long, then asked for again on the next lookup on it. */
+export const FILLING_RETRY_MS = 25_000;
+/** How many times one filling tile is asked for again in a trip before the regular prefetch takes over. */
+export const FILLING_RETRIES_MAX = 6;
 
 export interface SpeedLimitClient {
   /**
@@ -189,6 +200,9 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
   const absent = new Set<string>();
   /** Tiles requested from the network and not yet answered. */
   const inFlight = new Set<string>();
+  /** Tiles that arrived `filling`, by the instant they expire; and how often each was asked again this trip. */
+  const filling = new Map<string, number>();
+  const fillingRetries = new Map<string, number>();
   /** All outstanding async work, for `settled`. */
   const work = new Set<Promise<unknown>>();
   const pointAnswers: PointAnswer[] = [];
@@ -293,8 +307,10 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
         if (!need.includes(tile.tile)) continue; // not asked for: not trusted
         const expiresAt = Math.min(
           tile.expiresAt,
-          t + (tile.truncated ? TRUNCATED_TILE_TTL_MS : MAX_TILE_TTL_MS)
+          t + (tile.filling ? FILLING_RETRY_MS : tile.truncated ? TRUNCATED_TILE_TTL_MS : MAX_TILE_TTL_MS)
         );
+        if (tile.filling) filling.set(tile.tile, expiresAt);
+        else filling.delete(tile.tile);
         const payload: StoredTilePayload = { truncated: tile.truncated, segments: tile.segments };
         if (persist) {
           try {
@@ -321,6 +337,21 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     if (!finite(lat, lng)) return;
     const keys = prefetchSet(lat, lng, course).map(tileKey);
     void track(runBatch(keys, generation, counters));
+  }
+
+  /**
+   * The one network call a lookup may make: the car's own tile arrived `filling` and has now
+   * expired, so ask for it alone again (bounded per tile per trip). Nothing else — the prefetch
+   * every kilometre re-requests every expired tile anyway.
+   */
+  function retryFilling(key: string): void {
+    const until = filling.get(key);
+    if (until === undefined || now() < until || inFlight.has(key) || !isOnline()) return;
+    filling.delete(key);
+    const n = (fillingRetries.get(key) ?? 0) + 1;
+    if (n > FILLING_RETRIES_MAX) return;
+    fillingRetries.set(key, n);
+    void track(runBatch([key], generation, counters));
   }
 
   /** Point answers that cover this position in this direction; the nearest one's sample. */
@@ -397,7 +428,8 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     if (own && own.expiresAt > now() && !tiles.includes(own)) tiles.push(own);
     const p = { lat, lng };
     const result = matchLimit(course, candidatesNear(tiles, p, MATCH.RADIUS_M));
-    if (result.source === 'unknown') {
+    if (result.source === 'unknown' || result.source === 'statutory') {
+      // A server point answer is posted or cached: it beats no answer and beats a class default.
       if (course >= 0) {
         const fromPoint = pointAnswerAt(lat, lng, normalizeDeg(course));
         if (fromPoint) return { sample: fromPoint, capped: false };
@@ -440,7 +472,10 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
 
       const key = tileKey(tileFor(lat, lng));
       const loaded = memoryTile(key) !== undefined;
-      if (!loaded) void loadFromSqlite(key); // never charged to the network budget
+      if (!loaded) {
+        void loadFromSqlite(key); // never charged to the network budget
+        retryFilling(key); // the one exception: a filling tile that has just expired
+      }
       const { sample, capped } = evaluate(lat, lng, course);
 
       if (!loaded) {
@@ -453,7 +488,8 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       }
 
       last = { lat, lng, sample };
-      if ((sample.source === 'unknown' || capped) && moving) {
+      // A default is a gap the server's point answer may fill with a posted limit, like unknown.
+      if ((sample.source === 'unknown' || sample.source === 'statutory' || capped) && moving) {
         unknownRun += 1;
         if (unknownRun >= UNKNOWN_ROWS_BEFORE_POINT_LOOKUP) maybePointLookup(lat, lng, course);
       } else {
@@ -488,6 +524,8 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       lru.clear();
       pending.clear();
       absent.clear();
+      filling.clear();
+      fillingRetries.clear();
       pointAllowed = false;
       unknownRun = 0;
       last = null;

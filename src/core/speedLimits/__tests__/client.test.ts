@@ -2,6 +2,8 @@
 import { createSupabaseSpeedLimitApi, type SpeedLimitApi } from '@/core/speedLimits/api';
 import {
   createSpeedLimitClient,
+  FILLING_RETRIES_MAX,
+  FILLING_RETRY_MS,
   MIN_MOVING_MPS,
   STICKY_RADIUS_M,
   TRUNCATED_CONFIDENCE_CAP,
@@ -211,7 +213,7 @@ describe('the network budget (§3.5, R7)', () => {
     expect(getTiles).not.toHaveBeenCalled();
     expect(lookupPoint).not.toHaveBeenCalled();
     expect(client.stats().requestsThisTrip).toBe(0);
-    expect(client.lookup(LAT, LNG0, EAST, MOVING)).toMatchObject({ source: 'unknown', limitMps: null });
+    expect(client.lookup(LAT, LNG0, EAST, MOVING)).toMatchObject({ source: 'statutory', limitMps: mphToMps(45) });
   });
 
   it('a batch the contract rejects is reported, stores nothing, and the next prefetch asks again', async () => {
@@ -358,8 +360,18 @@ describe('honesty (§13.2, rev1: I8)', () => {
     expect(client.lookup(LAT, LNG0, -1, { gnssValid: true, speedMps: null })).toBeNull();
   });
 
-  it('an untagged road is unknown — no number, confidence 0', async () => {
+  it("an untagged road is its class default (primary: 45), statutory, at the road match's confidence", async () => {
     await loaded([road({ limitMph: null })]);
+    expect(client.lookup(LAT, LNG0, EAST, MOVING)).toEqual({
+      limitMps: mphToMps(45),
+      source: 'statutory',
+      matchConfidence: 0.95,
+      parallelRoads: false,
+    });
+  });
+
+  it('an untagged road of a class with no default is unknown — no number, confidence 0', async () => {
+    await loaded([road({ limitMph: null, highway: 'service' })]);
     expect(client.lookup(LAT, LNG0, EAST, MOVING)).toEqual({
       limitMps: null,
       source: 'unknown',
@@ -435,7 +447,7 @@ describe('point lookups (R7: only with fallback aws, charged to the per-km budge
     // The answer covers the road ahead of where it was asked, in this direction.
     const [ahead] = await drive(180, 1);
     expect(ahead).toEqual({ limitMps: mphToMps(40), source: 'cached', matchConfidence: 0.7, parallelRoads: false });
-    expect(client.lookup(LAT, LNG0 + mLng(180), 270, MOVING)?.source).toBe('unknown'); // the other way
+    expect(client.lookup(LAT, LNG0 + mLng(180), 270, MOVING)?.source).toBe('statutory'); // the other way
 
     // Past it, unknown again — but this km's lookup is spent.
     await drive(400, 10);
@@ -461,7 +473,7 @@ describe('point lookups (R7: only with fallback aws, charged to the per-km budge
     await drive(0, 6);
     expect(lookupPoint).toHaveBeenCalledTimes(1);
     const [next] = await drive(120, 1);
-    expect(next?.source).toBe('unknown');
+    expect(next?.source).toBe('statutory');
   });
 
   it('a failed point lookup is reported and the drive carries on', async () => {
@@ -471,7 +483,88 @@ describe('point lookups (R7: only with fallback aws, charged to the per-km budge
     await client.settled();
     await drive(0, 6);
     expect(errors).toHaveLength(1);
-    expect(client.lookup(LAT, LNG0, EAST, MOVING)?.source).toBe('unknown');
+    expect(client.lookup(LAT, LNG0, EAST, MOVING)?.source).toBe('statutory');
+  });
+
+  it('a point answer (posted or cached) beats the class default where it covers the road', async () => {
+    const { api, lookupPoint } = fakeApi({ segmentsFor: untagged, fallback: 'aws', point: answer });
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    const [before] = await drive(0, 1);
+    expect(before).toMatchObject({ source: 'statutory', limitMps: mphToMps(45) });
+    await drive(20, 5);
+    expect(lookupPoint).toHaveBeenCalledTimes(1);
+    const [after] = await drive(140, 1);
+    expect(after).toEqual({ limitMps: mphToMps(40), source: 'cached', matchConfidence: 0.7, parallelRoads: false });
+  });
+});
+
+describe('a tile the server is still filling (the OpenStreetMap load behind a first drive through an area)', () => {
+  const batchOf = (keys: string[], filling: boolean, segments: LimitSegment[]): TileBatchResponse => ({
+    tiles: keys.map((tile) => ({ tile, expiresAt: clock + DAY, truncated: false, filling, segments })),
+    fallback: null,
+  });
+
+  it('is kept FILLING_RETRY_MS, then the first lookup on it asks for that tile alone and the filled reply replaces it', async () => {
+    expect(FILLING_RETRY_MS).toBe(25_000);
+    const { api, getTiles } = fakeApi();
+    getTiles.mockImplementationOnce(async (keys) => batchOf(keys, true, []));
+    getTiles.mockImplementationOnce(async (keys) => batchOf(keys, false, [road()]));
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(1);
+    // Loaded, empty: unknown, not null (the tile is in memory), and no request from the lookup.
+    expect(client.lookup(LAT, LNG0, EAST, MOVING)).toMatchObject({ source: 'unknown' });
+    const own = keyAt(LAT, LNG0);
+    const row = await createTilesRepo(db).getTile<unknown>(own, clock);
+    expect(row?.expires_at).toBe(clock + FILLING_RETRY_MS);
+    clock += FILLING_RETRY_MS - 1;
+    client.lookup(LAT, LNG0, EAST, MOVING);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(1);
+
+    clock += 1;
+    expect(client.lookup(LAT, LNG0, EAST, MOVING)).toBeNull(); // expired: nothing in memory for this row
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(2);
+    expect(getTiles.mock.calls[1]).toEqual([[own]]);
+    expect(client.lookup(LAT, LNG0, EAST, MOVING)).toMatchObject({ source: 'posted', limitMps: mphToMps(35) });
+    expect((await createTilesRepo(db).getTile<unknown>(own, clock))?.expires_at).toBe(clock + DAY);
+    // Filled: no further retry, however long the drive goes on.
+    clock += 10 * FILLING_RETRY_MS;
+    client.lookup(LAT, LNG0, EAST, MOVING);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(2);
+    expect(client.stats().requestsThisTrip).toBe(2);
+  });
+
+  it('asks again at most FILLING_RETRIES_MAX times per tile per trip, never offline, and the prefetch still refreshes it', async () => {
+    expect(FILLING_RETRIES_MAX).toBe(6);
+    const { api, getTiles } = fakeApi();
+    getTiles.mockImplementation(async (keys) => batchOf(keys, true, []));
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    for (let i = 0; i < FILLING_RETRIES_MAX + 3; i += 1) {
+      clock += FILLING_RETRY_MS;
+      client.lookup(LAT, LNG0, EAST, MOVING);
+      await client.settled();
+      client.lookup(LAT, LNG0, EAST, MOVING); // a second lookup on the same expired tile asks nothing more
+      await client.settled();
+    }
+    expect(getTiles).toHaveBeenCalledTimes(1 + FILLING_RETRIES_MAX);
+    // The kilometre prefetch re-requests every expired tile as usual.
+    client.prefetch(LAT, LNG0, EAST);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(2 + FILLING_RETRIES_MAX);
+
+    online = false;
+    clock += FILLING_RETRY_MS;
+    client.resetTrip();
+    client.startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    client.lookup(LAT, LNG0, EAST, MOVING);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(2 + FILLING_RETRIES_MAX);
   });
 });
 

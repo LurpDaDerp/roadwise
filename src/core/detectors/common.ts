@@ -50,14 +50,25 @@ export function knownSpeedMph(row: FeatureRow): number | null {
 /** A map match this weak (or beside a parallel road) may belong to the road next door. */
 export const MATCH_CONFIDENCE_MIN = 0.7;
 
-/**
- * THE line between a limit the app acts on and one it does not: a known limit from a real source
- * with a confident, unambiguous match. The HUD's limit sign shows a limit exactly when this holds
- * (with a current fix), and the speeding detector records events against exactly these limits.
- */
-export function limitActionable(limit: LimitSample): boolean {
+/** A known limit on a confident, unambiguous match, whatever its source. */
+function limitConfident(limit: LimitSample): boolean {
   if (limit.source === 'unknown' || limit.limitMps === null) return false;
   return !limit.parallelRoads && limit.matchConfidence >= MATCH_CONFIDENCE_MIN;
+}
+
+/**
+ * THE line between a limit the app acts on and one it does not: a posted limit (open data or the
+ * cache, never a road class's `statutory` default) with a confident, unambiguous match. The speeding
+ * detector records events against exactly these limits. The sign shows them too, and also a
+ * confident default (`limitShown`): a default can be wrong, so it is shown, never scored.
+ */
+export function limitActionable(limit: LimitSample): boolean {
+  return limit.source !== 'statutory' && limitConfident(limit);
+}
+
+/** The limits the sign prints: every actionable limit, plus a confident road-class default. */
+export function limitShown(limit: LimitSample): boolean {
+  return limitConfident(limit);
 }
 
 /** GPS accuracy worse than `MAX_H_ACC_M` (spec): the limit shows "—" and no event is recorded. */
@@ -65,14 +76,25 @@ export function gnssPoor(row: FeatureRow): boolean {
   return !row.gnssValid || !(row.hAcc <= MAX_H_ACC_M);
 }
 
-/**
- * The posted limit in whole mph the row may be judged against, or null: unknown, low-confidence,
- * or a poor fix (spec "Speed limit data").
- */
-export function limitMphFor(row: FeatureRow, limit: LimitSample): number | null {
-  if (gnssPoor(row) || !limitActionable(limit) || limit.limitMps === null) return null;
+const wholeMph = (limit: LimitSample): number | null => {
+  if (limit.limitMps === null) return null;
   const v = Math.round(mph(limit.limitMps));
   return v > 0 ? v : null;
+};
+
+/**
+ * The posted limit in whole mph the row may be judged against, or null: unknown, a class default,
+ * low-confidence, or a poor fix (spec "Speed limit data").
+ */
+export function limitMphFor(row: FeatureRow, limit: LimitSample): number | null {
+  if (gnssPoor(row) || !limitActionable(limit)) return null;
+  return wholeMph(limit);
+}
+
+/** The limit in whole mph the sign prints for the row, or null for "—": `limitMphFor` plus defaults. */
+export function limitShownMph(row: FeatureRow, limit: LimitSample): number | null {
+  if (gnssPoor(row) || !limitShown(limit)) return null;
+  return wholeMph(limit);
 }
 
 /** No events before the drive's warm-up ends (spec "Rules against false positives"; `session.noteWarmup`). */

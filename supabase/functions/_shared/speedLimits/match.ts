@@ -5,19 +5,23 @@
 // `scripts/sync-scoring.js` — so the two can never disagree on a match. SQL only returns
 // candidates. Imports only its siblings, so it runs unchanged under Jest and Deno.
 //
-// Honesty rule: when a limit cannot be established the answer is `unknown`, never a guess.
-// `statutory` is never produced (R17: a statutory default can be wrong — Seattle's residential
-// default is 20 mph against the state's 25 — and a confident wrong limit is worse than "—").
+// Honesty rule: a posted limit is never guessed. When the road is established but carries no
+// posted limit, the answer is the road class's default (`DEFAULT_LIMIT_MPH`), marked `statutory`
+// so the sign can show it while nothing is scored against it (a statutory default can be wrong —
+// Seattle's residential default is 20 mph against the state's 25 — so a speeding penalty on one
+// would be a false positive; `limitActionable` in src/core/detectors/common.ts refuses it). When no
+// road is established at all the answer is `unknown`.
 //
-// Precedence follows design §4.4 — open data first, then the cache:
+// Precedence follows design §4.4 — open data first, then the cache, then the class default:
 //   1. The road is the nearest heading-passing OSM way within 25 m. If it carries a limit, that
 //      limit, `posted`.
 //   2. If it is untagged, an HPMS section that joins it (within 15 m of it) supplies the limit,
 //      `posted`, 0.1 less confident (R5: HPMS only fills a way that has none).
 //   3. Else an AWS cache segment that joins it the same way, `cached` (the cache is only ever
 //      written for a road the open data could not answer, so it fills the same gap HPMS does).
-//   4. With no OSM way at all, the nearest heading-passing cache segment, `cached`.
-//   5. Otherwise `unknown`.
+//   4. Else the untagged road's class default, `statutory`, at the road match's own confidence.
+//   5. With no OSM way at all, the nearest heading-passing cache segment, `cached`.
+//   6. Otherwise `unknown`.
 
 import { angleDiffDeg, normalizeDeg } from './geometry';
 import type { Provider } from './wire';
@@ -64,7 +68,40 @@ export type MatchResult =
       parallelRoads: boolean;
       provider: 'aws';
       key: string;
+    }
+  | {
+      /** The road's class default (`DEFAULT_LIMIT_MPH`), not a posted limit: shown, never scored. */
+      limitMph: number;
+      source: 'statutory';
+      matchConfidence: number;
+      parallelRoads: boolean;
+      provider: 'osm';
+      key: string;
     };
+
+/**
+ * The limit assumed for an OSM road of each class when neither OSM, HPMS nor the cache posts one
+ * (mph; typical US statutory defaults). `public.get_current_speed_limit` (migration 0013) carries
+ * the same table. A class not listed here (none of the twelve the tiles carry) has no default.
+ */
+export const DEFAULT_LIMIT_MPH: Readonly<Record<string, number>> = {
+  motorway: 65,
+  motorway_link: 45,
+  trunk: 55,
+  trunk_link: 40,
+  primary: 45,
+  primary_link: 35,
+  secondary: 40,
+  secondary_link: 30,
+  tertiary: 35,
+  tertiary_link: 30,
+  unclassified: 30,
+  residential: 25,
+};
+
+/** The class default for `highway`, or null for a class without one. */
+export const defaultLimitMph = (highway: string): number | null =>
+  Object.prototype.hasOwnProperty.call(DEFAULT_LIMIT_MPH, highway) ? (DEFAULT_LIMIT_MPH[highway] as number) : null;
 
 export const MATCH = {
   RADIUS_M: 25,
@@ -213,6 +250,12 @@ function matchNearest(course: number, nearest: readonly Candidate[]): MatchResul
   const fromCache = joinFill(road, cache, roads);
   if (fromCache && fromCache !== 'conflict') {
     return known(fromCache.fill, fromCache.limitMph, Math.min(base, MATCH.CONF_AWS), parallel);
+  }
+  // Nothing posts a limit for this road: its class default, at the confidence of the road match
+  // itself (the road is as certain as any; only the number is assumed, which `statutory` says).
+  const fallback = defaultLimitMph(road.highway);
+  if (fallback !== null) {
+    return { limitMph: fallback, source: 'statutory', matchConfidence: round2(base), parallelRoads: parallel, provider: 'osm', key: road.key };
   }
   return unknown(parallel);
 }
