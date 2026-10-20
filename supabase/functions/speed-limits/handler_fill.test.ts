@@ -22,6 +22,7 @@ const tileBatch = (keys: string[]) => ({
 interface Harness {
   deps: SpeedLimitsDeps;
   ensured: BBox[][];
+  users: string[];
   infos: Row[];
 }
 
@@ -41,10 +42,12 @@ function harness(answer: (boxes: readonly BBox[]) => boolean[], withFill = true)
     },
   });
   const ensured: BBox[][] = [];
+  const users: string[] = [];
   const infos: Row[] = [];
   const fill: OsmFill = {
-    ensure: (boxes) => {
+    ensure: (boxes, userId) => {
       ensured.push([...boxes]);
+      users.push(userId);
       return Promise.resolve(answer(boxes));
     },
     settled: () => Promise.resolve(),
@@ -58,7 +61,7 @@ function harness(answer: (boxes: readonly BBox[]) => boolean[], withFill = true)
     log,
     now: () => NOW,
   };
-  return { deps, ensured, infos };
+  return { deps, ensured, users, infos };
 }
 
 const get = (keys: string[]) =>
@@ -76,6 +79,7 @@ Deno.test('a tile batch hands every requested tile box to the fill, and a tile w
   const res = await handleSpeedLimits(get(KEYS), h.deps);
   assertEquals(res.status, 200);
   assertEquals(h.ensured, [KEYS.map((k) => tileBounds(parseTileKey(k)!))]);
+  assertEquals(h.users, [UID], 'the claims are charged to the token holder');
   const body = await res.json();
   const checked = TileBatchResponseSchema.parse(body);
   assertEquals(checked.tiles.map((t) => t.filling), [undefined, true, undefined]);
@@ -109,6 +113,7 @@ Deno.test('a point request claims the box of the point itself (one cell, plus it
   const res = await handleSpeedLimits(post({ lat: 47.6062, lng: -122.315, heading: 90 }), h.deps);
   assertEquals(res.status, 200);
   assertEquals(h.ensured, [[{ minLat: 47.6062, maxLat: 47.6062, minLng: -122.315, maxLng: -122.315 }]]);
+  assertEquals(h.users, [UID]);
   assertEquals((await res.json()).source, 'unknown');
 });
 

@@ -141,10 +141,30 @@ export class OverpassRefused extends Error {
 }
 
 /**
+ * The body ran past a size cap: the whole reply, one element, or the text before or after the
+ * array. The reader is cancelled; the caller marks the cell failed (never done on partial data)
+ * and no other mirror is tried for it.
+ */
+export class OverpassTooLarge extends Error {
+  constructor(readonly what: 'reply' | 'element' | 'header' | 'tail') {
+    super(`overpass ${what} exceeds its size cap`);
+    this.name = 'OverpassTooLarge';
+  }
+}
+
+/** The most one cell's reply may be: a dense city cell is tens of megabytes, never this. */
+export const MAX_REPLY_BYTES = 64 * 1024 * 1024;
+/** One element: a 2000-node way with full tags is about 150 KB pretty-printed. */
+export const MAX_ELEMENT_BYTES = 512 * 1024;
+/** The text before the `elements` array and after it (the remark): both are a few hundred bytes. */
+export const MAX_EDGE_BYTES = 64 * 1024;
+
+/**
  * The objects of the reply's top-level `elements` array, one at a time, from a body of any chunking.
  * A brace-depth scan that honours strings (and escapes within them) finds each element's extent;
  * only that element is parsed, and the buffer never holds more than the element in progress plus
- * one chunk. After the array, the rest of the body is read for a `remark`.
+ * one chunk. After the array, the rest of the body is read for a `remark`. Every buffer and the
+ * whole body are capped (`OverpassTooLarge`).
  */
 export async function* streamElements(body: ReadableStream<Uint8Array>): AsyncGenerator<unknown, void, undefined> {
   const reader = body.getReader();
@@ -158,8 +178,21 @@ export async function* streamElements(body: ReadableStream<Uint8Array>): AsyncGe
   let esc = false;
   let pos = 0;
   let closed = false;
-  while (!closed) {
+  let bytes = 0;
+  const tooLarge = async (what: OverpassTooLarge['what']): Promise<never> => {
+    await reader.cancel().catch(() => undefined);
+    throw new OverpassTooLarge(what);
+  };
+  const read = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
     const chunk = await reader.read();
+    if (chunk.value) {
+      bytes += chunk.value.byteLength;
+      if (bytes > MAX_REPLY_BYTES) await tooLarge('reply');
+    }
+    return chunk;
+  };
+  while (!closed) {
+    const chunk = await read();
     done = chunk.done;
     buf += chunk.value ? decoder.decode(chunk.value, { stream: !done }) : decoder.decode();
     if (!inElements) {
@@ -168,6 +201,7 @@ export async function* streamElements(body: ReadableStream<Uint8Array>): AsyncGe
       if (j === -1) {
         if (done) return;
         if (i === -1) buf = buf.slice(Math.max(0, buf.length - 16)); // the key may straddle chunks
+        if (bytes > MAX_EDGE_BYTES) await tooLarge('header');
         continue;
       }
       inElements = true;
@@ -217,15 +251,17 @@ export async function* streamElements(body: ReadableStream<Uint8Array>): AsyncGe
     } else {
       buf = buf.slice(start);
       start = 0;
+      if (buf.length > MAX_ELEMENT_BYTES) await tooLarge('element');
     }
     pos = buf.length;
     if (done) return;
   }
   // past the array: only the remark matters
   while (!done) {
-    const chunk = await reader.read();
+    const chunk = await read();
     done = chunk.done;
     buf += chunk.value ? decoder.decode(chunk.value, { stream: !done }) : decoder.decode();
+    if (buf.length > MAX_EDGE_BYTES) await tooLarge('tail');
   }
   const m = /"remark"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(buf);
   if (m) throw new OverpassRemark(JSON.parse(`"${m[1]}"`) as string);
@@ -268,7 +304,9 @@ export async function* fetchWays(
       }
       return;
     } catch (err) {
-      if (yielded) throw err;
+      // Partial data in hand, or a reply past its size cap (another mirror would send the same):
+      // the caller marks the cell failed. Only a refusal or a failure before any element moves on.
+      if (yielded || err instanceof OverpassTooLarge) throw err;
       lastError = err;
     }
   }

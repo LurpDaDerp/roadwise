@@ -5,18 +5,28 @@
 //     `cell_x = floor(lng / 0.1)`, about 11 km × 7.5 km at 47° N. A z15 tile (0.8 km) lies in one
 //     cell, or straddles two or four at a cell edge; `cellsCovering` names them all.
 //   * `ensure` is the per-request hook: for every requested tile it claims each cell the tile lies
-//     in, plus every cell within `LOOKAHEAD_M` (1.5 km) of the tile's edge — the brief's "fetch the
-//     next zone before the driver reaches it" — and reports, per tile, whether its own cells are
-//     all loaded. A cell claimed here is filled in the background (`deps.background`, the runtime's
-//     `EdgeRuntime.waitUntil`), one cell at a time per isolate so one request never opens several
-//     Overpass connections at once; across isolates the app-wide budget bounds the rate.
+//     in, plus the adjacent cells within `LOOKAHEAD_M` (1.5 km) of the tile's edge — the brief's
+//     "fetch the next zone before the driver reaches it" — and reports, per tile, whether its own
+//     cells are all loaded. A cell claimed here is filled in the background (`deps.background`,
+//     the runtime's `EdgeRuntime.waitUntil`), one cell at a time per isolate so one request never
+//     opens several Overpass connections at once; across isolates the app-wide budget bounds the
+//     rate.
+//   * What one request can start is bounded (security review): only cells the request's own
+//     tiles or point touch, or their immediate neighbours, ever get claimed; at most
+//     `MAX_CLAIMS_PER_REQUEST` claims per request and `MAX_LOOKAHEAD_CELLS` look-ahead cells; a box
+//     beyond `MAX_LAT` (Web Mercator's edge, where longitude maths explodes) is refused outright;
+//     and each cell a user's request wins the claim for is charged to that user's own budget
+//     (`CLAIM_BUDGET`, `take_rate_limit`) before any Overpass work — spent, the claim is released
+//     at once, so no one user can drain the shared Overpass budget for everyone.
 //   * Memo: a cell known `done` is not asked about again for `DONE_MEMO_MS` in this isolate, and one
 //     known `filling` not for `FILLING_MEMO_MS`, so steady-state tile requests cost no claim RPC.
 //   * The fill streams the cell's ways from Overpass (overpass.ts) and upserts them in batches of
-//     `UPSERT_BATCH`, so memory stays at one batch; it then marks the cell done with the count, or
-//     failed on any error (budget spent, mirrors down, a partial reply) so it is retried later.
-//   * Logs carry outcomes and counts only, never a cell, a tile or a coordinate (the function's
-//     logging rule).
+//     `UPSERT_BATCH`, so memory stays at one batch; it then marks the cell done with the count,
+//     failed on any error (mirrors down, a partial or oversized reply) so it is retried later, or
+//     released when the app-wide budget was spent before anything was tried, so a busy minute
+//     never leaves a cell marked failed.
+//   * Logs carry outcomes and counts only, never a cell, a tile, a coordinate or a user (the
+//     function's logging rule).
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { asPgError } from '../_shared/pg.ts';
 import type { BBox } from '../_shared/speedLimits/geometry';
@@ -30,11 +40,22 @@ export const LOOKAHEAD_M = 1500;
 export const UPSERT_BATCH = 500;
 export const DONE_MEMO_MS = 10 * 60_000;
 export const FILLING_MEMO_MS = 15_000;
+/** Web Mercator's edge: no tile exists beyond it, and no fill is attempted there. */
+export const MAX_LAT = 85.05112878;
+/** Claims one request may make (its own cells first), and look-ahead cells it may name. */
+export const MAX_CLAIMS_PER_REQUEST = 6;
+export const MAX_LOOKAHEAD_CELLS = 8;
 /**
  * Overpass queries across every isolate and user: the public mirrors allow a couple of concurrent
  * slots per address, and one cell's query can run for tens of seconds.
  */
 export const OVERPASS_BUDGET = { key: 'overpass_fill', window: '1 minute', max: 4 } as const;
+/**
+ * Cells one user may cause to be fetched per hour. A car at highway speed crosses a new 10 km cell
+ * every six minutes or so, with a look-ahead cell beside it: a dozen covers an honest drive and
+ * leaves the shared budget to everyone else.
+ */
+export const CLAIM_BUDGET = { key: 'overpass_claim', window: '1 hour', max: 12 } as const;
 
 const M_PER_DEG = 111_320;
 const DEG = Math.PI / 180;
@@ -47,13 +68,15 @@ export interface Cell {
 }
 
 export type ClaimStatus = 'claimed' | 'filling' | 'done';
+export type FillOutcome = 'done' | 'failed' | 'released';
 
-/** The fill's database port: the three 0013 functions and the app-wide budget, service-role only. */
+/** The fill's database port: the three 0013 functions and the two budgets, service-role only. */
 export interface OsmFillDb {
   claimFillCell(cell: Cell): Promise<ClaimStatus>;
-  finishFillCell(cell: Cell, ok: boolean, wayCount: number): Promise<boolean>;
+  finishFillCell(cell: Cell, outcome: FillOutcome, wayCount: number): Promise<boolean>;
   /** Rows written. */
   upsertWays(ways: readonly WayRow[]): Promise<number>;
+  takeRateLimit(userId: string, key: string, window: string, max: number): Promise<boolean>;
   takeGlobalRateLimit(key: string, window: string, max: number): Promise<boolean>;
 }
 
@@ -82,11 +105,14 @@ export function cellsCovering(b: BBox): Cell[] {
   return out;
 }
 
-/** The box grown by `metres` on every side (longitude scaled at the box's poleward edge). */
+/**
+ * The box grown by `metres` on every side. Longitude is scaled at the box's poleward edge, held
+ * to `MAX_LAT`: past it the scale would run away, and no fill happens there anyway.
+ */
 export function expand(b: BBox, metres: number): BBox {
   const dLat = metres / M_PER_DEG;
-  const lat = Math.max(Math.abs(b.minLat), Math.abs(b.maxLat));
-  const dLng = metres / (M_PER_DEG * Math.max(Math.cos(Math.min(89.9, lat) * DEG), 1e-3));
+  const lat = Math.min(MAX_LAT, Math.max(Math.abs(b.minLat), Math.abs(b.maxLat)));
+  const dLng = metres / (M_PER_DEG * Math.cos(lat * DEG));
   return {
     minLat: Math.max(-90, b.minLat - dLat),
     maxLat: Math.min(90, b.maxLat + dLat),
@@ -95,11 +121,30 @@ export function expand(b: BBox, metres: number): BBox {
   };
 }
 
-/** The cells within `LOOKAHEAD_M` of the box that it does not itself overlap. */
+/** True when `c` is one of the eight cells around some cell of `own` (never one of `own`). */
+const adjacent = (c: Cell, own: readonly Cell[]): boolean =>
+  own.some((o) => Math.abs(o.y - c.y) <= 1 && Math.abs(o.x - c.x) <= 1) && !own.some((o) => o.y === c.y && o.x === c.x);
+
+/**
+ * The cells within `LOOKAHEAD_M` of the box that it does not itself overlap: only the box's
+ * immediate neighbours, at most `MAX_LOOKAHEAD_CELLS`.
+ */
 export function lookaheadCells(b: BBox): Cell[] {
-  const own = new Set(cellsCovering(b).map(cellKey));
-  return cellsCovering(expand(b, LOOKAHEAD_M)).filter((c) => !own.has(cellKey(c)));
+  const own = cellsCovering(b);
+  return cellsCovering(expand(b, LOOKAHEAD_M))
+    .filter((c) => adjacent(c, own))
+    .slice(0, MAX_LOOKAHEAD_CELLS);
 }
+
+/** A box the fill will work on: on the globe and inside Web Mercator's latitude range. */
+export const fillable = (b: BBox): boolean =>
+  [b.minLat, b.maxLat, b.minLng, b.maxLng].every(Number.isFinite) &&
+  b.minLat <= b.maxLat &&
+  b.minLng <= b.maxLng &&
+  b.minLat >= -MAX_LAT &&
+  b.maxLat <= MAX_LAT &&
+  b.minLng >= -180 &&
+  b.maxLng <= 180;
 
 const toStatus = (v: unknown): ClaimStatus => (v === 'claimed' || v === 'done' ? v : 'filling');
 
@@ -110,8 +155,8 @@ export function createOsmFillDb(client: SupabaseClient): OsmFillDb {
       if (error) throw asPgError(error);
       return toStatus(data);
     },
-    async finishFillCell(cell, ok, wayCount) {
-      const { data, error } = await client.rpc('osm_finish_fill_cell', { p_y: cell.y, p_x: cell.x, p_ok: ok, p_way_count: wayCount });
+    async finishFillCell(cell, outcome, wayCount) {
+      const { data, error } = await client.rpc('osm_finish_fill_cell', { p_y: cell.y, p_x: cell.x, p_outcome: outcome, p_way_count: wayCount });
       if (error) throw asPgError(error);
       return data === true;
     },
@@ -119,6 +164,11 @@ export function createOsmFillDb(client: SupabaseClient): OsmFillDb {
       const { data, error } = await client.rpc('osm_upsert_ways', { p_ways: ways });
       if (error) throw asPgError(error);
       return typeof data === 'number' ? data : 0;
+    },
+    async takeRateLimit(userId, key, window, max) {
+      const { data, error } = await client.rpc('take_rate_limit', { p_user: userId, p_key: key, p_window: window, p_max: max });
+      if (error) throw asPgError(error);
+      return data === true;
     },
     async takeGlobalRateLimit(key, window, max) {
       const { data, error } = await client.rpc('take_global_rate_limit', { p_key: key, p_window: window, p_max: max });
@@ -141,10 +191,12 @@ export interface OsmFill {
   /**
    * Per box (a requested tile, or a point's surroundings), true while any cell it overlaps is not
    * loaded: the box's data is partial and the device should ask again soon. Claims what needs
-   * filling, in this order: the boxes' own cells, then the look-ahead cells; starts the fills in
-   * the background. Never throws: a claim that fails reads as filling.
+   * filling, in this order: the boxes' own cells, then their adjacent look-ahead cells, at most
+   * `MAX_CLAIMS_PER_REQUEST` claims, each won claim charged to `userId`'s budget; starts the fills
+   * in the background. A box the fill will not work on reads false. Never throws: a claim that
+   * fails reads as filling.
    */
-  ensure(boxes: readonly BBox[]): Promise<boolean[]>;
+  ensure(boxes: readonly BBox[], userId: string): Promise<boolean[]>;
   /** Resolves once every fill started so far has finished (tests and orderly shutdown). */
   settled(): Promise<void>;
 }
@@ -161,15 +213,31 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
   /** One fill at a time in this isolate. */
   let queue: Promise<void> = Promise.resolve();
 
+  async function finish(cell: Cell, outcome: FillOutcome, ways: number): Promise<void> {
+    try {
+      await db.finishFillCell(cell, outcome, ways);
+    } catch (err) {
+      log.error('speed-limits osm fill could not record its outcome', { error: errorText(err) });
+    }
+    const key = cellKey(cell);
+    if (outcome === 'done') {
+      filling.delete(key);
+      done.set(key, now() + DONE_MEMO_MS);
+    } else {
+      // Failed: the database holds the cell back for a while. Released: claimable again, but not
+      // worth asking about from this isolate at once.
+      filling.set(key, now() + FILLING_MEMO_MS);
+    }
+  }
+
   async function fill(cell: Cell): Promise<void> {
     const started = now();
-    let ok = false;
+    let outcome: FillOutcome = 'failed';
     let ways = 0;
-    let outcome = 'filled';
     try {
       const { key, window, max } = OVERPASS_BUDGET;
       if (!(await db.takeGlobalRateLimit(key, window, max))) {
-        outcome = 'budget_spent';
+        outcome = 'released';
       } else {
         let batch: WayRow[] = [];
         let streamError: unknown = null;
@@ -187,30 +255,17 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
         // What did arrive is kept, whole reply or not: a partial cell is fetched again later.
         if (batch.length > 0) ways += await db.upsertWays(batch);
         if (streamError !== null) throw streamError;
-        ok = true;
+        outcome = 'done';
       }
     } catch (err) {
-      outcome = 'failed';
       log.error('speed-limits osm fill failed', { error: errorText(err), ways });
     }
-    try {
-      await db.finishFillCell(cell, ok, ways);
-    } catch (err) {
-      log.error('speed-limits osm fill could not record its outcome', { error: errorText(err) });
-    }
-    const key = cellKey(cell);
-    if (ok) {
-      filling.delete(key);
-      done.set(key, now() + DONE_MEMO_MS);
-    } else {
-      // The database holds the failure back for a while; no point asking again at once.
-      filling.set(key, now() + FILLING_MEMO_MS);
-    }
-    log.info('speed-limits osm fill', { outcome, ways, ms: now() - started });
+    await finish(cell, outcome, ways);
+    log.info('speed-limits osm fill', { outcome: outcome === 'done' ? 'filled' : outcome === 'released' ? 'budget_spent' : 'failed', ways, ms: now() - started });
   }
 
-  /** The cell's status, from the memo or a claim; a claimed cell's fill is queued here. */
-  async function status(cell: Cell): Promise<ClaimStatus> {
+  /** The cell's status, from the memo or a claim; a claim this user may afford queues the fill. */
+  async function status(cell: Cell, userId: string): Promise<ClaimStatus> {
     const key = cellKey(cell);
     const t = now();
     const d = done.get(key);
@@ -229,23 +284,38 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
       return s;
     }
     filling.set(key, t + FILLING_MEMO_MS);
-    if (s === 'claimed') {
-      queue = queue.then(() => fill(cell));
-      deps.background(queue);
+    if (s !== 'claimed') return s;
+    // The claim is this user's to pay for: refused, it goes straight back.
+    let afford = false;
+    try {
+      const { key: bk, window, max } = CLAIM_BUDGET;
+      afford = await db.takeRateLimit(userId, bk, window, max);
+    } catch (err) {
+      log.error('speed-limits osm fill budget check failed', { error: errorText(err) });
     }
+    if (!afford) {
+      await finish(cell, 'released', 0);
+      return 'filling';
+    }
+    queue = queue.then(() => fill(cell));
+    deps.background(queue);
     return s;
   }
 
   return {
-    async ensure(boxes) {
-      const own = boxes.map((b) => cellsCovering(b));
-      const ahead = boxes.flatMap(lookaheadCells);
+    async ensure(boxes, userId) {
+      const own = boxes.map((b) => (fillable(b) ? cellsCovering(b) : []));
+      const ahead = boxes.filter(fillable).flatMap(lookaheadCells);
       const statuses = new Map<string, ClaimStatus>();
-      // Own cells first (they decide the answer and should fill first), then the look-ahead.
+      let claims = 0;
+      // Own cells first (they decide the answer and should fill first), then the look-ahead; a
+      // request names at most MAX_CLAIMS_PER_REQUEST cells.
       for (const cell of [...own.flat(), ...ahead]) {
         const key = cellKey(cell);
         if (statuses.has(key)) continue;
-        statuses.set(key, await status(cell));
+        if (claims >= MAX_CLAIMS_PER_REQUEST) break;
+        claims += 1;
+        statuses.set(key, await status(cell, userId));
       }
       return own.map((cells) => cells.some((c) => statuses.get(cellKey(c)) !== 'done'));
     },

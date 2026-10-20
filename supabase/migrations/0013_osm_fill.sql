@@ -12,8 +12,10 @@
 --     cell_x = floor(lng / 0.1). The edge function's fill.ts computes the same cells.
 --   * osm_claim_fill_cell is the atomic claim: one `insert … on conflict do update … where` under
 --     the row's lock, so two requests arriving together never fetch one cell twice. A claim left
---     'filling' for 5 minutes (a killed isolate) can be retaken; a 'failed' cell (Overpass down,
---     budget spent) is retaken after 10 minutes; a 'done' cell is refreshed after 30 days.
+--     'filling' for 5 minutes (a killed isolate) can be retaken; a 'failed' cell (Overpass down, a
+--     partial reply) is retaken after 10 minutes; a cell 'released' (the app-wide or the user's
+--     Overpass budget was spent, so nothing was tried) is claimable at once; a 'done' cell is
+--     refreshed after 30 days.
 --   * the functions are SECURITY INVOKER like 0002's: they run with the edge function's
 --     service-role privileges and can never exceed them. Execute is granted to service_role alone,
 --     and the writers refuse any other JWT role in their first statement (require_service_role).
@@ -35,7 +37,7 @@
 create table osm.filled_cells (
   cell_y int not null check (cell_y between -900 and 899),
   cell_x int not null check (cell_x between -1800 and 1799),
-  status text not null check (status in ('filling', 'done', 'failed')),
+  status text not null check (status in ('filling', 'done', 'failed', 'released')),
   claimed_at timestamptz not null default now(),
   filled_at timestamptz,
   way_count int not null default 0 check (way_count >= 0),
@@ -68,6 +70,7 @@ begin
     set status = 'filling', claimed_at = now(), attempts = osm.filled_cells.attempts + 1
     where (osm.filled_cells.status = 'filling' and osm.filled_cells.claimed_at <= now() - interval '5 minutes')
        or (osm.filled_cells.status = 'failed' and osm.filled_cells.updated_at <= now() - interval '10 minutes')
+       or osm.filled_cells.status = 'released'
        or (osm.filled_cells.status = 'done' and osm.filled_cells.filled_at <= now() - interval '30 days')
   returning 'claimed' into v_status;
   if v_status is not null then
@@ -80,23 +83,24 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- osm_finish_fill_cell: the claim's outcome; true when the cell was ours to finish
+-- osm_finish_fill_cell: the claim's outcome ('done', 'failed' or 'released'); true when the cell
+-- was ours to finish
 -- ---------------------------------------------------------------------------
-create or replace function public.osm_finish_fill_cell(p_y int, p_x int, p_ok boolean, p_way_count int) returns boolean
+create or replace function public.osm_finish_fill_cell(p_y int, p_x int, p_outcome text, p_way_count int) returns boolean
 language plpgsql volatile security invoker set search_path = public as $$
 begin
   perform public.require_service_role('osm_finish_fill_cell');
-  if p_y is null or p_x is null or p_ok is null then
-    raise exception 'cell and outcome are required' using errcode = 'invalid_parameter_value';
+  if p_y is null or p_x is null or p_outcome is null or p_outcome not in ('done', 'failed', 'released') then
+    raise exception 'cell and an outcome of done, failed or released are required' using errcode = 'invalid_parameter_value';
   end if;
   if p_way_count is not null and p_way_count < 0 then
     raise exception 'way_count must be at least 0' using errcode = 'invalid_parameter_value';
   end if;
   -- only a cell still claimed can be finished: a stale claim another caller retook is theirs now
   update osm.filled_cells
-    set status = case when p_ok then 'done' else 'failed' end,
-        filled_at = case when p_ok then now() else filled_at end,
-        way_count = case when p_ok then coalesce(p_way_count, 0) else way_count end
+    set status = p_outcome,
+        filled_at = case when p_outcome = 'done' then now() else filled_at end,
+        way_count = case when p_outcome = 'done' then coalesce(p_way_count, 0) else way_count end
     where cell_y = p_y and cell_x = p_x and status = 'filling';
   return found;
 end $$;
@@ -257,11 +261,11 @@ end $$;
 -- function grants: the edge function's service-role client only
 -- ---------------------------------------------------------------------------
 revoke all on function public.osm_claim_fill_cell(int, int) from public, anon, authenticated;
-revoke all on function public.osm_finish_fill_cell(int, int, boolean, int) from public, anon, authenticated;
+revoke all on function public.osm_finish_fill_cell(int, int, text, int) from public, anon, authenticated;
 revoke all on function public.osm_upsert_ways(jsonb) from public, anon, authenticated;
 revoke all on function public.get_current_speed_limit(double precision, double precision, double precision) from public, anon, authenticated;
 grant execute on function public.osm_claim_fill_cell(int, int) to service_role;
-grant execute on function public.osm_finish_fill_cell(int, int, boolean, int) to service_role;
+grant execute on function public.osm_finish_fill_cell(int, int, text, int) to service_role;
 grant execute on function public.osm_upsert_ways(jsonb) to service_role;
 grant execute on function public.get_current_speed_limit(double precision, double precision, double precision) to service_role;
 

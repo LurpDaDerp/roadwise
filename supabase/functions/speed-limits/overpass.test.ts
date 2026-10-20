@@ -2,10 +2,14 @@ import { assert, assertEquals, assertRejects, assertStringIncludes } from '@std/
 import {
   fetchWays,
   HIGHWAY_CLASSES,
+  MAX_EDGE_BYTES,
+  MAX_ELEMENT_BYTES,
+  MAX_REPLY_BYTES,
   OVERPASS_ENDPOINTS,
   OVERPASS_USER_AGENT,
   OverpassRefused,
   OverpassRemark,
+  OverpassTooLarge,
   overpassQuery,
   parseMaxspeed,
   parseOneway,
@@ -272,4 +276,72 @@ Deno.test('a remark reply propagates as OverpassRemark after its partial rows', 
     for await (const r of fetchWays(CELL, { fetch })) got.push(r.id);
   }, OverpassRemark);
   assertEquals(got, [1]);
+});
+
+// --- size caps (security review: the reader must never hold an unbounded body) ---
+
+/** A lazily generated body: `head`, then `filler` repeated `times`, then `tail`, one chunk per pull. */
+const generated = (head: string, filler: string, times: number, tail: string) => {
+  const enc = new TextEncoder();
+  let i = -1;
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(c) {
+      i += 1;
+      if (i === 0) c.enqueue(enc.encode(head));
+      else if (i <= times) c.enqueue(enc.encode(filler));
+      else if (i === times + 1) c.enqueue(enc.encode(tail));
+      else c.close();
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  return { stream, wasCancelled: () => cancelled, pulls: () => i + 1 };
+};
+
+Deno.test('a reply past MAX_REPLY_BYTES is cut off: the reader is cancelled and OverpassTooLarge(reply) thrown after the rows so far', async () => {
+  assertEquals(MAX_REPLY_BYTES, 64 * 1024 * 1024);
+  const mb = ' '.repeat(1024 * 1024);
+  const g = generated(reply([way(1, { highway: 'primary' })]).slice(0, -2) + ',', mb, 70, ']}');
+  const got: unknown[] = [];
+  const err = await assertRejects(async () => {
+    for await (const el of streamElements(g.stream)) got.push(el);
+  }, OverpassTooLarge);
+  assertEquals(err.what, 'reply');
+  assertEquals(got.length, 1);
+  assert(g.wasCancelled());
+  assert(g.pulls() <= 66, 'reading stopped at the cap');
+});
+
+Deno.test('one element past MAX_ELEMENT_BYTES, or a header or tail past MAX_EDGE_BYTES, is refused the same way', async () => {
+  assertEquals(MAX_ELEMENT_BYTES, 512 * 1024);
+  assertEquals(MAX_EDGE_BYTES, 64 * 1024);
+  const kb = 'x'.repeat(1024);
+  const element = generated('{"elements":[{"type":"way","id":1,"tags":{"note":"', kb, 600, '"}}]}');
+  const e1 = await assertRejects(() => collect(streamElements(element.stream)), OverpassTooLarge);
+  assertEquals(e1.what, 'element');
+  assert(element.wasCancelled());
+
+  const header = generated('{"version":0.6,"note":"', kb, 70, '","elements":[]}');
+  const e2 = await assertRejects(() => collect(streamElements(header.stream)), OverpassTooLarge);
+  assertEquals(e2.what, 'header');
+
+  const tail = generated('{"elements":[],"note":"', kb, 70, '"}');
+  const e3 = await assertRejects(() => collect(streamElements(tail.stream)), OverpassTooLarge);
+  assertEquals(e3.what, 'tail');
+
+  // a long but legitimate way (2000 nodes, about 100 KB) is fine
+  const long = way(1, { highway: 'primary' }, Array.from({ length: 2000 }, (_, i) => ({ lat: 47.6 + i * 1e-5, lon: -122.3 })));
+  assertEquals((await collect(streamElements(chunked(reply([long]), 4096)))).length, 1);
+});
+
+Deno.test('fetchWays never retries an oversized reply on another mirror', async () => {
+  const kb = 'x'.repeat(1024);
+  const { calls, fetch } = fetcher([
+    () => new Response(generated('{"elements":[{"type":"way","id":1,"tags":{"note":"', kb, 600, '"}}]}').stream, { status: 200 }),
+    () => ok(reply([way(1, { highway: 'primary' })])),
+  ]);
+  await assertRejects(() => collect(fetchWays(CELL, { fetch })), OverpassTooLarge);
+  assertEquals(calls.length, 1);
 });

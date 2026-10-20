@@ -434,7 +434,7 @@ async function tiles(req: Request, run: Run): Promise<Outcome> {
   // The fill's claims run beside the tile query: they decide nothing about this batch's rows,
   // only whether each tile is flagged filling. `ensure` never throws.
   const boxes = parsed.data.map((k) => tileBounds(parseTileKey(k) as TileXY));
-  const [raw, filling] = await Promise.all([deps.db.tiles(parsed.data), deps.fill ? deps.fill.ensure(boxes) : Promise.resolve(null)]);
+  const [raw, filling] = await Promise.all([deps.db.tiles(parsed.data), deps.fill ? deps.fill.ensure(boxes, run.userId) : Promise.resolve(null)]);
   // A point lookup can reach AWS only inside coverage (ruling B2 F2), so the batch promises the
   // fallback only when the client is configured and some requested tile overlaps a coverage box.
   const fallback = deps.routes && parsed.data.some(tileInCoverage) ? 'aws' : null;
@@ -494,7 +494,7 @@ async function point(req: Request, run: Run): Promise<Outcome> {
   // The point's cell is claimed for the fill beside the query (its answer is for later requests).
   const [candidates] = await Promise.all([
     deps.db.candidates(lat, lng, radiusM),
-    deps.fill ? deps.fill.ensure([{ minLat: lat, maxLat: lat, minLng: lng, maxLng: lng }]) : Promise.resolve(null),
+    deps.fill ? deps.fill.ensure([{ minLat: lat, maxLat: lat, minLng: lng, maxLng: lng }], userId) : Promise.resolve(null),
   ]);
   const match = matchLimit(heading, candidates);
   if (match.source === 'posted' || match.source === 'cached') return answer(toAnswer(match), 'matched');

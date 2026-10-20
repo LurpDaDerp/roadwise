@@ -6,21 +6,28 @@ import {
   cellKey,
   cellOf,
   cellsCovering,
+  CLAIM_BUDGET,
   createOsmFill,
   DONE_MEMO_MS,
   expand,
+  fillable,
   FILLING_MEMO_MS,
   LOOKAHEAD_M,
   lookaheadCells,
+  MAX_CLAIMS_PER_REQUEST,
+  MAX_LAT,
+  MAX_LOOKAHEAD_CELLS,
   OVERPASS_BUDGET,
   type Cell,
   type ClaimStatus,
+  type FillOutcome,
   type OsmFillDb,
   UPSERT_BATCH,
 } from './fill.ts';
 import { OVERPASS_ENDPOINTS, overpassQuery, type WayRow } from './overpass.ts';
 
 const T0 = 1_760_000_000_000;
+const UID = '00000000-0000-4000-8000-000000000001';
 /** The fixture corridor's tile (0002's seed): one cell, 670 m north of its south edge. */
 const TILE = tileBounds(parseTileKey('15/5249/11443')!);
 const SEATTLE: Cell = { y: 476, x: -1224 };
@@ -95,9 +102,10 @@ Deno.test('lookaheadCells: the cells within 1.5 km of the box that it does not o
 interface Harness {
   db: OsmFillDb;
   claims: Cell[];
-  finishes: { cell: Cell; ok: boolean; ways: number }[];
+  finishes: { cell: Cell; outcome: FillOutcome; ways: number }[];
   batches: WayRow[][];
   budgets: number;
+  userBudgets: { userId: string; key: string; window: string; max: number }[];
   background: Promise<void>[];
   fetches: { url: string; body: string }[];
   logs: { level: string; args: unknown[] }[];
@@ -118,6 +126,7 @@ const body = (text: string) =>
 function harness(opts: {
   claim?: (cell: Cell) => ClaimStatus;
   budget?: boolean;
+  userBudget?: boolean;
   answers?: ((url: string) => Response | Promise<Response>)[];
 } = {}) {
   const h: Harness = {
@@ -125,6 +134,7 @@ function harness(opts: {
     finishes: [],
     batches: [],
     budgets: 0,
+    userBudgets: [],
     background: [],
     fetches: [],
     logs: [],
@@ -134,9 +144,13 @@ function harness(opts: {
         h.claims.push(cell);
         return Promise.resolve(opts.claim ? opts.claim(cell) : 'claimed');
       },
-      finishFillCell: (cell, ok, ways) => {
-        h.finishes.push({ cell, ok, ways });
+      finishFillCell: (cell, outcome, ways) => {
+        h.finishes.push({ cell, outcome, ways });
         return Promise.resolve(true);
+      },
+      takeRateLimit: (userId, key, window, max) => {
+        h.userBudgets.push({ userId, key, window, max });
+        return Promise.resolve(opts.userBudget ?? true);
       },
       upsertWays: (ways) => {
         h.batches.push([...ways]);
@@ -165,7 +179,7 @@ function harness(opts: {
 
 Deno.test('a tile in an unloaded cell: the cell and its look-ahead are claimed (own first), the tile reads filling, and the fill runs in the background', async () => {
   const h = harness();
-  assertEquals(await h.fill.ensure([TILE]), [true]);
+  assertEquals(await h.fill.ensure([TILE], UID), [true]);
   assertEquals(h.claims, [SEATTLE, SOUTH]);
   assertEquals(h.background.length, 2);
   await h.fill.settled();
@@ -177,11 +191,16 @@ Deno.test('a tile in an unloaded cell: the cell and its look-ahead are claimed (
   assertEquals(h.batches.length, 2);
   assertEquals(h.batches[0].map((w) => w.id), [1, 2, 3]);
   assertEquals(h.finishes, [
-    { cell: SEATTLE, ok: true, ways: 3 },
-    { cell: SOUTH, ok: true, ways: 3 },
+    { cell: SEATTLE, outcome: 'done', ways: 3 },
+    { cell: SOUTH, outcome: 'done', ways: 3 },
+  ]);
+  // each won claim was charged to the requesting user, before any fetch
+  assertEquals(h.userBudgets, [
+    { userId: UID, key: 'overpass_claim', window: '1 hour', max: 12 },
+    { userId: UID, key: 'overpass_claim', window: '1 hour', max: 12 },
   ]);
   // filled: the next request sees it done from the memo, with no claim
-  assertEquals(await h.fill.ensure([TILE]), [false]);
+  assertEquals(await h.fill.ensure([TILE], UID), [false]);
   assertEquals(h.claims.length, 2);
   const info = h.logs.filter((l) => l.level === 'info').map((l) => l.args[1] as Record<string, unknown>);
   assertEquals(info.map((i) => [i.outcome, i.ways]), [['filled', 3], ['filled', 3]]);
@@ -192,55 +211,55 @@ Deno.test('the fill upserts in batches of UPSERT_BATCH and reports the rows writ
   assertEquals(UPSERT_BATCH, 500);
   const ids = Array.from({ length: 1234 }, (_, i) => i + 1);
   const h = harness({ claim: (c) => (c.y === SEATTLE.y && c.x === SEATTLE.x ? 'claimed' : 'done'), answers: [() => new Response(body(replyOf(ids)), { status: 200 })] });
-  await h.fill.ensure([TILE]);
+  await h.fill.ensure([TILE], UID);
   await h.fill.settled();
   assertEquals(h.batches.map((b) => b.length), [500, 500, 234]);
-  assertEquals(h.finishes, [{ cell: SEATTLE, ok: true, ways: 1234 }]);
+  assertEquals(h.finishes, [{ cell: SEATTLE, outcome: 'done', ways: 1234 }]);
 });
 
 Deno.test('a done cell is not claimed again for DONE_MEMO_MS; a filling one not for FILLING_MEMO_MS; then they are', async () => {
   assertEquals(DONE_MEMO_MS, 600_000);
   assertEquals(FILLING_MEMO_MS, 15_000);
   const h = harness({ claim: (c) => (c.y === SOUTH.y ? 'filling' : 'done') });
-  assertEquals(await h.fill.ensure([TILE]), [false]);
+  assertEquals(await h.fill.ensure([TILE], UID), [false]);
   assertEquals(h.claims.length, 2);
   assertEquals(h.background.length, 0);
-  await h.fill.ensure([TILE]);
+  await h.fill.ensure([TILE], UID);
   assertEquals(h.claims.length, 2, 'both answers are remembered');
   h.clock.now += FILLING_MEMO_MS;
-  await h.fill.ensure([TILE]);
+  await h.fill.ensure([TILE], UID);
   assertEquals(h.claims, [SEATTLE, SOUTH, SOUTH], 'the filling cell is asked about again');
   h.clock.now += DONE_MEMO_MS;
-  await h.fill.ensure([TILE]);
+  await h.fill.ensure([TILE], UID);
   assertEquals(h.claims.length, 5, 'and the done one once its memo lapses');
 });
 
 Deno.test('a tile whose own cell another caller is filling reads filling; its look-ahead still claims', async () => {
   const h = harness({ claim: (c) => (c.y === SEATTLE.y ? 'filling' : 'claimed') });
-  assertEquals(await h.fill.ensure([TILE]), [true]);
+  assertEquals(await h.fill.ensure([TILE], UID), [true]);
   assertEquals(h.background.length, 1);
   await h.fill.settled();
-  assertEquals(h.finishes, [{ cell: SOUTH, ok: true, ways: 3 }]);
+  assertEquals(h.finishes, [{ cell: SOUTH, outcome: 'done', ways: 3 }]);
 });
 
 Deno.test('a tile across a cell edge is filling until both its cells are done; several tiles share one claim per cell', async () => {
   const h = harness({ claim: (c) => (c.x === -1225 ? 'done' : 'filling') });
   const straddling = { minLat: 47.65, maxLat: 47.66, minLng: -122.405, maxLng: -122.395 };
   const inside = { minLat: 47.65, maxLat: 47.66, minLng: -122.42, maxLng: -122.41 };
-  assertEquals(await h.fill.ensure([straddling, inside, TILE]), [true, false, true]);
+  assertEquals(await h.fill.ensure([straddling, inside, TILE], UID), [true, false, true]);
   // own cells of every box first, then the look-ahead cells, each once
   assertEquals(h.claims.map(cellKey), ['476/-1225', '476/-1224', '475/-1224']);
 });
 
-Deno.test('a spent Overpass budget marks the cell failed without fetching; the claim is remembered as filling meanwhile', async () => {
+Deno.test('a spent app-wide Overpass budget releases the cell (claimable again at once) without fetching; this isolate remembers it as filling for a while', async () => {
   assertEquals(OVERPASS_BUDGET, { key: 'overpass_fill', window: '1 minute', max: 4 });
   const h = harness({ budget: false, claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done') });
-  assertEquals(await h.fill.ensure([TILE]), [true]);
+  assertEquals(await h.fill.ensure([TILE], UID), [true]);
   await h.fill.settled();
   assertEquals(h.fetches.length, 0);
-  assertEquals(h.finishes, [{ cell: SEATTLE, ok: false, ways: 0 }]);
+  assertEquals(h.finishes, [{ cell: SEATTLE, outcome: 'released', ways: 0 }]);
   assertEquals((h.logs.at(-1)?.args[1] as Record<string, unknown>).outcome, 'budget_spent');
-  assertEquals(await h.fill.ensure([TILE]), [true]);
+  assertEquals(await h.fill.ensure([TILE], UID), [true]);
   assertEquals(h.claims.length, 2, 'no second claim within FILLING_MEMO_MS');
 });
 
@@ -249,21 +268,21 @@ Deno.test('both mirrors down: the cell is marked failed with nothing written; a 
     claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done'),
     answers: [() => Promise.reject(new TypeError('fetch failed')), () => new Response('', { status: 504 })],
   });
-  await down.fill.ensure([TILE]);
+  await down.fill.ensure([TILE], UID);
   await down.fill.settled();
   assertEquals(down.fetches.map((f) => f.url), [OVERPASS_ENDPOINTS[0], OVERPASS_ENDPOINTS[1]]);
   assertEquals(down.batches, []);
-  assertEquals(down.finishes, [{ cell: SEATTLE, ok: false, ways: 0 }]);
+  assertEquals(down.finishes, [{ cell: SEATTLE, outcome: 'failed', ways: 0 }]);
   assertEquals(down.logs.filter((l) => l.level === 'error').length, 1);
 
   const busy = harness({
     claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done'),
     answers: [() => new Response('busy', { status: 429 }), () => new Response(body(replyOf([9])), { status: 200 })],
   });
-  await busy.fill.ensure([TILE]);
+  await busy.fill.ensure([TILE], UID);
   await busy.fill.settled();
   assertEquals(busy.fetches.map((f) => f.url), [OVERPASS_ENDPOINTS[0], OVERPASS_ENDPOINTS[1]]);
-  assertEquals(busy.finishes, [{ cell: SEATTLE, ok: true, ways: 1 }]);
+  assertEquals(busy.finishes, [{ cell: SEATTLE, outcome: 'done', ways: 1 }]);
 });
 
 Deno.test('a partial reply (an Overpass remark) keeps the rows it did send but marks the cell failed, so it is fetched again later', async () => {
@@ -271,20 +290,20 @@ Deno.test('a partial reply (an Overpass remark) keeps the rows it did send but m
     claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done'),
     answers: [() => new Response(body(replyOf([1, 2], ',"remark":"runtime error: Query timed out"')), { status: 200 })],
   });
-  await h.fill.ensure([TILE]);
+  await h.fill.ensure([TILE], UID);
   await h.fill.settled();
   assertEquals(h.batches.map((b) => b.map((w) => w.id)), [[1, 2]]);
-  assertEquals(h.finishes, [{ cell: SEATTLE, ok: false, ways: 2 }]);
+  assertEquals(h.finishes, [{ cell: SEATTLE, outcome: 'failed', ways: 2 }]);
   const err = h.logs.find((l) => l.level === 'error')?.args[1] as Record<string, unknown>;
   assertEquals(err.ways, 2);
   assert(String(err.error).includes('OverpassRemark'));
-  assertEquals(await h.fill.ensure([TILE]), [true], 'not remembered as done');
+  assertEquals(await h.fill.ensure([TILE], UID), [true], 'not remembered as done');
 });
 
 Deno.test('a failing claim RPC reads as filling, is logged without the cell, and starts no fill', async () => {
   const h = harness();
   h.db.claimFillCell = () => Promise.reject(new Error('connection refused'));
-  assertEquals(await h.fill.ensure([TILE]), [true]);
+  assertEquals(await h.fill.ensure([TILE], UID), [true]);
   assertEquals(h.background.length, 0);
   const err = h.logs.find((l) => l.level === 'error');
   assertEquals(err?.args[0], 'speed-limits osm fill claim failed');
@@ -303,11 +322,82 @@ Deno.test('fills run one at a time in an isolate: the second cell is not fetched
       () => new Response(body(replyOf([2])), { status: 200 }),
     ],
   });
-  await h.fill.ensure([TILE]);
+  await h.fill.ensure([TILE], UID);
   await new Promise((r) => setTimeout(r, 5));
   assertEquals(h.fetches.length, 1, 'the second cell waits');
   release();
   await h.fill.settled();
   assertEquals(h.fetches.length, 2);
-  assertEquals(h.finishes.map((f) => [cellKey(f.cell), f.ok]), [['476/-1224', true], ['475/-1224', true]]);
+  assertEquals(h.finishes.map((f) => [cellKey(f.cell), f.outcome]), [['476/-1224', 'done'], ['475/-1224', 'done']]);
+});
+
+// --- what one request may start (security review) ---
+
+Deno.test("a user whose claim budget is spent: the claim is released at once, nothing is fetched, and the tile reads filling; the user's budget is checked only for a won claim", async () => {
+  assertEquals(CLAIM_BUDGET, { key: 'overpass_claim', window: '1 hour', max: 12 });
+  const h = harness({ userBudget: false, claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done') });
+  assertEquals(await h.fill.ensure([TILE], UID), [true]);
+  assertEquals(h.userBudgets.length, 1, 'the done look-ahead cell costs nothing');
+  assertEquals(h.background.length, 0);
+  await h.fill.settled();
+  assertEquals(h.fetches.length, 0);
+  assertEquals(h.budgets, 0, 'the shared budget is untouched');
+  assertEquals(h.finishes, [{ cell: SEATTLE, outcome: 'released', ways: 0 }]);
+  assertEquals(await h.fill.ensure([TILE], UID), [true]);
+  assertEquals(h.claims.length, 2, 'remembered as filling: no second claim within FILLING_MEMO_MS');
+});
+
+Deno.test('a failing user budget check counts as refused: released, logged without the user', async () => {
+  const h = harness({ claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done') });
+  h.db.takeRateLimit = () => Promise.reject(new Error('connection refused'));
+  assertEquals(await h.fill.ensure([TILE], UID), [true]);
+  assertEquals(h.finishes, [{ cell: SEATTLE, outcome: 'released', ways: 0 }]);
+  assertEquals(h.background.length, 0);
+  const err = h.logs.find((l) => l.level === 'error');
+  assertEquals(err?.args[0], 'speed-limits osm fill budget check failed');
+  assert(!JSON.stringify(h.logs).includes(UID), 'no user in the log');
+});
+
+Deno.test('one request claims at most MAX_CLAIMS_PER_REQUEST cells, its own cells first', async () => {
+  assertEquals(MAX_CLAIMS_PER_REQUEST, 6);
+  // four boxes in four different cells, each with neighbours within 1.5 km: far more than six cells in reach
+  const boxes = [0, 1, 2, 3].map((i) => ({ minLat: 47.601 + i * 0.1, maxLat: 47.601 + i * 0.1, minLng: -122.399, maxLng: -122.399 }));
+  const h = harness({ claim: () => 'done' });
+  assertEquals(await h.fill.ensure(boxes, UID), [false, false, false, false]);
+  assertEquals(h.claims.map(cellKey), ['476/-1224', '477/-1224', '478/-1224', '479/-1224', '475/-1225', '475/-1224']);
+  // own cells past the cap are not claimed, so their tiles read as not loaded
+  const many = [0, 1, 2, 3, 4, 5, 6].map((i) => ({ minLat: 47.65 + i * 0.1, maxLat: 47.65 + i * 0.1, minLng: -122.35, maxLng: -122.35 }));
+  const h2 = harness({ claim: () => 'done' });
+  assertEquals(await h2.fill.ensure(many, UID), [false, false, false, false, false, false, true]);
+  assertEquals(h2.claims.length, 6);
+});
+
+Deno.test('look-ahead names only the immediate neighbours, at most MAX_LOOKAHEAD_CELLS, however far the longitude scale stretches', () => {
+  assertEquals(MAX_LOOKAHEAD_CELLS, 8);
+  // at 85 degrees a 1.5 km look-ahead spans nearly two cells of longitude: still only the neighbours
+  const far = { minLat: 85.001, maxLat: 85.001, minLng: 10.001, maxLng: 10.001 };
+  const ahead = lookaheadCells(far);
+  assert(ahead.length <= 8);
+  assert(ahead.every((c) => Math.abs(c.y - 850) <= 1 && Math.abs(c.x - 100) <= 1 && !(c.y === 850 && c.x === 100)));
+  // a box across a corner at 85 degrees: four own cells, the stretch reaches two columns either side, only the adjacent ones are named
+  const corner = lookaheadCells({ minLat: 84.999, maxLat: 85.001, minLng: 9.999, maxLng: 10.001 });
+  assertEquals(corner, [{ y: 849, x: 98 }, { y: 849, x: 101 }, { y: 850, x: 98 }, { y: 850, x: 101 }]);
+  // a box 5 km inside its cells reaches nothing
+  assertEquals(lookaheadCells({ minLat: 47.595, maxLat: 47.605, minLng: -122.405, maxLng: -122.395 }), []);
+  // expand never scales past MAX_LAT
+  const e = expand({ minLat: 89, maxLat: 89.5, minLng: 0, maxLng: 1 }, 1500);
+  assert(e.maxLng - 1 < 0.2 && -e.minLng < 0.2);
+});
+
+Deno.test('a box beyond Web Mercator, off the globe or inside out is not fillable: no claim, reads not filling', async () => {
+  assertEquals(MAX_LAT, 85.05112878);
+  assert(fillable(TILE));
+  assert(!fillable({ minLat: 85.1, maxLat: 85.1, minLng: 0, maxLng: 0 }));
+  assert(!fillable({ minLat: -86, maxLat: -85.5, minLng: 0, maxLng: 0 }));
+  assert(!fillable({ minLat: 0, maxLat: 0, minLng: 180.5, maxLng: 180.5 }));
+  assert(!fillable({ minLat: 1, maxLat: 0, minLng: 0, maxLng: 0 }));
+  assert(!fillable({ minLat: Number.NaN, maxLat: 0, minLng: 0, maxLng: 0 }));
+  const h = harness();
+  assertEquals(await h.fill.ensure([{ minLat: 86, maxLat: 86, minLng: 0, maxLng: 0 }, TILE], UID), [false, true]);
+  assertEquals(h.claims.map(cellKey), ['476/-1224', '475/-1224']);
 });

@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(70);
+select plan(77);
 
 -- ---------------------------------------------------------------------------
 -- posture: table, RLS, grants
@@ -19,7 +19,7 @@ select table_privs_are('osm', 'ways', 'authenticated', '{}'::name[], 'authentica
 
 select function_privs_are('public', 'osm_claim_fill_cell', array['int', 'int'], 'anon', '{}'::name[], 'anon cannot call osm_claim_fill_cell');
 select function_privs_are('public', 'osm_claim_fill_cell', array['int', 'int'], 'authenticated', '{}'::name[], 'authenticated cannot call osm_claim_fill_cell');
-select function_privs_are('public', 'osm_finish_fill_cell', array['int', 'int', 'boolean', 'int'], 'authenticated', '{}'::name[], 'authenticated cannot call osm_finish_fill_cell');
+select function_privs_are('public', 'osm_finish_fill_cell', array['int', 'int', 'text', 'int'], 'authenticated', '{}'::name[], 'authenticated cannot call osm_finish_fill_cell');
 select function_privs_are('public', 'osm_upsert_ways', array['jsonb'], 'authenticated', '{}'::name[], 'authenticated cannot call osm_upsert_ways');
 select function_privs_are('public', 'get_current_speed_limit', array['double precision', 'double precision', 'double precision'], 'authenticated', '{}'::name[], 'authenticated cannot call get_current_speed_limit');
 select function_privs_are('public', 'get_current_speed_limit', array['double precision', 'double precision', 'double precision'], 'service_role', array['EXECUTE'], 'service_role calls get_current_speed_limit');
@@ -33,7 +33,7 @@ reset role;
 -- the writers refuse any JWT role but service_role in their first statement, even as the owner
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4"}', true);
 select throws_ok($$ select public.osm_claim_fill_cell(476, -1224) $$, '42501', 'osm_claim_fill_cell requires the service role', 'osm_claim_fill_cell requires the service role');
-select throws_ok($$ select public.osm_finish_fill_cell(476, -1224, true, 0) $$, '42501', 'osm_finish_fill_cell requires the service role', 'osm_finish_fill_cell requires the service role');
+select throws_ok($$ select public.osm_finish_fill_cell(476, -1224, 'done', 0) $$, '42501', 'osm_finish_fill_cell requires the service role', 'osm_finish_fill_cell requires the service role');
 select throws_ok($$ select public.osm_upsert_ways('[]') $$, '42501', 'osm_upsert_ways requires the service role', 'osm_upsert_ways requires the service role');
 
 set local role service_role;
@@ -45,21 +45,28 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(public.osm_claim_fill_cell(476, -1224), 'claimed', 'the first claim of a cell is claimed');
 select is(public.osm_claim_fill_cell(476, -1224), 'filling', 'a second claim while it is being filled is filling');
 select is((select row(status, attempts, way_count)::text from osm.filled_cells where cell_y = 476 and cell_x = -1224), row('filling', 1, 0)::text, 'the row is filling after one attempt');
-select is(public.osm_finish_fill_cell(476, -1224, true, 1234), true, 'the claimant finishes it');
+select is(public.osm_finish_fill_cell(476, -1224, 'done', 1234), true, 'the claimant finishes it');
 select is((select row(status, way_count, filled_at is not null)::text from osm.filled_cells where cell_y = 476 and cell_x = -1224), row('done', 1234, true)::text, 'done, with the way count and the fill time');
 select is(public.osm_claim_fill_cell(476, -1224), 'done', 'a done cell answers done');
-select is(public.osm_finish_fill_cell(476, -1224, true, 5), false, 'finishing a cell nobody holds changes nothing');
+select is(public.osm_finish_fill_cell(476, -1224, 'done', 5), false, 'finishing a cell nobody holds changes nothing');
 select is((select way_count from osm.filled_cells where cell_y = 476 and cell_x = -1224), 1234, 'and its count stands');
 
 select is(public.osm_claim_fill_cell(0, 0), 'claimed', 'another cell has its own claim');
-select is(public.osm_finish_fill_cell(0, 0, false, null), true, 'a fill can fail');
+select is(public.osm_finish_fill_cell(0, 0, 'failed', null), true, 'a fill can fail');
 select is((select status from osm.filled_cells where cell_y = 0 and cell_x = 0), 'failed', 'and the row says so');
 select is(public.osm_claim_fill_cell(0, 0), 'filling', 'a cell that just failed is not retaken yet (it reads as filling)');
+select is(public.osm_claim_fill_cell(3, 3), 'claimed', 'a cell is claimed');
+select is(public.osm_finish_fill_cell(3, 3, 'released', null), true, 'and released (a budget was spent before anything was tried)');
+select is((select row(status, way_count, filled_at)::text from osm.filled_cells where cell_y = 3 and cell_x = 3), row('released', 0, null::timestamptz)::text, 'released, nothing filled');
+select is(public.osm_claim_fill_cell(3, 3), 'claimed', 'a released cell is claimable at once');
+select is((select attempts from osm.filled_cells where cell_y = 3 and cell_x = 3), 2, 'as a second attempt');
+select is(public.osm_claim_fill_cell(3, 3), 'filling', 'and held again');
 
 select throws_ok($$ select public.osm_claim_fill_cell(900, 0) $$, '22023', 'cell must be a 0.1 degree grid cell: y in -900..899, x in -1800..1799', 'a cell off the grid is refused');
 select throws_ok($$ select public.osm_claim_fill_cell(null, 0) $$, '22023', 'cell must be a 0.1 degree grid cell: y in -900..899, x in -1800..1799', 'a missing cell is refused');
-select throws_ok($$ select public.osm_finish_fill_cell(0, 0, null, 0) $$, '22023', 'cell and outcome are required', 'a missing outcome is refused');
-select throws_ok($$ select public.osm_finish_fill_cell(0, 0, true, -1) $$, '22023', 'way_count must be at least 0', 'a negative count is refused');
+select throws_ok($$ select public.osm_finish_fill_cell(0, 0, null, 0) $$, '22023', 'cell and an outcome of done, failed or released are required', 'a missing outcome is refused');
+select throws_ok($$ select public.osm_finish_fill_cell(0, 0, 'ok', 0) $$, '22023', 'cell and an outcome of done, failed or released are required', 'an unknown outcome is refused');
+select throws_ok($$ select public.osm_finish_fill_cell(0, 0, 'done', -1) $$, '22023', 'way_count must be at least 0', 'a negative count is refused');
 
 -- stale and old claims are retaken (the clock is moved on the rows themselves)
 reset role;
