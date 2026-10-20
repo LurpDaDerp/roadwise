@@ -197,9 +197,11 @@ export function toLocalDriveEvent(row: EventRow): LocalDriveEvent {
   };
 }
 
-/** A drive the lists show: not merged away, not still recording, not failed. */
-export const isListed = (d: Pick<LocalDrive, 'status'>): boolean =>
-  d.status !== 'merged' && d.status !== 'recording' && d.status !== 'failed';
+/**
+ * A drive the lists show: not merged away, not still recording. One that failed to upload is still
+ * a drive the user made, and is listed under "Not synced" rather than lost.
+ */
+export const isListed = (d: Pick<LocalDrive, 'status'>): boolean => d.status !== 'merged' && d.status !== 'recording';
 
 /** A drive that counts toward stats and the first-run count: scored by the server, or a pending estimate. */
 export const isScoredDrive = (d: Pick<LocalDrive, 'status' | 'pointsNet'>): boolean =>

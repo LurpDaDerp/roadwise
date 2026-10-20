@@ -35,11 +35,15 @@ const asStatus = (value: unknown): number | null => {
   return null;
 };
 
-/** What an HTTP status means for a queued item. 408, 409, 425 and 429 join the 5xx range as "not decided". */
+/**
+ * What an HTTP status means for a queued item. 408, 409, 425 and 429 join the 5xx range as "not
+ * decided", and so does 404: nothing read the payload, the function is simply not deployed (yet,
+ * or any more), and the same bytes go through once it is.
+ */
 export function classifyStatus(status: number | null): FailureKind {
   if (status === null) return 'retryable';
   if (status === 401) return 'unauthorized';
-  if (status === 408 || status === 425 || status === 429) return 'retryable';
+  if (status === 404 || status === 408 || status === 425 || status === 429) return 'retryable';
   if (status >= 500) return 'retryable';
   if (status >= 400) return 'terminal';
   return 'retryable';
@@ -82,7 +86,8 @@ export async function classifyInvokeError(error: unknown, now: number): Promise<
   const header =
     typeof getHeader === 'function' ? ((getHeader as (name: string) => string | null).call(headers, 'Retry-After') ?? null) : null;
 
-  const body = await readBody(context);
+  // A 404's body is the gateway's, not a function's: the status is the whole story.
+  const body = status === 404 ? undefined : await readBody(context);
   const parsed = ErrorBodySchema.safeParse(body);
   const code = parsed.success ? parsed.data.code : status === null ? 'network' : `http_${status}`;
 

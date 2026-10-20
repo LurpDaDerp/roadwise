@@ -4,6 +4,7 @@ import { closedSession, speedingEvent, TZ, uuid } from '@/core/engine/__fixtures
 import { finalizeTrip } from '@/core/engine/finalize';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
+import { REFUSED_NEVER } from '@/data/db/queue';
 import { createFakeAppState, createFakeSupabase, functionsFetchError, functionsHttpError, invokeOk } from '@/data/sync/__fixtures__/fakes';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import type { FinalizeTripResponseV3 } from '@/data/sync/payload';
@@ -216,6 +217,25 @@ test('a terminal refusal fails the item and the drive for good; a transport fail
   const after = (await createQueueRepo(db).byKey(`trip:${uuid(12)}`))!;
   expect(after.next_attempt_at).toBe(T0 + 2_000_000 + 120_000);
   await r.stop();
+});
+
+test('a 404 (the function not deployed yet) is no refusal: the drive stays pending and the upload retries; a drive an earlier build failed on one is picked up again', async () => {
+  await finalized(uuid(10));
+  const r = runner(createFakeSupabase({ invoke: () => functionsHttpError(404, {}) }));
+  await r.start();
+  expect(await r.drainOnce()).toMatchObject({ failed: 0, deferred: 1 });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', sync_error: null });
+  expect(await createQueueRepo(db).byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'pending', attempts: 1, last_error: 'http_404' });
+  await r.stop();
+
+  // What an earlier build left behind: the item refused for good on the 404, the drive `failed` with it.
+  await db.execute("UPDATE sync_queue SET status = 'failed', next_attempt_at = ?, last_error = 'http_404'", [REFUSED_NEVER]);
+  await createTripsRepo(db).update(uuid(10), { status: 'failed', sync_error: 'http_404' });
+  const deployed = runner(createFakeSupabase({ invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId)) }));
+  await deployed.start();
+  expect(await deployed.drainOnce()).toMatchObject({ done: 1 });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'scored', points_net: 106, sync_error: null });
+  await deployed.stop();
 });
 
 test('nothing is sent without a session, while recording, or under another user; items wait', async () => {

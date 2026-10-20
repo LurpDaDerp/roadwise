@@ -31,6 +31,11 @@ export const REFUSED_NEVER = Number.MAX_SAFE_INTEGER;
 
 /** `last_error` of an attempt that never reached a server; such an item is reopened on every reconnect. */
 export const TRANSPORT_FAILURE = 'network';
+/**
+ * `last_error` of an attempt that found no function at the URL. An earlier build took that for a
+ * refusal and failed the item for good; it is reopened like any other, since a deploy answers it.
+ */
+export const FUNCTION_MISSING = 'http_404';
 /** An item that ran out on server answers is reopened only this long after it gave up. */
 export const SERVER_REOPEN_AFTER_MS = 24 * 60 * 60 * 1000;
 
@@ -174,18 +179,19 @@ export function createQueueRepo(db: Db) {
 
     /**
      * Put back every item that gave up only because its retries ran out, with a clean ladder, due
-     * now. An item the server refused stays failed. One that ran out on server answers is reopened
+     * now. An item the server refused stays failed, unless the "refusal" was a missing function
+     * (`FUNCTION_MISSING`): that is reopened too. One that ran out on server answers is reopened
      * only `SERVER_REOPEN_AFTER_MS` after it gave up. Returns how many were reopened.
      */
     reopenRetryable(now: number = Date.now()): Promise<number> {
       return db.transaction(async (tx) => {
         const { rows } = await tx.execute(
-          'SELECT * FROM sync_queue WHERE status = \'failed\' AND attempts >= ? AND next_attempt_at <> ?',
-          [MAX_ATTEMPTS, REFUSED_NEVER]
+          "SELECT * FROM sync_queue WHERE status = 'failed' AND ((attempts >= ? AND next_attempt_at <> ?) OR last_error = ?)",
+          [MAX_ATTEMPTS, REFUSED_NEVER, FUNCTION_MISSING]
         );
         let reopened = 0;
         for (const item of rows.map(toQueueItem)) {
-          const serverSide = item.last_error !== TRANSPORT_FAILURE;
+          const serverSide = item.last_error !== TRANSPORT_FAILURE && item.last_error !== FUNCTION_MISSING;
           if (serverSide && now - item.next_attempt_at < SERVER_REOPEN_AFTER_MS) continue;
           reopened += 1;
           await tx.execute(

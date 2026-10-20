@@ -17,6 +17,7 @@ beforeEach(async () => {
     { client_trip_id: uuid(4), started_at: T0 - 4000, tz: 'UTC', status: 'not_driving', points_net: 0, miles: 3 },
     { client_trip_id: uuid(5), started_at: T0 - 5000, tz: 'UTC', status: 'recording' },
     { client_trip_id: uuid(6), started_at: T0 - 90 * 86_400_000, tz: 'UTC', status: 'unscored', reason: 'too_short', miles: 0.2, polyline: 'old' },
+    { client_trip_id: uuid(7), started_at: T0 - 100 * 86_400_000, tz: 'UTC', status: 'failed', sync_error: 'http_404', miles: 2, points_net: 20, estimate: 1 },
   ]);
   await seedEvents(db, [
     { id: uuid(21), client_trip_id: uuid(2), type: 'speeding', tier: 'minor', started_at: T0 - 1900, duration_s: 8, penalty: 15, lat: 47.6, lng: -122.3, measured_json: '{"speedMph":41}' },
@@ -24,9 +25,9 @@ beforeEach(async () => {
   ]);
 });
 
-test('lists hide merged, recording and failed drives; filters pick clean / negative / passenger', async () => {
+test('lists hide merged and recording drives, and keep a drive that failed to upload; filters pick clean / negative / passenger', async () => {
   const all = await readDriveHistory(db, 'all');
-  expect(all.map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2), uuid(4), uuid(6)]);
+  expect(all.map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2), uuid(4), uuid(6), uuid(7)]);
   expect((await readDriveHistory(db, 'clean')).map((d) => d.clientTripId)).toEqual([uuid(1)]);
   expect((await readDriveHistory(db, 'negative')).map((d) => d.clientTripId)).toEqual([uuid(2)]);
   expect((await readDriveHistory(db, 'passenger')).map((d) => d.clientTripId)).toEqual([uuid(4)]);
@@ -53,7 +54,7 @@ test('stat sums cover scored and pending drives only, within the window; routes 
 
 test('recent drives: the newest listed drives, capped', async () => {
   expect((await readRecentDrives(db, 2)).map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2)]);
-  expect((await readRecentDrives(db, 10)).map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2), uuid(4), uuid(6)]);
+  expect((await readRecentDrives(db, 10)).map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2), uuid(4), uuid(6), uuid(7)]);
   // The hooks are thin wrappers over these readers (React Query + the provider's db).
   expect(typeof useRecentDrives).toBe('function');
   expect(typeof useDriveCount).toBe('function');
@@ -67,5 +68,7 @@ test('row bridges: counts from events, filters on a drive view', () => {
     status: 'failed', points_net: null, estimate: 1, breakdown_json: null, clean: null, counts_json: 'not json', reason: null, merged_into: null, result_json: 'nope', server_id: null, sync_error: 'x', checkpoint_ts: null, created_at: 1, updated_at: 1, continues: 0, end_cause: null,
   });
   expect(d).toMatchObject({ fromLabel: 'Home', result: null, counts: expect.objectContaining({ speeding: 0 }) });
-  expect(matchesHistoryFilter(d, 'all')).toBe(false);
+  // A drive that failed to upload is still a drive the user made: listed, under "Not synced".
+  expect(matchesHistoryFilter(d, 'all')).toBe(true);
+  expect(matchesHistoryFilter({ ...d, status: 'merged' }, 'all')).toBe(false);
 });
