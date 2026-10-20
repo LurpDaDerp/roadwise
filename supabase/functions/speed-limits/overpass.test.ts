@@ -8,6 +8,8 @@ import {
   OVERPASS_DE,
   OVERPASS_ENDPOINTS,
   OVERPASS_USER_AGENT,
+  overpassEndpoints,
+  MAX_OPERATOR_ENDPOINTS,
   OverpassBudgetSpent,
   OverpassHeldBack,
   OverpassIncomplete,
@@ -17,10 +19,12 @@ import {
   overpassQuery,
   parseMaxspeed,
   parseOneway,
+  parseOverpassUrls,
   PRIVATE_COFFEE,
   streamElements,
   toWayRow,
   userAgent,
+  VK_MAPS,
   type WayRow,
 } from './overpass.ts';
 
@@ -64,9 +68,14 @@ Deno.test('the query names the twelve classes anchored, the cell bbox south,west
     '[out:json][timeout:90];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](47.6,-122.4,47.7,-122.3);out geom;'
   );
   assertEquals(HIGHWAY_CLASSES.length, 12);
-  // private.coffee first (no rate limit), the main instance as the fallback (fill.ts holds it to its policy)
-  assertEquals(OVERPASS_ENDPOINTS, ['https://overpass.private.coffee/api/interpreter', 'https://overpass-api.de/api/interpreter']);
-  assertEquals([PRIVATE_COFFEE, OVERPASS_DE], OVERPASS_ENDPOINTS);
+  // private.coffee first (no rate limit), VK Maps next (no request limits), the main instance last
+  // (fill.ts holds it to its policy)
+  assertEquals(OVERPASS_ENDPOINTS, [
+    'https://overpass.private.coffee/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+    'https://overpass-api.de/api/interpreter',
+  ]);
+  assertEquals([PRIVATE_COFFEE, VK_MAPS, OVERPASS_DE], OVERPASS_ENDPOINTS);
 });
 
 // --- maxspeed ---
@@ -254,7 +263,7 @@ Deno.test('fetchWays POSTs the query form-encoded with the User-Agent to the fir
   assert(calls[0].init.signal instanceof AbortSignal);
 });
 
-Deno.test('a mirror that refuses (429) or fails before any element is skipped for the next; both failing throws the last error', async () => {
+Deno.test('a mirror that refuses (429) or fails before any element is skipped for the next; every one failing throws the last error', async () => {
   const good = () => ok(reply([way(1, { highway: 'primary' })]));
   const refused = fetcher([() => new Response('busy', { status: 429 }), good]);
   assertEquals((await collect(fetchWays(CELL, { fetch: refused.fetch }))).length, 1);
@@ -264,10 +273,10 @@ Deno.test('a mirror that refuses (429) or fails before any element is skipped fo
   assertEquals((await collect(fetchWays(CELL, { fetch: down.fetch }))).length, 1);
   assertEquals(down.calls.length, 2);
 
-  const both = fetcher([() => new Response('', { status: 504 }), () => new Response('', { status: 429 })]);
-  const err = await assertRejects(() => collect(fetchWays(CELL, { fetch: both.fetch })), OverpassRefused);
+  const all = fetcher([() => new Response('', { status: 504 }), () => Promise.reject(new TypeError('connection reset')), () => new Response('', { status: 429 })]);
+  const err = await assertRejects(() => collect(fetchWays(CELL, { fetch: all.fetch })), OverpassRefused);
   assertEquals(err.status, 429);
-  assertEquals(both.calls.length, 2);
+  assertEquals(all.calls.map((c) => c.url), [PRIVATE_COFFEE, VK_MAPS, OVERPASS_DE]);
 });
 
 Deno.test('a failure after elements have been yielded propagates (the caller holds partial data) and no other mirror is tried', async () => {
@@ -392,7 +401,10 @@ Deno.test('a gate that holds a mirror back skips it unasked; holding all back th
   const good = () => ok(reply([way(1, { highway: 'primary' })]));
   const skipFirst = fetcher([good]);
   assertEquals((await collect(fetchWays(CELL, { fetch: skipFirst.fetch, gate: gate((u) => u !== PRIVATE_COFFEE) }))).length, 1);
-  assertEquals(skipFirst.calls.map((c) => c.url), [OVERPASS_DE]);
+  assertEquals(skipFirst.calls.map((c) => c.url), [VK_MAPS]);
+  const mainOnly = fetcher([good]);
+  assertEquals((await collect(fetchWays(CELL, { fetch: mainOnly.fetch, gate: gate((u) => u === OVERPASS_DE) }))).length, 1);
+  assertEquals(mainOnly.calls.map((c) => c.url), [OVERPASS_DE]);
 
   const none = fetcher([]);
   await assertRejects(() => collect(fetchWays(CELL, { fetch: none.fetch, gate: gate(() => false) })), OverpassHeldBack);
@@ -420,4 +432,75 @@ Deno.test('the byte hook is asked once per MiB; a no cancels the read with Overp
     OverpassBudgetSpent
   );
   assertEquals(no.calls.length, 1);
+});
+
+// --- the operator's instances (OVERPASS_URL) ---
+
+Deno.test('OVERPASS_URL: comma-separated https URLs, trimmed, in order; http only on a local host; junk, repeats and public instances ignored', () => {
+  assertEquals(parseOverpassUrls(undefined), { urls: [], ignored: 0 });
+  assertEquals(parseOverpassUrls(null), { urls: [], ignored: 0 });
+  assertEquals(parseOverpassUrls(' , '), { urls: [], ignored: 0 });
+  assertEquals(parseOverpassUrls(' https://overpass.nextgis.com/KEY/api/interpreter , https://overpass.example.org/api/interpreter'), {
+    urls: ['https://overpass.nextgis.com/KEY/api/interpreter', 'https://overpass.example.org/api/interpreter'],
+    ignored: 0,
+  });
+  assertEquals(
+    parseOverpassUrls('http://localhost:8080/api/interpreter,http://127.0.0.1/api/interpreter,http://host.docker.internal:9/api/interpreter'),
+    { urls: ['http://localhost:8080/api/interpreter', 'http://127.0.0.1/api/interpreter', 'http://host.docker.internal:9/api/interpreter'], ignored: 0 }
+  );
+  assertEquals(
+    parseOverpassUrls(
+      [
+        'http://overpass.example.org/api/interpreter', // plain http off a local host
+        'ftp://overpass.example.org/api/interpreter',
+        'not a url',
+        'overpass.example.org/api/interpreter', // no scheme
+        'https://a.example.org/api/interpreter',
+        'https://a.example.org/api/interpreter', // a repeat
+        OVERPASS_DE, // already in the list, in its place (last, under its policy)
+        PRIVATE_COFFEE,
+      ].join(',')
+    ),
+    { urls: ['https://a.example.org/api/interpreter'], ignored: 7 }
+  );
+  const many = Array.from({ length: MAX_OPERATOR_ENDPOINTS + 2 }, (_, i) => `https://o${i}.example.org/api/interpreter`);
+  assertEquals(parseOverpassUrls(many.join(',')), { urls: many.slice(0, MAX_OPERATOR_ENDPOINTS), ignored: 2 });
+});
+
+Deno.test("the operator's instances are tried first, then private.coffee, VK Maps and the main instance", () => {
+  assertEquals(overpassEndpoints(), [PRIVATE_COFFEE, VK_MAPS, OVERPASS_DE]);
+  const mine = 'https://overpass.nextgis.com/KEY/api/interpreter';
+  assertEquals(overpassEndpoints([mine]), [mine, PRIVATE_COFFEE, VK_MAPS, OVERPASS_DE]);
+});
+
+Deno.test("fetchWays asks the operator's instance first and moves on to the public ones when it fails", async () => {
+  const mine = 'https://overpass.nextgis.com/KEY/api/interpreter';
+  const good = () => ok(reply([way(1, { highway: 'primary' })]));
+  const first = fetcher([good]);
+  assertEquals((await collect(fetchWays(CELL, { fetch: first.fetch, endpoints: overpassEndpoints([mine]) }))).length, 1);
+  assertEquals(first.calls.map((c) => c.url), [mine]);
+
+  const down = fetcher([() => new Response('', { status: 502 }), good]);
+  assertEquals((await collect(fetchWays(CELL, { fetch: down.fetch, endpoints: overpassEndpoints([mine]) }))).length, 1);
+  assertEquals(down.calls.map((c) => c.url), [mine, PRIVATE_COFFEE]);
+});
+
+Deno.test('an error that names the mirror (its URL can hold a key) has the URL cut out, before and after the first element', async () => {
+  const mine = 'https://overpass.nextgis.com/SECRETKEY/api/interpreter';
+  const named = () => Promise.reject(new TypeError(`error sending request for url (${mine}): client error (Connect)`));
+  const err = await assertRejects(() => collect(fetchWays(CELL, { fetch: fetcher([named]).fetch, endpoints: [mine] })), Error);
+  assertEquals(err.name, 'TypeError');
+  assertEquals(err.message, 'error sending request for url (<overpass mirror>): client error (Connect)');
+
+  const text = reply([way(1, { highway: 'primary' }), way(2, { highway: 'primary' })]);
+  let pulls = 0;
+  const broken = new ReadableStream<Uint8Array>({
+    pull(c) {
+      pulls += 1;
+      if (pulls === 1) c.enqueue(new TextEncoder().encode(text.slice(0, text.indexOf('"id":2'))));
+      else c.error(new Error(`error reading a body from connection (${mine})`));
+    },
+  });
+  const late = await assertRejects(() => collect(fetchWays(CELL, { fetch: fetcher([() => new Response(broken, { status: 200 })]).fetch, endpoints: [mine] })));
+  assert(late instanceof Error && !late.message.includes('SECRETKEY'), String(late));
 });

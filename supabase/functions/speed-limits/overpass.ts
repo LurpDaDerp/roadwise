@@ -12,20 +12,61 @@
 //     and it is fetched again later. A reply that ends before its `elements` array closes, or
 //     never had one (a cut-off body, an error page sent as 200), throws `OverpassIncomplete`: the
 //     cell is marked failed and fetched again, never taken as loaded.
-//   * The public instances are shared by everyone, and each has a usage policy (fill.ts keeps to
-//     them through a `MirrorGate`): private.coffee's (free, no rate limit, a User-Agent naming the
+//   * The mirrors are tried in order, each only when every one before it refused, was held back,
+//     or failed before sending any element. First come the operator's own instances
+//     (`OVERPASS_URL`, a comma-separated list: a keyed one such as NextGIS's, or one self-hosted),
+//     then the free public ones. Each public instance has a usage policy (fill.ts keeps to them
+//     through a `MirrorGate`): private.coffee's (free, no rate limit, a User-Agent naming the
 //     project and a contact, notice before more than 10 requests a second or 10 at once) makes it
-//     the first choice; overpass-api.de's (for an app's regular use, about 1/100 of 10,000 queries
-//     and 1 GB a day, no two queries at once, 30 s off after a 429) makes it the fallback, held to
-//     that. The second is tried only when the first refused, was held back, or failed before
-//     sending any element.
+//     the first of them; VK Maps' (global, no request limits) the second; overpass-api.de's (for an
+//     app's regular use, about 1/100 of 10,000 queries and 1 GB a day, no two queries at once, 30 s
+//     off after a 429) makes it the last, held to that.
+//   * An operator URL can hold an API key, so no URL is ever logged, and a fetch error that names
+//     its URL has it cut out before it leaves `fetchWays`.
 import type { BBox } from '../_shared/speedLimits/geometry';
 
 /** https://overpass.private.coffee — free, no rate limit. */
 export const PRIVATE_COFFEE = 'https://overpass.private.coffee/api/interpreter';
-/** https://overpass-api.de — the main instance, a fallback held to its regular-use policy. */
+/** https://maps.mail.ru/osm/tools/overpass — VK Maps' instance: global, no request limits. */
+export const VK_MAPS = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
+/** https://overpass-api.de — the main instance, the last fallback, held to its regular-use policy. */
 export const OVERPASS_DE = 'https://overpass-api.de/api/interpreter';
-export const OVERPASS_ENDPOINTS: readonly string[] = [PRIVATE_COFFEE, OVERPASS_DE];
+/** The public instances, in the order they are tried. */
+export const OVERPASS_ENDPOINTS: readonly string[] = [PRIVATE_COFFEE, VK_MAPS, OVERPASS_DE];
+/** Operator instances beyond this many are ignored: each one tried can cost a whole abort. */
+export const MAX_OPERATOR_ENDPOINTS = 4;
+/** Hosts a plain-http instance may sit on: a local one, for tests. */
+const LOCAL_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', 'host.docker.internal']);
+
+/**
+ * The operator's instances from `OVERPASS_URL` (comma-separated): each an https URL, or http on a
+ * local host; anything else, a public instance (already in the list, in its place) or a repeat is
+ * ignored, as is any past `MAX_OPERATOR_ENDPOINTS`. `ignored` counts the dropped entries: counts
+ * may be logged, never a URL.
+ */
+export function parseOverpassUrls(raw: string | null | undefined): { urls: string[]; ignored: number } {
+  const urls: string[] = [];
+  let ignored = 0;
+  for (const entry of (raw ?? '').split(',').map((e) => e.trim()).filter((e) => e.length > 0)) {
+    let u: URL;
+    try {
+      u = new URL(entry);
+    } catch {
+      ignored += 1;
+      continue;
+    }
+    const allowed = u.protocol === 'https:' || (u.protocol === 'http:' && LOCAL_HOSTS.has(u.hostname));
+    if (!allowed || OVERPASS_ENDPOINTS.includes(u.href) || urls.includes(u.href) || urls.length >= MAX_OPERATOR_ENDPOINTS) {
+      ignored += 1;
+      continue;
+    }
+    urls.push(u.href);
+  }
+  return { urls, ignored };
+}
+
+/** Every mirror in the order tried: the operator's (`parseOverpassUrls`), then the public ones. */
+export const overpassEndpoints = (operator: readonly string[] = []): string[] => [...operator, ...OVERPASS_ENDPOINTS];
 export const OVERPASS_USER_AGENT = 'RoadWise/1.0 (speed-limit road layer; Supabase edge function; OSM data under ODbL)';
 
 /** The User-Agent, with the operator's contact when one is configured (`OVERPASS_CONTACT`). */
@@ -328,6 +369,14 @@ export interface MirrorGate {
   refused(url: string, status: number): void;
 }
 
+/** The error with every mention of `url` cut out (a fetch error names its URL, which can hold a key). */
+function scrub(err: unknown, url: string): unknown {
+  if (!(err instanceof Error) || !err.message.includes(url)) return err;
+  const clean = new Error(err.message.split(url).join('<overpass mirror>'));
+  clean.name = err.name;
+  return clean;
+}
+
 /**
  * Every drivable way of the box, as upsert rows, from the first mirror that answers. A mirror that
  * refuses (any non-2xx) or fails before its first element is skipped for the next; a failure after
@@ -371,8 +420,8 @@ export async function* fetchWays(
     } catch (err) {
       // Partial data in hand, or a reply past its size cap (another mirror would send the same):
       // the caller marks the cell failed. Only a refusal or a failure before any element moves on.
-      if (yielded || err instanceof OverpassTooLarge || err instanceof OverpassBudgetSpent) throw err;
-      lastError = err;
+      if (yielded || err instanceof OverpassTooLarge || err instanceof OverpassBudgetSpent) throw scrub(err, url);
+      lastError = scrub(err, url);
     }
   }
   throw lastError;

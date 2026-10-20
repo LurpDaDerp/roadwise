@@ -28,7 +28,7 @@ import {
   type OsmFillDb,
   UPSERT_BATCH,
 } from './fill.ts';
-import { OVERPASS_DE, OVERPASS_ENDPOINTS, overpassQuery, PRIVATE_COFFEE, type WayRow } from './overpass.ts';
+import { OVERPASS_DE, OVERPASS_ENDPOINTS, overpassEndpoints, overpassQuery, PRIVATE_COFFEE, VK_MAPS, type WayRow } from './overpass.ts';
 
 const T0 = 1_760_000_000_000;
 const UID = '00000000-0000-4000-8000-000000000001';
@@ -136,6 +136,7 @@ function harness(opts: {
   global?: (key: string) => boolean;
   userBudget?: boolean;
   answers?: ((url: string) => Response | Promise<Response>)[];
+  endpoints?: readonly string[];
 } = {}) {
   const h: Harness = {
     claims: [],
@@ -183,7 +184,7 @@ function harness(opts: {
     warn: (...args: unknown[]) => h.logs.push({ level: 'warn', args }),
     error: (...args: unknown[]) => h.logs.push({ level: 'error', args }),
   };
-  const fill = createOsmFill({ db: h.db, background: (p) => h.background.push(p), log, fetch, now: () => h.clock.now });
+  const fill = createOsmFill({ db: h.db, background: (p) => h.background.push(p), log, fetch, now: () => h.clock.now, endpoints: opts.endpoints });
   return Object.assign(h, { fill });
 }
 
@@ -273,14 +274,14 @@ Deno.test('a spent app-wide Overpass budget releases the cell (claimable again a
   assertEquals(h.claims.length, 2, 'no second claim within FILLING_MEMO_MS');
 });
 
-Deno.test('both mirrors down: the cell is marked failed with nothing written; a 429 on the first mirror falls through to the second', async () => {
+Deno.test('every mirror down: the cell is marked failed with nothing written; a 429 on the first mirror falls through to the second', async () => {
   const down = harness({
     claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done'),
     answers: [() => Promise.reject(new TypeError('fetch failed')), () => new Response('', { status: 504 })],
   });
   await down.fill.ensure([TILE], UID);
   await down.fill.settled();
-  assertEquals(down.fetches.map((f) => f.url), [OVERPASS_ENDPOINTS[0], OVERPASS_ENDPOINTS[1]]);
+  assertEquals(down.fetches.map((f) => f.url), [...OVERPASS_ENDPOINTS]);
   assertEquals(down.batches, []);
   assertEquals(down.finishes, [{ cell: SEATTLE, outcome: 'failed', ways: 0 }]);
   assertEquals(down.logs.filter((l) => l.level === 'error').length, 1);
@@ -435,11 +436,24 @@ Deno.test('private.coffee answering costs only the app-wide fill budget; the mai
   assertEquals(h.globalKeys, [OVERPASS_BUDGET.key]);
 });
 
-Deno.test('a 429 from private.coffee falls back to the main instance under its budgets, and private.coffee rests 60 s', async () => {
+Deno.test('a 429 from private.coffee falls back to VK Maps at no budget; the main instance is still never asked', async () => {
+  const h = harness({
+    claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done'),
+    answers: [() => new Response('busy', { status: 429 }), () => new Response(body(replyOf([1])), { status: 200 })],
+  });
+  await h.fill.ensure([TILE], UID);
+  await h.fill.settled();
+  assertEquals(h.fetches.map((f) => f.url), [PRIVATE_COFFEE, VK_MAPS]);
+  assertEquals(h.globalKeys, [OVERPASS_BUDGET.key]);
+  assertEquals(h.finishes, [{ cell: SEATTLE, outcome: 'done', ways: 1 }]);
+});
+
+Deno.test('private.coffee and VK Maps both refusing fall back to the main instance under its budgets, and both rest 60 s', async () => {
   const h = harness({
     claim: () => 'claimed',
     answers: [
       () => new Response('busy', { status: 429 }),
+      () => new Response('', { status: 504 }),
       () => new Response(body(replyOf([1])), { status: 200 }),
       () => new Response(body(replyOf([2])), { status: 200 }),
       () => new Response(body(replyOf([3])), { status: 200 }),
@@ -447,8 +461,8 @@ Deno.test('a 429 from private.coffee falls back to the main instance under its b
   });
   await h.fill.ensure([TILE], UID); // SEATTLE, then its look-ahead SOUTH
   await h.fill.settled();
-  // SEATTLE: private.coffee refuses, the main instance answers; SOUTH: private.coffee is resting, so the main instance alone
-  assertEquals(h.fetches.map((f) => f.url), [PRIVATE_COFFEE, OVERPASS_DE, OVERPASS_DE]);
+  // SEATTLE: private.coffee and VK Maps refuse, the main instance answers; SOUTH: both are resting, so the main instance alone
+  assertEquals(h.fetches.map((f) => f.url), [PRIVATE_COFFEE, VK_MAPS, OVERPASS_DE, OVERPASS_DE]);
   assertEquals(h.globalKeys, [
     OVERPASS_BUDGET.key, OVERPASS_DE_START.key, OVERPASS_DE_QUERIES.key,
     OVERPASS_BUDGET.key, OVERPASS_DE_START.key, OVERPASS_DE_QUERIES.key,
@@ -456,7 +470,7 @@ Deno.test('a 429 from private.coffee falls back to the main instance under its b
   assertEquals(h.finishes.map((f) => f.outcome), ['done', 'done']);
 });
 
-Deno.test('with private.coffee refusing and the main instance over its daily budget, the cell is released (claimable again), not failed', async () => {
+Deno.test('with private.coffee and VK Maps refusing and the main instance over its daily budget, the cell is released (claimable again), not failed', async () => {
   const h = harness({
     claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done'),
     global: (key) => key !== OVERPASS_DE_QUERIES.key,
@@ -464,7 +478,28 @@ Deno.test('with private.coffee refusing and the main instance over its daily bud
   });
   await h.fill.ensure([TILE], UID);
   await h.fill.settled();
-  assertEquals(h.fetches.map((f) => f.url), [PRIVATE_COFFEE]);
+  assertEquals(h.fetches.map((f) => f.url), [PRIVATE_COFFEE, VK_MAPS]);
   assertEquals(h.finishes, [{ cell: SEATTLE, outcome: 'released', ways: 0 }]);
   assertEquals(h.logs.filter((l) => l.level === 'error').length, 0);
+});
+
+Deno.test("the operator's instances (OVERPASS_URL) are asked first at no budget; refusing, one rests 60 s like any mirror", async () => {
+  const mine = 'https://overpass.nextgis.com/KEY/api/interpreter';
+  const ok1 = harness({ claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done'), endpoints: overpassEndpoints([mine]) });
+  await ok1.fill.ensure([TILE], UID);
+  await ok1.fill.settled();
+  assertEquals(ok1.fetches.map((f) => f.url), [mine]);
+  assertEquals(ok1.globalKeys, [OVERPASS_BUDGET.key]);
+  assertEquals(ok1.finishes, [{ cell: SEATTLE, outcome: 'done', ways: 3 }]);
+
+  const h = harness({
+    claim: () => 'claimed',
+    endpoints: overpassEndpoints([mine]),
+    answers: [() => new Response('', { status: 502 }), () => new Response(body(replyOf([1])), { status: 200 })],
+  });
+  await h.fill.ensure([TILE], UID); // SEATTLE, then its look-ahead SOUTH
+  await h.fill.settled();
+  // SEATTLE: the operator's instance fails, private.coffee answers; SOUTH: the operator's instance is resting
+  assertEquals(h.fetches.map((f) => f.url), [mine, PRIVATE_COFFEE, PRIVATE_COFFEE]);
+  assertEquals(h.finishes.map((f) => f.outcome), ['done', 'done']);
 });

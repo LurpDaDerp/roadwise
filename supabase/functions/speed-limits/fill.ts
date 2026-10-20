@@ -60,7 +60,7 @@ export const OVERPASS_BUDGET = { key: 'overpass_fill', window: '1 minute', max: 
 export const CLAIM_BUDGET = { key: 'overpass_claim', window: '1 hour', max: 40 } as const;
 /**
  * overpass-api.de's usage policy (wiki.openstreetmap.org/wiki/Overpass_API) asks an app in regular
- * use for about 1/100 of its 10,000 queries and 1 GB a day, and no two queries at once. As the
+ * use for about 1/100 of its 10,000 queries and 1 GB a day, and no two queries at once. As the last
  * fallback it gets at most 100 queries and 10 MiB a day app-wide, and one start per 2 minutes
  * (longer than the 100 s abort, so never two at once).
  */
@@ -200,6 +200,8 @@ export interface OsmFillDeps {
   now?: () => number;
   /** The operator's contact for the User-Agent (`OVERPASS_CONTACT`), as private.coffee's terms ask. */
   contact?: string | null;
+  /** The mirrors in the order tried (`overpassEndpoints`); the public ones alone by default. */
+  endpoints?: readonly string[];
 }
 
 export interface OsmFill {
@@ -236,7 +238,7 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
       return false;
     });
 
-  /** The mirrors' usage policies (overpass.ts): the main instance's daily budgets, a cool-off after any refusal. */
+  /** The mirrors' usage policies (overpass.ts): the main instance's daily budgets, a cool-off for any mirror after a refusal. */
   const gate: MirrorGate = {
     async allow(url) {
       const until = cooling.get(url);
@@ -281,7 +283,7 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
         let batch: WayRow[] = [];
         let streamError: unknown = null;
         try {
-          for await (const way of fetchWays(cellBounds(cell), { fetch: deps.fetch, gate, contact: deps.contact })) {
+          for await (const way of fetchWays(cellBounds(cell), { fetch: deps.fetch, gate, contact: deps.contact, endpoints: deps.endpoints })) {
             batch.push(way);
             if (batch.length >= UPSERT_BATCH) {
               ways += await db.upsertWays(batch);
