@@ -425,8 +425,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       speed: s.speedKnown ? inDisplayUnit(mpsToMph(s.speedMps), displayUnit) : null,
       limit: inDisplayUnit(s.limitMph, displayUnit),
       unit: displayUnit,
-      points: points?.total ?? null,
-      // The background surfaces show the total only, like the driving screen.
+      // The background surfaces show the speed and the limit only.
+      points: null,
       pointsDelta: null,
       stopped: s.stopped,
     });

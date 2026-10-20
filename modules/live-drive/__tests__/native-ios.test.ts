@@ -149,13 +149,14 @@ describe('live-drive: the widget extension target', () => {
     const src = code(WIDGET_DIR, 'LiveDriveWidgetBundle.swift');
     expect(src).toMatch(/@main\s*struct LiveDriveWidgetBundle: WidgetBundle/);
     expect(src).toMatch(/ActivityConfiguration\(for: LiveDriveAttributes\.self\)/);
-    for (const region of ['.leading', '.trailing', '.bottom']) expect(src).toContain(`DynamicIslandExpandedRegion(${region})`);
+    for (const region of ['.leading', '.trailing']) expect(src).toContain(`DynamicIslandExpandedRegion(${region})`);
     expect(src).toMatch(/compactLeading: \{/);
     expect(src).toMatch(/compactTrailing: \{/);
     expect(src).toMatch(/minimal: \{/);
-    // points only when present (lock screen) and only when stopped (expanded island)
-    expect(src).toMatch(/if let p = state\.points \{/);
-    expect(src).toMatch(/if state\.stopped, state\.points != nil \{/);
+    // the speed and the limit only: no points anywhere
+    expect(src).not.toMatch(/points|DynamicIslandExpandedRegion\(\.bottom\)/i);
+    expect(src).toContain('SpeedBlock(speed: state.speed, unit: state.unit, size: 52)');
+    expect(src).toContain('LimitSign(limit: state.limit, size: 56)');
     // "—" for an unknown speed or limit
     expect(src).toMatch(/guard let v = v, v\.isFinite else \{ return "—" \}/);
     // the palette
@@ -177,15 +178,9 @@ describe('live-drive: the widget extension target', () => {
     expect(src).toMatch(/\.background \{ ground \}/);
     expect(src).toContain('.activityBackgroundTint(Color(hex: state.skyMid) ?? Palette.navy)');
     expect(src).toContain('.keylineTint(Color(hex: state.accent) ?? Palette.gold)');
-    // the limit sign's ring is the driving screen's red; the points line white, total only
+    // the limit sign's ring is the driving screen's red
     expect(src).toMatch(/signRed = Color\(red: 215 \/ 255, green: 38 \/ 255, blue: 61 \/ 255\)/);
     expect(src).toContain('Circle().strokeBorder(Palette.signRed,');
-    expect(src).toMatch(/static let points = Color\.white\.opacity\(0\.85\)/);
-    expect(src).toContain('Text(Format.points(p))');
-    expect(src).toContain('.foregroundColor(Palette.points)');
-    expect(src).toMatch(/static func points\(_ points: Double\) -> String \{/);
-    expect(src).toContain('return "\\(total) pts"');
-    expect(src).not.toMatch(/pointsDelta(?! = nil)/);
   });
 });
 

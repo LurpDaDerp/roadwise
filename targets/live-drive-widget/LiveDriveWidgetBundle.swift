@@ -1,7 +1,7 @@
 // The Live Activity / Dynamic Island for a drive in progress (spec "Driving screen · Background";
-// plan §6). Lock screen: big speed, a round speed-limit sign, a points line only when points are
-// present. Dynamic Island: expanded = speed + limit (+ points when stopped); compact = speed |
-// limit; minimal = speed. The lock screen wears the app's sky (the driving screen's deepened sky,
+// plan §6). The speed and the speed limit, nothing else. Lock screen: big speed, a round
+// speed-limit sign. Dynamic Island: expanded = speed + limit; compact = speed | limit;
+// minimal = speed. The lock screen wears the app's sky (the driving screen's deepened sky,
 // top to bottom, as the app sends it with the state; navy until it does), the island's keyline the
 // sky accent (gold without one); white numerals, the limit sign's ring the driving screen's red.
 // Nothing here is interactive: the activity is started and ended by the app alone.
@@ -21,7 +21,6 @@ enum Palette {
   static let gold = Color(red: 255 / 255, green: 195 / 255, blue: 0 / 255) // #FFC300
   static let signRed = Color(red: 215 / 255, green: 38 / 255, blue: 61 / 255) // #D7263D
   static let dim = Color.white.opacity(0.7)
-  static let points = Color.white.opacity(0.85)
 }
 
 extension Color {
@@ -43,15 +42,6 @@ enum Format {
   static func speed(_ v: Double?) -> String {
     guard let v = v, v.isFinite else { return "—" }
     return String(Int(v.rounded()))
-  }
-
-  /// "1,240 pts": the total only.
-  static func points(_ points: Double) -> String {
-    let f = NumberFormatter()
-    f.numberStyle = .decimal
-    f.maximumFractionDigits = 0
-    let total = f.string(from: NSNumber(value: points.rounded())) ?? String(Int(points.rounded()))
-    return "\(total) pts"
   }
 }
 
@@ -96,20 +86,6 @@ struct SpeedBlock: View {
   }
 }
 
-struct PointsLine: View {
-  let state: LiveDriveAttributes.ContentState
-
-  var body: some View {
-    if let p = state.points {
-      Text(Format.points(p))
-        .font(.system(size: 15, weight: .semibold, design: .rounded))
-        .monospacedDigit()
-        .foregroundColor(Palette.points)
-        .lineLimit(1)
-    }
-  }
-}
-
 /// The lock-screen banner (and the StandBy / CarPlay-adjacent surfaces WidgetKit derives from it).
 struct LockScreenView: View {
   let state: LiveDriveAttributes.ContentState
@@ -118,10 +94,7 @@ struct LockScreenView: View {
     HStack(alignment: .center, spacing: 16) {
       SpeedBlock(speed: state.speed, unit: state.unit, size: 52)
       Spacer(minLength: 8)
-      VStack(alignment: .trailing, spacing: 6) {
-        LimitSign(limit: state.limit, size: 52)
-        PointsLine(state: state)
-      }
+      LimitSign(limit: state.limit, size: 56)
     }
     .padding(.horizontal, 20)
     .padding(.vertical, 14)
@@ -139,13 +112,11 @@ struct LockScreenView: View {
   }
 }
 
-/// Past `staleDate` (no update for 2 min: the app is gone) nothing here is live: speed unknown, no points.
+/// Past `staleDate` (no update for 2 min: the app is gone) nothing here is live: speed unknown.
 func displayState(_ context: ActivityViewContext<LiveDriveAttributes>) -> LiveDriveAttributes.ContentState {
   guard context.isStale else { return context.state }
   var s = context.state
   s.speed = nil
-  s.points = nil
-  s.pointsDelta = nil
   s.stopped = false
   return s
 }
@@ -167,13 +138,6 @@ struct LiveDriveActivityWidget: Widget {
         DynamicIslandExpandedRegion(.trailing) {
           LimitSign(limit: state.limit, size: 44)
             .padding(.trailing, 6)
-        }
-        DynamicIslandExpandedRegion(.bottom) {
-          if state.stopped, state.points != nil {
-            PointsLine(state: state)
-              .frame(maxWidth: .infinity, alignment: .center)
-              .padding(.bottom, 4)
-          }
         }
       } compactLeading: {
         Text(Format.speed(state.speed))

@@ -244,7 +244,7 @@ test('a first drive on the phone is no restart', async () => {
   await h.host.stop({ endOpenTrip: true });
 });
 
-test('a drive: rows publish at most once each, the display updates on change, points show only while stopped, end finalizes and queues', async () => {
+test('a drive: rows publish at most once each, the display updates on change with the speed and the limit only, points show on the driving screen only while stopped, end finalizes and queues', async () => {
   const h = build();
   await h.host.boot();
   await h.host.start();
@@ -260,10 +260,9 @@ test('a drive: rows publish at most once each, the display updates on change, po
   const snap = h.host.snapshot();
   expect(snap.stopped).toBe(true);
   expect(snap.points).toEqual({ total: expect.any(Number), sinceLastStop: snap.points!.total });
-  expect(h.display.log.at(-1)).toMatch(/update 0\/35\/\d+/);
-  // The background surfaces show the total only: never the change since the last stop.
-  expect(h.display.states.at(-1)).toMatchObject({ points: snap.points!.total, pointsDelta: null });
-  expect(h.display.states.every((s) => s.pointsDelta === null)).toBe(true);
+  // The background surfaces show the speed and the limit only: never points.
+  expect(h.display.log.at(-1)).toBe('update 0/35/null');
+  expect(h.display.states.every((s) => s.points === null && s.pointsDelta === null)).toBe(true);
   clock = T0 + 124_000;
   const ended = await h.host.end();
   expect(ended).toEqual({ clientTripId: uuid(1), dropped: null });
@@ -286,7 +285,7 @@ test('points clear the moment the stop is no longer confirmed, even with the fix
   await feed(h, rows(60, { speedMps: 15 }));
   await feed(h, rows(3, { speedMps: 0, t0: T0 + 60_000 }));
   expect(h.host.snapshot().points).not.toBeNull();
-  expect(h.display.log.at(-1)).toMatch(/update 0\/35\/\d+$/);
+  expect(h.display.log.at(-1)).toBe('update 0/35/null');
   // Pulling away under a bridge: no fix, so not stopped and no points at once; the shown speed holds
   // for 3 s (S3), then there is no known speed either.
   await feed(h, rows(1, { speedMps: 15, t0: T0 + 63_000, over: () => ({ gnssValid: false, speed: -1, hAcc: -1 }) }));
