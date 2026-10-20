@@ -115,25 +115,29 @@ export function FriendsScreen() {
           {data.outgoing.length > 0 ? (
             <Section title={copy.outgoing} testID="friends-outgoing">
               {data.outgoing.map((c) => (
-                <ListRow
-                  key={c.user_id}
-                  title={c.username}
-                  leading={<Avatar username={c.username} size="sm" />}
-                  onPress={() => open(c.username)}
-                  trailing={
-                    <Button
-                      label={copy.cancel}
-                      size="sm"
-                      variant="ghost"
-                      loading={busyId === c.user_id}
-                      disabled={busyId !== null}
-                      onPress={() => act(c.user_id, 'cancel_friend_request', { p_user_id: c.user_id })}
-                      accessibilityHint={copy.cancelHint(c.username)}
-                      testID={`cancel-${c.username}`}
+                // Cancel sits beside the row, not inside it: the row is one button for VoiceOver,
+                // which would hide a button nested in it.
+                <View key={c.user_id} style={{ flexDirection: 'row', alignItems: 'center', paddingRight: th.space.lg }}>
+                  <View style={{ flex: 1 }}>
+                    <ListRow
+                      title={c.username}
+                      leading={<Avatar username={c.username} size="sm" />}
+                      onPress={() => open(c.username)}
+                      accessory="none"
+                      testID={`outgoing-${c.username}`}
                     />
-                  }
-                  testID={`outgoing-${c.username}`}
-                />
+                  </View>
+                  <Button
+                    label={copy.cancel}
+                    size="sm"
+                    variant="ghost"
+                    loading={busyId === c.user_id}
+                    disabled={busyId !== null}
+                    onPress={() => act(c.user_id, 'cancel_friend_request', { p_user_id: c.user_id })}
+                    accessibilityHint={copy.cancelHint(c.username)}
+                    testID={`cancel-${c.username}`}
+                  />
+                </View>
               ))}
             </Section>
           ) : null}

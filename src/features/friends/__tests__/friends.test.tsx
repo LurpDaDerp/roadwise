@@ -2,7 +2,7 @@
  * Friends: requests answered and cancelled from the list, search only from 3 letters, the QR code
  * holds the add link, and the scanner opens only a RoadWise add link.
  */
-import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react-native';
 
 import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
 import type { PublicCard } from '@/features/social/api';
@@ -76,6 +76,19 @@ describe('Friends list', () => {
     );
     await tap('cancel-crush');
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('cancel_friend_request', { p_user_id: 'id-crush' }));
+  });
+
+  it('a sent request: its row opens the profile and Cancel is its own button beside it (VoiceOver reaches both)', async () => {
+    answerRpc(mockRpc, { list_friends: { friends: [], incoming: [], outgoing: [card('crush')] } });
+    const w = await appWorld();
+    await w.render(<FriendsScreen />);
+    const row = await screen.findByTestId('outgoing-crush');
+    // Not inside the row's button, which would hide it from the screen reader.
+    expect(within(row).queryByTestId('cancel-crush')).toBeNull();
+    expect(screen.getByRole('button', { name: 'crush' })).toBeOnTheScreen();
+    expect(screen.getByTestId('cancel-crush')).toHaveProp('accessibilityRole', 'button');
+    await tap('outgoing-crush');
+    expect(mockRouter.push).toHaveBeenCalledWith('/u/crush');
   });
 
   it('a friend opens their profile', async () => {
