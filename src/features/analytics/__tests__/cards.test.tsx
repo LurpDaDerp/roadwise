@@ -473,7 +473,7 @@ describe('CategorySheet', () => {
 
   test("each category's numbers over the range: its own counts, never points", () => {
     expect(Object.fromEntries(AXES.map((a) => [a.key, categoryGroup(a.key, sums, 'week', 'mi').cells.map((c) => c.caption)]))).toEqual({
-      speeding: ['Speeding', 'Rate'],
+      speeding: ['Speeding events', 'Rate'],
       braking: ['Hard brakes', 'Rate'],
       accel: ['Hard starts', 'Rate'],
       cornering: ['Sharp turns', 'Rate'],

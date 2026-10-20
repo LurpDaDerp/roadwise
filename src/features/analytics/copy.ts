@@ -38,7 +38,7 @@ export const analyticsCopy = {
     distance: 'Distance',
     avgDrive: 'Avg drive',
     avgSpeed: 'Avg speed',
-    speeding: 'Speeding',
+    speeding: 'Speeding events',
     hardBrakes: 'Hard brakes',
     hardStarts: 'Hard starts',
     sharpTurns: 'Sharp turns',
