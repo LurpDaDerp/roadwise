@@ -670,13 +670,7 @@ function runSql(target, sql, { rows: wantRows = true } = {}) {
   const r = spawnSync(win ? 'npx.cmd' : 'npx', args, { cwd: ROOT, encoding: 'utf8', shell: win, maxBuffer: 256 * 1024 * 1024 });
   fs.rmSync(dir, { recursive: true, force: true });
   const out = r.stdout ?? '';
-  const start = out.indexOf('{');
-  let parsed = null;
-  try {
-    parsed = start >= 0 ? JSON.parse(out.slice(start)) : null;
-  } catch {
-    parsed = null;
-  }
+  const parsed = parseQueryOutput(out);
   const printed = () => `${out}\n${r.stderr ?? ''}`.trim() || String(r.error ?? 'no output');
   if (r.status === 0 && parsed === null && !wantRows) return [];
   if (r.status !== 0 || parsed === null || parsed._tag === 'Error') {
@@ -686,6 +680,25 @@ function runSql(target, sql, { rows: wantRows = true } = {}) {
     throw new Error(`supabase db query (${target.flag}) returned no rows for \`${sql.slice(0, 80)}\`. The CLI printed:\n${printed()}`);
   }
   return (parsed.rows ?? []).map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, typeof v === 'string' && /^[[{]/.test(v) ? JSON.parse(v) : v])));
+}
+
+/**
+ * The JSON in what `supabase db query --output-format json` printed, as `{ rows }` (or its error
+ * object), or null when there is none. CLI versions differ: some print `{ boundary, rows, warning }`,
+ * others the bare array of rows; either may have status lines around it.
+ */
+function parseQueryOutput(out) {
+  const starts = ['[', '{'].map((c) => out.indexOf(c)).filter((i) => i >= 0);
+  if (starts.length === 0) return null;
+  const start = Math.min(...starts);
+  const end = out.lastIndexOf(out[start] === '[' ? ']' : '}');
+  if (end < start) return null;
+  try {
+    const value = JSON.parse(out.slice(start, end + 1));
+    return Array.isArray(value) ? { rows: value } : value;
+  } catch {
+    return null;
+  }
 }
 
 /** A JSON value as a dollar-quoted SQL literal. */
@@ -827,7 +840,7 @@ async function main() {
   console.log(`\nSign in with ${DEMO_EMAIL} / ${password} (username @${DEMO_USERNAME})`);
 }
 
-module.exports = { buildHistory, summarize, uploadProblem, toEnvelope, batchSql };
+module.exports = { buildHistory, summarize, uploadProblem, toEnvelope, batchSql, parseQueryOutput };
 
 if (require.main === module) {
   main().catch((err) => {

@@ -12,6 +12,7 @@ interface Drive {
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- a CommonJS Node script
 const seed = require('../seed-demo.js') as {
+  parseQueryOutput: (out: string) => { rows?: Record<string, unknown>[]; error?: { message: string } } | null;
   buildHistory: (now: number) => Drive[];
   summarize: (drives: Drive[], now: number) => {
     drives: number;
@@ -105,4 +106,14 @@ it('checks the server context before every apply in a batch', () => {
   expect(sql.match(/private\.drive_context\(/g)).toHaveLength(3);
   expect(sql.match(/perform private\.apply_drive\(/g)).toHaveLength(3);
   expect(sql.match(/raise exception/g)).toHaveLength(3);
+});
+
+test('the Supabase CLI query output parses in both shapes, with status lines around it', () => {
+  const rows = [{ ms: 1792382400000 }];
+  expect(seed.parseQueryOutput(`Connecting to local database...\n${JSON.stringify({ boundary: 'b', rows, warning: 'w' }, null, 2)}\n`)).toMatchObject({ rows });
+  // The bare array of rows (other CLI versions), with the status line after it.
+  expect(seed.parseQueryOutput(`${JSON.stringify(rows, null, 2)}\n\nInitialising login role...\n`)).toEqual({ rows });
+  expect(seed.parseQueryOutput('Initialising login role...\n[]\n')).toEqual({ rows: [] });
+  expect(seed.parseQueryOutput('DO\n')).toBeNull();
+  expect(seed.parseQueryOutput('{ "_tag": "Error", "error": { "message": "boom" } }')).toMatchObject({ error: { message: 'boom' } });
 });
