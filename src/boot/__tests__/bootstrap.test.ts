@@ -306,6 +306,22 @@ test('every wipe tells the cache: drive lists and stats cached before a sign-out
   await rt.stop();
 });
 
+test('a handover keeps the incoming driver’s unsent Terms tick through the wipe, and drops the previous driver’s', async () => {
+  const settings = createSettingsRepo(db);
+  await bootstrapApp(deps().deps).then((rt) => rt.stop());
+  await settings.set('auth.pendingTerms', { version: 'v1', at: T0, uid: 'user-2' });
+  expect(await ensureDeviceOwner(db, 'user-2')).toBe('wiped');
+  expect(await settings.get('auth.pendingTerms')).toEqual({ version: 'v1', at: T0, uid: 'user-2' });
+
+  await settings.set('auth.pendingTerms', { version: 'v1', at: T0, uid: 'user-2' });
+  expect(await ensureDeviceOwner(db, 'user-3')).toBe('wiped');
+  expect(await settings.get('auth.pendingTerms')).toBeNull();
+
+  await settings.set('auth.pendingTerms', { version: 'v1', at: T0, uid: 'user-3', sent: true });
+  expect(await ensureDeviceOwner(db, 'user-4')).toBe('wiped');
+  expect(await settings.get('auth.pendingTerms')).toBeNull();
+});
+
 test('flushBeforeSignOut drains once and reports what is still owed', async () => {
   const d = deps({ mayDrain: () => true });
   const rt = await bootstrapApp(d.deps);

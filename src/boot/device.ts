@@ -17,6 +17,7 @@ import { RESTORED_AT_KEY } from '@/data/hydrate/restore';
 import { publishUnits } from '@/data/queries/units';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { DROP_NOTICE_KEY } from '@/drive/dropNotice';
+import { PENDING_TERMS_KEY } from '@/features/auth/pendingTermsKey';
 
 /** Where the owner is remembered. The wipe clears it too, and it is rewritten straight after. */
 export const LAST_USER_KEY = 'device.lastUserId';
@@ -192,7 +193,26 @@ export async function ensureDeviceOwner(db: Db, uid: string | null, deps: Device
     return 'same';
   }
   const adopt = lastUserId === null && !(await hasDriverData(db));
-  if (!adopt) await wipeDevice(db, deps);
+  if (!adopt) {
+    const terms = await incomingTerms(db, uid);
+    await wipeDevice(db, deps);
+    // The Terms tick the incoming driver just made on the sign-in screen is theirs, not the
+    // previous driver's: it outlives the wipe, so the sign-in attestation is still sent for them.
+    if (terms !== null) await createSettingsRepo(db).set(PENDING_TERMS_KEY, terms);
+  }
   await rememberDeviceOwner(db, uid);
   return adopt ? 'first' : 'wiped';
+}
+
+/** The pending Terms tick if it is `uid`'s (bound to them, or still waiting for its sign-in) and unsent. */
+async function incomingTerms(db: Db, uid: string): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await createSettingsRepo(db).get<unknown>(PENDING_TERMS_KEY);
+    if (typeof raw !== 'object' || raw === null) return null;
+    const tick = raw as Record<string, unknown>;
+    if (tick.sent === true) return null;
+    return tick.uid === undefined || tick.uid === uid ? tick : null;
+  } catch {
+    return null;
+  }
 }

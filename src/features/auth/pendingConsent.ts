@@ -16,9 +16,10 @@ import type { SettingsRepo } from '@/data/db/settings';
 import { supabase } from '@/data/supabase/client';
 
 import { TERMS_VERSION } from './legal';
+import { PENDING_TERMS_KEY } from './pendingTermsKey';
 
 /** Settings key: `{ version, at, uid?, sent? }`, the attestation made on this phone. */
-export const PENDING_TERMS_KEY = 'auth.pendingTerms';
+export { PENDING_TERMS_KEY };
 /** How long a tick stays good for: one sign-in, a slow one included. */
 export const PENDING_TERMS_TTL_MS = 24 * 60 * 60 * 1000;
 
