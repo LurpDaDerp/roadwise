@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
-import { Text } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 
 import { FloatingTabBar, type FloatingTabBarProps } from '@/ui/nav/FloatingTabBar';
 import { ThemeProvider } from '@/ui/theme';
@@ -57,4 +57,21 @@ test('every tab keeps a touch target of at least 44 pt', async () => {
     const style = (tab.props.style as { height?: number }) ?? {};
     expect(style.height ?? 0).toBeGreaterThanOrEqual(44);
   }
+});
+
+test('the disc sits under the current tab from the render that selects it, with no animation to wait on', async () => {
+  const view = await render(
+    <ThemeProvider scheme="light" reduceMotion={false}>
+      <FloatingTabBar {...props(0).p} />
+    </ThemeProvider>
+  );
+  // The pill is 336 wide: 8 pt padding each side, four 80 pt slots, the 48 pt disc centred in its slot.
+  await fireEvent(screen.getByTestId('tab-bar'), 'layout', { nativeEvent: { layout: { width: 336 } } });
+  expect(StyleSheet.flatten(screen.getByTestId('tab-disc').props.style)).toMatchObject({ left: 24 });
+  await view.rerender(
+    <ThemeProvider scheme="light" reduceMotion={false}>
+      <FloatingTabBar {...props(2).p} />
+    </ThemeProvider>
+  );
+  expect(StyleSheet.flatten(screen.getByTestId('tab-disc').props.style)).toMatchObject({ left: 8 + 2 * 80 + 16 });
 });

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { LinearTransition } from 'react-native-reanimated';
 
 import { useTheme } from '../theme';
 import { Text } from './Text';
@@ -20,6 +20,11 @@ export type SegmentedControlProps<V extends string> = {
 /**
  * Two to four equal segments on a raised track; the selected one sits on a sliding ink thumb
  * (snappy spring; jumps under reduce motion). Each segment is a tab for VoiceOver.
+ *
+ * The thumb's place is plain layout, under the selected segment from the render that selects it;
+ * the spring is a layout transition between the old place and the new. So the selected label (ink
+ * on ink's opposite) always has the thumb under it: a transition that fails to run lands the thumb
+ * at once instead of leaving it behind the old segment.
  */
 export function SegmentedControl<V extends string>({
   segments,
@@ -37,19 +42,8 @@ export function SegmentedControl<V extends string>({
   );
   const pad = 3;
   const segW = width > 0 ? (width - pad * 2) / segments.length : 0;
-  const x = useSharedValue(index * segW);
-  const lastW = useRef(segW);
-
-  useEffect(() => {
-    const target = index * segW;
-    // Only a change of selection slides. The first layout and a rotation (width changed) snap,
-    // so the thumb never springs in from the left edge on mount.
-    const relayout = lastW.current !== segW;
-    lastW.current = segW;
-    x.set(t.reduceMotion || relayout ? target : withSpring(target, t.motion.spring.snappy));
-  }, [index, segW, t.reduceMotion, t.motion.spring.snappy, x]);
-
-  const thumb = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
+  const spring = t.motion.spring.snappy;
+  const slide = t.reduceMotion ? undefined : LinearTransition.springify().damping(spring.damping).stiffness(spring.stiffness).mass(spring.mass);
 
   return (
     <View
@@ -71,19 +65,18 @@ export function SegmentedControl<V extends string>({
       {segW > 0 ? (
         <Animated.View
           pointerEvents="none"
-          style={[
-            {
-              position: 'absolute',
-              top: pad,
-              bottom: pad,
-              left: pad,
-              width: segW,
-              borderRadius: t.radius.pill,
-              backgroundColor: t.colors.primary,
-              boxShadow: t.elevation.card,
-            },
-            thumb,
-          ]}
+          layout={slide}
+          testID={testID ? `${testID}-thumb` : undefined}
+          style={{
+            position: 'absolute',
+            top: pad,
+            bottom: pad,
+            left: pad + index * segW,
+            width: segW,
+            borderRadius: t.radius.pill,
+            backgroundColor: t.colors.primary,
+            boxShadow: t.elevation.card,
+          }}
         />
       ) : null}
       {segments.map((s) => {

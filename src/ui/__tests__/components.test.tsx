@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
+import { StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { Avatar, avatarColorIndex, avatarInitials } from '@/ui/primitives/Avatar';
@@ -105,6 +106,27 @@ test('SegmentedControl exposes tabs and reports the chosen value', async () => {
   expect(screen.getByRole('tab', { name: 'Friends & clan' })).toBeSelected();
   await fireEvent.press(screen.getByRole('tab', { name: 'League' }));
   expect(onChange).toHaveBeenCalledWith('league');
+});
+
+test('SegmentedControl: the thumb sits under the selected segment from the render that selects it', async () => {
+  const segments = [
+    { value: 'day', label: 'Day' },
+    { value: 'week', label: 'Week' },
+    { value: 'month', label: 'Month' },
+  ] as const;
+  const view = await wrap(<SegmentedControl accessibilityLabel="Range" segments={segments} value="week" onChange={jest.fn()} testID="range" />, { still: false });
+  await fireEvent(screen.getByTestId('range'), 'layout', { nativeEvent: { layout: { width: 306 } } });
+  // 3 pt of track padding, then 100 pt a segment.
+  expect(StyleSheet.flatten(screen.getByTestId('range-thumb').props.style)).toMatchObject({ left: 103, width: 100 });
+  await view.rerender(
+    <SafeAreaProvider>
+      <ThemeProvider scheme="light" reduceMotion={false}>
+        <SegmentedControl accessibilityLabel="Range" segments={segments} value="month" onChange={jest.fn()} testID="range" />
+      </ThemeProvider>
+    </SafeAreaProvider>
+  );
+  // No animation has to run for it to get there: the spring only animates the layout change.
+  expect(StyleSheet.flatten(screen.getByTestId('range-thumb').props.style)).toMatchObject({ left: 203 });
 });
 
 describe('progress', () => {

@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Pressable, View } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { LinearTransition } from 'react-native-reanimated';
 
 import { withAlpha } from '../sky/color';
 import { useTheme } from '../theme';
@@ -48,13 +48,11 @@ export function FloatingTabBar({ state, descriptors, navigation, insets }: Float
   const idle = light ? '#A9A9B0' : c.textMuted;
   const [width, setWidth] = useState(0);
   const slot = state.routes.length > 0 && width > 0 ? width / state.routes.length : 0;
-  const x = useSharedValue(0);
-  useEffect(() => {
-    if (slot === 0) return;
-    const target = state.index * slot + (slot - DISC) / 2;
-    x.set(t.reduceMotion ? target : withSpring(target, t.motion.spring.snappy));
-  }, [state.index, slot, t.reduceMotion, t.motion.spring.snappy, x]);
-  const discStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
+  // The disc's place is plain layout, under the current tab from the render that selects it; the
+  // spring is a layout transition from the old place. The current icon is drawn for the disc, so a
+  // transition that fails to run lands the disc at once rather than leaving that icon on the pill.
+  const spring = t.motion.spring.snappy;
+  const slide = t.reduceMotion ? undefined : LinearTransition.springify().damping(spring.damping).stiffness(spring.stiffness).mass(spring.mass);
 
   return (
     <View style={{ paddingBottom: Math.max(insets.bottom, t.space.md), paddingTop: t.space.sm, paddingHorizontal: SIDE }}>
@@ -66,6 +64,7 @@ export function FloatingTabBar({ state, descriptors, navigation, insets }: Float
       />
       <View
         accessibilityRole="tablist"
+        testID="tab-bar"
         onLayout={(e) => setWidth(e.nativeEvent.layout.width - 16)}
         style={{
           height: TAB_BAR_HEIGHT,
@@ -83,7 +82,17 @@ export function FloatingTabBar({ state, descriptors, navigation, insets }: Float
         {slot > 0 ? (
           <Animated.View
             pointerEvents="none"
-            style={[{ position: 'absolute', left: 8, top: (TAB_BAR_HEIGHT - DISC) / 2, width: DISC, height: DISC, borderRadius: DISC / 2, backgroundColor: disc }, discStyle]}
+            layout={slide}
+            testID="tab-disc"
+            style={{
+              position: 'absolute',
+              left: 8 + state.index * slot + (slot - DISC) / 2,
+              top: (TAB_BAR_HEIGHT - DISC) / 2,
+              width: DISC,
+              height: DISC,
+              borderRadius: DISC / 2,
+              backgroundColor: disc,
+            }}
           />
         ) : null}
         {state.routes.map((route, i) => {
