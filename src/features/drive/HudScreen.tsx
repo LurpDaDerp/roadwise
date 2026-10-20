@@ -126,8 +126,8 @@ export type HudScreenProps = {
  *   phone's event, a failed end, weather, the points. With a DashPal paired, a small static chip top right.
  * - Stopped only: the points total ("pts"), fading in and out, under the halo when there is
  *   room (so the halo never moves; in landscape above the navigation button), else in the band.
- * - Landscape: the sign left of the halo (the band above it), the navigation button right of it,
- *   End across the bottom.
+ * - Landscape: the halo the full height, the sign left of it; on the right the band, the points,
+ *   the navigation button and End under it.
  * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive.
  *   End and the navigation button wear the app's paper, ink and sky accent (`hudButtonColors`).
  *   End, the navigation button and the weather banner's ✕ are the only touch targets while moving.
