@@ -10,6 +10,7 @@ import {
   OVERPASS_USER_AGENT,
   OverpassBudgetSpent,
   OverpassHeldBack,
+  OverpassIncomplete,
   OverpassRefused,
   OverpassRemark,
   OverpassTooLarge,
@@ -184,10 +185,26 @@ Deno.test('streamElements yields each element of the array whatever the chunking
   }
 });
 
-Deno.test('an empty elements array, an empty body, and a body without elements yield nothing', async () => {
+Deno.test('an empty elements array yields nothing; an empty body or one without elements is incomplete, never an empty cell', async () => {
   assertEquals(await collect(streamElements(chunked(reply([]), 5))), []);
-  assertEquals(await collect(streamElements(chunked('', 5))), []);
-  assertEquals(await collect(streamElements(chunked('{"version": 0.6}', 5))), []);
+  for (const body of ['', '{"version": 0.6}', '<html><body>Service unavailable</body></html>']) {
+    const err = await assertRejects(() => collect(streamElements(chunked(body, 5))), OverpassIncomplete);
+    assertEquals(err.what, 'no_elements', body);
+  }
+});
+
+Deno.test('a body that ends inside the elements array throws OverpassIncomplete once the whole elements are out', async () => {
+  const full = reply([way(1, { highway: 'primary' }), way(2, { highway: 'residential' })]);
+  for (const cut of [full.indexOf('[') + 1, full.lastIndexOf('}', full.length - 3), full.length - 2]) {
+    for (const size of [3, 4096]) {
+      const got: unknown[] = [];
+      const err = await assertRejects(async () => {
+        for await (const el of streamElements(chunked(full.slice(0, cut), size))) got.push(el);
+      }, OverpassIncomplete);
+      assertEquals(err.what, 'unterminated', `cut ${cut}`);
+      assert(got.length <= 2);
+    }
+  }
 });
 
 Deno.test('a remark after the array (Overpass ran out of time or memory) throws OverpassRemark once the partial elements are out', async () => {

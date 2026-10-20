@@ -9,7 +9,9 @@
 //   * Overpass reports its own failures (a timed-out or out-of-memory query) as a 200 with a
 //     `remark` after a partial `elements` array. The stream throws `OverpassRemark` at the end of
 //     such a body, so a caller that already stored the partial batches still marks the cell failed
-//     and it is fetched again later.
+//     and it is fetched again later. A reply that ends before its `elements` array closes, or
+//     never had one (a cut-off body, an error page sent as 200), throws `OverpassIncomplete`: the
+//     cell is marked failed and fetched again, never taken as loaded.
 //   * The public instances are shared by everyone, and each has a usage policy (fill.ts keeps to
 //     them through a `MirrorGate`): private.coffee's (free, no rate limit, a User-Agent naming the
 //     project and a contact, notice before more than 10 requests a second or 10 at once) makes it
@@ -141,6 +143,14 @@ export class OverpassRemark extends Error {
   }
 }
 
+/** The reply ended before its `elements` array closed, or had none: it is not a whole cell. */
+export class OverpassIncomplete extends Error {
+  constructor(readonly what: 'no_elements' | 'unterminated') {
+    super(what === 'no_elements' ? 'overpass reply has no elements array' : 'overpass reply ended inside its elements array');
+    this.name = 'OverpassIncomplete';
+  }
+}
+
 /** The gate held every remaining mirror back (a policy budget spent, or a mirror cooling off). */
 export class OverpassHeldBack extends Error {
   constructor() {
@@ -190,7 +200,8 @@ const MIB = 1024 * 1024;
  * A brace-depth scan that honours strings (and escapes within them) finds each element's extent;
  * only that element is parsed, and the buffer never holds more than the element in progress plus
  * one chunk. After the array, the rest of the body is read for a `remark`. Every buffer and the
- * whole body are capped (`OverpassTooLarge`).
+ * whole body are capped (`OverpassTooLarge`). A body that ends before the array closes, or without
+ * one, throws `OverpassIncomplete` once the elements that did arrive are out.
  */
 export async function* streamElements(
   body: ReadableStream<Uint8Array>,
@@ -237,7 +248,7 @@ export async function* streamElements(
       const i = buf.indexOf('"elements"');
       const j = i === -1 ? -1 : buf.indexOf('[', i);
       if (j === -1) {
-        if (done) return;
+        if (done) throw new OverpassIncomplete('no_elements');
         if (i === -1) buf = buf.slice(Math.max(0, buf.length - 16)); // the key may straddle chunks
         if (bytes > MAX_EDGE_BYTES) await tooLarge('header');
         continue;
@@ -292,7 +303,7 @@ export async function* streamElements(
       if (buf.length > MAX_ELEMENT_BYTES) await tooLarge('element');
     }
     pos = buf.length;
-    if (done) return;
+    if (done) throw new OverpassIncomplete('unterminated');
   }
   // past the array: only the remark matters
   while (!done) {
