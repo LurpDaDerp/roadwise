@@ -1,9 +1,9 @@
 import { haversineMeters } from '@/lib/geo';
 
 import { DAY, drive, event, NOW, ROUTE, sums } from '../__fixtures__/drives';
-import { formatDuration, formatTimeSpan, groupByWeek, weekLabel, weekStart } from '../format';
+import { eventKind, formatDuration, formatEventDuration, formatTimeSpan, groupByWeek, spokenEventDuration, weekLabel, weekStart } from '../format';
 import { eventTally } from '../DriveRow';
-import { eventMarks, markShape, metersPerPixel, MIN_MARK_PX, regionFor, sketchPath } from '../route';
+import { eventMarks, fittedSpan, markShape, metersPerPixel, MIN_MARK_PX, minZoomFor, regionFor, sameZoom, sketchPath, tipAnchor, ZOOM_SLACK, zoomBack } from '../route';
 import { homeStats, trendFor } from '../stats';
 import {
   breakdownLines,
@@ -163,6 +163,62 @@ describe('route', () => {
     const region = { latitude: 0, longitude: 0, latitudeDelta: 0.01, longitudeDelta: 0.02 };
     expect(metersPerPixel(region, 200)).toBeCloseTo((0.02 * 111_320) / 200, 3);
     expect(metersPerPixel(region, 0)).toBe(0);
+  });
+
+  test('a marker view lands its tip on the spot: anchor for Google Maps, centre offset for Apple Maps', () => {
+    expect(tipAnchor(44, 42)).toEqual({ anchor: { x: 0.5, y: 42 / 44 }, centerOffset: { x: 0, y: -20 } });
+    // A tip at the very bottom lifts the view by half its height; a centred spot does not move it.
+    expect(tipAnchor(40, 40).centerOffset).toEqual({ x: 0, y: -20 });
+    expect(tipAnchor(12, 6)).toEqual({ anchor: { x: 0.5, y: 0.5 }, centerOffset: { x: 0, y: 0 } });
+  });
+
+  test('the outer zoom limit is the level that frames the route, in each engine’s zoom levels', () => {
+    // At the equator a 360° wide view on a 256-point square is Google zoom 0 and Apple zoom −1.
+    const world = { latitude: 0, longitude: 0, latitudeDelta: 10, longitudeDelta: 360 };
+    expect(minZoomFor(world, 256, 'google')).toBeCloseTo(0 - ZOOM_SLACK, 9);
+    expect(minZoomFor(world, 256, 'apple')).toBeCloseTo(-1 - ZOOM_SLACK, 9);
+    // Each halving of the span or doubling of the square is one level further in.
+    const city = { latitude: 0, longitude: 0, latitudeDelta: 0.01, longitudeDelta: 360 / 1024 };
+    expect(minZoomFor(city, 512, 'google')).toBeCloseTo(11 - ZOOM_SLACK, 9);
+    expect(minZoomFor(city, 0, 'google')).toBeUndefined();
+    // A tall route is fitted by its height: at 60° a degree of latitude spans two of longitude.
+    const tall = { latitude: 60, longitude: 0, latitudeDelta: 0.1, longitudeDelta: 0.05 };
+    expect(fittedSpan(tall)).toBeCloseTo(0.2, 9);
+    expect(minZoomFor(tall, 300, 'google')).toBeCloseTo(Math.log2((360 * 300) / (256 * 0.2)) - ZOOM_SLACK, 9);
+  });
+
+  test('the zoom backstop pulls a map that went too far out back to the fitted size where it stands', () => {
+    const fitted = { latitude: 40, longitude: -74, latitudeDelta: 0.05, longitudeDelta: 0.04 };
+    expect(zoomBack(fitted, fitted)).toBeNull();
+    expect(zoomBack({ ...fitted, latitudeDelta: 0.01, longitudeDelta: 0.008 }, fitted)).toBeNull(); // zoomed in
+    expect(zoomBack({ ...fitted, latitudeDelta: 0.0515, longitudeDelta: 0.0412 }, fitted)).toBeNull(); // within 5 %
+    expect(zoomBack({ latitude: 40.01, longitude: -74.02, latitudeDelta: 0.1, longitudeDelta: 0.08 }, fitted)).toEqual({
+      latitude: 40.01,
+      longitude: -74.02,
+      latitudeDelta: 0.05,
+      longitudeDelta: 0.04,
+    });
+  });
+
+  test('a pan keeps the zoom; a pinch changes it', () => {
+    const a = { latitude: 40, longitude: -74, latitudeDelta: 0.05, longitudeDelta: 0.04 };
+    expect(sameZoom(a, { ...a, latitude: 40.02, longitude: -74.01 })).toBe(true);
+    expect(sameZoom(a, { ...a, latitudeDelta: 0.025, longitudeDelta: 0.02 })).toBe(false);
+  });
+
+  test('an event says how long it lasted, in words too, and its tier or source', () => {
+    expect(formatEventDuration(0.4)).toBe('under 1 s');
+    expect(formatEventDuration(2)).toBe('2 s');
+    expect(formatEventDuration(65)).toBe('1 min 5 s');
+    expect(formatEventDuration(180)).toBe('3 min');
+    expect(formatEventDuration(3900)).toBe('1 h 05 min');
+    expect(spokenEventDuration(0)).toBe('under a second');
+    expect(spokenEventDuration(1)).toBe('1 second');
+    expect(spokenEventDuration(65)).toBe('1 minute 5 seconds');
+    expect(spokenEventDuration(120)).toBe('2 minutes');
+    expect(eventKind('hard_brake', 'moderate')).toBe('Moderate');
+    expect(eventKind('phone_pickup', 'severe')).toBeNull();
+    expect(eventKind('drowsy', 'severe')).toBe('DashPal');
   });
 });
 

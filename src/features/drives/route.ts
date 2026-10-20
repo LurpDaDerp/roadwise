@@ -237,3 +237,69 @@ export function metersPerPixel(region: Region, side: number): number {
   const k = Math.cos((region.latitude * Math.PI) / 180);
   return (Math.max(region.latitudeDelta, region.longitudeDelta * k) * M_PER_DEG) / side;
 }
+
+// ── Map pins and zoom ───────────────────────────────────────────────────────────────────
+
+/**
+ * Where a custom marker view `height` points tall sits so the point `tipY` points down from its
+ * top (horizontally centred) lands on the coordinate, for both map engines: Google Maps reads `anchor` (a fraction of
+ * the view), Apple Maps centres the view on the coordinate and reads `centerOffset` (points,
+ * negative moves it up). Each engine ignores the other's prop, so a marker passes both.
+ */
+export function tipAnchor(height: number, tipY: number): { anchor: { x: number; y: number }; centerOffset: { x: number; y: number } } {
+  return { anchor: { x: 0.5, y: tipY / height }, centerOffset: { x: 0, y: height / 2 - tipY } };
+}
+
+/** The map engine drawing the summary map: Apple Maps on iOS, Google Maps on Android. */
+export type MapEngine = 'apple' | 'google';
+
+/**
+ * How wide a world map is, in points, at zoom 0 for each engine's zoom levels: Google's are the
+ * usual 256-point tiles; react-native-maps measures Apple Maps against 512 (one level lower for the
+ * same view).
+ */
+const WORLD_PTS: Record<MapEngine, number> = { apple: 512, google: 256 };
+
+/** Slack on the outer zoom limit, in zoom levels, so the fitted view itself is never nudged in. */
+export const ZOOM_SLACK = 0.02;
+
+/**
+ * The longitude span a square map shows when it frames `region`: the region's own width, or its
+ * height turned into the same Mercator scale when the height is what has to fit.
+ */
+export function fittedSpan(region: Region): number {
+  const k = Math.cos((region.latitude * Math.PI) / 180);
+  return Math.max(region.longitudeDelta, k > 0 ? region.latitudeDelta / k : region.latitudeDelta);
+}
+
+/**
+ * The farthest out a square map `side` points wide may zoom: the level at which it frames
+ * `region`, in `engine`'s zoom levels (a hair lower, see `ZOOM_SLACK`). Undefined before layout.
+ */
+export function minZoomFor(region: Region, side: number, engine: MapEngine): number | undefined {
+  if (!(side > 0)) return undefined;
+  const span = fittedSpan(region);
+  if (!(span > 0)) return undefined;
+  return Math.log2((360 * side) / (WORLD_PTS[engine] * span)) - ZOOM_SLACK;
+}
+
+/** How far past the fitted view a map may report before the backstop pulls it in (5 %). */
+export const ZOOM_OUT_SLACK = 1.05;
+
+/**
+ * The backstop to the engine's own zoom limit: when the map shows more than the fitted view (past
+ * `ZOOM_OUT_SLACK`), the region to go back to — the fitted view's size around where the map is now
+ * centred. Null while the map is within bounds.
+ */
+export function zoomBack(current: Region, fitted: Region): Region | null {
+  if (fittedSpan(current) <= fittedSpan(fitted) * ZOOM_OUT_SLACK) return null;
+  return {
+    latitude: current.latitude,
+    longitude: current.longitude,
+    latitudeDelta: fitted.latitudeDelta,
+    longitudeDelta: fitted.longitudeDelta,
+  };
+}
+
+/** Whether two views are at the same zoom (within 2 %), so a pan alone redraws nothing. */
+export const sameZoom = (a: Region, b: Region): boolean => Math.abs(Math.log(fittedSpan(a) / fittedSpan(b))) < 0.02;

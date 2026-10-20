@@ -104,6 +104,35 @@ export function eventName(type: EventType, tier: Tier): string {
   return SINGLE_TIER.has(type) ? EVENT_LABEL[type] : `${EVENT_LABEL[type]} · ${TIER_WORD[tier]}`;
 }
 
+/** What sets an event apart besides its name: its tier, its source for DashPal, nothing for a one-tier type. */
+export function eventKind(type: EventType, tier: Tier): string | null {
+  if (isDashcamType(type)) return DASHPAL_MARK;
+  return SINGLE_TIER.has(type) ? null : TIER_WORD[tier];
+}
+
+/** How long an event lasted: "under 1 s", "2 s", "1 min 5 s", "3 min", "1 h 05 min". */
+export function formatEventDuration(seconds: number): string {
+  const s = Math.round(Math.max(0, seconds));
+  if (s < 1) return 'under 1 s';
+  if (s < 60) return `${s} s`;
+  if (s >= 3600) return formatDuration(s);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r === 0 ? `${m} min` : `${m} min ${r} s`;
+}
+
+/** The same, spoken: "under a second", "2 seconds", "1 minute 5 seconds". */
+export function spokenEventDuration(seconds: number): string {
+  const s = Math.round(Math.max(0, seconds));
+  if (s < 1) return 'under a second';
+  if (s >= 3600) return spokenDuration(s);
+  const part = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m === 0) return part(r, 'second');
+  return r === 0 ? part(m, 'minute') : `${part(m, 'minute')} ${part(r, 'second')}`;
+}
+
 const TIER_RANK: Record<Tier, number> = { minor: 1, moderate: 2, severe: 3 };
 
 /** The worse of two tiers (null = none). */
