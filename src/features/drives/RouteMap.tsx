@@ -1,14 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
-import type { Tier } from '@scoring';
-import { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import type { EventType, Tier } from '@scoring';
+import { useMemo, useState } from 'react';
+import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 
 import type { LatLng } from '@/lib/geo';
-import { Text, ThemeProvider, tokens, useTheme } from '@/ui';
+import { Text, tokens, useTheme } from '@/ui';
 
 import { EVENT_ICON, eventName, formatClock, TIER_SIGNAL } from './format';
 import type { LocalDriveEvent } from './model';
-import { allPoints, regionFor, routeDots, routeRuns, type Runs } from './route';
+import { allPoints, eventMarks, markShape, metersPerPixel, MIN_MARK_PX, regionFor, type EventMark, type Runs } from './route';
 import { RouteSketch } from './RouteSketch';
 
 export type MapsModule = typeof import('react-native-maps');
@@ -37,51 +37,72 @@ export function resetMapsCache(): void {
   cached = undefined;
 }
 
-const MAP_HEIGHT = 240;
 /**
  * Map tiles follow the system appearance, not the app's scheme, so the route inks are pinned to
- * the light palette's signal fills: strong enough on both light and dark tiles. The legend uses
- * the same values, and every colour also has a word there.
+ * the light palette's signal fills: strong enough on both light and dark tiles. Every pin also
+ * carries its event's icon, so no mark relies on colour alone.
  */
 const INK = tokens.color.light.signal;
-const inkFor = (tier: Tier | null) => (tier === null ? INK.clean.fill : INK[TIER_SIGNAL[tier]].fill);
+const PAPER = tokens.color.light.surface;
 const RING = tokens.color.light.accent;
+const ROUTE_WIDTH = 5;
+const PIN = 28;
+const PIN_TIP = 8;
+const TIER_Z: Record<Tier, number> = { minor: 1, moderate: 2, severe: 3 };
 
-const LEGEND: { tier: Tier | null; label: string }[] = [
-  { tier: null, label: 'Clean' },
-  { tier: 'minor', label: 'Minor' },
-  { tier: 'moderate', label: 'Moderate' },
-  { tier: 'severe', label: 'Severe' },
-];
+/** Singular and plural for the map's spoken summary. */
+const SPOKEN: Record<EventType, [string, string]> = {
+  speeding: ['speeding', 'speeding'],
+  hard_brake: ['hard brake', 'hard brakes'],
+  hard_accel: ['hard acceleration', 'hard accelerations'],
+  hard_corner: ['hard corner', 'hard corners'],
+  phone_pickup: ['phone pickup', 'phone pickups'],
+  phone_handling: ['phone handling', 'phone handling'],
+  eyes_off: ['eyes off road', 'eyes off road'],
+  drowsy: ['drowsy alert', 'drowsy alerts'],
+};
 
-function Legend() {
-  const t = tokens.color.light;
+/** What the map shows, for a screen reader: "Route map, 2 hard brakes, 1 speeding". */
+export function mapLabel(marks: readonly Pick<EventMark, 'type'>[]): string {
+  if (marks.length === 0) return 'Route map, no events marked';
+  const n = new Map<EventType, number>();
+  for (const m of marks) n.set(m.type, (n.get(m.type) ?? 0) + 1);
+  return `Route map, ${[...n].map(([type, k]) => `${k} ${SPOKEN[type][k === 1 ? 0 : 1]}`).join(', ')}`;
+}
+
+/** A map pin in its tier's colour with the event's icon, its tip on the spot. */
+function Pin({ mark }: { mark: EventMark }) {
+  const ink = INK[TIER_SIGNAL[mark.tier]];
   return (
-    <ThemeProvider scheme="light">
+    <View style={{ alignItems: 'center' }}>
       <View
-        pointerEvents="none"
         style={{
-          position: 'absolute',
-          left: 8,
-          top: 8,
-          paddingHorizontal: 8,
-          paddingVertical: 6,
-          gap: 2,
-          borderRadius: 10,
-          backgroundColor: t.surface,
-          opacity: 0.94,
+          width: PIN,
+          height: PIN,
+          borderRadius: PIN / 2,
+          backgroundColor: ink.fill,
+          borderWidth: 2,
+          borderColor: PAPER,
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
       >
-        {LEGEND.map((l) => (
-          <View key={l.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <View style={{ width: 14, height: 4, borderRadius: 2, backgroundColor: inkFor(l.tier) }} />
-            <Text variant="caption" tone="muted">
-              {l.label}
-            </Text>
-          </View>
-        ))}
+        <Ionicons name={EVENT_ICON[mark.type]} size={15} color={ink.onFill} />
       </View>
-    </ThemeProvider>
+      <View
+        style={{
+          marginTop: -1,
+          width: 0,
+          height: 0,
+          borderLeftWidth: PIN_TIP / 2 + 1,
+          borderRightWidth: PIN_TIP / 2 + 1,
+          borderTopWidth: PIN_TIP,
+          borderLeftColor: 'transparent',
+          borderRightColor: 'transparent',
+          borderTopColor: ink.fill,
+        }}
+      />
+    </View>
   );
 }
 
@@ -94,12 +115,13 @@ export function highlightCaption(e: LocalDriveEvent): string {
 }
 
 /**
- * The route map on the summary: a plain base map, the route coloured by the worst event along
- * each stretch (green clean, then yellow, orange, red), instant events as yellow or red dots, a
- * small legend in the corner, and a ring around the event tapped in the breakdown. The route comes
- * as its visible runs and each is drawn apart: no line joins one run to the next across a privacy
- * cut. Static: it never steals the page scroll. Hidden from screen readers — the breakdown lists
- * every event in words, and the caption below says what is circled.
+ * The route map on the summary: a square, a plain base map with the route in green, and every
+ * event as a pin with its icon where it happened, the stretch of route it covered drawn in its
+ * tier's colour (yellow, orange, red) — or a dot of that colour when the stretch is too short to
+ * see at this zoom. Severe marks sit on top. A ring circles the event tapped in the breakdown. The
+ * route comes as its visible runs and each is drawn apart: no line joins one run to the next
+ * across a privacy cut. Static: it never steals the page scroll. A screen reader hears one summary
+ * of the events; the breakdown lists each in words, and the caption below says what is circled.
  */
 export function RouteMap({
   runs: visible,
@@ -113,20 +135,24 @@ export function RouteMap({
   testID?: string;
 }) {
   const t = useTheme();
+  const [side, setSide] = useState(0);
   const points = useMemo(() => allPoints(visible), [visible]);
-  const runs = useMemo(() => routeRuns(visible, events), [visible, events]);
-  const dots = useMemo(() => routeDots(events), [events]);
+  const marks = useMemo(() => eventMarks(visible, events), [visible, events]);
   const region = useMemo(() => regionFor(points), [points]);
   const maps = loadMaps();
   const ring = highlighted && highlighted.lat !== null && highlighted.lng !== null ? { lat: highlighted.lat, lng: highlighted.lng } : null;
+  const mPerPx = region ? metersPerPixel(region, side) : 0;
+  const onLayout = (e: LayoutChangeEvent) => setSide(Math.round(e.nativeEvent.layout.width));
 
   const frame = {
-    height: MAP_HEIGHT,
     borderRadius: t.radius.card,
     borderCurve: 'continuous' as const,
     overflow: 'hidden' as const,
     backgroundColor: t.colors.surfaceRaised,
   };
+  const square = [frame, { width: '100%' as const, aspectRatio: 1 }];
+  const a11y = { accessible: true, accessibilityRole: 'image' as const, accessibilityLabel: mapLabel(marks) };
+  const hidden = { accessibilityElementsHidden: true, importantForAccessibility: 'no-hide-descendants' as const };
 
   let body: React.ReactNode;
   if (points.length < 2) {
@@ -140,56 +166,92 @@ export function RouteMap({
     );
   } else if (maps === null || region === null) {
     body = (
-      <View style={[frame, { alignItems: 'center', justifyContent: 'center' }]} testID="map-unavailable" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-        <RouteSketch runs={visible} size={MAP_HEIGHT - 32} strokeWidth={4} background="transparent" />
+      <View style={[square, { alignItems: 'center', justifyContent: 'center' }]} testID="map-unavailable" onLayout={onLayout} {...a11y}>
+        <View {...hidden}>{side > 32 ? <RouteSketch runs={visible} size={side - 32} strokeWidth={4} background="transparent" /> : null}</View>
       </View>
     );
   } else {
     const MapView = maps.default;
     const { Marker, Polyline } = maps;
     const coords = (ps: readonly LatLng[]) => ps.map((p) => ({ latitude: p.lat, longitude: p.lng }));
+    const clean = INK.clean.fill;
     body = (
-      <View style={frame} testID="map-canvas" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-        <MapView
-          style={StyleSheet.absoluteFill}
-          initialRegion={region}
-          scrollEnabled={false}
-          zoomEnabled={false}
-          rotateEnabled={false}
-          pitchEnabled={false}
-          toolbarEnabled={false}
-          showsUserLocation={false}
-          showsPointsOfInterests={false}
-          liteMode
-        >
-          {runs.map((run, i) => (
-            <Polyline key={i} coordinates={coords(run.points)} strokeWidth={5} strokeColor={inkFor(run.tier)} lineCap="round" lineJoin="round" />
-          ))}
-          {dots.map((dot) => (
-            <Marker key={dot.id} coordinate={{ latitude: dot.at.lat, longitude: dot.at.lng }} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} testID={`dot-${dot.id}`}>
-              <View
-                style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: 11,
-                  backgroundColor: inkFor(dot.tier),
-                  borderWidth: 2,
-                  borderColor: tokens.color.light.surface,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
+      <View style={square} testID="map-canvas" onLayout={onLayout} {...a11y}>
+        <View style={StyleSheet.absoluteFill} {...hidden}>
+          <MapView
+            style={StyleSheet.absoluteFill}
+            initialRegion={region}
+            scrollEnabled={false}
+            zoomEnabled={false}
+            rotateEnabled={false}
+            pitchEnabled={false}
+            toolbarEnabled={false}
+            showsUserLocation={false}
+            showsPointsOfInterests={false}
+            liteMode
+          >
+            {visible.map((run, i) =>
+              run.length >= 2 ? (
+                <Polyline key={`run-${i}`} coordinates={coords(run)} strokeWidth={ROUTE_WIDTH} strokeColor={clean} lineCap="round" lineJoin="round" zIndex={0} />
+              ) : null
+            )}
+            {marks.map((m) => {
+              const ink = INK[TIER_SIGNAL[m.tier]].fill;
+              if (m.stretch.length >= 2 && markShape(m.lengthM, mPerPx) === 'line') {
+                return (
+                  <Polyline
+                    key={`stretch-${m.id}`}
+                    testID={`stretch-${m.id}`}
+                    coordinates={coords(m.stretch)}
+                    strokeWidth={ROUTE_WIDTH}
+                    strokeColor={ink}
+                    lineCap="round"
+                    lineJoin="round"
+                    zIndex={TIER_Z[m.tier]}
+                  />
+                );
+              }
+              const at = m.stretch[0] ?? m.at;
+              return (
+                <Marker
+                  key={`dot-${m.id}`}
+                  testID={`dot-${m.id}`}
+                  coordinate={{ latitude: at.lat, longitude: at.lng }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  tracksViewChanges={false}
+                  zIndex={TIER_Z[m.tier]}
+                >
+                  <View style={{ width: MIN_MARK_PX, height: MIN_MARK_PX, borderRadius: MIN_MARK_PX / 2, backgroundColor: ink }} />
+                </Marker>
+              );
+            })}
+            {marks.map((m) => (
+              <Marker
+                key={`pin-${m.id}`}
+                testID={`pin-${m.id}`}
+                coordinate={{ latitude: m.at.lat, longitude: m.at.lng }}
+                anchor={{ x: 0.5, y: 1 }}
+                tracksViewChanges={false}
+                zIndex={10 + TIER_Z[m.tier]}
               >
-                <Ionicons name={EVENT_ICON[dot.type]} size={12} color={INK[TIER_SIGNAL[dot.tier]].onFill} />
-              </View>
-            </Marker>
-          ))}
-          {ring ? (
-            <Marker key={`ring-${highlighted?.id}`} coordinate={{ latitude: ring.lat, longitude: ring.lng }} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} testID="map-highlight">
-              <View style={{ width: 44, height: 44, borderRadius: 22, borderWidth: 3, borderColor: RING, backgroundColor: 'rgba(255,255,255,0.25)' }} />
-            </Marker>
-          ) : null}
-        </MapView>
-        <Legend />
+                <Pin mark={m} />
+              </Marker>
+            ))}
+            {ring ? (
+              <Marker
+                key={`ring-${highlighted?.id}`}
+                coordinate={{ latitude: ring.lat, longitude: ring.lng }}
+                // Its foot on the spot, so it rings the pin's head.
+                anchor={{ x: 0.5, y: 1 }}
+                tracksViewChanges={false}
+                zIndex={20}
+                testID="map-highlight"
+              >
+                <View style={{ width: 44, height: 44, borderRadius: 22, borderWidth: 3, borderColor: RING, backgroundColor: 'rgba(255,255,255,0.25)' }} />
+              </Marker>
+            ) : null}
+          </MapView>
+        </View>
       </View>
     );
   }

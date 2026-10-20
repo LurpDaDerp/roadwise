@@ -1,7 +1,9 @@
+import { haversineMeters } from '@/lib/geo';
+
 import { DAY, drive, event, NOW, ROUTE, sums } from '../__fixtures__/drives';
 import { formatDuration, formatTimeSpan, groupByWeek, weekLabel, weekStart } from '../format';
 import { eventTally } from '../DriveRow';
-import { routeDots, routeRuns, sketchPath } from '../route';
+import { eventMarks, markShape, metersPerPixel, MIN_MARK_PX, regionFor, sketchPath } from '../route';
 import { homeStats, trendFor } from '../stats';
 import {
   breakdownLines,
@@ -29,10 +31,9 @@ describe('DashPal', () => {
     expect(reportReasons('hard_brake')).toEqual(['hazard', 'not_driving']);
   });
 
-  test('DashPal events are dots on the route, never coloured stretches', () => {
+  test('DashPal events get a pin on the route like any other event', () => {
     const drowsy = event({ id: 'd1', type: 'drowsy', tier: 'severe', durationS: 60 });
-    expect(routeDots([drowsy]).map((d) => [d.id, d.type, d.tier])).toEqual([['d1', 'drowsy', 'severe']]);
-    expect(routeRuns([ROUTE], [drowsy]).every((r) => r.tier === null)).toBe(true);
+    expect(eventMarks([ROUTE], [drowsy]).map((m) => [m.id, m.type, m.tier])).toEqual([['d1', 'drowsy', 'severe']]);
   });
 
   test('a history row shows DashPal events with the phone events', () => {
@@ -105,40 +106,65 @@ describe('route', () => {
     expect(sketchPath([first, [ROUTE[15]!], second], 56, 56, 4)!.match(/M/g)).toHaveLength(2);
   });
 
-  test('a speeding stretch is coloured by its tier; the rest stays clean', () => {
-    const runs = routeRuns([ROUTE], [event({ id: 's', type: 'speeding', tier: 'moderate', durationS: 20, lat: ROUTE[5]!.lat, lng: ROUTE[5]!.lng })]);
-    expect(runs.map((r) => r.tier)).toEqual([null, 'moderate', null]);
+  test('each event marks the stretch it covered: from where it began, for its duration along the road', () => {
+    const [m] = eventMarks([ROUTE], [event({ id: 's', type: 'speeding', tier: 'moderate', durationS: 20, lat: ROUTE[5]!.lat, lng: ROUTE[5]!.lng })]);
+    expect(m!.at).toEqual(ROUTE[5]);
+    expect(m!.stretch[0]).toEqual(ROUTE[5]);
+    // 20 s at ≈ 30 mph: about 268 m of road, measured along the stretch itself.
+    expect(m!.lengthM).toBeCloseTo(268, 0);
+    const along = m!.stretch.slice(1).reduce((n, p, i) => n + haversineMeters(m!.stretch[i]!, p), 0);
+    expect(along).toBeCloseTo(m!.lengthM, 0);
   });
 
-  test('coloured stretches never leave their visible run, and no output segment joins one run to the next', () => {
+  test('a measured speed sets how far the stretch runs', () => {
+    const at = { lat: ROUTE[5]!.lat, lng: ROUTE[5]!.lng };
+    const [slow] = eventMarks([ROUTE], [event({ type: 'speeding', durationS: 10, measured: { speedMph: 20 }, ...at })]);
+    const [fast] = eventMarks([ROUTE], [event({ type: 'speeding', durationS: 10, measured: { speedMph: 60 }, ...at })]);
+    expect(fast!.lengthM / slow!.lengthM).toBeCloseTo(3, 1);
+  });
+
+  test('a stretch never leaves its visible run; one that would run off the end starts earlier instead', () => {
     const first = ROUTE.slice(0, 10);
     const second = ROUTE.slice(20);
-    // A long speeding event near the end of the first run would, on one joined line, run on into the second.
-    const runs = routeRuns([first, second], [event({ id: 's', type: 'speeding', tier: 'severe', durationS: 600, lat: first[8]!.lat, lng: first[8]!.lng })]);
-    const onFirst = (p: { lat: number; lng: number }) => first.some((q) => q.lat === p.lat && q.lng === p.lng);
-    for (const run of runs) {
-      // Every stretch lies wholly in one visible run: no segment has an end in each.
-      expect(new Set(run.points.map(onFirst)).size).toBe(1);
-    }
-    expect(runs.filter((r) => r.points.every((p) => !onFirst(p))).every((r) => r.tier === null)).toBe(true); // the second run stays clean
-    expect(runs.some((r) => r.tier === 'severe')).toBe(true);
-    expect(routeRuns([], [])).toEqual([]);
+    const onFirst = (p: { lat: number; lng: number }) => p.lat <= first[9]!.lat;
+    const [m] = eventMarks([first, second], [event({ id: 's', type: 'speeding', tier: 'severe', durationS: 30, lat: first[8]!.lat, lng: first[8]!.lng })]);
+    expect(m!.stretch.every(onFirst)).toBe(true);
+    expect(m!.stretch[m!.stretch.length - 1]).toEqual(first[9]);
+    expect(m!.lengthM).toBeCloseTo(30 * 13.4, 0);
   });
 
-  test('overlapping stretches take the worse tier, and removed events are ignored', () => {
-    const runs = routeRuns([ROUTE], [
-      event({ id: 's', type: 'speeding', tier: 'minor', durationS: 60, lat: ROUTE[5]!.lat, lng: ROUTE[5]!.lng }),
-      event({ id: 'h', type: 'phone_handling', tier: 'severe', durationS: 5, lat: ROUTE[6]!.lat, lng: ROUTE[6]!.lng }),
-      event({ id: 'x', type: 'speeding', tier: 'severe', durationS: 60, lat: ROUTE[20]!.lat, lng: ROUTE[20]!.lng, disputeStatus: 'accepted' }),
+  test('every counted event with a location is marked, minor first so severe draws on top', () => {
+    const marks = eventMarks([ROUTE], [
+      event({ id: 'b', type: 'hard_brake', tier: 'severe' }),
+      event({ id: 'a', type: 'hard_accel', tier: 'minor' }),
+      event({ id: 'c', type: 'hard_corner', tier: 'moderate' }),
+      event({ id: 'p', type: 'phone_pickup', tier: 'severe', lat: null, lng: null }),
+      event({ id: 'x', type: 'speeding', tier: 'severe', disputeStatus: 'accepted' }),
+      event({ id: 'r', type: 'speeding', tier: 'severe', removed: true }),
     ]);
-    expect(runs.some((r) => r.tier === 'severe')).toBe(true);
-    expect(runs.some((r) => r.tier === 'minor')).toBe(true);
-    expect(runs[runs.length - 1]!.tier).toBeNull();
+    expect(marks.map((m) => [m.id, m.tier])).toEqual([
+      ['a', 'minor'],
+      ['c', 'moderate'],
+      ['b', 'severe'],
+    ]);
+    expect(eventMarks([], [event()])).toEqual([expect.objectContaining({ id: 'e1', stretch: [], lengthM: 0 })]);
   });
 
-  test('instant events become dots; ones without a location are left off', () => {
-    const dots = routeDots([event(), event({ id: 'p', type: 'phone_pickup', tier: 'severe', lat: null, lng: null }), event({ id: 's', type: 'speeding' })]);
-    expect(dots.map((d) => d.id)).toEqual(['e1']);
+  test('a stretch too short to see at the zoom becomes a dot', () => {
+    expect(markShape(1000, 10)).toBe('line'); // 100 pt on screen
+    expect(markShape(MIN_MARK_PX * 10, 10)).toBe('line');
+    expect(markShape(MIN_MARK_PX * 10 - 1, 10)).toBe('dot');
+    expect(markShape(13, 80)).toBe('dot'); // a one-second brake on a long drive
+    expect(markShape(500, 0)).toBe('dot'); // not laid out yet
+    // A one-second brake on the fixture's ~6.4 km route, on a 340 pt square map.
+    const [brake] = eventMarks([ROUTE], [event()]);
+    expect(markShape(brake!.lengthM, metersPerPixel(regionFor(ROUTE)!, 340))).toBe('dot');
+  });
+
+  test('the map scale follows the longer side of the region', () => {
+    const region = { latitude: 0, longitude: 0, latitudeDelta: 0.01, longitudeDelta: 0.02 };
+    expect(metersPerPixel(region, 200)).toBeCloseTo((0.02 * 111_320) / 200, 3);
+    expect(metersPerPixel(region, 0)).toBe(0);
   });
 });
 

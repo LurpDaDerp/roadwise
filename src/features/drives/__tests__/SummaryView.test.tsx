@@ -120,6 +120,13 @@ test('an event outside the map (privacy zone) says so when tapped', async () => 
   expect(screen.getByTestId('map-highlight-caption')).toHaveTextContent(/isn't on the map/);
 });
 
+test('without a maps module the route sketch fills the same square slot, with the events spoken', async () => {
+  await draw(<SummaryView {...props()} />);
+  const slot = screen.getByTestId('map-unavailable');
+  expect(slot).toHaveStyle({ width: '100%', aspectRatio: 1 });
+  expect(slot).toHaveProp('accessibilityLabel', 'Route map, 1 hard brake');
+});
+
 test('a negative drive shows red points with a true minus, in the scene card red kept at AA on its sky', async () => {
   const r = result({ net: -44 });
   await draw(<SummaryView {...props({ drive: drive({ pointsNet: -44, result: r }) })} />);

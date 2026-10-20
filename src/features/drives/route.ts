@@ -1,14 +1,13 @@
 /**
  * Route geometry for the drive screens: decoding the (already privacy-trimmed) polyline, the cheap
- * SVG sketch used for history thumbnails and the share card, and the colouring of the summary map
- * (segments by the worst event in them, instant events as dots). Pure.
+ * SVG sketch used for history thumbnails and the share card, and the marks on the summary map
+ * (a pin per event and the stretch of route it covered, a dot when too short to see). Pure.
  */
 import type { EventType, Tier } from '@scoring';
 
 import { haversineMeters, type LatLng } from '@/lib/geo';
 import { decodeRuns } from '@/lib/polyline';
 
-import { worseTier } from './format';
 import type { LocalDriveEvent } from './model';
 
 /** A route as its visible runs: each is drawn on its own, never joined to the next. */
@@ -78,43 +77,25 @@ export function sketchPath(runs: Runs, w: number, h: number, pad = 4, max = 120)
   return parts.join(' ');
 }
 
-// ── Summary map colouring ───────────────────────────────────────────────────────────────
-
-/** Events that last along the road; the rest are instants drawn as dots. */
-export const SEGMENT_EVENTS: ReadonlySet<EventType> = new Set<EventType>(['speeding', 'phone_handling']);
+// ── Summary map marks ───────────────────────────────────────────────────────────────────
 
 /** Rough road speed used to turn a duration into a stretch of route (≈ 30 mph). */
 const ASSUMED_MPS = 13.4;
-const MIN_STRETCH_M = 150;
+const MPH_TO_MPS = 0.44704;
+/** Metres per degree of latitude (and of longitude at the equator). */
+const M_PER_DEG = 111_320;
 
-export interface RouteRun {
-  /** null = clean (green). */
-  tier: Tier | null;
-  points: LatLng[];
-}
-
-export interface RouteDot {
+/** One event on the summary map: a pin where it happened and the stretch of route it covered. */
+export interface EventMark {
   id: string;
-  tier: Tier;
   type: EventType;
+  tier: Tier;
+  /** Where it happened: the pin's tip. */
   at: LatLng;
-}
-
-/** The run and point index nearest `p` across every run (runs with under two points are skipped). */
-function nearestIndex(runs: Runs, p: LatLng): { run: number; i: number } {
-  let best = { run: 0, i: 0 };
-  let bestD = Infinity;
-  runs.forEach((points, run) => {
-    if (points.length < 2) return;
-    points.forEach((q, i) => {
-      const d = haversineMeters(p, q);
-      if (d < bestD) {
-        bestD = d;
-        best = { run, i };
-      }
-    });
-  });
-  return best;
+  /** The route from where it began for as far as its duration covers, inside one visible run. */
+  stretch: LatLng[];
+  /** The stretch's length along the road, in metres (0 for an instant at the end of a run). */
+  lengthM: number;
 }
 
 const located = (e: LocalDriveEvent): LatLng | null =>
@@ -123,59 +104,105 @@ const located = (e: LocalDriveEvent): LatLng | null =>
 /** Disputes that were accepted no longer count anywhere, the map included. */
 const counts = (e: LocalDriveEvent) => !e.removed && e.disputeStatus !== 'accepted';
 
-/**
- * The route split into stretches of one colour: each lasting event (speeding, phone handling)
- * colours the visible run it happened on from where it began for about as far as its
- * duration covers, and an overlap takes the worse tier. A coloured stretch never leaves its run —
- * the output holds no segment from one visible run to the next.
- */
-export function routeRuns(visible: Runs, events: readonly LocalDriveEvent[]): RouteRun[] {
-  const drawn = visible.filter((r) => r.length >= 2);
-  if (drawn.length === 0) return [];
-  // One tier per segment (point i → i + 1) of each run.
-  const segTier: (Tier | null)[][] = drawn.map((points) => points.slice(1).map(() => null));
-  const cum: number[][] = drawn.map((points) => {
-    const c: number[] = [0];
-    for (let i = 1; i < points.length; i++) c.push(c[i - 1]! + haversineMeters(points[i - 1]!, points[i]!));
-    return c;
-  });
+/** Cumulative distance along a run, metres, one entry per point. */
+function cumulative(points: readonly LatLng[]): number[] {
+  const c: number[] = [0];
+  for (let i = 1; i < points.length; i++) c.push(c[i - 1]! + haversineMeters(points[i - 1]!, points[i]!));
+  return c;
+}
 
-  for (const e of events) {
-    const at = located(e);
-    if (!SEGMENT_EVENTS.has(e.type) || at === null || !counts(e)) continue;
-    const near = nearestIndex(drawn, at);
-    const points = drawn[near.run]!;
-    const tiers = segTier[near.run]!;
-    const c = cum[near.run]!;
-    const i0 = Math.min(near.i, points.length - 2);
-    const length = Math.max(MIN_STRETCH_M, e.durationS * ASSUMED_MPS);
-    for (let i = i0; i < tiers.length && (i === i0 || c[i + 1]! - c[i0]! <= length); i++) {
-      tiers[i] = worseTier(tiers[i]!, e.tier);
+/** The point `d` metres along a run. */
+function pointAt(points: readonly LatLng[], cum: readonly number[], d: number): LatLng {
+  let i = 1;
+  while (i < points.length - 1 && cum[i]! < d) i++;
+  const a = points[i - 1]!;
+  const b = points[i]!;
+  const seg = cum[i]! - cum[i - 1]!;
+  const t = seg > 0 ? Math.min(1, Math.max(0, (d - cum[i - 1]!) / seg)) : 0;
+  return { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
+}
+
+/** The part of a run from `d0` to `d1` metres along it: the two cut points and every point between. */
+function slice(points: readonly LatLng[], cum: readonly number[], d0: number, d1: number): LatLng[] {
+  const out = [pointAt(points, cum, d0)];
+  points.forEach((p, i) => {
+    if (cum[i]! > d0 && cum[i]! < d1) out.push(p);
+  });
+  out.push(pointAt(points, cum, d1));
+  return out;
+}
+
+/** Where `p` falls on the route: the run and how far along it, from the nearest point on any segment. */
+function project(runs: readonly (readonly LatLng[])[], cums: readonly number[][], p: LatLng): { run: number; d: number } {
+  const k = Math.cos((p.lat * Math.PI) / 180);
+  let best = { run: 0, d: 0 };
+  let bestD = Infinity;
+  runs.forEach((points, r) => {
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1]!;
+      const b = points[i]!;
+      // A flat local frame is plenty at road scale.
+      const bx = (b.lng - a.lng) * k;
+      const by = b.lat - a.lat;
+      const px = (p.lng - a.lng) * k;
+      const py = p.lat - a.lat;
+      const len2 = bx * bx + by * by;
+      const t = len2 > 0 ? Math.min(1, Math.max(0, (px * bx + py * by) / len2)) : 0;
+      const dist = (px - t * bx) ** 2 + (py - t * by) ** 2;
+      if (dist < bestD) {
+        bestD = dist;
+        best = { run: r, d: cums[r]![i - 1]! + t * (cums[r]![i]! - cums[r]![i - 1]!) };
+      }
     }
-  }
-
-  const runs: RouteRun[] = [];
-  drawn.forEach((points, r) => {
-    segTier[r]!.forEach((tier, i) => {
-      const last = runs[runs.length - 1];
-      // A stretch continues only within its own run (i > 0); each run starts a new one.
-      if (i > 0 && last && last.tier === tier) last.points.push(points[i + 1]!);
-      else runs.push({ tier, points: [points[i]!, points[i + 1]!] });
-    });
   });
-  return runs;
+  return best;
 }
 
-/** Instant events with a location (not inside a privacy zone or the trimmed ends). */
-export function routeDots(events: readonly LocalDriveEvent[]): RouteDot[] {
-  const dots: RouteDot[] = [];
+const TIER_ORDER: Record<Tier, number> = { minor: 1, moderate: 2, severe: 3 };
+
+/**
+ * Every counted event with a location, as a pin and the stretch of route it covered: from the
+ * point on the route nearest where it began, along the road for its duration at its measured
+ * speed (else ≈ 30 mph). A stretch never leaves its visible run; one that would run past the end
+ * of its run ends there and starts earlier instead. Events inside a privacy zone have no location
+ * and stay off the map, as do removed ones. Ordered minor → severe, the order they are drawn in,
+ * so the worst sits on top.
+ */
+export function eventMarks(visible: Runs, events: readonly LocalDriveEvent[]): EventMark[] {
+  const drawn = visible.filter((r) => r.length >= 2);
+  const cums = drawn.map(cumulative);
+  const marks: EventMark[] = [];
   for (const e of events) {
     const at = located(e);
-    if (SEGMENT_EVENTS.has(e.type) || at === null || !counts(e)) continue;
-    dots.push({ id: e.id, tier: e.tier, type: e.type, at });
+    if (at === null || !counts(e)) continue;
+    let stretch: LatLng[] = [];
+    let lengthM = 0;
+    if (drawn.length > 0) {
+      const near = project(drawn, cums, at);
+      const points = drawn[near.run]!;
+      const cum = cums[near.run]!;
+      const total = cum[cum.length - 1]!;
+      const mps = e.measured.speedMph ? e.measured.speedMph * MPH_TO_MPS : ASSUMED_MPS;
+      const want = Math.min(total, Math.max(0, e.durationS) * mps);
+      const d1 = Math.min(total, near.d + want);
+      const d0 = Math.max(0, d1 - want);
+      stretch = slice(points, cum, d0, d1);
+      lengthM = d1 - d0;
+    }
+    marks.push({ id: e.id, type: e.type, tier: e.tier, at, stretch, lengthM });
   }
-  return dots;
+  return marks.sort((a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier]);
 }
+
+/** On-screen size, in points, below which a stretch is drawn as a dot of this diameter instead. */
+export const MIN_MARK_PX = 12;
+
+/**
+ * How a stretch shows on a map at `metersPerPx`: a line when it is at least `MIN_MARK_PX` long on
+ * screen, else a dot, so a one-second brake on a long drive still shows.
+ */
+export const markShape = (lengthM: number, metersPerPx: number): 'line' | 'dot' =>
+  metersPerPx > 0 && lengthM / metersPerPx >= MIN_MARK_PX ? 'line' : 'dot';
 
 export interface Region {
   latitude: number;
@@ -199,4 +226,14 @@ export function regionFor(points: readonly LatLng[]): Region | null {
     latitudeDelta: Math.max(0.005, (maxLat - minLat) * 1.4),
     longitudeDelta: Math.max(0.005, (maxLng - minLng) * 1.4),
   };
+}
+
+/**
+ * Roughly how many metres one on-screen point spans on a square map `side` points wide showing
+ * `region`: the map fits the region's longer side, so that side sets the scale.
+ */
+export function metersPerPixel(region: Region, side: number): number {
+  if (!(side > 0)) return 0;
+  const k = Math.cos((region.latitude * Math.PI) / 180);
+  return (Math.max(region.latitudeDelta, region.longitudeDelta * k) * M_PER_DEG) / side;
 }
