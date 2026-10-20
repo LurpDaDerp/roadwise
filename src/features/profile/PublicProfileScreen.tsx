@@ -5,7 +5,7 @@ import { Alert, View } from 'react-native';
 import { statsFrom, type StatSums } from '@scoring';
 import { useUnits } from '@/data/queries/units';
 import { formatRate, STAT_LABEL } from '@/features/drives/stats';
-import { TopBar } from '@/features/settings/parts';
+import { backOrHome, TopBar } from '@/features/settings/parts';
 import { useHeatmap, useMemberStats, useProfile, useServerAction, type PublicProfile, type Relationship } from '@/features/social/api';
 import { isNotFound } from '@/features/social/errors';
 import { ReportSheet } from '@/features/social/ReportSheet';
@@ -83,9 +83,7 @@ export function PublicProfileScreen({ username }: { username: string }) {
     if (!p) return;
     setMenu(false);
     if (!(await confirm(copy.blockTitle(p.username), copy.blockBody, copy.block, copy.cancel))) return;
-    if (await action.run('block_user', { p_user_id: p.user_id })) {
-      if (router.canGoBack()) router.back();
-    }
+    if (await action.run('block_user', { p_user_id: p.user_id })) backOrHome(router);
   };
 
   if (!p) {

@@ -19,7 +19,7 @@ jest.mock('@/data/server/rpc', () => {
 });
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 jest.mock('@/data/supabase/session', () => ({ useSession: () => ({ session: { user: { id: 'me' } } }) }));
-const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => true };
+const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => true) };
 jest.mock('expo-router', () => {
   const { useEffect } = jest.requireActual<typeof import('react')>('react');
   return {
@@ -74,6 +74,8 @@ async function show(p: PublicProfile | Error) {
 beforeEach(() => {
   mockRpc.mockReset();
   mockRouter.back.mockClear();
+  mockRouter.replace.mockClear();
+  mockRouter.canGoBack.mockImplementation(() => true);
 });
 afterEach(() => clearQueryClients());
 
@@ -152,6 +154,22 @@ describe('moderation', () => {
     expect(alert).toHaveBeenCalledWith(copy.blockTitle('swift_fox'), copy.blockBody, expect.any(Array), expect.anything());
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('block_user', { p_user_id: 'u-fox' }));
     await waitFor(() => expect(mockRouter.back).toHaveBeenCalled());
+    alert.mockRestore();
+  });
+
+  it('opened straight from a link (nothing to go back to), Back and a block go Home', async () => {
+    mockRouter.canGoBack.mockImplementation(() => false);
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation((_t, _b, buttons) => {
+      buttons?.find((b) => b.style === 'destructive')?.onPress?.();
+    });
+    await show(profile());
+    await tap('top-bar-back');
+    expect(mockRouter.replace).toHaveBeenLastCalledWith('/(tabs)/home');
+    mockRouter.replace.mockClear();
+    await tap('profile-more');
+    await tap('profile-block');
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(tabs)/home'));
+    expect(mockRouter.back).not.toHaveBeenCalled();
     alert.mockRestore();
   });
 

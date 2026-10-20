@@ -3,25 +3,29 @@ import { useRouter } from 'expo-router';
 import { Children, type ComponentProps, type ReactNode } from 'react';
 import { View } from 'react-native';
 
+import { HOME_HREF } from '@/features/drives/routes';
 import { Card, Divider, IconButton, ListRow, Text, useFontScale, useTheme } from '@/ui';
+
+/** Back where there is a screen to go back to; Home when this one is all there is. */
+export function backOrHome(router: Pick<ReturnType<typeof useRouter>, 'canGoBack' | 'back' | 'replace'>): void {
+  if (router.canGoBack()) router.back();
+  else router.replace(HOME_HREF);
+}
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
 /**
  * The header every screen outside the tabs prints for itself (`app/(app)/_layout.tsx` is a
  * headerless stack): Back, the screen's title as its heading, and an optional trailing control.
- * Back is left out when there is nowhere to go (a deep link straight in), so the rotor never meets
- * a dead control.
+ * Back always shows: with nowhere to go back to (a link that opened RoadWise straight onto this
+ * screen, or the one onboarding finished on) it goes Home, so no screen is a dead end.
  */
 export function TopBar({ title, trailing, testID }: { title: string; trailing?: ReactNode; testID?: string }) {
   const th = useTheme();
   const router = useRouter();
-  const canGoBack = router.canGoBack();
   return (
     <View testID={testID} style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.md, minHeight: th.size.touch }}>
-      {canGoBack ? (
-        <IconButton icon="chevron-back" accessibilityLabel="Back" onPress={() => router.back()} variant="surface" testID="top-bar-back" />
-      ) : null}
+      <IconButton icon="chevron-back" accessibilityLabel="Back" onPress={() => backOrHome(router)} variant="surface" testID="top-bar-back" />
       <Text variant="title2" accessibilityRole="header" style={{ flex: 1 }}>
         {title}
       </Text>
