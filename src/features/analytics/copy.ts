@@ -17,7 +17,11 @@ export const analyticsCopy = {
     /** The range card's title. */
     range: { day: 'Last 24 hours', week: 'Last 7 days', month: 'Last 30 days', year: 'Last 365 days' },
     rate: 'Rate',
-    cleanShare: 'Clean share',
+    afterDark: 'After dark',
+    darkShare: 'Share after dark',
+    /** In place of the numbers when the range has no drives. */
+    empty: 'No data yet',
+    emptyBody: (range: string) => `No drives in the ${range.toLowerCase()}. Your numbers show up here after a drive.`,
   },
   bests: {
     title: 'Personal best',
@@ -41,6 +45,7 @@ export const analyticsCopy = {
     pickups: 'Pickups',
     phoneTime: 'Phone time',
     cleanDrives: 'Clean drives',
+    cleanShare: 'Clean share',
     totalPoints: 'Total points',
     avgPoints: 'Avg points',
   },

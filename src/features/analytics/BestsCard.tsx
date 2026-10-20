@@ -26,8 +26,8 @@ function bestCell(key: BestKey, bests: PersonalBests, units: Units): { caption: 
 }
 
 /**
- * All-time bests in one row, each opening the drive it came from. The page shows the general one
- * (most points); a category's sheet shows its own (longest clean, longest phone-free).
+ * All-time bests in one row, each opening the drive it came from. The page shows the general ones
+ * (most points, longest clean); Phone use's sheet shows its own (longest phone-free).
  */
 export function BestsCard({
   bests,

@@ -5,7 +5,7 @@ import type { Units } from '@/lib/units';
 import { Card, Text, tokens, useFontScale, type CardVariant } from '@/ui';
 
 import { analyticsCopy } from './copy';
-import { countMetric, distanceMetric, pointsMetric, speedMetric, type Metric } from './format';
+import { countMetric, distanceMetric, percentMetric, pointsMetric, speedMetric, type Metric } from './format';
 import { METRIC_CELL_GAP, MetricCell } from './MetricCell';
 import type { Trend, WindowSums } from './model';
 import { sizeAt } from './textSize';
@@ -21,8 +21,9 @@ export interface MetricGroup {
 }
 
 /**
- * The range's general numbers: Driving (drives, distance and two averages) and Points (the total
- * and per drive). Each behaviour's own numbers live in its radar category's sheet.
+ * The range's general numbers: Driving (drives, distance and two averages) and Points (the total,
+ * per drive, and the clean drives that keep the streak). Each radar category's own numbers live in
+ * its sheet.
  */
 export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
   return [
@@ -42,13 +43,15 @@ export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
       cells: [
         { key: 'points', caption: m.totalPoints, metric: pointsMetric(s.drives > 0 ? s.points : null) },
         { key: 'avg-points', caption: m.avgPoints, metric: pointsMetric(s.avgPoints) },
+        { key: 'clean', caption: m.cleanDrives, metric: countMetric(s.cleanDrives) },
+        { key: 'clean-share', caption: m.cleanShare, metric: percentMetric(s.cleanPct) },
       ],
     },
   ];
 }
 
 /** The main block's number cards by their cell counts: Driving and Points. */
-export const MAIN_CARDS: readonly number[] = [4, 2];
+export const MAIN_CARDS: readonly number[] = [4, 4];
 
 /** The user's rule: the metrics block never takes more than this share of the window's height. */
 export const METRICS_MAX_SHARE = 0.75;

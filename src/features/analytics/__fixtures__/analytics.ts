@@ -6,8 +6,8 @@ import type { AnalyticsData } from '../useAnalytics';
 
 export { NOW };
 
-export const SCORES: AxisScores = { speeding: 88, braking: 72, accel: 95, cornering: 100, phone: 60, clean: 50 };
-export const NO_SCORES: AxisScores = { speeding: null, braking: null, accel: null, cornering: null, phone: null, clean: null };
+export const SCORES: AxisScores = { speeding: 88, braking: 72, accel: 95, cornering: 100, phone: 60, night: 50 };
+export const NO_SCORES: AxisScores = { speeding: null, braking: null, accel: null, cornering: null, phone: null, night: null };
 
 const HOUR = 3_600_000;
 
@@ -26,7 +26,7 @@ const ROUTE = [
 /** What `useAnalytics(range)` returns for the given drives, computed with the real model. */
 export function analytics(list: readonly LocalDrive[], range: Range = 'week', over: Partial<AnalyticsData> = {}): AnalyticsData {
   const sinceMs = rangeStart(NOW, range);
-  const totals = { drives: 4, cleanDrives: 2, miles: 48 };
+  const totals = { drives: 4, cleanDrives: 2, miles: 48, nightMiles: 24 };
   const routes = list.length > 0 ? [ROUTE] : [];
   return {
     range,
@@ -50,6 +50,6 @@ export function analytics(list: readonly LocalDrive[], range: Range = 'week', ov
 /** An empty account. */
 export const empty = (over: Partial<AnalyticsData> = {}): AnalyticsData =>
   analytics([], 'week', {
-    coaching: { scores: NO_SCORES, totals: { drives: 0, cleanDrives: 0, miles: 0 }, coaching: coach(NO_SCORES, { drives: 0, miles: 0 }) },
+    coaching: { scores: NO_SCORES, totals: { drives: 0, cleanDrives: 0, miles: 0, nightMiles: 0 }, coaching: coach(NO_SCORES, { drives: 0, miles: 0 }) },
     ...over,
   });

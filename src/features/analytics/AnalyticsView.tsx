@@ -50,7 +50,7 @@ export function AnalyticsView({ data, rating, range, onRange, onOpenDrive }: Ana
         <>
           <RadarCard rating={rating} scores={data.coaching.scores} onOpen={(axis) => setSheet({ axis, open: true })} />
           <SummaryCard coaching={data.coaching.coaching} />
-          <BestsCard bests={data.bests} show={['points']} onOpen={onOpenDrive} />
+          <BestsCard bests={data.bests} show={['points', 'clean']} onOpen={onOpenDrive} />
           <SegmentedControl accessibilityLabel={analyticsCopy.range} segments={SEGMENTS} value={range} onChange={onRange} testID="analytics-range" />
           <MetricsCards sums={data.sums} trend={data.trend} />
           <WhenYouDriveCard grid={data.grid} />

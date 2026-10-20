@@ -3,9 +3,11 @@
  * deterministic: every function takes the instant it measures from (`now`) or a cutoff, never the
  * clock, so each rule is testable on its own.
  *
- * The radar's sub-scores use the Safety Rating's own scale (100 − 10 × penalty per mile), so the
- * five penalty axes add up to the rating over the same 30 days: 100 − rating = Σ (100 − axis),
- * before clamping. Local data includes pending estimates; the server rating stays authoritative.
+ * The radar's penalty sub-scores use the Safety Rating's own scale (100 − 10 × penalty per mile),
+ * so the five penalty axes add up to the rating over the same 30 days: 100 − rating = Σ (100 −
+ * axis), before clamping. The sixth, Time of day, scores how much of the driving was after dark and
+ * is not part of the rating. Local data includes pending estimates; the server rating stays
+ * authoritative.
  */
 import { ratingPenalty, safetyRating, type DriveEvent, type EventType } from '@scoring';
 
@@ -16,22 +18,23 @@ import { decodeRuns } from '@/lib/polyline';
 // ---------------------------------------------------------------------------------------------
 // Axes and sub-scores
 
-export type AxisKey = 'speeding' | 'braking' | 'accel' | 'cornering' | 'phone' | 'clean';
-export type PenaltyAxisKey = Exclude<AxisKey, 'clean'>;
+export type AxisKey = 'speeding' | 'braking' | 'accel' | 'cornering' | 'phone' | 'night';
+export type PenaltyAxisKey = Exclude<AxisKey, 'night'>;
 
-/** Radar order, clockwise from the top. */
+/** Radar order, clockwise from the top; the two longest names take the top and bottom, where there is room. */
 export const AXES: readonly { key: AxisKey; label: string }[] = [
-  { key: 'speeding', label: 'Speeding' },
-  { key: 'braking', label: 'Braking' },
   { key: 'accel', label: 'Acceleration' },
-  { key: 'cornering', label: 'Cornering' },
+  { key: 'braking', label: 'Braking' },
+  { key: 'cornering', label: 'Turning' },
+  { key: 'night', label: 'Time of day' },
   { key: 'phone', label: 'Phone use' },
-  { key: 'clean', label: 'Clean drives' },
+  { key: 'speeding', label: 'Speed' },
 ];
 
 export const AXIS_LABEL: Record<AxisKey, string> = Object.fromEntries(AXES.map((a) => [a.key, a.label])) as Record<AxisKey, string>;
 
-export const PENALTY_AXES: readonly PenaltyAxisKey[] = ['speeding', 'braking', 'accel', 'cornering', 'phone'];
+/** The axes the Safety Rating's penalties fall on, in radar order. */
+export const PENALTY_AXES: readonly PenaltyAxisKey[] = AXES.flatMap((a) => (a.key === 'night' ? [] : [a.key]));
 
 /** The axis an event counts toward; null for DashPal events (never in the rating). */
 export function axisOf(type: EventType): PenaltyAxisKey | null {
@@ -53,7 +56,7 @@ export function axisOf(type: EventType): PenaltyAxisKey | null {
   }
 }
 
-/** 0–100 per axis, whole numbers; null when the window has no miles (or no drives, for `clean`). */
+/** 0–100 per axis, whole numbers; null when the window has no miles. */
 export type AxisScores = Record<AxisKey, number | null>;
 
 /** What a window holds: the scored drives' totals the axes divide by. */
@@ -61,7 +64,12 @@ export interface WindowTotals {
   drives: number;
   cleanDrives: number;
   miles: number;
+  /** Miles driven with the sun down. */
+  nightMiles: number;
 }
+
+/** Time of day loses this many points per share of miles after dark: all of them at night reads 50. */
+export const NIGHT_WEIGHT = 50;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
@@ -77,7 +85,8 @@ export function axisPenalties(events: readonly DriveEvent[]): Record<PenaltyAxis
 }
 
 /**
- * S = clamp(100 − 10 · P / miles, 0, 100) per penalty axis; clean = clean drives / drives × 100.
+ * S = clamp(100 − 10 · P / miles, 0, 100) per penalty axis; Time of day = 100 − 50 × the share of
+ * miles driven after dark (night driving carries about two to three times the crash risk per mile).
  * `events` are the active events of the window's scored drives; `totals` the same drives' sums.
  */
 export function axisScores(events: readonly DriveEvent[], totals: WindowTotals): AxisScores {
@@ -90,7 +99,7 @@ export function axisScores(events: readonly DriveEvent[], totals: WindowTotals):
     accel: score(p.accel),
     cornering: score(p.cornering),
     phone: score(p.phone),
-    clean: totals.drives > 0 ? Math.round((totals.cleanDrives / totals.drives) * 100) : null,
+    night: totals.miles > 0 ? Math.round(clamp(100 - (NIGHT_WEIGHT * clamp(totals.nightMiles, 0, totals.miles)) / totals.miles, 0, 100)) : null,
   };
 }
 
@@ -135,7 +144,7 @@ export const AXIS_TIP: Record<AxisKey, string> = {
   accel: 'Roll onto the gas smoothly.',
   cornering: 'Slow down before the turn, not in it.',
   phone: 'Put the phone away before you pull out.',
-  clean: 'Aim for one clean drive at a time.',
+  night: 'Drive in daylight when you can.',
 };
 
 export const AXIS_TITLE: Record<AxisKey, string> = {
@@ -144,7 +153,7 @@ export const AXIS_TITLE: Record<AxisKey, string> = {
   accel: 'Ease into the gas',
   cornering: 'Take turns slower',
   phone: 'Phone down while driving',
-  clean: 'More clean drives',
+  night: 'Less driving after dark',
 };
 
 export const GOOD_TITLE = 'Driving well';
@@ -161,8 +170,8 @@ export interface Coaching {
   tip: string;
   /**
    * The other penalty axes that are fair or poor, weakest first (ties in radar order), at most
-   * `COACH_ALSO_MAX`. Empty when the result is good or there is no advice. The clean-drive share
-   * never appears here: it follows from the penalty axes, as in the main choice.
+   * `COACH_ALSO_MAX`. Empty when the result is good or there is no advice. Time of day never
+   * appears here: it speaks only when every penalty axis is good, as in the main choice.
    */
   also: { axis: AxisKey; level: Level }[];
 }
@@ -171,7 +180,7 @@ export const COACH_ALSO_MAX = 2;
 
 /**
  * The advice for a window. The weakest penalty axis decides (ties go to the earlier axis in radar
- * order); when every penalty axis is good, a fair or poor clean-drive share speaks instead. A good
+ * order); when every penalty axis is good, a fair or poor Time of day speaks instead. A good
  * result is a compliment. Fewer than 3 drives or 10 miles: no advice.
  */
 export function coach(scores: AxisScores, window: { drives: number; miles: number }): Coaching {
@@ -187,9 +196,9 @@ export function coach(scores: AxisScores, window: { drives: number; miles: numbe
       score = s;
     }
   }
-  if ((score === null || levelFor(score) === 'good') && scores.clean !== null && levelFor(scores.clean) !== 'good') {
-    axis = 'clean';
-    score = scores.clean;
+  if ((score === null || levelFor(score) === 'good') && scores.night !== null && levelFor(scores.night) !== 'good') {
+    axis = 'night';
+    score = scores.night;
   }
   if (axis === null || score === null) return { level: null, axis: null, title: NO_DATA_TITLE, tip: NO_DATA_TIP, also: [] };
   const level = levelFor(score);
@@ -234,10 +243,11 @@ export interface CoachWindow {
  * active events of the same window's scored drives (`readWindowEvents(db, sinceMs)`).
  */
 export function coachWindow(drives: readonly LocalDrive[], events: readonly DriveEvent[], sinceMs: number): CoachWindow {
-  const totals: WindowTotals = { drives: 0, cleanDrives: 0, miles: 0 };
+  const totals: WindowTotals = { drives: 0, cleanDrives: 0, miles: 0, nightMiles: 0 };
   for (const d of scoredSince(drives, sinceMs)) {
     totals.drives += 1;
     totals.miles += d.miles;
+    totals.nightMiles += d.nightMiles;
     if (d.clean === true) totals.cleanDrives += 1;
   }
   const scores = axisScores(events, totals);
@@ -276,6 +286,10 @@ export interface WindowSums {
   drives: number;
   miles: number;
   durationS: number;
+  /** Miles driven with the sun down. */
+  nightMiles: number;
+  /** Whole percent of the miles driven after dark; null with no miles. */
+  nightPct: number | null;
   /** Distance / hours; null with no drive time. */
   avgMph: number | null;
   speeding: number;
@@ -299,6 +313,8 @@ export const EMPTY_WINDOW: WindowSums = Object.freeze({
   drives: 0,
   miles: 0,
   durationS: 0,
+  nightMiles: 0,
+  nightPct: null,
   avgMph: null,
   speeding: 0,
   hardBrake: 0,
@@ -323,6 +339,7 @@ export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null
     out.drives += 1;
     out.miles += d.miles;
     out.durationS += d.durationS;
+    out.nightMiles += d.nightMiles;
     out.speeding += d.counts.speeding;
     out.hardBrake += d.counts.hardBrake;
     out.hardAccel += d.counts.hardAccel;
@@ -333,6 +350,7 @@ export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null
     out.points += d.pointsNet ?? 0;
   }
   out.avgMph = out.durationS > 0 ? out.miles / (out.durationS / 3600) : null;
+  out.nightPct = out.miles > 0 ? Math.round((Math.min(out.nightMiles, out.miles) / out.miles) * 100) : null;
   out.cleanPct = out.drives > 0 ? Math.round((out.cleanDrives / out.drives) * 100) : null;
   out.avgMiles = out.drives > 0 ? out.miles / out.drives : null;
   out.avgPoints = out.drives > 0 ? out.points / out.drives : null;

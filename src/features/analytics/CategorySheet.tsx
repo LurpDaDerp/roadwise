@@ -3,11 +3,11 @@ import { useWindowDimensions, View } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
 import type { Units } from '@/lib/units';
-import { SegmentedControl, Sheet, Text, useFontScale, useTheme } from '@/ui';
+import { EmptyState, SegmentedControl, Sheet, Text, useFontScale, useTheme } from '@/ui';
 
 import { BestsCard, type BestKey } from './BestsCard';
 import { analyticsCopy } from './copy';
-import { countMetric, percentMetric, rateMetric, timeMetric } from './format';
+import { countMetric, distanceMetric, percentMetric, rateMetric, timeMetric } from './format';
 import { metricsLayout, metricsText, NumberCard, type MetricGroup } from './MetricsCards';
 import {
   AXIS_LABEL,
@@ -29,7 +29,8 @@ const SEGMENTS = RANGES.map((value) => ({ value, label: RANGE_LABEL[value] }));
 
 /**
  * A category's numbers over the range, never points: an event axis's count and its rate per 100 of
- * the driver's units, Phone use's pickups and phone time, or the clean drives and their share.
+ * the driver's units, Phone use's pickups and phone time, or Time of day's distance after dark and
+ * its share of the driving.
  */
 export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units: Units): MetricGroup {
   const events = (key: string, caption: string, n: number): MetricGroup['cells'] => [
@@ -51,10 +52,10 @@ export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units:
           { key: 'pickups', caption: m.pickups, metric: countMetric(s.pickups) },
           { key: 'phone-time', caption: m.phoneTime, metric: timeMetric(s.handlingS) },
         ];
-      case 'clean':
+      case 'night':
         return [
-          { key: 'clean', caption: m.cleanDrives, metric: countMetric(s.cleanDrives) },
-          { key: 'clean-share', caption: c.cleanShare, metric: percentMetric(s.cleanPct) },
+          { key: 'after-dark', caption: c.afterDark, metric: distanceMetric(s.nightMiles, units) },
+          { key: 'dark-share', caption: c.darkShare, metric: percentMetric(s.nightPct) },
         ];
     }
   })();
@@ -62,9 +63,9 @@ export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units:
 }
 
 /** The all-time best that belongs to a category, if any. */
-export const CATEGORY_BEST: Partial<Record<AxisKey, BestKey>> = { phone: 'phone-free', clean: 'clean' };
+export const CATEGORY_BEST: Partial<Record<AxisKey, BestKey>> = { phone: 'phone-free' };
 
-/** The sheet's title: the category and its 30-day score ("Speeding · 82", "Speeding · —"). */
+/** The sheet's title: the category and its 30-day score ("Speed · 82", "Speed · —"). */
 export const categoryTitle = (axis: AxisKey, score: number | null): string => `${AXIS_LABEL[axis]} · ${score === null ? '—' : score}`;
 
 export interface CategorySheetProps {
@@ -86,7 +87,8 @@ export interface CategorySheetProps {
  * One radar category's details in a sheet, under its name and score: its own verdict (the level
  * icon and word, a title and a tip), the page's time range, the range's numbers for it, and its
  * all-time best when it has one. The numbers follow the metrics block's rule: never more than three
- * quarters of the window's height.
+ * quarters of the window's height. A range with no drives shows "No data yet" in their place (and
+ * no verdict either when the 30 days have no score), so the sheet always opens to something.
  */
 export function CategorySheet({ axis, visible, onClose, score, last30, sums, bests, range, onRange, onOpenDrive }: CategorySheetProps) {
   const t = useTheme();
@@ -99,20 +101,29 @@ export function CategorySheet({ axis, visible, onClose, score, last30, sums, bes
   const color = verdict.level ? t.colors[LEVEL_TONE[verdict.level]] : t.colors.textMuted;
   const spoken = [verdict.level ? LEVEL_LABEL[verdict.level] : null, verdict.title, verdict.tip].filter(Boolean).join('. ');
   const best = CATEGORY_BEST[axis];
+  const empty = sums.drives === 0;
   return (
     <Sheet visible={visible} onClose={onClose} title={categoryTitle(axis, score)} subtitle={c.subtitle} scroll testID="category-sheet">
-      <View accessible accessibilityLabel={spoken} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }} testID="category-coaching">
-        <Ionicons name={icon} size={t.size.iconLg} color={color} testID="category-coaching-icon" />
-        <View style={{ flex: 1, gap: 2 }}>
-          <Text variant="headline">{verdict.title}</Text>
-          <Text variant="subhead" tone="muted">
-            {verdict.tip}
-          </Text>
+      {empty && score === null ? null : (
+        <View accessible accessibilityLabel={spoken} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }} testID="category-coaching">
+          <Ionicons name={icon} size={t.size.iconLg} color={color} testID="category-coaching-icon" />
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text variant="headline">{verdict.title}</Text>
+            <Text variant="subhead" tone="muted">
+              {verdict.tip}
+            </Text>
+          </View>
         </View>
-      </View>
+      )}
       <SegmentedControl accessibilityLabel={analyticsCopy.range} segments={SEGMENTS} value={range} onChange={onRange} testID="category-range" />
-      <NumberCard group={group} layout={l} text={metricsText(l)} variant="raised" />
-      {best ? <BestsCard bests={bests} show={[best]} onOpen={onOpenDrive} variant="raised" testID="category-best" /> : null}
+      {empty ? (
+        <EmptyState icon="analytics-outline" title={c.empty} body={c.emptyBody(c.range[range])} testID="category-empty" />
+      ) : (
+        <>
+          <NumberCard group={group} layout={l} text={metricsText(l)} variant="raised" />
+          {best ? <BestsCard bests={bests} show={[best]} onOpen={onOpenDrive} variant="raised" testID="category-best" /> : null}
+        </>
+      )}
     </Sheet>
   );
 }

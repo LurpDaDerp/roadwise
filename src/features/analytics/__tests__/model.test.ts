@@ -23,6 +23,8 @@ import {
   LEVEL_LABEL,
   LEVEL_TONE,
   levelFor,
+  NIGHT_WEIGHT,
+  PENALTY_AXES,
   personalBests,
   rangeStart,
   routeLines,
@@ -78,14 +80,15 @@ const scores = (over: Partial<AxisScores> = {}): AxisScores => ({
   accel: 100,
   cornering: 100,
   phone: 100,
-  clean: 100,
+  night: 100,
   ...over,
 });
 
 describe('axes', () => {
   test('radar order and labels', () => {
-    expect(AXES.map((a) => a.key)).toEqual(['speeding', 'braking', 'accel', 'cornering', 'phone', 'clean']);
-    expect(AXES.map((a) => a.label)).toEqual(['Speeding', 'Braking', 'Acceleration', 'Cornering', 'Phone use', 'Clean drives']);
+    expect(AXES.map((a) => a.key)).toEqual(['accel', 'braking', 'cornering', 'night', 'phone', 'speeding']);
+    expect(AXES.map((a) => a.label)).toEqual(['Acceleration', 'Braking', 'Turning', 'Time of day', 'Phone use', 'Speed']);
+    expect(PENALTY_AXES).toEqual(['accel', 'braking', 'cornering', 'phone', 'speeding']);
   });
 
   test('each event type maps to its axis; DashPal events to none', () => {
@@ -112,26 +115,31 @@ describe('axes', () => {
     expect(p).toEqual({ speeding: 40, braking: 25, accel: 0, cornering: 0, phone: 20 + 30 });
   });
 
-  test('S = clamp(100 − 10·P/miles); clean = clean / drives; whole numbers', () => {
+  test('S = clamp(100 − 10·P/miles); Time of day = 100 − 50 × the share after dark; whole numbers', () => {
     const s = axisScores(
       [ev({ type: 'speeding', tier: 'minor' }), ev({ type: 'hard_accel', tier: 'severe' }), ev({ type: 'phone_pickup', tier: 'severe' })],
-      { drives: 3, cleanDrives: 2, miles: 20 }
+      { drives: 3, cleanDrives: 2, miles: 20, nightMiles: 5 }
     );
-    // 100 − 10·15/20 = 92.5 → 93; 100 − 10·30/20 = 85; 100 − 10·40/20 = 80; clean 66.7 → 67
-    expect(s).toEqual({ speeding: 93, braking: 100, accel: 85, cornering: 100, phone: 80, clean: 67 });
+    // 100 − 10·15/20 = 92.5 → 93; 100 − 10·30/20 = 85; 100 − 10·40/20 = 80; 100 − 50·5/20 = 87.5 → 88
+    expect(s).toEqual({ speeding: 93, braking: 100, accel: 85, cornering: 100, phone: 80, night: 88 });
+    expect(NIGHT_WEIGHT).toBe(50);
+    expect(axisScores([], { drives: 2, cleanDrives: 2, miles: 20, nightMiles: 20 }).night).toBe(50);
+    expect(axisScores([], { drives: 2, cleanDrives: 2, miles: 20, nightMiles: 0 }).night).toBe(100);
+    // Night miles past the total (rounding) clamp to it.
+    expect(axisScores([], { drives: 2, cleanDrives: 2, miles: 20, nightMiles: 21 }).night).toBe(50);
   });
 
   test('scores clamp at 0 and are null with no miles or drives', () => {
-    expect(axisScores([ev({ type: 'speeding', tier: 'severe' })], { drives: 1, cleanDrives: 0, miles: 1 }).speeding).toBe(0);
-    expect(axisScores([], { drives: 0, cleanDrives: 0, miles: 0 })).toEqual({
+    expect(axisScores([ev({ type: 'speeding', tier: 'severe' })], { drives: 1, cleanDrives: 0, miles: 1, nightMiles: 0 }).speeding).toBe(0);
+    expect(axisScores([], { drives: 0, cleanDrives: 0, miles: 0, nightMiles: 0 })).toEqual({
       speeding: null,
       braking: null,
       accel: null,
       cornering: null,
       phone: null,
-      clean: null,
+      night: null,
     });
-    expect(axisScores([], { drives: 1, cleanDrives: 1, miles: 0 }).clean).toBe(100);
+    expect(axisScores([], { drives: 1, cleanDrives: 1, miles: 0, nightMiles: 0 }).night).toBeNull();
   });
 
   test('the penalty axes add up to the Safety Rating over the same window', () => {
@@ -171,9 +179,9 @@ describe('levels and coaching', () => {
     expect(coach(scores({ speeding: 75 }), { drives: 3, miles: 10 })).toMatchObject({ level: 'fair', axis: 'speeding', tip: AXIS_TIP.speeding });
   });
 
-  test('clean drives speak only when every penalty axis is good', () => {
-    expect(coach(scores({ clean: 40 }), { drives: 5, miles: 50 })).toMatchObject({ level: 'poor', axis: 'clean', tip: AXIS_TIP.clean });
-    expect(coach(scores({ clean: 40, accel: 70 }), { drives: 5, miles: 50 })).toMatchObject({ level: 'fair', axis: 'accel' });
+  test('Time of day speaks only when every penalty axis is good', () => {
+    expect(coach(scores({ night: 55 }), { drives: 5, miles: 50 })).toMatchObject({ level: 'poor', axis: 'night', tip: AXIS_TIP.night });
+    expect(coach(scores({ night: 55, accel: 70 }), { drives: 5, miles: 50 })).toMatchObject({ level: 'fair', axis: 'accel' });
   });
 
   test('all good is a compliment', () => {
@@ -204,15 +212,15 @@ describe('levels and coaching', () => {
     expect(coach(scores({ braking: 70, phone: null }), { drives: 5, miles: 50 }).also).toEqual([]);
   });
 
-  test('also: the clean-drive share never joins in', () => {
-    expect(coach(scores({ braking: 70, clean: 20 }), { drives: 5, miles: 50 }).also).toEqual([]);
-    expect(coach(scores({ clean: 40 }), { drives: 5, miles: 50 })).toMatchObject({ axis: 'clean', also: [] });
+  test('also: Time of day never joins in', () => {
+    expect(coach(scores({ braking: 70, night: 50 }), { drives: 5, miles: 50 }).also).toEqual([]);
+    expect(coach(scores({ night: 55 }), { drives: 5, miles: 50 })).toMatchObject({ axis: 'night', also: [] });
   });
 
   test('also: empty when good or without enough driving', () => {
     expect(coach(scores(), { drives: 5, miles: 50 }).also).toEqual([]);
     expect(coach(scores({ phone: 10, braking: 10 }), { drives: 2, miles: 50 }).also).toEqual([]);
-    expect(coach(scores({ speeding: null, braking: null, accel: null, cornering: null, phone: null, clean: null }), { drives: 5, miles: 50 }).also).toEqual([]);
+    expect(coach(scores({ speeding: null, braking: null, accel: null, cornering: null, phone: null, night: null }), { drives: 5, miles: 50 }).also).toEqual([]);
   });
 
   test('fewer than 3 drives or 10 miles: no advice', () => {
@@ -232,7 +240,7 @@ describe('levels and coaching', () => {
     const now = 100 * DAY;
     const since = windowStart(now, 30);
     const drives = [
-      drive({ startedAt: now - DAY, miles: 6, clean: true }),
+      drive({ startedAt: now - DAY, miles: 6, clean: true, nightMiles: 3 }),
       drive({ startedAt: now - 2 * DAY, miles: 4, clean: false }),
       drive({ startedAt: now - 3 * DAY, miles: 5, clean: true, status: 'pending', pointsNet: 10 }),
       drive({ startedAt: now - 3 * DAY, miles: 50, status: 'not_driving' }),
@@ -240,16 +248,16 @@ describe('levels and coaching', () => {
     ];
     const brakes = [1, 2, 3].map(() => ev({ type: 'hard_brake', tier: 'severe' }));
     const out = coachWindow(drives, brakes, since);
-    expect(out.totals).toEqual({ drives: 3, cleanDrives: 2, miles: 15 });
+    expect(out.totals).toEqual({ drives: 3, cleanDrives: 2, miles: 15, nightMiles: 3 });
     expect(out.scores.braking).toBe(50);
-    expect(out.scores.clean).toBe(67);
+    expect(out.scores.night).toBe(90);
     expect(out.coaching).toMatchObject({ level: 'poor', axis: 'braking' });
   });
 
   test("a category's own verdict: its tip when fair or poor, a compliment when good, the wait line without enough driving", () => {
     const enough = { drives: 3, miles: 10 };
     expect(axisCoaching('braking', 72, enough)).toEqual({ level: 'fair', title: 'Brake more gently', tip: AXIS_TIP.braking });
-    expect(axisCoaching('clean', 40, enough)).toEqual({ level: 'poor', title: 'More clean drives', tip: AXIS_TIP.clean });
+    expect(axisCoaching('night', 55, enough)).toEqual({ level: 'poor', title: 'Less driving after dark', tip: AXIS_TIP.night });
     expect(axisCoaching('cornering', 80, enough)).toEqual({ level: 'good', title: 'Driving well', tip: 'Keep it up.' });
     const wait = { level: null, title: 'Tips are on the way', tip: 'Drive a few more times to get tips here.' };
     expect(axisCoaching('speeding', 40, { drives: 2, miles: 50 })).toEqual(wait);
@@ -272,7 +280,7 @@ describe('windows', () => {
   test('sums scored drives in the window; DashPal counts stay out; avg speed, clean share and per-drive averages', () => {
     const since = 1_000;
     const drives = [
-      drive({ startedAt: 2_000, miles: 10, durationS: 1800, pointsNet: 120, clean: true, counts: { ...EMPTY_COUNTS, eyesOff: 3, drowsy: 1 } }),
+      drive({ startedAt: 2_000, miles: 10, durationS: 1800, nightMiles: 3, pointsNet: 120, clean: true, counts: { ...EMPTY_COUNTS, eyesOff: 3, drowsy: 1 } }),
       drive({
         startedAt: 1_000,
         miles: 5,
@@ -289,6 +297,8 @@ describe('windows', () => {
       drives: 2,
       miles: 15,
       durationS: 3600,
+      nightMiles: 3,
+      nightPct: 20,
       avgMph: 15,
       speeding: 2,
       hardBrake: 1,
@@ -306,7 +316,7 @@ describe('windows', () => {
   });
 
   test('an empty window has no averages and no clean share', () => {
-    expect(windowSums([], 0)).toMatchObject({ drives: 0, avgMph: null, cleanPct: null, points: 0, avgMiles: null, avgPoints: null });
+    expect(windowSums([], 0)).toMatchObject({ drives: 0, avgMph: null, cleanPct: null, nightPct: null, points: 0, avgMiles: null, avgPoints: null });
   });
 
   test('scoredSince keeps scored and pending-with-points drives in the window, in order', () => {

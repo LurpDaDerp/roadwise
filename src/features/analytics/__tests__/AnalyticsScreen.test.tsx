@@ -107,14 +107,17 @@ test('the trend card sits between Driving and Points and follows the range', asy
   expect(screen.getByTestId('trend-chart-box').props.accessibilityLabel).toMatch(/^Points per drive by week\. /);
 });
 
-test('the page keeps only general numbers: no behaviour counts, rates or bests, and points only in general', async () => {
+test('the page keeps only general numbers: no category counts, rates or bests, and points only in general', async () => {
   await draw(<AnalyticsScreen />);
-  for (const key of ['speeding', 'brakes', 'starts', 'turns', 'pickups', 'phone-time', 'clean', 'clean-share']) {
+  for (const key of ['speeding', 'brakes', 'starts', 'turns', 'pickups', 'phone-time', 'after-dark', 'dark-share']) {
     expect(screen.queryByTestId(`metric-${key}`)).toBeNull();
     expect(screen.queryByTestId(`metric-${key}-rate`)).toBeNull();
   }
-  expect(screen.queryByTestId('best-clean')).toBeNull();
   expect(screen.queryByTestId('best-phone-free')).toBeNull();
+  // Clean drives belong to no radar category, so they stay on the page.
+  expect(screen.getByTestId('metric-clean')).toBeOnTheScreen();
+  expect(screen.getByTestId('metric-clean-share')).toBeOnTheScreen();
+  expect(screen.getByTestId('best-clean')).toBeOnTheScreen();
   expect(screen.queryByTestId('category-sheet')).toBeNull();
   // The points left are the range's total and per drive, and the most in one drive.
   expect(screen.getByTestId('metric-points-value')).toHaveTextContent('+792 pts');
@@ -125,12 +128,12 @@ test('the page keeps only general numbers: no behaviour counts, rates or bests, 
 });
 
 test.each([
-  ['speeding', 'Speeding · 88', ['metric-speeding', 'metric-speeding-rate'], null],
+  ['speeding', 'Speed · 88', ['metric-speeding', 'metric-speeding-rate'], null],
   ['braking', 'Braking · 72', ['metric-brakes', 'metric-brakes-rate'], null],
   ['accel', 'Acceleration · 95', ['metric-starts', 'metric-starts-rate'], null],
-  ['cornering', 'Cornering · 100', ['metric-turns', 'metric-turns-rate'], null],
+  ['cornering', 'Turning · 100', ['metric-turns', 'metric-turns-rate'], null],
   ['phone', 'Phone use · 60', ['metric-pickups', 'metric-phone-time'], 'best-phone-free'],
-  ['clean', 'Clean drives · 50', ['metric-clean', 'metric-clean-share'], 'best-clean'],
+  ['night', 'Time of day · 50', ['metric-after-dark', 'metric-dark-share'], null],
 ] as const)('tapping %s on the radar opens its details, which close again', async (axis, title, cells, best) => {
   await draw(<AnalyticsScreen />);
   await press(screen.getByTestId(`radar-axis-${axis}`));
@@ -143,6 +146,19 @@ test.each([
   expect(within(sheet).queryByText(/pts|points/i)).toBeNull();
   await press(within(sheet).getAllByRole('button', { name: 'Close' }).at(-1)!);
   await waitFor(() => expect(screen.queryByTestId('category-sheet')).toBeNull());
+});
+
+test('with no drives at all, every category still opens: "No data yet"', async () => {
+  mockData = () => mockEmpty();
+  mockRating = null;
+  await draw(<AnalyticsScreen />);
+  for (const axis of ['accel', 'braking', 'cornering', 'night', 'phone', 'speeding']) {
+    await press(screen.getByTestId(`radar-axis-${axis}`));
+    const sheet = screen.getByTestId('category-sheet');
+    expect(within(sheet).getByText('No data yet')).toBeOnTheScreen();
+    await press(within(sheet).getAllByRole('button', { name: 'Close' }).at(-1)!);
+    await waitFor(() => expect(screen.queryByTestId('category-sheet')).toBeNull());
+  }
 });
 
 test("the sheet's range is the page's: switching it there re-reads the page too", async () => {
