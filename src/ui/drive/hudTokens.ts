@@ -135,7 +135,7 @@ export const END_SWIPE_MAX_W_PT = 420;
 /** The screen dims after this long without a touch… */
 export const DIM_AFTER_MS = 10_000;
 /** …under a black scrim this opaque. */
-export const DIM_SCRIM_OPACITY = 0.7;
+export const DIM_SCRIM_OPACITY = 0.35;
 
 /** The halo's square box at most, and the smallest box that still draws a ring (else bare numerals). */
 export const HALO_MAX_BOX_PT = 420;
@@ -145,7 +145,7 @@ export const HALO_MAX_SCALE = 1.04;
 /** Calm: light goes once around the ring in this long. */
 export const HALO_FLOW_MS = 18_000;
 /** Dimmed and calm, the halo and the speed show at this strength (above the scrim). */
-export const HALO_DIM_OPACITY = 0.45;
+export const HALO_DIM_OPACITY = 0.725;
 /** The speeding display hold lets go this many rows after the engine last reported a tier. */
 export const HALO_SPEED_HOLD_MAX_ROWS = 10;
 /** The halo's colour ramp: calm, yellow, orange, red at these severities. */
