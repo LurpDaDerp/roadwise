@@ -43,7 +43,9 @@ jest.mock('expo-notifications', () => ({
 
 const mockRouter = { push: jest.fn(), navigate: jest.fn(), dismissTo: jest.fn(), canDismiss: jest.fn(() => false) };
 // read lazily: the factory runs at import time, before this file's consts are set
+let mockPathname = '/home';
 jest.mock('expo-router', () => ({
+  usePathname: () => mockPathname,
   get router() {
     return mockRouter;
   },
@@ -362,4 +364,41 @@ test('Android: a tap handed over natively before mount is taken and started once
   for (let i = 0; i < 6; i += 1) await act(async () => Promise.resolve());
   expect(startDrive).toHaveBeenCalledTimes(1);
   expect(native.calls.filter((c) => c === 'claimReminderTap')).toHaveLength(1);
+});
+
+describe('a tap on the "Drive ended" note', () => {
+  const summaryTap = (url: string, date: number) => ({
+    actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
+    notification: { date, request: { identifier: `drive-summary:${date}`, content: { data: { kind: 'driveSummary', url } } } },
+  });
+  afterEach(() => {
+    mockPathname = '/home';
+  });
+
+  test('with that drive’s summary already on screen (the driving screen opened it as the drive ended), opens nothing more', async () => {
+    mockPathname = '/drives/trip-9';
+    const h = await mount();
+    await act(async () => mockNotifications.listener!(summaryTap('/drives/trip-9?fresh=1', 11)));
+    await h.settle();
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  test('anywhere else, or on another drive’s summary, opens it', async () => {
+    mockPathname = '/drives/trip-8';
+    const h = await mount();
+    await act(async () => mockNotifications.listener!(summaryTap('/drives/trip-9?fresh=1', 12)));
+    await h.settle();
+    expect(h.navigate.mock.calls).toEqual([['/drives/trip-9?fresh=1']]);
+  });
+
+  test('a tap held during a drive is replayed once the drive is over, unless its summary is already on screen', async () => {
+    const h = await mount({ gate: 'driving' });
+    await act(async () => mockNotifications.listener!(summaryTap('/drives/trip-9?fresh=1', 13)));
+    await h.settle();
+    expect(h.navigate).not.toHaveBeenCalled();
+    mockPathname = '/drives/trip-9';
+    await h.setGate('yes');
+    await h.fireBusy();
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
 });

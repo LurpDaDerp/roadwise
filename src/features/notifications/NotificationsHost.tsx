@@ -20,6 +20,9 @@
  * a second one on it; Home goes through `router.dismissTo` when a screen sits above the tabs, so it
  * returns to the Home already in the stack instead of opening a second one.
  *
+ * Any other tap (or a held one's replay) opens its route, except a drive's summary already on
+ * screen: the driving screen opened it as the drive ended, so its "Drive ended" note opens nothing more.
+ *
  * Battery (§3.5): no timer and no polling. The busy subscription fires with the drive host's state
  * changes; while nothing is held it returns after one boolean read.
  *
@@ -27,7 +30,7 @@
  * which also removes M3's interim `useSummaryNotificationRouting`, so one tap navigates once.
  */
 import * as Notifications from 'expo-notifications';
-import { router, type Href } from 'expo-router';
+import { router, usePathname, type Href } from 'expo-router';
 import { useEffect, useLayoutEffect, useRef } from 'react';
 
 import type { ReminderTap } from '@drive-sense';
@@ -47,6 +50,7 @@ import {
   type ReminderTapNative,
   type StartGate,
 } from './reminderTap';
+import { SUMMARY_HREF } from './hrefs';
 import { handleResponse, replayPendingHref, type ResponseDeps } from './responses';
 
 export interface NotificationsHostProps {
@@ -87,11 +91,23 @@ export function NotificationsHost(props: NotificationsHostProps): null {
   const { db, now } = useDataSource();
   const ready = props.ready ?? true;
 
+  const pathname = usePathname();
+
   // Latest props, read by listeners that are attached once per mount.
-  const latest = useRef({ props, ready, db, now });
+  const latest = useRef({ props, ready, db, now, pathname });
   // Declared first, so every effect below reads this render's values.
   useLayoutEffect(() => {
-    latest.current = { props, ready, db, now };
+    latest.current = { props, ready, db, now, pathname };
+  });
+  /**
+   * A tap's route (and a held one's replay). A drive's summary already on screen is not opened a
+   * second time: the driving screen opens it as the drive ends, and the "Drive ended" note for the
+   * same drive lands there.
+   */
+  const tapRoute = useRef((href: string) => {
+    const summary = SUMMARY_HREF.exec(href);
+    if (summary !== null && latest.current.pathname === `/drives/${summary[1]}`) return;
+    (latest.current.props.navigate ?? defaultNavigate)(href);
   });
   /** Something may be held in settings: true at mount (a tap from an earlier process), and after a deferral. */
   const mayHavePending = useRef(true);
@@ -144,7 +160,7 @@ export function NotificationsHost(props: NotificationsHostProps): null {
       return {
         db: l.db,
         now: l.now,
-        navigate: l.props.navigate ?? defaultNavigate,
+        navigate: tapRoute.current,
         isBusy: () => !latest.current.ready || latest.current.props.isBusy(),
         onError: report,
       };
@@ -217,7 +233,7 @@ export function NotificationsHost(props: NotificationsHostProps): null {
       replayPendingHref({
         db: l.db,
         now: l.now,
-        navigate: l.props.navigate ?? defaultNavigate,
+        navigate: tapRoute.current,
         isBusy: () => !latest.current.ready || latest.current.props.isBusy(),
       })
         .then((out) => {
