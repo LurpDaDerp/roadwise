@@ -206,6 +206,7 @@ function fakeRuntime(drive: Partial<DriveState>) {
   const runner = {
     drainOnce: jest.fn(async () => ({ done: 2 })),
     owed: jest.fn(async () => 1),
+    signedIn: jest.fn(async () => {}),
   };
   return {
     runtime: { db: {}, queryClient, drive: host, runner } as unknown as NonNullable<RuntimeState['runtime']>,
@@ -295,12 +296,13 @@ describe('the root layout', () => {
     expect(screen.getByText('Setting this phone up for you')).toBeTruthy();
   });
 
-  test("the owner's sign-in restores their drives now, through the live runtime's foreground jobs", async () => {
-    await renderReady();
+  test("the owner's sign-in restores their drives now, through the live runtime's foreground jobs, and sends what waited for a session", async () => {
+    const { runner } = await renderReady();
     mockController.runNow.mockClear();
     expect(mockHandover.signIn).not.toBeNull();
     await act(async () => mockHandover.signIn?.('user-a'));
     expect(mockController.runNow).toHaveBeenCalledTimes(1);
+    expect(runner.signedIn).toHaveBeenCalledTimes(1);
     expect(mockController.rebuild).not.toHaveBeenCalled();
   });
 

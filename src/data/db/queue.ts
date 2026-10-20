@@ -203,6 +203,26 @@ export function createQueueRepo(db: Db) {
       });
     },
 
+    /**
+     * Items never tried yet (held back only for want of a session, another owner's turn or a busy
+     * database) are due now: a sign-in sends them without waiting out the hold. Items in a retry
+     * back-off keep their time. Returns how many moved.
+     */
+    async makeUntriedDue(now: number = Date.now()): Promise<number> {
+      const { changes } = await db.execute(
+        "UPDATE sync_queue SET next_attempt_at = ? WHERE status = 'pending' AND attempts = 0 AND next_attempt_at > ?",
+        [now, now]
+      );
+      return changes;
+    },
+
+    /** The earliest `next_attempt_at` of an item still owed, or null when none is. */
+    async nextPendingAt(): Promise<number | null> {
+      const { rows } = await db.execute("SELECT MIN(next_attempt_at) AS at FROM sync_queue WHERE status = 'pending'");
+      const at = rows[0]?.at;
+      return typeof at === 'number' ? at : null;
+    },
+
     async countByStatus(status: QueueStatus): Promise<number> {
       const { rows } = await db.execute('SELECT count(*) AS n FROM sync_queue WHERE status = ?', [status]);
       return asNumber(rows[0] ?? {}, 'n');

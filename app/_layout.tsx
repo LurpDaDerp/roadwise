@@ -144,11 +144,13 @@ export default function RootLayout() {
   // a second: the cleanup unsubscribes before the next effect subscribes.
   // A sign-in by the owner (or the first sign-in on an empty phone) keeps this runtime, so what a
   // launch would have done for them runs now: their drives are restored from the server (a fresh
-  // install, or a sign-out that emptied the phone) without waiting for a relaunch.
+  // install, or a sign-out that emptied the phone) and the uploads that waited for a session go,
+  // without waiting for a relaunch or the next foreground.
   useEffect(() => {
     if (runtime === null) return;
     const onOwnerSignIn = () => {
       void controller.foregroundJobs()?.runNow();
+      void runtime.runner.signedIn().catch(() => {});
     };
     return watchDeviceOwner(runtime.db, { supabase, onHandover: handover, onOwnerSignIn });
   }, [runtime, handover]);

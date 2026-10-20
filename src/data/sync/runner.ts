@@ -41,6 +41,9 @@ export const RECORDING_RETRY_MS = 15_000;
 export const FOREIGN_OWNER_RETRY_MS = 60 * 60_000;
 /** With no session, items wait this long. */
 export const NO_SESSION_RETRY_MS = 60_000;
+/** While the app is open, the next retry is woken for, at most this far ahead and no sooner than the floor. */
+export const RETRY_WAKE_MAX_MS = 60 * 60_000;
+export const RETRY_WAKE_MIN_MS = 1_000;
 export const DEFAULT_BATCH = 10;
 export const MAX_ROUNDS = 20;
 
@@ -106,6 +109,11 @@ export interface SyncRunner {
   idle(): Promise<void>;
   /** Items still owed: pending or in flight. */
   owed(): Promise<number>;
+  /**
+   * The device's owner signed in: what waited only for a session is sent now, not when its hold
+   * runs out or the app next comes to the front.
+   */
+  signedIn(): Promise<void>;
 }
 
 type Outcome = { kind: 'done' } | { kind: 'retry'; error: string; untilMs?: number } | { kind: 'refused'; error: string } | { kind: 'release'; untilMs: number };
@@ -308,6 +316,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   let started = false;
   let draining: Promise<DrainResult> | null = null;
   let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The wake for the next item in a retry back-off; only while the app is open. */
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let subscriptions: (() => void)[] = [];
 
   async function readSession(): Promise<string | null> {
@@ -540,7 +550,31 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         if (draining === run) draining = null;
       });
     draining = run;
+    void run.then(() => armRetry()).catch(noop);
     return run;
+  }
+
+  function clearRetry(): void {
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+
+  /**
+   * While the app is open, wake for the earliest item still owed, so an upload that failed on a
+   * blip (or waits out a Retry-After) goes when it is due rather than at the next foreground. Never
+   * in the background, never during a drive (the finalize change event wakes the runner then).
+   */
+  async function armRetry(): Promise<void> {
+    clearRetry();
+    if (!started || deps.appState?.currentState !== 'active' || deps.isRecording()) return;
+    const at = await queue.nextPendingAt();
+    if (at === null || !started) return;
+    const delay = Math.min(RETRY_WAKE_MAX_MS, Math.max(RETRY_WAKE_MIN_MS, at - now()));
+    clearRetry();
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      wake();
+    }, delay);
   }
 
   function wake(delayMs = 0): void {
@@ -570,6 +604,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           if (next === 'active') {
             void queue.reopenRetryable(now()).catch(noop);
             wake();
+          } else {
+            clearRetry();
           }
         });
         subscriptions.push(() => sub.remove());
@@ -580,6 +616,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       started = false;
       if (wakeTimer !== null) clearTimeout(wakeTimer);
       wakeTimer = null;
+      clearRetry();
       for (const off of subscriptions) off();
       subscriptions = [];
       await draining?.catch(noop);
@@ -589,5 +626,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       await draining?.catch(noop);
     },
     owed: async () => (await queue.countByStatus('pending')) + (await queue.countByStatus('inflight')),
+    async signedIn() {
+      if (!started) return;
+      await queue.makeUntriedDue(now()).catch((error: unknown) => report(error, 'sync signed in'));
+      wake();
+    },
   };
 }

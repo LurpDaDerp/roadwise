@@ -11,7 +11,7 @@ import type { FinalizeTripResponseV3 } from '@/data/sync/payload';
 import { emitDataChanged } from '@/data/events';
 import { toLocalDrive, toLocalDriveEvent } from '@/data/queries/rows';
 import { receipt } from '@/features/drives/summary';
-import { createSyncRunner, FOREIGN_OWNER_RETRY_MS, joinPolylines, NO_SESSION_RETRY_MS } from '@/data/sync/runner';
+import { createSyncRunner, FOREIGN_OWNER_RETRY_MS, joinPolylines, NO_SESSION_RETRY_MS, RETRY_WAKE_MIN_MS } from '@/data/sync/runner';
 import { encodePolyline, splitRuns } from '@/lib/polyline';
 
 let db: Db;
@@ -578,6 +578,69 @@ test('no polling during a drive: a wake while recording arms no further timer; t
     await jest.advanceTimersByTimeAsync(10);
     await r.idle();
     expect(supabase.invokes).toHaveLength(1);
+    await r.stop();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('a sign-in sends what waited only for a session at once; a back-off keeps its time', async () => {
+  jest.useFakeTimers();
+  try {
+    await finalized(uuid(10));
+    const supabase = createFakeSupabase({ uid: null, invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId)) });
+    const r = runner(supabase);
+    await r.start();
+    await jest.advanceTimersByTimeAsync(10);
+    await r.idle();
+    expect(supabase.invokes).toHaveLength(0);
+    expect((await createQueueRepo(db).byKey(`trip:${uuid(10)}`))!.next_attempt_at).toBe(T0 + 2_000_000 + NO_SESSION_RETRY_MS);
+    // A drive whose upload failed once is in its back-off: the sign-in does not cut it short.
+    await finalized(uuid(11), T0 + 5_000_000);
+    await db.execute("UPDATE sync_queue SET attempts = 1, next_attempt_at = ? WHERE idempotency_key = ?", [T0 + 9_000_000, `trip:${uuid(11)}`]);
+    supabase.setUid('user-1');
+    await r.signedIn();
+    await jest.advanceTimersByTimeAsync(10);
+    await r.idle();
+    expect(supabase.invokes.map((i) => (i.body as { clientTripId: string }).clientTripId)).toEqual([uuid(10)]);
+    await r.stop();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('while the app is open, an upload that failed on a blip is tried again when its back-off ends, not at the next foreground; in the background nothing waits', async () => {
+  jest.useFakeTimers();
+  try {
+    let clock = T0 + 2_000_000;
+    let fail = true;
+    const supabase = createFakeSupabase({ invoke: ({ body }) => (fail ? functionsFetchError() : invokeOk(response((body as { clientTripId: string }).clientTripId))) });
+    const appState = createFakeAppState('active');
+    const r = runner(supabase, { appState, now: () => clock });
+    await finalized(uuid(10));
+    await r.start();
+    await jest.advanceTimersByTimeAsync(10);
+    await r.idle();
+    expect(supabase.invokes).toHaveLength(1);
+    fail = false;
+    clock += 30_000;
+    await jest.advanceTimersByTimeAsync(30_000);
+    await r.idle();
+    expect(supabase.invokes).toHaveLength(2);
+    expect(await r.owed()).toBe(0);
+    await jest.advanceTimersByTimeAsync(10);
+    expect(jest.getTimerCount()).toBe(0);
+
+    // In the background the retry timer goes: the next foreground wakes the runner instead.
+    fail = true;
+    clock = T0 + 7_000_000;
+    await finalized(uuid(11), T0 + 5_000_000);
+    await jest.advanceTimersByTimeAsync(10);
+    await r.idle();
+    expect(supabase.invokes).toHaveLength(3);
+    await jest.advanceTimersByTimeAsync(RETRY_WAKE_MIN_MS);
+    appState.set('background');
+    expect(jest.getTimerCount()).toBe(0);
     await r.stop();
   } finally {
     jest.useRealTimers();
