@@ -1,16 +1,20 @@
 /** @jest-environment node */
 import { uuid } from '@/core/engine/__fixtures__/drives';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
-import { createEventsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
-import { restoreDrives, toEventRows } from '@/data/hydrate/restore';
+import { createEventsRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
+import { onDataChanged } from '@/data/events';
+import { RESTORED_AT_KEY, RestoreAbandonedError, restoreDrives, toEventRows } from '@/data/hydrate/restore';
 import { readDriveCount, readRecentDrives } from '@/data/queries/drives';
 
 const T0 = 1_700_000_000_000;
 
 let db: Db;
+const UID = 'user-1';
+
 beforeEach(async () => {
   db = await createSqlJsDb();
   await migrate(db);
+  await createSettingsRepo(db).set('device.lastUserId', UID);
 });
 
 const serverDrive = (n: number, over: Record<string, unknown> = {}) => ({
@@ -42,6 +46,7 @@ test('an empty device is restored page by page, newest first; events come along'
   const calls: unknown[] = [];
   const result = await restoreDrives({
     db,
+    uid: UID,
     pageSize: 2,
     rpc: async (fn, args) => {
       calls.push([fn, args]);
@@ -58,11 +63,64 @@ test('an empty device is restored page by page, newest first; events come along'
   expect(await readDriveCount(db)).toBe(2);
 });
 
-test('a device that holds drives is left alone; a malformed row is skipped', async () => {
-  await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0, tz: 'UTC', status: 'scored' }, T0);
-  expect(await restoreDrives({ db, rpc: async () => [serverDrive(1)] })).toMatchObject({ skipped: true, restored: 0 });
-  await db.execute('DELETE FROM trips');
-  expect(await restoreDrives({ db, rpc: async () => [{ bogus: true }, serverDrive(1)] })).toMatchObject({ restored: 1 });
+test('a drive the device already holds is kept as it is and the rest are filled in; a malformed row is skipped', async () => {
+  // A drive recorded before the restore ran never stops it.
+  await createTripsRepo(db).insert({ client_trip_id: uuid(1), started_at: T0, tz: 'UTC', status: 'pending' }, T0);
+  expect(await restoreDrives({ db, uid: UID, rpc: async () => [{ bogus: true }, serverDrive(1), serverDrive(2)] })).toMatchObject({ skipped: false, restored: 1 });
+  expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'pending', started_at: T0 });
+  expect(await createTripsRepo(db).get(uuid(2))).toMatchObject({ status: 'scored' });
+});
+
+test('a restore that ran to the end is not run again for that driver; another driver’s record does not count', async () => {
+  const rpc = jest.fn(async () => [serverDrive(1)]);
+  await restoreDrives({ db, uid: UID, rpc });
+  expect(await createSettingsRepo(db).get(RESTORED_AT_KEY)).toMatchObject({ uid: UID });
+  expect(await restoreDrives({ db, uid: UID, rpc })).toMatchObject({ skipped: true, restored: 0 });
+  expect(rpc).toHaveBeenCalledTimes(1);
+  await createSettingsRepo(db).set(RESTORED_AT_KEY, { uid: 'someone-else', at: T0 });
+  expect(await restoreDrives({ db, uid: UID, rpc })).toMatchObject({ skipped: false });
+});
+
+test('a restore cut short keeps what it wrote, shows it, and the next run picks up the older pages', async () => {
+  const changes: string[] = [];
+  const off = onDataChanged((c) => changes.push(c.source));
+  let fail = true;
+  const rpc = async (_fn: string, args?: Record<string, unknown>) => {
+    if (args?.p_before === undefined) return [serverDrive(1), serverDrive(2)];
+    if (fail) throw new Error('offline');
+    return [serverDrive(3)];
+  };
+  await expect(restoreDrives({ db, uid: UID, pageSize: 2, rpc })).rejects.toThrow('offline');
+  expect(await createTripsRepo(db).count()).toBe(2);
+  expect(await createSettingsRepo(db).get(RESTORED_AT_KEY)).toBeNull();
+  await new Promise((r) => setTimeout(r, 0));
+  expect(changes).toContain('hydrate');
+  fail = false;
+  expect(await restoreDrives({ db, uid: UID, pageSize: 2, rpc })).toMatchObject({ restored: 1, complete: true });
+  expect(await createTripsRepo(db).get(uuid(3))).not.toBeNull();
+  off();
+});
+
+test('a restore that outlives its driver writes nothing more: another owner on the device, or the run no longer wanted', async () => {
+  let page = 0;
+  const rpc = async () => {
+    page += 1;
+    // A handover lands while the first page is out.
+    if (page === 1) await createSettingsRepo(db).set('device.lastUserId', 'user-2');
+    return [serverDrive(page)];
+  };
+  await expect(restoreDrives({ db, uid: UID, rpc })).rejects.toBeInstanceOf(RestoreAbandonedError);
+  expect(await createTripsRepo(db).count()).toBe(0);
+  expect(await createSettingsRepo(db).get(RESTORED_AT_KEY)).toBeNull();
+
+  await createSettingsRepo(db).set('device.lastUserId', UID);
+  let wanted = true;
+  const later = async () => {
+    wanted = false; // the session changed while the page was read
+    return [serverDrive(5)];
+  };
+  await expect(restoreDrives({ db, uid: UID, rpc: later, isCurrent: () => wanted })).rejects.toBeInstanceOf(RestoreAbandonedError);
+  expect(await createTripsRepo(db).count()).toBe(0);
 });
 
 test('a restored removed event keeps its accepted report, so Report is not offered again', () => {

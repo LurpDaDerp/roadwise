@@ -17,11 +17,11 @@ import { recoverRecordingTrips, type RecoveryResult } from '@/core/engine/recove
 import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSupabaseSpeedLimitApi, type SpeedLimitApi, type SpeedLimitsSupabase } from '@/core/speedLimits/api';
 import { refreshAppConfig, type AppConfigSupabase } from '@/data/config/appConfig';
-import { createExpoDb, createSettingsRepo, createTripsRepo, migrate, type Db, type TripRow } from '@/data/db';
+import { createExpoDb, createSettingsRepo, migrate, type Db, type TripRow } from '@/data/db';
 import { preloadDeviceSecret } from '@/data/devices/deviceSecret';
 import { onDataChanged } from '@/data/events';
 import { runWhenForeground, type AppStateLike as ForegroundAppState } from '@/data/foreground';
-import { restoreDrives } from '@/data/hydrate/restore';
+import { restoreDrives, type RestoreResult } from '@/data/hydrate/restore';
 import { getSharedOnline } from '@/data/net/net';
 import { createQueryClient } from '@/data/queries/client';
 import { subscribeInvalidation } from '@/data/queries/invalidate';
@@ -139,8 +139,11 @@ export interface AppRuntime {
   now: () => number;
   /** Fetch the public config once; rejects on failure. */
   refreshConfig(): Promise<void>;
-  /** Restore the user's drives from the server when the device holds none. */
-  restore(): Promise<void>;
+  /**
+   * Restore the owner's drives the device does not hold (`restoreDrives`). Null when the device has
+   * no owner yet (nothing to restore for); rejects when the read fails or the run was abandoned.
+   */
+  restore(): Promise<RestoreResult | null>;
   /** Stops the runner, then the drive host (ending an open drive unless told not to), and empties the cache. */
   stop(opts?: { endOpenTrip?: boolean }): Promise<void>;
 }
@@ -457,6 +460,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     throw reason;
   }
   const started = runner;
+  let stopped = false;
 
   return {
     db,
@@ -477,10 +481,23 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       await refreshAppConfig(seam, db, now);
     },
     async restore() {
-      if ((await readDeviceOwner(db)) === null) return;
-      await restoreDrives({ db, rpc, now });
+      const uid = await readDeviceOwner(db);
+      if (uid === null) return null;
+      // Wanted only while this runtime lives and the session is still the owner's: a restore that
+      // outlives a sign-out or a handover writes nothing more (`restoreDrives` also fences on the owner).
+      const isCurrent = async (): Promise<boolean> => {
+        if (stopped) return false;
+        try {
+          const { data } = await identity.supabase.auth.getSession();
+          return data.session?.user.id === uid;
+        } catch {
+          return false;
+        }
+      };
+      return restoreDrives({ db, rpc, now, uid, isCurrent });
     },
     async stop(opts = {}) {
+      stopped = true;
       await started.stop();
       await engine.drive.stop({ endOpenTrip: opts.endOpenTrip ?? true });
       await engine.release();
@@ -644,7 +661,7 @@ export interface ForegroundJobs {
 
 /**
  * The work that runs only while the driver has the app open, each on a transition to `active`:
- * the restore (once per launch while the device holds no drives), the public config (daily), the
+ * the restore (once per launch until the owner's has run to the end), the public config (daily), the
  * expired-tile purge and the 7-day prune of DashPal events outside any drive (daily).
  */
 export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJobsDeps = {}): Promise<ForegroundJobs> {
@@ -653,11 +670,9 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
   let restoredThisLaunch = false;
   const restore = async (): Promise<void> => {
     if (restoredThisLaunch) return;
-    if ((await createTripsRepo(runtime.db).count()) > 0) {
-      restoredThisLaunch = true;
-      return;
-    }
-    await runtime.restore();
+    // No owner yet (a launch signed out on a phone nobody has used): nothing is marked done and no
+    // stamp is written, so the sign-in that names the owner (`runNow`) or the next foreground restores.
+    if ((await runtime.restore()) === null) throw new Error('no device owner yet: nothing to restore');
     restoredThisLaunch = true;
     await runtime.limits.purgeExpired().catch((error: unknown) => onError(error, 'purge expired tiles'));
   };

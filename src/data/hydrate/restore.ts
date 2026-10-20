@@ -1,20 +1,39 @@
 /**
- * Restoring the user's drives from the server when the local database is empty for them (plan
- * §5): a reinstall, a new device, a device that changed hands. `list_my_drives` pages newest
- * first; every row becomes a settled local drive (the server's result, no estimate) with its
- * events. From/to labels are not restored (they only ever lived on the old device).
+ * Restoring the user's drives from the server (plan §5): a reinstall, a new device, a device that
+ * changed hands, a sign-out that emptied the phone. `list_my_drives` pages newest first; every row
+ * the device does not hold becomes a settled local drive (the server's result, no estimate) with
+ * its events, and a drive the device already holds is left as it is. From/to labels are not
+ * restored (they only ever lived on the old device).
+ *
+ * A restore runs to the end once per owner: `RESTORED_AT_KEY` records `{ uid, at }` only after the
+ * last page, so one cut short (offline, the app closed) starts again at the next try and fills
+ * in what is still missing, and a drive recorded before the restore ran never stops it.
+ *
+ * Every page is written only while the device still belongs to the driver it was started for, and
+ * only while `isCurrent` says the run is still wanted: a restore that outlives a sign-out or a
+ * handover writes nothing more.
  */
 import { z } from 'zod';
 
-import { createEventsRepo, createTripsRepo, type Db, type NewEvent, type NewTrip } from '@/data/db';
+import { createEventsRepo, createSettingsRepo, createTripsRepo, type Db, type NewEvent, type NewTrip } from '@/data/db';
 import { emitDataChanged } from '@/data/events';
 import { countEvents } from '@/data/queries/rows';
 import { DriveBreakdownSchema, EVENT_TYPES_V3, TIERS_V3 } from '@/data/sync/payload';
+import { deviceOwnerIs } from '@/data/sync/queue';
 
 export const RESTORE_PAGE = 50;
 export const MAX_PAGES = 40;
-/** Settings key: epoch ms of the last completed restore for `{ uid, at }`. */
+/** Settings key: `{ uid, at }`, the driver whose restore last ran to the end and when. */
 export const RESTORED_AT_KEY = 'restore.completedAt';
+
+/** The restore stopped because the device or the session no longer belongs to its driver. */
+export class RestoreAbandonedError extends Error {
+  override readonly name = 'RestoreAbandonedError';
+
+  constructor() {
+    super('restore abandoned: the device no longer belongs to the driver it was started for');
+  }
+}
 
 const ServerEvent = z.object({
   id: z.uuid(),
@@ -59,15 +78,33 @@ export type ServerDrive = z.infer<typeof ServerDriveSchema>;
 export interface RestoreDeps {
   db: Db;
   rpc: (fn: string, args?: Record<string, unknown>) => Promise<unknown>;
+  /** The driver this restore is for: the device's owner when it starts. */
+  uid: string;
+  /**
+   * Whether the run is still wanted (the session is still `uid`'s, the runtime still live). Asked
+   * before each page is read and again before it is written. Default: always.
+   */
+  isCurrent?: () => boolean | Promise<boolean>;
   now?: () => number;
   pageSize?: number;
 }
 
 export interface RestoreResult {
-  /** The device already held drives: nothing was read. */
+  /** This driver's restore had already run to the end: nothing was read. */
   skipped: boolean;
   restored: number;
   complete: boolean;
+}
+
+interface RestoredAt {
+  uid: string;
+  at: number;
+}
+
+/** Whether `uid`'s restore has already run to the end on this device. */
+export async function restoreCompleted(db: Db, uid: string): Promise<boolean> {
+  const stored = await createSettingsRepo(db).get<Partial<RestoredAt>>(RESTORED_AT_KEY);
+  return stored !== null && typeof stored === 'object' && stored.uid === uid;
 }
 
 export function toTripRow(d: ServerDrive): NewTrip {
@@ -115,36 +152,57 @@ export function toEventRows(d: ServerDrive): NewEvent[] {
   }));
 }
 
-/** Restore when the device holds no drives at all. Idempotent per row (an existing id is kept). */
+/**
+ * Restore every drive of `uid` the device does not hold yet. Idempotent per row (an existing id is
+ * kept). Skipped once `uid`'s restore has run to the end; rejects with `RestoreAbandonedError` when
+ * the device or session changed hands mid-way (the rows already written stay, and are announced).
+ */
 export async function restoreDrives(deps: RestoreDeps): Promise<RestoreResult> {
-  const { db } = deps;
+  const { db, uid } = deps;
   const now = deps.now ?? Date.now;
   const trips = createTripsRepo(db);
   const events = createEventsRepo(db);
-  if ((await trips.count()) > 0) return { skipped: true, restored: 0, complete: true };
+  if (await restoreCompleted(db, uid)) return { skipped: true, restored: 0, complete: true };
+  const isCurrent = deps.isCurrent ?? (() => true);
   const pageSize = deps.pageSize ?? RESTORE_PAGE;
   let before: number | null = null;
   let restored = 0;
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const args: Record<string, unknown> = { p_limit: pageSize };
-    if (before !== null) args.p_before = new Date(before).toISOString();
-    const raw = await deps.rpc('list_my_drives', args);
-    const rows = z.array(z.unknown()).safeParse(raw);
-    if (!rows.success) throw new Error('list_my_drives did not answer with a list');
-    const drives = rows.data.map((r) => ServerDriveSchema.safeParse(r)).flatMap((p) => (p.success ? [p.data] : []));
-    for (const d of drives) {
-      await db.transaction(async (tx) => {
-        if ((await trips.get(d.clientTripId, tx)) !== null) return;
-        await trips.insert(toTripRow(d), now(), tx);
-        await events.insertMany(toEventRows(d), tx);
-        restored += 1;
+  try {
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      if (!(await isCurrent())) throw new RestoreAbandonedError();
+      const args: Record<string, unknown> = { p_limit: pageSize };
+      if (before !== null) args.p_before = new Date(before).toISOString();
+      const raw = await deps.rpc('list_my_drives', args);
+      const rows = z.array(z.unknown()).safeParse(raw);
+      if (!rows.success) throw new Error('list_my_drives did not answer with a list');
+      const drives = rows.data.map((r) => ServerDriveSchema.safeParse(r)).flatMap((p) => (p.success ? [p.data] : []));
+      // The page was read under whoever holds the session now: it is written only if that is still this driver.
+      if (!(await isCurrent())) throw new RestoreAbandonedError();
+      const written = await db.transaction(async (tx) => {
+        if (!(await deviceOwnerIs(tx, uid))) return null;
+        let n = 0;
+        for (const d of drives) {
+          if ((await trips.get(d.clientTripId, tx)) !== null) continue;
+          await trips.insert(toTripRow(d), now(), tx);
+          await events.insertMany(toEventRows(d), tx);
+          n += 1;
+        }
+        return n;
       });
+      if (written === null) throw new RestoreAbandonedError();
+      restored += written;
+      if (rows.data.length < pageSize || drives.length === 0) break;
+      const oldest = Math.min(...drives.map((d) => d.startedAt));
+      if (before !== null && oldest >= before) break;
+      before = oldest;
     }
-    if (rows.data.length < pageSize || drives.length === 0) break;
-    const oldest = Math.min(...drives.map((d) => d.startedAt));
-    if (before !== null && oldest >= before) break;
-    before = oldest;
+    await db.transaction(async (tx) => {
+      if (!(await deviceOwnerIs(tx, uid))) throw new RestoreAbandonedError();
+      await createSettingsRepo(tx).set(RESTORED_AT_KEY, { uid, at: now() } satisfies RestoredAt);
+    });
+  } finally {
+    // Whatever was written is shown, also when the run stopped part-way.
+    if (restored > 0) emitDataChanged({ source: 'hydrate' });
   }
-  if (restored > 0) emitDataChanged({ source: 'hydrate' });
   return { skipped: false, restored, complete: true };
 }

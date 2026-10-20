@@ -90,7 +90,7 @@ test('a restored drive keeps its DashPal event and its DashPal breakdown', async
     result: null,
     events: [{ id: DROWSY, type: 'drowsy', tier: 'severe', startedAt: T0 + 60_000, durationS: 4, units: null, stoppedInTraffic: null, lat: null, lng: null, measured: { source: 'dashcam', speedMph: 40 }, penalty: 50, status: 'active' }],
   };
-  expect(await restoreDrives({ db, rpc: async (_fn, args) => (args?.p_before ? [] : [drive]) })).toMatchObject({ restored: 1 });
+  expect(await restoreDrives({ db, uid: 'user-1', rpc: async (_fn, args) => (args?.p_before ? [] : [drive]) })).toMatchObject({ restored: 1 });
   const [d] = await readRecentDrives(db, 1);
   expect(d).toMatchObject({ clean: true, counts: expect.objectContaining({ drowsy: 1, pickups: 0 }) });
   expect(JSON.parse((await createTripsRepo(db).get(uuid(1)))!.breakdown_json!)).toMatchObject({ dashcamMult: 1.25, mult: 1.25 });

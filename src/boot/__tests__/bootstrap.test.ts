@@ -224,6 +224,43 @@ test('a plain sign-out with nothing owed wipes the drives and zones but keeps th
   await rt.stop();
 });
 
+const serverDrive = (n: number) => ({
+  tripId: uuid(100 + n),
+  clientTripId: uuid(n),
+  startedAt: T0 - n * 3_600_000,
+  endedAt: T0 - n * 3_600_000 + 600_000,
+  tz: TZ,
+  localDay: null,
+  miles: 5,
+  safeMiles: 5,
+  nightMiles: 0,
+  durationS: 600,
+  polyline: null,
+  scored: true,
+  reason: null,
+  notDriving: false,
+  clean: true,
+  pointsNet: 50,
+  breakdown: null,
+  result: null,
+  events: [],
+});
+
+test('restore: the owner’s drives come from the server under the owner’s session; a stopped runtime or another session writes nothing', async () => {
+  const supabase = createFakeSupabase({ uid: 'user-1', rpc: () => ({ data: [serverDrive(1)], error: null }) });
+  const rt = await bootstrapApp(deps({ supabase: supabase as unknown as BootSupabase }).deps);
+  expect(await rt.restore()).toMatchObject({ restored: 1 });
+  expect(supabase.rpcs[0]).toEqual({ fn: 'list_my_drives', args: { p_limit: 50 } });
+  await db.execute('DELETE FROM trips');
+  await db.execute("DELETE FROM settings WHERE key = 'restore.completedAt'");
+  supabase.setUid('user-2');
+  await expect(rt.restore()).rejects.toThrow('restore abandoned');
+  supabase.setUid('user-1');
+  await rt.stop();
+  await expect(rt.restore()).rejects.toThrow('restore abandoned');
+  expect(await createTripsRepo(db).count()).toBe(0);
+});
+
 test('flushBeforeSignOut drains once and reports what is still owed', async () => {
   const d = deps({ mayDrain: () => true });
   const rt = await bootstrapApp(d.deps);
