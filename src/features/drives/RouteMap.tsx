@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { EventType, Tier } from '@scoring';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import type MapViewType from 'react-native-maps';
 import Svg, { Path } from 'react-native-svg';
 
@@ -12,17 +12,15 @@ import { DASHPAL_MARK, EVENT_ICON, EVENT_LABEL, eventKind, eventName, formatCloc
 import type { LocalDriveEvent } from './model';
 import {
   allPoints,
+  awayFrom,
   eventMarks,
   markShape,
   metersPerPixel,
   MIN_MARK_PX,
-  minZoomFor,
   regionFor,
   sameZoom,
   tipAnchor,
-  zoomBack,
   type EventMark,
-  type MapEngine,
   type Region,
   type Runs,
 } from './route';
@@ -64,7 +62,8 @@ const PAPER = tokens.color.light.surface;
 const RING = tokens.color.light.accent;
 const ROUTE_WIDTH = 5;
 const TIER_Z: Record<Tier, number> = { minor: 1, moderate: 2, severe: 3 };
-const ENGINE: MapEngine = Platform.OS === 'android' ? 'google' : 'apple';
+/** How long Recenter takes to bring the map back to the view it opened on. */
+export const RECENTER_MS = 300;
 
 /**
  * The pin: a round head tapering to a point, Google Maps style, in a fixed 32 × 44 point view. The
@@ -218,8 +217,9 @@ function useSettling(key: string): boolean {
  * the stretch is too short to see at the current zoom. Severe marks sit on top. Tapping a pin
  * opens a small card over the map with the event, how long it lasted, its tier and time; the
  * close button or a tap elsewhere on the map shuts it. A ring circles the event tapped in the
- * breakdown. Pinch, double-tap and drag zoom and pan the map, but it never zooms out past the view
- * it opens on, which frames the whole route; it doesn't rotate or tilt. The route comes as its
+ * breakdown. Pinch, double-tap and drag zoom and pan the map freely (no rotating or tilting); once
+ * it is off the view it opened on, which frames the whole route, a Recenter button in its corner
+ * brings that view back. The route comes as its
  * visible runs and each is drawn apart: no line joins one run to the next across a privacy cut.
  */
 export function RouteMap({
@@ -241,6 +241,8 @@ export function RouteMap({
   /** Where the map was last left, with the fitted region it belongs to (a new route starts over). */
   const [view, setView] = useState<{ base: Region; at: Region } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** The map has been dragged or zoomed off the view it opened on: Recenter shows. */
+  const [away, setAway] = useState(false);
   const lastPinTap = useRef(0);
   const mapRef = useRef<MapViewType>(null);
   const maps = loadMaps();
@@ -284,8 +286,7 @@ export function RouteMap({
     const coords = (ps: readonly LatLng[]) => ps.map((p) => ({ latitude: p.lat, longitude: p.lng }));
     const clean = INK.clean.fill;
     const onRegionChangeComplete = (r: Region) => {
-      const back = zoomBack(r, region);
-      if (back) mapRef.current?.animateToRegion(back, 250);
+      setAway(awayFrom(r, region));
       setView((cur) => (cur && cur.base === region && sameZoom(cur.at, r) ? cur : { base: region, at: r }));
     };
     const onMapPress = (e: { nativeEvent: { action?: string } }) => {
@@ -300,7 +301,6 @@ export function RouteMap({
           ref={mapRef}
           style={StyleSheet.absoluteFill}
           initialRegion={region}
-          minZoomLevel={minZoomFor(region, side, ENGINE)}
           onRegionChangeComplete={onRegionChangeComplete}
           onPress={onMapPress}
           scrollEnabled
@@ -390,6 +390,22 @@ export function RouteMap({
             );
           })}
         </MapView>
+        {away ? (
+          <View style={{ position: 'absolute', top: t.space.md, right: t.space.md }}>
+            <IconButton
+              icon="scan-outline"
+              accessibilityLabel="Recenter map"
+              accessibilityHint="Shows the whole route again"
+              variant="surface"
+              size={40}
+              onPress={() => {
+                mapRef.current?.animateToRegion(region, RECENTER_MS);
+                setAway(false);
+              }}
+              testID="map-recenter"
+            />
+          </View>
+        ) : null}
         {selected ? <EventCard event={selected} onClose={() => setSelectedId(null)} /> : null}
       </View>
     );

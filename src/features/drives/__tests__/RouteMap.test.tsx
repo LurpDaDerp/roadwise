@@ -3,10 +3,9 @@ import { fireEvent, screen, within } from '@testing-library/react-native';
 
 import { tokens } from '@/ui';
 
-import { draw, event, ROUTE } from '../__fixtures__/drives';
+import { draw, event, press, ROUTE } from '../__fixtures__/drives';
 import { EVENT_ICON } from '../format';
-import { resetMapsCache, RouteMap } from '../RouteMap';
-import { minZoomFor } from '../route';
+import { RECENTER_MS, resetMapsCache, RouteMap } from '../RouteMap';
 
 /** The map is hidden from screen readers (the breakdown says it all), so queries must look inside. */
 const H = { includeHiddenElements: true } as const;
@@ -149,7 +148,7 @@ test('tapping a pin opens a card with the event, how long it lasted, its tier an
   expect(screen.queryByTestId('map-event-card')).toBeNull();
 });
 
-test('the map pans and zooms in, but never out past the view that frames the route', async () => {
+test('the map pans and zooms freely; off its opening view a Recenter button brings the whole route back', async () => {
   await draw(<RouteMap runs={[ROUTE]} events={[event({ id: 's', type: 'speeding', tier: 'severe', durationS: 8 })]} highlighted={null} />);
   const map = screen.getByTestId('map-view');
   expect(map).toHaveProp('zoomEnabled', true);
@@ -157,23 +156,37 @@ test('the map pans and zooms in, but never out past the view that frames the rou
   expect(map).toHaveProp('rotateEnabled', false);
   expect(map).toHaveProp('pitchEnabled', false);
   expect(map).not.toHaveProp('liteMode', true);
-  expect(map.props.minZoomLevel).toBeUndefined(); // not until the square's size is known
+  expect(map.props.minZoomLevel).toBeUndefined();
+  expect(screen.queryByTestId('map-recenter')).toBeNull();
 
   await fireEvent(screen.getByTestId('map-canvas'), 'layout', { nativeEvent: { layout: { width: 340, height: 340 } } });
   const fitted = screen.getByTestId('map-view').props.initialRegion as { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number };
-  expect(screen.getByTestId('map-view').props.minZoomLevel).toBeCloseTo(minZoomFor(fitted, 340, 'apple')!, 6);
+  expect(screen.getByTestId('map-view').props.minZoomLevel).toBeUndefined();
   expect(screen.getByTestId('dot-s', H)).toBeOnTheScreen(); // 8 s of speeding is too short to see at first
 
   // Zoomed in 8×: the stretch is long enough to draw as a line.
   const zoomedIn = { ...fitted, latitudeDelta: fitted.latitudeDelta / 8, longitudeDelta: fitted.longitudeDelta / 8 };
   await fireEvent(screen.getByTestId('map-view'), 'regionChangeComplete', zoomedIn);
   expect(screen.getByTestId('stretch-s')).toBeOnTheScreen();
-  expect(mockAnimateToRegion).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Recenter map' })).toBeOnTheScreen();
 
-  // Somehow past the limit: pulled back to the fitted size where it stands.
-  const out = { ...fitted, latitude: fitted.latitude + 0.001, latitudeDelta: fitted.latitudeDelta * 2, longitudeDelta: fitted.longitudeDelta * 2 };
+  // Zoomed out past the opening view: allowed, nothing pulls it back.
+  const out = { ...fitted, latitudeDelta: fitted.latitudeDelta * 4, longitudeDelta: fitted.longitudeDelta * 4 };
   await fireEvent(screen.getByTestId('map-view'), 'regionChangeComplete', out);
-  expect(mockAnimateToRegion).toHaveBeenCalledWith({ ...fitted, latitude: fitted.latitude + 0.001 }, 250);
+  expect(mockAnimateToRegion).not.toHaveBeenCalled();
+  expect(screen.getByTestId('map-recenter')).toBeOnTheScreen();
+
+  // Recenter animates back to the view that frames the route, and steps aside.
+  await press(screen.getByTestId('map-recenter'));
+  expect(mockAnimateToRegion).toHaveBeenCalledWith(fitted, RECENTER_MS);
+  expect(screen.queryByTestId('map-recenter')).toBeNull();
+  // The map reports where it settled: back home, so it stays hidden.
+  await fireEvent(screen.getByTestId('map-view'), 'regionChangeComplete', fitted);
+  expect(screen.queryByTestId('map-recenter')).toBeNull();
+
+  // A drag alone shows it too.
+  await fireEvent(screen.getByTestId('map-view'), 'regionChangeComplete', { ...fitted, latitude: fitted.latitude + fitted.latitudeDelta, longitude: fitted.longitude + fitted.longitudeDelta });
+  expect(screen.getByTestId('map-recenter')).toBeOnTheScreen();
 });
 
 test('a ring circles the head of the highlighted pin, under the pins so the pin still takes the tap', async () => {
