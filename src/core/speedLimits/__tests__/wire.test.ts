@@ -70,9 +70,11 @@ describe('LimitSegmentSchema', () => {
 });
 
 describe('TileSchema', () => {
-  it('accepts a tile, including an empty one', () => {
+  it('accepts a tile, including an empty one, with or without the filling flag', () => {
     expect(ok(TileSchema, tile)).toBe(true);
     expect(ok(TileSchema, { ...tile, segments: [] })).toBe(true);
+    expect(ok(TileSchema, { ...tile, filling: true })).toBe(true);
+    expect(ok(TileSchema, { ...tile, filling: false })).toBe(true);
   });
 
   it('caps segments at 2000', () => {
@@ -87,6 +89,7 @@ describe('TileSchema', () => {
     ['a fractional expiresAt', { ...tile, expiresAt: 1.5 }],
     ['a missing truncated flag', (({ truncated: _t, ...rest }) => rest)(tile)],
     ['an unknown key', { ...tile, source: 'posted' }],
+    ['a filling flag that is not a boolean', { ...tile, filling: 'yes' }],
     ['a bad segment', { ...tile, segments: [{ ...segment, limitMph: 90 }] }],
   ])('refuses %s', (_label, value) => {
     expect(ok(TileSchema, value)).toBe(false);
