@@ -61,7 +61,7 @@ select table_privs_are('hpms', 'sections', 'anon', '{}'::name[], 'anon has no pr
 select table_privs_are('hpms', 'sections', 'authenticated', '{}'::name[], 'authenticated has no privileges on hpms.sections');
 select table_privs_are('public', 'limits_cache', 'anon', '{}'::name[], 'anon has no privileges on limits_cache');
 select table_privs_are('public', 'limits_cache', 'authenticated', '{}'::name[], 'authenticated has no privileges on limits_cache');
-select table_privs_are('osm', 'ways', 'service_role', array['SELECT']::name[], 'service_role may only read osm.ways');
+select table_privs_are('osm', 'ways', 'service_role', array['SELECT', 'INSERT', 'UPDATE']::name[], 'service_role reads osm.ways and writes it (the 0013 fill)');
 select table_privs_are('hpms', 'sections', 'service_role', array['SELECT']::name[], 'service_role may only read hpms.sections');
 select table_privs_are('public', 'limits_cache', 'service_role', array['DELETE', 'INSERT', 'SELECT', 'UPDATE']::name[], 'service_role has exactly select/insert/update/delete on limits_cache');
 
