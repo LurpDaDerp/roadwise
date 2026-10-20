@@ -122,50 +122,49 @@ export function GlobalBoard() {
 
   // a new state filter keeps the last board on screen (dimmed) until its own lands
   const board = q.data;
-  if (board === undefined) {
-    return (
-      <View style={{ padding: t.space.lg, gap: t.space.md }}>
-        {filter}
-        {q.isError ? <LoadFailed onRetry={() => void q.refetch()} /> : <ListSkeleton />}
-        {sheet}
-      </View>
-    );
-  }
-
+  // The sheet sits in one place whatever the board shows: the first load landing while it is
+  // open must not remount it (iOS would close it and refuse to open the new one meanwhile).
   return (
     <>
-      <FlatList
-        testID="global-board"
-        style={{ opacity: q.isPlaceholderData ? 0.6 : 1 }}
-        data={board.top}
-        keyExtractor={(r) => r.user_id}
-        contentContainerStyle={{ padding: t.space.lg }}
-        ItemSeparatorComponent={RowSeparator}
-        ListHeaderComponent={
-          <View style={{ gap: t.space.md, paddingBottom: t.space.md }}>
-            {filter}
-            {q.isError ? <RefreshFailedNote /> : null}
-            <MeCard me={board.me} />
-          </View>
-        }
-        ListEmptyComponent={
-          <Card padded={false}>
-            <EmptyState icon="earth" title={copy.emptyTitle} body={copy.emptyBody(units)} testID="global-empty" />
-          </Card>
-        }
-        refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.onSky.text} />}
-        renderItem={({ item }) => (
-          <BoardRow
-            rank={item.rank}
-            username={item.username}
-            subtitle={copy.cleanMiles(item.clean_miles, units)}
-            value={formatRating(item.safety_rating, true)}
-            me={item.user_id === myId}
-            onPress={() => router.push(profileHref(item.username))}
-            testID={`global-row-${item.rank}`}
-          />
-        )}
-      />
+      {board === undefined ? (
+        <View style={{ padding: t.space.lg, gap: t.space.md }}>
+          {filter}
+          {q.isError ? <LoadFailed onRetry={() => void q.refetch()} /> : <ListSkeleton />}
+        </View>
+      ) : (
+        <FlatList
+          testID="global-board"
+          style={{ opacity: q.isPlaceholderData ? 0.6 : 1 }}
+          data={board.top}
+          keyExtractor={(r) => r.user_id}
+          contentContainerStyle={{ padding: t.space.lg }}
+          ItemSeparatorComponent={RowSeparator}
+          ListHeaderComponent={
+            <View style={{ gap: t.space.md, paddingBottom: t.space.md }}>
+              {filter}
+              {q.isError ? <RefreshFailedNote /> : null}
+              <MeCard me={board.me} />
+            </View>
+          }
+          ListEmptyComponent={
+            <Card padded={false}>
+              <EmptyState icon="earth" title={copy.emptyTitle} body={copy.emptyBody(units)} testID="global-empty" />
+            </Card>
+          }
+          refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.onSky.text} />}
+          renderItem={({ item }) => (
+            <BoardRow
+              rank={item.rank}
+              username={item.username}
+              subtitle={copy.cleanMiles(item.clean_miles, units)}
+              value={formatRating(item.safety_rating, true)}
+              me={item.user_id === myId}
+              onPress={() => router.push(profileHref(item.username))}
+              testID={`global-row-${item.rank}`}
+            />
+          )}
+        />
+      )}
       {sheet}
     </>
   );

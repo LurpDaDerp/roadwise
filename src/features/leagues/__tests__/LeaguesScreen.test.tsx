@@ -182,6 +182,18 @@ describe('Global', () => {
     expect(await screen.findByTestId('global-empty')).toBeOnTheScreen();
   });
 
+  test('the state sheet opened while the board loads stays the same sheet when the board lands', async () => {
+    let release: (b: unknown) => void = () => {};
+    wire({ get_global_board: () => new Promise((r) => (release = r)) });
+    await open();
+    await fireEvent.press(await screen.findByTestId('state-filter'));
+    const sheet = await screen.findByTestId('state-sheet-modal');
+    release(globalBoard());
+    expect(await screen.findByTestId('global-board')).toBeOnTheScreen();
+    // Not remounted: the same modal is still up (iOS would have closed it and refused a new one).
+    expect(screen.getByTestId('state-sheet-modal')).toBe(sheet);
+  });
+
   test('the state filter asks for that state only', async () => {
     wire();
     await open();
