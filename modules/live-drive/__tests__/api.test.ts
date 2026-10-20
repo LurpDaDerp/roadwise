@@ -49,11 +49,22 @@ test('every method goes to native with its arguments and coerces the result', as
   await expect(LiveDrive.isSupported()).resolves.toBe(false);
 });
 
+test("the app's sky goes along as \"#RRGGBB\" or null", async () => {
+  const sky = { ...state, skyTop: '#0B2A5C', skyMid: '#123B7A', skyLow: '#1A4C94', accent: '#93A9FF' };
+  await LiveDrive.update(sky);
+  expect(mockNative.update).toHaveBeenLastCalledWith(sky);
+  const plain = { ...state, skyTop: null, skyMid: null, skyLow: null, accent: null };
+  await LiveDrive.update(plain);
+  expect(mockNative.update).toHaveBeenLastCalledWith(plain);
+});
+
 test.each([
   ['start', { ...state, speed: '34' }],
   ['start', { ...state, unit: 'knots' }],
   ['update', { speed: 1, limit: 1, unit: 'mph', points: null, pointsDelta: null }],
   ['update', { ...state, extra: 1 }],
+  ['update', { ...state, skyMid: 'navy' }],
+  ['update', { ...state, accent: '#93A9FF80' }],
 ] as const)('%s rejects a bad state without calling native', async (method, bad) => {
   const fn = LiveDrive[method] as (s: unknown) => Promise<unknown>;
   await expect(fn(bad)).rejects.toThrow(`LiveDrive.${method}: invalid state`);

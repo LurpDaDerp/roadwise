@@ -426,7 +426,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       limit: inDisplayUnit(s.limitMph, displayUnit),
       unit: displayUnit,
       points: points?.total ?? null,
-      pointsDelta: points?.sinceLastStop ?? null,
+      // The background surfaces show the total only, like the driving screen.
+      pointsDelta: null,
       stopped: s.stopped,
     });
   }

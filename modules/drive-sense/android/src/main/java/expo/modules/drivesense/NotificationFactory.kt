@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import java.text.NumberFormat
@@ -15,10 +16,11 @@ import java.util.Locale
  * The foreground-service notification — the Android half of the background surface (spec
  * "Driving screen · Background"; plan §6). A low-importance channel with no sound; title
  * "Driving"; text "34 mph · limit 35" ("—" for an unknown speed or limit); a points line
- * "1,240 pts (+18)" only when JS sends points (it does so only while stopped); the **End drive**
- * action only while stopped — the only control while moving is on the screen; tapping opens the
- * app. It exists exactly while the capture it describes runs, and the watchdog stops a capture
- * nobody records (README §6).
+ * "1,240 pts" (the total only) only when JS sends points (it does so only while stopped); the
+ * **End drive** action only while stopped — the only control while moving is on the screen;
+ * tapping opens the app. Colorized in the app's sky (its middle stop, as JS sends it) once JS has
+ * sent one; the system's plain look before. It exists exactly while the capture it describes
+ * runs, and the watchdog stops a capture nobody records (README §6).
  */
 object NotificationFactory {
   const val CHANNEL_ID = "drive_recording"
@@ -47,14 +49,15 @@ object NotificationFactory {
     return "$speed · limit $limit"
   }
 
-  /** "1,240 pts (+18)" — only when points are known; the delta only when non-zero and known. */
+  /** "1,240 pts" — the total only, and only when points are known. */
   fun pointsLine(d: DriveDisplay): String? {
     val points = d.points ?: return null
     val n = NumberFormat.getIntegerInstance(Locale.US)
-    val delta = d.pointsDelta?.let { Math.round(it) }?.takeIf { it != 0L }
-    val deltaText = delta?.let { " (${if (it > 0) "+" else "−"}${n.format(Math.abs(it))})" } ?: ""
-    return "${n.format(Math.round(points))} pts$deltaText"
+    return "${n.format(Math.round(points))} pts"
   }
+
+  /** The sky's middle stop as a colour; null without one (or one that does not parse). */
+  fun skyColor(d: DriveDisplay): Int? = d.skyMid?.let { runCatching { Color.parseColor(it) }.getOrNull() }
 
   fun build(context: Context, display: DriveDisplay?): Notification {
     ensureChannel(context)
@@ -71,6 +74,8 @@ object NotificationFactory {
       .setPriority(NotificationCompat.PRIORITY_LOW)
       .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
     pointsLine(d)?.let { builder.setSubText(it) }
+    // A foreground service's notification may be colorized: it wears the app's sky.
+    skyColor(d)?.let { builder.setColor(it).setColorized(true) }
     openAppIntent(context)?.let { builder.setContentIntent(it) }
     if (d.stopped && !d.ended) {
       val end = Intent(context, CaptureService::class.java).setAction(CaptureService.ACTION_END_DRIVE)

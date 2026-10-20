@@ -216,11 +216,15 @@ struct DriveDisplayRecord: Record {
   @Field var pointsDelta: Double?
   @Field var stopped: Bool = false
   @Field var ended: Bool = false
+  @Field var skyTop: String?
+  @Field var skyMid: String?
+  @Field var skyLow: String?
+  @Field var accent: String?
 }
 
 /// The hand-off to the Live Activity module. `modules/live-drive` observes `name` on main and
 /// updates its activity if one is running; with no observer (Android, or no activity) the post is
-/// a no-op. Keys mirror `DriveDisplayState`; a nil number is left out of `userInfo`.
+/// a no-op. Keys mirror `DriveDisplayState`; a nil number or colour is left out of `userInfo`.
 enum DriveDisplayBridge {
   static let name = Notification.Name("roadwise.driveDisplay")
 
@@ -230,6 +234,10 @@ enum DriveDisplayBridge {
     if let v = s.limit { info["limit"] = v }
     if let v = s.points { info["points"] = v }
     if let v = s.pointsDelta { info["pointsDelta"] = v }
+    if let v = s.skyTop { info["skyTop"] = v }
+    if let v = s.skyMid { info["skyMid"] = v }
+    if let v = s.skyLow { info["skyLow"] = v }
+    if let v = s.accent { info["accent"] = v }
     NotificationCenter.default.post(name: name, object: nil, userInfo: info)
   }
 

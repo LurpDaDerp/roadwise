@@ -37,13 +37,20 @@ final class LiveDriveController {
       let v = n.doubleValue
       return v.isFinite ? v : nil
     }
+    func text(_ key: String) -> String? {
+      info[key] as? String
+    }
     return LiveDriveAttributes.ContentState(
       speed: number("speed"),
       limit: number("limit"),
       unit: (info["unit"] as? String) == "km/h" ? "km/h" : "mph",
       points: number("points"),
       pointsDelta: number("pointsDelta"),
-      stopped: info["stopped"] as? Bool ?? false
+      stopped: info["stopped"] as? Bool ?? false,
+      skyTop: text("skyTop"),
+      skyMid: text("skyMid"),
+      skyLow: text("skyLow"),
+      accent: text("accent")
     )
   }
 

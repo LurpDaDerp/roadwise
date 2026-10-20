@@ -1,8 +1,10 @@
 // The Live Activity / Dynamic Island for a drive in progress (spec "Driving screen · Background";
 // plan §6). Lock screen: big speed, a round speed-limit sign, a points line only when points are
 // present. Dynamic Island: expanded = speed + limit (+ points when stopped); compact = speed |
-// limit; minimal = speed. Navy/gold palette, white numerals. Nothing here is interactive: the
-// activity is started and ended by the app alone.
+// limit; minimal = speed. The lock screen wears the app's sky (the driving screen's deepened sky,
+// top to bottom, as the app sends it with the state; navy until it does), the island's keyline the
+// sky accent (gold without one); white numerals, the limit sign's ring the driving screen's red.
+// Nothing here is interactive: the activity is started and ended by the app alone.
 import ActivityKit
 import SwiftUI
 import WidgetKit
@@ -17,7 +19,23 @@ struct LiveDriveWidgetBundle: WidgetBundle {
 enum Palette {
   static let navy = Color(red: 0 / 255, green: 29 / 255, blue: 61 / 255) // #001D3D
   static let gold = Color(red: 255 / 255, green: 195 / 255, blue: 0 / 255) // #FFC300
+  static let signRed = Color(red: 215 / 255, green: 38 / 255, blue: 61 / 255) // #D7263D
   static let dim = Color.white.opacity(0.7)
+  static let points = Color.white.opacity(0.85)
+}
+
+extension Color {
+  /// "#RRGGBB" as a colour; nil for nil or anything else.
+  init?(hex: String?) {
+    guard let hex = hex, hex.count == 7, hex.hasPrefix("#") else { return nil }
+    let digits = hex.dropFirst()
+    guard digits.allSatisfy({ $0.isHexDigit }), let n = UInt32(digits, radix: 16) else { return nil }
+    self.init(
+      red: Double((n >> 16) & 0xFF) / 255,
+      green: Double((n >> 8) & 0xFF) / 255,
+      blue: Double(n & 0xFF) / 255
+    )
+  }
 }
 
 enum Format {
@@ -27,22 +45,17 @@ enum Format {
     return String(Int(v.rounded()))
   }
 
-  /// "1,240 pts", with " (+18)" / " (−18)" when the delta is present and non-zero.
-  static func points(_ points: Double, delta: Double?) -> String {
+  /// "1,240 pts": the total only.
+  static func points(_ points: Double) -> String {
     let f = NumberFormatter()
     f.numberStyle = .decimal
     f.maximumFractionDigits = 0
     let total = f.string(from: NSNumber(value: points.rounded())) ?? String(Int(points.rounded()))
-    var text = "\(total) pts"
-    if let d = delta, d.isFinite, d.rounded() != 0 {
-      let magnitude = f.string(from: NSNumber(value: abs(d).rounded())) ?? String(Int(abs(d).rounded()))
-      text += d > 0 ? " (+\(magnitude))" : " (−\(magnitude))"
-    }
-    return text
+    return "\(total) pts"
   }
 }
 
-/// The posted limit as a round sign: white disc, gold ring, black numeral ("—" when unknown).
+/// The posted limit as a round sign: white disc, red ring, black numeral ("—" when unknown).
 struct LimitSign: View {
   let limit: Double?
   var size: CGFloat = 44
@@ -50,7 +63,7 @@ struct LimitSign: View {
   var body: some View {
     ZStack {
       Circle().fill(Color.white)
-      Circle().strokeBorder(Palette.gold, lineWidth: max(2, size * 0.09))
+      Circle().strokeBorder(Palette.signRed, lineWidth: max(2, size * 0.09))
       Text(Format.speed(limit))
         .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
         .monospacedDigit()
@@ -88,10 +101,10 @@ struct PointsLine: View {
 
   var body: some View {
     if let p = state.points {
-      Text(Format.points(p, delta: state.pointsDelta))
+      Text(Format.points(p))
         .font(.system(size: 15, weight: .semibold, design: .rounded))
         .monospacedDigit()
-        .foregroundColor(Palette.gold)
+        .foregroundColor(Palette.points)
         .lineLimit(1)
     }
   }
@@ -112,7 +125,17 @@ struct LockScreenView: View {
     }
     .padding(.horizontal, 20)
     .padding(.vertical, 14)
-    .background(Palette.navy)
+    .background { ground }
+  }
+
+  /// The app's sky top to bottom when it sent all three stops; navy otherwise.
+  @ViewBuilder
+  var ground: some View {
+    if let top = Color(hex: state.skyTop), let mid = Color(hex: state.skyMid), let low = Color(hex: state.skyLow) {
+      LinearGradient(colors: [top, mid, low], startPoint: .top, endPoint: .bottom)
+    } else {
+      Palette.navy
+    }
   }
 }
 
@@ -130,8 +153,9 @@ func displayState(_ context: ActivityViewContext<LiveDriveAttributes>) -> LiveDr
 struct LiveDriveActivityWidget: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: LiveDriveAttributes.self) { context in
-      LockScreenView(state: displayState(context))
-        .activityBackgroundTint(Palette.navy)
+      let state = displayState(context)
+      return LockScreenView(state: state)
+        .activityBackgroundTint(Color(hex: state.skyMid) ?? Palette.navy)
         .activitySystemActionForegroundColor(.white)
     } dynamicIsland: { context in
       let state = displayState(context)
@@ -165,7 +189,7 @@ struct LiveDriveActivityWidget: Widget {
           .monospacedDigit()
           .foregroundColor(.white)
       }
-      .keylineTint(Palette.gold)
+      .keylineTint(Color(hex: state.accent) ?? Palette.gold)
     }
   }
 }

@@ -233,6 +233,9 @@ export const exitInfoSchema: z.ZodType<ExitInfo> = z.strictObject({
   whileCapturing: z.boolean(),
 });
 
+/** A display colour: "#RRGGBB", null or absent. */
+const skyHex = z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional();
+
 export const driveDisplaySchema: z.ZodType<DriveDisplayState> = z.strictObject({
   speed: z.number().nullable(),
   limit: z.number().nullable(),
@@ -241,6 +244,10 @@ export const driveDisplaySchema: z.ZodType<DriveDisplayState> = z.strictObject({
   pointsDelta: z.number().nullable(),
   stopped: z.boolean(),
   ended: z.boolean().optional(),
+  skyTop: skyHex,
+  skyMid: skyHex,
+  skyLow: skyHex,
+  accent: skyHex,
 });
 
 export const tripReminderStatusSchema: z.ZodType<TripReminderStatus> = z.strictObject({

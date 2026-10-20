@@ -242,6 +242,11 @@ describe('iOS drive-sense module (text)', () => {
     expect(src).toMatch(/NotificationCenter\.default\.post\(name: name, object: nil, userInfo: info\)/);
     for (const k of ['unit', 'stopped', 'ended', 'speed', 'limit', 'points', 'pointsDelta']) expect(src).toContain(`"${k}"`);
     expect(src).toMatch(/struct DriveDisplayRecord: Record/);
+    // the app's sky: strings on the record, each in userInfo only when present
+    for (const k of ['skyTop', 'skyMid', 'skyLow', 'accent']) {
+      expect(src).toContain(`@Field var ${k}: String?`);
+      expect(src).toContain(`if let v = s.${k} { info["${k}"] = v }`);
+    }
     // review I1: a native stop (JS or the watchdog) ends the Live Activity too
     expect(src).toMatch(/static func postEnded\(\)[\s\S]{0,200}"ended": true/);
     const stop = /func stopCapture\(end: CaptureEnd\? = nil\) \{[\s\S]*?\n {2}\}/.exec(code('CaptureController.swift'))?.[0] ?? '';

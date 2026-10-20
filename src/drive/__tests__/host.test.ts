@@ -47,12 +47,17 @@ function fakePlayer(): AlertPlayer & { delivered: AlertDecision[] } {
   };
 }
 
-function fakeDisplay(): DriveDisplay & { log: string[] } {
+function fakeDisplay(): DriveDisplay & { log: string[]; states: DriveDisplayState[] } {
   const log: string[] = [];
+  const states: DriveDisplayState[] = [];
   return {
     log,
+    states,
     start: (s: DriveDisplayState) => log.push(`start ${s.speed}`),
-    update: (s: DriveDisplayState) => log.push(`update ${s.speed}/${s.limit}/${s.points}${s.unit === 'km/h' ? ' km/h' : ''}`),
+    update: (s: DriveDisplayState) => {
+      states.push(s);
+      log.push(`update ${s.speed}/${s.limit}/${s.points}${s.unit === 'km/h' ? ' km/h' : ''}`);
+    },
     end: () => log.push('end'),
   };
 }
@@ -256,6 +261,9 @@ test('a drive: rows publish at most once each, the display updates on change, po
   expect(snap.stopped).toBe(true);
   expect(snap.points).toEqual({ total: expect.any(Number), sinceLastStop: snap.points!.total });
   expect(h.display.log.at(-1)).toMatch(/update 0\/35\/\d+/);
+  // The background surfaces show the total only: never the change since the last stop.
+  expect(h.display.states.at(-1)).toMatchObject({ points: snap.points!.total, pointsDelta: null });
+  expect(h.display.states.every((s) => s.pointsDelta === null)).toBe(true);
   clock = T0 + 124_000;
   const ended = await h.host.end();
   expect(ended).toEqual({ clientTripId: uuid(1), dropped: null });

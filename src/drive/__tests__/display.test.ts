@@ -1,4 +1,5 @@
 import { createDriveDisplay, DISPLAY_KEEPALIVE_MS, DISPLAY_MIN_INTERVAL_MS, type DriveDisplayState } from '@/drive/display';
+import { displayLook, setDisplayLook, type DisplayLook } from '@/drive/displayLook';
 
 const state = (over: Partial<DriveDisplayState> = {}): DriveDisplayState => ({ speed: 30, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: false, ...over });
 
@@ -101,4 +102,42 @@ test('an unchanged display is re-sent every 60 s (a long stop never goes stale);
   now = 64_000;
   d.update(stopped);
   expect(set).toHaveBeenCalledTimes(5); // the new drive's start; the unchanged update waits
+});
+
+test("every state wears the app's sky (null for all four without one) and goes out again when only the sky changes", () => {
+  let now = 0;
+  let look: DisplayLook | null = null;
+  const { set, live } = sinks();
+  const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', look: () => look });
+  d.start(state());
+  expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ skyTop: null, skyMid: null, skyLow: null, accent: null }));
+  expect(live.start).toHaveBeenLastCalledWith(expect.objectContaining({ skyTop: null, skyMid: null, skyLow: null, accent: null }));
+  look = { skyTop: '#0B2A5C', skyMid: '#123B7A', skyLow: '#1A4C94', accent: '#93A9FF' };
+  now = 4000;
+  d.update(state());
+  expect(set).toHaveBeenCalledTimes(2); // the same drive state, a new sky
+  expect(set).toHaveBeenLastCalledWith({ ...state(), ...look });
+  now = 8000;
+  d.update(state());
+  expect(set).toHaveBeenCalledTimes(2); // nothing changed
+  d.end();
+  // The Live Activity starts in the sky of its moment.
+  d.start(state());
+  expect(live.start).toHaveBeenLastCalledWith({ ...state(), ...look });
+});
+
+test('by default the display wears the look the app set', () => {
+  const { set } = sinks();
+  const look: DisplayLook = { skyTop: '#000001', skyMid: '#000002', skyLow: '#000003', accent: '#000004' };
+  setDisplayLook(look);
+  try {
+    const d = createDriveDisplay({ setDriveDisplay: set }, { now: () => 0, platform: 'android' });
+    d.start(state());
+    d.end();
+    expect(set).toHaveBeenNthCalledWith(1, { ...state(), ...look });
+    expect(set).toHaveBeenLastCalledWith({ ...state(), ...look, ended: true });
+  } finally {
+    setDisplayLook(null);
+  }
+  expect(displayLook()).toBeNull();
 });

@@ -18,6 +18,9 @@ type NativeModule = {
 
 const native = requireOptionalNativeModule<NativeModule>('LiveDrive');
 
+/** A colour: "#RRGGBB", null or absent. */
+const skyHex = z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional();
+
 export const liveDriveStateSchema: z.ZodType<LiveDriveState> = z.strictObject({
   speed: z.number().nullable(),
   limit: z.number().nullable(),
@@ -25,6 +28,10 @@ export const liveDriveStateSchema: z.ZodType<LiveDriveState> = z.strictObject({
   points: z.number().nullable(),
   pointsDelta: z.number().nullable(),
   stopped: z.boolean(),
+  skyTop: skyHex,
+  skyMid: skyHex,
+  skyLow: skyHex,
+  accent: skyHex,
 });
 
 function checked(method: string, state: LiveDriveState): LiveDriveState {

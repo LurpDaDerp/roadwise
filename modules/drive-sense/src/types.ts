@@ -156,6 +156,14 @@ export interface DriveDisplayState {
   stopped: boolean;
   /** The drive is over: Android shows the final notification state; the iOS Live Activity ends at once. */
   ended?: boolean;
+  /**
+   * The app's sky ("#RRGGBB"), so the background surfaces wear the hour's theme: the driving
+   * screen's deepened sky top to bottom, and the sky accent. Null or absent: the plain look.
+   */
+  skyTop?: string | null;
+  skyMid?: string | null;
+  skyLow?: string | null;
+  accent?: string | null;
 }
 
 export type DriveSenseEvents = {

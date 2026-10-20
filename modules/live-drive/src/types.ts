@@ -11,10 +11,16 @@ export interface LiveDriveState {
   unit: 'mph' | 'km/h';
   /** shown only when non-null (the host passes it only while stopped) */
   points: number | null;
-  /** change since the last stop; shown beside `points` when non-null and non-zero */
+  /** change since the last stop; not shown (the host sends null) */
   pointsDelta: number | null;
   /** ≤ 5 mph: the expanded island adds the points line */
   stopped: boolean;
+  /** the app's sky, "#RRGGBB" top to bottom: the lock screen's gradient; null or absent: navy */
+  skyTop?: string | null;
+  skyMid?: string | null;
+  skyLow?: string | null;
+  /** the sky accent ("#RRGGBB"): the island's keyline; null or absent: gold */
+  accent?: string | null;
 }
 
 export const LIVE_DRIVE_METHODS = ['isSupported', 'start', 'update', 'end'] as const;

@@ -16,10 +16,16 @@ struct LiveDriveAttributes: ActivityAttributes {
     var unit: String
     /// shown only when present (the host sends it only while stopped)
     var points: Double?
-    /// change since the last stop; shown beside `points` when present and non-zero
+    /// change since the last stop; not shown (the app sends nil)
     var pointsDelta: Double?
     /// at or under 5 mph
     var stopped: Bool
+    /// the app's sky, "#RRGGBB" top to bottom: the lock screen's gradient; nil: navy
+    var skyTop: String?
+    var skyMid: String?
+    var skyLow: String?
+    /// the sky accent, "#RRGGBB": the island's keyline; nil: gold
+    var accent: String?
   }
 
   /// When the drive started; fixed for the activity's life.

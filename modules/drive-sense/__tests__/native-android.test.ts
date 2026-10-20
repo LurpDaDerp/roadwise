@@ -544,7 +544,23 @@ describe('native-android: the background surface (plan §6) — the foreground n
     expect(src).toMatch(/\?: "—"/);
     expect(src).toMatch(/val points = d\.points \?: return null/);
     expect(src).toMatch(/pointsLine\(d\)\?\.let \{ builder\.setSubText\(it\) \}/);
-    expect(src).toMatch(/"\$\{n\.format\(Math\.round\(points\)\)\} pts\$deltaText"/);
+    // the total only
+    expect(src).toMatch(/return "\$\{n\.format\(Math\.round\(points\)\)\} pts"/);
+    expect(src).not.toMatch(/pointsDelta|deltaText/);
+  });
+
+  it("wears the app's sky: colorized in its middle stop once JS sends one, plain before", () => {
+    const src = code(kt('NotificationFactory'));
+    expect(src).toMatch(/fun skyColor\(d: DriveDisplay\): Int\? = d\.skyMid\?\.let \{ runCatching \{ Color\.parseColor\(it\) \}\.getOrNull\(\) \}/);
+    expect(src).toMatch(/skyColor\(d\)\?\.let \{ builder\.setColor\(it\)\.setColorized\(true\) \}/);
+    const types = code(kt('Types'));
+    for (const k of ['skyTop', 'skyMid', 'skyLow', 'accent']) {
+      expect(types).toContain(`val ${k}: String? = null`);
+      expect(types).toContain(`${k} = hex(m["${k}"])`);
+    }
+    // "#RRGGBB" only; anything else is no colour
+    expect(types).toContain('Regex("^#[0-9A-Fa-f]{6}$")');
+    expect(types).toMatch(/private fun hex\(v: Any\?\): String\? = \(v as\? String\)\?\.takeIf \{ HEX\.matches\(it\) \}/);
   });
 
   it('the End drive action only while stopped (and not ended); tapping opens the app', () => {

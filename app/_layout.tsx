@@ -20,6 +20,7 @@ import { callRpc } from '@/data/server/rpc';
 import { DataProvider } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
 import { registerBeforeSignOut, SessionProvider, useSession } from '@/data/supabase/session';
+import { setDisplayLook } from '@/drive/displayLook';
 import { DriveProvider } from '@/drive/DriveProvider';
 import { tripRecords } from '@/drive/policy';
 import { AuthGate } from '@/features/auth/AuthGate';
@@ -29,6 +30,8 @@ import { LockoutGate } from '@/features/drive/LockoutGate';
 import { NotificationsHost, reminderStartGate } from '@/features/notifications';
 import { syncNotificationPrefs } from '@/features/settings/notifications/sync';
 import { ThemeProvider } from '@/ui';
+import { lookFor } from '@/ui/sky/look';
+import { skyBundle } from '@/ui/sky/palette';
 import { appSkyPorts } from '@/ui/sky/ports';
 import { SkyChrome } from '@/ui/sky/SkyChrome';
 import { useSkyMood } from '@/ui/sky/useSkyMood';
@@ -99,6 +102,10 @@ export default function RootLayout() {
   // The sky the theme wears: the sun at the phone's last known position and the weather there.
   // Read from the first render, behind the splash, so the first frame already has it.
   const mood = useSkyMood(appSkyPorts);
+  // The Live Activity and the Android drive notification wear the same sky (`src/drive/displayLook.ts`).
+  useEffect(() => {
+    setDisplayLook(lookFor(skyBundle(mood)));
+  }, [mood]);
   const [timedOut, setTimedOut] = useState(false);
   // The record: SQLite opened and migrated, the interrupted drive recovered or adopted, the drive
   // host started, the sync runner started (`src/boot/bootstrap.ts`). The controller owns it: the

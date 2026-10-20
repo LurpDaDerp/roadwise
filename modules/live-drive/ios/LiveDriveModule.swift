@@ -52,6 +52,10 @@ struct LiveDriveStateRecord: Record {
   @Field var points: Double?
   @Field var pointsDelta: Double?
   @Field var stopped: Bool = false
+  @Field var skyTop: String?
+  @Field var skyMid: String?
+  @Field var skyLow: String?
+  @Field var accent: String?
 
   @available(iOS 16.2, *)
   var contentState: LiveDriveAttributes.ContentState {
@@ -61,7 +65,11 @@ struct LiveDriveStateRecord: Record {
       unit: unit == "km/h" ? "km/h" : "mph",
       points: points,
       pointsDelta: pointsDelta,
-      stopped: stopped
+      stopped: stopped,
+      skyTop: skyTop,
+      skyMid: skyMid,
+      skyLow: skyLow,
+      accent: accent
     )
   }
 }

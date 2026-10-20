@@ -145,6 +145,10 @@ describe('every method goes to native with its arguments', () => {
       stopped: false,
       ended: true,
     });
+    // The app's sky, "#RRGGBB" or null.
+    const sky = { ...display, skyTop: '#0B2A5C', skyMid: '#123B7A', skyLow: '#1A4C94', accent: null };
+    await DriveSense.setDriveDisplay(sky);
+    expect(mockNative.setDriveDisplay).toHaveBeenLastCalledWith(sky);
   });
 
   test('query methods resolve native results', async () => {
@@ -311,6 +315,7 @@ describe('bridge validation', () => {
     ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'knots', points: null, pointsDelta: null, stopped: true }]],
     ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null }]],
     ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, extra: 1 }]],
+    ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, skyMid: 'rgba(0, 0, 0, 1)' }]],
     ['selfTest', [{}]],
     ['setTripReminder', ['yes']],
     ['claimReminderTap', ['']],

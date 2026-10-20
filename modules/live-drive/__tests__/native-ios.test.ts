@@ -2,7 +2,7 @@
 // The Swift half of live-drive (the Expo module and the widget extension target) cannot be compiled
 // here, so this suite pins what can be checked as text: the bridge surface, the one rule that the
 // ActivityAttributes type is byte-identical in the app and the widget (ActivityKit matches them by
-// type), the iOS 16.2 gate, the palette and copy of the widget, and the config plugin wiring.
+// type), the iOS 16.2 gate, the palette, the sky and copy of the widget, and the config plugin wiring.
 import { LIVE_DRIVE_METHODS } from '../src/types';
 
 declare const __dirname: string;
@@ -80,7 +80,28 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(bridge).toMatch(/Notification\.Name\("roadwise\.driveDisplay"\)/);
     expect(ctrl).toMatch(/if info\["ended"\] as\? Bool == true \{\s*self\.end\(\)/);
     expect(bridge).toMatch(/static func postEnded\(\)[\s\S]{0,160}"ended": true/);
-    for (const k of ['speed', 'limit', 'unit', 'points', 'pointsDelta', 'stopped']) expect(ctrl).toContain(`"${k}"`);
+    for (const k of ['speed', 'limit', 'unit', 'points', 'pointsDelta', 'stopped', 'skyTop', 'skyMid', 'skyLow', 'accent']) expect(ctrl).toContain(`"${k}"`);
+    // the sky arrives as strings
+    for (const k of ['skyTop', 'skyMid', 'skyLow', 'accent']) expect(ctrl).toContain(`${k}: text("${k}")`);
+  });
+
+  it('the bridge record carries the sky into the content state', () => {
+    const src = module();
+    const record = /struct LiveDriveStateRecord: Record \{([\s\S]*?)\n {2}@available/.exec(src)?.[1] ?? '';
+    const fields = [...record.matchAll(/@Field var (\w+): ([\w?]+)/g)].map((m) => `${m[1]}: ${m[2]}`);
+    expect(fields).toEqual([
+      'speed: Double?',
+      'limit: Double?',
+      'unit: String',
+      'points: Double?',
+      'pointsDelta: Double?',
+      'stopped: Bool',
+      'skyTop: String?',
+      'skyMid: String?',
+      'skyLow: String?',
+      'accent: String?',
+    ]);
+    for (const k of ['skyTop', 'skyMid', 'skyLow', 'accent']) expect(src).toContain(`${k}: ${k}`);
   });
 
   it('the podspec links ActivityKit weakly (iOS 15.1 minimum stays)', () => {
@@ -100,10 +121,21 @@ describe('live-drive: the widget extension target', () => {
     expect(src).toMatch(/struct LiveDriveAttributes: ActivityAttributes/);
     const state = /struct ContentState: Codable, Hashable \{([\s\S]*?)\n {2}\}/.exec(src)?.[1] ?? '';
     const fields = [...state.matchAll(/var (\w+): ([\w?]+)/g)].map((m) => `${m[1]}: ${m[2]}`);
-    expect(fields).toEqual(['speed: Double?', 'limit: Double?', 'unit: String', 'points: Double?', 'pointsDelta: Double?', 'stopped: Bool']);
+    expect(fields).toEqual([
+      'speed: Double?',
+      'limit: Double?',
+      'unit: String',
+      'points: Double?',
+      'pointsDelta: Double?',
+      'stopped: Bool',
+      'skyTop: String?',
+      'skyMid: String?',
+      'skyLow: String?',
+      'accent: String?',
+    ]);
   });
 
-  it('is a widget target at iOS 16.2 with SwiftUI, WidgetKit and ActivityKit, in the navy/gold palette', () => {
+  it('is a widget target at iOS 16.2 with SwiftUI, WidgetKit and ActivityKit, navy/gold until the app sends its sky', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- the target config is CommonJS by the plugin's rule
     const cfg = require(path.join(WIDGET_DIR, 'expo-target.config.js')) as Record<string, unknown>;
     expect(cfg.type).toBe('widget');
@@ -131,6 +163,29 @@ describe('live-drive: the widget extension target', () => {
     expect(src).toMatch(/red: 255 \/ 255, green: 195 \/ 255, blue: 0 \/ 255/);
     // nothing interactive
     expect(src).not.toMatch(/Button\(|Link\(|widgetURL/);
+  });
+
+  it("wears the app's sky: the lock screen's gradient, its tint, the island's keyline; navy and gold without it", () => {
+    const src = code(WIDGET_DIR, 'LiveDriveWidgetBundle.swift');
+    // "#RRGGBB" only; anything else (or nil) is no colour
+    expect(src).toMatch(/init\?\(hex: String\?\) \{\s*guard let hex = hex, hex\.count == 7, hex\.hasPrefix\("#"\) else \{ return nil \}/);
+    expect(src).toMatch(/allSatisfy\(\{ \$0\.isHexDigit \}\), let n = UInt32\(digits, radix: 16\) else \{ return nil \}/);
+    // the gradient only with all three stops, top to bottom; navy otherwise
+    expect(src).toMatch(
+      /if let top = Color\(hex: state\.skyTop\), let mid = Color\(hex: state\.skyMid\), let low = Color\(hex: state\.skyLow\) \{\s*LinearGradient\(colors: \[top, mid, low\], startPoint: \.top, endPoint: \.bottom\)\s*\} else \{\s*Palette\.navy\s*\}/
+    );
+    expect(src).toMatch(/\.background \{ ground \}/);
+    expect(src).toContain('.activityBackgroundTint(Color(hex: state.skyMid) ?? Palette.navy)');
+    expect(src).toContain('.keylineTint(Color(hex: state.accent) ?? Palette.gold)');
+    // the limit sign's ring is the driving screen's red; the points line white, total only
+    expect(src).toMatch(/signRed = Color\(red: 215 \/ 255, green: 38 \/ 255, blue: 61 \/ 255\)/);
+    expect(src).toContain('Circle().strokeBorder(Palette.signRed,');
+    expect(src).toMatch(/static let points = Color\.white\.opacity\(0\.85\)/);
+    expect(src).toContain('Text(Format.points(p))');
+    expect(src).toContain('.foregroundColor(Palette.points)');
+    expect(src).toMatch(/static func points\(_ points: Double\) -> String \{/);
+    expect(src).toContain('return "\\(total) pts"');
+    expect(src).not.toMatch(/pointsDelta(?! = nil)/);
   });
 });
 

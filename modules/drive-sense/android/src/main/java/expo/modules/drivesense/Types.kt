@@ -38,13 +38,22 @@ data class DriveDisplay(
   val points: Double?,
   val pointsDelta: Double?,
   val stopped: Boolean,
-  val ended: Boolean
+  val ended: Boolean,
+  /** The app's sky ("#RRGGBB"): the driving screen's deepened sky top to bottom, and the sky accent. */
+  val skyTop: String? = null,
+  val skyMid: String? = null,
+  val skyLow: String? = null,
+  val accent: String? = null
 ) {
   companion object {
-    /** Before JS has sent anything: "— mph · limit —", no points, no action. */
+    /** Before JS has sent anything: "— mph · limit —", no points, no action, the plain look. */
     val EMPTY = DriveDisplay(null, null, "mph", null, null, stopped = false, ended = false)
 
     private fun num(v: Any?): Double? = (v as? Number)?.toDouble()?.takeIf { it.isFinite() }
+
+    private val HEX = Regex("^#[0-9A-Fa-f]{6}$")
+
+    private fun hex(v: Any?): String? = (v as? String)?.takeIf { HEX.matches(it) }
 
     fun from(m: Map<String, Any?>): DriveDisplay = DriveDisplay(
       speed = num(m["speed"]),
@@ -53,7 +62,11 @@ data class DriveDisplay(
       points = num(m["points"]),
       pointsDelta = num(m["pointsDelta"]),
       stopped = m["stopped"] as? Boolean ?: false,
-      ended = m["ended"] as? Boolean ?: false
+      ended = m["ended"] as? Boolean ?: false,
+      skyTop = hex(m["skyTop"]),
+      skyMid = hex(m["skyMid"]),
+      skyLow = hex(m["skyLow"]),
+      accent = hex(m["accent"])
     )
   }
 }
