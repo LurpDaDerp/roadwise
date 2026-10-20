@@ -5,7 +5,7 @@ import { StyleSheet, View, type TextStyle, type ViewStyle } from 'react-native';
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
 import { draw, drive, HOUR, NOW, press } from '@/features/drives/__fixtures__/drives';
 import { setMapsForTests, type MapsModule } from '@/features/settings/maps';
-import { contrastRatio, mix } from '@/ui';
+import { contrastRatio } from '@/ui';
 import { ThemeProvider } from '@/ui/theme';
 import { tokens } from '@/ui/tokens';
 
@@ -19,7 +19,7 @@ import { axisAt, RADAR_LABEL_MAX_SCALE, radarGeometry, radarLabel, radarPoint, r
 import { SummaryCard } from '../SummaryCard';
 import { AXIS_GAP, axisTicks, axisWidth, chartBoxHeight, monotonePath, PLOT_EDGE, plotPoint, trendLabel, trendValue, visibleTicks } from '../TrendCard';
 import { TripsMapCard } from '../TripsMapCard';
-import { bandSpan, busiest, cellAlpha, WhenYouDriveCard } from '../WhenYouDriveCard';
+import { bandSpan, busiest, cellLevel, HEAT_RAMP, WhenYouDriveCard } from '../WhenYouDriveCard';
 
 const light = tokens.color.light;
 
@@ -714,14 +714,15 @@ describe('WhenYouDriveCard', () => {
     drive({ clientTripId: 'c', startedAt: NOW - 16 * HOUR }),
   ];
 
-  test('weekday rows by 3-hour columns, shaded by count in the page ink, with the busiest slot', async () => {
+  test('weekday rows by 3-hour columns, coloured by count on a five-step scale with a key, with the busiest slot', async () => {
     const grid = driveGrid(list, null);
     await draw(<WhenYouDriveCard grid={grid} />);
     expect(screen.getByText('When you drive')).toBeOnTheScreen();
     for (const tick of ['12a', '6a', '12p', '6p']) expect(screen.getByText(tick)).toBeOnTheScreen();
     expect(screen.queryByText('3a')).toBeNull();
     expect(screen.getAllByText('S')).toHaveLength(2);
-    expect(screen.getByTestId('grid-0-4')).toHaveStyle({ backgroundColor: light.text });
+    expect(screen.getByTestId('grid-0-4')).toHaveStyle({ backgroundColor: HEAT_RAMP.light[4] });
+    expect(screen.getByTestId('analytics-grid-key')).toHaveTextContent('FewerMore');
     expect(screen.getByTestId('grid-0-0')).toHaveStyle({ backgroundColor: 'transparent', borderWidth: 1, borderColor: light.border });
     expect(screen.getByTestId('analytics-grid-busiest')).toHaveTextContent('Busiest: Mon 12p–3p');
     expect(screen.getByLabelText('When you drive. 3 drives. Busiest: Monday 12p–3p, 2 drives.')).toBeOnTheScreen();
@@ -738,9 +739,11 @@ describe('WhenYouDriveCard', () => {
     expect(Number(flat(screen.getByTestId('grid-day-0')).width)).toBeGreaterThanOrEqual(tokens.type.caption.fontSize * 2);
   });
 
-  test('a one-drive cell stands at 3:1 against the card in both schemes', () => {
-    for (const c of [tokens.color.light, tokens.color.dark]) {
-      expect(contrastRatio(mix(c.surface, c.text, cellAlpha(1, 10)), c.surface)).toBeGreaterThanOrEqual(3);
+  test('every step stands at 3:1 against the card in both schemes, and each scheme’s steps run from faint to strong', () => {
+    for (const [scheme, c] of [['light', tokens.color.light], ['dark', tokens.color.dark]] as const) {
+      const ratios = HEAT_RAMP[scheme].map((step) => contrastRatio(step, c.surface));
+      for (const r of ratios) expect(r).toBeGreaterThanOrEqual(3);
+      for (let i = 1; i < ratios.length; i++) expect(ratios[i]!).toBeGreaterThan(ratios[i - 1]!);
     }
   });
 
@@ -752,9 +755,11 @@ describe('WhenYouDriveCard', () => {
 
   test('helpers', () => {
     expect(bandSpan(7)).toBe('9p–12a');
-    expect(cellAlpha(0, 3)).toBe(0);
-    expect(cellAlpha(3, 3)).toBe(1);
-    expect(cellAlpha(1, 3)).toBeGreaterThan(0.45);
+    expect(cellLevel(0, 3)).toBe(0);
+    expect(cellLevel(3, 3)).toBe(5);
+    expect(cellLevel(1, 3)).toBe(2);
+    expect(cellLevel(1, 50)).toBe(1);
+    expect([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => cellLevel(n, 10))).toEqual([1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
     expect(busiest(driveGrid([], null))).toBeNull();
   });
 });

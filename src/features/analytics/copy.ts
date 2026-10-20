@@ -72,6 +72,9 @@ export const analyticsCopy = {
     title: 'When you drive',
     empty: 'No drives yet',
     busiest: 'Busiest',
+    /** The colour key's ends. */
+    fewer: 'Fewer',
+    more: 'More',
   },
   map: {
     title: 'All trips',

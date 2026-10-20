@@ -1,6 +1,6 @@
 import { View } from 'react-native';
 
-import { Card, Text, useFontScale, useTheme, withAlpha } from '@/ui';
+import { Card, Text, useFontScale, useTheme } from '@/ui';
 
 import { analyticsCopy } from './copy';
 import { BAND_LABELS, BAND_TICKS, WEEKDAY_LABELS, type DriveGrid } from './model';
@@ -29,22 +29,30 @@ export function busiest(grid: DriveGrid): { day: number; band: number; count: nu
 export const bandSpan = (band: number): string => `${BAND_LABELS[band]}–${BAND_LABELS[(band + 1) % BAND_LABELS.length]}`;
 
 /**
- * How strong a cell's ink is: nothing for no drives, then a ramp up to the busiest that starts
- * dark enough for a one-drive cell to stand at 3:1 against the card. Empty cells are an outline
- * as well, so they differ by shape and not only by shade.
+ * The colour steps, fewest to most drives: teal through blue to deep violet on the light card,
+ * blue through teal to lime on the dark one (a viridis-like order), so the busiest cell always
+ * stands out most. Even the first step stands at 3:1 against its card; empty cells are an outline
+ * instead, so they differ by shape too.
  */
-export const CELL_ALPHA_MIN = 0.45;
-export const cellAlpha = (count: number, max: number): number =>
-  count <= 0 || max <= 0 ? 0 : CELL_ALPHA_MIN + (1 - CELL_ALPHA_MIN) * (count / max);
+export const HEAT_STEPS = 5;
+export const HEAT_RAMP = {
+  light: ['#2A9D8F', '#2B83BA', '#3B5BA9', '#4A2F8F', '#2A0F5C'],
+  dark: ['#2B83BA', '#2FA3B5', '#4CC0A8', '#8FD98C', '#D9F07A'],
+} as const satisfies Record<'light' | 'dark', readonly string[]>;
+
+/** A cell's step: 0 for no drives, then 1–5 by its share of the busiest cell (a single drive is at least 1). */
+export const cellLevel = (count: number, max: number): number =>
+  count <= 0 || max <= 0 ? 0 : Math.max(1, Math.min(HEAT_STEPS, Math.ceil((count / max) * HEAT_STEPS)));
 
 /**
  * When the range's drives start: weekdays down the side (Monday first), 3-hour bands across,
- * each cell shaded in the page ink by how many drives started there.
+ * each cell coloured on a five-step scale by how many drives started there, with a Fewer–More key.
  */
 export function WhenYouDriveCard({ grid }: { grid: DriveGrid }) {
   const t = useTheme();
   const labelCol = Math.max(LABEL_COL, Math.ceil(sizeAt('caption', useFontScale()).fontSize * 1.1));
   const top = busiest(grid);
+  const ramp = HEAT_RAMP[t.scheme === 'dark' ? 'dark' : 'light'];
   const spoken = top
     ? `${analyticsCopy.grid.title}. ${grid.total} ${grid.total === 1 ? 'drive' : 'drives'}. ${analyticsCopy.grid.busiest}: ${WEEKDAY_NAMES[top.day]} ${bandSpan(top.band)}, ${top.count} ${top.count === 1 ? 'drive' : 'drives'}.`
     : `${analyticsCopy.grid.title}. ${analyticsCopy.grid.empty}.`;
@@ -66,7 +74,7 @@ export function WhenYouDriveCard({ grid }: { grid: DriveGrid }) {
                 {WEEKDAY_LABELS[day]}
               </Text>
               {row.map((count, band) => {
-                const a = cellAlpha(count, grid.max);
+                const level = cellLevel(count, grid.max);
                 return (
                   <View
                     key={band}
@@ -76,8 +84,8 @@ export function WhenYouDriveCard({ grid }: { grid: DriveGrid }) {
                       height: CELL_H,
                       borderRadius: 5,
                       borderCurve: 'continuous',
-                      backgroundColor: a > 0 ? withAlpha(t.colors.text, a) : 'transparent',
-                      borderWidth: a > 0 ? 0 : 1,
+                      backgroundColor: level > 0 ? ramp[level - 1] : 'transparent',
+                      borderWidth: level > 0 ? 0 : 1,
                       borderColor: t.colors.border,
                     }}
                   />
@@ -93,11 +101,26 @@ export function WhenYouDriveCard({ grid }: { grid: DriveGrid }) {
               </Text>
             ))}
           </View>
-          {top ? (
-            <Text variant="footnote" tone="subtle" testID="analytics-grid-busiest">
-              {`${analyticsCopy.grid.busiest}: ${WEEKDAY_SHORT[top.day]} ${bandSpan(top.band)}`}
-            </Text>
-          ) : null}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: t.space.sm, marginTop: GAP }}>
+            {top ? (
+              <Text variant="footnote" tone="subtle" style={{ flexShrink: 1 }} testID="analytics-grid-busiest">
+                {`${analyticsCopy.grid.busiest}: ${WEEKDAY_SHORT[top.day]} ${bandSpan(top.band)}`}
+              </Text>
+            ) : (
+              <View />
+            )}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }} testID="analytics-grid-key">
+              <Text variant="caption" tone="muted">
+                {analyticsCopy.grid.fewer}
+              </Text>
+              {ramp.map((c) => (
+                <View key={c} style={{ width: 12, height: 12, borderRadius: 3, backgroundColor: c }} />
+              ))}
+              <Text variant="caption" tone="muted">
+                {analyticsCopy.grid.more}
+              </Text>
+            </View>
+          </View>
         </View>
       )}
     </Card>
