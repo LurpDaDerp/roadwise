@@ -122,7 +122,8 @@ export function createEngine(deps: EngineDeps): Engine {
       startedAt: session?.startedAt ?? null,
       lastRowTs: row?.ts ?? null,
       speedMps: shown?.mps ?? 0,
-      speedKnown: shown !== null,
+      // Never "—" during a drive: 0 until the first row (`displaySpeed.ts`).
+      speedKnown: session !== null || shown !== null,
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
       limitMph: seen?.limitMph ?? null,
       speedingTier: status === 'recording' && open !== null ? open.tier : null,

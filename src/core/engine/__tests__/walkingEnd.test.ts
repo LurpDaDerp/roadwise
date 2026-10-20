@@ -402,7 +402,7 @@ describe('15. S2: the shown speed', () => {
     expect((await shown({ speed: 0.8, speedAcc: 0.5 })).speedMps).toBe(0);
     expect((await shown({ speed: 0.8, speedAcc: -1 })).speedMps).toBe(0);
     expect((await shown({ speed: 1.5, speedAcc: 3.0 })).speedMps).toBe(1.5);
-    expect(await shown({ speed: -1, gnssValid: false })).toMatchObject({ speedMps: 0, speedKnown: false });
+    expect(await shown({ speed: -1, gnssValid: false })).toMatchObject({ speedMps: 0, speedKnown: true });
   });
 
   test('stopped and lockedOut read the raw speed', async () => {

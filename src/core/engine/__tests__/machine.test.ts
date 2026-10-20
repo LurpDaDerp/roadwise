@@ -212,7 +212,7 @@ describe('the warm-up in a live drive (Start Drive at any speed)', () => {
   });
 });
 
-test('S3: a row that lost its fix keeps the last shown speed for up to 3 s, then shows none; stopped reads the raw fix', async () => {
+test('S3: a row that lost its fix keeps the last shown speed, never "—"; stopped reads the raw fix', async () => {
   const h = harness();
   await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
   await feed(h, after(2, { speed: mph(30) }));
@@ -223,7 +223,7 @@ test('S3: a row that lost its fix keeps the last shown speed for up to 3 s, then
   await feed(h, [row(at(3), 0)]);
   expect(h.engine.snapshot()).toMatchObject({ speedKnown: true, speedMps: mph(30) });
   await feed(h, [row(at(4), 0)]);
-  expect(h.engine.snapshot()).toMatchObject({ speedKnown: false, speedMps: 0 });
+  expect(h.engine.snapshot()).toMatchObject({ speedKnown: true, speedMps: mph(30) });
   // A fix back resets the hold to the new speed.
   await feed(h, [row({ speed: mph(20), ts: T0 + 37_000 }, 0)]);
   expect(h.engine.snapshot()).toMatchObject({ speedKnown: true, speedMps: mph(20) });

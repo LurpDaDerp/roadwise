@@ -196,7 +196,8 @@ test.each(START_ANY_SPEED)('start with %s', async (_label, speedMps) => {
     h,
     rows(1, speedMps === null ? { speedMps: 0, over: () => ({ gnssValid: false, speed: -1 }) } : { speedMps })
   );
-  expect(h.host.snapshot()).toMatchObject({ status: 'recording', speedKnown: speedMps !== null, lockedOut: speedMps !== null && speedMps > 5 * 0.44704 });
+  // The speed is always shown during a drive: 0 with no fix yet.
+  expect(h.host.snapshot()).toMatchObject({ status: 'recording', speedKnown: true, lockedOut: speedMps !== null && speedMps > 5 * 0.44704 });
   await h.host.stop({ endOpenTrip: true });
 });
 
@@ -286,14 +287,14 @@ test('points clear the moment the stop is no longer confirmed, even with the fix
   await feed(h, rows(3, { speedMps: 0, t0: T0 + 60_000 }));
   expect(h.host.snapshot().points).not.toBeNull();
   expect(h.display.log.at(-1)).toBe('update 0/35/null');
-  // Pulling away under a bridge: no fix, so not stopped and no points at once; the shown speed holds
-  // for 3 s (S3), then there is no known speed either.
+  // Pulling away under a bridge: no fix, so not stopped and no points at once; the shown speed (0)
+  // holds (S3): the screen never shows "—" for the speed.
   await feed(h, rows(1, { speedMps: 15, t0: T0 + 63_000, over: () => ({ gnssValid: false, speed: -1, hAcc: -1 }) }));
   expect(h.host.snapshot()).toMatchObject({ speedKnown: true, speedMps: 0, stopped: false, points: null });
   await feed(h, rows(3, { speedMps: 15, t0: T0 + 64_000, over: () => ({ gnssValid: false, speed: -1, hAcc: -1 }) }));
   const snap = h.host.snapshot();
-  expect(snap).toMatchObject({ speedKnown: false, stopped: false, points: null });
-  expect(h.display.log.at(-1)).toBe('update null/null/null'); // no fix: no speed, no limit, no points
+  expect(snap).toMatchObject({ speedKnown: true, speedMps: 0, stopped: false, points: null });
+  expect(h.display.log.at(-1)).toBe('update 0/null/null'); // no fix: the held speed, no limit, no points
   await h.host.stop({ endOpenTrip: true });
 });
 

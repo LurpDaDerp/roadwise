@@ -8,7 +8,9 @@
 //   or while it already shows 0 and the IMU does not say the car is pulling away (`LEAVE_ZERO_MPS2`;
 //   GPS drift jumps, so its change alone never leaves 0).
 // - S3: a row that lost its fix keeps the last shown speed while that is `SPEED_HOLD_MS` old or
-//   less; then there is none ("—").
+//   less. Past that it shows 0 when the car is still or already showed 0 (a parked phone often
+//   stops reporting a speed at all), and otherwise keeps holding the last speed. Before the first
+//   fix it is 0. The screen never shows "—" for the speed.
 import type { FeatureRow } from './types';
 
 import { MPS_PER_MPH } from '@/core/detectors/common';
@@ -23,7 +25,7 @@ export const STOP_DISPLAY_MAX_MPS = 3 * MPS_PER_MPH;
 export const LEAVE_ZERO_MPS2 = 0.3;
 /** S2: still when the aligned forward acceleration stays within ± this all second (g). */
 export const STILL_LON_G = 0.02;
-/** S3: a row that lost its fix holds the last shown speed while that is this recent (row clock). */
+/** S3: a row that lost its fix holds the last shown speed unconditionally while that is this recent (row clock). */
 export const SPEED_HOLD_MS = 3_000;
 
 export type DisplaySpeed = {
@@ -48,13 +50,14 @@ function still(row: FeatureRow): boolean {
 }
 
 /**
- * The next value from `prev` and a row whose known speed is `known` (m/s; null when the row lost
- * its fix). Null when there is nothing to show.
+ * The next value from `prev` (null before the first row) and a row whose known speed is `known`
+ * (m/s; null when the row lost its fix). There is always a value: no fix yet is 0.
  */
-export function nextDisplaySpeed(prev: DisplaySpeed | null, row: FeatureRow, known: number | null): DisplaySpeed | null {
+export function nextDisplaySpeed(prev: DisplaySpeed | null, row: FeatureRow, known: number | null): DisplaySpeed {
   if (known === null) {
-    if (prev === null || row.ts - prev.fixTs > SPEED_HOLD_MS) return null;
-    return prev;
+    if (prev === null) return { mps: 0, zero: true, fixTs: row.ts };
+    if (row.ts - prev.fixTs <= SPEED_HOLD_MS || (!prev.zero && !still(row))) return prev;
+    return prev.zero ? prev : { mps: 0, zero: true, fixTs: prev.fixTs };
   }
   const v = Math.max(0, known);
   const wasZero = prev === null || prev.zero;

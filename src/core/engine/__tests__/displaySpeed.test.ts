@@ -54,15 +54,30 @@ describe('S2: 0 mph reads 0', () => {
 });
 
 describe('S3: a lost fix', () => {
-  test('holds the last speed flat for up to 3 s, then nothing', () => {
+  test('holds the last speed flat for 3 s, and past that while the car may still be moving: never "—"', () => {
     const lost = { known: null, gnssValid: false, speed: -1 };
-    const out = run([{ speed: 10 }, { speed: 12 }, lost, lost, lost, lost]);
+    const out = run([{ speed: 10 }, { speed: 12 }, lost, lost, lost, lost, lost]);
     expect(out[2]).toMatchObject({ mps: 12 });
     expect(out[4]).toMatchObject({ mps: 12 });
-    expect(out[5]).toBeNull();
+    // No IMU word that the car stopped: the last speed holds.
+    expect(out[5]).toMatchObject({ mps: 12, zero: false });
+    expect(out[6]).toMatchObject({ mps: 12, zero: false });
   });
 
-  test('nothing to hold before the first fix', () => {
-    expect(run([{ known: null }])[0]).toBeNull();
+  test('past 3 s without a fix a still car reads 0 (a parked phone often stops reporting a speed)', () => {
+    const lostStill = { known: null, gnssValid: false, speed: -1, aLonMax: 0.005, aLonMin: -0.005 };
+    const out = run([{ speed: 12 }, lostStill, lostStill, lostStill, lostStill]);
+    expect(out[3]).toMatchObject({ mps: 12 });
+    expect(out[4]).toMatchObject({ mps: 0, zero: true });
+  });
+
+  test('a car already showing 0 keeps 0 through a lost fix, however long', () => {
+    const lost = { known: null, gnssValid: false, speed: -1 };
+    const out = run([{ speed: 0 }, ...Array.from({ length: 20 }, () => lost)]);
+    for (const o of out) expect(o).toMatchObject({ mps: 0, zero: true });
+  });
+
+  test('before the first fix it is 0', () => {
+    expect(run([{ known: null }])[0]).toMatchObject({ mps: 0, zero: true });
   });
 });
