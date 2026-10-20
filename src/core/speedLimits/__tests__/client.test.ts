@@ -10,10 +10,11 @@ import {
   TRUNCATED_TILE_TTL_MS,
   UNKNOWN_ROWS_BEFORE_POINT_LOOKUP,
   WARM_AHEAD_M,
+  WARM_AROUND_M,
   WARM_REPEAT_MS,
   type SpeedLimitClient,
 } from '@/core/speedLimits/client';
-import { fillCellKey, prefetchSet, tileBounds, tileFor, tileKey } from '@/core/speedLimits/tiles';
+import { fillCellKey, parseTileKey, prefetchSet, tileBounds, tileFor, tileKey } from '@/core/speedLimits/tiles';
 import { type LimitSegment, MAX_TILE_TTL_MS, type PointResponse, type TileBatchResponse } from '@/core/speedLimits/wire';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
@@ -348,8 +349,8 @@ describe('honesty (§13.2, rev1: I8)', () => {
     // A tunnel: the row keeps the last fix's position, course -1, no speed.
     expect(client.lookup(LAT, LNG0, -1, { gnssValid: false, speedMps: null })).toBeNull();
     expect(client.lookup(LAT, LNG0, EAST, { gnssValid: false, speedMps: 20 })).toBeNull();
-    // Out of the tunnel, stopped with no course: the pre-tunnel match is not carried over.
-    expect(client.lookup(LAT, LNG0, -1, STOPPED)).toBeNull();
+    // Out of the tunnel, stopped with no course 40 m off the road: the pre-tunnel match is not carried over.
+    expect(client.lookup(LAT + mLat(40), LNG0, -1, STOPPED)).toBeNull();
   });
 
   it('stopped with no course, the previous match holds within 30 m and nowhere else', async () => {
@@ -359,9 +360,34 @@ describe('honesty (§13.2, rev1: I8)', () => {
     expect(STICKY_RADIUS_M).toBe(30);
     expect(MIN_MOVING_MPS).toBe(2);
     expect(client.lookup(LAT, LNG0 + mLng(10), -1, STOPPED)).toEqual(match);
-    expect(client.lookup(LAT, LNG0 + mLng(40), -1, STOPPED)).toBeNull();
+    expect(client.lookup(LAT + mLat(40), LNG0, -1, STOPPED)).toBeNull();
     expect(client.lookup(LAT, LNG0, -1, { gnssValid: true, speedMps: 5 })).toBeNull();
-    expect(client.lookup(LAT, LNG0, -1, { gnssValid: true, speedMps: null })).toBeNull();
+  });
+
+  it("standing with no course and nothing carried: the nearest road's own limit, matched along it; none within 25 m is null", async () => {
+    await loaded();
+    const posted = { limitMps: mphToMps(35), source: 'posted', matchConfidence: 0.95, parallelRoads: false };
+    expect(client.lookup(LAT, LNG0, -1, STOPPED)).toEqual(posted);
+    client.resetTrip();
+    await client.lookupStored(LAT, LNG0, EAST);
+    // An unknown speed with no course counts as standing.
+    expect(client.lookup(LAT + mLat(8), LNG0, -1, { gnssValid: true, speedMps: null })).toEqual(posted);
+    client.resetTrip();
+    await client.lookupStored(LAT, LNG0, EAST);
+    expect(client.lookup(LAT + mLat(40), LNG0, -1, STOPPED)).toBeNull();
+    // A reverse one-way is read against its digitised direction, so it still passes.
+    client.resetTrip();
+    await store(keyAt(LAT, LNG0), [road({ oneway: -1 })]);
+    await client.lookupStored(LAT, LNG0, EAST);
+    expect(client.lookup(LAT, LNG0, -1, STOPPED)).toEqual(posted);
+  });
+
+  it('standing with no course on a tile not loaded yet: null, and the tile is read from SQLite for the next row', async () => {
+    await store(keyAt(LAT, LNG0), [road()]);
+    make(fakeApi().api);
+    expect(client.lookup(LAT, LNG0, -1, STOPPED)).toBeNull();
+    await client.settled();
+    expect(client.lookup(LAT, LNG0, -1, STOPPED)?.limitMps).toBeCloseTo(mphToMps(35));
   });
 
   it("an untagged road is its class default (primary: 45), statutory, at the road match's confidence", async () => {
@@ -598,14 +624,45 @@ describe('the warm-up: the fill cells ahead start loading before the car gets th
     await client.settled();
     expect(getTiles).toHaveBeenCalledTimes(1);
     client.resetTrip();
-    client.startTrip(LAT, LNG0, -1);
+    client.prefetch(LAT, LNG0, -1);
     await client.settled();
-    expect(getTiles).toHaveBeenCalledTimes(2); // the 2 × 2 block only
+    expect(getTiles).toHaveBeenCalledTimes(2); // mid-trip with no course: the 2 × 2 block only
     client.resetTrip();
     online = false;
     client.startTrip(LAT, LNG0, EAST);
     await client.settled();
     expect(getTiles).toHaveBeenCalledTimes(2);
+  });
+
+  it('a trip that starts with no course warms the fill cells around it, and its first course asks for the tiles ahead once', async () => {
+    expect(WARM_AROUND_M).toBe(3000);
+    const { api, getTiles } = fakeApi();
+    make(api, warmOn).startTrip(LAT, LNG0, -1);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(2);
+    const block = prefetchSet(LAT, LNG0, -1).map(tileKey);
+    const calls = getTiles.mock.calls.map((c) => c[0]);
+    expect(calls).toContainEqual(block);
+    const around = calls.find((c) => c !== calls.find((k) => k.join() === block.join())) ?? [];
+    // 47.6062, -122.3321 sits 0.7 km above its cell's south edge and 2.5 km short of its east one:
+    // the cells south and east start loading, one tile each.
+    const cellOf = (k: string): string => {
+      const b = tileBounds(parseTileKey(k)!);
+      return fillCellKey((b.minLat + b.maxLat) / 2, (b.minLng + b.maxLng) / 2);
+    };
+    expect(around).toHaveLength(2);
+    expect(around.map(cellOf).sort()).toEqual([fillCellKey(LAT - mLat(3000), LNG0), fillCellKey(LAT, LNG0 + mLng(3000))].sort());
+    for (const k of around) expect(block).not.toContain(k);
+
+    const ahead = prefetchSet(LAT, LNG0, EAST).map(tileKey).filter((k) => !block.includes(k));
+    expect(ahead.length).toBeGreaterThan(0);
+    client.lookup(LAT, LNG0, EAST, MOVING);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(3);
+    expect(getTiles.mock.calls[2]?.[0]).toEqual(ahead);
+    client.lookup(LAT, LNG0 + mLng(20), EAST, MOVING);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(3);
   });
 
   it('a cell is warmed again no sooner than WARM_REPEAT_MS, and only while its tile is not fresh here', async () => {

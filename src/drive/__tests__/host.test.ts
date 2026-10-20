@@ -11,6 +11,7 @@ import { T0 } from '@/core/detectors/__fixtures__/rows';
 import { rows, START, TZ } from '@/core/engine/__fixtures__/drives';
 import type { LimitSample } from '@/core/engine/types';
 import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
+import { prefetchSet, tileKey } from '@/core/speedLimits/tiles';
 import type { LimitSegment, PointResponse, TileBatchResponse } from '@/core/speedLimits/wire';
 import { encodePolyline } from '@/lib/polyline';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
@@ -393,6 +394,36 @@ describe('the speed-limit lookup reads each row’s own fix', () => {
     }
   }
 
+  test("the tiles around the phone's cached position are asked for at the tap, before the first fix", async () => {
+    const { client, getTiles } = realLimits(35, null);
+    const h = build({ limits: client, lastPosition: async () => ({ lat: 47.62, lng: -122.35 }) });
+    await h.host.boot();
+    await h.host.start();
+    await h.host.settled();
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(1);
+    expect(getTiles.mock.calls[0]?.[0]).toEqual(prefetchSet(47.62, -122.35, -1).map(tileKey));
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('no cached position, or one that fails: nothing until the first fix, and the drive starts all the same', async () => {
+    const { client, getTiles } = realLimits(35, null);
+    const h = build({ limits: client, lastPosition: async () => null });
+    await h.host.boot();
+    expect((await h.host.start()).ok).toBe(true);
+    await client.settled();
+    expect(getTiles).not.toHaveBeenCalled();
+    await h.host.stop({ endOpenTrip: true });
+    const failing = build({ limits: client, lastPosition: () => Promise.reject(new Error('no fix')) });
+    await failing.host.boot();
+    expect((await failing.host.start()).ok).toBe(true);
+    await failing.host.settled();
+    await client.settled();
+    expect(getTiles).not.toHaveBeenCalled();
+    expect(failing.errors).toContain('lastPosition: no fix');
+    await failing.host.stop({ endOpenTrip: true });
+  });
+
   test('stopped at a light with no course (iPhone: -1), the sign keeps the limit it had; a lost fix drops it', async () => {
     const { client } = realLimits(35, null);
     const h = build({ limits: client });
@@ -404,11 +435,14 @@ describe('the speed-limit lookup reads each row’s own fix', () => {
     const at = driven.at(-1)!;
     await feedSettled(h, client, rows(5, { speedMps: 0, t0: at.ts + 1000, over: () => ({ lng: at.lng, course: -1 }) }));
     expect(h.host.snapshot()).toMatchObject({ stopped: true, limitMph: 35 });
-    // A lost fix: nothing is known, and the old match does not come back with the fix.
+    // A lost fix: nothing is known, and the old match does not come back with the fix (back 55 m off the road).
     await feedSettled(h, client, rows(1, { speedMps: 0, t0: at.ts + 6000, over: () => ({ lng: at.lng, course: -1, gnssValid: false, speed: -1, hAcc: -1 }) }));
     expect(h.host.snapshot().limitMph).toBeNull();
-    await feedSettled(h, client, rows(2, { speedMps: 0, t0: at.ts + 7000, over: () => ({ lng: at.lng, course: -1 }) }));
+    await feedSettled(h, client, rows(2, { speedMps: 0, t0: at.ts + 7000, over: () => ({ lat: at.lat + 0.0005, lng: at.lng, course: -1 }) }));
     expect(h.host.snapshot().limitMph).toBeNull();
+    // Back on the road, still standing: the road it stands on, matched afresh.
+    await feedSettled(h, client, rows(1, { speedMps: 0, t0: at.ts + 9000, over: () => ({ lng: at.lng, course: -1 }) }));
+    expect(h.host.snapshot().limitMph).toBe(35);
     await h.host.stop({ endOpenTrip: true });
   });
 

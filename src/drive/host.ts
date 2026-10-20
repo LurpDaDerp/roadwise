@@ -184,6 +184,11 @@ export interface DriveHostDeps {
    * Location Services switch and Precise Location (read only).
    */
   permissions?: () => Promise<DriveStartPermissions>;
+  /**
+   * The phone's cached position (no GPS of its own), or null. The speed-limit tiles around it are
+   * asked for the moment a drive starts, before its first fix.
+   */
+  lastPosition?: () => Promise<{ lat: number; lng: number } | null>;
   /** The cached summary context for the points estimate; null when nothing is cached. */
   context?: () => Promise<DriveContext | null>;
   voiceEnabled?: () => boolean;
@@ -626,6 +631,21 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
+  /**
+   * The speed-limit tiles around the phone's cached position, at the tap, while the capture waits
+   * for its first fix (which asks again from the fix itself: tiles already held cost nothing).
+   */
+  function fetchLimitsAtStart(id: string): void {
+    if (!deps.lastPosition) return;
+    deps
+      .lastPosition()
+      .then((p) => {
+        if (p === null || !startTripPending || engine.snapshot().clientTripId !== id) return;
+        limits.startTrip(p.lat, p.lng, -1);
+      })
+      .catch((e: unknown) => report(e, 'lastPosition'));
+  }
+
   /** iOS: the drive's first in-drive lock proof goes to native once, so later drives count switches from their start. */
   function writeProof(): void {
     if (proofWritten || suite === null || platform !== 'ios') return;
@@ -814,6 +834,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           return;
         }
         result = { ok: true, clientTripId: id };
+        if (persist) fetchLimitsAtStart(id);
         // A new drive replaces Home's notice about the last one that was not kept.
         if (persist) await clearDropNotice(db).catch((e: unknown) => report(e, 'dropNotice'));
       }, 'start');

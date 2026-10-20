@@ -100,6 +100,8 @@ export interface BootstrapDeps {
   display?: DriveDisplay | null;
   /** Just-in-time permissions for Start Drive. Default: `ensureDrivePermissions` (asks for location only). */
   permissions?: () => Promise<DriveStartPermissions>;
+  /** The phone's cached position for the speed-limit fetch at Start. Default: expo-location's last known (≤ 10 min old). */
+  lastPosition?: () => Promise<{ lat: number; lng: number } | null>;
   voiceEnabled?: () => boolean;
   attachSummaryNotifier?: ((host: DriveHost, db: Db) => { detach(): void; settled?(): Promise<void> }) | null;
   /**
@@ -372,6 +374,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       appVersion,
       permissions: deps.permissions ?? defaultPermissions(db),
       context: summaryContext,
+      lastPosition: deps.lastPosition ?? defaultLastPosition,
       voiceEnabled: deps.voiceEnabled ?? defaultVoiceEnabled,
       appState,
       alertsAvailable,
@@ -546,6 +549,21 @@ function defaultPermissions(db: Db): () => Promise<DriveStartPermissions> {
     const result = await ensureDrivePermissions({ settings: createSettingsRepo(db) }, { askMotion: false });
     return { location: result.location, precise: result.precise, services: result.services };
   };
+}
+
+/** A cached fix older than this says too little about where the car is. */
+const LAST_POSITION_MAX_AGE_MS = 10 * 60_000;
+
+/** expo-location's last known position (the OS's cached fix, no GPS of its own), loaded on first use; null on any failure. */
+async function defaultLastPosition(): Promise<{ lat: number; lng: number } | null> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
+    const Location = require('expo-location') as typeof import('expo-location');
+    const pos = await Location.getLastKnownPositionAsync({ maxAge: LAST_POSITION_MAX_AGE_MS });
+    return pos ? { lat: pos.coords.latitude, lng: pos.coords.longitude } : null;
+  } catch {
+    return null;
+  }
 }
 
 function defaultVoiceEnabled(): boolean {

@@ -23,6 +23,10 @@
 //   and that cell was not warmed in the last `WARM_REPEAT_MS`. The request makes the server start
 //   loading that area from OpenStreetMap minutes before the car gets there, so the tiles the
 //   prefetch later asks for there come back filled. A cell already cached here costs nothing.
+//   A trip that starts with no course (standing still, or from the phone's cached position before
+//   the first fix) asks for the 2x2 block of tiles around the car and warms the fill cells
+//   `WARM_AROUND_M` away in eight directions instead, and the first lookup with a course then makes
+//   the batch along it (once, not per row) rather than waiting for the next kilometre's prefetch.
 // - **Memory (rev1: I7).** At most `MEMORY_TILES` decoded tiles (`store.ts`), each decoded once
 //   whether it came from the network or SQLite; recovery's `lookupStored` shares the same LRU and
 //   reads each tile from SQLite once, not once per row.
@@ -31,7 +35,9 @@
 //   SQLite for the next row); a loaded tile with no established road is `unknown`; an established
 //   road with no posted limit is its class default, `statutory` (the matcher's table), which the
 //   sign shows and nothing scores. The one carry-over: stopped (valid fix, no course, under 2 m/s)
-//   within 30 m of the last match. A server point answer (posted or cached) beats a default.
+//   within 30 m of the last match. Standing with no course and nothing carried (the drive's first
+//   seconds), the nearest road within 25 m is matched as if heading along it, by the matcher's own
+//   rules; no road near, or none with a limit, is null. A server point answer (posted or cached) beats a default.
 // - **Confidence.** `matchConfidence` is the matcher's, unaltered — with one exception: a match
 //   near a tile the server truncated is capped at `TRUNCATED_CONFIDENCE_CAP` (0.6). The server cuts
 //   a dense tile by road class (minor classes first), not by place, so the car's own road can be
@@ -89,6 +95,8 @@ export const FILLING_RETRY_MS = 25_000;
 export const FILLING_RETRIES_MAX = 6;
 /** How far ahead along the course the next fill cells are warmed (see the header). */
 export const WARM_AHEAD_M: readonly number[] = [3000, 6000];
+/** With no course at the trip's start, the fill cells this far away in any of eight directions are warmed. */
+export const WARM_AROUND_M = 3000;
 /** A warmed cell is asked about again no sooner than this: a fill the server put off, or one still loading. */
 export const WARM_REPEAT_MS = 60_000;
 
@@ -231,6 +239,8 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
   let pointInFlight = false;
   let unknownRun = 0;
   let last: { lat: number; lng: number; sample: LimitSample } | null = null;
+  /** The last batch was made with no course: the first row with one asks for the tiles ahead. */
+  let courselessBatch = false;
 
   function track<T>(p: Promise<T>): Promise<T> {
     work.add(p);
@@ -345,23 +355,32 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     }
   }
 
-  function batch(lat: number, lng: number, course: number): void {
+  function batch(lat: number, lng: number, course: number, start = false): void {
     pointAllowed = true;
     // Not gated on being online: `runBatch` preloads the tiles ahead from SQLite either way.
     if (!finite(lat, lng)) return;
+    courselessBatch = !(course >= 0) || !Number.isFinite(course);
     const keys = prefetchSet(lat, lng, course).map(tileKey);
     void track(runBatch(keys, generation, counters));
-    warm(lat, lng, course);
+    if (courselessBatch) {
+      if (start) warmAround(lat, lng);
+    } else warm(lat, lng, [normalizeDeg(course)], warmAheadM);
   }
 
-  /** The warm-up (see the header): one request for the tiles ahead that lie in other fill cells. */
-  function warm(lat: number, lng: number, course: number): void {
-    if (!(course >= 0) || !Number.isFinite(course) || !isOnline()) return;
+  /** With no course, the fill cells within `WARM_AROUND_M` in any direction (see the header). */
+  function warmAround(lat: number, lng: number): void {
+    if (warmAheadM.length === 0) return;
+    warm(lat, lng, [0, 45, 90, 135, 180, 225, 270, 315], [WARM_AROUND_M]);
+  }
+
+  /** The warm-up (see the header): one request for the tiles at `distances` along `bearings` that lie in other fill cells. */
+  function warm(lat: number, lng: number, bearings: readonly number[], distances: readonly number[]): void {
+    if (!isOnline()) return;
     const here = fillCellKey(lat, lng);
     const t = now();
     const keys: string[] = [];
-    for (const m of warmAheadM) {
-      const [wLat, wLng] = offset(lat, lng, normalizeDeg(course), m);
+    for (const [b, m] of bearings.flatMap((b) => distances.map((m) => [b, m] as const))) {
+      const [wLat, wLng] = offset(lat, lng, b, m);
       if (!finite(wLat, wLng) || Math.abs(wLat) > 85 || Math.abs(wLng) > 180) continue;
       const cell = fillCellKey(wLat, wLng);
       const at = warmed.get(cell);
@@ -485,6 +504,24 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     return { sample, capped: false };
   }
 
+  /**
+   * A standing car with no course: the limit of the nearest road in memory, matched as if heading
+   * along it (against its digitised direction for a reverse one-way). The matcher's own rules then
+   * apply: a cross street fails the heading test, a close parallel road lowers the confidence.
+   * Null when no road is near or none establishes a limit.
+   */
+  function standingSample(lat: number, lng: number): LimitSample | null {
+    let road: { distanceM: number; bearingDeg: number; oneway: number } | null = null;
+    for (const c of candidatesNear(freshTiles(), { lat, lng }, MATCH.RADIUS_M)) {
+      if (c.provider !== 'osm' || !Number.isFinite(c.bearingDeg) || c.distanceM > MATCH.RADIUS_M) continue;
+      if (road === null || c.distanceM < road.distanceM) road = c;
+    }
+    if (road === null) return null;
+    const along = road.oneway === -1 ? road.bearingDeg + 180 : road.bearingDeg;
+    const { sample } = evaluate(lat, lng, normalizeDeg(along));
+    return sample.limitMps === null ? null : sample;
+  }
+
   return {
     lookup(lat, lng, course, { gnssValid, speedMps }) {
       // No valid fix: the position is the last fix's and the course is -1. Nothing is known, and
@@ -500,8 +537,21 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
         unknownRun = 0;
         const stopped = speedMps !== null && speedMps < MIN_MOVING_MPS;
         if (stopped && last && metresBetween(last.lat, last.lng, lat, lng) <= STICKY_RADIUS_M) return last.sample;
-        return null;
+        // Standing with nothing carried (a drive's first seconds): the nearest road's own limit.
+        if (speedMps !== null && !stopped) return null;
+        const own = tileKey(tileFor(lat, lng));
+        if (memoryTile(own) === undefined) {
+          void loadFromSqlite(own);
+          retryFilling(own);
+          return null;
+        }
+        const standing = standingSample(lat, lng);
+        if (standing !== null) last = { lat, lng, sample: standing };
+        return standing;
       }
+
+      // The trip's last batch had no course (a start standing still): the tiles ahead now that there is one.
+      if (courselessBatch) batch(lat, lng, course);
 
       const key = tileKey(tileFor(lat, lng));
       const loaded = memoryTile(key) !== undefined;
@@ -548,7 +598,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     },
 
     startTrip(lat, lng, course) {
-      batch(lat, lng, course);
+      batch(lat, lng, course, true);
     },
 
     resetTrip() {
@@ -560,6 +610,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       filling.clear();
       fillingRetries.clear();
       warmed.clear();
+      courselessBatch = false;
       pointAllowed = false;
       unknownRun = 0;
       last = null;
