@@ -20,6 +20,7 @@ test('the server’s own refusals stay terminal', () => {
   expect(classifyStatus(400)).toBe('terminal');
   expect(classifyStatus(403)).toBe('terminal');
   expect(classifyStatus(413)).toBe('terminal');
+  expect(classifyStatus(409)).toBe('terminal');
   expect(classifyStatus(401)).toBe('unauthorized');
   expect(classifyStatus(429)).toBe('retryable');
   expect(classifyStatus(503)).toBe('retryable');

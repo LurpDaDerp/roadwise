@@ -36,9 +36,11 @@ const asStatus = (value: unknown): number | null => {
 };
 
 /**
- * What an HTTP status means for a queued item. 408, 409, 425 and 429 join the 5xx range as "not
- * decided", and so does 404: nothing read the payload, the function is simply not deployed (yet,
- * or any more), and the same bytes go through once it is.
+ * What an HTTP status means for a queued item. 408, 425 and 429 join the 5xx range as "not
+ * decided", and so does a bare 404: nothing read the payload, the function is simply not deployed
+ * (yet, or any more), and the same bytes go through once it is (a function's own `not_found` is
+ * told apart in `classifyInvokeError`). 409 is an answer: the server already holds the action
+ * (`ALREADY_APPLIED` in the runner) or refuses it for good.
  */
 export function classifyStatus(status: number | null): FailureKind {
   if (status === null) return 'retryable';
