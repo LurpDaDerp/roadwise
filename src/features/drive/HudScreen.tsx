@@ -226,12 +226,18 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   }, [ending, controls, host, leave]);
 
   // A drive that ends without the button (it ended by itself) still lands on its summary, or on
-  // Home when it was not kept.
+  // Home when it was not kept. One that closed but could not be finalized stays here, saying
+  // "Swipe again": End finalizes it again (`host.end()`).
+  const failedId = useDrive((d) => (d.lastFinalized !== null && !d.lastFinalized.ok ? d.lastFinalized.clientTripId : null));
   const sawRecording = useRef(false);
   useEffect(() => {
     if (live.status === 'recording') sawRecording.current = true;
-    else if (live.status === 'idle' && sawRecording.current && !ending) leave(droppedId !== null && droppedId === lastTripId.current ? null : lastTripId.current);
-  }, [live.status, ending, leave, droppedId]);
+    else if (live.status === 'idle' && sawRecording.current && !ending) {
+      const id = lastTripId.current;
+      if (failedId !== null && failedId === id) setEndFailed(true);
+      else leave(droppedId !== null && droppedId === id ? null : id);
+    }
+  }, [live.status, ending, leave, droppedId, failedId]);
 
   const speeding = live.speedingTier !== null;
   const busy = ending || live.status === 'finalizing';

@@ -85,6 +85,14 @@ export type StartRefusalReason = 'permission' | 'precise' | 'services' | 'busy' 
 
 export type StartResult = { ok: true; clientTripId: string } | { ok: false; reason: StartRefusalReason };
 
+/** `end()`: the drive closed, but finalizing it failed; End again retries it. */
+export class DriveEndFailedError extends Error {
+  constructor(readonly clientTripId: string) {
+    super(`drive ${clientTripId} could not be finalized`);
+    this.name = 'DriveEndFailedError';
+  }
+}
+
 /**
  * What the tap reads before a drive can start: location (asked once if never answered), and,
  * read only, Precise Location and the Location Services switch (null: could not be read, which
@@ -103,7 +111,9 @@ export interface DriveHost {
   start(): Promise<StartResult>;
   /**
    * The swipe-to-end. Resolves once the drive is finalized; null when none was open. `dropped`: that
-   * drive was not kept (whichever end closed it: this one or an automatic end it raced).
+   * drive was not kept (whichever end closed it: this one or an automatic end it raced). Rejects with
+   * `DriveEndFailedError` when the drive closed but could not be finalized (stored, scored, queued);
+   * with no drive open, the next `end()` finalizes that drive again.
    */
   end(): Promise<{ clientTripId: string; dropped: DropReason | null } | null>;
   stop(opts: { endOpenTrip: boolean }): Promise<void>;
@@ -254,6 +264,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let switchWrites: Promise<void> = Promise.resolve();
   let screenLocked = false;
   let lastFinalized: LastFinalized = null;
+  /** The closed drive whose finalize failed, kept for End to finalize again; null when none. */
+  let unfinalized: Readonly<TripSession> | null = null;
   let soundFailedThisDrive = false;
   let signedOut = deps.signedOut === true;
   let signingOut = false;
@@ -302,9 +314,26 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         lastFinalized = { clientTripId: id, ok: true, status: result.trip.status, pointsNet: result.trip.points_net, dropped: null, endCause, at: now() };
       }
       finalizedPending = true;
+      if (unfinalized?.clientTripId === id) unfinalized = null;
     } catch (error) {
       lastFinalized = { clientTripId: id, ok: false, at: now() };
+      unfinalized = session;
       throw error;
+    }
+  }
+
+  /** End on a drive whose finalize failed (no drive open): finalize it again, from memory. */
+  async function finalizeAgain(session: Readonly<TripSession>): Promise<void> {
+    try {
+      await onFinalize(session);
+    } finally {
+      // The capture stopped with the first attempt: this end is for nothing to hand on.
+      captureEnd = null;
+      publish();
+      if (finalizedPending) {
+        finalizedPending = false;
+        emitDataChanged({ source: 'finalize' }, (e) => report(e, 'dataChanged'));
+      }
     }
   }
 
@@ -446,6 +475,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       prevStatus = s.status;
     }
     if (opened) {
+      // A drive left unfinalized stays `recording` in storage: the next launch recovers it.
+      unfinalized = null;
       soundFailedThisDrive = false;
       points = null;
       lastStopTotal = 0;
@@ -790,11 +821,20 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     },
 
     async end() {
-      const id = engine.snapshot().clientTripId;
+      const open = engine.snapshot().clientTripId;
+      const id = open ?? unfinalized?.clientTripId ?? null;
       if (id === null) return null;
-      await run(() => engine.dispatch({ type: 'end', ts: now() }), 'end');
-      await self.untilIdle();
+      if (open !== null) {
+        await run(() => engine.dispatch({ type: 'end', ts: now() }), 'end');
+        await self.untilIdle();
+      } else {
+        await run(async () => {
+          const again = unfinalized;
+          if (again !== null && again.clientTripId === id && !isBusyStatus(engine.snapshot().status)) await finalizeAgain(again);
+        }, 'end');
+      }
       const f = lastFinalized;
+      if (f !== null && f.clientTripId === id && !f.ok) throw new DriveEndFailedError(id);
       return { clientTripId: id, dropped: f !== null && f.ok && f.clientTripId === id ? f.dropped : null };
     },
 

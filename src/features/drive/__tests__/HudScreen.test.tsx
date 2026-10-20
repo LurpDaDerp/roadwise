@@ -589,6 +589,41 @@ describe('swipe to end', () => {
     expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
   });
 
+  test('a drive that closed but could not be saved stays here with "Swipe again"; the next swipe saves it and opens its summary', async () => {
+    const h = await renderHud();
+    // End: the engine closes the drive, the finalize fails, and end() rejects.
+    mockEnd.mockImplementationOnce(async () => {
+      mockLastFinalized = { clientTripId: 't1', ok: false, at: T };
+      throw new Error('drive t1 could not be finalized');
+    });
+    const end = screen.getByRole('button', { name: hudCopy.endLabel });
+    await swipeEnd(end);
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(screen.getByTestId('hud-end-failed')).toHaveTextContent(hudCopy.endFailed);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    expect(end).not.toBeDisabled();
+
+    // The retry finalizes it.
+    mockEnd.mockImplementationOnce(async () => {
+      mockLastFinalized = { clientTripId: 't1', ok: true, status: 'pending', pointsNet: 12, dropped: null, endCause: 'manual', at: T + 1 };
+      return { clientTripId: 't1', dropped: null };
+    });
+    await swipeEnd(end);
+    expect(screen.queryByTestId('hud-end-failed')).toBeNull();
+    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
+    expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
+  });
+
+  test('a drive that ended by itself but could not be saved says "Swipe again" instead of opening a summary', async () => {
+    const h = await renderHud();
+    mockLastFinalized = { clientTripId: 't1', ok: false, at: T };
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(screen.getByTestId('hud-end-failed')).toHaveTextContent(hudCopy.endFailed);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+  });
+
   test('while the drive is being saved, End is disabled', async () => {
     await renderHud({ status: 'finalizing' });
     expect(screen.getByRole('button', { name: hudCopy.endLabel })).toBeDisabled();

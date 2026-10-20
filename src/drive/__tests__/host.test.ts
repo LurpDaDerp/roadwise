@@ -17,7 +17,7 @@ import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
 import { readDropNotice, writeDropNotice } from '@/drive/dropNotice';
-import { createDriveHost, type DriveHost, type DriveState } from '@/drive/host';
+import { createDriveHost, DriveEndFailedError, type DriveHost, type DriveState } from '@/drive/host';
 import { readPhoneSwitch, writePhoneSwitch } from '@/drive/phoneSwitchStore';
 import type { Scheduler } from '@/drive/ticks';
 import { metersToMiles } from '@/lib/units';
@@ -299,6 +299,59 @@ test('points clear the moment the stop is no longer confirmed, even with the fix
   expect(snap).toMatchObject({ speedKnown: true, speedMps: 0, stopped: false, points: null });
   expect(h.display.log.at(-1)).toBe('update 0/null/null'); // no fix: the held speed, no limit, no points
   await h.host.stop({ endOpenTrip: true });
+});
+
+test('a finalize that fails: end() rejects, the drive stays unfinalized, and the next end() finalizes it from memory', async () => {
+  let failWrites = false;
+  const failing: Db = {
+    ...db,
+    transaction: ((fn: never) => (failWrites ? Promise.reject(new Error('disk full')) : db.transaction(fn))) as Db['transaction'],
+  } as Db;
+  const h = build({ db: failing });
+  await h.host.boot();
+  await h.host.start();
+  await feed(h, rows(60, { speedMps: 15 }));
+  failWrites = true;
+  clock = T0 + 61_000;
+  await expect(h.host.end()).rejects.toBeInstanceOf(DriveEndFailedError);
+  expect(h.host.snapshot()).toMatchObject({ status: 'idle', lastFinalized: { clientTripId: uuid(1), ok: false } });
+  expect(h.source.calls.at(-1)).toBe('stopCapture');
+  expect((await createTripsRepo(db).get(uuid(1)))?.status).toBe('recording');
+
+  // Still failing: rejects again.
+  await expect(h.host.end()).rejects.toBeInstanceOf(DriveEndFailedError);
+  failWrites = false;
+  expect(await h.host.end()).toEqual({ clientTripId: uuid(1), dropped: null });
+  expect(h.host.snapshot().lastFinalized).toMatchObject({ clientTripId: uuid(1), ok: true, status: 'pending' });
+  expect((await createTripsRepo(db).get(uuid(1)))?.status).toBe('pending');
+  expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
+  // Nothing is left to finalize.
+  expect(await h.host.end()).toBeNull();
+  await h.host.stop({ endOpenTrip: false });
+});
+
+test('a new drive lets an unfinalized one go to the next launch’s recovery; its end() is its own', async () => {
+  let failWrites = false;
+  const failing: Db = {
+    ...db,
+    transaction: ((fn: never) => (failWrites ? Promise.reject(new Error('disk full')) : db.transaction(fn))) as Db['transaction'],
+  } as Db;
+  const h = build({ db: failing });
+  await h.host.boot();
+  await h.host.start();
+  await feed(h, rows(60, { speedMps: 15 }));
+  failWrites = true;
+  clock = T0 + 61_000;
+  await expect(h.host.end()).rejects.toBeInstanceOf(DriveEndFailedError);
+  failWrites = false;
+  clock = T0 + 70_000;
+  expect(await h.host.start()).toEqual({ ok: true, clientTripId: uuid(2) });
+  await feed(h, rows(60, { speedMps: 15, t0: T0 + 71_000 }));
+  clock = T0 + 132_000;
+  expect(await h.host.end()).toEqual({ clientTripId: uuid(2), dropped: null });
+  expect(await h.host.end()).toBeNull();
+  expect((await createTripsRepo(db).get(uuid(1)))?.status).toBe('recording');
+  await h.host.stop({ endOpenTrip: false });
 });
 
 describe('the speed-limit lookup reads each row’s own fix', () => {
