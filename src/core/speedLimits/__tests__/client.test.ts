@@ -4,6 +4,7 @@ import {
   createSpeedLimitClient,
   FILLING_RETRIES_MAX,
   FILLING_RETRY_MS,
+  fillingRetryMs,
   MIN_MOVING_MPS,
   STICKY_RADIUS_M,
   TRUNCATED_CONFIDENCE_CAP,
@@ -535,7 +536,8 @@ describe('a tile the server is still filling (the OpenStreetMap load behind a fi
     fallback: null,
   });
 
-  it('is kept FILLING_RETRY_MS, then the first lookup on it asks for that tile alone and the filled reply replaces it', async () => {
+  it('is kept 5 s, doubling to 25 s per re-ask, then the first lookup on it asks for that tile alone and the filled reply replaces it', async () => {
+    expect([0, 1, 2, 3, 7].map(fillingRetryMs)).toEqual([5_000, 10_000, 20_000, 25_000, FILLING_RETRY_MS]);
     expect(FILLING_RETRY_MS).toBe(25_000);
     const { api, getTiles } = fakeApi();
     getTiles.mockImplementationOnce(async (keys) => batchOf(keys, true, []));
@@ -547,8 +549,8 @@ describe('a tile the server is still filling (the OpenStreetMap load behind a fi
     expect(client.lookup(LAT, LNG0, EAST, MOVING)).toMatchObject({ source: 'unknown' });
     const own = keyAt(LAT, LNG0);
     const row = await createTilesRepo(db).getTile<unknown>(own, clock);
-    expect(row?.expires_at).toBe(clock + FILLING_RETRY_MS);
-    clock += FILLING_RETRY_MS - 1;
+    expect(row?.expires_at).toBe(clock + 5_000);
+    clock += 5_000 - 1;
     client.lookup(LAT, LNG0, EAST, MOVING);
     await client.settled();
     expect(getTiles).toHaveBeenCalledTimes(1);
@@ -569,7 +571,7 @@ describe('a tile the server is still filling (the OpenStreetMap load behind a fi
   });
 
   it('asks again at most FILLING_RETRIES_MAX times per tile per trip, never offline, and the prefetch still refreshes it', async () => {
-    expect(FILLING_RETRIES_MAX).toBe(6);
+    expect(FILLING_RETRIES_MAX).toBe(8);
     const { api, getTiles } = fakeApi();
     getTiles.mockImplementation(async (keys) => batchOf(keys, true, []));
     make(api).startTrip(LAT, LNG0, EAST);

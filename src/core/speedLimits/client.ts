@@ -14,10 +14,10 @@
 //   has said a fallback exists (`fallback: 'aws'`) — without the AWS key it could only ever answer
 //   "unknown". Offline: no requests at all. Nothing here runs a timer.
 //   The exception: a tile the server sent `filling` (its area is being loaded from OpenStreetMap
-//   right now) expires `FILLING_RETRY_MS` after it arrived, and the first lookup on it after that
-//   asks for that one tile again, at most `FILLING_RETRIES_MAX` times per tile per trip — so the
-//   sign fills in within a minute of the first drive through a new area instead of a kilometre
-//   later. A filled tile answers with its full expiry and the retries stop.
+//   right now) expires after `fillingRetryMs` (5 s, then 10, 20 and 25 s after each answer), and the
+//   first lookup on it after that asks for that one tile again, at most `FILLING_RETRIES_MAX` times
+//   per tile per trip — so the sign fills in seconds after the server has loaded a new area instead
+//   of a kilometre later. Each ask is a read of what the server already holds, never a new load. A filled tile answers with its full expiry and the retries stop.
 //   And the warm-up: with each batch, the tile `WARM_AHEAD_M` (3 and 6 km) ahead along the course
 //   is asked for too, in its own small request, when it lies in a different fill cell than the car
 //   and that cell was not warmed in the last `WARM_REPEAT_MS`. The request makes the server start
@@ -89,10 +89,13 @@ export const TRUNCATED_CONFIDENCE_CAP = 0.6;
  * every kilometre would re-download the same cut tile; a day lets a server-side fix arrive.
  */
 export const TRUNCATED_TILE_TTL_MS = 24 * 3600 * 1000;
-/** A tile the server is still filling is kept this long, then asked for again on the next lookup on it. */
+/** A tile the server is still filling is kept `fillingRetryMs`, then asked for again on the next lookup on it. */
+export const FILLING_RETRY_FIRST_MS = 5_000;
 export const FILLING_RETRY_MS = 25_000;
-/** How many times one filling tile is asked for again in a trip before the regular prefetch takes over. */
-export const FILLING_RETRIES_MAX = 6;
+/** How long a filling tile is kept after its `asked`-th re-ask (0 for the first answer): doubling from 5 s up to 25 s. */
+export const fillingRetryMs = (asked: number): number => Math.min(FILLING_RETRY_MS, FILLING_RETRY_FIRST_MS * 2 ** asked);
+/** How many times one filling tile is asked for again in a trip before the regular prefetch takes over (about 2.5 min). */
+export const FILLING_RETRIES_MAX = 8;
 /** How far ahead along the course the next fill cells are warmed (see the header). */
 export const WARM_AHEAD_M: readonly number[] = [3000, 6000];
 /** With no course at the trip's start, the fill cells this far away in any of eight directions are warmed. */
@@ -331,7 +334,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
         if (!need.includes(tile.tile)) continue; // not asked for: not trusted
         const expiresAt = Math.min(
           tile.expiresAt,
-          t + (tile.filling ? FILLING_RETRY_MS : tile.truncated ? TRUNCATED_TILE_TTL_MS : MAX_TILE_TTL_MS)
+          t + (tile.filling ? fillingRetryMs(fillingRetries.get(tile.tile) ?? 0) : tile.truncated ? TRUNCATED_TILE_TTL_MS : MAX_TILE_TTL_MS)
         );
         if (tile.filling) filling.set(tile.tile, expiresAt);
         else filling.delete(tile.tile);

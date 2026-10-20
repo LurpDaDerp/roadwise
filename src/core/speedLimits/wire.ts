@@ -74,7 +74,7 @@ export const TileSchema = z
     /**
      * True while the server is still loading this tile's area from OpenStreetMap: the segments are
      * whatever was there when asked and `expiresAt` is seconds away, so the device asks again soon
-     * (`FILLING_RETRY_MS` in client.ts). Absent or false: the area is loaded.
+     * (`fillingRetryMs` in client.ts). Absent or false: the area is loaded.
      */
     filling: z.boolean().optional(),
     segments: z.array(LimitSegmentSchema).max(MAX_SEGMENTS_PER_TILE),
