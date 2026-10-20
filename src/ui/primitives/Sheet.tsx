@@ -1,22 +1,15 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
   type GestureResponderEvent,
   Modal,
   Pressable,
   ScrollView,
-  useWindowDimensions,
   View,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useTheme } from '../theme';
@@ -50,15 +43,15 @@ export type SheetProps = {
 /** How far down a drag has to travel (or how fast) before the sheet closes. */
 const DISMISS_DISTANCE = 120;
 const DISMISS_VELOCITY = 1.1;
-/** Exits are faster than entrances. */
-const EXIT_MS = 220;
 
 /**
- * The bottom sheet: a rounded panel that rises over a dimmed page, with a grabber, a title row
- * with a round close button, optional scrolling content and an optional pinned footer.
+ * The bottom sheet: a rounded panel over a dimmed page, with a grabber, a title row with a round
+ * close button, optional scrolling content and an optional pinned footer.
  *
- * - Enter: the scrim fades and the panel springs up; exit: it slides down faster than it came.
- *   Under Reduce Motion it only fades.
+ * - Enter and exit: the system modal fades the scrim and panel together (no motion under Reduce
+ *   Motion). The panel's resting place never depends on a JS-driven animation, so it is on screen
+ *   the moment the modal is: an animation that fails to run cannot leave an invisible modal
+ *   swallowing every touch.
  * - Drag the grabber or the title row down to close (a short drag springs back). Tap the scrim,
  *   press the close button, Android back, or the screen reader's escape gesture all close it too.
  * - Keyboard-safe: the panel lifts above the keyboard; `keyboardShouldPersistTaps` keeps a tap on
@@ -82,31 +75,11 @@ export function BottomSheet({
 }: SheetProps) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
-  const { height: screenH } = useWindowDimensions();
-  const offscreen = Math.max(400, screenH);
-  const y = useSharedValue(t.reduceMotion ? 0 : offscreen);
-  const fade = useSharedValue(0);
-  // Stays mounted through the exit so the panel can leave instead of vanishing.
-  const [mounted, setMounted] = useState(visible);
-  const [wasVisible, setWasVisible] = useState(visible);
-  if (wasVisible !== visible) {
-    setWasVisible(visible);
-    if (visible) setMounted(true);
-  }
-
-  const still = t.reduceMotion;
-  const leaving = mounted && !visible;
+  // Only a drag moves the panel; at rest it sits at 0.
+  const y = useSharedValue(0);
   useEffect(() => {
-    if (visible) {
-      fade.value = withTiming(1, { duration: t.motion.base });
-      y.value = still ? 0 : withSpring(0, t.motion.spring.gentle);
-      return;
-    }
-    fade.value = withTiming(0, { duration: EXIT_MS });
-    y.value = still ? 0 : withTiming(offscreen, { duration: EXIT_MS, easing: Easing.in(Easing.cubic) });
-    const timer = setTimeout(() => setMounted(false), still ? 0 : EXIT_MS);
-    return () => clearTimeout(timer);
-  }, [visible, still, offscreen, t.motion.base, t.motion.spring.gentle, y, fade]);
+    if (visible) y.set(0);
+  }, [visible, y]);
 
   // Drag-to-close on the grabber and title row, through the plain responder props: the start of
   // the touch, and the last move, give the distance and the speed at release.
@@ -146,7 +119,6 @@ export function BottomSheet({
   };
 
   const panel = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
-  const scrim = useAnimatedStyle(() => ({ opacity: fade.value }));
 
   const content = (
     <View style={[{ gap: t.space.lg, paddingHorizontal: t.space.xl, paddingBottom: footer ? t.space.md : 0 }, contentStyle]}>
@@ -159,24 +131,15 @@ export function BottomSheet({
 
   return (
     <Modal
-      visible={mounted}
+      visible={visible}
       transparent
-      animationType="none"
+      animationType={t.reduceMotion ? 'none' : 'fade'}
       statusBarTranslucent
       navigationBarTranslucent
       onRequestClose={close}
     >
-      <KeyboardAvoidingView
-        behavior="padding"
-        style={{ flex: 1, justifyContent: 'flex-end' }}
-        // A sheet on its way out can no longer be touched or read.
-        pointerEvents={leaving ? 'none' : 'auto'}
-        accessibilityElementsHidden={leaving}
-        importantForAccessibility={leaving ? 'no-hide-descendants' : 'auto'}
-      >
-        <Animated.View
-          style={[{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: t.colors.scrim }, scrim]}
-        >
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <View style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: t.colors.scrim }}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Close"
@@ -185,7 +148,7 @@ export function BottomSheet({
             onPress={close}
             style={{ flex: 1 }}
           />
-        </Animated.View>
+        </View>
         <Animated.View
           testID={testID}
           accessibilityViewIsModal
