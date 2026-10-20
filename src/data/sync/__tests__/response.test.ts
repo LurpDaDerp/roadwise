@@ -9,6 +9,13 @@ test('a 404 is not a refusal: the function is not there (yet), so the item retri
   expect(bare).toMatchObject({ kind: 'retryable', code: 'http_404', status: 404 });
 });
 
+test('a function’s own 404 `not_found` (no such trip or event on the server) is a refusal, never the missing-function retry', async () => {
+  const own = await classifyInvokeError(functionsHttpError(404, { code: 'not_found' }).error, 0);
+  expect(own).toMatchObject({ kind: 'terminal', code: 'not_found', status: 404 });
+  const empty = await classifyInvokeError(functionsHttpError(404, {}).error, 0);
+  expect(empty).toMatchObject({ kind: 'retryable', code: 'http_404' });
+});
+
 test('the server’s own refusals stay terminal', () => {
   expect(classifyStatus(400)).toBe('terminal');
   expect(classifyStatus(403)).toBe('terminal');

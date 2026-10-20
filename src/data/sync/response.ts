@@ -74,6 +74,9 @@ async function readBody(context: Record<string, unknown>): Promise<unknown> {
   return undefined;
 }
 
+/** The code a function itself answers a 404 with (trip-actions: no such trip or event on the server). */
+export const FUNCTION_NOT_FOUND_CODE = 'not_found';
+
 /** Classify a `functions.invoke` error. `now` dates a `Retry-After` given as an HTTP date. */
 export async function classifyInvokeError(error: unknown, now: number): Promise<Failure> {
   const record = asRecord(error);
@@ -86,12 +89,21 @@ export async function classifyInvokeError(error: unknown, now: number): Promise<
   const header =
     typeof getHeader === 'function' ? ((getHeader as (name: string) => string | null).call(headers, 'Retry-After') ?? null) : null;
 
-  // A 404's body is the gateway's, not a function's: the status is the whole story.
-  const body = status === 404 ? undefined : await readBody(context);
+  const body = await readBody(context);
   const parsed = ErrorBodySchema.safeParse(body);
+  const retryAfterS = retryAfterSeconds(header, now);
+
+  // A 404 is two different answers. The function's own `not_found` (trip-actions: the trip or the
+  // event is not on the server) is a refusal like any other: the same bytes get the same answer.
+  // Anything else at a 404 is the gateway finding no function there, and the item records the
+  // bare status, which is what the queue reopens on once a deploy answers it.
+  if (status === 404) {
+    if (parsed.success && parsed.data.code === FUNCTION_NOT_FOUND_CODE) return { kind: 'terminal', code: FUNCTION_NOT_FOUND_CODE, status, retryAfterS };
+    return { kind, code: 'http_404', status, retryAfterS };
+  }
   const code = parsed.success ? parsed.data.code : status === null ? 'network' : `http_${status}`;
 
-  return { kind, code, status, retryAfterS: retryAfterSeconds(header, now) };
+  return { kind, code, status, retryAfterS };
 }
 
 /** SQLite's one contention failure, which the driver deliberately does not retry (see `driver.ts`). */

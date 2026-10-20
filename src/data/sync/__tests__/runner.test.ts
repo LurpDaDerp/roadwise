@@ -238,6 +238,20 @@ test('a 404 (the function not deployed yet) is no refusal: the drive stays pendi
   await deployed.stop();
 });
 
+test('a report on an event the server does not hold (404 not_found) reads as refused and is never reopened', async () => {
+  await finalized(uuid(10), T0, uuid(1));
+  await db.execute('DELETE FROM sync_queue');
+  await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db });
+  const r = runner(createFakeSupabase({ invoke: () => functionsHttpError(404, { code: 'not_found' }) }));
+  await r.start();
+  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+  expect(await r.drainOnce()).toMatchObject({ failed: 1 });
+  expect(await createEventsRepo(db).get(uuid(1))).toMatchObject({ dispute_status: 'rejected', dispute_message: 'This event is no longer on the server.' });
+  expect(await createQueueRepo(db).reopenRetryable(T0 + 9_000_000_000)).toBe(0);
+  expect(await r.owed()).toBe(0);
+  await r.stop();
+});
+
 test('nothing is sent without a session, while recording, or under another user; items wait', async () => {
   await finalized(uuid(10));
   const supabase = createFakeSupabase({ uid: null, invoke: () => invokeOk(response(uuid(10))) });
