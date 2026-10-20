@@ -1,13 +1,12 @@
-import { Ionicons } from '@expo/vector-icons';
-import { MIN_SCORED_MILES, type EventType, type Tier } from '@scoring';
+import { MIN_SCORED_MILES } from '@scoring';
 import { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
 import { formatDistance, type Units } from '@/lib/units';
-import { Button, Card, IconButton, Pill, PointsCounter, StreakFlame, Text, useTheme } from '@/ui';
+import { Button, Card, Divider, IconButton, Pill, PointsCounter, Text, useTheme } from '@/ui';
 
-import { EVENT_ICON, formatDay, formatDuration, formatTimeSpan, routeLine, spokenDuration, spokenRoute, TIER_SIGNAL, worseTier } from './format';
+import { formatDay, formatDuration, formatTimeSpan, spokenDuration } from './format';
 import type { LocalDrive, LocalDriveEvent } from './model';
 import { Receipt } from './Receipt';
 import { NotDrivingSheet, ReportSheet } from './ReportSheet';
@@ -16,14 +15,11 @@ import { RouteMap } from './RouteMap';
 import { ShareSheet } from './ShareCard';
 import {
   canMarkNotDriving,
-  celebrations,
   endNote,
-  isRemoved,
   notDrivingLabel,
   notDrivingRefusal,
   pointsState,
   receipt,
-  streakLine,
   type PointsState,
   type ReportReason,
 } from './summary';
@@ -64,31 +60,29 @@ function StateBlock({ title, body, testID }: { title: string; body: string; test
   );
 }
 
-function PointsBlock({ state, drive, fresh, units, onOpenDrive }: { state: PointsState; drive: LocalDrive; fresh: boolean; units: Units; onOpenDrive: (id: string) => void }) {
+/** The drive's total in bold, counting up on a fresh summary. */
+function Total({ value, fresh, estimate }: { value: number; fresh: boolean; estimate: boolean }) {
+  const t = useTheme();
+  return (
+    <View style={{ gap: t.space.xs }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: t.space.sm }}>
+        <Text variant="label" tone="muted">
+          Points this drive
+        </Text>
+        {estimate ? <Pill label="Estimate" tone="info" icon="cloud-offline-outline" testID="estimate" /> : null}
+      </View>
+      <PointsCounter value={value} from={fresh ? 0 : undefined} react={fresh} size="hero" signed label="Points this drive" testID="summary-points" />
+    </View>
+  );
+}
+
+function PointsHead({ state, total, drive, fresh, units, onOpenDrive }: { state: PointsState; total: number | null; drive: LocalDrive; fresh: boolean; units: Units; onOpenDrive: (id: string) => void }) {
   const t = useTheme();
   switch (state.kind) {
     case 'points':
       return (
         <View style={{ gap: t.space.xs }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: t.space.sm }}>
-            <Text variant="label" tone="muted">
-              Points this drive
-            </Text>
-            {state.estimate ? (
-              <Pill label="Estimate" tone="info" icon="cloud-offline-outline" testID="estimate" />
-            ) : drive.clean ? (
-              <Pill label="Clean drive" tone="clean" icon="checkmark-circle" emphasis="solid" testID="clean-badge" />
-            ) : null}
-          </View>
-          <PointsCounter
-            value={state.value}
-            from={fresh ? 0 : undefined}
-            react={fresh}
-            size="hero"
-            signed
-            label="Points this drive"
-            testID="summary-points"
-          />
+          <Total value={state.value} fresh={fresh} estimate={state.estimate} />
           {state.estimate ? (
             <Text variant="footnote" tone="muted">
               Your final points arrive once this drive uploads.
@@ -113,7 +107,12 @@ function PointsBlock({ state, drive, fresh, units, onOpenDrive }: { state: Point
     case 'recording':
       return <StateBlock testID="state-recording" title="Drive in progress" body="Points land here when the drive ends." />;
     case 'failed':
-      return <StateBlock testID="state-failed" title="Not synced yet" body="We'll keep trying. Your points show up once it uploads." />;
+      return (
+        <View style={{ gap: t.space.md }}>
+          {total !== null ? <Total value={total} fresh={false} estimate={false} /> : null}
+          <StateBlock testID="state-failed" title="Not synced yet" body="We'll keep trying. Your points show up once it uploads." />
+        </View>
+      );
     case 'merged':
       return (
         <View style={{ gap: t.space.md }} testID="state-merged">
@@ -130,52 +129,7 @@ function PointsBlock({ state, drive, fresh, units, onOpenDrive }: { state: Point
   }
 }
 
-type Counter = { key: string; label: string; n: number; tier: Tier | null; icon: React.ComponentProps<typeof Ionicons>['name'] };
-
-function counters(drive: LocalDrive, events: readonly LocalDriveEvent[]): Counter[] {
-  const worst = (types: EventType[]) =>
-    events.filter((e) => types.includes(e.type) && !isRemoved(e)).reduce<Tier | null>((w, e) => worseTier(w, e.tier), null);
-  const c = drive.counts;
-  const list: Counter[] = [
-    { key: 'pickups', label: 'Phone pickups', n: c.pickups, tier: worst(['phone_pickup', 'phone_handling']), icon: EVENT_ICON.phone_pickup },
-    { key: 'speeding', label: 'Speeding', n: c.speeding, tier: worst(['speeding']), icon: EVENT_ICON.speeding },
-    { key: 'hardBrake', label: 'Hard braking', n: c.hardBrake, tier: worst(['hard_brake']), icon: EVENT_ICON.hard_brake },
-    { key: 'hardAccel', label: 'Hard acceleration', n: c.hardAccel, tier: worst(['hard_accel']), icon: EVENT_ICON.hard_accel },
-    { key: 'hardCorner', label: 'Cornering', n: c.hardCorner, tier: worst(['hard_corner']), icon: EVENT_ICON.hard_corner },
-  ];
-  // A DashPal drive (its x1.25), or any DashPal event on the drive, adds the DashPal tile.
-  const dashcam = c.eyesOff + c.drowsy;
-  if ((drive.result?.breakdown.dashcamMult ?? 1) > 1 || dashcam > 0) {
-    list.push({ key: 'dashpal', label: 'DashPal events', n: dashcam, tier: worst(['eyes_off', 'drowsy']), icon: 'videocam-outline' });
-  }
-  return list;
-}
-
-function CounterTile({ counter }: { counter: Counter }) {
-  const t = useTheme();
-  const zero = counter.n === 0;
-  const sig = t.colors.signal[zero ? 'clean' : counter.tier ? TIER_SIGNAL[counter.tier] : 'severe'];
-  return (
-    <View
-      testID={`counter-${counter.key}`}
-      accessible
-      accessibilityLabel={`${counter.label}: ${counter.n}${zero ? ', none' : ''}`}
-      style={{ flexBasis: '30%', flexGrow: 1, gap: 2, padding: t.space.md, borderRadius: t.radius.lg, borderCurve: 'continuous', backgroundColor: sig.faint }}
-    >
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.xs }}>
-        <Ionicons name={zero ? 'checkmark-circle' : counter.icon} size={t.size.iconSm} color={sig.text} />
-        <Text variant="stat" style={{ color: sig.text }}>
-          {counter.n}
-        </Text>
-      </View>
-      <Text variant="caption" tone="muted" numberOfLines={2}>
-        {counter.label}
-      </Text>
-    </View>
-  );
-}
-
-/** The drive summary: the spec's seven blocks, top to bottom, with a fixed footer. */
+/** The drive summary, top to bottom: time and distance, the route map, the points; actions in a fixed footer. */
 export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating, ranked = false, latestClientTripId, now, onBack, onOpenDrive, onReport, onNotDriving }: SummaryViewProps) {
   const t = useTheme();
   const units = useUnits();
@@ -186,8 +140,6 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
 
   const state = pointsState(drive);
   const points = useMemo(() => receipt(drive, events, units), [drive, events, units]);
-  const streak = streakLine(drive);
-  const party = celebrations(drive);
   const runs = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
   const selected = events.find((e) => e.id === selectedId) ?? null;
   const reportEvent = events.find((e) => e.id === reporting) ?? null;
@@ -202,18 +154,21 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
   return (
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={{ padding: t.space.lg, gap: t.space.lg }} testID="drive-summary">
-        {/* 1. Title */}
+        {/* 1. Time and distance */}
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.md }}>
           <IconButton icon="chevron-back" accessibilityLabel="Back" onPress={onBack} testID="back" variant="surface" />
           <View
             style={{ flex: 1 }}
+            testID="summary-trip"
             accessible
             accessibilityRole="header"
-            accessibilityLabel={`${formatDay(drive.startedAt)}, ${formatTimeSpan(drive.startedAt, drive.endedAt)}, ${spokenRoute(drive)}${endedNote ? `. ${endedNote}` : ''}`}
+            accessibilityLabel={`${spokenDuration(drive.durationS)}, ${formatDistance(drive.miles, units, { spoken: true })}. ${formatDay(drive.startedAt)}, ${formatTimeSpan(drive.startedAt, drive.endedAt)}${endedNote ? `. ${endedNote}` : ''}`}
           >
-            <Text variant="title2">{formatDay(drive.startedAt)}</Text>
+            <Text variant="title2">
+              {formatDuration(drive.durationS)} · {formatDistance(drive.miles, units)}
+            </Text>
             <Text variant="subhead" tone="muted">
-              {formatTimeSpan(drive.startedAt, drive.endedAt)} · {routeLine(drive)}
+              {formatDay(drive.startedAt)} · {formatTimeSpan(drive.startedAt, drive.endedAt)}
             </Text>
             {endedNote ? (
               <Text variant="footnote" tone="muted" testID="summary-end-note">
@@ -223,59 +178,22 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
           </View>
         </View>
 
-        {/* 2. Points, 3. The points receipt */}
-        <Card variant="hero">
-          <PointsBlock state={state} drive={drive} fresh={fresh} units={units} onOpenDrive={onOpenDrive} />
-        </Card>
-        {showReceipt ? (
-          <Receipt receipt={points} selectedId={selectedId} onSelect={(id) => setSelectedId((cur) => (cur === id ? null : id))} onReport={setReporting} />
-        ) : null}
-
-        {/* 4. Streak line (+ anything unlocked) */}
-        {streak ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }} testID="streak-line">
-            <StreakFlame count={drive.result?.streak.after ?? 0} state={streak.state} />
-            <Text variant="headline" style={{ flex: 1 }}>
-              {streak.text}
-            </Text>
-          </View>
-        ) : null}
-        {party.length > 0 ? (
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }} testID="celebrations" accessibilityLabel={`Unlocked: ${party.map((p) => p.label).join(', ')}`}>
-            {party.map((p) => (
-              <Pill key={p.key} label={p.label} icon={p.icon} tone="gold" emphasis="solid" />
-            ))}
-          </View>
-        ) : null}
-
-        {/* 5. Stats row */}
-        <View style={{ gap: t.space.sm }}>
-          <View style={{ flexDirection: 'row', gap: t.space.xl }}>
-            <View accessible accessibilityLabel={`Distance ${formatDistance(drive.miles, units, { spoken: true })}`}>
-              <Text variant="label" tone="muted">
-                Distance
-              </Text>
-              <Text variant="stat">{formatDistance(drive.miles, units)}</Text>
-            </View>
-            <View accessible accessibilityLabel={`Time ${spokenDuration(drive.durationS)}`}>
-              <Text variant="label" tone="muted">
-                Time
-              </Text>
-              <Text variant="stat">{formatDuration(drive.durationS)}</Text>
-            </View>
-          </View>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
-            {counters(drive, events).map((c) => (
-              <CounterTile key={c.key} counter={c} />
-            ))}
-          </View>
-        </View>
-
-        {/* 6. Route map */}
+        {/* 2. Route map */}
         <RouteMap runs={runs} events={events} highlighted={selected} />
+
+        {/* 3. Points: the total in bold, then what was earned and lost */}
+        <Card testID="summary-points-card">
+          <PointsHead state={state} total={points.total} drive={drive} fresh={fresh} units={units} onOpenDrive={onOpenDrive} />
+          {showReceipt ? (
+            <>
+              <Divider />
+              <Receipt receipt={points} selectedId={selectedId} onSelect={(id) => setSelectedId((cur) => (cur === id ? null : id))} onReport={setReporting} />
+            </>
+          ) : null}
+        </Card>
       </ScrollView>
 
-      {/* 7. Footer */}
+      {/* Actions */}
       <View
         style={{
           flexDirection: 'row',

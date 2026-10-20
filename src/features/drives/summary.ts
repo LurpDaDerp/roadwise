@@ -1,9 +1,8 @@
 /**
  * What the drive summary derives from a drive before anything is drawn: the points state, the
- * points receipt (and the itemized breakdown it is built from), the streak line, the celebration
- * row and the report reasons. Pure.
+ * points receipt (and the itemized breakdown it is built from) and the report reasons. Pure.
  */
-import { ACHIEVEMENTS, IDLE_END_S, isDashcamType, MULT_CAP, STREAK_MULT_CAP, type EventType } from '@scoring';
+import { IDLE_END_S, isDashcamType, MULT_CAP, STREAK_MULT_CAP, type EventType } from '@scoring';
 
 import { formatMultiplier } from '@/ui';
 
@@ -15,7 +14,7 @@ import type { LocalDrive, LocalDriveEvent } from './model';
 // ── End note ────────────────────────────────────────────────────────────────────────────
 
 /**
- * Under the title, on the phone that recorded it: a drive that ended by itself says so, and so
+ * Under the drive's time and distance, on the phone that recorded it: a drive that ended by itself says so, and so
  * does one ended with End after standing still (it ends where the car stopped; phone use while
  * standing still still counts). Null otherwise.
  */
@@ -192,8 +191,8 @@ function eventLines(d: LocalDrive, events: readonly LocalDriveEvent[]): Extract<
 
 // ── Receipt ─────────────────────────────────────────────────────────────────────────────
 
-/** Deduction lines the receipt shows before "Show more". */
-export const RECEIPT_MAX_LINES = 5;
+/** Entries the receipt shows before "Show more": Earned counts as one, then the deductions. */
+export const RECEIPT_MAX_LINES = 3;
 
 export type ReceiptLine = Extract<BreakdownLine, { kind: 'event' }>;
 
@@ -245,53 +244,6 @@ export function spokenPoints(n: number): string {
   const abs = Math.abs(r).toLocaleString('en-US');
   const unit = Math.abs(r) === 1 ? 'point' : 'points';
   return r > 0 ? `plus ${abs} ${unit}` : r < 0 ? `minus ${abs} ${unit}` : `0 ${unit}`;
-}
-
-// ── Streak ──────────────────────────────────────────────────────────────────────────────
-
-export type StreakLine = { text: string; state: 'active' | 'atRisk' | 'frozen'; freezeEarned: boolean } | null;
-
-export function streakLine(d: LocalDrive): StreakLine {
-  const s = d.result?.streak;
-  if (!s || d.status === 'not_driving' || d.status === 'merged') return null;
-  const next = `Streak ${s.after} · next drive ${formatMultiplier(s.nextMult)}`;
-  const freezeEarned = s.freezeEarned;
-  switch (s.outcome) {
-    case 'freeze_used':
-      return { text: `Freeze used · streak stays at ${s.after}`, state: 'frozen', freezeEarned };
-    case 'at_risk':
-      return { text: 'Streak at risk: drive clean next time', state: 'atRisk', freezeEarned };
-    case 'reset':
-      return { text: 'Streak reset. Your next good drive starts a new one.', state: 'active', freezeEarned };
-    case 'restored':
-      return { text: `Streak saved! ${next}`, state: 'active', freezeEarned };
-    case 'grew':
-      return { text: next, state: 'active', freezeEarned };
-    case 'none':
-      return s.after > 0 ? { text: next, state: s.atRisk ? 'atRisk' : 'active', freezeEarned } : null;
-  }
-}
-
-// ── Celebrations ────────────────────────────────────────────────────────────────────────
-
-export interface Celebration {
-  key: string;
-  label: string;
-  icon: 'trophy' | 'flag' | 'arrow-up-circle' | 'snow';
-}
-
-export function celebrations(d: LocalDrive): Celebration[] {
-  const r = d.result;
-  if (!r || d.status === 'not_driving' || d.status === 'merged') return [];
-  const out: Celebration[] = [];
-  if (r.progress.levelUp) out.push({ key: 'level', label: `Level ${r.progress.level}!`, icon: 'arrow-up-circle' });
-  for (const id of r.achievements) {
-    const a = ACHIEVEMENTS.find((x) => x.id === id);
-    out.push({ key: `ach-${id}`, label: a ? a.title : id, icon: 'trophy' });
-  }
-  for (const c of r.challenges) out.push({ key: `ch-${c.id}`, label: `${c.title} · +100`, icon: 'flag' });
-  if (r.streak.freezeEarned) out.push({ key: 'freeze', label: 'Freeze earned', icon: 'snow' });
-  return out;
 }
 
 // ── Reports ─────────────────────────────────────────────────────────────────────────────

@@ -1,22 +1,12 @@
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 
-import { Button, Card, Divider, Text, useTheme } from '@/ui';
+import { Button, Divider, Text, useTheme } from '@/ui';
 
 import { signedPoints } from './format';
 import { canReport, disputeText, isRemoved, RECEIPT_MAX_LINES, spokenPoints, type Receipt as ReceiptData, type ReceiptLine } from './summary';
 
 const TABULAR = { fontVariant: ['tabular-nums' as const] };
-
-/** A receipt's dashed rule above the total. A one-sided dashed border draws solid on iOS, so a clipped box draws it. */
-function DashedRule() {
-  const t = useTheme();
-  return (
-    <View accessibilityElementsHidden importantForAccessibility="no" style={{ height: 1, overflow: 'hidden', marginTop: t.space.xs }}>
-      <View style={{ height: 2, borderWidth: 1, borderStyle: 'dashed', borderColor: t.colors.borderStrong }} />
-    </View>
-  );
-}
 
 /** A screen reader reads "→" as "right arrow"; the multiplier line says "to" instead. */
 const spokenArrow = (s: string): string => s.replace(/ → /g, ' to ');
@@ -117,18 +107,19 @@ export type ReceiptProps = {
 };
 
 /**
- * The summary's points receipt: Earned in green, one line per deduction in red (tap → circled on
- * the map, Report under it), at most five before "Show more", then the total under a dashed rule.
- * Every amount carries its sign, so colour is never the only cue.
+ * The points breakdown under the summary's total: Earned in green, one line per deduction in red
+ * (tap → circled on the map, Report under it). At most three entries show, Earned counting as one,
+ * before "Show more". Every amount carries its sign, so colour is never the only cue.
  */
 export function Receipt({ receipt, selectedId, onSelect, onReport }: ReceiptProps) {
   const t = useTheme();
   const [all, setAll] = useState(false);
-  const { earned, detail, deductions, total, note } = receipt;
-  const hidden = deductions.length - RECEIPT_MAX_LINES;
-  const shown = all || hidden <= 0 ? deductions : deductions.slice(0, RECEIPT_MAX_LINES);
+  const { earned, detail, deductions, note } = receipt;
+  const room = RECEIPT_MAX_LINES - (earned !== null ? 1 : 0);
+  const hidden = deductions.length - room;
+  const shown = all || hidden <= 0 ? deductions : deductions.slice(0, room);
   return (
-    <Card padded style={{ gap: 0 }} testID="receipt">
+    <View testID="receipt">
       {earned !== null ? <EarnedRow earned={earned} detail={detail} /> : null}
       {deductions.length === 0 ? (
         <>
@@ -157,27 +148,11 @@ export function Receipt({ receipt, selectedId, onSelect, onReport }: ReceiptProp
           style={{ alignSelf: 'flex-start', marginTop: t.space.xs }}
         />
       ) : null}
-      {total !== null ? (
-        <>
-          <DashedRule />
-          <View
-            testID="receipt-total"
-            accessible
-            accessibilityLabel={`Total, ${spokenPoints(total)}`}
-            style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: t.space.md, paddingTop: t.space.md }}
-          >
-            <Text variant="headline">Total</Text>
-            <Text variant="stat" style={TABULAR}>
-              {signedPoints(total)}
-            </Text>
-          </View>
-        </>
-      ) : null}
       {note ? (
         <Text variant="footnote" tone="muted" style={{ paddingTop: t.space.sm }}>
           {note}
         </Text>
       ) : null}
-    </Card>
+    </View>
   );
 }

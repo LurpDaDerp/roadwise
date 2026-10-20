@@ -7,14 +7,12 @@ import { eventMarks, markShape, metersPerPixel, MIN_MARK_PX, regionFor, sketchPa
 import { homeStats, trendFor } from '../stats';
 import {
   breakdownLines,
-  celebrations,
   multiplierText,
   notDrivingLabel,
   pointsState,
   receipt,
   reportReasons,
   spokenPoints,
-  streakLine,
 } from '../summary';
 
 describe('DashPal', () => {
@@ -260,19 +258,6 @@ describe('summary', () => {
     expect(spokenPoints(-1)).toBe('minus 1 point');
     expect(spokenPoints(-1240)).toBe('minus 1,240 points');
     expect(spokenPoints(0)).toBe('0 points');
-  });
-
-  test('the streak line covers growth, freezes and risk', () => {
-    expect(streakLine(drive())!.text).toBe('Streak 11 · next drive ×1.22');
-    const r = drive().result!;
-    expect(streakLine(drive({ result: { ...r, streak: { ...r.streak, outcome: 'freeze_used', after: 11 } } }))!.text).toBe('Freeze used · streak stays at 11');
-    expect(streakLine(drive({ result: { ...r, streak: { ...r.streak, outcome: 'at_risk' } } }))!.text).toBe('Streak at risk: drive clean next time');
-  });
-
-  test('celebrations list level-ups, achievements and challenges', () => {
-    const r = drive().result!;
-    const c = celebrations(drive({ result: { ...r, achievements: ['streak_10'], challenges: [{ id: 'c1', title: 'Phone down' }], progress: { ...r.progress, levelUp: true, level: 5 } } }));
-    expect(c.map((x) => x.label)).toEqual(['Level 5!', 'Streak 10', 'Phone down · +100']);
   });
 
   test('report reasons fit the event type, with "wasn\'t driving" always offered', () => {
