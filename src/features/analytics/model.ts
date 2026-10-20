@@ -204,6 +204,22 @@ export function coach(scores: AxisScores, window: { drives: number; miles: numbe
   return { level, axis, title: AXIS_TITLE[axis], tip: AXIS_TIP[axis], also };
 }
 
+/** A category's own verdict says this when it is good. */
+export const AXIS_GOOD_TIP = 'Keep it up.';
+
+/**
+ * One axis's verdict, for its detail sheet: its own level with its title and tip when fair or
+ * poor, a short compliment when good, and the wait line under 3 drives or 10 miles (or no score).
+ */
+export function axisCoaching(axis: AxisKey, score: number | null, window: { drives: number; miles: number }): Omit<Coaching, 'axis' | 'also'> {
+  if (score === null || window.drives < COACH_MIN_DRIVES || window.miles < COACH_MIN_MILES) {
+    return { level: null, title: NO_DATA_TITLE, tip: NO_DATA_TIP };
+  }
+  const level = levelFor(score);
+  if (level === 'good') return { level, title: GOOD_TITLE, tip: AXIS_GOOD_TIP };
+  return { level, title: AXIS_TITLE[axis], tip: AXIS_TIP[axis] };
+}
+
 /** Home shows the tip card only when there is something to work on. */
 export const showsTip = (c: Coaching): boolean => c.level === 'fair' || c.level === 'poor';
 

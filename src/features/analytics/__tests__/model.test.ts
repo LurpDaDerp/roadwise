@@ -7,6 +7,7 @@ import { encodePolyline, encodeRuns } from '@/lib/polyline';
 import {
   AXES,
   AXIS_TIP,
+  axisCoaching,
   axisOf,
   axisPenalties,
   axisScores,
@@ -243,6 +244,17 @@ describe('levels and coaching', () => {
     expect(out.scores.braking).toBe(50);
     expect(out.scores.clean).toBe(67);
     expect(out.coaching).toMatchObject({ level: 'poor', axis: 'braking' });
+  });
+
+  test("a category's own verdict: its tip when fair or poor, a compliment when good, the wait line without enough driving", () => {
+    const enough = { drives: 3, miles: 10 };
+    expect(axisCoaching('braking', 72, enough)).toEqual({ level: 'fair', title: 'Brake more gently', tip: AXIS_TIP.braking });
+    expect(axisCoaching('clean', 40, enough)).toEqual({ level: 'poor', title: 'More clean drives', tip: AXIS_TIP.clean });
+    expect(axisCoaching('cornering', 80, enough)).toEqual({ level: 'good', title: 'Driving well', tip: 'Keep it up.' });
+    const wait = { level: null, title: 'Tips are on the way', tip: 'Drive a few more times to get tips here.' };
+    expect(axisCoaching('speeding', 40, { drives: 2, miles: 50 })).toEqual(wait);
+    expect(axisCoaching('speeding', 40, { drives: 5, miles: 9 })).toEqual(wait);
+    expect(axisCoaching('speeding', null, enough)).toEqual(wait);
   });
 });
 

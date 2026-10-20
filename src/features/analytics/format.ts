@@ -2,7 +2,7 @@
  * Number formatting for the Analytics cards: every value comes back as a short number plus a
  * unit, so the number sits in the display face and the unit beside it in small print. Pure.
  */
-import { distanceIn, distanceWord, type Units } from '@/lib/units';
+import { distanceIn, distanceWord, per100In, type Units } from '@/lib/units';
 import { formatPointsValue } from '@/ui';
 
 /** A number for the display face, its printed unit and the words a screen reader says. */
@@ -60,4 +60,13 @@ export function pointsMetric(n: number | null): Metric {
   const value = formatPointsValue(n, true);
   const r = Math.round(n);
   return { value, unit: 'pts', spoken: r > 0 ? `plus ${r} points` : r < 0 ? `minus ${Math.abs(r)} points` : '0 points' };
+}
+
+/** Events per 100 of the driver's units ("2.1 /100 mi", whole from 10 up); a dash with no distance. */
+export function rateMetric(count: number, miles: number, units: Units): Metric {
+  const unit = `/100 ${units}`;
+  if (!(miles > 0)) return { value: DASH, unit, spoken: 'no data' };
+  const v = per100In((count / miles) * 100, units);
+  const value = v >= 10 ? String(Math.round(v)) : v.toFixed(1);
+  return { value, unit, spoken: `${value} per 100 ${distanceWord(units)}` };
 }

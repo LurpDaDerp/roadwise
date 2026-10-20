@@ -1,11 +1,11 @@
-import { useWindowDimensions, View } from 'react-native';
+import { useWindowDimensions, View, type TextStyle } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
 import type { Units } from '@/lib/units';
-import { Card, Text, tokens, useFontScale } from '@/ui';
+import { Card, Text, tokens, useFontScale, type CardVariant } from '@/ui';
 
 import { analyticsCopy } from './copy';
-import { countMetric, distanceMetric, percentMetric, pointsMetric, speedMetric, timeMetric, type Metric } from './format';
+import { countMetric, distanceMetric, pointsMetric, speedMetric, type Metric } from './format';
 import { METRIC_CELL_GAP, MetricCell } from './MetricCell';
 import type { Trend, WindowSums } from './model';
 import { sizeAt } from './textSize';
@@ -13,16 +13,16 @@ import { TrendCard, trendCardHeight } from './TrendCard';
 
 const m = analyticsCopy.metrics;
 
-interface MetricGroup {
-  key: 'driving' | 'events' | 'phone';
+export interface MetricGroup {
+  key: string;
   title: string;
-  /** Four cells, read as two rows of two (or one row of four in the densest layout). */
+  /** Up to four cells, read as rows of two (or one row of four in the densest layout). */
   cells: { key: string; caption: string; metric: Metric }[];
 }
 
 /**
- * The range's twelve numbers in three groups of four: totals, event counts and two per-drive
- * averages. The event counts sit under the trend chart (or make up the middle card alone).
+ * The range's general numbers: Driving (drives, distance and two averages) and Points (the total
+ * and per drive). Each behaviour's own numbers live in its radar category's sheet.
  */
 export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
   return [
@@ -37,32 +37,23 @@ export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
       ],
     },
     {
-      key: 'events',
-      title: m.events,
+      key: 'points',
+      title: m.points,
       cells: [
-        { key: 'speeding', caption: m.speeding, metric: countMetric(s.speeding) },
-        { key: 'brakes', caption: m.hardBrakes, metric: countMetric(s.hardBrake) },
-        { key: 'starts', caption: m.hardStarts, metric: countMetric(s.hardAccel) },
-        { key: 'turns', caption: m.sharpTurns, metric: countMetric(s.hardCorner) },
-      ],
-    },
-    {
-      key: 'phone',
-      title: m.phone,
-      cells: [
-        { key: 'pickups', caption: m.pickups, metric: countMetric(s.pickups) },
-        { key: 'phone-time', caption: m.phoneTime, metric: timeMetric(s.handlingS) },
-        { key: 'clean', caption: m.cleanDrives, metric: percentMetric(s.cleanPct) },
+        { key: 'points', caption: m.totalPoints, metric: pointsMetric(s.drives > 0 ? s.points : null) },
         { key: 'avg-points', caption: m.avgPoints, metric: pointsMetric(s.avgPoints) },
       ],
     },
   ];
 }
 
+/** The main block's number cards by their cell counts: Driving and Points. */
+export const MAIN_CARDS: readonly number[] = [4, 2];
+
 /** The user's rule: the metrics block never takes more than this share of the window's height. */
 export const METRICS_MAX_SHARE = 0.75;
 
-/** How the three cards are drawn. The block picks the first that fits; see {@link metricsLayout}. */
+/** How the cards are drawn. The block picks the first that fits; see {@link metricsLayout}. */
 export interface MetricsLayout {
   name: 'grid' | 'compact' | 'row';
   /** Cells per row: 2 (two rows of two) or 4 (one row of four). */
@@ -72,7 +63,7 @@ export interface MetricsLayout {
   gap: number;
   /** Between cells in a row. */
   colGap: number;
-  /** Between the three cards. */
+  /** Between the cards. */
   blockGap: number;
   /** The number's size at 1× (the display face either way). */
   stat: { fontSize: number; lineHeight: number };
@@ -80,7 +71,7 @@ export interface MetricsLayout {
   textScale: number;
   /** The system's multiple (capped at 2×): the trend picker's labels follow it, not `textScale`. */
   fontScale: number;
-  /** The trend chart's plot height; 0 when there is no room for it and the middle card is the four event counts alone. */
+  /** The trend chart's plot height; 0 when there is no room for it (or no chart) and the Trend card is left out. */
   plot: number;
 }
 
@@ -122,94 +113,115 @@ const ROW: Base = { ...COMPACT, name: 'row', perRow: 4, colGap: space.sm, plotMa
  */
 export const captionLines = (l: Pick<MetricsLayout, 'perRow'>): 1 | 2 => (l.perRow === 4 ? 2 : 1);
 
-/** A number card's height: a title and one or two rows of number-over-caption cells. */
-function numberCardHeight(l: MetricsLayout): number {
+/** A number card's height: a title and its rows of number-over-caption cells. */
+function numberCardHeight(l: MetricsLayout, cells: number): number {
   const cell =
     sizeAt('stat', l.textScale, l.stat).lineHeight + METRIC_CELL_GAP + captionLines(l) * sizeAt('label', l.textScale).lineHeight;
-  const rows = 4 / l.perRow;
+  const rows = Math.ceil(cells / l.perRow);
   // The card's gap sits between its title and each row.
   return l.pad * 2 + sizeAt('title3', l.textScale).lineHeight + rows * (l.gap + cell);
 }
 
-/** The block's height in a layout: the Driving and Phone & points cards, the trend card (or the event counts alone), and the gaps. */
-export function metricsBlockHeight(l: MetricsLayout): number {
-  const number = numberCardHeight(l);
-  return number * 2 + (l.plot > 0 ? trendCardHeight(l) : number) + l.blockGap * 2;
+/** The block's height in a layout: its number cards (by cell count), the trend card when it has a plot, and the gaps. */
+export function metricsBlockHeight(l: MetricsLayout, cards: readonly number[] = MAIN_CARDS): number {
+  const parts = cards.map((n) => numberCardHeight(l, n));
+  if (l.plot > 0) parts.push(trendCardHeight(l));
+  return parts.reduce((a, b) => a + b, 0) + l.blockGap * (parts.length - 1);
 }
 
 /**
- * The densest layout the block needs to stay within three quarters of the window's height at the
- * reader's text size: the standard 2 × 2 cards, then tighter 2 × 2 cards, then one row of four.
- * In each, the trend chart takes the room that is left, up to the layout's most, and the layout
- * fits only if that is at least its least.
+ * The densest layout a block of number cards (and, with `chart`, the trend card) needs to stay
+ * within three quarters of the window's height at the reader's text size: the standard 2 × 2
+ * cards, then tighter 2 × 2 cards, then one row of four. In each, the trend chart takes the room
+ * that is left, up to the layout's most, and the layout fits only if that is at least its least.
  *
  * The reader's text size comes before the chart: when no layout has room for it (the shortest
- * phones, the largest text), the middle card drops the chart and keeps the event counts, and the
- * three number cards go through the same steps. When even their row is too tall, the block's text
- * stops growing at the largest size that fits (never below 1×).
+ * phones, the largest text), the Trend card is left out and the number cards go through the same
+ * steps. When even their row is too tall, the block's text stops growing at the largest size that
+ * fits (never below 1×). A category sheet's numbers use the same rule with no chart.
  */
-export function metricsLayout(windowHeight: number, fontScale: number): MetricsLayout {
+export function metricsLayout(windowHeight: number, fontScale: number, cards: readonly number[] = MAIN_CARDS, chart = true): MetricsLayout {
   const limit = windowHeight * METRICS_MAX_SHARE;
-  for (const base of [GRID, COMPACT, ROW]) {
-    const l = { ...base, textScale: fontScale, fontScale, plot: base.plotMin };
-    // The block grows one for one with the plot, so whatever is left under the limit is the plot's.
-    const room = Math.floor(base.plotMin + limit - metricsBlockHeight(l));
-    if (room >= base.plotMin) return { ...l, plot: Math.min(base.plotMax, room) };
+  if (chart) {
+    for (const base of [GRID, COMPACT, ROW]) {
+      const l = { ...base, textScale: fontScale, fontScale, plot: base.plotMin };
+      // The block grows one for one with the plot, so whatever is left under the limit is the plot's.
+      const room = Math.floor(base.plotMin + limit - metricsBlockHeight(l, cards));
+      if (room >= base.plotMin) return { ...l, plot: Math.min(base.plotMax, room) };
+    }
   }
   for (const base of [GRID, COMPACT, ROW]) {
     const l = { ...base, textScale: fontScale, fontScale, plot: 0 };
-    if (metricsBlockHeight(l) <= limit) return l;
+    if (metricsBlockHeight(l, cards) <= limit) return l;
   }
   for (let s = Math.floor(fontScale * 20) / 20; s > 1; s = Math.round((s - 0.05) * 100) / 100) {
     const l = { ...ROW, textScale: s, fontScale, plot: 0 };
-    if (metricsBlockHeight(l) <= limit) return l;
+    if (metricsBlockHeight(l, cards) <= limit) return l;
   }
   return { ...ROW, textScale: Math.min(fontScale, 1), fontScale, plot: 0 };
 }
 
+export interface MetricsText {
+  title: TextStyle;
+  stat: TextStyle;
+  unit: TextStyle;
+  label: TextStyle;
+}
+
+/** The block's text sizes in a layout. */
+export const metricsText = (l: MetricsLayout): MetricsText => ({
+  title: sizeAt('title3', l.textScale),
+  stat: sizeAt('stat', l.textScale, l.stat),
+  unit: sizeAt('footnote', l.textScale),
+  label: sizeAt('label', l.textScale),
+});
+
+/** One number card: a title over rows of two cells (or one row of four). */
+export function NumberCard({ group: g, layout: l, text, variant }: { group: MetricGroup; layout: MetricsLayout; text: MetricsText; variant?: CardVariant }) {
+  const rows: MetricGroup['cells'][] = [];
+  for (let i = 0; i < g.cells.length; i += l.perRow) rows.push(g.cells.slice(i, i + l.perRow));
+  return (
+    <Card variant={variant} padded={false} style={{ padding: l.pad, gap: l.gap }} testID={`metrics-${g.key}`}>
+      <Text variant="title3" accessibilityRole="header" style={text.title} testID={`metrics-${g.key}-title`}>
+        {g.title}
+      </Text>
+      {rows.map((row, i) => (
+        <View key={i} style={{ flexDirection: 'row', gap: l.colGap }} testID={`metrics-${g.key}-row-${i}`}>
+          {row.map((c) => (
+            <MetricCell
+              key={c.key}
+              caption={c.caption}
+              metric={c.metric}
+              text={text}
+              captionLines={captionLines(l)}
+              style={{ flex: 1 }}
+              testID={`metric-${c.key}`}
+            />
+          ))}
+        </View>
+      ))}
+    </Card>
+  );
+}
+
 /**
- * Three compact cards: Driving and Phone & points, each a 2 × 2 grid of numbers, and between them
- * the range's trend over its event counts (the counts alone when the window has no room for it).
+ * The range's general cards: Driving and Points, each a grid of numbers, and between them the
+ * range's trend (left out when the window has no room for its chart).
  */
 export function MetricsCards({ sums, trend }: { sums: WindowSums; trend: Trend }) {
   const units = useUnits();
   const { width, height } = useWindowDimensions();
   const l = metricsLayout(height, useFontScale());
-  const text = {
-    title: sizeAt('title3', l.textScale),
-    stat: sizeAt('stat', l.textScale, l.stat),
-    unit: sizeAt('footnote', l.textScale),
-    label: sizeAt('label', l.textScale),
-  };
+  const text = metricsText(l);
+  const [driving, points] = metricGroups(sums, units);
   return (
     <View style={{ gap: l.blockGap }} testID="analytics-metrics">
-      {metricGroups(sums, units).map((g) =>
-        g.key === 'events' && l.plot > 0 ? (
-          // The chart spans the card's inside: the window less the screen gutter and the card's padding, each side.
-          <TrendCard key={g.key} trend={trend} counts={g.cells} units={units} layout={l} width={width - 2 * space.lg - 2 * l.pad} text={text} />
-        ) : (
-          <Card key={g.key} padded={false} style={{ padding: l.pad, gap: l.gap }} testID={`metrics-${g.key}`}>
-            <Text variant="title3" accessibilityRole="header" style={text.title} testID={`metrics-${g.key}-title`}>
-              {g.title}
-            </Text>
-            {(l.perRow === 4 ? [g.cells] : [g.cells.slice(0, 2), g.cells.slice(2, 4)]).map((row, i) => (
-              <View key={i} style={{ flexDirection: 'row', gap: l.colGap }} testID={`metrics-${g.key}-row-${i}`}>
-                {row.map((c) => (
-                  <MetricCell
-                    key={c.key}
-                    caption={c.caption}
-                    metric={c.metric}
-                    text={text}
-                    captionLines={captionLines(l)}
-                    style={{ flex: 1 }}
-                    testID={`metric-${c.key}`}
-                  />
-                ))}
-              </View>
-            ))}
-          </Card>
-        )
-      )}
+      <NumberCard group={driving!} layout={l} text={text} />
+      {l.plot > 0 ? (
+        // The chart spans the card's inside: the window less the screen gutter and the card's padding, each side.
+        <TrendCard trend={trend} units={units} layout={l} width={width - 2 * space.lg - 2 * l.pad} text={text} />
+      ) : null}
+      <NumberCard group={points!} layout={l} text={text} />
     </View>
   );
 }

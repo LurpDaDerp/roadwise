@@ -11,9 +11,10 @@ import { tokens } from '@/ui/tokens';
 
 import { drives, NO_SCORES, SCORES } from '../__fixtures__/analytics';
 import { BestsCard } from '../BestsCard';
+import { CATEGORY_BEST, categoryGroup, CategorySheet, categoryTitle } from '../CategorySheet';
 import { DRIVES_PAGE, DrivesCard, driveLine } from '../DrivesCard';
-import { metricGroups, metricsBlockHeight, MetricsCards, metricsLayout, METRICS_MAX_SHARE } from '../MetricsCards';
-import { coach, driveGrid, EMPTY_TREND, EMPTY_WINDOW, fitLines, personalBests, trend, windowSums, type MapPoint } from '../model';
+import { metricGroups, metricsBlockHeight, MetricsCards, metricsLayout, METRICS_MAX_SHARE, metricsText } from '../MetricsCards';
+import { AXES, coach, driveGrid, EMPTY_TREND, EMPTY_WINDOW, fitLines, personalBests, trend, windowSums, type MapPoint } from '../model';
 import { RADAR_LABEL_MAX_SCALE, radarGeometry, radarLabel, radarPoint, radarPolygon, RadarCard } from '../RadarCard';
 import { SummaryCard } from '../SummaryCard';
 import { chartBoxHeight, monotonePath, PLOT_EDGE, plotPoint, trendLabel, trendValue, visibleTicks } from '../TrendCard';
@@ -37,7 +38,7 @@ const flat = (el: El): ViewStyle & TextStyle => StyleSheet.flatten(el.props.styl
 
 describe('RadarCard', () => {
   test('the Safety Rating sits in the middle as a whole number, with every axis and its score around it', async () => {
-    await draw(<RadarCard rating={92.4} scores={SCORES} />);
+    await draw(<RadarCard rating={92.4} scores={SCORES} onOpen={jest.fn()} />);
     expect(screen.getByTestId('radar-rating')).toHaveTextContent('92');
     expect(screen.getByTestId('radar-out-of')).toHaveTextContent('/100');
     expect(screen.getByText('Safety Rating')).toBeOnTheScreen();
@@ -59,14 +60,28 @@ describe('RadarCard', () => {
   });
 
   test('one summary label for a screen reader lists the rating and every axis', async () => {
-    await draw(<RadarCard rating={92.4} scores={SCORES} />);
+    await draw(<RadarCard rating={92.4} scores={SCORES} onOpen={jest.fn()} />);
     const label = 'Safety Rating 92 out of 100. Speeding 88, Braking 72, Acceleration 95, Cornering 100, Phone use 60, Clean drives 50.';
     expect(screen.getByLabelText(label)).toBeOnTheScreen();
     expect(screen.getByLabelText(label).props.accessibilityRole).toBe('image');
   });
 
+  test('each axis is a button that opens its category, named with its score', async () => {
+    const onOpen = jest.fn();
+    await draw(<RadarCard rating={92.4} scores={{ ...SCORES, cornering: null }} onOpen={onOpen} />);
+    const speeding = screen.getByRole('button', { name: 'Speeding, score 88' });
+    expect(speeding.props.accessibilityHint).toBe('Opens details');
+    expect(screen.getByRole('button', { name: 'Cornering, no score yet' })).toBeOnTheScreen();
+    expect(screen.getAllByRole('button')).toHaveLength(6);
+    for (const key of ['speeding', 'braking', 'accel', 'cornering', 'phone', 'clean'] as const) {
+      expect(Number(flat(screen.getByTestId(`radar-axis-${key}`)).height)).toBeGreaterThanOrEqual(tokens.size.touch);
+      await press(screen.getByTestId(`radar-axis-${key}`));
+      expect(onOpen).toHaveBeenLastCalledWith(key);
+    }
+  });
+
   test('no rating and no data: dashes everywhere, the shape folds to the centre', async () => {
-    await draw(<RadarCard rating={null} scores={NO_SCORES} />);
+    await draw(<RadarCard rating={null} scores={NO_SCORES} onOpen={jest.fn()} />);
     expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
     expect(screen.queryByTestId('radar-out-of')).toBeNull();
     expect(screen.getAllByText('—')).toHaveLength(7);
@@ -118,6 +133,9 @@ describe('RadarCard', () => {
       expect(b.align).toBe('right');
     }
     for (const b of g.labels) {
+      // each label is a button: never under the touch floor
+      expect(b.height).toBeGreaterThanOrEqual(tokens.size.touch);
+      expect(b.width).toBeGreaterThanOrEqual(tokens.size.touch);
       expect(b.left).toBeGreaterThanOrEqual(0);
       expect(b.top).toBeGreaterThanOrEqual(0);
       expect(b.left + b.width).toBeLessThanOrEqual(g.width);
@@ -128,7 +146,7 @@ describe('RadarCard', () => {
 
   test('the drawn labels follow the geometry and stop growing at 1.3× text', async () => {
     setWindow(390, 844, 2);
-    await draw(<RadarCard rating={80} scores={SCORES} />);
+    await draw(<RadarCard rating={80} scores={SCORES} onOpen={jest.fn()} />);
     const box = radarGeometry(390 - 4 * tokens.space.lg, RADAR_LABEL_MAX_SCALE).labels[2]!;
     expect(flat(screen.getByTestId('radar-axis-accel'))).toMatchObject({ left: box.left, top: box.top, width: box.width, height: box.height });
     expect(flat(screen.getByText('Acceleration')).fontSize).toBeCloseTo(tokens.type.caption.fontSize * RADAR_LABEL_MAX_SCALE);
@@ -136,7 +154,7 @@ describe('RadarCard', () => {
   });
 
   test('the chart ink is monotone: the page ink, no signal colours', async () => {
-    await draw(<RadarCard rating={80} scores={SCORES} />);
+    await draw(<RadarCard rating={80} scores={SCORES} onOpen={jest.fn()} />);
     expect(screen.getByTestId('radar-rating')).toHaveStyle({ color: light.text });
     expect(screen.getByText('Speeding')).toHaveStyle({ color: light.textMuted });
   });
@@ -191,10 +209,17 @@ describe('BestsCard', () => {
     drive({ clientTripId: 'phone', pointsNet: 80, miles: 18, counts: { ...drive().counts, pickups: 2 } }),
   ];
 
-  test('one row of three, each opening its drive', async () => {
+  test('the page shows only the general best, most points', async () => {
+    await draw(<BestsCard bests={personalBests(list)} show={['points']} onOpen={jest.fn()} />);
+    expect(screen.getByText('Personal best')).toBeOnTheScreen();
+    expect(screen.getByTestId('best-points-value')).toHaveTextContent('+310 pts');
+    expect(screen.queryByTestId('best-clean')).toBeNull();
+    expect(screen.queryByTestId('best-phone-free')).toBeNull();
+  });
+
+  test('each best opens its drive', async () => {
     const onOpen = jest.fn();
-    await draw(<BestsCard bests={personalBests(list)} onOpen={onOpen} />);
-    expect(screen.getByText('Personal bests')).toBeOnTheScreen();
+    await draw(<BestsCard bests={personalBests(list)} show={['points', 'clean', 'phone-free']} onOpen={onOpen} />);
     expect(screen.getByTestId('best-points-value')).toHaveTextContent('+310 pts');
     expect(screen.getByTestId('best-clean-value')).toHaveTextContent('31.2 mi');
     expect(screen.getByTestId('best-phone-free-value')).toHaveTextContent('31.2 mi');
@@ -205,12 +230,12 @@ describe('BestsCard', () => {
 
   test('in kilometres when the driver uses them', async () => {
     publishUnits('km');
-    await draw(<BestsCard bests={personalBests(list)} onOpen={jest.fn()} />);
+    await draw(<BestsCard bests={personalBests(list)} show={['clean']} onOpen={jest.fn()} />);
     expect(screen.getByTestId('best-clean-value')).toHaveTextContent('50.3 km');
   });
 
   test('no drives yet: dashes, nothing to press', async () => {
-    await draw(<BestsCard bests={personalBests([])} onOpen={jest.fn()} />);
+    await draw(<BestsCard bests={personalBests([])} show={['points', 'clean', 'phone-free']} onOpen={jest.fn()} />);
     expect(screen.getAllByText('—')).toHaveLength(3);
     expect(screen.getByTestId('best-points').props.accessibilityRole).toBeUndefined();
     expect(screen.getByLabelText('Phone-free, none yet')).toBeOnTheScreen();
@@ -218,26 +243,32 @@ describe('BestsCard', () => {
 });
 
 describe('MetricsCards', () => {
-  test('three cards: Driving, the Trend over the event counts, Phone & points, with per-drive averages', async () => {
+  test('three cards: Driving, the Trend, and Points, with no behaviour counts and no per-event points', async () => {
     const sums = windowSums(drives(4), null);
     await draw(<MetricsCards sums={sums} trend={EMPTY_TREND} />);
-    for (const title of ['Driving', 'Trend', 'Phone & points']) expect(screen.getByText(title)).toBeOnTheScreen();
+    for (const [key, title] of [
+      ['driving', 'Driving'],
+      ['trend', 'Trend'],
+      ['points', 'Points'],
+    ]) expect(screen.getByTestId(`metrics-${key}-title`)).toHaveTextContent(title!);
     expect(screen.queryByTestId('metrics-events')).toBeNull();
+    expect(screen.queryByTestId('metrics-phone')).toBeNull();
+    expect(screen.queryByTestId('metrics-trend-row-0')).toBeNull();
+    for (const key of ['speeding', 'brakes', 'starts', 'turns', 'pickups', 'phone-time', 'clean']) expect(screen.queryByTestId(`metric-${key}`)).toBeNull();
     expect(screen.getByRole('tab', { name: 'Events' })).toBeOnTheScreen();
     expect(metricGroups(sums, 'mi').map((g) => g.cells.map((c) => c.caption))).toEqual([
       ['Drives', 'Distance', 'Avg drive', 'Avg speed'],
-      ['Speeding', 'Hard brakes', 'Hard starts', 'Sharp turns'],
-      ['Pickups', 'Phone time', 'Clean drives', 'Avg points'],
+      ['Total points', 'Avg points'],
     ]);
     expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('4');
     expect(screen.getByTestId('metric-distance-value')).toHaveTextContent('48.0 mi');
     expect(screen.getByTestId('metric-avg-drive-value')).toHaveTextContent('12.0 mi');
     expect(screen.getByTestId('metric-speed-value')).toHaveTextContent('30 mph');
-    expect(screen.getByTestId('metric-brakes-value')).toHaveTextContent('4');
-    expect(screen.getByTestId('metric-clean-value')).toHaveTextContent('0 %');
+    expect(screen.getByTestId('metric-points-value')).toHaveTextContent('+528 pts');
     expect(screen.getByTestId('metric-avg-points-value')).toHaveTextContent('+132 pts');
     expect(screen.getByLabelText('Distance, 48.0 miles')).toBeOnTheScreen();
     expect(screen.getByLabelText('Avg drive, 12.0 miles')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Total points, plus 528 points')).toBeOnTheScreen();
     expect(screen.getByLabelText('Avg points, plus 132 points')).toBeOnTheScreen();
     expect(metricGroups(sums, 'km')[0]!.cells[2]!.metric).toMatchObject({ value: '19.3', unit: 'km' });
   });
@@ -248,7 +279,7 @@ describe('MetricsCards', () => {
     expect(screen.getByTestId('metric-distance-value')).toHaveTextContent('0.0 mi');
     expect(screen.getByTestId('metric-avg-drive-value')).toHaveTextContent('— mi');
     expect(screen.getByTestId('metric-speed-value')).toHaveTextContent('— mph');
-    expect(screen.getByTestId('metric-clean-value')).toHaveTextContent('— %');
+    expect(screen.getByTestId('metric-points-value')).toHaveTextContent('— pts');
     expect(screen.getByTestId('metric-avg-points-value')).toHaveTextContent('— pts');
     expect(screen.getByLabelText('Avg points, no data')).toBeOnTheScreen();
     // a zero-drive range from real data reads the same: no NaN or Infinity
@@ -259,8 +290,8 @@ describe('MetricsCards', () => {
    * The block's height as drawn, read off the rendered tree: each card's padding, its title's line,
    * and per row the card gap plus the tallest cell (number line + cell gap + caption line); then the
    * gaps between the cards. The trend card counts its header row (the title or the picker, the
-   * taller), its chart box and its row of counts. The lines are the rendered `lineHeight`s and
-   * heights, so this follows whatever sizes and spacing the cards actually use.
+   * taller) and its chart box. The lines are the rendered `lineHeight`s and heights, so this follows
+   * whatever sizes and spacing the cards actually use.
    */
   const cellsIn = (row: El) => within(row).getAllByTestId(/^metric-(?!.*-(value|caption)$)[a-z-]+$/);
   const rowHeight = (row: El) =>
@@ -273,26 +304,29 @@ describe('MetricsCards', () => {
         return value + Number(flat(cell).gap ?? 0) + caption;
       })
     );
+  /** One number card's drawn height. */
+  function numberCardDrawn(key: string): number {
+    const card = flat(screen.getByTestId(`metrics-${key}`));
+    const gap = Number(card.gap ?? 0);
+    const title = Number(flat(screen.getByTestId(`metrics-${key}-title`)).lineHeight);
+    const rows = screen.getAllByTestId(new RegExp(`^metrics-${key}-row-`));
+    const rowsH = rows.reduce((sum, row) => sum + gap + rowHeight(row), 0);
+    return Number(card.padding ?? 0) * 2 + title + rowsH;
+  }
   function drawnHeight(): number {
-    const cards = (['driving', 'events', 'phone'] as const).map((key) => {
-      const trendCard = key === 'events' ? screen.queryByTestId('metrics-trend') : null;
-      if (trendCard) {
-        const card = flat(trendCard);
-        const gap = Number(card.gap ?? 0);
-        const header = Math.max(
-          Number(flat(screen.getByTestId('metrics-trend-title')).lineHeight),
-          Number(flat(screen.getByTestId('metrics-trend-picker')).minHeight)
-        );
-        expect(flat(screen.getByTestId('metrics-trend-header')).minHeight).toBe(header);
-        const chart = Number(flat(screen.getByTestId('trend-chart-box')).height);
-        return Number(card.padding ?? 0) * 2 + header + gap + chart + gap + rowHeight(screen.getByTestId('metrics-trend-row-0'));
-      }
-      const card = flat(screen.getByTestId(`metrics-${key}`));
+    const cards = (['driving', 'trend', 'points'] as const).flatMap((key) => {
+      if (key !== 'trend') return [numberCardDrawn(key)];
+      const trendCard = screen.queryByTestId('metrics-trend');
+      if (!trendCard) return [];
+      const card = flat(trendCard);
       const gap = Number(card.gap ?? 0);
-      const title = Number(flat(screen.getByTestId(`metrics-${key}-title`)).lineHeight);
-      const rows = screen.getAllByTestId(new RegExp(`^metrics-${key}-row-`));
-      const rowsH = rows.reduce((sum, row) => sum + gap + rowHeight(row), 0);
-      return Number(card.padding ?? 0) * 2 + title + rowsH;
+      const header = Math.max(
+        Number(flat(screen.getByTestId('metrics-trend-title')).lineHeight),
+        Number(flat(screen.getByTestId('metrics-trend-picker')).minHeight)
+      );
+      expect(flat(screen.getByTestId('metrics-trend-header')).minHeight).toBe(header);
+      const chart = Number(flat(screen.getByTestId('trend-chart-box')).height);
+      return [Number(card.padding ?? 0) * 2 + header + gap + chart];
     });
     const blockGap = Number(flat(screen.getByTestId('analytics-metrics')).gap ?? 0);
     return cards.reduce((a, b) => a + b, 0) + blockGap * (cards.length - 1);
@@ -320,65 +354,169 @@ describe('MetricsCards', () => {
     // The layout model agrees with what was drawn.
     const l = metricsLayout(height, Math.min(fontScale, 2));
     expect(metricsBlockHeight(l)).toBeCloseTo(drawn, 5);
-    expect(screen.getAllByTestId(/^metric-[a-z-]+-value$/)).toHaveLength(12);
+    expect(screen.getAllByTestId(/^metric-[a-z-]+-value$/)).toHaveLength(6);
     // With room, the chart is drawn at the plot height the layout gave it.
     if (l.plot > 0) expect(screen.getByTestId('trend-chart').props.height).toBe(l.plot);
     else expect(screen.queryByTestId('metrics-trend')).toBeNull();
   });
 
-  test('the chart takes the room left: standard cards on a big phone, tighter ones on most, a row of four on short ones', async () => {
+  test('the chart takes the room left: the standard cards with the tallest chart on most phones, tighter ones on short ones', () => {
     expect(metricsLayout(932, 1)).toMatchObject({ name: 'grid', perRow: 2, textScale: 1, plot: 120 });
-    expect(metricsBlockHeight(metricsLayout(932, 1))).toBe(690);
-    expect(metricsLayout(844, 1)).toMatchObject({ name: 'compact', perRow: 2, textScale: 1, plot: 96 });
-    expect(metricsBlockHeight(metricsLayout(844, 1))).toBe(594);
-    expect(metricsLayout(740, 1)).toMatchObject({ name: 'compact', plot: 57 });
-    expect(metricsLayout(667, 1)).toMatchObject({ name: 'row', perRow: 4, textScale: 1, plot: 78 });
-    expect(metricsLayout(640, 1)).toMatchObject({ name: 'row', plot: 58 });
-    expect(metricsLayout(844, 1.3)).toMatchObject({ name: 'row', textScale: 1.3, plot: 80 });
+    expect(metricsLayout(844, 1)).toMatchObject({ name: 'grid', perRow: 2, textScale: 1, plot: 120 });
+    expect(metricsLayout(667, 1)).toMatchObject({ name: 'compact', perRow: 2, textScale: 1 });
+    for (const h of [932, 844, 740, 667, 640, 568]) {
+      const l = metricsLayout(h, 1);
+      expect(l.plot).toBeGreaterThan(0);
+      expect(metricsBlockHeight(l)).toBeLessThanOrEqual(h * METRICS_MAX_SHARE);
+    }
   });
 
-  test('no room for the chart: the middle card is the event counts, and the text size comes first', async () => {
-    // The shortest phone: the counts alone, as a row of four.
-    expect(metricsLayout(568, 1)).toMatchObject({ name: 'row', textScale: 1, plot: 0 });
-    expect(metricsBlockHeight(metricsLayout(568, 1))).toBe(382);
+  test('no room for the chart: the Trend card is left out, and the text size comes first', async () => {
     // 2× text keeps its size and drops the chart.
-    expect(metricsLayout(844, 2)).toMatchObject({ name: 'row', perRow: 4, textScale: 2, plot: 0 });
+    expect(metricsLayout(740, 2)).toMatchObject({ name: 'grid', textScale: 2, plot: 0 });
     // Too tall even as a row: the block's text stops growing where it fits, never below 1×.
-    const capped = metricsLayout(640, 2);
+    const capped = metricsLayout(400, 2);
     expect(capped).toMatchObject({ name: 'row', plot: 0 });
     expect(capped.textScale).toBeLessThan(2);
     expect(capped.textScale).toBeGreaterThanOrEqual(1);
-    expect(metricsBlockHeight(capped)).toBeLessThanOrEqual(480);
+    expect(metricsBlockHeight(capped)).toBeLessThanOrEqual(400 * METRICS_MAX_SHARE);
 
-    setWindow(390, 844, 2);
+    setWindow(390, 740, 2);
     await draw(<MetricsCards sums={EMPTY_WINDOW} trend={EMPTY_TREND} />);
-    expect(screen.getAllByTestId(/^metrics-driving-row-/)).toHaveLength(1);
-    expect(cellsIn(screen.getByTestId('metrics-driving-row-0'))).toHaveLength(4);
     expect(screen.queryByTestId('metrics-trend')).toBeNull();
-    expect(screen.getByTestId('metrics-events-title')).toHaveTextContent('Events');
-    expect(cellsIn(screen.getByTestId('metrics-events-row-0'))).toHaveLength(4);
+    expect(screen.getByTestId('metrics-driving')).toBeOnTheScreen();
+    expect(screen.getAllByTestId(/^metrics-points-row-/)).toHaveLength(1);
+    expect(cellsIn(screen.getByTestId('metrics-points-row-0'))).toHaveLength(2);
   });
 
   test('large text never draws a number or caption smaller than 1×: the row of four wraps its captions to two lines, and every fit has a floor', async () => {
     setWindow(390, 844, 2);
     await draw(<MetricsCards sums={windowSums(drives(4), null)} trend={trend(drives(4), [], 'week', NOW)} />);
+    const l = metricsLayout(844, 2);
     for (const el of screen.getAllByTestId(/^metric-[a-z-]+-caption$/)) {
-      expect(el.props).toMatchObject({ numberOfLines: 2, minimumFontScale: 0.85 });
+      expect(el.props).toMatchObject({ numberOfLines: l.perRow === 4 ? 2 : 1, minimumFontScale: 0.85 });
       // 14 pt label at 2×, floored at 0.85: still above the 14 pt it is at 1×
       expect(Number(flat(el).fontSize) * Number(el.props.minimumFontScale)).toBeGreaterThan(tokens.type.label.fontSize);
     }
     for (const el of screen.getAllByTestId(/^metric-[a-z-]+-value$/)) expect(el.props.minimumFontScale).toBe(0.7);
+    setWindow(390, 640, 1.3);
+    await draw(<MetricsCards sums={windowSums(drives(4), null)} trend={trend(drives(4), [], 'week', NOW)} />);
+    expect(metricsLayout(640, 1.3).perRow).toBe(4);
+    expect(screen.getByTestId('metric-avg-points-caption').props.numberOfLines).toBe(2);
     setWindow(390, 844, 1);
     await draw(<MetricsCards sums={windowSums(drives(4), null)} trend={trend(drives(4), [], 'week', NOW)} />);
-    expect(screen.getByTestId('metric-clean-caption').props.numberOfLines).toBe(1);
-    await draw(<BestsCard bests={personalBests([])} onOpen={jest.fn()} />);
+    expect(screen.getByTestId('metric-avg-points-caption').props.numberOfLines).toBe(1);
+    await draw(<BestsCard bests={personalBests([])} show={['points', 'clean', 'phone-free']} onOpen={jest.fn()} />);
     expect(screen.getByTestId('best-clean-caption').props).toMatchObject({ numberOfLines: 2, minimumFontScale: 0.85 });
   });
 
   test('at 390 × 844 a 2 × 2 cell has room for "1,204 mi" in the display face', () => {
-    // Half the card's inner width (the tighter cards there), less the gap between the two cells.
+    // Half the card's inner width, less the gap between the two cells.
     const { pad, colGap } = metricsLayout(844, 1);
     expect((390 - 2 * tokens.space.lg - 2 * pad - colGap) / 2).toBeGreaterThanOrEqual(150);
+  });
+});
+
+describe('CategorySheet', () => {
+  // Four 12 mi drives with a hard brake each; the second one clean and phone-free.
+  const list = drives(4).map((d, i) => (i === 1 ? { ...d, clean: true, counts: { ...d.counts, hardBrake: 0 } } : { ...d, counts: { ...d.counts, pickups: 1, handlingS: 30 } }));
+  const sums = windowSums(list, null);
+  const props = {
+    visible: true,
+    onClose: jest.fn(),
+    last30: { drives: 4, miles: 48 },
+    sums,
+    bests: personalBests(list),
+    range: 'week' as const,
+    onRange: jest.fn(),
+    onOpenDrive: jest.fn(),
+  };
+
+  test("each category's numbers over the range: its own counts, never points", () => {
+    expect(Object.fromEntries(AXES.map((a) => [a.key, categoryGroup(a.key, sums, 'week', 'mi').cells.map((c) => c.caption)]))).toEqual({
+      speeding: ['Speeding', 'Rate'],
+      braking: ['Hard brakes', 'Rate'],
+      accel: ['Hard starts', 'Rate'],
+      cornering: ['Sharp turns', 'Rate'],
+      phone: ['Pickups', 'Phone time'],
+      clean: ['Clean drives', 'Clean share'],
+    });
+    for (const a of AXES) {
+      for (const c of categoryGroup(a.key, sums, 'month', 'km').cells) {
+        expect(`${c.caption} ${c.metric.value} ${c.metric.unit} ${c.metric.spoken}`).not.toMatch(/pts|point/i);
+      }
+    }
+    expect(categoryGroup('braking', sums, 'week', 'mi')).toMatchObject({ key: 'braking', title: 'Last 7 days' });
+    expect(categoryGroup('braking', sums, 'day', 'mi').title).toBe('Last 24 hours');
+    expect(categoryGroup('braking', sums, 'week', 'km').cells[1]!.metric).toMatchObject({ value: '3.9', unit: '/100 km' });
+    expect(CATEGORY_BEST).toEqual({ phone: 'phone-free', clean: 'clean' });
+    expect(categoryTitle('speeding', 88)).toBe('Speeding · 88');
+    expect(categoryTitle('cornering', null)).toBe('Cornering · —');
+  });
+
+  test('Braking: its name and score, its own verdict, the range and its numbers, with no points anywhere', async () => {
+    const onRange = jest.fn();
+    const onClose = jest.fn();
+    await draw(<CategorySheet {...props} axis="braking" score={72} onRange={onRange} onClose={onClose} />);
+    expect(screen.getByRole('header', { name: 'Braking · 72' })).toBeOnTheScreen();
+    expect(screen.getByText('Score out of 100, last 30 days')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Fair. Brake more gently. Leave more room so you can brake gently.')).toBeOnTheScreen();
+    expect(screen.getByTestId('category-coaching-icon')).toHaveStyle({ color: light.warning });
+    expect(screen.getByTestId('metrics-braking-title')).toHaveTextContent('Last 7 days');
+    expect(screen.getByTestId('metric-brakes-value')).toHaveTextContent('3');
+    expect(screen.getByTestId('metric-brakes-rate-value')).toHaveTextContent('6.3 /100 mi');
+    expect(screen.getByLabelText('Rate, 6.3 per 100 miles')).toBeOnTheScreen();
+    expect(screen.queryByTestId('category-best')).toBeNull();
+    expect(screen.queryByText(/pts|points/i)).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Week' })).toBeSelected();
+    await press(screen.getByRole('tab', { name: 'Month' }));
+    expect(onRange).toHaveBeenCalledWith('month');
+    await press(screen.getAllByRole('button', { name: 'Close' }).at(-1)!);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  test('Phone use and Clean drives carry their own all-time best, which opens its drive', async () => {
+    const onOpenDrive = jest.fn();
+    await draw(<CategorySheet {...props} axis="phone" score={60} onOpenDrive={onOpenDrive} />);
+    expect(screen.getByTestId('metric-pickups-value')).toHaveTextContent('3');
+    expect(screen.getByTestId('metric-phone-time-value')).toHaveTextContent('2 min');
+    expect(screen.getByTestId('best-phone-free-value')).toHaveTextContent('12.0 mi');
+    expect(screen.queryByTestId('best-points')).toBeNull();
+    await press(screen.getByTestId('best-phone-free'));
+    expect(onOpenDrive).toHaveBeenCalledWith('d1');
+
+    await draw(<CategorySheet {...props} axis="clean" score={25} />);
+    expect(screen.getByTestId('metric-clean-value')).toHaveTextContent('1');
+    expect(screen.getByTestId('metric-clean-share-value')).toHaveTextContent('25 %');
+    expect(screen.getByTestId('best-clean-value')).toHaveTextContent('12.0 mi');
+    expect(screen.getByTestId('category-coaching-icon')).toHaveStyle({ color: light.danger });
+  });
+
+  test('a good category gets a compliment; too little driving or no score gets the wait line', async () => {
+    await draw(<CategorySheet {...props} axis="cornering" score={100} />);
+    expect(screen.getByLabelText('Good. Driving well. Keep it up.')).toBeOnTheScreen();
+    await draw(<CategorySheet {...props} axis="cornering" score={null} />);
+    expect(screen.getByRole('header', { name: 'Cornering · —' })).toBeOnTheScreen();
+    expect(screen.getByLabelText('Tips are on the way. Drive a few more times to get tips here.')).toBeOnTheScreen();
+    await draw(<CategorySheet {...props} axis="speeding" score={40} last30={{ drives: 1, miles: 5 }} />);
+    expect(screen.getByLabelText('Tips are on the way. Drive a few more times to get tips here.')).toBeOnTheScreen();
+  });
+
+  test.each([
+    [844, 1],
+    [568, 1],
+    [568, 2],
+    [640, 3],
+  ])("its numbers keep the metrics' rule: at most three quarters of a %d pt window (text %d×)", async (height, fontScale) => {
+    setWindow(390, height, fontScale);
+    const l = metricsLayout(height, Math.min(fontScale, 2), [2], false);
+    expect(l.plot).toBe(0);
+    expect(metricsBlockHeight(l, [2])).toBeLessThanOrEqual(height * METRICS_MAX_SHARE);
+    await draw(<CategorySheet {...props} axis="speeding" score={88} />);
+    // The card drawn is the one measured.
+    const card = flat(screen.getByTestId('metrics-speeding'));
+    expect(card.padding).toBe(l.pad);
+    expect(Number(flat(screen.getByTestId('metrics-speeding-title')).lineHeight)).toBeCloseTo(Number(metricsText(l).title.lineHeight), 5);
   });
 });
 
@@ -426,11 +564,10 @@ describe('TrendCard', () => {
     expect(screen.getByTestId('trend-chart-box')).toHaveAccessibleName('Events per 100 kilometers by day. Lowest 0.0 today, latest 0.0, trending down.');
   });
 
-  test('the event counts stay as numbers under the chart', async () => {
+  test('no event counts under the chart: they live in the radar categories', async () => {
     await draw(<MetricsCards sums={windowSums(list, null)} trend={data} />);
-    const row = screen.getByTestId('metrics-trend-row-0');
-    expect(within(row).getAllByTestId(/^metric-(?!.*-(value|caption)$)[a-z-]+$/).map((c) => c.props.accessibilityLabel)).toEqual(['Speeding, 1', 'Hard brakes, 2', 'Hard starts, 0', 'Sharp turns, 0']);
-    for (const el of within(row).getAllByTestId(/^metric-[a-z-]+-caption$/)) expect(el.props.numberOfLines).toBe(2);
+    expect(screen.queryByTestId('metrics-trend-row-0')).toBeNull();
+    for (const key of ['speeding', 'brakes', 'starts', 'turns']) expect(within(screen.getByTestId('metrics-trend')).queryByTestId(`metric-${key}`)).toBeNull();
   });
 
   test('fewer than two points: one muted line in the chart’s place, at the same height', async () => {

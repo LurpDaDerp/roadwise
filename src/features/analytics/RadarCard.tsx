@@ -1,10 +1,10 @@
-import { useWindowDimensions, View } from 'react-native';
+import { Pressable, useWindowDimensions, View } from 'react-native';
 import Svg, { Circle, Line, Polygon } from 'react-native-svg';
 
 import { Card, Text, tokens, useFontScale, useTheme, withAlpha } from '@/ui';
 
 import { analyticsCopy } from './copy';
-import { AXES, type AxisScores } from './model';
+import { AXES, type AxisKey, type AxisScores } from './model';
 import { sizeAt } from './textSize';
 
 /** Grid rings, as a share of the full score. */
@@ -55,7 +55,7 @@ export interface RadarGeometry {
   height: number;
   r: number;
   c: Pt;
-  /** One box per axis, in `AXES` order, each wholly outside the hexagon. */
+  /** One box per axis, in `AXES` order, each wholly outside the hexagon and at least 44 pt tall (a button). */
   labels: RadarLabelBox[];
 }
 
@@ -64,23 +64,28 @@ export interface RadarGeometry {
  * outside its vertex: above the top one, below the bottom one, and beside the four side ones
  * (left-aligned on the right, right-aligned on the left), so no label crosses a ring or the shape.
  * The radius is what the side labels leave of the width; the height is what the top and bottom
- * labels need.
+ * labels need. Each box is a button, so one shorter than the 44 pt touch floor grows evenly above
+ * and below its text.
  */
 export function radarGeometry(width: number, labelScale: number, n: number = AXES.length): RadarGeometry {
   const { caption, subhead } = tokens.type;
-  const labelH = (caption.lineHeight + subhead.lineHeight) * labelScale;
+  const textH = (caption.lineHeight + subhead.lineHeight) * labelScale;
+  const pad = Math.max(0, (tokens.size.touch - textH) / 2);
+  const labelH = textH + 2 * pad;
   const half = width / 2;
   // The side vertices sit cos 30° × r out from the centre.
   const reach = Math.cos(Math.PI / 6);
   const r = Math.max(RADAR_R_MIN, Math.min(RADAR_R_MAX, (half - LABEL_GAP - SIDE_LABEL_W) / reach));
-  const height = Math.ceil(2 * (r + LABEL_GAP + labelH));
+  const height = Math.ceil(2 * (r + LABEL_GAP + textH + pad));
   const c = { x: half, y: height / 2 };
   const sideW = Math.min(SIDE_LABEL_W, half - LABEL_GAP - reach * r);
   const labels = Array.from({ length: n }, (_, i): RadarLabelBox => {
     const p = radarPoint(i, n, r, c);
     if (Math.abs(p.x - c.x) < 1) {
       const above = p.y < c.y;
-      return { left: p.x - END_LABEL_W / 2, top: above ? p.y - LABEL_GAP - labelH : p.y + LABEL_GAP, width: END_LABEL_W, height: labelH, align: 'center' };
+      // The text keeps its gap from the vertex; the touch padding may reach past it.
+      const top = above ? p.y - LABEL_GAP - textH - pad : p.y + LABEL_GAP - pad;
+      return { left: p.x - END_LABEL_W / 2, top, width: END_LABEL_W, height: labelH, align: 'center' };
     }
     const right = p.x > c.x;
     return {
@@ -106,9 +111,10 @@ export function radarLabel(rating: number | null, scores: AxisScores): string {
 /**
  * The six-axis radar of the last 30 days: grid rings at 25/50/75/100, a spoke per axis, one
  * filled polygon, and the Safety Rating in the middle. All of it in the page ink (no colour
- * coding), with each axis's name and score around the outside.
+ * coding), with each axis's name and score around the outside on a faint chip: a button that opens
+ * that category's details.
  */
-export function RadarCard({ rating, scores }: { rating: number | null; scores: AxisScores }) {
+export function RadarCard({ rating, scores, onOpen }: { rating: number | null; scores: AxisScores; onOpen: (axis: AxisKey) => void }) {
   const t = useTheme();
   const { width: windowWidth } = useWindowDimensions();
   const labelScale = useFontScale(RADAR_LABEL_MAX_SCALE);
@@ -125,43 +131,76 @@ export function RadarCard({ rating, scores }: { rating: number | null; scores: A
 
   return (
     <Card testID="analytics-radar">
-      <View
-        accessible
-        accessibilityRole="image"
-        accessibilityLabel={radarLabel(rating === null ? null : Math.round(rating), scores)}
-        style={{ width, height, alignSelf: 'center' }}
-      >
-        <Svg width={width} height={height}>
-          {RADAR_RINGS.map((k) => (
-            <Polygon key={k} points={ring(k)} fill="none" stroke={t.colors.divider} strokeWidth={k === 1 ? 1.5 : 1} />
-          ))}
-          {AXES.map((a, i) => {
-            const p = radarPoint(i, n, r, c);
-            return <Line key={a.key} x1={c.x} y1={c.y} x2={p.x} y2={p.y} stroke={t.colors.divider} strokeWidth={1} />;
-          })}
-          <Polygon
-            testID="radar-shape"
-            points={radarPolygon(values, r, c)}
-            fill={withAlpha(t.colors.text, 0.12)}
-            stroke={t.colors.text}
-            strokeWidth={2}
-            strokeLinejoin="round"
-          />
-          {/* No dot for an axis with no score: it would only pile up under the centre number. */}
-          {values.map((s, i) => {
-            if (s === null) return null;
-            const p = radarPoint(i, n, (Math.max(0, Math.min(100, s)) / 100) * r, c);
-            return <Circle key={AXES[i]!.key} cx={p.x} cy={p.y} r={3} fill={t.colors.text} testID={`radar-dot-${AXES[i]!.key}`} />;
-          })}
-        </Svg>
+      <View style={{ width, height, alignSelf: 'center' }}>
+        <View
+          accessible
+          accessibilityRole="image"
+          accessibilityLabel={radarLabel(rating === null ? null : Math.round(rating), scores)}
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+        >
+          <Svg width={width} height={height}>
+            {RADAR_RINGS.map((k) => (
+              <Polygon key={k} points={ring(k)} fill="none" stroke={t.colors.divider} strokeWidth={k === 1 ? 1.5 : 1} />
+            ))}
+            {AXES.map((a, i) => {
+              const p = radarPoint(i, n, r, c);
+              return <Line key={a.key} x1={c.x} y1={c.y} x2={p.x} y2={p.y} stroke={t.colors.divider} strokeWidth={1} />;
+            })}
+            <Polygon
+              testID="radar-shape"
+              points={radarPolygon(values, r, c)}
+              fill={withAlpha(t.colors.text, 0.12)}
+              stroke={t.colors.text}
+              strokeWidth={2}
+              strokeLinejoin="round"
+            />
+            {/* No dot for an axis with no score: it would only pile up under the centre number. */}
+            {values.map((s, i) => {
+              if (s === null) return null;
+              const p = radarPoint(i, n, (Math.max(0, Math.min(100, s)) / 100) * r, c);
+              return <Circle key={AXES[i]!.key} cx={p.x} cy={p.y} r={3} fill={t.colors.text} testID={`radar-dot-${AXES[i]!.key}`} />;
+            })}
+          </Svg>
+          <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' }}>
+            {/* A halo in the card's colour keeps the shape's lines from running through the glyphs. */}
+            <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
+              <Text variant="display" testID="radar-rating" style={halo}>
+                {shownRating}
+              </Text>
+              {rating === null ? null : (
+                <Text variant="footnote" tone="muted" testID="radar-out-of" style={halo}>
+                  {analyticsCopy.radar.outOf}
+                </Text>
+              )}
+            </View>
+            <Text variant="caption" tone="muted" style={halo}>
+              {analyticsCopy.radar.rating}
+            </Text>
+          </View>
+        </View>
         {AXES.map((a, i) => {
           const box = labels[i]!;
           const items = box.align === 'left' ? 'flex-start' : box.align === 'right' ? 'flex-end' : 'center';
           return (
-            <View
+            <Pressable
               key={a.key}
               testID={`radar-axis-${a.key}`}
-              style={{ position: 'absolute', left: box.left, top: box.top, width: box.width, height: box.height, alignItems: items, justifyContent: 'center' }}
+              accessibilityRole="button"
+              accessibilityLabel={analyticsCopy.radar.axis(a.label, scores[a.key])}
+              accessibilityHint={analyticsCopy.radar.axisHint}
+              onPress={() => onOpen(a.key)}
+              style={({ pressed }) => ({
+                position: 'absolute',
+                left: box.left,
+                top: box.top,
+                width: box.width,
+                height: box.height,
+                alignItems: items,
+                justifyContent: 'center',
+                paddingHorizontal: t.space.xs,
+                borderRadius: t.radius.sm,
+                backgroundColor: withAlpha(t.colors.text, pressed ? 0.12 : 0.05),
+              })}
             >
               <Text variant="caption" tone="muted" numberOfLines={1} adjustsFontSizeToFit style={[sizeAt('caption', labelScale), { textAlign: box.align }]}>
                 {a.label}
@@ -169,25 +208,9 @@ export function RadarCard({ rating, scores }: { rating: number | null; scores: A
               <Text variant="subhead" numberOfLines={1} adjustsFontSizeToFit style={[sizeAt('subhead', labelScale), { fontWeight: '700', textAlign: box.align }]}>
                 {shown(scores[a.key])}
               </Text>
-            </View>
+            </Pressable>
           );
         })}
-        <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' }}>
-          {/* A halo in the card's colour keeps the shape's lines from running through the glyphs. */}
-          <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-            <Text variant="display" testID="radar-rating" style={halo}>
-              {shownRating}
-            </Text>
-            {rating === null ? null : (
-              <Text variant="footnote" tone="muted" testID="radar-out-of" style={halo}>
-                {analyticsCopy.radar.outOf}
-              </Text>
-            )}
-          </View>
-          <Text variant="caption" tone="muted" style={halo}>
-            {analyticsCopy.radar.rating}
-          </Text>
-        </View>
       </View>
       <Text variant="footnote" tone="subtle" style={{ textAlign: 'center' }}>
         {analyticsCopy.radar.window}

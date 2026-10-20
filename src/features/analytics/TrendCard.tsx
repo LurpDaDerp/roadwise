@@ -7,7 +7,6 @@ import { Card, formatPointsValue, SegmentedControl, Text, tokens, useTheme } fro
 
 import { analyticsCopy } from './copy';
 import type { Metric } from './format';
-import { METRIC_CELL_GAP, MetricCell } from './MetricCell';
 import type { MetricsLayout } from './MetricsCards';
 import { trendDirection, trendRange, TREND_KINDS, type Trend, type TrendKind, type TrendPoint, type TrendStep, type TrendTick } from './model';
 import { sizeAt } from './textSize';
@@ -21,10 +20,6 @@ const PICKER_PAD = 3;
 export const TICK_GAP = 4;
 /** Room inside the plot's edges, so the end dots and the line's caps are never clipped. */
 export const PLOT_EDGE = 6;
-/** The event counts under the chart: a number a step below the stat cards', and a small caption that wraps to two lines. */
-const COUNT_STAT = { fontSize: 20, lineHeight: 24 };
-const COUNT_LABEL = { fontSize: 12, lineHeight: 16 };
-export const COUNT_CAPTION_LINES = 2;
 
 // ---------------------------------------------------------------------------------------------
 // Heights (the metrics block's layout counts the card with these)
@@ -41,13 +36,9 @@ export const trendHeaderHeight = (l: Pick<MetricsLayout, 'textScale' | 'fontScal
 export const chartBoxHeight = (l: Pick<MetricsLayout, 'plot' | 'textScale'>): number =>
   l.plot + TICK_GAP + sizeAt('caption', l.textScale).lineHeight;
 
-/** One row of four counts, each a number over a caption of up to two lines. */
-export const countsRowHeight = (l: Pick<MetricsLayout, 'textScale'>): number =>
-  sizeAt('stat', l.textScale, COUNT_STAT).lineHeight + METRIC_CELL_GAP + COUNT_CAPTION_LINES * sizeAt('label', l.textScale, COUNT_LABEL).lineHeight;
-
-/** The whole card with a chart: padding, the header row, the chart and the counts, with the card's gap between them. */
+/** The whole card: padding, the header row and the chart, with the card's gap between them. */
 export const trendCardHeight = (l: Pick<MetricsLayout, 'pad' | 'gap' | 'plot' | 'textScale' | 'fontScale'>): number =>
-  l.pad * 2 + trendHeaderHeight(l) + l.gap + chartBoxHeight(l) + l.gap + countsRowHeight(l);
+  l.pad * 2 + trendHeaderHeight(l) + l.gap + chartBoxHeight(l);
 
 // ---------------------------------------------------------------------------------------------
 // Geometry
@@ -143,22 +134,20 @@ export function trendLabel(kind: TrendKind, points: readonly TrendPoint[], step:
 
 export interface TrendCardProps {
   trend: Trend;
-  /** The range's event counts (Speeding, Hard brakes, Hard starts, Sharp turns), kept as numbers under the chart. */
-  counts: { key: string; caption: string; metric: Metric }[];
   units: Units;
   layout: MetricsLayout;
   /** The chart's width: the card's inside. */
   width: number;
-  text: { title: TextStyle; unit: TextStyle };
+  text: { title: TextStyle };
 }
 
 /**
  * The range over time: a Score / Events / Points picker beside the title, one monotone line in the
  * page ink with a dot per point (the latest labelled), thin guides at the bottom, middle and top
- * of the range, a few short ticks, and the range's event counts under it. Fewer than two points
+ * of the range and a few short ticks. Fewer than two points
  * read "Not enough drives yet" in the chart's place.
  */
-export function TrendCard({ trend, counts, units, layout: l, width, text }: TrendCardProps) {
+export function TrendCard({ trend, units, layout: l, width, text }: TrendCardProps) {
   const t = useTheme();
   const [kind, setKind] = useState<TrendKind>('score');
   const points = seriesIn(kind, trend.series[kind], units);
@@ -249,19 +238,6 @@ export function TrendCard({ trend, counts, units, layout: l, width, text }: Tren
           })}
         </View>
       )}
-      <View style={{ flexDirection: 'row', gap: t.space.sm }} testID="metrics-trend-row-0">
-        {counts.map((cell) => (
-          <MetricCell
-            key={cell.key}
-            caption={cell.caption}
-            metric={cell.metric}
-            text={{ stat: sizeAt('stat', l.textScale, COUNT_STAT), unit: text.unit, label: sizeAt('label', l.textScale, COUNT_LABEL) }}
-            captionLines={COUNT_CAPTION_LINES}
-            style={{ flex: 1 }}
-            testID={`metric-${cell.key}`}
-          />
-        ))}
-      </View>
     </Card>
   );
 }
