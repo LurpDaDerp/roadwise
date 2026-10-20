@@ -413,6 +413,12 @@ Deno.test('a gate that holds a mirror back skips it unasked; holding all back th
   const busy = fetcher([() => new Response('busy', { status: 429 }), good]);
   await collect(fetchWays(CELL, { fetch: busy.fetch, gate: gate(() => true) }));
   assertEquals(refusedLog, [[PRIVATE_COFFEE, 429]]);
+
+  // A mirror that hangs past the abort, or can't be reached, rests like a refusal (status 0).
+  refusedLog.length = 0;
+  const hung = fetcher([() => Promise.reject(new DOMException('timed out', 'TimeoutError')), () => Promise.reject(new TypeError('connection refused')), good]);
+  await collect(fetchWays(CELL, { fetch: hung.fetch, gate: gate(() => true) }));
+  assertEquals(refusedLog, [[PRIVATE_COFFEE, 0], [VK_MAPS, 0]]);
 });
 
 Deno.test('the byte hook is asked once per MiB; a no cancels the read with OverpassBudgetSpent, and no other mirror is tried', async () => {

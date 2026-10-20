@@ -365,7 +365,10 @@ export interface MirrorGate {
   allow(url: string): Promise<boolean>;
   /** Another MiB arrived from this mirror; false stops the read. */
   megabyte(url: string): Promise<boolean>;
-  /** The mirror refused (429, 406, 504, …). */
+  /**
+   * The mirror refused (429, 406, 504, …), or sent nothing usable before failing (a timeout, no
+   * connection, a broken reply: `status` 0), so a mirror that hangs rests like one that says no.
+   */
   refused(url: string, status: number): void;
 }
 
@@ -421,6 +424,7 @@ export async function* fetchWays(
       // Partial data in hand, or a reply past its size cap (another mirror would send the same):
       // the caller marks the cell failed. Only a refusal or a failure before any element moves on.
       if (yielded || err instanceof OverpassTooLarge || err instanceof OverpassBudgetSpent) throw scrub(err, url);
+      if (!(err instanceof OverpassRefused)) gate?.refused(url, 0);
       lastError = scrub(err, url);
     }
   }
