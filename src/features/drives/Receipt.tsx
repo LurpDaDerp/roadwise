@@ -4,7 +4,7 @@ import { Pressable, View } from 'react-native';
 import { Button, Divider, Text, useTheme } from '@/ui';
 
 import { signedPoints } from './format';
-import { canReport, disputeText, isRemoved, RECEIPT_MAX_LINES, spokenPoints, type Receipt as ReceiptData, type ReceiptLine } from './summary';
+import { availableReasons, canReport, disputeText, isRemoved, RECEIPT_MAX_LINES, spokenPoints, type Receipt as ReceiptData, type ReceiptLine } from './summary';
 
 const TABULAR = { fontVariant: ['tabular-nums' as const] };
 
@@ -38,7 +38,20 @@ function EarnedRow({ earned, detail }: { earned: number; detail: readonly string
   );
 }
 
-function DeductionLine({ line, selected, onSelect, onReport }: { line: ReceiptLine; selected: boolean; onSelect: () => void; onReport: () => void }) {
+function DeductionLine({
+  line,
+  selected,
+  reportable,
+  onSelect,
+  onReport,
+}: {
+  line: ReceiptLine;
+  selected: boolean;
+  /** Report shows: the event was never reported and some reason fits it now. */
+  reportable: boolean;
+  onSelect: () => void;
+  onReport: () => void;
+}) {
   const t = useTheme();
   const e = line.event;
   const removed = isRemoved(e);
@@ -76,7 +89,7 @@ function DeductionLine({ line, selected, onSelect, onReport }: { line: ReceiptLi
         <Text variant="footnote" tone="subtle" accessibilityElementsHidden importantForAccessibility="no">
           {line.time}
         </Text>
-        {canReport(e) ? (
+        {reportable ? (
           <Pressable
             testID={`report-${e.id}`}
             onPress={onReport}
@@ -101,6 +114,8 @@ function DeductionLine({ line, selected, onSelect, onReport }: { line: ReceiptLi
 
 export type ReceiptProps = {
   receipt: ReceiptData;
+  /** "I wasn't driving" can be a report's reason here (the whole-drive action is allowed). */
+  allowNotDriving?: boolean;
   selectedId: string | null;
   onSelect: (eventId: string) => void;
   onReport: (eventId: string) => void;
@@ -111,7 +126,7 @@ export type ReceiptProps = {
  * (tap → circled on the map, Report under it). At most three entries show, Earned counting as one,
  * before "Show more". Every amount carries its sign, so colour is never the only cue.
  */
-export function Receipt({ receipt, selectedId, onSelect, onReport }: ReceiptProps) {
+export function Receipt({ receipt, allowNotDriving = false, selectedId, onSelect, onReport }: ReceiptProps) {
   const t = useTheme();
   const [all, setAll] = useState(false);
   const { earned, detail, deductions, note } = receipt;
@@ -132,7 +147,13 @@ export function Receipt({ receipt, selectedId, onSelect, onReport }: ReceiptProp
         shown.map((line, i) => (
           <View key={line.key}>
             {i > 0 || earned !== null ? <Divider /> : null}
-            <DeductionLine line={line} selected={selectedId === line.event.id} onSelect={() => onSelect(line.event.id)} onReport={() => onReport(line.event.id)} />
+            <DeductionLine
+              line={line}
+              selected={selectedId === line.event.id}
+              reportable={canReport(line.event) && availableReasons(line.event.type, allowNotDriving).length > 0}
+              onSelect={() => onSelect(line.event.id)}
+              onReport={() => onReport(line.event.id)}
+            />
           </View>
         ))
       )}

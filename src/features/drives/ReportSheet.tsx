@@ -7,7 +7,7 @@ import { Banner, Button, Sheet, Text, useTheme } from '@/ui';
 
 import { eventName, formatClock } from './format';
 import type { LocalDriveEvent } from './model';
-import { REPORT_LABEL, reportReasons, type ReportReason } from './summary';
+import { availableReasons, REPORT_LABEL, type ReportReason } from './summary';
 
 const REASON_HELP: Record<ReportReason, string> = {
   hazard: 'Braking for something in the road was the right call. Removed right away, up to 3 times a week.',
@@ -50,7 +50,7 @@ export function ReportSheet({
     setState('idle');
   }
 
-  const reasons = event ? reportReasons(event.type).filter((r) => r !== 'not_driving' || allowNotDriving) : [];
+  const reasons = event ? availableReasons(event.type, allowNotDriving) : [];
 
   const send = async () => {
     if (!event || !reason) return;

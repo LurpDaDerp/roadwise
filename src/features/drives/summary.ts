@@ -273,6 +273,15 @@ export function reportReasons(type: EventType): ReportReason[] {
   return [...specific, 'not_driving'];
 }
 
+/**
+ * The reasons a report on this event can give right now: "I wasn't driving" only where the
+ * whole-drive action is allowed. Empty (a hard start or a sharp turn on an older drive) means the
+ * event has nothing to report and offers no Report.
+ */
+export function availableReasons(type: EventType, allowNotDriving: boolean): ReportReason[] {
+  return reportReasons(type).filter((r) => r !== 'not_driving' || allowNotDriving);
+}
+
 /** Whether an event can still be reported (one report per event). */
 export const canReport = (e: LocalDriveEvent): boolean => e.disputeStatus === 'none';
 

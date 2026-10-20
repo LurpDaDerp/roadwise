@@ -275,6 +275,24 @@ describe('Report', () => {
     expect(screen.queryByTestId('reason-hazard')).toBeNull();
   });
 
+  test(`a sharp turn or hard start offers Report only while "wasn't driving" can be its reason`, async () => {
+    const turn = event({ id: 't1', type: 'hard_corner', tier: 'moderate' });
+    const start = event({ id: 'a1x', type: 'hard_accel', tier: 'minor' });
+    const shows = async (over: Partial<SummaryViewProps>) => {
+      const view = await draw(<SummaryView {...props(over)} />);
+      const ids = ['t1', 'a1x', 'e1'].filter((id) => screen.queryByTestId(`report-${id}`) !== null);
+      await view.unmount();
+      return ids;
+    };
+    // The latest drive, within a day, with uses left: "wasn't driving" is the reason on offer.
+    expect(await shows({ events: [turn, start] })).toEqual(['t1', 'a1x']);
+    // An older drive, or none left this month: nothing fits, so no Report, never an empty sheet.
+    expect(await shows({ events: [turn, start], latestClientTripId: 'other' })).toEqual([]);
+    expect(await shows({ events: [turn, start], notDrivingLeft: 0 })).toEqual([]);
+    // A hard brake on an older drive still has its own reason.
+    expect(await shows({ events: [event()], latestClientTripId: 'other' })).toEqual(['e1']);
+  });
+
   test('a phone pickup offers "phone was mounted"', async () => {
     await open(event({ id: 'p1', type: 'phone_pickup', tier: 'severe' }));
     expect(screen.getByTestId('reason-mounted')).toBeOnTheScreen();

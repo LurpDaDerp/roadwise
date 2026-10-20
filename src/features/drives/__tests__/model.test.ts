@@ -11,6 +11,7 @@ import {
   notDrivingLabel,
   pointsState,
   receipt,
+  availableReasons,
   reportReasons,
   spokenPoints,
 } from '../summary';
@@ -316,6 +317,14 @@ describe('summary', () => {
     expect(reportReasons('phone_pickup')).toEqual(['mounted', 'not_driving']);
     expect(reportReasons('phone_handling')).toEqual(['mounted', 'not_driving']);
     expect(reportReasons('hard_corner')).toEqual(['not_driving']);
+  });
+
+  test(`the reasons on offer drop "wasn't driving" where the whole-drive action is not allowed`, () => {
+    expect(availableReasons('hard_brake', true)).toEqual(['hazard', 'not_driving']);
+    expect(availableReasons('hard_brake', false)).toEqual(['hazard']);
+    expect(availableReasons('hard_accel', true)).toEqual(['not_driving']);
+    expect(availableReasons('hard_accel', false)).toEqual([]);
+    expect(availableReasons('hard_corner', false)).toEqual([]);
   });
 
   test('the wasn\'t-driving label carries the uses left', () => {

@@ -151,6 +151,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
     (state.kind === 'points' || state.kind === 'failed' || state.kind === 'pending') &&
     (points.earned !== null || points.total !== null || points.deductions.length > 0);
   const notDrivingOk = canMarkNotDriving(drive, latestClientTripId, now);
+  const reportNotDriving = notDrivingOk && notDrivingLeft !== 0;
   const refusal = notDrivingRefusal(drive);
   const endedNote = endNote(drive);
 
@@ -190,7 +191,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
           {showReceipt ? (
             <>
               <Divider />
-              <Receipt receipt={points} selectedId={selectedId} onSelect={(id) => setSelectedId((cur) => (cur === id ? null : id))} onReport={setReporting} />
+              <Receipt receipt={points} allowNotDriving={reportNotDriving} selectedId={selectedId} onSelect={(id) => setSelectedId((cur) => (cur === id ? null : id))} onReport={setReporting} />
             </>
           ) : null}
         </Card>
@@ -231,7 +232,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
 
       <ReportSheet
         event={reportEvent}
-        allowNotDriving={notDrivingOk && notDrivingLeft !== 0}
+        allowNotDriving={reportNotDriving}
         onClose={() => setReporting(null)}
         onSend={onReport}
         onNotDriving={() => {
