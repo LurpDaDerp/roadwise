@@ -30,10 +30,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { asPgError } from '../_shared/pg.ts';
 import type { BBox } from '../_shared/speedLimits/geometry';
+import { FILL_CELL_DEG } from '../_shared/speedLimits/tiles';
 import type { SpeedLogger } from './handler.ts';
 import { fetchWays, type Fetch, type WayRow } from './overpass.ts';
 
-export const CELL_DEG = 0.1;
+export const CELL_DEG = FILL_CELL_DEG;
 /** A tile within this distance of its cell's edge also claims the cell(s) over that edge. */
 export const LOOKAHEAD_M = 1500;
 /** Ways per `osm_upsert_ways` call (the function takes up to 1000). */
@@ -52,10 +53,11 @@ export const MAX_LOOKAHEAD_CELLS = 8;
 export const OVERPASS_BUDGET = { key: 'overpass_fill', window: '1 minute', max: 4 } as const;
 /**
  * Cells one user may cause to be fetched per hour. A car at highway speed crosses a new 10 km cell
- * every six minutes or so, with a look-ahead cell beside it: a dozen covers an honest drive and
- * leaves the shared budget to everyone else.
+ * every six minutes or so; with the edge look-ahead beside it and the device warming the cells 3
+ * and 6 km ahead (a straight line, so sometimes off the route), 40 covers an honest drive through
+ * unloaded country and still leaves the shared budget to everyone else.
  */
-export const CLAIM_BUDGET = { key: 'overpass_claim', window: '1 hour', max: 12 } as const;
+export const CLAIM_BUDGET = { key: 'overpass_claim', window: '1 hour', max: 40 } as const;
 
 const M_PER_DEG = 111_320;
 const DEG = Math.PI / 180;

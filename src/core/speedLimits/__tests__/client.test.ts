@@ -9,9 +9,11 @@ import {
   TRUNCATED_CONFIDENCE_CAP,
   TRUNCATED_TILE_TTL_MS,
   UNKNOWN_ROWS_BEFORE_POINT_LOOKUP,
+  WARM_AHEAD_M,
+  WARM_REPEAT_MS,
   type SpeedLimitClient,
 } from '@/core/speedLimits/client';
-import { prefetchSet, tileBounds, tileFor, tileKey } from '@/core/speedLimits/tiles';
+import { fillCellKey, prefetchSet, tileBounds, tileFor, tileKey } from '@/core/speedLimits/tiles';
 import { type LimitSegment, MAX_TILE_TTL_MS, type PointResponse, type TileBatchResponse } from '@/core/speedLimits/wire';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
@@ -83,8 +85,10 @@ function fakeApi(opts: FakeOptions = {}) {
   return { api: { getTiles, lookupPoint } satisfies SpeedLimitApi, getTiles, lookupPoint };
 }
 
-function make(api: SpeedLimitApi, extra: { persist?: boolean } = {}): SpeedLimitClient {
+/** The warm-up is off unless a test asks for it: it adds its own request (covered below). */
+function make(api: SpeedLimitApi, extra: { persist?: boolean; warmAheadM?: readonly number[] } = {}): SpeedLimitClient {
   client = createSpeedLimitClient({
+    warmAheadM: [],
     ...extra,
     db,
     api,
@@ -565,6 +569,67 @@ describe('a tile the server is still filling (the OpenStreetMap load behind a fi
     client.lookup(LAT, LNG0, EAST, MOVING);
     await client.settled();
     expect(getTiles).toHaveBeenCalledTimes(2 + FILLING_RETRIES_MAX);
+  });
+});
+
+describe('the warm-up: the fill cells ahead start loading before the car gets there', () => {
+  const warmOn = { warmAheadM: WARM_AHEAD_M };
+
+  it('asks for the tile 3 km ahead in its own request when it lies in the next fill cell (6 km ahead is the same cell: one tile)', async () => {
+    expect(WARM_AHEAD_M).toEqual([3000, 6000]);
+    const { api, getTiles } = fakeApi();
+    make(api, warmOn).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    const ahead = LNG0 + mLng(3000);
+    expect(fillCellKey(LAT, ahead)).not.toBe(fillCellKey(LAT, LNG0));
+    expect(fillCellKey(LAT, LNG0 + mLng(6000))).toBe(fillCellKey(LAT, ahead));
+    expect(getTiles).toHaveBeenCalledTimes(2);
+    const calls = getTiles.mock.calls.map((c) => c[0]);
+    expect(calls).toContainEqual(prefetchSet(LAT, LNG0, EAST).map(tileKey));
+    expect(calls).toContainEqual([keyAt(LAT, ahead)]);
+    // Fetched like any tile: in memory once the car is there (null would mean not loaded).
+    expect(client.lookup(LAT, ahead, EAST, MOVING)).not.toBeNull();
+  });
+
+  it("nothing to warm while the ground ahead stays in the car's own cell, without a course, or offline", async () => {
+    const lat = 47.62; // cell 47.6–47.7: 6 km north is still inside it
+    const { api, getTiles } = fakeApi();
+    make(api, warmOn).startTrip(lat, LNG0, 0);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(1);
+    client.resetTrip();
+    client.startTrip(LAT, LNG0, -1);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(2); // the 2 × 2 block only
+    client.resetTrip();
+    online = false;
+    client.startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(2);
+  });
+
+  it('a cell is warmed again no sooner than WARM_REPEAT_MS, and only while its tile is not fresh here', async () => {
+    expect(WARM_REPEAT_MS).toBe(60_000);
+    const { api, getTiles } = fakeApi();
+    // The server is still loading everything: each tile comes back filling (kept 25 s).
+    getTiles.mockImplementation(async (keys) => ({
+      tiles: keys.map((tile) => ({ tile, expiresAt: clock + DAY, truncated: false, filling: true, segments: [] })),
+      fallback: null,
+    }));
+    make(api, warmOn).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(2);
+    const warmTile = keyAt(LAT, LNG0 + mLng(3000));
+    clock += 30_000;
+    client.prefetch(LAT, LNG0, EAST);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(3); // the expired prefetch set, no warm-up yet
+    expect(getTiles.mock.calls[2]![0]).not.toContain(warmTile);
+    clock += 31_000;
+    client.prefetch(LAT, LNG0, EAST);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(5);
+    expect(getTiles.mock.calls.slice(3).map((c) => c[0])).toContainEqual([warmTile]);
   });
 });
 

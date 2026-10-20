@@ -51,6 +51,17 @@ export function tileKey(t: TileXY): string {
   return `${t.z}/${t.x}/${t.y}`;
 }
 
+/**
+ * The server loads roads from OpenStreetMap one fixed 0.1° cell at a time (migration 0013,
+ * `speed-limits/fill.ts`): `cell_y = floor(lat / 0.1)`, `cell_x = floor(lng / 0.1)`.
+ */
+export const FILL_CELL_DEG = 0.1;
+
+/** The fill cell a point lies in, as "y/x". The epsilon absorbs `lat / 0.1` landing a hair under an integer. */
+export function fillCellKey(lat: number, lng: number): string {
+  return `${Math.floor(lat / FILL_CELL_DEG + 1e-9)}/${Math.floor(lng / FILL_CELL_DEG + 1e-9)}`;
+}
+
 /** The inverse of `tileKey` for z15 keys; `null` for anything malformed or off the grid. */
 export function parseTileKey(key: string): TileXY | null {
   const m = TILE_KEY_RE.exec(key);

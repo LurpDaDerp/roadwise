@@ -1,5 +1,5 @@
 import { assert, assertAlmostEquals, assertEquals } from '@std/assert';
-import { parseTileKey, tileBounds } from '../_shared/speedLimits/tiles';
+import { fillCellKey, parseTileKey, tileBounds } from '../_shared/speedLimits/tiles';
 import {
   CELL_DEG,
   cellBounds,
@@ -196,8 +196,8 @@ Deno.test('a tile in an unloaded cell: the cell and its look-ahead are claimed (
   ]);
   // each won claim was charged to the requesting user, before any fetch
   assertEquals(h.userBudgets, [
-    { userId: UID, key: 'overpass_claim', window: '1 hour', max: 12 },
-    { userId: UID, key: 'overpass_claim', window: '1 hour', max: 12 },
+    { userId: UID, key: 'overpass_claim', window: '1 hour', max: 40 },
+    { userId: UID, key: 'overpass_claim', window: '1 hour', max: 40 },
   ]);
   // filled: the next request sees it done from the memo, with no claim
   assertEquals(await h.fill.ensure([TILE], UID), [false]);
@@ -334,7 +334,7 @@ Deno.test('fills run one at a time in an isolate: the second cell is not fetched
 // --- what one request may start (security review) ---
 
 Deno.test("a user whose claim budget is spent: the claim is released at once, nothing is fetched, and the tile reads filling; the user's budget is checked only for a won claim", async () => {
-  assertEquals(CLAIM_BUDGET, { key: 'overpass_claim', window: '1 hour', max: 12 });
+  assertEquals(CLAIM_BUDGET, { key: 'overpass_claim', window: '1 hour', max: 40 });
   const h = harness({ userBudget: false, claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done') });
   assertEquals(await h.fill.ensure([TILE], UID), [true]);
   assertEquals(h.userBudgets.length, 1, 'the done look-ahead cell costs nothing');
@@ -400,4 +400,10 @@ Deno.test('a box beyond Web Mercator, off the globe or inside out is not fillabl
   const h = harness();
   assertEquals(await h.fill.ensure([{ minLat: 86, maxLat: 86, minLng: 0, maxLng: 0 }, TILE], UID), [false, true]);
   assertEquals(h.claims.map(cellKey), ['476/-1224', '475/-1224']);
+});
+
+Deno.test("the device's fill cell (the warm-up's) is the server's cell, edges included", () => {
+  for (const [lat, lng] of [[47.6062, -122.3321], [47.7, -122.3], [-33.8688, 151.2093], [0, 0], [0.1, -0.1], [64.99999, -147.7]]) {
+    assertEquals(fillCellKey(lat, lng), cellKey(cellOf(lat, lng)));
+  }
 });

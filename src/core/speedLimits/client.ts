@@ -18,6 +18,11 @@
 //   asks for that one tile again, at most `FILLING_RETRIES_MAX` times per tile per trip — so the
 //   sign fills in within a minute of the first drive through a new area instead of a kilometre
 //   later. A filled tile answers with its full expiry and the retries stop.
+//   And the warm-up: with each batch, the tile `WARM_AHEAD_M` (3 and 6 km) ahead along the course
+//   is asked for too, in its own small request, when it lies in a different fill cell than the car
+//   and that cell was not warmed in the last `WARM_REPEAT_MS`. The request makes the server start
+//   loading that area from OpenStreetMap minutes before the car gets there, so the tiles the
+//   prefetch later asks for there come back filled. A cell already cached here costs nothing.
 // - **Memory (rev1: I7).** At most `MEMORY_TILES` decoded tiles (`store.ts`), each decoded once
 //   whether it came from the network or SQLite; recovery's `lookupStored` shares the same LRU and
 //   reads each tile from SQLite once, not once per row.
@@ -54,7 +59,7 @@ import {
   type StoredTilePayload,
   truncatedNear,
 } from './store';
-import { prefetchSet, tileFor, tileKey } from './tiles';
+import { fillCellKey, prefetchSet, tileFor, tileKey } from './tiles';
 import { MAX_TILE_TTL_MS, type PointResponse } from './wire';
 
 /** Under this speed the car counts as stopped, for stickiness and for the point-lookup trigger. */
@@ -82,6 +87,10 @@ export const TRUNCATED_TILE_TTL_MS = 24 * 3600 * 1000;
 export const FILLING_RETRY_MS = 25_000;
 /** How many times one filling tile is asked for again in a trip before the regular prefetch takes over. */
 export const FILLING_RETRIES_MAX = 6;
+/** How far ahead along the course the next fill cells are warmed (see the header). */
+export const WARM_AHEAD_M: readonly number[] = [3000, 6000];
+/** A warmed cell is asked about again no sooner than this: a fill the server put off, or one still loading. */
+export const WARM_REPEAT_MS = 60_000;
 
 export interface SpeedLimitClient {
   /**
@@ -138,6 +147,8 @@ export interface SpeedLimitClientDeps {
    * no-op). Tiles already stored may still be read. Defaults to true.
    */
   persist?: boolean;
+  /** The distances ahead to warm (default `WARM_AHEAD_M`); [] turns the warm-up off. */
+  warmAheadM?: readonly number[];
 }
 
 interface PointAnswer {
@@ -185,6 +196,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
   const repo = createTilesRepo(db);
   const isOnline = (): boolean => deps.online?.() ?? true;
   const persist = deps.persist ?? true;
+  const warmAheadM = deps.warmAheadM ?? WARM_AHEAD_M;
   const report = (e: unknown): void => {
     try {
       deps.onError?.(e);
@@ -203,6 +215,8 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
   /** Tiles that arrived `filling`, by the instant they expire; and how often each was asked again this trip. */
   const filling = new Map<string, number>();
   const fillingRetries = new Map<string, number>();
+  /** Fill cells warmed this trip, by when. */
+  const warmed = new Map<string, number>();
   /** All outstanding async work, for `settled`. */
   const work = new Set<Promise<unknown>>();
   const pointAnswers: PointAnswer[] = [];
@@ -337,6 +351,25 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     if (!finite(lat, lng)) return;
     const keys = prefetchSet(lat, lng, course).map(tileKey);
     void track(runBatch(keys, generation, counters));
+    warm(lat, lng, course);
+  }
+
+  /** The warm-up (see the header): one request for the tiles ahead that lie in other fill cells. */
+  function warm(lat: number, lng: number, course: number): void {
+    if (!(course >= 0) || !Number.isFinite(course) || !isOnline()) return;
+    const here = fillCellKey(lat, lng);
+    const t = now();
+    const keys: string[] = [];
+    for (const m of warmAheadM) {
+      const [wLat, wLng] = offset(lat, lng, normalizeDeg(course), m);
+      if (!finite(wLat, wLng) || Math.abs(wLat) > 85 || Math.abs(wLng) > 180) continue;
+      const cell = fillCellKey(wLat, wLng);
+      const at = warmed.get(cell);
+      if (cell === here || (at !== undefined && t - at < WARM_REPEAT_MS)) continue;
+      warmed.set(cell, t);
+      keys.push(tileKey(tileFor(wLat, wLng)));
+    }
+    if (keys.length > 0) void track(runBatch(keys, generation, counters));
   }
 
   /**
@@ -526,6 +559,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       absent.clear();
       filling.clear();
       fillingRetries.clear();
+      warmed.clear();
       pointAllowed = false;
       unknownRun = 0;
       last = null;
