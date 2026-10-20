@@ -141,6 +141,19 @@ describe('the steps', () => {
     expect(screen.getByTestId('wizard-permission-asking')).toHaveTextContent(dashpalCopy.setup.permission);
   });
 
+  it('the sheet is at rest from its first frame: the system modal fades it (not under Reduce Motion), nothing slides it up', async () => {
+    await open({}, false);
+    const sheet = screen.getByTestId('wizard-sheet');
+    expect(StyleSheet.flatten(sheet.props.style).transform).toEqual([{ translateY: 0 }]);
+    expect(screen.getByTestId('wizard-modal', HIDDEN).props.animationType).toBe('fade');
+    expect(screen.getByTestId('wizard-permission-asking')).toBeOnTheScreen();
+  });
+
+  it('under Reduce Motion the modal appears without a fade', async () => {
+    await open({}, true);
+    expect(screen.getByTestId('wizard-modal', HIDDEN).props.animationType).toBe('none');
+  });
+
   it('search: “Looking for your DashPal…”, no step number; several heard: “Which DashPal is yours?”, strongest first', async () => {
     const s = await open();
     await s.to({ kind: 'search', until: 1 });

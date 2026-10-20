@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Modal, Pressable, ScrollView, View, type GestureResponderEvent } from 'react-native';
-import Animated, { LinearTransition, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { LayoutAnimationConfig, LinearTransition, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { StepDots, Text, useTheme } from '@/ui';
@@ -16,9 +16,11 @@ export const BODY_RESIZE_MS = 260;
 
 /**
  * The setup's bottom sheet, in the app's BottomSheet look (a floating rounded panel over a scrim,
- * a grabber, ink step pills) but with the setup's own rules: the panel springs up (no slide under
- * Reduce Motion), the header has Cancel on the left as a paper capsule and the step pills in the
- * middle, and the body's height follows its step. The scrim, Android back and a downward swipe on
+ * a grabber, ink step pills) but with the setup's own rules: the header has Cancel on the left as a
+ * paper capsule and the step pills in the middle, and the body's height follows its step. As with
+ * BottomSheet, the system modal fades the scrim and panel in and out (no motion under Reduce
+ * Motion) and the panel rests in place from the first frame: nothing it needs to be seen waits on a
+ * JS-driven animation, and the first step shows without its slide-in (later steps slide). The scrim, Android back and a downward swipe on
  * the grabber all call `onRequestCancel` (the sheet decides: ask, or close); the panel follows a
  * swipe down and springs back, since closing always asks first.
  * `cancel` false hides Cancel (done, finishing); `overlay` (the confirmation) renders under the body,
@@ -50,16 +52,13 @@ export function WizardFrame({
 }) {
   const th = useTheme();
   const insets = useSafeAreaInsets();
-  const rise = useSharedValue(th.reduceMotion ? 0 : 360);
+  // Only a swipe moves the panel; at rest it sits at 0.
+  const rise = useSharedValue(0);
   const swipeFrom = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!visible) {
-      rise.value = th.reduceMotion ? 0 : 360;
-      return;
-    }
-    rise.value = th.reduceMotion ? 0 : withSpring(0, th.motion.spring.gentle);
-  }, [visible, th.reduceMotion, th.motion.spring.gentle, rise]);
+    if (visible) rise.set(0);
+  }, [visible, rise]);
   const panelStyle = useAnimatedStyle(() => ({ transform: [{ translateY: rise.value }] }));
 
   const touchStart = (e: GestureResponderEvent) => {
@@ -79,7 +78,7 @@ export function WizardFrame({
   };
 
   return (
-    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onRequestCancel} testID="wizard-modal">
+    <Modal visible={visible} transparent animationType={th.reduceMotion ? 'none' : 'fade'} statusBarTranslucent onRequestClose={onRequestCancel} testID="wizard-modal">
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
         <Pressable
           accessibilityRole="button"
@@ -173,7 +172,8 @@ export function WizardFrame({
                 style={{ opacity: dimmed ? 0.4 : 1 }}
                 testID="wizard-body"
               >
-                {children}
+                {/* The step showing as the sheet opens skips its entrance; later steps slide in. */}
+                <LayoutAnimationConfig skipEntering>{children}</LayoutAnimationConfig>
               </Animated.View>
             </ScrollView>
             {overlay}
