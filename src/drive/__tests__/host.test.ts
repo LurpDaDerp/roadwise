@@ -8,9 +8,11 @@ import { IDLE_END_S } from '@scoring';
 import type { AlertDecision } from '@/core/alerts/types';
 import type { AlertPlayer } from '@/core/alerts/player';
 import { T0 } from '@/core/detectors/__fixtures__/rows';
-import { rows, TZ } from '@/core/engine/__fixtures__/drives';
+import { rows, START, TZ } from '@/core/engine/__fixtures__/drives';
 import type { LimitSample } from '@/core/engine/types';
-import type { SpeedLimitClient } from '@/core/speedLimits/client';
+import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
+import type { LimitSegment, PointResponse, TileBatchResponse } from '@/core/speedLimits/wire';
+import { encodePolyline } from '@/lib/polyline';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
@@ -296,6 +298,77 @@ test('points clear the moment the stop is no longer confirmed, even with the fix
   expect(snap).toMatchObject({ speedKnown: true, speedMps: 0, stopped: false, points: null });
   expect(h.display.log.at(-1)).toBe('update 0/null/null'); // no fix: the held speed, no limit, no points
   await h.host.stop({ endOpenTrip: true });
+});
+
+describe('the speed-limit lookup reads each row’s own fix', () => {
+  /** One east-west road through the drive fixture's start; `limitMph` null: untagged (a class default). */
+  const corridor = (limitMph: number | null): LimitSegment => ({
+    id: 'corridor',
+    provider: 'osm',
+    limitMph,
+    highway: 'primary',
+    oneway: 0,
+    line: encodePolyline([
+      { lat: START.lat, lng: -122.333 },
+      { lat: START.lat, lng: -122.299 },
+    ]),
+  });
+
+  function realLimits(limitMph: number | null, fallback: 'aws' | null, point?: PointResponse) {
+    const getTiles = jest.fn(
+      async (keys: string[]): Promise<TileBatchResponse> => ({
+        tiles: keys.map((tile) => ({ tile, expiresAt: clock + 86_400_000, truncated: false, segments: [corridor(limitMph)] })),
+        fallback,
+      })
+    );
+    const lookupPoint = jest.fn(
+      async (): Promise<PointResponse> => point ?? { limitMph: null, source: 'unknown', matchConfidence: 0, parallelRoads: false, provider: null }
+    );
+    const client = createSpeedLimitClient({ db, api: { getTiles, lookupPoint }, now: () => clock, warmAheadM: [] });
+    return { client, getTiles, lookupPoint };
+  }
+
+  /** Feed rows one at a time, letting the limit client's requests settle after each. */
+  async function feedSettled(h: ReturnType<typeof build>, client: SpeedLimitClient, list: ReturnType<typeof rows>): Promise<void> {
+    h.source.loadTrace(list);
+    for (const r of list) {
+      clock = r.ts;
+      h.source.step();
+      await h.host.settled();
+      await client.settled();
+    }
+  }
+
+  test('stopped at a light with no course (iPhone: -1), the sign keeps the limit it had; a lost fix drops it', async () => {
+    const { client } = realLimits(35, null);
+    const h = build({ limits: client });
+    await h.host.boot();
+    await h.host.start();
+    const driven = rows(10, { speedMps: 15 });
+    await feedSettled(h, client, driven);
+    expect(h.host.snapshot().limitMph).toBe(35);
+    const at = driven.at(-1)!;
+    await feedSettled(h, client, rows(5, { speedMps: 0, t0: at.ts + 1000, over: () => ({ lng: at.lng, course: -1 }) }));
+    expect(h.host.snapshot()).toMatchObject({ stopped: true, limitMph: 35 });
+    // A lost fix: nothing is known, and the old match does not come back with the fix.
+    await feedSettled(h, client, rows(1, { speedMps: 0, t0: at.ts + 6000, over: () => ({ lng: at.lng, course: -1, gnssValid: false, speed: -1, hAcc: -1 }) }));
+    expect(h.host.snapshot().limitMph).toBeNull();
+    await feedSettled(h, client, rows(2, { speedMps: 0, t0: at.ts + 7000, over: () => ({ lng: at.lng, course: -1 }) }));
+    expect(h.host.snapshot().limitMph).toBeNull();
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('moving on a road with no posted limit, the server’s point answer is asked for after the unknown run and shown', async () => {
+    const answer: PointResponse = { limitMph: 40, source: 'cached', matchConfidence: 0.7, parallelRoads: false, provider: 'aws' };
+    const { client, lookupPoint } = realLimits(null, 'aws', answer);
+    const h = build({ limits: client });
+    await h.host.boot();
+    await h.host.start();
+    await feedSettled(h, client, rows(12, { speedMps: 15 }));
+    expect(lookupPoint).toHaveBeenCalledTimes(1);
+    expect(h.host.snapshot().limitMph).toBe(40);
+    await h.host.stop({ endOpenTrip: true });
+  });
 });
 
 test('the background display follows the driver\'s units: km/h with speed and limit converted, read as the drive starts', async () => {

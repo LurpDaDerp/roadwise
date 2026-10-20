@@ -198,13 +198,24 @@ export interface EngineSnapshot {
   lastAlert: AlertEvent | null;
 }
 
+/** A row's fix as the speed-limit lookup reads it. */
+export interface LimitFix {
+  gnssValid: boolean;
+  /** The row's known speed, m/s; null when unknown. */
+  speedMps: number | null;
+}
+
 export interface EngineDeps {
   now(): number;
   /** A fresh `clientTripId` / event id. */
   newId(): string;
   limits: {
-    /** The cached limit for a fix, or null when nothing is cached (treated as unknown). */
-    lookup(lat: number, lng: number, course: number): LimitSample | null;
+    /**
+     * The cached limit for a fix, or null when nothing is cached (treated as unknown). `fix` is the
+     * row's: the lookup holds the last limit while stopped, drops it on a lost fix, and asks for a
+     * point answer after a run of unknown limits while moving.
+     */
+    lookup(lat: number, lng: number, course: number, fix?: LimitFix): LimitSample | null;
     /** Warm the cache along the heading; called once per `PREFETCH_EVERY_M` travelled. */
     prefetch(lat: number, lng: number, course: number): void;
   };

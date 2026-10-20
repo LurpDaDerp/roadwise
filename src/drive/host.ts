@@ -314,7 +314,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     now,
     newId,
     limits: {
-      lookup: (lat, lng, course) => limits.lookup(lat, lng, course, { gnssValid: true, speedMps: null }),
+      // The row's own fix: the stopped hold, the lost-fix reset and the point fallback read it.
+      lookup: (lat, lng, course, fix) => limits.lookup(lat, lng, course, fix ?? { gnssValid: true, speedMps: null }),
       prefetch: (lat, lng, course) => {
         if (persist) limits.prefetch(lat, lng, course);
       },

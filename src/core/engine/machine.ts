@@ -184,7 +184,7 @@ export function createEngine(deps: EngineDeps): Engine {
   async function processRow(row: FeatureRow): Promise<void> {
     const s = session as TripSession;
     const det = suite as DetectorSuite;
-    const limit = deps.limits.lookup(row.lat, row.lng, row.course) ?? UNKNOWN_LIMIT;
+    const limit = deps.limits.lookup(row.lat, row.lng, row.course, { gnssValid: row.gnssValid, speedMps: knownSpeed(row) }) ?? UNKNOWN_LIMIT;
     // The sign's number: a posted limit or a confident class default. The detectors judge the row
     // against `limit` themselves (`limitMphFor`), which refuses a default.
     seen = { row, limit, limitMph: limitShownMph(row, limit) };
