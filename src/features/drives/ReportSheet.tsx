@@ -27,6 +27,7 @@ export function ReportSheet({
   onClose,
   onSend,
   onNotDriving,
+  onDismiss,
 }: {
   event: LocalDriveEvent | null;
   /** "I wasn't driving" only where the whole-drive action is allowed. */
@@ -34,6 +35,8 @@ export function ReportSheet({
   onClose: () => void;
   onSend: (eventId: string, reason: Exclude<ReportReason, 'not_driving'>) => Promise<void>;
   onNotDriving: () => void;
+  /** The sheet has left the screen after a close (the moment to open the next sheet). */
+  onDismiss?: () => void;
 }) {
   const t = useTheme();
   const [reason, setReason] = useState<ReportReason | null>(null);
@@ -65,7 +68,7 @@ export function ReportSheet({
   };
 
   return (
-    <Sheet visible={event !== null} onClose={onClose} title="Report this event" testID="report-sheet">
+    <Sheet visible={event !== null} onClose={onClose} onDismiss={onDismiss} title="Report this event" testID="report-sheet">
       {event ? (
         <View style={{ gap: t.space.md }}>
           <Text variant="subhead" tone="muted">

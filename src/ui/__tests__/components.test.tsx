@@ -13,7 +13,7 @@ import { ProgressBar } from '@/ui/primitives/ProgressBar';
 import { ProgressRing } from '@/ui/primitives/ProgressRing';
 import { SectionHeader } from '@/ui/primitives/SectionHeader';
 import { SegmentedControl } from '@/ui/primitives/SegmentedControl';
-import { BottomSheet, Sheet } from '@/ui/primitives/Sheet';
+import { BottomSheet, Sheet, SHEET_DISMISS_FALLBACK_MS } from '@/ui/primitives/Sheet';
 import { StepDots, StepTransition } from '@/ui/primitives/StepTransition';
 import { Button } from '@/ui/primitives/Button';
 import { Text } from '@/ui/primitives/Text';
@@ -333,6 +333,64 @@ describe('BottomSheet', () => {
       jest.advanceTimersByTime(400);
     });
     expect(screen.queryByText('Reasons')).toBeNull();
+  });
+
+  test('onDismiss fires once after a close: from the modal, or after the fallback when the modal sends none', async () => {
+    const onDismiss = jest.fn();
+    const sheet = (visible: boolean) => (
+      <SafeAreaProvider>
+        <ThemeProvider scheme="light" reduceMotion>
+          <Sheet visible={visible} title="Menu" onClose={jest.fn()} onDismiss={onDismiss} testID="sheet">
+            <Text>Items</Text>
+          </Sheet>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    );
+    const view = await wrap(
+      <Sheet visible={false} title="Menu" onClose={jest.fn()} onDismiss={onDismiss}>
+        <Text>Items</Text>
+      </Sheet>
+    );
+    // Never opened: nothing to dismiss.
+    await act(async () => {
+      jest.advanceTimersByTime(SHEET_DISMISS_FALLBACK_MS * 2);
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    await view.rerender(sheet(true));
+    const modal = screen.getByTestId('sheet-modal');
+    await view.rerender(sheet(false));
+    // The system modal says it has gone (iOS): once, and the fallback adds nothing.
+    await act(async () => {
+      modal.props.onDismiss();
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      jest.advanceTimersByTime(SHEET_DISMISS_FALLBACK_MS * 2);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+
+    // No word from the modal (Android): the fallback ends the way out.
+    await view.rerender(sheet(true));
+    await view.rerender(sheet(false));
+    await act(async () => {
+      jest.advanceTimersByTime(SHEET_DISMISS_FALLBACK_MS - 1);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+
+    // Opened again before it had gone: the close is called off.
+    await view.rerender(sheet(false));
+    await view.rerender(sheet(true));
+    await view.rerender(sheet(false));
+    await view.rerender(sheet(true));
+    await act(async () => {
+      jest.advanceTimersByTime(SHEET_DISMISS_FALLBACK_MS * 2);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -68,6 +68,8 @@ export function PublicProfileScreen({ username }: { username: string }) {
   const action = useServerAction();
   const [menu, setMenu] = useState(false);
   const [reporting, setReporting] = useState(false);
+  // Report from the menu opens once the menu sheet has gone (iOS shows one modal at a time).
+  const [reportNext, setReportNext] = useState(false);
   const p = profile.data;
 
   const relate = async (a: RelationAction) => {
@@ -127,8 +129,27 @@ export function PublicProfileScreen({ username }: { username: string }) {
       {p.can_view_stats && others ? <MemberStats profile={p} /> : null}
       {p.can_view_heatmap && others ? <MemberHeatmap userId={p.user_id} /> : null}
 
-      <Sheet visible={menu} onClose={() => setMenu(false)} title={p.username} testID="profile-menu">
-        <Button label={copy.report} icon="flag-outline" variant="secondary" onPress={() => { setMenu(false); setReporting(true); }} testID="profile-report" />
+      <Sheet
+        visible={menu}
+        onClose={() => setMenu(false)}
+        onDismiss={() => {
+          if (!reportNext) return;
+          setReportNext(false);
+          setReporting(true);
+        }}
+        title={p.username}
+        testID="profile-menu"
+      >
+        <Button
+          label={copy.report}
+          icon="flag-outline"
+          variant="secondary"
+          onPress={() => {
+            setReportNext(true);
+            setMenu(false);
+          }}
+          testID="profile-report"
+        />
         <Button label={copy.block} icon="ban-outline" variant="destructive" onPress={() => void block()} testID="profile-block" />
       </Sheet>
       <ReportSheet visible={reporting} onClose={() => setReporting(false)} targetId={p.user_id} name={p.username} />

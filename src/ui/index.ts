@@ -54,7 +54,7 @@ export {
   type Segment,
   type SegmentedControlProps,
 } from './primitives/SegmentedControl';
-export { BottomSheet, Sheet, type SheetProps } from './primitives/Sheet';
+export { BottomSheet, Sheet, SHEET_DISMISS_FALLBACK_MS, type SheetProps } from './primitives/Sheet';
 export { StepDots, StepTransition } from './primitives/StepTransition';
 export { Skeleton } from './primitives/Skeleton';
 export {

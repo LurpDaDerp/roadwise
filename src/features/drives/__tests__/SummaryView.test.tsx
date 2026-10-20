@@ -1,7 +1,7 @@
 import { screen, within } from '@testing-library/react-native';
 
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
-import { fontFamilies } from '@/ui';
+import { fontFamilies, SHEET_DISMISS_FALLBACK_MS } from '@/ui';
 import { plainBundle } from '@/ui/sky/palette';
 
 import { DAY, draw, drive, event, HOUR, NOW, press, result } from '../__fixtures__/drives';
@@ -294,7 +294,9 @@ describe('Report', () => {
     await press(screen.getByTestId('reason-not_driving'));
     await press(screen.getByTestId('report-send'));
     expect(p.onReport).not.toHaveBeenCalled();
-    expect(screen.getByTestId('not-driving-sheet')).toBeOnTheScreen();
+    // The confirm waits for the report sheet to leave: iOS shows one modal at a time.
+    expect(screen.queryByTestId('not-driving-sheet')).toBeNull();
+    expect(await screen.findByTestId('not-driving-sheet', {}, { timeout: SHEET_DISMISS_FALLBACK_MS + 1000 })).toBeOnTheScreen();
   });
 
   test('an event already reported shows its status instead of the link', async () => {

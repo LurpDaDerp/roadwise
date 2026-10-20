@@ -159,6 +159,8 @@ describe('moderation', () => {
     await show(profile());
     await tap('profile-more');
     await tap('profile-report');
+    // The report sheet waits for the menu to leave: iOS shows one modal at a time.
+    expect(screen.queryByTestId('report-harassment')).toBeNull();
     await tap('report-harassment');
     await waitFor(() =>
       expect(mockRpc).toHaveBeenCalledWith('report_target', {

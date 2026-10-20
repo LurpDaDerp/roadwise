@@ -1,8 +1,9 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
   type GestureResponderEvent,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   View,
@@ -20,6 +21,12 @@ export type SheetProps = {
   visible: boolean;
   /** Called by the close button, a tap on the scrim, a drag down, the screen reader's escape and Android back. */
   onClose: () => void;
+  /**
+   * Called once, after a close, when the sheet has left the screen. Open a second sheet from here,
+   * never in the same render as this one's close: iOS refuses to present a modal while another is
+   * still on its way out, and the second sheet would never show.
+   */
+  onDismiss?: () => void;
   title?: string;
   /** A line under the title. */
   subtitle?: string;
@@ -43,6 +50,12 @@ export type SheetProps = {
 /** How far down a drag has to travel (or how fast) before the sheet closes. */
 const DISMISS_DISTANCE = 120;
 const DISMISS_VELOCITY = 1.1;
+/**
+ * `onDismiss` comes from the system modal on iOS once the fade-out has finished. Android has no
+ * such event (and an iOS modal that never presented sends none), so this long after a close the
+ * sheet counts as gone anyway.
+ */
+export const SHEET_DISMISS_FALLBACK_MS = Platform.OS === 'ios' ? 700 : 250;
 
 /**
  * The bottom sheet: a rounded panel over a dimmed page, with a grabber, a title row with a round
@@ -63,6 +76,7 @@ const DISMISS_VELOCITY = 1.1;
 export function BottomSheet({
   visible,
   onClose,
+  onDismiss,
   title,
   subtitle,
   children,
@@ -77,9 +91,32 @@ export function BottomSheet({
   const insets = useSafeAreaInsets();
   // Only a drag moves the panel; at rest it sits at 0.
   const y = useSharedValue(0);
+
+  // A close starts the way out; the modal's own dismissal (or the fallback) ends it, once.
+  const onDismissRef = useRef(onDismiss);
   useEffect(() => {
-    if (visible) y.set(0);
-  }, [visible, y]);
+    onDismissRef.current = onDismiss;
+  });
+  const leaving = useRef(false);
+  const wasVisible = useRef(visible);
+  const left = useCallback(() => {
+    if (!leaving.current) return;
+    leaving.current = false;
+    onDismissRef.current?.();
+  }, []);
+  useEffect(() => {
+    const was = wasVisible.current;
+    wasVisible.current = visible;
+    if (visible) {
+      leaving.current = false;
+      y.set(0);
+      return;
+    }
+    if (!was) return;
+    leaving.current = true;
+    const timer = setTimeout(left, SHEET_DISMISS_FALLBACK_MS);
+    return () => clearTimeout(timer);
+  }, [visible, y, left]);
 
   // Drag-to-close on the grabber and title row, through the plain responder props: the start of
   // the touch, and the last move, give the distance and the speed at release.
@@ -137,6 +174,8 @@ export function BottomSheet({
       statusBarTranslucent
       navigationBarTranslucent
       onRequestClose={close}
+      onDismiss={left}
+      testID={testID ? `${testID}-modal` : undefined}
     >
       <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: 'flex-end' }}>
         <View style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: t.colors.scrim }}>

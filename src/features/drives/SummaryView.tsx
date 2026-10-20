@@ -136,6 +136,9 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reporting, setReporting] = useState<string | null>(null);
   const [confirmNotDriving, setConfirmNotDriving] = useState(false);
+  // "I wasn't driving" in a report: the confirm opens once the report sheet has gone (iOS shows
+  // one modal at a time and refuses a second while the first is still leaving).
+  const [notDrivingNext, setNotDrivingNext] = useState(false);
   const [sharing, setSharing] = useState(false);
 
   const state = pointsState(drive);
@@ -232,7 +235,12 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
         onClose={() => setReporting(null)}
         onSend={onReport}
         onNotDriving={() => {
+          setNotDrivingNext(true);
           setReporting(null);
+        }}
+        onDismiss={() => {
+          if (!notDrivingNext) return;
+          setNotDrivingNext(false);
           setConfirmNotDriving(true);
         }}
       />
