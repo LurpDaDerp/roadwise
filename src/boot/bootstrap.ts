@@ -619,10 +619,9 @@ function defaultDiagnostics(host: DriveHost, db: Db, onError: (error: unknown) =
 }
 
 function defaultSummaryNotifier(host: DriveHost, db: Db): { detach(): void; settled(): Promise<void> } {
-  void db;
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
-  const { attachSummaryNotifier } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
-  return attachSummaryNotifier(host);
+  const { attachSummaryNotifier, summaryUnits } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
+  return attachSummaryNotifier(host, { units: summaryUnits(db) });
 }
 
 /**

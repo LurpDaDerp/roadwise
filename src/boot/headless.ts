@@ -28,10 +28,10 @@ export const HEADLESS_DRAIN_TIMEOUT_MS = 60_000;
 
 type AttachNotifier = (host: DriveHost, db: Db) => { detach(): void; settled(): Promise<void> };
 
-export function attachHeadlessSummaryNotifier(host: DriveHost, _db: Db): { detach(): void; settled(): Promise<void> } {
+export function attachHeadlessSummaryNotifier(host: DriveHost, db: Db): { detach(): void; settled(): Promise<void> } {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: expo-notifications
-  const { attachSummaryNotifier } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
-  return attachSummaryNotifier(host);
+  const { attachSummaryNotifier, summaryUnits } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
+  return attachSummaryNotifier(host, { units: summaryUnits(db) });
 }
 
 export interface DriveHeadlessTaskDeps {
