@@ -111,28 +111,28 @@ enum DetectSelfTest {
 
   private static func opt(_ x: Double?) -> Any { x.map { $0 as Any } ?? NSNull() }
 
-  private static func rowOf(_ any: Any?) -> DetectRow? { DetectRow(json: any) }
+  private static func rowOf(_ value: Any?) -> DetectRow? { DetectRow(json: value) }
 
-  private static func rowsOf(_ any: Any?) -> [DetectRow]? {
-    guard let list = any as? [Any] else { return nil }
+  private static func rowsOf(_ value: Any?) -> [DetectRow]? {
+    guard let list = value as? [Any] else { return nil }
     let rows = list.compactMap { rowOf($0) }
     return rows.count == list.count ? rows : nil
   }
 
-  private static func lastEndOf(_ any: Any?) -> DetectLastEnd? {
-    guard let o = any as? [String: Any], let decidedAt = jsonNumber(o["decidedAt"]), let cut = jsonNumber(o["cut"]),
+  private static func lastEndOf(_ value: Any?) -> DetectLastEnd? {
+    guard let o = value as? [String: Any], let decidedAt = jsonNumber(o["decidedAt"]), let cut = jsonNumber(o["cut"]),
           let lat = jsonNumber(o["lat"]), let lng = jsonNumber(o["lng"]), let id = o["driveId"] as? String else { return nil }
     return DetectLastEnd(decidedAt: decidedAt, cut: cut, lat: lat, lng: lng, driveId: id)
   }
 
-  private static func activityOf(_ any: Any) -> DetectActivity? {
-    guard let o = any as? [String: Any], let start = jsonNumber(o["start"]), let automotive = jsonBool(o["automotive"]),
+  private static func activityOf(_ value: Any) -> DetectActivity? {
+    guard let o = value as? [String: Any], let start = jsonNumber(o["start"]), let automotive = jsonBool(o["automotive"]),
           let stationary = jsonBool(o["stationary"]), let onFoot = jsonBool(o["onFoot"]), let confident = jsonBool(o["confident"]) else { return nil }
     return DetectActivity(start: start, automotive: automotive, stationary: stationary, onFoot: onFoot, confident: confident)
   }
 
-  private static func motionOf(_ any: Any?) -> DetectMotion? {
-    guard let o = any as? [String: Any], let last = jsonNumber(o["lastAutomotiveAt"]), let since = jsonNumber(o["automotiveSince"]),
+  private static func motionOf(_ value: Any?) -> DetectMotion? {
+    guard let o = value as? [String: Any], let last = jsonNumber(o["lastAutomotiveAt"]), let since = jsonNumber(o["automotiveSince"]),
           let onFoot = jsonBool(o["onFootNow"]) else { return nil }
     return DetectMotion(lastAutomotiveAt: last, automotiveSince: since, onFootNow: onFoot)
   }
@@ -141,8 +141,8 @@ enum DetectSelfTest {
     ["lastAutomotiveAt": m.lastAutomotiveAt, "automotiveSince": m.automotiveSince, "onFootNow": m.onFootNow]
   }
 
-  private static func wakeOf(_ any: Any?) -> WakeCtx? {
-    guard let o = any as? [String: Any], let now = jsonNumber(o["now"]), let reason = o["reason"] as? String, let phase = o["phase"] as? String,
+  private static func wakeOf(_ value: Any?) -> WakeCtx? {
+    guard let o = value as? [String: Any], let now = jsonNumber(o["now"]), let reason = o["reason"] as? String, let phase = o["phase"] as? String,
           let armed = jsonBool(o["armed"]), let hasOwner = jsonBool(o["hasOwner"]), let ok = jsonBool(o["permissionsOk"]),
           let rest = jsonNumber(o["candidateRestUntil"]), let starts = o["candidateStarts"] as? [Any] else { return nil }
     let times = starts.compactMap { jsonNumber($0) }
@@ -150,8 +150,8 @@ enum DetectSelfTest {
     return WakeCtx(now: now, reason: reason, phase: phase, armed: armed, hasOwner: hasOwner, permissionsOk: ok, candidateRestUntil: rest, candidateStarts: times)
   }
 
-  private static func statusInputsOf(_ any: Any?) -> StatusInputs? {
-    guard let o = any as? [String: Any], let armed = jsonBool(o["armed"]), let hardware = jsonBool(o["hardware"]),
+  private static func statusInputsOf(_ value: Any?) -> StatusInputs? {
+    guard let o = value as? [String: Any], let armed = jsonBool(o["armed"]), let hardware = jsonBool(o["hardware"]),
           let location = o["location"] as? String, let precise = jsonBool(o["precise"]), let motion = o["motion"] as? String,
           let refresh = o["backgroundRefresh"] as? String, let live = jsonBool(o["liveActivities"]) else { return nil }
     return StatusInputs(armed: armed, hardware: hardware, location: location, precise: precise, motion: motion, backgroundRefresh: refresh, liveActivities: live)

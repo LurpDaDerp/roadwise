@@ -9,7 +9,7 @@ import CoreMotion
 import Foundation
 
 /// A live motion report as the detector reads it, with when it arrived (epoch ms).
-struct LiveActivity {
+struct MotionReport {
   /// walking or running
   var walking: Bool
   var cycling: Bool
@@ -32,7 +32,7 @@ enum ActivitySource {
   private static var live = false
   private static var lastEmitted: (type: String, confidence: String)?
   /// Every live report, on main (the drive detector).
-  static var onLive: ((LiveActivity) -> Void)?
+  static var onLive: ((MotionReport) -> Void)?
 
   // MARK: - Mapping (README §3, iOS)
 
@@ -128,7 +128,7 @@ enum ActivitySource {
     manager.startActivityUpdates(to: queue) { a in
       guard let a = a else { return }
       let payload = activityPayload(a)
-      let report = LiveActivity(
+      let report = MotionReport(
         walking: a.walking || a.running,
         cycling: a.cycling,
         automotive: a.automotive,

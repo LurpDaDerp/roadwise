@@ -22,8 +22,8 @@ struct JournalSummary {
 
 extension DetectRow {
   /// A `row` payload (or a journal row line) as the detector reads it; nil when a field is missing.
-  init?(json any: Any?) {
-    guard let o = any as? [String: Any], let ts = jsonNumber(o["ts"]), let lat = jsonNumber(o["lat"]), let lng = jsonNumber(o["lng"]),
+  init?(json value: Any?) {
+    guard let o = value as? [String: Any], let ts = jsonNumber(o["ts"]), let lat = jsonNumber(o["lat"]), let lng = jsonNumber(o["lng"]),
           let hAcc = jsonNumber(o["hAcc"]), let speed = jsonNumber(o["speed"]), let speedAcc = jsonNumber(o["speedAcc"]),
           let valid = jsonBool(o["gnssValid"]) else { return nil }
     self.init(ts: ts, lat: lat, lng: lng, hAcc: hAcc, speed: speed, speedAcc: speedAcc, gnssValid: valid)
@@ -82,7 +82,8 @@ extension RowJournal {
       for f in self.files() {
         if let s = self.summary(f.url) { out.append(Self.listed(f.id, s)) }
       }
-      DispatchQueue.main.async { done(out) }
+      let drives = out
+      DispatchQueue.main.async { done(drives) }
     }
   }
 
@@ -90,7 +91,8 @@ extension RowJournal {
     let st = s.start
     var ended: Any = NSNull()
     if let e = s.end {
-      ended = ["endedAt": e["endedAt"] ?? 0, "cause": e["cause"] ?? "orphan", "decidedAt": e["decidedAt"] ?? 0]
+      let endInfo: [String: Any] = ["endedAt": e["endedAt"] ?? 0, "cause": e["cause"] ?? "orphan", "decidedAt": e["decidedAt"] ?? 0]
+      ended = endInfo
     }
     return [
       "driveId": id,

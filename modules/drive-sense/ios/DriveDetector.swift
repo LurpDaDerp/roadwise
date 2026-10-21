@@ -28,7 +28,7 @@ final class DriveDetector {
   var lastFix: (lat: Double, lng: Double)?
   var lastOverStopTs: Double?
   var walkSince: Double?
-  var latest: LiveActivity?
+  var latest: MotionReport?
   var clock: DispatchSourceTimer?
   var wakeTask: UIBackgroundTaskIdentifier = .invalid
   var waking = false

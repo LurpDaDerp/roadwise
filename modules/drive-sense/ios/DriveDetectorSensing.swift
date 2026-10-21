@@ -36,7 +36,7 @@ extension DriveDetector {
   }
 
   /// A confident walk or run stands from when it arrived until another report replaces it.
-  func onActivity(_ a: LiveActivity) {
+  func onActivity(_ a: MotionReport) {
     latest = a
     if a.walking && a.confident {
       if walkSince == nil { walkSince = a.at }
