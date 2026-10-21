@@ -208,6 +208,7 @@ export type Database = {
           device_id: string
           last_seen_at: string
           live_activity_drive: string | null
+          live_activity_leg: number | null
           live_activity_sent_at: string | null
           live_activity_token: string | null
           platform: string
@@ -221,6 +222,7 @@ export type Database = {
           device_id: string
           last_seen_at?: string
           live_activity_drive?: string | null
+          live_activity_leg?: number | null
           live_activity_sent_at?: string | null
           live_activity_token?: string | null
           platform: string
@@ -233,6 +235,7 @@ export type Database = {
           device_id?: string
           last_seen_at?: string
           live_activity_drive?: string | null
+          live_activity_leg?: number | null
           live_activity_sent_at?: string | null
           live_activity_token?: string | null
           platform?: string
@@ -999,7 +1002,7 @@ export type Database = {
       cancel_friend_request: { Args: { p_user_id: string }; Returns: undefined }
       check_username: { Args: { p: string }; Returns: Json }
       claim_live_activity_start: {
-        Args: { p_client_trip_id: string; p_device_id: string }
+        Args: { p_client_trip_id: string; p_device_id: string; p_leg?: number }
         Returns: Json
       }
       claim_push_batch: {

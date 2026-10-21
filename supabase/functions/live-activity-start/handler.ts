@@ -1,16 +1,17 @@
 // live-activity-start: shows a drive's Live Activity on the lock screen when the drive was noticed
 // in the background (iOS 17.2 and later, ActivityKit push-to-start).
 //
-// The phone calls this once per drive it adopted while RoadWise was not in front:
-// `{ deviceId, clientTripId, startedAt, state }`. Order of work, cheapest refusal first: method,
-// JWT, size (4 KB), JSON, the contract (strict), then: APNs configured at all (else
+// The phone calls this once per drive it adopted while RoadWise was not in front, and again for each
+// time that drive is re-opened after a stop: `{ deviceId, clientTripId, startedAt, state, leg? }`,
+// `leg` the drive's continuation count (0 to 50, 0 when left out). Order of work, cheapest refusal
+// first: method, JWT, size (4 KB), JSON, the contract (strict), then: APNs configured at all (else
 // `unconfigured`, before anything is claimed), then `claim_live_activity_start` AS THE USER (the
 // publishable key with the caller's token: RLS and `auth.uid()` decide whose device it is; 30 an
-// hour per account; one send per drive in 15 minutes), then one APNs request.
+// hour per account; one send per drive and leg in 15 minutes), then one APNs request.
 //
 // The answer is `{ sent, reason? }` with reason `no_token` (this device registered no push-to-start
-// token), `duplicate` (already sent for this drive), `apns_error` (Apple refused or did not
-// answer) or `unconfigured`. A missing token or a refused push is never a 5xx: the phone's own
+// token), `duplicate` (already sent for this leg of the drive, or a later one), `apns_error` (Apple
+// refused or did not answer) or `unconfigured`. A missing token or a refused push is never a 5xx: the phone's own
 // "Recording your drive" notification and its local start on the next foreground cover it.
 //
 // Logs carry the request id and codes only: never the device token, a secret, a position or a name.
@@ -54,6 +55,8 @@ export const LiveActivityStartSchema = z
     /** The drive's start, epoch ms (the activity's `startedAt` attribute). */
     startedAt: z.number().int().positive(),
     state: LiveDriveStateSchema,
+    /** How many times the drive was re-opened after a stop: each leg may start its activity once. */
+    leg: z.number().int().min(0).max(50).default(0),
   })
   .strict();
 export type LiveActivityStart = z.infer<typeof LiveActivityStartSchema>;
@@ -71,8 +74,8 @@ export const ClaimSchema = z.object({
 });
 export type Claim = z.infer<typeof ClaimSchema>;
 
-/** Claims the caller's device token for one drive, as the caller (their token, never the secret key). */
-export type ClaimFn = (userToken: string, deviceId: string, clientTripId: string) => Promise<unknown>;
+/** Claims the caller's device token for one leg of one drive, as the caller (their token, never the secret key). */
+export type ClaimFn = (userToken: string, deviceId: string, clientTripId: string, leg: number) => Promise<unknown>;
 
 export interface LiveActivityDeps {
   verifyJwt(token: string): Promise<string | null>;
@@ -86,12 +89,12 @@ export interface LiveActivityDeps {
 
 /** The claim over the Data API as the user: PostgREST runs it as `authenticated` with the caller's `auth.uid()`. */
 export function createClaim(url: string, publishableKey: string): ClaimFn {
-  return async (userToken, deviceId, clientTripId) => {
+  return async (userToken, deviceId, clientTripId, leg) => {
     const client = createClient(url, publishableKey, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
       global: { headers: { Authorization: `Bearer ${userToken}` } },
     });
-    const { data, error } = await client.rpc('claim_live_activity_start', { p_device_id: deviceId, p_client_trip_id: clientTripId });
+    const { data, error } = await client.rpc('claim_live_activity_start', { p_device_id: deviceId, p_client_trip_id: clientTripId, p_leg: leg });
     if (error) throw asPgError(error);
     return data;
   };
@@ -129,14 +132,14 @@ export async function handleLiveActivityStart(req: Request, deps: LiveActivityDe
   if (a.startedAt > t + MAX_AHEAD_MS || t - a.startedAt > MAX_AGE_MS) {
     return reply(json(400, { code: 'invalid_payload', issues: [{ path: 'startedAt', message: 'startedAt is not a drive in progress' }] }));
   }
-  const ctx = { requestId: id, clientTripId: a.clientTripId };
+  const ctx = { requestId: id, clientTripId: a.clientTripId, leg: a.leg };
 
   // nothing is claimed while there is no way to send: a later deploy of the secrets can still start it
   if (!deps.apns) return reply(answer({ sent: false, reason: 'unconfigured' }));
 
   let claim: Claim;
   try {
-    const raw = await deps.claim(token, a.deviceId, a.clientTripId);
+    const raw = await deps.claim(token, a.deviceId, a.clientTripId, a.leg);
     const c = ClaimSchema.safeParse(raw);
     if (!c.success) {
       log.error('live-activity-start claim outside the contract', ctx);

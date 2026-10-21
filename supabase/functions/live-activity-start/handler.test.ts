@@ -26,7 +26,7 @@ const state = {
 const body = (over: Record<string, unknown> = {}) => ({ deviceId: DEVICE, clientTripId: TRIP, startedAt: NOW - 60_000, state, ...over });
 
 interface Calls {
-  claims: { userToken: string; deviceId: string; clientTripId: string }[];
+  claims: { userToken: string; deviceId: string; clientTripId: string; leg: number }[];
   sends: { token: string; startedAt: number; state: LiveActivityContentState }[];
   logs: unknown[][];
 }
@@ -44,8 +44,8 @@ function harness(opts: { claim?: unknown | Error; apns?: ApnsResult | null; auth
         };
   const deps: LiveActivityDeps = {
     verifyJwt: (token) => (opts.auth === 'down' ? Promise.reject(new Error('auth down')) : Promise.resolve(token === 'good' ? USER : null)),
-    claim: (userToken, deviceId, clientTripId) => {
-      calls.claims.push({ userToken, deviceId, clientTripId });
+    claim: (userToken, deviceId, clientTripId, leg) => {
+      calls.claims.push({ userToken, deviceId, clientTripId, leg });
       const c = opts.claim ?? { token: PUSH_TOKEN, duplicate: false };
       return c instanceof Error ? Promise.reject(c) : Promise.resolve(c);
     },
@@ -69,11 +69,23 @@ Deno.test("sent: the caller's own token is claimed as the caller for this drive 
   assertEquals(res.status, 200);
   assertEquals(await res.json(), { sent: true });
   assert(res.headers.get('x-request-id'));
-  assertEquals(h.calls.claims, [{ userToken: 'good', deviceId: DEVICE, clientTripId: TRIP }]);
+  assertEquals(h.calls.claims, [{ userToken: 'good', deviceId: DEVICE, clientTripId: TRIP, leg: 0 }]);
   assertEquals(h.calls.sends.length, 1);
   assertEquals(h.calls.sends[0].token, PUSH_TOKEN);
   assertEquals(h.calls.sends[0].startedAt, NOW - 60_000);
   assertEquals(h.calls.sends[0].state, { ...state, unit: 'mph', weatherKind: null, weatherText: null } as LiveActivityContentState);
+});
+
+Deno.test('a drive re-opened after a stop claims its next leg, so its Live Activity comes back; a leg left out is 0', async () => {
+  const h = harness();
+  assertEquals(await (await handleLiveActivityStart(post(body({ leg: 1 })), h.deps)).json(), { sent: true });
+  assertEquals(await (await handleLiveActivityStart(post(body({ leg: 0 })), h.deps)).json(), { sent: true });
+  assertEquals(await (await handleLiveActivityStart(post(body()), h.deps)).json(), { sent: true });
+  assertEquals(h.calls.claims.map((c) => [c.clientTripId, c.leg]), [[TRIP, 1], [TRIP, 0], [TRIP, 0]]);
+  // the claim decides what repeats: the same leg again within 15 minutes is its duplicate
+  const dup = harness({ claim: { token: PUSH_TOKEN, duplicate: true } });
+  assertEquals(await (await handleLiveActivityStart(post(body({ leg: 1 })), dup.deps)).json(), { sent: false, reason: 'duplicate' });
+  assertEquals([dup.calls.claims[0].leg, dup.calls.sends.length], [1, 0]);
 });
 
 Deno.test('the optional sky colours may be left out; they go as null', async () => {
@@ -141,6 +153,11 @@ Deno.test('refusals before any claim: method, token, size, JSON, the strict cont
     body({ state: { ...state, weatherText: 'x'.repeat(65) } }),
     body({ startedAt: NOW - 13 * 3_600_000 }),
     body({ startedAt: NOW + 11 * 60_000 }),
+    body({ leg: -1 }),
+    body({ leg: 51 }),
+    body({ leg: 1.5 }),
+    body({ leg: '1' }),
+    body({ leg: null }),
   ]) {
     assertEquals((await handleLiveActivityStart(post(bad), h.deps)).status, 400, JSON.stringify(bad).slice(0, 80));
   }

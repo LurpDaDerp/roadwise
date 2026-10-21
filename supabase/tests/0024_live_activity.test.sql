@@ -1,10 +1,11 @@
 -- 0024_live_activity: the push-to-start token on the device row (its shape, server-only), register
 -- and release, the token moving with the install, and claim_live_activity_start (the caller's own
--- token only, one send per drive in 15 minutes, 30 claims an hour, grants).
+-- token only, one send per drive and leg in 15 minutes so a re-opened drive gets its activity back,
+-- 30 claims an hour, grants).
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(30);
+select plan(36);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -30,9 +31,10 @@ select is((select count(*)::int from information_schema.role_table_grants g wher
 select is(array[has_function_privilege('authenticated', 'public.register_device(text, text, text, text)', 'execute'), has_function_privilege('anon', 'public.register_device(text, text, text, text)', 'execute')],
   array[true, false], 'register_device with the token: authenticated only');
 select hasnt_function('public', 'register_device', array['text', 'text', 'text'], 'the three-argument form is gone (a call naming three arguments still resolves)');
-select is(array[has_function_privilege('authenticated', 'public.claim_live_activity_start(text, uuid)', 'execute'), has_function_privilege('anon', 'public.claim_live_activity_start(text, uuid)', 'execute')],
+select is(array[has_function_privilege('authenticated', 'public.claim_live_activity_start(text, uuid, int)', 'execute'), has_function_privilege('anon', 'public.claim_live_activity_start(text, uuid, int)', 'execute')],
   array[true, false], 'claim_live_activity_start: authenticated only');
-select is_definer('public', 'claim_live_activity_start', array['text', 'uuid']::name[], 'claim_live_activity_start is security definer');
+select is_definer('public', 'claim_live_activity_start', array['text', 'uuid', 'integer']::name[], 'claim_live_activity_start is security definer');
+select hasnt_function('public', 'claim_live_activity_start', array['text', 'uuid'], 'one form only: the leg defaults to 0, so a call naming two arguments still resolves');
 
 -- ---------------------------------------------------------------------------
 -- register and release
@@ -58,6 +60,13 @@ select is(public.claim_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-400
   'the first claim for a drive hands back the token');
 select is(public.claim_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-4000-8000-000000000001'), jsonb_build_object('token', (select a from tok), 'duplicate', true),
   'a second claim for the same drive within 15 minutes is a duplicate');
+select is(public.claim_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-4000-8000-000000000001', 0) ->> 'duplicate', 'true', 'leg 0 named is the same claim as leg 0 left out');
+-- a drive re-opened after a stop: its next leg gets its Live Activity back within the 15 minutes
+select is(public.claim_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-4000-8000-000000000001', 1), jsonb_build_object('token', (select a from tok), 'duplicate', false),
+  'the same drive''s leg 1 after leg 0 is a fresh claim');
+select is(public.claim_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-4000-8000-000000000001', 1) ->> 'duplicate', 'true', 'the same drive and the same leg within 15 minutes is a duplicate');
+select is(public.claim_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-4000-8000-000000000001', 0) ->> 'duplicate', 'true', 'and a late retry of the leg it replaced too');
+select throws_ok($$ select public.claim_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-4000-8000-000000000001', 51) $$, '22023', 'leg must be 0 to 50', 'a leg past 50 is refused');
 select is(public.claim_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-4000-8000-000000000002') ->> 'duplicate', 'false', 'another drive is a fresh claim');
 reset role;
 update public.devices set live_activity_sent_at = now() - interval '16 minutes' where device_id = 'device-aaaaaaaa';
@@ -82,8 +91,8 @@ set local role authenticated;
 select pg_temp.as_user(2);
 select lives_ok($$ select public.release_device('device-aaaaaaaa') $$, 'B signs out');
 reset role;
-select is((select row(push_token, live_activity_token, live_activity_drive, live_activity_sent_at)::text from public.devices where user_id = '00000000-0000-0000-0000-000000000002'),
-  row(null::text, null::text, null::uuid, null::timestamptz)::text, 'release clears the push token, the push-to-start token and its claim');
+select is((select row(push_token, live_activity_token, live_activity_drive, live_activity_leg, live_activity_sent_at)::text from public.devices where user_id = '00000000-0000-0000-0000-000000000002'),
+  row(null::text, null::text, null::uuid, null::int, null::timestamptz)::text, 'release clears the push token, the push-to-start token and its claim');
 set local role authenticated;
 select pg_temp.as_user(2);
 select is(public.claim_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-4000-8000-000000000005') -> 'token', 'null'::jsonb, 'nothing to claim after sign-out');

@@ -2,17 +2,20 @@
 -- through an ActivityKit push-to-start (iOS 17.2 and later).
 --
 --   * Each device row may hold the app's push-to-start token (`live_activity_token`, the hex the
---     phone hands over through register_device), the drive it last started an activity for and
---     when. The token is server-only like the push token: no API role reads devices, the account
+--     phone hands over through register_device), the drive and leg it last started an activity for
+--     and when. The token is server-only like the push token: no API role reads devices, the account
 --     export leaves it out, and it moves with the install (no other row keeps it).
 --   * release_device (sign-out) clears it with the push token.
---   * claim_live_activity_start(device, drive) is what the live-activity-start edge function asks
---     before it sends: the caller's own device token, at most one send per drive in 15 minutes
---     (a repeat answers `duplicate`), and at most 30 claims an hour per account.
+--   * claim_live_activity_start(device, drive, leg) is what the live-activity-start edge function
+--     asks before it sends: the caller's own device token, at most one send per drive and leg in
+--     15 minutes (a repeat answers `duplicate`), and at most 30 claims an hour per account. The leg
+--     is the drive's continuation count (0 for a new drive, 1 once it is re-opened after a stop, and
+--     so on), so a drive re-opened within the 15 minutes gets its Live Activity back.
 
 alter table public.devices
   add column live_activity_token text check (live_activity_token ~ '^[0-9a-f]{32,200}$'),
   add column live_activity_drive uuid,
+  add column live_activity_leg int check (live_activity_leg between 0 and 50),
   add column live_activity_sent_at timestamptz;
 -- the token lookup in register_device (a token moves with the install)
 create index devices_live_activity_token_idx on public.devices (live_activity_token) where live_activity_token is not null;
@@ -71,7 +74,7 @@ begin
   end if;
   -- the push-to-start token belongs to one install: no other row keeps it
   if p_live_activity_token is not null then
-    update public.devices set live_activity_token = null, live_activity_drive = null, live_activity_sent_at = null
+    update public.devices set live_activity_token = null, live_activity_drive = null, live_activity_leg = null, live_activity_sent_at = null
       where live_activity_token = p_live_activity_token and not (user_id = v_uid and device_id = p_device_id);
   end if;
   -- at most 10 device rows per account: the least recently seen go
@@ -108,17 +111,19 @@ begin
   if p_device_id is null or p_device_id !~ '^[A-Za-z0-9._:-]{8,128}$' then
     raise exception 'device_id must be 8 to 128 characters' using errcode = 'invalid_parameter_value';
   end if;
-  update public.devices set push_token = null, live_activity_token = null, live_activity_drive = null, live_activity_sent_at = null
+  update public.devices set push_token = null, live_activity_token = null, live_activity_drive = null, live_activity_leg = null,
+      live_activity_sent_at = null
     where user_id = v_uid and device_id = p_device_id
       and (push_token is not null or live_activity_token is not null or live_activity_drive is not null);
 end $$;
 
--- claim_live_activity_start(p_device_id, p_client_trip_id) -> { token, duplicate }
--- The caller's own device's push-to-start token, claimed for one drive: token null when the device
--- has none (or is not the caller's); duplicate true when this drive was already claimed in the last
--- 15 minutes (nothing changes); else the claim is recorded and the token handed back for one send.
--- 30 claims an hour per account.
-create or replace function public.claim_live_activity_start(p_device_id text, p_client_trip_id uuid) returns jsonb
+-- claim_live_activity_start(p_device_id, p_client_trip_id, p_leg) -> { token, duplicate }
+-- The caller's own device's push-to-start token, claimed for one leg of one drive (p_leg, 0 to 50:
+-- how many times the drive was re-opened, 0 when left out): token null when the device has none (or
+-- is not the caller's); duplicate true when this drive was claimed in the last 15 minutes for this
+-- leg or a later one (nothing changes: a repeat, or a late retry of a leg a newer one replaced); else
+-- the claim is recorded and the token handed back for one send. 30 claims an hour per account.
+create or replace function public.claim_live_activity_start(p_device_id text, p_client_trip_id uuid, p_leg int default 0) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   v_uid uuid := auth.uid();
@@ -133,23 +138,27 @@ begin
   if p_client_trip_id is null then
     raise exception 'client_trip_id is required' using errcode = 'invalid_parameter_value';
   end if;
+  if p_leg is null or p_leg not between 0 and 50 then
+    raise exception 'leg must be 0 to 50' using errcode = 'invalid_parameter_value';
+  end if;
   perform private.require_rate_limit(v_uid, 'live_activity_start', interval '1 hour', 30);
   select * into d from public.devices x where x.user_id = v_uid and x.device_id = p_device_id for update;
   if not found or d.live_activity_token is null then
     return jsonb_build_object('token', null, 'duplicate', false);
   end if;
-  if d.live_activity_drive = p_client_trip_id and d.live_activity_sent_at > now() - interval '15 minutes' then
+  if d.live_activity_drive = p_client_trip_id and coalesce(d.live_activity_leg, 0) >= p_leg
+     and d.live_activity_sent_at > now() - interval '15 minutes' then
     return jsonb_build_object('token', d.live_activity_token, 'duplicate', true);
   end if;
-  update public.devices set live_activity_drive = p_client_trip_id, live_activity_sent_at = now()
+  update public.devices set live_activity_drive = p_client_trip_id, live_activity_leg = p_leg, live_activity_sent_at = now()
     where user_id = v_uid and device_id = p_device_id;
   return jsonb_build_object('token', d.live_activity_token, 'duplicate', false);
 end $$;
 
 revoke all on function public.register_device(text, text, text, text) from public, anon, authenticated;
 revoke all on function public.release_device(text) from public, anon, authenticated;
-revoke all on function public.claim_live_activity_start(text, uuid) from public, anon, authenticated;
+revoke all on function public.claim_live_activity_start(text, uuid, int) from public, anon, authenticated;
 grant execute on function public.register_device(text, text, text, text) to authenticated;
 grant execute on function public.release_device(text) to authenticated;
-grant execute on function public.claim_live_activity_start(text, uuid) to authenticated;
+grant execute on function public.claim_live_activity_start(text, uuid, int) to authenticated;
 notify pgrst, 'reload schema';
