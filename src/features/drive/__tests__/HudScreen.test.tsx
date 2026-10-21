@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 
 import type { LastFinalized } from '@/drive/host';
 import type { DriveLive } from '@/drive/useDrive';
@@ -88,6 +88,7 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
     status: 'recording',
     clientTripId: 't1',
     speedMph: 34,
+    speedAccelMph: 0,
     limitMph: 35,
     speedingTier: null,
     stopped: false,
@@ -155,13 +156,30 @@ describe('speed and limit', () => {
     expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('-');
   });
 
-  test('the speed moves on once a row and holds still between rows', async () => {
+  test('cruising, the speed moves on once a row and holds still between rows', async () => {
     const h = await renderHud({ speedMph: 40, rowTs: T });
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('40');
     await act(() => jest.advanceTimersByTime(900));
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('40');
     await h.update({ speedMph: 33, rowTs: T + 1000 });
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('33');
+  });
+
+  test('speeding up or slowing, it moves on about 3 times a second along the acceleration, then waits for the next row', async () => {
+    // 40 mph, slowing 3 mph/s: 40, then 39 at 333 ms, 38 at 667 ms, still 38 until the next row.
+    const h = await renderHud({ speedMph: 40, speedAccelMph: -3, rowTs: T });
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('40');
+    await act(() => jest.advanceTimersByTime(333));
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('39');
+    await act(() => jest.advanceTimersByTime(334));
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('38');
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('38');
+    // The next row starts again from its own fix.
+    await h.update({ speedMph: 37.4, speedAccelMph: 0, rowTs: T + 1000 });
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('37');
+    await act(() => jest.advanceTimersByTime(700));
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('37');
   });
 
   test('an unknown speed or limit is "-"', async () => {
@@ -426,6 +444,20 @@ describe('points', () => {
     // The fix drops as the car pulls away: not stopped, speed "-", stale points still published.
     await h.update({ stopped: false, speedMph: null });
     expect(screen.queryByTestId('hud-points')).toBeNull();
+  });
+
+  test('landscape: the points sit inside the halo, under the speed; the band line stays free', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the hook behind react-native's export
+    const dims = require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
+    jest.spyOn(dims, 'default').mockReturnValue({ width: 667, height: 375, scale: 2, fontScale: 1 });
+    const h = await renderHud({ speedMph: 30 });
+    expect(screen.getByTestId('hud-halo-stack')).toHaveStyle({ transform: [{ translateY: -33 }] });
+    expect(screen.queryByTestId('hud-points')).toBeNull();
+    await h.update({ stopped: true, speedMph: 0, points: { total: 1234, sinceLastStop: 0 } });
+    expect(within(screen.getByTestId('hud-halo-points')).getByTestId('hud-points')).toHaveTextContent('1,234 pts');
+    expect(screen.getByTestId('hud-points')).toHaveStyle({ fontSize: 28, width: 135 });
+    expect(within(screen.getByTestId('hud-line')).queryByTestId('hud-points')).toBeNull();
+    jest.restoreAllMocks();
   });
 
   test('gone again as the car moves off', async () => {

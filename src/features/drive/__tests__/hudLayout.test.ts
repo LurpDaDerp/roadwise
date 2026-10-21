@@ -82,27 +82,31 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect([small.sign.w, small.sign.h]).toEqual([96, 96]);
   });
 
-  test('iPhone SE landscape 667 × 375: the sign left of a full-height halo (307), the navigation button right with End under it', () => {
+  test('iPhone SE landscape 667 × 375: the sign left of a full-height halo (347) with the points inside it, the navigation button right with End under it', () => {
     const l = L({ width: 667, height: 375 });
     expect(l).toMatchObject({ orientation: 'landscape', compact: false });
-    expect(l.halo).toMatchObject({ x: 128, y: 32, w: 307, ring: true });
+    expect(l.halo).toMatchObject({ x: 128, y: 12, w: 347, h: 347, ring: true });
     const mid = l.halo.y + l.halo.h / 2;
     // the sign in the left column, level with the halo's centre
     expect(l.sign).toEqual({ x: 16, y: mid - 60, w: 96, h: 120 });
-    // the right column, top to bottom: the band, the points, the navigation button, End
-    expect(l.band).toEqual({ x: 451, y: 12, w: 200, h: 56 });
-    expect(l.points).toEqual({ x: 451, y: 94.5, w: 200, h: 46 });
-    expect(l.nav).toEqual({ x: 503, y: 167, w: 96, h: 104 });
-    expect(l.end).toEqual({ x: 451, y: 375 - 16 - 76, w: 200, h: 76 });
+    // the right column, top to bottom: the band, the navigation button, End (160 wide)
+    expect(l.band).toEqual({ x: 491, y: 12, w: 160, h: 56 });
+    expect(l.nav).toEqual({ x: 523, y: 167, w: 96, h: 104 });
+    expect(l.end).toEqual({ x: 491, y: 375 - 16 - 76, w: 160, h: 76 });
     expect(l.end.y).toBe(l.nav.y + l.nav.h + 12);
+    // the points inside the halo, under the speed: the stack raised 33 pt, the numerals sized for it
+    expect(l.points).toBe('halo');
+    expect(l.haloPoints).toEqual({ lift: 33, pt: 28, w: 135 });
+    expect([l.numeralPt2, l.numeralPt3]).toEqual([126, 97]);
     // the navigation list covers the sign and the halo, never the button or End
-    expect(l.panel).toEqual({ x: 16, y: 12, w: 419, h: 347 });
+    expect(l.panel).toEqual({ x: 16, y: 12, w: 459, h: 347 });
   });
 
-  test('iPhone 15 landscape 852 × 393 (side insets 59, bottom 21): the halo the full height, 344 pt', () => {
+  test('iPhone 15 landscape 852 × 393 (side insets 59, bottom 21): the halo the full height, 344 pt, centred on the screen', () => {
     const l = L({ width: 852, height: 393, insets: { top: 0, bottom: 21, left: 59, right: 59 } });
-    expect(l).toMatchObject({ orientation: 'landscape', compact: false, halo: { y: 12, w: 344, ring: true } });
-    expect(l.end).toMatchObject({ x: 852 - 75 - 200, w: 200 });
+    expect(l).toMatchObject({ orientation: 'landscape', compact: false, halo: { y: 12, w: 344, ring: true }, points: 'halo' });
+    expect(l.halo.x + l.halo.w / 2).toBe(852 / 2);
+    expect(l.end).toMatchObject({ x: 852 - 75 - 163, w: 163 });
     expect(l.sign.x).toBeGreaterThanOrEqual(75);
     expect(l.nav.x + l.nav.w).toBeLessThanOrEqual(852 - 75);
   });
@@ -114,21 +118,20 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.end.w).toBe(355);
   });
 
-  test('a 360 × 640 Android turned, with the 3-button bar on the right (640 × 360, right 48): the ring, 232 pt', () => {
+  test('a 360 × 640 Android turned, with the 3-button bar on the right (640 × 360, right 48): the ring, 272 pt; too small for the points inside, they go in the band line', () => {
     const l = L({ width: 640, height: 360, insets: { ...ZERO, right: 48 } });
-    expect(l).toMatchObject({ orientation: 'landscape', compact: false, halo: { w: 232, ring: true } });
+    expect(l).toMatchObject({ orientation: 'landscape', compact: false, halo: { w: 272, ring: true }, points: 'line', haloPoints: null });
     expect(l.nav.w).toBe(96);
-    expect(l.points).not.toBe('line');
     expect(l.numeralPt2).toBeGreaterThanOrEqual(96);
     const statusBar = L({ width: 640, height: 360, insets: { ...ZERO, top: 24, right: 48 } });
-    expect(statusBar).toMatchObject({ compact: false, halo: { w: 232, ring: true }, points: 'line' });
-    expect(L({ width: 600, height: 400 })).toMatchObject({ compact: false, halo: { w: 240, ring: true } });
+    expect(statusBar).toMatchObject({ compact: false, halo: { w: 272, ring: true } });
+    expect(L({ width: 600, height: 400 })).toMatchObject({ compact: false, halo: { w: 280, ring: true } });
   });
 
   test('landscape falls to compact only when the middle cannot hold a 220 pt ring, or the right column its stack', () => {
-    // frameW - 32 - 96 - 200 >= 220 from width 580; the band, navigation and End stack (260 pt) from height 288
-    expect(L({ width: 580, height: 400 })).toMatchObject({ compact: false, halo: { w: 220 } });
-    expect(L({ width: 578, height: 400 })).toMatchObject({ compact: true });
+    // frameW - 32 - 96 - 160 >= 220 from width 540; the band, navigation and End stack (260 pt) from height 288
+    expect(L({ width: 540, height: 400 })).toMatchObject({ compact: false, halo: { w: 220 } });
+    expect(L({ width: 538, height: 400 })).toMatchObject({ compact: true });
     expect(L({ width: 700, height: 288 })).toMatchObject({ compact: false, halo: { w: 260 } });
     expect(L({ width: 700, height: 286 })).toMatchObject({ compact: true });
   });
@@ -165,7 +168,8 @@ describe('invariants across windows', () => {
         expect(l.end.h).toBeGreaterThanOrEqual(64);
         expect(l.end.h).toBeLessThanOrEqual(76);
       } else expect(l.end.h).toBe(76);
-      expect(l.end.w).toBeGreaterThanOrEqual(200);
+      // a landscape End shares its column with the navigation button: at least 160 wide
+      expect(l.end.w).toBeGreaterThanOrEqual(l.orientation === 'landscape' && !l.compact ? 160 : 200);
       expect(l.end.w).toBeLessThanOrEqual(420);
     }
   });
@@ -179,7 +183,7 @@ describe('invariants across windows', () => {
         ['end', l.end],
         ['nav', l.nav],
       ];
-      if (l.points !== 'line') items.push(['points', l.points]);
+      if (l.points !== 'line' && l.points !== 'halo') items.push(['points', l.points]);
       for (let a = 0; a < items.length; a += 1)
         for (let b = a + 1; b < items.length; b += 1)
           if (overlap(items[a]![1], items[b]![1])) throw new Error(`${items[a]![0]} meets ${items[b]![0]} at ${c.w}x${c.h}`);
@@ -219,8 +223,30 @@ describe('invariants across windows', () => {
       expect(l.numeralPt2).toBeGreaterThanOrEqual(96);
       if (l.orientation === 'portrait' && c.w >= 360 && l.halo.w >= 328) expect(l.numeralPt2).toBeGreaterThanOrEqual(120);
       const rc = haloGeometry(l.halo.w).rc;
-      expect(((3 * 0.535 * l.numeralPt3) / 2) ** 2 + (0.357 * l.numeralPt3) ** 2).toBeLessThanOrEqual((0.94 * rc) ** 2);
+      const lift = l.haloPoints?.lift ?? 0;
+      expect(((3 * 0.535 * l.numeralPt3) / 2) ** 2 + (0.357 * l.numeralPt3 + lift) ** 2).toBeLessThanOrEqual((0.94 * rc) ** 2);
+      if (l.haloPoints !== null) {
+        // the points line, under the unit label, keeps its corners inside the ring for either size
+        for (const pt of [l.numeralPt2, l.numeralPt3]) {
+          const bottom = -lift + 0.357 * pt + SPEED_UNIT_GAP_PT + unitLineHeight(l.unitPt) + 4 + Math.round(1.15 * l.haloPoints.pt);
+          expect((l.haloPoints.w / 2) ** 2 + bottom ** 2).toBeLessThanOrEqual((0.94 * rc) ** 2 + 1e-6);
+        }
+      }
     }
+  });
+
+  test('landscape: the points inside the halo on every phone turned that keeps 96 pt numerals with them', () => {
+    let inside = 0;
+    for (const c of cases) {
+      const l = L({ width: c.w, height: c.h, insets: c.ins, chip: c.chip, units: c.units });
+      if (l.orientation !== 'landscape' || l.compact) continue;
+      if (l.points === 'halo') {
+        inside += 1;
+        expect(l.numeralPt2).toBeGreaterThanOrEqual(96);
+        expect(l.haloPoints!.w).toBeGreaterThanOrEqual(3.5 * l.haloPoints!.pt);
+      } else expect([l.points, l.haloPoints]).toEqual(['line', null]);
+    }
+    expect(inside).toBeGreaterThan(20);
   });
 });
 
@@ -304,11 +330,11 @@ describe('compact windows (§3.3)', () => {
     expect(L({ width: 412, height: 300 }).end.h).toBe(76);
   });
 
-  test('a short wide window (600 × 240) is compact too, End inside; at 600 × 300 a 240 pt ring fits', () => {
+  test('a short wide window (600 × 240) is compact too, End inside; at 600 × 300 a 272 pt ring fits', () => {
     const l = L({ width: 600, height: 240 });
     expect(l.compact).toBe(true);
     expect(inside(l.end, 600, 240)).toBe(true);
-    expect(L({ width: 600, height: 300 })).toMatchObject({ compact: false, halo: { w: 240, ring: true } });
+    expect(L({ width: 600, height: 300 })).toMatchObject({ compact: false, halo: { w: 272, ring: true } });
   });
 
   test('a larger font scale grows the unit label and shrinks the numerals, never the halo', () => {

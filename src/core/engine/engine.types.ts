@@ -172,13 +172,19 @@ export interface EngineSnapshot {
    * `stopped` and `lockedOut` read the raw speed.
    */
   speedMps: number;
+  /**
+   * The forward acceleration (m/s²) the screen carries `speedMps` on with until the next row
+   * (`displaySpeed.carriedSpeed`); 0 when cruising, held, shown as 0 or before the axis is learned.
+   */
+  speedAccelMps2: number;
   /** There is a speed to show: always during a drive (the screen never shows "—" for it); false with no drive. */
   speedKnown: boolean;
   limit: LimitSample;
   /**
    * The limit the sign shows, whole mph: a posted limit or, on a road with none, its class default
-   * (`limit.source` says `statutory`; shown, never scored); null → "—" (unknown, low-confidence or
-   * hAcc > 20 m). The detectors judge against the posted limits alone (`limitMphFor`).
+   * (`limit.source` says `statutory`; shown, never scored); a row with none (unknown, low-confidence
+   * or hAcc > 20 m) keeps the last one for up to 10 s (`displayLimit.ts`), then null → "-". Display
+   * only: the detectors judge each row against its own `limit` (`limitMphFor`).
    */
   limitMph: number | null;
   /** The speeding tier of the current row's episode, for the driving screen's halo. */

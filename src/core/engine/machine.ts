@@ -20,6 +20,7 @@ import { MAX_DRIVE_MS } from '@/data/sync/payload';
 import type { MotionActivity } from '@drive-sense';
 
 import type { AdoptedTrip, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
+import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './displayLimit';
 import { nextDisplaySpeed, type DisplaySpeed } from './displaySpeed';
 import { footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS, WALK_STALE_FIX_MS } from './motion';
 import {
@@ -65,6 +66,8 @@ export function createEngine(deps: EngineDeps): Engine {
   let seen: Seen | null = null;
   /** The speed the screen shows, as of the last row (`displaySpeed.ts`). */
   let shown: DisplaySpeed | null = null;
+  /** The limit the sign shows, as of the last row (`displayLimit.ts`). */
+  let shownLimit: DisplayLimit = NO_DISPLAY_LIMIT;
   /**
    * The latest on-foot report still standing (`motion.ts`): `since` when the walk began, `at` when it
    * arrived, both on the row clock. Null when none, or once cleared or cancelled by driving.
@@ -122,10 +125,11 @@ export function createEngine(deps: EngineDeps): Engine {
       startedAt: session?.startedAt ?? null,
       lastRowTs: row?.ts ?? null,
       speedMps: shown?.mps ?? 0,
+      speedAccelMps2: shown?.accel ?? 0,
       // Never "—" during a drive: 0 until the first row (`displaySpeed.ts`).
       speedKnown: session !== null || shown !== null,
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
-      limitMph: seen?.limitMph ?? null,
+      limitMph: shownLimit.mph,
       speedingTier: status === 'recording' && open !== null ? open.tier : null,
       phoneUseSince: status === 'recording' && phone !== null && phone.confirmed ? phone.startedAt : null,
       stopped: status === 'recording' && speed !== null && speed <= STOPPED_MPS,
@@ -142,6 +146,7 @@ export function createEngine(deps: EngineDeps): Engine {
     suite = null;
     seen = null;
     shown = null;
+    shownLimit = NO_DISPLAY_LIMIT;
     foot = null;
     prefetchedAtM = null;
     lastAlert = null;
@@ -189,6 +194,7 @@ export function createEngine(deps: EngineDeps): Engine {
     // against `limit` themselves (`limitMphFor`), which refuses a default.
     seen = { row, limit, limitMph: limitShownMph(row, limit) };
     shown = nextDisplaySpeed(shown, row, knownSpeed(row));
+    shownLimit = nextDisplayLimit(shownLimit, row.ts, seen.limitMph);
     touch();
     noteWarmup(s, row);
     const ctx: DetectorContext = { ...deps.ctx(), warmupEndsAt: s.warmup.endsAt };

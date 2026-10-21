@@ -7,15 +7,19 @@
 //   bottom. The top row takes the height above the band (up to 144 pt: a bigger sign); a points line
 //   sits under the halo when it fits above End (so the halo never moves when the car stops).
 // - Landscape: three columns, the halo the full height in the middle: the sign on the left, level
-//   with the halo's centre; on the right the band at the top, the points line, the navigation
-//   button and the End swipe under it at the foot (a 200 pt column at least, so End stays a swipe).
-//   The halo is centred on the screen when both side columns can be that wide.
+//   with the halo's centre; on the right the band at the top, the navigation button and the End
+//   swipe under it at the foot (a 160 pt column at least, so End stays a swipe). The halo is
+//   centred on the screen when both side columns can be that wide. The points sit inside the halo,
+//   under the speed and its unit: the readout stack (digits, unit, points) is centred in the ring
+//   whether the points show or not, so nothing moves when the car stops (a halo too small for that
+//   with 96 pt numerals puts them in the band's line).
 // - Compact (a window too small for a 220 pt halo: split screen, a small freeform window): an 88 pt
 //   top row (the navigation circle back at 64 pt) with the band between the sign and the navigation button, bare numerals in the middle,
 //   the unit label under them inside the same space (never over End); End stays pinned to the
 //   bottom. End is 76 pt tall everywhere except a compact window too short for it and a readable
 //   speed, where it gives back down to the 64 pt target.
 import {
+  DIGIT_ADVANCE_EM,
   DIGIT_HEIGHT_EM,
   END_SWIPE_H_PT,
   END_SWIPE_MAX_W_PT,
@@ -52,8 +56,14 @@ export interface HudLayout {
    * digits centred in it and the unit label hanging just below it (still above End)
    */
   halo: Rect & { ring: boolean };
-  /** the points' own line under the halo, or 'line' (the band's line) */
-  points: Rect | 'line';
+  /** the points' own line under the halo, 'line' (the band's line) or 'halo' (inside it: `haloPoints`) */
+  points: Rect | 'line' | 'halo';
+  /**
+   * Landscape: the points inside the halo, under the unit label. `lift` raises the readout (digits
+   * centre) above the halo's centre so the whole stack is centred; `pt` is the points' type size
+   * and `w` the width they fit in (they shrink to fit it).
+   */
+  haloPoints: { lift: number; pt: number; w: number } | null;
   /** the top row and its two items */
   row: Rect;
   sign: Rect;
@@ -92,7 +102,42 @@ export const HUD_COMPACT_NAV_H_PT = HUD_MIN_TARGET_PT + 24;
 export const HUD_ROW_MIN_PT = HUD_NAV_H_PT + 8;
 export const HUD_ROW_MAX_PT = 144;
 /** Landscape's right column (the band, the navigation button and End): at least this wide. */
-export const HUD_LAND_RIGHT_MIN_PT = 200;
+export const HUD_LAND_RIGHT_MIN_PT = 160;
+/** Landscape: the points inside the halo, 8 % of the halo box (20 to 28 pt; the line 1.15 of it), this far under the unit label. */
+export const haloPointsPt = (box: number): number => Math.max(20, Math.min(28, Math.round(0.08 * box)));
+export const HALO_POINTS_GAP_PT = 4;
+/** …and never narrower than this many of their em (they shrink to fit what is left). */
+const HALO_POINTS_MIN_W_EM = 3.5;
+/** The points go inside the halo only while its two-digit numerals stay at least this big. */
+const HALO_POINTS_MIN_NUMERAL_PT = 96;
+const pointsLineHeight = (pt: number): number => Math.round(1.15 * pt);
+
+/**
+ * The numerals for `digits` digits when the points sit inside the halo under the unit label: the
+ * largest size whose stack (digits, unit, points), centred in the ring, keeps the digits' corners,
+ * the unit and the points line inside 0.94 of the ring's inner radius, with the points line at
+ * least `HALO_POINTS_MIN_W_EM` wide. Also the stack's lift and the points' width at its foot.
+ */
+export function haloStack(rc: number, digits: number, unitPt: number, pointsPt: number): { pt: number; lift: number; w: number } {
+  const lim = (0.94 * rc) ** 2;
+  const n = Math.max(1, digits);
+  const below = SPEED_UNIT_GAP_PT + unitLineHeight(unitPt) + HALO_POINTS_GAP_PT + pointsLineHeight(pointsPt);
+  // The digits' centre sits `lift` above the ring's centre: half of what hangs under the digits.
+  const lift = below / 2;
+  for (let pt = 168; pt > 1; pt -= 1) {
+    const half = (n * DIGIT_ADVANCE_EM * pt) / 2;
+    const digitTop = lift + (DIGIT_HEIGHT_EM / 2) * pt;
+    if (half ** 2 + digitTop ** 2 > lim) continue;
+    const unitBottom = -lift + (DIGIT_HEIGHT_EM / 2) * pt + SPEED_UNIT_GAP_PT + unitLineHeight(unitPt);
+    if (unitPt ** 2 + unitBottom ** 2 > lim) continue;
+    const pointsBottom = unitBottom + HALO_POINTS_GAP_PT + pointsLineHeight(pointsPt);
+    if (pointsBottom ** 2 >= lim) continue;
+    const w = 2 * Math.sqrt(lim - pointsBottom ** 2);
+    if (w < HALO_POINTS_MIN_W_EM * pointsPt) continue;
+    return { pt, lift, w: Math.floor(w) };
+  }
+  return { pt: 1, lift, w: 0 };
+}
 const GAP = 12;
 const COMPACT_GAP = 8;
 /** A compact window's End never shrinks under the 64 pt target… */
@@ -188,6 +233,7 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
         ...bandParts(band, i.chip),
         halo: { x: left + (frameW - B) / 2, y: haloY, w: B, h: B, ring: true },
         points: pointsLine ? { x: left, y: haloY + B + GAP, w: frameW, h: HUD_POINTS_LINE_PT } : 'line',
+        haloPoints: null,
         row,
         ...rowItems(row, i.units),
         end,
@@ -213,28 +259,34 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
       // Left: the sign, level with the halo's centre.
       const s = signFor(i.units, Math.min(HUD_ROW_MAX_PT, frameH), leftW);
       const sign: Rect = { x: left + (leftW - s.w) / 2, y: mid - s.h / 2, w: s.w, h: s.h };
-      // Right, top to bottom: the band, the points line when it fits, the navigation button, End.
+      // Right, top to bottom: the band, the navigation button, End.
       const band: Rect = { x: rx, y: top, w: rightW, h: HUD_BAND_PT };
       const end = endAt(rx, rightW, bottom);
       const navW = Math.min(HUD_NAV_W_PT, rightW);
       const nav: Rect = { x: rx + (rightW - navW) / 2, y: end.y - GAP - HUD_NAV_H_PT, w: navW, h: HUD_NAV_H_PT };
-      const gapTop = top + HUD_BAND_PT + GAP;
-      const pointsLine = gapTop + HUD_POINTS_LINE_PT + GAP <= nav.y;
+      // The points inside the halo; the numerals sized for the stack (the points line placed for two
+      // digits, the lower and narrower of the two). A halo too small to keep 96 pt numerals with
+      // them keeps its numerals and puts the points in the band's line.
+      const pointsPt = haloPointsPt(B);
+      const two = haloStack(g.rc, 2, unitPt, pointsPt);
+      const three = haloStack(g.rc, 3, unitPt, pointsPt);
+      const inHalo = two.pt >= HALO_POINTS_MIN_NUMERAL_PT;
       return {
         orientation,
         compact: false,
         band,
         ...bandParts(band, i.chip),
         halo: { x: left + leftW + 16, y: haloY, w: B, h: B, ring: true },
-        points: pointsLine ? { x: rx, y: gapTop + (nav.y - GAP - gapTop - HUD_POINTS_LINE_PT) / 2, w: rightW, h: HUD_POINTS_LINE_PT } : 'line',
+        points: inHalo ? 'halo' : 'line',
+        haloPoints: inHalo ? { lift: two.lift, pt: pointsPt, w: Math.min(two.w, three.w) } : null,
         row: { x: left, y: top, w: frameW, h: frameH },
         sign,
         nav,
         end,
         // Over the sign and the halo: the right column's navigation button and End stay reachable.
         panel: { x: left, y: top, w: rx - 16 - left, h: frameH },
-        numeralPt2: haloNumeralPt(g.rc, 2, unitPt),
-        numeralPt3: haloNumeralPt(g.rc, 3, unitPt),
+        numeralPt2: inHalo ? two.pt : haloNumeralPt(g.rc, 2, unitPt),
+        numeralPt3: inHalo ? three.pt : haloNumeralPt(g.rc, 3, unitPt),
         unitPt,
       };
     }
@@ -263,6 +315,7 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
     ...bandParts(band, i.chip),
     halo: { x: left, y: regionTop, w: frameW, h: boxH, ring: false },
     points: 'line',
+    haloPoints: null,
     row,
     ...rowItems(row, i.units, HUD_NAV_W_PT, HUD_COMPACT_NAV_H_PT),
     end,

@@ -25,8 +25,6 @@ import {
   hudPalette,
   nextSpeedingHold,
   SPEEDING_HOLD_NONE,
-  speedDigits,
-  SpeedReadout,
   SpeedSign,
   type BurstSource,
   type SpeedingHold,
@@ -39,7 +37,8 @@ import { hudLayout, type Rect } from './hudLayout';
 import { navHighlight, NavigationButton } from './NavigationButton';
 import { StoppedPoints } from './StoppedPoints';
 import { useHaloBurst } from './useHaloBurst';
-import { inUnits, unitLabel, useHudUnits } from './useHudUnits';
+import { HaloReadout } from './HaloReadout';
+import { inUnits, useHudUnits } from './useHudUnits';
 import { WeatherBanner } from './WeatherBanner';
 
 /** How often the HUD re-reads the sun (the night palette follows sunset within a few minutes). */
@@ -269,10 +268,14 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   });
 
   const layout = hudLayout({ width, height, insets, fontScale, chip: dashpalChip !== null, units });
-  const speed = inUnits(live.speedMph, units);
   const bannerUp = dashpal !== null || alert !== null;
   const showPoints = live.stopped && live.points !== null;
-  const pointsView = showPoints ? <StoppedPoints total={live.points!.total} palette={p} /> : null;
+  const haloPoints = layout.points === 'halo' ? layout.haloPoints : null;
+  const pointsView = !showPoints ? null : haloPoints !== null ? (
+    <StoppedPoints total={live.points!.total} palette={p} size={haloPoints.pt} width={haloPoints.w} inHalo />
+  ) : (
+    <StoppedPoints total={live.points!.total} palette={p} />
+  );
   // A weather alert the driver hid (with its ✕, at any speed) stays hidden for the rest of this drive.
   const [hiddenWeather, setHiddenWeather] = useState<{ trip: string | null; kinds: readonly DangerKind[] }>({ trip: null, kinds: [] });
   const weather = live.weatherAlert;
@@ -329,7 +332,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
       {/* Twice guarded: the pipeline publishes points only while stopped, and the screen shows
           them only while the car is known to be stopped (a lost fix is not "stopped"). */}
-      {layout.points !== 'line' ? <View style={[styles.abs, styles.centred, at(layout.points)]}>{pointsView}</View> : null}
+      {layout.points !== 'line' && layout.points !== 'halo' ? <View style={[styles.abs, styles.centred, at(layout.points)]}>{pointsView}</View> : null}
 
       <View style={[styles.abs, styles.centred, at(layout.sign)]}>
         <SpeedSign limit={inUnits(live.limitMph, units)} palette={p} units={units} height={layout.sign.h} />
@@ -387,10 +390,16 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           dimmed={dimmed}
           reduceMotion={reduceMotion}
           numerals={(numeralStyle) => (
-            <SpeedReadout
-              speed={speed}
-              unit={unitLabel(units)}
-              size={speedDigits(speed) >= 3 ? layout.numeralPt3 : layout.numeralPt2}
+            <HaloReadout
+              speedMph={live.speedMph}
+              accelMph={live.speedAccelMph}
+              rowTs={live.rowTs}
+              units={units}
+              pt2={layout.numeralPt2}
+              pt3={layout.numeralPt3}
+              unitPt={layout.unitPt}
+              haloPoints={haloPoints}
+              points={haloPoints !== null ? pointsView : null}
               color={p.haloInk}
               unitColor={p.haloInkMuted}
               numeralStyle={numeralStyle}
