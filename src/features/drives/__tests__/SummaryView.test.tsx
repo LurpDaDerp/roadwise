@@ -557,6 +557,8 @@ test('Share previews the card without any speed and shares the image', async () 
   const card = screen.getByTestId('share-card');
   expect(within(card).getByTestId('share-points')).toHaveTextContent('+132');
   expect(within(card).queryByText(/mph/)).toBeNull();
+  // The map backdrop is opt-in: the card opens as the plain route sketch.
+  expect(within(card).queryByTestId('share-map', { includeHiddenElements: true })).toBeNull();
   // A fixed-size image: its text never follows Dynamic Type.
   expect(within(card).getByTestId('share-points')).toHaveProp('allowFontScaling', false);
   expect(within(card).getByTestId('share-points')).toHaveStyle({ fontSize: 28 });
