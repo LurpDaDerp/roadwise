@@ -13,7 +13,7 @@ export const HEALTH_LABEL: Record<StatHealth, string> = { green: 'Good', yellow:
 const HEALTH_GLYPH: Record<StatHealth, IconName> = { green: 'checkmark', yellow: 'remove', red: 'alert' };
 
 export type StatTileProps = {
-  /** "Speeding", "Phone pickups", "Clean drives". */
+  /** "Speeding", "Harsh driving", "Clean drives". */
   label: string;
   /** Pre-formatted: "3", "92", "—". */
   value: string;

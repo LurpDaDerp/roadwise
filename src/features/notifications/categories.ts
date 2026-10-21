@@ -1,7 +1,7 @@
 /**
  * The one setup call every scheduler awaits: the Android channels. No RoadWise notification carries
- * an action button (the drive summary opens the app; the pushes open their screen; the
- * forgot-to-start reminder's only action is its tap), so no category is registered anywhere.
+ * an action button (the drive recap opens the app; the pushes open their screen), so no category is
+ * registered anywhere.
  */
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
