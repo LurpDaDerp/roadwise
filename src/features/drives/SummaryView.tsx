@@ -4,7 +4,7 @@ import { ScrollView, View } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
 import { formatDistance, type Units } from '@/lib/units';
-import { Button, Card, Divider, IconButton, Pill, PointsCounter, Text, useTheme } from '@/ui';
+import { Button, Card, Divider, IconButton, Pill, PointsCounter, Text, useFontScale, useTheme } from '@/ui';
 
 import { formatDay, formatDuration, formatTimeSpan, spokenDuration } from './format';
 import type { LocalDrive, LocalDriveEvent } from './model';
@@ -58,12 +58,25 @@ function StateBlock({ title, body, testID }: { title: string; body: string; test
   );
 }
 
+/**
+ * From this Dynamic Type multiple up (the accessibility sizes) the drive score sits under the total
+ * instead of beside it: the hero total stops growing at 1.3x while the score and its caption keep
+ * growing, so side by side they would run into each other on a phone.
+ */
+export const SCORE_STACK_FONT_SCALE = 1.5;
+
 /** The drive score beside the total: the number in its red-to-green ink, "score" under it. */
-function DriveScore({ score }: { score: number }) {
+function DriveScore({ score, stacked }: { score: number; stacked: boolean }) {
   const t = useTheme();
   const ink = scoreInk(score, t.colors, t.colors.surface);
   return (
-    <View testID="summary-score" accessible accessibilityLabel={`Drive score ${score} out of 100`} style={{ alignItems: 'flex-end', flexShrink: 0 }}>
+    <View
+      testID="summary-score"
+      accessible
+      accessibilityLabel={`Drive score ${score} out of 100`}
+      // Beside the total it keeps to the right edge, also when a wide total pushes it onto a line of its own.
+      style={stacked ? { alignItems: 'flex-start' } : { alignItems: 'flex-end', marginLeft: 'auto' }}
+    >
       <Text variant="stat" testID="summary-score-value" style={{ color: ink }}>
         {score}
       </Text>
@@ -74,22 +87,34 @@ function DriveScore({ score }: { score: number }) {
   );
 }
 
-/** The drive's total in bold, counting up on a fresh summary, with the drive score to its right. */
+/**
+ * The drive's total in bold, counting up on a fresh summary, with the drive score to its right. At
+ * the accessibility text sizes the score goes under the total; below them the row wraps, so a total
+ * too wide to share its line puts the score on the next one rather than under the number.
+ */
 function Total({ value, fresh, estimate, score }: { value: number; fresh: boolean; estimate: boolean; score: number | null }) {
   const t = useTheme();
+  const stacked = useFontScale() >= SCORE_STACK_FONT_SCALE;
   return (
     <View style={{ gap: t.space.xs }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: t.space.sm }}>
+      <View testID="summary-total-label" style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: t.space.sm, rowGap: t.space.xs }}>
         <Text variant="label" tone="muted">
           Points this drive
         </Text>
         {estimate ? <Pill label="Estimate" tone="info" icon="cloud-offline-outline" testID="estimate" /> : null}
       </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
-        <View style={{ flex: 1, minWidth: 0 }}>
+      <View
+        testID="summary-total"
+        style={
+          stacked
+            ? { gap: t.space.xs }
+            : { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: t.space.md, rowGap: t.space.xs }
+        }
+      >
+        <View style={stacked ? undefined : { flexShrink: 1, minWidth: 0 }}>
           <PointsCounter value={value} from={fresh ? 0 : undefined} react={fresh} size="hero" signed label="Points this drive" testID="summary-points" />
         </View>
-        {score !== null ? <DriveScore score={score} /> : null}
+        {score !== null ? <DriveScore score={score} stacked={stacked} /> : null}
       </View>
     </View>
   );
@@ -183,6 +208,9 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, latestClient
   const selected = events.find((e) => e.id === selectedId) ?? null;
   const reportEvent = events.find((e) => e.id === reporting) ?? null;
   const net = state.kind === 'points' ? state.value : null;
+  // The share card carries the total and the drive score the points card shows: a drive not synced
+  // yet keeps its total there too.
+  const shareNet = state.kind === 'failed' ? points.total : net;
   const showReceipt =
     (state.kind === 'points' || state.kind === 'failed' || state.kind === 'pending') &&
     (points.earned !== null || points.total !== null || points.deductions.length > 0);
@@ -296,8 +324,8 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, latestClient
           runs,
           miles: drive.miles,
           durationS: drive.durationS,
-          net,
-          score: net === null ? null : score,
+          net: shareNet,
+          score: shareNet === null ? null : score,
           clean: drive.clean === true,
           units,
         }}

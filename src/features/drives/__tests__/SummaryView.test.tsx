@@ -6,11 +6,19 @@ import { plainBundle } from '@/ui/sky/palette';
 
 import { DAY, draw, drive, event, HOUR, NOW, press, result } from '../__fixtures__/drives';
 import { scoreInk } from '../scoreInk';
-import { SummaryView, type SummaryViewProps } from '../SummaryView';
+import { SCORE_STACK_FONT_SCALE, SummaryView, type SummaryViewProps } from '../SummaryView';
 import { endNote } from '../summary';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
 jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn(async () => 'file:///card.png') }));
+
+// Dynamic Type at the phone's default (jest's own window says 2×); a test raises it where it matters.
+const mockFontScale = jest.fn(() => 1);
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => ({ width: 750, height: 1334, scale: 2, fontScale: mockFontScale() }),
+}));
+afterEach(() => mockFontScale.mockReturnValue(1));
 
 const props = (over: Partial<SummaryViewProps> = {}): SummaryViewProps => ({
   drive: drive(),
@@ -88,6 +96,32 @@ describe('the drive score', () => {
     const c = plainBundle('light').colors;
     expect(screen.getByTestId('summary-score-value')).toHaveTextContent('99');
     expect(screen.getByTestId('summary-score-value')).toHaveStyle({ color: scoreInk(99, c, c.surface) });
+    // One row that wraps: a total too wide to share its line puts the score on the next, still on the right.
+    expect(screen.getByTestId('summary-total')).toHaveStyle({ flexDirection: 'row', flexWrap: 'wrap' });
+    expect(score).toHaveStyle({ alignItems: 'flex-end', marginLeft: 'auto' });
+    expect(score).not.toHaveStyle({ flexShrink: 0 });
+  });
+
+  test.each([1.3, 1.49])('at %d× text the score stays beside the total', async (fontScale) => {
+    mockFontScale.mockReturnValue(fontScale);
+    await draw(<SummaryView {...props()} />);
+    expect(screen.getByTestId('summary-total')).toHaveStyle({ flexDirection: 'row' });
+  });
+
+  test.each([SCORE_STACK_FONT_SCALE, 1.786, 2, 3])('at the accessibility text sizes (%d×) the score sits under the total, never over it', async (fontScale) => {
+    mockFontScale.mockReturnValue(fontScale);
+    await draw(<SummaryView {...props({ drive: drive({ pointsNet: -1240 }) })} />);
+    const total = screen.getByTestId('summary-total');
+    expect(total).not.toHaveStyle({ flexDirection: 'row' });
+    const ids = testIds();
+    expect(ids.indexOf('summary-points')).toBeLessThan(ids.indexOf('summary-score'));
+    expect(screen.getByTestId('summary-score')).toHaveStyle({ alignItems: 'flex-start' });
+    expect(screen.getByTestId('summary-score')).not.toHaveStyle({ marginLeft: 'auto' });
+    expect(screen.getByTestId('summary-score')).toHaveProp('accessibilityLabel', 'Drive score 99 out of 100');
+    // The label row wraps too, so the Estimate pill drops under "Points this drive" rather than over it.
+    await draw(<SummaryView {...props({ drive: drive({ status: 'pending', estimate: true, pointsNet: 40, result: null }) })} />);
+    expect(within(screen.getByTestId('summary-total-label')).getByTestId('estimate')).toBeOnTheScreen();
+    expect(screen.getByTestId('summary-total-label')).toHaveStyle({ flexDirection: 'row', flexWrap: 'wrap' });
   });
 
   test('a rough drive is coloured further toward red', async () => {
@@ -454,7 +488,7 @@ describe('final-review fixes', () => {
     expect(screen.getByTestId('state-too-short')).toBeOnTheScreen();
   });
 
-  test('the share card shows the drive score in place of the Safety Rating, "—" when the drive has no total', async () => {
+  test('the share card shows the total and the drive score the points card shows, "—" when the drive has no total', async () => {
     // 12 mi with one minor hard brake scores 99, never the 30-day rating (92.4 in the result).
     await draw(<SummaryView {...props()} />);
     await press(screen.getByTestId('share'));
@@ -468,10 +502,16 @@ describe('final-review fixes', () => {
     await draw(<SummaryView {...props({ drive: drive({ miles: 5, status: 'pending', estimate: true, pointsNet: 40, result: null }), events: [event({ type: 'phone_pickup', tier: 'severe' })] })} />);
     await press(screen.getByTestId('share'));
     expect(screen.getByTestId('share-score')).toHaveTextContent('90');
+    // A drive not synced yet carries the total and score its points card shows.
+    await draw(<SummaryView {...props({ drive: drive({ status: 'failed', pointsNet: 40, result: null }) })} />);
+    expect(screen.getByTestId('summary-score-value')).toHaveTextContent('99');
+    await press(screen.getByTestId('share'));
+    expect(screen.getByTestId('share-points')).toHaveTextContent('+40');
+    expect(screen.getByTestId('share-score')).toHaveTextContent('99');
     for (const d of [
       drive({ status: 'pending', pointsNet: null, result: null }),
       drive({ status: 'unscored', reason: 'too_short', pointsNet: 0, result: null }),
-      drive({ status: 'failed', pointsNet: 40, result: null }),
+      drive({ status: 'failed', pointsNet: null, result: null }),
     ]) {
       await draw(<SummaryView {...props({ drive: d })} />);
       await press(screen.getByTestId('share'));
