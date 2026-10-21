@@ -224,6 +224,26 @@ describe('the events', () => {
     await press(screen.getByTestId('report-send'));
     expect(p.onReport).toHaveBeenCalledWith('d1', 'camera_wrong');
   });
+
+  test('a phone pickup is listed as "Phone pickup" with its time in hand and speed, spoken whole', async () => {
+    const pickup = event({ id: 'p1', type: 'phone_pickup', tier: 'severe', durationS: 24, measured: { speedMph: 38.2, maxSpeedMph: 44 } });
+    await draw(<SummaryView {...props({ events: [pickup] })} />);
+    const row = screen.getByTestId('event-p1');
+    expect(within(row).getByText('Phone pickup')).toBeOnTheScreen();
+    expect(screen.getByTestId('event-detail-p1', { includeHiddenElements: true })).toHaveTextContent('In hand 24 s · 38 mph');
+    expect(row.props.accessibilityLabel).toMatch(/^Phone pickup at .+, in hand 24 seconds, at 38 miles per hour$/);
+  });
+
+  test('in kilometres a pickup says its speed in km/h', async () => {
+    publishUnits('km');
+    try {
+      const pickup = event({ id: 'p1', type: 'phone_pickup', tier: 'moderate', durationS: 9, measured: { speedMph: 30 } });
+      await draw(<SummaryView {...props({ events: [pickup] })} />);
+      expect(screen.getByTestId('event-detail-p1', { includeHiddenElements: true })).toHaveTextContent('In hand 9 s · 48 km/h');
+    } finally {
+      resetUnitsForTests();
+    }
+  });
 });
 
 describe('Report', () => {
@@ -234,12 +254,24 @@ describe('Report', () => {
     return p;
   };
 
-  test('a hard brake offers "braked for a hazard" and "wasn\'t driving" only; there is no "phone was mounted"', async () => {
+  test('a hard brake offers "braked for a hazard" and "wasn\'t driving" only, never "my phone was mounted"', async () => {
     await open();
     expect(screen.getByTestId('reason-hazard')).toBeOnTheScreen();
     expect(screen.getByTestId('reason-not_driving')).toBeOnTheScreen();
     expect(screen.queryByTestId('reason-wrong_limit')).toBeNull();
     expect(screen.queryByTestId('reason-mounted')).toBeNull();
+  });
+
+  test('a phone pickup offers "my phone was mounted" and "wasn\'t driving", and sends "mounted"', async () => {
+    const p = await open(event({ id: 'p1', type: 'phone_pickup', tier: 'moderate', durationS: 6 }));
+    expect(screen.getByText('Phone pickup at 1:09 PM')).toBeOnTheScreen();
+    expect(screen.getByTestId('reason-mounted')).toHaveAccessibleName('My phone was mounted');
+    expect(screen.getByText("If your phone sat in a mount and a bump looked like a pickup, we'll take it off right away, up to 3 times a week.")).toBeOnTheScreen();
+    expect(screen.getByTestId('reason-not_driving')).toBeOnTheScreen();
+    expect(screen.queryByTestId('reason-hazard')).toBeNull();
+    await press(screen.getByTestId('reason-mounted'));
+    await press(screen.getByTestId('report-send'));
+    expect(p.onReport).toHaveBeenCalledWith('p1', 'mounted');
   });
 
   test('speeding offers "wrong speed limit"', async () => {

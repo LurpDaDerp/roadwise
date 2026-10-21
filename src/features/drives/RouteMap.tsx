@@ -4,11 +4,13 @@ import { useMemo, useRef, useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import type MapViewType from 'react-native-maps';
 
+import { useUnits } from '@/data/queries/units';
 import type { LatLng } from '@/lib/geo';
+import type { Units } from '@/lib/units';
 import { IconButton, Text, tokens, useTheme } from '@/ui';
 
 import { EventIcon } from './EventIcon';
-import { DASHPAL_MARK, EVENT_LABEL, eventKind, eventName, formatClock, formatEventDuration, spokenEventDuration, TIER_SIGNAL } from './format';
+import { DASHPAL_MARK, EVENT_LABEL, eventKind, eventName, formatClock, formatEventDuration, pickupDetail, spokenEventDuration, TIER_SIGNAL } from './format';
 import type { LocalDriveEvent } from './model';
 import { PIN, PIN_PLACE, TeardropPin, useSettling } from './Pin';
 import {
@@ -88,6 +90,7 @@ const SPOKEN: Record<EventType, [string, string]> = {
   hard_brake: ['hard brake', 'hard brakes'],
   hard_accel: ['hard acceleration', 'hard accelerations'],
   hard_corner: ['hard corner', 'hard corners'],
+  phone_pickup: ['phone pickup', 'phone pickups'],
   eyes_off: ['eyes off road', 'eyes off road'],
   drowsy: ['drowsy alert', 'drowsy alerts'],
 };
@@ -100,15 +103,17 @@ export function mapLabel(marks: readonly Pick<EventMark, 'type'>[]): string {
   return `Route map, ${[...n].map(([type, k]) => `${k} ${SPOKEN[type][k === 1 ? 0 : 1]}`).join(', ')}`;
 }
 
-/** A pin for a screen reader: "Hard brake, 2 seconds, moderate". */
-export function pinLabel(e: Pick<LocalDriveEvent, 'type' | 'tier' | 'durationS'>): string {
+/** A pin for a screen reader: "Hard brake, 2 seconds, moderate", "Phone pickup, in hand 24 seconds, at 38 miles per hour". */
+export function pinLabel(e: Pick<LocalDriveEvent, 'type' | 'tier' | 'durationS' | 'measured'>, units: Units = 'mi'): string {
+  if (e.type === 'phone_pickup') return `${EVENT_LABEL[e.type]}, ${pickupDetail(e, units).spoken}`;
   const kind = eventKind(e.type, e.tier);
   const tail = kind === null ? '' : `, ${kind === DASHPAL_MARK ? kind : kind.toLowerCase()}`;
   return `${EVENT_LABEL[e.type]}, ${spokenEventDuration(e.durationS)}${tail}`;
 }
 
-/** The second line of a pin's card: "Lasted 2 s · Moderate · 7:42 AM". */
-export function eventDetail(e: Pick<LocalDriveEvent, 'type' | 'tier' | 'durationS' | 'startedAt'>): string {
+/** The second line of a pin's card: "Lasted 2 s · Moderate · 7:42 AM", or a pickup's "In hand 24 s · 38 mph · 7:42 AM". */
+export function eventDetail(e: Pick<LocalDriveEvent, 'type' | 'tier' | 'durationS' | 'startedAt' | 'measured'>, units: Units = 'mi'): string {
+  if (e.type === 'phone_pickup') return `${pickupDetail(e, units).text} · ${formatClock(e.startedAt)}`;
   return [`Lasted ${formatEventDuration(e.durationS)}`, eventKind(e.type, e.tier), formatClock(e.startedAt)].filter(Boolean).join(' · ');
 }
 
@@ -121,6 +126,7 @@ function Pin({ mark }: { mark: EventMark }) {
 /** The small card a tapped pin opens over the bottom of the map: what happened and for how long. */
 function EventCard({ event: e, onClose }: { event: LocalDriveEvent; onClose: () => void }) {
   const t = useTheme();
+  const units = useUnits();
   const ink = INK[TIER_SIGNAL[e.tier]];
   return (
     <View
@@ -157,7 +163,7 @@ function EventCard({ event: e, onClose }: { event: LocalDriveEvent; onClose: () 
           {EVENT_LABEL[e.type]}
         </Text>
         <Text variant="subhead" tone="muted" testID="map-event-detail">
-          {eventDetail(e)}
+          {eventDetail(e, units)}
         </Text>
       </View>
       <IconButton icon="close" variant="plain" size={36} accessibilityLabel="Close event details" onPress={onClose} testID="map-event-close" />
@@ -197,6 +203,7 @@ export function RouteMap({
   testID?: string;
 }) {
   const t = useTheme();
+  const units = useUnits();
   const [side, setSide] = useState(0);
   const points = useMemo(() => allPoints(visible), [visible]);
   const marks = useMemo(() => eventMarks(visible, events), [visible, events]);
@@ -345,7 +352,7 @@ export function RouteMap({
                 zIndex={m.id === selectedId ? 20 : 10 + TIER_Z[m.tier]}
                 accessible
                 accessibilityRole="button"
-                accessibilityLabel={e ? pinLabel(e) : EVENT_LABEL[m.type]}
+                accessibilityLabel={e ? pinLabel(e, units) : EVENT_LABEL[m.type]}
                 onPress={() => {
                   lastPinTap.current = Date.now();
                   setSelectedId(m.id);

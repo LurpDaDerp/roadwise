@@ -21,6 +21,7 @@ const COUNT_TYPES: [keyof DriveCounts, EventType][] = [
   ['hardBrake', 'hard_brake'],
   ['hardAccel', 'hard_accel'],
   ['hardCorner', 'hard_corner'],
+  ['pickups', 'phone_pickup'],
   ['eyesOff', 'eyes_off'],
   ['drowsy', 'drowsy'],
 ];

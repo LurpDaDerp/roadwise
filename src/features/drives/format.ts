@@ -5,9 +5,10 @@
 import type { Ionicons } from '@expo/vector-icons';
 import { isDashcamType, type EventType, type Tier } from '@scoring';
 
+import { distanceIn, type Units } from '@/lib/units';
 import type { Signal } from '@/ui';
 
-import type { LocalDrive } from './model';
+import type { LocalDrive, LocalDriveEvent } from './model';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -67,6 +68,7 @@ export const EVENT_LABEL: Record<EventType, string> = {
   hard_brake: 'Hard brake',
   hard_accel: 'Hard start',
   hard_corner: 'Sharp turn',
+  phone_pickup: 'Phone pickup',
   eyes_off: 'Eyes off road',
   drowsy: 'Drowsy',
 };
@@ -76,6 +78,7 @@ export const EVENT_ICON: Record<EventType, IconName> = {
   hard_brake: 'hand-left-outline',
   hard_accel: 'trending-up-outline',
   hard_corner: 'return-down-forward-outline',
+  phone_pickup: 'phone-portrait-outline',
   eyes_off: 'eye-off-outline',
   drowsy: 'moon-outline',
 };
@@ -88,16 +91,44 @@ export const TIER_SIGNAL: Record<Tier, Signal> = { minor: 'minor', moderate: 'mo
 
 export const TIER_WORD: Record<Tier, string> = { minor: 'Minor', moderate: 'Moderate', severe: 'Severe' };
 
-/** "Hard brake · Severe", "Drowsy · DashPal" (a DashPal event names its source, not its one tier). */
+/**
+ * "Hard brake · Severe", "Drowsy · DashPal" (a DashPal event names its source, not its one tier),
+ * "Phone pickup" (its time in hand says how long, `pickupDetail`, and its tier follows from that).
+ */
 export function eventName(type: EventType, tier: Tier): string {
   if (isDashcamType(type)) return `${EVENT_LABEL[type]} · ${DASHPAL_MARK}`;
+  if (type === 'phone_pickup') return EVENT_LABEL[type];
   return `${EVENT_LABEL[type]} · ${TIER_WORD[tier]}`;
 }
 
-/** What sets an event apart besides its name: its tier, or its source for DashPal. */
+/** What sets an event apart besides its name: its tier, its source for DashPal, nothing for a phone pickup. */
 export function eventKind(type: EventType, tier: Tier): string | null {
   if (isDashcamType(type)) return DASHPAL_MARK;
+  if (type === 'phone_pickup') return null;
   return TIER_WORD[tier];
+}
+
+/** "38 mph" or "61 km/h", whole. */
+export const formatSpeed = (mph: number, units: Units): string =>
+  `${Math.round(distanceIn(Math.max(0, mph), units))} ${units === 'km' ? 'km/h' : 'mph'}`;
+
+/** "38 miles per hour" or "61 kilometers per hour". */
+export const spokenSpeed = (mph: number, units: Units): string =>
+  `${Math.round(distanceIn(Math.max(0, mph), units))} ${units === 'km' ? 'kilometers' : 'miles'} per hour`;
+
+/** A pickup's speed: where it started, else the most it reached; null when neither was measured. */
+const pickupMph = (e: Pick<LocalDriveEvent, 'measured'>): number | null => {
+  const v = e.measured.speedMph ?? e.measured.maxSpeedMph;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+};
+
+/** A phone pickup's facts: "In hand 24 s · 38 mph" and the same in words ("in hand 24 seconds, at 38 miles per hour"). */
+export function pickupDetail(e: Pick<LocalDriveEvent, 'durationS' | 'measured'>, units: Units): { text: string; spoken: string } {
+  const mph = pickupMph(e);
+  return {
+    text: [`In hand ${formatEventDuration(e.durationS)}`, mph === null ? null : formatSpeed(mph, units)].filter(Boolean).join(' · '),
+    spoken: [`in hand ${spokenEventDuration(e.durationS)}`, mph === null ? null : `at ${spokenSpeed(mph, units)}`].filter(Boolean).join(', '),
+  };
 }
 
 /** How long an event lasted: "under 1 s", "2 s", "1 min 5 s", "3 min", "1 h 05 min". */

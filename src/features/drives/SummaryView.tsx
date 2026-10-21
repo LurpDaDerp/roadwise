@@ -98,7 +98,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
 
   const state = useMemo(() => scoreState(drive, events), [drive, events]);
   const tier = useMemo(() => meritOf(drive, events), [drive, events]);
-  const rows = useMemo(() => eventRows(events), [events]);
+  const rows = useMemo(() => eventRows(events, units), [events, units]);
   const runs = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
   const score = state.kind === 'score' ? state.value : null;
   const selected = events.find((e) => e.id === selectedId) ?? null;

@@ -1,7 +1,20 @@
 import { haversineMeters } from '@/lib/geo';
 
-import { DAY, drive, event, NOW, ROUTE, sums } from '../__fixtures__/drives';
-import { eventKind, formatDuration, formatEventDuration, formatTimeSpan, groupByWeek, spokenEventDuration, weekLabel, weekStart } from '../format';
+import { DAY, drive, event, EXPOSURE, NOW, ROUTE, sums } from '../__fixtures__/drives';
+import {
+  EVENT_ICON,
+  eventKind,
+  eventName,
+  formatDuration,
+  formatEventDuration,
+  formatSpeed,
+  formatTimeSpan,
+  groupByWeek,
+  spokenEventDuration,
+  spokenSpeed,
+  weekLabel,
+  weekStart,
+} from '../format';
 import { eventTally } from '../DriveRow';
 import { awayFrom, eventMarks, fittedSpan, markShape, metersPerPixel, MIN_MARK_PX, regionFor, sameZoom, sketchPath, tipAnchor } from '../route';
 import { homeStats, trendFor } from '../stats';
@@ -16,6 +29,7 @@ import {
   meritOf,
   notDrivingLabel,
   originLine,
+  REPORT_LABEL,
   reportReasons,
   scoreState,
   stateWord,
@@ -35,9 +49,10 @@ describe('DashPal', () => {
   });
 
   test("a history row shows DashPal events with the phone's own", () => {
-    const counts = { speeding: 1, hardBrake: 0, hardAccel: 0, hardCorner: 0, eyesOff: 2, drowsy: 1 };
+    const counts = { speeding: 1, hardBrake: 0, hardAccel: 0, hardCorner: 0, pickups: 2, eyesOff: 2, drowsy: 1 };
     expect(eventTally(counts)).toEqual([
       { type: 'speeding', n: 1 },
+      { type: 'phone_pickup', n: 2 },
       { type: 'eyes_off', n: 2 },
       { type: 'drowsy', n: 1 },
     ]);
@@ -213,6 +228,13 @@ describe('route', () => {
     expect(spokenEventDuration(120)).toBe('2 minutes');
     expect(eventKind('hard_brake', 'moderate')).toBe('Moderate');
     expect(eventKind('drowsy', 'severe')).toBe('DashPal');
+    // A phone pickup's time in hand says how bad it was: no tier word.
+    expect(eventKind('phone_pickup', 'severe')).toBeNull();
+    expect(eventName('phone_pickup', 'severe')).toBe('Phone pickup');
+    expect(EVENT_ICON.phone_pickup).toBe('phone-portrait-outline');
+    expect(formatSpeed(38.4, 'mi')).toBe('38 mph');
+    expect(formatSpeed(38.4, 'km')).toBe('62 km/h');
+    expect(spokenSpeed(38.4, 'km')).toBe('62 kilometers per hour');
   });
 });
 
@@ -279,22 +301,36 @@ describe('summary', () => {
     expect(originLine(drive({ origin: 'manual', endCause: 'manual' }))).toBeNull();
   });
 
-  test('the event list: shown events, oldest first, never an old phone event', () => {
+  test('the event list: shown events, oldest first, a phone pickup with its time in hand and speed; never an old phone handling', () => {
     const later = event({ id: 'b', startedAt: NOW });
-    const phone = event({ id: 'p', type: 'phone_pickup' as never, startedAt: NOW - 3 * DAY });
-    const rows = eventRows([later, event(), phone]);
-    expect(rows.map((r) => r.event.id)).toEqual(['e1', 'b']);
-    expect(rows[0]).toMatchObject({ key: 'event-e1', label: 'Hard brake · Minor' });
+    const pickup = event({ id: 'p', type: 'phone_pickup', tier: 'severe', startedAt: NOW - 3 * DAY, durationS: 24, measured: { speedMph: 38.4, maxSpeedMph: 45 } });
+    const handling = event({ id: 'h', type: 'phone_handling' as never, startedAt: NOW - 4 * DAY });
+    const rows = eventRows([later, event(), pickup, handling]);
+    expect(rows.map((r) => r.event.id)).toEqual(['p', 'e1', 'b']);
+    expect(rows[0]).toMatchObject({
+      key: 'event-p',
+      label: 'Phone pickup',
+      detail: { text: 'In hand 24 s · 38 mph', spoken: 'in hand 24 seconds, at 38 miles per hour' },
+    });
+    expect(rows[1]).toMatchObject({ key: 'event-e1', label: 'Hard brake · Minor', detail: null });
+    // In kilometres, and without a measured speed.
+    expect(eventRows([pickup], 'km')[0]!.detail).toEqual({ text: 'In hand 24 s · 62 km/h', spoken: 'in hand 24 seconds, at 62 kilometers per hour' });
+    expect(eventRows([{ ...pickup, measured: {} }])[0]!.detail).toEqual({ text: 'In hand 24 s', spoken: 'in hand 24 seconds' });
+    expect(eventRows([{ ...pickup, durationS: 75, measured: { maxSpeedMph: 51 } }])[0]!.detail!.text).toBe('In hand 1 min 15 s · 51 mph');
     expect(isShownEvent({ type: 'phone_handling' as never })).toBe(false);
+    expect(isShownEvent({ type: 'phone_pickup' })).toBe(true);
     expect(isShownEvent({ type: 'speeding' })).toBe(true);
     expect(EVENT_LIST_MAX).toBe(3);
   });
 
-  test(`report reasons fit the event type, with "wasn't driving" always offered and no "phone was mounted"`, () => {
+  test(`report reasons fit the event type, with "wasn't driving" always offered; a phone pickup offers "my phone was mounted"`, () => {
     expect(reportReasons('hard_brake')).toEqual(['hazard', 'not_driving']);
     expect(reportReasons('speeding')).toEqual(['wrong_limit', 'not_driving']);
+    expect(reportReasons('phone_pickup')).toEqual(['mounted', 'not_driving']);
     expect(reportReasons('hard_corner')).toEqual(['not_driving']);
     expect(reportReasons('hard_accel')).toEqual(['not_driving']);
+    expect(REPORT_LABEL.mounted).toBe('My phone was mounted');
+    expect(availableReasons('phone_pickup', false)).toEqual(['mounted']);
   });
 
   test(`the reasons on offer drop "wasn't driving" where the whole-drive action is not allowed`, () => {
@@ -331,7 +367,19 @@ describe('drive score', () => {
     // A severe one weighs twice: Braking 46 → 89.
     expect(driveScoreOf(drive(), [event({ tier: 'severe' })])).toBe(89);
     // Few slowdowns floor at 10, so one hard brake never sinks a short drive to 0: Braking 36 → 87.
-    expect(driveScoreOf(drive({ exposure: { slowdowns: 2, speedups: 2, turns: 1, limitS: 60, movingS: 200 } }), [event()])).toBe(87);
+    expect(driveScoreOf(drive({ exposure: { slowdowns: 2, speedups: 2, turns: 1, limitS: 60, movingS: 200, phoneS: 0 } }), [event()])).toBe(87);
+  });
+
+  test('a phone pickup counts against Phone use, judged against the drive’s time at driving speed; not watched, Phone use is left out', () => {
+    const watched = drive({ exposure: { ...EXPOSURE, phoneS: 1200 } });
+    const pickup = (durationS: number) => event({ id: 'p', type: 'phone_pickup', tier: durationS > 15 ? 'severe' : 'moderate', durationS, measured: { speedMph: 30 } });
+    expect(driveScoreOf(watched, [])).toBe(100);
+    const short = driveScoreOf(watched, [pickup(5)])!;
+    const long = driveScoreOf(watched, [pickup(60)])!;
+    expect(short).toBeLessThan(100);
+    expect(long).toBeLessThan(short);
+    // A report that took it off: it no longer counts.
+    expect(driveScoreOf(watched, [{ ...pickup(60), disputeStatus: 'accepted' }])).toBe(100);
   });
 
   test('an event a report took off, or one removed, no longer counts', () => {

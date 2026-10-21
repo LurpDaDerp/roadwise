@@ -42,7 +42,7 @@ function EventLine({
         testID={row.key}
         onPress={onSelect}
         accessibilityRole="button"
-        accessibilityLabel={`${row.label} at ${row.time}${removed ? ', removed' : ''}`}
+        accessibilityLabel={`${row.label} at ${row.time}${row.detail ? `, ${row.detail.spoken}` : ''}${removed ? ', removed' : ''}`}
         accessibilityHint={recapCopy.events.selectHint}
         accessibilityState={{ selected }}
         hitSlop={{ top: 4, bottom: 4 }}
@@ -57,6 +57,19 @@ function EventLine({
         </Text>
       </Pressable>
       <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', columnGap: t.space.sm, minHeight: 28, paddingLeft: 20 + t.space.md }}>
+        {row.detail ? (
+          // Spoken with the row's name above, so a screen reader doesn't read it twice.
+          <Text
+            variant="footnote"
+            tone="muted"
+            testID={`event-detail-${e.id}`}
+            accessibilityElementsHidden
+            importantForAccessibility="no"
+            style={removed ? { textDecorationLine: 'line-through' } : null}
+          >
+            {row.detail.text}
+          </Text>
+        ) : null}
         {reportable ? (
           <Pressable
             testID={`report-${e.id}`}
@@ -91,8 +104,9 @@ export type EventListProps = {
 
 /**
  * The drive's events under its score: one row each, oldest first, its icon in its tier's ink, its
- * name and time, and Report (or the report's status) under it. A tap circles it on the route map.
- * Three show before "Show more"; a clean drive says so.
+ * name and time, and under it a phone pickup's time in hand and speed, then Report (or the
+ * report's status). A tap circles it on the route map. Three show before "Show more"; a clean drive
+ * says so.
  */
 export function EventList({ rows, allowNotDriving = false, selectedId, onSelect, onReport }: EventListProps) {
   const t = useTheme();

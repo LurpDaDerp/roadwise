@@ -89,6 +89,25 @@ test('a drive row (Home and Drive history) shows the chevrons for a hard acceler
   expect(within(screen.getByTestId('recent-x-event-hard_brake', H)).getByText(glyph(EVENT_ICON.hard_brake), H)).toBeOnTheScreen();
 });
 
+test('a phone pickup wears the phone icon: in a drive row, on its pin and on the card the pin opens, which says its time in hand and speed', async () => {
+  const d = drive({ clientTripId: 'x', counts: { ...drive().counts, hardBrake: 0, pickups: 2 } });
+  await draw(<DriveRow drive={d} onPress={jest.fn()} testID="recent-x" />);
+  expect(within(screen.getByTestId('recent-x-event-phone_pickup', H)).getByText(glyph('phone-portrait-outline'), H)).toBeOnTheScreen();
+  expect(screen.getByTestId('recent-x').props.accessibilityLabel).toContain('2 phone pickup');
+
+  const pickup = event({ id: 'p', type: 'phone_pickup', tier: 'severe', durationS: 24, measured: { speedMph: 38 } });
+  await draw(<RouteMap runs={[ROUTE]} events={[pickup]} highlighted={null} />);
+  const pin = screen.getByTestId('pin-p', H);
+  expect(within(pin).getByText(glyph('phone-portrait-outline'), H)).toBeOnTheScreen();
+  expect(pin.props.accessibilityLabel).toBe('Phone pickup, in hand 24 seconds, at 38 miles per hour');
+  expect(screen.getByLabelText('Route map, 1 phone pickup', H)).toBeOnTheScreen();
+  await fireEvent.press(pin);
+  const card = screen.getByTestId('map-event-card');
+  expect(within(card).getByText(glyph('phone-portrait-outline'), H)).toBeOnTheScreen();
+  expect(within(card).getByTestId('map-event-title')).toHaveTextContent('Phone pickup');
+  expect(within(card).getByTestId('map-event-detail')).toHaveTextContent(/^In hand 24 s · 38 mph · \d{1,2}:\d{2} [AP]M$/);
+});
+
 test('a hard-acceleration pin on the summary map, and the card it opens, wear the chevrons', async () => {
   await draw(<RouteMap runs={[ROUTE]} events={[event({ id: 'a', type: 'hard_accel', tier: 'minor' })]} highlighted={null} />);
   const pin = screen.getByTestId('pin-a', H);

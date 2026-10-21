@@ -14,8 +14,10 @@ import {
   type MeritTier,
 } from '@scoring';
 
+import type { Units } from '@/lib/units';
+
 import { recapCopy } from './copy';
-import { eventName, formatClock } from './format';
+import { eventName, formatClock, pickupDetail } from './format';
 import type { LocalDrive, LocalDriveEvent } from './model';
 
 // ── Notes under the time and distance ───────────────────────────────────────────────────
@@ -139,9 +141,8 @@ export function meritOf(d: LocalDrive, events: readonly LocalDriveEvent[]): Meri
 
 // ── Events ──────────────────────────────────────────────────────────────────────────────
 
-/** Old phone events (recorded before phone use left the app) are never shown, counted or pinned. */
-export const isShownEvent = (e: Pick<LocalDriveEvent, 'type'>): boolean =>
-  (e.type as string) !== 'phone_pickup' && (e.type as string) !== 'phone_handling';
+/** A type no build records any more (an older build's phone handling) is never shown, counted or pinned. */
+export const isShownEvent = (e: Pick<LocalDriveEvent, 'type'>): boolean => (e.type as string) !== 'phone_handling';
 
 /** An accepted report took this event off: it no longer counts anywhere. */
 export const isRemoved = (e: LocalDriveEvent): boolean => e.removed || e.disputeStatus === 'accepted';
@@ -153,32 +154,55 @@ export interface EventRow {
   key: string;
   label: string;
   time: string;
+  /** A phone pickup's time in hand and speed ("In hand 24 s · 38 mph"), and the same in words; null for any other event. */
+  detail: { text: string; spoken: string } | null;
   event: LocalDriveEvent;
 }
 
 /** The recap's event list: shown events, oldest first. */
-export function eventRows(events: readonly LocalDriveEvent[]): EventRow[] {
+export function eventRows(events: readonly LocalDriveEvent[], units: Units = 'mi'): EventRow[] {
   return events
     .filter(isShownEvent)
     .sort((x, y) => x.startedAt - y.startedAt)
-    .map((e) => ({ key: `event-${e.id}`, label: eventName(e.type, e.tier), time: formatClock(e.startedAt), event: e }));
+    .map((e) => ({
+      key: `event-${e.id}`,
+      label: eventName(e.type, e.tier),
+      time: formatClock(e.startedAt),
+      detail: e.type === 'phone_pickup' ? pickupDetail(e, units) : null,
+      event: e,
+    }));
 }
 
 // ── Reports ─────────────────────────────────────────────────────────────────────────────
 
-export type ReportReason = 'hazard' | 'wrong_limit' | 'camera_wrong' | 'not_driving';
+export type ReportReason = 'hazard' | 'wrong_limit' | 'mounted' | 'camera_wrong' | 'not_driving';
 
 export const REPORT_LABEL: Record<ReportReason, string> = {
   hazard: 'I braked for a hazard',
   wrong_limit: 'The speed limit was wrong',
+  mounted: 'My phone was mounted',
   camera_wrong: 'DashPal got it wrong',
   not_driving: "I wasn't driving",
 };
 
+/** The event type's own reason, if it has one. */
+function specificReason(type: EventType): ReportReason | null {
+  switch (type) {
+    case 'hard_brake':
+      return 'hazard';
+    case 'speeding':
+      return 'wrong_limit';
+    case 'phone_pickup':
+      return 'mounted';
+    default:
+      return isDashcamType(type) ? 'camera_wrong' : null;
+  }
+}
+
 /** The reasons that make sense for this event type, "wasn't driving" always last. */
 export function reportReasons(type: EventType): ReportReason[] {
-  const specific: ReportReason[] = type === 'hard_brake' ? ['hazard'] : type === 'speeding' ? ['wrong_limit'] : isDashcamType(type) ? ['camera_wrong'] : [];
-  return [...specific, 'not_driving'];
+  const specific = specificReason(type);
+  return specific === null ? ['not_driving'] : [specific, 'not_driving'];
 }
 
 /**
