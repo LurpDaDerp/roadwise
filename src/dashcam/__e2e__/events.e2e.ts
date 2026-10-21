@@ -9,8 +9,7 @@ import { closedSession } from '@/core/engine/__fixtures__/drives';
 import { dashcamBlock, dashcamEvents, finalizeTrip } from '@/core/engine/finalize';
 import { createSettingsRepo } from '@/data/db';
 import { readDriveDetail } from '@/data/queries/drives';
-import { signedPoints } from '@/features/drives/format';
-import { breakdownLines } from '@/features/drives/summary';
+import { eventRows } from '@/features/drives/summary';
 
 import type { DashcamTripFacts } from '../facts';
 import { CAM, EPOCH0, linkedA, scenario, type Phone, type World } from './world';
@@ -496,7 +495,7 @@ describeSim('DashPal events only inside a drive started by hand (firmware ring â
         // The fatigue warning is stored with the drive, never a candidate: one drowsy, the microsleep's.
         expect(facts.events.map((e) => [e.id, e.kind])).toEqual([[rows[0]!.id, 'drowsy']]);
 
-        // Finalized as the app finalizes it: one âˆ’50 line, no Safety Rating penalty, still clean.
+        // Finalized as the app finalizes it: the drowsy event goes with the drive, breaks nothing, still clean.
         const n = Math.round((endedAt - startedAt) / 1000);
         const result = await finalizeTrip(closedSession(n, [], { clientTripId: a.tripId, t0: startedAt }), {
           db: a.rawDb,
@@ -505,15 +504,13 @@ describeSim('DashPal events only inside a drive started by hand (firmware ring â
           appVersion: '2.0.0',
           geocode: null,
           trimSeed: async (id: string) => `${id}-seed`.padEnd(64, '0'),
-          context: async () => ({ streak: 0 }),
           dashcamFacts: async () => facts,
         });
         expect(result.payload!.events.map((e) => [e.id, e.type, e.tier])).toEqual([[rows[0]!.id, 'drowsy', 'severe']]);
-        expect(result.breakdown).toMatchObject({ penalties: 50, ratingPenalty: 0, activeEventCount: 0, events: [{ id: rows[0]!.id, penalty: 50 }] });
+        expect(result.drive).toEqual({ scored: true, reason: null, activeEventCount: 0 });
         expect(result.trip.clean).toBe(1);
         const detail = await readDriveDetail(a.rawDb, a.tripId);
-        const lines = breakdownLines(detail!.drive, detail!.events).lines.filter((l) => l.kind === 'event');
-        expect(lines.map((l) => [l.label, l.value, l.tone])).toEqual([['Drowsy Â· DashPal', signedPoints(-50), 'loss']]);
+        expect(eventRows(detail!.events).map((r) => r.label)).toEqual(['Drowsy Â· DashPal']);
       })
   );
 
