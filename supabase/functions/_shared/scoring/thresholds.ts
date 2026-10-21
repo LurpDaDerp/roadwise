@@ -1,5 +1,5 @@
-// v3 detection thresholds and game constants (product spec v3, plan §2). Shared by the device's
-// detectors, the server's re-validation and the screens, so every number lives here once.
+// Detection thresholds and drive rules. Shared by the device's detectors, the server's
+// re-validation and the screens, so every number lives here once.
 
 /** Hard braking, in g: minor from 0.30, severe from 0.45 (confirmed by a GPS speed drop). */
 export const HARD_BRAKE_G = { minor: 0.3, severe: 0.45 } as const;
@@ -7,14 +7,14 @@ export const HARD_BRAKE_G = { minor: 0.3, severe: 0.45 } as const;
 export const HARD_ACCEL_G = { minor: 0.32, severe: 0.45 } as const;
 /** Hard cornering (sideways force), in g. */
 export const HARD_CORNER_G = { minor: 0.4, severe: 0.55 } as const;
-/** Phone pickups count only while moving above this speed. */
-export const PHONE_MIN_MPH = 5;
+/** The car counts as moving at or above this speed (mph): moving time, harsh-event gates. */
+export const MOVING_MIN_MPH = 5;
 /**
  * The grace on speeding: an episode is an event only once it has MORE than this many rows over the
- * points line (L + T), whatever its tier (the 6th row makes it one), and the cost counts the rows
- * after these (`speedingChargedS`). An episode that never gets there is never an event, costs
- * nothing and does not break a clean drive. The alert sounds on the first over row, so the driver
- * has this long to react before points come off.
+ * speeding line (L + T), whatever its tier (the 6th row makes it one), and the Speed weight counts
+ * the rows after these (`speedingChargedS`). An episode that never gets there is never an event,
+ * weighs nothing and does not break a clean drive. The alert sounds on the first over row, so the
+ * driver has this long to react before it counts.
  */
 export const SPEEDING_GRACE_S = 5;
 /** A speeding episode ends after this long back under L + T − `SPEEDING_END_BUFFER_MPH`. */
@@ -25,24 +25,33 @@ export const NO_EVENTS_FIRST_S = 30;
 /** GPS accuracy worse than this (m) records no speeding and shows "—". */
 export const MAX_H_ACC_M = 20;
 /** A drive ends on its own after this long without the car moving, cut back to its last movement. */
-export const IDLE_END_S = 900;
-/** Ending then restarting within this gap and distance merges into one drive. */
+export const IDLE_END_S = 300;
+/** At or under this speed (mph) the car is crawling: with walking confirmed, the drive ends. */
+export const END_CRAWL_MPH = 3;
+/** The native safety stop's slack over the JS end rules (s): it fires only when JS has not ended the drive. */
+export const END_NATIVE_SLACK_S = 60;
+/**
+ * A drive confirmed within this gap (s) of the previous drive's end, starting within
+ * `MERGE_RADIUS_M` of where it ended, is the same drive (the phone continues it; the server joins
+ * the two when the first was already sent). Also the upload hold after every end.
+ */
 export const MERGE_GAP_S = 300;
-export const MERGE_DIST_M = 402;
+/** The distance (m) from the previous drive's end to the next drive's start for a merge. */
+export const MERGE_RADIUS_M = 150;
+/** The privacy trim: the route's first and last this many metres are cut before upload. */
+export const TRIM_ENDS_M = 402;
 /**
  * A drive under `MIN_SCORED_MILES` miles AND under `MIN_SCORED_S` seconds is not scored (kept and
  * listed, "Too short to score"). Either one reached makes it a scored drive.
  */
 export const MIN_SCORED_MILES = 0.5;
 export const MIN_SCORED_S = 120;
-/** Points for finishing a weekly challenge (the server pays it; the client copy reads it here). */
-export const CHALLENGE_REWARD_POINTS = 200;
 /** "Wasn't driving" uses per month. */
 export const NOT_DRIVING_PER_MONTH = 2;
+/** "Wasn't driving" is offered until this long (s) after the drive's end. */
+export const NOT_DRIVING_WINDOW_S = 86_400;
 /** "Braked for a hazard" / "wrong speed limit" disputes auto-accepted per week. */
 export const DISPUTE_AUTO_PER_WEEK = 3;
-/** Freezes held at most. */
-export const MAX_FREEZES = 3;
 
 /** DashPal events score only at this phone GPS speed or faster, on a good fix. */
 export const DASHCAM_MIN_MPH = 10;
@@ -54,27 +63,19 @@ export const DASHCAM_EYES_OFF_GAP_S = 300;
 export const DASHCAM_MIN_MOVING_S = 60;
 /** …with the dashcam watching the driver for at least this share of them. */
 export const DASHCAM_MIN_COVERAGE = 0.8;
-/** An eyes-off event within this many seconds of a phone pickup or handling event is dropped: the phone already charged it. */
-export const DASHCAM_PHONE_OVERLAP_S = 5;
 /** "DashPal got it wrong" reports auto-accepted per week, a quota of its own beside `DISPUTE_AUTO_PER_WEEK`. */
 export const CAMERA_DISPUTE_AUTO_PER_WEEK = 3;
 
-/** Weekly league tiers, lowest first. */
-export const LEAGUE_TIERS = ['bronze', 'silver', 'gold', 'platinum', 'diamond'] as const;
-export type LeagueTier = (typeof LEAGUE_TIERS)[number];
-
-export type AchievementId = 'first_drive' | 'clean_100' | 'perfect_week' | 'phone_free_25' | 'streak_10';
+export type AchievementId = 'first_drive' | 'clean_100' | 'perfect_week';
 export interface Achievement {
   id: AchievementId;
   title: string;
   description: string;
 }
 
-/** The launch set of 5 achievements. */
+/** The three achievements (badges; they reward nothing). */
 export const ACHIEVEMENTS: readonly Achievement[] = [
   { id: 'first_drive', title: 'First Drive', description: 'Complete a scored drive.' },
   { id: 'clean_100', title: 'Clean 100', description: 'Drive 100 clean miles.' },
   { id: 'perfect_week', title: 'Perfect Week', description: 'Take 3 or more drives in a week, all with zero events.' },
-  { id: 'phone_free_25', title: 'Phone-Free 25', description: 'Take 25 drives in a row with no phone pickups.' },
-  { id: 'streak_10', title: 'Streak 10', description: 'Reach a 10-drive streak.' },
 ];

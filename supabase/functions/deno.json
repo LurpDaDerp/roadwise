@@ -2,10 +2,10 @@
   "imports": {
     "./_shared/scoring/drive": "./_shared/scoring/drive.ts",
     "./_shared/scoring/index": "./_shared/scoring/index.ts",
+    "./_shared/scoring/merit": "./_shared/scoring/merit.ts",
     "./_shared/scoring/num": "./_shared/scoring/num.ts",
     "./_shared/scoring/rating": "./_shared/scoring/rating.ts",
     "./_shared/scoring/stats": "./_shared/scoring/stats.ts",
-    "./_shared/scoring/streak": "./_shared/scoring/streak.ts",
     "./_shared/scoring/thresholds": "./_shared/scoring/thresholds.ts",
     "./_shared/speedLimits/geometry": "./_shared/speedLimits/geometry.ts",
     "./_shared/speedLimits/match": "./_shared/speedLimits/match.ts",
