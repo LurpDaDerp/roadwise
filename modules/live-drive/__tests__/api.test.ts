@@ -65,6 +65,9 @@ test('every method goes to native with its arguments and coerces the result', as
   const unknown = { ...state, speed: null, limit: null, notDrivingAvailable: false, unit: 'km/h' as const };
   await LiveDrive.update(unknown);
   expect(mockNative.update).toHaveBeenLastCalledWith(unknown);
+  // An unknown speed crosses as null (the widget reads "-"), never as 0.
+  await LiveDrive.start(unknown);
+  expect(mockNative.start).toHaveBeenLastCalledWith(expect.objectContaining({ speed: null, limit: null }));
   await LiveDrive.end();
   expect(mockNative.end).toHaveBeenCalledTimes(1);
   // Anything but `true` from native is "not running" / "not supported"; anything but hex is no token.

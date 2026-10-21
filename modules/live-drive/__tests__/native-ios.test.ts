@@ -257,6 +257,24 @@ describe('live-drive: the widget extension target', () => {
     expect(sign).toMatch(/\.accessibilityLabel\(Format\.limitLabel\(limit\)\)/);
   });
 
+  it('an unknown speed reads "-" on the lock screen and in the island, never "0"; a real 0 reads "0" (plan 3.10)', () => {
+    const src = widget();
+    const format = /enum Format \{[\s\S]*?\n\}/.exec(src)?.[0] ?? '';
+    expect(format).toMatch(/static func speed\(_ v: Double\?\) -> String \{\s*guard let v = v, v\.isFinite else \{ return "-" \}\s*return String\(Int\(v\.rounded\(\)\)\)\s*\}/);
+    expect(format).not.toMatch(/\?\? 0|v \?\? /);
+    // every surface shows the state's own speed through it (the stale state blanks it to nil)
+    for (const v of ['SpeedBlock', 'SpeedNumber']) expect(view(v)).toContain('Text(Format.speed(state.speed))');
+    expect(src).not.toMatch(/state\.speed \?\?/);
+    // nil stays nil on the way in: the bridge record, the display notification, drive-sense's post
+    const c = code(IOS_DIR, 'LiveDriveController.swift');
+    expect(c).toMatch(/guard let n = info\[key\] as\? NSNumber else \{ return nil \}/);
+    expect(c).toMatch(/speed: number\("speed"\),/);
+    expect(code(IOS_DIR, 'LiveDriveModule.swift')).toMatch(/@Field var speed: Double\?\n[\s\S]*speed: speed,/);
+    const bridge = code(path.join(ROOT, 'modules', 'drive-sense', 'ios'), 'DriveSenseModule.swift');
+    expect(bridge).toMatch(/@Field var speed: Double\?/);
+    expect(bridge).toMatch(/if let v = s\.speed \{ info\["speed"\] = v \}/);
+  });
+
   it("the speed takes the driving screen's tint over the limit (white otherwise) and never animates", () => {
     const src = widget();
     for (const v of ['SpeedBlock', 'SpeedNumber']) expect(view(v)).toContain('.foregroundColor(Color(hex: state.speedTint) ?? .white)');
