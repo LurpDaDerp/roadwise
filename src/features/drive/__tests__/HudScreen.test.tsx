@@ -977,7 +977,7 @@ describe('the navigation button (design §7.4, §8)', () => {
       expect(locked()).toBe(false);
       await h.update({ speedMph: 35 });
       expect(locked()).toBe(true);
-      expect(nav()).toHaveProp('accessibilityHint', 'Available below 35 mph.');
+      expect(nav()).toHaveProp('accessibilityHint', 'Available below 30 mph.');
       // visibly grey: weaker, on a face that is no longer the paper
       expect(StyleSheet.flatten(nav().props.style)).toMatchObject({ opacity: 0.55 });
       await fireEvent.press(nav());
@@ -986,6 +986,8 @@ describe('the navigation button (design §7.4, §8)', () => {
       for (const mph of [33, 31, 30]) {
         await h.update({ speedMph: mph });
         expect(locked()).toBe(true);
+        // the hint names where it comes back, so it stays true between 30 and 35
+        expect(nav()).toHaveProp('accessibilityHint', 'Available below 30 mph.');
       }
       await h.update({ speedMph: 29.9 });
       expect(locked()).toBe(false);
@@ -1009,7 +1011,7 @@ describe('the navigation button (design §7.4, §8)', () => {
     test('kilometres: the hint in km/h', async () => {
       mockUnits = 'km';
       await renderHud({ speedMph: 60 });
-      expect(nav()).toHaveProp('accessibilityHint', 'Available below 56 km/h.');
+      expect(nav()).toHaveProp('accessibilityHint', 'Available below 48 km/h.');
     });
 
     test('the open list closes as it locks, and a long press or the screen reader action does nothing while locked', async () => {

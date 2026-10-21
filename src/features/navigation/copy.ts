@@ -18,8 +18,11 @@ export const navCopy = {
   /** The long press, and the screen reader's action for it (once an app is saved). */
   changeLabel: 'Change navigation app',
   changeHint: 'Touch and hold to change the navigation app.',
-  /** The button while greyed out for speed (35 mph and over), in the driver's units. */
-  lockedHint: (units: 'mi' | 'km') => (units === 'km' ? 'Available below 56 km/h.' : 'Available below 35 mph.'),
+  /**
+   * The button while greyed out for speed, in the driver's units: it greys out at 35 mph but only
+   * comes back under 30 (48 km/h is under 30 mph), so the hint names the speed where it comes back.
+   */
+  lockedHint: (units: 'mi' | 'km') => (units === 'km' ? 'Available below 48 km/h.' : 'Available below 30 mph.'),
   settings: {
     title: 'Navigation app',
     notSet: 'Not set',

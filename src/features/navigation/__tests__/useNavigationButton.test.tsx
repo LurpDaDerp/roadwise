@@ -308,7 +308,7 @@ describe('greyed out at speed', () => {
     await render(<NavigationButton {...base} locked onPress={onPress} onLongPress={onLongPress} />);
     const button = screen.getByRole('button', { name: 'Open Waze' });
     expect(button).toHaveProp('accessibilityState', { disabled: true });
-    expect(button).toHaveProp('accessibilityHint', 'Available below 35 mph.');
+    expect(button).toHaveProp('accessibilityHint', 'Available below 30 mph.');
     expect(button.props.accessibilityActions).toBeUndefined();
     const style = StyleSheet.flatten(button.props.style) as { opacity: number; backgroundColor: string };
     expect(style.opacity).toBe(0.55);
@@ -319,6 +319,6 @@ describe('greyed out at speed', () => {
     expect(onPress).not.toHaveBeenCalled();
     expect(onLongPress).not.toHaveBeenCalled();
     await render(<NavigationButton {...base} locked units="km" onPress={onPress} />);
-    expect(screen.getByRole('button', { name: 'Open Waze' })).toHaveProp('accessibilityHint', 'Available below 56 km/h.');
+    expect(screen.getByRole('button', { name: 'Open Waze' })).toHaveProp('accessibilityHint', 'Available below 48 km/h.');
   });
 });
