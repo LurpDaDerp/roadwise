@@ -1,14 +1,15 @@
-// The `finalize-trip` upload contract (plan §3).
+// The `finalize-trip` upload contract (v4), the v3 contract older builds still send, and the
+// `trip-actions` request and answer shapes.
 //
 // This file is the contract's single source: the device validates what it queues against it and
-// the edge function validates what it receives against a byte-identical copy (`_shared/payload.ts`,
+// the edge functions validate what they receive against a byte-identical copy (`_shared/payload.ts`,
 // synced by `scripts/sync-scoring.js`). So it must stay self-contained: zod only — no `@/`
 // alias, no `@scoring`, no React Native, no Node built-ins. The event shape mirrors `DriveEvent`
-// in packages/scoring/src/drive.ts and the response's `breakdown` mirrors `DriveBreakdown`;
-// packages/scoring/__tests__/payloadV3.test.ts pins that they stay assignable both ways.
+// and the exposure mirrors `Exposure` in packages/scoring; packages/scoring/__tests__/payload.test.ts
+// pins that they stay assignable both ways.
 //
-// Every object is `strict()`: a key the contract does not know is drift between the two ends,
-// not data, and is better refused on the device than 400'd by the server.
+// Every request object is `strict()`: a key the contract does not know is drift between the two
+// ends, not data, and is better refused on the device than 400'd by the server.
 import { z } from 'zod';
 
 /** The server refuses more events than this; the finalizer trims the upload to fit. */
@@ -30,11 +31,11 @@ const nonNegative = z.number().nonnegative();
 export const MAX_PAYLOAD_BYTES = 524_288;
 /** The longest drive the server accepts, start to end. */
 export const MAX_DRIVE_MS = 12 * 3_600_000;
-/** Most extra blocks an event may claim (mirrors MAX_UNITS in the scoring package). */
+/** Most extra blocks a v3 event may claim. */
 export const MAX_EVENT_UNITS = 1440;
 /** Slack for an event's end past the drive's end, and for durationS against the wall span. */
 const EVENT_END_SLACK_MS = 2000;
-const DURATION_SLACK_S = 5;
+export const DURATION_SLACK_S = 5;
 /**
  * The route: encoded-polyline runs (ASCII 63–126, so length in code units is length in bytes)
  * joined by single spaces — one run per visible stretch between privacy cuts, never a chord across
@@ -47,54 +48,40 @@ const runCount = (s: string): number => (s === '' ? 0 : s.split(' ').length);
 
 const DAY_MS = 86_400_000;
 
-export const EVENT_TYPES_V3 = [
-  'speeding',
-  'hard_brake',
-  'hard_accel',
-  'hard_corner',
-  'phone_pickup',
-  'phone_handling',
-  'eyes_off',
-  'drowsy',
-] as const;
-export const TIERS_V3 = ['minor', 'moderate', 'severe'] as const;
+/** The event types a drive records (mirrors `EventType` in the scoring package). */
+export const EVENT_TYPES = ['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'eyes_off', 'drowsy'] as const;
+export const TIERS = ['minor', 'moderate', 'severe'] as const;
 /** The types only the DashPal dashcam reports (mirrors DASHCAM_EVENT_TYPES in the scoring package). */
-export const DASHCAM_EVENT_TYPES_V3 = ['eyes_off', 'drowsy'] as const satisfies readonly (typeof EVENT_TYPES_V3)[number][];
-const isDashcamTypeV3 = (type: (typeof EVENT_TYPES_V3)[number]): boolean =>
-  (DASHCAM_EVENT_TYPES_V3 as readonly string[]).includes(type);
+export const DASHCAM_EVENT_TYPES_WIRE = ['eyes_off', 'drowsy'] as const satisfies readonly (typeof EVENT_TYPES)[number][];
+const isDashcamWireType = (type: string): boolean => (DASHCAM_EVENT_TYPES_WIRE as readonly string[]).includes(type);
 
-/** The tiers each event type can have (plan §2). */
-export const TIERS_BY_TYPE: Record<(typeof EVENT_TYPES_V3)[number], readonly (typeof TIERS_V3)[number][]> = {
+/** The tiers each event type can have. */
+export const TIERS_BY_TYPE: Record<(typeof EVENT_TYPES)[number], readonly (typeof TIERS)[number][]> = {
   speeding: ['minor', 'moderate', 'severe'],
   hard_brake: ['minor', 'severe'],
   hard_accel: ['minor', 'severe'],
   hard_corner: ['minor', 'severe'],
-  phone_pickup: ['severe'],
-  phone_handling: ['moderate', 'severe'],
   eyes_off: ['severe'],
   drowsy: ['severe'],
 };
 
 const roundedTo4dp = (v: number): boolean => Number(v.toFixed(4)) === v;
 
-/** A raw first/last fix, rounded to 4 dp. Used only for the merge and loop checks. */
-export const PointV3Schema = z
+/** A raw first/last fix, rounded to 4 dp. `start` is the drive's first recorded row (its traced-back start). */
+export const PointSchema = z
   .object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) })
   .strict()
   .refine((p) => roundedTo4dp(p.lat) && roundedTo4dp(p.lng), {
     error: 'coordinates must already be rounded to 4 decimal places',
   });
 
-/** What the detector measured; shown on the summary, re-checked by the server. */
-export const MeasuredV3Schema = z
+/** What the detector measured; shown on the recap, re-checked by the server. */
+export const MeasuredSchema = z
   .object({
     speedMph: z.number().min(0).max(250).optional(),
     limitMph: z.number().min(0).max(120).optional(),
     peakG: z.number().min(0).max(10).optional(),
-    mounted: z.boolean().optional(),
-    /** phone_pickup, phone_handling: the highest trusted GPS speed during the episode (the phone speed multiplier). */
-    maxSpeedMph: z.number().min(0).max(250).optional(),
-    /** speeding: mph-seconds over the points line after the grace (the speeding cost). The scorer clamps it per charged second. */
+    /** speeding: mph-seconds over the speeding line after the grace (the Speed weight reads it). */
     overMphS: z.number().min(0).max(1_000_000).optional(),
     /** Who saw it: `dashcam` on (and only on) a DashPal event. */
     source: z.literal('dashcam').optional(),
@@ -102,50 +89,43 @@ export const MeasuredV3Schema = z
   .strict();
 
 /** One event: a `DriveEvent` plus where it happened (null inside a privacy zone) and its measurements. */
-export const PayloadEventV3Schema = z
+export const PayloadEventSchema = z
   .object({
     id: z.uuid(),
-    type: z.enum(EVENT_TYPES_V3),
-    tier: z.enum(TIERS_V3),
+    type: z.enum(EVENT_TYPES),
+    tier: z.enum(TIERS),
     startedAt: epochMs,
     durationS: z.number().min(0).max(MAX_DRIVE_MS / 1000),
-    /** phone_handling: 1..1440. Speeding's blocks are derived from durationS by the scorer. */
-    units: z.number().int().min(0).max(MAX_EVENT_UNITS).optional(),
-    stoppedInTraffic: z.boolean().optional(),
     zone: z.enum(['school', 'construction']).nullable().optional(),
     /** Only the server removes an event (an accepted dispute); an upload is always active. */
     status: z.literal('active').optional(),
     lat: z.number().min(-90).max(90).nullable(),
     lng: z.number().min(-180).max(180).nullable(),
-    measured: MeasuredV3Schema,
+    measured: MeasuredSchema,
   })
   .strict()
   .refine((e) => TIERS_BY_TYPE[e.type].includes(e.tier), {
     error: 'tier not allowed for this event type',
     path: ['tier'],
   })
-  .refine((e) => e.type !== 'phone_handling' || e.units === undefined || e.units >= 1, {
-    error: 'phone handling counts at least 1 unit',
-    path: ['units'],
-  })
-  .refine((e) => isDashcamTypeV3(e.type) === (e.measured.source === 'dashcam'), {
+  .refine((e) => isDashcamWireType(e.type) === (e.measured.source === 'dashcam'), {
     error: 'a DashPal event carries source dashcam, and only a DashPal event does',
     path: ['measured', 'source'],
   });
 
 /** The longest a drive can be moving, in seconds (the 12 h drive bound). */
-const MAX_DASHCAM_S = MAX_DRIVE_MS / 1000;
+const MAX_DRIVE_S = MAX_DRIVE_MS / 1000;
 
 /**
  * The DashPal seconds of a drive, sent only when a paired dashcam covered some of it (absent: no
- * DashPal). The server derives the DashPal drive bonus from them (scoring `dashcamDrive`).
+ * DashPal). The server derives the DashPal drive from them (scoring `dashcamDrive`).
  */
-export const DashcamV3Schema = z
+export const DashcamSchema = z
   .object({
     /** The dashcam's identity MAC, lowercase hex. */
     deviceId: z.string().regex(/^[0-9a-f]{12}$/),
     /** Seconds moving at 5 mph or more. */
-    movingS: z.number().int().min(0).max(MAX_DASHCAM_S),
+    movingS: z.number().int().min(0).max(MAX_DRIVE_S),
     /** Of those, seconds the dashcam watched a live face on this phone's link. */
     coveredS: z.number().int().min(0),
     /** Every dashcam event was persisted within 30 s of the drive's end. */
@@ -153,6 +133,24 @@ export const DashcamV3Schema = z
   })
   .strict()
   .refine((d) => d.coveredS <= d.movingS, { error: 'coveredS exceeds movingS', path: ['coveredS'] });
+
+/** Most of each counted opportunity a drive may claim (mirrors `EXPOSURE_MAX.count` in the scoring package). */
+const MAX_EXPOSURE_COUNT = 20_000;
+
+/**
+ * The drive's opportunity counters (scoring `Exposure`). Optional on the upload: a drive upgraded
+ * from v3 has none and the server estimates them from its miles and duration.
+ */
+export const ExposureSchema = z
+  .object({
+    slowdowns: z.number().int().min(0).max(MAX_EXPOSURE_COUNT),
+    speedups: z.number().int().min(0).max(MAX_EXPOSURE_COUNT),
+    turns: z.number().int().min(0).max(MAX_EXPOSURE_COUNT),
+    limitS: z.number().int().min(0).max(MAX_DRIVE_S),
+    movingS: z.number().int().min(0).max(MAX_DRIVE_S),
+  })
+  .strict()
+  .refine((e) => e.limitS <= e.movingS, { error: 'limitS exceeds movingS', path: ['limitS'] });
 
 /** `YYYY-MM-DD` that is a real calendar date → its UTC day number, else null. */
 const dayNumber = (s: string): number | null => {
@@ -167,138 +165,254 @@ const dayNumber = (s: string): number | null => {
   return t / DAY_MS;
 };
 
+/** The facts every upload version shares. */
+const driveFields = {
+  clientTripId: z.uuid(),
+  startedAt: epochMs,
+  endedAt: epochMs,
+  /** IANA time zone name, never an offset (`TZ_NAME_PATTERN`). */
+  tz: z.string().min(1).max(64).regex(TZ_NAME_PATTERN),
+  /** Device-local date of startedAt. */
+  localDay: z.string().refine((s) => dayNumber(s) !== null, { error: 'localDay must be a real YYYY-MM-DD date' }),
+  miles: z.number().min(0).max(1000),
+  nightMiles: nonNegative,
+  durationS: z.number().min(0).max(MAX_DRIVE_MS / 1000),
+  start: PointSchema.nullable(),
+  end: PointSchema.nullable(),
+  /** Google encoded polyline runs, space-joined, trimmed on the device (privacy zones + the first and last 402 m). ASCII only. */
+  polyline: z
+    .string()
+    .max(MAX_POLYLINE_BYTES)
+    .regex(POLYLINE_PATTERN)
+    .refine((s) => runCount(s) <= MAX_POLYLINE_RUNS, { message: `at most ${MAX_POLYLINE_RUNS} runs` }),
+  integrity: z
+    .object({
+      mockLocation: z.boolean(),
+      motionMismatch: z.boolean(),
+      validGnssPct: z.number().min(0).max(100),
+      maxSpeedMph: z.number().min(0).max(300),
+    })
+    .strict(),
+  appVersion: z.string().min(1).max(32),
+  /** Optional: an app without DashPal (or a drive no dashcam covered) leaves it out. */
+  dashcam: DashcamSchema.optional(),
+};
+
+/** The checks every upload version shares, over its drive facts and events. */
+interface DriveFacts {
+  startedAt: number;
+  endedAt: number;
+  durationS: number;
+  miles: number;
+  nightMiles: number;
+  localDay: string;
+  events: readonly { id: string; startedAt: number; durationS: number }[];
+}
+const driveIssues = (p: DriveFacts, ctx: z.RefinementCtx): void => {
+  const issue = (message: string, path: string): void => ctx.addIssue({ code: 'custom', message, path: [path] });
+  if (!(p.endedAt > p.startedAt)) issue('endedAt must be after startedAt', 'endedAt');
+  if (p.endedAt - p.startedAt > MAX_DRIVE_MS) issue('a drive lasts at most 12 h', 'endedAt');
+  if (!(Math.abs(p.durationS - (p.endedAt - p.startedAt) / 1000) <= DURATION_SLACK_S)) {
+    issue('durationS must match endedAt − startedAt within 5 s', 'durationS');
+  }
+  if (p.nightMiles > p.miles) issue('nightMiles exceeds miles', 'nightMiles');
+  // Every real time zone puts the local date within one day of the UTC date.
+  const day = dayNumber(p.localDay);
+  if (!(day !== null && Math.abs(day - Math.floor(p.startedAt / DAY_MS)) <= 1)) {
+    issue('localDay is not the date of startedAt in any time zone', 'localDay');
+  }
+  if (!p.events.every((e) => e.startedAt >= p.startedAt && e.startedAt <= p.endedAt)) issue('every event must start within the drive', 'events');
+  if (!p.events.every((e) => e.startedAt + e.durationS * 1000 <= p.endedAt + EVENT_END_SLACK_MS)) issue('every event must end by endedAt', 'events');
+  if (new Set(p.events.map((e) => e.id)).size !== p.events.length) issue('event ids must be unique', 'events');
+};
+
+/** The upload a drive sends to `finalize-trip`. */
+export const FinalizeTripPayloadV4Schema = z
+  .object({
+    v: z.literal(4),
+    ...driveFields,
+    events: z.array(PayloadEventSchema).max(MAX_EVENTS),
+    /** How the drive started: noticed on its own, or a Start tap. */
+    origin: z.enum(['auto', 'manual']),
+    /** The in-drive "Not driving?" ran out of its 2-minute visibility budget. */
+    notDrivingExpired: z.boolean(),
+    /** The drive's opportunity counters (`ExposureSchema`). Optional: an upgraded v3 drive has none. */
+    exposure: ExposureSchema.optional(),
+  })
+  .strict()
+  .superRefine((p, ctx) => {
+    driveIssues(p, ctx);
+    if (p.exposure !== undefined && p.exposure.movingS > p.durationS + DURATION_SLACK_S) {
+      ctx.addIssue({ code: 'custom', message: 'exposure movingS exceeds the drive', path: ['exposure', 'movingS'] });
+    }
+  });
+
+// --- v3: what an older build sends (or still has queued). Upgraded to v4 by `upgradePayloadV3`. ---
+
+export const EVENT_TYPES_V3 = [
+  'speeding',
+  'hard_brake',
+  'hard_accel',
+  'hard_corner',
+  'phone_pickup',
+  'phone_handling',
+  'eyes_off',
+  'drowsy',
+] as const;
+const TIERS_BY_TYPE_V3: Record<(typeof EVENT_TYPES_V3)[number], readonly (typeof TIERS)[number][]> = {
+  ...TIERS_BY_TYPE,
+  phone_pickup: ['severe'],
+  phone_handling: ['moderate', 'severe'],
+};
+
+/** A v3 event's measurements: v4's plus the phone-use keys. */
+export const MeasuredV3Schema = z
+  .object({
+    speedMph: z.number().min(0).max(250).optional(),
+    limitMph: z.number().min(0).max(120).optional(),
+    peakG: z.number().min(0).max(10).optional(),
+    mounted: z.boolean().optional(),
+    maxSpeedMph: z.number().min(0).max(250).optional(),
+    overMphS: z.number().min(0).max(1_000_000).optional(),
+    source: z.literal('dashcam').optional(),
+  })
+  .strict();
+
+export const PayloadEventV3Schema = z
+  .object({
+    id: z.uuid(),
+    type: z.enum(EVENT_TYPES_V3),
+    tier: z.enum(TIERS),
+    startedAt: epochMs,
+    durationS: z.number().min(0).max(MAX_DRIVE_MS / 1000),
+    units: z.number().int().min(0).max(MAX_EVENT_UNITS).optional(),
+    stoppedInTraffic: z.boolean().optional(),
+    zone: z.enum(['school', 'construction']).nullable().optional(),
+    status: z.literal('active').optional(),
+    lat: z.number().min(-90).max(90).nullable(),
+    lng: z.number().min(-180).max(180).nullable(),
+    measured: MeasuredV3Schema,
+  })
+  .strict()
+  .refine((e) => TIERS_BY_TYPE_V3[e.type].includes(e.tier), {
+    error: 'tier not allowed for this event type',
+    path: ['tier'],
+  })
+  .refine((e) => e.type !== 'phone_handling' || e.units === undefined || e.units >= 1, {
+    error: 'phone handling counts at least 1 unit',
+    path: ['units'],
+  })
+  .refine((e) => isDashcamWireType(e.type) === (e.measured.source === 'dashcam'), {
+    error: 'a DashPal event carries source dashcam, and only a DashPal event does',
+    path: ['measured', 'source'],
+  });
+
 export const FinalizeTripPayloadV3Schema = z
   .object({
     v: z.literal(3),
-    clientTripId: z.uuid(),
-    startedAt: epochMs,
-    endedAt: epochMs,
-    /** IANA time zone name, never an offset (`TZ_NAME_PATTERN`). */
-    tz: z.string().min(1).max(64).regex(TZ_NAME_PATTERN),
-    /** Device-local date of startedAt. */
-    localDay: z.string().refine((s) => dayNumber(s) !== null, { error: 'localDay must be a real YYYY-MM-DD date' }),
-    miles: z.number().min(0).max(1000),
+    ...driveFields,
     safeMiles: nonNegative,
-    nightMiles: nonNegative,
-    durationS: z.number().min(0).max(MAX_DRIVE_MS / 1000),
-    start: PointV3Schema.nullable(),
-    end: PointV3Schema.nullable(),
-    /** Google encoded polyline runs, space-joined, trimmed on the device (privacy zones + first/last 0.25 mi). ASCII only. */
-    polyline: z
-      .string()
-      .max(MAX_POLYLINE_BYTES)
-      .regex(POLYLINE_PATTERN)
-      .refine((s) => runCount(s) <= MAX_POLYLINE_RUNS, { message: `at most ${MAX_POLYLINE_RUNS} runs` }),
-    integrity: z
-      .object({
-        mockLocation: z.boolean(),
-        motionMismatch: z.boolean(),
-        validGnssPct: z.number().min(0).max(100),
-        maxSpeedMph: z.number().min(0).max(300),
-      })
-      .strict(),
     events: z.array(PayloadEventV3Schema).max(MAX_EVENTS),
-    appVersion: z.string().min(1).max(32),
-    /** Optional: an app without DashPal (or a drive no dashcam covered) leaves it out. */
-    dashcam: DashcamV3Schema.optional(),
   })
   .strict()
-  .refine((p) => p.endedAt > p.startedAt, { error: 'endedAt must be after startedAt', path: ['endedAt'] })
-  .refine((p) => p.endedAt - p.startedAt <= MAX_DRIVE_MS, { error: 'a drive lasts at most 12 h', path: ['endedAt'] })
-  .refine((p) => Math.abs(p.durationS - (p.endedAt - p.startedAt) / 1000) <= DURATION_SLACK_S, {
-    error: 'durationS must match endedAt − startedAt within 5 s',
-    path: ['durationS'],
-  })
-  .refine((p) => p.safeMiles <= p.miles, { error: 'safeMiles exceeds miles', path: ['safeMiles'] })
-  .refine((p) => p.nightMiles <= p.miles, { error: 'nightMiles exceeds miles', path: ['nightMiles'] })
-  .refine(
-    (p) => {
-      // Every real time zone puts the local date within one day of the UTC date.
-      const day = dayNumber(p.localDay);
-      return day !== null && Math.abs(day - Math.floor(p.startedAt / DAY_MS)) <= 1;
-    },
-    { error: 'localDay is not the date of startedAt in any time zone', path: ['localDay'] }
-  )
-  .refine((p) => p.events.every((e) => e.startedAt >= p.startedAt && e.startedAt <= p.endedAt), {
-    error: 'every event must start within the drive',
-    path: ['events'],
-  })
-  .refine((p) => p.events.every((e) => e.startedAt + e.durationS * 1000 <= p.endedAt + EVENT_END_SLACK_MS), {
-    error: 'every event must end by endedAt',
-    path: ['events'],
-  })
-  .refine((p) => new Set(p.events.map((e) => e.id)).size === p.events.length, {
-    error: 'event ids must be unique',
-    path: ['events'],
+  .superRefine((p, ctx) => {
+    driveIssues(p, ctx);
+    if (p.safeMiles > p.miles) ctx.addIssue({ code: 'custom', message: 'safeMiles exceeds miles', path: ['safeMiles'] });
   });
 
-/**
- * `DriveBreakdown` from the scoring package, as the server computed it. `dashcamMult` and `mult`
- * are optional on the wire (a result stored before DashPal lacks them) and read as 1 and
- * `streakMult` when absent, so the parsed value is always a full `DriveBreakdown`. `pointsPerMile`
- * is optional too (a result stored before the rate doubled lacks it and earned 10), and
- * `cleanBonus` may still be the 25 those results stored.
- */
-export const DriveBreakdownSchema = z
-  .object({
-    scored: z.boolean(),
-    reason: z.literal('too_short').optional(),
-    safeMiles: nonNegative,
-    creditedMiles: nonNegative,
-    milePoints: nonNegative,
-    pointsPerMile: z.number().positive().optional(),
-    cleanBonus: z.union([z.literal(0), z.literal(25), z.literal(50)]),
-    streakMult: z.number().min(1),
-    dashcamMult: z.union([z.literal(1), z.literal(1.25)]).optional(),
-    mult: z.number().min(1).max(1.5).optional(),
-    gains: z.number().int().nonnegative(),
-    shortScale: z.number().min(0).max(1),
-    events: z.array(z.object({ id: z.string(), penalty: z.number().int().nonnegative() })),
-    penalties: z.number().int().nonnegative(),
-    net: z.number().int(),
-    ratingPenalty: nonNegative,
-    activeEventCount: z.number().int().nonnegative(),
-  })
-  .transform((b) => ({ ...b, dashcamMult: b.dashcamMult ?? (1 as const), mult: b.mult ?? b.streakMult }));
+export type PayloadEvent = z.infer<typeof PayloadEventSchema>;
+export type PayloadDashcam = z.infer<typeof DashcamSchema>;
+export type ExposureWire = z.infer<typeof ExposureSchema>;
+export type FinalizeTripPayloadV4 = z.infer<typeof FinalizeTripPayloadV4Schema>;
+export type PayloadEventV3 = z.infer<typeof PayloadEventV3Schema>;
+export type FinalizeTripPayloadV3 = z.infer<typeof FinalizeTripPayloadV3Schema>;
 
-export const STREAK_OUTCOMES = ['none', 'grew', 'freeze_used', 'at_risk', 'restored', 'reset'] as const;
+/**
+ * A v3 upload (an older build, or one still queued from it) as v4: phone events go, with the
+ * fields only they used (`units`, `stoppedInTraffic`, `measured.mounted`, `measured.maxSpeedMph`);
+ * `safeMiles` goes; the drive reads as started from Start (`origin: 'manual'`) with its
+ * "Not driving?" never run out; no exposure (the server estimates it). Pure.
+ */
+export function upgradePayloadV3(p: FinalizeTripPayloadV3): FinalizeTripPayloadV4 {
+  const { v: _v, safeMiles: _safe, events, ...rest } = p;
+  const kept: PayloadEvent[] = [];
+  for (const e of events) {
+    const { units: _u, stoppedInTraffic: _st, measured, type, ...event } = e;
+    if (type === 'phone_pickup' || type === 'phone_handling') continue;
+    const { mounted: _m, maxSpeedMph: _x, ...m } = measured;
+    kept.push({ ...event, type, measured: m });
+  }
+  return { ...rest, v: 4, origin: 'manual', notDrivingExpired: false, events: kept };
+}
+
+/** A v3 body read as v4: validated as v3, upgraded, then held to v4. */
+const UpgradedV3Schema = FinalizeTripPayloadV3Schema.transform(upgradePayloadV3).pipe(FinalizeTripPayloadV4Schema);
+
+/**
+ * Reads a queued or received upload: `v: 3` is validated as v3 and upgraded; anything else is held
+ * to v4 (so an unknown version's refusal names the path `v`).
+ */
+export function parseFinalizeUpload(body: unknown): z.ZodSafeParseResult<FinalizeTripPayloadV4> {
+  const v = typeof body === 'object' && body !== null ? (body as { v?: unknown }).v : undefined;
+  return v === 3 ? UpgradedV3Schema.safeParse(body) : FinalizeTripPayloadV4Schema.safeParse(body);
+}
+
+/** A Safety Rating as the server now holds it. */
+const RatingWireSchema = z.object({
+  safetyRating: z.number().min(0).max(100).nullable(),
+  ranked: z.boolean(),
+});
 
 /** What `finalize-trip` returns; the client stores it as the local trip's `result_json`. Idempotent on clientTripId. */
-export const FinalizeTripResponseV3Schema = z.object({
+export const FinalizeTripResponseSchema = z.object({
   tripId: z.uuid(),
   clientTripId: z.uuid(),
-  /** clientTripId of the drive this one was merged into. */
+  /** clientTripId of the drive this upload was merged into. */
   mergedInto: z.uuid().nullable(),
   scored: z.boolean(),
   reason: z.enum(['too_short', 'spoofed', 'implausible']).nullable(),
-  breakdown: DriveBreakdownSchema,
-  net: z.number().int(),
-  streak: z.object({
-    before: z.number().int().nonnegative(),
-    after: z.number().int().nonnegative(),
-    outcome: z.enum(STREAK_OUTCOMES),
-    nextMult: z.number().min(1),
-    atRisk: z.boolean(),
-    freezes: z.number().int().min(0).max(3),
-    freezeEarned: z.boolean(),
-  }),
-  progress: z.object({
-    points: z.number().int(),
-    lifetime: z.number().int().nonnegative(),
-    level: z.number().int().min(1).max(50),
-    levelUp: z.boolean(),
-    safetyRating: z.number().min(0).max(100).nullable(),
-    ranked: z.boolean(),
-  }),
-  /** Newly unlocked achievement ids. */
-  achievements: z.array(z.string()),
-  /** Newly completed weekly challenges. */
+  /** Every event the stored drive keeps (the union's on a merge): the phone drops a DashPal event the server did not keep. */
+  eventIds: z.array(z.uuid()),
+  rating: RatingWireSchema,
+  /** Weekly goals this drive completed. */
   challenges: z.array(z.object({ id: z.string(), title: z.string() })),
-  league: z.object({ tier: z.string(), placed: z.boolean() }),
+  /** Achievements this drive unlocked. */
+  achievements: z.array(z.string()),
 });
+export type FinalizeTripResponse = z.infer<typeof FinalizeTripResponseSchema>;
 
-export type PayloadEventV3 = z.infer<typeof PayloadEventV3Schema>;
-export type DashcamV3 = z.infer<typeof DashcamV3Schema>;
-export type FinalizeTripPayloadV3 = z.infer<typeof FinalizeTripPayloadV3Schema>;
-export type DriveBreakdownWire = z.infer<typeof DriveBreakdownSchema>;
-export type FinalizeTripResponseV3 = z.infer<typeof FinalizeTripResponseV3Schema>;
+// --- trip-actions: dispute one event, or mark a drive as "wasn't driving" ---
+
+/** The report sheet's reasons: `not_driving` routes to the whole-drive action; `camera_wrong` is for a DashPal event. */
+export const DISPUTE_REASONS = ['hazard', 'wrong_limit', 'camera_wrong', 'not_driving'] as const;
+export type DisputeReason = (typeof DISPUTE_REASONS)[number];
+
+export const DisputeActionSchema = z
+  .object({ action: z.literal('dispute'), clientTripId: z.uuid(), eventId: z.uuid(), reason: z.enum(DISPUTE_REASONS) })
+  .strict();
+export const NotDrivingActionSchema = z.object({ action: z.literal('not_driving'), clientTripId: z.uuid() }).strict();
+export const TripActionSchema = z.discriminatedUnion('action', [DisputeActionSchema, NotDrivingActionSchema]);
+export type TripAction = z.infer<typeof TripActionSchema>;
+
+/** What `not_driving` answers: the uses left this month and the rating as now stored. */
+export const NotDrivingResultSchema = z.object({
+  tripId: z.uuid(),
+  clientTripId: z.uuid(),
+  notDrivingLeft: z.number().int().min(0),
+  rating: RatingWireSchema,
+});
+export type NotDrivingResult = z.infer<typeof NotDrivingResultSchema>;
+
+/** What `dispute` answers. */
+export const DisputeResultSchema = z.object({
+  tripId: z.uuid(),
+  eventId: z.uuid(),
+  status: z.enum(['accepted', 'rejected']),
+  rejectReason: z.literal('quota').nullable(),
+  /** Auto-accepts left this week in this reason's quota (hazard + wrong-limit, or camera_wrong alone). */
+  quotaLeft: z.number().int().min(0),
+  /** The drive's clean flag as now stored. */
+  clean: z.boolean(),
+  rating: RatingWireSchema,
+});
+export type DisputeResult = z.infer<typeof DisputeResultSchema>;
