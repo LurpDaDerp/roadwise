@@ -34,7 +34,7 @@ export interface LiveActivityStartDeps {
 function defaultInvoke(): NonNullable<LiveActivityStartDeps['invoke']> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- the app client, only when called for real
   const { supabase } = require('@/data/supabase/client') as typeof import('@/data/supabase/client');
-  return (name, options) => supabase.functions.invoke(name, options);
+  return (name, options) => supabase.functions.invoke(name, { body: options.body as Record<string, unknown> });
 }
 
 /** True when the server sent the push (`{ sent: true }`); false on anything else. Never throws. */
