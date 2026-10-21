@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { CHALLENGE_REWARD_POINTS } from '@scoring';
 import { ScrollView, View } from 'react-native';
 
 import type { MySummary } from '@/data/server/summary';
@@ -73,7 +74,7 @@ export function StatsCard({ stats, window, onAllStats }: { stats: readonly HomeS
           </View>
         ))}
         <Text variant="footnote" tone="subtle">
-          {window === '7d' ? 'Arrows compare with your average week in the last 30 days.' : 'No drives in 7 days, so these show your last 30.'}
+          {window === '7d' ? 'Compared with your average week in the last 30 days.' : 'No drives in 7 days, so these show your last 30.'}
         </Text>
       </Card>
     </View>
@@ -101,6 +102,9 @@ export function RecentDrives({ drives, onOpen, onSeeAll }: { drives: readonly Lo
 
 type Challenge = MySummary['challenges'][number];
 
+/** What each weekly challenge pays (the server's `complete_challenges` pays the same). */
+const REWARD = CHALLENGE_REWARD_POINTS.toLocaleString('en-US');
+
 /** Completed challenges per Freeze (server: `freeze_progress` 0..2, the third grants one). */
 export const CHALLENGES_PER_FREEZE = 3;
 
@@ -115,12 +119,12 @@ export function ChallengesStrip({ challenges, freezeProgress }: { challenges: re
       <View
         style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.xs }}
         accessible
-        accessibilityLabel={`Each challenge is worth 100 points. ${toFreeze} of ${CHALLENGES_PER_FREEZE} toward a Freeze.`}
+        accessibilityLabel={`Each challenge is worth ${REWARD} points. ${toFreeze} of ${CHALLENGES_PER_FREEZE} toward a Freeze.`}
         testID="challenges-freeze"
       >
         <Ionicons name="snow" size={t.size.iconSm} color={t.colors.freeze} />
         <Text variant="footnote" tone="muted">
-          +100 pts each · {toFreeze}/{CHALLENGES_PER_FREEZE} toward a Freeze
+          +{REWARD} pts each · {toFreeze}/{CHALLENGES_PER_FREEZE} toward a Freeze
         </Text>
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: t.space.md, paddingRight: t.space.lg }} style={{ marginHorizontal: -t.space.lg }}>
@@ -156,7 +160,7 @@ export function ChallengesStrip({ challenges, freezeProgress }: { challenges: re
                       {c.title}
                     </Text>
                     <Text variant="footnote" tone={c.completed ? 'success' : 'muted'}>
-                      {c.completed ? 'Done · +100 pts' : '+100 pts'}
+                      {c.completed ? `Done · +${REWARD} pts` : `+${REWARD} pts`}
                     </Text>
                   </View>
                 </View>

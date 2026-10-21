@@ -81,7 +81,7 @@ describe('the full Home', () => {
     expect(screen.getByLabelText('Clean drives, 50 %, Okay, Down, worse vs your 30-day average')).toBeOnTheScreen();
     expect(within(card).getByText('3')).toHaveStyle({ color: tokens.color.light.signal.severe.text });
     expect(within(card).queryByText(/per 100/)).toBeNull();
-    expect(within(card).getByText('Arrows compare with your average week in the last 30 days.')).toBeOnTheScreen();
+    expect(within(card).getByText('Compared with your average week in the last 30 days.')).toBeOnTheScreen();
   });
 
   test('with no drive in 7 days the card shows 30 days without arrows', async () => {
@@ -209,7 +209,7 @@ describe('the action items', () => {
   const card = <Text testID="perm-card">{"Location is off. Drives can't record."}</Text>;
   const weather = <Text testID="weather-slot">Dense fog</Text>;
   const dashpal = <Text testID="dashpal-slot">A new phone was paired</Text>;
-  const fair = { level: 'fair' as const, axis: 'speeding' as const, title: 'Watch your speed', tip: 'Ease off a little over the limit.', also: [] };
+  const fair = { level: 'fair' as const, axis: 'speed' as const, title: 'Watch your speed', tip: 'Ease off a little over the limit.', also: [] };
 
   test('directly under the drive card, in order: weather, streak, permission, DashPal, tip; then stats, and How it works last', async () => {
     await draw(
@@ -349,6 +349,15 @@ describe('final-review fixes', () => {
     const s = summary();
     await draw(<HomeView {...props({ summary: { ...s, progress: { ...s.progress, freeze_progress: 2 } } })} />);
     expect(screen.getByTestId('challenges-freeze')).toHaveTextContent(/2\/3 toward a Freeze/);
+  });
+
+  test('each weekly challenge is worth 200 points, on the strip, each card and aloud', async () => {
+    await draw(<HomeView {...props()} />);
+    expect(screen.getByTestId('challenges-freeze')).toHaveTextContent(/\+200 pts each · 0\/3 toward a Freeze$/);
+    expect(screen.getByTestId('challenges-freeze')).toHaveProp('accessibilityLabel', 'Each challenge is worth 200 points. 0 of 3 toward a Freeze.');
+    expect(within(screen.getByTestId('challenge-c1')).getByText('+200 pts')).toBeOnTheScreen();
+    expect(within(screen.getByTestId('challenge-c2')).getByText('Done · +200 pts')).toBeOnTheScreen();
+    expect(screen.queryByText(/\+100 pts/)).toBeNull();
   });
 
   test('km: the stats card shows the same counts, never per 100 km, and the unranked line converts', async () => {
