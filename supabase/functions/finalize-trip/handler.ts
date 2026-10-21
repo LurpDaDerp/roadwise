@@ -147,7 +147,13 @@ export function buildScoringInput(
   loopRepeat: boolean;
   dashcam: EnvelopeDashcam;
 } {
-  // a refused target never merges, even if a stale engine offered it
+  // a refused target never merges, even if a stale engine offered it.
+  // The union is scored under the current rules, whatever version the target was first scored
+  // under, and the merged drive is stored under SCORING_VERSION, so a later dispute re-scores it by
+  // the rules it was paid by. A target scored before an earn-rate change is re-paid at the new rate
+  // for its own miles; that happens once, at the deploy, for a target that ended within 5 min of
+  // the upload's start, and scoring the union under the target's old rules would instead pay the
+  // new leg's miles at the old rate, a bigger loss to the driver than this gain.
   if (merge && !isRefusedReason(merge.reason)) {
     const events = [...merge.events.map(fromStored), ...keepDashcamEvents(p.events, merge.events).map(fromPayload)];
     const dashcam = dashcamOf(p, merge);

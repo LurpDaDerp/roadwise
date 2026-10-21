@@ -20,6 +20,10 @@
 --   * dispute_context hands the re-score the drive's durationS (the minimum-drive rule reads it) and
 --     scoringVersion (a drive keeps the earning rules it was first scored under).
 --   * Every driver's rating is recomputed.
+--
+-- Deploy order: push this migration BEFORE deploying the trip-actions and finalize-trip functions.
+-- The new trip-actions requires durationS and scoringVersion from dispute_context (every accepted
+-- dispute answers 500 against the older function); the older functions tolerate this migration.
 
 -- the category an event counts toward (scoring `axisOf`)
 create or replace function private.axis_of(p_type text) returns text

@@ -91,7 +91,12 @@ export const DriveContextSchema = z.union([
 ]);
 export type DriveContext = z.infer<typeof DriveContextSchema>;
 
-/** `private.dispute_context`. */
+/**
+ * `private.dispute_context`, as migration 0022 defines it: the re-score input must carry
+ * `durationS` and `scoringVersion` (an older `dispute_context` without them fails this contract, and
+ * every accepted dispute answers 500). Push 0022 before deploying trip-actions; the other order is
+ * safe, as the older function strips keys it does not know.
+ */
 export const DisputeContextSchema = z.object({
   tripId: Uuid,
   clientTripId: Uuid,
