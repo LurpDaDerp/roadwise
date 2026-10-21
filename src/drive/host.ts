@@ -1185,11 +1185,16 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
-  /** A live `row` event. iOS: in journal order (a gap is filled from the journal first, a repeat dropped). */
+  /**
+   * A live `row` event. iOS: a journal row (with `seq`) belongs only to the native drive the host
+   * holds, in journal order (a gap is filled from the journal first, a repeat dropped); with none
+   * held it is dropped, never added to another open trip (its journal is read when it is taken in).
+   */
   async function onLiveRow(row: SeqRow): Promise<void> {
     const seq = row.seq;
     const live = liveDrive;
-    if (ios && typeof seq === 'number' && live !== null && engine.snapshot().status === 'recording') {
+    if (ios && typeof seq === 'number') {
+      if (live === null || engine.snapshot().status !== 'recording') return;
       if (seq <= live.lastSeq) return;
       if (seq > live.lastSeq + 1) {
         await drainJournal(live.driveId, live.lastSeq, { capped: false });

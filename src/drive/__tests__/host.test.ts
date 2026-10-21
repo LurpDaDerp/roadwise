@@ -696,6 +696,29 @@ describe('iOS: the drive detector', () => {
     await h.host.stop({ endOpenTrip: false });
   });
 
+  test('journal rows go only to the native drive they belong to: with a recovered drive open (no journal of its own), a native drive’s rows are never added to it', async () => {
+    const session = createSession({ clientTripId: uuid(9), startedAt: T0, origin: 'manual' });
+    const own = rows(30, { speedMps: 15 });
+    for (const r of own) appendRow(session, r, { unsafe: false, limitUsable: false });
+    session.pending = [];
+    await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0, tz: TZ, status: 'recording' }, T0);
+    await createSamplesRepo(db).appendMany(uuid(9), own.map((r) => ({ ts: r.ts, row: r })));
+    const h = buildIos();
+    await h.host.boot({ adopt: { session, detectors: createDetectors(() => 'x') } });
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(9) });
+    const before = h.host.snapshot().lastRowTs;
+    // Native confirms a drive of its own meanwhile: refused (one is open), and its rows stay out.
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(40, { t0: T0 + 60_000, speedMps: 15 }));
+    h.detect.emitRows(journalRows(rows(5, { t0: T0 + 100_000, speedMps: 15 })));
+    await h.host.settled();
+    expect(h.host.snapshot()).toMatchObject({ clientTripId: uuid(9), lastRowTs: before });
+    expect(await createSamplesRepo(db).count(uuid(9))).toBe(30);
+    expect(h.errors).toContain('driveStarted: a native drive started while another is open');
+    await h.host.stop({ endOpenTrip: false });
+  });
+
   test('native stops on its own: the drive ends where the car last moved, is stored, and its journal is deleted; no stopCapture', async () => {
     const h = buildIos();
     await h.host.boot();
