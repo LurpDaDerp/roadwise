@@ -85,14 +85,15 @@ test('an on-foot report at 40 mph is cancelled by driving; one at a stop ends th
   expect(w.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 5000, cut: true });
 });
 
-test('alerts: one chime per speeding episode, the pickup and the 15-s handling alert, instant events as they close', async () => {
+test('alerts: one shown speeding alert per episode (its repeats are sounded only), the pickup and the 15-s handling alert, instant events as they close', async () => {
   const h = harness();
   await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
   // Forward extremes on the first rows: the axis is learned, so the 47 → 30 mph step is not a GPS-only brake.
   await feed(h, after(10, { speed: mph(47), aLonMax: 0.02, aLonMin: -0.02 }));
   await feed(h, seq([10, (i) => ({ speed: mph(30), ts: T0 + 41_000 + i * 1000 })]));
-  expect(h.alerts.filter((a) => a.type === 'speeding')).toHaveLength(1);
-  expect(h.alerts[0]).toMatchObject({ type: 'speeding', tier: 'moderate' });
+  expect(h.alerts.filter((a) => a.type === 'speeding' && a.repeat !== true)).toHaveLength(1);
+  expect(h.alerts[0]).toMatchObject({ type: 'speeding', tier: 'moderate', at: T0 + 31_000 });
+  expect(h.alerts[0]!.repeat).toBeUndefined();
   expect(h.snapshots.some((s) => s.speedingTier === 'moderate')).toBe(true);
   const phoneRows = seq([20, (i) => ({ speed: mph(30), handlingScore: 0.9, gravityStability: 0.5, ts: T0 + 51_000 + i * 1000 })]);
   await feed(h, phoneRows);
@@ -103,7 +104,7 @@ test('alerts: one chime per speeding episode, the pickup and the 15-s handling a
   // A confirmed brake is told on the row that releases it.
   await feed(h, seq([5, (i) => ({ speed: mph(35), ts: T0 + 74_000 + i * 1000 })]));
   await feed(h, [row({ speed: mph(25), aLonMin: -0.35, ts: T0 + 79_000 }), ...seq([4, (i) => ({ speed: mph(25), ts: T0 + 80_000 + i * 1000 })])]);
-  expect(h.alerts.at(-1)).toMatchObject({ type: 'hard_brake', tier: 'minor' });
+  expect(h.alerts.at(-1)).toMatchObject({ type: 'hard_brake', tier: 'minor', points: 8 });
   expect(h.engine.snapshot().lastAlert?.type).toBe('hard_brake');
   await h.engine.dispatch({ type: 'end', ts: T0 + 90_000 });
   expect(h.finalized[0]!.events.map((e) => e.type).sort()).toEqual(['hard_brake', 'phone_handling', 'phone_pickup', 'speeding']);
@@ -307,5 +308,110 @@ describe('the driving screen contract', () => {
     await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
     await feed(h, after(2, { speed: mph(50) }));
     expect(h.engine.snapshot()).toMatchObject({ limitMph: 35, speedingRatio: null, speedingOver: false });
+  });
+});
+
+describe('speeding alerts and deductions', () => {
+  /** After the warm-up: row i at T0 + 31 s + i. */
+  // Forward extremes on every row: the axis is learned, so a sharp slowdown is never a GPS-only brake.
+  const over = (n: number, speedMph: number, from = 0) =>
+    seq([n, (i) => ({ speed: mph(speedMph), aLonMax: 0.02, aLonMin: -0.02, ts: T0 + 31_000 + (from + i) * 1000 })]);
+  async function started(): Promise<Harness> {
+    const h = harness();
+    await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+    return h;
+  }
+  const rowOf = (at: number) => (at - T0 - 31_000) / 1000;
+
+  test('the first over row alerts at once; repeats follow while over, the grace end deducts, later repeats deduct what accrued', async () => {
+    const h = await started();
+    await feed(h, over(20, 47));
+    const speeding = h.alerts.filter((a) => a.type === 'speeding');
+    // 47 on a 35 is 8 past the line: repeats every 8 / 2.6 × 0.85^(elapsed / 10) s (about 3 s here).
+    expect(speeding.map((a) => [rowOf(a.at), a.repeat === true, a.points ?? 0])).toEqual([
+      [0, false, 0],
+      [3, true, 0],
+      [5, true, 1],
+      [8, true, 4],
+      [11, true, 4],
+      [14, true, 4],
+      [17, true, 5],
+    ]);
+    // The repeats never touch lastAlert (no banner); the deductions are the HUD's lastDeduction.
+    expect(h.engine.snapshot().lastAlert).toMatchObject({ type: 'speeding', at: T0 + 31_000 });
+    expect(h.engine.snapshot().lastDeduction).toEqual({ key: `${speeding[0]!.id}:5`, points: 5, at: T0 + 31_000 + 17_000 });
+    const keys = new Set(h.snapshots.map((s) => s.lastDeduction?.key).filter((k) => k !== undefined));
+    expect(keys.size).toBe(5);
+  });
+
+  test('back under the line within the grace: one alert, nothing deducted', async () => {
+    const h = await started();
+    await feed(h, [...over(5, 45), ...over(10, 30, 5)]);
+    expect(h.alerts.filter((a) => a.type === 'speeding' && a.repeat !== true)).toHaveLength(1);
+    expect(h.alerts.some((a) => a.points !== undefined)).toBe(false);
+    expect(h.engine.snapshot().lastDeduction).toBeNull();
+  });
+
+  test('hovering at the line is one episode: no new alert, repeats only on rows over the line; 5 s under the buffer ends it', async () => {
+    const h = await started();
+    // 2 over, 10 hovering at 37 (L + T − 2), 2 over: one alert; nothing sounds while under.
+    await feed(h, [...over(2, 41), ...over(10, 37, 2), ...over(2, 41, 12)]);
+    const shown = () => h.alerts.filter((a) => a.type === 'speeding' && a.repeat !== true);
+    expect(shown()).toHaveLength(1);
+    const sounded = h.alerts.filter((a) => a.type === 'speeding').map((a) => rowOf(a.at));
+    // 41 is 2 past the line: 8 / 1.4 s = 5.7 s; the row back over at 12 is due at once.
+    expect(sounded).toEqual([0, 12]);
+    expect(h.snapshots.at(-1)!.speedingOver).toBe(true);
+    // 5 rows under 37 end the episode; the next over row is a new alert.
+    await feed(h, [...over(5, 30, 14), ...over(1, 41, 19)]);
+    expect(shown()).toHaveLength(2);
+  });
+
+  test('the cadence quickens the further over and the longer it lasts, never under 2 s', async () => {
+    const h = await started();
+    await feed(h, over(60, 70));
+    const at = h.alerts.filter((a) => a.type === 'speeding').map((a) => rowOf(a.at));
+    const gaps = at.slice(1).map((t, i) => t - at[i]!);
+    // 31 past the line: 8 / 7.2 s ≈ 1.1, held at the 2-s floor (the grace end at row 5 sounds at once).
+    expect(gaps.every((g) => g >= 1 && g <= 2)).toBe(true);
+    expect(gaps.filter((g) => g === 1)).toHaveLength(1);
+  });
+
+  test('a speeding repeat with no whole point accrued since the last deduction is the chime', async () => {
+    const h = await started();
+    // 39.6 on a 35: 0.6 past the line: 0.09 a second accrues, under a point between most repeats.
+    await feed(h, over(40, 39.6));
+    const repeats = h.alerts.filter((a) => a.type === 'speeding' && a.repeat === true);
+    expect(repeats.some((a) => a.points === undefined && rowOf(a.at) > 5)).toBe(true);
+    for (const a of repeats) if (a.points !== undefined) expect(a.points).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('deductions from the instant and phone alerts', () => {
+  const handled = { handlingScore: 0.9, gravityStability: 0.5 };
+  const at = (fromS: number, n: number, over: Partial<FeatureRow>) => seq([n, (i) => ({ ...over, ts: T0 + 31_000 + (fromS + i) * 1000 })]);
+
+  // A 65 road: 50 mph is no speeding.
+  const road65 = { limits: { lookup: () => limit(mph(65)), prefetch: () => {} } };
+
+  test('a pickup at 50 mph costs 32 × 2; the handling alert the units at that speed; each with the points-lost cue and a new key', async () => {
+    const h = harness(road65);
+    await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+    await feed(h, [...at(0, 5, { speed: mph(50) }), ...at(5, 30, { speed: mph(50), ...handled }), ...at(35, 3, { speed: mph(50) })]);
+    const phone = h.alerts.filter((a) => a.type.startsWith('phone'));
+    expect(phone.map((a) => [a.type, a.points])).toEqual([
+      ['phone_pickup', 64],
+      ['phone_handling', 16],
+    ]);
+    const keys = h.snapshots.map((s) => s.lastDeduction?.key).filter((k): k is string => k !== undefined);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  test('a pickup stopped in traffic costs 16, with no speed multiplier', async () => {
+    const h = harness(road65);
+    await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+    await feed(h, [...at(0, 5, { speed: mph(50) }), ...at(5, 3, { speed: 0 }), ...at(8, 4, { speed: 0, ...handled }), ...at(12, 3, { speed: 0 })]);
+    expect(h.alerts.find((a) => a.type === 'phone_pickup')).toMatchObject({ points: 16 });
+    expect(h.engine.snapshot().lastDeduction).toMatchObject({ points: 16 });
   });
 });

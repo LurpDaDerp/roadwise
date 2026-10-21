@@ -1136,19 +1136,20 @@ describe("the points-lost cue and a held speeding session", () => {
     expect(count(r.calls, "deactivate")).toBe(2);
   });
 
-  it("a release waits behind the item playing, and an item without a hold has released already", async () => {
+  it("a release waits behind the item playing (that will hold) and frees it after; an item without a hold has released already", async () => {
     const r = rig({ holdPlay: true });
     const player = createAlertPlayer(r.deps);
     const first = player.deliver(decision(1, { voice: undefined, holdSession: true }));
     await flush();
-    // Not held yet (the tone is still playing): nothing to release.
-    await player.release!("speeding");
+    // Asked while the held item's tone still plays: it waits behind it, then frees the session.
+    const released = player.release!("speeding");
+    await flush();
+    expect(count(r.calls, "deactivate")).toBe(0);
     r.release();
     await first;
-    expect(count(r.calls, "deactivate")).toBe(0);
-    const released = player.release!("speeding");
     await released;
     expect(count(r.calls, "deactivate")).toBe(1);
+    expect(r.calls.indexOf("deactivate")).toBeGreaterThan(r.calls.indexOf("haptic:1"));
     // A held session that the next item without a hold released is not released twice.
     const again = player.deliver(decision(1, { voice: undefined, holdSession: true }));
     await flush();

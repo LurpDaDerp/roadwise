@@ -147,13 +147,24 @@ export interface TripSession {
   cut: boolean;
 }
 
-/** An alert the engine raised: the alert layer plays it, the HUD glows for 1.5 s. */
+/**
+ * An alert the engine raised: the alert layer plays it, the HUD glows for 1.5 s (`lastAlert`; a
+ * `repeat` is sounded only). `id` is the episode's, which may never become an event (a speeding
+ * episode that ends within its grace): use it as a key only.
+ */
 export interface AlertEvent {
   id: string;
   type: EventType;
   tier: Tier;
   /** epoch ms, row clock */
   at: number;
+  /**
+   * A speeding repeat while the car stays over the line: sounded, never shown (never `lastAlert`,
+   * so no banner): the chime within the grace, the points-lost cue alone once points come off.
+   */
+  repeat?: true;
+  /** Points came off with this alert (an estimate, `lastDeduction`): the points-lost cue sounds with it. */
+  points?: number;
   /**
    * `switch`: a phone alert raised while a screen switch counts; its voice line is "Back to RoadWise".
    * Local only (never stored or uploaded); level, tone, haptic and the HUD word are unchanged.

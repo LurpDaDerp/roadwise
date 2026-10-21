@@ -9,17 +9,27 @@
 // (`closeAtLastMovement`; a walking end at or before the walk began): a manual end
 // `MANUAL_CUT_AFTER_S` or more after the idle clock's base is cut too (its phone use kept whole), a
 // sooner one ends at the tap.
+//
+// Alerts (`deps.onAlert`; the HUD shows `lastAlert`): speeding as the car first passes the points
+// line, then repeats while the row stays over it (`speedingRepeatS`; sounded only, never
+// `lastAlert`); a hard brake, start or turn and the phone alerts as below. Where points come off
+// (an estimate the HUD shakes on, `lastDeduction`): a hard event and a pickup as they alert (the
+// base cost, phone use at its speed), each later handling alert (the units since the last), a
+// speeding episode as its grace ends and at each later repeat that accrued a point (`speedingCost`);
+// such an alert carries `points`, and the alert layer adds the points-lost cue.
+//
 // A reducer over one explicit state, driven by 1 Hz rows and a few events through a serialised
 // `dispatch`; the only clock is the `ts` on what comes in. Everything the engine wants done —
 // persistence, sound, scoring — goes out through callbacks.
-import { PHONE_MIN_MPH, type EventType, type Tier } from '@scoring';
+import { basePenalty, PHONE_MIN_MPH, speedingChargedS, speedingCost, type DriveEvent, type EventType, type Tier } from '@scoring';
 
+import { speedingRepeatS } from '@/core/alerts/policy';
 import { knownSpeed, limitShownMph, MPS_PER_MPH, ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { MAX_DRIVE_MS } from '@/data/sync/payload';
 
 import type { MotionActivity } from '@drive-sense';
 
-import type { AdoptedTrip, Deduction, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
+import type { AdoptedTrip, AlertEvent, Deduction, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
 import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './displayLimit';
 import { displayFix, displayRow, type DisplaySpeed } from './displaySpeed';
 import { footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS, WALK_STALE_FIX_MS } from './motion';
@@ -34,7 +44,7 @@ import {
   noteWarmup,
   snapshotSession,
 } from './session';
-import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
+import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample, OpenEpisode, SpeedingEpisode } from './types';
 
 /** Speed-limit tiles are prefetched once per this much distance, never per fix. */
 export const PREFETCH_EVERY_M = 1000;
@@ -52,6 +62,39 @@ export const HANDLING_AFTER_PICKUP_MS = 10_000;
 export const SWITCH_REPEAT_ALERT_MS = 60_000;
 /** The compass takes the GPS course only at this speed or faster (5 mph): slower, the course is noise and the last one holds. */
 export const COURSE_MIN_MPS = 5 * MPS_PER_MPH;
+
+/** The speeding episode the alerts follow: its last sound and the points already taken. */
+interface SpeedingAlerts {
+  id: string;
+  /** Row clock of its last sound (the first alert, a repeat or a deduction). */
+  lastSoundAt: number;
+  /** Its grace has ended: points come off from here on. */
+  graceDone: boolean;
+  /** The points already deducted for it, of `speedingSoFar`. */
+  deducted: number;
+}
+
+/** What a speeding episode has cost so far (`speedingCost`, before the repeat, zone and short-drive multipliers); 0 within the grace. */
+const speedingSoFar = (e: SpeedingEpisode): number => (e.confirmed ? speedingCost(speedingChargedS(e.overRows), e.overMphS) : 0);
+
+/** Phone handling units for a use of `usedMs` (the alerts' `lastUseAt − startedAt`): one per 15 s, or part, past the first 15 s. */
+const handlingUnits = (usedMs: number): number => {
+  const extra = usedMs / 1000 + 1 - 15;
+  return extra > 0 ? Math.max(1, Math.ceil(extra / 15)) : 0;
+};
+
+type EstimateEvent = Omit<DriveEvent, 'id' | 'startedAt' | 'durationS'>;
+
+/** An event's base points as an estimate (`basePenalty`): whole, never negative. */
+const pointsOf = (e: EstimateEvent): number => Math.max(0, Math.round(basePenalty({ id: 'estimate', startedAt: 0, durationS: 0, ...e })));
+
+/** The open phone episode's speeds, as the phone speed multiplier reads them. */
+const phoneMeasured = (p: OpenEpisode): NonNullable<DriveEvent['measured']> => {
+  const m: NonNullable<DriveEvent['measured']> = {};
+  if (typeof p.maxSpeedMph === 'number') m.maxSpeedMph = p.maxSpeedMph;
+  if (typeof p.speedMph === 'number') m.speedMph = p.speedMph;
+  return m;
+};
 
 interface Seen {
   row: FeatureRow;
@@ -81,10 +124,15 @@ export function createEngine(deps: EngineDeps): Engine {
   let lastDeduction: Deduction | null = null;
   /** The last GPS course taken (`COURSE_MIN_MPS`), held until the next. */
   let course: number | null = null;
-  /** Episodes already alerted: one chime per speeding episode, one pickup and one handling alert per phone episode. */
-  let chimed: string | null = null;
+  /** The speeding episode the alerts follow (`speedingAlertsOn`), or null. */
+  let speeding: SpeedingAlerts | null = null;
+  /** Episodes already alerted: one pickup and one handling alert per phone episode. */
   let pickupAlerted: string | null = null;
   let handlingAlerted: string | null = null;
+  /** The current phone episode's handling units already deducted. */
+  let handlingDeducted = 0;
+  /** Deductions so far this drive: each one's key is unique. */
+  let deductions = 0;
   /** Row clock of the current phone episode's pickup alert, and of its latest phone alert. */
   let pickupAt = 0;
   let lastPhoneAlertAt = 0;
@@ -166,22 +214,74 @@ export function createEngine(deps: EngineDeps): Engine {
     lastAlert = null;
     lastDeduction = null;
     course = null;
-    chimed = null;
+    speeding = null;
     pickupAlerted = null;
     handlingAlerted = null;
+    handlingDeducted = 0;
+    deductions = 0;
     pickupAt = 0;
     lastPhoneAlertAt = 0;
     touch();
   }
 
-  function alert(id: string, type: EventType, tier: Tier, at: number, words?: 'switch'): void {
-    lastAlert = words === undefined ? { id, type, tier, at } : { id, type, tier, at, words };
+  /** An alert the HUD shows (`lastAlert`) and the alert layer plays; `points` it cost, if any. */
+  function alert(id: string, type: EventType, tier: Tier, at: number, words?: 'switch', points = 0): void {
+    const event: AlertEvent = { id, type, tier, at };
+    if (words !== undefined) event.words = words;
+    if (points > 0) event.points = points;
+    lastAlert = event;
     touch();
+    tell(event);
+  }
+
+  function tell(event: AlertEvent): void {
     try {
-      deps.onAlert(lastAlert);
+      deps.onAlert(event);
     } catch (err) {
       deps.onError?.(err);
     }
+  }
+
+  /** Points came off on the row at `at` (`lastDeduction`); returns them, or 0 for less than a point. */
+  function deduct(id: string, points: number, at: number): number {
+    if (!(points >= 1)) return 0;
+    deductions += 1;
+    lastDeduction = { key: `${id}:${deductions}`, points, at };
+    touch();
+    return points;
+  }
+
+  /**
+   * Speeding: the alert on the episode's first over row (`lastAlert`); then, while the row stays
+   * over the line, a repeat every `speedingRepeatS` (sounded only): the chime within the grace, the
+   * points-lost cue with the points accrued since the last deduction after it (the row the grace
+   * ends on deducts at once). A repeat past the grace that accrued no whole point is the chime.
+   */
+  function speedingAlertsOn(row: FeatureRow, det: DetectorSuite): void {
+    const ep = det.speedingEpisode();
+    if (ep === null) {
+      speeding = null;
+      return;
+    }
+    const open = det.openSpeeding();
+    if (speeding === null || speeding.id !== ep.id) {
+      // A new episode (or one a rebuilt drive was already in: its cost so far is not deducted again).
+      speeding = { id: ep.id, lastSoundAt: row.ts, graceDone: ep.confirmed, deducted: speedingSoFar(ep) };
+      if (ep.over && open !== null) alert(ep.id, 'speeding', open.tier, row.ts);
+      return;
+    }
+    if (!ep.over || open === null) return;
+    const graceEnds = ep.confirmed && !speeding.graceDone;
+    const overMph = det.speedingNow()?.overMph ?? 0;
+    const due = row.ts - speeding.lastSoundAt >= speedingRepeatS(overMph, (row.ts - ep.startedAt) / 1000) * 1000;
+    if (!graceEnds && !due) return;
+    speeding.graceDone = speeding.graceDone || ep.confirmed;
+    speeding.lastSoundAt = row.ts;
+    const points = speeding.graceDone ? deduct(ep.id, Math.round(speedingSoFar(ep) - speeding.deducted), row.ts) : 0;
+    speeding.deducted += points;
+    const repeat: AlertEvent = { id: ep.id, type: 'speeding', tier: open.tier, at: row.ts, repeat: true };
+    if (points > 0) repeat.points = points;
+    tell(repeat);
   }
 
   // --- recording --------------------------------------------------------------------------------
@@ -222,36 +322,44 @@ export function createEngine(deps: EngineDeps): Engine {
       // The instant events are told as they close (the row after the peak). Speeding and phone
       // episodes were already told while open, below.
       if (e.type === 'hard_brake' || e.type === 'hard_accel' || e.type === 'hard_corner') {
-        alert(e.id, e.type, e.tier, row.ts);
+        alert(e.id, e.type, e.tier, row.ts, undefined, deduct(e.id, pointsOf({ type: e.type, tier: e.tier }), row.ts));
       }
     }
-    const speeding = det.openSpeeding();
-    if (speeding !== null && speeding.confirmed && chimed !== speeding.id) {
-      chimed = speeding.id;
-      alert(speeding.id, 'speeding', speeding.tier, row.ts);
-    }
+    speedingAlertsOn(row, det);
     // Phone: the pickup alert once per episode ("Back to RoadWise" while a switch counts); the
     // handling alert once its use has lasted 15 s and 10 s have passed since the pickup alert; while
     // a counted switch goes on, the handling alert again every 60 s. Never during an iPhone hold.
+    // The pickup deducts its price at the episode's speed; each handling alert the units since the last.
     const phone = det.openPhone();
     if (phone !== null && phone.confirmed) {
       const words = phone.phase === 'switching' ? 'switch' : undefined;
+      const measured = phoneMeasured(phone);
+      const handlingPoints = (used: number): number => {
+        const units = handlingUnits(used) - handlingDeducted;
+        if (units <= 0) return 0;
+        const points = deduct(phone.id, pointsOf({ type: 'phone_handling', tier: 'moderate', units, measured }), row.ts);
+        if (points > 0) handlingDeducted += units;
+        return points;
+      };
       if (pickupAlerted !== phone.id) {
         pickupAlerted = phone.id;
+        handlingDeducted = 0;
         pickupAt = row.ts;
         lastPhoneAlertAt = row.ts;
-        alert(phone.id, 'phone_pickup', 'severe', row.ts, words);
+        const pickup: EstimateEvent = { type: 'phone_pickup', tier: 'severe', measured };
+        if (phone.stoppedInTraffic === true) pickup.stoppedInTraffic = true;
+        alert(phone.id, 'phone_pickup', 'severe', row.ts, words, deduct(phone.id, pointsOf(pickup), row.ts));
       } else if (phone.phase !== 'hold') {
         const used = (phone.lastUseAt ?? row.ts) - phone.startedAt;
         if (handlingAlerted !== phone.id) {
           if (used >= HANDLING_ALERT_MS && row.ts - pickupAt >= HANDLING_AFTER_PICKUP_MS) {
             handlingAlerted = phone.id;
             lastPhoneAlertAt = row.ts;
-            alert(phone.id, 'phone_handling', 'moderate', row.ts, words);
+            alert(phone.id, 'phone_handling', 'moderate', row.ts, words, handlingPoints(used));
           }
         } else if (phone.phase === 'switching' && row.ts - lastPhoneAlertAt >= SWITCH_REPEAT_ALERT_MS) {
           lastPhoneAlertAt = row.ts;
-          alert(phone.id, 'phone_handling', 'moderate', row.ts, 'switch');
+          alert(phone.id, 'phone_handling', 'moderate', row.ts, 'switch', handlingPoints(used));
         }
       }
     }

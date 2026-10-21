@@ -1,6 +1,9 @@
-// What each v3 event sounds like (product spec v3 "Driving screen"): a distinct tone per category,
-// an optional short voice line, and a haptic. Speeding gets the soft chime once per episode (the
-// halo carries the tier); harsh driving the warning tone; a phone pickup the urgent one.
+// What each v3 event sounds like (product spec "Driving screen"): a distinct tone per category, an
+// optional short voice line, and a haptic. Speeding gets the soft chime as the car passes the points
+// line and again while it stays over (`machine.ts`; the halo carries how far); harsh driving the
+// warning tone; a phone pickup the urgent one. An alert that cost points adds the points-lost cue
+// after its tone; a speeding repeat past the grace is that cue alone. A speeding sound keeps the
+// audio session (and the ducking) while the car stays over: the host releases it once it is not.
 // The two DashPal types are never raised by the phone's engine (the dashcam alerts on its own and
 // through `src/dashcam`); their entries keep the maps exhaustive and name their level and words.
 import type { EventType, Tier } from '@scoring';
@@ -40,6 +43,23 @@ export const ALERT_INTENSITY: Readonly<Record<AlertLevel, HapticIntensity>> = { 
 /** How long the HUD shows an alert's banner (and holds its halo burst colour), ms. */
 export const ALERT_GLOW_MS = 1500;
 
+/** The speeding repeat interval's bounds, seconds. */
+export const SPEEDING_REPEAT_MAX_S = 8;
+export const SPEEDING_REPEAT_MIN_S = 2;
+
+/**
+ * Seconds from one speeding sound to the next while the car stays over the points line:
+ * `clamp(8 / (1 + over / 5) × 0.85^(elapsed / 10), 2, 8)`, `over` the mph past the line now and
+ * `elapsed` the seconds since the episode's first alert. 8 s just over the line, faster the further
+ * over and the longer it lasts, never under 2 s. A reading that is not a finite number counts as 0.
+ */
+export function speedingRepeatS(overMph: number, elapsedS: number): number {
+  const over = Number.isFinite(overMph) ? Math.max(0, overMph) : 0;
+  const elapsed = Number.isFinite(elapsedS) ? Math.max(0, elapsedS) : 0;
+  const s = (SPEEDING_REPEAT_MAX_S / (1 + over / 5)) * 0.85 ** (elapsed / 10);
+  return Math.min(SPEEDING_REPEAT_MAX_S, Math.max(SPEEDING_REPEAT_MIN_S, s));
+}
+
 export function decisionFor(alert: AlertEvent, opts: { voiceEnabled: boolean }): AlertDecision {
   const level = ALERT_LEVEL[alert.type];
   const voice = opts.voiceEnabled ? (alert.words === 'switch' ? SWITCH_VOICE : ALERT_VOICE[alert.type]) : null;
@@ -51,6 +71,14 @@ export function decisionFor(alert: AlertEvent, opts: { voiceEnabled: boolean }):
     intensity: severeBoost(level, alert.tier),
   };
   if (voice !== null) decision.voice = voice;
+  const lost = alert.points !== undefined && alert.points > 0;
+  if (alert.type === 'speeding') {
+    decision.holdSession = true;
+    if (alert.repeat === true && lost) decision.tone = 'points_lost';
+    else if (alert.repeat !== true && lost) decision.cue = 'points_lost';
+  } else if (lost) {
+    decision.cue = 'points_lost';
+  }
   return decision;
 }
 

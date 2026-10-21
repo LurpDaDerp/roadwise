@@ -38,15 +38,20 @@ function fakeLimits(limitMps: number | null = 35 * 0.44704): SpeedLimitClient {
   } as unknown as SpeedLimitClient;
 }
 
-function fakePlayer(): AlertPlayer & { delivered: AlertDecision[] } {
+function fakePlayer(): AlertPlayer & { delivered: AlertDecision[]; releases: string[] } {
   const delivered: AlertDecision[] = [];
+  const releases: string[] = [];
   return {
     delivered,
+    releases,
     deliver: async (d) => {
       delivered.push(d);
     },
     stopCurrent: async () => {},
     announce: async () => {},
+    release: async (kind) => {
+      releases.push(kind);
+    },
   };
 }
 
@@ -896,19 +901,32 @@ describe('the drive end stopCapture hands the reminder', () => {
   });
 });
 
-test('alerts go to the player as decisions (one speeding chime); a hands-free call suppresses phone events', async () => {
+test('alerts go to the player as decisions (the speeding chime, its repeats and the points-lost cue past the grace); a hands-free call suppresses phone events', async () => {
   const h = build();
   await h.host.boot();
   await h.host.start();
   await feed(h, rows(40, { speedMps: 15 }));
   await feed(h, rows(10, { speedMps: 20, t0: T0 + 40_000 })); // 45 mph on a 35: moderate
+  // While over the line, only the newest speeding sound may still play.
+  expect(h.player.delivered.at(-1)!.stillWanted!()).toBe(true);
+  expect(h.player.delivered[0]!.stillWanted!()).toBe(false);
+  expect(h.player.releases).toEqual([]);
   await feed(h, rows(10, { speedMps: 15, t0: T0 + 50_000 }));
-  expect(h.player.delivered.map((d) => d.kind)).toEqual(['speeding']);
+  const speeding = h.player.delivered;
+  expect(speeding.every((d) => d.kind === 'speeding' && d.holdSession === true && d.stillWanted !== undefined)).toBe(true);
+  // The chime as the car passes the line; the grace ends on the 6th over row with the cue alone.
+  expect(speeding[0]!.tone).toBeUndefined();
+  expect(speeding.some((d) => d.tone === 'points_lost')).toBe(true);
+  // Only the newest speeding sound may still play, and only while the car is over the line.
+  expect(speeding.map((d) => d.stillWanted!())).toEqual(speeding.map(() => false));
+  expect(h.player.releases).toEqual(['speeding']);
   expect(h.host.snapshot().lastAlert).toMatchObject({ type: 'speeding', tier: 'moderate' });
+  expect(h.host.snapshot().lastDeduction).toMatchObject({ points: expect.any(Number) });
+  const sounded = h.player.delivered.length;
   h.source.emit('call', { active: true, ts: clock });
   await feed(h, rows(10, { speedMps: 15, t0: T0 + 60_000, over: () => ({ handlingScore: 0.9, gravityStability: 0.5 }) }));
   await feed(h, rows(3, { speedMps: 15, t0: T0 + 70_000 }));
-  expect(h.player.delivered.map((d) => d.kind)).toEqual(['speeding']);
+  expect(h.player.delivered).toHaveLength(sounded);
   expect(h.host.snapshot().callActive).toBe(true);
   await h.host.stop({ endOpenTrip: true });
   expect(await createEventsRepo(db).listByTrip(uuid(1))).toHaveLength(1);
@@ -1267,7 +1285,8 @@ describe('the DashPal hooks (plan §7.7)', () => {
     expect(dc.log[0]).toBe(`row:true:${uuid(1)}:false`);
     dc.setContinuous(true);
     await feed(h, rows(10, { speedMps: 22, t0: T0 + 40_000 }));
-    expect(h.player.delivered.map((d) => [d.kind, d.silent ?? false])).toEqual([['speeding', true]]);
+    expect(h.player.delivered.length).toBeGreaterThan(1);
+    expect(h.player.delivered.every((d) => d.kind === 'speeding' && d.silent === true)).toBe(true);
     // The stopped estimate asks whether this is a DashPal drive so far.
     await feed(h, rows(5, { speedMps: 0, t0: T0 + 50_000 }));
     expect(dc.log).toContain(`estimate:${uuid(1)}`);
@@ -1302,7 +1321,7 @@ describe('the DashPal hooks (plan §7.7)', () => {
     await feed(h, rows(5, { speedMps: 0, t0: T0 + 50_000 }));
     await h.host.end();
     expect((await createTripsRepo(db).get(uuid(1)))?.status).toBe('pending');
-    expect(h.player.delivered.map((d) => d.kind)).toEqual(['speeding']);
+    expect(new Set(h.player.delivered.map((d) => d.kind))).toEqual(new Set(['speeding']));
     expect(h.errors.some((e) => e.includes('boom'))).toBe(true);
   });
 });

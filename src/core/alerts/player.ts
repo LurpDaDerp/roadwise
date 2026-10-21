@@ -150,8 +150,9 @@ export interface AlertPlayer {
   feedback?(feedback: AlertFeedback): Promise<void>;
   /**
    * Release the audio session a `holdSession` decision of `kind` left held (a speeding alert's
-   * repeats), through the queue: nothing playing is cut, and a session held by another kind, or
-   * already released, is left alone. Optional like `feedback`; the host calls it only when present.
+   * repeats), through the queue, so it also covers one playing or queued now: nothing is cut, and a
+   * session held by another kind, or already released, is left alone. Optional like `feedback`; the
+   * host calls it only when present.
    */
   release?(kind: AlertKind): Promise<void>;
 }
@@ -487,7 +488,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
     },
 
     release(kind) {
-      if (heldBy !== kind) return Promise.resolve();
+      // Through the queue, so an item of `kind` playing or queued now (that will hold) is released too.
       return enqueue(async () => {
         if (heldBy === kind) await releaseSession();
       });

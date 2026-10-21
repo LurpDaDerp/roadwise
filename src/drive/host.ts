@@ -283,6 +283,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let startTripPending = false;
   let finalizedPending = false;
   let prevStatus: EngineStatus = 'idle';
+  /** The last state's `speedingOver`: a speeding alert's held session is released when it turns false. */
+  let prevSpeedingOver = false;
+  /** Bumped by every speeding sound: only the newest one queued may still play. */
+  let speedingSounds = 0;
   let subscriptions: (() => void)[] = [];
   const idleWaiters = new Set<() => void>();
   const listeners = new Set<(s: DriveState) => void>();
@@ -358,6 +362,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     ctx: () => detectorContext(callActive, phoneSwitch, platform),
     onAlert(alert: AlertEvent) {
       const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
+      if (alert.type === 'speeding') {
+        // Speeding sounds never queue up: a newer one, or the car back under the line, drops one
+        // that has not started (its held session is released once the row is not over the line).
+        speedingSounds += 1;
+        const mine = speedingSounds;
+        decision.stillWanted = () => mine === speedingSounds && engine.snapshot().speedingOver;
+      }
       // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.
       if (dashcamAlertActive()) decision.silent = true;
       player.deliver(decision).catch((e: unknown) => report(e, 'player'));
@@ -429,10 +440,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     } catch (e) {
       report(e, 'dashcam');
     }
-    const bd = scoreDrive(
-      { miles, safeMiles: Math.min(miles, metersToMiles(s.safeDistanceM)), events: s.events.map(({ measured: _m, ...e }) => e), dashcam: dashcamOn },
-      pointsCtx
-    );
+    // The events keep what they measured (speeding's overMphS, phone use's speeds), as the server reads them.
+    const durationS = s.lastRowTs === null ? 0 : Math.max(0, (s.lastRowTs + 1000 - s.startedAt) / 1000);
+    const bd = scoreDrive({ miles, safeMiles: Math.min(miles, metersToMiles(s.safeDistanceM)), events: s.events, dashcam: dashcamOn, durationS }, pointsCtx);
     return bd.scored ? bd.net : 0;
   }
 
@@ -493,6 +503,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
     updatePoints(s);
     display(s);
+    // The car is back under the speeding line (or the drive ended): its alert's held session goes.
+    if (prevSpeedingOver && !s.speedingOver) player.release?.('speeding').catch((e: unknown) => report(e, 'player'));
+    prevSpeedingOver = s.speedingOver;
     if (closed) {
       limits.resetTrip();
       startTripPending = false;

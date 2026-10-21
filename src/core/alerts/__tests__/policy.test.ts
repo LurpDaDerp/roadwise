@@ -2,14 +2,44 @@ import { ALERT_GLOW_MS, decisionFor } from '@/core/alerts/policy';
 
 const at = 1_700_000_000_000;
 
-test('speeding is the soft chime (level 1), no voice, one light pulse', () => {
+test('speeding is the soft chime (level 1), no voice, one light pulse, holding the session while the car stays over', () => {
   expect(decisionFor({ id: 'e1', type: 'speeding', tier: 'moderate', at }, { voiceEnabled: true })).toEqual({
     id: 'e1',
     level: 1,
     kind: 'speeding',
     ts: at,
     intensity: 1,
+    holdSession: true,
   });
+});
+
+test('a speeding repeat is the chime within the grace, and the points-lost cue alone once points come off', () => {
+  expect(decisionFor({ id: 'e1', type: 'speeding', tier: 'minor', at, repeat: true }, { voiceEnabled: true })).toEqual({
+    id: 'e1',
+    level: 1,
+    kind: 'speeding',
+    ts: at,
+    intensity: 1,
+    holdSession: true,
+  });
+  expect(decisionFor({ id: 'e1', type: 'speeding', tier: 'minor', at, repeat: true, points: 4 }, { voiceEnabled: true })).toEqual({
+    id: 'e1',
+    level: 1,
+    kind: 'speeding',
+    ts: at,
+    intensity: 1,
+    holdSession: true,
+    tone: 'points_lost',
+  });
+});
+
+test('an alert that cost points plays the points-lost cue after its own tone; none without points', () => {
+  expect(decisionFor({ id: 'e2', type: 'hard_brake', tier: 'minor', at, points: 8 }, { voiceEnabled: true })).toMatchObject({ level: 2, cue: 'points_lost', voice: 'Hard brake' });
+  expect(decisionFor({ id: 'e3', type: 'phone_pickup', tier: 'severe', at, points: 64 }, { voiceEnabled: false })).toMatchObject({ level: 3, cue: 'points_lost' });
+  expect(decisionFor({ id: 'e2', type: 'hard_brake', tier: 'minor', at }, { voiceEnabled: true }).cue).toBeUndefined();
+  expect(decisionFor({ id: 'e2', type: 'hard_brake', tier: 'minor', at, points: 0 }, { voiceEnabled: true }).cue).toBeUndefined();
+  // Only speeding holds the session.
+  expect(decisionFor({ id: 'e2', type: 'hard_brake', tier: 'minor', at, points: 8 }, { voiceEnabled: true }).holdSession).toBeUndefined();
 });
 
 test('harsh driving is the warning tone with a short voice line only when voice is on; severe vibrates harder', () => {
