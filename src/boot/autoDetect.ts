@@ -110,13 +110,10 @@ export async function autoDetectSync(opts: { onboarded?: boolean } = {}): Promis
   }
 }
 
-/** `DriveDetect.wipe()` (native drive-sense): discards every journal, the last end, the parked region and a rest. */
-type WipeableDetect = DriveDetectApi & { wipe?: () => Promise<void> };
-
 export interface AutoDetectOffOptions {
   /** The detector to disarm (the launch's, before the runtime is registered); default the runtime's. */
   detect?: DriveDetectApi | null;
-  /** Also wipe native's drive state (the device wipes). A build without `wipe` (Android, an older native) skips it. */
+  /** Also wipe native's drive state (`DriveDetect.wipe()`: every journal, the last end, the parked region, a rest). */
   wipe?: boolean;
 }
 
@@ -128,7 +125,8 @@ export async function autoDetectOff(opts: AutoDetectOffOptions = {}): Promise<vo
   if (opts.wipe) await wipeNative(detect);
 }
 
-async function wipeNative(detect: WipeableDetect): Promise<void> {
+async function wipeNative(detect: DriveDetectApi): Promise<void> {
+  // A detector without the method (an older native build) has nothing more to wipe.
   if (typeof detect.wipe !== 'function') return;
   try {
     await detect.wipe();

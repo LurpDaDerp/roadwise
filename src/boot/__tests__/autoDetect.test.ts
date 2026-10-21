@@ -122,6 +122,7 @@ test('both wipes disarm automatic drives (iPhone) and wipe native’s drive stat
   }
   // A native build without `wipe`, or one that fails it: the wipe still runs to the end.
   const old = rig({ onboarded: true });
+  Object.assign(old, { wipe: undefined });
   await autoDetectSync();
   await wipeDevice(db);
   expect(old.snapshot.armed).toBe(false);
