@@ -256,13 +256,14 @@ describe('the drive detector and the opportunities (tuning)', () => {
 
   test('the last drives with their counters (or the estimate) and per-category loads', async () => {
     await seedTrips(db, [
-      { client_trip_id: 'd-1', started_at: T, tz: 'UTC', status: 'pending', miles: 10, duration_s: 1200, slowdowns: 12, speedups: 10, turns: 8, limit_s: 900, moving_s: 1100 },
+      { client_trip_id: 'd-1', started_at: T, tz: 'UTC', status: 'pending', miles: 10, duration_s: 1200, slowdowns: 12, speedups: 10, turns: 8, limit_s: 900, moving_s: 1100, phone_s: 1000 },
       { client_trip_id: 'd-2', started_at: T - 86_400_000, tz: 'UTC', status: 'scored', miles: 5, duration_s: 600 },
     ]);
     await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={createFakeDriveSense()} detect={null} />));
     await waitFor(() => expect(screen.getAllByTestId('diag-loads')).toHaveLength(2));
-    expect(screen.getAllByTestId('diag-loads')[0]).toHaveTextContent(/12 slowdowns · 10 speed-ups · 8 turns · 900 s under a limit of 1100 s moving/);
+    expect(screen.getAllByTestId('diag-loads')[0]).toHaveTextContent(/12 slowdowns · 10 speed-ups · 8 turns · 900 s under a limit · 1000 s watched for the phone, of 1100 s moving/);
     expect(screen.getAllByTestId('diag-loads')[0]).toHaveTextContent('braking 0.00 / 12 (0)', { exact: false });
+    expect(screen.getAllByTestId('diag-loads')[0]).toHaveTextContent('phone 0.00 / 1000 (0)', { exact: false });
     expect(screen.getAllByTestId('diag-loads')[1]).toHaveTextContent('(estimated)', { exact: false });
   });
 });

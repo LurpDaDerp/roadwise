@@ -109,7 +109,7 @@ export const diagCopy = {
   opportunities: 'Last drives: opportunities and loads',
   noDrives: 'No finished drives yet.',
   exposure: (e: Exposure, estimated: boolean) =>
-    `${e.slowdowns} slowdowns · ${e.speedups} speed-ups · ${e.turns} turns · ${e.limitS} s under a limit of ${e.movingS} s moving${estimated ? ' (estimated)' : ''}`,
+    `${e.slowdowns} slowdowns · ${e.speedups} speed-ups · ${e.turns} turns · ${e.limitS} s under a limit · ${e.phoneS} s watched for the phone, of ${e.movingS} s moving${estimated ? ' (estimated)' : ''}`,
   load: (axis: string, weight: number, count: number, opportunities: number) => `${axis} ${weight.toFixed(2)} / ${opportunities} (${count})`,
 } as const;
 
@@ -182,7 +182,7 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 /** The last 5 finished drives with what the scoring reads of them. */
 async function lastDriveLoads(db: Db): Promise<DriveLoadRow[]> {
   const { rows } = await db.execute(
-    `SELECT client_trip_id, started_at, miles, duration_s, slowdowns, speedups, turns, limit_s, moving_s FROM trips
+    `SELECT client_trip_id, started_at, miles, duration_s, slowdowns, speedups, turns, limit_s, moving_s, phone_s FROM trips
       WHERE status NOT IN ('recording', 'merged') ORDER BY started_at DESC LIMIT 5`
   );
   const out: DriveLoadRow[] = [];
@@ -193,7 +193,7 @@ async function lastDriveLoads(db: Db): Promise<DriveLoadRow[]> {
     const miles = num(r.miles) ?? 0;
     const exposure = estimated
       ? estimateExposure(miles, num(r.duration_s) ?? 0)
-      : clampExposure({ slowdowns: counters[0]!, speedups: counters[1]!, turns: counters[2]!, limitS: counters[3]!, movingS: counters[4]! });
+      : clampExposure({ slowdowns: counters[0]!, speedups: counters[1]!, turns: counters[2]!, limitS: counters[3]!, movingS: counters[4]!, phoneS: num(r.phone_s) ?? 0 });
     const ev = await db.execute('SELECT id, type, tier, started_at, duration_s, status, measured_json FROM trip_events WHERE client_trip_id = ?', [id]);
     const events: DriveEvent[] = ev.rows.map((e) => {
       let measured: DriveEvent['measured'] = {};

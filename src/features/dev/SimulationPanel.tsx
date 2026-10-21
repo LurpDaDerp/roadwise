@@ -72,7 +72,7 @@ export const simCopy = {
   failed: (message: string) => `The simulation could not start: ${message}`,
 } as const;
 
-export type SimTraceName = 'speeding-minor' | 'hard-brake';
+export type SimTraceName = 'speeding-minor' | 'hard-brake' | 'phone-pickup';
 export type SimSpeed = 1 | 5;
 export const SIM_SPEEDS: readonly SimSpeed[] = [1, 5];
 
@@ -87,6 +87,11 @@ export const SIM_TRACES: readonly { name: SimTraceName; label: string; detail: s
     label: 'A hard brake',
     detail: 'A hard stop from 35 mph, then on again. 3⅓ minutes.',
   },
+  {
+    name: 'phone-pickup',
+    label: 'Phone picked up',
+    detail: 'The phone is handled for 8 s at 35 mph. 3⅓ minutes.',
+  },
 ];
 
 /** Loaded on demand, so the fixtures are parsed only when a developer runs one. */
@@ -99,6 +104,8 @@ export function loadSimTrace(name: SimTraceName): Trace {
         return parseTrace(require('../../core/__fixtures__/traces/speeding-minor.json'));
       case 'hard-brake':
         return parseTrace(require('../../core/__fixtures__/traces/hard-brake-confirmed.json'));
+      case 'phone-pickup':
+        return parseTrace(require('../../core/__fixtures__/traces/phone-pickup.json'));
     }
   }
   throw new Error('The simulation drives are not in this build');

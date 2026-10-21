@@ -94,7 +94,7 @@ describe('fakeLimits', () => {
 });
 
 describe('createSimulation (a dry-run host over a fixture trace)', () => {
-  test.each(['speeding-minor', 'hard-brake'] as const)(
+  test.each(['speeding-minor', 'hard-brake', 'phone-pickup'] as const)(
     '%s at 5x: rows flow through the real host, alerts reach the player, and nothing is stored',
     async (name) => {
       const before = await countTables(db);
