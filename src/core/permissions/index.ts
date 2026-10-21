@@ -7,8 +7,8 @@ export {
   readPromptHistory,
   recordPrompt,
 } from './policy';
-export { createDriveSenseResolver, resolveDriveSense } from './driveSensePort';
-export type { DriveSenseLoaders, DriveSensePort } from './driveSensePort';
+export { createDriveSenseResolver, resolveDriveDetect, resolveDriveSense } from './driveSensePort';
+export type { DriveDetectPort, DriveSenseLoaders, DriveSensePort } from './driveSensePort';
 export {
   ANDROID_BT_PERMISSIONS,
   ANDROID_FINE_LOCATION,

@@ -1,4 +1,4 @@
-import { createFakeDriveSense } from '@drive-sense';
+import { createFakeDriveDetect, createFakeDriveSense } from '@drive-sense';
 
 import {
   createPermissionsAdapter,
@@ -7,7 +7,7 @@ import {
   type PermissionsAdapterDeps,
   type RadioState,
 } from '../adapters';
-import type { DriveSensePort } from '../driveSensePort';
+import type { DriveDetectPort, DriveSensePort } from '../driveSensePort';
 import type { PermissionPlatform } from '../types';
 
 const NOW = 1_700_000_000_000;
@@ -29,6 +29,7 @@ function makeDeps(
     notifAfterRequest?: NotificationAnswer;
     lowPower?: boolean | Error;
     driveSense?: DriveSensePort | null;
+    driveDetect?: DriveDetectPort | null;
     sendIntentFails?: boolean;
     services?: boolean | Error;
     enableProvider?: Error;
@@ -93,6 +94,7 @@ function makeDeps(
       },
     },
     driveSense: async () => (opts.driveSense === undefined ? null : opts.driveSense),
+    driveDetect: async () => (opts.driveDetect === undefined ? null : opts.driveDetect),
   };
   return { deps, calls };
 }
@@ -130,6 +132,9 @@ describe('snapshot', () => {
       notificationsCanAskAgain: true,
       batteryOptimization: 'optimized',
       lowPowerMode: true,
+      backgroundRefresh: null,
+      canAskAlways: null,
+      liveActivities: null,
       checkedAt: NOW,
     });
     expect(ds.queries).toEqual(['getState', 'isIgnoringBatteryOptimizations']);
@@ -375,26 +380,34 @@ describe('camera (read only)', () => {
   });
 });
 
-describe('requestAlwaysForReminder — the forgot-to-start reminder only', () => {
-  it('iOS: the one Always request through drive-sense; Android: no location at all', async () => {
-    const ds = createFakeDriveSense({ platform: 'ios' });
-    ds.setTripReminderEnv({ location: 'whenInUse' });
-    const port: DriveSensePort = { ...withBattery(ds), requestReminderLocation: () => ds.requestReminderLocation() };
-    const ios = makeDeps('ios', { driveSense: port });
-    expect(await createPermissionsAdapter(ios.deps).requestAlwaysForReminder()).toBe('whenInUse');
-    expect(ds.calls).toEqual(['requestReminderLocation']);
-    expect(ios.calls).toEqual([]);
-    const android = makeDeps('android', { driveSense: port });
-    expect(await createPermissionsAdapter(android.deps).requestAlwaysForReminder()).toBe('notNeeded');
-    expect(ds.calls).toEqual(['requestReminderLocation']);
+describe('automatic drives (iOS): Location Always, Background App Refresh, Live Activities', () => {
+  it('the snapshot reads them from the drive detector on iOS; null on Android and when unreadable', async () => {
+    const detect = createFakeDriveDetect({ permissions: { backgroundRefresh: 'denied', canAskAlways: true, liveActivities: false } });
+    const ios = await createPermissionsAdapter(makeDeps('ios', { driveDetect: detect }).deps).snapshot();
+    expect(ios).toMatchObject({ backgroundRefresh: 'denied', canAskAlways: true, liveActivities: false });
+    const android = await createPermissionsAdapter(makeDeps('android', { driveDetect: detect }).deps).snapshot();
+    expect(android).toMatchObject({ backgroundRefresh: null, canAskAlways: null, liveActivities: null });
+    const failing: DriveDetectPort = { getState: () => Promise.reject(new Error('x')), requestAlways: () => Promise.reject(new Error('x')) };
+    expect(await createPermissionsAdapter(makeDeps('ios', { driveDetect: failing }).deps).snapshot()).toMatchObject({ backgroundRefresh: null, canAskAlways: null });
   });
 
-  it('denied when it cannot be asked: no drive-sense, an older build, or a failed call', async () => {
-    const ds = createFakeDriveSense({ platform: 'ios' });
-    expect(await createPermissionsAdapter(makeDeps('ios', { driveSense: null }).deps).requestAlwaysForReminder()).toBe('denied');
-    expect(await createPermissionsAdapter(makeDeps('ios', { driveSense: withBattery(ds) }).deps).requestAlwaysForReminder()).toBe('denied');
-    const failing: DriveSensePort = { ...withBattery(ds), requestReminderLocation: () => Promise.reject(new Error('x')) };
-    expect(await createPermissionsAdapter(makeDeps('ios', { driveSense: failing }).deps).requestAlwaysForReminder()).toBe('denied');
+  it('iOS: the one Always request through the detector; Android asks nothing and answers as it stands', async () => {
+    const detect = createFakeDriveDetect({ permissions: { location: 'whenInUse', canAskAlways: true } });
+    detect.setAlwaysAnswer('always');
+    const ios = makeDeps('ios', { driveDetect: detect });
+    expect(await createPermissionsAdapter(ios.deps).requestLocationAlways()).toBe('always');
+    expect(detect.calls).toEqual(['requestAlways']);
+    const android = makeDeps('android', { driveDetect: detect });
+    expect(await createPermissionsAdapter(android.deps).requestLocationAlways()).toBe('whenInUse');
+    expect(detect.calls).toEqual(['requestAlways']);
+    expect(android.calls).toEqual(['location.getForeground', 'location.getBackground']);
+  });
+
+  it('with no detector, or a failed request, the answer as it stands', async () => {
+    expect(await createPermissionsAdapter(makeDeps('ios', { driveDetect: null }).deps).requestLocationAlways()).toBe('whenInUse');
+    const failing: DriveDetectPort = { getState: () => Promise.reject(new Error('x')), requestAlways: () => Promise.reject(new Error('x')) };
+    expect(await createPermissionsAdapter(makeDeps('ios', { driveDetect: failing, bg: loc({ status: 'granted' }) }).deps).requestLocationAlways()).toBe('always');
+    expect(await createPermissionsAdapter(makeDeps('ios', { driveDetect: null, fg: loc({ status: 'denied' }) }).deps).requestLocationAlways()).toBe('denied');
   });
 });
 

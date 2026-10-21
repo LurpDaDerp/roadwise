@@ -1,20 +1,26 @@
 // The slice of drive-sense the permission adapters use, resolved lazily: nothing native is
 // loaded until a snapshot or request asks. `null` where no native DriveSense module exists
 // (Jest, Expo Go, web) — callers report motion as unavailable and battery as unknown, never as
-// granted. `isIgnoringBatteryOptimizations` and `requestReminderLocation` are feature-detected on
-// the native module, so a dev build that predates them reads as "can't check" rather than a
-// rejected call.
-import type { DriveSenseApi, DriveSenseState, ReminderLocationAnswer } from '@drive-sense';
+// granted. `isIgnoringBatteryOptimizations` is feature-detected on the native module, so a dev
+// build that predates it reads as "can't check" rather than a rejected call. The iOS drive
+// detector (`DriveDetect`) is a second port: what automatic drives need (Location Always, Background
+// App Refresh, Live Activities) and the one Always request; null on Android.
+import type { DetectState, DriveSenseApi } from '@drive-sense';
 
 export interface DriveSensePort {
-  getState(): Promise<DriveSenseState>;
+  getState(): ReturnType<DriveSenseApi['getState']>;
   requestMotionPermission(): Promise<'granted' | 'denied' | 'unavailable'>;
   isIgnoringBatteryOptimizations?(): Promise<boolean>;
-  /** iOS: the forgot-to-start reminder's one "Always" request. */
-  requestReminderLocation?(): Promise<ReminderLocationAnswer>;
 }
 
-type Wrapper = Pick<DriveSenseApi, 'getState' | 'requestMotionPermission' | 'isIgnoringBatteryOptimizations' | 'requestReminderLocation'>;
+/** iOS: the drive detector's permission reads and its one Always request. */
+export interface DriveDetectPort {
+  getState(): Promise<DetectState>;
+  /** The one Always request, only from While Using, once per install; otherwise the current answer. */
+  requestAlways(): Promise<'always' | 'whenInUse' | 'denied'>;
+}
+
+type Wrapper = Pick<DriveSenseApi, 'getState' | 'requestMotionPermission' | 'isIgnoringBatteryOptimizations'>;
 
 export interface DriveSenseLoaders {
   /** The raw native module (for feature detection), or null when it does not exist. */
@@ -50,9 +56,6 @@ export function createDriveSenseResolver(
       if (typeof native.isIgnoringBatteryOptimizations === 'function') {
         port.isIgnoringBatteryOptimizations = () => ds.isIgnoringBatteryOptimizations();
       }
-      if (typeof native.requestReminderLocation === 'function') {
-        port.requestReminderLocation = () => ds.requestReminderLocation();
-      }
       return port;
     })().catch(() => {
       pending = null;
@@ -64,3 +67,13 @@ export function createDriveSenseResolver(
 
 export const resolveDriveSense: () => Promise<DriveSensePort | null> =
   createDriveSenseResolver(defaultLoaders);
+
+/** The iOS drive detector, or null where it does not exist (Android, Jest, Expo Go, web). */
+export async function resolveDriveDetect(): Promise<DriveDetectPort | null> {
+  try {
+    const { DriveDetect } = await import('@drive-sense');
+    return DriveDetect.available ? DriveDetect : null;
+  } catch {
+    return null;
+  }
+}

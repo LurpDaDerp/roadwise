@@ -7,11 +7,7 @@
 // Callers still apply the one prompt policy (`canPrompt` / `recordPrompt`) around every request.
 import { Linking, PermissionsAndroid, Platform } from 'react-native';
 
-import type { ReminderLocationAnswer } from '@drive-sense';
-
-import { blockedDuringDrive } from '@/drive/leave';
-
-import { resolveDriveSense, type DriveSensePort } from './driveSensePort';
+import { resolveDriveDetect, resolveDriveSense, type DriveDetectPort, type DriveSensePort } from './driveSensePort';
 import type {
   BatteryOptimization,
   BluetoothPermission,
@@ -112,6 +108,8 @@ export interface PermissionsAdapterDeps {
   battery: BatteryPort;
   linking: LinkingPort;
   driveSense: () => Promise<DriveSensePort | null>;
+  /** iOS: the drive detector (automatic drives' permissions, the Always request). Default: the native one; null on Android. */
+  driveDetect?: () => Promise<DriveDetectPort | null>;
   now: () => number;
   /** Default: the DashPal transport's radio, loaded on first use. */
   bluetooth?: BluetoothPort;
@@ -170,11 +168,12 @@ export interface PermissionsAdapter {
    */
   requestBluetooth(): Promise<BluetoothAccess>;
   /**
-   * The forgot-to-start reminder only, on the driver's tap that turns it on: iOS asks once for
-   * "Always" (While Using must already be granted; never asked twice). Android uses no location for
-   * it: `notNeeded`. `denied` when it could not be asked at all.
+   * iOS, on the driver's tap (onboarding, the Permissions screen): the one Location Always request
+   * automatic drives need, through the drive detector (While Using must already be held; asked once
+   * per install, then the answer as it stands). Android asks nothing (drives start from the Start
+   * card): the answer as it stands. `denied` when location could not be read at all.
    */
-  requestAlwaysForReminder(): Promise<ReminderLocationAnswer>;
+  requestLocationAlways(): Promise<'always' | 'whenInUse' | 'denied'>;
 }
 
 export const IGNORE_BATTERY_OPTIMIZATION_SETTINGS =
@@ -230,15 +229,12 @@ const lazyBattery: BatteryPort = {
   isLowPowerModeEnabledAsync: async () => (await import('expo-battery')).isLowPowerModeEnabledAsync(),
 };
 
-// Every Settings page RoadWise opens goes through here. During a drive it opens nothing and says
-// "End the drive first": leaving RoadWise mid-drive counts as phone use (src/drive/leave.ts).
+// Every Settings page RoadWise opens goes through here.
 const rnLinking: LinkingPort = {
   openSettings: async () => {
-    if (blockedDuringDrive()) return;
     await Linking.openSettings();
   },
   sendIntent: async (action, extras) => {
-    if (blockedDuringDrive()) return;
     await Linking.sendIntent(action, extras);
   },
 };
@@ -269,6 +265,7 @@ function defaultDeps(): PermissionsAdapterDeps {
     battery: lazyBattery,
     linking: rnLinking,
     driveSense: resolveDriveSense,
+    driveDetect: resolveDriveDetect,
     now: () => Date.now(),
     bluetooth: lazyBluetooth,
     androidPermissions: rnAndroidPermissions,
@@ -372,6 +369,20 @@ export function createPermissionsAdapter(
     }
   }
 
+  /** iOS: what the drive detector reads of automatic drives' permissions; all null on Android or when unreadable. */
+  async function readDetect(): Promise<Pick<PermissionSnapshot, 'backgroundRefresh' | 'canAskAlways' | 'liveActivities'>> {
+    const none = { backgroundRefresh: null, canAskAlways: null, liveActivities: null };
+    if (deps.platform !== 'ios') return none;
+    try {
+      const port = await (deps.driveDetect ?? resolveDriveDetect)();
+      if (port === null) return none;
+      const p = (await port.getState()).permissions;
+      return { backgroundRefresh: p.backgroundRefresh, canAskAlways: p.canAskAlways, liveActivities: p.liveActivities };
+    } catch {
+      return none;
+    }
+  }
+
   async function readLowPower(): Promise<boolean | null> {
     try {
       return await deps.battery.isLowPowerModeEnabledAsync();
@@ -383,13 +394,14 @@ export function createPermissionsAdapter(
   return {
     async snapshot() {
       const port = await deps.driveSense();
-      const [{ fg, bg }, notif, motion, batteryOptimization, lowPowerMode, locationServices] = await Promise.all([
+      const [{ fg, bg }, notif, motion, batteryOptimization, lowPowerMode, locationServices, detect] = await Promise.all([
         readLocation(),
         deps.notifications.getPermissionsAsync(),
         readMotion(port),
         readBattery(port),
         readLowPower(),
         readServices(),
+        readDetect(),
       ]);
       const location = toLocationAccess(fg, bg);
       return {
@@ -403,6 +415,7 @@ export function createPermissionsAdapter(
         notificationsCanAskAgain: notif.canAskAgain,
         batteryOptimization,
         lowPowerMode,
+        ...detect,
         checkedAt: deps.now(),
       };
     },
@@ -512,14 +525,21 @@ export function createPermissionsAdapter(
       return fromRadio(await radio.startRadio());
     },
 
-    async requestAlwaysForReminder() {
-      if (deps.platform === 'android') return 'notNeeded';
-      const port = await deps.driveSense();
-      if (!port?.requestReminderLocation) return 'denied';
+    async requestLocationAlways() {
+      const asIs = async (): Promise<'always' | 'whenInUse' | 'denied'> => {
+        try {
+          const access = await locationAccess();
+          return access === 'always' ? 'always' : access === 'foreground' ? 'whenInUse' : 'denied';
+        } catch {
+          return 'denied';
+        }
+      };
+      if (deps.platform !== 'ios') return asIs();
       try {
-        return await port.requestReminderLocation();
+        const port = await (deps.driveDetect ?? resolveDriveDetect)();
+        return port === null ? await asIs() : await port.requestAlways();
       } catch {
-        return 'denied';
+        return asIs();
       }
     },
 

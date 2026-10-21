@@ -41,6 +41,15 @@ export interface PermissionSnapshot {
   batteryOptimization: BatteryOptimization;
   /** iOS Low Power Mode / Android Battery Saver; null when it could not be read. */
   lowPowerMode: boolean | null;
+  /**
+   * iOS Background App Refresh for RoadWise (automatic drives need it), from the drive detector;
+   * null on Android or when it could not be read.
+   */
+  backgroundRefresh: 'available' | 'denied' | 'restricted' | null;
+  /** iOS: the one Location Always request is still available (While Using held, not yet asked); null on Android or unreadable. */
+  canAskAlways: boolean | null;
+  /** iOS: Live Activities are allowed for RoadWise; null on Android or unreadable. */
+  liveActivities: boolean | null;
   /** epoch ms, integer */
   checkedAt: number;
 }
