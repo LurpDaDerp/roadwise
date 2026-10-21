@@ -105,6 +105,17 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(c).toMatch(/func isRunning\(\) -> Bool \{/);
   });
 
+  it('an activity the driver dismissed (or iOS ended) is let go, so the next start in front requests a new one (review M8)', () => {
+    const c = ctrl();
+    expect(c).toMatch(/private static func live\(_ a: Activity<LiveDriveAttributes>\) -> Bool \{\s*a\.activityState == \.active \|\| a\.activityState == \.stale\s*\}/);
+    const start = /func start\([\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
+    expect(start).toMatch(/\{\s*if let a = activity, !LiveDriveController\.live\(a\) \{ activity = nil \}\s*if activity == nil \{ adoptRunning\(\) \}\s*if activity != nil \{\s*update\(state\)/);
+    // isRunning answers only for a live one (a dismissed one is replaced by what adoptRunning finds live)
+    expect(c).toMatch(/func isRunning\(\) -> Bool \{\s*if let a = activity, LiveDriveController\.live\(a\) \{ return true \}\s*adoptRunning\(\)/);
+    const adopt = /func adoptRunning\(\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
+    expect(adopt).toMatch(/all\.first\(where: LiveDriveController\.live\)/);
+  });
+
   it('every content carries a stale date, and the widget blanks a stale state (review I1)', () => {
     const c = ctrl();
     expect(c).toMatch(/STALE_AFTER_S: TimeInterval = 120/);

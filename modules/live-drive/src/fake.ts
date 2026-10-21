@@ -1,5 +1,6 @@
 // In-memory live-drive for tests: one activity at a time, started by `start` or by a push, updated
-// (never replaced) by a later `start`, gone on `end`; a settable push-to-start token and its event.
+// (never replaced) by a later `start`, gone on `end` or when the driver dismisses it (`dismiss`: the
+// next `start` brings a new one); a settable push-to-start token and its event.
 import type { LiveDriveApi, LiveDriveEvent, LiveDriveEvents, LiveDriveFakeControls, LiveDriveState } from './types';
 
 export function createFakeLiveDrive(opts: { supported?: boolean; token?: string | null } = {}): LiveDriveApi & LiveDriveFakeControls {
@@ -52,6 +53,9 @@ export function createFakeLiveDrive(opts: { supported?: boolean; token?: string 
     },
     pushStart(state) {
       active = { ...state };
+    },
+    dismiss() {
+      active = null;
     },
     setToken(t) {
       token = t;

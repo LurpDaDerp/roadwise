@@ -176,6 +176,18 @@ describe('the fake', () => {
     expect(fake.active).toMatchObject({ speed: 50 });
   });
 
+  test('a dismissed activity no longer runs, and the next start brings a new one (review M8)', async () => {
+    const fake = createFakeLiveDrive();
+    await fake.start(state);
+    fake.dismiss();
+    await expect(fake.isRunning()).resolves.toBe(false);
+    await fake.update({ ...state, speed: 40 }); // nothing shows it: ignored
+    expect(fake.active).toBeNull();
+    await expect(fake.start({ ...state, speed: 41 })).resolves.toBe(true);
+    expect(fake.active).toMatchObject({ speed: 41 });
+    await expect(fake.isRunning()).resolves.toBe(true);
+  });
+
   test('unsupported: start resolves false and nothing runs', async () => {
     const fake = createFakeLiveDrive({ supported: false });
     await expect(fake.isSupported()).resolves.toBe(false);

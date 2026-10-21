@@ -54,7 +54,7 @@ export interface LiveDriveApi {
   getPushToStartToken(): Promise<string | null>;
   /**
    * Show the drive with `state`: a running activity (a push-started one included) is updated, never
-   * replaced; else one is requested. Resolves whether one is now running (false when unsupported,
+   * replaced; else (none, or one the driver dismissed or iOS ended) one is requested. Resolves whether one is now running (false when unsupported,
    * disabled, or refused by the system, e.g. from the background; the drive goes on regardless).
    */
   start(state: LiveDriveState): Promise<boolean>;
@@ -73,6 +73,8 @@ export interface LiveDriveFakeControls {
   readonly active: LiveDriveState | null;
   /** An activity started by a push (it runs without `start`). */
   pushStart(state: LiveDriveState): void;
+  /** The driver dismissed the activity (or iOS ended it): no longer running; the next `start` requests a new one. */
+  dismiss(): void;
   /** What `getPushToStartToken` answers (default null). */
   setToken(token: string | null): void;
   /** A new token arrives: stored and sent to the `pushToStartToken` listeners. */

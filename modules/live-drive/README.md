@@ -27,7 +27,7 @@ targets/live-drive-widget/       the widget extension (@bacons/apple-targets): e
 | `isSupported()` | iOS 16.2+ and Live Activities enabled for the app in Settings; `false` elsewhere. |
 | `isRunning()` | An activity shows the drive now: one started here, adopted at launch, or started by a push. |
 | `getPushToStartToken()` | The push-to-start token (lowercase hex, iOS 17.2+) the phone last received, persisted under `livedrive.pushToStartToken`; `null` before one arrived or below 17.2. |
-| `start(state)` | Shows the drive. A running activity (a push-started one included) is **updated, never replaced**; else one is requested. Resolves whether one now runs: `false` when unsupported, disabled, or refused (iOS refuses a request from the background); the drive goes on regardless. |
+| `start(state)` | Shows the drive. A running activity (a push-started one included) is **updated, never replaced**; else one is requested. One the driver dismissed (or iOS ended) no longer runs, so the next `start` (the app back in front) requests a new one. Resolves whether one now runs: `false` when unsupported, disabled, or refused (iOS refuses a request from the background); the drive goes on regardless. |
 | `update(state)` | Updates the running activity; a no-op without one. |
 | `end()` | Ends the running activity at once; a no-op without one. Called on drive end or cancel. |
 | `pushToStartToken` event | `{ token }` each time iOS hands the app a new push-to-start token (iOS 17.2+). The app registers it with RoadWise's server (`register_device`), which starts the activity by APNs for a drive that starts with the app in the background. |

@@ -3,7 +3,8 @@
 // (`drivesense.captureOpen`, written by drive-sense) is kept and any other ended; with no drive open
 // every one is ended (it is stale). A push-started activity (iOS 17.2+, sent by RoadWise's server
 // for a drive that started with the app in the background) arrives through `activityUpdates` and is
-// adopted too. `start` updates a running activity instead of ending and requesting another.
+// adopted too. `start` updates a running activity instead of ending and requesting another; one the
+// driver dismissed (or iOS ended) is no longer running, so `start` requests a new one.
 // Updated by `update` or drive-sense's `setDriveDisplay` (the `roadwise.driveDisplay` notification),
 // ended by `end` or the drive's end. The push-to-start token is persisted and announced. Each change
 // of the running activity is posted as "roadwise.liveActivity", and an activity that runs takes the
@@ -141,9 +142,11 @@ final class LiveDriveController {
     return activity != nil
   }
 
-  /// Shows the drive: updates the running activity (a pushed one included), else requests one.
+  /// Shows the drive: updates the running activity (a pushed one included), else requests one. One
+  /// the driver dismissed or iOS ended is let go first, so the next start in front brings a new one.
   /// Returns whether one is now running.
   func start(_ state: LiveDriveAttributes.ContentState) -> Bool {
+    if let a = activity, !LiveDriveController.live(a) { activity = nil }
     if activity == nil { adoptRunning() }
     if activity != nil {
       update(state)
