@@ -7,6 +7,8 @@ import type { Ionicons } from '@expo/vector-icons';
 
 import { hudCopy } from '@/features/drive/hudCopy';
 import {
+  AXES,
+  AXIS_WEIGHT,
   CAMERA_DISPUTE_AUTO_PER_WEEK,
   DASHCAM_DROWSY_GAP_S,
   DASHCAM_EYES_OFF_GAP_S,
@@ -17,10 +19,14 @@ import {
   MIN_SCORED_MILES,
   MIN_SCORED_S,
   NOT_DRIVING_PER_MONTH,
+  PHONE_PICKUP_MIN_MPH,
+  PHONE_PICKUP_WEIGHT_S,
+  PHONE_PUTDOWN_QUIET_S,
   RANKED_MIN_MILES,
   RATING_WINDOW_DAYS,
   SPEEDING_GRACE_S,
   speedTolerance,
+  type AxisKey,
 } from '@scoring';
 
 /** The driving screen's own words for its "Not driving?" link, quoted wherever the rules name it. */
@@ -58,12 +64,38 @@ const everyMin = (s: number) => `every ${Math.round(s / 60)} min`;
 const IDLE_MIN = Math.round(IDLE_END_S / 60);
 const MERGE_MIN = Math.round(MERGE_GAP_S / 60);
 
+/** Each category as a sentence names it. */
+const AXIS_WORD: Record<AxisKey, string> = {
+  acceleration: 'starts',
+  braking: 'braking',
+  turning: 'turns',
+  attention: 'attention',
+  phone: 'phone use',
+  speed: 'speed',
+};
+const TIMES: Record<number, string> = { 2: 'double', 3: 'triple' };
+
+/** "Speed and phone use count double.": the categories that weigh more than one, from `AXIS_WEIGHT`. */
+function heavierLine(): string {
+  const groups = new Map<number, string[]>();
+  for (const a of AXES) {
+    const w = AXIS_WEIGHT[a];
+    if (w > 1) groups.set(w, [...(groups.get(w) ?? []), AXIS_WORD[a]]);
+  }
+  return [...groups]
+    .map(([w, names]) => {
+      const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]!;
+      return `${list.charAt(0).toUpperCase()}${list.slice(1)} ${names.length > 1 ? 'count' : 'counts'} ${TIMES[w] ?? `${w} times`}.`;
+    })
+    .join(' ');
+}
+
 /** The three ideas: Home's How it works card and the top of How scores work. */
 export const howItWorks = (autoDrives: boolean): HowItem[] => [
   autoDrives
     ? { icon: 'car-sport-outline', title: 'Drives record themselves', body: `Once you’re on the road, RoadWise starts recording. Riding along? Tap “${ND}”.` }
     : { icon: 'car-sport-outline', title: 'Start, then drive', body: 'Swipe Start drive before you pull out. RoadWise records until you park.' },
-  { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
+  { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns, staying near the limit and leaving your phone alone all help.' },
   {
     icon: 'shield-checkmark-outline',
     title: 'Grow your Safety Rating',
@@ -83,7 +115,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     title: 'Your drive score',
     icon: 'speedometer-outline',
     lines: [
-      'Every drive gets a score from 0 to 100 for braking, starts, turns and speed, plus attention when DashPal rides along. A drive with no events scores 100.',
+      'Every drive gets a score from 0 to 100 for braking, starts, turns, speed and phone use, plus attention when DashPal rides along. A drive with no events scores 100.',
       'Each one is judged against your chances: hard brakes against the times you slowed down, hard starts against the times you sped up, and sharp turns against the real turns you made. A busy city drive isn’t marked down just for having more stops.',
       'Speed is judged by how much of your driving time with a known limit you spent over it, and by how far over.',
       `A drive under ${MIN_SCORED_MILES} mi that takes under ${MIN_SCORED_S / 60} min doesn’t get a score.`,
@@ -101,13 +133,25 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     ],
   },
   {
+    id: 'phone',
+    title: 'Phone use',
+    icon: 'phone-portrait-outline',
+    lines: [
+      'RoadWise feels for your phone being picked up while you drive, from its motion alone. It never sees your screen, your apps or your messages.',
+      `A pickup counts once the car is going ${PHONE_PICKUP_MIN_MPH} mph or more. Pick it up at a red light and put it down before you pull away, and it doesn’t count.`,
+      `Every second it stays in your hand while you’re moving adds to it. Put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s and it’s still one pickup.`,
+      `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, judged against your time at driving speed, so a long drive isn’t marked down for being long.`,
+      `With the drive screen open, you hear a tone and see “${hudCopy.alert.phone_pickup}”. With RoadWise in the background, you get a quiet notification instead.`,
+    ],
+  },
+  {
     id: 'rating',
     title: 'Safety Rating',
     icon: 'shield-checkmark-outline',
     lines: [
       `Your Safety Rating rolls your last ${RATING_WINDOW_DAYS} days of drives into one score from 0 to 100.`,
       'Recent weeks count more, so better habits show up quickly and an old rough day fades.',
-      'It’s the average of your braking, starts, turns, speed and, with DashPal, attention scores. Speed counts double.',
+      `It’s the average of your braking, starts, turns, speed, phone use and, with DashPal, attention scores. ${heavierLine()}`,
       'New drivers start from a typical driver’s score, so one rough drive early on won’t sink you.',
       'It’s fair to city and highway drivers alike, because each part is judged against your chances, not your miles.',
       `You get a rating once you’ve driven ${RANKED_MIN_MILES} mi in the last ${RATING_WINDOW_DAYS} days.`,
@@ -172,7 +216,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     icon: 'flag-outline',
     lines: [
       'Every event on a drive has a Report link.',
-      `“Braked for a hazard” and “wrong speed limit” are accepted right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
+      `“Braked for a hazard”, “wrong speed limit” and “phone was mounted” are accepted right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
       `“DashPal got it wrong” is accepted right away too, up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of those.`,
       `“Wasn’t driving” takes a whole drive off when someone else drove. You can use it ${NOT_DRIVING_PER_MONTH} times a month, within a day of the drive, as long as “${ND}” didn’t run out during it.`,
       'Recorded drives can’t be deleted, so nobody can hide a rough drive.',
