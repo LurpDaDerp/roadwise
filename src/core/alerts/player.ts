@@ -15,6 +15,12 @@
 //   (haptic only: a routed-elsewhere alert, or a phone alert during a DashPal continuous one) and
 //   `startWithinMs` (a DashPal critical: an audio session not active by then, or then a tone not
 //   loaded or playing by then, fails, so the dashcam's buzzer takes it at once).
+// - The points-lost cue (`cue`): a decision that cost points plays it right after its own tone and
+//   before the voice line, under the same session, gain, call and style rules (`silent` and
+//   vibration-only play neither).
+// - Held sessions: a `holdSession` item leaves the session active for its kind until the next item
+//   without it, `stopCurrent()`, or `release(kind)` (the host's, once a speeding alert stops
+//   repeating) releases it.
 // - Feedback (`feedback`): a one-off nudge that is not a decision — the level-1 tone and a
 //   vibration at the strength it names, on the same rules (style, call) and never a voice.
 // - Audio session: level 1 honours the silent switch only when `l1RespectsSilentSwitch()` says so;
@@ -46,7 +52,9 @@
 import { processTimers, type Timers } from "@/lib/timers";
 
 import type {
+  AlertCue,
   AlertDecision,
+  AlertKind,
   AlertLevel,
   AlertStyle,
   AlertTone,
@@ -140,6 +148,12 @@ export interface AlertPlayer {
    * and test doubles need not implement it; the host calls it only when present.
    */
   feedback?(feedback: AlertFeedback): Promise<void>;
+  /**
+   * Release the audio session a `holdSession` decision of `kind` left held (a speeding alert's
+   * repeats), through the queue: nothing playing is cut, and a session held by another kind, or
+   * already released, is left alone. Optional like `feedback`; the host calls it only when present.
+   */
+  release?(kind: AlertKind): Promise<void>;
 }
 
 /**
@@ -188,6 +202,10 @@ export function asAlertStyle(value: unknown): AlertStyle {
 /** What one queued item plays: a decision's sound and pulse, or a feedback's. */
 interface Playable {
   level: AlertLevel;
+  /** The decision's kind (none for a feedback): who holds the session after a `holdSession` item. */
+  kind?: AlertKind;
+  /** Played right after the tone, before the voice. */
+  cue?: AlertCue;
   /** Spoken (L2 and up, voice on — or `voiceAlways` — and no call) when present. */
   voice?: AlertVoiceKey;
   intensity: HapticIntensity;
@@ -228,6 +246,8 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
    * an item that exits without releasing (dropped, or an announcement it skipped) pays it on exit.
    */
   let releaseOwed = false;
+  /** The kind whose `holdSession` item left the session active, or null when it is released. */
+  let heldBy: AlertKind | null = null;
 
   function report(err: unknown): void {
     try {
@@ -345,6 +365,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
   /** Every release goes through here, so it settles a release an idle stopCurrent left owed. */
   async function releaseSession(): Promise<void> {
     releaseOwed = false;
+    heldBy = null;
     await bounded(() => audio.deactivate());
   }
 
@@ -384,7 +405,11 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
           const opts: { volume: number; tone?: AlertTone; startWithinMs?: number } = { volume };
           if (item.tone) opts.tone = item.tone;
           if (startWithin !== undefined) opts.startWithinMs = startWithin;
-          const played = await step(run, () => audio.play(level, opts));
+          let played = await step(run, () => audio.play(level, opts));
+          const cue = item.cue;
+          if (cue !== undefined && !run.stopped) {
+            played = (await step(run, () => audio.play(level, { volume, tone: cue }))) && played;
+          }
           // Silent for the driver, and they must be able to see that; a sound that worked
           // clears an earlier mark.
           if (!activated || !played) unavailable();
@@ -404,6 +429,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         hold = item.holdSession === true && activated && !run.stopped;
       } finally {
         if (!hold) await releaseSession();
+        else heldBy = item.kind ?? null;
       }
     }
     if (chosen !== "sound") {
@@ -418,10 +444,12 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
       const level = decision.level;
       const item: Playable = {
         level,
+        kind: decision.kind,
         intensity: decision.intensity ?? HAPTIC_INTENSITY_FOR_LEVEL[level],
       };
       if (decision.voice !== undefined) item.voice = decision.voice;
       if (decision.tone !== undefined) item.tone = decision.tone;
+      if (decision.cue !== undefined) item.cue = decision.cue;
       if (decision.stillWanted !== undefined) item.stillWanted = decision.stillWanted;
       if (decision.voiceAlways) item.voiceAlways = true;
       if (decision.holdSession) item.holdSession = true;
@@ -456,6 +484,13 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
         // without playing (dropped, or a skipped announcement), it pays the owed release.
         releaseOwed = true;
       }
+    },
+
+    release(kind) {
+      if (heldBy !== kind) return Promise.resolve();
+      return enqueue(async () => {
+        if (heldBy === kind) await releaseSession();
+      });
     },
 
     announce(key) {

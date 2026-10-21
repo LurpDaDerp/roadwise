@@ -9,10 +9,14 @@ export type AlertLevel = 1 | 2 | 3;
 export type AlertKind = EventType | 'dashpal';
 
 /**
- * A DashPal tone, distinct from the three levels (scripts/make-tones.js): glance (eyes on the
- * road), drowsy (take a break), wake (urgent, loud) and phone (phone down). Absent: the level's tone.
+ * A tone other than the three levels (scripts/make-tones.js): the points-lost cue (`points_lost`,
+ * a falling pair played when points come off) and the DashPal sounds, glance (eyes on the road),
+ * drowsy (take a break), wake (urgent, loud) and phone (phone down). Absent: the level's tone.
  */
-export type AlertTone = 'dp_glance' | 'dp_drowsy' | 'dp_wake' | 'dp_phone';
+export type AlertTone = 'points_lost' | 'dp_glance' | 'dp_drowsy' | 'dp_wake' | 'dp_phone';
+
+/** The cue that follows an alert's own tone when points came off with it. */
+export type AlertCue = 'points_lost';
 
 /** How hard an alert vibrates: 1 is one short pulse, 4 the longest, heaviest pattern. */
 export type HapticIntensity = 1 | 2 | 3 | 4;
@@ -40,6 +44,11 @@ export interface AlertDecision {
   suppressed?: boolean;
   /** Plays this tone instead of the level's (the level still sets gain and the voice rule). */
   tone?: AlertTone;
+  /**
+   * A second tone right after the first, before the voice line (the points-lost cue when the alert
+   * cost points): same session, gain, call and style rules; nothing with `silent` or vibration-only.
+   */
+  cue?: AlertCue;
   /**
    * Re-read as the item starts, next to `deliverable()`: false drops it without touching a port
    * (a DashPal repeat whose alert the dashcam has since stopped).

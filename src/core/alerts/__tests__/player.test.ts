@@ -1065,3 +1065,101 @@ describe("startWithinMs (a DashPal critical's start watchdog)", () => {
     }
   });
 });
+
+describe("the points-lost cue and a held speeding session", () => {
+  const withTones = (r: Rig) => {
+    r.deps.audio.play = async (level, opts) => {
+      r.calls.push(`play:${level}${opts.tone ? `:${opts.tone}` : ""}@${opts.volume}`);
+    };
+    return r;
+  };
+
+  it("a decision that cost points plays the cue right after its own tone, before the voice, on the same session and gain", async () => {
+    const r = withTones(rig());
+    await createAlertPlayer(r.deps).deliver(decision(2, { cue: "points_lost" }));
+    expect(r.calls).toEqual([
+      "activate:playback",
+      `play:2@${TONE_GAIN[2]}`,
+      `play:2:points_lost@${TONE_GAIN[2]}`,
+      `speak:Phone down@${VOICE_GAIN}`,
+      "deactivate",
+      "haptic:2",
+    ]);
+  });
+
+  it("the cue follows the call gain, and neither tone plays vibration-only or silent", async () => {
+    const r = withTones(rig());
+    r.flags.call = true;
+    const player = createAlertPlayer(r.deps);
+    await player.deliver(decision(3, { cue: "points_lost" }));
+    expect(r.calls.filter((c) => c.startsWith("play"))).toEqual([`play:3@${TONE_GAIN_IN_CALL[3]}`, `play:3:points_lost@${TONE_GAIN_IN_CALL[3]}`]);
+    r.calls.length = 0;
+    r.flags.call = false;
+    r.flags.style = "vibration";
+    await player.deliver(decision(2, { cue: "points_lost" }));
+    expect(r.calls).toEqual(["haptic:2"]);
+    r.calls.length = 0;
+    r.flags.style = "both";
+    await player.deliver(decision(2, { cue: "points_lost", silent: true }));
+    expect(r.calls).toEqual(["haptic:2"]);
+  });
+
+  it("a failing cue marks the sound unavailable like a failing tone", async () => {
+    const r = withTones(rig());
+    let unavailable = 0;
+    r.deps.onUnavailable = () => {
+      unavailable += 1;
+    };
+    r.deps.audio.play = async (_level, opts) => {
+      if (opts.tone === "points_lost") throw new Error("no cue");
+    };
+    await createAlertPlayer(r.deps).deliver(decision(2, { cue: "points_lost" }));
+    expect(unavailable).toBe(1);
+  });
+
+  it("release(kind) frees the session a held speeding alert left active, once, and leaves another kind's hold alone", async () => {
+    const r = withTones(rig());
+    const player = createAlertPlayer(r.deps);
+    await player.deliver(decision(1, { voice: undefined, holdSession: true }));
+    expect(r.calls).toEqual(["activate:playback", `play:1@${TONE_GAIN[1]}`, "haptic:1"]);
+    await player.release!("dashpal");
+    expect(count(r.calls, "deactivate")).toBe(0);
+    await player.release!("speeding");
+    expect(count(r.calls, "deactivate")).toBe(1);
+    await player.release!("speeding");
+    expect(count(r.calls, "deactivate")).toBe(1);
+    // A DashPal hold is not the speeding alert's to release.
+    await player.deliver(decision(1, { kind: "dashpal", voice: undefined, holdSession: true }));
+    await player.release!("speeding");
+    expect(count(r.calls, "deactivate")).toBe(1);
+    await player.release!("dashpal");
+    expect(count(r.calls, "deactivate")).toBe(2);
+  });
+
+  it("a release waits behind the item playing, and an item without a hold has released already", async () => {
+    const r = rig({ holdPlay: true });
+    const player = createAlertPlayer(r.deps);
+    const first = player.deliver(decision(1, { voice: undefined, holdSession: true }));
+    await flush();
+    // Not held yet (the tone is still playing): nothing to release.
+    await player.release!("speeding");
+    r.release();
+    await first;
+    expect(count(r.calls, "deactivate")).toBe(0);
+    const released = player.release!("speeding");
+    await released;
+    expect(count(r.calls, "deactivate")).toBe(1);
+    // A held session that the next item without a hold released is not released twice.
+    const again = player.deliver(decision(1, { voice: undefined, holdSession: true }));
+    await flush();
+    r.release();
+    await again;
+    const plain = player.deliver(decision(2, { voice: undefined }));
+    await flush();
+    r.release();
+    await plain;
+    expect(count(r.calls, "deactivate")).toBe(2);
+    await player.release!("speeding");
+    expect(count(r.calls, "deactivate")).toBe(2);
+  });
+});

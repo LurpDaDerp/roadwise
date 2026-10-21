@@ -83,8 +83,9 @@ export const TONE_MS: Readonly<Record<AlertLevel, number>> = {
   3: 880,
 };
 
-/** The DashPal sounds' lengths (ms), as scripts/make-tones.js renders them. */
+/** The other tones' lengths (ms), as scripts/make-tones.js renders them: the points-lost cue and the DashPal sounds. */
 export const TONE_MS_BY_TONE: Readonly<Record<AlertTone, number>> = {
+  points_lost: 240,
   dp_glance: 440,
   dp_drowsy: 940,
   dp_wake: 760,
@@ -172,6 +173,8 @@ export function audioModeFor(
 function toneSource(level: AlertLevel, tone?: AlertTone): number {
   // Static requires, so Metro bundles every file.
   switch (tone) {
+    case "points_lost":
+      return require("../../../assets/sounds/points_lost.wav") as number;
     case "dp_glance":
       return require("../../../assets/sounds/dp_glance.wav") as number;
     case "dp_drowsy":
