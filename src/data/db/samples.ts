@@ -4,9 +4,10 @@ import { assertTripExists } from '@/data/db/trips';
 import type { SampleRow } from '@/data/db/types';
 
 /**
- * The 1 Hz feature rows for the trip being recorded. They exist so scoring and the trace export
- * can replay the drive; once the trace is written they are purged, which is what keeps this
- * table from growing without bound.
+ * The 1 Hz feature rows of a drive. They exist so a relaunch can rebuild the drive under way and a
+ * drive re-opened within its upload hold can carry on from them. They go when the drive's upload is
+ * sent, or when the hold is over (`purgeFinishedBefore`), which is what keeps this table from
+ * growing without bound.
  */
 
 function toSampleRow(row: Record<string, unknown>): SampleRow {
@@ -80,13 +81,28 @@ export function createSamplesRepo(db: Db) {
     },
 
     /**
-     * Called once the trace has been exported. Returns how many rows went. Runs on `on` when
-     * given, so the purge can commit together with the trip it belongs to.
+     * One drive's rows (its upload was sent, or it was dropped). Returns how many rows went. Runs on
+     * `on` when given, so the purge can commit together with the trip it belongs to.
      */
     async purgeByTrip(clientTripId: string, on: Db = db): Promise<number> {
       const { changes } = await on.execute('DELETE FROM samples WHERE client_trip_id = ?', [
         clientTripId,
       ]);
+      return changes;
+    },
+
+    /**
+     * The sweep: drops the samples of every drive that is closed (not `recording`) and whose end was
+     * decided before `ts` (or never stamped), i.e. drives past the window in which the car setting
+     * off again re-opens them. Returns how many rows went. Runs on `on` when given.
+     */
+    async purgeFinishedBefore(ts: number, on: Db = db): Promise<number> {
+      const { changes } = await on.execute(
+        `DELETE FROM samples WHERE client_trip_id IN (
+           SELECT client_trip_id FROM trips
+            WHERE status != 'recording' AND (finalized_at IS NULL OR finalized_at < ?))`,
+        [ts]
+      );
       return changes;
     },
   };

@@ -2,7 +2,7 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
-import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
 const TABLES = [
   'schema_version',
@@ -15,6 +15,7 @@ const TABLES = [
   'dashcam_events',
   'dashcam_boots',
   'dashcam_coverage',
+  'problem_spots',
 ];
 const V4_INDEXES = ['idx_trips_started_at', 'idx_trips_local_day', 'idx_trip_events_client_trip_id', 'idx_sync_queue_due'];
 const INDEXES = [...V4_INDEXES, 'idx_dashcam_events_id', 'idx_dashcam_events_trip', 'idx_dashcam_events_received'];
@@ -32,17 +33,17 @@ beforeEach(async () => {
   db = await createSqlJsDb();
 });
 
-test('creates every v3 and v5 table and index, and nothing of v2', async () => {
+test('creates every v3, v5 and v10 table and index, and nothing of v2', async () => {
   await migrate(db);
   expect(await names(db, 'table')).toEqual([...TABLES].sort());
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
-test('records the schema version it reached (9)', async () => {
+test('records the schema version it reached (10)', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
-  expect(CURRENT_SCHEMA_VERSION).toBe(9);
+  expect(CURRENT_SCHEMA_VERSION).toBe(10);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 9 }]);
+  expect(rows).toEqual([{ version: 10 }]);
 });
 
 test('is idempotent', async () => {
@@ -51,21 +52,23 @@ test('is idempotent', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
   expect(await names(db, 'table')).toEqual(tables);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 9 }]);
+  expect(rows).toEqual([{ version: 10 }]);
 });
 
-test('the v3 trips table carries the v3 columns', async () => {
+test('the trips table carries the current columns and none of the points or phone ones', async () => {
   await migrate(db);
   const cols = await columns(db, 'trips');
-  for (const c of ['miles', 'safe_miles', 'night_miles', 'polyline', 'from_label', 'to_label', 'points_net', 'estimate', 'counts_json', 'result_json', 'merged_into', 'integrity_json']) {
+  for (const c of ['miles', 'night_miles', 'polyline', 'from_label', 'to_label', 'counts_json', 'result_json', 'merged_into', 'integrity_json', 'start_lat', 'start_lng']) {
     expect(cols).toContain(c);
   }
-  expect(cols).not.toContain('role');
-  expect(cols).not.toContain('score');
-  expect(cols).not.toContain('dms_on');
-  expect(cols).not.toContain('dms_face_seen');
+  for (const c of ['role', 'score', 'dms_on', 'dms_face_seen', 'points_net', 'estimate', 'breakdown_json', 'safe_miles']) expect(cols).not.toContain(c);
+  expect(cols.slice(-14)).toEqual([
+    'continues', 'end_cause', 'watched_miles', 'origin', 'not_driving_expired', 'continuations', 'finalized_at', 'start_source', 'last_seq',
+    'slowdowns', 'speedups', 'turns', 'limit_s', 'moving_s',
+  ]);
   const events = await columns(db, 'trip_events');
-  for (const c of ['type', 'tier', 'units', 'stopped_in_traffic', 'penalty', 'dispute_status']) expect(events).toContain(c);
+  for (const c of ['type', 'tier', 'measured_json', 'dispute_status']) expect(events).toContain(c);
+  for (const c of ['units', 'stopped_in_traffic', 'penalty']) expect(events).not.toContain(c);
 });
 
 test('a v2 development database steps up to v3: the trip tables are replaced, settings and tiles survive', async () => {
@@ -79,7 +82,7 @@ test('a v2 development database steps up to v3: the trip tables are replaced, se
 
   expect((await db.execute('SELECT * FROM trips')).rows).toEqual([]);
   expect((await db.execute("SELECT value_json FROM settings WHERE key = 'units'")).rows).toEqual([{ value_json: '"mi"' }]);
-  expect(await columns(db, 'trips')).toContain('points_net');
+  expect(await columns(db, 'trips')).toContain('night_miles');
 });
 
 test('a v3 database steps up to v4: the DMS columns, events and settings go, everything else survives', async () => {
@@ -165,7 +168,7 @@ test('a v7 database steps up to v8: every stored drive stays, with no end cause 
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
   expect((await db.execute('SELECT client_trip_id, end_cause FROM trips')).rows).toEqual([{ client_trip_id: 't1', end_cause: null }]);
-  expect((await columns(db, 'trips')).slice(-3)).toEqual(['continues', 'end_cause', 'watched_miles']);
+  expect(await columns(db, 'trips')).toEqual(expect.arrayContaining(['continues', 'end_cause', 'watched_miles']));
 });
 
 test('a v8 database steps up to v9: a drive DashPal covered gets its watched miles from its coverage, the rest 0', async () => {
@@ -177,12 +180,103 @@ test('a v8 database steps up to v9: a drive DashPal covered gets its watched mil
   }
   await db.execute("INSERT INTO dashcam_coverage (client_trip_id, moving_s, covered_s) VALUES ('t1', 1000, 500), ('t2', 0, 0)");
 
-  await expect(migrate(db)).resolves.toBe(9);
+  await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
   expect((await db.execute('SELECT client_trip_id, watched_miles FROM trips ORDER BY client_trip_id')).rows).toEqual([
     { client_trip_id: 't1', watched_miles: 10 },
     { client_trip_id: 't2', watched_miles: 0 },
     { client_trip_id: 't3', watched_miles: 0 },
+  ]);
+});
+
+/** A database at V9, as a build before this round left it. */
+async function atV9(): Promise<void> {
+  for (const statement of [...SCHEMA_V1, ...SCHEMA_V2, ...SCHEMA_V3, ...SCHEMA_V4, ...SCHEMA_V5, ...SCHEMA_V6, ...SCHEMA_V7, ...SCHEMA_V8, ...SCHEMA_V9]) {
+    await db.execute(statement);
+  }
+  await db.execute(SCHEMA_VERSION_TABLE);
+  await db.execute('INSERT INTO schema_version (version) VALUES (9)');
+}
+
+test('a v9 database steps up to v10: phone events and the points columns go, clean is recounted, the old answers and settings go', async () => {
+  await atV9();
+  const trip = (id: string, status: string, extra: string, values: string) =>
+    db.execute(`INSERT INTO trips (client_trip_id, started_at, tz, status, created_at, updated_at${extra}) VALUES (?, 1, 'UTC', ?, 1, 1${values})`, [id, status]);
+  // a scored drive whose only event was a pickup: clean once the pickup goes
+  await trip('pickup', 'scored', ', points_net, estimate, clean, safe_miles, result_json', `, 40, 0, 0, 3, '{"net":40}'`);
+  // a pending estimate with a phone event and a hard brake: still not clean
+  await trip('brake', 'pending', ', points_net, estimate, clean, breakdown_json', ", 12, 1, 0, '{}'");
+  // a scored drive with only a DashPal event: clean
+  await trip('dashpal', 'scored', ', clean', ', 0');
+  // a drive with no verdict keeps none
+  await trip('unscored', 'unscored', ', clean', ', NULL');
+  // a recording drive keeps its samples; a finished one loses them
+  await trip('rec', 'recording', '', '');
+  const event = (id: string, tripId: string, type: string, tier = 'severe') =>
+    db.execute(
+      "INSERT INTO trip_events (id, client_trip_id, type, tier, started_at, units, stopped_in_traffic, penalty) VALUES (?, ?, ?, ?, 1, 2, 1, -20)",
+      [id, tripId, type, tier]
+    );
+  await event('p1', 'pickup', 'phone_pickup');
+  await event('p2', 'brake', 'phone_handling', 'moderate');
+  await event('b1', 'brake', 'hard_brake');
+  await event('d1', 'dashpal', 'drowsy');
+  await db.execute("INSERT INTO samples (client_trip_id, ts, row_json) VALUES ('rec', 1, '{}'), ('pickup', 1, '{}')");
+  for (const key of ['home.streakCard.dismissed', 'drive.phoneSwitch', 'units']) {
+    await db.execute("INSERT INTO settings (key, value_json) VALUES (?, 'true')", [key]);
+  }
+
+  await expect(migrate(db)).resolves.toBe(10);
+
+  expect((await db.execute('SELECT id FROM trip_events ORDER BY id')).rows).toEqual([{ id: 'b1' }, { id: 'd1' }]);
+  const fresh = { result_json: null, origin: 'manual', not_driving_expired: 0, continuations: 0, finalized_at: null };
+  expect(
+    (await db.execute('SELECT client_trip_id, clean, result_json, origin, not_driving_expired, continuations, finalized_at FROM trips ORDER BY client_trip_id')).rows
+  ).toEqual([
+    { client_trip_id: 'brake', clean: 0, ...fresh },
+    { client_trip_id: 'dashpal', clean: 1, ...fresh },
+    { client_trip_id: 'pickup', clean: 1, ...fresh },
+    { client_trip_id: 'rec', clean: null, ...fresh },
+    { client_trip_id: 'unscored', clean: null, ...fresh },
+  ]);
+  expect((await db.execute('SELECT DISTINCT slowdowns, speedups, turns, limit_s, moving_s, start_source, last_seq FROM trips')).rows).toEqual([
+    { slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null, start_source: null, last_seq: null },
+  ]);
+  const cols = await columns(db, 'trips');
+  for (const c of ['points_net', 'estimate', 'breakdown_json', 'safe_miles']) expect(cols).not.toContain(c);
+  const events = await columns(db, 'trip_events');
+  for (const c of ['units', 'stopped_in_traffic', 'penalty']) expect(events).not.toContain(c);
+  expect((await db.execute('SELECT client_trip_id FROM samples')).rows).toEqual([{ client_trip_id: 'rec' }]);
+  expect((await db.execute('SELECT key FROM settings')).rows).toEqual([{ key: 'units' }]);
+  expect(await names(db, 'table')).toEqual([...TABLES].sort());
+  expect(await names(db, 'index')).toEqual([...INDEXES].sort());
+});
+
+test('v10 checks: origin is auto or manual, start_source one of three, a spot kind one of the four and its state active or cleared', async () => {
+  await migrate(db);
+  const trip = (id: string, origin: string, source: string | null) =>
+    db.execute(
+      "INSERT INTO trips (client_trip_id, started_at, tz, status, origin, start_source, created_at, updated_at) VALUES (?, 1, 'UTC', 'recording', ?, ?, 1, 1)",
+      [id, origin, source]
+    );
+  await expect(trip('a', 'auto', 'trace')).resolves.toBeDefined();
+  await expect(trip('b', 'manual', null)).resolves.toBeDefined();
+  await expect(trip('c', 'mode', null)).rejects.toThrow();
+  await expect(trip('d', 'auto', 'guess')).rejects.toThrow();
+  const spot = (id: string, kind: string, state: string) =>
+    db.execute(
+      `INSERT INTO problem_spots (id, kind, state, lat, lng, heading_deg, segment, hits, passes, recent_hits, recent_passes, rate,
+         clean_streak, clean_needed, last_hit_at, last_hit_trip, last_pass_at, rank, computed_at)
+       VALUES (?, ?, ?, 47.6, -122.3, 90, '_p~iF~ps|U', 3, 5, 3, 5, 0.4, 0, 5, 1, 't', 1, 1, 1)`,
+      [id, kind, state]
+    );
+  await expect(spot('s1', 'hard_brake', 'active')).resolves.toBeDefined();
+  await expect(spot('s2', 'speeding', 'cleared')).resolves.toBeDefined();
+  await expect(spot('s3', 'phone_pickup', 'active')).rejects.toThrow();
+  await expect(spot('s4', 'hard_corner', 'gone')).rejects.toThrow();
+  expect(await columns(db, 'problem_spots')).toEqual([
+    'id', 'kind', 'state', 'lat', 'lng', 'heading_deg', 'segment', 'limit_mph', 'hits', 'passes', 'recent_hits', 'recent_passes', 'rate',
+    'clean_streak', 'clean_needed', 'last_hit_at', 'last_hit_trip', 'last_pass_at', 'cleared_at', 'rank', 'label', 'label_at', 'computed_at',
   ]);
 });
 

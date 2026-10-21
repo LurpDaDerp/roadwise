@@ -1,6 +1,6 @@
-import { EVENT_TYPES_V3, TIERS_V3 } from '@/data/sync/payload';
+import { EVENT_TYPES, TIERS } from '@/data/sync/payload';
 import type { Db } from '@/data/db/driver';
-import { asEnum, asFlag, asNumber, asNumberOrNull, asText, asTextOrNull, insertStatement, updateStatement } from '@/data/db/row';
+import { asEnum, asNumber, asNumberOrNull, asText, asTextOrNull, insertStatement, updateStatement } from '@/data/db/row';
 import { assertTripExists } from '@/data/db/trips';
 import { DISPUTE_STATUSES, type EventPatch, type EventRow, type NewEvent } from '@/data/db/types';
 
@@ -11,12 +11,9 @@ const COLUMNS = [
   'tier',
   'started_at',
   'duration_s',
-  'units',
-  'stopped_in_traffic',
   'lat',
   'lng',
   'measured_json',
-  'penalty',
   'status',
   'dispute_status',
   'dispute_reason',
@@ -30,16 +27,13 @@ export function toEventRow(row: Record<string, unknown>): EventRow {
   return {
     id: asText(row, 'id'),
     client_trip_id: asText(row, 'client_trip_id'),
-    type: asEnum(row, 'type', EVENT_TYPES_V3),
-    tier: asEnum(row, 'tier', TIERS_V3),
+    type: asEnum(row, 'type', EVENT_TYPES),
+    tier: asEnum(row, 'tier', TIERS),
     started_at: asNumber(row, 'started_at'),
     duration_s: asNumber(row, 'duration_s'),
-    units: asNumberOrNull(row, 'units'),
-    stopped_in_traffic: asFlag(row, 'stopped_in_traffic'),
     lat: asNumberOrNull(row, 'lat'),
     lng: asNumberOrNull(row, 'lng'),
     measured_json: asTextOrNull(row, 'measured_json'),
-    penalty: asNumberOrNull(row, 'penalty'),
     status: asEnum(row, 'status', ['active', 'removed'] as const),
     dispute_status: asEnum(row, 'dispute_status', DISPUTE_STATUSES),
     dispute_reason: asTextOrNull(row, 'dispute_reason'),

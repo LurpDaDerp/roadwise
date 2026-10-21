@@ -22,10 +22,25 @@ beforeEach(async () => {
 
 test('insert applies the defaults; listByTrip is oldest first', async () => {
   await events.insert({ id: 'e2', client_trip_id: 'a', type: 'hard_brake', tier: 'severe', started_at: T0 + 2000 });
-  await events.insert({ id: 'e1', client_trip_id: 'a', type: 'speeding', tier: 'minor', started_at: T0 + 1000, duration_s: 12, penalty: 15 });
+  await events.insert({ id: 'e1', client_trip_id: 'a', type: 'speeding', tier: 'minor', started_at: T0 + 1000, duration_s: 12, measured_json: '{"overMphS":42.5}' });
   const list = await events.listByTrip('a');
   expect(list.map((e) => e.id)).toEqual(['e1', 'e2']);
-  expect(list[1]).toMatchObject({ status: 'active', dispute_status: 'none', stopped_in_traffic: 0, units: null, penalty: null, duration_s: 0 });
+  expect(list[0]).toMatchObject({ duration_s: 12, measured_json: '{"overMphS":42.5}' });
+  expect(list[1]).toEqual({
+    id: 'e2',
+    client_trip_id: 'a',
+    type: 'hard_brake',
+    tier: 'severe',
+    started_at: T0 + 2000,
+    duration_s: 0,
+    lat: null,
+    lng: null,
+    measured_json: null,
+    status: 'active',
+    dispute_status: 'none',
+    dispute_reason: null,
+    dispute_message: null,
+  });
 });
 
 test('insertMany is all or nothing and refuses an unknown trip explicitly', async () => {
@@ -39,7 +54,7 @@ test('insertMany is all or nothing and refuses an unknown trip explicitly', asyn
 });
 
 test('update settles a dispute; reparent moves a merged drive’s events', async () => {
-  await events.insert({ id: 'e1', client_trip_id: 'b', type: 'phone_pickup', tier: 'severe', started_at: T0 });
+  await events.insert({ id: 'e1', client_trip_id: 'b', type: 'hard_corner', tier: 'severe', started_at: T0 });
   await events.update('e1', { dispute_status: 'accepted', status: 'removed' });
   expect(await events.get('e1')).toMatchObject({ dispute_status: 'accepted', status: 'removed' });
   expect(await events.reparent('b', 'a')).toBe(1);

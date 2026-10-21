@@ -1,7 +1,7 @@
 /**
  * The on-device schema. SQLite is the source of truth for the user's own drives (offline-first,
- * plan §5): a drive is recorded here, scored here as an estimate, uploaded from here, and the
- * server's answer is written back here.
+ * plan §5): a drive is recorded here, classified here (scored or too short, clean or not), uploaded
+ * from here, and the server's answer is written back here.
  *
  * Conventions:
  * - timestamps are epoch **milliseconds** stored as INTEGER;
@@ -12,7 +12,9 @@
  * Versions 1 and 2 are the v2 app's (never shipped to users). Version 3 drops the v2 trip tables
  * and creates the v3 ones; `settings` and `speed_limit_tiles` survive untouched. Version 4 removes
  * what the in-app driver monitoring (DMS) left behind. Version 5 adds the DashPal dashcam's tables.
- * Version 6 marks the DashPal events that arrived while no drive was open.
+ * Version 6 marks the DashPal events that arrived while no drive was open. Versions 7 to 9 add a
+ * column each. Version 10 is the round where points and phone use leave, drives start on their own,
+ * scores are judged per opportunity and problem spots are kept.
  */
 
 /** Migration bookkeeping. Created before the version row is read, so it is not part of V1. */
@@ -272,3 +274,105 @@ export const SCHEMA_V9: readonly string[] = [
      FROM dashcam_coverage c WHERE c.client_trip_id = trips.client_trip_id)
    WHERE EXISTS (SELECT 1 FROM dashcam_coverage c WHERE c.client_trip_id = trips.client_trip_id)`,
 ];
+
+/**
+ * V10 (removal part): points and phone use are gone.
+ * - phone events go, and each drive's clean flag is recomputed from the events it keeps (DashPal
+ *   events never break a clean drive);
+ * - the local points estimate (`points_net`, `estimate`, `breakdown_json`), safe miles and the stored
+ *   server answers (`result_json`: every one held points) go; event penalties, units and
+ *   stopped-in-traffic go (they were points, or phone use's);
+ * - the streak card's dismissal and the screen-switch settings go.
+ */
+export const REMOVAL_V10: readonly string[] = [
+  "DELETE FROM trip_events WHERE type IN ('phone_pickup', 'phone_handling')",
+  `UPDATE trips SET clean = CASE WHEN EXISTS (SELECT 1 FROM trip_events e WHERE e.client_trip_id = trips.client_trip_id
+       AND e.status = 'active' AND e.type NOT IN ('eyes_off', 'drowsy')) THEN 0 ELSE 1 END
+     WHERE clean IS NOT NULL`,
+  'ALTER TABLE trips DROP COLUMN points_net',
+  'ALTER TABLE trips DROP COLUMN estimate',
+  'ALTER TABLE trips DROP COLUMN breakdown_json',
+  'ALTER TABLE trips DROP COLUMN safe_miles',
+  'UPDATE trips SET result_json = NULL',
+  'ALTER TABLE trip_events DROP COLUMN penalty',
+  'ALTER TABLE trip_events DROP COLUMN units',
+  'ALTER TABLE trip_events DROP COLUMN stopped_in_traffic',
+  "DELETE FROM settings WHERE key IN ('home.streakCard.dismissed', 'drive.phoneSwitch')",
+];
+
+/**
+ * V10 (lifecycle part): drives start on their own.
+ * - `origin`: how the drive started, noticed on its own (`auto`) or a Start tap (`manual`);
+ * - `not_driving_expired`: 1 once the in-drive "Not driving?" ran out of its 2-minute budget (no
+ *   "Wasn't driving" later);
+ * - `continuations`: how many times the drive was re-opened because the car set off again near
+ *   where it stopped while its upload was still held (local only);
+ * - `finalized_at`: when the end was decided (epoch ms); the upload hold and the re-open window run
+ *   from it;
+ * - `start_source`: where the start came from (`trace`: traced back over the rows, `motion`: the
+ *   motion history, `wake`: the first row); the start place lives in the existing
+ *   `start_lat`/`start_lng`;
+ * - `last_seq`: the last journal row (iOS) the recorder made durable, so a relaunch resumes there;
+ * - samples are now kept until the upload is sent, so any left from finished drives go.
+ *
+ * `start_lat` and `start_lng` exist since V3 (the raw first fix), so they are not added here.
+ */
+export const LIFECYCLE_V10: readonly string[] = [
+  "ALTER TABLE trips ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual' CHECK (origin IN ('auto', 'manual'))",
+  'ALTER TABLE trips ADD COLUMN not_driving_expired INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE trips ADD COLUMN continuations INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE trips ADD COLUMN finalized_at INTEGER',
+  "ALTER TABLE trips ADD COLUMN start_source TEXT CHECK (start_source IN ('trace', 'motion', 'wake'))",
+  'ALTER TABLE trips ADD COLUMN last_seq INTEGER',
+  "DELETE FROM samples WHERE client_trip_id IN (SELECT client_trip_id FROM trips WHERE status != 'recording')",
+];
+
+/**
+ * V10 (scores part): each drive's chances to slip, counted as it records (scoring `Exposure`).
+ * NULL means the drive was recorded before the counters existed: they are estimated at read from
+ * its miles and duration (`estimateExposure`).
+ */
+export const SCORES_V10: readonly string[] = [
+  'ALTER TABLE trips ADD COLUMN slowdowns INTEGER',
+  'ALTER TABLE trips ADD COLUMN speedups INTEGER',
+  'ALTER TABLE trips ADD COLUMN turns INTEGER',
+  'ALTER TABLE trips ADD COLUMN limit_s INTEGER',
+  'ALTER TABLE trips ADD COLUMN moving_s INTEGER',
+];
+
+/**
+ * V10 (spots part): `problem_spots`, the places where the same thing keeps happening on this
+ * driver's drives, derived on the phone from `trip_events` and `trips.polyline` and replaced whole
+ * on every recompute (`src/features/spots/recompute.ts`). Local only: never uploaded or restored.
+ * No foreign key: a spot names its newest hit's drive only for the sheet's link.
+ */
+export const PROBLEM_SPOTS_V10: readonly string[] = [
+  `CREATE TABLE problem_spots (
+    id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('speeding', 'hard_brake', 'hard_corner', 'hard_accel')),
+    state TEXT NOT NULL CHECK (state IN ('active', 'cleared')),
+    lat REAL NOT NULL,
+    lng REAL NOT NULL,
+    heading_deg REAL NOT NULL,
+    segment TEXT NOT NULL,
+    limit_mph INTEGER,
+    hits INTEGER NOT NULL,
+    passes INTEGER NOT NULL,
+    recent_hits INTEGER NOT NULL,
+    recent_passes INTEGER NOT NULL,
+    rate REAL NOT NULL,
+    clean_streak INTEGER NOT NULL,
+    clean_needed INTEGER NOT NULL,
+    last_hit_at INTEGER NOT NULL,
+    last_hit_trip TEXT NOT NULL,
+    last_pass_at INTEGER NOT NULL,
+    cleared_at INTEGER,
+    rank INTEGER NOT NULL,
+    label TEXT,
+    label_at INTEGER,
+    computed_at INTEGER NOT NULL
+  )`,
+];
+
+/** V10: one entry for the whole round (points and phone use out, drives that start on their own, fair scores, problem spots). */
+export const SCHEMA_V10: readonly string[] = [...REMOVAL_V10, ...LIFECYCLE_V10, ...SCORES_V10, ...PROBLEM_SPOTS_V10];

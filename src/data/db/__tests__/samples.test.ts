@@ -155,3 +155,19 @@ test('appendMany on a transaction handle joins it: undone on rollback, and still
   await db.transaction((tx) => samples.appendMany('trip-1', batch, tx));
   await expect(samples.count('trip-1')).resolves.toBe(2);
 });
+
+test('purgeFinishedBefore drops the samples of closed drives whose end was decided before the cut, and keeps the rest', async () => {
+  const trips = createTripsRepo(db);
+  const HOLD = 300_000;
+  const now = T0 + 3_600_000;
+  // trip-1 recording (kept); trip-2 closed long ago (purged); held: closed within the hold (kept);
+  // stale: closed with no finalize stamp (purged, it can never re-open)
+  await trips.update('trip-2', { status: 'pending', finalized_at: now - HOLD - 1 });
+  await trips.insert({ client_trip_id: 'held', started_at: T0, tz: 'UTC', status: 'pending', finalized_at: now - HOLD + 1 }, T0);
+  await trips.insert({ client_trip_id: 'stale', started_at: T0, tz: 'UTC', status: 'scored' }, T0);
+  for (const id of ['trip-1', 'trip-2', 'held', 'stale']) await samples.appendMany(id, [{ ts: T0, row: { n: 1 } }, { ts: T0 + 1000, row: { n: 2 } }]);
+
+  await expect(db.transaction((tx) => samples.purgeFinishedBefore(now - HOLD, tx))).resolves.toBe(4);
+  for (const [id, n] of [['trip-1', 2], ['trip-2', 0], ['held', 2], ['stale', 0]] as const) await expect(samples.count(id)).resolves.toBe(n);
+  await expect(samples.purgeFinishedBefore(now - HOLD)).resolves.toBe(0);
+});

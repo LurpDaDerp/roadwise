@@ -1,7 +1,7 @@
 export { createExpoDb, type Db, type DbResult } from '@/data/db/driver';
 export { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
-export { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
-export { DISPUTE_REASONS } from '@/data/db/types';
+export { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V10, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+export { DISPUTE_REASONS, DRIVE_ORIGINS, START_SOURCES } from '@/data/db/types';
 
 export { MissingTripError } from '@/data/db/errors';
 export { createEventsRepo, type EventsRepo } from '@/data/db/events';
@@ -14,6 +14,7 @@ export { assertTripExists, createTripsRepo, type TripListOptions, type TripsRepo
 export type {
   DisputeReason,
   DisputeStatus,
+  DriveOrigin,
   EventPatch,
   EventRow,
   EventStatus,
@@ -24,8 +25,10 @@ export type {
   QueueStatus,
   SampleRow,
   SettingRow,
+  StartSource,
   Tile,
   TileRow,
+  TripEndCause,
   TripPatch,
   TripRow,
   TripStatus,
