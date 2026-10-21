@@ -29,15 +29,16 @@ export function busiest(grid: DriveGrid): { day: number; band: number; count: nu
 export const bandSpan = (band: number): string => `${BAND_LABELS[band]}–${BAND_LABELS[(band + 1) % BAND_LABELS.length]}`;
 
 /**
- * The colour steps, fewest to most drives: teal through blue to deep violet on the light card,
- * blue through teal to lime on the dark one (a viridis-like order), so the busiest cell always
- * stands out most. Even the first step stands at 3:1 against its card; empty cells are an outline
- * instead, so they differ by shape too.
+ * The shading steps, fewest to most drives: neutral greys evenly spaced in OKLab lightness, so each
+ * step looks as far from the next as any other. On the light card light grey to near-black (L 0.86
+ * down to 0.18), on the dark card mirrored, dark grey to near-white (L 0.36 up to 0.96), so the
+ * busiest cell always stands out most. Empty cells are an outline instead of a fill, so they differ
+ * from the faintest step by shape too.
  */
 export const HEAT_STEPS = 5;
 export const HEAT_RAMP = {
-  light: ['#2A9D8F', '#2B83BA', '#3B5BA9', '#4A2F8F', '#2A0F5C'],
-  dark: ['#2B83BA', '#2FA3B5', '#4CC0A8', '#8FD98C', '#D9F07A'],
+  light: ['#D1D1D1', '#9B9B9B', '#696969', '#3A3A3A', '#121212'],
+  dark: ['#3D3D3D', '#666666', '#929292', '#C1C1C1', '#F2F2F2'],
 } as const satisfies Record<'light' | 'dark', readonly string[]>;
 
 /** A cell's step: 0 for no drives, then 1–5 by its share of the busiest cell (a single drive is at least 1). */

@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { View, type TextStyle } from 'react-native';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
 
-import { distanceWord, per100In, type Units } from '@/lib/units';
 import { Card, formatPointsValue, SegmentedControl, Text, tokens, useTheme } from '@/ui';
 
 import { analyticsCopy } from './copy';
@@ -103,12 +102,13 @@ const tickWidth = (ticks: readonly TrendTick[], fontSize: number): number => Mat
 // ---------------------------------------------------------------------------------------------
 // Words
 
-/** A series value as drawn ("88", "2.1" with "/100 mi", "+120" with "pts") and as spoken. */
-export function trendValue(kind: TrendKind, v: number, units: Units): Metric {
+/** A series value as drawn ("88", "3" with "events", "+120" with "pts") and as spoken. */
+export function trendValue(kind: TrendKind, v: number): Metric {
   if (kind === 'score') return { value: String(Math.round(v)), unit: '', spoken: String(Math.round(v)) };
   if (kind === 'events') {
-    const value = v >= 10 ? String(Math.round(v)) : v.toFixed(1);
-    return { value, unit: `/100 ${units}`, spoken: value };
+    const n = Math.round(v);
+    const unit = n === 1 ? 'event' : 'events';
+    return { value: n.toLocaleString('en-US'), unit, spoken: `${n} ${unit}` };
   }
   const r = Math.round(v);
   return { value: formatPointsValue(v, true), unit: 'pts', spoken: r > 0 ? `plus ${r}` : r < 0 ? `minus ${Math.abs(r)}` : '0' };
@@ -117,7 +117,7 @@ export function trendValue(kind: TrendKind, v: number, units: Units): Metric {
 /** A Y axis label: the series' number alone ("100", "2.5", "+120"); the unit is on the latest value. */
 export function axisValue(kind: TrendKind, v: number): string {
   if (kind === 'score') return String(Math.round(v));
-  if (kind === 'events') return Math.abs(v) >= 10 ? String(Math.round(v)) : v.toFixed(1);
+  if (kind === 'events') return Number.isInteger(v) || Math.abs(v) >= 10 ? String(Math.round(v)) : v.toFixed(1);
   return formatPointsValue(v, true);
 }
 
@@ -128,14 +128,10 @@ export const axisTicks = (kind: TrendKind, lo: number, hi: number): string[] => 
 export const axisWidth = (labels: readonly string[], fontSize: number): number =>
   Math.ceil(Math.max(1, ...labels.map((s) => s.length)) * fontSize * 0.6) + AXIS_GAP;
 
-/** Events are counted per 100 mi; in km they read per 100 km. */
-export const seriesIn = (kind: TrendKind, points: readonly TrendPoint[], units: Units): TrendPoint[] =>
-  kind === 'events' ? points.map((p) => ({ ...p, value: Math.round(per100In(p.value, units) * 10) / 10 })) : [...points];
-
 /** The chart for a screen reader: "Score by day. Lowest 71 on Tuesday, latest 88, trending up." */
-export function trendLabel(kind: TrendKind, points: readonly TrendPoint[], step: TrendStep, units: Units): string {
+export function trendLabel(kind: TrendKind, points: readonly TrendPoint[], step: TrendStep): string {
   if (points.length < 2) return c.notEnough;
-  const name = kind === 'events' ? c.spoken.events(distanceWord(units)) : c.spoken[kind];
+  const name = c.spoken[kind];
   const low = points.reduce((a, b) => (b.value < a.value ? b : a));
   const last = points[points.length - 1]!;
   const { lo, hi } = trendRange(
@@ -143,7 +139,7 @@ export function trendLabel(kind: TrendKind, points: readonly TrendPoint[], step:
     points.map((p) => p.value)
   );
   const dir = c.direction[trendDirection(points, hi - lo)];
-  return `${name} ${c.by[step]}. ${c.lowest} ${trendValue(kind, low.value, units).spoken} ${low.when}, ${c.latest} ${trendValue(kind, last.value, units).spoken}, ${dir}.`;
+  return `${name} ${c.by[step]}. ${c.lowest} ${trendValue(kind, low.value).spoken} ${low.when}, ${c.latest} ${trendValue(kind, last.value).spoken}, ${dir}.`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -151,7 +147,6 @@ export function trendLabel(kind: TrendKind, points: readonly TrendPoint[], step:
 
 export interface TrendCardProps {
   trend: Trend;
-  units: Units;
   layout: MetricsLayout;
   /** The chart's width: the card's inside. */
   width: number;
@@ -164,10 +159,10 @@ export interface TrendCardProps {
  * middle and top of the range with their values down a Y axis on the left, and a few short ticks
  * under it. Fewer than two points read "Not enough drives yet" in the chart's place.
  */
-export function TrendCard({ trend, units, layout: l, width, text }: TrendCardProps) {
+export function TrendCard({ trend, layout: l, width, text }: TrendCardProps) {
   const t = useTheme();
   const [kind, setKind] = useState<TrendKind>('score');
-  const points = seriesIn(kind, trend.series[kind], units);
+  const points = trend.series[kind];
   const { lo, hi } = trendRange(
     kind,
     points.map((p) => p.value)
@@ -181,7 +176,7 @@ export function TrendCard({ trend, units, layout: l, width, text }: TrendCardPro
   const latest = sizeAt('subhead', l.textScale);
   const xy = points.map((p) => plotPoint(p, plotW, l.plot, lo, hi));
   const last = xy[xy.length - 1];
-  const lastValue = points.length > 0 ? trendValue(kind, points[points.length - 1]!.value, units) : null;
+  const lastValue = points.length > 0 ? trendValue(kind, points[points.length - 1]!.value) : null;
   const ticks = visibleTicks(trend.ticks, plotW, tickWidth(trend.ticks, tick.fontSize));
   const tickW = tickWidth(ticks, tick.fontSize);
   const halo = { textShadowColor: t.colors.surface, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6 };
@@ -212,7 +207,7 @@ export function TrendCard({ trend, units, layout: l, width, text }: TrendCardPro
         <View
           accessible
           accessibilityRole="image"
-          accessibilityLabel={trendLabel(kind, points, trend.step, units)}
+          accessibilityLabel={trendLabel(kind, points, trend.step)}
           style={{ height: box, width: axisW + plotW, flexDirection: 'row' }}
           testID="trend-chart-box"
         >

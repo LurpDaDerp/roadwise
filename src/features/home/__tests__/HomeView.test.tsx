@@ -72,20 +72,22 @@ describe('the full Home', () => {
     expect(p.onAnalytics).toHaveBeenCalled();
   });
 
-  test('stats card: 4 stats coloured by band, with arrows vs 30 days', async () => {
+  test('stats card: 4 stats as counts over the 7 days, coloured by band, with arrows vs an average 30-day week', async () => {
     await draw(<HomeView {...props()} />);
     const card = screen.getByTestId('stats-card');
     expect(within(card).getByText('Last 7 days')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Speeding events, 6.0 per 100 mi, Needs work, Up, worse vs your 30-day average')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Phone pickups, 0.0 per 100 mi, Good, Down, better vs your 30-day average')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Speeding events, 3, Needs work, Up, worse vs your 30-day average')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Phone pickups, 0, Good, Down, better vs your 30-day average')).toBeOnTheScreen();
     expect(screen.getByLabelText('Clean drives, 50 %, Okay, Down, worse vs your 30-day average')).toBeOnTheScreen();
-    expect(within(card).getByText(/^6.0/)).toHaveStyle({ color: tokens.color.light.signal.severe.text });
+    expect(within(card).getByText('3')).toHaveStyle({ color: tokens.color.light.signal.severe.text });
+    expect(within(card).queryByText(/per 100/)).toBeNull();
+    expect(within(card).getByText('Arrows compare with your average week in the last 30 days.')).toBeOnTheScreen();
   });
 
   test('with no drive in 7 days the card shows 30 days without arrows', async () => {
     await draw(<HomeView {...props({ week: sums({ drives: 0, miles: 0 }) })} />);
     expect(screen.getByText('Last 30 days')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Speeding events, 1.0 per 100 mi, Good')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Speeding events, 2, Good')).toBeOnTheScreen();
   });
 
   test('recent drives, weekly challenges, and links out', async () => {
@@ -349,11 +351,12 @@ describe('final-review fixes', () => {
     expect(screen.getByTestId('challenges-freeze')).toHaveTextContent(/2\/3 toward a Freeze/);
   });
 
-  test('km: the stats card reads per 100 km and the unranked line converts', async () => {
+  test('km: the stats card shows the same counts, never per 100 km, and the unranked line converts', async () => {
     publishUnits('km');
     const s = summary();
     await draw(<HomeView {...props({ summary: { ...s, progress: { ...s.progress, ranked: false, safety_rating: null, miles_30d: 12 } } })} />);
-    expect(screen.getAllByText('per 100 km').length).toBeGreaterThan(0);
+    expect(screen.getByLabelText('Speeding events, 3, Needs work, Up, worse vs your 30-day average')).toBeOnTheScreen();
+    expect(screen.queryByText(/per 100/)).toBeNull();
     expect(screen.getByText('19/40 km')).toBeOnTheScreen();
     expect(screen.getByLabelText('Safety Rating: none yet. 19 of 40 kilometers in the last 30 days to get one')).toBeOnTheScreen();
   });

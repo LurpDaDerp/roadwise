@@ -8,7 +8,7 @@ export type TrendDirection = 'up' | 'down' | 'flat';
 
 export type TrendArrowProps = {
   direction: TrendDirection;
-  /** Which way is good for this metric. Safety Rating: `up`. Events per 100 mi: `down`. Default `up`. */
+  /** Which way is good for this metric. Safety Rating: `up`. Event counts: `down`. Default `up`. */
   better?: 'up' | 'down';
   size?: number;
   /** Default "Up, better" / "Down, worse" / "No change". */

@@ -218,16 +218,18 @@ describe('route', () => {
 });
 
 describe('stats', () => {
-  test('Home shows the last 7 days coloured by the spec bands, with arrows vs 30 days', () => {
+  test('Home shows the last 7 days as counts coloured by the spec bands, with arrows vs an average 30-day week', () => {
     const { stats, window } = homeStats(
       sums({ miles: 50, drives: 4, cleanDrives: 2, speeding: 3, pickups: 0, hardBrake: 1, hardAccel: 0 }),
       sums({ miles: 200, drives: 20, cleanDrives: 18, speeding: 2, pickups: 1, hardBrake: 4, hardAccel: 2 })
     );
     expect(window).toBe('7d');
     const by = Object.fromEntries(stats.map((s) => [s.id, s]));
-    expect(by.speeding).toMatchObject({ value: '6.0', health: 'red', trend: 'up' });
-    expect(by.pickups).toMatchObject({ value: '0.0', health: 'green', trend: 'down' });
-    expect(by.harsh).toMatchObject({ value: '2.0', health: 'green', trend: 'down' });
+    // counts over the 7 days, never per 100 mi; the colour still follows the rate (6.0 per 100 mi is red)
+    expect(by.speeding).toMatchObject({ value: '3', unit: '', health: 'red', trend: 'up' });
+    expect(by.pickups).toMatchObject({ value: '0', unit: '', health: 'green', trend: 'down' });
+    // 1 against 6 × 7/30 = 1.4 a week
+    expect(by.harsh).toMatchObject({ value: '1', unit: '', health: 'green', trend: 'down' });
     expect(by.clean).toMatchObject({ value: '50', health: 'yellow', trend: 'down', higherIsBetter: true });
   });
 

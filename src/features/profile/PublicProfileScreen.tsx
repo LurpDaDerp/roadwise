@@ -4,7 +4,7 @@ import { Alert, View } from 'react-native';
 
 import { statsFrom, type StatSums } from '@scoring';
 import { useUnits } from '@/data/queries/units';
-import { formatRate, STAT_LABEL } from '@/features/drives/stats';
+import { formatStat, STAT_LABEL } from '@/features/drives/stats';
 import { backOrHome, TopBar } from '@/features/settings/parts';
 import { useHeatmap, useMemberStats, useProfile, useServerAction, type PublicProfile, type Relationship } from '@/features/social/api';
 import { isNotFound } from '@/features/social/errors';
@@ -196,7 +196,7 @@ function MemberStats({ profile }: { profile: PublicProfile }) {
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: th.space.lg }}>
           {home.map((s) => {
             // The same rounding and units as Home's stats card.
-            const shown = formatRate(s, units);
+            const shown = formatStat(s, units);
             return (
               <View key={s.id} style={{ width: '50%' }}>
                 <StatTile

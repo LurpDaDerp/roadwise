@@ -215,12 +215,12 @@ function Body() {
       <Section title="Stats">
         <Card>
           <View style={{ flexDirection: 'row', gap: t.space.lg }}>
-            <StatTile label="Speeding" value="0.8" unit="per 100 mi" health="green" trend="down" style={{ flex: 1 }} />
-            <StatTile label="Phone pickups" value="1.4" unit="per 100 mi" health="red" trend="up" style={{ flex: 1 }} />
+            <StatTile label="Speeding events" value="1" health="green" trend="down" style={{ flex: 1 }} />
+            <StatTile label="Phone pickups" value="4" health="red" trend="up" style={{ flex: 1 }} />
           </View>
           <Divider />
           <View style={{ flexDirection: 'row', gap: t.space.lg }}>
-            <StatTile label="Harsh driving" value="6.1" unit="per 100 mi" health="yellow" trend="flat" style={{ flex: 1 }} />
+            <StatTile label="Harsh driving" value="6" health="yellow" trend="flat" style={{ flex: 1 }} />
             <StatTile label="Clean drives" value="84" unit="%" health="green" trend="up" higherIsBetter style={{ flex: 1 }} />
           </View>
         </Card>

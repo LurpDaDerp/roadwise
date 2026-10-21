@@ -128,10 +128,10 @@ test('the page keeps only general numbers: no category counts, rates or bests, a
 });
 
 test.each([
-  ['speeding', 'Speed · 88', ['metric-speeding', 'metric-speeding-rate'], null],
-  ['braking', 'Braking · 72', ['metric-brakes', 'metric-brakes-rate'], null],
-  ['accel', 'Acceleration · 95', ['metric-starts', 'metric-starts-rate'], null],
-  ['cornering', 'Turning · 100', ['metric-turns', 'metric-turns-rate'], null],
+  ['speeding', 'Speed · 88', ['metric-speeding', 'metric-speeding-distance'], null],
+  ['braking', 'Braking · 72', ['metric-brakes', 'metric-brakes-distance'], null],
+  ['accel', 'Acceleration · 95', ['metric-starts', 'metric-starts-distance'], null],
+  ['cornering', 'Turning · 100', ['metric-turns', 'metric-turns-distance'], null],
   ['phone', 'Phone use · 60', ['metric-pickups', 'metric-phone-time'], 'best-phone-free'],
   ['night', 'Time of day · 50', ['metric-after-dark', 'metric-dark-share'], null],
 ] as const)('tapping %s on the radar opens its details, which close again', async (axis, title, cells, best) => {
@@ -167,7 +167,7 @@ test("the sheet's range is the page's: switching it there re-reads the page too"
   const sheet = screen.getByTestId('category-sheet');
   // Six drives in the week, a hard brake each, 72 mi.
   expect(within(sheet).getByTestId('metric-brakes-value')).toHaveTextContent('6');
-  expect(within(sheet).getByTestId('metric-brakes-rate-value')).toHaveTextContent('8.3 /100 mi');
+  expect(within(sheet).getByTestId('metric-brakes-distance-value')).toHaveTextContent('72.0 mi');
   await press(within(sheet).getByRole('tab', { name: 'Month' }));
   expect(mockUseAnalytics).toHaveBeenLastCalledWith('month');
   expect(within(screen.getByTestId('category-sheet')).getByTestId('metric-brakes-value')).toHaveTextContent('10');

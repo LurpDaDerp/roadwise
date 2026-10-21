@@ -32,12 +32,6 @@ export function formatDistance(miles: number, units: Units, opts: { digits?: 0 |
   return `${n} ${opts.spoken ? distanceWord(units) : distanceUnit(units)}`;
 }
 
-/** A rate per 100 mi as a rate per 100 of the driver's units (per 100 km is 1.609× rarer). */
-export const per100In = (ratePer100Mi: number, units: Units): number => (units === 'km' ? ratePer100Mi / KM_PER_MILE : ratePer100Mi);
-
-/** "per 100 mi" / "per 100 km". */
-export const per100Label = (units: Units): string => `per 100 ${distanceUnit(units)}`;
-
 /**
  * Progress toward a distance in the driver's units, whole numbers: "12/25 mi" or "19/40 km".
  * `done` is floored and capped at the target, so it never reads as reached early.

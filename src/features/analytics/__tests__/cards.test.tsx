@@ -473,10 +473,10 @@ describe('CategorySheet', () => {
 
   test("each category's numbers over the range: its own counts, never points", () => {
     expect(Object.fromEntries(AXES.map((a) => [a.key, categoryGroup(a.key, sums, 'week', 'mi').cells.map((c) => c.caption)]))).toEqual({
-      speeding: ['Speeding events', 'Rate'],
-      braking: ['Hard brakes', 'Rate'],
-      accel: ['Hard starts', 'Rate'],
-      cornering: ['Sharp turns', 'Rate'],
+      speeding: ['Speeding events', 'Distance'],
+      braking: ['Hard brakes', 'Distance'],
+      accel: ['Hard starts', 'Distance'],
+      cornering: ['Sharp turns', 'Distance'],
       phone: ['Pickups', 'Phone time'],
       night: ['After dark', 'Share after dark'],
     });
@@ -487,7 +487,10 @@ describe('CategorySheet', () => {
     }
     expect(categoryGroup('braking', sums, 'week', 'mi')).toMatchObject({ key: 'braking', title: 'Last 7 days' });
     expect(categoryGroup('braking', sums, 'day', 'mi').title).toBe('Last 24 hours');
-    expect(categoryGroup('braking', sums, 'week', 'km').cells[1]!.metric).toMatchObject({ value: '3.9', unit: '/100 km' });
+    // the total over the range, never a rate per distance
+    expect(categoryGroup('braking', sums, 'week', 'km').cells[0]!.metric).toMatchObject({ value: '3', unit: '' });
+    for (const a of AXES)
+      for (const c of categoryGroup(a.key, sums, 'week', 'km').cells) expect(`${c.metric.unit} ${c.metric.spoken}`).not.toMatch(/\/100|per 100/);
     expect(CATEGORY_BEST).toEqual({ phone: 'phone-free' });
     expect(categoryTitle('speeding', 88)).toBe('Speed · 88');
     expect(categoryTitle('cornering', null)).toBe('Turning · —');
@@ -503,8 +506,8 @@ describe('CategorySheet', () => {
     expect(screen.getByTestId('category-coaching-icon')).toHaveStyle({ color: light.warning });
     expect(screen.getByTestId('metrics-braking-title')).toHaveTextContent('Last 7 days');
     expect(screen.getByTestId('metric-brakes-value')).toHaveTextContent('3');
-    expect(screen.getByTestId('metric-brakes-rate-value')).toHaveTextContent('6.3 /100 mi');
-    expect(screen.getByLabelText('Rate, 6.3 per 100 miles')).toBeOnTheScreen();
+    expect(screen.getByTestId('metric-brakes-distance-value')).toBeOnTheScreen();
+    expect(screen.queryByText(/\/100|per 100/)).toBeNull();
     expect(screen.queryByTestId('category-best')).toBeNull();
     expect(screen.queryByText(/pts|points/i)).toBeNull();
     expect(screen.getByRole('tab', { name: 'Week' })).toBeSelected();
@@ -603,13 +606,13 @@ describe('TrendCard', () => {
     expect(screen.getByTestId('trend-chart-box')).toHaveAccessibleName('Score by day. Lowest 83 on Sunday, latest 100, trending up.');
   });
 
-  test('the picker switches the series; Events read per 100 of the driver’s units, Points per drive', async () => {
+  test('the picker switches the series; Events read as each day’s total count, Points per drive', async () => {
     await draw(<MetricsCards sums={windowSums(list, null)} trend={data} />);
     await press(screen.getByRole('tab', { name: 'Events' }));
     expect(screen.getByRole('tab', { name: 'Events' })).toBeSelected();
-    // Sunday: 3 events over 30 mi = 10 per 100 mi; Monday 0.
-    expect(screen.getByTestId('trend-chart-box')).toHaveAccessibleName('Events per 100 miles by day. Lowest 0.0 today, latest 0.0, trending down.');
-    expect(screen.getByTestId('trend-latest', { includeHiddenElements: true })).toHaveTextContent('0.0 /100 mi');
+    // Sunday: 3 events; Monday 0.
+    expect(screen.getByTestId('trend-chart-box')).toHaveAccessibleName('Events by day. Lowest 0 events today, latest 0 events, trending down.');
+    expect(screen.getByTestId('trend-latest', { includeHiddenElements: true })).toHaveTextContent('0 events');
     await press(screen.getByRole('tab', { name: 'Points' }));
     expect(screen.getByTestId('trend-chart-box')).toHaveAccessibleName('Points per drive by day. Lowest plus 90 on Sunday, latest plus 150, trending up.');
     expect(screen.getByTestId('trend-latest', { includeHiddenElements: true })).toHaveTextContent('+150 pts');
@@ -622,17 +625,17 @@ describe('TrendCard', () => {
     await press(screen.getByRole('tab', { name: 'Points' }));
     // +90 and +150, padded by 15 % of the spread (9): 81 to 159.
     expect(labels()).toEqual(['+159', '+120', '+81']);
-    expect(axisTicks('events', 0, 2.5)).toEqual(['2.5', '1.3', '0.0']);
-    expect(axisTicks('events', 0, 14)).toEqual(['14', '7.0', '0.0']);
+    expect(axisTicks('events', 0, 2.5)).toEqual(['2.5', '1.3', '0']);
+    expect(axisTicks('events', 0, 14)).toEqual(['14', '7', '0']);
     // The plot is what the axis leaves of the card's inside.
     expect(axisWidth(['+159', '+120', '+81'], 12)).toBe(Math.ceil(4 * 12 * 0.6) + AXIS_GAP);
   });
 
-  test('in kilometres, Events read per 100 km', async () => {
+  test('in kilometres, Events are the same counts', async () => {
     publishUnits('km');
     await draw(<MetricsCards sums={windowSums(list, null)} trend={data} />);
     await press(screen.getByRole('tab', { name: 'Events' }));
-    expect(screen.getByTestId('trend-chart-box')).toHaveAccessibleName('Events per 100 kilometers by day. Lowest 0.0 today, latest 0.0, trending down.');
+    expect(screen.getByTestId('trend-chart-box')).toHaveAccessibleName('Events by day. Lowest 0 events today, latest 0 events, trending down.');
   });
 
   test('no event counts under the chart: they live in the radar categories', async () => {
@@ -687,11 +690,11 @@ describe('TrendCard', () => {
   });
 
   test('values read as drawn and as spoken', () => {
-    expect(trendValue('score', 88, 'mi')).toEqual({ value: '88', unit: '', spoken: '88' });
-    expect(trendValue('events', 2.14, 'km')).toEqual({ value: '2.1', unit: '/100 km', spoken: '2.1' });
-    expect(trendValue('events', 12.6, 'mi')).toMatchObject({ value: '13' });
-    expect(trendValue('points', -40, 'mi')).toEqual({ value: '−40', unit: 'pts', spoken: 'minus 40' });
-    expect(trendLabel('score', [], 'day', 'mi')).toBe('Not enough drives yet');
+    expect(trendValue('score', 88)).toEqual({ value: '88', unit: '', spoken: '88' });
+    expect(trendValue('events', 3)).toEqual({ value: '3', unit: 'events', spoken: '3 events' });
+    expect(trendValue('events', 1)).toEqual({ value: '1', unit: 'event', spoken: '1 event' });
+    expect(trendValue('points', -40)).toEqual({ value: '−40', unit: 'pts', spoken: 'minus 40' });
+    expect(trendLabel('score', [], 'day')).toBe('Not enough drives yet');
     expect(
       trendLabel(
         'score',
@@ -699,8 +702,7 @@ describe('TrendCard', () => {
           { x: 0, value: 90, when: 'in March' },
           { x: 1, value: 60, when: 'in April' },
         ],
-        'month',
-        'mi'
+        'month'
       )
     ).toBe('Score by month. Lowest 60 in April, latest 60, trending down.');
   });
@@ -739,10 +741,12 @@ describe('WhenYouDriveCard', () => {
     expect(Number(flat(screen.getByTestId('grid-day-0')).width)).toBeGreaterThanOrEqual(tokens.type.caption.fontSize * 2);
   });
 
-  test('every step stands at 3:1 against the card in both schemes, and each scheme’s steps run from faint to strong', () => {
+  test('the steps are neutral greys running from faint to strong against the card in both schemes, the busiest at 7:1 or more', () => {
     for (const [scheme, c] of [['light', tokens.color.light], ['dark', tokens.color.dark]] as const) {
+      for (const step of HEAT_RAMP[scheme]) expect(step.slice(1, 3).repeat(3)).toBe(step.slice(1));
       const ratios = HEAT_RAMP[scheme].map((step) => contrastRatio(step, c.surface));
-      for (const r of ratios) expect(r).toBeGreaterThanOrEqual(3);
+      expect(ratios[0]!).toBeGreaterThan(1.3);
+      expect(ratios[ratios.length - 1]!).toBeGreaterThanOrEqual(7);
       for (let i = 1; i < ratios.length; i++) expect(ratios[i]!).toBeGreaterThan(ratios[i - 1]!);
     }
   });

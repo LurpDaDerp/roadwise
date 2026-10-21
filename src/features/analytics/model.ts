@@ -460,8 +460,6 @@ function hourTicks(sinceMs: number, now: number): TrendTick[] {
   return out;
 }
 
-const round1 = (v: number): number => Math.round(v * 10) / 10;
-
 /**
  * The range's trend, per series, from the same scored drives as the cards and the active events of
  * those drives (`readWindowEvents` from the range's start or earlier: an event before the range's
@@ -471,12 +469,12 @@ const round1 = (v: number): number => Math.round(v * 10) / 10;
  *   where P is the rating penalty of their events (`ratingPenalty`: base penalties, DashPal never
  *   counts), as a whole number. Over 30 days of drives it is the rating; the radar's axes split
  *   the same P.
- * - Events: speeding, hard brakes, hard starts, sharp turns and pickups per 100 miles, from the
- *   drives' counts like the window's numbers (phone handling is a time, not a count). 1 decimal.
+ * - Events: the slot's total speeding, hard brakes, hard starts, sharp turns and pickups, from the
+ *   drives' counts like the window's numbers (phone handling is a time, not a count).
  * - Points: net points per drive, whole.
  *
  * An event belongs to the drive it happened in: the latest drive started at or before it (drives
- * never overlap). A slot with no miles has no Score or Events point.
+ * never overlap). A slot with no miles has no Score point.
  */
 export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent[] | null, range: Range, now: number): Trend {
   const sinceMs = rangeStart(now, range);
@@ -520,8 +518,8 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
     const at = { x: s.x, when: s.when };
     if (a.miles > 0) {
       if (events !== null) series.score.push({ ...at, value: Math.round(safetyRating(a.penalty, a.miles).rating ?? 100) });
-      series.events.push({ ...at, value: round1((a.events / a.miles) * 100) });
     }
+    series.events.push({ ...at, value: a.events });
     series.points.push({ ...at, value: Math.round(a.points / a.drives) });
   });
   return { step, ticks, series };

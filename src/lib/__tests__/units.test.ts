@@ -1,4 +1,4 @@
-import { distanceIn, formatDistance, formatDistanceProgress, kmhToMph, metersToMiles, mphToMps, mpsToMph, per100In, per100Label } from '@/lib/units';
+import { distanceIn, formatDistance, formatDistanceProgress, kmhToMph, metersToMiles, mphToMps, mpsToMph } from '@/lib/units';
 
 test('converts m/s to mph', () => expect(mpsToMph(10)).toBeCloseTo(22.369, 3));
 test('round-trips mph', () => expect(mpsToMph(mphToMps(45))).toBeCloseTo(45, 6));
@@ -13,10 +13,7 @@ describe('display units', () => {
     expect(formatDistance(1, 'km', { spoken: true })).toBe('1.6 kilometers');
     expect(formatDistance(2, 'mi', { spoken: true })).toBe('2.0 miles');
   });
-  test('converts a per-100 rate and its label', () => {
-    expect(per100In(1.6, 'mi')).toBe(1.6);
-    expect(per100In(1.609344, 'km')).toBeCloseTo(1, 6);
-    expect(per100Label('km')).toBe('per 100 km');
+  test('converts a distance', () => {
     expect(distanceIn(25, 'km')).toBeCloseTo(40.2, 1);
   });
 });

@@ -15,15 +15,15 @@ const HEALTH_GLYPH: Record<StatHealth, IconName> = { green: 'checkmark', yellow:
 export type StatTileProps = {
   /** "Speeding", "Phone pickups", "Clean drives". */
   label: string;
-  /** Pre-formatted: "0.8", "92", "—". */
+  /** Pre-formatted: "3", "92", "—". */
   value: string;
-  /** "per 100 mi", "%". */
+  /** "%", "mi"; none for a count. */
   unit?: string;
   /** `statColor()` from @scoring: green / yellow / red. Omit (or null) for uncoloured totals. */
   health?: StatHealth | null;
   /** vs. your own 30-day average. Omit when there is no comparison. */
   trend?: TrendDirection;
-  /** Default false: for event rates, down is better. Pass true for clean-drive %. */
+  /** Default false: for event counts, down is better. Pass true for clean-drive %. */
   higherIsBetter?: boolean;
   /** Spoken after the trend, e.g. "vs your 30-day average". */
   trendContext?: string;

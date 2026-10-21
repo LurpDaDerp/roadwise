@@ -4,7 +4,7 @@
  */
 import { statsFrom, type Stat, type StatId, type StatSums } from '@scoring';
 
-import { distanceIn, per100In, per100Label, type Units } from '@/lib/units';
+import { distanceIn, type Units } from '@/lib/units';
 import type { StatHealth, TrendDirection } from '@/ui';
 
 export const STAT_LABEL: Record<StatId, string> = {
@@ -38,7 +38,7 @@ export const EMPTY_SUMS: StatSums = {
 const rateUnit = (unit: Stat['unit'], units: Units): string => {
   switch (unit) {
     case 'per_100_mi':
-      return per100Label(units);
+      return '';
     case 'pct':
       return '%';
     case 'min_per_h':
@@ -53,11 +53,12 @@ const rateUnit = (unit: Stat['unit'], units: Units): string => {
 const oneDp = (n: number) => (Math.round(n * 10) / 10).toFixed(1);
 
 /**
- * The rate as shown, in the driver's units: "0.8" per 100 mi (or per 100 km), "92" %, "0.3" min
- * per hour, "312" mi (or km), "12.5" h, or "—".
+ * A stat as shown, in the driver's units: an event stat's total over the window ("3", never a rate
+ * per distance), "92" %, "0.3" min per hour, "312" mi (or km), "12.5" h, or "—".
  */
-export function formatRate(stat: Stat, units: Units = 'mi'): { value: string; unit: string } {
+export function formatStat(stat: Stat, units: Units = 'mi'): { value: string; unit: string } {
   const unit = rateUnit(stat.unit, units);
+  if (stat.unit === 'per_100_mi') return { value: Math.round(stat.total).toLocaleString('en-US'), unit };
   if (stat.value === null) return { value: '—', unit };
   switch (stat.unit) {
     case 'pct':
@@ -66,8 +67,6 @@ export function formatRate(stat: Stat, units: Units = 'mi'): { value: string; un
       const v = distanceIn(stat.value, units);
       return { value: v >= 100 ? Math.round(v).toLocaleString('en-US') : oneDp(v), unit };
     }
-    case 'per_100_mi':
-      return { value: oneDp(per100In(stat.value, units)), unit };
     default:
       return { value: oneDp(stat.value), unit };
   }
@@ -76,7 +75,7 @@ export function formatRate(stat: Stat, units: Units = 'mi'): { value: string; un
 /** Clean % is the one stat where higher is better. */
 export const higherIsBetter = (id: StatId): boolean => id === 'clean';
 
-/** Recent vs baseline, compared at the precision shown (1 dp), so "0.8 vs 0.8" is flat. */
+/** Recent vs baseline, compared at 1 dp, so "0.8 vs 0.8" is flat. */
 export function trendFor(recent: number | null, base: number | null): TrendDirection | undefined {
   if (recent === null || base === null) return undefined;
   const a = Math.round(recent * 10);
@@ -95,23 +94,25 @@ export interface HomeStat {
 }
 
 /**
- * Home's four: the last 7 days with an arrow against your own 30 days. With no drive in the last
- * 7 days, the 30-day values without arrows.
+ * Home's four: the last 7 days with an arrow against your own 30 days (an event count against your
+ * average week in them, the 30-day total × 7/30; clean % against the 30-day share). With no drive
+ * in the last 7 days, the 30-day values without arrows.
  */
 export function homeStats(week: StatSums, month: StatSums, units: Units = 'mi'): { stats: HomeStat[]; window: '7d' | '30d' } {
   const useWeek = week.drives > 0;
   const shown = statsFrom(useWeek ? week : month).filter((s) => s.home);
   const base = statsFrom(month);
   const stats = shown.map((s) => {
-    const { value, unit } = formatRate(s, units);
-    const b = base.find((x) => x.id === s.id)?.value ?? null;
+    const { value, unit } = formatStat(s, units);
+    const b = base.find((x) => x.id === s.id);
+    const trend = s.unit === 'per_100_mi' ? trendFor(s.total, b ? (b.total * 7) / 30 : null) : trendFor(s.value, b?.value ?? null);
     return {
       id: s.id,
       label: STAT_LABEL[s.id],
       value,
       unit,
       health: s.color,
-      trend: useWeek ? trendFor(s.value, b) : undefined,
+      trend: useWeek ? trend : undefined,
       higherIsBetter: higherIsBetter(s.id),
     };
   });

@@ -16,7 +16,6 @@ export const analyticsCopy = {
     subtitle: 'Score out of 100, last 30 days',
     /** The range card's title. */
     range: { day: 'Last 24 hours', week: 'Last 7 days', month: 'Last 30 days', year: 'Last 365 days' },
-    rate: 'Rate',
     afterDark: 'After dark',
     darkShare: 'Share after dark',
     /** In place of the numbers when the range has no drives. */
@@ -60,7 +59,7 @@ export const analyticsCopy = {
     /** What a screen reader calls each series and its step ("Score by day"). */
     spoken: {
       score: 'Score',
-      events: (distance: string) => `Events per 100 ${distance}`,
+      events: 'Events',
       points: 'Points per drive',
     },
     by: { drive: 'by drive', day: 'by day', week: 'by week', month: 'by month' },

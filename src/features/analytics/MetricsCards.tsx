@@ -222,7 +222,7 @@ export function MetricsCards({ sums, trend }: { sums: WindowSums; trend: Trend }
       <NumberCard group={driving!} layout={l} text={text} />
       {l.plot > 0 ? (
         // The chart spans the card's inside: the window less the screen gutter and the card's padding, each side.
-        <TrendCard trend={trend} units={units} layout={l} width={width - 2 * space.lg - 2 * l.pad} text={text} />
+        <TrendCard trend={trend} layout={l} width={width - 2 * space.lg - 2 * l.pad} text={text} />
       ) : null}
       <NumberCard group={points!} layout={l} text={text} />
     </View>

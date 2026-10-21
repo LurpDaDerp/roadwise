@@ -7,7 +7,7 @@ import { EmptyState, SegmentedControl, Sheet, Text, useFontScale, useTheme } fro
 
 import { BestsCard, type BestKey } from './BestsCard';
 import { analyticsCopy } from './copy';
-import { countMetric, distanceMetric, percentMetric, rateMetric, timeMetric } from './format';
+import { countMetric, distanceMetric, percentMetric, timeMetric } from './format';
 import { metricsLayout, metricsText, NumberCard, type MetricGroup } from './MetricsCards';
 import {
   AXIS_LABEL,
@@ -28,14 +28,14 @@ const m = analyticsCopy.metrics;
 const SEGMENTS = RANGES.map((value) => ({ value, label: RANGE_LABEL[value] }));
 
 /**
- * A category's numbers over the range, never points: an event axis's count and its rate per 100 of
- * the driver's units, Phone use's pickups and phone time, or Time of day's distance after dark and
- * its share of the driving.
+ * A category's numbers over the range, never points or rates: an event axis's total count and the
+ * distance driven, Phone use's pickups and phone time, or Time of day's distance after dark and its
+ * share of the driving.
  */
 export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units: Units): MetricGroup {
   const events = (key: string, caption: string, n: number): MetricGroup['cells'] => [
     { key, caption, metric: countMetric(n) },
-    { key: `${key}-rate`, caption: c.rate, metric: rateMetric(n, s.miles, units) },
+    { key: `${key}-distance`, caption: m.distance, metric: distanceMetric(s.miles, units) },
   ];
   const cells = ((): MetricGroup['cells'] => {
     switch (axis) {

@@ -430,7 +430,7 @@ describe('trend', () => {
   const at = (day: number, h: number, m = 0) => new Date(2026, 9, day, h, m).getTime();
   const brakes = (n: number) => ({ ...EMPTY_COUNTS, hardBrake: n });
 
-  test('a week is a point per local day with drives: Score on the rating’s scale, events per 100 mi, points per drive', () => {
+  test('a week is a point per local day with drives: Score on the rating’s scale, the day’s event count, points per drive', () => {
     const tue1 = drive({ startedAt: at(13, 8), miles: 10, pointsNet: 100, counts: brakes(1) });
     const tue2 = drive({ startedAt: at(13, 17), miles: 10, pointsNet: 50, counts: { ...EMPTY_COUNTS, speeding: 1, pickups: 1, handlingS: 30 } });
     const fri = drive({ startedAt: at(9, 9), miles: 20, pointsNet: 120 });
@@ -455,8 +455,8 @@ describe('trend', () => {
       { x: 6 / 7, value: Math.round(safetyRating(p, 20).rating!), when: 'on Tuesday' },
     ]);
     expect(t.series.score[1]!.value).toBeLessThan(100);
-    // Tuesday: a brake, a speeding and a pickup over 20 mi; handling time is not a count.
-    expect(t.series.events.map((q) => q.value)).toEqual([0, 15]);
+    // Tuesday: a brake, a speeding and a pickup; handling time is not a count.
+    expect(t.series.events.map((q) => q.value)).toEqual([0, 3]);
     expect(t.series.points.map((q) => q.value)).toEqual([120, 75]);
   });
 
@@ -471,10 +471,10 @@ describe('trend', () => {
     expect(t.series.score.map((q) => q.value)).toEqual([100, Math.round(safetyRating(ratingPenalty(events[0]!), 5).rating!), 100]);
   });
 
-  test('Score waits for the events; a slot with no miles has Points only', () => {
+  test('Score waits for the events; a slot with no miles has no Score but still its event count', () => {
     const t = trend([drive({ startedAt: at(13, 8), miles: 6 }), drive({ startedAt: at(11, 8), miles: 0, pointsNet: -20 })], null, 'week', NOW);
     expect(t.series.score).toEqual([]);
-    expect(t.series.events).toHaveLength(1);
+    expect(t.series.events).toHaveLength(2);
     expect(t.series.points.map((q) => q.value)).toEqual([-20, 100]);
     expect(trend([], [], 'week', NOW).series).toEqual({ score: [], events: [], points: [] });
   });
