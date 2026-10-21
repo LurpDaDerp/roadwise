@@ -85,7 +85,7 @@ test('an on-foot report at 40 mph is cancelled by driving; one at a stop ends th
   expect(w.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 5000, cut: true });
 });
 
-test('alerts: one shown speeding alert per episode (its repeats are sounded only), the pickup and the 15-s handling alert, instant events as they close', async () => {
+test('alerts: one shown speeding alert per episode (its repeats are sounded only), the pickup and the 15-s handling alert, a hard brake the row the GPS confirms it', async () => {
   const h = harness();
   await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
   // Forward extremes on the first rows: the axis is learned, so the 47 → 30 mph step is not a GPS-only brake.
