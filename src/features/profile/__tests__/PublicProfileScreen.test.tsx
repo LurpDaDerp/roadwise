@@ -61,10 +61,17 @@ function serve(p: PublicProfile | Error) {
   });
 }
 
+/**
+ * Renders the screen and, for a profile, waits until it has loaded. The loading state draws its own
+ * top bar, which unmounts when the profile arrives; a press found there but fired after the swap
+ * lands on an unmounted element and does nothing (RNTL ignores it), so every tap waits for the
+ * loaded screen.
+ */
 async function show(p: PublicProfile | Error) {
   serve(p);
   const w = await appWorld();
   await w.render(<PublicProfileScreen username="Swift_Fox" />);
+  if (!(p instanceof Error)) await screen.findByTestId('profile-username', {}, { timeout: 3000 });
   return w;
 }
 
