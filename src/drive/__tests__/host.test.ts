@@ -17,6 +17,7 @@ import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
 import { speedTintOf } from '@/drive/displayTint';
 import { readDropNotice, writeDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, DriveEndFailedError, JOURNAL_LINK_KEY, MAX_JOURNAL_REPLAY_ROWS, type PushToStartRequest } from '@/drive/host';
+import { CANCEL_KEY, finishPendingCancel } from '@/drive/cancel';
 import { NOT_DRIVING_BUDGET_MS, NOT_DRIVING_KEY, readBudget } from '@/drive/notDriving';
 import type { Scheduler } from '@/drive/ticks';
 import { WAIT_COUNTDOWN_MS, WAIT_POPUP_MS, WAIT_TOTAL_MS } from '@/drive/waiting';
@@ -496,8 +497,28 @@ describe('"Not driving?"', () => {
     expect(await readDropNotice(db)).toBeNull();
     expect(h.source.calls.at(-1)).toBe('stopCapture');
     expect(h.display.log.at(-1)).toBe('end');
+    expect(await createSettingsRepo(db).get(CANCEL_KEY)).toBeNull();
     // Nothing to cancel any more.
     expect(await h.host.cancelDrive()).toBe(false);
+  });
+
+  test('Android: a trip that cannot be deleted still stops the capture; the marker stays for the next launch', async () => {
+    let failWrites = false;
+    const failing: Db = {
+      ...db,
+      transaction: ((fn: never) => (failWrites ? Promise.reject(new Error('disk full')) : db.transaction(fn))) as Db['transaction'],
+    } as Db;
+    const h = build({ db: failing });
+    await h.host.boot();
+    await drive(h, rows(60, { speedMps: 25 }));
+    failWrites = true;
+    expect(await h.host.cancelDrive()).toBe(true);
+    expect(h.source.calls.at(-1)).toBe('stopCapture');
+    expect(h.host.snapshot().status).toBe('idle');
+    expect(await createSettingsRepo(db).get(CANCEL_KEY)).toEqual({ clientTripId: uuid(1), driveId: null });
+    failWrites = false;
+    expect(await finishPendingCancel(db, null)).toBe(uuid(1));
+    expect(await createTripsRepo(db).get(uuid(1))).toBeNull();
   });
 });
 
@@ -710,6 +731,63 @@ describe('iOS: the drive detector', () => {
     expect(h.detect.calls).toContain(`discardDrive:${NATIVE}`);
     expect(h.detect.journal.has(NATIVE)).toBe(false);
     await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('"Not driving?" tells native before the trip goes; a trip that cannot be deleted never leaves native recording, and the next launch deletes it', async () => {
+    let failWrites = false;
+    const failing: Db = {
+      ...db,
+      transaction: ((fn: never) => (failWrites ? Promise.reject(new Error('disk full')) : db.transaction(fn))) as Db['transaction'],
+    } as Db;
+    const h = buildIos({ db: failing });
+    const tripWhenTold: unknown[] = [];
+    const told = h.detect.notDriving.bind(h.detect);
+    h.detect.notDriving = async () => {
+      tripWhenTold.push(await createTripsRepo(db).get(NATIVE));
+      expect(await createSettingsRepo(db).get(CANCEL_KEY)).toEqual({ clientTripId: NATIVE, driveId: NATIVE });
+      return told();
+    };
+    await h.host.boot();
+    await h.host.start();
+    await confirm(h, rows(60, { speedMps: 15 }));
+    failWrites = true;
+    expect(await h.host.cancelDrive()).toBe(true);
+    await h.host.settled();
+    // Native was told first (the trip still there), and rests: nothing more records.
+    expect(tripWhenTold).toEqual([expect.objectContaining({ client_trip_id: NATIVE })]);
+    expect(h.detect.snapshot.state).toBe('suppressed');
+    expect(h.detect.journal.has(NATIVE)).toBe(false);
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', lastFinalized: { dropped: 'cancelled' } });
+    // The trip could not go: the marker stays, and the next launch finishes the cancel.
+    expect(await createTripsRepo(db).get(NATIVE)).not.toBeNull();
+    failWrites = false;
+    await h.host.stop({ endOpenTrip: false });
+    expect(await finishPendingCancel(db, h.detect)).toBe(NATIVE);
+    expect(await createTripsRepo(db).get(NATIVE)).toBeNull();
+    expect(await createSettingsRepo(db).get(CANCEL_KEY)).toBeNull();
+    expect(await finishPendingCancel(db, h.detect)).toBeNull();
+  });
+
+  test('killed between the marker and native: the next launch cancels native’s drive and deletes the trip', async () => {
+    const h = buildIos();
+    await h.host.boot();
+    await h.host.start();
+    await confirm(h, rows(60, { speedMps: 15 }));
+    await h.host.stop({ endOpenTrip: false });
+    // The process died right after writing the marker: native still records, the trip is stored.
+    await createSettingsRepo(db).set(CANCEL_KEY, { clientTripId: NATIVE, driveId: NATIVE });
+    expect(h.detect.snapshot).toMatchObject({ state: 'recording', driveId: NATIVE });
+    expect(await finishPendingCancel(db, h.detect)).toBe(NATIVE);
+    expect(h.detect.snapshot.state).toBe('suppressed');
+    expect(h.detect.journal.has(NATIVE)).toBe(false);
+    expect(await createTripsRepo(db).get(NATIVE)).toBeNull();
+    // A fresh host finds nothing to take in.
+    const next = buildIos({ detect: h.detect as DriveDetectApi, source: h.source });
+    await next.host.boot();
+    await next.host.settled();
+    expect(next.host.snapshot().status).toBe('idle');
+    expect(await tripCount()).toBe(0);
+    await next.host.stop({ endOpenTrip: false });
   });
 
   test('"Not driving?" tells native (it discards and rests); the trip goes; no stopCapture', async () => {

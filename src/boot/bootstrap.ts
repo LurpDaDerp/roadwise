@@ -37,6 +37,7 @@ import { setActiveDashcam } from '@/dashcam/registry';
 import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { writeDropNotice } from '@/drive/dropNotice';
+import { finishPendingCancel } from '@/drive/cancel';
 import { createDriveHost, isJournaled, playerInputs, type DriveHost, type DriveStartPermissions, type PushToStartRequest } from '@/drive/host';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
@@ -334,6 +335,10 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     await writeDropNotice(db, { clientTripId: result.clientTripId, cause: 'orphan', reason: result.dropped, at: now() }).catch((e: unknown) => onError(e, 'dropNotice'));
     return 'dropped';
   };
+
+  // A "Not driving?" the last process was killed in the middle of is finished first, so the
+  // cancelled drive is never recovered or recorded again.
+  await finishPendingCancel(db, detect, onError).catch((error: unknown) => onError(error, 'not driving'));
 
   enter('recover');
   const recovery = await stage('recover', () =>

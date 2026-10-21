@@ -488,6 +488,28 @@ test('iOS: a launch for a different driver wipes native’s journals before the 
   await rt.stop();
 });
 
+test('a "Not driving?" the last process was killed in the middle of is finished at launch: the drive is never recovered or recorded again', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  const detect = createFakeDriveDetect({ now: () => clock });
+  await detect.setArmed(true, 'user-1');
+  detect.wake();
+  const list = rows(60, { t0: clock - 60_000 });
+  const trips = createTripsRepo(db);
+  await trips.insert({ client_trip_id: uuid(14), started_at: clock - 60_000, tz: TZ, status: 'recording', origin: 'auto', last_seq: 30 }, clock);
+  await createSamplesRepo(db).appendMany(uuid(14), list.slice(0, 30).map((r) => ({ ts: r.ts, row: r })));
+  detect.confirm({ driveId: uuid(14), startedAt: clock - 60_000, rows: list.map((r) => ({ ...r })) });
+  await createSettingsRepo(db).set('drive.cancelling', { clientTripId: uuid(14), driveId: uuid(14) });
+  const rt = await bootstrapApp({ ...deps().deps, detect });
+  expect(rt.adopted).toBeNull();
+  expect(rt.drive.snapshot().status).toBe('idle');
+  expect(await trips.get(uuid(14))).toBeNull();
+  expect(detect.calls).toContain('notDriving');
+  expect(detect.journal.has(uuid(14))).toBe(false);
+  expect(await createSettingsRepo(db).get('drive.cancelling')).toBeNull();
+  await rt.stop();
+});
+
 test('iOS: a drive native journals is continued at launch whatever the capture says, and taken in from the journal', async () => {
   const seed = await bootstrapApp(deps().deps);
   await seed.stop();

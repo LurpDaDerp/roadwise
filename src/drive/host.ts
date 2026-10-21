@@ -58,6 +58,7 @@ import { toLive, type DriveDisplay, type DriveDisplayState } from './display';
 import { displayLook } from './displayLook';
 import { speedTintOf } from './displayTint';
 import { clearDropNotice, writeDropNotice } from './dropNotice';
+import { clearCancelMarker, writeCancelMarker } from './cancel';
 import { budgetFor, NOT_DRIVING_KEY, NOT_DRIVING_PERSIST_EVERY_MS, spend, writeBudget, type NotDrivingBudget } from './notDriving';
 import { isBusyStatus } from './policy';
 import type { DriveSource } from './source';
@@ -487,22 +488,32 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
-  /** "Not driving?": the drive goes whole (a re-opened one with its earlier leg); nothing is kept, sent or told. */
+  /**
+   * "Not driving?": the drive goes whole (a re-opened one with its earlier leg); nothing is kept,
+   * sent or told. Order: a durable marker first, then native (iOS: it deletes the journal and
+   * rests; Android's capture stops after the task, whatever happens here), then the trip, then the
+   * marker. A kill anywhere in between is finished at the next launch (`finishPendingCancel`), and
+   * a trip that cannot be deleted never leaves native recording.
+   */
   async function onCancel(session: Readonly<TripSession>): Promise<void> {
     const id = session.clientTripId;
+    const driveId = liveDrive !== null && liveDrive.clientTripId === id ? liveDrive.driveId : null;
     captureEnd = null;
-    if (persist) {
-      await dropTrip(db, id);
-      await createSettingsRepo(db).remove(NOT_DRIVING_KEY).catch((e: unknown) => report(e, 'notDriving'));
-    }
-    lastFinalized = { clientTripId: id, ok: true, status: null, dropped: 'cancelled', endCause: 'manual', at: now(), durationS: null, miles: null };
-    finalizedPending = persist;
-    if (unfinalized?.clientTripId === id) unfinalized = null;
+    if (persist) await writeCancelMarker(db, { clientTripId: id, driveId }).catch((e: unknown) => report(e, 'notDriving'));
     if (ios && detect !== null) {
       // Native deletes the journal and rests until walking or 5 min still; it is no capture of ours to stop.
       captureOn = false;
       liveDrive = null;
       await detect.notDriving().catch((e: unknown) => report(e, 'notDriving'));
+    }
+    lastFinalized = { clientTripId: id, ok: true, status: null, dropped: 'cancelled', endCause: 'manual', at: now(), durationS: null, miles: null };
+    finalizedPending = persist;
+    if (unfinalized?.clientTripId === id) unfinalized = null;
+    if (persist) {
+      // A failure here keeps the marker: the next launch deletes the trip.
+      await dropTrip(db, id);
+      await createSettingsRepo(db).remove(NOT_DRIVING_KEY).catch((e: unknown) => report(e, 'notDriving'));
+      await clearCancelMarker(db).catch((e: unknown) => report(e, 'notDriving'));
     }
   }
 
