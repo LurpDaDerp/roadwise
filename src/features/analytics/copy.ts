@@ -61,7 +61,7 @@ export const analyticsCopy = {
       label: 'How it works',
       hint: 'Explains the Safety Rating',
       title: 'How it works',
-      body: "Your Safety Rating is the average of your category scores, with Speed and Phone use counting double. Each one looks at your last 90 days, recent weeks a bit more, and judges you per chance to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, and how often and how long your phone is in your hand at driving speed. You start from a typical driver's score and move from there with every drive.",
+      body: "Your Safety Rating is the average of your category scores, with Speed and Phone use counting double. Each one looks at your last 90 days, recent weeks a bit more, and judges you per chance to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, and how often you pick up your phone at driving speed and how long it stays in your hand while you're moving. You start from a typical driver's score and move from there with every drive.",
     },
   },
   category: {
@@ -83,7 +83,7 @@ export const analyticsCopy = {
     noDashpalBody: (range: string) => `DashPal didn't watch any drives in the ${range.toLowerCase()}. Your Attention numbers show up here after one.`,
     /** Phone use: how a pickup is judged, under its numbers. */
     phoneHow: (units: Units) => [
-      `A pickup counts once the car is going ${speed(PHONE_PICKUP_MIN_MPH, units)} or more, plus every second your phone stays in your hand while you're moving.`,
+      `A pickup counts once the car is going ${speed(PHONE_PICKUP_MIN_MPH, units)} or more. From then, every second your phone stays in your hand while you're moving counts too.`,
       `Put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s and it's still one pickup.`,
     ],
     /** Phone use before any drive was watched for it. */
