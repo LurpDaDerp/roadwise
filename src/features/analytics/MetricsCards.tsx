@@ -18,9 +18,10 @@ export interface MetricGroup {
   title: string;
   /**
    * Up to five cells, read as rows of two (or rows of four in the densest layout), a short last
-   * row keeping the grid's columns. `spokenCaption` is the caption in words for a screen reader.
+   * row keeping the grid's columns. `spokenCaption` is the caption in words for a screen reader;
+   * `shortCaption` the one a cell shows where its caption could be cut off (see {@link shortCaptions}).
    */
-  cells: { key: string; caption: string; spokenCaption?: string; metric: Metric }[];
+  cells: { key: string; caption: string; shortCaption?: string; spokenCaption?: string; metric: Metric }[];
 }
 
 /**
@@ -46,7 +47,7 @@ export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
       title: m.points,
       cells: [
         { key: 'points', caption: m.totalPoints, metric: pointsMetric(s.drives > 0 ? s.points : null) },
-        { key: 'avg-points', caption: m.avgPoints, spokenCaption: m.avgPointsSpoken, metric: pointsMetric(s.avgPoints) },
+        { key: 'avg-points', caption: m.avgPoints, shortCaption: m.avgPointsShort, spokenCaption: m.avgPointsSpoken, metric: pointsMetric(s.avgPoints) },
         { key: 'clean', caption: m.cleanDrives, metric: countMetric(s.cleanDrives) },
         { key: 'clean-rate', caption: m.cleanRate, metric: percentMetric(s.cleanPct) },
       ],
@@ -120,6 +121,20 @@ const ROW: Base = { ...COMPACT, name: 'row', perRow: 4, colGap: space.sm, plotMa
  */
 export const captionLines = (l: Pick<MetricsLayout, 'perRow'>): 1 | 2 => (l.perRow === 4 ? 2 : 1);
 
+/**
+ * The largest text size at which a 2 × 2 cell keeps a long caption. "AVG POINTS/DRIVE" in the
+ * label face is 7.6 em plus its letter spacing (0.6 pt a character): at 1.2× it shrinks into the
+ * narrowest 2 × 2 cell (120 pt on a 320 pt wide phone) on its one line.
+ */
+export const LONG_CAPTION_MAX_SCALE = 1.2;
+
+/**
+ * Whether the cells show their short captions ("Pts/drive"): in the narrow cells of a row of four,
+ * and in a 2 × 2 card past {@link LONG_CAPTION_MAX_SCALE}, so a long caption is never cut off.
+ */
+export const shortCaptions = (l: Pick<MetricsLayout, 'perRow' | 'textScale'>): boolean =>
+  l.perRow === 4 || l.textScale > LONG_CAPTION_MAX_SCALE;
+
 /** A number card's height: a title and its rows of number-over-caption cells. */
 function numberCardHeight(l: MetricsLayout, cells: number): number {
   const cell =
@@ -183,8 +198,13 @@ export const metricsText = (l: MetricsLayout): MetricsText => ({
   label: sizeAt('label', l.textScale),
 });
 
-/** One number card: a title over rows of two cells (or of four); a short last row is padded with empty columns, so its cells keep the grid's width. */
+/**
+ * One number card: a title over rows of two cells (or of four); a short last row is padded with
+ * empty columns, so its cells keep the grid's width. A cell with a short caption shows it where
+ * the layout calls for one ({@link shortCaptions}).
+ */
 export function NumberCard({ group: g, layout: l, text, variant }: { group: MetricGroup; layout: MetricsLayout; text: MetricsText; variant?: CardVariant }) {
+  const short = shortCaptions(l);
   const rows: MetricGroup['cells'][] = [];
   for (let i = 0; i < g.cells.length; i += l.perRow) rows.push(g.cells.slice(i, i + l.perRow));
   return (
@@ -197,7 +217,7 @@ export function NumberCard({ group: g, layout: l, text, variant }: { group: Metr
           {row.map((c) => (
             <MetricCell
               key={c.key}
-              caption={c.caption}
+              caption={short && c.shortCaption ? c.shortCaption : c.caption}
               spokenCaption={c.spokenCaption}
               metric={c.metric}
               text={text}

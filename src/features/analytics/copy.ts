@@ -67,7 +67,9 @@ export const analyticsCopy = {
     cleanRate: 'Clean rate',
     totalPoints: 'Total points',
     avgPoints: 'Avg points/drive',
-    /** Avg points/drive for a screen reader. */
+    /** Avg points/drive where it could be cut off: a row of four, or large text. */
+    avgPointsShort: 'Pts/drive',
+    /** Avg points/drive (or Pts/drive) for a screen reader. */
     avgPointsSpoken: 'Average points per drive',
   },
   trend: {

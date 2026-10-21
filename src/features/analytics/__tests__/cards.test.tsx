@@ -13,7 +13,16 @@ import { drives, NO_SCORES, SCORES } from '../__fixtures__/analytics';
 import { BestsCard } from '../BestsCard';
 import { CATEGORY_BEST, categoryGroup, CategorySheet, categoryTitle } from '../CategorySheet';
 import { DRIVES_PAGE, DrivesCard, driveLine } from '../DrivesCard';
-import { metricGroups, metricsBlockHeight, MetricsCards, metricsLayout, METRICS_MAX_SHARE, metricsText } from '../MetricsCards';
+import {
+  LONG_CAPTION_MAX_SCALE,
+  metricGroups,
+  metricsBlockHeight,
+  MetricsCards,
+  metricsLayout,
+  METRICS_MAX_SHARE,
+  metricsText,
+  shortCaptions,
+} from '../MetricsCards';
 import { AXES, coach, driveGrid, EMPTY_TREND, EMPTY_WINDOW, fitLines, personalBests, trend, windowSums, type MapPoint } from '../model';
 import { axisAt, RADAR_LABEL_MAX_SCALE, RADAR_RINGS, RADAR_ZERO, radarGeometry, radarLabel, radarPoint, radarPolygon, RadarCard, radiusFor } from '../RadarCard';
 import { SummaryCard } from '../SummaryCard';
@@ -546,6 +555,34 @@ describe('MetricsCards', () => {
     expect(screen.getByTestId('metric-avg-points-caption').props.numberOfLines).toBe(1);
     await draw(<BestsCard bests={personalBests([])} show={['points', 'clean', 'phone-free']} onOpen={jest.fn()} />);
     expect(screen.getByTestId('best-clean-caption').props).toMatchObject({ numberOfLines: 2, minimumFontScale: 0.85 });
+  });
+
+  test('"Avg points/drive" reads "Pts/drive" where it could be cut off: in a row of four, and in a 2 × 2 card past 1.2× text; spoken in words either way', async () => {
+    const caption = async (width: number, height: number, fontScale: number) => {
+      setWindow(width, height, fontScale);
+      await draw(<MetricsCards sums={windowSums(drives(4), null)} trend={EMPTY_TREND} />);
+      expect(screen.getByLabelText('Average points per drive, plus 132 points')).toBeOnTheScreen();
+      return screen.getByTestId('metric-avg-points-caption');
+    };
+    // 2 × 2 at standard text, and a step above it.
+    expect(metricsLayout(844, 1).perRow).toBe(2);
+    expect(await caption(390, 844, 1)).toHaveTextContent('Avg points/drive');
+    expect(metricsLayout(932, 1.15)).toMatchObject({ perRow: 2, textScale: 1.15 });
+    expect(await caption(430, 932, 1.15)).toHaveTextContent('Avg points/drive');
+    // A row of four (a 667 pt phone at standard text).
+    expect(metricsLayout(667, 1).perRow).toBe(4);
+    expect(await caption(375, 667, 1)).toHaveTextContent('Pts/drive');
+    // 2 × 2 at large text.
+    expect(metricsLayout(844, 2)).toMatchObject({ perRow: 2, textScale: 2 });
+    expect(await caption(390, 844, 2)).toHaveTextContent('Pts/drive');
+    // The rule.
+    expect(LONG_CAPTION_MAX_SCALE).toBe(1.2);
+    expect(shortCaptions({ perRow: 2, textScale: 1.2 })).toBe(false);
+    expect(shortCaptions({ perRow: 2, textScale: 1.25 })).toBe(true);
+    expect(shortCaptions({ perRow: 4, textScale: 1 })).toBe(true);
+    // Only that cell has a short caption: every other one is short enough as it is.
+    const shorts = metricGroups(windowSums(drives(4), null), 'mi').flatMap((g) => g.cells.flatMap((c) => (c.shortCaption ? [[c.key, c.shortCaption]] : [])));
+    expect(shorts).toEqual([['avg-points', 'Pts/drive']]);
   });
 
   test('at 390 × 844 a 2 × 2 cell has room for "1,204 mi" in the display face', () => {
