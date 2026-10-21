@@ -6,6 +6,7 @@
 // Behaviour is proven by the device build.
 import * as CONSTANTS from '../src/extract/constants';
 import { REMINDER } from '../src/reminder/policy';
+import { DETECT } from '../src/detect/policy';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
 import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS, DRIVE_SENSE_SYNC_METHODS } from '../src/types';
@@ -170,9 +171,11 @@ describe('iOS drive-sense module (text)', () => {
     only(/isProtectedDataAvailable/, ['PhoneState.swift']);
     const src = allCode();
     expect(src).not.toMatch(/CLCircularRegion|startMonitoring\(for|CLBackgroundActivitySession|CLServiceSession|willFinishLaunchingWithOptions|UNUserNotificationCenter\.current\(\)\.delegate\s*=|\.location\]/);
-    expect(src).not.toMatch(/\barmed\b|func arm\(|disarm|WakeLocation|WakeTask|nativeStarted: true/);
-    // No "wake" event: the string appears only in the self-test, as a decision-table row kind and a gate phase.
-    for (const f of swiftFiles.filter((x) => x !== 'TripReminderSelfTest.swift')) expect({ f, wake: /"wake"/.test(code(f)) }).toEqual({ f, wake: false });
+    // The detector's pure policy names these words as data (a wake gate, a start source).
+    const pure = new Set(['DetectPolicy.swift', 'DetectEndPolicy.swift', 'DetectSelfTest.swift', 'RowJournalRead.swift', 'TripReminderSelfTest.swift']);
+    expect(swiftFiles.filter((f) => !pure.has(f)).map(code).join('\n')).not.toMatch(/\barmed\b|func arm\(|disarm|WakeLocation|WakeTask|nativeStarted: true/);
+    // No "wake" event: the string appears only in the self-tests and the pure policy.
+    for (const f of swiftFiles.filter((x) => !pure.has(x))) expect({ f, wake: /"wake"/.test(code(f)) }).toEqual({ f, wake: false });
     const ctrl = code('CaptureController.swift');
     expect(ctrl).toMatch(/func startCapture\(mode newMode: String\) -> Bool \{\s*guard locationAuthorization != "none" else \{ return false \}/);
     // the motion feed runs only inside a capture
@@ -677,5 +680,87 @@ describe('iOS: DashPal alerts on the phone (README §2)', () => {
     expect(src).toMatch(/Function\("dashpalLinkRunning"\) \{ \(\) -> Bool in\s*false\s*\}/);
     expect(src).toMatch(/AsyncFunction\("setDashpalLink"\) \{ \(_: String, promise: Promise\) in\s*promise\.resolve\("unsupported"\)\s*\}/);
     expect(allCode()).not.toMatch(/emit\("dashpalLinkTick"/);
+  });
+});
+
+// The drive detector's policy, self-test and journal (plan §3.2, §3.3).
+describe('iOS drive detector: the policy and the journal (text)', () => {
+  const POLICY = ['DetectPolicy.swift', 'DetectEndPolicy.swift', 'DetectSelfTest.swift', 'RowBuffer.swift'];
+
+  it('the policy declares exactly the reference constants, with the reference values', () => {
+    const src = code('DetectPolicy.swift');
+    const declared = new Map([...src.matchAll(/static let ([A-Z][A-Z0-9_]*)(?:\s*:\s*\w+)?\s*=\s*([\d_.]+)/g)].map((m) => [m[1]!, Number(m[2]!.replace(/_/g, ''))] as const));
+    for (const [name, value] of Object.entries(DETECT)) expect({ name, value: declared.get(name) }).toEqual({ name, value });
+    expect([...declared.keys()].sort()).toEqual(Object.keys(DETECT).sort());
+  });
+
+  it('the policy, its end half, the self-test and the ring buffer are pure: Foundation only, no phone, no clock', () => {
+    for (const f of POLICY) {
+      expect({ f, imports: [...read(f).matchAll(/^import (\w+)/gm)].map((m) => m[1]) }).toEqual({ f, imports: ['Foundation'] });
+      expect({ f, impure: /UserDefaults|CLLocationManager|CMMotion|UIApplication|Date\(\)|EventHub|DispatchQueue/.test(code(f)) }).toEqual({ f, impure: false });
+    }
+  });
+
+  it('each rule of policy.ts has its Swift function, and the self-test runs every row kind through them', () => {
+    const policy = code('DetectPolicy.swift') + code('DetectEndPolicy.swift');
+    for (const fn of ['trusted', 'slow', 'moving', 'distanceM', 'confirmStep', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'endDue', 'suppressionDue']) {
+      expect({ fn, declared: new RegExp(`static func ${fn}\\(`).test(policy) }).toEqual({ fn, declared: true });
+    }
+    const st = code('DetectSelfTest.swift');
+    for (const kind of ['confirm', 'trace', 'start', 'summary', 'motionGate', 'wake', 'candidate', 'end', 'suppress', 'resume', 'status']) expect(st).toContain(`case "${kind}":`);
+    for (const call of ['confirmStep(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'endClockAt(', 'endOnRow(', 'endDue(', 'suppressionDue(', 'resumeDecision(', 'statusOf(']) {
+      expect({ call, used: st.includes(`DetectPolicy.${call}`) }).toEqual({ call, used: true });
+    }
+    // the trace-back loop is bounded, and the dip breaks only past 5 s
+    expect(policy).toMatch(/for _ in 0\.\.\.rows\.count \{/);
+    expect(policy).toMatch(/if r\.ts - dip > CONFIRM_DIP_MAX_MS \{ return \(ConfirmState\(\), false\) \}/);
+  });
+
+  it('the journal: one file per drive under Application Support, excluded from backup, protected until the first unlock', () => {
+    const j = code('RowJournal.swift');
+    expect(j).toContain('.applicationSupportDirectory');
+    expect(j).toContain('appendingPathComponent("drivesense", isDirectory: true)');
+    expect(j).toContain('appendingPathComponent("journal", isDirectory: true)');
+    expect(j).toContain('appendingPathComponent("\\(driveId).ndjson")');
+    expect(j).toContain('isExcludedFromBackup = true');
+    expect(j.match(/FileProtectionType\.completeUntilFirstUserAuthentication/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(j).toMatch(/label: "drivesense\.journal", qos: \.utility/);
+  });
+
+  it('the journal fsyncs the start, every gap and end, and every JOURNAL_SYNC_EVERY_ROWS rows; caps a drive and the files', () => {
+    const j = code('RowJournal.swift');
+    const open = /func open\([\s\S]*?\n {2}\}/.exec(j)?.[0] ?? '';
+    expect(open).toMatch(/self\.attach\(driveId, url\)\s*self\.sync\(\)/);
+    expect(open).toMatch(/self\.rotate\(keepingRoomFor: driveId\)/);
+    const row = /func appendRow\([\s\S]*?\n {2}\}/.exec(j)?.[0] ?? '';
+    expect(row).toMatch(/self\.bytes \+ data\.count <= DetectPolicy\.JOURNAL_MAX_BYTES_PER_DRIVE/);
+    expect(row).toMatch(/if self\.rowsSinceSync >= DetectPolicy\.JOURNAL_SYNC_EVERY_ROWS \{ self\.sync\(\) \}/);
+    const marker = /func appendMarker\([\s\S]*?\n {2}\}/.exec(j)?.[0] ?? '';
+    expect(marker).toMatch(/self\.bytes \+= data\.count\s*self\.sync\(\)/);
+    expect(j).toMatch(/private func sync\(\) \{\s*try\? handle\?\.synchronize\(\)/);
+    // rotation: only an ended file goes, the oldest by its start
+    const rotate = /private func rotate\([\s\S]*?\n {2}\}/.exec(j)?.[0] ?? '';
+    expect(rotate).toMatch(/while list\.count >= DetectPolicy\.JOURNAL_MAX_DRIVES/);
+    expect(rotate).toMatch(/s\.end != nil/);
+    expect(rotate).toMatch(/ended\.min\(by: \{ \$0\.startedAt < \$1\.startedAt \}\)/);
+  });
+
+  it('a reader never reads a torn last line, drops a seq out of order, and keeps its place; a resume cuts the torn tail off', () => {
+    const r = code('RowJournalRead.swift');
+    expect(r).toMatch(/seq == last \+ 1/);
+    expect(r).toMatch(/while let nl = buf\[lineStart\.\.\.\]\.firstIndex\(of: 0x0A\)/);
+    expect(r).toMatch(/cursors\[driveId\] = \(seq: seq, offset: lineEnd\)/);
+    expect(r).toMatch(/s\.cleanEnd = from \+ UInt64/);
+    expect(code('RowJournal.swift')).toMatch(/if s\.cleanEnd < s\.bytes, let w = try\? FileHandle\(forWritingTo: url\) \{\s*try\? w\.truncate\(atOffset: s\.cleanEnd\)/);
+  });
+
+  it('no file timestamps, attribute reads or disk-space reads anywhere', () => {
+    expect(allCode()).not.toMatch(/attributesOfItem|contentModificationDate|creationDate|modificationDate|volumeAvailableCapacity|fileSize/);
+  });
+
+  it('the ring buffer keeps the last CANDIDATE_BUFFER_MAX_ROWS rows', () => {
+    const b = code('RowBuffer.swift');
+    expect(b).toMatch(/init\(capacity: Int = DetectPolicy\.CANDIDATE_BUFFER_MAX_ROWS\)/);
+    expect(b).toMatch(/if items\.count > capacity \{ items\.removeFirst\(items\.count - capacity\) \}/);
   });
 });
