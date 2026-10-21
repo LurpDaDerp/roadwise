@@ -4,10 +4,24 @@
  * and the direction of travel at a distance. Shared by the summary map's event marks
  * (`src/features/drives/route.ts`) and problem spots (`src/core/spots/detect.ts`). Pure.
  */
-import { bearingDeg, haversineMeters, type LatLng } from '@/lib/geo';
+import { bearingDeg, type LatLng } from '@/lib/geo';
 
-/** Metres per degree of latitude on the mean Earth sphere (the radius `haversineMeters` uses). */
-const M_PER_DEG = (Math.PI / 180) * 6371008.8;
+// Local bindings: these loops run hundreds of thousands of times per spots recompute, and a
+// global `Math` lookup per call is slow in some engines (Jest's VM context most of all).
+const { asin, atan2, cos, max, min, PI, sin, sqrt } = Math;
+const toRad = (d: number) => (d * PI) / 180;
+/** The mean Earth radius `haversineMeters` uses (`@/lib/geo`), in metres. */
+const R = 6371008.8;
+/** Metres per degree of latitude on that sphere. */
+const M_PER_DEG = (PI / 180) * R;
+
+/** `haversineMeters` step for step, with the math bound locally: the same result, faster. */
+function haversine(a: LatLng, b: LatLng): number {
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const s = sin(dLat / 2) ** 2 + cos(toRad(a.lat)) * cos(toRad(b.lat)) * sin(dLng / 2) ** 2;
+  return 2 * R * asin(sqrt(s));
+}
 
 /** The direction of travel is read over this much road before a point. */
 export const HEADING_BASE_M = 30;
@@ -21,7 +35,7 @@ export const EXIT_MIN_M = 15;
 /** Cumulative distance along a run, metres, one entry per point. */
 export function cumulative(points: readonly LatLng[]): number[] {
   const c: number[] = [0];
-  for (let i = 1; i < points.length; i++) c.push(c[i - 1]! + haversineMeters(points[i - 1]!, points[i]!));
+  for (let i = 1; i < points.length; i++) c.push(c[i - 1]! + haversine(points[i - 1]!, points[i]!));
   return c;
 }
 
@@ -40,7 +54,7 @@ export function pointAt(points: readonly LatLng[], cum: readonly number[], d: nu
   const a = points[i - 1]!;
   const b = points[i]!;
   const seg = cum[i]! - cum[i - 1]!;
-  const t = seg > 0 ? Math.min(1, Math.max(0, (d - cum[i - 1]!) / seg)) : 0;
+  const t = seg > 0 ? min(1, max(0, (d - cum[i - 1]!) / seg)) : 0;
   return { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
 }
 
@@ -67,7 +81,7 @@ export interface Projection {
  * route gives run 0, 0 m along, infinitely far off.
  */
 export function project(runs: readonly (readonly LatLng[])[], cums: readonly (readonly number[])[], p: LatLng): Projection {
-  const k = Math.cos((p.lat * Math.PI) / 180);
+  const k = cos(toRad(p.lat));
   let best = { run: 0, d: 0 };
   let bestD = Infinity;
   runs.forEach((points, r) => {
@@ -79,7 +93,7 @@ export function project(runs: readonly (readonly LatLng[])[], cums: readonly (re
       const px = (p.lng - a.lng) * k;
       const py = p.lat - a.lat;
       const len2 = bx * bx + by * by;
-      const t = len2 > 0 ? Math.min(1, Math.max(0, (px * bx + py * by) / len2)) : 0;
+      const t = len2 > 0 ? min(1, max(0, (px * bx + py * by) / len2)) : 0;
       const dist = (px - t * bx) ** 2 + (py - t * by) ** 2;
       if (dist < bestD) {
         bestD = dist;
@@ -87,7 +101,7 @@ export function project(runs: readonly (readonly LatLng[])[], cums: readonly (re
       }
     }
   });
-  return { ...best, distM: Math.sqrt(bestD) * M_PER_DEG };
+  return { ...best, distM: sqrt(bestD) * M_PER_DEG };
 }
 
 /**
@@ -98,9 +112,9 @@ export function project(runs: readonly (readonly LatLng[])[], cums: readonly (re
 export function headingAt(points: readonly LatLng[], cum: readonly number[], d: number): number | null {
   const total = cum[cum.length - 1] ?? 0;
   if (points.length < 2 || !(total >= HEADING_MIN_M)) return null;
-  const at = Math.min(total, Math.max(0, d));
-  if (at >= HEADING_MIN_M) return bearingDeg(pointAt(points, cum, Math.max(0, at - HEADING_BASE_M)), pointAt(points, cum, at));
-  const end = Math.min(total, at + HEADING_BASE_M);
+  const at = min(total, max(0, d));
+  if (at >= HEADING_MIN_M) return bearingDeg(pointAt(points, cum, max(0, at - HEADING_BASE_M)), pointAt(points, cum, at));
+  const end = min(total, at + HEADING_BASE_M);
   if (end - at >= HEADING_MIN_M) return bearingDeg(pointAt(points, cum, at), pointAt(points, cum, end));
   return bearingDeg(points[0]!, points[points.length - 1]!);
 }
@@ -112,8 +126,8 @@ export function headingAt(points: readonly LatLng[], cum: readonly number[], d: 
 export function exitAt(points: readonly LatLng[], cum: readonly number[], d: number): number | null {
   const total = cum[cum.length - 1] ?? 0;
   if (points.length < 2) return null;
-  const at = Math.min(total, Math.max(0, d));
-  const end = Math.min(total, at + EXIT_BASE_M);
+  const at = min(total, max(0, d));
+  const end = min(total, at + EXIT_BASE_M);
   if (end - at < EXIT_MIN_M) return null;
   return bearingDeg(pointAt(points, cum, at), pointAt(points, cum, end));
 }
@@ -123,9 +137,9 @@ export function circularMeanDeg(degs: readonly number[]): number {
   let s = 0;
   let c = 0;
   for (const deg of degs) {
-    s += Math.sin((deg * Math.PI) / 180);
-    c += Math.cos((deg * Math.PI) / 180);
+    s += sin(toRad(deg));
+    c += cos(toRad(deg));
   }
   if (s === 0 && c === 0) return 0;
-  return ((Math.atan2(s, c) * 180) / Math.PI + 360) % 360;
+  return ((atan2(s, c) * 180) / PI + 360) % 360;
 }
