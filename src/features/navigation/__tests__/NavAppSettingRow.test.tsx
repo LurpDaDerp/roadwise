@@ -3,7 +3,6 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { migrate, type Db } from '@/data/db';
-import { setLeaveSink } from '@/drive/leave';
 import type { NavAppsPort } from '@/features/navigation/apps';
 import { NavAppSettingRow, navAppSubtitle } from '@/features/navigation/NavAppSettingRow';
 import { readNavApp, writeNavApp } from '@/features/navigation/prefs';
@@ -55,23 +54,19 @@ test('the row reads the saved app; a gone one says so', async () => {
   expect(screen.getByText('Google Maps · not on this phone')).toBeOnTheScreen();
 });
 
-test('tapping it shows the list without the driving line; choosing only saves: nothing opens, no drive is touched', async () => {
-  const leave = jest.fn();
-  setLeaveSink({ beginLeave: leave, cancelLeave: leave, recording: () => true });
+test('tapping it shows the list without the driving line; choosing only saves: nothing opens', async () => {
   await mount();
   expect(screen.getByText('Not set')).toBeOnTheScreen();
   await fireEvent.press(screen.getByTestId('settings-nav-app'));
   await act(async () => {});
   expect(screen.getByText('Select default navigation app')).toBeOnTheScreen();
-  expect(screen.queryByText(/never costs points/)).toBeNull();
+  expect(screen.queryByText('Your drive keeps recording while you navigate.')).toBeNull();
   expect(screen.getByText('You can change it in Settings › Driving.')).toBeOnTheScreen();
   await fireEvent.press(screen.getByTestId('nav-picker-row-waze'));
   await act(async () => {});
   expect(await readNavApp(db)).toBe('waze');
   expect(opened).toEqual([]);
-  expect(leave).not.toHaveBeenCalled();
   expect(screen.getByText('Waze')).toBeOnTheScreen();
-  setLeaveSink(null);
 });
 
 test('the saved app carries the checkmark in the list', async () => {

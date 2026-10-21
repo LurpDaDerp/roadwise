@@ -4,7 +4,6 @@ import { StyleSheet } from 'react-native';
 
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, migrate, type Db } from '@/data/db';
-import { setLeaveSink } from '@/drive/leave';
 import {
   NAV_HIGHLIGHT_MS,
   NAV_LOCK_MPH,
@@ -29,9 +28,7 @@ beforeEach(async () => {
   db = await createSqlJsDb();
   await migrate(db);
   log = [];
-  setLeaveSink({ beginLeave: () => log.push('beginLeave'), cancelLeave: () => log.push('cancelLeave'), recording: () => true });
 });
-afterEach(() => setLeaveSink(null));
 
 function iosPort(installed: string[], opens: () => Promise<unknown> = async () => true): NavAppsPort {
   return {
@@ -52,14 +49,14 @@ async function mount(port: NavAppsPort) {
   return hook;
 }
 
-test('the first tap lists the installed apps; choosing one saves it, notes the leave before opening it, and closes the list', async () => {
+test('the first tap lists the installed apps; choosing one saves it, opens it, and closes the list', async () => {
   const { result } = await mount(iosPort(['waze://', 'comgooglemaps://']));
   expect(result.current.saved).toBeNull();
   await act(() => result.current.press());
   expect(result.current.picker).toEqual({ mode: 'first', apps: [expect.objectContaining({ id: 'google_maps' }), expect.objectContaining({ id: 'waze' })] });
   expect(log).toEqual([]);
   await act(() => result.current.choose(result.current.picker!.apps[1]!));
-  expect(log).toEqual(['beginLeave', 'open waze://']);
+  expect(log).toEqual(['open waze://']);
   expect(result.current.picker).toBeNull();
   expect(result.current.saved).toBe('waze');
   expect(await readNavApp(db)).toBe('waze');
@@ -71,7 +68,7 @@ test('later taps open the saved app directly', async () => {
   expect(result.current.saved).toBe('waze');
   await act(() => result.current.press());
   expect(result.current.picker).toBeNull();
-  expect(log).toEqual(['beginLeave', 'open waze://']);
+  expect(log).toEqual(['open waze://']);
 });
 
 test("saved but no longer installed: the choice is cleared and the list says so", async () => {
@@ -84,11 +81,11 @@ test("saved but no longer installed: the choice is cleared and the list says so"
   expect(log).toEqual([]);
 });
 
-test("an app that doesn't open: the leave is taken back and the list says so", async () => {
+test("an app that doesn't open: the list says so", async () => {
   await writeNavApp(db, 'waze');
   const { result } = await mount(iosPort(['waze://'], async () => Promise.reject(new Error('no'))));
   await act(() => result.current.press());
-  expect(log).toEqual(['beginLeave', 'open waze://', 'cancelLeave']);
+  expect(log).toEqual(['open waze://']);
   expect(result.current.picker).toEqual({ mode: 'failed', apps: [expect.objectContaining({ id: 'waze' })], missingLabel: 'Waze' });
   // choosing it from the list again fails the same way and keeps the list up
   await act(() => result.current.choose(result.current.picker!.apps[0]!));
@@ -142,7 +139,7 @@ test('Android: listed by package and launched', async () => {
   expect(result.current.picker?.apps).toEqual([{ id: 'google_maps', label: 'Maps', target: 'com.google.android.apps.maps' }]);
   await act(() => result.current.choose(result.current.picker!.apps[0]!));
   expect(launched).toEqual(['com.google.android.apps.maps']);
-  expect(log).toEqual(['beginLeave']);
+  expect(log).toEqual([]);
 });
 
 describe('changing the saved app (the long press)', () => {
@@ -153,7 +150,7 @@ describe('changing the saved app (the long press)', () => {
     expect(result.current.picker).toEqual({ mode: 'change', apps: [expect.objectContaining({ id: 'google_maps' }), expect.objectContaining({ id: 'waze' })] });
     expect(log).toEqual([]);
     await act(() => result.current.choose(result.current.picker!.apps[0]!));
-    expect(log).toEqual(['beginLeave', 'open comgooglemaps://']);
+    expect(log).toEqual(['open comgooglemaps://']);
     expect(result.current.picker).toBeNull();
     expect(result.current.saved).toBe('google_maps');
     expect(await readNavApp(db)).toBe('google_maps');
@@ -277,7 +274,7 @@ describe('greyed out at speed', () => {
     expect(await readNavApp(db)).toBe('waze');
     await hook.rerender({ locked: false });
     await act(() => hook.result.current.press());
-    expect(log).toEqual(['beginLeave', 'open waze://']);
+    expect(log).toEqual(['open waze://']);
   });
 
   test('a list a press already under way asks for never shows once it is locked', async () => {

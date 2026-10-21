@@ -35,7 +35,7 @@ export function NavAppPicker({
   mode: 'first' | 'gone' | 'failed' | 'change' | 'settings';
   /** The app the gone / failed line names. */
   missingLabel?: string;
-  /** The line about points (the driving screen only). */
+  /** "Your drive keeps recording while you navigate." (the driving screen only). */
   driveLine: boolean;
   /** The saved app, marked (Settings, and the driving screen's long press). */
   selected?: NavAppId | null;

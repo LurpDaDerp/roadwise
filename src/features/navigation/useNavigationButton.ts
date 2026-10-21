@@ -7,21 +7,18 @@
 // - A long press (or the screen reader's "Change navigation app") once an app is saved: the same
 //   list, the saved app marked. Choosing one saves it as the new default and opens it. With nothing
 //   saved, a long press is a first tap: the list.
-// - Every open tells the drive host first (`noteLeaving`): leaving RoadWise this way is the one
-//   screen switch that is never phone use. An open that fails takes it back (`cancelLeaving`).
 // - A tap while an open is in flight is ignored (at most 3 s).
 // - `locked` (the driving screen greys the button out at 35 mph and over): the list closes, and
 //   nothing new starts or opens the list until it is free again. An app already opening finishes.
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { Db } from '@/data/db';
-import { cancelLeaving, noteLeaving } from '@/drive/leave';
 
 import { defaultNavAppsPort, findInstalledNavApp, listInstalledNavApps, openNavApp, type InstalledNavApp, type NavAppsPort } from './apps';
 import { navAppById, type NavAppId } from './catalog';
 import { clearNavApp, readNavApp, writeNavApp } from './prefs';
 
-/** An open that has not settled by then is taken as done (the host's 10-s window still guards it). */
+/** An open that has not settled by then is taken as done. */
 export const NAV_OPEN_TIMEOUT_MS = 3_000;
 
 export type NavPicker = { mode: 'first' | 'gone' | 'failed' | 'change'; apps: InstalledNavApp[]; missingLabel?: string } | null;
@@ -71,16 +68,8 @@ export function useNavigationButton(db: Db | null, port: NavAppsPort = defaultNa
     if (locked && live.current) setPicker(null);
   }, [locked]);
 
-  /** Note the leave, open, and take it back when the app did not open. */
-  const leaveTo = useCallback(
-    async (app: InstalledNavApp): Promise<boolean> => {
-      noteLeaving();
-      const ok = await settle(openNavApp(app, port), NAV_OPEN_TIMEOUT_MS);
-      if (!ok) cancelLeaving();
-      return ok;
-    },
-    [port]
-  );
+  /** Open the app; false when it did not open. */
+  const leaveTo = useCallback((app: InstalledNavApp): Promise<boolean> => settle(openNavApp(app, port), NAV_OPEN_TIMEOUT_MS), [port]);
 
   const press = useCallback(async () => {
     if (busy.current || lockedNow.current) return;
