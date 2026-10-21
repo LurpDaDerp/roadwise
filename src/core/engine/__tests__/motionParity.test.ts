@@ -99,7 +99,7 @@ async function replay(s: Scenario, list: EngineEvent[]): Promise<{ finalized: Re
     newId: () => `id${(n += 1)}`,
     limits: { lookup: () => s.limitFor(current), prefetch: () => {} },
     createDetectors: () => createDetectors(() => `e${(n += 1)}`),
-    ctx: () => ({}),
+    ctx: () => ({ platform: 'ios' }),
     onAlert: () => {},
     onCheckpoint: async () => {},
     onFinalize: async (closed) => {

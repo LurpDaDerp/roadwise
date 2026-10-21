@@ -21,7 +21,7 @@ beforeEach(async () => {
 const ID = '55555555-5555-4555-8555-555555555555';
 const M_PER_DEG_LNG = 111_194.93 * Math.cos((47.6062 * Math.PI) / 180);
 const lookup = () => null;
-const rebuild = { createDetectors: () => createDetectors(() => 'x'), limits: { lookup } };
+const rebuild = { createDetectors: () => createDetectors(() => 'x'), platform: 'ios' as const, limits: { lookup } };
 
 /** A first leg recorded through the real engine and recorder: 600 s at 15 m/s, 300 s parked; finalized at its still end. */
 async function firstLeg(): Promise<{ finalizedAt: number; end: { lat: number; lng: number }; session: Readonly<TripSession> }> {
@@ -32,7 +32,7 @@ async function firstLeg(): Promise<{ finalizedAt: number; end: { lat: number; ln
     newId: () => ID,
     limits: { lookup, prefetch: () => {} },
     createDetectors: () => createDetectors(() => crypto.randomUUID()),
-    ctx: () => ({}),
+    ctx: () => ({ platform: 'ios' }),
     onAlert: () => {},
     onCheckpoint: (s) => recorder.onCheckpoint(s),
     onFinalize: async (s) => {
@@ -109,7 +109,7 @@ test('re-open: the held upload goes, the row records again with one more continu
     newId: () => 'x',
     limits: { lookup, prefetch: () => {} },
     createDetectors: () => createDetectors(() => 'y'),
-    ctx: () => ({}),
+    ctx: () => ({ platform: 'ios' }),
     onAlert: () => {},
     onCheckpoint: async () => {},
     onFinalize: async () => {},

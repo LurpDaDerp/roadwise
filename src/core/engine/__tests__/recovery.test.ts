@@ -28,6 +28,7 @@ async function recording(id: string, n: number, t0 = T0): Promise<void> {
 
 const base = () => ({
   createDetectors: () => createDetectors(() => 'x'),
+  platform: 'ios' as const,
   limits: { lookup: () => null },
   now: () => T0 + 600_000,
 });
@@ -127,7 +128,7 @@ test('a rebuilt drive agrees with the live engine on movement: the mark (bar saf
     newId: () => uuid(7),
     limits: { lookup: () => ({ limitMps: 35 * 0.44704, source: 'posted', matchConfidence: 1, parallelRoads: false }), prefetch: () => {} },
     createDetectors: () => createDetectors(() => 'x'),
-    ctx: () => ({}),
+    ctx: () => ({ platform: 'ios' }),
     onAlert: () => {},
     onCheckpoint: async () => {},
     onFinalize: async () => {},

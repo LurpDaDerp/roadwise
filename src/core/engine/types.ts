@@ -1,5 +1,5 @@
 // Contract between the native feature extractor, the detectors and the engine (product spec
-// "Event detection"; modes plan §3.9).
+// "Event detection"; modes plan §3.9; phone plan P1).
 import type { DriveEvent, EventType, Tier } from '@scoring';
 
 /**
@@ -7,8 +7,8 @@ import type { DriveEvent, EventType, Tier } from '@scoring';
  * phone-state signals. Accelerations are in g, speeds in m/s, angles in radians unless noted.
  *
  * The field list is the native row contract (frozen on Android), so every field stays; nothing in
- * JS reads `locked`, `screenOn`, `appForeground`, `call` or `exempt` any more (phone use is not
- * tracked).
+ * JS reads `locked`, `screenOn`, `appForeground` or `exempt` (phone use is motion only); the phone
+ * detector reads `call` on iPhone.
  */
 export interface FeatureRow {
   /**
@@ -54,7 +54,11 @@ export interface FeatureRow {
    * the key lack it, and absent reads as "not mock".
    */
   mock?: boolean;
-  /** A call during the row (bridge-only, like `mock`): `ring` or `live`; absent with none. Read nowhere in JS. */
+  /**
+   * A call during the row (bridge-only, like `mock`): `ring` or `live`; absent with none. Stored with
+   * the row. On iPhone a row with a call is never phone use (`detectors/phoneUse.ts`): iOS cannot
+   * tell hands-free from handheld. Android motion is never suppressed by a call.
+   */
   call?: 'ring' | 'live';
   /**
    * An exemption stamp an older build's host wrote on stored rows (`nav`, `restart`). Never written
@@ -79,6 +83,8 @@ export interface DetectorContext {
    * itself for a continuation (`TripSession.warmup`).
    */
   warmupEndsAt: number;
+  /** The phone that recorded the drive: on iPhone a row with a call is never phone use. */
+  platform: 'ios' | 'android';
 }
 
 /** What the detector measured; shown on the summary and sent with the event. */
@@ -88,6 +94,8 @@ export interface EventMeasured {
   peakG?: number;
   /** speeding: mph past the speeding line summed over the over rows after the grace (1 dp); the Speed weight reads it. */
   overMphS?: number;
+  /** phone_pickup: the highest trusted GPS speed from the pickup's start through its last use row, mph (1 dp). */
+  maxSpeedMph?: number;
   /** `dashcam` on (and only on) a DashPal event (`eyes_off`, `drowsy`); the phone's own detectors never set it. */
   source?: 'dashcam';
 }
@@ -123,6 +131,17 @@ export interface HarshAlert {
   id: string;
   type: HarshKind;
   tier: Tier;
+}
+
+/**
+ * A phone pickup alert the phone detector raised on the latest row: the pickup confirmed (the first
+ * alert, its tier so far), or `repeat` as its time in hand reached the next mark.
+ */
+export interface PhoneAlert {
+  /** The pickup's id (its event's, once it closes). */
+  id: string;
+  tier: Tier;
+  repeat: boolean;
 }
 
 /** The speeding episode in progress (its end window included), as the engine's alerts read it. */
@@ -161,6 +180,8 @@ export interface DetectorSuite extends Detector {
   speedingEpisode(): SpeedingEpisode | null;
   /** The hard brakes, starts and turns first confirmed on the latest row (each told once). */
   harshAlerts(): HarshAlert[];
+  /** The phone pickup alerts the latest row raised (at most one; each told once). */
+  phoneAlerts(): PhoneAlert[];
   /** A speeding episode past its grace is active on the latest row: its distance is not safe miles. */
   unsafe(): boolean;
 }

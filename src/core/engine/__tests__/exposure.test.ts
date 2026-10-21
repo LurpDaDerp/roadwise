@@ -159,6 +159,34 @@ describe('limit time', () => {
   });
 });
 
+describe('phone time (phone plan P2)', () => {
+  /** The IMU-absent encoding: every IMU field 0. */
+  const noImu = { aLonMax: 0, aLonMin: 0, aLatMax: 0, aLatMin: 0, yawRateMax: 0, jerkMax: 0, gravityStability: 0, orientationDelta: 0, handlingScore: 0 };
+
+  test('counts every row at 10 mph or more on a trusted speed with the motion sensors read, limit or not', () => {
+    expect(run(speeds([5, 9, 9.9, 10, 20, 30])).phoneS).toBe(3);
+    const list = rows(
+      [
+        [30, 90],
+        [30, 90],
+        [30, 90],
+        [30, 90],
+        [30, 90],
+        [30, 90],
+      ],
+      (i) => [{}, { speedAcc: 3 }, noImu, { gnssValid: false }, { speed: -1 }, { speedAcc: -1 }][i]!
+    );
+    // the untrusted speed, the IMU-absent row, the lost fix and the unknown speed count nothing; no speed accuracy reported is trusted
+    expect(run(list).phoneS).toBe(2);
+  });
+
+  test('closeExposure keeps phoneS within movingS', () => {
+    const s = run(speeds(hold(30, 10)));
+    expect(closeExposure(s, 12)).toMatchObject({ phoneS: 10, movingS: 12 });
+    expect(closeExposure(s, 6)).toMatchObject({ phoneS: 6, movingS: 6 });
+  });
+});
+
 describe('the reducer is pure', () => {
   test('states are frozen and the input is never changed', () => {
     const list = rows([
@@ -193,13 +221,15 @@ describe('the reducer is pure', () => {
     ]);
     expect(closeExposure(run(list, () => true), 60)).toEqual(closeExposure(run(list, () => true), 60));
     // limit time: 21 rows rising from 10 to 30 mph, 6 at 30, 21 falling from 30 to 10
-    expect(closeExposure(run(list, () => true), 60)).toEqual({ slowdowns: 1, speedups: 1, turns: 1, limitS: 48, movingS: 60 });
+    expect(closeExposure(run(list, () => true), 60)).toEqual({ slowdowns: 1, speedups: 1, turns: 1, limitS: 48, movingS: 60, phoneS: 48 });
   });
 
   test('a cut drive keeps the counters of the state it was cut at (a mark is just a state)', () => {
     const list = speeds([...ramp(0, 30), ...ramp(30, 0), ...ramp(0, 30)]);
     const mid = run(list.slice(0, 61));
-    expect(closeExposure(mid, 0)).toEqual({ slowdowns: 1, speedups: 1, turns: 0, limitS: 0, movingS: 0 });
+    expect(closeExposure(mid, 0)).toEqual({ slowdowns: 1, speedups: 1, turns: 0, limitS: 0, movingS: 0, phoneS: 0 });
+    // phone time to the cut row: 21 rows from 10 to 30 mph, 21 from 30 down to 10 (row 60 is 0 mph).
+    expect(mid.phoneS).toBe(42);
     expect(T0).toBe(list[0]!.ts);
   });
 });

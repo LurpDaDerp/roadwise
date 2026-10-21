@@ -157,14 +157,17 @@ export function joinPolylines(a: string | null, b: string | null, maxBytes = MAX
 const cleanOf = (events: readonly EventRow[], scored: boolean): 0 | 1 | null =>
   scored ? (events.some((e) => e.status === 'active' && !isDashcamType(e.type)) ? 0 : 1) : null;
 
-/** The five counters of a merged drive: the sum when both legs counted them, else none (estimated at read). */
-type ExposureCols = Pick<TripRow, 'slowdowns' | 'speedups' | 'turns' | 'limit_s' | 'moving_s'>;
+/**
+ * The counters of a merged drive: the five and the phone seconds summed when both legs counted
+ * them, else none (estimated at read, with no phone seconds).
+ */
+type ExposureCols = Pick<TripRow, 'slowdowns' | 'speedups' | 'turns' | 'limit_s' | 'moving_s' | 'phone_s'>;
 const EXPOSURE_COLS = ['slowdowns', 'speedups', 'turns', 'limit_s', 'moving_s'] as const;
 function sumExposure(a: ExposureCols, b: ExposureCols): ExposureCols {
   const counted = EXPOSURE_COLS.every((k) => a[k] !== null && b[k] !== null);
   const out = {} as Record<(typeof EXPOSURE_COLS)[number], number | null>;
   for (const k of EXPOSURE_COLS) out[k] = counted ? (a[k] as number) + (b[k] as number) : null;
-  return out;
+  return { ...out, phone_s: counted ? a.phone_s + b.phone_s : 0 } as ExposureCols;
 }
 
 /**
@@ -340,7 +343,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   }
 
   async function runFinalize(item: QueueItem, uid: string): Promise<Outcome> {
-    // A v3 item (queued by an older build) is upgraded and goes up as v4.
+    // A v3 or v4 item (queued by an older build) is upgraded and goes up as v5.
     const parsed = parseFinalizeUpload(parseJson(item.payload_json));
     if (!parsed.success) return { kind: 'refused', error: 'invalid_payload' };
     const payload = parsed.data;

@@ -17,11 +17,11 @@
 // A drive that never reaches it is not kept; the walking end (`motion.ts`) keys on it too.
 //
 // Opportunities: every row also goes through the exposure reducer (`exposure.ts`: slowdowns,
-// speed-ups, turns, limit time), and each movement mark keeps its counters, so a drive cut back to
-// its last movement counts none of its tail.
-import { END_CRAWL_MPH, IDLE_END_S, MAX_H_ACC_M, MOVING_MIN_MPH, NO_EVENTS_FIRST_S } from '@scoring';
+// speed-ups, turns, limit time, phone time), and each movement mark keeps its counters, so a drive
+// cut back to its last movement counts none of its tail.
+import { END_CRAWL_MPH, IDLE_END_S, MAX_H_ACC_M, MOVING_MIN_MPH, NO_EVENTS_FIRST_S, phonePickupTier } from '@scoring';
 
-import { knownSpeed, MPS_PER_MPH, ROW_MS, speedTrusted } from '@/core/detectors/common';
+import { imuAbsent, knownSpeed, MPS_PER_MPH, ROW_MS, speedTrusted } from '@/core/detectors/common';
 import { MAX_DRIVE_MS } from '@/data/sync/payload';
 import { haversineMeters } from '@/lib/geo';
 import { sunIsDown } from '@/lib/time';
@@ -87,20 +87,8 @@ export function stillWithoutFix(row: FeatureRow): boolean {
   );
 }
 
-/** The IMU-absent encoding (drive-sense README §4): all nine IMU fields 0. Evidence of nothing. */
-export function imuAbsent(row: FeatureRow): boolean {
-  return (
-    row.aLonMax === 0 &&
-    row.aLonMin === 0 &&
-    row.aLatMax === 0 &&
-    row.aLatMin === 0 &&
-    row.yawRateMax === 0 &&
-    row.jerkMax === 0 &&
-    row.gravityStability === 0 &&
-    row.orientationDelta === 0 &&
-    row.handlingScore === 0
-  );
-}
+/** The IMU-absent encoding (`detectors/common.ts`). */
+export { imuAbsent };
 
 /** A phone being carried or handled (the harsh detector's spike and frame-reset lines). */
 export function carried(row: FeatureRow): boolean {
@@ -454,7 +442,8 @@ const INSTANT = new Set<DetectedEvent['type']>(['hard_brake', 'hard_accel', 'har
 /**
  * The events of a drive closed at `cutTs`, in input order: an instant event (brake, start, turn)
  * is kept when it starts before `cutTs + CUT_INSTANT_SLACK_MS`; any other event starting at or
- * after the cut is dropped, and one running across it ends there. Pure.
+ * after the cut is dropped, and one running across it ends there. A phone pickup keeps whole
+ * seconds in hand (at least 1) and the tier they make. Pure.
  */
 export function cutEvents(events: readonly DetectedEvent[], cutTs: number): DetectedEvent[] {
   const out: DetectedEvent[] = [];
@@ -470,6 +459,10 @@ function cutEvent(e: DetectedEvent, cutTs: number): DetectedEvent | null {
   if (INSTANT.has(e.type)) return e.startedAt < cutTs + CUT_INSTANT_SLACK_MS ? e : null;
   if (e.startedAt >= cutTs) return null;
   if (e.startedAt + e.durationS * 1000 <= cutTs) return e;
+  if (e.type === 'phone_pickup') {
+    const durationS = Math.max(1, Math.floor((cutTs - e.startedAt) / 1000));
+    return { ...e, durationS, tier: phonePickupTier(durationS) };
+  }
   return { ...e, durationS: (cutTs - e.startedAt) / 1000 };
 }
 

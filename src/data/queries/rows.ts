@@ -14,6 +14,8 @@ export interface DriveCounts {
   hardBrake: number;
   hardAccel: number;
   hardCorner: number;
+  /** Phone pickups. */
+  pickups: number;
   /** DashPal events: kept apart from the phone's counts (never in the stats). */
   eyesOff: number;
   drowsy: number;
@@ -24,6 +26,7 @@ export const EMPTY_COUNTS: DriveCounts = Object.freeze({
   hardBrake: 0,
   hardAccel: 0,
   hardCorner: 0,
+  pickups: 0,
   eyesOff: 0,
   drowsy: 0,
 });
@@ -61,7 +64,11 @@ export interface LocalDrive {
   continuations: number;
   /** Where the start came from; null on an older or restored drive. */
   startSource: StartSource | null;
-  /** The drive's chances to slip: counted while it recorded, or estimated (`exposureEstimated`). */
+  /**
+   * The drive's chances to slip: counted while it recorded, or estimated (`exposureEstimated`).
+   * `phoneS` (seconds at driving speed watched for phone use) is 0 on a drive recorded before phone
+   * tracking and on an estimated one: Phone use has no score from it.
+   */
   exposure: Exposure;
   /** True when the drive was recorded before the counters and `exposure` is estimated from its miles and duration. */
   exposureEstimated: boolean;
@@ -79,8 +86,11 @@ export interface LocalDriveEvent {
   disputeMessage: string | null;
   /** Removed by an accepted dispute: shown struck through, counted nowhere. */
   removed: boolean;
-  /** What the detector measured; speeding's `overMphS` weighs it in the Speed score. */
-  measured: { speedMph?: number; limitMph?: number; peakG?: number; overMphS?: number; source?: 'dashcam' };
+  /**
+   * What the detector measured; speeding's `overMphS` weighs it in the Speed score. A phone pickup:
+   * `speedMph` as it started, `maxSpeedMph` the highest while in hand.
+   */
+  measured: { speedMph?: number; maxSpeedMph?: number; limitMph?: number; peakG?: number; overMphS?: number; source?: 'dashcam' };
 }
 
 /** Counts of ACTIVE events, from a drive's event rows (or any wire events). */
@@ -100,6 +110,9 @@ export function countEvents(events: readonly { type: EventType; status?: 'active
         break;
       case 'hard_corner':
         c.hardCorner += 1;
+        break;
+      case 'phone_pickup':
+        c.pickups += 1;
         break;
       case 'eyes_off':
         c.eyesOff += 1;
@@ -140,16 +153,17 @@ export function parseResult(json: string | null): FinalizeTripResponse | null {
 }
 
 /**
- * The drive's opportunity counters: the five stored columns when all are there (clamped), else the
- * estimate from its miles and duration (a drive recorded before the counters existed).
+ * The drive's opportunity counters: the five stored columns when all are there, with its phone
+ * seconds (clamped), else the estimate from its miles and duration (a drive recorded before the
+ * counters existed; no phone seconds).
  */
-export function exposureOf(row: Pick<TripRow, 'slowdowns' | 'speedups' | 'turns' | 'limit_s' | 'moving_s' | 'miles' | 'duration_s'>): {
+export function exposureOf(row: Pick<TripRow, 'slowdowns' | 'speedups' | 'turns' | 'limit_s' | 'moving_s' | 'phone_s' | 'miles' | 'duration_s'>): {
   exposure: Exposure;
   estimated: boolean;
 } {
-  const { slowdowns, speedups, turns, limit_s: limitS, moving_s: movingS } = row;
+  const { slowdowns, speedups, turns, limit_s: limitS, moving_s: movingS, phone_s: phoneS } = row;
   if (slowdowns !== null && speedups !== null && turns !== null && limitS !== null && movingS !== null) {
-    return { exposure: clampExposure({ slowdowns, speedups, turns, limitS, movingS }), estimated: false };
+    return { exposure: clampExposure({ slowdowns, speedups, turns, limitS, movingS, phoneS }), estimated: false };
   }
   return { exposure: estimateExposure(row.miles, row.duration_s), estimated: true };
 }
@@ -186,8 +200,11 @@ export function toLocalDrive(row: TripRow): LocalDrive {
 
 const finiteOrUndefined = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 
-/** The measured block as stored, keeping only the keys this build reads (an older build's phone keys are dropped). */
-function parseMeasured(json: string | null): LocalDriveEvent['measured'] {
+/**
+ * The measured block as stored, keeping only the keys this build reads: `maxSpeedMph` on a phone
+ * pickup only, and never an older build's `mounted`.
+ */
+function parseMeasured(json: string | null, type: EventType): LocalDriveEvent['measured'] {
   if (json === null) return {};
   let raw: unknown;
   try {
@@ -199,10 +216,12 @@ function parseMeasured(json: string | null): LocalDriveEvent['measured'] {
   const r = raw as Record<string, unknown>;
   const out: LocalDriveEvent['measured'] = {};
   const speedMph = finiteOrUndefined(r.speedMph);
+  const maxSpeedMph = type === 'phone_pickup' ? finiteOrUndefined(r.maxSpeedMph) : undefined;
   const limitMph = finiteOrUndefined(r.limitMph);
   const peakG = finiteOrUndefined(r.peakG);
   const overMphS = finiteOrUndefined(r.overMphS);
   if (speedMph !== undefined) out.speedMph = speedMph;
+  if (maxSpeedMph !== undefined) out.maxSpeedMph = maxSpeedMph;
   if (limitMph !== undefined) out.limitMph = limitMph;
   if (peakG !== undefined) out.peakG = peakG;
   if (overMphS !== undefined) out.overMphS = overMphS;
@@ -222,7 +241,7 @@ export function toLocalDriveEvent(row: EventRow): LocalDriveEvent {
     disputeStatus: row.dispute_status,
     disputeMessage: row.dispute_message,
     removed: row.status === 'removed',
-    measured: parseMeasured(row.measured_json),
+    measured: parseMeasured(row.measured_json, row.type),
   };
 }
 

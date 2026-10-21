@@ -2,7 +2,7 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
-import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9, SCHEMA_V10, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
 const TABLES = [
   'schema_version',
@@ -39,11 +39,11 @@ test('creates every v3, v5 and v10 table and index, and nothing of v2', async ()
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
-test('records the schema version it reached (10)', async () => {
+test('records the schema version it reached (11)', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
-  expect(CURRENT_SCHEMA_VERSION).toBe(10);
+  expect(CURRENT_SCHEMA_VERSION).toBe(11);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 10 }]);
+  expect(rows).toEqual([{ version: 11 }]);
 });
 
 test('is idempotent', async () => {
@@ -52,19 +52,19 @@ test('is idempotent', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
   expect(await names(db, 'table')).toEqual(tables);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 10 }]);
+  expect(rows).toEqual([{ version: 11 }]);
 });
 
-test('the trips table carries the current columns and none of the points or phone ones', async () => {
+test('the trips table carries the current columns (phone time among them) and none of the points or screen-switch ones', async () => {
   await migrate(db);
   const cols = await columns(db, 'trips');
   for (const c of ['miles', 'night_miles', 'polyline', 'from_label', 'to_label', 'counts_json', 'result_json', 'merged_into', 'integrity_json', 'start_lat', 'start_lng']) {
     expect(cols).toContain(c);
   }
   for (const c of ['role', 'score', 'dms_on', 'dms_face_seen', 'points_net', 'estimate', 'breakdown_json', 'safe_miles']) expect(cols).not.toContain(c);
-  expect(cols.slice(-14)).toEqual([
+  expect(cols.slice(-15)).toEqual([
     'continues', 'end_cause', 'watched_miles', 'origin', 'not_driving_expired', 'continuations', 'finalized_at', 'start_source', 'last_seq',
-    'slowdowns', 'speedups', 'turns', 'limit_s', 'moving_s',
+    'slowdowns', 'speedups', 'turns', 'limit_s', 'moving_s', 'phone_s',
   ]);
   const events = await columns(db, 'trip_events');
   for (const c of ['type', 'tier', 'measured_json', 'dispute_status']) expect(events).toContain(c);
@@ -198,7 +198,7 @@ async function atV9(): Promise<void> {
   await db.execute('INSERT INTO schema_version (version) VALUES (9)');
 }
 
-test('a v9 database steps up to v10: phone events and the points columns go, clean is recounted, the old answers and settings go', async () => {
+test('a v9 database steps up through v10: the old phone events and the points columns go, clean is recounted, the old answers and settings go', async () => {
   await atV9();
   const trip = (id: string, status: string, extra: string, values: string) =>
     db.execute(`INSERT INTO trips (client_trip_id, started_at, tz, status, created_at, updated_at${extra}) VALUES (?, 1, 'UTC', ?, 1, 1${values})`, [id, status]);
@@ -226,7 +226,7 @@ test('a v9 database steps up to v10: phone events and the points columns go, cle
     await db.execute("INSERT INTO settings (key, value_json) VALUES (?, 'true')", [key]);
   }
 
-  await expect(migrate(db)).resolves.toBe(10);
+  await expect(migrate(db)).resolves.toBe(11);
 
   expect((await db.execute('SELECT id FROM trip_events ORDER BY id')).rows).toEqual([{ id: 'b1' }, { id: 'd1' }]);
   const fresh = { result_json: null, origin: 'manual', not_driving_expired: 0, continuations: 0, finalized_at: null };
@@ -250,6 +250,38 @@ test('a v9 database steps up to v10: phone events and the points columns go, cle
   expect((await db.execute('SELECT key FROM settings')).rows).toEqual([{ key: 'units' }]);
   expect(await names(db, 'table')).toEqual([...TABLES].sort());
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
+});
+
+test('a v10 database steps up to v11: every drive gets 0 phone seconds and its stored pickups recounted from its active phone_pickup events', async () => {
+  for (const statement of [...SCHEMA_V1, ...SCHEMA_V2, ...SCHEMA_V3, ...SCHEMA_V4, ...SCHEMA_V5, ...SCHEMA_V6, ...SCHEMA_V7, ...SCHEMA_V8, ...SCHEMA_V9, ...SCHEMA_V10]) {
+    await db.execute(statement);
+  }
+  await db.execute(SCHEMA_VERSION_TABLE);
+  await db.execute('INSERT INTO schema_version (version) VALUES (10)');
+  const trip = (id: string, counts: string | null) =>
+    db.execute("INSERT INTO trips (client_trip_id, started_at, tz, status, counts_json, moving_s, created_at, updated_at) VALUES (?, 1, 'UTC', 'scored', ?, 600, 1, 1)", [id, counts]);
+  // an old build's counts: its pickups' events went at V10
+  await trip('old', '{"speeding":1,"pickups":3,"handlingS":40,"hardBrake":0}');
+  // a drive with one active pickup and one removed by a report
+  await trip('now', '{"speeding":0}');
+  await trip('none', null);
+  await trip('junk', 'not json');
+  for (const [id, status] of [
+    ['p1', 'active'],
+    ['p2', 'removed'],
+  ] as const) {
+    await db.execute("INSERT INTO trip_events (id, client_trip_id, type, tier, started_at, status) VALUES (?, 'now', 'phone_pickup', 'moderate', 1, ?)", [id, status]);
+  }
+
+  await expect(migrate(db)).resolves.toBe(11);
+
+  const rows = (await db.execute('SELECT client_trip_id, counts_json, phone_s, moving_s FROM trips ORDER BY client_trip_id')).rows;
+  expect(rows.map((r) => [r.client_trip_id, r.counts_json === null || r.counts_json === 'not json' ? r.counts_json : JSON.parse(String(r.counts_json)), r.phone_s, r.moving_s])).toEqual([
+    ['junk', 'not json', 0, 600],
+    ['none', null, 0, 600],
+    ['now', { speeding: 0, pickups: 1 }, 0, 600],
+    ['old', { speeding: 1, pickups: 0, handlingS: 40, hardBrake: 0 }, 0, 600],
+  ]);
 });
 
 test('v10 checks: origin is auto or manual, start_source one of three, a spot kind one of the four and its state active or cleared', async () => {

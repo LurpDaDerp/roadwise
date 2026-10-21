@@ -1,6 +1,6 @@
 export { createExpoDb, type Db, type DbResult } from '@/data/db/driver';
 export { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
-export { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V10, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+export { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V10, SCHEMA_V11, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 export { DISPUTE_REASONS, DRIVE_ORIGINS, START_SOURCES } from '@/data/db/types';
 
 export { MissingTripError } from '@/data/db/errors';

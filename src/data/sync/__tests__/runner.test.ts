@@ -3,7 +3,7 @@ import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { REFUSED_NEVER } from '@/data/db/queue';
 import { createFakeAppState, createFakeSupabase, functionsFetchError, functionsHttpError, invokeOk } from '@/data/sync/__fixtures__/fakes';
-import { answer, finishedDrive, payloadV3, speeding, T0, uuid } from '@/data/sync/__fixtures__/drives';
+import { answer, finishedDrive, payloadV3, payloadV4, pickup, speeding, T0, uuid } from '@/data/sync/__fixtures__/drives';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import { emitDataChanged } from '@/data/events';
 import { enqueueFinalize } from '@/data/sync/queue';
@@ -30,7 +30,7 @@ function runner(supabase: ReturnType<typeof createFakeSupabase>, over: Partial<P
 
 const samplesOf = (id: string) => createSamplesRepo(db).count(id);
 
-test('posts the queued v4 payload and writes the server’s answer into the drive; the drive’s samples go once it is sent', async () => {
+test('posts the queued v5 payload and writes the server’s answer into the drive; the drive’s samples go once it is sent', async () => {
   await finalized(uuid(10), T0, uuid(1));
   expect(await samplesOf(uuid(10))).toBe(2);
   const supabase = createFakeSupabase({ invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId, { eventIds: [uuid(1)] })) });
@@ -40,7 +40,7 @@ test('posts the queued v4 payload and writes the server’s answer into the driv
   expect(result).toMatchObject({ ran: true, done: 1, failed: 0 });
   expect(supabase.invokes).toHaveLength(1);
   expect(supabase.invokes[0]!.name).toBe('finalize-trip');
-  expect(supabase.invokes[0]!.body).toMatchObject({ v: 4, clientTripId: uuid(10), origin: 'manual', notDrivingExpired: false, exposure: { slowdowns: 4 } });
+  expect(supabase.invokes[0]!.body).toMatchObject({ v: 5, clientTripId: uuid(10), origin: 'manual', notDrivingExpired: false, exposure: { slowdowns: 4, phoneS: 1000 } });
   const trip = (await createTripsRepo(db).get(uuid(10)))!;
   expect(trip).toMatchObject({ status: 'scored', clean: 0, server_id: uuid(77), reason: null, sync_error: null });
   expect(JSON.parse(trip.result_json!)).toMatchObject({ rating: { safetyRating: 91.2, ranked: true }, eventIds: [uuid(1)] });
@@ -49,7 +49,7 @@ test('posts the queued v4 payload and writes the server’s answer into the driv
   await r.stop();
 });
 
-test('a drive an older build queued as v3 goes up as v4: its phone event and safe miles stay behind, origin manual, "Not driving?" never ran out', async () => {
+test('a drive an older build queued as v3 goes up as v5: its phone event and safe miles stay behind, origin manual, "Not driving?" never ran out', async () => {
   const p = payloadV3(uuid(12), { events: [speeding(uuid(1), T0)] });
   await createTripsRepo(db).insert({ client_trip_id: uuid(12), started_at: T0, tz: 'UTC', status: 'pending' }, T0);
   // An older build validated it against v3; the queue stores what it was given.
@@ -59,16 +59,40 @@ test('a drive an older build queued as v3 goes up as v4: its phone event and saf
   await r.start();
   expect(await r.drainOnce()).toMatchObject({ done: 1 });
   const sent = supabase.invokes[0]!.body as Record<string, unknown>;
-  expect(sent).toMatchObject({ v: 4, origin: 'manual', notDrivingExpired: false });
+  expect(sent).toMatchObject({ v: 5, origin: 'manual', notDrivingExpired: false });
   expect(sent).not.toHaveProperty('safeMiles');
   expect(sent).not.toHaveProperty('exposure');
   expect((sent.events as { id: string }[]).map((e) => e.id)).toEqual([uuid(1)]);
   await r.stop();
 });
 
-test('enqueueFinalize refuses anything but a valid v4 upload', async () => {
+test('a drive a build from before phone tracking queued as v4 goes up as v5 with no phone seconds (it was not watched)', async () => {
+  const p = payloadV4(uuid(14), { events: [speeding(uuid(2), T0)] });
+  await createTripsRepo(db).insert({ client_trip_id: uuid(14), started_at: T0, tz: 'UTC', status: 'pending' }, T0);
+  await createQueueRepo(db).enqueue('finalize-trip', p, `trip:${uuid(14)}`, T0, undefined, 'user-1');
+  const supabase = createFakeSupabase({ invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId)) });
+  const r = runner(supabase);
+  await r.start();
+  expect(await r.drainOnce()).toMatchObject({ done: 1 });
+  expect(supabase.invokes[0]!.body).toMatchObject({ v: 5, exposure: { slowdowns: 4, speedups: 5, turns: 3, limitS: 900, movingS: 1100, phoneS: 0 } });
+  await r.stop();
+});
+
+test('a phone pickup goes up with its seconds in hand and speeds', async () => {
+  await finishedDrive(db, uuid(15), { events: [speeding(uuid(3), T0), pickup(uuid(4), T0)] });
+  const supabase = createFakeSupabase({ invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId, { eventIds: [uuid(3), uuid(4)] })) });
+  const r = runner(supabase);
+  await r.start();
+  expect(await r.drainOnce()).toMatchObject({ done: 1 });
+  const sent = supabase.invokes[0]!.body as { events: unknown[] };
+  expect(sent.events).toContainEqual(expect.objectContaining({ id: uuid(4), type: 'phone_pickup', tier: 'moderate', durationS: 12, measured: { speedMph: 35, maxSpeedMph: 41.5 } }));
+  await r.stop();
+});
+
+test('enqueueFinalize refuses anything but a valid v5 upload', async () => {
   await createTripsRepo(db).insert({ client_trip_id: uuid(13), started_at: T0, tz: 'UTC', status: 'pending' }, T0);
   await expect(enqueueFinalize(db, payloadV3(uuid(13)) as never)).rejects.toThrow();
+  await expect(enqueueFinalize(db, payloadV4(uuid(13)) as never)).rejects.toThrow();
   expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
 });
 
@@ -78,7 +102,7 @@ test('mergedInto: the earlier local drive becomes the union (counters summed, "N
     t0: T0 + 1_400_000,
     events: [speeding(uuid(511), T0 + 1_400_000)],
     notDrivingExpired: true,
-    exposure: { slowdowns: 1, speedups: 2, turns: 3, limitS: 400, movingS: 1000 },
+    exposure: { slowdowns: 1, speedups: 2, turns: 3, limitS: 400, movingS: 1000, phoneS: 700 },
     row: { end_cause: 'walking' },
   });
   const supabase = createFakeSupabase({
@@ -109,6 +133,7 @@ test('mergedInto: the earlier local drive becomes the union (counters summed, "N
     turns: 6,
     limit_s: 1300,
     moving_s: 2100,
+    phone_s: 1700,
   });
   expect(await createEventsRepo(db).listByTrip(uuid(11))).toEqual([]);
   expect(await createEventsRepo(db).listByTrip(uuid(10))).toHaveLength(2);
@@ -131,7 +156,7 @@ test('mergedInto: a leg recorded before the counters leaves the union to be esti
   await r.start();
   await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   await r.drainOnce();
-  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ clean: 1, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ clean: 1, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null, phone_s: 0 });
   await r.stop();
 });
 
@@ -395,6 +420,17 @@ test('nothing is sent without a session, while recording, or under another user;
   await busy.start();
   expect(await busy.drainOnce()).toMatchObject({ ran: false });
   await busy.stop();
+});
+
+test('"My phone was mounted" is a phone pickup’s report only: queued as the dispute, refused on any other event', async () => {
+  await finishedDrive(db, uuid(10), { events: [speeding(uuid(1), T0), pickup(uuid(2), T0)] });
+  await db.execute('DELETE FROM sync_queue');
+  expect(await reportEvent(uuid(10), uuid(1), 'mounted', { db })).toBe('missing');
+  expect((await createEventsRepo(db).get(uuid(1)))?.dispute_status).toBe('none');
+  expect(await reportEvent(uuid(10), uuid(2), 'mounted', { db })).toBe('queued');
+  expect(await createEventsRepo(db).get(uuid(2))).toMatchObject({ dispute_status: 'pending', dispute_reason: 'mounted' });
+  const item = (await createQueueRepo(db).byKey(`dispute:${uuid(2)}`)) ?? null;
+  expect(item === null ? null : JSON.parse(item.payload_json)).toEqual({ action: 'dispute', clientTripId: uuid(10), eventId: uuid(2), reason: 'mounted' });
 });
 
 test('drive actions: a report goes pending, the server’s acceptance removes the event and recounts the drive; a refusal reads as rejected', async () => {

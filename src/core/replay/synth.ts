@@ -1,5 +1,5 @@
-// Synthetic v3 drives for the replay suite (product spec v3 "Event detection", "Rules against false
-// positives"). Each builder returns a trace whose expectations encode one rule. `npm run traces:make`
+// Synthetic drives for the replay suite (product spec "Event detection", "Rules against false
+// positives", "Phone use"). Each builder returns a trace whose expectations encode one rule. `npm run traces:make`
 // writes them to `src/core/__fixtures__/traces`; the suite asserts the committed JSON is exactly a
 // fresh generation.
 //
@@ -70,6 +70,8 @@ const posted = (limitMph: number, fromTs = T0) => ({ fromTs, limitMps: limitMph 
 const unknown = (fromTs: number) => ({ fromTs, limitMps: null, source: 'unknown' as const, matchConfidence: 0, parallelRoads: false });
 
 const at = (i: number): number => T0 + i * 1000;
+/** A second of the phone in the hand: handled, its gravity vector unsteady. */
+const HANDLED = { handlingScore: 0.9, gravityStability: 0.6 } as const;
 const between = (i: number, a: number, b: number): boolean => i >= a && i < b;
 
 export const TRACE_BUILDERS: Record<string, () => Trace> = {
@@ -269,6 +271,79 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     limits: [posted(35)],
     expected: [{ type: 'hard_brake', startsNear: at(100), absent: true }],
     noEvents: true,
+  }),
+
+  /** Handled for 8 s at 35 mph: one moderate pickup, 8 s in hand. */
+  'phone-pickup': () => ({
+    name: 'phone-pickup',
+    rows: drive(200, (i) => ({ ...(between(i, 100, 108) ? HANDLED : {}) })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), tier: 'moderate', durationMin: 8, durationMax: 8 }],
+  }),
+
+  /** Handled for 40 s at 35 mph: one severe pickup of 40 s in hand, never a second one. */
+  'phone-handling-long': () => ({
+    name: 'phone-handling-long',
+    rows: drive(240, (i) => ({ ...(between(i, 100, 140) ? HANDLED : {}) })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), tier: 'severe', durationMin: 40, durationMax: 40 }],
+  }),
+
+  /** A 2-s tap on a mounted, stable phone: not a pickup. */
+  'phone-tap-mounted': () => ({
+    name: 'phone-tap-mounted',
+    rows: drive(200, (i) => ({ handlingScore: between(i, 100, 102) ? 0.8 : 0 })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** Handled for 10 s at a red light mid-drive and put down before the car moves off: never a pickup. */
+  'phone-stopped-in-traffic': () => ({
+    name: 'phone-stopped-in-traffic',
+    rows: drive(240, (i) => ({ speedMph: between(i, 90, 130) ? 0 : 35, ...(between(i, 100, 110) ? HANDLED : {}) })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /**
+   * Picked up at a red light and still in hand as the car moves off: one pickup from the first
+   * handled row at driving speed, its 15 s in hand counted from there.
+   */
+  'phone-red-light-drive-off': () => ({
+    name: 'phone-red-light-drive-off',
+    rows: drive(240, (i) => ({ speedMph: between(i, 90, 120) ? 0 : 35, ...(between(i, 100, 135) ? HANDLED : {}) })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(120), toleranceS: 0, tier: 'moderate', durationMin: 15, durationMax: 15 }],
+  }),
+
+  /** Handled before the car has ever moved (parked at the start): parking-lot use, nothing. */
+  'phone-parked-start': () => ({
+    name: 'phone-parked-start',
+    rows: drive(200, (i) => ({ speedMph: i < 80 ? 0 : 35, ...(between(i, 40, 60) ? HANDLED : {}) })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(40), absent: true }],
+    noEvents: true,
+  }),
+
+  /** iPhone: handled during a call (iOS cannot tell hands-free from handheld): nothing. */
+  'phone-hands-free-call': () => ({
+    name: 'phone-hands-free-call',
+    platform: 'ios',
+    rows: drive(200, (i) => ({ ...(between(i, 95, 115) ? { call: 'live' as const } : {}), ...(between(i, 100, 110) ? HANDLED : {}) })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** Android: the same call never hides phone motion: one pickup of 10 s. */
+  'phone-call-android': () => ({
+    name: 'phone-call-android',
+    platform: 'android',
+    rows: drive(200, (i) => ({ ...(between(i, 95, 115) ? { call: 'live' as const } : {}), ...(between(i, 100, 110) ? HANDLED : {}) })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), tier: 'moderate', durationMin: 10, durationMax: 10 }],
   }),
 
   /**

@@ -55,7 +55,7 @@ export function closedSession(
   const list = rows(n, opts);
   const det = createDetectors(() => 'x');
   list.forEach((r, i) => {
-    det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, { warmupEndsAt: t0 + 30_000 });
+    det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, { warmupEndsAt: t0 + 30_000, platform: 'ios' });
     appendRow(session, r, { unsafe: opts.unsafeRows?.(i) ?? false, limitUsable: det.speedingNow() !== null });
   });
   session.events.push(...events);

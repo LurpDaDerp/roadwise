@@ -20,16 +20,20 @@ beforeEach(async () => {
 
 const DROWSY = 'dddddddd-0000-4000-8000-000000000001';
 
-test('DashPal events are counted apart from the phone’s events; an older counts row reads them as 0', () => {
-  expect(countEvents([{ type: 'drowsy' }, { type: 'eyes_off' }, { type: 'eyes_off', status: 'removed' }, { type: 'hard_brake' }])).toEqual({
+test('DashPal events are counted apart from the phone’s events (active pickups among them); an older counts row reads them as 0', () => {
+  expect(
+    countEvents([{ type: 'drowsy' }, { type: 'eyes_off' }, { type: 'eyes_off', status: 'removed' }, { type: 'hard_brake' }, { type: 'phone_pickup' }, { type: 'phone_pickup', status: 'removed' }])
+  ).toEqual({
     speeding: 0,
     hardBrake: 1,
     hardAccel: 0,
     hardCorner: 0,
+    pickups: 1,
     drowsy: 1,
     eyesOff: 1,
   });
-  expect(parseCounts(JSON.stringify({ speeding: 2 }))).toMatchObject({ speeding: 2, eyesOff: 0, drowsy: 0 });
+  expect(parseCounts(JSON.stringify({ speeding: 2 }))).toMatchObject({ speeding: 2, pickups: 0, eyesOff: 0, drowsy: 0 });
+  expect(parseCounts(JSON.stringify({ pickups: 2 }))).toMatchObject({ pickups: 2 });
 });
 
 test('a restored drive keeps its DashPal event and stays clean', async () => {
@@ -61,10 +65,11 @@ test('a restored drive keeps its DashPal event and stays clean', async () => {
   expect(await createEventsRepo(db).listByTrip(uuid(1))).toEqual([expect.objectContaining({ id: DROWSY, type: 'drowsy', measured_json: '{"source":"dashcam","speedMph":40}' })]);
 });
 
-test('"DashPal got it wrong" is a reason the queue accepts; "My phone was mounted" is gone', () => {
-  expect(DISPUTE_REASONS).toEqual(['hazard', 'wrong_limit', 'camera_wrong']);
+test('"DashPal got it wrong" and "My phone was mounted" are reasons the queue accepts', () => {
+  expect(DISPUTE_REASONS).toEqual(['hazard', 'wrong_limit', 'mounted', 'camera_wrong']);
   expect(DisputeActionSchema.safeParse({ action: 'dispute', clientTripId: uuid(1), eventId: DROWSY, reason: 'camera_wrong' }).success).toBe(true);
-  expect(DisputeActionSchema.safeParse({ action: 'dispute', clientTripId: uuid(1), eventId: DROWSY, reason: 'mounted' }).success).toBe(false);
+  expect(DisputeActionSchema.safeParse({ action: 'dispute', clientTripId: uuid(1), eventId: DROWSY, reason: 'mounted' }).success).toBe(true);
+  expect(DisputeActionSchema.safeParse({ action: 'dispute', clientTripId: uuid(1), eventId: DROWSY, reason: 'pocket' }).success).toBe(false);
 });
 
 test('an accepted dispute leaving only a DashPal event marks the scored drive clean, as the server answers', async () => {

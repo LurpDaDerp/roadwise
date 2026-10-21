@@ -55,9 +55,9 @@ export function limit(limitMps: number | null, source: LimitSample['source'] = '
 
 export const NO_LIMIT: LimitSample = limit(null, 'unknown', { matchConfidence: 0 });
 
-/** A context whose warm-up is long over (the drive started an hour before row 0). */
+/** A context whose warm-up is long over (the drive started an hour before row 0), on an iPhone. */
 export function ctx(overrides: Partial<DetectorContext> = {}): DetectorContext {
-  return { warmupEndsAt: T0 - 3_600_000 + 30_000, ...overrides };
+  return { warmupEndsAt: T0 - 3_600_000 + 30_000, platform: 'ios', ...overrides };
 }
 
 /** Deterministic ids: e1, e2, ... */

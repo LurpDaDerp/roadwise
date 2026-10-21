@@ -2,8 +2,9 @@
  * Restoring the user's drives from the server (plan §5): a reinstall, a new device, a device that
  * changed hands, a sign-out that emptied the phone. `list_my_drives` pages newest first; every row
  * the device does not hold becomes a settled local drive (the server's result) with its events,
- * how it started, whether its "Not driving?" ran out and its counted chances to slip (absent: they
- * are estimated at read), and a drive the device already holds is left as it is. From/to labels,
+ * how it started, whether its "Not driving?" ran out and its counted chances to slip with its phone
+ * seconds (absent: they are estimated at read, with none), and a drive the device already holds is
+ * left as it is. From/to labels,
  * the end note and the re-open count are not restored (they only ever lived on the old device). An
  * event of a type this build does not know is skipped; the drive is kept.
  *
@@ -60,6 +61,8 @@ const ServerExposure = z.object({
   turns: z.number(),
   limitS: z.number(),
   movingS: z.number(),
+  /** Seconds at driving speed watched for phone use; a server before phone tracking sends none (0). */
+  phoneS: z.number().nullable().optional(),
 });
 
 /** One `list_my_drives` row. Not strict: the server's extra keys (and a transition's legacy ones) are ignored. */
@@ -128,11 +131,11 @@ const isKnownType = (type: string): type is EventType => (EVENT_TYPES as readonl
 /** The server's events this build knows. */
 const knownEvents = (d: ServerDrive) => d.events.flatMap((e) => (isKnownType(e.type) ? [{ ...e, type: e.type }] : []));
 
-/** The five counter columns of the server's exposure, clamped; all null when it sent none. */
-function exposureCols(d: ServerDrive): Pick<NewTrip, 'slowdowns' | 'speedups' | 'turns' | 'limit_s' | 'moving_s'> {
-  if (d.exposure === null || d.exposure === undefined) return { slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null };
-  const e = clampExposure(d.exposure);
-  return { slowdowns: e.slowdowns, speedups: e.speedups, turns: e.turns, limit_s: e.limitS, moving_s: e.movingS };
+/** The six counter columns of the server's exposure, clamped; null (and no phone seconds) when it sent none. */
+function exposureCols(d: ServerDrive): Pick<NewTrip, 'slowdowns' | 'speedups' | 'turns' | 'limit_s' | 'moving_s' | 'phone_s'> {
+  if (d.exposure === null || d.exposure === undefined) return { slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null, phone_s: 0 };
+  const e = clampExposure({ ...d.exposure, phoneS: d.exposure.phoneS ?? 0 });
+  return { slowdowns: e.slowdowns, speedups: e.speedups, turns: e.turns, limit_s: e.limitS, moving_s: e.movingS, phone_s: e.phoneS };
 }
 
 export function toTripRow(d: ServerDrive): NewTrip {

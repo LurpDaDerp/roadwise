@@ -1,10 +1,11 @@
-// A drive's opportunity counters (scoring `Exposure`): slowdowns, speed-ups, turns and the seconds
-// with a usable speed limit, counted row by row at 1 Hz. A pure reducer, so a live drive, a drive
-// cut back to its last movement and a drive rebuilt from its stored rows all agree. Speeds are the
-// row's GNSS speed in mph, read only when trusted; an unknown or untrusted speed changes nothing.
+// A drive's opportunity counters (scoring `Exposure`): slowdowns, speed-ups, turns, the seconds
+// with a usable speed limit and the seconds at driving speed watched for phone use, counted row by
+// row at 1 Hz. A pure reducer, so a live drive, a drive cut back to its last movement and a drive
+// rebuilt from its stored rows all agree. Speeds are the row's GNSS speed in mph, read only when
+// trusted; an unknown or untrusted speed changes nothing.
 import { clampExposure, type Exposure } from '@scoring';
 
-import { knownSpeedMph, speedTrusted } from '../detectors/common';
+import { atDrivingSpeed, imuAbsent, knownSpeedMph, speedTrusted } from '../detectors/common';
 import { CORNER_MIN_MPH } from '../detectors/harsh';
 import type { FeatureRow } from './types';
 
@@ -29,6 +30,11 @@ export interface ExposureState {
   readonly speedups: number;
   readonly turns: number;
   readonly limitS: number;
+  /**
+   * Phone use's opportunities: rows at driving speed (`atDrivingSpeed`: a known, trusted GPS speed of
+   * 10 mph or more) whose motion sensors reported (not `imuAbsent`), one second each.
+   */
+  readonly phoneS: number;
   /** Speed swings: the phase and its running extremes (mph); `peak`/`trough` null before the first trusted speed. */
   readonly phase: 'rising' | 'falling';
   readonly peak: number | null;
@@ -46,6 +52,7 @@ export const EMPTY_EXPOSURE_STATE: Readonly<ExposureState> = Object.freeze({
   speedups: 0,
   turns: 0,
   limitS: 0,
+  phoneS: 0,
   phase: 'rising',
   peak: null,
   trough: null,
@@ -118,6 +125,7 @@ export function noteExposure(state: Readonly<ExposureState>, row: FeatureRow, li
   const qualifies = row.gnssValid && row.course >= 0 && row.course <= 360 && v >= TURN_MIN_MPH;
   const turned = qualifies ? turn(state, row.ts, row.course) : state;
   const limitS = state.limitS + (limitUsable && v >= LIMIT_MIN_MPH ? 1 : 0);
+  const phoneS = state.phoneS + (atDrivingSpeed(row) && !imuAbsent(row) ? 1 : 0);
   return Object.freeze({
     slowdowns: swung.slowdowns,
     speedups: swung.speedups,
@@ -131,6 +139,7 @@ export function noteExposure(state: Readonly<ExposureState>, row: FeatureRow, li
     turning: turned.turning,
     calmRows: turned.calmRows,
     limitS,
+    phoneS,
   });
 }
 
@@ -145,5 +154,5 @@ export function closeExposure(state: Readonly<ExposureState>, movingS: number): 
     if (state.phase === 'falling') slowdowns += 1;
     else speedups += 1;
   }
-  return clampExposure({ slowdowns, speedups, turns: state.turns, limitS: state.limitS, movingS });
+  return clampExposure({ slowdowns, speedups, turns: state.turns, limitS: state.limitS, movingS, phoneS: state.phoneS });
 }

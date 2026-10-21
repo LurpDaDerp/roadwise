@@ -14,9 +14,11 @@
 //
 // Alerts (`deps.onAlert`; the HUD shows `lastAlert`): speeding as the car first passes the speeding
 // line, then the chime again while the row stays over it (`speedingRepeatS`, and as the grace
-// ends; sounded only, never `lastAlert`); a hard brake, start or turn the row it is confirmed. The
-// halo shakes (`lastShake`) on a hard event as it alerts and on a speeding episode as its grace
-// ends; two on one row are one shake, the later key's.
+// ends; sounded only, never `lastAlert`); a hard brake, start or turn the row it is confirmed; a
+// phone pickup the row it is confirmed, then again (sounded only) as its time in hand reaches 15 s
+// and every 60 s more (`detectors/phoneUse.ts`). The halo shakes (`lastShake`) on a hard event and
+// a phone pickup as they alert (never on a repeat) and on a speeding episode as its grace ends; two
+// on one row are one shake, the later key's. Where a phone alert plays is the host's call.
 //
 // A reducer over one explicit state, driven by 1 Hz rows and a few events through a serialised
 // `dispatch`; the only clock is the `ts` on what comes in. Everything the engine wants done —
@@ -262,6 +264,15 @@ export function createEngine(deps: EngineDeps): Engine {
       shake(a.id, row.ts, a.tier);
     }
     speedingAlertsOn(row, det);
+    // A phone pickup: the alert (`lastAlert`) and the shake the row it confirms; a repeat is sounded only.
+    for (const a of det.phoneAlerts()) {
+      if (a.repeat) {
+        tell({ id: a.id, type: 'phone_pickup', tier: a.tier, at: row.ts, repeat: true });
+      } else {
+        alert(a.id, 'phone_pickup', a.tier, row.ts);
+        shake(a.id, row.ts, a.tier);
+      }
+    }
     appendRow(s, row, { unsafe: det.unsafe(), limitUsable: det.speedingNow() !== null });
     maybePrefetch(row, s.distanceM);
 

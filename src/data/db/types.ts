@@ -25,8 +25,12 @@ export type EventStatus = 'active' | 'removed';
 export type DisputeStatus = 'none' | 'pending' | 'accepted' | 'rejected';
 export const DISPUTE_STATUSES: readonly DisputeStatus[] = ['none', 'pending', 'accepted', 'rejected'];
 
-/** The reasons the summary's Report sheet offers (plan §4 "Disputes"); `camera_wrong` is "DashPal got it wrong". */
-export const DISPUTE_REASONS = ['hazard', 'wrong_limit', 'camera_wrong'] as const;
+/**
+ * The reasons the summary's Report sheet offers (plan §4 "Disputes"): `hazard` (a hard brake),
+ * `wrong_limit` (speeding), `mounted` ("My phone was mounted", a phone pickup only), `camera_wrong`
+ * ("DashPal got it wrong").
+ */
+export const DISPUTE_REASONS = ['hazard', 'wrong_limit', 'mounted', 'camera_wrong'] as const;
 export type DisputeReason = (typeof DISPUTE_REASONS)[number];
 
 /** `trips.origin`: noticed on its own (`auto`, iOS) or started from the Start card (`manual`). */
@@ -97,6 +101,8 @@ export interface TripRow {
   turns: number | null;
   limit_s: number | null;
   moving_s: number | null;
+  /** Seconds at driving speed watched for phone use (phone use's opportunities); 0 on a drive recorded before phone tracking. */
+  phone_s: number;
 }
 
 export type NewTrip = Pick<TripRow, 'client_trip_id' | 'started_at' | 'tz' | 'status'> &

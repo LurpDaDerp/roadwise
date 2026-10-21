@@ -1,5 +1,5 @@
 // Small pure helpers every detector shares. Nothing here touches the platform.
-import { MAX_H_ACC_M } from '@scoring';
+import { MAX_H_ACC_M, PHONE_PICKUP_MIN_MPH } from '@scoring';
 
 import type { DetectorContext, FeatureRow, LimitSample } from '../engine/types';
 
@@ -39,6 +39,30 @@ export const SPEED_ACC_MAX_MPS = 2;
  */
 export function speedTrusted(row: FeatureRow): boolean {
   return row.speedAcc === -1 || (row.speedAcc >= 0 && row.speedAcc <= SPEED_ACC_MAX_MPS);
+}
+
+/**
+ * Driving speed, for phone use (phone plan P1): a known, trusted GPS speed of `PHONE_PICKUP_MIN_MPH`
+ * (10 mph) or more, the same line as the drive's own driving speed (`session.drivingRow`).
+ */
+export function atDrivingSpeed(row: FeatureRow): boolean {
+  const s = knownSpeed(row);
+  return s !== null && speedTrusted(row) && s >= PHONE_PICKUP_MIN_MPH * MPS_PER_MPH;
+}
+
+/** The IMU-absent encoding (drive-sense README §4): all nine IMU fields 0. Evidence of nothing. */
+export function imuAbsent(row: FeatureRow): boolean {
+  return (
+    row.aLonMax === 0 &&
+    row.aLonMin === 0 &&
+    row.aLatMax === 0 &&
+    row.aLatMin === 0 &&
+    row.yawRateMax === 0 &&
+    row.jerkMax === 0 &&
+    row.gravityStability === 0 &&
+    row.orientationDelta === 0 &&
+    row.handlingScore === 0
+  );
 }
 
 /** The row's speed in mph, or null when unknown. */

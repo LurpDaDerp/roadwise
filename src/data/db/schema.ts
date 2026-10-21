@@ -376,3 +376,19 @@ export const PROBLEM_SPOTS_V10: readonly string[] = [
 
 /** V10: one entry for the whole round (points and phone use out, drives that start on their own, fair scores, problem spots). */
 export const SCHEMA_V10: readonly string[] = [...REMOVAL_V10, ...LIFECYCLE_V10, ...SCORES_V10, ...PROBLEM_SPOTS_V10];
+
+/**
+ * V11: phone use is tracked again (motion only).
+ * - `phone_s`: the seconds of the drive at driving speed with the motion sensors read, phone use's
+ *   opportunities, beside the other counters. 0 on every drive recorded before (it was not watched
+ *   for phone use), and on a drive whose counters are estimated.
+ * - the stored counts' `pickups` is recounted from the drive's active `phone_pickup` events: a drive
+ *   from before V10 still carries its old build's count, whose events V10 deleted.
+ * `phone_pickup` events need no change: `trip_events.type` has no CHECK.
+ */
+export const SCHEMA_V11: readonly string[] = [
+  'ALTER TABLE trips ADD COLUMN phone_s INTEGER NOT NULL DEFAULT 0',
+  `UPDATE trips SET counts_json = json_set(counts_json, '$.pickups', (SELECT COUNT(*) FROM trip_events e
+       WHERE e.client_trip_id = trips.client_trip_id AND e.status = 'active' AND e.type = 'phone_pickup'))
+     WHERE counts_json IS NOT NULL AND json_valid(counts_json) AND json_type(counts_json) = 'object'`,
+];

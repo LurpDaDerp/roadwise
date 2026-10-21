@@ -63,6 +63,7 @@ const trip = (over: Partial<TripRow> = {}): TripRow => ({
   turns: null,
   limit_s: null,
   moving_s: null,
+  phone_s: 0,
   ...over,
 });
 
@@ -78,7 +79,7 @@ const ANSWER = {
   achievements: ['first_drive'],
 };
 
-test('a drive event keeps what it measured (speeding: overMphS) and drops the phone-use keys', () => {
+test('a drive event keeps what it measured (speeding: overMphS; a phone pickup: its top speed) and drops the keys this build does not read', () => {
   expect(toLocalDriveEvent(row())).toEqual({
     id: 'e1',
     type: 'speeding',
@@ -93,6 +94,11 @@ test('a drive event keeps what it measured (speeding: overMphS) and drops the ph
     measured: { speedMph: 52, limitMph: 40, overMphS: 180.5 },
   });
   expect(toLocalDriveEvent(row({ type: 'eyes_off', tier: 'severe', measured_json: '{"source":"dashcam","speedMph":30}' })).measured).toEqual({ speedMph: 30, source: 'dashcam' });
+  expect(toLocalDriveEvent(row({ type: 'phone_pickup', tier: 'moderate', duration_s: 12, measured_json: '{"speedMph":35,"maxSpeedMph":41.5,"mounted":false}' }))).toMatchObject({
+    type: 'phone_pickup',
+    durationS: 12,
+    measured: { speedMph: 35, maxSpeedMph: 41.5 },
+  });
   expect(toLocalDriveEvent(row({ measured_json: 'not json' })).measured).toEqual({});
   expect(toLocalDriveEvent(row({ measured_json: null, status: 'removed' }))).toMatchObject({ measured: {}, removed: true });
 });
@@ -112,11 +118,15 @@ test('the stored answer reads as v4; an older points answer or garbage is null',
   expect(parseResult(null)).toBeNull();
 });
 
-test('exposure: the counted columns when all five are there (clamped), else estimated from miles and duration', () => {
+test('exposure: the counted columns when all five are there, with the phone seconds (clamped), else estimated from miles and duration (no phone seconds)', () => {
   expect(exposureOf(trip({ slowdowns: 9, speedups: 8, turns: 5, limit_s: 2000, moving_s: 1500 }))).toEqual({
-    exposure: { slowdowns: 9, speedups: 8, turns: 5, limitS: 1500, movingS: 1500 },
+    exposure: { slowdowns: 9, speedups: 8, turns: 5, limitS: 1500, movingS: 1500, phoneS: 0 },
     estimated: false,
   });
+  expect(exposureOf(trip({ slowdowns: 9, speedups: 8, turns: 5, limit_s: 900, moving_s: 1500, phone_s: 1200 })).exposure.phoneS).toBe(1200);
+  expect(exposureOf(trip({ slowdowns: 9, speedups: 8, turns: 5, limit_s: 900, moving_s: 1500, phone_s: 9000 })).exposure.phoneS).toBe(1500);
+  // A drive recorded before the counters: estimated, and never watched for phone use.
+  expect(exposureOf(trip({ phone_s: 700 })).exposure.phoneS).toBe(0);
   expect(exposureOf(trip({ slowdowns: 9, speedups: 8, turns: 5, limit_s: 100, moving_s: null }))).toEqual({ exposure: estimateExposure(12, 1800), estimated: true });
   expect(exposureOf(trip())).toEqual({ exposure: estimateExposure(12, 1800), estimated: true });
 });
@@ -130,7 +140,7 @@ test('a local drive carries how it started, its "Not driving?" verdict, its cont
     notDrivingExpired: true,
     continuations: 2,
     startSource: 'trace',
-    exposure: { slowdowns: 3, speedups: 4, turns: 2, limitS: 600, movingS: 900 },
+    exposure: { slowdowns: 3, speedups: 4, turns: 2, limitS: 600, movingS: 900, phoneS: 0 },
     exposureEstimated: false,
     result: ANSWER,
   });

@@ -165,7 +165,7 @@ test('an older server: no origin (a Start tap), no "Not driving?" verdict (never
   const { origin: _o, notDrivingExpired: _n, exposure: _e, ...old } = serverDrive(1);
   const parsed = ServerDriveSchema.parse(old);
   expect(parsed).toMatchObject({ origin: 'manual', notDrivingExpired: false });
-  expect(toTripRow(parsed)).toMatchObject({ origin: 'manual', not_driving_expired: 0, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null });
+  expect(toTripRow(parsed)).toMatchObject({ origin: 'manual', not_driving_expired: 0, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null, phone_s: 0 });
   expect(toTripRow(ServerDriveSchema.parse(serverDrive(1, { notDrivingExpired: true, exposure: { slowdowns: 1e9, speedups: 2.7, turns: -1, limitS: 900, movingS: 600 } })))).toMatchObject({
     not_driving_expired: 1,
     slowdowns: 20_000,
@@ -173,19 +173,33 @@ test('an older server: no origin (a Start tap), no "Not driving?" verdict (never
     turns: 0,
     limit_s: 600,
     moving_s: 600,
+    // a server before phone tracking sends no phone seconds: 0, never watched
+    phone_s: 0,
   });
 });
 
-test('an event of a type this build does not know (a phone event) is skipped and the drive is kept', async () => {
+test('a drive restored from a server that tracks phone use reads its phone seconds (held within its moving time)', async () => {
+  const exposure = { slowdowns: 3, speedups: 2, turns: 4, limitS: 300, movingS: 500 };
+  expect(toTripRow(ServerDriveSchema.parse(serverDrive(1, { exposure: { ...exposure, phoneS: 420 } })))).toMatchObject({ moving_s: 500, phone_s: 420 });
+  expect(toTripRow(ServerDriveSchema.parse(serverDrive(1, { exposure: { ...exposure, phoneS: 9000 } }))).phone_s).toBe(500);
+  expect(toTripRow(ServerDriveSchema.parse(serverDrive(1, { exposure: { ...exposure, phoneS: null } }))).phone_s).toBe(0);
+  expect(await restoreDrives({ db, uid: UID, rpc: async () => [serverDrive(1, { exposure: { ...exposure, phoneS: 420 } })] })).toMatchObject({ restored: 1 });
+  expect((await readRecentDrives(db, 1))[0]).toMatchObject({ exposure: { ...exposure, phoneS: 420 }, exposureEstimated: false });
+});
+
+test('a phone pickup comes back with its seconds in hand and speeds; an event of a type this build does not know (an older phone event) is skipped and the drive is kept', async () => {
   const drive = serverDrive(1, {
     events: [
-      { id: uuid(601), type: 'phone_pickup', tier: 'severe', startedAt: T0 - 3_000_000, durationS: 3, status: 'active' },
+      { id: uuid(601), type: 'phone_pickup', tier: 'moderate', startedAt: T0 - 3_000_000, durationS: 12, measured: { speedMph: 35, maxSpeedMph: 41.5 }, status: 'active' },
       { id: uuid(602), type: 'hard_brake', tier: 'minor', startedAt: T0 - 3_100_000, durationS: 0, status: 'active' },
+      { id: uuid(603), type: 'phone_handling', tier: 'moderate', startedAt: T0 - 3_050_000, durationS: 20, status: 'active' },
     ],
   });
   expect(await restoreDrives({ db, uid: UID, rpc: async () => [drive] })).toMatchObject({ restored: 1 });
-  expect((await createEventsRepo(db).listByTrip(uuid(1))).map((e) => e.id)).toEqual([uuid(602)]);
-  expect(JSON.parse((await createTripsRepo(db).get(uuid(1)))!.counts_json!)).toMatchObject({ hardBrake: 1 });
+  const events = await createEventsRepo(db).listByTrip(uuid(1));
+  expect(events.map((e) => e.id).sort()).toEqual([uuid(601), uuid(602)]);
+  expect(events.find((e) => e.id === uuid(601))).toMatchObject({ type: 'phone_pickup', tier: 'moderate', duration_s: 12, measured_json: '{"speedMph":35,"maxSpeedMph":41.5}' });
+  expect(JSON.parse((await createTripsRepo(db).get(uuid(1)))!.counts_json!)).toMatchObject({ hardBrake: 1, pickups: 1 });
 });
 
 test('bringing a held drive in line with the server keeps the counters this phone counted and its origin; fills counters it lacks; a ran-out "Not driving?" sticks', async () => {

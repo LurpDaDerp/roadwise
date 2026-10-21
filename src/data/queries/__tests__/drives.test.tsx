@@ -14,8 +14,8 @@ beforeEach(async () => {
   db = await createTestDb();
   await seedTrips(db, [
     { client_trip_id: uuid(1), started_at: T0 - 1000, tz: 'UTC', status: 'scored', miles: 10, duration_s: 600, clean: 1, counts_json: JSON.stringify({ speeding: 0, hardBrake: 0, hardAccel: 0, hardCorner: 0 }), polyline: 'abc', origin: 'auto' },
-    // an older build's counts_json still names phone counts: they are ignored
-    { client_trip_id: uuid(2), started_at: T0 - 2000, tz: 'UTC', status: 'pending', miles: 4, duration_s: 300, clean: 0, counts_json: JSON.stringify({ speeding: 1, pickups: 1, handlingS: 20 }), night_miles: 1, not_driving_expired: 1 },
+    // an older build's counts_json still names its phone handling count: it is ignored (V11 recounted its pickups)
+    { client_trip_id: uuid(2), started_at: T0 - 2000, tz: 'UTC', status: 'pending', miles: 4, duration_s: 300, clean: 0, counts_json: JSON.stringify({ speeding: 1, pickups: 0, handlingS: 20 }), night_miles: 1, not_driving_expired: 1 },
     { client_trip_id: uuid(3), started_at: T0 - 3000, tz: 'UTC', status: 'merged', merged_into: uuid(1) },
     { client_trip_id: uuid(4), started_at: T0 - 4000, tz: 'UTC', status: 'not_driving', miles: 3 },
     { client_trip_id: uuid(5), started_at: T0 - 5000, tz: 'UTC', status: 'recording' },
@@ -36,8 +36,8 @@ test('lists hide merged and recording drives, and keep a drive that failed to up
   expect((await readDriveHistory(db, 'clean')).map((d) => d.clientTripId)).toEqual([uuid(1)]);
   expect((await readDriveHistory(db, 'passenger')).map((d) => d.clientTripId)).toEqual([uuid(4)]);
   expect(all[0]).toMatchObject({ origin: 'auto', notDrivingExpired: false });
-  expect(all[1]).toMatchObject({ origin: 'manual', notDrivingExpired: true, counts: { speeding: 1, hardBrake: 0, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 0 } });
-  expect(all[1]?.counts).not.toHaveProperty('pickups');
+  expect(all[1]).toMatchObject({ origin: 'manual', notDrivingExpired: true, counts: { speeding: 1, hardBrake: 0, hardAccel: 0, hardCorner: 0, pickups: 0, eyesOff: 0, drowsy: 0 } });
+  expect(all[1]?.counts).not.toHaveProperty('handlingS');
 });
 
 test('detail returns the drive with its events (dispute state, coordinates, measurements); null when absent', async () => {
@@ -68,15 +68,15 @@ test('recent drives: the newest listed drives, capped', async () => {
 });
 
 test('row bridges: counts from events, filters on a drive view', () => {
-  expect(countEvents([{ type: 'drowsy' }, { type: 'hard_brake', status: 'removed' }, { type: 'hard_corner' }])).toEqual({
-    speeding: 0, hardBrake: 0, hardAccel: 0, hardCorner: 1, eyesOff: 0, drowsy: 1,
+  expect(countEvents([{ type: 'drowsy' }, { type: 'hard_brake', status: 'removed' }, { type: 'hard_corner' }, { type: 'phone_pickup' }])).toEqual({
+    speeding: 0, hardBrake: 0, hardAccel: 0, hardCorner: 1, pickups: 1, eyesOff: 0, drowsy: 1,
   });
   const row: TripRow = {
     client_trip_id: 'x', started_at: 1, ended_at: 2, tz: 'UTC', local_day: null, miles: 1, night_miles: 0, duration_s: 1,
     start_lat: null, start_lng: null, end_lat: null, end_lng: null, polyline: null, from_label: 'Home', to_label: null, max_speed_mph: 0, integrity_json: null,
     status: 'failed', clean: null, counts_json: 'not json', reason: null, merged_into: null, result_json: 'nope', server_id: null, sync_error: 'x', checkpoint_ts: null,
     created_at: 1, updated_at: 1, continues: 0, end_cause: null, watched_miles: 0, origin: 'manual', not_driving_expired: 0, continuations: 0, finalized_at: null,
-    start_source: null, last_seq: null, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null,
+    start_source: null, last_seq: null, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null, phone_s: 0,
   };
   const d = toLocalDrive(row);
   expect(d).toMatchObject({ fromLabel: 'Home', result: null, counts: expect.objectContaining({ speeding: 0 }) });

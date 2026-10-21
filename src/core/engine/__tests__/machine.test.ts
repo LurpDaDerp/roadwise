@@ -25,7 +25,7 @@ function harness(over: Partial<EngineDeps> = {}): Harness {
     newId: () => `id${(n += 1)}`,
     limits: { lookup: () => limit(mph(35)), prefetch: () => {} },
     createDetectors: () => createDetectors(() => `e${(n += 1)}`),
-    ctx: () => ({}),
+    ctx: () => ({ platform: 'ios' }),
     onAlert: (a) => h.alerts.push(a),
     onCheckpoint: async (s) => {
       if (h.checkpointFails > 0) {
@@ -89,7 +89,7 @@ test('an on-foot report at 40 mph is cancelled by driving; one at a stop ends th
   expect(w.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 5000, cut: true });
 });
 
-test('alerts: one shown speeding alert per episode (its repeats are sounded only), a hard brake the row the GPS confirms it; a handled phone is nothing', async () => {
+test('alerts: one shown speeding alert per episode (its repeats are sounded only), a hard brake the row the GPS confirms it, a phone pickup the row it confirms', async () => {
   const h = harness();
   await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
   // Forward extremes on the first rows: the axis is learned, so the 47 → 30 mph step is not a GPS-only brake.
@@ -99,18 +99,28 @@ test('alerts: one shown speeding alert per episode (its repeats are sounded only
   expect(h.alerts[0]).toMatchObject({ type: 'speeding', tier: 'moderate', at: T0 + 31_000 });
   expect(h.alerts[0]!.repeat).toBeUndefined();
   expect(h.snapshots.some((s) => s.speedingTier === 'moderate')).toBe(true);
-  // Phone use is not tracked: 20 s of a handled, unlocked phone raise nothing.
+  // 20 s of a handled phone at 30 mph: the pickup is shown (and shaken) on its third use row, then
+  // sounded again, never shown, as its time in hand reaches 15 s.
   const before = h.alerts.length;
   await feed(h, seq([20, (i) => ({ speed: mph(30), handlingScore: 0.9, gravityStability: 0.5, locked: false, screenOn: true, appForeground: false, ts: T0 + 51_000 + i * 1000 })]));
   await feed(h, seq([3, (i) => ({ speed: mph(30), ts: T0 + 71_000 + i * 1000 })]));
-  expect(h.alerts.slice(before).filter((a) => a.type !== 'speeding')).toEqual([]);
+  const phone = h.alerts.slice(before).filter((a) => a.type !== 'speeding');
+  expect(phone).toEqual([
+    { id: expect.any(String), type: 'phone_pickup', tier: 'moderate', at: T0 + 53_000 },
+    { id: phone[0]!.id, type: 'phone_pickup', tier: 'moderate', at: T0 + 65_000, repeat: true },
+  ]);
+  const confirmed = h.snapshots.find((s) => s.lastAlert?.type === 'phone_pickup');
+  expect(confirmed).toMatchObject({ lastAlert: phone[0], lastShake: { key: phone[0]!.id, at: T0 + 53_000, tier: 'moderate' } });
+  // The repeat is never shown and never shakes.
+  expect(h.snapshots.some((s) => s.lastShake?.at === T0 + 65_000 || s.lastAlert?.at === T0 + 65_000)).toBe(false);
   // A brake is told on the row the GNSS confirms it (its peak row here), not after the 2-s veto hold.
   await feed(h, seq([5, (i) => ({ speed: mph(35), ts: T0 + 74_000 + i * 1000 })]));
   await feed(h, [row({ speed: mph(25), aLonMin: -0.35, ts: T0 + 79_000 }), ...seq([4, (i) => ({ speed: mph(25), ts: T0 + 80_000 + i * 1000 })])]);
   expect(h.alerts.at(-1)).toEqual({ id: expect.any(String), type: 'hard_brake', tier: 'minor', at: T0 + 79_000 });
   expect(h.engine.snapshot().lastAlert?.type).toBe('hard_brake');
   await h.engine.dispatch({ type: 'end', ts: T0 + 90_000 });
-  expect(h.finalized[0]!.events.map((e) => e.type).sort()).toEqual(['hard_brake', 'speeding']);
+  expect(h.finalized[0]!.events.map((e) => e.type).sort()).toEqual(['hard_brake', 'phone_pickup', 'speeding']);
+  expect(h.finalized[0]!.events.find((e) => e.type === 'phone_pickup')).toMatchObject({ id: phone[0]!.id, startedAt: T0 + 51_000, durationS: 20, tier: 'severe' });
   // The fixture rows do not move (one position), so the distance accumulators stay at zero here;
   // `session.test.ts` covers the safe-distance split.
   expect(h.finalized[0]!.rowsCount).toBe(53);
@@ -269,10 +279,10 @@ describe('the warm-up in a live drive (Start Drive at any speed)', () => {
   }
   const types = (s: Readonly<TripSession>) => s.events.map((e) => e.type);
 
-  test('a start at 37 mph: the warm-up ends at the first trusted reading; a handled phone is no event', async () => {
+  test('a start at 37 mph: the warm-up ends at the first trusted reading, so a phone handled 10 s in is a pickup', async () => {
     const s = await drive(false, [...at(0, 10, { speed: mph(37) }), ...at(10, 3, { speed: mph(37), ...handled }), ...at(13, 5, { speed: mph(37) })]);
     expect(s.warmup).toMatchObject({ decided: true, endsAt: T0 });
-    expect(types(s)).toEqual([]);
+    expect(s.events).toEqual([expect.objectContaining({ type: 'phone_pickup', startedAt: T0 + 10_000, durationS: 3 })]);
   });
 
   test('a stopped start (first reading 0 mph) keeps the 30 s', async () => {

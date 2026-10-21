@@ -17,7 +17,7 @@ export const DEFAULT_TOLERANCE_S = 2;
 
 export interface TraceResult {
   events: DetectedEvent[];
-  /** slowdowns, speed-ups, turns, limit seconds and moving seconds over the whole trace */
+  /** slowdowns, speed-ups, turns, limit seconds, moving seconds and phone seconds over the whole trace */
   exposure: Exposure;
   passes: boolean;
   failures: string[];
@@ -64,7 +64,7 @@ export function runTrace(trace: Trace): TraceResult {
   const suite = createDetectors(counterIds());
   const base = trace.rows[0]?.ts ?? 0;
   // A drive started stopped at the first row: the 30 s warm-up.
-  const ctx: DetectorContext = { warmupEndsAt: base + NO_EVENTS_FIRST_S * 1000 };
+  const ctx: DetectorContext = { warmupEndsAt: base + NO_EVENTS_FIRST_S * 1000, platform: trace.platform ?? 'ios' };
   const session = createSession({ clientTripId: trace.name, startedAt: base, origin: 'manual' });
   const events: DetectedEvent[] = [];
   for (const row of trace.rows) {

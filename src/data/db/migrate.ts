@@ -10,6 +10,7 @@ import {
   SCHEMA_V8,
   SCHEMA_V9,
   SCHEMA_V10,
+  SCHEMA_V11,
   SCHEMA_VERSION_TABLE,
 } from '@/data/db/schema';
 
@@ -33,6 +34,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 8, statements: SCHEMA_V8 },
   { version: 9, statements: SCHEMA_V9 },
   { version: 10, statements: SCHEMA_V10 },
+  { version: 11, statements: SCHEMA_V11 },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

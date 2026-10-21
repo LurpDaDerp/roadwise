@@ -21,7 +21,7 @@ import { PRIVACY_ZONES_KEY } from '@/core/engine/privacy';
 import { appendRow, closeAtLastMovement, closeSession, createSession } from '@/core/engine/session';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
-import { FinalizeTripPayloadV4Schema, MAX_DRIVE_MS } from '@/data/sync/payload';
+import { FinalizeTripPayloadV5Schema, MAX_DRIVE_MS } from '@/data/sync/payload';
 import { findFinalize } from '@/data/sync/queue';
 import { haversineMeters } from '@/lib/geo';
 import { decodeRuns } from '@/lib/polyline';
@@ -51,7 +51,7 @@ async function recorded(session: Readonly<TripSession>, list: ReturnType<typeof 
   await createSamplesRepo(db).appendMany(session.clientTripId, list.map((r) => ({ ts: r.ts, row: r })));
 }
 
-test('a 20-minute drive is stored as pending with its classification, trimmed route, labels, exposure and one held v4 payload', async () => {
+test('a 20-minute drive is stored as pending with its classification, trimmed route, labels, exposure and one held v5 payload', async () => {
   // 1200 rows × 15 m = 18 km ≈ 11.2 mi; one speeding and one brake after the warm-up.
   const session = closedSession(1200, [speedingEvent(T0 + 300_000), brakeEvent(T0 + 600_000)], { origin: 'auto' });
   await createSettingsRepo(db).set(PRIVACY_ZONES_KEY, [{ id: 'h', name: 'Home', lat: 47.6062, lng: -122.3321, radiusM: 300 }]);
@@ -84,8 +84,8 @@ test('a 20-minute drive is stored as pending with its classification, trimmed ro
   expect(result.events[1]!.lat).not.toBeNull();
 
   const payload = result.payload!;
-  expect(FinalizeTripPayloadV4Schema.safeParse(payload).success).toBe(true);
-  expect(payload).toMatchObject({ v: 4, clientTripId: session.clientTripId, startedAt: T0, endedAt: T0 + 1_200_000, tz: TZ, localDay: '2023-11-14', appVersion: '2.0.0', origin: 'auto', notDrivingExpired: false });
+  expect(FinalizeTripPayloadV5Schema.safeParse(payload).success).toBe(true);
+  expect(payload).toMatchObject({ v: 5, clientTripId: session.clientTripId, startedAt: T0, endedAt: T0 + 1_200_000, tz: TZ, localDay: '2023-11-14', appVersion: '2.0.0', origin: 'auto', notDrivingExpired: false });
   expect(payload).not.toHaveProperty('safeMiles');
   expect(payload.start).toEqual({ lat: 47.6062, lng: -122.3321 });
   expect(payload.integrity).toMatchObject({ mockLocation: false, motionMismatch: false, validGnssPct: 100 });
@@ -93,7 +93,9 @@ test('a 20-minute drive is stored as pending with its classification, trimmed ro
   // The opportunities: one per row moving at 5 mph or more, the stored columns the same.
   expect(payload.exposure).toEqual(exposureOf(session, 1200, payload.miles));
   expect(payload.exposure!.movingS).toBe(1200);
-  expect(result.trip).toMatchObject({ slowdowns: 0, speedups: 0, turns: 0, limit_s: 0, moving_s: 1200 });
+  // Every row at 33.5 mph with the motion sensors read is a second watched for phone use.
+  expect(payload.exposure!.phoneS).toBe(1200);
+  expect(result.trip).toMatchObject({ slowdowns: 0, speedups: 0, turns: 0, limit_s: 0, moving_s: 1200, phone_s: 1200 });
   // The route never shows the first/last 0.25 mi nor the zone around the start.
   const runs = decodeRuns(payload.polyline);
   expect(runs).toHaveLength(1); // the zone sits at the start, inside the trimmed end: one visible run
@@ -108,6 +110,20 @@ test('a 20-minute drive is stored as pending with its classification, trimmed ro
   // Held: the upload waits out the merge window from the finalize.
   expect(item?.next_attempt_at).toBe(NOW + UPLOAD_HOLD_MS);
   expect(UPLOAD_HOLD_MS).toBe(MERGE_GAP_S * 1000);
+});
+
+test('a phone pickup goes up (v5) with its whole seconds in hand and its speeds, is counted and breaks a clean drive', async () => {
+  const pickup = { id: uuid(31), type: 'phone_pickup', tier: 'moderate', startedAt: T0 + 100_000, durationS: 12, measured: { speedMph: 33.5, maxSpeedMph: 33.6 } } as const;
+  const session = closedSession(600, [pickup], { clientTripId: uuid(30) });
+  const result = await finalizeTrip(session, deps());
+  const payload = result.payload!;
+  expect(FinalizeTripPayloadV5Schema.safeParse(payload).success).toBe(true);
+  expect(payload.events).toEqual([expect.objectContaining({ id: uuid(31), type: 'phone_pickup', tier: 'moderate', startedAt: T0 + 100_000, durationS: 12, measured: { speedMph: 33.5, maxSpeedMph: 33.6 } })]);
+  expect(payload.exposure!.phoneS).toBe(600);
+  expect(result.trip).toMatchObject({ phone_s: 600, clean: 0 });
+  expect(JSON.parse(result.trip.counts_json!)).toMatchObject({ pickups: 1, speeding: 0 });
+  expect(result.drive).toEqual({ scored: true, reason: null, activeEventCount: 1 });
+  expect(result.events[0]).toMatchObject({ type: 'phone_pickup', duration_s: 12, measured_json: JSON.stringify({ speedMph: 33.5, maxSpeedMph: 33.6 }) });
 });
 
 test('the drive’s own samples stay through its hold; drives whose hold is over lose theirs (the sweep)', async () => {
@@ -160,7 +176,7 @@ test('a drive through a mid-route privacy zone uploads both visible runs, so the
   await createSettingsRepo(db).set(PRIVACY_ZONES_KEY, [{ id: 's', name: 'School', lat: mid.lat, lng: mid.lng, radiusM: 300 }]);
   const result = await finalizeTrip(session, deps());
   const payload = result.payload!;
-  expect(FinalizeTripPayloadV4Schema.safeParse(payload).success).toBe(true);
+  expect(FinalizeTripPayloadV5Schema.safeParse(payload).success).toBe(true);
   const runs = decodeRuns(payload.polyline);
   expect(runs.length).toBeGreaterThanOrEqual(2);
   // No encoded point inside the zone, and no segment of any run crosses it (west stays west, east stays east).
@@ -225,9 +241,22 @@ test('sanitizeEvent clamps and rounds what a detector emitted, keeping only the 
   expect(sanitizeEvent({ ...base, measured: { overMphS: 5e6 } }, T0, T0 + 60_000).measured).toEqual({ overMphS: 1e6 });
   expect(sanitizeEvent({ ...base, measured: { overMphS: -3 } }, T0, T0 + 60_000).measured).toEqual({ overMphS: 0 });
   expect(sanitizeEvent({ ...base, measured: { overMphS: Number.NaN } }, T0, T0 + 60_000).measured).toEqual({});
-  // Fields an older detector wrote (phone use) never reach the upload.
+  // Fields an older detector wrote (a mount flag; the top speed anywhere but a phone pickup) never reach the upload.
   const legacy = { ...base, measured: { maxSpeedMph: 52, mounted: true } } as unknown as Parameters<typeof sanitizeEvent>[0];
   expect(sanitizeEvent(legacy, T0, T0 + 60_000).measured).toEqual({});
+});
+
+test('sanitizeEvent keeps a phone pickup in whole seconds in hand (1 to the drive, within its end), its tier by them, and its speeds', () => {
+  const pickup = { id: 'p', type: 'phone_pickup', tier: 'moderate', startedAt: T0 + 10_000, durationS: 8, measured: { speedMph: 35.04, maxSpeedMph: 48.12345 } } as const;
+  expect(sanitizeEvent(pickup, T0, T0 + 60_000)).toEqual({ ...pickup, measured: { speedMph: 35.04, maxSpeedMph: 48.123 } });
+  expect(sanitizeEvent({ ...pickup, durationS: 7.6 }, T0, T0 + 60_000).durationS).toBe(8);
+  expect(sanitizeEvent({ ...pickup, durationS: 0 }, T0, T0 + 60_000).durationS).toBe(1);
+  expect(sanitizeEvent({ ...pickup, durationS: Number.NaN }, T0, T0 + 60_000).durationS).toBe(1);
+  // No longer than what is left of the drive after its start (2 s of slack), nor than the drive itself.
+  expect(sanitizeEvent({ ...pickup, durationS: 99, tier: 'severe' }, T0, T0 + 30_000)).toMatchObject({ durationS: 22, tier: 'severe' });
+  expect(sanitizeEvent({ ...pickup, startedAt: T0, durationS: 99 }, T0, T0 + 30_400).durationS).toBe(30);
+  expect(sanitizeEvent({ ...pickup, durationS: 20, tier: 'severe' }, T0, T0 + 24_000)).toMatchObject({ durationS: 16, tier: 'severe' });
+  expect(sanitizeEvent({ ...pickup, durationS: 20, tier: 'severe' }, T0, T0 + 23_000)).toMatchObject({ durationS: 15, tier: 'moderate' });
 });
 
 test('normaliseZone', () => {
@@ -261,7 +290,7 @@ describe('a drive closed at its last movement', () => {
     expect(closed.endedAt).toBe(T0 + 600_000);
     const result = await finalizeTrip(closed, deps());
     const payload = result.payload!;
-    expect(FinalizeTripPayloadV4Schema.safeParse(payload).success).toBe(true);
+    expect(FinalizeTripPayloadV5Schema.safeParse(payload).success).toBe(true);
     expect(payload.endedAt).toBe(T0 + 600_000);
     expect(payload.miles).toBeCloseTo(metersToMiles(open.moved!.distanceM), 3);
     expect(payload.miles).toBeLessThan(metersToMiles(open.distanceM));
@@ -283,7 +312,7 @@ describe('a drive closed at its last movement', () => {
     const result = await finalizeTrip(closed, deps({ now: () => T0 + MAX_DRIVE_MS + 5000 }));
     expect(result.trip.status).toBe('pending');
     expect(result.payload).not.toBeNull();
-    expect(FinalizeTripPayloadV4Schema.safeParse(result.payload).success).toBe(true);
+    expect(FinalizeTripPayloadV5Schema.safeParse(result.payload).success).toBe(true);
   });
 });
 
@@ -406,26 +435,27 @@ test('a drive under 0.5 mi is scored once it lasts 2 min (and too short under bo
   expect((await finalizeTrip(short, deps())).drive).toMatchObject({ scored: false, reason: 'too_short' });
 });
 
-test('the counters are held as the server holds them: moving within the drive, limit within moving, a swing per 15 s, a turn per 10 s, 40 a mile', () => {
-  const e = { slowdowns: 500, speedups: 3, turns: 900, limitS: 9000, movingS: 9000 };
-  expect(boundExposure(e, 600, 10)).toEqual({ slowdowns: 40, speedups: 3, turns: 60, limitS: 600, movingS: 600 });
-  // half a mile: moving time at most ceil(0.5 × 900) + 60 = 510 s, limit time ceil(0.5 × 450) + 60 = 285 s
-  expect(boundExposure(e, 600, 0.5)).toEqual({ slowdowns: 20, speedups: 3, turns: 20, limitS: 285, movingS: 510 });
-  expect(boundExposure({ slowdowns: 5, speedups: 5, turns: 5, limitS: 0, movingS: 0 }, 0, 0)).toEqual({ slowdowns: 0, speedups: 0, turns: 0, limitS: 0, movingS: 0 });
-  expect(boundExposure({ slowdowns: 5, speedups: 5, turns: 5, limitS: 5, movingS: 5 }, 100, 1)).toEqual({ slowdowns: 1, speedups: 1, turns: 1, limitS: 5, movingS: 5 });
-  expect(boundExposure({ slowdowns: Number.NaN, speedups: -2, turns: 2.7, limitS: 50_000, movingS: 50_000 }, 50_000, 500)).toEqual({ slowdowns: 0, speedups: 0, turns: 2, limitS: 43_200, movingS: 43_200 });
+test('the counters are held as the server holds them: moving within the drive, limit and phone time within moving, a swing per 15 s, a turn per 10 s, 40 a mile', () => {
+  const e = { slowdowns: 500, speedups: 3, turns: 900, limitS: 9000, movingS: 9000, phoneS: 9000 };
+  expect(boundExposure(e, 600, 10)).toEqual({ slowdowns: 40, speedups: 3, turns: 60, limitS: 600, movingS: 600, phoneS: 600 });
+  // half a mile: moving time at most ceil(0.5 × 900) + 60 = 510 s, limit and phone time ceil(0.5 × 450) + 60 = 285 s
+  expect(boundExposure(e, 600, 0.5)).toEqual({ slowdowns: 20, speedups: 3, turns: 20, limitS: 285, movingS: 510, phoneS: 285 });
+  expect(boundExposure({ slowdowns: 5, speedups: 5, turns: 5, limitS: 0, movingS: 0, phoneS: 5 }, 0, 0)).toEqual({ slowdowns: 0, speedups: 0, turns: 0, limitS: 0, movingS: 0, phoneS: 0 });
+  expect(boundExposure({ slowdowns: 5, speedups: 5, turns: 5, limitS: 5, movingS: 5, phoneS: 4 }, 100, 1)).toEqual({ slowdowns: 1, speedups: 1, turns: 1, limitS: 5, movingS: 5, phoneS: 4 });
+  expect(boundExposure({ slowdowns: Number.NaN, speedups: -2, turns: 2.7, limitS: 50_000, movingS: 50_000, phoneS: Number.NaN }, 50_000, 500)).toEqual({ slowdowns: 0, speedups: 0, turns: 2, limitS: 43_200, movingS: 43_200, phoneS: 0 });
+  expect(boundExposure({ slowdowns: 5, speedups: 5, turns: 5, limitS: 5, movingS: 50, phoneS: 30.9 }, 100, 1).phoneS).toBe(30);
 });
 
-test('the time counters are held to the distance as the server holds them: moving to ceil(mi × 720 × 1.25) + 60 s, limit to ceil(mi × 360 × 1.25) + 60 s', () => {
-  const claimed = { slowdowns: 5, speedups: 5, turns: 5, limitS: 43_200, movingS: 43_200 };
+test('the time counters are held to the distance as the server holds them: moving to ceil(mi × 720 × 1.25) + 60 s, limit and phone time to ceil(mi × 360 × 1.25) + 60 s', () => {
+  const claimed = { slowdowns: 5, speedups: 5, turns: 5, limitS: 43_200, movingS: 43_200, phoneS: 43_200 };
   // half a mile claimed as 12 h of moving under a limit (an upload inflated to dilute Speed): 510 s and 285 s
-  expect(boundExposure(claimed, 43_200, 0.5)).toMatchObject({ movingS: 510, limitS: 285 });
+  expect(boundExposure(claimed, 43_200, 0.5)).toMatchObject({ movingS: 510, limitS: 285, phoneS: 285 });
   // the products are doubles taken in this order, as apply_drive takes them: 1.1 mi gives
   // 990.0000000000001 → 991 and 495.00000000000006 → 496 (supabase/tests/0023 pins the same)
-  expect(boundExposure(claimed, 43_200, 1.1)).toMatchObject({ movingS: 1051, limitS: 556 });
-  // a real drive always fits: a mile at 5 mph keeps its 720 s of moving, a mile at 10 mph its 360 s under a limit
-  expect(boundExposure({ ...claimed, limitS: 0, movingS: 720 }, 720, 1)).toMatchObject({ movingS: 720, limitS: 0 });
-  expect(boundExposure({ ...claimed, limitS: 360, movingS: 360 }, 360, 1)).toMatchObject({ movingS: 360, limitS: 360 });
+  expect(boundExposure(claimed, 43_200, 1.1)).toMatchObject({ movingS: 1051, limitS: 556, phoneS: 556 });
+  // a real drive always fits: a mile at 5 mph keeps its 720 s of moving, a mile at 10 mph its 360 s under a limit and at driving speed
+  expect(boundExposure({ ...claimed, limitS: 0, movingS: 720, phoneS: 0 }, 720, 1)).toMatchObject({ movingS: 720, limitS: 0, phoneS: 0 });
+  expect(boundExposure({ ...claimed, limitS: 360, movingS: 360, phoneS: 360 }, 360, 1)).toMatchObject({ movingS: 360, limitS: 360, phoneS: 360 });
   // no distance at all: a minute of each at most
-  expect(boundExposure(claimed, 600, 0)).toMatchObject({ movingS: 60, limitS: 60 });
+  expect(boundExposure(claimed, 600, 0)).toMatchObject({ movingS: 60, limitS: 60, phoneS: 60 });
 });

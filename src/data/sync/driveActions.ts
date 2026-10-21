@@ -24,13 +24,17 @@ export interface DriveActionDeps {
 
 export type ReportOutcome = 'queued' | 'already' | 'missing';
 
-/** Report an event with one of the reason sheet's reasons. */
+/**
+ * Report an event with one of the reason sheet's reasons. "My phone was mounted" (`mounted`) is a
+ * phone pickup's only: on any other event there is nothing it could report (`missing`).
+ */
 export async function reportEvent(clientTripId: string, eventId: string, reason: DisputeReason, deps: DriveActionDeps): Promise<ReportOutcome> {
   const { db } = deps;
   const now = deps.now ?? Date.now;
   const events = createEventsRepo(db);
   const event = await events.get(eventId);
   if (event === null || event.client_trip_id !== clientTripId) return 'missing';
+  if (reason === 'mounted' && event.type !== 'phone_pickup') return 'missing';
   if (event.dispute_status !== 'none') return 'already';
   const at = now();
   await db.transaction(async (tx) => {

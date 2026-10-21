@@ -8,10 +8,10 @@ import { emitDataChanged } from '@/data/events';
 import type { SyncKind } from '@/data/sync/kinds';
 import {
   DisputeActionSchema,
-  FinalizeTripPayloadV4Schema,
+  FinalizeTripPayloadV5Schema,
   NotDrivingActionSchema as NotDrivingWireSchema,
   parseFinalizeUpload,
-  type FinalizeTripPayloadV4,
+  type FinalizeTripPayloadV5,
 } from '@/data/sync/payload';
 
 export const FINALIZE_KIND: SyncKind = 'finalize-trip';
@@ -66,8 +66,8 @@ export type TripAction = z.infer<typeof TripActionSchema>;
  * Validate the payload against the contract, then queue it. Idempotent on the trip. Given a
  * transaction handle `on`, the queue item joins that transaction.
  */
-export async function enqueueFinalize(db: Db, payload: FinalizeTripPayloadV4, now: number = Date.now(), on?: Db): Promise<QueueItem> {
-  const valid = FinalizeTripPayloadV4Schema.parse(payload);
+export async function enqueueFinalize(db: Db, payload: FinalizeTripPayloadV5, now: number = Date.now(), on?: Db): Promise<QueueItem> {
+  const valid = FinalizeTripPayloadV5Schema.parse(payload);
   const owner = await currentOwnerUid(db);
   const item = await createQueueRepo(db).enqueue(FINALIZE_KIND, valid, finalizeIdempotencyKey(valid.clientTripId), now, on, owner);
   // Delivered on a macrotask, so a drain it wakes meets the committed row, not the lock.
@@ -85,10 +85,10 @@ export async function enqueueAction(db: Db, action: TripAction, now: number = Da
 }
 
 /**
- * The payload queued for a trip, in whatever state the item has reached, as v4 (one queued by an
+ * The payload queued for a trip, in whatever state the item has reached, as v5 (one queued by an
  * older build is upgraded), or null.
  */
-export async function findFinalize(db: Db, clientTripId: string): Promise<FinalizeTripPayloadV4 | null> {
+export async function findFinalize(db: Db, clientTripId: string): Promise<FinalizeTripPayloadV5 | null> {
   const item = await createQueueRepo(db).byKey(finalizeIdempotencyKey(clientTripId));
   if (!item) return null;
   let body: unknown;

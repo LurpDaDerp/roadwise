@@ -160,6 +160,23 @@ describe('the cut at the last movement', () => {
     ]);
   });
 
+  test('cutEvents: a phone pickup keeps whole seconds in hand (at least 1) and the tier they make; one starting at the cut goes', () => {
+    const out = cutEvents(
+      [
+        ev('phone_pickup', 60, 30, { tier: 'moderate' }),
+        ev('phone_pickup', 75, 40, { tier: 'severe' }),
+        ev('phone_pickup', 99.5, 4, { tier: 'moderate' }),
+        ev('phone_pickup', 100, 3, { tier: 'moderate' }),
+      ],
+      CUT
+    );
+    expect(out.map((e) => [e.startedAt - T0, e.durationS, e.tier])).toEqual([
+      [60_000, 30, 'moderate'],
+      [75_000, 25, 'severe'],
+      [99_500, 1, 'moderate'],
+    ]);
+  });
+
   test('closeAtLastMovement: the accumulators, track and events come back to the mark; the open session is untouched', () => {
     const s = createSession({ clientTripId: 'x', startedAt: T0, origin: 'manual' });
     const drive = seq([60, (i) => ({ speed: mph(30), lng: -122.4194 + i * 0.00015, ts: T0 + i * 1000 })]);

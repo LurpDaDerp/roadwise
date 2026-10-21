@@ -182,13 +182,17 @@ export interface AlertEvent {
   tier: Tier;
   /** epoch ms, row clock */
   at: number;
-  /** A speeding repeat while the car stays over the line: the chime, sounded, never shown (never `lastAlert`, so no banner). */
+  /**
+   * A repeat, sounded, never shown (never `lastAlert`, so no banner and no shake): speeding's chime
+   * while the car stays over the line, a phone pickup's tone and haptic while the phone stays in hand.
+   */
   repeat?: true;
 }
 
 /**
- * The halo shakes on it: a hard brake, start or turn as it is confirmed, a speeding episode as its
- * grace ends. Two on the same row are one shake (the later key wins). Never a DashPal alert.
+ * The halo shakes on it: a hard brake, start or turn and a phone pickup as they are confirmed, a
+ * speeding episode as its grace ends. Two on the same row are one shake (the later key wins). Never
+ * a DashPal alert, never a repeat.
  */
 export interface EventShake {
   /** Unique per shake in a drive. */
@@ -287,7 +291,7 @@ export interface EngineDeps {
   };
   /** A fresh detector suite for each drive. */
   createDetectors(): DetectorSuite;
-  /** The per-row detector context minus `warmupEndsAt`, which the engine knows. */
+  /** The per-row detector context minus `warmupEndsAt`, which the engine knows: the phone's platform. */
   ctx(): Omit<DetectorContext, 'warmupEndsAt'>;
   onAlert(alert: AlertEvent): void;
   /** Every `CHECKPOINT_ROWS` rows and before finalize. Owns persistence; a rejection leaves the rows pending. */

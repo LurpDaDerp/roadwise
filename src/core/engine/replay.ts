@@ -13,6 +13,8 @@ import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './
 
 export interface RebuildDeps {
   createDetectors(): DetectorSuite;
+  /** The phone that recorded the drive (this one): the detectors read it as they did live. */
+  platform: DetectorContext['platform'];
   /** SQLite only, never the network: the stored tiles (sync or async). */
   limits: { lookup(lat: number, lng: number, course: number): LimitSample | null | Promise<LimitSample | null> };
 }
@@ -52,7 +54,7 @@ export async function rebuildFromSamples(db: Db, trip: TripRow, deps: RebuildDep
     if (row.ts + ROW_MS > trip.started_at + MAX_DRIVE_MS) continue;
     const limit = (await deps.limits.lookup(row.lat, row.lng, row.course)) ?? UNKNOWN_LIMIT;
     noteWarmup(session, row);
-    const ctx: DetectorContext = { warmupEndsAt: session.warmup.endsAt };
+    const ctx: DetectorContext = { warmupEndsAt: session.warmup.endsAt, platform: deps.platform };
     const closed = detectors.push(row, limit, ctx);
     session.events.push(...closed);
     appendRow(session, row, { unsafe: detectors.unsafe(), limitUsable: detectors.speedingNow() !== null });

@@ -14,7 +14,7 @@ import { PAIRED_KEY } from '@/dashcam/keys';
 import { createDashcamStore } from '@/dashcam/store';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
-import { FinalizeTripPayloadV4Schema } from '@/data/sync/payload';
+import { FinalizeTripPayloadV5Schema } from '@/data/sync/payload';
 import { findFinalize } from '@/data/sync/queue';
 
 let db: Db;
@@ -77,7 +77,7 @@ describe('finalizeTrip with DashPal facts', () => {
     expect(await createSamplesRepo(db).count(TRIP)).toBe(1);
 
     const payload = result.payload!;
-    expect(FinalizeTripPayloadV4Schema.safeParse(payload).success).toBe(true);
+    expect(FinalizeTripPayloadV5Schema.safeParse(payload).success).toBe(true);
     expect(dashcamDrive(payload.dashcam)).toBe(true);
     expect(payload.dashcam).toEqual({ deviceId: DEVICE, movingS: 1150, coveredS: 1100, synced: true });
     expect(payload.events).toEqual([
@@ -156,7 +156,7 @@ describe('finalizeTrip with DashPal facts', () => {
   ])('row 37: %s → not a DashPal drive, and the payload is still valid and uploaded', async (_why, f) => {
     const result = await finalizeTrip(session(), deps(async () => f));
     expect(result.trip.status).toBe('pending');
-    expect(FinalizeTripPayloadV4Schema.safeParse(result.payload).success).toBe(true);
+    expect(FinalizeTripPayloadV5Schema.safeParse(result.payload).success).toBe(true);
     expect(result.payload!.dashcam).toEqual({ deviceId: DEVICE, movingS: f.movingS, coveredS: f.coveredS, synced: f.synced });
     expect(dashcamDrive(result.payload!.dashcam)).toBe(false);
   });

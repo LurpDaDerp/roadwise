@@ -68,6 +68,7 @@ const COLUMNS = [
   'turns',
   'limit_s',
   'moving_s',
+  'phone_s',
 ] as const;
 
 /** Every column except the primary key and `created_at`, which a patch must not move. */
@@ -128,6 +129,7 @@ export function toTripRow(row: Record<string, unknown>): TripRow {
     turns: asNumberOrNull(row, 'turns'),
     limit_s: asNumberOrNull(row, 'limit_s'),
     moving_s: asNumberOrNull(row, 'moving_s'),
+    phone_s: asNumberOrNull(row, 'phone_s') ?? 0,
   };
 }
 

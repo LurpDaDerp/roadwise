@@ -62,7 +62,7 @@ function harness(over: Partial<EngineDeps> = {}) {
     newId: () => `id${(n += 1)}`,
     limits: { lookup: () => limit(mph(35)), prefetch: () => {} },
     createDetectors: () => createDetectors(() => `e${(n += 1)}`),
-    ctx: () => ({}),
+    ctx: () => ({ platform: 'ios' }),
     onAlert: () => {},
     onCheckpoint: async () => {},
     onFinalize: async (s) => {

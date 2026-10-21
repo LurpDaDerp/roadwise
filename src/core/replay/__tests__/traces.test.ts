@@ -52,44 +52,54 @@ test.each(names)('%s is a 1 Hz drive that asserts something', (name) => {
 });
 
 /**
- * Each trace's opportunity counters (slowdowns, speed-ups, turns, limit seconds, moving seconds), with
- * the harness's 30 s warm-up. The synthetic drives run straight east, so only `turn-right-90` turns;
- * a 35 → 25 mph brake is a 10 mph drop, under the 12 mph slowdown line.
+ * Each trace's opportunity counters (slowdowns, speed-ups, turns, limit seconds, moving seconds,
+ * phone seconds), with the harness's 30 s warm-up. The synthetic drives run straight east, so only
+ * `turn-right-90` turns; a 35 → 25 mph brake is a 10 mph drop, under the 12 mph slowdown line. Phone
+ * seconds are every row at 10 mph or more on a trusted speed with the motion sensors read, the
+ * warm-up's included.
  */
-const EXPOSURE: Record<string, readonly [number, number, number, number, number]> = {
-  'clean-commute': [0, 0, 0, 270, 300],
-  'hard-accel-confirmed': [0, 0, 0, 170, 200],
-  'hard-brake-confirmed': [0, 0, 0, 170, 200],
-  'hard-brake-poor-speedacc': [0, 0, 0, 168, 200],
-  'hard-brake-severe': [1, 0, 0, 170, 200],
-  'hard-brake-unconfirmed': [0, 0, 0, 170, 200],
-  'hard-corner-no-course': [0, 0, 0, 170, 200],
-  'hard-corner-plausible': [0, 0, 0, 170, 200],
-  'hard-corner-straight': [0, 0, 0, 170, 200],
-  'hard-corner-wrong-side': [0, 0, 0, 170, 200],
-  'phone-slide-false-positive': [0, 0, 0, 170, 200],
-  'speeding-blip': [0, 0, 0, 170, 200],
-  'speeding-blip-hover': [0, 0, 0, 170, 200],
-  'speeding-grace': [1, 1, 0, 170, 200],
-  'speeding-hover': [0, 0, 0, 210, 240],
-  'speeding-minor': [0, 0, 0, 210, 240],
-  'speeding-poor-gps': [1, 1, 0, 130, 200],
-  'speeding-poor-speedacc': [0, 0, 0, 190, 240],
-  'speeding-severe-brief': [1, 1, 0, 170, 200],
-  'speeding-split': [0, 0, 0, 170, 200],
-  'speeding-unknown-limit': [1, 1, 0, 120, 200],
-  'speeding-warmup': [1, 0, 0, 170, 200],
-  'stop-and-go': [3, 3, 0, 139, 181],
-  'turn-right-90': [0, 0, 1, 170, 200],
+const EXPOSURE: Record<string, readonly [number, number, number, number, number, number]> = {
+  'clean-commute': [0, 0, 0, 270, 300, 300],
+  'hard-accel-confirmed': [0, 0, 0, 170, 200, 200],
+  'hard-brake-confirmed': [0, 0, 0, 170, 200, 200],
+  'hard-brake-poor-speedacc': [0, 0, 0, 168, 200, 198],
+  'hard-brake-severe': [1, 0, 0, 170, 200, 200],
+  'hard-brake-unconfirmed': [0, 0, 0, 170, 200, 200],
+  'hard-corner-no-course': [0, 0, 0, 170, 200, 200],
+  'hard-corner-plausible': [0, 0, 0, 170, 200, 200],
+  'hard-corner-straight': [0, 0, 0, 170, 200, 200],
+  'hard-corner-wrong-side': [0, 0, 0, 170, 200, 200],
+  'phone-call-android': [0, 0, 0, 170, 200, 200],
+  'phone-handling-long': [0, 0, 0, 210, 240, 240],
+  'phone-hands-free-call': [0, 0, 0, 170, 200, 200],
+  'phone-parked-start': [0, 1, 0, 120, 120, 120],
+  'phone-pickup': [0, 0, 0, 170, 200, 200],
+  'phone-red-light-drive-off': [1, 1, 0, 180, 210, 210],
+  'phone-slide-false-positive': [0, 0, 0, 170, 200, 200],
+  'phone-stopped-in-traffic': [1, 1, 0, 170, 200, 200],
+  'phone-tap-mounted': [0, 0, 0, 170, 200, 200],
+  'speeding-blip': [0, 0, 0, 170, 200, 200],
+  'speeding-blip-hover': [0, 0, 0, 170, 200, 200],
+  'speeding-grace': [1, 1, 0, 170, 200, 200],
+  'speeding-hover': [0, 0, 0, 210, 240, 240],
+  'speeding-minor': [0, 0, 0, 210, 240, 240],
+  'speeding-poor-gps': [1, 1, 0, 130, 200, 200],
+  'speeding-poor-speedacc': [0, 0, 0, 190, 240, 220],
+  'speeding-severe-brief': [1, 1, 0, 170, 200, 200],
+  'speeding-split': [0, 0, 0, 170, 200, 200],
+  'speeding-unknown-limit': [1, 1, 0, 120, 200, 200],
+  'speeding-warmup': [1, 0, 0, 170, 200, 200],
+  'stop-and-go': [3, 3, 0, 139, 181, 169],
+  'turn-right-90': [0, 0, 1, 170, 200, 200],
 };
 
 test('every trace pins its opportunity counters', () => {
   expect(Object.keys(EXPOSURE).sort()).toEqual(names);
 });
 
-test.each(names)('%s counts its slowdowns, speed-ups, turns, limit time and moving time', (name) => {
+test.each(names)('%s counts its slowdowns, speed-ups, turns, limit time, moving time and phone time', (name) => {
   const e = runTrace(load(name)).exposure;
-  expect([e.slowdowns, e.speedups, e.turns, e.limitS, e.movingS]).toEqual(EXPOSURE[name]);
+  expect([e.slowdowns, e.speedups, e.turns, e.limitS, e.movingS, e.phoneS]).toEqual(EXPOSURE[name]);
 });
 
 /** The trace's limits looked up by position, as the tiles answer the engine (the first row at a spot decides). */
@@ -108,7 +118,7 @@ test.each(names)('%s gives the same counters live and rebuilt from its stored ro
     newId: () => 'live',
     limits: { lookup: (lat, lng) => limits.lookup(lat, lng), prefetch: () => {} },
     createDetectors: () => createDetectors(() => 'x'),
-    ctx: () => ({}),
+    ctx: () => ({ platform: trace.platform ?? 'ios' }),
     onAlert: () => {},
     onCheckpoint: async () => {},
     onFinalize: async () => {},
@@ -123,9 +133,15 @@ test.each(names)('%s gives the same counters live and rebuilt from its stored ro
   await createTripsRepo(db).insert({ client_trip_id: 'live', started_at: t0, tz: 'America/Los_Angeles', status: 'recording', origin: 'manual' }, t0);
   await createSamplesRepo(db).appendMany('live', trace.rows.map((row) => ({ ts: row.ts, row })));
   const trip = (await createTripsRepo(db).get('live'))!;
-  const rebuilt = (await rebuildFromSamples(db, trip, { createDetectors: () => createDetectors(() => 'x'), limits: { lookup: async (lat, lng) => limits.lookup(lat, lng) } }))!.session;
+  const rebuilt = (await rebuildFromSamples(db, trip, {
+    createDetectors: () => createDetectors(() => 'x'),
+    platform: trace.platform ?? 'ios',
+    limits: { lookup: async (lat, lng) => limits.lookup(lat, lng) },
+  }))!.session;
   expect(rebuilt.exposure).toEqual(live.exposure);
   expect(rebuilt.movingRows).toBe(live.movingRows);
+  // The events too: a phone pickup rebuilt from the stored rows is the one the live drive had.
+  expect(rebuilt.events.map((e) => [e.type, e.startedAt, e.durationS, e.tier])).toEqual(live.events.map((e) => [e.type, e.startedAt, e.durationS, e.tier]));
 });
 
 test('parseTrace refuses an unknown key and a bad expectation', () => {

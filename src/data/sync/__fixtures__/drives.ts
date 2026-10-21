@@ -1,6 +1,6 @@
 /**
  * Finished drives for the sync and restore suites, written the way the finalizer leaves them: a
- * `pending` trip row with its events, counters and kept samples, and its v4 upload queued (held
+ * `pending` trip row with its events, counters and kept samples, and its v5 upload queued (held
  * for nothing: due at once). Built from the data layer's own repos, so these suites do not depend
  * on the engine.
  */
@@ -10,7 +10,7 @@ import { createSamplesRepo } from '@/data/db/samples';
 import { createTripsRepo } from '@/data/db/trips';
 import type { NewEvent, TripPatch } from '@/data/db/types';
 import { countEvents } from '@/data/queries/rows';
-import type { FinalizeTripPayloadV3, FinalizeTripPayloadV4, FinalizeTripResponse, PayloadEvent } from '@/data/sync/payload';
+import type { FinalizeTripPayloadV3, FinalizeTripPayloadV4, FinalizeTripPayloadV5, FinalizeTripResponse, PayloadEvent, PayloadEventV4 } from '@/data/sync/payload';
 import { enqueueFinalize } from '@/data/sync/queue';
 
 export const T0 = 1_700_000_000_000;
@@ -39,16 +39,28 @@ export interface DriveOptions {
   origin?: 'auto' | 'manual';
   notDrivingExpired?: boolean;
   /** null: no counters (an older drive). */
-  exposure?: FinalizeTripPayloadV4['exposure'] | null;
+  exposure?: FinalizeTripPayloadV5['exposure'] | null;
   /** Extra columns on the trip row. */
   row?: TripPatch;
 }
 
-/** The v4 upload of a 20-minute, 11-mile drive. */
-export function payloadV4(clientTripId: string, opts: DriveOptions = {}): FinalizeTripPayloadV4 {
+/** One phone pickup, 12 s in hand, seven minutes in. */
+export const pickup = (id: string, t0: number): PayloadEvent => ({
+  id,
+  type: 'phone_pickup',
+  tier: 'moderate',
+  startedAt: t0 + 420_000,
+  durationS: 12,
+  lat: null,
+  lng: null,
+  measured: { speedMph: 35, maxSpeedMph: 41.5 },
+});
+
+/** The v5 upload of a 20-minute, 11-mile drive. */
+export function payloadV5(clientTripId: string, opts: DriveOptions = {}): FinalizeTripPayloadV5 {
   const t0 = opts.t0 ?? T0;
   return {
-    v: 4,
+    v: 5,
     clientTripId,
     startedAt: t0,
     endedAt: t0 + DURATION_MS,
@@ -65,8 +77,17 @@ export function payloadV4(clientTripId: string, opts: DriveOptions = {}): Finali
     appVersion: '4',
     origin: opts.origin ?? 'manual',
     notDrivingExpired: opts.notDrivingExpired ?? false,
-    ...(opts.exposure === undefined ? { exposure: { slowdowns: 4, speedups: 5, turns: 3, limitS: 900, movingS: 1100 } } : opts.exposure === null ? {} : { exposure: opts.exposure }),
+    ...(opts.exposure === undefined ? { exposure: { slowdowns: 4, speedups: 5, turns: 3, limitS: 900, movingS: 1100, phoneS: 1000 } } : opts.exposure === null ? {} : { exposure: opts.exposure }),
   };
+}
+
+/** The same drive as a build from before phone tracking queued it (v4: no pickups, no phone seconds). */
+export function payloadV4(clientTripId: string, opts: DriveOptions = {}): FinalizeTripPayloadV4 {
+  const { v: _v, exposure, events, ...rest } = payloadV5(clientTripId, opts);
+  const v4Events = events.filter((e) => e.type !== 'phone_pickup') as PayloadEventV4[];
+  if (exposure === undefined) return { ...rest, v: 4, events: v4Events };
+  const { phoneS: _p, ...counters } = exposure;
+  return { ...rest, v: 4, events: v4Events, exposure: counters };
 }
 
 /** The same drive as an older build queued it (v3, with a phone event and safe miles). */
@@ -85,8 +106,8 @@ export function payloadV3(clientTripId: string, opts: DriveOptions = {}): Finali
 }
 
 /** A finished drive on the phone: its row, its events, two samples and its upload queued (due at `t0 + 1 300 000`). */
-export async function finishedDrive(db: Db, clientTripId: string, opts: DriveOptions = {}): Promise<FinalizeTripPayloadV4> {
-  const p = payloadV4(clientTripId, opts);
+export async function finishedDrive(db: Db, clientTripId: string, opts: DriveOptions = {}): Promise<FinalizeTripPayloadV5> {
+  const p = payloadV5(clientTripId, opts);
   const finalizedAt = p.endedAt + 100_000;
   await createTripsRepo(db).insert(
     {
@@ -113,6 +134,7 @@ export async function finishedDrive(db: Db, clientTripId: string, opts: DriveOpt
       turns: p.exposure?.turns ?? null,
       limit_s: p.exposure?.limitS ?? null,
       moving_s: p.exposure?.movingS ?? null,
+      phone_s: p.exposure?.phoneS ?? 0,
       ...opts.row,
     },
     finalizedAt

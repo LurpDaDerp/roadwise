@@ -1,10 +1,10 @@
-// The finalize pipeline (modes plan §3.5, §3.11): the closed session the engine hands over becomes a
-// stored drive with a privacy-trimmed route, from/to labels, its opportunity counters and one
-// queued, held upload.
+// The finalize pipeline (modes plan §3.5, §3.11; phone plan P5): the closed session the engine hands
+// over becomes a stored drive with a privacy-trimmed route, from/to labels, its opportunity counters
+// and one queued, held upload.
 //
 //   1. the route is trimmed (zones + first/last 0.25 mi) and the events located on it;
-//   2. the v4 payload is built and validated against the upload contract (how the drive started,
-//      whether its "Not driving?" ran out, its exposure);
+//   2. the v5 payload is built and validated against the upload contract (how the drive started,
+//      whether its "Not driving?" ran out, its exposure with the phone seconds, its phone pickups);
 //   3. the drive is classified (`classifyDrive`: scored, or too short; the events that break clean);
 //   4. ONE transaction replaces the events, updates the trip row (`pending`, `finalized_at`), queues
 //      the upload HELD for `UPLOAD_HOLD_MS` (a drive confirmed in that window, starting near this
@@ -27,6 +27,7 @@ import {
   MERGE_GAP_S,
   NO_EVENTS_FIRST_S,
   isDashcamType,
+  phonePickupTier,
   watchedMiles,
   type DashcamEventType,
   type DriveClass,
@@ -40,12 +41,12 @@ import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRep
 import { deviceTrimSeed } from '@/data/devices/deviceSecret';
 import { countEvents } from '@/data/queries/rows';
 import {
-  FinalizeTripPayloadV4Schema,
+  FinalizeTripPayloadV5Schema,
   MAX_DRIVE_MS,
   MAX_EVENTS,
   MAX_POLYLINE_BYTES,
   TZ_NAME_PATTERN,
-  type FinalizeTripPayloadV4,
+  type FinalizeTripPayloadV5,
   type PayloadDashcam,
   type PayloadEvent,
 } from '@/data/sync/payload';
@@ -96,7 +97,7 @@ export interface FinalizeResult {
   trip: TripRow;
   events: EventRow[];
   /** The queued (held) upload, or null when the contract refused the drive (stored as `failed`). */
-  payload: FinalizeTripPayloadV4 | null;
+  payload: FinalizeTripPayloadV5 | null;
   /** Whether it scores and how many events break clean. */
   drive: DriveClass;
 }
@@ -205,18 +206,28 @@ const MAX_OVER_MPH_S = 1e6;
 
 const finiteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/** A copy of the event with every number finite and rounded, so the contract holds whatever a detector emitted. */
+/**
+ * A copy of the event with every number finite and rounded, so the contract holds whatever a
+ * detector emitted. A phone pickup keeps whole seconds in hand, at least 1 and at most the drive's
+ * (rounded) length and its own span to the end, with the tier they make.
+ */
 export function sanitizeEvent(e: DetectedEvent, tripStartedAt: number, tripEndedAt: number): DetectedEvent {
   const startedAt = clamp(Number.isFinite(e.startedAt) ? Math.round(e.startedAt) : tripStartedAt, tripStartedAt, tripEndedAt);
   const maxDuration = Math.max(0, (tripEndedAt - startedAt) / 1000 + 2);
   const measured: DetectedEvent['measured'] = {};
   const m = e.measured;
   if (finiteNumber(m.speedMph)) measured.speedMph = clamp(round3(m.speedMph), 0, 250);
+  if (finiteNumber(m.maxSpeedMph) && e.type === 'phone_pickup') measured.maxSpeedMph = clamp(round3(m.maxSpeedMph), 0, 250);
   if (finiteNumber(m.limitMph)) measured.limitMph = clamp(Math.round(m.limitMph), 0, 120);
   if (finiteNumber(m.peakG)) measured.peakG = clamp(round3(m.peakG), 0, 10);
   if (finiteNumber(m.overMphS)) measured.overMphS = clamp(round3(m.overMphS), 0, MAX_OVER_MPH_S);
   // The contract's rule: a DashPal event carries source dashcam, and nothing else does.
   if (isDashcamType(e.type)) measured.source = 'dashcam';
+  if (e.type === 'phone_pickup') {
+    const most = Math.max(1, Math.min(Math.floor(maxDuration), Math.round(round3((tripEndedAt - tripStartedAt) / 1000))));
+    const durationS = clamp(Math.round(finite(e.durationS, 1)), 1, most);
+    return { id: e.id, type: e.type, tier: phonePickupTier(durationS), startedAt, durationS, measured };
+  }
   return {
     id: e.id,
     type: e.type,
@@ -230,11 +241,12 @@ export function sanitizeEvent(e: DetectedEvent, tripStartedAt: number, tripEnded
 /**
  * The counters held to what the drive itself allows, exactly as the server holds them
  * (`apply_drive`), so the phone's own reading is the server's: moving time within the drive's
- * length (and 12 h) and within ceil(miles × 720 × 1.25) + 60 s, limit time within moving time and
- * within ceil(miles × 360 × 1.25) + 60 s (moving time accrues at 5 mph or more, 720 s a mile at
- * most, and limit time at 10 mph or more, 360 s a mile at most), a slowdown or a speed-up per 15 s
- * of moving and a turn per 10 s (at least one each), and no count above 40 a mile. The server takes
- * the two time caps in double precision in this same order, so both cut to the same second. Pure.
+ * length (and 12 h) and within ceil(miles × 720 × 1.25) + 60 s, limit time and phone time each
+ * within moving time and within ceil(miles × 360 × 1.25) + 60 s (moving time accrues at 5 mph or
+ * more, 720 s a mile at most; limit and phone time at 10 mph or more, 360 s a mile at most), a
+ * slowdown or a speed-up per 15 s of moving and a turn per 10 s (at least one each), and no count
+ * above 40 a mile. The server takes the time caps in double precision in this same order, so both
+ * cut to the same second. Pure.
  */
 export function boundExposure(e: Exposure, durationS: number, miles: number): Exposure {
   const whole = (v: number): number => (Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0);
@@ -248,6 +260,7 @@ export function boundExposure(e: Exposure, durationS: number, miles: number): Ex
     turns: Math.min(cap, Math.max(1, Math.ceil(movingS / 10)), whole(e.turns)),
     limitS: Math.min(movingS, Math.ceil(mi * 360 * 1.25) + 60, whole(e.limitS)),
     movingS,
+    phoneS: Math.min(movingS, Math.ceil(mi * 360 * 1.25) + 60, whole(e.phoneS)),
   };
 }
 
@@ -421,7 +434,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const exposure = exposureOf(session, durationS, miles);
   const point = (f: { lat: number; lng: number } | null) => (f === null ? null : { lat: round4(f.lat), lng: round4(f.lng) });
   const candidate = {
-    v: 4 as const,
+    v: 5 as const,
     clientTripId: id,
     startedAt,
     endedAt,
@@ -441,7 +454,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     exposure,
     ...(dashcam === null ? {} : { dashcam }),
   };
-  const parsed = FinalizeTripPayloadV4Schema.safeParse(candidate);
+  const parsed = FinalizeTripPayloadV5Schema.safeParse(candidate);
 
   // 3. What the drive is: scored or too short, and the events that break clean.
   const drive = classifyDrive({ miles, durationS, events: cleaned });
@@ -481,6 +494,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     turns: exposure.turns,
     limit_s: exposure.limitS,
     moving_s: exposure.movingS,
+    phone_s: exposure.phoneS,
     // Local only (the summary's end note); a manual end cut at the last movement is `manual_still`.
     end_cause: session.endCause === null ? null : session.endCause === 'manual' && session.cut ? 'manual_still' : session.endCause,
   } as const;

@@ -31,7 +31,7 @@ export interface Expectation {
 
 // eyes_off and drowsy come only from the DashPal dashcam: no phone trace ever raises them, but an
 // expectation may still name one (e.g. as `absent`).
-const EVENT_TYPES = ['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'eyes_off', 'drowsy'] as const;
+const EVENT_TYPES = ['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'eyes_off', 'drowsy'] as const;
 const TIERS = ['minor', 'moderate', 'severe'] as const;
 
 /** Annotated with the engine's own types, so a field added to `FeatureRow` and forgotten here fails `tsc`. */
@@ -82,6 +82,8 @@ export const expectationSchema: z.ZodType<Expectation> = z.strictObject({
 
 export const traceSchema = z.strictObject({
   name: z.string().min(1),
+  /** The phone that recorded it (default `ios`): on iPhone a row with a call is never phone use. */
+  platform: z.enum(['ios', 'android']).optional(),
   rows: z.array(featureRowSchema).min(1),
   limits: z.array(limitEntrySchema),
   expected: z.array(expectationSchema),
