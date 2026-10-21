@@ -39,19 +39,20 @@ export type Database = {
           is_public: boolean
           key: string
           updated_at: string
-          value: Json
+          value: NonNullable<Json>
         }
+        ComputedFields: never
         Insert: {
           is_public?: boolean
           key: string
           updated_at?: string
-          value: Json
+          value: NonNullable<Json>
         }
         Update: {
           is_public?: boolean
           key?: string
           updated_at?: string
-          value?: Json
+          value?: NonNullable<Json>
         }
         Relationships: []
       }
@@ -61,6 +62,7 @@ export type Database = {
           blocker_id: string
           created_at: string
         }
+        ComputedFields: never
         Insert: {
           blocked_id: string
           blocker_id: string
@@ -81,6 +83,7 @@ export type Database = {
           target: number
           title: string
         }
+        ComputedFields: never
         Insert: {
           description: string
           id: string
@@ -104,6 +107,7 @@ export type Database = {
           role: string
           user_id: string
         }
+        ComputedFields: never
         Insert: {
           clan_id: string
           joined_at?: string
@@ -135,6 +139,7 @@ export type Database = {
           name: string
           updated_at: string
         }
+        ComputedFields: never
         Insert: {
           banner: string
           created_at?: string
@@ -161,6 +166,7 @@ export type Database = {
           user_id: string
           version: string
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           id?: string
@@ -183,6 +189,7 @@ export type Database = {
           device_id: string
           user_id: string
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           device_id: string
@@ -200,15 +207,22 @@ export type Database = {
           created_at: string
           device_id: string
           last_seen_at: string
+          live_activity_drive: string | null
+          live_activity_sent_at: string | null
+          live_activity_token: string | null
           platform: string
           push_token: string | null
           updated_at: string
           user_id: string
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           device_id: string
           last_seen_at?: string
+          live_activity_drive?: string | null
+          live_activity_sent_at?: string | null
+          live_activity_token?: string | null
           platform: string
           push_token?: string | null
           updated_at?: string
@@ -218,6 +232,9 @@ export type Database = {
           created_at?: string
           device_id?: string
           last_seen_at?: string
+          live_activity_drive?: string | null
+          live_activity_sent_at?: string | null
+          live_activity_token?: string | null
           platform?: string
           push_token?: string | null
           updated_at?: string
@@ -234,6 +251,7 @@ export type Database = {
           trip_id: string
           user_id: string
         }
+        ComputedFields: never
         Insert: {
           client_event_id: string
           created_at?: string
@@ -266,6 +284,7 @@ export type Database = {
           from_id: string
           to_id: string
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           from_id: string
@@ -284,6 +303,7 @@ export type Database = {
           user_a: string
           user_b: string
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           user_a: string
@@ -304,6 +324,7 @@ export type Database = {
           updated_at: string
           window_start: string
         }
+        ComputedFields: never
         Insert: {
           count?: number
           created_at?: string
@@ -326,7 +347,7 @@ export type Database = {
           dedupe_key: string
           id: string
           kind: string
-          payload: Json
+          payload: NonNullable<Json>
           push_after: string
           push_attempts: number
           push_claimed_at: string | null
@@ -336,12 +357,13 @@ export type Database = {
           updated_at: string
           user_id: string
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           dedupe_key: string
           id?: string
           kind: string
-          payload?: Json
+          payload?: NonNullable<Json>
           push_after?: string
           push_attempts?: number
           push_claimed_at?: string | null
@@ -356,7 +378,7 @@ export type Database = {
           dedupe_key?: string
           id?: string
           kind?: string
-          payload?: Json
+          payload?: NonNullable<Json>
           push_after?: string
           push_attempts?: number
           push_claimed_at?: string | null
@@ -375,6 +397,7 @@ export type Database = {
           name: string
           updated_at: string
         }
+        ComputedFields: never
         Insert: {
           expires_at: string
           holder: string
@@ -389,71 +412,6 @@ export type Database = {
         }
         Relationships: []
       }
-      league_groups: {
-        Row: {
-          closed_at: string | null
-          created_at: string
-          id: string
-          member_count: number
-          tier: string
-          week: string
-        }
-        Insert: {
-          closed_at?: string | null
-          created_at?: string
-          id?: string
-          member_count?: number
-          tier: string
-          week: string
-        }
-        Update: {
-          closed_at?: string | null
-          created_at?: string
-          id?: string
-          member_count?: number
-          tier?: string
-          week?: string
-        }
-        Relationships: []
-      }
-      league_members: {
-        Row: {
-          final_rank: number | null
-          group_id: string
-          joined_at: string
-          result: string | null
-          tier: string
-          user_id: string
-          week: string
-        }
-        Insert: {
-          final_rank?: number | null
-          group_id: string
-          joined_at?: string
-          result?: string | null
-          tier: string
-          user_id: string
-          week: string
-        }
-        Update: {
-          final_rank?: number | null
-          group_id?: string
-          joined_at?: string
-          result?: string | null
-          tier?: string
-          user_id?: string
-          week?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "league_members_group_id_fkey"
-            columns: ["group_id"]
-            isOneToOne: false
-            referencedRelation: "league_groups"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       limits_cache: {
         Row: {
           created_at: string
@@ -465,6 +423,7 @@ export type Database = {
           segment_key: string
           updated_at: string
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           expires_at: string
@@ -496,6 +455,7 @@ export type Database = {
           lng: number
           speed_mph: number | null
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           id?: string
@@ -527,6 +487,7 @@ export type Database = {
           user_id: string
           weekly_recap: boolean
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           leagues?: boolean
@@ -552,47 +513,6 @@ export type Database = {
           weekly_recap?: boolean
         }
         Relationships: []
-      }
-      points_ledger: {
-        Row: {
-          amount: number
-          created_at: string
-          id: string
-          key: string
-          kind: string
-          league_week: string | null
-          trip_id: string | null
-          user_id: string
-        }
-        Insert: {
-          amount: number
-          created_at?: string
-          id?: string
-          key: string
-          kind: string
-          league_week?: string | null
-          trip_id?: string | null
-          user_id: string
-        }
-        Update: {
-          amount?: number
-          created_at?: string
-          id?: string
-          key?: string
-          kind?: string
-          league_week?: string | null
-          trip_id?: string | null
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "points_ledger_trip_id_fkey"
-            columns: ["trip_id"]
-            isOneToOne: false
-            referencedRelation: "trips"
-            referencedColumns: ["id"]
-          },
-        ]
       }
       profiles: {
         Row: {
@@ -602,11 +522,16 @@ export type Database = {
           id: string
           league_eligible: boolean
           onboarded_at: string | null
+          share_achievements: boolean
+          share_categories: boolean
+          share_rating: boolean
+          share_stats: boolean
           state: string | null
           units: string
           updated_at: string
           username: string | null
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           flagged?: boolean
@@ -614,6 +539,10 @@ export type Database = {
           id: string
           league_eligible?: boolean
           onboarded_at?: string | null
+          share_achievements?: boolean
+          share_categories?: boolean
+          share_rating?: boolean
+          share_stats?: boolean
           state?: string | null
           units?: string
           updated_at?: string
@@ -626,6 +555,10 @@ export type Database = {
           id?: string
           league_eligible?: boolean
           onboarded_at?: string | null
+          share_achievements?: boolean
+          share_categories?: boolean
+          share_rating?: boolean
+          share_stats?: boolean
           state?: string | null
           units?: string
           updated_at?: string
@@ -635,77 +568,39 @@ export type Database = {
       }
       progress: {
         Row: {
-          at_risk: boolean
-          clean_miles_30d: number
-          clean_run: number
           created_at: string
-          freeze_progress: number
-          freezes: number
-          freezes_granted_at: string
           last_end_at: string | null
           last_end_lat: number | null
           last_end_lng: number | null
-          league_tier: string
-          level: number
-          lifetime: number
-          miles_30d: number
-          phone_free_run: number
-          points: number
+          miles_90d: number
           ranked: boolean
-          rating_penalty_30d: number
           rating_updated_at: string | null
           safety_rating: number | null
-          streak: number
           updated_at: string
           user_id: string
         }
+        ComputedFields: never
         Insert: {
-          at_risk?: boolean
-          clean_miles_30d?: number
-          clean_run?: number
           created_at?: string
-          freeze_progress?: number
-          freezes?: number
-          freezes_granted_at?: string
           last_end_at?: string | null
           last_end_lat?: number | null
           last_end_lng?: number | null
-          league_tier?: string
-          level?: number
-          lifetime?: number
-          miles_30d?: number
-          phone_free_run?: number
-          points?: number
+          miles_90d?: number
           ranked?: boolean
-          rating_penalty_30d?: number
           rating_updated_at?: string | null
           safety_rating?: number | null
-          streak?: number
           updated_at?: string
           user_id: string
         }
         Update: {
-          at_risk?: boolean
-          clean_miles_30d?: number
-          clean_run?: number
           created_at?: string
-          freeze_progress?: number
-          freezes?: number
-          freezes_granted_at?: string
           last_end_at?: string | null
           last_end_lat?: number | null
           last_end_lng?: number | null
-          league_tier?: string
-          level?: number
-          lifetime?: number
-          miles_30d?: number
-          phone_free_run?: number
-          points?: number
+          miles_90d?: number
           ranked?: boolean
-          rating_penalty_30d?: number
           rating_updated_at?: string | null
           safety_rating?: number | null
-          streak?: number
           updated_at?: string
           user_id?: string
         }
@@ -725,6 +620,7 @@ export type Database = {
           updated_at: string
           user_id: string
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           error?: string | null
@@ -770,6 +666,7 @@ export type Database = {
           user_id: string
           window_start: string
         }
+        ComputedFields: never
         Insert: {
           count?: number
           created_at?: string
@@ -798,6 +695,7 @@ export type Database = {
           target_id: string
           target_kind: string
         }
+        ComputedFields: never
         Insert: {
           created_at?: string
           id?: string
@@ -825,34 +723,29 @@ export type Database = {
           duration_s: number
           lat: number | null
           lng: number | null
-          measured: Json
-          penalty: number
+          measured: NonNullable<Json>
           started_at: string
           status: string
-          stopped_in_traffic: boolean | null
           tier: string
           trip_id: string
           type: string
-          units: number | null
           updated_at: string
           user_id: string
           zone: string | null
         }
+        ComputedFields: never
         Insert: {
           client_event_id: string
           created_at?: string
           duration_s: number
           lat?: number | null
           lng?: number | null
-          measured?: Json
-          penalty?: number
+          measured?: NonNullable<Json>
           started_at: string
           status?: string
-          stopped_in_traffic?: boolean | null
           tier: string
           trip_id: string
           type: string
-          units?: number | null
           updated_at?: string
           user_id: string
           zone?: string | null
@@ -863,15 +756,12 @@ export type Database = {
           duration_s?: number
           lat?: number | null
           lng?: number | null
-          measured?: Json
-          penalty?: number
+          measured?: NonNullable<Json>
           started_at?: string
           status?: string
-          stopped_in_traffic?: boolean | null
           tier?: string
           trip_id?: string
           type?: string
-          units?: number | null
           updated_at?: string
           user_id?: string
           zone?: string | null
@@ -889,7 +779,6 @@ export type Database = {
       trips: {
         Row: {
           app_version: string | null
-          breakdown: Json
           clean: boolean
           client_trip_id: string
           created_at: string
@@ -900,44 +789,40 @@ export type Database = {
           dashcam_synced: boolean
           duration_s: number
           ended_at: string
-          handling_s: number
           id: string
-          is_loop: boolean
           league_week: string
+          limit_s: number
           local_day: string
-          loop_repeat: boolean
           merged_into: string | null
           miles: number
+          moving_s: number
           n_dashcam: number
           n_events: number
           n_hard_accel: number
           n_hard_brake: number
           n_hard_corner: number
-          n_pickup: number
           n_speeding: number
           night_miles: number
           not_driving: boolean
           not_driving_at: string | null
-          points_net: number
+          not_driving_expired: boolean
+          origin: string
           polyline: string
-          progress_before: Json
-          rating_penalty: number
           reason: string | null
           result: Json | null
-          rev: number
-          safe_miles: number
-          safe_miles_earlier_today: number
           scored: boolean
           scoring_version: number
+          slowdowns: number
+          speedups: number
           started_at: string
-          streak_before: number
+          turns: number
           tz: string
           updated_at: string
           user_id: string
         }
+        ComputedFields: never
         Insert: {
           app_version?: string | null
-          breakdown?: Json
           clean?: boolean
           client_trip_id: string
           created_at?: string
@@ -948,44 +833,39 @@ export type Database = {
           dashcam_synced?: boolean
           duration_s: number
           ended_at: string
-          handling_s?: number
           id?: string
-          is_loop?: boolean
           league_week: string
+          limit_s: number
           local_day: string
-          loop_repeat?: boolean
           merged_into?: string | null
           miles: number
+          moving_s: number
           n_dashcam?: number
           n_events?: number
           n_hard_accel?: number
           n_hard_brake?: number
           n_hard_corner?: number
-          n_pickup?: number
           n_speeding?: number
           night_miles: number
           not_driving?: boolean
           not_driving_at?: string | null
-          points_net?: number
+          not_driving_expired?: boolean
+          origin?: string
           polyline?: string
-          progress_before?: Json
-          rating_penalty?: number
           reason?: string | null
           result?: Json | null
-          rev?: number
-          safe_miles: number
-          safe_miles_earlier_today?: number
           scored?: boolean
           scoring_version?: number
+          slowdowns: number
+          speedups: number
           started_at: string
-          streak_before?: number
+          turns: number
           tz: string
           updated_at?: string
           user_id: string
         }
         Update: {
           app_version?: string | null
-          breakdown?: Json
           clean?: boolean
           client_trip_id?: string
           created_at?: string
@@ -996,37 +876,33 @@ export type Database = {
           dashcam_synced?: boolean
           duration_s?: number
           ended_at?: string
-          handling_s?: number
           id?: string
-          is_loop?: boolean
           league_week?: string
+          limit_s?: number
           local_day?: string
-          loop_repeat?: boolean
           merged_into?: string | null
           miles?: number
+          moving_s?: number
           n_dashcam?: number
           n_events?: number
           n_hard_accel?: number
           n_hard_brake?: number
           n_hard_corner?: number
-          n_pickup?: number
           n_speeding?: number
           night_miles?: number
           not_driving?: boolean
           not_driving_at?: string | null
-          points_net?: number
+          not_driving_expired?: boolean
+          origin?: string
           polyline?: string
-          progress_before?: Json
-          rating_penalty?: number
           reason?: string | null
           result?: Json | null
-          rev?: number
-          safe_miles?: number
-          safe_miles_earlier_today?: number
           scored?: boolean
           scoring_version?: number
+          slowdowns?: number
+          speedups?: number
           started_at?: string
-          streak_before?: number
+          turns?: number
           tz?: string
           updated_at?: string
           user_id?: string
@@ -1047,6 +923,7 @@ export type Database = {
           unlocked_at: string
           user_id: string
         }
+        ComputedFields: never
         Insert: {
           achievement_id: string
           unlocked_at?: string
@@ -1069,6 +946,7 @@ export type Database = {
           template_id: string
           user_id: string
         }
+        ComputedFields: never
         Insert: {
           completed_at?: string | null
           completed_by_trip?: string | null
@@ -1117,6 +995,10 @@ export type Database = {
       block_user: { Args: { p_user_id: string }; Returns: undefined }
       cancel_friend_request: { Args: { p_user_id: string }; Returns: undefined }
       check_username: { Args: { p: string }; Returns: Json }
+      claim_live_activity_start: {
+        Args: { p_client_trip_id: string; p_device_id: string }
+        Returns: Json
+      }
       claim_push_batch: {
         Args: { p_lease_seconds: number; p_limit: number }
         Returns: Json
@@ -1128,24 +1010,51 @@ export type Database = {
       }
       create_clan: { Args: { p_banner: string; p_name: string }; Returns: Json }
       export_account: { Args: { p_user: string }; Returns: Json }
-      get_friends_board: { Args: { p_metric: string }; Returns: Json }
-      get_global_board: { Args: { p_state?: string }; Returns: Json }
+      get_current_speed_limit: {
+        Args: { p_heading: number; p_lat: number; p_lon: number }
+        Returns: {
+          distance_m: number
+          highway: string
+          is_default: boolean
+          limit_mph: number
+          name: string
+          osm_id: number
+        }[]
+      }
+      get_friends_board: { Args: Record<PropertyKey, never>; Returns: Json }
       get_heatmap: { Args: { p_user_id: string }; Returns: Json }
       get_member_stats: { Args: { p_user_id: string }; Returns: Json }
-      get_my_clan: { Args: never; Returns: Json }
-      get_my_league: { Args: never; Returns: Json }
+      get_my_clan: { Args: Record<PropertyKey, never>; Returns: Json }
       get_my_stat_sums: { Args: { p_since?: string }; Returns: Json }
-      get_my_summary: { Args: never; Returns: Json }
-      get_notification_prefs: { Args: never; Returns: Json }
+      get_my_summary: { Args: Record<PropertyKey, never>; Returns: Json }
+      get_notification_prefs: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       get_profile: { Args: { p_username: string }; Returns: Json }
       join_clan: { Args: { p_code: string }; Returns: Json }
-      leave_clan: { Args: never; Returns: undefined }
-      list_blocked: { Args: never; Returns: Json }
-      list_friends: { Args: never; Returns: Json }
+      leave_clan: { Args: Record<PropertyKey, never>; Returns: undefined }
+      list_blocked: { Args: Record<PropertyKey, never>; Returns: Json }
+      list_friends: { Args: Record<PropertyKey, never>; Returns: Json }
       list_my_drives: {
         Args: { p_before?: string; p_limit?: number }
         Returns: Json
       }
+      osm_claim_fill_cell: {
+        Args: { p_version?: number; p_x: number; p_y: number }
+        Returns: string
+      }
+      osm_finish_fill_cell: {
+        Args: {
+          p_outcome: string
+          p_version?: number
+          p_way_count: number
+          p_x: number
+          p_y: number
+        }
+        Returns: boolean
+      }
+      osm_upsert_ways: { Args: { p_ways: Json }; Returns: number }
       preview_clan: { Args: { p_code: string }; Returns: Json }
       purge_auth_audit: {
         Args: { p_email: string; p_user: string }
@@ -1164,9 +1073,14 @@ export type Database = {
       }
       record_push_outcomes: { Args: { p: Json }; Returns: number }
       record_push_receipts: { Args: { p: Json }; Returns: number }
-      regenerate_clan_code: { Args: never; Returns: Json }
+      regenerate_clan_code: { Args: Record<PropertyKey, never>; Returns: Json }
       register_device: {
-        Args: { p_device_id: string; p_platform: string; p_push_token?: string }
+        Args: {
+          p_device_id: string
+          p_live_activity_token?: string
+          p_platform: string
+          p_push_token?: string
+        }
         Returns: Json
       }
       release_device: { Args: { p_device_id: string }; Returns: undefined }
@@ -1238,6 +1152,10 @@ export type Database = {
       update_profile: {
         Args: {
           p_heatmap_visibility?: string
+          p_share_achievements?: boolean
+          p_share_categories?: boolean
+          p_share_rating?: boolean
+          p_share_stats?: boolean
           p_state?: string
           p_units?: string
         }
@@ -1378,4 +1296,3 @@ export const Constants = {
     Enums: {},
   },
 } as const
-
