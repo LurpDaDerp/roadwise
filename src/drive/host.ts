@@ -17,7 +17,9 @@
 //   chain; after each task the capture is reconciled with the engine's state (on iOS the host never
 //   starts a capture: native owns it, and `stopCapture` tells native the JS end and its cut).
 // - **In front only.** Alert sounds, voice and haptics play only while RoadWise is active; the
-//   spot nudge shows only then. The drive records the same either way.
+//   spot nudge shows only then. A phone pickup's alert plays only while the driving screen shows
+//   (focused, RoadWise active); with RoadWise not active its first alert, from a live row, posts the
+//   phone reminder instead (`phoneReminder`), never for a dry run. The drive records the same either way.
 // - **Battery.** Nothing runs while idle: no timer, no read. While recording, one timeout at most
 //   (the automatic end, `ticks.ts`), the display throttled to one update per 3 s, the weather
 //   checked every 15 min or 20 km, the state published at most once per row.
@@ -27,6 +29,7 @@
 import { parseActivity, parseRow, parseSpeed, type CaptureEnd, type DriveDetectApi, type DriveStartedEvent, type DriveEndedEvent, type DetectStateEvent, type EndCauseNative, type JournaledDrive } from '@drive-sense';
 import type { LiveDriveState } from '@live-drive';
 import { MERGE_GAP_S } from '@scoring';
+import { Platform } from 'react-native';
 
 import { decisionFor, ALERT_GLOW_MS } from '@/core/alerts/policy';
 import type { AlertPlayer } from '@/core/alerts/player';
@@ -255,6 +258,14 @@ export interface DriveHostDeps {
   spots?: { readWatchSpots(): Promise<WatchSpot[]> };
   /** The weather at a place (default Open-Meteo). */
   weather?: WeatherLookup;
+  /** The phone recording the drives (default `Platform.OS`): the phone detector reads it (on iPhone a row with a call is never phone use). */
+  platform?: 'ios' | 'android';
+  /**
+   * The phone reminder (`src/features/drive/phoneReminder.ts`): told of a phone pickup's first alert
+   * while RoadWise is not active, from a live row at most `PHONE_REMINDER_MAX_AGE_MS` old, on a drive
+   * that is stored (never a dry run). It posts (or not) by its own rules.
+   */
+  phoneReminder?: (pickup: { clientTripId: string; at: number }) => void;
   /**
    * Called as each row arrives: fires the pumped timers that are due (`src/lib/timers.ts`), which
    * Android leaves unfired while the app is in the background. Default: the process's.
@@ -278,6 +289,8 @@ export const MAX_JOURNAL_REPLAY_ROWS = 1800;
 export const JOURNAL_READ_ROWS = 300;
 /** The car counts as still driving at the end only when its latest speed reading is at most this old then. */
 export const DRIVING_AT_END_MS = 5_000;
+/** A phone pickup confirmed on a row older than this (host clock) posts no reminder: it is old news. */
+export const PHONE_REMINDER_MAX_AGE_MS = 15_000;
 
 /**
  * Whether native's journal (or the journal link of a re-opened drive) holds `clientTripId`: the
@@ -395,6 +408,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   const persist = (deps.persistence ?? 'full') === 'full';
   const detect = deps.detect && deps.detect.available ? deps.detect : null;
   const ios = detect !== null;
+  const platform: 'ios' | 'android' = deps.platform ?? (Platform.OS === 'android' ? 'android' : 'ios');
   const scheduler = deps.scheduler ?? realScheduler;
 
   function report(error: unknown, ctx: string): void {
@@ -465,6 +479,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let weatherRaw: DangerAlert | null = null;
   let weatherDismissed: DangerKind | null = null;
   let lastFixAt: { lat: number; lng: number; ts: number } | null = null;
+  /** The row the engine is taking in is a replay (a journal drained, the wait's buffer): no reminder from it. */
+  let replayingRow = false;
   let subscriptions: (() => void)[] = [];
   const idleWaiters = new Set<() => void>();
   const listeners = new Set<(s: DriveState) => void>();
@@ -570,8 +586,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       },
     },
     createDetectors: () => createDetectors(newId),
-    ctx: () => ({}),
+    ctx: () => ({ platform }),
     onAlert(alert: AlertEvent) {
+      if (alert.type === 'phone_pickup') {
+        phoneAlert(alert);
+        return;
+      }
       // Speeding sounds never queue up: a newer one drops one that has not started, and one still
       // queued is dropped once the row is not over the line. A held session is released then.
       const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
@@ -591,6 +611,30 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     onCancel,
     onError: (e) => report(e, 'engine'),
   });
+
+  /**
+   * A phone pickup's alert (phone plan P4): it plays (the urgent tone, "Phone down", the haptic; a
+   * repeat the tone and haptic) only while the driving screen shows, focused with RoadWise active.
+   * RoadWise not active: nothing plays, and the pickup's first alert from a live, fresh row of a
+   * stored drive tells the phone reminder. RoadWise active on another screen: nothing at all. The
+   * pickup counts the same either way.
+   */
+  function phoneAlert(alert: AlertEvent): void {
+    const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
+    // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.
+    if (dashcamAlertActive()) decision.silent = true;
+    if (!hudVisible()) decision.suppressed = true;
+    player.deliver(decision).catch((e: unknown) => report(e, 'player'));
+    if (appActive() || alert.repeat === true || !persist || replayingRow || !deps.phoneReminder) return;
+    if (now() - alert.at > PHONE_REMINDER_MAX_AGE_MS) return;
+    const id = engine.snapshot().clientTripId;
+    if (id === null) return;
+    try {
+      deps.phoneReminder({ clientTripId: id, at: alert.at });
+    } catch (e) {
+      report(e, 'phoneReminder');
+    }
+  }
 
   // --- the published state ------------------------------------------------------------------------
 
@@ -965,6 +1009,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   const rebuildDeps: RebuildDeps = {
     createDetectors: () => createDetectors(newId),
+    platform,
     limits: { lookup: (lat, lng, course) => limits.lookupStored(lat, lng, course) },
   };
 
@@ -1140,7 +1185,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
     // Visible time first, so the state the row publishes carries it.
     if (!opts.replay && engine.snapshot().status === 'recording') accrueRow(row);
-    await engine.dispatch({ type: 'row', row });
+    replayingRow = opts.replay === true;
+    try {
+      await engine.dispatch({ type: 'row', row });
+    } finally {
+      replayingRow = false;
+    }
     const snap = engine.snapshot();
     const recording = snap.status === 'recording';
     if (recording) {

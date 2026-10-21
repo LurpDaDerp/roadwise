@@ -57,6 +57,7 @@ export const hudCopy = {
     hard_brake: 'Hard brake',
     hard_accel: 'Hard start',
     hard_corner: 'Sharp turn',
+    phone_pickup: 'Phone down',
     eyes_off: 'Eyes up',
     drowsy: 'Take a break',
   } satisfies Record<EventType, string>,

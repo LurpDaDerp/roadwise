@@ -1,8 +1,10 @@
 // What each event sounds like (product spec "Driving screen"): a distinct tone per category, an
 // optional short voice line, and a haptic. Speeding gets the soft chime as the car passes the
 // speeding line and again while it stays over (`machine.ts`; the halo carries how far); harsh
-// driving the warning tone. A speeding sound keeps the audio session (and the ducking) while the
-// car stays over: the host releases it once it is not. Alerts play only while RoadWise is in front
+// driving the warning tone; a phone pickup the urgent one with "Phone down", and while the phone
+// stays in hand its repeats (tone and haptic, never the voice). A speeding sound keeps the audio
+// session (and the ducking) while the car stays over: the host releases it once it is not. Alerts
+// play only while RoadWise is in front, and a phone alert only while the driving screen shows too
 // (the host marks the rest `suppressed`). The two DashPal types are never raised by the phone's
 // engine (the dashcam alerts on its own and through `src/dashcam`); their entries keep the maps
 // exhaustive and name their level and words.
@@ -17,6 +19,7 @@ export const ALERT_LEVEL: Readonly<Record<EventType, AlertLevel>> = {
   hard_brake: 2,
   hard_accel: 2,
   hard_corner: 2,
+  phone_pickup: 3,
   eyes_off: 2,
   drowsy: 3,
 };
@@ -27,6 +30,7 @@ export const ALERT_VOICE: Readonly<Record<EventType, string | null>> = {
   hard_brake: 'Hard brake',
   hard_accel: 'Hard acceleration',
   hard_corner: 'Hard corner',
+  phone_pickup: 'Phone down',
   eyes_off: 'Eyes up',
   drowsy: 'Take a break',
 };
@@ -53,9 +57,10 @@ export function speedingRepeatS(overMph: number, elapsedS: number): number {
   return Math.min(SPEEDING_REPEAT_MAX_S, Math.max(SPEEDING_REPEAT_MIN_S, s));
 }
 
+/** A repeat (speeding's chime, a phone pickup still in hand) is its tone and haptic only: never the voice line. */
 export function decisionFor(alert: AlertEvent, opts: { voiceEnabled: boolean }): AlertDecision {
   const level = ALERT_LEVEL[alert.type];
-  const voice = opts.voiceEnabled ? ALERT_VOICE[alert.type] : null;
+  const voice = opts.voiceEnabled && alert.repeat !== true ? ALERT_VOICE[alert.type] : null;
   const decision: AlertDecision = {
     id: alert.id,
     level,

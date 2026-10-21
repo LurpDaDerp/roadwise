@@ -14,8 +14,9 @@ function strings(v: unknown): string[] {
   return [];
 }
 
-test('an alert chip for each of the six event types, three words at most', () => {
-  expect(Object.keys(hudCopy.alert).sort()).toEqual(['drowsy', 'eyes_off', 'hard_accel', 'hard_brake', 'hard_corner', 'speeding']);
+test('an alert chip for each of the seven event types, three words at most; a phone pickup says "Phone down"', () => {
+  expect(Object.keys(hudCopy.alert).sort()).toEqual(['drowsy', 'eyes_off', 'hard_accel', 'hard_brake', 'hard_corner', 'phone_pickup', 'speeding']);
+  expect(hudCopy.alert.phone_pickup).toBe('Phone down');
   for (const w of Object.values(hudCopy.alert)) expect(words(w)).toBeLessThanOrEqual(3);
 });
 
@@ -42,11 +43,12 @@ test('the words of the waiting screen', () => {
   expect(hudCopy.countdown.spoken(27)).toBe('Stopping in 27 seconds. Touch the screen to keep waiting.');
 });
 
-test('nothing about points, no em dash, no exclamation mark', () => {
+test('nothing about points, no em dash, no exclamation mark; the phone only in the pickup chip', () => {
   const all = strings(hudCopy);
   expect(all.length).toBeGreaterThan(30);
   for (const s of all) {
-    expect({ s, bad: /\bpoints?\b|\bpts\b|streak|leaderboard|phone/i.test(s) }).toEqual({ s, bad: false });
+    expect({ s, bad: /\bpoints?\b|\bpts\b|streak|leaderboard/i.test(s) }).toEqual({ s, bad: false });
+    expect({ s, bad: /phone/i.test(s) && s !== hudCopy.alert.phone_pickup }).toEqual({ s, bad: false });
     expect(s).not.toMatch(/[—!]/);
   }
 });

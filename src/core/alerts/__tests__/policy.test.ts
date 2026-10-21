@@ -34,7 +34,29 @@ test('harsh driving is the warning tone with a short voice line only when voice 
   expect(ALERT_GLOW_MS).toBe(1500);
 });
 
-test('the maps cover the six event types and nothing else (no phone use)', () => {
-  expect(Object.keys(ALERT_LEVEL).sort()).toEqual(['drowsy', 'eyes_off', 'hard_accel', 'hard_brake', 'hard_corner', 'speeding']);
+test('the maps cover the seven event types and nothing else', () => {
+  expect(Object.keys(ALERT_LEVEL).sort()).toEqual(['drowsy', 'eyes_off', 'hard_accel', 'hard_brake', 'hard_corner', 'phone_pickup', 'speeding']);
   expect(Object.keys(ALERT_VOICE).sort()).toEqual(Object.keys(ALERT_LEVEL).sort());
+});
+
+test('a phone pickup is the urgent tone (level 3) with "Phone down" when voice is on and the longest haptic; no points cue, no held session', () => {
+  expect(decisionFor({ id: 'p1', type: 'phone_pickup', tier: 'moderate', at }, { voiceEnabled: true })).toEqual({
+    id: 'p1',
+    level: 3,
+    kind: 'phone_pickup',
+    ts: at,
+    voice: 'Phone down',
+    intensity: 4,
+  });
+  expect(decisionFor({ id: 'p1', type: 'phone_pickup', tier: 'severe', at }, { voiceEnabled: false })).toEqual({ id: 'p1', level: 3, kind: 'phone_pickup', ts: at, intensity: 4 });
+});
+
+test('a phone repeat (still in hand) is the tone and haptic only, never the voice line', () => {
+  expect(decisionFor({ id: 'p1', type: 'phone_pickup', tier: 'severe', at, repeat: true }, { voiceEnabled: true })).toEqual({
+    id: 'p1',
+    level: 3,
+    kind: 'phone_pickup',
+    ts: at,
+    intensity: 4,
+  });
 });

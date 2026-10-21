@@ -20,6 +20,7 @@ const ICON: Record<EventType, keyof typeof Ionicons.glyphMap> = {
   hard_brake: 'stop-circle',
   hard_accel: 'flash',
   hard_corner: 'return-up-forward',
+  phone_pickup: 'phone-portrait',
   eyes_off: 'eye-off',
   drowsy: 'moon',
 };
