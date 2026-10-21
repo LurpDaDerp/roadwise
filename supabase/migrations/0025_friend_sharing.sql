@@ -115,6 +115,7 @@ declare
   v_friend boolean;
   v_self boolean;
   pr public.profiles%rowtype;
+  s jsonb;
   v_scores jsonb := null;
 begin
   if v_uid is null then
@@ -138,16 +139,16 @@ begin
     when exists (select 1 from public.friend_requests r where r.from_id = v_other and r.to_id = v_uid) then 'incoming'
     when exists (select 1 from public.friend_requests r where r.from_id = v_uid and r.to_id = v_other) then 'outgoing'
     else 'none' end;
-  -- the category scores, whole numbers (half up), each null where it has no score
+  -- the category scores, whole numbers (half up), each null where it has no score. The rating is
+  -- computed once, into a variable: an inline subquery would be copied into each of the ten reads.
   if v_self or (v_friend and pr.share_categories) then
-    select jsonb_build_object(
-        'acceleration', case when s ->> 'acceleration' is null then null else private.round_half_up((s ->> 'acceleration')::float8, 0)::int end,
-        'braking', case when s ->> 'braking' is null then null else private.round_half_up((s ->> 'braking')::float8, 0)::int end,
-        'turning', case when s ->> 'turning' is null then null else private.round_half_up((s ->> 'turning')::float8, 0)::int end,
-        'attention', case when s ->> 'attention' is null then null else private.round_half_up((s ->> 'attention')::float8, 0)::int end,
-        'speed', case when s ->> 'speed' is null then null else private.round_half_up((s ->> 'speed')::float8, 0)::int end)
-      into v_scores
-      from (select private.rating_at(v_other, now()) -> 'scores' as s) x;
+    s := private.rating_at(v_other, now()) -> 'scores';
+    v_scores := jsonb_build_object(
+      'acceleration', case when s ->> 'acceleration' is null then null else private.round_half_up((s ->> 'acceleration')::float8, 0)::int end,
+      'braking', case when s ->> 'braking' is null then null else private.round_half_up((s ->> 'braking')::float8, 0)::int end,
+      'turning', case when s ->> 'turning' is null then null else private.round_half_up((s ->> 'turning')::float8, 0)::int end,
+      'attention', case when s ->> 'attention' is null then null else private.round_half_up((s ->> 'attention')::float8, 0)::int end,
+      'speed', case when s ->> 'speed' is null then null else private.round_half_up((s ->> 'speed')::float8, 0)::int end);
   end if;
   return private.public_card(v_other, v_uid) || jsonb_build_object(
     'achievements', case when v_self or (v_friend and pr.share_achievements)
@@ -258,7 +259,8 @@ begin
         'onboarded_at', p.onboarded_at, 'share_rating', p.share_rating, 'share_categories', p.share_categories,
         'share_achievements', p.share_achievements, 'share_stats', p.share_stats) from public.profiles p where p.id = v_uid),
     'progress', jsonb_build_object('safety_rating', g.safety_rating, 'ranked', g.ranked, 'miles_90d', g.miles_90d,
-        'rating_trend', case when g.safety_rating is null then null else g.safety_rating - private.rating_as_of(v_uid, now() - interval '7 days') end)
+        -- the trend: the stored rating less the rating 7 days before it, both written by refresh_rating
+        'rating_trend', g.safety_rating - g.rating_week_ago)
       -- LEGACY (Phase B removes): what a build from before 0023 reads, at its starting values
       || jsonb_build_object('points', 0, 'lifetime', 0, 'level', 1, 'level_floor', 0, 'level_next', 250,
         'streak', 0, 'at_risk', false, 'next_mult', 1, 'freezes', 0, 'clean_run', 0, 'freeze_progress', 0,

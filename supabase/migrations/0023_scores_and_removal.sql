@@ -74,6 +74,8 @@ alter table public.trips
   add column moving_s int check (moving_s between 0 and 43200),
   add constraint trips_limit_le_moving check (limit_s is null or moving_s is null or limit_s <= moving_s);
 alter table public.progress add column miles_90d numeric(8,2) not null default 0 check (miles_90d >= 0);
+-- the rating as of 7 days before the stored one, kept with it for the summary's weekly trend
+alter table public.progress add column rating_week_ago numeric(4,1) check (rating_week_ago between 0 and 100);
 
 -- the category an event counts toward (scoring axisOf); anything else counts nowhere
 create or replace function private.axis_of(p_type text) returns text
@@ -180,55 +182,82 @@ end $$;
 --                  score = rate_score((W + prior * rate) / (O + prior), rate)
 --   Attention: P = sum(w * penalty), M = sum(w * watched miles); category_score(P, M, 10) when M > 0
 --   rating = the weighted mean (Speed 2, the rest 1), clamped, half up to 1 decimal
+-- Set-based: the window's drives; their active events summed per drive and category in one grouped
+-- scan, and the speeding sums in a second scan of the speeding events alone, each ordered sum adding
+-- in the event order; then the weighted sums over the drives, each ordered sum adding in the drive
+-- order. An ordered float8 sum adds one term at a time in that order, exactly as the TypeScript's
+-- loops do. A hard event weighs a whole 1 or 2 (event_weight_of), and a sum of whole numbers this
+-- small is exact in any order, so those sums need no ordering. The cost grows with the rows, read
+-- once each, not with a subquery per drive and category.
 create or replace function private.rating_at(p_user uuid, p_at timestamptz) returns jsonb
 language plpgsql stable set search_path = public as $$
 declare
-  r record;
-  w float8;
-  v_miles numeric := 0;
-  bw float8 := 0; bo float8 := 0; aw float8 := 0; ao float8 := 0; tw float8 := 0; tow float8 := 0; sw float8 := 0; so float8 := 0;
-  ap float8 := 0; am float8 := 0;
+  v_miles numeric;
+  bw float8; bo float8; aw float8; ao float8; tw float8; tow float8; sw float8; so float8;
+  ap float8; am float8;
   s_b float8; s_a float8; s_t float8; s_s float8; s_att float8;
   v_num float8; v_den float8;
 begin
   if p_user is null or p_at is null then
     raise exception 'user and time are required' using errcode = 'invalid_parameter_value';
   end if;
-  for r in
-    select t.miles, t.started_at, t.slowdowns, t.speedups, t.turns, t.limit_s,
+  with d as materialized (
+    select t.id, t.client_trip_id, t.started_at, t.miles, t.slowdowns, t.speedups, t.turns, t.limit_s,
+      private.recency_weight(floor(extract(epoch from (p_at - t.started_at)) / 86400)::int) as w,
       -- scoring watchedMiles: miles x the share of the moving seconds the dashcam covered
       case when t.miles > 0 and t.dashcam_moving_s > 0 and t.dashcam_covered_s > 0
            then t.miles::float8 * least(t.dashcam_covered_s, t.dashcam_moving_s)::float8 / t.dashcam_moving_s::float8
-           else 0::float8 end as watched,
-      coalesce((select sum(private.event_weight_of(e.type, e.tier, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
-                from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'hard_brake'), 0::float8) as b_w,
-      (select count(*) from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'hard_brake') as b_n,
-      coalesce((select sum(private.event_weight_of(e.type, e.tier, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
-                from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'hard_accel'), 0::float8) as a_w,
-      (select count(*) from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'hard_accel') as a_n,
-      coalesce((select sum(private.event_weight_of(e.type, e.tier, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
-                from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'hard_corner'), 0::float8) as t_w,
-      (select count(*) from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'hard_corner') as t_n,
-      coalesce((select sum(private.event_weight_of(e.type, e.tier, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
-                from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'speeding'), 0::float8) as s_w,
-      -- scoring speedingChargedS per event: max(1, duration - 5)
-      coalesce((select sum(greatest(1::float8, greatest(0::float8, e.duration_s::float8) - 5::float8) order by e.started_at, e.client_event_id)
-                from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'speeding'), 0::float8) as s_n,
-      coalesce((select sum(private.attention_penalty_of(e.type))
-                from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type in ('eyes_off', 'drowsy')), 0) as att
+           else 0::float8 end as watched
     from public.trips t
     where t.user_id = p_user and t.scored and not t.not_driving and t.merged_into is null
       and t.started_at > p_at - interval '2160 hours' and t.started_at <= p_at
-    order by t.started_at, t.client_trip_id
-  loop
-    w := private.recency_weight(floor(extract(epoch from (p_at - r.started_at)) / 86400)::int);
-    v_miles := v_miles + greatest(r.miles, 0);
-    bw := bw + w * r.b_w;  bo := bo + w * greatest(coalesce(r.slowdowns, 0), r.b_n)::float8;
-    aw := aw + w * r.a_w;  ao := ao + w * greatest(coalesce(r.speedups, 0), r.a_n)::float8;
-    tw := tw + w * r.t_w;  tow := tow + w * greatest(coalesce(r.turns, 0), r.t_n)::float8;
-    sw := sw + w * r.s_w;  so := so + w * greatest(coalesce(r.limit_s, 0)::float8, r.s_n);
-    ap := ap + w * r.att::float8;  am := am + w * r.watched;
-  end loop;
+  ),
+  ev as (
+    -- event_weight_of of a hard event: minor 1, severe 2 (written out: a call per event costs more
+    -- than the whole sum)
+    select e.trip_id,
+      sum((case when e.tier = 'severe' then 2 else 1 end)::float8) filter (where e.type = 'hard_brake') as b_w,
+      count(*) filter (where e.type = 'hard_brake') as b_n,
+      sum((case when e.tier = 'severe' then 2 else 1 end)::float8) filter (where e.type = 'hard_accel') as a_w,
+      count(*) filter (where e.type = 'hard_accel') as a_n,
+      sum((case when e.tier = 'severe' then 2 else 1 end)::float8) filter (where e.type = 'hard_corner') as t_w,
+      count(*) filter (where e.type = 'hard_corner') as t_n,
+      sum(private.attention_penalty_of(e.type)) filter (where e.type in ('eyes_off', 'drowsy')) as att
+    from d join public.trip_events e on e.trip_id = d.id
+    -- (a drive's events are its driver's: the user filter only lets the planner read them by user)
+    where e.status = 'active' and e.user_id = p_user
+    group by e.trip_id
+  ),
+  sp as (
+    -- event_weight_of of a speeding event is its speeding_weight; scoring speedingChargedS per event: max(1, duration - 5)
+    select e.trip_id,
+      sum(private.speeding_weight(e.duration_s, e.measured, e.tier) order by e.started_at, e.client_event_id) as s_w,
+      sum(greatest(1::float8, greatest(0::float8, e.duration_s::float8) - 5::float8) order by e.started_at, e.client_event_id) as s_n
+    from d join public.trip_events e on e.trip_id = d.id
+    where e.status = 'active' and e.user_id = p_user and e.type = 'speeding'
+    group by e.trip_id
+  ),
+  x as (
+    select d.client_trip_id, d.started_at, d.miles, d.w, d.watched,
+      d.w * coalesce(ev.b_w, 0::float8) as b_w,
+      d.w * greatest(coalesce(d.slowdowns, 0), coalesce(ev.b_n, 0))::float8 as b_o,
+      d.w * coalesce(ev.a_w, 0::float8) as a_w,
+      d.w * greatest(coalesce(d.speedups, 0), coalesce(ev.a_n, 0))::float8 as a_o,
+      d.w * coalesce(ev.t_w, 0::float8) as t_w,
+      d.w * greatest(coalesce(d.turns, 0), coalesce(ev.t_n, 0))::float8 as t_o,
+      d.w * coalesce(sp.s_w, 0::float8) as s_w,
+      d.w * greatest(coalesce(d.limit_s, 0)::float8, coalesce(sp.s_n, 0::float8)) as s_o,
+      d.w * coalesce(ev.att, 0)::float8 as att
+    from d left join ev on ev.trip_id = d.id left join sp on sp.trip_id = d.id
+  )
+  select coalesce(sum(greatest(x.miles, 0)), 0),
+    coalesce(sum(x.b_w order by x.started_at, x.client_trip_id), 0::float8), coalesce(sum(x.b_o order by x.started_at, x.client_trip_id), 0::float8),
+    coalesce(sum(x.a_w order by x.started_at, x.client_trip_id), 0::float8), coalesce(sum(x.a_o order by x.started_at, x.client_trip_id), 0::float8),
+    coalesce(sum(x.t_w order by x.started_at, x.client_trip_id), 0::float8), coalesce(sum(x.t_o order by x.started_at, x.client_trip_id), 0::float8),
+    coalesce(sum(x.s_w order by x.started_at, x.client_trip_id), 0::float8), coalesce(sum(x.s_o order by x.started_at, x.client_trip_id), 0::float8),
+    coalesce(sum(x.att order by x.started_at, x.client_trip_id), 0::float8), coalesce(sum(x.w * x.watched order by x.started_at, x.client_trip_id), 0::float8)
+    into v_miles, bw, bo, aw, ao, tw, tow, sw, so, ap, am
+  from x;
   if v_miles <= 0 then
     return jsonb_build_object('rating', null, 'ranked', false, 'miles', 0, 'scores', jsonb_build_object(
       'acceleration', null, 'braking', null, 'turning', null, 'attention', null, 'speed', null));
@@ -254,7 +283,8 @@ language sql stable set search_path = public as $$
   select (private.rating_at(p_user, p_at) ->> 'rating')::numeric
 $$;
 
--- the driver's rating now, its ranked flag and the window's miles
+-- the driver's rating now, its ranked flag, the window's miles, and the rating as of 7 days before
+-- (the summary's trend reads it, so no summary call computes a rating)
 create or replace function private.refresh_rating(p_user uuid) returns void
 language plpgsql volatile set search_path = public as $$
 declare
@@ -265,6 +295,7 @@ begin
     miles_90d = least((v_r ->> 'miles')::numeric, 999999),
     safety_rating = (v_r ->> 'rating')::numeric,
     ranked = (v_r ->> 'ranked')::boolean,
+    rating_week_ago = case when v_r ->> 'rating' is null then null else private.rating_as_of(p_user, now() - interval '7 days') end,
     rating_updated_at = now()
   where user_id = p_user;
 end $$;
@@ -987,7 +1018,8 @@ begin
         'state', p.state, 'heatmap_visibility', p.heatmap_visibility, 'league_eligible', p.league_eligible,
         'onboarded_at', p.onboarded_at) from public.profiles p where p.id = v_uid),
     'progress', jsonb_build_object('safety_rating', g.safety_rating, 'ranked', g.ranked, 'miles_90d', g.miles_90d,
-        'rating_trend', case when g.safety_rating is null then null else g.safety_rating - private.rating_as_of(v_uid, now() - interval '7 days') end)
+        -- the trend: the stored rating less the rating 7 days before it, both written by refresh_rating
+        'rating_trend', g.safety_rating - g.rating_week_ago)
       -- LEGACY (Phase B removes): what a build from before this migration reads, at its starting values
       || jsonb_build_object('points', 0, 'lifetime', 0, 'level', 1, 'level_floor', 0, 'level_next', 250,
         'streak', 0, 'at_risk', false, 'next_mult', 1, 'freezes', 0, 'clean_run', 0, 'freeze_progress', 0,

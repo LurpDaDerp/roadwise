@@ -78,8 +78,8 @@ select is((select completed_by_trip = (r ->> 'tripId')::uuid from public.weekly_
   'the completing drive is recorded');
 select hasnt_table('public', 'points_ledger', 'there is no ledger to pay into');
 select is((select array(select jsonb_object_keys(to_jsonb(g)) order by 1) from public.progress g where user_id = '00000000-0000-0000-0000-000000000001'),
-  array['created_at', 'last_end_at', 'last_end_lat', 'last_end_lng', 'miles_90d', 'ranked', 'rating_updated_at', 'safety_rating', 'updated_at', 'user_id'],
-  'progress holds the rating and the last end, nothing a goal could pay into');
+  array['created_at', 'last_end_at', 'last_end_lat', 'last_end_lng', 'miles_90d', 'ranked', 'rating_updated_at', 'rating_week_ago', 'safety_rating', 'updated_at', 'user_id'],
+  'progress holds the rating (and the rating a week before) and the last end, nothing a goal could pay into');
 select is(private.sync_challenges('00000000-0000-0000-0000-000000000001', private.league_week(now()), null), '[]'::jsonb, 'a second sync completes nothing again');
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000-8000-000000000004', (select w0 from w) + interval '4 hours', 3, '[]');
 select is((select array_agg(template_id order by slot) from public.weekly_challenges where user_id = '00000000-0000-0000-0000-000000000001' and completed_at is not null),

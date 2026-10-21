@@ -9,7 +9,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(67);
+select plan(69);
 -- the scores travel in jsonb: read them back exactly (the test runner's session prints 15 digits)
 set local extra_float_digits = 1;
 
@@ -171,6 +171,9 @@ select is((select array[(r ->> 'rating')::float8, (s ->> 'acceleration')::float8
   array[82.0, 80.09658912192572, 66.5022298398257, 79.78673027342722, 93.74047948255254, 86.05770434358871]::float8[], 'pin C: 82.0 with Attention, to the digit');
 select is((select row(safety_rating, ranked, miles_90d)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(82.0, true, 56.00)::text,
   'refresh_rating stores the rating, ranked and the 90-day miles');
+select is((select rating_week_ago from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
+  private.rating_as_of('00000000-0000-0000-0000-000000000001', now() - interval '7 days'), 'and the rating as of 7 days before, for the trend');
+select is((select rating_week_ago from public.progress where user_id = '00000000-0000-0000-0000-000000000004'), null, 'a driver whose drives are all this week has no rating a week before (so no trend)');
 select is(private.rating_at('00000000-0000-0000-0000-000000000001', now() - interval '41 days') -> 'rating', 'null'::jsonb, 'a time before every drive has no rating');
 -- a removed speeding event lowers the Speed weight
 update public.trip_events set status = 'removed' where client_event_id = 'c1000000-0000-4000-8000-000000000003';

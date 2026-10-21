@@ -575,6 +575,7 @@ export type Database = {
           miles_90d: number
           ranked: boolean
           rating_updated_at: string | null
+          rating_week_ago: number | null
           safety_rating: number | null
           updated_at: string
           user_id: string
@@ -588,6 +589,7 @@ export type Database = {
           miles_90d?: number
           ranked?: boolean
           rating_updated_at?: string | null
+          rating_week_ago?: number | null
           safety_rating?: number | null
           updated_at?: string
           user_id: string
@@ -600,6 +602,7 @@ export type Database = {
           miles_90d?: number
           ranked?: boolean
           rating_updated_at?: string | null
+          rating_week_ago?: number | null
           safety_rating?: number | null
           updated_at?: string
           user_id?: string
