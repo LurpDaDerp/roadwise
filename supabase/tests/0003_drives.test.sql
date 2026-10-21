@@ -63,11 +63,11 @@ select is((select count(*)::int from public.weekly_challenges where user_id = '0
 
 create temporary table r1 as select pg_temp.drive('00000000-0000-0000-0000-000000000001', '11111111-1111-4111-8111-111111111111', pg_temp.t0(), 30, 12, 167,
   '[{"id":"22222222-2222-4222-8222-222222222222","type":"hard_brake","penalty":10}]', null, '{"ratingPenalty": 10}') as r;
-select is((select r -> 'progress' from r1), '{"level": 1, "points": 167, "ranked": true, "levelUp": false, "lifetime": 167, "safetyRating": 91.7}'::jsonb, 'the response carries the new progress');
+select is((select r -> 'progress' from r1), '{"level": 1, "points": 167, "ranked": true, "levelUp": false, "lifetime": 167, "safetyRating": 99.3}'::jsonb, 'the response carries the new progress');
 select is((select r -> 'streak' from r1), '{"after": 1, "atRisk": false, "before": 0, "freezes": 2, "outcome": "grew", "nextMult": 1.02, "freezeEarned": false}'::jsonb, 'and the streak block');
 select is((select array[r ->> 'scored', r ->> 'mergedInto', r -> 'achievements' #>> '{0}', r -> 'league' ->> 'placed'] from r1), array['true', null, 'first_drive', 'true'], 'scored, not merged, first_drive unlocked, placed in a league');
 select is((select row(points, lifetime, level, streak, phone_free_run, miles_30d, safety_rating, ranked, last_end_lat, last_end_lng)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
-  row(167, 167, 1, 1, 1, 12.00, 91.7, true, 47.61, -122.31)::text, 'progress: points, lifetime, streak, phone-free run, 30-day miles, rating, the end point');
+  row(167, 167, 1, 1, 1, 12.00, 99.3, true, 47.61, -122.31)::text, 'progress: points, lifetime, streak, phone-free run, 30-day miles, rating (one minor hard brake on 12 mi: braking 95, the rest 100), the end point');
 select is((select row(scored, points_net, n_events, n_hard_brake, clean, rating_penalty, rev, streak_before)::text from public.trips where client_trip_id = '11111111-1111-4111-8111-111111111111'),
   row(true, 167, 1, 1, false, 10, 1, 0)::text, 'the trip row holds the derived counts');
 select is((select progress_before from public.trips where client_trip_id = '11111111-1111-4111-8111-111111111111') - 'freezes_granted_at',
@@ -251,15 +251,17 @@ update public.trips set scored = true, reason = null where client_trip_id = '8a8
 -- ---------------------------------------------------------------------------
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', '77777777-7777-4777-8777-777777777777', pg_temp.t0() + interval '120 minutes', 10, 10, 50,
   '[{"id":"b1b1b1b1-0000-4000-8000-000000000001","type":"phone_pickup","tier":"severe","penalty":40}]', null, '{"ratingPenalty": 40}');
-select is((select row(miles_30d, clean_miles_30d, rating_penalty_30d, safety_rating, ranked)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
-  row(29.00, 17.00, 40.00, 86.2, true)::text, '29 miles: ranked; R = 40/29*100 = 138 -> 86.2; clean miles exclude the drives with events');
+-- the rating is read as of tomorrow 02:00 (a window every drive of the day falls in, whatever the clock says now)
+select is((select row(miles_30d, clean_miles_30d, rating_penalty_30d, private.rating_as_of(user_id, pg_temp.t0() + interval '1 day'), ranked)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
+  row(29.00, 17.00, 40.00, 97.4, true)::text, '29 miles: ranked; one pickup (phone use 92, counted double) and one hard brake (braking 98) over 29 mi -> 97.4; clean miles exclude the drives with events');
 select is(private.stat_sums('00000000-0000-0000-0000-000000000001', null), '{"miles": 29.00, "drives": 4, "pickups": 1, "durationS": 4680, "hardAccel": 0, "hardBrake": 1, "speeding": 0, "handlingS": 0, "hardCorner": 0, "nightMiles": 0.00, "cleanDrives": 2, "dashcamDrives": 0, "dashcamEvents": 0}'::jsonb,
   'stat sums cover the kept scored drives only');
 update public.trips set started_at = started_at - interval '32 days', ended_at = ended_at - interval '32 days' where client_trip_id = '77777777-7777-4777-8777-777777777777';
 update public.progress set rating_updated_at = now() - interval '21 hours' where user_id = '00000000-0000-0000-0000-000000000001';
 select is(private.refresh_ratings_daily(), 1, 'the daily refresh picks the user whose rating is 20 h old');
-select is((select row(miles_30d, safety_rating, ranked)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(19.00, 100.0, true)::text, 'the daily refresh (driven from progress) ages drives out of the window');
-select is((select round(private.rating_as_of('00000000-0000-0000-0000-000000000001', now() - interval '30 days'), 1)), 60.0, 'rating_as_of sees only the drive inside its window (one pickup per 10 mi)');
+select is((select row(miles_30d, private.rating_as_of(user_id, pg_temp.t0() + interval '1 day'), ranked)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(19.00, 99.5, true)::text,
+  'the daily refresh (driven from progress) ages drives out of the window: the pickup is gone, the hard brake over 19 mi remains');
+select is((select round(private.rating_as_of('00000000-0000-0000-0000-000000000001', now() - interval '30 days'), 1)), 94.3, 'rating_as_of sees only the drive inside its window (one pickup per 10 mi: phone use 80, counted double)');
 
 -- ---------------------------------------------------------------------------
 -- client reads

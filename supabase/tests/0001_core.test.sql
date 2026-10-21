@@ -93,8 +93,10 @@ select is(private.league_week(timestamptz '2026-10-05 04:00:00+00'), '2026-W41',
 select is(private.week_end(timestamptz '2026-10-07 12:00:00+00'), timestamptz '2026-10-12 04:00:00+00', 'the week ends next Monday 00:00 New York');
 select is(array[private.level_for(0), private.level_for(249), private.level_for(250), private.level_for(750), private.level_for(1499), private.level_for(1500), private.level_for(100000000)],
   array[1, 1, 2, 3, 3, 4, 50], 'levels at 250 x n(n-1)/2, capped at 50');
-select is(array[private.safety_rating(40, 10), private.safety_rating(10, 20), private.safety_rating(0, 5), private.safety_rating(0, 0)], array[60.0, 95.0, 100.0, null],
-  'safety rating: 60 for a pickup per 10 mi, 95 for a hard brake per 20 mi, null with no miles');
+-- safety_rating(acceleration, braking, turning, attention, phone, speed, miles, watched miles): the weighted mean of the category scores (0022)
+select is(array[private.safety_rating(0, 0, 0, 0, 40, 0, 10, 0), private.safety_rating(0, 10, 0, 0, 0, 0, 20, 0), private.safety_rating(0, 0, 0, 0, 0, 0, 5, 0), private.safety_rating(0, 0, 0, 0, 0, 0, 0, 0)],
+  array[94.3, 99.6, 100.0, null],
+  'safety rating: 94.3 for a pickup per 10 mi (phone use 80, counted double), 99.6 for a hard brake per 20 mi, 100 with no events, null with no miles');
 
 -- ---------------------------------------------------------------------------
 -- act as A

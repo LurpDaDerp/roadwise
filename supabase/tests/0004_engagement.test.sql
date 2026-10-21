@@ -69,11 +69,11 @@ select pg_temp.drive('00000000-0000-0000-0000-000000000001', private.week_start(
 select is((select (private.challenges_json('00000000-0000-0000-0000-000000000001', private.league_week(now())) -> 2) - 'description' - 'title'), '{"id": "clean", "slot": 3, "target": 3, "progress": 2, "completed": false}'::jsonb, 'two of three after two clean drives');
 create temporary table r3 as select pg_temp.drive('00000000-0000-0000-0000-000000000001', private.week_start(now()) + interval '3 hours', 3, 30, '[]') as r;
 select is((select r -> 'challenges' from r3), '[{"id": "clean", "title": "Clean sweep"}]'::jsonb, 'the third clean drive completes the clean challenge');
-select is((select row(points, lifetime, freeze_progress, freezes)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(190, 190, 1, 2)::text,
-  '+100 points and lifetime, freeze progress 1 of 3');
-select is((select row(amount, kind, league_week)::text from public.points_ledger where user_id = '00000000-0000-0000-0000-000000000001' and kind = 'challenge'), row(100, 'challenge', private.league_week(now()))::text,
+select is((select row(points, lifetime, freeze_progress, freezes)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(290, 290, 1, 2)::text,
+  '+200 points and lifetime, freeze progress 1 of 3');
+select is((select row(amount, kind, league_week)::text from public.points_ledger where user_id = '00000000-0000-0000-0000-000000000001' and kind = 'challenge'), row(200, 'challenge', private.league_week(now()))::text,
   'a challenge ledger row keyed to the week');
-select is(private.week_points('00000000-0000-0000-0000-000000000001', private.league_week(now())), 190, 'week points include the drives and the reward');
+select is(private.week_points('00000000-0000-0000-0000-000000000001', private.league_week(now())), 290, 'week points include the drives and the reward');
 select is((select completed_by_trip = (r ->> 'tripId')::uuid from public.weekly_challenges, r3 where user_id = '00000000-0000-0000-0000-000000000001' and slot = 3), true, 'the completing drive is recorded');
 
 -- the fourth and fifth clean drives complete no_pickups (5) and no_speeding (4) -> a freeze
@@ -82,7 +82,7 @@ select pg_temp.drive('00000000-0000-0000-0000-000000000001', private.week_start(
 select is((select row(freeze_progress, freezes)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(2, 1)::text, 'no_speeding (4 drives) completes: progress 2');
 create temporary table r5 as select pg_temp.drive('00000000-0000-0000-0000-000000000001', private.week_start(now()) + interval '5 hours', 3, 30, '[]') as r;
 select is((select r -> 'challenges' from r5), '[{"id": "no_pickups", "title": "Hands off"}]'::jsonb, 'the fifth drive completes no_pickups');
-select is((select row(freeze_progress, freezes, points)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(0, 2, 450)::text,
+select is((select row(freeze_progress, freezes, points)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(0, 2, 750)::text,
   'the third completed challenge turns progress into a freeze');
 
 -- revert of the completing drive takes the challenge back
@@ -90,7 +90,7 @@ select private.revert_trip('00000000-0000-0000-0000-000000000001', (select (r ->
 select is((select row(completed_at is null, completed_by_trip)::text from public.weekly_challenges where user_id = '00000000-0000-0000-0000-000000000001' and template_id = 'no_pickups'), row(true, null)::text,
   'the challenge is open again');
 select is((select count(*)::int from public.points_ledger where user_id = '00000000-0000-0000-0000-000000000001' and kind = 'challenge'), 2, 'its ledger row is gone');
-select is((select row(freeze_progress, freezes, points)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(2, 1, 320)::text, 'progress is back to before that drive');
+select is((select row(freeze_progress, freezes, points)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(2, 1, 520)::text, 'progress is back to before that drive');
 
 -- ---------------------------------------------------------------------------
 -- achievements
