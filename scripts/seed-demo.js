@@ -243,12 +243,15 @@ function planTrips(now, rnd) {
     const recent = back < 30;
     if (!weekend) {
       const commute = lastWeek ? true : recent ? rnd() < 0.42 : rnd() < 0.1;
+      let lateHome = false;
       if (commute) {
         add(day, intBetween(rnd, 7 * 60 + 25, 8 * 60 + 40), 'work', false);
-        const late = rnd() < 0.2;
-        add(day, late ? intBetween(rnd, 19 * 60, 20 * 60 + 15) : intBetween(rnd, 17 * 60, 18 * 60 + 45), 'work', true);
+        lateHome = rnd() < 0.2;
+        add(day, lateHome ? intBetween(rnd, 19 * 60, 20 * 60 + 15) : intBetween(rnd, 17 * 60, 18 * 60 + 45), 'work', true);
       }
-      if (recent && !lastWeek && rnd() < 0.07) {
+      // No evening errand after a late commute home: leaving again minutes after arriving would read
+      // as one drive continued (the server joins drives within 5 min and 150 m).
+      if (recent && !lastWeek && !lateHome && rnd() < 0.07) {
         const errand = pick(rnd, ERRANDS);
         add(day, intBetween(rnd, 19 * 60 + 30, 20 * 60 + 30), errand, false);
         add(day, intBetween(rnd, 22 * 60 + 20, 23 * 60 + 15), errand, true);
@@ -326,11 +329,16 @@ function recordDrive(trip, rnd) {
   };
 }
 
-/** Events per drive: the earlier months had harder driving than the last 30 days. */
+/**
+ * Events per drive: the earlier months had harder driving than the last 30 days. Hard brakes, starts
+ * and turns stay near the scoring package's typical rates (`BASELINE`: about 1 per 100 slowdowns and
+ * 1 per 125 speed-ups or turns), so with the Fremont spot the demo reads as a decent driver: a Safety
+ * Rating around 80 and no category under 60.
+ */
 function eventRates(back) {
-  if (back >= 30) return { speeding: 0.19, hard_brake: 0.05, hard_accel: 0.02, hard_corner: 0.03 };
-  if (back >= 13) return { speeding: 0.17, hard_brake: 0.03, hard_accel: 0.012, hard_corner: 0.02 };
-  return { speeding: 0.15, hard_brake: 0.025, hard_accel: 0.01, hard_corner: 0.018 };
+  if (back >= 30) return { speeding: 0.19, hard_brake: 0.02, hard_accel: 0.016, hard_corner: 0.012 };
+  if (back >= 13) return { speeding: 0.17, hard_brake: 0.012, hard_accel: 0.01, hard_corner: 0.008 };
+  return { speeding: 0.15, hard_brake: 0.008, hard_accel: 0.008, hard_corner: 0.006 };
 }
 
 /** mph-seconds over the speeding line after the grace, at a steady `over` mph past the line for `durationS` rows. */
@@ -432,8 +440,8 @@ function makeEvents(trip, rec, rnd, opts) {
 const DEMO_SPOTS = [
   // Speeding on the 35 mph stretch down Dexter on the way to work: 2 of every 3 commutes in the last 45 days.
   { type: 'speeding', route: 'work', reverse: false, at: [47.6415, -122.3434], rule: { lastDays: 45, hit: (n) => n % 3 !== 2 }, durationS: 16, overMph: 7 },
-  // A hard brake just before the turn in Fremont on the way home: every other evening commute in the last 45 days.
-  { type: 'hard_brake', route: 'work', reverse: true, at: [47.6492, -122.3497], rule: { lastDays: 45, hit: (n) => n % 2 === 0 }, peakG: 0.47 },
+  // A firm (minor) brake just before the turn in Fremont on the way home: every third evening commute in the last 45 days.
+  { type: 'hard_brake', route: 'work', reverse: true, at: [47.6492, -122.3497], rule: { lastDays: 45, hit: (n) => n % 3 === 0 }, peakG: 0.38 },
   // Hard starts from the light at N 39th: the 4 newest commutes started more than 16 days ago, clean since (a cleared spot).
   { type: 'hard_accel', route: 'work', reverse: false, at: [47.6553, -122.3421], rule: { newestBefore: 16, count: 4 }, peakG: 0.36 },
 ];

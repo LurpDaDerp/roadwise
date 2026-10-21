@@ -112,6 +112,12 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
     expect(drives.some((d) => d.payload.dashcam !== undefined)).toBe(true);
   });
 
+  it('reads like a decent driver: a Safety Rating in the high 70s to 80s, no category under 60', () => {
+    expect(summary.rating).toBeGreaterThanOrEqual(77);
+    expect(summary.rating).toBeLessThan(90);
+    for (const v of Object.values(summary.axes)) expect(v).toBeGreaterThanOrEqual(60);
+  });
+
   it('measures what the phone does: speeding past the grace with its mph-seconds over the line; counters for every drive', () => {
     for (const d of drives) {
       for (const e of d.payload.events) {
