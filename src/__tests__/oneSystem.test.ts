@@ -106,9 +106,6 @@ export const PLUMBING_FORBIDDEN_MODULES: readonly string[] = ['src/drive', 'src/
 /** The notification plumbing. */
 export const NOTIFICATION_FILES: readonly string[] = ['src/features/notifications/'];
 
-/** The one Home module the notification plumbing may import a value from: the start notice (words only). */
-export const NOTIFICATION_ALLOWED_MODULES: readonly string[] = ['src/features/home/startNotice'];
-
 /** Every module specifier in `from '…'`, `import '…'`, `import('…')` and `require('…')`. */
 const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)(['"`])([^'"`]+)\1/g;
 
@@ -300,7 +297,7 @@ const TYPE_ONLY = /\b(?:import|export)\s+type\b[^;]*?\bfrom\s*(['"`])[^'"`]+\1/g
 
 /**
  * The notification files that import a value (types are fine: they are erased) from the drive, the
- * drive screens or Home (the start notice excepted).
+ * drive screens or Home.
  */
 export function notificationImports(files: Readonly<Record<string, string>>): string[] {
   return Object.entries(files)
@@ -310,7 +307,6 @@ export function notificationImports(files: Readonly<Record<string, string>>): st
       return [...code.matchAll(SPECIFIER)].some((m) => {
         const target = resolveSpecifier(file, m[2] as string);
         if (target === null) return false;
-        if (NOTIFICATION_ALLOWED_MODULES.some((mod) => within(target, mod))) return false;
         return PLUMBING_FORBIDDEN_MODULES.some((mod) => within(target, mod));
       });
     })
@@ -447,11 +443,12 @@ describe('the scanner (negative control)', () => {
         'src/features/notifications/c.ts': "const { HudScreen } = require('@/features/drive/HudScreen');",
         'src/features/notifications/d.ts': "import { HomeScreen } from '@/features/home/HomeScreen';",
         'src/features/notifications/e.ts': "const host = await import('@/drive/host');",
-        // fine: types, the start notice, packages, other features
-        'src/features/notifications/ok.ts': ["import type { StartResult } from '@/drive/host';", "import { showStartNotice } from '@/features/home/startNotice';", "import DriveSense from '@drive-sense';"].join('\n'),
+        'src/features/notifications/f.ts': "import { readHomeNotice } from '@/features/home/homeNotice';",
+        // fine: types, packages, the plumbing's own modules
+        'src/features/notifications/ok.ts': ["import type { StartResult } from '@/drive/host';", "import { isAllowedHref } from '@/features/notifications/hrefs';", "import DriveSense from '@drive-sense';"].join('\n'),
         'src/features/home/ok.ts': "import { useDrive } from '@/drive/useDrive';",
       })
-    ).toEqual(['src/features/notifications/a.ts', 'src/features/notifications/b.ts', 'src/features/notifications/c.ts', 'src/features/notifications/d.ts', 'src/features/notifications/e.ts']);
+    ).toEqual(['src/features/notifications/a.ts', 'src/features/notifications/b.ts', 'src/features/notifications/c.ts', 'src/features/notifications/d.ts', 'src/features/notifications/e.ts', 'src/features/notifications/f.ts']);
     expect(resolveSpecifier('src/features/notifications/x.ts', '../../drive/useDrive')).toBe('src/drive/useDrive');
     expect(resolveSpecifier('src/features/notifications/x.ts', '@/features/home')).toBe('src/features/home');
     expect(resolveSpecifier('src/features/notifications/x.ts', 'expo-router')).toBeNull();
