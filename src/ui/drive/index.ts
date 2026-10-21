@@ -10,7 +10,6 @@ export {
   HALO_MAX_SCALE,
   HALO_MIN_RING_BOX_PT,
   HALO_RAMP_STOPS,
-  HALO_SPEED_HOLD_MAX_ROWS,
   HUD,
   HUD_CONTRAST_PAIRS,
   HUD_GRAPHIC_PAIRS,
@@ -35,3 +34,4 @@ export { R2_1_ASPECT, signSize, SpeedSign, type SpeedSignProps } from './SpeedSi
 export * from './halo';
 export { HALO_TIMINGS } from './haloMotion';
 export { Halo, type HaloProps } from './HaloRing';
+export { HaloCompass, type HaloCompassProps } from './HaloCompass';

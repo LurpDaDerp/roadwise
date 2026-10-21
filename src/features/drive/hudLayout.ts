@@ -3,8 +3,8 @@
 //
 // - Portrait: a top row (the sign at its left, the navigation button at its right), the 56 pt band
 //   under it (with a DashPal paired its right 88 pt are the chip's slot), the halo centred
-//   on the screen (as near as the shortest top row and End allow) and the End swipe across the
-//   bottom. The top row takes the height above the band (up to 144 pt: a bigger sign); a points line
+//   on the screen (as near as the shortest top row and End allow; the band clears its compass) and
+//   the End swipe across the bottom. The top row takes the height above the band (up to 144 pt: a bigger sign); a points line
 //   sits under the halo when it fits above End (so the halo never moves when the car stops).
 // - Landscape: three columns, the halo the full height in the middle: the sign on the left, level
 //   with the halo's centre; on the right the band at the top, the navigation button and the End
@@ -19,6 +19,7 @@
 //   bottom. End is 76 pt tall everywhere except a compact window too short for it and a readable
 //   speed, where it gives back down to the 64 pt target.
 import {
+  compassGeometry,
   DIGIT_ADVANCE_EM,
   DIGIT_HEIGHT_EM,
   END_SWIPE_H_PT,
@@ -214,15 +215,15 @@ export function hudLayout(i: HudLayoutInput): HudLayout {
     const B = Math.floor(Math.min(HALO_MAX_BOX_PT, frameW, region));
     if (B >= HALO_MIN_RING_BOX_PT) {
       const g = haloGeometry(B);
-      // The lit ring's outer edge at rest; the band clears it by a gap (only the glow's faint edge
-      // reaches past it).
-      const ringR = g.r + g.W / 2;
+      // The compass's outer edge (around the ring, just inside the box); the band clears it by a gap
+      // (only the glow's faint edge reaches past it).
+      const edgeR = compassGeometry(B).outer;
       const end = endAt(left, frameW, bottom);
       // The halo centred on the screen, held between the shortest top row and End.
-      const highest = top + HUD_ROW_MIN_PT + GAP + HUD_BAND_PT + GAP + ringR - B / 2;
+      const highest = top + HUD_ROW_MIN_PT + GAP + HUD_BAND_PT + GAP + edgeR - B / 2;
       const lowest = end.y - GAP - B;
       const haloY = Math.min(lowest, Math.max(highest, height / 2 - B / 2));
-      const rowH = Math.max(HUD_ROW_MIN_PT, Math.min(HUD_ROW_MAX_PT, Math.floor(haloY + B / 2 - ringR - GAP - HUD_BAND_PT - GAP - top)));
+      const rowH = Math.max(HUD_ROW_MIN_PT, Math.min(HUD_ROW_MAX_PT, Math.floor(haloY + B / 2 - edgeR - GAP - HUD_BAND_PT - GAP - top)));
       const pointsLine = haloY + B + GAP + HUD_POINTS_LINE_PT + GAP <= end.y;
       const row: Rect = { x: left, y: top, w: frameW, h: rowH };
       const band: Rect = { x: left, y: top + rowH + GAP, w: frameW, h: HUD_BAND_PT };

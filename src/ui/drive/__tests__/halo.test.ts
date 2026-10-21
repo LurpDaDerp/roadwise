@@ -1,31 +1,33 @@
-// The halo's pure rules (drive-screen design §2, §4): severity per signal, the speeding display hold,
-// bursts, the visual, the colour ramps and the geometry.
+// The halo's pure rules (drive-screen design §2, §4): severity per signal, the speeding tint, bursts,
+// the shake, the visual, the colour ramps, the geometry and the compass.
 import { interpolateColor, ReduceMotion } from 'react-native-reanimated';
 
 import { contrastRatio } from '@/ui/contrast';
 
 import {
   burstFor,
+  COMPASS_LETTERS,
+  compassGeometry,
   dashpalSeverity,
   deltaEOk,
   glowStops,
   glowWeight,
   HALO_CALM,
+  HALO_TINT_FULL_RATIO,
   haloGeometry,
   haloNumeralPt,
   haloVisual,
-  nextSpeedingHold,
+  nextCompassAngle,
   numeralRamp,
   phoneSeverity,
   rampColor,
   ringRamp,
-  SPEEDING_HOLD_NONE,
+  shakeAmplitudePt,
+  shakeOffsets,
   speedDigits,
-  speedingSeverity,
+  speedingTint,
   type HaloBurst,
   type HaloInput,
-  type HoldRow,
-  type SpeedingHold,
 } from '../halo';
 import { HALO_TIMINGS } from '../haloMotion';
 import { HALO_BURST, HALO_MAX_SCALE, HALO_RAMP_STOPS, HUD, type HudPalette } from '../hudTokens';
@@ -36,96 +38,35 @@ const palettes: [string, HudPalette][] = [
 ];
 const samples = Array.from({ length: 101 }, (_, i) => i / 100);
 
-describe('speeding severity (§4.1)', () => {
-  // limit 65: T = 8, L + T = 73
+describe('the speeding tint, from the posted limit', () => {
+  test('0 at or under the limit, rising straight to full red at 1.7 × it; just over is all but calm', () => {
+    expect(HALO_TINT_FULL_RATIO).toBe(1.7);
+    expect(speedingTint(0.8)).toBe(0);
+    expect(speedingTint(1)).toBe(0);
+    expect(speedingTint(1.035)).toBeCloseTo(0.05, 9);
+    expect(speedingTint(1.21)).toBeCloseTo(0.3, 9);
+    expect(speedingTint(1.385)).toBeCloseTo(0.55, 9);
+    expect(speedingTint(1.7)).toBe(1);
+    expect(speedingTint(2.5)).toBe(1);
+  });
+
+  test('no ratio (no usable limit or speed) is no tint', () => {
+    expect(speedingTint(null)).toBe(0);
+    expect(speedingTint(Number.NaN)).toBe(0);
+    expect(speedingTint(Number.POSITIVE_INFINITY)).toBe(0);
+  });
+
   test.each([
-    [0.1, 'minor', 0.304375],
-    [2, 'minor', 0.3875],
-    [4, 'minor', 0.475],
-    [4.1, 'moderate', 0.4785],
-    [7, 'moderate', 0.58],
-    [9, 'moderate', 0.65],
-    [9.1, 'severe', 0.6535],
-    [14, 'severe', 0.825],
-    [19, 'severe', 1],
-    [30, 'severe', 1],
-  ] as const)('%s mph over L + T, %s: %s', (over, tier, s) => {
-    expect(speedingSeverity(tier, 73 + over, 65)).toBeCloseTo(s, 4);
-  });
-
-  test('a 35 mph limit (T 3): 40 / 44 / 49 / 60 mph', () => {
-    expect(speedingSeverity('minor', 40, 35)).toBeCloseTo(0.3875, 4);
-    expect(speedingSeverity('moderate', 44, 35)).toBeCloseTo(0.545, 4);
-    expect(speedingSeverity('severe', 49, 35)).toBeCloseTo(0.72, 4);
-    expect(speedingSeverity('severe', 60, 35)).toBe(1);
-  });
-
-  test('kept in the engine tier band on both sides of every edge; unknown speed or limit: the band low end', () => {
-    expect(speedingSeverity('moderate', 73 + 3.9, 65)).toBe(0.475);
-    expect(speedingSeverity('minor', 73 + 5, 65)).toBe(0.475);
-    expect(speedingSeverity('minor', 72, 65)).toBe(0.3);
-    expect(speedingSeverity('severe', 73 + 8, 65)).toBe(0.65);
-    expect(speedingSeverity('moderate', 73 + 11, 65)).toBe(0.65);
-    expect(speedingSeverity('severe', null, 65)).toBe(0.65);
-    expect(speedingSeverity('moderate', 80, null)).toBe(0.475);
-    expect(speedingSeverity('minor', Number.NaN, 65)).toBe(0.3);
-  });
-});
-
-describe('the speeding display hold (§4.1)', () => {
-  const T = 1_790_000_000_000;
-  const rows = (list: Omit<HoldRow, 'recording' | 'rowTs'>[], start = T, recording = true): SpeedingHold[] => {
-    let h = SPEEDING_HOLD_NONE;
-    return list.map((r, i) => (h = nextSpeedingHold(h, { ...r, recording, rowTs: start + i * 1000 })));
-  };
-
-  test('72.9 / 73.1 alternating against L + T = 73 for 30 rows: one entry, held at about 0.30, never calm again', () => {
-    const list = Array.from({ length: 30 }, (_, i) => (i % 2 === 0 ? { tier: 'minor' as const, speedMph: 73.1, limitMph: 65 } : { tier: null, speedMph: 72.9, limitMph: 65 }));
-    const out = rows(list);
-    expect(out.every((h) => h.s >= 0.3 && h.s <= 0.31)).toBe(true);
-    const rises = out.filter((h, i) => h.s > 0 && (i === 0 || out[i - 1]!.s === 0));
-    expect(rises).toHaveLength(1);
-  });
-
-  test('a one-row tier gap at full red: 1.0 → 0.90 → 1.0', () => {
-    const out = rows([
-      { tier: 'severe', speedMph: 95, limitMph: 65 },
-      { tier: null, speedMph: 95, limitMph: 65 },
-      { tier: 'severe', speedMph: 95, limitMph: 65 },
-    ]);
-    expect(out.map((h) => h.s)).toEqual([1, expect.closeTo(0.9, 6), 1]);
-  });
-
-  test('ends on the 5th row under L + T − 2, never snapping on the way (decays, not below 0.30)', () => {
-    const out = rows([{ tier: 'severe', speedMph: 95, limitMph: 65 }, ...Array(5).fill({ tier: null, speedMph: 60, limitMph: 65 })]);
-    expect(out.map((h) => Number(h.s.toFixed(2)))).toEqual([1, 0.9, 0.8, 0.7, 0.6, 0]);
-  });
-
-  test('touched the line once, then just under it (in the 2 mph band): ends on the 10th row without a tier', () => {
-    const out = rows([{ tier: 'minor', speedMph: 73.2, limitMph: 65 }, ...Array(10).fill({ tier: null, speedMph: 72, limitMph: 65 })]);
-    expect(out.slice(1, 10).every((h) => h.s === 0.3)).toBe(true);
-    expect(out[10]!.s).toBe(0);
-  });
-
-  test('an unknown speed or limit counts as quiet', () => {
-    const out = rows([{ tier: 'minor', speedMph: 76, limitMph: 65 }, ...Array(5).fill({ tier: null, speedMph: null, limitMph: 65 })]);
-    expect(out.at(-1)!.s).toBe(0);
-    const out2 = rows([{ tier: 'minor', speedMph: 76, limitMph: 65 }, ...Array(5).fill({ tier: null, speedMph: 76, limitMph: null })]);
-    expect(out2.at(-1)!.s).toBe(0);
-  });
-
-  test('a 4 s row gap restarts from the new row alone; a repeated row does not advance; not recording clears it', () => {
-    const a = nextSpeedingHold(SPEEDING_HOLD_NONE, { recording: true, rowTs: T, tier: 'severe', speedMph: 95, limitMph: 65 });
-    expect(nextSpeedingHold(a, { recording: true, rowTs: T, tier: null, speedMph: 60, limitMph: 65 })).toBe(a);
-    expect(nextSpeedingHold(a, { recording: true, rowTs: T + 4000, tier: null, speedMph: 95, limitMph: 65 }).s).toBe(0);
-    expect(nextSpeedingHold(a, { recording: true, rowTs: T + 3000, tier: null, speedMph: 95, limitMph: 65 }).s).toBeCloseTo(0.9, 6);
-    expect(nextSpeedingHold(a, { recording: true, rowTs: T - 1000, tier: null, speedMph: 95, limitMph: 65 }).s).toBe(0);
-    expect(nextSpeedingHold(a, { recording: false, rowTs: T + 1000, tier: 'severe', speedMph: 95, limitMph: 65 })).toBe(SPEEDING_HOLD_NONE);
-    expect(nextSpeedingHold(a, { recording: true, rowTs: null, tier: null, speedMph: null, limitMph: null })).toBe(SPEEDING_HOLD_NONE);
-  });
-
-  test('no tier ever: calm', () => {
-    expect(rows(Array(5).fill({ tier: null, speedMph: 90, limitMph: 65 })).every((h) => h.s === 0)).toBe(true);
+    [25, 3],
+    [35, 4],
+    [45, 5],
+    [65, 9],
+  ])('on a %i (T %i): 1 mph over is all but calm (ΔE_OK under 5); the points line is under a fifth of the way to red', (limit, t) => {
+    const near = speedingTint((limit + 1) / limit);
+    expect(deltaEOk(rampColor(ringRamp(HUD.day), near), HUD.day.haloCalm)).toBeLessThan(5);
+    const line = speedingTint((limit + t) / limit);
+    expect(line).toBeGreaterThan(0);
+    expect(line).toBeLessThan(0.2);
   });
 });
 
@@ -185,6 +126,8 @@ describe('the visual (§4.4, §4.5)', () => {
     reduceMotion: false,
     status: 'recording',
     speeding: 0,
+    speedingOver: false,
+    deduction: null,
     phoneUseSince: null,
     rowTs: T,
     held: null,
@@ -194,25 +137,44 @@ describe('the visual (§4.4, §4.5)', () => {
   });
   const burst: HaloBurst = { key: 'phone:hard_brake:1', severity: 1, pulses: 3, until: T + 1500 };
 
-  test('calm: no pulse, flowing', () => {
+  test('calm: no pulse, flowing, no warning, no shake', () => {
     expect(haloVisual(input())).toEqual(HALO_CALM);
-    expect(HALO_CALM).toMatchObject({ mode: 'calm', pulsePeriodMs: 0, pulseDepth: 0, pulseScale: 0, flow: true });
+    expect(HALO_CALM).toMatchObject({ mode: 'calm', pulsePeriodMs: 0, pulseDepth: 0, pulseScale: 0, flow: true, warning: false, shake: null });
   });
 
-  test('a sustained warning pulses by the formulas and stops the flow; every period at least 800 ms', () => {
-    for (const s of [0.3, 0.5, 0.825, 1]) {
-      const v = haloVisual(input({ speeding: s }));
-      expect(v).toMatchObject({ mode: 'speeding', severity: s, colorSeverity: s, flow: false });
+  test('over the points line: pulsing by the formulas, the flow stopped, a warning; every period at least 800 ms', () => {
+    for (const s of [0.17, 0.3, 0.5, 0.825, 1]) {
+      const v = haloVisual(input({ speeding: s, speedingOver: true }));
+      expect(v).toMatchObject({ mode: 'speeding', severity: s, colorSeverity: s, flow: false, warning: true });
       expect(v.pulsePeriodMs).toBeCloseTo(2200 - 1400 * s, 6);
       expect(v.pulseDepth).toBeCloseTo(0.3 + 0.4 * s, 6);
       expect(v.pulseScale).toBeCloseTo(0.015 + 0.02 * s, 6);
     }
-    for (const s of samples.slice(1)) expect(haloVisual(input({ speeding: s })).pulsePeriodMs).toBeGreaterThanOrEqual(800);
+    for (const s of samples) expect(haloVisual(input({ speeding: s, speedingOver: true })).pulsePeriodMs).toBeGreaterThanOrEqual(800);
   });
 
-  test('the strongest signal wins; distraction on a tie', () => {
+  test('tinted but under the points line: the colour only; no pulse, still flowing, not a warning', () => {
+    for (const s of [0.05, 0.15, 0.6]) {
+      const v = haloVisual(input({ speeding: s }));
+      expect(v).toMatchObject({ mode: 'speeding', severity: s, colorSeverity: s, pulsePeriodMs: 0, pulseDepth: 0, pulseScale: 0, flow: true, warning: false });
+    }
+  });
+
+  test('the pulse stops on the first row back under the line; the tint follows the row', () => {
+    const over = haloVisual(input({ speeding: 0.4, speedingOver: true }));
+    const under = haloVisual(input({ speeding: 0.1 }));
+    expect(over.pulsePeriodMs).toBeGreaterThan(0);
+    expect(under).toMatchObject({ pulsePeriodMs: 0, colorSeverity: 0.1, flow: true });
+  });
+
+  test('a non-finite tint reads as none', () => {
+    expect(haloVisual(input({ speeding: Number.NaN }))).toEqual(HALO_CALM);
+  });
+
+  test('the strongest signal wins; distraction on a tie; distraction pulses whatever the tint', () => {
     const v = haloVisual(input({ speeding: 0.5, phoneUseSince: T - 2000 }));
-    expect(v).toMatchObject({ mode: 'distraction', severity: 0.65 });
+    expect(v).toMatchObject({ mode: 'distraction', severity: 0.65, warning: true, flow: false });
+    expect(v.pulsePeriodMs).toBeCloseTo(2200 - 1400 * 0.65, 6);
     expect(haloVisual(input({ speeding: 0.9, phoneUseSince: T - 2000 }))).toMatchObject({ mode: 'speeding', severity: 0.9 });
     expect(haloVisual(input({ speeding: 0.65, phoneUseSince: T - 2000 })).mode).toBe('distraction');
     expect(haloVisual(input({ held: { sound: 3, tier: 3, level: 0, since: T } }))).toMatchObject({ mode: 'distraction', severity: 0.8 });
@@ -230,8 +192,8 @@ describe('the visual (§4.4, §4.5)', () => {
     expect(later.pulsePeriodMs).toBeLessThan(first.pulsePeriodMs);
   });
 
-  test('a burst: its mode and colour while it lasts, then the sustained state again', () => {
-    expect(haloVisual(input({ burst }))).toMatchObject({ mode: 'burst', severity: 0, colorSeverity: 1, burst, flow: false, pulsePeriodMs: 0 });
+  test('a burst: its mode and colour while it lasts (a warning), then the sustained state again', () => {
+    expect(haloVisual(input({ burst }))).toMatchObject({ mode: 'burst', severity: 0, colorSeverity: 1, burst, flow: false, pulsePeriodMs: 0, warning: true });
     expect(haloVisual(input({ burst, now: T + 1500 }))).toEqual(HALO_CALM);
     const sustained = haloVisual(input({ burst, phoneUseSince: T - 2000 }));
     expect(sustained).toMatchObject({ mode: 'burst', severity: 0.65, colorSeverity: 1 });
@@ -240,15 +202,27 @@ describe('the visual (§4.4, §4.5)', () => {
     expect(haloVisual(input({ speeding: 0.9, burst: { ...burst, severity: 0.45 } })).colorSeverity).toBe(0.9);
   });
 
+  test('points coming off: the shake carries their key and points, whatever else shows; none under Reduce Motion', () => {
+    const deduction = { key: 'hard_brake:1@5', points: 20 };
+    expect(haloVisual(input({ deduction })).shake).toEqual(deduction);
+    expect(haloVisual(input({ deduction, speeding: 0.5, speedingOver: true })).shake).toEqual(deduction);
+    // a shake alone is not a warning: the colour and the flow stay as they are
+    expect(haloVisual(input({ deduction }))).toMatchObject({ mode: 'calm', flow: true, warning: false });
+    expect(haloVisual(input({ deduction, reduceMotion: true })).shake).toBeNull();
+    expect(haloVisual(input({ deduction, status: 'finalizing' })).shake).toBeNull();
+  });
+
   test('not recording: calm whatever the inputs', () => {
     for (const status of ['idle', 'finalizing'] as const) {
-      expect(haloVisual(input({ status, speeding: 1, phoneUseSince: T, held: { sound: 3, tier: 3, level: 3, since: T }, burst }))).toEqual(HALO_CALM);
+      expect(
+        haloVisual(input({ status, speeding: 1, speedingOver: true, phoneUseSince: T, held: { sound: 3, tier: 3, level: 3, since: T }, burst }))
+      ).toEqual(HALO_CALM);
     }
   });
 
   test('Reduce Motion: no pulse, no flow, the burst as colour only; colours unchanged', () => {
-    const still = haloVisual(input({ reduceMotion: true, speeding: 0.8 }));
-    expect(still).toMatchObject({ severity: 0.8, colorSeverity: 0.8, pulsePeriodMs: 0, pulseDepth: 0, pulseScale: 0, flow: false, burst: null });
+    const still = haloVisual(input({ reduceMotion: true, speeding: 0.8, speedingOver: true }));
+    expect(still).toMatchObject({ severity: 0.8, colorSeverity: 0.8, pulsePeriodMs: 0, pulseDepth: 0, pulseScale: 0, flow: false, burst: null, warning: true });
     expect(haloVisual(input({ reduceMotion: true, burst }))).toMatchObject({ mode: 'burst', colorSeverity: 1, burst: null, flow: false });
     expect(haloVisual(input({ reduceMotion: true }))).toMatchObject({ mode: 'calm', flow: false, pulsePeriodMs: 0 });
     expect(haloVisual(input({ reduceMotion: true, status: 'idle' })).flow).toBe(false);
@@ -258,7 +232,7 @@ describe('the visual (§4.4, §4.5)', () => {
     expect(1000 / HALO_BURST.periodMs).toBeLessThan(3);
     expect(HALO_TIMINGS.burstHalf.duration * 2).toBe(HALO_BURST.periodMs);
     expect(1 - HALO_BURST.depth).toBeGreaterThanOrEqual(0.25);
-    expect(1 - haloVisual(input({ speeding: 1 })).pulseDepth).toBeGreaterThanOrEqual(0.25);
+    expect(1 - haloVisual(input({ speeding: 1, speedingOver: true })).pulseDepth).toBeGreaterThanOrEqual(0.25);
     expect(HALO_BURST.scale).toBeLessThanOrEqual(HALO_MAX_SCALE - 1 + 1e-9);
   });
 });
@@ -282,7 +256,7 @@ describe('colours (§2.2)', () => {
     }
   });
 
-  test.each(palettes)('%s: the first speeding cue is an unmistakable change (ΔE_OK ≥ 15 from calm)', (_n, p) => {
+  test.each(palettes)('%s: the yellow stop is an unmistakable change (ΔE_OK ≥ 15 from calm)', (_n, p) => {
     expect(deltaEOk(rampColor(ringRamp(p), 0), rampColor(ringRamp(p), 0.3))).toBeGreaterThanOrEqual(15);
     expect(deltaEOk(rampColor(numeralRamp(p), 0), rampColor(numeralRamp(p), 0.3))).toBeGreaterThanOrEqual(15);
   });
@@ -376,8 +350,94 @@ describe('geometry (§2.1)', () => {
   });
 });
 
+describe('the shake', () => {
+  test('grows with the points: 4.5 pt for 8, 6.5 for 20, 10.6 for 80 in a large box', () => {
+    expect(shakeAmplitudePt(8, 420)).toBeCloseTo(4.5, 6);
+    expect(shakeAmplitudePt(20, 420)).toBeCloseTo(2 + 2.5 * Math.log2(3.5), 6);
+    expect(shakeAmplitudePt(80, 420)).toBeCloseTo(2 + 2.5 * Math.log2(11), 6);
+    const pts = [1, 8, 12, 20, 32, 40, 80];
+    for (let k = 1; k < pts.length; k += 1) expect(shakeAmplitudePt(pts[k]!, 420)).toBeGreaterThanOrEqual(shakeAmplitudePt(pts[k - 1]!, 420));
+    // a nonsense count shakes as one point would
+    expect(shakeAmplitudePt(Number.NaN, 420)).toBe(shakeAmplitudePt(1, 420));
+  });
+
+  test('never past what keeps the ring inside the compass at its largest pulse, in every box', () => {
+    for (let B = 220; B <= 420; B += 1) {
+      const g = haloGeometry(B);
+      const c = compassGeometry(B);
+      for (const points of [8, 80, 300, 10_000]) {
+        const a = shakeAmplitudePt(points, B);
+        expect(a).toBeLessThanOrEqual(c.shakeMax);
+        expect((g.r + g.W / 2) * HALO_MAX_SCALE + a).toBeLessThan(c.inner);
+      }
+      expect(c.shakeMax).toBeGreaterThanOrEqual(2.5);
+    }
+  });
+
+  test('swings side to side, fading out, back to rest; two more swings from 40 points', () => {
+    expect(shakeOffsets(8, 20)).toEqual([8, -6, 4, -2, 0]);
+    const big = shakeOffsets(12, 40);
+    expect(big).toHaveLength(7);
+    expect(big.at(-1)).toBe(0);
+    for (let k = 1; k < big.length - 1; k += 1) {
+      expect(Math.sign(big[k]!)).toBe(-Math.sign(big[k - 1]!));
+      expect(Math.abs(big[k]!)).toBeLessThan(Math.abs(big[k - 1]!));
+    }
+  });
+});
+
+describe('the compass', () => {
+  test('turns the short way round: 350° to 10° is 20° on, never 340° back; an unwrapped angle keeps counting', () => {
+    expect(nextCompassAngle(-350, -10)).toBe(-370);
+    expect(nextCompassAngle(0, -90)).toBe(-90);
+    expect(nextCompassAngle(0, -270)).toBe(90);
+    expect(nextCompassAngle(720, 5)).toBe(725);
+    expect(nextCompassAngle(10, 190)).toBe(-170);
+    for (let prev = -720; prev <= 720; prev += 37) {
+      for (let target = -360; target <= 360; target += 23) {
+        const next = nextCompassAngle(prev, target);
+        expect(Math.abs(next - prev)).toBeLessThanOrEqual(180);
+        expect((((next - target) % 360) + 360) % 360).toBeCloseTo(0, 9);
+      }
+    }
+  });
+
+  test('N, E, S and W at their bearings', () => {
+    expect(COMPASS_LETTERS.map((l) => [l.label, l.bearing])).toEqual([
+      ['N', 0],
+      ['E', 90],
+      ['S', 180],
+      ['W', 270],
+    ]);
+  });
+
+  test('in every ring box: inside the box, outside the ring at its largest pulse, letters 10 to 14 pt, ticks 4 to 7', () => {
+    for (let B = 220; B <= 420; B += 1) {
+      const c = compassGeometry(B);
+      const g = haloGeometry(B);
+      expect(c.outer).toBeLessThanOrEqual(B / 2);
+      expect(c.inner).toBeGreaterThan((g.r + g.W / 2) * HALO_MAX_SCALE);
+      expect(c.letterPt).toBeGreaterThanOrEqual(10);
+      expect(c.letterPt).toBeLessThanOrEqual(14);
+      expect(c.tick).toBeGreaterThanOrEqual(4);
+      expect(c.tick).toBeLessThanOrEqual(7);
+      expect(c.minorTick).toBeLessThan(c.tick);
+      // the letters sit inside the ticks; the fixed mark reaches past the ticks, never into a letter
+      expect(c.letterR).toBeLessThan(c.outer - c.tick);
+      expect(c.outer - c.markH).toBeGreaterThan(c.letterR + 0.42 * c.letterPt);
+    }
+  });
+
+  test('worked boxes: 260 (Android 360 × 640) and 361 (iPhone 15)', () => {
+    expect(compassGeometry(260)).toMatchObject({ outer: 129, tick: 4, letterPt: 10, shakeMax: 6.4 });
+    expect(compassGeometry(361)).toMatchObject({ outer: 179.5, tick: 6, letterPt: 12 });
+    expect(compassGeometry(361).shakeMax).toBeGreaterThan(12);
+  });
+});
+
 test('every halo timing runs under the OS reduce-motion setting (the halo gates motion itself)', () => {
   for (const config of Object.values(HALO_TIMINGS)) expect(config.reduceMotion).toBe(ReduceMotion.Never);
   expect(HALO_TIMINGS.colorSpring).toMatchObject({ duration: 700, dampingRatio: 1 });
   expect([HALO_TIMINGS.intoBurst.duration, HALO_TIMINGS.outOfBurst.duration, HALO_TIMINGS.reduceColor.duration, HALO_TIMINGS.target.duration, HALO_TIMINGS.layer.duration]).toEqual([120, 400, 250, 400, 400]);
+  expect([HALO_TIMINGS.shakeSwing.duration, HALO_TIMINGS.compass.duration]).toEqual([70, 700]);
 });

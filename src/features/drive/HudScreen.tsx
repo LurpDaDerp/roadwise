@@ -23,11 +23,9 @@ import {
   Halo,
   haloVisual,
   hudPalette,
-  nextSpeedingHold,
-  SPEEDING_HOLD_NONE,
+  speedingTint,
   SpeedSign,
   type BurstSource,
-  type SpeedingHold,
 } from '@/ui/drive';
 
 import { EventBanner, useAlertFlash } from './EventBanner';
@@ -36,6 +34,7 @@ import { hudCopy } from './hudCopy';
 import { hudLayout, type Rect } from './hudLayout';
 import { navHighlight, NavigationButton, nextNavLock } from './NavigationButton';
 import { StoppedPoints } from './StoppedPoints';
+import { useDeductionShake } from './useDeductionShake';
 import { useHaloBurst } from './useHaloBurst';
 import { HaloReadout } from './HaloReadout';
 import { inUnits, useHudUnits } from './useHudUnits';
@@ -49,12 +48,14 @@ export const HUD_NIGHT_RECHECK_MS = 5 * 60_000;
 const POSITION_MAX_AGE_MS = 60 * 60_000;
 
 /**
- * Night, judged by the sun at the phone's last known position (the OS's cached fix: no GPS of its
- * own). With no cached fix the day palette stays. Re-checked every few minutes while on screen.
+ * Night by the sun at the phone's last known position (the OS's cached fix: no GPS of its own), or
+ * null while there is none. Re-checked every few minutes while on screen, and only while `wanted`
+ * (a static theme decides day or night itself).
  */
-function useHudNight(): boolean {
-  const [night, setNight] = useState(false);
+function useSunNight(wanted: boolean): boolean | null {
+  const [night, setNight] = useState<boolean | null>(null);
   useEffect(() => {
+    if (!wanted) return;
     let live = true;
     const check = async () => {
       try {
@@ -70,8 +71,19 @@ function useHudNight(): boolean {
       live = false;
       clearInterval(timer);
     };
-  }, []);
+  }, [wanted]);
   return night;
+}
+
+/**
+ * The driving screen's night look: a static theme's own choice (Light: day, Dark: night, System: the
+ * phone's scheme); else (Adaptive) the sun at the last known position, and with no position yet the
+ * sky's own scheme (dark from dusk to dawn). Outside a theme, the sun or day.
+ */
+export function hudNightOf(themeNight: boolean | null | undefined, sunNight: boolean | null, skyScheme: 'light' | 'dark' | null): boolean {
+  if (themeNight !== null && themeNight !== undefined) return themeNight;
+  if (sunNight !== null) return sunNight;
+  return skyScheme === 'dark';
 }
 
 /**
@@ -111,11 +123,16 @@ export type HudScreenProps = {
  * The driving screen (spec "Driving screen"): built to be glanced at, not watched.
  *
  * - Middle: the halo, a glowing ring with the speed inside it (white when calm, the halo's colour
- *   otherwise). Calm: light blue-white, light moving slowly round it. Over the limit: yellow, then
- *   orange, then red, pulsing faster the further over (held through a speed hovering at the line).
- *   Phone use and a DashPal alert (driver-not-visible included): warmer and faster the more serious
- *   and the longer. A hard brake, hard start, sharp turn, phone pickup or handling alert, and each
- *   DashPal alert start or step (not a reconnect's re-send), pulse it quickly a few times. Rules in `src/ui/drive/halo.ts`; drawing in `HaloRing.tsx`.
+ *   otherwise). Calm: light blue-white, light moving slowly round it. Past the posted limit it tints
+ *   toward yellow, orange and red with the speed over it (all but calm just over, red at 1.7 × the
+ *   limit), following each row; it pulses only while the car is over the points line (limit plus
+ *   tolerance), faster the further over, and stops on the first row back under it. Phone use and a
+ *   DashPal alert (driver-not-visible included): warmer and faster the more serious and the longer.
+ *   A hard brake, hard start, sharp turn, phone pickup or handling alert, and each DashPal alert
+ *   start or step (not a reconnect's re-send), pulse it quickly a few times. Points coming off shake
+ *   the ring sideways, more for more points. Around it a compass turns with the car's GPS course
+ *   (heading up, never growing or moving with the ring). Rules in `src/ui/drive/halo.ts`; drawing
+ *   in `HaloRing.tsx` and `HaloCompass.tsx`.
  * - Top row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres) on
  *   the left and the navigation button on the right. The navigation button's list of apps shows in
  *   a panel under the row, never a route: on a tap while no app is saved, or on a long press (to
@@ -136,8 +153,10 @@ export type HudScreenProps = {
  *   while moving.
  *   Every other touch only undims.
  * - After 10 s without a touch a dark scrim dims everything, never while an alert banner shows; the
- *   halo and the speed stay above it, at reduced strength and still flowing while calm, at full
- *   strength while warning.
+ *   halo and the speed stay above it, at reduced strength and still flowing with no warning showing
+ *   (a tint under the points line included), at full strength while warning.
+ * - Night: a static theme's own look; else the sun at the phone's last known position (with none
+ *   yet, the sky's scheme).
  * - Every position comes from `hudLayout` (absolute rects): End is always on screen.
  *
  * It re-renders when `useDriveLive` publishes (≤ 1 Hz), a flash or the dim state flips, or DashPal's
@@ -151,8 +170,10 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const insets = useSafeAreaInsets();
   const { width, height, fontScale } = useWindowDimensions();
   const reduceMotion = useOsReduceMotion();
-  const night = useHudNight();
   const theme = useOptionalTheme();
+  const themeNight = theme?.hudNight ?? null;
+  const sunNight = useSunNight(themeNight === null);
+  const night = hudNightOf(themeNight, sunNight, theme?.scheme ?? null);
   // The hour's sky, deepened for the road (its own day or night set), under everything; its panels
   // take a deeper shade of it. Outside a theme the HUD stays on true black.
   const sky = theme === null ? null : theme.sky.hud[night ? 'night' : 'day'];
@@ -249,15 +270,13 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
     }
   }, [live.status, ending, leave, droppedId, failedId]);
 
-  const speeding = live.speedingTier !== null;
+  // Over the posted limit speeding is judged on (the speed's spoken label says so).
+  const speeding = live.speedingRatio !== null && live.speedingRatio > 1;
   const busy = ending || live.status === 'finalizing';
-  const recording = live.status === 'recording';
 
-  // The halo: the speeding display hold advances once per new row (React's state-from-the-previous-
-  // render pattern; a repeated row returns the same hold, so this settles at once).
-  const [hold, setHold] = useState<SpeedingHold>(SPEEDING_HOLD_NONE);
-  const nextHold = nextSpeedingHold(hold, { recording, rowTs: live.rowTs, tier: live.speedingTier, speedMph: live.rowSpeedMph, limitMph: live.limitMph });
-  if (nextHold !== hold) setHold(nextHold);
+  // The halo: tinted from the limit on each row, pulsing only over the points line; it shakes once
+  // for points that just came off (fresh on the row clock, never one from the background).
+  const deduction = useDeductionShake(live.lastDeduction, live.rowTs);
   const now = wallClock();
   const phoneSource = useMemo<BurstSource | null>(() => (alert === null ? null : { kind: 'phone', type: alert.type, at: alert.at, until: alert.until }), [alert]);
   const dashpalSource = useMemo<BurstSource | null>(
@@ -268,7 +287,9 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const visual = haloVisual({
     reduceMotion,
     status: live.status,
-    speeding: nextHold.s,
+    speeding: speedingTint(live.speedingRatio),
+    speedingOver: live.speedingOver,
+    deduction,
     phoneUseSince: live.phoneUseSince,
     rowTs: live.rowTs,
     held,
@@ -401,6 +422,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           palette={p}
           dimmed={dimmed}
           reduceMotion={reduceMotion}
+          heading={live.courseDeg}
           numerals={(numeralStyle) => (
             <HaloReadout
               units={units}

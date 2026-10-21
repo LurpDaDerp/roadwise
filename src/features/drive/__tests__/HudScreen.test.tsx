@@ -9,11 +9,11 @@ import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-han
 
 import { DIM_AFTER_MS, END_SWIPE_H_PT, HUD, HUD_MIN_TARGET_PT, type HaloProps, type HaloVisual } from '@/ui/drive';
 import { skyBundle, type SkyMood } from '@/ui/sky/palette';
-import { ThemeProvider } from '@/ui/theme';
+import { ThemeProvider, useTheme, type Theme } from '@/ui/theme';
 
 import { hudCopy } from '../hudCopy';
 import { hudLayout } from '../hudLayout';
-import { HudScreen } from '../HudScreen';
+import { HudScreen, hudNightOf } from '../HudScreen';
 import { WEATHER_CLOSE_PT, weatherBannerPt } from '../WeatherBanner';
 
 // The halo renders for real; its props are kept so a test can read the visual it was given.
@@ -252,13 +252,9 @@ describe('speed and limit', () => {
   });
 });
 
-describe('the halo while speeding (design §4.1)', () => {
-  // limit 35: T = 5, L + T = 40; one row per second on the row clock
-  async function drive(rows: LiveOver[]) {
-    const h = await renderHud({ rowTs: T, ...rows[0] });
-    for (let i = 1; i < rows.length; i += 1) await h.update({ rowTs: T + i * 1000, ...rows[i] });
-    return h;
-  }
+describe('the halo while speeding', () => {
+  // limit 35: the points line at 39 (T 4); the tint full red at 1.7 x 35 = 59.5; one row per second
+  const at = (mph: number, line = 39, limit = 35) => ({ speedMph: mph, speedingRatio: mph / limit, speedingOver: mph > line });
 
   test('within the limit: calm, flowing, the speed white', async () => {
     await renderHud({ rowTs: T });
@@ -269,42 +265,57 @@ describe('the halo while speeding (design §4.1)', () => {
     expect(screen.getByTestId('hud-halo', HIDDEN)).toBeTruthy();
   });
 
+  test('past the limit, under the points line: a faint tint from the limit, still flowing, no pulse; spoken "over the limit"', async () => {
+    await renderHud({ rowTs: T, ...at(37) });
+    expect(halo()).toMatchObject({ mode: 'speeding', flow: true, pulsePeriodMs: 0, warning: false });
+    expect(halo().colorSeverity).toBeCloseTo((37 / 35 - 1) / 0.7, 9);
+    expect(screen.getByLabelText(/over the limit/)).toBeTruthy();
+  });
+
   test.each([
-    ['minor', 38.1, 0.304375],
-    ['moderate', 45, 0.58],
-    ['severe', 52, 0.825],
-  ] as const)('%s at %s mph: speeding at about %s, pulsing, no flow', async (tier, speedMph, s) => {
-    await renderHud({ rowTs: T, speedMph, speedingTier: tier });
+    [40, (40 / 35 - 1) / 0.7],
+    [45, (45 / 35 - 1) / 0.7],
+    [52, (52 / 35 - 1) / 0.7],
+    [70, 1],
+  ])('over the points line at %s mph: tinted %s from the limit, pulsing, no flow', async (mph, s) => {
+    await renderHud({ rowTs: T, ...at(mph) });
     expect(halo().mode).toBe('speeding');
-    expect(halo().severity).toBeCloseTo(s, 4);
+    expect(halo().severity).toBeCloseTo(s, 9);
     expect(halo().flow).toBe(false);
-    expect(halo().pulsePeriodMs).toBeCloseTo(2200 - 1400 * s, 3);
+    expect(halo().pulsePeriodMs).toBeCloseTo(2200 - 1400 * s, 6);
   });
 
-  test('back under 38 mph: calm again on the 5th row', async () => {
-    await drive([{ speedMph: 47, speedingTier: 'moderate' }, ...Array(4).fill({ speedMph: 30, speedingTier: null })]);
-    expect(halo().mode).toBe('speeding');
-    await drive([{ speedMph: 47, speedingTier: 'moderate' }, ...Array(5).fill({ speedMph: 30, speedingTier: null })]);
+  test('the pulse stops on the first row back under the points line; the tint follows each row, calm at the limit', async () => {
+    const h = await renderHud({ rowTs: T, ...at(47) });
+    expect(halo().pulsePeriodMs).toBeGreaterThan(0);
+    await h.update({ rowTs: T + 1000, ...at(38) });
+    expect(halo()).toMatchObject({ mode: 'speeding', pulsePeriodMs: 0, flow: true });
+    expect(halo().colorSeverity).toBeCloseTo((38 / 35 - 1) / 0.7, 9);
+    await h.update({ rowTs: T + 2000, ...at(34) });
+    expect(halo().mode).toBe('calm');
+    expect(screen.queryByLabelText(/over the limit/)).toBeNull();
+  });
+
+  test('no usable limit (a class default, a ramp): no tint and no pulse, whatever the sign shows', async () => {
+    await renderHud({ rowTs: T, speedMph: 60, limitMph: 25, speedingRatio: null, speedingOver: false });
     expect(halo().mode).toBe('calm');
   });
 
-  test('no flicker at the line: 75.1 / 74.9 against L + T = 75 for 30 rows enters once and never returns to calm; the scrim ignores it', async () => {
-    const rows = Array.from({ length: 30 }, (_, i) =>
-      i % 2 === 0 ? { speedMph: 75.1, limitMph: 65, speedingTier: 'minor' as const } : { speedMph: 74.9, limitMph: 65, speedingTier: null }
-    );
-    const h = await renderHud({ rowTs: T - 1000, speedMph: 70, limitMph: 65 });
-    expect(halo().mode).toBe('calm');
-    const modes: string[] = [];
-    for (let i = 0; i < rows.length; i += 1) {
-      await h.update({ rowTs: T + i * 1000, ...rows[i] });
-      modes.push(halo().mode);
-      if (i === 12) await act(() => jest.advanceTimersByTime(DIM_AFTER_MS));
+  test('hovering at the line (39.1 / 38.9): the pulse comes and goes with the row, the colour barely moves; the scrim dims under a tint alone', async () => {
+    const h = await renderHud({ rowTs: T - 1000, ...at(30) });
+    const tints: number[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      await h.update({ rowTs: T + i * 1000, ...at(i % 2 === 0 ? 39.1 : 38.9) });
+      tints.push(halo().colorSeverity);
+      expect(halo().pulsePeriodMs > 0).toBe(i % 2 === 0);
+      expect(halo().warning).toBe(i % 2 === 0);
     }
-    expect(modes.every((m) => m === 'speeding')).toBe(true);
-    expect(halo().severity).toBeGreaterThanOrEqual(0.3);
-    expect(halo().severity).toBeLessThanOrEqual(0.31);
-    // dimmed after 10 s without a touch, whatever the halo does
+    expect(Math.max(...tints) - Math.min(...tints)).toBeLessThan(0.01);
+    await h.update({ rowTs: T + 20_000, ...at(37) });
+    await act(() => jest.advanceTimersByTime(DIM_AFTER_MS));
     expect(screen.getByTestId('hud-dim')).toBeTruthy();
+    expect(mockHalo.at(-1)!.dimmed).toBe(true);
+    expect(halo().warning).toBe(false);
   });
 
   test('a speed with three digits takes the three-digit size', async () => {
@@ -315,6 +326,56 @@ describe('the halo while speeding (design §4.1)', () => {
     const three = Number(screen.getByTestId('hud-speed-numeral').props.style.flat?.(9).find((x: { fontSize?: number }) => x?.fontSize)?.fontSize ?? 0);
     expect(three).toBeGreaterThan(0);
     expect(three).toBeLessThan(two);
+  });
+});
+
+describe('the shake when points come off', () => {
+  const ded = (key: string, points: number, atTs: number) => ({ key, points, at: atTs });
+
+  test('each new deduction shakes the ring once with its points; the same one again does not', async () => {
+    const h = await renderHud({ rowTs: T });
+    expect(halo().shake).toBeNull();
+    await h.update({ rowTs: T + 1000, lastDeduction: ded('hard_brake:1', 20, T + 1000) });
+    expect(halo().shake).toEqual({ key: `hard_brake:1@${T + 1000}`, points: 20 });
+    await h.update({ rowTs: T + 1000, lastDeduction: ded('hard_brake:1', 20, T + 1000) });
+    expect(halo().shake).toEqual({ key: `hard_brake:1@${T + 1000}`, points: 20 });
+    await act(() => jest.advanceTimersByTime(1500));
+    expect(halo().shake).toBeNull();
+    await h.update({ rowTs: T + 9000, lastDeduction: ded('speeding:2', 5, T + 9000) });
+    expect(halo().shake).toEqual({ key: `speeding:2@${T + 9000}`, points: 5 });
+  });
+
+  test('never for the one standing when the screen opens, nor for one 1.5 s old on the row clock (it came off in the background)', async () => {
+    const h = await renderHud({ rowTs: T, lastDeduction: ded('hard_brake:1', 20, T) });
+    expect(halo().shake).toBeNull();
+    await h.update({ rowTs: T + 6000, lastDeduction: ded('phone_pickup:2', 32, T + 1000) });
+    expect(halo().shake).toBeNull();
+  });
+
+  test('none under Reduce Motion', async () => {
+    mockStill = true;
+    const h = await renderHud({ rowTs: T });
+    await h.update({ rowTs: T + 1000, lastDeduction: ded('hard_brake:1', 20, T + 1000) });
+    expect(halo().shake).toBeNull();
+  });
+});
+
+describe('the compass', () => {
+  test('the halo is handed the GPS course; none before the first', async () => {
+    const h = await renderHud({ rowTs: T });
+    expect(mockHalo.at(-1)!.heading).toBeNull();
+    expect(screen.getByTestId('hud-compass', HIDDEN)).toBeTruthy();
+    await h.update({ rowTs: T + 1000, courseDeg: 270 });
+    expect(mockHalo.at(-1)!.heading).toBe(270);
+  });
+
+  test('none in a compact window (no ring)', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the hook behind react-native's export
+    const dims = require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
+    jest.spyOn(dims, 'default').mockReturnValue({ width: 400, height: 300, scale: 2, fontScale: 1 });
+    await renderHud({ courseDeg: 90 });
+    expect(screen.queryByTestId('hud-compass', HIDDEN)).toBeNull();
+    jest.restoreAllMocks();
   });
 });
 
@@ -461,7 +522,14 @@ describe('event alerts', () => {
 
   test('a speeding alert shows its words but never bursts', async () => {
     const h = await renderHud({ rowTs: T });
-    await h.update({ rowTs: T + 1000, speedingTier: 'minor', speedMph: 41, lastAlert: { type: 'speeding', tier: 'minor', at: T + 1000 } });
+    await h.update({
+      rowTs: T + 1000,
+      speedingTier: 'minor',
+      speedMph: 41,
+      speedingRatio: 41 / 35,
+      speedingOver: true,
+      lastAlert: { type: 'speeding', tier: 'minor', at: T + 1000 },
+    });
     expect(screen.getByTestId('hud-alert')).toBeTruthy();
     expect(halo().mode).toBe('speeding');
     expect(halo().burst).toBeNull();
@@ -1122,16 +1190,16 @@ describe('layout, accessibility and Reduce Motion', () => {
 
   test('Reduce Motion: no pulse, no flow, colours unchanged, a burst as colour only', async () => {
     mockStill = true;
-    const h = await renderHud({ rowTs: T, speedMph: 52, speedingTier: 'severe' });
+    const h = await renderHud({ rowTs: T, speedMph: 52, speedingTier: 'severe', speedingRatio: 52 / 35, speedingOver: true });
     expect(halo()).toMatchObject({ mode: 'speeding', pulsePeriodMs: 0, flow: false });
-    expect(halo().colorSeverity).toBeCloseTo(0.825, 4);
+    expect(halo().colorSeverity).toBeCloseTo((52 / 35 - 1) / 0.7, 9);
     await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
     expect(halo()).toMatchObject({ mode: 'burst', colorSeverity: 1, burst: null });
     expect(screen.queryByTestId('hud-halo-flow', HIDDEN)).toBeNull();
   });
 
   test('not recording (saving): calm whatever the signals', async () => {
-    await renderHud({ status: 'finalizing', rowTs: T, speedingTier: 'severe', speedMph: 90, phoneUseSince: T - 5000 });
+    await renderHud({ status: 'finalizing', rowTs: T, speedingTier: 'severe', speedMph: 90, speedingRatio: 2, speedingOver: true, phoneUseSince: T - 5000 });
     expect(halo().mode).toBe('calm');
   });
 });
@@ -1157,13 +1225,85 @@ describe("the driving screen wears the hour's sky, still", () => {
       </ThemeProvider>
     );
     await act(async () => {});
-    // the gradient holds its colours as processed ARGB numbers
+    // the gradient holds its colours as processed ARGB numbers; with no cached position the sky's
+    // own scheme says day or night (dark at dusk)
     const argb = (hex: string) => 0xff000000 + parseInt(hex.slice(1), 16);
-    expect(screen.getByTestId('hud-sky', HIDDEN).props.colors).toEqual(skyBundle(mood).sky.hud.day.stops.map(argb));
+    const bundle = skyBundle(mood);
+    expect(screen.getByTestId('hud-sky', HIDDEN).props.colors).toEqual(bundle.sky.hud[bundle.scheme === 'dark' ? 'night' : 'day'].stops.map(argb));
     expect(screen.queryByTestId('sky-backdrop', HIDDEN)).toBeNull();
     expect(screen.queryByTestId('sky-ambient', HIDDEN)).toBeNull();
-    expect(screen.getByTestId('hud-speed-numeral', HIDDEN).props.style).toEqual(bare);
+    // the speed in the HUD palette of that set, as without a sky (the day set: exactly as bare)
+    const set = bundle.scheme === 'dark' ? 'night' : 'day';
+    expect(JSON.stringify(screen.getByTestId('hud-speed-numeral', HIDDEN).props.style)).toContain(HUD[set].haloInk);
+    expect(mockHalo.at(-1)!.palette.haloInk).toBe(HUD[set].haloInk);
+    expect(set === 'night' || JSON.stringify(screen.getByTestId('hud-speed-numeral', HIDDEN).props.style) === JSON.stringify(bare)).toBe(true);
     expect(halo().mode).toBe('calm');
+  });
+
+  test('Adaptive: night by the sun at the last known position, over the sky\'s own scheme', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked module
+    const Location = require('expo-location') as { getLastKnownPositionAsync: jest.Mock };
+    // 2026-09-21 14:13 UTC: night in Tokyo (23:13), morning in Los Angeles (07:13)
+    const mood: SkyMood = { phase: 'day', glow: 0, weather: { kind: 'clear', intensity: 'moderate' } };
+    const argb = (hex: string) => 0xff000000 + parseInt(hex.slice(1), 16);
+    Location.getLastKnownPositionAsync.mockResolvedValueOnce({ coords: { latitude: 35.68, longitude: 139.69 } });
+    mockLive = live();
+    const tokyo = await render(
+      <ThemeProvider mood={mood}>
+        <HudScreen />
+      </ThemeProvider>
+    );
+    await act(async () => {});
+    expect(screen.getByTestId('hud-sky', HIDDEN).props.colors).toEqual(skyBundle(mood).sky.hud.night.stops.map(argb));
+    expect(mockHalo.at(-1)!.palette.haloInk).toBe(HUD.night.haloInk);
+    await tokyo.unmount();
+    Location.getLastKnownPositionAsync.mockResolvedValueOnce({ coords: { latitude: 34.05, longitude: -118.24 } });
+    await render(
+      <ThemeProvider mood={{ ...mood, phase: 'night' }}>
+        <HudScreen />
+      </ThemeProvider>
+    );
+    await act(async () => {});
+    expect(screen.getByTestId('hud-sky', HIDDEN).props.colors).toEqual(skyBundle({ ...mood, phase: 'night' }).sky.hud.day.stops.map(argb));
+  });
+
+  test.each([
+    ['Dark', 'dark', 'night'],
+    ['Light', 'light', 'day'],
+  ] as const)('a static %s theme decides day or night itself, whatever the sun', async (_name, scheme, set) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked module
+    const Location = require('expo-location') as { getLastKnownPositionAsync: jest.Mock };
+    // the sun would say the opposite (morning in Los Angeles, night in Tokyo), and is never asked
+    Location.getLastKnownPositionAsync.mockResolvedValue({ coords: { latitude: scheme === 'dark' ? 34.05 : 35.68, longitude: scheme === 'dark' ? -118.24 : 139.69 } });
+    let theme: Theme | null = null;
+    const Grab = () => {
+      theme = useTheme();
+      return null;
+    };
+    mockLive = live();
+    await render(
+      <ThemeProvider scheme={scheme}>
+        <Grab />
+        <HudScreen />
+      </ThemeProvider>
+    );
+    await act(async () => {});
+    const argb = (hex: string) => 0xff000000 + parseInt(hex.slice(1), 16);
+    expect(theme!.hudNight).toBe(scheme === 'dark');
+    expect(screen.getByTestId('hud-sky', HIDDEN).props.colors).toEqual(theme!.sky.hud[set].stops.map(argb));
+    expect(mockHalo.at(-1)!.palette.haloInk).toBe(HUD[set].haloInk);
+    expect(Location.getLastKnownPositionAsync).not.toHaveBeenCalled();
+    Location.getLastKnownPositionAsync.mockImplementation(async () => null);
+  });
+
+  test('the night rule: a static theme first, then the sun, then the sky scheme; outside a theme with no position, day', () => {
+    expect(hudNightOf(true, false, 'light')).toBe(true);
+    expect(hudNightOf(false, true, 'dark')).toBe(false);
+    expect(hudNightOf(null, true, 'light')).toBe(true);
+    expect(hudNightOf(null, false, 'dark')).toBe(false);
+    expect(hudNightOf(null, null, 'dark')).toBe(true);
+    expect(hudNightOf(null, null, 'light')).toBe(false);
+    expect(hudNightOf(undefined, null, null)).toBe(false);
   });
 
   test('outside a theme it stays on true black', async () => {

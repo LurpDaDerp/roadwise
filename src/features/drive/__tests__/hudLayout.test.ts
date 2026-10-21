@@ -1,6 +1,6 @@
 // The driving screen's layout (drive-screen design §3, §5.12): worked phones, End always inside the
 // window, nothing overlapping, the numerals large enough.
-import { DIGIT_ADVANCE_EM, DIGIT_HEIGHT_EM, haloGeometry, numeralLineHeight, SPEED_UNIT_GAP_PT, unitLineHeight, unitTop } from '@/ui/drive';
+import { compassGeometry, DIGIT_ADVANCE_EM, DIGIT_HEIGHT_EM, haloGeometry, numeralLineHeight, SPEED_UNIT_GAP_PT, unitLineHeight, unitTop } from '@/ui/drive';
 
 import { HUD_COMPACT_NAV_H_PT, HUD_NAV_H_PT, HUD_NAV_W_PT, hudLayout, type HudLayout, type HudLayoutInput, type Rect } from '../hudLayout';
 
@@ -9,14 +9,13 @@ const L = (o: Partial<HudLayoutInput> & { width: number; height: number }): HudL
 
 const inside = (r: Rect, w: number, h: number) => r.x >= -1e-9 && r.y >= -1e-9 && r.x + r.w <= w + 1e-9 && r.y + r.h <= h + 1e-9;
 const overlap = (a: Rect, b: Rect) => a.x < b.x + b.w - 1e-9 && b.x < a.x + a.w - 1e-9 && a.y < b.y + b.h - 1e-9 && b.y < a.y + a.h - 1e-9;
-/** A rect meets the halo's lit ring (its outer edge at rest). */
+/** A rect meets the halo's compass (its outer edge, around the lit ring). */
 function hitsCircle(r: Rect, halo: Rect): boolean {
   const cx = halo.x + halo.w / 2;
   const cy = halo.y + halo.h / 2;
   const nx = Math.max(r.x, Math.min(cx, r.x + r.w));
   const ny = Math.max(r.y, Math.min(cy, r.y + r.h));
-  const g = haloGeometry(halo.w);
-  return (nx - cx) ** 2 + (ny - cy) ** 2 < (g.r + g.W / 2) ** 2 - 1e-6;
+  return (nx - cx) ** 2 + (ny - cy) ** 2 < compassGeometry(halo.w).outer ** 2 - 1e-6;
 }
 
 describe('worked phones (§3.1, §3.2)', () => {
@@ -35,9 +34,11 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.sign.x).toBe(l.row.x);
     expect(l.nav.x + l.nav.w).toBe(l.row.x + l.row.w);
     expect(l.band.y).toBeGreaterThanOrEqual(l.row.y + l.row.h);
-    // the halo centred on the screen; its lit ring clears the band
-    expect(l.halo.y + l.halo.h / 2).toBe(852 / 2);
+    // the halo as near the centre as the shortest top row allows (its compass clears the band by 12 pt)
+    expect(l.halo.y + l.halo.h / 2).toBe(442.5);
     expect(hitsCircle(l.band, l.halo)).toBe(false);
+    expect(l.halo.y + l.halo.h / 2 - compassGeometry(l.halo.w).outer - (l.band.y + l.band.h)).toBe(12);
+    expect(l.row.h).toBe(112);
     expect(l.end).toEqual({ x: 16, y: 852 - 34 - 16 - 76, w: 361, h: 76 });
     expect(l.end.y).toBeGreaterThanOrEqual(l.halo.y + l.halo.h);
   });
@@ -55,7 +56,8 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(L({ width: 393, height: 852, insets: { ...ZERO, top: 59, bottom: 34 } }).halo.w).toBe(361);
     const max = L({ width: 430, height: 932, insets: { ...ZERO, top: 59, bottom: 34 } });
     expect(max.halo.w).toBe(398);
-    expect(max.row.h).toBe(144);
+    // the row takes what the halo, centred, leaves above the band (its compass clear of it)
+    expect(max.row.h).toBe(117);
     expect(max.numeralPt2).toBe(168);
   });
 

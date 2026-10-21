@@ -5,10 +5,14 @@
 //
 // - Glow: four static radial gradients (calm, yellow, orange, red), cross-faded by view opacity.
 // - Ring: one stroked circle whose colour follows the severity (Reanimated's OKLab interpolation).
-// - Flow (calm only): a light-and-shade gradient over the ring turning once every 18 s.
+// - Flow (no warning showing): a light-and-shade gradient over the ring turning once every 18 s.
 // - Pulse: opacity and scale from the pulse phase; a burst is its own value, combined in one style.
+// - Shake: points coming off move the ring and its glow sideways a few times, fading out, more for
+//   more points (`shakeAmplitudePt`), once per key; the compass and the speed never move with it.
+// - Compass (`HaloCompass`): outside the pulse view, so it never grows, fades or shakes.
 // - The speed is a sibling of the ring views: the ring is hidden from screen readers, the speed not.
-// - Reduce Motion (live): no frame clock, no flow, no pulse; colours still change (250 ms fades).
+// - Reduce Motion (live): no frame clock, no flow, no pulse, no shake; colours still change (250 ms
+//   fades) and the compass snaps to each course.
 import { useEffect, useId, useMemo, useRef, type ReactNode } from 'react';
 import { StyleSheet, View, type TextStyle } from 'react-native';
 import Animated, {
@@ -25,7 +29,8 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Circle, Defs, LinearGradient, RadialGradient, Stop } from 'react-native-svg';
 
-import { glowStops, glowWeight, haloGeometry, numeralRamp, ringRamp, type HaloVisual } from './halo';
+import { glowStops, glowWeight, haloGeometry, numeralRamp, ringRamp, shakeAmplitudePt, shakeOffsets, type HaloVisual } from './halo';
+import { HaloCompass } from './HaloCompass';
 import { HALO_TIMINGS } from './haloMotion';
 import { HALO_BURST, HALO_DIM_OPACITY, HALO_FLOW_MS, HALO_RAMP_STOPS, type HudPalette } from './hudTokens';
 
@@ -42,14 +47,16 @@ export type HaloProps = {
   /** false: bare numerals (a window too small for the ring) */
   ring: boolean;
   palette: HudPalette;
-  /** the screen is dimmed (the halo shows at reduced strength while calm) */
+  /** the screen is dimmed (the halo shows at reduced strength unless a warning shows) */
   dimmed: boolean;
   reduceMotion: boolean;
+  /** the car's GPS course for the compass (degrees clockwise from north), null before the first */
+  heading?: number | null;
   /** the speed, given the animated colour style for its numerals */
   numerals: (numeralStyle: AnimatedStyle<TextStyle>) => ReactNode;
 };
 
-export function Halo({ visual, size, height, ring, palette, dimmed, reduceMotion, numerals }: HaloProps) {
+export function Halo({ visual, size, height, ring, palette, dimmed, reduceMotion, heading = null, numerals }: HaloProps) {
   const g = useMemo(() => haloGeometry(size), [size]);
   const stops = useMemo(() => glowStops(g), [g]);
   const ringColors = useMemo(() => [...ringRamp(palette)], [palette]);
@@ -64,6 +71,7 @@ export function Halo({ visual, size, height, ring, palette, dimmed, reduceMotion
   const flowOn = useSharedValue(visual.flow ? 1 : 0);
   const layer = useSharedValue(1);
   const burstP = useSharedValue(0);
+  const shakeX = useSharedValue(0);
   const pulsePhase = useSharedValue(0);
   const flowPhase = useSharedValue(0);
 
@@ -114,17 +122,30 @@ export function Halo({ visual, size, height, ring, palette, dimmed, reduceMotion
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [burstKey]);
 
-  // Dimmed and calm: reduced strength, still flowing. Any warning: full strength.
-  const calm = visual.mode === 'calm';
+  // Points coming off: a few sideways swings, fading out, once per key (never under Reduce Motion:
+  // `visual.shake` is then null).
+  const shakeKey = visual.shake?.key ?? null;
+  const shakePoints = visual.shake?.points ?? 0;
   useEffect(() => {
-    layer.set(withTiming(dimmed && calm ? HALO_DIM_OPACITY : 1, HALO_TIMINGS.layer));
-  }, [dimmed, calm, layer]);
+    if (shakeKey === null) return;
+    const a = shakeAmplitudePt(shakePoints, size);
+    shakeX.set(withSequence(...shakeOffsets(a, shakePoints).map((x) => withTiming(x, HALO_TIMINGS.shakeSwing))));
+    // keyed on the shake alone: a re-render of the same one never replays it
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shakeKey]);
+
+  // Dimmed with no warning showing: reduced strength, still flowing (a tint under the points line
+  // included). Any warning: full strength.
+  const quiet = !visual.warning;
+  useEffect(() => {
+    layer.set(withTiming(dimmed && quiet ? HALO_DIM_OPACITY : 1, HALO_TIMINGS.layer));
+  }, [dimmed, quiet, layer]);
 
   useEffect(
     () => () => {
-      for (const v of [colorS, depth, amp, flowOn, layer, burstP]) cancelAnimation(v);
+      for (const v of [colorS, depth, amp, flowOn, layer, burstP, shakeX]) cancelAnimation(v);
     },
-    [colorS, depth, amp, flowOn, layer, burstP]
+    [colorS, depth, amp, flowOn, layer, burstP, shakeX]
   );
 
   const layerStyle = useAnimatedStyle(() => ({ opacity: layer.get() }));
@@ -133,7 +154,7 @@ export function Halo({ visual, size, height, ring, palette, dimmed, reduceMotion
     const b = burstP.get();
     return {
       opacity: Math.min(1 - depth.get() * p, 1 - HALO_BURST.depth * b),
-      transform: [{ scale: 1 + Math.max(amp.get() * p, HALO_BURST.scale * b) }],
+      transform: [{ translateX: shakeX.get() }, { scale: 1 + Math.max(amp.get() * p, HALO_BURST.scale * b) }],
     };
   });
   const flowStyle = useAnimatedStyle(() => ({ opacity: flowOn.get(), transform: [{ rotate: `${flowPhase.get() * 360}deg` }] }));
@@ -194,6 +215,7 @@ export function Halo({ visual, size, height, ring, palette, dimmed, reduceMotion
               </Animated.View>
             )}
           </Animated.View>
+          <HaloCompass size={size} heading={heading} palette={palette} reduceMotion={reduceMotion} />
         </View>
       ) : null}
       <View style={[StyleSheet.absoluteFill, styles.centre]} pointerEvents="none">

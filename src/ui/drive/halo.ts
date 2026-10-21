@@ -3,21 +3,21 @@
 // here animates; `Halo.tsx` feeds the visual into shared values.
 //
 // Severity is one number `s` in [0, 1], never rounded:
-// - Speeding: rising through the engine tier's band with the mph over the limit plus tolerance
-//   (minor 0.30–0.475 over 0–4 mph, moderate 0.475–0.65 over 4–9, severe 0.65–1 over 9–19), held
-//   through a speed hovering at the line (`nextSpeedingHold`).
+// - Speeding: a tint from the row speed over the posted limit (`speedingTint`: 0 at the limit, 1 at
+//   1.7 × it), following each row; it pulses only while the row is over the points line (L + T).
 // - Phone use: 0.65 once the pickup counts, rising to 1 at 30 s of use, until the episode closes.
 // - DashPal: a critical 0.80 + 0.07 per level + 0.02 per second (≤ 1); a warning, driver-not-visible
 //   among them, 0.50 + 0.03 per second (≤ 0.80); a continuous advisory 0.30 + 0.01 per second (≤ 0.45,
 //   below a warning's start).
 // The strongest wins. Colour: calm blue-white → yellow (0.30) → orange (0.55) → red (1), in OKLab.
-// Calm flows (light moving round the ring) and never pulses; any pulse means a warning, faster the
-// higher `s`. Sudden events burst: a few quick pulses (2.5 a second), then back.
-import type { EventType, Tier } from '@scoring';
-import { SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, speedTolerance } from '@scoring';
+// A tint under the points line still flows (light moving round the ring) and never pulses; any pulse
+// means a warning, faster the higher `s`. Sudden events burst: a few quick pulses (2.5 a second),
+// then back. Points coming off shake the ring sideways, more for more points.
+// Around the ring, outside everything that pulses, a compass turns with the car (`compassGeometry`).
+import type { EventType } from '@scoring';
 import { interpolateColor } from 'react-native-reanimated';
 
-import { HALO_BURST, HALO_MAX_SCALE, HALO_RAMP_STOPS, HALO_SPEED_HOLD_MAX_ROWS, type HudPalette } from './hudTokens';
+import { HALO_BURST, HALO_MAX_SCALE, HALO_RAMP_STOPS, type HudPalette } from './hudTokens';
 
 // ——— colour ———
 
@@ -86,66 +86,17 @@ export function glowWeight(layer: number, s: number): number {
 
 // ——— speeding ———
 
-/** Each tier's severity band, and the mph over L + T it spans (the engine's tier edges: 4 and 9). */
-const BAND: Readonly<Record<Tier, readonly [lo: number, hi: number, fromMph: number, toMph: number]>> = {
-  minor: [0.3, 0.475, 0, 4],
-  moderate: [0.475, 0.65, 4, 9],
-  severe: [0.65, 1, 9, 19],
-};
+/** The tint is full red at this many times the posted limit (1.7 ×). */
+export const HALO_TINT_FULL_RATIO = 1.7;
 
 /**
- * The speeding severity of a row the engine put in `tier`: linear through the tier's band with the
- * mph over L + T, kept in it (so a tenths-rounded speed across a tier edge never contradicts the
- * engine); the band's low end with the speed or limit unknown.
+ * The halo's speeding tint from the row speed over the posted limit speeding is judged on
+ * (`speedingRatio`): 0 at or under the limit, rising straight to 1 at 1.7 × it, so just over the
+ * limit is all but the calm colour. 0 with no ratio (no usable limit or speed).
  */
-export function speedingSeverity(tier: Tier, speedMph: number | null, limitMph: number | null): number {
-  const [lo, hi, from, to] = BAND[tier];
-  if (speedMph === null || limitMph === null || !Number.isFinite(speedMph) || !Number.isFinite(limitMph)) return lo;
-  const over = speedMph - (limitMph + speedTolerance(limitMph));
-  return Math.min(hi, Math.max(lo, lo + ((hi - lo) * (over - from)) / (to - from)));
-}
-
-/** The halo's speeding display hold, advanced once per new row. */
-export interface SpeedingHold {
-  s: number;
-  /** consecutive rows without a tier and under L + T − 2 (or with the speed or limit unknown) */
-  quietRows: number;
-  /** rows since the engine last reported a tier */
-  rowsSinceTier: number;
-  rowTs: number | null;
-}
-
-export const SPEEDING_HOLD_NONE: SpeedingHold = Object.freeze({ s: 0, quietRows: 0, rowsSinceTier: 0, rowTs: null });
-
-/** A row gap longer than this (back from the background) restarts the hold from the new row alone. */
-export const HALO_ROW_GAP_MS = 3000;
-
-export interface HoldRow {
-  recording: boolean;
-  rowTs: number | null;
-  tier: Tier | null;
-  speedMph: number | null;
-  limitMph: number | null;
-}
-
-/**
- * The display hold, so a speed hovering at the line never flickers the halo: it enters on the first
- * row the engine calls over, decays 0.10 a row (never below 0.30) on a row without a tier, and ends
- * by the engine's own rule (5 rows under L + T − 2) or 10 rows after the last tier. Pure; a repeated
- * row changes nothing.
- */
-export function nextSpeedingHold(prev: SpeedingHold, row: HoldRow): SpeedingHold {
-  if (!row.recording || row.rowTs === null) return SPEEDING_HOLD_NONE;
-  if (prev.rowTs !== null && row.rowTs === prev.rowTs) return prev;
-  const fresh = prev.rowTs === null || row.rowTs < prev.rowTs || row.rowTs - prev.rowTs > HALO_ROW_GAP_MS;
-  const base = fresh ? SPEEDING_HOLD_NONE : prev;
-  if (row.tier !== null) return { s: speedingSeverity(row.tier, row.speedMph, row.limitMph), quietRows: 0, rowsSinceTier: 0, rowTs: row.rowTs };
-  if (base.s <= 0) return { ...SPEEDING_HOLD_NONE, rowTs: row.rowTs };
-  const near = row.speedMph !== null && row.limitMph !== null && row.speedMph >= row.limitMph + speedTolerance(row.limitMph) - SPEEDING_END_BUFFER_MPH;
-  const quietRows = near ? 0 : base.quietRows + 1;
-  const rowsSinceTier = base.rowsSinceTier + 1;
-  if (quietRows >= SPEEDING_END_S || rowsSinceTier >= HALO_SPEED_HOLD_MAX_ROWS) return { ...SPEEDING_HOLD_NONE, rowTs: row.rowTs };
-  return { s: Math.max(0.3, base.s - 0.1), quietRows, rowsSinceTier, rowTs: row.rowTs };
+export function speedingTint(ratio: number | null): number {
+  if (ratio === null || !Number.isFinite(ratio)) return 0;
+  return Math.min(1, Math.max(0, (ratio - 1) / (HALO_TINT_FULL_RATIO - 1)));
 }
 
 // ——— distraction ———
@@ -209,11 +160,21 @@ export function burstFor(src: BurstSource): { key: string; severity: number; pul
 
 // ——— the visual ———
 
+/** Points just came off (`DriveLive.lastDeduction`, fresh on the row clock): the ring shakes once per key. */
+export interface HaloDeduction {
+  key: string;
+  points: number;
+}
+
 export interface HaloInput {
   reduceMotion: boolean;
   status: 'idle' | 'recording' | 'finalizing';
-  /** the held speeding severity (`nextSpeedingHold`), 0 = none */
+  /** the speeding tint (`speedingTint`), 0 = none */
   speeding: number;
+  /** the row is over the points line (L + T): the only time speeding pulses */
+  speedingOver: boolean;
+  /** points that just came off, or null */
+  deduction: HaloDeduction | null;
   /** the engine's confirmed phone episode's first use row (row clock) */
   phoneUseSince: number | null;
   /** the engine's newest row (row clock) */
@@ -236,10 +197,17 @@ export interface HaloVisual {
   pulsePeriodMs: number;
   pulseDepth: number;
   pulseScale: number;
-  /** light moving round the ring (calm only) */
+  /** light moving round the ring (no warning showing) */
   flow: boolean;
   /** null under Reduce Motion (the burst is then its colour only) */
   burst: HaloBurst | null;
+  /**
+   * A warning shows (over the points line, phone use, a DashPal alert, a burst): the dimmed screen's
+   * halo comes back to full strength. A tint under the line alone is not one.
+   */
+  warning: boolean;
+  /** the ring's sideways shake for points coming off, once per key; null under Reduce Motion */
+  shake: HaloDeduction | null;
 }
 
 export const HALO_CALM: HaloVisual = Object.freeze({
@@ -251,22 +219,36 @@ export const HALO_CALM: HaloVisual = Object.freeze({
   pulseScale: 0,
   flow: true,
   burst: null,
+  warning: false,
+  shake: null,
 });
 
 /** The sustained pulse at severity `s` > 0: about every 1.8 s at 0.30 down to every 0.8 s at 1. */
 export const pulsePeriodMs = (s: number): number => 2200 - 1400 * s;
 
-/** The drive's signals → the halo. Calm unless the drive is recording. */
+/**
+ * The drive's signals → the halo. Calm unless the drive is recording. The speeding tint colours the
+ * ring from the limit up; it pulses only while the row is over the points line, and phone use and
+ * DashPal alerts pulse while they last.
+ */
 export function haloVisual(i: HaloInput): HaloVisual {
   if (i.status !== 'recording') return i.reduceMotion ? { ...HALO_CALM, flow: false } : HALO_CALM;
-  const sSpeed = Math.min(1, Math.max(0, i.speeding));
+  const sSpeed = Number.isFinite(i.speeding) ? Math.min(1, Math.max(0, i.speeding)) : 0;
+  const over = i.speedingOver;
   const sPhone = phoneSeverity(i.phoneUseSince, i.rowTs);
   const distraction = Math.max(sPhone, dashpalSeverity(i.held, i.now));
   const s = Math.max(sSpeed, distraction);
   const bursting = i.burst !== null && i.now < i.burst.until;
-  const mode: HaloMode = bursting ? 'burst' : distraction > 0 && distraction >= sSpeed ? 'distraction' : sSpeed > 0 ? 'speeding' : 'calm';
+  const mode: HaloMode = bursting
+    ? 'burst'
+    : distraction > 0 && distraction >= sSpeed
+      ? 'distraction'
+      : sSpeed > 0 || over
+        ? 'speeding'
+        : 'calm';
   const colorSeverity = bursting ? Math.max(s, i.burst!.severity) : s;
-  const pulsing = s > 0 && !i.reduceMotion;
+  const warning = bursting || distraction > 0 || over;
+  const pulsing = (over || distraction > 0) && !i.reduceMotion;
   return {
     mode,
     severity: s,
@@ -274,9 +256,93 @@ export function haloVisual(i: HaloInput): HaloVisual {
     pulsePeriodMs: pulsing ? pulsePeriodMs(s) : 0,
     pulseDepth: pulsing ? 0.3 + 0.4 * s : 0,
     pulseScale: pulsing ? 0.015 + 0.02 * s : 0,
-    flow: s === 0 && !bursting && !i.reduceMotion,
+    flow: !warning && !i.reduceMotion,
     burst: bursting && !i.reduceMotion ? i.burst : null,
+    warning,
+    shake: i.reduceMotion || i.deduction === null ? null : i.deduction,
   };
+}
+
+// ——— the shake ———
+
+/**
+ * How far (pt) the ring shakes for `points` coming off in a box of side `B`: 2 + 2.5 · log2(1 +
+ * points / 8) (4.5 for 8 points, 6.5 for 20, 10.6 for 80), never past what keeps the ring inside
+ * the compass (`compassGeometry(B).shakeMax`).
+ */
+export function shakeAmplitudePt(points: number, B: number): number {
+  const p = Number.isFinite(points) ? Math.max(1, points) : 1;
+  return Math.min(compassGeometry(B).shakeMax, 2 + 2.5 * Math.log2(1 + p / 8));
+}
+
+/** The shake's swings, as offsets (pt): alternating sides, fading out, then back to 0. Two swings more from 40 points. */
+export function shakeOffsets(amplitude: number, points: number): number[] {
+  const n = points >= 40 ? 6 : 4;
+  const out: number[] = [];
+  for (let k = 0; k < n; k += 1) out.push((k % 2 === 0 ? 1 : -1) * amplitude * (1 - k / n));
+  out.push(0);
+  return out;
+}
+
+// ——— the compass ———
+
+/**
+ * The compass card's next rotation (degrees, unwrapped): `target` reached from `prev` the short way
+ * round, so 350° → 10° turns 20°, never 340° back.
+ */
+export function nextCompassAngle(prev: number, target: number): number {
+  const d = ((((target - prev) % 360) + 540) % 360) - 180;
+  return prev + d;
+}
+
+/** The compass's letters, their bearings (clockwise from north). */
+export const COMPASS_LETTERS = [
+  { label: 'N', bearing: 0 },
+  { label: 'E', bearing: 90 },
+  { label: 'S', bearing: 180 },
+  { label: 'W', bearing: 270 },
+] as const;
+/** A tick every this many degrees. */
+export const COMPASS_TICK_DEG = 15;
+/** Half a letter's extent from its centre, of its type size (a wide W). */
+const COMPASS_LETTER_HALF_EM = 0.42;
+/** Between the ticks and the letters. */
+const COMPASS_GAP_PT = 2;
+
+export interface CompassGeometry {
+  /** the outer edge: where the ticks end and the fixed mark sits */
+  outer: number;
+  /** a cardinal tick's length, and the others' */
+  tick: number;
+  minorTick: number;
+  /** the letters' type size and the radius their centres sit on */
+  letterPt: number;
+  letterR: number;
+  /** the innermost reach of anything the compass draws */
+  inner: number;
+  /** the fixed mark at the top: a triangle pointing in */
+  markH: number;
+  markW: number;
+  /** the farthest the ring may shake sideways and stay clear of the compass at its largest pulse */
+  shakeMax: number;
+}
+
+/**
+ * The compass in a halo box of side `B`: ticks just inside the box's edge, the letters inside them,
+ * all of it outside the ring at its largest pulse with room for the shake. It never scales.
+ */
+export function compassGeometry(B: number): CompassGeometry {
+  const g = haloGeometry(B);
+  const outer = B / 2 - 1;
+  const tick = Math.min(7, Math.max(4, Math.round(0.016 * B)));
+  const minorTick = Math.max(2, Math.round(0.55 * tick));
+  const letterPt = Math.min(14, Math.max(10, Math.round(0.034 * B)));
+  const half = COMPASS_LETTER_HALF_EM * letterPt;
+  const letterR = outer - tick - COMPASS_GAP_PT - half;
+  const inner = letterR - half;
+  const ringMax = (g.r + g.W / 2) * HALO_MAX_SCALE;
+  const shakeMax = Math.max(0, Math.floor((inner - ringMax - 1) * 10) / 10);
+  return { outer, tick, minorTick, letterPt, letterR, inner, markH: tick + 1, markW: Math.round(1.4 * (tick + 1)), shakeMax };
 }
 
 // ——— geometry ———

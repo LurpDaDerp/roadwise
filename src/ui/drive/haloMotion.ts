@@ -20,4 +20,8 @@ export const HALO_TIMINGS = {
   layer: { duration: 400, easing: Easing.inOut(Easing.quad), reduceMotion: ReduceMotion.Never } satisfies WithTimingConfig,
   /** each half of a burst pulse */
   burstHalf: { duration: HALO_BURST.periodMs / 2, easing: Easing.inOut(Easing.sin), reduceMotion: ReduceMotion.Never } satisfies WithTimingConfig,
+  /** each swing of the shake when points come off (the halo never shakes under Reduce Motion) */
+  shakeSwing: { duration: 70, easing: Easing.inOut(Easing.sin), reduceMotion: ReduceMotion.Never } satisfies WithTimingConfig,
+  /** the compass card turning to the next course (it snaps under Reduce Motion) */
+  compass: { duration: 700, easing: Easing.inOut(Easing.quad), reduceMotion: ReduceMotion.Never } satisfies WithTimingConfig,
 } as const;

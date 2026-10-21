@@ -3,8 +3,10 @@
 // Reduce Motion drops every movement.
 import { act, render, screen, within } from '@testing-library/react-native';
 import { StyleSheet, View } from 'react-native';
+import { getAnimatedStyle } from 'react-native-reanimated';
 
 import { HALO_CALM, type HaloVisual } from '../halo';
+import { COMPASS_DIM_LETTERS } from '../HaloCompass';
 import { HALO_TIMINGS } from '../haloMotion';
 import { Halo } from '../HaloRing';
 import { HALO_DIM_OPACITY, HUD } from '../hudTokens';
@@ -58,10 +60,22 @@ const speeding = (s: number): HaloVisual => ({
   pulseScale: 0.015 + 0.02 * s,
   flow: false,
   burst: null,
+  warning: true,
+  shake: null,
 });
-const burst = (key: string): HaloVisual => ({ ...HALO_CALM, mode: 'burst', colorSeverity: 1, flow: false, burst: { key, severity: 1, pulses: 3, until: Date.now() + 1500 } });
+const burst = (key: string): HaloVisual => ({
+  ...HALO_CALM,
+  mode: 'burst',
+  colorSeverity: 1,
+  flow: false,
+  warning: true,
+  burst: { key, severity: 1, pulses: 3, until: Date.now() + 1500 },
+});
+/** Tinted under the points line: the colour only, still flowing, no warning. */
+const tint = (s: number): HaloVisual => ({ ...HALO_CALM, mode: 'speeding', severity: s, colorSeverity: s });
+const shaking = (key: string, points: number): HaloVisual => ({ ...HALO_CALM, shake: { key, points } });
 
-function view(visual: HaloVisual, o: { dimmed?: boolean; reduceMotion?: boolean; ring?: boolean; height?: number } = {}) {
+function view(visual: HaloVisual, o: { dimmed?: boolean; reduceMotion?: boolean; ring?: boolean; height?: number; heading?: number | null } = {}) {
   return (
     <Halo
       visual={visual}
@@ -71,6 +85,7 @@ function view(visual: HaloVisual, o: { dimmed?: boolean; reduceMotion?: boolean;
       palette={p}
       dimmed={o.dimmed ?? false}
       reduceMotion={o.reduceMotion ?? false}
+      heading={o.heading === undefined ? null : o.heading}
       numerals={(style) => <SpeedReadout speed={62} color={p.haloInk} unitColor={p.haloInkMuted} size={157} numeralStyle={style} speeding />}
     />
   );
@@ -142,6 +157,90 @@ test('dimmed and calm: reduced strength, still flowing; a warning: full strength
   mockTiming.mockClear();
   await r.rerender(view(speeding(0.5), { dimmed: true }));
   expect(mockTiming).toHaveBeenCalledWith(1, HALO_TIMINGS.layer);
+});
+
+test('dimmed with a tint under the points line: still reduced strength (a faint tint is not a warning)', async () => {
+  const r = await render(view(HALO_CALM, { dimmed: true }));
+  mockTiming.mockClear();
+  await r.rerender(view(tint(0.15), { dimmed: true }));
+  expect(mockTiming).not.toHaveBeenCalledWith(1, HALO_TIMINGS.layer);
+  expect(mockSetActive).toHaveBeenLastCalledWith(true);
+});
+
+test('a shake plays once per key, swinging through its offsets; the same key over renders never again', async () => {
+  const r = await render(view(shaking('hard_brake:1@5', 20)));
+  for (let i = 0; i < 4; i += 1) await r.rerender(view(shaking('hard_brake:1@5', 20)));
+  expect(mockSequence).toHaveBeenCalledTimes(1);
+  expect(mockSequence.mock.calls[0]).toHaveLength(5); // four swings and back to rest
+  expect(mockTiming).toHaveBeenCalledWith(0, HALO_TIMINGS.shakeSwing);
+  await r.rerender(view(shaking('speeding:2@9', 80)));
+  expect(mockSequence).toHaveBeenCalledTimes(2);
+  expect(mockSequence.mock.calls[1]).toHaveLength(7);
+  await r.rerender(view(HALO_CALM));
+  expect(mockSequence).toHaveBeenCalledTimes(2);
+});
+
+describe('the compass', () => {
+  const rotation = () => (getAnimatedStyle(screen.getByTestId('hud-compass-card', HIDDEN)) as { transform: { rotate: string }[] }).transform[0]!.rotate;
+
+  test('around the ring, outside the pulse view (it never grows, fades or shakes); hidden from screen readers with the ring', async () => {
+    await render(view(speeding(0.5), { heading: 90 }));
+    const compass = screen.getByTestId('hud-compass', HIDDEN);
+    const pulse = screen.getByTestId('hud-halo-pulse', HIDDEN);
+    expect(within(pulse).queryByTestId('hud-compass', HIDDEN)).toBeNull();
+    expect(within(screen.getByTestId('hud-halo', HIDDEN)).getByTestId('hud-compass', HIDDEN)).toBe(compass);
+    expect(screen.queryByTestId('hud-compass')).toBeNull();
+    for (const l of ['N', 'E', 'S', 'W']) expect(within(compass).getByText(l, HIDDEN)).toBeTruthy();
+  });
+
+  test('none without a ring', async () => {
+    await render(view(HALO_CALM, { ring: false, heading: 90 }));
+    expect(screen.queryByTestId('hud-compass', HIDDEN)).toBeNull();
+  });
+
+  test('heading up: the card turns the other way by the course, the short way round, in 700 ms; letters upright, placed by bearing', async () => {
+    const r = await render(view(HALO_CALM, { heading: 350 }));
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(rotation()).toBe('-350deg');
+    mockTiming.mockClear();
+    await r.rerender(view(HALO_CALM, { heading: 10 }));
+    expect(mockTiming).toHaveBeenCalledWith(-370, HALO_TIMINGS.compass);
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(rotation()).toBe('-370deg');
+    // heading 10: N sits 10 degrees left of the top, moved there without turning
+    const n = getAnimatedStyle(screen.getByTestId('hud-compass-N', HIDDEN)) as { transform: Record<string, number>[] };
+    expect(n.transform[0]!['translateX']).toBeLessThan(0);
+    expect(n.transform[1]!['translateY']).toBeLessThan(0);
+    expect(n.transform.some((t) => 'rotate' in t)).toBe(false);
+  });
+
+  test('no course yet: the ticks with the letters dimmed; a lost course holds the card where it was', async () => {
+    const r = await render(view(HALO_CALM, { heading: null }));
+    expect(screen.getByTestId('hud-compass-N', HIDDEN)).toHaveStyle({ opacity: COMPASS_DIM_LETTERS });
+    await r.rerender(view(HALO_CALM, { heading: 45 }));
+    expect(screen.getByTestId('hud-compass-N', HIDDEN)).toHaveStyle({ opacity: 1 });
+    await act(() => jest.advanceTimersByTime(1000));
+    mockTiming.mockClear();
+    await r.rerender(view(HALO_CALM, { heading: null }));
+    expect(mockTiming).not.toHaveBeenCalledWith(expect.anything(), HALO_TIMINGS.compass);
+    expect(rotation()).toBe('-45deg');
+  });
+
+  test('N in the halo ink, the other letters muted (never red)', async () => {
+    await render(view(HALO_CALM, { heading: 0 }));
+    const color = (l: string) => StyleSheet.flatten(within(screen.getByTestId(`hud-compass-${l}`, HIDDEN)).getByText(l, HIDDEN).props.style).color;
+    expect(color('N')).toBe(p.haloInk);
+    for (const l of ['E', 'S', 'W']) expect(color(l)).toBe(p.haloInkMuted);
+  });
+
+  test('Reduce Motion: the card snaps to each course', async () => {
+    const r = await render(view(HALO_CALM, { heading: 0, reduceMotion: true }));
+    mockTiming.mockClear();
+    await r.rerender(view(HALO_CALM, { heading: 120, reduceMotion: true }));
+    expect(mockTiming).not.toHaveBeenCalledWith(expect.anything(), HALO_TIMINGS.compass);
+    await act(() => jest.advanceTimersByTime(20)); // the next frame
+    expect(rotation()).toBe('-120deg');
+  });
 });
 
 test('a distraction warning (driver not visible among them) runs the clock: it pulses', async () => {

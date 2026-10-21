@@ -146,8 +146,6 @@ export const HALO_MAX_SCALE = 1.04;
 export const HALO_FLOW_MS = 18_000;
 /** Dimmed and calm, the halo and the speed show at this strength (above the scrim). */
 export const HALO_DIM_OPACITY = 0.725;
-/** The speeding display hold lets go this many rows after the engine last reported a tier. */
-export const HALO_SPEED_HOLD_MAX_ROWS = 10;
 /** The halo's colour ramp: calm, yellow, orange, red at these severities. */
 export const HALO_RAMP_STOPS = [0, 0.3, 0.55, 1] as const;
 /** A burst: each pulse 400 ms (2.5 a second), opacity down to 0.25, scale up to 1.04. */
