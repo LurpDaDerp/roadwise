@@ -83,8 +83,8 @@ select isnt((select x -> 'safety_rating' from jsonb_array_elements(public.list_f
 reset role;
 select pg_temp.set('share_categories', true);
 set local role authenticated;
-select is((select array(select jsonb_object_keys(p -> 'scores') order by 1) from (select public.get_profile('fay') as p) x), array['acceleration', 'attention', 'braking', 'speed', 'turning'],
-  'categories on: the five category scores show');
+select is((select array(select jsonb_object_keys(p -> 'scores') order by 1) from (select public.get_profile('fay') as p) x), array['acceleration', 'attention', 'braking', 'phone', 'speed', 'turning'],
+  'categories on: the six category scores show (Phone use since 0026)');
 select is((select array[p -> 'scores' -> 'attention', to_jsonb((p -> 'scores' ->> 'braking')::numeric = round((p -> 'scores' ->> 'braking')::numeric))] from (select public.get_profile('fay') as p) x),
   array['null'::jsonb, 'true'::jsonb], 'as whole numbers, Attention null without DashPal');
 select is((select array[p -> 'achievements', p -> 'can_view_stats'] from (select public.get_profile('fay') as p) x), array['[]'::jsonb, 'false'::jsonb], 'and still no badges or stats');

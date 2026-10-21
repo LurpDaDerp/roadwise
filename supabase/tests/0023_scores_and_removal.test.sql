@@ -57,7 +57,7 @@ select is((select array_agg(column_name::text order by column_name::text) from i
     and column_name in ('penalty', 'units', 'stopped_in_traffic')), null, 'trip_events keeps no penalty, units or stopped-in-traffic');
 select col_default_is('public', 'trips', 'origin', 'manual'::text, 'a drive started manually unless it says otherwise');
 select col_default_is('public', 'trips', 'not_driving_expired', 'false', 'its "Not driving?" never ran out unless it says so');
-select col_default_is('public', 'trips', 'scoring_version', '7', 'scoring version 7');
+select col_default_is('public', 'trips', 'scoring_version', '8', 'scoring version 8 (7 here, 8 since 0026)');
 select is((select array_agg(column_name::text || '=' || is_nullable order by column_name::text) from information_schema.columns where table_schema = 'public' and table_name = 'trips'
     and column_name in ('slowdowns', 'speedups', 'turns', 'limit_s', 'moving_s')),
   array['limit_s=NO', 'moving_s=NO', 'slowdowns=NO', 'speedups=NO', 'turns=NO'], 'every drive holds its five counters (the backfill left none null)');
@@ -116,11 +116,11 @@ create function pg_temp.t(p_client uuid) returns public.trips language sql stabl
 
 select pg_temp.drive('00000000-0000-0000-0000-000000000004', 'f0000000-0000-4000-8000-000000000001', now() - interval '3 hours', 600, 2, '[{"id":"f1000000-0000-4000-8000-000000000001","type":"hard_brake"}]');
 select throws_ok($$ insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, started_at, duration_s)
-    values ((pg_temp.t('f0000000-0000-4000-8000-000000000001')).id, gen_random_uuid(), '00000000-0000-0000-0000-000000000004', 'phone_pickup', 'severe', now(), 1) $$,
-  '23514', null, 'a phone pickup cannot be stored');
+    values ((pg_temp.t('f0000000-0000-4000-8000-000000000001')).id, gen_random_uuid(), '00000000-0000-0000-0000-000000000004', 'phone_handling', 'severe', now(), 1) $$,
+  '23514', null, 'phone handling cannot be stored (a phone pickup can again since 0026)');
 select throws_ok($$ insert into public.event_disputes (trip_id, client_event_id, user_id, reason, status)
-    values ((pg_temp.t('f0000000-0000-4000-8000-000000000001')).id, 'f1000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000004', 'mounted', 'accepted') $$,
-  '23514', null, 'a "mounted" report cannot be stored');
+    values ((pg_temp.t('f0000000-0000-4000-8000-000000000001')).id, 'f1000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000004', 'not_driving', 'accepted') $$,
+  '23514', null, 'a "not driving" report cannot be stored (it is the whole-drive action; "mounted" is a reason again since 0026)');
 select throws_ok($$ insert into public.user_achievements (user_id, achievement_id) values ('00000000-0000-0000-0000-000000000004', 'phone_free_25') $$, '23514', null, 'phone_free_25 is no achievement');
 select throws_ok($$ insert into public.inbox (user_id, kind, payload, dedupe_key) values ('00000000-0000-0000-0000-000000000004', 'league_result', '{}', 'x') $$, '23514', null, 'league_result is no inbox kind');
 
@@ -146,8 +146,8 @@ select is((select array_agg(row(e.*)::text order by n) from (values (1, 8::numer
   'estimate_exposure: the seven pinned estimates');
 select is(array[private.event_weight_of('hard_brake', 'minor', 2, '{}'), private.event_weight_of('hard_brake', 'severe', 2, '{}'), private.event_weight_of('hard_accel', 'moderate', 2, '{}'),
     private.event_weight_of('hard_corner', 'severe', 2, '{}'), private.event_weight_of('speeding', 'moderate', 25, '{"overMphS": 160}'), private.event_weight_of('eyes_off', 'severe', 2, '{}'),
-    private.event_weight_of('phone_pickup', 'severe', 2, '{}')],
-  array[1, 2, 1, 2, 40.47715405015526, 0, 0]::float8[], 'event_weight_of: a hard event 1 / 2, speeding its weight, DashPal and anything else 0');
+    private.event_weight_of('phone_handling', 'severe', 2, '{}')],
+  array[1, 2, 1, 2, 40.47715405015526, 0, 0]::float8[], 'event_weight_of: a hard event 1 / 2, speeding its weight, DashPal and anything else 0 (0026 pins a pickup)');
 
 -- A, B, C (one driver, ava): drives 0, 10 and 40 days old, each an hour long, with their counters
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000-8000-00000000000a', now() - interval '1 hour', 3600, 6,

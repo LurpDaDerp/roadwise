@@ -525,6 +525,23 @@ describe('ratingAt: Phone use', () => {
     }
   });
 
+  test('pins the 0026 pgTAP stores too: one pickup on a drive with no phone seconds; a drive watched with no pickup', () => {
+    const lone = drive({ ageDays: 0, events: [ev({ type: 'phone_pickup', tier: 'moderate', durationS: 12 })] });
+    expect(ratingAt([lone], AT)).toEqual({
+      rating: 86.2,
+      ranked: false,
+      miles: 6,
+      scores: { acceleration: 87.62886597938144, braking: 87.62886597938144, turning: 86.69623059866963, attention: null, phone: 83.14241611828743, speed: 87.48261474269819 },
+    });
+    const quiet = drive({ ageDays: 0, exposure: exp(15, 15, 9, 840, 1136, 900) });
+    expect(ratingAt([quiet], AT)).toEqual({
+      rating: 87.5,
+      ranked: false,
+      miles: 6,
+      scores: { acceleration: 87.62886597938144, braking: 87.62886597938144, turning: 86.69623059866963, attention: null, phone: 87.62886597938144, speed: 87.48261474269819 },
+    });
+  });
+
   test('sums are order-stable with pickups too', () => {
     const want = ratingAt([pinP1, pinP2, pinP3], AT);
     expect(ratingAt([pinP3, pinP2, pinP1], AT)).toEqual(want);

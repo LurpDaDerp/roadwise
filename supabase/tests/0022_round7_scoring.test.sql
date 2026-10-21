@@ -23,7 +23,7 @@ select is(array[private.round_half_up(89.549999999999997, 1), private.round_half
 
 select is(array[private.axis_of('speeding'), private.axis_of('hard_brake'), private.axis_of('hard_accel'), private.axis_of('hard_corner'), private.axis_of('eyes_off'), private.axis_of('drowsy'),
     private.axis_of('phone_pickup'), private.axis_of('phone_handling'), private.axis_of('nope')],
-  array['speed', 'braking', 'acceleration', 'turning', 'attention', 'attention', null, null, null], 'axis_of: the radar category of every event type; phone use counts nowhere');
+  array['speed', 'braking', 'acceleration', 'turning', 'attention', 'attention', 'phone', null, null], 'axis_of: the radar category of every event type; a phone pickup counts toward Phone use (0026), phone handling nowhere');
 
 -- ---------------------------------------------------------------------------
 -- the older ratings are gone

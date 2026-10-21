@@ -51,7 +51,7 @@ $$;
 -- context + first drive
 -- ---------------------------------------------------------------------------
 select is(pg_temp.ctx('11111111-1111-4111-8111-111111111111', pg_temp.t0(), 47.6, -122.3),
-  '{"version": 23, "existing": null, "merge": null}'::jsonb, 'a fresh context: version 23, nothing stored, no merge');
+  '{"version": 23, "phoneUse": true, "existing": null, "merge": null}'::jsonb, 'a fresh context: version 23, phone use stored (0026), nothing stored, no merge');
 
 create temporary table r1 as select pg_temp.drive(pg_temp.a(), '11111111-1111-4111-8111-111111111111', pg_temp.t0(), 30, 12,
   '[{"id":"22222222-2222-4222-8222-222222222222","type":"hard_brake"}]', null,
@@ -120,7 +120,7 @@ select throws_ok($$ select private.dispute_event('00000000-0000-0000-0000-000000
 select throws_ok($$ select private.dispute_event('00000000-0000-0000-0000-000000000002', '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', 'hazard') $$,
   'P0002', 'trip not found', 'B cannot report A''s drive: it is not found');
 select throws_ok($$ select private.dispute_event('00000000-0000-0000-0000-000000000001', '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', 'mounted') $$,
-  '22023', 'reason must be hazard, wrong_limit or camera_wrong', '"My phone was mounted" is no reason any more');
+  '22023', 'that reason does not apply to this event', '"My phone was mounted" is for a phone pickup only (0026)');
 create temporary table d1 as select private.dispute_event(pg_temp.a(), '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', 'hazard') as d;
 select is((select d - 'rating' from d1),
   jsonb_build_object('tripId', pg_temp.trip('11111111-1111-4111-8111-111111111111'), 'eventId', '22222222-2222-4222-8222-222222222222',
@@ -191,8 +191,8 @@ select pg_temp.drive(pg_temp.a(), '8a8a8a8a-8a8a-4a8a-8a8a-8a8a8a8a8a8a', pg_tem
 select is((select row(status, (select clean from public.trips where client_trip_id = '8a8a8a8a-8a8a-4a8a-8a8a-8a8a8a8a8a8a'))::text from public.trip_events where client_event_id = 'c1c1c1c1-0000-4000-8000-000000000001'),
   row('active', false)::text, 'a fresh event is stored active and counted, whatever the envelope said');
 select throws_ok($$ select pg_temp.drive('00000000-0000-0000-0000-000000000001', '8b8b8b8b-8b8b-4b8b-8b8b-8b8b8b8b8b8b', pg_temp.t0() + interval '320 minutes', 10, 2,
-    '[{"id":"c2c2c2c2-0000-4000-8000-000000000001","type":"phone_pickup","tier":"severe"}]') $$,
-  '22023', 'event needs id, type, tier, startedAt and durationS', 'a phone event is refused');
+    '[{"id":"c2c2c2c2-0000-4000-8000-000000000001","type":"phone_handling","tier":"severe"}]') $$,
+  '22023', 'event needs id, type, tier, startedAt and durationS', 'a phone handling event is refused (phone use is pickups only, 0026)');
 select throws_ok($$ select pg_temp.drive('00000000-0000-0000-0000-000000000001', '8b8b8b8b-8b8b-4b8b-8b8b-8b8b8b8b8b8b', pg_temp.t0() + interval '320 minutes', 10, 2, '[]', null, '{"origin": "bus"}') $$,
   '22023', 'origin must be auto or manual and notDrivingExpired a boolean', 'an unknown origin is refused');
 select throws_ok($$ select pg_temp.drive('00000000-0000-0000-0000-000000000001', '8b8b8b8b-8b8b-4b8b-8b8b-8b8b8b8b8b8b', pg_temp.t0() + interval '320 minutes', 10, 2, '[]', null, '{"notDrivingExpired": "yes"}') $$,
@@ -217,7 +217,7 @@ select is((select array(select jsonb_object_keys(d) order by 1) from jsonb_array
         'nightMiles', 'notDriving', 'notDrivingExpired', 'origin', 'pointsNet', 'polyline', 'reason', 'result', 'safeMiles', 'scored', 'startedAt', 'tripId', 'tz'],
   'each drive carries its facts, origin, ran-out flag and counters (pointsNet and safeMiles are LEGACY literals)');
 select is((select array[d -> 'exposure', d -> 'pointsNet', d -> 'safeMiles', d -> 'origin'] from jsonb_array_elements(public.list_my_drives(null, 20)) d where d ->> 'clientTripId' = '11111111-1111-4111-8111-111111111111'),
-  array['{"turns": 14, "limitS": 1500, "movingS": 2150, "speedups": 21, "slowdowns": 23}'::jsonb, 'null'::jsonb, '0'::jsonb, '"auto"'::jsonb], 'the union''s counters; the LEGACY keys at their literals');
+  array['{"turns": 14, "limitS": 1500, "phoneS": 0, "movingS": 2150, "speedups": 21, "slowdowns": 23}'::jsonb, 'null'::jsonb, '0'::jsonb, '"auto"'::jsonb], 'the union''s counters (no phone seconds: neither leg sent any); the LEGACY keys at their literals');
 select is((select d -> 'events' #>> '{0,status}' from jsonb_array_elements(public.list_my_drives(null, 20)) d where d ->> 'clientTripId' = '11111111-1111-4111-8111-111111111111'), 'removed', 'events carry their status');
 select throws_ok($$ select public.list_my_drives(null, 51) $$, '22023', 'limit must be between 1 and 50', 'the limit is bounded');
 select throws_ok($$ select count(*) from public.trips $$, '42501', null, 'trips are not readable directly');

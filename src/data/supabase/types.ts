@@ -813,6 +813,7 @@ export type Database = {
           not_driving_at: string | null
           not_driving_expired: boolean
           origin: string
+          phone_s: number
           polyline: string
           reason: string | null
           result: Json | null
@@ -857,6 +858,7 @@ export type Database = {
           not_driving_at?: string | null
           not_driving_expired?: boolean
           origin?: string
+          phone_s?: number
           polyline?: string
           reason?: string | null
           result?: Json | null
@@ -900,6 +902,7 @@ export type Database = {
           not_driving_at?: string | null
           not_driving_expired?: boolean
           origin?: string
+          phone_s?: number
           polyline?: string
           reason?: string | null
           result?: Json | null

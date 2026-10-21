@@ -1,4 +1,4 @@
-// Integration: the real handlers against the local stack (migrations 0001–0025) over the real
+// Integration: the real handlers against the local stack (migrations 0001–0026) over the real
 // engine. Runs only when FUNCTIONS_IT_DB_URL is readable — `npm run functions:test` has no env
 // permission and skips it; run it with
 //
@@ -10,7 +10,7 @@ import { assert, assertEquals } from '@std/assert';
 import postgres from 'postgres';
 import { createEngine } from '../_shared/engine.ts';
 import { deleteTestUser } from '../_shared/testing/it_cleanup.ts';
-import { EVENT, lineOfMiles, payload, payloadV3, TRIP, TRIP_2 } from '../_shared/testing/v5_fixtures.ts';
+import { EVENT, lineOfMiles, payload, payloadV3, payloadV4, pickup, PICKUP, TRIP, TRIP_2 } from '../_shared/testing/v5_fixtures.ts';
 import { handleTripAction } from '../trip-actions/handler.ts';
 import { handleFinalizeTrip } from './handler.ts';
 
@@ -20,6 +20,7 @@ const DB_URL = envState === 'granted' ? Deno.env.get('FUNCTIONS_IT_DB_URL') : un
 const quiet = { warn: () => {}, error: () => {} };
 const EVENT_B = 'abababab-abab-4bab-8bab-abababababab';
 const TRIP_3 = 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+const TRIP_4 = 'efefefef-efef-4fef-8fef-efefefefefef';
 
 const post = (path: string, body: unknown) =>
   new Request(`http://local/functions/v1/${path}`, {
@@ -32,7 +33,7 @@ const nyDay = (t: number): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(t));
 
 Deno.test({
-  name: 'finalize-trip + trip-actions against the local stack: v4 answer, replay, merge at 2 min / 100 m, report, "Wasn\'t driving"',
+  name: 'finalize-trip + trip-actions against the local stack: v5 answer with a pickup, replay, merge at 2 min / 100 m, reports ("mounted" too), "Wasn\'t driving", a v4 upload',
   ignore: !DB_URL,
   sanitizeResources: false,
   sanitizeOps: false,
@@ -46,21 +47,25 @@ Deno.test({
       startedAt: started,
       endedAt: started + 30 * 60_000,
       localDay: nyDay(started),
-      events: [{ ...payload().events[0], startedAt: started + 10 * 60_000 }],
+      events: [{ ...payload().events[0], startedAt: started + 10 * 60_000 }, pickup({ startedAt: started + 12 * 60_000 })],
     });
     try {
       await sql`insert into auth.users (id, email) values (${user}::uuid, ${`it-${user}@example.com`})`;
       await sql`update public.profiles set username = ${'it_' + user.slice(0, 8)}, onboarded_at = now() where id = ${user}::uuid`;
 
-      // 1. a v4 upload: the answer is the v4 shape, nothing about points
+      // 1. a v5 upload with a phone pickup: the answer is the v4 shape, nothing about points
       const first = await handleFinalizeTrip(post('finalize-trip', base), deps);
       assertEquals(first.status, 200);
       const r1 = await first.json();
       assertEquals(Object.keys(r1).sort(), ['achievements', 'challenges', 'clientTripId', 'eventIds', 'mergedInto', 'rating', 'reason', 'scored', 'tripId']);
-      assertEquals([r1.scored, r1.reason, r1.mergedInto, r1.eventIds, r1.achievements, r1.rating.ranked], [true, null, null, [EVENT], ['first_drive'], true]);
+      assertEquals([r1.scored, r1.reason, r1.mergedInto, r1.eventIds, r1.achievements, r1.rating.ranked], [true, null, null, [EVENT, PICKUP], ['first_drive'], true]);
       assert(typeof r1.rating.safetyRating === 'number');
-      const [t1] = await sql`select origin, not_driving_expired, slowdowns, speedups, turns, limit_s, moving_s from public.trips where id = ${r1.tripId}::uuid`;
-      assertEquals([t1.origin, t1.not_driving_expired, t1.slowdowns, t1.speedups, t1.turns, t1.limit_s, t1.moving_s], ['auto', false, 18, 17, 11, 1200, 1650]);
+      const [t1] = await sql`select origin, not_driving_expired, slowdowns, speedups, turns, limit_s, moving_s, phone_s, n_events, scoring_version from public.trips where id = ${r1.tripId}::uuid`;
+      assertEquals([t1.origin, t1.not_driving_expired, t1.slowdowns, t1.speedups, t1.turns, t1.limit_s, t1.moving_s, t1.phone_s, t1.n_events, t1.scoring_version], ['auto', false, 18, 17, 11, 1200, 1650, 1500, 2, 8]);
+      const [p1] = await sql`select type, tier, duration_s, measured from public.trip_events where client_event_id = ${PICKUP}::uuid`;
+      assertEquals([p1.type, p1.tier, Number(p1.duration_s), p1.measured], ['phone_pickup', 'severe', 24, { speedMph: 31.2, maxSpeedMph: 38.4 }]);
+      const [rating] = await sql`select private.rating_at(${user}::uuid, now()) -> 'scores' ->> 'phone' as phone`;
+      assert(Number(rating.phone) > 0 && Number(rating.phone) < 100, 'Phone use is scored');
 
       // 2. replay: the stored answer, nothing applied twice
       const again = await handleFinalizeTrip(post('finalize-trip', base), deps);
@@ -88,10 +93,10 @@ Deno.test({
       const merged = await handleFinalizeTrip(post('finalize-trip', second), deps);
       assertEquals(merged.status, 200);
       const r2 = await merged.json();
-      assertEquals([r2.mergedInto, r2.clientTripId, r2.tripId, r2.eventIds.length], [TRIP, TRIP_2, r1.tripId, 2]);
-      const [union] = await sql`select miles, n_hard_brake, polyline, duration_s, scoring_version, origin, not_driving_expired, slowdowns from public.trips where id = ${r1.tripId}::uuid`;
-      // the union keeps the first leg's origin, ORs the "Not driving?" flag and sums the counters (3 mi in 18 min, 10 mph, estimates 9 slowdowns)
-      assertEquals([Number(union.miles), union.n_hard_brake, union.duration_s, union.scoring_version, union.origin, union.not_driving_expired, union.slowdowns], [15, 2, 2880, 7, 'auto', true, 27]);
+      assertEquals([r2.mergedInto, r2.clientTripId, r2.tripId, r2.eventIds.length], [TRIP, TRIP_2, r1.tripId, 3]);
+      const [union] = await sql`select miles, n_hard_brake, polyline, duration_s, scoring_version, origin, not_driving_expired, slowdowns, phone_s from public.trips where id = ${r1.tripId}::uuid`;
+      // the union keeps the first leg's origin, ORs the "Not driving?" flag and sums the counters (3 mi in 18 min, 10 mph, estimates 9 slowdowns and no phone seconds)
+      assertEquals([Number(union.miles), union.n_hard_brake, union.duration_s, union.scoring_version, union.origin, union.not_driving_expired, union.slowdowns, union.phone_s], [15, 2, 2880, 8, 'auto', true, 27, 1500]);
       assertEquals(union.polyline, `${base.polyline} ${second.polyline}`);
 
       // 4. report the first hard brake as a hazard: accepted, the event removed, one brake left
@@ -105,6 +110,13 @@ Deno.test({
       assertEquals([other.status, (await other.json()).code], [409, 'already_disputed']);
       const mismatch = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT_B, reason: 'wrong_limit' }), deps);
       assertEquals([mismatch.status, (await mismatch.json()).code], [400, 'reason_mismatch']);
+      const notMounted = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT_B, reason: 'mounted' }), deps);
+      assertEquals([notMounted.status, (await notMounted.json()).code], [400, 'reason_mismatch']);
+      // "My phone was mounted" on the pickup: accepted from the same weekly three
+      const mounted = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: PICKUP, reason: 'mounted' }), deps);
+      assertEquals(mounted.status, 200);
+      const md = await mounted.json();
+      assertEquals([md.status, md.rejectReason, md.quotaLeft, md.clean], ['accepted', null, 1, false]);
       const brake2 = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT_B, reason: 'hazard' }), deps);
       assertEquals((await brake2.json()).clean, true);
 
@@ -133,6 +145,25 @@ Deno.test({
       assertEquals([ndBody.action, ndBody.clientTripId, ndBody.notDrivingLeft], ['not_driving', TRIP_3, 1]);
       const ndAgain = await handleTripAction(post('trip-actions', { action: 'not_driving', clientTripId: TRIP_3 }), deps);
       assertEquals([ndAgain.status, await ndAgain.json()], [200, ndBody]);
+
+      // 7. a build from before phone tracking (v4): stored with no phone seconds
+      const v4At = Date.now() - 30 * 60_000;
+      const v4 = payloadV4({
+        clientTripId: TRIP_4,
+        startedAt: v4At,
+        endedAt: v4At + 20 * 60_000,
+        durationS: 1200,
+        localDay: nyDay(v4At),
+        start: { lat: 41.0, lng: -74.5 },
+        events: [],
+        exposure: { slowdowns: 10, speedups: 10, turns: 6, limitS: 800, movingS: 1100 },
+      });
+      const fromV4 = await handleFinalizeTrip(post('finalize-trip', v4), deps);
+      assertEquals(fromV4.status, 200);
+      const r4 = await fromV4.json();
+      assertEquals(r4.mergedInto, null);
+      const [t4] = await sql`select phone_s, moving_s, scoring_version from public.trips where id = ${r4.tripId}::uuid`;
+      assertEquals([t4.phone_s, t4.moving_s, t4.scoring_version], [0, 1100, 8]);
     } finally {
       await deleteTestUser(sql, user);
       await engine.close();
