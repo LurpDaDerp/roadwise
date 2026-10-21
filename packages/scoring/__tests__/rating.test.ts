@@ -7,14 +7,12 @@ import {
   DASHPAL_AXIS,
   DRIVE_SCORE_MIN_MILES,
   RANKED_MIN_MILES,
-  attentionDeficit,
   axisOf,
   axisPenalties,
   axisScores,
   categoryScore,
   driveScore,
   levelForPoints,
-  safetyRating,
   safetyRatingOf,
   watchedMiles,
   weightedScore,
@@ -214,16 +212,6 @@ describe('driveScore — one drive, floored at 3 mi, a whole number', () => {
     expect(barrel.categoryScore).toBe(categoryScore);
     expect(barrel.axisOf).toBe(axisOf);
     expect(barrel.AXES).toBe(AXES);
-  });
-});
-
-describe('legacy safetyRating (kept for callers not yet switched)', () => {
-  test('one phone pickup every 10 mi → 60; clamped to 0; Attention takes its share', () => {
-    expect(safetyRating(40, 10)).toEqual({ rating: 60, ranked: true });
-    expect(safetyRating(1000, 10).rating).toBe(0);
-    expect(safetyRating(0, 0)).toEqual({ rating: null, ranked: false });
-    expect(safetyRating(40, 20, { penalty: 40, watchedMiles: 20 }).rating).toBe(60);
-    expect(attentionDeficit(40, 2)).toBe(40);
   });
 });
 

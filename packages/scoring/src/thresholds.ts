@@ -17,11 +17,6 @@ export const PHONE_MIN_MPH = 5;
  * has this long to react before points come off.
  */
 export const SPEEDING_GRACE_S = 5;
-/**
- * @deprecated Superseded by `SPEEDING_GRACE_S` (the event starts on the row after the grace, for
- * every tier). Kept only until the speeding detector reads the grace; nothing else may use it.
- */
-export const SPEEDING_MIN_S = { default: 4, severe: 3 } as const;
 /** A speeding episode ends after this long back under L + T − `SPEEDING_END_BUFFER_MPH`. */
 export const SPEEDING_END_S = 5;
 export const SPEEDING_END_BUFFER_MPH = 2;

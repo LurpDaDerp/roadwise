@@ -169,36 +169,6 @@ export function driveScore(events: readonly DriveEvent[], miles: number, watched
 }
 
 // ---------------------------------------------------------------------------------------------
-// Legacy rating (the linear, summed formula). Kept only while the analytics model and the demo
-// seed still call it; nothing new may. The server's SQL no longer computes it.
-
-/** @deprecated The categories floor at `RANKED_MIN_MILES` now (`categoryScore`). */
-export const ATTENTION_MIN_MILES = 10;
-
-/** @deprecated Use `axisScores` / `categoryScore`. */
-export function attentionDeficit(penalty: number, watched: number): number {
-  if (!(watched > 0)) return 0;
-  return (10 * Math.max(0, penalty)) / Math.max(watched, ATTENTION_MIN_MILES);
-}
-
-/** @deprecated Use `RatingWindow`. */
-export interface AttentionWindow {
-  penalty: number;
-  watchedMiles: number;
-}
-
-/**
- * @deprecated The pre-round-7 rating: 100 less 10 × the summed penalty per mile, less Attention's
- * deficit, clamped to 0. Use `safetyRatingOf` (the weighted mean of the category scores).
- */
-export function safetyRating(ratingPenalty30d: number, miles30d: number, attention?: AttentionWindow | null): SafetyRating {
-  if (!(miles30d > 0)) return { rating: null, ranked: false };
-  const R = (Math.max(0, ratingPenalty30d) * 100) / miles30d;
-  const att = attention ? attentionDeficit(attention.penalty, attention.watchedMiles) : 0;
-  return { rating: roundTo(clamp(100 - R / 10 - att, 0, 100), 1), ranked: miles30d >= RANKED_MIN_MILES };
-}
-
-// ---------------------------------------------------------------------------------------------
 // Levels
 
 export interface LevelInfo {
