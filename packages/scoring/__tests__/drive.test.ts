@@ -1,6 +1,9 @@
 import {
+  CURRENT_RULES,
   DASHCAM_EVENT_TYPES,
   DASHCAM_MULT,
+  EARN_RATE_VERSION,
+  LEGACY_RULES,
   MULT_CAP,
   SCORING_VERSION,
   SPEEDING_EVENT_CAP,
@@ -18,6 +21,7 @@ import {
   phoneSpeedMult,
   ratingPenalty,
   scoreDrive,
+  scoringRules,
   speedTier,
   speedTolerance,
   speedingChargedS,
@@ -387,6 +391,68 @@ describe('scoreDrive — spec examples (20 a safe mile, +50 clean)', () => {
   });
 });
 
+describe('scoreDrive — a drive first scored before version 6 keeps its own rules when re-scored', () => {
+  test('scoringRules: under 6 legacy (10 a mile, 25 bonus, no phone speed multiplier); 6, later, absent or unreadable current', () => {
+    expect([LEGACY_RULES, CURRENT_RULES]).toEqual([
+      { pointsPerMile: 10, cleanBonus: 25, phoneSpeed: false },
+      { pointsPerMile: 20, cleanBonus: 50, phoneSpeed: true },
+    ]);
+    expect(EARN_RATE_VERSION).toBe(6);
+    expect([3, 4, 5, 5.5].map(scoringRules)).toEqual([LEGACY_RULES, LEGACY_RULES, LEGACY_RULES, LEGACY_RULES]);
+    expect([6, 7, undefined, null, Number.NaN, Number.POSITIVE_INFINITY].map(scoringRules)).toEqual([
+      CURRENT_RULES,
+      CURRENT_RULES,
+      CURRENT_RULES,
+      CURRENT_RULES,
+      CURRENT_RULES,
+      CURRENT_RULES,
+    ]);
+  });
+
+  test('basePenalty and eventPenalty under LEGACY_RULES skip the phone speed multiplier, nothing else', () => {
+    const pickup = ev({ type: 'phone_pickup', tier: 'severe', measured: { speedMph: 50 } });
+    const handling = ev({ type: 'phone_handling', tier: 'severe', units: 3, measured: { maxSpeedMph: 70 } });
+    expect([basePenalty(pickup), basePenalty(pickup, LEGACY_RULES)]).toEqual([64, 32]);
+    expect([basePenalty(handling), basePenalty(handling, LEGACY_RULES)]).toEqual([48, 24]);
+    expect(eventPenalty(pickup, 1, LEGACY_RULES)).toBe(40); // 32 × 1.25
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', stoppedInTraffic: true, measured: { speedMph: 50 } }), LEGACY_RULES)).toBe(16);
+    expect(basePenalty(ev({ type: 'hard_brake', tier: 'severe' }), LEGACY_RULES)).toBe(20);
+    expect(basePenalty(ev({ type: 'speeding', tier: 'moderate', durationS: 60 }), LEGACY_RULES)).toBe(48);
+    expect(basePenalty(ev({ type: 'speeding', tier: 'minor', durationS: 35, measured: { overMphS: 90 } }), LEGACY_RULES)).toBe(18);
+  });
+
+  test('a v5 drive re-scores at 10 a mile with a 25 bonus and reports that rate', () => {
+    const v5 = scoreDrive(drive({ miles: 12, safeMiles: 11.8, scoringVersion: 5 }), { streak: 10, safeMilesEarlierToday: 0 });
+    expect(v5).toMatchObject({ scored: true, milePoints: 118, pointsPerMile: 10, cleanBonus: 25, gains: 172, net: 172 }); // (118 + 25) × 1.2
+    const v6 = scoreDrive(drive({ miles: 12, safeMiles: 11.8, scoringVersion: 6 }), { streak: 10, safeMilesEarlierToday: 0 });
+    expect(v6).toMatchObject({ milePoints: 236, pointsPerMile: 20, cleanBonus: 50, gains: 343 });
+    expect(scoreDrive(drive({ miles: 0.1, safeMiles: 0.1, scoringVersion: 5 }), ctx0).pointsPerMile).toBe(10);
+  });
+
+  test('a dispute on a v5 drive: the delta is the removed event’s penalty plus the 25 bonus a now-clean drive earns, never the new rate', () => {
+    const brake = ev({ type: 'hard_brake', tier: 'minor' });
+    const stored = scoreDrive(drive({ miles: 40, safeMiles: 40, scoringVersion: 5, events: [brake] }), ctx0);
+    expect(stored).toMatchObject({ gains: 400, penalties: 8, net: 392 }); // what version 5 stored
+    const rescored = scoreDrive(drive({ miles: 40, safeMiles: 40, scoringVersion: 5, events: [{ ...brake, status: 'removed' }] }), ctx0);
+    expect(rescored).toMatchObject({ gains: 425, cleanBonus: 25, penalties: 0, net: 425 });
+    expect(rescored.net - stored.net).toBe(stored.penalties + 25); // the brake back, and the clean bonus the drive now earns
+    // without the version the same re-score would pay the new rate out as a windfall
+    expect(scoreDrive(drive({ miles: 40, safeMiles: 40, events: [{ ...brake, status: 'removed' }] }), ctx0).net).toBe(850);
+  });
+
+  test('a dispute on a v5 drive never lowers the net through the phone speed multiplier (no credited miles, pickup at 50 mph)', () => {
+    const brake = ev({ type: 'hard_brake', tier: 'minor' });
+    const pickup = ev({ type: 'phone_pickup', tier: 'severe', measured: { speedMph: 50 } });
+    const ctx = { streak: 0, safeMilesEarlierToday: 100 }; // the daily cap is used up
+    const stored = scoreDrive(drive({ miles: 5, safeMiles: 5, scoringVersion: 5, events: [brake, pickup] }), ctx);
+    expect(stored).toMatchObject({ creditedMiles: 0, gains: 0, penalties: 40, net: -40 });
+    const rescored = scoreDrive(drive({ miles: 5, safeMiles: 5, scoringVersion: 5, events: [{ ...brake, status: 'removed' }, pickup] }), ctx);
+    expect(rescored).toMatchObject({ penalties: 32, net: -32 });
+    expect(rescored.net - stored.net).toBe(8);
+    expect(scoreDrive(drive({ miles: 5, safeMiles: 5, scoringVersion: 6, events: [{ ...brake, status: 'removed' }, pickup] }), ctx).net).toBe(-64);
+  });
+});
+
 describe('scoreDrive — DashPal', () => {
   test('the two DashPal types, and only them', () => {
     expect(DASHCAM_EVENT_TYPES).toEqual(['eyes_off', 'drowsy']);
@@ -651,7 +717,9 @@ test('SCORING_VERSION is 6 and the barrel exports the API', () => {
   expect(barrel.speedingCost).toBe(speedingCost);
   expect(barrel.phoneSpeedMult).toBe(phoneSpeedMult);
   expect(barrel.tooShort).toBe(tooShort);
+  expect(barrel.scoringRules).toBe(scoringRules);
   expect([barrel.POINTS_PER_MILE, barrel.CLEAN_BONUS]).toEqual([20, 50]);
+  expect([barrel.LEGACY_POINTS_PER_MILE, barrel.LEGACY_CLEAN_BONUS, barrel.EARN_RATE_VERSION]).toEqual([10, 25, 6]);
   expect(barrel.SCORING_VERSION).toBe(6);
 });
 

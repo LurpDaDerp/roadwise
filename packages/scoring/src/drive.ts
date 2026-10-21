@@ -136,6 +136,33 @@ type PenaltyTable = typeof BASE_PENALTY | typeof RATING_PENALTY;
 export const POINTS_PER_MILE = 20;
 export const CLEAN_BONUS = 50;
 export const CLEAN_BONUS_MIN_MILES = 2;
+
+/**
+ * The rules a drive earns and is charged under. A drive first scored under an older
+ * `SCORING_VERSION` keeps its own rules when it is re-scored (an accepted dispute), so the re-score
+ * changes only the disputed event's penalty and never pays the newer rate out as a windfall.
+ */
+export interface ScoringRules {
+  pointsPerMile: number;
+  cleanBonus: 25 | 50;
+  /** Phone use is multiplied by `phoneSpeedMult`. */
+  phoneSpeed: boolean;
+}
+/** The first `SCORING_VERSION` that earns 20 a mile, a 50 clean bonus and prices phone use by speed. */
+export const EARN_RATE_VERSION = 6;
+export const LEGACY_POINTS_PER_MILE = 10;
+export const LEGACY_CLEAN_BONUS = 25;
+export const CURRENT_RULES: Readonly<ScoringRules> = { pointsPerMile: POINTS_PER_MILE, cleanBonus: CLEAN_BONUS, phoneSpeed: true };
+export const LEGACY_RULES: Readonly<ScoringRules> = { pointsPerMile: LEGACY_POINTS_PER_MILE, cleanBonus: LEGACY_CLEAN_BONUS, phoneSpeed: false };
+
+/**
+ * The rules for a drive first scored under `scoringVersion` (`trips.scoring_version`): the current
+ * ones for the current version, a later one, or no version at all; `LEGACY_RULES` under
+ * `EARN_RATE_VERSION`. A non-finite version reads as current.
+ */
+export function scoringRules(scoringVersion?: number | null): Readonly<ScoringRules> {
+  return typeof scoringVersion === 'number' && Number.isFinite(scoringVersion) && scoringVersion < EARN_RATE_VERSION ? LEGACY_RULES : CURRENT_RULES;
+}
 /** Daily cap bands on safe miles: full rate to 40, half rate to 100, nothing beyond. */
 export const DAILY_FULL_MILES = 40;
 export const DAILY_HALF_MILES = 100;
@@ -336,16 +363,18 @@ function penaltyFrom(table: PenaltyTable, e: DriveEvent): number {
 /**
  * The event's base penalty in points: no repeat or zone multiplier. Speeding is `speedingPenalty`
  * (measured, or the legacy tier price with its duration extension); a phone pickup that was not
- * stopped in traffic, and phone handling, are multiplied by `phoneSpeedMult`. Whole numbers.
+ * stopped in traffic, and phone handling, are multiplied by `phoneSpeedMult` (under `rules` that
+ * price phone use by speed; `LEGACY_RULES` do not). Whole numbers.
  */
-export function basePenalty(e: DriveEvent): number {
+export function basePenalty(e: DriveEvent, rules: Readonly<ScoringRules> = CURRENT_RULES): number {
+  const speedMult = rules.phoneSpeed ? phoneSpeedMult(phoneSpeedOf(e)) : 1;
   switch (e.type) {
     case 'speeding':
       return speedingPenalty(e);
     case 'phone_pickup':
-      return e.stoppedInTraffic ? BASE_PENALTY.phone_pickup_stopped : BASE_PENALTY.phone_pickup * phoneSpeedMult(phoneSpeedOf(e));
+      return e.stoppedInTraffic ? BASE_PENALTY.phone_pickup_stopped : BASE_PENALTY.phone_pickup * speedMult;
     case 'phone_handling':
-      return penaltyFrom(BASE_PENALTY, e) * phoneSpeedMult(phoneSpeedOf(e));
+      return penaltyFrom(BASE_PENALTY, e) * speedMult;
     default:
       return penaltyFrom(BASE_PENALTY, e);
   }
@@ -368,11 +397,11 @@ const repeatMult = (repeatIndex: number): number => (repeatIndex <= 0 ? 1 : repe
 
 /**
  * The event's game penalty before short-drive scaling: `basePenalty` (speeding's measured cost or
- * legacy extension, phone use's speed multiplier included) × repeat multiplier (2nd of a type
- * ×1.25, 3rd and later ×1.5) × zone (×2).
+ * legacy extension, phone use's speed multiplier included under the current `rules`) × repeat
+ * multiplier (2nd of a type ×1.25, 3rd and later ×1.5) × zone (×2).
  */
-export function eventPenalty(e: DriveEvent, repeatIndex: number): number {
-  return basePenalty(e) * repeatMult(repeatIndex) * (e.zone ? 2 : 1);
+export function eventPenalty(e: DriveEvent, repeatIndex: number, rules: Readonly<ScoringRules> = CURRENT_RULES): number {
+  return basePenalty(e, rules) * repeatMult(repeatIndex) * (e.zone ? 2 : 1);
 }
 
 /** Safe miles credited after the daily cap: ∫ rate over [earlier, earlier + safe], 3 dp. */
@@ -401,6 +430,13 @@ export interface DriveInput {
    * rule: absent reads as 0, so a caller that does not send it keeps the miles-only rule.
    */
   durationS?: number;
+  /**
+   * The `SCORING_VERSION` the drive was first scored under (`trips.scoring_version`), for a
+   * re-score (an accepted dispute). Absent reads as the current version. Under `EARN_RATE_VERSION`
+   * the drive keeps `LEGACY_RULES` (10 a safe mile, a 25 clean bonus, phone use without the speed
+   * multiplier; `scoringRules`), so the re-score changes only the disputed event's penalty.
+   */
+  scoringVersion?: number | null;
 }
 
 export interface DriveContext {
@@ -417,9 +453,16 @@ export interface DriveBreakdown {
   creditedMiles: number;
   /** creditedMiles × pointsPerMile (unrounded). */
   milePoints: number;
-  /** The points each credited mile earned (`POINTS_PER_MILE`). A breakdown stored before it was recorded earned 10. */
+  /**
+   * The points each credited mile earned: `POINTS_PER_MILE`, or `LEGACY_POINTS_PER_MILE` on a
+   * re-score of a drive first scored before `EARN_RATE_VERSION`. A breakdown stored before it was
+   * recorded earned 10.
+   */
   pointsPerMile?: number;
-  /** `CLEAN_BONUS` iff miles ≥ 2, zero active non-DashPal events, creditedMiles > 0 and not a loop repeat (25 on a breakdown stored before the rate doubled). */
+  /**
+   * `CLEAN_BONUS` iff miles ≥ 2, zero active non-DashPal events, creditedMiles > 0 and not a loop
+   * repeat (`LEGACY_CLEAN_BONUS` on a drive first scored before `EARN_RATE_VERSION`, or stored then).
+   */
   cleanBonus: 0 | 25 | 50;
   /** The streak multiplier, 1 + 0.02 × streak capped at 1.30. */
   streakMult: number;
@@ -456,7 +499,8 @@ export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown
   const dashcamMult: 1 | 1.25 = input.dashcam === true ? DASHCAM_MULT : 1;
   const mult = Math.min(MULT_CAP, roundTo(streakMult * dashcamMult, 4));
   const shortScale = Math.min(1, 0.5 + Math.max(0, input.miles) / 6);
-  const base = { pointsPerMile: POINTS_PER_MILE, streakMult, dashcamMult, mult, shortScale };
+  const rules = scoringRules(input.scoringVersion);
+  const base = { pointsPerMile: rules.pointsPerMile, streakMult, dashcamMult, mult, shortScale };
 
   if (tooShort(input.miles, input.durationS)) {
     return {
@@ -479,7 +523,7 @@ export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown
   const safeMiles = clamp(input.safeMiles, 0, input.miles);
   let creditedMiles = cappedMiles(safeMiles, ctx.safeMilesEarlierToday);
   if (input.loopRepeat) creditedMiles = roundTo(creditedMiles * 0.5, 3);
-  const milePoints = creditedMiles * POINTS_PER_MILE;
+  const milePoints = creditedMiles * rules.pointsPerMile;
 
   const active = input.events
     .filter(isActive)
@@ -490,7 +534,7 @@ export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown
   // No bonus once the daily cap is used up or on a repeated loop, so short clean loops can't farm it.
   const earnsBonus =
     input.miles >= CLEAN_BONUS_MIN_MILES && phoneCount === 0 && creditedMiles > 0 && !input.loopRepeat;
-  const cleanBonus: 0 | 50 = earnsBonus ? CLEAN_BONUS : 0;
+  const cleanBonus: 0 | 25 | 50 = earnsBonus ? rules.cleanBonus : 0;
   const gains = roundTo((milePoints + cleanBonus) * mult);
 
   const seen: Partial<Record<EventType, number>> = {};
@@ -499,7 +543,7 @@ export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown
   const events = active.map((e) => {
     const repeatIndex = seen[e.type] ?? 0;
     seen[e.type] = repeatIndex + 1;
-    const penalty = roundTo(eventPenalty(e, repeatIndex) * shortScale);
+    const penalty = roundTo(eventPenalty(e, repeatIndex, rules) * shortScale);
     penalties += penalty;
     rating += ratingPenalty(e);
     return { id: e.id, penalty };
