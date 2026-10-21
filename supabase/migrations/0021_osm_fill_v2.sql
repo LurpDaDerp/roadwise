@@ -27,6 +27,12 @@
 --     leaves an old road beside the real one to make the match ambiguous. "Not returned" is a
 --     stamp older than the claim by 5 minutes or more, so a clock that steps back a little never
 --     costs a road the fill just stored. A way crossing the cell's edge is left alone.
+--   * A done fill far smaller than the cell's last one (no ways, or under half of them) is not
+--     trusted: a mirror whose database is broken or stale can answer a well-formed, short reply
+--     (a reply cut off, or ending in an Overpass error remark, never reaches done: the edge
+--     function marks it failed). The cell keeps its ways, count and version, is marked failed and
+--     is fetched again in 10 minutes; only the third such fill in a row stands, and it deletes
+--     nothing (osm.filled_cells.suspect_fills counts them).
 
 -- ---------------------------------------------------------------------------
 -- tables
@@ -46,6 +52,8 @@ alter table osm.ways alter column seen_at set default now();
 alter table osm.ways alter column seen_at set not null;
 
 alter table osm.filled_cells add column fill_version int not null default 1 check (fill_version >= 1);
+-- whole fills in a row that came back far smaller than the cell's last one (osm_finish_fill_cell)
+alter table osm.filled_cells add column suspect_fills int not null default 0 check (suspect_fills between 0 and 2);
 
 -- ---------------------------------------------------------------------------
 -- osm_claim_fill_cell: 'claimed' when this caller must fill the cell now, 'done' when it is loaded,
@@ -90,13 +98,17 @@ end $$;
 
 -- ---------------------------------------------------------------------------
 -- osm_finish_fill_cell: the claim's outcome ('done', 'failed' or 'released'); true when the cell
--- was ours to finish. Done also records the version and drops the cell's ways the fill did not see.
+-- was ours to finish. Done also records the version and drops the cell's ways the fill did not see,
+-- unless the fill came back far smaller than the last one (below).
 -- ---------------------------------------------------------------------------
 drop function public.osm_finish_fill_cell(int, int, text, int);
 create function public.osm_finish_fill_cell(p_y int, p_x int, p_outcome text, p_way_count int, p_version int default 1) returns boolean
 language plpgsql volatile security invoker set search_path = public, extensions as $$
 declare
   v_claimed timestamptz;
+  v_prev int;
+  v_suspect int;
+  v_count int := coalesce(p_way_count, 0);
   v_box extensions.geometry;
 begin
   perform public.require_service_role('osm_finish_fill_cell');
@@ -110,18 +122,38 @@ begin
     raise exception 'version must be at least 1' using errcode = 'invalid_parameter_value';
   end if;
   -- only a cell still claimed can be finished: a stale claim another caller retook is theirs now
-  update osm.filled_cells
-    set status = p_outcome,
-        filled_at = case when p_outcome = 'done' then now() else filled_at end,
-        way_count = case when p_outcome = 'done' then coalesce(p_way_count, 0) else way_count end,
-        fill_version = case when p_outcome = 'done' then p_version else fill_version end
-    where cell_y = p_y and cell_x = p_x and status = 'filling'
-    returning claimed_at into v_claimed;
-  if v_claimed is null then
+  select c.claimed_at, c.way_count, c.suspect_fills into v_claimed, v_prev, v_suspect
+    from osm.filled_cells c
+    where c.cell_y = p_y and c.cell_x = p_x and c.status = 'filling'
+    for update;
+  if not found then
     return false;
   end if;
 
-  if p_outcome = 'done' then
+  if p_outcome <> 'done' then
+    update osm.filled_cells set status = p_outcome where cell_y = p_y and cell_x = p_x;
+    return true;
+  end if;
+
+  -- A whole reply far smaller than the last fill's (no ways, or under half) is not trusted: a
+  -- mirror with a broken or stale database answers well-formed and short. The cell keeps its ways,
+  -- count and version and is marked failed, so it is fetched again in 10 minutes; the third such
+  -- fill in a row stands (the roads really went), still deleting nothing.
+  if v_prev > 0 and v_count * 2 < v_prev then
+    if v_suspect < 2 then
+      update osm.filled_cells set status = 'failed', suspect_fills = v_suspect + 1 where cell_y = p_y and cell_x = p_x;
+      return true;
+    end if;
+    update osm.filled_cells
+      set status = 'done', filled_at = now(), way_count = v_count, fill_version = p_version, suspect_fills = 0
+      where cell_y = p_y and cell_x = p_x;
+    return true;
+  end if;
+
+  update osm.filled_cells
+    set status = 'done', filled_at = now(), way_count = v_count, fill_version = p_version, suspect_fills = 0
+    where cell_y = p_y and cell_x = p_x;
+  if v_count > 0 then
     v_box := extensions.st_makeenvelope(p_x * 0.1, p_y * 0.1, (p_x + 1) * 0.1, (p_y + 1) * 0.1, 4326);
     delete from osm.ways w
       where w.geom operator(extensions.&&) v_box

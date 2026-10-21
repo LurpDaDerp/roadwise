@@ -313,6 +313,32 @@ Deno.test('a partial reply (an Overpass remark) keeps the rows it did send but m
   assertEquals(await h.fill.ensure([TILE], UID), [true], 'not remembered as done');
 });
 
+Deno.test('a reply that is not a whole cell never finishes done: a remark with no rows, a body cut off, an error page sent as 200', async () => {
+  // [reply, error, mirrors asked]: with nothing stored yet the next mirror is asked; once a row is
+  // stored (the cut-off body) the cell is failed at once, its rows kept.
+  const replies: [string, string, number][] = [
+    [replyOf([], ',"remark":"runtime error: Query run out of memory"'), 'OverpassRemark', OVERPASS_ENDPOINTS.length],
+    ['{"version":0.6,"elements":[' + wayJson(1), 'OverpassIncomplete', 1],
+    ['<html>502 Bad Gateway</html>', 'OverpassIncomplete', OVERPASS_ENDPOINTS.length],
+  ];
+  for (const [text, name, asked] of replies) {
+    const h = harness({ claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done'), answers: [() => new Response(body(text), { status: 200 })] });
+    await h.fill.ensure([TILE], UID);
+    await h.fill.settled();
+    // The cell is failed, never done: fetched again later.
+    assertEquals(h.fetches.length, asked, name);
+    assertEquals(h.finishes.map((f) => f.outcome), ['failed'], name);
+    assert(String((h.logs.find((l) => l.level === 'error')?.args[1] as Record<string, unknown>).error).includes(name), name);
+  }
+});
+
+Deno.test('a whole reply with no ways finishes done with 0 ways: the database decides whether to trust it against the last fill (0021)', async () => {
+  const h = harness({ claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done'), answers: [() => new Response(body(replyOf([])), { status: 200 })] });
+  await h.fill.ensure([TILE], UID);
+  await h.fill.settled();
+  assertEquals(h.finishes, [{ cell: SEATTLE, outcome: 'done', ways: 0 }]);
+});
+
 Deno.test('a failing claim RPC reads as filling, is logged without the cell, and starts no fill', async () => {
   const h = harness();
   h.db.claimFillCell = () => Promise.reject(new Error('connection refused'));

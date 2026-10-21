@@ -1,10 +1,10 @@
 -- 0021_osm_fill_v2: more road classes, versioned cells, an empty cell checked again after a day,
--- and a refill that drops the ways it no longer finds. Cell (100, 100) is 10.0..10.1° N,
--- 10.0..10.1° E, away from seed.sql's fixture.
+-- a refill that drops the ways it no longer finds, unless it came back far smaller than the last
+-- fill. Cells (100, 100) and (102, 102) are 10.0..10.1° and 10.2..10.3°, away from seed.sql's fixture.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(28);
+select plan(39);
 
 -- ---------------------------------------------------------------------------
 -- posture
@@ -81,6 +81,33 @@ select is(public.osm_finish_fill_cell(100, 100, 'done', 2, 3), true, 'the refill
 select is((select array_agg(osm_id order by osm_id) from osm.ways where osm_id between 9200000001 and 9200000011 or osm_id = 1125899916842624),
   array[9200000001, 9200000010, 9200000011, 1125899916842624]::bigint[],
   'the ways it did not see inside the cell are gone; the one it saw, the one crossing the edge and the one outside stay');
+
+-- ---------------------------------------------------------------------------
+-- a fill far smaller than the last one deletes nothing and is fetched again
+-- ---------------------------------------------------------------------------
+select has_column('osm', 'filled_cells', 'suspect_fills', 'osm.filled_cells counts the suspect fills');
+select is(public.osm_claim_fill_cell(102, 102, 2), 'claimed', 'a cell');
+select is(public.osm_finish_fill_cell(102, 102, 'done', 100, 2), true, 'filled with 100 ways');
+reset role;
+insert into osm.ways (osm_id, geom, highway, oneway, seen_at) values
+  (9200000020, extensions.st_setsrid(extensions.st_makeline(extensions.st_makepoint(10.25, 10.25), extensions.st_makepoint(10.26, 10.25)), 4326), 'primary', 0, now() - interval '2 days');
+update osm.filled_cells set status = 'filling', claimed_at = now() where cell_y = 102 and cell_x = 102;
+set local role service_role;
+select is(public.osm_finish_fill_cell(102, 102, 'done', 0, 2), true, 'a whole reply with no ways');
+select is((select row(status, way_count, fill_version, suspect_fills)::text from osm.filled_cells where cell_y = 102 and cell_x = 102),
+  row('failed', 100, 2, 1)::text, 'is not trusted: failed (fetched again in 10 minutes), the count and version kept');
+select is((select count(*) from osm.ways where osm_id = 9200000020), 1::bigint, 'and the ways it did not return are kept');
+reset role;
+update osm.filled_cells set status = 'filling', claimed_at = now() where cell_y = 102 and cell_x = 102;
+set local role service_role;
+select is(public.osm_finish_fill_cell(102, 102, 'done', 49, 2), true, 'under half the last count');
+select is((select row(status, way_count, suspect_fills)::text from osm.filled_cells where cell_y = 102 and cell_x = 102), row('failed', 100, 2)::text, 'is not trusted either');
+reset role;
+update osm.filled_cells set status = 'filling', claimed_at = now() where cell_y = 102 and cell_x = 102;
+set local role service_role;
+select is(public.osm_finish_fill_cell(102, 102, 'done', 40, 2), true, 'the third such fill in a row');
+select is((select row(status, way_count, suspect_fills)::text from osm.filled_cells where cell_y = 102 and cell_x = 102), row('done', 40, 0)::text, 'stands');
+select is((select count(*) from osm.ways where osm_id = 9200000020), 1::bigint, 'and still deletes nothing');
 
 select * from finish();
 rollback;
