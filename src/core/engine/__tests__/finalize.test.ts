@@ -8,6 +8,7 @@ import {
   closeDrive,
   dropReason,
   dropTrip,
+  boundExposure,
   exposureOf,
   finalizeTrip,
   INVALID_PAYLOAD_SYNC_ERROR,
@@ -90,7 +91,7 @@ test('a 20-minute drive is stored as pending with its classification, trimmed ro
   expect(payload.integrity).toMatchObject({ mockLocation: false, motionMismatch: false, validGnssPct: 100 });
   expect(payload.integrity.maxSpeedMph).toBeCloseTo(33.55, 1);
   // The opportunities: one per row moving at 5 mph or more, the stored columns the same.
-  expect(payload.exposure).toEqual(exposureOf(session, 1200));
+  expect(payload.exposure).toEqual(exposureOf(session, 1200, payload.miles));
   expect(payload.exposure!.movingS).toBe(1200);
   expect(result.trip).toMatchObject({ slowdowns: 0, speedups: 0, turns: 0, limit_s: 0, moving_s: 1200 });
   // The route never shows the first/last 0.25 mi nor the zone around the start.
@@ -403,4 +404,13 @@ test('a drive under 0.5 mi is scored once it lasts 2 min (and too short under bo
   expect(scored.trip.reason).toBeNull();
   const short = closedSession(110, [], { speedMps: 5, clientTripId: uuid(8) });
   expect((await finalizeTrip(short, deps())).drive).toMatchObject({ scored: false, reason: 'too_short' });
+});
+
+test('the counters are held as the server holds them: moving within the drive, limit within moving, a swing per 15 s, a turn per 10 s, 40 a mile', () => {
+  const e = { slowdowns: 500, speedups: 3, turns: 900, limitS: 9000, movingS: 9000 };
+  expect(boundExposure(e, 600, 10)).toEqual({ slowdowns: 40, speedups: 3, turns: 60, limitS: 600, movingS: 600 });
+  expect(boundExposure(e, 600, 0.5)).toEqual({ slowdowns: 20, speedups: 3, turns: 20, limitS: 600, movingS: 600 });
+  expect(boundExposure({ slowdowns: 5, speedups: 5, turns: 5, limitS: 0, movingS: 0 }, 0, 0)).toEqual({ slowdowns: 0, speedups: 0, turns: 0, limitS: 0, movingS: 0 });
+  expect(boundExposure({ slowdowns: 5, speedups: 5, turns: 5, limitS: 5, movingS: 5 }, 100, 1)).toEqual({ slowdowns: 1, speedups: 1, turns: 1, limitS: 5, movingS: 5 });
+  expect(boundExposure({ slowdowns: Number.NaN, speedups: -2, turns: 2.7, limitS: 50_000, movingS: 50_000 }, 50_000, 500)).toEqual({ slowdowns: 0, speedups: 0, turns: 2, limitS: 43_200, movingS: 43_200 });
 });

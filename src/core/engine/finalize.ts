@@ -228,12 +228,31 @@ export function sanitizeEvent(e: DetectedEvent, tripStartedAt: number, tripEnded
 }
 
 /**
- * The drive's opportunity counters as uploaded and stored: the session's (its mark's, for a cut
- * drive) with the open swing settled (`closeExposure`), the moving seconds never past the drive's
- * own duration.
+ * The counters held to what the drive itself allows, exactly as the server holds them
+ * (`apply_drive`), so the phone's own reading is the server's: moving time within the drive's
+ * length (and 12 h), limit time within moving time, a slowdown or a speed-up per 15 s of moving and
+ * a turn per 10 s (at least one each), and no count above 40 a mile. Pure.
  */
-export function exposureOf(session: Pick<TripSession, 'exposure' | 'movingRows'>, durationS: number): Exposure {
-  return closeExposure(session.exposure, Math.min(session.movingRows, Math.floor(Math.max(0, durationS))));
+export function boundExposure(e: Exposure, durationS: number, miles: number): Exposure {
+  const whole = (v: number): number => (Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0);
+  const movingS = Math.min(whole(durationS), 43_200, whole(e.movingS));
+  const cap = Math.min(20_000, Math.ceil(Math.max(0, Number.isFinite(miles) ? miles : 0) * 40));
+  const swings = Math.max(1, Math.ceil(movingS / 15));
+  return {
+    slowdowns: Math.min(cap, swings, whole(e.slowdowns)),
+    speedups: Math.min(cap, swings, whole(e.speedups)),
+    turns: Math.min(cap, Math.max(1, Math.ceil(movingS / 10)), whole(e.turns)),
+    limitS: Math.min(movingS, whole(e.limitS)),
+    movingS,
+  };
+}
+
+/**
+ * The drive's opportunity counters as uploaded and stored: the session's (its mark's, for a cut
+ * drive) with the open swing settled (`closeExposure`), then held to the drive (`boundExposure`).
+ */
+export function exposureOf(session: Pick<TripSession, 'exposure' | 'movingRows'>, durationS: number, miles: number): Exposure {
+  return boundExposure(closeExposure(session.exposure, session.movingRows), durationS, miles);
 }
 
 const toNewEvent = (e: PayloadEvent, clientTripId: string): NewEvent => ({
@@ -395,7 +414,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     validGnssPct,
     maxSpeedMph,
   };
-  const exposure = exposureOf(session, durationS);
+  const exposure = exposureOf(session, durationS, miles);
   const point = (f: { lat: number; lng: number } | null) => (f === null ? null : { lat: round4(f.lat), lng: round4(f.lng) });
   const candidate = {
     v: 4 as const,
