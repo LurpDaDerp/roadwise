@@ -1,8 +1,10 @@
 /**
- * `register_device` (plan §4): this install's row under the signed-in account — platform and, when
- * notifications are permitted, the Expo push token — and the one answer the app keeps:
- * `league_eligible` (the first account to register a device claims it). Called on sign-in and on
- * foreground, throttled to once every 6 hours unless the token changed.
+ * `register_device` (plan §4): this install's row under the signed-in account — platform, the Expo
+ * push token when notifications are permitted and, on an iPhone with iOS 17.2 or later, the Live
+ * Activity push-to-start token (so a drive that starts on its own can show on the lock screen) —
+ * and the one answer the app keeps: `league_eligible` (the first account to register a device
+ * claims it). Called on sign-in and on foreground, throttled to once every 6 hours unless a token
+ * changed.
  */
 import type { SettingsRepo } from '@/data/db/settings';
 
@@ -19,6 +21,8 @@ export interface RegisterDeps {
   deviceId: string;
   platform: 'ios' | 'android';
   pushToken: string | null;
+  /** The Live Activity push-to-start token (lowercase hex), or null where there is none. */
+  liveActivityToken?: string | null;
   now: () => number;
   force?: boolean;
   onError?: (error: unknown, context: string) => void;
@@ -31,13 +35,21 @@ interface LastRegister {
   deviceId: string;
   at: number;
   token: string | null;
+  /** The Live Activity token registered with it (absent in a stamp from before it existed: none). */
+  laToken?: string | null;
 }
 
 function parseLast(raw: unknown): LastRegister | null {
   if (raw === null || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.userId !== 'string' || typeof r.deviceId !== 'string' || typeof r.at !== 'number') return null;
-  return { userId: r.userId, deviceId: r.deviceId, at: r.at, token: typeof r.token === 'string' ? r.token : null };
+  return {
+    userId: r.userId,
+    deviceId: r.deviceId,
+    at: r.at,
+    token: typeof r.token === 'string' ? r.token : null,
+    laToken: typeof r.laToken === 'string' ? r.laToken : null,
+  };
 }
 
 /** The cached `league_eligible` for `userId`, or null before the first registration answered. */
@@ -72,8 +84,8 @@ export interface ReleaseDeps {
 
 /**
  * Before the session ends at sign-out: `release_device(p_device_id)` clears this install's push
- * token on the server, so the next holder of the phone never sees this driver's pushes (security
- * audit, Important 1). Bounded, failure tolerated (Expo's `DeviceNotRegistered` and the next
+ * token and Live Activity token on the server, so the next holder of the phone never sees this
+ * driver's pushes or lock-screen drives (security audit, Important 1). Bounded, failure tolerated (Expo's `DeviceNotRegistered` and the next
  * account's `register_device` are the backstops); the local registration stamp is cleared so a
  * return registers afresh.
  */
@@ -104,29 +116,36 @@ export async function releaseDevice(deps: ReleaseDeps): Promise<'released' | 'sk
 /**
  * True while this account's registration from this install is under 6 hours old. Checked before
  * the push token is read on a plain foreground, so a throttled foreground costs no Expo call (a
- * new token arrives through the token listener, which forces a registration anyway).
+ * new token arrives through the token listener, which forces a registration anyway). Given the
+ * Live Activity token read now (a local read), a token the last registration did not carry makes
+ * it false, so a changed one is registered at the next foreground even without its event.
  */
 export async function registeredRecently(
   settings: Pick<SettingsRepo, 'get'>,
   userId: string,
   deviceId: string,
-  now: number
+  now: number,
+  liveActivityToken?: string | null
 ): Promise<boolean> {
   const last = parseLast(await settings.get<unknown>(LAST_REGISTER_KEY));
-  return last !== null && last.userId === userId && last.deviceId === deviceId && last.at <= now && now - last.at < REGISTER_INTERVAL_MS;
+  if (last === null || last.userId !== userId || last.deviceId !== deviceId || last.at > now || now - last.at >= REGISTER_INTERVAL_MS) return false;
+  return liveActivityToken === undefined || (last.laToken ?? null) === liveActivityToken;
 }
 
 export async function registerDevice(deps: RegisterDeps): Promise<RegisterResult> {
   const { settings, userId, deviceId } = deps;
   const now = deps.now();
   const last = parseLast(await settings.get<unknown>(LAST_REGISTER_KEY));
+  const laToken = deps.liveActivityToken ?? null;
   const same = last !== null && last.userId === userId && last.deviceId === deviceId;
-  if (!deps.force && same && last.token === deps.pushToken && last.at <= now && now - last.at < REGISTER_INTERVAL_MS) return 'throttled';
+  if (!deps.force && same && last.token === deps.pushToken && (last.laToken ?? null) === laToken && last.at <= now && now - last.at < REGISTER_INTERVAL_MS) return 'throttled';
 
   let eligible: boolean | null = null;
   try {
     const args: Record<string, unknown> = { p_device_id: deviceId, p_platform: deps.platform };
     if (deps.pushToken !== null) args.p_push_token = deps.pushToken;
+    // Left out when there is none: the server keeps the one it holds (a token is only ever replaced).
+    if (laToken !== null) args.p_live_activity_token = laToken;
     const answer = await deps.rpc('register_device', args);
     const r = answer !== null && typeof answer === 'object' ? (answer as Record<string, unknown>) : {};
     eligible = typeof r.league_eligible === 'boolean' ? r.league_eligible : null;
@@ -134,7 +153,7 @@ export async function registerDevice(deps: RegisterDeps): Promise<RegisterResult
     deps.onError?.(asError(error, 'register_device failed'), 'register device');
     return 'error';
   }
-  const stamp: LastRegister = { userId, deviceId, at: now, token: deps.pushToken };
+  const stamp: LastRegister = { userId, deviceId, at: now, token: deps.pushToken, laToken };
   await settings.set(LAST_REGISTER_KEY, stamp);
   if (eligible !== null) await settings.set(LEAGUE_ELIGIBLE_KEY, { userId, eligible });
   return 'saved';

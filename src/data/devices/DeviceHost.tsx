@@ -1,11 +1,12 @@
 /**
  * Keeps this install registered with the server (`register_device`): on sign-in, on every foreground
- * (throttled), and when the OS issues a new push token. Renders nothing; mounted once by the root
+ * (throttled), and when the OS issues a new push token or a new Live Activity push-to-start token
+ * (iOS 17.2+). Renders nothing; mounted once by the root
  * layout. Runs only while signed in and while this account is the device owner with no handover
  * pending, so nothing is ever registered for one driver from another's phone.
  *
  * Battery: no timer and no polling. The only triggers are the OS saying the app came forward, a
- * screen asking (`requestDeviceSync`) and a new token.
+ * screen asking (`requestDeviceSync`) and a new token of either kind.
  */
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { AppState, Platform } from 'react-native';
@@ -18,12 +19,22 @@ import { useSession } from '@/data/supabase/session';
 
 import { onDeviceSyncRequested } from './events';
 import { getInstallId } from './installId';
-import { createExpoPushPort, easProjectId, readPushToken, type PushPort } from './pushToken';
+import {
+  createExpoPushPort,
+  createLiveDriveTokenPort,
+  easProjectId,
+  readLiveActivityToken,
+  readPushToken,
+  type LiveActivityTokenPort,
+  type PushPort,
+} from './pushToken';
 import { registerDevice, registeredRecently, type Rpc } from './register';
 
 export interface DeviceHostDeps {
   rpc: Rpc;
   push: PushPort;
+  /** The Live Activity push-to-start token (iOS); its token is null elsewhere. */
+  liveActivity: LiveActivityTokenPort;
   appState: AppStateLike & { currentState?: string | null };
   platform: 'ios' | 'android' | null;
   projectId: string | null;
@@ -47,6 +58,7 @@ function resolveDeps(p: Partial<DeviceHostDeps> = {}): DeviceHostDeps {
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- the app client, only when mounted for real
       ((require('@/data/server/rpc') as typeof import('@/data/server/rpc')).callRpc as Rpc),
     push: p.push ?? createExpoPushPort(),
+    liveActivity: p.liveActivity ?? createLiveDriveTokenPort(),
     appState: p.appState ?? AppState,
     platform: p.platform !== undefined ? p.platform : Platform.OS === 'ios' || Platform.OS === 'android' ? Platform.OS : null,
     projectId: p.projectId !== undefined ? p.projectId : easProjectId(),
@@ -92,11 +104,14 @@ export function DeviceHost(props: DeviceHostProps): null {
       if (!(await ownerHolds())) return;
       deviceId ??= await getInstallId(settings, d.newId);
       if (!live) return;
-      if (!force && (await registeredRecently(settings, userId, deviceId, now()))) return;
+      // A local read (no network): a token the last registration did not carry is registered now.
+      const liveActivityToken = d.platform === 'ios' ? await readLiveActivityToken(d.liveActivity, (e) => report(e, 'devices live activity token')) : null;
+      if (!live) return;
+      if (!force && (await registeredRecently(settings, userId, deviceId, now(), liveActivityToken))) return;
       if (!live) return;
       const pushToken = await readPushToken(d.push, d.projectId, (e) => report(e, 'devices push token'));
       if (!live) return;
-      const result = await registerDevice({ rpc: d.rpc, settings, userId, deviceId, platform: d.platform, pushToken, now, force, onError: report });
+      const result = await registerDevice({ rpc: d.rpc, settings, userId, deviceId, platform: d.platform, pushToken, liveActivityToken, now, force, onError: report });
       if (result !== 'error') forcedFor.current = userId;
     };
 
@@ -132,6 +147,8 @@ export function DeviceHost(props: DeviceHostProps): null {
     cleanups.push(onDeviceSyncRequested(() => void run(() => register(true))));
     const tokenSub = d.push.addPushTokenListener(() => void run(() => register(true)));
     cleanups.push(() => tokenSub.remove());
+    const laSub = d.liveActivity.addTokenListener(() => void run(() => register(true)));
+    cleanups.push(() => laSub.remove());
     const appSub = d.appState.addEventListener('change', (next) => {
       if (next === 'active') void run(foreground);
     });

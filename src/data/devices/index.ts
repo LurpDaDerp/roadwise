@@ -14,6 +14,18 @@ export {
   type RegisterResult,
   type Rpc,
 } from './register';
-export { createExpoPushPort, easProjectId, PUSH_TOKEN_KEY, readPushToken, TOKEN_PATTERN, type PushPort } from './pushToken';
+export {
+  createExpoPushPort,
+  createLiveDriveTokenPort,
+  easProjectId,
+  LIVE_ACTIVITY_TOKEN_PATTERN,
+  PUSH_TOKEN_KEY,
+  readLiveActivityToken,
+  readPushToken,
+  TOKEN_PATTERN,
+  type LiveActivityTokenPort,
+  type PushPort,
+} from './pushToken';
+export { LIVE_ACTIVITY_START_FUNCTION, LIVE_ACTIVITY_START_TIMEOUT_MS, requestLiveActivityStart, type LiveActivityStartDeps, type LiveActivityStartRequest } from './liveActivity';
 export { onDeviceSyncRequested, requestDeviceSync } from './events';
 export { DeviceHost, type DeviceHostDeps, type DeviceHostProps } from './DeviceHost';

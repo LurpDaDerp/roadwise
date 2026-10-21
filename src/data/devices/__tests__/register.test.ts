@@ -1,7 +1,7 @@
 /** @jest-environment node */
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, migrate } from '@/data/db';
-import { readPushToken, type PushPort } from '@/data/devices/pushToken';
+import { readLiveActivityToken, readPushToken, type LiveActivityTokenPort, type PushPort } from '@/data/devices/pushToken';
 import { LAST_REGISTER_KEY, LEAGUE_ELIGIBLE_KEY, readLeagueEligible, REGISTER_INTERVAL_MS, registerDevice, registeredRecently, releaseDevice } from '@/data/devices/register';
 
 const T0 = 1_700_000_000_000;
@@ -80,5 +80,44 @@ test('readPushToken: only on a device with permission, and only a real Expo toke
   expect(await readPushToken(port({ getExpoPushToken: async () => 'junk' }), null)).toBeNull();
   const errors: unknown[] = [];
   expect(await readPushToken(port({ getExpoPushToken: async () => Promise.reject(new Error('x')) }), null, (e) => errors.push(e))).toBeNull();
+  expect(errors).toHaveLength(1);
+});
+
+const LA = 'a1b2c3d4'.repeat(8);
+
+test('the Live Activity token goes up as p_live_activity_token when there is one; a new one is not throttled; none leaves the server’s as it is', async () => {
+  const db = await createSqlJsDb();
+  await migrate(db);
+  const settings = createSettingsRepo(db);
+  const calls: [string, Record<string, unknown> | undefined][] = [];
+  const rpc = async (fn: string, args?: Record<string, unknown>) => {
+    calls.push([fn, args]);
+    return { league_eligible: false };
+  };
+  const base = { rpc, settings, userId: 'u1', deviceId: 'install-1234', platform: 'ios' as const, pushToken: null, now: () => T0 };
+  expect(await registerDevice({ ...base, liveActivityToken: LA })).toBe('saved');
+  expect(calls[0]).toEqual(['register_device', { p_device_id: 'install-1234', p_platform: 'ios', p_live_activity_token: LA }]);
+  expect(await registerDevice({ ...base, liveActivityToken: LA, now: () => T0 + 1000 })).toBe('throttled');
+  const next = 'f'.repeat(64);
+  expect(await registerDevice({ ...base, liveActivityToken: next, now: () => T0 + 2000 })).toBe('saved');
+  expect(calls[1]?.[1]).toMatchObject({ p_live_activity_token: next });
+  expect(await registerDevice({ ...base, platform: 'android', liveActivityToken: null, now: () => T0 + 3000 })).toBe('saved');
+  expect(calls[2]?.[1]).not.toHaveProperty('p_live_activity_token');
+
+  // The foreground's cheap check: a token the last registration did not carry is not "recent".
+  expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + 4000)).toBe(true);
+  expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + 4000, null)).toBe(true);
+  expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + 4000, LA)).toBe(false);
+});
+
+test('readLiveActivityToken: only a hex token in the server’s pattern (lowercased); none, junk or a failure is null', async () => {
+  const port = (getToken: LiveActivityTokenPort['getToken']): LiveActivityTokenPort => ({ getToken, addTokenListener: () => ({ remove() {} }) });
+  expect(await readLiveActivityToken(port(async () => LA))).toBe(LA);
+  expect(await readLiveActivityToken(port(async () => LA.toUpperCase()))).toBe(LA);
+  expect(await readLiveActivityToken(port(async () => null))).toBeNull();
+  expect(await readLiveActivityToken(port(async () => 'abc'))).toBeNull();
+  expect(await readLiveActivityToken(port(async () => 'z'.repeat(64)))).toBeNull();
+  const errors: unknown[] = [];
+  expect(await readLiveActivityToken(port(async () => Promise.reject(new Error('x'))), (e) => errors.push(e))).toBeNull();
   expect(errors).toHaveLength(1);
 });
