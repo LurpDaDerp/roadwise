@@ -5,6 +5,7 @@
  */
 import type { Ionicons } from '@expo/vector-icons';
 
+import { hudCopy } from '@/features/drive/hudCopy';
 import {
   CAMERA_DISPUTE_AUTO_PER_WEEK,
   DASHCAM_DROWSY_GAP_S,
@@ -21,6 +22,9 @@ import {
   SPEEDING_GRACE_S,
   speedTolerance,
 } from '@scoring';
+
+/** The driving screen's own words for its "Not driving?" link, quoted wherever the rules name it. */
+const ND = hudCopy.notDriving;
 
 export type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -57,7 +61,7 @@ const MERGE_MIN = Math.round(MERGE_GAP_S / 60);
 /** The three ideas: Home's How it works card and the top of How scores work. */
 export const howItWorks = (autoDrives: boolean): HowItem[] => [
   autoDrives
-    ? { icon: 'car-sport-outline', title: 'Drives record themselves', body: 'Once you’re on the road, RoadWise starts recording. Riding along? Tap “Not driving?”.' }
+    ? { icon: 'car-sport-outline', title: 'Drives record themselves', body: `Once you’re on the road, RoadWise starts recording. Riding along? Tap “${ND}”.` }
     : { icon: 'car-sport-outline', title: 'Start, then drive', body: 'Swipe Start drive before you pull out. RoadWise records until you park.' },
   { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
   {
@@ -119,7 +123,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
           `Once you’ve been moving at about ${n.autoTriggerMph} mph for ${n.autoTriggerS} s, RoadWise starts recording, counting from the moment you set off.`,
           `It ends once you park and walk away, or after ${IDLE_MIN} min parked.`,
           `Stop for under ${MERGE_MIN} min and set off again from the same spot, and it stays one drive.`,
-          `Riding along? Open the drive screen and tap “Not driving?”. It’s there for your first ${n.notDrivingMin} minutes on that screen.`,
+          `Riding along? Open the drive screen and tap “${ND}”. It’s there for your first ${n.notDrivingMin} minutes on that screen.`,
           `Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
         ],
       }
@@ -130,7 +134,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
         lines: [
           `Swipe Start drive on Home before you pull out. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
           `It records until you swipe End drive, park and walk away, or stay parked for ${IDLE_MIN} min.`,
-          `Riding along? Tap “Not driving?” on the drive screen. It’s there for your first ${n.notDrivingMin} minutes on that screen.`,
+          `Riding along? Tap “${ND}” on the drive screen. It’s there for your first ${n.notDrivingMin} minutes on that screen.`,
         ],
       },
   {
@@ -170,7 +174,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
       'Every event on a drive has a Report link.',
       `“Braked for a hazard” and “wrong speed limit” are accepted right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
       `“DashPal got it wrong” is accepted right away too, up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of those.`,
-      `“Wasn’t driving” takes a whole drive off when someone else drove. You can use it ${NOT_DRIVING_PER_MONTH} times a month, within a day of the drive, as long as “Not driving?” didn’t run out during it.`,
+      `“Wasn’t driving” takes a whole drive off when someone else drove. You can use it ${NOT_DRIVING_PER_MONTH} times a month, within a day of the drive, as long as “${ND}” didn’t run out during it.`,
       'Recorded drives can’t be deleted, so nobody can hide a rough drive.',
     ],
   },

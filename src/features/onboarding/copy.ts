@@ -1,6 +1,8 @@
 import type { Ionicons } from '@expo/vector-icons';
 import { IDLE_END_S } from '@scoring';
 
+import { hudCopy } from '@/features/drive/hudCopy';
+
 import type { StepId } from './flow';
 
 /** The automatic end's minutes (product spec v3 "Ending on its own"), so the words follow the rule. */
@@ -53,13 +55,13 @@ export const onboardingCopy = {
     rows: {
       ios: [
         { icon: 'car-sport-outline', title: 'It notices your drives', body: 'Once you’re on the road, RoadWise starts recording by itself. No buttons to remember.' },
-        { icon: 'person-outline', title: 'Just riding along?', body: 'Open RoadWise and tap “Not driving?” so that trip won’t count.' },
+        { icon: 'person-outline', title: 'Just riding along?', body: `Open RoadWise and tap “${hudCopy.notDriving}” so that trip won’t count.` },
         { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
         { icon: 'people-outline', title: 'Better with friends', body: 'Build your Safety Rating and see how it compares with your friends.' },
       ],
       android: [
         { icon: 'car-sport-outline', title: 'Start, then drive', body: 'Swipe Start drive on Home before you pull out. RoadWise records until you park.' },
-        { icon: 'person-outline', title: 'Not you driving?', body: 'Tap “Not driving?” on the drive screen so that trip won’t count.' },
+        { icon: 'person-outline', title: 'Not you driving?', body: `Tap “${hudCopy.notDriving}” on the drive screen so that trip won’t count.` },
         { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
         { icon: 'people-outline', title: 'Better with friends', body: 'Build your Safety Rating and see how it compares with your friends.' },
       ],

@@ -5,6 +5,8 @@
  */
 import type { MeritTier } from '@scoring';
 
+import { hudCopy } from '@/features/drive/hudCopy';
+
 export const recapCopy = {
   /** The share card's and the hero's three facts, lowercase, the same on both. */
   facts: {
@@ -59,7 +61,7 @@ export const recapCopy = {
     too_old: 'This drive is more than a day old, so it can’t be marked.',
     no_uses_left: 'You’ve used both “Wasn’t driving” marks this month.',
     already_marked: 'This drive was already marked as not driving.',
-    not_driving_expired: 'The “Not driving?” option on that drive ran out, so it can’t be marked.',
+    not_driving_expired: `The “${hudCopy.notDriving}” option on that drive ran out, so it can’t be marked.`,
   } as Readonly<Record<string, string>>,
   report: {
     sent: "Thanks. We'll check it and update this drive.",
