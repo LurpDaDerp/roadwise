@@ -216,26 +216,47 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** A 0.32 g acceleration the GNSS confirms (20 → 30 mph): one minor hard accel. */
+  /** A 0.36 g acceleration the GNSS confirms (20 → 30 mph): one minor hard accel. */
   'hard-accel-confirmed': () => ({
     name: 'hard-accel-confirmed',
-    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 30 : 20, aLonMax: i === 100 ? 0.32 : 0.02 })),
+    rows: drive(200, (i) => ({ speedMph: i >= 100 ? 30 : 20, aLonMax: i === 100 ? 0.36 : 0.02 })),
     limits: [posted(35)],
     expected: [{ type: 'hard_accel', startsNear: at(100), tier: 'minor' }],
   }),
 
-  /** A 0.45 g lateral peak with the course swinging 45° in a second at 30 mph: plausible, one corner. */
+  /**
+   * A 0.45 g push to the right (the lateral force is left-positive) with the gyroscope turning and
+   * the course swinging 45° right in a second at 30 mph: plausible, one corner.
+   */
   'hard-corner-plausible': () => ({
     name: 'hard-corner-plausible',
-    rows: drive(200, (i) => ({ speedMph: 30, course: i >= 100 ? 135 : 90, aLatMax: i === 100 ? 0.45 : 0.02 })),
+    rows: drive(200, (i) => ({ speedMph: 30, course: i >= 100 ? 135 : 90, aLatMin: i === 100 ? -0.45 : -0.02, yawRateMax: i === 100 ? 0.8 : 0.01 })),
     limits: [posted(35)],
     expected: [{ type: 'hard_corner', startsNear: at(100), tier: 'minor' }],
   }),
 
-  /** The same lateral peak on a dead-straight course: the phone, not the car. */
+  /** The same turn with the push to the left, against the turn: a jolt, not the corner. */
+  'hard-corner-wrong-side': () => ({
+    name: 'hard-corner-wrong-side',
+    rows: drive(200, (i) => ({ speedMph: 30, course: i >= 100 ? 135 : 90, aLatMax: i === 100 ? 0.45 : 0.02, yawRateMax: i === 100 ? 0.8 : 0.01 })),
+    limits: [posted(35)],
+    expected: [{ type: 'hard_corner', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** The turn's push with no course on the fixes around it (-1, a fix with no bearing): nothing confirms it. */
+  'hard-corner-no-course': () => ({
+    name: 'hard-corner-no-course',
+    rows: drive(200, (i) => ({ speedMph: 30, course: between(i, 95, 105) ? -1 : 90, aLatMin: i === 100 ? -0.45 : -0.02, yawRateMax: i === 100 ? 0.8 : 0.01 })),
+    limits: [posted(35)],
+    expected: [{ type: 'hard_corner', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** The same lateral peak, the gyroscope reading a turn, on a dead-straight course: the phone, not the car. */
   'hard-corner-straight': () => ({
     name: 'hard-corner-straight',
-    rows: drive(200, (i) => ({ speedMph: 30, aLatMax: i === 100 ? 0.45 : 0.02 })),
+    rows: drive(200, (i) => ({ speedMph: 30, aLatMin: i === 100 ? -0.45 : -0.02, yawRateMax: i === 100 ? 0.8 : 0.01 })),
     limits: [posted(35)],
     expected: [{ type: 'hard_corner', startsNear: at(100), absent: true }],
     noEvents: true,

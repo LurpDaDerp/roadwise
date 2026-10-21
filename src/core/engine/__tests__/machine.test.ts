@@ -101,10 +101,10 @@ test('alerts: one shown speeding alert per episode (its repeats are sounded only
   const phone = h.alerts.filter((a) => a.type.startsWith('phone'));
   expect(phone.map((a) => a.type)).toEqual(['phone_pickup', 'phone_handling']);
   expect(phone[1]!.at - phone[0]!.at).toBeGreaterThanOrEqual(15_000 - 2000);
-  // A confirmed brake is told on the row that releases it.
+  // A brake is told on the row the GNSS confirms it (its peak row here), not after the 2-s veto hold.
   await feed(h, seq([5, (i) => ({ speed: mph(35), ts: T0 + 74_000 + i * 1000 })]));
   await feed(h, [row({ speed: mph(25), aLonMin: -0.35, ts: T0 + 79_000 }), ...seq([4, (i) => ({ speed: mph(25), ts: T0 + 80_000 + i * 1000 })])]);
-  expect(h.alerts.at(-1)).toMatchObject({ type: 'hard_brake', tier: 'minor', points: 8 });
+  expect(h.alerts.at(-1)).toMatchObject({ type: 'hard_brake', tier: 'minor', points: 8, at: T0 + 79_000 });
   expect(h.engine.snapshot().lastAlert?.type).toBe('hard_brake');
   await h.engine.dispatch({ type: 'end', ts: T0 + 90_000 });
   expect(h.finalized[0]!.events.map((e) => e.type).sort()).toEqual(['hard_brake', 'phone_handling', 'phone_pickup', 'speeding']);

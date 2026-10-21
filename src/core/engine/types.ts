@@ -151,6 +151,16 @@ export interface OpenEpisode {
   maxSpeedMph?: number | null;
 }
 
+/** The three hard-movement kinds. */
+export type HarshKind = 'hard_brake' | 'hard_accel' | 'hard_corner';
+
+/** A hard brake, start or turn the harsh detector has just confirmed: alert it now (its tier so far). */
+export interface HarshAlert {
+  id: string;
+  type: HarshKind;
+  tier: Tier;
+}
+
 /** The speeding episode in progress (its end window included), as the engine's alerts read it. */
 export interface SpeedingEpisode {
   id: string;
@@ -185,6 +195,8 @@ export interface DetectorSuite extends Detector {
   speedingNow(): SpeedingReading | null;
   /** The speeding episode in progress, its end window included (whatever the current row), or null. */
   speedingEpisode(): SpeedingEpisode | null;
+  /** The hard brakes, starts and turns first confirmed on the latest row (each told once). */
+  harshAlerts(): HarshAlert[];
   /** The phone episode in progress on the latest row, if any. */
   openPhone(): OpenEpisode | null;
   /** A speeding or phone episode is active on the latest row: its distance is not safe miles. */

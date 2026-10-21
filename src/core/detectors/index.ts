@@ -3,7 +3,7 @@ import { createHarshDetector } from './harsh';
 import { createPhoneUseDetector } from './phoneUse';
 import { createSpeedingDetector } from './speeding';
 
-export { createHarshDetector } from './harsh';
+export { createHarshDetector, type HarshDetector } from './harsh';
 export { createPhoneUseDetector, type PhoneUseDetector } from './phoneUse';
 export type { SwitchSignal } from './phoneSwitch';
 export { createSpeedingDetector, type SpeedingDetector } from './speeding';
@@ -15,13 +15,15 @@ export { createSpeedingDetector, type SpeedingDetector } from './speeding';
 export function createDetectors(newId: () => string): DetectorSuite {
   const speeding = createSpeedingDetector(newId);
   const phone = createPhoneUseDetector(newId);
-  const detectors: Detector[] = [speeding, createHarshDetector(newId), phone];
+  const harsh = createHarshDetector(newId);
+  const detectors: Detector[] = [speeding, harsh, phone];
   return {
     push: (row, limit, ctx) => detectors.flatMap((d) => d.push(row, limit, ctx)),
     flush: () => detectors.flatMap((d) => d.flush()),
     openSpeeding: () => speeding.open(),
     speedingNow: () => speeding.reading(),
     speedingEpisode: () => speeding.episode(),
+    harshAlerts: () => harsh.alerts(),
     openPhone: () => phone.open(),
     unsafe: () => speeding.active() || phone.active(),
     lockProof: () => phone.lockProof(),

@@ -317,13 +317,12 @@ export function createEngine(deps: EngineDeps): Engine {
     noteWarmup(s, row);
     const ctx: DetectorContext = { ...deps.ctx(), warmupEndsAt: s.warmup.endsAt };
     const closed = det.push(row, limit, ctx);
-    for (const e of closed) {
-      s.events.push(e);
-      // The instant events are told as they close (the row after the peak). Speeding and phone
-      // episodes were already told while open, below.
-      if (e.type === 'hard_brake' || e.type === 'hard_accel' || e.type === 'hard_corner') {
-        alert(e.id, e.type, e.tier, row.ts, undefined, deduct(e.id, pointsOf({ type: e.type, tier: e.tier }), row.ts));
-      }
+    s.events.push(...closed);
+    // A hard brake, start or turn is told the row it is confirmed (one alert per episode, its tier
+    // so far), never when its event is released after the veto window: the detector tells every
+    // episode that counts on or before the row that releases it.
+    for (const a of det.harshAlerts()) {
+      alert(a.id, a.type, a.tier, row.ts, undefined, deduct(a.id, pointsOf({ type: a.type, tier: a.tier }), row.ts));
     }
     speedingAlertsOn(row, det);
     // Phone: the pickup alert once per episode ("Back to RoadWise" while a switch counts); the

@@ -29,9 +29,11 @@ describe('hard braking / acceleration (spec event table, "confirmed by GPS")', (
     expect(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.5 }, 10, 10)).all).toEqual([]);
   });
 
-  test('a 0.30 g acceleration with a matching GNSS rise is a minor hard accel; 0.40 g and up severe', () => {
-    expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.3 }, 10, 10, mph(20), mph(30))).all)).toMatchObject({ type: 'hard_accel', tier: 'minor' });
-    expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.52 }, 10, 10, mph(20), mph(32))).all).tier).toBe('severe');
+  test('a 0.32 g acceleration with a matching GNSS rise is a minor hard accel (0.31 g is none); 0.45 g and up severe', () => {
+    expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.32 }, 10, 10, mph(20), mph(30))).all)).toMatchObject({ type: 'hard_accel', tier: 'minor' });
+    expect(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.31 }, 10, 10, mph(20), mph(30))).all).toEqual([]);
+    expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.44 }, 10, 10, mph(20), mph(32))).all).tier).toBe('minor');
+    expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.45 }, 10, 10, mph(20), mph(32))).all).tier).toBe('severe');
   });
 
   test('a free-fall or slide spike within two seconds vetoes the event', () => {
@@ -55,23 +57,114 @@ describe('hard braking / acceleration (spec event table, "confirmed by GPS")', (
   });
 });
 
-describe('hard cornering (spec: sideways force, plausibility by GPS course rate × speed)', () => {
-  test('0.45 g lateral with the course swinging 45° in a second at 30 mph is a minor hard corner', () => {
-    const rows = seq([10, { speed: mph(30) }], [1, { speed: mph(30), course: 135, aLatMax: 0.45 }], [10, { speed: mph(30), course: 135 }]);
-    const e = only(drive(createHarshDetector(counterIds()), rows).all);
+describe('hard cornering (spec: sideways force, confirmed by the gyroscope and the GPS course turning the same way)', () => {
+  // The lateral force is left-positive and the course clockwise: a right turn (course rising) pushes
+  // the phone right (negative). 30 mph is 13.4 m/s: 0.8 rad/s of yaw is 1.09 g of turn.
+  /** A turn at `v` mph from course 90 to `to` in one second, the peak row's force and yaw as given. */
+  const turn = (to: number, peak: Partial<FeatureRow>, v = 30) =>
+    seq([10, { speed: mph(v) }], [1, { speed: mph(v), course: to, yawRateMax: 0.8, ...peak }], [10, { speed: mph(v), course: to }]);
+  const corner = (rows: FeatureRow[]) => drive(createHarshDetector(counterIds()), rows).all;
+
+  test('0.45 g to the right with the course swinging 45° right in a second at 30 mph is a minor hard corner; to the left with a left turn too', () => {
+    const e = only(corner(turn(135, { aLatMin: -0.45 })));
     expect(e).toMatchObject({ type: 'hard_corner', tier: 'minor' });
     expect(e.measured.peakG).toBe(0.45);
+    expect(only(corner(turn(45, { aLatMax: 0.45 }))).type).toBe('hard_corner');
+  });
+
+  test('the force against the turn (a jolt to the left in a right turn) is not a corner', () => {
+    expect(corner(turn(135, { aLatMax: 0.45 }))).toEqual([]);
+    expect(corner(turn(45, { aLatMin: -0.45 }))).toEqual([]);
   });
 
   test('the same lateral peak on a straight course, or below 10 mph, is not a corner', () => {
-    expect(drive(createHarshDetector(counterIds()), peakDrive({ aLatMax: 0.45 }, 10, 10, mph(30))).all).toEqual([]);
-    const slow = seq([10, { speed: mph(8) }], [1, { speed: mph(8), course: 180, aLatMin: -0.5 }], [10, { speed: mph(8), course: 180 }]);
-    expect(drive(createHarshDetector(counterIds()), slow).all).toEqual([]);
+    expect(corner(turn(90, { aLatMin: -0.45 }))).toEqual([]);
+    expect(corner(turn(180, { aLatMin: -0.5 }, 8))).toEqual([]);
+  });
+
+  test('an unknown course (-1) beside the peak confirms nothing: it is no 136° turn', () => {
+    const rows = seq([10, { speed: mph(30), course: -1 }], [1, { speed: mph(30), course: 135, yawRateMax: 0.8, aLatMin: -0.45 }], [10, { speed: mph(30), course: -1 }]);
+    expect(corner(rows)).toEqual([]);
+    const after = seq([10, { speed: mph(30) }], [1, { speed: mph(30), course: -1, yawRateMax: 0.8, aLatMin: -0.45 }], [10, { speed: mph(30), course: -1 }]);
+    expect(corner(after)).toEqual([]);
+  });
+
+  test('a course jumping faster than 60°/s at 10 mph or more is the fix, not the car', () => {
+    expect(corner(turn(150, { aLatMin: -0.45 }))).toHaveLength(1); // 60°/s: a turn
+    expect(corner(turn(151, { aLatMin: -0.45 }))).toEqual([]);
+    expect(corner(turn(200, { aLatMin: -0.45 }))).toEqual([]);
+  });
+
+  test('the GPS must make at least half the peak plausible: 9° in a second at 30 mph (0.21 g) does not confirm 0.45 g, 10° (0.24 g) does', () => {
+    expect(corner(turn(99, { aLatMin: -0.45 }))).toEqual([]);
+    expect(corner(turn(100, { aLatMin: -0.45 }))).toHaveLength(1);
+  });
+
+  test('the gyroscope must turn with it: speed × yaw rate at least half the peak', () => {
+    // 0.45 g at 13.4 m/s needs 0.165 rad/s.
+    expect(corner(turn(135, { aLatMin: -0.45, yawRateMax: 0.16 }))).toEqual([]);
+    expect(corner(turn(135, { aLatMin: -0.45, yawRateMax: 0.17 }))).toHaveLength(1);
+    expect(corner(turn(135, { aLatMin: -0.45, yawRateMax: 0 }))).toEqual([]);
+  });
+
+  test('a wobble (past 0.25 g both ways in one second) is not a corner', () => {
+    expect(corner(turn(135, { aLatMin: -0.45, aLatMax: 0.3 }))).toEqual([]);
+    expect(corner(turn(135, { aLatMin: -0.45, aLatMax: 0.24 }))).toHaveLength(1);
   });
 
   test('0.60 g with a plausible turn is severe', () => {
-    const rows = seq([10, { speed: mph(40) }], [1, { speed: mph(40), course: 150, aLatMin: -0.6 }], [10, { speed: mph(40), course: 150 }]);
-    expect(only(drive(createHarshDetector(counterIds()), rows).all).tier).toBe('severe');
+    const rows = seq([10, { speed: mph(40) }], [1, { speed: mph(40), course: 150, yawRateMax: 1, aLatMin: -0.6 }], [10, { speed: mph(40), course: 150 }]);
+    expect(only(corner(rows)).tier).toBe('severe');
+  });
+});
+
+describe('alerts at confirmation (the event itself still waits out the veto)', () => {
+  /** Push every row, keeping what alerts() told after each one. */
+  function tell(rows: FeatureRow[]) {
+    const det = createHarshDetector(counterIds());
+    const told: string[][] = [];
+    const released: number[] = [];
+    const events = rows.flatMap((r, i) => {
+      const out = det.push(r, L35, ctx());
+      if (out.length > 0) released.push(i);
+      told.push(det.alerts().map((a) => `${a.id}:${a.type}:${a.tier}`));
+      return out;
+    });
+    return { told, released, events: [...events, ...det.flush()] };
+  }
+  const L35 = { limitMps: mph(35), source: 'posted', matchConfidence: 1, parallelRoads: false } as const;
+
+  test('a brake the GNSS confirms on its peak row is alerted on that row, once; the event is released after the hold', () => {
+    const t = tell(peakDrive({ aLonMin: -0.35 }, 10, 10, mph(35), mph(25)));
+    expect(t.told.findIndex((x) => x.length > 0)).toBe(10);
+    expect(t.told[10]).toEqual(['e1:hard_brake:minor']);
+    expect(t.told.flat()).toHaveLength(1);
+    expect(t.released).toEqual([13]);
+  });
+
+  test('a GNSS drop a row late alerts on that row', () => {
+    const t = tell(seq([10, { speed: mph(45) }], [1, { speed: mph(45), aLonMin: -0.6 }], [10, { speed: mph(30) }]));
+    expect(t.told.findIndex((x) => x.length > 0)).toBe(11);
+    expect(t.told[11]).toEqual(['e1:hard_brake:severe']);
+  });
+
+  test('a multi-row episode alerts once, at its tier so far; the event takes its peak', () => {
+    const t = tell(seq([10, { speed: mph(40) }], [1, { speed: mph(35), aLonMin: -0.35 }], [1, { speed: mph(28), aLonMin: -0.5 }], [10, { speed: mph(25) }]));
+    expect(t.told.flat()).toEqual(['e1:hard_brake:minor']);
+    expect(only(t.events).tier).toBe('severe');
+  });
+
+  test('alerted, then vetoed by the phone sliding a moment later: alerted but never an event', () => {
+    const t = tell(seq([10, { speed: mph(35) }], [1, { speed: mph(25), aLonMin: -0.5 }], [1, { speed: mph(25), orientationDelta: 0.9 }], [10, { speed: mph(25) }]));
+    expect(t.told.findIndex((x) => x.length > 0)).toBe(10);
+    expect(t.told.flat()).toHaveLength(1);
+    expect(t.events).toEqual([]);
+  });
+
+  test('a spike on the peak row, an unconfirmed jolt or a crawl is never alerted', () => {
+    expect(tell(seq([10, { speed: mph(35) }], [1, { speed: mph(25), aLonMin: -0.5, gravityStability: 0.2 }], [10, { speed: mph(25) }])).told.flat()).toEqual([]);
+    expect(tell(peakDrive({ aLonMin: -0.5 }, 10, 10)).told.flat()).toEqual([]);
+    expect(tell(seq([10, { speed: mph(4) }], [1, { speed: mph(1), aLonMin: -0.5 }], [10, { speed: mph(1) }])).told.flat()).toEqual([]);
   });
 });
 
@@ -103,7 +196,7 @@ describe('the GPS confirmation reads only trusted speeds (speed accuracy 2 m/s o
   });
 
   test('a corner on untrusted speeds is no event', () => {
-    const rows = seq([10, { speed: mph(30), speedAcc: 3 }], [1, { speed: mph(30), course: 135, aLatMax: 0.45, speedAcc: 3 }], [10, { speed: mph(30), course: 135, speedAcc: 3 }]);
+    const rows = seq([10, { speed: mph(30), speedAcc: 3 }], [1, { speed: mph(30), course: 135, yawRateMax: 0.8, aLatMin: -0.45, speedAcc: 3 }], [10, { speed: mph(30), course: 135, speedAcc: 3 }]);
     expect(drive(createHarshDetector(counterIds()), rows).all).toEqual([]);
   });
 });
@@ -117,9 +210,10 @@ describe('before the forward axis is learned, the GPS speed change stands in for
     expect(only(drive(createHarshDetector(counterIds()), minor).all)).toMatchObject({ type: 'hard_brake', tier: 'minor' });
   });
 
-  test('a well-rated 20 → 27 mph rise in a second (0.32 g) is a hard accel', () => {
-    const rows = seq([10, { speed: mph(20) }], [10, { speed: mph(27) }]);
+  test('a well-rated 20 → 28 mph rise in a second (0.36 g) is a hard accel; 20 → 27 mph (0.319 g) is under 0.32 g', () => {
+    const rows = seq([10, { speed: mph(20) }], [10, { speed: mph(28) }]);
     expect(only(drive(createHarshDetector(counterIds()), rows).all)).toMatchObject({ type: 'hard_accel', tier: 'minor' });
+    expect(drive(createHarshDetector(counterIds()), seq([10, { speed: mph(20) }], [10, { speed: mph(27) }])).all).toEqual([]);
   });
 
   test('a gentle change, a speed rated worse than 1 m/s or unrated, or a jump past 1 g is nothing', () => {
