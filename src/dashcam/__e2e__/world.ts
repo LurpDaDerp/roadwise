@@ -68,7 +68,7 @@ export const NAME = 'DashPal-C4D5';
 export const TRIP_PREFIX = '11111111-1111-4111-8111-';
 
 /** Tone lengths the fake player takes (ms), as `scripts/make-tones.js` renders them. */
-const TONE_MS: Record<string, number> = { points_lost: 240, dp_glance: 440, dp_drowsy: 940, dp_wake: 760, dp_phone: 360 };
+const TONE_MS: Record<string, number> = { dp_glance: 440, dp_drowsy: 940, dp_wake: 760, dp_phone: 360 };
 const LEVEL_MS: Record<number, number> = { 1: 180, 2: 300, 3: 880 };
 
 /** A phone's pairing with the bench's dashcam, derived from its name: its id there and its key. */

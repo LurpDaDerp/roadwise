@@ -117,9 +117,9 @@ function decision(
   return {
     id: `d${level}`,
     level,
-    kind: level === 1 ? "speeding" : "phone_pickup",
+    kind: level === 1 ? "speeding" : "drowsy",
     ts: 1_700_000_000_000,
-    voice: level === 1 ? "Ease off" : "Phone down",
+    voice: level === 1 ? "Ease off" : "Take a break",
     ...extra,
   };
 }
@@ -148,7 +148,7 @@ describe("alert player", () => {
       expect(r.calls).toEqual([
         "activate:playback",
         `play:2@${TONE_GAIN[2]}`,
-        `speak:Phone down@${VOICE_GAIN}`,
+        `speak:Take a break@${VOICE_GAIN}`,
         "deactivate",
         "haptic:2",
       ]);
@@ -160,7 +160,7 @@ describe("alert player", () => {
       expect(r.calls).toEqual([
         "activate:playback",
         `play:3@${TONE_GAIN[3]}`,
-        `speak:Phone down@${VOICE_GAIN}`,
+        `speak:Take a break@${VOICE_GAIN}`,
         "deactivate",
         "haptic:4",
       ]);
@@ -217,7 +217,7 @@ describe("alert player", () => {
         "deactivate",
         "activate:playback",
         `play:2@${TONE_GAIN[2]}`,
-        `speak:Phone down@${VOICE_GAIN}`,
+        `speak:Take a break@${VOICE_GAIN}`,
         "deactivate",
       ]);
     });
@@ -485,7 +485,7 @@ describe("alert player", () => {
       expect(r.errors).toEqual([boom]);
       expect(r.calls).toEqual([
         "activate:playback",
-        `speak:Phone down@${VOICE_GAIN}`,
+        `speak:Take a break@${VOICE_GAIN}`,
         "deactivate",
         "haptic:2",
       ]);
@@ -1066,7 +1066,7 @@ describe("startWithinMs (a DashPal critical's start watchdog)", () => {
   });
 });
 
-describe("the points-lost cue and a held speeding session", () => {
+describe("a held speeding session", () => {
   const withTones = (r: Rig) => {
     r.deps.audio.play = async (level, opts) => {
       r.calls.push(`play:${level}${opts.tone ? `:${opts.tone}` : ""}@${opts.volume}`);
@@ -1074,47 +1074,10 @@ describe("the points-lost cue and a held speeding session", () => {
     return r;
   };
 
-  it("a decision that cost points plays the cue right after its own tone, before the voice, on the same session and gain", async () => {
+  it("a decision plays one tone, then the voice: there is no second tone", async () => {
     const r = withTones(rig());
-    await createAlertPlayer(r.deps).deliver(decision(2, { cue: "points_lost" }));
-    expect(r.calls).toEqual([
-      "activate:playback",
-      `play:2@${TONE_GAIN[2]}`,
-      `play:2:points_lost@${TONE_GAIN[2]}`,
-      `speak:Phone down@${VOICE_GAIN}`,
-      "deactivate",
-      "haptic:2",
-    ]);
-  });
-
-  it("the cue follows the call gain, and neither tone plays vibration-only or silent", async () => {
-    const r = withTones(rig());
-    r.flags.call = true;
-    const player = createAlertPlayer(r.deps);
-    await player.deliver(decision(3, { cue: "points_lost" }));
-    expect(r.calls.filter((c) => c.startsWith("play"))).toEqual([`play:3@${TONE_GAIN_IN_CALL[3]}`, `play:3:points_lost@${TONE_GAIN_IN_CALL[3]}`]);
-    r.calls.length = 0;
-    r.flags.call = false;
-    r.flags.style = "vibration";
-    await player.deliver(decision(2, { cue: "points_lost" }));
-    expect(r.calls).toEqual(["haptic:2"]);
-    r.calls.length = 0;
-    r.flags.style = "both";
-    await player.deliver(decision(2, { cue: "points_lost", silent: true }));
-    expect(r.calls).toEqual(["haptic:2"]);
-  });
-
-  it("a failing cue marks the sound unavailable like a failing tone", async () => {
-    const r = withTones(rig());
-    let unavailable = 0;
-    r.deps.onUnavailable = () => {
-      unavailable += 1;
-    };
-    r.deps.audio.play = async (_level, opts) => {
-      if (opts.tone === "points_lost") throw new Error("no cue");
-    };
-    await createAlertPlayer(r.deps).deliver(decision(2, { cue: "points_lost" }));
-    expect(unavailable).toBe(1);
+    await createAlertPlayer(r.deps).deliver(decision(2));
+    expect(r.calls).toEqual(["activate:playback", `play:2@${TONE_GAIN[2]}`, `speak:Take a break@${VOICE_GAIN}`, "deactivate", "haptic:2"]);
   });
 
   it("release(kind) frees the session a held speeding alert left active, once, and leaves another kind's hold alone", async () => {

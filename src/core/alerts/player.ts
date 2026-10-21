@@ -1,5 +1,5 @@
-// The alert player: turns delivered alert decisions (`policy.ts`, product spec v3 "Driving
-// screen") into sound, speech and haptics.
+// The alert player: turns delivered alert decisions (`policy.ts`, product spec "Driving screen")
+// into sound, speech and haptics.
 //
 // What it decides:
 // - Level mapping: each event type maps to a tone level (`ALERT_LEVEL` in policy.ts). Level 1 is
@@ -15,9 +15,6 @@
 //   (haptic only: a routed-elsewhere alert, or a phone alert during a DashPal continuous one) and
 //   `startWithinMs` (a DashPal critical: an audio session not active by then, or then a tone not
 //   loaded or playing by then, fails, so the dashcam's buzzer takes it at once).
-// - The points-lost cue (`cue`): a decision that cost points plays it right after its own tone and
-//   before the voice line, under the same session, gain, call and style rules (`silent` and
-//   vibration-only play neither).
 // - Held sessions: a `holdSession` item leaves the session active for its kind until the next item
 //   without it, `stopCurrent()`, or `release(kind)` (the host's, once a speeding alert stops
 //   repeating) releases it.
@@ -52,7 +49,6 @@
 import { processTimers, type Timers } from "@/lib/timers";
 
 import type {
-  AlertCue,
   AlertDecision,
   AlertKind,
   AlertLevel,
@@ -205,8 +201,6 @@ interface Playable {
   level: AlertLevel;
   /** The decision's kind (none for a feedback): who holds the session after a `holdSession` item. */
   kind?: AlertKind;
-  /** Played right after the tone, before the voice. */
-  cue?: AlertCue;
   /** Spoken (L2 and up, voice on — or `voiceAlways` — and no call) when present. */
   voice?: AlertVoiceKey;
   intensity: HapticIntensity;
@@ -406,11 +400,7 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
           const opts: { volume: number; tone?: AlertTone; startWithinMs?: number } = { volume };
           if (item.tone) opts.tone = item.tone;
           if (startWithin !== undefined) opts.startWithinMs = startWithin;
-          let played = await step(run, () => audio.play(level, opts));
-          const cue = item.cue;
-          if (cue !== undefined && !run.stopped) {
-            played = (await step(run, () => audio.play(level, { volume, tone: cue }))) && played;
-          }
+          const played = await step(run, () => audio.play(level, opts));
           // Silent for the driver, and they must be able to see that; a sound that worked
           // clears an earlier mark.
           if (!activated || !played) unavailable();
@@ -450,7 +440,6 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
       };
       if (decision.voice !== undefined) item.voice = decision.voice;
       if (decision.tone !== undefined) item.tone = decision.tone;
-      if (decision.cue !== undefined) item.cue = decision.cue;
       if (decision.stillWanted !== undefined) item.stillWanted = decision.stillWanted;
       if (decision.voiceAlways) item.voiceAlways = true;
       if (decision.holdSession) item.holdSession = true;

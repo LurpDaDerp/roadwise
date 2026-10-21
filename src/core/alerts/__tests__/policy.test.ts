@@ -1,4 +1,4 @@
-import { ALERT_GLOW_MS, decisionFor } from '@/core/alerts/policy';
+import { ALERT_GLOW_MS, ALERT_LEVEL, ALERT_VOICE, decisionFor } from '@/core/alerts/policy';
 
 const at = 1_700_000_000_000;
 
@@ -13,7 +13,7 @@ test('speeding is the soft chime (level 1), no voice, one light pulse, holding t
   });
 });
 
-test('a speeding repeat is the chime within the grace, and the points-lost cue alone once points come off', () => {
+test('a speeding repeat is the same plain chime: no other tone, no cue', () => {
   expect(decisionFor({ id: 'e1', type: 'speeding', tier: 'minor', at, repeat: true }, { voiceEnabled: true })).toEqual({
     id: 'e1',
     level: 1,
@@ -22,36 +22,19 @@ test('a speeding repeat is the chime within the grace, and the points-lost cue a
     intensity: 1,
     holdSession: true,
   });
-  expect(decisionFor({ id: 'e1', type: 'speeding', tier: 'minor', at, repeat: true, points: 4 }, { voiceEnabled: true })).toEqual({
-    id: 'e1',
-    level: 1,
-    kind: 'speeding',
-    ts: at,
-    intensity: 1,
-    holdSession: true,
-    tone: 'points_lost',
-  });
 });
 
-test('an alert that cost points plays the points-lost cue after its own tone; none without points', () => {
-  expect(decisionFor({ id: 'e2', type: 'hard_brake', tier: 'minor', at, points: 8 }, { voiceEnabled: true })).toMatchObject({ level: 2, cue: 'points_lost', voice: 'Hard brake' });
-  expect(decisionFor({ id: 'e3', type: 'phone_pickup', tier: 'severe', at, points: 64 }, { voiceEnabled: false })).toMatchObject({ level: 3, cue: 'points_lost' });
-  expect(decisionFor({ id: 'e2', type: 'hard_brake', tier: 'minor', at }, { voiceEnabled: true }).cue).toBeUndefined();
-  expect(decisionFor({ id: 'e2', type: 'hard_brake', tier: 'minor', at, points: 0 }, { voiceEnabled: true }).cue).toBeUndefined();
-  // Only speeding holds the session.
-  expect(decisionFor({ id: 'e2', type: 'hard_brake', tier: 'minor', at, points: 8 }, { voiceEnabled: true }).holdSession).toBeUndefined();
-});
-
-test('harsh driving is the warning tone with a short voice line only when voice is on; severe vibrates harder', () => {
+test('harsh driving is the warning tone with a short voice line only when voice is on; severe vibrates harder; only speeding holds the session', () => {
   const minor = decisionFor({ id: 'e2', type: 'hard_brake', tier: 'minor', at }, { voiceEnabled: true });
-  expect(minor).toMatchObject({ level: 2, kind: 'hard_brake', voice: 'Hard brake', intensity: 2 });
+  expect(minor).toEqual({ id: 'e2', level: 2, kind: 'hard_brake', ts: at, voice: 'Hard brake', intensity: 2 });
   const severe = decisionFor({ id: 'e2', type: 'hard_brake', tier: 'severe', at }, { voiceEnabled: false });
   expect(severe.voice).toBeUndefined();
   expect(severe.intensity).toBe(3);
+  expect(severe.holdSession).toBeUndefined();
+  expect(ALERT_GLOW_MS).toBe(1500);
 });
 
-test('a phone pickup is urgent (level 3), spoken only when voice is on', () => {
-  expect(decisionFor({ id: 'e3', type: 'phone_pickup', tier: 'severe', at }, { voiceEnabled: true })).toMatchObject({ level: 3, voice: 'Phone down', intensity: 4 });
-  expect(decisionFor({ id: 'e3', type: 'phone_pickup', tier: 'severe', at }, { voiceEnabled: false }).voice).toBeUndefined();
-  expect(ALERT_GLOW_MS).toBe(1500);
+test('the maps cover the six event types and nothing else (no phone use)', () => {
+  expect(Object.keys(ALERT_LEVEL).sort()).toEqual(['drowsy', 'eyes_off', 'hard_accel', 'hard_brake', 'hard_corner', 'speeding']);
+  expect(Object.keys(ALERT_VOICE).sort()).toEqual(Object.keys(ALERT_LEVEL).sort());
 });

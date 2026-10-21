@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Generates the in-drive alert tones (three levels, the points-lost cue, four DashPal sounds) into assets/sounds, so the app ships no third-party
+ * Generates the in-drive alert tones (three levels, four DashPal sounds) into assets/sounds, so the app ships no third-party
  * audio and every byte of every tone can be regenerated from this file.
  *
  *   npm run tones:make
@@ -13,11 +13,6 @@
  *   L2  two tones rising 660 → 990 Hz, 150 ms each, back to back          — a warning
  *   L3  three pairs of 1040 Hz + 780 Hz (120 ms each), 80 ms between pairs — urgent
  * Every segment is shaped by a raised-cosine ramp so nothing clicks at its edges.
- *
- * The points-lost cue plays after an alert's own tone each time points come off (and alone for a
- * speeding repeat past its grace), so it is short and unlike every other sound: the only falling
- * pair, low in the register:
- *   points_lost  740 Hz then 494 Hz, 110 ms each, 20 ms apart (240 ms)           — points lost
  *
  * The DashPal dashcam's four sounds (src/dashcam/alerts.ts) are distinct from the levels and from
  * each other, by pitch, direction and rhythm:
@@ -160,11 +155,6 @@ function renderTones() {
     silence(40),
     ...wakePair(),
   ]);
-  const pointsLost = concat([
-    tone(740, 110, SEGMENT_RAMP_MS, PEAK),
-    silence(20),
-    tone(494, 110, SEGMENT_RAMP_MS, PEAK),
-  ]);
   const dpPhone = concat([
     tone(1320, 120, SEGMENT_RAMP_MS, PEAK),
     tone(990, 120, SEGMENT_RAMP_MS, PEAK),
@@ -174,7 +164,6 @@ function renderTones() {
     l1: wav(l1),
     l2: wav(l2),
     l3: wav(l3),
-    points_lost: wav(pointsLost),
     dp_glance: wav(dpGlance),
     dp_drowsy: wav(dpDrowsy),
     dp_wake: wav(dpWake),

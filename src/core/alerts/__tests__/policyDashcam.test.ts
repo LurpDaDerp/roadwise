@@ -28,5 +28,4 @@ test('the drive screens label both types and mark them DashPal', () => {
   expect(eventName('eyes_off', 'severe')).toBe('Eyes off road · DashPal');
   expect(eventName('drowsy', 'severe')).toBe('Drowsy · DashPal');
   expect(eventName('hard_brake', 'severe')).toBe('Hard brake · Severe');
-  expect(eventName('phone_pickup', 'severe')).toBe('Phone pickup');
 });

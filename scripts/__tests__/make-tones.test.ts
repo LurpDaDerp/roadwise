@@ -1,16 +1,16 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- a CommonJS Node script
 const { renderTones, SAMPLE_RATE } = require('../make-tones.js') as {
-  renderTones: () => Record<'l1' | 'l2' | 'l3' | 'points_lost' | 'dp_glance' | 'dp_drowsy' | 'dp_wake' | 'dp_phone', Buffer>;
+  renderTones: () => Record<'l1' | 'l2' | 'l3' | 'dp_glance' | 'dp_drowsy' | 'dp_wake' | 'dp_phone', Buffer>;
   SAMPLE_RATE: number;
 };
 
 const SOUNDS = join(__dirname, '..', '..', 'assets', 'sounds');
 const LEVELS = ['l1', 'l2', 'l3'] as const;
 const DASHPAL = ['dp_glance', 'dp_drowsy', 'dp_wake', 'dp_phone'] as const;
-const ALL = [...LEVELS, 'points_lost', ...DASHPAL] as const;
+const ALL = [...LEVELS, ...DASHPAL] as const;
 
 type Wav = { channels: number; rate: number; bits: number; samples: Int16Array };
 
@@ -131,21 +131,9 @@ describe('make-tones', () => {
     for (const l of ALL) expect(readFileSync(join(SOUNDS, `${l}.wav`)).equals(tones[l])).toBe(true);
   });
 
-  test('points lost: a 240 ms falling pair, 740 Hz then 494 Hz, heard as one cue', () => {
-    const w = wavs.points_lost;
-    expect(durationMs(w)).toBeCloseTo(240, 0);
-    // A 20 ms gap is under the 50 ms split: one cue.
-    expect(soundingSegments(w)).toBe(1);
-    const half = Math.floor(w.samples.length / 2);
-    const part = (from: number, to: number): Wav => ({ ...w, samples: w.samples.slice(from, to) });
-    const first = dominantHz(part(0, half));
-    const second = dominantHz(part(half, w.samples.length));
-    expect(first).toBeGreaterThan(740 * 0.97);
-    expect(first).toBeLessThan(740 * 1.03);
-    expect(second).toBeGreaterThan(494 * 0.97);
-    expect(second).toBeLessThan(494 * 1.03);
-    // The only falling pair, and lower than every level.
-    for (const l of LEVELS) expect(dominantHz(w)).toBeLessThan(dominantHz(wavs[l]) - 100);
+  test('there is no points-lost cue: the script renders the levels and the DashPal sounds only', () => {
+    expect(Object.keys(tones).sort()).toEqual([...ALL].sort());
+    expect(existsSync(join(SOUNDS, 'points_lost.wav'))).toBe(false);
   });
 
   test('DashPal sounds: lengths and rhythm (glance 3 bursts, drowsy 3, wake one fast burst train, phone 1)', () => {
@@ -159,7 +147,7 @@ describe('make-tones', () => {
     expect(soundingSegments(wavs.dp_phone)).toBe(1);
   });
 
-  test('DashPal sounds and the points-lost cue are told apart from the levels and from each other (pitch, length or rhythm)', () => {
+  test('DashPal sounds are told apart from the levels and from each other (pitch, length or rhythm)', () => {
     const sig = (w: Wav) => ({ hz: dominantHz(w), ms: durationMs(w), seg: soundingSegments(w) });
     const all = ALL.map((l) => [l, sig(wavs[l])] as const);
     for (let i = 0; i < all.length; i++) {
