@@ -43,17 +43,28 @@ describe('onboarding copy', () => {
   it('words how drives start for each phone: on their own on an iPhone, from Start drive on Android', () => {
     expect(onboardingCopy.how.rows.ios[0]!.title).toBe('It notices your drives');
     expect(onboardingCopy.how.rows.android[0]!.body).toBe('Swipe Start drive on Home before you pull out. RoadWise records until you park.');
-    expect(onboardingCopy.how.rows.ios).toHaveLength(4);
-    expect(onboardingCopy.how.rows.android).toHaveLength(4);
+    expect(onboardingCopy.how.rows.ios).toHaveLength(5);
+    expect(onboardingCopy.how.rows.android).toHaveLength(5);
     for (const s of strings(onboardingCopy.how.rows.android)) expect(s).not.toMatch(/notices|by itself|on its own|automatic/i);
   });
 
-  it('says what motion access is for on each phone, and that speed and braking need none', () => {
+  it('says on both phones that a phone pickup counts, felt by motion, and that RoadWise never sees the screen, apps or messages', () => {
+    for (const rows of [onboardingCopy.how.rows.ios, onboardingCopy.how.rows.android]) {
+      expect(rows[3]).toEqual({
+        icon: 'phone-portrait-outline',
+        title: 'Phone down',
+        body: 'Picking up your phone while you drive counts against your score. RoadWise feels it by motion and never sees your screen, apps or messages.',
+      });
+    }
+    expect(onboardingCopy.motion.phone).toBe('Pickups are felt from motion alone. RoadWise never sees your screen, apps or messages.');
+  });
+
+  it('says what motion access is for on each phone, and that speed, braking and phone pickups need none', () => {
     expect(onboardingCopy.motion.body.ios).toBe(
-      'Motion & Fitness tells driving from walking, so your drives start and end at the right moment. Speed and braking are measured either way.'
+      'Motion & Fitness tells driving from walking, so your drives start and end at the right moment. Speed, braking and phone pickups are measured either way.'
     );
     expect(onboardingCopy.motion.body.android).toBe(
-      'Lets RoadWise end a drive once you park and walk away. Speed and braking are measured either way.'
+      'Lets RoadWise end a drive once you park and walk away. Speed, braking and phone pickups are measured either way.'
     );
     expect(onboardingCopy.motion.denied.android).toBe(
       'Physical activity is off. Drives still record, and one you forget to end stops after 5 min parked. You can turn it on in Settings.'

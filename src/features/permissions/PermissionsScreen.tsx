@@ -108,6 +108,12 @@ export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps })
           {copy.about[(board.read?.snapshot.platform ?? Platform.OS) === 'ios' ? 'ios' : 'android']}
         </Text>
       </View>
+      <View style={{ flexDirection: 'row', gap: th.space.sm, alignItems: 'flex-start' }} testID="permissions-phone-note">
+        <Ionicons name="phone-portrait-outline" size={th.size.icon} color={th.colors.textMuted} />
+        <Text variant="footnote" tone="muted" style={{ flex: 1 }}>
+          {copy.phone}
+        </Text>
+      </View>
     </Screen>
   );
 }

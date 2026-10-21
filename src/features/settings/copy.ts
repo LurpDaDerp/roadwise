@@ -60,7 +60,8 @@ export const settingsCopy = {
       stats: { title: 'Driving stats', subtitle: 'Friends can see your drives, distance and events' },
     },
     heatmap: 'Heat map',
-    privacyFooter: 'Only your friends can see what you share here. The heat map shows the roads you drive most.',
+    privacyFooter:
+      'Only your friends can see what you share here. The heat map shows the roads you drive most. RoadWise feels when your phone is picked up on a drive, and never sees your screen, apps or messages.',
     you: 'You',
     units: 'Units',
     appearance: {

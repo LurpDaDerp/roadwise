@@ -32,6 +32,12 @@ describe('Appearance', () => {
 });
 
 describe('the rest of the settings words', () => {
+  it('Privacy says who sees what, and that phone pickups are felt, never seen', () => {
+    expect(settingsCopy.root.privacyFooter).toBe(
+      'Only your friends can see what you share here. The heat map shows the roads you drive most. RoadWise feels when your phone is picked up on a drive, and never sees your screen, apps or messages.'
+    );
+  });
+
   it('Automatic drives: on, and off with what it needs', () => {
     const a = settingsCopy.root.autoDrives;
     expect(a.on).toBe('On. RoadWise notices your drives.');

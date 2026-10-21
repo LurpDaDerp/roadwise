@@ -8,6 +8,10 @@ import type { StepId } from './flow';
 /** The automatic end's minutes (product spec v3 "Ending on its own"), so the words follow the rule. */
 const IDLE_MIN = Math.round(IDLE_END_S / 60);
 
+/** How phone pickups are noticed, and what RoadWise never sees: the How it works row and the Motion step. */
+const PHONE_ROW = 'Picking up your phone while you drive counts against your score. RoadWise feels it by motion and never sees your screen, apps or messages.';
+const PHONE_PRIVACY = 'Pickups are felt from motion alone. RoadWise never sees your screen, apps or messages.';
+
 /**
  * Every string the onboarding stepper prints, in one table. Voice: second person, plain words.
  * Honesty: nothing here claims more than the screen it is on can back.
@@ -57,12 +61,14 @@ export const onboardingCopy = {
         { icon: 'car-sport-outline', title: 'It notices your drives', body: 'Once you’re on the road, RoadWise starts recording by itself. No buttons to remember.' },
         { icon: 'person-outline', title: 'Just riding along?', body: `Open RoadWise and tap “${hudCopy.notDriving}” so that trip won’t count.` },
         { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
+        { icon: 'phone-portrait-outline', title: 'Phone down', body: PHONE_ROW },
         { icon: 'people-outline', title: 'Better with friends', body: 'Build your Safety Rating and see how it compares with your friends.' },
       ],
       android: [
         { icon: 'car-sport-outline', title: 'Start, then drive', body: 'Swipe Start drive on Home before you pull out. RoadWise records until you park.' },
         { icon: 'person-outline', title: 'Not you driving?', body: `Tap “${hudCopy.notDriving}” on the drive screen so that trip won’t count.` },
         { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
+        { icon: 'phone-portrait-outline', title: 'Phone down', body: PHONE_ROW },
         { icon: 'people-outline', title: 'Better with friends', body: 'Build your Safety Rating and see how it compares with your friends.' },
       ],
     } satisfies Record<'ios' | 'android', { icon: keyof typeof Ionicons.glyphMap; title: string; body: string }[]>,
@@ -106,9 +112,11 @@ export const onboardingCopy = {
   motion: {
     title: { ios: 'Motion & Fitness', android: 'Physical activity' },
     body: {
-      ios: 'Motion & Fitness tells driving from walking, so your drives start and end at the right moment. Speed and braking are measured either way.',
-      android: 'Lets RoadWise end a drive once you park and walk away. Speed and braking are measured either way.',
+      ios: 'Motion & Fitness tells driving from walking, so your drives start and end at the right moment. Speed, braking and phone pickups are measured either way.',
+      android: 'Lets RoadWise end a drive once you park and walk away. Speed, braking and phone pickups are measured either way.',
     },
+    /** Under the body: phone pickups are felt, never seen. */
+    phone: PHONE_PRIVACY,
     allow: 'Allow motion access',
     notNow: 'Not now',
     continue: 'Continue',

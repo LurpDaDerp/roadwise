@@ -58,6 +58,13 @@ test.each(['ios', 'android'] as const)(
   }
 );
 
+test.each(['ios', 'android'] as const)('%s: under what motion access is for, the line on phone pickups: felt by motion, never the screen', async (platform) => {
+  const adapter = fakeAdapter(snap({ platform, motion: 'undetermined' }));
+  await renderStep(platform, adapter);
+  expect(await screen.findByText(copy.body[platform])).toBeOnTheScreen();
+  expect(screen.getByTestId('motion-phone')).toHaveTextContent('Pickups are felt from motion alone. RoadWise never sees your screen, apps or messages.');
+});
+
 test('unavailable: the briefed line, no claim about when the phone will ask, and Continue moves on', async () => {
   const adapter = fakeAdapter(snap({ platform: 'android', motion: 'unavailable' }), { motion: 'unavailable' });
   const { onNext } = await renderStep('android', adapter);

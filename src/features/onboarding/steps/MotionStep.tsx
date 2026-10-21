@@ -111,6 +111,9 @@ export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: P
       <View style={{ gap: th.space.lg }}>
         <Card>
           <Text variant="body">{copy.body[ctx.platform]}</Text>
+          <Text variant="subhead" tone="muted" testID="motion-phone">
+            {copy.phone}
+          </Text>
         </Card>
         {phone.status === 'loading' && answer === undefined ? <Skeleton width="70%" height={20} /> : null}
         {line ? <StatusLine tone={line.tone}>{line.text}</StatusLine> : null}

@@ -3,7 +3,7 @@
  * the tap, then the phone read again; Settings where it can't ask), Show on Home for a hidden row,
  * and the summary.
  */
-import { screen, waitFor } from '@testing-library/react-native';
+import { screen, waitFor, within } from '@testing-library/react-native';
 
 import { HOME_HIDDEN_KEY } from '@/core/permissions';
 import { PAIRED_KEY } from '@/dashcam/keys';
@@ -81,6 +81,12 @@ it('iOS lists Location Always and Background App Refresh with the note about Alw
   await open(fakeAdapter(snap({ platform: 'android' })));
   expect(ids()).toEqual(['location', 'precise', 'motion', 'notifications', 'bluetooth', 'camera']);
   expect(screen.getByText('A drive uses location only while it records. Start each drive from Home.')).toBeOnTheScreen();
+  // On both phones, the note on phone pickups.
+  expect(
+    within(screen.getByTestId('permissions-phone-note')).getByText(
+      'On a drive, RoadWise feels when your phone is picked up, from motion alone. It never sees your screen, apps or messages.'
+    )
+  ).toBeOnTheScreen();
 });
 
 it('Bluetooth: Not in use without a pairing; Off with a pairing and the permission gone, fixed only in Settings', async () => {
