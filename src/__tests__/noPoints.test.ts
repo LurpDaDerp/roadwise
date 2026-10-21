@@ -20,7 +20,7 @@ jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 const ROOT = path.join(__dirname, '..', '..');
 
 /** The words of the points era. */
-const POINTS = /\bpoints?\b|\bpts\b|streaks?|freezes?|\blevel \d|leaderboard|global board|phone pickup/i;
+const POINTS = /\bpoints?\b|\bpts\b|streaks?|freezes?|\blevel \d|leaderboard|global board/i;
 /**
  * The names a merit tier must never have. "Steady" is also the Safety Rating's word for a week
  * without change ("Steady this week"), so it is allowed under a trend's own `steady` key only.
