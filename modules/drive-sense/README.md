@@ -849,6 +849,7 @@ holds every rule and number, mirrored constant for constant by `ios/DetectPolicy
 | `listDrives()` | Every journal file as a `JournaledDrive` (its start line, last seq and row time, bytes, the end if any). |
 | `readRows(driveId, afterSeq, limit)` | The rows after `afterSeq`, in order, at most `limit` (1-600), each a `row` payload with its `seq`; `done` when the file holds no more. Keeps its place in the file, so a drain reads it once. |
 | `discardDrive(driveId)` | Deletes the journal file (JS, once the drive is finalized); resolves when none exists; **rejects `E_BUSY` for the drive that still records**. |
+| `wipe()` | The sign-out, device and account-switch wipes: a candidate, a wait, a drive or a rest stops (no `driveEnded`: JS ends its own drive first), every journal file goes, the record starts again empty (no owner, last end, parked region, rest or drive) and the detector is `off` until JS arms it again. Resolves once the files are gone; on Android (no module) a no-op that resolves. |
 | `detectState` | every transition, with its `reason` (`armed`, `wake:slc`, `confirmed`, `stillClock`, `moved`, `ended`, `notDriving`, `resumed`, …). |
 | `driveStarted` | `{ driveId, origin, startedAt, startSource, startLat, startLng, continues, confirmedAt, firstSeq }` at every confirmation. |
 | `driveEnded` | `{ driveId, endedAt, cause, decidedAt, lastSeq, lastRowTs }` when native ends a drive (`still`, `walking`, `limit`, `orphan`) or cancels it (`cancelled`); never for a JS end. |

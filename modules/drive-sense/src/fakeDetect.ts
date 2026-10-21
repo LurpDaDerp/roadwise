@@ -5,6 +5,7 @@
 //   `driveStarted`; `emitRows()` journals rows with `seq` (and, given `sense`, emits each as a
 //   DriveSense `row` event, as native does);
 // - `endFor()` is a native safety stop or a cancel (`driveEnded`), `jsStop()` a JS `stopCapture`;
+// - `wipe()` forgets everything (journals, last end, rest, owner) and leaves it off;
 // - the journal is ndjson text per drive, read back by `readJournal` exactly as native reads it;
 // - events nobody listens for are buffered and delivered when the first listener attaches.
 import { journalLine, readJournal } from './detect/journal';
@@ -299,6 +300,24 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       if (!available) return absent('discardDrive');
       if (live?.driveId === driveId) return Promise.reject(busy());
       journal.delete(driveId);
+      return resolve(undefined);
+    },
+    wipe() {
+      calls.push('wipe');
+      // Nothing to wipe without the module (Android): a no-op that resolves, as the wrapper's.
+      if (!available) return resolve(undefined);
+      const waitingNow = phase === 'candidate' && origin === 'manual';
+      live = null;
+      journal.clear();
+      intent = false;
+      owner = null;
+      origin = null;
+      waitUntil = null;
+      lastEnd = null;
+      suppressedUntil = null;
+      journalDropped = 0;
+      enter('off');
+      announce(waitingNow ? 'cancelled' : 'disarmed');
       return resolve(undefined);
     },
     addListener<E extends DriveDetectEvent>(event: E, fn: (p: DriveDetectEvents[E]) => void): DetectSubscription {

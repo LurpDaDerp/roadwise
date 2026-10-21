@@ -160,6 +160,33 @@ extension DriveDetector {
     emitState("notDriving")
   }
 
+  /// `wipe` (a sign-out, a device or account switch): nothing of the last owner stays. A candidate,
+  /// a Start-card wait, a drive or a rest stops (no `driveEnded`: JS ends its own drive first), every
+  /// journal file goes, and the record starts again empty: no owner, not armed, no last end, no rest,
+  /// no drive, off. The wakes and the parked region stop. `done` on main once the files are gone.
+  func wipe(done: @escaping () -> Void) {
+    let waiting = rec?.state == "candidate" && rec?.origin == "manual"
+    if isRecording {
+      finishSensing()
+    } else if capture.sensing == .detector || capture.sensing == .suppressed {
+      capture.endSensing()
+    }
+    stopClock()
+    endWakeTask()
+    buffer.clear()
+    confirmState = ConfirmState()
+    confirming = false
+    nextSeq = 1
+    lastRowTs = nil
+    lastFix = nil
+    lastOverStopTs = nil
+    walkSince = nil
+    save(DetectStateRecord())
+    wakes.stop()
+    journal.wipe(done: done)
+    emitState(waiting ? "cancelled" : "disarmed")
+  }
+
   /// Sensing and the capture JS sees end; the note and the Live Activity go.
   func finishSensing() {
     capture.endSensing()

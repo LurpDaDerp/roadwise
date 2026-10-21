@@ -146,6 +146,17 @@ final class RowJournal {
     }
   }
 
+  /// A wipe: the open file closed, every place forgotten, the whole journal directory deleted (every
+  /// file in it, ended or not). The next drive creates it again. `done` on main.
+  func wipe(done: @escaping () -> Void) {
+    queue.async {
+      self.closeHandle()
+      self.cursors.removeAll()
+      if let dir = Self.directory { try? FileManager.default.removeItem(at: dir) }
+      DispatchQueue.main.async(execute: done)
+    }
+  }
+
   private func attach(_ driveId: String, _ url: URL) {
     guard let h = try? FileHandle(forWritingTo: url) else { return }
     let end = (try? h.seekToEnd()) ?? 0

@@ -4,7 +4,8 @@
 // counted, never passed on.
 //
 // The lookup is `requireOptionalNativeModule`: on Android (the module is registered for Apple only),
-// Jest, Expo Go and web `available` is false, every method rejects and every listener is inert.
+// Jest, Expo Go and web `available` is false, every method but `wipe` rejects (a wipe resolves: there
+// is nothing to wipe) and every listener is inert.
 // Tests inject `createFakeDriveDetect()`.
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import { z } from 'zod';
@@ -185,6 +186,8 @@ export const DriveDetect: DriveDetectApi = {
   readRows: (id, afterSeq, limit) =>
     call('readRows', [id, afterSeq, limit], isDriveId(id) && isCount(afterSeq, 0, Number.MAX_SAFE_INTEGER) && isCount(limit, 1, DETECT.READ_ROWS_MAX), readRowsResultSchema),
   discardDrive: (id) => call('discardDrive', [id], isDriveId(id), voidResult),
+  // A wipe must never fail where there is no detector (Android, Jest, Expo Go, web): nothing to wipe.
+  wipe: () => (native ? call('wipe', [], true, voidResult) : Promise.resolve()),
   addListener<E extends DriveDetectEvent>(event: E, fn: (p: DriveDetectEvents[E]) => void): DetectSubscription {
     if (!native) return { remove() {} };
     const schema = EVENT_SCHEMAS[event] as z.ZodType<DriveDetectEvents[E]>;

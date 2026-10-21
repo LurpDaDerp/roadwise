@@ -11,10 +11,12 @@ import { createFakeDriveDetect } from '../src/fakeDetect';
 const OWNER = '3b2e4c1a-1111-4222-8333-444455556666';
 const row = (ts: number) => ({ ts, speed: 9, lat: 47.6, lng: -122.33 });
 
-test('the real wrapper with no native module: unavailable, every method rejects, listeners inert', async () => {
+test('the real wrapper with no native module: unavailable, every method but wipe rejects, listeners inert', async () => {
   expect(DriveDetect.available).toBe(false);
   await expect(DriveDetect.getState()).rejects.toThrow('DriveDetect.getState: not available');
   await expect(DriveDetect.setArmed(true, OWNER)).rejects.toThrow('not available');
+  // Android: the sign-out and device wipes call it all the same; there is nothing to wipe.
+  await expect(DriveDetect.wipe()).resolves.toBeUndefined();
   expect(() => DriveDetect.addListener('driveStarted', () => {}).remove()).not.toThrow();
 });
 
@@ -137,6 +139,53 @@ describe('the fake detector', () => {
     expect(off.available).toBe(false);
     await expect(off.getState()).rejects.toThrow('not available');
     await expect(off.listDrives()).rejects.toThrow('not available');
+  });
+
+  test('wipe: the drive stops unannounced, every journal goes, the last end, the rest and the owner are forgotten, and it is off', async () => {
+    let now = 1_760_000_000_000;
+    const d = createFakeDriveDetect({ now: () => now });
+    await d.setArmed(true, OWNER);
+    const ended = jest.fn();
+    d.addListener('driveEnded', ended);
+    const reasons: string[] = [];
+    d.addListener('detectState', (e) => reasons.push(`${e.reason}:${e.state}`));
+    const first = d.confirm({ rows: [row(now)] });
+    now += 60_000;
+    d.jsStop(now);
+    const second = d.confirm({ rows: [row(now)] });
+    expect([...d.journal.keys()]).toEqual([first.driveId, second.driveId]);
+    expect((await d.getState()).lastEnd).not.toBeNull();
+    d.setJournalDropped(1);
+    reasons.length = 0;
+    await expect(d.wipe()).resolves.toBeUndefined();
+    expect(d.journal.size).toBe(0);
+    await expect(d.listDrives()).resolves.toEqual([]);
+    expect(await d.getState()).toMatchObject({ armed: false, ownerId: null, state: 'off', origin: null, driveId: null, startedAt: null, waitUntil: null, lastEnd: null, suppressedUntil: null, status: 'off', journalDropped: 0 });
+    expect(ended).not.toHaveBeenCalled();
+    expect(reasons).toEqual(['disarmed:off']);
+    // Nothing starts again until JS arms it for an owner.
+    expect(d.wake('region')).toBe(false);
+    expect(await d.setArmed(true, OWNER)).toMatchObject({ armed: true, state: 'armed', lastEnd: null });
+  });
+
+  test('wipe: a rest ends; a Start-card wait is cancelled; an unavailable fake resolves', async () => {
+    const d = createFakeDriveDetect();
+    const reasons: string[] = [];
+    d.addListener('detectState', (e) => reasons.push(e.reason));
+    await d.setArmed(true, OWNER);
+    d.confirm();
+    await d.notDriving();
+    expect((await d.getState()).state).toBe('suppressed');
+    await d.wipe();
+    expect(await d.getState()).toMatchObject({ state: 'off', suppressedUntil: null, ownerId: null });
+    await d.startWaiting();
+    reasons.length = 0;
+    await d.wipe();
+    expect(reasons).toEqual(['cancelled']);
+    expect(await d.extendWaiting()).toBeNull();
+    const off = createFakeDriveDetect({ available: false });
+    await expect(off.wipe()).resolves.toBeUndefined();
+    expect(off.calls).toEqual(['wipe']);
   });
 
   test('events nobody listens for are buffered and delivered when the first listener attaches', async () => {

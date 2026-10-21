@@ -380,6 +380,27 @@ describe('iOS drive detector: the bridge (text)', () => {
     expect(src).toMatch(/let n = min\(max\(1, limit\), DetectPolicy\.READ_ROWS_MAX\)/);
   });
 
+  it('wipe: sensing stops with no driveEnded, every journal file goes, the record starts empty (off, unarmed, no owner, last end, rest or drive), the wakes and the parked region stop', () => {
+    expect(detectCode()).toMatch(/AsyncFunction\("wipe"\) \{ \(promise: Promise\) in\s*DriveDetector\.shared\.wipe \{ promise\.resolve\(nil\) \}\s*\}\.runOnQueue\(\.main\)/);
+    const w = fn(detector(), 'func wipe(done:');
+    expect(w).toMatch(/if isRecording \{\s*finishSensing\(\)\s*\} else if capture\.sensing == \.detector \|\| capture\.sensing == \.suppressed \{\s*capture\.endSensing\(\)\s*\}/);
+    for (const step of ['stopClock()', 'endWakeTask()', 'buffer.clear()', 'lastOverStopTs = nil', 'save(DetectStateRecord())', 'wakes.stop()', 'journal.wipe(done: done)']) {
+      expect({ step, found: w.includes(step) }).toEqual({ step, found: true });
+    }
+    expect(w).not.toMatch(/driveEnded|commitEnd|stopPlainCapture/);
+    expect(w).toMatch(/emitState\(waiting \? "cancelled" : "disarmed"\)/);
+    // a fresh record: off, not armed, no owner, no drive, no last end, no rest
+    const rec = code('DetectStateRecord.swift');
+    for (const field of ['var armed = false', 'var ownerId: String?\n', 'var state = "off"', 'var driveId: String?\n', 'var lastEnd: DetectLastEnd?\n', 'var suppressedSince: Double?\n', 'var suppressedUntil: Double?\n']) {
+      expect({ field, declared: rec.includes(field) }).toEqual({ field, declared: true });
+    }
+    // the wakes stop with the parked region
+    expect(fn(code('WakeSources.swift'), 'func stop()')).toMatch(/manager\.stopMonitoringSignificantLocationChanges\(\)\s*manager\.stopMonitoringVisits\(\)\s*setParked\(nil\)/);
+    // the journal: the open file closed, every place forgotten, the whole directory deleted
+    const jw = fn(code('RowJournal.swift'), 'func wipe(done:');
+    expect(jw).toMatch(/queue\.async \{\s*self\.closeHandle\(\)\s*self\.cursors\.removeAll\(\)\s*if let dir = Self\.directory \{ try\? FileManager\.default\.removeItem\(at: dir\) \}\s*DispatchQueue\.main\.async\(execute: done\)/);
+  });
+
   it('the launch hook resumes at didFinishLaunching only and adds no notification delegate', () => {
     const d = code('DriveDetectAppDelegate.swift');
     expect(d).toMatch(/didFinishLaunchingWithOptions/);

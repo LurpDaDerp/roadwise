@@ -88,6 +88,12 @@ public final class DriveDetectModule: Module, DriveSenseEventSink {
       }
       RowJournal.shared.delete(driveId) { promise.resolve(nil) }
     }.runOnQueue(.main)
+
+    // The sign-out, device and account-switch wipes: sensing stops, every journal file goes, the
+    // record is emptied (no owner, last end, parked region, rest or drive) and the detector is off.
+    AsyncFunction("wipe") { (promise: Promise) in
+      DriveDetector.shared.wipe { promise.resolve(nil) }
+    }.runOnQueue(.main)
   }
 
   /// A drive id names a file: a lowercase UUID and nothing else.

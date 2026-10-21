@@ -1,7 +1,8 @@
 // The `DriveDetect` contract (plan §3.1.1): the iOS drive detector's bridge, a second Expo module in
 // the drive-sense pod (`ios/DriveDetectModule.swift`). Android, Jest, Expo Go and web have no such
-// module: `DriveDetect.available` is false there and every method rejects. The shared `DriveSense`
-// contract (`../types.ts`) is unchanged by it apart from the bridge-only `seq` on rows.
+// module: `DriveDetect.available` is false there and every method but `wipe` rejects (a wipe
+// resolves). The shared `DriveSense` contract (`../types.ts`) is unchanged by it apart from the
+// bridge-only `seq` on rows.
 import type { DetectMissing, DetectPhase, DetectStatus, StartSource } from './policy';
 
 export type { DetectMissing, DetectPhase, DetectStatus, StartSource };
@@ -21,6 +22,7 @@ export const DRIVE_DETECT_METHODS = [
   'listDrives',
   'readRows',
   'discardDrive',
+  'wipe',
 ] as const;
 
 /** `discardDrive` on the live drive. Every other method never rejects. */
@@ -187,7 +189,7 @@ export interface DetectSubscription {
 }
 
 export interface DriveDetectApi {
-  /** False on Android, Jest, Expo Go and web: every method then rejects and every listener is inert. */
+  /** False on Android, Jest, Expo Go and web: every method but `wipe` then rejects and every listener is inert. */
   readonly available: boolean;
   /** Arms (needs Always + Precise + Motion, else resolves status 'needs' and stays off) or disarms. Never rejects. */
   setArmed(armed: boolean, ownerId: string): Promise<DetectState>;
@@ -206,6 +208,14 @@ export interface DriveDetectApi {
   readRows(driveId: string, afterSeq: number, limit: number): Promise<ReadRowsResult>;
   /** Deletes the journal file; resolves even when none exists; rejects E_BUSY for the live drive. */
   discardDrive(driveId: string): Promise<void>;
+  /**
+   * The sign-out, device and account-switch wipes: any candidate, Start-card wait, recording drive
+   * or "Not driving?" rest stops (no `driveEnded`: JS ends its own drive first), EVERY journal file is
+   * deleted, the last end, the parked region, the rest and the drive are forgotten, and the detector
+   * is left off with no owner (a later `setArmed(true, owner)` arms it again). Resolves once the
+   * files are gone. On Android, or with no native module, a no-op that resolves.
+   */
+  wipe(): Promise<void>;
   /** A payload that fails validation is dropped (counted by `droppedDetectEvents`), never passed on. */
   addListener<E extends DriveDetectEvent>(event: E, fn: (p: DriveDetectEvents[E]) => void): DetectSubscription;
 }

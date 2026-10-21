@@ -49,6 +49,7 @@ jest.mock('expo-modules-core', () => {
     listDrives: jest.fn(async () => []),
     readRows: jest.fn(async () => ({ rows: [{ seq: 1 }], lastSeq: 1, done: true })),
     discardDrive: jest.fn(async () => undefined),
+    wipe: jest.fn(async () => null),
     addListener: jest.fn((event: string, fn: (mockPayload: unknown) => void) => {
       listeners.set(event, fn);
       return { remove: () => listeners.delete(event) };
@@ -65,9 +66,9 @@ type Native = Record<string, jest.Mock> & { state: DetectState; listeners: Map<s
 const native = (jest.requireMock('expo-modules-core') as { __detect: Native }).__detect;
 
 describe('the contract lists', () => {
-  test('three events, ten methods, one error code', () => {
+  test('three events, eleven methods, one error code', () => {
     expect([...DRIVE_DETECT_EVENTS]).toEqual(['detectState', 'driveStarted', 'driveEnded']);
-    expect([...DRIVE_DETECT_METHODS]).toEqual(['setArmed', 'getState', 'requestAlways', 'startWaiting', 'extendWaiting', 'cancelWaiting', 'notDriving', 'listDrives', 'readRows', 'discardDrive']);
+    expect([...DRIVE_DETECT_METHODS]).toEqual(['setArmed', 'getState', 'requestAlways', 'startWaiting', 'extendWaiting', 'cancelWaiting', 'notDriving', 'listDrives', 'readRows', 'discardDrive', 'wipe']);
     expect([...DRIVE_DETECT_ERROR_CODES]).toEqual(['E_BUSY']);
     for (const m of DRIVE_DETECT_METHODS) expect(typeof DriveDetect[m]).toBe('function');
   });
@@ -96,6 +97,13 @@ describe('with the native module', () => {
     expect(native.readRows).toHaveBeenCalledWith(ID, 0, 300);
     await expect(DriveDetect.discardDrive(ID)).resolves.toBeUndefined();
     expect(native.discardDrive).toHaveBeenCalledWith(ID);
+    await expect(DriveDetect.wipe()).resolves.toBeUndefined();
+    expect(native.wipe).toHaveBeenCalledWith();
+  });
+
+  test('wipe rejects a malformed native result like every other method', async () => {
+    native.wipe!.mockResolvedValueOnce({ wiped: true });
+    await expect(DriveDetect.wipe()).rejects.toThrow('DriveDetect.wipe: invalid result');
   });
 
   test.each([
