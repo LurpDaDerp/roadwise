@@ -10,16 +10,19 @@ import {
   mergeTarget,
   payload,
   payloadV3,
+  payloadV4,
+  pickup,
+  PICKUP,
   response,
   STARTED_AT,
   TRIP,
   TRIP_2,
   USER,
-} from '../_shared/testing/v4_fixtures.ts';
+} from '../_shared/testing/v5_fixtures.ts';
 import { buildStoredDrive, clampMeasured, dashcamOf, handleFinalizeTrip, MAX_UPLOADS_PER_DAY, TZ_REFUSAL, UPLOAD_LIMIT_KEY } from './handler.ts';
 
 const quiet = { warn: () => {}, error: () => {} };
-const freshContext = { version: 23, existing: null, merge: null };
+const freshContext = { version: 23, phoneUse: true, existing: null, merge: null };
 const withMerge = (merge = mergeTarget()) => ({ ...freshContext, merge });
 
 function harness(script: FakeEngineScript = {}, auth: 'good' | 'bad' | 'down' = 'good') {
@@ -52,7 +55,7 @@ const PAYLOAD_KEYS = [
   'notDrivingExpired', 'origin', 'polyline', 'startedAt', 'tz',
 ];
 
-Deno.test('happy path: a v4 upload is stored in one transaction with its origin, its "Not driving?" flag and its counters, and the stored answer is returned', async () => {
+Deno.test('happy path: a v5 upload is stored in one transaction with its origin, its "Not driving?" flag and its counters, and the stored answer is returned', async () => {
   const h = harness();
   const res = await handleFinalizeTrip(post(payload()), h.deps);
   assertEquals(res.status, 200);
@@ -65,9 +68,9 @@ Deno.test('happy path: a v4 upload is stored in one transaction with its origin,
   const e = envelopeOf(h);
   assertEquals(Object.keys(e).sort(), ENVELOPE_KEYS);
   assertEquals(Object.keys(e.payload).sort(), PAYLOAD_KEYS);
-  assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.scoringVersion], [USER, null, true, null, 7]);
+  assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.scoringVersion], [USER, null, true, null, 8]);
   assertEquals([e.payload.origin, e.payload.notDrivingExpired], ['auto', false]);
-  assertEquals(e.payload.exposure, { slowdowns: 18, speedups: 17, turns: 11, limitS: 1200, movingS: 1650 });
+  assertEquals(e.payload.exposure, { slowdowns: 18, speedups: 17, turns: 11, limitS: 1200, movingS: 1650, phoneS: 1500 });
   // the uploaded event goes in active whatever the device said, with its position and measurements
   assertEquals(e.events.map((x) => [x.id, x.status, x.lat, x.measured]), [[EVENT, 'active', 40.72, { peakG: 0.42 }]]);
   assertEquals([e.payload.localDay, e.payload.end], ['2026-10-05', { lat: 40.7306, lng: -73.9352 }]);
@@ -81,6 +84,58 @@ Deno.test('a manual drive whose "Not driving?" ran out, and one with no counters
   assertEquals((await handleFinalizeTrip(post(noExposure), h.deps)).status, 200);
   const e = envelopeOf(h);
   assertEquals([e.payload.origin, e.payload.notDrivingExpired, e.payload.exposure], ['manual', true, null]);
+});
+
+Deno.test('a phone pickup travels to apply_drive as uploaded: its tier, its seconds in hand, its speeds; it breaks nothing else', async () => {
+  const h = harness();
+  const res = await handleFinalizeTrip(post(payload({ events: [...payload().events, pickup()] })), h.deps);
+  assertEquals(res.status, 200);
+  const e = envelopeOf(h);
+  assertEquals(
+    e.events.map((x) => [x.id, x.type, x.tier, x.durationS, x.status, x.measured]),
+    [
+      [EVENT, 'hard_brake', 'minor', 2, 'active', { peakG: 0.42 }],
+      [PICKUP, 'phone_pickup', 'severe', 24, 'active', { speedMph: 31.2, maxSpeedMph: 38.4 }],
+    ]
+  );
+  assertEquals([e.scored, e.reason, e.payload.exposure?.phoneS], [true, null, 1500]);
+  // a pickup on a merge: the union keeps the target's events, then the upload's (the pickup included)
+  const m = harness({ context: withMerge() });
+  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, events: [pickup({ tier: 'moderate', durationS: 15 })] })), m.deps);
+  assertEquals(envelopeOf(m).events.map((x) => [x.id, x.tier, x.status]), [[EVENT_2, 'severe', 'removed'], [PICKUP, 'moderate', 'active']]);
+});
+
+Deno.test('the contract refuses a pickup the phone could not have recorded', async () => {
+  const h = harness();
+  for (const bad of [
+    pickup({ tier: 'minor' }),
+    pickup({ durationS: 0 }),
+    pickup({ durationS: 2.5 }),
+    pickup({ durationS: 1801 }),
+    pickup({ startedAt: STARTED_AT - 1 }),
+    pickup({ startedAt: STARTED_AT + 30 * 60_000 + 1 }),
+    pickup({ measured: { source: 'dashcam' } }),
+  ]) {
+    assertEquals((await handleFinalizeTrip(post(payload({ events: [bad] })), h.deps)).status, 400);
+  }
+  assertEquals(h.fake.calls, []);
+});
+
+Deno.test('a v4 upload from a build before phone tracking is upgraded: no phone seconds, everything else as sent', async () => {
+  const h = harness();
+  const res = await handleFinalizeTrip(post(payloadV4()), h.deps);
+  assertEquals(res.status, 200);
+  const e = envelopeOf(h);
+  assertEquals(e.payload.exposure, { slowdowns: 18, speedups: 17, turns: 11, limitS: 1200, movingS: 1650, phoneS: 0 });
+  assertEquals([e.payload.origin, e.payload.appVersion, e.events.map((x) => x.id)], ['auto', '3.0.0', [EVENT]]);
+  const { exposure: _e, ...noCounters } = payloadV4();
+  const none = harness();
+  assertEquals((await handleFinalizeTrip(post(noCounters), none.deps)).status, 200);
+  assertEquals(envelopeOf(none).payload.exposure, null);
+  // a v4 body still refuses a pickup (only v5 carries one)
+  const refused = harness();
+  const withPickup = { ...payloadV4(), events: [{ ...pickup(), measured: { speedMph: 31.2 } }] };
+  assertEquals((await handleFinalizeTrip(post(withPickup), refused.deps)).status, 400);
 });
 
 Deno.test('a v3 upload from an older build is upgraded: phone events and their fields go, origin manual, "Not driving?" never ran out, no safe miles', async () => {
@@ -97,14 +152,19 @@ Deno.test('a v3 upload from an older build is upgraded: phone events and their f
   assertEquals(e.payload.appVersion, '2.0.0');
 });
 
-Deno.test('the counters are clamped as scoring clampExposure clamps them; limit time over moving time is refused by the contract', async () => {
+Deno.test('the counters are clamped as scoring clampExposure clamps them; limit or phone time over moving time is refused by the contract', async () => {
   const h = harness();
-  // limitS above movingS is refused by the contract; a counter at the cap is kept
-  const bad = await handleFinalizeTrip(post(payload({ exposure: { slowdowns: 5, speedups: 5, turns: 5, limitS: 900, movingS: 800 } })), h.deps);
+  // limitS or phoneS above movingS is refused by the contract; a counter at the cap is kept
+  const bad = await handleFinalizeTrip(post(payload({ exposure: { slowdowns: 5, speedups: 5, turns: 5, limitS: 900, movingS: 800, phoneS: 0 } })), h.deps);
   assertEquals(bad.status, 400);
+  const badPhone = await handleFinalizeTrip(post(payload({ exposure: { slowdowns: 5, speedups: 5, turns: 5, limitS: 0, movingS: 800, phoneS: 801 } })), h.deps);
+  assertEquals(badPhone.status, 400);
+  const noPhone = { ...payload(), exposure: { slowdowns: 5, speedups: 5, turns: 5, limitS: 0, movingS: 800 } };
+  assertEquals((await handleFinalizeTrip(post(noPhone), h.deps)).status, 400);
+  assertEquals(h.fake.calls, []);
   const ok = harness();
-  await handleFinalizeTrip(post(payload({ exposure: { slowdowns: 20_000, speedups: 0, turns: 0, limitS: 0, movingS: 1800 } })), ok.deps);
-  assertEquals(envelopeOf(ok).payload.exposure, { slowdowns: 20_000, speedups: 0, turns: 0, limitS: 0, movingS: 1800 });
+  await handleFinalizeTrip(post(payload({ exposure: { slowdowns: 20_000, speedups: 0, turns: 0, limitS: 0, movingS: 1800, phoneS: 1800 } })), ok.deps);
+  assertEquals(envelopeOf(ok).payload.exposure, { slowdowns: 20_000, speedups: 0, turns: 0, limitS: 0, movingS: 1800, phoneS: 1800 });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -150,7 +210,7 @@ Deno.test('merge: DashPal seconds are summed over the target and the upload and 
 
 Deno.test('a replay returns the stored answer from the context and applies nothing', async () => {
   const stored = response({ achievements: [] });
-  const h = harness({ context: { version: 23, existing: stored, merge: null } });
+  const h = harness({ context: { version: 23, phoneUse: true, existing: stored, merge: null } });
   const res = await handleFinalizeTrip(post(payload()), h.deps);
   assertEquals(res.status, 200);
   assertEquals(await res.json(), stored);
@@ -320,15 +380,15 @@ Deno.test('refusals before any database work: method, token, size, JSON, contrac
   assertEquals((await handleFinalizeTrip(post(payload(), 'good', { headers: { 'content-length': String(600_000) } }), h.deps)).status, 413);
   assertEquals((await handleFinalizeTrip(post(JSON.stringify(payload()) + 'x'.repeat(530_000)), h.deps)).status, 413);
   assertEquals((await handleFinalizeTrip(post('{not json'), h.deps)).status, 400);
-  const version = await handleFinalizeTrip(post({ ...payload(), v: 5 }), h.deps);
+  const version = await handleFinalizeTrip(post({ ...payload(), v: 6 }), h.deps);
   assertEquals(version.status, 400);
   const vBody = await version.json();
   assertEquals(vBody.code, 'invalid_payload');
   assert(vBody.issues.some((i: { path: string }) => i.path === 'v'));
-  // v4 refuses what only phone use and points carried
-  const phone = { ...payload().events[0], id: EVENT_3, type: 'phone_pickup', tier: 'severe' };
+  // v5 refuses what only the old phone use (screen switches) and points carried
+  const handling = { ...payload().events[0], id: EVENT_3, type: 'phone_handling', tier: 'severe' };
   for (const bad of [
-    { ...payload(), events: [phone] },
+    { ...payload(), events: [handling] },
     { ...payload(), safeMiles: 11 },
     { ...payload(), events: [{ ...payload().events[0], units: 2 }] },
     { ...payload(), events: [{ ...payload().events[0], measured: { mounted: true } }] },
@@ -360,11 +420,16 @@ Deno.test('the user is the JWT and nothing in the body; the upload budget answer
   assertEquals(limited.fake.calls.map((c) => c.fn), ['driveContext', 'takeRateLimit']);
 });
 
-Deno.test('engine failures map to codes only: an older database (no version 23) 500, retryable 503, 22023 400, P0002 500, an answer outside the contract 500', async () => {
+Deno.test('engine failures map to codes only: an older database (no version 23, or no phone use) 500, retryable 503, 22023 400, P0002 500, an answer outside the contract 500', async () => {
   const old = harness({ context: { existing: null, week: '2026-W41', merge: null } });
   const older = await handleFinalizeTrip(post(payload()), old.deps);
   assertEquals([older.status, (await older.json()).code], [500, 'internal']);
   assertEquals(old.fake.calls.map((c) => c.fn), ['driveContext']);
+  // a database without 0026 cannot store a pickup: refused before anything is written (a 500 the phone retries, never a 400)
+  const noPhone = harness({ context: { version: 23, existing: null, merge: null } });
+  const before0026 = await handleFinalizeTrip(post(payload({ events: [pickup()] })), noPhone.deps);
+  assertEquals([before0026.status, (await before0026.json()).code], [500, 'internal']);
+  assertEquals(noPhone.fake.calls.map((c) => c.fn), ['driveContext']);
   const retry = await handleFinalizeTrip(post(payload()), harness({ context: new PgError('55P03', 'lock timeout') }).deps);
   assertEquals([retry.status, retry.headers.get('retry-after')], [503, '2']);
   const envelope = await handleFinalizeTrip(post(payload()), harness({ apply: new PgError('22023', 'payload metrics are out of range') }).deps);
@@ -376,7 +441,7 @@ Deno.test('engine failures map to codes only: an older database (no version 23) 
   const drift = await handleFinalizeTrip(post(payload()), harness({ apply: { tripId: 'nope' } }).deps);
   assertEquals([drift.status, (await drift.json()).code], [500, 'internal']);
   // an old points answer (a replay of a drive stored before 0023 rewrote it) is drift too
-  const legacy = await handleFinalizeTrip(post(payload()), harness({ context: { version: 23, existing: { tripId: TRIP, net: 4 }, merge: null } }).deps);
+  const legacy = await handleFinalizeTrip(post(payload()), harness({ context: { version: 23, phoneUse: true, existing: { tripId: TRIP, net: 4 }, merge: null } }).deps);
   assertEquals(legacy.status, 500);
-  for (const r of [older, retry, envelope, missing, drift, legacy]) assert(r.headers.get('x-request-id'));
+  for (const r of [older, before0026, retry, envelope, missing, drift, legacy]) assert(r.headers.get('x-request-id'));
 });

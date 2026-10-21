@@ -2,8 +2,9 @@
 // (report one event) and `not_driving { clientTripId }` ("Wasn't driving").
 //
 // The SQL owns every rule ("Wasn't driving": any drive, until 24 h after its end, only while its
-// "Not driving?" never ran out, 2 a month; a report: within 7 days, a reason that fits the event,
-// 3 auto-accepts a week, 3 more a week for "DashPal got it wrong", "already disputed"); each action
+// "Not driving?" never ran out, 2 a month; a report: within 7 days, a reason that fits the event
+// ("My phone was mounted" for a phone pickup), 3 auto-accepts a week for a hazard, a wrong limit and
+// a mounted phone together, 3 more a week for "DashPal got it wrong", "already disputed"); each action
 // is ONE SQL call in one transaction (`mark_not_driving`, `dispute_event`), and this function turns
 // the writers' fixed refusals into codes the device can show. Each action is one request from the
 // device's queue, retried when its answer was lost: the writers answer a repeat with what the first

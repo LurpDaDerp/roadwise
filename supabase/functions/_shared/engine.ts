@@ -1,4 +1,4 @@
-// The drive engine port: the `private.*` SQL functions of migration 0023, reached over a DIRECT
+// The drive engine port: the `private.*` SQL functions of migrations 0023 and 0026, reached over a DIRECT
 // Postgres connection — the `private` schema is not exposed by the Data API, so nothing but these
 // functions (and the service role) can call them. Every request runs inside ONE transaction:
 // `drive_context` locks the user's progress row and finds the merge target, the TypeScript decides
@@ -10,7 +10,7 @@
 // maps. The handlers never see a query builder or a column name.
 import postgres, { type TransactionSql } from 'postgres';
 import { z } from 'zod';
-import { EVENT_TYPES, type FinalizeTripPayloadV4, type PayloadEvent } from './payload.ts';
+import { EVENT_TYPES, type FinalizeTripPayloadV5, type PayloadEvent } from './payload.ts';
 import { PgError } from './pg.ts';
 import type { Exposure } from './scoring/index';
 
@@ -42,7 +42,7 @@ export const StoredDashcamSchema = z.object({
 export type StoredDashcam = z.infer<typeof StoredDashcamSchema>;
 
 /** The report reasons the engine decides (`not_driving` is the whole-drive action). */
-export type EngineDisputeReason = 'hazard' | 'wrong_limit' | 'camera_wrong';
+export type EngineDisputeReason = 'hazard' | 'wrong_limit' | 'camera_wrong' | 'mounted';
 
 /** The drive a new upload joins (drive_context's rule: started within 300 s and 150 m of its end). */
 export const MergeTargetSchema = z.object({
@@ -59,10 +59,14 @@ export type MergeTarget = z.infer<typeof MergeTargetSchema>;
 
 /**
  * `private.drive_context`: a replay (`existing`) or the merge target of a fresh drive. `version: 23`
- * is what makes an older database (or older function) fail loudly as a 500, never a 400.
+ * is what makes an older database (or older function) fail loudly as a 500, never a 400; so is
+ * `phoneUse: true` (0026): a database that cannot store a phone pickup would refuse one with a 400
+ * the phone never retries, so this function refuses to run on it. The key is additive, so the
+ * function before this one keeps working on a database with 0026.
  */
 export const DriveContextSchema = z.object({
   version: z.literal(23),
+  phoneUse: z.literal(true),
   existing: z.record(z.string(), z.unknown()).nullable(),
   merge: MergeTargetSchema.nullable(),
 });
@@ -112,10 +116,13 @@ export interface ApplyDriveEnvelope {
     end: { lat: number; lng: number } | null;
     polyline: string;
     appVersion: string;
-    dashcam: FinalizeTripPayloadV4['dashcam'] | null;
+    dashcam: FinalizeTripPayloadV5['dashcam'] | null;
     origin: 'auto' | 'manual';
     notDrivingExpired: boolean;
-    /** The upload's own counters (clamped); apply_drive estimates them when absent and sums them on a merge. */
+    /**
+     * The upload's own counters (clamped), `phoneS` included; apply_drive estimates them when absent
+     * (with no phone seconds) and sums them on a merge.
+     */
     exposure: Exposure | null;
   };
   scored: boolean;

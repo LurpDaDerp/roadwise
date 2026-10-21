@@ -1,7 +1,7 @@
 import { assertEquals } from '@std/assert';
 import { distanceM, integrityReason, milesExceedRoute, polylineMiles, SERVER_MERGE } from './finalize_rules.ts';
 import { localDayOf, isKnownTz } from './local_day.ts';
-import { lineOfMiles, payload } from './testing/v4_fixtures.ts';
+import { lineOfMiles, payload } from './testing/v5_fixtures.ts';
 
 Deno.test('integrity: mock location is spoofed; motion mismatch, a 170 mph fix, 150 mph average or bad GNSS is implausible', () => {
   const ok = payload();

@@ -3,7 +3,7 @@
 // The phone detected the events, measured the miles and counted the drive's chances to slip; the
 // server stores the drive and is authoritative for the week's goals, the achievements and the
 // Safety Rating. Order of work, cheapest refusal first: method, JWT, size (512 KB, checked before
-// parsing), JSON, the upload contract (v4; a v3 body from an older build is upgraded, so no drive
+// parsing), JSON, the upload contract (v5; a v4 or v3 body from an older build is upgraded, so no drive
 // is ever lost), the time zone and local day (derived here from tz + startedAt; an unknown IANA
 // zone or a mislabelled day is refused), then ONE database transaction: `drive_context` (lock,
 // idempotency, the merge target) → the daily upload budget → integrity → the merge union (the
@@ -32,7 +32,7 @@ import {
   FinalizeTripResponseSchema,
   MAX_PAYLOAD_BYTES,
   parseFinalizeUpload,
-  type FinalizeTripPayloadV4,
+  type FinalizeTripPayloadV5,
   type FinalizeTripResponse,
   type PayloadEvent,
 } from '../_shared/payload.ts';
@@ -94,7 +94,7 @@ const fromPayload = (e: PayloadEvent): EnvelopeEvent => ({
  * (the newest part, absent = false), the device id the upload's else the target's — and the
  * DashPal-drive flag derived from those sums (never an OR of the two parts' flags).
  */
-export function dashcamOf(p: FinalizeTripPayloadV4, merge: MergeTarget | null): EnvelopeDashcam {
+export function dashcamOf(p: FinalizeTripPayloadV5, merge: MergeTarget | null): EnvelopeDashcam {
   const own = p.dashcam ?? null;
   const movingS = (merge?.dashcam.movingS ?? 0) + (own?.movingS ?? 0);
   const coveredS = (merge?.dashcam.coveredS ?? 0) + (own?.coveredS ?? 0);
@@ -112,7 +112,7 @@ export function dashcamOf(p: FinalizeTripPayloadV4, merge: MergeTarget | null): 
  * (scoring `classifyDrive`: under 0.5 mi AND under 2 min) over what is stored.
  */
 export function buildStoredDrive(
-  p: FinalizeTripPayloadV4,
+  p: FinalizeTripPayloadV5,
   merge: MergeTarget | null
 ): { events: EnvelopeEvent[]; dashcam: EnvelopeDashcam; short: boolean } {
   if (merge) {
@@ -149,7 +149,8 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
 
   const body = await readJsonBody(req, MAX_PAYLOAD_BYTES);
   if (!body.ok) return reply(body.response);
-  // v4 as is; v3 (an older build, or its queue) upgraded: phone events go, origin manual
+  // v5 as is; v4 upgraded with no phone seconds; v3 (an older build, or its queue) upgraded: its
+  // screen-switch phone events go, origin manual
   const parsed = parseFinalizeUpload(body.body);
   if (!parsed.success) return reply(invalidPayload(parsed.error));
   const p = parsed.data;

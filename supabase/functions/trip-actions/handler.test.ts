@@ -1,7 +1,7 @@
 import { assertEquals } from '@std/assert';
 import { PgError } from '../_shared/pg.ts';
 import { fakeEngine, type FakeEngineScript } from '../_shared/testing/fake_engine.ts';
-import { EVENT, TRIP, USER } from '../_shared/testing/v4_fixtures.ts';
+import { EVENT, TRIP, USER } from '../_shared/testing/v5_fixtures.ts';
 import { ACTION_LIMIT_KEY, handleTripAction, MAX_ACTIONS_PER_HOUR, REFUSALS } from './handler.ts';
 
 const quiet = { warn: () => {}, error: () => {} };
@@ -52,7 +52,7 @@ Deno.test('not_driving: one transaction, the budget, one call to mark_not_drivin
 });
 
 Deno.test('dispute: one call to dispute_event with the reason; the stored answer comes back with the trip id', async () => {
-  for (const reason of ['hazard', 'wrong_limit', 'camera_wrong']) {
+  for (const reason of ['hazard', 'wrong_limit', 'camera_wrong', 'mounted']) {
     const h = harness();
     const res = await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason }), h.deps);
     assertEquals(res.status, 200, reason);
@@ -71,8 +71,11 @@ Deno.test('a rejected report (the week\'s quota) passes through with its reason'
   assertEquals(await res.json(), { action: 'dispute', clientTripId: TRIP, ...rejected });
 });
 
-Deno.test('"My phone was mounted" is no longer a reason: refused by the contract before the engine', async () => {
-  for (const reason of ['mounted', 'camera']) {
+Deno.test('"My phone was mounted" goes to dispute_event like the others (the SQL checks it is a pickup); an unknown reason is refused before the engine', async () => {
+  const mismatch = harness({ dispute: new PgError('22023', 'that reason does not apply to this event') });
+  const res = await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'mounted' }), mismatch.deps);
+  assertEquals([res.status, (await res.json()).code], [400, 'reason_mismatch']);
+  for (const reason of ['camera', 'passenger', 'not_mounted']) {
     const h = harness();
     assertEquals((await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason }), h.deps)).status, 400, reason);
     assertEquals(h.fake.calls, []);

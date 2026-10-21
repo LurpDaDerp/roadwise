@@ -10,7 +10,7 @@ import { assert, assertEquals } from '@std/assert';
 import postgres from 'postgres';
 import { createEngine } from '../_shared/engine.ts';
 import { deleteTestUser } from '../_shared/testing/it_cleanup.ts';
-import { EVENT, lineOfMiles, payload, payloadV3, TRIP, TRIP_2 } from '../_shared/testing/v4_fixtures.ts';
+import { EVENT, lineOfMiles, payload, payloadV3, TRIP, TRIP_2 } from '../_shared/testing/v5_fixtures.ts';
 import { handleTripAction } from '../trip-actions/handler.ts';
 import { handleFinalizeTrip } from './handler.ts';
 

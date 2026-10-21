@@ -2,7 +2,7 @@
 // or an implausible drive is stored unscored with a reason) and the server merge rule
 // `drive_context` applies (its SQL holds the same numbers as literals). Pure, so every rule is a
 // unit test.
-import type { FinalizeTripPayloadV4 } from './payload.ts';
+import type { FinalizeTripPayloadV5 } from './payload.ts';
 import { MERGE_GAP_S, MERGE_RADIUS_M } from './scoring/index';
 import { decodeLine } from './speedLimits/geometry.ts';
 
@@ -60,7 +60,7 @@ export function polylineMiles(polyline: string): number {
 export const milesExceedRoute = (miles: number, polyline: string): boolean => miles > polylineMiles(polyline) * POLYLINE_SLACK_FACTOR + POLYLINE_SLACK_MILES;
 
 /** Why a drive is stored unscored, or null when it may be scored. */
-export function integrityReason(p: FinalizeTripPayloadV4): IntegrityReason | null {
+export function integrityReason(p: FinalizeTripPayloadV5): IntegrityReason | null {
   if (p.integrity.mockLocation) return 'spoofed';
   if (p.integrity.motionMismatch) return 'implausible';
   if (p.integrity.maxSpeedMph > MAX_PEAK_MPH) return 'implausible';
