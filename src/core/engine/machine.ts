@@ -242,11 +242,16 @@ export function createEngine(deps: EngineDeps): Engine {
     }
   }
 
-  /** Points came off on the row at `at` (`lastDeduction`); returns them, or 0 for less than a point. */
+  /**
+   * Points came off on the row at `at` (`lastDeduction`); returns them, or 0 for less than a point.
+   * The drive state is published once per row, so the points that come off on one row (a hard brake
+   * on the row a speeding repeat takes points) are one deduction: their sum, under a new key.
+   */
   function deduct(id: string, points: number, at: number): number {
     if (!(points >= 1)) return 0;
     deductions += 1;
-    lastDeduction = { key: `${id}:${deductions}`, points, at };
+    const sameRow = lastDeduction !== null && lastDeduction.at === at ? lastDeduction.points : 0;
+    lastDeduction = { key: `${id}:${deductions}`, points: sameRow + points, at };
     touch();
     return points;
   }

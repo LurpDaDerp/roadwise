@@ -367,7 +367,7 @@ describe('speeding alerts and deductions', () => {
     expect(shown()).toHaveLength(2);
   });
 
-  test('the cadence quickens the further over and the longer it lasts, never under 2 s', async () => {
+  test('the cadence quickens the further over and the longer it lasts: repeats never under 2 s apart, the grace end sounds at once', async () => {
     const h = await started();
     await feed(h, over(60, 70));
     const at = h.alerts.filter((a) => a.type === 'speeding').map((a) => rowOf(a.at));
@@ -405,6 +405,29 @@ describe('deductions from the instant and phone alerts', () => {
     ]);
     const keys = h.snapshots.map((s) => s.lastDeduction?.key).filter((k): k is string => k !== undefined);
     expect(new Set(keys).size).toBe(2);
+  });
+
+  test('a hard brake on the row the speeding grace ends: each alert keeps its own points, the driving screen gets their sum as one deduction', async () => {
+    const h = harness();
+    await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+    // 60 on a 35 for 5 rows, then a hard brake to 50 on the 6th over row (still over the line, 39):
+    // the brake (8) and the grace's end (11 past the line for 1 charged second: 2) on one row.
+    const steady = { aLonMax: 0.02, aLonMin: -0.02 };
+    await feed(h, [...at(0, 5, { speed: mph(60), ...steady }), ...at(5, 1, { speed: mph(50), aLonMax: 0.02, aLonMin: -0.35 }), ...at(6, 4, { speed: mph(50), ...steady })]);
+    const brakeRow = T0 + 31_000 + 5000;
+    const onRow = h.alerts.filter((a) => a.at === brakeRow);
+    expect(onRow.map((a) => [a.type, a.points])).toEqual([
+      ['hard_brake', 8],
+      ['speeding', 2],
+    ]);
+    // The state is published once per row: that row's one deduction carries both, under its own key.
+    const published = h.snapshots.map((s) => s.lastDeduction).filter((d) => d !== null && d.at === brakeRow);
+    expect(new Set(published.map((d) => d!.key)).size).toBe(1);
+    expect(published[0]).toMatchObject({ points: 10, at: brakeRow });
+    // A later row's deduction stands alone again.
+    const later = h.snapshots.map((s) => s.lastDeduction).filter((d) => d !== null && d.at > brakeRow);
+    expect(later.length).toBeGreaterThan(0);
+    for (const d of later) expect(d!.points).toBe(h.alerts.filter((a) => a.at === d!.at).reduce((sum, a) => sum + (a.points ?? 0), 0));
   });
 
   test('a pickup stopped in traffic costs 16, with no speed multiplier', async () => {

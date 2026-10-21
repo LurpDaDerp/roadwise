@@ -176,8 +176,8 @@ export interface AlertEvent {
  * Points coming off, as the engine estimates them on the row it happens: a hard brake, start or turn
  * or a phone pickup as it alerts (its base cost, the phone speed multiplier included), each later
  * phone-handling alert (the units since the last), a speeding episode at the end of its grace and at
- * each later speeding repeat (the points accrued since the last, from `speedingCost`). Never a
- * DashPal alert (decided at the end).
+ * each later speeding repeat (the points accrued since the last, from `speedingCost`). Points that
+ * come off on the same row are one deduction, their sum. Never a DashPal alert (decided at the end).
  */
 export interface Deduction {
   /** Unique per deduction in a drive. */
