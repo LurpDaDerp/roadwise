@@ -119,8 +119,8 @@ const SECRETS = [
   TOKEN_A,
   TOKEN_B,
   'aaaaaaaaaaaaaaaaaaaaaa',
-  'Your week in review',
-  'Best drive +167',
+  'Your week on the road',
+  '2 of 3 weekly goals done',
   'expo-access',
 ];
 
@@ -220,8 +220,8 @@ Deno.test('happy path: every token gets the rendered message, outcomes record th
   assertEquals(h.expoCalls[0].body, [
     {
       to: TOKEN_A,
-      title: 'Your week in review',
-      body: '5 drives, +420 points. Best drive +167. Safety Rating 92 (up 1). Streak 4.',
+      title: 'Your week on the road',
+      body: '5 drives this week. Safety Rating 92, up 1. 2 of 3 weekly goals done.',
       data: { inboxId: a.inboxId, url: '/home' },
       sound: 'default',
       priority: 'default',

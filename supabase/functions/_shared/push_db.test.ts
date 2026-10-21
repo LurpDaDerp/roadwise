@@ -18,7 +18,7 @@ function client(answers: Record<string, { data?: unknown; error?: { code: string
 const ROW = {
   inbox_id: '11111111-1111-4111-8111-111111111111',
   user_id: '22222222-2222-4222-8222-222222222222',
-  kind: 'league_result',
+  kind: 'friend_request',
   payload: { week: '2026-W40' },
   created_at: '2026-10-05T12:00:00.000Z',
   ctx: { tz: 'America/New_York', quiet: { enabled: true, start: '22:00', end: '07:00' }, enabled: true, tokens: ['ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]'] },
@@ -32,7 +32,7 @@ Deno.test('claim: rows are camel-cased; a malformed row is set aside; one withou
     {
       inboxId: ROW.inbox_id,
       userId: ROW.user_id,
-      kind: 'league_result',
+      kind: 'friend_request',
       payload: { week: '2026-W40' },
       createdAt: Date.parse(ROW.created_at),
       ctx: { tz: 'America/New_York', quiet: { enabled: true, start: '22:00', end: '07:00' }, enabled: true, tokens: ['ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]'] },

@@ -1,19 +1,20 @@
-// finalize-trip: the server side of a drive upload (plan §3, §4 "Edge functions").
+// finalize-trip: the server side of a drive upload.
 //
-// The phone detected events and measured miles; the server is authoritative for points, streak,
-// freezes, level, rating and leagues. Order of work, cheapest refusal first: method, JWT, size
-// (512 KB, checked before parsing), JSON, the zod contract, the time zone and local day (derived
-// here from tz + startedAt; an unknown IANA zone or a mislabelled day is refused), then ONE
-// database transaction: `drive_context` (lock, lazy freeze grant, idempotency, streak state, the
-// daily-cap and loop context, the merge target) → integrity → merge union (the DashPal limits
-// re-applied over it) → `scoreDrive` and `applyStreak` from the shared scoring package →
-// `apply_drive` → the response, stored for replays.
+// The phone detected the events, measured the miles and counted the drive's chances to slip; the
+// server stores the drive and is authoritative for the week's goals, the achievements and the
+// Safety Rating. Order of work, cheapest refusal first: method, JWT, size (512 KB, checked before
+// parsing), JSON, the upload contract (v4; a v3 body from an older build is upgraded, so no drive
+// is ever lost), the time zone and local day (derived here from tz + startedAt; an unknown IANA
+// zone or a mislabelled day is refused), then ONE database transaction: `drive_context` (lock,
+// idempotency, the merge target) → the daily upload budget → integrity → the merge union (the
+// DashPal limits re-applied over it) → `classifyDrive`'s length rule → `apply_drive` → the
+// response, stored for replays.
 //
 // A user id comes from the JWT and nowhere else. Logs carry the request id, the client trip id and
 // codes — never a position, a name or a database message.
-import type { ApplyDriveEnvelope, Engine, EnvelopeDashcam, MergeTarget, StoredEvent } from '../_shared/engine.ts';
+import type { ApplyDriveEnvelope, Engine, EnvelopeDashcam, EnvelopeEvent, MergeTarget, StoredEvent } from '../_shared/engine.ts';
 import { EngineContractError } from '../_shared/engine.ts';
-import { integrityReason, isLoopDrive, isRefusedReason, unscoredBreakdown } from '../_shared/finalize_rules.ts';
+import { integrityReason, isRefusedReason } from '../_shared/finalize_rules.ts';
 import {
   bearerToken,
   invalidPayload,
@@ -28,30 +29,27 @@ import {
 import { isKnownTz, localDayOf } from '../_shared/local_day.ts';
 import { isPgError } from '../_shared/pg.ts';
 import {
-  FinalizeTripPayloadV3Schema,
-  FinalizeTripResponseV3Schema,
+  FinalizeTripResponseSchema,
   MAX_PAYLOAD_BYTES,
-  type FinalizeTripPayloadV3,
-  type FinalizeTripResponseV3,
+  parseFinalizeUpload,
+  type FinalizeTripPayloadV4,
+  type FinalizeTripResponse,
+  type PayloadEvent,
 } from '../_shared/payload.ts';
 import {
-  applyStreak,
+  clampExposure,
+  classifyDrive,
   dashcamDrive,
   keepDashcamEvents,
-  scoreDrive,
   SCORING_VERSION,
   SPEEDING_MAX_OVER_MPH,
   speedingChargedS,
-  type DriveContext,
-  type DriveEvent,
-  type DriveInput,
-  type StreakState,
 } from '../_shared/scoring/index';
 
 /** Uploads a user may make per rolling day; above it the queue is told to wait. */
 export const MAX_UPLOADS_PER_DAY = 300;
 export const UPLOAD_LIMIT_KEY = 'finalize_trip';
-/** apply_drive's fixed refusal of a zone pg_timezone_names lacks (0008). */
+/** apply_drive's fixed refusal of a zone pg_timezone_names lacks (0023). */
 export const TZ_REFUSAL = 'payload needs clientTripId, a known tz, localDay and a valid reason';
 
 export interface FinalizeDeps {
@@ -61,31 +59,13 @@ export interface FinalizeDeps {
   log?: Logger;
 }
 
-type EnvelopeEvent = ApplyDriveEnvelope['events'][number];
-
 /** A stored event of the merge target, in the envelope's shape (its status survives). */
-const fromStored = (e: StoredEvent): EnvelopeEvent => ({
-  id: e.id,
-  type: e.type,
-  tier: e.tier,
-  startedAt: e.startedAt,
-  durationS: e.durationS,
-  units: e.units ?? undefined,
-  stoppedInTraffic: e.stoppedInTraffic ?? undefined,
-  zone: e.zone,
-  status: e.status,
-  lat: e.lat,
-  lng: e.lng,
-  measured: e.measured,
-});
-
-type PayloadEvent = FinalizeTripPayloadV3['events'][number];
+const fromStored = (e: StoredEvent): EnvelopeEvent => ({ ...e });
 
 /**
- * What an uploaded event measured, as stored and scored: a speeding event's `overMphS` (mph-seconds
+ * What an uploaded event measured, as stored and rated: a speeding event's `overMphS` (mph-seconds
  * over the line after the grace) is capped at `SPEEDING_MAX_OVER_MPH` per charged second, as the
- * scorer reads it, so a bad reading is never kept for a later re-score. Every other key travels
- * untouched.
+ * rating reads it, so a bad reading is never kept. Every other key travels untouched.
  */
 export function clampMeasured(e: PayloadEvent): PayloadEvent['measured'] {
   const m = e.measured;
@@ -101,8 +81,6 @@ const fromPayload = (e: PayloadEvent): EnvelopeEvent => ({
   tier: e.tier,
   startedAt: e.startedAt,
   durationS: e.durationS,
-  units: e.units,
-  stoppedInTraffic: e.stoppedInTraffic,
   zone: e.zone ?? null,
   status: 'active',
   lat: e.lat,
@@ -111,12 +89,12 @@ const fromPayload = (e: PayloadEvent): EnvelopeEvent => ({
 });
 
 /**
- * The DashPal seconds of what is scored. A fresh drive: the upload's own (absent = none). A merge:
+ * The DashPal seconds of what is stored. A fresh drive: the upload's own (absent = none). A merge:
  * the moving and covered seconds summed over the target and the upload, `synced` from the upload
  * (the newest part, absent = false), the device id the upload's else the target's — and the
  * DashPal-drive flag derived from those sums (never an OR of the two parts' flags).
  */
-export function dashcamOf(p: FinalizeTripPayloadV3, merge: MergeTarget | null): EnvelopeDashcam {
+export function dashcamOf(p: FinalizeTripPayloadV4, merge: MergeTarget | null): EnvelopeDashcam {
   const own = p.dashcam ?? null;
   const movingS = (merge?.dashcam.movingS ?? 0) + (own?.movingS ?? 0);
   const coveredS = (merge?.dashcam.coveredS ?? 0) + (own?.coveredS ?? 0);
@@ -126,68 +104,27 @@ export function dashcamOf(p: FinalizeTripPayloadV3, merge: MergeTarget | null): 
 }
 
 /**
- * What is scored: the payload alone, or its union with the merge target (plan §4 "Merge"). The
- * DashPal limits are re-applied over the whole drive (scoring `keepDashcamEvents`): an uploaded
- * eyes-off or drowsy event under 10 mph or with no measured speed, or within 5 min (eyes-off) or
- * 10 min (drowsy) of one the drive already keeps (the merge target's, or an earlier one of the
- * upload), is dropped — never stored, never scored. The target's own events always stand.
+ * What is stored: the upload alone, or its union with the merge target. The DashPal limits are
+ * re-applied over the whole drive (scoring `keepDashcamEvents`): an uploaded eyes-off or drowsy
+ * event under 10 mph or with no measured speed, or within 5 min (eyes-off) or 10 min (drowsy) of
+ * one the drive already keeps (the merge target's, or an earlier one of the upload), is dropped —
+ * never stored, never rated. The target's own events always stand. `short` is the length rule
+ * (scoring `classifyDrive`: under 0.5 mi AND under 2 min) over what is stored.
  */
-export function buildScoringInput(
-  p: FinalizeTripPayloadV3,
-  merge: MergeTarget | null,
-  loopDrivesToday: number,
-  streakNow: StreakState,
-  safeMilesEarlierToday: number
-): {
-  input: DriveInput;
-  ctx: DriveContext;
-  streak: StreakState;
-  events: EnvelopeEvent[];
-  isLoop: boolean;
-  loopRepeat: boolean;
-  dashcam: EnvelopeDashcam;
-} {
-  // a refused target never merges, even if a stale engine offered it.
-  // The union is scored under the current rules, whatever version the target was first scored
-  // under, and the merged drive is stored under SCORING_VERSION, so a later dispute re-scores it by
-  // the rules it was paid by. A target scored before an earn-rate change is re-paid at the new rate
-  // for its own miles; that happens once, at the deploy, for a target that ended within 5 min of
-  // the upload's start, and scoring the union under the target's old rules would instead pay the
-  // new leg's miles at the old rate, a bigger loss to the driver than this gain.
-  if (merge && !isRefusedReason(merge.reason)) {
+export function buildStoredDrive(
+  p: FinalizeTripPayloadV4,
+  merge: MergeTarget | null
+): { events: EnvelopeEvent[]; dashcam: EnvelopeDashcam; short: boolean } {
+  if (merge) {
     const events = [...merge.events.map(fromStored), ...keepDashcamEvents(p.events, merge.events).map(fromPayload)];
-    const dashcam = dashcamOf(p, merge);
     return {
-      input: {
-        miles: merge.miles + p.miles,
-        safeMiles: merge.safeMiles + p.safeMiles,
-        events: events as DriveEvent[],
-        loopRepeat: merge.loopRepeat,
-        dashcam: dashcam.on,
-        // the union's length: the minimum-drive rule (under 0.5 mi AND under 2 min) reads it
-        durationS: merge.durationS + p.durationS,
-      },
-      ctx: { streak: merge.streak.streak, safeMilesEarlierToday: merge.safeMilesEarlierToday },
-      streak: merge.streak,
       events,
-      isLoop: merge.isLoop,
-      loopRepeat: merge.loopRepeat,
-      dashcam,
+      dashcam: dashcamOf(p, merge),
+      short: !classifyDrive({ miles: merge.miles + p.miles, durationS: merge.durationS + p.durationS, events }).scored,
     };
   }
   const events = keepDashcamEvents(p.events).map(fromPayload);
-  const isLoop = isLoopDrive(p.start, p.end, p.miles);
-  const loopRepeat = isLoop && loopDrivesToday >= 2;
-  const dashcam = dashcamOf(p, null);
-  return {
-    input: { miles: p.miles, safeMiles: p.safeMiles, events: events as DriveEvent[], loopRepeat, dashcam: dashcam.on, durationS: p.durationS },
-    ctx: { streak: streakNow.streak, safeMilesEarlierToday },
-    streak: streakNow,
-    events,
-    isLoop,
-    loopRepeat,
-    dashcam,
-  };
+  return { events, dashcam: dashcamOf(p, null), short: !classifyDrive({ miles: p.miles, durationS: p.durationS, events }).scored };
 }
 
 export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Promise<Response> {
@@ -212,7 +149,8 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
 
   const body = await readJsonBody(req, MAX_PAYLOAD_BYTES);
   if (!body.ok) return reply(body.response);
-  const parsed = FinalizeTripPayloadV3Schema.safeParse(body.body);
+  // v4 as is; v3 (an older build, or its queue) upgraded: phone events go, origin manual
+  const parsed = parseFinalizeUpload(body.body);
   if (!parsed.success) return reply(invalidPayload(parsed.error));
   const p = parsed.data;
   const ctxLog = { requestId: id, clientTripId: p.clientTripId };
@@ -233,20 +171,13 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
         return { kind: 'limited' as const };
       }
 
-      // An integrity-refused drive is stored alone and unscored: it never merges into a good one.
+      // An integrity-refused drive is stored alone and unscored: it never merges into a good one,
+      // and a refused target is never merged into.
       const refused = integrityReason(p);
       const merge = refused || isRefusedReason(context.merge?.reason ?? null) ? null : context.merge;
-      const s = buildScoringInput(p, merge, context.loopDrivesToday, context.streak, context.safeMilesEarlierToday);
-
-      let breakdown = scoreDrive(s.input, s.ctx);
-      let scored = breakdown.scored;
-      let reason: ApplyDriveEnvelope['reason'] = breakdown.reason ?? null;
-      if (refused) {
-        breakdown = unscoredBreakdown(breakdown);
-        scored = false;
-        reason = refused;
-      }
-      const streak = applyStreak(s.streak, { scored, net: breakdown.net, activeEventCount: breakdown.activeEventCount });
+      const s = buildStoredDrive(p, merge);
+      const scored = !refused && !s.short;
+      const reason: ApplyDriveEnvelope['reason'] = refused ?? (s.short ? 'too_short' : null);
 
       const envelope: ApplyDriveEnvelope = {
         user: userId,
@@ -259,28 +190,19 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
           tz: p.tz,
           localDay,
           miles: p.miles,
-          safeMiles: p.safeMiles,
           nightMiles: p.nightMiles,
           durationS: Math.round(p.durationS),
           end: p.end,
           polyline: p.polyline,
           appVersion: p.appVersion,
           dashcam: p.dashcam ?? null,
+          origin: p.origin,
+          notDrivingExpired: p.notDrivingExpired,
+          exposure: p.exposure ? clampExposure(p.exposure) : null,
         },
         scored,
         reason,
-        net: breakdown.net,
-        breakdown,
         events: s.events,
-        streak: {
-          before: { streak: s.streak.streak },
-          after: streak.state,
-          outcome: streak.outcome,
-          freezeEarned: streak.freezeEarned,
-        },
-        isLoop: s.isLoop,
-        loopRepeat: s.loopRepeat,
-        safeMilesEarlierToday: s.ctx.safeMilesEarlierToday,
         scoringVersion: SCORING_VERSION,
       };
       if (refused) log.warn('finalize-trip stored unscored', { ...ctxLog, reason: refused });
@@ -289,12 +211,12 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
 
     if (result.kind === 'limited') return reply(json(429, { code: 'too_many_trips' }, { 'retry-after': '3600' }));
     // The stored document is our own contract; a document outside it says the database drifted.
-    const response = FinalizeTripResponseV3Schema.safeParse(result.response);
+    const response = FinalizeTripResponseSchema.safeParse(result.response);
     if (!response.success) {
       log.error('finalize-trip response outside the contract', { ...ctxLog, replay: result.kind === 'replay' });
       return reply(json(500, { code: 'internal' }));
     }
-    const out: FinalizeTripResponseV3 = response.data;
+    const out: FinalizeTripResponse = response.data;
     return reply(json(200, out, result.kind === 'replay' ? { 'x-replayed': 'true' } : {}));
   } catch (err) {
     if (err instanceof EngineContractError) {

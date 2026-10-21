@@ -155,7 +155,7 @@ export function pushItem(overrides: Partial<PushItem> = {}, ctx: Partial<PushIte
     inboxId: crypto.randomUUID(),
     userId: '11111111-1111-4111-8111-111111111111',
     kind: 'weekly_recap',
-    payload: { week: '2026-W40', rating: 91.7, rating_delta: 1.2, streak: 4, drives: 5, week_points: 420, best_drive_net: 167 },
+    payload: { week: '2026-W40', rating: 91.7, rating_delta: 1.2, drives: 5, goals_done: 2 },
     createdAt: 0,
     ctx: {
       tz: 'America/Los_Angeles',

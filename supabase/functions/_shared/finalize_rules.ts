@@ -1,10 +1,9 @@
-// The server-side rules around scoring a drive that are not the scorer's: integrity (plan §4:
-// mock location or an implausible drive is stored unscored with a reason), the loop rule (start
-// and end within 402 m and under 5 miles), and the zeroed breakdown an unscored drive keeps.
-// Pure, so every rule is a unit test.
-import type { FinalizeTripPayloadV3 } from './payload.ts';
-import type { DriveBreakdown } from './scoring/index';
-import { MERGE_DIST_M } from './scoring/index';
+// The server-side rules around storing a drive that are not the scorer's: integrity (mock location
+// or an implausible drive is stored unscored with a reason) and the server merge rule
+// `drive_context` applies (its SQL holds the same numbers as literals). Pure, so every rule is a
+// unit test.
+import type { FinalizeTripPayloadV4 } from './payload.ts';
+import { MERGE_GAP_S, MERGE_RADIUS_M } from './scoring/index';
 import { decodeLine } from './speedLimits/geometry.ts';
 
 /** Faster than this, sustained over a whole drive, is not a car on a road. */
@@ -13,8 +12,13 @@ export const MAX_AVG_MPH = 120;
 export const MAX_PEAK_MPH = 160;
 /** Below this share of valid fixes the miles cannot be trusted (drives under a mile are excused). */
 export const MIN_VALID_GNSS_PCT = 30;
-/** A loop drive is under this many miles. */
-export const LOOP_MAX_MILES = 5;
+/**
+ * The server merge rule (`private.drive_context`, migration 0023): an upload that starts within
+ * `gapS` of the user's latest kept drive's end, and within `radiusM` of where it ended, is joined
+ * to it. The phone continues a drive by the same rule (scoring `MERGE_GAP_S`, `MERGE_RADIUS_M`);
+ * the SQL literals are pinned by pgTAP (0023: 149 m and 300 s merge, 151 m and 301 s do not).
+ */
+export const SERVER_MERGE = { gapS: MERGE_GAP_S, radiusM: MERGE_RADIUS_M } as const;
 
 /** The route may be up to this much longer than its drawn polyline (GPS noise, simplification)… */
 export const POLYLINE_SLACK_FACTOR = 1.25;
@@ -56,7 +60,7 @@ export function polylineMiles(polyline: string): number {
 export const milesExceedRoute = (miles: number, polyline: string): boolean => miles > polylineMiles(polyline) * POLYLINE_SLACK_FACTOR + POLYLINE_SLACK_MILES;
 
 /** Why a drive is stored unscored, or null when it may be scored. */
-export function integrityReason(p: FinalizeTripPayloadV3): IntegrityReason | null {
+export function integrityReason(p: FinalizeTripPayloadV4): IntegrityReason | null {
   if (p.integrity.mockLocation) return 'spoofed';
   if (p.integrity.motionMismatch) return 'implausible';
   if (p.integrity.maxSpeedMph > MAX_PEAK_MPH) return 'implausible';
@@ -76,26 +80,4 @@ export function distanceM(a: { lat: number; lng: number }, b: { lat: number; lng
   const dLng = rad(b.lng - a.lng);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
   return 2 * R_M * Math.asin(Math.min(1, Math.sqrt(h)));
-}
-
-/** Start and end within MERGE_DIST_M of each other and under LOOP_MAX_MILES: a loop. */
-export function isLoopDrive(start: { lat: number; lng: number } | null, end: { lat: number; lng: number } | null, miles: number): boolean {
-  if (!start || !end) return false;
-  return miles < LOOP_MAX_MILES && distanceM(start, end) <= MERGE_DIST_M;
-}
-
-/** The breakdown an integrity-refused drive keeps: its miles, nothing credited, no penalties. */
-export function unscoredBreakdown(bd: DriveBreakdown): DriveBreakdown {
-  return {
-    ...bd,
-    scored: false,
-    creditedMiles: 0,
-    milePoints: 0,
-    cleanBonus: 0,
-    gains: 0,
-    events: [],
-    penalties: 0,
-    net: 0,
-    ratingPenalty: 0,
-  };
 }

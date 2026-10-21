@@ -1,5 +1,5 @@
-// push-sender: one sweep of the server-originated notifications (plan §4 "Push/outbox": weekly
-// recap and friend request; a queued league result is skipped). pg_cron's `private.dispatch_push` (0005) calls it about
+// push-sender: one sweep of the server-originated notifications (the weekly recap and the friend
+// request; any other kind is skipped). pg_cron's `private.dispatch_push` (0005) calls it about
 // once a minute when something is due; it claims the due inbox items, decides each one
 // (`push_policy.ts`), sends what may go now through Expo in one pass, records every outcome, then
 // reads the receipts that are due.

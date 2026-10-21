@@ -1,7 +1,16 @@
 // An in-memory stand-in for the engine port (`engine.ts`): answers each call from a script,
 // records every call in order, and rolls back nothing (there is nothing to roll back) — a handler
-// test asserts what was asked of the engine and in which order.
-import type { ApplyDisputeEnvelope, ApplyDriveEnvelope, DisputeContext, DriveContext, DriveContextArgs, Engine, EngineTx } from '../engine.ts';
+// test asserts what was asked of the engine and in which order. A scripted drive context is held to
+// `DriveContextSchema` as the real port holds the database's answer, so a context from an older
+// database (no `version: 23`) is the same contract error.
+import {
+  DriveContextSchema,
+  EngineContractError,
+  type ApplyDriveEnvelope,
+  type DriveContextArgs,
+  type Engine,
+  type EngineTx,
+} from '../engine.ts';
 
 export interface EngineCall {
   fn: keyof EngineTx;
@@ -10,11 +19,11 @@ export interface EngineCall {
 
 export interface FakeEngineScript {
   rateLimit?: boolean;
-  context?: DriveContext | Error;
+  /** What drive_context answers (checked against `DriveContextSchema`), or the error it throws. */
+  context?: unknown;
   apply?: unknown | Error | ((envelope: ApplyDriveEnvelope) => unknown);
-  revert?: unknown | Error;
-  disputeContext?: DisputeContext | Error;
-  applyDispute?: unknown | Error | ((envelope: ApplyDisputeEnvelope) => unknown);
+  notDriving?: unknown | Error;
+  dispute?: unknown | Error | ((args: { userId: string; clientTripId: string; eventId: string; reason: string }) => unknown);
 }
 
 export interface FakeEngine {
@@ -39,25 +48,25 @@ export function fakeEngine(script: FakeEngineScript = {}): FakeEngine {
     },
     driveContext(args: DriveContextArgs) {
       calls.push({ fn: 'driveContext', args });
-      return Promise.resolve(answer(script.context ?? new Error('no context scripted')));
+      const raw = answer(script.context ?? new Error('no context scripted'));
+      const parsed = DriveContextSchema.safeParse(raw);
+      if (!parsed.success) return Promise.reject(new EngineContractError('private.drive_context'));
+      return Promise.resolve(parsed.data);
     },
     applyDrive(envelope) {
       calls.push({ fn: 'applyDrive', args: envelope });
       const a = script.apply ?? new Error('no apply scripted');
       return Promise.resolve(typeof a === 'function' ? (a as (e: ApplyDriveEnvelope) => unknown)(envelope) : answer(a));
     },
-    revertNotDriving(userId, clientTripId) {
-      calls.push({ fn: 'revertNotDriving', args: { userId, clientTripId } });
-      return Promise.resolve(answer(script.revert ?? new Error('no revert scripted')));
+    markNotDriving(userId, clientTripId) {
+      calls.push({ fn: 'markNotDriving', args: { userId, clientTripId } });
+      return Promise.resolve(answer(script.notDriving ?? new Error('no not-driving answer scripted')));
     },
-    disputeContext(userId, clientTripId, eventId, reason) {
-      calls.push({ fn: 'disputeContext', args: { userId, clientTripId, eventId, reason } });
-      return Promise.resolve(answer(script.disputeContext ?? new Error('no dispute context scripted')));
-    },
-    applyDispute(envelope) {
-      calls.push({ fn: 'applyDispute', args: envelope });
-      const a = script.applyDispute ?? new Error('no apply dispute scripted');
-      return Promise.resolve(typeof a === 'function' ? (a as (e: ApplyDisputeEnvelope) => unknown)(envelope) : answer(a));
+    disputeEvent(userId, clientTripId, eventId, reason) {
+      const args = { userId, clientTripId, eventId, reason };
+      calls.push({ fn: 'disputeEvent', args });
+      const a = script.dispute ?? new Error('no dispute answer scripted');
+      return Promise.resolve(typeof a === 'function' ? (a as (x: typeof args) => unknown)(args) : answer(a));
     },
   };
   const engine: Engine = {

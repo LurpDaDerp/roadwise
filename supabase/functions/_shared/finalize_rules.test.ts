@@ -1,8 +1,7 @@
 import { assertEquals } from '@std/assert';
-import { distanceM, integrityReason, isLoopDrive, milesExceedRoute, polylineMiles, unscoredBreakdown } from './finalize_rules.ts';
+import { distanceM, integrityReason, milesExceedRoute, polylineMiles, SERVER_MERGE } from './finalize_rules.ts';
 import { localDayOf, isKnownTz } from './local_day.ts';
-import { scoreDrive } from './scoring/index';
-import { lineOfMiles, payload } from './testing/v3_fixtures.ts';
+import { lineOfMiles, payload } from './testing/v4_fixtures.ts';
 
 Deno.test('integrity: mock location is spoofed; motion mismatch, a 170 mph fix, 150 mph average or bad GNSS is implausible', () => {
   const ok = payload();
@@ -10,9 +9,9 @@ Deno.test('integrity: mock location is spoofed; motion mismatch, a 170 mph fix, 
   assertEquals(integrityReason(payload({ integrity: { ...ok.integrity, mockLocation: true, motionMismatch: true } })), 'spoofed');
   assertEquals(integrityReason(payload({ integrity: { ...ok.integrity, motionMismatch: true } })), 'implausible');
   assertEquals(integrityReason(payload({ integrity: { ...ok.integrity, maxSpeedMph: 170 } })), 'implausible');
-  assertEquals(integrityReason(payload({ miles: 75, safeMiles: 75 })), 'implausible'); // 75 mi in 30 min
+  assertEquals(integrityReason(payload({ miles: 75 })), 'implausible'); // 75 mi in 30 min
   assertEquals(integrityReason(payload({ integrity: { ...ok.integrity, validGnssPct: 10 } })), 'implausible');
-  assertEquals(integrityReason(payload({ miles: 0.6, safeMiles: 0.6, integrity: { ...ok.integrity, validGnssPct: 10 } })), null);
+  assertEquals(integrityReason(payload({ miles: 0.6, integrity: { ...ok.integrity, validGnssPct: 10 } })), null);
 });
 
 Deno.test('miles cross-check: miles above polyline × 1.25 + 6 are implausible (two 0.25–0.5 mi end trims plus up to three zones crossed edge to edge stay under it); an empty or broken polyline allows 6', () => {
@@ -24,16 +23,16 @@ Deno.test('miles cross-check: miles above polyline × 1.25 + 6 are implausible (
   assertEquals(milesExceedRoute(6.01, ''), true);
   assertEquals(polylineMiles('abc_def'), 0); // decodes to no usable line: treated as empty
   assertEquals(milesExceedRoute(7, 'abc_def'), true);
-  assertEquals(integrityReason(payload({ miles: 20, safeMiles: 20, polyline: eight })), 'implausible');
-  assertEquals(integrityReason(payload({ miles: 14, safeMiles: 14, polyline: eight })), null);
-  assertEquals(integrityReason(payload({ miles: 3.9, safeMiles: 3.9, polyline: '' })), null);
+  assertEquals(integrityReason(payload({ miles: 20, polyline: eight })), 'implausible');
+  assertEquals(integrityReason(payload({ miles: 14, polyline: eight })), null);
+  assertEquals(integrityReason(payload({ miles: 3.9, polyline: '' })), null);
 });
 
 Deno.test('miles cross-check sums every visible run: a 10 mi drive through a mid-route privacy zone (4.5 mi + 4.5 mi) is plausible', () => {
   const twoRuns = `${lineOfMiles(4.5)} ${lineOfMiles(4.5, 40.9, -74.006)}`;
   assertEquals(Math.abs(polylineMiles(twoRuns) - 9) < 0.03, true);
   assertEquals(milesExceedRoute(10, twoRuns), false);
-  assertEquals(integrityReason(payload({ miles: 10, safeMiles: 10, polyline: twoRuns })), null);
+  assertEquals(integrityReason(payload({ miles: 10, polyline: twoRuns })), null);
   // Only the longer half would refuse a 12 mi drive the two runs allow: 12 > 4.5 x 1.25 + 6.
   assertEquals(milesExceedRoute(12, twoRuns), false);
   assertEquals(milesExceedRoute(12, lineOfMiles(4.5)), true);
@@ -42,24 +41,10 @@ Deno.test('miles cross-check sums every visible run: a 10 mi drive through a mid
   assertEquals(polylineMiles(' '), 0);
 });
 
-Deno.test('loop: 402 m and 5 miles are the bounds; a missing end point is never a loop', () => {
+Deno.test('the server merge rule is the one the phone uses: 300 s and 150 m (drive_context holds them as literals, pinned by pgTAP)', () => {
+  assertEquals(SERVER_MERGE, { gapS: 300, radiusM: 150 });
   const a = { lat: 40.7128, lng: -74.006 };
-  assertEquals(Math.round(distanceM(a, { lat: 40.7128 + 402 / 111_320, lng: -74.006 })), 402);
-  assertEquals(isLoopDrive(a, { lat: 40.7128 + 400 / 111_320, lng: -74.006 }, 4.9), true);
-  assertEquals(isLoopDrive(a, { lat: 40.7128 + 410 / 111_320, lng: -74.006 }, 4.9), false);
-  assertEquals(isLoopDrive(a, a, 5), false);
-  assertEquals(isLoopDrive(a, null, 1), false);
-  assertEquals(isLoopDrive(null, a, 1), false);
-});
-
-Deno.test('an unscored breakdown keeps the multipliers it was scored with (shown, never applied)', () => {
-  const bd = unscoredBreakdown(scoreDrive({ miles: 12, safeMiles: 11.8, events: [], dashcam: true }, { streak: 10, safeMilesEarlierToday: 0 }));
-  assertEquals([bd.streakMult, bd.dashcamMult, bd.mult, bd.gains, bd.net], [1.2, 1.25, 1.5, 0, 0]);
-});
-
-Deno.test('an unscored breakdown keeps the miles and zeroes everything credited or charged', () => {
-  const bd = unscoredBreakdown(scoreDrive({ miles: 12, safeMiles: 11.8, events: [] }, { streak: 10, safeMilesEarlierToday: 0 }));
-  assertEquals([bd.scored, bd.safeMiles, bd.creditedMiles, bd.gains, bd.penalties, bd.net, bd.ratingPenalty, bd.events], [false, 11.8, 0, 0, 0, 0, 0, []]);
+  assertEquals(Math.round(distanceM(a, { lat: 40.7128 + 150 / 111_195, lng: -74.006 })), 150);
 });
 
 Deno.test('local day follows the zone; unknown zones and offsets are refused', () => {

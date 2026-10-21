@@ -1,9 +1,7 @@
-// The pushes RoadWise sends (plan §4 "Push/outbox"): what each inbox payload must hold, how long
-// it stays worth sending, and the words. Copy is plain, short, second person; it never names
-// another user (a friend request says only that one arrived) and never states a speed.
-//
-// The app has no leagues: a `league_result` the database still queues is not a kind here, so
-// push-sender skips it (`unknown_type`), and the weekly recap says nothing about a league.
+// The pushes RoadWise sends: what each inbox payload must hold, how long it stays worth sending,
+// and the words. Copy is plain, short, second person; it never names another user (a friend
+// request says only that one arrived) and never states a speed. Any other kind is skipped
+// (`unknown_type`).
 import { z } from 'zod';
 
 export const PUSH_KINDS = ['weekly_recap', 'friend_request'] as const;
@@ -31,12 +29,11 @@ export const PayloadSchemas = {
       week: z.string(),
       rating: z.number().nullable(),
       rating_delta: z.number().nullable(),
-      streak: z.number().int().min(0),
       drives: z.number().int().min(0),
-      week_points: z.number().int(),
-      best_drive_net: z.number().int().nullable(),
+      /** Weekly goals done that week; absent on a recap queued before 0023 (the goals part is left out). */
+      goals_done: z.number().int().min(0).max(3).optional(),
     })
-    // Extra fields (the league rank the database still adds) are allowed and never said.
+    // Extra fields (an older recap's points and streak) are allowed and never said.
     .loose(),
   friend_request: z.object({}).loose(),
 };
@@ -56,19 +53,13 @@ export function renderPush(kind: PushKind, payload: unknown): PushCopy | null {
   if (kind === 'weekly_recap') {
     const p = PayloadSchemas.weekly_recap.safeParse(payload);
     if (!p.success) return null;
-    const { rating, rating_delta, streak, drives, week_points, best_drive_net } = p.data;
+    const { rating, rating_delta, drives, goals_done } = p.data;
+    const drivesPart = `${plural(drives, 'drive', 'drives')} this week.`;
+    const d = rating_delta === null ? 0 : Math.round(rating_delta);
     const ratingPart =
-      rating === null
-        ? 'Not ranked yet.'
-        : rating_delta === null || Math.round(Math.abs(rating_delta)) === 0
-          ? `Safety Rating ${Math.round(rating)}.`
-          : `Safety Rating ${Math.round(rating)} (${rating_delta > 0 ? 'up' : 'down'} ${Math.round(Math.abs(rating_delta))}).`;
-    const bestPart = best_drive_net === null || best_drive_net === undefined ? '' : ` Best drive ${best_drive_net >= 0 ? '+' : ''}${best_drive_net}.`;
-    return {
-      title: 'Your week in review',
-      body: `${plural(drives, 'drive', 'drives')}, ${week_points >= 0 ? '+' : ''}${week_points} points.${bestPart} ${ratingPart} Streak ${streak}.`,
-      url: URLS.weekly_recap,
-    };
+      rating === null ? ' Your Safety Rating is on its way.' : ` Safety Rating ${Math.round(rating)}${d > 0 ? `, up ${d}` : d < 0 ? `, down ${-d}` : ''}.`;
+    const goalsPart = !goals_done ? '' : goals_done >= 3 ? ' All 3 weekly goals done.' : ` ${goals_done} of 3 weekly goals done.`;
+    return { title: 'Your week on the road', body: `${drivesPart}${ratingPart}${goalsPart}`, url: URLS.weekly_recap };
   }
   const p = PayloadSchemas.friend_request.safeParse(payload);
   if (!p.success) return null;

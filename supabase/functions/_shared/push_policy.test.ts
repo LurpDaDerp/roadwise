@@ -13,8 +13,8 @@ Deno.test('a weekly recap is sent to every token with its words and the home url
   assertEquals(d.kind, 'send');
   if (d.kind !== 'send') return;
   assertEquals(d.tokens, ['ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]']);
-  assertEquals(d.message.title, 'Your week in review');
-  assertEquals(d.message.body, '5 drives, +420 points. Best drive +167. Safety Rating 92 (up 1). Streak 4.');
+  assertEquals(d.message.title, 'Your week on the road');
+  assertEquals(d.message.body, '5 drives this week. Safety Rating 92, up 1. 2 of 3 weekly goals done.');
   assertEquals(d.message.data.url, '/home');
   assertEquals(d.message.channelId, 'updates');
 });
@@ -50,14 +50,22 @@ Deno.test('quiet hours defer to their end in the user zone, across midnight and 
   assertEquals(resolveTz('Mars/Olympus'), 'America/New_York');
 });
 
-Deno.test('copy: the recap and friend request never name anyone, a speed or a league', () => {
-  const recap = renderPush('weekly_recap', { week: '2026-W40', rating: 91.7, rating_delta: 1.2, streak: 4, drives: 5, week_points: 420, best_drive_net: 167, league: { rank: 3, tier: 'silver', size: 30 } });
-  assertEquals(recap?.body, '5 drives, +420 points. Best drive +167. Safety Rating 92 (up 1). Streak 4.');
-  const closed = renderPush('weekly_recap', { week: '2026-W40', rating: 80, rating_delta: 0, streak: 2, drives: 2, week_points: 50, best_drive_net: 30, league: null, last_result: { week: '2026-W39', result: 'promoted', final_rank: 2, tier: 'bronze' } });
-  assertEquals(closed?.body, '2 drives, +50 points. Best drive +30. Safety Rating 80. Streak 2.');
-  const unranked = renderPush('weekly_recap', { week: '2026-W40', rating: null, rating_delta: null, streak: 0, drives: 1, week_points: -12, best_drive_net: -12 });
-  assertEquals(unranked?.body, '1 drive, -12 points. Best drive -12. Not ranked yet. Streak 0.');
+Deno.test('copy: the recap says the drives, the rating and its change, and the goals done; it never names anyone, a speed, points or a league', () => {
+  const recap = (p: Record<string, unknown>) => renderPush('weekly_recap', { week: '2026-W40', ...p })?.body;
+  assertEquals(recap({ rating: 91.7, rating_delta: 1.2, drives: 4, goals_done: 2 }), '4 drives this week. Safety Rating 92, up 1. 2 of 3 weekly goals done.');
+  assertEquals(recap({ rating: 88, rating_delta: -2.4, drives: 5, goals_done: 3 }), '5 drives this week. Safety Rating 88, down 2. All 3 weekly goals done.');
+  assertEquals(recap({ rating: 80, rating_delta: 0.4, drives: 2, goals_done: 0 }), '2 drives this week. Safety Rating 80.');
+  assertEquals(recap({ rating: 80, rating_delta: null, drives: 2, goals_done: 1 }), '2 drives this week. Safety Rating 80. 1 of 3 weekly goals done.');
+  assertEquals(recap({ rating: null, rating_delta: null, drives: 1, goals_done: 0 }), '1 drive this week. Your Safety Rating is on its way.');
+  assertEquals(renderPush('weekly_recap', { week: '2026-W40', rating: 90, rating_delta: 1, drives: 3, goals_done: 1 })?.title, 'Your week on the road');
+  // a recap queued before 0023 (points, streak, no goals) still renders, without the goals part or the points
+  const old = recap({ rating: 91.7, rating_delta: 1.2, streak: 4, drives: 5, week_points: 420, best_drive_net: 167, league: { rank: 3, tier: 'silver', size: 30 } });
+  assertEquals(old, '5 drives this week. Safety Rating 92, up 1.');
+  for (const body of [old, recap({ rating: null, rating_delta: null, drives: 1 })]) {
+    assertEquals(/points?|streak|league|level|!|—/i.test(body ?? ''), false);
+  }
   const fr = renderPush('friend_request', { from_user_id: '22222222-2222-4222-8222-222222222222' });
   assertEquals(fr, { title: 'New friend request', body: 'Someone wants to add you as a friend.', url: '/friends' });
   assertEquals(renderPush('weekly_recap', { week: 1 }), null);
+  assertEquals(renderPush('weekly_recap', { week: '2026-W40', rating: 90, rating_delta: 1, drives: 3, goals_done: 4 }), null);
 });
