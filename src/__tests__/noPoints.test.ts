@@ -1,7 +1,7 @@
 /**
  * The guard that points are gone for good: no copy the app prints or speaks names points, streaks,
- * freezes, levels, a leaderboard, the global board or phone pickups, and a drive's merit tier has
- * no name anywhere (it shows only as its icon and colour).
+ * freezes, levels, a leaderboard or the global board, and a drive's merit tier has no name anywhere
+ * (it shows only as its icon and colour).
  *
  * It reads every copy module (each `copy.ts` under src/features, the content under src/content, the
  * driving screen's `hudCopy` and the English strings), walks every exported value, and calls every
@@ -90,7 +90,7 @@ test('the guard reads the copy it is meant to', () => {
   expect(modules.flatMap((m) => strings(m.exports, m.rel)).length).toBeGreaterThan(500);
 });
 
-test.each(modules.map((m) => [m.rel, m] as const))('%s names no points, streaks, freezes, levels, leaderboards or phone pickups', (_rel, m) => {
+test.each(modules.map((m) => [m.rel, m] as const))('%s names no points, streaks, freezes, levels or leaderboards', (_rel, m) => {
   const hits = strings(m.exports, m.rel).filter((s) => POINTS.test(s.text));
   expect(hits).toEqual([]);
 });
