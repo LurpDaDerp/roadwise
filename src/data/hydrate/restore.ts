@@ -1,9 +1,11 @@
 /**
  * Restoring the user's drives from the server (plan §5): a reinstall, a new device, a device that
  * changed hands, a sign-out that emptied the phone. `list_my_drives` pages newest first; every row
- * the device does not hold becomes a settled local drive (the server's result, no estimate) with
- * its events, and a drive the device already holds is left as it is. From/to labels are not
- * restored (they only ever lived on the old device).
+ * the device does not hold becomes a settled local drive (the server's result) with its events,
+ * how it started, whether its "Not driving?" ran out and its counted chances to slip (absent: they
+ * are estimated at read), and a drive the device already holds is left as it is. From/to labels,
+ * the end note and the re-open count are not restored (they only ever lived on the old device). An
+ * event of a type this build does not know is skipped; the drive is kept.
  *
  * A restore runs to the end once per owner: `RESTORED_AT_KEY` records `{ uid, at }` only after the
  * last page, so one cut short (offline, the app closed) starts again at the next try and fills
@@ -13,13 +15,13 @@
  * only while `isCurrent` says the run is still wanted: a restore that outlives a sign-out or a
  * handover writes nothing more.
  */
-import { watchedMiles } from '@scoring';
+import { clampExposure, watchedMiles, type EventType } from '@scoring';
 import { z } from 'zod';
 
-import { createEventsRepo, createSettingsRepo, createTripsRepo, type Db, type NewEvent, type NewTrip } from '@/data/db';
+import { createEventsRepo, createSettingsRepo, createTripsRepo, type Db, type NewEvent, type NewTrip, type TripPatch } from '@/data/db';
 import { emitDataChanged } from '@/data/events';
 import { countEvents } from '@/data/queries/rows';
-import { DriveBreakdownSchema, EVENT_TYPES_V3, TIERS_V3 } from '@/data/sync/payload';
+import { EVENT_TYPES, TIERS } from '@/data/sync/payload';
 import { deviceOwnerIs } from '@/data/sync/queue';
 
 export const RESTORE_PAGE = 50;
@@ -38,21 +40,29 @@ export class RestoreAbandonedError extends Error {
 
 const ServerEvent = z.object({
   id: z.uuid(),
-  type: z.enum(EVENT_TYPES_V3),
-  tier: z.enum(TIERS_V3),
+  /** Any string: an event of a type this build does not know is skipped, not the whole drive. */
+  type: z.string(),
+  tier: z.enum(TIERS),
   startedAt: z.number(),
   durationS: z.number(),
-  units: z.number().nullable().optional(),
-  stoppedInTraffic: z.boolean().nullable().optional(),
   lat: z.number().nullable().optional(),
   lng: z.number().nullable().optional(),
   measured: z.unknown().optional(),
-  penalty: z.number().nullable().optional(),
   status: z.enum(['active', 'removed']).nullable().optional(),
   /** A settled report on this event, when the server sends it. */
   disputeStatus: z.enum(['accepted', 'rejected']).nullable().optional(),
 });
 
+/** A drive's counted chances to slip, as the server stores them; absent on an older server. */
+const ServerExposure = z.object({
+  slowdowns: z.number(),
+  speedups: z.number(),
+  turns: z.number(),
+  limitS: z.number(),
+  movingS: z.number(),
+});
+
+/** One `list_my_drives` row. Not strict: the server's extra keys (and a transition's legacy ones) are ignored. */
 export const ServerDriveSchema = z.object({
   tripId: z.uuid(),
   clientTripId: z.uuid(),
@@ -61,7 +71,6 @@ export const ServerDriveSchema = z.object({
   tz: z.string(),
   localDay: z.string().nullable().optional(),
   miles: z.number(),
-  safeMiles: z.number(),
   nightMiles: z.number(),
   durationS: z.number(),
   polyline: z.string().nullable(),
@@ -69,11 +78,14 @@ export const ServerDriveSchema = z.object({
   reason: z.string().nullable(),
   notDriving: z.boolean(),
   clean: z.boolean().nullable(),
-  pointsNet: z.number().nullable(),
+  /** How the drive started; an older server does not say (a Start tap). */
+  origin: z.enum(['auto', 'manual']).default('manual'),
+  /** The in-drive "Not driving?" ran out; an older server does not say (it never did). */
+  notDrivingExpired: z.boolean().default(false),
+  exposure: ServerExposure.nullable().optional(),
   /** The DashPal seconds (moving, and of those watched); absent from a server before 0020. */
   dashcamMovingS: z.number().nullable().optional(),
   dashcamCoveredS: z.number().nullable().optional(),
-  breakdown: DriveBreakdownSchema.nullable().optional(),
   result: z.unknown().optional(),
   events: z.array(ServerEvent).default([]),
 });
@@ -111,8 +123,20 @@ export async function restoreCompleted(db: Db, uid: string): Promise<boolean> {
   return stored !== null && typeof stored === 'object' && stored.uid === uid;
 }
 
+const isKnownType = (type: string): type is EventType => (EVENT_TYPES as readonly string[]).includes(type);
+
+/** The server's events this build knows. */
+const knownEvents = (d: ServerDrive) => d.events.flatMap((e) => (isKnownType(e.type) ? [{ ...e, type: e.type }] : []));
+
+/** The five counter columns of the server's exposure, clamped; all null when it sent none. */
+function exposureCols(d: ServerDrive): Pick<NewTrip, 'slowdowns' | 'speedups' | 'turns' | 'limit_s' | 'moving_s'> {
+  if (d.exposure === null || d.exposure === undefined) return { slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null };
+  const e = clampExposure(d.exposure);
+  return { slowdowns: e.slowdowns, speedups: e.speedups, turns: e.turns, limit_s: e.limitS, moving_s: e.movingS };
+}
+
 export function toTripRow(d: ServerDrive): NewTrip {
-  const events = d.events.map((e) => ({ type: e.type, durationS: e.durationS, status: e.status ?? 'active' }));
+  const events = knownEvents(d).map((e) => ({ type: e.type, status: e.status ?? 'active' }));
   return {
     client_trip_id: d.clientTripId,
     started_at: d.startedAt,
@@ -120,37 +144,33 @@ export function toTripRow(d: ServerDrive): NewTrip {
     tz: d.tz,
     local_day: d.localDay ?? null,
     miles: d.miles,
-    safe_miles: d.safeMiles,
     night_miles: d.nightMiles,
     duration_s: d.durationS,
     polyline: d.polyline,
     status: d.notDriving ? 'not_driving' : d.scored ? 'scored' : 'unscored',
-    points_net: d.pointsNet,
-    estimate: 0,
-    breakdown_json: d.breakdown ? JSON.stringify(d.breakdown) : null,
     clean: d.clean === null ? null : d.clean ? 1 : 0,
     counts_json: JSON.stringify(countEvents(events)),
     reason: d.reason,
     result_json: d.result === undefined || d.result === null ? null : JSON.stringify(d.result),
     server_id: d.tripId,
     watched_miles: watchedMiles(d.miles, d.dashcamMovingS ?? 0, d.dashcamCoveredS ?? 0),
+    origin: d.origin,
+    not_driving_expired: d.notDrivingExpired ? 1 : 0,
+    ...exposureCols(d),
   };
 }
 
 export function toEventRows(d: ServerDrive): NewEvent[] {
-  return d.events.map((e) => ({
+  return knownEvents(d).map((e) => ({
     id: e.id,
     client_trip_id: d.clientTripId,
     type: e.type,
     tier: e.tier,
     started_at: e.startedAt,
     duration_s: e.durationS,
-    units: e.units ?? null,
-    stopped_in_traffic: e.stoppedInTraffic === true ? 1 : 0,
     lat: e.lat ?? null,
     lng: e.lng ?? null,
     measured_json: e.measured === undefined ? null : JSON.stringify(e.measured),
-    penalty: e.penalty ?? null,
     status: e.status ?? 'active',
     // A removed event was taken off by an accepted report: never offer Report on it again.
     dispute_status: e.disputeStatus ?? (e.status === 'removed' ? 'accepted' : 'none'),
@@ -177,10 +197,12 @@ export async function readServerDrive(
 }
 
 /**
- * Bring a drive the device holds in line with the server's copy: its status, points, breakdown and
- * result, and each of its events' status and penalty (an event the server removed was taken off
- * by an accepted report). Local-only facts (labels, the route as recorded, the end note) stay.
- * Runs on a transaction handle; a drive the device does not hold is left alone.
+ * Bring a drive the device holds in line with the server's copy: its status, clean flag, reason and
+ * result, whether its "Not driving?" ran out, and each of its events' status (an event the server
+ * removed was taken off by an accepted report). Local-only facts (labels, the route as recorded, the
+ * end note, how it started) stay, and so do counters this phone counted itself; the server's fill
+ * them in only when the phone has none. Runs on a transaction handle; a drive the device does not
+ * hold is left alone.
  */
 export async function applyServerDrive(tx: Db, d: ServerDrive, now: number): Promise<void> {
   const trips = createTripsRepo(tx);
@@ -188,35 +210,23 @@ export async function applyServerDrive(tx: Db, d: ServerDrive, now: number): Pro
   const local = await trips.get(d.clientTripId, tx);
   if (local === null) return;
   const row = toTripRow(d);
-  await trips.update(
-    d.clientTripId,
-    {
-      status: row.status,
-      points_net: row.points_net ?? null,
-      estimate: 0,
-      ...(row.breakdown_json ? { breakdown_json: row.breakdown_json } : {}),
-      clean: row.clean ?? null,
-      reason: row.reason ?? null,
-      ...(row.result_json ? { result_json: row.result_json } : {}),
-      server_id: d.tripId,
-      sync_error: null,
-    },
-    now,
-    tx
-  );
+  const counted = local.slowdowns !== null && local.speedups !== null && local.turns !== null && local.limit_s !== null && local.moving_s !== null;
+  const patch: TripPatch = {
+    status: row.status,
+    clean: row.clean ?? null,
+    reason: row.reason ?? null,
+    ...(row.result_json ? { result_json: row.result_json } : {}),
+    ...(row.not_driving_expired === 1 ? { not_driving_expired: 1 as const } : {}),
+    ...(!counted && row.slowdowns !== null && row.slowdowns !== undefined ? exposureCols(d) : {}),
+    server_id: d.tripId,
+    sync_error: null,
+  };
+  await trips.update(d.clientTripId, patch, now, tx);
   const held = new Set((await events.listByTrip(d.clientTripId, tx)).map((e) => e.id));
   for (const e of d.events) {
     if (!held.has(e.id)) continue;
     const removed = e.status === 'removed';
-    await events.update(
-      e.id,
-      {
-        status: removed ? 'removed' : 'active',
-        penalty: e.penalty ?? null,
-        ...(removed ? { dispute_status: 'accepted' as const, dispute_message: null } : {}),
-      },
-      tx
-    );
+    await events.update(e.id, { status: removed ? 'removed' : 'active', ...(removed ? { dispute_status: 'accepted' as const, dispute_message: null } : {}) }, tx);
   }
   const remaining = await events.listByTrip(d.clientTripId, tx);
   await trips.update(d.clientTripId, { counts_json: JSON.stringify(countEvents(remaining)) }, now, tx);

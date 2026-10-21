@@ -1,9 +1,9 @@
 /** @jest-environment node */
-import { uuid } from '@/core/engine/__fixtures__/drives';
+import { uuid } from '@/data/sync/__fixtures__/drives';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { onDataChanged } from '@/data/events';
-import { RESTORED_AT_KEY, RestoreAbandonedError, restoreDrives, ServerDriveSchema, toEventRows, toTripRow } from '@/data/hydrate/restore';
+import { applyServerDrive, RESTORED_AT_KEY, RestoreAbandonedError, restoreDrives, ServerDriveSchema, toEventRows, toTripRow } from '@/data/hydrate/restore';
 import { readDriveCount, readRecentDrives } from '@/data/queries/drives';
 
 const T0 = 1_700_000_000_000;
@@ -15,6 +15,18 @@ beforeEach(async () => {
   db = await createSqlJsDb();
   await migrate(db);
   await createSettingsRepo(db).set('device.lastUserId', UID);
+});
+
+const ANSWER = (n: number) => ({
+  tripId: uuid(100 + n),
+  clientTripId: uuid(n),
+  mergedInto: null,
+  scored: true,
+  reason: null,
+  eventIds: [uuid(500 + n)],
+  rating: { safetyRating: 88, ranked: true },
+  challenges: [],
+  achievements: [],
 });
 
 const serverDrive = (n: number, over: Record<string, unknown> = {}) => ({
@@ -34,15 +46,18 @@ const serverDrive = (n: number, over: Record<string, unknown> = {}) => ({
   reason: null,
   notDriving: false,
   clean: false,
-  pointsNet: 30,
-  breakdown: null,
-  result: { net: 30 },
-  events: [{ id: uuid(500 + n), type: 'speeding', tier: 'minor', startedAt: T0 - n * 3_600_000 + 60_000, durationS: 8, units: null, stoppedInTraffic: null, lat: null, lng: null, measured: { speedMph: 41 }, penalty: 15, status: 'active' }],
+  // what a server in the transition still sends for older builds: ignored
+  pointsNet: null,
+  origin: 'auto',
+  notDrivingExpired: false,
+  exposure: { slowdowns: 3, speedups: 2, turns: 4, limitS: 300, movingS: 500 },
+  result: ANSWER(n),
+  events: [{ id: uuid(500 + n), type: 'speeding', tier: 'minor', startedAt: T0 - n * 3_600_000 + 60_000, durationS: 8, lat: null, lng: null, measured: { speedMph: 41, overMphS: 9 }, status: 'active' }],
   ...over,
 });
 
 test('an empty device is restored page by page, newest first; events come along', async () => {
-  const pages: Record<string, unknown>[][] = [[serverDrive(1), serverDrive(2)], [serverDrive(3, { notDriving: true, pointsNet: 0 })]];
+  const pages: Record<string, unknown>[][] = [[serverDrive(1), serverDrive(2)], [serverDrive(3, { notDriving: true })]];
   const calls: unknown[] = [];
   const result = await restoreDrives({
     db,
@@ -58,7 +73,18 @@ test('an empty device is restored page by page, newest first; events come along'
   expect((calls[1] as [string, { p_before: string }])[1].p_before).toBe(new Date(T0 - 2 * 3_600_000).toISOString());
   const drives = await readRecentDrives(db, 10);
   expect(drives.map((d) => d.status)).toEqual(['scored', 'scored', 'not_driving']);
-  expect(drives[0]).toMatchObject({ clientTripId: uuid(1), pointsNet: 30, estimate: false, counts: expect.objectContaining({ speeding: 1 }), polyline: '_p~iF~ps|U' });
+  expect(drives[0]).toMatchObject({
+    clientTripId: uuid(1),
+    origin: 'auto',
+    notDrivingExpired: false,
+    exposure: { slowdowns: 3, speedups: 2, turns: 4, limitS: 300, movingS: 500 },
+    exposureEstimated: false,
+    result: ANSWER(1),
+    counts: expect.objectContaining({ speeding: 1 }),
+    polyline: '_p~iF~ps|U',
+  });
+  expect(drives[0]).not.toHaveProperty('pointsNet');
+  expect((await createEventsRepo(db).listByTrip(uuid(1)))[0]?.measured_json).toBe('{"speedMph":41,"overMphS":9}');
   expect(await createEventsRepo(db).listByTrip(uuid(1))).toHaveLength(1);
   expect(await readDriveCount(db)).toBe(2);
 });
@@ -124,7 +150,7 @@ test('a restore that outlives its driver writes nothing more: another owner on t
 });
 
 test('a restored removed event keeps its accepted report, so Report is not offered again', () => {
-  const e = { id: uuid(900), type: 'speeding' as const, tier: 'minor' as const, startedAt: T0, durationS: 8, penalty: 0 };
+  const e = { id: uuid(900), type: 'speeding' as const, tier: 'minor' as const, startedAt: T0, durationS: 8 };
   const d = { clientTripId: uuid(901), events: [{ ...e, status: 'removed' as const }, { ...e, id: uuid(902), status: 'active' as const }, { ...e, id: uuid(903), status: 'active' as const, disputeStatus: 'rejected' as const }] };
   const rows = toEventRows(d as unknown as Parameters<typeof toEventRows>[0]);
   expect(rows.map((r) => r.dispute_status)).toEqual(['accepted', 'none', 'rejected']);
@@ -133,4 +159,43 @@ test('a restored removed event keeps its accepted report, so Report is not offer
 test('a restored drive takes its watched miles from its DashPal seconds (0 from a server that sends none)', () => {
   expect(toTripRow({ ...ServerDriveSchema.parse(serverDrive(1)), miles: 20, dashcamMovingS: 1000, dashcamCoveredS: 250 }).watched_miles).toBe(5);
   expect(toTripRow(ServerDriveSchema.parse(serverDrive(1))).watched_miles).toBe(0);
+});
+
+test('an older server: no origin (a Start tap), no "Not driving?" verdict (never ran out), no counters (estimated at read)', () => {
+  const { origin: _o, notDrivingExpired: _n, exposure: _e, ...old } = serverDrive(1);
+  const parsed = ServerDriveSchema.parse(old);
+  expect(parsed).toMatchObject({ origin: 'manual', notDrivingExpired: false });
+  expect(toTripRow(parsed)).toMatchObject({ origin: 'manual', not_driving_expired: 0, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null });
+  expect(toTripRow(ServerDriveSchema.parse(serverDrive(1, { notDrivingExpired: true, exposure: { slowdowns: 1e9, speedups: 2.7, turns: -1, limitS: 900, movingS: 600 } })))).toMatchObject({
+    not_driving_expired: 1,
+    slowdowns: 20_000,
+    speedups: 2,
+    turns: 0,
+    limit_s: 600,
+    moving_s: 600,
+  });
+});
+
+test('an event of a type this build does not know (a phone event) is skipped and the drive is kept', async () => {
+  const drive = serverDrive(1, {
+    events: [
+      { id: uuid(601), type: 'phone_pickup', tier: 'severe', startedAt: T0 - 3_000_000, durationS: 3, status: 'active' },
+      { id: uuid(602), type: 'hard_brake', tier: 'minor', startedAt: T0 - 3_100_000, durationS: 0, status: 'active' },
+    ],
+  });
+  expect(await restoreDrives({ db, uid: UID, rpc: async () => [drive] })).toMatchObject({ restored: 1 });
+  expect((await createEventsRepo(db).listByTrip(uuid(1))).map((e) => e.id)).toEqual([uuid(602)]);
+  expect(JSON.parse((await createTripsRepo(db).get(uuid(1)))!.counts_json!)).toMatchObject({ hardBrake: 1 });
+});
+
+test('bringing a held drive in line with the server keeps the counters this phone counted and its origin; fills counters it lacks; a ran-out "Not driving?" sticks', async () => {
+  const trips = createTripsRepo(db);
+  await trips.insert({ client_trip_id: uuid(1), started_at: T0, tz: 'UTC', status: 'pending', origin: 'manual', slowdowns: 9, speedups: 9, turns: 9, limit_s: 9, moving_s: 9 }, T0);
+  await trips.insert({ client_trip_id: uuid(2), started_at: T0, tz: 'UTC', status: 'pending' }, T0);
+  await db.transaction(async (tx) => {
+    await applyServerDrive(tx, ServerDriveSchema.parse(serverDrive(1, { notDrivingExpired: true })), T0 + 1);
+    await applyServerDrive(tx, ServerDriveSchema.parse(serverDrive(2)), T0 + 1);
+  });
+  expect(await trips.get(uuid(1))).toMatchObject({ status: 'scored', origin: 'manual', not_driving_expired: 1, slowdowns: 9, moving_s: 9, server_id: uuid(101) });
+  expect(await trips.get(uuid(2))).toMatchObject({ status: 'scored', not_driving_expired: 0, slowdowns: 3, speedups: 2, turns: 4, limit_s: 300, moving_s: 500 });
 });
