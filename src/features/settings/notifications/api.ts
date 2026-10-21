@@ -9,8 +9,6 @@ import { deviceZone } from '@/lib/deviceZone';
 
 export interface NotificationPrefs {
   weekly_recap: boolean;
-  /** Still stored by the server; no switch shows it and no league pushes are sent. */
-  leagues: boolean;
   social: boolean;
   quiet_enabled: boolean;
   /** `HH:MM`. */

@@ -30,7 +30,6 @@ jest.mock('expo-router', () => {
 
 const DEFAULTS: NotificationPrefs = {
   weekly_recap: true,
-  leagues: true,
   social: true,
   quiet_enabled: true,
   quiet_start: '22:00',
