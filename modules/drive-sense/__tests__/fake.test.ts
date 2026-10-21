@@ -377,6 +377,17 @@ describe('listeners and buffering (README §Buffering)', () => {
     expect(got).toHaveLength(2);
   });
 
+  test('`speed` is live only: with no listener it is dropped, never buffered', async () => {
+    const fake = createFakeDriveSense();
+    fake.emit('speed', { ts: 1, speed: 10, speedAcc: 0.5, hAcc: 5, ageMs: 200 });
+    const got: unknown[] = [];
+    fake.addListener('speed', (p) => got.push(p));
+    await flush();
+    expect(got).toEqual([]);
+    fake.emit('speed', { ts: 2, speed: 11, speedAcc: 0.5, hAcc: 5, ageMs: 200 });
+    expect(got).toEqual([{ ts: 2, speed: 11, speedAcc: 0.5, hAcc: 5, ageMs: 200 }]);
+  });
+
   test('the buffer holds 300 events and drops the oldest row first', async () => {
     const fake = await capturing();
     fake.emit('call', { active: true, ts: 0 });

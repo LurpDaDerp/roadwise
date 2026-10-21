@@ -21,7 +21,7 @@ import type { MotionActivity } from '@drive-sense';
 
 import type { AdoptedTrip, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
 import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './displayLimit';
-import { nextDisplaySpeed, type DisplaySpeed } from './displaySpeed';
+import { displayFix, displayRow, type DisplaySpeed } from './displaySpeed';
 import { footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS, WALK_STALE_FIX_MS } from './motion';
 import {
   appendRow,
@@ -64,7 +64,7 @@ export function createEngine(deps: EngineDeps): Engine {
   let session: TripSession | null = null;
   let suite: DetectorSuite | null = null;
   let seen: Seen | null = null;
-  /** The speed the screen shows, as of the last row (`displaySpeed.ts`). */
+  /** The speed the screen shows, as of the last fix or row (`displaySpeed.ts`). */
   let shown: DisplaySpeed | null = null;
   /** The limit the sign shows, as of the last row (`displayLimit.ts`). */
   let shownLimit: DisplayLimit = NO_DISPLAY_LIMIT;
@@ -126,8 +126,10 @@ export function createEngine(deps: EngineDeps): Engine {
       lastRowTs: row?.ts ?? null,
       speedMps: shown?.mps ?? 0,
       speedAccelMps2: shown?.accel ?? 0,
-      // Never "—" during a drive: 0 until the first row (`displaySpeed.ts`).
+      speedAt: shown?.kf != null ? shown.at : null,
+      // Never "—" during a drive: 0 until the first fix (`displaySpeed.ts`).
       speedKnown: session !== null || shown !== null,
+      rowSpeedMps: speed,
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
       limitMph: shownLimit.mph,
       speedingTier: status === 'recording' && open !== null ? open.tier : null,
@@ -193,7 +195,7 @@ export function createEngine(deps: EngineDeps): Engine {
     // The sign's number: a posted limit or a confident class default. The detectors judge the row
     // against `limit` themselves (`limitMphFor`), which refuses a default.
     seen = { row, limit, limitMph: limitShownMph(row, limit) };
-    shown = nextDisplaySpeed(shown, row, knownSpeed(row));
+    shown = displayRow(shown, row, knownSpeed(row));
     shownLimit = nextDisplayLimit(shownLimit, row.ts, seen.limitMph);
     touch();
     noteWarmup(s, row);
@@ -445,6 +447,14 @@ export function createEngine(deps: EngineDeps): Engine {
       return () => {
         listeners.delete(fn);
       };
+    },
+    speed(fix) {
+      if (status !== 'recording') return;
+      const next = displayFix(shown, fix);
+      if (next === shown) return;
+      shown = next;
+      touch();
+      notify();
     },
   };
 }

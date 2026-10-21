@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 
 import type { LastFinalized } from '@/drive/host';
-import type { DriveLive } from '@/drive/useDrive';
+import type { DriveLive, ShownSpeed } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { State } from 'react-native-gesture-handler';
 import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
@@ -64,7 +64,10 @@ const mockDb = {
 jest.mock('@/data/queries/context', () => ({ useDb: () => mockDb, useOptionalDb: () => mockDb }));
 
 const T = 1_790_000_000_000;
+const MPS_PER_MPH = 0.44704;
 let mockLive: DriveLive;
+/** The halo's number as the store hands it to the readout (`useShownSpeed`). */
+let mockShown: ShownSpeed = { mps: null, accel: 0, at: null };
 const mockEnd = jest.fn<Promise<{ clientTripId: string; dropped: 'no_movement' | 'no_gps' | null } | null>, []>();
 let mockLastFinalized: LastFinalized = null;
 /** The store's newest row time (the row clock), or null before any row. */
@@ -73,6 +76,7 @@ jest.mock('@/drive/useDrive', () => ({
   useDrive: <T,>(sel: (s: { lastFinalized: LastFinalized; status: DriveLive['status']; startedAt: number | null; lastRowTs: number | null }) => T) =>
     sel({ lastFinalized: mockLastFinalized, status: mockLive.status, startedAt: mockLive.startedAt, lastRowTs: mockLastRowTs }),
   useDriveLive: () => mockLive,
+  useShownSpeed: () => mockShown,
   useDriveControls: () => ({ start: jest.fn(), end: mockEnd }),
   useDriveHost: () => ({ snapshot: () => ({ lastFinalized: mockLastFinalized }) }),
 }));
@@ -83,12 +87,39 @@ const HIDDEN = { includeHiddenElements: true };
 /** What the halo was last told to show. */
 const halo = (): HaloVisual => mockHalo.at(-1)!.visual;
 
+/**
+ * A test's view of the drive: `speedMph` is both the newest row's GPS speed (the halo's speeding
+ * hold) and the speed the readout shows, standing for `speedAt` (the clock now when not given),
+ * carried on with `speedAccelMph` (mph/s).
+ */
+type LiveOver = Partial<DriveLive> & { speedMph?: number | null; speedAccelMph?: number; speedAt?: number | null };
+
+let lastShown: { speedMph: number | null; speedAccelMph: number; speedAt: number | null } = { speedMph: 34, speedAccelMph: 0, speedAt: null };
+
+function split(over: LiveOver, base: typeof lastShown): { live: Partial<DriveLive>; shown: typeof lastShown } {
+  const { speedMph, speedAccelMph, speedAt, ...rest } = over;
+  const shown = {
+    speedMph: speedMph === undefined ? base.speedMph : speedMph,
+    speedAccelMph: speedAccelMph ?? (speedMph === undefined ? base.speedAccelMph : 0),
+    speedAt: speedAt !== undefined ? speedAt : speedMph === undefined && speedAccelMph === undefined ? base.speedAt : Date.now(),
+  };
+  const liveOver: Partial<DriveLive> = speedMph === undefined ? rest : { rowSpeedMph: speedMph, ...rest };
+  return { live: liveOver, shown };
+}
+
+function setShown(s: typeof lastShown): void {
+  lastShown = s;
+  mockShown =
+    s.speedMph === null
+      ? { mps: null, accel: 0, at: null }
+      : { mps: s.speedMph * MPS_PER_MPH, accel: s.speedAccelMph * MPS_PER_MPH, at: s.speedAt };
+}
+
 function live(over: Partial<DriveLive> = {}): DriveLive {
   return {
     status: 'recording',
     clientTripId: 't1',
-    speedMph: 34,
-    speedAccelMph: 0,
+    rowSpeedMph: 34,
     limitMph: 35,
     speedingTier: null,
     stopped: false,
@@ -102,13 +133,17 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
   };
 }
 
-async function renderHud(over: Partial<DriveLive> = {}) {
-  mockLive = live(over);
+async function renderHud(over: LiveOver = {}) {
+  const first = split(over, { speedMph: 34, speedAccelMph: 0, speedAt: Date.now() });
+  setShown(first.shown);
+  mockLive = live(first.live);
   const r = await render(<HudScreen />);
   await act(async () => {}); // the units read
   return {
-    async update(next: Partial<DriveLive>) {
-      mockLive = { ...mockLive, ...next };
+    async update(next: LiveOver) {
+      const s = split(next, lastShown);
+      setShown(s.shown);
+      mockLive = { ...mockLive, ...s.live };
       await r.rerender(<HudScreen />);
     },
   };
@@ -119,6 +154,7 @@ beforeEach(() => {
   jest.setSystemTime(T);
   jest.clearAllMocks();
   mockHalo.length = 0;
+  setShown({ speedMph: 34, speedAccelMph: 0, speedAt: T });
   mockStill = false;
   mockUnits = null;
   mockNavApp = null;
@@ -156,30 +192,52 @@ describe('speed and limit', () => {
     expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('-');
   });
 
-  test('cruising, the speed moves on once a row and holds still between rows', async () => {
-    const h = await renderHud({ speedMph: 40, rowTs: T });
+  test('cruising, the speed moves on with each fix and holds still between fixes', async () => {
+    const h = await renderHud({ speedMph: 40 });
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('40');
     await act(() => jest.advanceTimersByTime(900));
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('40');
-    await h.update({ speedMph: 33, rowTs: T + 1000 });
+    await h.update({ speedMph: 33 });
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('33');
   });
 
-  test('speeding up or slowing, it moves on about 3 times a second along the acceleration, then waits for the next row', async () => {
-    // 40 mph, slowing 3 mph/s: 40, then 39 at 333 ms, 38 at 667 ms, still 38 until the next row.
-    const h = await renderHud({ speedMph: 40, speedAccelMph: -3, rowTs: T });
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('40');
-    await act(() => jest.advanceTimersByTime(333));
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('39');
-    await act(() => jest.advanceTimersByTime(334));
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('38');
+  test("speeding up or slowing, it moves on 4 times a second along the acceleration from the fix's own time, for at most 1.5 s", async () => {
+    // A fix 250 ms old as it lands: 40 mph, slowing 3 mph/s. 39.25 at once, then 38.5, 37.75, 37,
+    // 36.25 and 35.5 every 250 ms, held at 35.5 past 1.5 s; whole numbers move 0.8 past the last one.
+    const h = await renderHud({ speedMph: 40, speedAccelMph: -3, speedAt: T - 250 });
+    const shown = () => screen.getByTestId('hud-speed-numeral');
+    expect(shown()).toHaveTextContent('39');
+    await act(() => jest.advanceTimersByTime(250));
+    expect(shown()).toHaveTextContent('39');
+    await act(() => jest.advanceTimersByTime(250));
+    expect(shown()).toHaveTextContent('38');
+    await act(() => jest.advanceTimersByTime(250));
+    expect(shown()).toHaveTextContent('37');
+    // 36.25 is not yet 0.8 past 37…
+    await act(() => jest.advanceTimersByTime(250));
+    expect(shown()).toHaveTextContent('37');
+    // …35.5 is, and the carry stops there, 1.5 s after the fix.
+    await act(() => jest.advanceTimersByTime(250));
+    expect(shown()).toHaveTextContent('36');
     await act(() => jest.advanceTimersByTime(1000));
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('38');
-    // The next row starts again from its own fix.
-    await h.update({ speedMph: 37.4, speedAccelMph: 0, rowTs: T + 1000 });
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('37');
+    expect(shown()).toHaveTextContent('36');
+    // The next fix starts again from its own estimate.
+    await h.update({ speedMph: 37.4, speedAccelMph: 0 });
+    expect(shown()).toHaveTextContent('37');
     await act(() => jest.advanceTimersByTime(700));
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('37');
+    expect(shown()).toHaveTextContent('37');
+  });
+
+  test('a speed sitting near x.5 does not flicker: the whole number moves only 0.3 past the half', async () => {
+    const h = await renderHud({ speedMph: 34.6 });
+    const shown = () => screen.getByTestId('hud-speed-numeral');
+    expect(shown()).toHaveTextContent('35');
+    await h.update({ speedMph: 34.4 });
+    expect(shown()).toHaveTextContent('35');
+    await h.update({ speedMph: 34.7 });
+    expect(shown()).toHaveTextContent('35');
+    await h.update({ speedMph: 34.15 });
+    expect(shown()).toHaveTextContent('34');
   });
 
   test('an unknown speed or limit is "-"', async () => {
@@ -191,7 +249,7 @@ describe('speed and limit', () => {
 
 describe('the halo while speeding (design §4.1)', () => {
   // limit 35: T = 5, L + T = 40; one row per second on the row clock
-  async function drive(rows: Partial<DriveLive>[]) {
+  async function drive(rows: LiveOver[]) {
     const h = await renderHud({ rowTs: T, ...rows[0] });
     for (let i = 1; i < rows.length; i += 1) await h.update({ rowTs: T + i * 1000, ...rows[i] });
     return h;
@@ -730,7 +788,8 @@ describe('the navigation button (design §7.4, §8)', () => {
 
   test("under a sky the list wears the app's own sheet colours, as in Settings", async () => {
     const mood: SkyMood = { phase: 'day', glow: 0, weather: { kind: 'clear', intensity: 'moderate' } };
-    mockLive = live({ speedMph: 60 });
+    mockLive = live({ rowSpeedMph: 60 });
+    setShown({ speedMph: 60, speedAccelMph: 0, speedAt: Date.now() });
     await render(
       <ThemeProvider mood={mood}>
         <HudScreen />

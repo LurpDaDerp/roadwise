@@ -20,6 +20,7 @@ import type {
   MotionActivity,
   ReminderLocationAnswer,
   ReminderTap,
+  SpeedSample,
   ThermalLevel,
   TripReminderStatus,
 } from './types';
@@ -174,6 +175,27 @@ export function parseActivity(raw: unknown): MotionActivity | null {
   const out: MotionActivity = { type: type as MotionActivity['type'], confidence: confidence as MotionActivity['confidence'], ts };
   if (exit === true) out.exit = true;
   return out;
+}
+
+/**
+ * A `speed` payload (README §3), or null when it is malformed: exactly its five keys, every number
+ * finite, `ts` and `ageMs` whole and not negative. The host drops a null (it is the hot path).
+ */
+export function parseSpeed(raw: unknown): SpeedSample | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  let keys: string[];
+  let ts: unknown, speed: unknown, speedAcc: unknown, hAcc: unknown, ageMs: unknown;
+  try {
+    keys = Object.keys(raw);
+    ({ ts, speed, speedAcc, hAcc, ageMs } = raw as Record<string, unknown>);
+  } catch {
+    return null;
+  }
+  if (keys.length !== 5) return null;
+  if (typeof ts !== 'number' || !Number.isSafeInteger(ts) || ts < 0) return null;
+  if (typeof ageMs !== 'number' || !Number.isSafeInteger(ageMs) || ageMs < 0) return null;
+  for (const v of [speed, speedAcc, hAcc]) if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  return { ts, speed: speed as number, speedAcc: speedAcc as number, hAcc: hAcc as number, ageMs };
 }
 
 export const captureModeSchema = z.enum(['mounted', 'pocket', 'auto']);

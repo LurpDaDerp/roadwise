@@ -129,6 +129,8 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   function deliverNow(event: DriveSenseEvent, payload: unknown) {
     const set = listeners.get(event);
     if (!set || set.size === 0) {
+      // `speed` is live only (README §3): with no listener it is dropped, never buffered.
+      if (event === 'speed') return;
       buffer.push({ event, payload });
       if (buffer.length > EVENT_BUFFER_MAX) {
         const oldestRow = buffer.findIndex((b) => b.event === 'row');

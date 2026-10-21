@@ -668,6 +668,16 @@ describe('native-android: sensors and location (README §7, rev1: O8, I5)', () =
     expect(src).toMatch(/\(0\.0 - x\) \/ G_MPS2/);
   });
 
+  it('sends each full-rate fix as a live `speed` event the moment it lands (never buffered)', () => {
+    const src = code(kt('CaptureService'));
+    expect(src).toMatch(/\} else \{\s*emitSpeed\(fix\)\s*fixes\.add\(fix\)/);
+    expect(src).toMatch(/EventBus\.emitLive\(\s*"speed",/);
+    for (const key of ['"ts" to', '"speed" to', '"speedAcc" to', '"hAcc" to', '"ageMs" to']) expect(src).toContain(key);
+    // The age on the capture's anchored boot clock, as the fix's own time.
+    expect(src).toMatch(/val age = \(TimeBase\.anchoredNow\(anchor\) - fix\.t\)\.coerceAtLeast\(0\.0\)/);
+    expect(MODULE()).toMatch(/OBSERVED_EVENTS = listOf\([^)]*"speed"[^)]*\)/);
+  });
+
   it('1 s high accuracy at full rate, 10 s balanced at low rate', () => {
     const src = code(kt('LocationSource'));
     expect(src).toMatch(/PRIORITY_HIGH_ACCURACY/);

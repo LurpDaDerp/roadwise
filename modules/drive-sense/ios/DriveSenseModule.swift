@@ -22,7 +22,7 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     Name("DriveSense")
 
     // Keep this list identical to DRIVE_SENSE_EVENTS in src/types.ts and to DriveSenseModule.kt.
-    Events("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")
+    Events("activity", "row", "speed", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")
 
     OnCreate {
       EventHub.shared.attach(self)
@@ -39,6 +39,9 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     OnStopObserving("activity") { EventHub.shared.stopObserving("activity") }
     OnStartObserving("row") { EventHub.shared.startObserving("row") }
     OnStopObserving("row") { EventHub.shared.stopObserving("row") }
+    // Live only (never buffered): `emitLive` delivers it only while a listener is attached.
+    OnStartObserving("speed") { EventHub.shared.startObserving("speed") }
+    OnStopObserving("speed") { EventHub.shared.stopObserving("speed") }
     OnStartObserving("screen") { EventHub.shared.startObserving("screen") }
     OnStopObserving("screen") { EventHub.shared.stopObserving("screen") }
     OnStartObserving("thermal") { EventHub.shared.startObserving("thermal") }

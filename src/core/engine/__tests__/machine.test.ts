@@ -229,3 +229,24 @@ test('S3: a row that lost its fix keeps the last shown speed, never "—"; stopp
   expect(h.engine.snapshot()).toMatchObject({ speedKnown: true, speedMps: mph(20) });
   await h.engine.dispatch({ type: 'end', ts: T0 + 38_000 });
 });
+
+test('a `speed` fix moves the shown speed at once, only while recording; the rows and the detectors keep their own fix', async () => {
+  const h = harness();
+  h.engine.speed({ at: T0, mps: mph(30), acc: 0.5, hAcc: 5 });
+  expect(h.engine.snapshot()).toMatchObject({ speedKnown: false, speedAt: null, rowSpeedMps: null });
+  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+  const published = h.snapshots.length;
+  h.engine.speed({ at: T0 + 31_200, mps: mph(30), acc: 0.5, hAcc: 5 });
+  expect(h.snapshots.length).toBe(published + 1);
+  expect(h.engine.snapshot()).toMatchObject({ speedMps: mph(30), speedAt: T0 + 31_200, rowSpeedMps: null });
+  // A row with its own (different) fix: the detectors and `stopped` read it; the screen keeps the event's.
+  await feed(h, after(1, { speed: mph(4) }));
+  expect(h.engine.snapshot()).toMatchObject({ speedMps: mph(30), speedAt: T0 + 31_200, rowSpeedMps: mph(4), stopped: true });
+  // A fix that measures nothing, or one no newer, publishes nothing.
+  const before = h.snapshots.length;
+  h.engine.speed({ at: T0 + 31_200, mps: mph(50), acc: 0.5, hAcc: 5 });
+  expect(h.snapshots.length).toBe(before);
+  await h.engine.dispatch({ type: 'end', ts: T0 + 33_000 });
+  h.engine.speed({ at: T0 + 34_000, mps: mph(30), acc: 0.5, hAcc: 5 });
+  expect(h.engine.snapshot()).toMatchObject({ status: 'idle', speedKnown: false });
+});

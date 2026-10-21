@@ -1,6 +1,6 @@
 /** @jest-environment node */
 // `parseRow` is the only gate between what native emits and M1's engine (R2's row contract).
-import { parseActivity, parseRow, resetUnknownRowKeys, ROW_DECIMALS, roundTo, unknownRowKeys } from '../src/rowSchema';
+import { parseActivity, parseRow, parseSpeed, resetUnknownRowKeys, ROW_DECIMALS, roundTo, unknownRowKeys } from '../src/rowSchema';
 import type { FeatureRow } from '../src/types';
 import { sampleRows } from '../scripts/sampleRows';
 
@@ -210,6 +210,35 @@ describe('the call state', () => {
     expect(parseRow({ ...good, exempt: 'restart', call: 'live' })).toEqual({ ...good, call: 'live' });
     expect(unknownRowKeys()).toBe(2);
     resetUnknownRowKeys();
+  });
+});
+
+// README §3: the `speed` payload, one fix's speed as it lands.
+describe('parseSpeed', () => {
+  const good = { ts: 1_700_000_000_123, speed: 13.4, speedAcc: 0.6, hAcc: 4.5, ageMs: 240 };
+
+  test('accepts the payload as a fresh object, unknowns as -1 included', () => {
+    expect(parseSpeed(good)).toEqual(good);
+    expect(parseSpeed(good)).not.toBe(good);
+    const unknown = { ts: 0, speed: -1, speedAcc: -1, hAcc: -1, ageMs: 0 };
+    expect(parseSpeed(unknown)).toEqual(unknown);
+  });
+
+  test.each([
+    ['null', null],
+    ['a string', 'x'],
+    ['an array', [1]],
+    ['a missing key', { ts: 1, speed: 1, speedAcc: 1, hAcc: 1 }],
+    ['an extra key', { ...good, mock: false }],
+    ['a fractional ts', { ...good, ts: 1.5 }],
+    ['a negative ts', { ...good, ts: -1 }],
+    ['a fractional age', { ...good, ageMs: 2.5 }],
+    ['a negative age', { ...good, ageMs: -3 }],
+    ['a NaN speed', { ...good, speed: Number.NaN }],
+    ['an infinite accuracy', { ...good, speedAcc: Number.POSITIVE_INFINITY }],
+    ['a string hAcc', { ...good, hAcc: '5' }],
+  ])('rejects %s', (_name, raw) => {
+    expect(parseSpeed(raw)).toBeNull();
   });
 });
 

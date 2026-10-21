@@ -165,6 +165,8 @@ function driveState(over: Partial<DriveState> = {}): DriveState {
     speedMps: 0,
     speedAccelMps2: 0,
     speedKnown: false,
+    speedAt: null,
+    rowSpeedMps: null,
     limit: UNKNOWN_LIMIT,
     limitMph: null,
     speedingTier: null,

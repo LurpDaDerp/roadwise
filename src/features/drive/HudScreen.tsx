@@ -247,7 +247,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // The halo: the speeding display hold advances once per new row (React's state-from-the-previous-
   // render pattern; a repeated row returns the same hold, so this settles at once).
   const [hold, setHold] = useState<SpeedingHold>(SPEEDING_HOLD_NONE);
-  const nextHold = nextSpeedingHold(hold, { recording, rowTs: live.rowTs, tier: live.speedingTier, speedMph: live.speedMph, limitMph: live.limitMph });
+  const nextHold = nextSpeedingHold(hold, { recording, rowTs: live.rowTs, tier: live.speedingTier, speedMph: live.rowSpeedMph, limitMph: live.limitMph });
   if (nextHold !== hold) setHold(nextHold);
   const now = wallClock();
   const phoneSource = useMemo<BurstSource | null>(() => (alert === null ? null : { kind: 'phone', type: alert.type, at: alert.at, until: alert.until }), [alert]);
@@ -391,9 +391,6 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           reduceMotion={reduceMotion}
           numerals={(numeralStyle) => (
             <HaloReadout
-              speedMph={live.speedMph}
-              accelMph={live.speedAccelMph}
-              rowTs={live.rowTs}
               units={units}
               pt2={layout.numeralPt2}
               pt3={layout.numeralPt3}

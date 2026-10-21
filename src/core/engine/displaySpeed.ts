@@ -1,19 +1,30 @@
-// The speed the driving screen shows (product spec v3 "Driving screen"). Display only: nothing
-// scores, stops or ends a drive on it; `stopped`, the lockout and every detector read the raw fix.
+// The speed the driving screen shows (PRODUCT.md "Operating Context", the halo). Display only:
+// nothing scores, stops or ends a drive on it; `stopped`, the lockout and every detector read each
+// row's raw GPS speed, the most accurate reading the phone gives of the speed at that moment.
 //
-// One value per row, carried on between rows by the screen (about 3 times a second):
-// - S1: the row's GPS speed as it is. With the phone's forward axis learned, the row also carries
-//   this second's mean forward acceleration (`accel`; 0 inside `ACCEL_DEADBAND_MPS2`, clamped to
-//   `ACCEL_MAX_MPS2`, 0 while shown as 0 or held), and the screen moves the number on along it from
-//   the row for at most `CARRY_MAX_MS` (`carriedSpeed`), starting again from each new row. Nothing
-//   leads the fix: the carry only fills the time until the next one.
-// - S2: under 1 mph it is 0. Under 3 mph it is 0 while the speed is below its own accuracy rating,
-//   while the car is still (aligned and the forward acceleration within `STILL_LON_G` all second),
-//   or while it already shows 0 and the IMU does not say the car is pulling away (`LEAVE_ZERO_MPS2`;
-//   GPS drift jumps, so its change alone never leaves 0).
-// - S3: a row that lost its fix keeps the last shown speed while that is `SPEED_HOLD_MS` old or
-//   less. Past that it shows 0 when the car is still or already showed 0 (a parked phone often
-//   stops reporting a speed at all), and otherwise keeps holding the last speed. Before the first
+// L1, the measurement: each GPS fix's Doppler speed, the moment the phone reports it (native's
+//   `speed` event, about once a second, saying how old the fix already is), timed at the fix itself.
+//   A row's own fix stands in only while no `speed` event has come for `EVENT_STALE_MS` (a native
+//   build without the event), timed `ROW_FIX_AGE_MS` before the row. No speed is read from positions
+//   (noisier and later than Doppler), and a fix outside the row's GNSS gate (`GNSS_MAX_HACC_M`) or
+//   with no speed measures nothing.
+// L2, the filter: a two-state Kalman filter (speed and acceleration; the acceleration free to change
+//   as white jerk of density `JERK_PSD`) that weighs each fix by its own speed accuracy (`sigmaOf`),
+//   so a steady speed reads steady and a poorly rated fix moves it little. A car standing still (a
+//   fix under 1 mph), a first fix or one after `GAP_RESET_MS` without any starts it afresh.
+// L3, now: the screen carries the estimate on along its acceleration from the fix's own time to the
+//   present (`carriedSpeed`: a fix is 0.1 to 0.4 s old when it lands and the next comes a second
+//   later), for at most `CARRY_MAX_MS` after the fix, re-read every `SPEED_TICK_MS`; never under 0,
+//   and 0 once a slowing car drops under 1 mph. An acceleration inside `ACCEL_DEADBAND_MPS2` is not
+//   carried (a cruise holds still between fixes), and none over `ACCEL_MAX_MPS2`.
+// S2, 0 mph reads 0: under 1 mph it is 0. Under 3 mph it is 0 while the speed is below its own
+//   accuracy rating, while the car is still (aligned and the forward acceleration within
+//   `STILL_LON_G` all of the latest row's second), or while it already shows 0 and the IMU does not
+//   say the car is pulling away (`LEAVE_ZERO_MPS2`; GPS drift jumps, so its change alone never
+//   leaves 0). While it shows 0 nothing is carried.
+// S3, a lost fix: past `CARRY_MAX_MS` the screen holds the carried speed flat. A row that finds the
+//   last measured fix more than `SPEED_HOLD_MS` old shows 0 when the car is still or already showed
+//   0 (a parked phone often stops reporting a speed), and otherwise keeps holding. Before the first
 //   fix it is 0. The screen never shows "—" for the speed.
 import type { FeatureRow } from './types';
 
@@ -29,27 +40,117 @@ export const STOP_DISPLAY_MAX_MPS = 3 * MPS_PER_MPH;
 export const LEAVE_ZERO_MPS2 = 0.3;
 /** S2: still when the aligned forward acceleration stays within ± this all second (g). */
 export const STILL_LON_G = 0.02;
-/** S3: a row that lost its fix holds the last shown speed unconditionally while that is this recent (row clock). */
+/** S3: a row finding the last fix older than this shows 0 for a still car (row clock). */
 export const SPEED_HOLD_MS = 3_000;
-/** S1: under this the car is cruising and the number is not carried (no wander at a steady speed). */
-export const ACCEL_DEADBAND_MPS2 = 0.3;
-/** S1: never carry along more than this (a hard stop is about 8 m/s²; a jolt is not the car). */
-export const ACCEL_MAX_MPS2 = 5;
-/** The screen moves the number on this often between rows… */
-export const SPEED_TICK_MS = 333;
-/** …for at most this long after a row (two ticks; a late row stops it rather than guessing on). */
-export const CARRY_MAX_MS = 667;
+/** L3: under this the car is cruising and the number is not carried (no wander at a steady speed). */
+export const ACCEL_DEADBAND_MPS2 = 0.5;
+/** L2/L3: no acceleration beyond this is believed or carried (a hard stop is about 8 m/s²). */
+export const ACCEL_MAX_MPS2 = 8;
+/** L3: the screen moves the number on this often while it carries it… */
+export const SPEED_TICK_MS = 250;
+/** …for at most this long after the fix (the next one normally lands about 1.2 s after it). */
+export const CARRY_MAX_MS = 1_500;
+/** L2: the white-jerk density of the process model, (m/s³)²·s. */
+export const JERK_PSD = 1;
+/** L2: a fix's speed weighs as this share of its own accuracy rating (phones rate conservatively)… */
+export const SPEED_ACC_SCALE = 0.5;
+/** …held within these bounds (m/s); a fix with no rating counts as `SIGMA_UNRATED_MPS`. */
+export const SIGMA_MIN_MPS = 0.1;
+export const SIGMA_MAX_MPS = 3;
+export const SIGMA_UNRATED_MPS = 0.3;
+/** L2: the acceleration's starting uncertainty, (m/s²)². */
+const ACCEL_VAR0 = 4;
+/** L2: a fix this long after the last one starts the filter afresh. */
+export const GAP_RESET_MS = 3_000;
+/** L1: rows stand in for the `speed` event only once none has come for this long (row clock). */
+export const EVENT_STALE_MS = 2_500;
+/** L1: a row's own fix is taken to be this old at the row (the middle of its second). */
+export const ROW_FIX_AGE_MS = 500;
+/** L1: the row's GNSS gate (`modules/drive-sense` `GNSS_MAX_HACC_M`), for a `speed` event too. */
+export const GNSS_MAX_HACC_M = 50;
+
+/** One fix's speed, as the `speed` event or a row brings it. */
+export interface SpeedFix {
+  /** When the fix was taken, epoch ms (the host's clock: arrival less the fix's age). */
+  at: number;
+  /** Doppler speed, m/s; negative: none. */
+  mps: number;
+  /** Its accuracy rating, m/s (about one standard deviation); negative: not rated. */
+  acc: number;
+  /** Horizontal accuracy, m; negative: unknown (measures nothing). */
+  hAcc: number;
+}
+
+/** What the latest row's IMU says (null before the forward axis is learned). */
+interface ImuCue {
+  still: boolean;
+  pullingAway: boolean;
+}
+
+/** The filter: speed and acceleration at `t`, and their covariance. */
+interface Kalman {
+  t: number;
+  v: number;
+  a: number;
+  pvv: number;
+  pva: number;
+  paa: number;
+}
 
 export type DisplaySpeed = {
-  /** The speed to show, m/s, as of the row. */
+  /** The speed to show at `at` (m/s): the estimate, or 0 for S2. */
   mps: number;
-  /** The forward acceleration to carry it on with until the next row, m/s² (0: not carried). */
+  /** The acceleration to carry it on with from `at` (m/s²); 0: not carried. */
   accel: number;
+  /** The time `mps` stands for: the last measured fix's (epoch ms), or the row's before any. */
+  at: number;
   /** It shows 0 for S2 (the hysteresis reads it). */
   zero: boolean;
-  /** The last row with a fix. */
-  fixTs: number;
+  /** The filter, null before the first measured fix. */
+  kf: Kalman | null;
+  /** The latest measured fix's speed accuracy (S2), negative when not rated. */
+  acc: number;
+  /** The latest `speed` event's fix time, null before any (L1: rows stand in without one). */
+  eventAt: number | null;
+  imu: ImuCue | null;
 };
+
+/** A fix's standard deviation for the filter (m/s). */
+export function sigmaOf(acc: number): number {
+  if (!(acc >= 0)) return SIGMA_UNRATED_MPS;
+  return Math.min(SIGMA_MAX_MPS, Math.max(SIGMA_MIN_MPS, acc * SPEED_ACC_SCALE));
+}
+
+const clampAccel = (a: number): number => Math.min(ACCEL_MAX_MPS2, Math.max(-ACCEL_MAX_MPS2, a));
+
+function fresh(t: number, v: number, r: number): Kalman {
+  return { t, v, a: 0, pvv: r, pva: 0, paa: ACCEL_VAR0 };
+}
+
+/** One Kalman step: predict to `t`, then take the speed `z` with variance `r`. */
+export function kalmanStep(kf: Kalman | null, t: number, z: number, r: number): Kalman {
+  if (kf === null || t - kf.t > GAP_RESET_MS || z < ZERO_MPS) return fresh(t, z, r);
+  const dt = (t - kf.t) / 1000;
+  const q = JERK_PSD;
+  // Predict: v' = v + a·dt, a' = a; P' = F·P·Fᵀ + Q (white jerk).
+  const v = kf.v + kf.a * dt;
+  const pvv = kf.pvv + 2 * dt * kf.pva + dt * dt * kf.paa + (q * dt * dt * dt) / 3;
+  const pva = kf.pva + dt * kf.paa + (q * dt * dt) / 2;
+  const paa = kf.paa + q * dt;
+  // Update with the measured speed.
+  const s = pvv + r;
+  const kv = pvv / s;
+  const ka = pva / s;
+  const y = z - v;
+  return {
+    t,
+    v: Math.max(0, v + kv * y),
+    a: clampAccel(kf.a + ka * y),
+    pvv: (1 - kv) * pvv,
+    pva: (1 - kv) * pva,
+    paa: paa - ka * pva,
+  };
+}
 
 /** This second's mean forward acceleration from the IMU (m/s²), or null before the axis is learned. */
 function imuAccel(row: FeatureRow): number | null {
@@ -63,29 +164,68 @@ function still(row: FeatureRow): boolean {
   return Math.max(Math.abs(row.aLonMax), Math.abs(row.aLonMin)) < STILL_LON_G;
 }
 
-/**
- * The next value from `prev` (null before the first row) and a row whose known speed is `known`
- * (m/s; null when the row lost its fix). There is always a value: no fix yet is 0.
- */
-export function nextDisplaySpeed(prev: DisplaySpeed | null, row: FeatureRow, known: number | null): DisplaySpeed {
-  if (known === null) {
-    if (prev === null) return { mps: 0, accel: 0, zero: true, fixTs: row.ts };
-    const held = prev.accel === 0 ? prev : { ...prev, accel: 0 };
-    if (row.ts - prev.fixTs <= SPEED_HOLD_MS || (!prev.zero && !still(row))) return held;
-    return prev.zero ? held : { mps: 0, accel: 0, zero: true, fixTs: prev.fixTs };
-  }
-  const v = Math.max(0, known);
-  const wasZero = prev === null || prev.zero;
-  const rated = row.speedAcc >= 0 && v < row.speedAcc;
-  const imu = imuAccel(row);
-  const pullingAway = imu !== null && imu >= LEAVE_ZERO_MPS2;
-  const zero = v < ZERO_MPS || (v < STOP_DISPLAY_MAX_MPS && (rated || still(row) || (wasZero && !pullingAway)));
-  const accel = zero || imu === null || Math.abs(imu) < ACCEL_DEADBAND_MPS2 ? 0 : Math.min(ACCEL_MAX_MPS2, Math.max(-ACCEL_MAX_MPS2, imu));
-  return { mps: zero ? 0 : v, accel, zero, fixTs: row.ts };
+function cueOf(row: FeatureRow): ImuCue | null {
+  const a = imuAccel(row);
+  if (a === null) return null;
+  return { still: still(row), pullingAway: a >= LEAVE_ZERO_MPS2 };
+}
+
+const EMPTY = (at: number): DisplaySpeed => ({ mps: 0, accel: 0, at, zero: true, kf: null, acc: -1, eventAt: null, imu: null });
+
+/** S2 over the filter's estimate: what to show at `kf.t`. */
+function shown(prev: DisplaySpeed, kf: Kalman, acc: number, eventAt: number | null, imu: ImuCue | null): DisplaySpeed {
+  const v = kf.v;
+  const rated = acc >= 0 && v < acc;
+  const pullingAway = imu?.pullingAway ?? false;
+  const zero = v < ZERO_MPS || (v < STOP_DISPLAY_MAX_MPS && (rated || (imu?.still ?? false) || (prev.zero && !pullingAway)));
+  const accel = zero || Math.abs(kf.a) < ACCEL_DEADBAND_MPS2 ? 0 : kf.a;
+  return { mps: zero ? 0 : v, accel, at: kf.t, zero, kf, acc, eventAt, imu };
+}
+
+/** Whether a fix can measure the speed (L1). */
+const measures = (f: SpeedFix): boolean => f.mps >= 0 && f.hAcc >= 0 && f.hAcc <= GNSS_MAX_HACC_M && Number.isFinite(f.at);
+
+function measure(prev: DisplaySpeed, f: SpeedFix, eventAt: number | null): DisplaySpeed {
+  if (prev.kf !== null && f.at <= prev.kf.t) return eventAt === prev.eventAt ? prev : { ...prev, eventAt };
+  const sigma = sigmaOf(f.acc);
+  const kf = kalmanStep(prev.kf, f.at, f.mps, sigma * sigma);
+  return shown(prev, kf, f.acc, eventAt, prev.imu);
 }
 
 /**
- * The speed `elapsedMs` after its row (m/s), for the screen between rows: carried along the row's
+ * A `speed` event (L1): the fix measures the speed at once. `prev` null: before anything this drive.
+ * A fix that measures nothing changes nothing but the time the last event came.
+ */
+export function displayFix(prev: DisplaySpeed | null, f: SpeedFix): DisplaySpeed {
+  const base = prev ?? EMPTY(f.at);
+  const eventAt = base.eventAt === null ? f.at : Math.max(base.eventAt, f.at);
+  if (!measures(f)) return eventAt === base.eventAt ? base : { ...base, eventAt };
+  return measure(base, f, eventAt);
+}
+
+/**
+ * A row: the IMU cue for S2, its own fix while no `speed` event is coming (L1), and S3. `known`
+ * is the row's known GPS speed (`knownSpeed`), null when it lost its fix.
+ */
+export function displayRow(prev: DisplaySpeed | null, row: FeatureRow, known: number | null): DisplaySpeed {
+  const imu = cueOf(row);
+  let d: DisplaySpeed = { ...(prev ?? EMPTY(row.ts)), imu };
+  const eventsStale = d.eventAt === null || row.ts - d.eventAt > EVENT_STALE_MS;
+  if (eventsStale && known !== null) {
+    d = measure(d, { at: row.ts - ROW_FIX_AGE_MS, mps: known, acc: row.speedAcc, hAcc: row.hAcc }, d.eventAt);
+  }
+  if (d.kf === null) return { ...d, mps: 0, accel: 0, zero: true };
+  if (row.ts - d.kf.t > SPEED_HOLD_MS) {
+    // S3: a still car, or one already at 0, reads 0; otherwise the screen holds the last speed.
+    if (d.zero || still(row)) return { ...d, mps: 0, accel: 0, zero: true };
+    return d;
+  }
+  // S2 again with this row's IMU (a car pulling away, or one gone still, since the fix).
+  return shown(d, d.kf, d.acc, d.eventAt, imu);
+}
+
+/**
+ * The speed `elapsedMs` after the time it stands for (m/s), for the screen: carried along the
  * acceleration for at most `CARRY_MAX_MS`, never below 0, and 0 once a slowing car drops under
  * 1 mph (S2).
  */
@@ -93,4 +233,14 @@ export function carriedSpeed(mps: number, accel: number, elapsedMs: number): num
   if (mps <= 0 || accel === 0) return mps;
   const v = mps + (accel * Math.min(Math.max(0, elapsedMs), CARRY_MAX_MS)) / 1000;
   return v < ZERO_MPS ? 0 : v;
+}
+
+/** Whole units on the screen move only once the speed is this far past the half (no flicker at x.5). */
+export const ROUND_HYSTERESIS = 0.3;
+
+/** The whole number to show for `value` (display units), given the one shown now (null: none yet). */
+export function wholeSpeed(prev: number | null, value: number): number {
+  const r = Math.round(value);
+  if (prev === null || r === prev) return r;
+  return Math.abs(value - prev) < 0.5 + ROUND_HYSTERESIS ? prev : r;
 }

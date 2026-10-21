@@ -39,7 +39,7 @@ only while it is on).
 ## 1. Rules for both native modules
 
 - **Event names.** Declare exactly
-  `Events("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")` —
+  `Events("activity", "row", "speed", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")` —
   keep this list **byte-identical** to `DRIVE_SENSE_EVENTS` in `src/types.ts` and to the other
   platform's list (the native text tests compare them). `call` is emitted on iOS only,
   `reminderTap` and `dashpalLinkTick` on Android only, but both platforms declare every one.
@@ -77,7 +77,7 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 
 | Method | Behaviour |
 |---|---|
-| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of the Android sticky restart** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: a `SecurityException` from the location foreground service → `E_PERMISSION`; any other refusal → `E_FGS_REFUSED`. iOS: a new capture emits `call { active: true }` once if a phone call is already in progress (later changes as they happen). Both platforms subscribe the motion-activity feed for the capture's life when `motion` is `granted`, **best effort** (Android: a `SecurityException` or missing Play services is logged and swallowed, never rejects `startCapture`, never stops the capture), for the drive's walking end. Only ever called from a user's tap in the foreground. |
+| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second; iOS `kCLLocationAccuracyBestForNavigation` with `.automotiveNavigation` and no distance filter, so Core Location fuses the motion sensors into each fix; Android the fused provider at `PRIORITY_HIGH_ACCURACY`, 1 s) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of the Android sticky restart** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: a `SecurityException` from the location foreground service → `E_PERMISSION`; any other refusal → `E_FGS_REFUSED`. iOS: a new capture emits `call { active: true }` once if a phone call is already in progress (later changes as they happen). Both platforms subscribe the motion-activity feed for the capture's life when `motion` is `granted`, **best effort** (Android: a `SecurityException` or missing Play services is logged and swallowed, never rejects `startCapture`, never stops the capture), for the drive's walking end. Only ever called from a user's tap in the foreground. |
 | `stopCapture(end?)` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service (its notification goes with it) and the capture's activity-transition subscription. Idempotent. `end` (`CaptureEnd`): the drive's driving end (`drivingEndedAt`, epoch ms, or null for a drive that was not kept) and whether the car was still at driving speed as it ended (`drivingAtEnd`), for the reminder's session (§10); sent natively as `(kind, endedAt, drivingAtEnd)` with kind `now` (no `end`), `dropped` or `at`. The watchdog's stop passes none (now). |
 | `setCaptureRate(rate)` | `full` as above. `low`: coarse location (iOS `kCLLocationAccuracyHundredMeters`, `distanceFilter = 50`; Android `PRIORITY_BALANCED_POWER_ACCURACY` at 10 s), IMU stopped, and a row is emitted **only when a fix arrives** (IMU-absent encoding, §4). The process stays alive. iOS reads the phone state (`locked`/`screenOn`/`appForeground`, and `screen` changes) on each fix at `low` rather than polling at 1 Hz, so the low rate wakes nothing per second. Ignored (resolves) while not capturing. |
 | `getState()` | `DriveSenseState` (below). |
@@ -146,12 +146,13 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 |---|---|---|
 | `activity` | `MotionActivity` `{ type, confidence, ts, exit? }` | a motion-activity change **while capturing** (both platforms subscribe the feed for the capture's life only) |
 | `row` | a `DriveSenseRow` (§4) | once per second while capturing at `full`; once per fix at `low` |
+| `speed` | `SpeedSample` `{ ts, speed, speedAcc, hAcc, ageMs }` | each fix at `full` rate, the moment it lands (before its row): the fix's own time (integer epoch ms), its Doppler speed (m/s), speed accuracy (m/s) and horizontal accuracy (m), each `-1` when unknown, and `ageMs`, how old the fix already is (integer ms, ≥ 0; iOS the wall clock less `CLLocation.timestamp`, Android the capture's anchored boot clock less the fix's `elapsedRealtimeNanos`). It drives the driving screen's speed only (`src/core/engine/displaySpeed.ts`); the rows still carry every fix for scoring. Sent only while a JS listener is attached, **never buffered** (a stale speed is worthless). Validate with `parseSpeed` |
 | `screen` | `{ locked, on, ts }` | lock/screen change while capturing (Android `SCREEN_ON`/`SCREEN_OFF`/`USER_PRESENT`; iOS on a change of the 1 Hz poll) |
 | `thermal` | `{ level, ts }` | a thermal-state change while capturing |
 | `notificationAction` | `{ action: 'endDrive', ts }` | Android: the notification's End drive action (offered only while `setDriveDisplay` says `stopped`) |
 | `call` | `{ active, ts }` | iOS only: `CXCallObserver` — a call started or ended |
 | `reminderTap` | `{}` | Android only: a tap on the forgot-to-start reminder's note was handed over (§10); read it with `takeReminderTap` |
-| `dashpalLinkTick` | `{}` | Android only: every 30 s while the DashPal link service runs `waiting`; JS pumps its timers with it (a reconnect back-off fires with JS timers paused). Sent only while a JS listener is attached, **never buffered** (the exception to Buffering below) |
+| `dashpalLinkTick` | `{}` | Android only: every 30 s while the DashPal link service runs `waiting`; JS pumps its timers with it (a reconnect back-off fires with JS timers paused). Sent only while a JS listener is attached, **never buffered** (with `speed`, the exceptions to Buffering below) |
 
 **Motion-activity mapping** (the `activity` event). The host validates each payload with
 `parseActivity` (a bad one is dropped) and hands it to the engine, whose only use for it is the
@@ -712,7 +713,8 @@ instead. The fake follows this contract where host tests depend on it:
 - delivery is synchronous by default; `asyncDelivery: true` delivers every event on a microtask
   as native always does — use it in integration tests so a host that relies on synchronous
   delivery fails in Jest rather than on a device;
-- buffering before the first listener and the 300-event cap are native's.
+- buffering before the first listener and the 300-event cap are native's, and `speed` is
+  dropped, never buffered, while no listener is attached.
 
 The other controls (`emit`, `loadTrace`, `listenerCount`, `setLastExitInfo`,
 `setIgnoringBatteryOptimizations`, `transition`, `failCaptureSubscribe`, `strandSubscription`,

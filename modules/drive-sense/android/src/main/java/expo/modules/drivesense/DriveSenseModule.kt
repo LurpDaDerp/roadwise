@@ -32,7 +32,7 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class DriveSenseModule : Module() {
   companion object {
     /** Every event, for the per-event buffer flush (README §3). Same names as `Events(...)` below. */
-    private val OBSERVED_EVENTS = listOf("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")
+    private val OBSERVED_EVENTS = listOf("activity", "row", "speed", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")
     private val MODES = setOf("mounted", "pocket", "auto")
 
     /** The reminder tap handed over and not yet taken by JS, with its hand-over time. Process-wide. */
@@ -73,7 +73,7 @@ class DriveSenseModule : Module() {
     Name("DriveSense")
 
     // Keep this list byte-identical to DRIVE_SENSE_EVENTS in src/types.ts and to DriveSenseModule.swift.
-    Events("activity", "row", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")
+    Events("activity", "row", "speed", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")
 
     OnCreate {
       DriveSensePrefs.init(context)

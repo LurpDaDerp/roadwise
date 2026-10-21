@@ -3,44 +3,49 @@ import { View, type TextStyle } from 'react-native';
 import type { AnimatedStyle } from 'react-native-reanimated';
 
 import { MPS_PER_MPH } from '@/core/detectors/common';
-import { CARRY_MAX_MS, carriedSpeed, SPEED_TICK_MS } from '@/core/engine/displaySpeed';
+import { CARRY_MAX_MS, carriedSpeed, SPEED_TICK_MS, wholeSpeed } from '@/core/engine/displaySpeed';
+import { useShownSpeed, type ShownSpeed } from '@/drive/useDrive';
+import { KMH_PER_MPH } from '@/lib/units';
 import { speedDigits, SpeedReadout, unitLineHeight, unitTop } from '@/ui/drive';
 
 import { HALO_POINTS_GAP_PT } from './hudLayout';
-import { inUnits, unitLabel, type HudUnits } from './useHudUnits';
+import { unitLabel, type HudUnits } from './useHudUnits';
+
+const wallClock = (): number => Date.now();
 
 /**
- * The speed to show now (mph): the row's speed carried on along its acceleration (mph/s) since the
- * row landed, re-read every `SPEED_TICK_MS` for up to `CARRY_MAX_MS`, then still until the next row
- * (`rowTs`). A cruising car, 0 and a held speed never tick.
+ * The whole number to show now, in the driver's units (null with no drive): the estimate carried on
+ * from the time it stands for along its acceleration (`carriedSpeed`), re-read every
+ * `SPEED_TICK_MS` until `CARRY_MAX_MS` after that time, and rounded with a little hysteresis
+ * (`wholeSpeed`) so a speed sitting at x.5 doesn't flicker. A cruising car, 0 and a held speed
+ * never tick.
  */
-export function useCarriedSpeed(speedMph: number | null, accelMph: number, rowTs: number | null): number | null {
-  const [elapsed, setElapsed] = useState(0);
-  const [row, setRow] = useState(rowTs);
-  // A new row starts from its own speed in the same render (React's state-from-props pattern).
-  if (row !== rowTs) {
-    setRow(rowTs);
-    setElapsed(0);
-  }
-  const carrying = speedMph !== null && speedMph > 0 && accelMph !== 0;
+export function useCarriedSpeed(shown: ShownSpeed, units: HudUnits): number | null {
+  const { mps, accel, at } = shown;
+  const [, setTick] = useState(0);
+  const carrying = mps !== null && mps > 0 && accel !== 0 && at !== null;
   useEffect(() => {
-    if (!carrying) return;
-    const start = Date.now();
+    if (!carrying || at === null) return;
+    const end = at + CARRY_MAX_MS;
+    if (wallClock() >= end) return;
     const id = setInterval(() => {
-      const e = Math.min(Date.now() - start, CARRY_MAX_MS);
-      setElapsed(e);
-      if (e >= CARRY_MAX_MS) clearInterval(id);
+      setTick((n) => n + 1);
+      if (wallClock() >= end) clearInterval(id);
     }, SPEED_TICK_MS);
     return () => clearInterval(id);
-  }, [carrying, rowTs]);
-  if (speedMph === null || !carrying) return speedMph;
-  return carriedSpeed(speedMph * MPS_PER_MPH, accelMph * MPS_PER_MPH, elapsed) / MPS_PER_MPH;
+  }, [carrying, at, mps, accel]);
+  const now = mps === null ? null : at === null ? mps : carriedSpeed(mps, accel, wallClock() - at);
+  const value = now === null ? null : (now / MPS_PER_MPH) * (units === 'km' ? KMH_PER_MPH : 1);
+  // The number shown last, kept across renders (React's state-from-props pattern; `wholeSpeed` of
+  // its own answer is that answer, so this settles at once).
+  const [whole, setWhole] = useState<{ n: number | null; units: HudUnits }>({ n: null, units });
+  const prev = whole.units === units ? whole.n : null;
+  const next = value === null ? null : wholeSpeed(prev, value);
+  if (next !== whole.n || units !== whole.units) setWhole({ n: next, units });
+  return next;
 }
 
 export type HaloReadoutProps = {
-  speedMph: number | null;
-  accelMph: number;
-  rowTs: number | null;
   units: HudUnits;
   pt2: number;
   pt3: number;
@@ -56,12 +61,13 @@ export type HaloReadoutProps = {
 };
 
 /**
- * The speed inside the halo, carried on between rows (`useCarriedSpeed`): its own component, so the
- * ticks re-render the numerals and nothing else. In landscape the stack is raised by `lift` and the
- * points sit under the unit label, inside the ring, whether or not they show (nothing moves).
+ * The speed inside the halo, carried on between fixes (`useCarriedSpeed`): its own component reading
+ * its own slice of the drive, so each fix and each tick re-render the numerals and nothing else. In
+ * landscape the stack is raised by `lift` and the points sit under the unit label, inside the ring,
+ * whether or not they show (nothing moves).
  */
-export function HaloReadout({ speedMph, accelMph, rowTs, units, pt2, pt3, unitPt, haloPoints, points, ...rest }: HaloReadoutProps) {
-  const speed = inUnits(useCarriedSpeed(speedMph, accelMph, rowTs), units);
+export function HaloReadout({ units, pt2, pt3, unitPt, haloPoints, points, ...rest }: HaloReadoutProps) {
+  const speed = useCarriedSpeed(useShownSpeed(), units);
   const size = speedDigits(speed) >= 3 ? pt3 : pt2;
   const readout = <SpeedReadout speed={speed} unit={unitLabel(units)} size={size} {...rest} />;
   if (haloPoints === null) return readout;

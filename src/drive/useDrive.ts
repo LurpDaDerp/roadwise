@@ -48,10 +48,8 @@ export function useDriveControls(): DriveControls {
 export interface DriveLive {
   status: 'idle' | 'recording' | 'finalizing';
   clientTripId: string | null;
-  /** The speed to show as of the newest row; null → show "-". */
-  speedMph: number | null;
-  /** The acceleration (mph/s) the screen carries `speedMph` on with until the next row; 0: not carried. */
-  speedAccelMph: number;
+  /** The newest row's GPS speed (mph, tenths), null when it had none: the halo's speeding hold. */
+  rowSpeedMph: number | null;
   /** The limit the sign shows (the last one held up to 10 s through a row without one); null → "-". */
   limitMph: number | null;
   speedingTier: Tier | null;
@@ -71,9 +69,7 @@ export interface DriveLive {
 const selectLive = (s: DriveState) => ({
   status: s.status,
   clientTripId: s.clientTripId,
-  // Tenths, not whole mph: the HUD rounds once in the driver's unit (km/h would round twice).
-  speedMph: s.speedKnown ? Math.round(mpsToMph(s.speedMps) * 10) / 10 : null,
-  speedAccelMph: s.speedKnown ? Math.round(mpsToMph(s.speedAccelMps2) * 10) / 10 : 0,
+  rowSpeedMph: s.rowSpeedMps === null ? null : Math.round(mpsToMph(s.rowSpeedMps) * 10) / 10,
   limitMph: s.limitMph,
   speedingTier: s.speedingTier,
   stopped: s.stopped,
@@ -83,6 +79,27 @@ const selectLive = (s: DriveState) => ({
   rowTs: s.lastRowTs,
   phoneUseSince: s.phoneUseSince,
 });
+
+/** The speed the driving screen shows, as of its last fix (`displaySpeed.ts`). */
+export interface ShownSpeed {
+  /** m/s at `at`; null with no drive (the screen shows "-"). */
+  mps: number | null;
+  /** m/s² to carry it on with from `at`; 0: not carried. */
+  accel: number;
+  /** The time `mps` stands for (host clock), null before the drive's first fix. */
+  at: number | null;
+}
+
+const selectShown = (s: DriveState): ShownSpeed => ({
+  mps: s.speedKnown ? s.speedMps : null,
+  accel: s.speedKnown ? s.speedAccelMps2 : 0,
+  at: s.speedKnown ? s.speedAt : null,
+});
+
+/** The halo's number alone: it changes with every fix, so only the readout reads it. */
+export function useShownSpeed(): ShownSpeed {
+  return useDrive(selectShown);
+}
 
 /** The weather leg: changes once per refetch distance, so the odometer never re-renders the HUD per row. */
 const selectWeatherLeg = (s: DriveState) => Math.floor(s.distanceM / WEATHER_REFETCH_DISTANCE_M);

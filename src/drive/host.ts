@@ -15,7 +15,7 @@
 // - **Background.** Each row first pumps the process's timers (`src/lib/timers.ts`): with the app
 //   in the Android background JS timers are paused, and the rows are what keeps the alert player
 //   and the DashPal link moving.
-import { parseActivity, parseRow, type CaptureEnd } from '@drive-sense';
+import { parseActivity, parseRow, parseSpeed, type CaptureEnd } from '@drive-sense';
 import { MERGE_GAP_S, scoreDrive, type DriveContext } from '@scoring';
 
 import { decisionFor } from '@/core/alerts/policy';
@@ -692,6 +692,19 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           const row = parseRow(raw);
           if (row === null) return;
           void run(() => onRow(row), 'row');
+        })
+      ),
+      remover(
+        // Each fix's speed the moment it lands, straight to the screen's number: not queued behind
+        // the rows (a checkpoint's write must not hold it), and timed at the fix (arrival less its age).
+        source.addListener('speed', (raw) => {
+          const s = parseSpeed(raw);
+          if (s === null) return;
+          try {
+            engine.speed({ at: now() - s.ageMs, mps: s.speed, acc: s.speedAcc, hAcc: s.hAcc });
+          } catch (e) {
+            report(e, 'speed');
+          }
         })
       ),
       remover(

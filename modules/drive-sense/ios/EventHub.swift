@@ -94,6 +94,15 @@ final class EventHub {
     }
   }
 
+  /// An event that only matters now (`speed`): delivered while a JS listener for it is attached,
+  /// else dropped. Never buffered, so nothing stale piles up while JS is away.
+  func emitLive(_ event: String, _ body: [String: Any]) {
+    onMain {
+      guard self.listening.contains(event), let sink = self.sink else { return }
+      sink.deliver(event, body)
+    }
+  }
+
   private func onMain(_ work: @escaping () -> Void) {
     if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
   }

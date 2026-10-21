@@ -98,10 +98,11 @@ const mockState = control.state;
 
 beforeEach(() => jest.clearAllMocks());
 
-test('the eight event names are fixed, in order', () => {
+test('the nine event names are fixed, in order', () => {
   expect(DRIVE_SENSE_EVENTS).toEqual([
     'activity',
     'row',
+    'speed',
     'screen',
     'thermal',
     'notificationAction',

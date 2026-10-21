@@ -176,8 +176,22 @@ final class CaptureController {
       let p = phone.poll()
       pipeline.queue.async { self.pipeline.lowRateFix(fix, phone: p, generation: gen) }
     } else {
+      emitSpeed(fix)
       pipeline.queue.async { self.pipeline.addFix(fix) }
     }
+  }
+
+  /// The `speed` event (README §3): this fix's speed the moment it lands, with how old it already
+  /// is, for the driving screen. Live only: dropped while no JS listener is attached.
+  private func emitSpeed(_ fix: FixSample) {
+    let age = Swift.max(0, TimeBase.nowEpochMs() - fix.t)
+    EventHub.shared.emitLive("speed", [
+      "ts": NSNumber(value: Int64(jsRound(fix.t))),
+      "speed": fix.speed >= 0 ? fix.speed : -1.0,
+      "speedAcc": fix.speedAcc >= 0 ? fix.speedAcc : -1.0,
+      "hAcc": fix.hAcc >= 0 ? fix.hAcc : -1.0,
+      "ageMs": NSNumber(value: Int64(jsRound(age))),
+    ])
   }
 
   /// The `row` payload: the FeatureRow keys plus the bridge-only `mock` (v3, plan §6: the window's

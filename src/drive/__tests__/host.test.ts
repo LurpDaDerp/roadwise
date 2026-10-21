@@ -584,7 +584,43 @@ describe('motion activity reports reach the engine through parseActivity', () =>
     expect(h.display.log.at(-1)).toMatch(/^update 0\//);
     expect(h.host.snapshot()).toMatchObject({ speedMps: 0, speedKnown: true });
     await feed(h, rows(1, { speedMps: 3, t0: T0 + 1000, over: () => ({ speedAcc: 1 }) }));
-    expect(h.host.snapshot()).toMatchObject({ speedMps: 3, speedKnown: true });
+    // The row's fix stands in for the `speed` event (none came) and goes through the filter.
+    expect(h.host.snapshot().speedKnown).toBe(true);
+    expect(h.host.snapshot().speedMps).toBeCloseTo(3, 0);
+    await h.host.stop({ endOpenTrip: false });
+  });
+});
+
+describe('the `speed` event: each fix on the screen as it lands', () => {
+  const sample = (over: Record<string, unknown> = {}) => ({ ts: clock - 300, speed: 20, speedAcc: 0.5, hAcc: 5, ageMs: 300, ...over });
+
+  test('moves the shown speed at once, without a row, standing for the fix (arrival less its age)', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    clock = T0 + 5_000;
+    h.source.emit('speed', sample());
+    expect(h.host.snapshot()).toMatchObject({ speedMps: 20, speedAt: T0 + 4_700, speedKnown: true, lastRowTs: null });
+    clock += 1_000;
+    h.source.emit('speed', sample({ speed: 22 }));
+    expect(h.host.snapshot().speedMps).toBeGreaterThan(21);
+    expect(h.host.snapshot().speedAt).toBe(T0 + 5_700);
+    expect(h.errors).toEqual([]);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('a malformed payload is dropped; with no drive recording it changes nothing', async () => {
+    const h = build();
+    await h.host.boot();
+    clock = T0 + 5_000;
+    h.source.emit('speed', sample());
+    expect(h.host.snapshot()).toMatchObject({ speedKnown: false, speedAt: null });
+    await h.host.start();
+    for (const bad of [sample({ ageMs: -1 }), sample({ ts: 1.5 }), sample({ speed: Number.NaN }), { ...sample(), extra: 1 }, null, 'x']) {
+      h.source.emit('speed', bad);
+    }
+    expect(h.host.snapshot()).toMatchObject({ speedMps: 0, speedAt: null });
+    expect(h.errors).toEqual([]);
     await h.host.stop({ endOpenTrip: false });
   });
 });

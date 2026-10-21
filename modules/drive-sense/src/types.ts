@@ -84,6 +84,23 @@ export interface DriveSenseRow extends FeatureRow {
   mock?: boolean;
 }
 
+/**
+ * README §3 `speed`: one GPS fix's speed the moment it lands, at `full` rate only, for the driving
+ * screen's number. Live only: sent while a JS listener is attached, never buffered.
+ */
+export interface SpeedSample {
+  /** The fix's own time, epoch ms, integer. */
+  ts: number;
+  /** Doppler speed, m/s; -1 unknown. */
+  speed: number;
+  /** Its accuracy rating, m/s; -1 not rated. */
+  speedAcc: number;
+  /** Horizontal accuracy, m; -1 unknown. */
+  hAcc: number;
+  /** How old the fix already was when native sent it, ms (integer, on one native clock). */
+  ageMs: number;
+}
+
 export interface MotionActivity {
   type: 'automotive' | 'walking' | 'running' | 'cycling' | 'stationary' | 'unknown';
   confidence: 'low' | 'medium' | 'high';
@@ -170,6 +187,8 @@ export type DriveSenseEvents = {
   activity: MotionActivity;
   /** a `DriveSenseRow` as native emitted it — validate with `parseRow` before use */
   row: unknown;
+  /** a `SpeedSample` as native emitted it — validate with `parseSpeed` before use (live only, never buffered) */
+  speed: unknown;
   screen: { locked: boolean; on: boolean; ts: number };
   thermal: { level: ThermalLevel; ts: number };
   notificationAction: { action: 'endDrive'; ts: number };
@@ -195,6 +214,7 @@ export type DriveSenseEvent = keyof DriveSenseEvents;
 export const DRIVE_SENSE_EVENTS = [
   'activity',
   'row',
+  'speed',
   'screen',
   'thermal',
   'notificationAction',

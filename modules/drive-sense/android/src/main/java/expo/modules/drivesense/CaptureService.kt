@@ -574,12 +574,32 @@ class CaptureService : Service() {
         emitRow(out.row, fix.mock)
       }
     } else {
+      emitSpeed(fix)
       fixes.add(fix)
       if (fixes.size > MAX_FIXES_BUFFERED) fixes.removeAt(0)
       if (fix.t > latestFixT) latestFixT = fix.t
       if (pendingTs.isNotEmpty()) closeReady()
     }
     watchdog.check()
+  }
+
+  /**
+   * The `speed` event (README §3): this fix's speed the moment it lands, with how old it already is
+   * (both on the capture's anchored boot clock), for the driving screen. Live only: dropped while no
+   * JS listener is attached.
+   */
+  private fun emitSpeed(fix: FixSample) {
+    val age = (TimeBase.anchoredNow(anchor) - fix.t).coerceAtLeast(0.0)
+    EventBus.emitLive(
+      "speed",
+      linkedMapOf(
+        "ts" to Math.round(fix.t),
+        "speed" to (if (fix.speed >= 0) fix.speed else -1.0),
+        "speedAcc" to (if (fix.speedAcc >= 0) fix.speedAcc else -1.0),
+        "hAcc" to (if (fix.hAcc >= 0) fix.hAcc else -1.0),
+        "ageMs" to Math.round(age)
+      )
+    )
   }
 
   /**

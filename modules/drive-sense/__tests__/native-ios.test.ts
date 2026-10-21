@@ -139,7 +139,8 @@ describe('iOS drive-sense module (text)', () => {
     expect(src).toContain('allowsBackgroundLocationUpdates = true');
     expect(src).toContain('showsBackgroundLocationIndicator = false');
     expect(src).toContain('.automotiveNavigation');
-    expect(src).toContain('kCLLocationAccuracyBest');
+    // Navigation accuracy while capturing: Core Location fuses the motion sensors into the fix.
+    expect(src).toContain('manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation');
     expect(src).toContain('kCLDistanceFilterNone');
     // low rate (rev1: I5)
     expect(src).toContain('kCLLocationAccuracyHundredMeters');
@@ -655,6 +656,19 @@ describe('iOS: DashPal alerts on the phone (README §2)', () => {
     expect(fn).toMatch(/session\.currentRoute\.outputs\.contains \{ \$0\.portType == \.headphones \|\| \$0\.portType == \.usbAudio \}/);
     expect(fn).toMatch(/"callActive": CallObserver\.anyCallActiveNow\(\), "volume": volume, "headphones": headphones/);
     expect(fn).not.toMatch(/bluetoothA2DP|bluetoothLE|carAudio|setActive|setCategory/);
+  });
+
+  it('sends each full-rate fix as a live `speed` event the moment it lands (never buffered)', () => {
+    const cap = code('CaptureController.swift');
+    expect(cap).toMatch(/emitSpeed\(fix\)\s*pipeline\.queue\.async \{ self\.pipeline\.addFix\(fix\) \}/);
+    expect(cap).toMatch(/EventHub\.shared\.emitLive\("speed", \[/);
+    for (const key of ['"ts"', '"speed"', '"speedAcc"', '"hAcc"', '"ageMs"']) expect(cap).toContain(key);
+    expect(cap).toMatch(/let age = Swift\.max\(0, TimeBase\.nowEpochMs\(\) - fix\.t\)/);
+    // Low rate sends none (rows per fix only).
+    expect(cap).not.toMatch(/lowRateFix[^\n]*emitSpeed/);
+    const live = /func emitLive\([\s\S]*?\n {2}\}/.exec(code('EventHub.swift'))?.[0] ?? '';
+    expect(live).toMatch(/guard self\.listening\.contains\(event\), let sink = self\.sink else \{ return \}/);
+    expect(live).not.toMatch(/buffer/);
   });
 
   it('holdAwake and dashpalLinkRunning answer false, setDashpalLink unsupported, and the tick is never emitted', () => {

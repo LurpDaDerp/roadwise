@@ -28,13 +28,15 @@ final class CaptureLocation: NSObject, CLLocationManagerDelegate {
     }
   }
 
-  /// `full`: best accuracy, every fix (distance filter unset). `low` (rev1: I5): coarse, 50 m.
+  /// `full`: navigation accuracy (Core Location fuses the motion sensors into the fix, so its
+  /// speed follows the car more closely), every fix (distance filter unset). `low` (rev1: I5):
+  /// coarse, 50 m.
   func configure(low: Bool) {
     if low {
       manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
       manager.distanceFilter = 50
     } else {
-      manager.desiredAccuracy = kCLLocationAccuracyBest
+      manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
       manager.distanceFilter = kCLDistanceFilterNone
     }
   }

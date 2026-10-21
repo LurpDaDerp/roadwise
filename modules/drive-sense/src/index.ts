@@ -35,7 +35,7 @@ import { isNavAppPackage } from './navPackages';
 import type { AudioOutputState, CaptureEnd, DriveSenseApi, DriveSenseEvent, DriveSenseEvents, DriveSenseSyncMethod, Subscription } from './types';
 
 export * from './types';
-export { CALL_ROW_KEY, MOCK_ROW_KEY, parseActivity, parseRow, REMINDER_TOKEN, resetUnknownRowKeys, unknownRowKeys } from './rowSchema';
+export { CALL_ROW_KEY, MOCK_ROW_KEY, parseActivity, parseRow, parseSpeed, REMINDER_TOKEN, resetUnknownRowKeys, unknownRowKeys } from './rowSchema';
 export { createFakeDriveSense, driveSenseError } from './fake';
 export type { FakeOptions } from './fake';
 export { diffSelfTest, parseVectors } from './selfTest';

@@ -6,6 +6,7 @@
 import type { MotionActivity } from '@drive-sense';
 import type { EventType, Tier } from '@scoring';
 
+import type { SpeedFix } from './displaySpeed';
 import type { DetectedEvent, DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
 /** idle → recording → finalizing → idle. Nothing starts a drive but `start`. */
@@ -166,17 +167,21 @@ export interface EngineSnapshot {
   startedAt: number | null;
   lastRowTs: number | null;
   /**
-   * The speed to show as of the row, m/s (`displaySpeed.ts`): the GPS speed, 0 for a car standing
-   * still or creeping under 3 mph, the last one held when a row lost its fix (0 once the car is
-   * still), 0 before the first row of a drive.
-   * `stopped` and `lockedOut` read the raw speed.
+   * The speed to show at `speedAt`, m/s (`displaySpeed.ts`): the Kalman estimate from each fix's
+   * Doppler speed, 0 for a car standing still or creeping under 3 mph, held through lost fixes (0
+   * once the car is still), 0 before the first fix of a drive.
+   * `stopped`, `lockedOut` and every detector read the raw row speed.
    */
   speedMps: number;
   /**
-   * The forward acceleration (m/s²) the screen carries `speedMps` on with until the next row
-   * (`displaySpeed.carriedSpeed`); 0 when cruising, held, shown as 0 or before the axis is learned.
+   * The acceleration (m/s²) the screen carries `speedMps` on with from `speedAt`
+   * (`displaySpeed.carriedSpeed`); 0 when cruising, shown as 0 or before any fix.
    */
   speedAccelMps2: number;
+  /** The time `speedMps` stands for (the last measured fix's, host clock), or null before any. */
+  speedAt: number | null;
+  /** The newest row's known GPS speed (m/s), null when it had none: the halo's speeding hold. */
+  rowSpeedMps: number | null;
   /** There is a speed to show: always during a drive (the screen never shows "—" for it); false with no drive. */
   speedKnown: boolean;
   limit: LimitSample;
@@ -269,4 +274,10 @@ export interface Engine {
   session(): Readonly<TripSession> | null;
   /** Called with a fresh snapshot after every state change; returns the unsubscribe. */
   subscribe(fn: (snapshot: EngineSnapshot) => void): () => void;
+  /**
+   * A GPS fix's speed the moment it lands (native's `speed` event), for the screen's number only.
+   * Not serialised behind the rows: it changes nothing but the display speed, at once, and only
+   * while recording.
+   */
+  speed(fix: SpeedFix): void;
 }
