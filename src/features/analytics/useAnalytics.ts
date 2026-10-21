@@ -80,10 +80,7 @@ export interface AnalyticsData {
 }
 
 export interface AnalyticsOptions {
-  /**
-   * The driver's points total now (the server's): the Trends card's latest Points value, with the
-   * estimate of any drive the server has not answered yet added.
-   */
+  /** The driver's points total now (the server's, as Home's pill shows it): the Trends card's latest Points value. */
   pointsNow?: number | null;
 }
 

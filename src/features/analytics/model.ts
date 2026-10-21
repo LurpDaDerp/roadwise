@@ -390,8 +390,8 @@ export interface Trend {
   ticks: TrendTick[];
   /**
    * Per series, oldest first (see `trend`): Score per slot whose trailing 30 days hold 10 mi or
-   * more, Events per slot with miles, Points per slot from the first drive on. Score stays empty
-   * until the events are in.
+   * more (by drive, also one now), Events per slot with miles, Points per slot from the first
+   * drive on. Score stays empty until the events are in.
    */
   series: Record<TrendKind, TrendPoint[]>;
 }
@@ -404,9 +404,8 @@ export const TREND_EVENT_DAYS = RANGE_DAYS.year + COACH_DAYS;
 
 export interface TrendOptions {
   /**
-   * The driver's points total now (the server's, as Home's pill shows it): with the net points of
-   * any drive the server has not answered yet added, the Points line's latest value. Null or
-   * absent: the total after the latest drive, carried forward.
+   * The driver's points total now (the server's, as Home's pill shows it): the Points line's
+   * latest value. Null or absent: the total after the latest drive, carried forward.
    */
   pointsNow?: number | null;
 }
@@ -482,9 +481,10 @@ function hourTicks(sinceMs: number, now: number): TrendTick[] {
  *
  * - Score: the Safety Rating over time. Each point is the rating (`safetyRatingOf`, whole) over
  *   the 30-day window that ends at the point's moment: the end of its day, week or month (now for
- *   the current one), or the drive's start on Day. The window is the radar's (the moment floored
- *   to the hour, less 30 days), so the latest point is the radar's centre. A point only where that
- *   window holds 10 mi or more (ranked), so a slot with no drives of its own can still have one.
+ *   the current one), or on Day the drive's start, with one more point now. The window is counted
+ *   as the radar's (the moment floored to the hour, less 30 days), so the latest point (now) is the
+ *   radar's centre on every range. A point only where that window holds 10 mi or more (ranked), so
+ *   a slot with no drives of its own can still have one.
  * - Events: the slot's speeding, hard brakes, hard starts, sharp turns and pickups, from the
  *   drives' counts like the window's numbers (phone handling is a time, not a count), per mile
  *   driven in the slot; a slot with no miles has no point.
@@ -493,9 +493,10 @@ function hourTicks(sinceMs: number, now: number): TrendTick[] {
  *   the total before it plus its net points, never below 0. Each slot holds the total after the
  *   last drive at or before its end, carried through slots with no drives (on Day: a point at the
  *   range's start, one per drive, and one now); there is no point before the first drive. The
- *   latest point (now) is `pointsNow` when given, plus the net points of every drive still
- *   waiting for the server (never below 0), so credits and challenge rewards since the last drive
- *   show and a waiting drive never makes the line dip at now.
+ *   latest point (now) is `pointsNow` when given: the server's total, the one Home's pill shows,
+ *   so credits and challenge rewards since the last drive show. A drive still waiting for its
+ *   answer counts in the points from its own on, except that latest one, which has it once the
+ *   server counts it.
  *
  * An event belongs to the drive it happened in: the latest drive started at or before it (drives
  * never overlap).
@@ -549,8 +550,8 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
     }
     // Active events only, rating penalties per category (`axisPenalties` skips removed ones).
     const penalties = own.map((evs) => axisPenalties(evs));
-    slots.forEach((s, i) => {
-      const at = ends[i]!;
+    /** The rating over the 30 days ending at `at`, whole; null while they hold under 10 mi. */
+    const ratingAt = (at: number): number | null => {
       const from = windowStart(at, COACH_DAYS);
       const p: AxisPenalties = zeroAxisPenalties();
       let miles = 0;
@@ -563,8 +564,18 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
         for (const axis of PENALTY_AXES) p[axis] += q[axis];
       });
       const r = safetyRatingOf({ penalties: p, miles, watchedMiles });
-      if (r.ranked && r.rating !== null) series.score.push({ x: s.x, value: Math.round(r.rating), when: s.when });
+      return r.ranked && r.rating !== null ? Math.round(r.rating) : null;
+    };
+    slots.forEach((s, i) => {
+      const value = ratingAt(ends[i]!);
+      if (value !== null) series.score.push({ x: s.x, value, when: s.when });
     });
+    // By drive the line also ends now, as Points does: a drive leaving the 30 days since the last
+    // drive shows, and the latest point is the radar's centre.
+    if (step === 'drive') {
+      const value = ratingAt(now);
+      if (value !== null) series.score.push({ x: 1, value, when: 'now' });
+    }
   }
 
   // Points: the running total after each drive, all time.
@@ -581,13 +592,9 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
     while (k + 1 < scored.length && scored[k + 1]!.startedAt <= at) k += 1;
     return k >= 0 ? totals[k]! : null;
   };
-  // The server's total now leaves out every drive it has not answered yet (still pending): add
-  // their estimates (in drive order, never below 0), as the line itself does, so a waiting drive
-  // never dips it.
-  const pinned =
-    typeof opts.pointsNow === 'number' && Number.isFinite(opts.pointsNow)
-      ? scored.reduce((t, d) => (d.status === 'pending' && d.startedAt <= now ? Math.max(0, t + (d.pointsNet ?? 0)) : t), opts.pointsNow)
-      : null;
+  // The server's total now, as Home's pill shows it. A drive still waiting for its answer is left
+  // out until the server counts it: the phone can't tell whether it already has.
+  const pinned = typeof opts.pointsNow === 'number' && Number.isFinite(opts.pointsNow) ? opts.pointsNow : null;
   if (step === 'drive') {
     const before = totalAt(sinceMs - 1);
     if (before !== null) series.points.push({ x: 0, value: before, when: `at ${clock(sinceMs)}` });

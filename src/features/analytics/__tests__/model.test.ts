@@ -491,6 +491,27 @@ describe('trend', () => {
     }
   });
 
+  test('by drive, the Score line also ends now, at the radar’s centre: a drive that has left the 30 days since the last drive no longer counts', () => {
+    const end = NOW + HOUR - 1;
+    // The day's only drive started 20 h ago; 30 days before it, a drive with a severe speeding that
+    // has left the radar's 30 days since.
+    const last = drive({ startedAt: NOW - 20 * HOUR, miles: 12 });
+    const old = drive({ startedAt: NOW - 30 * DAY - 10 * HOUR, miles: 12 });
+    const events = [ev({ type: 'speeding', tier: 'severe', startedAt: old.startedAt + 60_000 })];
+    const since = windowStart(end, 30);
+    const centre = coachWindow([last, old], events.filter((e) => e.startedAt >= since), since).rating;
+    expect(centre).toMatchObject({ rating: 100, ranked: true });
+    const score = trend([last, old], events, 'day', end).series.score;
+    // At the drive's start the old drive still counted; now it doesn't, as on the radar.
+    expect(score[0]!.value).toBe(rated(24, { speed: 100 }));
+    expect(score[0]!.value).toBeLessThan(100);
+    expect(score.map((q) => [q.x, q.when])).toEqual([
+      [(4 * HOUR) / (end - rangeStart(end, 'day')), 'at 4:00 PM'],
+      [1, 'now'],
+    ]);
+    expect(score[1]!.value).toBe(Math.round(centre.rating!));
+  });
+
   test('Score needs 10 mi in a point’s 30 days; an event belongs to the latest drive started at or before it', () => {
     // 12 mi on Sep 10 rank the windows that still hold it (to the end of Friday Oct 9), then leave.
     const sep = drive({ startedAt: new Date(2026, 8, 10, 9).getTime(), miles: 12 });
@@ -551,44 +572,47 @@ describe('trend', () => {
     ];
     const t = trend(list, [], 'week', NOW);
     expect(t.series.points.map((q) => q.value)).toEqual([500, 500, 600, 600, 600, 600, 640, 640]);
-    // The server's total now (a challenge reward since) is the latest point, with the estimate it
-    // has not answered yet added (840 + 40).
+    // The server's total now (a challenge reward since) is the latest point, as Home's pill shows it.
     const pinned = trend(list, [], 'week', NOW, { pointsNow: 840 });
-    expect(pinned.series.points.map((q) => q.value)).toEqual([500, 500, 600, 600, 600, 600, 640, 880]);
+    expect(pinned.series.points.map((q) => q.value)).toEqual([500, 500, 600, 600, 600, 600, 640, 840]);
     expect(pinned.series.points[7]).toMatchObject({ x: 1, when: 'today' });
     // No drive yet: the total now alone, a single point.
     expect(trend([], [], 'week', NOW, { pointsNow: 0 }).series.points).toEqual([{ x: 1, value: 0, when: 'today' }]);
     expect(trend(list, [], 'week', NOW, { pointsNow: null }).series.points[7]!.value).toBe(640);
   });
 
-  test('Points: a drive still waiting for the server never makes the line dip at now', () => {
+  test('Points: the latest point is the server’s total alone, so a drive still waiting is never counted twice', () => {
     const answered = (points: number) =>
       ({ net: 0, progress: { points, lifetime: points, level: 1, levelUp: false, safetyRating: null, ranked: false } }) as unknown as LocalDrive['result'];
     const waiting = (over: Partial<LocalDrive>) => drive({ estimate: true, status: 'pending', ...over });
-    // Week: answered two days ago at 1,000; yesterday's drive is still an estimate (+50).
-    const week = [drive({ startedAt: at(12, 9), pointsNet: 60, result: answered(1000) }), waiting({ startedAt: at(13, 9), pointsNet: 50 })];
-    const w = trend(week, [], 'week', NOW, { pointsNow: 1000 });
-    expect(w.series.points.slice(-3).map((q) => [q.when, q.value])).toEqual([
-      ['on Monday', 1000],
-      ['on Tuesday', 1050],
-      ['today', 1050],
-    ]);
-    // Day: answered yesterday at 1,000; this morning's drive is still an estimate (+50).
-    const day = [drive({ startedAt: at(13, 18), pointsNet: 60, result: answered(1000) }), waiting({ startedAt: at(14, 8), pointsNet: 50 })];
-    expect(trend(day, [], 'day', NOW, { pointsNow: 1000 }).series.points.map((q) => [q.when, q.value])).toEqual([
+    // Answered yesterday at 1,000; this morning's drive is still an estimate (+80).
+    const list = [drive({ startedAt: at(13, 18), pointsNet: 60, result: answered(1000) }), waiting({ startedAt: at(14, 8), pointsNet: 80 })];
+    const values = (pointsNow: number, range: 'day' | 'week' = 'day') =>
+      trend(list, [], range, NOW, { pointsNow }).series.points.map((q) => [q.when, q.value]);
+    // The server already counted it (its answer was lost on the way, or the summary came first):
+    // the line ends on that total, never the estimate on top of it.
+    expect(values(1080)).toEqual([
       ['at 6:00 PM', 1000],
-      ['at 8:00 AM', 1050],
-      ['now', 1050],
+      ['at 8:00 AM', 1080],
+      ['now', 1080],
     ]);
-    // A credit since still shows on top of the estimate.
-    expect(trend(day, [], 'day', NOW, { pointsNow: 1200 }).series.points.at(-1)!.value).toBe(1250);
-    // Two waiting drives add in order, never below 0, as the line does.
-    const low = [
-      drive({ startedAt: at(12, 9), pointsNet: 10, result: answered(30) }),
-      waiting({ startedAt: at(13, 9), pointsNet: -80 }),
-      waiting({ startedAt: at(14, 9), pointsNet: 20 }),
-    ];
-    expect(trend(low, [], 'week', NOW, { pointsNow: 30 }).series.points.slice(-3).map((q) => q.value)).toEqual([30, 0, 20]);
+    // Not counted yet: the drive shows in its own point, and now is the server's total until it is.
+    expect(values(1000)).toEqual([
+      ['at 6:00 PM', 1000],
+      ['at 8:00 AM', 1080],
+      ['now', 1000],
+    ]);
+    // A week reads the same: today's point is the server's total, whatever is still waiting.
+    expect(values(1080, 'week')).toEqual([
+      ['on Tuesday', 1000],
+      ['today', 1080],
+    ]);
+    expect(values(1000, 'week')).toEqual([
+      ['on Tuesday', 1000],
+      ['today', 1000],
+    ]);
+    // A credit since shows as it is.
+    expect(values(1200).at(-1)).toEqual(['now', 1200]);
   });
 
   test('unscored drives stay out; a drive before the range carries its total in, with no Events point', () => {
@@ -620,9 +644,11 @@ describe('trend', () => {
       { x: 0.25, value: 0, when: 'at 6:00 PM' },
       { x: (20.25 * HOUR) / DAY, value: 0, when: 'at 8:15 AM' },
     ]);
-    expect(t.series.score.map((q) => [q.x, q.value])).toEqual([
-      [0.25, 100],
-      [(20.25 * HOUR) / DAY, 100],
+    // Score: one per drive and one now, as Points.
+    expect(t.series.score).toEqual([
+      { x: 0.25, value: 100, when: 'at 6:00 PM' },
+      { x: (20.25 * HOUR) / DAY, value: 100, when: 'at 8:15 AM' },
+      { x: 1, value: 100, when: 'now' },
     ]);
     expect(t.series.points).toEqual([
       { x: 0.25, value: 100, when: 'at 6:00 PM' },

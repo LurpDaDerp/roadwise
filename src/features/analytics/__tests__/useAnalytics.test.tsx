@@ -118,11 +118,11 @@ test('the Trends card’s latest points are the total now, when the screen passe
   const { result } = await renderHook(() => useAnalytics('week', { pointsNow: 1000 }), { wrapper: wrapperFor(db, client, now) });
   await waitFor(() => expect(result.current.loading).toBe(false));
   expect(result.current.trend.series.points.map((p) => p.value)).toEqual([230, 230, 230, 230, 280, 280, 280, 1000]);
-  // A drive still waiting for the server (yesterday, +30): the server's total leaves it out, so its
-  // estimate is added at now too and the line never dips.
+  // A drive still waiting for the server (yesterday, +30) shows in its own day, and now stays the
+  // server's total: whether it has counted the drive yet, the phone can't tell.
   await seedTrips(db, [{ client_trip_id: uuid(9), started_at: NOW - DAY, tz: 'UTC', status: 'pending', miles: 2, points_net: 30 }]);
   await invalidateAfterSync(client);
-  await waitFor(() => expect(result.current.trend.series.points.map((p) => p.value)).toEqual([230, 230, 230, 230, 280, 280, 310, 1030]));
+  await waitFor(() => expect(result.current.trend.series.points.map((p) => p.value)).toEqual([230, 230, 230, 230, 280, 280, 310, 1000]));
 });
 
 test('every range reads the same year and 30 days of events: a wider range scores its older drives with their own at once', async () => {
