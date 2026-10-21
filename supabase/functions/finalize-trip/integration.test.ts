@@ -5,10 +5,12 @@
 //   FUNCTIONS_IT_DB_URL=postgresql://postgres:postgres@127.0.0.1:54622/postgres \
 //     deno test -A --config supabase/functions/deno.json supabase/functions/finalize-trip/integration.test.ts
 //
-// Each run creates its own auth user and deletes it at the end (every table cascades).
+// Each run creates its own auth user and deletes it at the end (every user-owned table cascades;
+// the league group it was placed in is put right by `deleteTestUser`).
 import { assert, assertEquals } from '@std/assert';
 import postgres from 'postgres';
 import { createEngine } from '../_shared/engine.ts';
+import { deleteTestUser } from '../_shared/testing/it_cleanup.ts';
 import { DASHCAM, EVENT, lineOfMiles, payload, STARTED_AT, TRIP, TRIP_2 } from '../_shared/testing/v3_fixtures.ts';
 import { handleTripAction } from '../trip-actions/handler.ts';
 import { handleFinalizeTrip } from './handler.ts';
@@ -132,7 +134,7 @@ Deno.test({
       assert(r1.tripId !== TRIP);
       assertEquals(typeof STARTED_AT, 'number');
     } finally {
-      await sql`delete from auth.users where id = ${USER}::uuid`;
+      await deleteTestUser(sql, USER);
       await engine.close();
       await sql.end({ timeout: 5 });
     }
@@ -201,7 +203,7 @@ Deno.test({
       const again = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'camera_wrong' }), deps);
       assertEquals([again.status, (await again.json()).code], [409, 'already_disputed']);
     } finally {
-      await sql`delete from auth.users where id = ${user}::uuid`;
+      await deleteTestUser(sql, user);
       await engine.close();
       await sql.end({ timeout: 5 });
     }
