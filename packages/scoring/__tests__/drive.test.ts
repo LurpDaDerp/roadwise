@@ -23,6 +23,7 @@ import {
   speedingChargedS,
   speedingCost,
   speedingPenalty,
+  tooShort,
   type DriveEvent,
   type DriveInput,
 } from '../src/drive';
@@ -313,8 +314,8 @@ describe('nextMultiplier', () => {
   ])('streak %i → ×%f', (streak, m) => expect(nextMultiplier(streak)).toBe(m));
 });
 
-describe('scoreDrive — spec examples', () => {
-  test('12 mi, 11.8 safe, 1 hard brake, streak 10 → +134', () => {
+describe('scoreDrive — spec examples (20 a safe mile, +50 clean)', () => {
+  test('12 mi, 11.8 safe, 1 hard brake, streak 10 → +275', () => {
     const b = scoreDrive(
       drive({ miles: 12, safeMiles: 11.8, events: [ev({ type: 'hard_brake', tier: 'minor' })] }),
       { streak: 10, safeMilesEarlierToday: 0 }
@@ -322,39 +323,40 @@ describe('scoreDrive — spec examples', () => {
     expect(b).toMatchObject({
       scored: true,
       creditedMiles: 11.8,
-      milePoints: 118,
+      milePoints: 236,
+      pointsPerMile: 20,
       cleanBonus: 0,
       streakMult: 1.2,
       dashcamMult: 1,
       mult: 1.2,
-      gains: 142,
+      gains: 283, // 283.2
       shortScale: 1,
       penalties: 8,
-      net: 134,
+      net: 275,
       ratingPenalty: 10,
       activeEventCount: 1,
     });
   });
 
-  test('the same drive as a DashPal drive: 118 × 1.50 = 177 − 8 → +169', () => {
+  test('the same drive as a DashPal drive: 236 × 1.50 = 354 − 8 → +346', () => {
     const b = scoreDrive(
       drive({ miles: 12, safeMiles: 11.8, dashcam: true, events: [ev({ type: 'hard_brake', tier: 'minor' })] }),
       { streak: 10, safeMilesEarlierToday: 0 }
     );
     expect(b).toMatchObject({
-      milePoints: 118,
+      milePoints: 236,
       streakMult: 1.2,
       dashcamMult: 1.25,
       mult: 1.5,
-      gains: 177,
+      gains: 354,
       penalties: 8,
-      net: 169,
+      net: 346,
       ratingPenalty: 10,
       activeEventCount: 1,
     });
   });
 
-  test('5 mi, 4.6 safe, 2 phone pickups, no streak → −26', () => {
+  test('5 mi, 4.6 safe, 2 phone pickups, no streak → +20 (penalties keep their scale)', () => {
     const b = scoreDrive(
       drive({
         miles: 5,
@@ -363,20 +365,25 @@ describe('scoreDrive — spec examples', () => {
       }),
       ctx0
     );
-    expect(b.gains).toBe(46);
+    expect(b.gains).toBe(92);
     expect(b.events.map((e) => e.penalty)).toEqual([32, 40]);
     expect(b.penalties).toBe(72);
-    expect(b.net).toBe(-26);
+    expect(b.net).toBe(20);
     expect(b.ratingPenalty).toBe(80);
   });
 
-  test('3 mi clean, streak 4 → +59', () => {
+  test('3 mi clean, streak 4 → +119', () => {
     const b = scoreDrive(drive({ miles: 3, safeMiles: 3 }), { streak: 4, safeMilesEarlierToday: 0 });
-    expect(b.cleanBonus).toBe(25);
+    expect(b.cleanBonus).toBe(50);
     expect(b.streakMult).toBe(1.08);
     expect(b.mult).toBe(1.08);
-    expect(b.gains).toBe(59);
-    expect(b.net).toBe(59);
+    expect(b.gains).toBe(119); // (60 + 50) × 1.08 = 118.8
+    expect(b.net).toBe(119);
+  });
+
+  test('every breakdown records the rate it paid, a too-short one included', () => {
+    expect(scoreDrive(drive({}), ctx0).pointsPerMile).toBe(20);
+    expect(scoreDrive(drive({ miles: 0.1, safeMiles: 0.1 }), ctx0).pointsPerMile).toBe(20);
   });
 });
 
@@ -391,7 +398,7 @@ describe('scoreDrive — DashPal', () => {
 
   test('a drowsy on a clean 5 mi drive keeps the clean bonus and adds 0 to the rating, but costs its points', () => {
     const b = scoreDrive(drive({ miles: 5, safeMiles: 5, events: [ev({ type: 'drowsy', tier: 'severe' })] }), ctx0);
-    expect(b).toMatchObject({ cleanBonus: 25, gains: 75, penalties: 40, net: 35, ratingPenalty: 0, activeEventCount: 0 });
+    expect(b).toMatchObject({ cleanBonus: 50, gains: 150, penalties: 40, net: 110, ratingPenalty: 0, activeEventCount: 0 });
     expect(b.events.map((e) => e.penalty)).toEqual([40]);
   });
 
@@ -413,13 +420,13 @@ describe('scoreDrive — DashPal', () => {
   test('the DashPal multiplier stacks on the streak: 1.02 × 1.25 = 1.275', () => {
     const b = scoreDrive(drive({ miles: 10, safeMiles: 10, dashcam: true }), { streak: 1, safeMilesEarlierToday: 0 });
     expect([b.streakMult, b.dashcamMult, b.mult]).toEqual([1.02, 1.25, 1.275]);
-    expect(b.gains).toBe(159); // (100 + 25) × 1.275 = 159.375
+    expect(b.gains).toBe(319); // (200 + 50) × 1.275 = 318.75
   });
 
   test('together they cap at ×1.50', () => {
     const b = scoreDrive(drive({ miles: 10, safeMiles: 10, dashcam: true }), { streak: 30, safeMilesEarlierToday: 0 });
     expect([b.streakMult, b.dashcamMult, b.mult]).toEqual([1.3, 1.25, 1.5]);
-    expect(b.gains).toBe(188); // 125 × 1.5 = 187.5
+    expect(b.gains).toBe(375); // 250 × 1.5
   });
 
   test('the multiplier never scales penalties', () => {
@@ -517,9 +524,9 @@ describe('scoreDrive — rules', () => {
     expect(b.activeEventCount).toBe(1);
 
     const onlyRemoved = scoreDrive(drive({ miles: 5, safeMiles: 5, events: [removed] }), ctx0);
-    expect(onlyRemoved.cleanBonus).toBe(25);
+    expect(onlyRemoved.cleanBonus).toBe(50);
     expect(onlyRemoved.activeEventCount).toBe(0);
-    expect(onlyRemoved.net).toBe(75);
+    expect(onlyRemoved.net).toBe(150);
   });
 
   test('short-drive scale softens penalties under 3 mi', () => {
@@ -533,9 +540,9 @@ describe('scoreDrive — rules', () => {
     expect(scoreDrive(drive({ miles: 0.5, safeMiles: 0.5 }), ctx0).shortScale).toBeCloseTo(0.5833, 4);
   });
 
-  test('drives under 0.5 mi are not scored and score all zeros', () => {
+  test('a drive under 0.5 mi AND under 2 min is not scored and scores all zeros', () => {
     const b = scoreDrive(
-      drive({ miles: 0.49, safeMiles: 0.49, events: [ev({ type: 'hard_brake', tier: 'severe' })] }),
+      drive({ miles: 0.49, safeMiles: 0.49, durationS: 119, events: [ev({ type: 'hard_brake', tier: 'severe' })] }),
       { streak: 10, safeMilesEarlierToday: 0 }
     );
     expect(b).toMatchObject({
@@ -552,12 +559,33 @@ describe('scoreDrive — rules', () => {
       ratingPenalty: 0,
       activeEventCount: 0,
     });
+  });
+
+  test('either 0.5 mi or 2 min makes a drive a scored drive', () => {
+    expect(scoreDrive(drive({ miles: 0.5, safeMiles: 0.5, durationS: 0 }), ctx0).scored).toBe(true);
     expect(scoreDrive(drive({ miles: 0.5, safeMiles: 0.5 }), ctx0).scored).toBe(true);
+    const slow = scoreDrive(drive({ miles: 0.3, safeMiles: 0.3, durationS: 120, events: [ev({ type: 'hard_brake', tier: 'minor' })] }), ctx0);
+    expect(slow.scored).toBe(true);
+    expect(slow.reason).toBeUndefined();
+    expect(slow.milePoints).toBe(6);
+    expect(slow.shortScale).toBeCloseTo(0.55, 6);
+    expect(slow.penalties).toBe(4); // 8 × 0.55 = 4.4
+    expect(scoreDrive(drive({ miles: 0, safeMiles: 0, durationS: 600 }), ctx0).scored).toBe(true);
+  });
+
+  test('a missing or unreadable duration reads as 0, so the miles-only rule stands', () => {
+    expect(tooShort(0.49, undefined)).toBe(true);
+    expect(tooShort(0.49, Number.NaN)).toBe(true);
+    expect(tooShort(0.49, 119.9)).toBe(true);
+    expect(tooShort(0.49, 120)).toBe(false);
+    expect(tooShort(0.5, undefined)).toBe(false);
+    expect(tooShort(Number.NaN, 0)).toBe(true);
+    expect(scoreDrive(drive({ miles: 0.2, safeMiles: 0.2 }), ctx0).scored).toBe(false);
   });
 
   test('clean bonus only from 2 mi with zero active events', () => {
     expect(scoreDrive(drive({ miles: 1.99, safeMiles: 1.99 }), ctx0).cleanBonus).toBe(0);
-    expect(scoreDrive(drive({ miles: 2, safeMiles: 2 }), ctx0).cleanBonus).toBe(25);
+    expect(scoreDrive(drive({ miles: 2, safeMiles: 2 }), ctx0).cleanBonus).toBe(50);
     expect(
       scoreDrive(drive({ miles: 5, safeMiles: 5, events: [ev({ type: 'hard_corner', tier: 'minor' })] }), ctx0).cleanBonus
     ).toBe(0);
@@ -567,7 +595,7 @@ describe('scoreDrive — rules', () => {
     const b = scoreDrive(drive({ miles: 100, safeMiles: 100 }), { streak: 0, safeMilesEarlierToday: 20 });
     expect(b.safeMiles).toBe(100);
     expect(b.creditedMiles).toBe(50);
-    expect(b.milePoints).toBe(500);
+    expect(b.milePoints).toBe(1000);
   });
 
   test('daily cap exhausted: no miles credited and no clean bonus either', () => {
@@ -580,15 +608,15 @@ describe('scoreDrive — rules', () => {
   test('a partly capped clean drive still earns the clean bonus', () => {
     const b = scoreDrive(drive({ miles: 10, safeMiles: 10 }), { streak: 0, safeMilesEarlierToday: 95 });
     expect(b.creditedMiles).toBe(2.5);
-    expect(b.cleanBonus).toBe(25);
-    expect(b.gains).toBe(50);
+    expect(b.cleanBonus).toBe(50);
+    expect(b.gains).toBe(100);
   });
 
   test('loopRepeat halves credited miles after the cap and forfeits the clean bonus', () => {
     const b = scoreDrive(drive({ miles: 10, safeMiles: 10, loopRepeat: true }), { streak: 0, safeMilesEarlierToday: 35 });
     expect(b.creditedMiles).toBe(3.75); // (5 + 2.5) × 0.5
     expect(b.cleanBonus).toBe(0);
-    expect(b.gains).toBe(38); // 37.5 rounds half up
+    expect(b.gains).toBe(75);
   });
 
   test('multiplier caps at 1.30 and only scales gains', () => {
@@ -597,9 +625,9 @@ describe('scoreDrive — rules', () => {
       { streak: 30, safeMilesEarlierToday: 0 }
     );
     expect(b.streakMult).toBe(1.3);
-    expect(b.gains).toBe(117);
+    expect(b.gains).toBe(234);
     expect(b.penalties).toBe(20);
-    expect(b.net).toBe(97);
+    expect(b.net).toBe(214);
   });
 
   test('safeMiles is clamped into [0, miles]', () => {
@@ -616,11 +644,15 @@ describe('scoreDrive — rules', () => {
   });
 });
 
-test('SCORING_VERSION is 5 and the barrel exports the API', () => {
-  expect(SCORING_VERSION).toBe(5);
+test('SCORING_VERSION is 6 and the barrel exports the API', () => {
+  expect(SCORING_VERSION).toBe(6);
   expect(barrel.scoreDrive).toBe(scoreDrive);
   expect(barrel.dashcamDrive).toBe(dashcamDrive);
-  expect(barrel.SCORING_VERSION).toBe(5);
+  expect(barrel.speedingCost).toBe(speedingCost);
+  expect(barrel.phoneSpeedMult).toBe(phoneSpeedMult);
+  expect(barrel.tooShort).toBe(tooShort);
+  expect([barrel.POINTS_PER_MILE, barrel.CLEAN_BONUS]).toEqual([20, 50]);
+  expect(barrel.SCORING_VERSION).toBe(6);
 });
 
 describe('keepDashcamEvents — the DashPal limits re-applied over the whole drive', () => {

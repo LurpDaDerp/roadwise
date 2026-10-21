@@ -235,7 +235,9 @@ export const FinalizeTripPayloadV3Schema = z
 /**
  * `DriveBreakdown` from the scoring package, as the server computed it. `dashcamMult` and `mult`
  * are optional on the wire (a result stored before DashPal lacks them) and read as 1 and
- * `streakMult` when absent, so the parsed value is always a full `DriveBreakdown`.
+ * `streakMult` when absent, so the parsed value is always a full `DriveBreakdown`. `pointsPerMile`
+ * is optional too (a result stored before the rate doubled lacks it and earned 10), and
+ * `cleanBonus` may still be the 25 those results stored.
  */
 export const DriveBreakdownSchema = z
   .object({
@@ -244,7 +246,8 @@ export const DriveBreakdownSchema = z
     safeMiles: nonNegative,
     creditedMiles: nonNegative,
     milePoints: nonNegative,
-    cleanBonus: z.union([z.literal(0), z.literal(25)]),
+    pointsPerMile: z.number().positive().optional(),
+    cleanBonus: z.union([z.literal(0), z.literal(25), z.literal(50)]),
     streakMult: z.number().min(1),
     dashcamMult: z.union([z.literal(1), z.literal(1.25)]).optional(),
     mult: z.number().min(1).max(1.5).optional(),

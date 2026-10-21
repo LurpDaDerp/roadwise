@@ -11,10 +11,11 @@ import {
   DASHCAM_MIN_MOVING_S,
   DASHCAM_MIN_MPH,
   MIN_SCORED_MILES,
+  MIN_SCORED_S,
   SPEEDING_GRACE_S,
 } from './thresholds';
 
-export const SCORING_VERSION = 5;
+export const SCORING_VERSION = 6;
 
 export type EventType =
   | 'speeding'
@@ -132,8 +133,8 @@ export const RATING_PENALTY = {
 type PenaltyTable = typeof BASE_PENALTY | typeof RATING_PENALTY;
 
 /** Points per credited safe mile, and the clean-drive bonus (from `CLEAN_BONUS_MIN_MILES`). */
-export const POINTS_PER_MILE = 10;
-export const CLEAN_BONUS = 25;
+export const POINTS_PER_MILE = 20;
+export const CLEAN_BONUS = 50;
 export const CLEAN_BONUS_MIN_MILES = 2;
 /** Daily cap bands on safe miles: full rate to 40, half rate to 100, nothing beyond. */
 export const DAILY_FULL_MILES = 40;
@@ -395,6 +396,11 @@ export interface DriveInput {
   loopRepeat?: boolean;
   /** A DashPal drive (`dashcamDrive` of its seconds): gains × `DASHCAM_MULT`. Absent: false. */
   dashcam?: boolean;
+  /**
+   * The drive's length in seconds, start to end (stops included). Read only for the minimum-drive
+   * rule: absent reads as 0, so a caller that does not send it keeps the miles-only rule.
+   */
+  durationS?: number;
 }
 
 export interface DriveContext {
@@ -403,16 +409,18 @@ export interface DriveContext {
 }
 
 export interface DriveBreakdown {
-  /** miles < 0.5 → not scored, all point fields zero. */
+  /** Under `MIN_SCORED_MILES` and under `MIN_SCORED_S` → not scored, all point fields zero. */
   scored: boolean;
   reason?: 'too_short';
   safeMiles: number;
   /** After the daily cap (and ×0.5 if loopRepeat), 3 dp. */
   creditedMiles: number;
-  /** creditedMiles × 10 (unrounded). */
+  /** creditedMiles × pointsPerMile (unrounded). */
   milePoints: number;
-  /** 25 iff miles ≥ 2, zero active non-DashPal events, creditedMiles > 0 and not a loop repeat. */
-  cleanBonus: 0 | 25;
+  /** The points each credited mile earned (`POINTS_PER_MILE`). A breakdown stored before it was recorded earned 10. */
+  pointsPerMile?: number;
+  /** `CLEAN_BONUS` iff miles ≥ 2, zero active non-DashPal events, creditedMiles > 0 and not a loop repeat (25 on a breakdown stored before the rate doubled). */
+  cleanBonus: 0 | 25 | 50;
   /** The streak multiplier, 1 + 0.02 × streak capped at 1.30. */
   streakMult: number;
   /** `DASHCAM_MULT` on a DashPal drive, else 1. */
@@ -434,15 +442,23 @@ export interface DriveBreakdown {
   activeEventCount: number;
 }
 
+/**
+ * Whether a drive is too short to score: under `MIN_SCORED_MILES` AND under `MIN_SCORED_S`. Either
+ * one reached scores it. A missing or unreadable duration reads as 0.
+ */
+export function tooShort(miles: number, durationS: number | undefined): boolean {
+  return !(miles >= MIN_SCORED_MILES) && !(durationS !== undefined && durationS >= MIN_SCORED_S);
+}
+
 /** Score one drive. Deterministic; does not mutate its input. */
 export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown {
   const streakMult = nextMultiplier(ctx.streak);
   const dashcamMult: 1 | 1.25 = input.dashcam === true ? DASHCAM_MULT : 1;
   const mult = Math.min(MULT_CAP, roundTo(streakMult * dashcamMult, 4));
   const shortScale = Math.min(1, 0.5 + Math.max(0, input.miles) / 6);
-  const base = { streakMult, dashcamMult, mult, shortScale };
+  const base = { pointsPerMile: POINTS_PER_MILE, streakMult, dashcamMult, mult, shortScale };
 
-  if (!(input.miles >= MIN_SCORED_MILES)) {
+  if (tooShort(input.miles, input.durationS)) {
     return {
       scored: false,
       reason: 'too_short',
@@ -474,7 +490,7 @@ export function scoreDrive(input: DriveInput, ctx: DriveContext): DriveBreakdown
   // No bonus once the daily cap is used up or on a repeated loop, so short clean loops can't farm it.
   const earnsBonus =
     input.miles >= CLEAN_BONUS_MIN_MILES && phoneCount === 0 && creditedMiles > 0 && !input.loopRepeat;
-  const cleanBonus: 0 | 25 = earnsBonus ? CLEAN_BONUS : 0;
+  const cleanBonus: 0 | 50 = earnsBonus ? CLEAN_BONUS : 0;
   const gains = roundTo((milePoints + cleanBonus) * mult);
 
   const seen: Partial<Record<EventType, number>> = {};

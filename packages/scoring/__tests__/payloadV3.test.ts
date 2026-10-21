@@ -221,16 +221,17 @@ const breakdown: DriveBreakdown = {
   scored: true,
   safeMiles: 11.8,
   creditedMiles: 11.8,
-  milePoints: 118,
+  milePoints: 236,
+  pointsPerMile: 20,
   cleanBonus: 0,
   streakMult: 1.2,
   dashcamMult: 1,
   mult: 1.2,
-  gains: 142,
+  gains: 283,
   shortScale: 1,
   events: [{ id: uuid(1001), penalty: 10 }],
   penalties: 10,
-  net: 132,
+  net: 273,
   ratingPenalty: 10,
   activeEventCount: 1,
 };
@@ -242,7 +243,7 @@ const response = (): FinalizeTripResponseV3 => ({
   scored: true,
   reason: null,
   breakdown,
-  net: 132,
+  net: 273,
   streak: { before: 10, after: 11, outcome: 'grew', nextMult: 1.22, atRisk: false, freezes: 2, freezeEarned: false },
   progress: { points: 1200, lifetime: 1500, level: 4, levelUp: true, safetyRating: 92.5, ranked: true },
   achievements: ['streak_10'],
@@ -265,14 +266,31 @@ describe('FinalizeTripResponseV3Schema', () => {
   });
 
   test('a DashPal breakdown round-trips', () => {
-    const b = { ...breakdown, dashcamMult: 1.25 as const, mult: 1.5, gains: 177, net: 167 };
-    expect(FinalizeTripResponseV3Schema.parse({ ...response(), breakdown: b, net: 167 }).breakdown).toEqual(b);
+    const b = { ...breakdown, dashcamMult: 1.25 as const, mult: 1.5, gains: 354, net: 344 };
+    expect(FinalizeTripResponseV3Schema.parse({ ...response(), breakdown: b, net: 344 }).breakdown).toEqual(b);
+  });
+
+  test('a clean bonus of 50 (now), 25 (stored before the rate doubled) or 0', () => {
+    for (const cleanBonus of [0, 25, 50] as const) {
+      const b = { ...breakdown, cleanBonus };
+      expect(FinalizeTripResponseV3Schema.parse({ ...response(), breakdown: b }).breakdown).toEqual(b);
+    }
+  });
+
+  test('a breakdown stored before pointsPerMile was recorded parses without it (the receipt reads it as 10)', () => {
+    const { pointsPerMile: _p, ...old } = breakdown;
+    const r = FinalizeTripResponseV3Schema.parse({ ...response(), breakdown: old });
+    expect(r.breakdown).not.toHaveProperty('pointsPerMile');
+    expect(r.breakdown.milePoints).toBe(236);
   });
 
   test.each([
     ['a dashcamMult other than 1 or 1.25', { dashcamMult: 1.3 }],
     ['a mult above the 1.50 cap', { mult: 1.51 }],
     ['a mult below 1', { mult: 0.9 }],
+    ['a clean bonus other than 0, 25 or 50', { cleanBonus: 30 }],
+    ['a pointsPerMile of 0', { pointsPerMile: 0 }],
+    ['a negative pointsPerMile', { pointsPerMile: -10 }],
   ])('rejects %s', (_name, over) => {
     expect(FinalizeTripResponseV3Schema.safeParse({ ...response(), breakdown: { ...breakdown, ...over } }).success).toBe(false);
   });
