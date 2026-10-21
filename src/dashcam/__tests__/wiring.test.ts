@@ -233,15 +233,19 @@ describe('phone-first sound wiring (bootstrap → the DashPal runtime → drive-
     const rt = await bootstrapApp(d.deps);
     await rt.dashcam!.ready;
     for (let i = 0; i < 80; i++) await new Promise<void>((resolve) => setImmediate(resolve));
-    return { rt, native, ble, cam, errors: d.errors };
+    return { rt, native, ble, cam, errors: d.errors, source: d.source };
   }
 
   test('the player counts as available whenever the ports loaded, with or without a drive: a failed sound means "cannot play" for 30 s and no longer, also during a drive', async () => {
     const t = { now: clock };
-    const { rt } = await android(false, () => t.now);
+    const { rt, source } = await android(false, () => t.now);
     rt.drive.reportAlertsUnavailable();
     expect(rt.dashcam!.link.canPlay(true)).toBe(true);
-    expect(await rt.drive.start()).toMatchObject({ ok: true });
+    // Start opens the wait; the capture's rows confirm the drive (10 mph held 15 s).
+    expect(await rt.drive.start()).toEqual({ ok: true, waiting: true });
+    source.loadTrace(rows(30, { t0: t.now }));
+    while (source.step()) await rt.drive.settled();
+    expect(rt.drive.snapshot().status).toBe('recording');
     expect(rt.dashcam!.link.canPlay(true)).toBe(true);
     // A DashPal sound fails during the drive: the host's flag stays set for the rest of the drive
     // (no DashPal sound plays to clear it), the link's rule holds 30 s.
