@@ -25,14 +25,13 @@ export interface Expectation {
   tier?: Tier;
   durationMin?: number;
   durationMax?: number;
-  stoppedInTraffic?: boolean;
   /** no event of this type anywhere in the trace */
   absent?: true;
 }
 
 // eyes_off and drowsy come only from the DashPal dashcam: no phone trace ever raises them, but an
 // expectation may still name one (e.g. as `absent`).
-const EVENT_TYPES = ['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling', 'eyes_off', 'drowsy'] as const;
+const EVENT_TYPES = ['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'eyes_off', 'drowsy'] as const;
 const TIERS = ['minor', 'moderate', 'severe'] as const;
 
 /** Annotated with the engine's own types, so a field added to `FeatureRow` and forgotten here fails `tsc`. */
@@ -78,20 +77,11 @@ export const expectationSchema: z.ZodType<Expectation> = z.strictObject({
   tier: z.enum(TIERS).optional(),
   durationMin: z.number().nonnegative().optional(),
   durationMax: z.number().nonnegative().optional(),
-  stoppedInTraffic: z.boolean().optional(),
   absent: z.literal(true).optional(),
 });
 
 export const traceSchema = z.strictObject({
   name: z.string().min(1),
-  /** A hands-free call is active for the whole trace. */
-  callActive: z.boolean().optional(),
-  /** The drive's screen-switch signal (default `reliable`: an Android phone). */
-  switchSignal: z.enum(['reliable', 'lagged', 'unproven', 'none']).optional(),
-  /** iOS: the lock delay measured before the drive, ms (default none). */
-  lockDelayMs: z.number().int().nonnegative().nullable().optional(),
-  /** The phone (default `android`, or `ios` for an iPhone-only signal). */
-  platform: z.enum(['ios', 'android']).optional(),
   rows: z.array(featureRowSchema).min(1),
   limits: z.array(limitEntrySchema),
   expected: z.array(expectationSchema),

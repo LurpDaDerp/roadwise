@@ -1,9 +1,13 @@
 // The replay harness: feed a trace through the real detector suite and check what came out.
-// `runTrace` never asserts anything itself; it returns the events and a list of human-readable
-// failures, so a Jest test can print exactly what the detectors did.
-import { NO_EVENTS_FIRST_S } from '@scoring';
+// `runTrace` never asserts anything itself; it returns the events, the drive's opportunity counters
+// and a list of human-readable failures, so a Jest test can print exactly what the detectors did.
+// The counters come from the engine's own session path (`appendRow` after the detectors, as the
+// machine does it), closed as finalize closes them.
+import { NO_EVENTS_FIRST_S, type Exposure } from '@scoring';
 
 import { createDetectors } from '../detectors';
+import { closeExposure } from '../engine/exposure';
+import { appendRow, createSession } from '../engine/session';
 import type { DetectedEvent, DetectorContext } from '../engine/types';
 import type { Expectation, Trace } from './trace';
 import { limitAt } from './trace';
@@ -13,6 +17,8 @@ export const DEFAULT_TOLERANCE_S = 2;
 
 export interface TraceResult {
   events: DetectedEvent[];
+  /** slowdowns, speed-ups, turns, limit seconds and moving seconds over the whole trace */
+  exposure: Exposure;
   passes: boolean;
   failures: string[];
 }
@@ -36,9 +42,6 @@ function checkBounds(exp: Expectation, e: DetectedEvent, base: number): string[]
   if (exp.tier !== undefined && e.tier !== exp.tier) out.push(`${where}: tier ${e.tier}, expected ${exp.tier}`);
   if (exp.durationMin !== undefined && e.durationS < exp.durationMin) out.push(`${where}: durationS ${e.durationS} is below durationMin ${exp.durationMin}`);
   if (exp.durationMax !== undefined && e.durationS > exp.durationMax) out.push(`${where}: durationS ${e.durationS} is above durationMax ${exp.durationMax}`);
-  if (exp.stoppedInTraffic !== undefined && (e.stoppedInTraffic === true) !== exp.stoppedInTraffic) {
-    out.push(`${where}: stoppedInTraffic ${e.stoppedInTraffic === true}, expected ${exp.stoppedInTraffic}`);
-  }
   return out;
 }
 
@@ -61,19 +64,17 @@ export function runTrace(trace: Trace): TraceResult {
   const suite = createDetectors(counterIds());
   const base = trace.rows[0]?.ts ?? 0;
   // A drive started stopped at the first row: the 30 s warm-up.
-  const switchSignal = trace.switchSignal ?? 'reliable';
-  const ctx: DetectorContext = {
-    warmupEndsAt: base + NO_EVENTS_FIRST_S * 1000,
-    callActive: trace.callActive === true,
-    switchSignal,
-    lockDelayMs: trace.lockDelayMs ?? null,
-    platform: trace.platform ?? (switchSignal === 'lagged' || switchSignal === 'unproven' ? 'ios' : 'android'),
-  };
+  const ctx: DetectorContext = { warmupEndsAt: base + NO_EVENTS_FIRST_S * 1000 };
+  const session = createSession({ clientTripId: trace.name, startedAt: base, origin: 'manual' });
   const events: DetectedEvent[] = [];
-  for (const row of trace.rows) events.push(...suite.push(row, limitAt(trace.limits, row.ts), ctx));
+  for (const row of trace.rows) {
+    events.push(...suite.push(row, limitAt(trace.limits, row.ts), ctx));
+    appendRow(session, row, { unsafe: suite.unsafe(), limitUsable: suite.speedingNow() !== null });
+  }
   events.push(...suite.flush());
+  const exposure = closeExposure(session.exposure, session.movingRows);
 
   const noEvents = trace.noEvents && events.length > 0 ? [`expected no events at all; ${events.length} turned up: ${list(events, base)}`] : [];
   const failures = [...noEvents, ...trace.expected.flatMap((exp) => checkExpectation(exp, events, base))].map((line) => `${trace.name}: ${line}`);
-  return { events, passes: failures.length === 0, failures };
+  return { events, exposure, passes: failures.length === 0, failures };
 }

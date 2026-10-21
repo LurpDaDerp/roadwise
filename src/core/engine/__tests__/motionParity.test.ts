@@ -18,7 +18,6 @@ interface Scenario {
   name: string;
   rows: FeatureRow[];
   limitFor: (ts: number) => LimitSample;
-  callActive: boolean;
   /** epoch ms of the manual end after the last row, or null to let the drive end by itself. */
   endAt: number | null;
 }
@@ -37,13 +36,13 @@ function lifecycle(name: string, driveRows: number, parkedRows: number, endAt: n
     rows.push(row({ ts: T0 + i * 1000, lat: LAT, lng: LNG + x / M_PER_DEG_LNG, speed: mps }));
     x += mps;
   }
-  return { name, rows, limitFor: () => limit(mph(35)), callActive: false, endAt };
+  return { name, rows, limitFor: () => limit(mph(35)), endAt };
 }
 
 const scenarios: Scenario[] = [
   ...Object.entries(TRACE_BUILDERS).map(([name, build]) => {
     const t = build();
-    return { name, rows: t.rows, limitFor: (ts: number) => limitAt(t.limits, ts), callActive: t.callActive === true, endAt: t.rows.at(-1)!.ts + 1000 };
+    return { name, rows: t.rows, limitFor: (ts: number) => limitAt(t.limits, ts), endAt: t.rows.at(-1)!.ts + 1000 };
   }),
   // The 15 min idle end, cut at the last movement.
   lifecycle('idle end', 60, 905, null),

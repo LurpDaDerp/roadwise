@@ -19,11 +19,6 @@
       "type": "hard_brake",
       "startsNear": 1700000000000,
       "absent": true
-    },
-    {
-      "type": "phone_pickup",
-      "startsNear": 1700000000000,
-      "absent": true
     }
   ],
   "noEvents": true,

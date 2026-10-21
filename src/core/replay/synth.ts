@@ -42,17 +42,26 @@ type Shape = (i: number) => Partial<FeatureRow> & { speedMph?: number };
 
 /**
  * `n` rows at 1 Hz. `shape(i)` returns the row's overrides; `speedMph` (default 35) drives the
- * position, which is integrated from the speed so the GNSS agrees with itself.
+ * position, which is integrated from the speed so the GNSS agrees with itself: due east, or along
+ * each row's course with `followCourse` (a drive that turns).
  */
-export function drive(n: number, shape: Shape = () => ({})): FeatureRow[] {
+export function drive(n: number, shape: Shape = () => ({}), opts: { followCourse?: boolean } = {}): FeatureRow[] {
   const rows: FeatureRow[] = [];
+  let lat = START.lat;
   let lng = START.lng;
   for (let i = 0; i < n; i += 1) {
     const { speedMph, ...over } = shape(i);
     const mph = speedMph ?? 35;
     const speed = mph * MPH;
-    rows.push({ ...ROW_DEFAULTS, ts: T0 + i * 1000, lat: START.lat, lng, speed, ...over });
-    lng += speed / M_PER_DEG_LNG;
+    const row: FeatureRow = { ...ROW_DEFAULTS, ts: T0 + i * 1000, lat, lng, speed, ...over };
+    rows.push(row);
+    if (opts.followCourse === true) {
+      const rad = (row.course * Math.PI) / 180;
+      lat += (speed * Math.cos(rad)) / M_PER_DEG_LAT;
+      lng += (speed * Math.sin(rad)) / M_PER_DEG_LNG;
+    } else {
+      lng += speed / M_PER_DEG_LNG;
+    }
   }
   return rows;
 }
@@ -63,19 +72,6 @@ const unknown = (fromTs: number) => ({ fromTs, limitMps: null, source: 'unknown'
 const at = (i: number): number => T0 + i * 1000;
 const between = (i: number, a: number, b: number): boolean => i >= a && i < b;
 
-/**
- * The navigation app opened with the navigation button: unlocked, screen on, RoadWise in the
- * background, and every row stamped with the button's exemption by the host.
- */
-const NAVIGATION_IN_FRONT = { locked: false, screenOn: true, appForeground: false, exempt: 'nav' } as const;
-
-/** Another app in front of an unlocked phone, reached any other way than the navigation button: a screen switch. */
-const OTHER_APP = { locked: false, screenOn: true, appForeground: false } as const;
-/** RoadWise in front of an unlocked phone with its screen on. */
-const ROADWISE = { locked: false, screenOn: true, appForeground: true } as const;
-/** iPhone: the lock report (protected data gone) with RoadWise in the background. */
-const IOS_LOCKED = { locked: true, screenOn: false, appForeground: false } as const;
-
 export const TRACE_BUILDERS: Record<string, () => Trace> = {
   /** A clean commute at the limit: nothing fires. */
   'clean-commute': () => ({
@@ -85,7 +81,6 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     expected: [
       { type: 'speeding', startsNear: T0, absent: true },
       { type: 'hard_brake', startsNear: T0, absent: true },
-      { type: 'phone_pickup', startsNear: T0, absent: true },
     ],
     noEvents: true,
   }),
@@ -276,191 +271,49 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** Handling for 8 s at 35 mph: one pickup of 8 s, no handling event. */
-  'phone-pickup': () => ({
-    name: 'phone-pickup',
-    rows: drive(200, (i) => ({ handlingScore: between(i, 100, 108) ? 0.9 : 0, gravityStability: between(i, 100, 108) ? 0.6 : 0.99, locked: !between(i, 100, 108) })),
-    limits: [posted(35)],
-    expected: [
-      { type: 'phone_pickup', startsNear: at(100), durationMin: 7, durationMax: 9, stoppedInTraffic: false },
-      { type: 'phone_handling', startsNear: at(100), absent: true },
-    ],
-  }),
-
-  /** Handling for 40 s: a pickup and a severe handling event of 25 s (2 units). */
-  'phone-handling-long': () => ({
-    name: 'phone-handling-long',
-    rows: drive(240, (i) => ({ handlingScore: between(i, 100, 140) ? 0.9 : 0, gravityStability: between(i, 100, 140) ? 0.6 : 0.99 })),
-    limits: [posted(35)],
-    expected: [
-      { type: 'phone_pickup', startsNear: at(100), durationMin: 39, durationMax: 41 },
-      { type: 'phone_handling', startsNear: at(115), tier: 'severe', durationMin: 24, durationMax: 26 },
-    ],
-  }),
-
-  /** A 2-s tap on a mounted, stable phone: not a pickup. */
-  'phone-tap-mounted': () => ({
-    name: 'phone-tap-mounted',
-    rows: drive(200, (i) => ({ handlingScore: between(i, 100, 102) ? 0.8 : 0 })),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
-    noEvents: true,
-  }),
-
-  /** Handling for 10 s while stopped at a light mid-drive: a pickup, stopped in traffic. */
-  'phone-stopped-in-traffic': () => ({
-    name: 'phone-stopped-in-traffic',
-    rows: drive(240, (i) => ({ speedMph: between(i, 90, 130) ? 0 : 35, handlingScore: between(i, 100, 110) ? 0.9 : 0, gravityStability: between(i, 100, 110) ? 0.6 : 0.99 })),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), stoppedInTraffic: true }],
-  }),
-
-  /** Handling before the car has ever moved (parked at the start): nothing. */
-  'phone-parked-start': () => ({
-    name: 'phone-parked-start',
-    rows: drive(200, (i) => ({ speedMph: i < 80 ? 0 : 35, handlingScore: between(i, 40, 60) ? 0.9 : 0, gravityStability: between(i, 40, 60) ? 0.6 : 0.99 })),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(40), absent: true }],
-    noEvents: true,
-  }),
-
-  /** Handling during a hands-free call: suppressed. */
-  'phone-hands-free-call': () => ({
-    name: 'phone-hands-free-call',
-    callActive: true,
-    rows: drive(200, (i) => ({ handlingScore: between(i, 100, 110) ? 0.9 : 0, gravityStability: between(i, 100, 110) ? 0.6 : 0.99 })),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+  /**
+   * A right turn at a city corner: 90° in 4 s at a steady 20 mph (0.36 g sideways, under the corner
+   * line), the fixes following the road east then south: one turn, no event.
+   */
+  'turn-right-90': () => ({
+    name: 'turn-right-90',
+    rows: drive(
+      200,
+      (i) => {
+        const turning = between(i, 100, 104);
+        return {
+          speedMph: 20,
+          course: i < 100 ? 90 : i >= 104 ? 180 : 90 + 22.5 * (i - 99),
+          aLatMin: turning ? -0.36 : -0.02,
+          yawRateMax: turning ? 0.39 : 0.01,
+        };
+      },
+      { followCourse: true }
+    ),
+    limits: [posted(25)],
+    expected: [{ type: 'hard_corner', startsNear: at(100), absent: true }],
     noEvents: true,
   }),
 
   /**
-   * The navigation app, opened with the navigation button, in front the whole drive: unlocked,
-   * screen on, RoadWise in the background, the phone steady in its mount with road shake, potholes,
-   * a GPS gap and a stop: no phone use.
+   * Stop-and-go: 30 mph, then three stops at lights (10 s down to 0 at 0.14 g, 20 s stopped, 10 s
+   * back up to 30, 30 s at 30): three slowdowns and three speed-ups, no hard brake or start.
    */
-  'phone-navigation-in-front': () => ({
-    name: 'phone-navigation-in-front',
-    rows: drive(300, (i) => {
-      const pothole = between(i, 60, 62) || between(i, 90, 92) || between(i, 150, 152);
-      return {
-        ...NAVIGATION_IN_FRONT,
-        speedMph: between(i, 200, 231) ? 0 : 35,
-        hAcc: between(i, 120, 125) ? 40 : 5,
-        handlingScore: pothole ? 0.7 : i % 7 === 0 ? 0.3 : 0.1,
-        gravityStability: pothole ? 0.6 : 0.93,
-      };
+  'stop-and-go': () => ({
+    name: 'stop-and-go',
+    rows: drive(250, (i) => {
+      const k = i < 40 ? -1 : (i - 40) % 70;
+      if (k < 0 || k >= 40) return { speedMph: 30 };
+      if (k < 10) return { speedMph: 30 - 3 * (k + 1), aLonMin: -0.14 };
+      if (k < 30) return { speedMph: 0 };
+      return { speedMph: 3 * (k - 29), aLonMax: 0.14 };
     }),
     limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(40), absent: true }],
-    noEvents: true,
-  }),
-
-  /** The phone lifted and handled for 10 s over the navigation app opened with the button: a pickup (motion counts there too). */
-  'phone-handled-over-navigation': () => ({
-    name: 'phone-handled-over-navigation',
-    rows: drive(200, (i) => ({
-      ...NAVIGATION_IN_FRONT,
-      handlingScore: between(i, 100, 110) ? 0.9 : 0,
-      gravityStability: between(i, 100, 110) ? 0.6 : 0.99,
-    })),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), durationMin: 9, durationMax: 11 }],
-  }),
-
-  /** Android: 41 s in another app at 35 mph: one pickup from the first away row, and handling past 15 s. */
-  'phone-switch-android': () => ({
-    name: 'phone-switch-android',
-    rows: drive(240, (i) => (between(i, 100, 141) ? OTHER_APP : ROADWISE)),
-    limits: [posted(35)],
     expected: [
-      { type: 'phone_pickup', startsNear: at(100), durationMin: 40, durationMax: 42 },
-      { type: 'phone_handling', startsNear: at(115), tier: 'severe' },
+      { type: 'hard_brake', startsNear: at(40), absent: true },
+      { type: 'hard_accel', startsNear: at(70), absent: true },
     ],
-  }),
-
-  /** A counted switch through a 6-s GPS gap is one pickup, not two. */
-  'phone-switch-gps-gap': () => ({
-    name: 'phone-switch-gps-gap',
-    rows: drive(240, (i) => {
-      if (!between(i, 100, 160)) return ROADWISE;
-      if (between(i, 120, 126)) return { ...OTHER_APP, gnssValid: false, hAcc: 9999, speedAcc: -1, course: -1, speedMph: 35, speed: -1 };
-      return OTHER_APP;
-    }),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), durationMin: 59, durationMax: 61 }],
-  }),
-
-  /** Android: RoadWise not in front while the phone is locked with its screen off: never a switch. */
-  'phone-switch-locked': () => ({
-    name: 'phone-switch-locked',
-    rows: drive(240, (i) => (between(i, 100, 161) ? { locked: true, screenOn: false, appForeground: false } : ROADWISE)),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
     noEvents: true,
-  }),
-
-  /** The dialer in front through a 61-s call: the call's own screen, not a switch. */
-  'phone-switch-call': () => ({
-    name: 'phone-switch-call',
-    rows: drive(240, (i) => (between(i, 100, 161) ? { ...OTHER_APP, call: 'live' as const } : ROADWISE)),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
-    noEvents: true,
-  }),
-
-  /** Another app in front while parked before the car ever moved, kept as it pulls away: charged from the first second above 5 mph. */
-  'phone-switch-parked-start': () => ({
-    name: 'phone-switch-parked-start',
-    rows: drive(200, (i) => ({ ...(i < 90 ? OTHER_APP : ROADWISE), speedMph: i < 60 ? 0 : 35 })),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(60), durationMin: 29, durationMax: 31, stoppedInTraffic: false }],
-  }),
-
-  /**
-   * Android: three 2-s switches (each too short to count alone) with 4 s back in RoadWise between
-   * them: one pickup at the third return, from the first one's start, no handling.
-   */
-  'phone-switch-burst': () => ({
-    name: 'phone-switch-burst',
-    rows: drive(240, (i) => (between(i, 100, 102) || between(i, 106, 108) || between(i, 112, 114) ? OTHER_APP : ROADWISE)),
-    limits: [posted(35)],
-    expected: [
-      { type: 'phone_pickup', startsNear: at(100), durationMin: 14, durationMax: 14 },
-      { type: 'phone_handling', startsNear: at(100), absent: true },
-    ],
-  }),
-
-  /** iPhone: the side button pressed with RoadWise in front; its lock report 10 s later: not a switch. */
-  'phone-switch-ios-lock': () => ({
-    name: 'phone-switch-ios-lock',
-    switchSignal: 'lagged',
-    platform: 'ios',
-    rows: drive(240, (i) => (between(i, 100, 110) ? OTHER_APP : i >= 110 && i < 200 ? IOS_LOCKED : ROADWISE)),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
-    noEvents: true,
-  }),
-
-  /** iPhone: a lock report 17 s late: never counted (an iPhone switch counts at 26 s), so no alert and nothing charged. */
-  'phone-switch-ios-slow-lock': () => ({
-    name: 'phone-switch-ios-slow-lock',
-    switchSignal: 'lagged',
-    platform: 'ios',
-    rows: drive(240, (i) => (between(i, 100, 117) ? OTHER_APP : i >= 117 && i < 200 ? IOS_LOCKED : ROADWISE)),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
-    noEvents: true,
-  }),
-
-  /** iPhone: 41 s in another app: one pickup from the first away row (it counts at 26 s). */
-  'phone-switch-ios': () => ({
-    name: 'phone-switch-ios',
-    switchSignal: 'lagged',
-    platform: 'ios',
-    rows: drive(240, (i) => (between(i, 100, 141) ? OTHER_APP : ROADWISE)),
-    limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), durationMin: 40, durationMax: 42 }],
   }),
 
   /** The limit is unknown for a stretch: speed there is not judged. */

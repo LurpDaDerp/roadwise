@@ -1,7 +1,14 @@
 /** @jest-environment node */
+import { createDetectors } from '@/core/detectors';
+import type { TripSession } from '@/core/engine/engine.types';
+import { createEngine } from '@/core/engine/machine';
+import { rebuildFromSamples } from '@/core/engine/replay';
+import type { LimitSample } from '@/core/engine/types';
 import { runTrace } from '@/core/replay/runTrace';
 import { TRACE_BUILDERS, serializeTrace } from '@/core/replay/synth';
-import { parseTrace } from '@/core/replay/trace';
+import { limitAt, parseTrace, type Trace } from '@/core/replay/trace';
+import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
+import { createSamplesRepo, createTripsRepo, migrate } from '@/data/db';
 
 declare const __dirname: string;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the root tsconfig has no Node typings
@@ -42,6 +49,83 @@ test.each(names)('%s is a 1 Hz drive that asserts something', (name) => {
   expect(trace.expected.length).toBeGreaterThan(0);
   const gaps = new Set(trace.rows.slice(1).map((r, i) => r.ts - trace.rows[i]!.ts));
   expect([...gaps]).toEqual([1000]);
+});
+
+/**
+ * Each trace's opportunity counters (slowdowns, speed-ups, turns, limit seconds, moving seconds), with
+ * the harness's 30 s warm-up. The synthetic drives run straight east, so only `turn-right-90` turns;
+ * a 35 → 25 mph brake is a 10 mph drop, under the 12 mph slowdown line.
+ */
+const EXPOSURE: Record<string, readonly [number, number, number, number, number]> = {
+  'clean-commute': [0, 0, 0, 270, 300],
+  'hard-accel-confirmed': [0, 0, 0, 170, 200],
+  'hard-brake-confirmed': [0, 0, 0, 170, 200],
+  'hard-brake-poor-speedacc': [0, 0, 0, 168, 200],
+  'hard-brake-severe': [1, 0, 0, 170, 200],
+  'hard-brake-unconfirmed': [0, 0, 0, 170, 200],
+  'hard-corner-no-course': [0, 0, 0, 170, 200],
+  'hard-corner-plausible': [0, 0, 0, 170, 200],
+  'hard-corner-straight': [0, 0, 0, 170, 200],
+  'hard-corner-wrong-side': [0, 0, 0, 170, 200],
+  'phone-slide-false-positive': [0, 0, 0, 170, 200],
+  'speeding-blip': [0, 0, 0, 170, 200],
+  'speeding-blip-hover': [0, 0, 0, 170, 200],
+  'speeding-grace': [1, 1, 0, 170, 200],
+  'speeding-hover': [0, 0, 0, 210, 240],
+  'speeding-minor': [0, 0, 0, 210, 240],
+  'speeding-poor-gps': [1, 1, 0, 130, 200],
+  'speeding-poor-speedacc': [0, 0, 0, 190, 240],
+  'speeding-severe-brief': [1, 1, 0, 170, 200],
+  'speeding-split': [0, 0, 0, 170, 200],
+  'speeding-unknown-limit': [1, 1, 0, 120, 200],
+  'speeding-warmup': [1, 0, 0, 170, 200],
+  'stop-and-go': [3, 3, 0, 139, 181],
+  'turn-right-90': [0, 0, 1, 170, 200],
+};
+
+test('every trace pins its opportunity counters', () => {
+  expect(Object.keys(EXPOSURE).sort()).toEqual(names);
+});
+
+test.each(names)('%s counts its slowdowns, speed-ups, turns, limit time and moving time', (name) => {
+  const e = runTrace(load(name)).exposure;
+  expect([e.slowdowns, e.speedups, e.turns, e.limitS, e.movingS]).toEqual(EXPOSURE[name]);
+});
+
+/** The trace's limits looked up by position, as the tiles answer the engine (the first row at a spot decides). */
+function limitsByPlace(trace: Trace): { lookup: (lat: number, lng: number) => LimitSample } {
+  const at = new Map<string, LimitSample>();
+  for (const r of trace.rows) if (!at.has(`${r.lat},${r.lng}`)) at.set(`${r.lat},${r.lng}`, limitAt(trace.limits, r.ts));
+  return { lookup: (lat, lng) => at.get(`${lat},${lng}`)! };
+}
+
+test.each(names)('%s gives the same counters live and rebuilt from its stored rows', async (name) => {
+  const trace = load(name);
+  const t0 = trace.rows[0]!.ts;
+  const limits = limitsByPlace(trace);
+  const engine = createEngine({
+    now: () => t0,
+    newId: () => 'live',
+    limits: { lookup: (lat, lng) => limits.lookup(lat, lng), prefetch: () => {} },
+    createDetectors: () => createDetectors(() => 'x'),
+    ctx: () => ({}),
+    onAlert: () => {},
+    onCheckpoint: async () => {},
+    onFinalize: async () => {},
+    onCancel: async () => {},
+  });
+  await engine.dispatch({ type: 'start', ts: t0, origin: 'manual', continues: false });
+  for (const row of trace.rows) await engine.dispatch({ type: 'row', row });
+  const live = engine.session() as Readonly<TripSession>;
+
+  const db = await createSqlJsDb();
+  await migrate(db);
+  await createTripsRepo(db).insert({ client_trip_id: 'live', started_at: t0, tz: 'America/Los_Angeles', status: 'recording', origin: 'manual' }, t0);
+  await createSamplesRepo(db).appendMany('live', trace.rows.map((row) => ({ ts: row.ts, row })));
+  const trip = (await createTripsRepo(db).get('live'))!;
+  const rebuilt = (await rebuildFromSamples(db, trip, { createDetectors: () => createDetectors(() => 'x'), limits: { lookup: async (lat, lng) => limits.lookup(lat, lng) } }))!.session;
+  expect(rebuilt.exposure).toEqual(live.exposure);
+  expect(rebuilt.movingRows).toBe(live.movingRows);
 });
 
 test('parseTrace refuses an unknown key and a bad expectation', () => {
