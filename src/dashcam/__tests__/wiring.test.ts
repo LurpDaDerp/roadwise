@@ -153,10 +153,10 @@ test('row 41: crash mid-drive, then recovery finalizes the orphan with its store
     endedAt: trip!.ended_at!,
   })) as DashcamTripFacts;
   expect(facts).toMatchObject({ dashcamId: CAM, movingS: 300, coveredS: 280, synced: false });
-  // Called here after the recovery finalize purged the samples, so no speed (finalize itself calls
-  // it before the purge).
+  // The finalize keeps the drive's samples through the continuation hold (they go once the upload is
+  // done), so the speed at the event still comes from them: the fixture's 15 m/s.
   expect(facts.events).toEqual([
-    { id: '11111111-2222-4333-8444-555555555555', kind: 'drowsy', startedAt: started + 120_000 - 1500, durationS: 1.5, speedMph: null },
+    { id: '11111111-2222-4333-8444-555555555555', kind: 'drowsy', startedAt: started + 120_000 - 1500, durationS: 1.5, speedMph: expect.closeTo(15 / 0.44704, 6) },
   ]);
   // The paired dashcam's transport is not available under Jest: reported, never fatal.
   expect(rt.dashcam).not.toBeNull();
@@ -174,7 +174,11 @@ test('the host finalize passes the DashPal facts too, and a launch with no DashP
   // Creating the transport would require the BLE native module, which Jest lacks: no error means
   // it was never created.
   expect(d.errors.filter((e) => e.startsWith('dashcam'))).toEqual([]);
-  expect(await rt.drive.start()).toEqual({ ok: true, clientTripId: uuid(7) });
+  // Start opens the wait; on Android the capture's rows confirm it once 10 mph has held 15 s.
+  expect(await rt.drive.start()).toEqual({ ok: true, waiting: true });
+  d.source.loadTrace(rows(30, { t0: clock }));
+  while (d.source.step()) await rt.drive.settled();
+  expect(rt.drive.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(7) });
   await rt.drive.end();
   expect(finalizeCalls.find((c) => c.clientTripId === uuid(7))?.deps.dashcamFacts).toEqual(expect.any(Function));
   await rt.stop();
