@@ -18,7 +18,8 @@ import {
   UPLOAD_HOLD_MS,
 } from '@/core/engine/finalize';
 import { PRIVACY_ZONES_KEY } from '@/core/engine/privacy';
-import { appendRow, closeAtLastMovement, closeSession, createSession } from '@/core/engine/session';
+import { appendRow, closeAtLastMovement, closeSession, createSession, noteWarmup } from '@/core/engine/session';
+import { createDetectors } from '@/core/detectors';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { FinalizeTripPayloadV5Schema, MAX_DRIVE_MS } from '@/data/sync/payload';
@@ -313,6 +314,66 @@ describe('a drive closed at its last movement', () => {
     expect(result.trip.status).toBe('pending');
     expect(result.payload).not.toBeNull();
     expect(FinalizeTripPayloadV5Schema.safeParse(result.payload).success).toBe(true);
+  });
+});
+
+describe('a phone pickup always passes the server’s own checks (a refused upload would lose the drive)', () => {
+  /** What apply_drive (0026) checks of each pickup: its tier, whole seconds 1..the drive's rounded length, a start inside the drive. */
+  function serverRefuses(payload: NonNullable<Awaited<ReturnType<typeof finalizeTrip>>['payload']>): string[] {
+    const out: string[] = [];
+    if (!FinalizeTripPayloadV5Schema.safeParse(payload).success) out.push('contract');
+    for (const e of payload.events.filter((x) => x.type === 'phone_pickup')) {
+      if (e.tier !== 'moderate' && e.tier !== 'severe') out.push(`${e.id} tier ${e.tier}`);
+      if (!Number.isInteger(e.durationS) || e.durationS < 1 || e.durationS > Math.round(payload.durationS)) out.push(`${e.id} durationS ${e.durationS}`);
+      if (e.startedAt < payload.startedAt || e.startedAt > payload.endedAt) out.push(`${e.id} startedAt ${e.startedAt - payload.startedAt}`);
+    }
+    return out;
+  }
+
+  test('a pickup the detector made, still in hand past the cut at the last movement, goes up whole and inside the drive', async () => {
+    const s = createSession({ clientTripId: '55555555-5555-4555-8555-555555555555', startedAt: T0, origin: 'manual' });
+    const det = createDetectors(() => uuid(70));
+    const drive = rows(600, { over: (i) => (i >= 580 ? { handlingScore: 0.9, gravityStability: 0.6 } : {}) });
+    const end = drive.at(-1)!;
+    // Parked with the phone still in hand: jittering at 1 mph (under 5: no time in hand).
+    const parked = rows(300, { t0: T0 + 600_000, speedMps: 0.5, over: (i) => (i < 30 ? { handlingScore: 0.9, gravityStability: 0.6 } : {}) }).map((r, i) => ({
+      ...r,
+      lng: end.lng + (i % 2 === 0 ? 10 : 0) / 75_000,
+    }));
+    for (const r of [...drive, ...parked]) {
+      noteWarmup(s, r);
+      s.events.push(...det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, { warmupEndsAt: s.warmup.endsAt, platform: 'ios' }));
+      appendRow(s, r, { unsafe: false, limitUsable: false });
+    }
+    s.events.push(...det.flush());
+    expect(s.events).toEqual([expect.objectContaining({ type: 'phone_pickup', startedAt: T0 + 580_000, durationS: 20, tier: 'severe' })]);
+    const result = await finalizeTrip(closeAtLastMovement(s, 'stopped'), deps());
+    expect(serverRefuses(result.payload!)).toEqual([]);
+    expect(result.payload!.events).toEqual([expect.objectContaining({ type: 'phone_pickup', startedAt: T0 + 580_000, durationS: 20 })]);
+  });
+
+  test('whatever a session holds (a start before the drive, past its end, fractional, absurd or missing seconds, a wrong tier), the upload passes', async () => {
+    let seed = 7;
+    const rnd = (): number => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed / 2_147_483_648;
+    };
+    for (let k = 0; k < 30; k += 1) {
+      const n = 60 + Math.floor(rnd() * 400);
+      const durations = [rnd() * 2 * n, Math.floor(rnd() * n), -3, 0, 0.4, Number.NaN, 1e9, n, n + 0.6];
+      const pickups = Array.from({ length: 1 + Math.floor(rnd() * 5) }, (_, j) => ({
+        id: uuid(800 + k * 10 + j),
+        type: 'phone_pickup' as const,
+        tier: (['minor', 'moderate', 'severe'] as const)[Math.floor(rnd() * 3)]!,
+        startedAt: T0 - 20_000 + Math.floor(rnd() * (n * 1000 + 21_900)),
+        durationS: durations[Math.floor(rnd() * durations.length)]!,
+        measured: { speedMph: 30, maxSpeedMph: 40 },
+      }));
+      const session = closedSession(n, pickups, { clientTripId: uuid(900 + k) });
+      const result = await finalizeTrip(session, deps());
+      expect(result.trip.status).toBe('pending');
+      expect({ k, refused: serverRefuses(result.payload!) }).toEqual({ k, refused: [] });
+    }
   });
 });
 
