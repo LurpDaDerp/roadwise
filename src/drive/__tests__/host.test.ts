@@ -298,7 +298,7 @@ test('points clear the moment the stop is no longer confirmed, even with the fix
   await feed(h, rows(3, { speedMps: 15, t0: T0 + 64_000, over: () => ({ gnssValid: false, speed: -1, hAcc: -1 }) }));
   const snap = h.host.snapshot();
   expect(snap).toMatchObject({ speedKnown: true, speedMps: 0, stopped: false, points: null });
-  expect(h.display.log.at(-1)).toBe('update 0/null/null'); // no fix: the held speed, no limit, no points
+  expect(h.display.log.at(-1)).toBe('update 0/35/null'); // no fix: the held speed, the limit held (10 s), no points
   await h.host.stop({ endOpenTrip: true });
 });
 
