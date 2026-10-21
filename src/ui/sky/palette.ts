@@ -298,7 +298,7 @@ export function hudSky(stops: SkyStops, p: HudPalette, shade: readonly [number, 
   return { stops: deep, chrome: fix(mix(deep[1], '#000000', 0.4)), chromeEdge: ensureGround(mix(deep[1], '#FFFFFF', 0.14), [p.ink], 7, '#000000') };
 }
 
-/** The weather layer's colours: what can drift over the painted sky. */
+/** The weather layer's colours: what can drift over the painted sky (all transparent when nothing can). */
 type Veils = Pick<SkyColors, 'cover' | 'cloud' | 'particle' | 'wash'>;
 
 function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
@@ -418,16 +418,37 @@ function bundleOf(scheme: Scheme, colors: ColorSet, sky: SkyColors): SkyBundle {
   };
 }
 
-/** The mood the app wears with no sky information: clear day in light, clear night in dark. */
+/** A clear sky of the scheme's own hour: clear day for light, clear night for dark. */
 export function defaultMood(scheme: Scheme): SkyMood {
   return { phase: scheme === 'dark' ? 'night' : 'day', glow: 0, weather: CLEAR };
 }
 
 /**
- * The bundle with no sky at all (tests, the gallery, a pinned scheme): the token sets untouched,
- * with the default mood's sky drawn around them.
+ * The static looks' own skies (Settings › Appearance › Light, Dark or System, and any theme with
+ * no mood), before repair: a royal blue for Light, bolder and more violet than the day's azure,
+ * with a cool horizon and no warm band; a deep ultramarine for Dark, bluer and brighter than the
+ * night's navy and nothing like an overcast grey. Neither is any hour's sky; neither carries weather.
+ */
+const STATIC_PAINT: Readonly<Record<Scheme, Paint>> = {
+  light: { stops: ['#2338A8', '#2F47B8', '#4258C6'], horizon: '#AEBBEE' },
+  dark: { stops: ['#111A48', '#182463', '#22317C'], horizon: '#34449A' },
+};
+
+const NONE = 'rgba(0, 0, 0, 0)';
+/** Nothing lies over a static sky: no cover, cloud, stars or wash. */
+const STILL: Veils = { cover: NONE, cloud: NONE, particle: NONE, wash: NONE };
+const staticBundles: Partial<Record<Scheme, SkyBundle>> = {};
+
+/**
+ * The static look for a scheme (Light, Dark and System, the gallery and tests): the token sets
+ * untouched (their own accents, no tint of any hour) with the static sky drawn around them, no sun,
+ * moon or weather on it. Built by the same repairs as every mood, once per scheme, so a scheme is
+ * always the same object.
  */
 export function plainBundle(scheme: Scheme): SkyBundle {
-  const b = skyBundle(defaultMood(scheme));
-  return { ...b, colors: tokens.color[scheme] };
+  const hit = staticBundles[scheme];
+  if (hit) return hit;
+  const b = bundleOf(scheme, tokens.color[scheme], paintedSky(STATIC_PAINT[scheme], STILL, NONE, NONE));
+  staticBundles[scheme] = b;
+  return b;
 }

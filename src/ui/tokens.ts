@@ -146,9 +146,11 @@ export type Elevation = {
 };
 
 /**
- * The neutral grounds: paper white and ink black. These two sets are the theme with no sky (tests,
- * the gallery, the first frame before the sky is read). The live theme starts from the same
- * neutrals and swaps in the time-of-day and weather accent (`src/ui/sky/palette.ts`).
+ * The neutral grounds: paper white and ink black. These two sets are the static looks as they are
+ * (Settings › Appearance › Light, Dark or System; the gallery and tests), each with its own accent
+ * that no hour of the sky wears: indigo on paper, a clear sky blue on ink. The adaptive theme starts
+ * from the same neutrals and swaps in the time-of-day and weather tint and accent
+ * (`src/ui/sky/palette.ts`).
  */
 const light: ColorSet = {
   bg: '#F4F4F2',
@@ -162,9 +164,9 @@ const light: ColorSet = {
   textMuted: '#4A4A4F',
   textSubtle: '#5D5D62',
   textInverse: '#FFFFFF',
-  accent: '#1F5AD6',
+  accent: '#3A3FC8',
   accentText: '#FFFFFF',
-  accentFaint: '#E6EEFC',
+  accentFaint: '#E7E8F8',
   primary: '#111113',
   primaryPressed: '#2C2C30',
   onPrimary: '#FFFFFF',
@@ -212,9 +214,9 @@ const dark: ColorSet = {
   textMuted: '#B4B4BA',
   textSubtle: '#A0A0A7',
   textInverse: '#111113',
-  accent: '#93A9FF',
+  accent: '#6FA8FF',
   accentText: '#111113',
-  accentFaint: '#23283D',
+  accentFaint: '#283346',
   primary: '#F4F4F2',
   primaryPressed: '#D9D9D5',
   onPrimary: '#111113',

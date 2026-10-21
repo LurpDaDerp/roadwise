@@ -1,5 +1,5 @@
 import { lookFor } from '@/ui/sky/look';
-import { skyBundle, type SkyMood } from '@/ui/sky/palette';
+import { plainBundle, skyBundle, type SkyMood } from '@/ui/sky/palette';
 
 const HEX = /^#[0-9A-F]{6}$/;
 const mood = (phase: SkyMood['phase'], kind: SkyMood['weather']['kind'] = 'clear'): SkyMood => ({
@@ -28,4 +28,14 @@ test('every look is opaque "#RRGGBB", the one form the native sides parse', () =
       for (const v of Object.values(lookFor(skyBundle(mood(phase, kind))))) expect(v).toMatch(HEX);
     }
   }
+});
+
+test("the static looks give the driving screen's day sky for Light and its night sky for Dark, opaque hex", () => {
+  const light = plainBundle('light');
+  const [lt, lm, ll] = light.sky.hud.day.stops;
+  expect(lookFor(light)).toEqual({ skyTop: lt, skyMid: lm, skyLow: ll, accent: light.onScene.accent });
+  const dark = plainBundle('dark');
+  const [dt, dm, dl] = dark.sky.hud.night.stops;
+  expect(lookFor(dark)).toEqual({ skyTop: dt, skyMid: dm, skyLow: dl, accent: dark.onScene.accent });
+  for (const v of [...Object.values(lookFor(light)), ...Object.values(lookFor(dark))]) expect(v).toMatch(HEX);
 });

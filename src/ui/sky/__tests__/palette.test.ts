@@ -206,6 +206,85 @@ test('the plain bundle is the token set untouched', () => {
   expect(defaultMood('dark').phase).toBe('night');
 });
 
+describe.each(['light', 'dark'] as const)('the static %s look', (scheme) => {
+  const b = plainBundle(scheme);
+  const c = b.colors;
+  const alpha = (x: string) => parseColor(x).a;
+  const dist = (x: string, y: string) => {
+    const p = parseColor(opaque(x));
+    const q = parseColor(opaque(y));
+    return Math.hypot(p.r - q.r, p.g - q.g, p.b - q.b);
+  };
+  const apart = (x: readonly string[], y: readonly string[]) => x.reduce((s, v, i) => s + dist(v, y[i]!), 0) / x.length;
+  // The HUD set the static look's driving screen wears: Light by day, Dark at night.
+  const worn = scheme === 'dark' ? 'night' : 'day';
+
+  test('is its own scheme, the token set, and the same object every time', () => {
+    expect(b.scheme).toBe(scheme);
+    expect(c).toBe(tokens.color[scheme]);
+    expect(plainBundle(scheme)).toBe(b);
+  });
+
+  test('nothing lies over its sky: no sun, moon, cover, cloud, stars or wash', () => {
+    for (const v of [b.sky.halo, b.sky.disc, b.sky.cover, b.sky.cloud, b.sky.particle, b.sky.wash]) expect(alpha(v)).toBe(0);
+  });
+
+  test('text, its accent and every signal read on every ground', () => {
+    for (const g of [c.bg, c.surface, c.surfaceRaised]) {
+      for (const ink of [c.text, c.textMuted, c.textSubtle, c.accent]) expectContrast(ink, g, AA, `${ink} on ${g}`);
+      for (const s of Object.values(c.signal)) expectContrast(s.text, g, AA, `signal on ${g}`);
+    }
+    expectContrast(c.accent, c.accentFaint, AA, 'accent on its wash');
+    expectContrast(c.accentText, c.accent, AA, 'accentText on accent');
+  });
+
+  test('the white sky inks, the sky accent and signals read on every backdrop stop, and the top takes a light status bar', () => {
+    const s = b.onSky;
+    expect(s.text).toBe('#FFFFFF');
+    for (const stop of b.sky.backdrop) {
+      for (const ink of [s.text, s.textMuted, s.textSubtle, s.accent, s.warning, s.danger, s.success, s.info, s.freeze])
+        expectContrast(ink, stop, AA, `static sky ink ${ink}`);
+      for (const sig of Object.values(s.signal)) expectContrast(sig.text, stop, AA, 'static sky signal');
+    }
+    expect(relativeLuminance(b.sky.backdrop[0])).toBeLessThan(0.18);
+  });
+
+  test('the scene card carries white text, its muted inks, its accent and signals at AA', () => {
+    const s = b.onScene;
+    expect(s.text).toBe('#FFFFFF');
+    for (const stop of b.sky.scene) {
+      for (const ink of [s.text, s.textMuted, s.textSubtle, s.accent, s.warning, s.danger, s.success, s.freeze])
+        expectContrast(ink, stop, AA, `static scene ink ${ink}`);
+      for (const sig of Object.values(s.signal)) expectContrast(sig.text, stop, AA, 'static scene signal');
+    }
+  });
+
+  test("the driving screen's sky, in both HUD palettes: print at 7:1, alert colours at AA, the halo's red end at 3:1", () => {
+    for (const [which, p] of [['day', HUD.day], ['night', HUD.night]] as const) {
+      const sky = b.sky.hud[which];
+      for (const g of [...sky.stops, sky.chrome]) {
+        for (const ink of [p.ink, p.inkMuted, p.haloInk, p.haloInkMuted]) expectContrast(ink, g, 7, `static ${which} ink`);
+        for (const t of [p.minor, p.moderate, p.severe]) expectContrast(t, g, AA, `static ${which} tier`);
+        expectContrast(p.haloSevere, g, 3, `static ${which} halo red`);
+      }
+      expectContrast(p.ink, sky.chromeEdge, 7, `static ${which} ink on chrome edge`);
+    }
+  });
+
+  test.each([...moods, ...lightCloud].filter((m) => skyBundle(m).scheme === scheme).map((m) => [name(m), m] as const))(
+    'looks unlike the adaptive %s sky: its own sky, scene cards, driving-screen sky and accent',
+    (_n, mood) => {
+      const a = skyBundle(mood);
+      expect(apart(b.sky.backdrop, a.sky.backdrop)).toBeGreaterThanOrEqual(24);
+      expect(apart(b.sky.scene, a.sky.scene)).toBeGreaterThanOrEqual(20);
+      expect(apart(b.sky.hud[worn].stops, a.sky.hud[worn].stops)).toBeGreaterThanOrEqual(20);
+      expect(dist(c.accent, a.colors.accent)).toBeGreaterThanOrEqual(20);
+      expect(dist(b.onScene.accent, a.onScene.accent)).toBeGreaterThan(0);
+      expect(c.bg).not.toBe(a.colors.bg);
+    }
+  );
+});
+
 describe('blending', () => {
   test('lerpDeep blends colours, keeps shape, and switches non-colours at halfway', () => {
     const a = { c: '#000000', n: 0, s: 'light', arr: ['#000000', '#FFFFFF'], shadow: undefined as string | undefined };
