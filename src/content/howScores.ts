@@ -5,7 +5,22 @@
  */
 import type { Ionicons } from '@expo/vector-icons';
 
-import { RATING_WINDOW_DAYS } from '@scoring';
+import {
+  CAMERA_DISPUTE_AUTO_PER_WEEK,
+  DASHCAM_DROWSY_GAP_S,
+  DASHCAM_EYES_OFF_GAP_S,
+  DASHCAM_MIN_MPH,
+  DISPUTE_AUTO_PER_WEEK,
+  IDLE_END_S,
+  MERGE_GAP_S,
+  MIN_SCORED_MILES,
+  MIN_SCORED_S,
+  NOT_DRIVING_PER_MONTH,
+  RANKED_MIN_MILES,
+  RATING_WINDOW_DAYS,
+  SPEEDING_GRACE_S,
+  speedTolerance,
+} from '@scoring';
 
 export type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -14,6 +29,30 @@ export interface HowItem {
   title: string;
   body: string;
 }
+
+export interface RuleSection {
+  id: string;
+  title: string;
+  icon: IconName;
+  lines: string[];
+}
+
+/** The drive rules the rules quote that live outside the scoring package (the screen reads them from the drive code). */
+export interface DriveNumbers {
+  /** The speed that starts a drive on its own, mph. */
+  autoTriggerMph: number;
+  /** How long it has to hold, s. */
+  autoTriggerS: number;
+  /** How long a Start drive waits for the car to move, min. */
+  waitMin: number;
+  /** How long "Not driving?" lasts on the drive screen, min. */
+  notDrivingMin: number;
+}
+
+/** "every 5 min" from seconds. */
+const everyMin = (s: number) => `every ${Math.round(s / 60)} min`;
+const IDLE_MIN = Math.round(IDLE_END_S / 60);
+const MERGE_MIN = Math.round(MERGE_GAP_S / 60);
 
 /** The three ideas: Home's How it works card and the top of How scores work. */
 export const howItWorks = (autoDrives: boolean): HowItem[] => [
@@ -32,3 +71,107 @@ export const HERO = {
   title: 'Smooth and steady wins',
   body: `Every drive gets a score out of 100. Your Safety Rating sums up your last ${RATING_WINDOW_DAYS} days.`,
 } as const;
+
+/** Every rule, in plain words, worded for how drives start on this phone. */
+export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
+  {
+    id: 'drive-score',
+    title: 'Your drive score',
+    icon: 'speedometer-outline',
+    lines: [
+      'Every drive gets a score from 0 to 100 for braking, starts, turns and speed, plus attention when DashPal rides along. A drive with no events scores 100.',
+      'Each one is judged against your chances: hard brakes against the times you slowed down, hard starts against the times you sped up, and sharp turns against the real turns you made. A busy city drive isn’t marked down just for having more stops.',
+      'Speed is judged by how much of your driving time with a known limit you spent over it, and by how far over.',
+      `A drive under ${MIN_SCORED_MILES} mi that takes under ${MIN_SCORED_S / 60} min doesn’t get a score.`,
+      'The score’s colour and icon show how a drive went for its length: a short perfect drive stays humble, a long smooth one earns the top.',
+    ],
+  },
+  {
+    id: 'speeding',
+    title: 'Speeding',
+    icon: 'speedometer-outline',
+    lines: [
+      `Speeding starts a few mph over the posted limit: ${speedTolerance(25)} over at 25 mph, ${speedTolerance(35)} at 35, ${speedTolerance(45)} at 45, ${speedTolerance(55)} at 55 and ${speedTolerance(65)} at 65 (${speedTolerance(25, 'school')} in a school or construction zone).`,
+      `You hear a chime when you cross that line. Ease off within ${SPEEDING_GRACE_S} s and it doesn’t count.`,
+      'Where the limit isn’t known, nothing counts as speeding.',
+    ],
+  },
+  {
+    id: 'rating',
+    title: 'Safety Rating',
+    icon: 'shield-checkmark-outline',
+    lines: [
+      `Your Safety Rating rolls your last ${RATING_WINDOW_DAYS} days of drives into one score from 0 to 100.`,
+      'Recent weeks count more, so better habits show up quickly and an old rough day fades.',
+      'It’s the average of your braking, starts, turns, speed and, with DashPal, attention scores. Speed counts double.',
+      'New drivers start from a typical driver’s score, so one rough drive early on won’t sink you.',
+      'It’s fair to city and highway drivers alike, because each part is judged against your chances, not your miles.',
+      `You get a rating once you’ve driven ${RANKED_MIN_MILES} mi in the last ${RATING_WINDOW_DAYS} days.`,
+      'The time of day and how far you drive don’t change it.',
+    ],
+  },
+  autoDrives
+    ? {
+        id: 'drives',
+        title: 'How drives start and end',
+        icon: 'car-sport-outline',
+        lines: [
+          `Once you’ve been moving at about ${n.autoTriggerMph} mph for ${n.autoTriggerS} s, RoadWise starts recording, counting from the moment you set off.`,
+          `It ends once you park and walk away, or after ${IDLE_MIN} min parked.`,
+          `Stop for under ${MERGE_MIN} min and set off again from the same spot, and it stays one drive.`,
+          `Riding along? Open the drive screen and tap “Not driving?”. It’s there for your first ${n.notDrivingMin} minutes on that screen.`,
+          `Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
+        ],
+      }
+    : {
+        id: 'drives',
+        title: 'Starting a drive',
+        icon: 'car-sport-outline',
+        lines: [
+          `Swipe Start drive on Home before you pull out. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
+          `It records until you swipe End drive, park and walk away, or stay parked for ${IDLE_MIN} min.`,
+          `Riding along? Tap “Not driving?” on the drive screen. It’s there for your first ${n.notDrivingMin} minutes on that screen.`,
+        ],
+      },
+  {
+    id: 'dashpal',
+    title: 'DashPal dashcam',
+    icon: 'videocam-outline',
+    lines: [
+      'With a DashPal, eyes off the road and drowsiness count toward Attention, only on the miles it watched.',
+      `They count only at ${DASHCAM_MIN_MPH} mph or more with good GPS, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)} for eyes off and once ${everyMin(DASHCAM_DROWSY_GAP_S)} for drowsiness.`,
+      'DashPal may alarm at lower speeds, even stopped. Those alarms don’t count.',
+      'Without a DashPal, Attention is left out and your rating comes from the rest.',
+    ],
+  },
+  {
+    id: 'goals',
+    title: 'Weekly goals and badges',
+    icon: 'ribbon-outline',
+    lines: [
+      'Each week brings three goals: no speeding, smooth driving and clean drives. They’re just for fun and never change your scores.',
+      'Badges mark milestones: First Drive, Clean 100 and Perfect Week.',
+    ],
+  },
+  {
+    id: 'friends',
+    title: 'Friends',
+    icon: 'people-outline',
+    lines: [
+      'The Friends tab ranks you and your friends by Safety Rating.',
+      'Friends see your Safety Rating. Your category scores, badges, driving stats and heat map stay private until you share them in Settings › Privacy.',
+    ],
+  },
+  {
+    id: 'mistakes',
+    title: 'If we got it wrong',
+    icon: 'flag-outline',
+    lines: [
+      'Every event on a drive has a Report link.',
+      `“Braked for a hazard” and “wrong speed limit” are accepted right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
+      `“DashPal got it wrong” is accepted right away too, up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of those.`,
+      `“Wasn’t driving” takes a whole drive off when someone else drove. You can use it ${NOT_DRIVING_PER_MONTH} times a month, within a day of the drive, as long as “Not driving?” didn’t run out during it.`,
+      'Recorded drives can’t be deleted, so nobody can hide a rough drive.',
+    ],
+  },
+];
