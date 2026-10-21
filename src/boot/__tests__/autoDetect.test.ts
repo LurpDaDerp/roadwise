@@ -108,15 +108,35 @@ test('the status Settings and Home read: armed, on or needs, what is missing, th
   expect(s).toMatchObject({ status: expect.any(String), missing: expect.any(Array), permissions: { backgroundRefresh: 'denied' } });
 });
 
-test('both wipes disarm automatic drives (iPhone); the sign-out wipe takes the "Not driving?" budget and the spots bookkeeping', async () => {
+test('both wipes disarm automatic drives (iPhone) and wipe native’s drive state (journals, last end, parked spot); the sign-out wipe takes the "Not driving?" budget and the spots bookkeeping', async () => {
   for (const wipe of [() => wipeForSignOut(db), () => wipeDevice(db)]) {
     const detect = rig({ onboarded: true });
+    const wiped = jest.fn(async () => {});
+    Object.assign(detect, { wipe: wiped });
     await autoDetectSync();
     expect(detect.snapshot.armed).toBe(true);
     await wipe();
     expect(detect.snapshot.armed).toBe(false);
+    expect(wiped).toHaveBeenCalledTimes(1);
     setAutoDetectRuntime(null);
   }
+  // A native build without `wipe`, or one that fails it: the wipe still runs to the end.
+  const old = rig({ onboarded: true });
+  await autoDetectSync();
+  await wipeDevice(db);
+  expect(old.snapshot.armed).toBe(false);
+  const failing = rig({ onboarded: true });
+  Object.assign(failing, { wipe: async () => Promise.reject(new Error('busy')) });
+  await expect(wipeForSignOut(db)).resolves.toBeUndefined();
+  // The launch's own detector (an account switch, before the runtime is registered) is the one wiped.
+  setAutoDetectRuntime(null);
+  const launch = createFakeDriveDetect();
+  const launchWipe = jest.fn(async () => {});
+  Object.assign(launch, { wipe: launchWipe });
+  await launch.setArmed(true, 'user-1');
+  await wipeDevice(db, { detect: launch });
+  expect(launch.snapshot.armed).toBe(false);
+  expect(launchWipe).toHaveBeenCalledTimes(1);
   expect(SIGN_OUT_SETTINGS).toEqual(expect.arrayContaining([NOT_DRIVING_KEY, SPOTS_META_KEY]));
   await createSettingsRepo(db).set(NOT_DRIVING_KEY, { clientTripId: 'x', spentMs: 1, expired: false, updatedAt: 1 });
   await wipeForSignOut(db);

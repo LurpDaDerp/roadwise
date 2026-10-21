@@ -5,8 +5,10 @@
 //   while that holds (native answers `needs` and stays off while a permission is missing), and
 //   disarms it for a driver who is signed out or not onboarded. A session that cannot be read (an
 //   expired token that cannot refresh with no network) is not a sign-out: the arming stays as it is;
-// - `autoDetectOff()` disarms it at sign-out, an account switch and the account's deletion (the
-//   device wipes).
+// - `autoDetectOff()` disarms it at every session end; the device wipes (sign-out with nothing
+//   owed, an account switch, the account's deletion) also wipe native's drive state
+//   (`DriveDetect.wipe()`: every journal, the last end, the parked spot and a rest), so nothing of
+//   one driver's reaches the next.
 // Android has no detector: every call is a no-op and `readAutoDetectStatus()` answers null.
 import type { DetectMissing, DetectState, DriveDetectApi } from '@drive-sense';
 
@@ -108,16 +110,40 @@ export async function autoDetectSync(opts: { onboarded?: boolean } = {}): Promis
   }
 }
 
-/** Disarm the detector (sign-out, account switch, deletion). Best effort; never rejects. */
-export async function autoDetectOff(): Promise<void> {
-  const detect = detector();
+/** `DriveDetect.wipe()` (native drive-sense): discards every journal, the last end, the parked region and a rest. */
+type WipeableDetect = DriveDetectApi & { wipe?: () => Promise<void> };
+
+export interface AutoDetectOffOptions {
+  /** The detector to disarm (the launch's, before the runtime is registered); default the runtime's. */
+  detect?: DriveDetectApi | null;
+  /** Also wipe native's drive state (the device wipes). A build without `wipe` (Android, an older native) skips it. */
+  wipe?: boolean;
+}
+
+/** Disarm the detector (every session end, the device wipes). Best effort; never rejects. */
+export async function autoDetectOff(opts: AutoDetectOffOptions = {}): Promise<void> {
+  const detect = opts.detect !== undefined ? (opts.detect !== null && opts.detect.available ? opts.detect : null) : detector();
   if (detect === null) return;
+  await disarm(detect);
+  if (opts.wipe) await wipeNative(detect);
+}
+
+async function wipeNative(detect: WipeableDetect): Promise<void> {
+  if (typeof detect.wipe !== 'function') return;
+  try {
+    await detect.wipe();
+  } catch (e) {
+    report(e, 'autoDetectWipe');
+  }
+}
+
+async function disarm(detect: DriveDetectApi): Promise<void> {
   try {
     let uid: string | null = null;
     try {
       uid = (await runtime?.uid()) ?? null;
     } catch {
-      // signed out already
+      // signed out already, or the session is unreadable: native's own owner, else the placeholder
     }
     await detect.setArmed(false, await ownerToDisarm(detect, uid));
   } catch (e) {

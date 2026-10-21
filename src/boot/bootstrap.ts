@@ -258,11 +258,14 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   // background recovery finalizes from the cache (expo-secure-store, AFTER_FIRST_UNLOCK).
   void preloadDeviceSecret(undefined, (error) => onError(error, 'device secret'));
 
+  // iPhone's drive detector: the identity stage's wipe (an account switch) clears its state too.
+  const detect = deps.detect === undefined ? nativeDriveDetect() : deps.detect;
+
   enter('identity');
   const identity = await stage('identity', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- the app client, only outside tests
     const supabase: BootSupabase = deps.supabase ?? ((require('@/data/supabase/client') as typeof import('@/data/supabase/client')).supabase as unknown as BootSupabase);
-    const decide = (uid: string | null) => ensureDeviceOwner(db, uid, { onError });
+    const decide = (uid: string | null) => ensureDeviceOwner(db, uid, { onError, detect });
     if (deps.expectedUid !== undefined) return { supabase, owner: await decide(deps.expectedUid) };
     const sessionMs = deps.sessionTimeoutMs ?? SESSION_TIMEOUT_MS;
     const reading = supabase.auth.getSession();
@@ -294,7 +297,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- expo-crypto, only outside tests
   const newId = deps.newId ?? (require('@/lib/ids') as typeof import('@/lib/ids')).newClientTripId;
   const source = deps.source ?? nativeDriveSource;
-  const detect = deps.detect === undefined ? nativeDriveDetect() : deps.detect;
   const limits = deps.limits ?? defaultLimits(db, deps, now, onError);
   const queryClient = deps.queryClient ?? createQueryClient();
 

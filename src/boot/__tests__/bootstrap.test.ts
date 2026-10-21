@@ -441,6 +441,31 @@ test('iOS: a launch whose session cannot be read (an expired token, no network) 
   await rt.stop();
 });
 
+test('iOS: a launch for a different driver wipes native’s journals before the host looks: the last driver’s drive is never stored for the new one', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  expect(await readDeviceOwner(db)).toBe('user-1');
+  // user-1's drive, ended by native while JS was away and never taken in.
+  const detect = createFakeDriveDetect({ now: () => clock });
+  await detect.setArmed(true, 'user-1');
+  detect.wake();
+  detect.confirm({ driveId: uuid(12), startedAt: clock - 120_000, rows: rows(100, { t0: clock - 120_000 }).map((r) => ({ ...r })) });
+  detect.endFor('still', clock - 10_000);
+  const wipe = jest.fn(async () => {
+    for (const j of await detect.listDrives()) await detect.discardDrive(j.driveId);
+  });
+  Object.assign(detect, { wipe });
+  const other = deps();
+  other.supabase.setUid('user-2');
+  const rt = await bootstrapApp({ ...other.deps, detect });
+  expect(rt.owner).toBe('wiped');
+  expect(wipe).toHaveBeenCalledTimes(1);
+  expect(detect.snapshot.armed).toBe(false);
+  expect(await createTripsRepo(db).get(uuid(12))).toBeNull();
+  expect(await createTripsRepo(db).count()).toBe(0);
+  await rt.stop();
+});
+
 test('iOS: a drive native journals is continued at launch whatever the capture says, and taken in from the journal', async () => {
   const seed = await bootstrapApp(deps().deps);
   await seed.stop();

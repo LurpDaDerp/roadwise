@@ -1205,6 +1205,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       report(new Error('a native drive started while another is open'), 'driveStarted');
       return;
     }
+    // An event native held for the first listener, about a drive whose journal is gone (a device
+    // wipe at an account switch, a "Not driving?"): nothing to take in.
+    if (detect !== null) {
+      const drives = await detect.listDrives().catch(() => null);
+      if (drives !== null && !drives.some((d) => d.driveId === e.driveId)) return;
+    }
     // The Start card's wait shows until the drive's own start replaces it (one publish).
     confirmWaiting();
     if (await beginNative(e, { capped: false })) captureOn = true;

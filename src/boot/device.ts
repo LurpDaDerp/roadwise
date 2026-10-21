@@ -9,6 +9,8 @@
  *   - **a different user** takes everything — every table but the schema's own — before anything
  *     else in the launch touches a row. The install id and the phone's DashPal pairing stay.
  */
+import type { DriveDetectApi } from '@drive-sense';
+
 import { activeDashcam } from '@/dashcam/registry';
 import { createSettingsRepo, SPOTS_META_KEY, type Db } from '@/data/db';
 import { clearDeviceSecret } from '@/data/devices/deviceSecret';
@@ -108,13 +110,16 @@ export type DeviceOwnerOutcome = 'same' | 'first' | 'wiped' | 'signed-out';
 
 export interface DeviceOwnerDeps {
   onError?: (error: unknown, context: string) => void;
+  /** iPhone: the drive detector to disarm and wipe (the launch's); default the registered runtime's. */
+  detect?: DriveDetectApi | null;
 }
 
 /** Empty the device: every table in `DEVICE_TABLES` in one transaction. */
-export async function wipeDevice(db: Db, _deps: DeviceOwnerDeps = {}): Promise<void> {
+export async function wipeDevice(db: Db, deps: DeviceOwnerDeps = {}): Promise<void> {
   await cancelSummariesBounded();
-  // Automatic drives stop with the account (iPhone): the next driver arms them again.
-  await autoDetectOff();
+  // Automatic drives stop with the account (iPhone): the next driver arms them again. Native's
+  // journals, last end and parked spot go too, so none of them reaches the next driver.
+  await autoDetectOff({ ...(deps.detect !== undefined ? { detect: deps.detect } : {}), wipe: true });
   // The privacy trim secret goes with the account (a new one is minted on the next drive).
   await clearDeviceSecret();
   await db.transaction(async (tx) => {
@@ -146,8 +151,8 @@ export async function wipeDevice(db: Db, _deps: DeviceOwnerDeps = {}): Promise<v
  */
 export async function wipeForSignOut(db: Db): Promise<void> {
   await cancelSummariesBounded();
-  // Signed out, no drive starts on its own (iPhone).
-  await autoDetectOff();
+  // Signed out, no drive starts on its own (iPhone), and native's journals and parked spot leave with the drives.
+  await autoDetectOff({ wipe: true });
   await db.transaction(async (tx) => {
     for (const table of SIGN_OUT_TABLES) await tx.execute(`DELETE FROM ${table}`);
     for (const key of SIGN_OUT_SETTINGS) await tx.execute('DELETE FROM settings WHERE key = ?', [key]);
