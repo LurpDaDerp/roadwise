@@ -92,6 +92,10 @@ export const MeasuredV3Schema = z
     limitMph: z.number().min(0).max(120).optional(),
     peakG: z.number().min(0).max(10).optional(),
     mounted: z.boolean().optional(),
+    /** phone_pickup, phone_handling: the highest trusted GPS speed during the episode (the phone speed multiplier). */
+    maxSpeedMph: z.number().min(0).max(250).optional(),
+    /** speeding: mph-seconds over the points line after the grace (the speeding cost). The scorer clamps it per charged second. */
+    overMphS: z.number().min(0).max(1_000_000).optional(),
     /** Who saw it: `dashcam` on (and only on) a DashPal event. */
     source: z.literal('dashcam').optional(),
   })

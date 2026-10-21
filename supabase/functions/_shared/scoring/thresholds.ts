@@ -3,13 +3,24 @@
 
 /** Hard braking, in g: minor from 0.30, severe from 0.45 (confirmed by a GPS speed drop). */
 export const HARD_BRAKE_G = { minor: 0.3, severe: 0.45 } as const;
-/** Hard acceleration, in g: minor from 0.28, severe from 0.40. */
-export const HARD_ACCEL_G = { minor: 0.28, severe: 0.4 } as const;
+/** Hard acceleration, in g: minor from 0.32, severe from 0.45. */
+export const HARD_ACCEL_G = { minor: 0.32, severe: 0.45 } as const;
 /** Hard cornering (sideways force), in g. */
 export const HARD_CORNER_G = { minor: 0.4, severe: 0.55 } as const;
 /** Phone pickups count only while moving above this speed. */
 export const PHONE_MIN_MPH = 5;
-/** Continuous time above the threshold before speeding is an incident (3 s when severe). */
+/**
+ * The grace on speeding: an episode is an event only once it has MORE than this many rows over the
+ * points line (L + T), whatever its tier (the 6th row makes it one), and the cost counts the rows
+ * after these (`speedingChargedS`). An episode that never gets there is never an event, costs
+ * nothing and does not break a clean drive. The alert sounds on the first over row, so the driver
+ * has this long to react before points come off.
+ */
+export const SPEEDING_GRACE_S = 5;
+/**
+ * @deprecated Superseded by `SPEEDING_GRACE_S` (the event starts on the row after the grace, for
+ * every tier). Kept only until the speeding detector reads the grace; nothing else may use it.
+ */
 export const SPEEDING_MIN_S = { default: 4, severe: 3 } as const;
 /** A speeding episode ends after this long back under L + T − `SPEEDING_END_BUFFER_MPH`. */
 export const SPEEDING_END_S = 5;
@@ -23,8 +34,14 @@ export const IDLE_END_S = 900;
 /** Ending then restarting within this gap and distance merges into one drive. */
 export const MERGE_GAP_S = 300;
 export const MERGE_DIST_M = 402;
-/** Drives shorter than this are not scored. */
+/**
+ * A drive under `MIN_SCORED_MILES` miles AND under `MIN_SCORED_S` seconds is not scored (kept and
+ * listed, "Too short to score"). Either one reached makes it a scored drive.
+ */
 export const MIN_SCORED_MILES = 0.5;
+export const MIN_SCORED_S = 120;
+/** Points for finishing a weekly challenge (the server pays it; the client copy reads it here). */
+export const CHALLENGE_REWARD_POINTS = 200;
 /** "Wasn't driving" uses per month. */
 export const NOT_DRIVING_PER_MONTH = 2;
 /** "Braked for a hazard" / "wrong speed limit" disputes auto-accepted per week. */

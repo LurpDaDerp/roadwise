@@ -11,6 +11,7 @@ import {
   DASHCAM_MIN_MOVING_S,
   DASHCAM_MIN_MPH,
   MIN_SCORED_MILES,
+  SPEEDING_GRACE_S,
 } from './thresholds';
 
 export const SCORING_VERSION = 5;
@@ -41,6 +42,24 @@ export type Tier = 'minor' | 'moderate' | 'severe';
 
 export type Zone = 'school' | 'construction';
 
+/**
+ * What the detector measured, as far as scoring reads it. Any other key the detector recorded
+ * (limit, peak g, mount, source) travels with it untouched. Every value is re-checked when read:
+ * a missing, non-numeric or non-finite one reads as absent.
+ */
+export type DriveEventMeasured = {
+  /** phone_pickup: the GPS speed at the pickup, mph. Read for the phone speed multiplier only when `maxSpeedMph` is absent. */
+  speedMph?: number;
+  /** phone_pickup, phone_handling: the highest trusted GPS speed during the phone-use episode, mph. */
+  maxSpeedMph?: number;
+  /**
+   * speeding: the sum, over the over-the-line rows AFTER the first `SPEEDING_GRACE_S`, of
+   * (row speed − (L + T)) in mph, 1 dp. Absent on an event an older app recorded: it is then priced
+   * by tier and duration (`legacySpeedingPenalty`).
+   */
+  overMphS?: number;
+};
+
 export interface DriveEvent {
   /** uuid from the device */
   id: string;
@@ -58,15 +77,30 @@ export interface DriveEvent {
    * Ignored for speeding: its extra 30-s blocks are always floor(durationS / 30).
    */
   units?: number;
-  /** phone_pickup only: base 20 instead of 40. */
+  /** phone_pickup only: 16 points instead of 32 (rating 20 instead of 40), and no speed multiplier. */
   stoppedInTraffic?: boolean;
   /** ×2 penalty. Nothing sets it in v1. */
   zone?: Zone | null;
   /** removed = accepted dispute → excluded from points and rating. */
   status?: 'active' | 'removed';
+  /** What the detector measured (`DriveEventMeasured`); the scorer reads it for speeding and phone use. */
+  measured?: DriveEventMeasured;
 }
 
-/** The points an event costs, per type and tier. Two-level types read anything below severe as minor. */
+/** A finite number from a measured value; null for anything else (the readers clamp the sign). */
+const measuredNumber = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const measuredOf = (e: DriveEvent, key: keyof DriveEventMeasured): number | null => {
+  const m: unknown = e.measured;
+  if (typeof m !== 'object' || m === null) return null;
+  return measuredNumber((m as Record<string, unknown>)[key]);
+};
+
+/**
+ * The points an event costs, per type and tier. Two-level types read anything below severe as minor.
+ * Speeding's tier prices are the legacy formula only (`legacySpeedingPenalty`): an event with a
+ * measured `overMphS` is priced by `speedingCost` instead. Phone use is multiplied by
+ * `phoneSpeedMult`.
+ */
 export const BASE_PENALTY = {
   speeding: { minor: 12, moderate: 32, severe: 80 },
   hard_brake: { minor: 8, severe: 20 },
@@ -178,13 +212,14 @@ export function keepDashcamEvents<E extends DashcamLimitEvent>(uploaded: readonl
 }
 
 /**
- * T(L): tolerance over the posted limit, mph: 0.175 × (L − 8) rounded, less 2, between 2 and 8
- * (25 → 2, 35 → 3, 45 → 4, 55 → 6, 65 → 8). Fixed at 2 in a school or construction zone.
+ * T(L): tolerance over the posted limit, mph: 0.175 × (L − 8) rounded, less 1, between 3 and 9
+ * (25 → 3, 35 → 4, 45 → 5, 55 → 7, 65 → 9). Fixed at 2 in a school or construction zone. The
+ * points line is L + T: speeding is judged, charged and alerted from it.
  */
 export function speedTolerance(limitMph: number, zone?: Zone | null): number {
   if (zone) return 2;
   // 0.175 = 7/40; the integer form keeps exact halves (L = 28 → 3.5) exact.
-  return clamp(Math.round((7 * (limitMph - 8)) / 40) - 2, 2, 8);
+  return clamp(Math.round((7 * (limitMph - 8)) / 40) - 1, 3, 9);
 }
 
 /** Tier by how far the speed is beyond L + T: >0 minor, >4 moderate, >9 severe; null if not over. */
@@ -207,6 +242,77 @@ function units(e: DriveEvent): number {
   return 0;
 }
 
+// --- Speeding cost -----------------------------------------------------------------------------
+
+/** Points per charged second and mph over the line, before the growth. */
+export const SPEEDING_K = 0.15;
+/** The cost compounds by this share for every charged second. */
+export const SPEEDING_G = 0.02;
+/** The most one speeding event costs before the repeat, zone and short-drive multipliers. */
+export const SPEEDING_EVENT_CAP = 300;
+/** `overMphS` is read as at most this many mph over per charged second (a bad reading can't buy more than the cap anyway). */
+export const SPEEDING_MAX_OVER_MPH = 150;
+
+/**
+ * The seconds a speeding event is charged for: every over-the-line row (`durationS`) less the
+ * `SPEEDING_GRACE_S` grace rows, never under 1.
+ */
+export function speedingChargedS(durationS: number): number {
+  const d = Number.isFinite(durationS) ? Math.max(0, durationS) : 0;
+  return Math.max(1, d - SPEEDING_GRACE_S);
+}
+
+/**
+ * What a speeding event costs, in points, from its charged seconds `chargedS` (n) and the mph-seconds
+ * over the line after the grace `overMphS`:
+ *
+ *   clamp(round(K × (overMphS / n) × ((1 + G)^n − 1) / G), 1, CAP)
+ *
+ * The mean over per second sets the rate; the rate compounds at G per second, so staying over costs
+ * more and more. 10 s at 3 mph over → 5; 30 s at 3 → 18; 60 s at 3 → 51; 30 s at 10 → 61. Never
+ * under 1 (an event always costs something) and never over `SPEEDING_EVENT_CAP`. Repeat, zone and
+ * short-drive multipliers apply on top. Pure.
+ */
+export function speedingCost(chargedS: number, overMphS: number): number {
+  const n = Number.isFinite(chargedS) ? Math.max(1, chargedS) : 1;
+  const over = Number.isFinite(overMphS) ? clamp(overMphS, 0, n * SPEEDING_MAX_OVER_MPH) : 0;
+  const rate = over / n;
+  if (!(rate > 0)) return 1;
+  const growth = ((1 + SPEEDING_G) ** n - 1) / SPEEDING_G;
+  const raw = SPEEDING_K * rate * growth;
+  // (1 + G)^n overflows to Infinity for a very long n; the cap is what it means.
+  return Number.isFinite(raw) ? clamp(roundTo(raw), 1, SPEEDING_EVENT_CAP) : SPEEDING_EVENT_CAP;
+}
+
+/**
+ * The points a speeding event recorded without `overMphS` costs (an older app, or a stored event
+ * from before measured speeding): its tier's price plus 25% for every extra 30-s block. Exactly the
+ * pre-round-7 formula, so a dispute on an old drive re-prices its other events the same as before.
+ */
+export function legacySpeedingPenalty(e: DriveEvent): number {
+  return BASE_PENALTY.speeding[e.tier] * (1 + 0.25 * units(e));
+}
+
+/** The points a speeding event costs before the repeat, zone and short-drive multipliers. */
+export function speedingPenalty(e: DriveEvent): number {
+  const over = measuredOf(e, 'overMphS');
+  return over === null ? legacySpeedingPenalty(e) : speedingCost(speedingChargedS(e.durationS), over);
+}
+
+// --- Phone use at speed ------------------------------------------------------------------------
+
+/**
+ * Phone use costs more points the faster the car was going (the rating is untouched): unknown
+ * or at most 25 mph ×1, over 25 to 45 mph ×1.5, over 45 mph ×2.
+ */
+export function phoneSpeedMult(speedMph: number | null | undefined): 1 | 1.5 | 2 {
+  if (typeof speedMph !== 'number' || !Number.isFinite(speedMph) || speedMph <= 25) return 1;
+  return speedMph <= 45 ? 1.5 : 2;
+}
+
+/** The speed a phone event's multiplier reads: the episode's highest trusted speed, else the pickup speed. */
+const phoneSpeedOf = (e: DriveEvent): number | null => measuredOf(e, 'maxSpeedMph') ?? measuredOf(e, 'speedMph');
+
 function penaltyFrom(table: PenaltyTable, e: DriveEvent): number {
   const severe = e.tier === 'severe';
   switch (e.type) {
@@ -226,8 +332,23 @@ function penaltyFrom(table: PenaltyTable, e: DriveEvent): number {
   }
 }
 
-/** The event's base penalty in points: no extension, repeat or zone multiplier. */
-export const basePenalty = (e: DriveEvent): number => penaltyFrom(BASE_PENALTY, e);
+/**
+ * The event's base penalty in points: no repeat or zone multiplier. Speeding is `speedingPenalty`
+ * (measured, or the legacy tier price with its duration extension); a phone pickup that was not
+ * stopped in traffic, and phone handling, are multiplied by `phoneSpeedMult`. Whole numbers.
+ */
+export function basePenalty(e: DriveEvent): number {
+  switch (e.type) {
+    case 'speeding':
+      return speedingPenalty(e);
+    case 'phone_pickup':
+      return e.stoppedInTraffic ? BASE_PENALTY.phone_pickup_stopped : BASE_PENALTY.phone_pickup * phoneSpeedMult(phoneSpeedOf(e));
+    case 'phone_handling':
+      return penaltyFrom(BASE_PENALTY, e) * phoneSpeedMult(phoneSpeedOf(e));
+    default:
+      return penaltyFrom(BASE_PENALTY, e);
+  }
+}
 
 /**
  * What the event adds to the Safety Rating's penalty sum (`RATING_PENALTY`, no multipliers), and
@@ -245,12 +366,12 @@ export const attentionPenalty = (e: DriveEvent): number => (isDashcamType(e.type
 const repeatMult = (repeatIndex: number): number => (repeatIndex <= 0 ? 1 : repeatIndex === 1 ? 1.25 : 1.5);
 
 /**
- * The event's game penalty before short-drive scaling: base × speeding extension (+25% per extra
- * 30-s block) × repeat multiplier (2nd of a type ×1.25, 3rd and later ×1.5) × zone (×2).
+ * The event's game penalty before short-drive scaling: `basePenalty` (speeding's measured cost or
+ * legacy extension, phone use's speed multiplier included) × repeat multiplier (2nd of a type
+ * ×1.25, 3rd and later ×1.5) × zone (×2).
  */
 export function eventPenalty(e: DriveEvent, repeatIndex: number): number {
-  const extension = e.type === 'speeding' ? 1 + 0.25 * units(e) : 1;
-  return basePenalty(e) * extension * repeatMult(repeatIndex) * (e.zone ? 2 : 1);
+  return basePenalty(e) * repeatMult(repeatIndex) * (e.zone ? 2 : 1);
 }
 
 /** Safe miles credited after the daily cap: ∫ rate over [earlier, earlier + safe], 3 dp. */

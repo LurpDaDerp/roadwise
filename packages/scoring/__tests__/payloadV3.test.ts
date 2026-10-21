@@ -82,7 +82,8 @@ describe('FinalizeTripPayloadV3Schema — accepts', () => {
     expect(
       ok(
         mutate((p) => {
-          p.events[0].measured = { speedMph: 250, limitMph: 120, peakG: 10 };
+          p.events[0].measured = { speedMph: 250, limitMph: 120, peakG: 10, maxSpeedMph: 250 };
+          p.events[1].measured = { speedMph: 41, limitMph: 30, overMphS: 1_000_000 };
           p.events[1].units = 1440;
           p.integrity.maxSpeedMph = 300;
           p.polyline = '?~'.repeat(10);
@@ -96,6 +97,12 @@ describe('FinalizeTripPayloadV3Schema — accepts', () => {
   });
   test('a phone handling event with 1 unit', () =>
     expect(ok(mutate((p) => p.events.push(event(9, { type: 'phone_handling', tier: 'moderate', units: 1 }))))).toBe(true));
+  test('the round-7 measured keys: a speeding overMphS and a phone maxSpeedMph (both optional, 0 allowed)', () => {
+    expect(ok(mutate((p) => (p.events[1].measured = { speedMph: 41, limitMph: 30, overMphS: 12.3 })))).toBe(true);
+    expect(ok(mutate((p) => (p.events[1].measured = { overMphS: 0 })))).toBe(true);
+    expect(ok(mutate((p) => (p.events[2].measured = { mounted: false, speedMph: 12, maxSpeedMph: 48.5 })))).toBe(true);
+    expect(ok(mutate((p) => p.events.push(event(9, { type: 'phone_handling', tier: 'moderate', units: 2, measured: { mounted: true, maxSpeedMph: 0 } }))))).toBe(true);
+  });
   test('localDay a day either side of the UTC date (time zones)', () => {
     expect(ok(mutate((p) => (p.localDay = '2026-10-04')))).toBe(true);
     expect(ok(mutate((p) => (p.localDay = '2026-10-06')))).toBe(true);
@@ -193,6 +200,11 @@ describe('FinalizeTripPayloadV3Schema — rejects', () => {
     ['measured speed over 250 mph', (p) => (p.events[0].measured.speedMph = 250.1)],
     ['measured limit over 120 mph', (p) => (p.events[0].measured.limitMph = 120.1)],
     ['measured peak over 10 g', (p) => (p.events[0].measured.peakG = 10.1)],
+    ['a negative overMphS', (p) => (p.events[1].measured.overMphS = -0.1)],
+    ['an overMphS over 1,000,000', (p) => (p.events[1].measured.overMphS = 1_000_000.5)],
+    ['a maxSpeedMph over 250', (p) => (p.events[2].measured.maxSpeedMph = 250.1)],
+    ['a negative maxSpeedMph', (p) => (p.events[2].measured.maxSpeedMph = -1)],
+    ['a non-numeric overMphS', (p) => (p.events[1].measured.overMphS = '12')],
     ['maxSpeedMph over 300', (p) => (p.integrity.maxSpeedMph = 300.1)],
     ['a removed status (only the server removes events)', (p) => (p.events[1].status = 'removed')],
     ['a polyline with non-ASCII characters', (p) => (p.polyline = '_p~iFé')],

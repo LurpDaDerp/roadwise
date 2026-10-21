@@ -3,20 +3,30 @@ import {
   DASHCAM_MULT,
   MULT_CAP,
   SCORING_VERSION,
+  SPEEDING_EVENT_CAP,
+  SPEEDING_G,
+  SPEEDING_K,
+  SPEEDING_MAX_OVER_MPH,
   basePenalty,
   cappedMiles,
   dashcamDrive,
   isDashcamType,
   eventPenalty,
   keepDashcamEvents,
+  legacySpeedingPenalty,
   nextMultiplier,
+  phoneSpeedMult,
   ratingPenalty,
   scoreDrive,
   speedTier,
   speedTolerance,
+  speedingChargedS,
+  speedingCost,
+  speedingPenalty,
   type DriveEvent,
   type DriveInput,
 } from '../src/drive';
+import { SPEEDING_GRACE_S } from '../src/thresholds';
 import * as barrel from '../src';
 
 let seq = 0;
@@ -30,24 +40,24 @@ const roundHalfUp = (v: number): number => Math.floor(v + 0.5);
 
 describe('speedTolerance — T(L) for every row of the spec table', () => {
   test.each([
-    [25, 2],
-    [30, 2],
-    [35, 3],
-    [40, 4],
-    [45, 4],
-    [50, 5],
-    [55, 6],
-    [60, 7],
-    [65, 8],
-    [70, 8],
+    [25, 3],
+    [30, 3],
+    [35, 4],
+    [40, 5],
+    [45, 5],
+    [50, 6],
+    [55, 7],
+    [60, 8],
+    [65, 9],
+    [70, 9],
   ])('L=%i → T=%i', (L, T) => expect(speedTolerance(L)).toBe(T));
 
-  test('low limits clamp up to 2 (L=20 without a zone)', () => expect(speedTolerance(20)).toBe(2));
-  test('high limits clamp down to 8 (L=68: 10.5 → 11, less 2 → 9)', () => expect(speedTolerance(68)).toBe(8));
+  test('low limits clamp up to 3 (L=20 without a zone: 2.1 → 2, less 1 → 1)', () => expect(speedTolerance(20)).toBe(3));
+  test('high limits clamp down to 9 (L=68: 10.5 → 11, less 1 → 10)', () => expect(speedTolerance(68)).toBe(9));
   test('school and construction zones fix T at 2', () => {
     expect(speedTolerance(20, 'school')).toBe(2);
     expect(speedTolerance(65, 'construction')).toBe(2);
-    expect(speedTolerance(65, null)).toBe(8);
+    expect(speedTolerance(65, null)).toBe(9);
   });
 });
 
@@ -55,14 +65,14 @@ describe('speedTier — tier boundaries for every row', () => {
   // [limit, zone, minor above, moderate above, severe above]
   test.each([
     [20, 'school', 22, 26, 31],
-    [25, null, 27, 31, 36],
-    [30, null, 32, 36, 41],
-    [35, null, 38, 42, 47],
-    [45, null, 49, 53, 58],
-    [55, null, 61, 65, 70],
-    [60, null, 67, 71, 76],
-    [65, null, 73, 77, 82],
-    [70, null, 78, 82, 87],
+    [25, null, 28, 32, 37],
+    [30, null, 33, 37, 42],
+    [35, null, 39, 43, 48],
+    [45, null, 50, 54, 59],
+    [55, null, 62, 66, 71],
+    [60, null, 68, 72, 77],
+    [65, null, 74, 78, 83],
+    [70, null, 79, 83, 88],
   ] as const)('L=%i (%s): minor >%i, moderate >%i, severe >%i', (L, zone, minor, moderate, severe) => {
     expect(speedTier(minor, L, zone)).toBeNull();
     expect(speedTier(minor + 0.1, L, zone)).toBe('minor');
@@ -102,8 +112,122 @@ describe('basePenalty', () => {
   test('phone handling without units counts one block', () =>
     expect(basePenalty(ev({ type: 'phone_handling', tier: 'moderate' }))).toBe(8));
 
-  test('speeding base ignores the duration extension', () =>
-    expect(basePenalty(ev({ type: 'speeding', tier: 'minor', units: 4 }))).toBe(12));
+  test('speeding without a measured overMphS is the legacy tier price (the extension is in eventPenalty too)', () => {
+    expect(basePenalty(ev({ type: 'speeding', tier: 'minor', units: 4 }))).toBe(12);
+    expect(basePenalty(ev({ type: 'speeding', tier: 'minor', durationS: 30 }))).toBe(15);
+  });
+});
+
+describe('phone use at speed — points only', () => {
+  test('phoneSpeedMult: unknown or ≤ 25 ×1, over 25 to 45 ×1.5, over 45 ×2', () => {
+    expect([phoneSpeedMult(undefined), phoneSpeedMult(null), phoneSpeedMult(Number.NaN), phoneSpeedMult(0), phoneSpeedMult(25)]).toEqual([1, 1, 1, 1, 1]);
+    expect([phoneSpeedMult(25.1), phoneSpeedMult(45)]).toEqual([1.5, 1.5]);
+    expect([phoneSpeedMult(45.1), phoneSpeedMult(90)]).toEqual([2, 2]);
+  });
+
+  test('a pickup reads maxSpeedMph, else speedMph: 32, 48 or 64', () => {
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', measured: { maxSpeedMph: 20 } }))).toBe(32);
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', measured: { maxSpeedMph: 30 } }))).toBe(48);
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', measured: { maxSpeedMph: 50 } }))).toBe(64);
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', measured: { speedMph: 50 } }))).toBe(64);
+    // maxSpeedMph wins over the pickup speed when both are there
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', measured: { speedMph: 10, maxSpeedMph: 30 } }))).toBe(48);
+  });
+
+  test('a pickup stopped in traffic stays 16 whatever the measured speed', () => {
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', stoppedInTraffic: true, measured: { maxSpeedMph: 60 } }))).toBe(16);
+  });
+
+  test('handling is 8 per unit × the multiplier, whole numbers', () => {
+    expect(basePenalty(ev({ type: 'phone_handling', tier: 'severe', units: 3, measured: { maxSpeedMph: 30 } }))).toBe(36);
+    expect(basePenalty(ev({ type: 'phone_handling', tier: 'moderate', units: 1, measured: { maxSpeedMph: 70 } }))).toBe(16);
+  });
+
+  test('a missing, non-numeric or non-finite speed reads as ×1', () => {
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', measured: {} }))).toBe(32);
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', measured: { maxSpeedMph: '60' as never } }))).toBe(32);
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', measured: { maxSpeedMph: Number.POSITIVE_INFINITY } }))).toBe(32);
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', measured: null as never }))).toBe(32);
+  });
+
+  test('the rating penalty never takes the speed multiplier', () => {
+    expect(ratingPenalty(ev({ type: 'phone_pickup', tier: 'severe', measured: { maxSpeedMph: 60 } }))).toBe(40);
+    expect(ratingPenalty(ev({ type: 'phone_handling', tier: 'severe', units: 2, measured: { maxSpeedMph: 60 } }))).toBe(20);
+  });
+
+  test('the multiplier flows into the drive with the repeat multiplier on top', () => {
+    const b = scoreDrive(
+      drive({ events: [ev({ type: 'phone_pickup', tier: 'severe', measured: { maxSpeedMph: 50 } }), ev({ type: 'phone_pickup', tier: 'severe', measured: { maxSpeedMph: 30 } })] }),
+      ctx0
+    );
+    expect(b.events.map((e) => e.penalty)).toEqual([64, 60]); // 32 × 2, then 32 × 1.5 × 1.25
+    expect(b.ratingPenalty).toBe(80);
+  });
+});
+
+describe('speeding cost — by amount over, compounding over time', () => {
+  test('the constants', () => expect([SPEEDING_K, SPEEDING_G, SPEEDING_EVENT_CAP, SPEEDING_MAX_OVER_MPH, SPEEDING_GRACE_S]).toEqual([0.15, 0.02, 300, 150, 5]));
+
+  test('charged seconds: durationS less the 5 grace rows, never under 1', () => {
+    expect(speedingChargedS(6)).toBe(1);
+    expect(speedingChargedS(15)).toBe(10);
+    expect(speedingChargedS(5)).toBe(1);
+    expect(speedingChargedS(0)).toBe(1);
+    expect(speedingChargedS(-3)).toBe(1);
+    expect(speedingChargedS(Number.NaN)).toBe(1);
+    expect(speedingChargedS(35.5)).toBe(30.5);
+  });
+
+  test.each([
+    [10, 30, 5], // 10 s charged at 3 mph over
+    [30, 90, 18], // 30 s at 3
+    [60, 180, 51], // 60 s at 3
+    [30, 300, 61], // 30 s at 10
+    [1, 3, 1], // 0.45 rounds to 0, floored at 1
+    [120, 360, 220],
+    [200, 200, 300], // capped
+    [5, 12.5, 2],
+  ])('%i s charged with %f mph·s over → %i', (n, over, cost) => expect(speedingCost(n, over)).toBe(cost));
+
+  test('nothing over after the grace still costs 1', () => {
+    expect(speedingCost(10, 0)).toBe(1);
+    expect(speedingCost(10, -5)).toBe(1);
+    expect(speedingCost(10, Number.NaN)).toBe(1);
+  });
+
+  test('overMphS is read as at most 150 mph over per charged second, and a huge n lands on the cap, never NaN or Infinity', () => {
+    expect(speedingCost(10, 1e9)).toBe(speedingCost(10, 1500));
+    expect(speedingCost(43_200, 43_200)).toBe(300);
+    expect(speedingCost(1e300, 1e300)).toBe(300);
+    expect(speedingCost(Number.NaN, 30)).toBe(speedingCost(1, 30));
+    expect(speedingCost(0, 30)).toBe(speedingCost(1, 30));
+  });
+
+  test('a measured event is priced from overMphS and durationS, not its tier', () => {
+    const minor = ev({ type: 'speeding', tier: 'minor', durationS: 15, measured: { overMphS: 30 } });
+    const severe = ev({ type: 'speeding', tier: 'severe', durationS: 15, measured: { overMphS: 30 } });
+    expect(speedingPenalty(minor)).toBe(5);
+    expect(speedingPenalty(severe)).toBe(5);
+    expect(basePenalty(minor)).toBe(5);
+    expect(eventPenalty(minor, 0)).toBe(5);
+    // the five grace rows are never charged: 35 rows over with 90 over after the grace = 30 charged at 3
+    expect(speedingPenalty(ev({ type: 'speeding', tier: 'moderate', durationS: 35, measured: { overMphS: 90 } }))).toBe(18);
+  });
+
+  test('legacy: no finite overMphS → exactly the old tier price with +25% per extra 30-s block', () => {
+    expect(legacySpeedingPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 29 }))).toBe(12);
+    expect(speedingPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 30 }))).toBe(15);
+    expect(speedingPenalty(ev({ type: 'speeding', tier: 'moderate', durationS: 60 }))).toBe(48);
+    expect(speedingPenalty(ev({ type: 'speeding', tier: 'severe', durationS: 65 }))).toBe(120);
+    expect(speedingPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 30, measured: {} }))).toBe(15);
+    expect(speedingPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 30, measured: { overMphS: Number.NaN } }))).toBe(15);
+    expect(speedingPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 30, measured: { overMphS: '9' as never } }))).toBe(15);
+    expect(speedingPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 30, measured: null as never }))).toBe(15);
+  });
+
+  test('the speeding tier still sets the rating penalty', () => {
+    expect(ratingPenalty(ev({ type: 'speeding', tier: 'severe', durationS: 15, measured: { overMphS: 30 } }))).toBe(100);
+  });
 });
 
 describe('eventPenalty', () => {
@@ -115,14 +239,14 @@ describe('eventPenalty', () => {
     expect(eventPenalty(brake, 7)).toBe(12);
   });
 
-  test('speeding adds 25% of base per extra 30-s block', () => {
+  test('legacy speeding adds 25% of base per extra 30-s block', () => {
     expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 29 }), 0)).toBe(12);
     expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 30 }), 0)).toBe(15);
     expect(eventPenalty(ev({ type: 'speeding', tier: 'moderate', durationS: 60 }), 0)).toBe(48);
     expect(eventPenalty(ev({ type: 'speeding', tier: 'severe', durationS: 65 }), 0)).toBe(120);
   });
 
-  test('speeding blocks always come from durationS; a client-sent units is ignored', () => {
+  test('legacy speeding blocks always come from durationS; a client-sent units is ignored', () => {
     expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 600, units: 0 }), 0)).toBe(72);
     expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 0, units: 5 }), 0)).toBe(12);
   });
@@ -132,8 +256,16 @@ describe('eventPenalty', () => {
     expect(basePenalty(ev({ type: 'phone_handling', tier: 'severe', units: 1e12 }))).toBe(11_520);
   });
 
+  test('a measured speeding event takes the repeat multiplier on its cost', () => {
+    const e = ev({ type: 'speeding', tier: 'minor', durationS: 35, measured: { overMphS: 300 } }); // 61
+    expect(eventPenalty(e, 0)).toBe(61);
+    expect(eventPenalty(e, 1)).toBe(76.25);
+    expect(eventPenalty(e, 2)).toBe(91.5);
+  });
+
   test('school / construction zone doubles the penalty', () => {
     expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', zone: 'school' }), 0)).toBe(24);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 15, zone: 'school', measured: { overMphS: 30 } }), 0)).toBe(10);
     expect(eventPenalty(ev({ type: 'hard_brake', tier: 'minor', zone: 'construction' }), 1)).toBe(20);
   });
 
@@ -350,13 +482,30 @@ describe('scoreDrive — rules', () => {
     expect(b.penalties).toBe(16);
   });
 
-  test('speeding +25% per 30-s block and zone ×2 flow into the drive', () => {
+  test('legacy speeding +25% per 30-s block and zone ×2 flow into the drive', () => {
     const b = scoreDrive(
       drive({ events: [ev({ type: 'speeding', tier: 'moderate', durationS: 45, zone: 'school' })] }),
       ctx0
     );
     expect(b.penalties).toBe(80); // 32 × 1.25 × 2
     expect(b.ratingPenalty).toBe(40);
+  });
+
+  test('measured speeding: the cost × repeat × zone, then the short-drive scale, rounded per event', () => {
+    const first = ev({ type: 'speeding', tier: 'minor', durationS: 35, measured: { overMphS: 90 } }); // 18
+    const second = ev({ type: 'speeding', tier: 'moderate', durationS: 35, zone: 'construction', measured: { overMphS: 300 } }); // 61 × 1.25 × 2
+    const b = scoreDrive(drive({ events: [first, second] }), ctx0);
+    expect(b.events.map((e) => e.penalty)).toEqual([18, 153]); // 152.5 rounds half up
+    expect(b.ratingPenalty).toBe(55);
+    // 1.5 mi: shortScale 0.75
+    expect(scoreDrive(drive({ miles: 1.5, safeMiles: 1.5, events: [first] }), ctx0).events.map((e) => e.penalty)).toEqual([14]); // 13.5 → 14
+  });
+
+  test('a drive mixing legacy and measured speeding events prices each its own way', () => {
+    const old = ev({ type: 'speeding', tier: 'severe', durationS: 65 }); // 120
+    const measured = ev({ type: 'speeding', tier: 'severe', durationS: 15, measured: { overMphS: 30 } }); // 5 × 1.25
+    const b = scoreDrive(drive({ events: [old, measured] }), ctx0);
+    expect(b.events.map((e) => e.penalty)).toEqual([120, 6]); // 6.25 → 6
   });
 
   test('removed events are excluded from penalties, rating, repeat index and the clean check', () => {

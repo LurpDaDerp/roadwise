@@ -9,13 +9,15 @@ import {
   DASHCAM_MIN_MPH,
   DASHCAM_PHONE_OVERLAP_S,
   DISPUTE_AUTO_PER_WEEK,
+  CHALLENGE_REWARD_POINTS,
   HARD_ACCEL_G,
   HARD_BRAKE_G,
   HARD_CORNER_G,
   LEAGUE_TIERS,
   MERGE_DIST_M,
   MIN_SCORED_MILES,
-  SPEEDING_MIN_S,
+  MIN_SCORED_S,
+  SPEEDING_GRACE_S,
 } from '../src/thresholds';
 
 test('league tiers in promotion order', () =>
@@ -31,12 +33,15 @@ test('the 5 launch achievements, each with a title and description', () => {
 
 test('detection thresholds match the spec', () => {
   expect(HARD_BRAKE_G).toEqual({ minor: 0.3, severe: 0.45 });
-  expect(HARD_ACCEL_G).toEqual({ minor: 0.28, severe: 0.4 });
+  expect(HARD_ACCEL_G).toEqual({ minor: 0.32, severe: 0.45 });
   expect(HARD_CORNER_G).toEqual({ minor: 0.4, severe: 0.55 });
-  expect(SPEEDING_MIN_S).toEqual({ default: 4, severe: 3 });
+  expect(SPEEDING_GRACE_S).toBe(5);
   expect(MIN_SCORED_MILES).toBe(0.5);
+  expect(MIN_SCORED_S).toBe(120);
   expect(MERGE_DIST_M).toBe(402);
 });
+
+test('the weekly challenge reward', () => expect(CHALLENGE_REWARD_POINTS).toBe(200));
 
 test('the DashPal rules match the plan', () => {
   expect([DASHCAM_MIN_MPH, DASHCAM_DROWSY_GAP_S, DASHCAM_EYES_OFF_GAP_S, DASHCAM_MIN_MOVING_S, DASHCAM_MIN_COVERAGE]).toEqual([10, 600, 300, 60, 0.8]);
