@@ -22,6 +22,7 @@ import {
   statusOf,
   summarize,
   suppressionDue,
+  suppressionResume,
   traceStart,
   wakeGate,
   type DetectRow,
@@ -104,6 +105,11 @@ export function runDetectRow(v: DetectRowInputs): DetectActual {
     }
     case 'suppress':
       return { cause: suppressionDue(v.since, v.until, v.lastOverStopTs, v.walkSince, v.now) };
+    case 'suppressResume': {
+      const moved = suppressionResume(v.until, v.relaunch);
+      if (moved === null) return { resumed: false, causes: [] };
+      return { resumed: true, causes: v.checks.map((t) => suppressionDue(v.since, v.until, moved, null, t)) };
+    }
     case 'resume':
       return { decision: resumeDecision(v.lastRowTs, v.startedAt, v.now) };
     case 'status': {
@@ -119,6 +125,7 @@ export function expectedActual(v: DetectVector): DetectActual {
     case 'confirm':
     case 'start':
     case 'status':
+    case 'suppressResume':
       return { ...v.expected };
     case 'trace':
       return { index: v.expected.index };

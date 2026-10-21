@@ -438,6 +438,17 @@ export function suppressionDue(
   return null;
 }
 
+/**
+ * A relaunch while detection rests: the rest goes on until its 3 h cap, still measured from when
+ * "Not driving?" began it (`until`), and its still clock starts again at the relaunch. Nothing was
+ * sensed while RoadWise was not running, and a relaunch comes from a wake (the phone moved) or from
+ * the driver, so the rest ends no sooner than 5 min after it. The still clock's restart (`now`), or
+ * null when the rest is over.
+ */
+export function suppressionResume(until: number | null, now: number): number | null {
+  return until !== null && now < until ? now : null;
+}
+
 // ——— Launch ———
 
 /** A relaunch resumes a journaled drive whose last row (else its start) is 5 min old or less; older ones end as orphans. */

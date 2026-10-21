@@ -50,6 +50,7 @@ describe('the detect self-test', () => {
       candidate: () => ({ cause: 'walking' }),
       end: (a) => ({ results: (a.results as unknown[]).map(() => ({ due: 'limit', overdue: 'limit' })) }),
       suppress: () => ({ cause: 'never' }),
+      suppressResume: (a) => ({ ...a, causes: (a.causes as unknown[]).map(() => 'still') }),
       resume: (a) => ({ decision: a.decision === 'resume' ? 'orphan' : 'resume' }),
       status: (a) => ({ ...a, missing: ['motion'] }),
     };

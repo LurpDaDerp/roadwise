@@ -104,6 +104,16 @@ export type DetectVector =
       now: number;
       expected: 'cap' | 'walking' | 'still' | null;
     }
+  | {
+      name: string;
+      kind: 'suppressResume';
+      since: number;
+      until: number;
+      relaunch: number;
+      /** Times the rest's clock checks after the relaunch (no fix over 3 mph, no walk). */
+      checks: number[];
+      expected: { resumed: boolean; causes: ('cap' | 'walking' | 'still' | null)[] };
+    }
   | { name: string; kind: 'resume'; lastRowTs: number | null; startedAt: number; now: number; expected: 'resume' | 'orphan' }
   | { name: string; kind: 'status'; inputs: StatusInputs; expected: { status: DetectStatus; missing: DetectMissing[] } };
 
@@ -365,6 +375,25 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   { name: 'suppress: ends 5 min after anything over 3 mph', kind: 'suppress', since: at(0), until: at(10_800), lastOverStopTs: at(600), walkSince: null, now: at(900), expected: 'still' },
   { name: 'suppress: 5 min from its start with nothing over 3 mph', kind: 'suppress', since: at(0), until: at(10_800), lastOverStopTs: null, walkSince: null, now: at(300), expected: 'still' },
   { name: 'suppress: a bus still moving keeps it', kind: 'suppress', since: at(0), until: at(10_800), lastOverStopTs: at(800), walkSince: null, now: at(900), expected: null },
+  {
+    name: 'suppress resume: a relaunch 10 min into the rest keeps it; its still clock starts at the relaunch',
+    kind: 'suppressResume',
+    since: at(0),
+    until: at(10_800),
+    relaunch: at(600),
+    checks: [at(605), at(899), at(900)],
+    expected: { resumed: true, causes: [null, null, 'still'] },
+  },
+  {
+    name: 'suppress resume: the 3 h cap is still measured from when the rest began',
+    kind: 'suppressResume',
+    since: at(0),
+    until: at(10_800),
+    relaunch: at(10_700),
+    checks: [at(10_799), at(10_800)],
+    expected: { resumed: true, causes: [null, 'cap'] },
+  },
+  { name: 'suppress resume: a relaunch at the cap ends the rest', kind: 'suppressResume', since: at(0), until: at(10_800), relaunch: at(10_800), checks: [], expected: { resumed: false, causes: [] } },
 
   // ——— a relaunch ———
   { name: 'resume: a last row 5 min old resumes', kind: 'resume', lastRowTs: at(0), startedAt: at(-600), now: at(300), expected: 'resume' },

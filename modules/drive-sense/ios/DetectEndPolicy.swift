@@ -81,4 +81,11 @@ extension DetectPolicy {
     if now - max(since, lastOverStopTs ?? since) >= SUPPRESS_STILL_MS { return "still" }
     return nil
   }
+
+  /// policy.ts `suppressionResume`: a relaunch while detection rests keeps the rest until its cap
+  /// (from when it began) and restarts its still clock at the relaunch; nil when the rest is over.
+  static func suppressionResume(until: Double?, now: Double) -> Double? {
+    guard let u = until, now < u else { return nil }
+    return now
+  }
 }

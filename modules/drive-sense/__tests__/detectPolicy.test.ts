@@ -17,6 +17,8 @@ import {
   MPS_PER_MPH,
   slow,
   startOf,
+  suppressionDue,
+  suppressionResume,
   traceStart,
   trusted,
   type DetectRow,
@@ -39,7 +41,7 @@ describe('the decision table', () => {
 
   test('every rule has rows', () => {
     const kinds = new Set(DETECT_VECTORS.map((v) => v.kind));
-    expect([...kinds].sort()).toEqual(['candidate', 'confirm', 'end', 'motionGate', 'resume', 'start', 'status', 'summary', 'suppress', 'trace', 'wake'].sort());
+    expect([...kinds].sort()).toEqual(['candidate', 'confirm', 'end', 'motionGate', 'resume', 'start', 'status', 'summary', 'suppress', 'suppressResume', 'trace', 'wake'].sort());
   });
 });
 
@@ -165,6 +167,21 @@ describe('properties', () => {
     expect(c.holdMs).toBe(60_000);
     expect(endDue(c, T0, T0 + 20_000 + DETECT.STILL_END_MS + 59_999, null).overdue).toBeNull();
     expect(endDue(c, T0, T0 + 20_000 + DETECT.STILL_END_MS + 60_000, null).overdue).toBe('still');
+  });
+
+  test('a rest resumed at a relaunch ends no sooner than 5 min after it (nothing over 3 mph) and never past its cap', () => {
+    const since = T0;
+    const until = T0 + DETECT.SUPPRESS_MAX_MS;
+    for (let relaunch = since + 1_000; relaunch < until; relaunch += 7 * 60_000 + 13_000) {
+      const moved = suppressionResume(until, relaunch);
+      expect(moved).toBe(relaunch);
+      const justBefore = Math.min(until, relaunch + DETECT.SUPPRESS_STILL_MS) - 1;
+      expect({ relaunch, cause: suppressionDue(since, until, moved, null, justBefore) }).toEqual({ relaunch, cause: null });
+      const end = relaunch + DETECT.SUPPRESS_STILL_MS < until ? 'still' : 'cap';
+      expect({ relaunch, cause: suppressionDue(since, until, moved, null, Math.min(until, relaunch + DETECT.SUPPRESS_STILL_MS)) }).toEqual({ relaunch, cause: end });
+    }
+    expect(suppressionResume(until, until)).toBeNull();
+    expect(suppressionResume(null, T0)).toBeNull();
   });
 
   test('distances: 150 m north is 150 m', () => {

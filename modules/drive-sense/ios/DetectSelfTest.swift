@@ -48,6 +48,8 @@ enum DetectSelfTest {
       guard let since = jsonNumber(v["since"]), let until = jsonNumber(v["until"]), let now = jsonNumber(v["now"]) else { return nil }
       let cause = DetectPolicy.suppressionDue(since: since, until: until, lastOverStopTs: jsonNumber(v["lastOverStopTs"]), walkSince: jsonNumber(v["walkSince"]), now: now)
       return ["cause": cause.map { $0 as Any } ?? NSNull()]
+    case "suppressResume":
+      return suppressResume(v)
     case "resume":
       guard let startedAt = jsonNumber(v["startedAt"]), let now = jsonNumber(v["now"]) else { return nil }
       return ["decision": DetectPolicy.resumeDecision(lastRowTs: jsonNumber(v["lastRowTs"]), startedAt: startedAt, now: now)]
@@ -105,6 +107,21 @@ enum DetectSelfTest {
       }
     }
     return ["results": results]
+  }
+
+  /// A relaunch mid-rest, then the rest's clock at each check (nothing over 3 mph, no walk).
+  private static func suppressResume(_ v: [String: Any]) -> [String: Any]? {
+    guard let since = jsonNumber(v["since"]), let until = jsonNumber(v["until"]), let relaunch = jsonNumber(v["relaunch"]),
+          let list = v["checks"] as? [Any] else { return nil }
+    let checks = list.compactMap { jsonNumber($0) }
+    guard checks.count == list.count else { return nil }
+    guard let moved = DetectPolicy.suppressionResume(until: until, now: relaunch) else {
+      return ["resumed": false, "causes": [Any]()]
+    }
+    let causes: [Any] = checks.map { t -> Any in
+      DetectPolicy.suppressionDue(since: since, until: until, lastOverStopTs: moved, walkSince: nil, now: t).map { $0 as Any } ?? NSNull()
+    }
+    return ["resumed": true, "causes": causes]
   }
 
   // MARK: - Reading the row's JSON

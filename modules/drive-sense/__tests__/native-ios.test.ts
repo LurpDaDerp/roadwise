@@ -519,7 +519,14 @@ describe('iOS drive detector: the state machine (text)', () => {
     const launch = fn(d, 'func resumeAtLaunch()');
     expect(launch).toMatch(/case "candidate":\s*settle\(&r, now\)/);
     expect(launch).toMatch(/resumeDrive\(driveId\)/);
-    expect(launch).toMatch(/if let until = r\.suppressedUntil, now < until \{\s*capture\.beginSuppressedSensing\(\)/);
+    // a rest: kept until its cap (from when it began), its still clock from the relaunch (review M5)
+    expect(launch).toMatch(/if let moved = DetectPolicy\.suppressionResume\(until: r\.suppressedUntil, now: now\) \{\s*lastOverStopTs = moved\s*capture\.beginSuppressedSensing\(\)\s*startClock\(\)/);
+    expect(launch).not.toMatch(/suppressedSince =|suppressedUntil =/);
+    // the rest's start and cap are in the record, saved when "Not driving?" begins it
+    expect(code('DetectStateRecord.swift')).toMatch(/var suppressedSince: Double\?\s*var suppressedUntil: Double\?/);
+    const nd = fn(d, 'func notDriving()');
+    expect(nd.indexOf('r.suppressedSince = now')).toBeGreaterThan(-1);
+    expect(nd.indexOf('r.suppressedSince = now')).toBeLessThan(nd.indexOf('save(r)'));
     const resume = fn(d, 'func resumeDrive(');
     expect(resume).toMatch(/DetectPolicy\.resumeDecision\(lastRowTs: s\.lastRowTs, startedAt: startedAt, now: now\) == "resume" else \{\s*self\.commitEnd\(cause: "orphan", endedAt: now\)/);
     expect(resume).toMatch(/"k": "gap"/);
@@ -632,12 +639,12 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
 
   it('each rule of policy.ts has its Swift function, and the self-test runs every row kind through them', () => {
     const policy = code('DetectPolicy.swift') + code('DetectEndPolicy.swift');
-    for (const fn of ['trusted', 'slow', 'moving', 'distanceM', 'confirmStep', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'endDue', 'suppressionDue']) {
+    for (const fn of ['trusted', 'slow', 'moving', 'distanceM', 'confirmStep', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'endDue', 'suppressionDue', 'suppressionResume']) {
       expect({ fn, declared: new RegExp(`static func ${fn}\\(`).test(policy) }).toEqual({ fn, declared: true });
     }
     const st = code('DetectSelfTest.swift');
-    for (const kind of ['confirm', 'trace', 'start', 'summary', 'motionGate', 'wake', 'candidate', 'end', 'suppress', 'resume', 'status']) expect(st).toContain(`case "${kind}":`);
-    for (const call of ['confirmStep(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'endClockAt(', 'endOnRow(', 'endDue(', 'suppressionDue(', 'resumeDecision(', 'statusOf(']) {
+    for (const kind of ['confirm', 'trace', 'start', 'summary', 'motionGate', 'wake', 'candidate', 'end', 'suppress', 'suppressResume', 'resume', 'status']) expect(st).toContain(`case "${kind}":`);
+    for (const call of ['confirmStep(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'endClockAt(', 'endOnRow(', 'endDue(', 'suppressionDue(', 'suppressionResume(', 'resumeDecision(', 'statusOf(']) {
       expect({ call, used: st.includes(`DetectPolicy.${call}`) }).toEqual({ call, used: true });
     }
     // the trace-back loop is bounded, and the dip breaks only past 5 s

@@ -907,7 +907,8 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   asked for again; a candidate never survives a process; a drive whose journal's last row is 5 min
   old or less resumes (the torn tail cut off, a `gap` line, sensors on, rows from the next `seq`,
   the still clock from the last row); an older one ends as an `orphan` (`driveEnded`, for JS to
-  finalize); a rest resumes until its cap.
+  finalize); a rest resumes until its 3 h cap (measured from when it began), its still clock
+  starting again at the relaunch, so a relaunch never ends it at once.
 
 ### The row journal
 
@@ -946,6 +947,6 @@ did.
 
 `detect` vectors (§8): every row of `src/detect/vectors.ts` (confirmation, trace-back, start and
 fallbacks, the motion summary and gate, the wake gate, a candidate's clock, the safety stop, the
-rest's end, a relaunch's decision, the status) runs through the production `DetectPolicy` on the
+rest's end, a rest resumed at a relaunch, a relaunch's decision, the status) runs through the production `DetectPolicy` on the
 phone (`DetectSelfTest.swift`) and is diffed by `diffDetectSelfTest`.
 
