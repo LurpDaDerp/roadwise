@@ -1,53 +1,53 @@
-// The finalize pipeline (plan §3, §5): the closed session the engine hands over becomes a stored
-// drive with a local estimate, a privacy-trimmed route, from/to labels, and one queued upload.
+// The finalize pipeline (modes plan §3.5, §3.11): the closed session the engine hands over becomes a
+// stored drive with a privacy-trimmed route, from/to labels, its opportunity counters and one
+// queued, held upload.
 //
 //   1. the route is trimmed (zones + first/last 0.25 mi) and the events located on it;
-//   2. the v3 payload is built and validated against the upload contract;
-//   3. the drive is scored locally with `scoreDrive` and the cached context — an estimate until
-//      the server answers, from exactly what is uploaded (the events with what they measured, the
-//      drive's duration);
-//   4. ONE transaction replaces the events, updates the trip row (`pending`), queues the upload
-//      and purges the samples. It commits or it does not.
+//   2. the v4 payload is built and validated against the upload contract (how the drive started,
+//      whether its "Not driving?" ran out, its exposure);
+//   3. the drive is classified (`classifyDrive`: scored, or too short; the events that break clean);
+//   4. ONE transaction replaces the events, updates the trip row (`pending`, `finalized_at`), queues
+//      the upload HELD for `UPLOAD_HOLD_MS` (a drive confirmed in that window, starting near this
+//      end, re-opens this trip: `src/drive/continuation.ts`), and sweeps the samples of drives whose
+//      hold is over. This drive's own samples stay until its upload is sent or its hold lapses. It
+//      commits or it does not.
 // A payload the contract refuses is stored as `failed` (never uploaded, never left `recording`).
 // A drive that never moved, or never reached driving speed, is not finalized at all: `closeDrive`
 // drops it (nothing stored or queued).
 //
-// DashPal (plan §8.4): before any of that, the dashcam's facts for the drive are read once (they
-// read the samples the transaction purges). Its candidates become severe `eyes_off` / `drowsy`
-// events under the scoring rules (once the drive's warm-up is over, at 10 mph or more on a good fix, an eyes-off
-// beside a phone event dropped, at most one drowsy per 10 min and one eyes-off per 5 min), and its
-// seconds become the payload's `dashcam` block, from which the estimate derives the DashPal bonus
-// exactly as the server does.
+// DashPal: before any of that, the dashcam's facts for the drive are read once. Its candidates
+// become severe `eyes_off` / `drowsy` events under the scoring rules (once the drive's warm-up is
+// over, at 10 mph or more on a good fix, at most one drowsy per 10 min and one eyes-off per 5 min),
+// and its seconds become the payload's `dashcam` block.
 import {
+  classifyDrive,
   DASHCAM_DROWSY_GAP_S,
   DASHCAM_EYES_OFF_GAP_S,
   DASHCAM_MIN_MPH,
-  DASHCAM_PHONE_OVERLAP_S,
+  MERGE_GAP_S,
   NO_EVENTS_FIRST_S,
-  dashcamDrive,
-  watchedMiles,
   isDashcamType,
-  scoreDrive,
+  watchedMiles,
   type DashcamEventType,
-  type DriveBreakdown,
-  type DriveContext,
+  type DriveClass,
   type DriveEvent,
+  type Exposure,
 } from '@scoring';
 
 import type { DashcamCandidate, DashcamTripFacts } from '@/dashcam/facts';
 
-import { createEventsRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db, type EventRow, type NewEvent, type TripRow } from '@/data/db';
+import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db, type EventRow, type NewEvent, type TripRow } from '@/data/db';
 import { deviceTrimSeed } from '@/data/devices/deviceSecret';
 import { countEvents } from '@/data/queries/rows';
 import {
-  FinalizeTripPayloadV3Schema,
+  FinalizeTripPayloadV4Schema,
   MAX_DRIVE_MS,
   MAX_EVENTS,
   MAX_POLYLINE_BYTES,
   TZ_NAME_PATTERN,
-  type DashcamV3,
-  type FinalizeTripPayloadV3,
-  type PayloadEventV3,
+  type FinalizeTripPayloadV4,
+  type PayloadDashcam,
+  type PayloadEvent,
 } from '@/data/sync/payload';
 import { enqueueFinalize } from '@/data/sync/queue';
 import { RUN_SEPARATOR } from '@/lib/polyline';
@@ -55,10 +55,17 @@ import { metersToMiles, mpsToMph } from '@/lib/units';
 import { dayKey } from '@/lib/time';
 
 import type { TripSession } from './engine.types';
-import { expoGeocoder, labelFor, type Geocoder } from './labels';
+import { closeExposure } from './exposure';
+import { expoGeocoder, labelFor, startPoint, type Geocoder } from './labels';
 import { parseZones, PRIVACY_ZONES_KEY, trimRoute, type PrivacyZone } from './privacy';
 import { durationSOf } from './session';
 import type { DetectedEvent } from './types';
+
+/**
+ * Every finalized drive's upload waits this long from its finalize (`trips.finalized_at`), and its
+ * samples are kept as long: a drive confirmed within it, starting near this end, re-opens the trip.
+ */
+export const UPLOAD_HOLD_MS = MERGE_GAP_S * 1000;
 
 export interface FinalizeDeps {
   db: Db;
@@ -70,14 +77,17 @@ export interface FinalizeDeps {
   zones?: () => Promise<PrivacyZone[]>;
   /** Reverse geocoder for the labels; default expo-location. `null`: no geocode (zone names only). */
   geocode?: Geocoder | null;
-  /** The cached summary context for the estimate (streak); null when nothing is cached. */
-  context?: () => Promise<{ streak: number } | null>;
   /** The per-drive privacy trim seed. Default: `deviceTrimSeed` (HMAC of the SecureStore secret). */
   trimSeed?: (clientTripId: string) => Promise<string>;
   /**
+   * The drive's in-drive "Not driving?" ran out (the host's budget). Also read from the trip row
+   * (`not_driving_expired`, written the moment it ran out); either one marks the drive.
+   */
+  notDrivingExpired?: boolean;
+  /**
    * What the DashPal dashcam saw on this drive (`loadDashcamTripFacts` in `src/dashcam/facts.ts`).
-   * Called once, before the final transaction purges the samples it reads. Absent, or failing: the
-   * drive has no DashPal events and no DashPal block.
+   * Called once, before the final transaction. Absent, or failing: the drive has no DashPal events
+   * and no DashPal block.
    */
   dashcamFacts?: (trip: { clientTripId: string; startedAt: number; endedAt: number }) => Promise<DashcamTripFacts>;
 }
@@ -85,10 +95,10 @@ export interface FinalizeDeps {
 export interface FinalizeResult {
   trip: TripRow;
   events: EventRow[];
-  /** The queued upload, or null when the contract refused the drive (stored as `failed`). */
-  payload: FinalizeTripPayloadV3 | null;
-  /** The local estimate. */
-  breakdown: DriveBreakdown;
+  /** The queued (held) upload, or null when the contract refused the drive (stored as `failed`). */
+  payload: FinalizeTripPayloadV4 | null;
+  /** Whether it scores and how many events break clean. */
+  drive: DriveClass;
 }
 
 export const INVALID_PAYLOAD_SYNC_ERROR = 'invalid_payload';
@@ -137,14 +147,12 @@ const GAP_MS: Readonly<Record<DashcamEventType, number>> = { drowsy: DASHCAM_DRO
 const candidateDuration = (c: DashcamCandidate): number => (Number.isFinite(c.durationS) ? Math.max(0, c.durationS) : 0);
 
 /**
- * The scored DashPal events of a drive from the dashcam's candidates (plan §8.4), in time order:
- * kept only when they start once the drive's warm-up is over (`warmupEndsAt`; default
- * `NO_EVENTS_FIRST_S` after the start) and by its end, at a known
- * GPS speed of `DASHCAM_MIN_MPH` or more (an unknown speed drops it); an eyes-off whose span comes
- * within `DASHCAM_PHONE_OVERLAP_S` of an active phone pickup or handling event is dropped (the
- * phone already charged that look); then at most one drowsy per `DASHCAM_DROWSY_GAP_S` and one
- * eyes-off per `DASHCAM_EYES_OFF_GAP_S`, the earliest kept. A candidate whose id is not a lowercase
- * uuid, or repeats an id already on the drive, is dropped rather than refuse the whole upload.
+ * The scored DashPal events of a drive from the dashcam's candidates, in time order: kept only when
+ * they start once the drive's warm-up is over (`warmupEndsAt`; default `NO_EVENTS_FIRST_S` after
+ * the start) and by its end, at a known GPS speed of `DASHCAM_MIN_MPH` or more (an unknown speed
+ * drops it); then at most one drowsy per `DASHCAM_DROWSY_GAP_S` and one eyes-off per
+ * `DASHCAM_EYES_OFF_GAP_S`, the earliest kept. A candidate whose id is not a lowercase uuid, or
+ * repeats an id already on the drive, is dropped rather than refuse the whole upload.
  */
 export function dashcamEvents(
   candidates: readonly DashcamCandidate[],
@@ -152,20 +160,11 @@ export function dashcamEvents(
   driveEvents: readonly Pick<DriveEvent, 'id' | 'type' | 'startedAt' | 'durationS' | 'status'>[]
 ): DetectedEvent[] {
   const earliest = trip.warmupEndsAt ?? trip.startedAt + NO_EVENTS_FIRST_S * 1000;
-  const slack = DASHCAM_PHONE_OVERLAP_S * 1000;
   const taken = new Set(driveEvents.map((e) => e.id));
-  const phone = driveEvents
-    .filter((e) => e.status !== 'removed' && (e.type === 'phone_pickup' || e.type === 'phone_handling'))
-    .map((e) => [e.startedAt - slack, e.startedAt + Math.max(0, finite(e.durationS)) * 1000 + slack] as const);
   const eligible = candidates
     .filter((c) => (c.kind === 'eyes_off' || c.kind === 'drowsy') && typeof c.id === 'string' && EVENT_UUID.test(c.id) && !taken.has(c.id))
     .filter((c) => Number.isFinite(c.startedAt) && c.startedAt >= earliest && c.startedAt <= trip.endedAt)
     .filter((c) => c.speedMph !== null && Number.isFinite(c.speedMph) && c.speedMph >= DASHCAM_MIN_MPH)
-    .filter((c) => {
-      if (c.kind !== 'eyes_off') return true;
-      const end = c.startedAt + candidateDuration(c) * 1000;
-      return !phone.some(([from, to]) => c.startedAt <= to && end >= from);
-    })
     .slice()
     .sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const lastKept: Partial<Record<DashcamEventType, number>> = {};
@@ -192,7 +191,7 @@ export function dashcamEvents(
  * the drive (`dashcamId` non-null and a 12-hex id), whole seconds clamped into the contract
  * (moving ≤ 12 h, covered ≤ moving). Anything else: null, and the drive is simply not a DashPal one.
  */
-export function dashcamBlock(facts: DashcamTripFacts | null): DashcamV3 | null {
+export function dashcamBlock(facts: DashcamTripFacts | null): PayloadDashcam | null {
   if (facts === null || typeof facts.dashcamId !== 'string') return null;
   const deviceId = facts.dashcamId.toLowerCase();
   if (!DASHCAM_ID.test(deviceId)) return null;
@@ -213,14 +212,12 @@ export function sanitizeEvent(e: DetectedEvent, tripStartedAt: number, tripEnded
   const measured: DetectedEvent['measured'] = {};
   const m = e.measured;
   if (finiteNumber(m.speedMph)) measured.speedMph = clamp(round3(m.speedMph), 0, 250);
-  if (finiteNumber(m.maxSpeedMph)) measured.maxSpeedMph = clamp(round3(m.maxSpeedMph), 0, 250);
   if (finiteNumber(m.limitMph)) measured.limitMph = clamp(Math.round(m.limitMph), 0, 120);
   if (finiteNumber(m.peakG)) measured.peakG = clamp(round3(m.peakG), 0, 10);
   if (finiteNumber(m.overMphS)) measured.overMphS = clamp(round3(m.overMphS), 0, MAX_OVER_MPH_S);
-  if (typeof m.mounted === 'boolean') measured.mounted = m.mounted;
   // The contract's rule: a DashPal event carries source dashcam, and nothing else does.
   if (isDashcamType(e.type)) measured.source = 'dashcam';
-  const out: DetectedEvent = {
+  return {
     id: e.id,
     type: e.type,
     tier: e.tier,
@@ -228,35 +225,27 @@ export function sanitizeEvent(e: DetectedEvent, tripStartedAt: number, tripEnded
     durationS: clamp(round3(finite(e.durationS)), 0, maxDuration),
     measured,
   };
-  if (e.type === 'phone_handling') out.units = clamp(Math.floor(finite(e.units ?? 1, 1)), 1, 1440);
-  if (e.type === 'phone_pickup' && e.stoppedInTraffic === true) out.stoppedInTraffic = true;
-  return out;
 }
 
-/** Safe miles already credited today before this drive, from the device's own rows. */
-export async function safeMilesEarlierToday(db: Db, localDay: string, startedAt: number): Promise<number> {
-  const { rows } = await db.execute(
-    `SELECT COALESCE(SUM(safe_miles), 0) AS n FROM trips
-      WHERE local_day = ? AND started_at < ? AND status IN ('scored', 'pending')`,
-    [localDay, startedAt]
-  );
-  const n = rows[0]?.n;
-  return typeof n === 'number' && Number.isFinite(n) ? n : 0;
+/**
+ * The drive's opportunity counters as uploaded and stored: the session's (its mark's, for a cut
+ * drive) with the open swing settled (`closeExposure`), the moving seconds never past the drive's
+ * own duration.
+ */
+export function exposureOf(session: Pick<TripSession, 'exposure' | 'movingRows'>, durationS: number): Exposure {
+  return closeExposure(session.exposure, Math.min(session.movingRows, Math.floor(Math.max(0, durationS))));
 }
 
-const toNewEvent = (e: PayloadEventV3, clientTripId: string, penalty: number | null): NewEvent => ({
+const toNewEvent = (e: PayloadEvent, clientTripId: string): NewEvent => ({
   id: e.id,
   client_trip_id: clientTripId,
   type: e.type,
   tier: e.tier,
   started_at: e.startedAt,
   duration_s: e.durationS,
-  units: e.units ?? null,
-  stopped_in_traffic: e.stoppedInTraffic === true ? 1 : 0,
   lat: e.lat,
   lng: e.lng,
   measured_json: JSON.stringify(e.measured),
-  penalty,
   status: 'active',
   dispute_status: 'none',
 });
@@ -273,11 +262,12 @@ async function readZones(db: Db): Promise<PrivacyZone[]> {
  * Why a closed drive is not kept, whatever ended it: `no_gps` when it never had a valid fix,
  * `no_movement` when the car never moved (`session.ts` "Movement"), `not_driven` when it moved but
  * never reached driving speed (`session.droveAt`: two consecutive trusted readings of 10 mph or
- * more), so a walk or a jog with a drive open earns nothing. Null: the drive is kept.
+ * more), so a walk or a jog with a drive open earns nothing. `cancelled` is never a finalize's: it
+ * is the host's "Not driving?" (`src/drive/host.ts`). Null: the drive is kept.
  */
-export type DropReason = 'no_movement' | 'no_gps' | 'not_driven';
+export type DropReason = 'no_movement' | 'no_gps' | 'not_driven' | 'cancelled';
 
-export function dropReason(session: Pick<TripSession, 'moved' | 'validGnssRows' | 'droveAt'>): DropReason | null {
+export function dropReason(session: Pick<TripSession, 'moved' | 'validGnssRows' | 'droveAt'>): Exclude<DropReason, 'cancelled'> | null {
   if (session.validGnssRows === 0) return 'no_gps';
   if (session.moved === null) return 'no_movement';
   return session.droveAt === null ? 'not_driven' : null;
@@ -285,14 +275,15 @@ export function dropReason(session: Pick<TripSession, 'moved' | 'validGnssRows' 
 
 /** A drive that was not kept: nothing stored, uploaded or scored. */
 export interface DroppedResult {
-  dropped: DropReason;
+  dropped: Exclude<DropReason, 'cancelled'>;
   clientTripId: string;
 }
 
 /**
  * Delete a drive that is not kept, in one transaction: its samples, events and DashPal coverage,
  * then the trip row, but only while that row is still `recording` (a finalized drive is never
- * deleted). Nothing is queued. Returns false when a finalized row stood in the way.
+ * deleted; a re-opened continuation is `recording` again, so it goes whole). Nothing is queued.
+ * Returns false when a finalized row stood in the way.
  */
 export async function dropTrip(db: Db, clientTripId: string): Promise<boolean> {
   return db.transaction(async (tx) => {
@@ -308,9 +299,9 @@ export async function dropTrip(db: Db, clientTripId: string): Promise<boolean> {
 
 /**
  * The end of every drive: one that never moved or never reached driving speed is dropped
- * (`dropTrip`), any other is finalized
- * (`finalizeTrip`). A retry after a drop finds nothing and drops again; a drive somehow already
- * finalized under the same id is handed back as stored, never deleted.
+ * (`dropTrip`), any other is finalized (`finalizeTrip`). A retry after a drop finds nothing and
+ * drops again; a drive somehow already finalized under the same id is handed back as stored, never
+ * deleted.
  */
 export async function closeDrive(session: Readonly<TripSession>, deps: FinalizeDeps): Promise<FinalizeResult | DroppedResult> {
   const reason = dropReason(session);
@@ -335,18 +326,32 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   // Already finalized (a retried call): hand back what is stored, never re-run.
   const existing = await trips.get(id);
   if (existing !== null && existing.status !== 'recording') {
+    const stored = await events.listByTrip(id);
     return {
       trip: existing,
-      events: await events.listByTrip(id),
+      events: stored,
       payload: null,
-      breakdown: existing.breakdown_json ? (JSON.parse(existing.breakdown_json) as DriveBreakdown) : scoreDrive({ miles: 0, safeMiles: 0, events: [] }, { streak: 0, safeMilesEarlierToday: 0 }),
+      drive: classifyDrive({ miles: existing.miles, durationS: existing.duration_s, events: stored }),
     };
   }
   if (existing === null) {
-    await trips.insert({ client_trip_id: id, started_at: startedAt, tz, local_day: localDay, status: 'recording', continues: session.warmup.continues ? 1 : 0 }, now());
+    await trips.insert(
+      {
+        client_trip_id: id,
+        started_at: startedAt,
+        tz,
+        local_day: localDay,
+        status: 'recording',
+        continues: session.warmup.continues ? 1 : 0,
+        origin: session.origin,
+        start_source: session.startSource,
+      },
+      now()
+    );
   }
+  const notDrivingExpired = deps.notDrivingExpired === true || existing?.not_driving_expired === 1;
 
-  // 0. What the DashPal dashcam saw: read before the transaction below purges the samples.
+  // 0. What the DashPal dashcam saw.
   const facts = deps.dashcamFacts ? await deps.dashcamFacts({ clientTripId: id, startedAt, endedAt }).catch(() => null) : null;
   const dashcam = dashcamBlock(facts);
 
@@ -356,16 +361,17 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   // Every visible run, space-joined: the server sums them and the maps draw them apart.
   const polyline = route.runs.join(RUN_SEPARATOR);
   const geocode = deps.geocode === undefined ? expoGeocoder : deps.geocode;
-  const [fromLabel, toLabel] = await Promise.all([labelFor(session.firstFix, zones, geocode), labelFor(session.lastFix, zones, geocode)]);
+  const from = startPoint(session);
+  const [fromLabel, toLabel] = await Promise.all([labelFor(from, zones, geocode), labelFor(session.lastFix, zones, geocode)]);
 
   const phoneEvents = session.events.filter((e) => e.startedAt < endedAt + 2000).map((e) => sanitizeEvent(e, startedAt, endedAt));
   const fromDashcam = dashcamEvents(facts?.events ?? [], { startedAt, endedAt, warmupEndsAt: session.warmup.endsAt }, phoneEvents).map((e) => sanitizeEvent(e, startedAt, endedAt));
   const cleaned = [...phoneEvents, ...fromDashcam]
     .sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1))
     .slice(0, MAX_EVENTS);
-  const payloadEvents: PayloadEventV3[] = cleaned.map((e) => {
+  const payloadEvents: PayloadEvent[] = cleaned.map((e) => {
     const at = route.locate(e.startedAt);
-    const out: PayloadEventV3 = {
+    return {
       id: e.id,
       type: e.type,
       tier: e.tier,
@@ -375,14 +381,10 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
       lng: at?.lng ?? null,
       measured: e.measured,
     };
-    if (e.units !== undefined) out.units = e.units;
-    if (e.stoppedInTraffic === true) out.stoppedInTraffic = true;
-    return out;
   });
 
   // 2. The metrics and the payload.
   const miles = round3(clamp(metersToMiles(finite(session.distanceM)), 0, 1000));
-  const safeMiles = round3(clamp(metersToMiles(finite(session.safeDistanceM)), 0, miles));
   const nightMiles = round3(clamp(metersToMiles(finite(session.nightDistanceM)), 0, miles));
   const durationS = round3(durationSOf({ startedAt, endedAt }));
   const maxSpeedMph = round3(clamp(mpsToMph(finite(session.maxSpeedMps)), 0, MAX_SPEED));
@@ -393,16 +395,16 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     validGnssPct,
     maxSpeedMph,
   };
+  const exposure = exposureOf(session, durationS);
   const point = (f: { lat: number; lng: number } | null) => (f === null ? null : { lat: round4(f.lat), lng: round4(f.lng) });
   const candidate = {
-    v: 3 as const,
+    v: 4 as const,
     clientTripId: id,
     startedAt,
     endedAt,
     tz,
     localDay,
     miles,
-    safeMiles,
     nightMiles,
     durationS,
     start: point(session.firstFix),
@@ -411,19 +413,18 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     integrity,
     events: payloadEvents,
     appVersion: deps.appVersion.slice(0, 32) || 'unknown',
+    origin: session.origin,
+    notDrivingExpired,
+    exposure,
     ...(dashcam === null ? {} : { dashcam }),
   };
-  const parsed = FinalizeTripPayloadV3Schema.safeParse(candidate);
+  const parsed = FinalizeTripPayloadV4Schema.safeParse(candidate);
 
-  // 3. The local estimate.
-  const streak = (await deps.context?.().catch(() => null))?.streak ?? 0;
-  const ctx: DriveContext = { streak, safeMilesEarlierToday: await safeMilesEarlierToday(db, localDay, startedAt) };
-  // The same input as the server's: the events with what they measured (speeding's cost, phone use's
-  // speed), the drive's duration (the minimum-drive rule) and the DashPal bonus from the block's seconds.
-  const driveEvents: DriveEvent[] = cleaned;
-  const breakdown = scoreDrive({ miles, safeMiles, events: driveEvents, dashcam: dashcamDrive(dashcam), durationS }, ctx);
-  const penaltyOf = new Map(breakdown.events.map((e) => [e.id, e.penalty]));
+  // 3. What the drive is: scored or too short, and the events that break clean.
+  const drive = classifyDrive({ miles, durationS, events: cleaned });
   const counts = countEvents(cleaned);
+  const stamp = now();
+  const start = point(from);
 
   const patch = {
     started_at: startedAt,
@@ -431,12 +432,11 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     tz,
     local_day: localDay,
     miles,
-    safe_miles: safeMiles,
     night_miles: nightMiles,
     watched_miles: dashcam === null ? 0 : watchedMiles(miles, dashcam.movingS, dashcam.coveredS),
     duration_s: durationS,
-    start_lat: candidate.start?.lat ?? null,
-    start_lng: candidate.start?.lng ?? null,
+    start_lat: start?.lat ?? null,
+    start_lng: start?.lng ?? null,
     end_lat: candidate.end?.lat ?? null,
     end_lng: candidate.end?.lng ?? null,
     polyline: polyline === '' ? null : polyline,
@@ -444,13 +444,20 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     to_label: toLabel,
     max_speed_mph: maxSpeedMph,
     integrity_json: JSON.stringify(integrity),
-    points_net: breakdown.scored ? breakdown.net : null,
-    estimate: 1 as const,
-    breakdown_json: JSON.stringify(breakdown),
-    clean: breakdown.scored ? (breakdown.activeEventCount === 0 ? 1 : 0) : null,
+    clean: drive.scored ? (drive.activeEventCount === 0 ? 1 : 0) : null,
     counts_json: JSON.stringify(counts),
-    reason: breakdown.scored ? null : (breakdown.reason ?? null),
+    reason: drive.reason,
     checkpoint_ts: null,
+    origin: session.origin,
+    not_driving_expired: notDrivingExpired ? 1 : 0,
+    continuations: session.continuations,
+    start_source: session.startSource,
+    finalized_at: stamp,
+    slowdowns: exposure.slowdowns,
+    speedups: exposure.speedups,
+    turns: exposure.turns,
+    limit_s: exposure.limitS,
+    moving_s: exposure.movingS,
     // Local only (the summary's end note); a manual end cut at the last movement is `manual_still`.
     end_cause: session.endCause === null ? null : session.endCause === 'manual' && session.cut ? 'manual_still' : session.endCause,
   } as const;
@@ -459,7 +466,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const written = await db.transaction(async (tx) => {
     await events.removeByTrip(id, tx);
     const eventRows = await events.insertMany(
-      payloadEvents.map((e) => toNewEvent(e, id, penaltyOf.get(e.id) ?? null)),
+      payloadEvents.map((e) => toNewEvent(e, id)),
       tx
     );
     const trip = await trips.update(
@@ -467,14 +474,19 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
       parsed.success
         ? { ...patch, status: 'pending', sync_error: null }
         : { ...patch, status: 'failed', sync_error: INVALID_PAYLOAD_SYNC_ERROR },
-      now(),
+      stamp,
       tx
     );
     if (!trip) throw new Error(`trip ${id} vanished before finalize`);
-    if (parsed.success) await enqueueFinalize(db, parsed.data, now(), tx);
-    await samples.purgeByTrip(id, tx);
+    if (parsed.success) {
+      const item = await enqueueFinalize(db, parsed.data, stamp, tx);
+      // Held: the car setting off again near here within the hold re-opens this trip instead.
+      await createQueueRepo(db).deferUntil(item.id, stamp + UPLOAD_HOLD_MS, tx);
+    }
+    // This drive's samples stay for its hold; drives whose hold is over let theirs go.
+    await samples.purgeFinishedBefore(stamp - UPLOAD_HOLD_MS, tx);
     return { trip, eventRows };
   });
 
-  return { trip: written.trip, events: written.eventRows, payload: parsed.success ? parsed.data : null, breakdown };
+  return { trip: written.trip, events: written.eventRows, payload: parsed.success ? parsed.data : null, drive };
 }

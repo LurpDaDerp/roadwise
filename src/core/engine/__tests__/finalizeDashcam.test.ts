@@ -1,9 +1,8 @@
 /** @jest-environment node */
 // Finalize with the DashPal dashcam's facts (plan §8.4): candidates → scored eyes_off / drowsy
-// events under the scoring rules, seconds → the payload's dashcam block, and the estimate derived
-// as the server derives it. Edge-case rows 33 (speed, GPS, first 30 s), 35 (phone overlap),
-// 36 (per-drive limits) and 37 (no bonus, payload still valid).
-import { dashcamDrive, scoreDrive } from '@scoring';
+// events under the scoring rules, seconds → the payload's dashcam block. Edge-case rows 33 (speed,
+// GPS, first 30 s), 36 (per-drive limits) and 37 (not a DashPal drive, payload still valid).
+import { dashcamDrive } from '@scoring';
 
 import { T0 } from '@/core/detectors/__fixtures__/rows';
 import { closedSession, TZ, uuid } from '@/core/engine/__fixtures__/drives';
@@ -15,7 +14,7 @@ import { PAIRED_KEY } from '@/dashcam/keys';
 import { createDashcamStore } from '@/dashcam/store';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
-import { FinalizeTripPayloadV3Schema } from '@/data/sync/payload';
+import { FinalizeTripPayloadV4Schema } from '@/data/sync/payload';
 import { findFinalize } from '@/data/sync/queue';
 
 let db: Db;
@@ -46,16 +45,13 @@ const facts = (over: Partial<DashcamTripFacts> = {}): DashcamTripFacts => ({
   events: [],
   ...over,
 });
-const pickup = (s: number, durationS = 5, id = uuid(30)): DetectedEvent => ({ id, type: 'phone_pickup', tier: 'severe', startedAt: at(s), durationS, measured: {} });
-
-const deps = (dashcamFacts?: (trip: { clientTripId: string; startedAt: number; endedAt: number }) => Promise<DashcamTripFacts>, streak = 0) => ({
+const deps = (dashcamFacts?: (trip: { clientTripId: string; startedAt: number; endedAt: number }) => Promise<DashcamTripFacts>) => ({
   db,
   tz: TZ,
   now: () => T0 + 1_300_000,
   appVersion: '2.0.0',
   geocode: null,
   trimSeed: async (id: string) => `${id}-seed`.padEnd(64, '0'),
-  context: async () => ({ streak }),
   ...(dashcamFacts ? { dashcamFacts } : {}),
 });
 
@@ -63,7 +59,7 @@ const deps = (dashcamFacts?: (trip: { clientTripId: string; startedAt: number; e
 const session = (events: DetectedEvent[] = []) => closedSession(1200, events, { clientTripId: TRIP });
 
 describe('finalizeTrip with DashPal facts', () => {
-  test('a DashPal drive: the block and the drowsy are uploaded, the estimate takes ×1.25 and keeps the drive clean', async () => {
+  test('a DashPal drive: the block and the drowsy are uploaded and the drive stays clean', async () => {
     // a recording drive with a sample on it, as the engine leaves it
     await createTripsRepo(db).insert({ client_trip_id: TRIP, started_at: T0, tz: TZ, local_day: '2023-11-14', status: 'recording' }, T0);
     await createSamplesRepo(db).append(TRIP, T0, { ts: T0 });
@@ -71,34 +67,31 @@ describe('finalizeTrip with DashPal facts', () => {
     const result = await finalizeTrip(
       session(),
       deps(async (trip) => {
-        // read before the final transaction purges the samples it needs
+        // read once, before the final transaction
         calls.push({ trip, samples: await createSamplesRepo(db).count(TRIP) });
         return facts({ events: [cand(1, 'drowsy', 300, { durationS: 6.5, speedMph: 33.4567 })] });
-      }, 10)
+      })
     );
     expect(calls).toEqual([{ trip: { clientTripId: TRIP, startedAt: T0, endedAt: T0 + 1_200_000 }, samples: 1 }]);
-    expect(await createSamplesRepo(db).count(TRIP)).toBe(0);
+    // The drive's samples stay through its upload hold.
+    expect(await createSamplesRepo(db).count(TRIP)).toBe(1);
 
     const payload = result.payload!;
-    expect(FinalizeTripPayloadV3Schema.safeParse(payload).success).toBe(true);
+    expect(FinalizeTripPayloadV4Schema.safeParse(payload).success).toBe(true);
+    expect(dashcamDrive(payload.dashcam)).toBe(true);
     expect(payload.dashcam).toEqual({ deviceId: DEVICE, movingS: 1150, coveredS: 1100, synced: true });
     expect(payload.events).toEqual([
       { id: cid(1), type: 'drowsy', tier: 'severe', startedAt: at(300), durationS: 6.5, lat: expect.any(Number), lng: expect.any(Number), measured: { source: 'dashcam', speedMph: 33.457 } },
     ]);
     expect(await findFinalize(db, TRIP)).toEqual(payload);
 
-    expect(result.breakdown).toMatchObject({ streakMult: 1.2, dashcamMult: 1.25, mult: 1.5, cleanBonus: 50, pointsPerMile: 20, penalties: 40, ratingPenalty: 0, activeEventCount: 0 });
-    // the estimate is exactly the server's scoring of what was uploaded
-    const server = scoreDrive(
-      { miles: payload.miles, safeMiles: payload.safeMiles, events: payload.events, dashcam: dashcamDrive(payload.dashcam), durationS: payload.durationS },
-      { streak: 10, safeMilesEarlierToday: 0 }
-    );
-    expect(result.breakdown).toEqual(server);
-    expect(result.trip).toMatchObject({ status: 'pending', clean: 1, points_net: server.net });
+    // A DashPal event counts toward Attention only: never toward the clean check.
+    expect(result.drive).toEqual({ scored: true, reason: null, activeEventCount: 0 });
+    expect(result.trip).toMatchObject({ status: 'pending', clean: 1 });
     // the miles DashPal watched, for the radar's Attention: the miles × 1100 of 1150 moving seconds
     expect(result.trip.watched_miles).toBeCloseTo((payload.miles * 1100) / 1150, 6);
-    expect(JSON.parse(result.trip.counts_json!)).toMatchObject({ drowsy: 1, eyesOff: 0, pickups: 0 });
-    expect(result.events).toEqual([expect.objectContaining({ id: cid(1), type: 'drowsy', tier: 'severe', penalty: 40 })]);
+    expect(JSON.parse(result.trip.counts_json!)).toMatchObject({ drowsy: 1, eyesOff: 0 });
+    expect(result.events).toEqual([expect.objectContaining({ id: cid(1), type: 'drowsy', tier: 'severe' })]);
     expect(JSON.parse(result.events[0]!.measured_json!)).toEqual({ source: 'dashcam', speedMph: 33.457 });
   });
 
@@ -133,30 +126,6 @@ describe('finalizeTrip with DashPal facts', () => {
     expect(dashcamEvents([cand(1, 'drowsy', 5)], { startedAt: T0, endedAt: at(100) }, [])).toEqual([]);
   });
 
-  test('row 35: an eyes-off within 5 s of a phone pickup is dropped (the phone already charged it); a drowsy there is kept', async () => {
-    // the pickup spans 600–605 s; ±5 s → 595–610 s
-    const result = await finalizeTrip(
-      session([pickup(600, 5)]),
-      deps(async () =>
-        facts({
-          events: [
-            cand(1, 'eyes_off', 590, { durationS: 5 }), // ends at 595: touches the window
-            cand(2, 'eyes_off', 610), // starts at 610: touches it
-            cand(3, 'drowsy', 602),
-            cand(4, 'eyes_off', 900),
-            cand(5, 'eyes_off', 300, { durationS: 294.9 }), // ends at 594.9: clear of it
-          ],
-        })
-      )
-    );
-    expect(result.payload!.events.map((e) => [e.type, e.id])).toEqual([
-      ['eyes_off', cid(5)],
-      ['phone_pickup', uuid(30)],
-      ['drowsy', cid(3)],
-      ['eyes_off', cid(4)],
-    ]);
-  });
-
   test('row 36: at most one drowsy per 10 min and one eyes-off per 5 min, the earliest kept', async () => {
     const result = await finalizeTrip(
       session(),
@@ -177,31 +146,28 @@ describe('finalizeTrip with DashPal facts', () => {
       )
     );
     expect(result.payload!.events.map((e) => e.id)).toEqual([cid(5), cid(1), cid(7), cid(4), cid(9)]);
-    // and the repeat multiplier applies within each type: drowsy 40 + 50, eyes-off 32 + 40 + 48
-    expect(result.breakdown.events.map((e) => e.penalty)).toEqual([32, 40, 40, 50, 48]);
-    expect(result.breakdown.activeEventCount).toBe(0);
+    expect(result.drive.activeEventCount).toBe(0);
   });
 
   test.each([
     ['coverage under 80 %', facts({ coveredS: 919 })],
     ['under 60 s moving', facts({ movingS: 59, coveredS: 59 })],
     ['not synced at the end', facts({ synced: false })],
-  ])('row 37: %s → no bonus, and the payload is still valid and uploaded', async (_why, f) => {
+  ])('row 37: %s → not a DashPal drive, and the payload is still valid and uploaded', async (_why, f) => {
     const result = await finalizeTrip(session(), deps(async () => f));
     expect(result.trip.status).toBe('pending');
-    expect(FinalizeTripPayloadV3Schema.safeParse(result.payload).success).toBe(true);
+    expect(FinalizeTripPayloadV4Schema.safeParse(result.payload).success).toBe(true);
     expect(result.payload!.dashcam).toEqual({ deviceId: DEVICE, movingS: f.movingS, coveredS: f.coveredS, synced: f.synced });
-    expect([result.breakdown.dashcamMult, result.breakdown.mult]).toEqual([1, 1]);
+    expect(dashcamDrive(result.payload!.dashcam)).toBe(false);
   });
 
-  test('no dashcam id (nothing covered): no block, no bonus', async () => {
+  test('no dashcam id (nothing covered): no block, no watched miles', async () => {
     const none = await finalizeTrip(session(), deps(async () => facts({ dashcamId: null, movingS: 0, coveredS: 0, synced: false })));
     expect(none.payload).not.toHaveProperty('dashcam');
-    expect(none.breakdown.dashcamMult).toBe(1);
     expect(none.trip.watched_miles).toBe(0);
   });
 
-  test('events that arrived with no drive open are dropped: the stored facts give the same block, ×1.25 and scored events as without them', async () => {
+  test('events that arrived with no drive open are dropped: the stored facts give the same block and scored events as without them', async () => {
     const run = async (withIgnored: boolean) => {
       db = await createSqlJsDb();
       await migrate(db);
@@ -232,10 +198,10 @@ describe('finalizeTrip with DashPal facts', () => {
     const plain = await run(false);
     const result = await run(true);
     expect(result.payload!.dashcam).toEqual({ deviceId: DEVICE, movingS: 1150, coveredS: 1100, synced: true });
-    expect(result.breakdown.dashcamMult).toBe(1.25);
+    expect(dashcamDrive(result.payload!.dashcam)).toBe(true);
     expect(result.payload!.events.map((e) => [e.id, e.type])).toEqual([[cid(100), 'drowsy']]);
     expect(result.payload!.dashcam).toEqual(plain.payload!.dashcam);
-    expect(result.breakdown).toEqual(plain.breakdown);
+    expect(result.drive).toEqual(plain.drive);
     expect((await db.execute('SELECT seq, client_trip_id FROM dashcam_events ORDER BY seq')).rows).toEqual([
       { seq: 0, client_trip_id: TRIP },
       { seq: 1, client_trip_id: null },
@@ -322,14 +288,9 @@ describe('dashcamEvents', () => {
     expect(out.map((e) => e.id)).toEqual([cid(9)]);
   });
 
-  test('a removed phone event does not drop an eyes-off', () => {
-    const out = dashcamEvents([cand(1, 'eyes_off', 600)], trip, [{ ...pickup(600), status: 'removed' }]);
-    expect(out).toHaveLength(1);
-  });
-
-  test('phone handling counts as phone use for the overlap', () => {
-    const handling = { id: uuid(31), type: 'phone_handling' as const, startedAt: at(500), durationS: 60 };
-    expect(dashcamEvents([cand(1, 'eyes_off', 540)], trip, [handling])).toEqual([]);
+  test('an eyes-off beside the phone’s own event is kept (phone use is not tracked, so nothing overlaps)', () => {
+    const brake = { id: uuid(31), type: 'hard_brake' as const, startedAt: at(540), durationS: 1 };
+    expect(dashcamEvents([cand(1, 'eyes_off', 540)], trip, [brake])).toHaveLength(1);
   });
 });
 

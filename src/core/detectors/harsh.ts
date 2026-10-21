@@ -22,7 +22,7 @@
 // event itself waits: a closed episode is held for two seconds so the row after it can still
 // confirm or veto it, then released as at most one event (an alerted episode a later spike vetoes
 // is alerted but never charged).
-import { HARD_ACCEL_G, HARD_BRAKE_G, HARD_CORNER_G, PHONE_MIN_MPH, type Tier } from '@scoring';
+import { HARD_ACCEL_G, HARD_BRAKE_G, HARD_CORNER_G, MOVING_MIN_MPH, type Tier } from '@scoring';
 
 import type { DetectedEvent, Detector, FeatureRow, HarshAlert, HarshKind } from '../engine/types';
 import { G_MPS2, knownSpeed, knownSpeedMph, MPS_PER_MPH, round1, round2, rowEligible, speedTrusted } from './common';
@@ -194,7 +194,7 @@ export function createHarshDetector(newId: () => string): HarshDetector {
   }
 
   /** Confirmed, not vetoed, and the car at 5 mph or more: an event if nothing vetoes it later. */
-  const counts = (ep: Episode): boolean => ep.confirmed && !ep.spike && ep.maxSpeedMph >= PHONE_MIN_MPH;
+  const counts = (ep: Episode): boolean => ep.confirmed && !ep.spike && ep.maxSpeedMph >= MOVING_MIN_MPH;
 
   return {
     push(row, _limit, ctx) {

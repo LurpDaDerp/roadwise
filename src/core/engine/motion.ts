@@ -6,9 +6,9 @@
 //   (`session.lastDroveAt`): two driving rows in a row, the second at or after the walk began, void
 //   it for good, whenever the report arrives (before or after those rows).
 // - W1: once the car has reached driving speed (`session.droveAt`), such a report that stays the
-//   latest report for `WALK_CONFIRM_MS` ends the drive, unless the last known speed is driving speed
-//   and `WALK_STALE_FIX_MS` old or less; the drive is cut at the last movement at or before the walk
-//   began.
+//   latest report for `WALK_CONFIRM_MS` ends the drive, unless the last known speed is over 3 mph
+//   (`END_CRAWL_MPH`) and `WALK_STALE_FIX_MS` old or less; the drive is cut at the last movement at
+//   or before the walk began.
 // - W2: a drive that has not reached driving speed is ended by such a report only once it is
 //   `ON_FOOT_DROP_MS` old (and is then not kept).
 // Without the permission no reports come and neither rule ever applies.

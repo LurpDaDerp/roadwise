@@ -1,27 +1,27 @@
-// The drive state machine (product spec v3 "Starting and ending a drive", plan §1 decision 4).
+// The drive state machine (product spec "Starting and ending a drive"; modes plan §3.4, §3.9).
 //
 //   idle → recording → finalizing → idle
 //
-// A drive starts only on `start` (the user's Start Drive tap, at any speed; the host has already
-// checked permissions). It ends on `end` (the swipe-to-end), by itself once the car has not moved for
-// `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the driver walks away (`motion`
-// reports; `motion.ts` W1/W2). Every end but a prompt hold closes the drive where the car last moved
-// (`closeAtLastMovement`; a walking end at or before the walk began): a manual end
-// `MANUAL_CUT_AFTER_S` or more after the idle clock's base is cut too (its phone use kept whole), a
-// sooner one ends at the tap.
+// A drive starts only on `start` (the host's confirmation: native noticed driving, or the Start
+// card's waiting session saw 10 mph held 15 s; `ts` is the traced-back start) or `adopt` (a drive
+// the previous process was recording, or a re-opened continuation). It ends on `end` (the
+// swipe-to-end, or native's own stop with its cause), by itself once the car has not moved for
+// `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the driver walks away at 3 mph
+// or slower (`motion` reports; `motion.ts` W1/W2). Every end but a prompt manual one closes the
+// drive where the car last moved (`closeAtLastMovement`; a walking end at or before the walk
+// began): a manual end `MANUAL_CUT_AFTER_S` or more after the idle clock's base is cut too, a
+// sooner one ends at the tap. `cancel` ("Not driving?") discards the drive: never finalized.
 //
-// Alerts (`deps.onAlert`; the HUD shows `lastAlert`): speeding as the car first passes the points
-// line, then repeats while the row stays over it (`speedingRepeatS`; sounded only, never
-// `lastAlert`); a hard brake, start or turn and the phone alerts as below. Where points come off
-// (an estimate the HUD shakes on, `lastDeduction`): a hard event and a pickup as they alert (the
-// base cost, phone use at its speed), each later handling alert (the units since the last), a
-// speeding episode as its grace ends and at each later repeat that accrued a point (`speedingCost`);
-// such an alert carries `points`, and the alert layer adds the points-lost cue.
+// Alerts (`deps.onAlert`; the HUD shows `lastAlert`): speeding as the car first passes the speeding
+// line, then the chime again while the row stays over it (`speedingRepeatS`, and as the grace
+// ends; sounded only, never `lastAlert`); a hard brake, start or turn the row it is confirmed. The
+// halo shakes (`lastShake`) on a hard event as it alerts and on a speeding episode as its grace
+// ends; two on one row are one shake, the later key's.
 //
 // A reducer over one explicit state, driven by 1 Hz rows and a few events through a serialised
 // `dispatch`; the only clock is the `ts` on what comes in. Everything the engine wants done —
 // persistence, sound, scoring — goes out through callbacks.
-import { basePenalty, PHONE_MIN_MPH, speedingChargedS, speedingCost, type DriveEvent, type EventType, type Tier } from '@scoring';
+import { MOVING_MIN_MPH, type EventType, type Tier } from '@scoring';
 
 import { speedingRepeatS } from '@/core/alerts/policy';
 import { knownSpeed, limitShownMph, MPS_PER_MPH, ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
@@ -29,72 +29,32 @@ import { MAX_DRIVE_MS } from '@/data/sync/payload';
 
 import type { MotionActivity } from '@drive-sense';
 
-import type { AdoptedTrip, AlertEvent, Deduction, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
+import type { AdoptedTrip, AlertEvent, EndCause, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, EventShake, TripSession } from './engine.types';
 import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './displayLimit';
 import { displayFix, displayRow, type DisplaySpeed } from './displaySpeed';
 import { footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS, WALK_STALE_FIX_MS } from './motion';
-import {
-  appendRow,
-  autoEndAt,
-  closeAtLastMovement,
-  closeSession,
-  createSession,
-  DRIVING_SPEED_MPS,
-  idleSince,
-  noteWarmup,
-  snapshotSession,
-} from './session';
-import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample, OpenEpisode, SpeedingEpisode } from './types';
+import { appendRow, autoEndAt, closeAtLastMovement, closeSession, createSession, END_CRAWL_MPS, idleSince, noteWarmup, snapshotSession } from './session';
+import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
 /** Speed-limit tiles are prefetched once per this much distance, never per fix. */
 export const PREFETCH_EVERY_M = 1000;
 /** Rows between checkpoints (30 s at 1 Hz). */
 export const CHECKPOINT_ROWS = 30;
-/** At or below this (known) the points may show; above it the UI is locked out. */
-export const STOPPED_MPS = PHONE_MIN_MPH * MPS_PER_MPH;
+/** At or below this (known) the car is stopped; above it the UI is locked out. */
+export const STOPPED_MPS = MOVING_MIN_MPH * MPS_PER_MPH;
 /** A manual end this long after the idle clock's base (the car standing still) is cut at the last movement. */
 export const MANUAL_CUT_AFTER_S = 120;
-/** The phone-handling alert, once the pickup's use has lasted this long. */
-export const HANDLING_ALERT_MS = 15_000;
-/** …and no sooner than this after the pickup alert. */
-export const HANDLING_AFTER_PICKUP_MS = 10_000;
-/** While a counted screen switch goes on, the handling alert ("Back to RoadWise") repeats this often. */
-export const SWITCH_REPEAT_ALERT_MS = 60_000;
 /** The compass takes the GPS course only at this speed or faster (5 mph): slower, the course is noise and the last one holds. */
 export const COURSE_MIN_MPS = 5 * MPS_PER_MPH;
 
-/** The speeding episode the alerts follow: its last sound and the points already taken. */
+/** The speeding episode the alerts follow: its last sound and whether its grace has ended. */
 interface SpeedingAlerts {
   id: string;
-  /** Row clock of its last sound (the first alert, a repeat or a deduction). */
+  /** Row clock of its last sound (the first alert or a repeat). */
   lastSoundAt: number;
-  /** Its grace has ended: points come off from here on. */
+  /** Its grace has ended: it is an event (the halo shook for it). */
   graceDone: boolean;
-  /** The points already deducted for it, of `speedingSoFar`. */
-  deducted: number;
 }
-
-/** What a speeding episode has cost so far (`speedingCost`, before the repeat, zone and short-drive multipliers); 0 within the grace. */
-const speedingSoFar = (e: SpeedingEpisode): number => (e.confirmed ? speedingCost(speedingChargedS(e.overRows), e.overMphS) : 0);
-
-/** Phone handling units for a use of `usedMs` (the alerts' `lastUseAt − startedAt`): one per 15 s, or part, past the first 15 s. */
-const handlingUnits = (usedMs: number): number => {
-  const extra = usedMs / 1000 + 1 - 15;
-  return extra > 0 ? Math.max(1, Math.ceil(extra / 15)) : 0;
-};
-
-type EstimateEvent = Omit<DriveEvent, 'id' | 'startedAt' | 'durationS'>;
-
-/** An event's base points as an estimate (`basePenalty`): whole, never negative. */
-const pointsOf = (e: EstimateEvent): number => Math.max(0, Math.round(basePenalty({ id: 'estimate', startedAt: 0, durationS: 0, ...e })));
-
-/** The open phone episode's speeds, as the phone speed multiplier reads them. */
-const phoneMeasured = (p: OpenEpisode): NonNullable<DriveEvent['measured']> => {
-  const m: NonNullable<DriveEvent['measured']> = {};
-  if (typeof p.maxSpeedMph === 'number') m.maxSpeedMph = p.maxSpeedMph;
-  if (typeof p.speedMph === 'number') m.speedMph = p.speedMph;
-  return m;
-};
 
 interface Seen {
   row: FeatureRow;
@@ -120,22 +80,12 @@ export function createEngine(deps: EngineDeps): Engine {
   let foot: { since: number; at: number } | null = null;
   let prefetchedAtM: number | null = null;
   let lastAlert: EngineSnapshot['lastAlert'] = null;
-  /** The latest points-off estimate (`Deduction`), or null. */
-  let lastDeduction: Deduction | null = null;
+  /** The latest event the halo shakes on, or null. */
+  let lastShake: EventShake | null = null;
   /** The last GPS course taken (`COURSE_MIN_MPS`), held until the next. */
   let course: number | null = null;
   /** The speeding episode the alerts follow (`speedingAlertsOn`), or null. */
   let speeding: SpeedingAlerts | null = null;
-  /** Episodes already alerted: one pickup and one handling alert per phone episode. */
-  let pickupAlerted: string | null = null;
-  let handlingAlerted: string | null = null;
-  /** The current phone episode's handling units already deducted. */
-  let handlingDeducted = 0;
-  /** Deductions so far this drive: each one's key is unique. */
-  let deductions = 0;
-  /** Row clock of the current phone episode's pickup alert, and of its latest phone alert. */
-  let pickupAt = 0;
-  let lastPhoneAlertAt = 0;
 
   const listeners = new Set<(snapshot: EngineSnapshot) => void>();
   let version = 0;
@@ -173,11 +123,11 @@ export function createEngine(deps: EngineDeps): Engine {
     const speed = row === null ? null : knownSpeed(row);
     const recording = status === 'recording';
     const open = suite?.openSpeeding() ?? null;
-    const phone = suite?.openPhone() ?? null;
     const reading = recording ? (suite?.speedingNow() ?? null) : null;
     return Object.freeze({
       status,
       clientTripId: session?.clientTripId ?? null,
+      origin: recording ? (session?.origin ?? null) : null,
       startedAt: session?.startedAt ?? null,
       lastRowTs: row?.ts ?? null,
       speedMps: shown?.mps ?? 0,
@@ -192,13 +142,12 @@ export function createEngine(deps: EngineDeps): Engine {
       speedingRatio: reading === null ? null : reading.ratio,
       speedingOver: recording && open !== null,
       courseDeg: recording ? course : null,
-      lastDeduction: recording ? lastDeduction : null,
-      phoneUseSince: status === 'recording' && phone !== null && phone.confirmed ? phone.startedAt : null,
-      stopped: status === 'recording' && speed !== null && speed <= STOPPED_MPS,
-      autoEndAt: status === 'recording' && session !== null ? autoEndAt(session) : null,
+      lastShake: recording ? lastShake : null,
+      stopped: recording && speed !== null && speed <= STOPPED_MPS,
+      autoEndAt: recording && session !== null ? autoEndAt(session) : null,
       distanceM: session?.distanceM ?? 0,
       // The last known speed holds the lockout through a dropout, and after an adopt (the rebuilt session's).
-      lockedOut: status === 'recording' && (session?.lastSpeed?.mps ?? 0) > STOPPED_MPS,
+      lockedOut: recording && (session?.lastSpeed?.mps ?? 0) > STOPPED_MPS,
       lastAlert,
     });
   }
@@ -212,23 +161,15 @@ export function createEngine(deps: EngineDeps): Engine {
     foot = null;
     prefetchedAtM = null;
     lastAlert = null;
-    lastDeduction = null;
+    lastShake = null;
     course = null;
     speeding = null;
-    pickupAlerted = null;
-    handlingAlerted = null;
-    handlingDeducted = 0;
-    deductions = 0;
-    pickupAt = 0;
-    lastPhoneAlertAt = 0;
     touch();
   }
 
-  /** An alert the HUD shows (`lastAlert`) and the alert layer plays; `points` it cost, if any. */
-  function alert(id: string, type: EventType, tier: Tier, at: number, words?: 'switch', points = 0): void {
+  /** An alert the HUD shows (`lastAlert`) and the alert layer plays. */
+  function alert(id: string, type: EventType, tier: Tier, at: number): void {
     const event: AlertEvent = { id, type, tier, at };
-    if (words !== undefined) event.words = words;
-    if (points > 0) event.points = points;
     lastAlert = event;
     touch();
     tell(event);
@@ -242,25 +183,16 @@ export function createEngine(deps: EngineDeps): Engine {
     }
   }
 
-  /**
-   * Points came off on the row at `at` (`lastDeduction`); returns them, or 0 for less than a point.
-   * The drive state is published once per row, so the points that come off on one row (a hard brake
-   * on the row a speeding repeat takes points) are one deduction: their sum, under a new key.
-   */
-  function deduct(id: string, points: number, at: number): number {
-    if (!(points >= 1)) return 0;
-    deductions += 1;
-    const sameRow = lastDeduction !== null && lastDeduction.at === at ? lastDeduction.points : 0;
-    lastDeduction = { key: `${id}:${deductions}`, points: sameRow + points, at };
+  /** The halo shakes for `key` on the row at `at`; a later shake on the same row replaces it (one shake per row). */
+  function shake(key: string, at: number, tier: Tier): void {
+    lastShake = { key, at, tier };
     touch();
-    return points;
   }
 
   /**
    * Speeding: the alert on the episode's first over row (`lastAlert`); then, while the row stays
-   * over the line, a repeat every `speedingRepeatS` (sounded only): the chime within the grace, the
-   * points-lost cue with the points accrued since the last deduction after it (the row the grace
-   * ends on deducts at once). A repeat past the grace that accrued no whole point is the chime.
+   * over the line, the chime again every `speedingRepeatS` and on the row its grace ends (sounded
+   * only). The halo shakes as the grace ends: the episode is an event from there.
    */
   function speedingAlertsOn(row: FeatureRow, det: DetectorSuite): void {
     const ep = det.speedingEpisode();
@@ -270,8 +202,8 @@ export function createEngine(deps: EngineDeps): Engine {
     }
     const open = det.openSpeeding();
     if (speeding === null || speeding.id !== ep.id) {
-      // A new episode (or one a rebuilt drive was already in: its cost so far is not deducted again).
-      speeding = { id: ep.id, lastSoundAt: row.ts, graceDone: ep.confirmed, deducted: speedingSoFar(ep) };
+      // A new episode (or one a rebuilt drive was already in: past its grace, it does not shake again).
+      speeding = { id: ep.id, lastSoundAt: row.ts, graceDone: ep.confirmed };
       if (ep.over && open !== null) alert(ep.id, 'speeding', open.tier, row.ts);
       return;
     }
@@ -280,13 +212,12 @@ export function createEngine(deps: EngineDeps): Engine {
     const overMph = det.speedingNow()?.overMph ?? 0;
     const due = row.ts - speeding.lastSoundAt >= speedingRepeatS(overMph, (row.ts - ep.startedAt) / 1000) * 1000;
     if (!graceEnds && !due) return;
-    speeding.graceDone = speeding.graceDone || ep.confirmed;
     speeding.lastSoundAt = row.ts;
-    const points = speeding.graceDone ? deduct(ep.id, Math.round(speedingSoFar(ep) - speeding.deducted), row.ts) : 0;
-    speeding.deducted += points;
-    const repeat: AlertEvent = { id: ep.id, type: 'speeding', tier: open.tier, at: row.ts, repeat: true };
-    if (points > 0) repeat.points = points;
-    tell(repeat);
+    if (graceEnds) {
+      speeding.graceDone = true;
+      shake(`${ep.id}:grace`, row.ts, open.tier);
+    }
+    tell({ id: ep.id, type: 'speeding', tier: open.tier, at: row.ts, repeat: true });
   }
 
   // --- recording --------------------------------------------------------------------------------
@@ -327,47 +258,11 @@ export function createEngine(deps: EngineDeps): Engine {
     // so far), never when its event is released after the veto window: the detector tells every
     // episode that counts on or before the row that releases it.
     for (const a of det.harshAlerts()) {
-      alert(a.id, a.type, a.tier, row.ts, undefined, deduct(a.id, pointsOf({ type: a.type, tier: a.tier }), row.ts));
+      alert(a.id, a.type, a.tier, row.ts);
+      shake(a.id, row.ts, a.tier);
     }
     speedingAlertsOn(row, det);
-    // Phone: the pickup alert once per episode ("Back to RoadWise" while a switch counts); the
-    // handling alert once its use has lasted 15 s and 10 s have passed since the pickup alert; while
-    // a counted switch goes on, the handling alert again every 60 s. Never during an iPhone hold.
-    // The pickup deducts its price at the episode's speed; each handling alert the units since the last.
-    const phone = det.openPhone();
-    if (phone !== null && phone.confirmed) {
-      const words = phone.phase === 'switching' ? 'switch' : undefined;
-      const measured = phoneMeasured(phone);
-      const handlingPoints = (used: number): number => {
-        const units = handlingUnits(used) - handlingDeducted;
-        if (units <= 0) return 0;
-        const points = deduct(phone.id, pointsOf({ type: 'phone_handling', tier: 'moderate', units, measured }), row.ts);
-        if (points > 0) handlingDeducted += units;
-        return points;
-      };
-      if (pickupAlerted !== phone.id) {
-        pickupAlerted = phone.id;
-        handlingDeducted = 0;
-        pickupAt = row.ts;
-        lastPhoneAlertAt = row.ts;
-        const pickup: EstimateEvent = { type: 'phone_pickup', tier: 'severe', measured };
-        if (phone.stoppedInTraffic === true) pickup.stoppedInTraffic = true;
-        alert(phone.id, 'phone_pickup', 'severe', row.ts, words, deduct(phone.id, pointsOf(pickup), row.ts));
-      } else if (phone.phase !== 'hold') {
-        const used = (phone.lastUseAt ?? row.ts) - phone.startedAt;
-        if (handlingAlerted !== phone.id) {
-          if (used >= HANDLING_ALERT_MS && row.ts - pickupAt >= HANDLING_AFTER_PICKUP_MS) {
-            handlingAlerted = phone.id;
-            lastPhoneAlertAt = row.ts;
-            alert(phone.id, 'phone_handling', 'moderate', row.ts, words, handlingPoints(used));
-          }
-        } else if (phone.phase === 'switching' && row.ts - lastPhoneAlertAt >= SWITCH_REPEAT_ALERT_MS) {
-          lastPhoneAlertAt = row.ts;
-          alert(phone.id, 'phone_handling', 'moderate', row.ts, 'switch', handlingPoints(used));
-        }
-      }
-    }
-    appendRow(s, row, det.unsafe());
+    appendRow(s, row, { unsafe: det.unsafe(), limitUsable: det.speedingNow() !== null });
     maybePrefetch(row, s.distanceM);
 
     if (await endIfDue(row.ts + ROW_MS)) return;
@@ -405,9 +300,9 @@ export function createEngine(deps: EngineDeps): Engine {
    * A report is void for good once the car has been at driving speed at or after the moment its
    * walk began (`session.lastDroveAt` ≥ `since`: two driving rows in a row, the second at or after
    * it), however late the report came: only a walk that began after the car was last at driving
-   * speed counts. W1 (the car reached driving speed): unless the last known speed
-   * is driving speed and `WALK_STALE_FIX_MS` old or less. W2 (it never did): only once the drive is
-   * `ON_FOOT_DROP_MS` old. Cut at the last movement at or before the walk began. True when it
+   * speed counts. W1 (the car reached driving speed): unless the last known speed is over 3 mph
+   * (`END_CRAWL_MPS`) and `WALK_STALE_FIX_MS` old or less. W2 (it never did): only once the drive
+   * is `ON_FOOT_DROP_MS` old. Cut at the last movement at or before the walk began. True when it
    * ended the drive.
    */
   async function checkFoot(t: number): Promise<boolean> {
@@ -423,7 +318,7 @@ export function createEngine(deps: EngineDeps): Engine {
       if (t - s.startedAt < ON_FOOT_DROP_MS) return false;
     } else {
       const last = s.lastSpeed;
-      const carDriving = last !== null && last.mps >= DRIVING_SPEED_MPS && t - last.ts <= WALK_STALE_FIX_MS;
+      const carDriving = last !== null && last.mps > END_CRAWL_MPS && t - last.ts <= WALK_STALE_FIX_MS;
       if (carDriving) return false;
     }
     const since = foot.since;
@@ -450,14 +345,15 @@ export function createEngine(deps: EngineDeps): Engine {
     await checkFoot(t);
   }
 
-  /**
-   * The End swipe (or any manual end) at `ts`: cut when the car had stood still `MANUAL_CUT_AFTER_S` or
-   * more, with the phone use while standing still kept (a long red light, End, Start again must not
-   * erase a pickup made there).
-   */
+  /** The End swipe (or any manual end) at `ts`: cut when the car had stood still `MANUAL_CUT_AFTER_S` or more. */
   function closeManual(open: TripSession, ts: number): Readonly<TripSession> {
-    if (open.moved !== null && ts - idleSince(open) >= MANUAL_CUT_AFTER_S * 1000) return closeAtLastMovement(open, 'manual', { keepPhoneUseUntil: ts });
+    if (open.moved !== null && ts - idleSince(open) >= MANUAL_CUT_AFTER_S * 1000) return closeAtLastMovement(open, 'manual');
     return closeSession(open, ts, 'manual');
+  }
+
+  /** The end event: a manual end without a cause; native's own stop (its cause) is cut at the last movement. */
+  function closeEnd(open: TripSession, ts: number, cause: EndCause | undefined): Readonly<TripSession> {
+    return cause === undefined || cause === 'manual' ? closeManual(open, ts) : closeAtLastMovement(open, cause);
   }
 
   /**
@@ -487,13 +383,39 @@ export function createEngine(deps: EngineDeps): Engine {
     if (failure !== null) report(failure.err);
   }
 
+  /**
+   * "Not driving?": the drive is discarded, never finalized. `finalizing` while the host drops what
+   * was stored (so the routes see a drive closing), then idle; a failure is reported after.
+   */
+  async function cancel(): Promise<void> {
+    const s = session as TripSession;
+    setStatus('finalizing');
+    let failure: { err: unknown } | null = null;
+    try {
+      await deps.onCancel(snapshotSession(s));
+    } catch (err) {
+      failure = { err };
+    } finally {
+      clearTrip();
+      setStatus('idle');
+    }
+    if (failure !== null) report(failure.err);
+  }
+
   // --- events -----------------------------------------------------------------------------------
 
-  async function start(ts: number, continues: boolean): Promise<void> {
+  async function start(e: Extract<EngineEvent, { type: 'start' }>): Promise<void> {
     if (status !== 'idle') return;
     foot = null;
     const made = deps.createDetectors();
-    session = createSession({ clientTripId: deps.newId(), startedAt: Math.round(ts), continues });
+    session = createSession({
+      clientTripId: e.clientTripId ?? deps.newId(),
+      startedAt: Math.round(e.ts),
+      origin: e.origin,
+      continues: e.continues,
+      startSource: e.startSource ?? null,
+      startPlace: e.startPlace ?? null,
+    });
     suite = made;
     setStatus('recording');
     // The trip row exists from the first second: a process death before the first checkpoint
@@ -521,7 +443,7 @@ export function createEngine(deps: EngineDeps): Engine {
   async function reduce(e: EngineEvent): Promise<void> {
     switch (e.type) {
       case 'start':
-        await start(e.ts, e.continues);
+        await start(e);
         return;
       case 'adopt':
         adopt(e.trip);
@@ -543,7 +465,10 @@ export function createEngine(deps: EngineDeps): Engine {
         return;
       case 'end':
         // A drive already past its automatic end (no row or tick came since) ends as that end would.
-        if (status === 'recording' && !(await endIfDue(e.ts))) await finalize((open) => closeManual(open, e.ts));
+        if (status === 'recording' && !(await endIfDue(e.ts))) await finalize((open) => closeEnd(open, e.ts, e.cause));
+        return;
+      case 'cancel':
+        if (status === 'recording') await cancel();
         return;
       case 'tick':
         if (status === 'recording' && !(await endIfDue(e.ts))) await checkFoot(e.ts);

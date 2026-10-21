@@ -12,7 +12,7 @@
 // route never draws across a hidden gap: every visible run is encoded on its own and the wire
 // carries them space-joined (`encodeRuns` in `src/lib/polyline.ts`), so the server sees the whole
 // visible distance (its miles-vs-route check) and the maps draw each run apart.
-import { MERGE_DIST_M } from '@scoring';
+import { TRIM_ENDS_M } from '@scoring';
 
 import { MAX_POLYLINE_RUNS } from '@/data/sync/payload';
 import { haversineMeters, type LatLng } from '@/lib/geo';
@@ -33,8 +33,8 @@ export const PRIVACY_ZONES_KEY = 'privacy.zones';
 export const MAX_ZONES = 3;
 export const ZONE_RADIUS_M = { min: 200, max: 800 } as const;
 
-/** The first and last 0.25 mi of every route are trimmed at least (0.25 mi = 402 m, the merge radius)… */
-export const TRIM_ENDS_M = MERGE_DIST_M;
+/** The first and last 0.25 mi of every route are trimmed at least (`TRIM_ENDS_M`, 402 m, from the scoring package)… */
+export { TRIM_ENDS_M };
 /** …plus up to this much more, per drive. */
 export const TRIM_JITTER_M = 400;
 /** A zone is cut at its radius × a factor in [1, ZONE_JITTER_MAX), per drive. */

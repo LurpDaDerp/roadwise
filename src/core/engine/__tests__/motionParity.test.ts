@@ -76,7 +76,7 @@ type Variant = 'none' | 'notOnFoot' | 'walkToCar';
 
 function events(s: Scenario, variant: Variant, seed: number): EngineEvent[] {
   const start = s.rows[0]!.ts;
-  const out: EngineEvent[] = [{ type: 'start', ts: start, continues: false }];
+  const out: EngineEvent[] = [{ type: 'start', ts: start, origin: 'manual', continues: false }];
   if (variant === 'walkToCar') out.push({ type: 'motion', activity: { type: 'walking', confidence: 'high', ts: start - 45_000 }, ts: start });
   const next = rng(seed);
   for (const r of s.rows) {
@@ -100,12 +100,13 @@ async function replay(s: Scenario, list: EngineEvent[]): Promise<{ finalized: Re
     newId: () => `id${(n += 1)}`,
     limits: { lookup: () => s.limitFor(current), prefetch: () => {} },
     createDetectors: () => createDetectors(() => `e${(n += 1)}`),
-    ctx: () => ({ callActive: s.callActive, switchSignal: 'reliable', lockDelayMs: null, platform: 'android' }),
+    ctx: () => ({}),
     onAlert: () => {},
     onCheckpoint: async () => {},
     onFinalize: async (closed) => {
       finalized.push(closed);
     },
+    onCancel: async () => {},
   });
   engine.subscribe((snap) => snapshots.push(snap));
   for (const e of list) {

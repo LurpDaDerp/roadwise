@@ -1,12 +1,14 @@
-// Contract between the native feature extractor, the detectors and the engine (product spec v3
-// "Event detection", plan §2, §6).
+// Contract between the native feature extractor, the detectors and the engine (product spec
+// "Event detection"; modes plan §3.9).
 import type { DriveEvent, EventType, Tier } from '@scoring';
-
-import type { SwitchSignal } from '../detectors/phoneSwitch';
 
 /**
  * One second of fused sensing at 1 Hz: the GNSS fix, the IMU extremes over that second and the
  * phone-state signals. Accelerations are in g, speeds in m/s, angles in radians unless noted.
+ *
+ * The field list is the native row contract (frozen on Android), so every field stays; nothing in
+ * JS reads `locked`, `screenOn`, `appForeground`, `call` or `exempt` any more (phone use is not
+ * tracked).
  */
 export interface FeatureRow {
   /**
@@ -40,31 +42,23 @@ export interface FeatureRow {
   orientationDelta: number;
   /** 0..1 — how much the second looked like the phone being handled */
   handlingScore: number;
+  /** Row contract only; read nowhere in JS. */
   locked: boolean;
+  /** Row contract only; read nowhere in JS. */
   screenOn: boolean;
-  /**
-   * RoadWise is in front (Android: a started RoadWise activity, not sharing a phone-sized screen in
-   * split screen; iOS: the app is not in the background). Its absence while the phone is unlocked
-   * with its screen on is a screen switch (`detectors/phoneSwitch.ts`).
-   */
+  /** RoadWise is in front, as native saw it. Row contract only; read nowhere in JS. */
   appForeground: boolean;
   /**
    * The fix came from a mock provider (Android `Location.isMock()`, iOS 15+
    * `sourceInformation.isSimulatedBySoftware`). Optional: rows from a native build that predates
-   * the key lack it, and absent reads as "not mock" (plan §6; WP7 adds it natively).
+   * the key lack it, and absent reads as "not mock".
    */
   mock?: boolean;
-  /**
-   * A call during the row (bridge-only, like `mock`): `ring` while one rings or dials, `live` while
-   * one is connected; absent with none. A call's own screen is not a screen switch.
-   */
+  /** A call during the row (bridge-only, like `mock`): `ring` or `live`; absent with none. Read nowhere in JS. */
   call?: 'ring' | 'live';
   /**
-   * Stamped by the drive host before the row reaches the engine, never by native (`parseRow`
-   * strips it): `nav` while the navigation button's exemption runs, `restart` while the home
-   * screen a mid-drive process restart left behind is excused. Exempt rows are never a screen
-   * switch; motion use, speeding and harsh events read them as usual. Stored with the row, so a
-   * rebuild agrees.
+   * An exemption stamp an older build's host wrote on stored rows (`nav`, `restart`). Never written
+   * now; kept optional so stored samples and traces still parse.
    */
   exempt?: 'nav' | 'restart';
 }
@@ -80,42 +74,25 @@ export interface LimitSample {
 
 export interface DetectorContext {
   /**
-   * epoch ms before which no event starts: `NO_EVENTS_FIRST_S` after the Start tap for a drive
-   * that starts stopped, the first trusted reading over 5 mph for one started while moving, the
-   * start itself for a restart (`TripSession.warmup`).
+   * epoch ms before which no event starts: `NO_EVENTS_FIRST_S` after the start for a drive that
+   * starts stopped, the first trusted reading over 5 mph for one started while moving, the start
+   * itself for a continuation (`TripSession.warmup`).
    */
   warmupEndsAt: number;
-  /**
-   * A call is active (the iOS CallKit observer, live only): phone motion is not counted. The rows'
-   * own `call` key does the same on iPhone, live and rebuilt alike (`phoneUse.ts`).
-   */
-  callActive: boolean;
-  /** How this drive tells a screen switch from a lock (`phoneSwitch.ts`), fixed at the Start tap. */
-  switchSignal: SwitchSignal;
-  /** iOS: the lock-report delay measured before the drive (ms), or null; Android null. */
-  lockDelayMs: number | null;
-  /** The phone that recorded the drive. */
-  platform: 'ios' | 'android';
 }
 
-/** What the detector measured; shown on the summary and sent with the event (plan §3). */
+/** What the detector measured; shown on the summary and sent with the event. */
 export interface EventMeasured {
   speedMph?: number;
   limitMph?: number;
   peakG?: number;
-  mounted?: boolean;
-  /**
-   * speeding: mph past the points line summed over the over rows after the grace (1 dp); the cost
-   * reads it (`speedingCost`).
-   */
+  /** speeding: mph past the speeding line summed over the over rows after the grace (1 dp); the Speed weight reads it. */
   overMphS?: number;
-  /** phone_pickup, phone_handling: the highest trusted GPS speed during the phone-use episode, mph (1 dp). */
-  maxSpeedMph?: number;
   /** `dashcam` on (and only on) a DashPal event (`eyes_off`, `drowsy`); the phone's own detectors never set it. */
   source?: 'dashcam';
 }
 
-/** A scorable v3 event as a detector closes it. Coordinates are added at finalize from the track. */
+/** A scorable event as a detector closes it. Coordinates are added at finalize from the track. */
 export interface DetectedEvent extends DriveEvent {
   measured: EventMeasured;
 }
@@ -131,24 +108,11 @@ export interface Detector {
 export interface OpenEpisode {
   id: string;
   type: EventType;
-  /** The tier so far (speeding: the current row's; phone: severe). */
+  /** The tier so far (speeding: the current row's). */
   tier: Tier;
   startedAt: number;
-  /** Long enough to count as an incident (speeding: past the 5-s grace; phone 3 s, a switch 3 s / 26 s). */
+  /** Long enough to count as an incident (speeding: past the 5-s grace). */
   confirmed: boolean;
-  /** Phone: the latest row of use so far (motion or a counting switch). Speeding never sets it. */
-  lastUseAt?: number;
-  /**
-   * Phone: `switching` while a counted screen switch goes on, `hold` while an iPhone departure
-   * waits out its 26 s inside an open pickup, else null. Speeding never sets it.
-   */
-  phase?: 'switching' | 'hold' | null;
-  /** Phone: the pickup was made stopped mid-drive (half price, no speed multiplier). */
-  stoppedInTraffic?: boolean;
-  /** Phone: the GPS speed at the pickup, mph, or null. */
-  speedMph?: number | null;
-  /** Phone: the highest trusted GPS speed of the episode so far, mph, or null (the points estimate's multiplier). */
-  maxSpeedMph?: number | null;
 }
 
 /** The three hard-movement kinds. */
@@ -180,7 +144,7 @@ export interface SpeedingEpisode {
 export interface SpeedingReading {
   /** The row's speed over the posted limit it is judged on (1 = at the limit). */
   ratio: number;
-  /** mph past the points line (L + T): over the line when above 0. */
+  /** mph past the speeding line (L + T): over the line when above 0. */
   overMph: number;
 }
 
@@ -197,13 +161,6 @@ export interface DetectorSuite extends Detector {
   speedingEpisode(): SpeedingEpisode | null;
   /** The hard brakes, starts and turns first confirmed on the latest row (each told once). */
   harshAlerts(): HarshAlert[];
-  /** The phone episode in progress on the latest row, if any. */
-  openPhone(): OpenEpisode | null;
-  /** A speeding or phone episode is active on the latest row: its distance is not safe miles. */
+  /** A speeding episode past its grace is active on the latest row: its distance is not safe miles. */
   unsafe(): boolean;
-  /**
-   * iPhone: the latest in-drive lock proof (a lock reported within 15 s of RoadWise leaving the
-   * screen), with its delay `row.ts − left − one row`, ms; null before any.
-   */
-  lockProof(): { delayMs: number } | null;
 }

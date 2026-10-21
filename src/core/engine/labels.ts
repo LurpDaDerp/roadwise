@@ -44,6 +44,14 @@ function within<T>(ms: number, p: Promise<T>): Promise<T | null> {
   });
 }
 
+/**
+ * Where the drive started, for its "from" label and its stored start: the parked spot the drive
+ * started from when its start came from the motion history (`startPlace`), else its first recorded fix.
+ */
+export function startPoint(session: { startPlace: LatLng | null; firstFix: LatLng | null }): LatLng | null {
+  return session.startPlace ?? session.firstFix;
+}
+
 /** The label for one endpoint: its zone's name first, so a geocode is never made inside a zone. */
 export async function labelFor(point: LatLng | null, zones: readonly PrivacyZone[], geocode: Geocoder | null): Promise<string | null> {
   if (point === null) return null;

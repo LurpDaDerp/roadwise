@@ -1,5 +1,5 @@
-// The automatic end and the cut at the last movement (product spec v3 "Ending on its own";
-// drive-lifecycle design §3): 15 min without movement, the 12 h bound, the manual cut after 2 min
+// The automatic end and the cut at the last movement (product spec "Ending on its own"; modes plan
+// §3.4): 5 min without movement, the 12 h bound, the manual cut after 2 min
 // standing still, the ticks, adopt, and every parked-phone case that must not keep a drive alive.
 import { IDLE_END_S } from '@scoring';
 
@@ -62,12 +62,13 @@ function harness(over: Partial<EngineDeps> = {}) {
     newId: () => `id${(n += 1)}`,
     limits: { lookup: () => limit(mph(35)), prefetch: () => {} },
     createDetectors: () => createDetectors(() => `e${(n += 1)}`),
-    ctx: () => ({ callActive: false, switchSignal: 'reliable', lockDelayMs: null, platform: 'android' }),
+    ctx: () => ({}),
     onAlert: () => {},
     onCheckpoint: async () => {},
     onFinalize: async (s) => {
       finalized.push(s);
     },
+    onCancel: async () => {},
     ...over,
   });
   return { engine, finalized };
@@ -79,14 +80,14 @@ async function feed(h: H, rows: FeatureRow[]): Promise<void> {
 }
 async function started(): Promise<H> {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+  await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
   return h;
 }
 const status = (h: H) => h.engine.snapshot().status;
 /** The drive's 60 s of driving end at T0 + 60 s (its last pace row is at T0 + 59 s). */
 const PARKED_AT = T0 + 60_000;
 
-test('(a) 60 s at 30 mph then stopped: recording at 899 s, ended at 900 s, cut at the last pace row + 1 s', async () => {
+test('(a) 60 s at 30 mph then stopped: recording at 299 s, ended at 300 s, cut at the last pace row + 1 s', async () => {
   const h = await started();
   const rows = path(T0, DRIVE, PARKED(IDLE_END_S));
   await feed(h, rows.slice(0, -1));
@@ -117,16 +118,16 @@ test('(c) 40 min of 60 s stops with 5 s at 12 mph never ends', async () => {
   expect(status(h)).toBe('recording');
 });
 
-test('(d) a drive-thru creeping at 1-3 mph Doppler, 240 m in 20 min, never ends', async () => {
+test('(d) a drive-thru creeping at 1-3 mph Doppler, 540 m in 20 min, never ends', async () => {
   const h = await started();
-  await feed(h, path(T0, DRIVE, { n: 1200, mps: mph(1), step: 0.2, over: (i) => (i % 10 === 0 ? { speed: mph(3) } : {}) }));
+  await feed(h, path(T0, DRIVE, { n: 1200, mps: mph(1), step: 0.45, over: (i) => (i % 10 === 0 ? { speed: mph(3) } : {}) }));
   expect(status(h)).toBe('recording');
   expect(h.engine.session()!.moved!.rowTs).toBeGreaterThan(PARKED_AT + 8 * 60_000);
 });
 
-test('(e) parked with one 7 mph spike every 60 s: ends 900 s after the real stop; a spike on the deadline row waits, the next slow row ends it', async () => {
+test('(e) parked with one 7 mph spike every 60 s: ends 300 s after the real stop; a spike on the deadline row waits, the next slow row ends it', async () => {
   const h = await started();
-  // Parked rows from T0 + 60 s; a spike on every row whose second is 59 mod 60 — the deadline row (T0 + 959 s) is one.
+  // Parked rows from T0 + 60 s; a spike on every row whose second is 59 mod 60 — the deadline row (T0 + 359 s) is one.
   const rows = path(T0, DRIVE, PARKED(IDLE_END_S + 1, { over: (i) => ((60 + i) % 60 === 59 ? { speed: mph(7) } : {}) }));
   const deadline = rows.findIndex((r) => r.ts === PARKED_AT + IDLE_MS - 1000);
   expect(rows[deadline]!.speed).toBeCloseTo(mph(7));
@@ -137,7 +138,7 @@ test('(e) parked with one 7 mph spike every 60 s: ends 900 s after the real stop
   expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: PARKED_AT });
 });
 
-test('(f) parked 2 h with pairs of 3 mph readings every few minutes and ±15 m jitter: ends 900 s after the stop, miles of the mark', async () => {
+test('(f) parked 2 h with pairs of 3 mph readings every few minutes and ±15 m jitter: ends 300 s after the stop, miles of the mark', async () => {
   const h = await started();
   const tail = PARKED(7200, {
     north: (i) => 15 * Math.sin(i * 0.7),
@@ -148,7 +149,7 @@ test('(f) parked 2 h with pairs of 3 mph readings every few minutes and ±15 m j
   expect(h.finalized[0]!.distanceM).toBe(h.finalized[0]!.moved!.distanceM);
 });
 
-test('(g) multipath jumping 150 m out for 20 s every 2 min (hAcc 15): ends 900 s after the stop, miles of the mark', async () => {
+test('(g) multipath jumping 150 m out for 20 s every 2 min (hAcc 15): ends 300 s after the stop, miles of the mark', async () => {
   const h = await started();
   const tail = PARKED(IDLE_END_S + 30, { north: (i) => (i % 120 >= 100 ? 150 : 0), over: () => ({ hAcc: 15 }) });
   await feed(h, path(T0, DRIVE, tail));
@@ -156,17 +157,17 @@ test('(g) multipath jumping 150 m out for 20 s every 2 min (hAcc 15): ends 900 s
   expect(h.finalized[0]!.distanceM).toBe(h.finalized[0]!.moved!.distanceM);
 });
 
-test('(h) parked, then a 5 min walk at 3.2 mph with the phone in hand (no motion access): ends 900 s after parking, cut there, no pickup', async () => {
+test('(h) parked, then a 5 min walk at 3.2 mph with the phone in hand (no motion access): ends 300 s after parking, cut there, no event', async () => {
   const h = await started();
   const walk: Seg = { n: 300, mps: mph(3.2), over: () => handled };
   await feed(h, path(T0, DRIVE, PARKED(30), walk, PARKED(IDLE_END_S)));
   const s = h.finalized[0]!;
   expect(s).toMatchObject({ endCause: 'stopped', endedAt: PARKED_AT, cut: true });
-  expect(s.events.filter((e) => e.type.startsWith('phone'))).toEqual([]);
+  expect(s.events).toEqual([]);
   expect(s.distanceM).toBe(s.moved!.distanceM);
 });
 
-test('(i) a carried phone with no fix, and a still one, do not hold: both end 900 s after the stop', async () => {
+test('(i) a carried phone with no fix, and a still one, do not hold: both end 300 s after the stop', async () => {
   for (const tail of [
     { gnssValid: false, speed: -1, handlingScore: 0.7, gravityStability: 0.4, orientationDelta: 0.5 },
     { gnssValid: false, speed: -1, gravityStability: 0.99 },
@@ -177,17 +178,17 @@ test('(i) a carried phone with no fix, and a still one, do not hold: both end 90
   }
 });
 
-test('(j) no fix with a car-like IMU holds the drive open for an hour after the last movement, then the 15 min run out; cut at the movement', async () => {
+test('(j) no fix with a car-like IMU holds the drive open for an hour after the last movement, then the 5 min run out; cut at the movement', async () => {
   const h = await started();
   const rows = path(T0, DRIVE, PARKED(80 * 60, { over: vehicleNoFix }));
   const at20 = rows.findIndex((r) => r.ts >= PARKED_AT + 20 * 60_000);
   await feed(h, rows.slice(0, at20));
   expect(status(h)).toBe('recording');
-  const at70 = rows.findIndex((r) => r.ts >= PARKED_AT + 70 * 60_000);
-  await feed(h, rows.slice(at20, at70));
+  const at62 = rows.findIndex((r) => r.ts >= PARKED_AT + 62 * 60_000);
+  await feed(h, rows.slice(at20, at62));
   expect(status(h)).toBe('recording');
   expect(h.engine.snapshot().autoEndAt).toBe(PARKED_AT + 3600_000 + IDLE_MS);
-  await feed(h, rows.slice(at70));
+  await feed(h, rows.slice(at62));
   expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: PARKED_AT, cut: true });
 });
 
@@ -212,10 +213,10 @@ describe('(l2) a queue crawling at walking pace after driving speed (the walking
     return out;
   };
 
-  test('25 min of crawl with the phone mounted keeps the drive open; a pickup in it is kept once the car drives on', async () => {
+  test('25 min of crawl with the phone mounted keeps the drive open; a handled phone in it is no event', async () => {
     const h = await started();
     const crawl = jam(25);
-    // a 10-s pickup 8 min into the queue
+    // the phone picked up for 7 s 8 min into the queue
     crawl.splice(80, 1, { n: 7, mps: 0, step: 0, over: () => handled });
     await feed(h, path(T0, DRIVE, ...crawl));
     expect(status(h)).toBe('recording');
@@ -224,16 +225,16 @@ describe('(l2) a queue crawling at walking pace after driving speed (the walking
     await feed(h, path(queueEnd, DRIVE, PARKED(IDLE_END_S)));
     const s = h.finalized[0]!;
     expect(s).toMatchObject({ endCause: 'stopped', endedAt: queueEnd + 60_000, cut: true });
-    expect(s.events.filter((e) => e.type === 'phone_pickup')).toEqual([expect.objectContaining({ stoppedInTraffic: true })]);
+    expect(s.events).toEqual([]);
   });
 
-  test('a crawl before the car ever reached 10 mph holds nothing: the drive ends 900 s after the tap and is not moved', async () => {
+  test('a crawl before the car ever reached 10 mph holds nothing: the drive ends 300 s after the start and is not moved', async () => {
     const h = await started();
     await feed(h, path(T0, ...jam(16)));
     expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', moved: null, endedAt: T0 + IDLE_MS });
   });
 
-  test('the same crawl with the phone carried (a driver walking off with it) holds nothing: ends 900 s after parking', async () => {
+  test('the same crawl with the phone carried (a driver walking off with it) holds nothing: ends 300 s after parking', async () => {
     const h = await started();
     await feed(h, path(T0, DRIVE, ...jam(16, () => ({ orientationDelta: 0.5 }))));
     expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: PARKED_AT, cut: true });
@@ -242,24 +243,24 @@ describe('(l2) a queue crawling at walking pace after driving speed (the walking
   test('an 80 min walk at 3.2 mph with the phone not carried (a shopping cart) holds the clock at most an hour after the last movement; cut there, no miles', async () => {
     const h = await started();
     const rows = path(T0, DRIVE, { n: 80 * 60, mps: mph(3.2) });
-    const at70 = rows.findIndex((r) => r.ts >= PARKED_AT + 70 * 60_000);
-    await feed(h, rows.slice(0, at70));
+    const at62 = rows.findIndex((r) => r.ts >= PARKED_AT + 62 * 60_000);
+    await feed(h, rows.slice(0, at62));
     expect(status(h)).toBe('recording');
     expect(h.engine.snapshot().autoEndAt).toBeLessThanOrEqual(PARKED_AT + 3600_000 + IDLE_MS);
-    await feed(h, rows.slice(at70));
+    await feed(h, rows.slice(at62));
     const s = h.finalized[0]!;
     expect(s).toMatchObject({ endCause: 'stopped', endedAt: PARKED_AT, cut: true });
     expect(s.distanceM).toBe(s.moved!.distanceM);
   });
 });
 
-test('(m) a drive that never moved ends 900 s after the tap with no mark', async () => {
+test('(m) a drive that never moved ends 300 s after the start with no mark', async () => {
   const h = await started();
   await feed(h, path(T0, PARKED(IDLE_END_S)));
   expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', moved: null, cut: false, endedAt: T0 + IDLE_MS });
 });
 
-test('(n) ticks: nothing at 899.999 s, the end at 900 s; a pace row on the deadline delays a tick 3 s later, not one 6 s later', async () => {
+test('(n) ticks: nothing at 299.999 s, the end at 300 s; a pace row on the deadline delays a tick 3 s later, not one 6 s later', async () => {
   const h = await started();
   await h.engine.dispatch({ type: 'tick', ts: T0 + IDLE_MS - 1 });
   expect(status(h)).toBe('recording');
@@ -279,14 +280,14 @@ test('(n) ticks: nothing at 899.999 s, the end at 900 s; a pace row on the deadl
   expect(g.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: PARKED_AT });
 });
 
-test('(o) a walking report on a drive that never moved closes it at 10 min with no mark (the idle end is later)', async () => {
+test('(o) a walking report on a drive that never moved: the 5 min still end comes before the walking end’s 10 min', async () => {
   const h = await started();
   await feed(h, path(T0, { n: 3, mps: mph(1), step: 0.4 }));
   await h.engine.dispatch({ type: 'motion', activity: { type: 'walking', confidence: 'high', ts: T0 + 2000 }, ts: T0 + 3000 });
-  await h.engine.dispatch({ type: 'tick', ts: T0 + 599_999 });
+  await h.engine.dispatch({ type: 'tick', ts: T0 + IDLE_MS - 1 });
   expect(status(h)).toBe('recording');
-  await h.engine.dispatch({ type: 'tick', ts: T0 + 600_000 });
-  expect(h.finalized[0]).toMatchObject({ endCause: 'walking', moved: null, droveAt: null, cut: false, endedAt: T0 + 3000 });
+  await h.engine.dispatch({ type: 'tick', ts: T0 + IDLE_MS });
+  expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', moved: null, droveAt: null, cut: false, endedAt: T0 + 3000 });
 });
 
 describe('(p) a manual end', () => {
@@ -302,42 +303,21 @@ describe('(p) a manual end', () => {
     expect(await endAfter(s)).toMatchObject({ endCause: 'manual', endedAt: PARKED_AT + s * 1000, cut: false });
   });
 
-  test.each([MANUAL_CUT_AFTER_S, 600])('%s s after it is cut at the last movement', async (s) => {
+  test.each([MANUAL_CUT_AFTER_S, 290])('%s s after it is cut at the last movement', async (s) => {
     const closed = await endAfter(s);
     expect(closed).toMatchObject({ endCause: 'manual', endedAt: PARKED_AT, cut: true });
     expect(closed.distanceM).toBe(closed.moved!.distanceM);
   });
 
-  test('phone use while standing still survives the cut: a pickup at a long red light, then End, keeps its penalty', async () => {
-    // 150 s stopped (a long light), 10 s of handling, End at 165 s: the miles and route end at the
-    // last movement, but the stopped-in-traffic pickup stays, and the drive runs to its end.
+  test('a phone handled while standing still changes nothing: End after a long light is cut at the last movement, with no event', async () => {
+    // 150 s stopped (a long light), 10 s of handling, End at 165 s: everything ends at the last movement.
     const closed = await endAfter(165, [PARKED(150), PARKED(10, { over: () => handled }), PARKED(5)]);
-    expect(closed).toMatchObject({ endCause: 'manual', cut: true });
+    expect(closed).toMatchObject({ endCause: 'manual', cut: true, endedAt: PARKED_AT });
     expect(closed.distanceM).toBe(closed.moved!.distanceM);
-    const pickups = closed.events.filter((e) => e.type === 'phone_pickup');
-    expect(pickups).toEqual([expect.objectContaining({ startedAt: PARKED_AT + 150_000, durationS: 10, stoppedInTraffic: true })]);
-    expect(closed.endedAt).toBe(PARKED_AT + 160_000);
-    for (const e of closed.events) expect(e.startedAt + e.durationS * 1000).toBeLessThanOrEqual(closed.endedAt!);
-  });
-
-  test('handling in the tail is kept whole (not clipped to the cut), and the end never passes the tap', async () => {
-    const closed = await endAfter(600, [PARKED(120), PARKED(40, { over: () => handled }), PARKED(440)]);
-    const pickup = closed.events.find((e) => e.type === 'phone_pickup');
-    const handling = closed.events.find((e) => e.type === 'phone_handling');
-    expect(pickup).toMatchObject({ startedAt: PARKED_AT + 120_000, durationS: 40, stoppedInTraffic: true });
-    expect(handling).toMatchObject({ durationS: 25, tier: 'severe', units: 2 });
-    expect(closed.endedAt).toBe(PARKED_AT + 160_000);
-    // Handling still going at the tap: the drive ends at the tap, not after it.
-    const atTap = await endAfter(149.5, [PARKED(130), PARKED(20, { over: () => handled })]);
-    expect(atTap.events.some((e) => e.type === 'phone_pickup')).toBe(true);
-    expect(atTap.endedAt).toBe(PARKED_AT + 149_500);
-  });
-
-  test('with no phone use after it, a cut manual end ends at the last movement; a pickup at a 1 min stop ended at 1:30 is kept uncut', async () => {
-    expect(await endAfter(600)).toMatchObject({ cut: true, endedAt: PARKED_AT });
+    expect(closed.events).toEqual([]);
+    // Ended at 1:30 (under the 2 min), it ends at the tap, uncut.
     const kept = await endAfter(90, [PARKED(60), PARKED(10, { over: () => handled }), PARKED(20)]);
-    expect(kept.cut).toBe(false);
-    expect(kept.events.filter((e) => e.type === 'phone_pickup')).toHaveLength(1);
+    expect(kept).toMatchObject({ cut: false, endedAt: PARKED_AT + 90_000 });
   });
 
   test('a holding fix-less row restarts the 2 min', async () => {
@@ -361,8 +341,8 @@ describe('(p) a manual end', () => {
 });
 
 test('(q) an adopted drive whose last movement is 20 min old ends on the first tick, cut at that movement', async () => {
-  const session = createSession({ clientTripId: 'old', startedAt: T0 });
-  for (const r of path(T0, DRIVE, PARKED(60))) appendRow(session, r, false);
+  const session = createSession({ clientTripId: 'old', startedAt: T0, origin: 'manual' });
+  for (const r of path(T0, DRIVE, PARKED(60))) appendRow(session, r, { unsafe: false, limitUsable: false });
   const h = harness();
   await h.engine.dispatch({ type: 'adopt', trip: { session, detectors: createDetectors(() => 'x') }, ts: PARKED_AT + 20 * 60_000 });
   expect(h.engine.snapshot().autoEndAt).toBe(PARKED_AT + IDLE_MS);
@@ -370,14 +350,14 @@ test('(q) an adopted drive whose last movement is 20 min old ends on the first t
   expect(h.finalized[0]).toMatchObject({ clientTripId: 'old', endCause: 'stopped', endedAt: PARKED_AT, cut: true });
 });
 
-test('(r) the snapshot’s autoEndAt: start + 900 s, then the latest movement + 901 s, the pace grace, null when idle', async () => {
+test('(r) the snapshot’s autoEndAt: start + 300 s, then the latest movement + 301 s, the pace grace, null when idle', async () => {
   const h = harness();
   expect(h.engine.snapshot().autoEndAt).toBeNull();
-  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+  await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
   expect(h.engine.snapshot().autoEndAt).toBe(T0 + IDLE_MS);
   const rows = path(T0, { n: 2, mps: mph(30) });
   await feed(h, rows);
-  expect(h.engine.snapshot().autoEndAt).toBe(T0 + 1000 + 901_000);
+  expect(h.engine.snapshot().autoEndAt).toBe(T0 + 1000 + 1000 + IDLE_MS);
   await feed(h, path(T0 + 2000, PARKED(IDLE_END_S - 3)));
   const last = h.engine.session()!.lastRowTs!;
   await feed(h, [row({ ts: last + 1000, lat: LAT, lng: LNG, speed: mph(9) })]);
@@ -424,7 +404,7 @@ describe('(s) the 12 h bound', () => {
     expect(s.endedAt! - s.startedAt).toBeLessThan(MAX_DRIVE_MS);
   });
 
-  test('a parked phone held open by a car-like IMU ends by the 15 min rule long before 12 h', async () => {
+  test('a parked phone held open by a car-like IMU ends by the 5 min rule long before 12 h', async () => {
     const h = await started();
     await feed(h, path(T0, DRIVE, PARKED(80 * 60, { over: vehicleNoFix })));
     expect(h.finalized[0]!.endCause).toBe('stopped');

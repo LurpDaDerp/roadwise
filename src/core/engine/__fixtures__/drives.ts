@@ -45,14 +45,18 @@ export function rows(n: number, opts: DriveOptions = {}): FeatureRow[] {
 }
 
 /** A closed session of `n` rows with the given events, as the engine would hand it to the finalizer. */
-export function closedSession(n: number, events: DetectedEvent[] = [], opts: DriveOptions & { clientTripId?: string; unsafeRows?: (i: number) => boolean } = {}): Readonly<TripSession> {
+export function closedSession(
+  n: number,
+  events: DetectedEvent[] = [],
+  opts: DriveOptions & { clientTripId?: string; unsafeRows?: (i: number) => boolean; origin?: 'auto' | 'manual' } = {}
+): Readonly<TripSession> {
   const t0 = opts.t0 ?? T0;
-  const session = createSession({ clientTripId: opts.clientTripId ?? '11111111-1111-4111-8111-111111111111', startedAt: t0 });
+  const session = createSession({ clientTripId: opts.clientTripId ?? '11111111-1111-4111-8111-111111111111', startedAt: t0, origin: opts.origin ?? 'manual' });
   const list = rows(n, opts);
   const det = createDetectors(() => 'x');
   list.forEach((r, i) => {
-    det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, { warmupEndsAt: t0 + 30_000, callActive: false, switchSignal: 'reliable', lockDelayMs: null, platform: 'android' });
-    appendRow(session, r, opts.unsafeRows?.(i) ?? false);
+    det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, { warmupEndsAt: t0 + 30_000 });
+    appendRow(session, r, { unsafe: opts.unsafeRows?.(i) ?? false, limitUsable: det.speedingNow() !== null });
   });
   session.events.push(...events);
   session.pending = [];

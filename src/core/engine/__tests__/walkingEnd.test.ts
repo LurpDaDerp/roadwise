@@ -1,4 +1,4 @@
-// The walking end (product spec v3 "Ending on its own"; motion.ts W1/W2) and the shown speed (S2),
+// The walking end (product spec "Ending on its own"; motion.ts W1/W2, the car at 3 mph or slower) and the shown speed (S2),
 // through the real engine. Every time is on the row clock: a row at `ts` ends at `ts + 1 s`.
 import type { MotionActivity } from '@drive-sense';
 
@@ -49,12 +49,13 @@ function harness(over: Partial<EngineDeps> = {}) {
     newId: () => `id${(n += 1)}`,
     limits: { lookup: () => limit(mph(35)), prefetch: () => {} },
     createDetectors: () => createDetectors(() => `e${(n += 1)}`),
-    ctx: () => ({ callActive: false, switchSignal: 'reliable', lockDelayMs: null, platform: 'android' }),
+    ctx: () => ({}),
     onAlert: () => {},
     onCheckpoint: async () => {},
     onFinalize: async (s) => {
       finalized.push(s);
     },
+    onCancel: async () => {},
     ...over,
   });
   return { engine, finalized };
@@ -63,7 +64,7 @@ type H = ReturnType<typeof harness>;
 
 async function started(): Promise<H> {
   const h = harness();
-  await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+  await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
   return h;
 }
 async function feed(h: H, rows: FeatureRow[]): Promise<void> {
@@ -84,30 +85,40 @@ const DRIVE = { n: 60, mps: mph(30) };
 const DRIVE_END = T0 + 60_000;
 
 describe('W2: a drive that has not reached driving speed', () => {
-  test('1. the walk to the car (reported before the tap) ends a never-driven drive only at 10 min, and it was never driven', async () => {
+  // A slow roll (7 mph: movement, never driving speed) keeps the still end away, so W2 is what ends it.
+  const SLOW = mph(7);
+
+  test('1. the walk to the car (reported before the start) ends a never-driven drive only at 10 min, and it was never driven', async () => {
     const h = await started();
     await report(h, act('walking', T0 - 60_000), T0);
-    const still = path(T0, 0, { n: 600, mps: 0 });
-    await feed(h, still.slice(0, 599));
+    const slow = path(T0, 0, { n: 600, mps: SLOW });
+    await feed(h, slow.slice(0, 599));
     expect(status(h)).toBe('recording');
     expect(h.engine.session()!.lastRowTs! + 1000 - T0).toBe(ON_FOOT_DROP_MS - 1000);
-    await feed(h, still.slice(599));
+    await feed(h, slow.slice(599));
     expect(status(h)).toBe('idle');
-    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', droveAt: null, moved: null, cut: false, endedAt: T0 + 600_000 });
+    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', droveAt: null, cut: true });
   });
 
-  test('2. an interrupted walk reported after the tap: no end before driving speed (still recording at 5 min)', async () => {
+  test('a still drive never waits for W2: the 5 min still end comes first', async () => {
     const h = await started();
-    const still = path(T0, 0, { n: 300, mps: 0 });
-    await feed(h, still.slice(0, 13));
+    await report(h, act('walking', T0 - 60_000), T0);
+    await feed(h, path(T0, 0, { n: 300, mps: 0 }));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', droveAt: null, moved: null, endedAt: T0 + 300_000 });
+  });
+
+  test('2. an interrupted walk reported after the start: no end before driving speed (still recording at 5 min)', async () => {
+    const h = await started();
+    const slow = path(T0, 0, { n: 300, mps: SLOW });
+    await feed(h, slow.slice(0, 13));
     await report(h, act('walking', T0 + 12_000), T0 + 13_000);
-    await feed(h, still.slice(13));
+    await feed(h, slow.slice(13));
     expect(status(h)).toBe('recording');
   });
 
   test('a report under 20 s old at 10 min waits for its 20 s', async () => {
     const h = await started();
-    const still = path(T0, 0, { n: 640, mps: 0 });
+    const still = path(T0, 0, { n: 640, mps: SLOW });
     await feed(h, still.slice(0, 595));
     await report(h, act('walking', T0 + 590_000));
     // Arrived at T0 + 595 s (row clock): due at T0 + 615 s, past the 10 min.
@@ -133,9 +144,9 @@ describe('W1: after driving speed', () => {
     return [...head, ...path(T0 + 70_000, metresAfter(head), { n, mps })];
   };
 
-  test('4. a walk-off at 3.4 mph with a fresh fix ends 20 s after the report arrives, cut at the last movement before the walk', async () => {
+  test('4. a walk-off at 2.8 mph with a fresh fix ends 20 s after the report arrives, cut at the last movement before the walk', async () => {
     const h = await started();
-    const rows = walkOff(mph(3.4), 60);
+    const rows = walkOff(mph(2.8), 60);
     // The report of the walk that began at T0 + 70 s arrives 30 s later (after the row at T0 + 99 s).
     await feed(h, rows.slice(0, 100));
     await report(h, act('walking', T0 + 70_000));
@@ -148,13 +159,28 @@ describe('W1: after driving speed', () => {
     expect(h.finalized[0]!.distanceM).toBe(distanceAtMark);
   });
 
-  test('5. running at 6 mph (pace movement on foot) ends the same way, cut before the run', async () => {
+  test('4b. a walk at 3.4 mph with a fresh fix is over 3 mph: no walking end; the still end takes it 5 min after the last movement', async () => {
+    const h = await started();
+    // The phone walks off in a pocket (carried): walking-pace travel, never a crawl that holds the clock.
+    const head = path(T0, 0, DRIVE, { n: 10, mps: 0 });
+    const rows = [...head, ...path(T0 + 70_000, metresAfter(head), { n: 400, mps: mph(3.4), over: () => ({ gravityStability: 0.4 }) })];
+    await feed(h, rows.slice(0, 100));
+    await report(h, act('walking', T0 + 70_000));
+    await feed(h, rows.slice(100, 300));
+    expect(status(h)).toBe('recording');
+    await feed(h, rows.slice(300));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: DRIVE_END, cut: true });
+  });
+
+  test('5. running at 6 mph (pace movement on foot) holds the end while it lasts; once the phone is still it ends, cut before the run', async () => {
     const h = await started();
     const rows = walkOff(mph(6), 60);
     await feed(h, rows.slice(0, 100));
     expect(h.engine.session()!.moved!.rowTs).toBeGreaterThan(T0 + 70_000);
     await report(h, act('running', T0 + 70_000, 'medium'));
-    await feed(h, rows.slice(100, 120));
+    await feed(h, rows.slice(100, 130));
+    expect(status(h)).toBe('recording');
+    await feed(h, path(T0 + 130_000, metresAfter(rows), { n: 2, mps: 0 }));
     expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: DRIVE_END, cut: true });
   });
 
@@ -309,8 +335,8 @@ describe('W1: after driving speed', () => {
 
 describe('12. an adopted drive', () => {
   function adopted(): TripSession {
-    const s = createSession({ clientTripId: 'old', startedAt: T0 });
-    for (const r of path(T0, 0, DRIVE)) appendRow(s, r, false);
+    const s = createSession({ clientTripId: 'old', startedAt: T0, origin: 'manual' });
+    for (const r of path(T0, 0, DRIVE)) appendRow(s, r, { unsafe: false, limitUsable: false });
     return s;
   }
 
@@ -338,20 +364,20 @@ describe('12. an adopted drive', () => {
 });
 
 describe('13. walking or jogging with a drive open', () => {
-  /** 0.6 mi at 3 mph with a fix: pace no, driving speed never. */
-  const jog = () => path(T0, 0, { n: 720, mps: mph(3) });
+  /** At 3 mph with a fix: pace no, driving speed never, and walking pace is never place movement. */
+  const jog = (n: number) => path(T0, 0, { n, mps: mph(3) });
 
-  test('with the walk to the car reported, W2 ends it at 10 min and it was never driven', async () => {
+  test('with the walk to the car reported, the still end takes it at 5 min and it never moved', async () => {
     const h = await started();
     await report(h, act('walking', T0 - 60_000), T0);
-    await feed(h, jog());
-    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', droveAt: null, endedAt: T0 + 600_000 });
+    await feed(h, jog(720));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', droveAt: null, moved: null, endedAt: T0 + 300_000 });
   });
 
   test('without any report, a manual end still leaves a drive that never reached driving speed', async () => {
     const h = await started();
-    await feed(h, jog());
-    await h.engine.dispatch({ type: 'end', ts: T0 + 720_000 });
+    await feed(h, jog(200));
+    await h.engine.dispatch({ type: 'end', ts: T0 + 200_000 });
     expect(h.finalized[0]).toMatchObject({ endCause: 'manual', droveAt: null });
   });
 });
@@ -363,7 +389,7 @@ describe('14. reset', () => {
     await report(h, act('walking', T0 + 63_000));
     await h.engine.dispatch({ type: 'end', ts: T0 + 66_000 });
     expect(h.finalized[0]!.endCause).toBe('manual');
-    await h.engine.dispatch({ type: 'start', ts: T0 + 100_000, continues: false });
+    await h.engine.dispatch({ type: 'start', ts: T0 + 100_000, origin: 'manual', continues: false });
     await feed(h, path(T0 + 100_000, 0, DRIVE, { n: 60, mps: 0 }));
     expect(status(h)).toBe('recording');
   });
@@ -372,7 +398,7 @@ describe('14. reset', () => {
     const h = harness();
     await report(h, act('walking', T0));
     expect(status(h)).toBe('idle');
-    await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+    await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
     await feed(h, path(T0, 0, DRIVE, { n: 60, mps: 0 }));
     expect(status(h)).toBe('recording');
   });
@@ -382,8 +408,8 @@ describe('14. reset', () => {
     await feed(h, path(T0, 0, DRIVE));
     await report(h, act('walking', T0 + 30_000));
     await h.engine.dispatch({ type: 'end', ts: T0 + 60_000 });
-    const s = createSession({ clientTripId: 'old', startedAt: T0 + 100_000 });
-    for (const r of path(T0 + 100_000, 0, DRIVE)) appendRow(s, r, false);
+    const s = createSession({ clientTripId: 'old', startedAt: T0 + 100_000, origin: 'manual' });
+    for (const r of path(T0 + 100_000, 0, DRIVE)) appendRow(s, r, { unsafe: false, limitUsable: false });
     await h.engine.dispatch({ type: 'adopt', trip: { session: s, detectors: createDetectors(() => 'x') }, ts: T0 + 161_000 });
     await feed(h, path(T0 + 161_000, 900, { n: 60, mps: 0 }));
     expect(status(h)).toBe('recording');

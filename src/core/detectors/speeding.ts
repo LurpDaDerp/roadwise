@@ -1,15 +1,15 @@
 // Speeding episodes (product spec "Speeding"): a usable row (an actionable limit, a speed the phone
-// rates at 2 m/s or better, a good fix, past the warm-up) whose speed is beyond the points line
+// rates at 2 m/s or better, a good fix, past the warm-up) whose speed is beyond the speeding line
 // L + T(L) is an over row. The first over row opens an episode (the driving screen alerts on it);
 // the episode ends after `SPEEDING_END_S` rows in a row back under L + T − 2 mph or without a usable
 // row (hovering in that 2-mph buffer neither extends nor ends it, so hovering at the line is one
 // episode, alerted once). An episode is an event only once it has MORE than `SPEEDING_GRACE_S` over
 // rows (the 6th one), whatever its tier: the driver gets the grace to react to the alert. An episode
-// that never gets there is never an event, costs nothing and takes no safe miles.
+// that never gets there is never an event, weighs nothing and takes no safe miles.
 //
 // The event: `startedAt` the first over row, `durationS` every over row (the grace's included),
 // the tier by its peak, `measured.overMphS` the mph past the line summed over the over rows after
-// the grace (what the cost reads, `speedingCost`), and the peak speed with the limit there.
+// the grace (what the Speed weight reads), and the peak speed with the limit there.
 import { speedTier, speedTolerance, SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, SPEEDING_GRACE_S, type Tier } from '@scoring';
 
 import type { DetectedEvent, Detector, OpenEpisode, SpeedingEpisode, SpeedingReading } from '../engine/types';

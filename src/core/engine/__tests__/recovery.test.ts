@@ -49,8 +49,8 @@ test('a rebuilt session equals the live one on droveAt, lastDroveAt, lastSpeed, 
   await trips.insert({ client_trip_id: uuid(9), started_at: T0, tz: TZ, status: 'recording' }, T0);
   await createSamplesRepo(db).appendMany(uuid(9), list.map((r) => ({ ts: r.ts, row: r })));
   const rebuilt = (await rebuildFromSamples(db, (await trips.get(uuid(9)))!, base()))!.session;
-  const live = createSession({ clientTripId: uuid(9), startedAt: T0 });
-  for (const r of list) appendRow(live, r, false);
+  const live = createSession({ clientTripId: uuid(9), startedAt: T0, origin: 'manual' });
+  for (const r of list) appendRow(live, r, { unsafe: false, limitUsable: false });
   expect(rebuilt.droveAt).toBe(T0 + 41_000);
   expect(rebuilt.droveAt).toBe(live.droveAt);
   expect(rebuilt.lastDroveAt).toBe(T0 + 239_000);
@@ -113,7 +113,7 @@ test('a rebuilt drive decides its warm-up as the live engine did: a stored resta
   expect(stopped.session.warmup).toEqual({ continues: false, decided: true, endsAt: T0 + 30_000 });
 });
 
-test('a rebuilt drive agrees with the live engine on movement: the mark (bar safe miles), the hold and the warm-up, despite a call and missing tiles', async () => {
+test('a rebuilt drive agrees with the live engine on movement: the mark (bar safe miles and limit time, which follow the tiles), the hold and the warm-up, despite missing tiles', async () => {
   // Driving, a tunnel (vehicle-like fix-less rows), more driving with handling, then parked.
   const list = [
     ...rows(60, { speedMps: 15 }),
@@ -127,12 +127,13 @@ test('a rebuilt drive agrees with the live engine on movement: the mark (bar saf
     newId: () => uuid(7),
     limits: { lookup: () => ({ limitMps: 35 * 0.44704, source: 'posted', matchConfidence: 1, parallelRoads: false }), prefetch: () => {} },
     createDetectors: () => createDetectors(() => 'x'),
-    ctx: () => ({ callActive: true, switchSignal: 'reliable', lockDelayMs: null, platform: 'android' }),
+    ctx: () => ({}),
     onAlert: () => {},
     onCheckpoint: async () => {},
     onFinalize: async () => {},
+    onCancel: async () => {},
   });
-  await engine.dispatch({ type: 'start', ts: T0, continues: false });
+  await engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
   for (const r of list) await engine.dispatch({ type: 'row', row: r });
   live = engine.session();
 
@@ -141,9 +142,11 @@ test('a rebuilt drive agrees with the live engine on movement: the mark (bar saf
   await createSamplesRepo(db).appendMany(uuid(7), list.map((r) => ({ ts: r.ts, row: r })));
   const rebuilt = (await rebuildFromSamples(db, (await trips.get(uuid(7)))!, base()))!.session;
 
-  const { safeDistanceM: _a, ...liveMark } = live!.moved!;
-  const { safeDistanceM: _b, ...rebuiltMark } = rebuilt.moved!;
+  const { safeDistanceM: _a, exposure: liveExposure, ...liveMark } = live!.moved!;
+  const { safeDistanceM: _b, exposure: rebuiltExposure, ...rebuiltMark } = rebuilt.moved!;
   expect(rebuiltMark).toEqual(liveMark);
+  expect({ ...rebuiltExposure, limitS: 0 }).toEqual({ ...liveExposure, limitS: 0 });
+  expect(liveExposure.limitS).toBeGreaterThan(0);
   expect(rebuilt.motion).toEqual(live!.motion);
   expect(rebuilt.warmup).toEqual(live!.warmup);
   expect(live!.moved!.rowTs).toBe(T0 + 159_000);

@@ -1,4 +1,4 @@
-// The drive engine's contract (product spec v3 "Starting and ending a drive", plan §5, §10).
+// The drive engine's contract (product spec "Starting and ending a drive"; modes plan §3.4, §3.9).
 //
 // Everything the engine knows about the outside world comes in through `EngineDeps` and
 // `EngineEvent`; everything it decides goes out through the `EngineDeps` callbacks and
@@ -7,13 +7,23 @@ import type { MotionActivity } from '@drive-sense';
 import type { EventType, Tier } from '@scoring';
 
 import type { SpeedFix } from './displaySpeed';
+import type { ExposureState } from './exposure';
 import type { DetectedEvent, DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
-/** idle → recording → finalizing → idle. Nothing starts a drive but `start`. */
+/** idle → recording → finalizing → idle. Nothing starts a drive but `start` (or `adopt`). */
 export type EngineStatus = 'idle' | 'recording' | 'finalizing';
 
-/** Why the drive closed. Local only; never uploaded. `limit`: it reached `MAX_DRIVE_MS`. */
+/** Why the drive closed. Local only; never uploaded. `limit`: it reached `MAX_DRIVE_MS`. A "Not driving?" cancel is not an end. */
 export type EndCause = 'manual' | 'stopped' | 'walking' | 'orphan' | 'limit';
+
+/** How a drive began: noticed by the phone on its own (iOS), or from the Start card's waiting session. */
+export type DriveOrigin = 'auto' | 'manual';
+
+/**
+ * Where the drive's start time came from: traced back to the last stop before the rise (`trace`),
+ * the motion coprocessor's automotive run (`motion`, iOS), or the first row seen (`wake`).
+ */
+export type StartSource = 'trace' | 'motion' | 'wake';
 
 export interface Fix {
   lat: number;
@@ -60,6 +70,8 @@ export interface MovementMark {
   lastFix: Fix | null;
   /** `track.length` right after the row. */
   trackLength: number;
+  /** The opportunity counters right after the row (`exposure.ts`): a cut drive counts none of its tail. */
+  exposure: Readonly<ExposureState>;
 }
 
 /** The movement rule's running state (`session.ts`). Replaced on every row, never mutated. */
@@ -93,8 +105,16 @@ export interface MotionTrack {
  */
 export interface TripSession {
   clientTripId: string;
-  /** epoch ms of the Start tap. */
+  /** epoch ms the drive started: its traced-back start (the waiting session's or native's), or the first row. */
   startedAt: number;
+  /** How the drive began. */
+  origin: DriveOrigin;
+  /** How many times a continuation re-opened this trip (`src/drive/continuation.ts`). Local only. */
+  continuations: number;
+  /** Where `startedAt` came from; null for a drive rebuilt from a trip row that does not say. */
+  startSource: StartSource | null;
+  /** The place the drive started when it is not its first row (the parked spot native fell back to), else null. */
+  startPlace: { lat: number; lng: number } | null;
   /** epoch ms where driving stopped; null while open. */
   endedAt: number | null;
   endCause: EndCause | null;
@@ -108,7 +128,7 @@ export interface TripSession {
   imuActiveRows: number;
   /** Haversine over consecutive valid fixes, metres (GNSS jumps skipped). */
   distanceM: number;
-  /** Distance outside active speeding and phone episodes. */
+  /** Distance outside active speeding episodes. */
   safeDistanceM: number;
   /** Distance driven after sunset / before sunrise at the car's position. */
   nightDistanceM: number;
@@ -121,7 +141,11 @@ export interface TripSession {
   pending: FeatureRow[];
   /** `ts` of the last durable row. */
   checkpointTs: number | null;
+  /** The highest native journal `seq` taken in (iOS; rows without one leave it), or null. Stored at each checkpoint. */
+  lastSeq: number | null;
   warmup: Readonly<Warmup>;
+  /** The drive's opportunity counters so far (`exposure.ts`): slowdowns, speed-ups, turns, limit time. */
+  exposure: Readonly<ExposureState>;
   /** The latest movement (`session.ts`), or null while the car has not moved. */
   moved: Readonly<MovementMark> | null;
   /**
@@ -158,39 +182,28 @@ export interface AlertEvent {
   tier: Tier;
   /** epoch ms, row clock */
   at: number;
-  /**
-   * A speeding repeat while the car stays over the line: sounded, never shown (never `lastAlert`,
-   * so no banner): the chime within the grace, the points-lost cue alone once points come off.
-   */
+  /** A speeding repeat while the car stays over the line: the chime, sounded, never shown (never `lastAlert`, so no banner). */
   repeat?: true;
-  /** Points came off with this alert (an estimate, `lastDeduction`): the points-lost cue sounds with it. */
-  points?: number;
-  /**
-   * `switch`: a phone alert raised while a screen switch counts; its voice line is "Back to RoadWise".
-   * Local only (never stored or uploaded); level, tone, haptic and the HUD word are unchanged.
-   */
-  words?: 'switch';
 }
 
 /**
- * Points coming off, as the engine estimates them on the row it happens: a hard brake, start or turn
- * or a phone pickup as it alerts (its base cost, the phone speed multiplier included), each later
- * phone-handling alert (the units since the last), a speeding episode at the end of its grace and at
- * each later speeding repeat (the points accrued since the last, from `speedingCost`). Points that
- * come off on the same row are one deduction, their sum. Never a DashPal alert (decided at the end).
+ * The halo shakes on it: a hard brake, start or turn as it is confirmed, a speeding episode as its
+ * grace ends. Two on the same row are one shake (the later key wins). Never a DashPal alert.
  */
-export interface Deduction {
-  /** Unique per deduction in a drive. */
+export interface EventShake {
+  /** Unique per shake in a drive. */
   key: string;
-  /** Whole points, at least 1. */
-  points: number;
-  /** epoch ms, row clock: the row it came off on. */
+  /** epoch ms, row clock: the row it happened on. */
   at: number;
+  /** The event's tier so far: the shake's size. */
+  tier: Tier;
 }
 
 export interface EngineSnapshot {
   status: EngineStatus;
   clientTripId: string | null;
+  /** How the open drive began; null when not recording. */
+  origin: DriveOrigin | null;
   startedAt: number | null;
   lastRowTs: number | null;
   /**
@@ -228,7 +241,7 @@ export interface EngineSnapshot {
    * the limit. The driving screen's halo tints from it.
    */
   speedingRatio: number | null;
-  /** The current row is over the points line (L + T): the halo pulses. False when not recording. */
+  /** The current row is over the speeding line (L + T): the halo pulses. False when not recording. */
   speedingOver: boolean;
   /**
    * The last GPS course, degrees clockwise from true north, from a valid fix with a known course
@@ -237,16 +250,11 @@ export interface EngineSnapshot {
    */
   courseDeg: number | null;
   /**
-   * The latest moment points came off (an estimate, `Deduction`), or null before the first of the
-   * drive and when not recording. The driving screen shakes the halo on each new `key`.
+   * The latest event the halo shakes on (`EventShake`), or null before the first of the drive and
+   * when not recording. The driving screen shakes on each new `key`.
    */
-  lastDeduction: Deduction | null;
-  /**
-   * The confirmed phone episode's first use row (row clock), while it is open and recording; else
-   * null (before confirmation, a parking-lot episode, no episode). The halo's distraction ramp.
-   */
-  phoneUseSince: number | null;
-  /** Known speed at or below 5 mph: points may show. */
+  lastShake: EventShake | null;
+  /** Known speed at or below 5 mph (`MOVING_MIN_MPH`). */
   stopped: boolean;
   /** epoch ms the drive ends by itself unless the car moves (`session.autoEndAt`); null unless recording. */
   autoEndAt: number | null;
@@ -286,6 +294,8 @@ export interface EngineDeps {
   onCheckpoint(session: Readonly<TripSession>): Promise<void>;
   /** Once per drive with the closed session; the finalizer stores and queues it. */
   onFinalize(session: Readonly<TripSession>): Promise<void>;
+  /** "Not driving?": the open drive is discarded; drop what was stored. Nothing is scored or uploaded. */
+  onCancel(session: Readonly<TripSession>): Promise<void>;
   /** Failures that must not stop the engine (a finalizer that threw, a subscriber that threw). */
   onError?(err: unknown): void;
 }
@@ -297,19 +307,35 @@ export interface AdoptedTrip {
 }
 
 export type EngineEvent =
-  /** `continues`: the phone's previous drive ended within `MERGE_GAP_S` (the host reads it at the tap). */
-  | { type: 'start'; ts: number; continues: boolean }
+  /**
+   * A confirmed drive. `ts`: its traced-back start; `clientTripId`: native's drive id (default a
+   * fresh one); `continues`: the phone's previous drive ended within `MERGE_GAP_S` (no warm-up).
+   */
+  | {
+      type: 'start';
+      ts: number;
+      clientTripId?: string;
+      origin: DriveOrigin;
+      continues: boolean;
+      startSource?: StartSource;
+      startPlace?: { lat: number; lng: number } | null;
+    }
   | { type: 'row'; row: FeatureRow }
   /**
    * An OS motion-activity report (`parseActivity`), for the walking end (`motion.ts`). `ts`: the
    * host's clock at arrival, used only before the drive's first row.
    */
   | { type: 'motion'; activity: MotionActivity; ts: number }
-  /** A manual end (the End swipe, the notification's End drive, sign-out): cut after 2 min standing still. */
-  | { type: 'end'; ts: number }
+  /**
+   * An end. Without `cause`, a manual end (the End swipe, the notification's End drive, sign-out):
+   * cut after 2 min standing still. With one (native stopped sensing on its own), cut at the last movement.
+   */
+  | { type: 'end'; ts: number; cause?: EndCause }
+  /** "Not driving?": the drive is discarded (`deps.onCancel`), never finalized. Only while recording. */
+  | { type: 'cancel'; ts: number }
   /** The host's one timer: the automatic end (`autoEndAt`) may have passed with no row. */
   | { type: 'tick'; ts: number }
-  /** Continue a drive the previous process was recording. Applied only while idle. */
+  /** Continue a drive the previous process was recording (or a re-opened one). Applied only while idle. */
   | { type: 'adopt'; trip: AdoptedTrip; ts: number };
 
 export interface Engine {
@@ -317,7 +343,7 @@ export interface Engine {
   dispatch(event: EngineEvent): Promise<void>;
   /** A frozen copy of the current state. */
   snapshot(): EngineSnapshot;
-  /** The open session, read-only, or null (the host's points estimate reads it). */
+  /** The open session, read-only, or null. */
   session(): Readonly<TripSession> | null;
   /** Called with a fresh snapshot after every state change; returns the unsubscribe. */
   subscribe(fn: (snapshot: EngineSnapshot) => void): () => void;

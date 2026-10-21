@@ -1,15 +1,26 @@
 /** @jest-environment node */
-import { scoreDrive } from '@scoring';
+import { classifyDrive, MERGE_GAP_S } from '@scoring';
 
 import { T0 } from '@/core/detectors/__fixtures__/rows';
 import { brakeEvent, closedSession, rows, speedingEvent, TZ, uuid } from '@/core/engine/__fixtures__/drives';
 import type { TripSession } from '@/core/engine/engine.types';
-import { closeDrive, dropReason, dropTrip, finalizeTrip, INVALID_PAYLOAD_SYNC_ERROR, isDropped, normaliseZone, sanitizeEvent } from '@/core/engine/finalize';
+import {
+  closeDrive,
+  dropReason,
+  dropTrip,
+  exposureOf,
+  finalizeTrip,
+  INVALID_PAYLOAD_SYNC_ERROR,
+  isDropped,
+  normaliseZone,
+  sanitizeEvent,
+  UPLOAD_HOLD_MS,
+} from '@/core/engine/finalize';
 import { PRIVACY_ZONES_KEY } from '@/core/engine/privacy';
 import { appendRow, closeAtLastMovement, closeSession, createSession } from '@/core/engine/session';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
-import { FinalizeTripPayloadV3Schema, MAX_DRIVE_MS } from '@/data/sync/payload';
+import { FinalizeTripPayloadV4Schema, MAX_DRIVE_MS } from '@/data/sync/payload';
 import { findFinalize } from '@/data/sync/queue';
 import { haversineMeters } from '@/lib/geo';
 import { decodeRuns } from '@/lib/polyline';
@@ -22,46 +33,66 @@ beforeEach(async () => {
   await createSettingsRepo(db).set('device.lastUserId', 'user-1');
 });
 
+const NOW = T0 + 1_000_000;
 const deps = (over: Partial<Parameters<typeof finalizeTrip>[1]> = {}) => ({
   db,
   tz: TZ,
-  now: () => T0 + 1_000_000,
+  now: () => NOW,
   appVersion: '2.0.0',
   geocode: null,
   trimSeed: async (id: string) => `${id}-seed`.padEnd(64, '0'),
   ...over,
 });
 
-test('a 20-minute drive is stored as pending with the estimate, its trimmed route, labels and one queued v3 payload', async () => {
+/** Store a session's rows as the recorder would have (the trip row and its samples). */
+async function recorded(session: Readonly<TripSession>, list: ReturnType<typeof rows>): Promise<void> {
+  await createTripsRepo(db).insert({ client_trip_id: session.clientTripId, started_at: session.startedAt, tz: TZ, status: 'recording', origin: session.origin }, T0);
+  await createSamplesRepo(db).appendMany(session.clientTripId, list.map((r) => ({ ts: r.ts, row: r })));
+}
+
+test('a 20-minute drive is stored as pending with its classification, trimmed route, labels, exposure and one held v4 payload', async () => {
   // 1200 rows × 15 m = 18 km ≈ 11.2 mi; one speeding and one brake after the warm-up.
-  const session = closedSession(1200, [speedingEvent(T0 + 300_000), brakeEvent(T0 + 600_000)], { unsafeRows: (i) => i >= 300 && i < 320 });
+  const session = closedSession(1200, [speedingEvent(T0 + 300_000), brakeEvent(T0 + 600_000)], { origin: 'auto' });
   await createSettingsRepo(db).set(PRIVACY_ZONES_KEY, [{ id: 'h', name: 'Home', lat: 47.6062, lng: -122.3321, radiusM: 300 }]);
   const geocoded: string[] = [];
-  const result = await finalizeTrip(session, deps({ geocode: async (p) => (geocoded.push(`${p.lat},${p.lng}`), 'Capitol Hill'), context: async () => ({ streak: 10 }) }));
+  const result = await finalizeTrip(session, deps({ geocode: async (p) => (geocoded.push(`${p.lat},${p.lng}`), 'Capitol Hill') }));
 
-  expect(result.trip).toMatchObject({ status: 'pending', estimate: 1, tz: TZ, local_day: '2023-11-14', from_label: 'Home', to_label: 'Capitol Hill', sync_error: null });
+  expect(result.trip).toMatchObject({
+    status: 'pending',
+    tz: TZ,
+    local_day: '2023-11-14',
+    from_label: 'Home',
+    to_label: 'Capitol Hill',
+    sync_error: null,
+    origin: 'auto',
+    not_driving_expired: 0,
+    continuations: 0,
+    finalized_at: NOW,
+    reason: null,
+    clean: 0,
+  });
+  expect(result.trip).not.toHaveProperty('points_net');
   expect(geocoded).toHaveLength(1); // the start was inside a zone: no geocode there
   expect(result.trip.miles).toBeCloseTo(11.18, 1);
-  expect(result.trip.safe_miles).toBeLessThan(result.trip.miles);
   expect(result.trip.night_miles).toBe(0); // 14:13 local: daylight
   expect(result.trip.duration_s).toBe(1200);
-  expect(result.breakdown.scored).toBe(true);
-  expect(result.breakdown.streakMult).toBe(1.2);
-  expect(result.trip.points_net).toBe(result.breakdown.net);
-  expect(result.trip.clean).toBe(0);
+  expect(result.drive).toEqual({ scored: true, reason: null, activeEventCount: 2 });
   expect(JSON.parse(result.trip.counts_json!)).toMatchObject({ speeding: 1, hardBrake: 1 });
   expect(result.events).toHaveLength(2);
-  expect(result.events[0]).toMatchObject({ id: uuid(1), type: 'speeding', penalty: 12 });
+  expect(result.events[0]).toMatchObject({ id: uuid(1), type: 'speeding' });
   expect(result.events[1]!.lat).not.toBeNull();
 
   const payload = result.payload!;
-  expect(FinalizeTripPayloadV3Schema.safeParse(payload).success).toBe(true);
-  expect(payload).toMatchObject({ v: 3, clientTripId: session.clientTripId, startedAt: T0, endedAt: T0 + 1_200_000, tz: TZ, localDay: '2023-11-14', appVersion: '2.0.0' });
-  expect(payload).not.toHaveProperty('dmsOn');
-  expect(payload).not.toHaveProperty('dmsFaceSeen');
+  expect(FinalizeTripPayloadV4Schema.safeParse(payload).success).toBe(true);
+  expect(payload).toMatchObject({ v: 4, clientTripId: session.clientTripId, startedAt: T0, endedAt: T0 + 1_200_000, tz: TZ, localDay: '2023-11-14', appVersion: '2.0.0', origin: 'auto', notDrivingExpired: false });
+  expect(payload).not.toHaveProperty('safeMiles');
   expect(payload.start).toEqual({ lat: 47.6062, lng: -122.3321 });
   expect(payload.integrity).toMatchObject({ mockLocation: false, motionMismatch: false, validGnssPct: 100 });
   expect(payload.integrity.maxSpeedMph).toBeCloseTo(33.55, 1);
+  // The opportunities: one per row moving at 5 mph or more, the stored columns the same.
+  expect(payload.exposure).toEqual(exposureOf(session, 1200));
+  expect(payload.exposure!.movingS).toBe(1200);
+  expect(result.trip).toMatchObject({ slowdowns: 0, speedups: 0, turns: 0, limit_s: 0, moving_s: 1200 });
   // The route never shows the first/last 0.25 mi nor the zone around the start.
   const runs = decodeRuns(payload.polyline);
   expect(runs).toHaveLength(1); // the zone sits at the start, inside the trimmed end: one visible run
@@ -71,9 +102,54 @@ test('a 20-minute drive is stored as pending with the estimate, its trimmed rout
   // The trim plan never leaves the phone.
   expect(JSON.stringify(payload)).not.toMatch(/startM|zoneRadiiM|plan/);
   expect(await findFinalize(db, session.clientTripId)).toEqual(payload);
-  expect(await createSamplesRepo(db).count(session.clientTripId)).toBe(0);
   const item = await createQueueRepo(db).byKey(`trip:${session.clientTripId}`);
   expect(item?.owner_uid).toBe('user-1');
+  // Held: the upload waits out the merge window from the finalize.
+  expect(item?.next_attempt_at).toBe(NOW + UPLOAD_HOLD_MS);
+  expect(UPLOAD_HOLD_MS).toBe(MERGE_GAP_S * 1000);
+});
+
+test('the drive’s own samples stay through its hold; drives whose hold is over lose theirs (the sweep)', async () => {
+  const trips = createTripsRepo(db);
+  const samples = createSamplesRepo(db);
+  // An older drive finalized 6 min ago, and one finalized 2 min ago: only the first is swept.
+  for (const [n, at] of [
+    [21, NOW - 360_000],
+    [22, NOW - 120_000],
+  ] as const) {
+    await trips.insert({ client_trip_id: uuid(n), started_at: T0 - 3_600_000, tz: TZ, status: 'pending', finalized_at: at }, T0);
+    await samples.appendMany(uuid(n), rows(3).map((r) => ({ ts: r.ts, row: r })));
+  }
+  const list = rows(200);
+  const session = closedSession(200);
+  await recorded(session, list);
+  await finalizeTrip(session, deps());
+  expect(await samples.count(session.clientTripId)).toBe(200);
+  expect(await samples.count(uuid(21))).toBe(0);
+  expect(await samples.count(uuid(22))).toBe(3);
+});
+
+test('a drive whose "Not driving?" ran out (the row says so, or the host does) uploads notDrivingExpired', async () => {
+  const session = closedSession(200, [], { origin: 'auto' });
+  await recorded(session, rows(200));
+  await createTripsRepo(db).update(session.clientTripId, { not_driving_expired: 1 }, T0);
+  const result = await finalizeTrip(session, deps());
+  expect(result.payload).toMatchObject({ notDrivingExpired: true, origin: 'auto' });
+  expect(result.trip.not_driving_expired).toBe(1);
+
+  const other = closedSession(200, [], { clientTripId: uuid(30) });
+  expect((await finalizeTrip(other, deps({ notDrivingExpired: true }))).payload).toMatchObject({ notDrivingExpired: true, origin: 'manual' });
+});
+
+test('a drive started from the parked spot (start source motion) labels and stores that spot; the upload’s start stays its first row', async () => {
+  const base = closedSession(300);
+  const parked = { lat: 47.61, lng: -122.34 };
+  const session: Readonly<TripSession> = { ...base, startSource: 'motion', startPlace: parked, continuations: 2 };
+  const labelled: string[] = [];
+  const result = await finalizeTrip(session, deps({ geocode: async (p) => (labelled.push(`${p.lat},${p.lng}`), 'Somewhere') }));
+  expect(labelled[0]).toBe(`${parked.lat},${parked.lng}`);
+  expect(result.trip).toMatchObject({ start_lat: 47.61, start_lng: -122.34, start_source: 'motion', continuations: 2 });
+  expect(result.payload!.start).toEqual({ lat: 47.6062, lng: -122.3321 });
 });
 
 test('a drive through a mid-route privacy zone uploads both visible runs, so the whole visible distance passes the server miles check', async () => {
@@ -83,7 +159,7 @@ test('a drive through a mid-route privacy zone uploads both visible runs, so the
   await createSettingsRepo(db).set(PRIVACY_ZONES_KEY, [{ id: 's', name: 'School', lat: mid.lat, lng: mid.lng, radiusM: 300 }]);
   const result = await finalizeTrip(session, deps());
   const payload = result.payload!;
-  expect(FinalizeTripPayloadV3Schema.safeParse(payload).success).toBe(true);
+  expect(FinalizeTripPayloadV4Schema.safeParse(payload).success).toBe(true);
   const runs = decodeRuns(payload.polyline);
   expect(runs.length).toBeGreaterThanOrEqual(2);
   // No encoded point inside the zone, and no segment of any run crosses it (west stays west, east stays east).
@@ -100,22 +176,19 @@ test('a drive through a mid-route privacy zone uploads both visible runs, so the
   expect(result.trip.polyline).toBe(payload.polyline);
 });
 
-test('a short drive is stored unscored-as-estimate (too_short) and still uploaded; mock rows mark the integrity', async () => {
+test('a short drive is stored too short (pending, reason kept, no clean flag) and still uploaded; mock rows mark the integrity', async () => {
   const session = closedSession(40, [], { mockEvery: 10 });
   const result = await finalizeTrip(session, deps());
-  expect(result.breakdown).toMatchObject({ scored: false, reason: 'too_short' });
-  expect(result.trip).toMatchObject({ status: 'pending', points_net: null, clean: null, reason: 'too_short' });
+  expect(result.drive).toEqual({ scored: false, reason: 'too_short', activeEventCount: 0 });
+  expect(result.trip).toMatchObject({ status: 'pending', clean: null, reason: 'too_short' });
   expect(result.payload?.integrity.mockLocation).toBe(true);
   expect(JSON.parse(result.trip.integrity_json!).mockLocation).toBe(true);
 });
 
-test('the estimate credits safe miles after today’s earlier drives (daily cap)', async () => {
-  const trips = createTripsRepo(db);
-  await trips.insert({ client_trip_id: uuid(9), started_at: T0 - 3_600_000, tz: TZ, local_day: '2023-11-14', status: 'scored', safe_miles: 38 }, T0);
-  const session = closedSession(1200);
-  const result = await finalizeTrip(session, deps());
-  // 38 mi already today: 2 at full rate, the rest at half.
-  expect(result.breakdown.creditedMiles).toBeCloseTo(2 + (result.breakdown.safeMiles - 2) / 2, 2);
+test('a clean scored drive has clean 1; DashPal-only events never break clean (classifyDrive)', async () => {
+  const result = await finalizeTrip(closedSession(1200), deps());
+  expect(result.trip.clean).toBe(1);
+  expect(result.drive).toEqual(classifyDrive({ miles: result.trip.miles, durationS: 1200, events: [] }));
 });
 
 test('a motion mismatch (GPS moving, IMU flat) is flagged', async () => {
@@ -127,9 +200,10 @@ test('a motion mismatch (GPS moving, IMU flat) is flagged', async () => {
 test('a second call for the same drive returns what is stored and queues nothing new', async () => {
   const session = closedSession(200);
   const first = await finalizeTrip(session, deps());
-  const again = await finalizeTrip(session, deps());
+  const again = await finalizeTrip(session, deps({ now: () => NOW + 5000 }));
   expect(again.trip.updated_at).toBe(first.trip.updated_at);
   expect(again.payload).toBeNull();
+  expect(again.drive).toEqual(first.drive);
   expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
 });
 
@@ -142,9 +216,17 @@ test('a drive the contract refuses is stored as failed and never queued', async 
   expect(await createEventsRepo(db).listByTrip('not-a-uuid')).toEqual([]);
 });
 
-test('sanitizeEvent clamps and rounds what a detector emitted', () => {
-  const e = sanitizeEvent({ id: 'x', type: 'phone_handling', tier: 'moderate', startedAt: T0 - 5, durationS: Number.NaN, units: 0, measured: { speedMph: 1.23456, peakG: Number.POSITIVE_INFINITY } }, T0, T0 + 60_000);
-  expect(e).toEqual({ id: 'x', type: 'phone_handling', tier: 'moderate', startedAt: T0, durationS: 0, units: 1, measured: { speedMph: 1.235 } });
+test('sanitizeEvent clamps and rounds what a detector emitted, keeping only the measured fields of the contract', () => {
+  const e = sanitizeEvent({ id: 'x', type: 'hard_brake', tier: 'minor', startedAt: T0 - 5, durationS: Number.NaN, measured: { speedMph: 1.23456, peakG: Number.POSITIVE_INFINITY } }, T0, T0 + 60_000);
+  expect(e).toEqual({ id: 'x', type: 'hard_brake', tier: 'minor', startedAt: T0, durationS: 0, measured: { speedMph: 1.235 } });
+  const base = { id: 'x', type: 'speeding', tier: 'minor', startedAt: T0, durationS: 10 } as const;
+  expect(sanitizeEvent({ ...base, measured: { overMphS: 12.34567 } }, T0, T0 + 60_000).measured).toEqual({ overMphS: 12.346 });
+  expect(sanitizeEvent({ ...base, measured: { overMphS: 5e6 } }, T0, T0 + 60_000).measured).toEqual({ overMphS: 1e6 });
+  expect(sanitizeEvent({ ...base, measured: { overMphS: -3 } }, T0, T0 + 60_000).measured).toEqual({ overMphS: 0 });
+  expect(sanitizeEvent({ ...base, measured: { overMphS: Number.NaN } }, T0, T0 + 60_000).measured).toEqual({});
+  // Fields an older detector wrote (phone use) never reach the upload.
+  const legacy = { ...base, measured: { maxSpeedMph: 52, mounted: true } } as unknown as Parameters<typeof sanitizeEvent>[0];
+  expect(sanitizeEvent(legacy, T0, T0 + 60_000).measured).toEqual({});
 });
 
 test('normaliseZone', () => {
@@ -157,56 +239,50 @@ test('normaliseZone', () => {
 });
 
 describe('a drive closed at its last movement', () => {
-  /** 600 rows at 15 m/s (9 km), then 300 parked rows jittering 10 m a second (3 km of drift) with phone use in them. */
+  /** 600 rows at 15 m/s (9 km), then 300 parked rows jittering 10 m a second (3 km of drift) with events in them. */
   function cutSession() {
-    const s = createSession({ clientTripId: '22222222-2222-4222-8222-222222222222', startedAt: T0 });
+    const s = createSession({ clientTripId: '22222222-2222-4222-8222-222222222222', startedAt: T0, origin: 'manual' });
     const drive = rows(600);
     const end = drive.at(-1)!;
     const parked = rows(300, { t0: T0 + 600_000, speedMps: 0.5 }).map((r, i) => ({ ...r, lng: end.lng + (i % 2 === 0 ? 10 : 0) / 75_000 }));
-    for (const r of [...drive, ...parked]) appendRow(s, r, false);
+    for (const r of [...drive, ...parked]) appendRow(s, r, { unsafe: false, limitUsable: false });
     s.events.push(
-      // A pickup at 25 mph that ran 40 s into the stop: its handling (from +15 s) crosses the cut.
-      { id: uuid(11), type: 'phone_pickup', tier: 'severe', startedAt: T0 + 580_000, durationS: 60, measured: { speedMph: 25 } },
-      { id: uuid(12), type: 'phone_handling', tier: 'severe', startedAt: T0 + 595_000, durationS: 45, units: 3, measured: {} },
-      // Phone use well into the parked tail.
-      { id: uuid(13), type: 'phone_pickup', tier: 'severe', startedAt: T0 + 700_000, durationS: 30, stoppedInTraffic: true, measured: {} }
+      // Speeding that ran 40 s into the stop: clipped at the cut.
+      { id: uuid(11), type: 'speeding', tier: 'moderate', startedAt: T0 + 580_000, durationS: 60, measured: { speedMph: 45 } },
+      // A speeding event well into the parked tail: dropped.
+      { id: uuid(13), type: 'speeding', tier: 'minor', startedAt: T0 + 700_000, durationS: 30, measured: {} }
     );
     return { open: s, closed: closeAtLastMovement(s, 'stopped') };
   }
 
-  test('the payload ends at the cut with the mark’s miles and no tail event; a clipped handling event keeps its recomputed units', async () => {
+  test('the payload ends at the cut with the mark’s miles, exposure and no tail event; a crossing event is clipped', async () => {
     const { open, closed } = cutSession();
     expect(closed.endedAt).toBe(T0 + 600_000);
     const result = await finalizeTrip(closed, deps());
     const payload = result.payload!;
-    expect(FinalizeTripPayloadV3Schema.safeParse(payload).success).toBe(true);
+    expect(FinalizeTripPayloadV4Schema.safeParse(payload).success).toBe(true);
     expect(payload.endedAt).toBe(T0 + 600_000);
     expect(payload.miles).toBeCloseTo(metersToMiles(open.moved!.distanceM), 3);
     expect(payload.miles).toBeLessThan(metersToMiles(open.distanceM));
-    expect(payload.events.map((e) => [e.id, e.durationS, e.units])).toEqual([
-      [uuid(11), 20, undefined],
-      [uuid(12), 5, 1],
-    ]);
-    expect(payload.events[1]!.tier).toBe('moderate');
-    expect((await createEventsRepo(db).listByTrip(closed.clientTripId)).map((e) => [e.id, e.units, e.tier])).toEqual([
-      [uuid(11), null, 'severe'],
-      [uuid(12), 1, 'moderate'],
-    ]);
+    expect(payload.events.map((e) => [e.id, e.durationS])).toEqual([[uuid(11), 20]]);
+    // The parked tail moves nothing at 5 mph: the mark's moving seconds, never the tail's.
+    expect(payload.exposure!.movingS).toBe(open.moved!.movingRows);
+    expect((await createEventsRepo(db).listByTrip(closed.clientTripId)).map((e) => [e.id, e.tier])).toEqual([[uuid(11), 'moderate']]);
   });
 
   test('a drive that reached the 12 h bound (cause limit) is stored pending with a payload the contract takes', async () => {
-    const s = createSession({ clientTripId: '33333333-3333-4333-8333-333333333333', startedAt: T0 });
+    const s = createSession({ clientTripId: '33333333-3333-4333-8333-333333333333', startedAt: T0, origin: 'auto' });
     // One fix a minute for 12 h, 900 m apart: the last movement 1 s before the bound.
     for (let k = 0; k < 720; k += 1) {
-      appendRow(s, { ...rows(1, { t0: T0 + k * 60_000 })[0]!, lng: -122.3321 + (k * 900) / 75_000, speed: -1 }, false);
+      appendRow(s, { ...rows(1, { t0: T0 + k * 60_000 })[0]!, lng: -122.3321 + (k * 900) / 75_000, speed: -1 }, { unsafe: false, limitUsable: false });
     }
-    appendRow(s, { ...rows(1, { t0: T0 + MAX_DRIVE_MS - 1000 })[0]!, lng: -122.3321 + (720 * 900) / 75_000, speed: -1 }, false);
+    appendRow(s, { ...rows(1, { t0: T0 + MAX_DRIVE_MS - 1000 })[0]!, lng: -122.3321 + (720 * 900) / 75_000, speed: -1 }, { unsafe: false, limitUsable: false });
     const closed = closeAtLastMovement(s, 'limit');
     expect(closed.endedAt! - closed.startedAt).toBeLessThanOrEqual(MAX_DRIVE_MS);
     const result = await finalizeTrip(closed, deps({ now: () => T0 + MAX_DRIVE_MS + 5000 }));
     expect(result.trip.status).toBe('pending');
     expect(result.payload).not.toBeNull();
-    expect(FinalizeTripPayloadV3Schema.safeParse(result.payload).success).toBe(true);
+    expect(FinalizeTripPayloadV4Schema.safeParse(result.payload).success).toBe(true);
   });
 });
 
@@ -216,10 +292,10 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
     await createTripsRepo(db).insert({ client_trip_id: ID, started_at: T0, tz: TZ, status: 'recording' }, T0);
     const list = rows(n, { speedMps: 0, ...over });
     await createSamplesRepo(db).appendMany(ID, list.map((r) => ({ ts: r.ts, row: r })));
-    await createEventsRepo(db).insertMany([{ id: uuid(40), client_trip_id: ID, type: 'phone_pickup', tier: 'severe', started_at: T0 + 5000 }]);
+    await createEventsRepo(db).insertMany([{ id: uuid(40), client_trip_id: ID, type: 'hard_brake', tier: 'severe', started_at: T0 + 5000 }]);
     await db.execute('INSERT INTO dashcam_coverage (client_trip_id, moving_s, covered_s) VALUES (?, 0, 0)', [ID]);
-    const s = createSession({ clientTripId: ID, startedAt: T0 });
-    for (const r of list) appendRow(s, r, false);
+    const s = createSession({ clientTripId: ID, startedAt: T0, origin: 'manual' });
+    for (const r of list) appendRow(s, r, { unsafe: false, limitUsable: false });
     return s;
   }
 
@@ -252,8 +328,8 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
       ['orphan', (s: TripSession) => closeAtLastMovement(s, 'orphan')],
     ] as const) {
       await createTripsRepo(db).insert({ client_trip_id: ID, started_at: T0, tz: TZ, status: 'recording' }, T0);
-      const s = createSession({ clientTripId: ID, startedAt: T0 });
-      for (const r of walk) appendRow(s, r, false);
+      const s = createSession({ clientTripId: ID, startedAt: T0, origin: 'manual' });
+      for (const r of walk) appendRow(s, r, { unsafe: false, limitUsable: false });
       expect(s.moved).not.toBeNull();
       expect(s.droveAt).toBeNull();
       expect(dropReason(s)).toBe('not_driven');
@@ -264,12 +340,12 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
   });
 
   test('driving speed needs trusted readings: 30 mph rows rated at 3 m/s are not_driven; at -1 (no rating) they count', () => {
-    const untrusted = createSession({ clientTripId: ID, startedAt: T0 });
-    for (const r of rows(60, { over: () => ({ speedAcc: 3 }) })) appendRow(untrusted, r, false);
+    const untrusted = createSession({ clientTripId: ID, startedAt: T0, origin: 'manual' });
+    for (const r of rows(60, { over: () => ({ speedAcc: 3 }) })) appendRow(untrusted, r, { unsafe: false, limitUsable: false });
     expect(dropReason(untrusted)).toBe('not_driven');
     expect(untrusted.droveAt).toBeNull();
-    const unrated = createSession({ clientTripId: ID, startedAt: T0 });
-    for (const r of rows(60, { over: () => ({ speedAcc: -1 }) })) appendRow(unrated, r, false);
+    const unrated = createSession({ clientTripId: ID, startedAt: T0, origin: 'manual' });
+    for (const r of rows(60, { over: () => ({ speedAcc: -1 }) })) appendRow(unrated, r, { unsafe: false, limitUsable: false });
     expect(dropReason(unrated)).toBeNull();
   });
 
@@ -280,8 +356,8 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
   });
 
   test('a drive that moved is kept (dropReason null) and finalized as before', async () => {
-    const s = createSession({ clientTripId: ID, startedAt: T0 });
-    for (const r of rows(60)) appendRow(s, r, false);
+    const s = createSession({ clientTripId: ID, startedAt: T0, origin: 'manual' });
+    for (const r of rows(60)) appendRow(s, r, { unsafe: false, limitUsable: false });
     expect(dropReason(s)).toBeNull();
     const result = await closeDrive(closeAtLastMovement(s, 'stopped'), deps());
     expect(isDropped(result)).toBe(false);
@@ -314,45 +390,17 @@ test.each([
   const session = { ...closedSession(60), endCause: cause, cut };
   const result = await finalizeTrip(session, deps());
   expect(result.trip.end_cause).toBe(stored);
-  expect(JSON.stringify(result.payload)).not.toContain(stored);
+  // (origin is how the drive started, not how it ended; limitS is a counter.)
+  expect(JSON.stringify({ ...result.payload, origin: null, exposure: null })).not.toContain(stored);
 });
 
-describe('round 7: what the estimate reads', () => {
-  test('sanitizeEvent keeps and clamps maxSpeedMph (0..250) and overMphS (0..1e6), and drops what is not a finite number', () => {
-    const base = { id: 'x', type: 'speeding', tier: 'minor', startedAt: T0, durationS: 10 } as const;
-    expect(sanitizeEvent({ ...base, measured: { overMphS: 12.34567, maxSpeedMph: 61.23456 } }, T0, T0 + 60_000).measured).toEqual({ maxSpeedMph: 61.235, overMphS: 12.346 });
-    expect(sanitizeEvent({ ...base, measured: { overMphS: 5e6, maxSpeedMph: 400 } }, T0, T0 + 60_000).measured).toEqual({ maxSpeedMph: 250, overMphS: 1e6 });
-    expect(sanitizeEvent({ ...base, measured: { overMphS: -3, maxSpeedMph: -1 } }, T0, T0 + 60_000).measured).toEqual({ maxSpeedMph: 0, overMphS: 0 });
-    expect(sanitizeEvent({ ...base, measured: { overMphS: Number.NaN, maxSpeedMph: Number.POSITIVE_INFINITY } }, T0, T0 + 60_000).measured).toEqual({});
-  });
-
-  test('the estimate prices speeding from its measured overMphS and phone use at its highest speed, exactly as the server scores the upload', async () => {
-    const speeding = { ...speedingEvent(T0 + 300_000, 35), measured: { speedMph: 41, limitMph: 35, overMphS: 90 } };
-    const pickup = { id: uuid(3), type: 'phone_pickup' as const, tier: 'severe' as const, startedAt: T0 + 600_000, durationS: 8, measured: { mounted: false, speedMph: 30, maxSpeedMph: 52 } };
-    const session = closedSession(1200, [speeding, pickup]);
-    const result = await finalizeTrip(session, deps());
-    const payload = result.payload!;
-    expect(FinalizeTripPayloadV3Schema.safeParse(payload).success).toBe(true);
-    expect(payload.events.map((e) => e.measured)).toEqual([
-      { speedMph: 41, limitMph: 35, overMphS: 90 },
-      { mounted: false, speedMph: 30, maxSpeedMph: 52 },
-    ]);
-    // 30 s charged at 3 mph past the line: 18; a pickup over 45 mph: 32 × 2. An 11-mile drive: no short scale.
-    expect(result.breakdown.events).toEqual([
-      { id: uuid(1), penalty: 18 },
-      { id: uuid(3), penalty: 64 },
-    ]);
-    const server = scoreDrive({ miles: payload.miles, safeMiles: payload.safeMiles, events: payload.events, durationS: payload.durationS }, { streak: 0, safeMilesEarlierToday: 0 });
-    expect(result.breakdown).toEqual(server);
-  });
-
-  test('a drive under 0.5 mi is scored once it lasts 2 min (and too short under both)', async () => {
-    // 150 rows at 5 m/s: 0.47 mi in 150 s.
-    const long = closedSession(150, [], { speedMps: 5 });
-    const scored = await finalizeTrip(long, deps());
-    expect(scored.trip.miles).toBeLessThan(0.5);
-    expect(scored.breakdown).toMatchObject({ scored: true, pointsPerMile: 20 });
-    const short = closedSession(110, [], { speedMps: 5, clientTripId: uuid(8) });
-    expect((await finalizeTrip(short, deps())).breakdown).toMatchObject({ scored: false, reason: 'too_short' });
-  });
+test('a drive under 0.5 mi is scored once it lasts 2 min (and too short under both)', async () => {
+  // 150 rows at 5 m/s: 0.47 mi in 150 s.
+  const long = closedSession(150, [], { speedMps: 5 });
+  const scored = await finalizeTrip(long, deps());
+  expect(scored.trip.miles).toBeLessThan(0.5);
+  expect(scored.drive).toMatchObject({ scored: true, reason: null });
+  expect(scored.trip.reason).toBeNull();
+  const short = closedSession(110, [], { speedMps: 5, clientTripId: uuid(8) });
+  expect((await finalizeTrip(short, deps())).drive).toMatchObject({ scored: false, reason: 'too_short' });
 });
