@@ -1,4 +1,4 @@
-import { IDLE_END_S } from '@scoring';
+import { IDLE_END_S, POINTS_PER_MILE } from '@scoring';
 
 import type { StepId } from './flow';
 
@@ -48,7 +48,7 @@ export const onboardingCopy = {
     title: 'How it works',
     body: 'Drive safely, earn points, keep your streak going.',
     rows: [
-      { big: '+10', title: 'Safe miles earn points', body: '10 points for every mile without an event.' },
+      { big: `+${POINTS_PER_MILE}`, title: 'Safe miles earn points', body: `${POINTS_PER_MILE} points for every mile without an event.` },
       { big: '−', title: 'Events cost points', body: 'Speeding, hard braking and phone use (even leaving RoadWise mid-drive) cost points.' },
       { big: '×1.30', title: 'Streaks multiply', body: 'Each good drive grows your streak and boosts what you earn.' },
     ],

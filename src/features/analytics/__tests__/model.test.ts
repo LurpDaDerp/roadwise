@@ -278,7 +278,7 @@ describe('windows', () => {
     expect(rangeStart(now, 'year')).toBe(windowStart(now, 365));
   });
 
-  test('sums scored drives in the window; DashPal counts apart (Attention only); avg speed, clean share and per-drive averages', () => {
+  test('sums scored drives in the window; DashPal counts apart (Attention only); avg speed, clean rate and per-drive averages', () => {
     const since = 1_000;
     const drives = [
       drive({ startedAt: 2_000, miles: 10, durationS: 1800, nightMiles: 3, pointsNet: 120, clean: true, counts: { ...EMPTY_COUNTS, eyesOff: 3, drowsy: 1 } }),
@@ -319,7 +319,7 @@ describe('windows', () => {
     expect(windowSums(drives, null).drives).toBe(3);
   });
 
-  test('an empty window has no averages and no clean share', () => {
+  test('an empty window has no averages and no clean rate', () => {
     expect(windowSums([], 0)).toMatchObject({ drives: 0, avgMph: null, cleanPct: null, nightPct: null, points: 0, avgMiles: null, avgPoints: null });
   });
 

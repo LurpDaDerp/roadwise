@@ -1,4 +1,4 @@
-/** The word shown instead of a Safety Rating for a driver under 25 mi in 30 days. */
+/** The word shown instead of a Safety Rating for a driver under 10 mi in 30 days. */
 export const UNRANKED = 'Unranked';
 
 /**
