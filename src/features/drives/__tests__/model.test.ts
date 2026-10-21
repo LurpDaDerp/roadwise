@@ -308,16 +308,18 @@ describe('summary', () => {
     expect(notDrivingLabel(null)).toBe("Wasn't driving");
   });
 
-  test(`"Wasn't driving" is offered on any kept drive within a day of its end, while its "Not driving?" never ran out`, () => {
+  test(`"Wasn't driving" is offered on any kept drive the server holds or will hold, within a day of its end, while its "Not driving?" never ran out`, () => {
     const d = drive();
     const ended = d.endedAt!;
     expect(canMarkNotDriving(d, ended + DAY)).toBe(true);
     expect(canMarkNotDriving(d, ended + DAY + 1)).toBe(false);
     expect(canMarkNotDriving(drive({ notDrivingExpired: true }), ended)).toBe(false);
-    for (const status of ['scored', 'pending', 'unscored', 'failed'] as const) expect(canMarkNotDriving(drive({ status }), ended)).toBe(true);
-    for (const status of ['recording', 'merged', 'not_driving'] as const) expect(canMarkNotDriving(drive({ status }), ended)).toBe(false);
+    for (const status of ['scored', 'pending', 'unscored'] as const) expect(canMarkNotDriving(drive({ status }), ended)).toBe(true);
+    // A drive whose upload the server refused was never stored there: nothing to mark (it would come back not_found).
+    for (const status of ['recording', 'merged', 'not_driving', 'failed'] as const) expect(canMarkNotDriving(drive({ status }), ended)).toBe(false);
     expect(canMarkNotDriving(drive({ syncError: 'too_old' }), ended)).toBe(false);
     expect(canMarkNotDriving(drive({ syncError: 'invalid_payload' }), ended)).toBe(true);
+    expect(canMarkNotDriving(drive({ status: 'failed', syncError: 'invalid_payload' }), ended)).toBe(false);
   });
 });
 

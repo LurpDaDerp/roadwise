@@ -213,12 +213,14 @@ export function disputeText(e: LocalDriveEvent): string | null {
 export const NOT_DRIVING_WINDOW_MS = NOT_DRIVING_WINDOW_S * 1000;
 
 /**
- * Whether to offer "Wasn't driving" on this drive: any drive that is kept (scored, uploading, not
- * scored or not synced), within a day of its end, whose in-drive "Not driving?" never ran out, and
- * that the server has not already refused. The monthly uses are the caller's to check.
+ * Whether to offer "Wasn't driving" on this drive: a kept drive the server holds or will hold
+ * (scored, not scored, or still uploading: its upload goes ahead of the mark), within a day of its
+ * end, whose in-drive "Not driving?" never ran out, and that the server has not already refused. A
+ * drive whose upload the server refused (`failed`) is not on the server, so it has nothing to mark.
+ * The monthly uses are the caller's to check.
  */
 export function canMarkNotDriving(d: LocalDrive, now: number): boolean {
-  const kept = d.status === 'scored' || d.status === 'pending' || d.status === 'unscored' || d.status === 'failed';
+  const kept = d.status === 'scored' || d.status === 'pending' || d.status === 'unscored';
   if (!kept || d.notDrivingExpired) return false;
   if (now - (d.endedAt ?? d.startedAt) > NOT_DRIVING_WINDOW_MS) return false;
   return notDrivingRefusal(d) === null;
