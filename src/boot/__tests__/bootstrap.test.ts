@@ -134,7 +134,7 @@ test('an orphan that never moved is dropped at launch and Home gets the notice (
   const rt = await bootstrapApp(deps().deps);
   expect(rt.recovery).toMatchObject({ dropped: [uuid(8)], finalized: [] });
   expect(await trips.get(uuid(8))).toBeNull();
-  expect(await readDropNotice(db)).toEqual({ clientTripId: uuid(8), cause: 'orphan', reason: 'no_movement', at: clock });
+  expect(await readDropNotice(db)).toEqual({ clientTripId: uuid(8), cause: 'orphan', reason: 'no_movement', at: clock, origin: 'manual' });
   expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
   await rt.stop();
 });
