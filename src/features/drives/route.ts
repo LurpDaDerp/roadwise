@@ -5,8 +5,9 @@
  */
 import type { EventType, Tier } from '@scoring';
 
-import { haversineMeters, type LatLng } from '@/lib/geo';
+import type { LatLng } from '@/lib/geo';
 import { decodeRuns } from '@/lib/polyline';
+import { cumulative, project, slice } from '@/lib/runs';
 
 import type { LocalDriveEvent } from './model';
 
@@ -103,60 +104,6 @@ const located = (e: LocalDriveEvent): LatLng | null =>
 
 /** Disputes that were accepted no longer count anywhere, the map included. */
 const counts = (e: LocalDriveEvent) => !e.removed && e.disputeStatus !== 'accepted';
-
-/** Cumulative distance along a run, metres, one entry per point. */
-function cumulative(points: readonly LatLng[]): number[] {
-  const c: number[] = [0];
-  for (let i = 1; i < points.length; i++) c.push(c[i - 1]! + haversineMeters(points[i - 1]!, points[i]!));
-  return c;
-}
-
-/** The point `d` metres along a run. */
-function pointAt(points: readonly LatLng[], cum: readonly number[], d: number): LatLng {
-  let i = 1;
-  while (i < points.length - 1 && cum[i]! < d) i++;
-  const a = points[i - 1]!;
-  const b = points[i]!;
-  const seg = cum[i]! - cum[i - 1]!;
-  const t = seg > 0 ? Math.min(1, Math.max(0, (d - cum[i - 1]!) / seg)) : 0;
-  return { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
-}
-
-/** The part of a run from `d0` to `d1` metres along it: the two cut points and every point between. */
-function slice(points: readonly LatLng[], cum: readonly number[], d0: number, d1: number): LatLng[] {
-  const out = [pointAt(points, cum, d0)];
-  points.forEach((p, i) => {
-    if (cum[i]! > d0 && cum[i]! < d1) out.push(p);
-  });
-  out.push(pointAt(points, cum, d1));
-  return out;
-}
-
-/** Where `p` falls on the route: the run and how far along it, from the nearest point on any segment. */
-function project(runs: readonly (readonly LatLng[])[], cums: readonly number[][], p: LatLng): { run: number; d: number } {
-  const k = Math.cos((p.lat * Math.PI) / 180);
-  let best = { run: 0, d: 0 };
-  let bestD = Infinity;
-  runs.forEach((points, r) => {
-    for (let i = 1; i < points.length; i++) {
-      const a = points[i - 1]!;
-      const b = points[i]!;
-      // A flat local frame is plenty at road scale.
-      const bx = (b.lng - a.lng) * k;
-      const by = b.lat - a.lat;
-      const px = (p.lng - a.lng) * k;
-      const py = p.lat - a.lat;
-      const len2 = bx * bx + by * by;
-      const t = len2 > 0 ? Math.min(1, Math.max(0, (px * bx + py * by) / len2)) : 0;
-      const dist = (px - t * bx) ** 2 + (py - t * by) ** 2;
-      if (dist < bestD) {
-        bestD = dist;
-        best = { run: r, d: cums[r]![i - 1]! + t * (cums[r]![i]! - cums[r]![i - 1]!) };
-      }
-    }
-  });
-  return best;
-}
 
 const TIER_ORDER: Record<Tier, number> = { minor: 1, moderate: 2, severe: 3 };
 
