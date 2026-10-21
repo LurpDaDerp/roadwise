@@ -7,7 +7,8 @@ import { useUnits } from '@/data/queries/units';
 import { formatDistance } from '@/lib/units';
 import { Text, useTheme } from '@/ui';
 
-import { EVENT_ICON, EVENT_LABEL, formatDuration, formatWhen, routeLine, signedPoints, spokenRoute } from './format';
+import { EventIcon } from './EventIcon';
+import { EVENT_LABEL, formatDuration, formatWhen, routeLine, signedPoints, spokenRoute } from './format';
 import type { DriveCounts, LocalDrive } from './model';
 import { decodeRoute } from './route';
 import { RouteSketch } from './RouteSketch';
@@ -95,7 +96,7 @@ export function DriveRow({ drive, onPress, testID }: { drive: LocalDrive; onPres
           ) : (
             tally.map((x) => (
               <View key={x.type} style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }} testID={`${testID ?? 'row'}-event-${x.type}`}>
-                <Ionicons name={EVENT_ICON[x.type]} size={14} color={t.colors.textMuted} />
+                <EventIcon type={x.type} size={14} color={t.colors.textMuted} />
                 {x.n > 1 ? (
                   <Text variant="footnote" tone="muted">
                     {x.n}

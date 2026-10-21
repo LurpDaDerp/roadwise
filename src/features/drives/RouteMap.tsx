@@ -8,7 +8,8 @@ import Svg, { Path } from 'react-native-svg';
 import type { LatLng } from '@/lib/geo';
 import { IconButton, Text, tokens, useTheme } from '@/ui';
 
-import { DASHPAL_MARK, EVENT_ICON, EVENT_LABEL, eventKind, eventName, formatClock, formatEventDuration, spokenEventDuration, TIER_SIGNAL } from './format';
+import { EventIcon } from './EventIcon';
+import { DASHPAL_MARK, EVENT_LABEL, eventKind, eventName, formatClock, formatEventDuration, spokenEventDuration, TIER_SIGNAL } from './format';
 import type { LocalDriveEvent } from './model';
 import {
   allPoints,
@@ -136,7 +137,7 @@ function Pin({ mark }: { mark: EventMark }) {
           justifyContent: 'center',
         }}
       >
-        <Ionicons name={EVENT_ICON[mark.type]} size={16} color={ink.onFill} />
+        <EventIcon type={mark.type} size={16} color={ink.onFill} />
       </View>
     </View>
   );
@@ -174,7 +175,7 @@ function EventCard({ event: e, onClose }: { event: LocalDriveEvent; onClose: () 
         importantForAccessibility="no-hide-descendants"
         style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: ink.fill, alignItems: 'center', justifyContent: 'center' }}
       >
-        <Ionicons name={EVENT_ICON[e.type]} size={18} color={ink.onFill} />
+        <EventIcon type={e.type} size={18} color={ink.onFill} />
       </View>
       <View style={{ flex: 1 }}>
         <Text variant="headline" testID="map-event-title">
