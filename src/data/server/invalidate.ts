@@ -11,7 +11,6 @@ import type { Query, QueryClient } from '@tanstack/react-query';
 export type ServerRoot =
   | 'summary'
   | 'friends-board'
-  | 'global-board'
   | 'friends'
   | 'profile'
   | 'search'
@@ -31,11 +30,12 @@ const WRITE_ROOTS: Readonly<Record<string, readonly ServerRoot[] | 'all'>> = {
   block_user: 'all',
   unblock_user: 'all',
   report_target: [],
-  update_profile: ['summary', 'profile', 'global-board', 'heatmap'],
+  // What a driver shares moves their row on the friends board and their profile as friends see it.
+  update_profile: ['summary', 'profile', 'friends-board', 'memberStats', 'heatmap'],
 };
 
 /** Roots a settled drive or drive action moves, besides the summary. */
-const AFTER_DRIVE_STALE: readonly ServerRoot[] = ['friends-board', 'global-board', 'profile', 'memberStats', 'heatmap'];
+const AFTER_DRIVE_STALE: readonly ServerRoot[] = ['friends-board', 'profile', 'memberStats', 'heatmap'];
 
 function inRoots(roots: readonly ServerRoot[]) {
   return (q: Query): boolean => q.queryKey[0] === 'server' && roots.includes(q.queryKey[2] as ServerRoot);

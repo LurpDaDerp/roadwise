@@ -6,7 +6,7 @@ import { invalidateAfterDrive, invalidateAfterWrite } from '../invalidate';
 function setup() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const fetches: string[] = [];
-  const roots = ['summary', 'friends-board', 'global-board', 'friends', 'profile'];
+  const roots = ['summary', 'friends-board', 'friends', 'profile', 'memberStats'];
   const unsubs = roots.map((root) => {
     const obs = new QueryObserver(qc, {
       queryKey: ['server', 'u1', root],
@@ -32,7 +32,7 @@ test('a settled drive refetches only the summary and marks the boards stale for 
   await invalidateAfterDrive(s.qc);
   expect(s.fetches).toEqual(['summary']);
   expect(s.stale('friends-board')).toBe(true);
-  expect(s.stale('global-board')).toBe(true);
+  expect(s.stale('memberStats')).toBe(true);
   expect(s.stale('friends')).toBe(false);
   s.done();
 });
@@ -41,14 +41,15 @@ test('a social write refetches only what it moves; a report moves nothing; a blo
   const s = setup();
   await mounted(s);
   await invalidateAfterWrite(s.qc, 'send_friend_request');
-  expect(s.fetches.sort()).toEqual(['friends', 'friends-board', 'profile']);
+  expect(s.fetches.sort()).toEqual(['friends', 'friends-board', 'memberStats', 'profile']);
   s.fetches.length = 0;
   await invalidateAfterWrite(s.qc, 'report_target');
   expect(s.fetches).toEqual([]);
+  // a sharing setting moves the driver's row on the friends board and what friends see of them
   await invalidateAfterWrite(s.qc, 'update_profile');
-  expect(s.fetches.sort()).toEqual(['global-board', 'profile', 'summary']);
+  expect(s.fetches.sort()).toEqual(['friends-board', 'memberStats', 'profile', 'summary']);
   s.fetches.length = 0;
   await invalidateAfterWrite(s.qc, 'block_user');
-  expect(s.fetches.sort()).toEqual(['friends', 'friends-board', 'global-board', 'profile', 'summary']);
+  expect(s.fetches.sort()).toEqual(['friends', 'friends-board', 'memberStats', 'profile', 'summary']);
   s.done();
 });

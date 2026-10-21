@@ -1,7 +1,8 @@
 /**
- * `get_my_summary`: the signed-in driver's profile, progress, weekly challenges and achievements
- * (the server still sends a league placement, which the app no longer shows). Home's drive card and
- * the Profile card read it.
+ * `get_my_summary`: the signed-in driver's profile (with what they share with friends), Safety
+ * Rating, the "Wasn't driving" marks left this month, this week's goals and the achievements
+ * unlocked. Home, Profile, Analytics and Settings read it. (A server in the transition still sends a
+ * few keys older builds read, such as `progress.points`; they are not part of this shape.)
  * It refetches when a drive upload or drive action settles and after a profile edit
  * (`./invalidate.ts`).
  */
@@ -9,8 +10,8 @@ import { type UseQueryResult } from '@tanstack/react-query';
 
 import { useServerQuery } from './useServerQuery';
 
-export type LeagueTier = 'bronze' | 'silver' | 'gold' | 'platinum' | 'diamond';
-export type HeatmapVisibility = 'only_me' | 'clan' | 'friends';
+/** Who sees the driver's heat map. */
+export type HeatmapVisibility = 'only_me' | 'friends';
 
 export interface MySummary {
   profile: {
@@ -21,37 +22,28 @@ export interface MySummary {
     heatmap_visibility: HeatmapVisibility;
     league_eligible: boolean;
     onboarded_at: string | null;
+    /** Friends see the Safety Rating (on unless turned off). */
+    share_rating: boolean;
+    /** Friends see the category scores. */
+    share_categories: boolean;
+    /** Friends see the achievements. */
+    share_achievements: boolean;
+    /** Friends see the drives, distance and events (and the 90-day distance on the friends board). */
+    share_stats: boolean;
   };
   progress: {
-    points: number;
-    lifetime: number;
-    level: number;
-    level_floor: number;
-    level_next: number | null;
-    streak: number;
-    at_risk: boolean;
-    next_mult: number;
-    freezes: number;
-    clean_run: number;
-    freeze_progress: number;
-    phone_free_run: number;
+    /** The 90-day Safety Rating; null before the first scored drive. */
     safety_rating: number | null;
+    /** 10 mi or more in the last 90 days. */
     ranked: boolean;
-    miles_30d: number;
-    clean_miles_30d: number;
+    /** Miles driven in the last 90 days (the way to a rating). */
+    miles_90d: number;
     /** Rating now minus the rating as of 7 days ago; null when either is unknown. */
     rating_trend: number | null;
-    league_tier: LeagueTier;
   };
-  league: {
-    week: string;
-    tier: LeagueTier;
-    group_id: string | null;
-    rank: number | null;
-    size: number;
-    ends_at: string;
-  };
+  /** "Wasn't driving" marks left this month. */
   not_driving_left: number;
+  /** This week's goals, with a check mark when done. */
   challenges: {
     id: string;
     slot: number;
