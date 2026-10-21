@@ -4,14 +4,14 @@
  * A RoadWise process starts for one of two reasons:
  *   - **foreground** — the driver opened the app. Hydration, the config fetch and uploads are
  *     allowed (throttled; `startForegroundJobs`);
- *   - **background** — iOS relaunched the app with no one opening it: a significant-location
- *     change while the forgot-to-start reminder is on (the reminder's native code handles that
- *     wake; JS only boots alongside it), or Bluetooth state restoration for a paired DashPal —
- *     either can land while a drive the previous process left open still needs recovering; or
- *     the Android headless task (`DriveSenseTask`). iOS never relaunches for motion, and never to
- *     continue a capture. The drive engine starts and nothing else: no hydration, no config fetch,
+ *   - **background** — iOS relaunched the app with no one opening it: a wake of the drive detector
+ *     (a significant-location change, the parked-car region, a visit; its native code handles the
+ *     wake and journals any drive, and JS boots alongside it and takes the journal in), or
+ *     Bluetooth state restoration for a paired DashPal — any of them can land while a drive the
+ *     previous process left open still needs recovering; or the Android headless task
+ *     (`DriveSenseTask`). The drive engine starts and nothing else: no hydration, no config fetch,
  *     no upload (Android's headless task is the one exception for uploads: "upload from the
- *     service or on foreground", §3.5).
+ *     service or on foreground", §3.5). A drive's upload waits for the next foreground.
  *
  * The profile is read from `AppState.currentState` once, at boot. Only `active` is foreground:
  * iOS reports `unknown` for a cold start that has not finished becoming active, and treating it as

@@ -10,14 +10,17 @@
  *     else in the launch touches a row. The install id and the phone's DashPal pairing stay.
  */
 import { activeDashcam } from '@/dashcam/registry';
-import { createSettingsRepo, type Db } from '@/data/db';
+import { createSettingsRepo, SPOTS_META_KEY, type Db } from '@/data/db';
 import { clearDeviceSecret } from '@/data/devices/deviceSecret';
 import { emitDataChanged } from '@/data/events';
 import { RESTORED_AT_KEY } from '@/data/hydrate/restore';
 import { publishUnits } from '@/data/queries/units';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { DROP_NOTICE_KEY } from '@/drive/dropNotice';
+import { NOT_DRIVING_KEY } from '@/drive/notDriving';
 import { PENDING_TERMS_KEY } from '@/features/auth/pendingTermsKey';
+
+import { autoDetectOff } from './autoDetect';
 
 /** Where the owner is remembered. The wipe clears it too, and it is rewritten straight after. */
 export const LAST_USER_KEY = 'device.lastUserId';
@@ -38,14 +41,14 @@ export const DEVICE_TABLES: readonly string[] = [
   'dashcam_events',
   'dashcam_boots',
   'dashcam_coverage',
+  'problem_spots',
   'trips',
 ];
 
 /**
  * The one setting the handover wipe keeps: this install's device id (`src/data/devices/installId.ts`).
  * A random id that identifies nothing outside the app; keeping it is what ties every account on one
- * phone to one `device_id`, so "one league-eligible account per device" holds across a sign-out and
- * sign-in (security audit, Important 3).
+ * phone to one `device_id` (its push and Live Activity tokens) across a sign-out and sign-in.
  */
 export const WIPE_KEEPS_SETTINGS: readonly string[] = ['device.installId'];
 
@@ -58,13 +61,13 @@ export const WIPE_KEEPS_SETTINGS: readonly string[] = ['device.installId'];
 export const WIPE_KEEPS_SETTINGS_PREFIX = 'dashcam.';
 
 /** The driver's own data a plain sign-out removes (the owner key stays, so a return restores from the server). */
-export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'dashcam_events', 'dashcam_boots', 'dashcam_coverage', 'trips'];
+export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'dashcam_events', 'dashcam_boots', 'dashcam_coverage', 'problem_spots', 'trips'];
 /**
- * The zones, the notice of a drive that was not kept (`src/drive/dropNotice.ts`), and the record
- * that this driver's restore ran to the end: their drives just left the phone, so the next sign-in
- * restores them again.
+ * The zones, the notice of a drive that was not kept (`src/drive/dropNotice.ts`), the last drive's
+ * "Not driving?" budget, the problem spots' bookkeeping, and the record that this driver's restore
+ * ran to the end: their drives just left the phone, so the next sign-in restores them again.
  */
-export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones', DROP_NOTICE_KEY, RESTORED_AT_KEY];
+export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones', DROP_NOTICE_KEY, NOT_DRIVING_KEY, SPOTS_META_KEY, RESTORED_AT_KEY];
 
 /** How long a wipe waits for the drive summaries to be cancelled before going on without it. */
 export const CANCEL_SUMMARIES_TIMEOUT_MS = 2_000;
@@ -79,17 +82,6 @@ function restartDashcamLink(): void {
     activeDashcam()?.restartLink();
   } catch {
     // the wipe stands; the next reconnect handshakes anyway
-  }
-}
-
-/** The forgot-to-start reminder goes off and forgets its state with the account. Best effort. */
-function reminderOff(): void {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
-    const { turnOffReminder } = require('@/features/reminder/enable') as typeof import('@/features/reminder/enable');
-    void turnOffReminder().catch(() => {});
-  } catch {
-    // No drive-sense in this build: there is no reminder to switch off.
   }
 }
 
@@ -121,7 +113,8 @@ export interface DeviceOwnerDeps {
 /** Empty the device: every table in `DEVICE_TABLES` in one transaction. */
 export async function wipeDevice(db: Db, _deps: DeviceOwnerDeps = {}): Promise<void> {
   await cancelSummariesBounded();
-  reminderOff();
+  // Automatic drives stop with the account (iPhone): the next driver arms them again.
+  await autoDetectOff();
   // The privacy trim secret goes with the account (a new one is minted on the next drive).
   await clearDeviceSecret();
   await db.transaction(async (tx) => {
@@ -153,6 +146,8 @@ export async function wipeDevice(db: Db, _deps: DeviceOwnerDeps = {}): Promise<v
  */
 export async function wipeForSignOut(db: Db): Promise<void> {
   await cancelSummariesBounded();
+  // Signed out, no drive starts on its own (iPhone).
+  await autoDetectOff();
   await db.transaction(async (tx) => {
     for (const table of SIGN_OUT_TABLES) await tx.execute(`DELETE FROM ${table}`);
     for (const key of SIGN_OUT_SETTINGS) await tx.execute('DELETE FROM settings WHERE key = ?', [key]);

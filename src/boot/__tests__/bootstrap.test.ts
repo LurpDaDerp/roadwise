@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { createFakeDriveSense } from '@drive-sense';
+import { createFakeDriveDetect, createFakeDriveSense } from '@drive-sense';
 
 import type { AlertPlayer } from '@/core/alerts/player';
 import { T0 } from '@/core/detectors/__fixtures__/rows';
@@ -9,7 +9,7 @@ import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db } from '@/data/db';
 import { createFakeAppState, createFakeSupabase, invokeOk } from '@/data/sync/__fixtures__/fakes';
-import { bootstrapApp, flushBeforeSignOut, startForegroundJobs, type BootSupabase } from '@/boot/bootstrap';
+import { bootstrapApp, flushBeforeSignOut, REMINDER_RETIRED_KEY, startForegroundJobs, type BootSupabase } from '@/boot/bootstrap';
 import { createDriveHeadlessTask } from '@/boot/headless';
 import { DEVICE_TABLES, ensureDeviceOwner, hasDriverData, readDeviceOwner, rememberDeviceOwner, wipeDevice, wipeForSignOut } from '@/boot/device';
 import { createFakeDashcamRuntime } from '@/dashcam/__fixtures__/fakeRuntime';
@@ -80,14 +80,20 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
 test('a cold launch: migrates, records the owner, boots the host idle, starts the runner; nothing is armed or started', async () => {
   const d = deps();
   const rt = await bootstrapApp(d.deps);
-  expect(rt.schemaVersion).toBe(9);
+  expect(rt.schemaVersion).toBe(10);
   expect(rt.owner).toBe('first');
   expect(await readDeviceOwner(db)).toBe('user-1');
   expect(rt.drive.snapshot().status).toBe('idle');
   expect(rt.adopted).toBeNull();
-  // Nothing reaches the native side at launch: no capture, no arming, no motion feed.
-  expect(d.source.calls).toEqual([]);
+  // Nothing reaches the native side at launch (no capture, no motion feed) but the retired
+  // forgot-to-start reminder's one switch-off per install.
+  expect(d.source.calls).toEqual(['setTripReminder:false']);
+  expect(await createSettingsRepo(db).get(REMINDER_RETIRED_KEY)).toBe(1);
   await rt.stop();
+  const again = deps();
+  const rt2 = await bootstrapApp(again.deps);
+  expect(again.source.calls).toEqual([]);
+  await rt2.stop();
 });
 
 test('a drive the previous process was recording is continued when the capture still runs, else finalized as an orphan', async () => {
@@ -171,6 +177,7 @@ test('device ownership: a different user wipes every table but the schema’s; a
     'dashcam_events',
     'dashcam_boots',
     'dashcam_coverage',
+    'problem_spots',
     'trips',
   ]);
   expect(await ensureDeviceOwner(db, null)).toBe('signed-out');
@@ -187,7 +194,7 @@ test('a launch signed out, then the owner signs in: Start Drive works without a 
   // What the root layout does on SIGNED_IN for the device owner (or an empty device).
   await rt.drive.signedInAgain();
   const started = await rt.drive.start();
-  expect(started).toEqual({ ok: true, clientTripId: uuid(7) });
+  expect(started).toEqual({ ok: true, waiting: true });
   await rt.stop({ endOpenTrip: true });
 });
 
@@ -195,7 +202,7 @@ test('the default Start Drive permissions ask only for location, never for motio
   const d = deps({ newId: () => uuid(8), permissions: undefined });
   const rt = await bootstrapApp(d.deps);
   mockEnsureDrivePermissions.mockClear();
-  expect(await rt.drive.start()).toEqual({ ok: true, clientTripId: uuid(8) });
+  expect(await rt.drive.start()).toEqual({ ok: true, waiting: true });
   expect(mockEnsureDrivePermissions).toHaveBeenCalledTimes(1);
   expect(mockEnsureDrivePermissions.mock.calls[0]?.[1]).toEqual({ askMotion: false });
   await rt.stop({ endOpenTrip: true });
@@ -397,4 +404,37 @@ test('a plain sign-out takes the DashPal events, boots and coverage with the dri
   }
   expect(await createSettingsRepo(db).get('dashcam.paired')).toEqual({ dashcamId: 'a4cf12b3c4d5' });
   await rt.stop();
+});
+
+test('flushBeforeSignOut first makes a held upload due: no drive continues after a sign-out', async () => {
+  const d = deps();
+  const rt = await bootstrapApp(d.deps);
+  await db.execute(
+    "INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, created_at) VALUES ('finalize-trip', '{}', 'trip:x', 'pending', 0, ?, 0)",
+    [clock + 300_000]
+  );
+  await flushBeforeSignOut(rt);
+  const item = await createQueueRepo(db).byKey('trip:x');
+  expect(item!.next_attempt_at).toBeLessThanOrEqual(clock);
+  await rt.stop();
+});
+
+test('iOS: a drive native journals is continued at launch whatever the capture says, and taken in from the journal', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  const ios = deps();
+  const detect = createFakeDriveDetect({ now: () => clock });
+  await detect.setArmed(true, 'user-1');
+  detect.wake();
+  // The trip and 60 s of samples are stored; native kept journaling 120 s.
+  const list = rows(120, { t0: clock - 120_000 });
+  const trips = createTripsRepo(db);
+  await trips.insert({ client_trip_id: uuid(9), started_at: clock - 120_000, tz: TZ, status: 'recording', origin: 'auto', last_seq: 60 }, clock);
+  await createSamplesRepo(db).appendMany(uuid(9), list.slice(0, 60).map((r) => ({ ts: r.ts, row: { ...r, seq: list.indexOf(r) + 1 } })));
+  detect.confirm({ driveId: uuid(9), startedAt: clock - 120_000, rows: list.map((r) => ({ ...r })) });
+  const rt = await bootstrapApp({ ...ios.deps, detect });
+  expect(rt.adopted).toBe(uuid(9));
+  expect(rt.drive.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(9), origin: 'auto', lastRowTs: list.at(-1)!.ts });
+  expect(detect.calls).toContain(`readRows:${uuid(9)}:60:300`);
+  await rt.stop({ endOpenTrip: false });
 });

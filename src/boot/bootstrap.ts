@@ -1,10 +1,11 @@
 // The launch (plan §5): open and migrate SQLite, settle whose device this is, recover a drive the
-// previous process was recording (continue it if the capture still runs, else finalize it), boot
-// the drive host, start the sync runner. Everything platform-shaped is injected, so the whole
-// launch runs under Jest against sql.js and the fake drive-sense.
+// previous process was recording (continue it if the capture still runs or native still journals
+// it, else finalize it), boot the drive host (which on iOS also takes in every drive the native
+// detector journaled while JS was away), start the sync runner. Everything platform-shaped is
+// injected, so the whole launch runs under Jest against sql.js and the fake drive-sense.
 //
-// Nothing here starts a drive: a background launch (an iOS relaunch mid-drive, the Android
-// headless task) only keeps alive a drive the user already started.
+// Nothing here starts a drive by itself: on iOS the native detector does (the host adopts it), and
+// on Android only the Start card does.
 import type { QueryClient } from '@tanstack/react-query';
 import { AppState, Platform } from 'react-native';
 
@@ -12,13 +13,15 @@ import { createExpoAlertPorts } from '@/core/alerts/adapters';
 import { createAlertPlayer, type AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
 import type { AdoptedTrip, TripSession } from '@/core/engine/engine.types';
-import { closeDrive, isDropped, safeMilesEarlierToday } from '@/core/engine/finalize';
+import { closeDrive, isDropped } from '@/core/engine/finalize';
 import { recoverRecordingTrips, type RecoveryResult } from '@/core/engine/recovery';
 import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSupabaseSpeedLimitApi, type SpeedLimitApi, type SpeedLimitsSupabase } from '@/core/speedLimits/api';
 import { refreshAppConfig, type AppConfigSupabase } from '@/data/config/appConfig';
-import { createExpoDb, createSettingsRepo, migrate, type Db, type TripRow } from '@/data/db';
+import { createExpoDb, createQueueRepo, createSettingsRepo, migrate, type Db, type TripRow } from '@/data/db';
 import { preloadDeviceSecret } from '@/data/devices/deviceSecret';
+import { getInstallId } from '@/data/devices/installId';
+import { requestLiveActivityStart } from '@/data/devices/liveActivity';
 import { onDataChanged } from '@/data/events';
 import { runWhenForeground, type AppStateLike as ForegroundAppState } from '@/data/foreground';
 import { restoreDrives, type RestoreResult } from '@/data/hydrate/restore';
@@ -34,15 +37,15 @@ import { setActiveDashcam } from '@/dashcam/registry';
 import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { writeDropNotice } from '@/drive/dropNotice';
-import { createDriveHost, playerInputs, type DriveHost, type DriveStartPermissions } from '@/drive/host';
-import { setLeaveSink } from '@/drive/leave';
-import { phoneSwitchFor } from '@/drive/phoneSwitchStore';
+import { createDriveHost, JOURNAL_LINK_KEY, playerInputs, type DriveHost, type DriveStartPermissions, type PushToStartRequest } from '@/drive/host';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
-import { nativeDashpal, nativeDriveSource, type DashpalNative, type DriveSource } from '@/drive/source';
+import { nativeDashpal, nativeDriveDetect, nativeDriveSource, type DashpalNative, type DriveSource } from '@/drive/source';
 import { deviceZone } from '@/lib/deviceZone';
-import { dayKey } from '@/lib/time';
 
+import type { DriveDetectApi } from '@drive-sense';
+
+import { autoDetectSync, setAutoDetectRuntime } from './autoDetect';
 import { ensureDeviceOwner, PENDING_OWNER_KEY, readDeviceOwner, type DeviceOwnerOutcome } from './device';
 import { drainPolicy, launchProfile, type LaunchProfile } from './launchProfile';
 
@@ -53,6 +56,8 @@ export const ZONE_REREAD_MS = 60_000;
 export const APP_CONFIG_INTERVAL_MS = 24 * 60 * 60_000;
 /** A capture whose last row is older than this is not continued: the drive is finalized as it stood. */
 export const ADOPT_MAX_GAP_MS = 5 * 60_000;
+/** Set once the forgot-to-start reminder (retired) has been switched off on this install. */
+export const REMINDER_RETIRED_KEY = 'reminder.retired';
 
 export type BootstrapStage = 'open' | 'migrate' | 'identity' | 'recover' | 'engine' | 'sync';
 
@@ -93,6 +98,10 @@ export interface BootstrapDeps {
   mayDrain?: () => boolean;
   profile?: LaunchProfile;
   source?: DriveSource;
+  /** iOS: the drive detector. Default: the native module (null on Android, in Jest and on web). */
+  detect?: DriveDetectApi | null;
+  /** iOS: ask the server to push-start a drive's Live Activity. Default: `requestLiveActivityStart` with this install's id. */
+  pushToStart?: (req: PushToStartRequest) => Promise<boolean>;
   limits?: SpeedLimitClient;
   speedLimitsSupabase?: SpeedLimitsSupabase;
   appConfig?: AppConfigSupabase;
@@ -270,20 +279,31 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- expo-crypto, only outside tests
   const newId = deps.newId ?? (require('@/lib/ids') as typeof import('@/lib/ids')).newClientTripId;
   const source = deps.source ?? nativeDriveSource;
+  const detect = deps.detect === undefined ? nativeDriveDetect() : deps.detect;
   const limits = deps.limits ?? defaultLimits(db, deps, now, onError);
   const queryClient = deps.queryClient ?? createQueryClient();
 
-  /** The cached summary (if any screen fetched it) for the local estimate. */
-  const summaryContext = async (): Promise<{ streak: number; safeMilesEarlierToday: number } | null> => {
-    const owner = await readDeviceOwner(db);
-    if (owner === null) return null;
-    // `serverKey(owner, 'summary')` from src/data/server/useServerQuery.ts, spelled out so a background
-    // launch never loads the Supabase client through that module.
-    const cached = queryClient.getQueryData<MySummary>(['server', owner, 'summary']);
-    const streak = cached?.progress.streak ?? 0;
-    const today = dayKey(new Date(now()), currentZone());
-    return { streak, safeMilesEarlierToday: await safeMilesEarlierToday(db, today, now()) };
-  };
+  // The forgot-to-start reminder is retired: one switch-off per install stops one left on from
+  // before (the Android module still has it; iOS answers off).
+  await retireReminder(db, source, onError);
+
+  // Automatic drives (iPhone) follow the signed-in, onboarded driver (`autoDetect.ts`).
+  setAutoDetectRuntime({
+    db,
+    detect,
+    uid: async () => {
+      try {
+        return (await identity.supabase.auth.getSession()).data.session?.user.id ?? null;
+      } catch {
+        return null;
+      }
+    },
+    // `serverKey(owner, 'summary')` from src/data/server/useServerQuery.ts, spelled out so a
+    // background launch never loads the Supabase client through that module.
+    onboarded: (uid) => Boolean(queryClient.getQueryData<MySummary>(['server', uid, 'summary'])?.profile.onboarded_at),
+    onError,
+  });
+
   // Crash recovery finalizes with the drive's stored DashPal facts too (plan §7.7). An orphan that
   // never moved is dropped, and Home says why (no OS notification).
   const finalizeDeps = async (session: Readonly<TripSession>): Promise<'finalized' | 'dropped'> => {
@@ -292,7 +312,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       tz: currentZone(),
       now,
       appVersion,
-      context: async () => (await summaryContext()) ?? null,
       ...dashcamFinalizeDeps(db),
     });
     if (!isDropped(result)) return 'finalized';
@@ -305,11 +324,10 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     recoverRecordingTrips(db, {
       createDetectors: () => createDetectors(newId),
       limits: { lookup: (lat, lng, course) => limits.lookupStored(lat, lng, course) },
-      // Screen switches replay with the drive's own signal (none when it was not kept).
-      phoneSwitch: (trip) => phoneSwitchFor(db, trip.client_trip_id),
-      platform: Platform.OS === 'ios' ? 'ios' : 'android',
       now,
-      async adoptable(_trip: TripRow, lastRowTs: number | null) {
+      async adoptable(trip: TripRow, lastRowTs: number | null) {
+        // iOS: native still journals the drive (live, or ended while JS was away): the host takes the rest in.
+        if (detect !== null && (await journaled(db, detect, trip.client_trip_id))) return true;
         try {
           const state = await source.getState();
           return state.capturing && lastRowTs !== null && now() - lastRowTs <= ADOPT_MAX_GAP_MS;
@@ -373,8 +391,9 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       newId,
       appVersion,
       permissions: deps.permissions ?? defaultPermissions(db),
-      context: summaryContext,
       lastPosition: deps.lastPosition ?? defaultLastPosition,
+      detect,
+      pushToStart: deps.pushToStart ?? ((req) => defaultPushToStart(db, req, onError)),
       voiceEnabled: deps.voiceEnabled ?? defaultVoiceEnabled,
       appState,
       alertsAvailable,
@@ -383,7 +402,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
         ? {
             row: (row, drive) => dc.row(row, drive),
             adopt: (id) => dc.adopt(id),
-            estimateOn: (id) => dc.estimateOn(id),
             beforeFinalize: (id, o) => dc.beforeFinalize(id, o),
             continuousAlertActive: () => dc.continuousAlertActive(),
           }
@@ -392,8 +410,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     });
     host = drive;
     setActiveDashcam(dc);
-    // The navigation button and the "End the drive first" guard reach this host.
-    setLeaveSink(drive);
     const adopt: AdoptedTrip | null = recovery.adopt;
     await drive.boot({ adopt });
     if (!drive.isBusy()) limits.resetTrip();
@@ -417,7 +433,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       }
     }
     const release = async (): Promise<void> => {
-      setLeaveSink(null);
       unmountDiagnostics();
       await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
       notifier?.detach();
@@ -518,6 +533,41 @@ function readAppVersion(): string {
     return Constants.expoConfig?.version ?? 'unknown';
   } catch {
     return 'unknown';
+  }
+}
+
+/** The forgot-to-start reminder's one switch-off per install (it is retired). Never fails the launch. */
+async function retireReminder(db: Db, source: DriveSource, onError: (error: unknown, context: string) => void): Promise<void> {
+  try {
+    const settings = createSettingsRepo(db);
+    if ((await settings.get<number>(REMINDER_RETIRED_KEY)) === 1 || !source.setTripReminder) return;
+    await source.setTripReminder(false);
+    await settings.set(REMINDER_RETIRED_KEY, 1);
+  } catch (error) {
+    onError(error, 'reminder retirement');
+  }
+}
+
+/** Whether native's journal (or the journal link of a re-opened drive) holds `clientTripId`. */
+async function journaled(db: Db, detect: DriveDetectApi, clientTripId: string): Promise<boolean> {
+  try {
+    const drives = await detect.listDrives();
+    if (drives.some((d) => d.driveId === clientTripId)) return true;
+    const link = await createSettingsRepo(db).get<{ driveId?: unknown; clientTripId?: unknown }>(JOURNAL_LINK_KEY);
+    return link !== null && link.clientTripId === clientTripId && drives.some((d) => d.driveId === link.driveId);
+  } catch {
+    return false;
+  }
+}
+
+/** The push-to-start request with this install's id (the device row whose token the push goes to). */
+async function defaultPushToStart(db: Db, req: PushToStartRequest, onError: (error: unknown, context: string) => void): Promise<boolean> {
+  try {
+    const deviceId = await getInstallId(createSettingsRepo(db));
+    return await requestLiveActivityStart({ deviceId, ...req }, { onError });
+  } catch (error) {
+    onError(error, 'live activity start');
+    return false;
   }
 }
 
@@ -680,7 +730,8 @@ export interface ForegroundJobs {
 /**
  * The work that runs only while the driver has the app open, each on a transition to `active`:
  * the restore (once per launch until the owner's has run to the end), the public config (daily), the
- * expired-tile purge and the 7-day prune of DashPal events outside any drive (daily).
+ * expired-tile purge and the 7-day prune of DashPal events outside any drive (daily), automatic
+ * drives armed or disarmed (every time: iPhone), and the problem spots' recompute.
  */
 export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJobsDeps = {}): Promise<ForegroundJobs> {
   const onError = deps.onError ?? warn;
@@ -713,13 +764,27 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
     },
     foreground
   );
+  // Automatic drives (iPhone): armed for the signed-in, onboarded driver on every return to the front.
+  const stopAutoDetect = runWhenForeground(
+    'autoDetect',
+    0,
+    async () => {
+      await autoDetectSync();
+    },
+    foreground
+  );
+  const spots = startSpots(runtime, foreground.appState, onError);
   return {
     async stop() {
       stopRestore();
       stopConfig();
       stopPrune();
+      stopAutoDetect();
+      spots?.stop();
     },
     async runNow() {
+      // A sign-in names the driver: automatic drives follow at once.
+      void autoDetectSync();
       try {
         restoredThisLaunch = false;
         await restore();
@@ -732,8 +797,22 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
   };
 }
 
-/** Before the session ends at sign-out: one drain while the session can still send. */
+/** The problem spots' recompute (`src/features/spots/recompute.ts`), loaded on first use; null when it cannot start. */
+function startSpots(runtime: AppRuntime, appState: ForegroundAppState, onError: (error: unknown, context: string) => void): { stop(): void } | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the spots feature's module
+    const { startSpotJobs } = require('@/features/spots/recompute') as typeof import('@/features/spots/recompute');
+    return startSpotJobs({ db: runtime.db, appState, isBusy: () => runtime.drive.isBusy(), now: runtime.now, onError: (error, context) => onError(error, `spots ${context}`) });
+  } catch (error) {
+    onError(error, 'spots');
+    return null;
+  }
+}
+
+/** Before the session ends at sign-out: one drain while the session can still send (held uploads too). */
 export async function flushBeforeSignOut(runtime: AppRuntime): Promise<{ sent: number; left: number }> {
+  // A held upload (the 5 min continuation window) goes now: no drive continues after a sign-out.
+  await createQueueRepo(runtime.db).makeUntriedDue(runtime.now());
   const result = await runtime.runner.drainOnce();
   return { sent: result.done, left: await runtime.runner.owed() };
 }
