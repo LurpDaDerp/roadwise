@@ -16,7 +16,7 @@ import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRep
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
 import { speedTintOf } from '@/drive/displayTint';
 import { readDropNotice, writeDropNotice } from '@/drive/dropNotice';
-import { createDriveHost, DriveEndFailedError, JOURNAL_LINK_KEY, type PushToStartRequest } from '@/drive/host';
+import { createDriveHost, DriveEndFailedError, JOURNAL_LINK_KEY, MAX_JOURNAL_REPLAY_ROWS, type PushToStartRequest } from '@/drive/host';
 import { NOT_DRIVING_BUDGET_MS, NOT_DRIVING_KEY, readBudget } from '@/drive/notDriving';
 import type { Scheduler } from '@/drive/ticks';
 import { WAIT_COUNTDOWN_MS, WAIT_POPUP_MS, WAIT_TOTAL_MS } from '@/drive/waiting';
@@ -831,6 +831,61 @@ describe('iOS: the drive detector', () => {
     await h.host.settled();
     expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(62), lastRowTs: T0 + 39_000 });
     await h.host.stop({ endOpenTrip: false });
+  });
+
+  /** A first process: native records and ends these drives with no JS (each `rows` from its traced start, then parked). */
+  function journaledWithoutJs(drives: { id: string; t0: number; moving: number }[]): I {
+    const pre = buildIos();
+    void pre.detect.setArmed(true, 'user-1');
+    for (const d of drives) {
+      pre.detect.wake();
+      const moving = rows(d.moving, { t0: d.t0, speedMps: 15 });
+      const parked = rows(30, { t0: d.t0 + d.moving * 1000, speedMps: 0 }).map((r) => ({ ...r, lng: moving.at(-1)!.lng }));
+      clock = d.t0 + (d.moving + 30) * 1000;
+      pre.detect.confirm({ driveId: d.id, startedAt: d.t0, rows: journalRows([...moving, ...parked]) });
+      pre.detect.endFor('still', clock);
+    }
+    return pre;
+  }
+
+  test('boot: an ended journal longer than the per-launch replay budget, and a second one in the same launch, are both read to their end and stored whole', async () => {
+    const pre = journaledWithoutJs([
+      { id: uuid(90), t0: T0, moving: MAX_JOURNAL_REPLAY_ROWS + 300 },
+      { id: uuid(91), t0: T0 + 5_000_000, moving: 120 },
+    ]);
+    const h = buildIos({ detect: pre.detect as DriveDetectApi, source: pre.source });
+    await h.host.boot();
+    await h.host.settled();
+    const long = (await createTripsRepo(db).get(uuid(90)))!;
+    expect(long).toMatchObject({ status: 'pending', ended_at: T0 + (MAX_JOURNAL_REPLAY_ROWS + 300) * 1000 });
+    expect(long.miles).toBeCloseTo(((MAX_JOURNAL_REPLAY_ROWS + 299) * 15) / 1609.344, 1);
+    expect(await createTripsRepo(db).get(uuid(91))).toMatchObject({ status: 'pending', ended_at: T0 + 5_000_000 + 120_000 });
+    expect(pre.detect.journal.size).toBe(0);
+    expect(await readDropNotice(db)).toBeNull();
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('boot: an ended journal that cannot be read to its end is never finalized or deleted: stored as far as read, it is finished at the next launch', async () => {
+    const pre = journaledWithoutJs([{ id: uuid(92), t0: T0, moving: 900 }]);
+    const readRows = pre.detect.readRows.bind(pre.detect);
+    let failAt: number | null = 600;
+    pre.detect.readRows = (id, after, limit) => (failAt !== null && after >= failAt ? Promise.reject(new Error('io')) : readRows(id, after, limit));
+    const first = buildIos({ detect: pre.detect as DriveDetectApi, source: pre.source });
+    await first.host.boot();
+    await first.host.settled();
+    expect(first.host.snapshot().status).toBe('idle');
+    expect(await createTripsRepo(db).get(uuid(92))).toMatchObject({ status: 'recording', last_seq: 600 });
+    expect(pre.detect.journal.has(uuid(92))).toBe(true);
+    expect(first.host.snapshot().lastFinalized).toBeNull();
+    await first.host.stop({ endOpenTrip: false });
+    // The next launch reads the rest and ends it where native did.
+    failAt = null;
+    const next = buildIos({ detect: pre.detect as DriveDetectApi, source: pre.source });
+    await next.host.boot();
+    await next.host.settled();
+    expect(await createTripsRepo(db).get(uuid(92))).toMatchObject({ status: 'pending', ended_at: T0 + 900_000 });
+    expect(pre.detect.journal.has(uuid(92))).toBe(false);
+    await next.host.stop({ endOpenTrip: false });
   });
 
   test('a drive confirmed in front starts the Live Activity locally; a Start-card drive that confirms behind (navigation open) is pushed', async () => {

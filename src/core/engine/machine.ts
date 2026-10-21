@@ -402,6 +402,19 @@ export function createEngine(deps: EngineDeps): Engine {
     if (failure !== null) report(failure.err);
   }
 
+  /** The drive goes from memory, unended: what it holds is checkpointed, and storage keeps it `recording`. */
+  async function release(): Promise<void> {
+    const s = session as TripSession;
+    try {
+      await deps.onCheckpoint(snapshotSession(s));
+    } catch (err) {
+      report(err);
+    } finally {
+      clearTrip();
+      setStatus('idle');
+    }
+  }
+
   // --- events -----------------------------------------------------------------------------------
 
   async function start(e: Extract<EngineEvent, { type: 'start' }>): Promise<void> {
@@ -469,6 +482,9 @@ export function createEngine(deps: EngineDeps): Engine {
         return;
       case 'cancel':
         if (status === 'recording') await cancel();
+        return;
+      case 'release':
+        if (status === 'recording') await release();
         return;
       case 'tick':
         if (status === 'recording' && !(await endIfDue(e.ts))) await checkFoot(e.ts);

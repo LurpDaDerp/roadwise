@@ -157,6 +157,21 @@ describe('cancel ("Not driving?")', () => {
   });
 });
 
+test('release: the open drive is checkpointed as it stands and let go unended (never finalized or cancelled); only while recording', async () => {
+  const h = harness();
+  await h.engine.dispatch({ type: 'start', ts: T0, origin: 'auto', continues: false });
+  await feed(h, after(5, { speed: mph(30) }));
+  const before = h.checkpoints.length;
+  await h.engine.dispatch({ type: 'release', ts: T0 + 10_000 });
+  expect(h.checkpoints).toHaveLength(before + 1);
+  expect(h.checkpoints.at(-1)).toMatchObject({ clientTripId: 'id1', rowsCount: 5, endedAt: null });
+  expect(h.finalized).toEqual([]);
+  expect(h.cancelled).toEqual([]);
+  expect(h.engine.snapshot()).toMatchObject({ status: 'idle', clientTripId: null });
+  await h.engine.dispatch({ type: 'release', ts: T0 + 11_000 });
+  expect(h.checkpoints).toHaveLength(before + 1);
+});
+
 describe('an end with a cause (native stopped sensing on its own)', () => {
   test('is cut at the last movement with that cause, however recent; without one it is a manual end at the tap', async () => {
     const moving = (n: number, from: number) => seq([n, (i) => ({ speed: mph(30), lng: -122.4194 + (from + i) * 0.0002, ts: T0 + (from + i) * 1000 })]);

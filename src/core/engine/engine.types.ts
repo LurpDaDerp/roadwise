@@ -333,6 +333,12 @@ export type EngineEvent =
   | { type: 'end'; ts: number; cause?: EndCause }
   /** "Not driving?": the drive is discarded (`deps.onCancel`), never finalized. Only while recording. */
   | { type: 'cancel'; ts: number }
+  /**
+   * Let the open drive go without ending it: checkpointed as it stands and left `recording` in
+   * storage, for a later launch to take up (a journal that could not be read to its end). Only
+   * while recording.
+   */
+  | { type: 'release'; ts: number }
   /** The host's one timer: the automatic end (`autoEndAt`) may have passed with no row. */
   | { type: 'tick'; ts: number }
   /** Continue a drive the previous process was recording (or a re-opened one). Applied only while idle. */

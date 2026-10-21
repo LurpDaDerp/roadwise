@@ -268,7 +268,10 @@ const noop = (): void => {};
 export const UNITS_KEY = 'units';
 /** Which native journal feeds which trip (they differ for a re-opened drive). Cleared at every end. */
 export const JOURNAL_LINK_KEY = 'drive.journalLink';
-/** Journal rows replayed per boot at most; the rest arrive live. */
+/**
+ * Rows of the LIVE drive's journal replayed per boot at most; the rest arrive live (a live row past
+ * a gap reads the journal up to it). An ended journal is always read to its end.
+ */
 export const MAX_JOURNAL_REPLAY_ROWS = 1800;
 /** Rows read from the journal per call. */
 export const JOURNAL_READ_ROWS = 300;
@@ -412,6 +415,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let visibleNow = false;
   /** The journal link was written for the open drive. */
   let linkWritten = false;
+  /** A drive let go unended (`releaseDrive`): its journal link stays for the next launch. */
+  let keepLink = false;
   let lastCountedRowTs: number | null = null;
   let lastAccrualAt = 0;
   let persistedSpent = 0;
@@ -696,7 +701,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     weatherRaw = null;
     weatherDismissed = null;
     lastFixAt = null;
-    if (persist && linkWritten) void createSettingsRepo(db).remove(JOURNAL_LINK_KEY).catch((e: unknown) => report(e, 'journalLink'));
+    if (persist && linkWritten && !keepLink) void createSettingsRepo(db).remove(JOURNAL_LINK_KEY).catch((e: unknown) => report(e, 'journalLink'));
     linkWritten = false;
     liveDrive = null;
     // A re-opened drive (a new leg) asks again.
@@ -1132,20 +1137,24 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   /**
    * Journal rows of `driveId` after `afterSeq`, oldest first, through `onRow` (as replays), until
-   * the file holds no more or the boot's cap is spent. Returns the last `seq` taken in.
+   * the file holds no more (`done`), the boot's cap is spent (`capped`: the live drive only) or a
+   * read fails. Pages of `JOURNAL_READ_ROWS`; between pages the JS thread is let go once (`pace`),
+   * so a long drive read at a launch never holds the screen. Returns the last `seq` taken in and
+   * whether the file was read to its end.
    */
-  async function drainJournal(driveId: string, afterSeq: number, opts: { capped: boolean }): Promise<number> {
-    if (detect === null) return afterSeq;
+  async function drainJournal(driveId: string, afterSeq: number, opts: { capped: boolean; pace?: boolean }): Promise<{ last: number; done: boolean }> {
+    if (detect === null) return { last: afterSeq, done: true };
     let last = afterSeq;
-    for (;;) {
-      if (opts.capped && replayBudget <= 0) return last;
+    for (let first = true; ; first = false) {
+      if (opts.capped && replayBudget <= 0) return { last, done: false };
+      if (!first && opts.pace) await new Promise<void>((resolve) => setTimeout(resolve, 0));
       const limit = opts.capped ? Math.max(1, Math.min(JOURNAL_READ_ROWS, replayBudget)) : JOURNAL_READ_ROWS;
       let page: { rows: unknown[]; lastSeq: number; done: boolean };
       try {
         page = await detect.readRows(driveId, last, limit);
       } catch (e) {
         report(e, 'readRows');
-        return last;
+        return { last, done: false };
       }
       for (const raw of page.rows) {
         const row: SeqRow | null = parseRow(raw);
@@ -1161,7 +1170,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       }
       if (page.lastSeq > last) last = page.lastSeq;
       if (liveDrive !== null && liveDrive.driveId === driveId) liveDrive.lastSeq = last;
-      if (page.done || page.rows.length === 0) return last;
+      if (page.done || page.rows.length === 0) return { last, done: true };
     }
   }
 
@@ -1252,9 +1261,14 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       if (engine.snapshot().status === 'recording' && engine.snapshot().clientTripId === live.clientTripId) await engine.dispatch({ type: 'cancel', ts: now() });
       return;
     }
-    await drainJournal(live.driveId, live.lastSeq, { capped: false });
-    // Native stopped sensing on its own: the engine still decides the cut, at the last movement.
+    const drained = await drainJournal(live.driveId, live.lastSeq, { capped: false, pace: true });
     captureOn = false;
+    if (!drained.done) {
+      // Rows still unread: never ended short. The ended journal is finished at the next launch.
+      await releaseDrive();
+      return;
+    }
+    // Native stopped sensing on its own: the engine still decides the cut, at the last movement.
     await engine.dispatch({ type: 'end', ts: e.endedAt, cause: endCauseOfNative(e.cause) });
   }
 
@@ -1296,9 +1310,32 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     const s = engine.snapshot();
     if (s.status !== 'recording' || s.clientTripId === null) return recovered;
     liveDrive = { driveId: j.driveId, clientTripId: s.clientTripId, lastSeq: afterSeq };
-    await drainJournal(j.driveId, afterSeq, { capped: true });
+    // Read to its end, however long: a drive is never finalized (nor its journal deleted) with
+    // rows still unread.
+    const drained = await drainJournal(j.driveId, afterSeq, { capped: false, pace: true });
+    if (!drained.done) {
+      // The journal could not be read to its end: the drive stays stored as far as it was read,
+      // unended, and its journal stays for the next launch to finish it.
+      await releaseDrive();
+      return recovered;
+    }
     if (engine.snapshot().status === 'recording') await engine.dispatch({ type: 'end', ts: j.ended.endedAt, cause: endCauseOfNative(j.ended.cause) });
     return recovered;
+  }
+
+  /**
+   * The open drive goes from memory unended (its journal could not be read to its end): stored as
+   * far as read and still `recording`, with its journal and the journal link kept, so the next
+   * launch takes it up where it stopped.
+   */
+  async function releaseDrive(): Promise<void> {
+    keepLink = true;
+    try {
+      await engine.dispatch({ type: 'release', ts: now() });
+    } finally {
+      keepLink = false;
+      liveDrive = null;
+    }
   }
 
   /** iOS at boot: every ended journal first (oldest first), then the recovered drive, then the live one. */
