@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
 import type { SkyMood } from './palette';
@@ -37,12 +37,17 @@ const MAX_SLEEP_MS = 6 * 60 * 60_000;
  * (every 10 min inside a twilight window), and when a weather answer expires while on screen.
  * No polling faster than that; nothing at all while RoadWise is in the background.
  *
- * `enabled: false` (a static look in Settings › Appearance) stops all of it: no position read, no
- * weather request, no timers. Turned back on, it reads the sun and the weather again at once.
+ * `enabled: false` (a static look in Settings › Appearance, or the choice not read yet) stops all
+ * of it: no position read, no weather request, no timers, and a read already waiting on the position
+ * asks for no weather once it answers. Turned back on, the very render that turns it on already
+ * wears the phase of that moment (and drops a weather answer over 3 h old, as a cold start would),
+ * then it reads the sun and the weather again at once.
  */
 export function useSkyMood(ports: SkyPorts, { enabled = true }: { enabled?: boolean } = {}): SkyMood {
   const [place, setPlace] = useState<Place | null>(null);
   const [weather, setWeather] = useState<SkyWeather>(CLEAR);
+  // When the answer on show was fetched (0 for none), so a stale one is not shown on turning back on.
+  const [weatherAt, setWeatherAt] = useState(0);
   // The moment the phase was last read; every re-read sets it, and the reading follows from it.
   const [at, setAt] = useState(() => (ports.now ?? Date.now)());
   const reading = useMemo(() => readPhase(new Date(at), place), [at, place]);
@@ -72,7 +77,10 @@ export function useSkyMood(ports: SkyPorts, { enabled = true }: { enabled?: bool
         cache.current = cache.current ?? c;
         setPlace((p) => p ?? { lat: c.lat, lng: c.lng });
         setAt(clock());
-        if (c.weather && clock() - c.fetchedAt < WEATHER_STALE_MS) setWeather(c.weather);
+        if (c.weather && clock() - c.fetchedAt < WEATHER_STALE_MS) {
+          setWeather(c.weather);
+          setWeatherAt(c.fetchedAt);
+        }
       })
       .catch(() => {});
     return () => {
@@ -80,8 +88,21 @@ export function useSkyMood(ports: SkyPorts, { enabled = true }: { enabled?: bool
     };
   }, [ports.storage, clock]);
 
+  // Turned back on: this render already reads the phase now, not when it was last on, so the theme
+  // is never handed the old hour's sky for a frame (React's "adjust state when a prop changes").
+  const [wasEnabled, setWasEnabled] = useState(enabled);
+  if (wasEnabled !== enabled) {
+    setWasEnabled(enabled);
+    if (enabled) {
+      const now = (ports.now ?? Date.now)();
+      setAt(now);
+      if (!(now - weatherAt < WEATHER_STALE_MS)) setWeather(CLEAR);
+    }
+  }
+
+  // Updated as the change commits, so a read under way sees a turn-off before its answer lands.
   const enabledRef = useRef(enabled);
-  useEffect(() => {
+  useLayoutEffect(() => {
     enabledRef.current = enabled;
   }, [enabled]);
 
@@ -91,13 +112,15 @@ export function useSkyMood(ports: SkyPorts, { enabled = true }: { enabled?: bool
     try {
       const p = portsRef.current;
       const here = await p.position();
-      if (!here) return;
+      // Turned off while the position was being read: no weather request for a static look.
+      if (!here || !enabledRef.current) return;
       const rounded = { lat: roundCoord(here.lat), lng: roundCoord(here.lng) };
       setPlace((prev) => (prev && prev.lat === rounded.lat && prev.lng === rounded.lng ? prev : rounded));
       setAt(clock());
       const res = await skyWeatherFor(rounded, { now: clock(), cache: cache.current, fetch: p.fetch, save });
       cache.current = res.cache;
       setWeather((prev) => (prev.kind === res.weather.kind && prev.intensity === res.weather.intensity ? prev : res.weather));
+      setWeatherAt(res.cache.fetchedAt);
     } finally {
       busy.current = false;
     }
