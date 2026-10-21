@@ -75,6 +75,7 @@ jest.mock('@/drive/dropNotice', () => ({
   readDropNotice: async () => mockNotice,
   clearDropNotice: () => mockClearNotice(),
 }));
+jest.mock('@/features/drives/useDriveScores', () => ({ useDriveScores: () => new Map([['a1', 97]]) }));
 // The DashPal slot has its own tests.
 jest.mock('@/dashcam/ui/HomeDashpal', () => ({ HomeDashpal: () => null }));
 jest.mock('@/features/drive/DriveInProgressBanner', () => {
@@ -392,4 +393,9 @@ describe('automatic drives and the waiting Start', () => {
     await act(async () => {});
     expect(screen.queryByTestId('drive-dropped')).toBeNull();
   });
+});
+
+test('recent drives carry their scores', async () => {
+  await draw(<HomeScreen />);
+  expect(screen.getByTestId('recent-a1-score')).toHaveTextContent('97');
 });

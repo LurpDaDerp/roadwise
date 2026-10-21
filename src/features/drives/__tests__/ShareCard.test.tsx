@@ -1,11 +1,14 @@
-import { act, fireEvent, screen } from '@testing-library/react-native';
+import { act, fireEvent, screen, within } from '@testing-library/react-native';
 
 import { ThemeProvider } from '@/ui';
+import { plainBundle } from '@/ui/sky/palette';
 
 import { draw, press, ROUTE } from '../__fixtures__/drives';
+import { textsUnder } from '../__fixtures__/texts';
 import { resetMapsCache } from '../RouteMap';
 import { ShareSheet, type ShareCardData } from '../ShareCard';
 import { MAP_TIMEOUT_MS, routePath, shareFrame } from '../ShareMap';
+import { meritInk } from '../merit';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
 jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn(async () => 'file:///card.png') }));
@@ -34,9 +37,14 @@ const H = { includeHiddenElements: true } as const;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const sharing = () => require('expo-sharing') as { shareAsync: jest.Mock };
 
-const data: ShareCardData = { startedAt: Date.now(), runs: [ROUTE], miles: 12, durationS: 1440, net: 132, score: 99, clean: false, units: 'mi' };
+const data: ShareCardData = { runs: [ROUTE], miles: 12, durationS: 1440, score: 92, tier: 4, units: 'mi' };
 
-const sheet = (visible = true) => <ShareSheet visible={visible} data={data} onClose={jest.fn()} />;
+const sheet = (visible = true, d: ShareCardData = data) => <ShareSheet visible={visible} data={d} onClose={jest.fn()} />;
+
+/** Every string drawn on the card, in order. */
+function cardTexts(): string[] {
+  return textsUnder('share-card').map((x) => x.text);
+}
 const themed = (visible: boolean) => (
   <ThemeProvider scheme="light" reduceMotion>
     {sheet(visible)}
@@ -169,4 +177,36 @@ test('the route is framed inside the box and lands on it through the same projec
   // Two runs stay two subpaths; no route frames nothing.
   expect(routePath([ROUTE.slice(0, 10), ROUTE.slice(20)], b, 320, 400)!.match(/M/g)).toHaveLength(2);
   expect(shareFrame([[ROUTE[0]!]], 320, 400, box)).toBeNull();
+});
+
+describe('the card holds only time, distance and score', () => {
+  test("a tiered drive: the wordmark, then the icon beside the score and distance and time, each labelled, in the tier's ink", async () => {
+    await draw(sheet());
+    expect(cardTexts()).toEqual(['RoadWise', '92', 'score', '12.0 mi', 'distance', '24 min', 'time']);
+    const card = screen.getByTestId('share-card');
+    expect(within(card).getByTestId('share-facts-icon', H)).toBeTruthy();
+    const ink = meritInk(4, plainBundle('light').sky.scene);
+    for (const id of ['share-facts-score', 'share-facts-distance', 'share-facts-time']) expect(within(card).getByTestId(id)).toHaveStyle({ color: ink });
+    // no date, place, event count, rating, badge, points or tier name
+    const all = cardTexts().join(' ');
+    expect(all).not.toMatch(/(Mon|Tue|Wed|Thu|Fri|Sat|Sun)|→|event|Safety Rating|Clean drive|pts?|points|merit|Home|School/i);
+    expect(within(card).getByLabelText('Score 92 out of 100, 12.0 miles, 24 minutes, merit 4 of 5.')).toBeOnTheScreen();
+    // A fixed-size image: its text never follows Dynamic Type.
+    expect(within(card).getByTestId('share-facts-score')).toHaveProp('allowFontScaling', false);
+    expect(within(card).getByTestId('share-facts-score')).toHaveStyle({ fontSize: 44 });
+    expect(within(card).getByTestId('share-facts-distance')).toHaveStyle({ fontSize: 28 });
+  });
+
+  test('a drive with no score shows a dash, no icon, and the plain ink', async () => {
+    await draw(sheet(true, { ...data, score: null, tier: null, miles: 0.3, durationS: 70 }));
+    expect(cardTexts()).toEqual(['RoadWise', '—', 'score', '0.3 mi', 'distance', '1 min', 'time']);
+    expect(screen.queryByTestId('share-facts-icon', H)).toBeNull();
+    expect(screen.getByTestId('share-facts-score')).toHaveStyle({ color: plainBundle('light').onScene.text });
+    expect(screen.getByLabelText('No score, 0.3 miles, 1 minute.')).toBeOnTheScreen();
+  });
+
+  test('the "Show map" switch is still there, off when the sheet opens', async () => {
+    await draw(sheet());
+    expect(screen.getByTestId('share-map-toggle')).toHaveProp('value', false);
+  });
 });

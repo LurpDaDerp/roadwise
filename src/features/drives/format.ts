@@ -1,11 +1,11 @@
 /**
- * Pure formatting for the drive screens: dates, distances, points, event names and the weekly
- * grouping of the history. No React, no theme — every rule is testable on its own.
+ * Pure formatting for the drive screens: dates, durations, event names and the weekly grouping of
+ * the history. No React, no theme: every rule is testable on its own.
  */
 import type { Ionicons } from '@expo/vector-icons';
 import { isDashcamType, type EventType, type Tier } from '@scoring';
 
-import { formatPointsValue, type Signal } from '@/ui';
+import type { Signal } from '@/ui';
 
 import type { LocalDrive } from './model';
 
@@ -52,9 +52,6 @@ export function spokenDuration(seconds: number): string {
   return m === 0 ? part(h, 'hour') : `${part(h, 'hour')} ${part(m, 'minute')}`;
 }
 
-/** "+132", "−44", "0". */
-export const signedPoints = (n: number): string => formatPointsValue(n, true);
-
 /** "Home → School", with "Start" / "End" for a missing label. */
 export const routeLine = (d: Pick<LocalDrive, 'fromLabel' | 'toLabel'>): string =>
   `${d.fromLabel ?? 'Start'} → ${d.toLabel ?? 'End'}`;
@@ -68,10 +65,8 @@ export const spokenRoute = (d: Pick<LocalDrive, 'fromLabel' | 'toLabel'>): strin
 export const EVENT_LABEL: Record<EventType, string> = {
   speeding: 'Speeding',
   hard_brake: 'Hard brake',
-  hard_accel: 'Hard acceleration',
-  hard_corner: 'Hard cornering',
-  phone_pickup: 'Phone pickup',
-  phone_handling: 'Phone handling',
+  hard_accel: 'Hard start',
+  hard_corner: 'Sharp turn',
   eyes_off: 'Eyes off road',
   drowsy: 'Drowsy',
 };
@@ -81,8 +76,6 @@ export const EVENT_ICON: Record<EventType, IconName> = {
   hard_brake: 'hand-left-outline',
   hard_accel: 'trending-up-outline',
   hard_corner: 'return-down-forward-outline',
-  phone_pickup: 'phone-portrait-outline',
-  phone_handling: 'phone-portrait-outline',
   eyes_off: 'eye-off-outline',
   drowsy: 'moon-outline',
 };
@@ -95,19 +88,16 @@ export const TIER_SIGNAL: Record<Tier, Signal> = { minor: 'minor', moderate: 'mo
 
 export const TIER_WORD: Record<Tier, string> = { minor: 'Minor', moderate: 'Moderate', severe: 'Severe' };
 
-/** Types with one tier only say their name; the rest add "minor" / "severe". */
-const SINGLE_TIER: ReadonlySet<EventType> = new Set<EventType>(['phone_pickup']);
-
-/** "Hard brake · Severe", "Phone pickup", "Drowsy · DashPal" (a DashPal event names its source, not its one tier). */
+/** "Hard brake · Severe", "Drowsy · DashPal" (a DashPal event names its source, not its one tier). */
 export function eventName(type: EventType, tier: Tier): string {
   if (isDashcamType(type)) return `${EVENT_LABEL[type]} · ${DASHPAL_MARK}`;
-  return SINGLE_TIER.has(type) ? EVENT_LABEL[type] : `${EVENT_LABEL[type]} · ${TIER_WORD[tier]}`;
+  return `${EVENT_LABEL[type]} · ${TIER_WORD[tier]}`;
 }
 
-/** What sets an event apart besides its name: its tier, its source for DashPal, nothing for a one-tier type. */
+/** What sets an event apart besides its name: its tier, or its source for DashPal. */
 export function eventKind(type: EventType, tier: Tier): string | null {
   if (isDashcamType(type)) return DASHPAL_MARK;
-  return SINGLE_TIER.has(type) ? null : TIER_WORD[tier];
+  return TIER_WORD[tier];
 }
 
 /** How long an event lasted: "under 1 s", "2 s", "1 min 5 s", "3 min", "1 h 05 min". */
@@ -175,8 +165,6 @@ export function weekLabel(start: number, now: number): string {
 export interface WeekGroup {
   key: string;
   title: string;
-  /** Net points over the week's scored drives. */
-  points: number;
   miles: number;
   data: LocalDrive[];
 }
@@ -189,14 +177,12 @@ export function groupByWeek(drives: readonly LocalDrive[], now: number): WeekGro
     const start = weekStart(d.startedAt);
     let g = byStart.get(start);
     if (!g) {
-      g = { key: `week-${new Date(start).toISOString().slice(0, 10)}`, title: weekLabel(start, now), points: 0, miles: 0, data: [] };
+      g = { key: `week-${new Date(start).toISOString().slice(0, 10)}`, title: weekLabel(start, now), miles: 0, data: [] };
       byStart.set(start, g);
       groups.push(g);
     }
     g.data.push(d);
     g.miles += d.miles;
-    // The same number each row shows: the stored net, else the server's.
-    if (d.status === 'scored' || d.status === 'pending') g.points += d.pointsNet ?? d.result?.net ?? 0;
   }
   return groups;
 }

@@ -1,35 +1,32 @@
-import { Ionicons } from '@expo/vector-icons';
+import type { MeritTier } from '@scoring';
 import * as Sharing from 'expo-sharing';
 import { LinearGradient } from 'expo-linear-gradient';
 import { forwardRef, useCallback, useMemo, useRef, useState } from 'react';
 import { Text as RNText, StyleSheet, View, type TextStyle } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
-import { blockedDuringDrive } from '@/drive/leave';
-import { formatDistance, type Units } from '@/lib/units';
-import { Banner, Button, SceneScope, Sheet, Text, ToggleRow, tokens, useTheme, type TypeVariant } from '@/ui';
+import type { Units } from '@/lib/units';
+import { Banner, Button, SceneScope, Sheet, Text, ToggleRow, tokens, useTheme } from '@/ui';
 
-import { formatDay, formatDuration, signedPoints } from './format';
+import { MeritFacts } from './MeritFacts';
 import type { Runs } from './route';
 import { RouteSketch } from './RouteSketch';
 import { mapOffered, ShareMapBackdrop, type Box, type MapStatus } from './ShareMap';
 
 export type ShareCardData = {
-  startedAt: number;
   /** The route's visible runs, each drawn apart (`decodeRoute`). */
   runs: Runs;
   miles: number;
   durationS: number;
-  /** Net points; null when the drive has no score. */
-  net: number | null;
-  /** The drive score out of 100 (`driveScoreOf`); null when the drive has no total, and the card says "—". */
+  /** The drive score out of 100 (the recap's); null when the drive has none, and the card says "—". */
   score: number | null;
-  clean: boolean;
+  /** `driveMerit(score, miles)`; null with no score. */
+  tier: MeritTier | null;
   /** The driver's distance units. */
   units: Units;
 };
 
-/** Gold, the reward colour, carries the route and the clean badge on the card. */
+/** Gold, the reward colour, carries the route on the card. */
 const GOLD = tokens.color.dark.gold;
 const W = 320;
 const H = 400;
@@ -38,47 +35,28 @@ const MAP_BOX: Box = { left: 24, top: 72, right: W - 24, bottom: 228 };
 /** With the map on: the opaque sky behind the header (top) and the facts (bottom), and its fade. */
 const MAP_BAND = { top: 60, bottom: 156, fade: 40 };
 
-/**
- * Text on the captured card. The card is a fixed-size image, so its type never follows Dynamic
- * Type (the shared PNG would clip); everything else on screen still does.
- */
-function CardText({ variant, tone = 'default', style, children, testID }: { variant: TypeVariant; tone?: 'default' | 'muted'; style?: TextStyle; children: React.ReactNode; testID?: string }) {
+/** Text on the captured card: a fixed-size image, so its type never follows Dynamic Type (the shared PNG would clip). */
+function CardText({ children, style, testID }: { children: React.ReactNode; style?: TextStyle; testID?: string }) {
   const t = useTheme();
-  const s = t.type[variant];
-  const base: TextStyle = {
-    fontFamily: s.fontFamily,
-    fontSize: s.fontSize,
-    lineHeight: s.lineHeight,
-    color: tone === 'muted' ? t.colors.textMuted : t.colors.text,
-    ...(s.fontWeight ? { fontWeight: s.fontWeight } : null),
-    ...(s.letterSpacing !== undefined ? { letterSpacing: s.letterSpacing } : null),
-    ...(s.fontVariant ? { fontVariant: s.fontVariant } : null),
-    ...(s.textTransform ? { textTransform: s.textTransform } : null),
-  };
+  const s = t.type.title3;
   return (
-    <RNText allowFontScaling={false} maxFontSizeMultiplier={1} style={[base, style]} testID={testID}>
+    <RNText
+      allowFontScaling={false}
+      maxFontSizeMultiplier={1}
+      style={[{ fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, color: t.colors.text }, style]}
+      testID={testID}
+    >
       {children}
     </RNText>
   );
 }
 
-function Fact({ label, value, testID }: { label: string; value: string; testID?: string }) {
-  return (
-    <View style={{ flexBasis: '50%', paddingVertical: 8 }}>
-      <CardText variant="label" tone="muted">
-        {label}
-      </CardText>
-      <CardText variant="stat" testID={testID}>
-        {value}
-      </CardText>
-    </View>
-  );
-}
-
 /**
- * The Strava-style image: the (already privacy-trimmed) route in gold on the hour's sky (the same
- * scene as the app's hero cards), distance, time, points, the drive score and a clean badge. It
- * never shows a speed.
+ * The Strava-style image: the "RoadWise" wordmark, the hour's sky (the same scene as the app's hero
+ * cards), the (already privacy-trimmed) route in gold or, with "Show map" on, the map of its area,
+ * then the drive's three facts as the recap's hero shows them (`MeritFacts`): the tier's icon beside
+ * the score, then distance and time, in the tier's colour. Nothing else: no date, place, event
+ * count, rating, badge or tier name, and never a speed.
  */
 export const ShareCard = forwardRef<
   View,
@@ -91,7 +69,8 @@ export const ShareCard = forwardRef<
     map?: { attempt: number; onStatus: (s: MapStatus) => void } | null;
   }
 >(function ShareCard({ data, map }, ref) {
-  const scene = useTheme().sky.scene;
+  const t = useTheme();
+  const scene = t.sky.scene;
   return (
     <SceneScope>
       <View ref={ref} collapsable={false} testID="share-card" style={{ width: W, height: H, borderRadius: 28, overflow: 'hidden', padding: 20 }}>
@@ -110,49 +89,25 @@ export const ShareCard = forwardRef<
             onStatus={map.onStatus}
           />
         ) : null}
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <CardText variant="title3" style={{ fontStyle: 'italic' }}>
-            RoadWise
-          </CardText>
-          <CardText variant="footnote" tone="muted">
-            {formatDay(data.startedAt)}
-          </CardText>
-        </View>
+        <CardText style={{ fontStyle: 'italic' }} testID="share-wordmark">
+          RoadWise
+        </CardText>
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           {map ? null : <RouteSketch runs={data.runs} size={180} stroke={GOLD} strokeWidth={5} background="transparent" />}
-          {data.clean ? (
-            <View
-              testID="share-clean"
-              style={{
-                position: 'absolute',
-                right: 0,
-                top: 4,
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 4,
-                paddingHorizontal: 10,
-                paddingVertical: 4,
-                borderRadius: 999,
-                backgroundColor: GOLD,
-              }}
-            >
-              <Ionicons name="checkmark-circle" size={14} color={tokens.color.dark.onGold} />
-              <CardText variant="label" style={{ color: tokens.color.dark.onGold }}>
-                Clean drive
-              </CardText>
-            </View>
-          ) : null}
         </View>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-          <Fact label="Distance" value={formatDistance(data.miles, data.units)} />
-          <Fact label="Time" value={formatDuration(data.durationS)} />
-          <Fact label="Points" value={data.net === null ? '—' : signedPoints(data.net)} testID="share-points" />
-          <Fact label="Drive score" value={data.score === null ? '—' : String(data.score)} testID="share-score" />
-        </View>
+        <MeritFacts
+          size="card"
+          score={data.score}
+          miles={data.miles}
+          durationS={data.durationS}
+          units={data.units}
+          tier={data.tier}
+          surfaces={scene}
+          plainInk={t.onScene.text}
+          testID="share-facts"
+        />
         {map ? (
-          <CardText variant="caption" tone="muted" style={{ position: 'absolute', right: 20, bottom: 4, fontSize: 9, lineHeight: 12 }}>
-            Map © Apple
-          </CardText>
+          <CardText style={{ position: 'absolute', right: 20, bottom: 4, fontSize: 9, lineHeight: 12, fontStyle: 'normal', color: t.onScene.textMuted }}>Map © Apple</CardText>
         ) : null}
       </View>
     </SceneScope>
@@ -207,8 +162,6 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
   };
 
   const share = async () => {
-    // A share target opens outside RoadWise: not during a drive (src/drive/leave.ts).
-    if (blockedDuringDrive()) return;
     setState('busy');
     try {
       if (withMap && offered && !(await mapReady())) {

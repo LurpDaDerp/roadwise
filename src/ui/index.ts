@@ -38,6 +38,7 @@ export { EmptyState, type EmptyStateProps } from './primitives/EmptyState';
 export { FreezeCount, type FreezeCountProps } from './primitives/FreezeCount';
 export { IconButton, type IconButtonProps } from './primitives/IconButton';
 export { ListRow, type ListRowProps } from './primitives/ListRow';
+export { MERIT_GLYPH, MeritIcon } from './primitives/MeritIcon';
 export { Pill, type PillProps, type PillTone } from './primitives/Pill';
 export {
   formatPointsValue,

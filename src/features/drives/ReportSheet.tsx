@@ -1,24 +1,24 @@
 import { Ionicons } from '@expo/vector-icons';
-import { CAMERA_DISPUTE_AUTO_PER_WEEK } from '@scoring';
+import { CAMERA_DISPUTE_AUTO_PER_WEEK, DISPUTE_AUTO_PER_WEEK } from '@scoring';
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { Banner, Button, Sheet, Text, useTheme } from '@/ui';
 
+import { recapCopy } from './copy';
 import { eventName, formatClock } from './format';
 import type { LocalDriveEvent } from './model';
 import { availableReasons, REPORT_LABEL, type ReportReason } from './summary';
 
 const REASON_HELP: Record<ReportReason, string> = {
-  hazard: 'Braking for something in the road was the right call. Removed right away, up to 3 times a week.',
-  wrong_limit: "If the posted limit didn't match, we'll fix the map and take it off right away, up to 3 times a week.",
-  mounted: 'Taps on a mounted phone don’t count. We check what the phone saw.',
+  hazard: `Braking for something in the road was the right call. Removed right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
+  wrong_limit: `If the posted limit didn't match, we'll fix the map and take it off right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
   camera_wrong: `If DashPal flagged something that didn’t happen, we’ll take it off right away, up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of your other reports.`,
   not_driving: 'Someone else was driving. This takes the whole drive off, not just this event.',
 };
 
 /**
- * "Report" on one breakdown event: the reasons that fit its type, then send. "I wasn't driving"
+ * "Report" on one event of the recap: the reasons that fit its type, then send. "I wasn't driving"
  * hands over to the whole-drive confirm instead of sending a dispute.
  */
 export function ReportSheet({
@@ -76,7 +76,7 @@ export function ReportSheet({
           </Text>
           {state === 'sent' ? (
             <>
-              <Banner tone="success" message="Thanks! We'll check it and update your points." testID="report-sent" />
+              <Banner tone="success" message={recapCopy.report.sent} testID="report-sent" />
               <Button label="Done" onPress={onClose} variant="secondary" />
             </>
           ) : (
@@ -143,13 +143,11 @@ export function ReportSheet({
 export function NotDrivingSheet({
   visible,
   left,
-  points,
   onClose,
   onConfirm,
 }: {
   visible: boolean;
   left: number | null;
-  points: number | null;
   onClose: () => void;
   onConfirm: () => Promise<void>;
 }) {
@@ -173,36 +171,17 @@ export function NotDrivingSheet({
     }
   };
 
-  const pointsLine =
-    points === null || points === 0
-      ? 'This drive stops counting.'
-      : points > 0
-        ? `The ${points} points from this drive come off.`
-        : `The ${Math.abs(points)} points this drive cost you come back.`;
-
+  const c = recapCopy.notDriving;
   return (
-    <Sheet visible={visible} onClose={onClose} title="Wasn't driving?" testID="not-driving-sheet">
+    <Sheet visible={visible} onClose={onClose} title={c.title} testID="not-driving-sheet">
       <View style={{ gap: t.space.md }}>
-        <Text variant="body">
-          Use this if someone else was behind the wheel. {pointsLine} Your streak stays as it was.
-        </Text>
+        <Text variant="body">{c.body}</Text>
         <Text variant="subhead" tone="muted" testID="not-driving-left">
-          {left === null
-            ? 'You can do this 2 times a month.'
-            : `You can do this 2 times a month. You have ${left} left.`}
+          {c.left(left)}
         </Text>
-        {state === 'error' ? (
-          <Banner tone="danger" message="That didn't go through. It only works on your latest drive, within a day." testID="not-driving-error" />
-        ) : null}
-        <Button
-          label="Yes, I wasn't driving"
-          variant="destructive"
-          onPress={confirm}
-          loading={state === 'sending'}
-          disabled={left === 0}
-          testID="not-driving-confirm"
-        />
-        <Button label="Cancel" variant="ghost" onPress={onClose} />
+        {state === 'error' ? <Banner tone="danger" message={c.error} testID="not-driving-error" /> : null}
+        <Button label={c.confirm} variant="destructive" onPress={confirm} loading={state === 'sending'} disabled={left === 0} testID="not-driving-confirm" />
+        <Button label={c.cancel} variant="ghost" onPress={onClose} />
       </View>
     </Sheet>
   );

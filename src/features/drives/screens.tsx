@@ -1,15 +1,16 @@
 /**
- * The drive screens wired to their data: local drives from `@/data/queries` (plan §10), the
- * server summary for "Wasn't driving" uses left, and the drive actions.
+ * The drive screens wired to their data: local drives from `@/data/queries` (plan §10), their
+ * scores, the server summary for "Wasn't driving" uses left, and the drive actions.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 
-import { useDataSource, useDb, useDriveDetail, useDriveHistory, useRecentDrives } from '@/data/queries';
+import { useDataSource, useDb, useDriveDetail, useDriveHistory } from '@/data/queries';
 import { useMySummary } from '@/data/server/summary';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
+import { autoDrivesOn, useAutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { EmptyState, Screen, Skeleton, useTheme } from '@/ui';
 
 import { BackHeader } from './BackHeader';
@@ -17,6 +18,7 @@ import { HistoryView } from './HistoryView';
 import type { HistoryFilter } from './model';
 import { driveSummaryHref, HOME_HREF } from './routes';
 import { SummaryView } from './SummaryView';
+import { useDriveScores } from './useDriveScores';
 
 function useBack() {
   const router = useRouter();
@@ -29,6 +31,8 @@ export function DriveHistoryScreen() {
   const { now } = useDataSource();
   const [filter, setFilter] = useState<HistoryFilter>('all');
   const q = useDriveHistory(filter);
+  const scores = useDriveScores(q.data);
+  const auto = useAutoDrives();
   return (
     <Screen padded={false}>
       <HistoryView
@@ -43,6 +47,8 @@ export function DriveHistoryScreen() {
         onRefresh={() => void q.refetch()}
         refreshing={q.isRefetching}
         now={Math.floor(now() / 3_600_000) * 3_600_000}
+        scores={scores}
+        autoDrives={autoDrivesOn(auto)}
       />
     </Screen>
   );
@@ -57,7 +63,6 @@ export function DriveSummaryScreen() {
   const { clientTripId, fresh } = useLocalSearchParams<{ clientTripId: string; fresh?: string }>();
   const detail = useDriveDetail(clientTripId ?? '');
   const summary = useMySummary();
-  const latest = useRecentDrives(1);
   const { now } = useDataSource();
   // Animate only on the first render after a drive ends, not when coming back to it.
   const [isFresh] = useState(fresh === '1');
@@ -91,7 +96,6 @@ export function DriveSummaryScreen() {
         events={events}
         fresh={isFresh}
         notDrivingLeft={summary.data?.not_driving_left ?? null}
-        latestClientTripId={latest.data?.[0]?.clientTripId ?? null}
         now={now()}
         onBack={back}
         onOpenDrive={(id) => router.replace(driveSummaryHref(id))}

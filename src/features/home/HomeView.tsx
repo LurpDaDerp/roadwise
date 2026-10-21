@@ -28,6 +28,8 @@ export type HomeViewProps = {
   /** Scored drives; undefined while loading. */
   driveCount: number | undefined;
   recent: readonly LocalDrive[] | undefined;
+  /** The recent drives' scores (`useDriveScores`). */
+  scores?: ReadonlyMap<string, number>;
   week: StatSums | undefined;
   month: StatSums | undefined;
   /** This calendar week's (from Monday) sums, for the pills; undefined while loading. */
@@ -153,14 +155,14 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
         {firstRun ? (
           <>
             <FirstRunCard driveCount={p.driveCount ?? 0} autoDrives={auto} />
-            {p.recent && p.recent.length > 0 ? <RecentDrives drives={p.recent} onOpen={p.onOpenDrive} onSeeAll={p.onSeeAll} /> : null}
+            {p.recent && p.recent.length > 0 ? <RecentDrives drives={p.recent} scores={p.scores} onOpen={p.onOpenDrive} onSeeAll={p.onSeeAll} /> : null}
           </>
         ) : null}
 
         {full ? (
           <>
             {stats ? <StatsCard stats={stats.stats} window={stats.window} onAllStats={p.onAllStats} /> : null}
-            <RecentDrives drives={p.recent ?? []} onOpen={p.onOpenDrive} onSeeAll={p.onSeeAll} />
+            <RecentDrives drives={p.recent ?? []} scores={p.scores} onOpen={p.onOpenDrive} onSeeAll={p.onSeeAll} />
             <WeeklyGoals goals={p.summary?.challenges ?? []} />
           </>
         ) : null}

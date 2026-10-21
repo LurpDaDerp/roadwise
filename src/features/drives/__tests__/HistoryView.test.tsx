@@ -1,15 +1,21 @@
 import { screen, within } from '@testing-library/react-native';
+import { driveMerit } from '@scoring';
 
+import { contrastRatio } from '@/ui';
 import { tokens } from '@/ui/tokens';
 
 import { DAY, draw, drive, NOW, press } from '../__fixtures__/drives';
 import { HistoryView, type HistoryViewProps } from '../HistoryView';
+import { meritInk } from '../merit';
+
+const NO_POINTS = /\bpoints?\b|\bpts\b|streak|negative/i;
 
 const props = (over: Partial<HistoryViewProps> = {}): HistoryViewProps => ({
   drives: [
-    drive({ clientTripId: 'a', startedAt: NOW - 1000, pointsNet: 120, clean: true, counts: { ...drive().counts, hardBrake: 0 } }),
-    drive({ clientTripId: 'b', startedAt: NOW - 2 * DAY, pointsNet: -44, counts: { ...drive().counts, pickups: 2 } }),
-    drive({ clientTripId: 'c', startedAt: NOW - 10 * DAY, status: 'not_driving', pointsNet: 0 }),
+    drive({ clientTripId: 'a', startedAt: NOW - 1000, miles: 26, clean: true, counts: { ...drive().counts, hardBrake: 0 } }),
+    drive({ clientTripId: 'b', startedAt: NOW - 2 * DAY, status: 'failed', miles: 3, counts: { ...drive().counts, hardBrake: 2, speeding: 1 } }),
+    drive({ clientTripId: 'c', startedAt: NOW - 10 * DAY, status: 'not_driving' }),
+    drive({ clientTripId: 'd', startedAt: NOW - 10 * DAY - 1000, status: 'unscored', reason: 'too_short', miles: 0.3 }),
   ],
   loading: false,
   error: false,
@@ -19,27 +25,45 @@ const props = (over: Partial<HistoryViewProps> = {}): HistoryViewProps => ({
   onBack: jest.fn(),
   onHome: jest.fn(),
   now: NOW,
+  scores: new Map([
+    ['a', 98],
+    ['b', 71],
+  ]),
   ...over,
 });
 
-test('drives are grouped by week, newest first', async () => {
+test('drives are grouped by week, newest first, each week with its drives and distance', async () => {
   await draw(<HistoryView {...props()} />);
   expect(screen.getByText('This week')).toBeOnTheScreen();
   expect(screen.getByText('Last week')).toBeOnTheScreen();
   expect(screen.getByText('Sep 21 – 27')).toBeOnTheScreen();
-  expect(screen.getByLabelText('This week, 1 drive, 12.0 mi, +120 pts')).toBeOnTheScreen();
+  expect(screen.getByLabelText('This week, 1 drive, 26 mi')).toBeOnTheScreen();
+  expect(screen.queryByText(NO_POINTS)).toBeNull();
 });
 
-test('a row shows net points in green or red with a sign, and its events', async () => {
+test('a row shows its score in its merit colour (no icon), "not synced" for a drive still to upload, else the word', async () => {
   await draw(<HistoryView {...props()} />);
-  expect(screen.getByTestId('drive-a-points')).toHaveStyle({ color: tokens.color.light.signal.clean.text });
-  expect(screen.getByTestId('drive-a-points')).toHaveTextContent('+120');
-  expect(screen.getByTestId('drive-b-points')).toHaveStyle({ color: tokens.color.light.signal.severe.text });
-  expect(screen.getByTestId('drive-b-points')).toHaveTextContent('−44');
-  expect(screen.getByTestId('drive-b-event-phone_pickup')).toBeOnTheScreen();
+  const surfaces = [tokens.color.light.surface, tokens.color.light.surfaceRaised];
+  const a = screen.getByTestId('drive-a-score');
+  expect(a).toHaveTextContent('98');
+  expect(driveMerit(98, 26)).toBe(5);
+  expect(a).toHaveStyle({ color: meritInk(5, surfaces) });
+  expect(contrastRatio(meritInk(5, surfaces), tokens.color.light.surface)).toBeGreaterThanOrEqual(4.5);
+  expect(within(screen.getByTestId('drive-a')).getByText('score')).toBeOnTheScreen();
+  expect(screen.getByTestId('drive-b-score')).toHaveStyle({ color: meritInk(1, surfaces) });
+  expect(within(screen.getByTestId('drive-b')).getByText('not synced')).toBeOnTheScreen();
   expect(screen.getByTestId('drive-c-word')).toHaveTextContent('Not driving');
-  expect(screen.getByTestId('drive-b').props.accessibilityLabel).toContain('44 points lost, 2 phone pickup');
+  expect(screen.getByTestId('drive-d-word')).toHaveTextContent('Too short');
+  expect(screen.queryByTestId('merit-icon')).toBeNull();
+  expect(screen.getByTestId('drive-b').props.accessibilityLabel).toContain('drive score 71, not synced, 1 speeding, 2 hard brake');
   expect(screen.getByTestId('drive-a').props.accessibilityLabel).toContain('Home to School');
+  expect(screen.getByTestId('drive-a').props.accessibilityLabel).toContain('drive score 98, clean drive');
+});
+
+test('a score still loading leaves the column empty', async () => {
+  await draw(<HistoryView {...props({ scores: new Map() })} />);
+  expect(screen.queryByTestId('drive-a-score')).toBeNull();
+  expect(screen.queryByTestId('drive-a-word')).toBeNull();
 });
 
 test('tapping a row opens its summary', async () => {
@@ -49,14 +73,15 @@ test('tapping a row opens its summary', async () => {
   expect(p.onOpen).toHaveBeenCalledWith('b');
 });
 
-test('filters toggle on and back off to all', async () => {
+test('two filters, Clean and Passenger, toggle on and back off to all', async () => {
   const p = props({ filter: 'clean' });
   await draw(<HistoryView {...p} />);
   expect(screen.getByTestId('filter-clean')).toBeSelected();
+  expect(screen.queryByTestId('filter-negative')).toBeNull();
   await press(screen.getByTestId('filter-clean'));
   expect(p.onFilter).toHaveBeenLastCalledWith('all');
-  await press(screen.getByTestId('filter-negative'));
-  expect(p.onFilter).toHaveBeenLastCalledWith('negative');
+  await press(screen.getByTestId('filter-passenger'));
+  expect(p.onFilter).toHaveBeenLastCalledWith('passenger');
 });
 
 test('an empty filter says why and offers to show everything', async () => {
@@ -68,11 +93,14 @@ test('an empty filter says why and offers to show everything', async () => {
   expect(p.onFilter).toHaveBeenCalledWith('all');
 });
 
-test('no drives at all points back to Home', async () => {
+test('no drives at all points back to Home, in the words of how drives start here', async () => {
   const p = props({ drives: [] });
   await draw(<HistoryView {...p} />);
+  expect(screen.getByText('Swipe Start drive on Home before you pull out. Every drive shows up here.')).toBeOnTheScreen();
   await press(screen.getByText('Go to Home'));
   expect(p.onHome).toHaveBeenCalled();
+  await draw(<HistoryView {...props({ drives: [], autoDrives: true })} />);
+  expect(screen.getByText("Your drives show up here after you've driven. RoadWise notices them on its own.")).toBeOnTheScreen();
 });
 
 test('while loading it shows placeholders, not an empty state', async () => {

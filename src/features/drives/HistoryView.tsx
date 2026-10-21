@@ -6,20 +6,21 @@ import { formatDistance } from '@/lib/units';
 import { Banner, Chip, Divider, EmptyState, Skeleton, Text, useTheme } from '@/ui';
 
 import { BackHeader } from './BackHeader';
+import { recapCopy } from './copy';
 import { DriveRow } from './DriveRow';
-import { groupByWeek, signedPoints, type WeekGroup } from './format';
+import { groupByWeek, type WeekGroup } from './format';
 import type { HistoryFilter, LocalDrive } from './model';
 
-const FILTERS: { value: Exclude<HistoryFilter, 'all'>; label: string; icon: 'checkmark-circle-outline' | 'trending-down' | 'person-outline' }[] = [
+/** The history's two filters (clean drives, and drives marked "Wasn't driving"). */
+type Filter = 'clean' | 'passenger';
+
+const FILTERS: { value: Filter; label: string; icon: 'checkmark-circle-outline' | 'person-outline' }[] = [
   { value: 'clean', label: 'Clean', icon: 'checkmark-circle-outline' },
-  { value: 'negative', label: 'Negative', icon: 'trending-down' },
   { value: 'passenger', label: 'Passenger', icon: 'person-outline' },
 ];
 
-const EMPTY: Record<HistoryFilter, { title: string; body: string }> = {
-  all: { title: 'No drives yet', body: 'Swipe Start drive on Home before you pull out. Every drive shows up here.' },
+const EMPTY: Record<Filter, { title: string; body: string }> = {
   clean: { title: 'No clean drives yet', body: 'A drive with zero events counts as clean. Your next one could be it.' },
-  negative: { title: 'No negative drives', body: 'Nice. None of your drives went below zero.' },
   passenger: { title: 'No passenger drives', body: "Drives you mark as “Wasn't driving” show up here." },
 };
 
@@ -36,13 +37,17 @@ export type HistoryViewProps = {
   refreshing?: boolean;
   /** Rounded (to the hour) by the caller, so the week grouping is memoised across renders. */
   now: number;
+  /** Each drive's score (`useDriveScores`); a drive missing from it shows none yet. */
+  scores?: ReadonlyMap<string, number>;
+  /** Drives start on their own on this phone: the empty list says so. */
+  autoDrives?: boolean;
 };
 
 function WeekHeader({ group }: { group: WeekGroup }) {
   const t = useTheme();
   const units = useUnits();
   const n = group.data.length;
-  const summary = `${n} ${n === 1 ? 'drive' : 'drives'} · ${formatDistance(group.miles, units)} · ${signedPoints(group.points)} pts`;
+  const summary = recapCopy.history.week(n, formatDistance(group.miles, units, { digits: 0 }));
   return (
     <View
       testID={group.key}
@@ -59,14 +64,14 @@ function WeekHeader({ group }: { group: WeekGroup }) {
   );
 }
 
-/** Drive history: every drive, newest first, grouped by week, with three filters. */
-export function HistoryView({ drives, loading, error, filter, onFilter, onOpen, onBack, onHome, onRefresh, refreshing = false, now }: HistoryViewProps) {
+/** Drive history: every drive, newest first, grouped by week, with two filters. */
+export function HistoryView({ drives, loading, error, filter, onFilter, onOpen, onBack, onHome, onRefresh, refreshing = false, now, scores, autoDrives = false }: HistoryViewProps) {
   const t = useTheme();
   const sections = useMemo(() => groupByWeek(drives ?? [], now), [drives, now]);
 
   const header = (
     <View style={{ gap: t.space.md }}>
-      <BackHeader title="Your drives" onBack={onBack} />
+      <BackHeader title={recapCopy.history.title} onBack={onBack} />
       <View style={{ flexDirection: 'row', gap: t.space.sm, flexWrap: 'wrap' }} accessibilityLabel="Filter drives">
         {FILTERS.map((f) => (
           <Chip
@@ -96,7 +101,8 @@ export function HistoryView({ drives, loading, error, filter, onFilter, onOpen, 
     if (drives === undefined && error) {
       return <EmptyState title="Couldn't load your drives" body="Something went wrong. Try again in a moment." icon="alert-circle-outline" />;
     }
-    const e = EMPTY[filter];
+    const all = autoDrives ? recapCopy.history.emptyAuto : recapCopy.history.emptyManual;
+    const e = filter === 'all' ? all : (EMPTY[filter as Filter] ?? all);
     return (
       <View style={{ paddingTop: t.space.xl }} testID={`history-empty-${filter}`}>
         <EmptyState
@@ -140,7 +146,7 @@ export function HistoryView({ drives, loading, error, filter, onFilter, onOpen, 
             }}
           >
             {first ? null : <Divider inset={16} />}
-            <DriveRow drive={item} onPress={() => onOpen(item.clientTripId)} testID={`drive-${item.clientTripId}`} />
+            <DriveRow drive={item} score={scores?.get(item.clientTripId)} onPress={() => onOpen(item.clientTripId)} testID={`drive-${item.clientTripId}`} />
           </View>
         );
       }}

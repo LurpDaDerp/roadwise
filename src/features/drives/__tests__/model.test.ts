@@ -6,27 +6,23 @@ import { eventTally } from '../DriveRow';
 import { awayFrom, eventMarks, fittedSpan, markShape, metersPerPixel, MIN_MARK_PX, regionFor, sameZoom, sketchPath, tipAnchor } from '../route';
 import { homeStats, trendFor } from '../stats';
 import {
-  breakdownLines,
-  driveScoreOf,
-  multiplierText,
-  notDrivingLabel,
-  pointsPerMileOf,
-  pointsState,
-  receipt,
   availableReasons,
+  canMarkNotDriving,
+  driveKind,
+  driveScoreOf,
+  eventRows,
+  EVENT_LIST_MAX,
+  isShownEvent,
+  meritOf,
+  notDrivingLabel,
+  originLine,
   reportReasons,
-  spokenPoints,
+  scoreState,
+  stateWord,
   toScoringEvent,
 } from '../summary';
 
 describe('DashPal', () => {
-  test('the multiplier line names the DashPal ×1.25 and the ×1.50 cap of the two together', () => {
-    expect(multiplierText(1.2, 1.25, 1.5)).toBe('streak ×1.20 · DashPal ×1.25 → ×1.50 (cap)');
-    expect(multiplierText(1.08, 1.25, 1.35)).toBe('streak ×1.08 · DashPal ×1.25 → ×1.35');
-    expect(multiplierText(1.3, 1, 1.3)).toBe('streak ×1.30 (cap)');
-    expect(multiplierText(1.2, 1, 1.2)).toBe('streak ×1.20');
-  });
-
   test('a DashPal event is reported as "DashPal got it wrong" or "wasn\'t driving"', () => {
     expect(reportReasons('drowsy')).toEqual(['camera_wrong', 'not_driving']);
     expect(reportReasons('eyes_off')).toEqual(['camera_wrong', 'not_driving']);
@@ -38,8 +34,8 @@ describe('DashPal', () => {
     expect(eventMarks([ROUTE], [drowsy]).map((m) => [m.id, m.type, m.tier])).toEqual([['d1', 'drowsy', 'severe']]);
   });
 
-  test('a history row shows DashPal events with the phone events', () => {
-    const counts = { speeding: 1, pickups: 0, handlingS: 0, hardBrake: 0, hardAccel: 0, hardCorner: 0, eyesOff: 2, drowsy: 1 };
+  test("a history row shows DashPal events with the phone's own", () => {
+    const counts = { speeding: 1, hardBrake: 0, hardAccel: 0, hardCorner: 0, eyesOff: 2, drowsy: 1 };
     expect(eventTally(counts)).toEqual([
       { type: 'speeding', n: 1 },
       { type: 'eyes_off', n: 2 },
@@ -70,19 +66,20 @@ describe('format', () => {
     expect(weekLabel(weekStart(NOW - 7 * DAY * 1 - 8 * DAY), NOW)).toBe('Sep 14 – 20');
   });
 
-  test('drives group by week, newest first, with a points and miles total per week', () => {
+  test('drives group by week, newest first, with the miles per week and no points', () => {
     const groups = groupByWeek(
       [
-        drive({ clientTripId: 'a', startedAt: NOW - 1000, pointsNet: 100 }),
-        drive({ clientTripId: 'b', startedAt: NOW - 2 * DAY, pointsNet: -20 }),
-        drive({ clientTripId: 'c', startedAt: NOW - 3 * DAY, status: 'not_driving', pointsNet: 0 }),
-        drive({ clientTripId: 'd', startedAt: NOW - 12 * DAY, pointsNet: 50 }),
+        drive({ clientTripId: 'a', startedAt: NOW - 1000 }),
+        drive({ clientTripId: 'b', startedAt: NOW - 2 * DAY, miles: 3 }),
+        drive({ clientTripId: 'c', startedAt: NOW - 3 * DAY, status: 'not_driving', miles: 4 }),
+        drive({ clientTripId: 'd', startedAt: NOW - 12 * DAY }),
       ],
       NOW
     );
     expect(groups.map((g) => g.title)).toEqual(['This week', 'Last week', 'Sep 21 – 27']);
     expect(groups[1]!.data.map((d) => d.clientTripId)).toEqual(['b', 'c']);
-    expect(groups[1]!.points).toBe(-20);
+    expect(groups[1]!.miles).toBe(7);
+    expect(groups[1]).not.toHaveProperty('points');
   });
 });
 
@@ -140,7 +137,7 @@ describe('route', () => {
       event({ id: 'b', type: 'hard_brake', tier: 'severe' }),
       event({ id: 'a', type: 'hard_accel', tier: 'minor' }),
       event({ id: 'c', type: 'hard_corner', tier: 'moderate' }),
-      event({ id: 'p', type: 'phone_pickup', tier: 'severe', lat: null, lng: null }),
+      event({ id: 'p', type: 'drowsy', tier: 'severe', lat: null, lng: null }),
       event({ id: 'x', type: 'speeding', tier: 'severe', disputeStatus: 'accepted' }),
       event({ id: 'r', type: 'speeding', tier: 'severe', removed: true }),
     ]);
@@ -215,7 +212,6 @@ describe('route', () => {
     expect(spokenEventDuration(65)).toBe('1 minute 5 seconds');
     expect(spokenEventDuration(120)).toBe('2 minutes');
     expect(eventKind('hard_brake', 'moderate')).toBe('Moderate');
-    expect(eventKind('phone_pickup', 'severe')).toBeNull();
     expect(eventKind('drowsy', 'severe')).toBe('DashPal');
   });
 });
@@ -223,14 +219,16 @@ describe('route', () => {
 describe('stats', () => {
   test('Home shows the last 7 days as counts coloured by the spec bands, with arrows vs an average 30-day week', () => {
     const { stats, window } = homeStats(
-      sums({ miles: 50, drives: 4, cleanDrives: 2, speeding: 3, pickups: 0, hardBrake: 1, hardAccel: 0 }),
-      sums({ miles: 200, drives: 20, cleanDrives: 18, speeding: 2, pickups: 1, hardBrake: 4, hardAccel: 2 })
+      sums({ miles: 50, drives: 4, cleanDrives: 2, speeding: 3, hardBrake: 1, hardAccel: 0 }),
+      sums({ miles: 200, drives: 20, cleanDrives: 18, speeding: 2, hardBrake: 4, hardAccel: 2 })
     );
     expect(window).toBe('7d');
     const by = Object.fromEntries(stats.map((s) => [s.id, s]));
     // counts over the 7 days, never per 100 mi; the colour still follows the rate (6.0 per 100 mi is red)
     expect(by.speeding).toMatchObject({ value: '3', unit: '', health: 'red', trend: 'up' });
-    expect(by.pickups).toMatchObject({ value: '0', unit: '', health: 'green', trend: 'down' });
+    // distance gives the counts their context: no colour, no arrow
+    expect(by.miles).toMatchObject({ label: 'Distance', value: '50.0', unit: 'mi', health: null, trend: undefined });
+    expect(stats.map((x) => x.id)).toEqual(['speeding', 'harsh', 'clean', 'miles']);
     // 1 against 6 × 7/30 = 1.4 a week
     expect(by.harsh).toMatchObject({ value: '1', unit: '', health: 'green', trend: 'down' });
     expect(by.clean).toMatchObject({ value: '50', health: 'yellow', trend: 'down', higherIsBetter: true });
@@ -249,173 +247,131 @@ describe('stats', () => {
 });
 
 describe('summary', () => {
-  test('points state follows the drive status', () => {
-    expect(pointsState(drive())).toEqual({ kind: 'points', value: 132, estimate: false });
-    expect(pointsState(drive({ status: 'pending', estimate: true, pointsNet: 40, result: null }))).toEqual({ kind: 'points', value: 40, estimate: true });
-    expect(pointsState(drive({ status: 'unscored', reason: 'too_short' })).kind).toBe('too_short');
-    expect(pointsState(drive({ status: 'unscored', reason: 'spoofed' })).kind).toBe('not_scored');
-    expect(pointsState(drive({ status: 'merged', mergedInto: 'z' }))).toEqual({ kind: 'merged', into: 'z' });
+  test('a drive has a score to show when it is scored, uploading or not synced yet, and long enough', () => {
+    expect(driveKind(drive())).toEqual({ kind: 'scorable', notSynced: false });
+    expect(driveKind(drive({ status: 'pending', result: null }))).toEqual({ kind: 'scorable', notSynced: false });
+    expect(driveKind(drive({ status: 'failed', result: null }))).toEqual({ kind: 'scorable', notSynced: true });
+    expect(driveKind(drive({ status: 'pending', reason: 'too_short', result: null }))).toEqual({ kind: 'too_short' });
+    expect(driveKind(drive({ status: 'failed', reason: 'too_short', result: null }))).toEqual({ kind: 'too_short' });
+    expect(driveKind(drive({ status: 'unscored', reason: 'too_short' }))).toEqual({ kind: 'too_short' });
+    expect(driveKind(drive({ status: 'unscored', reason: 'spoofed' }))).toEqual({ kind: 'not_scored' });
+    expect(driveKind(drive({ status: 'not_driving' }))).toEqual({ kind: 'not_driving' });
+    expect(driveKind(drive({ status: 'merged', mergedInto: 'z' }))).toEqual({ kind: 'merged', into: 'z' });
+    expect(driveKind(drive({ status: 'recording', result: null }))).toEqual({ kind: 'recording' });
   });
 
-  test('the multiplier line names the streak multiplier and its cap', () => {
-    expect(multiplierText(1.2)).toBe('streak ×1.20');
-    expect(multiplierText(1.3)).toBe('streak ×1.30 (cap)');
+  test('the score state and the word a row shows instead', () => {
+    expect(scoreState(drive(), [event()])).toEqual({ kind: 'score', value: 93, notSynced: false });
+    expect(scoreState(drive({ status: 'failed', result: null }), [event()])).toEqual({ kind: 'score', value: 93, notSynced: true });
+    expect(scoreState(drive({ miles: 0 }), [])).toEqual({ kind: 'not_scored' });
+    expect(stateWord({ kind: 'score' })).toBeNull();
+    expect(stateWord({ kind: 'recording' })).toBe('Recording');
+    expect(stateWord({ kind: 'too_short' })).toBe('Too short');
+    expect(stateWord({ kind: 'not_scored' })).toBe('Not scored');
+    expect(stateWord({ kind: 'not_driving' })).toBe('Not driving');
+    expect(stateWord({ kind: 'merged' })).toBe('Merged');
   });
 
-  test('the breakdown itemizes miles, multiplier, each event and the net', () => {
-    const { lines, note } = breakdownLines(drive(), [event()]);
-    expect(lines.map((l) => [l.label, l.value])).toEqual([
-      ['Safe miles: 11.8 mi × 10', '+118'],
-      ['Multiplier: streak ×1.20', '= +142'],
-      ['Hard brake · Minor', '−10'],
-      ['Net total', '+132'],
-    ]);
-    expect(note).toBeNull();
+  test('how the drive started and ended, one line', () => {
+    expect(originLine(drive({ origin: 'auto', endCause: 'stopped' }))).toBe('Started on its own · Ended after 5 min parked');
+    expect(originLine(drive({ origin: 'auto', endCause: null }))).toBe('Started on its own');
+    expect(originLine(drive({ origin: 'manual', endCause: 'walking' }))).toBe('Ended when you walked away');
+    expect(originLine(drive({ origin: 'manual', endCause: 'manual' }))).toBeNull();
   });
 
-  test('an accepted report reads as removed; an offline estimate explains the missing lines', () => {
-    const { lines, note } = breakdownLines(drive({ result: null, status: 'pending', estimate: true, pointsNet: 30 }), [event({ disputeStatus: 'accepted' })]);
-    expect(lines.map((l) => l.value)).toEqual(['Removed', '+30']);
-    expect(note).toMatch(/once this drive is scored/);
+  test('the event list: shown events, oldest first, never an old phone event', () => {
+    const later = event({ id: 'b', startedAt: NOW });
+    const phone = event({ id: 'p', type: 'phone_pickup' as never, startedAt: NOW - 3 * DAY });
+    const rows = eventRows([later, event(), phone]);
+    expect(rows.map((r) => r.event.id)).toEqual(['e1', 'b']);
+    expect(rows[0]).toMatchObject({ key: 'event-e1', label: 'Hard brake · Minor' });
+    expect(isShownEvent({ type: 'phone_handling' as never })).toBe(false);
+    expect(isShownEvent({ type: 'speeding' })).toBe(true);
+    expect(EVENT_LIST_MAX).toBe(3);
   });
 
-  test('the receipt: Earned is the gross gains, one deduction per event, the total is the net', () => {
-    const r = receipt(drive(), [event()]);
-    expect(r.earned).toBe(142);
-    expect(r.detail).toEqual(['Safe miles 11.8 mi × 10', 'Streak ×1.20']);
-    expect(r.deductions.map((l) => [l.label, l.value, l.cost, l.tone])).toEqual([['Hard brake · Minor', '−10', 10, 'loss']]);
-    expect(r.total).toBe(132);
-    expect(r.note).toBeNull();
-  });
-
-  test('the receipt detail keeps the daily cap, the clean bonus, km and the DashPal multiplier', () => {
-    const b = drive().result!.breakdown;
-    const d = drive({ result: { ...drive().result!, breakdown: { ...b, safeMiles: 14, cleanBonus: 25, dashcamMult: 1.25, mult: 1.5 } } });
-    expect(receipt(d, [], 'km').detail).toEqual(['Safe miles 11.8 mi (19.0 km) × 10 (daily cap)', 'Clean bonus +25', 'Streak ×1.20 · DashPal ×1.25 → ×1.50 (cap)']);
-  });
-
-  test('the safe-miles rate is the one the breakdown recorded: × 20 now, × 10 for a breakdown stored without it', () => {
-    const b = drive().result!.breakdown;
-    const now = drive({ result: { ...drive().result!, breakdown: { ...b, pointsPerMile: 20, milePoints: 236, cleanBonus: 50, gains: 343 } } });
-    expect(receipt(now, []).detail).toEqual(['Safe miles 11.8 mi × 20', 'Clean bonus +50', 'Streak ×1.20']);
-    expect(breakdownLines(now, []).lines.map((l) => [l.label, l.value]).slice(0, 2)).toEqual([
-      ['Safe miles: 11.8 mi × 20', '+236'],
-      ['Clean-drive bonus', '+50'],
-    ]);
-    // A legacy re-score records the rate it paid.
-    const legacy = drive({ result: { ...drive().result!, breakdown: { ...b, pointsPerMile: 10 } } });
-    expect(receipt(legacy, []).detail[0]).toBe('Safe miles 11.8 mi × 10');
-    // Stored before the rate was recorded: it earned 10 a mile, and keeps the bonus it was paid.
-    expect('pointsPerMile' in b).toBe(false);
-    expect(receipt(drive({ result: { ...drive().result!, breakdown: { ...b, cleanBonus: 25 } } }), []).detail).toEqual([
-      'Safe miles 11.8 mi × 10',
-      'Clean bonus +25',
-      'Streak ×1.20',
-    ]);
-  });
-
-  test.each([
-    [{ pointsPerMile: 20 }, 20],
-    [{ pointsPerMile: 10 }, 10],
-    [{}, 10],
-    [{ pointsPerMile: null }, 10],
-    [{ pointsPerMile: 0 }, 10],
-    [{ pointsPerMile: Number.NaN }, 10],
-  ])('pointsPerMileOf(%j) is %d', (b, n) => {
-    expect(pointsPerMileOf(b)).toBe(n);
-  });
-
-  test('without a server breakdown, Earned is the total plus the known costs, and unknown while any is missing', () => {
-    const est = drive({ result: null, status: 'pending', estimate: true, pointsNet: 30 });
-    expect(receipt(est, [event({ penalty: 15 }), event({ id: 'e2', disputeStatus: 'accepted' })])).toMatchObject({ earned: 45, detail: [], total: 30, note: expect.stringMatching(/once this drive is scored/) });
-    expect(receipt(est, [event({ penalty: null })]).earned).toBeNull();
-    expect(receipt(drive({ result: null, status: 'pending', pointsNet: null }), [event()])).toMatchObject({ earned: null, total: null });
-  });
-
-  test('the receipt lists deductions oldest first and marks a removed one', () => {
-    const r = receipt(drive(), [event({ id: 'late', startedAt: NOW }), event({ id: 'gone', removed: true })]);
-    expect(r.deductions.map((l) => [l.event.id, l.value, l.cost, l.tone])).toEqual([
-      ['gone', 'Removed', 0, 'neutral'],
-      ['late', '−10', 10, 'loss'],
-    ]);
-  });
-
-  test('spoken points carry the sign in words', () => {
-    expect(spokenPoints(142)).toBe('plus 142 points');
-    expect(spokenPoints(-1)).toBe('minus 1 point');
-    expect(spokenPoints(-1240)).toBe('minus 1,240 points');
-    expect(spokenPoints(0)).toBe('0 points');
-  });
-
-  test('report reasons fit the event type, with "wasn\'t driving" always offered', () => {
+  test(`report reasons fit the event type, with "wasn't driving" always offered and no "phone was mounted"`, () => {
     expect(reportReasons('hard_brake')).toEqual(['hazard', 'not_driving']);
     expect(reportReasons('speeding')).toEqual(['wrong_limit', 'not_driving']);
-    expect(reportReasons('phone_pickup')).toEqual(['mounted', 'not_driving']);
-    expect(reportReasons('phone_handling')).toEqual(['mounted', 'not_driving']);
     expect(reportReasons('hard_corner')).toEqual(['not_driving']);
+    expect(reportReasons('hard_accel')).toEqual(['not_driving']);
   });
 
   test(`the reasons on offer drop "wasn't driving" where the whole-drive action is not allowed`, () => {
-    expect(availableReasons('hard_brake', true)).toEqual(['hazard', 'not_driving']);
     expect(availableReasons('hard_brake', false)).toEqual(['hazard']);
-    expect(availableReasons('hard_accel', true)).toEqual(['not_driving']);
-    expect(availableReasons('hard_accel', false)).toEqual([]);
     expect(availableReasons('hard_corner', false)).toEqual([]);
+    expect(availableReasons('hard_corner', true)).toEqual(['not_driving']);
   });
 
-  test('the wasn\'t-driving label carries the uses left', () => {
-    expect(notDrivingLabel(1)).toBe("Wasn't driving (1 left this month)");
+  test(`the "wasn't driving" label carries the uses left`, () => {
+    expect(notDrivingLabel(2)).toBe("Wasn't driving (2 left this month)");
     expect(notDrivingLabel(null)).toBe("Wasn't driving");
+  });
+
+  test(`"Wasn't driving" is offered on any kept drive within a day of its end, while its "Not driving?" never ran out`, () => {
+    const d = drive();
+    const ended = d.endedAt!;
+    expect(canMarkNotDriving(d, ended + DAY)).toBe(true);
+    expect(canMarkNotDriving(d, ended + DAY + 1)).toBe(false);
+    expect(canMarkNotDriving(drive({ notDrivingExpired: true }), ended)).toBe(false);
+    for (const status of ['scored', 'pending', 'unscored', 'failed'] as const) expect(canMarkNotDriving(drive({ status }), ended)).toBe(true);
+    for (const status of ['recording', 'merged', 'not_driving'] as const) expect(canMarkNotDriving(drive({ status }), ended)).toBe(false);
+    expect(canMarkNotDriving(drive({ syncError: 'too_old' }), ended)).toBe(false);
+    expect(canMarkNotDriving(drive({ syncError: 'invalid_payload' }), ended)).toBe(true);
   });
 });
 
 describe('drive score', () => {
-  const pickup = (over = {}) => event({ id: 'p', type: 'phone_pickup', tier: 'severe', ...over });
-
-  test("the weighted average of the drive's categories over its miles, floored at 3 mi, a whole number", () => {
-    // 12 mi, one minor hard brake (rating 10): braking 100 / (1 + 10/12/16) = 95.05, the rest 100 → 99.
-    expect(driveScoreOf(drive(), [event()])).toBe(99);
+  test('each category judged per chance over this drive alone: a hard brake against its slowdowns, a whole number', () => {
+    // 12 mi, one minor hard brake in 30 slowdowns: Braking 63, the rest 100, Speed double → 93.
+    expect(driveScoreOf(drive(), [event()])).toBe(93);
     expect(driveScoreOf(drive(), [])).toBe(100);
-    // One pickup on a 5 mi drive: phone 100 / (1 + 40/5/16) = 66.7, counted twice → 90.
-    expect(driveScoreOf(drive({ miles: 5 }), [pickup()])).toBe(90);
-    // On 1 mi the miles floor at 3: phone 54.5 → 87, never 0.
-    expect(driveScoreOf(drive({ miles: 1 }), [pickup()])).toBe(87);
+    // A severe one weighs twice: Braking 46 → 89.
+    expect(driveScoreOf(drive(), [event({ tier: 'severe' })])).toBe(89);
+    // Few slowdowns floor at 10, so one hard brake never sinks a short drive to 0: Braking 36 → 87.
+    expect(driveScoreOf(drive({ exposure: { slowdowns: 2, speedups: 2, turns: 1, limitS: 60, movingS: 200 } }), [event()])).toBe(87);
   });
 
   test('an event a report took off, or one removed, no longer counts', () => {
-    expect(driveScoreOf(drive({ miles: 5 }), [pickup({ disputeStatus: 'accepted' })])).toBe(100);
-    expect(driveScoreOf(drive({ miles: 5 }), [pickup({ removed: true })])).toBe(100);
-    expect(driveScoreOf(drive({ miles: 5 }), [pickup({ disputeStatus: 'pending' })])).toBe(90);
+    expect(driveScoreOf(drive(), [event({ disputeStatus: 'accepted' })])).toBe(100);
+    expect(driveScoreOf(drive(), [event({ removed: true })])).toBe(100);
+    expect(driveScoreOf(drive(), [event({ disputeStatus: 'pending' })])).toBe(93);
+    expect(toScoringEvent(event({ removed: true }))).toMatchObject({ status: 'removed' });
   });
 
-  test('phone handling counts its 15-s units (1 when not recorded)', () => {
-    const handling = (units: number | null) => event({ id: 'h', type: 'phone_handling', tier: 'severe', durationS: 75, units });
-    // 4 units: rating 40 on 1 mi (floored at 3) → phone 54.5 → 87; 1 unit: 10 → 82.8 → 95.
-    expect(driveScoreOf(drive({ miles: 1 }), [handling(4)])).toBe(87);
-    expect(driveScoreOf(drive({ miles: 1 }), [handling(null)])).toBe(95);
-    expect(toScoringEvent(handling(4))).toMatchObject({ units: 4, status: 'active' });
-    expect(toScoringEvent(handling(null))).not.toHaveProperty('units');
+  test('speeding reads how far over it was', () => {
+    const speeding = (overMphS: number) => event({ id: 's', type: 'speeding', tier: 'minor', durationS: 30, measured: { overMphS } });
+    const mild = driveScoreOf(drive(), [speeding(10)])!;
+    const far = driveScoreOf(drive(), [speeding(400)])!;
+    expect(far).toBeLessThan(mild);
+    expect(toScoringEvent(speeding(10))).toMatchObject({ measured: { overMphS: 10 } });
   });
 
   test("DashPal's events score Attention over the miles it watched, and only when it watched", () => {
     const eyes = event({ id: 'd', type: 'eyes_off', tier: 'severe', measured: { source: 'dashcam' } });
-    // Attention 100 / (1 + 40/6/16) = 70.6, weight 1 of 8 → 96.
-    expect(driveScoreOf(drive({ watchedMiles: 6 }), [eyes])).toBe(96);
+    // Attention 100 / (1 + 40/6/16) = 70.6, weight 1 of 6 → 95.
+    expect(driveScoreOf(drive({ watchedMiles: 6 }), [eyes])).toBe(95);
     expect(driveScoreOf(drive({ watchedMiles: 0 }), [eyes])).toBe(100);
   });
 
-  test('only where the points total shows', () => {
+  test('only for a drive with a score to show', () => {
     const e = [event()];
-    expect(driveScoreOf(drive({ status: 'pending', estimate: true, pointsNet: 40, result: null }), e)).toBe(99);
-    expect(driveScoreOf(drive({ status: 'failed', pointsNet: 40, result: null }), e)).toBe(99);
-    expect(driveScoreOf(drive({ status: 'failed', pointsNet: null, result: null }), e)).toBeNull();
-    expect(driveScoreOf(drive({ status: 'pending', pointsNet: null, result: null }), e)).toBeNull();
-    expect(driveScoreOf(drive({ status: 'pending', pointsNet: null, reason: 'too_short', result: null }), e)).toBeNull();
+    expect(driveScoreOf(drive({ status: 'pending', result: null }), e)).toBe(93);
+    expect(driveScoreOf(drive({ status: 'failed', result: null }), e)).toBe(93);
+    expect(driveScoreOf(drive({ status: 'pending', reason: 'too_short', result: null }), e)).toBeNull();
     expect(driveScoreOf(drive({ status: 'unscored', reason: 'too_short', result: null }), e)).toBeNull();
     expect(driveScoreOf(drive({ status: 'unscored', reason: 'spoofed', result: null }), e)).toBeNull();
-    expect(driveScoreOf(drive({ status: 'not_driving', pointsNet: 0 }), e)).toBeNull();
+    expect(driveScoreOf(drive({ status: 'not_driving' }), e)).toBeNull();
     expect(driveScoreOf(drive({ status: 'merged', mergedInto: 'z' }), e)).toBeNull();
-    expect(driveScoreOf(drive({ status: 'recording', pointsNet: null, result: null }), e)).toBeNull();
+    expect(driveScoreOf(drive({ status: 'recording', result: null }), e)).toBeNull();
     expect(driveScoreOf(drive({ miles: 0 }), e)).toBeNull();
+  });
+
+  test('the merit tier needs both the score and the distance', () => {
+    expect(meritOf(drive({ miles: 0.5 }), [])).toBe(1);
+    expect(meritOf(drive({ miles: 20 }), [])).toBe(4);
+    expect(meritOf(drive({ miles: 26 }), [])).toBe(5);
+    expect(meritOf(drive(), [event()])).toBe(4);
+    expect(meritOf(drive({ status: 'not_driving' }), [])).toBeNull();
   });
 });

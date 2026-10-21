@@ -103,10 +103,11 @@ describe('the full Home', () => {
     expect(within(card).getByText('Compared with your average week in the last 30 days.')).toBeOnTheScreen();
   });
 
-  test("recent drives, this week's goals with a check or the fraction, and links out", async () => {
-    const p = props();
+  test("recent drives with their scores, this week's goals with a check or the fraction, and links out", async () => {
+    const p = props({ scores: new Map([['a', 97]]) });
     await draw(<HomeView {...p} />);
-    expect(screen.getByTestId('recent-a')).toBeOnTheScreen();
+    expect(screen.getByTestId('recent-a-score')).toHaveTextContent('97');
+    expect(screen.queryByTestId('recent-b-score')).toBeNull();
     await press(screen.getByTestId('recent-b'));
     expect(p.onOpenDrive).toHaveBeenCalledWith('b');
     await press(screen.getByText('See all'));

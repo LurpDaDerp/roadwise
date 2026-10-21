@@ -15,6 +15,7 @@ import { useCoaching } from '@/features/analytics/useAnalytics';
 import { autoDrivesOn, useAutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
 import { sinceDays, weekStart } from '@/features/drives/format';
+import { useDriveScores } from '@/features/drives/useDriveScores';
 import { homeCard } from '@/features/permissions/board';
 import { HomeDashpal } from '@/dashcam/ui/HomeDashpal';
 import { PermissionCard } from '@/features/permissions/PermissionCard';
@@ -47,6 +48,7 @@ export function HomeScreen() {
   const summary = useMySummary();
   const count = useDriveCount();
   const recent = useRecentDrives(5);
+  const scores = useDriveScores(recent.data);
   const week = useStatSums(sinceDays(now(), 7));
   const month = useStatSums(sinceDays(now(), 30));
   const thisWeek = useStatSums(weekStart(now()));
@@ -182,6 +184,7 @@ export function HomeScreen() {
         onRetrySummary={() => void summary.refetch()}
         driveCount={count.data}
         recent={recent.data}
+        scores={scores}
         week={week.data}
         month={month.data}
         thisWeek={thisWeek.data}

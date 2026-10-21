@@ -18,7 +18,7 @@ jest.mock('@/data/queries', () => ({
   useDataSource: () => ({ now: () => mockNow }),
   useDb: () => 'db',
   useDriveDetail: () => (mockDetail === undefined ? { data: undefined, isLoading: true, isError: false } : mockOk(mockDetail)),
-  useDriveHistory: () => mockOk([]),
+  useDriveHistory: () => mockOk(mockHistory),
   useRecentDrives: () => mockOk([mockDrive()]),
   useStatSums: () => mockOk(undefined),
 }));
@@ -28,11 +28,19 @@ jest.mock('@/data/sync/driveActions', () => ({
   markNotDriving: (...a: unknown[]) => mockNotDriving(...(a as [])),
 }));
 jest.mock('@tanstack/react-query', () => ({ useQueryClient: () => 'qc' }));
+let mockScores = new Map<string, number>();
+jest.mock('../useDriveScores', () => ({ useDriveScores: () => mockScores }));
+let mockAuto: { state: string } = { state: 'unsupported' };
+jest.mock('@/features/autoDrives/useAutoDrives', () => ({ useAutoDrives: () => mockAuto, autoDrivesOn: (a: { state: string }) => a.state === 'on' }));
+let mockHistory: unknown[] = [];
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockParams = { clientTripId: 'a1' };
   mockDetail = { drive: mockDrive(), events: [mockEvent()] };
+  mockScores = new Map();
+  mockAuto = { state: 'unsupported' };
+  mockHistory = [];
 });
 
 test('the summary reads the drive and the uses left, and reports through the drive actions', async () => {
@@ -70,4 +78,15 @@ test('an empty history’s "Go to Home" pops back to the Home already open, neve
   expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
   expect(mockRouter.replace).not.toHaveBeenCalled();
   expect(mockRouter.push).not.toHaveBeenCalled();
+});
+
+test('the history shows each drive with its score, and the empty list words follow automatic drives', async () => {
+  mockHistory = [mockDrive({ clientTripId: 'h1' })];
+  mockScores = new Map([['h1', 97]]);
+  await draw(<DriveHistoryScreen />);
+  expect(screen.getByTestId('drive-h1-score')).toHaveTextContent('97');
+  mockHistory = [];
+  mockAuto = { state: 'on' };
+  await draw(<DriveHistoryScreen />);
+  expect(screen.getByText("Your drives show up here after you've driven. RoadWise notices them on its own.")).toBeOnTheScreen();
 });

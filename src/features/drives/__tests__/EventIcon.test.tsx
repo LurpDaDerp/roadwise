@@ -85,7 +85,7 @@ test('a drive row (Home and Drive history) shows the chevrons for a hard acceler
   expect(within(accel).getByText('2', H)).toBeOnTheScreen();
   expect(within(accel).queryByText(glyph(ACCEL_STOCK), H)).toBeNull();
   // Spoken from the event's name, never the glyph.
-  expect(screen.getByTestId('recent-x').props.accessibilityLabel).toContain('2 hard acceleration');
+  expect(screen.getByTestId('recent-x').props.accessibilityLabel).toContain('2 hard start');
   expect(within(screen.getByTestId('recent-x-event-hard_brake', H)).getByText(glyph(EVENT_ICON.hard_brake), H)).toBeOnTheScreen();
 });
 

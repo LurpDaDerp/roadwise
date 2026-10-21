@@ -83,8 +83,18 @@ export function StatsCard({ stats, window, onAllStats }: { stats: readonly HomeS
   );
 }
 
-/** The last five drives, with "See all" into Drive history. */
-export function RecentDrives({ drives, onOpen, onSeeAll }: { drives: readonly LocalDrive[]; onOpen: (id: string) => void; onSeeAll: () => void }) {
+/** The last five drives, each with its score, with "See all" into Drive history. */
+export function RecentDrives({
+  drives,
+  scores,
+  onOpen,
+  onSeeAll,
+}: {
+  drives: readonly LocalDrive[];
+  scores?: ReadonlyMap<string, number>;
+  onOpen: (id: string) => void;
+  onSeeAll: () => void;
+}) {
   const t = useTheme();
   if (drives.length === 0) return null;
   return (
@@ -94,7 +104,7 @@ export function RecentDrives({ drives, onOpen, onSeeAll }: { drives: readonly Lo
         {drives.map((d, i) => (
           <View key={d.clientTripId}>
             {i > 0 ? <Divider inset={16} /> : null}
-            <DriveRow drive={d} onPress={() => onOpen(d.clientTripId)} testID={`recent-${d.clientTripId}`} />
+            <DriveRow drive={d} score={scores?.get(d.clientTripId)} onPress={() => onOpen(d.clientTripId)} testID={`recent-${d.clientTripId}`} />
           </View>
         ))}
       </Card>

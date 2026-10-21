@@ -1,32 +1,32 @@
-import { act, render, screen, within } from '@testing-library/react-native';
-import type { ReactElement } from 'react';
+import { screen, within } from '@testing-library/react-native';
+import { driveMerit } from '@scoring';
 
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
-import { fontFamilies, SHEET_DISMISS_FALLBACK_MS, ThemeProvider, tokens } from '@/ui';
+import { contrastRatio, SHEET_DISMISS_FALLBACK_MS } from '@/ui';
+import { opaque, over } from '@/ui/sky/color';
 import { plainBundle } from '@/ui/sky/palette';
 
-import { DAY, draw, drive, event, HOUR, NOW, press, result } from '../__fixtures__/drives';
-import { scoreInk } from '../scoreInk';
-import { SCORE_STACK_FONT_SCALE, SummaryView, type SummaryViewProps } from '../SummaryView';
-import { endNote } from '../summary';
+import { DAY, draw, drive, event, HOUR, NOW, press } from '../__fixtures__/drives';
+import { meritInk, meritWash } from '../merit';
+import { SummaryView, type SummaryViewProps } from '../SummaryView';
+import { endNote, startNote } from '../summary';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
 jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn(async () => 'file:///card.png') }));
 
-// Dynamic Type at the phone's default (jest's own window says 2×); a test raises it where it matters.
-const mockFontScale = jest.fn(() => 1);
+// Dynamic Type at the phone's default (jest's own window says 2×).
 jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
   __esModule: true,
-  default: () => ({ width: 750, height: 1334, scale: 2, fontScale: mockFontScale() }),
+  default: () => ({ width: 750, height: 1334, scale: 2, fontScale: 1 }),
 }));
-afterEach(() => mockFontScale.mockReturnValue(1));
+
+const NO_POINTS = /\bpoints?\b|\bpts\b|streak|freeze|\blevel\b|Estimate|Scoring/i;
 
 const props = (over: Partial<SummaryViewProps> = {}): SummaryViewProps => ({
   drive: drive(),
   events: [event()],
   fresh: false,
   notDrivingLeft: 2,
-  latestClientTripId: 'a1',
   now: NOW,
   onBack: jest.fn(),
   onOpenDrive: jest.fn(),
@@ -49,391 +49,177 @@ function testIds(): string[] {
   return out;
 }
 
-test('top to bottom: time and distance, the route map, then the points', async () => {
+const light = plainBundle('light').colors;
+
+test('top to bottom: time and distance, the route map, then the hero with Share beside it, then the events', async () => {
   await draw(<SummaryView {...props()} />);
   const ids = testIds();
   const at = (id: string) => ids.indexOf(id);
   expect(at('summary-trip')).toBeGreaterThan(-1);
   expect(at('summary-trip')).toBeLessThan(at('route-map'));
-  expect(at('route-map')).toBeLessThan(at('summary-points-card'));
-  expect(at('summary-points')).toBeLessThan(at('receipt'));
+  expect(at('route-map')).toBeLessThan(at('summary-score-card'));
+  expect(at('summary-hero')).toBeLessThan(at('summary-facts'));
+  expect(at('summary-facts')).toBeLessThan(at('share'));
+  expect(at('share')).toBeLessThan(at('event-list'));
+  // Share sits in the hero's own row, right beside the facts.
+  expect(within(screen.getByTestId('summary-hero')).getByTestId('share')).toBeOnTheScreen();
   const trip = screen.getByTestId('summary-trip');
   expect(within(trip).getByText('24 min · 12.0 mi')).toBeOnTheScreen();
   expect(within(trip).getByText(/^Mon, Oct 5 · /)).toBeOnTheScreen();
   expect(trip).toHaveProp('accessibilityLabel', expect.stringMatching(/^24 minutes, 12\.0 miles\. Mon, Oct 5, /));
+  expect(JSON.stringify(screen.toJSON())).not.toMatch(NO_POINTS);
 });
 
-test('the summary drops the streak line, the stats row, the route labels and the unlocked row', async () => {
-  const r = result({ achievements: ['first_drive'], progress: { ...result().progress, levelUp: true, level: 5 } });
-  await draw(<SummaryView {...props({ drive: drive({ result: r, clean: true }) })} />);
-  expect(screen.queryByText(/Streak 11/)).toBeNull();
-  expect(screen.queryByTestId('streak-line')).toBeNull();
-  expect(screen.queryByTestId('celebrations')).toBeNull();
-  expect(screen.queryByTestId('counter-hardBrake')).toBeNull();
-  expect(screen.queryByText('Distance')).toBeNull();
-  expect(screen.queryByText(/Home → School/)).toBeNull();
-  expect(screen.queryByTestId('clean-badge')).toBeNull();
-  expect(screen.queryByTestId('receipt-total')).toBeNull();
-});
-
-test('the total is in bold above the breakdown', async () => {
-  await draw(<SummaryView {...props()} />);
-  const total = screen.getByTestId('summary-points');
-  expect(total).toHaveProp('accessibilityLabel', 'Points this drive: +132 points');
-  expect(within(total).getByText('+132')).toHaveStyle({ fontFamily: fontFamilies.displayItalic }); // the 800 ExtraBold face
-});
-
-describe('the drive score', () => {
-  test('top right of the points card, beside the total: the number in its ink, "score" under it, spoken out of 100', async () => {
+describe('the hero mirrors the share card', () => {
+  test('the tier icon beside the score, then distance and time, labelled, all three in the tier ink on its wash', async () => {
     await draw(<SummaryView {...props()} />);
-    const ids = testIds();
-    expect(ids.indexOf('summary-points-card')).toBeLessThan(ids.indexOf('summary-score'));
-    expect(ids.indexOf('summary-points')).toBeLessThan(ids.indexOf('summary-score'));
-    expect(ids.indexOf('summary-score')).toBeLessThan(ids.indexOf('receipt'));
-    const score = screen.getByTestId('summary-score');
-    expect(score).toHaveProp('accessibilityLabel', 'Drive score 99 out of 100');
-    expect(score).toHaveProp('accessible', true);
-    expect(within(score).getByText('score')).toBeOnTheScreen();
-    const c = plainBundle('light').colors;
-    expect(screen.getByTestId('summary-score-value')).toHaveTextContent('99');
-    expect(screen.getByTestId('summary-score-value')).toHaveStyle({ color: scoreInk(99, c, c.surface) });
-    // One row that wraps: a total too wide to share its line puts the score on the next, still on the right.
-    expect(screen.getByTestId('summary-total')).toHaveStyle({ flexDirection: 'row', flexWrap: 'wrap' });
-    expect(score).toHaveStyle({ alignItems: 'flex-end', marginLeft: 'auto' });
-    expect(score).not.toHaveStyle({ flexShrink: 0 });
+    // 12 mi with one minor hard brake in 30 slowdowns: Braking 63, the rest 100, Speed counting double.
+    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('93');
+    const tier = driveMerit(93, 12)!;
+    expect(tier).toBe(4);
+    const wash = meritWash(tier, 'light');
+    const surfaces = [light.surface, over(opaque(light.surface), wash)];
+    const ink = meritInk(tier, surfaces);
+    for (const id of ['summary-facts-score', 'summary-facts-distance', 'summary-facts-time']) expect(screen.getByTestId(id)).toHaveStyle({ color: ink });
+    expect(screen.getByTestId('summary-facts-icon', { includeHiddenElements: true })).toBeTruthy();
+    expect(screen.getByTestId('summary-hero')).toHaveStyle({ backgroundColor: wash });
+    for (const s of surfaces) expect(contrastRatio(ink, opaque(s))).toBeGreaterThanOrEqual(4.5);
+    expect(within(screen.getByTestId('summary-facts')).getByText('score')).toBeOnTheScreen();
+    expect(within(screen.getByTestId('summary-facts')).getByText('distance')).toBeOnTheScreen();
+    expect(within(screen.getByTestId('summary-facts')).getByText('time')).toBeOnTheScreen();
+    expect(screen.getByTestId('summary-facts')).toHaveProp('accessibilityLabel', 'Score 93 out of 100, 12.0 miles, 24 minutes, merit 4 of 5.');
   });
 
-  test.each([1.3, 1.49])('at %d× text the score stays beside the total', async (fontScale) => {
-    mockFontScale.mockReturnValue(fontScale);
+  test('the hero uses the share card type at 0.8×', async () => {
     await draw(<SummaryView {...props()} />);
-    expect(screen.getByTestId('summary-total')).toHaveStyle({ flexDirection: 'row' });
+    expect(screen.getByTestId('summary-facts-score')).toHaveStyle({ fontSize: 44 * 0.8 });
+    expect(screen.getByTestId('summary-facts-distance')).toHaveStyle({ fontSize: 28 * 0.8 });
   });
 
-  test.each([SCORE_STACK_FONT_SCALE, 1.786, 2, 3])('at the accessibility text sizes (%d×) the score sits under the total, never over it', async (fontScale) => {
-    mockFontScale.mockReturnValue(fontScale);
-    await draw(<SummaryView {...props({ drive: drive({ pointsNet: -1240 }) })} />);
-    const total = screen.getByTestId('summary-total');
-    expect(total).not.toHaveStyle({ flexDirection: 'row' });
+  test('a short perfect drive stays at the lowest tier; a long excellent one is high', async () => {
+    await draw(<SummaryView {...props({ drive: drive({ miles: 0.6 }), events: [] })} />);
+    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('100');
+    expect(screen.getByTestId('summary-facts')).toHaveProp('accessibilityLabel', expect.stringMatching(/merit 1 of 5\.$/));
+    await draw(<SummaryView {...props({ drive: drive({ miles: 26 }), events: [] })} />);
+    expect(screen.getByTestId('summary-facts')).toHaveProp('accessibilityLabel', expect.stringMatching(/merit 5 of 5\.$/));
+  });
+
+  test('the score never waits for the server: an uploading drive and one not synced yet show theirs', async () => {
+    await draw(<SummaryView {...props({ drive: drive({ status: 'pending', result: null }) })} />);
+    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('93');
+    expect(screen.queryByTestId('state-not-synced')).toBeNull();
+    await draw(<SummaryView {...props({ drive: drive({ status: 'failed', result: null }) })} />);
+    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('93');
+    expect(screen.getByTestId('state-not-synced')).toHaveTextContent("Not synced yet. We'll keep trying.");
+  });
+
+  test.each([
+    [{ status: 'recording', result: null }, 'state-recording', 'Drive in progress', 'Your score shows up when the drive ends.'],
+    [{ status: 'unscored', reason: 'too_short', result: null }, 'state-too-short', 'Too short to score', "Drives under 0.5 mi that take under 2 min don't get a score."],
+    [{ status: 'pending', reason: 'too_short', result: null }, 'state-too-short', 'Too short to score', "Drives under 0.5 mi that take under 2 min don't get a score."],
+    [{ status: 'not_driving' }, 'state-not-driving', 'Marked as not driving', "This drive doesn't count toward your Safety Rating."],
+    [{ status: 'merged', mergedInto: 'z' }, 'state-merged-text', 'Added to your last drive', 'You set off again within 5 minutes, so the two count as one drive.'],
+  ] as const)('%o: the state instead of a score, Share still beside it', async (over, id, title, body) => {
+    await draw(<SummaryView {...props({ drive: drive(over as never) })} />);
+    expect(screen.getByTestId(id)).toHaveTextContent(title, { exact: false });
+    expect(screen.getByText(body)).toBeOnTheScreen();
+    expect(screen.queryByTestId('summary-facts')).toBeNull();
+    expect(screen.getByTestId('share')).toBeOnTheScreen();
+  });
+
+  test('a merged drive opens the one it joined', async () => {
+    const p = props({ drive: drive({ status: 'merged', mergedInto: 'z' }) });
+    await draw(<SummaryView {...p} />);
+    await press(screen.getByText('Open that drive'));
+    expect(p.onOpenDrive).toHaveBeenCalledWith('z');
+  });
+
+  test('Share opens the card with the same score, tier ink and facts', async () => {
+    await draw(<SummaryView {...props()} />);
+    await press(screen.getByTestId('share'));
+    const card = screen.getByTestId('share-card');
+    expect(within(card).getByTestId('share-facts-score')).toHaveTextContent('93');
+    expect(within(card).getByTestId('share-facts')).toHaveProp('accessibilityLabel', 'Score 93 out of 100, 12.0 miles, 24 minutes, merit 4 of 5.');
+    expect(within(card).queryByText(/mph/)).toBeNull();
+  });
+});
+
+describe('the events', () => {
+  test('one row per event, oldest first, its icon in its tier ink, its name and time, Report under it', async () => {
+    const events = [
+      event({ id: 's1', type: 'speeding', tier: 'moderate', startedAt: NOW - 2 * HOUR + 20 * 60_000 }),
+      event({ id: 'e1', startedAt: NOW - 2 * HOUR + 9 * 60_000 }),
+    ];
+    await draw(<SummaryView {...props({ events })} />);
+    expect(screen.getByTestId('event-list-title')).toHaveTextContent('Events · 2');
     const ids = testIds();
-    expect(ids.indexOf('summary-points')).toBeLessThan(ids.indexOf('summary-score'));
-    expect(screen.getByTestId('summary-score')).toHaveStyle({ alignItems: 'flex-start' });
-    expect(screen.getByTestId('summary-score')).not.toHaveStyle({ marginLeft: 'auto' });
-    expect(screen.getByTestId('summary-score')).toHaveProp('accessibilityLabel', 'Drive score 99 out of 100');
-    // The label row wraps too, so the Estimate pill drops under "Points this drive" rather than over it.
-    await draw(<SummaryView {...props({ drive: drive({ status: 'pending', estimate: true, pointsNet: 40, result: null }) })} />);
-    expect(within(screen.getByTestId('summary-total-label')).getByTestId('estimate')).toBeOnTheScreen();
-    expect(screen.getByTestId('summary-total-label')).toHaveStyle({ flexDirection: 'row', flexWrap: 'wrap' });
+    expect(ids.indexOf('event-e1')).toBeLessThan(ids.indexOf('event-s1'));
+    expect(within(screen.getByTestId('event-e1')).getByText('Hard brake · Minor')).toBeOnTheScreen();
+    expect(screen.getByTestId('event-s1')).toHaveProp('accessibilityHint', 'Circles it on the route map');
+    expect(screen.getByTestId('report-e1')).toBeOnTheScreen();
   });
 
-  describe('the total keeps its room while it counts', () => {
-    // The count-up runs on requestAnimationFrame: fake timers drive it inside act().
-    beforeEach(() => jest.useFakeTimers());
-    afterEach(async () => {
-      await act(async () => {
-        jest.runOnlyPendingTimers();
-      });
-      jest.useRealTimers();
-    });
-
-    const moving = (ui: ReactElement) => (
-      <ThemeProvider scheme="light" reduceMotion={false}>
-        {ui}
-      </ThemeProvider>
-    );
-    const hidden = { includeHiddenElements: true } as const;
-    /** What each copy in the total's room reads: the totals the row breaks its line on. */
-    const room = () =>
-      within(screen.getByTestId('summary-points-room', hidden))
-        .getAllByTestId(/^summary-points-room-/, hidden)
-        .map((n) => within(n).getByText(/\d/, hidden).props.children as string);
-    /** The line the score is laid out on: the wrapping row, the item beside it, and the score's own place on it. */
-    const line = () => {
-      const row = screen.getByTestId('summary-total');
-      const total = screen.getByTestId('summary-points').parent!;
-      return {
-        row: row.props.style,
-        total: total.props.style,
-        sameItem: screen.getByTestId('summary-points-room', hidden).parent === total,
-        score: screen.getByTestId('summary-score').props.style,
-      };
-    };
-
-    test('a fresh summary counts a wide total up from 0 while the row breaks its line on the final total, first frame to last', async () => {
-      await render(moving(<SummaryView {...props({ fresh: true, drive: drive({ pointsNet: 1240 }) })} />));
-      // First frame: the number on screen is still small, the room already holds the final total.
-      expect(within(screen.getByTestId('summary-points')).getByText('0')).toBeOnTheScreen();
-      expect(room()).toEqual(['+1,240']);
-      const first = line();
-      expect(first.sameItem).toBe(true);
-      expect(first.total).toMatchObject({ flexShrink: 1, minWidth: 0 });
-
-      await act(async () => {
-        jest.advanceTimersByTime(tokens.motion.countUp / 3);
-      });
-      const mid = within(screen.getByTestId('summary-points')).getByText(/^\+\d/).props.children as string;
-      expect(mid).not.toBe('+1,240');
-      expect(room()).toEqual(['+1,240']);
-      expect(line()).toEqual(first);
-
-      await act(async () => {
-        jest.advanceTimersByTime(tokens.motion.countUp + 200);
-      });
-      expect(within(screen.getByTestId('summary-points')).getByText('+1,240')).toBeOnTheScreen();
-      expect(room()).toEqual(['+1,240']);
-      expect(line()).toEqual(first);
-    });
-
-    test('the room is invisible: no height, clipped, transparent, hidden from screen readers and touches', async () => {
-      await render(moving(<SummaryView {...props({ drive: drive({ pointsNet: 1240 }) })} />));
-      const r = screen.getByTestId('summary-points-room', hidden);
-      expect(r).toHaveStyle({ height: 0, overflow: 'hidden', opacity: 0 });
-      expect(r).toHaveProp('accessibilityElementsHidden', true);
-      expect(r).toHaveProp('importantForAccessibility', 'no-hide-descendants');
-      expect(r).toHaveProp('pointerEvents', 'none');
-      expect(screen.queryByTestId('summary-points-room')).toBeNull();
-      // Screen readers hear the total once.
-      expect(screen.getAllByLabelText(/\+1,240 points/)).toHaveLength(1);
-    });
-
-    test('a total replaced while the card is open (an estimate by the server answer) keeps the room of the one it replaced', async () => {
-      const estimate = drive({ status: 'pending', estimate: true, pointsNet: 1240, result: null });
-      const view = await render(moving(<SummaryView {...props({ fresh: true, drive: estimate })} />));
-      await act(async () => {
-        jest.advanceTimersByTime(tokens.motion.countUp + 200);
-      });
-      await view.rerender(moving(<SummaryView {...props({ fresh: true, drive: drive({ pointsNet: 980 }) })} />));
-      expect(room()).toEqual(['+1,240', '+980']);
-      await act(async () => {
-        jest.advanceTimersByTime(tokens.motion.countUp + 200);
-      });
-      expect(within(screen.getByTestId('summary-points')).getByText('+980')).toBeOnTheScreen();
-      expect(room()).toEqual(['+1,240', '+980']);
-    });
-
-    test('no room without a score beside the total: none at the accessibility text sizes or with no score', async () => {
-      mockFontScale.mockReturnValue(SCORE_STACK_FONT_SCALE);
-      await render(moving(<SummaryView {...props({ drive: drive({ pointsNet: 1240 }) })} />));
-      expect(screen.getByTestId('summary-score')).toBeOnTheScreen();
-      expect(screen.queryByTestId('summary-points-room', hidden)).toBeNull();
-      mockFontScale.mockReturnValue(1);
-      await render(moving(<SummaryView {...props({ drive: drive({ miles: 0, pointsNet: 1240 }) })} />));
-      expect(screen.queryByTestId('summary-score')).toBeNull();
-      expect(screen.queryByTestId('summary-points-room', hidden)).toBeNull();
-    });
+  test('a clean drive says so', async () => {
+    await draw(<SummaryView {...props({ events: [] })} />);
+    expect(screen.getByTestId('event-list-none')).toHaveTextContent('No events. Smooth all the way.');
+    expect(screen.getByTestId('event-list-title')).toHaveTextContent('Events · 0');
   });
 
-  test('a rough drive is coloured further toward red', async () => {
-    const pickups = [event({ id: 'p1', type: 'phone_pickup', tier: 'severe' }), event({ id: 'p2', type: 'phone_pickup', tier: 'severe' })];
-    await draw(<SummaryView {...props({ drive: drive({ miles: 2 }), events: pickups })} />);
-    // 80 rating penalty over 3 mi (the floor): phone 37.5, counted twice → 82.
-    expect(screen.getByTestId('summary-score')).toHaveProp('accessibilityLabel', 'Drive score 82 out of 100');
-    const c = plainBundle('light').colors;
-    expect(screen.getByTestId('summary-score-value')).toHaveStyle({ color: scoreInk(82, c, c.surface) });
+  test('three rows, then "Show more" reveals the rest and "Show less" hides them', async () => {
+    const events = [0, 1, 2, 3, 4].map((i) => event({ id: `x${i}`, startedAt: NOW - 2 * HOUR + i * 60_000 }));
+    await draw(<SummaryView {...props({ events })} />);
+    expect(screen.queryByTestId('event-x3')).toBeNull();
+    const more = screen.getByTestId('event-list-more');
+    expect(more).toHaveProp('accessibilityHint', 'Shows 2 more events');
+    await press(more);
+    expect(screen.getByTestId('event-x4')).toBeOnTheScreen();
+    await press(screen.getByText('Show less'));
+    expect(screen.queryByTestId('event-x4')).toBeNull();
   });
 
-  test('an estimate and a drive not synced yet with a total show it; no total, no score', async () => {
-    await draw(<SummaryView {...props({ drive: drive({ status: 'pending', estimate: true, pointsNet: 40, result: null }) })} />);
-    expect(screen.getByTestId('summary-score')).toBeOnTheScreen();
-    await draw(<SummaryView {...props({ drive: drive({ status: 'failed', pointsNet: 40, result: null }) })} />);
-    expect(screen.getByTestId('summary-score')).toBeOnTheScreen();
-    for (const d of [
-      drive({ status: 'failed', pointsNet: null, result: null }),
-      drive({ status: 'pending', pointsNet: null, result: null }),
-      drive({ status: 'unscored', reason: 'too_short', pointsNet: 0, result: null }),
-      drive({ status: 'unscored', reason: 'spoofed', pointsNet: null, result: null }),
-      drive({ status: 'not_driving', pointsNet: 0 }),
-      drive({ status: 'merged', mergedInto: 'z' }),
-      drive({ status: 'recording', pointsNet: null, result: null }),
-    ]) {
-      await draw(<SummaryView {...props({ drive: d })} />);
-      expect(screen.queryByTestId('summary-score')).toBeNull();
+  test('an event taken off by a report stays listed, struck through, with its status', async () => {
+    await draw(<SummaryView {...props({ events: [event({ disputeStatus: 'accepted' })] })} />);
+    const line = screen.getByTestId('event-e1');
+    expect(line).toHaveProp('accessibilityLabel', expect.stringMatching(/, removed$/));
+    expect(within(line).getByText('Hard brake · Minor')).toHaveStyle({ textDecorationLine: 'line-through' });
+    expect(screen.getByTestId('dispute-e1')).toHaveTextContent('Report accepted · event removed');
+    // a removed event costs nothing: the drive scores as clean
+    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('100');
+  });
+
+  test('tapping an event selects it and circles it on the map', async () => {
+    await draw(<SummaryView {...props()} />);
+    expect(screen.queryByTestId('map-highlight-caption')).toBeNull();
+    await press(screen.getByTestId('event-e1'));
+    expect(screen.getByTestId('event-e1')).toBeSelected();
+    expect(screen.getByTestId('map-highlight-caption')).toHaveTextContent(/^Circled on the map: Hard brake · Minor at /);
+    await press(screen.getByTestId('event-e1'));
+    expect(screen.queryByTestId('map-highlight-caption')).toBeNull();
+  });
+
+  test('an event outside the map (privacy zone) says so when tapped', async () => {
+    await draw(<SummaryView {...props({ events: [event({ lat: null, lng: null })] })} />);
+    await press(screen.getByTestId('event-e1'));
+    expect(screen.getByTestId('map-highlight-caption')).toHaveTextContent(/isn't on the map/);
+  });
+
+  test('a too-short drive still lists its events; a drive in progress, merged or marked lists none', async () => {
+    await draw(<SummaryView {...props({ drive: drive({ status: 'unscored', reason: 'too_short' }) })} />);
+    expect(screen.getByTestId('event-e1')).toBeOnTheScreen();
+    for (const over of [{ status: 'recording' }, { status: 'merged', mergedInto: 'z' }, { status: 'not_driving' }] as const) {
+      await draw(<SummaryView {...props({ drive: drive(over) })} />);
+      expect(screen.queryByTestId('event-list')).toBeNull();
     }
   });
-});
 
-test('the receipt lists what was earned and each deduction, open from the start', async () => {
-  await draw(<SummaryView {...props()} />);
-  expect(screen.getByLabelText('Points this drive: +132 points')).toBeOnTheScreen();
-  expect(screen.queryByTestId('breakdown-toggle')).toBeNull();
-  const r = screen.getByTestId('receipt');
-
-  const earned = within(r).getByTestId('receipt-earned');
-  expect(earned).toHaveProp('accessibilityLabel', 'Earned, plus 142 points. Safe miles 11.8 mi × 10, Streak ×1.20');
-  expect(within(earned).getByText('+142')).toHaveStyle({ color: plainBundle('light').colors.signal.clean.text });
-  expect(within(earned).getByText('Earned')).toBeOnTheScreen();
-  expect(within(r).getByTestId('receipt-detail')).toHaveTextContent('Safe miles 11.8 mi × 10 · Streak ×1.20');
-
-  const line = within(r).getByTestId('event-e1');
-  expect(line).toHaveProp('accessibilityLabel', expect.stringMatching(/^Hard brake · Minor at .+, minus 10 points$/));
-  expect(within(line).getByText('−10')).toHaveStyle({ color: plainBundle('light').colors.signal.severe.text });
-  expect(within(r).queryByTestId('receipt-none')).toBeNull();
-});
-
-test('a clean drive says "No deductions" and keeps the clean bonus in the detail', async () => {
-  const base = result();
-  const r = result({ breakdown: { ...base.breakdown, cleanBonus: 25, gains: 172, events: [], penalties: 0, net: 172 }, net: 172 });
-  const counts = { speeding: 0, pickups: 0, handlingS: 0, hardBrake: 0, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 0 };
-  await draw(<SummaryView {...props({ drive: drive({ pointsNet: 172, clean: true, counts, result: r }), events: [] })} />);
-  expect(screen.getByTestId('receipt-none')).toHaveTextContent('No deductions');
-  expect(screen.getByTestId('receipt-detail')).toHaveTextContent('Safe miles 11.8 mi × 10 · Clean bonus +25 · Streak ×1.20');
-  expect(screen.getByTestId('summary-points')).toHaveProp('accessibilityLabel', 'Points this drive: +172 points');
-});
-
-test('a drive scored at 20 a safe mile says × 20 and shows its +50 clean bonus', async () => {
-  const base = result();
-  const r = result({ breakdown: { ...base.breakdown, pointsPerMile: 20, milePoints: 236, cleanBonus: 50, gains: 343, events: [], penalties: 0, net: 343 }, net: 343 });
-  const counts = { speeding: 0, pickups: 0, handlingS: 0, hardBrake: 0, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 0 };
-  await draw(<SummaryView {...props({ drive: drive({ pointsNet: 343, clean: true, counts, result: r }), events: [] })} />);
-  expect(screen.getByTestId('receipt-detail')).toHaveTextContent('Safe miles 11.8 mi × 20 · Clean bonus +50 · Streak ×1.20');
-  expect(screen.getByTestId('receipt-earned')).toHaveProp('accessibilityLabel', 'Earned, plus 343 points. Safe miles 11.8 mi × 20, Clean bonus +50, Streak ×1.20');
-});
-
-test('a DashPal drive shows the multiplier arrow and says "to" aloud', async () => {
-  const base = result();
-  const r = result({ breakdown: { ...base.breakdown, dashcamMult: 1.25, mult: 1.5 } });
-  await draw(<SummaryView {...props({ drive: drive({ result: r }) })} />);
-  expect(screen.getByTestId('receipt-detail')).toHaveTextContent('Safe miles 11.8 mi × 10 · Streak ×1.20 · DashPal ×1.25 → ×1.50 (cap)');
-  expect(screen.getByTestId('receipt-earned')).toHaveProp(
-    'accessibilityLabel',
-    expect.stringMatching(/Streak ×1\.20 · DashPal ×1\.25 to ×1\.50 \(cap\)$/)
-  );
-});
-
-test('at most three entries show, Earned counting as one, then "Show more" reveals the rest', async () => {
-  const many = Array.from({ length: 4 }, (_, i) => event({ id: `m${i}`, startedAt: NOW - 2 * HOUR + (i + 1) * 60_000 }));
-  await draw(<SummaryView {...props({ events: many })} />);
-  expect(screen.getByTestId('receipt-earned')).toBeOnTheScreen();
-  expect(screen.getByTestId('event-m1')).toBeOnTheScreen();
-  expect(screen.queryByTestId('event-m2')).toBeNull();
-  const more = screen.getByTestId('receipt-more');
-  expect(more).toHaveTextContent(/Show more/);
-  expect(more).toHaveProp('accessibilityHint', 'Shows 2 more deductions');
-
-  await press(more);
-  expect(screen.getByTestId('event-m2')).toBeOnTheScreen();
-  expect(screen.getByTestId('event-m3')).toBeOnTheScreen();
-  expect(screen.getByTestId('receipt-more')).toHaveTextContent(/Show less/);
-
-  await press(screen.getByTestId('receipt-more'));
-  expect(screen.queryByTestId('event-m3')).toBeNull();
-});
-
-test('three entries need no "Show more": Earned and two deductions, or three deductions without Earned', async () => {
-  await draw(<SummaryView {...props({ events: [event({ id: 'f0' }), event({ id: 'f1' })] })} />);
-  expect(screen.getByTestId('event-f1')).toBeOnTheScreen();
-  expect(screen.queryByTestId('receipt-more')).toBeNull();
-  const three = Array.from({ length: 3 }, (_, i) => event({ id: `p${i}`, penalty: null }));
-  await draw(<SummaryView {...props({ drive: drive({ status: 'pending', pointsNet: null, result: null }), events: three })} />);
-  expect(screen.queryByTestId('receipt-earned')).toBeNull();
-  expect(screen.getByTestId('event-p2')).toBeOnTheScreen();
-  expect(screen.queryByTestId('receipt-more')).toBeNull();
-});
-
-test('an event taken off by a report stays on the receipt, struck through, as "Removed"', async () => {
-  await draw(<SummaryView {...props({ events: [event({ disputeStatus: 'accepted' })] })} />);
-  const line = screen.getByTestId('event-e1');
-  expect(line).toHaveProp('accessibilityLabel', expect.stringMatching(/, removed$/));
-  expect(within(line).getByText('Removed')).toHaveStyle({ color: plainBundle('light').colors.textMuted });
-  expect(within(line).getByText('Hard brake · Minor')).toHaveStyle({ textDecorationLine: 'line-through' });
-  expect(screen.getByTestId('dispute-e1')).toHaveTextContent('Report accepted · points returned');
-});
-
-test('tapping an event line selects it and circles it on the map', async () => {
-  await draw(<SummaryView {...props()} />);
-  expect(screen.queryByTestId('map-highlight-caption')).toBeNull();
-
-  await press(screen.getByTestId('event-e1'));
-  expect(screen.getByTestId('event-e1')).toBeSelected();
-  expect(screen.getByTestId('map-highlight-caption')).toHaveTextContent(/^Circled on the map: Hard brake · Minor at /);
-
-  await press(screen.getByTestId('event-e1'));
-  expect(screen.queryByTestId('map-highlight-caption')).toBeNull();
-});
-
-test('an event outside the map (privacy zone) says so when tapped', async () => {
-  await draw(<SummaryView {...props({ events: [event({ lat: null, lng: null })] })} />);
-  await press(screen.getByTestId('event-e1'));
-  expect(screen.getByTestId('map-highlight-caption')).toHaveTextContent(/isn't on the map/);
-});
-
-test('without a maps module the route sketch fills the same square slot, with the events spoken', async () => {
-  await draw(<SummaryView {...props()} />);
-  const slot = screen.getByTestId('map-unavailable');
-  expect(slot).toHaveStyle({ width: '100%', aspectRatio: 1 });
-  expect(slot).toHaveProp('accessibilityLabel', 'Route map, 1 hard brake');
-});
-
-test('a negative drive shows red points with a true minus', async () => {
-  const r = result({ net: -44 });
-  await draw(<SummaryView {...props({ drive: drive({ pointsNet: -44, result: r }) })} />);
-  const pts = screen.getByLabelText('Points this drive: −44 points');
-  expect(pts).toBeOnTheScreen();
-  expect(within(pts).getByText('−44')).toHaveStyle({ color: plainBundle('light').colors.signal.severe.text });
-});
-
-test('an offline estimate is labelled, earns the total plus its deductions, and explains the missing detail', async () => {
-  await draw(<SummaryView {...props({ drive: drive({ status: 'pending', estimate: true, pointsNet: 40, result: null }) })} />);
-  expect(screen.getByTestId('estimate')).toBeOnTheScreen();
-  expect(screen.getByText('Estimate')).toBeOnTheScreen();
-  expect(screen.getByTestId('receipt-earned')).toHaveProp('accessibilityLabel', 'Earned, plus 50 points');
-  expect(screen.queryByTestId('receipt-detail')).toBeNull();
-  expect(screen.getByTestId('summary-points')).toHaveProp('accessibilityLabel', 'Points this drive: +40 points');
-  expect(screen.getByText('The full breakdown shows up once this drive is scored.')).toBeOnTheScreen();
-});
-
-test('a drive still uploading lists its events to report, without Earned or a total', async () => {
-  await draw(<SummaryView {...props({ drive: drive({ status: 'pending', pointsNet: null, result: null }), events: [event({ penalty: null })] })} />);
-  expect(screen.getByTestId('state-pending')).toBeOnTheScreen();
-  expect(screen.queryByTestId('receipt-earned')).toBeNull();
-  expect(screen.queryByTestId('summary-points')).toBeNull();
-  expect(screen.getByTestId('event-e1')).toHaveProp('accessibilityLabel', expect.stringMatching(/points not known yet$/));
-  expect(screen.getByTestId('report-e1')).toBeOnTheScreen();
-});
-
-test('a drive still uploading with no events shows no receipt', async () => {
-  await draw(<SummaryView {...props({ drive: drive({ status: 'pending', pointsNet: null, result: null }), events: [] })} />);
-  expect(screen.queryByTestId('receipt')).toBeNull();
-});
-
-test('a too-short drive says so instead of points', async () => {
-  await draw(<SummaryView {...props({ drive: drive({ status: 'unscored', reason: 'too_short', pointsNet: 0, result: null }), events: [] })} />);
-  expect(screen.getByText('Too short to score')).toBeOnTheScreen();
-  expect(screen.getByText("Drives under 0.5 mi that take under 2 min don't earn or lose points.")).toBeOnTheScreen();
-  expect(screen.queryByTestId('receipt')).toBeNull();
-});
-
-test('a drive that failed to upload says "Not synced yet" and keeps its total and receipt', async () => {
-  await draw(<SummaryView {...props({ drive: drive({ status: 'failed', pointsNet: 40, result: null }) })} />);
-  expect(screen.getByTestId('state-failed')).toHaveTextContent(/Not synced yet/);
-  expect(screen.getByTestId('summary-points')).toHaveProp('accessibilityLabel', 'Points this drive: +40 points');
-  expect(screen.getByTestId('event-e1')).toBeOnTheScreen();
-});
-
-describe('DashPal', () => {
-  const dashpalResult = () => {
-    const r = result();
-    return { ...r, breakdown: { ...r.breakdown, dashcamMult: 1.25 as const, mult: 1.5, gains: 177, net: 167 }, net: 167 };
-  };
-  const drowsy = event({ id: 'd1', type: 'drowsy', tier: 'severe', penalty: 50, measured: { source: 'dashcam', speedMph: 40 } });
-
-  test('a DashPal drive names both multipliers', async () => {
-    await draw(<SummaryView {...props({ drive: drive({ pointsNet: 167, result: dashpalResult() }) })} />);
-    expect(within(screen.getByTestId('receipt')).getByText(/Streak ×1.20 · DashPal ×1.25 → ×1.50 \(cap\)$/)).toBeOnTheScreen();
-  });
-
-  test('a DashPal event is itemised', async () => {
-    await draw(<SummaryView {...props({ events: [event(), drowsy] })} />);
-    expect(within(screen.getByTestId('receipt')).getByText('Drowsy · DashPal')).toBeOnTheScreen();
-  });
-
-  test('a DashPal event offers "DashPal got it wrong" and "wasn\'t driving", and reports camera_wrong', async () => {
+  test('a DashPal event is listed in the muted ink and offers "DashPal got it wrong"', async () => {
+    const drowsy = event({ id: 'd1', type: 'drowsy', tier: 'severe', measured: { source: 'dashcam', speedMph: 40 } });
     const p = props({ events: [drowsy] });
     await draw(<SummaryView {...p} />);
+    expect(within(screen.getByTestId('event-d1')).getByText('Drowsy · DashPal')).toBeOnTheScreen();
     await press(screen.getByTestId('report-d1'));
     expect(screen.getByTestId('reason-camera_wrong')).toBeOnTheScreen();
     expect(screen.getByTestId('reason-not_driving')).toBeOnTheScreen();
-    expect(screen.queryByTestId('reason-hazard')).toBeNull();
-    expect(screen.getByText('DashPal got it wrong')).toBeOnTheScreen();
     await press(screen.getByTestId('reason-camera_wrong'));
     await press(screen.getByTestId('report-send'));
     expect(p.onReport).toHaveBeenCalledWith('d1', 'camera_wrong');
@@ -448,7 +234,7 @@ describe('Report', () => {
     return p;
   };
 
-  test('a hard brake offers "braked for a hazard" and "wasn\'t driving" only', async () => {
+  test('a hard brake offers "braked for a hazard" and "wasn\'t driving" only; there is no "phone was mounted"', async () => {
     await open();
     expect(screen.getByTestId('reason-hazard')).toBeOnTheScreen();
     expect(screen.getByTestId('reason-not_driving')).toBeOnTheScreen();
@@ -456,7 +242,7 @@ describe('Report', () => {
     expect(screen.queryByTestId('reason-mounted')).toBeNull();
   });
 
-  test('speeding offers "wrong speed limit"; a phone pickup offers "phone was mounted"', async () => {
+  test('speeding offers "wrong speed limit"', async () => {
     await open(event({ id: 's1', type: 'speeding', tier: 'moderate' }));
     expect(screen.getByTestId('reason-wrong_limit')).toBeOnTheScreen();
     expect(screen.queryByTestId('reason-hazard')).toBeNull();
@@ -471,27 +257,19 @@ describe('Report', () => {
       await view.unmount();
       return ids;
     };
-    // The latest drive, within a day, with uses left: "wasn't driving" is the reason on offer.
     expect(await shows({ events: [turn, start] })).toEqual(['t1', 'a1x']);
-    // An older drive, or none left this month: nothing fits, so no Report, never an empty sheet.
-    expect(await shows({ events: [turn, start], latestClientTripId: 'other' })).toEqual([]);
+    expect(await shows({ events: [turn, start], now: NOW + DAY })).toEqual([]);
     expect(await shows({ events: [turn, start], notDrivingLeft: 0 })).toEqual([]);
-    // A hard brake on an older drive still has its own reason.
-    expect(await shows({ events: [event()], latestClientTripId: 'other' })).toEqual(['e1']);
+    expect(await shows({ events: [event()], now: NOW + DAY })).toEqual(['e1']);
   });
 
-  test('a phone pickup offers "phone was mounted"', async () => {
-    await open(event({ id: 'p1', type: 'phone_pickup', tier: 'severe' }));
-    expect(screen.getByTestId('reason-mounted')).toBeOnTheScreen();
-  });
-
-  test('sending a reason reports the event', async () => {
+  test('sending a reason reports the event and thanks the driver', async () => {
     const p = await open();
     expect(screen.getByTestId('report-send')).toBeDisabled();
     await press(screen.getByTestId('reason-hazard'));
     await press(screen.getByTestId('report-send'));
     expect(p.onReport).toHaveBeenCalledWith('e1', 'hazard');
-    expect(await screen.findByTestId('report-sent')).toBeOnTheScreen();
+    expect(await screen.findByTestId('report-sent')).toHaveTextContent(/Thanks. We'll check it and update this drive./);
   });
 
   test('"wasn\'t driving" hands over to the whole-drive confirm', async () => {
@@ -499,7 +277,6 @@ describe('Report', () => {
     await press(screen.getByTestId('reason-not_driving'));
     await press(screen.getByTestId('report-send'));
     expect(p.onReport).not.toHaveBeenCalled();
-    // The confirm waits for the report sheet to leave: iOS shows one modal at a time.
     expect(screen.queryByTestId('not-driving-sheet')).toBeNull();
     expect(await screen.findByTestId('not-driving-sheet', {}, { timeout: SHEET_DISMISS_FALLBACK_MS + 1000 })).toBeOnTheScreen();
   });
@@ -512,69 +289,50 @@ describe('Report', () => {
 });
 
 describe("Wasn't driving", () => {
-  test('the footer shows how many uses are left and the confirm repeats it', async () => {
+  test('the footer shows how many uses are left and the confirm repeats it, with no points or streak words', async () => {
     const p = props({ notDrivingLeft: 1 });
     await draw(<SummaryView {...p} />);
     expect(screen.getByTestId('not-driving')).toHaveTextContent("Wasn't driving (1 left this month)");
     await press(screen.getByTestId('not-driving'));
     expect(screen.getByTestId('not-driving-left')).toHaveTextContent(/You have 1 left\./);
-    expect(screen.getByText(/The 132 points from this drive come off/)).toBeOnTheScreen();
+    expect(screen.getByText("Use this if someone else was behind the wheel. This drive won't count toward your Safety Rating.")).toBeOnTheScreen();
     await press(screen.getByTestId('not-driving-confirm'));
     expect(p.onNotDriving).toHaveBeenCalled();
   });
 
-  test('with none left the button is off', async () => {
+  test('with none left it is not offered', async () => {
     await draw(<SummaryView {...props({ notDrivingLeft: 0 })} />);
-    expect(screen.getByTestId('not-driving')).toBeDisabled();
-  });
-
-  test('offered only on the latest drive, within 24 h', async () => {
-    await draw(<SummaryView {...props({ latestClientTripId: 'newer' })} />);
-    expect(screen.queryByTestId('not-driving')).toBeNull();
-    await draw(<SummaryView {...props({ now: NOW + DAY })} />);
     expect(screen.queryByTestId('not-driving')).toBeNull();
   });
 
-  test("where it is not offered, Report leaves out \"I wasn't driving\"", async () => {
-    await draw(<SummaryView {...props({ latestClientTripId: 'newer' })} />);
+  test('any drive within a day of its end, not only the latest; never after 24 h', async () => {
+    const ended = NOW - 2 * HOUR + 24 * 60_000;
+    await draw(<SummaryView {...props({ now: ended + DAY - 1 })} />);
+    expect(screen.getByTestId('not-driving')).toBeOnTheScreen();
+    await draw(<SummaryView {...props({ now: ended + DAY + 1 })} />);
+    expect(screen.queryByTestId('not-driving')).toBeNull();
+  });
+
+  test('not when the drive\'s "Not driving?" ran out during it', async () => {
+    await draw(<SummaryView {...props({ drive: drive({ notDrivingExpired: true }) })} />);
+    expect(screen.queryByTestId('not-driving')).toBeNull();
     await press(screen.getByTestId('report-e1'));
-    expect(screen.getByTestId('reason-hazard')).toBeOnTheScreen();
     expect(screen.queryByTestId('reason-not_driving')).toBeNull();
   });
 
   test('a drive already marked has no footer option', async () => {
-    await draw(<SummaryView {...props({ drive: drive({ status: 'not_driving', pointsNet: 0 }) })} />);
-    expect(screen.getByText('Marked as not driving')).toBeOnTheScreen();
+    await draw(<SummaryView {...props({ drive: drive({ status: 'not_driving' }) })} />);
     expect(screen.queryByTestId('not-driving')).toBeNull();
   });
-});
 
-test('Share previews the card without any speed and shares the image', async () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const sharing = require('expo-sharing') as { shareAsync: jest.Mock };
-  await draw(<SummaryView {...props()} />);
-  await press(screen.getByTestId('share'));
-  const card = screen.getByTestId('share-card');
-  expect(within(card).getByTestId('share-points')).toHaveTextContent('+132');
-  expect(within(card).queryByText(/mph/)).toBeNull();
-  // The map backdrop is opt-in: the card opens as the plain route sketch.
-  expect(within(card).queryByTestId('share-map', { includeHiddenElements: true })).toBeNull();
-  // A fixed-size image: its text never follows Dynamic Type.
-  expect(within(card).getByTestId('share-points')).toHaveProp('allowFontScaling', false);
-  expect(within(card).getByTestId('share-points')).toHaveStyle({ fontSize: 28 });
-  await press(screen.getByTestId('share-image'));
-  expect(sharing.shareAsync).toHaveBeenCalledWith('file:///card.png', expect.objectContaining({ mimeType: 'image/png' }));
-});
-
-describe('final-review fixes', () => {
-  afterEach(() => resetUnitsForTests());
-
-  test("a refused \"Wasn't driving\" says why and is not offered again", async () => {
-    await draw(<SummaryView {...props({ drive: drive({ syncError: 'too_old' }) })} />);
-    expect(screen.getByTestId('not-driving-refused')).toHaveTextContent(/more than 24 hours old/);
+  test.each([
+    ['too_old', 'This drive is more than a day old, so it can’t be marked.'],
+    ['no_uses_left', 'You’ve used both “Wasn’t driving” marks this month.'],
+    ['not_driving_expired', 'The “Not driving?” option on that drive ran out, so it can’t be marked.'],
+  ])('a refusal (%s) says why and is not offered again', async (code, line) => {
+    await draw(<SummaryView {...props({ drive: drive({ syncError: code }) })} />);
+    expect(screen.getByTestId('not-driving-refused')).toHaveTextContent(line);
     expect(screen.queryByTestId('not-driving')).toBeNull();
-    await draw(<SummaryView {...props({ drive: drive({ syncError: 'no_uses_left' }) })} />);
-    expect(screen.getByTestId('not-driving-refused')).toHaveTextContent(/both “Wasn’t driving” marks this month/);
   });
 
   test('an upload error is not mistaken for a refusal', async () => {
@@ -582,66 +340,41 @@ describe('final-review fixes', () => {
     expect(screen.queryByTestId('not-driving-refused')).toBeNull();
     expect(screen.getByTestId('not-driving')).toBeOnTheScreen();
   });
+});
 
-  test('a pending drive the phone knows is too short says so straight away', async () => {
-    await draw(<SummaryView {...props({ drive: drive({ status: 'pending', pointsNet: null, reason: 'too_short', result: null }) })} />);
-    expect(screen.getByTestId('state-too-short')).toBeOnTheScreen();
-  });
+describe('units', () => {
+  afterEach(() => resetUnitsForTests());
 
-  test('the share card shows the total and the drive score the points card shows, "—" when the drive has no total', async () => {
-    // 12 mi with one minor hard brake scores 99, never the 30-day rating (92.4 in the result).
-    await draw(<SummaryView {...props()} />);
-    await press(screen.getByTestId('share'));
-    const card = screen.getByTestId('share-card');
-    expect(within(card).getByText('Drive score')).toBeOnTheScreen();
-    expect(within(card).getByTestId('share-score')).toHaveTextContent('99');
-    expect(within(card).getByTestId('share-score')).toHaveProp('allowFontScaling', false);
-    expect(within(card).queryByText('Safety Rating')).toBeNull();
-    expect(within(card).queryByTestId('share-rating')).toBeNull();
-    // An offline estimate scores from the phone's own events.
-    await draw(<SummaryView {...props({ drive: drive({ miles: 5, status: 'pending', estimate: true, pointsNet: 40, result: null }), events: [event({ type: 'phone_pickup', tier: 'severe' })] })} />);
-    await press(screen.getByTestId('share'));
-    expect(screen.getByTestId('share-score')).toHaveTextContent('90');
-    // A drive not synced yet carries the total and score its points card shows.
-    await draw(<SummaryView {...props({ drive: drive({ status: 'failed', pointsNet: 40, result: null }) })} />);
-    expect(screen.getByTestId('summary-score-value')).toHaveTextContent('99');
-    await press(screen.getByTestId('share'));
-    expect(screen.getByTestId('share-points')).toHaveTextContent('+40');
-    expect(screen.getByTestId('share-score')).toHaveTextContent('99');
-    for (const d of [
-      drive({ status: 'pending', pointsNet: null, result: null }),
-      drive({ status: 'unscored', reason: 'too_short', pointsNet: 0, result: null }),
-      drive({ status: 'failed', pointsNet: null, result: null }),
-    ]) {
-      await draw(<SummaryView {...props({ drive: d })} />);
-      await press(screen.getByTestId('share'));
-      expect(screen.getByTestId('share-points')).toHaveTextContent('—');
-      expect(screen.getByTestId('share-score')).toHaveTextContent('—');
-    }
-  });
-
-  test('km: the distance, the share card and the too-short note convert', async () => {
+  test('km: the distance, the hero, the share card and the too-short note convert', async () => {
     publishUnits('km');
     await draw(<SummaryView {...props()} />);
     expect(within(screen.getByTestId('summary-trip')).getByText('24 min · 19.3 km')).toBeOnTheScreen();
+    expect(screen.getByTestId('summary-facts-distance')).toHaveTextContent('19.3 km');
     await press(screen.getByTestId('share'));
     expect(within(screen.getByTestId('share-card')).getByText('19.3 km')).toBeOnTheScreen();
-    await draw(<SummaryView {...props({ drive: drive({ status: 'unscored', reason: 'too_short', pointsNet: null, result: null }) })} />);
-    expect(screen.getByText("Drives under 0.8 km that take under 2 min don't earn or lose points.")).toBeOnTheScreen();
+    await draw(<SummaryView {...props({ drive: drive({ status: 'unscored', reason: 'too_short', result: null }) })} />);
+    expect(screen.getByText("Drives under 0.8 km that take under 2 min don't get a score.")).toBeOnTheScreen();
   });
 });
 
-describe('the end note (this phone only)', () => {
+describe('how the drive started and ended (this phone only)', () => {
   test.each([
-    ['stopped', 'Ended on its own after 15 min without moving'],
-    ['walking', 'Ended on its own when you walked away'],
-    ['limit', 'Ended on its own at the 12-hour limit'],
-    ['manual_still', 'Ends where the car stopped. Phone use before End still counts'],
+    ['stopped', 'Ended after 5 min parked'],
+    ['walking', 'Ended when you walked away'],
+    ['limit', 'Ended at the 12-hour limit'],
+    ['manual_still', 'Ends where the car stopped'],
   ] as const)('a drive ended %s says so under the time and distance, and in the header label', async (endCause, line) => {
     expect(endNote({ endCause })).toBe(line);
     await draw(<SummaryView {...props({ drive: drive({ endCause }) })} />);
     expect(screen.getByTestId('summary-end-note')).toHaveTextContent(line);
     expect(screen.getByRole('header', { name: new RegExp(`${line.slice(0, 20)}`) })).toBeOnTheScreen();
+  });
+
+  test('a drive RoadWise noticed on its own says so, with how it ended', async () => {
+    expect(startNote({ origin: 'auto' })).toBe('Started on its own');
+    expect(startNote({ origin: 'manual' })).toBeNull();
+    await draw(<SummaryView {...props({ drive: drive({ origin: 'auto', endCause: 'walking' }) })} />);
+    expect(screen.getByTestId('summary-end-note')).toHaveTextContent('Started on its own · Ended when you walked away');
   });
 
   test.each(['manual', 'orphan', null] as const)('none for %s (a hold at the tap, a drive left open, a drive from the server)', async (endCause) => {

@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import type { EventType } from '@scoring';
+import { driveMerit, type EventType } from '@scoring';
 import { useMemo } from 'react';
 import { Pressable, View } from 'react-native';
 
@@ -7,16 +7,17 @@ import { useUnits } from '@/data/queries/units';
 import { formatDistance } from '@/lib/units';
 import { Text, useTheme } from '@/ui';
 
+import { recapCopy } from './copy';
 import { EventIcon } from './EventIcon';
-import { EVENT_LABEL, formatDuration, formatWhen, routeLine, signedPoints, spokenRoute } from './format';
+import { EVENT_LABEL, formatDuration, formatWhen, routeLine, spokenRoute } from './format';
+import { meritInk } from './merit';
 import type { DriveCounts, LocalDrive } from './model';
 import { decodeRoute } from './route';
 import { RouteSketch } from './RouteSketch';
-import { pointsState, pointsWord } from './summary';
+import { driveKind, stateWord } from './summary';
 
 const COUNT_TYPES: [keyof DriveCounts, EventType][] = [
   ['speeding', 'speeding'],
-  ['pickups', 'phone_pickup'],
   ['hardBrake', 'hard_brake'],
   ['hardAccel', 'hard_accel'],
   ['hardCorner', 'hard_corner'],
@@ -29,29 +30,29 @@ export function eventTally(counts: DriveCounts): { type: EventType; n: number }[
   return COUNT_TYPES.filter(([k]) => counts[k] > 0).map(([k, type]) => ({ type, n: counts[k] }));
 }
 
-function spokenPoints(n: number): string {
-  if (n > 0) return `${n} points earned`;
-  if (n < 0) return `${Math.abs(n)} points lost`;
-  return 'no points';
-}
-
-/** One drive in a list: when, where, a route sketch, distance, net points and its events. */
-export function DriveRow({ drive, onPress, testID }: { drive: LocalDrive; onPress: () => void; testID?: string }) {
+/**
+ * One drive in a list: when, where, a route sketch, distance, time and its events, with its score
+ * at the right in its merit tier's colour (no icon; "not synced" under a drive still to upload), or
+ * the word for why it has none. `score` is the drive's (`useDriveScores`); absent while it loads.
+ */
+export function DriveRow({ drive, score, onPress, testID }: { drive: LocalDrive; score?: number | null; onPress: () => void; testID?: string }) {
   const t = useTheme();
   const units = useUnits();
   const runs = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
-  const state = pointsState(drive);
-  const word = pointsWord(state);
+  const kind = driveKind(drive);
+  const scorable = kind.kind === 'scorable';
+  const value = scorable && typeof score === 'number' ? score : null;
+  const word = scorable ? (score === null ? stateWord({ kind: 'not_scored' }) : null) : stateWord(kind);
+  const tier = value === null ? null : driveMerit(value, drive.miles);
+  const ink = tier === null ? t.colors.text : meritInk(tier, [t.colors.surface, t.colors.surfaceRaised]);
   const tally = eventTally(drive.counts);
-  const value = state.kind === 'points' ? state.value : null;
-  const tone = value === null || value === 0 ? t.colors.textMuted : value > 0 ? t.colors.signal.clean.text : t.colors.signal.severe.text;
-  const clean = drive.clean === true && tally.length === 0 && state.kind === 'points';
+  const clean = drive.clean === true && tally.length === 0 && scorable;
 
   const spoken = [
     formatWhen(drive.startedAt),
     spokenRoute(drive),
     formatDistance(drive.miles, units, { spoken: true }),
-    value !== null ? spokenPoints(value) + (state.kind === 'points' && state.estimate ? ', estimate' : '') : word,
+    value !== null ? `drive score ${value}${kind.kind === 'scorable' && kind.notSynced ? ', not synced' : ''}` : word,
     clean ? 'clean drive' : tally.map((x) => `${x.n} ${EVENT_LABEL[x.type].toLowerCase()}`).join(', ') || null,
   ]
     .filter(Boolean)
@@ -110,18 +111,18 @@ export function DriveRow({ drive, onPress, testID }: { drive: LocalDrive; onPres
       <View style={{ alignItems: 'flex-end' }}>
         {value !== null ? (
           <>
-            <Text variant="stat" style={{ color: tone }} testID={testID ? `${testID}-points` : undefined}>
-              {signedPoints(value)}
+            <Text variant="stat" style={{ color: ink }} testID={testID ? `${testID}-score` : undefined}>
+              {value}
             </Text>
-            <Text variant="label" tone="subtle">
-              {state.kind === 'points' && state.estimate ? 'est. pts' : 'pts'}
+            <Text variant="label" tone="subtle" style={{ textTransform: 'none' }}>
+              {kind.kind === 'scorable' && kind.notSynced ? recapCopy.history.notSynced : recapCopy.history.score}
             </Text>
           </>
-        ) : (
+        ) : word ? (
           <Text variant="footnote" tone="muted" testID={testID ? `${testID}-word` : undefined}>
             {word}
           </Text>
-        )}
+        ) : null}
       </View>
     </Pressable>
   );
