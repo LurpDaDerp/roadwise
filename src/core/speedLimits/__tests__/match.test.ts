@@ -134,9 +134,24 @@ describe('matchLimit — parallel roads', () => {
     expect(r).toMatchObject({ key: 'osm:main', limitMph: 35, matchConfidence: 0.6, parallelRoads: true });
   });
 
-  it('a different class at the same limit is still a parallel road', () => {
-    const r = matchLimit(90, [cand({ distanceM: 3 }), cand({ distanceM: 6, highway: 'tertiary' })]);
-    expect(r).toMatchObject({ matchConfidence: 0.6, parallelRoads: true });
+  it('a different class at the same posted limit is not: the limit is the same on either road', () => {
+    // Pacific Highway (trunk, 45 mph, OSM way 428074289) and its 45 mph ramp (way 289492489) at the gore.
+    const r = matchLimit(90, [
+      cand({ key: 'osm:428074289', distanceM: 2, limitMph: 45, highway: 'trunk' }),
+      cand({ key: 'osm:289492489', distanceM: 3, limitMph: 45, highway: 'trunk_link' }),
+    ]);
+    expect(r).toMatchObject({ key: 'osm:428074289', limitMph: 45, matchConfidence: 0.95, parallelRoads: false });
+  });
+
+  it('two untagged roads of different classes are: their defaults may differ', () => {
+    const r = matchLimit(90, [cand({ distanceM: 3, limitMph: null, highway: 'tertiary' }), cand({ distanceM: 6, limitMph: null, highway: 'residential' })]);
+    expect(r).toMatchObject({ source: 'statutory', limitMph: 35, matchConfidence: 0.6, parallelRoads: true });
+  });
+
+  it('a posted road beside an untagged one is: the untagged road could carry any limit', () => {
+    // I-5 (motorway, 60 mph) with an untagged ramp 9.7 m away (ways 623957745, 454826562).
+    const r = matchLimit(90, [cand({ distanceM: 1, limitMph: 60, highway: 'motorway' }), cand({ distanceM: 9.7, limitMph: null, highway: 'motorway_link' })]);
+    expect(r).toMatchObject({ limitMph: 60, matchConfidence: 0.6, parallelRoads: true });
   });
 
   it('the same limit and class (a split way, the other half of the road) is not', () => {

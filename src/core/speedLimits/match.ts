@@ -229,11 +229,15 @@ function matchNearest(course: number, nearest: readonly Candidate[]): MatchResul
   }
 
   const ownLimit = validLimit(road.limitMph);
+  // A road within the margin makes the match ambiguous when the car on it could face another
+  // limit: a different posted one, or, with both untagged, another class (whose default may
+  // differ). The same posted limit on both leaves nothing to tell apart (a trunk and its 45 mph
+  // ramp at the gore), whichever road the car is on.
   const parallel = roads.some(
     (o) =>
       o.key !== road.key &&
       o.distanceM <= road.distanceM + MATCH.PARALLEL_MARGIN_M &&
-      (validLimit(o.limitMph) !== ownLimit || o.highway !== road.highway)
+      (validLimit(o.limitMph) !== ownLimit || (ownLimit === null && o.highway !== road.highway))
   );
   const base = Math.min(
     distanceConf(road.distanceM),
