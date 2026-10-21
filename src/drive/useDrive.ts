@@ -2,6 +2,7 @@
 import type { EventType, Tier } from '@scoring';
 import { useCallback, useContext, useMemo } from 'react';
 
+import type { Deduction } from '@/core/engine/engine.types';
 import type { DropReason } from '@/core/engine/finalize';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
@@ -53,6 +54,17 @@ export interface DriveLive {
   /** The limit the sign shows (the last one held up to 10 s through a row without one); null → "-". */
   limitMph: number | null;
   speedingTier: Tier | null;
+  /**
+   * The current row's speed over the posted limit speeding is judged on (1 = at the limit), on a row
+   * the speeding detector can use; else null. The halo's tint.
+   */
+  speedingRatio: number | null;
+  /** The current row is over the points line (L + T): the halo pulses. */
+  speedingOver: boolean;
+  /** The last GPS course (degrees clockwise from true north) taken at 5 mph or more, held; null before the first. */
+  courseDeg: number | null;
+  /** The latest points-off estimate; the halo shakes on each new `key`. Null before the first of the drive. */
+  lastDeduction: Deduction | null;
   stopped: boolean;
   lastAlert: { type: EventType; tier: Tier; at: number } | null;
   /** The dangerous-weather alert near the car (plan D14), or null. */
@@ -72,6 +84,10 @@ const selectLive = (s: DriveState) => ({
   rowSpeedMph: s.rowSpeedMps === null ? null : Math.round(mpsToMph(s.rowSpeedMps) * 10) / 10,
   limitMph: s.limitMph,
   speedingTier: s.speedingTier,
+  speedingRatio: s.speedingRatio,
+  speedingOver: s.speedingOver,
+  courseDeg: s.courseDeg,
+  lastDeduction: s.lastDeduction,
   stopped: s.stopped,
   lastAlert: s.lastAlert,
   points: s.points,
@@ -99,6 +115,13 @@ const selectShown = (s: DriveState): ShownSpeed => ({
 /** The halo's number alone: it changes with every fix, so only the readout reads it. */
 export function useShownSpeed(): ShownSpeed {
   return useDrive(selectShown);
+}
+
+const selectHeading = (s: DriveState): number | null => s.courseDeg ?? null;
+
+/** The compass's heading alone (`DriveLive.courseDeg`): degrees clockwise from true north, or null. */
+export function useHeading(): number | null {
+  return useDrive(selectHeading);
 }
 
 /** The weather leg: changes once per refetch distance, so the odometer never re-renders the HUD per row. */

@@ -20,6 +20,7 @@ export function createDetectors(newId: () => string): DetectorSuite {
     push: (row, limit, ctx) => detectors.flatMap((d) => d.push(row, limit, ctx)),
     flush: () => detectors.flatMap((d) => d.flush()),
     openSpeeding: () => speeding.open(),
+    speedingNow: () => speeding.reading(),
     openPhone: () => phone.open(),
     unsafe: () => speeding.active() || phone.active(),
     lockProof: () => phone.lockProof(),

@@ -138,10 +138,23 @@ export interface OpenEpisode {
   phase?: 'switching' | 'hold' | null;
 }
 
+/** What the speeding detector read on its latest row, when it could use the row. */
+export interface SpeedingReading {
+  /** The row's speed over the posted limit it is judged on (1 = at the limit). */
+  ratio: number;
+  /** mph past the points line (L + T): over the line when above 0. */
+  overMph: number;
+}
+
 /** Every detector behind one `push`/`flush`, plus what the engine reads per row. */
 export interface DetectorSuite extends Detector {
   /** The speeding episode in progress on the latest row, if any. */
   openSpeeding(): OpenEpisode | null;
+  /**
+   * The speeding detector's reading of the latest row: null when it could not use it (no posted
+   * limit it acts on, an unknown or untrusted speed, a poor fix, the warm-up).
+   */
+  speedingNow(): SpeedingReading | null;
   /** The phone episode in progress on the latest row, if any. */
   openPhone(): OpenEpisode | null;
   /** A speeding or phone episode is active on the latest row: its distance is not safe miles. */

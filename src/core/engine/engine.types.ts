@@ -161,6 +161,22 @@ export interface AlertEvent {
   words?: 'switch';
 }
 
+/**
+ * Points coming off, as the engine estimates them on the row it happens: a hard brake, start or turn
+ * or a phone pickup as it alerts (its base cost, the phone speed multiplier included), each later
+ * phone-handling alert (the units since the last), a speeding episode at the end of its grace and at
+ * each later speeding repeat (the points accrued since the last, from `speedingCost`). Never a
+ * DashPal alert (decided at the end).
+ */
+export interface Deduction {
+  /** Unique per deduction in a drive. */
+  key: string;
+  /** Whole points, at least 1. */
+  points: number;
+  /** epoch ms, row clock: the row it came off on. */
+  at: number;
+}
+
 export interface EngineSnapshot {
   status: EngineStatus;
   clientTripId: string | null;
@@ -194,6 +210,26 @@ export interface EngineSnapshot {
   limitMph: number | null;
   /** The speeding tier of the current row's episode, for the driving screen's halo. */
   speedingTier: Tier | null;
+  /**
+   * The current row's GPS speed over the posted limit speeding is judged on (`limitMphFor`: never a
+   * class default, a ramp's or a held display limit), on a row the speeding detector can use (a
+   * trusted speed on a good fix past the warm-up); null otherwise and when not recording. 1 is at
+   * the limit. The driving screen's halo tints from it.
+   */
+  speedingRatio: number | null;
+  /** The current row is over the points line (L + T): the halo pulses. False when not recording. */
+  speedingOver: boolean;
+  /**
+   * The last GPS course, degrees clockwise from true north, from a valid fix with a known course
+   * while moving at 5 mph or more (`COURSE_MIN_MPS`); held while slower or without a course; null
+   * before the drive's first and when not recording. The driving screen's compass.
+   */
+  courseDeg: number | null;
+  /**
+   * The latest moment points came off (an estimate, `Deduction`), or null before the first of the
+   * drive and when not recording. The driving screen shakes the halo on each new `key`.
+   */
+  lastDeduction: Deduction | null;
   /**
    * The confirmed phone episode's first use row (row clock), while it is open and recording; else
    * null (before confirmation, a parking-lot episode, no episode). The halo's distraction ramp.

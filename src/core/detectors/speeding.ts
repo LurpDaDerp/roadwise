@@ -7,7 +7,7 @@
 // it). Only a confirmed episode takes miles out of the safe miles.
 import { speedTier, speedTolerance, SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, SPEEDING_MIN_S, type Tier } from '@scoring';
 
-import type { DetectedEvent, Detector, OpenEpisode } from '../engine/types';
+import type { DetectedEvent, Detector, OpenEpisode, SpeedingReading } from '../engine/types';
 import { knownSpeedMph, limitMphFor, round1, rowEligible, speedTrusted } from './common';
 
 const RANK: Record<Tier, number> = { minor: 0, moderate: 1, severe: 2 };
@@ -33,10 +33,13 @@ export interface SpeedingDetector extends Detector {
   open(): OpenEpisode | null;
   /** A confirmed episode is open (its end window included): the row's distance is not safe miles. */
   active(): boolean;
+  /** The latest row's reading, or null when the row was not usable. */
+  reading(): SpeedingReading | null;
 }
 
 export function createSpeedingDetector(newId: () => string): SpeedingDetector {
   let ep: Episode | null = null;
+  let now: SpeedingReading | null = null;
 
   const close = (): DetectedEvent[] => {
     const e = ep;
@@ -60,6 +63,7 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
       const speedMph = knownSpeedMph(row);
       const usable = limitMph !== null && speedMph !== null && speedTrusted(row) && rowEligible(row, ctx);
       const tier = usable ? speedTier(speedMph, limitMph) : null;
+      now = usable ? { ratio: speedMph / limitMph, overMph: speedMph - (limitMph + speedTolerance(limitMph)) } : null;
 
       if (tier !== null && usable) {
         if (ep === null) {
@@ -107,5 +111,6 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
       return { id: ep.id, type: 'speeding', tier: ep.current, startedAt: ep.startedAt, confirmed: ep.confirmed };
     },
     active: () => ep !== null && ep.confirmed,
+    reading: () => now,
   };
 }

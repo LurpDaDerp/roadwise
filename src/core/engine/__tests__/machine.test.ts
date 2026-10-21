@@ -250,3 +250,62 @@ test('a `speed` fix moves the shown speed at once, only while recording; the row
   h.engine.speed({ at: T0 + 34_000, mps: mph(30), acc: 0.5, hAcc: 5 });
   expect(h.engine.snapshot()).toMatchObject({ status: 'idle', speedKnown: false });
 });
+
+describe('the driving screen contract', () => {
+  test('courseDeg: the GPS course at 5 mph or more, held while slower, without a course or a fix; null when not recording', async () => {
+    const h = harness();
+    expect(h.engine.snapshot().courseDeg).toBeNull();
+    await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+    expect(h.engine.snapshot().courseDeg).toBeNull();
+    // Slower than 5 mph: no course yet, whatever the fix says.
+    await feed(h, [row({ speed: mph(4), course: 45, ts: T0 + 1000 })]);
+    expect(h.engine.snapshot().courseDeg).toBeNull();
+    await feed(h, [row({ speed: mph(5), course: 45, ts: T0 + 2000 })]);
+    expect(h.engine.snapshot().courseDeg).toBe(45);
+    // Held: a crawl, an unknown course (-1), a lost fix, an unknown speed.
+    await feed(h, [row({ speed: mph(2), course: 200, ts: T0 + 3000 })]);
+    await feed(h, [row({ speed: mph(30), course: -1, ts: T0 + 4000 })]);
+    await feed(h, [row({ speed: mph(30), course: 300, gnssValid: false, ts: T0 + 5000 })]);
+    await feed(h, [row({ speed: -1, course: 300, ts: T0 + 6000 })]);
+    expect(h.engine.snapshot().courseDeg).toBe(45);
+    await feed(h, [row({ speed: mph(30), course: 359.5, ts: T0 + 7000 })]);
+    expect(h.engine.snapshot().courseDeg).toBe(359.5);
+    await h.engine.dispatch({ type: 'end', ts: T0 + 8000 });
+    expect(h.engine.snapshot().courseDeg).toBeNull();
+    // The next drive starts without one.
+    await h.engine.dispatch({ type: 'start', ts: T0 + 9000, continues: false });
+    expect(h.engine.snapshot().courseDeg).toBeNull();
+  });
+
+  test('speedingRatio and speedingOver: the row speed over the posted limit it is judged on; over from the points line', async () => {
+    const h = harness();
+    await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+    // In the warm-up (a start from a standstill) the detector cannot use the row: no ratio.
+    await feed(h, [row({ speed: 0, ts: T0 + 1000 }), row({ speed: mph(42), ts: T0 + 2000 })]);
+    expect(h.engine.snapshot()).toMatchObject({ speedingRatio: null, speedingOver: false });
+    // 35 on a 35: at the limit, not over the line (L + T = 39).
+    await feed(h, after(1, { speed: mph(35) }));
+    expect(h.engine.snapshot().speedingRatio).toBeCloseTo(1, 9);
+    expect(h.engine.snapshot().speedingOver).toBe(false);
+    await feed(h, seq([1, { speed: mph(39), ts: T0 + 32_000 }]));
+    expect(h.engine.snapshot().speedingRatio).toBeCloseTo(39 / 35, 9);
+    expect(h.engine.snapshot().speedingOver).toBe(false);
+    await feed(h, seq([1, { speed: mph(39.5), ts: T0 + 33_000 }]));
+    expect(h.engine.snapshot().speedingRatio).toBeCloseTo(39.5 / 35, 9);
+    expect(h.engine.snapshot().speedingOver).toBe(true);
+    // An untrusted speed, a poor fix: not a usable row.
+    await feed(h, seq([1, { speed: mph(45), speedAcc: 3, ts: T0 + 34_000 }]));
+    expect(h.engine.snapshot()).toMatchObject({ speedingRatio: null, speedingOver: false });
+    await feed(h, seq([1, { speed: mph(45), hAcc: 40, ts: T0 + 35_000 }]));
+    expect(h.engine.snapshot()).toMatchObject({ speedingRatio: null, speedingOver: false });
+    await h.engine.dispatch({ type: 'end', ts: T0 + 36_000 });
+    expect(h.engine.snapshot()).toMatchObject({ speedingRatio: null, speedingOver: false, lastDeduction: null });
+  });
+
+  test('a class default is shown on the sign but never tints: no ratio', async () => {
+    const h = harness({ limits: { lookup: () => limit(mph(35), 'statutory'), prefetch: () => {} } });
+    await h.engine.dispatch({ type: 'start', ts: T0, continues: false });
+    await feed(h, after(2, { speed: mph(50) }));
+    expect(h.engine.snapshot()).toMatchObject({ limitMph: 35, speedingRatio: null, speedingOver: false });
+  });
+});

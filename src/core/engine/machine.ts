@@ -19,7 +19,7 @@ import { MAX_DRIVE_MS } from '@/data/sync/payload';
 
 import type { MotionActivity } from '@drive-sense';
 
-import type { AdoptedTrip, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
+import type { AdoptedTrip, Deduction, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, TripSession } from './engine.types';
 import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './displayLimit';
 import { displayFix, displayRow, type DisplaySpeed } from './displaySpeed';
 import { footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS, WALK_STALE_FIX_MS } from './motion';
@@ -50,6 +50,8 @@ export const HANDLING_ALERT_MS = 15_000;
 export const HANDLING_AFTER_PICKUP_MS = 10_000;
 /** While a counted screen switch goes on, the handling alert ("Back to RoadWise") repeats this often. */
 export const SWITCH_REPEAT_ALERT_MS = 60_000;
+/** The compass takes the GPS course only at this speed or faster (5 mph): slower, the course is noise and the last one holds. */
+export const COURSE_MIN_MPS = 5 * MPS_PER_MPH;
 
 interface Seen {
   row: FeatureRow;
@@ -75,6 +77,10 @@ export function createEngine(deps: EngineDeps): Engine {
   let foot: { since: number; at: number } | null = null;
   let prefetchedAtM: number | null = null;
   let lastAlert: EngineSnapshot['lastAlert'] = null;
+  /** The latest points-off estimate (`Deduction`), or null. */
+  let lastDeduction: Deduction | null = null;
+  /** The last GPS course taken (`COURSE_MIN_MPS`), held until the next. */
+  let course: number | null = null;
   /** Episodes already alerted: one chime per speeding episode, one pickup and one handling alert per phone episode. */
   let chimed: string | null = null;
   let pickupAlerted: string | null = null;
@@ -117,8 +123,10 @@ export function createEngine(deps: EngineDeps): Engine {
   function snapshot(): EngineSnapshot {
     const row = seen?.row ?? null;
     const speed = row === null ? null : knownSpeed(row);
+    const recording = status === 'recording';
     const open = suite?.openSpeeding() ?? null;
     const phone = suite?.openPhone() ?? null;
+    const reading = recording ? (suite?.speedingNow() ?? null) : null;
     return Object.freeze({
       status,
       clientTripId: session?.clientTripId ?? null,
@@ -132,7 +140,11 @@ export function createEngine(deps: EngineDeps): Engine {
       rowSpeedMps: speed,
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
       limitMph: shownLimit.mph,
-      speedingTier: status === 'recording' && open !== null ? open.tier : null,
+      speedingTier: recording && open !== null ? open.tier : null,
+      speedingRatio: reading === null ? null : reading.ratio,
+      speedingOver: recording && open !== null,
+      courseDeg: recording ? course : null,
+      lastDeduction: recording ? lastDeduction : null,
       phoneUseSince: status === 'recording' && phone !== null && phone.confirmed ? phone.startedAt : null,
       stopped: status === 'recording' && speed !== null && speed <= STOPPED_MPS,
       autoEndAt: status === 'recording' && session !== null ? autoEndAt(session) : null,
@@ -152,6 +164,8 @@ export function createEngine(deps: EngineDeps): Engine {
     foot = null;
     prefetchedAtM = null;
     lastAlert = null;
+    lastDeduction = null;
+    course = null;
     chimed = null;
     pickupAlerted = null;
     handlingAlerted = null;
@@ -195,6 +209,8 @@ export function createEngine(deps: EngineDeps): Engine {
     // The sign's number: a posted limit or a confident class default. The detectors judge the row
     // against `limit` themselves (`limitMphFor`), which refuses a default.
     seen = { row, limit, limitMph: limitShownMph(row, limit) };
+    const speedMps = knownSpeed(row);
+    if (row.course >= 0 && row.course <= 360 && speedMps !== null && speedMps >= COURSE_MIN_MPS) course = row.course % 360;
     shown = displayRow(shown, row, knownSpeed(row));
     shownLimit = nextDisplayLimit(shownLimit, row.ts, seen.limitMph);
     touch();
