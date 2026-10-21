@@ -36,4 +36,17 @@ export {
   toLocalDrive,
   toLocalDriveEvent,
 } from '@/data/queries/rows';
+export {
+  hiddenByZone,
+  middleOf,
+  readSpotInputs,
+  readSpotsView,
+  readWatchSpots,
+  SPOT_READ,
+  toProblemSpot,
+  useSpots,
+  type ProblemSpot,
+  type SpotInputs,
+  type SpotsView,
+} from '@/data/queries/spots';
 export { markNotDriving, reportEvent, type DriveActionDeps } from '@/data/sync/driveActions';

@@ -8,7 +8,7 @@
  *
  * - the sync runner wakes on `enqueue` and `finalize` (there is new work), and ignores `sync` (its
  *   own pass) and `hydrate` (nothing was queued);
- * - the query cache invalidates on all four.
+ * - the query cache invalidates on all of them (on `spots`, only the spots view).
  *
  * **Delivery is on a macrotask, never inline.** The callers that matter emit from inside, or at
  * the very end of, a write: `finalizeTrip` enqueues inside the transaction that writes the trip
@@ -24,8 +24,11 @@
  * and the rest still hear the event, so an invalidation bug cannot fail the drain that fired it.
  */
 
-/** What moved the rows. `wipe`: a sign-out, a handover or a deleted account emptied the phone. */
-export type ChangeSource = 'enqueue' | 'sync' | 'hydrate' | 'finalize' | 'wipe';
+/**
+ * What moved the rows. `wipe`: a sign-out, a handover or a deleted account emptied the phone.
+ * `spots`: the problem spots were recomputed (only the spots moved).
+ */
+export type ChangeSource = 'enqueue' | 'sync' | 'hydrate' | 'finalize' | 'wipe' | 'spots';
 
 /** What a drain pass settled — the counts a `sync` change carries. */
 export type SyncApplied = Readonly<{ done: number; failed: number; deferred: number }>;

@@ -9,9 +9,13 @@ import { queryKeys, QUERY_ROOTS } from '@/data/queries/keys';
 
 const ignore = () => undefined;
 
-/** Everything this layer caches is now suspect. */
-export async function invalidateAfterSync(queryClient: QueryClient, _change?: DataChange): Promise<void> {
-  await Promise.all(QUERY_ROOTS.map((root) => queryClient.invalidateQueries({ queryKey: [root] }).catch(ignore)));
+/**
+ * Everything this layer caches is now suspect, except after a spots recompute: it moved only the
+ * spots, so only they refresh.
+ */
+export async function invalidateAfterSync(queryClient: QueryClient, change?: DataChange): Promise<void> {
+  const roots = change?.source === 'spots' ? (['spots'] as const) : QUERY_ROOTS;
+  await Promise.all(roots.map((root) => queryClient.invalidateQueries({ queryKey: [root] }).catch(ignore)));
 }
 
 /** One drive changed: its detail, and every list and aggregate it appears in. */

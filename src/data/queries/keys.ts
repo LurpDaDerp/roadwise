@@ -14,8 +14,10 @@ export const queryKeys = {
   routes: (sinceMs: number | null) => ['routes', sinceMs] as const,
   windowEvents: (sinceMs: number | null) => ['stats', 'events', sinceMs] as const,
   scoredDrives: (sinceMs: number | null) => ['stats', 'drives', sinceMs] as const,
+  /** The problem spots view (Analytics' card and sheet). */
+  spots: () => ['spots'] as const,
 };
 
-/** Every root the data layer owns; a change event refreshes them all. */
-export const QUERY_ROOTS = ['drives', 'drive', 'stats', 'driveCount', 'routes'] as const;
+/** Every root the data layer owns; a change event refreshes them all (a `spots` change only `spots`). */
+export const QUERY_ROOTS = ['drives', 'drive', 'stats', 'driveCount', 'routes', 'spots'] as const;
 export type QueryRoot = (typeof QUERY_ROOTS)[number];

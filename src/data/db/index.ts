@@ -8,6 +8,7 @@ export { createEventsRepo, type EventsRepo } from '@/data/db/events';
 export { backoffSeconds, createQueueRepo, MAX_ATTEMPTS, RECLAIM_AFTER_S, REFUSED_NEVER, type QueueRepo } from '@/data/db/queue';
 export { createSamplesRepo, type SamplesRepo } from '@/data/db/samples';
 export { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
+export { createSpotsRepo, parseSpotsMeta, SPOT_LABEL_CARRY_M, SPOTS_META_KEY, toProblemSpotRow, type SpotsMeta, type SpotsRepo } from '@/data/db/spots';
 export { createTilesRepo, type TilesRepo } from '@/data/db/tiles';
 export { assertTripExists, createTripsRepo, type TripListOptions, type TripsRepo } from '@/data/db/trips';
 
@@ -20,7 +21,9 @@ export type {
   EventStatus,
   Flag,
   NewEvent,
+  NewProblemSpot,
   NewTrip,
+  ProblemSpotRow,
   QueueItem,
   QueueStatus,
   SampleRow,
