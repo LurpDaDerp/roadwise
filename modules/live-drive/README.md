@@ -1,39 +1,60 @@
 # live-drive — the iOS Live Activity / Dynamic Island
 
-Local Expo module (plan §6; spec "Driving screen · Background") that shows the drive in progress
-on the lock screen and in the Dynamic Island: speed (large), a round speed-limit sign, and the
-points line only when points are present (the host sends them only while stopped). iOS 16.2+;
-everywhere else (older iOS, Android, Jest, web) every method is a no-op that resolves.
+Local Expo module (plan §3.1.3, §3.10) that shows the drive in progress on the lock screen and in
+the Dynamic Island: the speed, coloured as the driving screen colours it when over the limit (never
+pulsing), the speed limit in the driving screen's sign style, a dangerous-weather line when the
+driving screen has an alert, and the words "Not driving?" while that option is still available.
+iOS 16.2+; everywhere else (older iOS, Android, Jest, web) every method is a no-op that resolves.
 
 ```
 modules/live-drive/
   src/{types,index,fake}.ts      the JS contract, the wrapper, the test fake
-  ios/LiveDriveModule.swift      Expo module: isSupported / start / update / end
-  ios/LiveDriveController.swift  one Activity<LiveDriveAttributes>; observes roadwise.driveDisplay
+  ios/LiveDriveModule.swift      Expo module: isSupported / isRunning / getPushToStartToken /
+                                 start / update / end; the pushToStartToken event
+  ios/LiveDriveController.swift  one Activity<LiveDriveAttributes>: adopts, never replaces;
+                                 observes roadwise.driveDisplay; the push-to-start token stream
+  ios/LiveDriveAppDelegate.swift creates the controller at launch (every process)
   ios/LiveDriveAttributes.swift  ActivityAttributes — byte-identical copy in the widget target
 targets/live-drive-widget/       the widget extension (@bacons/apple-targets): expo-target.config.js,
-                                 Info.plist, LiveDriveAttributes.swift, LiveDriveWidgetBundle.swift
+                                 Info.plist, LiveDriveAttributes.swift, LiveDriveWidgetBundle.swift,
+                                 WeatherSymbol.swift
 ```
 
 ## API (`src/types.ts` is binding)
 
-| Method | Behaviour |
+| Method / event | Behaviour |
 |---|---|
 | `isSupported()` | iOS 16.2+ and Live Activities enabled for the app in Settings; `false` elsewhere. |
-| `start(state)` | Start the activity with `state` (`LiveDriveState`: `{ speed, limit, unit, points, pointsDelta, stopped }`). **Only ever called by a drive start.** Ends any activity still running first. Resolves whether an activity is now running — `false` when unsupported, disabled, or refused by the system; the drive goes on regardless. |
-| `update(state)` | Update the running activity; a no-op without one. |
-| `end()` | End the running activity at once; a no-op without one. Called on drive end or abort. |
+| `isRunning()` | An activity shows the drive now: one started here, adopted at launch, or started by a push. |
+| `getPushToStartToken()` | The push-to-start token (lowercase hex, iOS 17.2+) the phone last received, persisted under `livedrive.pushToStartToken`; `null` before one arrived or below 17.2. |
+| `start(state)` | Shows the drive. A running activity (a push-started one included) is **updated, never replaced**; else one is requested. Resolves whether one now runs: `false` when unsupported, disabled, or refused (iOS refuses a request from the background); the drive goes on regardless. |
+| `update(state)` | Updates the running activity; a no-op without one. |
+| `end()` | Ends the running activity at once; a no-op without one. Called on drive end or cancel. |
+| `pushToStartToken` event | `{ token }` each time iOS hands the app a new push-to-start token (iOS 17.2+). The app registers it with RoadWise's server (`register_device`), which starts the activity by APNs for a drive that starts with the app in the background. |
 
-The module also **ends every stale activity at creation** (`OnCreate`): nothing from an earlier
-process may linger. `DriveSense.setDriveDisplay(state)` reaches the activity too — drive-sense
-posts the process-local `roadwise.driveDisplay` notification, which the controller maps to a
-content state (`ended: true` ends it) — so the host needs one call per update, not two. Every
-content carries a `staleDate` 120 s out: with no update for that long (the app was killed) the
-widget blanks the speed and points (`context.isStale`), and a native `stopCapture` (JS, or the
-watchdog) posts `ended` so the activity never outlives its capture.
+`LiveDriveState`: `speed`, `limit` (in `unit`; `null` shows "-"), `unit` (`mph` draws the US SPEED
+LIMIT plate, `km/h` the round red-ringed sign), `speedTint` ("#RRGGBB", the driving screen's numeral
+at its speeding tint; `null` = white), `speeding` (VoiceOver only), `notDrivingAvailable` (the hint
+shows), `weatherKind` / `weatherText` (a `DangerKind` id and its line, `null` = no line), and the
+app's sky (`skyTop`, `skyMid`, `skyLow`, `accent`). A bad state rejects
+(`LiveDrive.<method>: invalid state …`) on every platform: the caller has a bug whatever the device.
+Nothing else rejects; a token that is not hex is dropped.
 
-A bad `state` rejects (`LiveDrive.<method>: invalid state …`) on every platform: the caller has a
-bug whatever the device. Nothing else rejects.
+## Adoption, not replacement
+
+At launch (`LiveDriveAppDelegate`) and at module creation the controller adopts a running activity
+while a drive is open — `UserDefaults "drivesense.captureOpen"`, the one key shared with drive-sense
+— and ends any other; with no drive open every activity is stale and ends. A push-started activity
+arrives through `Activity.activityUpdates` and is adopted the same way (a duplicate is ended).
+`DriveSense.setDriveDisplay(state)` reaches the activity too — drive-sense posts the process-local
+`roadwise.driveDisplay` notification, which the controller maps to a content state (`ended: true`
+ends it) — and every drive end or cancel in drive-sense posts `ended`, so the activity never
+outlives its drive. Every content carries a `staleDate` 120 s out: with no update for that long (the
+app was killed) the widget shows "-" and hides the hint and the weather line (`context.isStale`).
+
+Whenever the running activity changes the controller posts `roadwise.liveActivity`
+(`["running": Bool]`), and an activity that runs takes drive-sense's "Recording your drive" note
+(`roadwise.driveRecording`) down: the driver sees the Live Activity or the note, never both.
 
 ## Widget
 
@@ -41,15 +62,20 @@ bug whatever the device. Nothing else rejects.
 WidgetKit + ActivityKit) in the navy/gold palette (`$widgetBackground` #001D3D, `$accent`
 #FFC300). `LiveDriveWidgetBundle.swift` renders:
 
-- **Lock screen:** speed (large, white, rounded digits) with the unit under it; the limit as a
-  round white sign with a gold ring; the points line in gold only when points are present.
-- **Dynamic Island, expanded:** speed (leading), limit sign (trailing), points (bottom) only when
-  stopped and present. **Compact:** speed | limit sign. **Minimal:** speed.
-- `—` for an unknown speed or limit. Nothing is interactive.
+- **Lock screen:** the speed (52 pt, tinted) with its unit, and the sign (56 pt tall); under them the
+  weather line (its SF Symbol and text, 13 pt semibold, white at 0.9) when there is one, and
+  "Not driving?" (13 pt semibold, white at 0.7, trailing) while it is available. The app's sky behind.
+- **Dynamic Island, expanded:** the speed (40) leading, the sign (44) trailing, and a bottom row with
+  the weather line and the hint, each only when present. **Compact:** the tinted speed and a mini
+  sign (a 16 × 20 plate with the number only in mph, the 20 pt round sign in km/h). **Minimal:** the
+  tinted speed.
+- `-` for an unknown speed or limit. A tap anywhere opens `roadwise://drive`. Nothing is interactive.
+- VoiceOver: "Speed 34 miles per hour" (", over the limit" while speeding), "Speed limit 35" /
+  "Speed limit unknown", the weather line as its text.
 
-`LiveDriveAttributes.swift` must stay byte-identical in `modules/live-drive/ios` and
-`targets/live-drive-widget` (ActivityKit matches the activity to its widget by that type);
-`__tests__/native-ios.test.ts` compares the two files.
+`WeatherSymbol.swift` maps every `DangerKind` (`src/features/weather/danger.ts`) to an SF Symbol
+available on iOS 16. `LiveDriveAttributes.swift` must stay byte-identical in `modules/live-drive/ios`
+and `targets/live-drive-widget`; `__tests__/native-ios.test.ts` compares the two files.
 
 `app.config.ts` loads `@bacons/apple-targets` and sets `NSSupportsLiveActivities: true`. The
 extension is signed with `ios.appleTeamId` (from `EXPO_APPLE_TEAM_ID`); without it, `npx expo

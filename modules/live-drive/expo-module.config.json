@@ -1,6 +1,7 @@
 {
   "platforms": ["apple"],
   "apple": {
-    "modules": ["LiveDriveModule"]
+    "modules": ["LiveDriveModule"],
+    "appDelegateSubscribers": ["LiveDriveAppDelegate"]
   }
 }

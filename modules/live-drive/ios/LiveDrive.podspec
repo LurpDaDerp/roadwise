@@ -17,5 +17,7 @@ Pod::Spec.new do |s|
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
   s.weak_frameworks = 'ActivityKit'
+  # Taking drive-sense's "Recording your drive" note down once an activity runs.
+  s.frameworks = 'UserNotifications'
   s.source_files = '**/*.{h,m,mm,swift}'
 end

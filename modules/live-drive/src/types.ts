@@ -1,20 +1,24 @@
-// The live-drive contract (plan §6): the iOS Live Activity / Dynamic Island that mirrors the
-// driving screen while the app is in the background. iOS 16.2+ only; everywhere else every method
-// is a no-op that resolves (`isSupported()` false, `start()` false).
+// The live-drive contract (plan §3.1.3, §3.10): the iOS Live Activity / Dynamic Island that shows the
+// drive in progress on the lock screen. iOS 16.2+ only; everywhere else every method is a no-op
+// that resolves (`isSupported()`, `isRunning()` and `start()` false, no token) and no event comes.
 
 /** The Live Activity's content (`LiveDriveAttributes.ContentState` in Swift, field for field). */
 export interface LiveDriveState {
-  /** current speed in `unit`; null shows "—" */
+  /** current speed in `unit`; null shows "-" */
   speed: number | null;
-  /** posted limit in `unit`; null shows "—" */
+  /** posted limit in `unit`; null shows "-" */
   limit: number | null;
+  /** also the sign's style: "mph" the US SPEED LIMIT plate, "km/h" the round red-ringed sign */
   unit: 'mph' | 'km/h';
-  /** shown only when non-null (the host passes it only while stopped) */
-  points: number | null;
-  /** change since the last stop; not shown (the host sends null) */
-  pointsDelta: number | null;
-  /** ≤ 5 mph: the expanded island adds the points line */
-  stopped: boolean;
+  /** the driving screen's numeral colour at its speeding tint ("#RRGGBB"); null = white */
+  speedTint: string | null;
+  /** over the limit now (VoiceOver only) */
+  speeding: boolean;
+  /** the "Not driving?" hint shows */
+  notDrivingAvailable: boolean;
+  /** the driving screen's dangerous-weather alert: a `DangerKind` id and its line ("Heavy rain"); null = none */
+  weatherKind: string | null;
+  weatherText: string | null;
   /** the app's sky, "#RRGGBB" top to bottom: the lock screen's gradient; null or absent: navy */
   skyTop?: string | null;
   skyMid?: string | null;
@@ -23,23 +27,43 @@ export interface LiveDriveState {
   accent?: string | null;
 }
 
-export const LIVE_DRIVE_METHODS = ['isSupported', 'start', 'update', 'end'] as const;
+export const LIVE_DRIVE_METHODS = ['isSupported', 'isRunning', 'getPushToStartToken', 'start', 'update', 'end'] as const;
+
+/** Keep identical to `Events(...)` in ios/LiveDriveModule.swift. */
+export const LIVE_DRIVE_EVENTS = ['pushToStartToken'] as const;
 
 export type LiveDriveMethod = (typeof LIVE_DRIVE_METHODS)[number];
+
+export type LiveDriveEvents = {
+  /** iOS 17.2+: a new push-to-start token, hex. */
+  pushToStartToken: { token: string };
+};
+
+export type LiveDriveEvent = keyof LiveDriveEvents;
+
+export interface LiveDriveSubscription {
+  remove(): void;
+}
 
 export interface LiveDriveApi {
   /** iOS 16.2+ with Live Activities enabled for the app in Settings; false elsewhere. */
   isSupported(): Promise<boolean>;
+  /** An activity shows the drive now (one started here, adopted, or started by a push). */
+  isRunning(): Promise<boolean>;
+  /** The push-to-start token (hex, iOS 17.2+) the phone last received, or null. */
+  getPushToStartToken(): Promise<string | null>;
   /**
-   * Start the activity with `state`. Only ever called by a drive start (plan §6). Ends any activity
-   * still running first. Resolves whether an activity is now running (false when unsupported,
-   * disabled by the user, or refused by the system — the drive goes on regardless).
+   * Show the drive with `state`: a running activity (a push-started one included) is updated, never
+   * replaced; else one is requested. Resolves whether one is now running (false when unsupported,
+   * disabled, or refused by the system, e.g. from the background; the drive goes on regardless).
    */
   start(state: LiveDriveState): Promise<boolean>;
   /** Update the running activity; a no-op without one. (`DriveSense.setDriveDisplay` reaches it too.) */
   update(state: LiveDriveState): Promise<void>;
-  /** End the running activity at once; a no-op without one. Called on drive end or abort. */
+  /** End the running activity at once; a no-op without one. Called on drive end or cancel. */
   end(): Promise<void>;
+  /** A token payload that is not hex is dropped. Inert without the native module. */
+  addListener<E extends LiveDriveEvent>(event: E, fn: (payload: LiveDriveEvents[E]) => void): LiveDriveSubscription;
 }
 
 export interface LiveDriveFakeControls {
@@ -47,6 +71,12 @@ export interface LiveDriveFakeControls {
   setSupported(supported: boolean): void;
   /** The running activity's state, or null. */
   readonly active: LiveDriveState | null;
-  /** Commands in order: `start`, `update`, `end` (plus `isSupported` as a query). */
+  /** An activity started by a push (it runs without `start`). */
+  pushStart(state: LiveDriveState): void;
+  /** What `getPushToStartToken` answers (default null). */
+  setToken(token: string | null): void;
+  /** A new token arrives: stored and sent to the `pushToStartToken` listeners. */
+  emitToken(token: string): void;
+  /** Commands in order: `start`, `update`, `end` (plus `isSupported`, `isRunning`, `getPushToStartToken` as queries). */
   calls: string[];
 }

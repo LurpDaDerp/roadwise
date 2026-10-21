@@ -1,6 +1,7 @@
-// LiveDrive — the Live Activity / Dynamic Island bridge (plan §6). iOS 16.2+; below that every
-// method is a no-op (`isSupported` false, `start` false). The widget that renders the activity is
-// the `live-drive-widget` target (/targets, linked by @bacons/apple-targets).
+// LiveDrive — the Live Activity / Dynamic Island bridge (plan §3.10). iOS 16.2+; below that every
+// method is a no-op (`isSupported`/`isRunning`/`start` false). The widget that renders the activity
+// is the `live-drive-widget` target (/targets, linked by @bacons/apple-targets). The push-to-start
+// token (iOS 17.2+) reaches JS as the `pushToStartToken` event and through `getPushToStartToken`.
 import ExpoModulesCore
 import Foundation
 
@@ -8,11 +9,19 @@ public final class LiveDriveModule: Module {
   public func definition() -> ModuleDefinition {
     Name("LiveDrive")
 
+    // Keep identical to LIVE_DRIVE_EVENTS in src/types.ts.
+    Events("pushToStartToken")
+
     OnCreate {
-      // A Live Activity never outlives its drive: whatever an earlier process left, end it now.
-      // (Also installs the controller's observer for drive-sense's `setDriveDisplay`.)
+      // Adopt a running activity while a drive is open (never end a pushed one); hand new tokens to JS.
       if #available(iOS 16.2, *) {
-        DispatchQueue.main.async { LiveDriveController.shared.endAll() }
+        DispatchQueue.main.async {
+          let controller = LiveDriveController.shared
+          controller.onToken = { [weak self] hex in
+            self?.sendEvent("pushToStartToken", ["token": hex])
+          }
+          controller.adoptRunning()
+        }
       }
     }
 
@@ -21,6 +30,20 @@ public final class LiveDriveModule: Module {
         return LiveDriveController.isSupported
       }
       return false
+    }.runOnQueue(.main)
+
+    AsyncFunction("isRunning") { () -> Bool in
+      if #available(iOS 16.2, *) {
+        return LiveDriveController.shared.isRunning()
+      }
+      return false
+    }.runOnQueue(.main)
+
+    AsyncFunction("getPushToStartToken") { () -> String? in
+      if #available(iOS 16.2, *) {
+        return LiveDriveController.pushToStartToken
+      }
+      return nil
     }.runOnQueue(.main)
 
     AsyncFunction("start") { (state: LiveDriveStateRecord) -> Bool in
@@ -49,9 +72,11 @@ struct LiveDriveStateRecord: Record {
   @Field var speed: Double?
   @Field var limit: Double?
   @Field var unit: String = "mph"
-  @Field var points: Double?
-  @Field var pointsDelta: Double?
-  @Field var stopped: Bool = false
+  @Field var speedTint: String?
+  @Field var speeding: Bool = false
+  @Field var notDrivingAvailable: Bool = false
+  @Field var weatherKind: String?
+  @Field var weatherText: String?
   @Field var skyTop: String?
   @Field var skyMid: String?
   @Field var skyLow: String?
@@ -63,9 +88,11 @@ struct LiveDriveStateRecord: Record {
       speed: speed,
       limit: limit,
       unit: unit == "km/h" ? "km/h" : "mph",
-      points: points,
-      pointsDelta: pointsDelta,
-      stopped: stopped,
+      speedTint: speedTint,
+      speeding: speeding,
+      notDrivingAvailable: notDrivingAvailable,
+      weatherKind: weatherKind,
+      weatherText: weatherText,
       skyTop: skyTop,
       skyMid: skyMid,
       skyLow: skyLow,
