@@ -5,11 +5,10 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { Avatar, avatarColorIndex, avatarInitials } from '@/ui/primitives/Avatar';
 import { Chip } from '@/ui/primitives/Chip';
+import { CountUp } from '@/ui/primitives/CountUp';
 import { EmptyState } from '@/ui/primitives/EmptyState';
-import { FreezeCount } from '@/ui/primitives/FreezeCount';
 import { IconButton } from '@/ui/primitives/IconButton';
 import { Pill } from '@/ui/primitives/Pill';
-import { formatPointsValue, PointsCounter } from '@/ui/primitives/PointsCounter';
 import { ProgressBar } from '@/ui/primitives/ProgressBar';
 import { ProgressRing } from '@/ui/primitives/ProgressRing';
 import { SectionHeader } from '@/ui/primitives/SectionHeader';
@@ -19,7 +18,6 @@ import { StepDots, StepTransition } from '@/ui/primitives/StepTransition';
 import { Button } from '@/ui/primitives/Button';
 import { Text } from '@/ui/primitives/Text';
 import { StatTile } from '@/ui/primitives/StatTile';
-import { StreakFlame } from '@/ui/primitives/StreakFlame';
 import { TierBadge } from '@/ui/primitives/TierBadge';
 import { ToggleRow } from '@/ui/primitives/ToggleRow';
 import { describeTrend, TrendArrow } from '@/ui/primitives/TrendArrow';
@@ -175,53 +173,29 @@ test('TrendArrow has a spoken default', async () => {
   expect(screen.getByLabelText('Down, worse')).toBeOnTheScreen();
 });
 
-describe('streak and freezes', () => {
-  test('StreakFlame says the count and multiplier', async () => {
-    await wrap(<StreakFlame count={11} multiplier={1.22} />);
-    expect(screen.getByLabelText('Streak 11 drives, multiplier 1.22')).toBeOnTheScreen();
-  });
-
-  test('an at-risk streak says so in words', async () => {
-    await wrap(<StreakFlame count={3} state="atRisk" />);
-    expect(screen.getByLabelText('Streak 3 drives, at risk')).toBeOnTheScreen();
-  });
-
-  test('FreezeCount clamps to its maximum', async () => {
-    await wrap(<FreezeCount count={5} />);
-    expect(screen.getByLabelText('3 of 3 freezes held')).toBeOnTheScreen();
-  });
-});
-
-describe('PointsCounter', () => {
-  test('formats with separators, a plus for gains and a true minus for losses', () => {
-    expect(formatPointsValue(1240)).toBe('1,240');
-    expect(formatPointsValue(167, true)).toBe('+167');
-    expect(formatPointsValue(-44, true)).toBe('−44');
-    expect(formatPointsValue(0, true)).toBe('0');
-  });
-
-  test('VoiceOver hears the final value at once, never the count', async () => {
-    await wrap(<PointsCounter value={167} from={0} signed label="Points earned" />, { still: false });
-    expect(screen.getByLabelText('Points earned: +167 points')).toBeOnTheScreen();
+describe('CountUp', () => {
+  test('VoiceOver hears the label and the final value at once, never the count', async () => {
+    await wrap(<CountUp value={92} from={0} suffix="/100" label="Drive score" />, { still: false });
+    expect(screen.getByLabelText('Drive score 92/100')).toBeOnTheScreen();
   });
 
   test('under reduce motion it shows the final number straight away', async () => {
-    await wrap(<PointsCounter value={1240} from={0} unit="" />, { still: true });
-    expect(screen.getByText('1,240')).toBeOnTheScreen();
+    await wrap(<CountUp value={87} from={0} />, { still: true });
+    expect(screen.getByText('87')).toBeOnTheScreen();
   });
 
-  test('a negative total is red', async () => {
-    await wrap(<PointsCounter value={-44} signed unit="" />);
-    expect(screen.getByText('−44')).toHaveStyle({ color: tokens.color.light.signal.severe.text });
-  });
-
-  test('counts up to the target when motion is allowed', async () => {
-    await wrap(<PointsCounter value={500} from={0} unit="" />, { still: false });
-    expect(screen.queryByText('500')).toBeNull();
+  test('counts up to the target when motion is allowed, in the given ink, never red', async () => {
+    await wrap(<CountUp value={64} from={0} color="#123456" />, { still: false });
+    expect(screen.queryByText('64')).toBeNull();
     await act(async () => {
       jest.advanceTimersByTime(tokens.motion.countUp + 200);
     });
-    expect(screen.getByText('500')).toBeOnTheScreen();
+    expect(screen.getByText('64')).toHaveStyle({ color: '#123456' });
+  });
+
+  test('by default it wears the text ink', async () => {
+    await wrap(<CountUp value={90} />);
+    expect(screen.getByText('90')).toHaveStyle({ color: tokens.color.light.text });
   });
 });
 
@@ -442,10 +416,8 @@ test('StepTransition shows the current step; StepDots speaks the position', asyn
 test('a pill or trend inside an element that speaks it is not a second TalkBack stop', async () => {
   await wrap(
     <>
-      <StreakFlame count={4} multiplier={1.08} />
       <StatTile label="Speeding" value="0.8" health="green" trend="down" />
     </>
   );
-  expect(screen.queryByLabelText('×1.08')).toBeNull();
   expect(screen.queryByLabelText('Down, better')).toBeNull();
 });

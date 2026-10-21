@@ -76,12 +76,13 @@ describe.each(schemes)('%s scheme', (s) => {
     for (const bg of c.avatar) expectContrast(c.avatarInk, bg, AA, `avatarInk on ${bg}`);
   });
 
-  test('freeze flakes and the at-risk / frozen streak glyphs read', () => {
-    expectContrast(c.freeze, c.bg, AA, 'freeze on bg');
-    expectContrast(c.freeze, c.surface, AA, 'freeze on surface');
-    expectContrast(c.freeze, c.infoFaint, NON_TEXT, 'freeze on infoFaint');
+  test('a warning glyph reads on its wash, and a subtle glyph on raised', () => {
     expectContrast(c.warning, c.warningFaint, NON_TEXT, 'warning glyph on warningFaint');
-    expectContrast(c.textSubtle, c.surfaceRaised, NON_TEXT, 'empty flame on raised');
+    expectContrast(c.textSubtle, c.surfaceRaised, NON_TEXT, 'subtle glyph on raised');
+  });
+
+  test('there is no freeze ink', () => {
+    expect(c).not.toHaveProperty('freeze');
   });
 
   test('a gold Pill reads on its wash', () => {

@@ -63,7 +63,6 @@ describe.each([...moods, ...lightCloud].map((m) => [name(m), m] as const))('%s',
     for (const [g, bg] of Object.entries(grounds)) {
       for (const ink of [c.text, c.textMuted, c.textSubtle, c.accent]) expectContrast(ink, bg, AA, `${ink} on ${g}`);
       for (const s of Object.values(c.signal)) expectContrast(s.text, bg, AA, `signal on ${g}`);
-      expectContrast(c.freeze, bg, AA, `freeze on ${g}`);
     }
     expectContrast(c.accent, c.accentFaint, AA, 'accent on its wash');
     expectContrast(c.accentText, c.accent, AA, 'accentText on accent');
@@ -80,7 +79,7 @@ describe.each([...moods, ...lightCloud].map((m) => [name(m), m] as const))('%s',
       const stacks = veils.map((_v, i) => veils.slice(0, i + 1).reduce(over, stop));
       for (const g of [stop, over(stop, b.sky.halo), ...stacks]) {
         for (const ink of [s.text, s.textMuted, s.textSubtle]) expectContrast(ink, g, AA, `sky ink ${ink} on ${g}`);
-        for (const ink of [s.accent, s.warning, s.danger, s.success, s.info, s.freeze]) expectContrast(ink, g, AA, `sky mark ${ink} on ${g}`);
+        for (const ink of [s.accent, s.warning, s.danger, s.success, s.info]) expectContrast(ink, g, AA, `sky mark ${ink} on ${g}`);
         for (const sig of Object.values(s.signal)) expectContrast(sig.text, g, AA, `sky signal on ${g}`);
       }
     }
@@ -110,7 +109,7 @@ describe.each([...moods, ...lightCloud].map((m) => [name(m), m] as const))('%s',
   test('the scene card carries white text, its muted inks, its accent and signals at AA', () => {
     const s = b.onScene;
     for (const stop of b.sky.scene) {
-      for (const ink of [s.text, s.textMuted, s.textSubtle, s.accent, s.warning, s.danger, s.success, s.freeze])
+      for (const ink of [s.text, s.textMuted, s.textSubtle, s.accent, s.warning, s.danger, s.success])
         expectContrast(ink, stop, AA, `scene ink ${ink}`);
       for (const sig of Object.values(s.signal)) expectContrast(sig.text, stop, AA, 'scene signal');
       expectContrast(s.onPrimary, s.primary, AA, 'scene primary label');
@@ -242,7 +241,7 @@ describe.each(['light', 'dark'] as const)('the static %s look', (scheme) => {
     const s = b.onSky;
     expect(s.text).toBe('#FFFFFF');
     for (const stop of b.sky.backdrop) {
-      for (const ink of [s.text, s.textMuted, s.textSubtle, s.accent, s.warning, s.danger, s.success, s.info, s.freeze])
+      for (const ink of [s.text, s.textMuted, s.textSubtle, s.accent, s.warning, s.danger, s.success, s.info])
         expectContrast(ink, stop, AA, `static sky ink ${ink}`);
       for (const sig of Object.values(s.signal)) expectContrast(sig.text, stop, AA, 'static sky signal');
     }
@@ -253,7 +252,7 @@ describe.each(['light', 'dark'] as const)('the static %s look', (scheme) => {
     const s = b.onScene;
     expect(s.text).toBe('#FFFFFF');
     for (const stop of b.sky.scene) {
-      for (const ink of [s.text, s.textMuted, s.textSubtle, s.accent, s.warning, s.danger, s.success, s.freeze])
+      for (const ink of [s.text, s.textMuted, s.textSubtle, s.accent, s.warning, s.danger, s.success])
         expectContrast(ink, stop, AA, `static scene ink ${ink}`);
       for (const sig of Object.values(s.signal)) expectContrast(sig.text, stop, AA, 'static scene signal');
     }

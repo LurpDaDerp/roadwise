@@ -85,8 +85,6 @@ export type ColorSet = {
   /** Deterministic avatar backgrounds; all carry `avatarInk` at ≥ 4.5:1. */
   avatar: readonly string[];
   avatarInk: string;
-  /** Ice blue for streak freezes. Text-safe on bg / surface. */
-  freeze: string;
   /** @deprecated v2 licence stamp ink. Use `gold` / `accent`; kept so older screens compile. */
   stamp: string;
   /** @deprecated v2 licence stamp wash. */
@@ -196,7 +194,6 @@ const light: ColorSet = {
   },
   avatar: ['#FFC300', '#4FD1C5', '#7FB2FF', '#B79CFF', '#FF8FA3', '#FF9F43', '#5EE08A', '#A9BCD2'],
   avatarInk: '#111113',
-  freeze: '#1B6CAB',
   stamp: '#7A5C00',
   stampFaint: '#FFF4CC',
   sheen: ['#E7E7E4', '#FFD60A', '#FFC300'],
@@ -246,7 +243,6 @@ const dark: ColorSet = {
   },
   avatar: ['#FFC300', '#4FD1C5', '#7FB2FF', '#B79CFF', '#FF8FA3', '#FF9F43', '#5EE08A', '#A9BCD2'],
   avatarInk: '#111113',
-  freeze: '#8FD3FF',
   stamp: '#FFD60A',
   stampFaint: '#332B05',
   sheen: ['#222226', '#FFC300', '#FFD60A'],

@@ -385,7 +385,6 @@ function inkColors(
     danger: ensureContrast(d.danger, marks, AA),
     success: ensureContrast(d.success, marks, AA),
     info: ensureContrast(d.info, marks, AA),
-    freeze: ensureContrast(d.freeze, marks, AA),
   };
 }
 

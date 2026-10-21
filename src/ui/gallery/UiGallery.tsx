@@ -8,13 +8,13 @@ import { Banner } from '../primitives/Banner';
 import { Button } from '../primitives/Button';
 import { Card } from '../primitives/Card';
 import { Chip } from '../primitives/Chip';
+import { CountUp } from '../primitives/CountUp';
 import { Divider } from '../primitives/Divider';
 import { EmptyState } from '../primitives/EmptyState';
-import { FreezeCount } from '../primitives/FreezeCount';
 import { IconButton } from '../primitives/IconButton';
 import { ListRow } from '../primitives/ListRow';
+import { MeritIcon } from '../primitives/MeritIcon';
 import { Pill } from '../primitives/Pill';
-import { PointsCounter } from '../primitives/PointsCounter';
 import { ProgressBar } from '../primitives/ProgressBar';
 import { ProgressRing } from '../primitives/ProgressRing';
 import { Screen, ScreenTitle } from '../primitives/Screen';
@@ -23,7 +23,6 @@ import { SegmentedControl } from '../primitives/SegmentedControl';
 import { Sheet } from '../primitives/Sheet';
 import { Skeleton } from '../primitives/Skeleton';
 import { StatTile } from '../primitives/StatTile';
-import { StreakFlame } from '../primitives/StreakFlame';
 import { Text } from '../primitives/Text';
 import { TIER_ORDER, TierBadge } from '../primitives/TierBadge';
 import { ToggleRow } from '../primitives/ToggleRow';
@@ -99,10 +98,9 @@ function Swatch({ color, label }: { color: string; label: string }) {
 
 function Body() {
   const t = useTheme();
-  const [filter, setFilter] = useState<'clean' | 'negative' | null>('clean');
-  const [board, setBoard] = useState<'friends' | 'league' | 'global'>('friends');
-  const [points, setPoints] = useState(1240);
-  const [streak, setStreak] = useState(11);
+  const [filter, setFilter] = useState<'clean' | 'passenger' | null>('clean');
+  const [period, setPeriod] = useState<'week' | 'month' | 'all'>('week');
+  const [score, setScore] = useState(92);
   const [voice, setVoice] = useState(false);
   const [sheet, setSheet] = useState(false);
 
@@ -111,7 +109,7 @@ function Body() {
       <Section title="Type">
         {TYPE_RAMP.map((v) => (
           <Text key={v} variant={v} numberOfLines={1}>
-            {v === 'hero' || v === 'display' || v === 'stat' ? `${v} 1,240` : `${v} Drive clean`}
+            {v === 'hero' || v === 'display' || v === 'stat' ? `${v} 92` : `${v} Drive clean`}
           </Text>
         ))}
       </Section>
@@ -123,7 +121,6 @@ function Body() {
           <Swatch color={t.colors.surfaceRaised} label="raised" />
           <Swatch color={t.colors.primary} label="primary" />
           <Swatch color={t.colors.accent} label="accent" />
-          <Swatch color={t.colors.freeze} label="freeze" />
         </Row>
         <Row>
           {SIGNALS.map((s) => (
@@ -163,20 +160,20 @@ function Body() {
         <Row>
           <Chip label="Clean" selected={filter === 'clean'} onPress={() => setFilter(filter === 'clean' ? null : 'clean')} />
           <Chip
-            label="Negative"
-            selected={filter === 'negative'}
-            onPress={() => setFilter(filter === 'negative' ? null : 'negative')}
+            label="Passenger"
+            selected={filter === 'passenger'}
+            onPress={() => setFilter(filter === 'passenger' ? null : 'passenger')}
           />
         </Row>
         <SegmentedControl
-          accessibilityLabel="Leaderboard"
+          accessibilityLabel="Period"
           segments={[
-            { value: 'friends', label: 'Friends & clan' },
-            { value: 'league', label: 'League' },
-            { value: 'global', label: 'Global' },
+            { value: 'week', label: 'Week' },
+            { value: 'month', label: 'Month' },
+            { value: 'all', label: 'All time' },
           ]}
-          value={board}
-          onChange={setBoard}
+          value={period}
+          onChange={setPeriod}
         />
       </Section>
 
@@ -189,12 +186,7 @@ function Body() {
             <Text variant="hero">92</Text>
             <TrendArrow direction="up" better="up" />
           </View>
-          <View style={{ flexDirection: 'row', gap: t.space.lg, flexWrap: 'wrap', alignItems: 'center' }}>
-            <StreakFlame count={streak} multiplier={1 + Math.min(0.3, streak * 0.02)} />
-            <FreezeCount count={2} />
-            <TierBadge tier="gold" rank={4} />
-          </View>
-          <ProgressBar value={0.62} accessibilityLabel="Level 7 progress" />
+          <ProgressBar value={0.62} accessibilityLabel="Weekly goals progress" />
         </Card>
         <Card>
           <Text variant="title3">Plain card</Text>
@@ -216,7 +208,7 @@ function Body() {
         <Card>
           <View style={{ flexDirection: 'row', gap: t.space.lg }}>
             <StatTile label="Speeding events" value="1" health="green" trend="down" style={{ flex: 1 }} />
-            <StatTile label="Phone pickups" value="4" health="red" trend="up" style={{ flex: 1 }} />
+            <StatTile label="Hard brakes" value="4" health="red" trend="up" style={{ flex: 1 }} />
           </View>
           <Divider />
           <View style={{ flexDirection: 'row', gap: t.space.lg }}>
@@ -227,26 +219,25 @@ function Body() {
         <StatTile label="Miles" value="312" unit="mi" framed />
       </Section>
 
-      <Section title="Points and streak">
-        <PointsCounter value={points} size="hero" label="Points" />
+      <Section title="Drive score and merit">
+        <CountUp value={score} from={0} size="hero" suffix="/100" label="Drive score" />
         <Row>
-          <Button label="+167" size="sm" variant="secondary" onPress={() => setPoints((p) => p + 167)} />
-          <Button label="−44" size="sm" variant="secondary" onPress={() => setPoints((p) => p - 44)} />
-          <Button label="Streak +1" size="sm" variant="secondary" onPress={() => setStreak((s) => s + 1)} />
+          <Button label="Score 74" size="sm" variant="secondary" onPress={() => setScore(74)} />
+          <Button label="Score 98" size="sm" variant="secondary" onPress={() => setScore(98)} />
         </Row>
-        <PointsCounter value={-44} from={0} signed size="display" label="Points earned" />
-        <StreakFlame count={streak} multiplier={1.22} size="lg" />
-        <StreakFlame count={3} state="atRisk" />
-        <StreakFlame count={7} state="frozen" />
-        <StreakFlame count={0} />
-        <FreezeCount count={1} showNumber />
+        {/* The five merit shapes, lowest to highest (their inks are the recap's, per surface). */}
+        <Row>
+          {MERIT_TIERS.map((tier) => (
+            <MeritIcon key={tier} tier={tier} color={t.colors.text} size={28} testID={`gallery-merit-${tier}`} />
+          ))}
+        </Row>
       </Section>
 
       <Section title="Progress">
         <ProgressBar value={0.35} tone="clean" accessibilityLabel="Challenge progress" />
         <ProgressBar value={0.7} tone="moderate" height={6} accessibilityLabel="Thin bar" />
         <Row>
-          <ProgressRing value={0.68} accessibilityLabel="Clan goal" accessibilityValueText="340 of 500 clean miles">
+          <ProgressRing value={0.68} accessibilityLabel="Weekly goal" accessibilityValueText="34 of 50 clean miles">
             <Text variant="stat">68%</Text>
           </ProgressRing>
           <ProgressRing value={0.4} size={56} tone="clean" accessibilityLabel="Challenge">
@@ -284,14 +275,14 @@ function Body() {
             title="Tue 7:42 AM · Home → School"
             subtitle="6.2 mi · 14 min"
             leading={<Avatar username="maya_drives" size="sm" />}
-            trailing={<Pill label="+82" tone="clean" icon="checkmark-circle" />}
+            trailing={<Pill label="96" tone="clean" icon="checkmark-circle" />}
             onPress={() => {}}
           />
           <Divider inset={16} />
           <ListRow
             title="Mon 4:10 PM · School → Home"
             subtitle="5.9 mi · 2 events"
-            trailing={<Pill label="−20" tone="severe" icon="close-circle" />}
+            trailing={<Pill label="71" tone="severe" icon="close-circle" />}
             onPress={() => {}}
           />
           <Divider inset={16} />
@@ -303,12 +294,12 @@ function Body() {
         <Banner tone="info" message="Location is set to While Using. That's all RoadWise needs." />
         <Banner tone="warning" message="Motion access is off." action={{ label: 'Fix', onPress: () => {} }} />
         <Banner tone="danger" message="Couldn't sync. We'll retry when you're online." />
-        <Banner tone="success" message="Freeze earned for 5 clean drives." />
+        <Banner tone="success" message="Badge unlocked: Clean 100." />
         <Card>
           <EmptyState
             icon="car-sport"
             title="Take your first drive"
-            body="Safe miles earn points. Streaks multiply them."
+            body="Every drive gets a score out of 100."
             action={{ label: 'Start drive', onPress: () => {} }}
           />
         </Card>
@@ -329,6 +320,7 @@ function Body() {
   );
 }
 
+const MERIT_TIERS = [1, 2, 3, 4, 5] as const;
 const PHASES: SkyPhase[] = ['night', 'dawn', 'day', 'dusk'];
 const KINDS: WeatherKind[] = ['clear', 'cloudy', 'fog', 'rain', 'snow', 'storm'];
 
@@ -346,13 +338,13 @@ function SkyPreview() {
           Hey, maya
         </ScreenTitle>
         <Text variant="subhead" tone="onSkyMuted">
-          3-day streak. Drive today to keep it.
+          2 of 3 weekly goals done.
         </Text>
         <Card variant="hero" style={{ minHeight: 150 }}>
           <Text variant="label" tone="muted">
-            Level
+            Safety Rating
           </Text>
-          <Text variant="display">7</Text>
+          <Text variant="display">92</Text>
         </Card>
       </View>
     </View>
