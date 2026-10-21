@@ -8,7 +8,7 @@ export { ensureNotificationSetup, type SetupApi } from './categories';
 export { notificationCopy } from './copy';
 export { foregroundBehavior, installForegroundHandler, type HandlerApi } from './handler';
 export { NotificationsHost, type NotificationsHostProps } from './NotificationsHost';
-export { ALLOWED_HREFS, DRIVE_HREF, DRIVE_RECORDING_KIND, drivingHrefOf, isAllowedHref, SUMMARY_HREF } from './hrefs';
+export { ALLOWED_HREFS, DRIVE_HREF, DRIVE_RECORDING_KIND, drivingHrefOf, isAllowedHref, PHONE_REMINDER_KIND, SUMMARY_HREF } from './hrefs';
 export {
   allowHref,
   FALLBACK_HREF,

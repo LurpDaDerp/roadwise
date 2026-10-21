@@ -1,6 +1,6 @@
-// The one notification response listener: a tap on the iPhone's recording note opens the driving
-// screen while a drive records (never held past the drive, never replayed, starting nothing), and
-// any other tap opens its allowlisted route, held during a drive.
+// The one notification response listener: a tap on the iPhone's recording note or the phone
+// reminder opens the driving screen while a drive records (never held past the drive, never
+// replayed, starting nothing), and any other tap opens its allowlisted route, held during a drive.
 import { act, render } from '@testing-library/react-native';
 
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
@@ -159,7 +159,22 @@ test('a tap before the navigator is up waits for it, and opens the driving scree
   expect(late.navigate).not.toHaveBeenCalled();
 });
 
-test('only the recording note opens the driving screen: /drive under another kind opens Home', async () => {
+test('the phone reminder opens the driving screen while the drive records, and nothing once it is over', async () => {
+  const reminder = (date: number) => ({
+    actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
+    notification: { date, request: { identifier: 'phone-reminder:trip-1', content: { data: { kind: 'phoneReminder', url: '/drive' } } } },
+  });
+  const h = await mount({ drive: 'recording' });
+  await act(async () => mockNotifications.listener!(reminder(21)));
+  await h.settle();
+  expect(h.navigate.mock.calls).toEqual([['/drive']]);
+  await h.setDrive('idle');
+  await act(async () => mockNotifications.listener!(reminder(22)));
+  await h.settle();
+  expect(h.navigate.mock.calls).toEqual([['/drive']]);
+});
+
+test('only the drive’s own notes open the driving screen: /drive under another kind opens Home', async () => {
   const h = await mount();
   await act(async () => mockNotifications.listener!(recordingTap(6, { kind: 'weekly_recap', url: '/drive' })));
   await h.settle();

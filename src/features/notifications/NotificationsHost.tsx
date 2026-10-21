@@ -10,7 +10,8 @@
  * drive's busy signal says it is over.
  *
  * A tap on the drive's recording note (`kind: 'driveRecording'`, the iPhone's note while a drive
- * records) opens the driving screen, through `router.navigate` so it never stacks a second one, and
+ * records) or its phone reminder (`kind: 'phoneReminder'`, posted when the phone is picked up with
+ * RoadWise in the background) opens the driving screen, through `router.navigate` so it never stacks a second one, and
  * only while a drive records; one that lands before the navigator is mounted waits for it. It is
  * never held past the drive, never replayed, and starts nothing.
  *
