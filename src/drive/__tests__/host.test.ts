@@ -569,6 +569,28 @@ describe('a phone pickup (phone plan P4)', () => {
     await dry.host.stop({ endOpenTrip: true });
   });
 
+  test('with the driving screen showing, a pickup confirmed on a replayed row (the wait’s buffer) plays nothing; a live one plays', async () => {
+    const h = build({ voiceEnabled: () => true });
+    await h.host.boot();
+    h.host.setHudVisible(true);
+    // Handled from the second row to the eighth: the pickup confirms (and is put down) in the wait's buffer.
+    await drive(h, rows(40, { speedMps: 15, over: (i) => (i >= 1 && i < 8 ? handled : {}) }));
+    const [replayed, ...rest] = phoneDecisions(h);
+    expect(rest).toEqual([]);
+    expect(replayed!.ts).toBeLessThan(T0 + 15_000);
+    expect(replayed!.suppressed).toBe(true);
+    // Picked up again on live rows: it plays.
+    await feed(h, pickupRows(30, 0, 5));
+    const live = phoneDecisions(h).slice(1);
+    expect(live).toHaveLength(1);
+    expect(live[0]).toMatchObject({ ts: T0 + 42_000, voice: 'Phone down' });
+    expect(live[0]!.suppressed).toBeUndefined();
+    const id = h.host.snapshot().clientTripId!;
+    await h.host.end();
+    // Both still count.
+    expect((await createEventsRepo(db).listByTrip(id)).filter((e) => e.type === 'phone_pickup')).toHaveLength(2);
+  });
+
   test('on an iPhone a handled phone during a call is never a pickup; on Android it is', async () => {
     for (const [platform, count] of [
       ['ios', 0],

@@ -18,8 +18,9 @@
 //   starts a capture: native owns it, and `stopCapture` tells native the JS end and its cut).
 // - **In front only.** Alert sounds, voice and haptics play only while RoadWise is active; the
 //   spot nudge shows only then. A phone pickup's alert plays only while the driving screen shows
-//   (focused, RoadWise active); with RoadWise not active its first alert, from a live row, posts the
-//   phone reminder instead (`phoneReminder`), never for a dry run. The drive records the same either way.
+//   (focused, RoadWise active) and never for a replayed row; with RoadWise not active its first
+//   alert, from a live row, posts the phone reminder instead (`phoneReminder`), never for a dry
+//   run. The drive records the same either way.
 // - **Battery.** Nothing runs while idle: no timer, no read. While recording, one timeout at most
 //   (the automatic end, `ticks.ts`), the display throttled to one update per 3 s, the weather
 //   checked every 15 min or 20 km, the state published at most once per row.
@@ -616,14 +617,15 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    * A phone pickup's alert (phone plan P4): it plays (the urgent tone, "Phone down", the haptic; a
    * repeat the tone and haptic) only while the driving screen shows, focused with RoadWise active.
    * RoadWise not active: nothing plays, and the pickup's first alert from a live, fresh row of a
-   * stored drive tells the phone reminder. RoadWise active on another screen: nothing at all. The
-   * pickup counts the same either way.
+   * stored drive tells the phone reminder. RoadWise active on another screen: nothing at all. A
+   * replayed row (a journal drained, the wait's buffer) plays nothing either: it is old news, maybe
+   * minutes old. The pickup counts the same either way.
    */
   function phoneAlert(alert: AlertEvent): void {
     const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
     // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.
     if (dashcamAlertActive()) decision.silent = true;
-    if (!hudVisible()) decision.suppressed = true;
+    if (!hudVisible() || replayingRow) decision.suppressed = true;
     player.deliver(decision).catch((e: unknown) => report(e, 'player'));
     if (appActive() || alert.repeat === true || !persist || replayingRow || !deps.phoneReminder) return;
     if (now() - alert.at > PHONE_REMINDER_MAX_AGE_MS) return;
