@@ -1,10 +1,10 @@
-// The engine's one clock tick: the automatic end (`autoEndAt`, 15 min without movement, or 12 h)
+// The engine's one clock tick: the automatic end (`autoEndAt`, 5 min without movement, or 12 h)
 // can pass with no row arriving (a lost fix in a garage, a capture that stopped emitting), so the
 // host keeps a single timeout to that time and nothing else.
 //
 // Lazy re-arm: while the car moves, `autoEndAt` moves later every second. A timer already armed at
 // or before the new time is kept; when it fires, the tick re-checks (a no-op when the drive is not
-// due) and the host's next `update` arms the new time. So there is at most one re-arm per 15 min
+// due) and the host's next `update` arms the new time. So there is at most one re-arm per 5 min
 // while driving, and never a timer shorter than `TICK_MIN_DELAY_MS` (no 0 ms loop).
 
 /** The tick fires this long after the deadline, so it is never early against the row clock. */

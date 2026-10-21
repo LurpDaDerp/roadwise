@@ -16,7 +16,8 @@ export interface DropNotice {
 }
 
 const CAUSES: readonly EndCause[] = ['manual', 'stopped', 'walking', 'orphan', 'limit'];
-const REASONS: readonly DropReason[] = ['no_movement', 'no_gps', 'not_driven'];
+// `cancelled` ("Not driving?") is never written; it parses so a value from any build reads.
+const REASONS: readonly DropReason[] = ['no_movement', 'no_gps', 'not_driven', 'cancelled'];
 
 /** A stored notice, or null when absent or not one. */
 export function parseDropNotice(raw: unknown): DropNotice | null {

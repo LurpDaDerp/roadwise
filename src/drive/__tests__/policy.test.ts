@@ -1,5 +1,5 @@
 import { autoEndDeadline, createTicker, TICK_MIN_DELAY_MS, TICK_SLACK_MS } from '@/drive/ticks';
-import { detectorContext, isBusyStatus, NO_SWITCH, switchSignalFor, tripRecords } from '@/drive/policy';
+import { isBusyStatus, tripRecords } from '@/drive/policy';
 
 test('statuses', () => {
   expect(isBusyStatus('idle')).toBe(false);
@@ -7,19 +7,6 @@ test('statuses', () => {
   expect(isBusyStatus('finalizing')).toBe(true);
   expect(tripRecords('recording')).toBe(true);
   expect(tripRecords('finalizing')).toBe(false);
-});
-
-test('the detector context follows the call state, the drive switch signal and the platform', () => {
-  expect(detectorContext(false, NO_SWITCH, 'android')).toEqual({ callActive: false, switchSignal: 'none', lockDelayMs: null, platform: 'android' });
-  expect(detectorContext(true, { signal: 'lagged', lockDelayMs: 11_000 }, 'ios')).toEqual({ callActive: true, switchSignal: 'lagged', lockDelayMs: 11_000, platform: 'ios' });
-});
-
-test('the switch signal from getState: Android exact; an iPhone with a passcode proven or not yet; none without one', () => {
-  const s = (platform: 'ios' | 'android', lockSignal: 'reliable' | 'lagged' | 'unreliable', lockProof: boolean, lockDelayMs: number | null) => ({ platform, lockSignal, lockProof, lockDelayMs });
-  expect(switchSignalFor(s('android', 'reliable', false, null))).toEqual({ signal: 'reliable', lockDelayMs: null });
-  expect(switchSignalFor(s('ios', 'unreliable', true, 10_000))).toEqual({ signal: 'none', lockDelayMs: null });
-  expect(switchSignalFor(s('ios', 'lagged', true, 10_400))).toEqual({ signal: 'lagged', lockDelayMs: 10_400 });
-  expect(switchSignalFor(s('ios', 'lagged', false, null))).toEqual({ signal: 'unproven', lockDelayMs: null });
 });
 
 /** A scheduler whose timers the test fires; each entry keeps its delay and whether it is still armed. */

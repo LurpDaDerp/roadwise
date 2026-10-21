@@ -30,3 +30,7 @@ test('anything that is not a notice reads as none', async () => {
     expect(parseDropNotice({ clientTripId: 'a', cause, reason: 'no_movement', at: 1 })).toMatchObject({ cause });
   }
 });
+
+test('a "Not driving?" cancel reason parses (it is never written: Home says nothing for it)', () => {
+  expect(parseDropNotice({ clientTripId: 'a', cause: 'manual', reason: 'cancelled', at: 1 })).toMatchObject({ reason: 'cancelled' });
+});

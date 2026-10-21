@@ -1,13 +1,17 @@
-// What the drive host needs from drive-sense: start and stop the capture, one state read, and the
-// event subscription. `createFakeDriveSense()` satisfies it in tests.
-import DriveSense, { type DriveSenseApi } from '@drive-sense';
+// What the drive host needs from drive-sense: start and stop the capture, one state read, the
+// event subscription, and the one-time reminder retirement. `createFakeDriveSense()` satisfies it in
+// tests. On iOS the host also drives the drive detector (`DriveDetect`, `nativeDriveDetect`).
+import DriveSense, { DriveDetect, type DriveDetectApi, type DriveSenseApi } from '@drive-sense';
 
 export type DriveSource = Pick<DriveSenseApi, 'startCapture' | 'stopCapture' | 'getState' | 'addListener'> &
-  /** iOS: an in-drive lock proof written back, so later drives count screen switches from their start. */
-  Partial<Pick<DriveSenseApi, 'markLockProof'>>;
+  /** The forgot-to-start reminder's switch: the bootstrap turns it off once per install (it is retired). */
+  Partial<Pick<DriveSenseApi, 'setTripReminder'>>;
 
 /** The native module (every method rejects where it is absent: Jest, Expo Go, web). */
 export const nativeDriveSource: DriveSource = DriveSense;
+
+/** The iOS drive detector, or null where it does not exist (Android, Jest, Expo Go, web). */
+export const nativeDriveDetect = (): DriveDetectApi | null => (DriveDetect.available ? DriveDetect : null);
 
 /**
  * What the DashPal runtime needs from drive-sense: the audio output probe, the alert wake lock and
