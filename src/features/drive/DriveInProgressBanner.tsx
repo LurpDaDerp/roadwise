@@ -9,19 +9,21 @@ import { DRIVE_HREF, hudCopy } from './hudCopy';
 
 /**
  * A strip for in-app screens while a drive is recording (reached from a notification tap at a
- * stop): one tap goes back to the driving screen. Nothing else — the drive is ended there.
+ * stop), or while a Start drive swipe waits for the car to move: one tap goes back to the driving
+ * screen. Nothing else: the drive is ended (or the wait stopped) there.
  */
 export function DriveInProgressBanner() {
   const th = useTheme();
   const router = useRouter();
-  const recording = useDrive((d) => d.status === 'recording');
-  if (!recording) return null;
+  const state = useDrive((d) => (d.status === 'recording' ? 'recording' : d.waiting !== null && d.status === 'idle' ? 'waiting' : null));
+  if (state === null) return null;
+  const waiting = state === 'waiting';
 
   return (
     <Pressable
       testID="drive-in-progress"
       accessibilityRole="button"
-      accessibilityLabel={hudCopy.banner.label}
+      accessibilityLabel={waiting ? hudCopy.banner.waitingLabel : hudCopy.banner.label}
       onPress={() => router.navigate(DRIVE_HREF)}
       style={({ pressed }) => ({
         minHeight: th.size.touch,
@@ -37,12 +39,16 @@ export function DriveInProgressBanner() {
         borderColor: th.colors.accent,
       })}
     >
-      <Ionicons name="radio-button-on" size={th.size.icon} color={th.colors.danger} />
+      {waiting ? (
+        <Ionicons testID="drive-in-progress-waiting" name="car-sport" size={th.size.icon} color={th.colors.accent} />
+      ) : (
+        <Ionicons name="radio-button-on" size={th.size.icon} color={th.colors.danger} />
+      )}
       <View style={{ flex: 1 }}>
-        <Text variant="headline">{hudCopy.banner.title}</Text>
+        <Text variant="headline">{waiting ? hudCopy.banner.waitingTitle : hudCopy.banner.title}</Text>
       </View>
       <Text variant="subhead" tone="accent">
-        {hudCopy.banner.action}
+        {waiting ? hudCopy.banner.waitingAction : hudCopy.banner.action}
       </Text>
       <Ionicons name="chevron-forward" size={th.size.icon} color={th.colors.accent} />
     </Pressable>

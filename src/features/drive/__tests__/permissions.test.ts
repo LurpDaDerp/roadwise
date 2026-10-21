@@ -39,6 +39,9 @@ function snapshot(location: LocationAccess, motion: Grant | null, over: { precis
     notificationsCanAskAgain: true,
     batteryOptimization: 'unknown',
     lowPowerMode: false,
+    backgroundRefresh: 'available',
+    canAskAlways: true,
+    liveActivities: true,
     checkedAt: NOW,
   };
 }

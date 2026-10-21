@@ -16,7 +16,9 @@
  * - Motion is asked once when undetermined and never blocks: a manual drive records without it.
  *   The Start Drive tap passes `askMotion: false`: it asks only for location, so a tap at speed
  *   never brings up a second dialog (motion is asked in onboarding, on Home and in Settings).
- * - Background location ("Always") is never asked for, anywhere.
+ * - Start drive needs only While Using. Location "Always" (for drives that start on their own,
+ *   iPhone only) is asked in onboarding and from the Home and Settings permission rows, never from
+ *   here; Android never asks for it.
  */
 import {
   createPermissionsAdapter,
