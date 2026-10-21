@@ -1,10 +1,11 @@
-// The Live Activity / Dynamic Island for a drive in progress (spec "Driving screen · Background";
-// plan §6). The speed and the speed limit, nothing else. Lock screen: big speed, a round
-// speed-limit sign. Dynamic Island: expanded = speed + limit; compact = speed | limit;
-// minimal = speed. The lock screen wears the app's sky (the driving screen's deepened sky,
-// top to bottom, as the app sends it with the state; navy until it does), the island's keyline the
-// sky accent (gold without one); white numerals, the limit sign's ring the driving screen's red.
-// Nothing here is interactive: the activity is started and ended by the app alone.
+// The Live Activity / Dynamic Island for a drive in progress (plan §3.10). The lock screen: the
+// speed, coloured as the driving screen colours it when over the limit (it never pulses), the speed
+// limit in the driving screen's sign style (the US SPEED LIMIT plate in mph, the round red-ringed
+// sign in km/h), the driving screen's dangerous-weather line when it has one, and "Not driving?"
+// while that option is available. The island: expanded = speed, sign, and the weather line and
+// the hint below; compact = speed | mini sign; minimal = speed. The lock screen wears the app's sky
+// (navy until the app sends it), the island's keyline the sky accent (gold without one). A tap opens
+// the driving screen; nothing else is interactive.
 import ActivityKit
 import SwiftUI
 import WidgetKit
@@ -21,6 +22,13 @@ enum Palette {
   static let gold = Color(red: 255 / 255, green: 195 / 255, blue: 0 / 255) // #FFC300
   static let signRed = Color(red: 215 / 255, green: 38 / 255, blue: 61 / 255) // #D7263D
   static let dim = Color.white.opacity(0.7)
+  static let weather = Color.white.opacity(0.9)
+}
+
+/// The words on the activity (the hint is the driving screen's own: `hudCopy.notDriving`).
+enum Copy {
+  static let notDriving = "Not driving?"
+  static let tapURL = URL(string: "roadwise://drive")
 }
 
 extension Color {
@@ -38,63 +46,162 @@ extension Color {
 }
 
 enum Format {
-  /// "34", or "—" when unknown.
+  /// "34", or "-" when unknown.
   static func speed(_ v: Double?) -> String {
     guard let v = v, v.isFinite else { return "-" }
     return String(Int(v.rounded()))
   }
+
+  static func speedLabel(_ v: Double?, unit: String, speeding: Bool) -> String {
+    guard v != nil else { return "Speed unknown" }
+    let words = unit == "km/h" ? "kilometers per hour" : "miles per hour"
+    return "Speed \(speed(v)) \(words)" + (speeding ? ", over the limit" : "")
+  }
+
+  static func limitLabel(_ v: Double?) -> String {
+    v == nil ? "Speed limit unknown" : "Speed limit \(speed(v))"
+  }
 }
 
-/// The posted limit as a round sign: white disc, red ring, black numeral ("—" when unknown).
+/// The posted limit in the driving screen's sign style for the unit: the US R2-1 plate for mph
+/// (white, a black inner border, "SPEED" / "LIMIT" when 30 pt tall or more, the number), the round
+/// sign for km/h (white disc, red ring, the number). "-" when unknown.
 struct LimitSign: View {
   let limit: Double?
-  var size: CGFloat = 44
+  let unit: String
+  var height: CGFloat = 44
 
   var body: some View {
+    Group {
+      if unit == "km/h" { roundSign } else { usPlate }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(Format.limitLabel(limit))
+  }
+
+  private var usPlate: some View {
+    let w = height * 0.8
+    return ZStack {
+      RoundedRectangle(cornerRadius: w * 0.06).fill(Color.white)
+      RoundedRectangle(cornerRadius: max(0, w * 0.06 - 2))
+        .strokeBorder(Color.black, lineWidth: max(1.5, w * 0.025))
+        .padding(2)
+      VStack(spacing: 0) {
+        if height >= 30 {
+          Text("SPEED").font(.system(size: height * 0.167, weight: .bold))
+          Text("LIMIT").font(.system(size: height * 0.167, weight: .bold))
+        }
+        Text(Format.speed(limit))
+          .font(.system(size: height * 0.46, weight: .heavy, design: .rounded))
+          .monospacedDigit()
+      }
+      .foregroundColor(.black)
+      .minimumScaleFactor(0.5)
+      .lineLimit(1)
+    }
+    .frame(width: w, height: height)
+  }
+
+  private var roundSign: some View {
     ZStack {
       Circle().fill(Color.white)
-      Circle().strokeBorder(Palette.signRed, lineWidth: max(2, size * 0.09))
+      Circle().strokeBorder(Palette.signRed, lineWidth: max(2, height * 0.09))
       Text(Format.speed(limit))
-        .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
+        .font(.system(size: height * 0.42, weight: .bold, design: .rounded))
         .monospacedDigit()
         .foregroundColor(.black)
         .minimumScaleFactor(0.6)
         .lineLimit(1)
     }
-    .frame(width: size, height: size)
-    .accessibilityLabel("Speed limit \(Format.speed(limit))")
+    .frame(width: height, height: height)
   }
 }
 
-/// Speed, large, with the unit under it.
+/// The speed, large, in the driving screen's tint over the limit (white otherwise), the unit under it.
 struct SpeedBlock: View {
-  let speed: Double?
-  let unit: String
+  let state: LiveDriveAttributes.ContentState
   var size: CGFloat = 48
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Text(Format.speed(speed))
+      Text(Format.speed(state.speed))
         .font(.system(size: size, weight: .heavy, design: .rounded))
         .monospacedDigit()
-        .foregroundColor(.white)
+        .foregroundColor(Color(hex: state.speedTint) ?? .white)
         .lineLimit(1)
-      Text(unit)
+      Text(state.unit)
         .font(.system(size: max(11, size * 0.28), weight: .semibold, design: .rounded))
         .foregroundColor(Palette.dim)
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(Format.speedLabel(state.speed, unit: state.unit, speeding: state.speeding))
+  }
+}
+
+/// The speed alone (the compact and minimal island), tinted.
+struct SpeedNumber: View {
+  let state: LiveDriveAttributes.ContentState
+  let size: CGFloat
+
+  var body: some View {
+    Text(Format.speed(state.speed))
+      .font(.system(size: size, weight: .bold, design: .rounded))
+      .monospacedDigit()
+      .foregroundColor(Color(hex: state.speedTint) ?? .white)
+      .accessibilityLabel(Format.speedLabel(state.speed, unit: state.unit, speeding: state.speeding))
+  }
+}
+
+/// The dangerous-weather line: its symbol and its words, when the driving screen shows an alert.
+struct WeatherLine: View {
+  let state: LiveDriveAttributes.ContentState
+
+  var body: some View {
+    if let kind = state.weatherKind, let text = state.weatherText {
+      HStack(spacing: 6) {
+        Image(systemName: WeatherSymbol.name(kind))
+        Text(text).lineLimit(1)
+      }
+      .font(.system(size: 13, weight: .semibold, design: .rounded))
+      .foregroundColor(Palette.weather)
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(text)
     }
   }
 }
 
-/// The lock-screen banner (and the StandBy / CarPlay-adjacent surfaces WidgetKit derives from it).
+/// "Not driving?" while the option is available.
+struct NotDrivingHint: View {
+  let state: LiveDriveAttributes.ContentState
+
+  var body: some View {
+    if state.notDrivingAvailable {
+      Text(Copy.notDriving)
+        .font(.system(size: 13, weight: .semibold, design: .rounded))
+        .foregroundColor(Palette.dim)
+        .lineLimit(1)
+    }
+  }
+}
+
+/// The lock-screen banner (and the StandBy surfaces WidgetKit derives from it).
 struct LockScreenView: View {
   let state: LiveDriveAttributes.ContentState
 
   var body: some View {
-    HStack(alignment: .center, spacing: 16) {
-      SpeedBlock(speed: state.speed, unit: state.unit, size: 52)
-      Spacer(minLength: 8)
-      LimitSign(limit: state.limit, size: 56)
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: .center, spacing: 16) {
+        SpeedBlock(state: state, size: 52)
+        Spacer(minLength: 8)
+        LimitSign(limit: state.limit, unit: state.unit, height: 56)
+      }
+      WeatherLine(state: state)
+      if state.notDrivingAvailable {
+        HStack {
+          Spacer(minLength: 0)
+          NotDrivingHint(state: state)
+        }
+      }
     }
     .padding(.horizontal, 20)
     .padding(.vertical, 14)
@@ -112,12 +219,17 @@ struct LockScreenView: View {
   }
 }
 
-/// Past `staleDate` (no update for 2 min: the app is gone) nothing here is live: speed unknown.
+/// Past `staleDate` (no update for 2 min: the app is gone) nothing here is live: speed unknown, no
+/// tint, no hint, no weather.
 func displayState(_ context: ActivityViewContext<LiveDriveAttributes>) -> LiveDriveAttributes.ContentState {
   guard context.isStale else { return context.state }
   var s = context.state
   s.speed = nil
-  s.stopped = false
+  s.speedTint = nil
+  s.speeding = false
+  s.notDrivingAvailable = false
+  s.weatherKind = nil
+  s.weatherText = nil
   return s
 }
 
@@ -128,32 +240,36 @@ struct LiveDriveActivityWidget: Widget {
       return LockScreenView(state: state)
         .activityBackgroundTint(Color(hex: state.skyMid) ?? Palette.navy)
         .activitySystemActionForegroundColor(.white)
+        .widgetURL(Copy.tapURL)
     } dynamicIsland: { context in
       let state = displayState(context)
       return DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
-          SpeedBlock(speed: state.speed, unit: state.unit, size: 40)
+          SpeedBlock(state: state, size: 40)
             .padding(.leading, 6)
         }
         DynamicIslandExpandedRegion(.trailing) {
-          LimitSign(limit: state.limit, size: 44)
+          LimitSign(limit: state.limit, unit: state.unit, height: 44)
             .padding(.trailing, 6)
         }
+        DynamicIslandExpandedRegion(.bottom) {
+          HStack(spacing: 8) {
+            WeatherLine(state: state)
+            Spacer(minLength: 0)
+            NotDrivingHint(state: state)
+          }
+          .padding(.horizontal, 6)
+        }
       } compactLeading: {
-        Text(Format.speed(state.speed))
-          .font(.system(size: 15, weight: .bold, design: .rounded))
-          .monospacedDigit()
-          .foregroundColor(.white)
+        SpeedNumber(state: state, size: 15)
           .padding(.leading, 2)
       } compactTrailing: {
-        LimitSign(limit: state.limit, size: 20)
+        LimitSign(limit: state.limit, unit: state.unit, height: 20)
       } minimal: {
-        Text(Format.speed(state.speed))
-          .font(.system(size: 13, weight: .bold, design: .rounded))
-          .monospacedDigit()
-          .foregroundColor(.white)
+        SpeedNumber(state: state, size: 13)
       }
       .keylineTint(Color(hex: state.accent) ?? Palette.gold)
+      .widgetURL(Copy.tapURL)
     }
   }
 }
