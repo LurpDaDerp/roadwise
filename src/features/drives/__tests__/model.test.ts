@@ -9,6 +9,7 @@ import {
   breakdownLines,
   multiplierText,
   notDrivingLabel,
+  pointsPerMileOf,
   pointsState,
   receipt,
   availableReasons,
@@ -289,6 +290,37 @@ describe('summary', () => {
     const b = drive().result!.breakdown;
     const d = drive({ result: { ...drive().result!, breakdown: { ...b, safeMiles: 14, cleanBonus: 25, dashcamMult: 1.25, mult: 1.5 } } });
     expect(receipt(d, [], 'km').detail).toEqual(['Safe miles 11.8 mi (19.0 km) × 10 (daily cap)', 'Clean bonus +25', 'Streak ×1.20 · DashPal ×1.25 → ×1.50 (cap)']);
+  });
+
+  test('the safe-miles rate is the one the breakdown recorded: × 20 now, × 10 for a breakdown stored without it', () => {
+    const b = drive().result!.breakdown;
+    const now = drive({ result: { ...drive().result!, breakdown: { ...b, pointsPerMile: 20, milePoints: 236, cleanBonus: 50, gains: 343 } } });
+    expect(receipt(now, []).detail).toEqual(['Safe miles 11.8 mi × 20', 'Clean bonus +50', 'Streak ×1.20']);
+    expect(breakdownLines(now, []).lines.map((l) => [l.label, l.value]).slice(0, 2)).toEqual([
+      ['Safe miles: 11.8 mi × 20', '+236'],
+      ['Clean-drive bonus', '+50'],
+    ]);
+    // A legacy re-score records the rate it paid.
+    const legacy = drive({ result: { ...drive().result!, breakdown: { ...b, pointsPerMile: 10 } } });
+    expect(receipt(legacy, []).detail[0]).toBe('Safe miles 11.8 mi × 10');
+    // Stored before the rate was recorded: it earned 10 a mile, and keeps the bonus it was paid.
+    expect('pointsPerMile' in b).toBe(false);
+    expect(receipt(drive({ result: { ...drive().result!, breakdown: { ...b, cleanBonus: 25 } } }), []).detail).toEqual([
+      'Safe miles 11.8 mi × 10',
+      'Clean bonus +25',
+      'Streak ×1.20',
+    ]);
+  });
+
+  test.each([
+    [{ pointsPerMile: 20 }, 20],
+    [{ pointsPerMile: 10 }, 10],
+    [{}, 10],
+    [{ pointsPerMile: null }, 10],
+    [{ pointsPerMile: 0 }, 10],
+    [{ pointsPerMile: Number.NaN }, 10],
+  ])('pointsPerMileOf(%j) is %d', (b, n) => {
+    expect(pointsPerMileOf(b)).toBe(n);
   });
 
   test('without a server breakdown, Earned is the total plus the known costs, and unknown while any is missing', () => {

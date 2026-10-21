@@ -1,4 +1,4 @@
-import { MIN_SCORED_MILES } from '@scoring';
+import { MIN_SCORED_MILES, MIN_SCORED_S } from '@scoring';
 import { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
@@ -91,7 +91,7 @@ function PointsHead({ state, total, drive, fresh, units, onOpenDrive }: { state:
         </View>
       );
     case 'too_short':
-      return <StateBlock testID="state-too-short" title="Too short to score" body={`Drives under ${formatDistance(MIN_SCORED_MILES, units)} don't earn or lose points.`} />;
+      return <StateBlock testID="state-too-short" title="Too short to score" body={`Drives under ${formatDistance(MIN_SCORED_MILES, units)} that take under ${MIN_SCORED_S / 60} min don't earn or lose points.`} />;
     case 'not_scored':
       return (
         <StateBlock

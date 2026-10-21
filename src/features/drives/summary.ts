@@ -2,7 +2,7 @@
  * What the drive summary derives from a drive before anything is drawn: the points state, the
  * points receipt (and the itemized breakdown it is built from) and the report reasons. Pure.
  */
-import { IDLE_END_S, isDashcamType, MULT_CAP, STREAK_MULT_CAP, type EventType } from '@scoring';
+import { IDLE_END_S, isDashcamType, LEGACY_POINTS_PER_MILE, MULT_CAP, STREAK_MULT_CAP, type EventType } from '@scoring';
 
 import { formatMultiplier } from '@/ui';
 
@@ -58,7 +58,7 @@ export function pointsState(d: LocalDrive): PointsState {
     case 'failed':
       return { kind: 'failed', value: d.pointsNet };
     case 'pending':
-      // The phone already knows a sub-0.5 mi drive won't score: say so now, not "Scoring…".
+      // The phone already knows a drive under 0.5 mi and under 2 min won't score: say so now, not "Scoring…".
       if (d.reason === 'too_short') return { kind: 'too_short' };
       return d.pointsNet === null ? { kind: 'pending' } : { kind: 'points', value: d.pointsNet, estimate: true };
     case 'scored':
@@ -97,6 +97,15 @@ export type BreakdownLine =
   | { kind: 'event'; key: string; label: string; value: string; tone: LineTone; event: LocalDriveEvent; time: string; cost: number | null };
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/**
+ * The points a breakdown paid per credited safe mile: its recorded `pointsPerMile`, else 10 (a
+ * breakdown stored before the rate was recorded earned 10 a mile).
+ */
+export function pointsPerMileOf(b: { pointsPerMile?: number | null }): number {
+  const v = b.pointsPerMile;
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : LEGACY_POINTS_PER_MILE;
+}
 
 /**
  * "streak ×1.20", or "streak ×1.30 (cap)" at the streak cap; on a DashPal drive
@@ -139,7 +148,7 @@ export function breakdownLines(
     lines.push({
       kind: 'miles',
       key: 'miles',
-      label: `Safe miles: ${round1(b.creditedMiles)} mi${kmNote} × 10${capNote}`,
+      label: `Safe miles: ${round1(b.creditedMiles)} mi${kmNote} × ${pointsPerMileOf(b)}${capNote}`,
       value: signedPoints(Math.round(b.milePoints)),
       tone: 'gain',
     });
@@ -199,7 +208,7 @@ export type ReceiptLine = Extract<BreakdownLine, { kind: 'event' }>;
 export type Receipt = {
   /** Gross points: safe miles plus any clean bonus, times the multiplier. Null while unknown. */
   earned: number | null;
-  /** How `earned` was made, in short parts ("Safe miles 11.8 mi × 10", "Streak ×1.20"). Empty without a server breakdown. */
+  /** How `earned` was made, in short parts ("Safe miles 11.8 mi × 20", "Streak ×1.20"). Empty without a server breakdown. */
   detail: string[];
   /** One line per event, oldest first. */
   deductions: ReceiptLine[];
@@ -222,7 +231,7 @@ export function receipt(d: LocalDrive, events: readonly LocalDriveEvent[], units
     const capNote = b.creditedMiles + 1e-9 < b.safeMiles ? ' (daily cap)' : '';
     const kmNote = units === 'km' ? ` (${formatDistance(b.creditedMiles, 'km')})` : '';
     const mult = multiplierText(b.streakMult, b.dashcamMult, b.mult);
-    const detail = [`Safe miles ${round1(b.creditedMiles)} mi${kmNote} × 10${capNote}`];
+    const detail = [`Safe miles ${round1(b.creditedMiles)} mi${kmNote} × ${pointsPerMileOf(b)}${capNote}`];
     if (b.cleanBonus > 0) detail.push(`Clean bonus ${signedPoints(b.cleanBonus)}`);
     detail.push(mult.charAt(0).toUpperCase() + mult.slice(1));
     return { earned: b.gains, detail, deductions, total, note: null };

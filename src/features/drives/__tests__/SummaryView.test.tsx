@@ -102,6 +102,15 @@ test('a clean drive says "No deductions" and keeps the clean bonus in the detail
   expect(screen.getByTestId('summary-points')).toHaveProp('accessibilityLabel', 'Points this drive: +172 points');
 });
 
+test('a drive scored at 20 a safe mile says × 20 and shows its +50 clean bonus', async () => {
+  const base = result();
+  const r = result({ breakdown: { ...base.breakdown, pointsPerMile: 20, milePoints: 236, cleanBonus: 50, gains: 343, events: [], penalties: 0, net: 343 }, net: 343 });
+  const counts = { speeding: 0, pickups: 0, handlingS: 0, hardBrake: 0, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 0 };
+  await draw(<SummaryView {...props({ drive: drive({ pointsNet: 343, clean: true, counts, result: r }), events: [] })} />);
+  expect(screen.getByTestId('receipt-detail')).toHaveTextContent('Safe miles 11.8 mi × 20 · Clean bonus +50 · Streak ×1.20');
+  expect(screen.getByTestId('receipt-earned')).toHaveProp('accessibilityLabel', 'Earned, plus 343 points. Safe miles 11.8 mi × 20, Clean bonus +50, Streak ×1.20');
+});
+
 test('a DashPal drive shows the multiplier arrow and says "to" aloud', async () => {
   const base = result();
   const r = result({ breakdown: { ...base.breakdown, dashcamMult: 1.25, mult: 1.5 } });
@@ -212,6 +221,7 @@ test('a drive still uploading with no events shows no receipt', async () => {
 test('a too-short drive says so instead of points', async () => {
   await draw(<SummaryView {...props({ drive: drive({ status: 'unscored', reason: 'too_short', pointsNet: 0, result: null }), events: [] })} />);
   expect(screen.getByText('Too short to score')).toBeOnTheScreen();
+  expect(screen.getByText("Drives under 0.5 mi that take under 2 min don't earn or lose points.")).toBeOnTheScreen();
   expect(screen.queryByTestId('receipt')).toBeNull();
 });
 
@@ -416,7 +426,7 @@ describe('final-review fixes', () => {
     await press(screen.getByTestId('share'));
     expect(within(screen.getByTestId('share-card')).getByText('19.3 km')).toBeOnTheScreen();
     await draw(<SummaryView {...props({ drive: drive({ status: 'unscored', reason: 'too_short', pointsNet: null, result: null }) })} />);
-    expect(screen.getByText(/Drives under 0.8 km/)).toBeOnTheScreen();
+    expect(screen.getByText("Drives under 0.8 km that take under 2 min don't earn or lose points.")).toBeOnTheScreen();
   });
 });
 
