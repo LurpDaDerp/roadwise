@@ -5,7 +5,8 @@
  * "Phone down while you drive" · "Picking up your phone counts against this drive's score. Not the
  * driver? Tap to let us know." Silent (no sound; on Android the drive's own low-importance
  * channel). One identifier per drive (`phone-reminder:<clientTripId>`), so a newer one replaces the
- * older, and at most one per `PHONE_REMINDER_GAP_S` per drive. The host decides which pickups may
+ * older, and at most one per `PHONE_REMINDER_GAP_S` per drive, counted from the last reminder that
+ * actually went up (a pickup that posted nothing starts no gap). The host decides which pickups may
  * remind at all (`DriveHostDeps.phoneReminder`: the pickup's first alert, RoadWise not active, a
  * live row at most 15 s old, a stored drive; never a replayed row, a dry run or the simulation).
  * Tapping it opens the driving screen while a drive records, by the recording note's path
@@ -26,7 +27,7 @@ import { DRIVE_HREF, PHONE_REMINDER_KIND } from '@/features/notifications/hrefs'
 
 export { PHONE_REMINDER_KIND };
 
-/** At most one reminder per this many seconds of a drive (row clock). */
+/** At most one reminder per this many seconds of a drive (row clock), from the last one posted. */
 export const PHONE_REMINDER_GAP_S = 120;
 /**
  * The Android channel: the drive's own "Drive recording" channel (low importance: no sound, no
@@ -147,8 +148,10 @@ export function createPhoneReminder(deps: PhoneReminderDeps = {}): PhoneReminder
   let host: Pick<DriveHost, 'subscribe' | 'snapshot'> | null = null;
 
   const takeDown = (clientTripId: string): void => {
-    lastAt.delete(clientTripId);
-    queue(() => port.cancel(phoneReminderIdentifier(clientTripId)), 'phone reminder');
+    queue(async () => {
+      lastAt.delete(clientTripId);
+      await port.cancel(phoneReminderIdentifier(clientTripId));
+    }, 'phone reminder');
   };
 
   /** The drive recording now, or null. */
@@ -159,14 +162,16 @@ export function createPhoneReminder(deps: PhoneReminderDeps = {}): PhoneReminder
 
   return {
     pickup({ clientTripId, at }) {
-      const last = lastAt.get(clientTripId);
-      if (last !== undefined && at - last < PHONE_REMINDER_GAP_S * 1000) return;
-      lastAt.set(clientTripId, at);
+      // In the queue, so each pickup sees the one before it posted (or not); only a reminder that
+      // went up starts the gap: one skipped (no permission, the drive over) or refused does not.
       queue(async () => {
+        const last = lastAt.get(clientTripId);
+        if (last !== undefined && at - last < PHONE_REMINDER_GAP_S * 1000) return;
         if (!(await port.permissionGranted())) return;
         // The drive may have ended meanwhile: its reminder would only open a drive that is over.
         if (host !== null && recordingId() !== clientTripId) return;
         await port.post({ identifier: phoneReminderIdentifier(clientTripId), clientTripId, title: phoneReminderCopy.title, body: phoneReminderCopy.body });
+        lastAt.set(clientTripId, at);
       }, 'phone reminder');
     },
     attach(h) {

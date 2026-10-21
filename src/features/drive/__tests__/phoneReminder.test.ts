@@ -100,6 +100,39 @@ test('at most one per 120 s of each drive: a pickup 119 s after the last reminde
   expect(port.shown).toEqual([{ identifier: `phone-reminder:${A}`, clientTripId: A }]);
 });
 
+test('the 120 s count from the last reminder that went up: a pickup that posted nothing (no permission yet, a failed post) starts no gap', async () => {
+  const port = fakePort(false);
+  const host = fakeHost(recording(A));
+  const errors: string[] = [];
+  const r = createPhoneReminder({ port, onError: (_e, ctx) => void errors.push(ctx) });
+  r.attach(host);
+  // Notifications off: nothing goes up.
+  r.pickup({ clientTripId: A, at: T0 });
+  await r.settled();
+  expect(port.posts).toEqual([]);
+  // Turned on 30 s later: the next pickup posts at once.
+  port.granted = true;
+  r.pickup({ clientTripId: A, at: T0 + 30_000 });
+  await r.settled();
+  expect(port.posts).toHaveLength(1);
+  // That one starts the gap.
+  r.pickup({ clientTripId: A, at: T0 + 100_000 });
+  await r.settled();
+  expect(port.posts).toHaveLength(1);
+  // A post the OS refuses starts none either.
+  const post = port.post;
+  port.post = async () => {
+    throw new Error('refused');
+  };
+  r.pickup({ clientTripId: A, at: T0 + 150_000 });
+  await r.settled();
+  expect(errors).toEqual(['phone reminder']);
+  port.post = post;
+  r.pickup({ clientTripId: A, at: T0 + 160_000 });
+  await r.settled();
+  expect(port.posts).toHaveLength(2);
+});
+
 test('taken down as its drive stops recording (ended, discarded, cancelled), and the next drive starts afresh', async () => {
   const port = fakePort();
   const host = fakeHost(recording(A));
