@@ -1,6 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,11 +9,12 @@ import { DashpalChip, DashpalHudBanner, useDashpalChip, useDashpalFlash, useDash
 import { useOptionalDb } from '@/data/queries/context';
 import { useDrive, useDriveControls, useDriveHost, useDriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
+import { clearHomeNotice, showHomeNotice } from '@/features/home/homeNotice';
 import { navAppById } from '@/features/navigation/catalog';
 import { NavAppPicker } from '@/features/navigation/NavAppPicker';
 import { useNavigationButton } from '@/features/navigation/useNavigationButton';
-import type { DangerKind } from '@/features/weather/danger';
 import { sunIsDown } from '@/lib/time';
+import { mpsToMph } from '@/lib/units';
 import { fontFamilies } from '@/ui/fonts';
 import { SwipeButton } from '@/ui';
 import { useOptionalTheme, useOsReduceMotion } from '@/ui/theme';
@@ -28,16 +29,20 @@ import {
   type BurstSource,
 } from '@/ui/drive';
 
+import { nextEndLock } from './endLock';
 import { EventBanner, useAlertFlash } from './EventBanner';
 import { hudButtonColors } from './hudButtons';
 import { hudCopy } from './hudCopy';
 import { hudLayout, type Rect } from './hudLayout';
 import { navHighlight, NavigationButton, nextNavLock } from './NavigationButton';
-import { StoppedPoints } from './StoppedPoints';
-import { useDeductionShake } from './useDeductionShake';
+import { NotDrivingLink } from './NotDrivingLink';
+import { SpotNudgeLine, useSpotNudgeFlash } from './SpotNudge';
+import { useEventShake } from './useEventShake';
 import { useHaloBurst } from './useHaloBurst';
 import { HaloReadout } from './HaloReadout';
 import { inUnits, useHudUnits } from './useHudUnits';
+import { WaitingBanner } from './WaitingBanner';
+import { WaitPanel } from './WaitPanel';
 import { WeatherBanner } from './WeatherBanner';
 
 /** End's swipe forgives this much up or down before it gives way (nothing scrolls under it). */
@@ -88,8 +93,8 @@ export function hudNightOf(themeNight: boolean | null | undefined, sunNight: boo
 
 /**
  * The screen dims after `DIM_AFTER_MS` without a touch; any touch undims it (and re-arms the
- * timer). It never dims while `hold` is true (an alert is showing). One timer, re-armed per touch;
- * a touch on an undimmed screen changes no state, so it re-renders nothing.
+ * timer). It never dims while `hold` is true (an alert or a panel is showing). One timer, re-armed
+ * per touch; a touch on an undimmed screen changes no state, so it re-renders nothing.
  */
 export function useDimmer(hold: boolean): { dimmed: boolean; wake: () => void } {
   const [idle, setIdle] = useState(false);
@@ -125,36 +130,42 @@ export type HudScreenProps = {
  * - Middle: the halo, a glowing ring with the speed inside it (white when calm, the halo's colour
  *   otherwise). Calm: light blue-white, light moving slowly round it. Past the posted limit it tints
  *   toward yellow, orange and red with the speed over it (all but calm just over, red at 1.7 × the
- *   limit), following each row; it pulses only while the car is over the points line (limit plus
- *   tolerance), faster the further over, and stops on the first row back under it. Phone use and a
- *   DashPal alert (driver-not-visible included): warmer and faster the more serious and the longer.
- *   A hard brake, hard start, sharp turn, phone pickup or handling alert, and each DashPal alert
- *   start or step (not a reconnect's re-send), pulse it quickly a few times. Points coming off shake
- *   the ring sideways, more for more points. Around it a compass turns with the car's GPS course
- *   (heading up, never growing or moving with the ring). Rules in `src/ui/drive/halo.ts`; drawing
- *   in `HaloRing.tsx` and `HaloCompass.tsx`.
+ *   limit), following each row; it pulses only while the car is over the speeding line (limit plus
+ *   tolerance), faster the further over, and stops on the first row back under it. A DashPal alert
+ *   (driver-not-visible included): warmer and faster the more serious and the longer. A hard brake,
+ *   hard start or sharp turn, and each DashPal alert start or step (not a reconnect's re-send),
+ *   pulse it quickly a few times. Each event (a speeding episode at its grace end too) shakes the
+ *   ring sideways once, more for a more serious one. Around it a compass turns with the car's GPS
+ *   course (heading up, never growing or moving with the ring). Rules in `src/ui/drive/halo.ts`;
+ *   drawing in `HaloRing.tsx` and `HaloCompass.tsx`.
  * - Top row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres) on
  *   the left and the navigation button on the right. The navigation button's list of apps shows in
  *   a panel under the row, never a route: on a tap while no app is saved, or on a long press (to
  *   change the saved app, or to pick one). At 35 mph and over the button greys out and takes no
  *   touch (its list closes) until the car is back under 30 mph.
- * - Band, under the top row: for 1.5 s after an event (or a DashPal alert start or level change) its icon and one
- *   or two words, across the whole band (the DashPal chip steps aside); else a failed end, the
- *   dangerous-weather banner (its ✕ live at any speed; hidden for the rest of the drive once
- *   dismissed), or the points when they have no line of their own. Precedence: DashPal banner, the
- *   phone's event, a failed end, weather, the points. With a DashPal paired, a small static chip top right.
- * - Stopped only: the points total ("pts"), fading in and out, under the halo when there is
- *   room (so the halo never moves; in landscape above the navigation button), else in the band.
- * - Landscape: the halo the full height, the sign left of it; on the right the band, the points,
- *   the navigation button and End under it.
- * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive.
+ * - Band, under the top row: for 1.5 s after an event (or a DashPal alert start or level change)
+ *   its icon and one or two words, across the whole band (the DashPal chip steps aside); else a
+ *   failed end, "Not driving?" when it has no row of its own, for 4 s a problem spot's nudge
+ *   ("Watch your speed here"), then the dangerous-weather banner (its ✕ live at any speed; hidden
+ *   for the rest of the drive once dismissed). With a DashPal paired, a small static chip top right.
+ * - "Not driving?": a small underlined link in its own row above End (landscape: above the
+ *   navigation button), shown while the drive's 2-minute budget lasts (the host counts the time this
+ *   screen is focused with RoadWise in front); a tap discards the drive and goes Home. A touch that
+ *   starts while the screen is dimmed only wakes it.
+ * - Waiting (a Start drive swipe, before the car moves): the band says "Ready to roll" · "Starts
+ *   once you're moving", the halo shows the wait's own speed, End is "Cancel". At 2:00 a panel asks
+ *   "Still planning to drive?", from 4:30 it counts down; any touch waits a fresh 5 minutes; at
+ *   5:00, or on Cancel, the wait ends quietly and the screen goes Home.
+ * - Landscape: the halo the full height, the sign left of it; on the right the band, the link, the
+ *   navigation button and End under it.
+ * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive. At
+ *   15 mph and over it greys out with a lock and takes no swipe, until the car is back under 10.
  *   End and the navigation button wear the app's paper, ink and sky accent (`hudButtonColors`).
- *   End, the navigation button (under 35 mph) and the weather banner's ✕ are the only touch targets
- *   while moving.
- *   Every other touch only undims.
- * - After 10 s without a touch a dark scrim dims everything, never while an alert banner shows; the
- *   halo and the speed stay above it, at reduced strength and still flowing with no warning showing
- *   (a tint under the points line included), at full strength while warning.
+ *   End, the navigation button (under 35 mph), "Not driving?" and the weather banner's ✕ are the
+ *   only touch targets while moving. Every other touch only undims.
+ * - After 10 s without a touch a dark scrim dims everything, never while an alert, a nudge or a
+ *   panel shows; the halo and the speed stay above it, at reduced strength and still flowing with no
+ *   warning showing (a tint under the speeding line included), at full strength while warning.
  * - Night: a static theme's own look; else the sun at the phone's last known position (with none
  *   yet, the sky's scheme).
  * - Every position comes from `hudLayout` (absolute rects): End is always on screen.
@@ -180,28 +191,52 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const base = hudPalette(night);
   const p = sky === null ? base : { ...base, ground: sky.stops[1], chrome: sky.chrome, chromeEdge: sky.chromeEdge };
   const b = hudButtonColors(theme, p, night);
-  // The list of navigation apps wears the app's own sheet colours, as it does in Settings.
+  // The list of navigation apps and the waiting panels wear the app's own sheet colours, as in Settings.
   const sheet =
     theme === null
       ? { surface: p.chrome, ink: p.ink, muted: p.inkMuted, edge: p.chromeEdge }
       : { surface: theme.colors.surface, ink: theme.colors.text, muted: theme.colors.textMuted, edge: theme.colors.border };
   const units = useHudUnits();
 
+  // A Start drive swipe waiting for the car to move (no drive yet), or null.
+  const waiting = live.waiting;
+  const isWaiting = waiting !== null;
+  // The speed the locks read: the wait's own GPS speed while waiting, else the newest row's (mph).
+  const lockMph = waiting !== null ? (waiting.speedMps === null ? null : Math.round(mpsToMph(waiting.speedMps) * 10) / 10) : live.rowSpeedMph;
+
+  // The screen's focus: the "Not driving?" budget counts only while this screen is focused (the host
+  // adds RoadWise being in front), so the lock-screen hint goes at the same moment the link does.
+  useFocusEffect(
+    useCallback(() => {
+      if (overlay) return;
+      controls.setHudVisible(true);
+      return () => controls.setHudVisible(false);
+    }, [controls, overlay])
+  );
+
   const alert = useAlertFlash(live.lastAlert, live.rowTs);
+  const nudge = useSpotNudgeFlash(live.spotNudge, live.rowTs);
   const dashpal = useDashpalFlash();
   const dashpalChip = useDashpalChip();
   const held = useDashpalHeld();
   // The navigation button greys out at 35 mph and over, back under 30 (the row's GPS speed; an
   // unknown speed holds it): advanced once per render from the last (state-from-the-previous-render).
   const [navLocked, setNavLocked] = useState(false);
-  const nextLocked = nextNavLock(navLocked, live.rowSpeedMph);
+  const nextLocked = nextNavLock(navLocked, lockMph);
   if (nextLocked !== navLocked) setNavLocked(nextLocked);
+  // End greys out at 15 mph and over, back under 10 (an unknown speed holds it); never while waiting.
+  const [endLocked, setEndLocked] = useState(false);
+  const nextEnd = isWaiting ? false : nextEndLock(endLocked, live.rowSpeedMph);
+  if (nextEnd !== endLocked) setEndLocked(nextEnd);
   const nav = useNavigationButton(useOptionalDb(), undefined, nextLocked);
   const savedApp = nav.saved === null ? null : navAppById(nav.saved);
   // The button's warm-up highlight: an app is saved and the drive's rows are still under 30 s old (row clock).
   const navLit = useDrive((s) => s.status === 'recording' && navHighlight(savedApp !== null, s.startedAt, s.lastRowTs));
-  // The dimmer stays off while either alert shows, and while the list of apps is open.
-  const { dimmed, wake } = useDimmer(alert !== null || dashpal !== null || nav.picker !== null);
+  // The waiting panel: "Still planning to drive?" from 2:00, the countdown from 4:30.
+  const waitPanel = waiting !== null && (waiting.phase === 'popup' || waiting.phase === 'countdown') ? { ...waiting, phase: waiting.phase } : null;
+  const panelUp = waitPanel !== null;
+  // The dimmer stays off while an alert, a nudge, the list of apps or a waiting panel shows.
+  const { dimmed, wake } = useDimmer(alert !== null || dashpal !== null || nudge !== null || nav.picker !== null || panelUp);
   // Android back closes the list first (before the drive screen's own swallow).
   const pickerOpen = nav.picker !== null;
   const closePicker = nav.close;
@@ -213,6 +248,16 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
     });
     return () => sub.remove();
   }, [pickerOpen, closePicker]);
+  // A waiting panel closes the list: the two never show together.
+  useEffect(() => {
+    if (panelUp) closePicker();
+  }, [panelUp, closePicker]);
+
+  // Every touch undims; while waiting it also waits a fresh 5 minutes (the panel's Cancel excepted).
+  const onTouchStart = useCallback(() => {
+    wake();
+    if (isWaiting) controls.touchWaiting();
+  }, [wake, isWaiting, controls]);
 
   // Where the drive goes once it is over: its summary, fresh, or Home when there was none (a drive
   // that was not kept has no summary; Home says why). Home is the one under the drive: `dismissTo`
@@ -236,9 +281,28 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const [ending, setEnding] = useState(false);
   // A failed end says so (one line in the band) until the next swipe.
   const [endFailed, setEndFailed] = useState(false);
+  // "Not driving?" is discarding the drive.
+  const [cancelling, setCancelling] = useState(false);
+
+  /** Stop the wait (nothing is stored) and go Home, saying nothing. */
+  const stopWaiting = useCallback(async () => {
+    try {
+      await controls.cancelWaiting();
+    } catch {
+      // The wait ends with the session either way.
+    }
+    leave(null);
+  }, [controls, leave]);
+
   const onEnd = useCallback(async () => {
     if (ending) return;
     setEnding(true);
+    if (isWaiting) {
+      // "Cancel": the wait stops.
+      await stopWaiting();
+      setEnding(false);
+      return;
+    }
     setEndFailed(false);
     try {
       const done = await controls.end();
@@ -254,43 +318,63 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
       setEnding(false);
       setEndFailed(true);
     }
-  }, [ending, controls, host, leave]);
+  }, [ending, isWaiting, stopWaiting, controls, host, leave]);
+
+  // "Not driving?": Home is told first (it says the trip won't count as it opens), then the drive is
+  // discarded. Refused (its budget ran out between the render and the tap): nothing else happens.
+  const onNotDriving = useCallback(async () => {
+    if (cancelling) return;
+    setCancelling(true);
+    if (!overlay) showHomeNotice('notDriving');
+    let ok = false;
+    try {
+      ok = await controls.cancelDrive();
+    } catch {
+      ok = false;
+    }
+    if (ok) leave(null);
+    else if (!overlay) clearHomeNotice();
+    setCancelling(false);
+  }, [cancelling, overlay, controls, leave]);
 
   // A drive that ends without the button (it ended by itself) still lands on its summary, or on
   // Home when it was not kept. One that closed but could not be finalized stays here, saying
-  // "Swipe again": End finalizes it again (`host.end()`).
+  // "Swipe again": End finalizes it again (`host.end()`). A wait that ends with no drive (its 5
+  // minutes ran out, or it was cancelled) goes Home, saying nothing.
   const failedId = useDrive((d) => (d.lastFinalized !== null && !d.lastFinalized.ok ? d.lastFinalized.clientTripId : null));
   const sawRecording = useRef(false);
+  const sawWaiting = useRef(false);
   useEffect(() => {
     if (live.status === 'recording') sawRecording.current = true;
-    else if (live.status === 'idle' && sawRecording.current && !ending) {
+    if (isWaiting) sawWaiting.current = true;
+    if (live.status !== 'idle' || ending || cancelling) return;
+    if (sawRecording.current) {
       const id = lastTripId.current;
       if (failedId !== null && failedId === id) setEndFailed(true);
       else leave(droppedId !== null && droppedId === id ? null : id);
-    }
-  }, [live.status, ending, leave, droppedId, failedId]);
+    } else if (sawWaiting.current && !isWaiting) leave(null);
+  }, [live.status, isWaiting, ending, cancelling, leave, droppedId, failedId]);
 
   // Over the posted limit speeding is judged on (the speed's spoken label says so).
   const speeding = live.speedingRatio !== null && live.speedingRatio > 1;
   const busy = ending || live.status === 'finalizing';
 
-  // The halo: tinted from the limit on each row, pulsing only over the points line; it shakes once
-  // for points that just came off (fresh on the row clock, never one from the background).
-  const deduction = useDeductionShake(live.lastDeduction, live.rowTs);
+  // The halo: tinted from the limit on each row, pulsing only over the speeding line; it shakes once
+  // for each event as it happens (fresh on the row clock, never one from the background).
+  const shake = useEventShake(live.lastShake, live.rowTs);
   const now = wallClock();
-  const phoneSource = useMemo<BurstSource | null>(() => (alert === null ? null : { kind: 'phone', type: alert.type, at: alert.at, until: alert.until }), [alert]);
+  const eventSource = useMemo<BurstSource | null>(() => (alert === null ? null : { kind: 'event', type: alert.type, at: alert.at, until: alert.until }), [alert]);
   const dashpalSource = useMemo<BurstSource | null>(
     () => (dashpal === null ? null : { kind: 'dashpal', key: dashpal.key, sound: dashpal.sound, tier: dashpal.tier, resend: dashpal.resend, until: dashpal.until }),
     [dashpal]
   );
-  const burst = useHaloBurst({ phone: phoneSource, dashpal: dashpalSource, now });
+  const burst = useHaloBurst({ event: eventSource, dashpal: dashpalSource, now });
   const visual = haloVisual({
     reduceMotion,
     status: live.status,
     speeding: speedingTint(live.speedingRatio),
     speedingOver: live.speedingOver,
-    deduction,
-    phoneUseSince: live.phoneUseSince,
+    shake,
     rowTs: live.rowTs,
     held,
     now,
@@ -298,26 +382,18 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   });
 
   const layout = hudLayout({ width, height, insets, fontScale, chip: dashpalChip !== null, units });
+  const compactBand = layout.compact || layout.orientation === 'landscape';
   const bannerUp = dashpal !== null || alert !== null;
-  const showPoints = live.stopped && live.points !== null;
-  const haloPoints = layout.points === 'halo' ? layout.haloPoints : null;
-  const pointsView = !showPoints ? null : haloPoints !== null ? (
-    <StoppedPoints total={live.points!.total} palette={p} size={haloPoints.pt} width={haloPoints.w} inHalo />
-  ) : (
-    <StoppedPoints total={live.points!.total} palette={p} />
-  );
-  // A weather alert the driver hid (with its ✕, at any speed) stays hidden for the rest of this drive.
-  const [hiddenWeather, setHiddenWeather] = useState<{ trip: string | null; kinds: readonly DangerKind[] }>({ trip: null, kinds: [] });
+  // The weather alert at the car (the host leaves out a kind dismissed this drive); its ✕ hides it
+  // for the rest of the drive (a more severe kind shows again).
   const weather = live.weatherAlert;
-  const weatherShown = weather !== null && !(hiddenWeather.trip === live.clientTripId && hiddenWeather.kinds.includes(weather.kind)) ? weather : null;
-  const hideWeather = useCallback(() => {
-    if (weather === null) return;
-    const trip = live.clientTripId;
-    setHiddenWeather((h) => ({ trip, kinds: h.trip === trip ? [...h.kinds, weather.kind] : [weather.kind] }));
-  }, [weather, live.clientTripId]);
+  const dismissWeather = useCallback(() => controls.dismissWeather(), [controls]);
+  // "Not driving?" while the drive's budget lasts; never while waiting, saving or already going.
+  const showLink = live.status === 'recording' && live.notDrivingAvailable && !isWaiting && !busy && !cancelling;
+  const link = <NotDrivingLink palette={p} dimmed={dimmed} onPress={() => void onNotDriving()} />;
 
   return (
-    <View testID="hud-screen" onTouchStart={wake} style={[styles.root, { backgroundColor: p.ground }]}>
+    <View testID="hud-screen" onTouchStart={onTouchStart} style={[styles.root, { backgroundColor: p.ground }]}>
       {sky !== null ? <LinearGradient testID="hud-sky" pointerEvents="none" colors={sky.stops} style={StyleSheet.absoluteFill} /> : null}
       {/* The band: an alert banner across all of it, else the line (and the chip beside it). */}
       <View style={[styles.abs, styles.centred, at(layout.band)]}>
@@ -341,16 +417,14 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             >
               {hudCopy.endFailed}
             </Text>
-          ) : weatherShown !== null ? (
-            <WeatherBanner
-              alert={weatherShown}
-              units={units}
-              palette={p}
-              compact={layout.compact || layout.orientation === 'landscape'}
-              onDismiss={hideWeather}
-            />
-          ) : layout.points === 'line' && pointsView !== null ? (
-            pointsView
+          ) : isWaiting ? (
+            <WaitingBanner palette={p} compact={compactBand} />
+          ) : showLink && layout.notDriving === 'line' ? (
+            link
+          ) : nudge !== null ? (
+            <SpotNudgeLine nudge={nudge} palette={p} compact={compactBand} />
+          ) : weather !== null ? (
+            <WeatherBanner alert={weather} units={units} palette={p} compact={compactBand} onDismiss={dismissWeather} />
           ) : null}
         </View>
       ) : null}
@@ -360,28 +434,26 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         </View>
       ) : null}
 
-      {/* Twice guarded: the pipeline publishes points only while stopped, and the screen shows
-          them only while the car is known to be stopped (a lost fix is not "stopped"). */}
-      {layout.points !== 'line' && layout.points !== 'halo' ? <View style={[styles.abs, styles.centred, at(layout.points)]}>{pointsView}</View> : null}
-
       <View style={[styles.abs, styles.centred, at(layout.sign)]}>
-        <SpeedSign limit={inUnits(live.limitMph, units)} palette={p} units={units} height={layout.sign.h} />
+        <SpeedSign limit={inUnits(waiting !== null ? waiting.limitMph : live.limitMph, units)} palette={p} units={units} height={layout.sign.h} />
       </View>
+      {showLink && layout.notDriving !== 'line' ? <View style={[styles.abs, styles.centred, at(layout.notDriving)]}>{link}</View> : null}
       <View style={[styles.abs, styles.centred, at(layout.end)]}>
         <View style={{ width: layout.end.w }}>
           <SwipeButton
             testID="hud-end"
-            accessibilityLabel={hudCopy.endLabel}
-            accessibilityHint={hudCopy.endHint}
-            icon="stop"
+            accessibilityLabel={isWaiting ? hudCopy.cancelLabel : hudCopy.endLabel}
+            accessibilityHint={isWaiting ? hudCopy.cancelHint : nextEnd ? hudCopy.endLockedHint(units) : hudCopy.endHint}
+            icon={isWaiting ? 'close' : nextEnd ? 'lock-closed' : 'stop'}
             colors={{ track: b.paper, fill: b.fill, knob: b.ink, knobInk: b.paper, hint: b.ink }}
             height={layout.end.h}
             busy={busy}
+            disabled={nextEnd}
             verticalSlop={END_VERTICAL_SLOP_PT}
             onSwipe={() => void onEnd()}
             label={
               <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit style={[styles.endLabel, { color: b.ink }]}>
-                {busy ? hudCopy.ending : hudCopy.end}
+                {isWaiting ? hudCopy.cancel : busy ? hudCopy.ending : hudCopy.end}
               </Text>
             }
           />
@@ -392,7 +464,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           caption={savedApp?.short ?? null}
           appLabel={savedApp?.label ?? null}
           highlight={navLit && !nextLocked}
-          disabled={busy || live.status !== 'recording'}
+          disabled={busy || (live.status !== 'recording' && !isWaiting)}
           locked={nextLocked}
           units={units}
           palette={p}
@@ -428,25 +500,27 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
               units={units}
               pt2={layout.numeralPt2}
               pt3={layout.numeralPt3}
-              unitPt={layout.unitPt}
-              haloPoints={haloPoints}
-              points={haloPoints !== null ? pointsView : null}
               color={p.haloInk}
               unitColor={p.haloInkMuted}
               numeralStyle={numeralStyle}
               speeding={speeding}
+              waitingMps={waiting !== null ? waiting.speedMps : undefined}
             />
           )}
         />
       </View>
 
-      {nav.picker !== null ? (
+      {waitPanel !== null ? (
+        <View testID="hud-wait" style={[styles.panel, { ...at(layout.panel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>
+          <WaitPanel waiting={waitPanel} colors={sheet} height={layout.panel.h} onKeep={() => controls.touchWaiting()} onCancel={() => void stopWaiting()} />
+        </View>
+      ) : nav.picker !== null ? (
         <View
           testID="hud-nav-panel"
           style={[
             styles.panel,
             {
-              // Never over the navigation button or End: both stay reachable while the list is open.
+              // Never over the navigation button, the link or End: they stay reachable while the list is open.
               ...at(layout.panel),
               backgroundColor: sheet.surface,
               borderColor: sheet.edge,

@@ -8,6 +8,8 @@ import {
   hudLabelScale,
   tierColor,
 } from '@/ui/drive/hudTokens';
+import { opaque, over } from '@/ui/sky/color';
+import { plainBundle, skyBundle } from '@/ui/sky/palette';
 
 const palettes: [string, HudPalette][] = [
   ['day', HUD.day],
@@ -71,4 +73,30 @@ test('small HUD labels follow Dynamic Type between 1x and 2x', () => {
   expect(hudLabelScale(1.5)).toBe(1.5);
   expect(hudLabelScale(3)).toBe(2);
   expect(hudLabelScale(Number.NaN)).toBe(1);
+});
+
+// The Live Activity draws the unit, the weather line and "Not driving?" in white at 0.7 over the
+// driving screen's deepened sky (`DisplayLook`): it must read at 4.5:1 on every stop of every sky.
+describe('white at 0.7 on the driving screen’s sky (the lock screen’s quiet print)', () => {
+  const phases = ['night', 'dawn', 'day', 'dusk'] as const;
+  const kinds = ['clear', 'cloudy', 'fog', 'rain', 'snow', 'storm'] as const;
+  const bundles = [
+    ...phases.flatMap((phase) =>
+      kinds.flatMap((kind) =>
+        ([0, 1] as const).map((glow) => ({ name: `${phase}/${kind}/${glow}`, b: skyBundle({ phase, glow, weather: { kind, intensity: 'moderate' } }) }))
+      )
+    ),
+    ...phases.map((phase) => ({ name: `${phase}/light cloud`, b: skyBundle({ phase, glow: 1, weather: { kind: 'cloudy', intensity: 'light' } }) })),
+    { name: 'plain light', b: plainBundle('light') },
+    { name: 'plain dark', b: plainBundle('dark') },
+  ];
+
+  test.each(bundles.map((x) => [x.name, x.b] as const))('%s: every stop of both HUD skies', (_name, b) => {
+    for (const set of ['day', 'night'] as const) {
+      for (const stop of b.sky.hud[set].stops) {
+        const ink = over(opaque(stop), 'rgba(255, 255, 255, 0.7)');
+        expect(contrastRatio(ink, opaque(stop))).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
 });

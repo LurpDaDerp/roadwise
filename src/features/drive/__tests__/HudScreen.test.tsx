@@ -11,6 +11,8 @@ import { DIM_AFTER_MS, END_SWIPE_H_PT, HUD, HUD_MIN_TARGET_PT, type HaloProps, t
 import { skyBundle, type SkyMood } from '@/ui/sky/palette';
 import { ThemeProvider, useTheme, type Theme } from '@/ui/theme';
 
+import { clearHomeNotice, readHomeNotice } from '@/features/home/homeNotice';
+
 import { hudCopy } from '../hudCopy';
 import { hudLayout } from '../hudLayout';
 import { HudScreen, hudNightOf } from '../HudScreen';
@@ -34,7 +36,12 @@ let mockStill = false;
 jest.mock('@/ui/theme', () => ({ ...jest.requireActual('@/ui/theme'), useOsReduceMotion: () => mockStill }));
 
 const mockRouter = { replace: jest.fn(), push: jest.fn(), navigate: jest.fn(), dismissTo: jest.fn() };
-jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
+jest.mock('expo-router', () => ({
+  useRouter: () => mockRouter,
+  // The screen's focus, as a mount effect (the route is always focused in these tests).
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- inside the mock factory
+  useFocusEffect: (fn: () => void | (() => void)) => require('react').useEffect(fn, [fn]),
+}));
 jest.mock('expo-location', () => ({ getLastKnownPositionAsync: jest.fn(async () => null) }));
 jest.mock('expo-haptics', () => ({
   impactAsync: jest.fn(async () => {}),
@@ -69,8 +76,18 @@ const MPS_PER_MPH = 0.44704;
 let mockLive: DriveLive;
 /** The halo's number as the store hands it to the readout (`useShownSpeed`). */
 let mockShown: ShownSpeed = { mps: null, accel: 0, at: null };
-const mockEnd = jest.fn<Promise<{ clientTripId: string; dropped: 'no_movement' | 'no_gps' | null } | null>, []>();
+const mockEnd = jest.fn<Promise<{ clientTripId: string; dropped: 'no_movement' | 'no_gps' | 'cancelled' | null } | null>, []>();
 let mockLastFinalized: LastFinalized = null;
+/** The drive's controls as the screen calls them (stable, as the real hook's memo is). */
+const mockControls = {
+  start: jest.fn(),
+  end: mockEnd,
+  touchWaiting: jest.fn(),
+  cancelWaiting: jest.fn(async () => {}),
+  cancelDrive: jest.fn(async () => true),
+  setHudVisible: jest.fn(),
+  dismissWeather: jest.fn(),
+};
 /** The store's newest row time (the row clock), or null before any row. */
 let mockLastRowTs: number | null = null;
 jest.mock('@/drive/useDrive', () => ({
@@ -78,7 +95,7 @@ jest.mock('@/drive/useDrive', () => ({
     sel({ lastFinalized: mockLastFinalized, status: mockLive.status, startedAt: mockLive.startedAt, lastRowTs: mockLastRowTs }),
   useDriveLive: () => mockLive,
   useShownSpeed: () => mockShown,
-  useDriveControls: () => ({ start: jest.fn(), end: mockEnd }),
+  useDriveControls: () => mockControls,
   useDriveHost: () => ({ snapshot: () => ({ lastFinalized: mockLastFinalized }) }),
 }));
 
@@ -116,30 +133,36 @@ function setShown(s: typeof lastShown): void {
       : { mps: s.speedMph * MPS_PER_MPH, accel: s.speedAccelMph * MPS_PER_MPH, at: s.speedAt };
 }
 
+/** The speed a test drives at unless it says (End locks at 15 mph, so its tests run slower). */
+let mockDefaultMph = 34;
+
 function live(over: Partial<DriveLive> = {}): DriveLive {
   return {
     status: 'recording',
     clientTripId: 't1',
-    rowSpeedMph: 34,
+    rowSpeedMph: mockDefaultMph,
     limitMph: 35,
     speedingTier: null,
     speedingRatio: null,
     speedingOver: false,
     courseDeg: null,
-    lastDeduction: null,
+    origin: 'manual',
+    lastShake: null,
     stopped: false,
     lastAlert: null,
     weatherAlert: null,
-    points: null,
+    weather: null,
     startedAt: T,
     rowTs: null,
-    phoneUseSince: null,
+    waiting: null,
+    notDrivingAvailable: false,
+    spotNudge: null,
     ...over,
   };
 }
 
 async function renderHud(over: LiveOver = {}) {
-  const first = split(over, { speedMph: 34, speedAccelMph: 0, speedAt: Date.now() });
+  const first = split(over, { speedMph: mockDefaultMph, speedAccelMph: 0, speedAt: Date.now() });
   setShown(first.shown);
   mockLive = live(first.live);
   const r = await render(<HudScreen />);
@@ -165,7 +188,10 @@ beforeEach(() => {
   mockNavApp = null;
   mockLastRowTs = null;
   mockLastFinalized = null;
+  mockDefaultMph = 34;
   mockEnd.mockResolvedValue({ clientTripId: 't1', dropped: null });
+  mockControls.cancelDrive.mockResolvedValue(true);
+  clearHomeNotice();
 });
 afterEach(() => jest.useRealTimers());
 
@@ -253,7 +279,7 @@ describe('speed and limit', () => {
 });
 
 describe('the halo while speeding', () => {
-  // limit 35: the points line at 39 (T 4); the tint full red at 1.7 x 35 = 59.5; one row per second
+  // limit 35: the speeding line at 39 (T 4); the tint full red at 1.7 x 35 = 59.5; one row per second
   const at = (mph: number, line = 39, limit = 35) => ({ speedMph: mph, speedingRatio: mph / limit, speedingOver: mph > line });
 
   test('within the limit: calm, flowing, the speed white', async () => {
@@ -265,7 +291,7 @@ describe('the halo while speeding', () => {
     expect(screen.getByTestId('hud-halo', HIDDEN)).toBeTruthy();
   });
 
-  test('past the limit, under the points line: a faint tint from the limit, still flowing, no pulse; spoken "over the limit"', async () => {
+  test('past the limit, under the speeding line: a faint tint from the limit, still flowing, no pulse; spoken "over the limit"', async () => {
     await renderHud({ rowTs: T, ...at(37) });
     expect(halo()).toMatchObject({ mode: 'speeding', flow: true, pulsePeriodMs: 0, warning: false });
     expect(halo().colorSeverity).toBeCloseTo((37 / 35 - 1) / 0.7, 9);
@@ -277,7 +303,7 @@ describe('the halo while speeding', () => {
     [45, (45 / 35 - 1) / 0.7],
     [52, (52 / 35 - 1) / 0.7],
     [70, 1],
-  ])('over the points line at %s mph: tinted %s from the limit, pulsing, no flow', async (mph, s) => {
+  ])('over the speeding line at %s mph: tinted %s from the limit, pulsing, no flow', async (mph, s) => {
     await renderHud({ rowTs: T, ...at(mph) });
     expect(halo().mode).toBe('speeding');
     expect(halo().severity).toBeCloseTo(s, 9);
@@ -285,7 +311,7 @@ describe('the halo while speeding', () => {
     expect(halo().pulsePeriodMs).toBeCloseTo(2200 - 1400 * s, 6);
   });
 
-  test('the pulse stops on the first row back under the points line; the tint follows each row, calm at the limit', async () => {
+  test('the pulse stops on the first row back under the speeding line; the tint follows each row, calm at the limit', async () => {
     const h = await renderHud({ rowTs: T, ...at(47) });
     expect(halo().pulsePeriodMs).toBeGreaterThan(0);
     await h.update({ rowTs: T + 1000, ...at(38) });
@@ -329,33 +355,33 @@ describe('the halo while speeding', () => {
   });
 });
 
-describe('the shake when points come off', () => {
-  const ded = (key: string, points: number, atTs: number) => ({ key, points, at: atTs });
+describe('the shake on an event', () => {
+  const ev = (key: string, tier: 'minor' | 'moderate' | 'severe', atTs: number) => ({ key, tier, at: atTs });
 
-  test('each new deduction shakes the ring once with its points; the same one again does not', async () => {
+  test('each new event shakes the ring once with its tier; the same one again does not', async () => {
     const h = await renderHud({ rowTs: T });
     expect(halo().shake).toBeNull();
-    await h.update({ rowTs: T + 1000, lastDeduction: ded('hard_brake:1', 20, T + 1000) });
-    expect(halo().shake).toEqual({ key: `hard_brake:1@${T + 1000}`, points: 20 });
-    await h.update({ rowTs: T + 1000, lastDeduction: ded('hard_brake:1', 20, T + 1000) });
-    expect(halo().shake).toEqual({ key: `hard_brake:1@${T + 1000}`, points: 20 });
+    await h.update({ rowTs: T + 1000, lastShake: ev('hard_brake:1', 'severe', T + 1000) });
+    expect(halo().shake).toEqual({ key: `hard_brake:1@${T + 1000}`, tier: 'severe' });
+    await h.update({ rowTs: T + 1000, lastShake: ev('hard_brake:1', 'severe', T + 1000) });
+    expect(halo().shake).toEqual({ key: `hard_brake:1@${T + 1000}`, tier: 'severe' });
     await act(() => jest.advanceTimersByTime(1500));
     expect(halo().shake).toBeNull();
-    await h.update({ rowTs: T + 9000, lastDeduction: ded('speeding:2', 5, T + 9000) });
-    expect(halo().shake).toEqual({ key: `speeding:2@${T + 9000}`, points: 5 });
+    await h.update({ rowTs: T + 9000, lastShake: ev('speeding:2:grace', 'minor', T + 9000) });
+    expect(halo().shake).toEqual({ key: `speeding:2:grace@${T + 9000}`, tier: 'minor' });
   });
 
-  test('never for the one standing when the screen opens, nor for one 1.5 s old on the row clock (it came off in the background)', async () => {
-    const h = await renderHud({ rowTs: T, lastDeduction: ded('hard_brake:1', 20, T) });
+  test('never for the one standing when the screen opens, nor for one 1.5 s old on the row clock (it happened in the background)', async () => {
+    const h = await renderHud({ rowTs: T, lastShake: ev('hard_brake:1', 'severe', T) });
     expect(halo().shake).toBeNull();
-    await h.update({ rowTs: T + 6000, lastDeduction: ded('phone_pickup:2', 32, T + 1000) });
+    await h.update({ rowTs: T + 6000, lastShake: ev('hard_corner:2', 'moderate', T + 1000) });
     expect(halo().shake).toBeNull();
   });
 
   test('none under Reduce Motion', async () => {
     mockStill = true;
     const h = await renderHud({ rowTs: T });
-    await h.update({ rowTs: T + 1000, lastDeduction: ded('hard_brake:1', 20, T + 1000) });
+    await h.update({ rowTs: T + 1000, lastShake: ev('hard_brake:1', 'severe', T + 1000) });
     expect(halo().shake).toBeNull();
   });
 });
@@ -443,7 +469,7 @@ describe('the dangerous-weather banner (plan D14)', () => {
     expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Strong winds. Gusts to 84 km/h. Keep both hands on the wheel.');
   });
 
-  test('the ✕ shows and works at any speed, and hides it for the rest of the drive', async () => {
+  test('the ✕ shows and works at any speed: it asks the host to hide it for the rest of the drive', async () => {
     const h = await renderHud({ weatherAlert: ICE, speedMph: 3, stopped: true });
     expect(screen.getByRole('button', { name: 'Hide weather alert' })).toBeOnTheScreen();
     await h.update({ speedMph: 70, stopped: false });
@@ -456,32 +482,10 @@ describe('the dangerous-weather banner (plan D14)', () => {
     await act(async () => {
       fireEvent.press(close);
     });
+    expect(mockControls.dismissWeather).toHaveBeenCalledTimes(1);
+    // The host leaves the dismissed kind out from then on.
+    await h.update({ weatherAlert: null });
     expect(screen.queryByTestId('hud-weather')).toBeNull();
-    // Moving again, a fresh answer with the same danger: still hidden.
-    await h.update({ speedMph: 40, stopped: false, weatherAlert: { ...ICE } });
-    expect(screen.queryByTestId('hud-weather')).toBeNull();
-    // A different danger shows.
-    await h.update({ weatherAlert: GUSTS });
-    expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Strong winds/);
-    // The next drive starts with nothing hidden.
-    await h.update({ clientTripId: 't2', weatherAlert: ICE });
-    expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Freezing rain/);
-  });
-
-  test('stopped with points and no line of their own: weather keeps the line until hidden, then the points take it', async () => {
-    // A compact window (short and wide): the points share the band's line.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the hook behind react-native's export
-    const dims = require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
-    jest.spyOn(dims, 'default').mockReturnValue({ width: 400, height: 300, scale: 2, fontScale: 1 });
-    await renderHud({ weatherAlert: ICE, stopped: true, speedMph: 0, points: { total: 40, sinceLastStop: 5 } });
-    expect(screen.getByTestId('hud-weather')).toBeTruthy();
-    expect(screen.queryByTestId('hud-points')).toBeNull();
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('hud-weather-close'));
-    });
-    expect(screen.queryByTestId('hud-weather')).toBeNull();
-    expect(screen.getByTestId('hud-points')).toBeTruthy();
-    jest.restoreAllMocks();
   });
 
   test('an event banner still takes the band for its 1.5 s', async () => {
@@ -499,24 +503,11 @@ describe('event alerts', () => {
     const h = await renderHud({ rowTs: T });
     await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
     expect(screen.getByTestId('hud-alert')).toHaveTextContent(/Hard brake/);
-    expect(halo()).toMatchObject({ mode: 'burst', colorSeverity: 1, burst: { key: `phone:hard_brake:${T + 1000}`, pulses: 3 } });
+    expect(halo()).toMatchObject({ mode: 'burst', colorSeverity: 1, burst: { key: `event:hard_brake:${T + 1000}`, pulses: 3 } });
     await act(() => jest.advanceTimersByTime(1499));
     expect(screen.getByTestId('hud-alert')).toBeTruthy();
     await act(() => jest.advanceTimersByTime(1));
     expect(screen.queryByTestId('hud-alert')).toBeNull();
-    expect(halo().mode).toBe('calm');
-  });
-
-  test('a phone pickup bursts, then the halo holds the distraction while the episode lasts', async () => {
-    const h = await renderHud({ rowTs: T, speedingTier: 'minor', speedMph: 41 });
-    await h.update({ rowTs: T + 1000, phoneUseSince: T - 1000, lastAlert: { type: 'phone_pickup', tier: 'severe', at: T + 1000 } });
-    expect(screen.getByTestId('hud-alert')).toHaveTextContent(/Phone/);
-    expect(halo()).toMatchObject({ mode: 'burst', colorSeverity: 1 });
-    await act(() => jest.advanceTimersByTime(1500));
-    expect(halo()).toMatchObject({ mode: 'distraction', severity: 0.65, burst: null });
-    await h.update({ rowTs: T + 31_000, phoneUseSince: T - 1000, speedingTier: null });
-    expect(halo().severity).toBeCloseTo(1, 6);
-    await h.update({ rowTs: T + 32_000, phoneUseSince: null });
     expect(halo().mode).toBe('calm');
   });
 
@@ -555,50 +546,19 @@ describe('event alerts', () => {
   });
 });
 
-describe('points', () => {
-  test('hidden while moving', async () => {
-    await renderHud({ points: null });
-    expect(screen.queryByTestId('hud-points')).toBeNull();
-  });
-
-  test('when stopped: the total and "pts", nothing about the change since the last stop', async () => {
-    const h = await renderHud();
-    await h.update({ stopped: true, speedMph: 0, points: { total: 1234, sinceLastStop: 12 } });
-    expect(screen.getByTestId('hud-points')).toHaveTextContent('1,234 pts');
-    expect(screen.getByLabelText('1,234 points')).toBeOnTheScreen();
-    expect(screen.queryByText(/\+12/)).toBeNull();
-  });
-
-  test('pulling away from a stop with the speed unknown hides the points', async () => {
-    const h = await renderHud({ stopped: true, speedMph: 0, points: { total: 10, sinceLastStop: 1 } });
-    expect(screen.getByTestId('hud-points')).toBeTruthy();
-    // The fix drops as the car pulls away: not stopped, speed "-", stale points still published.
-    await h.update({ stopped: false, speedMph: null });
-    expect(screen.queryByTestId('hud-points')).toBeNull();
-  });
-
-  test('landscape: the points sit inside the halo, under the speed; the band line stays free', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the hook behind react-native's export
-    const dims = require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
-    jest.spyOn(dims, 'default').mockReturnValue({ width: 667, height: 375, scale: 2, fontScale: 1 });
-    const h = await renderHud({ speedMph: 30 });
-    expect(screen.getByTestId('hud-halo-stack')).toHaveStyle({ transform: [{ translateY: -33 }] });
-    expect(screen.queryByTestId('hud-points')).toBeNull();
-    await h.update({ stopped: true, speedMph: 0, points: { total: 1234, sinceLastStop: 0 } });
-    expect(within(screen.getByTestId('hud-halo-points')).getByTestId('hud-points')).toHaveTextContent('1,234 pts');
-    expect(screen.getByTestId('hud-points')).toHaveStyle({ fontSize: 28, width: 135 });
-    expect(within(screen.getByTestId('hud-line')).queryByTestId('hud-points')).toBeNull();
-    jest.restoreAllMocks();
-  });
-
-  test('gone again as the car moves off', async () => {
-    const h = await renderHud({ stopped: true, points: { total: 10, sinceLastStop: 1 } });
-    await h.update({ stopped: false, points: null });
-    expect(screen.queryByTestId('hud-points')).toBeNull();
-  });
+test('no points anywhere on the screen, stopped or moving', async () => {
+  const h = await renderHud({ speedMph: 30 });
+  await h.update({ stopped: true, speedMph: 0 });
+  expect(screen.queryByTestId('hud-points')).toBeNull();
+  expect(screen.queryByText(/\bpts\b|points?/)).toBeNull();
 });
 
 describe('swipe to end', () => {
+  // Slow enough for End (it locks at 15 mph).
+  beforeEach(() => {
+    mockDefaultMph = 8;
+  });
+
   test('a tap, or a swipe let go short of the end, does nothing: the drive goes on', async () => {
     await renderHud();
     const end = screen.getByRole('button', { name: hudCopy.endLabel });
@@ -645,7 +605,7 @@ describe('swipe to end', () => {
   });
 
   test('a full swipe ends the drive and lands on its fresh summary', async () => {
-    await renderHud({ speedMph: 60 });
+    await renderHud({ speedMph: 8 });
     const end = screen.getByRole('button', { name: hudCopy.endLabel });
     await swipeEnd(end);
     expect(mockEnd).toHaveBeenCalledTimes(1);
@@ -676,7 +636,7 @@ describe('swipe to end', () => {
     expect(mockRouter.dismissTo).not.toHaveBeenCalled();
   });
 
-  const drop = (clientTripId: string): LastFinalized => ({ clientTripId, ok: true, status: null, pointsNet: null, dropped: 'no_movement', endCause: 'stopped', at: T });
+  const drop = (clientTripId: string): LastFinalized => ({ clientTripId, ok: true, status: null, dropped: 'no_movement', endCause: 'stopped', at: T, durationS: null, miles: null });
 
   test('a drive that ended by itself and was not kept lands on Home once, not on a summary', async () => {
     const h = await renderHud();
@@ -727,7 +687,7 @@ describe('swipe to end', () => {
   test('a hold that lands after the drive ended by itself and was kept goes to its summary', async () => {
     await renderHud();
     mockEnd.mockResolvedValue(null);
-    mockLastFinalized = { clientTripId: 't1', ok: true, status: null, pointsNet: 12, dropped: null, endCause: 'stopped', at: T };
+    mockLastFinalized = { clientTripId: 't1', ok: true, status: null, dropped: null, endCause: 'stopped', at: T, durationS: 600, miles: 4 };
     await swipeEnd();
     expect(mockRouter.replace).toHaveBeenCalledTimes(1);
     expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
@@ -775,7 +735,7 @@ describe('swipe to end', () => {
 
     // The retry finalizes it.
     mockEnd.mockImplementationOnce(async () => {
-      mockLastFinalized = { clientTripId: 't1', ok: true, status: 'pending', pointsNet: 12, dropped: null, endCause: 'manual', at: T + 1 };
+      mockLastFinalized = { clientTripId: 't1', ok: true, status: 'pending', dropped: null, endCause: 'manual', at: T + 1, durationS: 600, miles: 4 };
       return { clientTripId: 't1', dropped: null };
     });
     await swipeEnd(end);
@@ -839,14 +799,17 @@ describe('dimming', () => {
   });
 });
 
-test('while moving, End, the navigation button and the weather ✕ are the only controls on the screen, the same as stopped', async () => {
+test('while moving, End, the navigation button, "Not driving?" and the weather ✕ are the only controls on the screen, the same as stopped', async () => {
   const fog = { kind: 'dense_fog', gustMph: null, visibilityM: 150 } as const;
   const h = await renderHud({ speedMph: 45, stopped: false });
   expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav']);
   await h.update({ weatherAlert: fog });
   expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-weather-close']);
-  await h.update({ speedMph: 0, stopped: true, points: { total: 5, sinceLastStop: 0 } });
+  await h.update({ speedMph: 0, stopped: true });
   expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-weather-close']);
+  // while it is offered, "Not driving?" too
+  await h.update({ speedMph: 45, stopped: false, notDrivingAvailable: true });
+  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-not-driving', 'hud-weather-close']);
 });
 
 describe('the navigation button (design §7.4, §8)', () => {
@@ -882,13 +845,13 @@ describe('the navigation button (design §7.4, §8)', () => {
     expect(screen.getByText('Select default navigation app')).toHaveStyle({ color: c.text });
   });
 
-  test('the first tap at 25 mph opens the list of installed apps over the HUD; End still ends the drive with it open', async () => {
-    await renderHud({ speedMph: 25 });
+  test('the first tap opens the list of installed apps over the HUD; End still ends the drive with it open', async () => {
+    await renderHud({ speedMph: 8 });
     await fireEvent.press(screen.getByTestId('hud-nav'));
     await act(async () => {});
     expect(screen.getByTestId('nav-picker')).toBeOnTheScreen();
     expect(screen.getByText('Select default navigation app')).toBeOnTheScreen();
-    expect(screen.getByText('Opening it here never costs points. Leaving RoadWise any other way does.')).toBeOnTheScreen();
+    expect(screen.getByText('Your drive keeps recording while you navigate.')).toBeOnTheScreen();
     expect(screen.getByTestId('nav-picker-row-apple_maps')).toBeOnTheScreen();
     expect(screen.getByTestId('nav-picker-row-waze')).toBeOnTheScreen();
     // the screen does not dim under the list
@@ -1089,7 +1052,7 @@ describe('DashPal (plan §7.10)', () => {
     expect(screen.getByTestId('hud-dashpal-dot-bad')).toBeTruthy();
   });
 
-  test('a DashPal alert: its banner for 1.5 s per start or level change, over the phone event; the chip steps aside; a critical bursts red', async () => {
+  test('a DashPal alert: its banner for 1.5 s per start or level change, over the event chip; the chip steps aside; a critical bursts red', async () => {
     const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
     setActiveDashcam(rt);
     const h = await renderHud({ rowTs: T, speedingTier: 'minor', speedMph: 41 });
@@ -1207,8 +1170,333 @@ describe('layout, accessibility and Reduce Motion', () => {
   });
 
   test('not recording (saving): calm whatever the signals', async () => {
-    await renderHud({ status: 'finalizing', rowTs: T, speedingTier: 'severe', speedMph: 90, speedingRatio: 2, speedingOver: true, phoneUseSince: T - 5000 });
+    await renderHud({ status: 'finalizing', rowTs: T, speedingTier: 'severe', speedMph: 90, speedingRatio: 2, speedingOver: true, lastShake: { key: 'k', tier: 'severe', at: T } });
     expect(halo().mode).toBe('calm');
+  });
+});
+
+/** A compact window (short and wide): no ring, the band between the sign and the navigation button. */
+function compactWindow(): void {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the hook behind react-native's export
+  const dims = require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
+  jest.spyOn(dims, 'default').mockReturnValue({ width: 400, height: 300, scale: 2, fontScale: 1 });
+}
+
+describe('End locks at speed (modes plan §3.6)', () => {
+  const end = () => screen.getByTestId('hud-end');
+  const locked = () => end().props.accessibilityState?.disabled === true;
+
+  test('at 15 mph it greys out with a lock and takes no swipe, saying when it comes back; it stays so down to 10 and is back under 10', async () => {
+    const h = await renderHud({ speedMph: 14.9 });
+    expect(locked()).toBe(false);
+    expect(end()).toHaveProp('accessibilityHint', hudCopy.endHint);
+    await h.update({ speedMph: 15 });
+    expect(locked()).toBe(true);
+    expect(end()).toHaveProp('accessibilityHint', 'Available below 10 mph.');
+    expect(end()).toHaveStyle({ opacity: 0.5 });
+    expect(screen.queryByTestId('hud-end-chevron', HIDDEN)).toBeNull();
+    // the label stays; nothing ends
+    expect(within(end()).getByText(hudCopy.end)).toBeTruthy();
+    await swipeEnd(end());
+    expect(mockEnd).not.toHaveBeenCalled();
+    for (const mph of [14, 12, 10]) {
+      await h.update({ speedMph: mph });
+      expect(locked()).toBe(true);
+    }
+    await h.update({ speedMph: 9.9 });
+    expect(locked()).toBe(false);
+    expect(screen.getByTestId('hud-end-chevron', HIDDEN)).toBeTruthy();
+    await swipeEnd(end());
+    expect(mockEnd).toHaveBeenCalledTimes(1);
+  });
+
+  test('an unknown speed holds it as it was; kilometres say km/h', async () => {
+    mockUnits = 'km';
+    const h = await renderHud({ speedMph: 50 });
+    expect(locked()).toBe(true);
+    expect(end()).toHaveProp('accessibilityHint', 'Available below 16 km/h.');
+    await h.update({ speedMph: null });
+    expect(locked()).toBe(true);
+    await h.update({ speedMph: 5 });
+    await h.update({ speedMph: null });
+    expect(locked()).toBe(false);
+  });
+});
+
+describe('"Not driving?" (modes plan §3.6)', () => {
+  const link = () => screen.getByTestId('hud-not-driving');
+
+  test('while it is offered, at any speed: a small underlined link in its row above End, labelled for screen readers', async () => {
+    await renderHud({ speedMph: 60, notDrivingAvailable: true });
+    expect(link()).toHaveProp('accessibilityLabel', 'Not driving? Stop this drive');
+    expect(link()).toHaveProp('accessibilityHint', "Stops recording. This trip won't count.");
+    expect(within(link()).getByText('Not driving?')).toHaveStyle({ textDecorationLine: 'underline', color: p.inkMuted, fontSize: 18 });
+    // its touch box reaches 64 pt through the slop
+    expect(link().props.hitSlop).toEqual({ top: 10, bottom: 10 });
+    // in its own row, not the band's line
+    expect(within(screen.getByTestId('hud-line')).queryByTestId('hud-not-driving')).toBeNull();
+  });
+
+  test('gone once its budget is spent, and never while saving', async () => {
+    const h = await renderHud({ notDrivingAvailable: true });
+    expect(link()).toBeOnTheScreen();
+    await h.update({ notDrivingAvailable: false });
+    expect(screen.queryByTestId('hud-not-driving')).toBeNull();
+    await h.update({ notDrivingAvailable: true, status: 'finalizing' });
+    expect(screen.queryByTestId('hud-not-driving')).toBeNull();
+  });
+
+  test('a tap discards the drive and goes Home, where the notice says it won’t count', async () => {
+    await renderHud({ speedMph: 40, notDrivingAvailable: true });
+    await act(async () => {
+      fireEvent.press(link());
+    });
+    expect(mockControls.cancelDrive).toHaveBeenCalledTimes(1);
+    expect(readHomeNotice()).toBe('notDriving');
+    expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  test('refused (the budget ran out between the render and the tap): the notice is taken back and the drive goes on', async () => {
+    mockControls.cancelDrive.mockResolvedValueOnce(false);
+    await renderHud({ notDrivingAvailable: true });
+    await act(async () => {
+      fireEvent.press(link());
+    });
+    expect(mockControls.cancelDrive).toHaveBeenCalledTimes(1);
+    expect(readHomeNotice()).toBeNull();
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+  });
+
+  test('a touch that starts while the screen is dimmed only wakes it', async () => {
+    await renderHud({ notDrivingAvailable: true });
+    await act(() => jest.advanceTimersByTime(DIM_AFTER_MS));
+    expect(screen.getByTestId('hud-dim')).toBeTruthy();
+    await fireEvent(link(), 'pressIn');
+    await fireEvent(screen.getByTestId('hud-screen'), 'touchStart');
+    await act(async () => {
+      fireEvent.press(link());
+    });
+    expect(mockControls.cancelDrive).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('hud-dim')).toBeNull();
+    // awake, the next touch counts
+    await fireEvent(link(), 'pressIn');
+    await act(async () => {
+      fireEvent.press(link());
+    });
+    expect(mockControls.cancelDrive).toHaveBeenCalledTimes(1);
+  });
+
+  test('a compact window puts it in the band line, under a failed end and over a spot nudge and the weather', async () => {
+    compactWindow();
+    const fog = { kind: 'dense_fog', gustMph: null, visibilityM: 150 } as const;
+    const h = await renderHud({ rowTs: T, notDrivingAvailable: true, weatherAlert: fog });
+    const line = () => screen.getByTestId('hud-line');
+    expect(within(line()).getByTestId('hud-not-driving')).toBeTruthy();
+    expect(screen.queryByTestId('hud-weather')).toBeNull();
+    await h.update({ rowTs: T + 1000, spotNudge: { key: `s1@${T + 1000}`, spotId: 's1', kind: 'speeding', at: T + 1000 } });
+    expect(within(line()).getByTestId('hud-not-driving')).toBeTruthy();
+    expect(screen.queryByTestId('hud-spot')).toBeNull();
+    // spent: the weather comes back
+    await h.update({ notDrivingAvailable: false });
+    expect(screen.queryByTestId('hud-not-driving')).toBeNull();
+    jest.restoreAllMocks();
+  });
+
+  test('the screen tells the host it is showing (the budget counts), and that it is not once it goes', async () => {
+    const r = await render(<HudScreen />);
+    expect(mockControls.setHudVisible).toHaveBeenLastCalledWith(true);
+    await r.unmount();
+    expect(mockControls.setHudVisible).toHaveBeenLastCalledWith(false);
+  });
+});
+
+describe('the band: a spot nudge, the weather, a failed end', () => {
+  const ICE = { kind: 'freezing_rain', gustMph: null, visibilityM: null } as const;
+  const spot = (at: number, kind: 'speeding' | 'hard_brake' = 'speeding') => ({ key: `s1@${at}`, spotId: 's1', kind, at });
+
+  test('a nudge covers the weather banner for its 4 s, then the banner is back', async () => {
+    const h = await renderHud({ rowTs: T, weatherAlert: ICE });
+    expect(screen.getByTestId('hud-weather')).toBeTruthy();
+    await h.update({ rowTs: T + 1000, spotNudge: spot(T + 1000) });
+    expect(screen.getByTestId('hud-spot')).toHaveProp('accessibilityLabel', 'Watch your speed here');
+    expect(screen.queryByTestId('hud-weather')).toBeNull();
+    await act(() => jest.advanceTimersByTime(3999));
+    expect(screen.getByTestId('hud-spot')).toBeTruthy();
+    await act(() => jest.advanceTimersByTime(1));
+    expect(screen.queryByTestId('hud-spot')).toBeNull();
+    expect(screen.getByTestId('hud-weather')).toBeTruthy();
+  });
+
+  test('an event chip hides it; a failed end wins over it', async () => {
+    mockDefaultMph = 8;
+    mockEnd.mockRejectedValueOnce(new Error('busy'));
+    const h = await renderHud({ rowTs: T });
+    await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 }, spotNudge: spot(T + 1000, 'hard_brake') });
+    expect(screen.getByTestId('hud-alert')).toBeTruthy();
+    expect(screen.queryByTestId('hud-spot')).toBeNull();
+    await swipeEnd();
+    await act(() => jest.advanceTimersByTime(1500));
+    await h.update({ rowTs: T + 3000, spotNudge: spot(T + 3000) });
+    expect(screen.getByTestId('hud-end-failed')).toBeTruthy();
+    expect(screen.queryByTestId('hud-spot')).toBeNull();
+  });
+
+  test('the screen does not dim while a nudge shows', async () => {
+    const h = await renderHud({ rowTs: T });
+    await act(() => jest.advanceTimersByTime(DIM_AFTER_MS - 500));
+    await h.update({ rowTs: T + 1000, spotNudge: spot(T + 1000) });
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(screen.queryByTestId('hud-dim')).toBeNull();
+    await act(() => jest.advanceTimersByTime(3000));
+    expect(screen.getByTestId('hud-dim')).toBeTruthy();
+  });
+
+  test('a moving line is three words at most, a nudge four', () => {
+    for (const words of [...Object.values(hudCopy.alert), hudCopy.endFailed, hudCopy.notDriving]) expect(words.trim().split(/\s+/).length).toBeLessThanOrEqual(3);
+    for (const words of Object.values(hudCopy.spot)) expect(words.trim().split(/\s+/).length).toBeLessThanOrEqual(4);
+  });
+});
+
+describe('waiting for the car to move (modes plan §3.7)', () => {
+  const W = (o: Partial<NonNullable<DriveLive['waiting']>> = {}): NonNullable<DriveLive['waiting']> => ({
+    since: T,
+    phase: 'waiting',
+    deadlineAt: T + 120_000,
+    speedMps: null,
+    limitMph: null,
+    ...o,
+  });
+  const idleWait = (o: Partial<NonNullable<DriveLive['waiting']>> = {}): LiveOver => ({
+    status: 'idle',
+    clientTripId: null,
+    startedAt: null,
+    speedMph: null,
+    limitMph: null,
+    notDrivingAvailable: false,
+    waiting: W(o),
+  });
+
+  test('the band says "Ready to roll"; End is Cancel, never locked; the halo shows the wait’s own speed and the sign its limit; no "Not driving?"', async () => {
+    const h = await renderHud(idleWait());
+    expect(screen.getByTestId('hud-waiting')).toHaveTextContent(/Ready to roll/);
+    expect(screen.getByTestId('hud-waiting-line')).toHaveTextContent("Starts once you're moving");
+    expect(screen.getByTestId('hud-waiting')).toHaveProp('accessibilityLabel', "Ready to roll. Recording starts once you're moving.");
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    expect(cancel).toHaveProp('accessibilityHint', 'Swipe right to stop waiting. Nothing is saved.');
+    expect(cancel).not.toBeDisabled();
+    expect(screen.queryByTestId('hud-not-driving')).toBeNull();
+    // 0 before a fix, the limit unknown
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('0');
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('-');
+    await h.update({ waiting: W({ speedMps: 12 * MPS_PER_MPH, limitMph: 25 }) });
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('12');
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('25');
+    // at 12 mph End stays a Cancel that takes a swipe
+    expect(screen.getByRole('button', { name: 'Cancel' })).not.toBeDisabled();
+    // the navigation button works
+    expect(screen.getByTestId('hud-nav').props.accessibilityState).toMatchObject({ disabled: false });
+  });
+
+  test('any touch on the screen waits a fresh 5 minutes; with no wait, a touch only undims', async () => {
+    const h = await renderHud(idleWait());
+    await fireEvent(screen.getByTestId('hud-screen'), 'touchStart');
+    expect(mockControls.touchWaiting).toHaveBeenCalledTimes(1);
+    await h.update({ waiting: null, status: 'recording', clientTripId: 't1', speedMph: 12 });
+    await fireEvent(screen.getByTestId('hud-screen'), 'touchStart');
+    expect(mockControls.touchWaiting).toHaveBeenCalledTimes(1);
+  });
+
+  test('at 2:00 the panel asks "Still planning to drive?" with one light haptic; Keep waiting is a touch', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked module
+    const Haptics = require('expo-haptics') as { impactAsync: jest.Mock };
+    jest.setSystemTime(T + 120_000);
+    const h = await renderHud(idleWait());
+    expect(screen.queryByTestId('hud-wait')).toBeNull();
+    await h.update({ waiting: W({ phase: 'popup', deadlineAt: T + 270_000 }) });
+    expect(screen.getByTestId('hud-wait')).toBeTruthy();
+    expect(screen.getByText('Still planning to drive?')).toBeTruthy();
+    expect(screen.getByTestId('hud-wait-body')).toHaveTextContent("We'll stop waiting in 3 min.");
+    expect(Haptics.impactAsync).toHaveBeenCalledTimes(1);
+    await fireEvent.press(screen.getByRole('button', { name: 'Keep waiting' }));
+    expect(mockControls.touchWaiting).toHaveBeenCalled();
+    // the host restarts the wait: the panel closes
+    await h.update({ waiting: W({ since: T + 121_000, deadlineAt: T + 241_000 }) });
+    expect(screen.queryByTestId('hud-wait')).toBeNull();
+  });
+
+  test('from 4:30 it counts down, a second at a time, with one more light haptic', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked module
+    const Haptics = require('expo-haptics') as { impactAsync: jest.Mock };
+    jest.setSystemTime(T + 273_000);
+    await renderHud(idleWait({ phase: 'countdown', deadlineAt: T + 300_000 }));
+    expect(screen.getByText('Stopping in')).toBeTruthy();
+    expect(screen.getByTestId('hud-wait-countdown')).toHaveTextContent('0:27');
+    expect(screen.getByLabelText('Stopping in 27 seconds. Touch the screen to keep waiting.')).toBeTruthy();
+    expect(screen.getByText('Touch the screen to keep waiting.')).toBeTruthy();
+    expect(Haptics.impactAsync).toHaveBeenCalledTimes(1);
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(screen.getByTestId('hud-wait-countdown')).toHaveTextContent('0:26');
+  });
+
+  test('Cancel on the panel stops the wait and goes Home, saying nothing', async () => {
+    jest.setSystemTime(T + 130_000);
+    await renderHud(idleWait({ phase: 'popup', deadlineAt: T + 270_000 }));
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('hud-wait-cancel'));
+    });
+    expect(mockControls.cancelWaiting).toHaveBeenCalledTimes(1);
+    expect(mockControls.touchWaiting).not.toHaveBeenCalled();
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+    expect(readHomeNotice()).toBeNull();
+  });
+
+  test('End swiped while waiting is Cancel: the wait stops and the screen goes Home', async () => {
+    await renderHud(idleWait());
+    await act(async () => {
+      await swipeEnd(screen.getByRole('button', { name: 'Cancel' }));
+    });
+    expect(mockControls.cancelWaiting).toHaveBeenCalledTimes(1);
+    expect(mockEnd).not.toHaveBeenCalled();
+    expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+  });
+
+  test('the panel closes the navigation list', async () => {
+    jest.setSystemTime(T + 100_000);
+    const h = await renderHud(idleWait());
+    await fireEvent.press(screen.getByTestId('hud-nav'));
+    await act(async () => {});
+    expect(screen.getByTestId('hud-nav-panel')).toBeTruthy();
+    jest.setSystemTime(T + 120_000);
+    await h.update({ waiting: W({ phase: 'popup', deadlineAt: T + 270_000 }) });
+    await act(async () => {});
+    expect(screen.queryByTestId('hud-nav-panel')).toBeNull();
+    expect(screen.getByTestId('hud-wait')).toBeTruthy();
+  });
+
+  test('the drive confirming closes the panel and the band at once, and the screen stays', async () => {
+    jest.setSystemTime(T + 280_000);
+    const h = await renderHud(idleWait({ phase: 'countdown', deadlineAt: T + 300_000 }));
+    expect(screen.getByTestId('hud-wait')).toBeTruthy();
+    await h.update({ waiting: null, status: 'recording', clientTripId: 't1', startedAt: T + 270_000, speedMph: 12, notDrivingAvailable: true });
+    expect(screen.queryByTestId('hud-wait')).toBeNull();
+    expect(screen.queryByTestId('hud-waiting')).toBeNull();
+    expect(screen.getByRole('button', { name: hudCopy.endLabel })).toBeTruthy();
+    expect(screen.getByTestId('hud-not-driving')).toBeTruthy();
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  test('a wait that runs out ends quietly: Home once, no notice', async () => {
+    const h = await renderHud(idleWait());
+    await h.update({ waiting: null });
+    await h.update({ waiting: null });
+    expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(readHomeNotice()).toBeNull();
   });
 });
 

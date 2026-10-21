@@ -20,8 +20,6 @@ const ICON: Record<EventType, keyof typeof Ionicons.glyphMap> = {
   hard_brake: 'stop-circle',
   hard_accel: 'flash',
   hard_corner: 'return-up-forward',
-  phone_pickup: 'phone-portrait',
-  phone_handling: 'phone-portrait',
   eyes_off: 'eye-off',
   drowsy: 'moon',
 };
@@ -32,20 +30,26 @@ const keyOf = (a: HudAlert | null): string | null => (a === null ? null : `${a.t
 export type HudFlash = HudAlert & { until: number };
 
 /**
- * The alert to show right now: each new `lastAlert` for what is left of its `ms` (1.5 s) on the
- * row clock (`rowTs − at`; a live alert is raised on the row it carries, so it shows the full
- * 1.5 s), then nothing. One already 1.5 s old when it reaches the screen (raised while RoadWise was
- * in the background) is never shown, and neither is the alert standing when the screen mounts.
+ * A flash on the row clock: the thing named `key`, raised on the row at `at`, shows for what is
+ * left of its `ms` (`rowTs − at`; a live one is raised on the row it carries, so it shows the full
+ * `ms`), then nothing. One already `ms` old when it reaches the screen (raised while RoadWise was
+ * in the background) is never shown, and neither is the one standing when the screen mounts.
+ * `until`: the JS time its flash ends.
  */
-export function useAlertFlash(alert: HudAlert | null, rowTs: number | null, ms: number = ALERT_GLOW_MS, now: () => number = Date.now): HudFlash | null {
-  const key = keyOf(alert);
-  // The alert standing when the screen mounts is old news.
+export function useFlash(
+  key: string | null,
+  at: number | null,
+  rowTs: number | null,
+  ms: number,
+  now: () => number = Date.now
+): { key: string; until: number } | null {
+  // The one standing when the screen mounts is old news.
   const [mountKey] = useState(key);
   const [expired, setExpired] = useState<string | null>(null);
-  // Read once, as the alert arrives: its age on the row clock and the JS time it was first seen.
+  // Read once, as it arrives: its age on the row clock and the JS time it was first seen.
   const arrival = useMemo(
-    () => ({ key, left: alert === null ? 0 : ms - (rowTs === null ? 0 : Math.max(0, rowTs - alert.at)), seenAt: now() }),
-    // `key` names the alert (the object may be a fresh copy of the same one); `rowTs` and the clock
+    () => ({ key, left: at === null ? 0 : ms - (rowTs === null ? 0 : Math.max(0, rowTs - at)), seenAt: now() }),
+    // `key` names it (the object may be a fresh copy of the same one); `rowTs`, `at` and the clock
     // are read as it arrives, never again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, ms]
@@ -56,12 +60,20 @@ export function useAlertFlash(alert: HudAlert | null, rowTs: number | null, ms: 
     const timer = setTimeout(() => setExpired(key), arrival.left);
     return () => clearTimeout(timer);
   }, [live, key, arrival]);
-  const flash = useMemo(() => (alert === null || !live ? null : { ...alert, until: arrival.seenAt + arrival.left }), [alert, live, arrival]);
-  return flash === null || key === expired ? null : flash;
+  return useMemo(() => (!live || key === null || key === expired ? null : { key, until: arrival.seenAt + arrival.left }), [live, key, expired, arrival]);
 }
 
 /**
- * The event chip at the top: the tier's colour, an icon and one or two words. Static — it appears
+ * The alert to show right now (`useFlash` over `lastAlert`): each new one for what is left of its
+ * 1.5 s on the row clock, never a stale one, never the one standing at mount.
+ */
+export function useAlertFlash(alert: HudAlert | null, rowTs: number | null, ms: number = ALERT_GLOW_MS, now: () => number = Date.now): HudFlash | null {
+  const f = useFlash(keyOf(alert), alert?.at ?? null, rowTs, ms, now);
+  return useMemo(() => (f === null || alert === null ? null : { ...alert, until: f.until }), [f, alert]);
+}
+
+/**
+ * The event chip at the top: the tier's colour, an icon and one or two words. Static: it appears
  * and goes; the halo's pulses carry it peripherally.
  */
 function EventBannerView({ alert, palette }: { alert: HudAlert; palette: HudPalette }) {

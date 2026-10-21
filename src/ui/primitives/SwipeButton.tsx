@@ -33,13 +33,14 @@ export type SwipeButtonProps = {
   label: ReactNode;
   accessibilityLabel: string;
   accessibilityHint?: string;
-  /** The icon on the knob. */
+  /** The icon on the knob (the caller swaps it for a state, such as a lock while disabled). */
   icon: IconName;
   colors: SwipeButtonColors;
   /** The capsule's height in pt; the knob is this less 12. Default 64. */
   height?: number;
   /** The action is under way: the knob sits at the end with a spinner and takes no swipe. */
   busy?: boolean;
+  /** Greyed out (half strength), its chevron gone: it takes no swipe and no screen-reader activate. */
   disabled?: boolean;
   onSwipe: () => void;
   testID?: string;
@@ -105,7 +106,8 @@ function land(x: SharedValue<number>, lag: SharedValue<number>) {
  * runs on the UI thread. A screen reader's double-tap is a deliberate act, so the
  * `activate` action fires straight away.
  *
- * While `busy` the knob stays at the end with a spinner. When `busy` clears (the action failed), or
+ * Disabled, the capsule shows at half strength without its chevron and takes nothing (a drag under
+ * way when it greys out springs home). While `busy` the knob stays at the end with a spinner. When `busy` clears (the action failed), or
  * when a swipe's action never goes busy, it springs home after `SWIPE_SETTLE_MS`.
  */
 export function SwipeButton({
@@ -250,9 +252,11 @@ export function SwipeButton({
         <Animated.View pointerEvents="none" style={[styles.label, { left: knob + PAD * 2, right: PAD + 28 }, labelStyle]}>
           {label}
         </Animated.View>
-        <Animated.View pointerEvents="none" style={[styles.hint, { right: PAD + 6 }, labelStyle]}>
-          <Ionicons name="chevron-forward" size={20} color={colors.hint} />
-        </Animated.View>
+        {disabled && !busy ? null : (
+          <Animated.View testID={testID ? `${testID}-chevron` : undefined} pointerEvents="none" style={[styles.hint, { right: PAD + 6 }, labelStyle]}>
+            <Ionicons name="chevron-forward" size={20} color={colors.hint} />
+          </Animated.View>
+        )}
         <Animated.View
           testID={testID ? `${testID}-knob` : undefined}
           pointerEvents="none"

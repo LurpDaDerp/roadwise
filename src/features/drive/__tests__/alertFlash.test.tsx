@@ -54,15 +54,15 @@ test('a stale alert arriving over a fresh one takes the fresh one down (nothing 
   expect(screen.getByTestId('f')).toHaveTextContent('none');
 });
 
-test('no row yet counts as age 0; a repeated switch alert (same type, new time) is a new flash', async () => {
+test('no row yet counts as age 0; a repeated alert (same type, new time) is a new flash', async () => {
   const r = await render(<Probe alert={null} rowTs={null} />);
   await r.rerender(<Probe alert={brake(T)} rowTs={null} />);
   expect(screen.getByTestId('f')).toHaveTextContent('hard_brake@1500');
   await act(() => jest.advanceTimersByTime(2000));
   now = T + 60_000;
-  await r.rerender(<Probe alert={{ type: 'phone_handling', tier: 'moderate', at: T + 60_000 }} rowTs={T + 60_000} />);
-  expect(screen.getByTestId('f')).toHaveTextContent('phone_handling@61500');
+  await r.rerender(<Probe alert={{ type: 'hard_corner', tier: 'moderate', at: T + 60_000 }} rowTs={T + 60_000} />);
+  expect(screen.getByTestId('f')).toHaveTextContent('hard_corner@61500');
   now = T + 120_000;
-  await r.rerender(<Probe alert={{ type: 'phone_handling', tier: 'moderate', at: T + 120_000 }} rowTs={T + 120_000} />);
-  expect(screen.getByTestId('f')).toHaveTextContent(/phone_handling@121500/);
+  await r.rerender(<Probe alert={{ type: 'hard_corner', tier: 'moderate', at: T + 120_000 }} rowTs={T + 120_000} />);
+  expect(screen.getByTestId('f')).toHaveTextContent(/hard_corner@121500/);
 });

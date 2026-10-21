@@ -293,6 +293,27 @@ test('busy or disabled, it takes no swipe and says so', async () => {
   expect(onSwipe).not.toHaveBeenCalled();
 });
 
+test('disabled: half strength, no chevron, and a screen reader’s activate does nothing; enabled again it swipes', async () => {
+  const r = await renderSwipe({ disabled: true });
+  expect(screen.getByTestId('swipe')).toHaveStyle({ opacity: 0.5 });
+  expect(screen.queryByTestId('swipe-chevron')).toBeNull();
+  await fireEvent(screen.getByRole('button', { name: 'Start drive' }), 'accessibilityAction', { nativeEvent: { actionName: 'activate' } });
+  expect(onSwipe).not.toHaveBeenCalled();
+  await r.rerender(
+    <SwipeButton testID="swipe" label={<Text>Start drive</Text>} accessibilityLabel="Start drive" icon="car-sport" colors={COLORS} onSwipe={onSwipe} />
+  );
+  expect(screen.getByTestId('swipe-chevron')).toBeTruthy();
+  expect(screen.getByTestId('swipe')).toHaveStyle({ opacity: 1 });
+  await swipe(TRAVEL);
+  expect(onSwipe).toHaveBeenCalledTimes(1);
+});
+
+test('busy shows the spinner at full strength, its chevron kept', async () => {
+  await renderSwipe({ busy: true });
+  expect(screen.getByTestId('swipe')).toHaveStyle({ opacity: 1 });
+  expect(screen.getByTestId('swipe-chevron')).toBeTruthy();
+});
+
 test('a screen reader’s activate fires it straight away', async () => {
   await renderSwipe();
   await fireEvent(screen.getByRole('button', { name: 'Start drive' }), 'accessibilityAction', { nativeEvent: { actionName: 'activate' } });
