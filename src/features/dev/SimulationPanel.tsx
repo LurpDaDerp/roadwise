@@ -72,7 +72,7 @@ export const simCopy = {
   failed: (message: string) => `The simulation could not start: ${message}`,
 } as const;
 
-export type SimTraceName = 'speeding-minor' | 'phone-pickup';
+export type SimTraceName = 'speeding-minor' | 'hard-brake';
 export type SimSpeed = 1 | 5;
 export const SIM_SPEEDS: readonly SimSpeed[] = [1, 5];
 
@@ -83,9 +83,9 @@ export const SIM_TRACES: readonly { name: SimTraceName; label: string; detail: s
     detail: '20 s at 41 mph on a 35 mph road, then back under the limit. 4 minutes.',
   },
   {
-    name: 'phone-pickup',
-    label: 'Phone picked up',
-    detail: 'The phone is handled for 8 s at 35 mph. 3⅓ minutes.',
+    name: 'hard-brake',
+    label: 'A hard brake',
+    detail: 'A hard stop from 35 mph, then on again. 3⅓ minutes.',
   },
 ];
 
@@ -97,8 +97,8 @@ export function loadSimTrace(name: SimTraceName): Trace {
     switch (name) {
       case 'speeding-minor':
         return parseTrace(require('../../core/__fixtures__/traces/speeding-minor.json'));
-      case 'phone-pickup':
-        return parseTrace(require('../../core/__fixtures__/traces/phone-pickup.json'));
+      case 'hard-brake':
+        return parseTrace(require('../../core/__fixtures__/traces/hard-brake-confirmed.json'));
     }
   }
   throw new Error('The simulation drives are not in this build');
@@ -470,7 +470,8 @@ export function SimulationPanel({
 }
 
 /**
- * What the modal shows: the HUD while the simulated drive is open, and a Stop control only while
+ * What the modal shows: the HUD while the simulated drive waits to confirm (the Start card's wait:
+ * 10 mph held 15 s) and while it is open, and a Stop control only while
  * the lockout is off (under 5 mph) — at "speed" the HUD's own touch shield is the only thing on
  * top, exactly as on a real drive. The screen is kept awake for the replay, as the lockout gate
  * does for a mounted trip.
@@ -479,8 +480,8 @@ function SimulatedDrive({ Hud, onStop }: { Hud: ComponentType; onStop: () => voi
   useKeepAwake();
   const insets = useSafeAreaInsets();
   const th = useTheme();
-  const s = useDrive((d) => ({ status: d.status, lockedOut: d.lockedOut }));
-  const open = s.status === 'recording';
+  const s = useDrive((d) => ({ status: d.status, lockedOut: d.lockedOut, waiting: d.waiting !== null }));
+  const open = s.status === 'recording' || s.waiting;
   return (
     <View style={styles.hudGround}>
       {open ? <Hud /> : null}

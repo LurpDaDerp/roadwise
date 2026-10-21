@@ -1,4 +1,4 @@
-import { createFakeDriveSense, parseRow, resetUnknownRowKeys } from '@drive-sense';
+import { createFakeDriveDetect, createFakeDriveSense, parseRow, resetUnknownRowKeys } from '@drive-sense';
 import { render, screen, waitFor } from '@testing-library/react-native';
 import { Text } from 'react-native';
 
@@ -95,7 +95,7 @@ describe('route guard: __DEV__ || env.diagnostics', () => {
 });
 
 describe('the drive-sense readout', () => {
-  test('state, lock signal, permissions, last exit and the stored rows', async () => {
+  test('state, permissions, last exit and the stored rows', async () => {
     const fake = createFakeDriveSense({ platform: 'android' });
     fake.setState({ location: 'always', motion: 'granted', lockSignal: 'reliable' });
     fake.setLastExitInfo({ ts: T, reason: 'watchdog', whileCapturing: true });
@@ -112,7 +112,6 @@ describe('the drive-sense readout', () => {
     }
     await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={fake} />));
 
-    expect(screen.getByText('reliable')).toBeTruthy();
     expect(screen.getByText('always')).toBeTruthy();
     expect(screen.getByText('granted')).toBeTruthy();
     expect(screen.getByText(/Restricted/)).toBeTruthy(); // battery optimisation is on
@@ -233,5 +232,37 @@ describe('the unknown row keys (C0r1-m2)', () => {
     expect(await screen.findByText('Unknown row keys')).toBeTruthy();
     expect(screen.getByTestId('diag-unknown-row-keys')).toHaveTextContent(/Unknown row keys\s*1$/);
     resetUnknownRowKeys();
+  });
+});
+
+describe('the drive detector and the opportunities (tuning)', () => {
+  test('iPhone: the detector phase, its permissions and its journal; read only', async () => {
+    const detect = createFakeDriveDetect({ now: () => T, permissions: { backgroundRefresh: 'denied' } });
+    await detect.setArmed(true, 'user-1');
+    detect.wake();
+    detect.confirm({ driveId: '11111111-1111-4111-8111-111111111111', startedAt: T, rows: [{ ts: T, lat: 1, lng: 2 }] });
+    detect.calls.length = 0;
+    await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={createFakeDriveSense()} detect={detect} />));
+    await waitFor(() => expect(screen.getByTestId('diag-detect-phase')).toHaveTextContent('recording (auto)', { exact: false }));
+    expect(screen.getByText('denied')).toBeTruthy();
+    expect(screen.getAllByTestId('diag-journal')[0]).toHaveTextContent(/auto · trace · 1 rows · recording/);
+    expect(detect.calls).toEqual(['getState', 'listDrives']);
+  });
+
+  test('no detector (Android) says so', async () => {
+    await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={createFakeDriveSense()} detect={null} />));
+    expect(await screen.findByText(/No drive detector on this phone/)).toBeTruthy();
+  });
+
+  test('the last drives with their counters (or the estimate) and per-category loads', async () => {
+    await seedTrips(db, [
+      { client_trip_id: 'd-1', started_at: T, tz: 'UTC', status: 'pending', miles: 10, duration_s: 1200, slowdowns: 12, speedups: 10, turns: 8, limit_s: 900, moving_s: 1100 },
+      { client_trip_id: 'd-2', started_at: T - 86_400_000, tz: 'UTC', status: 'scored', miles: 5, duration_s: 600 },
+    ]);
+    await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={createFakeDriveSense()} detect={null} />));
+    await waitFor(() => expect(screen.getAllByTestId('diag-loads')).toHaveLength(2));
+    expect(screen.getAllByTestId('diag-loads')[0]).toHaveTextContent(/12 slowdowns · 10 speed-ups · 8 turns · 900 s under a limit of 1100 s moving/);
+    expect(screen.getAllByTestId('diag-loads')[0]).toHaveTextContent('braking 0.00 / 12 (0)', { exact: false });
+    expect(screen.getAllByTestId('diag-loads')[1]).toHaveTextContent('(estimated)', { exact: false });
   });
 });

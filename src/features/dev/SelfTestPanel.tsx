@@ -2,21 +2,22 @@
 // vectors and diffs its output against the TypeScript reference, field by field. The vectors'
 // `expected` blocks are the reference's own output (`vectors.test.ts` regenerates and compares
 // them), so the diff is native against TS. iOS answers the gravity-filter and android-raw vectors
-// with `skipped`, which `diffSelfTest` accepts and this panel says. Then it runs the native
-// forgot-to-start reminder policy over its decision table (`src/reminder/vectors.ts`); each
-// platform skips the other's rows (`diffReminderSelfTest`).
+// with `skipped`, which `diffSelfTest` accepts and this panel says. Then it runs the native drive
+// detector's rules over their decision table (`src/detect/vectors.ts`: the confirmation, the
+// trace-back, the end and the wake gates); Android has no detector and skips every row
+// (`diffDetectSelfTest`).
 //
 // The vector files are loaded here and nowhere else in the app (README §8), and only when the
-// developer presses Run: the requires are inside `loadVectors` and `loadReminderVectors`, not at
+// developer presses Run: the requires are inside `loadVectors` and `loadDetectVectors`, not at
 // module scope.
 import {
-  diffReminderSelfTest,
+  detectWireVectors,
+  diffDetectSelfTest,
   diffSelfTest,
   parseVectors,
-  reminderWireVectors,
+  type DetectVector,
   type DriveSenseApi,
   type GoldenVector,
-  type ReminderVector,
   type SelfTestDiff,
   type VectorDiff,
 } from '@drive-sense';
@@ -28,7 +29,7 @@ import { Banner, Button, Card, fontFamilies, Text, useTheme } from '@/ui';
 export const selfTestCopy = {
   title: 'Self-test',
   intro:
-    'Runs the native feature extraction over the golden vectors, and the native forgot-to-start reminder over its decision table, and compares every field with the TypeScript reference.',
+    'Runs the native feature extraction over the golden vectors, and the native drive detector over its decision table, and compares every field with the TypeScript reference.',
   run: 'Run self-test',
   rerun: 'Run again',
   running: 'Running…',
@@ -80,16 +81,16 @@ export function loadVectors(): GoldenVector[] {
   throw new Error('The golden vectors are not in this build');
 }
 
-/** The forgot-to-start reminder's decision table, gated like the golden vectors. */
-export function loadReminderVectors(): ReminderVector[] {
+/** The drive detector's decision table, gated like the golden vectors. */
+export function loadDetectVectors(): DetectVector[] {
   if (__DEV__ || process.env.EXPO_PUBLIC_DIAGNOSTICS === '1') {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- gated like the vector files, so a production bundle drops the table
-    return (require('../../../modules/drive-sense/src/reminder/vectors') as { REMINDER_VECTORS: ReminderVector[] }).REMINDER_VECTORS;
+    return (require('../../../modules/drive-sense/src/detect/vectors') as { DETECT_VECTORS: DetectVector[] }).DETECT_VECTORS;
   }
-  throw new Error('The reminder vectors are not in this build');
+  throw new Error('The detector vectors are not in this build');
 }
 
-/** One result list: the extraction's, then the reminder's. An unusable output wins. */
+/** One result list: the extraction's, then the detector's. An unusable output wins. */
 export function combineDiffs(a: SelfTestDiff, b: SelfTestDiff): SelfTestDiff {
   if (a.error) return a;
   if (b.error) return b;
@@ -125,9 +126,9 @@ export function SelfTestPanel({ source }: { source: Pick<DriveSenseApi, 'selfTes
     try {
       const vectors = loadVectors();
       const output = await source.selfTest(JSON.stringify(vectors));
-      const rows = loadReminderVectors();
-      const reminderOutput = await source.selfTest(JSON.stringify(reminderWireVectors(rows)));
-      const diff = combineDiffs(diffSelfTest(vectors, output), diffReminderSelfTest(rows, reminderOutput));
+      const rows = loadDetectVectors();
+      const detectOutput = await source.selfTest(JSON.stringify(detectWireVectors(rows)));
+      const diff = combineDiffs(diffSelfTest(vectors, output), diffDetectSelfTest(rows, detectOutput));
       if (live.current) setPhase({ kind: 'done', diff });
     } catch (e) {
       if (live.current) setPhase({ kind: 'failed', message: e instanceof Error ? e.message : String(e) });

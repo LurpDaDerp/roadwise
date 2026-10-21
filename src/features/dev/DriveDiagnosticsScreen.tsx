@@ -9,8 +9,13 @@
 // Rows come from SQLite (`samples`), not from a native `row` listener: a JS listener attached here
 // would receive the rows native buffered for the drive host (README §3, "Buffering") and would
 // count as the watchdog's liveness signal (§6.2), so opening this screen could lose rows or keep
-// an orphaned capture alive. Samples exist only for a drive still recording or not yet saved.
-import DriveSense, { unknownRowKeys, type DriveSenseApi, type DriveSenseState, type ExitInfo, type FeatureRow } from '@drive-sense';
+// an orphaned capture alive. Samples exist only for a drive still recording or within its upload hold.
+//
+// iPhone: the drive detector's state (what phase it is in and since when: a `candidate` is the last
+// wake), its permissions and its journal, read with `getState`/`listDrives` only. Every platform:
+// the last drives' opportunity counters and per-category loads, for tuning the scoring baselines.
+import DriveSense, { DriveDetect, unknownRowKeys, type DetectState, type DriveDetectApi, type DriveSenseApi, type DriveSenseState, type ExitInfo, type FeatureRow, type JournaledDrive } from '@drive-sense';
+import { clampExposure, driveLoads, estimateExposure, RATE_AXES, type DriveEvent, type Exposure } from '@scoring';
 import { Ionicons } from '@expo/vector-icons';
 import * as Battery from 'expo-battery';
 import { Redirect, useRouter } from 'expo-router';
@@ -47,10 +52,6 @@ export const diagCopy = {
   captureStarted: 'Capture started',
   lastRow: 'Last row',
   captureWasOpen: 'Capture open at last exit',
-  lockSignal: 'Lock signal',
-  lockProof: 'Lock proof',
-  lockDelay: 'Lock delay',
-  ms: (v: number) => `${v} ms`,
   unknownRowKeys: 'Unknown row keys',
   platform: 'Platform',
   location: 'Location',
@@ -85,6 +86,31 @@ export const diagCopy = {
   withPowerSaving: 'power saving on',
   drain: (pctPerHour: string, minutes: number) => `${pctPerHour} % per hour over ${minutes} min`,
   noDrive: 'No drive recorded with diagnostics on yet.',
+  detector: 'Drive detector',
+  noDetector: 'No drive detector on this phone (drives start from the Start card).',
+  phase: 'Phase',
+  since: 'Since',
+  armed: 'Armed',
+  status: 'Automatic drives',
+  missing: 'Missing',
+  liveDrive: 'Live drive',
+  waitUntil: 'Wait ends',
+  lastEnd: 'Last end',
+  suppressedUntil: 'Resting until',
+  journalDropped: 'Journals dropped',
+  precise: 'Precise location',
+  backgroundRefresh: 'Background App Refresh',
+  liveActivities: 'Live Activities',
+  canAskAlways: 'Always can be asked',
+  journal: 'Journal',
+  noJournal: 'No journaled drives.',
+  journaled: (j: JournaledDrive) =>
+    `${j.origin} · ${j.startSource} · ${j.lastSeq} rows · ${j.ended === null ? 'recording' : `ended (${j.ended.cause})`}`,
+  opportunities: 'Last drives: opportunities and loads',
+  noDrives: 'No finished drives yet.',
+  exposure: (e: Exposure, estimated: boolean) =>
+    `${e.slowdowns} slowdowns · ${e.speedups} speed-ups · ${e.turns} turns · ${e.limitS} s under a limit of ${e.movingS} s moving${estimated ? ' (estimated)' : ''}`,
+  load: (axis: string, weight: number, count: number, opportunities: number) => `${axis} ${weight.toFixed(2)} / ${opportunities} (${count})`,
 } as const;
 
 /** The route guard: a developer build, or a build made with the diagnostics flag (`./flags`). */
@@ -100,6 +126,8 @@ export interface DriveDiagnosticsProps {
   /** The drive HUD for the simulation (the route passes U2's, drawn as the lockout overlay). */
   Hud: ComponentType;
   source?: DiagSource;
+  /** iOS: the drive detector, read only; null (Android) shows none. Default: the native one. */
+  detect?: Pick<DriveDetectApi, 'available' | 'getState' | 'listDrives'> | null;
   createPlayer?: (getHost: () => DriveHost | undefined) => Promise<AlertPlayer>;
 }
 
@@ -139,32 +167,87 @@ async function attempt<T>(p: () => Promise<T>): Promise<Read<T>> {
   }
 }
 
+/** One finished drive's counters and per-category loads (`driveLoads`). */
+interface DriveLoadRow {
+  clientTripId: string;
+  startedAt: number;
+  miles: number;
+  exposure: Exposure;
+  estimated: boolean;
+  loads: ReturnType<typeof driveLoads>;
+}
+
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** The last 5 finished drives with what the scoring reads of them. */
+async function lastDriveLoads(db: Db): Promise<DriveLoadRow[]> {
+  const { rows } = await db.execute(
+    `SELECT client_trip_id, started_at, miles, duration_s, slowdowns, speedups, turns, limit_s, moving_s FROM trips
+      WHERE status NOT IN ('recording', 'merged') ORDER BY started_at DESC LIMIT 5`
+  );
+  const out: DriveLoadRow[] = [];
+  for (const r of rows) {
+    const id = asText(r, 'client_trip_id');
+    const counters = [num(r.slowdowns), num(r.speedups), num(r.turns), num(r.limit_s), num(r.moving_s)];
+    const estimated = counters.some((c) => c === null);
+    const miles = num(r.miles) ?? 0;
+    const exposure = estimated
+      ? estimateExposure(miles, num(r.duration_s) ?? 0)
+      : clampExposure({ slowdowns: counters[0]!, speedups: counters[1]!, turns: counters[2]!, limitS: counters[3]!, movingS: counters[4]! });
+    const ev = await db.execute('SELECT id, type, tier, started_at, duration_s, status, measured_json FROM trip_events WHERE client_trip_id = ?', [id]);
+    const events: DriveEvent[] = ev.rows.map((e) => {
+      let measured: DriveEvent['measured'] = {};
+      try {
+        measured = JSON.parse(asText(e, 'measured_json')) as DriveEvent['measured'];
+      } catch {
+        // an unreadable measurement weighs by its tier
+      }
+      return {
+        id: asText(e, 'id'),
+        type: asText(e, 'type') as DriveEvent['type'],
+        tier: asText(e, 'tier') as DriveEvent['tier'],
+        startedAt: asNumber(e, 'started_at'),
+        durationS: asNumber(e, 'duration_s'),
+        status: asText(e, 'status') === 'removed' ? 'removed' : 'active',
+        measured,
+      };
+    });
+    out.push({ clientTripId: id, startedAt: asNumber(r, 'started_at'), miles, exposure, estimated, loads: driveLoads(events, exposure) });
+  }
+  return out;
+}
+
 interface Snapshot {
   state: Read<DriveSenseState>;
   exit: Read<ExitInfo | null>;
   ignoring: Read<boolean>;
   rows: Read<StoredRow[]>;
   battery: Read<DriveBatteryRecord | null>;
+  detector: Read<{ state: DetectState; journal: JournaledDrive[] } | null>;
+  loads: Read<DriveLoadRow[]>;
 }
 
 const when = (ts: number | null | undefined) => (ts == null ? diagCopy.never : new Date(ts).toLocaleString());
 
-export function DriveDiagnosticsScreen({ Hud, source = DriveSense, createPlayer }: DriveDiagnosticsProps) {
+export function DriveDiagnosticsScreen({ Hud, source = DriveSense, detect = DriveDetect, createPlayer }: DriveDiagnosticsProps) {
   const th = useTheme();
   const db = useDb();
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const live = useRef(true);
 
   const load = useCallback(async () => {
-    const [state, exit, ignoring, rows, battery] = await Promise.all([
+    const det = detect !== null && detect.available ? detect : null;
+    const [state, exit, ignoring, rows, battery, detector, loads] = await Promise.all([
       attempt(() => source.getState()),
       attempt(() => source.getLastExitInfo()),
       attempt(() => source.isIgnoringBatteryOptimizations()),
       attempt(() => lastStoredRows(db)),
       attempt(() => readDriveBattery(createSettingsRepo(db))),
+      attempt(async () => (det === null ? null : { state: await det.getState(), journal: await det.listDrives() })),
+      attempt(() => lastDriveLoads(db)),
     ]);
-    if (live.current) setSnap({ state, exit, ignoring, rows, battery });
-  }, [db, source]);
+    if (live.current) setSnap({ state, exit, ignoring, rows, battery, detector, loads });
+  }, [db, source, detect]);
 
   useEffect(() => {
     live.current = true;
@@ -206,6 +289,10 @@ export function DriveDiagnosticsScreen({ Hud, source = DriveSense, createPlayer 
           </>
         ) : null}
       </Section>
+
+      <Section title={diagCopy.detector}>{snap ? <DetectorLines detector={snap.detector} /> : null}</Section>
+
+      <Section title={diagCopy.opportunities}>{snap ? <LoadLines loads={snap.loads} /> : null}</Section>
 
       <Section title={diagCopy.lastExit}>
         {snap ? <ExitLines exit={snap.exit} platform={platform} /> : null}
@@ -326,12 +413,86 @@ function SensingLines({ s }: { s: DriveSenseState }) {
       <Line label={diagCopy.captureStarted} value={when(s.captureStartedAt)} />
       <Line label={diagCopy.lastRow} value={when(s.lastRowTs)} />
       <Line label={diagCopy.captureWasOpen} value={s.captureWasOpen ? diagCopy.yes : diagCopy.no} />
-      <Line label={diagCopy.lockSignal} value={s.lockSignal} />
-      <Line label={diagCopy.lockProof} value={s.lockProof ? diagCopy.yes : diagCopy.no} testID="diag-lock-proof" />
-      <Line label={diagCopy.lockDelay} value={s.lockDelayMs === null ? '—' : diagCopy.ms(s.lockDelayMs)} testID="diag-lock-delay" />
       {/* C0 round 1 (review-C0r1 m2): keys a newer native build sent that this bundle does not know. */}
       <Line label={diagCopy.unknownRowKeys} value={String(unknownRowKeys())} testID="diag-unknown-row-keys" />
     </>
+  );
+}
+
+function DetectorLines({ detector }: { detector: Read<{ state: DetectState; journal: JournaledDrive[] } | null> }) {
+  const th = useTheme();
+  if (!detector.ok) return <Line label={diagCopy.detector} value={detector.error} tone="danger" first />;
+  if (detector.value === null) {
+    return (
+      <Text variant="subhead" tone="muted">
+        {diagCopy.noDetector}
+      </Text>
+    );
+  }
+  const { state: s, journal } = detector.value;
+  const p = s.permissions;
+  return (
+    <>
+      <Line label={diagCopy.phase} value={s.origin ? `${s.state} (${s.origin})` : s.state} first testID="diag-detect-phase" />
+      <Line label={diagCopy.since} value={when(s.since)} />
+      <Line label={diagCopy.armed} value={s.armed ? diagCopy.yes : diagCopy.no} />
+      <Line label={diagCopy.status} value={s.status} testID="diag-detect-status" />
+      <Line label={diagCopy.missing} value={s.missing.length === 0 ? '—' : s.missing.join(', ')} />
+      <Line label={diagCopy.liveDrive} value={s.driveId === null ? '—' : `${s.driveId.slice(0, 8)} from ${when(s.startedAt)}`} />
+      <Line label={diagCopy.waitUntil} value={s.waitUntil === null ? '—' : when(s.waitUntil)} />
+      <Line label={diagCopy.lastEnd} value={s.lastEnd === null ? '—' : when(s.lastEnd.decidedAt)} />
+      <Line label={diagCopy.suppressedUntil} value={s.suppressedUntil === null ? '—' : when(s.suppressedUntil)} />
+      <Line label={diagCopy.journalDropped} value={String(s.journalDropped)} />
+      <Line label={diagCopy.location} value={p.location} />
+      <Line label={diagCopy.precise} value={p.precise ? diagCopy.yes : diagCopy.no} />
+      <Line label={diagCopy.motion} value={p.motion} />
+      <Line label={diagCopy.backgroundRefresh} value={p.backgroundRefresh} />
+      <Line label={diagCopy.liveActivities} value={p.liveActivities ? diagCopy.yes : diagCopy.no} />
+      <Line label={diagCopy.canAskAlways} value={p.canAskAlways ? diagCopy.yes : diagCopy.no} />
+      <View style={{ paddingTop: th.space.md, gap: th.space.xs }}>
+        <Text variant="headline">{diagCopy.journal}</Text>
+        {journal.length === 0 ? (
+          <Text variant="subhead" tone="muted">
+            {diagCopy.noJournal}
+          </Text>
+        ) : (
+          journal.map((j) => (
+            <Text key={j.driveId} testID="diag-journal" variant="footnote" style={{ fontFamily: fontFamilies.numerals }}>
+              {`${j.driveId.slice(0, 8)} · ${when(j.startedAt)} · ${diagCopy.journaled(j)}`}
+            </Text>
+          ))
+        )}
+      </View>
+    </>
+  );
+}
+
+function LoadLines({ loads }: { loads: Read<DriveLoadRow[]> }) {
+  const th = useTheme();
+  if (!loads.ok) return <Line label={diagCopy.opportunities} value={loads.error} tone="danger" first />;
+  if (loads.value.length === 0) {
+    return (
+      <Text variant="subhead" tone="muted">
+        {diagCopy.noDrives}
+      </Text>
+    );
+  }
+  return (
+    <View style={{ gap: th.space.sm }}>
+      {loads.value.map((d) => (
+        <View key={d.clientTripId} testID="diag-loads" style={{ gap: 2 }}>
+          <Text variant="footnote" style={{ fontFamily: fontFamilies.numerals }}>
+            {`${when(d.startedAt)} · ${d.miles.toFixed(1)} mi`}
+          </Text>
+          <Text variant="caption" tone="muted" style={{ fontFamily: fontFamilies.numerals }}>
+            {diagCopy.exposure(d.exposure, d.estimated)}
+          </Text>
+          <Text variant="caption" tone="muted" style={{ fontFamily: fontFamilies.numerals }}>
+            {RATE_AXES.map((a) => diagCopy.load(a, d.loads.rates[a].weight, d.loads.rates[a].count, d.loads.rates[a].opportunities)).join(' · ')}
+          </Text>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -378,8 +539,6 @@ function RowList({ rows }: { rows: Read<StoredRow[]> }) {
         const detail = [
           typeof row.hAcc === 'number' && row.hAcc >= 0 ? `±${Math.round(row.hAcc)} m` : null,
           typeof row.course === 'number' && row.course >= 0 ? `${Math.round(row.course)}°` : null,
-          typeof row.handlingScore === 'number' ? `handling ${row.handlingScore.toFixed(2)}` : null,
-          row.locked ? 'locked' : row.screenOn ? 'screen on' : 'screen off',
         ]
           .filter(Boolean)
           .join(' · ');

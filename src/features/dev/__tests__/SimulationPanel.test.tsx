@@ -94,7 +94,7 @@ describe('fakeLimits', () => {
 });
 
 describe('createSimulation (a dry-run host over a fixture trace)', () => {
-  test.each(['speeding-minor', 'phone-pickup'] as const)(
+  test.each(['speeding-minor', 'hard-brake'] as const)(
     '%s at 5x: rows flow through the real host, alerts reach the player, and nothing is stored',
     async (name) => {
       const before = await countTables(db);
@@ -122,7 +122,7 @@ describe('createSimulation (a dry-run host over a fixture trace)', () => {
     await db.execute("INSERT INTO settings (key, value_json) VALUES ('units', '\"mi\"')");
     const before = await countTables(db);
     jest.useFakeTimers();
-    const sim = createSimulation({ db, trace: loadSimTrace('phone-pickup'), speed: 5, player: fakePlayer });
+    const sim = createSimulation({ db, trace: loadSimTrace('hard-brake'), speed: 5, player: fakePlayer });
     const run = sim.run();
     await jest.advanceTimersByTimeAsync(5000);
     // What a leaking dry run would do: rewrite an existing setting in place. No count moves.
@@ -136,7 +136,7 @@ describe('createSimulation (a dry-run host over a fixture trace)', () => {
 
   test('an UPDATE is caught the same way', async () => {
     jest.useFakeTimers();
-    const sim = createSimulation({ db, trace: loadSimTrace('phone-pickup'), speed: 5, player: fakePlayer });
+    const sim = createSimulation({ db, trace: loadSimTrace('hard-brake'), speed: 5, player: fakePlayer });
     const run = sim.run();
     await jest.advanceTimersByTimeAsync(5000);
     await db.execute("UPDATE trips SET miles = miles + 1 WHERE client_trip_id = 'real-1'");
@@ -154,7 +154,8 @@ describe('createSimulation (a dry-run host over a fixture trace)', () => {
     jest.useFakeTimers();
     const sim = createSimulation({ db, trace: loadSimTrace('speeding-minor'), speed: 1, player: () => player });
     const run = sim.run();
-    await jest.advanceTimersByTimeAsync(10_000);
+    await jest.advanceTimersByTimeAsync(20_000);
+    expect(sim.host.snapshot().status).toBe('recording');
     player.stopCurrent.mockClear();
     player.deliver.mockClear();
     sim.cancel({ realDrive });
@@ -168,12 +169,12 @@ describe('createSimulation (a dry-run host over a fixture trace)', () => {
 
   test('at 1x a row takes a second; at 5x a fifth of one', async () => {
     jest.useFakeTimers();
-    const slow = createSimulation({ db, trace: loadSimTrace('phone-pickup'), speed: 1, player: fakePlayer });
+    const slow = createSimulation({ db, trace: loadSimTrace('hard-brake'), speed: 1, player: fakePlayer });
     void slow.run();
     await jest.advanceTimersByTimeAsync(10_050);
     const slowRows = slow.rowsPlayed();
     slow.cancel();
-    const fast = createSimulation({ db, trace: loadSimTrace('phone-pickup'), speed: 5, player: fakePlayer });
+    const fast = createSimulation({ db, trace: loadSimTrace('hard-brake'), speed: 5, player: fakePlayer });
     void fast.run();
     await jest.advanceTimersByTimeAsync(10_050);
     const fastRows = fast.rowsPlayed();
@@ -261,6 +262,11 @@ describe('SimulationPanel', () => {
     await fireEvent.press(screen.getByRole('button', { name: /5×/ }));
     jest.useFakeTimers();
     await fireEvent.press(screen.getByRole('button', { name: 'Simulate a drive' }));
+    // The Start card's wait first (the HUD shows it), then the drive once 10 mph has held 15 s.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(1000);
+    });
+    expect(screen.getByTestId('stub-hud').props.children).toBe('idle dry');
     await act(async () => {
       await jest.advanceTimersByTimeAsync(3000);
     });
@@ -325,6 +331,6 @@ describe('SimulationPanel', () => {
   test('offers both fixture drives', async () => {
     await renderPanel();
     expect(screen.getByRole('button', { name: /Speeding, then slowing down/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Phone picked up/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /A hard brake/ })).toBeTruthy();
   });
 });
