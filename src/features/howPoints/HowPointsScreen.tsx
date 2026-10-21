@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { POINTS_PER_MILE } from '@scoring';
 import { useRouter } from 'expo-router';
 import { ScrollView, View } from 'react-native';
 
@@ -76,9 +77,9 @@ export function HowPointsView({ onBack }: { onBack: () => void }) {
 
       <Card variant="hero">
         <Text variant="title2">Drive safe. Earn points. Keep the streak.</Text>
-        <View accessible accessibilityLabel="Drive points equal safe miles times 10 times your multiplier, minus penalties">
+        <View accessible accessibilityLabel={`Drive points equal safe miles times ${POINTS_PER_MILE} times your multiplier, minus penalties`}>
           <Text variant="stat" style={{ color: t.colors.gold }}>
-            safe mi × 10 × multiplier
+            safe mi × {POINTS_PER_MILE} × multiplier
           </Text>
           <Text variant="stat" style={{ color: t.colors.signal.severe.text }}>
             − penalties
