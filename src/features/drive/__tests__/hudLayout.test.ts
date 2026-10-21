@@ -2,7 +2,7 @@
 // window, nothing overlapping, the numerals large enough.
 import { compassGeometry, DIGIT_ADVANCE_EM, DIGIT_HEIGHT_EM, haloGeometry, numeralLineHeight, SPEED_UNIT_GAP_PT, unitLineHeight, unitTop } from '@/ui/drive';
 
-import { HUD_COMPACT_NAV_H_PT, HUD_NAV_H_PT, HUD_NAV_W_PT, hudLayout, type HudLayout, type HudLayoutInput, type Rect } from '../hudLayout';
+import { HUD_COMPACT_NAV_H_PT, HUD_NAV_H_PT, HUD_NAV_W_PT, HUD_NOT_DRIVING_PT, hudLayout, type HudLayout, type HudLayoutInput, type Rect } from '../hudLayout';
 
 const ZERO = { top: 0, bottom: 0, left: 0, right: 0 };
 const L = (o: Partial<HudLayoutInput> & { width: number; height: number }): HudLayout => hudLayout({ insets: ZERO, fontScale: 1, chip: false, units: 'mi', ...o });
@@ -19,14 +19,17 @@ function hitsCircle(r: Rect, halo: Rect): boolean {
 }
 
 describe('worked phones (§3.1, §3.2)', () => {
-  test('iPhone SE 375 × 667 (status bar 20): halo 339 as near the centre as fits, the points in the band line, a 112 pt top row, the R2-1 at 90 × 112', () => {
+  test('iPhone SE 375 × 667 (status bar 20): halo 295 resting on the "Not driving?" row above End, a 112 pt top row, the R2-1 at 90 × 112', () => {
     const l = L({ width: 375, height: 667, insets: { ...ZERO, top: 20 } });
     expect(l).toMatchObject({ orientation: 'portrait', compact: false });
-    expect(l.halo.w).toBe(339);
-    expect(l.points).toBe('line');
+    expect(l.halo.w).toBe(295);
+    expect(l.notDriving).toEqual({ x: 16, y: 519, w: 343, h: HUD_NOT_DRIVING_PT });
+    // the halo as low as the row lets it (its box rounded down to whole points)
+    expect(519 - (l.halo.y + l.halo.h)).toBeGreaterThanOrEqual(0);
+    expect(519 - (l.halo.y + l.halo.h)).toBeLessThan(2);
     expect(l.row).toMatchObject({ y: 32, h: 112 });
     expect([l.sign.w, l.sign.h]).toEqual([90, 112]);
-    expect(l.numeralPt2).toBe(156);
+    expect(l.numeralPt2).toBe(135);
   });
 
   test('top to bottom: the top row (sign left, navigation right), the band, the halo, End across the foot', () => {
@@ -41,12 +44,15 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.row.h).toBe(112);
     expect(l.end).toEqual({ x: 16, y: 852 - 34 - 16 - 76, w: 361, h: 76 });
     expect(l.end.y).toBeGreaterThanOrEqual(l.halo.y + l.halo.h);
+    // the link's 44 pt row a gap above End, under the halo
+    expect(l.notDriving).toEqual({ x: 16, y: l.end.y - 12 - 44, w: 361, h: 44 });
+    expect(l.halo.y + l.halo.h).toBeLessThanOrEqual(l.end.y - 12 - 44);
   });
 
-  test('360 × 640 Android (24 / 48): halo 260, the points in the band line, a 112 pt top row', () => {
+  test('360 × 640 Android (24 / 48): the link’s row would cost the ring, so it goes in the band line and the halo keeps 260; a 112 pt top row', () => {
     const l = L({ width: 360, height: 640, insets: { ...ZERO, top: 24, bottom: 48 } });
     expect(l.halo.w).toBe(260);
-    expect(l.points).toBe('line');
+    expect(l.notDriving).toBe('line');
     expect(l.row.h).toBe(112);
     expect(l.numeralPt2).toBe(118);
   });
@@ -68,9 +74,10 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.sign.w).toBeLessThanOrEqual(248 / 3);
   });
 
-  test('320 × 568: halo 240, a 112 pt top row and the R2-1 at 90 × 112', () => {
+  test('320 × 568: halo 240 with the link in the band line, a 112 pt top row and the R2-1 at 90 × 112', () => {
     const l = L({ width: 320, height: 568, insets: { ...ZERO, top: 20 } });
     expect(l.halo.w).toBe(240);
+    expect(l.notDriving).toBe('line');
     expect(l.row.h).toBe(112);
     expect([l.sign.w, l.sign.h]).toEqual([90, 112]);
   });
@@ -84,7 +91,7 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect([small.sign.w, small.sign.h]).toEqual([96, 96]);
   });
 
-  test('iPhone SE landscape 667 × 375: the sign left of a full-height halo (347) with the points inside it, the navigation button right with End under it', () => {
+  test('iPhone SE landscape 667 × 375: the sign left of a full-height halo (347), the link and the navigation button right with End under them', () => {
     const l = L({ width: 667, height: 375 });
     expect(l).toMatchObject({ orientation: 'landscape', compact: false });
     expect(l.halo).toMatchObject({ x: 128, y: 12, w: 347, h: 347, ring: true });
@@ -96,17 +103,16 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.nav).toEqual({ x: 523, y: 167, w: 96, h: 104 });
     expect(l.end).toEqual({ x: 491, y: 375 - 16 - 76, w: 160, h: 76 });
     expect(l.end.y).toBe(l.nav.y + l.nav.h + 12);
-    // the points inside the halo, under the speed: the stack raised 33 pt, the numerals sized for it
-    expect(l.points).toBe('halo');
-    expect(l.haloPoints).toEqual({ lift: 33, pt: 28, w: 135 });
-    expect([l.numeralPt2, l.numeralPt3]).toEqual([126, 97]);
+    // the link's row directly above the navigation button, under the band
+    expect(l.notDriving).toEqual({ x: 491, y: 111, w: 160, h: 44 });
+    expect([l.numeralPt2, l.numeralPt3]).toEqual([160, 117]);
     // the navigation list covers the sign and the halo, never the button or End
     expect(l.panel).toEqual({ x: 16, y: 12, w: 459, h: 347 });
   });
 
   test('iPhone 15 landscape 852 × 393 (side insets 59, bottom 21): the halo the full height, 344 pt, centred on the screen', () => {
     const l = L({ width: 852, height: 393, insets: { top: 0, bottom: 21, left: 59, right: 59 } });
-    expect(l).toMatchObject({ orientation: 'landscape', compact: false, halo: { y: 12, w: 344, ring: true }, points: 'halo' });
+    expect(l).toMatchObject({ orientation: 'landscape', compact: false, halo: { y: 12, w: 344, ring: true }, notDriving: { x: 614, w: 163, h: 44 } });
     expect(l.halo.x + l.halo.w / 2).toBe(852 / 2);
     expect(l.end).toMatchObject({ x: 852 - 75 - 163, w: 163 });
     expect(l.sign.x).toBeGreaterThanOrEqual(75);
@@ -120,13 +126,13 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.end.w).toBe(355);
   });
 
-  test('a 360 × 640 Android turned, with the 3-button bar on the right (640 × 360, right 48): the ring, 272 pt; too small for the points inside, they go in the band line', () => {
+  test('a 360 × 640 Android turned, with the 3-button bar on the right (640 × 360, right 48): the ring, 272 pt, the link above the navigation button; with the status bar too the column is too short for it and it goes in the band line', () => {
     const l = L({ width: 640, height: 360, insets: { ...ZERO, right: 48 } });
-    expect(l).toMatchObject({ orientation: 'landscape', compact: false, halo: { w: 272, ring: true }, points: 'line', haloPoints: null });
+    expect(l).toMatchObject({ orientation: 'landscape', compact: false, halo: { w: 272, ring: true }, notDriving: { x: 416, y: 96, w: 160, h: 44 } });
     expect(l.nav.w).toBe(96);
     expect(l.numeralPt2).toBeGreaterThanOrEqual(96);
     const statusBar = L({ width: 640, height: 360, insets: { ...ZERO, top: 24, right: 48 } });
-    expect(statusBar).toMatchObject({ compact: false, halo: { w: 272, ring: true } });
+    expect(statusBar).toMatchObject({ compact: false, halo: { w: 272, ring: true }, notDriving: 'line' });
     expect(L({ width: 600, height: 400 })).toMatchObject({ compact: false, halo: { w: 280, ring: true } });
   });
 
@@ -176,7 +182,7 @@ describe('invariants across windows', () => {
     }
   });
 
-  test('nothing overlaps: band items, points, sign, End and navigation never meet each other or the halo ring', () => {
+  test('nothing overlaps: band items, the link, sign, End and navigation never meet each other or the halo ring', () => {
     for (const c of cases) {
       const l = L({ width: c.w, height: c.h, insets: c.ins, chip: c.chip, units: c.units });
       const items: [string, Rect][] = [
@@ -185,15 +191,16 @@ describe('invariants across windows', () => {
         ['end', l.end],
         ['nav', l.nav],
       ];
-      if (l.points !== 'line' && l.points !== 'halo') items.push(['points', l.points]);
+      if (l.notDriving !== 'line') items.push(['notDriving', l.notDriving]);
       for (let a = 0; a < items.length; a += 1)
         for (let b = a + 1; b < items.length; b += 1)
           if (overlap(items[a]![1], items[b]![1])) throw new Error(`${items[a]![0]} meets ${items[b]![0]} at ${c.w}x${c.h}`);
       if (l.halo.ring) for (const [name, r] of items) if (hitsCircle(r, l.halo)) throw new Error(`${name} meets the halo at ${c.w}x${c.h}`);
       if (l.chip) expect(overlap(l.chip, l.line)).toBe(false);
-      // the navigation list never covers the navigation button or End
+      // the navigation list (and the waiting panels) never cover the navigation button, the link or End
       expect(overlap(l.panel, l.nav)).toBe(false);
       expect(overlap(l.panel, l.end)).toBe(false);
+      if (l.notDriving !== 'line') expect(overlap(l.panel, l.notDriving)).toBe(false);
       expect(inside(l.panel, c.w, c.h)).toBe(true);
       if (l.orientation === 'landscape' && !l.compact) {
         expect(l.sign.x + l.sign.w).toBeLessThanOrEqual(l.halo.x + 1e-9);
@@ -225,30 +232,52 @@ describe('invariants across windows', () => {
       expect(l.numeralPt2).toBeGreaterThanOrEqual(96);
       if (l.orientation === 'portrait' && c.w >= 360 && l.halo.w >= 328) expect(l.numeralPt2).toBeGreaterThanOrEqual(120);
       const rc = haloGeometry(l.halo.w).rc;
-      const lift = l.haloPoints?.lift ?? 0;
-      expect(((3 * 0.535 * l.numeralPt3) / 2) ** 2 + (0.357 * l.numeralPt3 + lift) ** 2).toBeLessThanOrEqual((0.94 * rc) ** 2);
-      if (l.haloPoints !== null) {
-        // the points line, under the unit label, keeps its corners inside the ring for either size
-        for (const pt of [l.numeralPt2, l.numeralPt3]) {
-          const bottom = -lift + 0.357 * pt + SPEED_UNIT_GAP_PT + unitLineHeight(l.unitPt) + 4 + Math.round(1.15 * l.haloPoints.pt);
-          expect((l.haloPoints.w / 2) ** 2 + bottom ** 2).toBeLessThanOrEqual((0.94 * rc) ** 2 + 1e-6);
-        }
-      }
+      expect(((3 * 0.535 * l.numeralPt3) / 2) ** 2 + (0.357 * l.numeralPt3) ** 2).toBeLessThanOrEqual((0.94 * rc) ** 2);
     }
   });
 
-  test('landscape: the points inside the halo on every phone turned that keeps 96 pt numerals with them', () => {
-    let inside = 0;
+  test('the "Not driving?" row: in portrait directly above End with the halo over it, turned directly above the navigation button; compact windows use the band line', () => {
+    let rows = 0;
+    let lines = 0;
     for (const c of cases) {
       const l = L({ width: c.w, height: c.h, insets: c.ins, chip: c.chip, units: c.units });
-      if (l.orientation !== 'landscape' || l.compact) continue;
-      if (l.points === 'halo') {
-        inside += 1;
-        expect(l.numeralPt2).toBeGreaterThanOrEqual(96);
-        expect(l.haloPoints!.w).toBeGreaterThanOrEqual(3.5 * l.haloPoints!.pt);
-      } else expect([l.points, l.haloPoints]).toEqual(['line', null]);
+      if (l.notDriving === 'line') {
+        lines += 1;
+        continue;
+      }
+      rows += 1;
+      const r = l.notDriving;
+      expect(l.compact).toBe(false);
+      expect(r.h).toBe(HUD_NOT_DRIVING_PT);
+      expect(inside(r, c.w, c.h)).toBe(true);
+      // its 64 pt touch box (10 pt of slop above and below) stays clear of End and the navigation button
+      const touch = { x: r.x, y: r.y - 10, w: r.w, h: r.h + 20 };
+      expect(overlap(touch, l.end)).toBe(false);
+      expect(overlap(touch, l.nav)).toBe(false);
+      if (l.orientation === 'portrait') {
+        expect(r.y + r.h + 12).toBe(l.end.y);
+        expect(l.halo.y + l.halo.h).toBeLessThanOrEqual(r.y + 1e-9);
+      } else {
+        expect(r.y + r.h + 12).toBe(l.nav.y);
+        expect(r.y).toBeGreaterThanOrEqual(l.band.y + l.band.h);
+        expect(r.x).toBe(l.band.x);
+      }
     }
-    expect(inside).toBeGreaterThan(20);
+    for (const c of cases) {
+      const l = L({ width: c.w, height: c.h, insets: c.ins, chip: c.chip, units: c.units });
+      if (l.compact) expect(l.notDriving).toBe('line');
+    }
+    expect(rows).toBeGreaterThan(100);
+    expect(lines).toBeGreaterThan(0);
+  });
+
+  test('a portrait window keeps the ring rather than the link’s row: the row goes to the band line only where the ring would not fit with it', () => {
+    for (const c of cases) {
+      const l = L({ width: c.w, height: c.h, insets: c.ins, chip: c.chip, units: c.units });
+      if (l.orientation !== 'portrait' || l.compact || l.notDriving !== 'line') continue;
+      // with the row the halo would fall under the 220 pt ring floor
+      expect(l.halo.w).toBeLessThan(220 + HUD_NOT_DRIVING_PT);
+    }
   });
 });
 
@@ -309,11 +338,11 @@ describe('compact windows (§3.3)', () => {
     expect(clear).toBeLessThan(9);
   });
 
-  test('300 × 400: compact, no ring, the points in the band line, End pinned at the bottom', () => {
+  test('300 × 400: compact, no ring, the link in the band line, End pinned at the bottom', () => {
     const l = L({ width: 300, height: 400 });
     expect(l.compact).toBe(true);
     expect(l.halo.ring).toBe(false);
-    expect(l.points).toBe('line');
+    expect(l.notDriving).toBe('line');
     expect(l.row.h).toBe(88);
     expect(l.end.y).toBe(400 - 16 - 76);
     expect(l.numeralPt2).toBeGreaterThan(0);

@@ -1,14 +1,13 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { View, type TextStyle } from 'react-native';
+import { useEffect, useState } from 'react';
+import type { TextStyle } from 'react-native';
 import type { AnimatedStyle } from 'react-native-reanimated';
 
 import { MPS_PER_MPH } from '@/core/detectors/common';
 import { CARRY_MAX_MS, carriedSpeed, SPEED_TICK_MS, wholeSpeed } from '@/core/engine/displaySpeed';
 import { useShownSpeed, type ShownSpeed } from '@/drive/useDrive';
 import { KMH_PER_MPH } from '@/lib/units';
-import { speedDigits, SpeedReadout, unitLineHeight, unitTop } from '@/ui/drive';
+import { speedDigits, SpeedReadout } from '@/ui/drive';
 
-import { HALO_POINTS_GAP_PT } from './hudLayout';
 import { unitLabel, type HudUnits } from './useHudUnits';
 
 const wallClock = (): number => Date.now();
@@ -49,45 +48,18 @@ export type HaloReadoutProps = {
   units: HudUnits;
   pt2: number;
   pt3: number;
-  unitPt: number;
   color: string;
   unitColor: string;
   numeralStyle?: AnimatedStyle<TextStyle>;
   speeding?: boolean;
-  /** Landscape: the points inside the halo under the unit label (`hudLayout` `haloPoints`). */
-  haloPoints: { lift: number; w: number } | null;
-  /** The points while stopped, else null (it fades itself in and out). */
-  points: ReactNode;
 };
 
 /**
  * The speed inside the halo, carried on between fixes (`useCarriedSpeed`): its own component reading
- * its own slice of the drive, so each fix and each tick re-render the numerals and nothing else. In
- * landscape the stack is raised by `lift` and the points sit under the unit label, inside the ring,
- * whether or not they show (nothing moves).
+ * its own slice of the drive, so each fix and each tick re-render the numerals and nothing else.
  */
-export function HaloReadout({ units, pt2, pt3, unitPt, haloPoints, points, ...rest }: HaloReadoutProps) {
+export function HaloReadout({ units, pt2, pt3, ...rest }: HaloReadoutProps) {
   const speed = useCarriedSpeed(useShownSpeed(), units);
   const size = speedDigits(speed) >= 3 ? pt3 : pt2;
-  const readout = <SpeedReadout speed={speed} unit={unitLabel(units)} size={size} {...rest} />;
-  if (haloPoints === null) return readout;
-  return (
-    <View testID="hud-halo-stack" style={{ transform: [{ translateY: -haloPoints.lift }] }}>
-      {readout}
-      <View
-        testID="hud-halo-points"
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          top: unitTop(size) + unitLineHeight(unitPt) + HALO_POINTS_GAP_PT,
-          left: '50%',
-          width: haloPoints.w,
-          marginLeft: -haloPoints.w / 2,
-          alignItems: 'center',
-        }}
-      >
-        {points}
-      </View>
-    </View>
-  );
+  return <SpeedReadout speed={speed} unit={unitLabel(units)} size={size} {...rest} />;
 }
