@@ -3,6 +3,7 @@ import type { ReactTestInstance } from 'react-test-renderer';
 
 import { draw, press, summary as mockSummary } from '@/features/drives/__fixtures__/drives';
 import { driveSummaryHref } from '@/features/drives/routes';
+import { SETTINGS_HREFS } from '@/features/settings/routes';
 
 import { analytics as mockAnalytics, drives as mockDrives, empty as mockEmpty } from '../__fixtures__/analytics';
 import { AnalyticsScreen } from '../AnalyticsScreen';
@@ -36,6 +37,7 @@ const SECTIONS = [
   'analytics-range',
   'analytics-metrics',
   'analytics-grid',
+  'analytics-time-of-day',
   'analytics-map',
   'analytics-drives',
 ];
@@ -53,7 +55,7 @@ function order(): string[] {
   return out;
 }
 
-test('top to bottom: radar, summary, bests, range, metrics, when you drive, map, drives', async () => {
+test('top to bottom: radar, summary, bests, range, metrics, when you drive, time of day, map, drives', async () => {
   await draw(<AnalyticsScreen />);
   expect(screen.getByRole('header', { name: 'Analytics' })).toBeOnTheScreen();
   expect(order()).toEqual(SECTIONS);
@@ -124,7 +126,7 @@ test('the page keeps only general numbers: no category counts, rates or bests, a
   expect(screen.getByTestId('metric-avg-points-value')).toHaveTextContent('+132 pts');
   expect(screen.getByTestId('best-points-value')).toHaveTextContent('+132 pts');
   // The radar's per-category numbers are its scores, nothing else.
-  for (const el of within(screen.getByTestId('analytics-radar')).getAllByRole('button')) expect(el.props.accessibilityLabel).toMatch(/^[A-Za-z ]+, (score \d+|no score yet)$/);
+  for (const el of within(screen.getByTestId('analytics-radar')).getAllByRole('button')) expect(el.props.accessibilityLabel).toMatch(/^[A-Za-z ]+, (score \d+|no score yet|needs DashPal)$/);
 });
 
 test.each([
@@ -133,7 +135,6 @@ test.each([
   ['accel', 'Acceleration · 95', ['metric-starts', 'metric-starts-distance'], null],
   ['cornering', 'Turning · 100', ['metric-turns', 'metric-turns-distance'], null],
   ['phone', 'Phone use · 60', ['metric-pickups', 'metric-phone-time'], 'best-phone-free'],
-  ['night', 'Time of day · 50', ['metric-after-dark', 'metric-dark-share'], null],
 ] as const)('tapping %s on the radar opens its details, which close again', async (axis, title, cells, best) => {
   await draw(<AnalyticsScreen />);
   await press(screen.getByTestId(`radar-axis-${axis}`));
@@ -152,13 +153,32 @@ test('with no drives at all, every category still opens: "No data yet"', async (
   mockData = () => mockEmpty();
   mockRating = null;
   await draw(<AnalyticsScreen />);
-  for (const axis of ['accel', 'braking', 'cornering', 'night', 'phone', 'speeding']) {
+  for (const axis of ['accel', 'braking', 'cornering', 'phone', 'speeding']) {
     await press(screen.getByTestId(`radar-axis-${axis}`));
     const sheet = screen.getByTestId('category-sheet');
     expect(within(sheet).getByText('No data yet')).toBeOnTheScreen();
     await press(within(sheet).getAllByRole('button', { name: 'Close' }).at(-1)!);
     await waitFor(() => expect(screen.queryByTestId('category-sheet')).toBeNull());
   }
+});
+
+test('with no DashPal paired, Attention is locked: its sheet says so and opens DashPal setup', async () => {
+  await draw(<AnalyticsScreen />);
+  expect(screen.getByTestId('radar-lock-attention')).toBeOnTheScreen();
+  await press(screen.getByTestId('radar-axis-attention'));
+  const sheet = screen.getByTestId('category-sheet');
+  expect(within(sheet).getByText('Attention comes from DashPal')).toBeOnTheScreen();
+  await press(within(sheet).getByRole('button', { name: 'Set up DashPal' }));
+  expect(mockRouter.push).toHaveBeenCalledWith(SETTINGS_HREFS.dashcam);
+  await waitFor(() => expect(screen.queryByTestId('category-sheet')).toBeNull());
+});
+
+test('the time-of-day card comments on when the drives start and scores nothing', async () => {
+  await draw(<AnalyticsScreen />);
+  const card = screen.getByTestId('analytics-time-of-day');
+  expect(within(card).getByText('Time of day')).toBeOnTheScreen();
+  expect(within(card).getByTestId('analytics-time-of-day-text').props.children).toMatch(/\.$/);
+  expect(within(card).queryByText(/pts|points|score/i)).toBeNull();
 });
 
 test("the sheet's range is the page's: switching it there re-reads the page too", async () => {

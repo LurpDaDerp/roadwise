@@ -258,3 +258,17 @@ export const SCHEMA_V7: readonly string[] = ['ALTER TABLE trips ADD COLUMN conti
  * end note. Local only, never uploaded; null on a drive hydrated from the server.
  */
 export const SCHEMA_V8: readonly string[] = ['ALTER TABLE trips ADD COLUMN end_cause TEXT'];
+
+/**
+ * V9 — `trips.watched_miles`: the miles DashPal watched on the drive (`watchedMiles`: its miles ×
+ * the covered share of its moving seconds), for the radar's Attention. A drive this phone recorded
+ * takes it from its `dashcam_coverage` row; one restored from the server, from its DashPal seconds.
+ */
+export const SCHEMA_V9: readonly string[] = [
+  'ALTER TABLE trips ADD COLUMN watched_miles REAL NOT NULL DEFAULT 0',
+  `UPDATE trips SET watched_miles = (
+     SELECT CASE WHEN c.moving_s > 0 AND c.covered_s > 0 AND trips.miles > 0
+       THEN trips.miles * MIN(c.covered_s, c.moving_s) * 1.0 / c.moving_s ELSE 0 END
+     FROM dashcam_coverage c WHERE c.client_trip_id = trips.client_trip_id)
+   WHERE EXISTS (SELECT 1 FROM dashcam_coverage c WHERE c.client_trip_id = trips.client_trip_id)`,
+];

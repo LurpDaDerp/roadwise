@@ -595,15 +595,22 @@ function summarize(drives, now) {
   const recent = scored.filter((d) => d.payload.startedAt > since);
   const miles30 = recent.reduce((s, d) => s + d.payload.miles, 0);
   const penalty30 = recent.reduce((s, d) => s + d.scored.breakdown.ratingPenalty, 0);
+  // Attention (DashPal): its events over the miles the dashcam watched, as the server rates it
+  const watched = (list) =>
+    list.reduce((s, d) => s + (d.payload.dashcam ? scoring.watchedMiles(d.payload.miles, d.payload.dashcam.movingS, d.payload.dashcam.coveredS) : 0), 0);
+  const attention = (list) => ({
+    penalty: list.reduce((s, d) => s + d.scored.kept.reduce((t, e) => t + scoring.attentionPenalty(e), 0), 0),
+    watchedMiles: watched(list),
+  });
   const axes = (list) => {
     const miles = list.reduce((s, d) => s + d.payload.miles, 0);
-    const night = list.reduce((s, d) => s + d.payload.nightMiles, 0);
     const p = { speeding: 0, braking: 0, accel: 0, cornering: 0, phone: 0 };
     const axis = { speeding: 'speeding', hard_brake: 'braking', hard_accel: 'accel', hard_corner: 'cornering', phone_pickup: 'phone', phone_handling: 'phone' };
     for (const d of list) for (const e of d.scored.kept) if (axis[e.type]) p[axis[e.type]] += scoring.ratingPenalty(e);
     const out = {};
     for (const k of Object.keys(p)) out[k] = Math.round(Math.min(100, Math.max(0, 100 - (10 * p[k]) / miles)));
-    out.night = Math.round(100 - (50 * night) / miles);
+    const a = attention(list);
+    out.attention = a.watchedMiles > 0 ? Math.round(Math.min(100, Math.max(0, 100 - scoring.attentionDeficit(a.penalty, a.watchedMiles)))) : null;
     return out;
   };
   const counts = {};
@@ -616,7 +623,7 @@ function summarize(drives, now) {
     drives30: recent.length,
     miles: round(scored.reduce((s, d) => s + d.payload.miles, 0), 1),
     miles30: round(miles30, 1),
-    rating30: scoring.safetyRating(penalty30, miles30).rating,
+    rating30: scoring.safetyRating(penalty30, miles30, attention(recent)).rating,
     axes30: axes(recent),
     axesAll: axes(scored),
     counts,

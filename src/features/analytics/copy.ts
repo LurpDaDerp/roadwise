@@ -9,6 +9,8 @@ export const analyticsCopy = {
     noScore: 'no score yet',
     /** An axis's button for a screen reader ("Speeding, score 82"). */
     axis: (label: string, score: number | null) => (score === null ? `${label}, no score yet` : `${label}, score ${score}`),
+    /** The Attention chip without a DashPal. */
+    locked: (label: string) => `${label}, needs DashPal`,
     axisHint: 'Opens details',
   },
   category: {
@@ -16,8 +18,18 @@ export const analyticsCopy = {
     subtitle: 'Score out of 100, last 30 days',
     /** The range card's title. */
     range: { day: 'Last 24 hours', week: 'Last 7 days', month: 'Last 30 days', year: 'Last 365 days' },
-    afterDark: 'After dark',
-    darkShare: 'Share after dark',
+    eyesOff: 'Eyes off road',
+    drowsy: 'Drowsy',
+    watched: 'DashPal miles',
+    /** Attention without a paired DashPal. */
+    locked: {
+      title: 'Attention comes from DashPal',
+      body: 'Pair a DashPal and it will score how well you keep your eyes on the road.',
+      action: 'Set up DashPal',
+    },
+    /** Attention with a DashPal but no watched drives in the range. */
+    noDashpal: 'No DashPal drives yet',
+    noDashpalBody: (range: string) => `DashPal didn't watch any drives in the ${range.toLowerCase()}. Your Attention numbers show up here after one.`,
     /** In place of the numbers when the range has no drives. */
     empty: 'No data yet',
     emptyBody: (range: string) => `No drives in the ${range.toLowerCase()}. Your numbers show up here after a drive.`,
@@ -66,6 +78,9 @@ export const analyticsCopy = {
     lowest: 'Lowest',
     latest: 'latest',
     direction: { up: 'trending up', down: 'trending down', steady: 'holding steady' },
+  },
+  timeOfDay: {
+    title: 'Time of day',
   },
   grid: {
     title: 'When you drive',

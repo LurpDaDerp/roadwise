@@ -7,11 +7,12 @@ import { EmptyState, SegmentedControl, Sheet, Text, useFontScale, useTheme } fro
 
 import { BestsCard, type BestKey } from './BestsCard';
 import { analyticsCopy } from './copy';
-import { countMetric, distanceMetric, percentMetric, timeMetric } from './format';
+import { countMetric, distanceMetric, timeMetric } from './format';
 import { metricsLayout, metricsText, NumberCard, type MetricGroup } from './MetricsCards';
 import {
   AXIS_LABEL,
   axisCoaching,
+  DASHPAL_AXIS,
   LEVEL_ICON,
   LEVEL_LABEL,
   LEVEL_TONE,
@@ -29,8 +30,8 @@ const SEGMENTS = RANGES.map((value) => ({ value, label: RANGE_LABEL[value] }));
 
 /**
  * A category's numbers over the range, never points or rates: an event axis's total count and the
- * distance driven, Phone use's pickups and phone time, or Time of day's distance after dark and its
- * share of the driving.
+ * distance driven, Phone use's pickups and phone time, or Attention's eyes-off and drowsy counts
+ * and the distance DashPal watched.
  */
 export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units: Units): MetricGroup {
   const events = (key: string, caption: string, n: number): MetricGroup['cells'] => [
@@ -52,10 +53,11 @@ export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units:
           { key: 'pickups', caption: m.pickups, metric: countMetric(s.pickups) },
           { key: 'phone-time', caption: m.phoneTime, metric: timeMetric(s.handlingS) },
         ];
-      case 'night':
+      case 'attention':
         return [
-          { key: 'after-dark', caption: c.afterDark, metric: distanceMetric(s.nightMiles, units) },
-          { key: 'dark-share', caption: c.darkShare, metric: percentMetric(s.nightPct) },
+          { key: 'eyes-off', caption: c.eyesOff, metric: countMetric(s.eyesOff) },
+          { key: 'drowsy', caption: c.drowsy, metric: countMetric(s.drowsy) },
+          { key: 'watched', caption: c.watched, metric: distanceMetric(s.watchedMiles, units) },
         ];
     }
   })();
@@ -65,8 +67,9 @@ export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units:
 /** The all-time best that belongs to a category, if any. */
 export const CATEGORY_BEST: Partial<Record<AxisKey, BestKey>> = { phone: 'phone-free' };
 
-/** The sheet's title: the category and its 30-day score ("Speed · 82", "Speed · —"). */
-export const categoryTitle = (axis: AxisKey, score: number | null): string => `${AXIS_LABEL[axis]} · ${score === null ? '—' : score}`;
+/** The sheet's title: the category and its 30-day score ("Speed · 82", "Speed · —"); a locked one its name alone. */
+export const categoryTitle = (axis: AxisKey, score: number | null, locked = false): string =>
+  locked ? AXIS_LABEL[axis] : `${AXIS_LABEL[axis]} · ${score === null ? '—' : score}`;
 
 export interface CategorySheetProps {
   axis: AxisKey;
@@ -81,6 +84,9 @@ export interface CategorySheetProps {
   range: Range;
   onRange: (range: Range) => void;
   onOpenDrive: (clientTripId: string) => void;
+  /** A DashPal is paired: without one Attention is locked and offers to set one up. */
+  dashpalPaired: boolean;
+  onPairDashpal: () => void;
 }
 
 /**
@@ -89,8 +95,10 @@ export interface CategorySheetProps {
  * all-time best when it has one. The numbers follow the metrics block's rule: never more than three
  * quarters of the window's height. A range with no drives shows "No data yet" in their place (and
  * no verdict either when the 30 days have no score), so the sheet always opens to something.
+ * Attention without a paired DashPal says where it comes from and offers to set one up; with one
+ * but no watched drives in the range, it says so.
  */
-export function CategorySheet({ axis, visible, onClose, score, last30, sums, bests, range, onRange, onOpenDrive }: CategorySheetProps) {
+export function CategorySheet({ axis, visible, onClose, score, last30, sums, bests, range, onRange, onOpenDrive, dashpalPaired, onPairDashpal }: CategorySheetProps) {
   const t = useTheme();
   const units = useUnits();
   const { height } = useWindowDimensions();
@@ -101,7 +109,15 @@ export function CategorySheet({ axis, visible, onClose, score, last30, sums, bes
   const color = verdict.level ? t.colors[LEVEL_TONE[verdict.level]] : t.colors.textMuted;
   const spoken = [verdict.level ? LEVEL_LABEL[verdict.level] : null, verdict.title, verdict.tip].filter(Boolean).join('. ');
   const best = CATEGORY_BEST[axis];
-  const empty = sums.drives === 0;
+  const attention = axis === DASHPAL_AXIS;
+  if (attention && !dashpalPaired) {
+    return (
+      <Sheet visible={visible} onClose={onClose} title={categoryTitle(axis, null, true)} scroll testID="category-sheet">
+        <EmptyState icon="lock-closed-outline" title={c.locked.title} body={c.locked.body} action={{ label: c.locked.action, onPress: onPairDashpal }} testID="category-locked" />
+      </Sheet>
+    );
+  }
+  const empty = attention ? sums.watchedMiles <= 0 : sums.drives === 0;
   return (
     <Sheet visible={visible} onClose={onClose} title={categoryTitle(axis, score)} subtitle={c.subtitle} scroll testID="category-sheet">
       {empty && score === null ? null : (
@@ -117,7 +133,12 @@ export function CategorySheet({ axis, visible, onClose, score, last30, sums, bes
       )}
       <SegmentedControl accessibilityLabel={analyticsCopy.range} segments={SEGMENTS} value={range} onChange={onRange} testID="category-range" />
       {empty ? (
-        <EmptyState icon="analytics-outline" title={c.empty} body={c.emptyBody(c.range[range])} testID="category-empty" />
+        <EmptyState
+          icon="analytics-outline"
+          title={attention ? c.noDashpal : c.empty}
+          body={attention ? c.noDashpalBody(c.range[range]) : c.emptyBody(c.range[range])}
+          testID="category-empty"
+        />
       ) : (
         <>
           <NumberCard group={group} layout={l} text={metricsText(l)} variant="raised" />

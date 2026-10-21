@@ -3,7 +3,7 @@ import { uuid } from '@/core/engine/__fixtures__/drives';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { onDataChanged } from '@/data/events';
-import { RESTORED_AT_KEY, RestoreAbandonedError, restoreDrives, toEventRows } from '@/data/hydrate/restore';
+import { RESTORED_AT_KEY, RestoreAbandonedError, restoreDrives, ServerDriveSchema, toEventRows, toTripRow } from '@/data/hydrate/restore';
 import { readDriveCount, readRecentDrives } from '@/data/queries/drives';
 
 const T0 = 1_700_000_000_000;
@@ -128,4 +128,9 @@ test('a restored removed event keeps its accepted report, so Report is not offer
   const d = { clientTripId: uuid(901), events: [{ ...e, status: 'removed' as const }, { ...e, id: uuid(902), status: 'active' as const }, { ...e, id: uuid(903), status: 'active' as const, disputeStatus: 'rejected' as const }] };
   const rows = toEventRows(d as unknown as Parameters<typeof toEventRows>[0]);
   expect(rows.map((r) => r.dispute_status)).toEqual(['accepted', 'none', 'rejected']);
+});
+
+test('a restored drive takes its watched miles from its DashPal seconds (0 from a server that sends none)', () => {
+  expect(toTripRow({ ...ServerDriveSchema.parse(serverDrive(1)), miles: 20, dashcamMovingS: 1000, dashcamCoveredS: 250 }).watched_miles).toBe(5);
+  expect(toTripRow(ServerDriveSchema.parse(serverDrive(1))).watched_miles).toBe(0);
 });

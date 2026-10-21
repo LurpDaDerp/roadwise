@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { ratingPenalty, safetyRating, type DriveEvent } from '@scoring';
+import { attentionPenalty, ratingPenalty, safetyRating, type DriveEvent } from '@scoring';
 
 import { EMPTY_COUNTS, type LocalDrive } from '@/data/queries/rows';
 import { encodePolyline, encodeRuns } from '@/lib/polyline';
@@ -23,7 +23,6 @@ import {
   LEVEL_LABEL,
   LEVEL_TONE,
   levelFor,
-  NIGHT_WEIGHT,
   PENALTY_AXES,
   personalBests,
   rangeStart,
@@ -35,8 +34,10 @@ import {
   trendRange,
   weekdayIndex,
   windowStart,
+  timeComment,
   windowSums,
   type AxisScores,
+  type DriveGrid,
 } from '../model';
 
 const HOUR = 3_600_000;
@@ -65,6 +66,7 @@ function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     mergedInto: null,
     syncError: null,
     endCause: null,
+    watchedMiles: 0,
     ...over,
   };
 }
@@ -80,29 +82,29 @@ const scores = (over: Partial<AxisScores> = {}): AxisScores => ({
   accel: 100,
   cornering: 100,
   phone: 100,
-  night: 100,
+  attention: 100,
   ...over,
 });
 
 describe('axes', () => {
   test('radar order and labels', () => {
-    expect(AXES.map((a) => a.key)).toEqual(['accel', 'braking', 'cornering', 'night', 'phone', 'speeding']);
-    expect(AXES.map((a) => a.label)).toEqual(['Acceleration', 'Braking', 'Turning', 'Time of day', 'Phone use', 'Speed']);
-    expect(PENALTY_AXES).toEqual(['accel', 'braking', 'cornering', 'phone', 'speeding']);
+    expect(AXES.map((a) => a.key)).toEqual(['accel', 'braking', 'cornering', 'attention', 'phone', 'speeding']);
+    expect(AXES.map((a) => a.label)).toEqual(['Acceleration', 'Braking', 'Turning', 'Attention', 'Phone use', 'Speed']);
+    expect(PENALTY_AXES).toEqual(['accel', 'braking', 'cornering', 'attention', 'phone', 'speeding']);
   });
 
-  test('each event type maps to its axis; DashPal events to none', () => {
+  test('each event type maps to its axis; DashPal events to Attention', () => {
     expect(axisOf('speeding')).toBe('speeding');
     expect(axisOf('hard_brake')).toBe('braking');
     expect(axisOf('hard_accel')).toBe('accel');
     expect(axisOf('hard_corner')).toBe('cornering');
     expect(axisOf('phone_pickup')).toBe('phone');
     expect(axisOf('phone_handling')).toBe('phone');
-    expect(axisOf('eyes_off')).toBeNull();
-    expect(axisOf('drowsy')).toBeNull();
+    expect(axisOf('eyes_off')).toBe('attention');
+    expect(axisOf('drowsy')).toBe('attention');
   });
 
-  test('penalties are the rating penalties per axis; removed and DashPal events count nothing', () => {
+  test('penalties are the rating penalties per axis, DashPal’s on Attention; removed events count nothing', () => {
     const p = axisPenalties([
       ev({ type: 'speeding', tier: 'moderate' }),
       ev({ type: 'speeding', tier: 'severe', status: 'removed' }),
@@ -112,49 +114,52 @@ describe('axes', () => {
       ev({ type: 'eyes_off', tier: 'severe' }),
       ev({ type: 'drowsy', tier: 'severe' }),
     ]);
-    expect(p).toEqual({ speeding: 40, braking: 25, accel: 0, cornering: 0, phone: 20 + 30 });
+    expect(p).toEqual({ speeding: 40, braking: 25, accel: 0, cornering: 0, phone: 20 + 30, attention: 40 + 50 });
   });
 
-  test('S = clamp(100 − 10·P/miles); Time of day = 100 − 50 × the share after dark; whole numbers', () => {
+  test('S = clamp(100 − 10·P/miles); Attention = 100 − 10·P per watched mile (over at least 10); whole numbers', () => {
     const s = axisScores(
-      [ev({ type: 'speeding', tier: 'minor' }), ev({ type: 'hard_accel', tier: 'severe' }), ev({ type: 'phone_pickup', tier: 'severe' })],
-      { drives: 3, cleanDrives: 2, miles: 20, nightMiles: 5 }
+      [ev({ type: 'speeding', tier: 'minor' }), ev({ type: 'hard_accel', tier: 'severe' }), ev({ type: 'phone_pickup', tier: 'severe' }), ev({ type: 'eyes_off', tier: 'severe' })],
+      { drives: 3, cleanDrives: 2, miles: 20, watchedMiles: 16 }
     );
-    // 100 − 10·15/20 = 92.5 → 93; 100 − 10·30/20 = 85; 100 − 10·40/20 = 80; 100 − 50·5/20 = 87.5 → 88
-    expect(s).toEqual({ speeding: 93, braking: 100, accel: 85, cornering: 100, phone: 80, night: 88 });
-    expect(NIGHT_WEIGHT).toBe(50);
-    expect(axisScores([], { drives: 2, cleanDrives: 2, miles: 20, nightMiles: 20 }).night).toBe(50);
-    expect(axisScores([], { drives: 2, cleanDrives: 2, miles: 20, nightMiles: 0 }).night).toBe(100);
-    // Night miles past the total (rounding) clamp to it.
-    expect(axisScores([], { drives: 2, cleanDrives: 2, miles: 20, nightMiles: 21 }).night).toBe(50);
+    // 100 − 10·15/20 = 92.5 → 93; 100 − 10·30/20 = 85; 100 − 10·40/20 = 80; 100 − 10·40/16 = 75
+    expect(s).toEqual({ speeding: 93, braking: 100, accel: 85, cornering: 100, phone: 80, attention: 75 });
+    // a short watched stretch counts as 10 miles: 100 − 10·40/10 = 60
+    expect(axisScores([ev({ type: 'eyes_off', tier: 'severe' })], { drives: 1, cleanDrives: 0, miles: 20, watchedMiles: 2 }).attention).toBe(60);
+    // nothing watched: no Attention score
+    expect(axisScores([ev({ type: 'eyes_off', tier: 'severe' })], { drives: 1, cleanDrives: 0, miles: 20, watchedMiles: 0 }).attention).toBeNull();
   });
 
   test('scores clamp at 0 and are null with no miles or drives', () => {
-    expect(axisScores([ev({ type: 'speeding', tier: 'severe' })], { drives: 1, cleanDrives: 0, miles: 1, nightMiles: 0 }).speeding).toBe(0);
-    expect(axisScores([], { drives: 0, cleanDrives: 0, miles: 0, nightMiles: 0 })).toEqual({
+    expect(axisScores([ev({ type: 'speeding', tier: 'severe' })], { drives: 1, cleanDrives: 0, miles: 1, watchedMiles: 0 }).speeding).toBe(0);
+    expect(axisScores([], { drives: 0, cleanDrives: 0, miles: 0, watchedMiles: 0 })).toEqual({
       speeding: null,
       braking: null,
       accel: null,
       cornering: null,
       phone: null,
-      night: null,
+      attention: null,
     });
-    expect(axisScores([], { drives: 1, cleanDrives: 1, miles: 0, nightMiles: 0 }).night).toBeNull();
   });
 
-  test('the penalty axes add up to the Safety Rating over the same window', () => {
+  test('the six axes add up to the Safety Rating over the same window, Attention included', () => {
     const events = [
       ev({ type: 'speeding', tier: 'minor' }),
       ev({ type: 'hard_brake', tier: 'minor' }),
       ev({ type: 'hard_corner', tier: 'severe' }),
       ev({ type: 'phone_handling', tier: 'moderate', units: 2 }),
+      ev({ type: 'drowsy', tier: 'severe' }),
     ];
     const miles = 200;
+    const watchedMiles = 120;
     const pen = events.reduce((sum, e) => sum + ratingPenalty(e), 0);
-    const rating = safetyRating(pen, miles).rating!;
+    const att = events.reduce((sum, e) => sum + attentionPenalty(e), 0);
+    const rating = safetyRating(pen, miles, { penalty: att, watchedMiles }).rating!;
+    const s = axisScores(events, { drives: 4, cleanDrives: 0, miles, watchedMiles });
     const p = axisPenalties(events);
-    const deficits = Object.values(p).reduce((sum, v) => sum + (10 * v) / miles, 0);
+    const deficits = Object.entries(p).reduce((sum, [k, v]) => sum + (10 * v) / (k === 'attention' ? watchedMiles : miles), 0);
     expect(100 - deficits).toBeCloseTo(rating, 1);
+    expect(s.attention).toBe(Math.round(100 - (10 * 50) / 120));
   });
 });
 
@@ -179,9 +184,10 @@ describe('levels and coaching', () => {
     expect(coach(scores({ speeding: 75 }), { drives: 3, miles: 10 })).toMatchObject({ level: 'fair', axis: 'speeding', tip: AXIS_TIP.speeding });
   });
 
-  test('Time of day speaks only when every penalty axis is good', () => {
-    expect(coach(scores({ night: 55 }), { drives: 5, miles: 50 })).toMatchObject({ level: 'poor', axis: 'night', tip: AXIS_TIP.night });
-    expect(coach(scores({ night: 55, accel: 70 }), { drives: 5, miles: 50 })).toMatchObject({ level: 'fair', axis: 'accel' });
+  test('Attention coaches like any axis when DashPal scored it, and stays out when it has no score', () => {
+    expect(coach(scores({ attention: 55 }), { drives: 5, miles: 50 })).toMatchObject({ level: 'poor', axis: 'attention', tip: AXIS_TIP.attention });
+    expect(coach(scores({ attention: 55, accel: 50 }), { drives: 5, miles: 50 })).toMatchObject({ axis: 'accel', also: [{ axis: 'attention', level: 'poor' }] });
+    expect(coach(scores({ attention: null }), { drives: 5, miles: 50 })).toMatchObject({ level: 'good' });
   });
 
   test('all good is a compliment', () => {
@@ -212,15 +218,11 @@ describe('levels and coaching', () => {
     expect(coach(scores({ braking: 70, phone: null }), { drives: 5, miles: 50 }).also).toEqual([]);
   });
 
-  test('also: Time of day never joins in', () => {
-    expect(coach(scores({ braking: 70, night: 50 }), { drives: 5, miles: 50 }).also).toEqual([]);
-    expect(coach(scores({ night: 55 }), { drives: 5, miles: 50 })).toMatchObject({ axis: 'night', also: [] });
-  });
 
   test('also: empty when good or without enough driving', () => {
     expect(coach(scores(), { drives: 5, miles: 50 }).also).toEqual([]);
     expect(coach(scores({ phone: 10, braking: 10 }), { drives: 2, miles: 50 }).also).toEqual([]);
-    expect(coach(scores({ speeding: null, braking: null, accel: null, cornering: null, phone: null, night: null }), { drives: 5, miles: 50 }).also).toEqual([]);
+    expect(coach(scores({ speeding: null, braking: null, accel: null, cornering: null, phone: null, attention: null }), { drives: 5, miles: 50 }).also).toEqual([]);
   });
 
   test('fewer than 3 drives or 10 miles: no advice', () => {
@@ -240,7 +242,7 @@ describe('levels and coaching', () => {
     const now = 100 * DAY;
     const since = windowStart(now, 30);
     const drives = [
-      drive({ startedAt: now - DAY, miles: 6, clean: true, nightMiles: 3 }),
+      drive({ startedAt: now - DAY, miles: 6, clean: true, watchedMiles: 3 }),
       drive({ startedAt: now - 2 * DAY, miles: 4, clean: false }),
       drive({ startedAt: now - 3 * DAY, miles: 5, clean: true, status: 'pending', pointsNet: 10 }),
       drive({ startedAt: now - 3 * DAY, miles: 50, status: 'not_driving' }),
@@ -248,16 +250,16 @@ describe('levels and coaching', () => {
     ];
     const brakes = [1, 2, 3].map(() => ev({ type: 'hard_brake', tier: 'severe' }));
     const out = coachWindow(drives, brakes, since);
-    expect(out.totals).toEqual({ drives: 3, cleanDrives: 2, miles: 15, nightMiles: 3 });
+    expect(out.totals).toEqual({ drives: 3, cleanDrives: 2, miles: 15, watchedMiles: 3 });
     expect(out.scores.braking).toBe(50);
-    expect(out.scores.night).toBe(90);
+    expect(out.scores.attention).toBe(100);
     expect(out.coaching).toMatchObject({ level: 'poor', axis: 'braking' });
   });
 
   test("a category's own verdict: its tip when fair or poor, a compliment when good, the wait line without enough driving", () => {
     const enough = { drives: 3, miles: 10 };
     expect(axisCoaching('braking', 72, enough)).toEqual({ level: 'fair', title: 'Brake more gently', tip: AXIS_TIP.braking });
-    expect(axisCoaching('night', 55, enough)).toEqual({ level: 'poor', title: 'Less driving after dark', tip: AXIS_TIP.night });
+    expect(axisCoaching('attention', 55, enough)).toEqual({ level: 'poor', title: 'Stay focused', tip: AXIS_TIP.attention });
     expect(axisCoaching('cornering', 80, enough)).toEqual({ level: 'good', title: 'Driving well', tip: 'Keep it up.' });
     const wait = { level: null, title: 'Tips are on the way', tip: 'Drive a few more times to get tips here.' };
     expect(axisCoaching('speeding', 40, { drives: 2, miles: 50 })).toEqual(wait);
@@ -277,7 +279,7 @@ describe('windows', () => {
     expect(rangeStart(now, 'year')).toBe(windowStart(now, 365));
   });
 
-  test('sums scored drives in the window; DashPal counts stay out; avg speed, clean share and per-drive averages', () => {
+  test('sums scored drives in the window; DashPal counts apart (Attention only); avg speed, clean share and per-drive averages', () => {
     const since = 1_000;
     const drives = [
       drive({ startedAt: 2_000, miles: 10, durationS: 1800, nightMiles: 3, pointsNet: 120, clean: true, counts: { ...EMPTY_COUNTS, eyesOff: 3, drowsy: 1 } }),
@@ -306,6 +308,9 @@ describe('windows', () => {
       hardCorner: 3,
       pickups: 1,
       handlingS: 45,
+      eyesOff: 3,
+      drowsy: 1,
+      watchedMiles: 0,
       cleanDrives: 1,
       cleanPct: 50,
       points: 90,
@@ -543,5 +548,60 @@ describe('trend', () => {
     // One low point in the middle does not make a trend.
     expect(trendDirection(pts(90, 40, 90), 100)).toBe('steady');
     expect(trendDirection(pts(90), 100)).toBe('steady');
+  });
+});
+
+describe('time of day comment', () => {
+  /** A grid with `n` drives in each [weekday, band] given. */
+  const grid = (cells: [number, number, number][]): DriveGrid => {
+    const g = Array.from({ length: 7 }, () => new Array<number>(8).fill(0));
+    let total = 0;
+    for (const [d, b, n] of cells) {
+      g[d]![b]! += n;
+      total += n;
+    }
+    return { cells: g, max: Math.max(...g.flat()), total };
+  };
+
+  test('no drives: nothing; under 3: asks for a few more', () => {
+    expect(timeComment(grid([]), null)).toBeNull();
+    expect(timeComment(grid([[0, 4, 2]]), 0)?.kind).toBe('few');
+  });
+
+  test('the first rule that fits speaks', () => {
+    // a quarter or more starting midnight–6am
+    expect(timeComment(grid([[2, 0, 1], [2, 4, 3]]), 10)?.kind).toBe('late');
+    // 40 % of the miles after dark, with the share
+    expect(timeComment(grid([[2, 6, 4]]), 45)).toEqual({ kind: 'dark', text: 'About 45% of your miles are after dark. Give yourself a bit more room at night.' });
+    // half or more on a weekday 6–9am or 3–6pm
+    expect(timeComment(grid([[0, 2, 2], [3, 5, 2], [5, 4, 1]]), 5)?.kind).toBe('rush');
+    // 60 % or more on the weekend
+    expect(timeComment(grid([[5, 6, 2], [6, 6, 2], [2, 6, 1]]), 5)?.kind).toBe('weekend');
+    // 70 % or more 9am–6pm
+    expect(timeComment(grid([[1, 3, 3], [2, 4, 3], [4, 6, 1]]), 5)?.kind).toBe('daytime');
+  });
+
+  test('otherwise the busiest time, and the share after dark when it is 15 % or more', () => {
+    expect(timeComment(grid([[4, 6, 3], [1, 7, 1], [2, 3, 1]]), 20)).toEqual({
+      kind: 'busiest',
+      text: 'Your busiest time is Fridays, 6–9pm. About 20% of your miles are after dark.',
+    });
+    expect(timeComment(grid([[4, 6, 3], [1, 7, 1], [2, 3, 1]]), 5)?.text).toBe('Your busiest time is Fridays, 6–9pm.');
+  });
+
+  test('every line is short, friendly and free of points, scores and em dashes', () => {
+    const lines = [
+      timeComment(grid([[0, 4, 2]]), 0),
+      timeComment(grid([[2, 0, 1], [2, 4, 3]]), 10),
+      timeComment(grid([[2, 6, 4]]), 45),
+      timeComment(grid([[0, 2, 2], [3, 5, 2], [5, 4, 1]]), 5),
+      timeComment(grid([[5, 6, 2], [6, 6, 2], [2, 6, 1]]), 5),
+      timeComment(grid([[1, 3, 3], [2, 4, 3], [4, 6, 1]]), 5),
+      timeComment(grid([[4, 6, 3], [1, 7, 1], [2, 3, 1]]), 20),
+    ];
+    for (const c of lines) {
+      expect(c!.text.length).toBeLessThanOrEqual(110);
+      expect(c!.text).not.toMatch(/—|!|points|score/i);
+    }
   });
 });

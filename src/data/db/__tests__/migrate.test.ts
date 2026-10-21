@@ -2,7 +2,7 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
-import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 
 const TABLES = [
   'schema_version',
@@ -38,11 +38,11 @@ test('creates every v3 and v5 table and index, and nothing of v2', async () => {
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
-test('records the schema version it reached (8)', async () => {
+test('records the schema version it reached (9)', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
-  expect(CURRENT_SCHEMA_VERSION).toBe(8);
+  expect(CURRENT_SCHEMA_VERSION).toBe(9);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 8 }]);
+  expect(rows).toEqual([{ version: 9 }]);
 });
 
 test('is idempotent', async () => {
@@ -51,7 +51,7 @@ test('is idempotent', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
   expect(await names(db, 'table')).toEqual(tables);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 8 }]);
+  expect(rows).toEqual([{ version: 9 }]);
 });
 
 test('the v3 trips table carries the v3 columns', async () => {
@@ -162,10 +162,28 @@ test('a v7 database steps up to v8: every stored drive stays, with no end cause 
   await db.execute('INSERT INTO schema_version (version) VALUES (7)');
   await db.execute("INSERT INTO trips (client_trip_id, started_at, tz, status, created_at, updated_at) VALUES ('t1', 1, 'UTC', 'scored', 1, 1)");
 
-  await expect(migrate(db)).resolves.toBe(8);
+  await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
   expect((await db.execute('SELECT client_trip_id, end_cause FROM trips')).rows).toEqual([{ client_trip_id: 't1', end_cause: null }]);
-  expect((await columns(db, 'trips')).slice(-2)).toEqual(['continues', 'end_cause']);
+  expect((await columns(db, 'trips')).slice(-3)).toEqual(['continues', 'end_cause', 'watched_miles']);
+});
+
+test('a v8 database steps up to v9: a drive DashPal covered gets its watched miles from its coverage, the rest 0', async () => {
+  for (const statement of [...SCHEMA_V1, ...SCHEMA_V2, ...SCHEMA_V3, ...SCHEMA_V4, ...SCHEMA_V5, ...SCHEMA_V6, ...SCHEMA_V7, ...SCHEMA_V8]) await db.execute(statement);
+  await db.execute(SCHEMA_VERSION_TABLE);
+  await db.execute('INSERT INTO schema_version (version) VALUES (8)');
+  for (const id of ['t1', 't2', 't3']) {
+    await db.execute("INSERT INTO trips (client_trip_id, started_at, tz, status, miles, created_at, updated_at) VALUES (?, 1, 'UTC', 'scored', 20, 1, 1)", [id]);
+  }
+  await db.execute("INSERT INTO dashcam_coverage (client_trip_id, moving_s, covered_s) VALUES ('t1', 1000, 500), ('t2', 0, 0)");
+
+  await expect(migrate(db)).resolves.toBe(9);
+
+  expect((await db.execute('SELECT client_trip_id, watched_miles FROM trips ORDER BY client_trip_id')).rows).toEqual([
+    { client_trip_id: 't1', watched_miles: 10 },
+    { client_trip_id: 't2', watched_miles: 0 },
+    { client_trip_id: 't3', watched_miles: 0 },
+  ]);
 });
 
 test('dashcam rows: an event dedupes on (dashcam, boot, seq) and its id is unique; a deleted trip unstamps its events and drops its coverage', async () => {

@@ -1,8 +1,10 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 
+import { useDashpalChip } from '@/dashcam/ui/HudDashpal';
 import { useMySummary } from '@/data/server/summary';
 import { driveSummaryHref } from '@/features/drives/routes';
+import { SETTINGS_HREFS } from '@/features/settings/routes';
 
 import { AnalyticsView } from './AnalyticsView';
 import type { Range } from './model';
@@ -15,6 +17,7 @@ export function AnalyticsScreen() {
   const data = useAnalytics(range);
   const summary = useMySummary();
   const progress = summary.data?.progress;
+  const dashpalPaired = useDashpalChip() !== null;
   return (
     <AnalyticsView
       data={data}
@@ -23,6 +26,8 @@ export function AnalyticsScreen() {
       range={range}
       onRange={setRange}
       onOpenDrive={(id) => router.push(driveSummaryHref(id))}
+      dashpalPaired={dashpalPaired}
+      onPairDashpal={() => router.push(SETTINGS_HREFS.dashcam)}
     />
   );
 }

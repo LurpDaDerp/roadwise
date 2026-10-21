@@ -95,6 +95,8 @@ describe('finalizeTrip with DashPal facts', () => {
     );
     expect(result.breakdown).toEqual(server);
     expect(result.trip).toMatchObject({ status: 'pending', clean: 1, points_net: server.net });
+    // the miles DashPal watched, for the radar's Attention: the miles × 1100 of 1150 moving seconds
+    expect(result.trip.watched_miles).toBeCloseTo((payload.miles * 1100) / 1150, 6);
     expect(JSON.parse(result.trip.counts_json!)).toMatchObject({ drowsy: 1, eyesOff: 0, pickups: 0 });
     expect(result.events).toEqual([expect.objectContaining({ id: cid(1), type: 'drowsy', tier: 'severe', penalty: 40 })]);
     expect(JSON.parse(result.events[0]!.measured_json!)).toEqual({ source: 'dashcam', speedMph: 33.457 });
@@ -196,6 +198,7 @@ describe('finalizeTrip with DashPal facts', () => {
     const none = await finalizeTrip(session(), deps(async () => facts({ dashcamId: null, movingS: 0, coveredS: 0, synced: false })));
     expect(none.payload).not.toHaveProperty('dashcam');
     expect(none.breakdown.dashcamMult).toBe(1);
+    expect(none.trip.watched_miles).toBe(0);
   });
 
   test('events that arrived with no drive open are dropped: the stored facts give the same block, ×1.25 and scored events as without them', async () => {

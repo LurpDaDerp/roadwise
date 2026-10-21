@@ -108,7 +108,7 @@ export const RULES: RuleSection[] = [
       `DashPal flags eyes off the road with no look back, or slumping out of view at speed (−${BASE_PENALTY.eyes_off}, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)}), and drowsiness (−${BASE_PENALTY.drowsy}, at most once ${everyMin(DASHCAM_DROWSY_GAP_S)}).`,
       `They count only at ${DASHCAM_MIN_MPH} mph or more with good GPS, and not in the first ${NO_EVENTS_FIRST_S} s of a drive you started while stopped (unless your last drive ended within ${MERGE_GAP_S / 60} min).`,
       `DashPal may alarm below ${DASHCAM_MIN_MPH} mph; those alarms cost no points.`,
-      'DashPal events never lower your Safety Rating or break a clean drive. They do cost points, like any event.',
+      'DashPal events never break a clean drive. They cost points like any event, and they count toward Attention in your Safety Rating.',
     ],
   },
   {
@@ -149,7 +149,8 @@ export const RULES: RuleSection[] = [
     icon: 'shield-checkmark-outline',
     points: [
       'Your Safety Rating is a score from 0 to 100 for how safely you drove over the last 30 days.',
-      'It’s based on penalty points per 100 miles. Streaks and multipliers don’t affect it.',
+      'It’s made of the categories on your Analytics radar: speed, braking, acceleration, turning and phone use, plus Attention if you drive with DashPal.',
+      'Each one counts penalty points per 100 miles (Attention per 100 miles DashPal watched). Streaks, multipliers and the time of day don’t affect it.',
       'One hard brake every 20 mi works out to about 95. One phone pickup every 10 mi drops it to 60.',
       `You need ${RANKED_MIN_MILES} mi in the last 30 days to get a rating on the boards.`,
     ],

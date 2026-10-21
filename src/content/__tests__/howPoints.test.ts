@@ -21,7 +21,7 @@ test('the DashPal section: what makes a DashPal drive, the events, and what they
     'DashPal flags eyes off the road with no look back, or slumping out of view at speed (−32, at most once every 5 min), and drowsiness (−40, at most once every 10 min).',
     'They count only at 10 mph or more with good GPS, and not in the first 30 s of a drive you started while stopped (unless your last drive ended within 5 min).',
     'DashPal may alarm below 10 mph; those alarms cost no points.',
-    'DashPal events never lower your Safety Rating or break a clean drive. They do cost points, like any event.',
+    'DashPal events never break a clean drive. They cost points like any event, and they count toward Attention in your Safety Rating.',
   ]);
   expect(section('points').some((p) => p.includes('DashPal events don’t count against it'))).toBe(true);
 });

@@ -48,6 +48,7 @@ const COLUMNS = [
   'updated_at',
   'continues',
   'end_cause',
+  'watched_miles',
 ] as const;
 
 /** Every column except the primary key and `created_at`, which a patch must not move. */
@@ -97,6 +98,7 @@ export function toTripRow(row: Record<string, unknown>): TripRow {
     updated_at: asNumber(row, 'updated_at'),
     continues: asFlag(row, 'continues'),
     end_cause: endCauseOf(asTextOrNull(row, 'end_cause')),
+    watched_miles: asNumberOrNull(row, 'watched_miles') ?? 0,
   };
 }
 

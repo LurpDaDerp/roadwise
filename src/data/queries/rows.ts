@@ -56,6 +56,8 @@ export interface LocalDrive {
   syncError: string | null;
   /** What ended it, on the phone that recorded it (null otherwise). */
   endCause: TripEndCause | null;
+  /** The miles DashPal watched (the radar's Attention divides by them); 0 without one. */
+  watchedMiles: number;
 }
 
 export interface LocalDriveEvent {
@@ -168,6 +170,7 @@ export function toLocalDrive(row: TripRow): LocalDrive {
     mergedInto: row.merged_into,
     syncError: row.sync_error,
     endCause: row.end_cause,
+    watchedMiles: row.watched_miles,
   };
 }
 

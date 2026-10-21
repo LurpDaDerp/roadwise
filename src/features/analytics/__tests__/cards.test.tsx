@@ -38,20 +38,20 @@ const flat = (el: El): ViewStyle & TextStyle => StyleSheet.flatten(el.props.styl
 
 describe('RadarCard', () => {
   test('the Safety Rating sits in the middle as a whole number, with every category named around it', async () => {
-    await draw(<RadarCard rating={92.4} scores={SCORES} onOpen={jest.fn()} />);
+    await draw(<RadarCard dashpalPaired rating={92.4} scores={SCORES} onOpen={jest.fn()} />);
     expect(screen.getByTestId('radar-rating')).toHaveTextContent('92');
     expect(screen.getByTestId('radar-out-of')).toHaveTextContent('/100');
     expect(screen.getByText('Safety Rating')).toBeOnTheScreen();
     // a card-coloured halo keeps the shape's lines out of the centre number
     expect(screen.getByTestId('radar-rating')).toHaveStyle({ textShadowColor: light.surface });
     expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(6);
-    for (const label of ['Acceleration', 'Braking', 'Turning', 'Time of day', 'Phone use', 'Speed']) expect(screen.getByText(label)).toBeOnTheScreen();
+    for (const label of ['Acceleration', 'Braking', 'Turning', 'Attention', 'Phone use', 'Speed']) expect(screen.getByText(label)).toBeOnTheScreen();
     expect(screen.getByText('Last 30 days')).toBeOnTheScreen();
   });
 
   test('each chip holds its name and nothing else, scored or not', async () => {
     for (const scores of [SCORES, NO_SCORES]) {
-      await draw(<RadarCard rating={null} scores={scores} onOpen={jest.fn()} />);
+      await draw(<RadarCard dashpalPaired rating={null} scores={scores} onOpen={jest.fn()} />);
       for (const a of AXES) {
         const chip = screen.getByTestId(`radar-chip-${a.key}`);
         expect(chip).toHaveTextContent(a.label, { exact: true });
@@ -63,15 +63,15 @@ describe('RadarCard', () => {
   });
 
   test('one summary label for a screen reader lists the rating and every axis', async () => {
-    await draw(<RadarCard rating={92.4} scores={SCORES} onOpen={jest.fn()} />);
-    const label = 'Safety Rating 92 out of 100. Acceleration 95, Braking 72, Turning 100, Time of day 50, Phone use 60, Speed 88.';
+    await draw(<RadarCard dashpalPaired rating={92.4} scores={SCORES} onOpen={jest.fn()} />);
+    const label = 'Safety Rating 92 out of 100. Acceleration 95, Braking 72, Turning 100, Attention 90, Phone use 60, Speed 88.';
     expect(screen.getByLabelText(label)).toBeOnTheScreen();
     expect(screen.getByLabelText(label).props.accessibilityRole).toBe('image');
   });
 
   test('each chip is a button that opens its category, named with its score, with or without data', async () => {
     const onOpen = jest.fn();
-    await draw(<RadarCard rating={92.4} scores={{ ...SCORES, cornering: null }} onOpen={onOpen} />);
+    await draw(<RadarCard dashpalPaired rating={92.4} scores={{ ...SCORES, cornering: null }} onOpen={onOpen} />);
     const speed = screen.getByRole('button', { name: 'Speed, score 88' });
     expect(speed.props.accessibilityHint).toBe('Opens details');
     expect(screen.getByRole('button', { name: 'Turning, no score yet' })).toBeOnTheScreen();
@@ -82,9 +82,23 @@ describe('RadarCard', () => {
       expect(onOpen).toHaveBeenLastCalledWith(a.key);
     }
     onOpen.mockClear();
-    await draw(<RadarCard rating={null} scores={NO_SCORES} onOpen={onOpen} />);
-    await press(screen.getByTestId('radar-axis-night'));
-    expect(onOpen).toHaveBeenLastCalledWith('night');
+    await draw(<RadarCard dashpalPaired rating={null} scores={NO_SCORES} onOpen={onOpen} />);
+    await press(screen.getByTestId('radar-axis-attention'));
+    expect(onOpen).toHaveBeenLastCalledWith('attention');
+  });
+
+  test('without a DashPal, Attention is locked: a greyed chip with a lock, no point on the shape, and it still opens', async () => {
+    const onOpen = jest.fn();
+    await draw(<RadarCard dashpalPaired={false} rating={80} scores={SCORES} onOpen={onOpen} />);
+    expect(screen.getByTestId('radar-lock-attention')).toBeOnTheScreen();
+    expect(screen.queryByTestId('radar-lock-speeding')).toBeNull();
+    expect(screen.queryByTestId('radar-dot-attention', { includeHiddenElements: true })).toBeNull();
+    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(5);
+    expect(screen.getByLabelText('Safety Rating 80 out of 100. Acceleration 95, Braking 72, Turning 100, Attention needs DashPal, Phone use 60, Speed 88.')).toBeOnTheScreen();
+    await press(screen.getByRole('button', { name: 'Attention, needs DashPal' }));
+    expect(onOpen).toHaveBeenLastCalledWith('attention');
+    // the shape joins the locked axis's neighbours across it
+    expect(radarPolygon([100, 100, 100, 100, 100, 100], 100, { x: 150, y: 150 }, [3]).split(' ')).toHaveLength(5);
   });
 
   test('a tap on the chart opens the category whose spoke it is nearest; the middle and far outside open nothing', () => {
@@ -95,7 +109,7 @@ describe('RadarCard', () => {
       return i === null ? null : AXES[i]!.key;
     };
     expect(keyAt(150, 60)).toBe('accel'); // straight up
-    expect(keyAt(150, 240)).toBe('night'); // straight down
+    expect(keyAt(150, 240)).toBe('attention'); // straight down
     const p = radarPoint(1, 6, 70, c);
     expect(keyAt(p.x, p.y)).toBe('braking');
     const q = radarPoint(5, 6, 90, c);
@@ -107,7 +121,7 @@ describe('RadarCard', () => {
 
   test('a tap on the chart reaches onOpen through its measured position', async () => {
     const onOpen = jest.fn();
-    await draw(<RadarCard rating={80} scores={SCORES} onOpen={onOpen} />);
+    await draw(<RadarCard dashpalPaired rating={80} scores={SCORES} onOpen={onOpen} />);
     const g = radarGeometry(390 - 4 * tokens.space.lg, 1);
     const top = radarPoint(0, 6, g.r * 0.8, g.c);
     fireEvent.press(screen.getByTestId('radar-chart'), { nativeEvent: { pageX: top.x, pageY: top.y, locationX: top.x, locationY: top.y } });
@@ -115,14 +129,14 @@ describe('RadarCard', () => {
   });
 
   test('no rating and no data: a dash in the middle, the shape folds to the centre', async () => {
-    await draw(<RadarCard rating={null} scores={NO_SCORES} onOpen={jest.fn()} />);
+    await draw(<RadarCard dashpalPaired rating={null} scores={NO_SCORES} onOpen={jest.fn()} />);
     expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
     expect(screen.queryByTestId('radar-out-of')).toBeNull();
     expect(screen.getAllByText('—')).toHaveLength(1);
     // no dots pile up under the dash for axes with no score
     expect(screen.queryAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(0);
     expect(radarLabel(null, NO_SCORES)).toBe(
-      'Safety Rating, no score yet. Acceleration no data, Braking no data, Turning no data, Time of day no data, Phone use no data, Speed no data.'
+      'Safety Rating, no score yet. Acceleration no data, Braking no data, Turning no data, Attention no data, Phone use no data, Speed no data.'
     );
     expect(radarPolygon([null, null, null, null, null, null], 100, { x: 150, y: 150 })).toBe(Array(6).fill('150.0,150.0').join(' '));
   });
@@ -182,7 +196,7 @@ describe('RadarCard', () => {
 
   test('the drawn labels follow the geometry and stop growing at 1.3× text', async () => {
     setWindow(390, 844, 2);
-    await draw(<RadarCard rating={80} scores={SCORES} onOpen={jest.fn()} />);
+    await draw(<RadarCard dashpalPaired rating={80} scores={SCORES} onOpen={jest.fn()} />);
     const g = radarGeometry(390 - 4 * tokens.space.lg, RADAR_LABEL_MAX_SCALE);
     const box = g.labels[1]!;
     expect(flat(screen.getByTestId('radar-axis-braking'))).toMatchObject({ left: box.left, top: box.top, width: box.width, height: box.height });
@@ -191,7 +205,7 @@ describe('RadarCard', () => {
   });
 
   test('the chart ink is monotone: the page ink, no signal colours', async () => {
-    await draw(<RadarCard rating={80} scores={SCORES} onOpen={jest.fn()} />);
+    await draw(<RadarCard dashpalPaired rating={80} scores={SCORES} onOpen={jest.fn()} />);
     expect(screen.getByTestId('radar-rating')).toHaveStyle({ color: light.text });
     expect(screen.getByText('Speed')).toHaveStyle({ color: light.text });
   });
@@ -225,7 +239,7 @@ describe('SummaryCard', () => {
   });
 
   test('good driving gets a compliment and a green check', async () => {
-    const good = { speeding: 95, braking: 90, accel: 99, cornering: 100, phone: 100, night: 90 };
+    const good = { speeding: 95, braking: 90, accel: 99, cornering: 100, phone: 100, attention: 90 };
     await draw(<SummaryCard coaching={coach(good, { drives: 5, miles: 40 })} />);
     expect(screen.getByText('Driving well')).toBeOnTheScreen();
     expect(screen.getByText('Smooth driving lately. Keep it up.')).toBeOnTheScreen();
@@ -469,6 +483,8 @@ describe('CategorySheet', () => {
     range: 'week' as const,
     onRange: jest.fn(),
     onOpenDrive: jest.fn(),
+    dashpalPaired: true,
+    onPairDashpal: jest.fn(),
   };
 
   test("each category's numbers over the range: its own counts, never points", () => {
@@ -478,7 +494,7 @@ describe('CategorySheet', () => {
       accel: ['Hard starts', 'Distance'],
       cornering: ['Sharp turns', 'Distance'],
       phone: ['Pickups', 'Phone time'],
-      night: ['After dark', 'Share after dark'],
+      attention: ['Eyes off road', 'Drowsy', 'DashPal miles'],
     });
     for (const a of AXES) {
       for (const c of categoryGroup(a.key, sums, 'month', 'km').cells) {
@@ -517,7 +533,7 @@ describe('CategorySheet', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  test('Phone use carries its own all-time best, which opens its drive; Time of day shows the distance after dark and its share', async () => {
+  test('Phone use carries its own all-time best, which opens its drive; Attention shows DashPal’s counts and watched distance', async () => {
     const onOpenDrive = jest.fn();
     await draw(<CategorySheet {...props} axis="phone" score={60} onOpenDrive={onOpenDrive} />);
     expect(screen.getByTestId('metric-pickups-value')).toHaveTextContent('3');
@@ -527,13 +543,28 @@ describe('CategorySheet', () => {
     await press(screen.getByTestId('best-phone-free'));
     expect(onOpenDrive).toHaveBeenCalledWith('d1');
 
-    await draw(<CategorySheet {...props} axis="night" score={55} sums={{ ...sums, nightMiles: 12, nightPct: 25 }} />);
-    expect(screen.getByRole('header', { name: 'Time of day · 55' })).toBeOnTheScreen();
-    expect(screen.getByLabelText('Poor. Less driving after dark. Drive in daylight when you can.')).toBeOnTheScreen();
-    expect(screen.getByTestId('metric-after-dark-value')).toHaveTextContent('12.0 mi');
-    expect(screen.getByTestId('metric-dark-share-value')).toHaveTextContent('25 %');
+    await draw(<CategorySheet {...props} axis="attention" score={55} sums={{ ...sums, eyesOff: 2, drowsy: 1, watchedMiles: 12 }} />);
+    expect(screen.getByRole('header', { name: 'Attention · 55' })).toBeOnTheScreen();
+    expect(screen.getByLabelText('Poor. Stay focused. Eyes on the road, and pull over when tired.')).toBeOnTheScreen();
+    expect(screen.getByTestId('metric-eyes-off-value')).toHaveTextContent('2');
+    expect(screen.getByTestId('metric-drowsy-value')).toHaveTextContent('1');
+    expect(screen.getByTestId('metric-watched-value')).toHaveTextContent('12.0 mi');
     expect(screen.queryByTestId('category-best')).toBeNull();
     expect(screen.getByTestId('category-coaching-icon')).toHaveStyle({ color: light.danger });
+  });
+
+  test('Attention without a DashPal says where it comes from and offers to set one up; with one but no watched drives, says so', async () => {
+    const onPairDashpal = jest.fn();
+    await draw(<CategorySheet {...props} axis="attention" score={null} dashpalPaired={false} onPairDashpal={onPairDashpal} />);
+    expect(screen.getByRole('header', { name: 'Attention' })).toBeOnTheScreen();
+    expect(screen.getByText('Attention comes from DashPal')).toBeOnTheScreen();
+    expect(screen.queryByTestId('category-range')).toBeNull();
+    await press(screen.getByRole('button', { name: 'Set up DashPal' }));
+    expect(onPairDashpal).toHaveBeenCalled();
+
+    await draw(<CategorySheet {...props} axis="attention" score={null} />);
+    expect(screen.getByText('No DashPal drives yet')).toBeOnTheScreen();
+    expect(screen.getByTestId('category-range')).toBeOnTheScreen();
   });
 
   test('no drives in the range: "No data yet" in place of the numbers, and no verdict without a score', async () => {

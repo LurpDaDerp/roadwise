@@ -13,6 +13,7 @@
  * only while `isCurrent` says the run is still wanted: a restore that outlives a sign-out or a
  * handover writes nothing more.
  */
+import { watchedMiles } from '@scoring';
 import { z } from 'zod';
 
 import { createEventsRepo, createSettingsRepo, createTripsRepo, type Db, type NewEvent, type NewTrip } from '@/data/db';
@@ -69,6 +70,9 @@ export const ServerDriveSchema = z.object({
   notDriving: z.boolean(),
   clean: z.boolean().nullable(),
   pointsNet: z.number().nullable(),
+  /** The DashPal seconds (moving, and of those watched); absent from a server before 0020. */
+  dashcamMovingS: z.number().nullable().optional(),
+  dashcamCoveredS: z.number().nullable().optional(),
   breakdown: DriveBreakdownSchema.nullable().optional(),
   result: z.unknown().optional(),
   events: z.array(ServerEvent).default([]),
@@ -129,6 +133,7 @@ export function toTripRow(d: ServerDrive): NewTrip {
     reason: d.reason,
     result_json: d.result === undefined || d.result === null ? null : JSON.stringify(d.result),
     server_id: d.tripId,
+    watched_miles: watchedMiles(d.miles, d.dashcamMovingS ?? 0, d.dashcamCoveredS ?? 0),
   };
 }
 

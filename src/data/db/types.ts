@@ -72,6 +72,8 @@ export interface TripRow {
   continues: Flag;
   /** What ended it, on the phone that recorded it; null for a drive hydrated from the server. */
   end_cause: TripEndCause | null;
+  /** The miles DashPal watched (`watchedMiles`); 0 without one. */
+  watched_miles: number;
 }
 
 export type NewTrip = Pick<TripRow, 'client_trip_id' | 'started_at' | 'tz' | 'status'> &

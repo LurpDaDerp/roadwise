@@ -3,13 +3,15 @@
  * deterministic: every function takes the instant it measures from (`now`) or a cutoff, never the
  * clock, so each rule is testable on its own.
  *
- * The radar's penalty sub-scores use the Safety Rating's own scale (100 − 10 × penalty per mile),
- * so the five penalty axes add up to the rating over the same 30 days: 100 − rating = Σ (100 −
- * axis), before clamping. The sixth, Time of day, scores how much of the driving was after dark and
- * is not part of the rating. Local data includes pending estimates; the server rating stays
- * authoritative.
+ * The radar's six sub-scores are the Safety Rating's own parts: each phone category scores
+ * 100 − 10 × its penalty per mile, and Attention (DashPal's eyes-off and drowsy events) 100 − its
+ * `attentionDeficit` (10 × its penalty per mile DashPal watched, over at least 10), so the axes add
+ * up to the rating over the same 30 days: 100 − rating = Σ (100 − axis), before clamping. With no
+ * DashPal miles Attention has no score and takes nothing. Time of day is not scored at all (a card
+ * under When you drive comments on it instead). Local data includes pending estimates; the server
+ * rating stays authoritative.
  */
-import { ratingPenalty, safetyRating, type DriveEvent, type EventType } from '@scoring';
+import { attentionDeficit, attentionPenalty, ratingPenalty, safetyRating, type DriveEvent, type EventType } from '@scoring';
 
 import { isScoredDrive, type LocalDrive } from '@/data/queries/rows';
 import type { Region } from '@/features/settings/maps';
@@ -18,26 +20,28 @@ import { decodeRuns } from '@/lib/polyline';
 // ---------------------------------------------------------------------------------------------
 // Axes and sub-scores
 
-export type AxisKey = 'speeding' | 'braking' | 'accel' | 'cornering' | 'phone' | 'night';
-export type PenaltyAxisKey = Exclude<AxisKey, 'night'>;
+export type AxisKey = 'speeding' | 'braking' | 'accel' | 'cornering' | 'phone' | 'attention';
 
 /** Radar order, clockwise from the top; the two longest names take the top and bottom, where there is room. */
 export const AXES: readonly { key: AxisKey; label: string }[] = [
   { key: 'accel', label: 'Acceleration' },
   { key: 'braking', label: 'Braking' },
   { key: 'cornering', label: 'Turning' },
-  { key: 'night', label: 'Time of day' },
+  { key: 'attention', label: 'Attention' },
   { key: 'phone', label: 'Phone use' },
   { key: 'speeding', label: 'Speed' },
 ];
 
 export const AXIS_LABEL: Record<AxisKey, string> = Object.fromEntries(AXES.map((a) => [a.key, a.label])) as Record<AxisKey, string>;
 
-/** The axes the Safety Rating's penalties fall on, in radar order. */
-export const PENALTY_AXES: readonly PenaltyAxisKey[] = AXES.flatMap((a) => (a.key === 'night' ? [] : [a.key]));
+/** The axes the Safety Rating's penalties fall on (all six), in radar order. */
+export const PENALTY_AXES: readonly AxisKey[] = AXES.map((a) => a.key);
 
-/** The axis an event counts toward; null for DashPal events (never in the rating). */
-export function axisOf(type: EventType): PenaltyAxisKey | null {
+/** The axis that needs a paired DashPal: locked on the radar without one. */
+export const DASHPAL_AXIS: AxisKey = 'attention';
+
+/** The axis an event counts toward: DashPal's eyes-off and drowsy events are Attention. */
+export function axisOf(type: EventType): AxisKey {
   switch (type) {
     case 'speeding':
       return 'speeding';
@@ -52,7 +56,7 @@ export function axisOf(type: EventType): PenaltyAxisKey | null {
       return 'phone';
     case 'eyes_off':
     case 'drowsy':
-      return null;
+      return 'attention';
   }
 }
 
@@ -64,30 +68,27 @@ export interface WindowTotals {
   drives: number;
   cleanDrives: number;
   miles: number;
-  /** Miles driven with the sun down. */
-  nightMiles: number;
+  /** Miles DashPal watched (Attention divides by them). */
+  watchedMiles: number;
 }
-
-/** Time of day loses this many points per share of miles after dark: all of them at night reads 50. */
-export const NIGHT_WEIGHT = 50;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
-/** Rating-penalty sum per penalty axis over the given (active) events. */
-export function axisPenalties(events: readonly DriveEvent[]): Record<PenaltyAxisKey, number> {
-  const out: Record<PenaltyAxisKey, number> = { speeding: 0, braking: 0, accel: 0, cornering: 0, phone: 0 };
+/** Rating-penalty sum per axis over the given (active) events: the phone's on its axes, DashPal's on Attention. */
+export function axisPenalties(events: readonly DriveEvent[]): Record<AxisKey, number> {
+  const out: Record<AxisKey, number> = { speeding: 0, braking: 0, accel: 0, cornering: 0, phone: 0, attention: 0 };
   for (const e of events) {
     if (e.status === 'removed') continue;
     const axis = axisOf(e.type);
-    if (axis !== null) out[axis] += ratingPenalty(e);
+    out[axis] += axis === 'attention' ? attentionPenalty(e) : ratingPenalty(e);
   }
   return out;
 }
 
 /**
- * S = clamp(100 − 10 · P / miles, 0, 100) per penalty axis; Time of day = 100 − 50 × the share of
- * miles driven after dark (night driving carries about two to three times the crash risk per mile).
- * `events` are the active events of the window's scored drives; `totals` the same drives' sums.
+ * S = clamp(100 − 10 · P / miles, 0, 100) per phone axis; Attention = clamp(100 −
+ * `attentionDeficit`(P, watched miles), 0, 100), null with no DashPal miles. `events` are the
+ * active events of the window's scored drives; `totals` the same drives' sums.
  */
 export function axisScores(events: readonly DriveEvent[], totals: WindowTotals): AxisScores {
   const p = axisPenalties(events);
@@ -99,7 +100,7 @@ export function axisScores(events: readonly DriveEvent[], totals: WindowTotals):
     accel: score(p.accel),
     cornering: score(p.cornering),
     phone: score(p.phone),
-    night: totals.miles > 0 ? Math.round(clamp(100 - (NIGHT_WEIGHT * clamp(totals.nightMiles, 0, totals.miles)) / totals.miles, 0, 100)) : null,
+    attention: totals.watchedMiles > 0 ? Math.round(clamp(100 - attentionDeficit(p.attention, totals.watchedMiles), 0, 100)) : null,
   };
 }
 
@@ -144,7 +145,7 @@ export const AXIS_TIP: Record<AxisKey, string> = {
   accel: 'Roll onto the gas smoothly.',
   cornering: 'Slow down before the turn, not in it.',
   phone: 'Put the phone away before you pull out.',
-  night: 'Drive in daylight when you can.',
+  attention: 'Eyes on the road, and pull over when tired.',
 };
 
 export const AXIS_TITLE: Record<AxisKey, string> = {
@@ -153,7 +154,7 @@ export const AXIS_TITLE: Record<AxisKey, string> = {
   accel: 'Ease into the gas',
   cornering: 'Take turns slower',
   phone: 'Phone down while driving',
-  night: 'Less driving after dark',
+  attention: 'Stay focused',
 };
 
 export const GOOD_TITLE = 'Driving well';
@@ -169,9 +170,8 @@ export interface Coaching {
   title: string;
   tip: string;
   /**
-   * The other penalty axes that are fair or poor, weakest first (ties in radar order), at most
-   * `COACH_ALSO_MAX`. Empty when the result is good or there is no advice. Time of day never
-   * appears here: it speaks only when every penalty axis is good, as in the main choice.
+   * The other axes that are fair or poor, weakest first (ties in radar order), at most
+   * `COACH_ALSO_MAX`. Empty when the result is good or there is no advice.
    */
   also: { axis: AxisKey; level: Level }[];
 }
@@ -179,9 +179,9 @@ export interface Coaching {
 export const COACH_ALSO_MAX = 2;
 
 /**
- * The advice for a window. The weakest penalty axis decides (ties go to the earlier axis in radar
- * order); when every penalty axis is good, a fair or poor Time of day speaks instead. A good
- * result is a compliment. Fewer than 3 drives or 10 miles: no advice.
+ * The advice for a window. The weakest scored axis decides (ties go to the earlier axis in radar
+ * order); Attention takes part only with DashPal miles. A good result is a compliment. Fewer than
+ * 3 drives or 10 miles: no advice.
  */
 export function coach(scores: AxisScores, window: { drives: number; miles: number }): Coaching {
   if (window.drives < COACH_MIN_DRIVES || window.miles < COACH_MIN_MILES) {
@@ -195,10 +195,6 @@ export function coach(scores: AxisScores, window: { drives: number; miles: numbe
       axis = key;
       score = s;
     }
-  }
-  if ((score === null || levelFor(score) === 'good') && scores.night !== null && levelFor(scores.night) !== 'good') {
-    axis = 'night';
-    score = scores.night;
   }
   if (axis === null || score === null) return { level: null, axis: null, title: NO_DATA_TITLE, tip: NO_DATA_TIP, also: [] };
   const level = levelFor(score);
@@ -243,11 +239,11 @@ export interface CoachWindow {
  * active events of the same window's scored drives (`readWindowEvents(db, sinceMs)`).
  */
 export function coachWindow(drives: readonly LocalDrive[], events: readonly DriveEvent[], sinceMs: number): CoachWindow {
-  const totals: WindowTotals = { drives: 0, cleanDrives: 0, miles: 0, nightMiles: 0 };
+  const totals: WindowTotals = { drives: 0, cleanDrives: 0, miles: 0, watchedMiles: 0 };
   for (const d of scoredSince(drives, sinceMs)) {
     totals.drives += 1;
     totals.miles += d.miles;
-    totals.nightMiles += d.nightMiles;
+    totals.watchedMiles += d.watchedMiles;
     if (d.clean === true) totals.cleanDrives += 1;
   }
   const scores = axisScores(events, totals);
@@ -298,6 +294,11 @@ export interface WindowSums {
   hardCorner: number;
   pickups: number;
   handlingS: number;
+  /** DashPal's events (Attention's sheet only; never in the phone's stats). */
+  eyesOff: number;
+  drowsy: number;
+  /** Miles DashPal watched. */
+  watchedMiles: number;
   cleanDrives: number;
   /** Whole percent of drives that were clean; null with no drives. */
   cleanPct: number | null;
@@ -322,6 +323,9 @@ export const EMPTY_WINDOW: WindowSums = Object.freeze({
   hardCorner: 0,
   pickups: 0,
   handlingS: 0,
+  eyesOff: 0,
+  drowsy: 0,
+  watchedMiles: 0,
   cleanDrives: 0,
   cleanPct: null,
   points: 0,
@@ -331,7 +335,7 @@ export const EMPTY_WINDOW: WindowSums = Object.freeze({
 
 /**
  * The metric sums over scored drives started at or after `sinceMs`. DashPal eyes-off and drowsy
- * stay out, as in every other stat.
+ * are counted apart, for Attention's sheet only; every other stat leaves them out.
  */
 export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null): WindowSums {
   const out = { ...EMPTY_WINDOW };
@@ -346,6 +350,9 @@ export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null
     out.hardCorner += d.counts.hardCorner;
     out.pickups += d.counts.pickups;
     out.handlingS += d.counts.handlingS;
+    out.eyesOff += d.counts.eyesOff;
+    out.drowsy += d.counts.drowsy;
+    out.watchedMiles += d.watchedMiles;
     if (d.clean === true) out.cleanDrives += 1;
     out.points += d.pointsNet ?? 0;
   }
@@ -465,10 +472,11 @@ function hourTicks(sinceMs: number, now: number): TrendTick[] {
  * those drives (`readWindowEvents` from the range's start or earlier: an event before the range's
  * first drive is left out; null while they load).
  *
- * - Score: the Safety Rating's own formula over the slot's drives, clamp(100 − 10 · P / miles),
- *   where P is the rating penalty of their events (`ratingPenalty`: base penalties, DashPal never
- *   counts), as a whole number. Over 30 days of drives it is the rating; the radar's axes split
- *   the same P.
+ * - Score: the Safety Rating's own formula over the slot's drives, clamp(100 − 10 · P / miles −
+ *   Attention's share), where P is the rating penalty of the phone's events (`ratingPenalty`) and
+ *   Attention's share comes from DashPal's events over the miles it watched (`attentionDeficit`),
+ *   as a whole number. Over 30 days of drives it is the rating; the radar's axes split the same
+ *   sums.
  * - Events: the slot's total speeding, hard brakes, hard starts, sharp turns and pickups, from the
  *   drives' counts like the window's numbers (phone handling is a time, not a count).
  * - Points: net points per drive, whole.
@@ -486,7 +494,7 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
       : calendarSlots(sinceMs, now, step);
   const ticks = step === 'drive' ? hourTicks(sinceMs, now) : slots.map((s) => ({ x: s.x, label: s.tick }));
 
-  const acc = slots.map(() => ({ drives: 0, miles: 0, points: 0, events: 0, penalty: 0 }));
+  const acc = slots.map(() => ({ drives: 0, miles: 0, watched: 0, points: 0, events: 0, penalty: 0, attention: 0 }));
   // The slot of each drive: its own (by drive), else the latest slot started at or before it.
   const slotOf = list.map((d, i) => {
     if (step === 'drive') return i;
@@ -498,6 +506,7 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
     const a = acc[slotOf[i]!]!;
     a.drives += 1;
     a.miles += d.miles;
+    a.watched += d.watchedMiles;
     a.points += d.pointsNet ?? 0;
     a.events += d.counts.speeding + d.counts.hardBrake + d.counts.hardAccel + d.counts.hardCorner + d.counts.pickups;
   });
@@ -507,7 +516,10 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
     for (const e of sorted) {
       if (e.status === 'removed') continue;
       while (j + 1 < list.length && list[j + 1]!.startedAt <= e.startedAt) j += 1;
-      if (j >= 0) acc[slotOf[j]!]!.penalty += ratingPenalty(e);
+      if (j >= 0) {
+        acc[slotOf[j]!]!.penalty += ratingPenalty(e);
+        acc[slotOf[j]!]!.attention += attentionPenalty(e);
+      }
     }
   }
 
@@ -517,7 +529,10 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
     if (a.drives === 0) return;
     const at = { x: s.x, when: s.when };
     if (a.miles > 0) {
-      if (events !== null) series.score.push({ ...at, value: Math.round(safetyRating(a.penalty, a.miles).rating ?? 100) });
+      if (events !== null) {
+        const rated = safetyRating(a.penalty, a.miles, { penalty: a.attention, watchedMiles: a.watched });
+        series.score.push({ ...at, value: Math.round(rated.rating ?? 100) });
+      }
     }
     series.events.push({ ...at, value: a.events });
     series.points.push({ ...at, value: Math.round(a.points / a.drives) });
@@ -633,6 +648,76 @@ export function driveGrid(drives: readonly LocalDrive[], sinceMs: number | null)
     total += 1;
   }
   return { cells, max, total };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Time of day: a comment on the grid, never a score
+
+/** A band's words in a sentence ("3–6pm"). */
+export const BAND_WORDS = ['midnight–3am', '3–6am', '6–9am', '9am–noon', 'noon–3pm', '3–6pm', '6–9pm', '9pm–midnight'] as const;
+const WEEKDAY_PLURAL = ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays', 'Sundays'] as const;
+
+/** Under this many drives the card only asks for more. */
+export const TIME_COMMENT_MIN_DRIVES = 3;
+
+export type TimeCommentKind = 'few' | 'late' | 'dark' | 'rush' | 'weekend' | 'daytime' | 'busiest';
+
+export interface TimeComment {
+  kind: TimeCommentKind;
+  text: string;
+}
+
+/**
+ * One or two short, friendly lines about when the range's drives start, read off the When you drive
+ * grid (and the share of miles after dark). It scores nothing and costs nothing: the first rule that
+ * fits speaks.
+ *
+ * - Fewer than 3 drives: ask for a few more.
+ * - A quarter or more of the drives start between midnight and 6am: late nights.
+ * - 40 % or more of the miles after dark: night driving, with the share.
+ * - Half or more start on a weekday 6–9am or 3–6pm: rush hour.
+ * - 60 % or more on a Saturday or Sunday: a weekend driver.
+ * - 70 % or more start 9am–6pm: daylight.
+ * - Otherwise the busiest day and band, plus the share after dark when it is 15 % or more.
+ *
+ * Null with no drives (the grid says so already).
+ */
+export function timeComment(grid: DriveGrid, nightPct: number | null): TimeComment | null {
+  const n = grid.total;
+  if (n === 0) return null;
+  if (n < TIME_COMMENT_MIN_DRIVES) return { kind: 'few', text: "A few more drives and we'll see when you usually hit the road." };
+  const sum = (days: readonly number[], bands: readonly number[]) =>
+    days.reduce((s, d) => s + bands.reduce((t, b) => t + (grid.cells[d]?.[b] ?? 0), 0), 0);
+  const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+  const ALL_BANDS = [0, 1, 2, 3, 4, 5, 6, 7];
+  const share = (count: number) => count / n;
+  if (share(sum(ALL_DAYS, [0, 1])) >= 0.25) {
+    return { kind: 'late', text: 'Quite a few of your drives start between midnight and 6am. Late nights are tiring, so go easy on those.' };
+  }
+  if (nightPct !== null && nightPct >= 40) {
+    return { kind: 'dark', text: `About ${nightPct}% of your miles are after dark. Give yourself a bit more room at night.` };
+  }
+  if (share(sum([0, 1, 2, 3, 4], [2, 5])) >= 0.5) {
+    return { kind: 'rush', text: 'Most of your drives hit weekday rush hour. A little extra following distance makes traffic calmer.' };
+  }
+  if (share(sum([5, 6], ALL_BANDS)) >= 0.6) {
+    return { kind: 'weekend', text: "You're mostly a weekend driver. Enjoy the quieter roads." };
+  }
+  if (share(sum(ALL_DAYS, [3, 4, 5])) >= 0.7) {
+    return { kind: 'daytime', text: 'You mostly drive in daylight, the easiest time to be on the road.' };
+  }
+  let day = 0;
+  let band = 0;
+  for (let d = 0; d < 7; d++) {
+    for (let b = 0; b < 8; b++) {
+      if ((grid.cells[d]?.[b] ?? 0) > (grid.cells[day]?.[band] ?? 0)) {
+        day = d;
+        band = b;
+      }
+    }
+  }
+  const dark = nightPct !== null && nightPct >= 15 ? ` About ${nightPct}% of your miles are after dark.` : '';
+  return { kind: 'busiest', text: `Your busiest time is ${WEEKDAY_PLURAL[day]}, ${BAND_WORDS[band]}.${dark}` };
 }
 
 // ---------------------------------------------------------------------------------------------

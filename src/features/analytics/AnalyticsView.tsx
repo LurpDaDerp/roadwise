@@ -10,6 +10,7 @@ import { MetricsCards } from './MetricsCards';
 import { RANGE_LABEL, RANGES, type AxisKey, type Range } from './model';
 import { RadarCard } from './RadarCard';
 import { SummaryCard } from './SummaryCard';
+import { TimeOfDayCard } from './TimeOfDayCard';
 import { TripsMapCard } from './TripsMapCard';
 import type { AnalyticsData } from './useAnalytics';
 import { WhenYouDriveCard } from './WhenYouDriveCard';
@@ -23,16 +24,20 @@ export interface AnalyticsViewProps {
   range: Range;
   onRange: (range: Range) => void;
   onOpenDrive: (clientTripId: string) => void;
+  /** A DashPal is paired: without one the radar's Attention is locked. */
+  dashpalPaired: boolean;
+  /** Opens Settings › DashPal (Attention's sheet, without one). */
+  onPairDashpal: () => void;
 }
 
 /**
  * The Analytics tab, top to bottom: the 30-day radar with the Safety Rating, the coaching line,
  * the all-time best, then the range toggle and everything it drives (the general metrics, when you
- * drive, the drives list), with the all-trips map (always all time) between them. Every card is
+ * drive and a comment on it, the drives list), with the all-trips map (always all time) between them. Every card is
  * paper. Each radar category opens a sheet with that behaviour's own numbers; the page keeps only
  * general ones.
  */
-export function AnalyticsView({ data, rating, range, onRange, onOpenDrive }: AnalyticsViewProps) {
+export function AnalyticsView({ data, rating, range, onRange, onOpenDrive, dashpalPaired, onPairDashpal }: AnalyticsViewProps) {
   const t = useTheme();
   // The axis stays set while the sheet slides away, so its content doesn't blank on the way out.
   const [sheet, setSheet] = useState<{ axis: AxisKey; open: boolean }>({ axis: 'speeding', open: false });
@@ -48,12 +53,13 @@ export function AnalyticsView({ data, rating, range, onRange, onOpenDrive }: Ana
         </>
       ) : (
         <>
-          <RadarCard rating={rating} scores={data.coaching.scores} onOpen={(axis) => setSheet({ axis, open: true })} />
+          <RadarCard rating={rating} scores={data.coaching.scores} dashpalPaired={dashpalPaired} onOpen={(axis) => setSheet({ axis, open: true })} />
           <SummaryCard coaching={data.coaching.coaching} />
           <BestsCard bests={data.bests} show={['points', 'clean']} onOpen={onOpenDrive} />
           <SegmentedControl accessibilityLabel={analyticsCopy.range} segments={SEGMENTS} value={range} onChange={onRange} testID="analytics-range" />
           <MetricsCards sums={data.sums} trend={data.trend} />
           <WhenYouDriveCard grid={data.grid} />
+          <TimeOfDayCard grid={data.grid} nightPct={data.sums.nightPct} />
           <TripsMapCard routes={data.routes} region={data.region} />
           <DrivesCard drives={data.drives} rangeKey={range} onOpen={onOpenDrive} />
           <CategorySheet
@@ -69,6 +75,11 @@ export function AnalyticsView({ data, rating, range, onRange, onOpenDrive }: Ana
             onOpenDrive={(id) => {
               close();
               onOpenDrive(id);
+            }}
+            dashpalPaired={dashpalPaired}
+            onPairDashpal={() => {
+              close();
+              onPairDashpal();
             }}
           />
         </>

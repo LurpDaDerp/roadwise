@@ -63,7 +63,7 @@ test('useCoaching: the last 30 days’ scores and advice', async () => {
   const { result } = await renderHook(() => useCoaching(), { wrapper: wrapperFor(db, client, now) });
   await waitFor(() => expect(result.current.loading).toBe(false));
   // 3 drives, 18 miles; braking 100 − 10·50/18 = 72.2 → 72 (fair).
-  expect(result.current.totals).toEqual({ drives: 3, cleanDrives: 2, miles: 18, nightMiles: 0 });
+  expect(result.current.totals).toEqual({ drives: 3, cleanDrives: 2, miles: 18, watchedMiles: 0 });
   expect(result.current.scores.braking).toBe(72);
   expect(result.current.coaching).toMatchObject({ level: 'fair', axis: 'braking' });
   expect(result.current.error).toBe(false);

@@ -1,10 +1,11 @@
+import { Ionicons } from '@expo/vector-icons';
 import { type GestureResponderEvent, Pressable, useWindowDimensions, View } from 'react-native';
 import Svg, { Circle, Line, Polygon } from 'react-native-svg';
 
 import { Card, Text, tokens, useFontScale, useTheme, withAlpha } from '@/ui';
 
 import { analyticsCopy } from './copy';
-import { AXES, type AxisKey, type AxisScores } from './model';
+import { AXES, DASHPAL_AXIS, type AxisKey, type AxisScores } from './model';
 import { sizeAt } from './textSize';
 
 /** Grid rings, as a share of the full score. */
@@ -35,12 +36,16 @@ export function radarPoint(i: number, n: number, r: number, c: Pt): Pt {
   return { x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) };
 }
 
-/** The score polygon's points ("x,y x,y …"); a missing score sits at the centre. */
-export function radarPolygon(scores: readonly (number | null)[], r: number, c: Pt): string {
+/**
+ * The score polygon's points ("x,y x,y …"); a missing score sits at the centre, and a locked axis
+ * (`skip`) is left out, its neighbours joined across it.
+ */
+export function radarPolygon(scores: readonly (number | null)[], r: number, c: Pt, skip: readonly number[] = []): string {
   return scores
-    .map((s, i) => {
+    .flatMap((s, i) => {
+      if (skip.includes(i)) return [];
       const p = radarPoint(i, scores.length, (Math.max(0, Math.min(100, s ?? 0)) / 100) * r, c);
-      return `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+      return [`${p.x.toFixed(1)},${p.y.toFixed(1)}`];
     })
     .join(' ');
 }
@@ -122,9 +127,9 @@ export function radarGeometry(width: number, labelScale: number, n: number = AXE
   return { width, height, r, c, chip, labels };
 }
 
-/** The whole radar for a screen reader: the rating, then every axis. */
-export function radarLabel(rating: number | null, scores: AxisScores): string {
-  const axes = AXES.map((a) => `${a.label} ${scores[a.key] === null ? 'no data' : scores[a.key]}`).join(', ');
+/** The whole radar for a screen reader: the rating, then every axis (a locked one says it needs DashPal). */
+export function radarLabel(rating: number | null, scores: AxisScores, locked: readonly AxisKey[] = []): string {
+  const axes = AXES.map((a) => `${a.label} ${locked.includes(a.key) ? 'needs DashPal' : scores[a.key] === null ? 'no data' : scores[a.key]}`).join(', ');
   const head =
     rating === null
       ? `${analyticsCopy.radar.rating}, ${analyticsCopy.radar.noScore}`
@@ -137,16 +142,30 @@ export function radarLabel(rating: number | null, scores: AxisScores): string {
  * filled polygon, and the Safety Rating in the middle. All of it in the page ink (no colour
  * coding), with each axis's name around the outside on a faint chip: a button that opens that
  * category's details, whether or not it has a score yet. A tap on the chart itself opens the
- * category whose spoke it is nearest.
+ * category whose spoke it is nearest. Without a paired DashPal, Attention is locked: its chip is
+ * greyed with a lock, its spoke faint, it has no point on the shape, and its sheet says how to get it.
  */
-export function RadarCard({ rating, scores, onOpen }: { rating: number | null; scores: AxisScores; onOpen: (axis: AxisKey) => void }) {
+export function RadarCard({
+  rating,
+  scores,
+  dashpalPaired,
+  onOpen,
+}: {
+  rating: number | null;
+  scores: AxisScores;
+  dashpalPaired: boolean;
+  onOpen: (axis: AxisKey) => void;
+}) {
   const t = useTheme();
   const { width: windowWidth } = useWindowDimensions();
   const labelScale = useFontScale(RADAR_LABEL_MAX_SCALE);
   // The screen gutter and the card's padding on both sides.
   const { width, height, r, c, chip, labels } = radarGeometry(Math.max(240, windowWidth - 4 * t.space.lg), labelScale);
   const n = AXES.length;
-  const values = AXES.map((a) => scores[a.key]);
+  const locked: AxisKey[] = dashpalPaired ? [] : [DASHPAL_AXIS];
+  const isLocked = (key: AxisKey) => locked.includes(key);
+  const values = AXES.map((a) => (isLocked(a.key) ? null : scores[a.key]));
+  const skip = AXES.flatMap((a, i) => (isLocked(a.key) ? [i] : []));
   const ring = (k: number) =>
     Array.from({ length: n }, (_, i) => radarPoint(i, n, r * k, c))
       .map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)
@@ -169,7 +188,7 @@ export function RadarCard({ rating, scores, onOpen }: { rating: number | null; s
         <Pressable
           accessible
           accessibilityRole="image"
-          accessibilityLabel={radarLabel(rating === null ? null : Math.round(rating), scores)}
+          accessibilityLabel={radarLabel(rating === null ? null : Math.round(rating), scores, locked)}
           onPress={tapChart}
           testID="radar-chart"
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
@@ -181,11 +200,22 @@ export function RadarCard({ rating, scores, onOpen }: { rating: number | null; s
               ))}
               {AXES.map((a, i) => {
                 const p = radarPoint(i, n, r, c);
-                return <Line key={a.key} x1={c.x} y1={c.y} x2={p.x} y2={p.y} stroke={t.colors.divider} strokeWidth={1} />;
+                return (
+                  <Line
+                    key={a.key}
+                    x1={c.x}
+                    y1={c.y}
+                    x2={p.x}
+                    y2={p.y}
+                    stroke={t.colors.divider}
+                    strokeWidth={1}
+                    strokeDasharray={isLocked(a.key) ? '3 4' : undefined}
+                  />
+                );
               })}
               <Polygon
                 testID="radar-shape"
-                points={radarPolygon(values, r, c)}
+                points={radarPolygon(values, r, c, skip)}
                 fill={withAlpha(t.colors.text, 0.12)}
                 stroke={t.colors.text}
                 strokeWidth={2}
@@ -230,12 +260,13 @@ export function RadarCard({ rating, scores, onOpen }: { rating: number | null; s
         {AXES.map((a, i) => {
           const box = labels[i]!;
           const items = box.align === 'left' ? 'flex-start' : box.align === 'right' ? 'flex-end' : 'center';
+          const lock = isLocked(a.key);
           return (
             <Pressable
               key={a.key}
               testID={`radar-axis-${a.key}`}
               accessibilityRole="button"
-              accessibilityLabel={analyticsCopy.radar.axis(a.label, scores[a.key])}
+              accessibilityLabel={lock ? analyticsCopy.radar.locked(a.label) : analyticsCopy.radar.axis(a.label, scores[a.key])}
               accessibilityHint={analyticsCopy.radar.axisHint}
               onPress={() => onOpen(a.key)}
               style={{
@@ -256,16 +287,21 @@ export function RadarCard({ rating, scores, onOpen }: { rating: number | null; s
                     maxWidth: box.width,
                     paddingHorizontal: CHIP_PAD_X,
                     borderRadius: chip / 2,
+                    flexDirection: 'row',
+                    alignItems: 'center',
                     justifyContent: 'center',
-                    backgroundColor: withAlpha(t.colors.text, pressed ? 0.14 : 0.07),
+                    gap: 4,
+                    backgroundColor: withAlpha(t.colors.text, pressed ? 0.14 : lock ? 0.04 : 0.07),
                   }}
                 >
+                  {lock ? <Ionicons name="lock-closed" size={Math.round(sizeAt('caption', labelScale).fontSize)} color={t.colors.textMuted} testID={`radar-lock-${a.key}`} /> : null}
                   <Text
                     variant="caption"
+                    tone={lock ? 'muted' : undefined}
                     numberOfLines={1}
                     adjustsFontSizeToFit
                     minimumFontScale={0.7}
-                    style={[sizeAt('caption', labelScale), { fontWeight: '600', textAlign: 'center' }]}
+                    style={[sizeAt('caption', labelScale), { fontWeight: '600', textAlign: 'center', flexShrink: 1 }]}
                   >
                     {a.label}
                   </Text>

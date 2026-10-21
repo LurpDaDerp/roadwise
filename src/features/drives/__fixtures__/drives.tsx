@@ -70,6 +70,7 @@ export function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     mergedInto: null,
     syncError: null,
     endCause: null,
+    watchedMiles: 0,
     ...over,
   } as LocalDrive;
 }
