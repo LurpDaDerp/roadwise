@@ -53,19 +53,22 @@ beforeEach(async () => {
   ]);
 });
 
-// Let every read land first (a year reads three queries), so none re-renders a hook after its test.
+// Let every read land first (the drives and two event windows), so none re-renders a hook after its test.
 afterEach(async () => {
   await waitFor(() => expect(client.isFetching()).toBe(0));
   client.clear();
 });
 
-test('useCoaching: the last 30 days’ scores and advice', async () => {
+test('useCoaching: the last 30 days’ scores, Safety Rating and advice', async () => {
   const { result } = await renderHook(() => useCoaching(), { wrapper: wrapperFor(db, client, now) });
   await waitFor(() => expect(result.current.loading).toBe(false));
-  // 3 drives, 18 miles; braking 100 − 10·50/18 = 72.2 → 72 (fair).
+  // 3 drives, 18 miles; braking 100 / (1 + 50/18/16) = 85.2 → 85 (good).
   expect(result.current.totals).toEqual({ drives: 3, cleanDrives: 2, miles: 18, watchedMiles: 0 });
-  expect(result.current.scores.braking).toBe(72);
-  expect(result.current.coaching).toMatchObject({ level: 'fair', axis: 'braking' });
+  expect(result.current.scores.braking).toBe(85);
+  expect(result.current.scores.attention).toBeNull();
+  expect(result.current.coaching).toMatchObject({ level: 'good', axis: null });
+  // (6 × 100 + 85.2) / 7 over the five phone categories (Speed and Phone use double), ranked at 18 mi.
+  expect(result.current.rating).toEqual({ rating: 97.9, ranked: true });
   expect(result.current.error).toBe(false);
 });
 
@@ -84,26 +87,45 @@ test('useAnalytics: range sums, grid and list; all-time bests and routes; 30-day
   expect(result.current.routes).toHaveLength(4);
   expect(result.current.region).toMatchObject({ latitude: 47.62, longitude: -122.3 });
 
-  // The trend: one point per day with drives; today's two severe brakes over 5 mi
-  // (100 − 10·50/5) take its Score to the floor.
+  // The trend by day. Score: the rating over each day's 30 days, from the first day they hold
+  // 10 mi (Sunday: the drives of 10 and 3 days ago); today's two severe brakes take it to 97.9.
   expect(result.current.trend.step).toBe('day');
-  expect(result.current.trend.series.points.map((p) => [p.when, p.value])).toEqual([
-    ['on Sunday', 50],
-    ['today', 20],
+  expect(result.current.trend.series.score.map((p) => [p.when, p.value])).toEqual([
+    ['on Sunday', 100],
+    ['on Monday', 100],
+    ['on Tuesday', 100],
+    ['today', 98],
   ]);
-  expect(result.current.trend.series.score.map((p) => p.value)).toEqual([100, 0]);
+  // Events per mile on each day with drives: none over 5 mi, then 2 over 5.
+  expect(result.current.trend.series.events.map((p) => [p.when, p.value])).toEqual([
+    ['on Sunday', 0],
+    ['today', 0.4],
+  ]);
+  // Points: the running total, from the drive before the week (90 + 140) on.
+  expect(result.current.trend.series.points.map((p) => p.value)).toEqual([230, 230, 230, 230, 280, 280, 280, 300]);
+  // The radar's centre is the latest Score point.
+  expect(Math.round(result.current.coaching.rating.rating!)).toBe(98);
 
   await rerender({ range: 'year' });
   await waitFor(() => expect(result.current.sums.drives).toBe(4));
   expect(result.current.range).toBe('year');
-  // A year reads its own events (past the 30-day window): Score by month, July and October.
+  // Score by month, wherever a month's 30 days hold 10 mi: July and October.
   await waitFor(() => expect(result.current.trend.series.score).toHaveLength(2));
   expect(result.current.trend.series.score.map((p) => p.when)).toEqual(['in July', 'in October 2026']);
 });
 
-test('a wider range never scores its older drives with the last range’s events: the Score waits for its own', async () => {
-  // Trip 4 (100 days ago, July) had a severe brake: 100 − 10·25/30 = 91.7 → 92.
+test('the Trends card’s latest points are the total now, when the screen passes it', async () => {
+  const { result } = await renderHook(() => useAnalytics('week', { pointsNow: 1000 }), { wrapper: wrapperFor(db, client, now) });
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  expect(result.current.trend.series.points.map((p) => p.value)).toEqual([230, 230, 230, 230, 280, 280, 280, 1000]);
+});
+
+test('every range reads the same year and 30 days of events: a wider range scores its older drives with their own at once', async () => {
+  // Trip 4 (100 days ago, July) had a severe brake: braking 100 / (1 + 25/30/16) = 95.0, the rating (6 × 100 + 95.0) / 7 = 99.3.
   await seedEvents(db, [{ id: uuid(23), client_trip_id: uuid(4), type: 'hard_brake', tier: 'severe', started_at: NOW - 100 * DAY + 1 }]);
+  // 374 days ago, before the year: 12 mi with a severe speeding, inside October 2025's 30 days.
+  await seedTrips(db, [{ client_trip_id: uuid(6), started_at: NOW - 374 * DAY, tz: 'UTC', status: 'scored', miles: 12, duration_s: 900, points_net: 10 }]);
+  await seedEvents(db, [{ id: uuid(24), client_trip_id: uuid(6), type: 'speeding', tier: 'severe', started_at: NOW - 374 * DAY + 1 }]);
   const julyScores: number[] = [];
   const { result, rerender } = await renderHook(
     ({ range }: { range: 'week' | 'year' }) => {
@@ -115,10 +137,12 @@ test('a wider range never scores its older drives with the last range’s events
   );
   await waitFor(() => expect(result.current.loading).toBe(false));
   await rerender({ range: 'year' });
-  await waitFor(() => expect(result.current.trend.series.score).toHaveLength(2));
-  expect(result.current.trend.series.score[0]).toMatchObject({ when: 'in July', value: 92 });
-  // Every render drew July at its true Score, never the perfect 100 the week's events alone give.
-  expect(new Set(julyScores)).toEqual(new Set([92]));
+  await waitFor(() => expect(result.current.trend.series.score).toHaveLength(3));
+  // October 2025: speed 100 / (1 + 100/12/16) = 65.8 (×2), the rest 100: 90.2.
+  expect(result.current.trend.series.score[0]).toMatchObject({ when: 'in October 2025', value: 90 });
+  expect(result.current.trend.series.score[1]).toMatchObject({ when: 'in July', value: 99 });
+  // Every render drew July at its true Score, never a perfect 100 without its events.
+  expect(new Set(julyScores)).toEqual(new Set([99]));
 });
 
 test('while the window’s events are still loading, nothing is scored: drives alone never read as perfect', async () => {

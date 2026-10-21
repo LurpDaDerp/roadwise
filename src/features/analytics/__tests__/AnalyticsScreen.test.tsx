@@ -5,30 +5,40 @@ import { draw, press, summary as mockSummary } from '@/features/drives/__fixture
 import { driveSummaryHref } from '@/features/drives/routes';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
 
-import { analytics as mockAnalytics, drives as mockDrives, empty as mockEmpty } from '../__fixtures__/analytics';
+import { analytics as mockAnalytics, drives as mockDrives, empty as mockEmpty, SCORES_RATING } from '../__fixtures__/analytics';
 import { AnalyticsScreen } from '../AnalyticsScreen';
 import type { AnalyticsData } from '../useAnalytics';
 
 const mockRouter = { push: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 
-let mockRating: number | null = 92.4;
-let mockRanked = true;
+// The server's rating differs from the local one on purpose: the radar shows the local one.
+let mockPoints: number | undefined = 1310;
 jest.mock('@/data/server/summary', () => ({
-  useMySummary: () => ({ data: mockSummary({ progress: { safety_rating: mockRating, ranked: mockRanked } }), isLoading: false, isError: false }),
+  useMySummary: () => ({
+    data: mockPoints === undefined ? undefined : mockSummary({ progress: { safety_rating: 92.4, ranked: true, points: mockPoints } }),
+    isLoading: false,
+    isError: false,
+  }),
 }));
 
+type MockRange = 'day' | 'week' | 'month' | 'year';
 // Ten drives, one every 30 hours: 6 in the last week, all 10 in the last month.
-let mockData: (range: 'day' | 'week' | 'month' | 'year') => AnalyticsData = (range) => mockAnalytics(mockDrives(10, 30), range);
-const mockUseAnalytics = jest.fn((range: 'day' | 'week' | 'month' | 'year') => mockData(range));
-jest.mock('../useAnalytics', () => ({ useAnalytics: (range: 'day' | 'week' | 'month' | 'year') => mockUseAnalytics(range) }));
+let mockData: (range: MockRange) => AnalyticsData = (range) => mockAnalytics(mockDrives(10, 30), range);
+const mockUseAnalytics = jest.fn((range: MockRange, _opts?: { pointsNow?: number | null }) => mockData(range));
+jest.mock('../useAnalytics', () => ({ useAnalytics: (range: MockRange, opts?: { pointsNow?: number | null }) => mockUseAnalytics(range, opts) }));
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockRating = 92.4;
-  mockRanked = true;
+  mockPoints = 1310;
   mockData = (range) => mockAnalytics(mockDrives(10, 30), range);
 });
+
+/** The fixture's analytics with this 30-day rating. */
+const withRating = (rating: number | null, ranked: boolean) => (range: MockRange) => {
+  const base = mockAnalytics(mockDrives(10, 30), range);
+  return { ...base, coaching: { ...base.coaching, rating: { rating, ranked } } };
+};
 
 const SECTIONS = [
   'analytics-radar',
@@ -61,33 +71,45 @@ test('top to bottom: radar, summary, bests, range, metrics, when you drive, time
   expect(order()).toEqual(SECTIONS);
 });
 
-test('the radar centre is the server Safety Rating, whole and bold', async () => {
+test('the radar centre is the 30-day Safety Rating of the categories around it, whole and bold', async () => {
   await draw(<AnalyticsScreen />);
-  expect(screen.getByTestId('radar-rating')).toHaveTextContent('92');
+  // The fixture's axes average to 81.6 (Speed and Phone use double); the server's 92.4 is not used here.
+  expect(SCORES_RATING).toBe(81.6);
+  expect(screen.getByTestId('radar-rating')).toHaveTextContent('82');
+  mockData = withRating(88.5, true);
+  await draw(<AnalyticsScreen />);
+  expect(screen.getByTestId('radar-rating')).toHaveTextContent('89');
 });
 
 test('no Safety Rating yet: a dash', async () => {
-  mockRating = null;
+  mockData = withRating(null, false);
   await draw(<AnalyticsScreen />);
   expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
 });
 
 test('unranked (under 10 mi): a dash, as on Home and Profile', async () => {
-  mockRating = 88;
-  mockRanked = false;
+  mockData = withRating(88, false);
   await draw(<AnalyticsScreen />);
   expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
 });
 
+test('the points total now comes from the server and goes to the Trends card', async () => {
+  await draw(<AnalyticsScreen />);
+  expect(mockUseAnalytics).toHaveBeenLastCalledWith('week', { pointsNow: 1310 });
+  mockPoints = undefined;
+  await draw(<AnalyticsScreen />);
+  expect(mockUseAnalytics).toHaveBeenLastCalledWith('week', { pointsNow: null });
+});
+
 test('the range starts on Week and switching it re-reads everything below it', async () => {
   await draw(<AnalyticsScreen />);
-  expect(mockUseAnalytics).toHaveBeenLastCalledWith('week');
+  expect(mockUseAnalytics).toHaveBeenLastCalledWith('week', { pointsNow: 1310 });
   expect(screen.getByRole('tab', { name: 'Week' })).toBeSelected();
   expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('6');
   expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, 6');
 
   await press(screen.getByRole('tab', { name: 'Month' }));
-  expect(mockUseAnalytics).toHaveBeenLastCalledWith('month');
+  expect(mockUseAnalytics).toHaveBeenLastCalledWith('month', { pointsNow: 1310 });
   expect(screen.getByRole('tab', { name: 'Month' })).toBeSelected();
   expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('10');
   expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, 10');
@@ -99,14 +121,17 @@ test('the trend card sits between Driving and Points and follows the range', asy
   await draw(<AnalyticsScreen />);
   const cards = within(screen.getByTestId('analytics-metrics')).getAllByTestId(/^metrics-[a-z]+$/);
   expect(cards.map((c) => c.props.testID)).toEqual(['metrics-driving', 'metrics-trend', 'metrics-points']);
-  expect(screen.getByTestId('metrics-trend-title')).toHaveTextContent('Trend');
+  expect(screen.getByTestId('metrics-trend-title')).toHaveTextContent('Trends');
   expect(screen.getByRole('tab', { name: 'Score' })).toBeSelected();
-  // Six drives 30 hours apart in the week: one point per day that has one.
-  expect(screen.getByTestId('trend-chart-box').props.accessibilityLabel).toMatch(/^Score by day\. /);
+  // Six drives 30 hours apart in the week: the Safety Rating by day.
+  expect(screen.getByTestId('trend-chart-box').props.accessibilityLabel).toMatch(/^Safety Rating by day\. /);
   await press(screen.getByRole('tab', { name: 'Month' }));
-  expect(screen.getByTestId('trend-chart-box').props.accessibilityLabel).toMatch(/^Score by week\. /);
+  expect(screen.getByTestId('trend-chart-box').props.accessibilityLabel).toMatch(/^Safety Rating by week\. /);
+  await press(screen.getByRole('tab', { name: 'Events' }));
+  expect(screen.getByTestId('trend-chart-box').props.accessibilityLabel).toMatch(/^Events per mile by week\. /);
   await press(screen.getByRole('tab', { name: 'Points' }));
-  expect(screen.getByTestId('trend-chart-box').props.accessibilityLabel).toMatch(/^Points per drive by week\. /);
+  // The running total: 1,240 after the newest drive (the fixture's answers).
+  expect(screen.getByTestId('trend-chart-box').props.accessibilityLabel).toMatch(/^Total points by week\. .*latest 1,240 points/);
 });
 
 test('the page keeps only general numbers: no category counts, rates or bests, and points only in general', async () => {
@@ -118,7 +143,7 @@ test('the page keeps only general numbers: no category counts, rates or bests, a
   expect(screen.queryByTestId('best-phone-free')).toBeNull();
   // Clean drives belong to no radar category, so they stay on the page.
   expect(screen.getByTestId('metric-clean')).toBeOnTheScreen();
-  expect(screen.getByTestId('metric-clean-share')).toBeOnTheScreen();
+  expect(screen.getByTestId('metric-clean-rate')).toBeOnTheScreen();
   expect(screen.getByTestId('best-clean')).toBeOnTheScreen();
   expect(screen.queryByTestId('category-sheet')).toBeNull();
   // The points left are the range's total and per drive, and the most in one drive.
@@ -126,14 +151,18 @@ test('the page keeps only general numbers: no category counts, rates or bests, a
   expect(screen.getByTestId('metric-avg-points-value')).toHaveTextContent('+132 pts');
   expect(screen.getByTestId('best-points-value')).toHaveTextContent('+132 pts');
   // The radar's per-category numbers are its scores, nothing else.
-  for (const el of within(screen.getByTestId('analytics-radar')).getAllByRole('button')) expect(el.props.accessibilityLabel).toMatch(/^[A-Za-z ]+, (score \d+|no score yet|needs DashPal)$/);
+  const chips = within(screen.getByTestId('analytics-radar')).getAllByTestId(/^radar-axis-/);
+  expect(chips).toHaveLength(6);
+  for (const el of chips) expect(el.props.accessibilityLabel).toMatch(/^[A-Za-z ]+, (score \d+|no score yet|needs DashPal)$/);
+  // Its one other button explains the total, with no number.
+  expect(within(screen.getByTestId('analytics-radar')).getAllByRole('button').map((el) => el.props.accessibilityLabel)).toContain('How it works');
 });
 
 test.each([
-  ['speeding', 'Speed · 88', ['metric-speeding', 'metric-speeding-distance'], null],
+  ['speed', 'Speed · 88', ['metric-speeding', 'metric-speeding-distance'], null],
   ['braking', 'Braking · 72', ['metric-brakes', 'metric-brakes-distance'], null],
-  ['accel', 'Acceleration · 95', ['metric-starts', 'metric-starts-distance'], null],
-  ['cornering', 'Turning · 100', ['metric-turns', 'metric-turns-distance'], null],
+  ['acceleration', 'Acceleration · 95', ['metric-starts', 'metric-starts-distance'], null],
+  ['turning', 'Turning · 100', ['metric-turns', 'metric-turns-distance'], null],
   ['phone', 'Phone use · 60', ['metric-pickups', 'metric-phone-time'], 'best-phone-free'],
 ] as const)('tapping %s on the radar opens its details, which close again', async (axis, title, cells, best) => {
   await draw(<AnalyticsScreen />);
@@ -151,9 +180,9 @@ test.each([
 
 test('with no drives at all, every category still opens: "No data yet"', async () => {
   mockData = () => mockEmpty();
-  mockRating = null;
   await draw(<AnalyticsScreen />);
-  for (const axis of ['accel', 'braking', 'cornering', 'phone', 'speeding']) {
+  expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
+  for (const axis of ['acceleration', 'braking', 'turning', 'phone', 'speed']) {
     await press(screen.getByTestId(`radar-axis-${axis}`));
     const sheet = screen.getByTestId('category-sheet');
     expect(within(sheet).getByText('No data yet')).toBeOnTheScreen();
@@ -189,7 +218,7 @@ test("the sheet's range is the page's: switching it there re-reads the page too"
   expect(within(sheet).getByTestId('metric-brakes-value')).toHaveTextContent('6');
   expect(within(sheet).getByTestId('metric-brakes-distance-value')).toHaveTextContent('72.0 mi');
   await press(within(sheet).getByRole('tab', { name: 'Month' }));
-  expect(mockUseAnalytics).toHaveBeenLastCalledWith('month');
+  expect(mockUseAnalytics).toHaveBeenLastCalledWith('month', { pointsNow: 1310 });
   expect(within(screen.getByTestId('category-sheet')).getByTestId('metric-brakes-value')).toHaveTextContent('10');
   expect(within(screen.getByTestId('category-sheet')).getByTestId('metrics-braking-title')).toHaveTextContent('Last 30 days');
   expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('10');
@@ -217,7 +246,6 @@ test('a personal best opens its drive', async () => {
 });
 
 test('a new driver sees short empty states, not errors', async () => {
-  mockRating = null;
   mockData = () => mockEmpty();
   await draw(<AnalyticsScreen />);
   expect(screen.getByText('Tips are on the way')).toBeOnTheScreen();

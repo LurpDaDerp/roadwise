@@ -10,19 +10,22 @@ import { AnalyticsView } from './AnalyticsView';
 import type { Range } from './model';
 import { useAnalytics } from './useAnalytics';
 
-/** The Analytics tab: local drives through `useAnalytics`, the Safety Rating from the server. */
+/**
+ * The Analytics tab: local drives through `useAnalytics` (the radar's centre is their 30-day
+ * Safety Rating), and the points total now from the server for the Trends card's latest point.
+ */
 export function AnalyticsScreen() {
   const router = useRouter();
   const [range, setRange] = useState<Range>('week');
-  const data = useAnalytics(range);
   const summary = useMySummary();
-  const progress = summary.data?.progress;
+  const data = useAnalytics(range, { pointsNow: summary.data?.progress.points ?? null });
+  const { rating } = data.coaching;
   const dashpalPaired = useDashpalChip() !== null;
   return (
     <AnalyticsView
       data={data}
       // Unranked (under 10 mi in 30 days) reads "—" here as it does on Home and Profile.
-      rating={progress?.ranked ? progress.safety_rating : null}
+      rating={rating.ranked ? rating.rating : null}
       range={range}
       onRange={setRange}
       onOpenDrive={(id) => router.push(driveSummaryHref(id))}

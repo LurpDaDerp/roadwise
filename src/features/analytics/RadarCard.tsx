@@ -1,15 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useState } from 'react';
 import { type GestureResponderEvent, Pressable, useWindowDimensions, View } from 'react-native';
 import Svg, { Circle, Line, Polygon } from 'react-native-svg';
 
-import { Card, Text, tokens, useFontScale, useTheme, withAlpha } from '@/ui';
+import { Card, Sheet, Text, tokens, useFontScale, useTheme, withAlpha } from '@/ui';
 
 import { analyticsCopy } from './copy';
 import { AXES, DASHPAL_AXIS, type AxisKey, type AxisScores } from './model';
 import { sizeAt } from './textSize';
 
-/** Grid rings, as a share of the full score. */
-export const RADAR_RINGS = [0.25, 0.5, 0.75, 1] as const;
+const HOW = analyticsCopy.radar.how;
+
+/** Grid rings, as a share of the full score: 0, 25, 50, 75 and 100. */
+export const RADAR_RINGS = [0, 0.25, 0.5, 0.75, 1] as const;
+/**
+ * Where a score of 0 sits, as a share of the radius: the zero ring is a hexagon of its own around
+ * the centre number, so a shape with low scores (or none yet) is never a point.
+ */
+export const RADAR_ZERO = 0.3;
 /** The hexagon's radius stays within these, so it reads on a small phone and stays near its labels on a big one. */
 export const RADAR_R_MIN = 56;
 export const RADAR_R_MAX = 110;
@@ -36,29 +44,36 @@ export function radarPoint(i: number, n: number, r: number, c: Pt): Pt {
   return { x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) };
 }
 
+/** A score's distance from the centre: 0 on the zero ring (`RADAR_ZERO` × r), 100 on the outer one; clamped to 0–100, a missing score as 0. */
+export function radiusFor(score: number | null, r: number): number {
+  const s = score === null || !Number.isFinite(score) ? 0 : Math.max(0, Math.min(100, score));
+  return r * (RADAR_ZERO + ((1 - RADAR_ZERO) * s) / 100);
+}
+
 /**
- * The score polygon's points ("x,y x,y …"); a missing score sits at the centre, and a locked axis
- * (`skip`) is left out, its neighbours joined across it.
+ * The score polygon's points ("x,y x,y …"); a missing score sits on the zero ring, and a locked
+ * axis (`skip`) is left out, its neighbours joined across it.
  */
 export function radarPolygon(scores: readonly (number | null)[], r: number, c: Pt, skip: readonly number[] = []): string {
   return scores
     .flatMap((s, i) => {
       if (skip.includes(i)) return [];
-      const p = radarPoint(i, scores.length, (Math.max(0, Math.min(100, s ?? 0)) / 100) * r, c);
+      const p = radarPoint(i, scores.length, radiusFor(s, r), c);
       return [`${p.x.toFixed(1)},${p.y.toFixed(1)}`];
     })
     .join(' ');
 }
 
 /**
- * The axis a tap on the chart at (x, y) is nearest to by angle, or null in the middle (the rating)
- * and well outside the outer ring. A tap anywhere on a category's spoke opens it, as its label does.
+ * The axis a tap on the chart at (x, y) is nearest to by angle, or null inside the zero ring (the
+ * rating) and well outside the outer ring. A tap anywhere on a category's spoke opens it, as its
+ * label does.
  */
 export function axisAt(x: number, y: number, r: number, c: Pt, n: number = AXES.length): number | null {
   const dx = x - c.x;
   const dy = y - c.y;
   const d = Math.hypot(dx, dy);
-  if (!(d >= r * 0.3) || d > r + 2 * LABEL_GAP) return null;
+  if (!(d >= r * RADAR_ZERO) || d > r + 2 * LABEL_GAP) return null;
   const step = (2 * Math.PI) / n;
   const i = Math.round((Math.atan2(dy, dx) + Math.PI / 2) / step);
   return ((i % n) + n) % n;
@@ -138,12 +153,14 @@ export function radarLabel(rating: number | null, scores: AxisScores, locked: re
 }
 
 /**
- * The six-axis radar of the last 30 days: grid rings at 25/50/75/100, a spoke per axis, one
- * filled polygon, and the Safety Rating in the middle. All of it in the page ink (no colour
- * coding), with each axis's name around the outside on a faint chip: a button that opens that
- * category's details, whether or not it has a score yet. A tap on the chart itself opens the
- * category whose spoke it is nearest. Without a paired DashPal, Attention is locked: its chip is
- * greyed with a lock, its spoke faint, it has no point on the shape, and its sheet says how to get it.
+ * The six-axis radar of the last 30 days: grid rings at 0/25/50/75/100 (0 is a small hexagon of
+ * its own around the centre, where a score of 0, or none yet, sits), a spoke per axis, one filled
+ * polygon, and the Safety Rating in the middle. All of it in the page ink (no colour coding), with
+ * each axis's name around the outside on a faint chip: a button that opens that category's
+ * details, whether or not it has a score yet. A tap on the chart itself opens the category whose
+ * spoke it is nearest. Without a paired DashPal, Attention is locked: its chip is greyed with a
+ * lock, its spoke faint, it has no point on the shape, and its sheet says how to get it. Under the
+ * chart, "Last 30 days" and a "How it works" button that opens a sheet saying what makes the total.
  */
 export function RadarCard({
   rating,
@@ -157,6 +174,7 @@ export function RadarCard({
   onOpen: (axis: AxisKey) => void;
 }) {
   const t = useTheme();
+  const [how, setHow] = useState(false);
   const { width: windowWidth } = useWindowDimensions();
   const labelScale = useFontScale(RADAR_LABEL_MAX_SCALE);
   // The screen gutter and the card's padding on both sides.
@@ -167,7 +185,7 @@ export function RadarCard({
   const values = AXES.map((a) => (isLocked(a.key) ? null : scores[a.key]));
   const skip = AXES.flatMap((a, i) => (isLocked(a.key) ? [i] : []));
   const ring = (k: number) =>
-    Array.from({ length: n }, (_, i) => radarPoint(i, n, r * k, c))
+    Array.from({ length: n }, (_, i) => radarPoint(i, n, radiusFor(k * 100, r), c))
       .map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)
       .join(' ');
   const shownRating = rating === null ? '—' : String(Math.round(rating));
@@ -196,7 +214,7 @@ export function RadarCard({
           <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
             <Svg width={width} height={height}>
               {RADAR_RINGS.map((k) => (
-                <Polygon key={k} points={ring(k)} fill="none" stroke={t.colors.divider} strokeWidth={k === 1 ? 1.5 : 1} />
+                <Polygon key={k} points={ring(k)} fill="none" stroke={t.colors.divider} strokeWidth={k === 1 ? 1.5 : 1} testID={`radar-ring-${k * 100}`} />
               ))}
               {AXES.map((a, i) => {
                 const p = radarPoint(i, n, r, c);
@@ -221,10 +239,10 @@ export function RadarCard({
                 strokeWidth={2}
                 strokeLinejoin="round"
               />
-              {/* No dot for an axis with no score: it would only pile up under the centre number. */}
+              {/* No dot for an axis with no score: the shape meets the zero ring there, unmarked. */}
               {values.map((s, i) => {
                 if (s === null) return null;
-                const p = radarPoint(i, n, (Math.max(0, Math.min(100, s)) / 100) * r, c);
+                const p = radarPoint(i, n, radiusFor(s, r), c);
                 return <Circle key={AXES[i]!.key} cx={p.x} cy={p.y} r={3} fill={t.colors.text} testID={`radar-dot-${AXES[i]!.key}`} />;
               })}
             </Svg>
@@ -311,9 +329,43 @@ export function RadarCard({
           );
         })}
       </View>
-      <Text variant="footnote" tone="subtle" style={{ textAlign: 'center' }}>
-        {analyticsCopy.radar.window}
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }} testID="radar-footer">
+        <Text variant="footnote" tone="subtle" style={{ flex: 1 }}>
+          {analyticsCopy.radar.window}
+        </Text>
+        <Pressable
+          testID="radar-how"
+          accessibilityRole="button"
+          accessibilityLabel={HOW.label}
+          accessibilityHint={HOW.hint}
+          onPress={() => setHow(true)}
+          style={{ minHeight: t.size.touch, minWidth: t.size.touch, justifyContent: 'center' }}
+        >
+          {({ pressed }) => (
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 4,
+                minHeight: chip,
+                paddingHorizontal: CHIP_PAD_X,
+                borderRadius: chip / 2,
+                backgroundColor: withAlpha(t.colors.text, pressed ? 0.14 : 0.07),
+              }}
+            >
+              <Ionicons name="information-circle-outline" size={t.size.iconSm} color={t.colors.text} />
+              <Text variant="footnote" style={{ fontWeight: '600' }}>
+                {HOW.label}
+              </Text>
+            </View>
+          )}
+        </Pressable>
+      </View>
+      <Sheet visible={how} onClose={() => setHow(false)} title={HOW.title} testID="radar-how-sheet">
+        <Text variant="body" testID="radar-how-body">
+          {HOW.body}
+        </Text>
+      </Sheet>
     </Card>
   );
 }

@@ -19,7 +19,7 @@ const SEGMENTS = RANGES.map((value) => ({ value, label: RANGE_LABEL[value] }));
 
 export interface AnalyticsViewProps {
   data: AnalyticsData;
-  /** The server Safety Rating (`summary.progress.safety_rating`); null before it exists. */
+  /** The 30-day Safety Rating (`data.coaching.rating`, 1 decimal); null while unranked or before it exists. */
   rating: number | null;
   range: Range;
   onRange: (range: Range) => void;
@@ -40,7 +40,7 @@ export interface AnalyticsViewProps {
 export function AnalyticsView({ data, rating, range, onRange, onOpenDrive, dashpalPaired, onPairDashpal }: AnalyticsViewProps) {
   const t = useTheme();
   // The axis stays set while the sheet slides away, so its content doesn't blank on the way out.
-  const [sheet, setSheet] = useState<{ axis: AxisKey; open: boolean }>({ axis: 'speeding', open: false });
+  const [sheet, setSheet] = useState<{ axis: AxisKey; open: boolean }>({ axis: 'speed', open: false });
   const close = () => setSheet((s) => ({ ...s, open: false }));
   const first = data.loading && data.drives.length === 0;
   return (

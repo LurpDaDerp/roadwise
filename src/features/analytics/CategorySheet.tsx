@@ -40,13 +40,13 @@ export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units:
   ];
   const cells = ((): MetricGroup['cells'] => {
     switch (axis) {
-      case 'speeding':
+      case 'speed':
         return events('speeding', m.speeding, s.speeding);
       case 'braking':
         return events('brakes', m.hardBrakes, s.hardBrake);
-      case 'accel':
+      case 'acceleration':
         return events('starts', m.hardStarts, s.hardAccel);
-      case 'cornering':
+      case 'turning':
         return events('turns', m.sharpTurns, s.hardCorner);
       case 'phone':
         return [

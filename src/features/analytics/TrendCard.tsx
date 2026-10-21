@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { View, type TextStyle } from 'react-native';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
 
+import { useUnits } from '@/data/queries/units';
+import { distanceIn, type Units } from '@/lib/units';
 import { Card, formatPointsValue, SegmentedControl, Text, tokens, useTheme } from '@/ui';
 
 import { analyticsCopy } from './copy';
@@ -102,23 +104,38 @@ const tickWidth = (ticks: readonly TrendTick[], fontSize: number): number => Mat
 // ---------------------------------------------------------------------------------------------
 // Words
 
-/** A series value as drawn ("88", "3" with "events", "+120" with "pts") and as spoken. */
-export function trendValue(kind: TrendKind, v: number): Metric {
-  if (kind === 'score') return { value: String(Math.round(v)), unit: '', spoken: String(Math.round(v)) };
-  if (kind === 'events') {
-    const n = Math.round(v);
-    const unit = n === 1 ? 'event' : 'events';
-    return { value: n.toLocaleString('en-US'), unit, spoken: `${n} ${unit}` };
-  }
-  const r = Math.round(v);
-  return { value: formatPointsValue(v, true), unit: 'pts', spoken: r > 0 ? `plus ${r}` : r < 0 ? `minus ${Math.abs(r)}` : '0' };
+/** Events per mile in the driver's units: per kilometre when they use kilometres. */
+export const eventsPer = (perMile: number, units: Units): number => perMile / distanceIn(1, units);
+
+/** An events rate's number: a whole number as it is, else 2 decimals under 1, 1 under 10, whole from there ("0.25", "2.5", "14"). */
+function rateNumber(v: number): string {
+  if (Number.isInteger(v)) return v.toLocaleString('en-US');
+  const a = Math.abs(v);
+  if (a < 1) return v.toFixed(2);
+  if (a < 10) return v.toFixed(1);
+  return Math.round(v).toLocaleString('en-US');
 }
 
-/** A Y axis label: the series' number alone ("100", "2.5", "+120"); the unit is on the latest value. */
+/**
+ * A series value as drawn and as spoken: the Safety Rating ("88"), events per mile or per km
+ * ("0.25" with "events/mile", a rate under 0.01 as "<0.01") and the points total ("1,240" with "pts").
+ */
+export function trendValue(kind: TrendKind, v: number, units: Units = 'mi'): Metric {
+  if (kind === 'score') return { value: String(Math.round(v)), unit: '', spoken: String(Math.round(v)) };
+  if (kind === 'events') {
+    const tiny = v > 0 && v < 0.005;
+    const value = tiny ? '<0.01' : rateNumber(v);
+    const noun = v === 1 ? 'event' : 'events';
+    return { value, unit: `${noun}/${units === 'km' ? 'km' : 'mile'}`, spoken: `${tiny ? 'under 0.01' : value} ${noun} per ${units === 'km' ? 'kilometer' : 'mile'}` };
+  }
+  return { value: formatPointsValue(v), unit: 'pts', spoken: `${formatPointsValue(v)} points` };
+}
+
+/** A Y axis label: the series' number alone ("100", "0.25", "1,240"); the unit is on the latest value. */
 export function axisValue(kind: TrendKind, v: number): string {
   if (kind === 'score') return String(Math.round(v));
-  if (kind === 'events') return Number.isInteger(v) || Math.abs(v) >= 10 ? String(Math.round(v)) : v.toFixed(1);
-  return formatPointsValue(v, true);
+  if (kind === 'events') return rateNumber(v);
+  return formatPointsValue(v);
 }
 
 /** The Y axis: the values at the three guides, top to bottom (the range's top, middle and bottom). */
@@ -128,10 +145,10 @@ export const axisTicks = (kind: TrendKind, lo: number, hi: number): string[] => 
 export const axisWidth = (labels: readonly string[], fontSize: number): number =>
   Math.ceil(Math.max(1, ...labels.map((s) => s.length)) * fontSize * 0.6) + AXIS_GAP;
 
-/** The chart for a screen reader: "Score by day. Lowest 71 on Tuesday, latest 88, trending up." */
-export function trendLabel(kind: TrendKind, points: readonly TrendPoint[], step: TrendStep): string {
+/** The chart for a screen reader: "Safety Rating by day. Lowest 71 on Tuesday, latest 88, trending up." */
+export function trendLabel(kind: TrendKind, points: readonly TrendPoint[], step: TrendStep, units: Units = 'mi'): string {
   if (points.length < 2) return c.notEnough;
-  const name = c.spoken[kind];
+  const name = kind === 'events' && units === 'km' ? c.spokenEventsKm : c.spoken[kind];
   const low = points.reduce((a, b) => (b.value < a.value ? b : a));
   const last = points[points.length - 1]!;
   const { lo, hi } = trendRange(
@@ -139,7 +156,7 @@ export function trendLabel(kind: TrendKind, points: readonly TrendPoint[], step:
     points.map((p) => p.value)
   );
   const dir = c.direction[trendDirection(points, hi - lo)];
-  return `${name} ${c.by[step]}. ${c.lowest} ${trendValue(kind, low.value).spoken} ${low.when}, ${c.latest} ${trendValue(kind, last.value).spoken}, ${dir}.`;
+  return `${name} ${c.by[step]}. ${c.lowest} ${trendValue(kind, low.value, units).spoken} ${low.when}, ${c.latest} ${trendValue(kind, last.value, units).spoken}, ${dir}.`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -154,15 +171,18 @@ export interface TrendCardProps {
 }
 
 /**
- * The range over time: a Score / Events / Points picker beside the title, one monotone line in the
- * page ink with a dot per point (the latest labelled with its unit), thin guides at the bottom,
- * middle and top of the range with their values down a Y axis on the left, and a few short ticks
- * under it. Fewer than two points read "Not enough drives yet" in the chart's place.
+ * The range over time, titled "Trends": a Score / Events / Points picker beside the title (the
+ * Safety Rating, events per mile or per km, and the running points total), one monotone line in
+ * the page ink with a dot per point (the latest labelled with its unit), thin guides at the
+ * bottom, middle and top of the range with their values down a Y axis on the left, and a few short
+ * ticks under it. Fewer than two points read "Not enough drives yet" in the chart's place.
  */
 export function TrendCard({ trend, layout: l, width, text }: TrendCardProps) {
   const t = useTheme();
+  const units = useUnits();
   const [kind, setKind] = useState<TrendKind>('score');
-  const points = trend.series[kind];
+  const series = trend.series[kind];
+  const points = kind === 'events' ? series.map((p) => ({ ...p, value: eventsPer(p.value, units) })) : series;
   const { lo, hi } = trendRange(
     kind,
     points.map((p) => p.value)
@@ -176,7 +196,7 @@ export function TrendCard({ trend, layout: l, width, text }: TrendCardProps) {
   const latest = sizeAt('subhead', l.textScale);
   const xy = points.map((p) => plotPoint(p, plotW, l.plot, lo, hi));
   const last = xy[xy.length - 1];
-  const lastValue = points.length > 0 ? trendValue(kind, points[points.length - 1]!.value) : null;
+  const lastValue = points.length > 0 ? trendValue(kind, points[points.length - 1]!.value, units) : null;
   const ticks = visibleTicks(trend.ticks, plotW, tickWidth(trend.ticks, tick.fontSize));
   const tickW = tickWidth(ticks, tick.fontSize);
   const halo = { textShadowColor: t.colors.surface, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6 };
@@ -207,7 +227,7 @@ export function TrendCard({ trend, layout: l, width, text }: TrendCardProps) {
         <View
           accessible
           accessibilityRole="image"
-          accessibilityLabel={trendLabel(kind, points, trend.step)}
+          accessibilityLabel={trendLabel(kind, points, trend.step, units)}
           style={{ height: box, width: axisW + plotW, flexDirection: 'row' }}
           testID="trend-chart-box"
         >

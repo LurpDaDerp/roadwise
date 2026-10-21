@@ -14,6 +14,7 @@ import type { Metric } from './format';
  */
 export function MetricCell({
   caption,
+  spokenCaption,
   metric,
   onPress,
   hint,
@@ -23,6 +24,8 @@ export function MetricCell({
   testID,
 }: {
   caption: string;
+  /** The caption in words for a screen reader, when the printed one is shorthand ("Avg points/drive"). */
+  spokenCaption?: string;
   metric: Metric;
   onPress?: () => void;
   hint?: string;
@@ -52,7 +55,7 @@ export function MetricCell({
       </Text>
     </>
   );
-  const label = `${caption}, ${metric.spoken}`;
+  const label = `${spokenCaption ?? caption}, ${metric.spoken}`;
   const box: ViewStyle = { gap: METRIC_CELL_GAP, minWidth: 0 };
   if (onPress) {
     return (

@@ -5,7 +5,7 @@ import type { Units } from '@/lib/units';
 import { Card, Text, tokens, useFontScale, type CardVariant } from '@/ui';
 
 import { analyticsCopy } from './copy';
-import { countMetric, distanceMetric, percentMetric, pointsMetric, speedMetric, type Metric } from './format';
+import { countMetric, distanceMetric, percentMetric, pointsMetric, speedMetric, timeMetric, type Metric } from './format';
 import { METRIC_CELL_GAP, MetricCell } from './MetricCell';
 import type { Trend, WindowSums } from './model';
 import { sizeAt } from './textSize';
@@ -16,14 +16,17 @@ const m = analyticsCopy.metrics;
 export interface MetricGroup {
   key: string;
   title: string;
-  /** Up to four cells, read as rows of two (or one row of four in the densest layout). */
-  cells: { key: string; caption: string; metric: Metric }[];
+  /**
+   * Up to five cells, read as rows of two (or rows of four in the densest layout), a short last
+   * row keeping the grid's columns. `spokenCaption` is the caption in words for a screen reader.
+   */
+  cells: { key: string; caption: string; spokenCaption?: string; metric: Metric }[];
 }
 
 /**
- * The range's general numbers: Driving (drives, distance and two averages) and Points (the total,
- * per drive, and the clean drives that keep the streak). Each radar category's own numbers live in
- * its sheet.
+ * The range's general numbers: Driving (drives, the time spent driving, distance and two averages)
+ * and Points (the total, per drive, and the clean drives that keep the streak, with their rate).
+ * Each radar category's own numbers live in its sheet.
  */
 export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
   return [
@@ -32,6 +35,7 @@ export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
       title: m.driving,
       cells: [
         { key: 'drives', caption: m.drives, metric: countMetric(s.drives) },
+        { key: 'drive-time', caption: m.driveTime, metric: timeMetric(s.durationS) },
         { key: 'distance', caption: m.distance, metric: distanceMetric(s.miles, units) },
         { key: 'avg-drive', caption: m.avgDrive, metric: distanceMetric(s.avgMiles, units) },
         { key: 'speed', caption: m.avgSpeed, metric: speedMetric(s.avgMph, units) },
@@ -42,16 +46,16 @@ export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
       title: m.points,
       cells: [
         { key: 'points', caption: m.totalPoints, metric: pointsMetric(s.drives > 0 ? s.points : null) },
-        { key: 'avg-points', caption: m.avgPoints, metric: pointsMetric(s.avgPoints) },
+        { key: 'avg-points', caption: m.avgPoints, spokenCaption: m.avgPointsSpoken, metric: pointsMetric(s.avgPoints) },
         { key: 'clean', caption: m.cleanDrives, metric: countMetric(s.cleanDrives) },
-        { key: 'clean-share', caption: m.cleanShare, metric: percentMetric(s.cleanPct) },
+        { key: 'clean-rate', caption: m.cleanRate, metric: percentMetric(s.cleanPct) },
       ],
     },
   ];
 }
 
 /** The main block's number cards by their cell counts: Driving and Points. */
-export const MAIN_CARDS: readonly number[] = [4, 4];
+export const MAIN_CARDS: readonly number[] = [5, 4];
 
 /** The user's rule: the metrics block never takes more than this share of the window's height. */
 export const METRICS_MAX_SHARE = 0.75;
@@ -74,7 +78,7 @@ export interface MetricsLayout {
   textScale: number;
   /** The system's multiple (capped at 2×): the trend picker's labels follow it, not `textScale`. */
   fontScale: number;
-  /** The trend chart's plot height; 0 when there is no room for it (or no chart) and the Trend card is left out. */
+  /** The trend chart's plot height; 0 when there is no room for it (or no chart) and the Trends card is left out. */
   plot: number;
 }
 
@@ -139,7 +143,7 @@ export function metricsBlockHeight(l: MetricsLayout, cards: readonly number[] = 
  * that is left, up to the layout's most, and the layout fits only if that is at least its least.
  *
  * The reader's text size comes before the chart: when no layout has room for it (the shortest
- * phones, the largest text), the Trend card is left out and the number cards go through the same
+ * phones, the largest text), the Trends card is left out and the number cards go through the same
  * steps. When even their row is too tall, the block's text stops growing at the largest size that
  * fits (never below 1×). A category sheet's numbers use the same rule with no chart.
  */
@@ -179,7 +183,7 @@ export const metricsText = (l: MetricsLayout): MetricsText => ({
   label: sizeAt('label', l.textScale),
 });
 
-/** One number card: a title over rows of two cells (or one row of four). */
+/** One number card: a title over rows of two cells (or of four); a short last row is padded with empty columns, so its cells keep the grid's width. */
 export function NumberCard({ group: g, layout: l, text, variant }: { group: MetricGroup; layout: MetricsLayout; text: MetricsText; variant?: CardVariant }) {
   const rows: MetricGroup['cells'][] = [];
   for (let i = 0; i < g.cells.length; i += l.perRow) rows.push(g.cells.slice(i, i + l.perRow));
@@ -194,12 +198,16 @@ export function NumberCard({ group: g, layout: l, text, variant }: { group: Metr
             <MetricCell
               key={c.key}
               caption={c.caption}
+              spokenCaption={c.spokenCaption}
               metric={c.metric}
               text={text}
               captionLines={captionLines(l)}
               style={{ flex: 1 }}
               testID={`metric-${c.key}`}
             />
+          ))}
+          {Array.from({ length: l.perRow - row.length }, (_, k) => (
+            <View key={`spacer-${k}`} style={{ flex: 1 }} />
           ))}
         </View>
       ))}

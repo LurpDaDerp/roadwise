@@ -12,6 +12,13 @@ export const analyticsCopy = {
     /** The Attention chip without a DashPal. */
     locked: (label: string) => `${label}, needs DashPal`,
     axisHint: 'Opens details',
+    /** The button under the chart and the sheet it opens: what makes the total. */
+    how: {
+      label: 'How it works',
+      hint: 'Explains the Safety Rating',
+      title: 'How it works',
+      body: 'Your Safety Rating is the average of your category scores, each from its events per mile over the last 30 days, with Speed and Phone use counting double.',
+    },
   },
   category: {
     /** Under the sheet's title (the axis name and its score). */
@@ -24,7 +31,7 @@ export const analyticsCopy = {
     /** Attention without a paired DashPal. */
     locked: {
       title: 'Attention comes from DashPal',
-      body: 'Pair a DashPal and it will score how well you keep your eyes on the road.',
+      body: 'Pair a DashPal and it will score how well you stay focused on the road.',
       action: 'Set up DashPal',
     },
     /** Attention with a DashPal but no watched drives in the range. */
@@ -46,6 +53,7 @@ export const analyticsCopy = {
     driving: 'Driving',
     points: 'Points',
     drives: 'Drives',
+    driveTime: 'Drive time',
     distance: 'Distance',
     avgDrive: 'Avg drive',
     avgSpeed: 'Avg speed',
@@ -56,24 +64,28 @@ export const analyticsCopy = {
     pickups: 'Pickups',
     phoneTime: 'Phone time',
     cleanDrives: 'Clean drives',
-    cleanShare: 'Clean share',
+    cleanRate: 'Clean rate',
     totalPoints: 'Total points',
-    avgPoints: 'Avg points',
+    avgPoints: 'Avg points/drive',
+    /** Avg points/drive for a screen reader. */
+    avgPointsSpoken: 'Average points per drive',
   },
   trend: {
-    title: 'Trend',
+    title: 'Trends',
     /** Names the series picker for a screen reader. */
     picker: 'Trend series',
     score: 'Score',
     events: 'Events',
     points: 'Points',
     notEnough: 'Not enough drives yet',
-    /** What a screen reader calls each series and its step ("Score by day"). */
+    /** What a screen reader calls each series and its step ("Safety Rating by day"). */
     spoken: {
-      score: 'Score',
-      events: 'Events',
-      points: 'Points per drive',
+      score: 'Safety Rating',
+      events: 'Events per mile',
+      points: 'Total points',
     },
+    /** Events in kilometres. */
+    spokenEventsKm: 'Events per kilometer',
     by: { drive: 'by drive', day: 'by day', week: 'by week', month: 'by month' },
     lowest: 'Lowest',
     latest: 'latest',
