@@ -1,6 +1,6 @@
 import { weightedScore } from '@scoring';
 
-import { drive, NOW, result } from '@/features/drives/__fixtures__/drives';
+import { drive, NOW } from '@/features/drives/__fixtures__/drives';
 import type { LocalDrive } from '@/features/drives/model';
 
 import { coach, driveGrid, fitLines, personalBests, rangeStart, scoredSince, trend, windowSums, type AxisScores, type Range } from '../model';
@@ -8,30 +8,23 @@ import type { AnalyticsData } from '../useAnalytics';
 
 export { NOW };
 
-export const SCORES: AxisScores = { speed: 88, braking: 72, acceleration: 95, turning: 100, phone: 60, attention: 90 };
-export const NO_SCORES: AxisScores = { speed: null, braking: null, acceleration: null, turning: null, phone: null, attention: null };
-/** The Safety Rating of `SCORES`: their weighted average (Speed and Phone use double), 1 decimal. 653 / 8 = 81.6. */
+export const SCORES: AxisScores = { speed: 88, braking: 72, acceleration: 95, turning: 100, attention: 90 };
+export const NO_SCORES: AxisScores = { speed: null, braking: null, acceleration: null, turning: null, attention: null };
+/** The Safety Rating of `SCORES`: their weighted average (Speed double), 1 decimal. 533 / 6 = 88.8. */
 export const SCORES_RATING = Math.round(weightedScore(SCORES)! * 10) / 10;
 
 const HOUR = 3_600_000;
-/** The points total after the newest drive; each older drive's answer holds 132 fewer. */
-export const POINTS_TOTAL = 1240;
 
-/**
- * `n` scored drives, one every `everyH` hours back from NOW, ids d0, d1, … (newest first). Each
- * carries the server's answer with the points total right after it: 1240 after d0, 1108 after d1, …
- */
+/** `n` scored drives, one every `everyH` hours back from NOW, ids d0, d1, … (newest first). */
 export function drives(n: number, everyH = 5, over: Partial<LocalDrive> = {}): LocalDrive[] {
-  return Array.from({ length: n }, (_, i) => {
-    const base = result();
-    return drive({
+  return Array.from({ length: n }, (_, i) =>
+    drive({
       clientTripId: `d${i}`,
       startedAt: NOW - (1 + i * everyH) * HOUR,
       endedAt: NOW - (1 + i * everyH) * HOUR + 24 * 60_000,
-      result: { ...base, progress: { ...base.progress, points: Math.max(0, POINTS_TOTAL - 132 * i) } },
       ...over,
-    });
-  });
+    })
+  );
 }
 
 const ROUTE = [

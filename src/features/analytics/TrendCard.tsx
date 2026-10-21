@@ -4,7 +4,7 @@ import Svg, { Circle, Line, Path } from 'react-native-svg';
 
 import { useUnits } from '@/data/queries/units';
 import { distanceIn, type Units } from '@/lib/units';
-import { Card, formatPointsValue, SegmentedControl, Text, tokens, useTheme } from '@/ui';
+import { Card, SegmentedControl, Text, tokens, useTheme } from '@/ui';
 
 import { analyticsCopy } from './copy';
 import type { Metric } from './format';
@@ -117,25 +117,20 @@ function rateNumber(v: number): string {
 }
 
 /**
- * A series value as drawn and as spoken: the Safety Rating ("88"), events per mile or per km
- * ("0.25" with "events/mile", a rate under 0.01 as "<0.01") and the points total ("1,240" with "pts").
+ * A series value as drawn and as spoken: the Safety Rating ("88") and events per mile or per km
+ * ("0.25" with "events/mile", a rate under 0.01 as "<0.01").
  */
 export function trendValue(kind: TrendKind, v: number, units: Units = 'mi'): Metric {
   if (kind === 'score') return { value: String(Math.round(v)), unit: '', spoken: String(Math.round(v)) };
-  if (kind === 'events') {
-    const tiny = v > 0 && v < 0.005;
-    const value = tiny ? '<0.01' : rateNumber(v);
-    const noun = v === 1 ? 'event' : 'events';
-    return { value, unit: `${noun}/${units === 'km' ? 'km' : 'mile'}`, spoken: `${tiny ? 'under 0.01' : value} ${noun} per ${units === 'km' ? 'kilometer' : 'mile'}` };
-  }
-  return { value: formatPointsValue(v), unit: 'pts', spoken: `${formatPointsValue(v)} points` };
+  const tiny = v > 0 && v < 0.005;
+  const value = tiny ? '<0.01' : rateNumber(v);
+  const noun = v === 1 ? 'event' : 'events';
+  return { value, unit: `${noun}/${units === 'km' ? 'km' : 'mile'}`, spoken: `${tiny ? 'under 0.01' : value} ${noun} per ${units === 'km' ? 'kilometer' : 'mile'}` };
 }
 
-/** A Y axis label: the series' number alone ("100", "0.25", "1,240"); the unit is on the latest value. */
+/** A Y axis label: the series' number alone ("100", "0.25"); the unit is on the latest value. */
 export function axisValue(kind: TrendKind, v: number): string {
-  if (kind === 'score') return String(Math.round(v));
-  if (kind === 'events') return rateNumber(v);
-  return formatPointsValue(v);
+  return kind === 'score' ? String(Math.round(v)) : rateNumber(v);
 }
 
 /** The Y axis: the values at the three guides, top to bottom (the range's top, middle and bottom). */
@@ -171,8 +166,8 @@ export interface TrendCardProps {
 }
 
 /**
- * The range over time, titled "Trends": a Score / Events / Points picker beside the title (the
- * Safety Rating, events per mile or per km, and the running points total), one monotone line in
+ * The range over time, titled "Trends": a Score / Events picker beside the title (the Safety
+ * Rating, and events per mile or per km), one monotone line in
  * the page ink with a dot per point (the latest labelled with its unit), thin guides at the
  * bottom, middle and top of the range with their values down a Y axis on the left, and a few short
  * ticks under it. Fewer than two points read "Not enough drives yet" in the chart's place.

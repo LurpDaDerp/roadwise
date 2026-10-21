@@ -14,18 +14,18 @@ const HOW = analyticsCopy.radar.how;
 /** Grid rings, as a share of the full score: 0, 25, 50, 75 and 100. */
 export const RADAR_RINGS = [0, 0.25, 0.5, 0.75, 1] as const;
 /**
- * Where a score of 0 sits, as a share of the radius: the zero ring is a hexagon of its own around
+ * Where a score of 0 sits, as a share of the radius: the zero ring is a pentagon of its own around
  * the centre number, so a shape with low scores (or none yet) is never a point.
  */
 export const RADAR_ZERO = 0.3;
-/** The hexagon's radius stays within these, so it reads on a small phone and stays near its labels on a big one. */
+/** The chart's radius stays within these, so it reads on a small phone and stays near its labels on a big one. */
 export const RADAR_R_MIN = 56;
 export const RADAR_R_MAX = 110;
 /** The axis labels follow Dynamic Type up to this multiple; past it they would crowd the chart. */
 export const RADAR_LABEL_MAX_SCALE = 1.3;
 /** Between a vertex and its label. */
 const LABEL_GAP = 6;
-/** The widest a side label's chip may be ("Phone use" at 12 pt; a longer name shrinks to fit). */
+/** The widest a side label's chip may be ("Acceleration" at 12 pt shrinks a little to fit). */
 const SIDE_LABEL_W = 84;
 /** The top and bottom labels' width, centred on their vertex. */
 const END_LABEL_W = 132;
@@ -94,43 +94,42 @@ export interface RadarGeometry {
   c: Pt;
   /** The name chip's height (its text and padding). */
   chip: number;
-  /** One touch box per axis, in `AXES` order, each wholly outside the hexagon and at least 44 pt tall (a button). */
+  /** One touch box per axis, in `AXES` order, each wholly outside the shape and at least 44 pt tall (a button). */
   labels: RadarLabelBox[];
 }
 
 /**
- * The chart's box for a given width and label text scale. Each axis's name sits on a chip outside
- * its vertex: above the top one, below the bottom one, and beside the four side ones (starting at
- * the vertex on the right, ending at it on the left), so no label crosses a ring or the shape. The
- * radius is what the side labels leave of the width; the height is what the top and bottom labels
- * need. Each chip's touch box is at least the 44 pt touch floor, growing evenly above and below it.
+ * The chart's box for a given width and label text scale, for any number of axes. Each axis's name
+ * sits on a chip outside its vertex: above a vertex straight up, below one straight down, and
+ * beside the others (starting at a vertex on the right, ending at one on the left), so no label
+ * crosses a ring or the shape. The radius is what the widest-reaching side labels leave of the
+ * width; each side label takes the room its own vertex leaves (the lower pentagon vertices sit
+ * nearer the middle and get more). The height is what the labels reach above and below the centre,
+ * which is no longer the box's middle for an odd count. Each chip's touch box is at least the 44 pt
+ * touch floor, growing evenly above and below it.
  */
 export function radarGeometry(width: number, labelScale: number, n: number = AXES.length): RadarGeometry {
   const chip = Math.ceil(tokens.type.caption.lineHeight * labelScale + 2 * CHIP_PAD_Y);
   const pad = Math.max(0, (tokens.size.touch - chip) / 2);
   const labelH = chip + 2 * pad;
   const half = width / 2;
-  // The side vertices sit cos 30° × r out from the centre.
-  const reach = Math.cos(Math.PI / 6);
+  const cos = Array.from({ length: n }, (_, i) => Math.cos(-Math.PI / 2 + (i * 2 * Math.PI) / n));
+  const end = (i: number) => Math.abs(cos[i]!) < 0.01;
+  // How far out the widest side vertex sits, as a share of the radius (cos 18° for five axes).
+  const reach = Math.max(...cos.map((x, i) => (end(i) ? 0 : Math.abs(x))), 0.01);
   const r = Math.max(RADAR_R_MIN, Math.min(RADAR_R_MAX, (half - LABEL_GAP - SIDE_LABEL_W) / reach));
-  const height = Math.ceil(2 * (r + LABEL_GAP + chip + pad));
-  const c = { x: half, y: height / 2 };
-  const sideW = Math.min(SIDE_LABEL_W, half - LABEL_GAP - reach * r);
-  const labels = Array.from({ length: n }, (_, i): RadarLabelBox => {
-    const p = radarPoint(i, n, r, c);
-    if (Math.abs(p.x - c.x) < 1) {
-      const above = p.y < c.y;
+  // The boxes around a centre at y 0, then the whole set moved down by what reaches above it.
+  const origin = { x: half, y: 0 };
+  const boxes = Array.from({ length: n }, (_, i): RadarLabelBox => {
+    const p = radarPoint(i, n, r, origin);
+    if (end(i)) {
+      const above = p.y < 0;
       // The chip keeps its gap from the vertex; the touch padding may reach past it.
       const top = above ? p.y - LABEL_GAP - chip - pad : p.y + LABEL_GAP - pad;
-      return {
-        left: p.x - END_LABEL_W / 2,
-        top,
-        width: END_LABEL_W,
-        height: labelH,
-        align: 'center',
-      };
+      return { left: p.x - END_LABEL_W / 2, top, width: END_LABEL_W, height: labelH, align: 'center' };
     }
-    const right = p.x > c.x;
+    const right = p.x > half;
+    const sideW = Math.min(SIDE_LABEL_W, half - LABEL_GAP - Math.abs(cos[i]!) * r);
     return {
       left: right ? p.x + LABEL_GAP : p.x - LABEL_GAP - sideW,
       top: p.y - labelH / 2,
@@ -139,6 +138,11 @@ export function radarGeometry(width: number, labelScale: number, n: number = AXE
       align: right ? 'left' : 'right',
     };
   });
+  const above = Math.max(r, ...boxes.map((b) => -b.top));
+  const below = Math.max(...Array.from({ length: n }, (_, i) => radarPoint(i, n, r, origin).y), ...boxes.map((b) => b.top + b.height));
+  const height = Math.ceil(above + below);
+  const c = { x: half, y: above };
+  const labels = boxes.map((b) => ({ ...b, top: b.top + above }));
   return { width, height, r, c, chip, labels };
 }
 
@@ -153,14 +157,15 @@ export function radarLabel(rating: number | null, scores: AxisScores, locked: re
 }
 
 /**
- * The six-axis radar of the last 30 days: grid rings at 0/25/50/75/100 (0 is a small hexagon of
- * its own around the centre, where a score of 0, or none yet, sits), a spoke per axis, one filled
- * polygon, and the Safety Rating in the middle. All of it in the page ink (no colour coding), with
- * each axis's name around the outside on a faint chip: a button that opens that category's
- * details, whether or not it has a score yet. A tap on the chart itself opens the category whose
- * spoke it is nearest. Without a paired DashPal, Attention is locked: its chip is greyed with a
- * lock, its spoke faint, it has no point on the shape, and its sheet says how to get it. Under the
- * chart, "Last 30 days" and a "How it works" button that opens a sheet saying what makes the total.
+ * The five-axis radar of the last 90 days (a pentagon): grid rings at 0/25/50/75/100 (0 is a small
+ * pentagon of its own around the centre, where a score of 0, or none yet, sits), a spoke per axis,
+ * one filled polygon, and the Safety Rating in the middle. All of it in the page ink (no colour
+ * coding), with each axis's name around the outside on a faint chip: a button that opens that
+ * category's details, whether or not it has a score yet. A tap on the chart itself opens the
+ * category whose spoke it is nearest. Without a paired DashPal, Attention is locked: its chip is
+ * greyed with a lock, its spoke faint, it has no point on the shape, and its sheet says how to get
+ * it. Under the chart, "Last 90 days" and a "How it works" button that opens a sheet saying what
+ * makes the total.
  */
 export function RadarCard({
   rating,
@@ -250,11 +255,12 @@ export function RadarCard({
           <View
             pointerEvents="none"
             style={{
+              // Centred on the chart's centre, which sits above the box's middle for an odd count.
               position: 'absolute',
               top: 0,
               left: 0,
               right: 0,
-              bottom: 0,
+              height: 2 * c.y,
               alignItems: 'center',
               justifyContent: 'center',
             }}

@@ -3,7 +3,6 @@
  * unit, so the number sits in the display face and the unit beside it in small print. Pure.
  */
 import { distanceIn, distanceWord, type Units } from '@/lib/units';
-import { formatPointsValue } from '@/ui';
 
 /** A number for the display face, its printed unit and the words a screen reader says. */
 export interface Metric {
@@ -52,12 +51,4 @@ export const countMetric = (n: number): Metric => {
 export function percentMetric(pct: number | null): Metric {
   if (pct === null) return { value: DASH, unit: '%', spoken: 'no data' };
   return { value: String(pct), unit: '%', spoken: `${pct} percent` };
-}
-
-/** "+243 pts" / "−40 pts" / "0 pts"; a dash with no drives. */
-export function pointsMetric(n: number | null): Metric {
-  if (n === null || !Number.isFinite(n)) return { value: DASH, unit: 'pts', spoken: 'no data' };
-  const value = formatPointsValue(n, true);
-  const r = Math.round(n);
-  return { value, unit: 'pts', spoken: r > 0 ? `plus ${r} points` : r < 0 ? `minus ${Math.abs(r)} points` : '0 points' };
 }

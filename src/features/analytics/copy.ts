@@ -1,3 +1,19 @@
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * A category's rate line under its numbers (scores §7.2): how often it slipped per chance, "1 hard
+ * brake per 137 slowdowns", "No sharp turns in 85 turns", "Over the limit 2% of the time". Null when
+ * there is nothing to say (no chances in the range, or Attention).
+ */
+function eventsRate(n: number, opps: number, event: [string, string], chance: [string, string], only: string): string | null {
+  const o = Math.max(opps, n);
+  if (o === 0) return null;
+  if (n === 0) return `No ${event[1]} in ${plural(o, chance[0], chance[1])}`;
+  if (n === 1 && o < 2) return only;
+  const k = Math.round(o / n);
+  return `1 ${event[0]} per ${plural(k, chance[0], chance[1])}`;
+}
+
 /** Every string the Analytics tab shows. Captions stay at one to three words. */
 export const analyticsCopy = {
   title: 'Analytics',
@@ -5,7 +21,7 @@ export const analyticsCopy = {
   radar: {
     rating: 'Safety Rating',
     outOf: '/100',
-    window: 'Last 30 days',
+    window: 'Last 90 days',
     noScore: 'no score yet',
     /** An axis's button for a screen reader ("Speeding, score 82"). */
     axis: (label: string, score: number | null) => (score === null ? `${label}, no score yet` : `${label}, score ${score}`),
@@ -17,12 +33,12 @@ export const analyticsCopy = {
       label: 'How it works',
       hint: 'Explains the Safety Rating',
       title: 'How it works',
-      body: 'Your Safety Rating is the average of your category scores, each from its events per mile over the last 30 days, with Speed and Phone use counting double.',
+      body: "Your Safety Rating is the average of your category scores, with Speed counting double. Each one looks at your last 90 days, recent weeks a bit more, and judges you per chance to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, and how much of your driving is over the limit. You start from a typical driver's score and move from there with every drive.",
     },
   },
   category: {
     /** Under the sheet's title (the axis name and its score). */
-    subtitle: 'Score out of 100, last 30 days',
+    subtitle: 'Score out of 100, last 90 days',
     /** The range card's title. */
     range: { day: 'Last 24 hours', week: 'Last 7 days', month: 'Last 30 days', year: 'Last 365 days' },
     eyesOff: 'Eyes off road',
@@ -40,18 +56,30 @@ export const analyticsCopy = {
     /** In place of the numbers when the range has no drives. */
     empty: 'No data yet',
     emptyBody: (range: string) => `No drives in the ${range.toLowerCase()}. Your numbers show up here after a drive.`,
+    /** The line under a category's numbers. */
+    rate: {
+      braking: (n: number, slowdowns: number) => eventsRate(n, slowdowns, ['hard brake', 'hard brakes'], ['slowdown', 'slowdowns'], 'A hard brake on your only slowdown'),
+      acceleration: (n: number, speedups: number) => eventsRate(n, speedups, ['hard start', 'hard starts'], ['speed-up', 'speed-ups'], 'A hard start on your only speed-up'),
+      turning: (n: number, turns: number) => eventsRate(n, turns, ['sharp turn', 'sharp turns'], ['turn', 'turns'], 'A sharp turn on your only turn'),
+      speed: (speedingS: number, limitS: number): string | null => {
+        if (limitS <= 0) return null;
+        if (speedingS <= 0) return 'Never over the limit';
+        const p = Math.round((100 * speedingS) / limitS);
+        return p < 1 ? 'Over the limit under 1% of the time' : `Over the limit ${Math.min(p, 100)}% of the time`;
+      },
+      /** While the range holds drives recorded before the chances were counted. */
+      estimated: (line: string) => `${line} (estimated)`,
+    },
   },
   bests: {
     title: 'Personal best',
-    mostPoints: 'Most points',
     longestClean: 'Longest clean',
-    phoneFree: 'Phone-free',
     hint: 'Opens the drive',
   },
   range: 'Time range',
   metrics: {
     driving: 'Driving',
-    points: 'Points',
+    clean: 'Clean driving',
     drives: 'Drives',
     driveTime: 'Drive time',
     distance: 'Distance',
@@ -61,16 +89,13 @@ export const analyticsCopy = {
     hardBrakes: 'Hard brakes',
     hardStarts: 'Hard starts',
     sharpTurns: 'Sharp turns',
-    pickups: 'Pickups',
-    phoneTime: 'Phone time',
+    slowdowns: 'Slowdowns',
+    speedups: 'Speed-ups',
+    turns: 'Turns',
+    overLimit: 'Over the limit',
+    withLimit: 'With a limit',
     cleanDrives: 'Clean drives',
     cleanRate: 'Clean rate',
-    totalPoints: 'Total points',
-    avgPoints: 'Avg points/drive',
-    /** Avg points/drive where it could be cut off: a row of four, or large text. */
-    avgPointsShort: 'Pts/drive',
-    /** Avg points/drive (or Pts/drive) for a screen reader. */
-    avgPointsSpoken: 'Average points per drive',
   },
   trend: {
     title: 'Trends',
@@ -78,13 +103,11 @@ export const analyticsCopy = {
     picker: 'Trend series',
     score: 'Score',
     events: 'Events',
-    points: 'Points',
     notEnough: 'Not enough drives yet',
     /** What a screen reader calls each series and its step ("Safety Rating by day"). */
     spoken: {
       score: 'Safety Rating',
       events: 'Events per mile',
-      points: 'Total points',
     },
     /** Events in kilometres. */
     spokenEventsKm: 'Events per kilometer',

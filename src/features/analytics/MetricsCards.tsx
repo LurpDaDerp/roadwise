@@ -5,7 +5,7 @@ import type { Units } from '@/lib/units';
 import { Card, Text, tokens, useFontScale, type CardVariant } from '@/ui';
 
 import { analyticsCopy } from './copy';
-import { countMetric, distanceMetric, percentMetric, pointsMetric, speedMetric, timeMetric, type Metric } from './format';
+import { countMetric, distanceMetric, percentMetric, speedMetric, timeMetric, type Metric } from './format';
 import { METRIC_CELL_GAP, MetricCell } from './MetricCell';
 import type { Trend, WindowSums } from './model';
 import { sizeAt } from './textSize';
@@ -18,16 +18,15 @@ export interface MetricGroup {
   title: string;
   /**
    * Up to five cells, read as rows of two (or rows of four in the densest layout), a short last
-   * row keeping the grid's columns. `spokenCaption` is the caption in words for a screen reader;
-   * `shortCaption` the one a cell shows where its caption could be cut off (see {@link shortCaptions}).
+   * row keeping the grid's columns. `spokenCaption` is the caption in words for a screen reader.
    */
-  cells: { key: string; caption: string; shortCaption?: string; spokenCaption?: string; metric: Metric }[];
+  cells: { key: string; caption: string; spokenCaption?: string; metric: Metric }[];
 }
 
 /**
  * The range's general numbers: Driving (drives, the time spent driving, distance and two averages)
- * and Points (the total, per drive, and the clean drives that keep the streak, with their rate).
- * Each radar category's own numbers live in its sheet.
+ * and Clean driving (the drives with no events, and their share). Each radar category's own
+ * numbers live in its sheet.
  */
 export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
   return [
@@ -43,11 +42,9 @@ export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
       ],
     },
     {
-      key: 'points',
-      title: m.points,
+      key: 'clean',
+      title: m.clean,
       cells: [
-        { key: 'points', caption: m.totalPoints, metric: pointsMetric(s.drives > 0 ? s.points : null) },
-        { key: 'avg-points', caption: m.avgPoints, shortCaption: m.avgPointsShort, spokenCaption: m.avgPointsSpoken, metric: pointsMetric(s.avgPoints) },
         { key: 'clean', caption: m.cleanDrives, metric: countMetric(s.cleanDrives) },
         { key: 'clean-rate', caption: m.cleanRate, metric: percentMetric(s.cleanPct) },
       ],
@@ -55,8 +52,8 @@ export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
   ];
 }
 
-/** The main block's number cards by their cell counts: Driving and Points. */
-export const MAIN_CARDS: readonly number[] = [5, 4];
+/** The main block's number cards by their cell counts: Driving and Clean driving. */
+export const MAIN_CARDS: readonly number[] = [5, 2];
 
 /** The user's rule: the metrics block never takes more than this share of the window's height. */
 export const METRICS_MAX_SHARE = 0.75;
@@ -120,20 +117,6 @@ const ROW: Base = { ...COMPACT, name: 'row', perRow: 4, colGap: space.sm, plotMa
  * wrap rather than shrink), one in the wider 2 × 2 cells.
  */
 export const captionLines = (l: Pick<MetricsLayout, 'perRow'>): 1 | 2 => (l.perRow === 4 ? 2 : 1);
-
-/**
- * The largest text size at which a 2 × 2 cell keeps a long caption. "AVG POINTS/DRIVE" in the
- * label face is 7.6 em plus its letter spacing (0.6 pt a character): at 1.2× it shrinks into the
- * narrowest 2 × 2 cell (120 pt on a 320 pt wide phone) on its one line.
- */
-export const LONG_CAPTION_MAX_SCALE = 1.2;
-
-/**
- * Whether the cells show their short captions ("Pts/drive"): in the narrow cells of a row of four,
- * and in a 2 × 2 card past {@link LONG_CAPTION_MAX_SCALE}, so a long caption is never cut off.
- */
-export const shortCaptions = (l: Pick<MetricsLayout, 'perRow' | 'textScale'>): boolean =>
-  l.perRow === 4 || l.textScale > LONG_CAPTION_MAX_SCALE;
 
 /** A number card's height: a title and its rows of number-over-caption cells. */
 function numberCardHeight(l: MetricsLayout, cells: number): number {
@@ -200,11 +183,9 @@ export const metricsText = (l: MetricsLayout): MetricsText => ({
 
 /**
  * One number card: a title over rows of two cells (or of four); a short last row is padded with
- * empty columns, so its cells keep the grid's width. A cell with a short caption shows it where
- * the layout calls for one ({@link shortCaptions}).
+ * empty columns, so its cells keep the grid's width.
  */
 export function NumberCard({ group: g, layout: l, text, variant }: { group: MetricGroup; layout: MetricsLayout; text: MetricsText; variant?: CardVariant }) {
-  const short = shortCaptions(l);
   const rows: MetricGroup['cells'][] = [];
   for (let i = 0; i < g.cells.length; i += l.perRow) rows.push(g.cells.slice(i, i + l.perRow));
   return (
@@ -217,7 +198,7 @@ export function NumberCard({ group: g, layout: l, text, variant }: { group: Metr
           {row.map((c) => (
             <MetricCell
               key={c.key}
-              caption={short && c.shortCaption ? c.shortCaption : c.caption}
+              caption={c.caption}
               spokenCaption={c.spokenCaption}
               metric={c.metric}
               text={text}
@@ -236,15 +217,15 @@ export function NumberCard({ group: g, layout: l, text, variant }: { group: Metr
 }
 
 /**
- * The range's general cards: Driving and Points, each a grid of numbers, and between them the
- * range's trend (left out when the window has no room for its chart).
+ * The range's general cards: Driving and Clean driving, each a grid of numbers, and between them
+ * the range's trend (left out when the window has no room for its chart).
  */
 export function MetricsCards({ sums, trend }: { sums: WindowSums; trend: Trend }) {
   const units = useUnits();
   const { width, height } = useWindowDimensions();
   const l = metricsLayout(height, useFontScale());
   const text = metricsText(l);
-  const [driving, points] = metricGroups(sums, units);
+  const [driving, clean] = metricGroups(sums, units);
   return (
     <View style={{ gap: l.blockGap }} testID="analytics-metrics">
       <NumberCard group={driving!} layout={l} text={text} />
@@ -252,7 +233,7 @@ export function MetricsCards({ sums, trend }: { sums: WindowSums; trend: Trend }
         // The chart spans the card's inside: the window less the screen gutter and the card's padding, each side.
         <TrendCard trend={trend} layout={l} width={width - 2 * space.lg - 2 * l.pad} text={text} />
       ) : null}
-      <NumberCard group={points!} layout={l} text={text} />
+      <NumberCard group={clean!} layout={l} text={text} />
     </View>
   );
 }

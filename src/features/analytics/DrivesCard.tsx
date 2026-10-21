@@ -10,24 +10,22 @@ import type { Units } from '@/lib/units';
 import { Button, Card, Divider, Text, useTheme } from '@/ui';
 
 import { analyticsCopy } from './copy';
-import { distanceMetric, pointsMetric, timeMetric } from './format';
+import { distanceMetric, timeMetric } from './format';
 
 /** Rows shown at first, and added by each "Show more". */
 export const DRIVES_PAGE = 10;
 
 const c = analyticsCopy.drives;
 
-/** "12.0 mi · 24 min · +132 pts · 2 events", and the same in words. */
+/** "12.0 mi · 24 min · 2 events", and the same in words. */
 export function driveLine(d: LocalDrive, units: Units): { text: string; spoken: string } {
   const dist = distanceMetric(d.miles, units);
   const time = timeMetric(d.durationS);
-  const pts = pointsMetric(d.pointsNet ?? d.result?.net ?? 0);
   const events = eventTally(d.counts).reduce((n, x) => n + x.n, 0);
   const tail = events > 0 ? `${events} ${events === 1 ? 'event' : 'events'}` : d.clean === true ? c.clean : c.noEvents;
-  const est = d.estimate ? ' est.' : '';
   return {
-    text: [`${dist.value} ${dist.unit}`, `${time.value} ${time.unit}`, `${pts.value} ${pts.unit}${est}`, tail].join(' · '),
-    spoken: [dist.spoken, time.spoken, `${pts.spoken}${d.estimate ? ', estimate' : ''}`, tail].join(', '),
+    text: [`${dist.value} ${dist.unit}`, `${time.value} ${time.unit}`, tail].join(' · '),
+    spoken: [dist.spoken, time.spoken, tail].join(', '),
   };
 }
 
@@ -53,7 +51,7 @@ function Row({ drive, onPress }: { drive: LocalDrive; onPress: () => void }) {
         backgroundColor: pressed ? t.colors.surfaceRaised : 'transparent',
       })}
     >
-      {/* Both lines wrap at large text: the points and events at the end of the line still show. */}
+      {/* Both lines wrap at large text: the events at the end of the line still show. */}
       <View style={{ flex: 1, gap: 2 }}>
         <Text variant="headline" testID="analytics-drive-when">
           {when}

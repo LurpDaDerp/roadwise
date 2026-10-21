@@ -24,7 +24,7 @@ export function MetricCell({
   testID,
 }: {
   caption: string;
-  /** The caption in words for a screen reader, when the printed one is shorthand ("Avg points/drive"). */
+  /** The caption in words for a screen reader, when the printed one is shorthand. */
   spokenCaption?: string;
   metric: Metric;
   onPress?: () => void;

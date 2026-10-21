@@ -1,8 +1,7 @@
 /**
  * The hooks the Analytics tab and Home's tip card read (plan D6): local SQLite only. The radar's
- * centre is the 30-day window's Safety Rating, computed here with the scoring package's arithmetic
- * (the server's), so it is always the weighted average of the categories around it. The points
- * total now comes from the server (`useMySummary`), which the screen reads and passes in.
+ * centre is the Safety Rating of the last 90 days, computed here with the scoring package's
+ * arithmetic (the server's), so it is always the weighted average of the categories around it.
  */
 import { useMemo } from 'react';
 
@@ -34,22 +33,25 @@ import {
 } from './model';
 
 export interface CoachingData extends CoachWindow {
-  /** The 30-day window's cutoff. */
+  /** The 90-day window's cutoff. */
   sinceMs: number;
   loading: boolean;
   error: boolean;
 }
 
-/** The last 30 days' sub-scores, Safety Rating and advice (Home's tip card; the Analytics radar and summary). */
+/** The last 90 days' sub-scores, Safety Rating and advice (Home's tip card; the Analytics radar and summary). */
 export function useCoaching(): CoachingData {
   const { now } = useDataSource();
-  const sinceMs = windowStart(now(), COACH_DAYS);
+  const at = now();
+  const sinceMs = windowStart(at, COACH_DAYS);
+  // The rating's moment moves with the hour, as the window's key does.
+  const hourEnd = windowStart(at, 0) + 3_599_999;
   const drives = useScoredDrives(sinceMs);
   const events = useWindowEvents(sinceMs);
   // Until the events are in, nothing is scored: drives with no events yet would read as perfect.
   const result = useMemo(
-    () => coachWindow(events.data ? (drives.data ?? []) : [], events.data ?? [], sinceMs),
-    [drives.data, events.data, sinceMs]
+    () => coachWindow(events.data ? (drives.data ?? []) : [], events.data ?? [], sinceMs, hourEnd),
+    [drives.data, events.data, sinceMs, hourEnd]
   );
   return { ...result, sinceMs, loading: drives.isLoading || events.isLoading, error: drives.isError || events.isError };
 }
@@ -58,7 +60,7 @@ export interface AnalyticsData {
   range: Range;
   /** The range's cutoff (now floored to the hour, minus 1, 7, 30 or 365 days). */
   sinceMs: number;
-  /** The last 30 days, whatever the range: the radar's scores and centre, and the advice. */
+  /** The last 90 days, whatever the range: the radar's scores and centre, and the advice. */
   coaching: CoachWindow;
   /** All time. */
   bests: PersonalBests;
@@ -66,7 +68,7 @@ export interface AnalyticsData {
   sums: WindowSums;
   /** The range's drives by weekday × 3-hour band. */
   grid: DriveGrid;
-  /** The range's Score, Events and Points over time (the Trends card). */
+  /** The range's Score and Events over time (the Trends card). */
   trend: Trend;
   /** The range's scored drives, newest first (the Drives list; its length matches `sums.drives`). */
   drives: LocalDrive[];
@@ -79,13 +81,8 @@ export interface AnalyticsData {
   refetch(): void;
 }
 
-export interface AnalyticsOptions {
-  /** The driver's points total now (the server's, as Home's pill shows it): the Trends card's latest Points value. */
-  pointsNow?: number | null;
-}
-
 /** Everything the Analytics tab draws, for the chosen range. */
-export function useAnalytics(range: Range, { pointsNow = null }: AnalyticsOptions = {}): AnalyticsData {
+export function useAnalytics(range: Range): AnalyticsData {
   const { now } = useDataSource();
   const at = now();
   const coachSince = windowStart(at, COACH_DAYS);
@@ -94,7 +91,7 @@ export function useAnalytics(range: Range, { pointsNow = null }: AnalyticsOption
   const hourEnd = windowStart(at, 0) + 3_599_999;
   const all = useScoredDrives(null);
   const events = useWindowEvents(coachSince);
-  // The trend's Score looks back 30 days from each point, so it reads a year and 30 days of events
+  // The trend's Score looks back 90 days from each point, so it reads a year and 90 days of events
   // for every range: switching the range never waits on a new read.
   const rangeEvents = useWindowEvents(windowStart(at, TREND_EVENT_DAYS));
   // A new window (the next hour's) holds the last one's events until its own land: the Score waits
@@ -104,15 +101,17 @@ export function useAnalytics(range: Range, { pointsNow = null }: AnalyticsOption
   const drives = all.data;
   // Until the events are in, nothing is scored: drives with no events yet would read as perfect.
   const coaching = useMemo(
-    () => coachWindow(events.data ? (drives ?? []) : [], events.data ?? [], coachSince),
-    [drives, events.data, coachSince]
+    () => coachWindow(events.data ? (drives ?? []) : [], events.data ?? [], coachSince, hourEnd),
+    [drives, events.data, coachSince, hourEnd]
   );
   const bests = useMemo(() => personalBests(drives ?? []), [drives]);
+  // The range's time over the limit reads its speeding events (the year and 90 days' read holds every range's).
+  const rangeEventList = rangeEvents.data;
   const windowed = useMemo(() => {
     const list = drives ?? [];
-    return { sums: windowSums(list, sinceMs), grid: driveGrid(list, sinceMs), drives: scoredSince(list, sinceMs) };
-  }, [drives, sinceMs]);
-  const trendData = useMemo(() => trend(drives ?? [], trendEvents, range, hourEnd, { pointsNow }), [drives, trendEvents, range, hourEnd, pointsNow]);
+    return { sums: windowSums(list, sinceMs, rangeEventList ?? []), grid: driveGrid(list, sinceMs), drives: scoredSince(list, sinceMs) };
+  }, [drives, sinceMs, rangeEventList]);
+  const trendData = useMemo(() => trend(drives ?? [], trendEvents, range, hourEnd), [drives, trendEvents, range, hourEnd]);
   // The map draws the same drives as every other card: scored ones, not "Wasn't driving".
   const map = useMemo(() => {
     const routes = routeLines((drives ?? []).flatMap((d) => (d.polyline ? [d.polyline] : [])));

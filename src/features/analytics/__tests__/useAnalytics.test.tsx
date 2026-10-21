@@ -4,10 +4,12 @@ import type { QueryClient } from '@tanstack/react-query';
 import { uuid } from '@/core/engine/__fixtures__/drives';
 import type { Db } from '@/data/db';
 import { createTestDb, seedEvents, seedTrips, wrapperFor } from '@/data/queries/__fixtures__/harness';
+import { readScoredDrives, readWindowEvents } from '@/data/queries/analytics';
 import { createQueryClient } from '@/data/queries/client';
 import { invalidateAfterSync } from '@/data/queries/invalidate';
 import { encodeRuns } from '@/lib/polyline';
 
+import { coachWindow, windowStart } from '../model';
 import { useAnalytics, useCoaching } from '../useAnalytics';
 
 const DAY = 86_400_000;
@@ -34,18 +36,22 @@ beforeEach(async () => {
     status: 'scored' as const,
     miles: 5,
     duration_s: 600,
-    points_net: 50,
     clean: 1 as const,
     polyline: route,
+    slowdowns: 12,
+    speedups: 12,
+    turns: 10,
+    limit_s: 300,
+    moving_s: 500,
     ...over,
   });
   await seedTrips(db, [
-    trip(1, 0.5, { clean: 0, counts_json: JSON.stringify({ hardBrake: 2 }), points_net: 20 }),
+    trip(1, 0.5, { clean: 0, counts_json: JSON.stringify({ hardBrake: 2 }) }),
     trip(2, 3),
-    trip(3, 10, { miles: 8, points_net: 140 }),
-    trip(4, 100, { miles: 30, points_net: 90 }),
+    trip(3, 10, { miles: 8 }),
+    trip(4, 100, { miles: 30 }),
     // "Wasn't driving": counted nowhere, drawn nowhere.
-    trip(5, 2, { status: 'not_driving', points_net: null }),
+    trip(5, 2, { status: 'not_driving' }),
   ]);
   await seedEvents(db, [
     { id: uuid(21), client_trip_id: uuid(1), type: 'hard_brake', tier: 'severe', started_at: NOW - 0.5 * DAY },
@@ -59,78 +65,77 @@ afterEach(async () => {
   client.clear();
 });
 
-test('useCoaching: the last 30 days’ scores, Safety Rating and advice', async () => {
+/** The hour the hooks rate as of: the end of the current hour (the window's key moves with it). */
+const HOUR_END = windowStart(NOW, 0) + 3_599_999;
+
+test('useCoaching: the last 90 days’ scores, Safety Rating and advice, as of the hour', async () => {
   const { result } = await renderHook(() => useCoaching(), { wrapper: wrapperFor(db, client, now) });
   await waitFor(() => expect(result.current.loading).toBe(false));
-  // 3 drives, 18 miles; braking 100 / (1 + 50/18/16) = 85.2 → 85 (good).
+  // 3 drives, 18 miles (the 100-day-old one is out of the 90 days).
   expect(result.current.totals).toEqual({ drives: 3, cleanDrives: 2, miles: 18, watchedMiles: 0 });
-  expect(result.current.scores.braking).toBe(85);
+  const since = windowStart(NOW, 90);
+  expect(result.current.sinceMs).toBe(since);
+  const want = coachWindow(await readScoredDrives(db, since), await readWindowEvents(db, since), since, HOUR_END);
+  expect(result.current.scores).toEqual(want.scores);
+  expect(result.current.rating).toEqual(want.rating);
+  // Two severe brakes in 36 slowdowns weigh on Braking alone; Attention has no DashPal miles.
+  expect(result.current.scores.braking!).toBeLessThan(result.current.scores.acceleration!);
   expect(result.current.scores.attention).toBeNull();
-  expect(result.current.coaching).toMatchObject({ level: 'good', axis: null });
-  // (6 × 100 + 85.2) / 7 over the five phone categories (Speed and Phone use double), ranked at 18 mi.
-  expect(result.current.rating).toEqual({ rating: 97.9, ranked: true });
+  expect(result.current.rating.ranked).toBe(true);
   expect(result.current.error).toBe(false);
 });
 
-test('useAnalytics: range sums, grid and list; all-time bests and routes; 30-day coaching', async () => {
+test('useAnalytics: range sums with their chances, grid and list; all-time bests and routes; 90-day coaching', async () => {
   const { result, rerender } = await renderHook(({ range }: { range: 'week' | 'year' }) => useAnalytics(range), {
     wrapper: wrapperFor(db, client, now),
     initialProps: { range: 'week' },
   });
   await waitFor(() => expect(result.current.loading).toBe(false));
-  expect(result.current.sums).toMatchObject({ drives: 2, miles: 10, hardBrake: 2, points: 70, cleanPct: 50 });
+  expect(result.current.sums).toMatchObject({ drives: 2, miles: 10, hardBrake: 2, cleanPct: 50, slowdowns: 24, speedups: 24, turns: 20, limitS: 600, exposureEstimated: false });
+  expect(result.current.sums).not.toHaveProperty('points');
   expect(result.current.drives.map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2)]);
   expect(result.current.grid.total).toBe(2);
-  expect(result.current.bests.mostPoints).toEqual({ value: 140, clientTripId: uuid(3) });
-  expect(result.current.bests.longestClean).toEqual({ value: 30, clientTripId: uuid(4) });
+  expect(result.current.bests).toEqual({ longestClean: { value: 30, clientTripId: uuid(4) } });
   expect(result.current.coaching.totals.drives).toBe(3);
   expect(result.current.routes).toHaveLength(4);
   expect(result.current.region).toMatchObject({ latitude: 47.62, longitude: -122.3 });
 
-  // The trend by day. Score: the rating over each day's 30 days, from the first day they hold
-  // 10 mi (Sunday: the drives of 10 and 3 days ago); today's two severe brakes take it to 97.9.
+  // The trend by day. Score: the rating as of each day's end, from the first day its 90 days hold
+  // 10 mi (Sunday: the drives of 10 and 3 days ago); today's two severe brakes take it down.
   expect(result.current.trend.step).toBe('day');
-  expect(result.current.trend.series.score.map((p) => [p.when, p.value])).toEqual([
-    ['on Sunday', 100],
-    ['on Monday', 100],
-    ['on Tuesday', 100],
-    ['today', 98],
-  ]);
+  const score = result.current.trend.series.score;
+  expect(score.map((p) => p.when)).toEqual(['on Sunday', 'on Monday', 'on Tuesday', 'today']);
+  expect(score[3]!.value).toBeLessThan(score[2]!.value);
   // Events per mile on each day with drives: none over 5 mi, then 2 over 5.
   expect(result.current.trend.series.events.map((p) => [p.when, p.value])).toEqual([
     ['on Sunday', 0],
     ['today', 0.4],
   ]);
-  // Points: the running total, from the drive before the week (90 + 140) on.
-  expect(result.current.trend.series.points.map((p) => p.value)).toEqual([230, 230, 230, 230, 280, 280, 280, 300]);
+  expect(result.current.trend.series).not.toHaveProperty('points');
   // The radar's centre is the latest Score point.
-  expect(Math.round(result.current.coaching.rating.rating!)).toBe(98);
+  expect(Math.round(result.current.coaching.rating.rating!)).toBe(score[3]!.value);
 
   await rerender({ range: 'year' });
   await waitFor(() => expect(result.current.sums.drives).toBe(4));
   expect(result.current.range).toBe('year');
-  // Score by month, wherever a month's 30 days hold 10 mi: July and October.
-  await waitFor(() => expect(result.current.trend.series.score).toHaveLength(2));
-  expect(result.current.trend.series.score.map((p) => p.when)).toEqual(['in July', 'in October 2026']);
+  // Score by month, wherever the 90 days to a month's end hold 10 mi: July to October.
+  await waitFor(() => expect(result.current.trend.series.score).toHaveLength(4));
+  expect(result.current.trend.series.score.map((p) => p.when)).toEqual(['in July', 'in August', 'in September', 'in October 2026']);
 });
 
-test('the Trends card’s latest points are the total now, when the screen passes it', async () => {
-  const { result } = await renderHook(() => useAnalytics('week', { pointsNow: 1000 }), { wrapper: wrapperFor(db, client, now) });
+test('the range’s time over the limit reads its own speeding events', async () => {
+  await seedEvents(db, [{ id: uuid(25), client_trip_id: uuid(2), type: 'speeding', tier: 'minor', started_at: NOW - 3 * DAY + 1, duration_s: 40 }]);
+  const { result } = await renderHook(() => useAnalytics('week'), { wrapper: wrapperFor(db, client, now) });
   await waitFor(() => expect(result.current.loading).toBe(false));
-  expect(result.current.trend.series.points.map((p) => p.value)).toEqual([230, 230, 230, 230, 280, 280, 280, 1000]);
-  // A drive still waiting for the server (yesterday, +30) shows in its own day, and now stays the
-  // server's total: whether it has counted the drive yet, the phone can't tell.
-  await seedTrips(db, [{ client_trip_id: uuid(9), started_at: NOW - DAY, tz: 'UTC', status: 'pending', miles: 2, points_net: 30 }]);
-  await invalidateAfterSync(client);
-  await waitFor(() => expect(result.current.trend.series.points.map((p) => p.value)).toEqual([230, 230, 230, 230, 280, 280, 310, 1000]));
+  await waitFor(() => expect(result.current.sums.speedingS).toBeGreaterThan(0));
+  expect(result.current.sums.speedingS).toBeLessThanOrEqual(40);
 });
 
-test('every range reads the same year and 30 days of events: a wider range scores its older drives with their own at once', async () => {
-  // Trip 4 (100 days ago, July) had a severe brake: braking 100 / (1 + 25/30/16) = 95.0, the rating (6 × 100 + 95.0) / 7 = 99.3.
+test('every range reads the same year and 90 days of events: a wider range scores its older drives with their own at once', async () => {
   await seedEvents(db, [{ id: uuid(23), client_trip_id: uuid(4), type: 'hard_brake', tier: 'severe', started_at: NOW - 100 * DAY + 1 }]);
-  // 374 days ago, before the year: 12 mi with a severe speeding, inside October 2025's 30 days.
-  await seedTrips(db, [{ client_trip_id: uuid(6), started_at: NOW - 374 * DAY, tz: 'UTC', status: 'scored', miles: 12, duration_s: 900, points_net: 10 }]);
-  await seedEvents(db, [{ id: uuid(24), client_trip_id: uuid(6), type: 'speeding', tier: 'severe', started_at: NOW - 374 * DAY + 1 }]);
+  // 374 days ago, before the year: 12 mi with a severe speeding, inside October 2025's 90 days.
+  await seedTrips(db, [{ client_trip_id: uuid(6), started_at: NOW - 374 * DAY, tz: 'UTC', status: 'scored', miles: 12, duration_s: 900, limit_s: 600, moving_s: 800 }]);
+  await seedEvents(db, [{ id: uuid(24), client_trip_id: uuid(6), type: 'speeding', tier: 'severe', started_at: NOW - 374 * DAY + 1, duration_s: 60 }]);
   const julyScores: number[] = [];
   const { result, rerender } = await renderHook(
     ({ range }: { range: 'week' | 'year' }) => {
@@ -142,12 +147,10 @@ test('every range reads the same year and 30 days of events: a wider range score
   );
   await waitFor(() => expect(result.current.loading).toBe(false));
   await rerender({ range: 'year' });
-  await waitFor(() => expect(result.current.trend.series.score).toHaveLength(3));
-  // October 2025: speed 100 / (1 + 100/12/16) = 65.8 (×2), the rest 100: 90.2.
-  expect(result.current.trend.series.score[0]).toMatchObject({ when: 'in October 2025', value: 90 });
-  expect(result.current.trend.series.score[1]).toMatchObject({ when: 'in July', value: 99 });
-  // Every render drew July at its true Score, never a perfect 100 without its events.
-  expect(new Set(julyScores)).toEqual(new Set([99]));
+  await waitFor(() => expect(result.current.trend.series.score.map((p) => p.when)).toContain('in October 2025'));
+  expect(result.current.trend.series.score[0]).toMatchObject({ when: 'in October 2025' });
+  // Every render drew July at one Score: never one without its events.
+  expect(new Set(julyScores).size).toBe(1);
 });
 
 test('while the window’s events are still loading, nothing is scored: drives alone never read as perfect', async () => {
@@ -179,7 +182,7 @@ test('while the window’s events are still loading, nothing is scored: drives a
 test('a sync refreshes the analytics data', async () => {
   const { result } = await renderHook(() => useAnalytics('week'), { wrapper: wrapperFor(db, client, now) });
   await waitFor(() => expect(result.current.loading).toBe(false));
-  await seedTrips(db, [{ client_trip_id: uuid(9), started_at: NOW - DAY, tz: 'UTC', status: 'scored', miles: 2, points_net: 10 }]);
+  await seedTrips(db, [{ client_trip_id: uuid(9), started_at: NOW - DAY, tz: 'UTC', status: 'scored', miles: 2 }]);
   await invalidateAfterSync(client);
   await waitFor(() => expect(result.current.sums.drives).toBe(3));
 });

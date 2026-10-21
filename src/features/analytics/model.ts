@@ -1,27 +1,26 @@
 /**
  * The coaching model behind the Analytics tab and Home's tip card (plan D6). Pure and
- * deterministic: every function takes the instant it measures from (`now`) or a cutoff, never the
- * clock, so each rule is testable on its own.
+ * deterministic: every function takes the instant it measures from (`now`, `at`) or a cutoff, never
+ * the clock, so each rule is testable on its own.
  *
- * The radar's six categories and the Safety Rating at its centre come from the scoring package:
- * each category scores `categoryScore` (100 / (1 + its rating penalty per mile / 16), over the
- * window's miles floored at 10; Attention over the miles DashPal watched, with no score without
- * them), and the rating is their weighted average (`safetyRatingOf`: Speed and Phone use count
- * double). The categories are shown as whole numbers, the rating to 1 decimal. Time of day is not
- * scored at all (a card under When you drive comments on it instead). Local data includes pending
- * estimates, so the numbers here can lead the server's by a drive until it answers.
+ * The radar's five categories and the Safety Rating at its centre come from the scoring package's
+ * `ratingAt`: over the last 90 days, recent weeks counting more, each category judges the driver per
+ * chance to slip (hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, time over
+ * the limit per second with a known limit, Attention per mile DashPal watched), smoothed toward a
+ * typical driver's, and the rating is their weighted average with Speed counting double. The
+ * categories are shown as whole numbers, the rating to 1 decimal. Time of day is not scored at all
+ * (a card under When you drive comments on it instead). Local data includes drives still uploading,
+ * so the numbers here can lead the server's by a drive until it answers.
  */
 import {
   AXES as SCORING_AXES,
-  axisPenalties,
-  axisScores as categoryScores,
   DASHPAL_AXIS as SCORING_DASHPAL_AXIS,
-  RANKED_MIN_MILES,
-  safetyRatingOf,
-  zeroAxisPenalties,
+  RATING_WINDOW_DAYS,
+  ratingAt,
+  speedingChargedS,
   type AxisKey,
-  type AxisPenalties,
   type DriveEvent,
+  type RatingDrive,
   type SafetyRating,
 } from '@scoring';
 
@@ -39,16 +38,15 @@ const LABELS: Record<AxisKey, string> = {
   braking: 'Braking',
   turning: 'Turning',
   attention: 'Attention',
-  phone: 'Phone use',
   speed: 'Speed',
 };
 
-/** Radar order, clockwise from the top (the scoring package's); the two longest names take the top and bottom, where there is room. */
+/** Radar order, clockwise from the top (the scoring package's): Acceleration, Braking, Turning, Attention, Speed. */
 export const AXES: readonly { key: AxisKey; label: string }[] = SCORING_AXES.map((key) => ({ key, label: LABELS[key] }));
 
 export const AXIS_LABEL: Record<AxisKey, string> = LABELS;
 
-/** The axes the Safety Rating averages (all six), in radar order. */
+/** The axes the Safety Rating averages (all five), in radar order. */
 export const PENALTY_AXES: readonly AxisKey[] = AXES.map((a) => a.key);
 
 /** The axis that needs a paired DashPal: locked on the radar without one. */
@@ -57,7 +55,7 @@ export const DASHPAL_AXIS: AxisKey = SCORING_DASHPAL_AXIS;
 /** 0–100 per axis, whole numbers; null when the window has no miles (Attention: no watched miles). */
 export type AxisScores = Record<AxisKey, number | null>;
 
-/** What a window holds: the scored drives' totals the axes divide by. */
+/** What a window holds: the scored drives' totals. */
 export interface WindowTotals {
   drives: number;
   cleanDrives: number;
@@ -68,30 +66,54 @@ export interface WindowTotals {
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
-/**
- * The radar's scores: each category's `categoryScore` over the window (its rating penalty from the
- * window's active events, over the window's miles floored at 10; Attention over the miles DashPal
- * watched, null without them), as whole numbers. All null with no miles.
- */
-export function radarScores(events: readonly DriveEvent[], totals: Pick<WindowTotals, 'miles' | 'watchedMiles'>): AxisScores {
-  const s = categoryScores({ penalties: axisPenalties(events), miles: totals.miles, watchedMiles: totals.watchedMiles }, RANKED_MIN_MILES);
-  const whole = (v: number | null): number | null => (v === null ? null : Math.round(v));
-  return {
-    acceleration: whole(s.acceleration),
-    braking: whole(s.braking),
-    turning: whole(s.turning),
-    attention: whole(s.attention),
-    phone: whole(s.phone),
-    speed: whole(s.speed),
-  };
-}
+const byStart = (a: Pick<LocalDrive, 'startedAt' | 'clientTripId'>, b: Pick<LocalDrive, 'startedAt' | 'clientTripId'>): number =>
+  a.startedAt - b.startedAt || (a.clientTripId < b.clientTripId ? -1 : a.clientTripId > b.clientTripId ? 1 : 0);
 
 /**
- * The window's Safety Rating: the weighted average of its unrounded category scores
- * (`safetyRatingOf`), 1 decimal, ranked from 10 mi. The same arithmetic as the server's.
+ * Each drive's own events: an event belongs to the latest drive started at or before it (drives
+ * never overlap). `drives` in any order; events before the first drive belong to none.
  */
-export function windowRating(events: readonly DriveEvent[], totals: Pick<WindowTotals, 'miles' | 'watchedMiles'>): SafetyRating {
-  return safetyRatingOf({ penalties: axisPenalties(events), miles: totals.miles, watchedMiles: totals.watchedMiles });
+export function eventsByDrive(drives: readonly LocalDrive[], events: readonly DriveEvent[]): Map<string, DriveEvent[]> {
+  const sorted = [...drives].sort(byStart);
+  const out = new Map<string, DriveEvent[]>(sorted.map((d) => [d.clientTripId, []]));
+  if (sorted.length === 0) return out;
+  const evs = [...events].sort((a, b) => a.startedAt - b.startedAt);
+  let j = -1;
+  for (const e of evs) {
+    while (j + 1 < sorted.length && sorted[j + 1]!.startedAt <= e.startedAt) j += 1;
+    if (j >= 0) out.get(sorted[j]!.clientTripId)!.push(e);
+  }
+  return out;
+}
+
+/** The drives as the rating reads them: each with its miles, watched miles, chances (exposure) and its own events. */
+export function toRatingDrives(drives: readonly LocalDrive[], events: readonly DriveEvent[]): RatingDrive[] {
+  const own = eventsByDrive(drives, events);
+  return drives.map((d) => ({
+    id: d.clientTripId,
+    startedAt: d.startedAt,
+    miles: d.miles,
+    watchedMiles: d.watchedMiles,
+    exposure: d.exposure,
+    events: own.get(d.clientTripId) ?? [],
+  }));
+}
+
+const whole = (v: number | null): number | null => (v === null ? null : Math.round(v));
+
+/** Each category's score over the 90 days ending at `at`, as whole numbers (all null with no miles). */
+export function radarScores(drives: readonly LocalDrive[], events: readonly DriveEvent[], at: number): AxisScores {
+  return wholeScores(ratingAt(toRatingDrives(drives, events), at).scores);
+}
+
+function wholeScores(s: Record<AxisKey, number | null>): AxisScores {
+  return { acceleration: whole(s.acceleration), braking: whole(s.braking), turning: whole(s.turning), attention: whole(s.attention), speed: whole(s.speed) };
+}
+
+/** The Safety Rating as of `at` (`ratingAt`: 1 decimal, ranked from 10 mi in its 90 days). The same arithmetic as the server's. */
+export function windowRating(drives: readonly LocalDrive[], events: readonly DriveEvent[], at: number): SafetyRating {
+  const r = ratingAt(toRatingDrives(drives, events), at);
+  return { rating: r.rating, ranked: r.ranked };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -134,7 +156,6 @@ export const AXIS_TIP: Record<AxisKey, string> = {
   braking: 'Leave more room so you can brake gently.',
   acceleration: 'Roll onto the gas smoothly.',
   turning: 'Slow down before the turn, not in it.',
-  phone: 'Put the phone away before you pull out.',
   attention: 'Eyes on the road, and pull over when tired.',
 };
 
@@ -143,7 +164,6 @@ export const AXIS_TITLE: Record<AxisKey, string> = {
   braking: 'Brake more gently',
   acceleration: 'Ease into the gas',
   turning: 'Take turns slower',
-  phone: 'Phone down while driving',
   attention: 'Stay focused',
 };
 
@@ -227,19 +247,22 @@ export interface CoachWindow {
 }
 
 /**
- * Sub-scores, the Safety Rating and advice for the scored drives started at or after `sinceMs`.
- * `events` are the active events of the same window's scored drives (`readWindowEvents(db, sinceMs)`).
+ * Sub-scores, the Safety Rating (as of `at`) and advice for the scored drives started at or after
+ * `sinceMs` (the 90 days). `events` are the active events of the same window's scored drives
+ * (`readWindowEvents(db, sinceMs)`). One `ratingAt` call gives both the scores and the rating.
  */
-export function coachWindow(drives: readonly LocalDrive[], events: readonly DriveEvent[], sinceMs: number): CoachWindow {
+export function coachWindow(drives: readonly LocalDrive[], events: readonly DriveEvent[], sinceMs: number, at: number): CoachWindow {
   const totals: WindowTotals = { drives: 0, cleanDrives: 0, miles: 0, watchedMiles: 0 };
-  for (const d of scoredSince(drives, sinceMs)) {
+  const list = scoredSince(drives, sinceMs);
+  for (const d of list) {
     totals.drives += 1;
     totals.miles += d.miles;
     totals.watchedMiles += d.watchedMiles;
     if (d.clean === true) totals.cleanDrives += 1;
   }
-  const scores = radarScores(events, totals);
-  return { scores, rating: windowRating(events, totals), totals, coaching: coach(scores, totals) };
+  const r = ratingAt(toRatingDrives(list, events), at);
+  const scores = wholeScores(r.scores);
+  return { scores, rating: { rating: r.rating, ranked: r.ranked }, totals, coaching: coach(scores, totals) };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -249,8 +272,8 @@ export type Range = 'day' | 'week' | 'month' | 'year';
 export const RANGES: readonly Range[] = ['day', 'week', 'month', 'year'];
 export const RANGE_LABEL: Record<Range, string> = { day: 'Day', week: 'Week', month: 'Month', year: 'Year' };
 export const RANGE_DAYS: Record<Range, number> = { day: 1, week: 7, month: 30, year: 365 };
-/** The radar, summary and Home tip window: the Safety Rating's 30 days. */
-export const COACH_DAYS = 30;
+/** The radar, summary and Home tip window: the Safety Rating's 90 days. */
+export const COACH_DAYS = RATING_WINDOW_DAYS;
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
@@ -284,8 +307,16 @@ export interface WindowSums {
   hardBrake: number;
   hardAccel: number;
   hardCorner: number;
-  pickups: number;
-  handlingS: number;
+  /** The drives' chances to slip: slowdowns and speed-ups of 12 mph or more, real turns. */
+  slowdowns: number;
+  speedups: number;
+  turns: number;
+  /** Seconds driven at 10 mph or more under a known limit. */
+  limitS: number;
+  /** Seconds over the line after each speeding episode's grace (Σ `speedingChargedS` of the active speeding events). */
+  speedingS: number;
+  /** A drive in the window was recorded before the counters existed: its chances are estimated. */
+  exposureEstimated: boolean;
   /** DashPal's events (Attention's sheet only; never in the phone's stats). */
   eyesOff: number;
   drowsy: number;
@@ -294,12 +325,8 @@ export interface WindowSums {
   cleanDrives: number;
   /** Whole percent of drives that were clean; null with no drives. */
   cleanPct: number | null;
-  /** Net points of the window's drives (estimates included). */
-  points: number;
   /** Distance per drive; null with no drives. */
   avgMiles: number | null;
-  /** Net points per drive; null with no drives. */
-  avgPoints: number | null;
 }
 
 export const EMPTY_WINDOW: WindowSums = Object.freeze({
@@ -313,24 +340,30 @@ export const EMPTY_WINDOW: WindowSums = Object.freeze({
   hardBrake: 0,
   hardAccel: 0,
   hardCorner: 0,
-  pickups: 0,
-  handlingS: 0,
+  slowdowns: 0,
+  speedups: 0,
+  turns: 0,
+  limitS: 0,
+  speedingS: 0,
+  exposureEstimated: false,
   eyesOff: 0,
   drowsy: 0,
   watchedMiles: 0,
   cleanDrives: 0,
   cleanPct: null,
-  points: 0,
   avgMiles: null,
-  avgPoints: null,
 });
 
 /**
- * The metric sums over scored drives started at or after `sinceMs`. DashPal eyes-off and drowsy
- * are counted apart, for Attention's sheet only; every other stat leaves them out.
+ * The metric sums over scored drives started at or after `sinceMs`, with their chances to slip
+ * (each drive's exposure) and the seconds over the limit (from `events`, the active events of the
+ * scored drives: each belongs to the latest drive started at or before it). DashPal eyes-off and
+ * drowsy are counted apart, for Attention's sheet only; every other stat leaves them out.
  */
-export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null): WindowSums {
+export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null, events: readonly DriveEvent[] = []): WindowSums {
   const out = { ...EMPTY_WINDOW };
+  const scored = scoredSince(drives, null);
+  const own = events.length > 0 ? eventsByDrive(scored, events) : null;
   for (const d of scoredSince(drives, sinceMs)) {
     out.drives += 1;
     out.miles += d.miles;
@@ -340,27 +373,31 @@ export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null
     out.hardBrake += d.counts.hardBrake;
     out.hardAccel += d.counts.hardAccel;
     out.hardCorner += d.counts.hardCorner;
-    out.pickups += d.counts.pickups;
-    out.handlingS += d.counts.handlingS;
+    out.slowdowns += d.exposure.slowdowns;
+    out.speedups += d.exposure.speedups;
+    out.turns += d.exposure.turns;
+    out.limitS += d.exposure.limitS;
+    if (d.exposureEstimated) out.exposureEstimated = true;
     out.eyesOff += d.counts.eyesOff;
     out.drowsy += d.counts.drowsy;
     out.watchedMiles += d.watchedMiles;
     if (d.clean === true) out.cleanDrives += 1;
-    out.points += d.pointsNet ?? 0;
+    for (const e of own?.get(d.clientTripId) ?? []) {
+      if (e.type === 'speeding' && e.status !== 'removed') out.speedingS += speedingChargedS(e.durationS);
+    }
   }
   out.avgMph = out.durationS > 0 ? out.miles / (out.durationS / 3600) : null;
   out.nightPct = out.miles > 0 ? Math.round((Math.min(out.nightMiles, out.miles) / out.miles) * 100) : null;
   out.cleanPct = out.drives > 0 ? Math.round((out.cleanDrives / out.drives) * 100) : null;
   out.avgMiles = out.drives > 0 ? out.miles / out.drives : null;
-  out.avgPoints = out.drives > 0 ? out.points / out.drives : null;
   return out;
 }
 
 // ---------------------------------------------------------------------------------------------
 // Trend
 
-export type TrendKind = 'score' | 'events' | 'points';
-export const TREND_KINDS: readonly TrendKind[] = ['score', 'events', 'points'];
+export type TrendKind = 'score' | 'events';
+export const TREND_KINDS: readonly TrendKind[] = ['score', 'events'];
 
 /**
  * What one point of the trend stands for, per range: each drive of the day, each day of the
@@ -373,7 +410,7 @@ export const TREND_STEP: Record<Range, TrendStep> = { day: 'drive', week: 'day',
 export interface TrendPoint {
   /** Across the chart: 0 is the range's first slot (or its start, by drive), 1 the latest (now). */
   x: number;
-  /** Score: the Safety Rating, whole. Events: events per mile. Points: the running total. */
+  /** Score: the Safety Rating, whole. Events: events per mile. */
   value: number;
   /** When, for a screen reader: "at 8:15 AM", "now", "on Tuesday", "today", "in the week of Sep 22", "in March". */
   when: string;
@@ -389,28 +426,19 @@ export interface Trend {
   /** Every slot's tick (by day, week or month), or the 6-hour marks of a day; the chart thins them to fit. */
   ticks: TrendTick[];
   /**
-   * Per series, oldest first (see `trend`): Score per slot whose trailing 30 days hold 10 mi or
-   * more (by drive, also one now), Events per slot with miles, Points per slot from the first
-   * drive on. Score stays empty until the events are in.
+   * Per series, oldest first (see `trend`): Score per slot whose 90 days hold 10 mi or more (by
+   * drive, also one now), Events per slot with miles. Score stays empty until the events are in.
    */
   series: Record<TrendKind, TrendPoint[]>;
 }
 
 /**
- * How far back the trend's events reach, whatever the range: a year and the 30 days its first
+ * How far back the trend's events reach, whatever the range: a year and the 90 days its first
  * Score point looks back over. One read serves every range, so switching it never waits.
  */
 export const TREND_EVENT_DAYS = RANGE_DAYS.year + COACH_DAYS;
 
-export interface TrendOptions {
-  /**
-   * The driver's points total now (the server's, as Home's pill shows it): the Points line's
-   * latest value. Null or absent: the total after the latest drive, carried forward.
-   */
-  pointsNow?: number | null;
-}
-
-export const EMPTY_TREND: Trend = Object.freeze({ step: 'day', ticks: [], series: { score: [], events: [], points: [] } });
+export const EMPTY_TREND: Trend = Object.freeze({ step: 'day', ticks: [], series: { score: [], events: [] } });
 
 const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] as const;
@@ -479,35 +507,22 @@ function hourTicks(sinceMs: number, now: number): TrendTick[] {
  * The range's trend, per series, from the scored drives (all of them, as the cards read them) and
  * the active events of the scored drives since `TREND_EVENT_DAYS` ago (null while they load).
  *
- * - Score: the Safety Rating over time. Each point is the rating (`safetyRatingOf`, whole) over
- *   the 30-day window that ends at the point's moment: the end of its day, week or month (now for
- *   the current one), or on Day the drive's start, with one more point now. The window is counted
- *   as the radar's (the moment floored to the hour, less 30 days), so the latest point (now) is the
- *   radar's centre on every range. A point only where that window holds 10 mi or more (ranked), so
- *   a slot with no drives of its own can still have one.
- * - Events: the slot's speeding, hard brakes, hard starts, sharp turns and pickups, from the
- *   drives' counts like the window's numbers (phone handling is a time, not a count), per mile
- *   driven in the slot; a slot with no miles has no point.
- * - Points: the running points total. After each drive it is the total the server answered with
- *   (`result.progress.points`), or for a pending estimate (or a drive without a readable answer)
- *   the total before it plus its net points, never below 0. Each slot holds the total after the
- *   last drive at or before its end, carried through slots with no drives (on Day: a point at the
- *   range's start, one per drive, and one now); there is no point before the first drive. The
- *   latest point (now) is `pointsNow` when given: the server's total, the one Home's pill shows,
- *   so credits and challenge rewards since the last drive show. A drive still waiting for its
- *   answer counts in the points from its own on, except that latest one, which has it once the
- *   server counts it.
+ * - Score: the Safety Rating over time. Each point is `ratingAt` (whole) as of the point's moment:
+ *   the end of its day, week or month (now for the current one), or on Day the drive's start, with
+ *   one more point now. The latest point (now) is the radar's centre on every range. A point only
+ *   where those 90 days hold 10 mi or more (ranked), so a slot with no drives of its own can still
+ *   have one.
+ * - Events: the slot's speeding, hard brakes, hard starts and sharp turns, from the drives' counts
+ *   like the window's numbers, per mile driven in the slot; a slot with no miles has no point.
  *
  * An event belongs to the drive it happened in: the latest drive started at or before it (drives
  * never overlap).
  */
-export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent[] | null, range: Range, now: number, opts: TrendOptions = {}): Trend {
+export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent[] | null, range: Range, now: number): Trend {
   const sinceMs = rangeStart(now, range);
   const step = TREND_STEP[range];
   // Every scored drive, oldest first (a tie in start time keeps one order).
-  const scored = scoredSince(drives, null).sort(
-    (a, b) => a.startedAt - b.startedAt || (a.clientTripId < b.clientTripId ? -1 : a.clientTripId > b.clientTripId ? 1 : 0)
-  );
+  const scored = scoredSince(drives, null).sort(byStart);
   const first = scored.findIndex((d) => d.startedAt >= sinceMs);
   const list = first < 0 ? [] : scored.slice(first);
   const slots: Slot[] =
@@ -517,7 +532,7 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
   const ticks = step === 'drive' ? hourTicks(sinceMs, now) : slots.map((s) => ({ x: s.x, label: s.tick }));
   // Each slot's moment: the drive's start by drive, else the end of its period (now for the current one).
   const ends = slots.map((s, i) => (step === 'drive' ? s.start : Math.min(i + 1 < slots.length ? slots[i + 1]!.start - 1 : now, now)));
-  const series: Trend['series'] = { score: [], events: [], points: [] };
+  const series: Trend['series'] = { score: [], events: [] };
 
   // Events per mile, from the range's drives.
   const acc = slots.map(() => ({ miles: 0, events: 0 }));
@@ -529,97 +544,48 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
     }
     const a = acc[k]!;
     a.miles += d.miles;
-    a.events += d.counts.speeding + d.counts.hardBrake + d.counts.hardAccel + d.counts.hardCorner + d.counts.pickups;
+    a.events += d.counts.speeding + d.counts.hardBrake + d.counts.hardAccel + d.counts.hardCorner;
   });
   slots.forEach((s, i) => {
     const a = acc[i]!;
     if (a.miles > 0) series.events.push({ x: s.x, value: a.events / a.miles, when: s.when });
   });
 
-  // Score: the rating over each slot's trailing 30 days, from every drive that can fall in one.
+  // Score: the rating as of each slot's moment, from every drive that can fall in its 90 days.
   if (events !== null) {
-    const pool = scored.filter((d) => d.startedAt >= sinceMs - COACH_DAYS * DAY_MS);
-    const own: DriveEvent[][] = pool.map(() => []);
-    if (pool.length > 0) {
-      const sorted = [...events].sort((a, b) => a.startedAt - b.startedAt);
-      let j = -1;
-      for (const e of sorted) {
-        while (j + 1 < pool.length && pool[j + 1]!.startedAt <= e.startedAt) j += 1;
-        if (j >= 0) own[j]!.push(e);
-      }
-    }
-    // Active events only, rating penalties per category (`axisPenalties` skips removed ones).
-    const penalties = own.map((evs) => axisPenalties(evs));
-    /** The rating over the 30 days ending at `at`, whole; null while they hold under 10 mi. */
-    const ratingAt = (at: number): number | null => {
-      const from = windowStart(at, COACH_DAYS);
-      const p: AxisPenalties = zeroAxisPenalties();
-      let miles = 0;
-      let watchedMiles = 0;
-      pool.forEach((d, k) => {
-        if (d.startedAt < from || d.startedAt > at) return;
-        miles += d.miles;
-        watchedMiles += d.watchedMiles;
-        const q = penalties[k]!;
-        for (const axis of PENALTY_AXES) p[axis] += q[axis];
-      });
-      const r = safetyRatingOf({ penalties: p, miles, watchedMiles });
+    const pool = toRatingDrives(
+      scored.filter((d) => d.startedAt >= sinceMs - COACH_DAYS * DAY_MS),
+      events
+    );
+    /** The rating as of `at`, whole; null while its 90 days hold under 10 mi. */
+    const scoreAt = (at: number): number | null => {
+      const r = ratingAt(pool, at);
       return r.ranked && r.rating !== null ? Math.round(r.rating) : null;
     };
     slots.forEach((s, i) => {
-      const value = ratingAt(ends[i]!);
+      const value = scoreAt(ends[i]!);
       if (value !== null) series.score.push({ x: s.x, value, when: s.when });
     });
-    // By drive the line also ends now, as Points does: a drive leaving the 30 days since the last
-    // drive shows, and the latest point is the radar's centre.
+    // By drive the line also ends now: a drive leaving the 90 days since the last drive shows, and
+    // the latest point is the radar's centre.
     if (step === 'drive') {
-      const value = ratingAt(now);
+      const value = scoreAt(now);
       if (value !== null) series.score.push({ x: 1, value, when: 'now' });
     }
-  }
-
-  // Points: the running total after each drive, all time.
-  const totals: number[] = [];
-  let total = 0;
-  for (const d of scored) {
-    const answered = !d.estimate && d.result !== null ? d.result.progress.points : null;
-    total = answered !== null && Number.isFinite(answered) ? answered : Math.max(0, total + (d.pointsNet ?? 0));
-    totals.push(total);
-  }
-  /** The total after the last drive started at or before `at`; null before the first. */
-  const totalAt = (at: number): number | null => {
-    let k = -1;
-    while (k + 1 < scored.length && scored[k + 1]!.startedAt <= at) k += 1;
-    return k >= 0 ? totals[k]! : null;
-  };
-  // The server's total now, as Home's pill shows it. A drive still waiting for its answer is left
-  // out until the server counts it: the phone can't tell whether it already has.
-  const pinned = typeof opts.pointsNow === 'number' && Number.isFinite(opts.pointsNow) ? opts.pointsNow : null;
-  if (step === 'drive') {
-    const before = totalAt(sinceMs - 1);
-    if (before !== null) series.points.push({ x: 0, value: before, when: `at ${clock(sinceMs)}` });
-    list.forEach((d, i) => series.points.push({ x: slots[i]!.x, value: totals[first + i]!, when: slots[i]!.when }));
-    const latest = pinned ?? totalAt(now);
-    if (latest !== null) series.points.push({ x: 1, value: latest, when: 'now' });
-  } else {
-    slots.forEach((s, i) => {
-      const value = i === slots.length - 1 ? (pinned ?? totalAt(ends[i]!)) : totalAt(ends[i]!);
-      if (value !== null) series.points.push({ x: s.x, value, when: s.when });
-    });
   }
   return { step, ticks, series };
 }
 
 /**
- * The chart's value range per series: Score is always 0–100; Events and Points pad the data by
- * 15 % of its spread (at least 0.05 events a mile or 5 points each way), and neither dips below 0.
+ * The chart's value range per series: Score is always 0–100; Events pads the data by 15 % of its
+ * spread (at least 0.05 events a mile each way), and never dips below 0.
  */
 export function trendRange(kind: TrendKind, values: readonly number[]): { lo: number; hi: number } {
   if (kind === 'score') return { lo: 0, hi: 100 };
   if (values.length === 0) return { lo: 0, hi: 1 };
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const pad = Math.max((max - min) * 0.15, kind === 'events' ? 0.05 : 5);
+  const pad = Math.max((max - min) * 0.15, 0.05);
   return { lo: Math.max(0, min - pad), hi: max + pad };
 }
 
@@ -655,33 +621,20 @@ export interface Best {
 }
 
 export interface PersonalBests {
-  /** Most net points in one drive. */
-  mostPoints: Best | null;
   /** Longest clean drive, in miles. */
   longestClean: Best | null;
-  /** Longest drive with no pickup and no handling, in miles. */
-  longestPhoneFree: Best | null;
 }
 
 /** All-time bests over scored drives. The first (newest, as given) wins a tie. */
 export function personalBests(drives: readonly LocalDrive[]): PersonalBests {
-  let mostPoints: Best | null = null;
   let longestClean: Best | null = null;
-  let longestPhoneFree: Best | null = null;
   for (const d of drives) {
     if (!isScoredDrive(d)) continue;
-    if (d.pointsNet !== null && (mostPoints === null || d.pointsNet > mostPoints.value)) {
-      mostPoints = { value: d.pointsNet, clientTripId: d.clientTripId };
-    }
     if (d.miles > 0 && d.clean === true && (longestClean === null || d.miles > longestClean.value)) {
       longestClean = { value: d.miles, clientTripId: d.clientTripId };
     }
-    const phoneFree = d.counts.pickups === 0 && d.counts.handlingS === 0;
-    if (d.miles > 0 && phoneFree && (longestPhoneFree === null || d.miles > longestPhoneFree.value)) {
-      longestPhoneFree = { value: d.miles, clientTripId: d.clientTripId };
-    }
   }
-  return { mostPoints, longestClean, longestPhoneFree };
+  return { longestClean };
 }
 
 // ---------------------------------------------------------------------------------------------

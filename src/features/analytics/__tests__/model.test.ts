@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { AXES as SCORING_AXES, axisPenalties, axisScores as categoryScores, categoryScore, safetyRatingOf, weightedScore, zeroAxisPenalties, type DriveEvent } from '@scoring';
+import { AXES as SCORING_AXES, ratingAt, speedingChargedS, type DriveEvent, type Exposure } from '@scoring';
 
 import { EMPTY_COUNTS, type LocalDrive } from '@/data/queries/rows';
 import { encodePolyline, encodeRuns } from '@/lib/polyline';
@@ -12,8 +12,10 @@ import {
   bandIndex,
   coach,
   coachWindow,
+  COACH_DAYS,
   DASHPAL_AXIS,
   driveGrid,
+  eventsByDrive,
   fitLines,
   fitRegion,
   GOOD_TIP,
@@ -28,10 +30,12 @@ import {
   routeLines,
   scoredSince,
   showsTip,
+  toRatingDrives,
   trend,
   trendDirection,
   trendRange,
   TREND_EVENT_DAYS,
+  TREND_KINDS,
   weekdayIndex,
   windowRating,
   windowStart,
@@ -44,11 +48,14 @@ import {
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
+/** A 10 mi city drive's chances to slip. */
+const EXPOSURE: Exposure = { slowdowns: 25, speedups: 25, turns: 20, limitS: 900, movingS: 1100 };
+
 let seq = 0;
 function drive(over: Partial<LocalDrive> = {}): LocalDrive {
   seq += 1;
   return {
-    clientTripId: `d${seq}`,
+    clientTripId: `d${String(seq).padStart(4, '0')}`,
     startedAt: 0,
     endedAt: null,
     miles: 10,
@@ -58,8 +65,6 @@ function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     toLabel: null,
     polyline: null,
     status: 'scored',
-    pointsNet: 100,
-    estimate: false,
     clean: true,
     counts: { ...EMPTY_COUNTS },
     result: null,
@@ -68,8 +73,14 @@ function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     syncError: null,
     endCause: null,
     watchedMiles: 0,
+    origin: 'manual',
+    notDrivingExpired: false,
+    continuations: 0,
+    startSource: null,
+    exposure: { ...EXPOSURE },
+    exposureEstimated: false,
     ...over,
-  };
+  } as LocalDrive;
 }
 
 function ev(over: Partial<DriveEvent> & Pick<DriveEvent, 'type'>): DriveEvent {
@@ -82,77 +93,66 @@ const scores = (over: Partial<AxisScores> = {}): AxisScores => ({
   braking: 100,
   acceleration: 100,
   turning: 100,
-  phone: 100,
   attention: 100,
   ...over,
 });
 
+/** `ratingAt` over these drives and events, whole numbers per category (what the radar shows). */
+const wholeAt = (drives: readonly LocalDrive[], events: readonly DriveEvent[], at: number) => {
+  const s = ratingAt(toRatingDrives(drives, events), at).scores;
+  const r = (v: number | null) => (v === null ? null : Math.round(v));
+  return { acceleration: r(s.acceleration), braking: r(s.braking), turning: r(s.turning), attention: r(s.attention), speed: r(s.speed) };
+};
+
 describe('axes', () => {
-  test('radar order and labels: the scoring package’s categories', () => {
-    expect(AXES.map((a) => a.key)).toEqual(['acceleration', 'braking', 'turning', 'attention', 'phone', 'speed']);
+  test('radar order and labels: the scoring package’s five categories, no phone use', () => {
+    expect(AXES.map((a) => a.key)).toEqual(['acceleration', 'braking', 'turning', 'attention', 'speed']);
     expect(AXES.map((a) => a.key)).toEqual([...SCORING_AXES]);
-    expect(AXES.map((a) => a.label)).toEqual(['Acceleration', 'Braking', 'Turning', 'Attention', 'Phone use', 'Speed']);
-    expect(PENALTY_AXES).toEqual(['acceleration', 'braking', 'turning', 'attention', 'phone', 'speed']);
+    expect(AXES.map((a) => a.label)).toEqual(['Acceleration', 'Braking', 'Turning', 'Attention', 'Speed']);
+    expect(PENALTY_AXES).toEqual(['acceleration', 'braking', 'turning', 'attention', 'speed']);
     expect(DASHPAL_AXIS).toBe('attention');
+    expect(COACH_DAYS).toBe(90);
   });
 
-  test('each category scores 100 / (1 + penalty per mile / 16) over the miles floored at 10; Attention over the watched miles; whole numbers', () => {
-    const s = radarScores(
-      [ev({ type: 'speeding', tier: 'minor' }), ev({ type: 'hard_accel', tier: 'severe' }), ev({ type: 'phone_pickup', tier: 'severe' }), ev({ type: 'eyes_off', tier: 'severe' })],
-      { miles: 20, watchedMiles: 16 }
-    );
-    // 100 / (1 + 15/20/16) = 95.5; 100 / (1 + 30/20/16) = 91.4; 100 / (1 + 40/20/16) = 88.9; 100 / (1 + 40/16/16) = 86.5
-    expect(s).toEqual({ speed: 96, braking: 100, acceleration: 91, turning: 100, phone: 89, attention: 86 });
-    expect(s.phone).toBe(Math.round(categoryScore(40, 20, 10)));
-    // a short watched stretch counts as 10 miles: 100 / (1 + 40/10/16) = 80
-    expect(radarScores([ev({ type: 'eyes_off', tier: 'severe' })], { miles: 20, watchedMiles: 2 }).attention).toBe(80);
-    // nothing watched: no Attention score
-    expect(radarScores([ev({ type: 'eyes_off', tier: 'severe' })], { miles: 20, watchedMiles: 0 }).attention).toBeNull();
+  test('an event belongs to the latest drive started at or before it; one before every drive to none', () => {
+    const a = drive({ startedAt: 1000 });
+    const b = drive({ startedAt: 5000 });
+    const e1 = ev({ type: 'hard_brake', startedAt: 1500 });
+    const e2 = ev({ type: 'speeding', startedAt: 5000 });
+    const e3 = ev({ type: 'speeding', startedAt: 500 });
+    const own = eventsByDrive([b, a], [e2, e3, e1]);
+    expect(own.get(a.clientTripId)).toEqual([e1]);
+    expect(own.get(b.clientTripId)).toEqual([e2]);
+    const rated = toRatingDrives([a, b], [e1, e2]);
+    expect(rated.map((d) => [d.id, d.miles, d.events.length, d.exposure.slowdowns])).toEqual([
+      [a.clientTripId, 10, 1, 25],
+      [b.clientTripId, 10, 1, 25],
+    ]);
   });
 
-  test('rating penalties per category, DashPal’s on Attention; removed events count nothing; points multipliers never', () => {
-    const s = radarScores(
-      [
-        ev({ type: 'speeding', tier: 'moderate' }),
-        ev({ type: 'speeding', tier: 'severe', status: 'removed' }),
-        ev({ type: 'hard_brake', tier: 'severe' }),
-        // a pickup at 60 mph costs ×2 in points, never in the rating
-        ev({ type: 'phone_pickup', tier: 'severe', measured: { maxSpeedMph: 60 } }),
-        ev({ type: 'phone_handling', tier: 'severe', units: 3 }),
-        ev({ type: 'drowsy', tier: 'severe' }),
-      ],
-      { miles: 10, watchedMiles: 10 }
-    );
-    expect(s).toEqual({
-      speed: Math.round(categoryScore(40, 10, 10)),
-      braking: Math.round(categoryScore(25, 10, 10)),
-      acceleration: 100,
-      turning: 100,
-      phone: Math.round(categoryScore(40 + 30, 10, 10)),
-      attention: Math.round(categoryScore(50, 10, 10)),
-    });
+  test('the radar is ratingAt over the 90 days, as whole numbers: a hard brake counts against the slowdowns, not the miles', () => {
+    const now = 200 * DAY;
+    const list = [drive({ startedAt: now - DAY }), drive({ startedAt: now - 2 * DAY })];
+    const brake = ev({ type: 'hard_brake', tier: 'severe', startedAt: now - DAY + 60_000 });
+    const s = radarScores(list, [brake], now);
+    expect(s).toEqual(wholeAt(list, [brake], now));
+    expect(s.braking).toBeLessThan(s.acceleration!);
+    // twice the slowdowns, the same brake: a better Braking score, the miles unchanged
+    const busy = list.map((d) => ({ ...d, exposure: { ...d.exposure, slowdowns: 100 } }));
+    expect(radarScores(busy, [brake], now).braking!).toBeGreaterThan(s.braking!);
+    // nothing watched: no Attention score; nothing driven: no scores
+    expect(s.attention).toBeNull();
+    expect(radarScores([], [], now)).toEqual({ speed: null, braking: null, acceleration: null, turning: null, attention: null });
   });
 
-  test('a category never reaches 0 on real driving, and every score is null with no miles', () => {
-    // one severe speeding over 1 mi: the miles floor at 10, so 100 / (1 + 100/10/16) = 61.5
-    expect(radarScores([ev({ type: 'speeding', tier: 'severe' })], { miles: 1, watchedMiles: 0 }).speed).toBe(62);
-    const many = Array.from({ length: 30 }, () => ev({ type: 'speeding', tier: 'severe' }));
-    expect(radarScores(many, { miles: 10, watchedMiles: 0 }).speed).toBeGreaterThan(0);
-    expect(radarScores([], { miles: 0, watchedMiles: 0 })).toEqual({ speed: null, braking: null, acceleration: null, turning: null, phone: null, attention: null });
-  });
-
-  test('the Safety Rating is the weighted average of the unrounded categories (Speed and Phone use double), 1 decimal, ranked from 10 mi', () => {
-    const events = [ev({ type: 'speeding', tier: 'severe' }), ev({ type: 'phone_pickup', tier: 'severe' }), ev({ type: 'hard_brake', tier: 'minor' })];
-    // The scoring package's pinned value: speed 100, phone 40, braking 10 over 20 mi, no DashPal.
-    expect(windowRating(events, { miles: 20, watchedMiles: 0 })).toEqual({ rating: 89.6, ranked: true });
-    // Attention joins with DashPal miles: 40 over 20 watched.
-    expect(windowRating([...events, ev({ type: 'eyes_off', tier: 'severe' })], { miles: 20, watchedMiles: 20 })).toEqual({ rating: 89.5, ranked: true });
-    // It is the mean of the categories, never their sum: one severe speeding in a 9 mi month.
-    const short = windowRating([ev({ type: 'speeding', tier: 'severe' })], { miles: 9, watchedMiles: 0 });
-    expect(short).toEqual({ rating: 89, ranked: false });
-    const exact = categoryScores({ penalties: axisPenalties(events), miles: 20, watchedMiles: 0 }, 10);
-    expect(windowRating(events, { miles: 20, watchedMiles: 0 }).rating).toBe(Math.round(weightedScore(exact)! * 10) / 10);
-    expect(windowRating([], { miles: 0, watchedMiles: 0 })).toEqual({ rating: null, ranked: false });
+  test('the Safety Rating is ratingAt’s: 1 decimal, ranked from 10 mi in the 90 days', () => {
+    const now = 200 * DAY;
+    const list = [drive({ startedAt: now - DAY, miles: 6 }), drive({ startedAt: now - 3 * DAY, miles: 6 })];
+    const events = [ev({ type: 'speeding', tier: 'severe', durationS: 60, startedAt: now - DAY + 60_000, measured: { overMphS: 300 } })];
+    const r = ratingAt(toRatingDrives(list, events), now);
+    expect(windowRating(list, events, now)).toEqual({ rating: r.rating, ranked: true });
+    expect(windowRating(list.slice(0, 1), [], now)).toMatchObject({ ranked: false });
+    expect(windowRating([], [], now)).toEqual({ rating: null, ranked: false });
   });
 });
 
@@ -164,15 +164,16 @@ describe('levels and coaching', () => {
     expect(LEVEL_LABEL).toEqual({ good: 'Good', fair: 'Fair', poor: 'Poor' });
   });
 
-  test('every tip is one short line with no em dash', () => {
+  test('every tip is one short line with no em dash, and none is about the phone', () => {
     for (const tip of [...Object.values(AXIS_TIP), GOOD_TIP]) {
       expect(tip.length).toBeLessThanOrEqual(60);
-      expect(tip).not.toMatch(/[—!]/);
+      expect(tip).not.toMatch(/[—!]|phone/i);
     }
+    expect(Object.keys(AXIS_TIP).sort()).toEqual(['acceleration', 'attention', 'braking', 'speed', 'turning']);
   });
 
-  test('the weakest penalty axis decides; ties go to radar order', () => {
-    const c = coach(scores({ braking: 70, phone: 55, turning: 55 }), { drives: 5, miles: 50 });
+  test('the weakest axis decides; ties go to radar order', () => {
+    const c = coach(scores({ braking: 70, speed: 55, turning: 55 }), { drives: 5, miles: 50 });
     expect(c).toEqual({ level: 'poor', axis: 'turning', title: expect.any(String), tip: AXIS_TIP.turning, also: expect.any(Array) });
     expect(coach(scores({ speed: 75 }), { drives: 3, miles: 10 })).toMatchObject({ level: 'fair', axis: 'speed', tip: AXIS_TIP.speed });
   });
@@ -187,72 +188,62 @@ describe('levels and coaching', () => {
     expect(coach(scores({ speed: 80 }), { drives: 5, miles: 50 })).toEqual({ level: 'good', axis: null, title: expect.any(String), tip: GOOD_TIP, also: [] });
   });
 
-  test('also: the other fair or poor penalty axes, weakest first, ties in radar order', () => {
-    const c = coach(scores({ speed: 75, braking: 65, phone: 40, turning: 85 }), { drives: 5, miles: 50 });
-    expect(c.axis).toBe('phone');
+  test('also: the other fair or poor axes, weakest first, at most two, never the main axis', () => {
+    const c = coach(scores({ speed: 75, braking: 65, acceleration: 40, turning: 85 }), { drives: 5, miles: 50 });
+    expect(c.axis).toBe('acceleration');
     expect(c.also).toEqual([
       { axis: 'braking', level: 'fair' },
       { axis: 'speed', level: 'fair' },
     ]);
-    expect(coach(scores({ phone: 55, braking: 70, turning: 55 }), { drives: 5, miles: 50 }).also).toEqual([
-      { axis: 'phone', level: 'poor' },
-      { axis: 'braking', level: 'fair' },
-    ]);
-  });
-
-  test('also: at most two, never the main axis, empty with nothing else to watch', () => {
-    const c = coach(scores({ speed: 50, braking: 55, acceleration: 58, turning: 59, phone: 30 }), { drives: 5, miles: 50 });
-    expect(c.axis).toBe('phone');
-    expect(c.also).toEqual([
+    const many = coach(scores({ speed: 50, braking: 55, acceleration: 30, turning: 59, attention: 58 }), { drives: 5, miles: 50 });
+    expect(many.axis).toBe('acceleration');
+    expect(many.also).toEqual([
       { axis: 'speed', level: 'poor' },
       { axis: 'braking', level: 'poor' },
     ]);
     expect(coach(scores({ braking: 70 }), { drives: 5, miles: 50 }).also).toEqual([]);
-    expect(coach(scores({ braking: 70, phone: null }), { drives: 5, miles: 50 }).also).toEqual([]);
   });
-
 
   test('also: empty when good or without enough driving', () => {
     expect(coach(scores(), { drives: 5, miles: 50 }).also).toEqual([]);
-    expect(coach(scores({ phone: 10, braking: 10 }), { drives: 2, miles: 50 }).also).toEqual([]);
-    expect(coach(scores({ speed: null, braking: null, acceleration: null, turning: null, phone: null, attention: null }), { drives: 5, miles: 50 }).also).toEqual([]);
+    expect(coach(scores({ speed: 10, braking: 10 }), { drives: 2, miles: 50 }).also).toEqual([]);
+    expect(coach(scores({ speed: null, braking: null, acceleration: null, turning: null, attention: null }), { drives: 5, miles: 50 }).also).toEqual([]);
   });
 
   test('fewer than 3 drives or 10 miles: no advice', () => {
-    expect(coach(scores({ phone: 10 }), { drives: 2, miles: 50 }).level).toBeNull();
-    expect(coach(scores({ phone: 10 }), { drives: 5, miles: 9.9 }).level).toBeNull();
-    expect(coach(scores({ phone: 10 }), { drives: 5, miles: 9.9 }).axis).toBeNull();
+    expect(coach(scores({ speed: 10 }), { drives: 2, miles: 50 }).level).toBeNull();
+    expect(coach(scores({ speed: 10 }), { drives: 5, miles: 9.9 }).level).toBeNull();
+    expect(coach(scores({ speed: 10 }), { drives: 5, miles: 9.9 }).axis).toBeNull();
   });
 
   test('Home shows the tip only for fair or poor', () => {
-    expect(showsTip(coach(scores({ phone: 10 }), { drives: 5, miles: 50 }))).toBe(true);
-    expect(showsTip(coach(scores({ phone: 65 }), { drives: 5, miles: 50 }))).toBe(true);
+    expect(showsTip(coach(scores({ speed: 10 }), { drives: 5, miles: 50 }))).toBe(true);
+    expect(showsTip(coach(scores({ speed: 65 }), { drives: 5, miles: 50 }))).toBe(true);
     expect(showsTip(coach(scores(), { drives: 5, miles: 50 }))).toBe(false);
-    expect(showsTip(coach(scores({ phone: 10 }), { drives: 1, miles: 50 }))).toBe(false);
+    expect(showsTip(coach(scores({ speed: 10 }), { drives: 1, miles: 50 }))).toBe(false);
   });
 
-  test('coachWindow sums the window’s scored drives and scores the given events, with the window’s Safety Rating', () => {
-    const now = 100 * DAY;
-    const since = windowStart(now, 30);
-    const drives = [
+  test('coachWindow sums the 90 days’ scored drives and rates them with one ratingAt call', () => {
+    const now = 200 * DAY;
+    const since = windowStart(now, 90);
+    const list = [
       drive({ startedAt: now - DAY, miles: 6, clean: true, watchedMiles: 3 }),
       drive({ startedAt: now - 2 * DAY, miles: 4, clean: false }),
-      drive({ startedAt: now - 3 * DAY, miles: 5, clean: true, status: 'pending', pointsNet: 10 }),
+      drive({ startedAt: now - 3 * DAY, miles: 5, clean: true, status: 'pending' }),
       drive({ startedAt: now - 3 * DAY, miles: 50, status: 'not_driving' }),
-      drive({ startedAt: now - 40 * DAY, miles: 100 }),
+      drive({ startedAt: now - 100 * DAY, miles: 100 }),
     ];
-    const brakes = [1, 2, 3].map(() => ev({ type: 'hard_brake', tier: 'severe' }));
-    const out = coachWindow(drives, brakes, since);
+    const brakes = [1, 2, 3].map((i) => ev({ type: 'hard_brake', tier: 'severe', startedAt: now - 2 * DAY + i * 1000 }));
+    const out = coachWindow(list, brakes, since, now);
     expect(out.totals).toEqual({ drives: 3, cleanDrives: 2, miles: 15, watchedMiles: 3 });
-    // 3 × 25 over 15 mi: 100 / (1 + 5/16) = 76.2
-    expect(out.scores.braking).toBe(76);
-    expect(out.scores.attention).toBe(100);
-    expect(out.coaching).toMatchObject({ level: 'fair', axis: 'braking' });
-    // (7 × 100 + 76.2) / 8 over the six categories (Attention with DashPal's 3 mi), ranked at 15 mi.
-    expect(out.rating).toEqual({ rating: 97, ranked: true });
-    expect(out.rating.rating).toBe(Math.round(weightedScore(categoryScores({ penalties: axisPenalties(brakes), miles: 15, watchedMiles: 3 }, 10))! * 10) / 10);
+    const kept = scoredSince(list, since);
+    expect(out.scores).toEqual(wholeAt(kept, brakes, now));
+    const r = ratingAt(toRatingDrives(kept, brakes), now);
+    expect(out.rating).toEqual({ rating: r.rating, ranked: true });
+    expect(out.scores.braking!).toBeLessThan(85);
+    expect(out.coaching.axis).toBe('braking');
     // Under 10 mi the rating is there but unranked (the radar shows a dash).
-    expect(coachWindow(drives.slice(0, 1), [], since).rating).toEqual({ rating: 100, ranked: false });
+    expect(coachWindow(list.slice(0, 1), [], since, now).rating).toMatchObject({ ranked: false });
   });
 
   test("a category's own verdict: its tip when fair or poor, a compliment when good, the wait line without enough driving", () => {
@@ -278,23 +269,30 @@ describe('windows', () => {
     expect(rangeStart(now, 'year')).toBe(windowStart(now, 365));
   });
 
-  test('sums scored drives in the window; DashPal counts apart (Attention only); avg speed, clean rate and per-drive averages', () => {
-    const since = 1_000;
-    const drives = [
-      drive({ startedAt: 2_000, miles: 10, durationS: 1800, nightMiles: 3, pointsNet: 120, clean: true, counts: { ...EMPTY_COUNTS, eyesOff: 3, drowsy: 1 } }),
+  test('sums scored drives in the window with their chances to slip and the time over the limit; DashPal counts apart', () => {
+    const since = 10_000;
+    const list = [
+      drive({ startedAt: 20_000, miles: 10, durationS: 1800, nightMiles: 3, clean: true, counts: { ...EMPTY_COUNTS, eyesOff: 3, drowsy: 1 } }),
       drive({
-        startedAt: 1_000,
+        startedAt: 10_000,
         miles: 5,
         durationS: 1800,
-        pointsNet: -30,
         clean: false,
-        counts: { ...EMPTY_COUNTS, speeding: 2, hardBrake: 1, hardAccel: 1, hardCorner: 3, pickups: 1, handlingS: 45 },
+        counts: { ...EMPTY_COUNTS, speeding: 2, hardBrake: 1, hardAccel: 1, hardCorner: 3 },
+        exposure: { slowdowns: 12, speedups: 10, turns: 8, limitS: 600, movingS: 1500 },
+        exposureEstimated: true,
       }),
-      drive({ startedAt: 999, miles: 100, pointsNet: 999 }),
-      drive({ startedAt: 3_000, status: 'unscored', pointsNet: null, miles: 0.2 }),
-      drive({ startedAt: 3_000, status: 'pending', pointsNet: null }),
+      drive({ startedAt: 9_000, miles: 100 }),
+      drive({ startedAt: 30_000, status: 'unscored', reason: 'too_short', miles: 0.2 }),
     ];
-    expect(windowSums(drives, since)).toEqual({
+    const events = [
+      ev({ type: 'speeding', startedAt: 10_500, durationS: 40 }),
+      ev({ type: 'speeding', startedAt: 11_000, durationS: 20, status: 'removed' }),
+      ev({ type: 'speeding', startedAt: 12_000, durationS: 3 }),
+      // the drive before the window's: not counted
+      ev({ type: 'speeding', startedAt: 9_500, durationS: 100 }),
+    ];
+    expect(windowSums(list, since, events)).toEqual({
       drives: 2,
       miles: 15,
       durationS: 3600,
@@ -305,51 +303,51 @@ describe('windows', () => {
       hardBrake: 1,
       hardAccel: 1,
       hardCorner: 3,
-      pickups: 1,
-      handlingS: 45,
+      slowdowns: 37,
+      speedups: 35,
+      turns: 28,
+      limitS: 1500,
+      speedingS: speedingChargedS(40) + speedingChargedS(3),
+      exposureEstimated: true,
       eyesOff: 3,
       drowsy: 1,
       watchedMiles: 0,
       cleanDrives: 1,
       cleanPct: 50,
-      points: 90,
       avgMiles: 7.5,
-      avgPoints: 45,
     });
-    expect(windowSums(drives, null).drives).toBe(3);
+    expect(windowSums(list, null).drives).toBe(3);
+    // without the events the time over the limit is unknown: 0
+    expect(windowSums(list, since).speedingS).toBe(0);
   });
 
   test('an empty window has no averages and no clean rate', () => {
-    expect(windowSums([], 0)).toMatchObject({ drives: 0, avgMph: null, cleanPct: null, nightPct: null, points: 0, avgMiles: null, avgPoints: null });
+    expect(windowSums([], 0)).toMatchObject({ drives: 0, avgMph: null, cleanPct: null, nightPct: null, avgMiles: null, exposureEstimated: false });
+    expect(windowSums([], 0)).not.toHaveProperty('points');
   });
 
-  test('scoredSince keeps scored and pending-with-points drives in the window, in order', () => {
+  test('scoredSince keeps scored and uploading drives in the window, in order, never a short one', () => {
     const a = drive({ startedAt: 5 });
-    const b = drive({ startedAt: 4, status: 'pending', pointsNet: 3 });
+    const b = drive({ startedAt: 4, status: 'pending' });
     const c = drive({ startedAt: 3, status: 'merged' });
+    const short = drive({ startedAt: 3, status: 'pending', reason: 'too_short' });
     const d = drive({ startedAt: 1 });
-    expect(scoredSince([a, b, c, d], 2)).toEqual([a, b]);
+    expect(scoredSince([a, b, c, short, d], 2)).toEqual([a, b]);
   });
 });
 
 describe('personal bests', () => {
-  test('most points, longest clean and longest phone-free drive, over scored drives', () => {
-    const a = drive({ pointsNet: 150, miles: 8, clean: true });
-    const b = drive({ pointsNet: 90, miles: 30, clean: false, counts: { ...EMPTY_COUNTS, hardBrake: 1 } });
-    const c = drive({ pointsNet: 40, miles: 40, clean: false, counts: { ...EMPTY_COUNTS, pickups: 1 } });
-    const d = drive({ pointsNet: 500, miles: 90, clean: true, status: 'not_driving' });
-    const e = drive({ pointsNet: 150, miles: 12, clean: true, counts: { ...EMPTY_COUNTS, handlingS: 5 } });
-    expect(personalBests([a, b, c, d, e])).toEqual({
-      mostPoints: { value: 150, clientTripId: a.clientTripId },
-      longestClean: { value: 12, clientTripId: e.clientTripId },
-      longestPhoneFree: { value: 30, clientTripId: b.clientTripId },
-    });
+  test('the longest clean drive, over scored drives', () => {
+    const a = drive({ miles: 8, clean: true });
+    const b = drive({ miles: 30, clean: false, counts: { ...EMPTY_COUNTS, hardBrake: 1 } });
+    const d = drive({ miles: 90, clean: true, status: 'not_driving' });
+    const e = drive({ miles: 12, clean: true });
+    expect(personalBests([a, b, d, e])).toEqual({ longestClean: { value: 12, clientTripId: e.clientTripId } });
   });
 
   test('none without a qualifying drive', () => {
-    expect(personalBests([])).toEqual({ mostPoints: null, longestClean: null, longestPhoneFree: null });
-    const dirty = drive({ clean: false, counts: { ...EMPTY_COUNTS, pickups: 2 }, pointsNet: null, status: 'pending' });
-    expect(personalBests([dirty])).toEqual({ mostPoints: null, longestClean: null, longestPhoneFree: null });
+    expect(personalBests([])).toEqual({ longestClean: null });
+    expect(personalBests([drive({ clean: false })])).toEqual({ longestClean: null });
   });
 });
 
@@ -433,205 +431,107 @@ describe('trend', () => {
   const NOW = new Date(2026, 9, 14, 12, 0).getTime();
   const at = (day: number, h: number, m = 0) => new Date(2026, 9, day, h, m).getTime();
   const brakes = (n: number) => ({ ...EMPTY_COUNTS, hardBrake: n });
-  /** The rating `safetyRatingOf` gives these penalties over these miles, whole. */
-  const rated = (miles: number, penalties: Partial<ReturnType<typeof zeroAxisPenalties>>, watchedMiles = 0) =>
-    Math.round(safetyRatingOf({ penalties: { ...zeroAxisPenalties(), ...penalties }, miles, watchedMiles }).rating!);
+  /** The rating `ratingAt` gives these drives and events as of `when`, whole. */
+  const rated = (list: readonly LocalDrive[], events: readonly DriveEvent[], when: number) => Math.round(ratingAt(toRatingDrives(list, events), when).rating!);
 
-  test('a week: Score is the Safety Rating over each day’s trailing 30 days, Events per mile per day with drives, Points the running total', () => {
-    const tue1 = drive({ startedAt: at(13, 8), miles: 10, pointsNet: 100, counts: brakes(1) });
-    const tue2 = drive({ startedAt: at(13, 17), miles: 10, pointsNet: 50, counts: { ...EMPTY_COUNTS, speeding: 1, pickups: 1, handlingS: 30 } });
-    const fri = drive({ startedAt: at(9, 9), miles: 20, pointsNet: 120 });
-    // Before the range, inside every point's 30 days.
-    const old = drive({ startedAt: at(6, 9), miles: 50, pointsNet: 999 });
+  test('two series, Score and Events; no Points', () => {
+    expect(TREND_KINDS).toEqual(['score', 'events']);
+    expect(trend([], [], 'week', NOW).series).toEqual({ score: [], events: [] });
+  });
+
+  test('a week: Score is the Safety Rating as of each day’s end, Events per mile per day with drives', () => {
+    const tue1 = drive({ startedAt: at(13, 8), miles: 10, counts: brakes(1) });
+    const tue2 = drive({ startedAt: at(13, 17), miles: 10, counts: { ...EMPTY_COUNTS, speeding: 1 } });
+    const fri = drive({ startedAt: at(9, 9), miles: 20 });
+    // Before the range, inside every point's 90 days.
+    const old = drive({ startedAt: at(6, 9), miles: 50 });
     const events = [
       ev({ type: 'hard_brake', tier: 'severe', startedAt: at(13, 8, 10) }),
-      ev({ type: 'speeding', tier: 'moderate', startedAt: at(13, 17, 5), durationS: 40 }),
-      ev({ type: 'phone_pickup', startedAt: at(13, 17, 9) }),
+      ev({ type: 'speeding', tier: 'moderate', startedAt: at(13, 17, 5), durationS: 40, measured: { overMphS: 120 } }),
       // DashPal counts only over the miles it watched (none here); a removed event counts nothing.
       ev({ type: 'drowsy', tier: 'severe', startedAt: at(13, 17, 12) }),
       ev({ type: 'hard_brake', tier: 'severe', startedAt: at(9, 9, 5), status: 'removed' }),
     ];
-    const t = trend([tue2, tue1, fri, old], events, 'week', NOW);
+    const list = [tue2, tue1, fri, old];
+    const t = trend(list, events, 'week', NOW);
     expect(t.step).toBe('day');
     // A rolling week touches 8 local days: last Wednesday afternoon through today.
     expect(t.ticks.map((k) => k.label)).toEqual(['W', 'T', 'F', 'S', 'S', 'M', 'T', 'W']);
     expect(t.ticks[0]!.x).toBe(0);
     expect(t.ticks[7]!.x).toBe(1);
-    // Every day has a Score, drives of its own or not: the old drive's 50 mi rank each window.
-    const tuesday = rated(90, { braking: 25, speed: 40, phone: 40 });
-    expect(tuesday).toBeLessThan(100);
-    expect(t.series.score.map((q) => q.value)).toEqual([100, 100, 100, 100, 100, 100, tuesday, tuesday]);
+    // Every day has a Score, drives of its own or not: the old drive's 50 mi rank each day.
+    const values = t.series.score.map((q) => q.value);
+    expect(values).toHaveLength(8);
+    expect(values[5]).toBe(rated(list, events, at(13, 0) - 1));
+    expect(values[6]).toBe(rated(list, events, at(14, 0) - 1));
+    expect(values[6]!).toBeLessThan(values[5]!);
+    expect(values[7]).toBe(rated(list, events, NOW));
     expect(t.series.score.map((q) => q.when)).toEqual(['last Wednesday', 'on Thursday', 'on Friday', 'on Saturday', 'on Sunday', 'on Monday', 'on Tuesday', 'today']);
-    // Tuesday: a brake, a speeding and a pickup over 20 mi; handling time is not a count. Friday: none.
+    // Tuesday: a brake and a speeding over 20 mi. Friday: none.
     expect(t.series.events).toEqual([
       { x: 2 / 7, value: 0, when: 'on Friday' },
-      { x: 6 / 7, value: 3 / 20, when: 'on Tuesday' },
+      { x: 6 / 7, value: 2 / 20, when: 'on Tuesday' },
     ]);
-    // No answers stored: each drive adds its net points to the total before it.
-    expect(t.series.points.map((q) => q.value)).toEqual([999, 999, 1119, 1119, 1119, 1119, 1269, 1269]);
   });
 
-  test('the latest Score point is the radar’s centre: the same 30 days, the same arithmetic', () => {
-    const list = [0.5, 3, 9, 20, 29, 33, 45].map((d, i) => drive({ startedAt: NOW - d * DAY, miles: 4 + i, watchedMiles: i % 2 === 0 ? 2 : 0 }));
+  test('the latest Score point is the radar’s centre: the same 90 days, the same arithmetic', () => {
+    const list = [0.5, 3, 9, 20, 29, 60, 95].map((d, i) => drive({ startedAt: NOW - d * DAY, miles: 4 + i, watchedMiles: i % 2 === 0 ? 2 : 0 }));
     const events = [
       ev({ type: 'hard_brake', tier: 'severe', startedAt: NOW - 0.5 * DAY + 60_000 }),
-      ev({ type: 'phone_pickup', startedAt: NOW - 9 * DAY + 60_000 }),
       ev({ type: 'eyes_off', tier: 'severe', startedAt: NOW - 20 * DAY + 60_000 }),
       ev({ type: 'speeding', tier: 'severe', startedAt: NOW - 29 * DAY + 60_000 }),
-      ev({ type: 'speeding', tier: 'severe', startedAt: NOW - 33 * DAY + 60_000 }),
+      ev({ type: 'speeding', tier: 'severe', startedAt: NOW - 95 * DAY + 60_000 }),
     ];
-    const since = windowStart(NOW, 30);
+    const end = NOW + HOUR - 1;
+    const since = windowStart(end, 90);
     // The radar reads the window's own events (`readWindowEvents(since)`): those of drives started since.
     const own = events.filter((e) => e.startedAt >= since);
-    const centre = coachWindow(list, own, since).rating;
+    const centre = coachWindow(list, own, since, end).rating;
     expect(centre.ranked).toBe(true);
     for (const range of ['day', 'week', 'month', 'year'] as const) {
-      const score = trend(list, events, range, NOW + HOUR - 1).series.score;
+      const score = trend(list, events, range, end).series.score;
       expect(score[score.length - 1]!.value).toBe(Math.round(centre.rating!));
     }
   });
 
-  test('by drive, the Score line also ends now, at the radar’s centre: a drive that has left the 30 days since the last drive no longer counts', () => {
-    const end = NOW + HOUR - 1;
-    // The day's only drive started 20 h ago; 30 days before it, a drive with a severe speeding that
-    // has left the radar's 30 days since.
-    const last = drive({ startedAt: NOW - 20 * HOUR, miles: 12 });
-    const old = drive({ startedAt: NOW - 30 * DAY - 10 * HOUR, miles: 12 });
-    const events = [ev({ type: 'speeding', tier: 'severe', startedAt: old.startedAt + 60_000 })];
-    const since = windowStart(end, 30);
-    const centre = coachWindow([last, old], events.filter((e) => e.startedAt >= since), since).rating;
-    expect(centre).toMatchObject({ rating: 100, ranked: true });
-    const score = trend([last, old], events, 'day', end).series.score;
-    // At the drive's start the old drive still counted; now it doesn't, as on the radar.
-    expect(score[0]!.value).toBe(rated(24, { speed: 100 }));
-    expect(score[0]!.value).toBeLessThan(100);
-    expect(score.map((q) => [q.x, q.when])).toEqual([
-      [(4 * HOUR) / (end - rangeStart(end, 'day')), 'at 4:00 PM'],
-      [1, 'now'],
-    ]);
-    expect(score[1]!.value).toBe(Math.round(centre.rating!));
-  });
-
-  test('Score needs 10 mi in a point’s 30 days; an event belongs to the latest drive started at or before it', () => {
-    // 12 mi on Sep 10 rank the windows that still hold it (to the end of Friday Oct 9), then leave.
-    const sep = drive({ startedAt: new Date(2026, 8, 10, 9).getTime(), miles: 12 });
+  test('Score needs 10 mi in a point’s 90 days; an event belongs to the latest drive started at or before it', () => {
+    // 12 mi on Jul 10 rank the days that still hold it (to Oct 7), then leave.
+    const jul = drive({ startedAt: new Date(2026, 6, 10, 9).getTime(), miles: 12 });
     // Monday 23:50: its brake at 00:10 is still its own.
     const late = drive({ startedAt: at(12, 23, 50), miles: 5 });
     const today = drive({ startedAt: at(14, 7), miles: 6 });
     const events = [
       // Before any drive the trend holds: nobody's, so nothing.
-      ev({ type: 'speeding', tier: 'severe', startedAt: new Date(2026, 8, 8, 9).getTime() }),
+      ev({ type: 'speeding', tier: 'severe', startedAt: new Date(2026, 6, 8, 9).getTime() }),
       ev({ type: 'hard_brake', tier: 'severe', startedAt: at(13, 0, 10) }),
     ];
-    const t = trend([today, late, sep], events, 'week', NOW);
-    expect(t.series.score.map((q) => [q.when, q.value])).toEqual([
-      ['last Wednesday', 100],
-      ['on Thursday', 100],
-      ['on Friday', 100],
-      // Saturday to Tuesday hold under 10 mi; today holds 11 with Monday's brake.
-      ['today', rated(11, { braking: 25 })],
-    ]);
+    const list = [today, late, jul];
+    const t = trend(list, events, 'week', NOW);
+    expect(t.series.score.map((q) => q.when)).toEqual(['last Wednesday', 'today']);
+    // today holds 11 mi with Monday's brake
+    expect(t.series.score.at(-1)!.value).toBe(rated([today, late], events.slice(1), NOW));
+    expect(t.series.score.at(-1)!.value).toBeLessThan(100);
   });
 
   test('Score waits for the events; a slot with no miles has no Events point', () => {
-    const t = trend([drive({ startedAt: at(13, 8), miles: 6 }), drive({ startedAt: at(11, 8), miles: 0, pointsNet: -20 })], null, 'week', NOW);
+    const t = trend([drive({ startedAt: at(13, 8), miles: 6 }), drive({ startedAt: at(11, 8), miles: 0 })], null, 'week', NOW);
     expect(t.series.score).toEqual([]);
     expect(t.series.events.map((q) => q.when)).toEqual(['on Tuesday']);
-    // The total never goes below 0: −20 from nothing is 0, then +100.
-    expect(t.series.points.map((q) => [q.when, q.value])).toEqual([
-      ['on Sunday', 0],
-      ['on Monday', 0],
-      ['on Tuesday', 100],
-      ['today', 100],
-    ]);
-    expect(trend([], [], 'week', NOW).series).toEqual({ score: [], events: [], points: [] });
   });
 
-  test('Points: the total each answered drive came back with, an estimate added to the one before, carried forward, the latest pinned to the total now', () => {
-    const answered = (points: number) => ({
-      tripId: 't',
-      clientTripId: 'c',
-      mergedInto: null,
-      scored: true,
-      reason: null,
-      breakdown: {} as never,
-      net: 0,
-      streak: { before: 0, after: 0, outcome: 'grew' as const, nextMult: 1, atRisk: false, freezes: 0, freezeEarned: false },
-      progress: { points, lifetime: points, level: 1, levelUp: false, safetyRating: null, ranked: false },
-      achievements: [],
-      challenges: [],
-      league: { tier: 'bronze', placed: false },
-    });
-    const list = [
-      drive({ startedAt: at(1, 9), pointsNet: 300, result: answered(500) }),
-      drive({ startedAt: at(9, 9), pointsNet: 80, result: answered(600) }),
-      // An estimate: no answer yet, the total before it plus its net.
-      drive({ startedAt: at(13, 9), pointsNet: 40, estimate: true, status: 'pending' }),
-      // Not scored: counts nowhere.
-      drive({ startedAt: at(12, 9), pointsNet: 999, status: 'not_driving', result: answered(5000) }),
-    ];
-    const t = trend(list, [], 'week', NOW);
-    expect(t.series.points.map((q) => q.value)).toEqual([500, 500, 600, 600, 600, 600, 640, 640]);
-    // The server's total now (a challenge reward since) is the latest point, as Home's pill shows it.
-    const pinned = trend(list, [], 'week', NOW, { pointsNow: 840 });
-    expect(pinned.series.points.map((q) => q.value)).toEqual([500, 500, 600, 600, 600, 600, 640, 840]);
-    expect(pinned.series.points[7]).toMatchObject({ x: 1, when: 'today' });
-    // No drive yet: the total now alone, a single point.
-    expect(trend([], [], 'week', NOW, { pointsNow: 0 }).series.points).toEqual([{ x: 1, value: 0, when: 'today' }]);
-    expect(trend(list, [], 'week', NOW, { pointsNow: null }).series.points[7]!.value).toBe(640);
-  });
-
-  test('Points: the latest point is the server’s total alone, so a drive still waiting is never counted twice', () => {
-    const answered = (points: number) =>
-      ({ net: 0, progress: { points, lifetime: points, level: 1, levelUp: false, safetyRating: null, ranked: false } }) as unknown as LocalDrive['result'];
-    const waiting = (over: Partial<LocalDrive>) => drive({ estimate: true, status: 'pending', ...over });
-    // Answered yesterday at 1,000; this morning's drive is still an estimate (+80).
-    const list = [drive({ startedAt: at(13, 18), pointsNet: 60, result: answered(1000) }), waiting({ startedAt: at(14, 8), pointsNet: 80 })];
-    const values = (pointsNow: number, range: 'day' | 'week' = 'day') =>
-      trend(list, [], range, NOW, { pointsNow }).series.points.map((q) => [q.when, q.value]);
-    // The server already counted it (its answer was lost on the way, or the summary came first):
-    // the line ends on that total, never the estimate on top of it.
-    expect(values(1080)).toEqual([
-      ['at 6:00 PM', 1000],
-      ['at 8:00 AM', 1080],
-      ['now', 1080],
-    ]);
-    // Not counted yet: the drive shows in its own point, and now is the server's total until it is.
-    expect(values(1000)).toEqual([
-      ['at 6:00 PM', 1000],
-      ['at 8:00 AM', 1080],
-      ['now', 1000],
-    ]);
-    // A week reads the same: today's point is the server's total, whatever is still waiting.
-    expect(values(1080, 'week')).toEqual([
-      ['on Tuesday', 1000],
-      ['today', 1080],
-    ]);
-    expect(values(1000, 'week')).toEqual([
-      ['on Tuesday', 1000],
-      ['today', 1000],
-    ]);
-    // A credit since shows as it is.
-    expect(values(1200).at(-1)).toEqual(['now', 1200]);
-  });
-
-  test('unscored drives stay out; a drive before the range carries its total in, with no Events point', () => {
+  test('unscored drives stay out', () => {
     const t = trend(
-      [
-        drive({ startedAt: at(13, 8), status: 'unscored', pointsNet: null }),
-        drive({ startedAt: at(13, 9), status: 'not_driving', pointsNet: null }),
-        drive({ startedAt: new Date(2026, 8, 1, 9).getTime(), pointsNet: 100 }),
-      ],
+      [drive({ startedAt: at(13, 8), status: 'unscored', reason: 'too_short' }), drive({ startedAt: at(13, 9), status: 'not_driving' })],
       [],
       'month',
       NOW
     );
     expect(t.series.events).toEqual([]);
-    expect(t.series.points.map((q) => q.value)).toEqual([100, 100, 100, 100, 100]);
+    expect(t.series.score).toEqual([]);
   });
 
-  test('a day is a point per drive, placed by its start time, with 6-hour marks; Points also start the range and end now', () => {
-    const t = trend([drive({ startedAt: at(14, 8, 15), pointsNet: 40 }), drive({ startedAt: at(13, 18) })], [], 'day', NOW);
+  test('a day is a point per drive, placed by its start time, with 6-hour marks; Score also ends now', () => {
+    const t = trend([drive({ startedAt: at(14, 8, 15) }), drive({ startedAt: at(13, 18) })], [], 'day', NOW);
     expect(t.step).toBe('drive');
     expect(t.ticks).toEqual([
       { x: 0, label: '12p' },
@@ -644,23 +544,10 @@ describe('trend', () => {
       { x: 0.25, value: 0, when: 'at 6:00 PM' },
       { x: (20.25 * HOUR) / DAY, value: 0, when: 'at 8:15 AM' },
     ]);
-    // Score: one per drive and one now, as Points.
-    expect(t.series.score).toEqual([
-      { x: 0.25, value: 100, when: 'at 6:00 PM' },
-      { x: (20.25 * HOUR) / DAY, value: 100, when: 'at 8:15 AM' },
-      { x: 1, value: 100, when: 'now' },
-    ]);
-    expect(t.series.points).toEqual([
-      { x: 0.25, value: 100, when: 'at 6:00 PM' },
-      { x: (20.25 * HOUR) / DAY, value: 140, when: 'at 8:15 AM' },
-      { x: 1, value: 140, when: 'now' },
-    ]);
-    // A drive before the range starts the line at the range's start.
-    const carried = trend([drive({ startedAt: at(14, 8, 15), pointsNet: 40 }), drive({ startedAt: at(12, 18) })], [], 'day', NOW, { pointsNow: 150 });
-    expect(carried.series.points).toEqual([
-      { x: 0, value: 100, when: 'at 12:00 PM' },
-      { x: (20.25 * HOUR) / DAY, value: 140, when: 'at 8:15 AM' },
-      { x: 1, value: 150, when: 'now' },
+    expect(t.series.score.map((q) => [q.x, q.when])).toEqual([
+      [0.25, 'at 6:00 PM'],
+      [(20.25 * HOUR) / DAY, 'at 8:15 AM'],
+      [1, 'now'],
     ]);
   });
 
@@ -672,8 +559,6 @@ describe('trend', () => {
       [0, 'in the week of Sep 14'],
       [1, 'in the week of Oct 12'],
     ]);
-    expect(t.series.points.map((q) => q.value)).toEqual([100, 100, 100, 100, 300]);
-    // Score from the first week (10 mi) to the last; the three drives' 30 mi fall in the last window.
     expect(t.series.score.map((q) => q.when)).toEqual(['in the week of Sep 14', 'in the week of Sep 21', 'in the week of Sep 28', 'in the week of Oct 5', 'in the week of Oct 12']);
   });
 
@@ -686,25 +571,21 @@ describe('trend', () => {
       [5 / 12, 'in March'],
       [1, 'in October 2026'],
     ]);
-    // A month has a Score when the 30 days to its end hold a drive's 10 mi: never the month after.
-    expect(t.series.score.map((q) => q.when)).toEqual(['in October 2025', 'in March', 'in October 2026']);
-    expect(t.series.points).toHaveLength(13);
+    // A month has a Score while the 90 days to its end hold a drive's 10 mi.
+    expect(t.series.score.map((q) => q.when)).toEqual(['in October 2025', 'in November', 'in December', 'in March', 'in April', 'in May', 'in October 2026']);
   });
 
-  test('the events reach back a year and the 30 days before it', () => {
-    expect(TREND_EVENT_DAYS).toBe(395);
+  test('the events reach back a year and the 90 days before it', () => {
+    expect(TREND_EVENT_DAYS).toBe(455);
   });
 
-  test('range: Score is 0–100; Events and Points pad their spread and never go below 0', () => {
+  test('range: Score is 0–100; Events pads its spread and never goes below 0', () => {
     expect(trendRange('score', [40, 90])).toEqual({ lo: 0, hi: 100 });
     expect(trendRange('events', [1, 3])).toEqual({ lo: 0.7, hi: 3.3 });
     expect(trendRange('events', [0, 10])).toEqual({ lo: 0, hi: 11.5 });
     const flat = trendRange('events', [0.1, 0.1]);
     expect(flat.lo).toBeCloseTo(0.05);
     expect(flat.hi).toBeCloseTo(0.15);
-    expect(trendRange('points', [100, 300])).toEqual({ lo: 70, hi: 330 });
-    expect(trendRange('points', [50, 50])).toEqual({ lo: 45, hi: 55 });
-    expect(trendRange('points', [0, 2])).toEqual({ lo: 0, hi: 7 });
     expect(trendRange('events', [])).toEqual({ lo: 0, hi: 1 });
   });
 
