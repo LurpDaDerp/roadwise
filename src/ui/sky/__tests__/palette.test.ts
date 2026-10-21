@@ -1,8 +1,8 @@
 import { contrastRatio, relativeLuminance } from '@/ui/contrast';
 import { ensureContrast, ensureGround, lerpDeep, mix, opaque, over, parseColor } from '@/ui/sky/color';
-import { defaultMood, plainBundle, skyBundle, skyVeils, type SkyMood } from '@/ui/sky/palette';
+import { defaultMood, HUD_SHADE, hudSky, plainBundle, skyBundle, skyVeils, type SkyMood } from '@/ui/sky/palette';
 import type { SkyPhase } from '@/ui/sky/phase';
-import type { WeatherKind } from '@/ui/sky/weather';
+import { CLEAR, type WeatherKind } from '@/ui/sky/weather';
 import { HUD } from '@/ui/drive/hudTokens';
 import { tokens } from '@/ui/tokens';
 
@@ -160,6 +160,32 @@ test("the driving screen's sky, in both HUD palettes: its print at 7:1, its aler
       expectContrast(p.ink, sky.chromeEdge, 7, `${name(m)} ${which} ink on chrome edge`);
     }
   }
+});
+
+test("the driving screen's night sky is a step darker than its day shade, its contrast kept", () => {
+  for (let i = 0; i < 3; i++) expect(HUD_SHADE.night[i]).toBeGreaterThan(HUD_SHADE.day[i]!);
+  const L = (s: readonly string[]) => s.map((c) => relativeLuminance(c));
+  // The brightest ground the night print reads on at 7:1: a sky the contrast repair holds down
+  // lands at about this, whatever the shade.
+  const p = HUD.night;
+  const dimmest = Math.min(...[p.ink, p.inkMuted, p.haloInk, p.haloInkMuted].map((c) => relativeLuminance(c)));
+  const floor = (dimmest + 0.05) / 7 - 0.05;
+  // Any sky: the night shade never lifts a stop above the day shade's (or that floor).
+  for (const m of [...moods, ...lightCloud]) {
+    const stops = skyBundle(m).sky.backdrop;
+    const night = L(hudSky(stops, HUD.night, HUD_SHADE.night).stops);
+    const dayShade = L(hudSky(stops, HUD.night, HUD_SHADE.day).stops);
+    night.forEach((l, i) => expect(l).toBeLessThanOrEqual(Math.max(dayShade[i]!, floor) + 1e-9));
+  }
+  for (const kind of kinds) {
+    const night = skyBundle({ phase: 'night', glow: 0, weather: { kind, intensity: 'moderate' } }).sky.hud.night;
+    const day = skyBundle({ phase: 'night', glow: 0, weather: { kind, intensity: 'moderate' } }).sky.hud.day;
+    // The ground the driving screen's print sits on (the middle stop) is darker than the day set's.
+    expect(relativeLuminance(night.stops[1])).toBeLessThan(relativeLuminance(day.stops[1]));
+  }
+  // A clear night: the ground sits well under the old day shade's (0.0053).
+  const clearNight = skyBundle({ phase: 'night', glow: 0, weather: CLEAR }).sky.hud.night.stops;
+  expect(relativeLuminance(clearNight[1])).toBeLessThan(0.004);
 });
 
 test("the driving screen's sky follows the hour and the weather", () => {

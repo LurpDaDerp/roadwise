@@ -278,23 +278,31 @@ function deepen(g: string, inks: readonly string[], min: number, layers: readonl
 }
 
 /**
+ * How far the driving screen's sky is taken toward black, top to bottom, under each HUD palette.
+ * The night set sits deeper than the day set, so the screen is calmer on an unlit road.
+ */
+export const HUD_SHADE: Readonly<Record<'day' | 'night', readonly [number, number, number]>> = {
+  day: [0.12, 0.2, 0.3],
+  night: [0.3, 0.4, 0.5],
+};
+
+/**
  * The driving screen's sky for one HUD palette (see {@link HudSky}): the hour's sky a little more
  * vivid, deepened in its own hue to the HUD's contrast, settling darker toward the foot so End and
  * the navigation button sit on the calmest part.
  */
-function hudSky(stops: SkyStops, p: HudPalette): HudSky {
+export function hudSky(stops: SkyStops, p: HudPalette, shade: readonly [number, number, number]): HudSky {
   const text = [p.ink, p.inkMuted, p.haloInk, p.haloInkMuted];
   const fix = (g: string) => deepen(deepen(deepen(g, text, 7), [p.minor, p.moderate, p.severe], AA), [p.haloSevere], 3);
-  const shade = [0.12, 0.2, 0.3];
   const deep = stops.map((st, i) => fix(mix(vivid(st, 0.55), '#000000', shade[i]!))) as SkyStops;
   return { stops: deep, chrome: fix(mix(deep[1], '#000000', 0.4)), chromeEdge: ensureGround(mix(deep[1], '#FFFFFF', 0.14), [p.ink], 7, '#000000') };
 }
 
+/** The weather layer's colours: what can drift over the painted sky. */
+type Veils = Pick<SkyColors, 'cover' | 'cloud' | 'particle' | 'wash'>;
+
 function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
   const { phase, weather } = mood;
-  const paint = rawPaint(mood, scheme);
-  const veil = layers(phase, scheme, weather);
-
   const clear = weather.kind === 'clear';
   const haloBase = { day: '#FFF6DC', dawn: '#FFD9B0', dusk: '#FFB07A', night: '#C8D6FF' }[phase];
   // The glow's core sits beside the title row, so it stays faint enough for white text to read
@@ -303,7 +311,15 @@ function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
   const covered = clear ? 1 : weather.kind === 'cloudy' && weather.intensity === 'light' ? 0.35 : 0;
   const halo = withAlpha(haloBase, haloAlpha * covered);
   const moon = phase === 'night' ? (clear ? 0.9 : weather.kind === 'cloudy' ? 0.22 : 0) : 0;
+  return paintedSky(rawPaint(mood, scheme), layers(phase, scheme, weather), halo, withAlpha('#F2F4FF', moon));
+}
 
+/**
+ * Every colour of a sky from its paint and what can lie over it: the backdrop and scene stops
+ * repaired for their inks, and the driving screen's sky for both HUD palettes. One builder for the
+ * adaptive moods and the static looks, so every contrast guarantee holds for both.
+ */
+function paintedSky(paint: Paint, veil: Veils, halo: string, disc: string): SkyColors {
   // The ink has to read on the bare sky and through everything that can lie over it.
   const inks = [SKY_INK.text, SKY_INK.textMuted, SKY_INK.textSubtle];
   const veils = skyVeils({ ...veil, halo });
@@ -320,10 +336,10 @@ function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
     backdrop,
     horizon: opaque(paint.horizon),
     halo,
-    disc: withAlpha('#F2F4FF', moon),
+    disc,
     ...veil,
     scene,
-    hud: { day: hudSky(paint.stops, HUD.day), night: hudSky(paint.stops, HUD.night) },
+    hud: { day: hudSky(paint.stops, HUD.day, HUD_SHADE.day), night: hudSky(paint.stops, HUD.night, HUD_SHADE.night) },
   };
 }
 
@@ -388,12 +404,16 @@ export function skyBundle(mood: SkyMood): SkyBundle {
   const accent = ensureContrast(raw, grounds, AA);
   const accentText = contrastRatio('#FFFFFF', accent) >= contrastRatio('#111113', accent) ? '#FFFFFF' : '#111113';
   const colors: ColorSet = { ...base, bg, accent, accentText, accentFaint: faint };
-  const sky = skyColors(mood, scheme);
+  return bundleOf(scheme, colors, skyColors(mood, scheme));
+}
+
+/** A bundle from its page colours and its sky: the scene and sky inks lifted from the sky's grounds. */
+function bundleOf(scheme: Scheme, colors: ColorSet, sky: SkyColors): SkyBundle {
   return {
     scheme,
     colors,
-    onScene: inkColors(sky.scene, SCENE_INK, accent),
-    onSky: inkColors(sky.backdrop, SKY_INK, accent, sky.backdrop.map((s) => skyVeils(sky).reduce(over, s))),
+    onScene: inkColors(sky.scene, SCENE_INK, colors.accent),
+    onSky: inkColors(sky.backdrop, SKY_INK, colors.accent, sky.backdrop.map((s) => skyVeils(sky).reduce(over, s))),
     sky,
   };
 }
