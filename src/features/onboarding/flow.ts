@@ -1,8 +1,8 @@
 import type { Href } from 'expo-router';
 
 /**
- * The onboarding flow: username → how it works → motion → location → notifications →
- * forgot-to-start reminder (optional) → DashPal (optional) → Home.
+ * The onboarding flow: username → how it works → location → motion → notifications → DashPal
+ * (optional) → Home.
  *
  * Every step has one fixed place in `STEP_IDS`; the context only decides which of them this driver
  * walks. Navigation works on that canonical order rather than on a list index, so a step the context
@@ -13,15 +13,7 @@ import type { Href } from 'expo-router';
  */
 
 /** Canonical order. Adding a step means adding it here and in the registry. */
-export const STEP_IDS = [
-  'username',
-  'how',
-  'motion',
-  'location',
-  'notifications',
-  'reminder',
-  'dashcam',
-] as const;
+export const STEP_IDS = ['username', 'how', 'location', 'motion', 'notifications', 'dashcam'] as const;
 
 export type StepId = (typeof STEP_IDS)[number];
 

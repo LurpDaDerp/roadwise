@@ -58,10 +58,13 @@ async function renderStep(
 }
 
 test('the examples are pushes the server sends, worded as the server words them', async () => {
-  expect(copy.previews.map((p) => p.id)).toEqual(['weekly_recap', 'friend_request']);
+  expect(copy.previews.map((p) => p.id)).toEqual(['drive_recap', 'weekly_recap', 'friend_request']);
   await renderStep('ios', fakeAdapter(snap({ platform: 'ios', notifications: 'undetermined' })));
-  expect(await screen.findByText('Your week in review')).toBeOnTheScreen();
-  expect(screen.queryByText(/league/i)).toBeNull();
+  expect(await screen.findByText('Your drive recap is ready')).toBeOnTheScreen();
+  expect(screen.getByText('24 min · 12.0 mi. See how it went.')).toBeOnTheScreen();
+  expect(screen.getByText('Your week on the road')).toBeOnTheScreen();
+  expect(screen.getByText('4 drives this week. Safety Rating 92, up 1. 2 of 3 weekly goals done.')).toBeOnTheScreen();
+  expect(screen.queryByText(/league|points|streak/i)).toBeNull();
   expect(screen.getByText('Someone wants to add you as a friend.')).toBeOnTheScreen();
 });
 

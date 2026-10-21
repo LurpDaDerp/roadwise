@@ -4,6 +4,7 @@
  */
 import type { Href } from 'expo-router';
 
+import { autoDetectSync } from '@/boot/autoDetect';
 import type { SettingsRepo } from '@/data/db/settings';
 import { supabase } from '@/data/supabase/client';
 import { HOME, readPendingHref } from '@/features/auth/authGuard';
@@ -20,6 +21,8 @@ export interface FinishDeps {
   refreshProfile(): Promise<void>;
   /** Default: the `complete_onboarding` RPC. */
   complete?: (termsVersion: string) => Promise<unknown>;
+  /** Default: arms automatic drives for this onboarded driver (iPhone; a no-op on Android). Never rejects. */
+  armAutoDrives?: () => Promise<unknown>;
 }
 
 /**
@@ -43,7 +46,8 @@ async function completeOnboardingRpc(termsVersion: string): Promise<unknown> {
  * 2. the held deep link is read (allowlisted and held for this account), else Home is the target;
  * 3. the profile is refreshed, and the navigation is made in the same turn as the refresh settling,
  *    so the gate sees the ready profile and the target together and moves no one;
- * 4. the onboarding state (step, plan, held link) is cleared.
+ * 4. automatic drives are armed for this driver (iPhone, with the permissions they need);
+ * 5. the onboarding state (step, plan, held link) is cleared.
  *
  * Rejects when there is no session, the call fails or the refresh fails; nothing is navigated or
  * cleared then, so the step can say so and the driver can try again.
@@ -57,6 +61,10 @@ export async function finishOnboarding(deps: FinishDeps): Promise<void> {
 
   await deps.refreshProfile();
   router.replace(target as Href);
+
+  await (deps.armAutoDrives ?? (() => autoDetectSync({ onboarded: true })))().catch(() => {
+    // Armed again at the next foreground.
+  });
 
   await clearOnboardingState(settings).catch(() => {
     // Left behind, these keys are never read again: the profile now says onboarded.

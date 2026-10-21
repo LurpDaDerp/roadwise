@@ -38,6 +38,9 @@ export const snap = (over: Partial<PermissionSnapshot> = {}): PermissionSnapshot
   notificationsCanAskAgain: true,
   batteryOptimization: 'exempt',
   lowPowerMode: false,
+  backgroundRefresh: null,
+  canAskAlways: null,
+  liveActivities: null,
   checkedAt: T0,
   ...over,
 });
@@ -79,11 +82,13 @@ export function fakeAdapter(
       a.log.push('bluetooth');
       return a.bt;
     }),
-    requestAlwaysForReminder: jest.fn(async () => {
-      a.log.push('requestAlwaysForReminder');
-      if (a.current.platform === 'android') return 'notNeeded' as const;
+    requestLocationAlways: jest.fn(async () => {
+      a.log.push('requestLocationAlways');
+      const asIs = a.current.location === 'always' ? 'always' : a.current.location === 'foreground' ? 'whenInUse' : 'denied';
+      if (a.current.platform === 'android' || a.current.location !== 'foreground') return asIs;
       const next = answers.always ?? 'always';
-      if (next === 'always') a.current = { ...a.current, location: 'always' };
+      // iOS asks once; after that only Settings changes it.
+      a.current = { ...a.current, location: next === 'always' ? 'always' : a.current.location, canAskAlways: false };
       return next;
     }),
     requestBluetooth: jest.fn(async () => {

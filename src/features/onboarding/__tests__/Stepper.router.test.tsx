@@ -43,10 +43,6 @@ jest.mock('../steps/NotificationsStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { NotificationsStep: (p: object) => <StubStep {...p} step="notifications" /> };
 });
-jest.mock('../steps/ReminderStep', () => {
-  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
-  return { ReminderStep: (p: object) => <StubStep {...p} step="reminder" /> };
-});
 jest.mock('../steps/DashcamStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { DashcamStep: (p: object) => <StubStep {...p} step="dashcam" /> };
@@ -149,7 +145,7 @@ describe('the stepper under a covering screen', () => {
 
     await pressBack();
 
-    expect(app.getPathname()).toBe('/how');
+    expect(app.getPathname()).toBe('/location');
   });
 
   test('with a screen pushed over the step, Android back pops that screen and nothing else', async () => {
@@ -160,7 +156,7 @@ describe('the stepper under a covering screen', () => {
 
     await pressBack();
 
-    // The navigator popped the cover; the step did not replace anything to reach `how`.
+    // The navigator popped the cover; the step did not replace anything to reach `location`.
     expect(app.getPathname()).toBe('/motion');
     expect(screen.getByRole('header', { name: 'Motion' })).toBeTruthy();
   });

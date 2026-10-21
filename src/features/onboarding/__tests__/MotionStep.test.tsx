@@ -62,7 +62,7 @@ test('unavailable: the briefed line, no claim about when the phone will ask, and
   const adapter = fakeAdapter(snap({ platform: 'android', motion: 'unavailable' }), { motion: 'unavailable' });
   const { onNext } = await renderStep('android', adapter);
   await press(await screen.findByTestId('motion-allow'));
-  expect(await screen.findByText("Your phone didn't let us ask here. You can turn it on in Settings.")).toBeOnTheScreen();
+  expect(await screen.findByText('Your phone didn’t let us ask here. You can turn it on in Settings.')).toBeOnTheScreen();
   expect(copy.unavailable).not.toMatch(/later|next|when/i);
   expect(screen.getByTestId('motion-settings')).toBeOnTheScreen();
   await press(screen.getByTestId('motion-continue'));
@@ -73,7 +73,7 @@ test('denied: said plainly, and still passable (D12)', async () => {
   const adapter = fakeAdapter(snap({ platform: 'ios', motion: 'undetermined' }), { motion: 'denied' });
   const { onNext } = await renderStep('ios', adapter);
   await press(await screen.findByTestId('motion-allow'));
-  expect(await screen.findByText(copy.denied)).toBeOnTheScreen();
+  expect(await screen.findByText(copy.denied.ios)).toBeOnTheScreen();
   await press(screen.getByTestId('motion-continue'));
   expect(onNext).toHaveBeenCalledTimes(1);
   expect(requests(adapter)).toEqual(['requestMotion']);

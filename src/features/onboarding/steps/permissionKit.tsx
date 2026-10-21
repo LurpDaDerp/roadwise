@@ -3,7 +3,8 @@
  *
  * Every OS request these steps make is the driver's own tap on the step's primary button, so it
  * goes to the adapter directly, unthrottled, and stamps the 14-day history so the app's own later
- * offers wait. None of them asks for background ("Always") location: v3 never needs it.
+ * offers wait. Only the iPhone's location step asks for Always, right after While Using, for
+ * automatic drives.
  */
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';

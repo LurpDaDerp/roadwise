@@ -30,10 +30,6 @@ jest.mock('../steps/NotificationsStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { NotificationsStep: (p: object) => <StubStep {...p} step="notifications" /> };
 });
-jest.mock('../steps/ReminderStep', () => {
-  const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
-  return { ReminderStep: (p: object) => <StubStep {...p} step="reminder" /> };
-});
 jest.mock('../steps/DashcamStep', () => {
   const { StubStep } = jest.requireActual('../__fixtures__/StubStep');
   return { DashcamStep: (p: object) => <StubStep {...p} step="dashcam" /> };
@@ -127,7 +123,7 @@ describe('OnboardingStepper', () => {
 
   it('renders the registered step with its position and saves it for a later resume', async () => {
     await renderStepper('motion', ctx());
-    expect(screen.getByText('Step 2 of 6')).toBeOnTheScreen();
+    expect(screen.getByText('Step 3 of 5')).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Motion' })).toBeOnTheScreen();
     await waitFor(async () => expect(await readSavedStep(settings)).toBe('motion'));
   });
@@ -135,9 +131,9 @@ describe('OnboardingStepper', () => {
   it('moves forward with Continue and back with Back', async () => {
     await renderStepper('location', ctx());
     await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
-    expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/notifications');
-    await fireEvent.press(screen.getByRole('button', { name: 'Back' }));
     expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/motion');
+    await fireEvent.press(screen.getByRole('button', { name: 'Back' }));
+    expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/how');
     await act(async () => {});
   });
 
@@ -158,7 +154,7 @@ describe('OnboardingStepper', () => {
         };
       });
 
-    const view = await renderStepper('motion', ctx());
+    const view = await renderStepper('location', ctx());
     expect(listeners.at(-1)?.()).toBe(true);
     expect(mockRouter.replace).toHaveBeenLastCalledWith('/(onboarding)/how');
 
@@ -176,7 +172,7 @@ describe('OnboardingStepper', () => {
 
   it('keeps the count steady as the username drops out of the flow', async () => {
     const view = await renderStepper('username', ctx({ hasUsername: false }));
-    expect(screen.getByText('Step 1 of 7')).toBeOnTheScreen();
+    expect(screen.getByText('Step 1 of 6')).toBeOnTheScreen();
     const at = (step: StepId, c: FlowContext) =>
       view.rerender(
         <ThemeProvider>
@@ -184,15 +180,15 @@ describe('OnboardingStepper', () => {
         </ThemeProvider>
       );
     await at('how', ctx());
-    expect(screen.getByText('Step 2 of 7')).toBeOnTheScreen();
+    expect(screen.getByText('Step 2 of 6')).toBeOnTheScreen();
     await act(async () => {});
   });
 
   it('carries the saved count across a restart, through start', async () => {
-    // A plan saved by an older build, with retired steps (license, clan) and before the reminder and
+    // A plan saved by an older build, with retired steps (license, clan) and before the DashPal step
     // DashPal steps existed: the retired ids drop out, the new steps join the count.
     const PLAN = ['username', 'license', 'how', 'motion', 'location', 'notifications', 'clan'] as StepId[];
-    const NOW: StepId[] = ['username', 'how', 'motion', 'location', 'notifications', 'reminder', 'dashcam'];
+    const NOW: StepId[] = ['username', 'how', 'location', 'motion', 'notifications', 'dashcam'];
     await saveStep(settings, 'location');
     await savePlan(settings, PLAN);
     const view = await renderStepper('start', ctx());
@@ -202,7 +198,7 @@ describe('OnboardingStepper', () => {
         <OnboardingStepper step="location" ctx={ctx()} settings={settings} />
       </ThemeProvider>
     );
-    expect(screen.getByText('Step 4 of 7')).toBeOnTheScreen();
+    expect(screen.getByText('Step 3 of 6')).toBeOnTheScreen();
     await waitFor(async () => expect(await readSavedPlan(settings)).toEqual(NOW));
   });
 

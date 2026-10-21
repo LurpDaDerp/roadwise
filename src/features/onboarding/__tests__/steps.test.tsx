@@ -126,11 +126,13 @@ describe('username', () => {
 });
 
 describe('how it works', () => {
-  it('is one screen: miles earn, events cost, streaks multiply', async () => {
+  it.each(['ios', 'android'] as const)('%s: one screen of four lines worded for how drives start there', async (platform) => {
     const onNext = jest.fn();
     const w = await appWorld();
-    await w.render(<HowStep ctx={ctx} onNext={onNext} />);
-    for (const row of copy.how.rows) expect(await screen.findByLabelText(`${row.title}. ${row.body}`)).toBeOnTheScreen();
+    await w.render(<HowStep ctx={{ ...ctx, platform }} onNext={onNext} />);
+    expect(await screen.findByText(copy.how.body[platform])).toBeOnTheScreen();
+    for (const row of copy.how.rows[platform]) expect(await screen.findByLabelText(`${row.title}. ${row.body}`)).toBeOnTheScreen();
+    expect(screen.getByText('Sounds good')).toBeOnTheScreen();
     await tap('how-continue');
     expect(onNext).toHaveBeenCalled();
   });

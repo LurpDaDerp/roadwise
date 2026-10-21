@@ -96,7 +96,7 @@ export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: P
   } else if (answer === 'denied' || answer === 'undetermined') {
     primary = cont;
     secondary = settingsAction;
-    line = { tone: 'off', text: copy.denied };
+    line = { tone: 'off', text: copy.denied[ctx.platform] };
   } else if (answer === 'unavailable') {
     primary = cont;
     secondary = settingsAction;
@@ -110,7 +110,7 @@ export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: P
     <StepFrame title={copy.title[ctx.platform]} onBack={onBack} primary={primary} secondary={secondary} testID="motion-step">
       <View style={{ gap: th.space.lg }}>
         <Card>
-          <Text variant="body">{copy.body}</Text>
+          <Text variant="body">{copy.body[ctx.platform]}</Text>
         </Card>
         {phone.status === 'loading' && answer === undefined ? <Skeleton width="70%" height={20} /> : null}
         {line ? <StatusLine tone={line.tone}>{line.text}</StatusLine> : null}

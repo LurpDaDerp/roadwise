@@ -10,7 +10,7 @@ export const dashpalCopy = {
   screen: {
     title: 'DashPal',
     intro:
-      'DashPal is a dashcam that watches for drowsiness and eyes off the road. Once paired, its alerts play on your phone and its events count in your drives, with a bonus for drives it watches.',
+      'DashPal is a dashcam that watches for drowsiness and eyes off the road. Once paired, its alerts play on your phone and its events count toward Attention in your Safety Rating.',
     setUp: 'Set up DashPal',
     status: {
       connected: 'Connected',

@@ -6,7 +6,6 @@ import { HowStep } from './steps/HowStep';
 import { LocationStep } from './steps/LocationStep';
 import { MotionStep } from './steps/MotionStep';
 import { NotificationsStep } from './steps/NotificationsStep';
-import { ReminderStep } from './steps/ReminderStep';
 import { UsernameStep } from './steps/UsernameStep';
 
 /**
@@ -28,9 +27,8 @@ export interface StepProps {
 export const STEP_REGISTRY: Readonly<Record<StepId, ComponentType<StepProps>>> = {
   username: UsernameStep,
   how: HowStep,
-  motion: MotionStep,
   location: LocationStep,
+  motion: MotionStep,
   notifications: NotificationsStep,
-  reminder: ReminderStep,
   dashcam: DashcamStep,
 };

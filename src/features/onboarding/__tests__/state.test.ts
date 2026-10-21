@@ -41,9 +41,11 @@ describe('onboarding state', () => {
     expect(await readSavedStep(s)).toBeNull();
   });
 
-  it('reads the retired last step, the clan step, as the last step, so a resume finishes instead of starting over', async () => {
+  it('reads the retired late steps, clan and reminder, as the last step, so a resume finishes instead of starting over', async () => {
     const s = await settings();
     await s.set(ONBOARDING_STEP_KEY, 'clan');
+    expect(await readSavedStep(s)).toBe('dashcam');
+    await s.set(ONBOARDING_STEP_KEY, 'reminder');
     expect(await readSavedStep(s)).toBe('dashcam');
   });
 
