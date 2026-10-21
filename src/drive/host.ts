@@ -271,6 +271,21 @@ export const JOURNAL_READ_ROWS = 300;
 export const DRIVING_AT_END_MS = 5_000;
 
 /**
+ * Whether native's journal (or the journal link of a re-opened drive) holds `clientTripId`: the
+ * boot's recovery adopts such a drive whatever the capture says. False when it cannot be read.
+ */
+export async function isJournaled(db: Db, detect: Pick<DriveDetectApi, 'listDrives'>, clientTripId: string): Promise<boolean> {
+  try {
+    const drives = await detect.listDrives();
+    if (drives.some((d) => d.driveId === clientTripId)) return true;
+    const link = await createSettingsRepo(db).get<{ driveId?: unknown; clientTripId?: unknown }>(JOURNAL_LINK_KEY);
+    return link !== null && link.clientTripId === clientTripId && drives.some((d) => d.driveId === link.driveId);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * What native takes from a drive that closed at `at` (`stopCapture`'s end): its driving end (the
  * cut where the car last moved, or the End tap), and whether the car was still at driving speed as
  * it ended. A drive that is not kept passes null as its driving end.

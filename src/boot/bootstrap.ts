@@ -37,7 +37,7 @@ import { setActiveDashcam } from '@/dashcam/registry';
 import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { writeDropNotice } from '@/drive/dropNotice';
-import { createDriveHost, JOURNAL_LINK_KEY, playerInputs, type DriveHost, type DriveStartPermissions, type PushToStartRequest } from '@/drive/host';
+import { createDriveHost, isJournaled, playerInputs, type DriveHost, type DriveStartPermissions, type PushToStartRequest } from '@/drive/host';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
 import { nativeDashpal, nativeDriveDetect, nativeDriveSource, type DashpalNative, type DriveSource } from '@/drive/source';
@@ -327,7 +327,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       now,
       async adoptable(trip: TripRow, lastRowTs: number | null) {
         // iOS: native still journals the drive (live, or ended while JS was away): the host takes the rest in.
-        if (detect !== null && (await journaled(db, detect, trip.client_trip_id))) return true;
+        if (detect !== null && (await isJournaled(db, detect, trip.client_trip_id))) return true;
         try {
           const state = await source.getState();
           return state.capturing && lastRowTs !== null && now() - lastRowTs <= ADOPT_MAX_GAP_MS;
@@ -545,18 +545,6 @@ async function retireReminder(db: Db, source: DriveSource, onError: (error: unkn
     await settings.set(REMINDER_RETIRED_KEY, 1);
   } catch (error) {
     onError(error, 'reminder retirement');
-  }
-}
-
-/** Whether native's journal (or the journal link of a re-opened drive) holds `clientTripId`. */
-async function journaled(db: Db, detect: DriveDetectApi, clientTripId: string): Promise<boolean> {
-  try {
-    const drives = await detect.listDrives();
-    if (drives.some((d) => d.driveId === clientTripId)) return true;
-    const link = await createSettingsRepo(db).get<{ driveId?: unknown; clientTripId?: unknown }>(JOURNAL_LINK_KEY);
-    return link !== null && link.clientTripId === clientTripId && drives.some((d) => d.driveId === link.driveId);
-  } catch {
-    return false;
   }
 }
 
