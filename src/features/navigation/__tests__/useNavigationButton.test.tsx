@@ -10,7 +10,7 @@ import { NAV_APP_KEY, readNavApp, writeNavApp } from '@/features/navigation/pref
 import { useNavigationButton } from '@/features/navigation/useNavigationButton';
 import { HUD } from '@/ui/drive';
 
-const COLORS = { paper: '#FFFFFF', ink: '#111113', accent: '#1F5AD6' };
+const COLORS = { paper: '#FFFFFF', ink: '#111113', accent: '#1F5AD6', fill: '#1F5AD6' };
 
 jest.mock('expo-haptics', () => ({ impactAsync: jest.fn(async () => {}), ImpactFeedbackStyle: { Light: 'light' } }));
 

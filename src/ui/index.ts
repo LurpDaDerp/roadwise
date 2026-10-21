@@ -1,7 +1,7 @@
 export { contrastRatio, relativeLuminance } from './contrast';
 export { fontFamilies, useAppFonts } from './fonts';
 export { SceneScope, SkyScope, ThemeProvider, useTheme, type Theme } from './theme';
-export { mix, withAlpha } from './sky/color';
+export { ensureContrast, ensureGround, mix, withAlpha } from './sky/color';
 export { SkyBackdrop } from './sky/SkyBackdrop';
 export { SkyScrollProvider, SkyScrollScope, useSkyFocus, useSkyScrollHandler } from './sky/scroll';
 export { SkyScene } from './sky/SkyScene';

@@ -344,7 +344,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             accessibilityLabel={hudCopy.endLabel}
             accessibilityHint={hudCopy.endHint}
             icon="stop"
-            colors={{ track: b.paper, fill: b.accent, knob: b.ink, knobInk: b.paper, hint: b.ink }}
+            colors={{ track: b.paper, fill: b.fill, knob: b.ink, knobInk: b.paper, hint: b.ink }}
             height={layout.end.h}
             busy={busy}
             onSwipe={() => void onEnd()}

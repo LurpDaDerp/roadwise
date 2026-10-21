@@ -1,7 +1,7 @@
 import { contrastRatio } from '../contrast';
 import { HUD, type HudPalette } from '../drive/hudTokens';
 import { tokens, type ColorSet, type Signal } from '../tokens';
-import { ensureContrast, ensureGround, mix, opaque, over, withAlpha } from './color';
+import { ensureContrast, ensureGround, formatColor, mix, opaque, over, parseColor, withAlpha } from './color';
 import { PHASE_SCHEME, type Scheme, type SkyPhase } from './phase';
 import { CLEAR, type SkyWeather, type WeatherKind } from './weather';
 
@@ -113,7 +113,7 @@ export const WEATHER_WEIGHT: Readonly<Record<WeatherKind, number>> = {
 /** How far the weather pulls the painted sky: overcast greys most of the hour's colour away. */
 const SKY_WEIGHT: Readonly<Record<WeatherKind, number>> = {
   clear: 0,
-  cloudy: 0.8,
+  cloudy: 0.85,
   fog: 0.85,
   rain: 0.85,
   snow: 0.8,
@@ -125,12 +125,12 @@ const PHASE_TINT: Readonly<Record<SkyPhase, string>> = {
   day: '#C9DDFF',
   dawn: '#FFD2B6',
   dusk: '#4A2236',
-  night: '#172149',
+  night: '#10162F',
 };
 
 const WEATHER_TINT: Readonly<Record<Scheme, Record<Exclude<WeatherKind, 'clear'>, string>>> = {
-  light: { cloudy: '#D2D7DF', fog: '#DDE2DE', rain: '#BCD1DB', snow: '#E4EDF7', storm: '#C9C0E3' },
-  dark: { cloudy: '#252A34', fog: '#27302F', rain: '#11303B', snow: '#24324A', storm: '#22183E' },
+  light: { cloudy: '#D5D8DC', fog: '#DDE2DE', rain: '#BCD1DB', snow: '#E4EDF7', storm: '#C9C0E3' },
+  dark: { cloudy: '#26292E', fog: '#27302F', rain: '#11303B', snow: '#24324A', storm: '#22183E' },
 };
 
 /** A painted sky: three stops top to bottom and the band near the horizon. */
@@ -138,7 +138,7 @@ type Paint = { stops: SkyStops; horizon: string };
 
 /** The clear sky per phase, modelled on the iOS Weather backgrounds (before the AA repair). */
 const PHASE_PAINT: Readonly<Record<SkyPhase, Paint>> = {
-  day: { stops: ['#1A5CC4', '#2B72D0', '#3F88DA'], horizon: '#86B9EC' },
+  day: { stops: ['#2F78DC', '#3F8BE3', '#58A2EC'], horizon: '#A8D0F5' },
   dawn: { stops: ['#2B4489', '#5E4F8E', '#9A5A80'], horizon: '#F0A36E' },
   dusk: { stops: ['#1C2660', '#4A2F6E', '#8E3F6C'], horizon: '#E8875A' },
   night: { stops: ['#060A1C', '#0E1534', '#1B2452'], horizon: '#2A3566' },
@@ -147,14 +147,14 @@ const PHASE_PAINT: Readonly<Record<SkyPhase, Paint>> = {
 /** The weather's sky, by the light of day (day, dawn) and in the dark (dusk, night). */
 const WEATHER_PAINT: Readonly<Record<Scheme, Record<Exclude<WeatherKind, 'clear'>, Paint>>> = {
   light: {
-    cloudy: { stops: ['#4E5F73', '#5F6F82', '#768595'], horizon: '#A3AEBA' },
+    cloudy: { stops: ['#57616D', '#67717C', '#7D8691'], horizon: '#A9B0B8' },
     fog: { stops: ['#6F7A82', '#7E888E', '#8E979C'], horizon: '#BCC2C5' },
     rain: { stops: ['#33404F', '#3E4B5A', '#56626F'], horizon: '#7E8995' },
     snow: { stops: ['#5B7189', '#6B8199', '#8397AD'], horizon: '#BCCAD8' },
     storm: { stops: ['#25263A', '#2E3046', '#3E4158'], horizon: '#5C5E7A' },
   },
   dark: {
-    cloudy: { stops: ['#1B2029', '#252B35', '#343B47'], horizon: '#414856' },
+    cloudy: { stops: ['#1D2026', '#272B32', '#363A42'], horizon: '#43474F' },
     fog: { stops: ['#22272B', '#2D3338', '#3A4045'], horizon: '#4C5257' },
     rain: { stops: ['#0F141B', '#161D26', '#232B35'], horizon: '#2E3742' },
     snow: { stops: ['#1C2533', '#263142', '#344157'], horizon: '#48556C' },
@@ -166,7 +166,7 @@ const WEATHER_PAINT: Readonly<Record<Scheme, Record<Exclude<WeatherKind, 'clear'
 const SCENE_INK = { text: '#FFFFFF', textMuted: '#D8D8DE', textSubtle: '#C6C6CE' } as const;
 
 /** Ink used straight on the page sky: white, with cool near-whites for secondary text. */
-const SKY_INK = { text: '#FFFFFF', textMuted: '#EDF1F7', textSubtle: '#E6EAF1' } as const;
+const SKY_INK = { text: '#FFFFFF', textMuted: '#F3F6FA', textSubtle: '#EDF1F6' } as const;
 
 const SIGNALS: readonly Signal[] = ['clean', 'minor', 'moderate', 'severe'];
 
@@ -198,6 +198,9 @@ function rawPaint(mood: SkyMood, scheme: Scheme): Paint {
       horizon: mix(base.horizon, pull.horizon, SKY_WEIGHT[kind]),
     };
   }
+  // Night sits a step nearer black than the painted navy, whatever the weather.
+  if (mood.phase === 'night')
+    paint = { stops: paint.stops.map((s) => mix(s, '#000000', 0.2)) as SkyStops, horizon: mix(paint.horizon, '#000000', 0.15) };
   // The warm band is strongest at sunrise and sunset and never quite leaves the twilight hour.
   if (mood.phase !== 'dawn' && mood.phase !== 'dusk') return paint;
   return { ...paint, horizon: mix(paint.stops[2], paint.horizon, Math.max(0.4, mood.glow)) };
@@ -254,12 +257,36 @@ function layers(phase: SkyPhase, scheme: Scheme, w: SkyWeather) {
   }
 }
 
-/** The driving screen's sky for one HUD palette (see {@link HudSky}). */
+/**
+ * A colour's chroma pushed away from (k > 0) or toward (k < 0) its own grey, its luminance kept
+ * about where it was. Clamped to the gamut.
+ */
+function vivid(c: string, k: number): string {
+  const { r, g, b, a } = parseColor(c);
+  const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const ch = (v: number) => Math.max(0, Math.min(255, Math.round(y + (v - y) * (1 + k))));
+  return formatColor({ r: ch(r), g: ch(g), b: ch(b), a });
+}
+
+/**
+ * A ground pulled toward a deep shade of its own hue until `inks` read on it (through `layers`),
+ * so a repaired sky stays a clear blue instead of greying toward black; black finishes the job
+ * should the deep shade not be enough.
+ */
+function deepen(g: string, inks: readonly string[], min: number, layers: readonly string[] = []): string {
+  return ensureGround(ensureGround(g, inks, min, mix(g, '#000000', 0.7), layers), inks, min, '#000000', layers);
+}
+
+/**
+ * The driving screen's sky for one HUD palette (see {@link HudSky}): the hour's sky a little more
+ * vivid, deepened in its own hue to the HUD's contrast, settling darker toward the foot so End and
+ * the navigation button sit on the calmest part.
+ */
 function hudSky(stops: SkyStops, p: HudPalette): HudSky {
   const text = [p.ink, p.inkMuted, p.haloInk, p.haloInkMuted];
-  const fix = (g: string) =>
-    ensureGround(ensureGround(ensureGround(g, text, 7, '#000000'), [p.minor, p.moderate, p.severe], AA, '#000000'), [p.haloSevere], 3, '#000000');
-  const deep = stops.map((st) => fix(mix(st, '#000000', 0.25))) as SkyStops;
+  const fix = (g: string) => deepen(deepen(deepen(g, text, 7), [p.minor, p.moderate, p.severe], AA), [p.haloSevere], 3);
+  const shade = [0.12, 0.2, 0.3];
+  const deep = stops.map((st, i) => fix(mix(vivid(st, 0.55), '#000000', shade[i]!))) as SkyStops;
   return { stops: deep, chrome: fix(mix(deep[1], '#000000', 0.4)), chromeEdge: ensureGround(mix(deep[1], '#FFFFFF', 0.14), [p.ink], 7, '#000000') };
 }
 
@@ -272,7 +299,7 @@ function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
   const haloBase = { day: '#FFF6DC', dawn: '#FFD9B0', dusk: '#FFB07A', night: '#C8D6FF' }[phase];
   // The glow's core sits beside the title row, so it stays faint enough for white text to read
   // through it without darkening the sky much (the repair below counts it).
-  const haloAlpha = { day: 0.12, dawn: 0.14, dusk: 0.18, night: 0.14 }[phase];
+  const haloAlpha = { day: 0.09, dawn: 0.14, dusk: 0.18, night: 0.14 }[phase];
   const covered = clear ? 1 : weather.kind === 'cloudy' && weather.intensity === 'light' ? 0.35 : 0;
   const halo = withAlpha(haloBase, haloAlpha * covered);
   const moon = phase === 'night' ? (clear ? 0.9 : weather.kind === 'cloudy' ? 0.22 : 0) : 0;
@@ -280,7 +307,7 @@ function skyColors(mood: SkyMood, scheme: Scheme): SkyColors {
   // The ink has to read on the bare sky and through everything that can lie over it.
   const inks = [SKY_INK.text, SKY_INK.textMuted, SKY_INK.textSubtle];
   const veils = skyVeils({ ...veil, halo });
-  const backdrop = paint.stops.map((s) => ensureGround(s, inks, SKY_AA, '#000000', veils)) as SkyStops;
+  const backdrop = paint.stops.map((s) => deepen(s, inks, SKY_AA, veils)) as SkyStops;
 
   // The scene card is the same sky, a little deeper: brightest top-left, darkest bottom-right.
   const sceneInks = [SCENE_INK.text, SCENE_INK.textMuted, SCENE_INK.textSubtle];
