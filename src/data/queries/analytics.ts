@@ -11,22 +11,22 @@ import { toTripRow } from '@/data/db/trips';
 import type { EventRow } from '@/data/db/types';
 import { useDataSource } from '@/data/queries/context';
 import { queryKeys } from '@/data/queries/keys';
-import { isScoredDrive, toLocalDrive, type LocalDrive } from '@/data/queries/rows';
+import { isScoredDrive, toLocalDrive, toLocalDriveEvent, type LocalDrive } from '@/data/queries/rows';
 
-/** The SQL twin of `isScoredDrive`: scored by the server, or a pending estimate. */
-const SCORED_TRIP = "(t.status = 'scored' OR (t.status = 'pending' AND t.points_net IS NOT NULL))";
+/** The SQL twin of `isScoredDrive`: scored by the server, or pending and long enough to score. */
+export const SCORED_TRIP = "(t.status = 'scored' OR (t.status = 'pending' AND t.reason IS NULL))";
 
-/** An event row as the scoring package reads it (`ratingPenalty`, `basePenalty`). */
+/** An event row as the scoring package reads it (`driveLoads`, `ratingAt`, `driveScore`): speeding's weight reads `measured.overMphS`. */
 export function toDriveEvent(row: EventRow): DriveEvent {
+  const { measured } = toLocalDriveEvent(row);
   return {
     id: row.id,
     type: row.type,
     tier: row.tier,
     startedAt: row.started_at,
     durationS: row.duration_s,
-    ...(row.units !== null ? { units: row.units } : {}),
-    stoppedInTraffic: row.stopped_in_traffic === 1,
     status: row.status,
+    measured,
   };
 }
 
@@ -56,7 +56,7 @@ export async function readScoredDrives(db: Db, sinceMs: number | null): Promise<
 }
 
 /**
- * Active events of the window's scored drives (the radar's penalty sums). The window's start moves
+ * Active events of the window's scored drives (the radar's category loads). The window's start moves
  * every hour, which is a new key: the last answer stays until the new one lands.
  */
 export function useWindowEvents(sinceMs: number | null): UseQueryResult<DriveEvent[]> {

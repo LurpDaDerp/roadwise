@@ -2,17 +2,15 @@
  * Row → view bridges for the local drive data (plan §10). Pure, so the numbers a screen shows can
  * be tested without rendering anything.
  */
-import type { DriveBreakdown, EventType, StatSums, Tier } from '@scoring';
+import { clampExposure, estimateExposure, type EventType, type Exposure, type StatSums, type Tier } from '@scoring';
 
-import type { EventRow, TripEndCause, TripRow, TripStatus } from '@/data/db/types';
-import { FinalizeTripResponseV3Schema, type FinalizeTripResponseV3 } from '@/data/sync/payload';
+import type { DriveOrigin, EventRow, StartSource, TripEndCause, TripRow, TripStatus } from '@/data/db/types';
+import { FinalizeTripResponseSchema, type FinalizeTripResponse } from '@/data/sync/payload';
 
 export type DriveStatus = TripStatus;
 
 export interface DriveCounts {
   speeding: number;
-  pickups: number;
-  handlingS: number;
   hardBrake: number;
   hardAccel: number;
   hardCorner: number;
@@ -23,8 +21,6 @@ export interface DriveCounts {
 
 export const EMPTY_COUNTS: DriveCounts = Object.freeze({
   speeding: 0,
-  pickups: 0,
-  handlingS: 0,
   hardBrake: 0,
   hardAccel: 0,
   hardCorner: 0,
@@ -44,12 +40,11 @@ export interface LocalDrive {
   /** Already privacy-trimmed. */
   polyline: string | null;
   status: DriveStatus;
-  pointsNet: number | null;
-  /** The local `scoreDrive` estimate until the server answers. */
-  estimate: boolean;
+  /** No active event other than DashPal's; null until classified, and on an unscored drive. */
   clean: boolean | null;
   counts: DriveCounts;
-  result: FinalizeTripResponseV3 | null;
+  /** The server's answer (v4); null until it answered, and for one stored before this build. */
+  result: FinalizeTripResponse | null;
   reason: string | null;
   mergedInto: string | null;
   /** Why the server last refused an action on this drive (e.g. a "Wasn't driving": `too_old`). */
@@ -58,6 +53,18 @@ export interface LocalDrive {
   endCause: TripEndCause | null;
   /** The miles DashPal watched (the radar's Attention divides by them); 0 without one. */
   watchedMiles: number;
+  /** How the drive started: noticed on its own, or a Start tap. */
+  origin: DriveOrigin;
+  /** The in-drive "Not driving?" ran out, so "Wasn't driving" is never offered for it. */
+  notDrivingExpired: boolean;
+  /** Times it was re-opened because the car set off again within the upload hold. */
+  continuations: number;
+  /** Where the start came from; null on an older or restored drive. */
+  startSource: StartSource | null;
+  /** The drive's chances to slip: counted while it recorded, or estimated (`exposureEstimated`). */
+  exposure: Exposure;
+  /** True when the drive was recorded before the counters and `exposure` is estimated from its miles and duration. */
+  exposureEstimated: boolean;
 }
 
 export interface LocalDriveEvent {
@@ -66,36 +73,24 @@ export interface LocalDriveEvent {
   tier: Tier;
   startedAt: number;
   durationS: number;
-  /** phone_handling: its 15-s units (null when not recorded, which scoring reads as 1). */
-  units: number | null;
   lat: number | null;
   lng: number | null;
-  penalty: number | null;
   disputeStatus: 'none' | 'pending' | 'accepted' | 'rejected';
   disputeMessage: string | null;
-  /** Removed by an accepted dispute: shown struck through, excluded from points. */
+  /** Removed by an accepted dispute: shown struck through, counted nowhere. */
   removed: boolean;
-  measured: { speedMph?: number; limitMph?: number; peakG?: number; mounted?: boolean; source?: 'dashcam' };
-  stoppedInTraffic: boolean;
+  /** What the detector measured; speeding's `overMphS` weighs it in the Speed score. */
+  measured: { speedMph?: number; limitMph?: number; peakG?: number; overMphS?: number; source?: 'dashcam' };
 }
 
-/** Counts of ACTIVE events, from a drive's event rows (or any v3 events). */
-export function countEvents(
-  events: readonly { type: EventType; durationS?: number; duration_s?: number; status?: 'active' | 'removed' }[]
-): DriveCounts {
+/** Counts of ACTIVE events, from a drive's event rows (or any wire events). */
+export function countEvents(events: readonly { type: EventType; status?: 'active' | 'removed' }[]): DriveCounts {
   const c: DriveCounts = { ...EMPTY_COUNTS };
   for (const e of events) {
     if (e.status === 'removed') continue;
-    const d = e.durationS ?? e.duration_s ?? 0;
     switch (e.type) {
       case 'speeding':
         c.speeding += 1;
-        break;
-      case 'phone_pickup':
-        c.pickups += 1;
-        break;
-      case 'phone_handling':
-        c.handlingS += d;
         break;
       case 'hard_brake':
         c.hardBrake += 1;
@@ -117,6 +112,7 @@ export function countEvents(
   return c;
 }
 
+/** The stored counts; keys this build does not know (an older build's phone counts) are ignored. */
 export function parseCounts(json: string | null): DriveCounts {
   if (json === null) return { ...EMPTY_COUNTS };
   try {
@@ -132,26 +128,34 @@ export function parseCounts(json: string | null): DriveCounts {
   }
 }
 
-export function parseResult(json: string | null): FinalizeTripResponseV3 | null {
+/** The stored server answer, when it is a v4 answer; anything else (an older answer, garbage) is null. */
+export function parseResult(json: string | null): FinalizeTripResponse | null {
   if (json === null) return null;
   try {
-    const parsed = FinalizeTripResponseV3Schema.safeParse(JSON.parse(json));
+    const parsed = FinalizeTripResponseSchema.safeParse(JSON.parse(json));
     return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
 }
 
-export function parseBreakdown(json: string | null): DriveBreakdown | null {
-  if (json === null) return null;
-  try {
-    return JSON.parse(json) as DriveBreakdown;
-  } catch {
-    return null;
+/**
+ * The drive's opportunity counters: the five stored columns when all are there (clamped), else the
+ * estimate from its miles and duration (a drive recorded before the counters existed).
+ */
+export function exposureOf(row: Pick<TripRow, 'slowdowns' | 'speedups' | 'turns' | 'limit_s' | 'moving_s' | 'miles' | 'duration_s'>): {
+  exposure: Exposure;
+  estimated: boolean;
+} {
+  const { slowdowns, speedups, turns, limit_s: limitS, moving_s: movingS } = row;
+  if (slowdowns !== null && speedups !== null && turns !== null && limitS !== null && movingS !== null) {
+    return { exposure: clampExposure({ slowdowns, speedups, turns, limitS, movingS }), estimated: false };
   }
+  return { exposure: estimateExposure(row.miles, row.duration_s), estimated: true };
 }
 
 export function toLocalDrive(row: TripRow): LocalDrive {
+  const { exposure, estimated } = exposureOf(row);
   return {
     clientTripId: row.client_trip_id,
     startedAt: row.started_at,
@@ -163,8 +167,6 @@ export function toLocalDrive(row: TripRow): LocalDrive {
     toLabel: row.to_label,
     polyline: row.polyline,
     status: row.status,
-    pointsNet: row.points_net,
-    estimate: row.estimate === 1,
     clean: row.clean === null ? null : row.clean === 1,
     counts: parseCounts(row.counts_json),
     result: parseResult(row.result_json),
@@ -173,33 +175,54 @@ export function toLocalDrive(row: TripRow): LocalDrive {
     syncError: row.sync_error,
     endCause: row.end_cause,
     watchedMiles: row.watched_miles,
+    origin: row.origin,
+    notDrivingExpired: row.not_driving_expired === 1,
+    continuations: row.continuations,
+    startSource: row.start_source,
+    exposure,
+    exposureEstimated: estimated,
   };
 }
 
-export function toLocalDriveEvent(row: EventRow): LocalDriveEvent {
-  let measured: LocalDriveEvent['measured'] = {};
-  if (row.measured_json !== null) {
-    try {
-      measured = JSON.parse(row.measured_json) as LocalDriveEvent['measured'];
-    } catch {
-      measured = {};
-    }
+const finiteOrUndefined = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+
+/** The measured block as stored, keeping only the keys this build reads (an older build's phone keys are dropped). */
+function parseMeasured(json: string | null): LocalDriveEvent['measured'] {
+  if (json === null) return {};
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return {};
   }
+  if (typeof raw !== 'object' || raw === null) return {};
+  const r = raw as Record<string, unknown>;
+  const out: LocalDriveEvent['measured'] = {};
+  const speedMph = finiteOrUndefined(r.speedMph);
+  const limitMph = finiteOrUndefined(r.limitMph);
+  const peakG = finiteOrUndefined(r.peakG);
+  const overMphS = finiteOrUndefined(r.overMphS);
+  if (speedMph !== undefined) out.speedMph = speedMph;
+  if (limitMph !== undefined) out.limitMph = limitMph;
+  if (peakG !== undefined) out.peakG = peakG;
+  if (overMphS !== undefined) out.overMphS = overMphS;
+  if (r.source === 'dashcam') out.source = 'dashcam';
+  return out;
+}
+
+export function toLocalDriveEvent(row: EventRow): LocalDriveEvent {
   return {
     id: row.id,
     type: row.type,
     tier: row.tier,
     startedAt: row.started_at,
     durationS: row.duration_s,
-    units: row.units,
     lat: row.lat,
     lng: row.lng,
-    penalty: row.penalty,
     disputeStatus: row.dispute_status,
     disputeMessage: row.dispute_message,
     removed: row.status === 'removed',
-    measured,
-    stoppedInTraffic: row.stopped_in_traffic === 1,
+    measured: parseMeasured(row.measured_json),
   };
 }
 
@@ -209,19 +232,21 @@ export function toLocalDriveEvent(row: EventRow): LocalDriveEvent {
  */
 export const isListed = (d: Pick<LocalDrive, 'status'>): boolean => d.status !== 'merged' && d.status !== 'recording';
 
-/** A drive that counts toward stats and the first-run count: scored by the server, or a pending estimate. */
-export const isScoredDrive = (d: Pick<LocalDrive, 'status' | 'pointsNet'>): boolean =>
-  d.status === 'scored' || (d.status === 'pending' && d.pointsNet !== null);
+/**
+ * A drive that counts toward stats and the first-run count: scored by the server, or pending and
+ * long enough to score (a too-short pending drive carries `reason = 'too_short'`). Points play no
+ * part.
+ */
+export const isScoredDrive = (d: Pick<LocalDrive, 'status' | 'reason'>): boolean =>
+  d.status === 'scored' || (d.status === 'pending' && d.reason === null);
 
-export function matchesHistoryFilter(d: LocalDrive, filter: 'all' | 'clean' | 'negative' | 'passenger'): boolean {
+export function matchesHistoryFilter(d: LocalDrive, filter: 'all' | 'clean' | 'passenger'): boolean {
   if (!isListed(d)) return false;
   switch (filter) {
     case 'all':
       return true;
     case 'clean':
       return d.clean === true;
-    case 'negative':
-      return d.pointsNet !== null && d.pointsNet < 0;
     case 'passenger':
       return d.status === 'not_driving';
   }
@@ -234,8 +259,6 @@ export const EMPTY_SUMS: StatSums = Object.freeze({
   drives: 0,
   cleanDrives: 0,
   speeding: 0,
-  pickups: 0,
-  handlingS: 0,
   hardBrake: 0,
   hardAccel: 0,
   hardCorner: 0,
@@ -252,8 +275,6 @@ export function sumStats(drives: readonly LocalDrive[], sinceMs: number | null):
     out.drives += 1;
     if (d.clean === true) out.cleanDrives += 1;
     out.speeding += d.counts.speeding;
-    out.pickups += d.counts.pickups;
-    out.handlingS += d.counts.handlingS;
     out.hardBrake += d.counts.hardBrake;
     out.hardAccel += d.counts.hardAccel;
     out.hardCorner += d.counts.hardCorner;
