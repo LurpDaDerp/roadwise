@@ -104,6 +104,13 @@ export interface EventMeasured {
   limitMph?: number;
   peakG?: number;
   mounted?: boolean;
+  /**
+   * speeding: mph past the points line summed over the over rows after the grace (1 dp); the cost
+   * reads it (`speedingCost`).
+   */
+  overMphS?: number;
+  /** phone_pickup, phone_handling: the highest trusted GPS speed during the phone-use episode, mph (1 dp). */
+  maxSpeedMph?: number;
   /** `dashcam` on (and only on) a DashPal event (`eyes_off`, `drowsy`); the phone's own detectors never set it. */
   source?: 'dashcam';
 }
@@ -127,7 +134,7 @@ export interface OpenEpisode {
   /** The tier so far (speeding: the current row's; phone: severe). */
   tier: Tier;
   startedAt: number;
-  /** Long enough to count as an incident (speeding 5 s / 3 s severe; phone 3 s, a switch 3 s / 26 s). */
+  /** Long enough to count as an incident (speeding: past the 5-s grace; phone 3 s, a switch 3 s / 26 s). */
   confirmed: boolean;
   /** Phone: the latest row of use so far (motion or a counting switch). Speeding never sets it. */
   lastUseAt?: number;
@@ -136,6 +143,21 @@ export interface OpenEpisode {
    * waits out its 26 s inside an open pickup, else null. Speeding never sets it.
    */
   phase?: 'switching' | 'hold' | null;
+}
+
+/** The speeding episode in progress (its end window included), as the engine's alerts read it. */
+export interface SpeedingEpisode {
+  id: string;
+  /** epoch ms of its first over row. */
+  startedAt: number;
+  /** Over rows so far (`durationS` if it closed now). */
+  overRows: number;
+  /** mph past the line summed over the over rows after the grace, unrounded (0 within the grace). */
+  overMphS: number;
+  /** Past the grace: it is an event. */
+  confirmed: boolean;
+  /** The current row is over the line. */
+  over: boolean;
 }
 
 /** What the speeding detector read on its latest row, when it could use the row. */
@@ -155,6 +177,8 @@ export interface DetectorSuite extends Detector {
    * limit it acts on, an unknown or untrusted speed, a poor fix, the warm-up).
    */
   speedingNow(): SpeedingReading | null;
+  /** The speeding episode in progress, its end window included (whatever the current row), or null. */
+  speedingEpisode(): SpeedingEpisode | null;
   /** The phone episode in progress on the latest row, if any. */
   openPhone(): OpenEpisode | null;
   /** A speeding or phone episode is active on the latest row: its distance is not safe miles. */

@@ -21,6 +21,7 @@ export function createDetectors(newId: () => string): DetectorSuite {
     flush: () => detectors.flatMap((d) => d.flush()),
     openSpeeding: () => speeding.open(),
     speedingNow: () => speeding.reading(),
+    speedingEpisode: () => speeding.episode(),
     openPhone: () => phone.open(),
     unsafe: () => speeding.active() || phone.active(),
     lockProof: () => phone.lockProof(),

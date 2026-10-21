@@ -90,7 +90,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** 20 s at 41 mph on a 35 (T = 3: minor above 38): one minor episode of 20 s. */
+  /** 20 s at 41 mph on a 35 (T = 4: minor above 39): one minor episode of 20 s. */
   'speeding-minor': () => ({
     name: 'speeding-minor',
     rows: drive(240, (i) => ({ speedMph: between(i, 60, 80) ? 41 : 34 })),
@@ -98,15 +98,24 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     expected: [{ type: 'speeding', startsNear: at(60), tier: 'minor', durationMin: 19, durationMax: 21 }],
   }),
 
-  /** 4 s at 52 mph on a 35 (severe above 47): counts after 3 s; peak tier severe. */
+  /** 8 s at 52 mph on a 35 (severe above 48): an event from its 6th over row, from the first; peak tier severe. */
   'speeding-severe-brief': () => ({
     name: 'speeding-severe-brief',
-    rows: drive(200, (i) => ({ speedMph: between(i, 60, 64) ? 52 : 34 })),
+    rows: drive(200, (i) => ({ speedMph: between(i, 60, 68) ? 52 : 34 })),
     limits: [posted(35)],
-    expected: [{ type: 'speeding', startsNear: at(60), tier: 'severe', durationMin: 3, durationMax: 5 }],
+    expected: [{ type: 'speeding', startsNear: at(60), tier: 'severe', durationMin: 8, durationMax: 8 }],
   }),
 
-  /** 3 s at 42 mph: under the 4-s minimum, no incident. */
+  /** 5 s at 52 mph on a 35, back under the line within the 5-s grace: severe, but no incident. */
+  'speeding-grace': () => ({
+    name: 'speeding-grace',
+    rows: drive(200, (i) => ({ speedMph: between(i, 60, 65) ? 52 : 34 })),
+    limits: [posted(35)],
+    expected: [{ type: 'speeding', startsNear: at(60), absent: true }],
+    noEvents: true,
+  }),
+
+  /** 3 s at 42 mph: within the 5-s grace, no incident. */
   'speeding-blip': () => ({
     name: 'speeding-blip',
     rows: drive(200, (i) => ({ speedMph: between(i, 60, 63) ? 42 : 34 })),
@@ -115,7 +124,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** Hovering at 37 mph (between L+T−2 and L+T) after 8 s over keeps the episode open: one incident. */
+  /** Hovering at 37 mph (between L+T−2 = 37 and L+T = 39) after 8 s over keeps the episode open: one incident. */
   'speeding-hover': () => ({
     name: 'speeding-hover',
     rows: drive(240, (i) => ({ speedMph: between(i, 60, 68) ? 42 : between(i, 68, 90) ? 37 : between(i, 90, 98) ? 42 : 34 })),
@@ -123,7 +132,10 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     expected: [{ type: 'speeding', startsNear: at(60), tier: 'minor', durationMin: 15, durationMax: 17 }],
   }),
 
-  /** Five scattered 1-s blips over L+T, hovering at L+T−1 between them: no incident (not continuous). */
+  /**
+   * Five scattered 1-s blips over L+T, hovering at 37 (in the 2-mph buffer) between them: one episode
+   * of five over rows, all within the grace: no incident.
+   */
   'speeding-blip-hover': () => ({
     name: 'speeding-blip-hover',
     rows: drive(200, (i) => ({ speedMph: between(i, 60, 100) && i % 8 === 0 ? 41 : between(i, 60, 100) ? 37 : 34 })),
@@ -132,13 +144,15 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** 3 s over, one row under L+T, 3 s over: neither run reaches 4 s, so no incident. */
+  /**
+   * 3 s over, one row under the buffer, 3 s over: one episode (it ends only after 5 s back under the
+   * buffer), still over past the 5-s grace: an incident of 6 over rows from the first.
+   */
   'speeding-split': () => ({
     name: 'speeding-split',
     rows: drive(200, (i) => ({ speedMph: between(i, 60, 63) || between(i, 64, 67) ? 42 : 34 })),
     limits: [posted(35)],
-    expected: [{ type: 'speeding', startsNear: at(60), absent: true }],
-    noEvents: true,
+    expected: [{ type: 'speeding', startsNear: at(60), tier: 'minor', durationMin: 6, durationMax: 6 }],
   }),
 
   /** The minor episode's 20 s at 41 mph, every over-limit row rating its speed at 3 m/s: no speeding event. */
