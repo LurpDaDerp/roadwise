@@ -105,6 +105,26 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(c).toMatch(/func isRunning\(\) -> Bool \{/);
   });
 
+  it('a push-started activity is adopted for any background drive (auto, manual, a re-opened leg) unless a live one runs, and adopting it takes the 20 s note down (review I2)', () => {
+    const c = ctrl();
+    const adopt = /private func adopt\(_ a: Activity<LiveDriveAttributes>\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
+    // only a LIVE held activity refuses it (a dismissed or ended one, the last leg's included, does not)
+    expect(adopt).toMatch(/if let current = activity, LiveDriveController\.live\(current\) \{\s*Task \{ await a\.end\(nil, dismissalPolicy: \.immediate\) \}\s*return\s*\}/);
+    // any open drive takes it: nothing reads the drive's origin or leg
+    expect(adopt).toMatch(/guard LiveDriveController\.driveOpen else \{/);
+    expect(c).not.toMatch(/captureMode|origin/);
+    expect(adopt).toMatch(/activity = a\s*removeRecordingNote\(\)\s*\}$/);
+    // every drive end clears the held activity, so the next leg's pushed one is adopted
+    expect(c).toMatch(/if info\["ended"\] as\? Bool == true \{\s*self\.end\(\)/);
+    expect(c).toMatch(/func end\(\) \{\s*guard let a = activity else \{ return \}\s*activity = nil/);
+    // adopting announces `running`, and drive-sense's note then cancels its 20 s check and comes down
+    expect(c).toMatch(/didSet \{\s*if activity\?\.id != oldValue\?\.id \{ announce\(\) \}/);
+    const note = code(path.join(ROOT, 'modules', 'drive-sense', 'ios'), 'DriveNotifier.swift');
+    expect(note).toMatch(/activityRunning = note\.userInfo\?\["running"\] as\? Bool \?\? false\s*if activityRunning \{\s*cancel\(\)\s*remove\(\)/);
+    // the controller (its activityUpdates stream) exists in every process, a background relaunch included
+    expect(code(IOS_DIR, 'LiveDriveAppDelegate.swift')).toMatch(/LiveDriveController\.shared\.adoptRunning\(\)/);
+  });
+
   it('an activity the driver dismissed (or iOS ended) is let go, so the next start in front requests a new one (review M8)', () => {
     const c = ctrl();
     expect(c).toMatch(/private static func live\(_ a: Activity<LiveDriveAttributes>\) -> Bool \{\s*a\.activityState == \.active \|\| a\.activityState == \.stale\s*\}/);
