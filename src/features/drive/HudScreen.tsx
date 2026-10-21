@@ -34,13 +34,15 @@ import { EventBanner, useAlertFlash } from './EventBanner';
 import { hudButtonColors } from './hudButtons';
 import { hudCopy } from './hudCopy';
 import { hudLayout, type Rect } from './hudLayout';
-import { navHighlight, NavigationButton } from './NavigationButton';
+import { navHighlight, NavigationButton, nextNavLock } from './NavigationButton';
 import { StoppedPoints } from './StoppedPoints';
 import { useHaloBurst } from './useHaloBurst';
 import { HaloReadout } from './HaloReadout';
 import { inUnits, useHudUnits } from './useHudUnits';
 import { WeatherBanner } from './WeatherBanner';
 
+/** End's swipe forgives this much up or down before it gives way (nothing scrolls under it). */
+const END_VERTICAL_SLOP_PT = 24;
 /** How often the HUD re-reads the sun (the night palette follows sunset within a few minutes). */
 export const HUD_NIGHT_RECHECK_MS = 5 * 60_000;
 /** A cached position older than this says little about where the car is now. */
@@ -116,8 +118,9 @@ export type HudScreenProps = {
  *   DashPal alert start or step (not a reconnect's re-send), pulse it quickly a few times. Rules in `src/ui/drive/halo.ts`; drawing in `HaloRing.tsx`.
  * - Top row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres) on
  *   the left and the navigation button on the right. The navigation button's list of apps shows in
- *   a panel under the row, never a route: on a tap while no app is saved, or on a long press at any
- *   time (to change the saved app, or to pick one).
+ *   a panel under the row, never a route: on a tap while no app is saved, or on a long press (to
+ *   change the saved app, or to pick one). At 35 mph and over the button greys out and takes no
+ *   touch (its list closes) until the car is back under 30 mph.
  * - Band, under the top row: for 1.5 s after an event (or a DashPal alert start or level change) its icon and one
  *   or two words, across the whole band (the DashPal chip steps aside); else a failed end, the
  *   dangerous-weather banner (its ✕ live at any speed; hidden for the rest of the drive once
@@ -129,7 +132,8 @@ export type HudScreenProps = {
  *   the navigation button and End under it.
  * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive.
  *   End and the navigation button wear the app's paper, ink and sky accent (`hudButtonColors`).
- *   End, the navigation button and the weather banner's ✕ are the only touch targets while moving.
+ *   End, the navigation button (under 35 mph) and the weather banner's ✕ are the only touch targets
+ *   while moving.
  *   Every other touch only undims.
  * - After 10 s without a touch a dark scrim dims everything, never while an alert banner shows; the
  *   halo and the speed stay above it, at reduced strength and still flowing while calm, at full
@@ -166,7 +170,12 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const dashpal = useDashpalFlash();
   const dashpalChip = useDashpalChip();
   const held = useDashpalHeld();
-  const nav = useNavigationButton(useOptionalDb());
+  // The navigation button greys out at 35 mph and over, back under 30 (the row's GPS speed; an
+  // unknown speed holds it): advanced once per render from the last (state-from-the-previous-render).
+  const [navLocked, setNavLocked] = useState(false);
+  const nextLocked = nextNavLock(navLocked, live.rowSpeedMph);
+  if (nextLocked !== navLocked) setNavLocked(nextLocked);
+  const nav = useNavigationButton(useOptionalDb(), undefined, nextLocked);
   const savedApp = nav.saved === null ? null : navAppById(nav.saved);
   // The button's warm-up highlight: an app is saved and the drive's rows are still under 30 s old (row clock).
   const navLit = useDrive((s) => s.status === 'recording' && navHighlight(savedApp !== null, s.startedAt, s.lastRowTs));
@@ -347,6 +356,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             colors={{ track: b.paper, fill: b.fill, knob: b.ink, knobInk: b.paper, hint: b.ink }}
             height={layout.end.h}
             busy={busy}
+            verticalSlop={END_VERTICAL_SLOP_PT}
             onSwipe={() => void onEnd()}
             label={
               <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit style={[styles.endLabel, { color: b.ink }]}>
@@ -360,8 +370,10 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         <NavigationButton
           caption={savedApp?.short ?? null}
           appLabel={savedApp?.label ?? null}
-          highlight={navLit}
+          highlight={navLit && !nextLocked}
           disabled={busy || live.status !== 'recording'}
+          locked={nextLocked}
+          units={units}
           palette={p}
           colors={b}
           width={layout.nav.w}

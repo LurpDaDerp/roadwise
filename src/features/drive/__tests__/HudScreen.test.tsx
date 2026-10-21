@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 
 import type { LastFinalized } from '@/drive/host';
 import type { DriveLive, ShownSpeed } from '@/drive/useDrive';
@@ -122,6 +123,10 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
     rowSpeedMph: 34,
     limitMph: 35,
     speedingTier: null,
+    speedingRatio: null,
+    speedingOver: false,
+    courseDeg: null,
+    lastDeduction: null,
     stopped: false,
     lastAlert: null,
     weatherAlert: null,
@@ -779,7 +784,7 @@ describe('the navigation button (design §7.4, §8)', () => {
   });
 
   test('it shows while moving, with "Navigate" and no highlight when no app is saved', async () => {
-    await renderHud({ speedMph: 60 });
+    await renderHud({ speedMph: 25 });
     expect(screen.getByTestId('hud-nav')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Choose a navigation app' })).toBeOnTheScreen();
     expect(screen.getByText('Navigate')).toBeOnTheScreen();
@@ -788,8 +793,8 @@ describe('the navigation button (design §7.4, §8)', () => {
 
   test("under a sky the list wears the app's own sheet colours, as in Settings", async () => {
     const mood: SkyMood = { phase: 'day', glow: 0, weather: { kind: 'clear', intensity: 'moderate' } };
-    mockLive = live({ rowSpeedMph: 60 });
-    setShown({ speedMph: 60, speedAccelMph: 0, speedAt: Date.now() });
+    mockLive = live({ rowSpeedMph: 25 });
+    setShown({ speedMph: 25, speedAccelMph: 0, speedAt: Date.now() });
     await render(
       <ThemeProvider mood={mood}>
         <HudScreen />
@@ -803,8 +808,8 @@ describe('the navigation button (design §7.4, §8)', () => {
     expect(screen.getByText('Select default navigation app')).toHaveStyle({ color: c.text });
   });
 
-  test('the first tap at 60 mph opens the list of installed apps over the HUD; End still ends the drive with it open', async () => {
-    await renderHud({ speedMph: 60 });
+  test('the first tap at 25 mph opens the list of installed apps over the HUD; End still ends the drive with it open', async () => {
+    await renderHud({ speedMph: 25 });
     await fireEvent.press(screen.getByTestId('hud-nav'));
     await act(async () => {});
     expect(screen.getByTestId('nav-picker')).toBeOnTheScreen();
@@ -835,9 +840,9 @@ describe('the navigation button (design §7.4, §8)', () => {
     expect(screen.queryByTestId('hud-nav-highlight')).toBeNull();
   });
 
-  test('with a saved app, a long press at 60 mph reopens the list with it marked; choosing another saves it and opens it', async () => {
+  test('with a saved app, a long press at 25 mph reopens the list with it marked; choosing another saves it and opens it', async () => {
     mockNavApp = 'waze';
-    await renderHud({ speedMph: 60 });
+    await renderHud({ speedMph: 25 });
     const button = screen.getByRole('button', { name: 'Open Waze' });
     expect(button).toHaveProp('accessibilityHint', 'Touch and hold to change the navigation app.');
     await fireEvent(button, 'longPress');
@@ -856,7 +861,7 @@ describe('the navigation button (design §7.4, §8)', () => {
 
   test('the screen reader action "Change navigation app" does the same; a tap still opens the saved app', async () => {
     mockNavApp = 'waze';
-    await renderHud({ speedMph: 60 });
+    await renderHud({ speedMph: 25 });
     const button = screen.getByRole('button', { name: 'Open Waze' });
     expect(button).toHaveProp('accessibilityActions', [{ name: 'change', label: 'Change navigation app' }]);
     await fireEvent(button, 'accessibilityAction', { nativeEvent: { actionName: 'change' } });
@@ -870,7 +875,7 @@ describe('the navigation button (design §7.4, §8)', () => {
   });
 
   test('no saved app: a long press opens the list too (no "change" action); choosing saves it, and the next tap opens it directly', async () => {
-    await renderHud({ speedMph: 60 });
+    await renderHud({ speedMph: 25 });
     const button = screen.getByRole('button', { name: 'Choose a navigation app' });
     expect(button.props.accessibilityActions).toBeUndefined();
     await fireEvent(button, 'longPress');
@@ -893,6 +898,80 @@ describe('the navigation button (design §7.4, §8)', () => {
   test('disabled while the drive is saving', async () => {
     await renderHud({ status: 'finalizing' });
     expect(screen.getByTestId('hud-nav').props.accessibilityState).toMatchObject({ disabled: true });
+  });
+
+  describe('greyed out at speed', () => {
+    const nav = () => screen.getByTestId('hud-nav');
+    const locked = () => nav().props.accessibilityState?.disabled === true;
+
+    test('at 35 mph it greys out and takes no tap, saying when it comes back; it stays so down to 30 and is back under 30', async () => {
+      const h = await renderHud({ speedMph: 34.9 });
+      expect(locked()).toBe(false);
+      await h.update({ speedMph: 35 });
+      expect(locked()).toBe(true);
+      expect(nav()).toHaveProp('accessibilityHint', 'Available below 35 mph.');
+      // visibly grey: weaker, on a face that is no longer the paper
+      expect(StyleSheet.flatten(nav().props.style)).toMatchObject({ opacity: 0.55 });
+      await fireEvent.press(nav());
+      await act(async () => {});
+      expect(screen.queryByTestId('nav-picker')).toBeNull();
+      for (const mph of [33, 31, 30]) {
+        await h.update({ speedMph: mph });
+        expect(locked()).toBe(true);
+      }
+      await h.update({ speedMph: 29.9 });
+      expect(locked()).toBe(false);
+      expect(nav().props.accessibilityHint).toBeUndefined();
+      await fireEvent.press(nav());
+      await act(async () => {});
+      expect(screen.getByTestId('nav-picker')).toBeOnTheScreen();
+    });
+
+    test('an unknown speed holds it as it was, locked or not', async () => {
+      const h = await renderHud({ speedMph: 50 });
+      expect(locked()).toBe(true);
+      await h.update({ speedMph: null });
+      expect(locked()).toBe(true);
+      await h.update({ speedMph: 20 });
+      expect(locked()).toBe(false);
+      await h.update({ speedMph: null });
+      expect(locked()).toBe(false);
+    });
+
+    test('kilometres: the hint in km/h', async () => {
+      mockUnits = 'km';
+      await renderHud({ speedMph: 60 });
+      expect(nav()).toHaveProp('accessibilityHint', 'Available below 56 km/h.');
+    });
+
+    test('the open list closes as it locks, and a long press or the screen reader action does nothing while locked', async () => {
+      mockNavApp = 'waze';
+      const h = await renderHud({ speedMph: 25 });
+      await fireEvent(screen.getByRole('button', { name: 'Open Waze' }), 'longPress');
+      await act(async () => {});
+      expect(screen.getByTestId('nav-picker')).toBeOnTheScreen();
+      await h.update({ speedMph: 40 });
+      await act(async () => {});
+      expect(screen.queryByTestId('nav-picker')).toBeNull();
+      const button = screen.getByRole('button', { name: 'Open Waze' });
+      expect(button.props.accessibilityActions).toBeUndefined();
+      await fireEvent(button, 'longPress');
+      await fireEvent(button, 'accessibilityAction', { nativeEvent: { actionName: 'change' } });
+      await act(async () => {});
+      expect(screen.queryByTestId('nav-picker')).toBeNull();
+      expect(Linking.openURL).not.toHaveBeenCalled();
+    });
+
+    test('the warm-up highlight hides while it is greyed out', async () => {
+      mockNavApp = 'waze';
+      mockLastRowTs = T + 5_000;
+      const h = await renderHud({ speedMph: 25 });
+      expect(screen.getByTestId('hud-nav-highlight')).toBeOnTheScreen();
+      await h.update({ speedMph: 45 });
+      expect(screen.queryByTestId('hud-nav-highlight')).toBeNull();
+      await h.update({ speedMph: 20 });
+      expect(screen.getByTestId('hud-nav-highlight')).toBeOnTheScreen();
+    });
   });
 });
 

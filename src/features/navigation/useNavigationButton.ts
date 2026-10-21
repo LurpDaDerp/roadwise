@@ -9,7 +9,9 @@
 //   saved, a long press is a first tap: the list.
 // - Every open tells the drive host first (`noteLeaving`): leaving RoadWise this way is the one
 //   screen switch that is never phone use. An open that fails takes it back (`cancelLeaving`).
-// - A tap while an open is in flight is ignored (at most 3 s). It works at any speed.
+// - A tap while an open is in flight is ignored (at most 3 s).
+// - `locked` (the driving screen greys the button out at 35 mph and over): the list closes, and
+//   nothing new starts or opens the list until it is free again. An app already opening finishes.
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { Db } from '@/data/db';
@@ -44,11 +46,12 @@ const settle = (p: Promise<boolean>, ms: number): Promise<boolean> =>
     });
   });
 
-export function useNavigationButton(db: Db | null, port: NavAppsPort = defaultNavAppsPort): NavigationButton {
+export function useNavigationButton(db: Db | null, port: NavAppsPort = defaultNavAppsPort, locked = false): NavigationButton {
   const [saved, setSaved] = useState<NavAppId | null>(null);
   const [picker, setPicker] = useState<NavPicker>(null);
   const busy = useRef(false);
   const live = useRef(true);
+  const lockedNow = useRef(locked);
 
   useEffect(() => {
     live.current = true;
@@ -58,9 +61,15 @@ export function useNavigationButton(db: Db | null, port: NavAppsPort = defaultNa
     };
   }, [db]);
 
+  // Locked: no list shows, not even one a press already under way asks for.
   const show = useCallback((next: NavPicker) => {
-    if (live.current) setPicker(next);
+    if (live.current && (next === null || !lockedNow.current)) setPicker(next);
   }, []);
+
+  useEffect(() => {
+    lockedNow.current = locked;
+    if (locked && live.current) setPicker(null);
+  }, [locked]);
 
   /** Note the leave, open, and take it back when the app did not open. */
   const leaveTo = useCallback(
@@ -74,7 +83,7 @@ export function useNavigationButton(db: Db | null, port: NavAppsPort = defaultNa
   );
 
   const press = useCallback(async () => {
-    if (busy.current) return;
+    if (busy.current || lockedNow.current) return;
     busy.current = true;
     try {
       const id = db === null ? null : await readNavApp(db);
@@ -98,7 +107,7 @@ export function useNavigationButton(db: Db | null, port: NavAppsPort = defaultNa
   }, [db, port, leaveTo, show]);
 
   const change = useCallback(async () => {
-    if (busy.current) return;
+    if (busy.current || lockedNow.current) return;
     const id = db === null ? null : await readNavApp(db).catch(() => null);
     if (id === null) return press();
     if (busy.current) return;
@@ -112,7 +121,7 @@ export function useNavigationButton(db: Db | null, port: NavAppsPort = defaultNa
 
   const choose = useCallback(
     async (app: InstalledNavApp) => {
-      if (busy.current) return;
+      if (busy.current || lockedNow.current) return;
       busy.current = true;
       try {
         // A failed write leaves the drive alone: the app still opens, and the list comes next time.
