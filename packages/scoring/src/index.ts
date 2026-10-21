@@ -2,5 +2,4 @@
 export * from './drive';
 export * from './rating';
 export * from './stats';
-export * from './streak';
 export * from './thresholds';
