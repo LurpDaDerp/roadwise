@@ -1,4 +1,32 @@
+import { PHONE_PICKUP_MIN_MPH, PHONE_PUTDOWN_QUIET_S } from '@scoring';
+
+import { distanceIn, type Units } from '@/lib/units';
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** "10 mph" or "16 km/h": a speed in the driver's units, whole. */
+const speed = (mph: number, units: Units) => (units === 'km' ? `${Math.round(distanceIn(mph, 'km'))} km/h` : `${mph} mph`);
+
+/** "45 min" under an hour, "3.2 h" from there: driving time in a sentence. */
+function hours(seconds: number): string {
+  const min = Math.round(seconds / 60);
+  if (min < 60) return `${Math.max(1, min)} min`;
+  const h = seconds / 3600;
+  return `${h < 10 ? (Math.round(h * 10) / 10).toFixed(1) : Math.round(h).toLocaleString('en-US')} h`;
+}
+
+/**
+ * Phone use's rate line: pickups per hour at driving speed, "0.4 pickups an hour at driving
+ * speed", or "No pickups in 3.2 h at driving speed". Null when the phone was not watched.
+ */
+function pickupsRate(pickups: number, phoneS: number): string | null {
+  if (phoneS <= 0) return null;
+  if (pickups <= 0) return `No pickups in ${hours(phoneS)} at driving speed`;
+  const perHour = (pickups * 3600) / phoneS;
+  if (perHour < 0.1) return 'Under 0.1 pickups an hour at driving speed';
+  const n = perHour < 10 ? (Math.round(perHour * 10) / 10).toFixed(1) : Math.round(perHour).toLocaleString('en-US');
+  return `${n} pickups an hour at driving speed`;
+}
 
 /**
  * A category's rate line under its numbers (scores §7.2): how often it slipped per chance, "1 hard
@@ -33,7 +61,7 @@ export const analyticsCopy = {
       label: 'How it works',
       hint: 'Explains the Safety Rating',
       title: 'How it works',
-      body: "Your Safety Rating is the average of your category scores, with Speed counting double. Each one looks at your last 90 days, recent weeks a bit more, and judges you per chance to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, and how much of your driving is over the limit. You start from a typical driver's score and move from there with every drive.",
+      body: "Your Safety Rating is the average of your category scores, with Speed and Phone use counting double. Each one looks at your last 90 days, recent weeks a bit more, and judges you per chance to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, and how often and how long your phone is in your hand at driving speed. You start from a typical driver's score and move from there with every drive.",
     },
   },
   category: {
@@ -53,6 +81,14 @@ export const analyticsCopy = {
     /** Attention with a DashPal but no watched drives in the range. */
     noDashpal: 'No DashPal drives yet',
     noDashpalBody: (range: string) => `DashPal didn't watch any drives in the ${range.toLowerCase()}. Your Attention numbers show up here after one.`,
+    /** Phone use: how a pickup is judged, under its numbers. */
+    phoneHow: (units: Units) => [
+      `A pickup counts once the car is going ${speed(PHONE_PICKUP_MIN_MPH, units)} or more, plus every second your phone stays in your hand while you're moving.`,
+      `Put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s and it's still one pickup.`,
+    ],
+    /** Phone use before any drive was watched for it. */
+    noPhone: 'No phone data yet',
+    noPhoneBody: 'Your Phone use numbers show up here after your next drive.',
     /** In place of the numbers when the range has no drives. */
     empty: 'No data yet',
     emptyBody: (range: string) => `No drives in the ${range.toLowerCase()}. Your numbers show up here after a drive.`,
@@ -61,6 +97,7 @@ export const analyticsCopy = {
       braking: (n: number, slowdowns: number) => eventsRate(n, slowdowns, ['hard brake', 'hard brakes'], ['slowdown', 'slowdowns'], 'A hard brake on your only slowdown'),
       acceleration: (n: number, speedups: number) => eventsRate(n, speedups, ['hard start', 'hard starts'], ['speed-up', 'speed-ups'], 'A hard start on your only speed-up'),
       turning: (n: number, turns: number) => eventsRate(n, turns, ['sharp turn', 'sharp turns'], ['turn', 'turns'], 'A sharp turn on your only turn'),
+      phone: pickupsRate,
       speed: (speedingS: number, limitS: number): string | null => {
         if (limitS <= 0) return null;
         if (speedingS <= 0) return 'Never over the limit';
@@ -96,6 +133,8 @@ export const analyticsCopy = {
     withLimit: 'With a limit',
     cleanDrives: 'Clean drives',
     cleanRate: 'Clean rate',
+    pickups: 'Phone pickups',
+    inHand: 'Time in hand',
   },
   trend: {
     title: 'Trends',

@@ -15,6 +15,7 @@ import {
   LEVEL_ICON,
   LEVEL_LABEL,
   LEVEL_TONE,
+  PHONE_AXIS,
   RANGE_LABEL,
   RANGES,
   type AxisKey,
@@ -29,8 +30,8 @@ const SEGMENTS = RANGES.map((value) => ({ value, label: RANGE_LABEL[value] }));
 /**
  * A category's numbers over the range: its events against its chances to slip (hard brakes and
  * slowdowns, hard starts and speed-ups, sharp turns and turns), Speed's events with the time over
- * the limit and the time with a known limit, or Attention's eyes-off and drowsy counts and the
- * distance DashPal watched.
+ * the limit and the time with a known limit, Phone use's pickups and their time in hand, or
+ * Attention's eyes-off and drowsy counts and the distance DashPal watched.
  */
 export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units: Units): MetricGroup {
   const cells = ((): MetricGroup['cells'] => {
@@ -56,6 +57,11 @@ export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units:
           { key: 'sharp-turns', caption: m.sharpTurns, metric: countMetric(s.hardCorner) },
           { key: 'turns', caption: m.turns, metric: countMetric(s.turns) },
         ];
+      case 'phone':
+        return [
+          { key: 'phone-pickups', caption: m.pickups, metric: countMetric(s.pickups) },
+          { key: 'phone-in-hand', caption: m.inHand, metric: timeMetric(s.inHandS) },
+        ];
       case 'attention':
         return [
           { key: 'eyes-off', caption: c.eyesOff, metric: countMetric(s.eyesOff) },
@@ -69,8 +75,9 @@ export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units:
 
 /**
  * The line under a category's numbers: how often it slipped per chance ("1 hard brake per 137
- * slowdowns", "Over the limit 2% of the time"), marked "(estimated)" while the range holds drives
- * recorded before the chances were counted. Null for Attention and a range with no chances.
+ * slowdowns", "Over the limit 2% of the time", "0.4 pickups an hour at driving speed"), marked
+ * "(estimated)" while the range holds drives recorded before the chances were counted (never Phone
+ * use's, which is never estimated). Null for Attention and a range with no chances.
  */
 export function rateLine(axis: AxisKey, s: WindowSums): string | null {
   const r = c.rate;
@@ -84,11 +91,13 @@ export function rateLine(axis: AxisKey, s: WindowSums): string | null {
         return r.turning(s.hardCorner, s.turns);
       case 'speed':
         return r.speed(s.speedingS, s.limitS);
+      case 'phone':
+        return r.phone(s.pickups, s.phoneS);
       case 'attention':
         return null;
     }
   })();
-  return line !== null && s.exposureEstimated ? r.estimated(line) : line;
+  return line !== null && s.exposureEstimated && axis !== PHONE_AXIS ? r.estimated(line) : line;
 }
 
 /** The sheet's title: the category and its 90-day score ("Speed · 82", "Speed · —"); a locked one its name alone. */
@@ -118,7 +127,9 @@ export interface CategorySheetProps {
  * quarters of the window's height. A range with no drives shows "No data yet" in their place (and
  * no verdict either when the 30 days have no score), so the sheet always opens to something.
  * Attention without a paired DashPal says where it comes from and offers to set one up; with one
- * but no watched drives in the range, it says so.
+ * but no watched drives in the range, it says so. Phone use says how a pickup is judged under its
+ * numbers, and with drives in the range but none watched for pickups, it says its numbers come with
+ * the next drive.
  */
 export function CategorySheet({ axis, visible, onClose, score, last90, sums, range, onRange, dashpalPaired, onPairDashpal }: CategorySheetProps) {
   const t = useTheme();
@@ -139,7 +150,9 @@ export function CategorySheet({ axis, visible, onClose, score, last90, sums, ran
       </Sheet>
     );
   }
-  const empty = attention ? sums.watchedMiles <= 0 : sums.drives === 0;
+  const phone = axis === PHONE_AXIS;
+  const noPhone = phone && sums.drives > 0 && sums.phoneS <= 0 && sums.pickups === 0;
+  const empty = attention ? sums.watchedMiles <= 0 : sums.drives === 0 || noPhone;
   return (
     <Sheet visible={visible} onClose={onClose} title={categoryTitle(axis, score)} subtitle={c.subtitle} scroll testID="category-sheet">
       {empty && score === null ? null : (
@@ -157,8 +170,8 @@ export function CategorySheet({ axis, visible, onClose, score, last90, sums, ran
       {empty ? (
         <EmptyState
           icon="analytics-outline"
-          title={attention ? c.noDashpal : c.empty}
-          body={attention ? c.noDashpalBody(c.range[range]) : c.emptyBody(c.range[range])}
+          title={attention ? c.noDashpal : noPhone ? c.noPhone : c.empty}
+          body={attention ? c.noDashpalBody(c.range[range]) : noPhone ? c.noPhoneBody : c.emptyBody(c.range[range])}
           testID="category-empty"
         />
       ) : (
@@ -171,6 +184,15 @@ export function CategorySheet({ axis, visible, onClose, score, last90, sums, ran
           ) : null}
         </>
       )}
+      {phone ? (
+        <View style={{ gap: t.space.xs }} testID="category-phone-how">
+          {c.phoneHow(units).map((line) => (
+            <Text key={line} variant="footnote" tone="muted">
+              {line}
+            </Text>
+          ))}
+        </View>
+      ) : null}
     </Sheet>
   );
 }

@@ -3,12 +3,14 @@
  * deterministic: every function takes the instant it measures from (`now`, `at`) or a cutoff, never
  * the clock, so each rule is testable on its own.
  *
- * The radar's five categories and the Safety Rating at its centre come from the scoring package's
+ * The radar's six categories and the Safety Rating at its centre come from the scoring package's
  * `ratingAt`: over the last 90 days, recent weeks counting more, each category judges the driver per
  * chance to slip (hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, time over
- * the limit per second with a known limit, Attention per mile DashPal watched), smoothed toward a
- * typical driver's, and the rating is their weighted average with Speed counting double. The
- * categories are shown as whole numbers, the rating to 1 decimal. Time of day is not scored at all
+ * the limit per second with a known limit, phone pickups and their time in hand per second at
+ * driving speed, Attention per mile DashPal watched), smoothed toward a typical driver's, and the
+ * rating is their weighted average with Speed and Phone use counting double. Phone use has no score
+ * until a drive in the window was watched for it. The categories are shown as whole numbers, the
+ * rating to 1 decimal. Time of day is not scored at all
  * (a card under When you drive comments on it instead). Local data includes drives still uploading,
  * so the numbers here can lead the server's by a drive until it answers.
  */
@@ -38,21 +40,28 @@ const LABELS: Record<AxisKey, string> = {
   braking: 'Braking',
   turning: 'Turning',
   attention: 'Attention',
+  phone: 'Phone use',
   speed: 'Speed',
 };
 
-/** Radar order, clockwise from the top (the scoring package's): Acceleration, Braking, Turning, Attention, Speed. */
+/** Radar order, clockwise from the top (the scoring package's): Acceleration, Braking, Turning, Attention, Phone use, Speed. */
 export const AXES: readonly { key: AxisKey; label: string }[] = SCORING_AXES.map((key) => ({ key, label: LABELS[key] }));
 
 export const AXIS_LABEL: Record<AxisKey, string> = LABELS;
 
-/** The axes the Safety Rating averages (all five), in radar order. */
+/** The axes the Safety Rating averages (all of them), in radar order. */
 export const PENALTY_AXES: readonly AxisKey[] = AXES.map((a) => a.key);
 
 /** The axis that needs a paired DashPal: locked on the radar without one. */
 export const DASHPAL_AXIS: AxisKey = SCORING_DASHPAL_AXIS;
 
-/** 0–100 per axis, whole numbers; null when the window has no miles (Attention: no watched miles). */
+/** Phone use: no score (and no point on the radar) until a drive in the window was watched for pickups. */
+export const PHONE_AXIS: AxisKey = 'phone';
+
+/**
+ * 0–100 per axis, whole numbers; null when the window has no miles (Attention: no watched miles;
+ * Phone use: no drive watched for it).
+ */
 export type AxisScores = Record<AxisKey, number | null>;
 
 /** What a window holds: the scored drives' totals. */
@@ -126,7 +135,14 @@ export function radarScores(drives: readonly LocalDrive[], events: readonly Driv
 }
 
 function wholeScores(s: Record<AxisKey, number | null>): AxisScores {
-  return { acceleration: whole(s.acceleration), braking: whole(s.braking), turning: whole(s.turning), attention: whole(s.attention), speed: whole(s.speed) };
+  return {
+    acceleration: whole(s.acceleration),
+    braking: whole(s.braking),
+    turning: whole(s.turning),
+    attention: whole(s.attention),
+    phone: whole(s.phone),
+    speed: whole(s.speed),
+  };
 }
 
 /** The Safety Rating as of `at` (`ratingAt`: 1 decimal, ranked from 10 mi in its 90 days). The same arithmetic as the server's. */
@@ -176,6 +192,7 @@ export const AXIS_TIP: Record<AxisKey, string> = {
   acceleration: 'Roll onto the gas smoothly.',
   turning: 'Slow down before the turn, not in it.',
   attention: 'Eyes on the road, and pull over when tired.',
+  phone: 'Put your phone away before you pull out.',
 };
 
 export const AXIS_TITLE: Record<AxisKey, string> = {
@@ -184,6 +201,7 @@ export const AXIS_TITLE: Record<AxisKey, string> = {
   acceleration: 'Ease into the gas',
   turning: 'Take turns slower',
   attention: 'Stay focused',
+  phone: 'Phone down while driving',
 };
 
 export const GOOD_TITLE = 'Driving well';
@@ -334,6 +352,12 @@ export interface WindowSums {
   limitS: number;
   /** Seconds over the line after each speeding episode's grace (Σ `speedingChargedS` of the active speeding events). */
   speedingS: number;
+  /** Active phone pickups. */
+  pickups: number;
+  /** Their seconds in hand while moving (Σ the pickups' `durationS`, from the events). */
+  inHandS: number;
+  /** Seconds at driving speed the phone was watched for pickups (Phone use's chances); 0 before it was tracked. */
+  phoneS: number;
   /** A drive in the window was recorded before the counters existed: its chances are estimated. */
   exposureEstimated: boolean;
   /** DashPal's events (Attention's sheet only; never in the phone's stats). */
@@ -364,6 +388,9 @@ export const EMPTY_WINDOW: WindowSums = Object.freeze({
   turns: 0,
   limitS: 0,
   speedingS: 0,
+  pickups: 0,
+  inHandS: 0,
+  phoneS: 0,
   exposureEstimated: false,
   eyesOff: 0,
   drowsy: 0,
@@ -375,9 +402,9 @@ export const EMPTY_WINDOW: WindowSums = Object.freeze({
 
 /**
  * The metric sums over scored drives started at or after `sinceMs`, with their chances to slip
- * (each drive's exposure) and the seconds over the limit (from `events`, the active events of the
- * scored drives: each belongs to the latest drive started at or before it). DashPal eyes-off and
- * drowsy are counted apart, for Attention's sheet only; every other stat leaves them out.
+ * (each drive's exposure), and the seconds over the limit and in hand (from `events`, the active
+ * events of the scored drives: each belongs to the latest drive started at or before it). DashPal
+ * eyes-off and drowsy are counted apart, for Attention's sheet only; every other stat leaves them out.
  */
 export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null, events: readonly DriveEvent[] = []): WindowSums {
   const out = { ...EMPTY_WINDOW };
@@ -396,13 +423,17 @@ export function windowSums(drives: readonly LocalDrive[], sinceMs: number | null
     out.speedups += d.exposure.speedups;
     out.turns += d.exposure.turns;
     out.limitS += d.exposure.limitS;
+    out.phoneS += d.exposure.phoneS;
+    out.pickups += d.counts.pickups;
     if (d.exposureEstimated) out.exposureEstimated = true;
     out.eyesOff += d.counts.eyesOff;
     out.drowsy += d.counts.drowsy;
     out.watchedMiles += d.watchedMiles;
     if (d.clean === true) out.cleanDrives += 1;
     for (const e of own?.get(d.clientTripId) ?? []) {
-      if (e.type === 'speeding' && e.status !== 'removed') out.speedingS += speedingChargedS(e.durationS);
+      if (e.status === 'removed') continue;
+      if (e.type === 'speeding') out.speedingS += speedingChargedS(e.durationS);
+      else if (e.type === 'phone_pickup' && Number.isFinite(e.durationS)) out.inHandS += Math.max(0, e.durationS);
     }
   }
   out.avgMph = out.durationS > 0 ? out.miles / (out.durationS / 3600) : null;
@@ -531,8 +562,9 @@ function hourTicks(sinceMs: number, now: number): TrendTick[] {
  *   one more point now. The latest point (now) is the radar's centre on every range. A point only
  *   where those 90 days hold 10 mi or more (ranked), so a slot with no drives of its own can still
  *   have one.
- * - Events: the slot's speeding, hard brakes, hard starts and sharp turns, from the drives' counts
- *   like the window's numbers, per mile driven in the slot; a slot with no miles has no point.
+ * - Events: the slot's speeding, hard brakes, hard starts, sharp turns and phone pickups, from the
+ *   drives' counts like the window's numbers, per mile driven in the slot; a slot with no miles has
+ *   no point.
  *
  * An event belongs to the drive it happened in: the latest drive started at or before it (drives
  * never overlap).
@@ -563,7 +595,7 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
     }
     const a = acc[k]!;
     a.miles += d.miles;
-    a.events += d.counts.speeding + d.counts.hardBrake + d.counts.hardAccel + d.counts.hardCorner;
+    a.events += d.counts.speeding + d.counts.hardBrake + d.counts.hardAccel + d.counts.hardCorner + d.counts.pickups;
   });
   slots.forEach((s, i) => {
     const a = acc[i]!;

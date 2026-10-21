@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
 
-import { draw, press } from '@/features/drives/__fixtures__/drives';
+import { draw, EXPOSURE, press } from '@/features/drives/__fixtures__/drives';
 import { driveSummaryHref } from '@/features/drives/routes';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
 import { ThemeProvider } from '@/ui/theme';
@@ -43,20 +43,22 @@ jest.mock('../spots', () => {
 });
 
 type MockRange = 'day' | 'week' | 'month' | 'year';
-// Ten drives, one every 30 hours: 6 in the last week, all 10 in the last month.
-let mockData: (range: MockRange) => AnalyticsData = (range) => mockAnalytics(mockDrives(10, 30), range);
+// Ten drives, one every 30 hours: 6 in the last week, all 10 in the last month, each watched for
+// phone pickups for 20 minutes at driving speed.
+const mockList = () => mockDrives(10, 30, { exposure: { ...EXPOSURE, phoneS: 1200 } });
+let mockData: (range: MockRange) => AnalyticsData = (range) => mockAnalytics(mockList(), range);
 const mockUseAnalytics = jest.fn((range: MockRange) => mockData(range));
 jest.mock('../useAnalytics', () => ({ useAnalytics: (range: MockRange) => mockUseAnalytics(range) }));
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockSpots = { computed: true, eligible: true, active: [SPOT], clearedRecently: 0 };
-  mockData = (range) => mockAnalytics(mockDrives(10, 30), range);
+  mockData = (range) => mockAnalytics(mockList(), range);
 });
 
 /** The fixture's analytics with this 90-day rating. */
 const withRating = (rating: number | null, ranked: boolean) => (range: MockRange) => {
-  const base = mockAnalytics(mockDrives(10, 30), range);
+  const base = mockAnalytics(mockList(), range);
   return { ...base, coaching: { ...base.coaching, rating: { rating, ranked } } };
 };
 
@@ -94,9 +96,9 @@ test('top to bottom: radar, summary, bests, range, metrics, when you drive, time
 
 test('the radar centre is the 90-day Safety Rating of the categories around it, whole and bold', async () => {
   await draw(<AnalyticsScreen />);
-  // The fixture's axes average to 88.8 (Speed double).
-  expect(SCORES_RATING).toBe(88.8);
-  expect(screen.getByTestId('radar-rating')).toHaveTextContent('89');
+  // The fixture's axes average to 87.6 (Speed and Phone use double).
+  expect(SCORES_RATING).toBe(87.6);
+  expect(screen.getByTestId('radar-rating')).toHaveTextContent('88');
   mockData = withRating(91.5, true);
   await draw(<AnalyticsScreen />);
   expect(screen.getByTestId('radar-rating')).toHaveTextContent('92');
@@ -180,10 +182,10 @@ test('the page keeps only general numbers: no category counts, rates or bests, a
   expect(screen.getByTestId('metric-clean-rate')).toBeOnTheScreen();
   expect(screen.getByTestId('best-clean')).toBeOnTheScreen();
   expect(screen.queryByTestId('category-sheet')).toBeNull();
-  expect(screen.queryByText(/\bpoints?\b|\bpts\b|Phone use/i)).toBeNull();
+  expect(screen.queryByText(/\bpoints?\b|\bpts\b/i)).toBeNull();
   // The radar's per-category numbers are its scores, nothing else.
   const chips = within(screen.getByTestId('analytics-radar')).getAllByTestId(/^radar-axis-/);
-  expect(chips).toHaveLength(5);
+  expect(chips).toHaveLength(6);
   for (const el of chips) expect(el.props.accessibilityLabel).toMatch(/^[A-Za-z ]+, (score \d+|no score yet|needs DashPal)$/);
   // Its one other button explains the total, with no number.
   expect(within(screen.getByTestId('analytics-radar')).getAllByRole('button').map((el) => el.props.accessibilityLabel)).toContain('How it works');
@@ -194,6 +196,7 @@ test.each([
   ['braking', 'Braking · 72', ['metric-brakes', 'metric-slowdowns']],
   ['acceleration', 'Acceleration · 95', ['metric-starts', 'metric-speedups']],
   ['turning', 'Turning · 100', ['metric-sharp-turns', 'metric-turns']],
+  ['phone', 'Phone use · 84', ['metric-phone-pickups', 'metric-phone-in-hand']],
 ] as const)('tapping %s on the radar opens its details, which close again', async (axis, title, cells) => {
   await draw(<AnalyticsScreen />);
   await press(screen.getByTestId(`radar-axis-${axis}`));
@@ -212,7 +215,7 @@ test('with no drives at all, every category still opens: "No data yet"', async (
   mockData = () => mockEmpty();
   await draw(<AnalyticsScreen />);
   expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
-  for (const axis of ['acceleration', 'braking', 'turning', 'speed']) {
+  for (const axis of ['acceleration', 'braking', 'turning', 'phone', 'speed']) {
     await press(screen.getByTestId(`radar-axis-${axis}`));
     const sheet = screen.getByTestId('category-sheet');
     expect(within(sheet).getByText('No data yet')).toBeOnTheScreen();

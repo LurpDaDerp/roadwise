@@ -25,10 +25,12 @@ export interface MetricGroup {
 
 /**
  * The range's general numbers: Driving (drives, the time spent driving, distance and two averages)
- * and Clean driving (the drives with no events, and their share). Each radar category's own
- * numbers live in its sheet.
+ * and Clean driving (the drives with no events, their share, and the phone pickups and time in hand
+ * that break a clean drive; a dash for those while no drive in the range was watched for pickups).
+ * Each radar category's own numbers live in its sheet.
  */
 export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
+  const watched = s.phoneS > 0 || s.pickups > 0;
   return [
     {
       key: 'driving',
@@ -47,13 +49,15 @@ export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
       cells: [
         { key: 'clean', caption: m.cleanDrives, metric: countMetric(s.cleanDrives) },
         { key: 'clean-rate', caption: m.cleanRate, metric: percentMetric(s.cleanPct) },
+        { key: 'pickups', caption: m.pickups, metric: countMetric(watched ? s.pickups : null) },
+        { key: 'in-hand', caption: m.inHand, metric: timeMetric(watched ? s.inHandS : null) },
       ],
     },
   ];
 }
 
 /** The main block's number cards by their cell counts: Driving and Clean driving. */
-export const MAIN_CARDS: readonly number[] = [5, 2];
+export const MAIN_CARDS: readonly number[] = [5, 4];
 
 /** The user's rule: the metrics block never takes more than this share of the window's height. */
 export const METRICS_MAX_SHARE = 0.75;

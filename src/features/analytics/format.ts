@@ -21,8 +21,9 @@ export function distanceMetric(miles: number | null, units: Units): Metric {
   return { value, unit: units, spoken: `${value} ${distanceWord(units)}` };
 }
 
-/** "42 min" under an hour, "1.5 h" under ten hours, "152 h" from there; "<1 min" for a few seconds. */
-export function timeMetric(seconds: number): Metric {
+/** "42 min" under an hour, "1.5 h" under ten hours, "152 h" from there; "<1 min" for a few seconds; a dash for null. */
+export function timeMetric(seconds: number | null): Metric {
+  if (seconds === null || !Number.isFinite(seconds)) return { value: DASH, unit: 'min', spoken: 'no data' };
   const s = Math.max(0, seconds);
   if (s === 0) return { value: '0', unit: 'min', spoken: '0 minutes' };
   const min = Math.round(s / 60);
@@ -41,8 +42,9 @@ export function speedMetric(mph: number | null, units: Units): Metric {
   return { value, unit, spoken: `${value} ${units === 'km' ? 'kilometers per hour' : 'miles per hour'}` };
 }
 
-/** A plain count. */
-export const countMetric = (n: number): Metric => {
+/** A plain count; a dash for null. */
+export const countMetric = (n: number | null): Metric => {
+  if (n === null || !Number.isFinite(n)) return { value: DASH, unit: '', spoken: 'no data' };
   const value = Math.round(n).toLocaleString('en-US');
   return { value, unit: '', spoken: value };
 };

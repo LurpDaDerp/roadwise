@@ -30,8 +30,8 @@ export function result(over: Partial<FinalizeTripResponse> = {}): FinalizeTripRe
   };
 }
 
-/** A 12 mi, 24 min city drive with the chances a drive like it has to slip. */
-export const EXPOSURE = { slowdowns: 30, speedups: 30, turns: 24, limitS: 1200, movingS: 1300 };
+/** A 12 mi, 24 min city drive with the chances a drive like it has to slip; not watched for phone pickups (`phoneS` 0). */
+export const EXPOSURE = { slowdowns: 30, speedups: 30, turns: 24, limitS: 1200, movingS: 1300, phoneS: 0 };
 
 export function drive(over: Partial<LocalDrive> = {}): LocalDrive {
   return {
@@ -46,7 +46,7 @@ export function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     polyline: encodePolyline(ROUTE),
     status: 'scored',
     clean: false,
-    counts: { speeding: 0, hardBrake: 1, hardAccel: 0, hardCorner: 0, eyesOff: 0, drowsy: 0 },
+    counts: { speeding: 0, hardBrake: 1, hardAccel: 0, hardCorner: 0, pickups: 0, eyesOff: 0, drowsy: 0 },
     result: result(),
     reason: null,
     mergedInto: null,

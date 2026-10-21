@@ -14,6 +14,7 @@ import { tokens } from '@/ui/tokens';
 import { drives, NO_SCORES, SCORES } from '../__fixtures__/analytics';
 import { BestsCard } from '../BestsCard';
 import { categoryGroup, CategorySheet, categoryTitle, rateLine } from '../CategorySheet';
+import { analyticsCopy } from '../copy';
 import { DRIVES_PAGE, DrivesCard, driveLine } from '../DrivesCard';
 import { MAIN_CARDS, metricGroups, metricsBlockHeight, MetricsCards, metricsLayout, METRICS_MAX_SHARE, metricsText } from '../MetricsCards';
 import { AXES, coach, driveGrid, EMPTY_TREND, EMPTY_WINDOW, fitLines, personalBests, toRatingDrives, trend, windowSums, type MapPoint } from '../model';
@@ -39,6 +40,12 @@ type El = ReturnType<typeof screen.getByTestId>;
 const flat = (el: El): ViewStyle & TextStyle => StyleSheet.flatten(el.props.style) ?? {};
 
 describe('RadarCard', () => {
+  /** The drawn shape's vertices, read off its path ("M x y x y … z"). */
+  const shapePoints = (): number => {
+    const d = String(screen.getByTestId('radar-shape', { includeHiddenElements: true }).props.d);
+    return d.replace(/^M|z$/gi, '').trim().split(/[\s,]+/).length / 2;
+  };
+
   test('the Safety Rating sits in the middle as a whole number, with every category named around it', async () => {
     await draw(<RadarCard dashpalPaired rating={92.4} scores={SCORES} onOpen={jest.fn()} />);
     expect(screen.getByTestId('radar-rating')).toHaveTextContent('92');
@@ -46,9 +53,8 @@ describe('RadarCard', () => {
     expect(screen.getByText('Safety Rating')).toBeOnTheScreen();
     // a card-coloured halo keeps the shape's lines out of the centre number
     expect(screen.getByTestId('radar-rating')).toHaveStyle({ textShadowColor: light.surface });
-    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(5);
-    for (const label of ['Acceleration', 'Braking', 'Turning', 'Attention', 'Speed']) expect(screen.getByText(label)).toBeOnTheScreen();
-    expect(screen.queryByText('Phone use')).toBeNull();
+    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(6);
+    for (const label of ['Acceleration', 'Braking', 'Turning', 'Attention', 'Phone use', 'Speed']) expect(screen.getByText(label)).toBeOnTheScreen();
     expect(screen.getByText('Last 90 days')).toBeOnTheScreen();
   });
 
@@ -67,10 +73,10 @@ describe('RadarCard', () => {
     expect(screen.getByRole('header', { name: 'How it works' })).toBeOnTheScreen();
     const body = screen.getByTestId('radar-how-body');
     expect(body).toHaveTextContent(
-      "Your Safety Rating is the average of your category scores, with Speed counting double. Each one looks at your last 90 days, recent weeks a bit more, and judges you per chance to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, and how much of your driving is over the limit. You start from a typical driver's score and move from there with every drive."
+      "Your Safety Rating is the average of your category scores, with Speed and Phone use counting double. Each one looks at your last 90 days, recent weeks a bit more, and judges you per chance to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, and how often and how long your phone is in your hand at driving speed. You start from a typical driver's score and move from there with every drive."
     );
-    // No em dash, no phone use, no points.
-    expect(String(body.props.children)).not.toMatch(/—|phone|points?\b/i);
+    // No em dash, no points.
+    expect(String(body.props.children)).not.toMatch(/—|points?\b/i);
     await press(screen.getAllByRole('button', { name: 'Close' }).at(-1)!);
     await waitFor(() => expect(screen.queryByTestId('radar-how-sheet')).toBeNull());
   });
@@ -90,7 +96,7 @@ describe('RadarCard', () => {
 
   test('one summary label for a screen reader lists the rating and every axis', async () => {
     await draw(<RadarCard dashpalPaired rating={92.4} scores={SCORES} onOpen={jest.fn()} />);
-    const label = 'Safety Rating 92 out of 100. Acceleration 95, Braking 72, Turning 100, Attention 90, Speed 88.';
+    const label = 'Safety Rating 92 out of 100. Acceleration 95, Braking 72, Turning 100, Attention 90, Phone use 84, Speed 88.';
     expect(screen.getByLabelText(label)).toBeOnTheScreen();
     expect(screen.getByLabelText(label).props.accessibilityRole).toBe('image');
   });
@@ -101,8 +107,8 @@ describe('RadarCard', () => {
     const speed = screen.getByRole('button', { name: 'Speed, score 88' });
     expect(speed.props.accessibilityHint).toBe('Opens details');
     expect(screen.getByRole('button', { name: 'Turning, no score yet' })).toBeOnTheScreen();
-    // The five chips and "How it works".
-    expect(screen.getAllByRole('button')).toHaveLength(6);
+    // The six chips and "How it works".
+    expect(screen.getAllByRole('button')).toHaveLength(7);
     for (const a of AXES) {
       expect(Number(flat(screen.getByTestId(`radar-axis-${a.key}`)).height)).toBeGreaterThanOrEqual(tokens.size.touch);
       await press(screen.getByTestId(`radar-axis-${a.key}`));
@@ -120,12 +126,28 @@ describe('RadarCard', () => {
     expect(screen.getByTestId('radar-lock-attention')).toBeOnTheScreen();
     expect(screen.queryByTestId('radar-lock-speed')).toBeNull();
     expect(screen.queryByTestId('radar-dot-attention', { includeHiddenElements: true })).toBeNull();
-    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(4);
-    expect(screen.getByLabelText('Safety Rating 80 out of 100. Acceleration 95, Braking 72, Turning 100, Attention needs DashPal, Speed 88.')).toBeOnTheScreen();
+    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(5);
+    expect(
+      screen.getByLabelText('Safety Rating 80 out of 100. Acceleration 95, Braking 72, Turning 100, Attention needs DashPal, Phone use 84, Speed 88.')
+    ).toBeOnTheScreen();
     await press(screen.getByRole('button', { name: 'Attention, needs DashPal' }));
     expect(onOpen).toHaveBeenLastCalledWith('attention');
     // the shape joins the locked axis's neighbours across it
     expect(radarPolygon([100, 100, 100, 100, 100], 100, { x: 150, y: 150 }, [3]).split(' ')).toHaveLength(4);
+  });
+
+  test('Phone use with no score yet has no point on the shape: its neighbours join across it, and it still opens', async () => {
+    const onOpen = jest.fn();
+    await draw(<RadarCard dashpalPaired rating={80} scores={{ ...SCORES, phone: null }} onOpen={onOpen} />);
+    expect(screen.queryByTestId('radar-dot-phone', { includeHiddenElements: true })).toBeNull();
+    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(5);
+    expect(shapePoints()).toBe(5);
+    expect(screen.getByLabelText(/Phone use no data, Speed 88\.$/)).toBeOnTheScreen();
+    await press(screen.getByRole('button', { name: 'Phone use, no score yet' }));
+    expect(onOpen).toHaveBeenLastCalledWith('phone');
+    // With a score, it is a point like any other.
+    await draw(<RadarCard dashpalPaired rating={80} scores={SCORES} onOpen={onOpen} />);
+    expect(shapePoints()).toBe(6);
   });
 
   test('a tap on the chart opens the category whose spoke it is nearest; the middle and far outside open nothing', () => {
@@ -136,13 +158,15 @@ describe('RadarCard', () => {
       return i === null ? null : AXES[i]!.key;
     };
     expect(keyAt(150, 60)).toBe('acceleration'); // straight up
-    const p = radarPoint(1, 5, 70, c);
+    const p = radarPoint(1, 6, 70, c);
     expect(keyAt(p.x, p.y)).toBe('braking');
-    const t = radarPoint(2, 5, 80, c);
+    const t = radarPoint(2, 6, 80, c);
     expect(keyAt(t.x, t.y)).toBe('turning');
-    const a = radarPoint(3, 5, 80, c);
-    expect(keyAt(a.x, a.y)).toBe('attention');
-    const q = radarPoint(4, 5, 90, c);
+    const a = radarPoint(3, 6, 80, c);
+    expect(keyAt(a.x, a.y)).toBe('attention'); // straight down
+    const ph = radarPoint(4, 6, 80, c);
+    expect(keyAt(ph.x, ph.y)).toBe('phone');
+    const q = radarPoint(5, 6, 90, c);
     expect(keyAt(q.x + 4, q.y - 3)).toBe('speed');
     expect(keyAt(150, 150)).toBeNull();
     expect(keyAt(160, 160)).toBeNull();
@@ -156,7 +180,7 @@ describe('RadarCard', () => {
     const onOpen = jest.fn();
     await draw(<RadarCard dashpalPaired rating={80} scores={SCORES} onOpen={onOpen} />);
     const g = radarGeometry(390 - 4 * tokens.space.lg, 1);
-    const top = radarPoint(0, 5, g.r * 0.8, g.c);
+    const top = radarPoint(0, 6, g.r * 0.8, g.c);
     fireEvent.press(screen.getByTestId('radar-chart'), { nativeEvent: { pageX: top.x, pageY: top.y, locationX: top.x, locationY: top.y } });
     await waitFor(() => expect(onOpen).toHaveBeenCalledWith('acceleration'));
   });
@@ -169,7 +193,7 @@ describe('RadarCard', () => {
     // no dots pile up under the dash for axes with no score
     expect(screen.queryAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(0);
     expect(radarLabel(null, NO_SCORES)).toBe(
-      'Safety Rating, no score yet. Acceleration no data, Braking no data, Turning no data, Attention no data, Speed no data.'
+      'Safety Rating, no score yet. Acceleration no data, Braking no data, Turning no data, Attention no data, Phone use no data, Speed no data.'
     );
     const c = { x: 150, y: 150 };
     const zero = Array.from({ length: 5 }, (_, i) => radarPoint(i, 5, 100 * RADAR_ZERO, c))
@@ -230,15 +254,15 @@ describe('RadarCard', () => {
     [326, RADAR_LABEL_MAX_SCALE],
     [288, RADAR_LABEL_MAX_SCALE],
     [256, RADAR_LABEL_MAX_SCALE],
-  ])('five labels sit wholly outside the pentagon and inside the chart (width %d, text %d×)', (width, scale) => {
+  ])('six labels sit wholly outside the hexagon and inside the chart (width %d, text %d×)', (width, scale) => {
     const g = radarGeometry(width, scale);
-    expect(g.labels).toHaveLength(5);
-    const pts = Array.from({ length: 5 }, (_, i) => radarPoint(i, 5, g.r, g.c));
-    const [top, upRight, downRight, downLeft, upLeft] = g.labels;
-    expect(top!.align).toBe('center');
+    expect(g.labels).toHaveLength(6);
+    const pts = Array.from({ length: 6 }, (_, i) => radarPoint(i, 6, g.r, g.c));
+    const [top, upRight, downRight, bottom, downLeft, upLeft] = g.labels;
+    for (const b of [top!, bottom!]) expect(b.align).toBe('center');
     for (const b of [upRight!, downRight!]) expect(b.align).toBe('left');
     for (const b of [downLeft!, upLeft!]) expect(b.align).toBe('right');
-    // The chips (centred in their touch boxes) clear the pentagon: no point of a chip's edge is inside it.
+    // The chips (centred in their touch boxes) clear the hexagon: no point of a chip's edge is inside it.
     for (const b of g.labels) {
       const pad = (b.height - g.chip) / 2;
       const y0 = b.top + pad;
@@ -264,13 +288,13 @@ describe('RadarCard', () => {
       expect(b.left + b.width).toBeLessThanOrEqual(g.width);
       expect(b.top + b.height).toBeLessThanOrEqual(g.height + 1);
     }
-    for (let i = 0; i < 5; i++) for (let j = i + 1; j < 5; j++) expect(overlaps(g.labels[i]!, g.labels[j]!)).toBe(false);
-    // The centre sits where the top label's reach ends: the chart is taller above it than below.
-    expect(g.c.y).toBeCloseTo(-Math.min(0, top!.top - g.c.y) || g.c.y - top!.top, 5);
-    expect(g.c.y).toBeGreaterThan(g.height / 2);
+    for (let i = 0; i < 6; i++) for (let j = i + 1; j < 6; j++) expect(overlaps(g.labels[i]!, g.labels[j]!)).toBe(false);
+    // An even count is symmetric: the centre sits in the middle, the top and bottom labels as far from it.
+    expect(g.c.y).toBeCloseTo(g.height / 2, 0);
+    expect(g.c.y - top!.top).toBeCloseTo(bottom!.top + bottom!.height - g.c.y, 5);
   });
 
-  test('at 320 pt wide with 1.3× labels the pentagon still fits its card', () => {
+  test('at 320 pt wide with 1.3× labels the hexagon still fits its card', () => {
     // The card's inside on a 320 pt phone: the gutter and the card padding on both sides.
     const g = radarGeometry(320 - 4 * tokens.space.lg, RADAR_LABEL_MAX_SCALE);
     for (const b of g.labels) {
@@ -323,7 +347,7 @@ describe('SummaryCard', () => {
   });
 
   test('good driving gets a compliment and a green check', async () => {
-    const good = { speed: 95, braking: 90, acceleration: 99, turning: 100, attention: 90 };
+    const good = { speed: 95, braking: 90, acceleration: 99, turning: 100, attention: 90, phone: 92 };
     await draw(<SummaryCard coaching={coach(good, { drives: 5, miles: 40 })} />);
     expect(screen.getByText('Driving well')).toBeOnTheScreen();
     expect(screen.getByText('Smooth driving lately. Keep it up.')).toBeOnTheScreen();
@@ -370,7 +394,7 @@ describe('BestsCard', () => {
 });
 
 describe('MetricsCards', () => {
-  test('three cards: Driving with the drive time, Trends, and Clean driving with the clean drives and their rate; no points', async () => {
+  test('three cards: Driving with the drive time, Trends, and Clean driving with the clean drives, their rate, the pickups and the time in hand; no points', async () => {
     const sums = windowSums(drives(4), null);
     await draw(<MetricsCards sums={sums} trend={EMPTY_TREND} />);
     for (const [key, title] of [
@@ -384,11 +408,14 @@ describe('MetricsCards', () => {
     for (const key of ['speeding', 'brakes', 'starts', 'turns', 'points', 'avg-points', 'after-dark', 'dark-share']) expect(screen.queryByTestId(`metric-${key}`)).toBeNull();
     expect(screen.getByRole('tab', { name: 'Events' })).toBeOnTheScreen();
     expect(screen.queryByRole('tab', { name: 'Points' })).toBeNull();
-    expect(MAIN_CARDS).toEqual([5, 2]);
+    expect(MAIN_CARDS).toEqual([5, 4]);
     expect(metricGroups(sums, 'mi').map((g) => g.cells.map((c) => c.caption))).toEqual([
       ['Drives', 'Drive time', 'Distance', 'Avg drive', 'Avg speed'],
-      ['Clean drives', 'Clean rate'],
+      ['Clean drives', 'Clean rate', 'Phone pickups', 'Time in hand'],
     ]);
+    // No drive in the range was watched for pickups: dashes, never a made-up 0.
+    expect(screen.getByTestId('metric-pickups-value')).toHaveTextContent('—');
+    expect(screen.getByTestId('metric-in-hand-value')).toHaveTextContent('— min');
     expect(screen.getByTestId('metric-clean-value')).toHaveTextContent('0');
     expect(screen.getByTestId('metric-clean-rate-value')).toHaveTextContent('0 %');
     expect(screen.getByLabelText('Clean rate, 0 percent')).toBeOnTheScreen();
@@ -485,7 +512,7 @@ describe('MetricsCards', () => {
     // The layout model agrees with what was drawn.
     const l = metricsLayout(height, Math.min(fontScale, 2));
     expect(metricsBlockHeight(l)).toBeCloseTo(drawn, 5);
-    expect(screen.getAllByTestId(/^metric-[a-z-]+-value$/)).toHaveLength(7);
+    expect(screen.getAllByTestId(/^metric-[a-z-]+-value$/)).toHaveLength(9);
     // With room, the chart is drawn at the plot height the layout gave it.
     if (l.plot > 0) expect(screen.getByTestId('trend-chart').props.height).toBe(l.plot);
     else expect(screen.queryByTestId('metrics-trend')).toBeNull();
@@ -500,9 +527,9 @@ describe('MetricsCards', () => {
       expect(l.plot).toBeGreaterThan(0);
       expect(metricsBlockHeight(l)).toBeLessThanOrEqual(h * METRICS_MAX_SHARE);
     }
-    // Two clean cells instead of four: a shorter block than with the points card it replaced.
+    // The block is the Driving card's five cells and the Clean driving card's four.
     const l = metricsLayout(844, 1);
-    expect(metricsBlockHeight(l, [5, 2])).toBeLessThan(metricsBlockHeight(l, [5, 4]));
+    expect(metricsBlockHeight(l)).toBe(metricsBlockHeight(l, [5, 4]));
     // Under three quarters of a 568 pt phone at 1× text, and the fallbacks at 2×.
     expect(metricsBlockHeight(metricsLayout(568, 1))).toBeLessThanOrEqual(568 * METRICS_MAX_SHARE);
     expect(metricsBlockHeight(metricsLayout(568, 2))).toBeLessThanOrEqual(568 * METRICS_MAX_SHARE);
@@ -524,7 +551,21 @@ describe('MetricsCards', () => {
     await draw(<MetricsCards sums={EMPTY_WINDOW} trend={EMPTY_TREND} />);
     expect(screen.getByTestId('metrics-driving')).toBeOnTheScreen();
     expect(screen.getByTestId('metrics-clean')).toBeOnTheScreen();
-    expect(cellsIn(screen.getByTestId('metrics-clean-row-0'))).toHaveLength(2);
+    expect(cellsIn(screen.getByTestId('metrics-clean-row-0'))).toHaveLength(4);
+  });
+
+  test('the range’s phone pickups and their time in hand, once a drive in it was watched', () => {
+    const watched = { ...EMPTY_WINDOW, drives: 3, phoneS: 5400, pickups: 4, inHandS: 95 };
+    const clean = metricGroups(watched, 'mi')[1]!.cells;
+    expect(clean.map((c) => [c.key, `${c.metric.value} ${c.metric.unit}`.trim(), c.metric.spoken])).toEqual([
+      ['clean', '0', '0'],
+      ['clean-rate', '— %', 'no data'],
+      ['pickups', '4', '4'],
+      ['in-hand', '2 min', '2 minutes'],
+    ]);
+    // Watched with no pickups: real zeros.
+    const none = metricGroups({ ...watched, pickups: 0, inHandS: 0 }, 'mi')[1]!.cells;
+    expect(none.slice(2).map((c) => `${c.metric.value} ${c.metric.unit}`.trim())).toEqual(['0', '0 min']);
   });
 
   test('a short last row keeps the grid: its cell stays one column wide, an empty column beside it', async () => {
@@ -545,8 +586,9 @@ describe('MetricsCards', () => {
     expect(screen.getAllByTestId(/^metrics-driving-row-/)).toHaveLength(2);
     expect(cellsIn(screen.getByTestId('metrics-driving-row-0'))).toHaveLength(4);
     expect(spacers(screen.getByTestId('metrics-driving-row-1'))).toHaveLength(3);
-    // The clean card's two cells beside two empty columns.
-    expect(spacers(screen.getByTestId('metrics-clean-row-0'))).toHaveLength(2);
+    // The clean card's four cells fill its row.
+    expect(cellsIn(screen.getByTestId('metrics-clean-row-0'))).toHaveLength(4);
+    expect(spacers(screen.getByTestId('metrics-clean-row-0'))).toHaveLength(0);
   });
 
   test('large text never draws a number or caption smaller than 1×: the row of four wraps its captions to two lines, and every fit has a floor', async () => {
@@ -593,6 +635,7 @@ describe('CategorySheet', () => {
       acceleration: ['Hard starts', 'Speed-ups'],
       turning: ['Sharp turns', 'Turns'],
       attention: ['Eyes off road', 'Drowsy', 'DashPal miles'],
+      phone: ['Phone pickups', 'Time in hand'],
     });
     for (const a of AXES) {
       for (const c of categoryGroup(a.key, sums, 'month', 'km').cells) {
@@ -628,6 +671,15 @@ describe('CategorySheet', () => {
     expect(rateLine('speed', { ...s, speedingS: 0, limitS: 0 })).toBeNull();
     expect(rateLine('attention', s)).toBeNull();
     expect(rateLine('braking', { ...s, hardBrake: 3, slowdowns: 411, exposureEstimated: true })).toBe('1 hard brake per 137 slowdowns (estimated)');
+    // Phone use: pickups per hour at driving speed; never estimated; nothing before a drive was watched.
+    expect(rateLine('phone', { ...s, pickups: 2, phoneS: 18_000 })).toBe('0.4 pickups an hour at driving speed');
+    expect(rateLine('phone', { ...s, pickups: 3, phoneS: 3600 })).toBe('3.0 pickups an hour at driving speed');
+    expect(rateLine('phone', { ...s, pickups: 30, phoneS: 2400 })).toBe('45 pickups an hour at driving speed');
+    expect(rateLine('phone', { ...s, pickups: 1, phoneS: 40_000 })).toBe('Under 0.1 pickups an hour at driving speed');
+    expect(rateLine('phone', { ...s, pickups: 0, phoneS: 11_520 })).toBe('No pickups in 3.2 h at driving speed');
+    expect(rateLine('phone', { ...s, pickups: 0, phoneS: 2700 })).toBe('No pickups in 45 min at driving speed');
+    expect(rateLine('phone', { ...s, pickups: 0, phoneS: 0 })).toBeNull();
+    expect(rateLine('phone', { ...s, pickups: 2, phoneS: 18_000, exposureEstimated: true })).toBe('0.4 pickups an hour at driving speed');
     for (const line of [rateLine('braking', { ...s, hardBrake: 3, slowdowns: 411 }), rateLine('speed', { ...s, speedingS: 24, limitS: 1200 })]) expect(line).not.toMatch(/—|!/);
   });
 
@@ -694,6 +746,45 @@ describe('CategorySheet', () => {
     expect(screen.getByTestId('category-coaching')).toBeOnTheScreen();
     expect(screen.getByText('No drives in the last 24 hours. Your numbers show up here after a drive.')).toBeOnTheScreen();
     expect(screen.queryByTestId('category-best')).toBeNull();
+  });
+
+  test('Phone use: its score, its tip, the range’s pickups and time in hand, pickups an hour at driving speed, and how a pickup is judged', async () => {
+    const phoneSums = { ...sums, pickups: 3, inHandS: 75, phoneS: 10_800 };
+    await draw(<CategorySheet {...props} axis="phone" score={64} sums={phoneSums} />);
+    expect(screen.getByRole('header', { name: 'Phone use · 64' })).toBeOnTheScreen();
+    expect(screen.getByLabelText('Fair. Phone down while driving. Put your phone away before you pull out.')).toBeOnTheScreen();
+    expect(screen.getByTestId('metric-phone-pickups-value')).toHaveTextContent('3');
+    expect(screen.getByTestId('metric-phone-in-hand-value')).toHaveTextContent('1 min');
+    expect(screen.getByLabelText('Time in hand, 1 minute')).toBeOnTheScreen();
+    expect(screen.getByTestId('category-rate')).toHaveTextContent('1.0 pickups an hour at driving speed');
+    const how = screen.getByTestId('category-phone-how');
+    expect(within(how).getByText("A pickup counts once the car is going 10 mph or more, plus every second your phone stays in your hand while you're moving.")).toBeOnTheScreen();
+    expect(within(how).getByText("Put it down and pick it up again within 10 s and it's still one pickup.")).toBeOnTheScreen();
+    expect(screen.queryByText(/—|!|pts|points/)).toBeNull();
+  });
+
+  test('Phone use in kilometres says its speed in km/h; other categories have no such lines', async () => {
+    expect(analyticsCopy.category.phoneHow('km')[0]).toBe(
+      "A pickup counts once the car is going 16 km/h or more, plus every second your phone stays in your hand while you're moving."
+    );
+    await draw(<CategorySheet {...props} axis="braking" score={72} />);
+    expect(screen.queryByTestId('category-phone-how')).toBeNull();
+  });
+
+  test('Phone use before any drive in the range was watched: no score, no verdict, and its numbers come with the next drive', async () => {
+    await draw(<CategorySheet {...props} axis="phone" score={null} />);
+    expect(screen.getByRole('header', { name: 'Phone use · —' })).toBeOnTheScreen();
+    expect(screen.queryByTestId('category-coaching')).toBeNull();
+    expect(screen.getByText('No phone data yet')).toBeOnTheScreen();
+    expect(screen.getByText('Your Phone use numbers show up here after your next drive.')).toBeOnTheScreen();
+    expect(screen.queryByTestId('metrics-phone')).toBeNull();
+    expect(screen.queryByTestId('category-rate')).toBeNull();
+    // How it is judged still shows, and the range still switches.
+    expect(screen.getByTestId('category-phone-how')).toBeOnTheScreen();
+    expect(screen.getByTestId('category-range')).toBeOnTheScreen();
+    // No drives at all: the plain empty state.
+    await draw(<CategorySheet {...props} axis="phone" score={null} sums={EMPTY_WINDOW} />);
+    expect(screen.getByText('No data yet')).toBeOnTheScreen();
   });
 
   test('a good category gets a compliment; too little driving or no score gets the wait line', async () => {

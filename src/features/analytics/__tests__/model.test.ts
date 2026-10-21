@@ -7,6 +7,7 @@ import { encodePolyline, encodeRuns } from '@/lib/polyline';
 import {
   AXES,
   AXIS_TIP,
+  AXIS_TITLE,
   axisCoaching,
   BAND_LABELS,
   bandIndex,
@@ -25,6 +26,7 @@ import {
   levelFor,
   PENALTY_AXES,
   personalBests,
+  PHONE_AXIS,
   radarScores,
   rangeStart,
   routeLines,
@@ -49,8 +51,8 @@ import {
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
-/** A 10 mi city drive's chances to slip. */
-const EXPOSURE: Exposure = { slowdowns: 25, speedups: 25, turns: 20, limitS: 900, movingS: 1100 };
+/** A 10 mi city drive's chances to slip, not watched for phone pickups. */
+const EXPOSURE: Exposure = { slowdowns: 25, speedups: 25, turns: 20, limitS: 900, movingS: 1100, phoneS: 0 };
 
 let seq = 0;
 function drive(over: Partial<LocalDrive> = {}): LocalDrive {
@@ -95,6 +97,7 @@ const scores = (over: Partial<AxisScores> = {}): AxisScores => ({
   acceleration: 100,
   turning: 100,
   attention: 100,
+  phone: 100,
   ...over,
 });
 
@@ -102,16 +105,17 @@ const scores = (over: Partial<AxisScores> = {}): AxisScores => ({
 const wholeAt = (drives: readonly LocalDrive[], events: readonly DriveEvent[], at: number) => {
   const s = ratingAt(toRatingDrives(drives, events), at).scores;
   const r = (v: number | null) => (v === null ? null : Math.round(v));
-  return { acceleration: r(s.acceleration), braking: r(s.braking), turning: r(s.turning), attention: r(s.attention), speed: r(s.speed) };
+  return { acceleration: r(s.acceleration), braking: r(s.braking), turning: r(s.turning), attention: r(s.attention), phone: r(s.phone), speed: r(s.speed) };
 };
 
 describe('axes', () => {
-  test('radar order and labels: the scoring package’s five categories, no phone use', () => {
-    expect(AXES.map((a) => a.key)).toEqual(['acceleration', 'braking', 'turning', 'attention', 'speed']);
+  test('radar order and labels: the scoring package’s six categories, Phone use between Attention and Speed', () => {
+    expect(AXES.map((a) => a.key)).toEqual(['acceleration', 'braking', 'turning', 'attention', 'phone', 'speed']);
     expect(AXES.map((a) => a.key)).toEqual([...SCORING_AXES]);
-    expect(AXES.map((a) => a.label)).toEqual(['Acceleration', 'Braking', 'Turning', 'Attention', 'Speed']);
-    expect(PENALTY_AXES).toEqual(['acceleration', 'braking', 'turning', 'attention', 'speed']);
+    expect(AXES.map((a) => a.label)).toEqual(['Acceleration', 'Braking', 'Turning', 'Attention', 'Phone use', 'Speed']);
+    expect(PENALTY_AXES).toEqual(['acceleration', 'braking', 'turning', 'attention', 'phone', 'speed']);
     expect(DASHPAL_AXIS).toBe('attention');
+    expect(PHONE_AXIS).toBe('phone');
     expect(COACH_DAYS).toBe(90);
   });
 
@@ -141,9 +145,26 @@ describe('axes', () => {
     // twice the slowdowns, the same brake: a better Braking score, the miles unchanged
     const busy = list.map((d) => ({ ...d, exposure: { ...d.exposure, slowdowns: 100 } }));
     expect(radarScores(busy, [brake], now).braking!).toBeGreaterThan(s.braking!);
-    // nothing watched: no Attention score; nothing driven: no scores
+    // nothing watched: no Attention score and no Phone use score; nothing driven: no scores
     expect(s.attention).toBeNull();
-    expect(radarScores([], [], now)).toEqual({ speed: null, braking: null, acceleration: null, turning: null, attention: null });
+    expect(s.phone).toBeNull();
+    expect(radarScores([], [], now)).toEqual({ speed: null, braking: null, acceleration: null, turning: null, attention: null, phone: null });
+  });
+
+  test('Phone use: no score until a drive was watched for pickups; then pickups and their time in hand count against the time at driving speed', () => {
+    const now = 200 * DAY;
+    const watched = (over: Partial<LocalDrive> = {}) => drive({ startedAt: now - DAY, ...over, exposure: { ...EXPOSURE, phoneS: 1000 } });
+    const clean = radarScores([watched()], [], now);
+    expect(clean.phone).not.toBeNull();
+    const pickup = ev({ type: 'phone_pickup', tier: 'moderate', durationS: 12, startedAt: now - DAY + 60_000, measured: { speedMph: 30 } });
+    const held = radarScores([watched()], [pickup], now);
+    expect(held).toEqual(wholeAt([watched()], [pickup], now));
+    expect(held.phone!).toBeLessThan(clean.phone!);
+    // A longer time in hand weighs more.
+    const longer = radarScores([watched()], [{ ...pickup, durationS: 40, tier: 'severe' }], now);
+    expect(longer.phone!).toBeLessThan(held.phone!);
+    // The other categories don't move.
+    expect({ ...held, phone: null }).toEqual({ ...clean, phone: null });
   });
 
   test('the rating reads each drive’s miles as the server stores them (2 decimals), so the 10 mi ranked line falls where the server’s does', () => {
@@ -180,12 +201,19 @@ describe('levels and coaching', () => {
     expect(LEVEL_LABEL).toEqual({ good: 'Good', fair: 'Fair', poor: 'Poor' });
   });
 
-  test('every tip is one short line with no em dash, and none is about the phone', () => {
+  test('every tip is one short line with no em dash; Phone use has its own', () => {
     for (const tip of [...Object.values(AXIS_TIP), GOOD_TIP]) {
       expect(tip.length).toBeLessThanOrEqual(60);
-      expect(tip).not.toMatch(/[—!]|phone/i);
+      expect(tip).not.toMatch(/[—!]/);
     }
-    expect(Object.keys(AXIS_TIP).sort()).toEqual(['acceleration', 'attention', 'braking', 'speed', 'turning']);
+    expect(Object.keys(AXIS_TIP).sort()).toEqual(['acceleration', 'attention', 'braking', 'phone', 'speed', 'turning']);
+    expect(AXIS_TIP.phone).toBe('Put your phone away before you pull out.');
+    expect(AXIS_TITLE.phone).toBe('Phone down while driving');
+  });
+
+  test('Phone use coaches like any axis once scored, and stays out while it has no score', () => {
+    expect(coach(scores({ phone: 58 }), { drives: 5, miles: 50 })).toMatchObject({ level: 'poor', axis: 'phone', tip: AXIS_TIP.phone });
+    expect(coach(scores({ phone: null }), { drives: 5, miles: 50 })).toMatchObject({ level: 'good' });
   });
 
   test('the weakest axis decides; ties go to radar order', () => {
@@ -285,7 +313,7 @@ describe('windows', () => {
     expect(rangeStart(now, 'year')).toBe(windowStart(now, 365));
   });
 
-  test('sums scored drives in the window with their chances to slip and the time over the limit; DashPal counts apart', () => {
+  test('sums scored drives in the window with their chances to slip, the time over the limit and the time in hand; DashPal counts apart', () => {
     const since = 10_000;
     const list = [
       drive({ startedAt: 20_000, miles: 10, durationS: 1800, nightMiles: 3, clean: true, counts: { ...EMPTY_COUNTS, eyesOff: 3, drowsy: 1 } }),
@@ -294,8 +322,8 @@ describe('windows', () => {
         miles: 5,
         durationS: 1800,
         clean: false,
-        counts: { ...EMPTY_COUNTS, speeding: 2, hardBrake: 1, hardAccel: 1, hardCorner: 3 },
-        exposure: { slowdowns: 12, speedups: 10, turns: 8, limitS: 600, movingS: 1500 },
+        counts: { ...EMPTY_COUNTS, speeding: 2, hardBrake: 1, hardAccel: 1, hardCorner: 3, pickups: 2 },
+        exposure: { slowdowns: 12, speedups: 10, turns: 8, limitS: 600, movingS: 1500, phoneS: 1200 },
         exposureEstimated: true,
       }),
       drive({ startedAt: 9_000, miles: 100 }),
@@ -305,8 +333,12 @@ describe('windows', () => {
       ev({ type: 'speeding', startedAt: 10_500, durationS: 40 }),
       ev({ type: 'speeding', startedAt: 11_000, durationS: 20, status: 'removed' }),
       ev({ type: 'speeding', startedAt: 12_000, durationS: 3 }),
+      ev({ type: 'phone_pickup', tier: 'moderate', startedAt: 12_500, durationS: 9 }),
+      ev({ type: 'phone_pickup', tier: 'severe', startedAt: 13_000, durationS: 24 }),
+      ev({ type: 'phone_pickup', tier: 'moderate', startedAt: 13_500, durationS: 5, status: 'removed' }),
       // the drive before the window's: not counted
       ev({ type: 'speeding', startedAt: 9_500, durationS: 100 }),
+      ev({ type: 'phone_pickup', tier: 'severe', startedAt: 9_600, durationS: 60 }),
     ];
     expect(windowSums(list, since, events)).toEqual({
       drives: 2,
@@ -324,6 +356,9 @@ describe('windows', () => {
       turns: 28,
       limitS: 1500,
       speedingS: speedingChargedS(40) + speedingChargedS(3),
+      pickups: 2,
+      inHandS: 33,
+      phoneS: 1200,
       exposureEstimated: true,
       eyesOff: 3,
       drowsy: 1,
@@ -333,8 +368,8 @@ describe('windows', () => {
       avgMiles: 7.5,
     });
     expect(windowSums(list, null).drives).toBe(3);
-    // without the events the time over the limit is unknown: 0
-    expect(windowSums(list, since).speedingS).toBe(0);
+    // without the events the time over the limit and in hand is unknown: 0
+    expect(windowSums(list, since)).toMatchObject({ speedingS: 0, inHandS: 0, pickups: 2 });
   });
 
   test('an empty window has no averages and no clean rate', () => {
@@ -457,13 +492,14 @@ describe('trend', () => {
 
   test('a week: Score is the Safety Rating as of each day’s end, Events per mile per day with drives', () => {
     const tue1 = drive({ startedAt: at(13, 8), miles: 10, counts: brakes(1) });
-    const tue2 = drive({ startedAt: at(13, 17), miles: 10, counts: { ...EMPTY_COUNTS, speeding: 1 } });
+    const tue2 = drive({ startedAt: at(13, 17), miles: 10, counts: { ...EMPTY_COUNTS, speeding: 1, pickups: 1 } });
     const fri = drive({ startedAt: at(9, 9), miles: 20 });
     // Before the range, inside every point's 90 days.
     const old = drive({ startedAt: at(6, 9), miles: 50 });
     const events = [
       ev({ type: 'hard_brake', tier: 'severe', startedAt: at(13, 8, 10) }),
       ev({ type: 'speeding', tier: 'moderate', startedAt: at(13, 17, 5), durationS: 40, measured: { overMphS: 120 } }),
+      ev({ type: 'phone_pickup', tier: 'moderate', startedAt: at(13, 17, 8), durationS: 6 }),
       // DashPal counts only over the miles it watched (none here); a removed event counts nothing.
       ev({ type: 'drowsy', tier: 'severe', startedAt: at(13, 17, 12) }),
       ev({ type: 'hard_brake', tier: 'severe', startedAt: at(9, 9, 5), status: 'removed' }),
@@ -483,10 +519,10 @@ describe('trend', () => {
     expect(values[6]!).toBeLessThan(values[5]!);
     expect(values[7]).toBe(rated(list, events, NOW));
     expect(t.series.score.map((q) => q.when)).toEqual(['last Wednesday', 'on Thursday', 'on Friday', 'on Saturday', 'on Sunday', 'on Monday', 'on Tuesday', 'today']);
-    // Tuesday: a brake and a speeding over 20 mi. Friday: none.
+    // Tuesday: a brake, a speeding and a phone pickup over 20 mi. Friday: none.
     expect(t.series.events).toEqual([
       { x: 2 / 7, value: 0, when: 'on Friday' },
-      { x: 6 / 7, value: 2 / 20, when: 'on Tuesday' },
+      { x: 6 / 7, value: 3 / 20, when: 'on Tuesday' },
     ]);
   });
 

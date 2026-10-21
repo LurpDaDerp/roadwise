@@ -6,7 +6,7 @@ import Svg, { Circle, Line, Polygon } from 'react-native-svg';
 import { Card, Sheet, Text, tokens, useFontScale, useTheme, withAlpha } from '@/ui';
 
 import { analyticsCopy } from './copy';
-import { AXES, DASHPAL_AXIS, type AxisKey, type AxisScores } from './model';
+import { AXES, DASHPAL_AXIS, PHONE_AXIS, type AxisKey, type AxisScores } from './model';
 import { sizeAt } from './textSize';
 
 const HOW = analyticsCopy.radar.how;
@@ -14,7 +14,7 @@ const HOW = analyticsCopy.radar.how;
 /** Grid rings, as a share of the full score: 0, 25, 50, 75 and 100. */
 export const RADAR_RINGS = [0, 0.25, 0.5, 0.75, 1] as const;
 /**
- * Where a score of 0 sits, as a share of the radius: the zero ring is a pentagon of its own around
+ * Where a score of 0 sits, as a share of the radius: the zero ring is a hexagon of its own around
  * the centre number, so a shape with low scores (or none yet) is never a point.
  */
 export const RADAR_ZERO = 0.3;
@@ -157,15 +157,16 @@ export function radarLabel(rating: number | null, scores: AxisScores, locked: re
 }
 
 /**
- * The five-axis radar of the last 90 days (a pentagon): grid rings at 0/25/50/75/100 (0 is a small
- * pentagon of its own around the centre, where a score of 0, or none yet, sits), a spoke per axis,
+ * The six-axis radar of the last 90 days (a hexagon): grid rings at 0/25/50/75/100 (0 is a small
+ * hexagon of its own around the centre, where a score of 0, or none yet, sits), a spoke per axis,
  * one filled polygon, and the Safety Rating in the middle. All of it in the page ink (no colour
  * coding), with each axis's name around the outside on a faint chip: a button that opens that
  * category's details, whether or not it has a score yet. A tap on the chart itself opens the
  * category whose spoke it is nearest. Without a paired DashPal, Attention is locked: its chip is
  * greyed with a lock, its spoke faint, it has no point on the shape, and its sheet says how to get
- * it. Under the chart, "Last 90 days" and a "How it works" button that opens a sheet saying what
- * makes the total.
+ * it. Phone use with no score yet (no drive watched for pickups) has no point on the shape either,
+ * so a category nobody has measured never pulls it in. Under the chart, "Last 90 days" and a "How
+ * it works" button that opens a sheet saying what makes the total.
  */
 export function RadarCard({
   rating,
@@ -188,7 +189,8 @@ export function RadarCard({
   const locked: AxisKey[] = dashpalPaired ? [] : [DASHPAL_AXIS];
   const isLocked = (key: AxisKey) => locked.includes(key);
   const values = AXES.map((a) => (isLocked(a.key) ? null : scores[a.key]));
-  const skip = AXES.flatMap((a, i) => (isLocked(a.key) ? [i] : []));
+  // A locked axis, and Phone use before any drive was watched for it, are left out of the shape.
+  const skip = AXES.flatMap((a, i) => (isLocked(a.key) || (a.key === PHONE_AXIS && scores[a.key] === null) ? [i] : []));
   const ring = (k: number) =>
     Array.from({ length: n }, (_, i) => radarPoint(i, n, radiusFor(k * 100, r), c))
       .map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)
