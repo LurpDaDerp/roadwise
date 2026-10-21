@@ -94,7 +94,7 @@ export function TripsMapCard({
   const maps = loadMaps();
   const ink = withAlpha(t.colors.accent, t.scheme === 'dark' ? 0.45 : 0.35);
   const spotLine = spotInk(t.scheme);
-  const settling = useSettling(`${t.scheme}|${spots.map((s) => `${s.id}:${chipText(s)}`).join(',')}`);
+  const settling = useSettling(`${t.scheme}|${spots.map((s) => `${s.id}:${s.label ?? ''}`).join(',')}`);
 
   let body;
   if (!region || routes.length === 0) {

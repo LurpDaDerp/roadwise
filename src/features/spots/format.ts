@@ -38,6 +38,6 @@ export function progress(s: Pick<ProblemSpot, 'cleanStreak' | 'cleanNeeded'>): {
 /** The map chip's text: the street clipped to 16 characters, else the kind's short word. */
 export const CHIP_MAX_CHARS = 16;
 export function chipText(s: Pick<ProblemSpot, 'label' | 'kind'>): string {
-  if (s.label === null || s.label === '') return spotsCopy.mapChip[s.kind];
+  if (typeof s.label !== 'string' || s.label === '') return spotsCopy.mapChip[s.kind];
   return s.label.length > CHIP_MAX_CHARS ? `${s.label.slice(0, CHIP_MAX_CHARS - 1)}…` : s.label;
 }
