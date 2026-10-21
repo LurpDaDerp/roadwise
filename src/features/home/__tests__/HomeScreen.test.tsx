@@ -1,13 +1,14 @@
 import { act, screen, waitFor } from '@testing-library/react-native';
 import { AppState, ScrollView, type AppStateStatus } from 'react-native';
 
-import { draw, drive as mockDrive, press, result as mockResult, summary as mockSummary, sums as mockSums, swipe } from '@/features/drives/__fixtures__/drives';
+import { draw, drive as mockDrive, press, summary as mockSummary, sums as mockSums, swipe } from '@/features/drives/__fixtures__/drives';
 import type { LocalDrive } from '@/features/drives/model';
+import type { AutoDrives } from '@/features/autoDrives/useAutoDrives';
 
 import { ThemeProvider } from '@/ui';
 
-import { HomeScreen } from '../HomeScreen';
-import { clearStartNotice, readStartNotice, showStartNotice } from '../startNotice';
+import { HomeScreen, isManualDrop } from '../HomeScreen';
+import { clearHomeNotice, readHomeNotice, showHomeNotice } from '../homeNotice';
 
 const mockRouter = { push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => true) };
 // Focus runs its effect on mount (and again whenever the callback changes), as on a real focus.
@@ -41,15 +42,11 @@ jest.mock('@/data/queries', () => ({
   useRecentDrives: () => mockOk(mockRecent),
   useStatSums: () => mockOk(mockSums()),
 }));
-// The device settings (the streak card's dismissal), in memory.
-const mockSettings = new Map<string, unknown>();
-jest.mock('@/data/db/settings', () => ({
-  createSettingsRepo: () => ({
-    get: async (k: string) => mockSettings.get(k) ?? null,
-    set: async (k: string, v: unknown) => {
-      mockSettings.set(k, v);
-    },
-  }),
+// Whether drives start on their own (the native status), the test's to set.
+let mockAuto: AutoDrives = { state: 'unsupported' };
+jest.mock('@/features/autoDrives/useAutoDrives', () => ({
+  useAutoDrives: () => mockAuto,
+  autoDrivesOn: (a: AutoDrives) => a.state === 'on',
 }));
 // The 30-day coaching behind the tip card.
 let mockCoaching: { level: string | null; axis: string | null; title: string; tip: string } = { level: 'good', axis: null, title: 'Driving well', tip: 'Smooth driving lately. Keep it up.' };
@@ -60,9 +57,15 @@ jest.mock('@/features/weather/HomeWeatherAlert', () => {
 });
 jest.mock('@/data/server/summary', () => ({ useMySummary: () => mockOk(mockSummary()) }));
 let mockRecording = false;
+let mockWaiting = false;
 jest.mock('@/drive/useDrive', () => ({
   useDriveControls: () => ({ start: mockStart, end: jest.fn() }),
-  useDrive: (sel: (d: { status: string; lastFinalized: null }) => unknown) => sel({ status: mockRecording ? 'recording' : 'idle', lastFinalized: null }),
+  useDrive: (sel: (d: { status: string; waiting: unknown; lastFinalized: null }) => unknown) =>
+    sel({
+      status: mockRecording ? 'recording' : 'idle',
+      waiting: mockWaiting ? { since: 1, phase: 'waiting', deadlineAt: 2, speedMps: null, limitMph: null } : null,
+      lastFinalized: null,
+    }),
 }));
 let mockNotice: { clientTripId: string; cause: string; reason: string; at: number } | null = null;
 const mockClearNotice = jest.fn(async () => {
@@ -72,6 +75,8 @@ jest.mock('@/drive/dropNotice', () => ({
   readDropNotice: async () => mockNotice,
   clearDropNotice: () => mockClearNotice(),
 }));
+// The DashPal slot has its own tests.
+jest.mock('@/dashcam/ui/HomeDashpal', () => ({ HomeDashpal: () => null }));
 jest.mock('@/features/drive/DriveInProgressBanner', () => {
   const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
   return { DriveInProgressBanner: () => <Text testID="drive-in-progress">Drive in progress</Text> };
@@ -93,12 +98,13 @@ const MOTION_OFF = { ...ALL_ON, snapshot: { ...ALL_ON.snapshot, motion: 'denied'
 beforeEach(() => {
   jest.clearAllMocks();
   mockRecent = [mockDrive()];
-  mockSettings.clear();
+  mockAuto = { state: 'unsupported' };
   mockCoaching = { level: 'good', axis: null, title: 'Driving well', tip: 'Smooth driving lately. Keep it up.' };
   mockBoard = boardWith(null);
   mockRecording = false;
+  mockWaiting = false;
   mockNotice = null;
-  clearStartNotice();
+  clearHomeNotice();
 });
 
 describe('the notice of a drive that was not kept', () => {
@@ -107,7 +113,7 @@ describe('the notice of a drive that was not kept', () => {
   test('read from storage on mount (so it survives a relaunch), it shows above Start until OK, which clears it', async () => {
     mockNotice = { ...notice };
     await draw(<HomeScreen />);
-    expect(await screen.findByTestId('drive-dropped')).toHaveTextContent(/the car didn’t move for 15 min, so it wasn’t saved\./);
+    expect(await screen.findByTestId('drive-dropped')).toHaveTextContent(/the car didn’t move for 5 min, so it wasn’t saved\./);
     await press(screen.getByText('OK'));
     expect(screen.queryByTestId('drive-dropped')).toBeNull();
     expect(mockClearNotice).toHaveBeenCalledTimes(1);
@@ -163,9 +169,9 @@ test('while a drive is recording, the in-progress strip replaces Start', async (
   expect(screen.queryByTestId('start-drive')).toBeNull();
 });
 
-describe('a tap on the forgot-to-start reminder that started no drive', () => {
-  test('a notice set before Home mounts shows in the refusal line, with Fix it for permission, until the next start', async () => {
-    showStartNotice('permission');
+describe('the line Home keeps in memory', () => {
+  test('a refusal set before Home mounts shows in the refusal line, with Fix it for permission, until the next start', async () => {
+    showHomeNotice('permission');
     await draw(<HomeScreen />);
     expect(await screen.findByText('RoadWise needs location to record a drive.')).toBeOnTheScreen();
     await press(screen.getByText('Fix it'));
@@ -174,29 +180,36 @@ describe('a tap on the forgot-to-start reminder that started no drive', () => {
     mockStart.mockResolvedValue({ ok: true, clientTripId: 'x' });
     await swipe(screen.getByTestId('start-drive'));
     await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/drive'));
-    expect(readStartNotice()).toBeNull();
+    expect(readHomeNotice()).toBeNull();
     expect(screen.queryByTestId('start-refusal')).toBeNull();
   });
 
-  test('a notice set while Home is on screen shows at once; an expired reminder says so, with no button', async () => {
+  test('after "Not driving?": the acknowledgement once, until OK; it outranks an older drop line', async () => {
+    mockNotice = { clientTripId: 'gone', cause: 'stopped', reason: 'no_movement', at: 1 };
     await draw(<HomeScreen />);
-    expect(screen.queryByTestId('start-refusal')).toBeNull();
-    await act(async () => showStartNotice('reminder-expired'));
-    expect(await screen.findByTestId('start-refusal')).toHaveTextContent(/That reminder has expired. Swipe Start drive instead./);
+    expect(await screen.findByTestId('drive-dropped')).toBeOnTheScreen();
+    await act(async () => showHomeNotice('notDriving'));
+    expect(await screen.findByTestId('not-driving-ack')).toHaveTextContent(/Got it. That trip won't count./);
+    expect(screen.queryByTestId('drive-dropped')).toBeNull();
     expect(screen.queryByText('Fix it')).toBeNull();
-    expect(screen.queryByText('Open it')).toBeNull();
+    await press(screen.getByText('OK'));
+    expect(readHomeNotice()).toBeNull();
+    expect(screen.queryByTestId('not-driving-ack')).toBeNull();
+    expect(await screen.findByTestId('drive-dropped')).toBeOnTheScreen();
   });
 
-  test('a newer notice outranks an older refused Start', async () => {
+  test('a refused Start outranks the "Not driving?" line; a start takes the line down', async () => {
+    showHomeNotice('notDriving');
     mockStart.mockResolvedValue({ ok: false, reason: 'busy' });
     await draw(<HomeScreen />);
+    expect(await screen.findByTestId('not-driving-ack')).toBeOnTheScreen();
     await swipe(screen.getByTestId('start-drive'));
     expect(await screen.findByText('A drive is already running.')).toBeOnTheScreen();
-    await act(async () => showStartNotice('reminder-expired'));
-    expect(await screen.findByText('That reminder has expired. Swipe Start drive instead.')).toBeOnTheScreen();
+    expect(readHomeNotice()).toBeNull();
+    expect(screen.queryByTestId('not-driving-ack')).toBeNull();
   });
 
-  test('a drive that starts (by the reminder too) takes an old refused Start down', async () => {
+  test('a drive that starts any way takes an old refused Start down', async () => {
     mockStart.mockResolvedValue({ ok: false, reason: 'error' });
     const view = await draw(<HomeScreen />);
     await swipe(screen.getByTestId('start-drive'));
@@ -315,8 +328,8 @@ describe('a Start refused for Precise Location or Location Services', () => {
     await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/(app)/settings/permissions'));
   });
 
-  test('a reminder tap refused the same way shows the same line', async () => {
-    showStartNotice('services');
+  test('a refusal from elsewhere shows the same line', async () => {
+    showHomeNotice('services');
     await draw(<HomeScreen />);
     expect(await screen.findByText('Location Services are off. Turn them on to record a drive.')).toBeOnTheScreen();
     expect(screen.getByText('Fix it')).toBeOnTheScreen();
@@ -324,10 +337,10 @@ describe('a Start refused for Precise Location or Location Services', () => {
 });
 
 describe('Analytics and the action items', () => {
-  test('the Safety Rating badge, "All stats" and the tip card open the Analytics tab', async () => {
+  test('the rating block, "All stats" and the tip card open the Analytics tab', async () => {
     mockCoaching = { level: 'poor', axis: 'speeding', title: 'Watch your speed', tip: 'Ease off a little over the limit.' };
     await draw(<HomeScreen />);
-    await press(screen.getByTestId('rating-badge'));
+    await press(screen.getByTestId('rating-block'));
     expect(mockRouter.navigate).toHaveBeenLastCalledWith('/(tabs)/analytics');
     await press(screen.getByText('All stats'));
     expect(mockRouter.navigate).toHaveBeenLastCalledWith('/(tabs)/analytics');
@@ -348,33 +361,35 @@ describe('Analytics and the action items', () => {
   });
 });
 
-describe('the streak card', () => {
-  const lost = (id: string) => mockDrive({ clientTripId: id, result: mockResult({ streak: { before: 6, after: 0, outcome: 'reset', nextMult: 1, atRisk: false, freezes: 0, freezeEarned: false } }) });
-  const saved = (id: string) => mockDrive({ clientTripId: id, result: mockResult({ streak: { before: 6, after: 6, outcome: 'freeze_used', nextMult: 1.1, atRisk: false, freezes: 1, freezeEarned: false } }) });
-
-  test('the latest drive lost the streak: the card shows until ✕, and stays away (stored by drive)', async () => {
-    mockRecent = [lost('t1'), mockDrive({ clientTripId: 'older' })];
-    const view = await draw(<HomeScreen />);
-    expect(await screen.findByText('Streak lost')).toBeOnTheScreen();
-    expect(screen.getByText('2 freezes left')).toBeOnTheScreen();
-    await press(screen.getByTestId('home-streak-card-dismiss'));
-    expect(screen.queryByTestId('home-streak-card')).toBeNull();
-    await waitFor(() => expect(mockSettings.get('home.streakCard.dismissed')).toBe('t1'));
-    await view.unmount();
+describe('automatic drives and the waiting Start', () => {
+  test('with automatic drives on, Start gets its quiet line and How it works says drives record themselves', async () => {
+    mockAuto = { state: 'on' };
     await draw(<HomeScreen />);
-    await act(async () => {});
-    expect(screen.queryByTestId('home-streak-card')).toBeNull();
+    expect(screen.getByTestId('start-caption')).toHaveTextContent('Or just drive. RoadWise notices on its own.');
+    expect(screen.getByText('Drives record themselves')).toBeOnTheScreen();
   });
 
-  test('a newer drive with news shows again after an older dismissal; one that grew the streak takes it down', async () => {
-    mockSettings.set('home.streakCard.dismissed', 't1');
-    mockRecent = [saved('t2'), lost('t1')];
-    const view = await draw(<HomeScreen />);
-    expect(await screen.findByText('A freeze saved your streak')).toBeOnTheScreen();
-    await view.unmount();
-    mockRecent = [mockDrive({ clientTripId: 't3' }), saved('t2')];
+  test.each([{ state: 'unsupported' }, { state: 'unknown' }, { state: 'off', missing: ['locationAlways'] }] as AutoDrives[])('%o: the manual words', async (a) => {
+    mockAuto = a;
+    await draw(<HomeScreen />);
+    expect(screen.queryByTestId('start-caption')).toBeNull();
+    expect(screen.getByText('Start, then drive')).toBeOnTheScreen();
+  });
+
+  test('a Start waiting for the car to move shows the strip in place of Start, like a recording drive', async () => {
+    mockWaiting = true;
+    await draw(<HomeScreen />);
+    expect(screen.getByTestId('drive-in-progress')).toBeOnTheScreen();
+    expect(screen.queryByTestId('start-drive')).toBeNull();
+  });
+
+  test("an automatic drive that wasn't kept says nothing; a manual one says why", async () => {
+    expect(isManualDrop({ clientTripId: 'x', cause: 'stopped', reason: 'not_driven', at: 1, origin: 'auto' } as never)).toBe(false);
+    expect(isManualDrop({ clientTripId: 'x', cause: 'stopped', reason: 'not_driven', at: 1, origin: 'manual' } as never)).toBe(true);
+    expect(isManualDrop({ clientTripId: 'x', cause: 'stopped', reason: 'not_driven', at: 1 } as never)).toBe(true);
+    mockNotice = { clientTripId: 'gone', cause: 'stopped', reason: 'not_driven', at: 1, origin: 'auto' } as never;
     await draw(<HomeScreen />);
     await act(async () => {});
-    expect(screen.queryByTestId('home-streak-card')).toBeNull();
+    expect(screen.queryByTestId('drive-dropped')).toBeNull();
   });
 });

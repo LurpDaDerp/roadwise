@@ -1,7 +1,7 @@
 /**
- * Home wired to its data: the server summary for the header and challenges, local drives for
- * the first-run gate, stats, recent drives and the streak card, the 30-day coaching for the tip
- * card, and the drive controls for Start.
+ * Home wired to its data: the server summary for the rating and the weekly goals, local drives for
+ * the first-run gate, this week's pills, stats and recent drives, the coaching for the tip card,
+ * whether drives start on their own for the words, and the drive controls for Start.
  */
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -12,8 +12,9 @@ import { useMySummary } from '@/data/server/summary';
 import { clearDropNotice, readDropNotice, type DropNotice } from '@/drive/dropNotice';
 import { useDrive, useDriveControls } from '@/drive/useDrive';
 import { useCoaching } from '@/features/analytics/useAnalytics';
+import { autoDrivesOn, useAutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
-import { sinceDays } from '@/features/drives/format';
+import { sinceDays, weekStart } from '@/features/drives/format';
 import { homeCard } from '@/features/permissions/board';
 import { HomeDashpal } from '@/dashcam/ui/HomeDashpal';
 import { PermissionCard } from '@/features/permissions/PermissionCard';
@@ -23,17 +24,22 @@ import {
   DRIVE_HISTORY_HREF,
   DRIVE_HREF,
   driveSummaryHref,
-  HOW_POINTS_WORK_HREF,
+  HOW_SCORES_WORK_HREF,
   PERMISSIONS_HREF,
   PROFILE_HREF,
 } from '@/features/drives/routes';
 import { HomeWeatherAlert } from '@/features/weather/HomeWeatherAlert';
 import { Screen } from '@/ui';
 
+import { homeCopy } from './copy';
+import { clearHomeNotice, useHomeNotice } from './homeNotice';
 import { HomeView } from './HomeView';
-import { dropCopy, type StartBanner } from './StartDrive';
-import { clearStartNotice, useStartNotice } from './startNotice';
-import { useStreakCard } from './useStreakCard';
+import { dropCopy, type StartRefusal } from './StartDrive';
+
+/** A stored drop notice may say how its drive started; only a manual Start's drop is worth a line. */
+export function isManualDrop(n: DropNotice & { origin?: 'auto' | 'manual' }): boolean {
+  return n.origin !== 'auto';
+}
 
 export function HomeScreen() {
   const router = useRouter();
@@ -43,18 +49,20 @@ export function HomeScreen() {
   const recent = useRecentDrives(5);
   const week = useStatSums(sinceDays(now(), 7));
   const month = useStatSums(sinceDays(now(), 30));
+  const thisWeek = useStatSums(weekStart(now()));
   const { coaching } = useCoaching();
-  const streak = useStreakCard(recent.data);
+  const autoDrives = useAutoDrives();
   const { start } = useDriveControls();
-  // The status alone (not useDriveLive), so Home doesn't re-render on every 1 Hz drive tick.
-  const recording = useDrive((d) => d.status === 'recording');
+  // The status alone (not useDriveLive), so Home doesn't re-render on every 1 Hz drive tick: a
+  // drive recording, or a Start waiting for the car to move.
+  const recording = useDrive((d) => d.status === 'recording' || Boolean(d.waiting));
   const [starting, setStarting] = useState(false);
-  const [refusal, setRefusal] = useState<StartBanner | null>(null);
-  // Why a tap on the forgot-to-start reminder started no drive: shown in the same line as a refused
-  // Start (it outranks an older one), until the next start.
-  const notice = useStartNotice();
-  const shownRefusal = notice ?? refusal;
-  // A drive that started any way (a tap on the reminder too) takes an old refusal down.
+  const [refusal, setRefusal] = useState<StartRefusal | null>(null);
+  // The process-local line: a refusal from elsewhere (it outranks an older one), or that a drive
+  // stopped from "Not driving?" won't count.
+  const notice = useHomeNotice();
+  const shownRefusal = notice !== null && notice !== 'notDriving' ? notice : refusal;
+  // A drive that started any way takes an old refusal down.
   const [wasRecording, setWasRecording] = useState(recording);
   if (wasRecording !== recording) {
     setWasRecording(recording);
@@ -138,7 +146,7 @@ export function HomeScreen() {
     if (starting) return;
     setStarting(true);
     setRefusal(null);
-    clearStartNotice();
+    clearHomeNotice();
     try {
       const res = await start();
       if (res.ok) {
@@ -152,6 +160,14 @@ export function HomeScreen() {
       setStarting(false);
     }
   };
+
+  // The "Not driving?" line comes first: it is the newest thing that happened.
+  const infoLine =
+    notice === 'notDriving'
+      ? { message: homeCopy.notices.notDriving, onDismiss: clearHomeNotice, testID: 'not-driving-ack' }
+      : dropped && isManualDrop(dropped)
+        ? { message: dropCopy(dropped.cause, dropped.reason), onDismiss: dismissDropped }
+        : null;
 
   const refreshing = summary.isRefetching || recent.isRefetching;
   // Pull to refresh also looks for a DashPal ready to pair (the slot counts the pulls).
@@ -168,22 +184,22 @@ export function HomeScreen() {
         recent={recent.data}
         week={week.data}
         month={month.data}
+        thisWeek={thisWeek.data}
+        autoDrives={autoDrivesOn(autoDrives)}
         starting={starting}
         refusal={shownRefusal}
-        dropNotice={dropped ? { message: dropCopy(dropped.cause, dropped.reason), onDismiss: dismissDropped } : null}
+        dropNotice={infoLine}
         onStart={() => void onStart()}
         onRefusalAction={() => void onRefusalAction()}
         onOpenDrive={(id) => router.push(driveSummaryHref(id))}
         onSeeAll={() => router.push(DRIVE_HISTORY_HREF)}
         onAllStats={() => router.navigate(ANALYTICS_HREF)}
-        onHowPoints={() => router.push(HOW_POINTS_WORK_HREF)}
+        onHowScores={() => router.push(HOW_SCORES_WORK_HREF)}
         onAnalytics={() => router.navigate(ANALYTICS_HREF)}
         onProfile={() => router.navigate(PROFILE_HREF)}
         recording={recording}
         inProgress={<DriveInProgressBanner />}
         weather={<HomeWeatherAlert />}
-        streakNews={streak.news}
-        onDismissStreak={streak.dismiss}
         coaching={coaching}
         permissions={<PermissionCard board={board} recording={recording} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}
         dashpal={<HomeDashpal hidden={recording} pull={pulls} />}
@@ -195,6 +211,7 @@ export function HomeScreen() {
           void recent.refetch();
           void week.refetch();
           void month.refetch();
+          void thisWeek.refetch();
           void board.refresh('shared');
           setPulls((n) => n + 1);
         }}

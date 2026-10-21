@@ -4,4 +4,4 @@
  */
 export type { DriveCounts, DriveStatus, LocalDrive, LocalDriveEvent } from '@/data/queries';
 export type { DriveHistoryFilter as HistoryFilter } from '@/data/queries';
-export type { FinalizeTripResponseV3 } from '@/data/sync/payload';
+export type { FinalizeTripResponse } from '@/data/sync/payload';

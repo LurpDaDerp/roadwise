@@ -6,18 +6,16 @@ import type { DropReason } from '@/core/engine/finalize';
 import type { StartRefusalReason } from '@/drive/host';
 import { Banner, SwipeButton, Text, useTheme } from '@/ui';
 
+import { homeCopy } from './copy';
+
 export type StartRefusal = StartRefusalReason;
 
-/** What the line under the drive card says: a refused start, or a tap on a forgot-to-start reminder whose trip is over. */
-export type StartBanner = StartRefusal | 'reminder-expired';
-
-export const REFUSAL_COPY: Record<StartBanner, string> = {
+export const REFUSAL_COPY: Record<StartRefusal, string> = {
   permission: 'RoadWise needs location to record a drive.',
   precise: 'RoadWise needs Precise Location to record a drive.',
   services: 'Location Services are off. Turn them on to record a drive.',
   busy: 'A drive is already running.',
   error: 'Couldn’t start the drive. Try again.',
-  'reminder-expired': 'That reminder has expired. Swipe Start drive instead.',
 };
 
 const IDLE_MIN = Math.round(IDLE_END_S / 60);
@@ -47,8 +45,9 @@ export function dropCopy(cause: EndCause, reason: DropReason): string {
 /**
  * Start drive, the hero action at the foot of Home's drive card: a paper capsule across the scene
  * with an ink disc at its left carrying the car and the words to its right. The driver swipes the
- * car right to start, opening the sky's accent behind it, with a success haptic as it lands; a tap
- * does nothing. While the start is under way the disc sits at the end and spins.
+ * car right to start a waiting session (recording begins once the car is moving), opening the
+ * sky's accent behind it, with a success haptic as it lands; a tap does nothing. While the start
+ * is under way the disc sits at the end and spins.
  */
 export function StartDriveButton({ onStart, starting }: { onStart: () => void; starting: boolean }) {
   const t = useTheme();
@@ -57,8 +56,8 @@ export function StartDriveButton({ onStart, starting }: { onStart: () => void; s
     <View style={{ borderRadius: t.radius.pill, boxShadow: '0px 8px 24px rgba(0, 0, 0, 0.28)' }}>
       <SwipeButton
         testID="start-drive"
-        accessibilityLabel="Start drive"
-        accessibilityHint="Swipe right to start a drive."
+        accessibilityLabel={homeCopy.start.label}
+        accessibilityHint={homeCopy.start.hint}
         icon="car-sport"
         colors={{ track: c.primary, fill: c.accent, knob: c.onPrimary, knobInk: c.primary, hint: c.onPrimary }}
         height={64}
@@ -66,7 +65,7 @@ export function StartDriveButton({ onStart, starting }: { onStart: () => void; s
         onSwipe={onStart}
         label={
           <Text variant="headline" style={{ color: c.onPrimary, fontSize: 18 }} numberOfLines={1}>
-            Start drive
+            {homeCopy.start.label}
           </Text>
         }
       />
@@ -75,24 +74,24 @@ export function StartDriveButton({ onStart, starting }: { onStart: () => void; s
 }
 
 /**
- * The line under the drive card: a refused start (the button's, or a tap on the forgot-to-start
- * reminder's) says why, with its fix; with no refusal, a drive that was not kept says why until OK.
- * Nothing is recorded either way.
+ * The line under the drive card: a refused start says why, with its fix; with no refusal, an
+ * information line (the "Not driving?" acknowledgement, or why a started drive was not kept) stays
+ * until OK. Nothing is recorded either way.
  */
 export function StartNotice({
   refusal,
   onRefusalAction,
   notice,
 }: {
-  refusal: StartBanner | null;
+  refusal: StartRefusal | null;
   onRefusalAction: () => void;
-  notice?: { message: string; onDismiss: () => void } | null;
+  notice?: { message: string; onDismiss: () => void; testID?: string } | null;
 }) {
   const fixable = refusal === 'permission' || refusal === 'precise' || refusal === 'services';
   const action = fixable ? { label: 'Fix it', onPress: onRefusalAction } : refusal === 'busy' ? { label: 'Open it', onPress: onRefusalAction } : undefined;
-  if (refusal) {
-    return <Banner tone={refusal === 'reminder-expired' ? 'warning' : 'danger'} message={REFUSAL_COPY[refusal]} action={action} testID="start-refusal" />;
+  if (refusal) return <Banner tone="danger" message={REFUSAL_COPY[refusal]} action={action} testID="start-refusal" />;
+  if (notice) {
+    return <Banner tone="info" message={notice.message} action={{ label: homeCopy.notices.ok, onPress: notice.onDismiss }} testID={notice.testID ?? 'drive-dropped'} />;
   }
-  if (notice) return <Banner tone="info" message={notice.message} action={{ label: 'OK', onPress: notice.onDismiss }} testID="drive-dropped" />;
   return null;
 }

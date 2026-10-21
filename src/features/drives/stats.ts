@@ -9,14 +9,12 @@ import type { StatHealth, TrendDirection } from '@/ui';
 
 export const STAT_LABEL: Record<StatId, string> = {
   speeding: 'Speeding events',
-  pickups: 'Phone pickups',
   harsh: 'Harsh driving',
   clean: 'Clean drives',
   hard_brake: 'Hard braking',
   hard_accel: 'Hard acceleration',
   hard_corner: 'Hard cornering',
-  handling: 'Phone handling',
-  miles: 'Miles',
+  miles: 'Distance',
   duration: 'Time on the road',
   night_miles: 'Night miles',
 };
@@ -28,8 +26,6 @@ export const EMPTY_SUMS: StatSums = {
   drives: 0,
   cleanDrives: 0,
   speeding: 0,
-  pickups: 0,
-  handlingS: 0,
   hardBrake: 0,
   hardAccel: 0,
   hardCorner: 0,
@@ -41,8 +37,6 @@ const rateUnit = (unit: Stat['unit'], units: Units): string => {
       return '';
     case 'pct':
       return '%';
-    case 'min_per_h':
-      return 'min per hour';
     case 'mi':
       return units;
     case 'h':
@@ -54,7 +48,7 @@ const oneDp = (n: number) => (Math.round(n * 10) / 10).toFixed(1);
 
 /**
  * A stat as shown, in the driver's units: an event stat's total over the window ("3", never a rate
- * per distance), "92" %, "0.3" min per hour, "312" mi (or km), "12.5" h, or "—".
+ * per distance), "92" %, "312" mi (or km), "12.5" h, or "—".
  */
 export function formatStat(stat: Stat, units: Units = 'mi'): { value: string; unit: string } {
   const unit = rateUnit(stat.unit, units);
@@ -95,8 +89,9 @@ export interface HomeStat {
 
 /**
  * Home's four: the last 7 days with an arrow against your own 30 days (an event count against your
- * average week in them, the 30-day total × 7/30; clean % against the 30-day share). With no drive
- * in the last 7 days, the 30-day values without arrows.
+ * average week in them, the 30-day total × 7/30; clean % against the 30-day share). Distance has no
+ * colour and no arrow: it gives the counts their context, it is not good or bad. With no drive in
+ * the last 7 days, the 30-day values without arrows.
  */
 export function homeStats(week: StatSums, month: StatSums, units: Units = 'mi'): { stats: HomeStat[]; window: '7d' | '30d' } {
   const useWeek = week.drives > 0;
@@ -112,7 +107,7 @@ export function homeStats(week: StatSums, month: StatSums, units: Units = 'mi'):
       value,
       unit,
       health: s.color,
-      trend: useWeek ? trend : undefined,
+      trend: useWeek && s.id !== 'miles' ? trend : undefined,
       higherIsBetter: higherIsBetter(s.id),
     };
   });

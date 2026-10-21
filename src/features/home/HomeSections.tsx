@@ -1,16 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
-import { CHALLENGE_REWARD_POINTS } from '@scoring';
-import { ScrollView, View } from 'react-native';
+import { View } from 'react-native';
 
 import type { MySummary } from '@/data/server/summary';
 import { DriveRow } from '@/features/drives/DriveRow';
 import type { LocalDrive } from '@/features/drives/model';
 import type { HomeStat } from '@/features/drives/stats';
-import { HowItWorksList } from '@/features/howPoints/HowPointsScreen';
+import { HowItWorksList } from '@/features/howScores/HowItWorksList';
 import { Card, Divider, ProgressRing, SectionHeader, StatTile, Text, useTheme } from '@/ui';
 
-/** The first-run prompt: "Take your first drive", or how many more until stats unlock. */
-export function FirstRunCard({ driveCount }: { driveCount: number }) {
+import { homeCopy } from './copy';
+
+/**
+ * The first-run prompt: "Take your first drive", or how many more until stats unlock. Its line says
+ * how drives start on this phone: on their own (automatic drives on), or from Start drive.
+ */
+export function FirstRunCard({ driveCount, autoDrives }: { driveCount: number; autoDrives: boolean }) {
   const t = useTheme();
   const left = Math.max(0, 3 - driveCount);
   return (
@@ -20,11 +24,9 @@ export function FirstRunCard({ driveCount }: { driveCount: number }) {
           <Ionicons name="car-sport" size={t.size.iconLg} color={t.colors.accent} />
         </View>
         <View style={{ flex: 1, gap: 2 }}>
-          <Text variant="title3">{driveCount === 0 ? 'Take your first drive' : `${left} more ${left === 1 ? 'drive' : 'drives'} to unlock your stats`}</Text>
+          <Text variant="title3">{driveCount === 0 ? homeCopy.firstRun.first : homeCopy.firstRun.more(left)}</Text>
           <Text variant="subhead" tone="muted">
-            {driveCount === 0
-              ? 'Swipe Start drive before you pull out. Put your phone down and go.'
-              : 'Keep it up. Your driving stats show up here after 3 drives.'}
+            {driveCount > 0 ? homeCopy.firstRun.keepGoing : autoDrives ? homeCopy.firstRun.auto : homeCopy.firstRun.manual}
           </Text>
         </View>
       </View>
@@ -32,14 +34,14 @@ export function FirstRunCard({ driveCount }: { driveCount: number }) {
   );
 }
 
-/** How it works, last on Home for every driver, with "All the rules" into How points work. */
-export function HowItWorks({ onHowPoints }: { onHowPoints: () => void }) {
+/** How it works, last on Home for every driver, with "How scores work" into the full rules. */
+export function HowItWorks({ onHowScores, autoDrives }: { onHowScores: () => void; autoDrives: boolean }) {
   const t = useTheme();
   return (
     <View style={{ gap: t.space.sm }}>
-      <SectionHeader title="How it works" action={{ label: 'All the rules', onPress: onHowPoints }} />
+      <SectionHeader title={homeCopy.how.title} action={{ label: homeCopy.how.action, onPress: onHowScores }} />
       <Card testID="how-it-works">
-        <HowItWorksList />
+        <HowItWorksList autoDrives={autoDrives} />
       </Card>
     </View>
   );
@@ -100,78 +102,66 @@ export function RecentDrives({ drives, onOpen, onSeeAll }: { drives: readonly Lo
   );
 }
 
-type Challenge = MySummary['challenges'][number];
+type Goal = MySummary['challenges'][number];
 
-/** What each weekly challenge pays (the server's `complete_challenges` pays the same). */
-const REWARD = CHALLENGE_REWARD_POINTS.toLocaleString('en-US');
-
-/** Completed challenges per Freeze (server: `freeze_progress` 0..2, the third grants one). */
-export const CHALLENGES_PER_FREEZE = 3;
-
-/** This week's three challenges as a sideways strip. */
-export function ChallengesStrip({ challenges, freezeProgress }: { challenges: readonly Challenge[]; freezeProgress?: number }) {
+/**
+ * This week's three goals, one row each: a ring with the fraction while open, or full with a check
+ * when done, then the title and its line. No rewards: they change no score.
+ */
+export function WeeklyGoals({ goals }: { goals: readonly Goal[] }) {
   const t = useTheme();
-  if (challenges.length === 0) return null;
-  const toFreeze = Math.max(0, Math.min(CHALLENGES_PER_FREEZE - 1, Math.floor(freezeProgress ?? 0)));
+  if (goals.length === 0) return null;
   return (
-    <View style={{ gap: t.space.sm }} testID="challenges">
-      <SectionHeader title="Weekly challenges" />
-      <View
-        style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.xs }}
-        accessible
-        accessibilityLabel={`Each challenge is worth ${REWARD} points. ${toFreeze} of ${CHALLENGES_PER_FREEZE} toward a Freeze.`}
-        testID="challenges-freeze"
-      >
-        <Ionicons name="snow" size={t.size.iconSm} color={t.colors.freeze} />
-        <Text variant="footnote" tone="muted">
-          +{REWARD} pts each · {toFreeze}/{CHALLENGES_PER_FREEZE} toward a Freeze
-        </Text>
-      </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: t.space.md, paddingRight: t.space.lg }} style={{ marginHorizontal: -t.space.lg }}>
-        <View style={{ width: t.space.lg - t.space.md }} />
-        {[...challenges]
+    <View style={{ gap: t.space.sm }} testID="goals">
+      <SectionHeader title={homeCopy.goals.title} />
+      <Card padded={false}>
+        {[...goals]
           .sort((a, b) => a.slot - b.slot)
-          .map((c) => {
-            const value = c.target > 0 ? Math.min(1, c.progress / c.target) : 0;
+          .map((g, i) => {
+            const value = g.target > 0 ? Math.min(1, g.progress / g.target) : 0;
+            const spoken = g.completed
+              ? homeCopy.goals.spokenDone(g.title, g.description)
+              : homeCopy.goals.spokenOpen(g.title, g.progress, g.target, g.description);
             return (
-              <Card
-                key={c.id}
-                testID={`challenge-${c.id}`}
-                style={{ width: 220 }}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
-                  <ProgressRing
-                    value={c.completed ? 1 : value}
-                    size={52}
-                    strokeWidth={6}
-                    tone={c.completed ? 'clean' : 'primary'}
-                    accessibilityLabel={`${c.title}: ${c.completed ? 'done' : `${c.progress} of ${c.target}`}`}
-                  >
-                    {c.completed ? (
-                      <Ionicons name="checkmark" size={t.size.icon} color={t.colors.signal.clean.text} />
-                    ) : (
-                      <Text variant="footnote" style={{ fontWeight: '700' }}>
-                        {Math.min(c.progress, c.target)}/{c.target}
-                      </Text>
-                    )}
-                  </ProgressRing>
-                  <View style={{ flex: 1 }}>
-                    <Text variant="headline" numberOfLines={2}>
-                      {c.title}
-                    </Text>
-                    <Text variant="footnote" tone={c.completed ? 'success' : 'muted'}>
-                      {c.completed ? `Done · +${REWARD} pts` : `+${REWARD} pts`}
+              <View key={g.id}>
+                {i > 0 ? <Divider inset={16} /> : null}
+                <View
+                  accessible
+                  accessibilityLabel={spoken}
+                  testID={`goal-${g.id}`}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, padding: t.space.lg }}
+                >
+                  <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                    <ProgressRing
+                      value={g.completed ? 1 : value}
+                      size={40}
+                      strokeWidth={5}
+                      tone={g.completed ? 'clean' : 'primary'}
+                      accessibilityLabel={spoken}
+                    >
+                      {g.completed ? (
+                        <Ionicons name="checkmark" size={t.size.icon} color={t.colors.signal.clean.text} testID={`goal-${g.id}-done`} />
+                      ) : (
+                        <Text variant="caption" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5} style={{ fontWeight: '700', maxWidth: 28, textAlign: 'center' }}>
+                          {homeCopy.goals.progress(g.progress, g.target)}
+                        </Text>
+                      )}
+                    </ProgressRing>
+                  </View>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text variant="headline">{g.title}</Text>
+                    <Text variant="subhead" tone="muted">
+                      {g.description}
                     </Text>
                   </View>
                 </View>
-                <Text variant="footnote" tone="muted" numberOfLines={3}>
-                  {c.description}
-                </Text>
-              </Card>
+              </View>
             );
           })}
-      </ScrollView>
+        <Text variant="footnote" tone="subtle" style={{ paddingHorizontal: t.space.lg, paddingBottom: t.space.lg }}>
+          {homeCopy.goals.footer}
+        </Text>
+      </Card>
     </View>
   );
 }
-

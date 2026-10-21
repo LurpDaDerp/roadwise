@@ -10,10 +10,12 @@ import { homeStats } from '@/features/drives/stats';
 import { showsTip, type Coaching, type Level } from '@/features/analytics/model';
 import { Avatar, ScreenTitle, useOnSky, useSkyScrollHandler, useTheme } from '@/ui';
 
-import { CoachTipCard, StreakCard, type StreakNews } from './ActionCards';
-import { HomeHeader, ProgressStrip } from './HomeHeader';
-import { ChallengesStrip, FirstRunCard, HowItWorks, RecentDrives, StatsCard } from './HomeSections';
-import { StartDriveButton, StartNotice, type StartBanner } from './StartDrive';
+import { CoachTipCard } from './ActionCards';
+import { homeCopy } from './copy';
+import { HomeHeader } from './HomeHeader';
+import { FirstRunCard, HowItWorks, RecentDrives, StatsCard, WeeklyGoals } from './HomeSections';
+import { StartDriveButton, StartNotice, type StartRefusal } from './StartDrive';
+import { goalsDone, WeekPills } from './WeekPills';
 
 /** Scored drives before the stats card and the rest of Home appear. */
 export const FIRST_RUN_DRIVES = 3;
@@ -28,35 +30,39 @@ export type HomeViewProps = {
   recent: readonly LocalDrive[] | undefined;
   week: StatSums | undefined;
   month: StatSums | undefined;
+  /** This calendar week's (from Monday) sums, for the pills; undefined while loading. */
+  thisWeek?: StatSums | undefined;
+  /** Automatic drives are on (an iPhone with what they need): the auto words. */
+  autoDrives?: boolean;
   starting: boolean;
-  refusal: StartBanner | null;
-  /** The last drive was not kept: one line under the drive card until OK (a refusal outranks it). */
-  dropNotice?: { message: string; onDismiss: () => void } | null;
+  refusal: StartRefusal | null;
+  /**
+   * One information line under the drive card until OK (a refusal outranks it): the "Not driving?"
+   * acknowledgement, or why the last manual drive was not kept.
+   */
+  dropNotice?: { message: string; onDismiss: () => void; testID?: string } | null;
   onStart: () => void;
   onRefusalAction: () => void;
   onOpenDrive: (clientTripId: string) => void;
   onSeeAll: () => void;
   /** "All stats" on the stats card: the Analytics tab. */
   onAllStats: () => void;
-  onHowPoints: () => void;
-  /** The Safety Rating badge and the coaching tip open the Analytics tab. */
+  onHowScores: () => void;
+  /** The rating block and the coaching tip open the Analytics tab. */
   onAnalytics: () => void;
   /** The avatar beside the greeting opens Profile. */
   onProfile?: () => void;
   refreshing?: boolean;
   onRefresh?: () => void;
   /**
-   * A drive is recording (the driver backed out to Home): the "drive in progress" strip shows at
-   * the top, one tap back to the driving screen, and the drive card carries no Start.
+   * A drive is recording or a Start is waiting for the car to move (the driver backed out to Home):
+   * the strip shows at the top, one tap back to the driving screen, and the drive card carries no Start.
    */
   recording?: boolean;
   inProgress?: ReactNode;
   /** The dangerous-weather card: the first action item under the drive card (it renders nothing when all is well). */
   weather?: ReactNode;
-  /** The latest drive lost the streak or spent a freeze on it, until dismissed. */
-  streakNews?: StreakNews | null;
-  onDismissStreak?: () => void;
-  /** The permission card, an action item after the streak card (never while a drive records). */
+  /** The permission card, an action item under the weather card (never while a drive records). */
   permissions?: ReactNode;
   /**
    * Home's DashPal slot (the new-phone card and the card of a DashPal ready to pair), under the
@@ -64,19 +70,19 @@ export type HomeViewProps = {
    * setup sheet it opened stays to say the drive stopped it.
    */
   dashpal?: ReactNode;
-  /** The last 30 days' coaching; its tip card shows only for a Fair or Poor level. */
+  /** The coaching; its tip card shows only for a Fair or Poor level. */
   coaching?: Coaching | null;
   /** Home's scroll, so it can return to the top when the permission card shows. */
   scrollRef?: RefObject<ScrollView | null>;
 };
 
 /**
- * Home, a dashboard in the travel-card mould: the greeting with your avatar on the sky, your streak
- * and points in two pills, then the drive card, the screen's hero, with your level, the Safety
- * Rating in its corner and Start drive. Right under it, the action items, each only when it
- * applies: dangerous weather, streak news, a permission to fix, DashPal, a coaching tip. Then the
- * detail (stats, recent drives, the week's challenges; until 3 scored drives a first-drive prompt
- * instead) and How it works, always last.
+ * Home, a dashboard in the travel-card mould: the greeting with your avatar on the sky, this week's
+ * drives and goals in two pills, then the drive card, the screen's hero, with the Safety Rating in
+ * its ring and Start drive. Right under it, the action items, each only when it applies: dangerous
+ * weather, a permission to fix, DashPal, a coaching tip. Then the detail (stats, recent drives,
+ * this week's goals; until 3 scored drives a first-drive prompt instead) and How it works, always
+ * last.
  */
 export function HomeView({ scrollRef, ...p }: HomeViewProps) {
   const t = useTheme();
@@ -84,6 +90,7 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
   const units = useUnits();
   // A fresh install, or another phone changed units: the local mirror follows the server.
   useUnitsFromServer(p.summary?.profile.units);
+  const auto = p.autoDrives ?? false;
   const firstRun = p.driveCount !== undefined && p.driveCount < FIRST_RUN_DRIVES;
   const full = p.driveCount !== undefined && !firstRun;
   const stats = full && p.week && p.month ? homeStats(p.week, p.month, units) : null;
@@ -121,10 +128,10 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
             ) : null
           }
         >
-          {name ? `Hey, ${name}` : 'Home'}
+          {name ? homeCopy.greeting(name) : 'Home'}
         </ScreenTitle>
         {p.recording ? p.inProgress : null}
-        {p.summary ? <ProgressStrip summary={p.summary} /> : null}
+        {p.thisWeek ? <WeekPills drives={p.thisWeek.drives} miles={p.thisWeek.miles} units={units} goals={goalsDone(p.summary?.challenges)} /> : null}
         <View style={{ gap: t.space.md }}>
           <HomeHeader
             summary={p.summary}
@@ -133,21 +140,19 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
             onRating={p.onAnalytics}
             onRetry={p.onRetrySummary}
             start={p.recording ? undefined : <StartDriveButton onStart={p.onStart} starting={p.starting} />}
+            caption={auto ? homeCopy.start.auto : null}
           />
           {p.recording ? null : <StartNotice refusal={p.refusal} onRefusalAction={p.onRefusalAction} notice={p.dropNotice ?? null} />}
         </View>
 
         {p.weather}
-        {p.streakNews && p.summary ? (
-          <StreakCard outcome={p.streakNews.outcome} freezes={p.summary.progress.freezes} onDismiss={p.onDismissStreak ?? (() => {})} />
-        ) : null}
         {p.recording ? null : p.permissions}
         {p.dashpal}
         {tip ? <CoachTipCard coaching={tip} onOpen={p.onAnalytics} /> : null}
 
         {firstRun ? (
           <>
-            <FirstRunCard driveCount={p.driveCount ?? 0} />
+            <FirstRunCard driveCount={p.driveCount ?? 0} autoDrives={auto} />
             {p.recent && p.recent.length > 0 ? <RecentDrives drives={p.recent} onOpen={p.onOpenDrive} onSeeAll={p.onSeeAll} /> : null}
           </>
         ) : null}
@@ -156,11 +161,11 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
           <>
             {stats ? <StatsCard stats={stats.stats} window={stats.window} onAllStats={p.onAllStats} /> : null}
             <RecentDrives drives={p.recent ?? []} onOpen={p.onOpenDrive} onSeeAll={p.onSeeAll} />
-            <ChallengesStrip challenges={p.summary?.challenges ?? []} freezeProgress={p.summary?.progress.freeze_progress} />
+            <WeeklyGoals goals={p.summary?.challenges ?? []} />
           </>
         ) : null}
 
-        <HowItWorks onHowPoints={p.onHowPoints} />
+        <HowItWorks onHowScores={p.onHowScores} autoDrives={auto} />
       </Animated.ScrollView>
     </View>
   );
