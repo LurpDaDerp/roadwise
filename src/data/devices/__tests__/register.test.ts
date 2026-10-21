@@ -2,11 +2,11 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, migrate } from '@/data/db';
 import { readLiveActivityToken, readPushToken, type LiveActivityTokenPort, type PushPort } from '@/data/devices/pushToken';
-import { LAST_REGISTER_KEY, LEAGUE_ELIGIBLE_KEY, readLeagueEligible, REGISTER_INTERVAL_MS, registerDevice, registeredRecently, releaseDevice } from '@/data/devices/register';
+import { LAST_REGISTER_KEY, REGISTER_INTERVAL_MS, registerDevice, registeredRecently, releaseDevice } from '@/data/devices/register';
 
 const T0 = 1_700_000_000_000;
 
-test('register_device is called with the install id, platform and token; league_eligible is cached; repeats are throttled', async () => {
+test('register_device is called with the install id, platform and token; nothing of the answer is kept; repeats are throttled', async () => {
   const db = await createSqlJsDb();
   await migrate(db);
   const settings = createSettingsRepo(db);
@@ -18,8 +18,6 @@ test('register_device is called with the install id, platform and token; league_
   const base = { rpc, settings, userId: 'u1', deviceId: 'install-1234', platform: 'ios' as const, pushToken: 'ExponentPushToken[abcdefgh12345678]', now: () => T0 };
   expect(await registerDevice(base)).toBe('saved');
   expect(calls).toEqual([['register_device', { p_device_id: 'install-1234', p_platform: 'ios', p_push_token: 'ExponentPushToken[abcdefgh12345678]' }]]);
-  expect(await readLeagueEligible(settings, 'u1')).toBe(true);
-  expect(await readLeagueEligible(settings, 'u2')).toBeNull();
   expect(await registerDevice({ ...base, now: () => T0 + 1000 })).toBe('throttled');
   expect(await registerDevice({ ...base, pushToken: null, now: () => T0 + 1000 })).toBe('saved'); // the token changed
   expect(calls[1]).toEqual(['register_device', { p_device_id: 'install-1234', p_platform: 'ios' }]);
@@ -29,7 +27,7 @@ test('register_device is called with the install id, platform and token; league_
   const failing = { ...base, rpc: async () => Promise.reject(new Error('offline')), onError: jest.fn() };
   expect(await registerDevice({ ...failing, now: () => T0 + 2 * REGISTER_INTERVAL_MS })).toBe('error');
   expect(failing.onError).toHaveBeenCalled();
-  expect(await settings.get(LEAGUE_ELIGIBLE_KEY)).toEqual({ userId: 'u1', eligible: true });
+  expect(await settings.get('device.leagueEligible')).toBeNull();
 });
 
 test('registeredRecently: true only for this account and install within 6 hours (checked before reading the push token)', async () => {

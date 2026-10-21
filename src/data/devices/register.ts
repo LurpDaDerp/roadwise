@@ -1,15 +1,13 @@
 /**
  * `register_device` (plan §4): this install's row under the signed-in account — platform, the Expo
  * push token when notifications are permitted and, on an iPhone with iOS 17.2 or later, the Live
- * Activity push-to-start token (so a drive that starts on its own can show on the lock screen) —
- * and the one answer the app keeps: `league_eligible` (the first account to register a device
- * claims it). Called on sign-in and on foreground, throttled to once every 6 hours unless a token
- * changed.
+ * Activity push-to-start token (so a drive that starts on its own can show on the lock screen).
+ * The app keeps nothing of the answer. Called on sign-in and on foreground, throttled to once
+ * every 6 hours unless a token changed.
  */
 import type { SettingsRepo } from '@/data/db/settings';
 
 export const LAST_REGISTER_KEY = 'device.lastRegister';
-export const LEAGUE_ELIGIBLE_KEY = 'device.leagueEligible';
 export const REGISTER_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export type Rpc = (fn: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -50,14 +48,6 @@ function parseLast(raw: unknown): LastRegister | null {
     token: typeof r.token === 'string' ? r.token : null,
     laToken: typeof r.laToken === 'string' ? r.laToken : null,
   };
-}
-
-/** The cached `league_eligible` for `userId`, or null before the first registration answered. */
-export async function readLeagueEligible(settings: Pick<SettingsRepo, 'get'>, userId: string): Promise<boolean | null> {
-  const raw = await settings.get<unknown>(LEAGUE_ELIGIBLE_KEY);
-  if (raw === null || typeof raw !== 'object') return null;
-  const r = raw as Record<string, unknown>;
-  return r.userId === userId && typeof r.eligible === 'boolean' ? r.eligible : null;
 }
 
 /** A PostgREST error object as an `Error`, carrying its code only (never a row or a token). */
@@ -140,21 +130,17 @@ export async function registerDevice(deps: RegisterDeps): Promise<RegisterResult
   const same = last !== null && last.userId === userId && last.deviceId === deviceId;
   if (!deps.force && same && last.token === deps.pushToken && (last.laToken ?? null) === laToken && last.at <= now && now - last.at < REGISTER_INTERVAL_MS) return 'throttled';
 
-  let eligible: boolean | null = null;
   try {
     const args: Record<string, unknown> = { p_device_id: deviceId, p_platform: deps.platform };
     if (deps.pushToken !== null) args.p_push_token = deps.pushToken;
     // Left out when there is none: the server keeps the one it holds (a token is only ever replaced).
     if (laToken !== null) args.p_live_activity_token = laToken;
-    const answer = await deps.rpc('register_device', args);
-    const r = answer !== null && typeof answer === 'object' ? (answer as Record<string, unknown>) : {};
-    eligible = typeof r.league_eligible === 'boolean' ? r.league_eligible : null;
+    await deps.rpc('register_device', args);
   } catch (error) {
     deps.onError?.(asError(error, 'register_device failed'), 'register device');
     return 'error';
   }
   const stamp: LastRegister = { userId, deviceId, at: now, token: deps.pushToken, laToken };
   await settings.set(LAST_REGISTER_KEY, stamp);
-  if (eligible !== null) await settings.set(LEAGUE_ELIGIBLE_KEY, { userId, eligible });
   return 'saved';
 }
