@@ -35,8 +35,11 @@ export interface PublicProfile extends PublicCard {
   can_view_stats: boolean;
   /** You, or a friend whose heat map is set to Friends. */
   can_view_heatmap: boolean;
-  /** The five category scores, whole numbers (null each where unscored); null unless it is you or a friend who shares them. */
-  scores: Record<AxisKey, number | null> | null;
+  /**
+   * The category scores, whole numbers (null each where unscored; a category an older server leaves
+   * out reads as unscored); null unless it is you or a friend who shares them.
+   */
+  scores: Partial<Record<AxisKey, number | null>> | null;
 }
 
 export interface FriendsList {

@@ -225,13 +225,19 @@ describe('what friends see', () => {
     expect(await screen.findByLabelText('Safety Rating: No rating yet')).toBeOnTheScreen();
   });
 
-  it('a Categories card with the five whole-number scores, only when they share them', async () => {
-    await show(profile({ relationship: 'friend', scores: { acceleration: 95, braking: 72, turning: 100, attention: null, speed: 88 } }));
+  it('a Categories card with the six whole-number scores, Phone use among them, only when they share them', async () => {
+    await show(profile({ relationship: 'friend', scores: { acceleration: 95, braking: 72, turning: 100, attention: null, phone: 81, speed: 88 } }));
     const card = await screen.findByTestId('public-categories');
     expect(card).toHaveTextContent(/Categories/);
     expect(screen.getByLabelText('Braking 72')).toBeOnTheScreen();
     expect(screen.getByLabelText('Attention, no score yet')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Phone use 81')).toBeOnTheScreen();
     expect(screen.getByTestId('public-category-speed')).toHaveTextContent(/88/);
+    await clearQueryClients();
+    // Phone use not scored yet, or left out by the server: a dash, like any unscored category.
+    await show(profile({ relationship: 'friend', scores: { acceleration: 95, braking: 72, turning: 100, attention: null, speed: 88 } }));
+    expect(await screen.findByLabelText('Phone use, no score yet')).toBeOnTheScreen();
+    expect(screen.getByTestId('public-category-phone')).toHaveTextContent('—Phone use');
     await clearQueryClients();
     await show(profile({ relationship: 'friend', scores: null }));
     await screen.findByTestId('profile-username');

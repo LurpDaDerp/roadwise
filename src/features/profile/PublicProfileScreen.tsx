@@ -177,7 +177,7 @@ export function RelationshipButtons({ rel, pending, onPress }: { rel: Relationsh
   );
 }
 
-/** A friend's five category scores, whole numbers ("—" where unscored), when they share them. */
+/** A friend's category scores in radar order, Phone use among them, whole numbers ("—" where unscored), when they share them. */
 function CategoriesCard({ scores }: { scores: NonNullable<PublicProfile['scores']> }) {
   const th = useTheme();
   const c = profileCopy.categories;
