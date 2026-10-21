@@ -5,8 +5,8 @@ import { FloatingTabBar, type FloatingTabBarProps } from '@/ui/nav/FloatingTabBa
 import { ThemeProvider } from '@/ui/theme';
 
 function props(index: number, emit = jest.fn(() => ({ defaultPrevented: false }))) {
-  // The shell's tabs: Home · Analytics · Leaderboards (route `leagues`) · Profile.
-  const TITLES: Record<string, string> = { home: 'Home', analytics: 'Analytics', leagues: 'Leaderboards', profile: 'Profile' };
+  // The shell's tabs: Home · Analytics · Friends (route `leagues`) · Profile.
+  const TITLES: Record<string, string> = { home: 'Home', analytics: 'Analytics', leagues: 'Friends', profile: 'Profile' };
   const routes = Object.keys(TITLES).map((name) => ({ key: `${name}-k`, name }));
   const descriptors = Object.fromEntries(
     routes.map((r) => [
@@ -27,8 +27,8 @@ test('four tabs, each spoken by name with its selected state', async () => {
     </ThemeProvider>
   );
   expect(screen.getAllByRole('tab')).toHaveLength(4);
-  expect(screen.getAllByRole('tab').map((t) => t.props.accessibilityLabel)).toEqual(['Home', 'Analytics', 'Leaderboards', 'Profile']);
-  expect(screen.getByRole('tab', { name: 'Leaderboards' })).toBeSelected();
+  expect(screen.getAllByRole('tab').map((t) => t.props.accessibilityLabel)).toEqual(['Home', 'Analytics', 'Friends', 'Profile']);
+  expect(screen.getByRole('tab', { name: 'Friends' })).toBeSelected();
   expect(screen.getByRole('tab', { name: 'Home' })).not.toBeSelected();
 });
 
