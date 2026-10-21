@@ -633,6 +633,12 @@ describe('swipe to end', () => {
     expect(mockEnd).toHaveBeenCalledTimes(1);
   });
 
+  test('End forgives a diagonal start: 24 pt up or down before the drag gives way (Home’s Start keeps 16)', async () => {
+    await renderHud();
+    const { config } = getByGestureTestId('hud-end-pan') as unknown as { config: { failOffsetYStart: number; failOffsetYEnd: number } };
+    expect([config.failOffsetYStart, config.failOffsetYEnd]).toEqual([-24, 24]);
+  });
+
   test('End is the layout’s 76 pt capsule across the foot of the screen', async () => {
     await renderHud();
     expect(screen.getByTestId('hud-end')).toHaveStyle({ height: END_SWIPE_H_PT });
