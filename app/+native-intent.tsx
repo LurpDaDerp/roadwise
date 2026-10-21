@@ -1,10 +1,11 @@
 /**
  * Every link the OS hands the app passes through here first. Only the app's own link shapes go
- * through — a friend link (`add/`) and a drive summary (`drives/`);
- * anything else, `roadwise://drive` above all (and any `dashpal` path), opens Home. Nothing a link
- * can open starts a drive (plan §1.4).
+ * through: a friend link (`add/`), a drive summary (`drives/`) and the driving screen
+ * (`roadwise://drive`, which the Live Activity and the widget open, and only that exact link);
+ * anything else (any `dashpal` path, a `drive` link with parameters) opens Home. Nothing a link can
+ * open starts a drive (plan §1.4): the driving screen only shows a drive already recording.
  */
-const ALLOWED = /^(add\/[^/?#]+|drives(\/[^/?#]+)?)([?#].*)?$/;
+const ALLOWED = /^(add\/[^/?#]+|drives(\/[^/?#]+)?)([?#].*)?$|^drive$/;
 
 /** `roadwise://add/maya`, `roadwise:///add/maya`, `/add/maya` → `add/maya`. */
 function appPath(path: string): string {

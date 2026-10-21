@@ -85,7 +85,7 @@ const mockOwner: { uid: string | null; hasData: boolean } = { uid: null, hasData
 jest.mock('@/features/auth/AuthGate', () => ({
   AuthGate: ({ children }: { children: ReactNode }) => children,
 }));
-// The minimum-version gate the reminder tap's start gate reads (its own suite tests it).
+// The minimum-version gate (its own suite tests it).
 jest.mock('@/features/auth/version', () => ({ useUpdateStatus: () => 'ok' }));
 jest.mock('@/boot/device', () => ({
   readDeviceOwner: async () => mockOwner.uid,
@@ -142,7 +142,7 @@ jest.mock('@/data/queries', () => ({
 }));
 
 // Task 18's hosts are stand-ins here; their wiring is `layout-wiring.test.tsx`'s subject.
-jest.mock('@/features/notifications', () => ({ NotificationsHost: () => null, reminderStartGate: () => 'never' }));
+jest.mock('@/features/notifications', () => ({ NotificationsHost: () => null }));
 jest.mock('@/data/devices/DeviceHost', () => ({ DeviceHost: () => null }));
 
 // eslint-disable-next-line import/first -- after the mocks it depends on
@@ -180,24 +180,26 @@ function driveState(over: Partial<DriveState> = {}): DriveState {
     limit: UNKNOWN_LIMIT,
     limitMph: null,
     speedingTier: null,
-    phoneUseSince: null,
     stopped: false,
     autoEndAt: null,
     distanceM: 0,
     lockedOut: false,
     lastAlert: null,
     callActive: false,
-    screenLocked: false,
     lastFinalized: null,
     alertsAvailable: true,
-    points: null,
     dryRun: false,
-    mode: 'mounted',
-    role: 'driver',
     courseDeg: null,
     speedingRatio: null,
     speedingOver: false,
-    lastDeduction: null,
+    waiting: null,
+    notDrivingAvailable: false,
+    notDrivingSpentMs: 0,
+    spotNudge: null,
+    weatherAlert: null,
+    weather: null,
+    origin: null,
+    lastShake: null,
     ...over,
   };
 }
@@ -225,8 +227,10 @@ function fakeRuntime(drive: Partial<DriveState>) {
     owed: jest.fn(async () => 1),
     signedIn: jest.fn(async () => {}),
   };
+  // The sign-out drain first makes held uploads due (one UPDATE on the queue).
+  const db = { execute: jest.fn(async () => ({ rows: [], changes: 0 })) };
   return {
-    runtime: { db: {}, queryClient, drive: host, runner } as unknown as NonNullable<RuntimeState['runtime']>,
+    runtime: { db, now: () => 1_000, queryClient, drive: host, runner } as unknown as NonNullable<RuntimeState['runtime']>,
     host,
     runner,
     queryClient,

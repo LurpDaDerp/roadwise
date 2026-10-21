@@ -1,10 +1,11 @@
 /**
- * What a tap on a notification does — for local and pushed notifications alike.
+ * What a tap on a notification does, for local and pushed notifications alike.
  *
  * `routeForResponse` is pure: it reads the notification's `data.url` and lets through only the
  * routes a notification may open. Anything else opens Home; a response that is not shaped like one
- * opens nothing. `handleResponse` navigates, or — while a drive is under way or the navigator is
- * not mounted yet — holds the href in settings for `replayPendingHref`.
+ * opens nothing. `handleResponse` navigates, or (while a drive is under way or the navigator is
+ * not mounted yet) holds the href in settings for `replayPendingHref`. The drive's recording note
+ * is not handled here: `NotificationsHost` opens the driving screen for it, and it is never held.
  */
 import * as Notifications from 'expo-notifications';
 

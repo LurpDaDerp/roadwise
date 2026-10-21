@@ -93,7 +93,7 @@ jest.mock('@/data/queries', () => ({
   ...jest.requireActual('@/data/queries'),
   DataProvider: ({ children }: { children: ReactNode }) => children,
 }));
-jest.mock('@/features/notifications', () => ({ NotificationsHost: () => null, reminderStartGate: () => 'never' }));
+jest.mock('@/features/notifications', () => ({ NotificationsHost: () => null }));
 jest.mock('@/data/devices/DeviceHost', () => ({ DeviceHost: () => null }));
 
 // The store's give-way timer starts when the layout module loads, so the clock is faked first and
@@ -139,24 +139,26 @@ function readyRuntime() {
     limit: UNKNOWN_LIMIT,
     limitMph: null,
     speedingTier: null,
-    phoneUseSince: null,
     stopped: false,
     autoEndAt: null,
     distanceM: 0,
     lockedOut: false,
     lastAlert: null,
     callActive: false,
-    screenLocked: false,
     lastFinalized: null,
     alertsAvailable: true,
-    points: null,
     dryRun: false,
-    mode: 'mounted',
-    role: 'driver',
     courseDeg: null,
     speedingRatio: null,
     speedingOver: false,
-    lastDeduction: null,
+    waiting: null,
+    notDrivingAvailable: false,
+    notDrivingSpentMs: 0,
+    spotNudge: null,
+    weatherAlert: null,
+    weather: null,
+    origin: null,
+    lastShake: null,
   };
   const host = {
     snapshot: () => state,

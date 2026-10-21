@@ -7,15 +7,20 @@ test.each([
   ['roadwise:///add/maya_16', '/add/maya_16'],
   ['roadwise://drives/0f8fad5b-d9cb-469f-a165-70867728950e?fresh=1', '/drives/0f8fad5b-d9cb-469f-a165-70867728950e?fresh=1'],
   ['/add/maya_16', '/add/maya_16'],
+  // The Live Activity and the widget open the driving screen (it shows only a drive already recording).
+  ['roadwise://drive', '/drive'],
+  ['roadwise:///drive', '/drive'],
 ])('%s passes as %s', async (path, expected) => expect(await go(path)).toBe(expected));
 
 test.each([
-  'roadwise://drive',
   // Clan invites are gone with clans: an old invite link opens Home.
   'roadwise://clan/ABCD2345',
   'roadwise:///clan/ABCD2345',
   '/clan/ABCD2345',
+  // Only the exact link: a drive link with parameters opens Home, so no link can start a drive.
   'roadwise://drive?start=1',
+  'roadwise://drive/start',
+  'roadwise://drive#start',
   // Sign-in is a code typed into the app: no link signs anyone in.
   'roadwise://auth/callback#access_token=x',
   'roadwise://auth/callback?code=x',

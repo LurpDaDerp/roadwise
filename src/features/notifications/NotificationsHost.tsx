@@ -1,5 +1,5 @@
 /**
- * The app's only notification response listener (rev1: C1 — one plumbing for local and pushed
+ * The app's only notification response listener (rev1: C1: one plumbing for local and pushed
  * notifications).
  *
  * On mount: the Android channels (`ensureNotificationSetup`), the one
@@ -9,16 +9,10 @@
  * that lands during a drive, or before the navigator is mounted, is held and replayed when the
  * drive's busy signal says it is over.
  *
- * A tap on the forgot-to-start reminder is never routed as a link: its token is held (iOS: from the
- * response; Android: handed over natively, `watchReminderTapIntents`) and run by
- * `startFromReminderTap`, which claims it natively and only then starts the drive through
- * `startDrive` — the Start Drive button's own start. It is tried on a new hold, on each change of
- * the busy signal, and whenever `startGate` changes; a hold waits while the app is still starting
- * (at most 2 min from the tap) and is dropped during setup, signed out or with an update required.
- * A drive under way spends it at once: the drive screen while it records, nothing while it closes.
- * The tap's routes go through `router.navigate`, so a tap while the drive screen shows never stacks
- * a second one on it; Home goes through `router.dismissTo` when a screen sits above the tabs, so it
- * returns to the Home already in the stack instead of opening a second one.
+ * A tap on the drive's recording note (`kind: 'driveRecording'`, the iPhone's note while a drive
+ * records) opens the driving screen, through `router.navigate` so it never stacks a second one, and
+ * only while a drive records; one that lands before the navigator is mounted waits for it. It is
+ * never held past the drive, never replayed, and starts nothing.
  *
  * Any other tap (or a held one's replay) opens its route, except a drive's summary already on
  * screen: the driving screen opened it as the drive ended, so its "Drive ended" note opens nothing more.
@@ -33,24 +27,11 @@ import * as Notifications from 'expo-notifications';
 import { router, usePathname, type Href } from 'expo-router';
 import { useEffect, useLayoutEffect, useRef } from 'react';
 
-import type { ReminderTap } from '@drive-sense';
-
 import { useDataSource } from '@/data/queries';
-import type { StartResult } from '@/drive/host';
-import { clearStartNotice, showStartNotice } from '@/features/home/startNotice';
 
 import { ensureNotificationSetup } from './categories';
 import { installForegroundHandler } from './handler';
-import {
-  isReminderResponse,
-  REMINDER_HOME_HREF,
-  reminderTokenOf,
-  startFromReminderTap,
-  watchReminderTapIntents,
-  type ReminderTapNative,
-  type StartGate,
-} from './reminderTap';
-import { SUMMARY_HREF } from './hrefs';
+import { DRIVE_HREF, drivingHrefOf, SUMMARY_HREF } from './hrefs';
 import { handleResponse, replayPendingHref, type ResponseDeps } from './responses';
 
 export interface NotificationsHostProps {
@@ -60,32 +41,28 @@ export interface NotificationsHostProps {
   isBusy: () => boolean;
   /** Called on every change of the busy signal's source; returns the unsubscribe. */
   subscribeBusy: (listener: () => void) => () => void;
-  /** The Start Drive button's start: the only start a reminder tap may use. */
-  startDrive: () => Promise<StartResult>;
-  /** Whether a reminder tap may start a drive now (`reminderStartGate`). Read each render and per try. */
-  startGate: () => StartGate;
   /** The root navigator is mounted and can take a push. Defaults to true. */
   ready?: boolean;
-  /** Where a route is opened. Defaults to `router.push`. */
+  /** Where a route is opened. Defaults to `router.push` (`router.navigate` for the driving screen). */
   navigate?: (href: string) => void;
-  /** The reminder's native face (tests inject a fake). Defaults to the module. */
-  reminderNative?: ReminderTapNative;
   onError?: (e: unknown, ctx: string) => void;
 }
 
 const defaultNavigate = (href: string) => router.push(href as Href);
-/**
- * A reminder tap's route: onto the screen already showing it rather than a second copy of it. Home
- * pops back to the tabs under whatever is open (and selects Home); with nothing above them, popping
- * is not a tabs action, so it is a plain navigate (a tab switch).
- */
-const defaultTapNavigate = (href: string) => {
-  if (href === REMINDER_HOME_HREF && router.canDismiss()) router.dismissTo(href as Href);
-  else router.navigate(href as Href);
-};
+/** The driving screen: onto the one already showing rather than a second copy of it. */
+const defaultDriveNavigate = (href: string) => router.navigate(href as Href);
 
 const responseKey = (r: Notifications.NotificationResponse) =>
   `${r.notification.request.identifier}@${r.notification.date}#${r.actionIdentifier}`;
+
+/** The note's `data`, read defensively: a malformed response has none. */
+const dataOf = (r: Notifications.NotificationResponse): unknown => {
+  try {
+    return r.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER ? r.notification.request.content.data : null;
+  } catch {
+    return null;
+  }
+};
 
 export function NotificationsHost(props: NotificationsHostProps): null {
   const { db, now } = useDataSource();
@@ -115,43 +92,18 @@ export function NotificationsHost(props: NotificationsHostProps): null {
   const replay = useRef<() => void>(() => {});
   /** Counts deferrals, so a replay that raced one runs again. */
   const deferrals = useRef(0);
-  /** The reminder tap waiting to run (the newest replaces an older one), and whether one is running. */
-  const heldTap = useRef<ReminderTap | null>(null);
-  const tapping = useRef(false);
+  /** A recording-note tap waiting for the navigator. */
+  const driveTap = useRef(false);
 
-  /** Runs the held reminder tap once the gate allows; one run at a time. Reads only refs. */
-  const tryTap = useRef<() => void>(() => {});
-  useLayoutEffect(() => {
-    tryTap.current = () => {
-      const hold = heldTap.current;
-      if (hold === null || tapping.current) return;
-      const l = latest.current;
-      tapping.current = true;
-      startFromReminderTap(hold, {
-        start: () => latest.current.props.startDrive(),
-        navigate: l.props.navigate ?? defaultTapNavigate,
-        notice: showStartNotice,
-        gate: () => latest.current.props.startGate(),
-        now: latest.current.now,
-        native: l.props.reminderNative,
-        onError: l.props.onError,
-      })
-        .then((out) => {
-          // A drive is under way: an older line about a reminder that started none is spent.
-          if (out === 'started') clearStartNotice();
-          if (out !== 'waiting' && heldTap.current === hold) heldTap.current = null;
-        })
-        .catch((e: unknown) => {
-          if (heldTap.current === hold) heldTap.current = null;
-          latest.current.props.onError?.(e, 'notifications.reminder');
-        })
-        .finally(() => {
-          tapping.current = false;
-          // A newer tap arrived while this one ran.
-          if (heldTap.current !== null && heldTap.current !== hold) tryTap.current();
-        });
-    };
-  }, []);
+  /** Opens the driving screen for a waiting recording-note tap, once the navigator is up. Reads only refs. */
+  const openDrive = useRef(() => {
+    if (!driveTap.current || !latest.current.ready) return;
+    driveTap.current = false;
+    const l = latest.current;
+    // The drive already ended: its note has nothing left to open.
+    if (!l.props.isRecording() || l.pathname === DRIVE_HREF) return;
+    (l.props.navigate ?? defaultDriveNavigate)(DRIVE_HREF);
+  });
 
   useEffect(() => {
     const report = (e: unknown, ctx: string) => latest.current.props.onError?.(e, ctx);
@@ -171,11 +123,6 @@ export function NotificationsHost(props: NotificationsHostProps): null {
       isRecording: () => latest.current.props.isRecording(),
     });
 
-    const hold = (tap: ReminderTap) => {
-      heldTap.current = tap;
-      tryTap.current();
-    };
-
     const seen = new Set<string>();
     const take = (r: Notifications.NotificationResponse | null) => {
       if (!r) return;
@@ -188,10 +135,10 @@ export function NotificationsHost(props: NotificationsHostProps): null {
       if (seen.has(key)) return;
       seen.add(key);
       Notifications.clearLastNotificationResponse();
-      // The reminder's own note: its token is held for a start, never opened as a link.
-      if (isReminderResponse(r)) {
-        const token = reminderTokenOf(r);
-        if (token !== null) hold({ token, at: latest.current.now() });
+      // The drive's recording note: the driving screen, now or once the navigator is up; never held.
+      if (drivingHrefOf(dataOf(r)) !== null) {
+        driveTap.current = true;
+        openDrive.current();
         return;
       }
       handleResponse(r, deps())
@@ -207,12 +154,9 @@ export function NotificationsHost(props: NotificationsHostProps): null {
 
     const responses = Notifications.addNotificationResponseReceivedListener(take);
     take(Notifications.getLastNotificationResponse());
-    // Android hands a reminder tap over natively (once per token).
-    const unwatch = watchReminderTapIntents(hold, latest.current.props.reminderNative);
 
     return () => {
       responses.remove();
-      unwatch();
       uninstall();
     };
   }, []);
@@ -220,10 +164,10 @@ export function NotificationsHost(props: NotificationsHostProps): null {
   const { subscribeBusy } = props;
   useEffect(() => {
     if (!ready) return;
+    // A recording-note tap that came before the navigator.
+    openDrive.current();
     let replaying = false;
     const tryReplay = () => {
-      // A reminder tap waits on the same busy signal as a held link.
-      tryTap.current();
       if (replaying || !mayHavePending.current) return;
       const l = latest.current;
       if (l.props.isBusy()) return;
@@ -258,12 +202,6 @@ export function NotificationsHost(props: NotificationsHostProps): null {
       unsubscribe();
     };
   }, [ready, subscribeBusy]);
-
-  // A held reminder tap runs once the app can start a drive (signed in, set up, booted, idle).
-  const gate = props.startGate();
-  useEffect(() => {
-    tryTap.current();
-  }, [gate]);
 
   return null;
 }

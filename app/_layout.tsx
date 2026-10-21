@@ -20,15 +20,12 @@ import { releaseDevice } from '@/data/devices/register';
 import { callRpc } from '@/data/server/rpc';
 import { DataProvider } from '@/data/queries';
 import { supabase } from '@/data/supabase/client';
-import { registerAfterSignOut, registerBeforeSignOut, SessionProvider, useSession } from '@/data/supabase/session';
+import { registerAfterSignOut, registerBeforeSignOut, SessionProvider } from '@/data/supabase/session';
 import { setDisplayLook } from '@/drive/displayLook';
 import { DriveProvider } from '@/drive/DriveProvider';
-import { tripRecords } from '@/drive/policy';
 import { AuthGate } from '@/features/auth/AuthGate';
-import { profileGate } from '@/features/auth/authGuard';
-import { useUpdateStatus } from '@/features/auth/version';
 import { LockoutGate } from '@/features/drive/LockoutGate';
-import { NotificationsHost, reminderStartGate } from '@/features/notifications';
+import { NotificationsHost } from '@/features/notifications';
 import { syncNotificationPrefs } from '@/features/settings/notifications/sync';
 import { ThemeProvider } from '@/ui';
 import { appearance, useAppearance, type AppearanceChoice } from '@/ui/appearance';
@@ -73,31 +70,12 @@ function RootTheme({ choice, mood, children }: { choice: AppearanceChoice; mood:
  * - `NotificationsHost`: the app's only notification handler and response listener (rev1: C1).
  *   Foreground banners stay hidden for the whole of a drive, not only while recording (T5 review).
  *   U3's summary notifier stays attached by the runtime itself (bootstrap), not here. A tap on the
- *   forgot-to-start reminder starts a drive through `startDrive` — the Start Drive button's own
- *   `host.start()` — once the gate says the app can (signed in, set up, no update owed, booted, idle);
- *   a tap while a drive is under way opens the drive screen (recording) or does nothing (closing).
+ *   iPhone's recording note opens the driving screen while the drive records; no tap starts a drive.
  */
 function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean }) {
   const host = runtime.drive;
   const isBusy = useCallback(() => host.isBusy(), [host]);
   const subscribeBusy = useCallback((listener: () => void) => host.subscribe(() => listener()), [host]);
-  const { status, profile } = useSession();
-  const update = useUpdateStatus();
-  const startDrive = useCallback(() => host.start(), [host]);
-  const startGate = useCallback(
-    () =>
-      reminderStartGate({
-        ready,
-        session: status,
-        update,
-        profile: profileGate(profile),
-        hostBooted: host.booted(),
-        hostSignedIn: host.signedIn(),
-        hostBusy: host.isBusy(),
-        hostRecording: tripRecords(host.snapshot().status),
-      }),
-    [ready, status, update, profile, host]
-  );
   const onForeground = useCallback(
     (userId: string) => syncNotificationPrefs(userId, { db: runtime.db }),
     [runtime]
@@ -105,14 +83,7 @@ function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean 
   return (
     <>
       <DeviceHost onForeground={onForeground} />
-      <NotificationsHost
-        isRecording={isBusy}
-        isBusy={isBusy}
-        subscribeBusy={subscribeBusy}
-        startDrive={startDrive}
-        startGate={startGate}
-        ready={ready}
-      />
+      <NotificationsHost isRecording={isBusy} isBusy={isBusy} subscribeBusy={subscribeBusy} ready={ready} />
     </>
   );
 }

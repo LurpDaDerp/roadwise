@@ -344,20 +344,12 @@ describe('one notification response listener (rev1: C1)', () => {
     expect(mockNotifications.responseListeners.size).toBe(0);
   });
 
-  test("a reminder tap's start gate reads the drive host (booted, signed in, idle); mounting starts nothing", async () => {
-    const { runtime, host } = await fakeRuntime();
-    await renderWith(runtime);
-    expect(host.booted).toHaveBeenCalled();
-    expect(host.signedIn).toHaveBeenCalled();
-    expect(host.start).not.toHaveBeenCalled();
-  });
-
-  test("a tap on the reminder whose token native does not claim (no native module here) never reaches host.start", async () => {
+  test('mounting starts nothing, and a tap on any note never reaches host.start', async () => {
     const { runtime, host } = await fakeRuntime();
     await renderWith(runtime);
     const tap = {
       actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
-      notification: { date: 1, request: { identifier: 'roadwise.tripReminder', content: { data: { kind: 'tripReminder', reminderToken: 'tok-a' } } } },
+      notification: { date: 1, request: { identifier: 'roadwise.driveRecording', content: { data: { kind: 'driveRecording', url: '/drive' } } } },
     };
     await act(async () => {
       for (const l of [...mockNotifications.responseListeners]) l(tap);
