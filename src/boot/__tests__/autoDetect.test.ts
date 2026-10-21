@@ -49,6 +49,21 @@ test('not onboarded, or signed out: disarmed; a missing permission answers needs
   expect(needs.snapshot.armed).toBe(false);
 });
 
+test('a disarm names the owner native is armed for, else the signed-in driver; never an empty id', async () => {
+  const detect = rig({ onboarded: true });
+  await autoDetectSync();
+  const owners: string[] = [];
+  const setArmed = detect.setArmed.bind(detect);
+  detect.setArmed = (armed, ownerId) => (owners.push(ownerId), setArmed(armed, ownerId));
+  setAutoDetectRuntime({ db, detect, uid: async () => null });
+  await autoDetectOff();
+  expect(owners).toEqual(['user-1']);
+  expect(detect.snapshot.armed).toBe(false);
+  // Signed out with native already disarmed: the placeholder, never ''.
+  await autoDetectSync();
+  expect(owners).toEqual(['user-1', 'none']);
+});
+
 test('Android (no detector): every call is a no-op and the status is null', async () => {
   const detect = rig({ available: false, onboarded: true });
   expect(await autoDetectSync()).toBe('unsupported');

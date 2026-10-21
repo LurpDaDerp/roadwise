@@ -1,7 +1,21 @@
 import { createDriveDisplay, DISPLAY_KEEPALIVE_MS, DISPLAY_MIN_INTERVAL_MS, toLive, type DriveDisplayState } from '@/drive/display';
 import { displayLook, setDisplayLook, type DisplayLook } from '@/drive/displayLook';
 
-const state = (over: Partial<DriveDisplayState> = {}): DriveDisplayState => ({ speed: 30, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: false, ...over });
+// The host always sends the tint, the hint and the weather (values or null), as native's contract asks.
+const state = (over: Partial<DriveDisplayState> = {}): DriveDisplayState => ({
+  speed: 30,
+  limit: 35,
+  unit: 'mph',
+  points: null,
+  pointsDelta: null,
+  stopped: false,
+  speedTint: null,
+  speeding: false,
+  notDrivingAvailable: false,
+  weatherKind: null,
+  weatherText: null,
+  ...over,
+});
 
 test('an Android end right after the start keeps the start call\'s unit', () => {
   const sent: DriveDisplayState[] = [];

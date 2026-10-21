@@ -613,6 +613,11 @@ describe('iOS: the drive detector', () => {
     h.source.emit('row', { ...next[0]!, seq: 3, ts: T0 + 51_000 } as never);
     await h.host.settled();
     expect(h.host.snapshot().lastRowTs).toBe(T0 + 42_000);
+    // The checkpoint keeps the journal's place on the trip; the stored rows carry no `seq`.
+    expect((await db.execute('SELECT last_seq FROM trips')).rows).toEqual([{ last_seq: 30 }]);
+    const stored = (await db.execute('SELECT row_json FROM samples')).rows.map((r) => JSON.parse(String(r.row_json)) as Record<string, unknown>);
+    expect(stored.length).toBe(30);
+    expect(stored.some((r) => 'seq' in r)).toBe(false);
     await h.host.stop({ endOpenTrip: false });
   });
 

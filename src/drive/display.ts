@@ -73,9 +73,17 @@ export const toLive = (s: DriveDisplayState): LiveDriveState => ({
   accent: s.accent ?? null,
 });
 
-/** `state` in the given look (null for all four without one). */
+/**
+ * `state` in the given look (null for all four without one). The tint, the hint and the weather
+ * line always go out, as values or null (native's display contract).
+ */
 const wearing = (state: DriveDisplayState, look: DisplayLook | null): DriveDisplayState => ({
   ...state,
+  speedTint: state.speedTint ?? null,
+  speeding: state.speeding ?? false,
+  notDrivingAvailable: state.notDrivingAvailable ?? false,
+  weatherKind: state.weatherKind ?? null,
+  weatherText: state.weatherText ?? null,
   skyTop: look?.skyTop ?? null,
   skyMid: look?.skyMid ?? null,
   skyLow: look?.skyLow ?? null,

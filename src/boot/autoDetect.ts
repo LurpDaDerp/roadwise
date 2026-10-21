@@ -14,7 +14,7 @@ import { nativeDriveDetect } from '@/drive/source';
 
 /** The signed-in driver last seen onboarded on this phone (settings; the device wipes take it). */
 export const AUTO_DETECT_ONBOARDED_KEY = 'autoDetect.onboarded';
-/** Native's owner id when none is signed in (disarming needs one). */
+/** The owner id to disarm with when neither native nor the session knows one (the wrapper refuses an empty one). */
 const NO_OWNER = 'none';
 
 export interface AutoDetectRuntime {
@@ -38,6 +38,20 @@ export function setAutoDetectRuntime(next: AutoDetectRuntime | null): void {
 function detector(): DriveDetectApi | null {
   if (runtime?.detect !== undefined) return runtime.detect !== null && runtime.detect.available ? runtime.detect : null;
   return nativeDriveDetect();
+}
+
+/**
+ * Who to disarm for: the owner native is armed for (so a disarm never reads as an owner change),
+ * else the signed-in driver, else `NO_OWNER`.
+ */
+async function ownerToDisarm(detect: DriveDetectApi, uid: string | null): Promise<string> {
+  try {
+    const armedFor = (await detect.getState()).ownerId;
+    if (armedFor) return armedFor;
+  } catch {
+    // unreadable: fall back to the session's driver
+  }
+  return uid ?? NO_OWNER;
 }
 
 const report = (e: unknown, ctx: string): void => {
@@ -71,7 +85,7 @@ export async function autoDetectSync(opts: { onboarded?: boolean } = {}): Promis
       }
     }
     if (uid === null || !onboarded) {
-      await detect.setArmed(false, uid ?? NO_OWNER);
+      await detect.setArmed(false, uid ?? (await ownerToDisarm(detect, null)));
       return 'off';
     }
     const state = await detect.setArmed(true, uid);
@@ -87,7 +101,13 @@ export async function autoDetectOff(): Promise<void> {
   const detect = detector();
   if (detect === null) return;
   try {
-    await detect.setArmed(false, NO_OWNER);
+    let uid: string | null = null;
+    try {
+      uid = (await runtime?.uid()) ?? null;
+    } catch {
+      // signed out already
+    }
+    await detect.setArmed(false, await ownerToDisarm(detect, uid));
   } catch (e) {
     report(e, 'autoDetectOff');
   }

@@ -9,6 +9,7 @@ import { createSamplesRepo, createTripsRepo, type Db, type TripPatch } from '@/d
 import { dayKey } from '@/lib/time';
 
 import type { EngineDeps, TripSession } from './engine.types';
+import type { FeatureRow } from './types';
 
 export interface RecorderOptions {
   /** IANA zone of the device, stored on the trip row when it is created. */
@@ -21,6 +22,13 @@ export interface Recorder {
 }
 
 const round4 = (v: number): number => Math.round(v * 1e4) / 1e4;
+
+/** The row as stored: without the bridge-only journal `seq` (iOS), which `trips.last_seq` keeps instead. */
+export function storedRow(row: FeatureRow): FeatureRow {
+  if (!('seq' in row)) return row;
+  const { seq: _seq, ...rest } = row as FeatureRow & { seq?: unknown };
+  return rest;
+}
 
 export function createRecorder(db: Db, opts: RecorderOptions): Recorder {
   const trips = createTripsRepo(db);
@@ -52,7 +60,7 @@ export function createRecorder(db: Db, opts: RecorderOptions): Recorder {
       // The rows beyond the durable mark; the mark is what survives a crash, so it is the one to trust.
       const since = trip.checkpoint_ts ?? Number.NEGATIVE_INFINITY;
       const fresh = session.pending.filter((row) => row.ts > since);
-      if (fresh.length > 0) await samples.appendMany(id, fresh.map((row) => ({ ts: row.ts, row })), tx);
+      if (fresh.length > 0) await samples.appendMany(id, fresh.map((row) => ({ ts: row.ts, row: storedRow(row) })), tx);
       const last = session.lastRowTs;
       const patch: TripPatch = last !== null && last > since ? { checkpoint_ts: Math.round(last) } : {};
       if (session.lastSeq !== null && session.lastSeq !== trip.last_seq) patch.last_seq = session.lastSeq;
