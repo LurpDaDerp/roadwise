@@ -30,6 +30,7 @@ import {
   routeLines,
   scoredSince,
   showsTip,
+  storedMiles,
   toRatingDrives,
   trend,
   trendDirection,
@@ -143,6 +144,21 @@ describe('axes', () => {
     // nothing watched: no Attention score; nothing driven: no scores
     expect(s.attention).toBeNull();
     expect(radarScores([], [], now)).toEqual({ speed: null, braking: null, acceleration: null, turning: null, attention: null });
+  });
+
+  test('the rating reads each drive’s miles as the server stores them (2 decimals), so the 10 mi ranked line falls where the server’s does', () => {
+    expect([0, 1.004, 1.005, 4.995, 3.334, 12.3456, -1, Number.NaN].map(storedMiles)).toEqual([0, 1, 1.01, 5, 3.33, 12.35, 0, 0]);
+    const now = 200 * DAY;
+    // 3 × 3.334 mi: 10.002 on the phone's own decimals, but 9.99 as stored: the server says unranked.
+    const short = [1, 2, 3].map((i) => drive({ clientTripId: `s${i}`, startedAt: now - i * DAY, miles: 3.334 }));
+    expect(windowRating(short, [], now).ranked).toBe(false);
+    // 2 × 4.995 mi: 9.99 on the phone's decimals, but 10.00 as stored: the server says ranked.
+    const enough = [1, 2].map((i) => drive({ clientTripId: `e${i}`, startedAt: now - i * DAY, miles: 4.995 }));
+    expect(windowRating(enough, [], now).ranked).toBe(true);
+    // Watched miles follow the stored miles in proportion (the server's miles × the covered share).
+    const watched = toRatingDrives([drive({ miles: 4.995, watchedMiles: 4.995 / 2 })], []);
+    expect(watched[0]).toMatchObject({ miles: 5 });
+    expect(watched[0]!.watchedMiles).toBeCloseTo(2.5, 10);
   });
 
   test('the Safety Rating is ratingAt’s: 1 decimal, ranked from 10 mi in the 90 days', () => {

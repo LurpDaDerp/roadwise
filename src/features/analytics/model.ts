@@ -86,17 +86,36 @@ export function eventsByDrive(drives: readonly LocalDrive[], events: readonly Dr
   return out;
 }
 
-/** The drives as the rating reads them: each with its miles, watched miles, chances (exposure) and its own events. */
+/**
+ * A drive's miles as the server stores them (`trips.miles numeric(7,2)`): the 3-decimal miles the
+ * phone sent, rounded half away from zero to 2 decimals on the decimal itself (not its binary
+ * float: 4.995 is 5.00, as Postgres reads "4.995"). Not finite or negative: 0, as the server's
+ * window reads it.
+ */
+export function storedMiles(miles: number): number {
+  if (!Number.isFinite(miles) || miles <= 0) return 0;
+  const thousandths = Math.round(miles * 1000);
+  return Math.floor((thousandths + 5) / 10) / 100;
+}
+
+/**
+ * The drives as the rating reads them: each with its miles, watched miles, chances (exposure) and
+ * its own events. Miles as the server stores them (`storedMiles`, watched miles in proportion), so
+ * the phone's window sums the same miles and is ranked at 10 mi exactly when the server's is.
+ */
 export function toRatingDrives(drives: readonly LocalDrive[], events: readonly DriveEvent[]): RatingDrive[] {
   const own = eventsByDrive(drives, events);
-  return drives.map((d) => ({
-    id: d.clientTripId,
-    startedAt: d.startedAt,
-    miles: d.miles,
-    watchedMiles: d.watchedMiles,
-    exposure: d.exposure,
-    events: own.get(d.clientTripId) ?? [],
-  }));
+  return drives.map((d) => {
+    const miles = storedMiles(d.miles);
+    return {
+      id: d.clientTripId,
+      startedAt: d.startedAt,
+      miles,
+      watchedMiles: d.miles > 0 && Number.isFinite(d.watchedMiles) ? (d.watchedMiles * miles) / d.miles : 0,
+      exposure: d.exposure,
+      events: own.get(d.clientTripId) ?? [],
+    };
+  });
 }
 
 const whole = (v: number | null): number | null => (v === null ? null : Math.round(v));
