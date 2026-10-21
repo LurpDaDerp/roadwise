@@ -1,12 +1,13 @@
 import { renderHook } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
-import { contrastRatio } from '@/ui/contrast';
+import { mix } from '@/ui';
+import { contrastRatio, relativeLuminance } from '@/ui/contrast';
 import { HUD } from '@/ui/drive';
 import { defaultMood, type SkyMood } from '@/ui/sky/palette';
 import { ThemeProvider, useTheme } from '@/ui/theme';
 
-import { hudButtonColors } from '../hudButtons';
+import { HUD_BUTTON_LIFT, hudButtonColors } from '../hudButtons';
 
 const themeFor = async (mood: SkyMood) =>
   (await renderHook(() => useTheme(), { wrapper: ({ children }: { children: ReactNode }) => <ThemeProvider mood={mood}>{children}</ThemeProvider> })).result
@@ -45,5 +46,20 @@ describe('the driving screen buttons', () => {
     expect(contrastRatio(b.ink, b.paper)).toBeGreaterThanOrEqual(7);
     expect(contrastRatio(b.fill, b.paper)).toBeGreaterThanOrEqual(1.6 - 1e-9);
     expect(hudButtonColors(null, HUD.day, false)).toEqual({ paper: HUD.day.ink, ink: HUD.day.chrome, accent: HUD.day.haloCalm, fill: HUD.day.haloCalm });
+  });
+
+  test('at night the face is lifted 70 % of the way to the ink, so no brighter than a 76 % lift unless the 7:1 repair raises it; the ink at 7:1 in every weather', async () => {
+    expect(HUD_BUTTON_LIFT.night).toBe(0.7);
+    expect(HUD_BUTTON_LIFT.night).toBeLessThan(HUD_BUTTON_LIFT.day);
+    const kinds = ['clear', 'cloudy', 'fog', 'rain', 'snow', 'storm'] as const;
+    for (const kind of kinds) {
+      const t = await themeFor({ ...defaultMood('dark'), weather: { kind, intensity: 'heavy' } });
+      const g = t.sky.hud.night.stops[1];
+      const b = hudButtonColors(t, ground(true, g), true);
+      expect(contrastRatio(t.onScene.onPrimary, b.paper)).toBeGreaterThanOrEqual(7);
+      // never brighter than the old 0.76 lift, unless the 7:1 repair had to raise it
+      const before = mix(g, HUD.night.ink, 0.76);
+      expect(relativeLuminance(b.paper) <= relativeLuminance(before) + 1e-9 || contrastRatio(t.onScene.onPrimary, before) < 7.05).toBe(true);
+    }
   });
 });

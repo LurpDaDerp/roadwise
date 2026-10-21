@@ -13,7 +13,7 @@ import type { Theme } from '@/ui/theme';
 export type HudButtonColors = { paper: string; ink: string; accent: string; fill: string };
 
 /** How far the face is lifted from the HUD's sky toward white (day) or the HUD's ink (night). */
-export const HUD_BUTTON_LIFT = { day: 0.8, night: 0.76 } as const;
+export const HUD_BUTTON_LIFT = { day: 0.8, night: 0.7 } as const;
 /** End's swipe fill against the face. */
 export const HUD_FILL_MIN = 1.6;
 
