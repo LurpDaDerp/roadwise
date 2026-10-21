@@ -9,6 +9,7 @@ import { createFakeDriveSense } from '@drive-sense';
 
 import { answerRpc, appWorld, clearQueryClients, fakeAdapter, fakeAppState, snap, tap } from '@/features/permissions/__fixtures__/harness';
 import { reminderCopy } from '@/features/reminder';
+import { APPEARANCE_KEY, createAppearanceStore } from '@/ui/appearance';
 
 import { alertStyleCopy } from '../alerts/copy';
 import { ALERT_STYLE_PREF_KEY, alertStylePref, resetAlertStylePrefForTests } from '../alerts/stylePref';
@@ -224,6 +225,54 @@ describe('Settings', () => {
       fireEvent.press(control.getByRole('tab', { name: 'Friends' }));
     });
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_heatmap_visibility: 'friends' }));
+  });
+
+  it('You › Appearance shows the choice, offers Adaptive, Light, Dark and System, and a pick lands at once and stays on the phone', async () => {
+    const data: Record<string, string> = { [APPEARANCE_KEY]: 'dark' };
+    const storage = {
+      getItem: jest.fn(async (k: string) => data[k] ?? null),
+      setItem: jest.fn(async (k: string, v: string) => {
+        data[k] = v;
+      }),
+    };
+    const follow = jest.fn();
+    const looks = createAppearanceStore(storage, { follow });
+    await looks.load();
+    const w = await appWorld();
+    await w.render(<SettingsScreen deps={{ appearance: looks }} />);
+    const row = await screen.findByTestId('settings-appearance');
+    expect(within(row).getByText('Appearance')).toBeOnTheScreen();
+    expect(within(row).getByText('Dark')).toBeOnTheScreen();
+
+    await tap('settings-appearance');
+    const sheet = within(await screen.findByTestId('settings-appearance-sheet'));
+    const radios = sheet.getAllByRole('radio');
+    expect(radios.map((r) => r.props.accessibilityLabel)).toEqual(['Adaptive', 'Light', 'Dark', 'System']);
+    expect(radios.map((r) => r.props.accessibilityHint)).toEqual([
+      'Follows the time of day and the weather',
+      'Always light',
+      'Always dark',
+      "Matches your phone's Light / Dark setting",
+    ]);
+    expect(sheet.getByRole('radio', { name: 'Dark' })).toBeChecked();
+    expect(sheet.getByText('Saved on this phone only.')).toBeOnTheScreen();
+
+    await act(async () => {
+      fireEvent.press(sheet.getByRole('radio', { name: 'System' }));
+    });
+    expect(looks.get().choice).toBe('system');
+    expect(follow).toHaveBeenCalledTimes(1);
+    expect(data[APPEARANCE_KEY]).toBe('system');
+    expect(within(screen.getByTestId('settings-appearance')).getByText('System')).toBeOnTheScreen();
+    // Nothing about the look goes to the server.
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('update_profile');
+  });
+
+  it('You › Appearance reads Adaptive when nothing is stored', async () => {
+    const looks = createAppearanceStore(null, { follow: jest.fn() });
+    const w = await appWorld();
+    await w.render(<SettingsScreen deps={{ appearance: looks }} />);
+    expect(within(await screen.findByTestId('settings-appearance')).getByText('Adaptive')).toBeOnTheScreen();
   });
 
   it('Driving › DashPal opens the DashPal screen and says "Set up your dashcam" until one is paired', async () => {

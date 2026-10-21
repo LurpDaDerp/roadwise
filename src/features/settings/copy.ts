@@ -40,6 +40,18 @@ export const settingsCopy = {
     heatmapFooter: 'Who can see the map of roads you drive most. Only me is the default.',
     you: 'You',
     units: 'Units',
+    appearance: {
+      title: 'Appearance',
+      sheetTitle: 'Appearance',
+      /** Each choice and its one line, in the order the sheet lists them. */
+      options: {
+        adaptive: { label: 'Adaptive', detail: 'Follows the time of day and the weather' },
+        light: { label: 'Light', detail: 'Always light' },
+        dark: { label: 'Dark', detail: 'Always dark' },
+        system: { label: 'System', detail: "Matches your phone's Light / Dark setting" },
+      },
+      footer: 'Saved on this phone only.',
+    },
     state: { title: 'US state', subtitle: 'For the state filter on the global board', none: 'Not set' },
     notifications: { title: 'Notifications', subtitle: 'Weekly recap, friends' },
     saveError: "That didn't save. Check your connection and try again.",

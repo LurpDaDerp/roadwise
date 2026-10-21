@@ -11,6 +11,7 @@ import { useMySummary, type HeatmapVisibility } from '@/data/server/summary';
 import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
 import { ReminderRow, useTripReminder, type ReminderDeps } from '@/features/reminder';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, useTheme } from '@/ui';
+import { appearance as appAppearance, APPEARANCE_CHOICES, useAppearance, type AppearanceStore } from '@/ui/appearance';
 
 import { settingsCopy, shownVisibility, VISIBILITY_SEGMENTS } from './copy';
 
@@ -57,11 +58,45 @@ function SegmentRow<V extends string>({
   );
 }
 
+/** One choice in a sheet of radio rows: its label, an optional line under it, and a tick when chosen. */
+function RadioRow({ label, detail, chosen, onPress }: { label: string; detail?: string; chosen: boolean; onPress: () => void }) {
+  const th = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityState={{ checked: chosen }}
+      accessibilityLabel={label}
+      accessibilityHint={detail}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: th.size.touch,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: th.space.md,
+        paddingHorizontal: th.space.lg,
+        paddingVertical: th.space.sm,
+        backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
+      })}
+    >
+      <View style={{ flex: 1 }}>
+        <Text variant="body">{label}</Text>
+        {detail ? (
+          <Text variant="footnote" tone="muted">
+            {detail}
+          </Text>
+        ) : null}
+      </View>
+      {chosen ? <Ionicons name="checkmark" size={th.size.icon} color={th.colors.accent} /> : null}
+    </Pressable>
+  );
+}
+
 /**
  * `/settings`: everything a driver tunes, grouped by what it touches — the drive, privacy, the
  * public profile, notifications. Every control saves as it changes; there is no Save button.
+ * Appearance is this phone's own (`src/ui/appearance.ts`): it lands at once and is never uploaded.
  */
-export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps } }) {
+export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps; appearance?: AppearanceStore } }) {
   const router = useRouter();
   const th = useTheme();
   const db = useDb();
@@ -74,6 +109,9 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
   const [units, setUnits] = useState<Units | null>(null);
   const [zoneCount, setZoneCount] = useState(0);
   const [stateSheet, setStateSheet] = useState(false);
+  const [lookSheet, setLookSheet] = useState(false);
+  const looks = deps.appearance ?? appAppearance;
+  const look = useAppearance(looks).choice;
 
   // Read on every focus, so a zone added a screen deeper shows in the count on the way back.
   useFocusEffect(
@@ -146,6 +184,13 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
           onPress={() => setStateSheet(true)}
           testID="settings-state"
         />
+        <ListRow
+          title={copy.appearance.title}
+          subtitle={copy.appearance.options[look].label}
+          leading={<RowIcon name="contrast-outline" />}
+          onPress={() => setLookSheet(true)}
+          testID="settings-appearance"
+        />
       </Section>
 
       <Section>
@@ -154,35 +199,40 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
 
       <Sheet visible={stateSheet} onClose={() => setStateSheet(false)} title={settingsCopy.states.title} scroll testID="settings-state-sheet">
         <Card padded={false}>
-          {[['', settingsCopy.states.none] as const, ...US_STATES].map(([code, name]) => {
-            const chosen = (shownState ?? '') === code;
-            return (
-              <Pressable
-                key={code || 'none'}
-                accessibilityRole="radio"
-                accessibilityState={{ checked: chosen }}
-                accessibilityLabel={name}
-                onPress={() => {
-                  setStateSheet(false);
-                  void edit.save('state', code);
-                }}
-                style={({ pressed }) => ({
-                  minHeight: th.size.touch,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  paddingHorizontal: th.space.lg,
-                  paddingVertical: th.space.sm,
-                  backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
-                })}
-              >
-                <Text variant="body" style={{ flex: 1 }}>
-                  {name}
-                </Text>
-                {chosen ? <Ionicons name="checkmark" size={th.size.icon} color={th.colors.accent} /> : null}
-              </Pressable>
-            );
-          })}
+          {[['', settingsCopy.states.none] as const, ...US_STATES].map(([code, name]) => (
+            <RadioRow
+              key={code || 'none'}
+              label={name}
+              chosen={(shownState ?? '') === code}
+              onPress={() => {
+                setStateSheet(false);
+                void edit.save('state', code);
+              }}
+            />
+          ))}
         </Card>
+      </Sheet>
+
+      <Sheet visible={lookSheet} onClose={() => setLookSheet(false)} title={copy.appearance.sheetTitle} testID="settings-appearance-sheet">
+        <View style={{ gap: th.space.sm }}>
+          <Card padded={false}>
+            {APPEARANCE_CHOICES.map((choice) => (
+              <RadioRow
+                key={choice}
+                label={copy.appearance.options[choice].label}
+                detail={copy.appearance.options[choice].detail}
+                chosen={look === choice}
+                onPress={() => {
+                  setLookSheet(false);
+                  looks.set(choice);
+                }}
+              />
+            ))}
+          </Card>
+          <Text variant="footnote" tone="muted">
+            {copy.appearance.footer}
+          </Text>
+        </View>
       </Sheet>
     </Screen>
   );
