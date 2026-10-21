@@ -102,7 +102,13 @@ export function createAppearanceStore(
           .then((raw) => {
             clearTimeout(timer);
             if (chosen) publish({ ...state, loaded: true });
-            else publish({ choice: parseAppearance(raw), loaded: true });
+            else {
+              const choice = parseAppearance(raw);
+              // As `set` does: a stored System that lands after the 1 s give-way finds the sky's
+              // scheme forced, and the render it brings must already read the phone's own.
+              if (choice === 'system') follow();
+              publish({ choice, loaded: true });
+            }
             resolve();
           });
       });

@@ -137,6 +137,50 @@ test("System hands the phone's Light / Dark setting back before anyone hears of 
   expect(order).toEqual(['heard', 'follow', 'heard']);
 });
 
+test("a stored System hands the phone's Light / Dark setting back before anyone hears of it, on time or after the give-way to Adaptive", async () => {
+  // On time: read behind the splash.
+  {
+    const order: string[] = [];
+    const follow = jest.fn(() => order.push('follow'));
+    const store = createAppearanceStore(memoryStorage({ [APPEARANCE_KEY]: 'system' }), { follow });
+    store.subscribe(() => order.push(`heard ${store.get().choice}`));
+    await store.load();
+    expect(store.get()).toEqual({ choice: 'system', loaded: true });
+    expect(order).toEqual(['follow', 'heard system']);
+  }
+  // Late: Adaptive has been on screen (its sky's scheme forced) when the stored System lands.
+  {
+    jest.useFakeTimers();
+    let answer: (v: string | null) => void = () => {};
+    const order: string[] = [];
+    const follow = jest.fn(() => order.push('follow'));
+    const store = createAppearanceStore(
+      { getItem: () => new Promise<string | null>((r) => (answer = r)), setItem: jest.fn(async () => {}) },
+      { follow }
+    );
+    store.subscribe(() => order.push(`heard ${store.get().choice}`));
+    const done = store.load();
+    jest.advanceTimersByTime(1000);
+    await done;
+    expect(order).toEqual(['heard adaptive']);
+    answer('system');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.get()).toEqual({ choice: 'system', loaded: true });
+    expect(order).toEqual(['heard adaptive', 'follow', 'heard system']);
+  }
+});
+
+test('a stored Adaptive, Light or Dark leaves the override to the theme', async () => {
+  for (const v of ['light', 'dark', 'adaptive']) {
+    const follow = jest.fn();
+    const store = createAppearanceStore(memoryStorage({ [APPEARANCE_KEY]: v }), { follow });
+    await store.load();
+    expect(store.get().choice).toBe(v);
+    expect(follow).not.toHaveBeenCalled();
+  }
+});
+
 test("following the phone clears the app's override", () => {
   const spy = jest.spyOn(Appearance, 'setColorScheme').mockImplementation(() => {});
   followPhoneScheme();
