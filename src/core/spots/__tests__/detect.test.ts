@@ -108,6 +108,14 @@ describe('clustering', () => {
     expect(Math.abs(spots[0]!.headingDeg)).toBeLessThan(1);
   });
 
+  test('phone pickups never make a spot, however often they happen in the same place and direction', () => {
+    const { drives, events } = brakeRoad(10, () => true);
+    const pickups = events.map((e) => ({ ...e, id: `${e.id}p`, type: 'phone_pickup' }) as unknown as SpotEvent);
+    expect(detectSpots(drives, pickups, T0 + 10 * DAY)).toEqual([]);
+    // Beside the brakes they change nothing.
+    expect(detectSpots(drives, [...events, ...pickups], T0 + 10 * DAY)).toEqual(detectSpots(drives, events, T0 + 10 * DAY));
+  });
+
   test('the opposite direction is its own cluster: 2 + 2 drives make no spot', () => {
     const drives = [drive('n0', 0), drive('s0', 1, [SOUTH]), drive('n1', 2), drive('s1', 3, [SOUTH])];
     const events = drives.map((d, i) => ev(`e${i}`, d, 'hard_brake', [1000, 0]));

@@ -92,10 +92,12 @@ describe('inputs', () => {
       event(12, 1, { type: 'drowsy', tier: 'severe', measured_json: '{"source":"dashcam"}' }),
       event(13, 1, { lat: null, lng: null }),
       event(14, 2, { type: 'hard_accel', measured_json: 'not json' }),
+      // a phone pickup is never a spot's
+      event(15, 1, { type: 'phone_pickup', tier: 'moderate', duration_s: 12, measured_json: '{"speedMph":35,"maxSpeedMph":40}' }),
     ]);
   });
 
-  test('only scored, long-enough drives of the last 120 days with a route, and their active, unreported (or turned down) events of the four kinds with a place', async () => {
+  test('only scored, long-enough drives of the last 120 days with a route, and their active, unreported (or turned down) events of the four kinds with a place (never a phone pickup)', async () => {
     const inputs = await readSpotInputs(db, T0);
     expect(inputs.drives).toEqual([
       { clientTripId: uuid(1), startedAt: T0 - DAY, polyline: ROAD },
