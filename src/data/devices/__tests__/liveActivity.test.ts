@@ -5,18 +5,19 @@ import { createLiveDriveTokenPort } from '@/data/devices/pushToken';
 const REQ = {
   deviceId: 'install-1234',
   clientTripId: '00000000-0000-4000-8000-000000000001',
+  leg: 1,
   startedAt: 1_700_000_000_000,
   state: { speed: 34, limit: 35, unit: 'mph', speedTint: null, speeding: false, notDrivingAvailable: true, weatherKind: null, weatherText: null },
 } as unknown as LiveActivityStartRequest;
 
-test('asks live-activity-start with the device, the drive and its first state; true only when the server says it sent the push', async () => {
+test('asks live-activity-start with the device, the drive, its leg and its first state; true only when the server says it sent the push', async () => {
   const calls: [string, unknown][] = [];
   const invoke = async (name: string, { body }: { body: unknown }) => {
     calls.push([name, body]);
     return { data: { sent: true }, error: null };
   };
   expect(await requestLiveActivityStart(REQ, { invoke })).toBe(true);
-  expect(calls).toEqual([[LIVE_ACTIVITY_START_FUNCTION, { deviceId: REQ.deviceId, clientTripId: REQ.clientTripId, startedAt: REQ.startedAt, state: REQ.state }]]);
+  expect(calls).toEqual([[LIVE_ACTIVITY_START_FUNCTION, { deviceId: REQ.deviceId, clientTripId: REQ.clientTripId, leg: 1, startedAt: REQ.startedAt, state: REQ.state }]]);
   expect(LIVE_ACTIVITY_START_FUNCTION).toBe('live-activity-start');
 });
 

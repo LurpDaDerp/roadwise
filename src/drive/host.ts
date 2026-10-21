@@ -209,6 +209,11 @@ export interface DriveHostDashcam {
 /** The first Live Activity state, for a server push-to-start (iOS 17.2+). */
 export interface PushToStartRequest {
   clientTripId: string;
+  /**
+   * Which leg of the drive (`TripSession.continuations`): 0 for the first, 1 once it was re-opened
+   * after a stop, and so on. The server sends one push per drive and leg.
+   */
+  leg: number;
   startedAt: number;
   state: LiveDriveState;
 }
@@ -241,7 +246,7 @@ export interface DriveHostDeps {
   dashcam?: DriveHostDashcam;
   /** iOS: the drive detector (`DriveDetect`); null or absent on Android. */
   detect?: DriveDetectApi | null;
-  /** iOS: ask our server to push-start the Live Activity (a drive noticed with RoadWise behind). False: the native note stands. */
+  /** iOS: ask our server to push-start the Live Activity (any drive begun or re-opened with RoadWise behind). False: the native note stands. */
   pushToStart?: (req: PushToStartRequest) => Promise<boolean>;
   /** The held drive a confirmed start continues (default `continuationFor` over `db`). */
   continuation?: (now: number, fix: { lat: number; lng: number } | null) => Promise<Continuation | null>;
@@ -413,8 +418,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let budgetWrites: Promise<void> = Promise.resolve();
   /** The open drive's surfaces are live (not an ended journal drive replayed at boot). */
   let surfaces = false;
-  /** Drives a push-to-start was asked for. */
-  const pushedFor = new Set<string>();
+  /** The open drive's leg a push-to-start was asked for (`<id>#<leg>`), or null; cleared when the drive closes or is cancelled. */
+  let pushedFor: string | null = null;
   let spotWatcher: SpotWatcher | null = null;
   let spotNudge: SpotNudge | null = null;
   let spotsLoad = 0;
@@ -687,6 +692,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (persist && linkWritten) void createSettingsRepo(db).remove(JOURNAL_LINK_KEY).catch((e: unknown) => report(e, 'journalLink'));
     linkWritten = false;
     liveDrive = null;
+    // A re-opened drive (a new leg) asks again.
+    pushedFor = null;
   }
 
   function afterClose(): void {
@@ -703,7 +710,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   /**
    * A drive just opened (started, re-opened or adopted): its "Not driving?" budget comes back by
-   * trip id, the display starts (or, behind on iOS, the server is asked for a push-to-start), and
+   * trip id, the display starts (or, behind on iOS, the server is asked for a push-to-start for
+   * this leg, whatever started the drive), and
    * the weather watch and the spot nudges begin. `quiet`: an ended journal drive replayed at boot
    * (it closes at once): none of that.
    */
@@ -721,7 +729,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     surfaces = true;
     if (deps.display) {
       if (!ios || appActive()) deps.display.start({ ...displayState(s), stopped: s.lastRowTs === null || s.stopped });
-      else if (s.origin === 'auto') void askPushToStart(id, s.startedAt ?? now());
+      // iOS cannot start an activity from the background: the server push-starts it, for an
+      // automatic drive, a Start-card drive that confirmed behind (navigation open) and a re-opened leg alike.
+      else void askPushToStart(id, engine.session()?.continuations ?? 0, s.startedAt ?? now());
     }
     if (persist) {
       weatherWatch = createWeatherWatch({
@@ -748,10 +758,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
-  /** iOS, RoadWise behind: the server push-starts the Live Activity, once per drive, unless one already runs. */
-  async function askPushToStart(id: string, startedAt: number): Promise<void> {
-    if (!deps.pushToStart || pushedFor.has(id)) return;
-    pushedFor.add(id);
+  /** iOS, RoadWise behind: the server push-starts the Live Activity, once per drive and leg, unless one already runs. */
+  async function askPushToStart(id: string, leg: number, startedAt: number): Promise<void> {
+    const key = `${id}#${leg}`;
+    if (!deps.pushToStart || pushedFor === key) return;
+    pushedFor = key;
     try {
       if (await deps.display?.isRunning?.()) return;
       const look = displayLook();
@@ -764,7 +775,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         skyLow: look?.skyLow ?? null,
         accent: look?.accent ?? null,
       };
-      await deps.pushToStart({ clientTripId: id, startedAt, state });
+      await deps.pushToStart({ clientTripId: id, leg, startedAt, state });
     } catch (e) {
       report(e, 'pushToStart');
     }

@@ -781,15 +781,17 @@ describe('iOS: the drive detector', () => {
     await host.stop({ endOpenTrip: false });
   });
 
-  test('a drive confirmed in front starts the Live Activity locally; a Start-card drive behind is never pushed', async () => {
+  test('a drive confirmed in front starts the Live Activity locally; a Start-card drive that confirms behind (navigation open) is pushed', async () => {
     const pushed: PushToStartRequest[] = [];
     const h = buildIos({ pushToStart: async (req) => (pushed.push(req), true) });
     await h.host.boot();
     await h.host.start();
     h.appState.set('background');
     await confirm(h, rows(30, { speedMps: 15 }));
+    await new Promise((r) => setTimeout(r, 0));
     expect(h.host.snapshot().origin).toBe('manual');
-    expect(pushed).toEqual([]);
+    expect(pushed).toEqual([expect.objectContaining({ clientTripId: NATIVE, leg: 0, startedAt: T0 })]);
+    expect(h.display.log.filter((l) => l.startsWith('start'))).toEqual([]);
     await h.host.stop({ endOpenTrip: false });
 
     const f = buildIos({ pushToStart: async (req) => (pushed.push(req), true) });
@@ -798,8 +800,38 @@ describe('iOS: the drive detector', () => {
     f.detect.wake();
     await confirm(f, rows(30, { speedMps: 15 }), { driveId: uuid(80) });
     expect(f.display.log[0]).toMatch(/^start /);
-    expect(pushed).toEqual([]);
+    expect(pushed.map((r) => r.clientTripId)).toEqual([NATIVE]);
     await f.host.stop({ endOpenTrip: false });
+  });
+
+  test('behind, a drive re-opened after a stop asks again for its new leg (the first leg’s Live Activity ended with it)', async () => {
+    const pushed: PushToStartRequest[] = [];
+    const h = buildIos({ pushToStart: async (req) => (pushed.push(req), true) }, { appState: 'background' });
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    const parkedLng = START.lng + (59 * 15) / M_PER_DEG_LNG;
+    const first = [...rows(60, { speedMps: 15 }), ...rows(30, { t0: T0 + 60_000, speedMps: 0 }).map((r) => ({ ...r, lng: parkedLng }))];
+    await confirm(h, first);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(pushed.map((r) => [r.clientTripId, r.leg])).toEqual([[NATIVE, 0]]);
+    clock = T0 + 95_000;
+    h.detect.endFor('still', T0 + 95_000);
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.untilIdle();
+    expect(h.display.log.at(-1)).toBe('end');
+    // 2 min later the car sets off again from where it parked: native's new drive re-opens the trip.
+    h.detect.wake();
+    const again = rows(30, { t0: T0 + 215_000, speedMps: 15 }).map((r) => ({ ...r, lng: r.lng - START.lng + parkedLng }));
+    await confirm(h, again, { driveId: '22222222-2222-4222-8222-222222222222' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: NATIVE });
+    expect(await createTripsRepo(db).get(NATIVE)).toMatchObject({ continuations: 1 });
+    expect(pushed.map((r) => [r.clientTripId, r.leg])).toEqual([
+      [NATIVE, 0],
+      [NATIVE, 1],
+    ]);
+    await h.host.stop({ endOpenTrip: false });
   });
 });
 
