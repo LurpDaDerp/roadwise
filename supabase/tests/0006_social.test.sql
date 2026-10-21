@@ -15,8 +15,12 @@ update public.profiles set username = 'ava', onboarded_at = now() where id = '00
 update public.profiles set username = 'ben', onboarded_at = now() where id = '00000000-0000-0000-0000-000000000002';
 update public.profiles set username = 'cat', onboarded_at = now(), heatmap_visibility = 'friends' where id = '00000000-0000-0000-0000-000000000003';
 update public.profiles set username = 'dan', onboarded_at = now(), heatmap_visibility = 'only_me' where id = '00000000-0000-0000-0000-000000000004';
-insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, safe_miles, night_miles, duration_s, scored, points_net, polyline, clean)
-  select u, gen_random_uuid(), now() - interval '2 days', now() - interval '2 days' + interval '20 minutes', current_date, private.league_week(now()), 'America/New_York', 5, 5, 0, 1200, true, 50, 'poly-' || u, true
+-- ava and cat share their driving stats with friends (0025: off until turned on)
+update public.profiles set share_stats = true where id in ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000003');
+insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, night_miles, duration_s, scored, polyline, clean,
+    slowdowns, speedups, turns, limit_s, moving_s)
+  select u, gen_random_uuid(), now() - interval '2 days', now() - interval '2 days' + interval '20 minutes', current_date, private.league_week(now()), 'America/New_York', 5, 0, 1200, true, 'poly-' || u, true,
+    5, 5, 3, 600, 1000
   from unnest(array['00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000004']::uuid[]) u;
 
 create temporary table wk as select private.league_week(now()) as week;
@@ -35,7 +39,7 @@ select throws_ok($$ select public.search_users('av') $$, '22023', 'query must be
 select is((select array_agg(x ->> 'username') from jsonb_array_elements(public.search_users('ben')) x), array['ben'], 'A finds ben');
 select is((select x -> 'safety_rating' from jsonb_array_elements(public.search_users('ben')) x), 'null'::jsonb, 'an unranked driver shows no rating in search');
 select is((select array_agg(x ->> 'username') from jsonb_array_elements(public.search_users('ava')) x), null, 'never herself');
-select is(public.get_profile('ben') - 'user_id', '{"clan": null, "level": 1, "ranked": false, "streak": 0, "username": "ben", "league_tier": "bronze", "achievements": [], "relationship": "none", "safety_rating": null, "can_view_stats": false, "can_view_heatmap": false}'::jsonb,
+select is(public.get_profile('ben') - 'user_id', '{"clan": null, "level": 1, "ranked": false, "scores": null, "streak": 0, "username": "ben", "league_tier": "bronze", "achievements": [], "relationship": "none", "safety_rating": null, "can_view_stats": false, "can_view_heatmap": false}'::jsonb,
   'a stranger''s public card: no stats, no heat map');
 select is(public.get_profile('ava') ->> 'relationship', 'self', 'own profile is self');
 select throws_ok($$ select public.get_profile('nobody') $$, 'P0002', 'profile not found', 'an unknown username is not found');
@@ -54,7 +58,7 @@ select is((select array_agg(x ->> 'username') from jsonb_array_elements(public.l
 select is(public.send_friend_request('00000000-0000-0000-0000-000000000001'), '{"status": "friends"}'::jsonb, 'the reverse request auto-accepts');
 select is(public.get_profile('ava') ->> 'relationship', 'friend', 'now friends');
 select is((select count(*)::int from jsonb_array_elements(public.list_friends() -> 'incoming')), 0, 'the request is gone');
-select is(public.get_profile('ava') -> 'can_view_stats', 'true'::jsonb, 'friends may see stats');
+select is(public.get_profile('ava') -> 'can_view_stats', 'true'::jsonb, 'a friend may see the stats ava shares');
 select pg_temp.as_user(1);
 select is(public.get_member_stats('00000000-0000-0000-0000-000000000003') ->> 'drives', '1', 'A reads her friend''s 30-day stats');
 select is(public.get_heatmap('00000000-0000-0000-0000-000000000003'), '[{"polyline": "poly-00000000-0000-0000-0000-000000000003"}]'::jsonb, 'cat shares her heat map with friends');

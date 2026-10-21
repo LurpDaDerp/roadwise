@@ -14,11 +14,13 @@ insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000003', 'c@example.com'),
   ('00000000-0000-0000-0000-000000000004', 'd@example.com');
 update public.profiles set username = 'ava', onboarded_at = now() where id = '00000000-0000-0000-0000-000000000001';
-update public.profiles set username = 'ben', onboarded_at = now(), heatmap_visibility = 'friends' where id = '00000000-0000-0000-0000-000000000002';
-update public.profiles set username = 'cat', onboarded_at = now(), heatmap_visibility = 'friends' where id = '00000000-0000-0000-0000-000000000003';
+update public.profiles set username = 'ben', onboarded_at = now(), heatmap_visibility = 'friends', share_stats = true where id = '00000000-0000-0000-0000-000000000002';
+update public.profiles set username = 'cat', onboarded_at = now(), heatmap_visibility = 'friends', share_stats = true where id = '00000000-0000-0000-0000-000000000003';
 update public.profiles set username = 'dan', onboarded_at = now(), heatmap_visibility = 'friends' where id = '00000000-0000-0000-0000-000000000004';
-insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, safe_miles, night_miles, duration_s, scored, points_net, polyline, clean)
-  select u, gen_random_uuid(), now() - interval '2 days', now() - interval '2 days' + interval '20 minutes', current_date, private.league_week(now()), 'America/New_York', 5, 5, 0, 1200, true, 50, 'poly-' || u, true
+insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, night_miles, duration_s, scored, polyline, clean,
+    slowdowns, speedups, turns, limit_s, moving_s)
+  select u, gen_random_uuid(), now() - interval '2 days', now() - interval '2 days' + interval '20 minutes', current_date, private.league_week(now()), 'America/New_York', 5, 0, 1200, true, 'poly-' || u, true,
+    5, 5, 3, 600, 1000
   from unnest(array['00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000004']::uuid[]) u;
 insert into public.clans (id, name, banner, invite_code) values ('e0000000-0000-4000-8000-000000000001', 'Owls', 'navy', 'ABCDEFGH');
 insert into public.clan_members (clan_id, user_id, role) values
@@ -59,10 +61,9 @@ select is(public.get_profile('ben') -> 'can_view_stats', 'false'::jsonb, 'a clan
 select is(public.get_profile('ben') -> 'can_view_heatmap', 'false'::jsonb, 'and their heat map, even shared with friends');
 select throws_ok($$ select public.get_member_stats('00000000-0000-0000-0000-000000000002') $$, 'P0002', 'profile not found', 'get_member_stats refuses a clanmate');
 select throws_ok($$ select public.get_heatmap('00000000-0000-0000-0000-000000000002') $$, 'P0002', 'profile not found', 'get_heatmap refuses a clanmate');
-select is((select array_agg(x ->> 'username' order by x ->> 'username') from jsonb_array_elements(public.get_friends_board('week')) x), array['ava', 'cat'],
+select is((select array_agg(x ->> 'username' order by x ->> 'username') from jsonb_array_elements(public.get_friends_board()) x), array['ava', 'cat'],
   'the friends board holds self and friends, no clanmates');
-select is((select array_agg(x ->> 'username' order by x ->> 'username') from jsonb_array_elements(public.get_friends_board('rating')) x), array['ava', 'cat'],
-  'on both metrics');
+select hasnt_function('public', 'get_friends_board', array['text'], 'the board takes no metric (it ranks by Safety Rating)');
 select pg_temp.as_user(4);
 select throws_ok($$ select public.get_heatmap('00000000-0000-0000-0000-000000000002') $$, 'P0002', 'profile not found', 'clanmates see each other''s map no more than strangers do');
 

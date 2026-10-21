@@ -1,9 +1,9 @@
 -- 0001_core: posture (RLS everywhere, default deny, definer catch-all, private schema), the
--- account RPCs, username rules and the profanity filter, device claims, the lazy freeze grant.
+-- account RPCs, username rules and the profanity filter, device claims, the rate limiter.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(107);
+select plan(103);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -15,8 +15,8 @@ insert into auth.users (id, email) values
 -- ---------------------------------------------------------------------------
 select is((select count(*)::int from public.profiles), 3, 'signup creates a profile per user');
 select is((select count(*)::int from public.progress), 3, 'signup creates a progress row per user');
-select is((select row(points, lifetime, level, streak, freezes, league_tier)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
-  row(0, 0, 1, 0, 2, 'bronze')::text, 'progress starts at zero with 2 freezes in bronze');
+select is((select safety_rating is null and not ranked and miles_90d = 0 from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
+  true, 'progress starts with no rating, unranked, no miles in the window');
 
 select is((select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname in ('public', 'private', 'osm', 'hpms') and c.relkind in ('r', 'p') and not c.relrowsecurity), 0,
@@ -49,8 +49,8 @@ select is((select array_agg(distinct g.table_name::text order by g.table_name::t
 select is((select array_agg(c.column_name::text order by c.column_name::text) from information_schema.column_privileges c
     where c.grantee = 'authenticated' and c.table_schema = 'public' and c.table_name = 'profiles' and c.column_name = 'flagged'), null,
   'profiles.flagged is moderation state: not readable by the owner');
-select is((select count(*)::int from information_schema.column_privileges c where c.grantee = 'authenticated' and c.table_schema = 'public' and c.table_name = 'progress' and c.privilege_type = 'SELECT'), 19,
-  'progress grants select on its 19 client columns');
+select is((select count(*)::int from information_schema.column_privileges c where c.grantee = 'authenticated' and c.table_schema = 'public' and c.table_name = 'progress' and c.privilege_type = 'SELECT'), 6,
+  'progress grants select on its 6 client columns (user_id, safety_rating, ranked, rating_updated_at, created_at, updated_at)');
 select is((select array_agg(distinct g.privilege_type::text) from information_schema.role_table_grants g where g.grantee = 'authenticated' and g.table_schema = 'public'),
   array['SELECT'], 'and every one of them is select only');
 select is((select array_agg(c.column_name::text order by c.column_name::text) from information_schema.column_privileges c
@@ -64,7 +64,7 @@ select policies_are('public', 'devices', '{}'::name[], 'devices has no policies'
 select policies_are('public', 'app_config', array['app_config_public']::name[], 'app_config has exactly its public policy');
 select is((select count(*)::int from pg_policy p join pg_class c on c.oid = p.polrelid join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and p.polcmd <> 'r'), 0, 'no policy in public allows a client write');
-select has_index('public', 'progress', 'progress_global_board_idx', 'the global board index exists');
+select hasnt_index('public', 'progress', 'progress_global_board_idx', 'the global board index is gone with the board');
 select has_index('public', 'device_league_claims', 'device_league_claims_user_idx', 'device claims indexed by user (cascade)');
 select has_index('public', 'profiles', 'profiles_username_text_idx', 'the username prefix search has its text_pattern_ops index');
 select has_index('public', 'trips', 'trips_started_brin', 'trips has a time-leading BRIN index');
@@ -91,12 +91,8 @@ select is(array[private.is_clean_name('fuck_you'), private.is_clean_name('F.u.c.
 select is(private.league_week(timestamptz '2026-10-05 03:30:00+00'), '2026-W40', 'Sunday 23:30 New York is still ISO week 40');
 select is(private.league_week(timestamptz '2026-10-05 04:00:00+00'), '2026-W41', 'Monday 00:00 New York starts week 41');
 select is(private.week_end(timestamptz '2026-10-07 12:00:00+00'), timestamptz '2026-10-12 04:00:00+00', 'the week ends next Monday 00:00 New York');
-select is(array[private.level_for(0), private.level_for(249), private.level_for(250), private.level_for(750), private.level_for(1499), private.level_for(1500), private.level_for(100000000)],
-  array[1, 1, 2, 3, 3, 4, 50], 'levels at 250 x n(n-1)/2, capped at 50');
--- safety_rating(acceleration, braking, turning, attention, phone, speed, miles, watched miles): the weighted mean of the category scores (0022)
-select is(array[private.safety_rating(0, 0, 0, 0, 40, 0, 10, 0), private.safety_rating(0, 10, 0, 0, 0, 0, 20, 0), private.safety_rating(0, 0, 0, 0, 0, 0, 5, 0), private.safety_rating(0, 0, 0, 0, 0, 0, 0, 0)],
-  array[94.3, 99.6, 100.0, null],
-  'safety rating: 94.3 for a pickup per 10 mi (phone use 80, counted double), 99.6 for a hard brake per 20 mi, 100 with no events, null with no miles');
+-- the per-opportunity rating (0023): null with no drives
+select is(private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'rating', 'null'::jsonb, 'no drives: no Safety Rating');
 
 -- ---------------------------------------------------------------------------
 -- act as A
@@ -108,7 +104,7 @@ select is((select count(*)::int from public.progress), 1, 'A sees only own progr
 select throws_ok($$ select last_end_lat from public.progress $$, '42501', null, 'A cannot read progress.last_end_lat');
 select throws_ok($$ update public.profiles set units = 'km' where id = '00000000-0000-0000-0000-000000000001' $$, '42501', null, 'A cannot write profiles directly');
 select throws_ok($$ select flagged from public.profiles $$, '42501', null, 'A cannot read own flagged');
-select throws_ok($$ update public.progress set points = 999 where user_id = '00000000-0000-0000-0000-000000000001' $$, '42501', null, 'A cannot write progress directly');
+select throws_ok($$ update public.progress set safety_rating = 99 where user_id = '00000000-0000-0000-0000-000000000001' $$, '42501', null, 'A cannot write progress directly');
 select throws_ok($$ select count(*) from public.devices $$, '42501', null, 'A cannot read devices');
 select throws_ok($$ select count(*) from public.rate_limits $$, '42501', null, 'A cannot read rate_limits');
 select throws_ok($$ select private.is_clean_name('x') $$, '42501', null, 'A cannot call into private');
@@ -193,24 +189,13 @@ select is((select count(*)::int from public.app_config), 1, 'anon reads the publ
 reset role;
 
 -- ---------------------------------------------------------------------------
--- server side: push token moves with the device; the lazy freeze grant
+-- server side: push token moves with the device; the rate limiter
 -- ---------------------------------------------------------------------------
 select is((select push_token from public.devices where user_id = '00000000-0000-0000-0000-000000000001' and device_id = 'device-aaaaaaaa'), null,
   'a token registered by B is taken from A');
 select is((select push_token from public.devices where user_id = '00000000-0000-0000-0000-000000000002' and device_id = 'device-aaaaaaaa'), 'ExponentPushToken[abcdefgh12345]', 'and held by B');
 select is((select array_agg(user_id order by device_id) from public.device_league_claims where device_id like 'device-_bbbbbbb' or device_id = 'device-aaaaaaaa'), array['00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000002']::uuid[], 'one claim per device, first come (A''s was released above)');
 
-update public.progress set freezes = 0, freezes_granted_at = now() - interval '29 days' where user_id = '00000000-0000-0000-0000-000000000001';
-select private.apply_freeze_grant('00000000-0000-0000-0000-000000000001');
-select is((select freezes from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), 0, 'no grant before 30 days');
-update public.progress set freezes = 0, freezes_granted_at = now() - interval '31 days' where user_id = '00000000-0000-0000-0000-000000000001';
-select private.apply_freeze_grant('00000000-0000-0000-0000-000000000001');
-select is((select row(freezes, freezes_granted_at = now() - interval '1 day')::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(2, true)::text,
-  'after 30 days: +2 freezes and the grant clock moves on by 30 days');
-update public.progress set freezes = 2, freezes_granted_at = now() - interval '70 days' where user_id = '00000000-0000-0000-0000-000000000001';
-select private.apply_freeze_grant('00000000-0000-0000-0000-000000000001');
-select is((select row(freezes, freezes_granted_at = now() - interval '10 days')::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(3, true)::text,
-  'two missed periods cap at 3 and advance the clock by 60 days');
 select is(private.take_rate_limit('00000000-0000-0000-0000-000000000001', 'probe', interval '1 minute', 1), true, 'a budget take passes');
 select is(private.take_rate_limit('00000000-0000-0000-0000-000000000001', 'probe', interval '1 minute', 1), false, 'and the next in the window is refused');
 set local role service_role;
