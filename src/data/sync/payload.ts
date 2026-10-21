@@ -1,5 +1,5 @@
-// The `finalize-trip` upload contract (v4), the v3 contract older builds still send, and the
-// `trip-actions` request and answer shapes.
+// The `finalize-trip` upload contract (v5), the v4 and v3 contracts older builds still send, and
+// the `trip-actions` request and answer shapes.
 //
 // This file is the contract's single source: the device validates what it queues against it and
 // the edge functions validate what they receive against a byte-identical copy (`_shared/payload.ts`,
@@ -49,7 +49,16 @@ const runCount = (s: string): number => (s === '' ? 0 : s.split(' ').length);
 const DAY_MS = 86_400_000;
 
 /** The event types a drive records (mirrors `EventType` in the scoring package). */
-export const EVENT_TYPES = ['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'eyes_off', 'drowsy'] as const;
+export const EVENT_TYPES = ['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'eyes_off', 'drowsy'] as const;
+/** The event types a v4 upload may carry: v5's without the phone pickup. */
+export const EVENT_TYPES_V4 = [
+  'speeding',
+  'hard_brake',
+  'hard_accel',
+  'hard_corner',
+  'eyes_off',
+  'drowsy',
+] as const satisfies readonly (typeof EVENT_TYPES)[number][];
 export const TIERS = ['minor', 'moderate', 'severe'] as const;
 /** The types only the DashPal dashcam reports (mirrors DASHCAM_EVENT_TYPES in the scoring package). */
 export const DASHCAM_EVENT_TYPES_WIRE = ['eyes_off', 'drowsy'] as const satisfies readonly (typeof EVENT_TYPES)[number][];
@@ -61,6 +70,8 @@ export const TIERS_BY_TYPE: Record<(typeof EVENT_TYPES)[number], readonly (typeo
   hard_brake: ['minor', 'severe'],
   hard_accel: ['minor', 'severe'],
   hard_corner: ['minor', 'severe'],
+  /** In hand up to 15 s moderate, longer severe (scoring `phonePickupTier`). */
+  phone_pickup: ['moderate', 'severe'],
   eyes_off: ['severe'],
   drowsy: ['severe'],
 };
@@ -75,34 +86,64 @@ export const PointSchema = z
     error: 'coordinates must already be rounded to 4 decimal places',
   });
 
+/** The measurements a v4 event may carry. */
+const measuredFields = {
+  speedMph: z.number().min(0).max(250).optional(),
+  limitMph: z.number().min(0).max(120).optional(),
+  peakG: z.number().min(0).max(10).optional(),
+  /** speeding: mph-seconds over the speeding line after the grace (the Speed weight reads it). */
+  overMphS: z.number().min(0).max(1_000_000).optional(),
+  /** Who saw it: `dashcam` on (and only on) a DashPal event. */
+  source: z.literal('dashcam').optional(),
+};
+
 /** What the detector measured; shown on the recap, re-checked by the server. */
 export const MeasuredSchema = z
   .object({
-    speedMph: z.number().min(0).max(250).optional(),
-    limitMph: z.number().min(0).max(120).optional(),
-    peakG: z.number().min(0).max(10).optional(),
-    /** speeding: mph-seconds over the speeding line after the grace (the Speed weight reads it). */
-    overMphS: z.number().min(0).max(1_000_000).optional(),
-    /** Who saw it: `dashcam` on (and only on) a DashPal event. */
-    source: z.literal('dashcam').optional(),
+    ...measuredFields,
+    /** phone_pickup: the highest trusted GPS speed from its start to its last use row, mph. */
+    maxSpeedMph: z.number().min(0).max(250).optional(),
   })
   .strict();
+/** A v4 event's measurements: v5's without `maxSpeedMph`. */
+export const MeasuredV4Schema = z.object(measuredFields).strict();
 
-/** One event: a `DriveEvent` plus where it happened (null inside a privacy zone) and its measurements. */
+/** The fields of an event every upload version shares. */
+const eventFields = {
+  id: z.uuid(),
+  tier: z.enum(TIERS),
+  startedAt: epochMs,
+  durationS: z.number().min(0).max(MAX_DRIVE_MS / 1000),
+  zone: z.enum(['school', 'construction']).nullable().optional(),
+  /** Only the server removes an event (an accepted dispute); an upload is always active. */
+  status: z.literal('active').optional(),
+  lat: z.number().min(-90).max(90).nullable(),
+  lng: z.number().min(-180).max(180).nullable(),
+};
+
+/**
+ * One event: a `DriveEvent` plus where it happened (null inside a privacy zone) and its
+ * measurements. A phone pickup's `durationS` is its seconds in hand: a whole number, at least 1.
+ */
 export const PayloadEventSchema = z
-  .object({
-    id: z.uuid(),
-    type: z.enum(EVENT_TYPES),
-    tier: z.enum(TIERS),
-    startedAt: epochMs,
-    durationS: z.number().min(0).max(MAX_DRIVE_MS / 1000),
-    zone: z.enum(['school', 'construction']).nullable().optional(),
-    /** Only the server removes an event (an accepted dispute); an upload is always active. */
-    status: z.literal('active').optional(),
-    lat: z.number().min(-90).max(90).nullable(),
-    lng: z.number().min(-180).max(180).nullable(),
-    measured: MeasuredSchema,
+  .object({ ...eventFields, type: z.enum(EVENT_TYPES), measured: MeasuredSchema })
+  .strict()
+  .refine((e) => TIERS_BY_TYPE[e.type].includes(e.tier), {
+    error: 'tier not allowed for this event type',
+    path: ['tier'],
   })
+  .refine((e) => isDashcamWireType(e.type) === (e.measured.source === 'dashcam'), {
+    error: 'a DashPal event carries source dashcam, and only a DashPal event does',
+    path: ['measured', 'source'],
+  })
+  .refine((e) => e.type !== 'phone_pickup' || (Number.isInteger(e.durationS) && e.durationS >= 1), {
+    error: 'a phone pickup is in hand a whole number of seconds, at least 1',
+    path: ['durationS'],
+  });
+
+/** A v4 event: no phone pickup, no `maxSpeedMph`. */
+export const PayloadEventV4Schema = z
+  .object({ ...eventFields, type: z.enum(EVENT_TYPES_V4), measured: MeasuredV4Schema })
   .strict()
   .refine((e) => TIERS_BY_TYPE[e.type].includes(e.tier), {
     error: 'tier not allowed for this event type',
@@ -137,18 +178,28 @@ export const DashcamSchema = z
 /** Most of each counted opportunity a drive may claim (mirrors `EXPOSURE_MAX.count` in the scoring package). */
 const MAX_EXPOSURE_COUNT = 20_000;
 
+/** The opportunity counters a v4 upload carries. */
+const exposureFields = {
+  slowdowns: z.number().int().min(0).max(MAX_EXPOSURE_COUNT),
+  speedups: z.number().int().min(0).max(MAX_EXPOSURE_COUNT),
+  turns: z.number().int().min(0).max(MAX_EXPOSURE_COUNT),
+  limitS: z.number().int().min(0).max(MAX_DRIVE_S),
+  movingS: z.number().int().min(0).max(MAX_DRIVE_S),
+};
+
 /**
- * The drive's opportunity counters (scoring `Exposure`). Optional on the upload: a drive upgraded
- * from v3 has none and the server estimates them from its miles and duration.
+ * The drive's opportunity counters (scoring `Exposure`), with `phoneS` (seconds at driving speed
+ * with the motion sensors read) required. Optional on the upload: a drive upgraded from v3 has none
+ * and the server estimates them from its miles and duration (with no phone seconds).
  */
 export const ExposureSchema = z
-  .object({
-    slowdowns: z.number().int().min(0).max(MAX_EXPOSURE_COUNT),
-    speedups: z.number().int().min(0).max(MAX_EXPOSURE_COUNT),
-    turns: z.number().int().min(0).max(MAX_EXPOSURE_COUNT),
-    limitS: z.number().int().min(0).max(MAX_DRIVE_S),
-    movingS: z.number().int().min(0).max(MAX_DRIVE_S),
-  })
+  .object({ ...exposureFields, phoneS: z.number().int().min(0).max(MAX_DRIVE_S) })
+  .strict()
+  .refine((e) => e.limitS <= e.movingS, { error: 'limitS exceeds movingS', path: ['limitS'] })
+  .refine((e) => e.phoneS <= e.movingS, { error: 'phoneS exceeds movingS', path: ['phoneS'] });
+/** A v4 upload's counters: no `phoneS` (it reads 0). */
+export const ExposureV4Schema = z
+  .object(exposureFields)
   .strict()
   .refine((e) => e.limitS <= e.movingS, { error: 'limitS exceeds movingS', path: ['limitS'] });
 
@@ -226,25 +277,59 @@ const driveIssues = (p: DriveFacts, ctx: z.RefinementCtx): void => {
   if (new Set(p.events.map((e) => e.id)).size !== p.events.length) issue('event ids must be unique', 'events');
 };
 
-/** The upload a drive sends to `finalize-trip`. */
-export const FinalizeTripPayloadV4Schema = z
+/** The facts a v4 and a v5 upload share beside the drive's. */
+const lifecycleFields = {
+  /** How the drive started: noticed on its own, or a Start tap. */
+  origin: z.enum(['auto', 'manual']),
+  /** The in-drive "Not driving?" ran out of its 2-minute visibility budget. */
+  notDrivingExpired: z.boolean(),
+};
+
+const exposureIssues = (p: { durationS: number; exposure?: { movingS: number } }, ctx: z.RefinementCtx): void => {
+  if (p.exposure !== undefined && p.exposure.movingS > p.durationS + DURATION_SLACK_S) {
+    ctx.addIssue({ code: 'custom', message: 'exposure movingS exceeds the drive', path: ['exposure', 'movingS'] });
+  }
+};
+
+/**
+ * The upload a drive sends to `finalize-trip`: v4 plus the phone pickups and the seconds at
+ * driving speed they are judged over (`exposure.phoneS`). A pickup is in hand no longer than the
+ * drive lasts (its whole seconds, as the server stores them).
+ */
+export const FinalizeTripPayloadV5Schema = z
   .object({
-    v: z.literal(4),
+    v: z.literal(5),
     ...driveFields,
     events: z.array(PayloadEventSchema).max(MAX_EVENTS),
-    /** How the drive started: noticed on its own, or a Start tap. */
-    origin: z.enum(['auto', 'manual']),
-    /** The in-drive "Not driving?" ran out of its 2-minute visibility budget. */
-    notDrivingExpired: z.boolean(),
+    ...lifecycleFields,
     /** The drive's opportunity counters (`ExposureSchema`). Optional: an upgraded v3 drive has none. */
     exposure: ExposureSchema.optional(),
   })
   .strict()
   .superRefine((p, ctx) => {
     driveIssues(p, ctx);
-    if (p.exposure !== undefined && p.exposure.movingS > p.durationS + DURATION_SLACK_S) {
-      ctx.addIssue({ code: 'custom', message: 'exposure movingS exceeds the drive', path: ['exposure', 'movingS'] });
+    exposureIssues(p, ctx);
+    if (!p.events.every((e) => e.type !== 'phone_pickup' || e.durationS <= Math.round(p.durationS))) {
+      ctx.addIssue({ code: 'custom', message: 'a phone pickup is in hand no longer than the drive', path: ['events'] });
     }
+  });
+
+// --- v4: what a build from before phone tracking sends (or still has queued). Upgraded to v5 by
+// `upgradePayloadV4`. ---
+
+export const FinalizeTripPayloadV4Schema = z
+  .object({
+    v: z.literal(4),
+    ...driveFields,
+    events: z.array(PayloadEventV4Schema).max(MAX_EVENTS),
+    ...lifecycleFields,
+    /** The drive's opportunity counters, without phoneS. Optional: an upgraded v3 drive has none. */
+    exposure: ExposureV4Schema.optional(),
+  })
+  .strict()
+  .superRefine((p, ctx) => {
+    driveIssues(p, ctx);
+    exposureIssues(p, ctx);
   });
 
 // --- v3: what an older build sends (or still has queued). Upgraded to v4 by `upgradePayloadV3`. ---
@@ -261,6 +346,7 @@ export const EVENT_TYPES_V3 = [
 ] as const;
 const TIERS_BY_TYPE_V3: Record<(typeof EVENT_TYPES_V3)[number], readonly (typeof TIERS)[number][]> = {
   ...TIERS_BY_TYPE,
+  /** A v3 pickup (screen switches, a different rule) never reaches v4. */
   phone_pickup: ['severe'],
   phone_handling: ['moderate', 'severe'],
 };
@@ -323,6 +409,9 @@ export const FinalizeTripPayloadV3Schema = z
 export type PayloadEvent = z.infer<typeof PayloadEventSchema>;
 export type PayloadDashcam = z.infer<typeof DashcamSchema>;
 export type ExposureWire = z.infer<typeof ExposureSchema>;
+export type FinalizeTripPayloadV5 = z.infer<typeof FinalizeTripPayloadV5Schema>;
+export type PayloadEventV4 = z.infer<typeof PayloadEventV4Schema>;
+export type ExposureWireV4 = z.infer<typeof ExposureV4Schema>;
 export type FinalizeTripPayloadV4 = z.infer<typeof FinalizeTripPayloadV4Schema>;
 export type PayloadEventV3 = z.infer<typeof PayloadEventV3Schema>;
 export type FinalizeTripPayloadV3 = z.infer<typeof FinalizeTripPayloadV3Schema>;
@@ -335,7 +424,7 @@ export type FinalizeTripPayloadV3 = z.infer<typeof FinalizeTripPayloadV3Schema>;
  */
 export function upgradePayloadV3(p: FinalizeTripPayloadV3): FinalizeTripPayloadV4 {
   const { v: _v, safeMiles: _safe, events, ...rest } = p;
-  const kept: PayloadEvent[] = [];
+  const kept: PayloadEventV4[] = [];
   for (const e of events) {
     const { units: _u, stoppedInTraffic: _st, measured, type, ...event } = e;
     if (type === 'phone_pickup' || type === 'phone_handling') continue;
@@ -345,16 +434,31 @@ export function upgradePayloadV3(p: FinalizeTripPayloadV3): FinalizeTripPayloadV
   return { ...rest, v: 4, origin: 'manual', notDrivingExpired: false, events: kept };
 }
 
-/** A v3 body read as v4: validated as v3, upgraded, then held to v4. */
-const UpgradedV3Schema = FinalizeTripPayloadV3Schema.transform(upgradePayloadV3).pipe(FinalizeTripPayloadV4Schema);
+/**
+ * A v4 upload (a build from before phone tracking, or one still queued from it) as v5: its events
+ * as they are (it has no pickups) and, when it sent counters, no phone seconds (`phoneS: 0`: the
+ * drive was not watched for phone use, so Phone use has no score from it). Pure.
+ */
+export function upgradePayloadV4(p: FinalizeTripPayloadV4): FinalizeTripPayloadV5 {
+  const { v: _v, exposure, ...rest } = p;
+  return exposure === undefined ? { ...rest, v: 5 } : { ...rest, v: 5, exposure: { ...exposure, phoneS: 0 } };
+}
+
+/** A v4 body read as v5: validated as v4, upgraded, then held to v5. */
+const UpgradedV4Schema = FinalizeTripPayloadV4Schema.transform(upgradePayloadV4).pipe(FinalizeTripPayloadV5Schema);
+/** A v3 body read as v5: validated as v3, upgraded to v4 and held to it, then to v5 the same way. */
+const UpgradedV3Schema = FinalizeTripPayloadV3Schema.transform(upgradePayloadV3).pipe(UpgradedV4Schema);
 
 /**
- * Reads a queued or received upload: `v: 3` is validated as v3 and upgraded; anything else is held
- * to v4 (so an unknown version's refusal names the path `v`).
+ * Reads a queued or received upload: `v: 3` and `v: 4` are validated as sent and upgraded; anything
+ * else is held to v5 (so an unknown version's refusal names the path `v`, which a phone reads as a
+ * server behind it).
  */
-export function parseFinalizeUpload(body: unknown): z.ZodSafeParseResult<FinalizeTripPayloadV4> {
+export function parseFinalizeUpload(body: unknown): z.ZodSafeParseResult<FinalizeTripPayloadV5> {
   const v = typeof body === 'object' && body !== null ? (body as { v?: unknown }).v : undefined;
-  return v === 3 ? UpgradedV3Schema.safeParse(body) : FinalizeTripPayloadV4Schema.safeParse(body);
+  if (v === 3) return UpgradedV3Schema.safeParse(body);
+  if (v === 4) return UpgradedV4Schema.safeParse(body);
+  return FinalizeTripPayloadV5Schema.safeParse(body);
 }
 
 /** A Safety Rating as the server now holds it. */
@@ -383,8 +487,12 @@ export type FinalizeTripResponse = z.infer<typeof FinalizeTripResponseSchema>;
 
 // --- trip-actions: dispute one event, or mark a drive as "wasn't driving" ---
 
-/** The report sheet's reasons: `not_driving` routes to the whole-drive action; `camera_wrong` is for a DashPal event. */
-export const DISPUTE_REASONS = ['hazard', 'wrong_limit', 'camera_wrong', 'not_driving'] as const;
+/**
+ * The report sheet's reasons: `hazard` for a hard brake, `wrong_limit` for speeding, `camera_wrong`
+ * for a DashPal event, `mounted` ("My phone was mounted") for a phone pickup; `not_driving` routes to
+ * the whole-drive action.
+ */
+export const DISPUTE_REASONS = ['hazard', 'wrong_limit', 'camera_wrong', 'mounted', 'not_driving'] as const;
 export type DisputeReason = (typeof DISPUTE_REASONS)[number];
 
 export const DisputeActionSchema = z
@@ -409,7 +517,7 @@ export const DisputeResultSchema = z.object({
   eventId: z.uuid(),
   status: z.enum(['accepted', 'rejected']),
   rejectReason: z.literal('quota').nullable(),
-  /** Auto-accepts left this week in this reason's quota (hazard + wrong-limit, or camera_wrong alone). */
+  /** Auto-accepts left this week in this reason's quota (hazard + wrong-limit + mounted, or camera_wrong alone). */
   quotaLeft: z.number().int().min(0),
   /** The drive's clean flag as now stored. */
   clean: z.boolean(),

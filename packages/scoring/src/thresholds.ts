@@ -9,6 +9,23 @@ export const HARD_ACCEL_G = { minor: 0.32, severe: 0.45 } as const;
 export const HARD_CORNER_G = { minor: 0.4, severe: 0.55 } as const;
 /** The car counts as moving at or above this speed (mph): moving time, harsh-event gates. */
 export const MOVING_MIN_MPH = 5;
+
+/**
+ * Phone use (motion only): a row whose handling score is at least this reads as the phone in the
+ * driver's hand (a use row).
+ */
+export const PHONE_HANDLING_MIN_SCORE = 0.6;
+/** Driving speed for phone use (mph, a known, trusted GPS speed): a pickup counts only once one of its use rows is this fast. */
+export const PHONE_PICKUP_MIN_MPH = 10;
+/** A pickup needs at least this many use rows. */
+export const PHONE_PICKUP_MIN_ROWS = 3;
+/**
+ * The phone is put down once this many seconds of row clock pass after the last use row with no new
+ * one; a use row within them continues the same pickup (never a second one).
+ */
+export const PHONE_PUTDOWN_QUIET_S = 10;
+/** A pickup in hand up to this many seconds is moderate; longer is severe. */
+export const PHONE_SEVERE_S = 15;
 /**
  * The grace on speeding: an episode is an event only once it has MORE than this many rows over the
  * speeding line (L + T), whatever its tier (the 6th row makes it one), and the Speed weight counts

@@ -21,6 +21,11 @@ import {
   MOVING_MIN_MPH,
   NOT_DRIVING_PER_MONTH,
   NOT_DRIVING_WINDOW_S,
+  PHONE_HANDLING_MIN_SCORE,
+  PHONE_PICKUP_MIN_MPH,
+  PHONE_PICKUP_MIN_ROWS,
+  PHONE_PUTDOWN_QUIET_S,
+  PHONE_SEVERE_S,
   SPEEDING_GRACE_S,
   TRIM_ENDS_M,
 } from '../src/thresholds';
@@ -41,6 +46,15 @@ test('detection thresholds match the spec', () => {
   expect(MOVING_MIN_MPH).toBe(5);
   expect(MIN_SCORED_MILES).toBe(0.5);
   expect(MIN_SCORED_S).toBe(120);
+});
+
+test('phone use: a pickup at driving speed, put down after 10 quiet seconds, severe past 15 s in hand', () => {
+  expect(PHONE_HANDLING_MIN_SCORE).toBe(0.6);
+  expect(PHONE_PICKUP_MIN_MPH).toBe(10);
+  expect(PHONE_PICKUP_MIN_ROWS).toBe(3);
+  expect(PHONE_PUTDOWN_QUIET_S).toBe(10);
+  expect(PHONE_SEVERE_S).toBe(15);
+  expect(barrel.PHONE_PICKUP_MIN_MPH).toBe(PHONE_PICKUP_MIN_MPH);
 });
 
 test('the end, merge and privacy-trim rules', () => {

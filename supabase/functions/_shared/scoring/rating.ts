@@ -1,7 +1,8 @@
 // The Safety Rating, its category scores and the drive score, judged per opportunity: hard brakes
-// per slowdown, hard starts per speed-up, sharp turns per turn, and the share of driving time with a
-// known limit spent over the speeding line, weighted by how far over. Attention (DashPal) stays per
-// watched mile. The window is the last 90 days, recent weeks counting more.
+// per slowdown, hard starts per speed-up, sharp turns per turn, the share of driving time with a
+// known limit spent over the speeding line, weighted by how far over, and phone pickups (each
+// weighted by its seconds in hand) per second driven at driving speed. Attention (DashPal) stays
+// per watched mile. The window is the last 90 days, recent weeks counting more.
 //
 // Pure and deterministic. The SQL copy (`private.rating_at` and its helpers) matches it to the digit.
 import { isDashcamType, speedingChargedS, type DriveEvent, type Tier } from './drive';
@@ -32,16 +33,16 @@ export const RANKED_MIN_MILES = 10;
 /** What typical driving scores on every category: the curve's anchor. */
 export const TYPICAL_SCORE = 85;
 
-/** The five categories, in radar order, clockwise from the top. */
-export type AxisKey = 'acceleration' | 'braking' | 'turning' | 'attention' | 'speed';
-export const AXES: readonly AxisKey[] = ['acceleration', 'braking', 'turning', 'attention', 'speed'];
+/** The six categories, in radar order, clockwise from the top. */
+export type AxisKey = 'acceleration' | 'braking' | 'turning' | 'attention' | 'phone' | 'speed';
+export const AXES: readonly AxisKey[] = ['acceleration', 'braking', 'turning', 'attention', 'phone', 'speed'];
 /** The categories judged per opportunity (Attention is per watched mile). */
 export type RateAxis = Exclude<AxisKey, 'attention'>;
-export const RATE_AXES: readonly RateAxis[] = ['acceleration', 'braking', 'turning', 'speed'];
+export const RATE_AXES: readonly RateAxis[] = ['acceleration', 'braking', 'turning', 'phone', 'speed'];
 /** The category that needs a paired DashPal: no score without watched miles. */
 export const DASHPAL_AXIS: AxisKey = 'attention';
-/** What each category weighs in the Safety Rating and the drive score: Speed counts double. */
-export const AXIS_WEIGHT: Readonly<Record<AxisKey, number>> = { speed: 2, braking: 1, acceleration: 1, turning: 1, attention: 1 };
+/** What each category weighs in the Safety Rating and the drive score: Speed and Phone use count double. */
+export const AXIS_WEIGHT: Readonly<Record<AxisKey, number>> = { speed: 2, phone: 2, braking: 1, acceleration: 1, turning: 1, attention: 1 };
 
 /**
  * The category an event counts toward; null for any other type (a stored type no score reads).
@@ -57,6 +58,8 @@ export function axisOf(type: string): AxisKey | null {
       return 'acceleration';
     case 'hard_corner':
       return 'turning';
+    case 'phone_pickup':
+      return 'phone';
     case 'eyes_off':
     case 'drowsy':
       return 'attention';
@@ -80,7 +83,11 @@ export const BASELINE: Readonly<Record<RateAxis, Baseline>> = {
   turning: { rate: 0.008, prior: 60, floor: 10 },
   /** 4 weighted seconds over the line per 100 s with a limit. */
   speed: { rate: 0.04, prior: 3600, floor: 600 },
+  /** 4 weighted phone seconds (`PHONE_PICKUP_WEIGHT_S` + in hand, per pickup) per 100 s at driving speed. */
+  phone: { rate: 0.04, prior: 3600, floor: 600 },
 };
+/** What a phone pickup weighs on top of its seconds in hand: the reach and the look away. */
+export const PHONE_PICKUP_WEIGHT_S = 10;
 /** A hard brake, start or turn: minor 1, severe 2 (a two-level type reads anything below severe as minor). */
 export const HARD_EVENT_WEIGHT: Readonly<Record<'minor' | 'severe', number>> = { minor: 1, severe: 2 };
 /** Speeding: the over-the-line reference (5 mph over weighs 1 per charged second)… */
@@ -108,13 +115,21 @@ export interface Exposure {
   limitS: number;
   /** Seconds moving at 5 mph or more. */
   movingS: number;
+  /**
+   * Seconds at driving speed (10 mph or more on a trusted GPS speed) with the motion sensors read:
+   * Phone use's opportunities. 0 on a drive recorded before phone use was tracked.
+   */
+  phoneS: number;
 }
 export const EXPOSURE_MAX = { count: 20_000, seconds: 43_200 } as const;
 
 const wholeIn = (v: unknown, max: number): number =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.floor(Math.max(0, v))) : 0;
 
-/** Clamped, floored, finite whole numbers (counts ≤ 20 000, seconds ≤ 43 200), with limitS ≤ movingS. */
+/**
+ * Clamped, floored, finite whole numbers (counts ≤ 20 000, seconds ≤ 43 200), with limitS ≤ movingS
+ * and phoneS ≤ movingS. A missing counter reads 0.
+ */
 export function clampExposure(e: Partial<Exposure> | null | undefined): Exposure {
   const movingS = wholeIn(e?.movingS, EXPOSURE_MAX.seconds);
   return {
@@ -123,6 +138,7 @@ export function clampExposure(e: Partial<Exposure> | null | undefined): Exposure
     turns: wholeIn(e?.turns, EXPOSURE_MAX.count),
     limitS: Math.min(wholeIn(e?.limitS, EXPOSURE_MAX.seconds), movingS),
     movingS,
+    phoneS: Math.min(wholeIn(e?.phoneS, EXPOSURE_MAX.seconds), movingS),
   };
 }
 
@@ -158,7 +174,7 @@ function knotAt(avg: number, col: 1 | 2 | 3 | 4 | 5): number {
 /**
  * The counters for a drive recorded before they existed, from its miles and duration: the average
  * speed picks the per-mile counts and the shares of the duration (`ESTIMATE_KNOTS`), each rounded
- * half up, then clamped (`clampExposure`).
+ * half up, then clamped (`clampExposure`). phoneS is 0: such a drive was not watched for phone use.
  */
 export function estimateExposure(miles: number, durationS: number): Exposure {
   const mi = Number.isFinite(miles) ? Math.max(0, miles) : 0;
@@ -170,6 +186,7 @@ export function estimateExposure(miles: number, durationS: number): Exposure {
     turns: Math.round(mi * knotAt(avg, 3)),
     limitS: Math.round(s * knotAt(avg, 4)),
     movingS: Math.round(s * knotAt(avg, 5)),
+    phoneS: 0,
   });
 }
 
@@ -194,7 +211,18 @@ function overMphSOf(e: DriveEvent): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
-/** The weight an active event adds to its category: HARD_EVENT_WEIGHT, speedingWeight, or 0 (removed, DashPal). */
+/**
+ * A phone pickup's seconds in hand as Phone use reads them: its `durationS`, clamped to
+ * 0..EXPOSURE_MAX.seconds (43 200); a non-finite one reads 0.
+ */
+export function phoneInHandS(durationS: number): number {
+  return Number.isFinite(durationS) ? clamp(durationS, 0, EXPOSURE_MAX.seconds) : 0;
+}
+
+/**
+ * The weight an active event adds to its category: HARD_EVENT_WEIGHT, speedingWeight, a phone
+ * pickup's PHONE_PICKUP_WEIGHT_S + its seconds in hand (`phoneInHandS`), or 0 (removed, DashPal).
+ */
 export function eventWeight(e: DriveEvent): number {
   if (e.status === 'removed') return 0;
   switch (e.type) {
@@ -204,6 +232,8 @@ export function eventWeight(e: DriveEvent): number {
       return HARD_EVENT_WEIGHT[e.tier === 'severe' ? 'severe' : 'minor'];
     case 'speeding':
       return speedingWeight(e.durationS, overMphSOf(e), e.tier);
+    case 'phone_pickup':
+      return PHONE_PICKUP_WEIGHT_S + phoneInHandS(e.durationS);
     default:
       return 0;
   }
@@ -226,14 +256,15 @@ const byStart = (x: DriveEvent, y: DriveEvent): number => x.startedAt - y.starte
 /**
  * Over the drive's ACTIVE events (sorted by startedAt then id, so sums are order-stable) and its
  * exposure: braking/acceleration/turning weight and count; speed weight and count = Σ charged
- * seconds; opportunities = slowdowns / speedups / turns / limitS. Attention = Σ ATTENTION_PENALTY
- * of eyes_off / drowsy.
+ * seconds; phone weight and count = Σ seconds in hand; opportunities = slowdowns / speedups / turns
+ * / phoneS / limitS. Attention = Σ ATTENTION_PENALTY of eyes_off / drowsy.
  */
 export function driveLoads(events: readonly DriveEvent[], exposure: Exposure): DriveLoads {
   const rates: Record<RateAxis, AxisLoad> = {
     acceleration: { weight: 0, count: 0, opportunities: exposure.speedups },
     braking: { weight: 0, count: 0, opportunities: exposure.slowdowns },
     turning: { weight: 0, count: 0, opportunities: exposure.turns },
+    phone: { weight: 0, count: 0, opportunities: exposure.phoneS },
     speed: { weight: 0, count: 0, opportunities: exposure.limitS },
   };
   let attentionPenalty = 0;
@@ -246,7 +277,7 @@ export function driveLoads(events: readonly DriveEvent[], exposure: Exposure): D
     if (axis === null || axis === 'attention') continue;
     const load = rates[axis];
     load.weight += eventWeight(e);
-    load.count += axis === 'speed' ? speedingChargedS(e.durationS) : 1;
+    load.count += axis === 'speed' ? speedingChargedS(e.durationS) : axis === 'phone' ? phoneInHandS(e.durationS) : 1;
   }
   return { rates, attentionPenalty };
 }
@@ -274,7 +305,10 @@ export interface RatingResult {
   /** 0–100, 1 dp; null with no miles in the window. */
   rating: number | null;
   ranked: boolean;
-  /** Unrounded per category; Attention null without watched miles; all null with no miles. */
+  /**
+   * Unrounded per category; Attention null without watched miles; Phone use null without phone
+   * seconds or pickups in the window; all null with no miles.
+   */
   scores: AxisScores;
   /** Raw miles in the window. */
   miles: number;
@@ -287,7 +321,7 @@ export interface SafetyRating {
 }
 
 const DAY_MS = 86_400_000;
-const NO_SCORES: Readonly<AxisScores> = { acceleration: null, braking: null, turning: null, attention: null, speed: null };
+const NO_SCORES: Readonly<AxisScores> = { acceleration: null, braking: null, turning: null, attention: null, phone: null, speed: null };
 
 const driveOrder = (x: RatingDrive, y: RatingDrive): number => {
   if (x.startedAt !== y.startedAt) return x.startedAt - y.startedAt;
@@ -300,13 +334,15 @@ const driveOrder = (x: RatingDrive, y: RatingDrive): number => {
  * The Safety Rating as of `at` (epoch ms): over the drives started in (at − 90 d, at], each weighted
  * by recencyWeight(floor((at − startedAt) / 86 400 000)). Per rate axis:
  *   W = Σ w·weight, O = Σ w·max(opportunities, count), r = (W + prior·rate) / (O + prior), score = rateScore(r, rate).
+ * Phone use is null (not tracked, no score) when its O is 0: no phone seconds and no pickups in the
+ * window, as on every drive recorded before phone use was tracked.
  * Attention: P = Σ w·attentionPenalty, M = Σ w·watchedMiles; categoryScore(P, M, ATTENTION_MIN_MILES) when M > 0.
  * Rating = clamp(weightedScore(scores), 0, 100) rounded half up to 1 dp; ranked = miles ≥ RANKED_MIN_MILES.
  * Drives are summed in (startedAt, id) order. Pure; the SQL `private.rating_at` matches it to the digit.
  */
 export function ratingAt(drives: readonly RatingDrive[], at: number): RatingResult {
-  const W: Record<RateAxis, number> = { acceleration: 0, braking: 0, turning: 0, speed: 0 };
-  const O: Record<RateAxis, number> = { acceleration: 0, braking: 0, turning: 0, speed: 0 };
+  const W: Record<RateAxis, number> = { acceleration: 0, braking: 0, turning: 0, phone: 0, speed: 0 };
+  const O: Record<RateAxis, number> = { acceleration: 0, braking: 0, turning: 0, phone: 0, speed: 0 };
   let miles = 0;
   let attP = 0;
   let attM = 0;
@@ -335,6 +371,7 @@ export function ratingAt(drives: readonly RatingDrive[], at: number): RatingResu
     braking: rateOf('braking'),
     turning: rateOf('turning'),
     attention: attM > 0 ? categoryScore(attP, attM, ATTENTION_MIN_MILES) : null,
+    phone: O.phone > 0 ? rateOf('phone') : null,
     speed: rateOf('speed'),
   };
   const mean = weightedScore(scores);
@@ -348,8 +385,9 @@ export function ratingAt(drives: readonly RatingDrive[], at: number): RatingResu
 
 /**
  * One drive's score out of 100: per rate axis r = weight / max(opportunities, floor, count) (no
- * prior), Attention over max(watchedMiles, DRIVE_ATTENTION_MIN_MILES) when watched; the weighted
- * mean, a whole number. Null with no miles. Shown on the recap and the share card.
+ * prior), Attention over max(watchedMiles, DRIVE_ATTENTION_MIN_MILES) when watched, Phone use only
+ * when the drive has phone seconds or a pickup; the weighted mean, a whole number. Null with no
+ * miles. Shown on the recap and the share card.
  */
 export function driveScore(events: readonly DriveEvent[], miles: number, watchedMiles: number, exposure: Exposure): number | null {
   if (!(miles > 0)) return null;
@@ -359,19 +397,22 @@ export function driveScore(events: readonly DriveEvent[], miles: number, watched
     const b = BASELINE[axis];
     return rateScore(l.weight / Math.max(l.opportunities, b.floor, l.count), b.rate);
   };
+  const phone = loads.rates.phone;
   const mean = weightedScore({
     acceleration: rateOf('acceleration'),
     braking: rateOf('braking'),
     turning: rateOf('turning'),
     attention: watchedMiles > 0 ? categoryScore(loads.attentionPenalty, watchedMiles, DRIVE_ATTENTION_MIN_MILES) : null,
+    phone: phone.opportunities > 0 || phone.count > 0 ? rateOf('phone') : null,
     speed: rateOf('speed'),
   });
   return mean === null ? null : roundTo(clamp(mean, 0, 100));
 }
 
 /**
- * The weighted mean of the scored categories (`AXIS_WEIGHT`: Speed double, the rest single, a null
- * category left out of both sums), summed in radar order; null when none is scored. Unrounded.
+ * The weighted mean of the scored categories (`AXIS_WEIGHT`: Speed and Phone use double, the rest
+ * single, a null category left out of both sums), summed in radar order; null when none is scored.
+ * Unrounded.
  */
 export function weightedScore(scores: Readonly<Partial<Record<AxisKey, number | null>>>): number | null {
   let sum = 0;

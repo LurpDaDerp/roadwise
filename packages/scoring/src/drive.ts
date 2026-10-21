@@ -1,5 +1,5 @@
-// One drive's facts as the scoring reads them: its events, the speeding line, the DashPal limits
-// and whether the drive is long enough to score (`classifyDrive`). The drive's score and the Safety
+// One drive's facts as the scoring reads them: its events, the speeding line, a phone pickup's
+// tier, the DashPal limits and whether the drive is long enough to score (`classifyDrive`). The drive's score and the Safety
 // Rating are in rating.ts.
 //
 // Pure and deterministic: no clock, no randomness, no imports outside this package.
@@ -12,13 +12,14 @@ import {
   DASHCAM_MIN_MPH,
   MIN_SCORED_MILES,
   MIN_SCORED_S,
+  PHONE_SEVERE_S,
   SPEEDING_GRACE_S,
 } from './thresholds';
 
 /** Bumped whenever the rules a drive is judged by change; stored with every drive. */
-export const SCORING_VERSION = 7;
+export const SCORING_VERSION = 8;
 
-export type EventType = 'speeding' | 'hard_brake' | 'hard_accel' | 'hard_corner' | 'eyes_off' | 'drowsy';
+export type EventType = 'speeding' | 'hard_brake' | 'hard_accel' | 'hard_corner' | 'phone_pickup' | 'eyes_off' | 'drowsy';
 
 /**
  * The event types only the DashPal dashcam reports (eyes off the road with no return, eyes closed):
@@ -41,8 +42,13 @@ export type Zone = 'school' | 'construction';
  * non-finite one reads as absent.
  */
 export type DriveEventMeasured = {
-  /** The GPS speed at the event, mph (a DashPal event's speed gate reads it). */
+  /**
+   * The GPS speed at the event, mph (a DashPal event's speed gate reads it). phone_pickup: the
+   * trusted speed at the row the pickup starts, 1 dp.
+   */
   speedMph?: number;
+  /** phone_pickup: the highest trusted GPS speed from its start to its last use row, mph, 1 dp. */
+  maxSpeedMph?: number;
   /** speeding: the posted limit, mph. */
   limitMph?: number;
   /** harsh events: the peak force, g. */
@@ -61,10 +67,14 @@ export interface DriveEvent {
   /** uuid from the device */
   id: string;
   type: EventType;
-  /** speeding: minor | moderate | severe; harsh: minor | severe; eyes_off and drowsy (DashPal): severe. */
+  /**
+   * speeding: minor | moderate | severe; harsh: minor | severe; phone_pickup: moderate | severe
+   * (`phonePickupTier`); eyes_off and drowsy (DashPal): severe.
+   */
   tier: Tier;
   /** epoch ms */
   startedAt: number;
+  /** phone_pickup: the seconds in hand while moving (whole, at least 1); the Phone use weight reads it. */
   durationS: number;
   /** A school or construction zone: the speeding line's tolerance is 2 mph there. */
   zone?: Zone | null;
@@ -158,6 +168,11 @@ export function speedTier(speedMph: number, limitMph: number, zone?: Zone | null
   if (over > 9) return 'severe';
   if (over > 4) return 'moderate';
   return 'minor';
+}
+
+/** A phone pickup's tier by its seconds in hand: up to `PHONE_SEVERE_S` moderate, longer severe. */
+export function phonePickupTier(inHandS: number): Tier {
+  return inHandS > PHONE_SEVERE_S ? 'severe' : 'moderate';
 }
 
 /** `overMphS` is read as at most this many mph over per charged second (the device and the server clamp it). */

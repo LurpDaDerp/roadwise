@@ -5,8 +5,10 @@ import {
   DisputeActionSchema,
   DisputeResultSchema,
   EVENT_TYPES,
+  EVENT_TYPES_V4,
   FinalizeTripPayloadV3Schema,
   FinalizeTripPayloadV4Schema,
+  FinalizeTripPayloadV5Schema,
   FinalizeTripResponseSchema,
   MAX_EVENTS,
   MAX_POLYLINE_RUNS,
@@ -15,12 +17,15 @@ import {
   TripActionSchema,
   parseFinalizeUpload,
   upgradePayloadV3,
+  upgradePayloadV4,
   type ExposureWire,
   type FinalizeTripPayloadV3,
   type FinalizeTripPayloadV4,
+  type FinalizeTripPayloadV5,
   type FinalizeTripResponse,
   type PayloadEvent,
   type PayloadEventV3,
+  type PayloadEventV4,
 } from '../../../src/data/sync/payload';
 import type { DriveEvent, EventType, Exposure } from '../src';
 
@@ -39,8 +44,24 @@ const event = (n: number, p: Partial<PayloadEvent> = {}): PayloadEvent => ({
   ...p,
 });
 
-const valid = (): FinalizeTripPayloadV4 => ({
-  v: 4,
+const eventV4 = (n: number, p: Partial<PayloadEventV4> = {}): PayloadEventV4 => ({
+  id: uuid(1000 + n),
+  type: 'hard_brake',
+  tier: 'minor',
+  startedAt: T0 + 60_000 + n,
+  durationS: 1,
+  lat: 40.7128,
+  lng: -74.006,
+  measured: { peakG: 0.42, speedMph: 30 },
+  ...p,
+});
+
+/** A phone pickup: 24 s in hand from 31.2 mph, at most 38.4 mph. */
+const pickup = (n: number, p: Partial<PayloadEvent> = {}): PayloadEvent =>
+  event(n, { type: 'phone_pickup', tier: 'severe', durationS: 24, measured: { speedMph: 31.2, maxSpeedMph: 38.4 }, ...p });
+
+const valid = (): FinalizeTripPayloadV5 => ({
+  v: 5,
   clientTripId: uuid(1),
   startedAt: T0,
   endedAt: T0 + 20 * 60_000,
@@ -63,6 +84,31 @@ const valid = (): FinalizeTripPayloadV4 => ({
       status: 'active',
       measured: { speedMph: 41, limitMph: 30, overMphS: 120.5 },
     }),
+    pickup(3),
+  ],
+  appVersion: '3.1.0',
+  origin: 'auto',
+  notDrivingExpired: false,
+  exposure: { slowdowns: 30, speedups: 29, turns: 18, limitS: 900, movingS: 1100, phoneS: 1000 },
+});
+
+const validV4 = (): FinalizeTripPayloadV4 => ({
+  v: 4,
+  clientTripId: uuid(1),
+  startedAt: T0,
+  endedAt: T0 + 20 * 60_000,
+  tz: 'America/New_York',
+  localDay: '2026-10-05',
+  miles: 12,
+  nightMiles: 0,
+  durationS: 1200,
+  start: { lat: 40.7128, lng: -74.006 },
+  end: { lat: 40.758, lng: -73.9855 },
+  polyline: '_p~iF~ps|U_ulLnnqC',
+  integrity: { mockLocation: false, motionMismatch: false, validGnssPct: 98.5, maxSpeedMph: 61 },
+  events: [
+    eventV4(1),
+    eventV4(2, { type: 'speeding', tier: 'moderate', durationS: 40, zone: null, status: 'active', measured: { speedMph: 41, limitMph: 30, overMphS: 120.5 } }),
   ],
   appVersion: '3.0.0',
   origin: 'auto',
@@ -70,15 +116,15 @@ const valid = (): FinalizeTripPayloadV4 => ({
   exposure: { slowdowns: 30, speedups: 29, turns: 18, limitS: 900, movingS: 1100 },
 });
 
-const ok = (p: unknown) => FinalizeTripPayloadV4Schema.safeParse(p).success;
+const ok = (p: unknown) => FinalizeTripPayloadV5Schema.safeParse(p).success;
 const mutate = (fn: (p: Record<string, any>) => void) => {
   const p = valid() as Record<string, any>;
   fn(p);
   return p;
 };
 
-describe('FinalizeTripPayloadV4Schema: accepts', () => {
-  test('a full valid payload', () => expect(FinalizeTripPayloadV4Schema.parse(valid())).toEqual(valid()));
+describe('FinalizeTripPayloadV5Schema: accepts', () => {
+  test('a full valid payload', () => expect(FinalizeTripPayloadV5Schema.parse(valid())).toEqual(valid()));
   test('null start/end and no events', () => expect(ok(mutate((p) => ((p.start = null), (p.end = null), (p.events = []))))).toBe(true));
   test('nightMiles equal to miles', () => expect(ok(mutate((p) => (p.nightMiles = 12)))).toBe(true));
   test(`exactly ${MAX_EVENTS} events`, () =>
@@ -113,14 +159,44 @@ describe('FinalizeTripPayloadV4Schema: accepts', () => {
   });
   test('a manual drive whose "Not driving?" ran out', () =>
     expect(ok(mutate((p) => ((p.origin = 'manual'), (p.notDrivingExpired = true))))).toBe(true));
-  test('exposure is optional, and may be all zeros or limitS equal to movingS', () => {
+  test('exposure is optional, and may be all zeros or limitS and phoneS equal to movingS', () => {
     expect(ok(mutate((p) => delete p.exposure))).toBe(true);
-    expect(ok(mutate((p) => (p.exposure = { slowdowns: 0, speedups: 0, turns: 0, limitS: 0, movingS: 0 })))).toBe(true);
-    expect(ok(mutate((p) => (p.exposure = { slowdowns: 20_000, speedups: 20_000, turns: 20_000, limitS: 1205, movingS: 1205 })))).toBe(true);
+    expect(ok(mutate((p) => (p.exposure = { slowdowns: 0, speedups: 0, turns: 0, limitS: 0, movingS: 0, phoneS: 0 })))).toBe(true);
+    expect(ok(mutate((p) => (p.exposure = { slowdowns: 20_000, speedups: 20_000, turns: 20_000, limitS: 1205, movingS: 1205, phoneS: 1205 })))).toBe(true);
   });
 });
 
-describe('FinalizeTripPayloadV4Schema: DashPal', () => {
+describe('FinalizeTripPayloadV5Schema: phone pickups', () => {
+  test('a moderate and a severe pickup, with or without their speeds', () => {
+    const p = mutate((x) =>
+      x.events.push(pickup(4, { tier: 'moderate', durationS: 1, measured: {} }), pickup(5, { tier: 'moderate', durationS: 15, measured: { speedMph: 12.4 } }))
+    );
+    expect(FinalizeTripPayloadV5Schema.parse(p)).toEqual(p);
+  });
+  test('in hand as long as the drive itself (its whole seconds)', () => {
+    expect(ok(mutate((p) => (p.events[2] = pickup(3, { startedAt: T0, durationS: 1200 }))))).toBe(true);
+    expect(ok(mutate((p) => ((p.durationS = 1199.6), (p.events[2] = pickup(3, { startedAt: T0, durationS: 1200 })))))).toBe(true);
+  });
+  test.each<[string, (p: Record<string, any>) => void]>([
+    ['a minor pickup', (p) => (p.events[2].tier = 'minor')],
+    ['a pickup in hand 0 s', (p) => (p.events[2].durationS = 0)],
+    ['a pickup in hand a fraction of a second', (p) => (p.events[2].durationS = 2.5)],
+    ['a pickup in hand longer than the drive', (p) => (p.events[2] = pickup(3, { startedAt: T0, durationS: 1201 }))],
+    ['a pickup before the drive started', (p) => (p.events[2].startedAt = T0 - 1)],
+    ['a pickup after the drive ended', (p) => (p.events[2].startedAt = T0 + 20 * 60_000 + 1)],
+    ['a pickup carrying source dashcam', (p) => (p.events[2].measured.source = 'dashcam')],
+    ['a maxSpeedMph over 250', (p) => (p.events[2].measured.maxSpeedMph = 250.1)],
+    ['a negative maxSpeedMph', (p) => (p.events[2].measured.maxSpeedMph = -1)],
+    ['phone handling (gone since v4)', (p) => p.events.push(event(9, { type: 'phone_handling' as PayloadEvent['type'], tier: 'moderate' }))],
+    ['a missing phoneS', (p) => delete p.exposure.phoneS],
+    ['phoneS over movingS', (p) => (p.exposure.phoneS = 1101)],
+    ['a fractional phoneS', (p) => (p.exposure.phoneS = 10.5)],
+    ['a negative phoneS', (p) => (p.exposure.phoneS = -1)],
+    ['a null phoneS', (p) => (p.exposure.phoneS = null)],
+  ])('rejects %s', (_name, fn) => expect(ok(mutate(fn))).toBe(false));
+});
+
+describe('FinalizeTripPayloadV5Schema: DashPal', () => {
   const dashcam = { deviceId: 'a4c1380f2b7e', movingS: 1100, coveredS: 990, synced: true };
   const drowsy = (n: number, p: Partial<PayloadEvent> = {}) =>
     event(n, { type: 'drowsy', tier: 'severe', durationS: 4, measured: { source: 'dashcam', speedMph: 52 }, ...p });
@@ -130,7 +206,7 @@ describe('FinalizeTripPayloadV4Schema: DashPal', () => {
       x.dashcam = { ...dashcam };
       x.events.push(drowsy(7), drowsy(8, { type: 'eyes_off' }));
     });
-    expect(FinalizeTripPayloadV4Schema.parse(p)).toEqual(p);
+    expect(FinalizeTripPayloadV5Schema.parse(p)).toEqual(p);
   });
   test.each<[string, (p: Record<string, any>) => void]>([
     ['coveredS over movingS', (p) => (p.dashcam = { ...dashcam, coveredS: 1101 })],
@@ -143,24 +219,22 @@ describe('FinalizeTripPayloadV4Schema: DashPal', () => {
   ])('rejects %s', (_name, fn) => expect(ok(mutate(fn))).toBe(false));
 });
 
-describe('FinalizeTripPayloadV4Schema: rejects', () => {
+describe('FinalizeTripPayloadV5Schema: rejects', () => {
   test.each<[string, (p: Record<string, any>) => void]>([
-    ['v other than 4', (p) => (p.v = 3)],
+    ['v other than 5', (p) => (p.v = 4)],
     ['a missing origin', (p) => delete p.origin],
     ['an unknown origin', (p) => (p.origin = 'passive')],
     ['a missing notDrivingExpired', (p) => delete p.notDrivingExpired],
     ['safeMiles (gone in v4)', (p) => (p.safeMiles = 1)],
-    ['a phone pickup', (p) => p.events.push(event(9, { type: 'phone_pickup' as PayloadEvent['type'], tier: 'severe' }))],
     ['a phone handling event', (p) => p.events.push(event(9, { type: 'phone_handling' as PayloadEvent['type'], tier: 'moderate' }))],
     ['units on an event', (p) => (p.events[1].units = 1)],
     ['stoppedInTraffic on an event', (p) => (p.events[0].stoppedInTraffic = true)],
     ['a measured mounted', (p) => (p.events[0].measured.mounted = true)],
-    ['a measured maxSpeedMph', (p) => (p.events[0].measured.maxSpeedMph = 30)],
     ['exposure limitS over movingS', (p) => (p.exposure.limitS = 1101)],
     ['fractional exposure', (p) => (p.exposure.turns = 1.5)],
     ['negative exposure', (p) => (p.exposure.slowdowns = -1)],
     ['a count over 20 000', (p) => (p.exposure.speedups = 20_001)],
-    ['exposure seconds over 12 h', (p) => ((p.exposure.movingS = 43_201), (p.exposure.limitS = 0))],
+    ['exposure seconds over 12 h', (p) => ((p.exposure.movingS = 43_201), (p.exposure.limitS = 0), (p.exposure.phoneS = 0))],
     ['exposure movingS more than 5 s over the drive', (p) => (p.exposure.movingS = 1206)],
     ['an unknown exposure key', (p) => (p.exposure.stops = 3)],
     ['a null exposure', (p) => (p.exposure = null)],
@@ -193,7 +267,51 @@ describe('FinalizeTripPayloadV4Schema: rejects', () => {
   ])('%s', (_name, fn) => expect(ok(mutate(fn))).toBe(false));
 });
 
-const eventV3 = (n: number, p: Partial<PayloadEventV3> = {}): PayloadEventV3 => ({ ...event(n), ...p }) as PayloadEventV3;
+describe('the v4 contract a build from before phone tracking sends', () => {
+  const okV4 = (p: unknown) => FinalizeTripPayloadV4Schema.safeParse(p).success;
+  const mutateV4 = (fn: (p: Record<string, any>) => void) => {
+    const p = validV4() as Record<string, any>;
+    fn(p);
+    return p;
+  };
+  test('a full v4 payload still parses as v4', () => expect(FinalizeTripPayloadV4Schema.parse(validV4())).toEqual(validV4()));
+  test('the v4 event types are those of v5 without the pickup', () => {
+    expect(EVENT_TYPES_V4).toEqual(['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'eyes_off', 'drowsy']);
+    expect(EVENT_TYPES.filter((t) => t !== 'phone_pickup')).toEqual([...EVENT_TYPES_V4]);
+  });
+  test.each<[string, (p: Record<string, any>) => void]>([
+    ['v other than 4', (p) => (p.v = 5)],
+    ['a phone pickup', (p) => p.events.push(eventV4(9, { type: 'phone_pickup' as PayloadEventV4['type'], tier: 'severe', durationS: 4 }))],
+    ['a measured maxSpeedMph', (p) => (p.events[0].measured.maxSpeedMph = 30)],
+    ['phoneS (a v5 key)', (p) => (p.exposure.phoneS = 0)],
+    ['exposure limitS over movingS', (p) => (p.exposure.limitS = 1101)],
+    ['a missing origin', (p) => delete p.origin],
+  ])('rejects %s', (_name, fn) => expect(okV4(mutateV4(fn))).toBe(false));
+});
+
+describe('upgradePayloadV4', () => {
+  test('v5 with no phone seconds; everything else as sent', () => {
+    const up = upgradePayloadV4(validV4());
+    const { v: _v, exposure, ...rest } = validV4();
+    expect(up).toEqual({ ...rest, v: 5, exposure: { ...exposure, phoneS: 0 } });
+    expect(FinalizeTripPayloadV5Schema.parse(up)).toEqual(up);
+  });
+  test('no counters stay no counters (the server estimates them, with no phone seconds)', () => {
+    const p = validV4();
+    delete p.exposure;
+    const up = upgradePayloadV4(p);
+    expect(up).not.toHaveProperty('exposure');
+    expect(up.v).toBe(5);
+  });
+  test('pure: the v4 payload is not changed', () => {
+    const p = validV4();
+    const copy = JSON.parse(JSON.stringify(p));
+    upgradePayloadV4(p);
+    expect(p).toEqual(copy);
+  });
+});
+
+const eventV3 = (n: number, p: Partial<PayloadEventV3> = {}): PayloadEventV3 => ({ ...eventV4(n), ...p }) as PayloadEventV3;
 
 const validV3 = (): FinalizeTripPayloadV3 => ({
   v: 3,
@@ -248,7 +366,7 @@ describe('upgradePayloadV3', () => {
     expect(up).not.toHaveProperty('safeMiles');
     expect(up).not.toHaveProperty('exposure');
     expect(up.events.map((e) => e.type)).toEqual(['hard_brake', 'speeding', 'drowsy']);
-    expect(up.events[0]).toEqual(event(1, { measured: { peakG: 0.42, speedMph: 30 } }));
+    expect(up.events[0]).toEqual(eventV4(1, { measured: { peakG: 0.42, speedMph: 30 } }));
     expect(up.events[1]).not.toHaveProperty('units');
     expect(up.events[1]?.measured).toEqual({ speedMph: 41, limitMph: 30, overMphS: 120.5 });
     expect(up.dashcam).toEqual(validV3().dashcam);
@@ -264,30 +382,50 @@ describe('upgradePayloadV3', () => {
 });
 
 describe('parseFinalizeUpload', () => {
-  test('v4 is read as is', () => {
+  test('v5 is read as is', () => {
     const r = parseFinalizeUpload(valid());
     expect(r.success && r.data).toEqual(valid());
   });
 
-  test('v3 is validated as v3 and upgraded', () => {
-    const r = parseFinalizeUpload(validV3());
-    expect(r.success && r.data).toEqual(upgradePayloadV3(validV3()));
+  test('v4 is validated as v4 and upgraded (no phone seconds)', () => {
+    const r = parseFinalizeUpload(validV4());
+    expect(r.success && r.data).toEqual(upgradePayloadV4(validV4()));
+    expect(r.success && r.data.exposure?.phoneS).toBe(0);
   });
 
-  test('an invalid v3 body is refused', () => {
+  test('v3 is validated as v3 and upgraded through v4', () => {
+    const r = parseFinalizeUpload(validV3());
+    expect(r.success && r.data).toEqual(upgradePayloadV4(upgradePayloadV3(validV3())));
+    expect(r.success && r.data.v).toBe(5);
+  });
+
+  test('an invalid v3 or v4 body is refused, never on the path v', () => {
     const p = validV3() as Record<string, any>;
     p.safeMiles = 13;
     expect(parseFinalizeUpload(p).success).toBe(false);
+    const q = validV4() as Record<string, any>;
+    q.events.push(eventV4(9, { type: 'phone_pickup' as PayloadEventV4['type'], tier: 'severe', durationS: 4 }));
+    const r = parseFinalizeUpload(q);
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some((i) => i.path.join('.') === 'v')).toBe(false);
   });
 
-  test('an unknown version is refused with an issue on the path v (an older server says the same of v4)', () => {
-    const r = parseFinalizeUpload({ ...valid(), v: 5 });
-    expect(r.success).toBe(false);
-    expect(r.error?.issues.some((i) => i.path.join('.') === 'v')).toBe(true);
+  test('an unknown version is refused with an issue on the path v (an older server says the same of v5)', () => {
+    for (const v of [6, 2, '5', undefined]) {
+      const r = parseFinalizeUpload({ ...valid(), v });
+      expect(r.success).toBe(false);
+      expect(r.error?.issues.some((i) => i.path.join('.') === 'v')).toBe(true);
+    }
     for (const body of [null, 'x', 42, {}]) expect(parseFinalizeUpload(body).success).toBe(false);
   });
 
-  test('an invalid v4 body never names the path v', () => {
+  test('an older server (v3 and v4 only) refuses a v5 upload on the path v', () => {
+    const r = FinalizeTripPayloadV4Schema.safeParse(valid());
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some((i) => i.path.join('.') === 'v')).toBe(true);
+  });
+
+  test('an invalid v5 body never names the path v', () => {
     const r = parseFinalizeUpload(mutate((p) => (p.miles = -1)));
     expect(r.success).toBe(false);
     expect(r.error?.issues.some((i) => i.path.join('.') === 'v')).toBe(false);
@@ -327,12 +465,14 @@ describe('FinalizeTripResponseSchema', () => {
 });
 
 describe('trip actions', () => {
-  test('the report reasons, with no "mounted"', () => expect(DISPUTE_REASONS).toEqual(['hazard', 'wrong_limit', 'camera_wrong', 'not_driving']));
+  test('the report reasons, "mounted" for a phone pickup', () =>
+    expect(DISPUTE_REASONS).toEqual(['hazard', 'wrong_limit', 'camera_wrong', 'mounted', 'not_driving']));
   test('a dispute and a not-driving request', () => {
     const dispute = { action: 'dispute', clientTripId: uuid(1), eventId: uuid(2), reason: 'camera_wrong' };
     expect(DisputeActionSchema.parse(dispute)).toEqual(dispute);
     expect(TripActionSchema.parse({ action: 'not_driving', clientTripId: uuid(1) })).toEqual({ action: 'not_driving', clientTripId: uuid(1) });
-    expect(DisputeActionSchema.safeParse({ ...dispute, reason: 'mounted' }).success).toBe(false);
+    expect(DisputeActionSchema.parse({ ...dispute, reason: 'mounted' })).toEqual({ ...dispute, reason: 'mounted' });
+    expect(DisputeActionSchema.safeParse({ ...dispute, reason: 'passenger' }).success).toBe(false);
     expect(NotDrivingActionSchema.safeParse({ action: 'not_driving', clientTripId: uuid(1), previousStatus: 'scored' }).success).toBe(false);
   });
   test('the answers', () => {
@@ -355,7 +495,8 @@ const asExposure = (e: ExposureWire): Exposure => e;
 const asExposureWire = (e: Exposure): ExposureWire => e;
 test('wire types are assignable to the scoring types', () => {
   expect(asDriveEvent(event(1)).type).toBe('hard_brake');
-  expect(EVENT_TYPES.map(asEventType).map(asWireType)).toEqual(['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'eyes_off', 'drowsy']);
-  const e = { slowdowns: 1, speedups: 2, turns: 3, limitS: 4, movingS: 5 };
+  expect(asDriveEvent(pickup(2)).measured?.maxSpeedMph).toBe(38.4);
+  expect(EVENT_TYPES.map(asEventType).map(asWireType)).toEqual(['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'eyes_off', 'drowsy']);
+  const e = { slowdowns: 1, speedups: 2, turns: 3, limitS: 4, movingS: 5, phoneS: 4 };
   expect(asExposureWire(asExposure(e))).toEqual(e);
 });

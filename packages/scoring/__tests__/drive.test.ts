@@ -6,6 +6,7 @@ import {
   dashcamDrive,
   isDashcamType,
   keepDashcamEvents,
+  phonePickupTier,
   speedTier,
   speedTolerance,
   speedingChargedS,
@@ -13,7 +14,7 @@ import {
   type DriveEvent,
   type EventType,
 } from '../src/drive';
-import { SPEEDING_GRACE_S } from '../src/thresholds';
+import { PHONE_SEVERE_S, SPEEDING_GRACE_S } from '../src/thresholds';
 import * as barrel from '../src';
 
 let seq = 0;
@@ -140,15 +141,17 @@ describe('classifyDrive: scored, reason and the events that break clean', () => 
     expect(classifyDrive({ miles: 0.3, durationS: 120, events: [] }).scored).toBe(true);
   });
 
-  test('every active phone-detected event counts; DashPal events never break clean', () => {
+  test('every active phone-detected event counts, a phone pickup included; DashPal events never break clean', () => {
     const events = [
       ev({ type: 'hard_brake', tier: 'minor' }),
       ev({ type: 'speeding', tier: 'severe' }),
+      ev({ type: 'phone_pickup', tier: 'moderate', durationS: 6 }),
       ev({ type: 'drowsy', tier: 'severe' }),
       ev({ type: 'eyes_off', tier: 'severe' }),
     ];
-    expect(classifyDrive({ miles: 5, durationS: 600, events })).toEqual({ scored: true, reason: null, activeEventCount: 2 });
-    expect(classifyDrive({ miles: 5, durationS: 600, events: events.slice(2) }).activeEventCount).toBe(0);
+    expect(classifyDrive({ miles: 5, durationS: 600, events })).toEqual({ scored: true, reason: null, activeEventCount: 3 });
+    expect(classifyDrive({ miles: 5, durationS: 600, events: events.slice(3) }).activeEventCount).toBe(0);
+    expect(classifyDrive({ miles: 5, durationS: 600, events: events.slice(2, 3) }).activeEventCount).toBe(1);
   });
 
   test('removed (disputed) events are ignored', () => {
@@ -170,9 +173,32 @@ describe('classifyDrive: scored, reason and the events that break clean', () => 
   });
 });
 
-test('SCORING_VERSION is 7 and the barrel exports the API, and nothing about points', () => {
-  expect(SCORING_VERSION).toBe(7);
-  expect(barrel.SCORING_VERSION).toBe(7);
+describe('phonePickupTier: moderate up to 15 s in hand, severe beyond', () => {
+  test.each([
+    [1, 'moderate'],
+    [14, 'moderate'],
+    [15, 'moderate'],
+    [16, 'severe'],
+    [240, 'severe'],
+  ] as const)('%f s in hand is %s', (s, tier) => expect(phonePickupTier(s)).toBe(tier));
+  test('reads PHONE_SEVERE_S', () => {
+    expect(PHONE_SEVERE_S).toBe(15);
+    expect(phonePickupTier(PHONE_SEVERE_S)).toBe('moderate');
+    expect(phonePickupTier(PHONE_SEVERE_S + 0.5)).toBe('severe');
+  });
+});
+
+describe('keepDashcamEvents passes a phone pickup untouched', () => {
+  test('a pickup is never dropped by the DashPal limits', () => {
+    const pickup = ev({ type: 'phone_pickup', tier: 'severe', durationS: 20, measured: { speedMph: 4, maxSpeedMph: 31.5 } });
+    expect(keepDashcamEvents([pickup])).toEqual([pickup]);
+  });
+});
+
+test('SCORING_VERSION is 8 and the barrel exports the API, and nothing about points', () => {
+  expect(SCORING_VERSION).toBe(8);
+  expect(barrel.SCORING_VERSION).toBe(8);
+  expect(barrel.phonePickupTier).toBe(phonePickupTier);
   expect(barrel.classifyDrive).toBe(classifyDrive);
   expect(barrel.dashcamDrive).toBe(dashcamDrive);
   expect(barrel.tooShort).toBe(tooShort);
