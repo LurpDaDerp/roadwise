@@ -474,7 +474,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         captureEnd = captureEndOf(session, closedAt, false);
         lastFinalized = { clientTripId: id, ok: true, status: null, dropped: result.dropped, endCause, at: now(), durationS: null, miles: null };
         // Home says why; no OS notification (nothing was kept).
-        await writeDropNotice(db, { clientTripId: id, cause: endCause, reason: result.dropped, at: now() }).catch((e: unknown) => report(e, 'dropNotice'));
+        await writeDropNotice(db, { clientTripId: id, cause: endCause, reason: result.dropped, at: now(), origin: session.origin }).catch((e: unknown) => report(e, 'dropNotice'));
       } else {
         lastFinalized = { clientTripId: id, ok: true, status: result.trip.status, dropped: null, endCause, at: now(), durationS: result.trip.duration_s, miles: result.trip.miles };
       }

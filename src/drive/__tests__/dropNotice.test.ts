@@ -1,7 +1,7 @@
 /** @jest-environment node */
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, migrate, type Db } from '@/data/db';
-import { clearDropNotice, DROP_NOTICE_KEY, parseDropNotice, readDropNotice, writeDropNotice } from '@/drive/dropNotice';
+import { clearDropNotice, DROP_NOTICE_KEY, isManualDrop, parseDropNotice, readDropNotice, writeDropNotice } from '@/drive/dropNotice';
 
 let db: Db;
 beforeEach(async () => {
@@ -29,6 +29,18 @@ test('anything that is not a notice reads as none', async () => {
   for (const cause of ['manual', 'stopped', 'walking', 'orphan', 'limit'] as const) {
     expect(parseDropNotice({ clientTripId: 'a', cause, reason: 'no_movement', at: 1 })).toMatchObject({ cause });
   }
+});
+
+test('the notice keeps how the drive began: an automatic drive’s drop is never one for Home; an older notice with none reads as a Start', async () => {
+  await writeDropNotice(db, { clientTripId: 'a', cause: 'stopped', reason: 'not_driven', at: 1, origin: 'auto' });
+  const auto = (await readDropNotice(db))!;
+  expect(auto).toEqual({ clientTripId: 'a', cause: 'stopped', reason: 'not_driven', at: 1, origin: 'auto' });
+  expect(isManualDrop(auto)).toBe(false);
+  await writeDropNotice(db, { clientTripId: 'b', cause: 'manual', reason: 'no_movement', at: 2, origin: 'manual' });
+  expect(isManualDrop((await readDropNotice(db))!)).toBe(true);
+  const old = parseDropNotice({ clientTripId: 'c', cause: 'stopped', reason: 'no_movement', at: 3, origin: 'robot' })!;
+  expect(old).toEqual({ clientTripId: 'c', cause: 'stopped', reason: 'no_movement', at: 3 });
+  expect(isManualDrop(old)).toBe(true);
 });
 
 test('a "Not driving?" cancel reason parses (it is never written: Home says nothing for it)', () => {

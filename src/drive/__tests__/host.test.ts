@@ -15,7 +15,7 @@ import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
 import { speedTintOf } from '@/drive/displayTint';
-import { readDropNotice, writeDropNotice } from '@/drive/dropNotice';
+import { isManualDrop, readDropNotice, writeDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, DriveEndFailedError, JOURNAL_LINK_KEY, MAX_JOURNAL_REPLAY_ROWS, type PushToStartRequest } from '@/drive/host';
 import { CANCEL_KEY, finishPendingCancel } from '@/drive/cancel';
 import { NOT_DRIVING_BUDGET_MS, NOT_DRIVING_KEY, readBudget } from '@/drive/notDriving';
@@ -717,6 +717,36 @@ describe('iOS: the drive detector', () => {
     expect(await createSamplesRepo(db).count(uuid(9))).toBe(30);
     expect(h.errors).toContain('driveStarted: a native drive started while another is open');
     await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('an automatic drive that is not kept leaves a notice marked automatic (Home says nothing); a Start-card one is marked manual', async () => {
+    const h = buildIos();
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    // Never above walking pace: not driven.
+    await confirm(h, rows(40, { speedMps: 0.5 }));
+    clock = T0 + 45_000;
+    h.detect.endFor('walking', T0 + 45_000);
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.untilIdle();
+    expect(h.host.snapshot().lastFinalized).toMatchObject({ ok: true, dropped: expect.any(String) });
+    const auto = (await readDropNotice(db))!;
+    expect(auto).toMatchObject({ clientTripId: NATIVE, origin: 'auto' });
+    expect(isManualDrop(auto)).toBe(false);
+    await h.host.stop({ endOpenTrip: false });
+
+    const still = rows(30, { speedMps: 0 });
+    const session = createSession({ clientTripId: uuid(9), startedAt: T0, origin: 'manual' });
+    for (const r of still) appendRow(session, r, { unsafe: false, limitUsable: false });
+    session.pending = [];
+    await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0, tz: TZ, status: 'recording' }, T0);
+    const m = build();
+    m.source.setState({ capturing: true });
+    await m.host.boot({ adopt: { session, detectors: createDetectors(() => 'x') } });
+    clock = T0 + 31_000;
+    await m.host.end();
+    expect(await readDropNotice(db)).toMatchObject({ clientTripId: uuid(9), origin: 'manual' });
   });
 
   test('native stops on its own: the drive ends where the car last moved, is stored, and its journal is deleted; no stopCapture', async () => {

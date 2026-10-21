@@ -74,6 +74,7 @@ const mockClearNotice = jest.fn(async () => {
 jest.mock('@/drive/dropNotice', () => ({
   readDropNotice: async () => mockNotice,
   clearDropNotice: () => mockClearNotice(),
+  isManualDrop: jest.requireActual('@/drive/dropNotice').isManualDrop,
 }));
 jest.mock('@/features/drives/useDriveScores', () => ({ useDriveScores: () => new Map([['a1', 97]]) }));
 // The DashPal slot has its own tests.

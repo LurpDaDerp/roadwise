@@ -9,7 +9,7 @@ import { AppState, type ScrollView } from 'react-native';
 
 import { useDataSource, useDb, useDriveCount, useRecentDrives, useStatSums } from '@/data/queries';
 import { useMySummary } from '@/data/server/summary';
-import { clearDropNotice, readDropNotice, type DropNotice } from '@/drive/dropNotice';
+import { clearDropNotice, isManualDrop, readDropNotice, type DropNotice } from '@/drive/dropNotice';
 import { useDrive, useDriveControls } from '@/drive/useDrive';
 import { useCoaching } from '@/features/analytics/useAnalytics';
 import { autoDrivesOn, useAutoDrives } from '@/features/autoDrives/useAutoDrives';
@@ -37,10 +37,8 @@ import { clearHomeNotice, useHomeNotice } from './homeNotice';
 import { HomeView } from './HomeView';
 import { dropCopy, type StartRefusal } from './StartDrive';
 
-/** A stored drop notice may say how its drive started; only a manual Start's drop is worth a line. */
-export function isManualDrop(n: DropNotice & { origin?: 'auto' | 'manual' }): boolean {
-  return n.origin !== 'auto';
-}
+/** Only a Start-card drive's drop is worth a line (`isManualDrop`): an automatic drive's says nothing. */
+export { isManualDrop };
 
 export function HomeScreen() {
   const router = useRouter();

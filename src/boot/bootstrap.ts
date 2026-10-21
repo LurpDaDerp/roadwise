@@ -332,7 +332,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       ...dashcamFinalizeDeps(db),
     });
     if (!isDropped(result)) return 'finalized';
-    await writeDropNotice(db, { clientTripId: result.clientTripId, cause: 'orphan', reason: result.dropped, at: now() }).catch((e: unknown) => onError(e, 'dropNotice'));
+    await writeDropNotice(db, { clientTripId: result.clientTripId, cause: 'orphan', reason: result.dropped, at: now(), origin: session.origin }).catch((e: unknown) => onError(e, 'dropNotice'));
     return 'dropped';
   };
 
