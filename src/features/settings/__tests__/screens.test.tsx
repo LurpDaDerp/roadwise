@@ -1,14 +1,12 @@
 /**
- * The settings screens: the root (the forgot-to-start reminder, units, state), alerts (voice off by default,
+ * The settings screens: the root (Automatic drives on an iPhone, what friends see, units), alerts (voice off by default,
  * style, test), account (export, delete, sign out) and delete account. Device settings are an
  * in-memory table; the server, session and drive state are stand-ins.
  */
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react-native';
 
-import { createFakeDriveSense } from '@drive-sense';
-
-import { answerRpc, appWorld, clearQueryClients, fakeAdapter, fakeAppState, snap, tap } from '@/features/permissions/__fixtures__/harness';
-import { reminderCopy } from '@/features/reminder';
+import { resetAutoDrivesForTests } from '@/features/autoDrives/useAutoDrives';
+import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
 import { APPEARANCE_KEY, createAppearanceStore } from '@/ui/appearance';
 
 import { alertStyleCopy } from '../alerts/copy';
@@ -20,7 +18,7 @@ import { settingsCopy as copy } from '../copy';
 import { DeleteAccountScreen } from '../DeleteAccountScreen';
 import { UNITS_KEY } from '../localPrefs';
 import { SETTINGS_HREFS } from '../routes';
-import { SettingsScreen } from '../SettingsScreen';
+import { autoDrivesLine, SettingsScreen } from '../SettingsScreen';
 
 const mockRpc = jest.fn();
 jest.mock('@/data/server/rpc', () => {
@@ -49,6 +47,10 @@ jest.mock('@/drive/useDrive', () => ({
 }));
 jest.mock('@/drive/policy', () => ({ isBusyStatus: (s: string) => s === 'recording' || s === 'finalizing' }));
 jest.mock('../deviceWipe', () => ({ wipeThisPhone: jest.fn(async () => {}) }));
+/** The native automatic-drive status (null: Android). */
+const mockAutoStatus = jest.fn<unknown, []>(() => null);
+jest.mock('@/features/autoDrives/port', () => ({ readAutoDetectStatus: async () => mockAutoStatus() }));
+const ALL_ON = { location: 'always', precise: true, motion: 'granted', backgroundRefresh: 'available', liveActivities: true, canAskAlways: false };
 
 const SUMMARY = {
   profile: {
@@ -57,6 +59,10 @@ const SUMMARY = {
     units: 'mi',
     state: null,
     heatmap_visibility: 'only_me',
+    share_rating: true,
+    share_categories: false,
+    share_achievements: false,
+    share_stats: false,
     league_eligible: true,
     onboarded_at: '2026-10-01T00:00:00Z',
   },
@@ -74,6 +80,8 @@ beforeEach(() => {
   mockSession.signOut.mockClear();
   mockSession.signOut.mockImplementation(async () => ({ signedOut: true }));
   mockDrive.status = 'idle';
+  mockAutoStatus.mockReturnValue(null);
+  resetAutoDrivesForTests();
   resetVoicePrefForTests();
   resetAlertStylePrefForTests();
 });
@@ -90,82 +98,93 @@ function scrollsWithin(el: unknown, panelTestID: string): boolean {
 }
 
 describe('Settings', () => {
-  describe('the forgot-to-start reminder', () => {
-    const world = (platform: 'ios' | 'android', adapter = fakeAdapter(snap({ platform }))) => {
-      const native = createFakeDriveSense({ platform });
-      const appState = fakeAppState();
-      return { native, adapter, appState, deps: { reminder: { native, adapter, platform, appState } } };
-    };
-
-    it('is off by default; turning it on asks for what it needs (iOS: Always) and shows what is still missing', async () => {
-      const r = world('ios', fakeAdapter(snap({ platform: 'ios', location: 'foreground' }), { always: 'whenInUse' }));
+  describe('Automatic drives (iPhone)', () => {
+    it('says On, first in Driving, and opens Settings › Permissions; it has no switch', async () => {
+      mockAutoStatus.mockReturnValue({ armed: true, status: 'on', missing: [], permissions: ALL_ON });
       const w = await appWorld();
-      await w.render(<SettingsScreen deps={r.deps} />);
-      const toggle = await screen.findByTestId('settings-reminder');
-      expect(toggle.props.value).toBe(false);
-      expect(screen.getByText(reminderCopy.lines.off, { includeHiddenElements: true })).toBeOnTheScreen();
-      r.native.setTripReminderEnv({ missing: ['locationAlways'] });
-      await act(async () => {
-        fireEvent(toggle, 'valueChange', true);
-      });
-      await waitFor(() => expect(screen.getByTestId('settings-reminder').props.value).toBe(true));
-      expect(r.adapter.log).toContain('requestAlwaysForReminder');
-      expect(screen.getByText(reminderCopy.lines.needsAlways, { includeHiddenElements: true })).toBeOnTheScreen();
-      await tap('settings-reminder-openSettings');
-      expect(r.adapter.log).toContain('openAppSettings');
-      // The reminder never starts a drive.
-      expect(r.native.calls.filter((c) => c.startsWith('startCapture'))).toEqual([]);
+      await w.render(<SettingsScreen />);
+      const row = await screen.findByTestId('settings-auto-drives');
+      expect(row).toHaveTextContent('Automatic drives', { exact: false });
+      expect(screen.getByText('On. RoadWise notices your drives.')).toBeOnTheScreen();
+      expect(screen.queryByRole('switch', { name: /Automatic drives/ })).toBeNull();
+      await tap('settings-auto-drives');
+      expect(mockRouter.push).toHaveBeenLastCalledWith(SETTINGS_HREFS.permissions);
     });
 
-    it('Android, on: the honest line; turning it off forgets it', async () => {
-      const r = world('android');
-      await r.native.setTripReminder(true);
-      const w = await appWorld();
-      await w.render(<SettingsScreen deps={r.deps} />);
-      expect(await screen.findByText(reminderCopy.lines.onAndroid, { includeHiddenElements: true })).toBeOnTheScreen();
-      await act(async () => {
-        fireEvent(screen.getByTestId('settings-reminder'), 'valueChange', false);
+    it('off names the first thing it needs', async () => {
+      mockAutoStatus.mockReturnValue({
+        armed: true,
+        status: 'needs',
+        missing: ['motion', 'backgroundRefresh'],
+        permissions: { ...ALL_ON, motion: 'denied', backgroundRefresh: 'denied' },
       });
-      await waitFor(() => expect(r.native.tripReminderOn).toBe(false));
-      expect(r.adapter.log).toEqual([]);
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      expect(await screen.findByText('Off. Needs Motion & Fitness.')).toBeOnTheScreen();
     });
 
-    it('is read again when RoadWise comes back to the front', async () => {
-      const r = world('android');
-      const w = await appWorld();
-      await w.render(<SettingsScreen deps={r.deps} />);
-      await screen.findByTestId('settings-reminder');
-      r.native.setTripReminderEnv({ available: false });
-      await act(async () => {
-        r.appState.foreground();
-      });
-      expect(await screen.findByText(reminderCopy.lines.unavailable, { includeHiddenElements: true })).toBeOnTheScreen();
-      expect(screen.getByTestId('settings-reminder').props.disabled).toBe(true);
+    it('the line follows the order Location Always, Precise Location, Motion & Fitness, Background App Refresh', () => {
+      expect(autoDrivesLine({ state: 'off', missing: ['locationAlways', 'motion'] })).toBe('Off. Needs Location set to Always.');
+      expect(autoDrivesLine({ state: 'off', missing: ['precise'] })).toBe('Off. Needs Precise Location.');
+      expect(autoDrivesLine({ state: 'off', missing: ['backgroundRefresh'] })).toBe('Off. Needs Background App Refresh.');
+      expect(autoDrivesLine({ state: 'unknown' })).toBeNull();
+      expect(autoDrivesLine({ state: 'unsupported' })).toBeNull();
     });
 
-    it('on a phone that can no longer run it, a reminder still on can be turned off', async () => {
-      const r = world('android');
-      await r.native.setTripReminder(true);
-      r.native.setTripReminderEnv({ available: false });
-      const w = await appWorld();
-      await w.render(<SettingsScreen deps={r.deps} />);
-      expect(await screen.findByText(reminderCopy.lines.unavailable, { includeHiddenElements: true })).toBeOnTheScreen();
-      const toggle = screen.getByTestId('settings-reminder');
-      expect(toggle.props.value).toBe(true);
-      expect(toggle.props.disabled).toBe(false);
-      await act(async () => {
-        fireEvent(toggle, 'valueChange', false);
-      });
-      await waitFor(() => expect(r.native.tripReminderOn).toBe(false));
-      expect(screen.getByTestId('settings-reminder').props.disabled).toBe(true);
-    });
-
-    it('is not shown where the native module is missing', async () => {
+    it('is not shown on Android, and there is no reminder or state row', async () => {
       const w = await appWorld();
       await w.render(<SettingsScreen />);
       await screen.findByTestId('settings-alerts');
       await act(async () => {});
+      expect(screen.queryByTestId('settings-auto-drives')).toBeNull();
       expect(screen.queryByTestId('settings-reminder')).toBeNull();
+      expect(screen.queryByTestId('settings-state')).toBeNull();
+      expect(screen.queryByTestId('settings-license')).toBeNull();
+    });
+  });
+
+  describe('Privacy: what friends see', () => {
+    it('the zones row, then Safety Rating on and the other three off by default, then the heat map', async () => {
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      await waitFor(() => expect(screen.getByTestId('settings-share-rating').props.value).toBe(true));
+      for (const id of ['categories', 'achievements', 'stats']) expect(screen.getByTestId(`settings-share-${id}`).props.value).toBe(false);
+      expect(screen.getByText('Friends can see your Safety Rating', { includeHiddenElements: true })).toBeOnTheScreen();
+      expect(screen.getByText('Friends can see your category scores', { includeHiddenElements: true })).toBeOnTheScreen();
+      expect(screen.getByText('Friends can see your badges', { includeHiddenElements: true })).toBeOnTheScreen();
+      expect(screen.getByText('Friends can see your drives, distance and events', { includeHiddenElements: true })).toBeOnTheScreen();
+      expect(screen.getByTestId('settings-heatmap-visibility')).toBeOnTheScreen();
+    });
+
+    it.each([
+      ['rating', 'p_share_rating', false],
+      ['categories', 'p_share_categories', true],
+      ['achievements', 'p_share_achievements', true],
+      ['stats', 'p_share_stats', true],
+    ] as const)('%s saves through update_profile and shows the change at once', async (id, param, next) => {
+      answerRpc(mockRpc, { get_my_summary: SUMMARY, update_profile: {} });
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      const toggle = await screen.findByTestId(`settings-share-${id}`);
+      await waitFor(() => expect(toggle.props.disabled).toBe(false));
+      await act(async () => {
+        fireEvent(toggle, 'valueChange', next);
+      });
+      await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { [param]: next }));
+      expect(screen.getByTestId(`settings-share-${id}`).props.value).toBe(next);
+    });
+
+    it('a failed change goes back and says it did not save', async () => {
+      answerRpc(mockRpc, { get_my_summary: SUMMARY, update_profile: new Error('offline') });
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      const toggle = await screen.findByTestId('settings-share-stats');
+      await waitFor(() => expect(toggle.props.disabled).toBe(false));
+      await act(async () => {
+        fireEvent(toggle, 'valueChange', true);
+      });
+      expect(await screen.findByTestId('settings-save-error')).toBeOnTheScreen();
+      await waitFor(() => expect(screen.getByTestId('settings-share-stats').props.value).toBe(false));
     });
   });
 
@@ -207,23 +226,8 @@ describe('Settings', () => {
     await waitFor(async () => expect(await w.settings.get(UNITS_KEY)).toBe('km'));
   });
 
-  it('the state goes through update_profile, and there is no license setting', async () => {
-    const w = await appWorld();
-    await w.render(<SettingsScreen />);
-    await screen.findByTestId('settings-state');
-    expect(screen.queryByTestId('settings-license')).toBeNull();
-    await tap('settings-state');
-    await act(async () => {
-      fireEvent.press(await screen.findByRole('radio', { name: 'Ohio' }));
-    });
-    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_state: 'OH' }));
-  });
-
-  it('heat map visibility offers Only me and Friends; a saved clan setting shows as Only me', async () => {
-    answerRpc(mockRpc, {
-      get_my_summary: { ...SUMMARY, profile: { ...SUMMARY.profile, heatmap_visibility: 'clan' } },
-      update_profile: {},
-    });
+  it('heat map visibility offers Only me and Friends, Only me by default', async () => {
+    answerRpc(mockRpc, { get_my_summary: SUMMARY, update_profile: {} });
     const w = await appWorld();
     await w.render(<SettingsScreen />);
     const control = within(await screen.findByTestId('settings-heatmap-visibility'));

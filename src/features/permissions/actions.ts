@@ -1,8 +1,9 @@
 /**
  * What a tap on a missing permission does, from Home's row, Settings › Permissions and Start Drive's
  * Fix it alike. A request is the driver's own tap, so it is never throttled, and it stamps the 14-day
- * history so the app's own later offers wait (policy.ts). Bluetooth, the camera and the reminder's
- * need never request: they only open the phone's settings.
+ * history so the app's own later offers wait (policy.ts). Bluetooth, the camera and Background App
+ * Refresh never request: they only open the phone's settings. Location Always asks once (iOS shows
+ * that prompt once), then opens Settings.
  *
  * The no-effect rule: after a request the board is read again; if the permission is still missing
  * in the same state (a dialog the phone did not show, one dismissed, Android notifications switched
@@ -13,7 +14,7 @@ import { recordPrompt, type NotificationAccess, type PermissionsAdapter, type Se
 
 import type { Fix } from './board';
 import { markToSettings } from './homePrefs';
-import { permissionDef, REMINDER_CHANNEL_ID, signature, type MissingState, type PermissionBoardRead, type PermissionId } from './registry';
+import { permissionDef, signature, type MissingState, type PermissionBoardRead, type PermissionId } from './registry';
 import { markSettingsReturn } from './usePermissionHealth';
 
 export interface FixDeps {
@@ -39,10 +40,10 @@ const allowed = (n: NotificationAccess) => n === 'granted' || n === 'provisional
 const stamp = (deps: FixDeps, permission: 'location' | 'motion' | 'notifications') =>
   recordPrompt(deps.settings, permission, deps.now()).catch(() => {});
 
-/** Whether this id and state have a phone prompt at all (never Bluetooth, the camera or the reminder's need). */
+/** Whether this id and state have a phone prompt at all (never Bluetooth, the camera or Background App Refresh). */
 export function requestable(id: PermissionId, state: MissingState): boolean {
   if (!state.canAsk) return false;
-  return id === 'location' || id === 'precise' || id === 'motion' || id === 'notifications';
+  return id === 'location' || id === 'precise' || id === 'locationAlways' || id === 'motion' || id === 'notifications';
 }
 
 async function request(id: PermissionId, state: MissingState, deps: FixDeps): Promise<void> {
@@ -59,6 +60,10 @@ async function request(id: PermissionId, state: MissingState, deps: FixDeps): Pr
     case 'precise':
       // Fine and coarse again: Android 12+ shows its "change to precise" dialog.
       await adapter.requestLocationForeground();
+      await stamp(deps, 'location');
+      return;
+    case 'locationAlways':
+      await adapter.requestLocationAlways();
       await stamp(deps, 'location');
       return;
     case 'motion':
@@ -82,8 +87,6 @@ async function openTarget(state: MissingState, deps: FixDeps): Promise<void> {
   switch (state.target) {
     case 'locationServices':
       return deps.adapter.openLocationServicesSettings();
-    case 'reminderChannel':
-      return deps.adapter.openNotificationChannelSettings(REMINDER_CHANNEL_ID);
     case 'app':
       return deps.adapter.openAppSettings();
   }

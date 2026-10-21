@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 
 import { Section, TopBar } from '@/features/settings/parts';
 import { Banner, Card, Screen, Skeleton, Text, useTheme } from '@/ui';
@@ -83,7 +83,7 @@ export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps })
                 title={rowTitle(r.id, ctx)}
                 word={statusWord(r.state)}
                 required={r.def.need === 'required'}
-                detail={rowDetail(r.id, r.state, ctx, { reminderOn: read.reminder?.enabled === true })}
+                detail={rowDetail(r.id, r.state, ctx)}
                 fixLabel={label}
                 busy={busy === r.id}
                 onFix={() => void onFix(r.id)}
@@ -105,7 +105,7 @@ export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps })
       <View style={{ flexDirection: 'row', gap: th.space.sm, alignItems: 'flex-start' }}>
         <Ionicons name="lock-closed-outline" size={th.size.icon} color={th.colors.textMuted} />
         <Text variant="footnote" tone="muted" style={{ flex: 1 }}>
-          {copy.never}
+          {copy.about[(board.read?.snapshot.platform ?? Platform.OS) === 'ios' ? 'ios' : 'android']}
         </Text>
       </View>
     </Screen>

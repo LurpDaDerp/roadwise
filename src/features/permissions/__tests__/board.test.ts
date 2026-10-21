@@ -1,6 +1,4 @@
 /** The board: one read of the phone, Home's single row, Settings' list, the fix of a tap and the summary. */
-import type { TripReminderStatus } from '@drive-sense';
-
 import type { PermissionSnapshot } from '@/core/permissions';
 
 import { snap } from '../__fixtures__/harness';
@@ -10,12 +8,10 @@ import type { PermissionBoardRead } from '../registry';
 
 function board(over: Partial<PermissionSnapshot> = {}, rest: Partial<Omit<PermissionBoardRead, 'snapshot'>> = {}): PermissionBoardRead {
   const snapshot = snap(over);
-  return { snapshot, androidApi: snapshot.platform === 'android' ? 34 : null, paired: false, bluetooth: null, camera: null, reminder: null, ...rest };
+  return { snapshot, androidApi: snapshot.platform === 'android' ? 34 : null, paired: false, bluetooth: null, camera: null, ...rest };
 }
 
 const prefs = (over: Partial<HomePrefs> = {}): HomePrefs => ({ ...EMPTY_HOME_PREFS, ...over });
-const reminderOn: TripReminderStatus = { enabled: true, state: 'on', missing: [] };
-const reminderOff: TripReminderStatus = { enabled: false, state: 'off', missing: [] };
 
 const allOff = board({ location: 'undetermined', precise: null, motion: 'undetermined', notifications: 'undetermined' });
 
@@ -41,7 +37,7 @@ describe('homeCard', () => {
   });
 
   it('never the camera, idle or unknown rows', () => {
-    const read = board({ motion: null }, { camera: { access: 'denied', canAskAgain: false }, reminder: reminderOff });
+    const read = board({ motion: null }, { camera: { access: 'denied', canAskAgain: false } });
     expect(homeCard(read, prefs(), false)).toEqual({ row: null, more: 0 });
   });
 
@@ -82,12 +78,23 @@ describe('toSettingsApplies', () => {
 });
 
 describe('settingsRows', () => {
-  it('iOS lists the reminder row whatever its state; Android only while the reminder is on', () => {
-    expect(settingsRows(board({ platform: 'ios' }, { reminder: reminderOff }), prefs()).map((r) => r.id)).toContain('reminderAccess');
-    expect(settingsRows(board({ platform: 'ios' }, { reminder: null }), prefs()).map((r) => r.id)).toContain('reminderAccess');
-    expect(settingsRows(board({ platform: 'android' }, { reminder: reminderOff }), prefs()).map((r) => r.id)).not.toContain('reminderAccess');
-    expect(settingsRows(board({ platform: 'android' }, { reminder: null }), prefs()).map((r) => r.id)).not.toContain('reminderAccess');
-    expect(settingsRows(board({ platform: 'android' }, { reminder: reminderOn }), prefs()).map((r) => r.id)).toContain('reminderAccess');
+  it('iOS lists Location Always and Background App Refresh in order; Android lists neither', () => {
+    const ios = settingsRows(board({ platform: 'ios', location: 'always', backgroundRefresh: 'available' }), prefs()).map((r) => r.id);
+    expect(ios).toEqual(['location', 'precise', 'locationAlways', 'motion', 'backgroundRefresh', 'notifications', 'bluetooth', 'camera']);
+    const android = settingsRows(board({ platform: 'android' }), prefs()).map((r) => r.id);
+    expect(android).toEqual(['location', 'precise', 'motion', 'notifications', 'bluetooth', 'camera']);
+  });
+
+  it('Background App Refresh is left out when it cannot be read', () => {
+    expect(settingsRows(board({ platform: 'ios', backgroundRefresh: null }), prefs()).map((r) => r.id)).not.toContain('backgroundRefresh');
+  });
+
+  it('iPhone Home: Location Always, then Background App Refresh, after the rows a drive needs', () => {
+    const read = board({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied', motion: 'undetermined' });
+    const card = homeCard(read, prefs(), false);
+    expect(card.row?.id).toBe('locationAlways');
+    expect(card.more).toBe(2);
+    expect(overall(settingsRows(read, prefs()))).toBe('attention');
   });
 
   it('precise only while location is allowed; motion left out when it cannot be reported', () => {
@@ -107,7 +114,7 @@ describe('settingsRows', () => {
 
 describe('overall', () => {
   it('ok with idle and unknown rows', () => {
-    expect(overall(settingsRows(board({ precise: null, motion: null }, { reminder: null }), prefs()))).toBe('ok');
+    expect(overall(settingsRows(board({ precise: null, motion: null }), prefs()))).toBe('ok');
   });
 
   it('broken with location, Location Services or precise missing; otherwise attention', () => {
@@ -139,10 +146,6 @@ describe('readPermissionBoard', () => {
         calls.push('camera');
         return { access: 'undetermined', canAskAgain: true };
       },
-      reminder: async () => {
-        calls.push('reminder');
-        return reminderOn;
-      },
       ...over,
     };
     return { d, calls };
@@ -152,7 +155,7 @@ describe('readPermissionBoard', () => {
     const { d, calls } = deps();
     const read = await readPermissionBoard(d);
     expect(calls).not.toContain('bluetoothPermission');
-    expect(read).toMatchObject({ paired: false, bluetooth: null, androidApi: 33, camera: { access: 'undetermined' }, reminder: reminderOn });
+    expect(read).toMatchObject({ paired: false, bluetooth: null, androidApi: 33, camera: { access: 'undetermined' } });
   });
 
   it('paired: it is read', async () => {
@@ -163,8 +166,7 @@ describe('readPermissionBoard', () => {
 
   it('each extra read failing alone nulls only its own field', async () => {
     const boom = () => Promise.reject(new Error('x'));
-    expect(await readPermissionBoard(deps({ camera: boom }).d)).toMatchObject({ camera: null, reminder: reminderOn });
-    expect(await readPermissionBoard(deps({ reminder: boom }).d)).toMatchObject({ reminder: null, camera: { access: 'undetermined' } });
+    expect(await readPermissionBoard(deps({ camera: boom }).d)).toMatchObject({ camera: null });
     expect(await readPermissionBoard(deps({ paired: boom }).d)).toMatchObject({ paired: false, bluetooth: null });
     expect(await readPermissionBoard(deps({ paired: async () => true, bluetoothPermission: boom }).d)).toMatchObject({ paired: true, bluetooth: null });
   });

@@ -10,8 +10,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo } from 'react';
 import { AppState, Platform } from 'react-native';
 
-import type { TripReminderStatus } from '@drive-sense';
-
 import type { PermissionsAdapter } from '@/core/permissions';
 import { asPaired, PAIRED_KEY } from '@/dashcam/keys';
 import { activeDashcam, subscribeActiveDashcam } from '@/dashcam/registry';
@@ -20,7 +18,6 @@ import { createSettingsRepo } from '@/data/db/settings';
 import type { AppStateLike } from '@/data/foreground';
 import { useDb } from '@/data/queries/context';
 import { useSession } from '@/data/supabase/session';
-import { readReminderStatus } from '@/features/reminder/enable';
 
 import { runFix, type FixOutcome } from './actions';
 import { fixFor, readPermissionBoard, toSettingsApplies } from './board';
@@ -76,8 +73,6 @@ const defaultEnsureChannels = async () => (await import('@/features/notification
 export interface PermissionBoardDeps {
   adapter?: PermissionsAdapter;
   appState?: AppStateLike;
-  /** Default: the reminder's own status read (rejects where drive-sense is absent). */
-  reminder?: () => Promise<TripReminderStatus>;
   androidApi?: number | null;
   /** Default: the live DashPal runtime (`watchDashcamPermissions`). */
   watchDashcam?: (onChange: () => void) => () => void;
@@ -103,7 +98,6 @@ export interface PermissionBoard {
 export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBoard {
   const adapter = deps.adapter ?? defaultPermissionsAdapter();
   const appState = deps.appState ?? AppState;
-  const reminder = deps.reminder ?? readReminderStatus;
   const androidApi = deps.androidApi === undefined ? defaultAndroidApi() : deps.androidApi;
   const watch = deps.watchDashcam ?? watchDashcamPermissions;
   const now = deps.now ?? Date.now;
@@ -133,12 +127,11 @@ export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBo
         paired: async () => asPaired(await settings.get<unknown>(PAIRED_KEY)) !== null,
         bluetoothPermission: () => adapter.bluetoothPermission(),
         camera: () => adapter.camera(),
-        reminder,
       });
     } catch {
       return null;
     }
-  }, [queryClient, userId, adapter, androidApi, settings, reminder]);
+  }, [queryClient, userId, adapter, androidApi, settings]);
 
   const board = useQuery({ queryKey: boardKey, queryFn: readBoard, staleTime: SHARED_READ_MS, retry: false });
   const prefsQuery = useQuery({ queryKey: prefsKey, queryFn: () => readHomePrefs(settings), staleTime: Infinity, retry: false });

@@ -4,17 +4,24 @@
  * phone (`PermissionBoardRead`) into a state. Pure: nothing here touches the OS.
  *
  * Bluetooth and the camera are never requested from here (their `canAsk` is always false): the OS
- * asks for them only where the spec puts them, the DashPal setup and a QR scanner.
+ * asks for them only where the spec puts them, the DashPal setup and a QR scanner. Location Always
+ * and Background App Refresh are iPhone rows: automatic drives need them.
  */
-import type { TripReminderStatus } from '@drive-sense';
-
 import type { BluetoothPermission, CameraAccess, PermissionPlatform, PermissionSnapshot } from '@/core/permissions';
 
-export type PermissionId = 'location' | 'precise' | 'motion' | 'notifications' | 'reminderAccess' | 'bluetooth' | 'camera';
+export type PermissionId =
+  | 'location'
+  | 'precise'
+  | 'locationAlways'
+  | 'motion'
+  | 'backgroundRefresh'
+  | 'notifications'
+  | 'bluetooth'
+  | 'camera';
 export type Need = 'required' | 'recommended' | 'optional';
 export type MissingReason = 'notYet' | 'denied' | 'servicesOff';
-/** Where "Open Settings" goes: the app's own page, Android's Location page, or the reminder channel's page. */
-export type SettingsTarget = 'app' | 'locationServices' | 'reminderChannel';
+/** Where "Open Settings" goes: the app's own page, or Android's Location page. */
+export type SettingsTarget = 'app' | 'locationServices';
 
 /** What one read of the phone says about one permission. */
 export type PermState =
@@ -36,8 +43,6 @@ export interface PermissionBoardRead {
   bluetooth: BluetoothPermission | null;
   /** null: the read failed. */
   camera: CameraAccess | null;
-  /** null: no reminder module here (Expo Go, tests) or the read failed. */
-  reminder: TripReminderStatus | null;
 }
 
 export interface PermissionDef {
@@ -50,9 +55,6 @@ export interface PermissionDef {
   homeRow: boolean;
   state(read: PermissionBoardRead): PermState;
 }
-
-/** The Android channel of the forgot-to-start reminder's note (`TripReminderNotifier.CHANNEL_ID`). */
-export const REMINDER_CHANNEL_ID = 'trip_reminder';
 
 /** Bluetooth scans use location on Android 11 and lower, so there is no Bluetooth permission there. */
 export const ANDROID_NEARBY_DEVICES_API = 31;
@@ -110,26 +112,27 @@ function notificationsState(read: PermissionBoardRead): PermState {
   return missing(s.notifications === 'undetermined' ? 'notYet' : 'denied', s.notificationsCanAskAgain);
 }
 
-function reminderAccessState(read: PermissionBoardRead): PermState {
-  const r = read.reminder;
-  if (r === null) return UNKNOWN;
-  if (!r.enabled) return IDLE;
-  if (r.state === 'unavailable') return UNKNOWN;
-  const needs = r.state === 'needs' ? r.missing : [];
-  if (read.snapshot.platform === 'ios') {
-    // The location row comes first; the reminder's Always need shows once location is allowed.
-    if (locationState(read).kind !== 'granted') return IDLE;
-    if (needs.includes('locationAlways')) return missing('denied', false);
-    // The reminder reports no Always need: granted when the phone agrees; two reads that disagree
-    // (one taken just before a change) can't say.
-    return read.snapshot.location === 'always' ? GRANTED : UNKNOWN;
+/**
+ * iPhone: Location set to Always, which automatic drives need. Not in use until location is allowed
+ * (the location row comes first). iOS shows its Always prompt once; after that only Settings.
+ */
+function locationAlwaysState(read: PermissionBoardRead): PermState {
+  const s = read.snapshot;
+  if (locationState(read).kind !== 'granted') return IDLE;
+  if (s.location === 'always') return GRANTED;
+  return missing(s.canAskAlways === true ? 'notYet' : 'denied', s.canAskAlways === true);
+}
+
+/** iPhone: Background App Refresh, so iOS can wake RoadWise when a drive starts. Only Settings changes it. */
+function backgroundRefreshState(read: PermissionBoardRead): PermState {
+  switch (read.snapshot.backgroundRefresh) {
+    case 'available':
+      return GRANTED;
+    case 'denied':
+      return missing('denied', false);
+    default:
+      return UNKNOWN; // restricted (nothing the driver can do), or not read
   }
-  // Android: only the reminder's own channel switched off is this row; app-wide notifications are
-  // the notifications row (with them off no note can appear, so this row is not in use until they
-  // are on), and motion is the motion row.
-  if (notificationsState(read).kind !== 'granted') return IDLE;
-  if (needs.includes('notifications')) return missing('denied', false, 'reminderChannel');
-  return GRANTED;
 }
 
 function bluetoothState(read: PermissionBoardRead): PermState {
@@ -158,13 +161,15 @@ function cameraState(read: PermissionBoardRead): PermState {
 }
 
 const BOTH: readonly PermissionPlatform[] = ['ios', 'android'];
+const IOS: readonly PermissionPlatform[] = ['ios'];
 
 export const PERMISSIONS: readonly PermissionDef[] = [
   { id: 'location', order: 10, need: 'required', platforms: BOTH, homeRow: true, state: locationState },
   { id: 'precise', order: 20, need: 'required', platforms: BOTH, homeRow: true, state: preciseState },
+  { id: 'locationAlways', order: 25, need: 'recommended', platforms: IOS, homeRow: true, state: locationAlwaysState },
   { id: 'motion', order: 30, need: 'recommended', platforms: BOTH, homeRow: true, state: motionState },
+  { id: 'backgroundRefresh', order: 35, need: 'recommended', platforms: IOS, homeRow: true, state: backgroundRefreshState },
   { id: 'notifications', order: 40, need: 'recommended', platforms: BOTH, homeRow: true, state: notificationsState },
-  { id: 'reminderAccess', order: 50, need: 'optional', platforms: BOTH, homeRow: true, state: reminderAccessState },
   { id: 'bluetooth', order: 60, need: 'optional', platforms: BOTH, homeRow: true, state: bluetoothState },
   { id: 'camera', order: 70, need: 'optional', platforms: BOTH, homeRow: false, state: cameraState },
 ];

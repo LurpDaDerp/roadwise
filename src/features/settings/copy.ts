@@ -3,11 +3,10 @@
  * the control that causes it, and only what the app and the server actually do.
  */
 import type { HeatmapVisibility } from '@/data/server/summary';
+import type { AutoDrivesMissing } from '@/features/autoDrives/useAutoDrives';
 
-/** A saved `'clan'` (from when clans existed) reads as Only me: the server keeps it private. */
 export const VISIBILITY_LABEL: Record<HeatmapVisibility, string> = {
   only_me: 'Only me',
-  clan: 'Only me',
   friends: 'Friends',
 };
 
@@ -18,8 +17,8 @@ export const VISIBILITY_SEGMENTS = (['only_me', 'friends'] as const).map((value)
 }));
 
 /**
- * The segment a saved visibility shows as. Anything but `'friends'` (a saved `'clan'` included)
- * shows as Only me, so the screen never says more people can see the map than the server allows.
+ * The segment a saved visibility shows as. Anything but `'friends'` shows as Only me, so the screen
+ * never says more people can see the map than the server allows.
  */
 export function shownVisibility(v: HeatmapVisibility | null | undefined): 'only_me' | 'friends' | null {
   if (v === undefined || v === null) return null;
@@ -31,13 +30,32 @@ export const settingsCopy = {
 
   root: {
     driving: 'Driving',
+    /** iPhone only: whether drives start on their own, and what they need first. */
+    autoDrives: {
+      title: 'Automatic drives',
+      on: 'On. RoadWise notices your drives.',
+      off: (what: string) => `Off. Needs ${what}.`,
+      what: {
+        locationAlways: 'Location set to Always',
+        precise: 'Precise Location',
+        motion: 'Motion & Fitness',
+        backgroundRefresh: 'Background App Refresh',
+      } satisfies Record<AutoDrivesMissing, string>,
+    },
     dashcam: { title: 'DashPal' },
     alerts: { title: 'Alerts', subtitle: 'Voice, sound and vibration' },
     permissions: { title: 'Permissions', subtitle: 'What RoadWise can use on this phone' },
     privacy: 'Privacy',
     zones: { title: 'Privacy zones', subtitle: (n: number) => (n === 0 ? 'Hide routes near home or school' : `${n} of 3 set`) },
-    heatmap: 'Heat map visibility',
-    heatmapFooter: 'Who can see the map of roads you drive most. Only me is the default.',
+    /** What friends can see. Nobody but a friend ever sees any of it. */
+    sharing: {
+      rating: { title: 'Safety Rating', subtitle: 'Friends can see your Safety Rating' },
+      categories: { title: 'Category scores', subtitle: 'Friends can see your category scores' },
+      achievements: { title: 'Achievements', subtitle: 'Friends can see your badges' },
+      stats: { title: 'Driving stats', subtitle: 'Friends can see your drives, distance and events' },
+    },
+    heatmap: 'Heat map',
+    privacyFooter: 'Only your friends can see what you share here. The heat map shows the roads you drive most.',
     you: 'You',
     units: 'Units',
     appearance: {
@@ -52,14 +70,8 @@ export const settingsCopy = {
       },
       footer: 'Saved on this phone only.',
     },
-    state: { title: 'US state', subtitle: 'For the state filter on the global board', none: 'Not set' },
     notifications: { title: 'Notifications', subtitle: 'Weekly recap, friends' },
     saveError: "That didn't save. Check your connection and try again.",
-  },
-
-  states: {
-    title: 'Your state',
-    none: "Don't show a state",
   },
 
   alerts: {
@@ -151,7 +163,7 @@ export const settingsCopy = {
     consequencesLabel: 'What gets deleted',
     consequences: [
       'Your profile, username and drives',
-      'Your points, level, streak, freezes and achievements',
+      'Your Safety Rating, weekly goals and achievements',
       'Your friends and blocked list',
       'Your notification settings and devices on our servers',
     ],

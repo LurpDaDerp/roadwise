@@ -3,8 +3,6 @@
  * it into Home's single row and Settings › Permissions' list. A read never prompts and never starts
  * the BLE manager; the Bluetooth permission is read only for a phone with a DashPal paired.
  */
-import type { TripReminderStatus } from '@drive-sense';
-
 import type { BluetoothPermission, CameraAccess, PermissionPlatform, PermissionSnapshot } from '@/core/permissions';
 
 import type { HomePrefs } from './homePrefs';
@@ -18,7 +16,6 @@ export interface BoardReadDeps {
   paired(): Promise<boolean>;
   bluetoothPermission(): Promise<BluetoothPermission>;
   camera(): Promise<CameraAccess>;
-  reminder(): Promise<TripReminderStatus>;
 }
 
 const orNull = async <T>(read: () => Promise<T>): Promise<T | null> => {
@@ -31,14 +28,9 @@ const orNull = async <T>(read: () => Promise<T>): Promise<T | null> => {
 
 /** One read of the phone. Throws only when the snapshot cannot be read; any other failed read nulls its own field. */
 export async function readPermissionBoard(deps: BoardReadDeps): Promise<PermissionBoardRead> {
-  const [snapshot, paired, camera, reminder] = await Promise.all([
-    deps.snapshot(),
-    deps.paired().catch(() => false),
-    orNull(deps.camera),
-    orNull(deps.reminder),
-  ]);
+  const [snapshot, paired, camera] = await Promise.all([deps.snapshot(), deps.paired().catch(() => false), orNull(deps.camera)]);
   const bluetooth = paired ? await orNull(deps.bluetoothPermission) : null;
-  return { snapshot, androidApi: snapshot.platform === 'android' ? deps.androidApi : null, paired, bluetooth, camera, reminder };
+  return { snapshot, androidApi: snapshot.platform === 'android' ? deps.androidApi : null, paired, bluetooth, camera };
 }
 
 export interface BoardRow {
@@ -90,15 +82,13 @@ export interface SettingsRow extends BoardRow {
 
 /**
  * Settings › Permissions: every permission of this platform, except Precise Location while location
- * is not allowed, motion on a phone that cannot report it, and the reminder's channel on Android
- * while the reminder is off.
+ * is not allowed, and motion or Background App Refresh on a phone that cannot report it.
  */
 export function settingsRows(read: PermissionBoardRead, prefs: HomePrefs): SettingsRow[] {
   return boardRows(read)
     .filter((r) => {
       if (r.id === 'precise') return r.state.kind !== 'idle';
-      if (r.id === 'motion') return r.state.kind !== 'unknown';
-      if (r.id === 'reminderAccess' && read.snapshot.platform === 'android') return read.reminder?.enabled === true;
+      if (r.id === 'motion' || r.id === 'backgroundRefresh') return r.state.kind !== 'unknown';
       return true;
     })
     .map((r) => ({ ...r, hiddenFromHome: r.state.kind === 'missing' && prefs.hidden.includes(r.id) }));

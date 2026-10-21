@@ -1,6 +1,7 @@
 /**
  * The permission words: Home's one row, the "Don't remind me again" confirmation, and
- * Settings › Permissions. Each line says only what the reading supports and what it means for a
+ * Settings › Permissions. On an iPhone the words speak of drives starting on their own; on Android,
+ * of drives started from Home. Each line says only what the reading supports and what it means for a
  * drive; nothing nags. Limits, pinned by tests: Home lines ≤ 60 characters, Settings details ≤ 100.
  */
 import { IDLE_END_S } from '@scoring';
@@ -31,8 +32,11 @@ export const permissionsCopy = {
     attention: 'A couple of things could be better',
     broken: "RoadWise can't record drives right now",
   },
-  never:
-    'A drive uses location only while it records. Only iPhone asks for “Always”, and only if you turn on the forgot-to-start reminder.',
+  /** The note under the list. */
+  about: {
+    ios: 'With Location set to Always, RoadWise notices drives and records them even when it’s closed. Your location is never sold.',
+    android: 'A drive uses location only while it records. Start each drive from Home.',
+  },
   status: { on: 'On', notYet: 'Needs a look', off: 'Off', idle: 'Not in use', unknown: "Can't check" },
   openSettings: 'Open Settings',
   hiddenFromHome: 'Hidden from Home',
@@ -80,10 +84,12 @@ export function rowTitle(id: PermissionId, c: CopyCtx): string {
       return 'Precise location';
     case 'motion':
       return motionName(c);
+    case 'locationAlways':
+      return 'Location Always';
+    case 'backgroundRefresh':
+      return 'Background App Refresh';
     case 'notifications':
       return 'Notifications';
-    case 'reminderAccess':
-      return c.platform === 'ios' ? 'Location Always' : 'Drive reminder notifications';
     case 'bluetooth':
       return nearbyDevices(c) ? 'Nearby devices' : 'Bluetooth';
     case 'camera':
@@ -98,8 +104,6 @@ export function permissionName(id: PermissionId, c: CopyCtx): string {
       return 'Location';
     case 'precise':
       return 'Precise Location';
-    case 'reminderAccess':
-      return c.platform === 'ios' ? 'Location Always' : 'Drive reminder notifications';
     default:
       return rowTitle(id, c);
   }
@@ -114,12 +118,15 @@ export function homeLine(id: PermissionId, state: MissingState, c: CopyCtx): str
       return state.reason === 'notYet' ? 'Allow Location so drives can record.' : "Location is off. Drives can't record.";
     case 'precise':
       return "Precise Location is off. Drives can't record.";
+    case 'locationAlways':
+      return 'Set Location to Always so drives start themselves.';
     case 'motion':
+      if (ios) return state.reason === 'notYet' ? 'Allow Motion & Fitness so RoadWise can spot drives.' : 'Motion & Fitness is off. Drives won’t start themselves.';
       return state.reason === 'notYet' ? `Allow ${motionName(c)} so walking away ends a drive.` : `${motionName(c)} is off. Walking away won't end a drive.`;
+    case 'backgroundRefresh':
+      return 'Turn on Background App Refresh to catch every drive.';
     case 'notifications':
-      return state.reason === 'notYet' ? 'Allow Notifications for reminders and results.' : "Notifications are off. You'll miss reminders and results.";
-    case 'reminderAccess':
-      return ios ? 'The reminder needs Location set to Always.' : 'Drive reminder notifications are off.';
+      return state.reason === 'notYet' ? 'Allow Notifications to get your drive recaps.' : 'Notifications are off. You’ll miss your drive recaps.';
     case 'bluetooth':
       return nearbyDevices(c) ? "Nearby devices isn't allowed. DashPal can't connect." : "Bluetooth isn't allowed. DashPal can't connect.";
     case 'camera':
@@ -130,7 +137,7 @@ export function homeLine(id: PermissionId, state: MissingState, c: CopyCtx): str
 const CANT_CHECK = "RoadWise couldn't check this on this phone.";
 
 /** One line under a Settings row's title: what this state means (≤ 100 characters). */
-export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx, opts: { reminderOn?: boolean } = {}): string {
+export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx): string {
   if (state.kind === 'unknown') return CANT_CHECK;
   const on = state.kind === 'granted';
   const ios = c.platform === 'ios';
@@ -142,23 +149,22 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx, opts: 
       return on ? 'RoadWise can measure speed and miles on your drives.' : "Without it, RoadWise can't record drives.";
     case 'precise':
       return on ? 'Speed and distance are measured accurately.' : 'Approximate location is too rough to record a drive.';
+    case 'locationAlways':
+      if (state.kind === 'idle') return 'Allow Location first.';
+      return on ? 'RoadWise can notice your drives and record them with the app closed.' : 'Drives won’t start on their own. You can still start them from Home.';
     case 'motion': {
-      if (on) return 'A forgotten drive stops when you walk away, and the reminder can spot trips.';
-      const line = `Without it, a forgotten drive ends after ${IDLE_MIN} min.`;
-      return ios && state.kind === 'missing' && state.reason === 'denied' ? `${line} Also check Privacy & Security › Motion & Fitness.` : line;
-    }
-    case 'notifications':
-      return on ? 'Reminders, drive results, your weekly recap and friend requests can reach you.' : "You won't get reminders, drive results or your weekly recap.";
-    case 'reminderAccess':
       if (ios) {
-        if (on) return 'The forgot-to-start reminder works even with RoadWise closed.';
-        if (state.kind === 'missing') return 'The reminder needs Location set to Always.';
-        return opts.reminderOn ? 'Allow Location first, then set it to Always for the reminder.' : 'Only for the forgot-to-start reminder, which is off.';
+        if (on) return 'RoadWise can tell driving from walking, so drives start and end on time.';
+        return state.kind === 'missing' && state.reason === 'denied'
+          ? 'Drives won’t start on their own. Also check Privacy & Security › Motion & Fitness.'
+          : 'Without it, drives won’t start on their own.';
       }
-      if (state.kind === 'idle') {
-        return opts.reminderOn ? 'Turn on Notifications first so the reminder can appear.' : 'Only for the forgot-to-start reminder, which is off.';
-      }
-      return on ? 'Drive reminder notifications can appear.' : "The forgot-to-start reminder can't appear.";
+      return on ? 'A forgotten drive stops when you walk away.' : `Without it, a forgotten drive ends after ${IDLE_MIN} min.`;
+    }
+    case 'backgroundRefresh':
+      return on ? 'iOS can wake RoadWise when a drive starts.' : 'iOS can’t wake RoadWise, so drives won’t start on their own.';
+    case 'notifications':
+      return on ? 'Drive recaps, your weekly recap and friend requests can reach you.' : 'You won’t get drive recaps, your weekly recap or friend requests.';
     case 'bluetooth':
       if (state.kind === 'idle') return nearbyDevices(c) || ios ? 'Used only with a paired DashPal.' : 'Uses Location on this phone.';
       return on ? 'Your DashPal can connect.' : "Your DashPal can't connect, so it plays its alerts itself.";
@@ -175,6 +181,8 @@ export function requestLabel(id: PermissionId, state: MissingState): string {
       return state.reason === 'servicesOff' ? 'Turn on location' : 'Allow location';
     case 'precise':
       return 'Allow precise location';
+    case 'locationAlways':
+      return 'Allow Always';
     case 'motion':
       return 'Allow motion';
     case 'notifications':

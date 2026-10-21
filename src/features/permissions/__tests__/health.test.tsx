@@ -5,8 +5,6 @@
  */
 import { screen, waitFor } from '@testing-library/react-native';
 
-import type { TripReminderStatus } from '@drive-sense';
-
 import { HOME_HIDDEN_KEY } from '@/core/permissions';
 import { PAIRED_KEY } from '@/dashcam/keys';
 
@@ -21,16 +19,10 @@ jest.mock('expo-router', () => ({ useRouter: () => ({ back: jest.fn(), push: jes
 afterEach(() => clearQueryClients());
 
 const PAIRED = { dashcamId: 'a1b2c3d4e5f6', peripheralId: 'AA:BB', name: 'DashPal-E5F6', pairedAt: 1, secure: true as const };
-const OFF: TripReminderStatus = { enabled: false, state: 'off', missing: [] };
-
-function deps(adapter: FakeAdapter, reminder: TripReminderStatus | null = OFF): PermissionBoardDeps {
+function deps(adapter: FakeAdapter): PermissionBoardDeps {
   return {
     adapter,
     appState: fakeAppState(),
-    reminder: async () => {
-      if (reminder === null) throw new Error('no module');
-      return reminder;
-    },
     androidApi: adapter.current.platform === 'android' ? 34 : null,
     watchDashcam: () => () => {},
     ensureChannels: async () => {},
@@ -38,9 +30,9 @@ function deps(adapter: FakeAdapter, reminder: TripReminderStatus | null = OFF): 
   };
 }
 
-async function open(adapter: FakeAdapter, opts: { reminder?: TripReminderStatus | null; settings?: Record<string, unknown> } = {}) {
+async function open(adapter: FakeAdapter, opts: { settings?: Record<string, unknown> } = {}) {
   const w = await appWorld({ settings: opts.settings });
-  await w.render(<PermissionsScreen deps={deps(adapter, opts.reminder === undefined ? OFF : opts.reminder)} />);
+  await w.render(<PermissionsScreen deps={deps(adapter)} />);
   await screen.findByTestId('permissions-summary');
   return w;
 }
@@ -73,23 +65,22 @@ it('an unreadable phone says so with a retry', async () => {
   expect(await screen.findByTestId('permissions-read-error')).toBeOnTheScreen();
 });
 
-it('iOS lists the reminder row (Not in use while the reminder is off); Android lists it only with the reminder on', async () => {
-  await open(fakeAdapter(snap({ platform: 'ios' })));
-  expect(ids()).toEqual(['location', 'precise', 'motion', 'notifications', 'reminderAccess', 'bluetooth', 'camera']);
-  expect(screen.getByTestId('permission-reminderAccess-status')).toHaveTextContent('Not in use');
-  expect(screen.getByTestId('permission-reminderAccess-detail')).toHaveTextContent('Only for the forgot-to-start reminder, which is off.');
+it('iOS lists Location Always and Background App Refresh with the note about Always; Android lists neither', async () => {
+  const adapter = fakeAdapter(snap({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied' }));
+  await open(adapter);
+  expect(ids()).toEqual(['location', 'precise', 'locationAlways', 'motion', 'backgroundRefresh', 'notifications', 'bluetooth', 'camera']);
+  expect(screen.getByTestId('permission-locationAlways-status')).toHaveTextContent('Needs a look');
+  expect(screen.getByTestId('permission-backgroundRefresh-status')).toHaveTextContent('Off');
+  expect(screen.getByTestId('permission-backgroundRefresh-fix')).toHaveTextContent('Open Settings');
+  expect(screen.getByText(/With Location set to Always, RoadWise notices drives/)).toBeOnTheScreen();
+  expect(screen.getByTestId('permission-locationAlways-fix')).toHaveTextContent('Allow Always');
+  await tap('permission-locationAlways-fix');
+  await waitFor(() => expect(screen.getByTestId('permission-locationAlways-status')).toHaveTextContent('On'));
+  expect(adapter.log.filter((c) => c.startsWith('request') || c.startsWith('open'))).toEqual(['requestLocationAlways']);
   clearQueryClients();
   await open(fakeAdapter(snap({ platform: 'android' })));
-  expect(ids()).not.toContain('reminderAccess');
-  clearQueryClients();
-  await open(fakeAdapter(snap({ platform: 'android' })), { reminder: { enabled: true, state: 'needs', missing: ['notifications'] } });
-  expect(screen.getByTestId('permission-reminderAccess-status')).toHaveTextContent('Off');
-  expect(screen.getByTestId('permission-reminderAccess-fix')).toHaveTextContent('Open Settings');
-});
-
-it("iOS with the reminder module absent: Can't check", async () => {
-  await open(fakeAdapter(snap({ platform: 'ios' })), { reminder: null });
-  expect(screen.getByTestId('permission-reminderAccess-status')).toHaveTextContent("Can't check");
+  expect(ids()).toEqual(['location', 'precise', 'motion', 'notifications', 'bluetooth', 'camera']);
+  expect(screen.getByText('A drive uses location only while it records. Start each drive from Home.')).toBeOnTheScreen();
 });
 
 it('Bluetooth: Not in use without a pairing; Off with a pairing and the permission gone, fixed only in Settings', async () => {

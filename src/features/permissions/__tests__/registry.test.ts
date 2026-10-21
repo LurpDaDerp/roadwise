@@ -2,20 +2,10 @@
  * The permission registry: each permission's state from one read of the phone (design §3.1), one
  * case per branch, on both platforms.
  */
-import type { TripReminderStatus } from '@drive-sense';
-
 import type { PermissionSnapshot } from '@/core/permissions';
 
 import { snap } from '../__fixtures__/harness';
-import { PERMISSIONS, permissionDef, REMINDER_CHANNEL_ID, signature, type PermissionBoardRead, type PermissionId, type PermState } from '../registry';
-
-declare const __dirname: string;
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- the root tsconfig has no Node typings
-const { readFileSync } = require('node:fs') as { readFileSync: (file: string, encoding: 'utf8') => string };
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
-const { join } = require('node:path') as { join: (...parts: string[]) => string };
-
-const reminder = (over: Partial<TripReminderStatus> = {}): TripReminderStatus => ({ enabled: true, state: 'on', missing: [], ...over });
+import { PERMISSIONS, permissionDef, signature, type PermissionBoardRead, type PermissionId, type PermState } from '../registry';
 
 function board(over: Partial<PermissionSnapshot> = {}, rest: Partial<Omit<PermissionBoardRead, 'snapshot'>> = {}): PermissionBoardRead {
   const snapshot = snap(over);
@@ -25,7 +15,6 @@ function board(over: Partial<PermissionSnapshot> = {}, rest: Partial<Omit<Permis
     paired: false,
     bluetooth: null,
     camera: null,
-    reminder: null,
     ...rest,
   };
 }
@@ -36,10 +25,23 @@ const missing = (reason: string, canAsk: boolean, target = 'app') => ({ kind: 'm
 test('every permission has a unique order; only the camera has no Home row; location and precise are required', () => {
   const orders = PERMISSIONS.map((d) => d.order);
   expect(new Set(orders).size).toBe(orders.length);
-  expect(PERMISSIONS.map((d) => d.id)).toEqual(['location', 'precise', 'motion', 'notifications', 'reminderAccess', 'bluetooth', 'camera']);
+  expect(PERMISSIONS.map((d) => [d.id, d.order])).toEqual([
+    ['location', 10],
+    ['precise', 20],
+    ['locationAlways', 25],
+    ['motion', 30],
+    ['backgroundRefresh', 35],
+    ['notifications', 40],
+    ['bluetooth', 60],
+    ['camera', 70],
+  ]);
   expect(PERMISSIONS.filter((d) => !d.homeRow).map((d) => d.id)).toEqual(['camera']);
   expect(PERMISSIONS.filter((d) => d.need === 'required').map((d) => d.id)).toEqual(['location', 'precise']);
-  for (const d of PERMISSIONS) expect(d.platforms).toEqual(['ios', 'android']);
+  // The automatic-drive rows are the iPhone's alone: Android gains no row.
+  expect(PERMISSIONS.filter((d) => !d.platforms.includes('android')).map((d) => d.id)).toEqual(['locationAlways', 'backgroundRefresh']);
+  for (const d of PERMISSIONS) expect(d.platforms).toContain('ios');
+  expect(permissionDef('locationAlways').need).toBe('recommended');
+  expect(permissionDef('backgroundRefresh').need).toBe('recommended');
 });
 
 describe('location', () => {
@@ -104,53 +106,30 @@ describe('notifications', () => {
   });
 });
 
-describe("the reminder's need", () => {
-  it('no reminder module: unknown; reminder off: idle; unavailable phone: unknown', () => {
-    expect(state('reminderAccess', board({}, { reminder: null }))).toEqual({ kind: 'unknown' });
-    expect(state('reminderAccess', board({}, { reminder: reminder({ enabled: false, state: 'off' }) }))).toEqual({ kind: 'idle' });
-    expect(state('reminderAccess', board({}, { reminder: reminder({ enabled: false, state: 'unavailable' }) }))).toEqual({ kind: 'idle' });
-    expect(state('reminderAccess', board({}, { reminder: reminder({ state: 'unavailable' }) }))).toEqual({ kind: 'unknown' });
+describe('Location Always (iPhone)', () => {
+  it('not in use until location is allowed, so the location row comes first', () => {
+    expect(state('locationAlways', board({ platform: 'ios', location: 'denied', precise: null }))).toEqual({ kind: 'idle' });
+    expect(state('locationAlways', board({ platform: 'ios', location: 'undetermined', precise: null }))).toEqual({ kind: 'idle' });
+    expect(state('locationAlways', board({ platform: 'ios', location: 'always', locationServices: false }))).toEqual({ kind: 'idle' });
   });
 
-  it('iOS with location denied and the reminder on: only the location row (no duplicate)', () => {
-    const read = board({ platform: 'ios', location: 'denied', precise: null }, { reminder: reminder({ state: 'needs', missing: ['locationAlways'] }) });
-    expect(state('reminderAccess', read)).toEqual({ kind: 'idle' });
-    expect(state('location', read).kind).toBe('missing');
+  it('Always: granted', () => {
+    expect(state('locationAlways', board({ platform: 'ios', location: 'always' }))).toEqual({ kind: 'granted' });
   });
 
-  it('iOS kept at While Using: missing, Settings only; Always: granted', () => {
-    expect(state('reminderAccess', board({ platform: 'ios', location: 'foreground' }, { reminder: reminder({ state: 'needs', missing: ['locationAlways'] }) }))).toEqual(
-      missing('denied', false)
-    );
-    expect(state('reminderAccess', board({ platform: 'ios', location: 'always' }, { reminder: reminder() }))).toEqual({ kind: 'granted' });
+  it('While Using: asks while iOS still can, then Settings only', () => {
+    expect(state('locationAlways', board({ platform: 'ios', location: 'foreground', canAskAlways: true }))).toEqual(missing('notYet', true));
+    expect(state('locationAlways', board({ platform: 'ios', location: 'foreground', canAskAlways: false }))).toEqual(missing('denied', false));
+    expect(state('locationAlways', board({ platform: 'ios', location: 'foreground', canAskAlways: null }))).toEqual(missing('denied', false));
   });
+});
 
-  it('iOS reads that disagree (the reminder needs nothing, location still While Using): unknown', () => {
-    expect(state('reminderAccess', board({ platform: 'ios', location: 'foreground' }, { reminder: reminder() }))).toEqual({ kind: 'unknown' });
-  });
-
-  it("Android: only its own channel switched off is this row, opening the channel's page", () => {
-    expect(state('reminderAccess', board({ platform: 'android' }, { reminder: reminder({ state: 'needs', missing: ['notifications'] }) }))).toEqual(
-      missing('denied', false, 'reminderChannel')
-    );
-  });
-
-  it('Android: app-wide notifications off is only the notifications row; the reminder row is not in use until they are on', () => {
-    const off = board({ platform: 'android', notifications: 'denied' }, { reminder: reminder({ state: 'needs', missing: ['notifications'] }) });
-    expect(state('reminderAccess', off)).toEqual({ kind: 'idle' });
-    expect(state('notifications', off).kind).toBe('missing');
-    // Two reads that disagree (the reminder's taken before notifications were switched off): still not On.
-    expect(state('reminderAccess', board({ platform: 'android', notifications: 'denied' }, { reminder: reminder() }))).toEqual({ kind: 'idle' });
-    expect(state('reminderAccess', board({ platform: 'android', notifications: 'undetermined' }, { reminder: reminder() }))).toEqual({ kind: 'idle' });
-  });
-
-  it("Android: motion or precise needs aren't repeated", () => {
-    expect(state('reminderAccess', board({ platform: 'android', motion: 'denied' }, { reminder: reminder({ state: 'needs', missing: ['motion'] }) }))).toEqual({
-      kind: 'granted',
-    });
-    expect(state('reminderAccess', board({ platform: 'ios', location: 'always', precise: false }, { reminder: reminder({ state: 'needs', missing: ['locationPrecise'] }) }))).toEqual({
-      kind: 'granted',
-    });
+describe('Background App Refresh (iPhone)', () => {
+  it('available: granted; denied: Settings only; restricted or unread: unknown', () => {
+    expect(state('backgroundRefresh', board({ platform: 'ios', backgroundRefresh: 'available' }))).toEqual({ kind: 'granted' });
+    expect(state('backgroundRefresh', board({ platform: 'ios', backgroundRefresh: 'denied' }))).toEqual(missing('denied', false));
+    expect(state('backgroundRefresh', board({ platform: 'ios', backgroundRefresh: 'restricted' }))).toEqual({ kind: 'unknown' });
+    expect(state('backgroundRefresh', board({ platform: 'ios', backgroundRefresh: null }))).toEqual({ kind: 'unknown' });
   });
 });
 
@@ -187,27 +166,19 @@ describe('camera (never on Home, never requested here)', () => {
   });
 });
 
-test('Bluetooth, the camera and the reminder need never ask the phone from here', () => {
+test('Bluetooth, the camera and Background App Refresh never ask the phone from here', () => {
   const reads = [
-    board({ platform: 'android' }, { paired: true, bluetooth: 'denied', camera: { access: 'denied', canAskAgain: true }, reminder: reminder({ state: 'needs', missing: ['notifications'] }) }),
-    board({ platform: 'ios' }, { paired: true, bluetooth: 'denied', camera: { access: 'denied', canAskAgain: true }, reminder: reminder({ state: 'needs', missing: ['locationAlways'] }) }),
+    board({ platform: 'android' }, { paired: true, bluetooth: 'denied', camera: { access: 'denied', canAskAgain: true } }),
+    board({ platform: 'ios', backgroundRefresh: 'denied' }, { paired: true, bluetooth: 'denied', camera: { access: 'denied', canAskAgain: true } }),
   ];
   for (const read of reads) {
-    for (const id of ['bluetooth', 'camera', 'reminderAccess'] as const) {
+    const ids = read.snapshot.platform === 'ios' ? (['bluetooth', 'camera', 'backgroundRefresh'] as const) : (['bluetooth', 'camera'] as const);
+    for (const id of ids) {
       const s = state(id, read);
       expect(s.kind).toBe('missing');
       if (s.kind === 'missing') expect(s.canAsk).toBe(false);
     }
   }
-});
-
-test("the reminder channel opened from here is the one drive-sense posts the note on (TripReminderNotifier.CHANNEL_ID)", () => {
-  const src = readFileSync(
-    join(__dirname, '..', '..', '..', '..', 'modules', 'drive-sense', 'android', 'src', 'main', 'java', 'expo', 'modules', 'drivesense', 'TripReminderNotifier.kt'),
-    'utf8'
-  );
-  expect(src).toMatch(new RegExp(`const val CHANNEL_ID = "${REMINDER_CHANNEL_ID}"`));
-  expect(REMINDER_CHANNEL_ID).toBe('trip_reminder');
 });
 
 test('the signature names the reason and whether the phone can still ask', () => {

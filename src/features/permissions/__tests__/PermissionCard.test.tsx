@@ -7,8 +7,6 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 import type { ReactNode } from 'react';
 import { Alert, StyleSheet, type AlertButton } from 'react-native';
 
-import type { TripReminderStatus } from '@drive-sense';
-
 import type { PermissionSnapshot } from '@/core/permissions';
 import { ThemeProvider } from '@/ui/theme';
 
@@ -48,9 +46,10 @@ beforeEach(() => {
 });
 afterEach(() => alert.mockRestore());
 
-function read(over: Partial<PermissionSnapshot> = {}, reminder: TripReminderStatus | null = null): PermissionBoardRead {
-  const snapshot = snap(over);
-  return { snapshot, androidApi: snapshot.platform === 'android' ? 34 : null, paired: false, bluetooth: null, camera: null, reminder };
+/** An iPhone here has automatic drives' permissions unless a test says otherwise. */
+function read(over: Partial<PermissionSnapshot> = {}): PermissionBoardRead {
+  const snapshot = snap({ ...(over.platform === 'ios' ? { location: 'always' as const, backgroundRefresh: 'available' as const } : {}), ...over });
+  return { snapshot, androidApi: snapshot.platform === 'android' ? 34 : null, paired: false, bluetooth: null, camera: null };
 }
 
 function fakeBoard(r: PermissionBoardRead | null, prefs: HomePrefs = EMPTY_HOME_PREFS, status: PermissionBoard['status'] = 'ready') {
@@ -99,7 +98,7 @@ test('one row with the exact line and Allow, plus "2 more · See all", which ope
 
 test('a row that can only be fixed in Settings says Open Settings; one row alone has no "more" line', async () => {
   await draw(fakeBoard(read({ platform: 'ios', motion: 'denied' })));
-  expect(screen.getByTestId('home-permission-line')).toHaveTextContent("Motion & Fitness is off. Walking away won't end a drive.");
+  expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Motion & Fitness is off. Drives won’t start themselves.');
   expect(screen.getByTestId('home-permission-action')).toHaveTextContent('Open Settings');
   expect(screen.queryByTestId('home-permissions-more')).toBeNull();
 });
@@ -196,7 +195,7 @@ test('the row is one button with its line and action, no hint; the dismiss actio
   await draw(board);
   const row = screen.getByTestId('home-permission-motion');
   expect(row.props.accessibilityRole).toBe('button');
-  expect(row.props.accessibilityLabel).toBe("Motion & Fitness is off. Walking away won't end a drive. Open Settings.");
+  expect(row.props.accessibilityLabel).toBe('Motion & Fitness is off. Drives won’t start themselves. Open Settings.');
   expect(row.props.accessibilityHint).toBeUndefined();
   expect(row.props.accessibilityActions).toEqual([{ name: 'activate' }, { name: 'dismiss', label: "Don't remind me again" }]);
   expect(LONG_PRESS_MS).toBe(500);
@@ -264,13 +263,20 @@ test('hiding the shown row shows the next one; a hidden row stays hidden', async
   expect(screen.queryByTestId('home-permissions-more')).toBeNull();
 });
 
-test('Bluetooth and the reminder rows never offer Allow', async () => {
-  const r = { ...read({ platform: 'android' }, { enabled: true, state: 'needs', missing: ['notifications'] }), paired: true, bluetooth: 'undetermined' as const };
+test('Background App Refresh and Bluetooth rows never offer Allow', async () => {
+  const r = { ...read({ platform: 'ios', location: 'always', backgroundRefresh: 'denied' }), paired: true, bluetooth: 'denied' as const };
   await draw(fakeBoard(r));
-  expect(screen.getByTestId('home-permission-reminderAccess')).toBeOnTheScreen();
+  expect(screen.getByTestId('home-permission-backgroundRefresh')).toBeOnTheScreen();
+  expect(screen.getByText('Turn on Background App Refresh to catch every drive.')).toBeOnTheScreen();
   expect(screen.getByTestId('home-permission-action')).toHaveTextContent('Open Settings');
   expect(screen.getByTestId('home-permissions-more')).toHaveTextContent('1 more', { exact: false });
-  await draw(fakeBoard({ ...r, reminder: null }));
+  await draw(fakeBoard({ ...r, snapshot: { ...r.snapshot, backgroundRefresh: 'available' } }));
   expect(screen.getAllByTestId('home-permission-bluetooth')[0]).toBeOnTheScreen();
   expect(screen.getAllByTestId('home-permission-action').map((n) => n.props.children)).not.toContain('Allow');
+});
+
+test('an iPhone kept at While Using shows the Location Always line on Home', async () => {
+  await draw(fakeBoard(read({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'available' })));
+  expect(screen.getByTestId('home-permission-locationAlways')).toBeOnTheScreen();
+  expect(screen.getByText('Set Location to Always so drives start themselves.')).toBeOnTheScreen();
 });

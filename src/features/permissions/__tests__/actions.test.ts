@@ -2,8 +2,6 @@
  * A tap's fix: exactly the OS call of each permission, the 14-day stamp, the Android notification
  * channels and token sync, the Settings page of each target, and the no-effect rule.
  */
-import type { TripReminderStatus } from '@drive-sense';
-
 import { HOME_TO_SETTINGS_KEY, PROMPTS_KEY, type PermissionSnapshot } from '@/core/permissions';
 
 import { fakeAdapter, snap, T0, type FakeAdapter } from '../__fixtures__/harness';
@@ -27,7 +25,7 @@ function store() {
   };
 }
 
-function world(initial: PermissionSnapshot, opts: { reminder?: TripReminderStatus | null; paired?: boolean } = {}, answers: Parameters<typeof fakeAdapter>[1] = {}) {
+function world(initial: PermissionSnapshot, opts: { paired?: boolean } = {}, answers: Parameters<typeof fakeAdapter>[1] = {}) {
   const adapter: FakeAdapter = fakeAdapter(initial, answers);
   const settings = store();
   const boardOf = (): PermissionBoardRead => ({
@@ -36,7 +34,6 @@ function world(initial: PermissionSnapshot, opts: { reminder?: TripReminderStatu
     paired: opts.paired ?? false,
     bluetooth: opts.paired ? adapter.btPermission : null,
     camera: adapter.cam,
-    reminder: opts.reminder ?? null,
   });
   const ensureChannels = jest.fn(async () => {
     adapter.log.push('ensureChannels');
@@ -169,13 +166,27 @@ describe('the no-effect rule', () => {
 });
 
 describe('Settings targets', () => {
-  it("the reminder's Android channel opens its own page; iOS Always opens the app's page", async () => {
-    const a = world(snap({ platform: 'android' }), { reminder: { enabled: true, state: 'needs', missing: ['notifications'] } });
-    expect(await a.run('reminderAccess')).toEqual({ kind: 'opened' });
-    expect(a.calls()).toEqual(['openNotificationChannelSettings:trip_reminder']);
-    const i = world(snap({ platform: 'ios', location: 'foreground' }), { reminder: { enabled: true, state: 'needs', missing: ['locationAlways'] } });
-    await i.run('reminderAccess');
-    expect(i.calls()).toEqual(['openAppSettings']);
+  it("Location Always kept at While Using and Background App Refresh off open the app's page", async () => {
+    const i = world(snap({ platform: 'ios', location: 'foreground', canAskAlways: false, backgroundRefresh: 'denied' }));
+    expect(await i.run('locationAlways')).toEqual({ kind: 'opened' });
+    expect(await i.run('backgroundRefresh')).toEqual({ kind: 'opened' });
+    expect(i.calls()).toEqual(['openAppSettings', 'openAppSettings']);
+  });
+
+  it('Location Always asks once while iOS still can, stamped as a location prompt', async () => {
+    const w = world(snap({ platform: 'ios', location: 'foreground', canAskAlways: true }));
+    const out = await w.run('locationAlways');
+    expect(out).toMatchObject({ kind: 'requested', noEffect: false });
+    expect(w.calls()).toEqual(['requestLocationAlways']);
+    expect(w.settings.data.get(PROMPTS_KEY)).toEqual({ location: T0 });
+    expect(permissionDef('locationAlways').state(w.boardOf())).toEqual({ kind: 'granted' });
+  });
+
+  it('Location Always declined: the next tap opens Settings', async () => {
+    const w = world(snap({ platform: 'ios', location: 'foreground', canAskAlways: true }), {}, { always: 'whenInUse' });
+    await w.run('locationAlways');
+    await w.run('locationAlways');
+    expect(w.calls()).toEqual(['requestLocationAlways', 'openAppSettings']);
   });
 
   it("iOS Location Services off opens the app's page (iOS has no direct way to its Location Services)", async () => {
@@ -184,13 +195,13 @@ describe('Settings targets', () => {
     expect(w.calls()).toEqual(['openAppSettings']);
   });
 
-  it('Bluetooth, the camera and the reminder never call a request method', async () => {
-    const w = world(snap({ platform: 'android' }), { paired: true, reminder: { enabled: true, state: 'needs', missing: ['notifications'] } });
+  it('Bluetooth and the camera never call a request method', async () => {
+    const w = world(snap({ platform: 'android' }), { paired: true });
     w.adapter.btPermission = 'undetermined';
     w.adapter.cam = { access: 'denied', canAskAgain: true };
-    for (const id of ['bluetooth', 'camera', 'reminderAccess'] as const) await w.run(id);
+    for (const id of ['bluetooth', 'camera'] as const) await w.run(id);
     expect(w.calls().filter((c) => c.startsWith('request'))).toEqual([]);
-    expect(w.calls()).toEqual(['openAppSettings', 'openAppSettings', 'openNotificationChannelSettings:trip_reminder']);
+    expect(w.calls()).toEqual(['openAppSettings', 'openAppSettings']);
   });
 
   it('a request fix on a row that cannot ask still only opens Settings', async () => {

@@ -10,9 +10,8 @@ describe('heat-map visibility', () => {
     ]);
   });
 
-  it('shows a saved clan as Only me (fails closed, as the server stores it)', () => {
-    expect(shownVisibility('clan')).toBe('only_me');
-    expect(VISIBILITY_LABEL.clan).toBe('Only me');
+  it('labels both choices', () => {
+    expect(VISIBILITY_LABEL).toEqual({ only_me: 'Only me', friends: 'Friends' });
   });
 
   it('shows only_me and friends as themselves, and nothing while unknown', () => {
@@ -29,5 +28,26 @@ describe('Appearance', () => {
     expect(Object.keys(options).sort()).toEqual([...APPEARANCE_CHOICES].sort());
     expect(options.adaptive).toEqual({ label: 'Adaptive', detail: 'Follows the time of day and the weather' });
     for (const o of Object.values(options)) expect(`${o.label} ${o.detail}`).not.toMatch(/[–—]/);
+  });
+});
+
+describe('the rest of the settings words', () => {
+  it('Automatic drives: on, and off with what it needs', () => {
+    const a = settingsCopy.root.autoDrives;
+    expect(a.on).toBe('On. RoadWise notices your drives.');
+    expect(a.off(a.what.locationAlways)).toBe('Off. Needs Location set to Always.');
+    expect(Object.values(a.what)).toEqual(['Location set to Always', 'Precise Location', 'Motion & Fitness', 'Background App Refresh']);
+  });
+
+  it('deleting the account names the Safety Rating, and no settings words mention points, streaks, freezes, levels or the global board', () => {
+    expect(settingsCopy.deleteAccount.consequences[1]).toBe('Your Safety Rating, weekly goals and achievements');
+    const all: string[] = [];
+    const walk = (v: unknown) => {
+      if (typeof v === 'string') all.push(v);
+      else if (typeof v === 'function') return;
+      else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+    };
+    walk(settingsCopy);
+    for (const line of all) expect(line).not.toMatch(/\bpoints?\b|streak|freeze|\blevel\b|global board|leaderboard|reminder|\bstate\b/i);
   });
 });

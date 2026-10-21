@@ -10,9 +10,12 @@ import { useServerAction } from '@/features/social/api';
 
 export interface ProfileFields {
   units: 'mi' | 'km';
-  /** Two-letter code, or '' to clear. */
-  state: string;
   heatmap_visibility: HeatmapVisibility;
+  /** What friends can see (Settings › Privacy). */
+  share_rating: boolean;
+  share_categories: boolean;
+  share_achievements: boolean;
+  share_stats: boolean;
 }
 
 export function useProfileEdit() {

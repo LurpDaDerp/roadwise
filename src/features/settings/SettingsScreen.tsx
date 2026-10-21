@@ -8,9 +8,9 @@ import { useDashcamState } from '@/dashcam/ui/useDashcam';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { useMySummary, type HeatmapVisibility } from '@/data/server/summary';
+import { useAutoDrives, type AutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
-import { ReminderRow, useTripReminder, type ReminderDeps } from '@/features/reminder';
-import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, useTheme } from '@/ui';
+import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, ToggleRow, useTheme } from '@/ui';
 import { appearance as appAppearance, APPEARANCE_CHOICES, useAppearance, type AppearanceStore } from '@/ui/appearance';
 
 import { settingsCopy, shownVisibility, VISIBILITY_SEGMENTS } from './copy';
@@ -19,10 +19,24 @@ import { readUnits, writeUnits, type Units } from './localPrefs';
 import { LinkRow, RowIcon, Section, TopBar } from './parts';
 import { readZones } from './privacyZones';
 import { SETTINGS_HREFS } from './routes';
-import { useProfileEdit } from './useProfileEdit';
-import { stateName, US_STATES } from './usStates';
+import { useProfileEdit, type ProfileFields } from './useProfileEdit';
 
 const copy = settingsCopy.root;
+
+/** The Automatic drives row's line: on, or the first thing it needs. Null hides the row (Android, or not read yet). */
+export function autoDrivesLine(a: AutoDrives): string | null {
+  if (a.state === 'on') return copy.autoDrives.on;
+  if (a.state === 'off' && a.missing[0]) return copy.autoDrives.off(copy.autoDrives.what[a.missing[0]]);
+  return null;
+}
+
+/** The four sharing switches of Settings › Privacy, in order, and whether each is on by default. */
+const SHARING = [
+  { field: 'share_rating', copy: copy.sharing.rating, testID: 'settings-share-rating' },
+  { field: 'share_categories', copy: copy.sharing.categories, testID: 'settings-share-categories' },
+  { field: 'share_achievements', copy: copy.sharing.achievements, testID: 'settings-share-achievements' },
+  { field: 'share_stats', copy: copy.sharing.stats, testID: 'settings-share-stats' },
+] as const satisfies readonly { field: keyof ProfileFields; copy: { title: string; subtitle: string }; testID: string }[];
 
 const UNIT_SEGMENTS = [
   { value: 'mi' as const, label: 'Miles' },
@@ -92,11 +106,13 @@ function RadioRow({ label, detail, chosen, onPress }: { label: string; detail?: 
 }
 
 /**
- * `/settings`: everything a driver tunes, grouped by what it touches — the drive, privacy, the
- * public profile, notifications. Every control saves as it changes; there is no Save button.
+ * `/settings`: everything a driver tunes, grouped by what it touches: the drive, privacy and what
+ * friends see, you, notifications. Every control saves as it changes; there is no Save button.
  * Appearance is this phone's own (`src/ui/appearance.ts`): it lands at once and is never uploaded.
+ * On an iPhone, Automatic drives says whether drives start on their own; it has no switch (the
+ * phone's own permissions are the way to turn it off) and opens Settings › Permissions.
  */
-export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps; appearance?: AppearanceStore } }) {
+export function SettingsScreen({ deps = {} }: { deps?: { appearance?: AppearanceStore } }) {
   const router = useRouter();
   const th = useTheme();
   const db = useDb();
@@ -104,11 +120,10 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
   const summary = useMySummary();
   const profile = summary.data?.profile;
   const edit = useProfileEdit();
-  const reminder = useTripReminder(deps.reminder);
+  const autoLine = autoDrivesLine(useAutoDrives());
 
   const [units, setUnits] = useState<Units | null>(null);
   const [zoneCount, setZoneCount] = useState(0);
-  const [stateSheet, setStateSheet] = useState(false);
   const [lookSheet, setLookSheet] = useState(false);
   const looks = deps.appearance ?? appAppearance;
   const look = useAppearance(looks).choice;
@@ -149,7 +164,6 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
   const dashcam = dashcamStatus(useDashcamState());
 
   const shownUnits = edit.value('units', profile?.units) ?? units;
-  const shownState = edit.value('state', profile?.state ?? '');
 
   return (
     <Screen scroll testID="settings-screen">
@@ -157,15 +171,28 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
       {edit.error ? <Banner tone="danger" message={copy.saveError} testID="settings-save-error" /> : null}
 
       <Section title={copy.driving}>
+        {autoLine ? (
+          <LinkRow icon="car-sport-outline" title={copy.autoDrives.title} subtitle={autoLine} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-auto-drives" />
+        ) : null}
         <LinkRow icon="videocam-outline" title={copy.dashcam.title} subtitle={dashcam.label} onPress={() => router.push(SETTINGS_HREFS.dashcam)} testID="settings-dashcam" />
         <LinkRow icon="volume-high-outline" title={copy.alerts.title} subtitle={copy.alerts.subtitle} onPress={() => router.push(SETTINGS_HREFS.alerts)} testID="settings-alerts" />
         <NavAppSettingRow db={db} />
-        {reminder.status ? <ReminderRow status={reminder.status} onStatus={reminder.setStatus} deps={deps.reminder} /> : null}
         <LinkRow icon="shield-checkmark-outline" title={copy.permissions.title} subtitle={copy.permissions.subtitle} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-permissions" />
       </Section>
 
-      <Section title={copy.privacy} footer={copy.heatmapFooter}>
+      <Section title={copy.privacy} footer={copy.privacyFooter}>
         <LinkRow icon="location-outline" title={copy.zones.title} subtitle={copy.zones.subtitle(zoneCount)} onPress={() => router.push(SETTINGS_HREFS.privacyZones)} testID="settings-zones" />
+        {SHARING.map((row) => (
+          <ToggleRow
+            key={row.field}
+            title={row.copy.title}
+            subtitle={row.copy.subtitle}
+            value={edit.value(row.field, profile?.[row.field]) === true}
+            onValueChange={(next) => void edit.save(row.field, next)}
+            disabled={profile === undefined}
+            testID={row.testID}
+          />
+        ))}
         <SegmentRow<HeatmapVisibility>
           title={copy.heatmap}
           value={shownVisibility(edit.value('heatmap_visibility', profile?.heatmap_visibility))}
@@ -178,13 +205,6 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
       <Section title={copy.you}>
         <SegmentRow<Units> title={copy.units} value={shownUnits} segments={UNIT_SEGMENTS} onChange={(v) => void onUnits(v)} testID="settings-units" />
         <ListRow
-          title={copy.state.title}
-          subtitle={stateName(shownState) ?? copy.state.subtitle}
-          leading={<RowIcon name="map-outline" />}
-          onPress={() => setStateSheet(true)}
-          testID="settings-state"
-        />
-        <ListRow
           title={copy.appearance.title}
           subtitle={copy.appearance.options[look].label}
           leading={<RowIcon name="contrast-outline" />}
@@ -196,22 +216,6 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
       <Section>
         <LinkRow icon="notifications-outline" title={copy.notifications.title} subtitle={copy.notifications.subtitle} onPress={() => router.push(SETTINGS_HREFS.notifications)} testID="settings-notifications" />
       </Section>
-
-      <Sheet visible={stateSheet} onClose={() => setStateSheet(false)} title={settingsCopy.states.title} scroll testID="settings-state-sheet">
-        <Card padded={false}>
-          {[['', settingsCopy.states.none] as const, ...US_STATES].map(([code, name]) => (
-            <RadioRow
-              key={code || 'none'}
-              label={name}
-              chosen={(shownState ?? '') === code}
-              onPress={() => {
-                setStateSheet(false);
-                void edit.save('state', code);
-              }}
-            />
-          ))}
-        </Card>
-      </Sheet>
 
       <Sheet visible={lookSheet} onClose={() => setLookSheet(false)} title={copy.appearance.sheetTitle} scroll testID="settings-appearance-sheet">
         <View style={{ gap: th.space.sm }}>

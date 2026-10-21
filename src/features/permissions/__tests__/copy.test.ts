@@ -1,5 +1,7 @@
 /** The permission words: exact lines, and the length limits (Home ≤ 60, Settings details ≤ 100). */
-import { DETAIL_MAX, HOME_LINE_MAX, homeLine, permissionName, permissionsCopy, rowDetail, rowTitle, statusWord, type CopyCtx } from '../copy';
+import { IDLE_END_S } from '@scoring';
+
+import { DETAIL_MAX, HOME_LINE_MAX, homeLine, permissionName, permissionsCopy, requestLabel, rowDetail, rowTitle, statusWord, type CopyCtx } from '../copy';
 import { PERMISSION_IDS, type MissingReason, type MissingState, type PermState, type SettingsTarget } from '../registry';
 
 const IOS: CopyCtx = { platform: 'ios', androidApi: null };
@@ -15,7 +17,7 @@ test('every Home line fits in 60 characters, every Settings detail in 100, on ev
     for (const id of PERMISSION_IDS) {
       for (const s of ALL_STATES) {
         if (s.kind === 'missing') expect(homeLine(id, s, c).length).toBeLessThanOrEqual(HOME_LINE_MAX);
-        for (const reminderOn of [true, false]) expect(rowDetail(id, s, c, { reminderOn }).length).toBeLessThanOrEqual(DETAIL_MAX);
+        expect(rowDetail(id, s, c).length).toBeLessThanOrEqual(DETAIL_MAX);
       }
     }
   }
@@ -27,23 +29,49 @@ test('Home lines', () => {
   expect(homeLine('location', m('servicesOff', true, 'locationServices'), ANDROID)).toBe("Location Services are off. Drives can't record.");
   expect(homeLine('location', m('servicesOff'), IOS)).toBe('Location Services are off. Turn on in Privacy & Security.');
   expect(homeLine('precise', m('denied'), IOS)).toBe("Precise Location is off. Drives can't record.");
-  expect(homeLine('motion', m('denied'), IOS)).toBe("Motion & Fitness is off. Walking away won't end a drive.");
+  expect(homeLine('locationAlways', m('notYet', true), IOS)).toBe('Set Location to Always so drives start themselves.');
+  expect(homeLine('backgroundRefresh', m('denied'), IOS)).toBe('Turn on Background App Refresh to catch every drive.');
+  expect(homeLine('motion', m('denied'), IOS)).toBe('Motion & Fitness is off. Drives won’t start themselves.');
+  expect(homeLine('motion', m('notYet', true), IOS)).toBe('Allow Motion & Fitness so RoadWise can spot drives.');
   expect(homeLine('motion', m('denied', true), ANDROID)).toBe("Physical activity is off. Walking away won't end a drive.");
-  expect(homeLine('motion', m('notYet', true), IOS)).toBe('Allow Motion & Fitness so walking away ends a drive.');
   expect(homeLine('motion', m('notYet', true), ANDROID)).toBe('Allow Physical activity so walking away ends a drive.');
-  expect(homeLine('notifications', m('denied'), ANDROID)).toBe("Notifications are off. You'll miss reminders and results.");
-  expect(homeLine('notifications', m('notYet', true), IOS)).toBe('Allow Notifications for reminders and results.');
-  expect(homeLine('reminderAccess', m('denied'), IOS)).toBe('The reminder needs Location set to Always.');
-  expect(homeLine('reminderAccess', m('denied', false, 'reminderChannel'), ANDROID)).toBe('Drive reminder notifications are off.');
+  expect(homeLine('notifications', m('denied'), ANDROID)).toBe('Notifications are off. You’ll miss your drive recaps.');
+  expect(homeLine('notifications', m('notYet', true), IOS)).toBe('Allow Notifications to get your drive recaps.');
   expect(homeLine('bluetooth', m('denied'), IOS)).toBe("Bluetooth isn't allowed. DashPal can't connect.");
   expect(homeLine('bluetooth', m('denied'), ANDROID)).toBe("Nearby devices isn't allowed. DashPal can't connect.");
 });
 
-test('the motion lines say what motion access does (one source per surface)', () => {
-  expect(rowDetail('motion', { kind: 'granted' }, IOS)).toBe('A forgotten drive stops when you walk away, and the reminder can spot trips.');
-  expect(rowDetail('motion', m('denied', true), ANDROID)).toBe('Without it, a forgotten drive ends after 15 min.');
-  expect(rowDetail('motion', m('notYet', true), IOS)).toBe('Without it, a forgotten drive ends after 15 min.');
-  expect(rowDetail('motion', m('denied'), IOS)).toBe('Without it, a forgotten drive ends after 15 min. Also check Privacy & Security › Motion & Fitness.');
+test('the motion lines say what motion access does on each phone', () => {
+  expect(rowDetail('motion', { kind: 'granted' }, IOS)).toBe('RoadWise can tell driving from walking, so drives start and end on time.');
+  expect(rowDetail('motion', m('notYet', true), IOS)).toBe('Without it, drives won’t start on their own.');
+  expect(rowDetail('motion', m('denied'), IOS)).toBe('Drives won’t start on their own. Also check Privacy & Security › Motion & Fitness.');
+  expect(rowDetail('motion', { kind: 'granted' }, ANDROID)).toBe('A forgotten drive stops when you walk away.');
+  expect(rowDetail('motion', m('denied', true), ANDROID)).toBe(`Without it, a forgotten drive ends after ${IDLE_END_S / 60} min.`);
+});
+
+test('the automatic-drive rows and notifications say what they do', () => {
+  expect(rowDetail('locationAlways', { kind: 'granted' }, IOS)).toBe('RoadWise can notice your drives and record them with the app closed.');
+  expect(rowDetail('locationAlways', m('denied'), IOS)).toBe('Drives won’t start on their own. You can still start them from Home.');
+  expect(rowDetail('locationAlways', { kind: 'idle' }, IOS)).toBe('Allow Location first.');
+  expect(rowDetail('backgroundRefresh', { kind: 'granted' }, IOS)).toBe('iOS can wake RoadWise when a drive starts.');
+  expect(rowDetail('backgroundRefresh', m('denied'), IOS)).toBe('iOS can’t wake RoadWise, so drives won’t start on their own.');
+  expect(rowDetail('notifications', { kind: 'granted' }, ANDROID)).toBe('Drive recaps, your weekly recap and friend requests can reach you.');
+  expect(rowDetail('notifications', m('denied'), IOS)).toBe('You won’t get drive recaps, your weekly recap or friend requests.');
+  expect(requestLabel('locationAlways', m('notYet', true))).toBe('Allow Always');
+  expect(requestLabel('backgroundRefresh', m('denied'))).toBe('Open Settings');
+});
+
+test('the note under the list follows the phone, and no line mentions a reminder or points', () => {
+  expect(permissionsCopy.about.ios).toBe('With Location set to Always, RoadWise notices drives and records them even when it’s closed. Your location is never sold.');
+  expect(permissionsCopy.about.android).toBe('A drive uses location only while it records. Start each drive from Home.');
+  for (const c of CTXS) {
+    for (const id of PERMISSION_IDS) {
+      for (const s of ALL_STATES) {
+        const lines = [rowTitle(id, c), rowDetail(id, s, c), ...(s.kind === 'missing' ? [homeLine(id, s, c)] : [])];
+        for (const line of lines) expect(line).not.toMatch(/reminder|forgot-to-start|\bpoints?\b|—/i);
+      }
+    }
+  }
 });
 
 test('Settings details by state and platform', () => {
@@ -51,11 +79,6 @@ test('Settings details by state and platform', () => {
   expect(rowDetail('location', m('servicesOff', true, 'locationServices'), ANDROID)).toBe("Location Services are off, so drives can't record.");
   expect(rowDetail('precise', m('denied'), IOS)).toBe('Approximate location is too rough to record a drive.');
   expect(rowDetail('precise', { kind: 'unknown' }, IOS)).toBe("RoadWise couldn't check this on this phone.");
-  expect(rowDetail('reminderAccess', { kind: 'idle' }, IOS, { reminderOn: false })).toBe('Only for the forgot-to-start reminder, which is off.');
-  expect(rowDetail('reminderAccess', { kind: 'idle' }, IOS, { reminderOn: true })).toBe('Allow Location first, then set it to Always for the reminder.');
-  expect(rowDetail('reminderAccess', m('denied', false, 'reminderChannel'), ANDROID)).toBe("The forgot-to-start reminder can't appear.");
-  expect(rowDetail('reminderAccess', { kind: 'idle' }, ANDROID, { reminderOn: true })).toBe('Turn on Notifications first so the reminder can appear.');
-  expect(rowDetail('reminderAccess', { kind: 'idle' }, ANDROID, { reminderOn: false })).toBe('Only for the forgot-to-start reminder, which is off.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, IOS)).toBe('Used only with a paired DashPal.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID)).toBe('Used only with a paired DashPal.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID_11)).toBe('Uses Location on this phone.');
@@ -71,8 +94,9 @@ test('titles and the names the confirmation uses follow the platform', () => {
   expect(rowTitle('bluetooth', IOS)).toBe('Bluetooth');
   expect(rowTitle('bluetooth', ANDROID)).toBe('Nearby devices');
   expect(rowTitle('bluetooth', ANDROID_11)).toBe('Bluetooth');
-  expect(rowTitle('reminderAccess', IOS)).toBe('Location Always');
-  expect(rowTitle('reminderAccess', ANDROID)).toBe('Drive reminder notifications');
+  expect(rowTitle('locationAlways', IOS)).toBe('Location Always');
+  expect(rowTitle('backgroundRefresh', IOS)).toBe('Background App Refresh');
+  expect(permissionName('locationAlways', IOS)).toBe('Location Always');
   expect(permissionName('location', IOS)).toBe('Location');
   expect(permissionName('precise', ANDROID)).toBe('Precise Location');
   expect(permissionName('motion', IOS)).toBe('Motion & Fitness');

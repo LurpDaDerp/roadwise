@@ -6,8 +6,6 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
-import type { TripReminderStatus } from '@drive-sense';
-
 import { HOME_HIDDEN_KEY } from '@/core/permissions';
 import { PAIRED_KEY } from '@/dashcam/keys';
 import { setActiveDashcam } from '@/dashcam/registry';
@@ -42,11 +40,9 @@ function setup(over: Partial<PermissionBoardDeps> = {}, initial = snap({ platfor
   const adapter = fakeAdapter(initial, answers);
   const appState = fakeAppState();
   let dashcamChange: (() => void) | null = null;
-  const reminder = jest.fn(async (): Promise<TripReminderStatus> => ({ enabled: false, state: 'off', missing: [] }));
   const deps: PermissionBoardDeps = {
     adapter,
     appState,
-    reminder,
     androidApi: 34,
     watchDashcam: (fn) => {
       dashcamChange = fn;
@@ -59,15 +55,15 @@ function setup(over: Partial<PermissionBoardDeps> = {}, initial = snap({ platfor
     ...over,
   };
   const reads = () => adapter.log.filter((c) => c === 'snapshot').length;
-  return { adapter, appState, deps, reads, reminder, fireDashcam: () => dashcamChange?.() };
+  return { adapter, appState, deps, reads, fireDashcam: () => dashcamChange?.() };
 }
 
-test('one read of the phone: snapshot, camera and reminder; no Bluetooth read without a pairing', async () => {
+test('one read of the phone: snapshot and camera; no Bluetooth read without a pairing', async () => {
   const w = await appWorld();
   const s = setup();
   const { result } = await mount(w, s.deps);
   await waitFor(() => expect(result.current.status).toBe('ready'));
-  expect(result.current.read).toMatchObject({ paired: false, bluetooth: null, androidApi: 34, camera: { access: 'undetermined' }, reminder: { enabled: false } });
+  expect(result.current.read).toMatchObject({ paired: false, bluetooth: null, androidApi: 34, camera: { access: 'undetermined' } });
   expect(s.adapter.log).not.toContain('bluetoothPermission');
   expect(s.adapter.log).not.toContain('bluetooth');
   expect(s.reads()).toBe(1);
@@ -148,13 +144,13 @@ test('a board read that lands before the stored prefs stays loading, so a hidden
   }
 });
 
-test('a reminder or camera read that fails nulls only its field', async () => {
+test('a camera read that fails nulls only its field', async () => {
   const w = await appWorld();
-  const s = setup({ reminder: () => Promise.reject(new Error('no module')) });
+  const s = setup();
   (s.adapter.camera as jest.Mock).mockRejectedValue(new Error('no camera module'));
   const { result } = await mount(w, s.deps);
   await waitFor(() => expect(result.current.status).toBe('ready'));
-  expect(result.current.read).toMatchObject({ reminder: null, camera: null });
+  expect(result.current.read).toMatchObject({ camera: null, paired: false });
 });
 
 test('a request with no effect makes the next tap open Settings; once the permission is on, the mark is dropped', async () => {

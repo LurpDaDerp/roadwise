@@ -87,12 +87,26 @@ function boardWith(read: unknown): MockBoard {
   return { status: read ? 'ready' : 'loading', read, prefs: { hidden: [], toSettings: {} }, refresh: jest.fn(async () => {}), fix: jest.fn(async () => null), hide: jest.fn(), show: jest.fn() };
 }
 const ALL_ON = {
-  snapshot: { platform: 'ios', location: 'foreground', precise: true, locationCanAskAgain: true, locationServices: true, motion: 'granted', notifications: 'granted', notificationsCanAskAgain: true, batteryOptimization: 'exempt', lowPowerMode: false, checkedAt: 1 },
+  snapshot: {
+    platform: 'ios',
+    location: 'always',
+    precise: true,
+    locationCanAskAgain: true,
+    locationServices: true,
+    motion: 'granted',
+    notifications: 'granted',
+    notificationsCanAskAgain: true,
+    batteryOptimization: 'exempt',
+    lowPowerMode: false,
+    backgroundRefresh: 'available',
+    canAskAlways: false,
+    liveActivities: true,
+    checkedAt: 1,
+  },
   androidApi: null,
   paired: false,
   bluetooth: null,
   camera: null,
-  reminder: null,
 };
 const MOTION_OFF = { ...ALL_ON, snapshot: { ...ALL_ON.snapshot, motion: 'denied' } };
 
