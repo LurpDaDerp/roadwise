@@ -28,7 +28,7 @@
 import { MOVING_MIN_MPH, PHONE_HANDLING_MIN_SCORE, PHONE_PICKUP_MIN_ROWS, PHONE_PUTDOWN_QUIET_S, PHONE_SEVERE_S, phonePickupTier } from '@scoring';
 
 import type { DetectedEvent, Detector, DetectorContext, FeatureRow, PhoneAlert } from '../engine/types';
-import { atDrivingSpeed, imuAbsent, inWarmup, knownSpeed, mph, MPS_PER_MPH, round1, ROW_MS, speedTrusted } from './common';
+import { atDrivingSpeed, inWarmup, knownSpeed, mph, MPS_PER_MPH, phoneWatchable, round1, ROW_MS, speedTrusted } from './common';
 
 /** After the first repeat (at `PHONE_SEVERE_S` in hand), the next one comes each time this much more is in hand. */
 export const PHONE_REPEAT_IN_HAND_S = 60;
@@ -36,11 +36,9 @@ export const PHONE_REPEAT_IN_HAND_S = 60;
 const QUIET_MS = PHONE_PUTDOWN_QUIET_S * 1000;
 const MOVING_MPS = MOVING_MIN_MPH * MPS_PER_MPH;
 
-/** A use row (see the header): handled, the IMU read, and on iPhone no call. */
+/** A use row (see the header): handled, on a second a pickup could be seen in (the IMU read, and on iPhone no call). */
 export function isUseRow(row: FeatureRow, platform: DetectorContext['platform']): boolean {
-  if (!(row.handlingScore >= PHONE_HANDLING_MIN_SCORE)) return false;
-  if (imuAbsent(row)) return false;
-  return !(platform === 'ios' && row.call !== undefined);
+  return row.handlingScore >= PHONE_HANDLING_MIN_SCORE && phoneWatchable(row, platform);
 }
 
 interface Episode {

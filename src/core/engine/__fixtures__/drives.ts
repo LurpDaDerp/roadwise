@@ -56,7 +56,7 @@ export function closedSession(
   const det = createDetectors(() => 'x');
   list.forEach((r, i) => {
     det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, { warmupEndsAt: t0 + 30_000, platform: 'ios' });
-    appendRow(session, r, { unsafe: opts.unsafeRows?.(i) ?? false, limitUsable: det.speedingNow() !== null });
+    appendRow(session, r, { unsafe: opts.unsafeRows?.(i) ?? false, limitUsable: det.speedingNow() !== null, platform: 'ios' });
   });
   session.events.push(...events);
   session.pending = [];

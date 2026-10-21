@@ -29,7 +29,7 @@ const at = (s: number, northM: number, over: Partial<FeatureRow> = {}): FeatureR
 
 function run(rows: FeatureRow[]): TripSession {
   const s = createSession({ clientTripId: 'x', startedAt: T0, origin: 'manual' });
-  for (const r of rows) appendRow(s, r, { unsafe: false, limitUsable: false });
+  for (const r of rows) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
   return s;
 }
 
@@ -86,9 +86,9 @@ describe('place', () => {
     const s = run([at(0, 0, still), at(1, 150, still)]);
     expect(s.motion.anchor).toBeNull();
     expect(s.motion.anchorAfter).toBe(T0 + 1000 + PLACE_SETTLE_MS);
-    appendRow(s, at(20, 150, still), { unsafe: false, limitUsable: false });
+    appendRow(s, at(20, 150, still), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.motion.anchor).toBeNull();
-    appendRow(s, at(31, 150, still), { unsafe: false, limitUsable: false });
+    appendRow(s, at(31, 150, still), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.motion.anchor).toMatchObject({ lat: LAT + 150 / M_PER_DEG, lng: LNG });
     expect(s.moved).toBeNull();
   });
@@ -147,14 +147,14 @@ describe('fix-less rows and the idle clock', () => {
   test('a holding row moves the clock base, never the mark; movement clears it', () => {
     const s = run([at(0, 0, { speed: mph(30) }), at(1, 13, { speed: mph(30) })]);
     expect(idleSince(s)).toBe(T0 + 2000);
-    appendRow(s, carLike(100), { unsafe: false, limitUsable: false });
+    appendRow(s, carLike(100), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.motion.heldUntil).toBe(T0 + 101_000);
     expect(s.moved?.rowTs).toBe(T0 + 1000);
     expect(idleSince(s)).toBe(T0 + 101_000);
-    appendRow(s, carLike(101, { handlingScore: 0.9 }), { unsafe: false, limitUsable: false });
+    appendRow(s, carLike(101, { handlingScore: 0.9 }), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(idleSince(s)).toBe(T0 + 101_000);
-    appendRow(s, at(200, 2000, { speed: mph(30) }), { unsafe: false, limitUsable: false });
-    appendRow(s, at(201, 2013, { speed: mph(30) }), { unsafe: false, limitUsable: false });
+    appendRow(s, at(200, 2000, { speed: mph(30) }), { unsafe: false, limitUsable: false, platform: 'ios' });
+    appendRow(s, at(201, 2013, { speed: mph(30) }), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.motion.heldUntil).toBeNull();
     expect(idleSince(s)).toBe(T0 + 202_000);
   });
@@ -186,7 +186,7 @@ describe('the mark', () => {
       exposure: s.exposure,
     });
     // Rows after it change the session, not the mark.
-    appendRow(s, at(2, 14, { speed: 0 }), { unsafe: false, limitUsable: false });
+    appendRow(s, at(2, 14, { speed: 0 }), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.moved?.rowsCount).toBe(2);
     expect(s.rowsCount).toBe(3);
   });
@@ -195,7 +195,7 @@ describe('the mark', () => {
     const s = run([at(0, 0, { speed: mph(30) })]);
     const motion = s.motion;
     const copy = { ...s };
-    appendRow(s, at(1, 13, { speed: mph(30) }), { unsafe: false, limitUsable: false });
+    appendRow(s, at(1, 13, { speed: mph(30) }), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.motion).not.toBe(motion);
     expect(motion.paceRun).toBe(1);
     expect(copy.moved).toBeNull();
@@ -203,7 +203,7 @@ describe('the mark', () => {
     expect(Object.isFrozen(s.motion)).toBe(true);
     expect(Object.isFrozen(s.moved)).toBe(true);
     const moved = s.moved;
-    appendRow(s, at(2, 26, { speed: mph(30) }), { unsafe: false, limitUsable: false });
+    appendRow(s, at(2, 26, { speed: mph(30) }), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.moved).not.toBe(moved);
     expect(moved?.rowTs).toBe(T0 + 1000);
   });
@@ -241,10 +241,10 @@ describe('driving speed (droveAt), the last known speed and the kept marks', () 
     expect(s.droveAt).toBe(T0 + 1000);
     expect(s.lastDroveAt).toBe(T0 + 4000);
     // One driving row after a stop is not a pair: lastDroveAt keeps the pair before it.
-    appendRow(s, at(5, 15, { speed: 0 }), { unsafe: false, limitUsable: false });
-    appendRow(s, fast(6, 20), { unsafe: false, limitUsable: false });
+    appendRow(s, at(5, 15, { speed: 0 }), { unsafe: false, limitUsable: false, platform: 'ios' });
+    appendRow(s, fast(6, 20), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.lastDroveAt).toBe(T0 + 4000);
-    appendRow(s, fast(7, 25), { unsafe: false, limitUsable: false });
+    appendRow(s, fast(7, 25), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.lastDroveAt).toBe(T0 + 7000);
     expect(run([fast(0, 0)]).lastDroveAt).toBeNull();
     expect(run([fast(0, 0), fast(1, 5)]).lastDroveAt).toBe(T0 + 1000);
@@ -253,7 +253,7 @@ describe('driving speed (droveAt), the last known speed and the kept marks', () 
   test('lastSpeed follows every known speed, any accuracy, and keeps through a fix-less row', () => {
     const s = run([fast(0, 0), at(1, 1, { speed: mph(3), speedAcc: 4 })]);
     expect(s.lastSpeed).toEqual({ mps: mph(3), ts: T0 + 1000 });
-    appendRow(s, carLike(2), { unsafe: false, limitUsable: false });
+    appendRow(s, carLike(2), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.lastSpeed).toEqual({ mps: mph(3), ts: T0 + 1000 });
     expect(run([]).lastSpeed).toBeNull();
     expect(run([carLike(0)]).lastSpeed).toBeNull();
@@ -270,7 +270,7 @@ describe('driving speed (droveAt), the last known speed and the kept marks', () 
     expect(Object.isFrozen(s.marks)).toBe(true);
     // A row that is no movement leaves the marks as they were.
     const before = s.marks;
-    appendRow(s, at(400, 400 * 5 - 5, { speed: 0 }), { unsafe: false, limitUsable: false });
+    appendRow(s, at(400, 400 * 5 - 5, { speed: 0 }), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.marks).toBe(before);
   });
 
@@ -279,7 +279,7 @@ describe('driving speed (droveAt), the last known speed and the kept marks', () 
     const marks = s.marks;
     const motion = s.motion;
     const last = s.lastSpeed;
-    appendRow(s, fast(2, 10), { unsafe: false, limitUsable: false });
+    appendRow(s, fast(2, 10), { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.marks).not.toBe(marks);
     expect(marks).toHaveLength(1);
     expect(s.motion).not.toBe(motion);

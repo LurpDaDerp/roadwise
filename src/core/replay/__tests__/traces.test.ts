@@ -55,8 +55,9 @@ test.each(names)('%s is a 1 Hz drive that asserts something', (name) => {
  * Each trace's opportunity counters (slowdowns, speed-ups, turns, limit seconds, moving seconds,
  * phone seconds), with the harness's 30 s warm-up. The synthetic drives run straight east, so only
  * `turn-right-90` turns; a 35 → 25 mph brake is a 10 mph drop, under the 12 mph slowdown line. Phone
- * seconds are every row at 10 mph or more on a trusted speed with the motion sensors read, the
- * warm-up's included.
+ * seconds are every row at 10 mph or more on a trusted speed on which a pickup could be seen (the
+ * motion sensors read; on iPhone no call: `phone-hands-free-call` loses its 20 call rows, Android's
+ * `phone-call-android` keeps them), the warm-up's included.
  */
 const EXPOSURE: Record<string, readonly [number, number, number, number, number, number]> = {
   'clean-commute': [0, 0, 0, 270, 300, 300],
@@ -71,7 +72,7 @@ const EXPOSURE: Record<string, readonly [number, number, number, number, number,
   'hard-corner-wrong-side': [0, 0, 0, 170, 200, 200],
   'phone-call-android': [0, 0, 0, 170, 200, 200],
   'phone-handling-long': [0, 0, 0, 210, 240, 240],
-  'phone-hands-free-call': [0, 0, 0, 170, 200, 200],
+  'phone-hands-free-call': [0, 0, 0, 170, 200, 180],
   'phone-parked-start': [0, 1, 0, 120, 120, 120],
   'phone-pickup': [0, 0, 0, 170, 200, 200],
   'phone-red-light-drive-off': [1, 1, 0, 180, 210, 210],

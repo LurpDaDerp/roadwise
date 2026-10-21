@@ -5,7 +5,7 @@
 // trusted; an unknown or untrusted speed changes nothing.
 import { clampExposure, type Exposure } from '@scoring';
 
-import { atDrivingSpeed, imuAbsent, knownSpeedMph, speedTrusted } from '../detectors/common';
+import { atDrivingSpeed, knownSpeedMph, phoneWatchable, speedTrusted } from '../detectors/common';
 import { CORNER_MIN_MPH } from '../detectors/harsh';
 import type { FeatureRow } from './types';
 
@@ -31,8 +31,11 @@ export interface ExposureState {
   readonly turns: number;
   readonly limitS: number;
   /**
-   * Phone use's opportunities: rows at driving speed (`atDrivingSpeed`: a known, trusted GPS speed of
-   * 10 mph or more) whose motion sensors reported (not `imuAbsent`), one second each.
+   * Phone use's opportunities, the seconds a pickup could have been seen: rows at driving speed
+   * (`atDrivingSpeed`: a known, trusted GPS speed of 10 mph or more) on which a use row was possible
+   * (`phoneWatchable`: the motion sensors reported, and on iPhone no call), one second each. The
+   * warm-up's rows count: at 10 mph they are rare (a drive that starts moving has none), and the
+   * counter stays a reducer of the row alone.
    */
   readonly phoneS: number;
   /** Speed swings: the phase and its running extremes (mph); `peak`/`trough` null before the first trusted speed. */
@@ -116,16 +119,17 @@ function turn(s: Turn, ts: number, course: number): Turn {
 
 /**
  * One row. `limitUsable`: the speeding detector could use the row (an actionable posted limit,
- * trusted speed, a good fix, past the warm-up). Returns a new frozen state; the input is untouched.
+ * trusted speed, a good fix, past the warm-up). `platform`: the phone that recorded the drive (on
+ * iPhone a call row is no phone time). Returns a new frozen state; the input is untouched.
  */
-export function noteExposure(state: Readonly<ExposureState>, row: FeatureRow, limitUsable: boolean): Readonly<ExposureState> {
+export function noteExposure(state: Readonly<ExposureState>, row: FeatureRow, limitUsable: boolean, platform: 'ios' | 'android'): Readonly<ExposureState> {
   const v = speedTrusted(row) ? knownSpeedMph(row) : null;
   if (v === null) return state;
   const swung = swing(state, v);
   const qualifies = row.gnssValid && row.course >= 0 && row.course <= 360 && v >= TURN_MIN_MPH;
   const turned = qualifies ? turn(state, row.ts, row.course) : state;
   const limitS = state.limitS + (limitUsable && v >= LIMIT_MIN_MPH ? 1 : 0);
-  const phoneS = state.phoneS + (atDrivingSpeed(row) && !imuAbsent(row) ? 1 : 0);
+  const phoneS = state.phoneS + (atDrivingSpeed(row) && phoneWatchable(row, platform) ? 1 : 0);
   return Object.freeze({
     slowdowns: swung.slowdowns,
     speedups: swung.speedups,

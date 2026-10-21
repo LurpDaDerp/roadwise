@@ -276,7 +276,7 @@ describe('a drive closed at its last movement', () => {
     const drive = rows(600);
     const end = drive.at(-1)!;
     const parked = rows(300, { t0: T0 + 600_000, speedMps: 0.5 }).map((r, i) => ({ ...r, lng: end.lng + (i % 2 === 0 ? 10 : 0) / 75_000 }));
-    for (const r of [...drive, ...parked]) appendRow(s, r, { unsafe: false, limitUsable: false });
+    for (const r of [...drive, ...parked]) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     s.events.push(
       // Speeding that ran 40 s into the stop: clipped at the cut.
       { id: uuid(11), type: 'speeding', tier: 'moderate', startedAt: T0 + 580_000, durationS: 60, measured: { speedMph: 45 } },
@@ -305,9 +305,9 @@ describe('a drive closed at its last movement', () => {
     const s = createSession({ clientTripId: '33333333-3333-4333-8333-333333333333', startedAt: T0, origin: 'auto' });
     // One fix a minute for 12 h, 900 m apart: the last movement 1 s before the bound.
     for (let k = 0; k < 720; k += 1) {
-      appendRow(s, { ...rows(1, { t0: T0 + k * 60_000 })[0]!, lng: -122.3321 + (k * 900) / 75_000, speed: -1 }, { unsafe: false, limitUsable: false });
+      appendRow(s, { ...rows(1, { t0: T0 + k * 60_000 })[0]!, lng: -122.3321 + (k * 900) / 75_000, speed: -1 }, { unsafe: false, limitUsable: false, platform: 'ios' });
     }
-    appendRow(s, { ...rows(1, { t0: T0 + MAX_DRIVE_MS - 1000 })[0]!, lng: -122.3321 + (720 * 900) / 75_000, speed: -1 }, { unsafe: false, limitUsable: false });
+    appendRow(s, { ...rows(1, { t0: T0 + MAX_DRIVE_MS - 1000 })[0]!, lng: -122.3321 + (720 * 900) / 75_000, speed: -1 }, { unsafe: false, limitUsable: false, platform: 'ios' });
     const closed = closeAtLastMovement(s, 'limit');
     expect(closed.endedAt! - closed.startedAt).toBeLessThanOrEqual(MAX_DRIVE_MS);
     const result = await finalizeTrip(closed, deps({ now: () => T0 + MAX_DRIVE_MS + 5000 }));
@@ -343,7 +343,7 @@ describe('a phone pickup always passes the server’s own checks (a refused uplo
     for (const r of [...drive, ...parked]) {
       noteWarmup(s, r);
       s.events.push(...det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, { warmupEndsAt: s.warmup.endsAt, platform: 'ios' }));
-      appendRow(s, r, { unsafe: false, limitUsable: false });
+      appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     }
     s.events.push(...det.flush());
     expect(s.events).toEqual([expect.objectContaining({ type: 'phone_pickup', startedAt: T0 + 580_000, durationS: 20, tier: 'severe' })]);
@@ -386,7 +386,7 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
     await createEventsRepo(db).insertMany([{ id: uuid(40), client_trip_id: ID, type: 'hard_brake', tier: 'severe', started_at: T0 + 5000 }]);
     await db.execute('INSERT INTO dashcam_coverage (client_trip_id, moving_s, covered_s) VALUES (?, 0, 0)', [ID]);
     const s = createSession({ clientTripId: ID, startedAt: T0, origin: 'manual' });
-    for (const r of list) appendRow(s, r, { unsafe: false, limitUsable: false });
+    for (const r of list) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     return s;
   }
 
@@ -420,7 +420,7 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
     ] as const) {
       await createTripsRepo(db).insert({ client_trip_id: ID, started_at: T0, tz: TZ, status: 'recording' }, T0);
       const s = createSession({ clientTripId: ID, startedAt: T0, origin: 'manual' });
-      for (const r of walk) appendRow(s, r, { unsafe: false, limitUsable: false });
+      for (const r of walk) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
       expect(s.moved).not.toBeNull();
       expect(s.droveAt).toBeNull();
       expect(dropReason(s)).toBe('not_driven');
@@ -432,11 +432,11 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
 
   test('driving speed needs trusted readings: 30 mph rows rated at 3 m/s are not_driven; at -1 (no rating) they count', () => {
     const untrusted = createSession({ clientTripId: ID, startedAt: T0, origin: 'manual' });
-    for (const r of rows(60, { over: () => ({ speedAcc: 3 }) })) appendRow(untrusted, r, { unsafe: false, limitUsable: false });
+    for (const r of rows(60, { over: () => ({ speedAcc: 3 }) })) appendRow(untrusted, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(dropReason(untrusted)).toBe('not_driven');
     expect(untrusted.droveAt).toBeNull();
     const unrated = createSession({ clientTripId: ID, startedAt: T0, origin: 'manual' });
-    for (const r of rows(60, { over: () => ({ speedAcc: -1 }) })) appendRow(unrated, r, { unsafe: false, limitUsable: false });
+    for (const r of rows(60, { over: () => ({ speedAcc: -1 }) })) appendRow(unrated, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(dropReason(unrated)).toBeNull();
   });
 
@@ -448,7 +448,7 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
 
   test('a drive that moved is kept (dropReason null) and finalized as before', async () => {
     const s = createSession({ clientTripId: ID, startedAt: T0, origin: 'manual' });
-    for (const r of rows(60)) appendRow(s, r, { unsafe: false, limitUsable: false });
+    for (const r of rows(60)) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(dropReason(s)).toBeNull();
     const result = await closeDrive(closeAtLastMovement(s, 'stopped'), deps());
     expect(isDropped(result)).toBe(false);

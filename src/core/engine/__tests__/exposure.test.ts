@@ -30,8 +30,8 @@ function ramp(a: number, b: number, step = 1): number[] {
 }
 const hold = (v: number, n: number): number[] => Array.from({ length: n }, () => v);
 
-function run(list: readonly FeatureRow[], limitUsable: (i: number) => boolean = () => false): Readonly<ExposureState> {
-  return list.reduce<Readonly<ExposureState>>((s, r, i) => noteExposure(s, r, limitUsable(i)), EMPTY_EXPOSURE_STATE);
+function run(list: readonly FeatureRow[], limitUsable: (i: number) => boolean = () => false, platform: 'ios' | 'android' = 'ios'): Readonly<ExposureState> {
+  return list.reduce<Readonly<ExposureState>>((s, r, i) => noteExposure(s, r, limitUsable(i), platform), EMPTY_EXPOSURE_STATE);
 }
 const counted = (list: readonly FeatureRow[], movingS = 0) => closeExposure(run(list), movingS);
 
@@ -159,7 +159,7 @@ describe('limit time', () => {
   });
 });
 
-describe('phone time (phone plan P2)', () => {
+describe('phone time (phone plan P2): the seconds a pickup could have been seen', () => {
   /** The IMU-absent encoding: every IMU field 0. */
   const noImu = { aLonMax: 0, aLonMin: 0, aLatMax: 0, aLatMin: 0, yawRateMax: 0, jerkMax: 0, gravityStability: 0, orientationDelta: 0, handlingScore: 0 };
 
@@ -178,6 +178,12 @@ describe('phone time (phone plan P2)', () => {
     );
     // the untrusted speed, the IMU-absent row, the lost fix and the unknown speed count nothing; no speed accuracy reported is trusted
     expect(run(list).phoneS).toBe(2);
+  });
+
+  test('on an iPhone a call row is no phone time (it can never be phone use); on Android it is', () => {
+    const list = speeds(hold(30, 6)).map((r, i) => (i >= 2 && i < 5 ? { ...r, call: i === 2 ? ('ring' as const) : ('live' as const) } : r));
+    expect(run(list, () => false, 'ios').phoneS).toBe(3);
+    expect(run(list, () => false, 'android').phoneS).toBe(6);
   });
 
   test('closeExposure keeps phoneS within movingS', () => {
@@ -199,7 +205,7 @@ describe('the reducer is pure', () => {
     let s = EMPTY_EXPOSURE_STATE;
     for (const r of list) {
       const before = JSON.stringify(s);
-      const next = noteExposure(s, r, true);
+      const next = noteExposure(s, r, true, 'ios');
       expect(JSON.stringify(s)).toBe(before);
       expect(Object.isFrozen(next)).toBe(true);
       states.push(next);

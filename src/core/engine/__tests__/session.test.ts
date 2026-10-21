@@ -13,7 +13,7 @@ function eastward(n: number, mps: number, over: (i: number) => Partial<ReturnTyp
 test('distance integrates consecutive valid fixes; safe and night distance follow their flags', () => {
   const s = start();
   const rows = eastward(11, 10);
-  rows.forEach((r, i) => appendRow(s, r, { unsafe: i >= 6, limitUsable: false }));
+  rows.forEach((r, i) => appendRow(s, r, { unsafe: i >= 6, limitUsable: false, platform: 'ios' }));
   expect(s.rowsCount).toBe(11);
   expect(s.validGnssRows).toBe(11);
   expect(s.distanceM).toBeCloseTo(100, 0);
@@ -31,16 +31,16 @@ test('night distance counts metres driven after sunset at the car’s position',
   const s = createSession({ clientTripId: 't1', startedAt: T0 + 8 * 3_600_000, origin: 'manual' });
   // 22:13 PST: dark.
   const rows = eastward(11, 10).map((r, i) => ({ ...r, ts: T0 + 8 * 3_600_000 + i * 1000 }));
-  rows.forEach((r) => appendRow(s, r, { unsafe: false, limitUsable: false }));
+  rows.forEach((r) => appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' }));
   expect(s.nightDistanceM).toBeCloseTo(100, 0);
 });
 
 test('a GNSS jump is skipped, an invalid fix adds nothing, a mock row is counted', () => {
   const s = start();
   const rows = eastward(3, 10);
-  appendRow(s, rows[0]!, { unsafe: false, limitUsable: false });
-  appendRow(s, { ...rows[1]!, lat: 48.0 }, { unsafe: false, limitUsable: false }); // ~44 km in a second
-  appendRow(s, { ...rows[2]!, gnssValid: false, mock: true }, { unsafe: false, limitUsable: false });
+  appendRow(s, rows[0]!, { unsafe: false, limitUsable: false, platform: 'ios' });
+  appendRow(s, { ...rows[1]!, lat: 48.0 }, { unsafe: false, limitUsable: false, platform: 'ios' }); // ~44 km in a second
+  appendRow(s, { ...rows[2]!, gnssValid: false, mock: true }, { unsafe: false, limitUsable: false, platform: 'ios' });
   expect(s.distanceM).toBe(0);
   expect(s.validGnssRows).toBe(2);
   expect(s.mockRows).toBe(1);
@@ -50,7 +50,7 @@ test('a GNSS jump is skipped, an invalid fix adds nothing, a mock row is counted
 test('moving rows and IMU activity feed the motion-mismatch heuristic; pending rows accumulate', () => {
   const s = start();
   const rows = seq([3, { speed: mph(30), aLonMax: 0.05 }], [3, { speed: mph(30), aLonMax: 0, aLonMin: 0 }], [2, { speed: 0 }]);
-  rows.forEach((r) => appendRow(s, r, { unsafe: false, limitUsable: false }));
+  rows.forEach((r) => appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' }));
   expect(s.movingRows).toBe(6);
   expect(s.imuActiveRows).toBe(3);
   expect(s.pending).toHaveLength(8);
@@ -58,7 +58,7 @@ test('moving rows and IMU activity feed the motion-mismatch heuristic; pending r
 
 test('closeSession stamps the end (never before the start) and the cause; the open session is untouched', () => {
   const s = start();
-  appendRow(s, row({}, 0), { unsafe: false, limitUsable: false });
+  appendRow(s, row({}, 0), { unsafe: false, limitUsable: false, platform: 'ios' });
   const closed = closeSession(s, T0 - 5000, 'manual');
   expect(closed.endedAt).toBe(T0 + 1000);
   expect(closed.endCause).toBe('manual');
@@ -181,7 +181,7 @@ describe('the cut at the last movement', () => {
     const s = createSession({ clientTripId: 'x', startedAt: T0, origin: 'manual' });
     const drive = seq([60, (i) => ({ speed: mph(30), lng: -122.4194 + i * 0.00015, ts: T0 + i * 1000 })]);
     const parked = seq([300, (i) => ({ speed: 0.3, lat: 37.7749 + Math.sin(i) * 0.00005, lng: -122.4194 + 59 * 0.00015, ts: T0 + (60 + i) * 1000 })]);
-    for (const r of [...drive, ...parked]) appendRow(s, r, { unsafe: false, limitUsable: false });
+    for (const r of [...drive, ...parked]) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     s.events.push(ev('speeding', 200, 10, { tier: 'severe' }), ev('speeding', 30, 10));
     const before = { distanceM: s.distanceM, rows: s.rowsCount, track: s.track.length, events: s.events.length };
     const closed = closeAtLastMovement(s, 'stopped');
@@ -201,7 +201,7 @@ describe('the cut at the last movement', () => {
   test('closeAtLastMovement on a drive that never moved ends after its last row (never before start + 1 s), uncut', () => {
     const s = createSession({ clientTripId: 'x', startedAt: T0, origin: 'manual' });
     expect(closeAtLastMovement(s, 'stopped')).toMatchObject({ endedAt: T0 + 1000, cut: false, moved: null });
-    for (const r of seq([10, { speed: 0 }])) appendRow(s, r, { unsafe: false, limitUsable: false });
+    for (const r of seq([10, { speed: 0 }])) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(closeAtLastMovement(s, 'walking')).toMatchObject({ endedAt: T0 + 10_000, endCause: 'walking', cut: false });
     expect(closeAtLastMovement(s, 'walking', { notAfter: T0 + 5000 })).toMatchObject({ endedAt: T0 + 10_000, cut: false });
   });
@@ -211,7 +211,7 @@ describe('the cut at the last movement', () => {
     // 60 s at 30 mph (movement on every row from the second), then 60 s parked.
     const drive = seq([60, (i) => ({ speed: mph(30), lng: -122.4194 + i * 0.00015, ts: T0 + i * 1000 })]);
     const parked = seq([60, (i) => ({ speed: 0, lng: -122.4194 + 59 * 0.00015, ts: T0 + (60 + i) * 1000 })]);
-    for (const r of [...drive, ...parked]) appendRow(s, r, { unsafe: false, limitUsable: false });
+    for (const r of [...drive, ...parked]) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     // The walk began at +30.5 s: the mark of the row at +30 s.
     const mid = closeAtLastMovement(s, 'walking', { notAfter: T0 + 30_500 });
     expect(mid).toMatchObject({ endedAt: T0 + 31_000, lastRowTs: T0 + 30_000, rowsCount: 31, cut: true, endCause: 'walking' });
@@ -229,7 +229,7 @@ describe('the cut at the last movement', () => {
   test('closeAtLastMovement with notAfter older than every kept mark falls back to the oldest kept (5 min behind the newest)', () => {
     const s = createSession({ clientTripId: 'x', startedAt: T0, origin: 'manual' });
     const drive = seq([600, (i) => ({ speed: mph(30), lng: -122.4194 + i * 0.00015, ts: T0 + i * 1000 })]);
-    for (const r of drive) appendRow(s, r, { unsafe: false, limitUsable: false });
+    for (const r of drive) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     expect(s.marks[0]!.rowTs).toBe(T0 + 299_000);
     expect(closeAtLastMovement(s, 'walking', { notAfter: T0 + 100_000 })).toMatchObject({ lastRowTs: T0 + 299_000, endedAt: T0 + 300_000 });
   });

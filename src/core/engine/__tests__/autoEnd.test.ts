@@ -342,7 +342,7 @@ describe('(p) a manual end', () => {
 
 test('(q) an adopted drive whose last movement is 20 min old ends on the first tick, cut at that movement', async () => {
   const session = createSession({ clientTripId: 'old', startedAt: T0, origin: 'manual' });
-  for (const r of path(T0, DRIVE, PARKED(60))) appendRow(session, r, { unsafe: false, limitUsable: false });
+  for (const r of path(T0, DRIVE, PARKED(60))) appendRow(session, r, { unsafe: false, limitUsable: false, platform: 'ios' });
   const h = harness();
   await h.engine.dispatch({ type: 'adopt', trip: { session, detectors: createDetectors(() => 'x') }, ts: PARKED_AT + 20 * 60_000 });
   expect(h.engine.snapshot().autoEndAt).toBe(PARKED_AT + IDLE_MS);

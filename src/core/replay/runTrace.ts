@@ -69,7 +69,7 @@ export function runTrace(trace: Trace): TraceResult {
   const events: DetectedEvent[] = [];
   for (const row of trace.rows) {
     events.push(...suite.push(row, limitAt(trace.limits, row.ts), ctx));
-    appendRow(session, row, { unsafe: suite.unsafe(), limitUsable: suite.speedingNow() !== null });
+    appendRow(session, row, { unsafe: suite.unsafe(), limitUsable: suite.speedingNow() !== null, platform: ctx.platform });
   }
   events.push(...suite.flush());
   const exposure = closeExposure(session.exposure, session.movingRows);

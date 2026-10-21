@@ -273,7 +273,7 @@ export function createEngine(deps: EngineDeps): Engine {
         shake(a.id, row.ts, a.tier);
       }
     }
-    appendRow(s, row, { unsafe: det.unsafe(), limitUsable: det.speedingNow() !== null });
+    appendRow(s, row, { unsafe: det.unsafe(), limitUsable: det.speedingNow() !== null, platform: ctx.platform });
     maybePrefetch(row, s.distanceM);
 
     if (await endIfDue(row.ts + ROW_MS)) return;

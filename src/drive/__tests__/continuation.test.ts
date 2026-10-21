@@ -139,7 +139,7 @@ test('closeAtLastMovement of the re-opened drive keeps both legs: one drive, its
   const adopted = (await reopenTrip(db, (await continuationFor(db, at, end))!, { ...rebuild, now: at, at }))!;
   const s = adopted.session;
   const before = s.distanceM;
-  for (const r of rows(60, { t0: at }).map((r, i) => ({ ...r, lng: end.lng + (i * 15) / M_PER_DEG_LNG }))) appendRow(s, r, { unsafe: false, limitUsable: false });
+  for (const r of rows(60, { t0: at }).map((r, i) => ({ ...r, lng: end.lng + (i * 15) / M_PER_DEG_LNG }))) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
   const closed = closeAtLastMovement(s, 'stopped');
   expect(closed.startedAt).toBe(T0);
   expect(closed.distanceM).toBeGreaterThan(before);

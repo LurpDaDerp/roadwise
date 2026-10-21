@@ -249,6 +249,8 @@ export interface RowFlags {
   unsafe: boolean;
   /** The speeding detector could use the row (`DetectorSuite.speedingNow() !== null`): it counts toward limit time. */
   limitUsable: boolean;
+  /** The phone that recorded the drive (`DetectorContext.platform`): on iPhone a call row is no phone time. */
+  platform: 'ios' | 'android';
 }
 
 /** The bridge-only journal sequence number a row may carry (iOS), or null. */
@@ -264,7 +266,7 @@ export function rowSeq(row: FeatureRow): number | null {
 export function appendRow(session: TripSession, row: FeatureRow, flags: RowFlags): void {
   const prevFix = session.lastFix;
   accumulate(session, row, flags.unsafe);
-  session.exposure = noteExposure(session.exposure, row, flags.limitUsable);
+  session.exposure = noteExposure(session.exposure, row, flags.limitUsable, flags.platform);
   noteMovement(session, row, prevFix);
   noteDriving(session, row);
 }

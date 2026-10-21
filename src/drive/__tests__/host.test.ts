@@ -399,7 +399,7 @@ describe('a drive', () => {
   test('a drive that never moved (an adopted one) is dropped with Home’s notice; the next confirmed drive clears the notice', async () => {
     const still = rows(30, { speedMps: 0 });
     const session = createSession({ clientTripId: uuid(9), startedAt: T0, origin: 'manual' });
-    for (const r of still) appendRow(session, r, { unsafe: false, limitUsable: false });
+    for (const r of still) appendRow(session, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     session.pending = [];
     await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0, tz: TZ, status: 'recording' }, T0);
     const h = build();
@@ -447,7 +447,7 @@ describe('a drive', () => {
 
   test('boot adopts a rebuilt drive and keeps recording it (its budget comes back by trip id); a sign-out ends it', async () => {
     const session = createSession({ clientTripId: uuid(9), startedAt: T0, origin: 'manual' });
-    for (const r of rows(30, { speedMps: 15 })) appendRow(session, r, { unsafe: false, limitUsable: false });
+    for (const r of rows(30, { speedMps: 15 })) appendRow(session, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     session.pending = [];
     await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0, tz: TZ, status: 'recording' }, T0);
     await createSamplesRepo(db).appendMany(uuid(9), rows(30, { speedMps: 15 }).map((r) => ({ ts: r.ts, row: r })));
@@ -831,7 +831,7 @@ describe('iOS: the drive detector', () => {
   test('journal rows go only to the native drive they belong to: with a recovered drive open (no journal of its own), a native drive’s rows are never added to it', async () => {
     const session = createSession({ clientTripId: uuid(9), startedAt: T0, origin: 'manual' });
     const own = rows(30, { speedMps: 15 });
-    for (const r of own) appendRow(session, r, { unsafe: false, limitUsable: false });
+    for (const r of own) appendRow(session, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     session.pending = [];
     await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0, tz: TZ, status: 'recording' }, T0);
     await createSamplesRepo(db).appendMany(uuid(9), own.map((r) => ({ ts: r.ts, row: r })));
@@ -870,7 +870,7 @@ describe('iOS: the drive detector', () => {
 
     const still = rows(30, { speedMps: 0 });
     const session = createSession({ clientTripId: uuid(9), startedAt: T0, origin: 'manual' });
-    for (const r of still) appendRow(session, r, { unsafe: false, limitUsable: false });
+    for (const r of still) appendRow(session, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     session.pending = [];
     await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0, tz: TZ, status: 'recording' }, T0);
     const m = build();

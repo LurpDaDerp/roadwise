@@ -57,7 +57,7 @@ export async function rebuildFromSamples(db: Db, trip: TripRow, deps: RebuildDep
     const ctx: DetectorContext = { warmupEndsAt: session.warmup.endsAt, platform: deps.platform };
     const closed = detectors.push(row, limit, ctx);
     session.events.push(...closed);
-    appendRow(session, row, { unsafe: detectors.unsafe(), limitUsable: detectors.speedingNow() !== null });
+    appendRow(session, row, { unsafe: detectors.unsafe(), limitUsable: detectors.speedingNow() !== null, platform: deps.platform });
   }
   // Every replayed row is already durable.
   session.pending = [];

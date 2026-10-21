@@ -51,7 +51,7 @@ test('a rebuilt session equals the live one on droveAt, lastDroveAt, lastSpeed, 
   await createSamplesRepo(db).appendMany(uuid(9), list.map((r) => ({ ts: r.ts, row: r })));
   const rebuilt = (await rebuildFromSamples(db, (await trips.get(uuid(9)))!, base()))!.session;
   const live = createSession({ clientTripId: uuid(9), startedAt: T0, origin: 'manual' });
-  for (const r of list) appendRow(live, r, { unsafe: false, limitUsable: false });
+  for (const r of list) appendRow(live, r, { unsafe: false, limitUsable: false, platform: 'ios' });
   expect(rebuilt.droveAt).toBe(T0 + 41_000);
   expect(rebuilt.droveAt).toBe(live.droveAt);
   expect(rebuilt.lastDroveAt).toBe(T0 + 239_000);

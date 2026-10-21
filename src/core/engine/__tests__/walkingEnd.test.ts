@@ -336,7 +336,7 @@ describe('W1: after driving speed', () => {
 describe('12. an adopted drive', () => {
   function adopted(): TripSession {
     const s = createSession({ clientTripId: 'old', startedAt: T0, origin: 'manual' });
-    for (const r of path(T0, 0, DRIVE)) appendRow(s, r, { unsafe: false, limitUsable: false });
+    for (const r of path(T0, 0, DRIVE)) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     return s;
   }
 
@@ -409,7 +409,7 @@ describe('14. reset', () => {
     await report(h, act('walking', T0 + 30_000));
     await h.engine.dispatch({ type: 'end', ts: T0 + 60_000 });
     const s = createSession({ clientTripId: 'old', startedAt: T0 + 100_000, origin: 'manual' });
-    for (const r of path(T0 + 100_000, 0, DRIVE)) appendRow(s, r, { unsafe: false, limitUsable: false });
+    for (const r of path(T0 + 100_000, 0, DRIVE)) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
     await h.engine.dispatch({ type: 'adopt', trip: { session: s, detectors: createDetectors(() => 'x') }, ts: T0 + 161_000 });
     await feed(h, path(T0 + 161_000, 900, { n: 60, mps: 0 }));
     expect(status(h)).toBe('recording');
