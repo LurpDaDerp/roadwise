@@ -10,8 +10,9 @@
 --   * The friends board lists the driver and the friends who share their Safety Rating; a friend's
 --     row shows 90-day distance only when that friend shares driving stats.
 --   * get_profile hands a friend the achievements only when shared, the category scores (whole
---     numbers, the last 90 days) only when shared, and can_view_stats only when stats are shared;
---     get_member_stats refuses a friend who does not share them.
+--     numbers, the last 90 days) only when shared together with the Safety Rating (the rating is
+--     their weighted mean, so scores without it would give it away), and can_view_stats only when
+--     stats are shared; get_member_stats refuses a friend who does not share them.
 
 alter table public.profiles
   add column share_rating boolean not null default true,
@@ -139,9 +140,11 @@ begin
     when exists (select 1 from public.friend_requests r where r.from_id = v_other and r.to_id = v_uid) then 'incoming'
     when exists (select 1 from public.friend_requests r where r.from_id = v_uid and r.to_id = v_other) then 'outgoing'
     else 'none' end;
-  -- the category scores, whole numbers (half up), each null where it has no score. The rating is
-  -- computed once, into a variable: an inline subquery would be copied into each of the ten reads.
-  if v_self or (v_friend and pr.share_categories) then
+  -- the category scores, whole numbers (half up), each null where it has no score: to a friend only
+  -- with the Safety Rating shared too, since the rating is their weighted mean and would show through
+  -- them. The rating is computed once, into a variable: an inline subquery would be copied into each
+  -- of the ten reads.
+  if v_self or (v_friend and pr.share_rating and pr.share_categories) then
     s := private.rating_at(v_other, now()) -> 'scores';
     v_scores := jsonb_build_object(
       'acceleration', case when s ->> 'acceleration' is null then null else private.round_half_up((s ->> 'acceleration')::float8, 0)::int end,

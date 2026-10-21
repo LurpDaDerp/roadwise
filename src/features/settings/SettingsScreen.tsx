@@ -164,6 +164,9 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
   const dashcam = dashcamStatus(useDashcamState());
 
   const shownUnits = edit.value('units', profile?.units) ?? units;
+  // The category scores average to the Safety Rating, so friends get them only with the rating: while
+  // the rating is not shared, Category scores is greyed with the reason, its own setting kept as is.
+  const ratingOff = profile !== undefined && edit.value('share_rating', profile.share_rating) === false;
 
   return (
     <Screen scroll testID="settings-screen">
@@ -182,17 +185,20 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
 
       <Section title={copy.privacy} footer={copy.privacyFooter}>
         <LinkRow icon="location-outline" title={copy.zones.title} subtitle={copy.zones.subtitle(zoneCount)} onPress={() => router.push(SETTINGS_HREFS.privacyZones)} testID="settings-zones" />
-        {SHARING.map((row) => (
-          <ToggleRow
-            key={row.field}
-            title={row.copy.title}
-            subtitle={row.copy.subtitle}
-            value={edit.value(row.field, profile?.[row.field]) === true}
-            onValueChange={(next) => void edit.save(row.field, next)}
-            disabled={profile === undefined}
-            testID={row.testID}
-          />
-        ))}
+        {SHARING.map((row) => {
+          const waitsOnRating = row.field === 'share_categories' && ratingOff;
+          return (
+            <ToggleRow
+              key={row.field}
+              title={row.copy.title}
+              subtitle={waitsOnRating ? copy.sharing.categories.needsRating : row.copy.subtitle}
+              value={edit.value(row.field, profile?.[row.field]) === true}
+              onValueChange={(next) => void edit.save(row.field, next)}
+              disabled={profile === undefined || waitsOnRating}
+              testID={row.testID}
+            />
+          );
+        })}
         <SegmentRow<HeatmapVisibility>
           title={copy.heatmap}
           value={shownVisibility(edit.value('heatmap_visibility', profile?.heatmap_visibility))}

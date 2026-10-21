@@ -174,6 +174,33 @@ describe('Settings', () => {
       expect(screen.getByTestId(`settings-share-${id}`).props.value).toBe(next);
     });
 
+    it('Category scores waits on Safety Rating: greyed with the reason while the rating is not shared, its own setting kept', async () => {
+      answerRpc(mockRpc, {
+        get_my_summary: { ...SUMMARY, profile: { ...SUMMARY.profile, share_rating: false, share_categories: true } },
+        update_profile: {},
+      });
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      await waitFor(() => expect(screen.getByTestId('settings-share-rating').props.disabled).toBe(false));
+      const categories = screen.getByTestId('settings-share-categories');
+      expect(categories.props.disabled).toBe(true);
+      expect(categories.props.value).toBe(true);
+      expect(categories.props.accessibilityLabel).toBe('Category scores, Turn on Safety Rating to share these.');
+      expect(screen.getByText(copy.root.sharing.categories.needsRating, { includeHiddenElements: true })).toBeOnTheScreen();
+      expect(screen.queryByText('Friends can see your category scores', { includeHiddenElements: true })).toBeNull();
+      // the other switches never wait on the rating
+      for (const id of ['achievements', 'stats']) expect(screen.getByTestId(`settings-share-${id}`).props.disabled).toBe(false);
+
+      await act(async () => {
+        fireEvent(screen.getByTestId('settings-share-rating'), 'valueChange', true);
+      });
+      await waitFor(() => expect(screen.getByTestId('settings-share-categories').props.disabled).toBe(false));
+      expect(screen.getByTestId('settings-share-categories').props.value).toBe(true);
+      expect(screen.getByText('Friends can see your category scores', { includeHiddenElements: true })).toBeOnTheScreen();
+      // turning the rating on and off never writes the categories setting
+      expect(mockRpc.mock.calls.filter(([fn, args]) => fn === 'update_profile' && 'p_share_categories' in (args ?? {}))).toEqual([]);
+    });
+
     it('a failed change goes back and says it did not save', async () => {
       answerRpc(mockRpc, { get_my_summary: SUMMARY, update_profile: new Error('offline') });
       const w = await appWorld();

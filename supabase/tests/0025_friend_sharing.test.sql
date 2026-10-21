@@ -1,11 +1,12 @@
--- 0025_friend_sharing: each sharing setting gates exactly its part of what a friend sees, the
+-- 0025_friend_sharing: each sharing setting gates exactly its part of what a friend sees (the
+-- category scores only with the Safety Rating shared too, since they average to it), the
 -- defaults (rating on, the rest off), the driver always seeing all of their own, a non-friend never
 -- seeing a rating (search, requests, profile), the board leaving out a friend who keeps their rating
 -- to themselves, update_profile and the summary, grants and the catch-alls.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(43);
+select plan(45);
 
 -- ava (1) views; fay (2) is her friend; sam (3) is a stranger; rex (4) asked ava to be friends
 insert into auth.users (id, email) values
@@ -113,6 +114,18 @@ set local role authenticated;
 select is((select array[p -> 'safety_rating', p -> 'ranked'] from (select public.get_profile('fay') as p) x), array['null'::jsonb, 'false'::jsonb], 'Safety Rating off: her rating is gone from her profile');
 select is((select array_agg(x ->> 'username' order by x ->> 'username') from jsonb_array_elements(public.get_friends_board()) x), array['ava'], 'and she leaves the board');
 select is((select x -> 'safety_rating' from jsonb_array_elements(public.list_friends() -> 'friends') x where x ->> 'username' = 'fay'), 'null'::jsonb, 'and the friends list');
+-- the rating is the weighted mean of the categories: with the rating kept back, the categories are too
+reset role;
+select pg_temp.set('share_categories', true);
+set local role authenticated;
+select is((select array[p -> 'scores', p -> 'safety_rating'] from (select public.get_profile('fay') as p) x), array['null'::jsonb, 'null'::jsonb],
+  'Safety Rating off, Category scores on: her category scores stay hidden too (they would give the rating away)');
+select pg_temp.as_user(2);
+select is((select jsonb_typeof(p -> 'scores') from (select public.get_profile('fay') as p) x), 'object', 'while fay still sees her own');
+select pg_temp.as_user(1);
+reset role;
+select pg_temp.set('share_categories', false);
+set local role authenticated;
 
 -- ---------------------------------------------------------------------------
 -- a non-friend never sees a rating; the driver always sees all of their own
