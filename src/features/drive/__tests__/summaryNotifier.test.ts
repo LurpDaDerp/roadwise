@@ -143,6 +143,24 @@ test('a drive that was not kept, or was discarded with "Not driving?", posts not
   n.detach();
 });
 
+test('a re-opened drive discarded with "Not driving?" takes down the recap its first leg posted, in front too; another drive’s recap stays', async () => {
+  const { host, set } = hostStub({});
+  const { p, scheduled, cancelled } = port();
+  const appState = { currentState: 'background' as string | null };
+  const n = attachSummaryNotifier(host, { port: p, appState });
+  set({ lastFinalized: kept('other', 1) });
+  set({ lastFinalized: kept('abc', 5) });
+  await n.settled();
+  expect(scheduled.map((r) => r.identifier)).toEqual(['drive-summary:other', 'drive-summary:abc']);
+  // The car sets off again: the trip re-opens, and the passenger taps "Not driving?" on the driving screen.
+  appState.currentState = 'active';
+  set({ status: 'recording' });
+  set({ status: 'idle', lastFinalized: { clientTripId: 'abc', ok: true, status: null, dropped: 'cancelled', endCause: 'manual', at: 400, durationS: null, miles: null } });
+  await n.settled();
+  expect(cancelled).toEqual(['drive-summary:abc']);
+  n.detach();
+});
+
 test('cancelDriveSummaries removes every scheduled summary (the handover wipe)', async () => {
   const { p, scheduled, cancelled } = port();
   scheduled.push({ identifier: 'drive-summary:a', clientTripId: 'a', title: '', body: '', url: '' });

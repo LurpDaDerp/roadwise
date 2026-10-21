@@ -4,7 +4,9 @@
  * pocket, a drive ended from the lock screen): "24 min · 12.0 mi. See how it went." Tapping it
  * opens the recap (`/drives/<id>?fresh=1`). A drive set off again within 5 minutes continues the
  * same trip, so its next end posts again under the same identifier with the longer drive's
- * numbers, replacing the first. A drive discarded with "Not driving?", or not kept, posts nothing.
+ * numbers, replacing the first. A drive discarded with "Not driving?", or not kept, posts nothing;
+ * a re-opened drive discarded with "Not driving?" also takes down the recap its first leg posted
+ * (the drive it opens no longer exists).
  * Nothing here asks for notification permission, and nothing here starts a drive.
  *
  * Battery: the host listener compares one field per change and returns; the OS is touched only
@@ -141,7 +143,13 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
     if (f === seen || f === null) return;
     const fresh = seen === null || f.clientTripId !== seen.clientTripId || f.at !== seen.at;
     seen = f;
-    // A drive that was not kept (or was discarded with "Not driving?") has no recap.
+    // "Not driving?" deleted the drive, a re-opened one with its first leg: that leg's recap goes too.
+    if (fresh && f.ok && f.dropped === 'cancelled') {
+      const id = f.clientTripId;
+      chain = chain.then(() => port.cancel(`${IDENTIFIER_PREFIX}${id}`)).catch((e: unknown) => report(e, 'summary notification'));
+      return;
+    }
+    // A drive that was not kept has no recap.
     if (!fresh || !f.ok || f.status === 'failed' || f.dropped !== null) return;
     chain = chain.then(() => announce(f.clientTripId, f.durationS, f.miles)).catch((e: unknown) => report(e, 'summary notification'));
   });
