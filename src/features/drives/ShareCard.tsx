@@ -6,7 +6,6 @@ import { Text as RNText, StyleSheet, View, type TextStyle } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
 import { blockedDuringDrive } from '@/drive/leave';
-import { formatRating } from '@/lib/rating';
 import { formatDistance, type Units } from '@/lib/units';
 import { Banner, Button, SceneScope, Sheet, Text, tokens, useTheme, type TypeVariant } from '@/ui';
 
@@ -22,9 +21,8 @@ export type ShareCardData = {
   durationS: number;
   /** Net points; null when the drive has no score. */
   net: number | null;
-  safetyRating: number | null;
-  /** Under 10 mi in 30 days: the card says "Unranked", never a number. */
-  ranked: boolean;
+  /** The drive score out of 100 (`driveScoreOf`); null when the drive has no total, and the card says "—". */
+  score: number | null;
   clean: boolean;
   /** The driver's distance units. */
   units: Units;
@@ -74,7 +72,7 @@ function Fact({ label, value, testID }: { label: string; value: string; testID?:
 
 /**
  * The Strava-style image: the (already privacy-trimmed) route in gold on the hour's sky (the same
- * scene as the app's hero cards), distance, time, points, Safety Rating and a clean badge. It
+ * scene as the app's hero cards), distance, time, points, the drive score and a clean badge. It
  * never shows a speed.
  */
 export const ShareCard = forwardRef<View, { data: ShareCardData }>(function ShareCard({ data }, ref) {
@@ -120,7 +118,7 @@ export const ShareCard = forwardRef<View, { data: ShareCardData }>(function Shar
           <Fact label="Distance" value={formatDistance(data.miles, data.units)} />
           <Fact label="Time" value={formatDuration(data.durationS)} />
           <Fact label="Points" value={data.net === null ? '—' : signedPoints(data.net)} testID="share-points" />
-          <Fact label="Safety Rating" value={formatRating(data.safetyRating, data.ranked)} testID="share-rating" />
+          <Fact label="Drive score" value={data.score === null ? '—' : String(data.score)} testID="share-score" />
         </View>
       </View>
     </SceneScope>

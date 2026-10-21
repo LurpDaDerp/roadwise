@@ -12,9 +12,11 @@ import { Receipt } from './Receipt';
 import { NotDrivingSheet, ReportSheet } from './ReportSheet';
 import { decodeRoute } from './route';
 import { RouteMap } from './RouteMap';
+import { scoreInk } from './scoreInk';
 import { ShareSheet } from './ShareCard';
 import {
   canMarkNotDriving,
+  driveScoreOf,
   endNote,
   notDrivingLabel,
   notDrivingRefusal,
@@ -31,10 +33,6 @@ export type SummaryViewProps = {
   fresh: boolean;
   /** "Wasn't driving" uses left this month (from the server summary); null when unknown. */
   notDrivingLeft: number | null;
-  /** For the share card: the server's latest Safety Rating. */
-  safetyRating: number | null;
-  /** Whether that rating counts (25+ mi in 30 days); an unranked share card says "Unranked". */
-  ranked?: boolean;
   /** The newest drive on this phone; "Wasn't driving" is offered only there. Null while unknown. */
   latestClientTripId: string | null;
   now: number;
@@ -60,8 +58,24 @@ function StateBlock({ title, body, testID }: { title: string; body: string; test
   );
 }
 
-/** The drive's total in bold, counting up on a fresh summary. */
-function Total({ value, fresh, estimate }: { value: number; fresh: boolean; estimate: boolean }) {
+/** The drive score beside the total: the number in its red-to-green ink, "score" under it. */
+function DriveScore({ score }: { score: number }) {
+  const t = useTheme();
+  const ink = scoreInk(score, t.colors, t.colors.surface);
+  return (
+    <View testID="summary-score" accessible accessibilityLabel={`Drive score ${score} out of 100`} style={{ alignItems: 'flex-end', flexShrink: 0 }}>
+      <Text variant="stat" testID="summary-score-value" style={{ color: ink }}>
+        {score}
+      </Text>
+      <Text variant="label" tone="muted">
+        score
+      </Text>
+    </View>
+  );
+}
+
+/** The drive's total in bold, counting up on a fresh summary, with the drive score to its right. */
+function Total({ value, fresh, estimate, score }: { value: number; fresh: boolean; estimate: boolean; score: number | null }) {
   const t = useTheme();
   return (
     <View style={{ gap: t.space.xs }}>
@@ -71,18 +85,39 @@ function Total({ value, fresh, estimate }: { value: number; fresh: boolean; esti
         </Text>
         {estimate ? <Pill label="Estimate" tone="info" icon="cloud-offline-outline" testID="estimate" /> : null}
       </View>
-      <PointsCounter value={value} from={fresh ? 0 : undefined} react={fresh} size="hero" signed label="Points this drive" testID="summary-points" />
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <PointsCounter value={value} from={fresh ? 0 : undefined} react={fresh} size="hero" signed label="Points this drive" testID="summary-points" />
+        </View>
+        {score !== null ? <DriveScore score={score} /> : null}
+      </View>
     </View>
   );
 }
 
-function PointsHead({ state, total, drive, fresh, units, onOpenDrive }: { state: PointsState; total: number | null; drive: LocalDrive; fresh: boolean; units: Units; onOpenDrive: (id: string) => void }) {
+function PointsHead({
+  state,
+  total,
+  score,
+  drive,
+  fresh,
+  units,
+  onOpenDrive,
+}: {
+  state: PointsState;
+  total: number | null;
+  score: number | null;
+  drive: LocalDrive;
+  fresh: boolean;
+  units: Units;
+  onOpenDrive: (id: string) => void;
+}) {
   const t = useTheme();
   switch (state.kind) {
     case 'points':
       return (
         <View style={{ gap: t.space.xs }}>
-          <Total value={state.value} fresh={fresh} estimate={state.estimate} />
+          <Total value={state.value} fresh={fresh} estimate={state.estimate} score={score} />
           {state.estimate ? (
             <Text variant="footnote" tone="muted">
               Your final points arrive once this drive uploads.
@@ -109,7 +144,7 @@ function PointsHead({ state, total, drive, fresh, units, onOpenDrive }: { state:
     case 'failed':
       return (
         <View style={{ gap: t.space.md }}>
-          {total !== null ? <Total value={total} fresh={false} estimate={false} /> : null}
+          {total !== null ? <Total value={total} fresh={false} estimate={false} score={score} /> : null}
           <StateBlock testID="state-failed" title="Not synced yet" body="We'll keep trying. Your points show up once it uploads." />
         </View>
       );
@@ -130,7 +165,7 @@ function PointsHead({ state, total, drive, fresh, units, onOpenDrive }: { state:
 }
 
 /** The drive summary, top to bottom: time and distance, the route map, the points; actions in a fixed footer. */
-export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating, ranked = false, latestClientTripId, now, onBack, onOpenDrive, onReport, onNotDriving }: SummaryViewProps) {
+export function SummaryView({ drive, events, fresh, notDrivingLeft, latestClientTripId, now, onBack, onOpenDrive, onReport, onNotDriving }: SummaryViewProps) {
   const t = useTheme();
   const units = useUnits();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -144,6 +179,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
   const state = pointsState(drive);
   const points = useMemo(() => receipt(drive, events, units), [drive, events, units]);
   const runs = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
+  const score = useMemo(() => driveScoreOf(drive, events), [drive, events]);
   const selected = events.find((e) => e.id === selectedId) ?? null;
   const reportEvent = events.find((e) => e.id === reporting) ?? null;
   const net = state.kind === 'points' ? state.value : null;
@@ -187,7 +223,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
 
         {/* 3. Points: the total in bold, then what was earned and lost */}
         <Card testID="summary-points-card">
-          <PointsHead state={state} total={points.total} drive={drive} fresh={fresh} units={units} onOpenDrive={onOpenDrive} />
+          <PointsHead state={state} total={points.total} score={score} drive={drive} fresh={fresh} units={units} onOpenDrive={onOpenDrive} />
           {showReceipt ? (
             <>
               <Divider />
@@ -261,8 +297,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, safetyRating
           miles: drive.miles,
           durationS: drive.durationS,
           net,
-          safetyRating: drive.result?.progress.safetyRating ?? safetyRating,
-          ranked: drive.result?.progress.ranked ?? ranked,
+          score: net === null ? null : score,
           clean: drive.clean === true,
           units,
         }}

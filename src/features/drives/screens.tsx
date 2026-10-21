@@ -1,6 +1,6 @@
 /**
  * The drive screens wired to their data: local drives from `@/data/queries` (plan §10), the
- * server summary for "Wasn't driving" uses left and the Safety Rating, and the drive actions.
+ * server summary for "Wasn't driving" uses left, and the drive actions.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -91,8 +91,6 @@ export function DriveSummaryScreen() {
         events={events}
         fresh={isFresh}
         notDrivingLeft={summary.data?.not_driving_left ?? null}
-        safetyRating={summary.data?.progress.safety_rating ?? null}
-        ranked={summary.data?.progress.ranked ?? false}
         latestClientTripId={latest.data?.[0]?.clientTripId ?? null}
         now={now()}
         onBack={back}

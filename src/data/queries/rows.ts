@@ -66,6 +66,8 @@ export interface LocalDriveEvent {
   tier: Tier;
   startedAt: number;
   durationS: number;
+  /** phone_handling: its 15-s units (null when not recorded, which scoring reads as 1). */
+  units: number | null;
   lat: number | null;
   lng: number | null;
   penalty: number | null;
@@ -189,6 +191,7 @@ export function toLocalDriveEvent(row: EventRow): LocalDriveEvent {
     tier: row.tier,
     startedAt: row.started_at,
     durationS: row.duration_s,
+    units: row.units,
     lat: row.lat,
     lng: row.lng,
     penalty: row.penalty,

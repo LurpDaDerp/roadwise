@@ -82,6 +82,7 @@ export function event(over: Partial<LocalDriveEvent> = {}): LocalDriveEvent {
     tier: 'minor',
     startedAt: NOW - 2 * HOUR + 9 * 60_000,
     durationS: 1,
+    units: null,
     lat: ROUTE[10]!.lat,
     lng: ROUTE[10]!.lng,
     penalty: 10,

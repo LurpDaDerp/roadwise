@@ -2,7 +2,7 @@
  * What the drive summary derives from a drive before anything is drawn: the points state, the
  * points receipt (and the itemized breakdown it is built from) and the report reasons. Pure.
  */
-import { IDLE_END_S, isDashcamType, LEGACY_POINTS_PER_MILE, MULT_CAP, STREAK_MULT_CAP, type EventType } from '@scoring';
+import { driveScore, IDLE_END_S, isDashcamType, LEGACY_POINTS_PER_MILE, MULT_CAP, STREAK_MULT_CAP, type DriveEvent, type EventType } from '@scoring';
 
 import { formatMultiplier } from '@/ui';
 
@@ -86,6 +86,36 @@ export function pointsWord(s: PointsState): string | null {
     case 'failed':
       return 'Not synced';
   }
+}
+
+// ── Drive score ─────────────────────────────────────────────────────────────────────────
+
+/** A drive's event as the scorer reads it: removed once a report took it off. */
+export function toScoringEvent(e: LocalDriveEvent): DriveEvent {
+  return {
+    id: e.id,
+    type: e.type,
+    tier: e.tier,
+    startedAt: e.startedAt,
+    durationS: e.durationS,
+    ...(e.units !== null ? { units: e.units } : null),
+    stoppedInTraffic: e.stoppedInTraffic,
+    status: isRemoved(e) ? 'removed' : 'active',
+  };
+}
+
+/**
+ * The drive's score out of 100 (`driveScore`: the weighted average of its categories over its
+ * active events, its miles floored at 3, Attention over the miles DashPal watched), shown only
+ * where the drive's points total shows: a scored drive, an offline estimate, or one not synced
+ * yet that has a total. Null everywhere else (scoring, too short, not scored, not driving,
+ * merged, recording) and for a drive with no miles.
+ */
+export function driveScoreOf(d: LocalDrive, events: readonly LocalDriveEvent[]): number | null {
+  const s = pointsState(d);
+  const total = s.kind === 'points' || (s.kind === 'failed' && netOf(d) !== null);
+  if (!total) return null;
+  return driveScore(events.map(toScoringEvent), d.miles, d.watchedMiles);
 }
 
 // ── Breakdown ───────────────────────────────────────────────────────────────────────────

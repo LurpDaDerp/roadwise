@@ -7,6 +7,7 @@ import { awayFrom, eventMarks, fittedSpan, markShape, metersPerPixel, MIN_MARK_P
 import { homeStats, trendFor } from '../stats';
 import {
   breakdownLines,
+  driveScoreOf,
   multiplierText,
   notDrivingLabel,
   pointsPerMileOf,
@@ -15,6 +16,7 @@ import {
   availableReasons,
   reportReasons,
   spokenPoints,
+  toScoringEvent,
 } from '../summary';
 
 describe('DashPal', () => {
@@ -364,5 +366,56 @@ describe('summary', () => {
   test('the wasn\'t-driving label carries the uses left', () => {
     expect(notDrivingLabel(1)).toBe("Wasn't driving (1 left this month)");
     expect(notDrivingLabel(null)).toBe("Wasn't driving");
+  });
+});
+
+describe('drive score', () => {
+  const pickup = (over = {}) => event({ id: 'p', type: 'phone_pickup', tier: 'severe', ...over });
+
+  test("the weighted average of the drive's categories over its miles, floored at 3 mi, a whole number", () => {
+    // 12 mi, one minor hard brake (rating 10): braking 100 / (1 + 10/12/16) = 95.05, the rest 100 → 99.
+    expect(driveScoreOf(drive(), [event()])).toBe(99);
+    expect(driveScoreOf(drive(), [])).toBe(100);
+    // One pickup on a 5 mi drive: phone 100 / (1 + 40/5/16) = 66.7, counted twice → 90.
+    expect(driveScoreOf(drive({ miles: 5 }), [pickup()])).toBe(90);
+    // On 1 mi the miles floor at 3: phone 54.5 → 87, never 0.
+    expect(driveScoreOf(drive({ miles: 1 }), [pickup()])).toBe(87);
+  });
+
+  test('an event a report took off, or one removed, no longer counts', () => {
+    expect(driveScoreOf(drive({ miles: 5 }), [pickup({ disputeStatus: 'accepted' })])).toBe(100);
+    expect(driveScoreOf(drive({ miles: 5 }), [pickup({ removed: true })])).toBe(100);
+    expect(driveScoreOf(drive({ miles: 5 }), [pickup({ disputeStatus: 'pending' })])).toBe(90);
+  });
+
+  test('phone handling counts its 15-s units (1 when not recorded)', () => {
+    const handling = (units: number | null) => event({ id: 'h', type: 'phone_handling', tier: 'severe', durationS: 75, units });
+    // 4 units: rating 40 on 1 mi (floored at 3) → phone 54.5 → 87; 1 unit: 10 → 82.8 → 95.
+    expect(driveScoreOf(drive({ miles: 1 }), [handling(4)])).toBe(87);
+    expect(driveScoreOf(drive({ miles: 1 }), [handling(null)])).toBe(95);
+    expect(toScoringEvent(handling(4))).toMatchObject({ units: 4, status: 'active' });
+    expect(toScoringEvent(handling(null))).not.toHaveProperty('units');
+  });
+
+  test("DashPal's events score Attention over the miles it watched, and only when it watched", () => {
+    const eyes = event({ id: 'd', type: 'eyes_off', tier: 'severe', measured: { source: 'dashcam' } });
+    // Attention 100 / (1 + 40/6/16) = 70.6, weight 1 of 8 → 96.
+    expect(driveScoreOf(drive({ watchedMiles: 6 }), [eyes])).toBe(96);
+    expect(driveScoreOf(drive({ watchedMiles: 0 }), [eyes])).toBe(100);
+  });
+
+  test('only where the points total shows', () => {
+    const e = [event()];
+    expect(driveScoreOf(drive({ status: 'pending', estimate: true, pointsNet: 40, result: null }), e)).toBe(99);
+    expect(driveScoreOf(drive({ status: 'failed', pointsNet: 40, result: null }), e)).toBe(99);
+    expect(driveScoreOf(drive({ status: 'failed', pointsNet: null, result: null }), e)).toBeNull();
+    expect(driveScoreOf(drive({ status: 'pending', pointsNet: null, result: null }), e)).toBeNull();
+    expect(driveScoreOf(drive({ status: 'pending', pointsNet: null, reason: 'too_short', result: null }), e)).toBeNull();
+    expect(driveScoreOf(drive({ status: 'unscored', reason: 'too_short', result: null }), e)).toBeNull();
+    expect(driveScoreOf(drive({ status: 'unscored', reason: 'spoofed', result: null }), e)).toBeNull();
+    expect(driveScoreOf(drive({ status: 'not_driving', pointsNet: 0 }), e)).toBeNull();
+    expect(driveScoreOf(drive({ status: 'merged', mergedInto: 'z' }), e)).toBeNull();
+    expect(driveScoreOf(drive({ status: 'recording', pointsNet: null, result: null }), e)).toBeNull();
+    expect(driveScoreOf(drive({ miles: 0 }), e)).toBeNull();
   });
 });

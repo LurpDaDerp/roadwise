@@ -5,6 +5,7 @@ import { fontFamilies, SHEET_DISMISS_FALLBACK_MS } from '@/ui';
 import { plainBundle } from '@/ui/sky/palette';
 
 import { DAY, draw, drive, event, HOUR, NOW, press, result } from '../__fixtures__/drives';
+import { scoreInk } from '../scoreInk';
 import { SummaryView, type SummaryViewProps } from '../SummaryView';
 import { endNote } from '../summary';
 
@@ -16,7 +17,6 @@ const props = (over: Partial<SummaryViewProps> = {}): SummaryViewProps => ({
   events: [event()],
   fresh: false,
   notDrivingLeft: 2,
-  safetyRating: 92,
   latestClientTripId: 'a1',
   now: NOW,
   onBack: jest.fn(),
@@ -72,6 +72,51 @@ test('the total is in bold above the breakdown', async () => {
   const total = screen.getByTestId('summary-points');
   expect(total).toHaveProp('accessibilityLabel', 'Points this drive: +132 points');
   expect(within(total).getByText('+132')).toHaveStyle({ fontFamily: fontFamilies.displayItalic }); // the 800 ExtraBold face
+});
+
+describe('the drive score', () => {
+  test('top right of the points card, beside the total: the number in its ink, "score" under it, spoken out of 100', async () => {
+    await draw(<SummaryView {...props()} />);
+    const ids = testIds();
+    expect(ids.indexOf('summary-points-card')).toBeLessThan(ids.indexOf('summary-score'));
+    expect(ids.indexOf('summary-points')).toBeLessThan(ids.indexOf('summary-score'));
+    expect(ids.indexOf('summary-score')).toBeLessThan(ids.indexOf('receipt'));
+    const score = screen.getByTestId('summary-score');
+    expect(score).toHaveProp('accessibilityLabel', 'Drive score 99 out of 100');
+    expect(score).toHaveProp('accessible', true);
+    expect(within(score).getByText('score')).toBeOnTheScreen();
+    const c = plainBundle('light').colors;
+    expect(screen.getByTestId('summary-score-value')).toHaveTextContent('99');
+    expect(screen.getByTestId('summary-score-value')).toHaveStyle({ color: scoreInk(99, c, c.surface) });
+  });
+
+  test('a rough drive is coloured further toward red', async () => {
+    const pickups = [event({ id: 'p1', type: 'phone_pickup', tier: 'severe' }), event({ id: 'p2', type: 'phone_pickup', tier: 'severe' })];
+    await draw(<SummaryView {...props({ drive: drive({ miles: 2 }), events: pickups })} />);
+    // 80 rating penalty over 3 mi (the floor): phone 37.5, counted twice → 82.
+    expect(screen.getByTestId('summary-score')).toHaveProp('accessibilityLabel', 'Drive score 82 out of 100');
+    const c = plainBundle('light').colors;
+    expect(screen.getByTestId('summary-score-value')).toHaveStyle({ color: scoreInk(82, c, c.surface) });
+  });
+
+  test('an estimate and a drive not synced yet with a total show it; no total, no score', async () => {
+    await draw(<SummaryView {...props({ drive: drive({ status: 'pending', estimate: true, pointsNet: 40, result: null }) })} />);
+    expect(screen.getByTestId('summary-score')).toBeOnTheScreen();
+    await draw(<SummaryView {...props({ drive: drive({ status: 'failed', pointsNet: 40, result: null }) })} />);
+    expect(screen.getByTestId('summary-score')).toBeOnTheScreen();
+    for (const d of [
+      drive({ status: 'failed', pointsNet: null, result: null }),
+      drive({ status: 'pending', pointsNet: null, result: null }),
+      drive({ status: 'unscored', reason: 'too_short', pointsNet: 0, result: null }),
+      drive({ status: 'unscored', reason: 'spoofed', pointsNet: null, result: null }),
+      drive({ status: 'not_driving', pointsNet: 0 }),
+      drive({ status: 'merged', mergedInto: 'z' }),
+      drive({ status: 'recording', pointsNet: null, result: null }),
+    ]) {
+      await draw(<SummaryView {...props({ drive: d })} />);
+      expect(screen.queryByTestId('summary-score')).toBeNull();
+    }
+  });
 });
 
 test('the receipt lists what was earned and each deduction, open from the start', async () => {
@@ -409,14 +454,30 @@ describe('final-review fixes', () => {
     expect(screen.getByTestId('state-too-short')).toBeOnTheScreen();
   });
 
-  test('the share card shows a whole-number rating, or "Unranked"', async () => {
+  test('the share card shows the drive score in place of the Safety Rating, "—" when the drive has no total', async () => {
+    // 12 mi with one minor hard brake scores 99, never the 30-day rating (92.4 in the result).
     await draw(<SummaryView {...props()} />);
     await press(screen.getByTestId('share'));
-    expect(screen.getByTestId('share-rating')).toHaveTextContent('92');
-    const unranked = drive({ result: result({ progress: { points: 10, lifetime: 10, level: 1, levelUp: false, safetyRating: 88.2, ranked: false } }) });
-    await draw(<SummaryView {...props({ drive: unranked })} />);
+    const card = screen.getByTestId('share-card');
+    expect(within(card).getByText('Drive score')).toBeOnTheScreen();
+    expect(within(card).getByTestId('share-score')).toHaveTextContent('99');
+    expect(within(card).getByTestId('share-score')).toHaveProp('allowFontScaling', false);
+    expect(within(card).queryByText('Safety Rating')).toBeNull();
+    expect(within(card).queryByTestId('share-rating')).toBeNull();
+    // An offline estimate scores from the phone's own events.
+    await draw(<SummaryView {...props({ drive: drive({ miles: 5, status: 'pending', estimate: true, pointsNet: 40, result: null }), events: [event({ type: 'phone_pickup', tier: 'severe' })] })} />);
     await press(screen.getByTestId('share'));
-    expect(screen.getByTestId('share-rating')).toHaveTextContent('Unranked');
+    expect(screen.getByTestId('share-score')).toHaveTextContent('90');
+    for (const d of [
+      drive({ status: 'pending', pointsNet: null, result: null }),
+      drive({ status: 'unscored', reason: 'too_short', pointsNet: 0, result: null }),
+      drive({ status: 'failed', pointsNet: 40, result: null }),
+    ]) {
+      await draw(<SummaryView {...props({ drive: d })} />);
+      await press(screen.getByTestId('share'));
+      expect(screen.getByTestId('share-points')).toHaveTextContent('—');
+      expect(screen.getByTestId('share-score')).toHaveTextContent('—');
+    }
   });
 
   test('km: the distance, the share card and the too-short note convert', async () => {
