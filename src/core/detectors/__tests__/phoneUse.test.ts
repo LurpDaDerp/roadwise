@@ -51,6 +51,31 @@ describe('phone pickups (phone plan P1)', () => {
     expect(run(seq([10, at(35)], [2, use(35)], [20, at(35)])).all).toEqual([]);
   });
 
+  test('before it is a pickup, two quiet rows drop it: two 1-row spikes 5 s apart never confirm', () => {
+    expect(run(seq([10, at(35)], [1, use(35)], [4, at(35)], [1, use(35)], [4, at(35)], [1, use(35)], [20, at(35)])).all).toEqual([]);
+  });
+
+  test('a mounted phone on a rough road (a 1-row spike every 3 s, then 2-row jolts every 4 s, for 2 min) never confirms', () => {
+    const rough = seq([10, at(35)], [60, (i) => at(35, i % 3 === 0 ? handled : {})], [60, (i) => at(35, i % 4 < 2 ? handled : {})], [20, at(35)]);
+    expect(rough.filter((r) => r.handlingScore >= 0.6).length).toBe(50);
+    expect(run(rough).all).toEqual([]);
+    expect(alertsOf(rough)).toEqual([]);
+    // 2-row jolts with 2 quiet rows between never reach 3 use rows in one episode.
+    expect(run(seq([10, at(35)], [2, use(35)], [2, at(35)], [2, use(35)], [2, at(35)], [2, use(35)], [20, at(35)])).all).toEqual([]);
+    // Nor do spikes with a gap of 2 s or more in the rows between them.
+    const rowsAt = (ts: number[]): FeatureRow[] => ts.map((s) => row({ ...use(35), ts: T0 + s * 1000 }));
+    expect(run([...rowsAt([10, 13, 16, 19]), row({ ...at(35), ts: T0 + 60_000 })]).all).toEqual([]);
+  });
+
+  test('a real pickup with a one-row dip in the handling still confirms, the dip in its time in hand', () => {
+    const rows = seq([10, at(35)], [1, use(35)], [1, at(35)], [1, use(35)], [1, at(35)], [4, use(35)], [20, at(35)]);
+    expect(only(run(rows).all)).toMatchObject({ startedAt: T0 + 10_000, durationS: 8 });
+    expect(alertsOf(rows)).toEqual([{ i: 14, alert: { id: 'e1', tier: 'moderate', repeat: false } }]);
+    // A missing row (a 1 s gap) is a dip too.
+    const rowsAt = (ts: number[]): FeatureRow[] => ts.map((s) => row({ ...use(35), ts: T0 + s * 1000 }));
+    expect(only(run([...rowsAt([10, 12, 14]), row({ ...at(35), ts: T0 + 60_000 })]).all)).toMatchObject({ durationS: 3 });
+  });
+
   test('the put-down motion is never a second pickup: one pickup through it', () => {
     const rows = seq([10, at(35)], [8, use(35)], [3, at(35)], [2, use(35)], [20, at(35)]);
     expect(only(run(rows).all)).toMatchObject({ startedAt: T0 + 10_000, durationS: 13 });
@@ -187,13 +212,6 @@ describe('phone alerts', () => {
     ]);
   });
 
-  test('a pickup that confirms already past 15 s in hand repeats only from the next mark', () => {
-    // One use row at speed, held still (still in hand: in 10 s windows), then two more use rows.
-    const rows = seq([10, at(35)], [1, use(35)], [9, at(35, heldStill)], [1, use(35)], [9, at(35, heldStill)], [1, use(35)], [20, at(35)]);
-    // Use rows at 10, 20 and 30 (9 s still between): in hand 21 s as it confirms.
-    const told = alertsOf(rows);
-    expect(told).toEqual([{ i: 30, alert: { id: 'e1', tier: 'severe', repeat: false } }]);
-  });
 
   test('no alert for an episode that never counts', () => {
     expect(alertsOf(seq([10, at(0)], [20, use(0)], [20, at(0)]))).toEqual([]);
