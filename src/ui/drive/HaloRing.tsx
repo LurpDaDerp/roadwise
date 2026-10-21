@@ -7,8 +7,8 @@
 // - Ring: one stroked circle whose colour follows the severity (Reanimated's OKLab interpolation).
 // - Flow (no warning showing): a light-and-shade gradient over the ring turning once every 18 s.
 // - Pulse: opacity and scale from the pulse phase; a burst is its own value, combined in one style.
-// - Shake: points coming off move the ring and its glow sideways a few times, fading out, more for
-//   more points (`shakeAmplitudePt`), once per key; the compass and the speed never move with it.
+// - Shake: an event moves the ring and its glow sideways a few times, fading out, more for a more
+//   serious one (`shakeAmplitudePt`), once per key; the compass and the speed never move with it.
 // - Compass (`HaloCompass`): outside the pulse view, so it never grows, fades or shakes.
 // - The speed is a sibling of the ring views: the ring is hidden from screen readers, the speed not.
 // - Reduce Motion (live): no frame clock, no flow, no pulse, no shake; colours still change (250 ms
@@ -122,19 +122,19 @@ export function Halo({ visual, size, height, ring, palette, dimmed, reduceMotion
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [burstKey]);
 
-  // Points coming off: a few sideways swings, fading out, once per key (never under Reduce Motion:
+  // An event: a few sideways swings, fading out, once per key (never under Reduce Motion:
   // `visual.shake` is then null).
   const shakeKey = visual.shake?.key ?? null;
-  const shakePoints = visual.shake?.points ?? 0;
+  const shakeTier = visual.shake?.tier ?? 'moderate';
   useEffect(() => {
     if (shakeKey === null) return;
-    const a = shakeAmplitudePt(shakePoints, size);
-    shakeX.set(withSequence(...shakeOffsets(a, shakePoints).map((x) => withTiming(x, HALO_TIMINGS.shakeSwing))));
+    const a = shakeAmplitudePt(shakeTier, size);
+    shakeX.set(withSequence(...shakeOffsets(a, shakeTier).map((x) => withTiming(x, HALO_TIMINGS.shakeSwing))));
     // keyed on the shake alone: a re-render of the same one never replays it
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shakeKey]);
 
-  // Dimmed with no warning showing: reduced strength, still flowing (a tint under the points line
+  // Dimmed with no warning showing: reduced strength, still flowing (a tint under the speeding line
   // included). Any warning: full strength.
   const quiet = !visual.warning;
   useEffect(() => {

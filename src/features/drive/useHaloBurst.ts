@@ -1,4 +1,4 @@
-// Which flash bursts the halo (drive-screen design §4.6). The phone's event flash and DashPal's flash
+// Which flash bursts the halo (drive-screen design §4.6). The event chip's flash and DashPal's flash
 // run on different clocks, so they are ordered by the JS time each was first seen, never by their
 // own `at`. A flash bursts at most once, whatever re-renders or flash orders follow; nothing seen
 // while RoadWise is not in front bursts, then or later.
@@ -67,14 +67,14 @@ export function useAppActive(): boolean {
   return active;
 }
 
-/** The halo's burst this render, from the phone's and DashPal's flashes (null: none showing). */
-export function useHaloBurst({ phone, dashpal, now }: { phone: BurstSource | null; dashpal: BurstSource | null; now: number }): HaloBurst | null {
+/** The halo's burst this render, from the event chip's and DashPal's flashes (null: none showing). */
+export function useHaloBurst({ event, dashpal, now }: { event: BurstSource | null; dashpal: BurstSource | null; now: number }): HaloBurst | null {
   const active = useAppActive();
   // One mutable memory for the screen's life; each render's step is idempotent (a repeated render
   // returns the same burst), so re-rendering never replays one.
   const [mem] = useState(newBurstMemory);
   const candidates: Candidate[] = [];
-  for (const src of [phone, dashpal]) {
+  for (const src of [event, dashpal]) {
     const c = src === null ? null : burstFor(src);
     if (c !== null) candidates.push(c);
   }

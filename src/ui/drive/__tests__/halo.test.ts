@@ -19,10 +19,10 @@ import {
   haloVisual,
   nextCompassAngle,
   numeralRamp,
-  phoneSeverity,
   rampColor,
   ringRamp,
   shakeAmplitudePt,
+  SHAKE_PT,
   shakeOffsets,
   speedDigits,
   speedingTint,
@@ -70,18 +70,8 @@ describe('the speeding tint, from the posted limit', () => {
   });
 });
 
-describe('phone and DashPal severities (§4.2, §4.3)', () => {
+describe('DashPal severities (§4.3)', () => {
   const T = 1_790_000_000_000;
-  test('phone: 0.65 at 2 and 3 s, 0.825 at 16.5 s, 1 from 30 s; none without an episode; a row before it 0.65', () => {
-    expect(phoneSeverity(T, T + 2000)).toBeCloseTo(0.65, 6);
-    expect(phoneSeverity(T, T + 3000)).toBeCloseTo(0.65, 6);
-    expect(phoneSeverity(T, T + 16_500)).toBeCloseTo(0.825, 6);
-    expect(phoneSeverity(T, T + 30_000)).toBeCloseTo(1, 6);
-    expect(phoneSeverity(T, T + 300_000)).toBeCloseTo(1, 6);
-    expect(phoneSeverity(null, T)).toBe(0);
-    expect(phoneSeverity(T, T - 5000)).toBeCloseTo(0.65, 6);
-    expect(phoneSeverity(T, null)).toBeCloseTo(0.65, 6);
-  });
 
   const held = (sound: number, tier: number, level = 0, since = T) => ({ sound, tier, level, since });
   test('driver not visible is a warning: 0.50 rising 0.03 a second to 0.80, the longer it lasts', () => {
@@ -101,11 +91,11 @@ describe('phone and DashPal severities (§4.2, §4.3)', () => {
 });
 
 describe('bursts (§4.6)', () => {
-  test.each(['hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'phone_handling'] as const)('phone %s: red × 3, keyed by type and time', (type) => {
-    expect(burstFor({ kind: 'phone', type, at: 5, until: 99 })).toEqual({ key: `phone:${type}:5`, severity: 1, pulses: 3, until: 99 });
+  test.each(['hard_brake', 'hard_accel', 'hard_corner', 'eyes_off', 'drowsy'] as const)('event %s: red × 3, keyed by type and time', (type) => {
+    expect(burstFor({ kind: 'event', type, at: 5, until: 99 })).toEqual({ key: `event:${type}:5`, severity: 1, pulses: 3, until: 99 });
   });
   test('a speeding alert never bursts', () => {
-    expect(burstFor({ kind: 'phone', type: 'speeding', at: 5, until: 99 })).toBeNull();
+    expect(burstFor({ kind: 'event', type: 'speeding', at: 5, until: 99 })).toBeNull();
   });
   test('DashPal: every start or step red × 3, whatever its tier (driver-not-visible and a phone-in-hand advisory too); never for a resend', () => {
     const d = (tier: number, sound: number, resend = false) => burstFor({ kind: 'dashpal', key: 'k', sound, tier, resend, until: 99 });
@@ -127,22 +117,21 @@ describe('the visual (§4.4, §4.5)', () => {
     status: 'recording',
     speeding: 0,
     speedingOver: false,
-    deduction: null,
-    phoneUseSince: null,
+    shake: null,
     rowTs: T,
     held: null,
     now: T,
     burst: null,
     ...over,
   });
-  const burst: HaloBurst = { key: 'phone:hard_brake:1', severity: 1, pulses: 3, until: T + 1500 };
+  const burst: HaloBurst = { key: 'event:hard_brake:1', severity: 1, pulses: 3, until: T + 1500 };
 
   test('calm: no pulse, flowing, no warning, no shake', () => {
     expect(haloVisual(input())).toEqual(HALO_CALM);
     expect(HALO_CALM).toMatchObject({ mode: 'calm', pulsePeriodMs: 0, pulseDepth: 0, pulseScale: 0, flow: true, warning: false, shake: null });
   });
 
-  test('over the points line: pulsing by the formulas, the flow stopped, a warning; every period at least 800 ms', () => {
+  test('over the speeding line: pulsing by the formulas, the flow stopped, a warning; every period at least 800 ms', () => {
     for (const s of [0.17, 0.3, 0.5, 0.825, 1]) {
       const v = haloVisual(input({ speeding: s, speedingOver: true }));
       expect(v).toMatchObject({ mode: 'speeding', severity: s, colorSeverity: s, flow: false, warning: true });
@@ -153,7 +142,7 @@ describe('the visual (§4.4, §4.5)', () => {
     for (const s of samples) expect(haloVisual(input({ speeding: s, speedingOver: true })).pulsePeriodMs).toBeGreaterThanOrEqual(800);
   });
 
-  test('tinted but under the points line: the colour only; no pulse, still flowing, not a warning', () => {
+  test('tinted but under the speeding line: the colour only; no pulse, still flowing, not a warning', () => {
     for (const s of [0.05, 0.15, 0.6]) {
       const v = haloVisual(input({ speeding: s }));
       expect(v).toMatchObject({ mode: 'speeding', severity: s, colorSeverity: s, pulsePeriodMs: 0, pulseDepth: 0, pulseScale: 0, flow: true, warning: false });
@@ -172,11 +161,12 @@ describe('the visual (§4.4, §4.5)', () => {
   });
 
   test('the strongest signal wins; distraction on a tie; distraction pulses whatever the tint', () => {
-    const v = haloVisual(input({ speeding: 0.5, phoneUseSince: T - 2000 }));
-    expect(v).toMatchObject({ mode: 'distraction', severity: 0.65, warning: true, flow: false });
-    expect(v.pulsePeriodMs).toBeCloseTo(2200 - 1400 * 0.65, 6);
-    expect(haloVisual(input({ speeding: 0.9, phoneUseSince: T - 2000 }))).toMatchObject({ mode: 'speeding', severity: 0.9 });
-    expect(haloVisual(input({ speeding: 0.65, phoneUseSince: T - 2000 })).mode).toBe('distraction');
+    const warn = { sound: 1, tier: 2, level: 0, since: T };
+    const v = haloVisual(input({ speeding: 0.3, held: warn }));
+    expect(v).toMatchObject({ mode: 'distraction', severity: 0.5, warning: true, flow: false });
+    expect(v.pulsePeriodMs).toBeCloseTo(2200 - 1400 * 0.5, 6);
+    expect(haloVisual(input({ speeding: 0.9, held: warn }))).toMatchObject({ mode: 'speeding', severity: 0.9 });
+    expect(haloVisual(input({ speeding: 0.5, held: warn })).mode).toBe('distraction');
     expect(haloVisual(input({ held: { sound: 3, tier: 3, level: 0, since: T } }))).toMatchObject({ mode: 'distraction', severity: 0.8 });
   });
 
@@ -195,27 +185,28 @@ describe('the visual (§4.4, §4.5)', () => {
   test('a burst: its mode and colour while it lasts (a warning), then the sustained state again', () => {
     expect(haloVisual(input({ burst }))).toMatchObject({ mode: 'burst', severity: 0, colorSeverity: 1, burst, flow: false, pulsePeriodMs: 0, warning: true });
     expect(haloVisual(input({ burst, now: T + 1500 }))).toEqual(HALO_CALM);
-    const sustained = haloVisual(input({ burst, phoneUseSince: T - 2000 }));
-    expect(sustained).toMatchObject({ mode: 'burst', severity: 0.65, colorSeverity: 1 });
-    expect(haloVisual(input({ burst, phoneUseSince: T - 2000, now: T + 2000 }))).toMatchObject({ mode: 'distraction', colorSeverity: 0.65, burst: null });
+    const warn = { sound: 1, tier: 2, level: 0, since: T + 2000 };
+    const sustained = haloVisual(input({ burst, held: warn }));
+    expect(sustained).toMatchObject({ mode: 'burst', severity: 0.5, colorSeverity: 1 });
+    expect(haloVisual(input({ burst, held: warn, now: T + 2000 }))).toMatchObject({ mode: 'distraction', colorSeverity: 0.5, burst: null });
     // a weaker burst never lowers the colour
     expect(haloVisual(input({ speeding: 0.9, burst: { ...burst, severity: 0.45 } })).colorSeverity).toBe(0.9);
   });
 
-  test('points coming off: the shake carries their key and points, whatever else shows; none under Reduce Motion', () => {
-    const deduction = { key: 'hard_brake:1@5', points: 20 };
-    expect(haloVisual(input({ deduction })).shake).toEqual(deduction);
-    expect(haloVisual(input({ deduction, speeding: 0.5, speedingOver: true })).shake).toEqual(deduction);
+  test('an event: the shake carries its key and tier, whatever else shows; none under Reduce Motion', () => {
+    const shake = { key: 'hard_brake:1@5', tier: 'severe' as const };
+    expect(haloVisual(input({ shake })).shake).toEqual(shake);
+    expect(haloVisual(input({ shake, speeding: 0.5, speedingOver: true })).shake).toEqual(shake);
     // a shake alone is not a warning: the colour and the flow stay as they are
-    expect(haloVisual(input({ deduction }))).toMatchObject({ mode: 'calm', flow: true, warning: false });
-    expect(haloVisual(input({ deduction, reduceMotion: true })).shake).toBeNull();
-    expect(haloVisual(input({ deduction, status: 'finalizing' })).shake).toBeNull();
+    expect(haloVisual(input({ shake }))).toMatchObject({ mode: 'calm', flow: true, warning: false });
+    expect(haloVisual(input({ shake, reduceMotion: true })).shake).toBeNull();
+    expect(haloVisual(input({ shake, status: 'finalizing' })).shake).toBeNull();
   });
 
   test('not recording: calm whatever the inputs', () => {
     for (const status of ['idle', 'finalizing'] as const) {
       expect(
-        haloVisual(input({ status, speeding: 1, speedingOver: true, phoneUseSince: T, held: { sound: 3, tier: 3, level: 3, since: T }, burst }))
+        haloVisual(input({ status, speeding: 1, speedingOver: true, shake: { key: 'k', tier: 'severe' }, held: { sound: 3, tier: 3, level: 3, since: T }, burst }))
       ).toEqual(HALO_CALM);
     }
   });
@@ -351,32 +342,32 @@ describe('geometry (§2.1)', () => {
 });
 
 describe('the shake', () => {
-  test('grows with the points: 4.5 pt for 8, 6.5 for 20, 10.6 for 80 in a large box', () => {
-    expect(shakeAmplitudePt(8, 420)).toBeCloseTo(4.5, 6);
-    expect(shakeAmplitudePt(20, 420)).toBeCloseTo(2 + 2.5 * Math.log2(3.5), 6);
-    expect(shakeAmplitudePt(80, 420)).toBeCloseTo(2 + 2.5 * Math.log2(11), 6);
-    const pts = [1, 8, 12, 20, 32, 40, 80];
-    for (let k = 1; k < pts.length; k += 1) expect(shakeAmplitudePt(pts[k]!, 420)).toBeGreaterThanOrEqual(shakeAmplitudePt(pts[k - 1]!, 420));
-    // a nonsense count shakes as one point would
-    expect(shakeAmplitudePt(Number.NaN, 420)).toBe(shakeAmplitudePt(1, 420));
+  test('by tier: 3 pt for a minor event, 5 for moderate, 7 for severe, in a large box', () => {
+    expect(SHAKE_PT).toEqual({ minor: 3, moderate: 5, severe: 7 });
+    expect(shakeAmplitudePt('minor', 420)).toBe(3);
+    expect(shakeAmplitudePt('moderate', 420)).toBe(5);
+    expect(shakeAmplitudePt('severe', 420)).toBe(7);
   });
 
   test('never past what keeps the ring inside the compass at its largest pulse, in every box', () => {
     for (let B = 220; B <= 420; B += 1) {
       const g = haloGeometry(B);
       const c = compassGeometry(B);
-      for (const points of [8, 80, 300, 10_000]) {
-        const a = shakeAmplitudePt(points, B);
+      for (const tier of ['minor', 'moderate', 'severe'] as const) {
+        const a = shakeAmplitudePt(tier, B);
         expect(a).toBeLessThanOrEqual(c.shakeMax);
         expect((g.r + g.W / 2) * HALO_MAX_SCALE + a).toBeLessThan(c.inner);
       }
       expect(c.shakeMax).toBeGreaterThanOrEqual(2.5);
     }
+    // a small box caps a severe shake at its gap
+    expect(shakeAmplitudePt('severe', 260)).toBe(compassGeometry(260).shakeMax);
   });
 
-  test('swings side to side, fading out, back to rest; two more swings from 40 points', () => {
-    expect(shakeOffsets(8, 20)).toEqual([8, -6, 4, -2, 0]);
-    const big = shakeOffsets(12, 40);
+  test('swings side to side, fading out, back to rest: four swings, six for a severe event', () => {
+    expect(shakeOffsets(8, 'moderate')).toEqual([8, -6, 4, -2, 0]);
+    expect(shakeOffsets(8, 'minor')).toHaveLength(5);
+    const big = shakeOffsets(12, 'severe');
     expect(big).toHaveLength(7);
     expect(big.at(-1)).toBe(0);
     for (let k = 1; k < big.length - 1; k += 1) {

@@ -7,7 +7,7 @@ import type { BurstSource, HaloBurst } from '@/ui/drive';
 import { newBurstMemory, stepHaloBurst, useHaloBurst } from '../useHaloBurst';
 
 const T = 1_790_000_000_000;
-const phone = (at: number, until: number, type: 'hard_brake' | 'speeding' | 'phone_pickup' = 'hard_brake'): BurstSource => ({ kind: 'phone', type, at, until });
+const event = (at: number, until: number, type: 'hard_brake' | 'speeding' | 'hard_corner' = 'hard_brake'): BurstSource => ({ kind: 'event', type, at, until });
 const dashpal = (key: string, until: number, tier = 3, o: { sound?: number; resend?: boolean } = {}): BurstSource => ({
   kind: 'dashpal',
   key,
@@ -22,14 +22,14 @@ describe('stepHaloBurst', () => {
 
   test('overlapping flashes: the one first seen latest bursts once; the older never bursts after it; nothing re-bursts as one ends', () => {
     const m = newBurstMemory();
-    const a = cand('phone:hard_brake:1', T + 1500);
+    const a = cand('event:hard_brake:1', T + 1500);
     const b = cand('dashpal:1:7:0', T + 200 + 1500, 0.75);
     expect(stepHaloBurst(m, [a], T, true)).toMatchObject({ key: a.key, pulses: 3 });
     // the DashPal flash arrives 200 ms later: it takes over
     expect(stepHaloBurst(m, [a, b], T + 200, true)).toMatchObject({ key: b.key, severity: 0.75 });
-    // the phone flash outlives nothing; the DashPal one stays the burst while both show
+    // the event flash outlives nothing; the DashPal one stays the burst while both show
     expect(stepHaloBurst(m, [a, b], T + 400, true)).toMatchObject({ key: b.key });
-    // the phone flash ends: still the same burst, never the phone one again
+    // the event flash ends: still the same burst, never the event one again
     expect(stepHaloBurst(m, [b], T + 1500, true)).toMatchObject({ key: b.key });
     // the DashPal flash ends: nothing
     expect(stepHaloBurst(m, [], T + 1700, true)).toBeNull();
@@ -38,7 +38,7 @@ describe('stepHaloBurst', () => {
 
   test('two new flashes seen in the same render: the later-seen tie goes to the stronger, the other never bursts', () => {
     const m = newBurstMemory();
-    const a = cand('phone:hard_brake:1', T + 1500, 1);
+    const a = cand('event:hard_brake:1', T + 1500, 1);
     const b = cand('dashpal:1:1:0', T + 1500, 0.45, 1);
     expect(stepHaloBurst(m, [a, b], T, true)).toMatchObject({ key: a.key });
     expect(stepHaloBurst(m, [b], T + 100, true)).toBeNull();
@@ -64,7 +64,7 @@ describe('stepHaloBurst', () => {
 
   test('a repeated render returns the same burst object (nothing replays)', () => {
     const m = newBurstMemory();
-    const a = cand('phone:hard_brake:5', T + 1500);
+    const a = cand('event:hard_brake:5', T + 1500);
     const first = stepHaloBurst(m, [a], T, true);
     expect(stepHaloBurst(m, [a], T + 1, true)).toBe(first);
     expect(stepHaloBurst(m, [a], T + 1, true)).toBe(first);
@@ -81,7 +81,7 @@ describe('stepHaloBurst', () => {
 describe('useHaloBurst', () => {
   let seen: (HaloBurst | null)[] = [];
   function Probe({ p, d, now }: { p: BurstSource | null; d: BurstSource | null; now: number }) {
-    const b = useHaloBurst({ phone: p, dashpal: d, now });
+    const b = useHaloBurst({ event: p, dashpal: d, now });
     seen.push(b);
     return <Text>{b?.key ?? 'none'}</Text>;
   }
@@ -90,10 +90,10 @@ describe('useHaloBurst', () => {
   });
 
   test('a speeding alert and a resend never burst; a hard brake and driver not visible do', async () => {
-    const r = await render(<Probe p={phone(T, T + 1500, 'speeding')} d={dashpal('2:1:0', T + 1500, 3, { resend: true })} now={T} />);
+    const r = await render(<Probe p={event(T, T + 1500, 'speeding')} d={dashpal('2:1:0', T + 1500, 3, { resend: true })} now={T} />);
     expect(seen.at(-1)).toBeNull();
-    await r.rerender(<Probe p={phone(T + 20, T + 1520)} d={null} now={T + 20} />);
-    expect(seen.at(-1)).toMatchObject({ key: `phone:hard_brake:${T + 20}`, severity: 1, pulses: 3 });
+    await r.rerender(<Probe p={event(T + 20, T + 1520)} d={null} now={T + 20} />);
+    expect(seen.at(-1)).toMatchObject({ key: `event:hard_brake:${T + 20}`, severity: 1, pulses: 3 });
     await r.rerender(<Probe p={null} d={dashpal('1:1:0', T + 1540, 2, { sound: 6 })} now={T + 40} />);
     expect(seen.at(-1)).toMatchObject({ key: 'dashpal:1:1:0', pulses: 3 });
   });

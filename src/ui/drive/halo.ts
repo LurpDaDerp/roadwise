@@ -4,17 +4,16 @@
 //
 // Severity is one number `s` in [0, 1], never rounded:
 // - Speeding: a tint from the row speed over the posted limit (`speedingTint`: 0 at the limit, 1 at
-//   1.7 × it), following each row; it pulses only while the row is over the points line (L + T).
-// - Phone use: 0.65 once the pickup counts, rising to 1 at 30 s of use, until the episode closes.
+//   1.7 × it), following each row; it pulses only while the row is over the speeding line (L + T).
 // - DashPal: a critical 0.80 + 0.07 per level + 0.02 per second (≤ 1); a warning, driver-not-visible
 //   among them, 0.50 + 0.03 per second (≤ 0.80); a continuous advisory 0.30 + 0.01 per second (≤ 0.45,
 //   below a warning's start).
 // The strongest wins. Colour: calm blue-white → yellow (0.30) → orange (0.55) → red (1), in OKLab.
-// A tint under the points line still flows (light moving round the ring) and never pulses; any pulse
-// means a warning, faster the higher `s`. Sudden events burst: a few quick pulses (2.5 a second),
-// then back. Points coming off shake the ring sideways, more for more points.
+// A tint under the speeding line still flows (light moving round the ring) and never pulses; any
+// pulse means a warning, faster the higher `s`. Sudden events burst: a few quick pulses (2.5 a
+// second), then back. Each event shakes the ring sideways once, more for a more serious one.
 // Around the ring, outside everything that pulses, a compass turns with the car (`compassGeometry`).
-import type { EventType } from '@scoring';
+import type { EventType, Tier } from '@scoring';
 import { interpolateColor } from 'react-native-reanimated';
 
 import { HALO_BURST, HALO_MAX_SCALE, HALO_RAMP_STOPS, type HudPalette } from './hudTokens';
@@ -101,13 +100,6 @@ export function speedingTint(ratio: number | null): number {
 
 // ——— distraction ———
 
-/** Phone use: 0.65 at confirmation, rising to 1 at 30 s of use (row clock on both sides). */
-export function phoneSeverity(phoneUseSince: number | null, rowTs: number | null): number {
-  if (phoneUseSince === null) return 0;
-  const d = rowTs === null ? 0 : Math.max(0, rowTs - phoneUseSince) / 1000;
-  return 0.65 + 0.35 * Math.min(1, Math.max(0, (d - 3) / 27));
-}
-
 /** A DashPal alert the halo shows for as long as it lasts (`since`: JS clock). */
 export interface HeldDashpal {
   sound: number;
@@ -139,20 +131,20 @@ export interface HaloBurst {
   until: number;
 }
 
-/** A flash that may burst the halo. */
+/** A flash that may burst the halo: the phone's own event chip, or a DashPal alert. */
 export type BurstSource =
-  | { kind: 'phone'; type: EventType; at: number; until: number }
+  | { kind: 'event'; type: EventType; at: number; until: number }
   | { kind: 'dashpal'; key: string; sound: number; tier: number; resend: boolean; until: number };
 
 /**
- * What a flash bursts, or null: every phone alert except speeding, and every DashPal alert start or
- * level change (a distraction or drowsiness warning of any tier, driver-not-visible included), is
- * red × 3; never a reconnect's re-send.
+ * What a flash bursts, or null: every event chip except speeding (a hard brake, start or turn, and
+ * DashPal's own events), and every DashPal alert start or level change (a distraction or drowsiness
+ * warning of any tier, driver-not-visible included), is red × 3; never a reconnect's re-send.
  */
 export function burstFor(src: BurstSource): { key: string; severity: number; pulses: 1 | 2 | 3; until: number } | null {
-  if (src.kind === 'phone') {
+  if (src.kind === 'event') {
     if (src.type === 'speeding') return null;
-    return { key: `phone:${src.type}:${src.at}`, severity: 1, pulses: 3, until: src.until };
+    return { key: `event:${src.type}:${src.at}`, severity: 1, pulses: 3, until: src.until };
   }
   if (src.resend) return null;
   return { key: `dashpal:${src.key}`, severity: 1, pulses: 3, until: src.until };
@@ -160,10 +152,10 @@ export function burstFor(src: BurstSource): { key: string; severity: number; pul
 
 // ——— the visual ———
 
-/** Points just came off (`DriveLive.lastDeduction`, fresh on the row clock): the ring shakes once per key. */
-export interface HaloDeduction {
+/** An event just happened (`DriveLive.lastShake`, fresh on the row clock): the ring shakes once per key, sized by its tier. */
+export interface HaloShake {
   key: string;
-  points: number;
+  tier: Tier;
 }
 
 export interface HaloInput {
@@ -171,12 +163,10 @@ export interface HaloInput {
   status: 'idle' | 'recording' | 'finalizing';
   /** the speeding tint (`speedingTint`), 0 = none */
   speeding: number;
-  /** the row is over the points line (L + T): the only time speeding pulses */
+  /** the row is over the speeding line (L + T): the only time speeding pulses */
   speedingOver: boolean;
-  /** points that just came off, or null */
-  deduction: HaloDeduction | null;
-  /** the engine's confirmed phone episode's first use row (row clock) */
-  phoneUseSince: number | null;
+  /** an event that just happened, or null */
+  shake: HaloShake | null;
   /** the engine's newest row (row clock) */
   rowTs: number | null;
   held: HeldDashpal | null;
@@ -202,12 +192,12 @@ export interface HaloVisual {
   /** null under Reduce Motion (the burst is then its colour only) */
   burst: HaloBurst | null;
   /**
-   * A warning shows (over the points line, phone use, a DashPal alert, a burst): the dimmed screen's
-   * halo comes back to full strength. A tint under the line alone is not one.
+   * A warning shows (over the speeding line, a DashPal alert, a burst): the dimmed screen's halo
+   * comes back to full strength. A tint under the line alone is not one.
    */
   warning: boolean;
-  /** the ring's sideways shake for points coming off, once per key; null under Reduce Motion */
-  shake: HaloDeduction | null;
+  /** the ring's sideways shake for an event, once per key, sized by its tier; null under Reduce Motion */
+  shake: HaloShake | null;
 }
 
 export const HALO_CALM: HaloVisual = Object.freeze({
@@ -228,15 +218,14 @@ export const pulsePeriodMs = (s: number): number => 2200 - 1400 * s;
 
 /**
  * The drive's signals → the halo. Calm unless the drive is recording. The speeding tint colours the
- * ring from the limit up; it pulses only while the row is over the points line, and phone use and
- * DashPal alerts pulse while they last.
+ * ring from the limit up; it pulses only while the row is over the speeding line, and DashPal
+ * alerts pulse while they last.
  */
 export function haloVisual(i: HaloInput): HaloVisual {
   if (i.status !== 'recording') return i.reduceMotion ? { ...HALO_CALM, flow: false } : HALO_CALM;
   const sSpeed = Number.isFinite(i.speeding) ? Math.min(1, Math.max(0, i.speeding)) : 0;
   const over = i.speedingOver;
-  const sPhone = phoneSeverity(i.phoneUseSince, i.rowTs);
-  const distraction = Math.max(sPhone, dashpalSeverity(i.held, i.now));
+  const distraction = dashpalSeverity(i.held, i.now);
   const s = Math.max(sSpeed, distraction);
   const bursting = i.burst !== null && i.now < i.burst.until;
   const mode: HaloMode = bursting
@@ -259,25 +248,27 @@ export function haloVisual(i: HaloInput): HaloVisual {
     flow: !warning && !i.reduceMotion,
     burst: bursting && !i.reduceMotion ? i.burst : null,
     warning,
-    shake: i.reduceMotion || i.deduction === null ? null : i.deduction,
+    shake: i.reduceMotion || i.shake === null ? null : i.shake,
   };
 }
 
 // ——— the shake ———
 
+/** The shake's reach (pt) for each tier, before the compass's cap. */
+export const SHAKE_PT: Readonly<Record<Tier, number>> = { minor: 3, moderate: 5, severe: 7 };
+
 /**
- * How far (pt) the ring shakes for `points` coming off in a box of side `B`: 2 + 2.5 · log2(1 +
- * points / 8) (4.5 for 8 points, 6.5 for 20, 10.6 for 80), never past what keeps the ring inside
- * the compass (`compassGeometry(B).shakeMax`).
+ * How far (pt) the ring shakes for an event of `tier` in a box of side `B`: 3 for minor, 5 for
+ * moderate, 7 for severe, never past what keeps the ring inside the compass
+ * (`compassGeometry(B).shakeMax`). An unknown tier shakes as a moderate one.
  */
-export function shakeAmplitudePt(points: number, B: number): number {
-  const p = Number.isFinite(points) ? Math.max(1, points) : 1;
-  return Math.min(compassGeometry(B).shakeMax, 2 + 2.5 * Math.log2(1 + p / 8));
+export function shakeAmplitudePt(tier: Tier, B: number): number {
+  return Math.min(compassGeometry(B).shakeMax, SHAKE_PT[tier] ?? SHAKE_PT.moderate);
 }
 
-/** The shake's swings, as offsets (pt): alternating sides, fading out, then back to 0. Two swings more from 40 points. */
-export function shakeOffsets(amplitude: number, points: number): number[] {
-  const n = points >= 40 ? 6 : 4;
+/** The shake's swings, as offsets (pt): alternating sides, fading out, then back to 0. Four swings, six for a severe event. */
+export function shakeOffsets(amplitude: number, tier: Tier): number[] {
+  const n = tier === 'severe' ? 6 : 4;
   const out: number[] = [];
   for (let k = 0; k < n; k += 1) out.push((k % 2 === 0 ? 1 : -1) * amplitude * (1 - k / n));
   out.push(0);

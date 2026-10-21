@@ -1,6 +1,7 @@
 // The halo component (drive-screen design §5.7): the speed stays reachable for screen readers, the
 // flow scales with the ring, nothing restarts on a target change, a burst plays once per key, and
 // Reduce Motion drops every movement.
+import type { Tier } from '@scoring';
 import { act, render, screen, within } from '@testing-library/react-native';
 import { StyleSheet, View } from 'react-native';
 import { getAnimatedStyle } from 'react-native-reanimated';
@@ -73,7 +74,7 @@ const burst = (key: string): HaloVisual => ({
 });
 /** Tinted under the points line: the colour only, still flowing, no warning. */
 const tint = (s: number): HaloVisual => ({ ...HALO_CALM, mode: 'speeding', severity: s, colorSeverity: s });
-const shaking = (key: string, points: number): HaloVisual => ({ ...HALO_CALM, shake: { key, points } });
+const shaking = (key: string, tier: Tier): HaloVisual => ({ ...HALO_CALM, shake: { key, tier } });
 
 function view(visual: HaloVisual, o: { dimmed?: boolean; reduceMotion?: boolean; ring?: boolean; height?: number; heading?: number | null } = {}) {
   return (
@@ -121,7 +122,7 @@ test('Android texture: the pulse view is cached only while it pulses or bursts, 
   expect(flow()).toBe(true);
   await r.rerender(view(speeding(0.5)));
   expect(pulse()).toBe(true);
-  await r.rerender(view(burst('phone:hard_brake:2')));
+  await r.rerender(view(burst('event:hard_brake:2')));
   expect(pulse()).toBe(true);
   await r.rerender(view({ ...speeding(0.5), pulsePeriodMs: 0, pulseDepth: 0, pulseScale: 0 }, { reduceMotion: true }));
   expect(pulse()).toBe(false);
@@ -136,8 +137,8 @@ test('a severity wobbling within a tier for 10 rows restarts nothing: no burst, 
 });
 
 test('a burst plays once per key: the same key over 5 renders once, a new key again', async () => {
-  const r = await render(view(burst('phone:hard_brake:1')));
-  for (let i = 0; i < 5; i += 1) await r.rerender(view(burst('phone:hard_brake:1')));
+  const r = await render(view(burst('event:hard_brake:1')));
+  for (let i = 0; i < 5; i += 1) await r.rerender(view(burst('event:hard_brake:1')));
   expect(mockSequence).toHaveBeenCalledTimes(1);
   expect(mockSequence.mock.calls[0]).toHaveLength(6); // three pulses, up and down
   await r.rerender(view(burst('dashpal:2:1:0')));
@@ -167,13 +168,13 @@ test('dimmed with a tint under the points line: still reduced strength (a faint 
   expect(mockSetActive).toHaveBeenLastCalledWith(true);
 });
 
-test('a shake plays once per key, swinging through its offsets; the same key over renders never again', async () => {
-  const r = await render(view(shaking('hard_brake:1@5', 20)));
-  for (let i = 0; i < 4; i += 1) await r.rerender(view(shaking('hard_brake:1@5', 20)));
+test('a shake plays once per key, swinging through its offsets (six for a severe event); the same key over renders never again', async () => {
+  const r = await render(view(shaking('hard_brake:1@5', 'moderate')));
+  for (let i = 0; i < 4; i += 1) await r.rerender(view(shaking('hard_brake:1@5', 'moderate')));
   expect(mockSequence).toHaveBeenCalledTimes(1);
   expect(mockSequence.mock.calls[0]).toHaveLength(5); // four swings and back to rest
   expect(mockTiming).toHaveBeenCalledWith(0, HALO_TIMINGS.shakeSwing);
-  await r.rerender(view(shaking('speeding:2@9', 80)));
+  await r.rerender(view(shaking('speeding:2@9', 'severe')));
   expect(mockSequence).toHaveBeenCalledTimes(2);
   expect(mockSequence.mock.calls[1]).toHaveLength(7);
   await r.rerender(view(HALO_CALM));
@@ -278,7 +279,7 @@ test('unmounting mid-burst leaves no timer of its own behind', async () => {
   await base.unmount();
   await act(() => jest.advanceTimersByTime(5000));
   const baseline = jest.getTimerCount();
-  const r = await render(view(burst('phone:hard_corner:9')));
+  const r = await render(view(burst('event:hard_corner:9')));
   await act(() => jest.advanceTimersByTime(100));
   await r.unmount();
   await act(() => jest.advanceTimersByTime(5000));
