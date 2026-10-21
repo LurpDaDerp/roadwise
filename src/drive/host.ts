@@ -287,6 +287,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let prevSpeedingOver = false;
   /** Bumped by every speeding sound: only the newest one queued may still play. */
   let speedingSounds = 0;
+  /** The points the newest speeding sound took, while it has not started: a newer one plays the points-lost cue for them. */
+  let speedingPointsOwed = 0;
   let subscriptions: (() => void)[] = [];
   const idleWaiters = new Set<() => void>();
   const listeners = new Set<(s: DriveState) => void>();
@@ -361,13 +363,26 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     createDetectors: () => (suite = createDetectors(newId)),
     ctx: () => detectorContext(callActive, phoneSwitch, platform),
     onAlert(alert: AlertEvent) {
-      const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
+      // Speeding sounds never queue up: a newer one drops one that has not started. One that took
+      // points is never lost: a newer one that drops it plays the points-lost cue for those points
+      // too, and it still plays with the car back under the line (while its drive records). A plain
+      // chime is dropped once the row is not over the line. A held session is released then.
+      const sounded = alert.type === 'speeding' && speedingPointsOwed > 0 ? { ...alert, points: (alert.points ?? 0) + speedingPointsOwed } : alert;
+      const decision = decisionFor(sounded, { voiceEnabled: deps.voiceEnabled?.() ?? false });
       if (alert.type === 'speeding') {
-        // Speeding sounds never queue up: a newer one, or the car back under the line, drops one
-        // that has not started (its held session is released once the row is not over the line).
         speedingSounds += 1;
         const mine = speedingSounds;
-        decision.stillWanted = () => mine === speedingSounds && engine.snapshot().speedingOver;
+        const points = sounded.points ?? 0;
+        const trip = engine.snapshot().clientTripId;
+        speedingPointsOwed = points;
+        decision.stillWanted = () => {
+          if (mine !== speedingSounds) return false;
+          const state = engine.snapshot();
+          const wanted = points > 0 ? state.status === 'recording' && state.clientTripId === trip : state.speedingOver;
+          // Started: its points are told.
+          if (wanted) speedingPointsOwed = 0;
+          return wanted;
+        };
       }
       // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.
       if (dashcamAlertActive()) decision.silent = true;
@@ -496,6 +511,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       points = null;
       lastStopTotal = 0;
       wasStopped = false;
+      // Points an earlier drive's speeding sound took are never told in this one.
+      speedingPointsOwed = 0;
       startTripPending = true;
       // The drive's own speed and limit from the first state (0 before the first fix), never "-": the
       // display then holds this state for its 3-s throttle.

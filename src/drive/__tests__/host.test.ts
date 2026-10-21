@@ -3,7 +3,7 @@ import { createFakeDriveSense } from '@drive-sense';
 
 import { createDetectors } from '@/core/detectors';
 import { createSession } from '@/core/engine/session';
-import { IDLE_END_S } from '@scoring';
+import { BASE_PENALTY, IDLE_END_S, scoreDrive, speedingChargedS, speedingCost } from '@scoring';
 
 import type { AlertDecision } from '@/core/alerts/types';
 import type { AlertPlayer } from '@/core/alerts/player';
@@ -304,6 +304,57 @@ test('points clear the moment the stop is no longer confirmed, even with the fix
   const snap = h.host.snapshot();
   expect(snap).toMatchObject({ speedKnown: true, speedMps: 0, stopped: false, points: null });
   expect(h.display.log.at(-1)).toBe('update 0/35/null'); // no fix: the held speed, the limit held (10 s), no points
+  await h.host.stop({ endOpenTrip: true });
+});
+
+test('the stopped estimate reads the drive’s duration: a drive under 0.5 mi is scored once it has lasted 2 min', async () => {
+  const h = build();
+  await h.host.boot();
+  await h.host.start();
+  // 13.4 mph for a minute, then a light: under 0.5 mi and 61 s in, too short to score.
+  await feed(h, rows(60, { speedMps: 6 }));
+  await feed(h, rows(3, { speedMps: 0, t0: T0 + 60_000 }));
+  expect(h.host.snapshot().points).toEqual({ total: 0, sinceLastStop: 0 });
+  // Another minute, another light: still under 0.5 mi, but 124 s in, so it is scored.
+  await feed(h, rows(60, { speedMps: 6, t0: T0 + 63_000 }));
+  await feed(h, rows(3, { speedMps: 0, t0: T0 + 123_000 }));
+  const snap = h.host.snapshot();
+  const miles = metersToMiles(snap.distanceM);
+  expect(miles).toBeGreaterThan(0.4);
+  expect(miles).toBeLessThan(0.5);
+  const ctx = { streak: 4, safeMilesEarlierToday: 0 };
+  expect(scoreDrive({ miles, safeMiles: miles, events: [] }, ctx).scored).toBe(false);
+  const scored = scoreDrive({ miles, safeMiles: miles, events: [], durationS: 124 }, ctx);
+  expect(scored.scored).toBe(true);
+  expect(scored.net).toBeGreaterThan(0);
+  expect(snap.points).toEqual({ total: scored.net, sinceLastStop: scored.net });
+  await h.host.stop({ endOpenTrip: true });
+});
+
+test('the stopped estimate prices a speeding event from what it measured (its overMphS through speedingCost), never by its tier alone', async () => {
+  // No safe miles left to credit today: the estimate is the penalties alone.
+  const h = build({ context: async () => ({ streak: 0, safeMilesEarlierToday: 1000 }) });
+  await h.host.boot();
+  await h.host.start();
+  await feed(h, rows(40, { speedMps: 15 }));
+  // 44.7 mph on a 35 for 20 rows: 5.7 past the line (39), moderate; then back under the end buffer
+  // (37) for 6 rows, which ends the episode, and a light.
+  await feed(h, rows(20, { speedMps: 20, t0: T0 + 40_000 }));
+  await feed(h, rows(6, { speedMps: 15, t0: T0 + 60_000 }));
+  await feed(h, rows(3, { speedMps: 0, t0: T0 + 66_000 }));
+  const snap = h.host.snapshot();
+  expect(snap.stopped).toBe(true);
+  // The 15 over rows after the 5-s grace, each 20 m/s − 39 mph past the line, to 1 decimal: 86.1.
+  const overMphS = Math.round(15 * (20 / 0.44704 - 39) * 10) / 10;
+  expect(overMphS).toBe(86.1);
+  const cost = speedingCost(speedingChargedS(20), overMphS);
+  expect(cost).toBe(15);
+  // The tier's price would be 32: the measured cost is what counts.
+  expect(BASE_PENALTY.speeding.moderate).toBe(32);
+  const shortScale = Math.min(1, 0.5 + metersToMiles(snap.distanceM) / 6);
+  const total = -Math.round(cost * shortScale);
+  expect(total).not.toBe(-Math.round(BASE_PENALTY.speeding.moderate * shortScale));
+  expect(snap.points).toEqual({ total, sinceLastStop: total });
   await h.host.stop({ endOpenTrip: true });
 });
 
@@ -917,8 +968,10 @@ test('alerts go to the player as decisions (the speeding chime, its repeats and 
   // The chime as the car passes the line; the grace ends on the 6th over row with the cue alone.
   expect(speeding[0]!.tone).toBeUndefined();
   expect(speeding.some((d) => d.tone === 'points_lost')).toBe(true);
-  // Only the newest speeding sound may still play, and only while the car is over the line.
-  expect(speeding.map((d) => d.stillWanted!())).toEqual(speeding.map(() => false));
+  // Back under the line: only the newest speeding sound may still play, and it took points (the
+  // cue alone), so it still does while the drive records.
+  expect(speeding.at(-1)!.tone).toBe('points_lost');
+  expect(speeding.map((d) => d.stillWanted!())).toEqual(speeding.map((_, i) => i === speeding.length - 1));
   expect(h.player.releases).toEqual(['speeding']);
   expect(h.host.snapshot().lastAlert).toMatchObject({ type: 'speeding', tier: 'moderate' });
   expect(h.host.snapshot().lastDeduction).toMatchObject({ points: expect.any(Number) });
@@ -930,6 +983,76 @@ test('alerts go to the player as decisions (the speeding chime, its repeats and 
   expect(h.host.snapshot().callActive).toBe(true);
   await h.host.stop({ endOpenTrip: true });
   expect(await createEventsRepo(db).listByTrip(uuid(1))).toHaveLength(1);
+  // Its drive has ended: nothing of it plays now.
+  expect(speeding.at(-1)!.stillWanted!()).toBe(false);
+});
+
+test('a speeding sound that took points is never lost: one a newer sound drops hands its points-lost cue to it; a plain chime is dropped once the car is back under the line', async () => {
+  const h = build();
+  await h.host.boot();
+  await h.host.start();
+  await feed(h, rows(40, { speedMps: 15 }));
+  // 39.6 mph on a 35: 0.6 past the line (39). The grace ends on the 6th over row with a point; the
+  // repeats after it (about 6 s apart) take no whole point of their own for a while.
+  const sounds: { row: number; decision: AlertDecision; tookPoints: boolean }[] = [];
+  let key = h.host.snapshot().lastDeduction?.key;
+  const overRows = async (from: number, to: number) => {
+    for (let i = from; i < to; i += 1) {
+      const before = h.player.delivered.length;
+      await feed(h, rows(1, { speedMps: 39.6 * 0.44704, t0: T0 + 40_000 + i * 1000 }));
+      const now = h.host.snapshot().lastDeduction?.key;
+      for (const decision of h.player.delivered.slice(before)) sounds.push({ row: i, decision, tookPoints: now !== key });
+      key = now;
+    }
+  };
+  await overRows(0, 12);
+  expect(sounds.every((s) => s.decision.kind === 'speeding')).toBe(true);
+  expect(sounds.map((s) => [s.row, s.tookPoints])).toEqual([
+    [0, false],
+    [5, true],
+    [11, false],
+  ]);
+  const [first, graceEnd, repeat] = sounds;
+  expect(first!.decision.tone).toBeUndefined();
+  expect(graceEnd!.decision.tone).toBe('points_lost');
+  // The grace end's cue had not started when the row-11 repeat came: that repeat drops it and,
+  // though it took no point of its own, plays the points-lost cue in its place.
+  expect(graceEnd!.decision.stillWanted!()).toBe(false);
+  expect(repeat!.decision.tone).toBe('points_lost');
+  // It starts (still over the line): its points are told, so the next plain repeat is the chime.
+  expect(repeat!.decision.stillWanted!()).toBe(true);
+  await overRows(12, 20);
+  expect(sounds.slice(3).map((s) => [s.row, s.tookPoints])).toEqual([[17, false]]);
+  const next = sounds[3]!.decision;
+  expect(next.tone).toBeUndefined();
+  expect(next.cue).toBeUndefined();
+  expect(next.stillWanted!()).toBe(true);
+  // Back under the line (33.6 mph): the plain chime not started is dropped, and the session goes.
+  await feed(h, rows(1, { speedMps: 15, t0: T0 + 60_000 }));
+  expect(next.stillWanted!()).toBe(false);
+  expect(h.player.releases).toEqual(['speeding']);
+  await h.host.stop({ endOpenTrip: true });
+});
+
+test('the first alert of a new speeding episode takes over the points-lost cue of a dropped sound: the chime, then the cue', async () => {
+  const h = build();
+  await h.host.boot();
+  await h.host.start();
+  await feed(h, rows(40, { speedMps: 15 }));
+  // 45 mph on a 35 through the grace's end (a point), then 6 rows under the end buffer end the
+  // episode, then over again: a new episode while the grace end's cue has still not started.
+  await feed(h, rows(6, { speedMps: 20, t0: T0 + 40_000 }));
+  const graceEnd = h.player.delivered.at(-1)!;
+  expect(graceEnd.tone).toBe('points_lost');
+  await feed(h, rows(6, { speedMps: 15, t0: T0 + 46_000 }));
+  expect(h.host.snapshot().speedingOver).toBe(false);
+  await feed(h, rows(1, { speedMps: 20, t0: T0 + 52_000 }));
+  const alert = h.player.delivered.at(-1)!;
+  expect(h.host.snapshot().lastAlert).toMatchObject({ type: 'speeding', at: T0 + 52_000 });
+  expect(graceEnd.stillWanted!()).toBe(false);
+  expect(alert).toMatchObject({ kind: 'speeding', cue: 'points_lost' });
+  expect(alert.tone).toBeUndefined();
+  await h.host.stop({ endOpenTrip: true });
 });
 
 describe('screen switches and the navigation button (design §6, §12.3)', () => {
