@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { AppState } from 'react-native';
+import { Appearance, AppState } from 'react-native';
 
 import type { RuntimeState } from '@/boot/controller';
 import { UNKNOWN_LIMIT } from '@/core/detectors/common';
@@ -147,6 +147,16 @@ jest.mock('@/data/devices/DeviceHost', () => ({ DeviceHost: () => null }));
 
 // eslint-disable-next-line import/first -- after the mocks it depends on
 import RootLayout from '../_layout';
+// eslint-disable-next-line import/first -- after the mocks
+import { displayLook } from '@/drive/displayLook';
+// eslint-disable-next-line import/first -- after the mocks
+import { appearance } from '@/ui/appearance';
+// eslint-disable-next-line import/first -- after the mocks
+import { lookFor } from '@/ui/sky/look';
+// eslint-disable-next-line import/first -- after the mocks
+import { plainBundle } from '@/ui/sky/palette';
+// eslint-disable-next-line import/first -- after the mocks
+import { appSkyPorts } from '@/ui/sky/ports';
 
 // Captured at module load, before `clearAllMocks` empties it.
 const handlerCalls = (
@@ -184,6 +194,10 @@ function driveState(over: Partial<DriveState> = {}): DriveState {
     dryRun: false,
     mode: 'mounted',
     role: 'driver',
+    courseDeg: null,
+    speedingRatio: null,
+    speedingOver: false,
+    lastDeduction: null,
     ...over,
   };
 }
@@ -315,6 +329,34 @@ describe('the root layout', () => {
     mockController.ensureRuntime.mockClear();
     fireEvent.press(screen.getByRole('button'));
     expect(mockController.ensureRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  test("Settings › Appearance: a static look stops the sky's reads, pins the look and dresses the Live Activity in it; System hands the scheme back to the phone; Adaptive wears the sky again", async () => {
+    const override = jest.spyOn(Appearance, 'setColorScheme').mockImplementation(() => {});
+    const position = jest.spyOn(appSkyPorts, 'position').mockResolvedValue(null);
+    try {
+      await act(async () => appearance.set('dark'));
+      await renderReady();
+      expect(position).not.toHaveBeenCalled();
+      expect(displayLook()).toEqual(lookFor(plainBundle('dark')));
+      expect(override).toHaveBeenLastCalledWith('dark');
+
+      await act(async () => appearance.set('light'));
+      expect(displayLook()).toEqual(lookFor(plainBundle('light')));
+      expect(override).toHaveBeenLastCalledWith('light');
+      expect(position).not.toHaveBeenCalled();
+
+      await act(async () => appearance.set('system'));
+      expect(override).toHaveBeenLastCalledWith('unspecified');
+      expect(position).not.toHaveBeenCalled();
+
+      await act(async () => appearance.set('adaptive'));
+      expect(position).toHaveBeenCalled();
+    } finally {
+      await act(async () => appearance.set('adaptive'));
+      override.mockRestore();
+      position.mockRestore();
+    }
   });
 });
 

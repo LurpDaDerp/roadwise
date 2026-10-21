@@ -1,7 +1,8 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -30,8 +31,9 @@ import { LockoutGate } from '@/features/drive/LockoutGate';
 import { NotificationsHost, reminderStartGate } from '@/features/notifications';
 import { syncNotificationPrefs } from '@/features/settings/notifications/sync';
 import { ThemeProvider } from '@/ui';
+import { appearance, useAppearance, type AppearanceChoice } from '@/ui/appearance';
 import { lookFor } from '@/ui/sky/look';
-import { skyBundle } from '@/ui/sky/palette';
+import { plainBundle, skyBundle, type SkyMood } from '@/ui/sky/palette';
 import { appSkyPorts } from '@/ui/sky/ports';
 import { SkyChrome } from '@/ui/sky/SkyChrome';
 import { useSkyMood } from '@/ui/sky/useSkyMood';
@@ -43,7 +45,25 @@ void SplashScreen.preventAutoHideAsync().catch(() => {
   // The splash is already hidden (a fast reload). Nothing to hold.
 });
 
+// Settings › Appearance is read behind the splash too, so the first frame already wears the
+// driver's look (a failed or slow read gives Adaptive).
+void appearance.load();
+
 const controller = runtimeController;
+
+/**
+ * The theme every tree of the root wears, from the phone's Appearance choice: the sky (Adaptive),
+ * a pinned static look (Light, Dark), or the static look for the phone's own scheme (System, which
+ * also hands the keyboard, alerts and maps back to the phone's setting).
+ */
+function RootTheme({ choice, mood, children }: { choice: AppearanceChoice; mood: SkyMood; children: ReactNode }) {
+  return (
+    <ThemeProvider mood={choice === 'adaptive' ? mood : null} scheme={choice === 'light' || choice === 'dark' ? choice : undefined}>
+      <SkyChrome followSystem={choice === 'system'} />
+      {children}
+    </ThemeProvider>
+  );
+}
 
 /**
  * M4's runtime-bound hosts (Task 18), inside the data, query, drive and session providers:
@@ -99,13 +119,18 @@ function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean 
 
 export default function RootLayout() {
   const { loaded, error } = useAppFonts();
-  // The sky the theme wears: the sun at the phone's last known position and the weather there.
-  // Read from the first render, behind the splash, so the first frame already has it.
-  const mood = useSkyMood(appSkyPorts);
-  // The Live Activity and the Android drive notification wear the same sky (`src/drive/displayLook.ts`).
+  const { choice, loaded: appearanceLoaded } = useAppearance();
+  // The sky the theme wears under Adaptive: the sun at the phone's last known position and the
+  // weather there. Read from the first render, behind the splash, so the first frame already has it.
+  // A static look turns it off: no position read and no weather request for the sky.
+  const mood = useSkyMood(appSkyPorts, { enabled: choice === 'adaptive' });
+  // Under System, the phone's own scheme (the override is handed back, so this reads the phone's).
+  const phoneScheme = useColorScheme() === 'dark' ? 'dark' : 'light';
+  const staticScheme = choice === 'light' || choice === 'dark' ? choice : phoneScheme;
+  // The Live Activity and the Android drive notification wear the same look (`src/drive/displayLook.ts`).
   useEffect(() => {
-    setDisplayLook(lookFor(skyBundle(mood)));
-  }, [mood]);
+    setDisplayLook(lookFor(choice === 'adaptive' ? skyBundle(mood) : plainBundle(staticScheme)));
+  }, [choice, mood, staticScheme]);
   const [timedOut, setTimedOut] = useState(false);
   // The record: SQLite opened and migrated, the interrupted drive recovered or adopted, the drive
   // host started, the sync runner started (`src/boot/bootstrap.ts`). The controller owns it: the
@@ -207,7 +232,9 @@ export default function RootLayout() {
 
   const fontsReady = shouldRender({ loaded, error, timedOut });
   const ready =
-    fontsReady && (runtime !== null || state.error !== null || state.status === 'switching');
+    fontsReady &&
+    appearanceLoaded &&
+    (runtime !== null || state.error !== null || state.status === 'switching');
 
   // Sign-out drains what this device still owes while the session can.
   const flush = useCallback(
@@ -240,10 +267,9 @@ export default function RootLayout() {
     return (
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          <ThemeProvider mood={mood}>
-            <SkyChrome />
+          <RootTheme choice={choice} mood={mood}>
             <SwitchingAccounts />
-          </ThemeProvider>
+          </RootTheme>
         </SafeAreaProvider>
       </GestureHandlerRootView>
     );
@@ -253,13 +279,12 @@ export default function RootLayout() {
     return (
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          <ThemeProvider mood={mood}>
-            <SkyChrome />
+          <RootTheme choice={choice} mood={mood}>
             <BootstrapFailed
               retrying={state.status === 'booting'}
               onRetry={() => void controller.ensureRuntime().catch(() => {})}
             />
-          </ThemeProvider>
+          </RootTheme>
         </SafeAreaProvider>
       </GestureHandlerRootView>
     );
@@ -268,8 +293,7 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <ThemeProvider mood={mood}>
-          <SkyChrome />
+        <RootTheme choice={choice} mood={mood}>
           <QueryClientProvider client={runtime.queryClient}>
             <DataProvider db={runtime.db}>
               <DriveProvider host={runtime.drive}>
@@ -300,7 +324,7 @@ export default function RootLayout() {
               </DriveProvider>
             </DataProvider>
           </QueryClientProvider>
-        </ThemeProvider>
+        </RootTheme>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
