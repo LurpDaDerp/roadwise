@@ -6,6 +6,10 @@ import {
   FILLING_RETRY_MS,
   fillingRetryMs,
   MIN_MOVING_MPS,
+  MISSING_RETRY_MAX_MS,
+  missingRetryMs,
+  SIGN_ONLY_CONFIDENCE,
+  STAY_MAX_M,
   STICKY_RADIUS_M,
   TRUNCATED_CONFIDENCE_CAP,
   TRUNCATED_TILE_TTL_MS,
@@ -15,6 +19,7 @@ import {
   WARM_REPEAT_MS,
   type SpeedLimitClient,
 } from '@/core/speedLimits/client';
+import { TILE_DATA_VERSION } from '@/core/speedLimits/store';
 import { fillCellKey, parseTileKey, prefetchSet, tileBounds, tileFor, tileKey } from '@/core/speedLimits/tiles';
 import { type LimitSegment, MAX_TILE_TTL_MS, type PointResponse, type TileBatchResponse } from '@/core/speedLimits/wire';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
@@ -120,8 +125,9 @@ beforeEach(async () => {
   };
 });
 
+/** A tile stored as this build stores one (the current road layer's envelope). */
 const store = (key: string, segments: unknown[], expiresAt = clock + DAY) =>
-  createTilesRepo(db).putTile(key, expiresAt, segments);
+  createTilesRepo(db).putTile(key, expiresAt, { v: TILE_DATA_VERSION, truncated: false, segments });
 
 describe('the network budget (§3.5, R7)', () => {
   it('startTrip sends one batch of the prefetch set: current, next along course, and lateral', async () => {
@@ -265,6 +271,7 @@ describe('memory (rev1: I6, I7)', () => {
   });
 
   it('looks a tile up in SQLite once when it is not there, not on every row', async () => {
+    online = false;
     make(fakeApi().api);
     for (let i = 0; i < 100; i += 1) {
       expect(client.lookup(LAT, LNG0, EAST, MOVING)).toBeNull();
@@ -778,7 +785,7 @@ describe('fix round 1', () => {
     expect(rows).toHaveLength(4);
     for (const r of rows) {
       expect(r.expires_at).toBe(T0 + TRUNCATED_TILE_TTL_MS);
-      expect(JSON.parse(r.segments_json as string)).toEqual({ truncated: true, segments: [road()] });
+      expect(JSON.parse(r.segments_json as string)).toEqual({ v: TILE_DATA_VERSION, truncated: true, segments: [road()] });
     }
     expect(TRUNCATED_TILE_TTL_MS).toBe(24 * 3600 * 1000);
     expect(client.stats().truncatedTiles).toBe(4);
@@ -798,23 +805,32 @@ describe('fix round 1', () => {
     expect(client.stats().truncatedTiles).toBe(4); // reloaded from SQLite with the flag
   });
 
-  it('C-R4: a stored plain segment array (before the envelope) reads as not truncated', async () => {
-    await store(keyAt(LAT, LNG0), [road()]);
-    make(fakeApi().api);
-    const s = await client.lookupStored(LAT, LNG0, EAST);
-    expect(s?.matchConfidence).toBe(0.95);
-    expect(client.stats().truncatedTiles).toBe(0);
+  it('a tile stored from an older road layer (a plain array, or an envelope without the version) is not used: it is fetched again', async () => {
+    // The server's road layer changed what a tile holds (TILE_DATA_VERSION 2: more road classes,
+    // directional and zone limits), so a tile kept from before must not stand for its 30 days.
+    for (const old of [[road({ limitMph: 25 })], { truncated: false, segments: [road({ limitMph: 25 })] }]) {
+      await createTilesRepo(db).putTile(keyAt(LAT, LNG0), clock + DAY, old);
+      const { api, getTiles } = fakeApi();
+      make(api);
+      expect(await client.lookupStored(LAT, LNG0, EAST)).toBeNull();
+      client.lookup(LAT, LNG0, EAST, MOVING);
+      await client.settled();
+      expect(getTiles).toHaveBeenCalledTimes(1);
+      expect(client.lookup(LAT, LNG0, EAST, MOVING)?.limitMps).toBeCloseTo(mphToMps(35));
+      expect(client.stats().truncatedTiles).toBe(0);
+    }
+    expect(TILE_DATA_VERSION).toBe(2);
   });
 
   it("I1: a truncated tile that dropped the car's road but kept a parallel one never answers confidently", async () => {
     // Untruncated, the same tile would name the frontage road's 25 mph at 0.95 — the wrong limit,
     // confidently. That is exactly what truncation can produce, so the flag must hold it down.
     const own = keyAt(LAT, LNG0);
-    await createTilesRepo(db).putTile(own, clock + DAY, { truncated: false, segments: [frontage()] });
+    await createTilesRepo(db).putTile(own, clock + DAY, { v: TILE_DATA_VERSION, truncated: false, segments: [frontage()] });
     make(fakeApi().api);
     expect((await client.lookupStored(LAT, LNG0, EAST))?.matchConfidence).toBe(0.95);
 
-    await createTilesRepo(db).putTile(own, clock + DAY, { truncated: true, segments: [frontage()] });
+    await createTilesRepo(db).putTile(own, clock + DAY, { v: TILE_DATA_VERSION, truncated: true, segments: [frontage()] });
     make(fakeApi().api);
     await client.lookupStored(LAT, LNG0, EAST);
     const s = client.lookup(LAT, LNG0, EAST, MOVING);
@@ -896,5 +912,138 @@ describe('fix round 1', () => {
     expect(keyAt(LAT, lng)).toBe(set[1]);
     expect(client.lookup(LAT, lng, EAST, MOVING)?.limitMps).toBeCloseTo(mphToMps(35));
     expect(getTiles).not.toHaveBeenCalled();
+  });
+});
+
+describe("the car's own tile is fetched as soon as it is missing, not a kilometre later", () => {
+  const NORTH = 0;
+  /** A 25 mph street north from the corridor, 200 m east of the start. */
+  const X = LNG0 + mLng(200);
+  const street = (): LimitSegment =>
+    road({ id: 'north', limitMph: 25, highway: 'residential', line: encodePolyline([{ lat: LAT, lng: X }, { lat: LAT + mLat(3000), lng: X }]) });
+
+  it('a turn into a tile the last prefetch did not cover: asked for at once, the limit there all along', async () => {
+    const { api, getTiles } = fakeApi({ segmentsFor: () => [road(), street()] });
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    const covered = new Set(prefetchSet(LAT, LNG0, EAST).map(tileKey));
+    // Up the street, one reading every 20 m: every row has the limit, and the first row in a tile
+    // the batch left out asks for it then (the car's own tile first), not at the next kilometre.
+    let asked: string | null = null;
+    for (let lat = LAT; lat < LAT + mLat(1500); lat += mLat(20)) {
+      const before = getTiles.mock.calls.length;
+      expect(client.lookup(lat, X, NORTH, MOVING)?.limitMps).toBeCloseTo(mphToMps(25));
+      await client.settled();
+      if (asked === null && !covered.has(keyAt(lat, X))) {
+        expect(getTiles.mock.calls.length).toBe(before + 1);
+        asked = getTiles.mock.calls[before]![0][0]!;
+        expect(asked).toBe(keyAt(lat, X));
+        expect(lat - LAT).toBeLessThan(mLat(1000)); // before the engine's next 1 km prefetch
+      }
+    }
+    expect(asked).not.toBeNull();
+  });
+
+  it('a missing tile whose request fails is asked for again after 10 s, doubling to 2 min; never offline', async () => {
+    expect([1, 2, 3, 4, 5, 9].map(missingRetryMs)).toEqual([10_000, 20_000, 40_000, 80_000, 120_000, MISSING_RETRY_MAX_MS]);
+    const { api, getTiles } = fakeApi();
+    getTiles.mockRejectedValue(new Error('offline gateway'));
+    make(api);
+    const asks: number[] = [];
+    for (let t = 0; t <= 75; t += 1) {
+      const before = getTiles.mock.calls.length;
+      expect(client.lookup(LAT, LNG0, EAST, MOVING)).toBeNull();
+      await client.settled();
+      if (getTiles.mock.calls.length > before) asks.push(t);
+      clock += 1000;
+    }
+    expect(asks).toEqual([0, 10, 30, 70]);
+    expect(errors.length).toBe(4);
+    online = false;
+    clock += 10 * MISSING_RETRY_MAX_MS;
+    client.lookup(LAT, LNG0, EAST, MOVING);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(4);
+  });
+
+  it('a filling tile whose retries are spent is asked for every 2 minutes from then on', async () => {
+    const { api, getTiles } = fakeApi();
+    getTiles.mockImplementation(async (keys) => ({
+      tiles: keys.map((tile) => ({ tile, expiresAt: clock + DAY, truncated: false, filling: true, segments: [] })),
+      fallback: null,
+    }));
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    for (let i = 0; i < FILLING_RETRIES_MAX + 1; i += 1) {
+      clock += FILLING_RETRY_MS;
+      client.lookup(LAT, LNG0, EAST, MOVING);
+      await client.settled();
+    }
+    expect(getTiles).toHaveBeenCalledTimes(1 + FILLING_RETRIES_MAX);
+    clock += MISSING_RETRY_MAX_MS - 1;
+    client.lookup(LAT, LNG0, EAST, MOVING);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(1 + FILLING_RETRIES_MAX);
+    clock += 1;
+    client.lookup(LAT, LNG0, EAST, MOVING);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(2 + FILLING_RETRIES_MAX);
+  });
+});
+
+describe('the sign through a crawl and through an ambiguous stretch', () => {
+  it('crawling with a course the match cannot use keeps the last limit shown within 30 m, and no further', async () => {
+    await store(keyAt(LAT, LNG0), [road()]);
+    make(fakeApi().api);
+    await client.lookupStored(LAT, LNG0, EAST);
+    const posted = client.lookup(LAT, LNG0, EAST, MOVING);
+    expect(posted).toMatchObject({ source: 'posted', matchConfidence: 0.95 });
+    const crawl = { gnssValid: true, speedMps: 1 };
+    // At 2 mph the course wanders: 90° off the road fails the heading test.
+    expect(client.lookup(LAT, LNG0 + mLng(10), 0, crawl)).toEqual(posted);
+    expect(client.lookup(LAT, LNG0 + mLng(40), 0, crawl)).toMatchObject({ source: 'unknown' });
+    // Moving at speed, a match the sign can't show is not covered up.
+    expect(client.lookup(LAT, LNG0 + mLng(5), 0, MOVING)).toMatchObject({ source: 'unknown' });
+  });
+
+  /** A tagged 25 mph road leaving the corridor: 8 m north of it 300 m east of the start, 30 m north at 700 m. */
+  const beside = () =>
+    road({ id: 'beside', limitMph: 25, highway: 'residential', line: encodePolyline([{ lat: LAT + mLat(8), lng: LNG0 + mLng(300) }, { lat: LAT + mLat(30), lng: LNG0 + mLng(700) }]) });
+  const besideAt = (m: number) => LAT + mLat(8 + (22 * (m - 300)) / 400);
+
+  it('the road matched alone is stayed on, sign-only, where another runs within 10 m, until the car is clearly on another', async () => {
+    await store(keyAt(LAT, LNG0), [road(), beside()]);
+    make(fakeApi().api);
+    await client.lookupStored(LAT, LNG0, EAST);
+    // No road matched alone yet: the stretch beside the 25 mph road reads "-" as before.
+    expect(client.lookup(LAT, LNG0 + mLng(310), EAST, MOVING)).toMatchObject({ parallelRoads: true, matchConfidence: 0.6 });
+    // Alone on the corridor, then into the stretch beside the 25 mph road.
+    expect(client.lookup(LAT, LNG0 + mLng(100), EAST, MOVING)).toMatchObject({ source: 'posted', matchConfidence: 0.95 });
+    expect(client.lookup(LAT, LNG0 + mLng(310), EAST, MOVING)).toEqual({ limitMps: mphToMps(35), source: 'statutory', matchConfidence: SIGN_ONLY_CONFIDENCE, parallelRoads: false });
+    // On the road leaving it, 9.1 m off the corridor: the car could still be on either, so the corridor's 35.
+    expect(client.lookup(besideAt(320), LNG0 + mLng(320), EAST, MOVING)).toMatchObject({ limitMps: mphToMps(35), source: 'statutory' });
+    // Further along it, the corridor more than 10 m further away than it: its own 25, posted.
+    expect(client.lookup(besideAt(650), LNG0 + mLng(650), EAST, MOVING)).toMatchObject({ limitMps: mphToMps(25), source: 'posted' });
+  });
+
+  it('the road stayed on is dropped after an invalid fix, a new trip, or STAY_MAX_M from where it was matched', async () => {
+    expect(STAY_MAX_M).toBe(1500);
+    await store(keyAt(LAT, LNG0), [road(), beside()]);
+    make(fakeApi().api);
+    await client.lookupStored(LAT, LNG0, EAST);
+    const ambiguous = () => client.lookup(LAT, LNG0 + mLng(310), EAST, MOVING);
+    client.lookup(LAT, LNG0 + mLng(100), EAST, MOVING);
+    client.lookup(LAT, LNG0, EAST, { gnssValid: false, speedMps: null });
+    expect(ambiguous()).toMatchObject({ parallelRoads: true });
+    client.lookup(LAT, LNG0 + mLng(100), EAST, MOVING);
+    client.resetTrip();
+    await client.lookupStored(LAT, LNG0, EAST);
+    expect(ambiguous()).toMatchObject({ parallelRoads: true });
+    // Matched alone 1.6 km back along the corridor (another tile, held here too): too far to stay on.
+    const far = LNG0 + mLng(310) - mLng(1600);
+    await store(keyAt(LAT, far), [road({ line: encodePolyline([{ lat: LAT, lng: far - mLng(100) }, { lat: LAT, lng: -122.299 }]) })]);
+    await client.lookupStored(LAT, far, EAST);
+    expect(client.lookup(LAT, far, EAST, MOVING)).toMatchObject({ source: 'posted' });
+    expect(ambiguous()).toMatchObject({ parallelRoads: true });
   });
 });

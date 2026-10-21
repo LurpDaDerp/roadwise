@@ -192,6 +192,43 @@ const ambiguous = (r: MatchResult): MatchResult =>
     : { ...r, matchConfidence: Math.min(r.matchConfidence, MATCH.CONF_PARALLEL), parallelRoads: true };
 
 export function matchLimit(courseDeg: number | null, candidates: readonly Candidate[]): MatchResult {
+  return matchWith(courseDeg, candidates, { rampCap: true, stayOn: null });
+}
+
+/**
+ * The road the sign may name where `matchLimit` is too unsure to act on (DEVICE ONLY: the client
+ * shows its limit and nothing is scored against it). It reads the candidates as `matchLimit` does,
+ * with two differences:
+ *   - a ramp is not held below the action gate for being a ramp: the parallel-road rule already
+ *     catches the stretch where it runs beside its road, so a ramp alone is as certain as any road;
+ *   - with `stayOn` (the road the car was last matched to) among the roads within
+ *     `PARALLEL_MARGIN_M` of the nearest one, the car is taken to be still on it, and the roads
+ *     beside it no longer make the match ambiguous (a motorway past its ramps, a street through a
+ *     shallow fork). Its own way, or the next way of the same class and limit (OpenStreetMap splits
+ *     a road into ways at many nodes), stands for it. Once the car is nearer another road by more
+ *     than the margin, that road wins.
+ */
+export function signMatch(courseDeg: number | null, candidates: readonly Candidate[], stayOn: StayOn | null): MatchResult {
+  return matchWith(courseDeg, candidates, { rampCap: false, stayOn });
+}
+
+/** The road `signMatch` keeps the car on: its key, and the class and limit its next ways share. */
+export interface StayOn {
+  key: string;
+  highway: string;
+  limitMph: number | null;
+}
+
+interface MatchOptions {
+  rampCap: boolean;
+  stayOn: StayOn | null;
+}
+
+/** The candidate is the road stayed on, or its next way: the same class and limit. */
+const sameRoad = (c: Candidate, s: StayOn): boolean =>
+  c.key === s.key || (c.highway === s.highway && validLimit(c.limitMph) === validLimit(s.limitMph));
+
+function matchWith(courseDeg: number | null, candidates: readonly Candidate[], opts: MatchOptions): MatchResult {
   // An unknown course (null, the platforms' negative "invalid", or garbage) cannot pass a heading
   // test, so no road can be chosen.
   if (courseDeg === null || !Number.isFinite(courseDeg) || courseDeg < 0) return unknown(false);
@@ -202,18 +239,30 @@ export function matchLimit(courseDeg: number | null, candidates: readonly Candid
   const inRadius = candidates
     .filter((c) => Number.isFinite(c.distanceM) && c.distanceM >= 0 && c.distanceM <= MATCH.RADIUS_M)
     .sort(byDistance);
-  const result = matchNearest(course, inRadius.slice(0, MATCH.MAX_CANDIDATES));
+  const result = matchNearest(course, inRadius.slice(0, MATCH.MAX_CANDIDATES), opts);
   return inRadius.length > MATCH.MAX_CANDIDATES ? ambiguous(result) : result;
 }
 
 /** The match over the (already capped, nearest-first) candidates, for a valid course. */
-function matchNearest(course: number, nearest: readonly Candidate[]): MatchResult {
+function matchNearest(course: number, nearest: readonly Candidate[], opts: MatchOptions): MatchResult {
   const passing = nearest.filter((c) => headingPasses(course, c));
-  const roads = passing.filter((c) => c.provider === 'osm');
+  const allRoads = passing.filter((c) => c.provider === 'osm');
   const hpms = passing.filter((c) => c.provider === 'hpms' && validLimit(c.limitMph) !== null);
   const cache = passing.filter((c) => c.provider === 'aws' && validLimit(c.limitMph) !== null);
 
   const distanceConf = (d: number): number => (d <= NEAR_M ? MATCH.CONF_SINGLE_NEAR : MATCH.CONF_SINGLE);
+
+  // Staying on the last road (`signMatch`): it stands for every road within the margin of the
+  // nearest, which are set aside; the rest lie beyond the margin, where no road is the car's.
+  const nearestRoad = allRoads[0];
+  const stayOn = opts.stayOn;
+  const stay =
+    stayOn === null || !nearestRoad
+      ? undefined
+      : allRoads.find((c) => sameRoad(c, stayOn) && c.distanceM <= nearestRoad.distanceM + MATCH.PARALLEL_MARGIN_M);
+  const roads = stay
+    ? [stay, ...allRoads.filter((c) => c.key !== stay.key && c.distanceM > nearestRoad!.distanceM + MATCH.PARALLEL_MARGIN_M)]
+    : allRoads;
 
   const road = roads[0];
   if (!road) {
@@ -233,16 +282,18 @@ function matchNearest(course: number, nearest: readonly Candidate[]): MatchResul
   // limit: a different posted one, or, with both untagged, another class (whose default may
   // differ). The same posted limit on both leaves nothing to tell apart (a trunk and its 45 mph
   // ramp at the gore), whichever road the car is on.
-  const parallel = roads.some(
-    (o) =>
-      o.key !== road.key &&
-      o.distanceM <= road.distanceM + MATCH.PARALLEL_MARGIN_M &&
-      (validLimit(o.limitMph) !== ownLimit || (ownLimit === null && o.highway !== road.highway))
-  );
+  const parallel =
+    stay === undefined &&
+    roads.some(
+      (o) =>
+        o.key !== road.key &&
+        o.distanceM <= road.distanceM + MATCH.PARALLEL_MARGIN_M &&
+        (validLimit(o.limitMph) !== ownLimit || (ownLimit === null && o.highway !== road.highway))
+    );
   const base = Math.min(
     distanceConf(road.distanceM),
     parallel ? MATCH.CONF_PARALLEL : 1,
-    road.highway.endsWith('_link') ? MATCH.CONF_RAMP : 1
+    opts.rampCap && road.highway.endsWith('_link') ? MATCH.CONF_RAMP : 1
   );
 
   if (ownLimit !== null) return known(road, ownLimit, base, parallel);

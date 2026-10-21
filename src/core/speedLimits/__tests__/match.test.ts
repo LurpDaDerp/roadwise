@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { type Candidate, DEFAULT_LIMIT_MPH, defaultLimitMph, MATCH, matchLimit, type MatchResult } from '@/core/speedLimits/match';
+import { type Candidate, DEFAULT_LIMIT_MPH, defaultLimitMph, MATCH, matchLimit, type MatchResult, signMatch } from '@/core/speedLimits/match';
 
 let seq = 0;
 const cand = (over: Partial<Candidate> = {}): Candidate => ({
@@ -531,5 +531,47 @@ describe('the candidate cap (the server returns at most 20 nearest)', () => {
       ...Array.from({ length: 5 }, (_, i) => cand({ key: `osm:out${i}`, distanceM: 26 })),
     ];
     expect(matchLimit(90, [...junk, ...cs])).toEqual(matchLimit(90, cs));
+  });
+});
+
+describe('signMatch — the road the sign may name where matchLimit is too unsure to act on', () => {
+  const main = (over: Partial<Candidate> = {}) => cand({ key: 'osm:main', limitMph: 60, highway: 'motorway', oneway: 1, ...over });
+  const ramp = (over: Partial<Candidate> = {}) => cand({ key: 'osm:ramp', limitMph: null, highway: 'motorway_link', oneway: 1, ...over });
+  const STAY = { key: 'osm:main', highway: 'motorway', limitMph: 60 };
+
+  it('a ramp alone is not held below the gate for being a ramp; matchLimit still is', () => {
+    const cs = [cand({ key: 'osm:r', highway: 'trunk_link', limitMph: 35, distanceM: 2 })];
+    expect(matchLimit(90, cs)).toMatchObject({ limitMph: 35, matchConfidence: 0.65 });
+    expect(signMatch(90, cs, null)).toMatchObject({ limitMph: 35, matchConfidence: 0.95, parallelRoads: false, key: 'osm:r' });
+  });
+
+  it('without a road to stay on, a road beside the car is as ambiguous as for matchLimit', () => {
+    const cs = [main({ distanceM: 3 }), ramp({ distanceM: 9 })];
+    expect(signMatch(90, cs, null)).toEqual(matchLimit(90, cs));
+    expect(signMatch(90, cs, null)).toMatchObject({ parallelRoads: true, matchConfidence: 0.6 });
+  });
+
+  it('staying on the motorway past a ramp within the margin: its limit, nothing in doubt', () => {
+    expect(signMatch(90, [main({ distanceM: 3 }), ramp({ distanceM: 9 })], STAY)).toMatchObject({ key: 'osm:main', limitMph: 60, parallelRoads: false, matchConfidence: 0.95 });
+    // The ramp nearer, the motorway still within the margin of it: the car is taken to be on the motorway.
+    expect(signMatch(90, [ramp({ distanceM: 1 }), main({ distanceM: 10.5 })], STAY)).toMatchObject({ key: 'osm:main', limitMph: 60, parallelRoads: false });
+  });
+
+  it('the next way of the same class and limit stands for the road stayed on (OSM splits a road at nodes)', () => {
+    const next = main({ key: 'osm:next', distanceM: 3 });
+    const r = signMatch(90, [next, main({ distanceM: 12.8 }), ramp({ distanceM: 12.8 })], STAY);
+    expect(r).toMatchObject({ key: 'osm:next', limitMph: 60, parallelRoads: false });
+    // A different limit is a different road.
+    expect(signMatch(90, [main({ key: 'osm:fifty', limitMph: 50, distanceM: 3 }), ramp({ distanceM: 9 })], STAY)).toMatchObject({ parallelRoads: true });
+  });
+
+  it('once the car is nearer another road by more than the margin, that road wins', () => {
+    const r = signMatch(90, [ramp({ distanceM: 1 }), main({ distanceM: 11.01 })], STAY);
+    expect(r).toMatchObject({ key: 'osm:ramp', source: 'statutory', limitMph: 45, parallelRoads: false, matchConfidence: 0.95 });
+  });
+
+  it('a road stayed on that fails the heading test (the other carriageway) is not stayed on', () => {
+    const r = signMatch(90, [main({ distanceM: 3, key: 'osm:x', limitMph: 50 }), ramp({ distanceM: 6 }), main({ distanceM: 9, bearingDeg: 270 })], STAY);
+    expect(r).toMatchObject({ parallelRoads: true });
   });
 });

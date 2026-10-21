@@ -6,7 +6,7 @@
 //
 // The rules this file exists to keep:
 //
-// - **Battery (§3.5, R7).** A lookup never touches the network, with one bounded exception below.
+// - **Battery (§3.5, R7).** A lookup never touches the network, with two bounded exceptions below.
 //   The network is used by exactly two calls: `startTrip` (one batch) and `prefetch` (one batch per
 //   call — the engine calls it once per `PREFETCH_EVERY_M` = 1000 m). A batch asks only for the
 //   prefetch tiles that are neither in memory nor fresh in SQLite, so a commute already cached costs
@@ -18,6 +18,11 @@
 //   first lookup on it after that asks for that one tile again, at most `FILLING_RETRIES_MAX` times
 //   per tile per trip — so the sign fills in seconds after the server has loaded a new area instead
 //   of a kilometre later. Each ask is a read of what the server already holds, never a new load. A filled tile answers with its full expiry and the retries stop.
+//   The second: the car on a tile held nowhere (not in memory, not fresh in SQLite) asks for it at
+//   once with the batch around the car, then again after `missingRetryMs` (10 s doubling to 2 min)
+//   while it stays missing (`needOwn`). A turn off the course the last prefetch looked along, a
+//   failed request, or a filling tile whose retries are spent would otherwise leave the sign at "-"
+//   until the next kilometre's prefetch.
 //   And the warm-up: with each batch, the tile `WARM_AHEAD_M` (3 and 6 km) ahead along the course
 //   is asked for too, in its own small request, when it lies in a different fill cell than the car
 //   and that cell was not warmed in the last `WARM_REPEAT_MS`. The request makes the server start
@@ -34,8 +39,9 @@
 //   without a valid fix is null; a lookup whose tile is not in memory is null (and loads it from
 //   SQLite for the next row); a loaded tile with no established road is `unknown`; an established
 //   road with no posted limit is its class default, `statutory` (the matcher's table), which the
-//   sign shows and nothing scores. The one carry-over: stopped (valid fix, no course, under 2 m/s)
-//   within 30 m of the last match. Standing with no course and nothing carried (the drive's first
+//   sign shows and nothing scores. The one carry-over: stopped or crawling (valid fix, under 2 m/s,
+//   with no course or one the match can't use) within 30 m of the last limit the sign could show.
+//   A tile stored from an older road layer (`TILE_DATA_VERSION`) is not used. Standing with no course and nothing carried (the drive's first
 //   seconds), the nearest road within 25 m is matched as if heading along it, by the matcher's own
 //   rules; no road near, or none with a limit, is null. A server point answer (posted or cached) beats a default.
 // - **Confidence.** `matchConfidence` is the matcher's, unaltered — with one exception: a match
@@ -44,11 +50,16 @@
 //   the one dropped while a more important parallel road survives, and the matcher would name the
 //   neighbour's limit at 0.85. The HUD, the alerts and full-weight scoring act on a limit exactly
 //   when `limitActionable` holds, and any match below `MATCH_CONFIDENCE_MIN` (0.7) fails it, so
-//   ramp, parallel-road and truncated-tile matches (0.6–0.65) show "—" and never alert; §9.5 may
-//   still score them at reduced weight.
+//   ramp, parallel-road and truncated-tile matches (0.6–0.65) never alert or score.
+// - **The sign's fallback (`live`).** Where the match is too unsure to act on but a road is there,
+//   the sign still shows a limit, sign-only (a `statutory` sample at `SIGN_ONLY_CONFIDENCE`, like a
+//   class default: printed, never scored): a ramp alone, or, beside another road (a motorway past
+//   its ramps, a street through a shallow fork), the road the car was last matched to alone, while
+//   it is still one of those within the parallel margin (`signMatch`). A truncated tile's cap stays.
 // - **Simulation (`persist: false`).** Nothing is written to SQLite: no tile is stored and
 //   `purgeExpired` does nothing. Reading tiles already there is harmless and stays allowed.
 
+import { limitShown, MATCH_CONFIDENCE_MIN } from '@/core/detectors/common';
 import type { LimitSample } from '@/core/engine/types';
 import type { Db } from '@/data/db/driver';
 import { createTilesRepo } from '@/data/db/tiles';
@@ -56,13 +67,15 @@ import { mphToMps } from '@/lib/units';
 
 import type { SpeedLimitApi } from './api';
 import { angleDiffDeg, bboxOf, type BBox, nearBBox, nearestOnPolyline, normalizeDeg } from './geometry';
-import { MATCH, matchLimit, type MatchResult } from './match';
+import { type Candidate, MATCH, matchLimit, type MatchResult, signMatch, type StayOn } from './match';
 import {
   candidatesNear,
   createTileLru,
   decodeTile,
   type DecodedTile,
+  storedIsCurrent,
   type StoredTilePayload,
+  TILE_DATA_VERSION,
   truncatedNear,
 } from './store';
 import { fillCellKey, prefetchSet, tileFor, tileKey } from './tiles';
@@ -102,6 +115,26 @@ export const WARM_AHEAD_M: readonly number[] = [3000, 6000];
 export const WARM_AROUND_M = 3000;
 /** A warmed cell is asked about again no sooner than this: a fill the server put off, or one still loading. */
 export const WARM_REPEAT_MS = 60_000;
+/**
+ * The car's own tile, held nowhere (not in memory, not fresh in SQLite, not filling), is asked for
+ * at once with the batch around the car, then again this long after each ask, doubling from 10 s
+ * to 2 min, while it stays missing (a failed request, a tile the server never sent).
+ */
+export const MISSING_RETRY_FIRST_MS = 10_000;
+export const MISSING_RETRY_MAX_MS = 120_000;
+/** The wait after the `asked`-th ask for a missing own tile (1 for the first). */
+export const missingRetryMs = (asked: number): number =>
+  Math.min(MISSING_RETRY_MAX_MS, MISSING_RETRY_FIRST_MS * 2 ** Math.max(0, asked - 1));
+/** The asks a filling tile hands over with once its own retries are spent: the 2-min step. */
+const MISSING_ASKS_AT_MAX = 5;
+/**
+ * A sign-only limit (`signMatch`: a ramp alone, or the road the car stayed on through an ambiguous
+ * stretch) is a `statutory` sample at the action gate's own confidence: the sign prints it and
+ * nothing is scored against it, exactly like a class default.
+ */
+export const SIGN_ONLY_CONFIDENCE = MATCH_CONFIDENCE_MIN;
+/** The road last matched alone is stayed on through an ambiguous stretch up to this far from where it was matched. */
+export const STAY_MAX_M = 1500;
 
 export interface SpeedLimitClient {
   /**
@@ -202,6 +235,27 @@ function toSample(r: MatchResult): LimitSample {
 
 const finite = (...xs: number[]): boolean => xs.every(Number.isFinite);
 
+/** A row's answer, the match it came from (null when a point answer gave it) and the candidates read. */
+interface Evaluated {
+  sample: LimitSample;
+  /** A truncated tile held the match below the gate. */
+  capped: boolean;
+  result: MatchResult | null;
+  cands: Candidate[];
+}
+
+/** A road established on its own: a limit, nothing beside it in doubt, at or above the action gate. */
+const alone = (r: MatchResult): r is Exclude<MatchResult, { source: 'unknown' }> =>
+  r.source !== 'unknown' && !r.parallelRoads && r.matchConfidence >= MATCH_CONFIDENCE_MIN;
+
+/** A limit the sign shows and nothing scores (`SIGN_ONLY_CONFIDENCE`). */
+const signOnly = (limitMph: number): LimitSample => ({
+  limitMps: mphToMps(limitMph),
+  source: 'statutory',
+  matchConfidence: SIGN_ONLY_CONFIDENCE,
+  parallelRoads: false,
+});
+
 export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitClient {
   const { db, api, now } = deps;
   const repo = createTilesRepo(db);
@@ -228,6 +282,8 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
   const fillingRetries = new Map<string, number>();
   /** Fill cells warmed this trip, by when. */
   const warmed = new Map<string, number>();
+  /** Own tiles found missing and asked for this trip: how often, and when last (`missingRetryMs`). */
+  const missing = new Map<string, { n: number; at: number }>();
   /** All outstanding async work, for `settled`. */
   const work = new Set<Promise<unknown>>();
   const pointAnswers: PointAnswer[] = [];
@@ -241,7 +297,10 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
   let pointAllowed = false;
   let pointInFlight = false;
   let unknownRun = 0;
+  /** The last limit the sign could show (`limitShown`), and where: what a stopped or slow car keeps. */
   let last: { lat: number; lng: number; sample: LimitSample } | null = null;
+  /** The road last matched alone (no road beside it in doubt), and where: what `signMatch` stays on. */
+  let stay: (StayOn & { lat: number; lng: number }) | null = null;
   /** The last batch was made with no course: the first row with one asks for the tiles ahead. */
   let courselessBatch = false;
 
@@ -290,7 +349,8 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     const p = (async () => {
       try {
         const row = await repo.getTile<unknown>(key, now());
-        const tile = row ? decodeTile(key, row.expires_at, row.segments) : null;
+        // A tile from an older road layer is not used: it is fetched again (`TILE_DATA_VERSION`).
+        const tile = row && storedIsCurrent(row.segments) ? decodeTile(key, row.expires_at, row.segments) : null;
         if (!tile) {
           if (gen === generation) absent.add(key);
           return null;
@@ -338,7 +398,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
         );
         if (tile.filling) filling.set(tile.tile, expiresAt);
         else filling.delete(tile.tile);
-        const payload: StoredTilePayload = { truncated: tile.truncated, segments: tile.segments };
+        const payload: StoredTilePayload = { v: TILE_DATA_VERSION, truncated: tile.truncated, segments: tile.segments };
         if (persist) {
           try {
             await repo.putTile(tile.tile, expiresAt, payload);
@@ -404,9 +464,38 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     if (until === undefined || now() < until || inFlight.has(key) || !isOnline()) return;
     filling.delete(key);
     const n = (fillingRetries.get(key) ?? 0) + 1;
-    if (n > FILLING_RETRIES_MAX) return;
+    if (n > FILLING_RETRIES_MAX) {
+      // Spent: from here the tile is a missing one, asked for every 2 minutes (`needOwn`).
+      missing.set(key, { n: MISSING_ASKS_AT_MAX, at: now() });
+      return;
+    }
     fillingRetries.set(key, n);
     void track(runBatch([key], generation, counters));
+  }
+
+  /**
+   * The car is on a tile held nowhere in memory: read it from SQLite, and when it is not there
+   * either, ask for it now with the batch around the car (`batch`), not a kilometre later at the
+   * next prefetch. That happens after a turn off the course the last prefetch looked along, after a
+   * failed request, and once a filling tile's retries are spent. A filling tile keeps its own
+   * schedule (`retryFilling`); a missing one is asked for again after `missingRetryMs`.
+   */
+  function needOwn(key: string, lat: number, lng: number, course: number): void {
+    const gen = generation;
+    void track(
+      loadFromSqlite(key).then((tile) => {
+        if (tile !== null || gen !== generation || inFlight.has(key) || !isOnline()) return;
+        if (filling.has(key)) {
+          retryFilling(key);
+          return;
+        }
+        const t = now();
+        const asked = missing.get(key);
+        if (asked !== undefined && t - asked.at < missingRetryMs(asked.n)) return;
+        missing.set(key, { n: (asked?.n ?? 0) + 1, at: t });
+        batch(lat, lng, course);
+      })
+    );
   }
 
   /** Point answers that cover this position in this direction; the nearest one's sample. */
@@ -473,23 +562,19 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
    * `TRUNCATED_CONFIDENCE_CAP` and no point answer replaced it — the point-lookup trigger counts
    * that row as unknown.
    */
-  function evaluate(
-    lat: number,
-    lng: number,
-    course: number,
-    own?: DecodedTile
-  ): { sample: LimitSample; capped: boolean } {
+  function evaluate(lat: number, lng: number, course: number, own?: DecodedTile): Evaluated {
     const tiles = freshTiles();
     if (own && own.expiresAt > now() && !tiles.includes(own)) tiles.push(own);
     const p = { lat, lng };
-    const result = matchLimit(course, candidatesNear(tiles, p, MATCH.RADIUS_M));
+    const cands = candidatesNear(tiles, p, MATCH.RADIUS_M);
+    const result = matchLimit(course, cands);
     if (result.source === 'unknown' || result.source === 'statutory') {
       // A server point answer is posted or cached: it beats no answer and beats a class default.
       if (course >= 0) {
         const fromPoint = pointAnswerAt(lat, lng, normalizeDeg(course));
-        if (fromPoint) return { sample: fromPoint, capped: false };
+        if (fromPoint) return { sample: fromPoint, capped: false, result: null, cands };
       }
-      return { sample: toSample(result), capped: false };
+      return { sample: toSample(result), capped: false, result, cands };
     }
     const sample = toSample(result);
     if (truncatedNear(tiles, p, MATCH.RADIUS_M)) {
@@ -497,14 +582,49 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       // it sees the road the tile may have dropped. This is what the capped row's lookup was for.
       if (course >= 0) {
         const fromPoint = pointAnswerAt(lat, lng, normalizeDeg(course));
-        if (fromPoint) return { sample: fromPoint, capped: false };
+        if (fromPoint) return { sample: fromPoint, capped: false, result: null, cands };
       }
       return {
         sample: { ...sample, matchConfidence: Math.min(sample.matchConfidence, TRUNCATED_CONFIDENCE_CAP) },
         capped: true,
+        result,
+        cands,
       };
     }
-    return { sample, capped: false };
+    return { sample, capped: false, result, cands };
+  }
+
+  /**
+   * `evaluate` for the drive's own rows, with the sign's fallback. Where the match is too unsure to
+   * act on but not for want of a road (a ramp, or a road beside the car's), the sign shows what
+   * `signMatch` names, sign-only (`SIGN_ONLY_CONFIDENCE`): the road as if alone, or else the road
+   * the car was last matched to alone, while it is still one of those it may be on and within
+   * `STAY_MAX_M` of where it was. A road matched alone becomes the one to stay on. A match held
+   * down by a truncated tile stays down (the car's road may be the one the server dropped).
+   */
+  function live(lat: number, lng: number, course: number): Evaluated {
+    const e = evaluate(lat, lng, course);
+    if (limitShown(e.sample)) {
+      if (e.result !== null && alone(e.result)) keepStay(e.result.key, e.cands, lat, lng);
+      return e;
+    }
+    if (e.capped || e.result === null) return e;
+    const single = signMatch(course, e.cands, null);
+    if (alone(single)) {
+      keepStay(single.key, e.cands, lat, lng);
+      return { ...e, sample: signOnly(single.limitMph) };
+    }
+    if (stay !== null && metresBetween(stay.lat, stay.lng, lat, lng) <= STAY_MAX_M) {
+      const kept = signMatch(course, e.cands, stay);
+      if (alone(kept)) return { ...e, sample: signOnly(kept.limitMph) };
+    }
+    return e;
+  }
+
+  /** The road an answer names, kept to stay on when it is an OpenStreetMap way. */
+  function keepStay(key: string, cands: readonly Candidate[], lat: number, lng: number): void {
+    const road = key.startsWith('osm:') ? cands.find((c) => c.key === key) : undefined;
+    if (road) stay = { key, highway: road.highway, limitMph: road.limitMph, lat, lng };
   }
 
   /**
@@ -521,7 +641,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     }
     if (road === null) return null;
     const along = road.oneway === -1 ? road.bearingDeg + 180 : road.bearingDeg;
-    const { sample } = evaluate(lat, lng, normalizeDeg(along));
+    const { sample } = live(lat, lng, normalizeDeg(along));
     return sample.limitMps === null ? null : sample;
   }
 
@@ -531,25 +651,29 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       // the previous match must not come back when the fix does (I8: the tunnel).
       if (!gnssValid || !finite(lat, lng)) {
         last = null;
+        stay = null;
         unknownRun = 0;
         return null;
       }
       const moving = speedMps !== null && speedMps >= MIN_MOVING_MPS;
+      const slow = speedMps !== null && speedMps < MIN_MOVING_MPS;
+      /** Stopped or crawling within 30 m of the last limit shown: that limit (its course says little). */
+      const held = (): LimitSample | null =>
+        slow && last && metresBetween(last.lat, last.lng, lat, lng) <= STICKY_RADIUS_M ? last.sample : null;
 
       if (!(course >= 0) || !Number.isFinite(course)) {
         unknownRun = 0;
-        const stopped = speedMps !== null && speedMps < MIN_MOVING_MPS;
-        if (stopped && last && metresBetween(last.lat, last.lng, lat, lng) <= STICKY_RADIUS_M) return last.sample;
+        const kept = held();
+        if (kept) return kept;
         // Standing with nothing carried (a drive's first seconds): the nearest road's own limit.
-        if (speedMps !== null && !stopped) return null;
+        if (speedMps !== null && !slow) return null;
         const own = tileKey(tileFor(lat, lng));
         if (memoryTile(own) === undefined) {
-          void loadFromSqlite(own);
-          retryFilling(own);
+          needOwn(own, lat, lng, course);
           return null;
         }
         const standing = standingSample(lat, lng);
-        if (standing !== null) last = { lat, lng, sample: standing };
+        if (standing !== null && limitShown(standing)) last = { lat, lng, sample: standing };
         return standing;
       }
 
@@ -558,22 +682,22 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
 
       const key = tileKey(tileFor(lat, lng));
       const loaded = memoryTile(key) !== undefined;
-      if (!loaded) {
-        void loadFromSqlite(key); // never charged to the network budget
-        retryFilling(key); // the one exception: a filling tile that has just expired
-      }
-      const { sample, capped } = evaluate(lat, lng, course);
+      // Not in memory: from SQLite, else from the network at once (`needOwn`).
+      if (!loaded) needOwn(key, lat, lng, course);
+      const { sample, capped } = live(lat, lng, course);
 
       if (!loaded) {
         // The car's own tile is not here yet. A neighbour's buffered segment may still establish
         // the road; short of that, nothing can be said — null, not a (possibly false) unknown.
         unknownRun = 0;
-        if (sample.limitMps === null) return null;
-        last = { lat, lng, sample };
+        if (sample.limitMps === null) return held();
+        if (limitShown(sample)) last = { lat, lng, sample };
         return sample;
       }
 
-      last = { lat, lng, sample };
+      // A crawl's course is noise: a match the sign can't show keeps the last limit within 30 m.
+      const out = limitShown(sample) ? sample : (held() ?? sample);
+      if (limitShown(out)) last = { lat, lng, sample: out };
       // A default is a gap the server's point answer may fill with a posted limit, like unknown.
       if ((sample.source === 'unknown' || sample.source === 'statutory' || capped) && moving) {
         unknownRun += 1;
@@ -581,7 +705,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       } else {
         unknownRun = 0;
       }
-      return sample;
+      return out;
     },
 
     prefetch(lat, lng, course) {
@@ -613,10 +737,12 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       filling.clear();
       fillingRetries.clear();
       warmed.clear();
+      missing.clear();
       courselessBatch = false;
       pointAllowed = false;
       unknownRun = 0;
       last = null;
+      stay = null;
     },
 
     purgeExpired() {

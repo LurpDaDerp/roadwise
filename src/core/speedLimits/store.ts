@@ -59,20 +59,36 @@ interface Unpacked {
 
 /**
  * What a tile row stores in `segments_json`: the segments plus the server's `truncated` flag, in
- * one envelope, so the flag survives without a schema change. Rows written before the envelope
- * are a plain segment array and read as not truncated.
+ * one envelope, so the flag survives without a schema change, and the road layer's version (`v`).
+ * Rows written before the envelope are a plain segment array and decode as not truncated.
  */
 export interface StoredTilePayload {
+  /** `TILE_DATA_VERSION` when it was stored; absent before versions. */
+  v?: number;
   truncated: boolean;
   segments: unknown[];
+}
+
+/**
+ * The road layer a stored tile must come from to be used. Raised whenever the server changes what
+ * a tile holds (the road classes it loads, how it reads a limit from OpenStreetMap: fill.ts'
+ * `FILL_VERSION`), so a tile stored before reads as absent and is fetched again rather than kept
+ * for the rest of its 30 days. 2: living streets, unclassified `road`s and service roads with a
+ * limit; directional and zone limits.
+ */
+export const TILE_DATA_VERSION = 2;
+
+/** A stored row from the current road layer (`TILE_DATA_VERSION`); anything older is not used. */
+export function storedIsCurrent(payload: unknown): boolean {
+  return payload !== null && typeof payload === 'object' && (payload as { v?: unknown }).v === TILE_DATA_VERSION;
 }
 
 /** The segments and flag of a stored row, or null for a corrupt one. */
 export function readStoredPayload(payload: unknown): StoredTilePayload | null {
   if (Array.isArray(payload)) return { truncated: false, segments: payload };
   if (payload !== null && typeof payload === 'object') {
-    const { truncated, segments } = payload as { truncated?: unknown; segments?: unknown };
-    if (typeof truncated === 'boolean' && Array.isArray(segments)) return { truncated, segments };
+    const { v, truncated, segments } = payload as { v?: unknown; truncated?: unknown; segments?: unknown };
+    if (typeof truncated === 'boolean' && Array.isArray(segments)) return typeof v === 'number' ? { v, truncated, segments } : { truncated, segments };
   }
   return null;
 }
