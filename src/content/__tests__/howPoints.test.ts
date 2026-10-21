@@ -59,7 +59,7 @@ test('speeding: the points line per limit, the 5 s grace, and the growing cost w
   expect(section('speeding')).toEqual([
     'Speeding starts a few mph over the posted limit: 3 over at 25 mph, 4 at 35, 5 at 45, 7 at 55 and 9 at 65 (2 in a school or construction zone).',
     'You hear a chime the moment you cross that line. The first 5 s are free: slow down and it costs nothing.',
-    'After that it costs more the further over you are and the longer you stay, up to −300 in one go. 10 s at 3 mph over is about −5; a minute at 3 over about −51.',
+    'After that it costs more the further over you are and the longer you stay: 10 s at 3 mph over is about −5, a minute at 3 over about −51. One stretch tops out at −300, before the repeat multiplier for a second or third speeding in the same drive.',
   ]);
   expect(PENALTIES[0]).toEqual({
     event: 'Speeding',

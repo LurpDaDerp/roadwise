@@ -113,7 +113,7 @@ export const RULES: RuleSection[] = [
     points: [
       `Speeding starts a few mph over the posted limit: ${speedTolerance(25)} over at 25 mph, ${speedTolerance(35)} at 35, ${speedTolerance(45)} at 45, ${speedTolerance(55)} at 55 and ${speedTolerance(65)} at 65 (${speedTolerance(25, 'school')} in a school or construction zone).`,
       `You hear a chime the moment you cross that line. The first ${SPEEDING_GRACE_S} s are free: slow down and it costs nothing.`,
-      `After that it costs more the further over you are and the longer you stay, up to −${SPEEDING_EVENT_CAP} in one go. 10 s at 3 mph over is about −${speedingCost(10, 30)}; a minute at 3 over about −${speedingCost(60, 180)}.`,
+      `After that it costs more the further over you are and the longer you stay: 10 s at 3 mph over is about −${speedingCost(10, 30)}, a minute at 3 over about −${speedingCost(60, 180)}. One stretch tops out at −${SPEEDING_EVENT_CAP}, before the repeat multiplier for a second or third speeding in the same drive.`,
     ],
   },
   {
