@@ -42,10 +42,10 @@ describe('the full Home', () => {
     expect(screen.queryByLabelText('2 of 3 freezes held')).toBeNull();
     expect(within(strip).queryByText(/Lvl/)).toBeNull();
     const card = screen.getByTestId('home-header');
-    expect(within(card).getByLabelText('Level 4, 1,000 points to level 5')).toBeOnTheScreen();
-    expect(within(card).getByTestId('level-value')).toHaveTextContent('4');
-    expect(within(card).getByText('1,000 pts to level 5')).toBeOnTheScreen();
-    expect(within(card).getByLabelText('Level 4 progress')).toBeOnTheScreen();
+    expect(within(card).getByLabelText('Level 3, 260 points to level 4')).toBeOnTheScreen();
+    expect(within(card).getByTestId('level-value')).toHaveTextContent('3');
+    expect(within(card).getByText('260 pts to level 4')).toBeOnTheScreen();
+    expect(within(card).getByLabelText('Level 3 progress')).toBeOnTheScreen();
     // The badge where the league was: the whole rating, and it opens Analytics.
     const badge = within(card).getByLabelText('Safety Rating 92 out of 100');
     expect(within(card).getByTestId('rating-value')).toHaveTextContent('92');

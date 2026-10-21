@@ -124,9 +124,9 @@ export function summary(over: { progress?: Partial<MySummary['progress']>; leagu
     progress: {
       points: 1240,
       lifetime: 1500,
-      level: 4,
-      level_floor: 1500,
-      level_next: 2500,
+      level: 3,
+      level_floor: 750,
+      level_next: 1500,
       streak: 11,
       at_risk: false,
       next_mult: 1.22,

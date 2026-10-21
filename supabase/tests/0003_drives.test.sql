@@ -63,11 +63,11 @@ select is((select count(*)::int from public.weekly_challenges where user_id = '0
 
 create temporary table r1 as select pg_temp.drive('00000000-0000-0000-0000-000000000001', '11111111-1111-4111-8111-111111111111', pg_temp.t0(), 30, 12, 167,
   '[{"id":"22222222-2222-4222-8222-222222222222","type":"hard_brake","penalty":10}]', null, '{"ratingPenalty": 10}') as r;
-select is((select r -> 'progress' from r1), '{"level": 1, "points": 167, "ranked": false, "levelUp": false, "lifetime": 167, "safetyRating": 91.7}'::jsonb, 'the response carries the new progress');
+select is((select r -> 'progress' from r1), '{"level": 1, "points": 167, "ranked": true, "levelUp": false, "lifetime": 167, "safetyRating": 91.7}'::jsonb, 'the response carries the new progress');
 select is((select r -> 'streak' from r1), '{"after": 1, "atRisk": false, "before": 0, "freezes": 2, "outcome": "grew", "nextMult": 1.02, "freezeEarned": false}'::jsonb, 'and the streak block');
 select is((select array[r ->> 'scored', r ->> 'mergedInto', r -> 'achievements' #>> '{0}', r -> 'league' ->> 'placed'] from r1), array['true', null, 'first_drive', 'true'], 'scored, not merged, first_drive unlocked, placed in a league');
 select is((select row(points, lifetime, level, streak, phone_free_run, miles_30d, safety_rating, ranked, last_end_lat, last_end_lng)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
-  row(167, 167, 1, 1, 1, 12.00, 91.7, false, 47.61, -122.31)::text, 'progress: points, lifetime, streak, phone-free run, 30-day miles, rating, the end point');
+  row(167, 167, 1, 1, 1, 12.00, 91.7, true, 47.61, -122.31)::text, 'progress: points, lifetime, streak, phone-free run, 30-day miles, rating, the end point');
 select is((select row(scored, points_net, n_events, n_hard_brake, clean, rating_penalty, rev, streak_before)::text from public.trips where client_trip_id = '11111111-1111-4111-8111-111111111111'),
   row(true, 167, 1, 1, false, 10, 1, 0)::text, 'the trip row holds the derived counts');
 select is((select progress_before from public.trips where client_trip_id = '11111111-1111-4111-8111-111111111111') - 'freezes_granted_at',
@@ -188,7 +188,7 @@ select throws_ok($$ select private.revert_latest_not_driving('00000000-0000-0000
   'P0002', 'trip not found', 'a merged-away payload is not a drive');
 select is((select row(points, lifetime, streak)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(220, 220, 2)::text, 'before: the union plus the 4-mile drive');
 create temporary table nd as select private.revert_latest_not_driving('00000000-0000-0000-0000-000000000001', '44444444-4444-4444-8444-444444444444') as n;
-select is((select n -> 'progress' from nd), '{"level": 1, "atRisk": false, "points": 210, "ranked": false, "streak": 1, "freezes": 2, "lifetime": 210, "safetyRating": 100.0}'::jsonb,
+select is((select n -> 'progress' from nd), '{"level": 1, "atRisk": false, "points": 210, "ranked": true, "streak": 1, "freezes": 2, "lifetime": 210, "safetyRating": 100.0}'::jsonb,
   'progress is restored to exactly what it was before that drive');
 select is((select n ->> 'notDrivingLeft' from nd), '1', 'one use left this month');
 select is((select row(not_driving, points_net, not_driving_at = now())::text from public.trips where client_trip_id = '44444444-4444-4444-8444-444444444444'), row(true, 0, true)::text, 'the trip is marked');
@@ -258,7 +258,7 @@ select is(private.stat_sums('00000000-0000-0000-0000-000000000001', null), '{"mi
 update public.trips set started_at = started_at - interval '32 days', ended_at = ended_at - interval '32 days' where client_trip_id = '77777777-7777-4777-8777-777777777777';
 update public.progress set rating_updated_at = now() - interval '21 hours' where user_id = '00000000-0000-0000-0000-000000000001';
 select is(private.refresh_ratings_daily(), 1, 'the daily refresh picks the user whose rating is 20 h old');
-select is((select row(miles_30d, safety_rating, ranked)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(19.00, 100.0, false)::text, 'the daily refresh (driven from progress) ages drives out of the window');
+select is((select row(miles_30d, safety_rating, ranked)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(19.00, 100.0, true)::text, 'the daily refresh (driven from progress) ages drives out of the window');
 select is((select round(private.rating_as_of('00000000-0000-0000-0000-000000000001', now() - interval '30 days'), 1)), 60.0, 'rating_as_of sees only the drive inside its window (one pickup per 10 mi)');
 
 -- ---------------------------------------------------------------------------

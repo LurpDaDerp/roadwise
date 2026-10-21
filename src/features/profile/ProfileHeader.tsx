@@ -18,8 +18,8 @@ export interface ProfileHeaderProps {
   streak: number;
   /** The tab's own card adds the way to the next level, points, freezes and the way to being ranked; others' don't. */
   own?: {
+    /** The points total (never below 0): the level follows it. */
     points: number;
-    lifetime: number;
     levelFloor: number;
     levelNext: number | null;
     miles30d: number;
@@ -43,8 +43,8 @@ export function ProfileHeader({ username, level, safetyRating, ranked, streak, o
   const rated = ranked && safetyRating !== null;
   const ratingText = formatRating(safetyRating, ranked);
   const span = own && own.levelNext !== null ? own.levelNext - own.levelFloor : 0;
-  const levelProgress = own && span > 0 ? Math.min(1, Math.max(0, (own.lifetime - own.levelFloor) / span)) : 1;
-  const toNext = own && own.levelNext !== null ? copy.toNext(Math.max(0, own.levelNext - own.lifetime), level + 1) : copy.maxLevel;
+  const levelProgress = own && span > 0 ? Math.min(1, Math.max(0, (own.points - own.levelFloor) / span)) : 1;
+  const toNext = own && own.levelNext !== null ? copy.toNext(Math.max(0, own.levelNext - own.points), level + 1) : copy.maxLevel;
   const freezes = own ? Math.max(0, Math.min(own.freezes, MAX_FREEZES)) : 0;
   const toRank = own && !rated ? copy.unrankedMiles(formatDistanceProgress(own.miles30d, RANKED_MIN_MILES, units).text) : null;
   const unrankedLabel = toRank ? `${copy.rating}: ${copy.unranked}, ${toRank}` : `${copy.rating}: ${copy.unranked}`;

@@ -22,16 +22,16 @@ import { RANKED_MIN_MILES } from '@scoring';
 
 type Progress = MySummary['progress'];
 
-/** Share of the way from this level's floor to the next (1 at the cap). */
-export function levelProgress(p: Pick<Progress, 'lifetime' | 'level_floor' | 'level_next'>): number {
+/** Share of the way from this level's floor to the next (1 at the cap); the level follows the points total. */
+export function levelProgress(p: Pick<Progress, 'points' | 'level_floor' | 'level_next'>): number {
   if (p.level_next === null) return 1;
   const span = p.level_next - p.level_floor;
-  return span > 0 ? (p.lifetime - p.level_floor) / span : 0;
+  return span > 0 ? Math.min(1, Math.max(0, (p.points - p.level_floor) / span)) : 0;
 }
 
 /** Points still to earn for the next level; null at the top level. */
-export function pointsToNext(p: Pick<Progress, 'lifetime' | 'level_next'>): number | null {
-  return p.level_next === null ? null : Math.max(0, p.level_next - p.lifetime);
+export function pointsToNext(p: Pick<Progress, 'points' | 'level_next'>): number | null {
+  return p.level_next === null ? null : Math.max(0, p.level_next - p.points);
 }
 
 /** The card's main block: the level big, how far to the next one, and the bar toward it. */

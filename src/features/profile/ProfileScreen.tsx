@@ -66,7 +66,6 @@ export function ProfileScreen() {
             streak={data.progress.streak}
             own={{
               points: data.progress.points,
-              lifetime: data.progress.lifetime,
               levelFloor: data.progress.level_floor,
               levelNext: data.progress.level_next,
               miles30d: data.progress.miles_30d,

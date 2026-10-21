@@ -61,7 +61,7 @@ it('shows the public card, the achievements and a badge for friend requests', as
   await w.render(<ProfileScreen />);
   expect(await screen.findByTestId('profile-username')).toHaveTextContent('swift_fox');
   expect(screen.getByTestId('profile-level')).toHaveTextContent('Level 3');
-  expect(screen.getByText('600 pts to level 4')).toBeOnTheScreen();
+  expect(screen.getByText('680 pts to level 4')).toBeOnTheScreen();
   expect(screen.getByLabelText('Safety Rating 92')).toBeOnTheScreen();
   expect(screen.getByLabelText('Streak 7')).toBeOnTheScreen();
   expect(screen.getByTestId('achievement-first_drive-unlocked')).toBeOnTheScreen();

@@ -36,9 +36,12 @@ test('freezesLeft', () => {
 });
 
 test('level math: share of the way to the next level, and points still to earn', () => {
-  expect(levelProgress({ lifetime: 1750, level_floor: 1500, level_next: 2500 })).toBe(0.25);
-  expect(levelProgress({ lifetime: 400_000, level_floor: 306_250, level_next: null })).toBe(1);
-  expect(pointsToNext({ lifetime: 1750, level_next: 2500 })).toBe(750);
-  expect(pointsToNext({ lifetime: 2600, level_next: 2500 })).toBe(0);
-  expect(pointsToNext({ lifetime: 400_000, level_next: null })).toBeNull();
+  expect(levelProgress({ points: 1750, level_floor: 1500, level_next: 2500 })).toBe(0.25);
+  expect(levelProgress({ points: 400_000, level_floor: 306_250, level_next: null })).toBe(1);
+  expect(pointsToNext({ points: 1750, level_next: 2500 })).toBe(750);
+  expect(pointsToNext({ points: 2600, level_next: 2500 })).toBe(0);
+  expect(pointsToNext({ points: 400_000, level_next: null })).toBeNull();
+  // the level follows the points: a level just dropped to reads from its own floor
+  expect(levelProgress({ points: 700, level_floor: 250, level_next: 750 })).toBe(0.9);
+  expect(pointsToNext({ points: 700, level_next: 750 })).toBe(50);
 });

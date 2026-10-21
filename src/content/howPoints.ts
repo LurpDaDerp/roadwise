@@ -139,7 +139,7 @@ export const RULES: RuleSection[] = [
     title: 'Levels',
     icon: 'ribbon-outline',
     points: [
-      'Levels are based on all the points you’ve ever earned, so a bad drive never costs you a level.',
+      'Your level follows your points total, so losing points can drop you a level. Your total never goes below 0.',
       `Level 2 is at ${LEVEL_STEP} points, level 3 at ${LEVEL_STEP * 3}, level 4 at ${(LEVEL_STEP * 6).toLocaleString('en-US')}, and each one after takes a bit more.`,
     ],
   },
