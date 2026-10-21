@@ -215,6 +215,15 @@ async function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | typeof 
   }
 }
 
+/**
+ * A session read that answered nothing but an error: auth-js hands back no session with the refresh's
+ * error when the stored access token has expired and could not be refreshed (no network). Signed
+ * out reads answer no session and no error.
+ */
+function sessionUnknown(read: { data: { session: unknown }; error?: unknown }): boolean {
+  return read.data.session === null && read.error !== null && read.error !== undefined;
+}
+
 async function ownerMayHaveChanged(db: Db): Promise<boolean> {
   const settings = createSettingsRepo(db);
   const owner = await readDeviceOwner(db);
@@ -259,8 +268,14 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     const reading = supabase.auth.getSession();
     const session = await withinMs(reading, sessionMs);
     let owner: DeviceOwnerOutcome;
-    if (session !== TIMED_OUT) {
+    if (session !== TIMED_OUT && !sessionUnknown(session)) {
       owner = await decide(session.data.session?.user.id ?? null);
+    } else if (session !== TIMED_OUT) {
+      // No session, with an error: an expired token that could not refresh (offline). The stored
+      // session may well still be good: the owner stands, as when the read is slow. A session that
+      // really ended reaches the app as SIGNED_OUT.
+      owner = (await readDeviceOwner(db)) === null ? 'signed-out' : 'same';
+      onError(new Error('the session could not be read'), 'identity: session');
     } else if (await ownerMayHaveChanged(db)) {
       onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
       owner = await decide((await reading).data.session?.user.id ?? null);
@@ -291,12 +306,11 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   setAutoDetectRuntime({
     db,
     detect,
+    // Rejects when the session cannot be read (unknown): automatic drives then stay as they are.
     uid: async () => {
-      try {
-        return (await identity.supabase.auth.getSession()).data.session?.user.id ?? null;
-      } catch {
-        return null;
-      }
+      const read = await identity.supabase.auth.getSession();
+      if (sessionUnknown(read)) throw new Error('the session could not be read');
+      return read.data.session?.user.id ?? null;
     },
     // `serverKey(owner, 'summary')` from src/data/server/useServerQuery.ts, spelled out so a
     // background launch never loads the Supabase client through that module.

@@ -419,6 +419,28 @@ test('flushBeforeSignOut first makes a held upload due: no drive continues after
   await rt.stop();
 });
 
+test('iOS: a launch whose session cannot be read (an expired token, no network) keeps the owner signed in and automatic drives armed', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  const d = deps();
+  const detect = createFakeDriveDetect({ now: () => clock });
+  await detect.setArmed(true, 'user-1');
+  // auth-js answers no session and the refresh's error when the stored token expired offline.
+  const supabase = {
+    ...d.supabase,
+    auth: { ...d.supabase.auth, getSession: async () => ({ data: { session: null }, error: { name: 'AuthRetryableFetchError', message: 'Network request failed' } }) },
+  } as unknown as BootSupabase;
+  const rt = await bootstrapApp({ ...d.deps, supabase, detect });
+  expect(rt.owner).toBe('same');
+  expect(rt.drive.signedIn()).toBe(true);
+  const jobs = await startForegroundJobs(rt, { appState: d.appState, onError: () => {} });
+  await new Promise((r) => setTimeout(r, 0));
+  expect(detect.snapshot).toMatchObject({ armed: true, ownerId: 'user-1' });
+  expect(detect.calls).not.toContain('setArmed:false');
+  await jobs.stop();
+  await rt.stop();
+});
+
 test('iOS: a drive native journals is continued at launch whatever the capture says, and taken in from the journal', async () => {
   const seed = await bootstrapApp(deps().deps);
   await seed.stop();

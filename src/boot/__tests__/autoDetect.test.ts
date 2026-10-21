@@ -49,6 +49,32 @@ test('not onboarded, or signed out: disarmed; a missing permission answers needs
   expect(needs.snapshot.armed).toBe(false);
 });
 
+test('a session that cannot be read (an expired token, no network) keeps the arming as it is; a real sign-out disarms', async () => {
+  const detect = rig({ onboarded: true });
+  expect(await autoDetectSync()).toBe('on');
+  setAutoDetectRuntime({
+    db,
+    detect,
+    uid: async () => {
+      throw new Error('the session could not be read');
+    },
+    onboarded: () => true,
+  });
+  detect.calls.length = 0;
+  expect(await autoDetectSync()).toBe('on');
+  expect(detect.snapshot).toMatchObject({ armed: true, ownerId: 'user-1' });
+  expect(detect.calls.filter((c) => c.startsWith('setArmed'))).toEqual([]);
+  // Not armed before, unknown now: still not armed (nothing is armed on an unread session either).
+  await detect.setArmed(false, 'user-1');
+  detect.calls.length = 0;
+  expect(await autoDetectSync()).toBe('off');
+  expect(detect.calls.filter((c) => c.startsWith('setArmed'))).toEqual([]);
+  await detect.setArmed(true, 'user-1');
+  setAutoDetectRuntime({ db, detect, uid: async () => null });
+  expect(await autoDetectSync()).toBe('off');
+  expect(detect.snapshot.armed).toBe(false);
+});
+
 test('a disarm names the owner native is armed for, else the signed-in driver; never an empty id', async () => {
   const detect = rig({ onboarded: true });
   await autoDetectSync();

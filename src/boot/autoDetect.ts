@@ -3,7 +3,8 @@
 // This is the one place that arms or disarms it (`DriveDetect.setArmed`):
 // - `autoDetectSync()` arms it at onboarding's finish, at sign-in and on every return to the front
 //   while that holds (native answers `needs` and stays off while a permission is missing), and
-//   disarms it otherwise;
+//   disarms it for a driver who is signed out or not onboarded. A session that cannot be read (an
+//   expired token that cannot refresh with no network) is not a sign-out: the arming stays as it is;
 // - `autoDetectOff()` disarms it at sign-out, an account switch and the account's deletion (the
 //   device wipes).
 // Android has no detector: every call is a no-op and `readAutoDetectStatus()` answers null.
@@ -21,7 +22,11 @@ export interface AutoDetectRuntime {
   db: Db;
   /** The detector (null on Android); default the native module. */
   detect?: DriveDetectApi | null;
-  /** The signed-in driver's id, or null when signed out. */
+  /**
+   * The signed-in driver's id, or null when signed out. Rejects when the session cannot be read
+   * (an expired access token that cannot refresh offline, a storage failure): unknown, which never
+   * disarms.
+   */
   uid(): Promise<string | null>;
   /** Whether the server says this driver finished onboarding (the cached summary); unknown is false. */
   onboarded?(uid: string): boolean | Promise<boolean>;
@@ -64,6 +69,8 @@ const report = (e: unknown, ctx: string): void => {
 
 export type AutoDetectResult = 'on' | 'needs' | 'off' | 'unsupported';
 
+const resultOf = (state: DetectState): AutoDetectResult => (state.status === 'on' ? 'on' : state.status === 'needs' ? 'needs' : 'off');
+
 /**
  * Arm the detector when a driver is signed in and onboarded, else disarm it. `onboarded: true`
  * (onboarding's finish) records that this driver is onboarded. Never rejects.
@@ -74,7 +81,13 @@ export async function autoDetectSync(opts: { onboarded?: boolean } = {}): Promis
   if (detect === null || rt === null) return 'unsupported';
   try {
     const settings = createSettingsRepo(rt.db);
-    const uid = await rt.uid();
+    let uid: string | null;
+    try {
+      uid = await rt.uid();
+    } catch {
+      // Unknown is not signed out: the arming stays as it is (a real sign-out disarms at the session's end).
+      return resultOf(await detect.getState());
+    }
     let onboarded = false;
     if (uid !== null) {
       if (opts.onboarded === true) await settings.set(AUTO_DETECT_ONBOARDED_KEY, uid);
@@ -88,8 +101,7 @@ export async function autoDetectSync(opts: { onboarded?: boolean } = {}): Promis
       await detect.setArmed(false, uid ?? (await ownerToDisarm(detect, null)));
       return 'off';
     }
-    const state = await detect.setArmed(true, uid);
-    return state.status === 'on' ? 'on' : state.status === 'needs' ? 'needs' : 'off';
+    return resultOf(await detect.setArmed(true, uid));
   } catch (e) {
     report(e, 'autoDetect');
     return 'off';
