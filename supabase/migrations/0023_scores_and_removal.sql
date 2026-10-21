@@ -674,8 +674,15 @@ begin
   -- The estimate's densest knot is 3 slowdowns or speed-ups and 2 turns a mile (a 10 mph average),
   -- and stop-and-go with a stop every 100 m is about 16 a mile, so 40 a mile (one every 40 m) is far
   -- above any real drive and only cuts a count claimed to dilute the drive's event rates.
-  v_own_moving := least(v_dur, 43200, coalesce(floor((ex ->> 'movingS')::numeric)::int, v_exp.moving_s));
-  v_own_limit := least(v_own_moving, coalesce(floor((ex ->> 'limitS')::numeric)::int, v_exp.limit_s));
+  -- The times are held to the distance too: moving time accrues only at 5 mph or more (720 s a mile
+  -- at most) and limit time only at 10 mph or more (360 s a mile at most), so moving time is cut to
+  -- ceil(miles x 720 x 1.25) + 60 s and limit time to ceil(miles x 360 x 1.25) + 60 s, a quarter and
+  -- a minute above anything a real drive can reach. The products are taken in double precision, in
+  -- the phone's order (boundExposure), so both cut to the same second.
+  v_own_moving := least(v_dur, 43200, ceil(v_miles::float8 * 720::float8 * 1.25::float8)::int + 60,
+    coalesce(floor((ex ->> 'movingS')::numeric)::int, v_exp.moving_s));
+  v_own_limit := least(v_own_moving, ceil(v_miles::float8 * 360::float8 * 1.25::float8)::int + 60,
+    coalesce(floor((ex ->> 'limitS')::numeric)::int, v_exp.limit_s));
   v_count_cap := least(20000, ceil(v_miles * 40)::int);
   v_own_slow := least(v_count_cap, greatest(1, ceil(v_own_moving / 15.0)::int), coalesce(floor((ex ->> 'slowdowns')::numeric)::int, v_exp.slowdowns));
   v_own_up := least(v_count_cap, greatest(1, ceil(v_own_moving / 15.0)::int), coalesce(floor((ex ->> 'speedups')::numeric)::int, v_exp.speedups));

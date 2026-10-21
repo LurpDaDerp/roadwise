@@ -409,8 +409,23 @@ test('a drive under 0.5 mi is scored once it lasts 2 min (and too short under bo
 test('the counters are held as the server holds them: moving within the drive, limit within moving, a swing per 15 s, a turn per 10 s, 40 a mile', () => {
   const e = { slowdowns: 500, speedups: 3, turns: 900, limitS: 9000, movingS: 9000 };
   expect(boundExposure(e, 600, 10)).toEqual({ slowdowns: 40, speedups: 3, turns: 60, limitS: 600, movingS: 600 });
-  expect(boundExposure(e, 600, 0.5)).toEqual({ slowdowns: 20, speedups: 3, turns: 20, limitS: 600, movingS: 600 });
+  // half a mile: moving time at most ceil(0.5 × 900) + 60 = 510 s, limit time ceil(0.5 × 450) + 60 = 285 s
+  expect(boundExposure(e, 600, 0.5)).toEqual({ slowdowns: 20, speedups: 3, turns: 20, limitS: 285, movingS: 510 });
   expect(boundExposure({ slowdowns: 5, speedups: 5, turns: 5, limitS: 0, movingS: 0 }, 0, 0)).toEqual({ slowdowns: 0, speedups: 0, turns: 0, limitS: 0, movingS: 0 });
   expect(boundExposure({ slowdowns: 5, speedups: 5, turns: 5, limitS: 5, movingS: 5 }, 100, 1)).toEqual({ slowdowns: 1, speedups: 1, turns: 1, limitS: 5, movingS: 5 });
   expect(boundExposure({ slowdowns: Number.NaN, speedups: -2, turns: 2.7, limitS: 50_000, movingS: 50_000 }, 50_000, 500)).toEqual({ slowdowns: 0, speedups: 0, turns: 2, limitS: 43_200, movingS: 43_200 });
+});
+
+test('the time counters are held to the distance as the server holds them: moving to ceil(mi × 720 × 1.25) + 60 s, limit to ceil(mi × 360 × 1.25) + 60 s', () => {
+  const claimed = { slowdowns: 5, speedups: 5, turns: 5, limitS: 43_200, movingS: 43_200 };
+  // half a mile claimed as 12 h of moving under a limit (an upload inflated to dilute Speed): 510 s and 285 s
+  expect(boundExposure(claimed, 43_200, 0.5)).toMatchObject({ movingS: 510, limitS: 285 });
+  // the products are doubles taken in this order, as apply_drive takes them: 1.1 mi gives
+  // 990.0000000000001 → 991 and 495.00000000000006 → 496 (supabase/tests/0023 pins the same)
+  expect(boundExposure(claimed, 43_200, 1.1)).toMatchObject({ movingS: 1051, limitS: 556 });
+  // a real drive always fits: a mile at 5 mph keeps its 720 s of moving, a mile at 10 mph its 360 s under a limit
+  expect(boundExposure({ ...claimed, limitS: 0, movingS: 720 }, 720, 1)).toMatchObject({ movingS: 720, limitS: 0 });
+  expect(boundExposure({ ...claimed, limitS: 360, movingS: 360 }, 360, 1)).toMatchObject({ movingS: 360, limitS: 360 });
+  // no distance at all: a minute of each at most
+  expect(boundExposure(claimed, 600, 0)).toMatchObject({ movingS: 60, limitS: 60 });
 });

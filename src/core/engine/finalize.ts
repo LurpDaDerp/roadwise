@@ -230,19 +230,23 @@ export function sanitizeEvent(e: DetectedEvent, tripStartedAt: number, tripEnded
 /**
  * The counters held to what the drive itself allows, exactly as the server holds them
  * (`apply_drive`), so the phone's own reading is the server's: moving time within the drive's
- * length (and 12 h), limit time within moving time, a slowdown or a speed-up per 15 s of moving and
- * a turn per 10 s (at least one each), and no count above 40 a mile. Pure.
+ * length (and 12 h) and within ceil(miles × 720 × 1.25) + 60 s, limit time within moving time and
+ * within ceil(miles × 360 × 1.25) + 60 s (moving time accrues at 5 mph or more, 720 s a mile at
+ * most, and limit time at 10 mph or more, 360 s a mile at most), a slowdown or a speed-up per 15 s
+ * of moving and a turn per 10 s (at least one each), and no count above 40 a mile. The server takes
+ * the two time caps in double precision in this same order, so both cut to the same second. Pure.
  */
 export function boundExposure(e: Exposure, durationS: number, miles: number): Exposure {
   const whole = (v: number): number => (Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0);
-  const movingS = Math.min(whole(durationS), 43_200, whole(e.movingS));
-  const cap = Math.min(20_000, Math.ceil(Math.max(0, Number.isFinite(miles) ? miles : 0) * 40));
+  const mi = Math.max(0, Number.isFinite(miles) ? miles : 0);
+  const movingS = Math.min(whole(durationS), 43_200, Math.ceil(mi * 720 * 1.25) + 60, whole(e.movingS));
+  const cap = Math.min(20_000, Math.ceil(mi * 40));
   const swings = Math.max(1, Math.ceil(movingS / 15));
   return {
     slowdowns: Math.min(cap, swings, whole(e.slowdowns)),
     speedups: Math.min(cap, swings, whole(e.speedups)),
     turns: Math.min(cap, Math.max(1, Math.ceil(movingS / 10)), whole(e.turns)),
-    limitS: Math.min(movingS, whole(e.limitS)),
+    limitS: Math.min(movingS, Math.ceil(mi * 360 * 1.25) + 60, whole(e.limitS)),
     movingS,
   };
 }

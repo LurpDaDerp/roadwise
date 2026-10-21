@@ -9,7 +9,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(69);
+select plan(72);
 -- the scores travel in jsonb: read them back exactly (the test runner's session prints 15 digits)
 set local extra_float_digits = 1;
 
@@ -197,8 +197,19 @@ select pg_temp.drive('00000000-0000-0000-0000-000000000004', 'f0000000-0000-4000
 select is((select row(slowdowns, speedups, turns, limit_s, moving_s, origin)::text from pg_temp.t('f0000000-0000-4000-8000-000000000003')), row(80, 80, 120, 1200, 1200, 'manual')::text,
   'inflated counters are clamped to the drive: moving time to its 1200 s, a swing per 15 s, a turn per 10 s; no origin reads manual');
 select pg_temp.drive('00000000-0000-0000-0000-000000000004', 'f0000000-0000-4000-8000-000000000004', now() - interval '7 hours', 1800, 0.5, '[]', pg_temp.exp(1000, 1000, 1000, 1800, 1800));
-select is((select row(slowdowns, speedups, turns, limit_s, moving_s)::text from pg_temp.t('f0000000-0000-4000-8000-000000000004')), row(20, 20, 20, 1800, 1800)::text,
-  'and no count above 40 a mile (half a mile: 20)');
+select is((select row(slowdowns, speedups, turns, limit_s, moving_s)::text from pg_temp.t('f0000000-0000-4000-8000-000000000004')), row(20, 20, 20, 285, 510)::text,
+  'and no count above 40 a mile (half a mile: 20), moving time at most ceil(mi x 900) + 60 s and limit time ceil(mi x 450) + 60 s (510 and 285)');
+-- the time counters are held to the distance (moving time accrues at 5 mph or more, limit time at 10 mph or more)
+select pg_temp.drive('00000000-0000-0000-0000-000000000004', 'f0000000-0000-4000-8000-000000000011', now() - interval '30 hours', 43200, 0.5, '[]', pg_temp.exp(5, 5, 5, 43200, 43200));
+select is((select row(limit_s, moving_s)::text from pg_temp.t('f0000000-0000-4000-8000-000000000011')), row(285, 510)::text,
+  'half a mile claimed as 12 h of moving under a limit (to dilute Speed) keeps 510 s moving and 285 s under a limit');
+select pg_temp.drive('00000000-0000-0000-0000-000000000004', 'f0000000-0000-4000-8000-000000000012', now() - interval '10 hours', 5000, 1.1, '[]', pg_temp.exp(5, 5, 5, 5000, 5000));
+select is((select row(limit_s, moving_s)::text from pg_temp.t('f0000000-0000-4000-8000-000000000012')), row(556, 1051)::text,
+  'the caps are doubles in the phone''s order (boundExposure): 1.1 mi cuts to 1051 s and 556 s, not 1050 and 555');
+select pg_temp.drive('00000000-0000-0000-0000-000000000004', 'f0000000-0000-4000-8000-000000000013', now() - interval '9 hours', 720, 1, '[]', pg_temp.exp(1, 1, 1, 0, 720));
+select pg_temp.drive('00000000-0000-0000-0000-000000000004', 'f0000000-0000-4000-8000-000000000014', now() - interval '9 hours 30 minutes', 360, 1, '[]', pg_temp.exp(1, 1, 1, 360, 360));
+select is(array[(select row(limit_s, moving_s)::text from pg_temp.t('f0000000-0000-4000-8000-000000000013')), (select row(limit_s, moving_s)::text from pg_temp.t('f0000000-0000-4000-8000-000000000014'))],
+  array[row(0, 720)::text, row(360, 360)::text], 'a real drive always fits: a mile at 5 mph keeps its 720 s moving, a mile at 10 mph its 360 s under a limit');
 select pg_temp.drive('00000000-0000-0000-0000-000000000004', 'f0000000-0000-4000-8000-000000000005', now() - interval '8 hours', 1800, 12, '[]', pg_temp.exp(18, 17, 11, 1700, 1650));
 select is((select row(slowdowns, speedups, turns, limit_s, moving_s)::text from pg_temp.t('f0000000-0000-4000-8000-000000000005')), row(18, 17, 11, 1650, 1650)::text,
   'an honest drive keeps its counters; limit time never exceeds moving time');
