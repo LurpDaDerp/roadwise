@@ -360,9 +360,10 @@ function SkyPreview() {
 }
 
 /**
- * Every primitive in one scroll, under a light/dark switch, a reduce-motion switch and a sky
- * picker (any time of day with any weather, blended as the live app blends it). Reached at
- * `/(app)/dev/ui` in development and diagnostics builds only.
+ * Every primitive in one scroll, under a Light / Dark switch (the static looks of Settings ›
+ * Appearance), a reduce-motion switch and a sky picker (Adaptive: any time of day with any
+ * weather, blended as the live app blends it). Reached at `/(app)/dev/ui` in development and
+ * diagnostics builds only.
  */
 export function UiGallery({ initialScheme = 'light' }: { initialScheme?: 'light' | 'dark' }) {
   const [scheme, setScheme] = useState<'light' | 'dark'>(initialScheme);
