@@ -418,6 +418,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let budgetWrites: Promise<void> = Promise.resolve();
   /** The open drive's surfaces are live (not an ended journal drive replayed at boot). */
   let surfaces = false;
+  /**
+   * iOS: native drives were left alone while signed out (refused at a start, or not taken in at
+   * boot): the same driver signing in again takes them in. Another driver's sign-in is a handover,
+   * whose device wipe discards them. `deferredAdopt`: the recovered drive the signed-out boot left.
+   */
+  let journalsOwed = false;
+  let deferredAdopt: AdoptedTrip | null = null;
   /** The open drive's leg a push-to-start was asked for (`<id>#<leg>`), or null; cleared when the drive closes or is cancelled. */
   let pushedFor: string | null = null;
   let spotWatcher: SpotWatcher | null = null;
@@ -1201,6 +1208,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   async function onDriveStarted(e: DriveStartedEvent): Promise<void> {
     if (liveDrive !== null && liveDrive.driveId === e.driveId) return;
+    // Signed out, no drive is recorded: native's journal waits for this driver's next sign-in (a
+    // different driver's sign-in wipes it).
+    if (signedOut) {
+      journalsOwed = true;
+      return;
+    }
     if (engine.snapshot().status !== 'idle') {
       report(new Error('a native drive started while another is open'), 'driveStarted');
       return;
@@ -1220,7 +1233,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   async function onDriveEnded(e: DriveEndedEvent): Promise<void> {
     const live = liveDrive;
     if (live === null || live.driveId !== e.driveId) {
-      // Not the drive we hold: an ended journal is taken in at the next boot (or now, while idle).
+      // Not the drive we hold: an ended journal is taken in at the next boot (or now, while idle);
+      // signed out, at the same driver's next sign-in.
+      if (signedOut) {
+        journalsOwed = true;
+        return;
+      }
       if (e.cause !== 'cancelled' && engine.snapshot().status === 'idle' && detect !== null) {
         const j = (await detect.listDrives().catch(() => [] as JournaledDrive[])).find((x) => x.driveId === e.driveId && x.ended !== null);
         if (j) await adoptEndedJournal(j, null);
@@ -1333,6 +1351,16 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
     const begin = j ?? { driveId: liveId, origin: d.origin ?? 'auto', startedAt: d.startedAt ?? now(), startSource: 'wake' as const, startLat: null, startLng: null, continues: false };
     if (await beginNative(begin, { capped: true })) captureOn = true;
+  }
+
+  /** Signed in again (the same driver): the native drives left alone while signed out are taken in, as at a boot. */
+  async function takeInOwedJournals(): Promise<void> {
+    if (!ios || !booted || !journalsOwed || engine.snapshot().status !== 'idle') return;
+    journalsOwed = false;
+    const adopt = deferredAdopt;
+    deferredAdopt = null;
+    replayBudget = MAX_JOURNAL_REPLAY_ROWS;
+    await bootIos(adopt);
   }
 
   // --- native events -------------------------------------------------------------------------------
@@ -1456,7 +1484,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           report(e, 'getState');
         }
         replayBudget = MAX_JOURNAL_REPLAY_ROWS;
-        if (ios) await bootIos(opts.adopt ?? null);
+        if (ios && signedOut) {
+          // Signed out: native's drives are not taken in (nor stopped); they wait for this
+          // driver's next sign-in, or a different driver's wipe.
+          captureOn = false;
+          journalsOwed = true;
+          deferredAdopt = opts.adopt ?? null;
+        } else if (ios) await bootIos(opts.adopt ?? null);
         else if (opts.adopt) await adoptTrip(opts.adopt);
         attachNative();
       }, 'boot');
@@ -1642,14 +1676,16 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       await self.untilIdle();
     },
     resumeAfterSignIn: () =>
-      run(() => {
+      run(async () => {
         signingOut = false;
         signedOut = false;
+        await takeInOwedJournals();
       }, 'signIn'),
     signedInAgain: () =>
-      run(() => {
+      run(async () => {
         if (signingOut) return;
         signedOut = false;
+        await takeInOwedJournals();
       }, 'signIn'),
     signOutCompleted() {
       signingOut = false;

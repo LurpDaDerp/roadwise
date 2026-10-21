@@ -45,7 +45,7 @@ import { deviceZone } from '@/lib/deviceZone';
 
 import type { DriveDetectApi } from '@drive-sense';
 
-import { autoDetectSync, setAutoDetectRuntime } from './autoDetect';
+import { autoDetectOff, autoDetectSync, setAutoDetectRuntime } from './autoDetect';
 import { ensureDeviceOwner, PENDING_OWNER_KEY, readDeviceOwner, type DeviceOwnerOutcome } from './device';
 import { drainPolicy, launchProfile, type LaunchProfile } from './launchProfile';
 
@@ -810,6 +810,16 @@ function startSpots(runtime: AppRuntime, appState: ForegroundAppState, onError: 
     onError(error, 'spots');
     return null;
   }
+}
+
+/**
+ * Every end of a session, whoever ended it (the driver's sign-out, forced or with uploads still
+ * owed, a revoked or expired session): automatic drives are disarmed first, so no drive starts
+ * with nobody signed in, then an open drive is finalized under the owner. Never rejects.
+ */
+export async function endSession(runtime: Pick<AppRuntime, 'drive'>): Promise<void> {
+  await autoDetectOff();
+  await runtime.drive.sessionEnded().catch(() => {});
 }
 
 /** Before the session ends at sign-out: one drain while the session can still send (held uploads too). */

@@ -6,7 +6,7 @@ import { useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { flushBeforeSignOut, type AppRuntime } from '@/boot/bootstrap';
+import { endSession, flushBeforeSignOut, type AppRuntime } from '@/boot/bootstrap';
 import { hasDriverData, readDeviceOwner, wipeForSignOut } from '@/boot/device';
 import { BootstrapFailed } from '@/boot/BootstrapFailed';
 import { runtimeController } from '@/boot/controller';
@@ -155,18 +155,20 @@ export default function RootLayout() {
     return watchDeviceOwner(runtime.db, { supabase, onHandover: handover, onOwnerSignIn });
   }, [runtime, handover]);
 
-  // A session end — the driver's sign-out, or one they did not start (a revoked or expired
-  // token) — stops recording: an open drive is finalized under the owner first. A sign-in by this
-  // device's owner (or the first sign-in on an empty phone) lets Start Drive work again in this
-  // process: a host launched signed out refuses `start()` until told. Nothing here arms or starts
-  // a drive — a drive begins only from the Start Drive tap (plan §1 decision 4). A different
-  // driver is a handover: `watchDeviceOwner` rebuilds, and the new launch decides for itself.
+  // A session end — the driver's sign-out (forced or with uploads still owed), or one they did not
+  // start (a revoked or expired token) — disarms automatic drives and stops recording: an open
+  // drive is finalized under the owner first (`endSession`). A sign-in by this device's owner (or
+  // the first sign-in on an empty phone) lets Start Drive work again in this process (a host
+  // launched signed out refuses `start()` until told) and, on iPhone, takes in the drives native
+  // recorded meanwhile. Automatic drives are armed by the foreground jobs (`autoDetectSync`), not
+  // here. A different driver is a handover: `watchDeviceOwner` rebuilds, and the new launch's wipe
+  // discards what native kept.
   useEffect(() => {
     if (runtime === null) return;
     let live = true;
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
-        void runtime.drive.sessionEnded().catch(() => {});
+        void endSession(runtime);
         return;
       }
       if (!session || (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION')) return;

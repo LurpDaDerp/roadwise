@@ -781,6 +781,58 @@ describe('iOS: the drive detector', () => {
     await host.stop({ endOpenTrip: false });
   });
 
+  test('signed out, native drives are refused (no trip, native left alone) and kept: the same driver signing in again takes them in', async () => {
+    const h = buildIos({ signedOut: true });
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    // Ended while signed out (taken in nowhere), then a live one.
+    h.detect.wake();
+    const parkedLng = START.lng + (59 * 15) / M_PER_DEG_LNG;
+    const ended = [...rows(60, { speedMps: 15 }), ...rows(30, { t0: T0 + 60_000, speedMps: 0 }).map((r) => ({ ...r, lng: parkedLng }))];
+    await confirm(h, ended, { driveId: uuid(60) });
+    expect(h.host.snapshot().status).toBe('idle');
+    clock = T0 + 95_000;
+    h.detect.endFor('still', T0 + 95_000);
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.settled();
+    h.detect.wake();
+    await confirm(h, rows(30, { t0: T0 + 2_000_000, speedMps: 15 }), { driveId: uuid(61) });
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', clientTripId: null });
+    expect(await tripCount()).toBe(0);
+    expect(h.host.captureActive()).toBe(false);
+    expect(h.source.calls).not.toContain('stopCapture');
+    expect(h.detect.calls.filter((c) => c.startsWith('discardDrive') || c === 'notDriving')).toEqual([]);
+    expect([...h.detect.journal.keys()].sort()).toEqual([uuid(60), uuid(61)]);
+    // The same driver signs in again: the ended drive is stored, the live one adopted.
+    await h.host.signedInAgain();
+    await h.host.settled();
+    expect(await createTripsRepo(db).get(uuid(60))).toMatchObject({ status: 'pending' });
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(61) });
+    expect(h.host.captureActive()).toBe(true);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('a host launched signed out leaves native’s journals for the next sign-in, and refuses a drive that starts meanwhile', async () => {
+    const pre = buildIos();
+    await pre.detect.setArmed(true, 'user-1');
+    pre.detect.wake();
+    clock = T0 + 41_000;
+    pre.detect.confirm({ driveId: uuid(62), startedAt: T0, rows: journalRows(rows(40, { speedMps: 15 })) });
+    const h = buildIos({ detect: pre.detect as DriveDetectApi, source: pre.source, signedOut: true });
+    h.source.setState({ capturing: true });
+    await h.host.boot();
+    await h.host.settled();
+    expect(h.host.snapshot().status).toBe('idle');
+    expect(await tripCount()).toBe(0);
+    // Native's capture is not ours to stop while signed out.
+    expect(h.source.calls).not.toContain('stopCapture');
+    expect(await h.host.start()).toEqual({ ok: false, reason: 'error' });
+    await h.host.resumeAfterSignIn();
+    await h.host.settled();
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(62), lastRowTs: T0 + 39_000 });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
   test('a drive confirmed in front starts the Live Activity locally; a Start-card drive that confirms behind (navigation open) is pushed', async () => {
     const pushed: PushToStartRequest[] = [];
     const h = buildIos({ pushToStart: async (req) => (pushed.push(req), true) });

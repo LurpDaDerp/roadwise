@@ -9,7 +9,7 @@ import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db } from '@/data/db';
 import { createFakeAppState, createFakeSupabase, invokeOk } from '@/data/sync/__fixtures__/fakes';
-import { bootstrapApp, flushBeforeSignOut, REMINDER_RETIRED_KEY, startForegroundJobs, type BootSupabase } from '@/boot/bootstrap';
+import { bootstrapApp, endSession, flushBeforeSignOut, REMINDER_RETIRED_KEY, startForegroundJobs, type BootSupabase } from '@/boot/bootstrap';
 import { createDriveHeadlessTask } from '@/boot/headless';
 import { DEVICE_TABLES, ensureDeviceOwner, hasDriverData, readDeviceOwner, rememberDeviceOwner, wipeDevice, wipeForSignOut } from '@/boot/device';
 import { createFakeDashcamRuntime } from '@/dashcam/__fixtures__/fakeRuntime';
@@ -416,6 +416,28 @@ test('flushBeforeSignOut first makes a held upload due: no drive continues after
   await flushBeforeSignOut(rt);
   const item = await createQueueRepo(db).byKey('trip:x');
   expect(item!.next_attempt_at).toBeLessThanOrEqual(clock);
+  await rt.stop();
+});
+
+test('iOS: every session end disarms automatic drives, then ends an open drive under the owner; drives that start after it are refused', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  const d = deps();
+  const detect = createFakeDriveDetect({ now: () => clock });
+  await detect.setArmed(true, 'user-1');
+  const rt = await bootstrapApp({ ...d.deps, detect });
+  // A revoked session: no sign-out flow ran, no wipe (uploads may be owed), only the session's end.
+  d.supabase.setUid(null);
+  await endSession(rt);
+  expect(detect.snapshot.armed).toBe(false);
+  expect(rt.drive.signedIn()).toBe(false);
+  // Native was already sensing a candidate and confirms: nothing is recorded with nobody signed in.
+  detect.wake('region');
+  detect.confirm({ driveId: uuid(13), startedAt: clock, rows: rows(30, { t0: clock }).map((r) => ({ ...r })) });
+  await new Promise((r) => setTimeout(r, 0));
+  await rt.drive.settled();
+  expect(rt.drive.snapshot().status).toBe('idle');
+  expect(await createTripsRepo(db).get(uuid(13))).toBeNull();
   await rt.stop();
 });
 
