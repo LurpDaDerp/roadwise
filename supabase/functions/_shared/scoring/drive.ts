@@ -13,7 +13,7 @@ import {
   MIN_SCORED_MILES,
 } from './thresholds';
 
-export const SCORING_VERSION = 4;
+export const SCORING_VERSION = 5;
 
 export type EventType =
   | 'speeding'
@@ -66,8 +66,24 @@ export interface DriveEvent {
   status?: 'active' | 'removed';
 }
 
-/** Base penalty per type and tier. Two-level types read anything below severe as minor. */
+/** The points an event costs, per type and tier. Two-level types read anything below severe as minor. */
 export const BASE_PENALTY = {
+  speeding: { minor: 12, moderate: 32, severe: 80 },
+  hard_brake: { minor: 8, severe: 20 },
+  hard_accel: { minor: 12, severe: 24 },
+  hard_corner: { minor: 8, severe: 20 },
+  phone_pickup: 32,
+  phone_pickup_stopped: 16,
+  phone_handling_per_unit: 8,
+  eyes_off: 32,
+  drowsy: 40,
+} as const;
+
+/**
+ * What an event adds to the Safety Rating's penalty sum, per type and tier: its own scale, apart
+ * from the points (`BASE_PENALTY`), so the rating means the same however generous points are.
+ */
+export const RATING_PENALTY = {
   speeding: { minor: 15, moderate: 40, severe: 100 },
   hard_brake: { minor: 10, severe: 25 },
   hard_accel: { minor: 15, severe: 30 },
@@ -78,6 +94,8 @@ export const BASE_PENALTY = {
   eyes_off: 40,
   drowsy: 50,
 } as const;
+
+type PenaltyTable = typeof BASE_PENALTY | typeof RATING_PENALTY;
 
 /** Points per credited safe mile, and the clean-drive bonus (from `CLEAN_BONUS_MIN_MILES`). */
 export const POINTS_PER_MILE = 10;
@@ -159,19 +177,22 @@ export function keepDashcamEvents<E extends DashcamLimitEvent>(uploaded: readonl
   return uploaded.filter((e) => !dropped.has(e));
 }
 
-/** T(L): tolerance over the posted limit, mph. Fixed at 3 in a school or construction zone. */
+/**
+ * T(L): tolerance over the posted limit, mph: 0.175 × (L − 8) rounded, less 2, between 2 and 8
+ * (25 → 2, 35 → 3, 45 → 4, 55 → 6, 65 → 8). Fixed at 2 in a school or construction zone.
+ */
 export function speedTolerance(limitMph: number, zone?: Zone | null): number {
-  if (zone) return 3;
+  if (zone) return 2;
   // 0.175 = 7/40; the integer form keeps exact halves (L = 28 → 3.5) exact.
-  return clamp(Math.round((7 * (limitMph - 8)) / 40), 3, 10);
+  return clamp(Math.round((7 * (limitMph - 8)) / 40) - 2, 2, 8);
 }
 
-/** Tier by how far the speed is beyond L + T: >0 minor, >5 moderate, >10 severe; null if not over. */
+/** Tier by how far the speed is beyond L + T: >0 minor, >4 moderate, >9 severe; null if not over. */
 export function speedTier(speedMph: number, limitMph: number, zone?: Zone | null): Tier | null {
   const over = roundTo(speedMph - (limitMph + speedTolerance(limitMph, zone)), 6);
   if (over <= 0) return null;
-  if (over > 10) return 'severe';
-  if (over > 5) return 'moderate';
+  if (over > 9) return 'severe';
+  if (over > 4) return 'moderate';
   return 'minor';
 }
 
@@ -186,31 +207,33 @@ function units(e: DriveEvent): number {
   return 0;
 }
 
-/** The event's base penalty: no extension, repeat or zone multiplier. */
-export function basePenalty(e: DriveEvent): number {
+function penaltyFrom(table: PenaltyTable, e: DriveEvent): number {
   const severe = e.tier === 'severe';
   switch (e.type) {
     case 'speeding':
-      return BASE_PENALTY.speeding[e.tier];
+      return table.speeding[e.tier];
     case 'hard_brake':
     case 'hard_accel':
     case 'hard_corner':
-      return BASE_PENALTY[e.type][severe ? 'severe' : 'minor'];
+      return table[e.type][severe ? 'severe' : 'minor'];
     case 'phone_pickup':
-      return e.stoppedInTraffic ? BASE_PENALTY.phone_pickup_stopped : BASE_PENALTY.phone_pickup;
+      return e.stoppedInTraffic ? table.phone_pickup_stopped : table.phone_pickup;
     case 'phone_handling':
-      return BASE_PENALTY.phone_handling_per_unit * units(e);
+      return table.phone_handling_per_unit * units(e);
     case 'eyes_off':
     case 'drowsy':
-      return BASE_PENALTY[e.type];
+      return table[e.type];
   }
 }
 
+/** The event's base penalty in points: no extension, repeat or zone multiplier. */
+export const basePenalty = (e: DriveEvent): number => penaltyFrom(BASE_PENALTY, e);
+
 /**
- * What the event adds to the Safety Rating's penalty sum: the base penalty only, and nothing for a
- * DashPal event (the rating measures what every phone sees, so owners and non-owners compare).
+ * What the event adds to the Safety Rating's penalty sum (`RATING_PENALTY`, no multipliers), and
+ * nothing for a DashPal event (the rating measures what every phone sees, so owners and non-owners compare).
  */
-export const ratingPenalty = (e: DriveEvent): number => (isDashcamType(e.type) ? 0 : basePenalty(e));
+export const ratingPenalty = (e: DriveEvent): number => (isDashcamType(e.type) ? 0 : penaltyFrom(RATING_PENALTY, e));
 
 const repeatMult = (repeatIndex: number): number => (repeatIndex <= 0 ? 1 : repeatIndex === 1 ? 1.25 : 1.5);
 

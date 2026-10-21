@@ -37,7 +37,7 @@ const summary = (
   progress: {
     points: over.points ?? 820, lifetime: 900, level: 3, level_floor: 750, level_next: 1500, streak: 7, at_risk: false,
     next_mult: 1.16, freezes: over.freezes ?? 2, clean_run: 1, freeze_progress: 0, phone_free_run: 12,
-    safety_rating: over.ranked === false ? 88 : 92.4, ranked: over.ranked ?? true, miles_30d: 14.6,
+    safety_rating: over.ranked === false ? 88 : 92.4, ranked: over.ranked ?? true, miles_30d: over.ranked === false ? 6.6 : 14.6,
     clean_miles_30d: 10, rating_trend: 1.2, league_tier: 'silver',
   },
   league: { week: '2026-W41', tier: 'silver', group_id: 'g', rank: 4, size: 30, ends_at: '2026-10-12T04:00:00Z' },
@@ -90,8 +90,8 @@ it('unranked says how far there is to go', async () => {
   const w = await appWorld();
   await w.render(<ProfileScreen />);
   // Screen readers hear the way to being ranked too, not only "Unranked".
-  expect(await screen.findByLabelText(`Safety Rating: ${profileCopy.unranked}, ${profileCopy.unrankedMiles('14/25 mi')}`)).toBeOnTheScreen();
-  expect(screen.getByText(profileCopy.unrankedMiles('14/25 mi'))).toBeOnTheScreen();
+  expect(await screen.findByLabelText(`Safety Rating: ${profileCopy.unranked}, ${profileCopy.unrankedMiles('6/10 mi')}`)).toBeOnTheScreen();
+  expect(screen.getByText(profileCopy.unrankedMiles('6/10 mi'))).toBeOnTheScreen();
 });
 
 it('achievement hints say how close you are', () => {

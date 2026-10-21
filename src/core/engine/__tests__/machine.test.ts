@@ -170,8 +170,8 @@ describe('the warm-up in a live drive (Start Drive at any speed)', () => {
   }
   const types = (s: Readonly<TripSession>) => s.events.map((e) => e.type);
 
-  test('a start at 40 mph: three handling rows at +10 s are a pickup', async () => {
-    const s = await drive(false, [...at(0, 10, { speed: mph(40) }), ...at(10, 3, { speed: mph(40), ...handled }), ...at(13, 5, { speed: mph(40) })]);
+  test('a start at 37 mph: three handling rows at +10 s are a pickup', async () => {
+    const s = await drive(false, [...at(0, 10, { speed: mph(37) }), ...at(10, 3, { speed: mph(37), ...handled }), ...at(13, 5, { speed: mph(37) })]);
     expect(s.warmup).toMatchObject({ decided: true, endsAt: T0 });
     expect(types(s)).toEqual(['phone_pickup']);
   });

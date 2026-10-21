@@ -10,7 +10,7 @@ export const HARD_CORNER_G = { minor: 0.4, severe: 0.55 } as const;
 /** Phone pickups count only while moving above this speed. */
 export const PHONE_MIN_MPH = 5;
 /** Continuous time above the threshold before speeding is an incident (3 s when severe). */
-export const SPEEDING_MIN_S = { default: 5, severe: 3 } as const;
+export const SPEEDING_MIN_S = { default: 4, severe: 3 } as const;
 /** A speeding episode ends after this long back under L + T − `SPEEDING_END_BUFFER_MPH`. */
 export const SPEEDING_END_S = 5;
 export const SPEEDING_END_BUFFER_MPH = 2;

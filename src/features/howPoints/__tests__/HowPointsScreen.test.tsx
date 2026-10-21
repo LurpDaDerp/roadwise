@@ -19,7 +19,7 @@ test('the explainer, the penalty list and every rule section are on the page', a
   expect(screen.getByText('Each drive in your streak adds 0.02 to your multiplier, up to ×1.30 at a 15-drive streak.')).toBeOnTheScreen();
   expect(screen.queryByText(/DMS|driver monitoring/i)).toBeNull();
   expect(screen.getByText(/From 40 to 100 mi they earn half/)).toBeOnTheScreen();
-  expect(screen.getByText('−40 (−20 when stopped in traffic)')).toBeOnTheScreen();
+  expect(screen.getByText('−32 (−16 when stopped in traffic)')).toBeOnTheScreen();
   await press(screen.getByLabelText('Back'));
   expect(onBack).toHaveBeenCalled();
 });

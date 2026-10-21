@@ -70,7 +70,7 @@ test('no Safety Rating yet: a dash', async () => {
   expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
 });
 
-test('unranked (under 25 mi): a dash, as on Home and Profile', async () => {
+test('unranked (under 10 mi): a dash, as on Home and Profile', async () => {
   mockRating = 88;
   mockRanked = false;
   await draw(<AnalyticsScreen />);

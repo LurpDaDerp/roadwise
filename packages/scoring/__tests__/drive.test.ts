@@ -30,37 +30,39 @@ const roundHalfUp = (v: number): number => Math.floor(v + 0.5);
 
 describe('speedTolerance — T(L) for every row of the spec table', () => {
   test.each([
-    [25, 3],
-    [30, 4],
-    [35, 5],
-    [45, 6],
-    [55, 8],
-    [60, 9],
-    [65, 10],
-    [70, 10],
+    [25, 2],
+    [30, 2],
+    [35, 3],
+    [40, 4],
+    [45, 4],
+    [50, 5],
+    [55, 6],
+    [60, 7],
+    [65, 8],
+    [70, 8],
   ])('L=%i → T=%i', (L, T) => expect(speedTolerance(L)).toBe(T));
 
-  test('low limits clamp up to 3 (L=20 without a zone)', () => expect(speedTolerance(20)).toBe(3));
-  test('a .5 result rounds up (L=28 → 3.5 → 4)', () => expect(speedTolerance(28)).toBe(4));
-  test('school and construction zones fix T at 3', () => {
-    expect(speedTolerance(20, 'school')).toBe(3);
-    expect(speedTolerance(65, 'construction')).toBe(3);
-    expect(speedTolerance(65, null)).toBe(10);
+  test('low limits clamp up to 2 (L=20 without a zone)', () => expect(speedTolerance(20)).toBe(2));
+  test('high limits clamp down to 8 (L=68: 10.5 → 11, less 2 → 9)', () => expect(speedTolerance(68)).toBe(8));
+  test('school and construction zones fix T at 2', () => {
+    expect(speedTolerance(20, 'school')).toBe(2);
+    expect(speedTolerance(65, 'construction')).toBe(2);
+    expect(speedTolerance(65, null)).toBe(8);
   });
 });
 
 describe('speedTier — tier boundaries for every row', () => {
   // [limit, zone, minor above, moderate above, severe above]
   test.each([
-    [20, 'school', 23, 28, 33],
-    [25, null, 28, 33, 38],
-    [30, null, 34, 39, 44],
-    [35, null, 40, 45, 50],
-    [45, null, 51, 56, 61],
-    [55, null, 63, 68, 73],
-    [60, null, 69, 74, 79],
-    [65, null, 75, 80, 85],
-    [70, null, 80, 85, 90],
+    [20, 'school', 22, 26, 31],
+    [25, null, 27, 31, 36],
+    [30, null, 32, 36, 41],
+    [35, null, 38, 42, 47],
+    [45, null, 49, 53, 58],
+    [55, null, 61, 65, 70],
+    [60, null, 67, 71, 76],
+    [65, null, 73, 77, 82],
+    [70, null, 78, 82, 87],
   ] as const)('L=%i (%s): minor >%i, moderate >%i, severe >%i', (L, zone, minor, moderate, severe) => {
     expect(speedTier(minor, L, zone)).toBeNull();
     expect(speedTier(minor + 0.1, L, zone)).toBe('minor');
@@ -75,67 +77,67 @@ describe('speedTier — tier boundaries for every row', () => {
 
 describe('basePenalty', () => {
   test.each([
-    ['speeding', 'minor', 15],
-    ['speeding', 'moderate', 40],
-    ['speeding', 'severe', 100],
-    ['hard_brake', 'minor', 10],
-    ['hard_brake', 'severe', 25],
-    ['hard_accel', 'minor', 15],
-    ['hard_accel', 'severe', 30],
-    ['hard_corner', 'minor', 10],
-    ['hard_corner', 'severe', 25],
-    ['phone_pickup', 'severe', 40],
-    ['eyes_off', 'severe', 40],
-    ['drowsy', 'severe', 50],
+    ['speeding', 'minor', 12],
+    ['speeding', 'moderate', 32],
+    ['speeding', 'severe', 80],
+    ['hard_brake', 'minor', 8],
+    ['hard_brake', 'severe', 20],
+    ['hard_accel', 'minor', 12],
+    ['hard_accel', 'severe', 24],
+    ['hard_corner', 'minor', 8],
+    ['hard_corner', 'severe', 20],
+    ['phone_pickup', 'severe', 32],
+    ['eyes_off', 'severe', 32],
+    ['drowsy', 'severe', 40],
   ] as const)('%s %s → %i', (type, tier, points) => expect(basePenalty(ev({ type, tier }))).toBe(points));
 
-  test('phone pickup while stopped in traffic is 20', () =>
-    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', stoppedInTraffic: true }))).toBe(20));
+  test('phone pickup while stopped in traffic is 16', () =>
+    expect(basePenalty(ev({ type: 'phone_pickup', tier: 'severe', stoppedInTraffic: true }))).toBe(16));
 
-  test('phone handling is 10 per extra 15-s block', () => {
-    expect(basePenalty(ev({ type: 'phone_handling', tier: 'moderate', units: 1 }))).toBe(10);
-    expect(basePenalty(ev({ type: 'phone_handling', tier: 'severe', units: 3 }))).toBe(30);
+  test('phone handling is 8 per extra 15-s block', () => {
+    expect(basePenalty(ev({ type: 'phone_handling', tier: 'moderate', units: 1 }))).toBe(8);
+    expect(basePenalty(ev({ type: 'phone_handling', tier: 'severe', units: 3 }))).toBe(24);
   });
 
   test('phone handling without units counts one block', () =>
-    expect(basePenalty(ev({ type: 'phone_handling', tier: 'moderate' }))).toBe(10));
+    expect(basePenalty(ev({ type: 'phone_handling', tier: 'moderate' }))).toBe(8));
 
   test('speeding base ignores the duration extension', () =>
-    expect(basePenalty(ev({ type: 'speeding', tier: 'minor', units: 4 }))).toBe(15));
+    expect(basePenalty(ev({ type: 'speeding', tier: 'minor', units: 4 }))).toBe(12));
 });
 
 describe('eventPenalty', () => {
   const brake = ev({ type: 'hard_brake', tier: 'minor' });
   test('repeat multiplier: 1st ×1, 2nd ×1.25, 3rd and later ×1.5', () => {
-    expect(eventPenalty(brake, 0)).toBe(10);
-    expect(eventPenalty(brake, 1)).toBe(12.5);
-    expect(eventPenalty(brake, 2)).toBe(15);
-    expect(eventPenalty(brake, 7)).toBe(15);
+    expect(eventPenalty(brake, 0)).toBe(8);
+    expect(eventPenalty(brake, 1)).toBe(10);
+    expect(eventPenalty(brake, 2)).toBe(12);
+    expect(eventPenalty(brake, 7)).toBe(12);
   });
 
   test('speeding adds 25% of base per extra 30-s block', () => {
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 29 }), 0)).toBe(15);
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 30 }), 0)).toBe(18.75);
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'moderate', durationS: 60 }), 0)).toBe(60);
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'severe', durationS: 65 }), 0)).toBe(150);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 29 }), 0)).toBe(12);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 30 }), 0)).toBe(15);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'moderate', durationS: 60 }), 0)).toBe(48);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'severe', durationS: 65 }), 0)).toBe(120);
   });
 
   test('speeding blocks always come from durationS; a client-sent units is ignored', () => {
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 600, units: 0 }), 0)).toBe(90);
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 0, units: 5 }), 0)).toBe(15);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 600, units: 0 }), 0)).toBe(72);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 0, units: 5 }), 0)).toBe(12);
   });
 
   test('blocks are capped at 1440 so a huge input stays finite', () => {
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 1e300 }), 0)).toBe(15 * (1 + 0.25 * 1440));
-    expect(basePenalty(ev({ type: 'phone_handling', tier: 'severe', units: 1e12 }))).toBe(14_400);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', durationS: 1e300 }), 0)).toBe(12 * (1 + 0.25 * 1440));
+    expect(basePenalty(ev({ type: 'phone_handling', tier: 'severe', units: 1e12 }))).toBe(11_520);
   });
 
   test('school / construction zone doubles the penalty', () => {
-    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', zone: 'school' }), 0)).toBe(30);
-    expect(eventPenalty(ev({ type: 'hard_brake', tier: 'minor', zone: 'construction' }), 1)).toBe(25);
+    expect(eventPenalty(ev({ type: 'speeding', tier: 'minor', zone: 'school' }), 0)).toBe(24);
+    expect(eventPenalty(ev({ type: 'hard_brake', tier: 'minor', zone: 'construction' }), 1)).toBe(20);
   });
 
-  test('ratingPenalty is the base penalty with no multipliers', () => {
+  test('ratingPenalty is the rating scale (not the points) with no multipliers', () => {
     expect(ratingPenalty(ev({ type: 'speeding', tier: 'minor', units: 3, zone: 'school' }))).toBe(15);
     expect(ratingPenalty(ev({ type: 'phone_handling', tier: 'severe', units: 3 }))).toBe(30);
   });
@@ -146,8 +148,8 @@ describe('eventPenalty', () => {
   });
 
   test('DashPal events take the usual repeat multiplier within their own type', () => {
-    expect(eventPenalty(ev({ type: 'drowsy', tier: 'severe' }), 1)).toBe(62.5);
-    expect(eventPenalty(ev({ type: 'eyes_off', tier: 'severe' }), 2)).toBe(60);
+    expect(eventPenalty(ev({ type: 'drowsy', tier: 'severe' }), 1)).toBe(50);
+    expect(eventPenalty(ev({ type: 'eyes_off', tier: 'severe' }), 2)).toBe(48);
   });
 });
 
@@ -180,7 +182,7 @@ describe('nextMultiplier', () => {
 });
 
 describe('scoreDrive — spec examples', () => {
-  test('12 mi, 11.8 safe, 1 hard brake, streak 10 → +132', () => {
+  test('12 mi, 11.8 safe, 1 hard brake, streak 10 → +134', () => {
     const b = scoreDrive(
       drive({ miles: 12, safeMiles: 11.8, events: [ev({ type: 'hard_brake', tier: 'minor' })] }),
       { streak: 10, safeMilesEarlierToday: 0 }
@@ -195,14 +197,14 @@ describe('scoreDrive — spec examples', () => {
       mult: 1.2,
       gains: 142,
       shortScale: 1,
-      penalties: 10,
-      net: 132,
+      penalties: 8,
+      net: 134,
       ratingPenalty: 10,
       activeEventCount: 1,
     });
   });
 
-  test('the same drive as a DashPal drive: 118 × 1.50 = 177 − 10 → +167', () => {
+  test('the same drive as a DashPal drive: 118 × 1.50 = 177 − 8 → +169', () => {
     const b = scoreDrive(
       drive({ miles: 12, safeMiles: 11.8, dashcam: true, events: [ev({ type: 'hard_brake', tier: 'minor' })] }),
       { streak: 10, safeMilesEarlierToday: 0 }
@@ -213,14 +215,14 @@ describe('scoreDrive — spec examples', () => {
       dashcamMult: 1.25,
       mult: 1.5,
       gains: 177,
-      penalties: 10,
-      net: 167,
+      penalties: 8,
+      net: 169,
       ratingPenalty: 10,
       activeEventCount: 1,
     });
   });
 
-  test('5 mi, 4.6 safe, 2 phone pickups, no streak → −44', () => {
+  test('5 mi, 4.6 safe, 2 phone pickups, no streak → −26', () => {
     const b = scoreDrive(
       drive({
         miles: 5,
@@ -230,9 +232,9 @@ describe('scoreDrive — spec examples', () => {
       ctx0
     );
     expect(b.gains).toBe(46);
-    expect(b.events.map((e) => e.penalty)).toEqual([40, 50]);
-    expect(b.penalties).toBe(90);
-    expect(b.net).toBe(-44);
+    expect(b.events.map((e) => e.penalty)).toEqual([32, 40]);
+    expect(b.penalties).toBe(72);
+    expect(b.net).toBe(-26);
     expect(b.ratingPenalty).toBe(80);
   });
 
@@ -257,8 +259,8 @@ describe('scoreDrive — DashPal', () => {
 
   test('a drowsy on a clean 5 mi drive keeps the clean bonus and adds 0 to the rating, but costs its points', () => {
     const b = scoreDrive(drive({ miles: 5, safeMiles: 5, events: [ev({ type: 'drowsy', tier: 'severe' })] }), ctx0);
-    expect(b).toMatchObject({ cleanBonus: 25, gains: 75, penalties: 50, net: 25, ratingPenalty: 0, activeEventCount: 0 });
-    expect(b.events.map((e) => e.penalty)).toEqual([50]);
+    expect(b).toMatchObject({ cleanBonus: 25, gains: 75, penalties: 40, net: 35, ratingPenalty: 0, activeEventCount: 0 });
+    expect(b.events.map((e) => e.penalty)).toEqual([40]);
   });
 
   test('DashPal events are left out of activeEventCount but phone events still break clean', () => {
@@ -266,14 +268,14 @@ describe('scoreDrive — DashPal', () => {
       drive({ miles: 5, safeMiles: 5, events: [ev({ type: 'eyes_off', tier: 'severe' }), ev({ type: 'hard_brake', tier: 'minor' })] }),
       ctx0
     );
-    expect(b).toMatchObject({ cleanBonus: 0, penalties: 50, ratingPenalty: 10, activeEventCount: 1 });
+    expect(b).toMatchObject({ cleanBonus: 0, penalties: 40, ratingPenalty: 10, activeEventCount: 1 });
   });
 
-  test('two drowsy events: 50 + 62.5 → 63 (the repeat multiplier per type), scaled on a short drive', () => {
+  test('two drowsy events: 40 + 50 (the repeat multiplier per type), scaled on a short drive', () => {
     const two = [ev({ type: 'drowsy', tier: 'severe' }), ev({ type: 'drowsy', tier: 'severe' })];
-    expect(scoreDrive(drive({ events: two }), ctx0).events.map((e) => e.penalty)).toEqual([50, 63]);
-    // shortScale 0.5 + 1.5/6 = 0.75: 37.5 → 38
-    expect(scoreDrive(drive({ miles: 1.5, safeMiles: 1.5, events: [ev({ type: 'drowsy', tier: 'severe' })] }), ctx0).penalties).toBe(38);
+    expect(scoreDrive(drive({ events: two }), ctx0).events.map((e) => e.penalty)).toEqual([40, 50]);
+    // shortScale 0.5 + 1.5/6 = 0.75: 30
+    expect(scoreDrive(drive({ miles: 1.5, safeMiles: 1.5, events: [ev({ type: 'drowsy', tier: 'severe' })] }), ctx0).penalties).toBe(30);
   });
 
   test('the DashPal multiplier stacks on the streak: 1.02 × 1.25 = 1.275', () => {
@@ -332,20 +334,20 @@ describe('scoreDrive — rules', () => {
     const early = ev({ type: 'hard_brake', tier: 'minor', startedAt: 1000 });
     const b = scoreDrive(drive({ events: [late, accel, early] }), ctx0);
     expect(b.events).toEqual([
-      { id: early.id, penalty: 10 },
-      { id: accel.id, penalty: 15 },
-      { id: late.id, penalty: 13 }, // 12.5 rounds half up
+      { id: early.id, penalty: 8 },
+      { id: accel.id, penalty: 12 },
+      { id: late.id, penalty: 10 }, // 8 × 1.25
     ]);
   });
 
-  test('three pickups cost 40 + 50 + 60', () => {
+  test('three pickups cost 32 + 40 + 48', () => {
     const events = [1, 2, 3].map(() => ev({ type: 'phone_pickup', tier: 'severe' }));
-    expect(scoreDrive(drive({ events }), ctx0).penalties).toBe(150);
+    expect(scoreDrive(drive({ events }), ctx0).penalties).toBe(120);
   });
 
-  test('pickup stopped in traffic costs 20', () => {
+  test('pickup stopped in traffic costs 16', () => {
     const b = scoreDrive(drive({ events: [ev({ type: 'phone_pickup', tier: 'severe', stoppedInTraffic: true })] }), ctx0);
-    expect(b.penalties).toBe(20);
+    expect(b.penalties).toBe(16);
   });
 
   test('speeding +25% per 30-s block and zone ×2 flow into the drive', () => {
@@ -353,7 +355,7 @@ describe('scoreDrive — rules', () => {
       drive({ events: [ev({ type: 'speeding', tier: 'moderate', durationS: 45, zone: 'school' })] }),
       ctx0
     );
-    expect(b.penalties).toBe(100); // 40 × 1.25 × 2
+    expect(b.penalties).toBe(80); // 32 × 1.25 × 2
     expect(b.ratingPenalty).toBe(40);
   });
 
@@ -361,7 +363,7 @@ describe('scoreDrive — rules', () => {
     const removed = ev({ type: 'phone_pickup', tier: 'severe', status: 'removed' });
     const kept = ev({ type: 'phone_pickup', tier: 'severe', status: 'active' });
     const b = scoreDrive(drive({ events: [removed, kept] }), ctx0);
-    expect(b.events).toEqual([{ id: kept.id, penalty: 40 }]);
+    expect(b.events).toEqual([{ id: kept.id, penalty: 32 }]);
     expect(b.ratingPenalty).toBe(40);
     expect(b.activeEventCount).toBe(1);
 
@@ -377,7 +379,7 @@ describe('scoreDrive — rules', () => {
       ctx0
     );
     expect(b.shortScale).toBeCloseTo(0.6667, 4);
-    expect(b.penalties).toBe(27); // round(40 × 0.6667)
+    expect(b.penalties).toBe(21); // round(32 × 0.6667)
     expect(scoreDrive(drive({ miles: 3, safeMiles: 3 }), ctx0).shortScale).toBe(1);
     expect(scoreDrive(drive({ miles: 0.5, safeMiles: 0.5 }), ctx0).shortScale).toBeCloseTo(0.5833, 4);
   });
@@ -447,8 +449,8 @@ describe('scoreDrive — rules', () => {
     );
     expect(b.streakMult).toBe(1.3);
     expect(b.gains).toBe(117);
-    expect(b.penalties).toBe(25);
-    expect(b.net).toBe(92);
+    expect(b.penalties).toBe(20);
+    expect(b.net).toBe(97);
   });
 
   test('safeMiles is clamped into [0, miles]', () => {
@@ -465,11 +467,11 @@ describe('scoreDrive — rules', () => {
   });
 });
 
-test('SCORING_VERSION is 4 and the barrel exports the API', () => {
-  expect(SCORING_VERSION).toBe(4);
+test('SCORING_VERSION is 5 and the barrel exports the API', () => {
+  expect(SCORING_VERSION).toBe(5);
   expect(barrel.scoreDrive).toBe(scoreDrive);
   expect(barrel.dashcamDrive).toBe(dashcamDrive);
-  expect(barrel.SCORING_VERSION).toBe(4);
+  expect(barrel.SCORING_VERSION).toBe(5);
 });
 
 describe('keepDashcamEvents — the DashPal limits re-applied over the whole drive', () => {

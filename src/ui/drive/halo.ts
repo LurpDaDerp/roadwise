@@ -3,9 +3,9 @@
 // here animates; `Halo.tsx` feeds the visual into shared values.
 //
 // Severity is one number `s` in [0, 1], never rounded:
-// - Speeding: 0.30 + 0.035 per mph over the limit plus tolerance, kept inside the engine tier's band
-//   (minor 0.30–0.475, moderate 0.475–0.65, severe 0.65–1), held through a speed hovering at the line
-//   (`nextSpeedingHold`).
+// - Speeding: rising through the engine tier's band with the mph over the limit plus tolerance
+//   (minor 0.30–0.475 over 0–4 mph, moderate 0.475–0.65 over 4–9, severe 0.65–1 over 9–19), held
+//   through a speed hovering at the line (`nextSpeedingHold`).
 // - Phone use: 0.65 once the pickup counts, rising to 1 at 30 s of use, until the episode closes.
 // - DashPal: a critical 0.80 + 0.07 per level + 0.02 per second (≤ 1); a warning, driver-not-visible
 //   among them, 0.50 + 0.03 per second (≤ 0.80); a continuous advisory 0.30 + 0.01 per second (≤ 0.45,
@@ -86,18 +86,23 @@ export function glowWeight(layer: number, s: number): number {
 
 // ——— speeding ———
 
-const BAND: Readonly<Record<Tier, readonly [number, number]>> = { minor: [0.3, 0.475], moderate: [0.475, 0.65], severe: [0.65, 1] };
+/** Each tier's severity band, and the mph over L + T it spans (the engine's tier edges: 4 and 9). */
+const BAND: Readonly<Record<Tier, readonly [lo: number, hi: number, fromMph: number, toMph: number]>> = {
+  minor: [0.3, 0.475, 0, 4],
+  moderate: [0.475, 0.65, 4, 9],
+  severe: [0.65, 1, 9, 19],
+};
 
 /**
- * The speeding severity of a row the engine put in `tier`: 0.30 + 0.035 per mph over L + T, kept in
- * the tier's band (so a tenths-rounded speed across a tier edge never contradicts the engine); the
- * band's low end with the speed or limit unknown.
+ * The speeding severity of a row the engine put in `tier`: linear through the tier's band with the
+ * mph over L + T, kept in it (so a tenths-rounded speed across a tier edge never contradicts the
+ * engine); the band's low end with the speed or limit unknown.
  */
 export function speedingSeverity(tier: Tier, speedMph: number | null, limitMph: number | null): number {
-  const [lo, hi] = BAND[tier];
+  const [lo, hi, from, to] = BAND[tier];
   if (speedMph === null || limitMph === null || !Number.isFinite(speedMph) || !Number.isFinite(limitMph)) return lo;
   const over = speedMph - (limitMph + speedTolerance(limitMph));
-  return Math.min(hi, Math.max(lo, 0.3 + 0.035 * over));
+  return Math.min(hi, Math.max(lo, lo + ((hi - lo) * (over - from)) / (to - from)));
 }
 
 /** The halo's speeding display hold, advanced once per new row. */

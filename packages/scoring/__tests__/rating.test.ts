@@ -2,7 +2,7 @@ import { levelForPoints, safetyRating } from '../src/rating';
 
 describe('safetyRating', () => {
   test('one phone pickup every 10 mi → R 400 → 60', () =>
-    expect(safetyRating(40, 10)).toEqual({ rating: 60, ranked: false }));
+    expect(safetyRating(40, 10)).toEqual({ rating: 60, ranked: true }));
 
   test('one hard brake every 20 mi → R 50 → 95', () => expect(safetyRating(10, 20).rating).toBe(95));
 
@@ -14,9 +14,9 @@ describe('safetyRating', () => {
     expect(safetyRating(40, 0)).toEqual({ rating: null, ranked: false });
   });
 
-  test('ranked from 25 mi', () => {
-    expect(safetyRating(0, 24.9)).toEqual({ rating: 100, ranked: false });
-    expect(safetyRating(0, 25)).toEqual({ rating: 100, ranked: true });
+  test('ranked from 10 mi', () => {
+    expect(safetyRating(0, 9.9)).toEqual({ rating: 100, ranked: false });
+    expect(safetyRating(0, 10)).toEqual({ rating: 100, ranked: true });
   });
 
   test('clamped to 0', () => expect(safetyRating(1000, 10).rating).toBe(0));

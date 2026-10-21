@@ -37,35 +37,35 @@ const palettes: [string, HudPalette][] = [
 const samples = Array.from({ length: 101 }, (_, i) => i / 100);
 
 describe('speeding severity (§4.1)', () => {
-  // limit 65: T = 10, L + T = 75
+  // limit 65: T = 8, L + T = 73
   test.each([
-    [0.1, 'minor', 0.3035],
-    [2, 'minor', 0.37],
-    [5, 'minor', 0.475],
-    [5.1, 'moderate', 0.4785],
-    [7, 'moderate', 0.545],
-    [10, 'moderate', 0.65],
-    [10.1, 'severe', 0.6535],
-    [15, 'severe', 0.825],
-    [20, 'severe', 1],
+    [0.1, 'minor', 0.304375],
+    [2, 'minor', 0.3875],
+    [4, 'minor', 0.475],
+    [4.1, 'moderate', 0.4785],
+    [7, 'moderate', 0.58],
+    [9, 'moderate', 0.65],
+    [9.1, 'severe', 0.6535],
+    [14, 'severe', 0.825],
+    [19, 'severe', 1],
     [30, 'severe', 1],
   ] as const)('%s mph over L + T, %s: %s', (over, tier, s) => {
-    expect(speedingSeverity(tier, 75 + over, 65)).toBeCloseTo(s, 4);
+    expect(speedingSeverity(tier, 73 + over, 65)).toBeCloseTo(s, 4);
   });
 
-  test('a 35 mph limit (T 5): 41 / 46 / 51 / 60 mph', () => {
-    expect(speedingSeverity('minor', 41, 35)).toBeCloseTo(0.335, 4);
-    expect(speedingSeverity('moderate', 46, 35)).toBeCloseTo(0.51, 4);
-    expect(speedingSeverity('severe', 51, 35)).toBeCloseTo(0.685, 4);
+  test('a 35 mph limit (T 3): 40 / 44 / 49 / 60 mph', () => {
+    expect(speedingSeverity('minor', 40, 35)).toBeCloseTo(0.3875, 4);
+    expect(speedingSeverity('moderate', 44, 35)).toBeCloseTo(0.545, 4);
+    expect(speedingSeverity('severe', 49, 35)).toBeCloseTo(0.72, 4);
     expect(speedingSeverity('severe', 60, 35)).toBe(1);
   });
 
   test('kept in the engine tier band on both sides of every edge; unknown speed or limit: the band low end', () => {
-    expect(speedingSeverity('moderate', 75 + 4.9, 65)).toBe(0.475);
-    expect(speedingSeverity('minor', 75 + 6, 65)).toBe(0.475);
-    expect(speedingSeverity('minor', 74, 65)).toBe(0.3);
-    expect(speedingSeverity('severe', 75 + 9, 65)).toBe(0.65);
-    expect(speedingSeverity('moderate', 75 + 12, 65)).toBe(0.65);
+    expect(speedingSeverity('moderate', 73 + 3.9, 65)).toBe(0.475);
+    expect(speedingSeverity('minor', 73 + 5, 65)).toBe(0.475);
+    expect(speedingSeverity('minor', 72, 65)).toBe(0.3);
+    expect(speedingSeverity('severe', 73 + 8, 65)).toBe(0.65);
+    expect(speedingSeverity('moderate', 73 + 11, 65)).toBe(0.65);
     expect(speedingSeverity('severe', null, 65)).toBe(0.65);
     expect(speedingSeverity('moderate', 80, null)).toBe(0.475);
     expect(speedingSeverity('minor', Number.NaN, 65)).toBe(0.3);
@@ -79,8 +79,8 @@ describe('the speeding display hold (§4.1)', () => {
     return list.map((r, i) => (h = nextSpeedingHold(h, { ...r, recording, rowTs: start + i * 1000 })));
   };
 
-  test('74.9 / 75.1 alternating against L + T = 75 for 30 rows: one entry, held at about 0.30, never calm again', () => {
-    const list = Array.from({ length: 30 }, (_, i) => (i % 2 === 0 ? { tier: 'minor' as const, speedMph: 75.1, limitMph: 65 } : { tier: null, speedMph: 74.9, limitMph: 65 }));
+  test('72.9 / 73.1 alternating against L + T = 73 for 30 rows: one entry, held at about 0.30, never calm again', () => {
+    const list = Array.from({ length: 30 }, (_, i) => (i % 2 === 0 ? { tier: 'minor' as const, speedMph: 73.1, limitMph: 65 } : { tier: null, speedMph: 72.9, limitMph: 65 }));
     const out = rows(list);
     expect(out.every((h) => h.s >= 0.3 && h.s <= 0.31)).toBe(true);
     const rises = out.filter((h, i) => h.s > 0 && (i === 0 || out[i - 1]!.s === 0));
@@ -102,7 +102,7 @@ describe('the speeding display hold (§4.1)', () => {
   });
 
   test('touched the line once, then just under it (in the 2 mph band): ends on the 10th row without a tier', () => {
-    const out = rows([{ tier: 'minor', speedMph: 75.2, limitMph: 65 }, ...Array(10).fill({ tier: null, speedMph: 74, limitMph: 65 })]);
+    const out = rows([{ tier: 'minor', speedMph: 73.2, limitMph: 65 }, ...Array(10).fill({ tier: null, speedMph: 72, limitMph: 65 })]);
     expect(out.slice(1, 10).every((h) => h.s === 0.3)).toBe(true);
     expect(out[10]!.s).toBe(0);
   });

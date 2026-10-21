@@ -207,9 +207,9 @@ describe('the halo while speeding (design §4.1)', () => {
   });
 
   test.each([
-    ['minor', 40.1, 0.3035],
-    ['moderate', 47, 0.545],
-    ['severe', 55, 0.825],
+    ['minor', 38.1, 0.304375],
+    ['moderate', 45, 0.58],
+    ['severe', 52, 0.825],
   ] as const)('%s at %s mph: speeding at about %s, pulsing, no flow', async (tier, speedMph, s) => {
     await renderHud({ rowTs: T, speedMph, speedingTier: tier });
     expect(halo().mode).toBe('speeding');
@@ -984,7 +984,7 @@ describe('layout, accessibility and Reduce Motion', () => {
 
   test('Reduce Motion: no pulse, no flow, colours unchanged, a burst as colour only', async () => {
     mockStill = true;
-    const h = await renderHud({ rowTs: T, speedMph: 55, speedingTier: 'severe' });
+    const h = await renderHud({ rowTs: T, speedMph: 52, speedingTier: 'severe' });
     expect(halo()).toMatchObject({ mode: 'speeding', pulsePeriodMs: 0, flow: false });
     expect(halo().colorSeverity).toBeCloseTo(0.825, 4);
     await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });

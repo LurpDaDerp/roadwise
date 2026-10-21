@@ -18,7 +18,7 @@ export function AnalyticsScreen() {
   return (
     <AnalyticsView
       data={data}
-      // Unranked (under 25 mi in 30 days) reads "—" here as it does on Home and Profile.
+      // Unranked (under 10 mi in 30 days) reads "—" here as it does on Home and Profile.
       rating={progress?.ranked ? progress.safety_rating : null}
       range={range}
       onRange={setRange}

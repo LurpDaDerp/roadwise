@@ -87,7 +87,7 @@ describe('finalizeTrip with DashPal facts', () => {
     ]);
     expect(await findFinalize(db, TRIP)).toEqual(payload);
 
-    expect(result.breakdown).toMatchObject({ streakMult: 1.2, dashcamMult: 1.25, mult: 1.5, cleanBonus: 25, penalties: 50, ratingPenalty: 0, activeEventCount: 0 });
+    expect(result.breakdown).toMatchObject({ streakMult: 1.2, dashcamMult: 1.25, mult: 1.5, cleanBonus: 25, penalties: 40, ratingPenalty: 0, activeEventCount: 0 });
     // the estimate is exactly the server's scoring of what was uploaded
     const server = scoreDrive(
       { miles: payload.miles, safeMiles: payload.safeMiles, events: payload.events, dashcam: dashcamDrive(payload.dashcam) },
@@ -96,7 +96,7 @@ describe('finalizeTrip with DashPal facts', () => {
     expect(result.breakdown).toEqual(server);
     expect(result.trip).toMatchObject({ status: 'pending', clean: 1, points_net: server.net });
     expect(JSON.parse(result.trip.counts_json!)).toMatchObject({ drowsy: 1, eyesOff: 0, pickups: 0 });
-    expect(result.events).toEqual([expect.objectContaining({ id: cid(1), type: 'drowsy', tier: 'severe', penalty: 50 })]);
+    expect(result.events).toEqual([expect.objectContaining({ id: cid(1), type: 'drowsy', tier: 'severe', penalty: 40 })]);
     expect(JSON.parse(result.events[0]!.measured_json!)).toEqual({ source: 'dashcam', speedMph: 33.457 });
   });
 
@@ -175,8 +175,8 @@ describe('finalizeTrip with DashPal facts', () => {
       )
     );
     expect(result.payload!.events.map((e) => e.id)).toEqual([cid(5), cid(1), cid(7), cid(4), cid(9)]);
-    // and the repeat multiplier applies within each type: drowsy 50 + 62.5, eyes-off 40 + 50 + 60
-    expect(result.breakdown.events.map((e) => e.penalty)).toEqual([40, 50, 50, 63, 60]);
+    // and the repeat multiplier applies within each type: drowsy 40 + 50, eyes-off 32 + 40 + 48
+    expect(result.breakdown.events.map((e) => e.penalty)).toEqual([32, 40, 40, 50, 48]);
     expect(result.breakdown.activeEventCount).toBe(0);
   });
 

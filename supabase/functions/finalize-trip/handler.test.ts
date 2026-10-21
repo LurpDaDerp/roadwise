@@ -35,20 +35,20 @@ const post = (body: unknown, token = 'good', init: RequestInit = {}) =>
 
 const envelopeOf = (h: ReturnType<typeof harness>): ApplyDriveEnvelope => h.fake.calls.find((c) => c.fn === 'applyDrive')!.args as ApplyDriveEnvelope;
 
-Deno.test('happy path: the spec example scores 142 − 10 = 132 inside one transaction and the stored response is returned', async () => {
+Deno.test('happy path: the spec example scores 142 − 8 = 134 inside one transaction and the stored response is returned', async () => {
   const h = harness();
   const res = await handleFinalizeTrip(post(payload()), h.deps);
   assertEquals(res.status, 200);
   const body = await res.json();
-  assertEquals([body.net, body.scored, body.clientTripId], [132, true, TRIP]);
+  assertEquals([body.net, body.scored, body.clientTripId], [134, true, TRIP]);
   assertEquals(h.fake.transactions, { opened: 1, failed: 0 });
   assertEquals(h.fake.calls.map((c) => c.fn), ['driveContext', 'takeRateLimit', 'applyDrive']);
   assertEquals(h.fake.calls[0].args, { userId: USER, clientTripId: TRIP, startedAt: STARTED_AT, endedAt: STARTED_AT + 30 * 60_000, localDay: '2026-10-05', start: { lat: 40.7128, lng: -74.006 } });
   assertEquals(h.fake.calls[1].args, { userId: USER, key: UPLOAD_LIMIT_KEY, window: '1 day', max: MAX_UPLOADS_PER_DAY });
   const e = envelopeOf(h);
-  assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.net], [USER, null, true, null, 132]);
+  assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.net], [USER, null, true, null, 134]);
   assertEquals(e.breakdown.gains, 142);
-  assertEquals(e.breakdown.events, [{ id: EVENT, penalty: 10 }]);
+  assertEquals(e.breakdown.events, [{ id: EVENT, penalty: 8 }]);
   assertEquals(e.streak, { before: { streak: 10 }, after: { streak: 11, atRisk: false, freezes: 2, cleanRun: 0 }, outcome: 'grew', freezeEarned: false });
   // the uploaded event goes in active whatever the device said, with its position and measurements
   assertEquals(e.events.map((x) => [x.id, x.status, x.lat, x.measured]), [[EVENT, 'active', 40.72, { peakG: 0.42 }]]);
@@ -73,16 +73,16 @@ const drowsyEvent = {
   measured: { source: 'dashcam' as const, speedMph: 48 },
 };
 
-Deno.test('a DashPal drive: 118 × 1.50 = 177 − 10 = 167; the seconds and the derived flag go to apply_drive', async () => {
+Deno.test('a DashPal drive: 118 × 1.50 = 177 − 8 = 169; the seconds and the derived flag go to apply_drive', async () => {
   const h = harness();
   const res = await handleFinalizeTrip(post(payload({ dashcam: covered() })), h.deps);
   assertEquals(res.status, 200);
   const e = envelopeOf(h);
-  assertEquals([e.breakdown.streakMult, e.breakdown.dashcamMult, e.breakdown.mult, e.breakdown.gains, e.net], [1.2, 1.25, 1.5, 177, 167]);
+  assertEquals([e.breakdown.streakMult, e.breakdown.dashcamMult, e.breakdown.mult, e.breakdown.gains, e.net], [1.2, 1.25, 1.5, 177, 169]);
   assertEquals(e.dashcam, { deviceId: DASHCAM, movingS: 1500, coveredS: 1350, synced: true, on: true });
   assertEquals(e.payload.dashcam, covered());
   const body = await res.json();
-  assertEquals([body.breakdown.dashcamMult, body.breakdown.mult, body.net], [1.25, 1.5, 167]);
+  assertEquals([body.breakdown.dashcamMult, body.breakdown.mult, body.net], [1.25, 1.5, 169]);
 });
 
 Deno.test('no bonus under 80 % coverage, under 60 s moving, or not synced at the end; the payload stays valid', async () => {
@@ -96,7 +96,7 @@ Deno.test('no bonus under 80 % coverage, under 60 s moving, or not synced at the
     const res = await handleFinalizeTrip(post(payload({ dashcam: dc })), h.deps);
     assertEquals(res.status, 200, why);
     const e = envelopeOf(h);
-    assertEquals([e.dashcam.on, e.breakdown.dashcamMult, e.breakdown.mult, e.net], [false, 1, 1.2, 132], why);
+    assertEquals([e.dashcam.on, e.breakdown.dashcamMult, e.breakdown.mult, e.net], [false, 1, 1.2, 134], why);
     assertEquals([e.dashcam.movingS, e.dashcam.coveredS, e.dashcam.deviceId], [dc.movingS, dc.coveredS, DASHCAM], why);
   }
   // exactly 80 % earns it
@@ -118,7 +118,7 @@ Deno.test('a drowsy event costs its points but keeps the clean bonus, adds 0 to 
   const res = await handleFinalizeTrip(post(payload({ miles: 5, safeMiles: 5, events: [drowsyEvent] })), h.deps);
   assertEquals(res.status, 200);
   const e = envelopeOf(h);
-  assertEquals([e.breakdown.cleanBonus, e.breakdown.gains, e.breakdown.penalties, e.net, e.breakdown.ratingPenalty, e.breakdown.activeEventCount], [25, 75, 50, 25, 0, 0]);
+  assertEquals([e.breakdown.cleanBonus, e.breakdown.gains, e.breakdown.penalties, e.net, e.breakdown.ratingPenalty, e.breakdown.activeEventCount], [25, 75, 40, 35, 0, 0]);
   assertEquals(e.events.map((x) => [x.id, x.type, x.status, x.measured]), [[DROWSY, 'drowsy', 'active', { source: 'dashcam', speedMph: 48 }]]);
   // the streak sees a clean, net-positive drive
   assertEquals([e.streak.outcome, e.streak.after.cleanRun], ['grew', 1]);
@@ -135,8 +135,8 @@ Deno.test('merge: DashPal seconds are summed over the target and the upload and 
   const h2 = harness({ context: target({ deviceId: DASHCAM, movingS: 600, coveredS: 500, synced: false }) });
   await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, dashcam: covered({ movingS: 3000, coveredS: 2900 }) })), h2.deps);
   assertEquals(envelopeOf(h2).dashcam, { deviceId: DASHCAM, movingS: 3600, coveredS: 3400, synced: true, on: true });
-  // 15 mi, 14.8 safe, streak 4: 148 × (1.08 × 1.25 = 1.35) = 199.8 → 200, minus 10
-  assertEquals([envelopeOf(h2).breakdown.mult, envelopeOf(h2).breakdown.gains, envelopeOf(h2).net], [1.35, 200, 190]);
+  // 15 mi, 14.8 safe, streak 4: 148 × (1.08 × 1.25 = 1.35) = 199.8 → 200, minus 8
+  assertEquals([envelopeOf(h2).breakdown.mult, envelopeOf(h2).breakdown.gains, envelopeOf(h2).net], [1.35, 200, 192]);
   // synced comes from the upload (the newest part): absent there → not synced, no bonus
   const h3 = harness({ context: target({ deviceId: DASHCAM, movingS: 3000, coveredS: 3000, synced: true }) });
   await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2 })), h3.deps);
@@ -163,9 +163,9 @@ Deno.test('merge: the union is scored with the target context and streak; the re
   const e = envelopeOf(h);
   assertEquals(e.mergeInto, '99999999-9999-4999-8999-999999999999');
   assertEquals(e.events.map((x) => [x.id, x.status]), [[EVENT_2, 'removed'], [EVENT, 'active']]);
-  // 15 miles, 14.8 safe, streak 4 (the target's snapshot): 148 × 1.08 → 159.84 → 160, minus 10
-  assertEquals([e.breakdown.safeMiles, e.breakdown.streakMult, e.breakdown.gains, e.net], [14.8, 1.08, 160, 150]);
-  assertEquals(e.breakdown.events, [{ id: EVENT, penalty: 10 }]);
+  // 15 miles, 14.8 safe, streak 4 (the target's snapshot): 148 × 1.08 → 159.84 → 160, minus 8
+  assertEquals([e.breakdown.safeMiles, e.breakdown.streakMult, e.breakdown.gains, e.net], [14.8, 1.08, 160, 152]);
+  assertEquals(e.breakdown.events, [{ id: EVENT, penalty: 8 }]);
   assertEquals(e.streak.before, { streak: 4 });
   assertEquals(e.streak.after, { streak: 5, atRisk: false, freezes: 1, cleanRun: 0 });
   // the payload's own metrics travel; SQL sums the union
@@ -193,7 +193,7 @@ const storedDc = (n: number, type: 'drowsy' | 'eyes_off', m: number, status: 'ac
   stoppedInTraffic: null,
   zone: null,
   status,
-  penalty: status === 'active' ? (type === 'drowsy' ? 50 : 40) : 0,
+  penalty: status === 'active' ? (type === 'drowsy' ? 40 : 32) : 0,
 });
 
 Deno.test("merge: at most one drowsy per 10 min and one eyes-off per 5 min over the merged drive; the target's events stand, the upload's too-close ones are dropped, later ones repeat-scored", async () => {
@@ -218,16 +218,16 @@ Deno.test("merge: at most one drowsy per 10 min and one eyes-off per 5 min over 
     e.events.map((x) => [x.id, x.status]),
     [[EVENT_2, 'removed'], [dcId(1), 'active'], [dcId(2), 'active'], [EVENT, 'active'], [dcId(5), 'active'], [dcId(6), 'active']]
   );
-  // in time order, 15 mi (no short-drive scaling): 50, 40, then the repeats 40 × 1.25 = 50 and
-  // 50 × 1.25 = 62.5 → 63, and the hard brake 10 minutes in
+  // in time order, 15 mi (no short-drive scaling): 40, 32, then the repeats 32 × 1.25 = 40 and
+  // 40 × 1.25 = 50, and the hard brake 10 minutes in
   assertEquals(e.breakdown.events, [
-    { id: dcId(1), penalty: 50 },
-    { id: dcId(2), penalty: 40 },
-    { id: dcId(5), penalty: 50 },
-    { id: dcId(6), penalty: 63 },
-    { id: EVENT, penalty: 10 },
+    { id: dcId(1), penalty: 40 },
+    { id: dcId(2), penalty: 32 },
+    { id: dcId(5), penalty: 40 },
+    { id: dcId(6), penalty: 50 },
+    { id: EVENT, penalty: 8 },
   ]);
-  assertEquals([e.breakdown.penalties, e.breakdown.ratingPenalty, e.breakdown.activeEventCount, e.net], [213, 10, 1, 160 - 213]);
+  assertEquals([e.breakdown.penalties, e.breakdown.ratingPenalty, e.breakdown.activeEventCount, e.net], [170, 10, 1, 160 - 170]);
   const body = await res.json();
   assertEquals(body.breakdown.events.map((x: { id: string }) => x.id).includes(dcId(3)), false);
 });
@@ -237,7 +237,7 @@ Deno.test('merge: a removed (disputed) target drowsy holds nothing back; without
   const h = harness({ context: { ...freshContext, merge } });
   await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, events: [dcEvent(3, 'drowsy', 1), dcEvent(4, 'drowsy', 2)] })), h.deps);
   assertEquals(envelopeOf(h).events.map((x) => [x.id, x.status]), [[dcId(1), 'removed'], [dcId(3), 'active']]);
-  assertEquals(envelopeOf(h).breakdown.events, [{ id: dcId(3), penalty: 50 }]);
+  assertEquals(envelopeOf(h).breakdown.events, [{ id: dcId(3), penalty: 40 }]);
   const fresh = harness();
   await handleFinalizeTrip(post(payload({ events: [dcEvent(4, 'drowsy', 2), dcEvent(3, 'drowsy', 1)] })), fresh.deps);
   assertEquals(envelopeOf(fresh).events.map((x) => x.id), [dcId(3)]);
@@ -252,7 +252,7 @@ Deno.test('a DashPal event under 10 mph or with no measured speed is dropped, no
   assertEquals(res.status, 200);
   const e = envelopeOf(h);
   assertEquals(e.events.map((x) => x.id), [EVENT, dcId(3)]);
-  assertEquals([e.scored, e.breakdown.events], [true, [{ id: EVENT, penalty: 10 }, { id: dcId(3), penalty: 40 }]]);
+  assertEquals([e.scored, e.breakdown.events], [true, [{ id: EVENT, penalty: 8 }, { id: dcId(3), penalty: 32 }]]);
   // phone events carry no speed rule: a hard brake with no measured speed stays
   assertEquals(e.events[0].measured, { peakG: 0.42 });
 });

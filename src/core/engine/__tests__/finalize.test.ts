@@ -49,7 +49,7 @@ test('a 20-minute drive is stored as pending with the estimate, its trimmed rout
   expect(result.trip.clean).toBe(0);
   expect(JSON.parse(result.trip.counts_json!)).toMatchObject({ speeding: 1, hardBrake: 1 });
   expect(result.events).toHaveLength(2);
-  expect(result.events[0]).toMatchObject({ id: uuid(1), type: 'speeding', penalty: 15 });
+  expect(result.events[0]).toMatchObject({ id: uuid(1), type: 'speeding', penalty: 12 });
   expect(result.events[1]!.lat).not.toBeNull();
 
   const payload = result.payload!;

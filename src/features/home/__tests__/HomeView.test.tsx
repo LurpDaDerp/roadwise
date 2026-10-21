@@ -61,14 +61,14 @@ describe('the full Home', () => {
     expect(screen.getByText('Top level')).toBeOnTheScreen();
   });
 
-  test('under 25 mi in 30 days the badge shows a dash and how far to go, never "Unranked"', async () => {
-    const p = props({ summary: summary({ progress: { ranked: false, safety_rating: null, miles_30d: 12.7 } }) });
+  test('under 10 mi in 30 days the badge shows a dash and how far to go, never "Unranked"', async () => {
+    const p = props({ summary: summary({ progress: { ranked: false, safety_rating: null, miles_30d: 7.7 } }) });
     await draw(<HomeView {...p} />);
     expect(screen.getByTestId('rating-value')).toHaveTextContent('—');
     expect(screen.getByTestId('rating')).toHaveTextContent('Safety Rating');
     expect(screen.queryByText(/rank/i)).toBeNull();
-    expect(screen.getByText('12/25 mi')).toBeOnTheScreen();
-    await press(screen.getByLabelText('Safety Rating: none yet. 12 of 25 miles in the last 30 days to get one'));
+    expect(screen.getByText('7/10 mi')).toBeOnTheScreen();
+    await press(screen.getByLabelText('Safety Rating: none yet. 7 of 10 miles in the last 30 days to get one'));
     expect(p.onAnalytics).toHaveBeenCalled();
   });
 
@@ -354,11 +354,11 @@ describe('final-review fixes', () => {
   test('km: the stats card shows the same counts, never per 100 km, and the unranked line converts', async () => {
     publishUnits('km');
     const s = summary();
-    await draw(<HomeView {...props({ summary: { ...s, progress: { ...s.progress, ranked: false, safety_rating: null, miles_30d: 12 } } })} />);
+    await draw(<HomeView {...props({ summary: { ...s, progress: { ...s.progress, ranked: false, safety_rating: null, miles_30d: 6 } } })} />);
     expect(screen.getByLabelText('Speeding events, 3, Needs work, Up, worse vs your 30-day average')).toBeOnTheScreen();
     expect(screen.queryByText(/per 100/)).toBeNull();
-    expect(screen.getByText('19/40 km')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Safety Rating: none yet. 19 of 40 kilometers in the last 30 days to get one')).toBeOnTheScreen();
+    expect(screen.getByText('9/16 km')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Safety Rating: none yet. 9 of 16 kilometers in the last 30 days to get one')).toBeOnTheScreen();
   });
 
   test('the rating is a whole number', async () => {

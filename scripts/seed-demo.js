@@ -364,7 +364,7 @@ function makeEvents(trip, rec, rnd, opts) {
     const p = at(i);
     const roll = rnd();
     const tier = gentle || roll < 0.72 ? 'minor' : roll < 0.95 ? 'moderate' : 'severe';
-    const over = tier === 'minor' ? between(rnd, 0.6, 4.6) : tier === 'moderate' ? between(rnd, 5.6, 9.6) : between(rnd, 10.6, 15);
+    const over = tier === 'minor' ? between(rnd, 0.6, 3.6) : tier === 'moderate' ? between(rnd, 4.6, 8.6) : between(rnd, 9.6, 15);
     const speedMph = round(p.limit + scoring.speedTolerance(p.limit) + over, 1);
     if (scoring.speedTier(speedMph, p.limit) !== tier) throw new Error('speeding tier drifted from the scoring package');
     const durationS = tier === 'severe' ? intBetween(rnd, 4, 18) : intBetween(rnd, 6, gentle ? 25 : 70);

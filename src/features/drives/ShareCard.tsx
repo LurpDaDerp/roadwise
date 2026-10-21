@@ -23,7 +23,7 @@ export type ShareCardData = {
   /** Net points; null when the drive has no score. */
   net: number | null;
   safetyRating: number | null;
-  /** Under 25 mi in 30 days: the card says "Unranked", never a number. */
+  /** Under 10 mi in 30 days: the card says "Unranked", never a number. */
   ranked: boolean;
   clean: boolean;
   /** The driver's distance units. */

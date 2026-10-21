@@ -865,7 +865,7 @@ test('alerts go to the player as decisions (one speeding chime); a hands-free ca
   await h.host.boot();
   await h.host.start();
   await feed(h, rows(40, { speedMps: 15 }));
-  await feed(h, rows(10, { speedMps: 22, t0: T0 + 40_000 })); // 49 mph on a 35: moderate
+  await feed(h, rows(10, { speedMps: 20, t0: T0 + 40_000 })); // 45 mph on a 35: moderate
   await feed(h, rows(10, { speedMps: 15, t0: T0 + 50_000 }));
   expect(h.player.delivered.map((d) => d.kind)).toEqual(['speeding']);
   expect(h.host.snapshot().lastAlert).toMatchObject({ type: 'speeding', tier: 'moderate' });

@@ -9,7 +9,7 @@ import type { FriendsBoardRow, FriendsMetric } from './api';
 
 export { UNRANKED } from '@/lib/rating';
 
-/** A Safety Rating, never shown for an unranked driver (under 25 mi in 30 days): the shared rule. */
+/** A Safety Rating, never shown for an unranked driver (under 10 mi in 30 days): the shared rule. */
 export const ratingText = (rating: number | null, ranked: boolean): string => formatRating(rating, ranked);
 
 export function percentileText(percentile: number): string {
