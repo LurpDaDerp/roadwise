@@ -291,6 +291,94 @@ test('a report on an event the server does not hold (404 not_found) reads as ref
   await r.stop();
 });
 
+describe('"Wasn’t driving" or a report within the 5 min upload hold (review I5)', () => {
+  /** A server that holds a drive only once its upload arrived: an action on any other is `not_found`. */
+  function server(opts: { uploads?: () => 'ok' | 'down' } = {}) {
+    const stored = new Set<string>();
+    return createFakeSupabase({
+      invoke: ({ name, body }) => {
+        const b = body as { clientTripId: string; action?: string };
+        if (name === 'finalize-trip') {
+          if ((opts.uploads?.() ?? 'ok') === 'down') return functionsHttpError(503, { code: 'unavailable' });
+          stored.add(b.clientTripId);
+          return invokeOk(response(b.clientTripId));
+        }
+        if (!stored.has(b.clientTripId)) return functionsHttpError(404, { code: 'not_found' });
+        if (b.action === 'not_driving') return invokeOk({ tripId: uuid(77), clientTripId: b.clientTripId, notDrivingLeft: 1, rating: { safetyRating: null, ranked: false } });
+        return invokeOk({ eventId: uuid(1), status: 'accepted', message: null });
+      },
+    });
+  }
+
+  /** The drive as finalize leaves it: upload held 5 min from its finalize. */
+  async function heldDrive(): Promise<number> {
+    await finalized(uuid(10), T0, uuid(1));
+    const item = (await createQueueRepo(db).byKey(`trip:${uuid(10)}`))!;
+    await createQueueRepo(db).deferUntil(item.id, item.next_attempt_at + 300_000);
+    return item.next_attempt_at;
+  }
+
+  test('"Wasn’t driving" a minute after the end: the held upload is due at once and goes first, then the mark lands', async () => {
+    const finalizedAt = await heldDrive();
+    const tap = finalizedAt + 60_000;
+    expect(await markNotDriving(uuid(10), { db, now: () => tap })).toBe('queued');
+    expect((await createQueueRepo(db).byKey(`trip:${uuid(10)}`))?.next_attempt_at).toBe(tap);
+    const s = server();
+    const r = runner(s, { now: () => tap + 1000 });
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ done: 2, failed: 0 });
+    expect(s.invokes.map((i) => i.name)).toEqual(['finalize-trip', 'trip-actions']);
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', server_id: uuid(77) });
+    await r.stop();
+  });
+
+  test('a report a minute after the end: the upload goes first and the report is settled, never rejected as missing', async () => {
+    const finalizedAt = await heldDrive();
+    const tap = finalizedAt + 60_000;
+    expect(await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db, now: () => tap })).toBe('queued');
+    const s = server();
+    const r = runner(s, { now: () => tap + 1000 });
+    await r.start();
+    await r.drainOnce();
+    expect(s.invokes.map((i) => i.name)).toEqual(['finalize-trip', 'trip-actions']);
+    expect((await createEventsRepo(db).get(uuid(1)))?.dispute_status).not.toBe('rejected');
+    await r.stop();
+  });
+
+  test('not_found while the drive’s upload is still owed is no refusal: nothing is undone, and the mark goes once the drive is up; a failed mark tapped again is really sent', async () => {
+    const finalizedAt = await heldDrive();
+    const tap = finalizedAt + 60_000;
+    await markNotDriving(uuid(10), { db, now: () => tap });
+    // The upload fails on a server blip; the action reaches the server first and is told not_found.
+    let uploads: 'ok' | 'down' = 'down';
+    const s = server({ uploads: () => uploads });
+    let clock = tap + 1000;
+    const r = runner(s, { now: () => clock });
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ done: 0, failed: 0, deferred: 2 });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', sync_error: null });
+    expect((await createQueueRepo(db).byKey(`not_driving:${uuid(10)}`))).toMatchObject({ status: 'pending', last_error: 'not_found' });
+    uploads = 'ok';
+    clock += 120_000;
+    expect(await r.drainOnce()).toMatchObject({ done: 2, failed: 0 });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', server_id: uuid(77) });
+    await r.stop();
+
+    // A mark the server refused for good (the drive really is not there): undone, and the next
+    // tap re-arms the failed item, so it is sent again rather than silently kept failed.
+    await finalized(uuid(11), T0, uuid(2));
+    await db.execute("DELETE FROM sync_queue WHERE idempotency_key = ?", [`trip:${uuid(11)}`]);
+    await markNotDriving(uuid(11), { db, now: () => clock });
+    const r2 = runner(s, { now: () => clock });
+    await r2.start();
+    expect(await r2.drainOnce()).toMatchObject({ failed: 1 });
+    expect(await createTripsRepo(db).get(uuid(11))).toMatchObject({ status: 'pending', sync_error: 'not_found' });
+    expect(await markNotDriving(uuid(11), { db, now: () => clock })).toBe('queued');
+    expect(await createQueueRepo(db).byKey(`not_driving:${uuid(11)}`)).toMatchObject({ status: 'pending', attempts: 0, next_attempt_at: clock });
+    await r2.stop();
+  });
+});
+
 test('nothing is sent without a session, while recording, or under another user; items wait', async () => {
   await finalized(uuid(10));
   const supabase = createFakeSupabase({ uid: null, invoke: () => invokeOk(response(uuid(10))) });

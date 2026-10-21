@@ -100,8 +100,10 @@ export function createQueueRepo(db: Db) {
     reclaimInflight: (olderThanS: number = RECLAIM_AFTER_S, now: number = Date.now()) => reclaimInflight(olderThanS, now, db),
 
     /**
-     * Idempotent: enqueueing a key already in the queue keeps the item that is there. Given a
-     * transaction handle `on`, the insert joins that transaction.
+     * Idempotent: enqueueing a key already in the queue keeps the item that is there, unless that
+     * item has failed: then it is armed again with this payload (a fresh ladder, due now), so a
+     * second try after a refusal is really sent. Given a transaction handle `on`, the write joins
+     * that transaction.
      */
     enqueue(kind: string, payload: unknown, idempotencyKey: string, now: number = Date.now(), on?: Db, ownerUid: string | null = null): Promise<QueueItem> {
       const run = async (tx: Db): Promise<QueueItem> => {
@@ -110,6 +112,12 @@ export function createQueueRepo(db: Db) {
              (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, owner_uid, created_at)
            VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)`,
           [kind, JSON.stringify(payload), idempotencyKey, now, ownerUid, now]
+        );
+        await tx.execute(
+          `UPDATE sync_queue SET kind = ?, payload_json = ?, status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL,
+              claimed_at = NULL, owner_uid = ?
+            WHERE idempotency_key = ? AND status = 'failed'`,
+          [kind, JSON.stringify(payload), now, ownerUid, idempotencyKey]
         );
         const item = await byKey(idempotencyKey, tx);
         if (!item) throw new Error(`queue item ${idempotencyKey} vanished after insert`);
@@ -214,6 +222,25 @@ export function createQueueRepo(db: Db) {
         [now, now]
       );
       return changes;
+    },
+
+    /**
+     * The held, never-tried item under `idempotencyKey` is due at `at` (no later): a drive the
+     * driver acts on (a report, "Wasn't driving") uploads first. One already due, tried or settled
+     * keeps its time. True when it moved. Given a transaction handle `on`, it joins that transaction.
+     */
+    async makeDue(idempotencyKey: string, at: number, on: Db = db): Promise<boolean> {
+      const { changes } = await on.execute(
+        "UPDATE sync_queue SET next_attempt_at = ? WHERE idempotency_key = ? AND status = 'pending' AND attempts = 0 AND next_attempt_at > ?",
+        [at, idempotencyKey, at]
+      );
+      return changes > 0;
+    },
+
+    /** Whether the item under `idempotencyKey` is still owed (waiting or being sent). */
+    async owes(idempotencyKey: string, on: Db = db): Promise<boolean> {
+      const { rows } = await on.execute("SELECT 1 AS owed FROM sync_queue WHERE idempotency_key = ? AND status IN ('pending', 'inflight')", [idempotencyKey]);
+      return rows.length > 0;
     },
 
     /** The earliest `next_attempt_at` of an item still owed, or null when none is. */

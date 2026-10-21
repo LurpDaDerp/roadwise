@@ -30,8 +30,8 @@ import { applyServerDrive, readServerDrive } from '@/data/hydrate/restore';
 import { countEvents } from '@/data/queries/rows';
 import { isSyncKind } from '@/data/sync/kinds';
 import { FinalizeTripResponseSchema, parseFinalizeUpload, type FinalizeTripResponse } from '@/data/sync/payload';
-import { deviceOwnerIs, SESSION_UID_KEY, TripActionSchema, type TripAction } from '@/data/sync/queue';
-import { classifyInvokeError, DisputeResultSchema, isDatabaseLocked, NotDrivingResultSchema, type Failure } from '@/data/sync/response';
+import { deviceOwnerIs, finalizeIdempotencyKey, SESSION_UID_KEY, TripActionSchema, type TripAction } from '@/data/sync/queue';
+import { classifyInvokeError, DisputeResultSchema, FUNCTION_NOT_FOUND_CODE, isDatabaseLocked, NotDrivingResultSchema, type Failure } from '@/data/sync/response';
 import { MAX_POLYLINE_BYTES, MAX_POLYLINE_RUNS } from '@/data/sync/payload';
 import { RUN_SEPARATOR, splitRuns } from '@/lib/polyline';
 
@@ -360,6 +360,11 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const res = await invoke(ACTIONS_FUNCTION, body);
     if (!res.ok) {
       if (res.failure.kind === 'terminal' && ALREADY_APPLIED.has(res.failure.code)) return alreadyApplied(uid, action, res.failure.code);
+      // The server does not hold the drive yet because its upload is still owed: no refusal. The
+      // action waits for the upload, and nothing is undone.
+      if (res.failure.kind === 'terminal' && res.failure.code === FUNCTION_NOT_FOUND_CODE && (await queue.owes(finalizeIdempotencyKey(action.clientTripId)))) {
+        return { kind: 'retry', error: FUNCTION_NOT_FOUND_CODE };
+      }
       if (res.failure.kind === 'terminal') await undoAction(uid, action, res.failure.code);
       return failureOutcome(res.failure);
     }

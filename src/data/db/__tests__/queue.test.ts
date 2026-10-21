@@ -28,6 +28,37 @@ test('enqueue is idempotent on the key and stamps the owner', async () => {
   expect(await queue.countByStatus('pending')).toBe(1);
 });
 
+test('a failed item enqueued again is armed again with the new payload: pending, a fresh ladder, due now', async () => {
+  const a = await queue.enqueue('trip-actions', { v: 1 }, 'not_driving:a', T0, undefined, 'u1');
+  await queue.nextDue(T0);
+  await queue.markAttempt(a.id, false, 'not_found', T0);
+  await queue.markFailed(a.id, 'not_found');
+  expect(await queue.get(a.id)).toMatchObject({ status: 'failed', next_attempt_at: REFUSED_NEVER });
+  const again = await queue.enqueue('trip-actions', { v: 2 }, 'not_driving:a', T0 + 5000, undefined, 'u1');
+  expect(again).toMatchObject({ id: a.id, status: 'pending', attempts: 0, next_attempt_at: T0 + 5000, last_error: null, payload_json: JSON.stringify({ v: 2 }) });
+  expect((await queue.nextDue(T0 + 5000)).map((i) => i.id)).toEqual([a.id]);
+  // One already done is left alone.
+  await queue.markAttempt(a.id, true, null, T0 + 5000);
+  expect(await queue.enqueue('trip-actions', { v: 3 }, 'not_driving:a', T0 + 9000)).toMatchObject({ status: 'done', payload_json: JSON.stringify({ v: 2 }) });
+});
+
+test('makeDue brings a held, never-tried item forward (never later, never a tried or settled one); owes says whether it is still owed', async () => {
+  const held = await queue.enqueue('finalize-trip', {}, 'trip:a', T0);
+  await queue.deferUntil(held.id, T0 + 300_000);
+  expect(await queue.owes('trip:a')).toBe(true);
+  expect(await queue.makeDue('trip:a', T0 + 60_000)).toBe(true);
+  expect((await queue.get(held.id))?.next_attempt_at).toBe(T0 + 60_000);
+  expect(await queue.makeDue('trip:a', T0 + 90_000)).toBe(false);
+  const [claimed] = await queue.nextDue(T0 + 60_000);
+  expect(await queue.owes('trip:a')).toBe(true);
+  await queue.markAttempt(claimed!.id, false, 'network', T0 + 60_000);
+  expect(await queue.makeDue('trip:a', T0 + 61_000)).toBe(false);
+  const [again] = await queue.nextDue(T0 + 200_000);
+  await queue.markAttempt(again!.id, true, null, T0 + 200_000);
+  expect(await queue.owes('trip:a')).toBe(false);
+  expect(await queue.owes('trip:none')).toBe(false);
+});
+
 test('nextDue claims due items as inflight and reclaims stale claims', async () => {
   await queue.enqueue('finalize-trip', {}, 'trip:a', T0);
   await queue.enqueue('finalize-trip', {}, 'trip:b', T0 + 10_000);

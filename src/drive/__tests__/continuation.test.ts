@@ -84,6 +84,14 @@ test('an upload already tried, sent or marked not driving, or a drive whose samp
   expect(await continuationFor(db, now, end)).toBeNull();
 });
 
+test('a held upload made due early (a report or "Wasn’t driving" on it, a sign-out’s flush) is never continued', async () => {
+  const { finalizedAt, end } = await firstLeg();
+  const now = finalizedAt + 60_000;
+  expect(await continuationFor(db, now, end)).not.toBeNull();
+  await createQueueRepo(db).makeDue(`trip:${ID}`, finalizedAt + 30_000);
+  expect(await continuationFor(db, now, end)).toBeNull();
+});
+
 test('re-open: the held upload goes, the row records again with one more continuation, the session is the first leg rebuilt and its idle clock runs from the new start', async () => {
   const { finalizedAt, end, session } = await firstLeg();
   const at = finalizedAt + 120_000;

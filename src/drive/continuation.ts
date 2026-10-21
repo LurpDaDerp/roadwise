@@ -36,7 +36,8 @@ const CANDIDATES_SQL = `SELECT client_trip_id, finalized_at, end_lat, end_lng FR
 /**
  * The drive a start at `fix` continues, or null: the latest `pending` trip finalized within
  * `CONTINUE_HOLD_MS` of `now`, ended within `CONTINUE_DIST_M` of `fix`, whose upload is still held
- * and never tried, and whose samples are still kept. A null fix, or anything unreadable, is null.
+ * (for the whole hold: one made due early never re-opens) and never tried, and whose samples are
+ * still kept. A null fix, or anything unreadable, is null.
  */
 export async function continuationFor(db: Db, now: number, fix: { lat: number; lng: number } | null): Promise<Continuation | null> {
   if (fix === null || !Number.isFinite(fix.lat) || !Number.isFinite(fix.lng)) return null;
@@ -54,6 +55,8 @@ export async function continuationFor(db: Db, now: number, fix: { lat: number; l
       if (haversineMeters({ lat, lng }, fix) > CONTINUE_DIST_M) continue;
       const item = await queue.byKey(finalizeIdempotencyKey(id));
       if (item === null || item.status !== 'pending' || item.attempts !== 0) continue;
+      // Its hold was lifted (a report or "Wasn't driving" on it, a sign-out's flush): it uploads, never re-opens.
+      if (item.next_attempt_at < finalizedAt + CONTINUE_HOLD_MS) continue;
       if ((await samples.count(id)) === 0) continue;
       return { clientTripId: id, finalizedAt, endFix: { lat, lng } };
     }
