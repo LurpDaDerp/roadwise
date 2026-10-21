@@ -276,6 +276,42 @@ describe('the Start card (Android: the capture and a JS wait)', () => {
   });
 });
 
+/** Every state a host publishes, as (status, waiting) pairs. */
+function recordStates(host: H['host']): { status: string; waiting: boolean }[] {
+  const seen: { status: string; waiting: boolean }[] = [];
+  host.subscribe((s) => seen.push({ status: s.status, waiting: s.waiting !== null }));
+  return seen;
+}
+
+/** Between the last waiting state and the first recording one, no state is idle with no wait (the driving screen would go Home). */
+function noIdleGap(seen: readonly { status: string; waiting: boolean }[]): void {
+  const firstRecording = seen.findIndex((x) => x.status === 'recording');
+  expect(firstRecording).toBeGreaterThan(0);
+  expect(seen.slice(0, firstRecording).every((x) => x.status === 'idle' && x.waiting)).toBe(true);
+  expect(seen[firstRecording]).toEqual({ status: 'recording', waiting: false });
+}
+
+describe('the confirmation never shows an idle state between the wait and the drive', () => {
+  test('Android: every state published across the confirmation shows the wait, then the drive (a publish from elsewhere meanwhile too)', async () => {
+    let h!: H;
+    // The continuation read is slow, and RoadWise goes behind meanwhile (a publish of its own).
+    h = build({
+      continuation: async () => {
+        h.appState.set('background');
+        await new Promise((r) => setTimeout(r, 0));
+        return null;
+      },
+    });
+    await h.host.boot();
+    await h.host.start();
+    const seen = recordStates(h.host);
+    await feed(h, rows(16, { speedMps: 15 }).map((r, i) => ({ ...r, lng: START.lng + (i * 15) / M_PER_DEG_LNG })));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', waiting: null });
+    noIdleGap(seen);
+    await h.host.stop({ endOpenTrip: true });
+  });
+});
+
 describe('a drive', () => {
   test('rows publish, the display wears the tint, the hint and the speed; the end finalizes and queues the upload held 5 min', async () => {
     const h = build();
@@ -587,6 +623,24 @@ describe('iOS: the drive detector', () => {
     expect(h.detect.calls.at(-1)).toBe('cancelWaiting');
     expect(h.host.snapshot().waiting).toBeNull();
     await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('the Start card’s confirmation: every state published shows the wait, then the drive, never idle with no wait (a publish from elsewhere meanwhile too)', async () => {
+    let h!: I;
+    h = buildIos({
+      continuation: async () => {
+        h.appState.set('background');
+        await new Promise((r) => setTimeout(r, 0));
+        return null;
+      },
+    });
+    await h.host.boot();
+    await h.host.start();
+    const seen = recordStates(h.host);
+    await confirm(h, rows(30, { speedMps: 15 }));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', origin: 'manual', waiting: null });
+    noIdleGap(seen);
+    await h.host.stop({ endOpenTrip: false });
   });
 
   test('a confirmed drive is adopted from the journal: native’s id, its traced start, every row once; live rows follow in order (a gap filled, a repeat dropped)', async () => {

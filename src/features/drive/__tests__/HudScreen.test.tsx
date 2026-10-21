@@ -1,7 +1,11 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 
-import type { LastFinalized } from '@/drive/host';
+import { createFakeDriveSense } from '@drive-sense';
+
+import { T0 as DRIVE_T0 } from '@/core/detectors/__fixtures__/rows';
+import { rows as driveRows, TZ as DRIVE_TZ } from '@/core/engine/__fixtures__/drives';
+import { createDriveHost, type DriveState, type LastFinalized } from '@/drive/host';
 import type { DriveLive, ShownSpeed } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { State } from 'react-native-gesture-handler';
@@ -1497,6 +1501,78 @@ describe('waiting for the car to move (modes plan §3.7)', () => {
     expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
     expect(mockRouter.replace).not.toHaveBeenCalled();
     expect(readHomeNotice()).toBeNull();
+  });
+});
+
+describe('a Start-card drive confirming, as a real host publishes it (review I1)', () => {
+  /** Every state an Android host (a dry run: nothing stored) publishes from the wait through the confirmation. */
+  async function hostStates(): Promise<DriveState[]> {
+    let clock = DRIVE_T0;
+    let ids = 0;
+    const source = createFakeDriveSense({ platform: 'android', now: () => clock });
+    source.setState({ location: 'whenInUse', motion: 'granted', lockSignal: 'reliable' });
+    const appState = {
+      currentState: 'active' as string | null,
+      addEventListener: () => ({ remove: () => {} }),
+    };
+    const limit = { limitMps: 35 * MPS_PER_MPH, source: 'posted', matchConfidence: 0.95, parallelRoads: false };
+    const host = createDriveHost({
+      db: { execute: async () => ({ rows: [], changes: 0 }), transaction: async () => Promise.reject(new Error('dry run')) } as never,
+      source,
+      limits: { lookup: () => limit, lookupStored: async () => limit, startTrip: () => {}, prefetch: () => {}, resetTrip: () => {} } as never,
+      player: { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} },
+      now: () => clock,
+      tz: () => DRIVE_TZ,
+      newId: () => `00000000-0000-4000-8000-${String((ids += 1)).padStart(12, '0')}`,
+      appVersion: '2.0.0',
+      persistence: 'none',
+      permissions: async () => ({ location: 'granted' }),
+      scheduler: { setTimeout: () => 0, clearTimeout: () => {} },
+      appState,
+      weather: async () => null,
+      spots: { readWatchSpots: async () => [] },
+    });
+    await host.boot();
+    const states: DriveState[] = [];
+    host.subscribe((st) => states.push(st));
+    await host.start();
+    const list = driveRows(20, { speedMps: 15 });
+    source.loadTrace(list);
+    for (const r of list) {
+      clock = r.ts;
+      source.step();
+      await host.settled();
+    }
+    await host.stop({ endOpenTrip: false });
+    return states;
+  }
+
+  const liveOf = (st: DriveState): LiveOver => ({
+    status: st.status,
+    clientTripId: st.clientTripId,
+    origin: st.origin,
+    startedAt: st.startedAt,
+    limitMph: st.limitMph,
+    notDrivingAvailable: st.notDrivingAvailable,
+    rowTs: st.lastRowTs,
+    speedMph: st.rowSpeedMps === null ? null : Math.round((st.rowSpeedMps / MPS_PER_MPH) * 10) / 10,
+    waiting: st.waiting === null ? null : { ...st.waiting, since: T, deadlineAt: T + 120_000 },
+  });
+
+  test('every state published across the confirmation keeps the screen: the wait, then the drive, never Home', async () => {
+    jest.useRealTimers();
+    const states = await hostStates();
+    jest.useFakeTimers();
+    jest.setSystemTime(T);
+    const at = states.findIndex((st) => st.status === 'recording');
+    expect(at).toBeGreaterThan(0);
+    const h = await renderHud(liveOf(states[0]!));
+    expect(screen.getByTestId('hud-waiting')).toBeTruthy();
+    for (const st of states.slice(1, at + 3)) await h.update(liveOf(st));
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('hud-waiting')).toBeNull();
+    expect(screen.getByRole('button', { name: hudCopy.endLabel })).toBeTruthy();
   });
 });
 

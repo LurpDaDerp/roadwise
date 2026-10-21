@@ -335,6 +335,12 @@ interface Waiting {
   limitMph: number | null;
   timer: unknown;
   phase: WaitingPublic['phase'];
+  /**
+   * The drive confirmed and is being begun: the wait still shows (so the driving screen never sees
+   * an idle state between the wait and the drive), but nothing more happens to it. The drive's
+   * start (or re-open) clears it in the same publish.
+   */
+  confirming: boolean;
 }
 
 /** How the host begins a confirmed drive. */
@@ -644,6 +650,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       prevStatus = s.status;
     }
     if (opened) {
+      // A confirmed wait's drive replaces the wait in this same publish: never an idle state between.
+      if (waiting?.confirming === true) dropWaiting();
       // A drive left unfinalized stays `recording` in storage: the next launch recovers it.
       unfinalized = null;
       soundFailedThisDrive = false;
@@ -963,7 +971,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   /** The wait's phase now: the sheet, the countdown, or the quiet end at 5 min. */
   async function evaluateWaiting(): Promise<void> {
     const w = waiting;
-    if (w === null) return;
+    if (w === null || w.confirming) return;
     const phase = waitingPhaseAt(w.since, now());
     if (phase === 'expired') {
       await endWaiting('expired');
@@ -977,14 +985,40 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   }
 
   /** The wait ends with nothing stored (`expired`, `cancelled`; `native`: native already let it go). */
-  async function endWaiting(why: 'expired' | 'cancelled' | 'native' | 'confirmed'): Promise<void> {
+  async function endWaiting(why: 'expired' | 'cancelled' | 'native'): Promise<void> {
     const w = waiting;
     if (w === null) return;
     waiting = null;
     if (w.timer !== null) scheduler.clearTimeout(w.timer);
-    if (why !== 'confirmed' && engine.snapshot().status === 'idle') limits.resetTrip();
+    if (engine.snapshot().status === 'idle') limits.resetTrip();
     if (ios && detect !== null && (why === 'expired' || why === 'cancelled')) await detect.cancelWaiting().catch((e: unknown) => report(e, 'cancelWaiting'));
     publish();
+  }
+
+  /** The wait goes, unpublished: the drive opening publishes the change. */
+  function dropWaiting(): void {
+    const w = waiting;
+    if (w === null) return;
+    waiting = null;
+    if (w.timer !== null) scheduler.clearTimeout(w.timer);
+  }
+
+  /**
+   * The wait confirmed: it stays on screen while the drive is begun (nothing is published here), and
+   * the drive's start or re-open takes it down in the same publish. Call `afterConfirm` once the
+   * drive is begun.
+   */
+  function confirmWaiting(): void {
+    const w = waiting;
+    if (w === null) return;
+    w.confirming = true;
+    if (w.timer !== null) scheduler.clearTimeout(w.timer);
+    w.timer = null;
+  }
+
+  /** A confirmed wait whose drive did not open (a failed start): it ends now, nothing stored. */
+  async function afterConfirm(): Promise<void> {
+    if (waiting !== null && waiting.confirming) await endWaiting('native');
   }
 
   /** A row while the Start card waits (Android): the sign and the speed, the phase, and the confirmation. */
@@ -1001,7 +1035,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       publish();
       return;
     }
-    await endWaiting('confirmed');
+    // The wait shows until the drive's own start replaces it (one publish: never idle in between).
+    confirmWaiting();
     await beginDrive({
       ts: confirmed.startedAt,
       origin: 'manual',
@@ -1010,6 +1045,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       fix: confirmed.startFix ?? (row.gnssValid ? { lat: row.lat, lng: row.lng } : null),
       continues: false,
     });
+    await afterConfirm();
     for (const r of confirmed.rows) await onRow(r, { replay: true });
   }
 
@@ -1158,8 +1194,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       report(new Error('a native drive started while another is open'), 'driveStarted');
       return;
     }
-    if (waiting !== null) await endWaiting('confirmed');
+    // The Start card's wait shows until the drive's own start replaces it (one publish).
+    confirmWaiting();
     if (await beginNative(e, { capped: false })) captureOn = true;
+    await afterConfirm();
   }
 
   async function onDriveEnded(e: DriveEndedEvent): Promise<void> {
@@ -1446,7 +1484,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
             result = { ok: false, reason: r.reason === 'permission' ? 'permission' : r.reason === 'busy' ? 'busy' : 'error' };
             return;
           }
-          waiting = { since: r.waitUntil - WAIT_TOTAL_MS, session: null, speedMps: null, limitMph: null, timer: null, phase: 'waiting' };
+          waiting = { since: r.waitUntil - WAIT_TOTAL_MS, session: null, speedMps: null, limitMph: null, timer: null, phase: 'waiting', confirming: false };
         } else {
           try {
             await source.startCapture('mounted');
@@ -1455,7 +1493,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
             report(e, 'startCapture');
             return;
           }
-          waiting = { since: now(), session: createWaitingSession(), speedMps: null, limitMph: null, timer: null, phase: 'waiting' };
+          waiting = { since: now(), session: createWaitingSession(), speedMps: null, limitMph: null, timer: null, phase: 'waiting', confirming: false };
         }
         await readDisplayUnit();
         fetchLimitsNearby();
@@ -1467,7 +1505,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     },
 
     touchWaiting() {
-      if (waiting === null) return;
+      if (waiting === null || waiting.confirming) return;
       waiting.since = now();
       waiting.phase = 'waiting';
       armWaitingTimer();
