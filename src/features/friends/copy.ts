@@ -32,7 +32,7 @@ export const friendsCopy = {
   noUsername: 'Pick a username first to get your code.',
 
   scanTitle: 'Scan a code',
-  scanBody: 'Point your camera at a friend’s RoadWise code.',
+  scanBody: 'Aim your camera at a friend’s RoadWise code.',
   cameraWhy: 'RoadWise needs the camera to read a friend’s code. Nothing is recorded or saved.',
   allowCamera: 'Allow camera',
   openSettings: 'Open Settings',
