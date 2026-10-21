@@ -70,3 +70,39 @@ test('a stored answer paints at once and is reused while fresh', async () => {
   expect(result.current.weather.kind).toBe('snow');
   expect(fetch).not.toHaveBeenCalled();
 });
+
+test('turned off (a static look), it reads no position and asks for no weather; turned back on, it reads both at once', async () => {
+  const fetch = jest.fn(answer(61));
+  const position = jest.fn(async () => ({ lat: 47.60621, lng: -122.33207 }));
+  const ports: SkyPorts = { position, storage: memoryStorage(), fetch, now: () => NOON_SEATTLE };
+  const { result, rerender } = await renderHook(({ enabled }: { enabled: boolean }) => useSkyMood(ports, { enabled }), {
+    initialProps: { enabled: false },
+  });
+  await flush();
+  expect(position).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+
+  await rerender({ enabled: true });
+  await flush();
+  expect(position).toHaveBeenCalledTimes(1);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(result.current).toMatchObject({ phase: 'day', weather: { kind: 'rain' } });
+});
+
+test('turned off, coming back to the front asks no one either', async () => {
+  const { AppState } = jest.requireActual<typeof import('react-native')>('react-native');
+  const listeners: ((s: string) => void)[] = [];
+  const spy = jest.spyOn(AppState, 'addEventListener').mockImplementation(((_t: string, l: (s: string) => void) => {
+    listeners.push(l);
+    return { remove: () => {} };
+  }) as unknown as typeof AppState.addEventListener);
+  const fetch = jest.fn(answer(61));
+  const position = jest.fn(async () => ({ lat: 47.6, lng: -122.3 }));
+  await renderHook(() => useSkyMood({ position, storage: memoryStorage(), fetch, now: () => NOON_SEATTLE }, { enabled: false }));
+  await flush();
+  for (const l of listeners) l('active');
+  await flush();
+  expect(position).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+  spy.mockRestore();
+});

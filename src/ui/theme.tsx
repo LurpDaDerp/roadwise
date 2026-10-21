@@ -50,12 +50,12 @@ export type Theme = {
   onSky: ColorSet;
   /** The sky: backdrop, scene card and ambient colours for the current mood. */
   sky: SkyColors;
-  /** The time of day and weather the theme is wearing; null when pinned (tests, gallery). */
+  /** The time of day and weather the theme is wearing; null in a static look (Light, Dark, System, tests, the gallery). */
   mood: SkyMood | null;
   /**
    * Whether the driving screen wears its night look, as the theme decides it: null when the theme
-   * follows the sky (Adaptive: the driving screen judges night by the sun itself), true or false
-   * when the theme is static.
+   * follows the sky (Adaptive: the driving screen judges night by the sun itself); in a static look,
+   * true for Dark and false for Light, day or night (System: the phone's own scheme).
    */
   hudNight: boolean | null;
   hud: HudSet;
@@ -123,7 +123,7 @@ export function useBlendedBundle(target: SkyBundle, animate: boolean, durationMs
   return shown;
 }
 
-function buildTheme(bundle: SkyBundle, mood: SkyMood | null, reduceMotion: boolean): Theme {
+function buildTheme(bundle: SkyBundle, mood: SkyMood | null, hudNight: boolean | null, reduceMotion: boolean): Theme {
   return {
     scheme: bundle.scheme,
     colors: bundle.colors,
@@ -131,7 +131,7 @@ function buildTheme(bundle: SkyBundle, mood: SkyMood | null, reduceMotion: boole
     onSky: bundle.onSky,
     sky: bundle.sky,
     mood,
-    hudNight: null,
+    hudNight,
     hud: tokens.color.hud,
     type: tokens.type,
     elevation: tokens.elevation[bundle.scheme],
@@ -146,9 +146,11 @@ function buildTheme(bundle: SkyBundle, mood: SkyMood | null, reduceMotion: boole
 const moodKey = (m: SkyMood | null) => (m ? `${m.phase}|${m.glow}|${m.weather.kind}|${m.weather.intensity}` : null);
 
 /**
- * The app's theme. With a `mood` (the root, fed by `useSkyMood`) the palette follows the sky and
- * every change blends in over a couple of seconds, light ⇄ dark included. Without one it is the
- * plain paper / ink set for the pinned or system scheme (tests, the gallery).
+ * The app's theme. With a `mood` (Adaptive: the root, fed by `useSkyMood`) the palette follows the
+ * sky and every change of sky blends in over a couple of seconds, light ⇄ dark included. Without
+ * one it is the static look (`plainBundle`) for the pinned scheme (Light, Dark, tests, the gallery)
+ * or, with none pinned, the system's (System). A switch between Adaptive and a static look is the
+ * driver's own and lands at once, either way.
  */
 export function ThemeProvider({
   children,
@@ -157,7 +159,7 @@ export function ThemeProvider({
   mood,
 }: {
   children: ReactNode;
-  /** Pin a scheme (the dev gallery renders both side by side). Defaults to the system's. */
+  /** Pin a static scheme (Light or Dark, the dev gallery, tests). Defaults to the system's. */
   scheme?: 'light' | 'dark';
   /** Pin reduce motion (tests, gallery). Defaults to the OS accessibility setting. */
   reduceMotion?: boolean;
@@ -177,9 +179,13 @@ export function ThemeProvider({
   const plainScheme = forced ?? sysScheme;
 
   const target = useMemo(() => (stable ? skyBundle(stable) : plainBundle(plainScheme)), [stable, plainScheme]);
-  // The first sky lands at once (it is behind the splash); every later change blends.
+  // The first sky lands at once (it is behind the splash, or the driver just chose Adaptive); every
+  // later change of sky blends. A static look starts the settle over.
   const [settled, setSettled] = useState(false);
   const hasMood = stable !== null;
+  if (!hasMood && settled) setSettled(false);
+  // A static look decides the driving screen's night itself; the sky leaves it to the sun.
+  const hudNight = hasMood ? null : plainScheme === 'dark';
   useEffect(() => {
     if (!hasMood) return;
     const timer = setTimeout(() => setSettled(true), SETTLE_MS);
@@ -187,7 +193,10 @@ export function ThemeProvider({
   }, [hasMood]);
   const bundle = useBlendedBundle(target, hasMood && settled);
 
-  const value = useMemo<Theme>(() => buildTheme(bundle, stable, reduceMotion), [bundle, stable, reduceMotion]);
+  const value = useMemo<Theme>(
+    () => buildTheme(bundle, stable, hudNight, reduceMotion),
+    [bundle, stable, hudNight, reduceMotion]
+  );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

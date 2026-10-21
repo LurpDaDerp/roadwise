@@ -36,8 +36,11 @@ const MAX_SLEEP_MS = 6 * 60 * 60_000;
  * and the weather there. Re-read when RoadWise comes to the front, at the next phase boundary
  * (every 10 min inside a twilight window), and when a weather answer expires while on screen.
  * No polling faster than that; nothing at all while RoadWise is in the background.
+ *
+ * `enabled: false` (a static look in Settings › Appearance) stops all of it: no position read, no
+ * weather request, no timers. Turned back on, it reads the sun and the weather again at once.
  */
-export function useSkyMood(ports: SkyPorts): SkyMood {
+export function useSkyMood(ports: SkyPorts, { enabled = true }: { enabled?: boolean } = {}): SkyMood {
   const [place, setPlace] = useState<Place | null>(null);
   const [weather, setWeather] = useState<SkyWeather>(CLEAR);
   // The moment the phase was last read; every re-read sets it, and the reading follows from it.
@@ -77,8 +80,13 @@ export function useSkyMood(ports: SkyPorts): SkyMood {
     };
   }, [ports.storage, clock]);
 
+  const enabledRef = useRef(enabled);
+  useEffect(() => {
+    enabledRef.current = enabled;
+  }, [enabled]);
+
   const refresh = useCallback(async () => {
-    if (busy.current || AppState.currentState === 'background') return;
+    if (!enabledRef.current || busy.current || AppState.currentState === 'background') return;
     busy.current = true;
     try {
       const p = portsRef.current;
@@ -95,33 +103,37 @@ export function useSkyMood(ports: SkyPorts): SkyMood {
     }
   }, [save, clock]);
 
-  // On mount and every time RoadWise comes back to the front.
+  // On mount, when turned back on, and every time RoadWise comes back to the front.
   useEffect(() => {
-    void refresh();
+    if (!enabled) return;
+    const wake = () => {
+      setAt(clock());
+      void refresh();
+    };
+    wake();
     const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') {
-        setAt(clock());
-        void refresh();
-      }
+      if (s === 'active') wake();
     });
     return () => sub.remove();
-  }, [refresh, clock]);
+  }, [enabled, refresh, clock]);
 
   // A weather answer that expires while RoadWise is on screen is asked again once.
   useEffect(() => {
+    if (!enabled) return;
     const c = cache.current;
     if (!c || !c.weather) return;
     const wait = Math.max(60_000, c.fetchedAt + WEATHER_TTL_MS - clock());
     const timer = setTimeout(() => void refresh(), Math.min(wait, MAX_SLEEP_MS));
     return () => clearTimeout(timer);
-  }, [weather, refresh, clock]);
+  }, [enabled, weather, refresh, clock]);
 
   // The phase is read again at its next boundary (every 10 min inside a twilight window).
   useEffect(() => {
+    if (!enabled) return;
     const wait = Math.max(1_000, Math.min(reading.nextAt - clock(), MAX_SLEEP_MS));
     const timer = setTimeout(() => setAt(clock()), wait);
     return () => clearTimeout(timer);
-  }, [reading, clock]);
+  }, [enabled, reading, clock]);
 
   return useMemo(
     () => ({ phase: reading.phase, glow: reading.glow, weather }),
