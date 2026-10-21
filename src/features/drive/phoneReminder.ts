@@ -20,6 +20,7 @@
  * when a reminder is posted or taken down.
  */
 import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
 
 import type { DriveHost, LastFinalized } from '@/drive/host';
 import { ensureNotificationSetup } from '@/features/notifications/categories';
@@ -90,9 +91,10 @@ export function createExpoPhoneReminderPort(): PhoneReminderPort {
           body: req.body,
           sound: false,
           data: { kind: PHONE_REMINDER_KIND, url: DRIVE_HREF, clientTripId: req.clientTripId },
-          ...({ channelId: PHONE_REMINDER_CHANNEL_ID } as object),
         },
-        trigger: null,
+        // Android reads the channel only from the trigger (a channel-aware trigger posts at once);
+        // iOS has no channels and posts a null trigger at once.
+        trigger: Platform.OS === 'android' ? { channelId: PHONE_REMINDER_CHANNEL_ID } : null,
       });
     },
     async posted() {
