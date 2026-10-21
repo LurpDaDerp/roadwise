@@ -120,7 +120,6 @@ enum DetectPolicy {
   static let END_CRAWL_MPS: Double = 1.34112
   static let SAFETY_SLACK_MS: Double = 60_000
   static let FIXLESS_HOLD_MAX_MS: Double = 3_600_000
-  static let ACTIVITY_FRESH_MS: Double = 60_000
   static let ROW_MS: Double = 1_000
   static let MAX_DRIVE_MS: Double = 43_200_000
   static let SUPPRESS_MAX_MS: Double = 10_800_000

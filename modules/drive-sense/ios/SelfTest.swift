@@ -5,8 +5,8 @@
 // `runVector` in `src/extract/vectors.ts` does (fresh state per vector). JS diffs the output with
 // `diffSelfTest`. iOS has no gravity filter and no raw-accelerometer path (CoreMotion supplies
 // gravity and user acceleration), so `gravityFilter` and `androidRaw` vectors get `skipped`. A
-// `reminder` vector (one row of the forgot-to-start reminder's decision table) goes to
-// `TripReminderSelfTest`, which skips Android's activity-transition rows.
+// `detect` vector (one row of the drive detector's decision table) goes to `DetectSelfTest`, which
+// runs the production `DetectPolicy`. A `reminder` vector is Android's (iOS has no reminder): skipped.
 import Foundation
 
 enum SelfTest {
@@ -42,8 +42,10 @@ enum SelfTest {
         }
       case "gravityFilter", "androidRaw":
         results.append(["name": name, "kind": kind, "skipped": skipReason])
+      case "detect":
+        results.append(DetectSelfTest.result(name, v?["inputs"]))
       case "reminder":
-        results.append(TripReminderSelfTest.result(name, v?["inputs"]))
+        results.append(["name": name, "kind": kind, "skipped": "an Android rule"])
       default:
         results.append(["name": name, "kind": kind, "error": "unknown vector kind \(kind)"])
       }

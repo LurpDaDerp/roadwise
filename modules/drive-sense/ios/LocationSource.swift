@@ -1,10 +1,20 @@
-// Location: 1 Hz fixes while capturing, and nothing otherwise (plan §1 decision 4). Standard
-// updates (GPS) run only between `startCapture` and `stopCapture`; the same manager answers the
-// authorisation question. Created and used on the main thread.
+// Location: 1 Hz fixes while the detector senses or a plain capture runs, and nothing otherwise.
+// Every mode keeps the distance filter unset (iOS 16.4+ suspends an app whose updates use one while
+// significant-change monitoring runs) and never shows the blue background-location indicator (U3:
+// the status-bar arrow is enough, and the Dynamic Island stays free for the Live Activity). The same
+// manager answers the authorisation and precise-location questions. Created and used on main.
 import CoreLocation
 import Foundation
 
 final class CaptureLocation: NSObject, CLLocationManagerDelegate {
+  /// `full`: a candidate or a drive; `low`: a drive at the coarse rate (rev1: I5); `suppressed`: the
+  /// "Not driving?" rest, ten-metre accuracy.
+  enum Mode {
+    case full
+    case low
+    case suppressed
+  }
+
   private let manager = CLLocationManager()
   private(set) var running = false
   var onFix: ((FixSample) -> Void)?
@@ -17,8 +27,7 @@ final class CaptureLocation: NSObject, CLLocationManagerDelegate {
     manager.showsBackgroundLocationIndicator = false
   }
 
-  /// README §2 `DriveSenseState.location`. The app asks only for While Using; `always` appears
-  /// only when the user upgraded it in Settings themselves.
+  /// README §2 `DriveSenseState.location`.
   var authorization: String {
     switch manager.authorizationStatus {
     case .authorizedAlways: return "always"
@@ -28,26 +37,28 @@ final class CaptureLocation: NSObject, CLLocationManagerDelegate {
     }
   }
 
-  /// `full`: navigation accuracy (Core Location fuses the motion sensors into the fix, so its
-  /// speed follows the car more closely), every fix (distance filter unset). `low` (rev1: I5):
-  /// coarse, 50 m.
-  func configure(low: Bool) {
-    if low {
-      manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
-      manager.distanceFilter = 50
-    } else {
-      manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
-      manager.distanceFilter = kCLDistanceFilterNone
+  var precise: Bool { manager.accuracyAuthorization == .fullAccuracy }
+
+  /// `full`: navigation accuracy (Core Location fuses the motion sensors into the fix, so its speed
+  /// follows the car more closely). `low`: coarse. `suppressed`: ten metres. Every fix in each.
+  func configure(_ mode: Mode) {
+    switch mode {
+    case .full: manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+    case .low: manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+    case .suppressed: manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
     }
+    manager.distanceFilter = kCLDistanceFilterNone
   }
 
-  func start(low: Bool) {
-    configure(low: low)
+  func start(_ mode: Mode) {
+    configure(mode)
     guard !running else { return }
     running = true
-    // Keeps a capture started in the foreground running in the background on While Using.
+    // Keeps sensing in the background: with Always for a drive that started on its own, with While
+    // Using for one started from the app in front.
     manager.allowsBackgroundLocationUpdates = true
     manager.pausesLocationUpdatesAutomatically = false
+    manager.showsBackgroundLocationIndicator = false
     manager.startUpdatingLocation()
   }
 

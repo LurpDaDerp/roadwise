@@ -1,31 +1,15 @@
-// Phone state for the rows and the `screen` / `thermal` events (README §5).
+// Phone state for the rows and the `thermal` event (README §5).
 //
-// iOS gives an app no direct lock or screen state. `isProtectedDataAvailable` is the proxy:
-// with a passcode it turns false about 10 s after the side-button press (the file-protection
-// grace period), so `locked` lags the real lock (`lockSignal: 'lagged'`). Without a passcode it
-// never turns false, so a locked phone looks unlocked (`lockSignal: 'unreliable'`). The phone-use
-// detector reads these flags for screen switches (RoadWise not in front while the phone is in use),
-// and handles the lag itself (src/core/detectors/phoneSwitch.ts). `appForeground` is "RoadWise is on
-// screen": anything but `.background` (Notification Center, Control Center, Siri, a call banner, a
-// system alert and the app switcher make the app `.inactive` while it stays on screen).
+// Phone use is not tracked, so iOS reads no lock or screen state at all: every row carries the
+// fixed sample below (the row's three phone keys stay because the row contract is shared with
+// Android and with stored traces; JS ignores them) and the `screen` event is never emitted. The
+// thermal state remains (diagnostics).
 import Foundation
-import LocalAuthentication
-import UIKit
 
 enum PhoneState {
-  /// The phone flags now. Main thread only (UIApplication).
+  /// The fixed sample every iOS row carries: nothing is read.
   static func snapshot() -> PhoneSample {
-    dispatchPrecondition(condition: .onQueue(.main))
-    let app = UIApplication.shared
-    let available = app.isProtectedDataAvailable
-    return PhoneSample(locked: !available, screenOn: available, appForeground: app.applicationState != .background)
-  }
-
-  /// `lagged` with a passcode, `unreliable` without one.
-  static func lockSignal() -> String {
-    var error: NSError?
-    let hasPasscode = LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: &error)
-    return hasPasscode ? "lagged" : "unreliable"
+    PhoneSample(locked: false, screenOn: true, appForeground: true)
   }
 
   static func thermalLevel() -> String {
@@ -39,19 +23,15 @@ enum PhoneState {
   }
 }
 
-/// While capturing: emits `screen` when the polled lock/screen pair changes and `thermal` when
-/// the thermal state changes. The 1 Hz poll is the capture's own row tick (no timer of its own);
-/// at `low` rate it is sampled on each fix instead.
+/// While sensing: emits `thermal` when the thermal state changes, and hands the row tick the fixed
+/// phone sample.
 final class PhoneStateMonitor {
-  private var last: (locked: Bool, on: Bool)?
   private var lastThermal: String?
   private var thermalObserver: NSObjectProtocol?
 
-  /// Main thread. Takes the current state as the baseline without emitting it.
+  /// Main thread.
   func start() {
     dispatchPrecondition(condition: .onQueue(.main))
-    let s = PhoneState.snapshot()
-    last = (s.locked, s.screenOn)
     lastThermal = PhoneState.thermalLevel()
     guard thermalObserver == nil else { return }
     thermalObserver = NotificationCenter.default.addObserver(
@@ -65,18 +45,12 @@ final class PhoneStateMonitor {
     dispatchPrecondition(condition: .onQueue(.main))
     if let o = thermalObserver { NotificationCenter.default.removeObserver(o) }
     thermalObserver = nil
-    last = nil
     lastThermal = nil
   }
 
-  /// Main thread. Reads the phone state and emits `screen` if it changed; returns it for the row.
+  /// The row's phone sample (fixed).
   func poll() -> PhoneSample {
-    let s = PhoneState.snapshot()
-    if let l = last, l.locked != s.locked || l.on != s.screenOn {
-      EventHub.shared.emit("screen", ["locked": s.locked, "on": s.screenOn, "ts": TimeBase.nowTs()])
-    }
-    last = (s.locked, s.screenOn)
-    return s
+    PhoneState.snapshot()
   }
 
   private func thermalChanged() {

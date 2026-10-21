@@ -1,8 +1,8 @@
 {
   "platforms": ["apple", "android"],
   "apple": {
-    "modules": ["DriveSenseModule"],
-    "appDelegateSubscribers": ["TripReminderAppDelegate"]
+    "modules": ["DriveSenseModule", "DriveDetectModule"],
+    "appDelegateSubscribers": ["DriveDetectAppDelegate"]
   },
   "android": {
     "modules": ["expo.modules.drivesense.DriveSenseModule"]

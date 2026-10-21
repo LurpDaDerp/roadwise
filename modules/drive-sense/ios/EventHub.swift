@@ -1,18 +1,21 @@
 // Event routing to JS with the README's buffering rule (§3 "Buffering").
 //
-// Everything is emitted on the main queue. An event nobody listens for is buffered (at most
-// EVENT_BUFFER_MAX across all events; when full the oldest `row` goes first, else the oldest
-// event) and delivered in order when the first listener for it attaches. The hub outlives module
-// instances: the capture controller lives for the process.
+// Two hubs: `shared` for the DriveSense module's events and `detect` for the DriveDetect module's
+// (`detectState`, `driveStarted`, `driveEnded`). Everything is emitted on the main queue. An event
+// nobody listens for is buffered (at most EVENT_BUFFER_MAX per hub; when full the oldest `row` goes
+// first, else the oldest event) and delivered in order when the first listener for it attaches. A
+// dropped row is still in the drive's journal, where the host's seq check finds it. The hubs outlive
+// module instances: the detector and the capture live for the process.
 import Foundation
 
-/// Where events go once a module exists (the `DriveSenseModule`).
+/// Where events go once a module exists (`DriveSenseModule`, `DriveDetectModule`).
 protocol DriveSenseEventSink: AnyObject {
   func deliver(_ event: String, _ body: [String: Any])
 }
 
 final class EventHub {
   static let shared = EventHub()
+  static let detect = EventHub()
 
   /// Same number as `EVENT_BUFFER_MAX` in `src/fake.ts`.
   static let EVENT_BUFFER_MAX: Int = 300
@@ -21,20 +24,14 @@ final class EventHub {
   private weak var sink: DriveSenseEventSink?
   private var listening = Set<String>()
   private var buffer: [(event: String, body: [String: Any])] = []
-  /// Called on main when the set of events with a JS listener changes (the watchdog reads `row`).
-  var onListeningChanged: ((_ event: String, _ listening: Bool) -> Void)?
 
   private init() {}
 
-  /// A new module instance: listeners of the old one are gone. Say so for each (as Android does),
-  /// because the old instance's own `detach` may come later and then be ignored — the row
-  /// watchdog must learn that nobody is listening (review N2N3 M2).
+  /// A new module instance: the listeners of the old one are gone.
   func attach(_ sink: DriveSenseEventSink) {
     onMain {
       self.sink = sink
-      let had = self.listening
       self.listening.removeAll()
-      for e in had { self.onListeningChanged?(e, false) }
     }
   }
 
@@ -42,9 +39,7 @@ final class EventHub {
     onMain {
       guard self.sink === sink else { return }
       self.sink = nil
-      let had = self.listening
       self.listening.removeAll()
-      for e in had { self.onListeningChanged?(e, false) }
     }
   }
 
@@ -67,15 +62,13 @@ final class EventHub {
       self.buffer = keep
       for body in pending { sink.deliver(event, body) }
       self.listening.insert(event)
-      self.onListeningChanged?(event, true)
     }
   }
 
   /// The last JS listener for `event` went away (Expo `OnStopObserving`).
   func stopObserving(_ event: String) {
     DispatchQueue.main.async {
-      guard self.listening.remove(event) != nil else { return }
-      self.onListeningChanged?(event, false)
+      self.listening.remove(event)
     }
   }
 

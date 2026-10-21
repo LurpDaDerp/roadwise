@@ -1,8 +1,8 @@
 # DriveSense - the RoadWise background drive-capture module.
 #
 # 1 Hz location and 25 Hz motion capture reduced natively to
-# one feature row per second, phone state, calls and the backup exclusion. README.md is the
-# contract. The version is hard-coded rather than read from a package.json because this is a
+# one feature row per second, the iOS drive detector (wakes, the row journal, the "Recording your
+# drive" note), calls and the backup exclusion. README.md is the contract. The version is hard-coded rather than read from a package.json because this is a
 # local Expo module with no package.json of its own.
 
 Pod::Spec.new do |s|
@@ -12,7 +12,7 @@ Pod::Spec.new do |s|
   s.author         = 'RoadWise'
   s.license        = { :type => 'Proprietary' }
   s.homepage       = 'https://github.com/LurpDaDerp/RoadCash'
-  # 16.4: the Expo SDK's own floor (ExpoModulesCore, ExpoNotifications).
+  # 16.4: the Expo SDK's own floor (ExpoModulesCore).
   s.platforms      = { :ios => '16.4' }
   # Swift-only pod: CocoaPods aborts `pod install` for a pod with Swift sources and no declared
   # Swift version.
@@ -20,8 +20,7 @@ Pod::Spec.new do |s|
   s.source         = { git: '' }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
-  # The forgot-to-start reminder's "Not driving" action joins expo-notifications' delegate list.
-  s.dependency 'ExpoNotifications'
-  s.frameworks = 'CoreLocation', 'CoreMotion', 'CallKit', 'LocalAuthentication', 'UserNotifications'
+  # ActivityKit: whether Live Activities are on (the detector's status reads it, nothing more).
+  s.frameworks = 'CoreLocation', 'CoreMotion', 'CallKit', 'UserNotifications', 'ActivityKit'
   s.source_files = '**/*.{h,m,mm,swift}'
 end

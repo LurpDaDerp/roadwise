@@ -1,10 +1,24 @@
-// Motion activity: live `activity` events while capturing, the motion permission and the README §3
-// mapping.
+// Motion activity: live `activity` events while the detector senses (a candidate, a drive, the "Not
+// driving?" rest), the motion permission, the README §3 mapping, and the motion history a wake and
+// a start's back-fill read.
 //
 // The live feed costs nothing to subscribe to: the motion coprocessor classifies activity whatever
-// the app does. v3 runs it only during a capture (walking auto-end).
+// the app does. Every live report also goes to the detector (`onLive`: the walking end, the cycling
+// veto, the fix-less hold) before the duplicate filter that keeps the JS feed quiet.
 import CoreMotion
 import Foundation
+
+/// A live motion report as the detector reads it, with when it arrived (epoch ms).
+struct LiveActivity {
+  /// walking or running
+  var walking: Bool
+  var cycling: Bool
+  var automotive: Bool
+  var stationary: Bool
+  /// medium or high
+  var confident: Bool
+  var at: Double
+}
 
 enum ActivitySource {
   private static let manager = CMMotionActivityManager()
@@ -17,6 +31,8 @@ enum ActivitySource {
   /// Main thread only.
   private static var live = false
   private static var lastEmitted: (type: String, confidence: String)?
+  /// Every live report, on main (the drive detector).
+  static var onLive: ((LiveActivity) -> Void)?
 
   // MARK: - Mapping (README §3, iOS)
 
@@ -69,40 +85,30 @@ enum ActivitySource {
     }
   }
 
-  // MARK: - The forgot-to-start reminder's look-backs (no drive open; nothing reaches JS)
+  // MARK: - The motion history (a wake's gate, a start's back-fill; nothing reaches JS)
 
-  /// The last 3 h of motion history (always the same window, so a long car stretch that began well
-  /// before the last wake is still seen), summarized by the policy (`TripReminderPolicy.summarize`):
+  /// The motion history between two moments, summarized by the policy (`DetectPolicy.summarize`):
   /// the newest moving car stretch, the run it belongs to, and whether the driver is on foot now.
   /// Resolves on main; empty without Motion & Fitness.
-  static func recentAutomotive(_ done: @escaping (MotionSummary) -> Void) {
-    let now = Date()
-    lookBack(from: now.addingTimeInterval(-TripReminderPolicy.IOS_MOTION_LOOKBACK_MS / 1000), to: now) { list in
-      done(TripReminderPolicy.summarize(list, now.timeIntervalSince1970 * 1000))
-    }
-  }
-
-  /// Whether the driver walked or ran between two moments (a stop's hold, the last 30 s). Resolves on main.
-  static func walkingBetween(_ from: Date, _ to: Date, _ done: @escaping (Bool) -> Void) {
+  static func motionSummary(from: Date, to: Date, _ done: @escaping (DetectMotion) -> Void) {
     lookBack(from: from, to: to) { list in
-      done(list.contains { $0.walking && $0.confident })
+      done(DetectPolicy.summarize(list, to.timeIntervalSince1970 * 1000))
     }
   }
 
   /// The one history query besides the permission prompt. Empty without motion access.
-  private static func lookBack(from: Date, to: Date, _ done: @escaping ([ActivitySample]) -> Void) {
+  private static func lookBack(from: Date, to: Date, _ done: @escaping ([DetectActivity]) -> Void) {
     guard status() == "granted", from < to else {
       done([])
       return
     }
     manager.queryActivityStarting(from: from, to: to, to: queue) { activities, _ in
       let list = (activities ?? []).map { a in
-        ActivitySample(
+        DetectActivity(
           start: a.startDate.timeIntervalSince1970 * 1000,
           automotive: a.automotive,
           stationary: a.stationary,
           onFoot: a.walking || a.running || a.cycling,
-          walking: a.walking || a.running,
           confident: a.confidence != .low
         )
       }
@@ -112,8 +118,8 @@ enum ActivitySource {
 
   // MARK: - Live updates
 
-  /// Main thread. Idempotent. Emits `activity`, skipping an update equal in type and confidence
-  /// to the previous one.
+  /// Main thread. Idempotent. Hands every report to the detector, and emits `activity`, skipping an
+  /// update equal in type and confidence to the previous one.
   static func startLive() {
     dispatchPrecondition(condition: .onQueue(.main))
     guard !live, status() == "granted" else { return }
@@ -122,8 +128,17 @@ enum ActivitySource {
     manager.startActivityUpdates(to: queue) { a in
       guard let a = a else { return }
       let payload = activityPayload(a)
+      let report = LiveActivity(
+        walking: a.walking || a.running,
+        cycling: a.cycling,
+        automotive: a.automotive,
+        stationary: a.stationary,
+        confident: a.confidence != .low,
+        at: TimeBase.nowEpochMs()
+      )
       DispatchQueue.main.async {
         guard live else { return }
+        onLive?(report)
         let key = (payload["type"] as? String ?? "", payload["confidence"] as? String ?? "")
         if let l = lastEmitted, l.type == key.0, l.confidence == key.1 { return }
         lastEmitted = (key.0, key.1)

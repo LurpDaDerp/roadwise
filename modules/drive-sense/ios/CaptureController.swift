@@ -1,22 +1,30 @@
-// The iOS drive-sense core: capture and its rate, the persisted flags, and `getState`. One
-// instance for the process, created lazily on the main thread by the first module call and used
-// on the main thread only; row work happens on `RowPipeline.queue`.
+// The iOS sensing core: GPS, the 25 Hz motion feed, the live motion activity and the 1 s row tick,
+// for whatever the drive detector needs (a candidate, a recording drive, the "Not driving?" rest),
+// and the capture state JS reads (`getState`). One instance for the process, created on main and
+// used on main only; row work happens on `RowPipeline.queue`.
 //
-// v3 (plan §1 decision 4): nothing of the capture runs between captures — no wakes, no motion
-// feed, no timers. (The optional forgot-to-start reminder, `TripReminder`, has its own wake and
-// never starts a capture; this class tells it when a capture starts and ends and never hears from it.)
-// GPS 1 Hz and IMU 25 Hz only while capturing at `full`; at `low` the IMU and the 1 s tick stop
-// and a row is emitted per coarse fix. A capture started in the foreground keeps running in the
-// background on While Using through the `location` background mode (app.config.ts).
+// Rows of the detector's sensing go to `onRow` (the detector buffers or journals them and emits
+// them with their `seq`); a plain capture (a JS `startCapture` with nothing open: tests and dev
+// tools) emits its rows straight to JS without one. Phone use is not read: rows carry the fixed
+// phone sample. JS sees a capture (`capturing`) only while a drive records, never during a candidate.
 import CoreLocation
 import Foundation
 
 final class CaptureController {
   static let shared = CaptureController()
 
-  private enum Key {
+  enum Key {
+    /// Also read by modules/live-drive: a Live Activity found at launch is kept only while this is true.
     static let captureOpen = "drivesense.captureOpen"
     static let captureMode = "drivesense.captureMode"
+  }
+
+  /// What the sensors serve: nothing, the detector, a plain JS capture, or the "Not driving?" rest.
+  enum Sensing {
+    case off
+    case detector
+    case plain
+    case suppressed
   }
 
   private let defaults = UserDefaults.standard
@@ -25,15 +33,19 @@ final class CaptureController {
   private lazy var motion = MotionSource(workQueue: pipeline.queue)
   private let phone = PhoneStateMonitor()
   private let calls = CallObserver()
-  private let watchdog = Watchdog()
   private var rowTimer: DispatchSourceTimer?
 
-  /// The persisted capture-open flag as this process found it (rev1: I2). iOS never restarts a
-  /// capture on its own (no location relaunch without Always), so this only tells JS that the
-  /// previous process died mid-drive; the flag is cleared here so it reports once.
+  /// The detector's rows (the row and its `row` payload, without `seq`), on main.
+  var onRow: ((ExtractedRow, [String: Any]) -> Void)?
+  /// Every fix while anything senses, on main.
+  var onFix: ((FixSample) -> Void)?
+
+  /// The persisted capture-open flag as this process found it (rev1: I2): the previous process died
+  /// mid-drive. The drive itself is resumed or ended from its journal.
   let captureWasOpen: Bool
+  private(set) var sensing: Sensing = .off
+  private var sensingRate = "full"
   private(set) var capturing = false
-  private(set) var rate: String?
   private(set) var mode: String?
   private(set) var captureStartedAt: Int64?
   private(set) var lastRowTs: Int64?
@@ -43,99 +55,136 @@ final class CaptureController {
   private init() {
     dispatchPrecondition(condition: .onQueue(.main))
     captureWasOpen = defaults.bool(forKey: Key.captureOpen)
-    if captureWasOpen { defaults.set(false, forKey: Key.captureOpen) }
     location.onFix = { [weak self] fix in self?.handleFix(fix) }
     pipeline.onRow = { [weak self] row, mock, gen in
-      DispatchQueue.main.async { self?.emitRow(row, mock: mock, generation: gen) }
-    }
-    watchdog.onExpire = { [weak self] in self?.stopCapture() }
-    EventHub.shared.onListeningChanged = { [weak self] event, listening in
-      guard let self = self, event == "row" else { return }
-      self.watchdog.rowListening(listening, capturing: self.capturing)
+      DispatchQueue.main.async { self?.deliverRow(row, mock: mock, generation: gen) }
     }
   }
 
-  // MARK: - Permissions
-
   var locationAuthorization: String { location.authorization }
+  var preciseLocation: Bool { location.precise }
 
-  // MARK: - Capture
+  // MARK: - The detector's sensing
 
-  /// JS `startCapture`: starts a capture, or re-modes the running one. Needs While Using at least.
+  /// A candidate or a drive: navigation GPS, the motion feed, the row tick. A drive confirmed from a
+  /// candidate keeps the same sensors (no gap).
+  func beginSensing() {
+    if sensing == .detector { return }
+    if sensing != .off { endSensors() }
+    sensing = .detector
+    startSensors()
+  }
+
+  /// "Not driving?": ten-metre GPS and the live motion activity; no IMU, no rows.
+  func beginSuppressedSensing() {
+    if sensing != .off { endSensors() }
+    sensing = .suppressed
+    generation += 1
+    ActivitySource.startLive()
+    location.start(.suppressed)
+  }
+
+  func endSensing() {
+    guard sensing != .off else { return }
+    endSensors()
+    sensing = .off
+  }
+
+  /// A drive records (confirmed or resumed): JS sees a capture from its traced start.
+  func openCapture(startedAt: Double, mode newMode: String) {
+    capturing = true
+    mode = newMode
+    captureStartedAt = Int64(jsRound(startedAt))
+    defaults.set(true, forKey: Key.captureOpen)
+    defaults.set(newMode, forKey: Key.captureMode)
+  }
+
+  /// The drive ended or was cancelled.
+  func closeCapture() {
+    capturing = false
+    mode = nil
+    captureStartedAt = nil
+    defaults.set(false, forKey: Key.captureOpen)
+  }
+
+  /// At launch with no drive to resume: the flag a dead process left behind goes.
+  func clearStaleOpenFlag() {
+    if !capturing { defaults.set(false, forKey: Key.captureOpen) }
+  }
+
+  /// A row to JS (the detector's, with its `seq`; a plain capture's, without).
+  func emitRow(_ body: [String: Any], ts: Int64) {
+    lastRowTs = ts
+    EventHub.shared.emit("row", body)
+  }
+
+  // MARK: - A plain capture (JS `startCapture` with nothing open)
+
+  /// JS `startCapture`: re-modes the drive that records; with nothing sensing, starts a plain capture.
+  /// A candidate or a rest owns the sensors: nothing more starts. Needs While Using at least.
   func startCapture(mode newMode: String) -> Bool {
     guard locationAuthorization != "none" else { return false }
     if capturing {
       mode = newMode
       defaults.set(newMode, forKey: Key.captureMode)
-    } else {
-      beginCapture(mode: newMode)
+      return true
     }
+    guard sensing == .off else { return true }
+    sensing = .plain
+    startSensors()
+    openCapture(startedAt: anchor.epochMs, mode: newMode)
     return true
   }
 
-  private func beginCapture(mode newMode: String) {
+  /// Ends a plain capture (a detector drive's end is the detector's).
+  func stopPlainCapture() {
+    guard sensing == .plain else { return }
+    endSensing()
+    closeCapture()
+    DriveDisplayBridge.postEnded()
+  }
+
+  func setCaptureRate(_ newRate: String) {
+    guard capturing, sensing == .detector || sensing == .plain, newRate != sensingRate else { return }
+    sensingRate = newRate
+    if newRate == "low" {
+      // Close the queued rows with the samples already buffered, before the IMU buffer is dropped.
+      pipeline.queue.async { self.pipeline.flush() }
+      stopFullRateSensors()
+      location.configure(.low)
+    } else {
+      location.configure(.full)
+      startFullRateSensors()
+    }
+  }
+
+  // MARK: - Sensors
+
+  private func startSensors() {
     generation += 1
     let gen = generation
-    capturing = true
-    rate = "full"
-    mode = newMode
+    sensingRate = "full"
     anchor = ClockAnchor.now()
-    captureStartedAt = Int64(jsRound(anchor.epochMs))
-    defaults.set(true, forKey: Key.captureOpen)
-    defaults.set(newMode, forKey: Key.captureMode)
     pipeline.queue.async { self.pipeline.reset(generation: gen) }
     phone.start()
     calls.start()
-    // The motion-activity feed runs only during a capture (walking auto-end).
     ActivitySource.startLive()
-    location.start(low: false)
+    location.start(.full)
     startFullRateSensors()
-    watchdog.captureStarted(rowListening: EventHub.shared.isListening("row"))
-    // The forgot-to-start reminder learns a drive is open (one direction only).
-    TripReminder.shared.onCaptureStarted()
-    // The lock probe spends no background task or try while the drive keeps RoadWise running.
-    LockProbe.shared.captureRunning(true)
   }
 
-  /// `end`: what JS said about the drive's end, for the reminder; nil (the watchdog) = now.
-  func stopCapture(end: CaptureEnd? = nil) {
-    guard capturing else { return }
+  private func endSensors() {
     generation += 1
     let gen = generation
-    capturing = false
-    rate = nil
-    mode = nil
-    captureStartedAt = nil
-    defaults.set(false, forKey: Key.captureOpen)
-    watchdog.captureStopped()
     stopFullRateSensors()
     location.stop()
     pipeline.queue.async { self.pipeline.reset(generation: gen) }
     phone.stop()
     calls.stop()
     ActivitySource.stopLive()
-    DriveDisplayBridge.postEnded()
-    // The reminder's session takes the drive's end.
-    TripReminder.shared.onCaptureEnded(end)
-    LockProbe.shared.captureRunning(false)
   }
 
-  func setCaptureRate(_ newRate: String) {
-    guard capturing, newRate != rate else { return }
-    rate = newRate
-    if newRate == "low" {
-      // Close the queued rows with the samples already buffered, before the IMU buffer is dropped.
-      pipeline.queue.async { self.pipeline.flush() }
-      stopFullRateSensors()
-      location.configure(low: true)
-    } else {
-      location.configure(low: false)
-      startFullRateSensors()
-    }
-  }
-
-  /// 25 Hz device motion onto the work queue, and the 1 s row tick (which also polls the phone
-  /// state) on main.
+  /// 25 Hz device motion onto the work queue, and the 1 s row tick on main.
   private func startFullRateSensors() {
     let a = anchor
     pipeline.queue.async {
@@ -160,8 +209,10 @@ final class CaptureController {
     }
   }
 
+  private var rowsFlow: Bool { sensing == .detector || sensing == .plain }
+
   private func tick() {
-    guard capturing, rate == "full" else { return }
+    guard rowsFlow, sensingRate == "full" else { return }
     let ts = jsRound(TimeBase.nowEpochMs())
     let p = phone.poll()
     let gen = generation
@@ -169,10 +220,11 @@ final class CaptureController {
   }
 
   private func handleFix(_ fix: FixSample) {
-    watchdog.check() // a guard may be due (its timer can lag in sleep); may stop the capture
-    guard capturing else { return }
+    guard sensing != .off else { return }
+    onFix?(fix)
+    guard rowsFlow else { return }
     let gen = generation
-    if rate == "low" {
+    if sensingRate == "low" {
       let p = phone.poll()
       pipeline.queue.async { self.pipeline.lowRateFix(fix, phone: p, generation: gen) }
     } else {
@@ -182,7 +234,7 @@ final class CaptureController {
   }
 
   /// The `speed` event (README §3): this fix's speed the moment it lands, with how old it already
-  /// is, for the driving screen. Live only: dropped while no JS listener is attached.
+  /// is, for the driving screen (the waiting screen too). Live only: dropped with no JS listener.
   private func emitSpeed(_ fix: FixSample) {
     let age = Swift.max(0, TimeBase.nowEpochMs() - fix.t)
     EventHub.shared.emitLive("speed", [
@@ -194,34 +246,34 @@ final class CaptureController {
     ])
   }
 
-  /// The `row` payload: the FeatureRow keys plus the bridge-only `mock` (v3, plan §6: the window's
-  /// fix was simulated) and `call` ("ring" | "live", absent with no call: README §1).
-  private func emitRow(_ row: ExtractedRow, mock: Bool, generation gen: Int) {
-    watchdog.check()
-    guard capturing, gen == generation else { return }
-    lastRowTs = row.ts
+  /// The `row` payload: the FeatureRow keys plus the bridge-only `mock` (the window's fix was
+  /// simulated) and `call` ("ring" | "live", absent with no call: README §1).
+  private func deliverRow(_ row: ExtractedRow, mock: Bool, generation gen: Int) {
+    guard rowsFlow, gen == generation else { return }
     var body = row.payload
     body["mock"] = mock
     if let c = calls.state() { body["call"] = c }
-    EventHub.shared.emit("row", body)
+    if sensing == .plain {
+      emitRow(body, ts: row.ts)
+    } else {
+      onRow?(row, body)
+    }
   }
 
   // MARK: - State
 
   func state() -> [String: Any] {
-    let lockSignal = PhoneState.lockSignal()
-    // No passcode: a lock can never be told from a switch, and a proof from before means nothing now.
-    if lockSignal == "unreliable" { LockProbe.shared.passcodeGone() }
     return [
       "capturing": capturing,
-      "rate": rate.map { $0 as Any } ?? NSNull(),
+      "rate": capturing ? (sensingRate as Any) : NSNull(),
       "mode": mode.map { $0 as Any } ?? NSNull(),
       "platform": "ios",
       "location": locationAuthorization,
       "motion": ActivitySource.status(),
-      "lockSignal": lockSignal,
-      "lockProof": LockProbe.shared.proven,
-      "lockDelayMs": LockProbe.shared.lockDelayMs.map { NSNumber(value: $0) as Any } ?? NSNull(),
+      // Phone use is not tracked: no lock state, no proof.
+      "lockSignal": "unreliable",
+      "lockProof": false,
+      "lockDelayMs": NSNull(),
       "captureWasOpen": captureWasOpen,
       "captureStartedAt": captureStartedAt.map { NSNumber(value: $0) as Any } ?? NSNull(),
       "lastRowTs": lastRowTs.map { NSNumber(value: $0) as Any } ?? NSNull(),

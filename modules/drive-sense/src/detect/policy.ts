@@ -80,8 +80,6 @@ export const DETECT = {
   SAFETY_SLACK_MS: 60_000,
   /** A fix-less stretch with car motion pauses the still clock, at most this long. */
   FIXLESS_HOLD_MAX_MS: 3_600_000,
-  /** A live motion report this recent counts for the fix-less hold. */
-  ACTIVITY_FRESH_MS: 60_000,
   ROW_MS: 1_000,
   /** 12 h: the cap on a drive. */
   MAX_DRIVE_MS: 43_200_000,
@@ -388,8 +386,8 @@ export const endClockAt = (ts: number): EndClock => ({ lastMoveTs: ts, holdMs: 0
 
 /**
  * One recorded row. Two trusted rows over 5 mph in a row, or a trusted fix 100 m from where the car
- * went still, is movement: the clock restarts there. A row with no valid fix while the phone still
- * reports car motion (`automotiveNow`) adds a second to the hold, up to an hour.
+ * went still, is movement: the clock restarts there. A row with no valid fix while the phone's
+ * standing motion report is car motion (`automotiveNow`) adds a second to the hold, up to an hour.
  */
 export function endOnRow(c: EndClock, r: DetectRow, automotiveNow: boolean): EndClock {
   if (trusted(r)) {

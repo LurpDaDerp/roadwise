@@ -1,18 +1,16 @@
 // DriveSense — the RoadWise drive-capture module (iOS). README.md is the binding contract;
 // `src/types.ts` the typed half of it.
 //
-// v3 (plan §1 decision 4): a capture starts only from a JS `startCapture` (a user's tap in the
-// foreground) and runs in the background on While Using through the `location` background mode.
-// No arming and nothing that starts a capture by itself. The one thing that runs with no drive open
-// is the optional forgot-to-start reminder (`TripReminder`, off by default): it wakes on
-// significant-location changes and posts at most one note a session, with a one-use token. A tap
-// reaches JS through expo-notifications; JS claims the token here (`claimReminderTap`) and only then
-// starts the drive itself. It is the only user of "Always", asked for only when the driver turns the
-// reminder on.
+// iOS drives start on their own: the drive detector (`DriveDetector`, bridged as the second module
+// `DriveDetect`) confirms a drive, journals its rows and emits each here as a `row` with its `seq`.
+// This module keeps the shared contract (the same events and methods as Android's): `startCapture`
+// re-modes a recording drive or starts a plain capture with nothing open (tests and dev tools);
+// `stopCapture` ends the recording drive with JS's cut. Phone use is not tracked: the lock and
+// reminder methods are fixed answers.
 //
-// The module is a thin bridge: the capture core (`CaptureController`) and the event hub exist for
-// the whole process, and every method below runs on the main queue, where they live. Rejections
-// carry only the contract's `CodedError` codes.
+// The module is a thin bridge: the capture core (`CaptureController`), the detector and the event
+// hubs exist for the whole process, and every method below runs on the main queue, where they live.
+// Rejections carry only the contract's `CodedError` codes.
 import AVFoundation
 import ExpoModulesCore
 import Foundation
@@ -26,15 +24,13 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
 
     OnCreate {
       EventHub.shared.attach(self)
-      // The screen-switch lock proof (README §5): observes leaving, the lock report and returning.
-      LockProbe.shared.start()
     }
 
     OnDestroy {
       EventHub.shared.detach(self)
     }
 
-    // Buffering (README §3) and the row watchdog (§6) both key on which events have a JS listener.
+    // Buffering (README §3) keys on which events have a JS listener.
     OnStartObserving("activity") { EventHub.shared.startObserving("activity") }
     OnStopObserving("activity") { EventHub.shared.stopObserving("activity") }
     OnStartObserving("row") { EventHub.shared.startObserving("row") }
@@ -42,6 +38,7 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     // Live only (never buffered): `emitLive` delivers it only while a listener is attached.
     OnStartObserving("speed") { EventHub.shared.startObserving("speed") }
     OnStopObserving("speed") { EventHub.shared.stopObserving("speed") }
+    // Android's: iOS reads no screen state and never emits it.
     OnStartObserving("screen") { EventHub.shared.startObserving("screen") }
     OnStopObserving("screen") { EventHub.shared.stopObserving("screen") }
     OnStartObserving("thermal") { EventHub.shared.startObserving("thermal") }
@@ -65,10 +62,10 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
       }
     }.runOnQueue(.main)
 
-    // The drive's end for the reminder (README §2): kind "now" (nothing known), "dropped" (the drive
-    // was not kept) or "at" (its driving ended at endedAt), and whether the car was at driving speed.
+    // The drive's end from JS (README §2): kind "now" (nothing known), "dropped" (not kept) or "at"
+    // (its driving ended at endedAt, the cut). A recording drive's end is journaled with cause "js".
     AsyncFunction("stopCapture") { (kind: String, endedAt: Double, drivingAtEnd: Bool, promise: Promise) in
-      CaptureController.shared.stopCapture(end: CaptureEnd.of(kind, endedAt, drivingAtEnd))
+      DriveDetector.shared.stopCapture(end: CaptureEnd.of(kind, endedAt, drivingAtEnd))
       promise.resolve(nil)
     }.runOnQueue(.main)
 
@@ -126,36 +123,34 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
       promise.resolve(true)
     }
 
-    // The optional forgot-to-start reminder (README "Forgot-to-start reminder"). It never starts a
-    // capture: JS claims a tap's token and starts the drive itself.
-    AsyncFunction("setTripReminder") { (enabled: Bool, promise: Promise) in
-      TripReminder.shared.setEnabled(enabled) { promise.resolve($0) }
-    }.runOnQueue(.main)
+    // The forgot-to-start reminder is Android's: on iOS (where drives start on their own) the shared
+    // methods answer fixed values. The "Always" request is DriveDetect's `requestAlways`.
+    AsyncFunction("setTripReminder") { (_: Bool, promise: Promise) in
+      promise.resolve(DriveSenseModule.reminderOff())
+    }
 
     AsyncFunction("getTripReminderStatus") { (promise: Promise) in
-      TripReminder.shared.status { promise.resolve($0) }
-    }.runOnQueue(.main)
+      promise.resolve(DriveSenseModule.reminderOff())
+    }
 
-    // The one "Always" request, from the driver's tap that turns the reminder on.
+    // The current location answer, without prompting.
     AsyncFunction("requestReminderLocation") { (promise: Promise) in
-      TripReminder.shared.requestAlways { promise.resolve($0) }
+      let a = CaptureController.shared.locationAuthorization
+      promise.resolve(a == "none" ? "denied" : a)
     }.runOnQueue(.main)
 
-    // True once, for the note's token, while its session lasts (motion folded in) and no drive is open.
-    AsyncFunction("claimReminderTap") { (token: String, promise: Promise) in
-      TripReminder.shared.claim(token) { promise.resolve($0) }
-    }.runOnQueue(.main)
+    AsyncFunction("claimReminderTap") { (_: String, promise: Promise) in
+      promise.resolve(false)
+    }
 
-    // iOS hands a reminder tap to JS through expo-notifications: nothing is ever held here.
     AsyncFunction("takeReminderTap") { (promise: Promise) in
       promise.resolve(nil)
     }
 
-    // An in-drive lock proof (README §5): a lock reported within 15 s of RoadWise leaving the screen.
-    AsyncFunction("markLockProof") { (delayMs: Double, promise: Promise) in
-      LockProbe.shared.mark(delayMs: delayMs)
+    // Phone use is not tracked: no lock proof is kept.
+    AsyncFunction("markLockProof") { (_: Double, promise: Promise) in
       promise.resolve(nil)
-    }.runOnQueue(.main)
+    }
 
     // Android's (the navigation button): iOS finds and opens navigation apps by URL scheme from JS.
     AsyncFunction("listInstalledApps") { (_: [String], promise: Promise) in
@@ -203,6 +198,11 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
     }
   }
 
+  /// iOS's fixed reminder status (`tripReminderStatusSchema`): off, nothing missing.
+  static func reminderOff() -> [String: Any] {
+    ["enabled": false, "state": "off", "missing": [String]()]
+  }
+
   // MARK: - DriveSenseEventSink
 
   func deliver(_ event: String, _ body: [String: Any]) {
@@ -223,6 +223,12 @@ struct DriveDisplayRecord: Record {
   @Field var skyMid: String?
   @Field var skyLow: String?
   @Field var accent: String?
+  // The Live Activity's (plan §3.10): the speed's tint, over the limit, the hint, the weather line.
+  @Field var speedTint: String?
+  @Field var speeding: Bool = false
+  @Field var notDrivingAvailable: Bool = false
+  @Field var weatherKind: String?
+  @Field var weatherText: String?
 }
 
 /// The hand-off to the Live Activity module. `modules/live-drive` observes `name` on main and
@@ -232,7 +238,10 @@ enum DriveDisplayBridge {
   static let name = Notification.Name("roadwise.driveDisplay")
 
   static func post(_ s: DriveDisplayRecord) {
-    var info: [String: Any] = ["unit": s.unit, "stopped": s.stopped, "ended": s.ended]
+    var info: [String: Any] = [
+      "unit": s.unit, "stopped": s.stopped, "ended": s.ended,
+      "speeding": s.speeding, "notDrivingAvailable": s.notDrivingAvailable,
+    ]
     if let v = s.speed { info["speed"] = v }
     if let v = s.limit { info["limit"] = v }
     if let v = s.points { info["points"] = v }
@@ -241,10 +250,13 @@ enum DriveDisplayBridge {
     if let v = s.skyMid { info["skyMid"] = v }
     if let v = s.skyLow { info["skyLow"] = v }
     if let v = s.accent { info["accent"] = v }
+    if let v = s.speedTint { info["speedTint"] = v }
+    if let v = s.weatherKind { info["weatherKind"] = v }
+    if let v = s.weatherText { info["weatherText"] = v }
     NotificationCenter.default.post(name: name, object: nil, userInfo: info)
   }
 
-  /// The capture ended natively (watchdog, or any `stopCapture`): the Live Activity must not outlive it.
+  /// The drive ended or was cancelled (any way): the Live Activity must not outlive it.
   static func postEnded() {
     NotificationCenter.default.post(name: name, object: nil, userInfo: ["unit": "mph", "stopped": true, "ended": true])
   }

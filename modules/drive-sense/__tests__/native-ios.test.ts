@@ -1,12 +1,12 @@
 // The iOS module read as text. Swift cannot be compiled or run under Jest, so this suite pins what
-// can be checked statically against the JS contract: the event list, one AsyncFunction per contract
-// method, the port's constants, the location and motion configuration, the manual-start-only rule
-// (plan §1 decision 4), and the rule that `selfTest` runs the production extractor rather than a
-// copy. The forgot-to-start reminder is held to "it only notifies" and to its policy mirror.
-// Behaviour is proven by the device build.
+// can be checked statically against the JS contract: the two modules' events and methods, the
+// port's constants, the location and motion configuration, where each OS facility may be touched
+// (wakes, "Always", background tasks, notifications), the drive detector's transitions as written,
+// and the rule that `selfTest` runs the production extractor and policy rather than copies.
+// Behaviour is proven by the device build and its self-test.
 import * as CONSTANTS from '../src/extract/constants';
-import { REMINDER } from '../src/reminder/policy';
 import { DETECT } from '../src/detect/policy';
+import { DRIVE_DETECT_ERROR_CODES, DRIVE_DETECT_EVENTS, DRIVE_DETECT_METHODS } from '../src/detect/types';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
 import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS, DRIVE_SENSE_SYNC_METHODS } from '../src/types';
@@ -40,9 +40,19 @@ const code = (f: string) =>
     .join('\n');
 const allCode = () => swiftFiles.map(code).join('\n');
 const moduleCode = () => code('DriveSenseModule.swift');
+const detectCode = () => code('DriveDetectModule.swift');
+/** A function's body, from its declaration to the first line closing at two-space indent. */
+const fn = (src: string, decl: string) => new RegExp(`${decl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?\\n {2}\\}`).exec(src)?.[0] ?? '';
+const detector = () => code('DriveDetector.swift') + code('DriveDetectorDrive.swift') + code('DriveDetectorSensing.swift');
+
+/** `re` matches in exactly the `allowed` files (and in each of them). */
+function only(re: RegExp, allowed: string[]) {
+  for (const f of swiftFiles) expect({ f, uses: re.test(code(f)) }).toEqual({ f, uses: allowed.includes(f) && re.test(code(f)) });
+  for (const f of allowed) expect({ f, uses: re.test(code(f)) }).toEqual({ f, uses: true });
+}
 
 describe('iOS drive-sense module (text)', () => {
-  it("has the files the contract names; the one app-delegate subscriber is the reminder's launch hook", () => {
+  it('has the files the contract names, and none of the retired ones', () => {
     for (const f of [
       'DriveSenseModule.swift',
       'CaptureController.swift',
@@ -53,25 +63,36 @@ describe('iOS drive-sense module (text)', () => {
       'Alignment.swift',
       'PhoneState.swift',
       'CallObserver.swift',
-      'LockProbe.swift',
-      'Watchdog.swift',
       'Backup.swift',
-      'TripReminder.swift',
-      'TripReminderLook.swift',
-      'TripReminderAccess.swift',
-      'TripReminderPolicy.swift',
-      'TripReminderWakePolicy.swift',
-      'TripReminderNotifier.swift',
-      'TripReminderAppDelegate.swift',
-      'TripReminderSelfTest.swift',
+      'EventHub.swift',
+      'DriveDetector.swift',
+      'DriveDetectorDrive.swift',
+      'DriveDetectorSensing.swift',
+      'DetectStateRecord.swift',
+      'WakeSources.swift',
+      'DriveDetectAccess.swift',
+      'DetectPolicy.swift',
+      'DetectEndPolicy.swift',
+      'DetectSelfTest.swift',
+      'RowBuffer.swift',
+      'RowJournal.swift',
+      'RowJournalRead.swift',
+      'DriveNotifier.swift',
+      'DriveDetectModule.swift',
+      'DriveDetectAppDelegate.swift',
     ]) {
       expect(swiftFiles).toContain(f);
     }
-    expect(swiftFiles).not.toContain('DriveSenseAppDelegateSubscriber.swift');
+    for (const f of swiftFiles) expect({ f, retired: /^(LockProbe|Watchdog|TripReminder)/.test(f) }).toEqual({ f, retired: false });
+  });
+
+  it('registers both modules for Apple and the detector launch hook; the Android block is untouched', () => {
     const config = JSON.parse(fs.readFileSync(path.join(MODULE_DIR, 'expo-module.config.json'), 'utf8'));
-    expect(config.apple.modules).toEqual(['DriveSenseModule']);
-    expect(config.apple.appDelegateSubscribers).toEqual(['TripReminderAppDelegate']);
-    expect(code('TripReminderAppDelegate.swift')).toMatch(/public class TripReminderAppDelegate: ExpoAppDelegateSubscriber \{/);
+    expect(config.platforms).toEqual(['apple', 'android']);
+    expect(config.apple.modules).toEqual(['DriveSenseModule', 'DriveDetectModule']);
+    expect(config.apple.appDelegateSubscribers).toEqual(['DriveDetectAppDelegate']);
+    expect(config.android).toEqual({ modules: ['expo.modules.drivesense.DriveSenseModule'] });
+    expect(code('DriveDetectAppDelegate.swift')).toMatch(/public class DriveDetectAppDelegate: ExpoAppDelegateSubscriber \{/);
   });
 
   it('keeps every Swift file under 300 lines', () => {
@@ -93,21 +114,21 @@ describe('iOS drive-sense module (text)', () => {
     expect(new Set(declared).size).toBe(declared.length);
   });
 
-  it('observes listeners for every event (buffering and the row watchdog)', () => {
+  it('observes listeners for every event (buffering)', () => {
     const src = moduleCode();
     for (const e of DRIVE_SENSE_EVENTS) {
-      expect(src).toContain(`OnStartObserving("${e}")`);
-      expect(src).toContain(`OnStopObserving("${e}")`);
+      expect(src).toContain(`OnStartObserving("${e}") { EventHub.shared.startObserving("${e}") }`);
+      expect(src).toContain(`OnStopObserving("${e}") { EventHub.shared.stopObserving("${e}") }`);
     }
   });
 
-  it('rejects only with the contract error codes, each one used', () => {
-    const used = new Set([...allCode().matchAll(/"(E_[A-Z_]+)"/g)].map((x) => x[1]));
-    for (const c of used) expect(DRIVE_SENSE_ERROR_CODES).toContain(c);
+  it('rejects only with the contract error codes of each module, each one used', () => {
+    const codes = (src: string) => new Set([...src.matchAll(/"(E_[A-Z_]+)"/g)].map((x) => x[1]));
+    const sense = codes(swiftFiles.filter((f) => f !== 'DriveDetectModule.swift').map(code).join('\n'));
+    for (const c of sense) expect(DRIVE_SENSE_ERROR_CODES).toContain(c);
     // iOS has no foreground service, so E_FGS_REFUSED is Android-only.
-    for (const c of DRIVE_SENSE_ERROR_CODES.filter((x) => x !== 'E_FGS_REFUSED')) {
-      expect(used).toContain(c);
-    }
+    for (const c of DRIVE_SENSE_ERROR_CODES.filter((x) => x !== 'E_FGS_REFUSED')) expect(sense).toContain(c);
+    expect([...codes(detectCode())]).toEqual([...DRIVE_DETECT_ERROR_CODES]);
   });
 
   it('declares every extraction constant with the reference value', () => {
@@ -134,54 +155,43 @@ describe('iOS drive-sense module (text)', () => {
     }
   });
 
-  it('configures capture location for 1 Hz automotive updates that never pause', () => {
+  it('configures location for 1 Hz automotive updates that never pause, with no indicator and no distance filter anywhere (U3; the iOS 16.4 rule)', () => {
     const src = code('LocationSource.swift');
     expect(src).toContain('pausesLocationUpdatesAutomatically = false');
     expect(src).toContain('allowsBackgroundLocationUpdates = true');
-    expect(src).toContain('showsBackgroundLocationIndicator = false');
     expect(src).toContain('.automotiveNavigation');
-    // Navigation accuracy while capturing: Core Location fuses the motion sensors into the fix.
-    expect(src).toContain('manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation');
-    expect(src).toContain('kCLDistanceFilterNone');
-    // low rate (rev1: I5)
-    expect(src).toContain('kCLLocationAccuracyHundredMeters');
-    expect(src).toMatch(/distanceFilter = 50\b/);
+    expect(src).toContain('case .full: manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation');
+    expect(src).toContain('case .low: manager.desiredAccuracy = kCLLocationAccuracyHundredMeters');
+    expect(src).toContain('case .suppressed: manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters');
+    expect(src).toMatch(/manager\.distanceFilter = kCLDistanceFilterNone/);
+    const all = allCode();
+    expect(all).not.toMatch(/distanceFilter = \d/);
+    expect(all).not.toMatch(/showsBackgroundLocationIndicator = true/);
+    for (const f of ['LocationSource.swift', 'WakeSources.swift']) expect(code(f)).toContain('showsBackgroundLocationIndicator = false');
+    expect(all).not.toMatch(/kCLLocationAccuracyKilometer|kCLLocationAccuracyThreeKilometers/);
   });
 
-  it("starts standard location updates only from the capture source and the reminder's bounded look", () => {
-    for (const f of swiftFiles) {
-      const src = code(f);
-      if (f === 'LocationSource.swift' || f === 'TripReminderLook.swift') continue;
-      expect({ f, gps: /startUpdatingLocation|requestLocation\(/.test(src) }).toEqual({ f, gps: false });
-    }
-    expect(code('TripReminderLook.swift').match(/startUpdatingLocation\(/g)).toHaveLength(1);
+  it('touches each OS facility in one place only', () => {
+    only(/startUpdatingLocation|requestLocation\(/, ['LocationSource.swift']);
+    only(/startMonitoringSignificantLocationChanges/, ['WakeSources.swift']);
+    only(/startMonitoringVisits/, ['WakeSources.swift']);
+    only(/startMonitoring\(for|CLCircularRegion/, ['WakeSources.swift']);
+    only(/requestAlwaysAuthorization/, ['DriveDetectAccess.swift']);
+    only(/beginBackgroundTask/, ['DriveDetector.swift']);
+    only(/launchOptions/, ['DriveDetectAppDelegate.swift']);
+    only(/UNUserNotificationCenter|UNMutableNotificationContent/, ['DriveNotifier.swift']);
+    only(/FileHandle|createFile/, ['RowJournal.swift', 'RowJournalRead.swift']);
+    only(/UserDefaults/, ['CaptureController.swift', 'DetectStateRecord.swift', 'DriveDetectAccess.swift']);
   });
 
-  // plan §1 decision 4: no arming and nothing that starts a capture by itself. The reminder's wake,
-  // its "Always" request and its launch hook live in the reminder's own files only.
-  it("wakes, Always and launch hooks only in the reminder's files; no regions, no relaunch reading, no arming", () => {
-    const only = (re: RegExp, allowed: string[]) => {
-      for (const f of swiftFiles) expect({ f, uses: re.test(code(f)) }).toEqual({ f, uses: allowed.includes(f) && re.test(code(f)) });
-      for (const f of allowed) expect({ f, uses: re.test(code(f)) }).toEqual({ f, uses: true });
-    };
-    only(/startMonitoringSignificantLocationChanges/, ['TripReminder.swift']);
-    only(/requestAlwaysAuthorization/, ['TripReminderAccess.swift']);
-    only(/beginBackgroundTask/, ['TripReminder.swift', 'LockProbe.swift']);
-    only(/launchOptions/, ['TripReminderAppDelegate.swift']);
-    only(/isProtectedDataAvailable/, ['PhoneState.swift']);
+  it('nothing of the retired phone-use and reminder code remains, and no relaunch reading', () => {
     const src = allCode();
-    expect(src).not.toMatch(/CLCircularRegion|startMonitoring\(for|CLBackgroundActivitySession|CLServiceSession|willFinishLaunchingWithOptions|UNUserNotificationCenter\.current\(\)\.delegate\s*=|\.location\]/);
-    // The detector's pure policy names these words as data (a wake gate, a start source).
-    const pure = new Set(['DetectPolicy.swift', 'DetectEndPolicy.swift', 'DetectSelfTest.swift', 'RowJournalRead.swift', 'TripReminderSelfTest.swift']);
-    expect(swiftFiles.filter((f) => !pure.has(f)).map(code).join('\n')).not.toMatch(/\barmed\b|func arm\(|disarm|WakeLocation|WakeTask|nativeStarted: true/);
-    // No "wake" event: the string appears only in the self-tests and the pure policy.
-    for (const f of swiftFiles.filter((x) => !pure.has(x))) expect({ f, wake: /"wake"/.test(code(f)) }).toEqual({ f, wake: false });
-    const ctrl = code('CaptureController.swift');
-    expect(ctrl).toMatch(/func startCapture\(mode newMode: String\) -> Bool \{\s*guard locationAuthorization != "none" else \{ return false \}/);
-    // the motion feed runs only inside a capture
-    expect(ctrl).toMatch(/private func beginCapture\([\s\S]*?ActivitySource\.startLive\(\)/);
-    expect(ctrl).toMatch(/func stopCapture\(end: CaptureEnd\? = nil\)[\s\S]*?ActivitySource\.stopLive\(\)/);
-    expect(ctrl.match(/ActivitySource\.startLive\(\)/g)).toHaveLength(1);
+    expect(src).not.toMatch(
+      /CLMonitor\b|CLBackgroundActivitySession|CLServiceSession|LAContext|LocalAuthentication|isProtectedDataAvailable|NO_LISTENER_TIMEOUT|LockProbe|Watchdog|\bTripReminder|lockSignal\(\)|passcodeGone|willFinishLaunchingWithOptions|UNUserNotificationCenter\.current\(\)\.delegate\s*=|\.location\]|addDelegate\(|NotificationCenterManager/
+    );
+    // The Live Activity is live-drive's: drive-sense never requests one.
+    expect(src).not.toMatch(/Activity\.request|Activity<|import ActivityKit[\s\S]*Activity\.request/);
+    expect(src).not.toMatch(/emit\("screen"/);
   });
 
   it('uses device motion in xArbitraryZVertical at 25 Hz and never the magnetometer', () => {
@@ -192,69 +202,48 @@ describe('iOS drive-sense module (text)', () => {
     expect(code('MotionSource.swift')).toMatch(/1\.0 \/ ExtractConstants\.IMU_RATE_HZ/);
   });
 
-  it('runs the row-listener watchdog with the contract limit', () => {
-    const src = code('Watchdog.swift');
-    expect(src).toMatch(/NO_LISTENER_TIMEOUT_S\s*(?::\s*\w+)?\s*=\s*300\b/);
-    expect(src).not.toMatch(/CLAIM_TIMEOUT/);
-  });
-
-  it('keeps watchdog deadlines on a clock that runs in sleep, checked on rows and fixes (N2N3 M1)', () => {
-    const src = code('Watchdog.swift');
-    expect(src).toContain('asyncAfter(wallDeadline:');
-    expect(src).not.toMatch(/asyncAfter\(deadline:/);
-    expect(src).toContain('CLOCK_MONOTONIC');
-    const ctrl = code('CaptureController.swift');
-    expect(ctrl).toMatch(/func handleFix[\s\S]{0,80}watchdog\.check\(\)/);
-    expect(ctrl).toMatch(/func emitRow[\s\S]{0,120}watchdog\.check\(\)/);
-  });
-
-  it('tells the watchdog the old listeners are gone when a new module attaches (N2N3 M2)', () => {
-    expect(code('EventHub.swift')).toMatch(
-      /func attach[\s\S]{0,200}for e in had \{ self\.onListeningChanged\?\(e, false\) \}/
-    );
-  });
-
-  it('maps motion activity with the README precedence', () => {
+  it('maps motion activity with the README precedence, and hands every live report to the detector before the JS dedupe', () => {
     const src = code('ActivitySource.swift');
-    const order = ['.walking', '.running', '.cycling', '.automotive', '.stationary'].map((k) =>
-      src.indexOf(`if a${k} {`)
-    );
+    const order = ['.walking', '.running', '.cycling', '.automotive', '.stationary'].map((k) => src.indexOf(`if a${k} {`));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+    const live = fn(src, 'static func startLive()');
+    expect(live.indexOf('onLive?(report)')).toBeGreaterThan(-1);
+    expect(live.indexOf('onLive?(report)')).toBeLessThan(live.indexOf('if let l = lastEmitted'));
+    expect(live).toMatch(/walking: a\.walking \|\| a\.running,\s*cycling: a\.cycling,/);
+    expect(live).toMatch(/confident: a\.confidence != \.low,/);
   });
 
-  // No trip detection outside a capture: no look-back at the OS motion history.
-  it("reads motion history only for the permission prompt and the reminder's look-backs, all in ActivitySource", () => {
+  it('reads motion history only for the permission prompt and the detector, all in ActivitySource', () => {
     const src = allCode();
-    expect(src).not.toMatch(/forgottenDrive|FORGOTTEN_MIN_S|checkForgottenDrive|setForgotToStartReminder|queryMotionHistory|static func history\(/);
     expect(src.match(/queryActivityStarting\(/g)).toHaveLength(2);
     expect(code('ActivitySource.swift').match(/queryActivityStarting\(/g)).toHaveLength(2);
-    const lookBack = /private static func lookBack\([\s\S]*?\n {2}\}/.exec(code('ActivitySource.swift'))?.[0] ?? '';
+    const lookBack = fn(code('ActivitySource.swift'), 'private static func lookBack(');
     expect(lookBack).toMatch(/guard status\(\) == "granted", from < to else/);
-    expect(lookBack).toMatch(/queryActivityStarting\(/);
-    expect(lookBack).not.toMatch(/EventHub/);
-    const prompt = /static func requestPermission\([\s\S]*?\n {2}\}/.exec(code('ActivitySource.swift'))?.[0] ?? '';
+    expect(lookBack).toMatch(/onFoot: a\.walking \|\| a\.running \|\| a\.cycling,/);
+    expect(code('ActivitySource.swift')).toMatch(/done\(DetectPolicy\.summarize\(list, to\.timeIntervalSince1970 \* 1000\)\)/);
+    const prompt = fn(code('ActivitySource.swift'), 'static func requestPermission(');
     expect(prompt).toMatch(/guard s == "undetermined" else/);
     expect(prompt).toMatch(/queryActivityStarting\(from: now\.addingTimeInterval\(-60\), to: now/);
   });
 
-  // plan §6: the background surface
-  it('setDriveDisplay forwards to the Live Activity through the roadwise.driveDisplay notification', () => {
+  it('setDriveDisplay forwards every key to the Live Activity through the roadwise.driveDisplay notification', () => {
     const src = moduleCode();
     expect(src).toMatch(/AsyncFunction\("setDriveDisplay"\) \{ \(state: DriveDisplayRecord, promise: Promise\) in\s*DriveDisplayBridge\.post\(state\)/);
     expect(src).toMatch(/static let name = Notification\.Name\("roadwise\.driveDisplay"\)/);
     expect(src).toMatch(/NotificationCenter\.default\.post\(name: name, object: nil, userInfo: info\)/);
-    for (const k of ['unit', 'stopped', 'ended', 'speed', 'limit', 'points', 'pointsDelta']) expect(src).toContain(`"${k}"`);
+    for (const k of ['unit', 'stopped', 'ended', 'speed', 'limit', 'points', 'pointsDelta', 'speeding', 'notDrivingAvailable']) expect(src).toContain(`"${k}"`);
     expect(src).toMatch(/struct DriveDisplayRecord: Record/);
-    // the app's sky: strings on the record, each in userInfo only when present
-    for (const k of ['skyTop', 'skyMid', 'skyLow', 'accent']) {
+    for (const k of ['skyTop', 'skyMid', 'skyLow', 'accent', 'speedTint', 'weatherKind', 'weatherText']) {
       expect(src).toContain(`@Field var ${k}: String?`);
       expect(src).toContain(`if let v = s.${k} { info["${k}"] = v }`);
     }
-    // review I1: a native stop (JS or the watchdog) ends the Live Activity too
+    expect(src).toContain('@Field var speeding: Bool = false');
+    expect(src).toContain('@Field var notDrivingAvailable: Bool = false');
+    // every end ends the Live Activity: a detector drive's, a cancel's and a plain capture's
     expect(src).toMatch(/static func postEnded\(\)[\s\S]{0,200}"ended": true/);
-    const stop = /func stopCapture\(end: CaptureEnd\? = nil\) \{[\s\S]*?\n {2}\}/.exec(code('CaptureController.swift'))?.[0] ?? '';
-    expect(stop).toContain('DriveDisplayBridge.postEnded()');
+    expect(fn(code('DriveDetectorDrive.swift'), 'func finishSensing()')).toContain('DriveDisplayBridge.postEnded()');
+    expect(fn(code('CaptureController.swift'), 'func stopPlainCapture()')).toContain('DriveDisplayBridge.postEnded()');
   });
 
   // plan §6; spec "Integrity · GPS spoofing"
@@ -265,8 +254,10 @@ describe('iOS drive-sense module (text)', () => {
     expect(loc).toMatch(/mock: Self\.isSimulated\(l\)/);
     expect(code('ExtractMath.swift')).toMatch(/var mock: Bool = false/);
     expect(code('ExtractMath.swift')).not.toMatch(/"mock"/); // never in `payload`: the self-test rows stay the contract's keys
-    const ctrl = code('CaptureController.swift');
-    expect(ctrl).toMatch(/var body = row\.payload\s*body\["mock"\] = mock\s*if let c = calls\.state\(\) \{ body\["call"\] = c \}\s*EventHub\.shared\.emit\("row", body\)/);
+    const deliver = fn(code('CaptureController.swift'), 'private func deliverRow(');
+    expect(deliver).toMatch(/var body = row\.payload\s*body\["mock"\] = mock\s*if let c = calls\.state\(\) \{ body\["call"\] = c \}/);
+    // a plain capture's rows go to JS as they are; the detector's go to it (buffer or journal + seq)
+    expect(deliver).toMatch(/if sensing == \.plain \{\s*emitRow\(body, ts: row\.ts\)\s*\} else \{\s*onRow\?\(row, body\)\s*\}/);
     const pipe = code('RowPipeline.swift');
     expect(pipe).toMatch(/var onRow: \(\(ExtractedRow, Bool, Int\) -> Void\)\?/);
     expect(pipe).toMatch(/mock: fix\.mock\)/);
@@ -274,7 +265,7 @@ describe('iOS drive-sense module (text)', () => {
   });
 
   it('rows carry the bridge-only call state: "live" for a connected call, "ring" for one ringing or dialing, nothing with none', () => {
-    const state = /func state\(\) -> String\? \{[\s\S]*?\n {2}\}/.exec(code('CallObserver.swift'))?.[0] ?? '';
+    const state = fn(code('CallObserver.swift'), 'func state() -> String? {');
     expect(state).toMatch(/dispatchPrecondition\(condition: \.onQueue\(\.main\)\)/);
     expect(state).toMatch(/guard let calls = observer\?\.calls else \{ return nil \}/);
     expect(state).toMatch(/if calls\.contains\(where: \{ \$0\.hasConnected && !\$0\.hasEnded \}\) \{ return "live" \}\s*if calls\.contains\(where: \{ !\$0\.hasEnded \}\) \{ return "ring" \}\s*return nil/);
@@ -282,64 +273,30 @@ describe('iOS drive-sense module (text)', () => {
     expect(code('ExtractMath.swift')).not.toMatch(/"call"/);
   });
 
-  it('appForeground is RoadWise on screen: anything but the background (an .inactive app is still on screen)', () => {
-    const src = code('PhoneState.swift');
-    expect(src).toMatch(/appForeground: app\.applicationState != \.background\)/);
-    expect(src).not.toMatch(/applicationState == \.active/);
+  it('reads no phone state: every row carries the fixed sample, the screen state is fixed, no lock proof', () => {
+    const p = code('PhoneState.swift');
+    expect(p).toMatch(/static func snapshot\(\) -> PhoneSample \{\s*PhoneSample\(locked: false, screenOn: true, appForeground: true\)\s*\}/);
+    expect(p).not.toMatch(/UIApplication|import UIKit|LocalAuthentication/);
+    expect(p).toContain('thermalState');
+    const state = fn(code('CaptureController.swift'), 'func state() -> [String: Any] {');
+    expect(state).toMatch(/"lockSignal": "unreliable",\s*"lockProof": false,\s*"lockDelayMs": NSNull\(\),/);
+    expect(moduleCode()).toMatch(/AsyncFunction\("markLockProof"\) \{ \(_: Double, promise: Promise\) in\s*promise\.resolve\(nil\)\s*\}/);
   });
 
-  it('the lock probe: passcode phones only, at most 20 background tasks of 16 s, a proof only within 15 s of leaving', () => {
-    const p = code('LockProbe.swift');
-    expect(p).toMatch(/static let LOCK_PROOF_MAX_MS = 15_000\.0/);
-    expect(p).toMatch(/static let PROBE_MAX_TRIES = 20\b/);
-    expect(p).toMatch(/static let PROBE_TASK_S = 16\.0/);
-    for (const key of ['"drivesense.lockProof"', '"drivesense.lockDelayMs"', '"drivesense.lockProbeTries"']) expect(p).toContain(key);
-    for (const n of ['didEnterBackgroundNotification', 'protectedDataWillBecomeUnavailableNotification', 'willEnterForegroundNotification']) {
-      expect(p).toMatch(new RegExp(`addObserver\\(forName: UIApplication\\.${n}, object: nil, queue: \\.main\\)`));
-    }
-    expect(p).toMatch(/guard self\.observers\.isEmpty else \{ return \}/);
-    // a background task only on a passcode phone not yet proven, one at a time, under the try cap
-    const left = /private func left\(\) \{[\s\S]*?\n {2}\}/.exec(p)?.[0] ?? '';
-    // a departure during a capture is measured (leftAt) but begins no task and uses no try
-    expect(left).toMatch(/leftAt = TimeBase\.nowEpochMs\(\)\s*guard !capturing, !proven, PhoneState\.lockSignal\(\) == "lagged", task == \.invalid else \{ return \}/);
-    expect(p).toMatch(/private var capturing = false/);
-    expect(p).toMatch(/func captureRunning\(_ running: Bool\) \{\s*dispatchPrecondition\(condition: \.onQueue\(\.main\)\)\s*capturing = running\s*\}/);
-    expect(left).toMatch(/guard tries < Self\.PROBE_MAX_TRIES else \{ return \}\s*defaults\.set\(tries \+ 1, forKey: Key\.tries\)/);
-    expect(left.indexOf('lockSignal() == "lagged"')).toBeLessThan(left.indexOf('beginBackgroundTask'));
-    expect(left).toMatch(/beginBackgroundTask\(withName: "drivesense\.lockProbe"\) \{ \[weak self\] in\s*self\?\.endTask\(\)\s*\}/);
-    expect(left).toMatch(/DispatchQueue\.main\.asyncAfter\(deadline: \.now\(\) \+ Self\.PROBE_TASK_S, execute: work\)/);
-    // the report measured from leaving; a return clears it; every path ends the task
-    expect(p).toMatch(/private func locked\(\) \{\s*if let at = leftAt \{\s*record\(TimeBase\.nowEpochMs\(\) - at\)\s*leftAt = nil\s*\}\s*endTask\(\)\s*\}/);
-    expect(p).toMatch(/private func back\(\) \{\s*leftAt = nil\s*endTask\(\)\s*\}/);
-    expect(p).toMatch(/guard delayMs\.isFinite, delayMs >= 0, delayMs <= Self\.LOCK_PROOF_MAX_MS else \{ return \}\s*defaults\.set\(true, forKey: Key\.proof\)/);
-    expect(p).toMatch(/endWork\?\.cancel\(\)[\s\S]*?UIApplication\.shared\.endBackgroundTask\(task\)\s*task = \.invalid/);
-    // no passcode: the proof, the delay and the counter go
-    expect(p).toMatch(/func passcodeGone\(\) \{[\s\S]*?removeObject\(forKey: Key\.proof\)\s*defaults\.removeObject\(forKey: Key\.delay\)\s*defaults\.removeObject\(forKey: Key\.tries\)/);
-    expect(p).not.toMatch(/isProtectedDataAvailable|springboard|lockcomplete/);
-    // started from the module (no app-delegate hook); getState clears it without a passcode and reports it
-    expect(moduleCode()).toMatch(/OnCreate \{\s*EventHub\.shared\.attach\(self\)\s*LockProbe\.shared\.start\(\)\s*\}/);
-    expect(moduleCode()).toMatch(/AsyncFunction\("markLockProof"\) \{ \(delayMs: Double, promise: Promise\) in\s*LockProbe\.shared\.mark\(delayMs: delayMs\)\s*promise\.resolve\(nil\)\s*\}\.runOnQueue\(\.main\)/);
-    const ctrl = code('CaptureController.swift');
-    const begin = /private func beginCapture\(mode newMode: String\) \{[\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
-    const stop = /func stopCapture\(end: CaptureEnd\? = nil\) \{[\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
-    expect(begin).toMatch(/capturing = true[\s\S]*LockProbe\.shared\.captureRunning\(true\)/);
-    expect(stop).toMatch(/capturing = false[\s\S]*LockProbe\.shared\.captureRunning\(false\)/);
-    expect(ctrl).toMatch(/let lockSignal = PhoneState\.lockSignal\(\)\s*if lockSignal == "unreliable" \{ LockProbe\.shared\.passcodeGone\(\) \}/);
-    expect(ctrl).toMatch(/"lockProof": LockProbe\.shared\.proven,/);
-    expect(ctrl).toMatch(/"lockDelayMs": LockProbe\.shared\.lockDelayMs\.map \{ NSNumber\(value: \$0\) as Any \} \?\? NSNull\(\),/);
+  it('the shared reminder methods are fixed answers on iOS', () => {
+    const src = moduleCode();
+    expect(src).toMatch(/AsyncFunction\("setTripReminder"\) \{ \(_: Bool, promise: Promise\) in\s*promise\.resolve\(DriveSenseModule\.reminderOff\(\)\)/);
+    expect(src).toMatch(/AsyncFunction\("getTripReminderStatus"\) \{ \(promise: Promise\) in\s*promise\.resolve\(DriveSenseModule\.reminderOff\(\)\)/);
+    expect(src).toMatch(/\["enabled": false, "state": "off", "missing": \[String\]\(\)\]/);
+    expect(src).toMatch(/AsyncFunction\("requestReminderLocation"\) \{ \(promise: Promise\) in\s*let a = CaptureController\.shared\.locationAuthorization\s*promise\.resolve\(a == "none" \? "denied" : a\)/);
+    expect(src).toMatch(/AsyncFunction\("claimReminderTap"\) \{ \(_: String, promise: Promise\) in\s*promise\.resolve\(false\)/);
+    expect(src).toMatch(/AsyncFunction\("takeReminderTap"\) \{ \(promise: Promise\) in\s*promise\.resolve\(nil\)/);
   });
 
   it('navigation apps are found and opened by URL scheme in JS: the native list is empty and a launch is false', () => {
     expect(moduleCode()).toMatch(/AsyncFunction\("listInstalledApps"\) \{ \(_: \[String\], promise: Promise\) in\s*promise\.resolve\(\[\[String: Any\]\]\(\)\)\s*\}/);
     expect(moduleCode()).toMatch(/AsyncFunction\("launchApp"\) \{ \(_: String, promise: Promise\) in\s*promise\.resolve\(false\)\s*\}/);
     expect(allCode()).not.toMatch(/canOpenURL|openURL|UIApplication\.shared\.open\(/);
-  });
-
-  it('polls protected data for the lock state and reports the lock signal', () => {
-    const src = code('PhoneState.swift');
-    expect(src).toContain('isProtectedDataAvailable');
-    expect(src).toContain('canEvaluatePolicy(.deviceOwnerAuthentication');
-    expect(src).toContain('thermalState');
   });
 
   it('observes calls and excludes files from backup', () => {
@@ -359,9 +316,8 @@ describe('iOS drive-sense module (text)', () => {
     expect(src).toMatch(/AsyncFunction\("getLastExitInfo"\)[\s\S]{0,120}resolve\(nil\)/);
   });
 
-  it('self-tests the production FeatureExtractor, not a copy', () => {
+  it('self-tests the production FeatureExtractor and DetectPolicy, not copies; reminder vectors are Android’s', () => {
     const src = allCode();
-    // exactly one extractor implementation, and the self-test and the capture path both use it
     expect([...src.matchAll(/class FeatureExtractor\b/g)]).toHaveLength(1);
     expect([...src.matchAll(/func extractSecond\(/g)]).toHaveLength(1);
     expect(code('SelfTest.swift')).toContain('FeatureExtractor()');
@@ -369,273 +325,237 @@ describe('iOS drive-sense module (text)', () => {
     expect(code('SelfTest.swift')).toMatch(/"skipped"/);
     expect(code('SelfTest.swift')).toContain('"gravityFilter"');
     expect(code('SelfTest.swift')).toContain('"androidRaw"');
+    expect(code('SelfTest.swift')).toMatch(/case "detect":\s*results\.append\(DetectSelfTest\.result\(name, v\?\["inputs"\]\)\)/);
+    expect(code('SelfTest.swift')).toMatch(/case "reminder":\s*results\.append\(\["name": name, "kind": kind, "skipped": "an Android rule"\]\)/);
+    expect([...src.matchAll(/enum DetectPolicy\b/g)]).toHaveLength(1);
   });
 
-  it('links the frameworks it uses', () => {
+  it('links the frameworks it uses, and no notification or authentication pods any more', () => {
     const podspec = fs.readFileSync(path.join(IOS_DIR, 'DriveSense.podspec'), 'utf8');
-    expect(podspec).toContain("s.frameworks = 'CoreLocation', 'CoreMotion', 'CallKit', 'LocalAuthentication', 'UserNotifications'");
-    expect(podspec).toContain("s.dependency 'ExpoNotifications'");
+    expect(podspec).toContain("s.frameworks = 'CoreLocation', 'CoreMotion', 'CallKit', 'UserNotifications', 'ActivityKit'");
+    expect(podspec).not.toMatch(/ExpoNotifications|LocalAuthentication/);
     expect(podspec).toContain("s.platforms      = { :ios => '16.4' }");
   });
+
+  it('sends each full-rate fix as a live `speed` event the moment it lands (never buffered), a candidate’s too', () => {
+    const cap = code('CaptureController.swift');
+    expect(cap).toMatch(/emitSpeed\(fix\)\s*pipeline\.queue\.async \{ self\.pipeline\.addFix\(fix\) \}/);
+    expect(cap).toMatch(/EventHub\.shared\.emitLive\("speed", \[/);
+    for (const key of ['"ts"', '"speed"', '"speedAcc"', '"hAcc"', '"ageMs"']) expect(cap).toContain(key);
+    expect(cap).toMatch(/let age = Swift\.max\(0, TimeBase\.nowEpochMs\(\) - fix\.t\)/);
+    const live = fn(code('EventHub.swift'), 'func emitLive(');
+    expect(live).toMatch(/guard self\.listening\.contains\(event\), let sink = self\.sink else \{ return \}/);
+    expect(live).not.toMatch(/buffer/);
+  });
 });
 
-// The forgot-to-start reminder (README "Forgot-to-start reminder"): it only ever notifies.
-describe('iOS forgot-to-start reminder (text)', () => {
-  const reminderFiles = () => swiftFiles.filter((f) => f.startsWith('TripReminder'));
-
-  it('no reminder file can start a capture, emit to JS or touch the capture core', () => {
-    for (const f of reminderFiles()) {
-      expect({ f, starts: /startCapture\(|beginCapture\(|EventHub\.shared\.emit|nativeStarted|CaptureController\.shared/.test(code(f)) }).toEqual({ f, starts: false });
+describe('iOS drive detector: the bridge (text)', () => {
+  it('declares exactly DRIVE_DETECT_EVENTS, one AsyncFunction per DRIVE_DETECT_METHODS entry, each on main', () => {
+    const src = detectCode();
+    expect(src).toMatch(/Name\("DriveDetect"\)/);
+    const names = [...(src.match(/Events\(([^)]*)\)/)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map((x) => x[1]);
+    expect(names).toEqual([...DRIVE_DETECT_EVENTS]);
+    const declared = [...src.matchAll(/AsyncFunction\("([^"]+)"\)/g)].map((x) => x[1]);
+    expect([...declared].sort()).toEqual([...DRIVE_DETECT_METHODS].sort());
+    expect(src.match(/\.runOnQueue\(\.main\)/g)).toHaveLength(DRIVE_DETECT_METHODS.length);
+    for (const e of DRIVE_DETECT_EVENTS) {
+      expect(src).toContain(`OnStartObserving("${e}") { EventHub.detect.startObserving("${e}") }`);
+      expect(src).toContain(`OnStopObserving("${e}") { EventHub.detect.stopObserving("${e}") }`);
     }
+    expect(src).toMatch(/OnCreate \{\s*EventHub\.detect\.attach\(self\)\s*\}/);
   });
 
-  it('the capture pushes its start and end to the reminder (one direction only)', () => {
-    const ctrl = code('CaptureController.swift');
-    const begin = /private func beginCapture\([\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
-    expect(begin).toContain('TripReminder.shared.onCaptureStarted()');
-    const stop = /func stopCapture\(end: CaptureEnd\? = nil\) \{[\s\S]*?\n {2}\}/.exec(ctrl)?.[0] ?? '';
-    expect(stop).toContain('TripReminder.shared.onCaptureEnded(end)');
-    // the drive's end comes from JS (kind, endedAt, drivingAtEnd); the watchdog's stop passes none
-    expect(moduleCode()).toMatch(/AsyncFunction\("stopCapture"\) \{ \(kind: String, endedAt: Double, drivingAtEnd: Bool, promise: Promise\) in\s*CaptureController\.shared\.stopCapture\(end: CaptureEnd\.of\(kind, endedAt, drivingAtEnd\)\)\s*promise\.resolve\(nil\)/);
-    expect(ctrl).toMatch(/watchdog\.onExpire = \{ \[weak self\] in self\?\.stopCapture\(\) \}/);
-    const end = code('CaptureEnd.swift');
-    expect(end).toMatch(/case "dropped":\s*return CaptureEnd\(drivingEndedAt: nil, drivingAtEnd: drivingAtEnd\)/);
-    expect(end).toMatch(/case "at":\s*return endedAt\.isFinite && endedAt >= 0 \? CaptureEnd\(drivingEndedAt: endedAt, drivingAtEnd: drivingAtEnd\) : nil/);
-    expect(end).toMatch(/default:\s*return nil/);
-    expect(ctrl.match(/TripReminder\./g)).toHaveLength(2);
+  it('two event hubs, each buffering EVENT_BUFFER_MAX events for its own module', () => {
+    const hub = code('EventHub.swift');
+    expect(hub).toMatch(/static let shared = EventHub\(\)\s*static let detect = EventHub\(\)/);
+    expect(moduleCode()).toMatch(/OnCreate \{\s*EventHub\.shared\.attach\(self\)\s*\}/);
+    expect(hub).not.toMatch(/onListeningChanged/);
   });
 
-  it('the GPS look: automotive, ten-metre accuracy, every fix, never paused, no indicator; no watch after the post', () => {
-    const src = code('TripReminderLook.swift');
-    for (const s of [
-      'm.activityType = .automotiveNavigation',
-      'm.desiredAccuracy = kCLLocationAccuracyNearestTenMeters',
-      'm.distanceFilter = kCLDistanceFilterNone',
-      'm.pausesLocationUpdatesAutomatically = false',
-      'm.allowsBackgroundLocationUpdates = true',
-      'm.showsBackgroundLocationIndicator = false',
-      'lookManager.allowsBackgroundLocationUpdates = false',
-      'lookManager.stopUpdatingLocation()',
-      'timer.schedule(wallDeadline:',
-    ]) {
-      expect(src).toContain(s);
-    }
-    expect(src).not.toMatch(/distanceFilter = 10|watch|"moved"|"driving"|"ttl"|horizontalAccuracy/);
-    expect(allCode()).not.toMatch(/kCLLocationAccuracyKilometer|kCLLocationAccuracyThreeKilometers/);
-    for (const f of reminderFiles()) expect({ f, coarse: /kCLLocationAccuracyHundredMeters/.test(code(f)) }).toEqual({ f, coarse: false });
-    // every outcome of a held stop ends the look; a look that ran its full 10 min rests the next
-    const stopped = /private func stopped\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
-    expect(stopped).toMatch(/self\.endLook\("stopped"\)\s*\}\s*\}$/);
-    expect(src).toMatch(/case "no-drive", "look-max":\s*endLook\(verdict\)/);
-    expect(src).toMatch(/saveState\(TripReminderPolicy\.lookEnded\(s0, Self\.nowMs\(\), tr\.lastFastAt, verdict\)\)/);
+  it('discardDrive refuses the live drive with E_BUSY; a drive id must be a lowercase UUID before it names a file', () => {
+    const src = detectCode();
+    expect(src).toMatch(/if DriveDetector\.shared\.isLive\(driveId\) \{\s*promise\.reject\("E_BUSY"/);
+    expect(src).toContain('"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"');
+    expect(src.match(/DriveDetectModule\.isDriveId\(driveId\)/g)).toHaveLength(2);
+    expect(src).toMatch(/let n = min\(max\(1, limit\), DetectPolicy\.READ_ROWS_MAX\)/);
   });
 
-  it('the note: "Forgot to start drive?" / "Tap here to start", sound, interruption level active, the token in userInfo, no buttons, no link', () => {
-    const n = code('TripReminderNotifier.swift');
-    expect(n).toContain('content.interruptionLevel = .active');
-    expect(n).toContain('content.sound = .default');
-    expect(n).not.toMatch(/timeSensitive|\.critical/);
-    expect(n).toMatch(/static let identifier = "roadwise\.tripReminder"/);
-    expect(n).toMatch(/static let title = "Forgot to start drive\?"/);
-    expect(n).toMatch(/static let body = "Tap here to start"/);
-    expect(n).toMatch(/content\.userInfo = \["kind": "tripReminder", "reminderToken": token\]/);
-    expect(read('TripReminderNotifier.swift')).not.toMatch(/"url"|\/home/);
-    expect(n).not.toMatch(/UNNotificationAction|UNNotificationCategory|categoryIdentifier|setNotificationCategories|"Not driving"/);
-    expect(n).toMatch(/settings\.authorizationStatus == \.authorized\b/);
-    // a note iOS refused is reported, on main
-    expect(n).toMatch(/add\(request\) \{ error in\s*DispatchQueue\.main\.async \{ done\(error == nil\) \}/);
-    // the token: random per note
-    expect(code('TripReminderLook.swift')).toContain('let token = UUID().uuidString');
-  });
-
-  it('the launch hook: didFinishLaunching only, no notification delegate anywhere; the notification center delegate is never set', () => {
-    const d = code('TripReminderAppDelegate.swift');
+  it('the launch hook resumes at didFinishLaunching only and adds no notification delegate', () => {
+    const d = code('DriveDetectAppDelegate.swift');
     expect(d).toMatch(/didFinishLaunchingWithOptions/);
-    expect(d).toMatch(/TripReminder\.shared\.resumeAtLaunch\(\)\s*return true/);
+    expect(d).toMatch(/DriveDetector\.shared\.resumeAtLaunch\(\)\s*return true/);
     expect(d).not.toMatch(/NotificationCenterManager|NotificationDelegate|didReceive|ExpoNotifications/);
-    for (const f of swiftFiles) expect({ f, adds: /addDelegate\(|NotificationCenterManager/.test(code(f)) }).toEqual({ f, adds: false });
+    // the first unlock after a reboot runs it again
+    expect(code('DriveDetector.swift')).toMatch(/UIApplication\.protectedDataDidBecomeAvailableNotification[\s\S]{0,120}self\?\.resumeAtLaunch\(\)/);
   });
-
-  it('the reminder reads no call, no Low Power Mode and no app-in-front state: only the session rule decides', () => {
-    const call = /static func anyCallActiveNow\(\)[\s\S]*?\n {2}\}/.exec(code('CallObserver.swift'))?.[0] ?? '';
-    expect(call).toMatch(/CXCallObserver\(\)\.calls\.contains \{ !\$0\.hasEnded \}/);
-    expect(call).not.toMatch(/emit/);
-    for (const f of reminderFiles()) {
-      expect({ f, reads: /CallObserver|isLowPowerModeEnabled|applicationState|appForeground|onNotDriving|registerCategory/.test(code(f)) }).toEqual({ f, reads: false });
-    }
-    // RoadWise coming to the front only brings the state up to now: a live note and a running look stay
-    const active = /@objc private func appBecameActive\(\) \{[\s\S]*?\n {2}\}/.exec(code('TripReminder.swift'))?.[0] ?? '';
-    expect(active).toMatch(/refresh \{ s in/);
-    expect(active).not.toMatch(/TripReminderNotifier\.remove|endLook/);
-  });
-
-  it("the tap: claimed on main through the reminder's own claim (motion folded in first); nothing is ever held or emitted on iOS", () => {
-    const m = moduleCode();
-    expect(m).toMatch(/AsyncFunction\("claimReminderTap"\) \{ \(token: String, promise: Promise\) in\s*TripReminder\.shared\.claim\(token\) \{ promise\.resolve\(\$0\) \}\s*\}\.runOnQueue\(\.main\)/);
-    expect(m).toMatch(/AsyncFunction\("takeReminderTap"\) \{ \(promise: Promise\) in\s*promise\.resolve\(nil\)\s*\}/);
-    expect(allCode()).not.toMatch(/emit\("reminderTap"/);
-  });
-
-  it('"Always" is asked once, only from While Using, through the reminder; precise is required', () => {
-    const a = code('TripReminderAccess.swift');
-    expect(a).toMatch(/if current != \.authorizedWhenInUse \|\| defaults\.bool\(forKey: Key\.alwaysAsked\) \|\| alwaysPending != nil \{/);
-    expect(a.indexOf('defaults.set(true, forKey: Key.alwaysAsked)')).toBeLessThan(a.indexOf('slcManager.requestAlwaysAuthorization()'));
-    expect(code('TripReminder.swift')).toMatch(/slcManager\.authorizationStatus == \.authorizedAlways && slcManager\.accuracyAuthorization == \.fullAccuracy/);
-    expect(moduleCode()).toMatch(/AsyncFunction\("requestReminderLocation"\) \{ \(promise: Promise\) in\s*TripReminder\.shared\.requestAlways \{ promise\.resolve\(\$0\) \}\s*\}\.runOnQueue\(\.main\)/);
-  });
-
-  it('the policy mirror is pure and has the reference constants', () => {
-    for (const f of ['TripReminderPolicy.swift', 'TripReminderWakePolicy.swift']) {
-      expect([...read(f).matchAll(/^import (\w+)/gm)].map((m) => m[1])).toEqual(['Foundation']);
-    }
-    const src = code('TripReminderPolicy.swift');
-    const declared = new Map(
-      [...src.matchAll(/static let ([A-Z][A-Z0-9_]*)(?:\s*:\s*\w+)?\s*=\s*([\d_.]+)/g)].map((m) => [m[1]!, Number(m[2]!.replace(/_/g, ''))] as const)
-    );
-    for (const [name, value] of Object.entries(REMINDER)) expect({ name, value: declared.get(name) }).toEqual({ name, value });
-    expect([...declared.keys()].sort()).toEqual(Object.keys(REMINDER).sort());
-    const gate = /static func gate\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
-    const inOrder = (order: string[]) => {
-      const at = order.map((r) => gate.indexOf(`"${r}"`));
-      expect({ order, found: at.every((i) => i > 0) }).toEqual({ order, found: true });
-      expect([...at].sort((x, y) => x - y)).toEqual(at);
-    };
-    // the stop gate and the look gate, in the reference's order; no limit besides the session rule
-    inOrder(['off', 'permission', 'capturing', 'no-session', 'reminded', 'not-driven', 'stale', 'on-foot']);
-    inOrder(['off', 'permission', 'capturing', 'no-session', 'reminded', 'resting', 'not-fresh']);
-    const both = src + code('TripReminderWakePolicy.swift');
-    expect(both).not.toMatch(/PAUSE_DAYS|DAILY_CAP|POST_SPACING|TTL_MS|UNUSED_QUIET|NOT_DRIVING|MIN_IN_VEHICLE|AFTER_DRIVE|lowPower|inCall|appForeground|"too-soon"|"foreground"|"in-call"|"paused"|"quiet"|"sessions"/);
-    // iOS has no vehicle state: nothing in the policy ever puts a session in the vehicle
-    for (const f of ['TripReminderPolicy.swift', 'TripReminderWakePolicy.swift']) {
-      expect({ f, sets: /inVehicle = true|inVehicle: true/.test(code(f)) }).toEqual({ f, sets: false });
-    }
-    expect(code('TripReminderWakePolicy.swift')).toContain('newSession(m.automotiveSince > 0 ? m.automotiveSince : a, a, inVehicle: false)');
-    // a car standing still is no car motion; only 30 min without it starts a new run
-    expect(code('TripReminderWakePolicy.swift')).toMatch(/if a\.automotive && !a\.stationary && a\.confident \{/);
-    // the stored state: v3; a v2 keeps only its switch
-    expect(src).toMatch(/if probe\.v == 2 \{\s*var s = ReminderState\(\)\s*s\.enabled = probe\.enabled \?\? false\s*return s\s*\}/);
-  });
-
 });
 
-describe('iOS forgot-to-start reminder: one post, a stored state never overwritten by a missing read, every async step reloads, bounded checks', () => {
-  it('one post call in all the Swift: the held stop, after the checks, with the stop still held; a note iOS refused is taken back', () => {
-    expect(allCode().match(/TripReminderNotifier\.post\(/g)).toHaveLength(1);
-    const look = code('TripReminderLook.swift');
-    const stopped = /private func stopped\([\s\S]*?\n {2}\}/.exec(look)?.[0] ?? '';
-    expect(stopped).toMatch(/if r\.effect == "post" \{\s*TripReminderNotifier\.post\(token\) \{ added in/);
-    expect(stopped).toMatch(/if !added, let s1 = self\.loadState\(\) \{ self\.saveState\(TripReminderPolicy\.unposted\(s1, token\)\) \}/);
-    // a check's answer for a look that has ended, or for a stop the car pulled away from, posts nothing
-    expect(stopped.indexOf('guard let cur = self.current(tr) else { return }')).toBeGreaterThan(-1);
-    const pulled = stopped.indexOf('if cur.stopStart != tr.stopStart {');
-    expect(pulled).toBeGreaterThan(-1);
-    expect(stopped.slice(pulled, pulled + 120)).toMatch(/self\.look = TripReminderPolicy\.seekAgain\(cur, Self\.nowMs\(\)\)\s*return/);
-    expect(pulled).toBeLessThan(stopped.indexOf('TripReminderNotifier.post('));
-    expect(stopped).toMatch(/TripReminderPolicy\.onStop\(s0, self\.context\(notificationsOk: notificationsOk\), Self\.nowMs\(\), walked: walked, token: token, lastFastAt: cur\.lastFastAt\)/);
-    // fixes keep moving the tracker while a check is in flight; only the check acts
-    expect(look).toMatch(/look = r\.tracker\s*if !checking \{ handle\(r\.verdict\) \}/);
-  });
-
-  it('a missing read is never saved back: nothing stored is nil, and only setEnabled writes a first state', () => {
-    const load = /func loadState\(\) -> ReminderState\? \{[\s\S]*?\n {2}\}/.exec(code('TripReminder.swift'))?.[0] ?? '';
-    expect(load).toMatch(/guard let data = defaults\.data\(forKey: Key\.state\) else \{ return nil \}\s*return TripReminderPolicy\.fromStored\(data\)/);
-    expect(code('TripReminderAccess.swift')).toMatch(/TripReminderPolicy\.setEnabled\(TripReminderPolicy\.settle\(loadState\(\) \?\? ReminderState\(\), Self\.nowMs\(\), captureOpen\), on\)/);
-    for (const f of swiftFiles) {
-      const n = (code(f).match(/loadState\(\) \?\? /g) ?? []).length;
-      expect({ f, n }).toEqual({ f, n: f === 'TripReminderAccess.swift' ? 1 : 0 });
-    }
-  });
-
-  it('every async continuation reloads the state before it saves (no step saves a copy taken before its await)', () => {
-    const r = code('TripReminder.swift');
-    const after = (src: string, open: string) => {
-      const i = src.indexOf(open);
-      expect({ open, found: i }).not.toEqual({ open, found: -1 });
-      const body = src.slice(i + open.length);
-      const save = body.indexOf('saveState(');
-      const load = body.indexOf('loadState()');
-      expect({ open, reloads: load > -1 && load < save }).toEqual({ open, reloads: true });
+describe('iOS drive detector: the state machine (text)', () => {
+  it('the record: "drivesense.detect", a missing read decides nothing, every change saved before its side effects', () => {
+    const rec = code('DetectStateRecord.swift');
+    expect(rec).toMatch(/static let key = "drivesense\.detect"/);
+    expect(rec).toMatch(/guard let data = UserDefaults\.standard\.data\(forKey: key\) else \{ return nil \}/);
+    const d = detector();
+    expect(d).toMatch(/func save\(_ r: DetectStateRecord\) \{\s*rec = r\s*r\.save\(\)\s*\}/);
+    const before = (body: string, first: string, then: string) => {
+      expect({ first, found: body.indexOf(first) }).not.toEqual({ first, found: -1 });
+      expect({ first, then, ordered: body.indexOf(first) < body.indexOf(then) }).toEqual({ first, then, ordered: true });
     };
-    // the refresh, the wake's motion read, the capture's start and end, and the claim (after its refresh)
-    const fnBody = (fn: string) => new RegExp(`${fn.replace(/[()]/g, '\\$&')}[\\s\\S]*?\\n {2}\\}`).exec(r)?.[0] ?? '';
-    after(fnBody('private func onWake()'), 'ActivitySource.recentAutomotive { motion in');
-    for (const fn of ['func refresh(', 'func onCaptureStarted()', 'func onCaptureEnded(']) after(fnBody(fn), 'motionWhileOn { motion in');
-    const claim = /func claim\(_ token: String[\s\S]*?\n {2}\}/.exec(r)?.[0] ?? '';
-    after(claim, 'refresh { _ in');
-    expect(claim).toMatch(/TripReminderPolicy\.claim\(s0, token, Self\.nowMs\(\), self\.captureOpen, false\)/);
-    // the look's stop checks and the post's completion
-    const stopped = /private func stopped\([\s\S]*?\n {2}\}/.exec(code('TripReminderLook.swift'))?.[0] ?? '';
-    after(stopped, 'TripReminderNotifier.authorized { notificationsOk in');
-    after(stopped, 'TripReminderNotifier.post(token) { added in');
-    // a drive's start and end fold the motion history in first, so a stale clock never ends a live session
-    expect(r).toMatch(/TripReminderPolicy\.captureStarted\(folded, at\)/);
-    expect(r).toMatch(/let drivingEndedAt: Double\? = end == nil \? at : end\?\.drivingEndedAt, drivingAtEnd = end\?\.drivingAtEnd \?\? false/);
-    expect(r).toMatch(/TripReminderPolicy\.captureEnded\(folded, at, drivingEndedAt, drivingAtEnd: drivingAtEnd, vehicle: false\)/);
-    expect(r).toMatch(/TripReminderPolicy\.foldMotion\(TripReminderPolicy\.clampTimes\(s0, at\), at, motion, false\)/);
-    expect(r).toMatch(/TripReminderPolicy\.foldMotion\(TripReminderPolicy\.clampTimes\(s0, at\), at, motion, true\)/);
+    before(fn(d, 'func beginCandidate('), 'save(r)', 'capture.beginSensing()');
+    before(fn(d, 'func beginDrive('), 'save(r)', 'journal.open(');
+    before(fn(d, 'func commitEnd('), 'save(r)', 'finishSensing()');
+    before(fn(d, 'func notDriving()'), 'save(r)', 'capture.beginSuppressedSensing()');
+    before(fn(d, 'func endCandidate('), 'save(r)', 'capture.endSensing()');
+    before(fn(d, 'func endSuppression()'), 'save(r)', 'capture.endSensing()');
   });
 
-  it('the motion history is read only while the reminder is on: off, no query at all (a refresh, a drive start or end)', () => {
-    const r = code('TripReminder.swift');
-    const helper = /func motionWhileOn\(_ done: @escaping \(MotionSummary\) -> Void\) \{[\s\S]*?\n {2}\}/.exec(r)?.[0] ?? '';
-    expect(helper).toMatch(
-      /guard loadState\(\)\?\.enabled == true else \{\s*done\(MotionSummary\(lastAutomotiveAt: 0, automotiveSince: 0, onFootNow: false\)\)\s*return\s*\}\s*ActivitySource\.recentAutomotive\(done\)/
-    );
-    // the helper and the wake are the only reads; the wake reads only after its gate, which answers "off" first
-    expect(r.split('ActivitySource.recentAutomotive').length - 1).toBe(2);
-    const wake = /private func onWake\(\)[\s\S]*?\n {2}\}/.exec(r)?.[0] ?? '';
-    const gate = wake.indexOf('TripReminderPolicy.gate(s1, ctx, Self.nowMs(), .wake) == "ok"');
-    expect(gate).toBeGreaterThan(-1);
-    expect(wake.indexOf('ActivitySource.recentAutomotive')).toBeGreaterThan(gate);
-    expect(code('TripReminderPolicy.swift')).toMatch(/static func gate\([^)]*\) -> String \{\s*if !s\.enabled \{ return "off" \}/);
-    // off forgets the session, and the folds act only on a session, so the empty summary changes nothing
-    expect(code('TripReminderPolicy.swift')).toMatch(/static func setEnabled\([^)]*\) -> ReminderState \{\s*if !on \{ return ReminderState\(\) \}/);
-    expect(code('TripReminderWakePolicy.swift')).toMatch(/static func foldMotion\([^)]*\) -> ReminderState \{\s*var s = s0\s*if let x = s\.session \{/);
+  it('arming: JS arms for an owner; Always + Precise + Motion are required; a new owner forgets the last end', () => {
+    const d = detector();
+    expect(d).toMatch(/func allowed\(_ r: DetectStateRecord\) -> Bool \{ r\.armed && r\.ownerId != nil && access\.snapshot\(\)\.requiredOk \}/);
+    expect(fn(d, 'func setArmed(')).toMatch(/if armed && r\.ownerId != nil && r\.ownerId != ownerId \{ r\.lastEnd = nil \}/);
+    expect(code('DriveDetectAccess.swift')).toMatch(/var requiredOk: Bool \{ DetectPolicy\.statusOf\(inputs\(armed: true\)\)\.requiredOk \}/);
+    // the wakes run only while allowed and not off
+    expect(fn(d, 'func syncWakes()')).toMatch(/if allowed\(r\) && r\.state != "off" \{ wakes\.start\(\) \} else \{ wakes\.stop\(\) \}/);
   });
 
-  it('the wake off ends the look and takes a note still up down, its token gone', () => {
-    const r = code('TripReminder.swift');
-    const sync = /func syncWake\([\s\S]*?\n {2}\}/.exec(r)?.[0] ?? '';
-    expect(sync).toMatch(/\} else if !want \{[\s\S]*endLook\("ended"\)\s*TripReminderNotifier\.remove\(\)\s*if let s0 = loadState\(\), !s0\.token\.isEmpty \{ saveState\(TripReminderPolicy\.noteGone\(s0\)\) \}/);
+  it('a wake: the gate first; a region exit starts a candidate at once, the others after the motion gate; inside a background task', () => {
+    const wake = fn(detector(), 'func onWake(');
+    expect(wake).toMatch(/guard DetectPolicy\.wakeGate\(ctx\) == "ok", capture\.sensing == \.off else \{ return \}\s*beginWakeTask\(\)/);
+    expect(wake.indexOf('if reason == "region"')).toBeLessThan(wake.indexOf('ActivitySource.motionSummary'));
+    expect(wake).toMatch(/DetectPolicy\.motionGate\(m, DriveDetector\.now\(\)\) == "ok"/);
+    expect(fn(detector(), 'func onFix(')).toMatch(/if wakeTask != \.invalid \{ endWakeTask\(\) \}/);
+    expect(detector()).toMatch(/beginBackgroundTask\(withName: "drivesense\.wake"\)/);
+    expect(detector()).toMatch(/asyncAfter\(wallDeadline: \.now\(\) \+ DetectPolicy\.WAKE_TASK_MAX_MS \/ 1000\)/);
   });
 
-  it('a wake whose background task expires lets the next wake run, and its late finish leaves a newer wake alone; the look clock bounds a check in flight', () => {
-    const r = code('TripReminder.swift');
-    expect(r).toMatch(/wakeId &\+= 1\s*let thisWake = wakeId\s*waking = true/);
-    expect(r).toMatch(/task\.begin\(onExpire: \{ if self\.wakeId == thisWake \{ self\.waking = false \} \}\)/);
-    expect(r).toMatch(/let finish = \{\s*if self\.wakeId == thisWake \{ self\.waking = false \}\s*task\.end\(\)/);
-    expect(r.match(/self\.waking = false/g)).toHaveLength(2);
-    expect(r).toMatch(/beginBackgroundTask\(withName: "drivesense\.tripReminder"\) \{ \[weak self\] in\s*onExpire\(\)\s*self\?\.end\(\)/);
-    const look = code('TripReminderLook.swift');
-    expect(look).toMatch(/private static let lookBoundMs = TripReminderPolicy\.IOS_LOOK_MAX_MS \+ TripReminderPolicy\.IOS_LOOK_NO_DRIVE_MS/);
-    const tick = /private func tick\(\) \{[\s\S]*?\n {2}\}/.exec(look)?.[0] ?? '';
-    expect(tick.indexOf('Self.lookBoundMs')).toBeGreaterThan(-1);
-    expect(tick.indexOf('Self.lookBoundMs')).toBeLessThan(tick.indexOf('guard !checking else { return }'));
+  it('a candidate: rows into the ring, the hold confirmed by the policy (the veto for auto only); its clock ends it', () => {
+    const d = detector();
+    const row = fn(d, 'func onRow(');
+    expect(row).toMatch(/buffer\.append\(d, body\)/);
+    expect(row).toMatch(/DetectPolicy\.confirmStep\(confirmState, d, kind, veto: kind == "auto" && vetoNow\(\)\)/);
+    expect(row).toMatch(/case "recording", "ending":\s*record\(d, body\)/);
+    const tick = fn(d, 'func tick()');
+    expect(tick).toMatch(/DetectPolicy\.candidateDue\(kind, since: r\.since, waitUntil: r\.waitUntil, walkSince: walkSince, now: now\)/);
+    expect(tick).toMatch(/endCandidate\(reason: cause, rest: cause == "timeout"\)/);
+    expect(fn(d, 'func endCandidate(')).toMatch(/if rest \{ r\.candidateRestUntil = now \+ DetectPolicy\.CANDIDATE_REST_MS \}/);
+    expect(fn(d, 'func beginCandidate(')).toMatch(/r\.candidateStarts = DetectPolicy\.recentStarts\(r\.candidateStarts, now\) \+ \[now\]/);
+    expect(d).toMatch(/schedule\(wallDeadline: \.now\(\) \+ DetectPolicy\.TICK_MS \/ 1000, repeating: DetectPolicy\.TICK_MS \/ 1000/);
   });
 
-  it('"walked off" is walking or running; cycling counts as on foot only at the look gate; a car standing still is read as such; every motion read is the last 3 h', () => {
-    const a = code('ActivitySource.swift');
-    expect(a).toMatch(/automotive: a\.automotive,\s*stationary: a\.stationary,\s*onFoot: a\.walking \|\| a\.running \|\| a\.cycling,\s*walking: a\.walking \|\| a\.running,/);
-    expect(a).toMatch(/done\(list\.contains \{ \$0\.walking && \$0\.confident \}\)/);
-    expect(a).toMatch(/static func recentAutomotive\(_ done: @escaping \(MotionSummary\) -> Void\) \{\s*let now = Date\(\)\s*lookBack\(from: now\.addingTimeInterval\(-TripReminderPolicy\.IOS_MOTION_LOOKBACK_MS \/ 1000\), to: now\)/);
-    expect(code('TripReminderLook.swift')).toContain('ReminderFix(t: l.timestamp.timeIntervalSince1970 * 1000, speed: l.speed, speedAcc: l.speedAccuracy)');
+  it('a confirmation: the start traced back (the motion history only for an auto drive that began moving), journaled from the first kept row with seq 1, announced', () => {
+    const d = detector();
+    const confirm = fn(d, 'func confirm(');
+    expect(confirm).toMatch(/guard kind == "auto", DetectPolicy\.traceStart\(rows, h\) == nil else \{\s*finish\(0\)/);
+    expect(confirm).toMatch(/DetectPolicy\.startOf\(rows, h, kind, automotiveSince, lastEnd\)/);
+    const begin = fn(d, 'func beginDrive(');
+    expect(begin).toMatch(/let driveId = UUID\(\)\.uuidString\.lowercased\(\)/);
+    expect(begin).toMatch(/DetectPolicy\.continuesFrom\(r\.lastEnd, start\.startedAt, start\.startLat, start\.startLng\)/);
+    expect(begin).toMatch(/nextSeq = 1/);
+    expect(begin).toMatch(/let kept = buffer\.items\.filter \{ \$0\.row\.ts >= firstTs \}/);
+    expect(begin).toMatch(/capture\.openCapture\(startedAt: start\.startedAt, mode: kind == "auto" \? "auto" : "mounted"\)/);
+    expect(begin).toMatch(/DriveNotifier\.scheduleFallback/);
+    expect(begin.indexOf('for item in kept { record(item.row, item.body) }')).toBeLessThan(begin.indexOf('EventHub.detect.emit("driveStarted"'));
+    for (const k of ['"driveId"', '"origin"', '"startedAt"', '"startSource"', '"startLat"', '"startLng"', '"continues"', '"confirmedAt"', '"firstSeq"', '"nativeBuild"']) expect(begin).toContain(k);
+    // JS sees a capture only while a drive records
+    only(/openCapture\(startedAt:/, ['CaptureController.swift', 'DriveDetectorDrive.swift', 'DriveDetectorSensing.swift']);
   });
 
-  it('SelfTest hands each reminder row to TripReminderSelfTest, which runs the production policy for every iOS row kind', () => {
-    expect(code('SelfTest.swift')).toMatch(/case "reminder":\s*results\.append\(TripReminderSelfTest\.result\(name, v\?\["inputs"\]\)\)/);
-    const st = code('TripReminderSelfTest.swift');
-    for (const call of ['gate(', 'settle(', 'posted(', 'unposted(', 'noteGone(', 'claim(', 'captureStarted(', 'captureEnded(', 'setEnabled(', 'lookEnded(', 'onWake(', 'summarize(', 'onFix(', 'onStop(', 'foldMotion(', 'fromStored(']) {
-      expect({ call, used: st.includes(`TripReminderPolicy.${call}`) }).toEqual({ call, used: true });
-    }
-    for (const kind of ['gate', 'ops', 'claim', 'wake', 'summary', 'fixes', 'stop', 'stored']) expect(st).toContain(`case "${kind}":`);
-    // the same rows the JS diff expects iOS to skip
-    expect(st).toMatch(/case "tap", "transitions", "expires":\s*return "an Android rule"/);
-    expect(st).toMatch(/jsonBool\(row\["requireDelivery"\]\) == true \? "the hand-over check is Android's" : nil/);
-    expect(st).toMatch(/== "captureTransitions" \} \? "a capture batch is an Android rule" : nil/);
-    // the iOS claim: the motion history first, never the hand-over check
-    expect(st).toMatch(/TripReminderPolicy\.claim\(s, token, now, capturing, false\)/);
-    expect([...read('TripReminderSelfTest.swift').matchAll(/^import (\w+)/gm)].map((m) => m[1])).toEqual(['Foundation']);
-    expect(st).not.toMatch(/TripReminder\.shared|UserDefaults|TripReminderNotifier|CLLocationManager/);
+  it('a drive row: journaled and emitted with the next seq, then the safety stop checked', () => {
+    const rec = fn(detector(), 'func record(');
+    expect(rec).toMatch(/line\["seq"\] = nextSeq\s*nextSeq \+= 1\s*journal\.appendRow\(driveId, line\)\s*capture\.emitRow\(line, ts: Int64\(d\.ts\)\)/);
+    expect(rec).toMatch(/endClock = DetectPolicy\.endOnRow\(endClock, d, automotiveNow: automotiveNow\(\)\)\s*evaluateEnd\(\)/);
+  });
+
+  it('the safety stop: the policy decides; native commits with endedAt = when it decided and tells JS; a JS end is journaled as "js" and not echoed', () => {
+    const d = detector();
+    const ev = fn(d, 'func evaluateEnd()');
+    expect(ev).toMatch(/DetectPolicy\.endDue\(endClock, startedAt: startedAt, now: now, walkSince: walkSince\)/);
+    expect(ev).toMatch(/if let cause = d\.due \{\s*commitEnd\(cause: cause, endedAt: now\)/);
+    const end = fn(d, 'func commitEnd(');
+    expect(end).toMatch(/"k": "end"/);
+    expect(end).toMatch(/close: true/);
+    expect(end).toMatch(/cut: cause == "js" \? endedAt : now/);
+    expect(end).toMatch(/if cause != "js" \{\s*EventHub\.detect\.emit\("driveEnded"/);
+    expect(end).toMatch(/if r\.state == "armed" \{ wakes\.setParked\(lastFix\) \}/);
+    expect(fn(d, 'func stopCapture(')).toMatch(/commitEnd\(cause: "js", endedAt: end\?\.drivingEndedAt \?\? DriveDetector\.now\(\)\)/);
+    expect(moduleCode()).toMatch(/AsyncFunction\("stopCapture"\)[\s\S]{0,140}DriveDetector\.shared\.stopCapture\(end: CaptureEnd\.of\(kind, endedAt, drivingAtEnd\)\)/);
+  });
+
+  it('"Not driving?": the journal deleted, driveEnded cancelled, a rest of at most 3 h on ten-metre GPS; the last end untouched', () => {
+    const nd = fn(detector(), 'func notDriving()');
+    expect(nd).toMatch(/journal\.delete\(driveId\)/);
+    expect(nd).toMatch(/r\.suppressedUntil = now \+ DetectPolicy\.SUPPRESS_MAX_MS/);
+    expect(nd).toMatch(/"cause": "cancelled"/);
+    expect(nd).not.toMatch(/lastEnd/);
+    const tick = fn(detector(), 'func tick()');
+    expect(tick).toMatch(/DetectPolicy\.suppressionDue\(since: since, until: until, lastOverStopTs: lastOverStopTs, walkSince: walkSince, now: now\) != nil/);
+    expect(fn(detector(), 'func endSuppression()')).not.toMatch(/lastEnd =/);
+    expect(fn(code('CaptureController.swift'), 'func beginSuppressedSensing()')).toMatch(/location\.start\(\.suppressed\)/);
+  });
+
+  it('a relaunch: a candidate never survives; a drive resumes with a gap line or ends as an orphan; a rest resumes until its cap', () => {
+    const d = detector();
+    const launch = fn(d, 'func resumeAtLaunch()');
+    expect(launch).toMatch(/case "candidate":\s*settle\(&r, now\)/);
+    expect(launch).toMatch(/resumeDrive\(driveId\)/);
+    expect(launch).toMatch(/if let until = r\.suppressedUntil, now < until \{\s*capture\.beginSuppressedSensing\(\)/);
+    const resume = fn(d, 'func resumeDrive(');
+    expect(resume).toMatch(/DetectPolicy\.resumeDecision\(lastRowTs: s\.lastRowTs, startedAt: startedAt, now: now\) == "resume" else \{\s*self\.commitEnd\(cause: "orphan", endedAt: now\)/);
+    expect(resume).toMatch(/"k": "gap"/);
+    expect(resume).toMatch(/self\.nextSeq = s\.lastSeq \+ 1/);
+  });
+
+  it('the Start card: While Using and Precise; busy while a drive records; an auto candidate becomes the wait', () => {
+    const sw = fn(detector(), 'func startWaiting()');
+    expect(sw).toMatch(/guard p\.location != "none", p\.precise else \{ return \["ok": false, "reason": "permission"\] \}/);
+    expect(sw).toMatch(/return \["ok": false, "reason": "busy"\]/);
+    expect(sw).toMatch(/r1\.waitUntil = now \+ DetectPolicy\.WAIT_MAX_MS/);
+    expect(fn(detector(), 'func extendWaiting()')).toMatch(/let until = DriveDetector\.now\(\) \+ DetectPolicy\.WAIT_MAX_MS/);
+  });
+
+  it('"Always" is asked once, only from While Using, through DriveDetectAccess', () => {
+    const a = code('DriveDetectAccess.swift');
+    expect(a).toMatch(/if current != \.authorizedWhenInUse \|\| defaults\.bool\(forKey: Self\.alwaysAskedKey\) \|\| pending != nil \{/);
+    expect(a.indexOf('defaults.set(true, forKey: Self.alwaysAskedKey)')).toBeLessThan(a.indexOf('manager.requestAlwaysAuthorization()'));
+    expect(a).toMatch(/private static let alwaysAskedKey = "drivesense\.detect\.alwaysAsked"/);
+    expect(a).toMatch(/liveActivities: ActivityAuthorizationInfo\(\)\.areActivitiesEnabled/);
+    expect(a).toMatch(/UIApplication\.shared\.backgroundRefreshStatus/);
+  });
+});
+
+describe('iOS drive detector: wakes and the note (text)', () => {
+  it('the parked region: one, "roadwise.parked", 150 m, exit only; only it is ever touched', () => {
+    const w = code('WakeSources.swift');
+    expect(w).toMatch(/static let regionId = "roadwise\.parked"/);
+    expect(w).toMatch(/for r in manager\.monitoredRegions where r\.identifier == Self\.regionId \{\s*manager\.stopMonitoring\(for: r\)/);
+    expect(w).toMatch(/min\(DetectPolicy\.PARKED_REGION_RADIUS_M, manager\.maximumRegionMonitoringDistance\)/);
+    expect(w).toMatch(/region\.notifyOnEntry = false\s*region\.notifyOnExit = true/);
+    expect(w).toMatch(/guard region\.identifier == Self\.regionId else \{ return \}\s*onWake\?\("region"\)/);
+  });
+
+  it('a significant change older than SLC_STALE_MS is not a wake; a visit is one only when left in the last 10 min', () => {
+    const w = code('WakeSources.swift');
+    expect(w).toMatch(/l\.timestamp\.timeIntervalSince1970 \* 1000 >= startedAt - DetectPolicy\.SLC_STALE_MS/);
+    expect(w).toMatch(/visit\.departureDate != Date\.distantFuture/);
+    expect(w).toMatch(/<= DetectPolicy\.VISIT_FRESH_MS/);
+  });
+
+  it('the note: "Recording your drive", quiet, opens the driving screen, only if no Live Activity runs 20 s after the confirmation (A3)', () => {
+    const n = code('DriveNotifier.swift');
+    expect(n).toMatch(/static let identifier = "roadwise\.driveRecording"/);
+    expect(n).toMatch(/static let title = "Recording your drive"/);
+    expect(n).toMatch(/static let body = "Tap to open it\. Not driving\? You can stop it there\."/);
+    expect(n).toContain('content.interruptionLevel = .active');
+    expect(n).not.toMatch(/content\.sound|timeSensitive|\.critical|UNNotificationAction|categoryIdentifier/);
+    expect(n).toMatch(/content\.threadIdentifier = "drive-recording"/);
+    expect(n).toMatch(/content\.userInfo = \["kind": "driveRecording", "url": "\/drive"\]/);
+    expect(n).toMatch(/asyncAfter\(wallDeadline: \.now\(\) \+ DetectPolicy\.FALLBACK_NOTE_DELAY_MS \/ 1000, execute: work\)/);
+    expect(n).toMatch(/guard stillRecording\(\), !activityRunning else \{ return \}\s*post\(\)/);
+    expect(n).toMatch(/Notification\.Name\("roadwise\.liveActivity"\)/);
+    expect(n).toMatch(/if activityRunning \{\s*cancel\(\)\s*remove\(\)/);
+    expect(allCode().match(/DriveNotifier\.scheduleFallback/g)).toHaveLength(1);
+    const finish = fn(code('DriveDetectorDrive.swift'), 'func finishSensing()');
+    expect(finish).toMatch(/DriveNotifier\.cancel\(\)\s*DriveNotifier\.remove\(\)/);
   });
 });
 
@@ -661,18 +581,6 @@ describe('iOS: DashPal alerts on the phone (README §2)', () => {
     expect(fn).not.toMatch(/bluetoothA2DP|bluetoothLE|carAudio|setActive|setCategory/);
   });
 
-  it('sends each full-rate fix as a live `speed` event the moment it lands (never buffered)', () => {
-    const cap = code('CaptureController.swift');
-    expect(cap).toMatch(/emitSpeed\(fix\)\s*pipeline\.queue\.async \{ self\.pipeline\.addFix\(fix\) \}/);
-    expect(cap).toMatch(/EventHub\.shared\.emitLive\("speed", \[/);
-    for (const key of ['"ts"', '"speed"', '"speedAcc"', '"hAcc"', '"ageMs"']) expect(cap).toContain(key);
-    expect(cap).toMatch(/let age = Swift\.max\(0, TimeBase\.nowEpochMs\(\) - fix\.t\)/);
-    // Low rate sends none (rows per fix only).
-    expect(cap).not.toMatch(/lowRateFix[^\n]*emitSpeed/);
-    const live = /func emitLive\([\s\S]*?\n {2}\}/.exec(code('EventHub.swift'))?.[0] ?? '';
-    expect(live).toMatch(/guard self\.listening\.contains\(event\), let sink = self\.sink else \{ return \}/);
-    expect(live).not.toMatch(/buffer/);
-  });
 
   it('holdAwake and dashpalLinkRunning answer false, setDashpalLink unsupported, and the tick is never emitted', () => {
     const src = moduleCode();
