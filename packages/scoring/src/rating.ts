@@ -13,14 +13,42 @@ export interface SafetyRating {
   ranked: boolean;
 }
 
+/** Attention's penalty is divided by at least this many watched miles, so one look away on a short watched stretch can't sink the rating. */
+export const ATTENTION_MIN_MILES = 10;
+
+/** The miles DashPal watched on a drive: its miles × the share of its moving seconds the dashcam covered. */
+export function watchedMiles(miles: number, movingS: number, coveredS: number): number {
+  if (!(miles > 0) || !(movingS > 0) || !(coveredS > 0)) return 0;
+  return (miles * Math.min(coveredS, movingS)) / movingS;
+}
+
 /**
- * R = base penalty points ÷ miles × 100 over the last 30 days; rating = clamp(100 − R/10, 0, 100).
- * The penalty sum is base penalties only (`ratingPenalty`), never game multipliers.
+ * Attention's share of the rating: 10 × its penalty (`attentionPenalty`) ÷ the watched miles (at
+ * least `ATTENTION_MIN_MILES`), the same scale as the other categories; 0 with nothing watched.
  */
-export function safetyRating(ratingPenalty30d: number, miles30d: number): SafetyRating {
+export function attentionDeficit(penalty: number, watched: number): number {
+  if (!(watched > 0)) return 0;
+  return (10 * Math.max(0, penalty)) / Math.max(watched, ATTENTION_MIN_MILES);
+}
+
+/** The DashPal side of a window: its Attention penalty sum and the miles DashPal watched. */
+export interface AttentionWindow {
+  penalty: number;
+  watchedMiles: number;
+}
+
+/**
+ * The Safety Rating is 100 less what each radar category takes off, over the last 30 days:
+ * the phone's categories (speed, braking, acceleration, turning, phone use) take 10 × their base
+ * penalty per mile between them (R = penalty ÷ miles × 100, so R/10), and Attention, for a driver
+ * DashPal watched, takes `attentionDeficit` of its own. Clamped to 0–100, 1 decimal. The penalty
+ * sums are base penalties only (`ratingPenalty`, `attentionPenalty`), never game multipliers.
+ */
+export function safetyRating(ratingPenalty30d: number, miles30d: number, attention?: AttentionWindow | null): SafetyRating {
   if (!(miles30d > 0)) return { rating: null, ranked: false };
   const R = (Math.max(0, ratingPenalty30d) * 100) / miles30d;
-  return { rating: roundTo(clamp(100 - R / 10, 0, 100), 1), ranked: miles30d >= RANKED_MIN_MILES };
+  const att = attention ? attentionDeficit(attention.penalty, attention.watchedMiles) : 0;
+  return { rating: roundTo(clamp(100 - R / 10 - att, 0, 100), 1), ranked: miles30d >= RANKED_MIN_MILES };
 }
 
 export interface LevelInfo {

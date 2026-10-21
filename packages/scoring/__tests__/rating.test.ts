@@ -1,4 +1,5 @@
-import { levelForPoints, safetyRating } from '../src/rating';
+import { attentionPenalty } from '../src/drive';
+import { attentionDeficit, levelForPoints, safetyRating, watchedMiles } from '../src/rating';
 
 describe('safetyRating', () => {
   test('one phone pickup every 10 mi → R 400 → 60', () =>
@@ -22,6 +23,35 @@ describe('safetyRating', () => {
   test('clamped to 0', () => expect(safetyRating(1000, 10).rating).toBe(0));
 
   test('rounded to 1 decimal', () => expect(safetyRating(7, 30).rating).toBe(97.7)); // 100 − 23.33/10
+});
+
+describe('Attention (DashPal)', () => {
+  test('watched miles: the drive’s miles × the covered share of its moving seconds', () => {
+    expect(watchedMiles(20, 1000, 500)).toBe(10);
+    expect(watchedMiles(20, 1000, 1500)).toBe(20);
+    expect(watchedMiles(20, 0, 0)).toBe(0);
+    expect(watchedMiles(0, 1000, 1000)).toBe(0);
+  });
+
+  test('its penalty: DashPal events only', () => {
+    const base = { id: 'e', startedAt: 0, durationS: 3 };
+    expect(attentionPenalty({ ...base, type: 'eyes_off', tier: 'severe' })).toBe(40);
+    expect(attentionPenalty({ ...base, type: 'drowsy', tier: 'severe' })).toBe(50);
+    expect(attentionPenalty({ ...base, type: 'hard_brake', tier: 'severe' })).toBe(0);
+  });
+
+  test('10 × penalty per watched mile, never over fewer than 10 watched miles', () => {
+    expect(attentionDeficit(40, 40)).toBe(10);
+    expect(attentionDeficit(40, 2)).toBe(40);
+    expect(attentionDeficit(40, 0)).toBe(0);
+  });
+
+  test('takes its share off the rating only for a driver DashPal watched', () => {
+    expect(safetyRating(40, 20).rating).toBe(80);
+    expect(safetyRating(40, 20, { penalty: 40, watchedMiles: 20 }).rating).toBe(60);
+    expect(safetyRating(40, 20, { penalty: 0, watchedMiles: 20 }).rating).toBe(80);
+    expect(safetyRating(40, 20, null).rating).toBe(80);
+  });
 });
 
 describe('levelForPoints — level n at 250 × n(n−1)/2', () => {

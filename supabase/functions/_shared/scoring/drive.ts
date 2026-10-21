@@ -235,6 +235,13 @@ export const basePenalty = (e: DriveEvent): number => penaltyFrom(BASE_PENALTY, 
  */
 export const ratingPenalty = (e: DriveEvent): number => (isDashcamType(e.type) ? 0 : penaltyFrom(RATING_PENALTY, e));
 
+/**
+ * What a DashPal event (eyes off the road, drowsy) adds to the rating's Attention sum
+ * (`RATING_PENALTY`); 0 for every phone event. Attention is divided by the miles DashPal watched,
+ * not all the miles (`attentionDeficit`), so drivers without one are never judged on it.
+ */
+export const attentionPenalty = (e: DriveEvent): number => (isDashcamType(e.type) ? penaltyFrom(RATING_PENALTY, e) : 0);
+
 const repeatMult = (repeatIndex: number): number => (repeatIndex <= 0 ? 1 : repeatIndex === 1 ? 1.25 : 1.5);
 
 /**
