@@ -5,7 +5,7 @@
  */
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
-import appConfig, { googleServicesFile, PERMISSION_COPY, REMINDER_LOCATION_COPY } from '../../app.config';
+import appConfig, { ALWAYS_LOCATION_COPY, googleServicesFile, PERMISSION_COPY } from '../../app.config';
 
 // Local shapes: the app's tsconfig carries no Node types.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the same module app.config reads
@@ -93,22 +93,21 @@ describe('the runtime version (release gate, C0-I1)', () => {
   });
 });
 
-// v3: every drive starts in the app and needs "While Using" location only; a started drive keeps
-// running in the background (iOS location mode, Android foreground service); no microphone. The iOS
-// "Always" strings exist for the optional forgot-to-start reminder alone (asked only when the driver
-// turns it on); Android never gets background location.
-describe('permissions (v3)', () => {
+// iOS drives start on their own with "Always" (the drive detector), and Start drive needs "While
+// Using"; a drive records in the background (iOS location mode, Android foreground service); no
+// microphone. Android (frozen) starts drives only from the app and never gets background location.
+describe('permissions', () => {
   const plugin = (name: string) => {
     const entry = build().plugins?.find((p) => Array.isArray(p) && p[0] === name);
     return Array.isArray(entry) ? (entry[1] as Record<string, unknown>) : undefined;
   };
 
-  test('a drive needs While Using; the Always strings name the forgot-to-start reminder and nothing else', () => {
+  test('iOS: the Always strings say drives are noticed and recorded with the app closed, and that the location is never sold', () => {
     const location = plugin('expo-location');
     expect(location).toMatchObject({
       locationWhenInUsePermission: PERMISSION_COPY.location,
-      locationAlwaysAndWhenInUsePermission: REMINDER_LOCATION_COPY,
-      locationAlwaysPermission: REMINDER_LOCATION_COPY,
+      locationAlwaysAndWhenInUsePermission: ALWAYS_LOCATION_COPY,
+      locationAlwaysPermission: ALWAYS_LOCATION_COPY,
       isIosBackgroundLocationEnabled: true,
       isAndroidBackgroundLocationEnabled: false,
       isAndroidForegroundServiceEnabled: true,
@@ -119,8 +118,11 @@ describe('permissions (v3)', () => {
     const plist = build().ios?.infoPlist ?? {};
     expect(plist).not.toHaveProperty('NSLocationAlwaysAndWhenInUseUsageDescription');
     expect(plist).not.toHaveProperty('NSLocationAlwaysUsageDescription');
-    expect(REMINDER_LOCATION_COPY.startsWith('Only if you turn on the forgot-to-start reminder')).toBe(true);
-    expect(REMINDER_LOCATION_COPY).toContain('stays on your phone');
+    expect(ALWAYS_LOCATION_COPY).toBe(
+      'RoadWise notices when you start driving and records the drive, even when the app is closed. Your location is never sold.'
+    );
+    // plain copy: no em dash, no exclamation mark, no reminder
+    for (const s of [ALWAYS_LOCATION_COPY, ...Object.values(PERMISSION_COPY)]) expect(s).not.toMatch(/\u2014|!|reminder|forgot/i);
   });
 
   test('Android never gets background location or audio recording', () => {
@@ -163,15 +165,13 @@ describe('permissions (v3)', () => {
     }
   });
 
-  test('the Motion & Fitness string says what motion activity is for, and claims no braking or speed', () => {
-    expect(PERMISSION_COPY.motion).toBe(
-      'RoadWise uses motion activity to stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it to notice a trip.'
-    );
+  test('the Motion & Fitness string says what motion is for (driving, parking, walking away), and claims no braking or speed', () => {
+    expect(PERMISSION_COPY.motion).toBe("RoadWise uses motion to tell when you're driving and when you've parked and walked away.");
     expect(PERMISSION_COPY.motion).not.toMatch(/brak|speed|detect/i);
   });
 
-  test('the location string names every use: drives you start and the local weather (Home’s alert and the sky)', () => {
-    expect(PERMISSION_COPY.location).toBe('RoadWise measures speed and miles on drives you start, and checks local weather.');
+  test('the location string names every use: the drives and the local weather (Home’s alert and the sky)', () => {
+    expect(PERMISSION_COPY.location).toBe('RoadWise measures speed and distance on your drives and checks the local weather.');
   });
 
   test('the deep link scheme stays roadwise', () => {

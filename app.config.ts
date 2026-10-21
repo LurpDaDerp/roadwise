@@ -22,21 +22,24 @@ export function googleServicesFile(
   return exists(local) ? './google-services.json' : undefined;
 }
 
-/** The permission strings, in plain words. A drive needs location only "While Using"; Home and the sky read the rough area for the weather. */
+/**
+ * The permission strings, in plain words. Location measures the drive and reads the rough area for
+ * the weather; Motion & Fitness tells driving from parking and walking away (iOS: drives start and
+ * end on their own with it).
+ */
 export const PERMISSION_COPY = {
-  location: 'RoadWise measures speed and miles on drives you start, and checks local weather.',
-  motion:
-    'RoadWise uses motion activity to stop a drive you forgot to end once you walk away from your car. The optional forgot-to-start reminder uses it to notice a trip.',
+  location: 'RoadWise measures speed and distance on your drives and checks the local weather.',
+  motion: "RoadWise uses motion to tell when you're driving and when you've parked and walked away.",
   camera: "RoadWise uses the camera only to scan your friends' QR codes. Nothing is recorded.",
   bluetooth: 'RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts on your phone and add its events to your drives.',
 } as const;
 
 /**
- * The iOS "Always" string. Asked for only when the driver turns on the optional forgot-to-start
- * reminder (onboarding or Settings › Driving); nothing else in the app uses Always.
+ * The iOS "Always" string: drives start and record on their own (the drive detector in
+ * modules/drive-sense). Asked once, from While Using, at onboarding (`DriveDetect.requestAlways`).
  */
-export const REMINDER_LOCATION_COPY =
-  'Only if you turn on the forgot-to-start reminder: RoadWise reminds you at your next stop if you forgot to start a drive. Your location stays on your phone.';
+export const ALWAYS_LOCATION_COPY =
+  'RoadWise notices when you start driving and records the drive, even when the app is closed. Your location is never sold.';
 
 /** `{ [key]: value }`, or nothing when the value is undefined (the key is left out entirely). */
 function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
@@ -66,13 +69,14 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       supportsTablet: false,
       usesAppleSignIn: true,
       config: { usesNonExemptEncryption: false },
-      // A drive started in the app keeps recording in the background on "While Using" (the
-      // `location` background mode, from expo-location below); alerts play with the screen locked
-      // (`audio`, from expo-audio). The usage strings are set by the plugins below.
+      // Drives start on their own with "Always" and record in the background (the `location`
+      // background mode, from expo-location below; a Start-card drive keeps recording on "While
+      // Using"); alerts play with the screen locked (`audio`, from expo-audio). The usage strings are
+      // set by the plugins below.
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
         // The Live Activity / Dynamic Island for a drive in progress (modules/live-drive +
-        // targets/live-drive-widget).
+        // targets/live-drive-widget), started locally or by RoadWise's push-to-start.
         NSSupportsLiveActivities: true,
         // The DashPal dashcam (react-native-ble-manager, no config plugin: its plugin can add
         // location permissions with a maxSdkVersion that would break drive location on Android 12+).
@@ -91,8 +95,9 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       // EXPO_APPLE_TEAM_ID (EAS: an environment variable) or replace it with the team ID from Xcode.
       ...optional('appleTeamId', process.env.EXPO_APPLE_TEAM_ID),
       // The app's privacy manifest: the "required reason" APIs drive-sense's Swift calls
-      // (UserDefaults.standard in CaptureController, LockProbe and TripReminder, read and written by
-      // this app only; ProcessInfo.systemUptime in TimeBase, to time events within the app). App Store
+      // (UserDefaults.standard in CaptureController, DetectStateRecord and DriveDetectAccess, read and
+      // written by this app only; ProcessInfo.systemUptime in TimeBase, to time events within the
+      // app). The row journal reads no file timestamps or disk space. App Store
       // Connect rejects an upload without them (ITMS-91053). app/__tests__/app-config.test.ts holds
       // this list to the APIs the Swift sources use.
       privacyManifests: {
@@ -165,12 +170,11 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
         'expo-location',
         {
           locationWhenInUsePermission: PERMISSION_COPY.location,
-          // A drive needs "While Using" only. "Always" exists for the optional forgot-to-start
-          // reminder on iOS and is asked for only when the driver turns it on.
-          locationAlwaysAndWhenInUsePermission: REMINDER_LOCATION_COPY,
-          locationAlwaysPermission: REMINDER_LOCATION_COPY,
+          // iOS: "Always" lets drives start on their own; Start drive needs "While Using" only.
+          locationAlwaysAndWhenInUsePermission: ALWAYS_LOCATION_COPY,
+          locationAlwaysPermission: ALWAYS_LOCATION_COPY,
           motionUsagePermission: PERMISSION_COPY.motion,
-          // A drive started in the app continues in the background on iOS with While Using.
+          // iOS: a drive records in the background (on its own with Always, from Start with While Using).
           isIosBackgroundLocationEnabled: true,
           isAndroidBackgroundLocationEnabled: false,
           // Android keeps a started drive running through its location foreground service.
