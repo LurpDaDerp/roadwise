@@ -424,7 +424,7 @@ describe('the speed-limit lookup reads each row’s own fix', () => {
     await failing.host.stop({ endOpenTrip: true });
   });
 
-  test('stopped at a light with no course (iPhone: -1), the sign keeps the limit it had; a lost fix drops it', async () => {
+  test('stopped at a light with no course (iPhone: -1), the sign keeps the limit it had; a lost fix keeps it up 10 s, then "-"', async () => {
     const { client } = realLimits(35, null);
     const h = build({ limits: client });
     await h.host.boot();
@@ -435,13 +435,16 @@ describe('the speed-limit lookup reads each row’s own fix', () => {
     const at = driven.at(-1)!;
     await feedSettled(h, client, rows(5, { speedMps: 0, t0: at.ts + 1000, over: () => ({ lng: at.lng, course: -1 }) }));
     expect(h.host.snapshot()).toMatchObject({ stopped: true, limitMph: 35 });
-    // A lost fix: nothing is known, and the old match does not come back with the fix (back 55 m off the road).
+    // A lost fix: nothing is known (the detectors see no limit), and the old match does not come
+    // back with the fix (back 55 m off the road). The sign keeps the last limit for 10 s.
     await feedSettled(h, client, rows(1, { speedMps: 0, t0: at.ts + 6000, over: () => ({ lng: at.lng, course: -1, gnssValid: false, speed: -1, hAcc: -1 }) }));
-    expect(h.host.snapshot().limitMph).toBeNull();
-    await feedSettled(h, client, rows(2, { speedMps: 0, t0: at.ts + 7000, over: () => ({ lat: at.lat + 0.0005, lng: at.lng, course: -1 }) }));
+    expect(h.host.snapshot()).toMatchObject({ limitMph: 35, limit: { source: 'unknown' } });
+    await feedSettled(h, client, rows(9, { speedMps: 0, t0: at.ts + 7000, over: () => ({ lat: at.lat + 0.0005, lng: at.lng, course: -1 }) }));
+    expect(h.host.snapshot()).toMatchObject({ limitMph: 35, limit: { source: 'unknown' } });
+    await feedSettled(h, client, rows(1, { speedMps: 0, t0: at.ts + 16_000, over: () => ({ lat: at.lat + 0.0005, lng: at.lng, course: -1 }) }));
     expect(h.host.snapshot().limitMph).toBeNull();
     // Back on the road, still standing: the road it stands on, matched afresh.
-    await feedSettled(h, client, rows(1, { speedMps: 0, t0: at.ts + 9000, over: () => ({ lng: at.lng, course: -1 }) }));
+    await feedSettled(h, client, rows(1, { speedMps: 0, t0: at.ts + 17_000, over: () => ({ lng: at.lng, course: -1 }) }));
     expect(h.host.snapshot().limitMph).toBe(35);
     await h.host.stop({ endOpenTrip: true });
   });
