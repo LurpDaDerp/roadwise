@@ -213,7 +213,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { reminder?: ReminderDeps
         </Card>
       </Sheet>
 
-      <Sheet visible={lookSheet} onClose={() => setLookSheet(false)} title={copy.appearance.sheetTitle} testID="settings-appearance-sheet">
+      <Sheet visible={lookSheet} onClose={() => setLookSheet(false)} title={copy.appearance.sheetTitle} scroll testID="settings-appearance-sheet">
         <View style={{ gap: th.space.sm }}>
           <Card padded={false}>
             {APPEARANCE_CHOICES.map((choice) => (

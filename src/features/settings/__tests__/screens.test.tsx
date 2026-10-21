@@ -79,6 +79,16 @@ beforeEach(() => {
 });
 afterEach(() => clearQueryClients());
 
+type HostNode = { type: unknown; props: { testID?: string }; parent: HostNode | null };
+
+/** Whether a rendered element scrolls inside the panel with this test ID (not the page under it). */
+function scrollsWithin(el: unknown, panelTestID: string): boolean {
+  for (let node = el as HostNode | null; node && node.props.testID !== panelTestID; node = node.parent) {
+    if (node.type === 'RCTScrollView') return true;
+  }
+  return false;
+}
+
 describe('Settings', () => {
   describe('the forgot-to-start reminder', () => {
     const world = (platform: 'ios' | 'android', adapter = fakeAdapter(snap({ platform }))) => {
@@ -256,6 +266,10 @@ describe('Settings', () => {
     ]);
     expect(sheet.getByRole('radio', { name: 'Dark' })).toBeChecked();
     expect(sheet.getByText('Saved on this phone only.')).toBeOnTheScreen();
+    // The rows and the footer scroll inside the sheet, so none is cut off at the largest text sizes.
+    for (const el of [sheet.getByRole('radio', { name: 'System' }), sheet.getByText('Saved on this phone only.')]) {
+      expect(scrollsWithin(el, 'settings-appearance-sheet')).toBe(true);
+    }
 
     await act(async () => {
       fireEvent.press(sheet.getByRole('radio', { name: 'System' }));
