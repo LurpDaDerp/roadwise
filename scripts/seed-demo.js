@@ -2,7 +2,8 @@
 'use strict';
 /**
  * Seeds the demo account: about 60 drives over the last 120 days around Seattle, so every screen
- * (Home, Analytics, History, the drive summaries, Profile, Leaderboards) has something to show.
+ * (Home, Analytics with its spots to watch, History, the drive summaries, Profile, Friends) has
+ * something to show.
  *
  *   local:  SUPABASE_URL=http://127.0.0.1:54621 SUPABASE_SERVICE_ROLE_KEY=<key> node scripts/seed-demo.js
  *   hosted: SUPABASE_URL=https://<ref>.supabase.co SUPABASE_SERVICE_ROLE_KEY=<secret key> node scripts/seed-demo.js
@@ -17,17 +18,17 @@
  * auth.users) and a new one is made. Nothing derived is written by hand. The account is created
  * through the Auth admin API and onboarded through the app's own RPCs (claim_username,
  * complete_onboarding, update_profile). Every drive goes through the same path as a phone upload:
- * the shared scoring package scores it (`scoreDrive`, `applyStreak`, as finalize-trip does) and
- * `private.drive_context` + `private.apply_drive` store it, oldest first. So points, level, streak,
- * freezes, the Safety Rating, challenges, achievements and the ledger are the server's own
- * derivations.
+ * a v4 upload (its counters as the server would estimate them), stored as finalize-trip stores it
+ * (`keepDashcamEvents`, `classifyDrive`) through `private.drive_context` + `private.apply_drive`,
+ * oldest first. So the Safety Rating, the weekly goals and the achievements are the server's own
+ * derivations. A few places repeat the same event (`DEMO_SPOTS`), so Spots to watch has two active
+ * spots and one cleared.
  *
  * `private.*` is not on the Data API, so the drives go through `supabase db query`: `--local` when
  * SUPABASE_URL is a local address, else `--linked` (the CLI's linked project, which must be the
- * project SUPABASE_URL names). Drives from weeks that have ended are sent in batches, each one
- * checking that drive_context hands back exactly the streak and daily-cap context the script scored
- * against; drives from the current week can complete weekly challenges (which add freezes), so each
- * is scored against the context the server returns for it.
+ * project SUPABASE_URL names). The drives are sent in batches, each one checking that drive_context
+ * answers version 23 with nothing stored and no merge (two demo drives never start within 5 min
+ * and 150 m of each other).
  *
  * Env:
  *   SUPABASE_URL                the project URL (local: `supabase status`, API_URL)
@@ -37,7 +38,7 @@
  *
  * The drives are generated from a fixed seed relative to now, so two runs on the same day give the
  * same account. scripts/__tests__/seed-demo.test.ts checks the generator against the upload
- * contract, the integrity rules and the scoring.
+ * contract, the integrity rules, the rating and the spots.
  */
 
 const fs = require('fs');
@@ -65,9 +66,9 @@ function installTsHook() {
 installTsHook();
 
 const scoring = require('../packages/scoring/src/index.ts');
-const { FinalizeTripPayloadV3Schema } = require('../src/data/sync/payload.ts');
+const { parseFinalizeUpload } = require('../src/data/sync/payload.ts');
 // A Deno module (its imports name `.ts`): the path is built so the scripts' typecheck does not follow it.
-const { integrityReason, isLoopDrive } = require(path.join(ROOT, 'supabase', 'functions', '_shared', 'finalize_rules.ts'));
+const { integrityReason } = require(path.join(ROOT, 'supabase', 'functions', '_shared', 'finalize_rules.ts'));
 const { sunIsDown, dayKey } = require('../src/lib/time.ts');
 const { encodeRuns } = require('../src/lib/polyline.ts');
 
@@ -76,7 +77,7 @@ const DEMO_USERNAME = 'demo_driver';
 const DEFAULT_PASSWORD = 'RoadWiseDemo!2026';
 const TERMS_VERSION = '2026-10-05';
 const TZ = 'America/Los_Angeles';
-const APP_VERSION = '2.0.0-demo';
+const APP_VERSION = '3.0.0-demo';
 const SEED = 20261019;
 const DAYS = 120;
 const M_PER_MILE = 1609.344;
@@ -325,18 +326,24 @@ function recordDrive(trip, rnd) {
   };
 }
 
-/** Events per drive: the earlier months had more phone use and harder driving than the last 30 days. */
+/** Events per drive: the earlier months had harder driving than the last 30 days. */
 function eventRates(back) {
-  if (back >= 30) return { speeding: 0.19, hard_brake: 0.05, hard_accel: 0.02, hard_corner: 0.03, phone: 0.55 };
-  if (back >= 13) return { speeding: 0.17, hard_brake: 0.03, hard_accel: 0.012, hard_corner: 0.02, phone: 0.12 };
-  return { speeding: 0.15, hard_brake: 0.025, hard_accel: 0.01, hard_corner: 0.018, phone: 0 };
+  if (back >= 30) return { speeding: 0.19, hard_brake: 0.05, hard_accel: 0.02, hard_corner: 0.03 };
+  if (back >= 13) return { speeding: 0.17, hard_brake: 0.03, hard_accel: 0.012, hard_corner: 0.02 };
+  return { speeding: 0.15, hard_brake: 0.025, hard_accel: 0.01, hard_corner: 0.018 };
 }
+
+/** mph-seconds over the speeding line after the grace, at a steady `over` mph past the line for `durationS` rows. */
+const overMphSOf = (durationS, over) => round(Math.max(1, durationS - scoring.SPEEDING_GRACE_S) * over, 1);
 
 /** The events of one drive, on its visible route, with what the detectors would have measured. */
 function makeEvents(trip, rec, rnd, opts) {
   const rates = eventRates(trip.day.back);
-  // Indices on the visible route where an event may start: after the first 45 s and with room before the end.
-  const slots = rec.visible.filter((i) => rec.times[i] >= 45 && rec.times[i] <= rec.durationS - 75);
+  // Indices on the visible route where an event may start: after the first 45 s, with room before the
+  // end, and away from the demo spots (only `spotEvents` repeats there, so a cleared spot stays cleared).
+  const slots = rec.visible.filter(
+    (i) => rec.times[i] >= 45 && rec.times[i] <= rec.durationS - 75 && DEMO_SPOTS.every((spot) => distanceM([rec.track[i].lat, rec.track[i].lng], spot.at) > SPOT_CLEAR_M)
+  );
   if (slots.length === 0 || trip.short) return [];
   const taken = new Set();
   const slot = () => {
@@ -358,21 +365,19 @@ function makeEvents(trip, rec, rnd, opts) {
     limit: rec.track[i].limit,
   });
   const scale = Math.pow(rec.miles, 0.85);
-  const gentle = opts.gentle;
 
   for (let n = poisson(rnd, rates.speeding * scale); n > 0; n -= 1) {
     const i = slot();
     if (i === null) break;
     const p = at(i);
     const roll = rnd();
-    const tier = gentle || roll < 0.72 ? 'minor' : roll < 0.95 ? 'moderate' : 'severe';
+    const tier = roll < 0.72 ? 'minor' : roll < 0.95 ? 'moderate' : 'severe';
     const over = tier === 'minor' ? between(rnd, 0.6, 3.6) : tier === 'moderate' ? between(rnd, 4.6, 8.6) : between(rnd, 9.6, 15);
     const speedMph = round(p.limit + scoring.speedTolerance(p.limit) + over, 1);
     if (scoring.speedTier(speedMph, p.limit) !== tier) throw new Error('speeding tier drifted from the scoring package');
     // Every over-the-line row, more than the grace (a shorter episode is never an event).
-    const durationS = intBetween(rnd, scoring.SPEEDING_GRACE_S + 1, tier === 'severe' ? 18 : gentle ? 25 : 70);
-    // mph over the points line summed over the rows after the grace, at a steady speed
-    const overMphS = round((durationS - scoring.SPEEDING_GRACE_S) * (speedMph - p.limit - scoring.speedTolerance(p.limit)), 1);
+    const durationS = intBetween(rnd, scoring.SPEEDING_GRACE_S + 1, tier === 'severe' ? 18 : 70);
+    const overMphS = overMphSOf(durationS, speedMph - p.limit - scoring.speedTolerance(p.limit));
     events.push({ type: 'speeding', tier, startedAt: p.startedAt, durationS, lat: p.lat, lng: p.lng, measured: { speedMph, limitMph: p.limit, overMphS } });
   }
   const harsh = (type, rate, g) => {
@@ -380,7 +385,7 @@ function makeEvents(trip, rec, rnd, opts) {
       const i = slot();
       if (i === null) break;
       const p = at(i);
-      const severe = !gentle && rnd() < 0.18;
+      const severe = rnd() < 0.18;
       const peakG = round(severe ? between(rnd, g.severe, g.severe + 0.12) : between(rnd, g.minor, g.severe - 0.01), 2);
       events.push({
         type,
@@ -397,41 +402,6 @@ function makeEvents(trip, rec, rnd, opts) {
   harsh('hard_accel', rates.hard_accel, scoring.HARD_ACCEL_G);
   harsh('hard_corner', rates.hard_corner, scoring.HARD_CORNER_G);
 
-  if (!gentle && rnd() < rates.phone) {
-    const i = slot();
-    if (i !== null) {
-      const p = at(i);
-      const usedS = rnd() < 0.55 ? intBetween(rnd, 4, 14) : intBetween(rnd, 20, 55);
-      const pickupS = Math.min(usedS, 15);
-      // The highest speed during the phone use: the pace of the road (it prices both events).
-      const maxSpeedMph = round(p.mph, 1);
-      events.push({
-        type: 'phone_pickup',
-        tier: 'severe',
-        startedAt: p.startedAt,
-        durationS: usedS,
-        lat: p.lat,
-        lng: p.lng,
-        measured: { mounted: false, speedMph: round(p.mph * between(rnd, 0.7, 1), 1), maxSpeedMph },
-      });
-      if (usedS > pickupS) {
-        // The detector's split (src/core/detectors/phoneUse.ts): handling is what follows the first 15 s.
-        const extra = usedS - 15;
-        // Where the car was 15 s on (track points are about 120 m apart), still on the visible route.
-        const j = Math.min(rec.visible[rec.visible.length - 1], i + Math.max(1, Math.round(((15 * p.mph) / 3600) * (M_PER_MILE / 120))));
-        events.push({
-          type: 'phone_handling',
-          tier: usedS <= 30 ? 'moderate' : 'severe',
-          startedAt: p.startedAt + 15000,
-          durationS: extra,
-          units: Math.max(1, Math.ceil(extra / 15)),
-          lat: round(rec.track[j].lat, 5),
-          lng: round(rec.track[j].lng, 5),
-          measured: { mounted: false, maxSpeedMph },
-        });
-      }
-    }
-  }
   if (opts.dashcamEvent) {
     const i = slot();
     if (i !== null) {
@@ -450,35 +420,97 @@ function makeEvents(trip, rec, rnd, opts) {
   return events.sort((a, b) => a.startedAt - b.startedAt).map((e) => ({ id: uuid(rnd), ...e }));
 }
 
-/** Miles driven while speeding or on the phone are not safe miles (the session's `safeDistanceM`). */
-function unsafeMiles(events, rec) {
-  let m = 0;
-  for (const e of events) {
-    if (e.type === 'speeding') m += (e.measured.speedMph * e.durationS) / 3600;
-    if (e.type === 'phone_pickup') m += ((e.measured.speedMph ?? 20) * e.durationS) / 3600;
-  }
-  return Math.min(rec.miles, m);
+// ---------------------------------------------------------------------------------------------
+// Problem spots: places the demo driver keeps doing the same thing (spots.md §8)
+
+/**
+ * Places the demo driver keeps doing the same thing, so Analytics › Spots to watch has something
+ * to show. `rule` picks the matching drives (same route and direction): `lastDays` + `hit(n)`, n
+ * counting the matching drives in that window oldest first; or the `count` newest that started
+ * `newestBefore` days ago or more (a spot that has since cleared).
+ */
+const DEMO_SPOTS = [
+  // Speeding on the 35 mph stretch down Dexter on the way to work: 2 of every 3 commutes in the last 45 days.
+  { type: 'speeding', route: 'work', reverse: false, at: [47.6415, -122.3434], rule: { lastDays: 45, hit: (n) => n % 3 !== 2 }, durationS: 16, overMph: 7 },
+  // A hard brake just before the turn in Fremont on the way home: every other evening commute in the last 45 days.
+  { type: 'hard_brake', route: 'work', reverse: true, at: [47.6492, -122.3497], rule: { lastDays: 45, hit: (n) => n % 2 === 0 }, peakG: 0.47 },
+  // Hard starts from the light at N 39th: the 4 newest commutes started more than 16 days ago, clean since (a cleared spot).
+  { type: 'hard_accel', route: 'work', reverse: false, at: [47.6553, -122.3421], rule: { newestBefore: 16, count: 4 }, peakG: 0.36 },
+];
+
+/** No random event starts this close to a demo spot. */
+const SPOT_CLEAR_M = 250;
+
+/** For each demo spot, the indices of the planned trips it repeats on. */
+function spotTrips(trips) {
+  return DEMO_SPOTS.map((spot) => {
+    const matching = trips.map((t, i) => ({ t, i })).filter(({ t }) => !t.short && t.route === spot.route && Boolean(t.reverse) === spot.reverse);
+    if (spot.rule.lastDays !== undefined) {
+      const inWindow = matching.filter(({ t }) => t.day.back < spot.rule.lastDays);
+      return new Set(inWindow.filter((_, n) => spot.rule.hit(n)).map(({ i }) => i));
+    }
+    const old = matching.filter(({ t }) => t.day.back >= spot.rule.newestBefore);
+    return new Set(old.slice(-spot.rule.count).map(({ i }) => i));
+  });
+}
+
+/** The track index nearest a point. */
+function nearestIndex(track, at) {
+  let best = 0;
+  let bestM = Infinity;
+  track.forEach((p, i) => {
+    const m = distanceM([p.lat, p.lng], at);
+    if (m < bestM) {
+      bestM = m;
+      best = i;
+    }
+  });
+  return best;
+}
+
+/** The demo spots' events on one drive: each at the track point nearest its place, when that point is visible. */
+function spotEvents(tripIndex, rec, rndSpots, picked) {
+  const events = [];
+  DEMO_SPOTS.forEach((spot, s) => {
+    if (!picked[s].has(tripIndex)) return;
+    const i = nearestIndex(rec.track, spot.at);
+    if (!rec.visible.includes(i)) return;
+    const p = rec.track[i];
+    const base = { startedAt: rec.startedAt + Math.round(rec.times[i] * 1000), lat: round(p.lat, 5), lng: round(p.lng, 5) };
+    const pace = rec.paceBy.get(p.limit) ?? p.limit;
+    if (spot.type === 'speeding') {
+      const speedMph = round(p.limit + scoring.speedTolerance(p.limit) + spot.overMph, 1);
+      const tier = scoring.speedTier(speedMph, p.limit);
+      events.push({ ...base, type: 'speeding', tier, durationS: spot.durationS, measured: { speedMph, limitMph: p.limit, overMphS: overMphSOf(spot.durationS, spot.overMph) } });
+    } else {
+      const g = spot.type === 'hard_brake' ? scoring.HARD_BRAKE_G : spot.type === 'hard_accel' ? scoring.HARD_ACCEL_G : scoring.HARD_CORNER_G;
+      events.push({
+        ...base,
+        type: spot.type,
+        tier: spot.peakG >= g.severe ? 'severe' : 'minor',
+        durationS: 2,
+        measured: { peakG: spot.peakG, speedMph: round(pace * between(rndSpots, 0.6, 1.0), 1) },
+      });
+    }
+  });
+  return events.map((e) => ({ id: uuid(rndSpots), ...e }));
 }
 
 // ---------------------------------------------------------------------------------------------
-// The whole history, scored as finalize-trip scores it
+// The whole history, stored as finalize-trip stores it
 
-const START_STREAK = { streak: 0, atRisk: false, freezes: 2, cleanRun: 0 };
-
-/** The finalize-trip upload a phone would have sent for a recorded drive. */
+/** The finalize-trip upload (v4) a phone would have sent for a recorded drive. */
 function toPayload(trip, rec, events, rnd, dashcam) {
   const first = rec.track[0];
   const last = rec.track[rec.track.length - 1];
-  const safeMiles = round(Math.max(0, rec.miles - unsafeMiles(events, rec)), 2);
   const payload = {
-    v: 3,
+    v: 4,
     clientTripId: uuid(rnd),
     startedAt: rec.startedAt,
     endedAt: rec.endedAt,
     tz: TZ,
     localDay: dayKey(new Date(rec.startedAt), TZ),
     miles: rec.miles,
-    safeMiles,
     nightMiles: rec.nightMiles,
     durationS: rec.durationS,
     start: { lat: round(first.lat, 4), lng: round(first.lng, 4) },
@@ -487,6 +519,10 @@ function toPayload(trip, rec, events, rnd, dashcam) {
     integrity: { mockLocation: false, motionMismatch: false, validGnssPct: round(between(rnd, 92, 99.5), 1), maxSpeedMph: round(Math.max(...rec.paceBy.values()) * 1.12, 1) },
     events,
     appVersion: APP_VERSION,
+    origin: 'manual',
+    notDrivingExpired: false,
+    // the counters the phone would have counted, as the server would estimate them for this drive
+    exposure: scoring.estimateExposure(rec.miles, rec.durationS),
   };
   if (dashcam) {
     const movingS = Math.round(rec.durationS * 0.93);
@@ -495,23 +531,19 @@ function toPayload(trip, rec, events, rnd, dashcam) {
   return payload;
 }
 
-/** finalize-trip's scoring of one upload against a context (handler.ts `buildScoringInput` for a fresh drive). */
-function scoreUpload(p, ctx) {
+/** What finalize-trip stores of a fresh upload (handler.ts `buildStoredDrive`): the kept events, the DashPal seconds, scored or too short. */
+function storeUpload(p) {
   const kept = scoring.keepDashcamEvents(p.events);
   const dashcam = p.dashcam
     ? { deviceId: p.dashcam.deviceId, movingS: p.dashcam.movingS, coveredS: p.dashcam.coveredS, synced: p.dashcam.synced, on: scoring.dashcamDrive(p.dashcam) }
     : { deviceId: null, movingS: 0, coveredS: 0, synced: false, on: false };
-  const breakdown = scoring.scoreDrive(
-    { miles: p.miles, safeMiles: p.safeMiles, events: kept, loopRepeat: false, dashcam: dashcam.on, durationS: p.durationS },
-    { streak: ctx.streak.streak, safeMilesEarlierToday: ctx.safeMilesEarlierToday }
-  );
-  const streak = scoring.applyStreak(ctx.streak, { scored: breakdown.scored, net: breakdown.net, activeEventCount: breakdown.activeEventCount });
-  return { kept, dashcam, breakdown, streak };
+  const cls = scoring.classifyDrive({ miles: p.miles, durationS: p.durationS, events: kept });
+  return { kept, dashcam, scored: cls.scored, reason: cls.reason, activeEventCount: cls.activeEventCount };
 }
 
 /** The `private.apply_drive` envelope finalize-trip would build (handler.ts). */
-function toEnvelope(userId, p, ctx, scored) {
-  const { kept, dashcam, breakdown, streak } = scored;
+function toEnvelope(userId, p, stored) {
+  const { kept, dashcam, scored, reason } = stored;
   return {
     user: userId,
     mergeInto: null,
@@ -523,136 +555,100 @@ function toEnvelope(userId, p, ctx, scored) {
       tz: p.tz,
       localDay: p.localDay,
       miles: p.miles,
-      safeMiles: p.safeMiles,
       nightMiles: p.nightMiles,
       durationS: Math.round(p.durationS),
       end: p.end,
       polyline: p.polyline,
       appVersion: p.appVersion,
       dashcam: p.dashcam ?? null,
+      origin: p.origin,
+      notDrivingExpired: p.notDrivingExpired,
+      exposure: p.exposure ? scoring.clampExposure(p.exposure) : null,
     },
-    scored: breakdown.scored,
-    reason: breakdown.reason ?? null,
-    net: breakdown.net,
-    breakdown,
+    scored,
+    reason,
     events: kept.map((e) => ({
       id: e.id,
       type: e.type,
       tier: e.tier,
       startedAt: e.startedAt,
       durationS: e.durationS,
-      units: e.units,
-      stoppedInTraffic: e.stoppedInTraffic,
       zone: null,
       status: 'active',
       lat: e.lat,
       lng: e.lng,
       measured: e.measured,
     })),
-    streak: { before: { streak: ctx.streak.streak }, after: streak.state, outcome: streak.outcome, freezeEarned: streak.freezeEarned },
-    isLoop: false,
-    loopRepeat: false,
-    safeMilesEarlierToday: ctx.safeMilesEarlierToday,
     scoringVersion: scoring.SCORING_VERSION,
   };
 }
 
-/** How many of the newest scored drives are kept free of losses, so the streak ends long. */
-const STREAK_TAIL = 14;
-
 /**
- * Every drive of the demo history, oldest first: the upload, the context it is scored against
- * (simulated: the streak as apply_drive leaves it, the safe miles earlier that local day) and the
- * score. Drives among the newest `STREAK_TAIL` scored ones keep only gentle events, and lose them
- * if they would still cost points.
+ * Every drive of the demo history, oldest first: the trip, the upload and what finalize-trip
+ * stores of it. The demo spots' repeated events come from their own generator, so the rest of the
+ * history is the same with or without them.
  */
 function buildHistory(now, seed = SEED) {
   const rnd = mulberry32(seed);
+  const rndSpots = mulberry32(seed ^ 0x5b07);
   const trips = planTrips(now, rnd).filter((t) => localInstant(t.day, t.minutes) < now - 2 * 3600 * 1000);
+  const picked = spotTrips(trips);
   const scoredIdx = trips.map((t, i) => (t.short ? -1 : i)).filter((i) => i >= 0);
-  const tail = new Set(scoredIdx.slice(-STREAK_TAIL));
   // DashPal rode along on three outings in the last two weeks: one caught eyes off the road, one drowsiness on a late drive home.
   const dashcamIdx = scoredIdx.filter((i) => trips[i].day.back < 14 && trips[i].route !== 'work').slice(-3);
   const lateIdx = dashcamIdx.reduce((a, i) => (a === undefined || trips[i].minutes > trips[a].minutes ? i : a), undefined);
   const eyesIdx = dashcamIdx.find((i) => i !== lateIdx);
 
-  let state = { ...START_STREAK };
-  const safeByDay = new Map();
-  const drives = [];
-  trips.forEach((trip, i) => {
+  return trips.map((trip, i) => {
     const rec = recordDrive(trip, rnd);
-    const gentle = tail.has(i);
     const dashcamEvent = i === lateIdx ? 'drowsy' : i === eyesIdx ? 'eyes_off' : null;
-    let events = makeEvents(trip, rec, rnd, { gentle, dashcamEvent });
-    let payload = toPayload(trip, rec, events, rnd, dashcamIdx.includes(i));
-    const ctx = () => ({ streak: { ...state }, safeMilesEarlierToday: round(safeByDay.get(payload.localDay) ?? 0, 2) });
-    let scored = scoreUpload(payload, ctx());
-    // An at-risk streak resets on any drive with events: the tail must restore it, not lose it.
-    if (gentle && (scored.breakdown.net <= 0 || (state.atRisk && scored.breakdown.activeEventCount > 0))) {
-      events = events.filter((e) => e.type === 'eyes_off' || e.type === 'drowsy');
-      payload = { ...payload, events, safeMiles: rec.miles };
-      scored = scoreUpload(payload, ctx());
-    }
-    const context = ctx();
-    drives.push({ trip, payload, ctx: context, scored });
-    if (scored.breakdown.scored) {
-      safeByDay.set(payload.localDay, (safeByDay.get(payload.localDay) ?? 0) + payload.safeMiles);
-      state = scored.streak.state;
-    }
+    const events = [...makeEvents(trip, rec, rnd, { dashcamEvent }), ...spotEvents(i, rec, rndSpots, picked)].sort((a, b) => a.startedAt - b.startedAt);
+    const payload = toPayload(trip, rec, events, rnd, dashcamIdx.includes(i));
+    return { trip, payload, stored: storeUpload(payload) };
   });
-  return drives;
 }
 
 /**
- * What the history should add up to on the server: the Safety Rating over 30 days
- * (`safetyRatingOf`, as migration 0022's `private.rating_window` computes it), the streak and the
- * radar's category scores (`axisScores` over the window's miles floored at `RANKED_MIN_MILES`,
- * whole numbers, as the Analytics tab shows them).
+ * What the history should add up to on the server: the Safety Rating as of `now` (scoring
+ * `ratingAt`, as migration 0023's `private.rating_at` computes it), its categories (whole numbers,
+ * as Analytics shows them) and the event counts.
  */
 function summarize(drives, now) {
-  const since = now - 30 * 86400000;
-  const scored = drives.filter((d) => d.scored.breakdown.scored);
-  const recent = scored.filter((d) => d.payload.startedAt > since);
-  // A window: its stored events' rating penalties per category, its miles and the miles DashPal watched (Attention's).
-  const ratingWindow = (list) => ({
-    penalties: scoring.axisPenalties(list.flatMap((d) => d.scored.kept)),
-    miles: list.reduce((s, d) => s + d.payload.miles, 0),
-    watchedMiles: list.reduce(
-      (s, d) => s + (d.payload.dashcam ? scoring.watchedMiles(d.payload.miles, d.payload.dashcam.movingS, d.payload.dashcam.coveredS) : 0),
-      0
-    ),
-  });
-  const axes = (list) =>
-    Object.fromEntries(Object.entries(scoring.axisScores(ratingWindow(list), scoring.RANKED_MIN_MILES)).map(([k, v]) => [k, v === null ? null : Math.round(v)]));
+  const scored = drives.filter((d) => d.stored.scored);
+  const rating = scoring.ratingAt(
+    scored.map((d) => ({
+      id: d.payload.clientTripId,
+      startedAt: d.payload.startedAt,
+      miles: d.payload.miles,
+      watchedMiles: d.payload.dashcam ? scoring.watchedMiles(d.payload.miles, d.payload.dashcam.movingS, d.payload.dashcam.coveredS) : 0,
+      exposure: scoring.clampExposure(d.payload.exposure),
+      events: d.stored.kept,
+    })),
+    now
+  );
   const counts = {};
   for (const d of drives) for (const e of d.payload.events) counts[e.type] = (counts[e.type] ?? 0) + 1;
-  const last = drives[drives.length - 1];
   return {
     drives: drives.length,
     scored: scored.length,
-    clean: scored.filter((d) => d.scored.breakdown.activeEventCount === 0).length,
-    drives30: recent.length,
+    clean: scored.filter((d) => d.stored.activeEventCount === 0).length,
+    drives90: scored.filter((d) => d.payload.startedAt > now - 90 * 86400000).length,
     miles: round(scored.reduce((s, d) => s + d.payload.miles, 0), 1),
-    miles30: round(ratingWindow(recent).miles, 1),
-    rating30: scoring.safetyRatingOf(ratingWindow(recent)).rating,
-    axes30: axes(recent),
-    axesAll: axes(scored),
+    miles90: round(rating.miles, 1),
+    rating: rating.rating,
+    ranked: rating.ranked,
+    axes: Object.fromEntries(Object.entries(rating.scores).map(([k, v]) => [k, v === null ? null : Math.round(v)])),
     counts,
-    streak: last.scored.breakdown.scored ? last.scored.streak.state.streak : last.ctx.streak.streak,
-    points: scored.reduce((s, d) => s + d.scored.breakdown.net, 0),
   };
 }
 
-/**
- * Why finalize-trip would not take an upload as a fresh scored drive (null: it would): the upload
- * contract, the integrity rules (a refused drive is stored unscored) and the loop rule.
- */
+/** Why finalize-trip would not take an upload as a fresh scored drive (null: it would): the v4 contract and the integrity rules. */
 function uploadProblem(p) {
-  const parsed = FinalizeTripPayloadV3Schema.safeParse(p);
+  const parsed = parseFinalizeUpload(p);
   if (!parsed.success) return `breaks the upload contract: ${parsed.error.message}`;
+  if (p.v !== 4) return 'is not a v4 upload';
   const refused = integrityReason(p);
   if (refused) return `would be stored unscored as ${refused}`;
-  if (isLoopDrive(p.start, p.end, p.miles)) return 'is a loop drive';
   return null;
 }
 
@@ -731,22 +727,19 @@ const contextCall = (userId, p) =>
   `${p.start.lat}, ${p.start.lng}, to_timestamp(${p.endedAt} / 1000.0))`;
 
 /**
- * One batch of drives as one statement: for each, the server's context must be the one the drive
- * was scored against (no merge, no loop, the same streak and the same safe miles earlier that day),
- * then apply_drive stores it.
+ * One batch of drives as one statement: for each, the server's context must be a fresh drive
+ * (version 23, nothing stored, no merge), then apply_drive stores it.
  */
 function batchSql(userId, items) {
-  const lines = items.map(({ payload, ctx, envelope }) => {
-    const expected = jsonLiteral(ctx.streak);
-    return [
+  const lines = items.map(({ payload, envelope }) =>
+    [
       `  c := ${contextCall(userId, payload)};`,
-      `  if c -> 'existing' <> 'null'::jsonb or c -> 'merge' <> 'null'::jsonb or (c ->> 'loopDrivesToday')::int <> 0`,
-      `     or c -> 'streak' <> ${expected} or (c ->> 'safeMilesEarlierToday')::numeric <> ${ctx.safeMilesEarlierToday} then`,
-      `    raise exception 'seed-demo: the server context for drive ${payload.clientTripId} is %, the script scored against streak % and % earlier miles', c, ${expected}, ${ctx.safeMilesEarlierToday};`,
+      `  if c -> 'version' <> '23'::jsonb or c -> 'existing' <> 'null'::jsonb or c -> 'merge' <> 'null'::jsonb then`,
+      `    raise exception 'seed-demo: the server context for drive ${payload.clientTripId} is %, not a fresh drive', c;`,
       '  end if;',
       `  perform private.apply_drive(${jsonLiteral(envelope)});`,
-    ].join('\n');
-  });
+    ].join('\n')
+  );
   return `do $seed$\ndeclare c jsonb;\nbegin\n${lines.join('\n')}\nend $seed$`;
 }
 
@@ -766,12 +759,6 @@ async function main() {
   const opts = { auth: { persistSession: false, autoRefreshToken: false } };
   const admin = createClient(url, serviceKey, opts);
 
-  // The current league week has not ended: its drives can complete weekly challenges, so they are
-  // scored against the server's own context, one at a time.
-  // As epoch ms: the hosted and local databases print timestamps differently.
-  const [{ ms: weekStartRaw }] = runSql(target, 'select (extract(epoch from private.week_start(now())) * 1000)::bigint as ms');
-  const weekStart = Number(weekStartRaw);
-  if (!Number.isFinite(weekStart) || weekStart <= 0) throw new Error(`could not read the week start (${weekStartRaw})`);
   console.log(`Seeding ${DEMO_EMAIL} on the ${target.label} database (${url})`);
 
   // 1. A fresh account. The old one goes with all its rows (they cascade from auth.users). It is
@@ -802,8 +789,6 @@ async function main() {
     const problem = uploadProblem(d.payload);
     if (problem) throw new Error(`drive ${d.payload.clientTripId}: ${problem}`);
   }
-  const ended = drives.filter((d) => d.payload.startedAt < weekStart);
-  const current = drives.filter((d) => d.payload.startedAt >= weekStart);
   let batch = [];
   let batchBytes = 0;
   let sent = 0;
@@ -815,22 +800,13 @@ async function main() {
     batch = [];
     batchBytes = 0;
   };
-  for (const d of ended) {
-    const envelope = toEnvelope(userId, d.payload, d.ctx, d.scored);
-    batch.push({ payload: d.payload, ctx: d.ctx, envelope });
+  for (const d of drives) {
+    const envelope = toEnvelope(userId, d.payload, d.stored);
+    batch.push({ payload: d.payload, envelope });
     batchBytes += JSON.stringify(envelope).length;
     if (batch.length >= 12 || batchBytes > 120_000) flush();
   }
   flush();
-  for (const d of current) {
-    const [{ r: ctx }] = runSql(target, `select ${contextCall(userId, d.payload)} as r`);
-    if (!ctx || ctx.existing !== null || ctx.merge !== null) throw new Error(`unexpected context for ${d.payload.clientTripId}: ${JSON.stringify(ctx)}`);
-    const context = { streak: ctx.streak, safeMilesEarlierToday: Number(ctx.safeMilesEarlierToday) };
-    const envelope = toEnvelope(userId, d.payload, context, scoreUpload(d.payload, context));
-    runSql(target, `select private.apply_drive(${jsonLiteral(envelope)}) ->> 'tripId' as r`);
-    sent += 1;
-    process.stdout.write(`  stored ${sent}/${drives.length} drives\r`);
-  }
   process.stdout.write('\n');
 
   // 3. What the app will read.
@@ -847,18 +823,15 @@ async function main() {
   const expect = summarize(drives, Date.now());
   console.log(`  list_my_drives: ${restored} drives`);
   if (restored !== drives.length) throw new Error(`stored ${drives.length} drives but the app would restore ${restored}`);
-  console.log(
-    `  Safety Rating ${g.safety_rating} (${g.ranked ? 'ranked' : 'unranked'}, ${g.miles_30d} mi in 30 days), level ${g.level}, ` +
-      `${g.points} points (${g.lifetime} lifetime), streak ${g.streak}, ${g.freezes} freezes`
-  );
+  console.log(`  Safety Rating ${g.safety_rating} (${g.ranked ? 'ranked' : 'unranked'}, ${g.miles_90d} mi in 90 days); the scoring package expects ${expect.rating}`);
   console.log(`  achievements: ${summary.achievements.join(', ') || 'none'}`);
-  console.log(`  this week's challenges: ${summary.challenges.map((c) => `${c.title} ${c.progress}/${c.target}`).join(', ') || 'none'}`);
-  console.log(`  30-day categories: ${Object.entries(expect.axes30).map(([k, v]) => `${k} ${v}`).join(', ')}`);
+  console.log(`  this week's goals: ${summary.challenges.map((c) => `${c.title} ${c.progress}/${c.target}`).join(', ') || 'none'}`);
+  console.log(`  categories: ${Object.entries(expect.axes).map(([k, v]) => `${k} ${v ?? '-'}`).join(', ')}`);
   console.log(`  events: ${Object.entries(expect.counts).map(([k, v]) => `${k} ${v}`).join(', ')}; ${expect.clean} of ${expect.scored} scored drives clean`);
   console.log(`\nSign in with ${DEMO_EMAIL} / ${password} (username @${DEMO_USERNAME})`);
 }
 
-module.exports = { buildHistory, summarize, uploadProblem, toEnvelope, batchSql, parseQueryOutput };
+module.exports = { buildHistory, summarize, uploadProblem, toEnvelope, batchSql, parseQueryOutput, DEMO_SPOTS };
 
 if (require.main === module) {
   main().catch((err) => {
