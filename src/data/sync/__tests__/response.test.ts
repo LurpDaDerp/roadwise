@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { classifyInvokeError, classifyStatus } from '@/data/sync/response';
+import { classifyInvokeError, classifyStatus, SERVER_BEHIND_CODE } from '@/data/sync/response';
 import { functionsHttpError } from '@/data/sync/__fixtures__/fakes';
 
 test('a 404 is not a refusal: the function is not there (yet), so the item retries', async () => {
@@ -24,4 +24,29 @@ test('the server’s own refusals stay terminal', () => {
   expect(classifyStatus(401)).toBe('unauthorized');
   expect(classifyStatus(429)).toBe('retryable');
   expect(classifyStatus(503)).toBe('retryable');
+});
+
+test('a 400 that refuses the upload’s contract version (an issue at path `v`) is a server behind the app: retried, never failed', async () => {
+  const behind = await classifyInvokeError(
+    functionsHttpError(400, { code: 'invalid_payload', issues: [{ path: '', message: 'Unrecognized key: "origin"' }, { path: 'v', message: 'Invalid input: expected 3' }] }).error,
+    0
+  );
+  expect(behind).toEqual({ kind: 'retryable', code: SERVER_BEHIND_CODE, status: 400, retryAfterS: null });
+  expect(SERVER_BEHIND_CODE).toBe('server_behind');
+});
+
+test('any other invalid_payload stays a refusal, and so does a version issue under another code', async () => {
+  const other = await classifyInvokeError(functionsHttpError(400, { code: 'invalid_payload', issues: [{ path: 'events.0.tier', message: 'tier not allowed' }] }).error, 0);
+  expect(other).toMatchObject({ kind: 'terminal', code: 'invalid_payload' });
+  const nested = await classifyInvokeError(functionsHttpError(400, { code: 'invalid_payload', issues: [{ path: 'exposure.v', message: 'x' }] }).error, 0);
+  expect(nested).toMatchObject({ kind: 'terminal', code: 'invalid_payload' });
+  const noIssues = await classifyInvokeError(functionsHttpError(400, { code: 'invalid_payload' }).error, 0);
+  expect(noIssues).toMatchObject({ kind: 'terminal', code: 'invalid_payload' });
+  const notPayload = await classifyInvokeError(functionsHttpError(400, { code: 'spoofed_payload', issues: [{ path: 'v' }] }).error, 0);
+  expect(notPayload).toMatchObject({ kind: 'terminal', code: 'spoofed_payload' });
+  const notFirstFifty = await classifyInvokeError(
+    functionsHttpError(400, { code: 'invalid_payload', issues: [...Array.from({ length: 60 }, () => ({ path: 'events' })), { path: 'v' }] }).error,
+    0
+  );
+  expect(notFirstFifty).toMatchObject({ kind: 'terminal' });
 });

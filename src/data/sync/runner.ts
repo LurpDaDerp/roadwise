@@ -1,10 +1,12 @@
 // The sync runner: the device half of the upload (plan §3, §4, §5).
 //
 // It drains the `sync_queue` the finalizer and the drive actions fill. A `finalize-trip` item
-// posts its v3 payload verbatim and writes the server's answer back: the trip becomes `scored` or
-// `unscored` with its result, or — when the server merged it into the drive before it — the
-// earlier local drive becomes the merged union and this one is marked `merged`. A `trip-actions`
-// item posts a dispute or "wasn't driving" and resolves the optimistic `pending` rows.
+// posts its payload as v4 (one an older build queued as v3 is upgraded first) and writes the
+// server's answer back: the trip becomes `scored` or `unscored` with its result, or — when the
+// server merged it into the drive before it — the earlier local drive becomes the merged union and
+// this one is marked `merged`. Once the answer is written the drive's samples go: a sent drive is
+// never re-opened. A `trip-actions` item posts a dispute or "wasn't driving" and resolves the
+// optimistic `pending` rows.
 //
 // Rules:
 // - **Never while the engine is recording or finalizing**: a drain competes for SQLite's write lock.
@@ -13,19 +15,21 @@
 //   device still records that owner.
 // - **A claim is only ever closed by the pass that holds it.**
 // - **Retries** follow the queue's ladder; a terminal refusal fails the item for good and is shown.
-import { isDashcamType, type DriveBreakdown } from '@scoring';
+//   A server older than the upload (`server_behind`) is a retry, never a refusal.
+import { isDashcamType } from '@scoring';
 
 import type { Db } from '@/data/db/driver';
 import { createEventsRepo, type EventsRepo } from '@/data/db/events';
 import { createQueueRepo, TRANSPORT_FAILURE } from '@/data/db/queue';
+import { createSamplesRepo } from '@/data/db/samples';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
 import type { EventRow, QueueItem, TripRow, TripStatus } from '@/data/db/types';
 import { emitDataChanged, onDataChanged } from '@/data/events';
 import { applyServerDrive, readServerDrive } from '@/data/hydrate/restore';
-import { countEvents, parseResult } from '@/data/queries/rows';
+import { countEvents } from '@/data/queries/rows';
 import { isSyncKind } from '@/data/sync/kinds';
-import { FinalizeTripPayloadV3Schema, FinalizeTripResponseV3Schema, type FinalizeTripResponseV3, type DriveBreakdownWire } from '@/data/sync/payload';
+import { FinalizeTripResponseSchema, parseFinalizeUpload, type FinalizeTripResponse } from '@/data/sync/payload';
 import { deviceOwnerIs, SESSION_UID_KEY, TripActionSchema, type TripAction } from '@/data/sync/queue';
 import { classifyInvokeError, DisputeResultSchema, isDatabaseLocked, NotDrivingResultSchema, type Failure } from '@/data/sync/response';
 import { MAX_POLYLINE_BYTES, MAX_POLYLINE_RUNS } from '@/data/sync/payload';
@@ -149,17 +153,28 @@ export function joinPolylines(a: string | null, b: string | null, maxBytes = MAX
   return runs.length === 0 ? null : joined();
 }
 
-const cleanOf = (bd: DriveBreakdown, scored: boolean): 0 | 1 | null => (scored ? (bd.activeEventCount === 0 ? 1 : 0) : null);
+/** The drive's clean flag from the events it keeps: no active event other than DashPal's; null when unscored. */
+const cleanOf = (events: readonly EventRow[], scored: boolean): 0 | 1 | null =>
+  scored ? (events.some((e) => e.status === 'active' && !isDashcamType(e.type)) ? 0 : 1) : null;
+
+/** The five counters of a merged drive: the sum when both legs counted them, else none (estimated at read). */
+type ExposureCols = Pick<TripRow, 'slowdowns' | 'speedups' | 'turns' | 'limit_s' | 'moving_s'>;
+const EXPOSURE_COLS = ['slowdowns', 'speedups', 'turns', 'limit_s', 'moving_s'] as const;
+function sumExposure(a: ExposureCols, b: ExposureCols): ExposureCols {
+  const counted = EXPOSURE_COLS.every((k) => a[k] !== null && b[k] !== null);
+  const out = {} as Record<(typeof EXPOSURE_COLS)[number], number | null>;
+  for (const k of EXPOSURE_COLS) out[k] = counted ? (a[k] as number) + (b[k] as number) : null;
+  return out;
+}
 
 /**
- * A scored response lists every event the server keeps active. A local DashPal event it does not
- * list (one the server dropped under the DashPal limits, e.g. a drowsy within 10 min of the merge
- * target's) never reached the drive: it is deleted here, so the summary itemizes what was scored.
- * An event with a report in flight or accepted is left alone. Returns the events that remain.
+ * The answer lists every event the server keeps (the union's on a merge). A local DashPal event it
+ * does not list (one the server dropped under the DashPal limits, e.g. a drowsy within 10 min of the
+ * merge target's) never reached the drive: it is deleted here, so the summary itemizes what was
+ * kept. An event with a report in flight or accepted is left alone. Returns the events that remain.
  */
-async function dropUnkept(events: EventsRepo, list: EventRow[], resp: FinalizeTripResponseV3, tx: Db): Promise<EventRow[]> {
-  if (!resp.scored) return list;
-  const kept = new Set(resp.breakdown.events.map((e) => e.id));
+async function dropUnkept(events: EventsRepo, list: EventRow[], resp: FinalizeTripResponse, tx: Db): Promise<EventRow[]> {
+  const kept = new Set(resp.eventIds);
   const remain: EventRow[] = [];
   for (const e of list) {
     if (isDashcamType(e.type) && e.status === 'active' && e.dispute_status === 'none' && !kept.has(e.id)) await events.remove(e.id, tx);
@@ -170,16 +185,18 @@ async function dropUnkept(events: EventsRepo, list: EventRow[], resp: FinalizeTr
 
 /**
  * Write a finalize response into the local rows. With `mergedInto`, the earlier local drive becomes
- * the merged union (metrics summed, events re-parented, the server's result) and this one is
- * hidden as `merged`. Runs on a transaction handle.
+ * the merged union (metrics and counters summed, events re-parented, "Not driving?" ran out if it
+ * ran out on either, the earlier drive's start kept, the server's result) and this one is hidden as
+ * `merged`. The samples of both go: a sent drive is never re-opened. A drive re-opened as
+ * `recording` in the meantime is left alone (its own upload follows). Runs on a transaction handle.
  */
-export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: FinalizeTripResponseV3, now: number): Promise<void> {
+export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: FinalizeTripResponse, now: number): Promise<void> {
   const trips = createTripsRepo(tx);
   const events = createEventsRepo(tx);
+  const samples = createSamplesRepo(tx);
   const mine = await trips.get(clientTripId, tx);
-  if (mine === null) return;
+  if (mine === null || mine.status === 'recording') return;
   const status: TripStatus = resp.scored ? 'scored' : 'unscored';
-  const penaltyOf = new Map(resp.breakdown.events.map((e) => [e.id, e.penalty]));
   const resultJson = JSON.stringify(resp);
 
   if (resp.mergedInto !== null) {
@@ -187,10 +204,6 @@ export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: 
     if (target !== null && target.client_trip_id !== clientTripId) {
       await events.reparent(clientTripId, target.client_trip_id, tx);
       const all = await dropUnkept(events, await events.listByTrip(target.client_trip_id, tx), resp, tx);
-      for (const e of all) {
-        const penalty = penaltyOf.get(e.id);
-        if (penalty !== undefined && penalty !== e.penalty) await events.update(e.id, { penalty }, tx);
-      }
       await trips.update(
         target.client_trip_id,
         {
@@ -198,17 +211,17 @@ export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: 
           end_lat: mine.end_lat ?? target.end_lat,
           end_lng: mine.end_lng ?? target.end_lng,
           to_label: mine.to_label ?? target.to_label,
+          end_cause: mine.end_cause ?? target.end_cause,
           miles: target.miles + mine.miles,
-          safe_miles: target.safe_miles + mine.safe_miles,
           night_miles: target.night_miles + mine.night_miles,
           duration_s: target.duration_s + mine.duration_s,
+          watched_miles: target.watched_miles + mine.watched_miles,
           max_speed_mph: Math.max(target.max_speed_mph, mine.max_speed_mph),
           polyline: joinPolylines(target.polyline, mine.polyline),
+          not_driving_expired: target.not_driving_expired === 1 || mine.not_driving_expired === 1 ? 1 : 0,
+          ...sumExposure(target, mine),
           status,
-          points_net: resp.net,
-          estimate: 0,
-          breakdown_json: JSON.stringify(resp.breakdown),
-          clean: cleanOf(resp.breakdown, resp.scored),
+          clean: cleanOf(all, resp.scored),
           counts_json: JSON.stringify(countEvents(all)),
           reason: resp.reason,
           result_json: resultJson,
@@ -218,31 +231,21 @@ export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: 
         now,
         tx
       );
+      await samples.purgeByTrip(target.client_trip_id, tx);
     }
-    await trips.update(
-      clientTripId,
-      { status: 'merged', merged_into: resp.mergedInto, points_net: null, estimate: 0, result_json: resultJson, server_id: resp.tripId, sync_error: null },
-      now,
-      tx
-    );
+    await trips.update(clientTripId, { status: 'merged', merged_into: resp.mergedInto, result_json: resultJson, server_id: resp.tripId, sync_error: null }, now, tx);
+    await samples.purgeByTrip(clientTripId, tx);
     return;
   }
 
   const listed = await events.listByTrip(clientTripId, tx);
   const own = await dropUnkept(events, listed, resp, tx);
-  for (const e of own) {
-    const penalty = penaltyOf.get(e.id) ?? null;
-    if (penalty !== e.penalty) await events.update(e.id, { penalty }, tx);
-  }
   await trips.update(
     clientTripId,
     {
       ...(own.length !== listed.length ? { counts_json: JSON.stringify(countEvents(own)) } : {}),
       status,
-      points_net: resp.net,
-      estimate: 0,
-      breakdown_json: JSON.stringify(resp.breakdown),
-      clean: cleanOf(resp.breakdown, resp.scored),
+      clean: cleanOf(own, resp.scored),
       reason: resp.reason,
       result_json: resultJson,
       server_id: resp.tripId,
@@ -251,46 +254,32 @@ export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: 
     now,
     tx
   );
+  await samples.purgeByTrip(clientTripId, tx);
 }
 
-/** A dispute's answer into the event and its drive. */
-export async function applyDisputeResult(
-  tx: Db,
-  action: Extract<TripAction, { action: 'dispute' }>,
-  result: { status: 'accepted' | 'rejected'; rejectReason: string | null; net: number; breakdown: DriveBreakdownWire | null },
-  now: number
-): Promise<void> {
+/** What `applyDisputeResult` reads of a dispute answer. */
+export interface DisputeOutcome {
+  status: 'accepted' | 'rejected';
+  rejectReason: 'quota' | null;
+  /** The drive's clean flag as the server now stores it. */
+  clean: boolean;
+}
+
+/** A dispute's answer into the event and its drive: an accepted report removes the event, recounts the drive and takes the server's clean flag. */
+export async function applyDisputeResult(tx: Db, action: Extract<TripAction, { action: 'dispute' }>, result: DisputeOutcome, now: number): Promise<void> {
   const events = createEventsRepo(tx);
   const trips = createTripsRepo(tx);
-  const message = result.status === 'accepted' ? null : result.rejectReason === 'quota' ? 'Weekly report limit reached.' : result.rejectReason === 'not_mounted' ? 'The phone was not mounted for this event.' : null;
+  const message = result.status === 'accepted' ? null : result.rejectReason === 'quota' ? 'Weekly report limit reached.' : null;
   await events.update(action.eventId, { dispute_status: result.status, dispute_message: message, ...(result.status === 'accepted' ? { status: 'removed' as const } : {}) }, tx);
   if (result.status !== 'accepted') return;
   const trip = await trips.get(action.clientTripId, tx);
   if (trip === null) return;
   const remaining = await events.listByTrip(action.clientTripId, tx);
-  // DashPal events never break a clean drive (as the server counts it)
-  const activeCount = remaining.filter((e) => e.status === 'active' && !isDashcamType(e.type)).length;
-  // the server re-scored the drive: every remaining event takes its new penalty (repeat indices
-  // shift when the removed one was the first of its type), so the itemised list sums to the net
-  if (result.breakdown) {
-    const penaltyOf = new Map(result.breakdown.events.map((e) => [e.id, e.penalty]));
-    for (const e of remaining) {
-      const penalty = e.status === 'active' ? (penaltyOf.get(e.id) ?? 0) : 0;
-      if (penalty !== e.penalty) await events.update(e.id, { penalty }, tx);
-    }
-  }
-  // the summary reads its gains from the stored server answer: keep it in step with the re-score
-  // (a removed event can add the clean bonus), so Earned minus the deductions is still the total
-  const prior = result.breakdown ? parseResult(trip.result_json) : null;
   await trips.update(
     action.clientTripId,
     {
-      points_net: result.net,
-      estimate: 0,
-      clean: trip.status === 'scored' ? (activeCount === 0 ? 1 : 0) : trip.clean,
+      clean: trip.status === 'scored' ? (result.clean ? 1 : 0) : trip.clean,
       counts_json: JSON.stringify(countEvents(remaining)),
-      ...(result.breakdown ? { breakdown_json: JSON.stringify(result.breakdown) } : {}),
-      ...(prior && result.breakdown ? { result_json: JSON.stringify({ ...prior, breakdown: result.breakdown, net: result.net }) } : {}),
     },
     now,
     tx
@@ -351,12 +340,13 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   }
 
   async function runFinalize(item: QueueItem, uid: string): Promise<Outcome> {
-    const parsed = FinalizeTripPayloadV3Schema.safeParse(parseJson(item.payload_json));
+    // A v3 item (queued by an older build) is upgraded and goes up as v4.
+    const parsed = parseFinalizeUpload(parseJson(item.payload_json));
     if (!parsed.success) return { kind: 'refused', error: 'invalid_payload' };
     const payload = parsed.data;
     const res = await invoke(FINALIZE_FUNCTION, payload);
     if (!res.ok) return failureOutcome(res.failure);
-    const response = FinalizeTripResponseV3Schema.safeParse(res.data);
+    const response = FinalizeTripResponseSchema.safeParse(res.data);
     if (!response.success) return { kind: 'retry', error: 'bad_response' };
     const written = await fenced(uid, (tx) => applyFinalizeResponse(tx, payload.clientTripId, response.data, now()));
     return written ? { kind: 'done' } : { kind: 'release', untilMs: now() + FOREIGN_OWNER_RETRY_MS };
@@ -382,7 +372,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const result = NotDrivingResultSchema.safeParse(res.data);
     if (!result.success) return { kind: 'retry', error: 'bad_response' };
     const written = await fenced(uid, async (tx) => {
-      await trips.update(action.clientTripId, { status: 'not_driving', points_net: 0, estimate: 0, clean: null, server_id: result.data.tripId }, now(), tx);
+      await trips.update(action.clientTripId, { status: 'not_driving', clean: null, server_id: result.data.tripId }, now(), tx);
     });
     return written ? { kind: 'done' } : { kind: 'release', untilMs: now() + FOREIGN_OWNER_RETRY_MS };
   }
@@ -438,8 +428,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       const previous = (action.previousStatus ?? 'scored') as TripRow['status'];
       const trip = await trips.get(action.clientTripId, tx);
       if (trip === null || trip.status !== 'not_driving') return;
-      const points = trip.result_json ? (parseJson(trip.result_json) as { net?: unknown } | undefined)?.net : null;
-      await trips.update(action.clientTripId, { status: previous, points_net: typeof points === 'number' ? points : trip.points_net, sync_error: code }, now(), tx);
+      // The refusal code (`too_old`, `no_uses_left`, `not_driving_expired`, `not_found`) is what the summary explains.
+      await trips.update(action.clientTripId, { status: previous, sync_error: code }, now(), tx);
     }).catch((error: unknown) => report(error, 'sync undo action'));
   }
 

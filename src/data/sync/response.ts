@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DriveBreakdownSchema } from '@/data/sync/payload';
+export { DisputeResultSchema, NotDrivingResultSchema, type DisputeResult, type NotDrivingResult } from '@/data/sync/payload';
 
 /**
  * Reading what Supabase hands back, and deciding what it means for a queued item.
@@ -8,7 +8,8 @@ import { DriveBreakdownSchema } from '@/data/sync/payload';
  * - `terminal` — the server understood the request and refused it. Retrying sends the identical
  *   bytes and gets the identical refusal, so the item is failed and the user is told why.
  * - `unauthorized` — the access token had expired under the request. One refresh, one retry.
- * - `retryable` — nothing was decided (no network), or the server asked for later (429, 5xx).
+ * - `retryable` — nothing was decided (no network), or the server asked for later (429, 5xx), or the
+ *   server is older than the upload (`server_behind`: it refused the contract version itself).
  *
  * `functions.invoke` reports a non-2xx as a `FunctionsHttpError` whose `context` is the raw
  * `Response`, and a request that never left as a `FunctionsFetchError` with no context at all.
@@ -60,9 +61,26 @@ export function retryAfterSeconds(header: string | null, now: number): number | 
   return Number.isNaN(at) ? null : Math.max(0, Math.round((at - now) / 1000));
 }
 
-/** The 400 body the functions answer with: `{ code, field? }`. Bounded: it is stored and shown. */
+/** The 400 body the functions answer with: `{ code, field?, issues? }`. Bounded: it is stored and shown. */
 const MAX_CODE = 64;
 const ErrorBodySchema = z.object({ code: z.string().min(1).max(MAX_CODE), field: z.string().max(MAX_CODE).optional() });
+/** Most issues looked at for the contract version; a longer list is not read further. */
+const MAX_ISSUES = 50;
+
+/** The code a refusal of the upload's contract version is retried under: the server is older than the app. */
+export const SERVER_BEHIND_CODE = 'server_behind';
+
+/**
+ * Whether an `invalid_payload` refusal names the contract version (`path: 'v'`): an older server that
+ * does not know this version yet. Such a refusal is not about the drive, and the same bytes go
+ * through once the server is updated, so it is retried rather than failed.
+ */
+function refusesVersion(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) return false;
+  const issues = (body as { issues?: unknown }).issues;
+  if (!Array.isArray(issues)) return false;
+  return issues.slice(0, MAX_ISSUES).some((issue) => typeof issue === 'object' && issue !== null && (issue as { path?: unknown }).path === 'v');
+}
 
 async function readBody(context: Record<string, unknown>): Promise<unknown> {
   const json = context.json;
@@ -103,6 +121,9 @@ export async function classifyInvokeError(error: unknown, now: number): Promise<
     if (parsed.success && parsed.data.code === FUNCTION_NOT_FOUND_CODE) return { kind: 'terminal', code: FUNCTION_NOT_FOUND_CODE, status, retryAfterS };
     return { kind, code: 'http_404', status, retryAfterS };
   }
+  if (status === 400 && parsed.success && parsed.data.code === 'invalid_payload' && refusesVersion(body)) {
+    return { kind: 'retryable', code: SERVER_BEHIND_CODE, status, retryAfterS };
+  }
   const code = parsed.success ? parsed.data.code : status === null ? 'network' : `http_${status}`;
 
   return { kind, code, status, retryAfterS };
@@ -113,34 +134,3 @@ export function isDatabaseLocked(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /database is locked|SQLITE_BUSY/i.test(message);
 }
-
-const progressBase = {
-  points: z.number().int(),
-  lifetime: z.number().int().min(0),
-  level: z.number().int().min(1).max(50),
-  safetyRating: z.number().nullable(),
-  ranked: z.boolean(),
-};
-
-/** What `trip-actions` answers a `not_driving` (mirrors the function's `NotDrivingResultSchema`). */
-export const NotDrivingResultSchema = z.object({
-  tripId: z.uuid(),
-  clientTripId: z.uuid(),
-  notDrivingLeft: z.number().int().min(0),
-  progress: z.object({ ...progressBase, streak: z.number().int().min(0), atRisk: z.boolean(), freezes: z.number().int().min(0).max(3) }),
-});
-export type NotDrivingResult = z.infer<typeof NotDrivingResultSchema>;
-
-/** What `trip-actions` answers a `dispute` (mirrors the function's `DisputeResultSchema`). */
-export const DisputeResultSchema = z.object({
-  tripId: z.uuid(),
-  eventId: z.uuid(),
-  status: z.enum(['accepted', 'rejected']),
-  rejectReason: z.enum(['quota', 'not_mounted']).nullable(),
-  net: z.number().int(),
-  delta: z.number().int(),
-  /** The drive's breakdown as the server now stores it (re-scored on acceptance); null for an unscored drive. */
-  breakdown: DriveBreakdownSchema.nullable(),
-  progress: z.object({ ...progressBase, levelUp: z.boolean() }),
-});
-export type DisputeResult = z.infer<typeof DisputeResultSchema>;

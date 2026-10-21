@@ -95,3 +95,25 @@ test('purgeDone removes old finished items only', async () => {
   expect(await queue.purgeDone(T0)).toBe(0);
   expect(await queue.purgeDone(T0 + 1)).toBe(1);
 });
+
+test('the upload hold: deferUntil inside a transaction holds an item; makeUntriedDue frees it; dropUntried pulls back only an item never tried', async () => {
+  const HOLD = 300_000;
+  const held = await queue.enqueue('finalize-trip', { clientTripId: 'a' }, 'trip:a', T0);
+  await db.transaction((tx) => queue.deferUntil(held.id, T0 + HOLD, tx));
+  expect(await queue.nextDue(T0 + HOLD - 1)).toEqual([]);
+  expect(await queue.makeUntriedDue(T0 + 10)).toBe(1);
+  expect((await queue.get(held.id))?.next_attempt_at).toBe(T0 + 10);
+
+  // a claimed (in flight) item, or one already tried, is never dropped
+  const [claimed] = await queue.nextDue(T0 + 10);
+  expect(claimed?.id).toBe(held.id);
+  expect(await queue.dropUntried('trip:a')).toBe(false);
+  await queue.markAttempt(held.id, false, 'network', T0 + 20);
+  expect(await queue.dropUntried('trip:a')).toBe(false);
+  expect(await queue.byKey('trip:a')).not.toBeNull();
+
+  await queue.enqueue('finalize-trip', { clientTripId: 'b' }, 'trip:b', T0);
+  expect(await db.transaction((tx) => queue.dropUntried('trip:b', tx))).toBe(true);
+  expect(await queue.byKey('trip:b')).toBeNull();
+  expect(await queue.dropUntried('trip:b')).toBe(false);
+});

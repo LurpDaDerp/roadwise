@@ -1,16 +1,12 @@
 /** @jest-environment node */
-import { T0 } from '@/core/detectors/__fixtures__/rows';
-import { closedSession, speedingEvent, TZ, uuid } from '@/core/engine/__fixtures__/drives';
-import { finalizeTrip } from '@/core/engine/finalize';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
-import { createEventsRepo, createQueueRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
+import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { REFUSED_NEVER } from '@/data/db/queue';
 import { createFakeAppState, createFakeSupabase, functionsFetchError, functionsHttpError, invokeOk } from '@/data/sync/__fixtures__/fakes';
+import { answer, finishedDrive, payloadV3, speeding, T0, uuid } from '@/data/sync/__fixtures__/drives';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
-import type { FinalizeTripResponseV3 } from '@/data/sync/payload';
 import { emitDataChanged } from '@/data/events';
-import { toLocalDrive, toLocalDriveEvent } from '@/data/queries/rows';
-import { receipt } from '@/features/drives/summary';
+import { enqueueFinalize } from '@/data/sync/queue';
 import { createSyncRunner, FOREIGN_OWNER_RETRY_MS, joinPolylines, NO_SESSION_RETRY_MS, RETRY_WAKE_MIN_MS } from '@/data/sync/runner';
 import { encodePolyline, splitRuns } from '@/lib/polyline';
 
@@ -21,73 +17,74 @@ beforeEach(async () => {
   await createSettingsRepo(db).set('device.lastUserId', 'user-1');
 });
 
-const response = (clientTripId: string, over: Partial<FinalizeTripResponseV3> = {}): FinalizeTripResponseV3 => ({
-  tripId: uuid(77),
-  clientTripId,
-  mergedInto: null,
-  scored: true,
-  reason: null,
-  breakdown: {
-    scored: true,
-    safeMiles: 11,
-    creditedMiles: 11,
-    milePoints: 110,
-    cleanBonus: 0,
-    streakMult: 1.1,
-    dashcamMult: 1,
-    mult: 1.1,
-    gains: 121,
-    shortScale: 1,
-    events: [{ id: uuid(1), penalty: 15 }],
-    penalties: 15,
-    net: 106,
-    ratingPenalty: 15,
-    activeEventCount: 1,
-  },
-  net: 106,
-  streak: { before: 5, after: 6, outcome: 'grew', nextMult: 1.12, atRisk: false, freezes: 2, freezeEarned: false },
-  progress: { points: 1000, lifetime: 1200, level: 3, levelUp: false, safetyRating: 91.2, ranked: true },
-  achievements: [],
-  challenges: [],
-  league: { tier: 'bronze', placed: true },
-  ...over,
-});
-
-/** A finalized drive whose one speeding event carries the id `eventId` (default: the drive's own number + 500). */
+/** A finished drive whose one speeding event carries the id `eventId` (default: the drive's own number + 500). */
 async function finalized(clientTripId: string, t0 = T0, eventId = uuid(500 + Number(clientTripId.slice(-3)))): Promise<void> {
-  const session = closedSession(1200, [speedingEvent(t0 + 300_000, 20, eventId)], { clientTripId, t0 });
-  await finalizeTrip(session, { db, tz: TZ, now: () => t0 + 1_300_000, appVersion: '3', geocode: null });
+  await finishedDrive(db, clientTripId, { t0, events: [speeding(eventId, t0)] });
 }
+
+const response = answer;
 
 function runner(supabase: ReturnType<typeof createFakeSupabase>, over: Partial<Parameters<typeof createSyncRunner>[0]> = {}) {
   return createSyncRunner({ db, supabase, mayDrain: () => true, isRecording: () => false, now: () => T0 + 2_000_000, ...over });
 }
 
-test('posts the queued v3 payload verbatim and writes the server’s answer into the drive', async () => {
+const samplesOf = (id: string) => createSamplesRepo(db).count(id);
+
+test('posts the queued v4 payload and writes the server’s answer into the drive; the drive’s samples go once it is sent', async () => {
   await finalized(uuid(10), T0, uuid(1));
-  const supabase = createFakeSupabase({ invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId)) });
+  expect(await samplesOf(uuid(10))).toBe(2);
+  const supabase = createFakeSupabase({ invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId, { eventIds: [uuid(1)] })) });
   const r = runner(supabase);
   await r.start();
   const result = await r.drainOnce();
   expect(result).toMatchObject({ ran: true, done: 1, failed: 0 });
   expect(supabase.invokes).toHaveLength(1);
   expect(supabase.invokes[0]!.name).toBe('finalize-trip');
-  expect(supabase.invokes[0]!.body).toMatchObject({ v: 3, clientTripId: uuid(10) });
+  expect(supabase.invokes[0]!.body).toMatchObject({ v: 4, clientTripId: uuid(10), origin: 'manual', notDrivingExpired: false, exposure: { slowdowns: 4 } });
   const trip = (await createTripsRepo(db).get(uuid(10)))!;
-  expect(trip).toMatchObject({ status: 'scored', points_net: 106, estimate: 0, clean: 0, server_id: uuid(77), reason: null });
-  expect(JSON.parse(trip.result_json!)).toMatchObject({ net: 106 });
-  expect((await createEventsRepo(db).listByTrip(uuid(10)))[0]!.penalty).toBe(15);
+  expect(trip).toMatchObject({ status: 'scored', clean: 0, server_id: uuid(77), reason: null, sync_error: null });
+  expect(JSON.parse(trip.result_json!)).toMatchObject({ rating: { safetyRating: 91.2, ranked: true }, eventIds: [uuid(1)] });
   expect(await createQueueRepo(db).countByStatus('done')).toBe(1);
+  expect(await samplesOf(uuid(10))).toBe(0);
   await r.stop();
 });
 
-test('mergedInto: the earlier local drive becomes the union and this one is hidden as merged', async () => {
-  await finalized(uuid(10), T0);
-  await finalized(uuid(11), T0 + 1_400_000);
+test('a drive an older build queued as v3 goes up as v4: its phone event and safe miles stay behind, origin manual, "Not driving?" never ran out', async () => {
+  const p = payloadV3(uuid(12), { events: [speeding(uuid(1), T0)] });
+  await createTripsRepo(db).insert({ client_trip_id: uuid(12), started_at: T0, tz: 'UTC', status: 'pending' }, T0);
+  // An older build validated it against v3; the queue stores what it was given.
+  await createQueueRepo(db).enqueue('finalize-trip', p, `trip:${uuid(12)}`, T0, undefined, 'user-1');
+  const supabase = createFakeSupabase({ invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId)) });
+  const r = runner(supabase);
+  await r.start();
+  expect(await r.drainOnce()).toMatchObject({ done: 1 });
+  const sent = supabase.invokes[0]!.body as Record<string, unknown>;
+  expect(sent).toMatchObject({ v: 4, origin: 'manual', notDrivingExpired: false });
+  expect(sent).not.toHaveProperty('safeMiles');
+  expect(sent).not.toHaveProperty('exposure');
+  expect((sent.events as { id: string }[]).map((e) => e.id)).toEqual([uuid(1)]);
+  await r.stop();
+});
+
+test('enqueueFinalize refuses anything but a valid v4 upload', async () => {
+  await createTripsRepo(db).insert({ client_trip_id: uuid(13), started_at: T0, tz: 'UTC', status: 'pending' }, T0);
+  await expect(enqueueFinalize(db, payloadV3(uuid(13)) as never)).rejects.toThrow();
+  expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
+});
+
+test('mergedInto: the earlier local drive becomes the union (counters summed, "Not driving?" ran out if it did on either, its own start kept) and this one is hidden as merged', async () => {
+  await finishedDrive(db, uuid(10), { t0: T0, events: [speeding(uuid(510), T0)], origin: 'auto' });
+  await finishedDrive(db, uuid(11), {
+    t0: T0 + 1_400_000,
+    events: [speeding(uuid(511), T0 + 1_400_000)],
+    notDrivingExpired: true,
+    exposure: { slowdowns: 1, speedups: 2, turns: 3, limitS: 400, movingS: 1000 },
+    row: { end_cause: 'walking' },
+  });
   const supabase = createFakeSupabase({
     invoke: ({ body }) => {
       const id = (body as { clientTripId: string }).clientTripId;
-      return invokeOk(id === uuid(10) ? response(uuid(10)) : response(uuid(11), { mergedInto: uuid(10), net: 212, scored: true }));
+      return invokeOk(id === uuid(10) ? response(uuid(10), { eventIds: [uuid(510)] }) : response(uuid(11), { mergedInto: uuid(10), eventIds: [uuid(510), uuid(511)] }));
     },
   });
   const r = runner(supabase);
@@ -97,14 +94,44 @@ test('mergedInto: the earlier local drive becomes the union and this one is hidd
   const trips = createTripsRepo(db);
   const first = (await trips.get(uuid(10)))!;
   const second = (await trips.get(uuid(11)))!;
-  expect(second).toMatchObject({ status: 'merged', merged_into: uuid(10), points_net: null });
-  expect(first).toMatchObject({ status: 'scored', points_net: 212, estimate: 0 });
-  expect(first.miles).toBeCloseTo(22.35, 1);
-  expect(first.duration_s).toBe(2400);
-  expect(first.ended_at).toBe(T0 + 1_400_000 + 1_200_000);
+  expect(second).toMatchObject({ status: 'merged', merged_into: uuid(10), server_id: uuid(77) });
+  expect(first).toMatchObject({
+    status: 'scored',
+    clean: 0,
+    miles: 22,
+    duration_s: 2400,
+    ended_at: T0 + 1_400_000 + 1_200_000,
+    end_cause: 'walking',
+    origin: 'auto',
+    not_driving_expired: 1,
+    slowdowns: 5,
+    speedups: 7,
+    turns: 6,
+    limit_s: 1300,
+    moving_s: 2100,
+  });
   expect(await createEventsRepo(db).listByTrip(uuid(11))).toEqual([]);
   expect(await createEventsRepo(db).listByTrip(uuid(10))).toHaveLength(2);
   expect(JSON.parse(first.counts_json!).speeding).toBe(2);
+  expect(await samplesOf(uuid(10))).toBe(0);
+  expect(await samplesOf(uuid(11))).toBe(0);
+  await r.stop();
+});
+
+test('mergedInto: a leg recorded before the counters leaves the union to be estimated', async () => {
+  await finishedDrive(db, uuid(10), { t0: T0 });
+  await finishedDrive(db, uuid(11), { t0: T0 + 1_400_000, exposure: null });
+  const supabase = createFakeSupabase({
+    invoke: ({ body }) => {
+      const id = (body as { clientTripId: string }).clientTripId;
+      return invokeOk(id === uuid(10) ? response(uuid(10)) : response(uuid(11), { mergedInto: uuid(10) }));
+    },
+  });
+  const r = runner(supabase);
+  await r.start();
+  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+  await r.drainOnce();
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ clean: 1, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null });
   await r.stop();
 });
 
@@ -117,37 +144,25 @@ async function dashpal(clientTripId: string, id: string, type: 'drowsy' | 'eyes_
     tier: 'severe',
     started_at: startedAt,
     duration_s: 4,
-    units: null,
-    stopped_in_traffic: 0,
     lat: null,
     lng: null,
     measured_json: JSON.stringify({ source: 'dashcam', speedMph: 33 }),
-    penalty: type === 'drowsy' ? 50 : 40,
     status: 'active',
     dispute_status: over.dispute_status ?? 'none',
   });
 }
 
-test('mergedInto: a DashPal event the server dropped under the DashPal limits (a drowsy within 10 min of the target’s) is deleted; the rest take the server’s penalties and the counts follow', async () => {
+test('mergedInto: a DashPal event the server dropped under the DashPal limits (a drowsy within 10 min of the target’s) is deleted and the counts follow', async () => {
   await finalized(uuid(10), T0, uuid(510));
   await finalized(uuid(11), T0 + 1_400_000, uuid(511));
   await dashpal(uuid(10), uuid(600), 'drowsy', T0 + 1_000_000);
   await dashpal(uuid(11), uuid(601), 'drowsy', T0 + 1_500_000); // 8.3 min after the target's: dropped
   await dashpal(uuid(11), uuid(602), 'eyes_off', T0 + 1_600_000);
-  const merged = response(uuid(11), { mergedInto: uuid(10), net: 50 });
-  merged.breakdown = {
-    ...merged.breakdown,
-    events: [
-      { id: uuid(510), penalty: 15 },
-      { id: uuid(600), penalty: 50 },
-      { id: uuid(511), penalty: 19 },
-      { id: uuid(602), penalty: 40 },
-    ],
-  };
+  const merged = response(uuid(11), { mergedInto: uuid(10), eventIds: [uuid(510), uuid(600), uuid(511), uuid(602)] });
   const supabase = createFakeSupabase({
     invoke: ({ body }) => {
       const id = (body as { clientTripId: string }).clientTripId;
-      return invokeOk(id === uuid(10) ? response(uuid(10), { breakdown: { ...response(uuid(10)).breakdown, events: [{ id: uuid(510), penalty: 15 }, { id: uuid(600), penalty: 50 }] } }) : merged);
+      return invokeOk(id === uuid(10) ? response(uuid(10), { eventIds: [uuid(510), uuid(600)] }) : merged);
     },
   });
   const r = runner(supabase);
@@ -155,18 +170,18 @@ test('mergedInto: a DashPal event the server dropped under the DashPal limits (a
   await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   await r.drainOnce();
   const events = await createEventsRepo(db).listByTrip(uuid(10));
-  expect(events.map((e) => [e.id, e.type, e.penalty])).toEqual([
-    [uuid(510), 'speeding', 15],
-    [uuid(600), 'drowsy', 50],
-    [uuid(602), 'eyes_off', 40],
-    [uuid(511), 'speeding', 19],
+  expect(events.map((e) => [e.id, e.type])).toEqual([
+    [uuid(510), 'speeding'],
+    [uuid(600), 'drowsy'],
+    [uuid(602), 'eyes_off'],
+    [uuid(511), 'speeding'],
   ]);
   expect(await createEventsRepo(db).get(uuid(601))).toBeNull();
   expect(JSON.parse((await createTripsRepo(db).get(uuid(10)))!.counts_json!)).toMatchObject({ speeding: 2, drowsy: 1, eyesOff: 1 });
   await r.stop();
 });
 
-test('a scored drive: a DashPal event the server did not keep is deleted and the counts follow; a phone event, one with a report in flight, and any event of an unscored drive are left alone', async () => {
+test('every answer: a DashPal event the server did not keep is deleted and the counts follow; a phone-recorded event and one with a report in flight stay; an unscored drive has no clean flag', async () => {
   await finalized(uuid(10), T0, uuid(1));
   await dashpal(uuid(10), uuid(600), 'drowsy', T0 + 400_000);
   await dashpal(uuid(10), uuid(601), 'eyes_off', T0 + 500_000, { dispute_status: 'pending' });
@@ -175,20 +190,44 @@ test('a scored drive: a DashPal event the server did not keep is deleted and the
   const supabase = createFakeSupabase({
     invoke: ({ body }) => {
       const id = (body as { clientTripId: string }).clientTripId;
-      if (id === uuid(10)) return invokeOk(response(uuid(10), { breakdown: { ...response(uuid(10)).breakdown, events: [] } }));
-      return invokeOk(response(uuid(12), { scored: false, reason: 'too_short', net: 0, breakdown: { ...response(uuid(12)).breakdown, scored: false, events: [] } }));
+      if (id === uuid(10)) return invokeOk(response(uuid(10), { eventIds: [] }));
+      return invokeOk(response(uuid(12), { scored: false, reason: 'too_short', eventIds: [uuid(2), uuid(602)] }));
     },
   });
   const r = runner(supabase);
   await r.start();
   await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   await r.drainOnce();
-  expect((await createEventsRepo(db).listByTrip(uuid(10))).map((e) => [e.id, e.penalty])).toEqual([
-    [uuid(1), null],
-    [uuid(601), null],
-  ]);
+  expect((await createEventsRepo(db).listByTrip(uuid(10))).map((e) => e.id)).toEqual([uuid(1), uuid(601)]);
   expect(JSON.parse((await createTripsRepo(db).get(uuid(10)))!.counts_json!)).toMatchObject({ speeding: 1, drowsy: 0, eyesOff: 1 });
   expect((await createEventsRepo(db).listByTrip(uuid(12))).map((e) => e.id)).toEqual([uuid(2), uuid(602)]);
+  expect(await createTripsRepo(db).get(uuid(12))).toMatchObject({ status: 'unscored', reason: 'too_short', clean: null });
+  await r.stop();
+});
+
+test('a drive re-opened while its answer was on its way is left recording (its own upload follows)', async () => {
+  await finalized(uuid(10));
+  const supabase = createFakeSupabase({
+    invoke: async ({ body }) => {
+      await db.execute("UPDATE trips SET status = 'recording', ended_at = NULL WHERE client_trip_id = ?", [uuid(10)]);
+      return invokeOk(response((body as { clientTripId: string }).clientTripId));
+    },
+  });
+  const r = runner(supabase);
+  await r.start();
+  expect(await r.drainOnce()).toMatchObject({ done: 1 });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'recording', result_json: null, server_id: null });
+  expect(await samplesOf(uuid(10))).toBe(2);
+  await r.stop();
+});
+
+test('a server older than the upload (a 400 that refuses the contract version) is retried, never a refusal: the drive stays pending', async () => {
+  await finalized(uuid(10));
+  const r = runner(createFakeSupabase({ invoke: () => functionsHttpError(400, { code: 'invalid_payload', issues: [{ path: 'v', message: 'Invalid input: expected 3' }, { path: '', message: 'Unrecognized keys' }] }) }));
+  await r.start();
+  expect(await r.drainOnce()).toMatchObject({ failed: 0, deferred: 1 });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', sync_error: null });
+  expect(await createQueueRepo(db).byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'pending', attempts: 1, last_error: 'server_behind' });
   await r.stop();
 });
 
@@ -234,7 +273,7 @@ test('a 404 (the function not deployed yet) is no refusal: the drive stays pendi
   const deployed = runner(createFakeSupabase({ invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId)) }));
   await deployed.start();
   expect(await deployed.drainOnce()).toMatchObject({ done: 1 });
-  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'scored', points_net: 106, sync_error: null });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'scored', sync_error: null });
   await deployed.stop();
 });
 
@@ -270,7 +309,7 @@ test('nothing is sent without a session, while recording, or under another user;
   await busy.stop();
 });
 
-test('drive actions: a report goes pending, the server’s acceptance removes the event and takes the server’s net; a refusal reads as rejected', async () => {
+test('drive actions: a report goes pending, the server’s acceptance removes the event and recounts the drive; a refusal reads as rejected', async () => {
   await finalized(uuid(10), T0, uuid(1));
   await db.execute('DELETE FROM sync_queue');
   expect(await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db })).toBe('queued');
@@ -280,28 +319,18 @@ test('drive actions: a report goes pending, the server’s acceptance removes th
     invoke: ({ name, body }) => {
       expect(name).toBe('trip-actions');
       expect(body).toEqual({ action: 'dispute', clientTripId: uuid(10), eventId: uuid(1), reason: 'wrong_limit' });
-      return invokeOk({
-        tripId: uuid(77),
-        eventId: uuid(1),
-        status: 'accepted',
-        rejectReason: null,
-        net: 121,
-        delta: 15,
-        quotaLeft: 2,
-        breakdown: { ...response(uuid(10)).breakdown, events: [], penalties: 0, net: 121, ratingPenalty: 0, activeEventCount: 0 },
-        progress: { points: 1, lifetime: 1, level: 1, levelUp: false, safetyRating: null, ranked: false },
-      });
+      return invokeOk({ tripId: uuid(77), eventId: uuid(1), status: 'accepted', rejectReason: null, quotaLeft: 2, clean: true, rating: { safetyRating: null, ranked: false } });
     },
   });
   const r = runner(supabase);
   await r.start();
   await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   expect(await r.drainOnce()).toMatchObject({ done: 1 });
-  expect(await createEventsRepo(db).get(uuid(1))).toMatchObject({ dispute_status: 'accepted', status: 'removed', penalty: 0 });
-  const disputed = await createTripsRepo(db).get(uuid(10));
-  expect(disputed).toMatchObject({ points_net: 121, estimate: 0 });
-  // the stored breakdown is the server's re-score, so the itemised list sums to the net
-  expect(JSON.parse(disputed!.breakdown_json!)).toMatchObject({ net: 121, penalties: 0, events: [] });
+  expect(await createEventsRepo(db).get(uuid(1))).toMatchObject({ dispute_status: 'accepted', status: 'removed' });
+  const disputed = (await createTripsRepo(db).get(uuid(10)))!;
+  expect(JSON.parse(disputed.counts_json!)).toMatchObject({ speeding: 0 });
+  // not on the server yet as a scored drive: its own clean flag stands until the upload answers
+  expect(disputed.clean).toBe(0);
   await r.stop();
 
   await finalized(uuid(11), T0 + 5_000_000, uuid(2));
@@ -316,33 +345,37 @@ test('drive actions: a report goes pending, the server’s acceptance removes th
   expect(await createEventsRepo(db).get(uuid(2))).toMatchObject({ dispute_status: 'rejected', status: 'active', dispute_message: expect.stringContaining('reason') });
 });
 
-test('an accepted report that leaves the drive clean refreshes the stored answer, so Earned minus the deductions is the total', async () => {
+test('a scored drive takes the server’s clean flag when a report is accepted; one over the weekly quota reads as turned down', async () => {
   await finalized(uuid(10), T0, uuid(1));
-  const sync = createFakeSupabase({ invoke: () => invokeOk(response(uuid(10))) });
+  const sync = createFakeSupabase({ invoke: () => invokeOk(response(uuid(10), { eventIds: [uuid(1)] })) });
   const r = runner(sync);
   await r.start();
   await r.drainOnce();
   await r.stop();
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'scored', clean: 0 });
   await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db });
-  // the server re-scores: with no event left the clean bonus applies, so gains go up too
-  const rescored = { ...response(uuid(10)).breakdown, cleanBonus: 25 as const, gains: 149, events: [], penalties: 0, net: 149, ratingPenalty: 0, activeEventCount: 0 };
   const accepting = createFakeSupabase({
-    invoke: () =>
-      invokeOk({ tripId: uuid(77), eventId: uuid(1), status: 'accepted', rejectReason: null, net: 149, delta: 43, quotaLeft: 2, breakdown: rescored, progress: { points: 1, lifetime: 1, level: 1, levelUp: false, safetyRating: null, ranked: false } }),
+    invoke: () => invokeOk({ tripId: uuid(77), eventId: uuid(1), status: 'accepted', rejectReason: null, quotaLeft: 2, clean: true, rating: { safetyRating: 90, ranked: true } }),
   });
   const r2 = runner(accepting);
   await r2.start();
   await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   expect(await r2.drainOnce()).toMatchObject({ done: 1 });
   await r2.stop();
-  const trip = (await createTripsRepo(db).get(uuid(10)))!;
-  expect(JSON.parse(trip.result_json!)).toMatchObject({ net: 149, breakdown: { gains: 149, cleanBonus: 25, events: [] }, streak: { after: 6 } });
-  const events = (await createEventsRepo(db).listByTrip(uuid(10))).map(toLocalDriveEvent);
-  const shown = receipt(toLocalDrive(trip), events);
-  const active = shown.deductions.filter((l) => l.value !== 'Removed').reduce((a, l) => a + (l.cost ?? 0), 0);
-  expect(shown.earned! - active).toBe(shown.total);
-  expect(shown.total).toBe(149);
-  expect(shown.detail).toContain('Clean bonus +25');
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ clean: 1 });
+
+  await finalized(uuid(11), T0 + 5_000_000, uuid(2));
+  await db.execute('DELETE FROM sync_queue');
+  await reportEvent(uuid(11), uuid(2), 'hazard', { db });
+  const quota = createFakeSupabase({
+    invoke: () => invokeOk({ tripId: uuid(78), eventId: uuid(2), status: 'rejected', rejectReason: 'quota', quotaLeft: 0, clean: false, rating: { safetyRating: 90, ranked: true } }),
+  });
+  const r3 = runner(quota);
+  await r3.start();
+  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+  expect(await r3.drainOnce()).toMatchObject({ done: 1 });
+  await r3.stop();
+  expect(await createEventsRepo(db).get(uuid(2))).toMatchObject({ dispute_status: 'rejected', status: 'active', dispute_message: 'Weekly report limit reached.' });
 });
 
 test('"wasn’t driving": optimistic locally, confirmed by the server, or put back when refused', async () => {
@@ -350,7 +383,7 @@ test('"wasn’t driving": optimistic locally, confirmed by the server, or put ba
   await db.execute('DELETE FROM sync_queue');
   expect(await markNotDriving(uuid(10), { db })).toBe('queued');
   expect(await markNotDriving(uuid(10), { db })).toBe('already');
-  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', points_net: 0 });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving' });
   const refusing = createFakeSupabase({ invoke: () => functionsHttpError(403, { code: 'too_old' }) });
   const r = runner(refusing);
   await r.start();
@@ -365,14 +398,27 @@ test('"wasn’t driving": optimistic locally, confirmed by the server, or put ba
   await db.execute('DELETE FROM sync_queue');
   expect(await markNotDriving(uuid(10), { db })).toBe('queued');
   const ok = createFakeSupabase({
-    invoke: () => invokeOk({ tripId: uuid(77), clientTripId: uuid(10), notDrivingLeft: 1, progress: { points: 0, lifetime: 0, level: 1, streak: 0, atRisk: false, freezes: 2, safetyRating: null, ranked: false } }),
+    invoke: () => invokeOk({ tripId: uuid(77), clientTripId: uuid(10), notDrivingLeft: 1, rating: { safetyRating: null, ranked: false } }),
   });
   const r2 = runner(ok);
   await r2.start();
   await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   expect(await r2.drainOnce()).toMatchObject({ done: 1 });
-  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', points_net: 0, estimate: 0 });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', clean: null, server_id: uuid(77) });
   await r2.stop();
+});
+
+test('"wasn’t driving" on a drive whose "Not driving?" ran out is refused by the server and the drive is put back with the reason', async () => {
+  await finalized(uuid(10));
+  await db.execute("UPDATE trips SET status = 'scored', not_driving_expired = 1");
+  await db.execute('DELETE FROM sync_queue');
+  await markNotDriving(uuid(10), { db });
+  const r = runner(createFakeSupabase({ invoke: () => functionsHttpError(403, { code: 'not_driving_expired' }) }));
+  await r.start();
+  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+  expect(await r.drainOnce()).toMatchObject({ failed: 1 });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'scored', sync_error: 'not_driving_expired', not_driving_expired: 1 });
+  await r.stop();
 });
 
 /** The server's copy of a local drive as `list_my_drives` lists it. */
@@ -387,7 +433,6 @@ async function serverCopy(clientTripId: string, over: Record<string, unknown> = 
     tz: trip.tz,
     localDay: trip.local_day,
     miles: trip.miles,
-    safeMiles: trip.safe_miles,
     nightMiles: 0,
     durationS: trip.duration_s,
     polyline: null,
@@ -395,10 +440,10 @@ async function serverCopy(clientTripId: string, over: Record<string, unknown> = 
     reason: null,
     notDriving: false,
     clean: false,
-    pointsNet: 106,
-    breakdown: null,
-    result: { net: 106 },
-    events: events.map((e) => ({ id: e.id, type: e.type, tier: e.tier, startedAt: e.started_at, durationS: e.duration_s, penalty: eventStatus === 'removed' ? 0 : 15, status: eventStatus })),
+    origin: 'manual',
+    notDrivingExpired: false,
+    result: response(clientTripId),
+    events: events.map((e) => ({ id: e.id, type: e.type, tier: e.tier, startedAt: e.started_at, durationS: e.duration_s, status: eventStatus })),
     ...over,
   };
 }
@@ -408,14 +453,14 @@ describe('an action the server already holds (409: a retry whose first answer wa
     await finalized(uuid(10));
     await db.execute('DELETE FROM sync_queue');
     await markNotDriving(uuid(10), { db });
-    const copy = await serverCopy(uuid(10), { notDriving: true, pointsNet: 0 });
+    const copy = await serverCopy(uuid(10), { notDriving: true });
     const supabase = createFakeSupabase({ invoke: () => functionsHttpError(409, { code: 'already_marked' }), rpc: () => ({ data: [copy], error: null }) });
     const r = runner(supabase);
     await r.start();
     await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
     expect(await r.drainOnce()).toMatchObject({ done: 1, failed: 0 });
     expect(supabase.rpcs[0]!.fn).toBe('list_my_drives');
-    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', points_net: 0, server_id: uuid(77), sync_error: null });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', server_id: uuid(77), sync_error: null });
     expect(await r.owed()).toBe(0);
     await r.stop();
   });
@@ -437,14 +482,14 @@ describe('an action the server already holds (409: a retry whose first answer wa
     await finalized(uuid(10), T0, uuid(1));
     await db.execute('DELETE FROM sync_queue');
     await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db });
-    const accepted = await serverCopy(uuid(10), { pointsNet: 121, clean: true }, 'removed');
+    const accepted = await serverCopy(uuid(10), { clean: true }, 'removed');
     const supabase = createFakeSupabase({ invoke: () => functionsHttpError(409, { code: 'already_disputed' }), rpc: () => ({ data: [accepted], error: null }) });
     const r = runner(supabase);
     await r.start();
     await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
     expect(await r.drainOnce()).toMatchObject({ done: 1 });
-    expect(await createEventsRepo(db).get(uuid(1))).toMatchObject({ dispute_status: 'accepted', status: 'removed', penalty: 0 });
-    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ points_net: 121, clean: 1 });
+    expect(await createEventsRepo(db).get(uuid(1))).toMatchObject({ dispute_status: 'accepted', status: 'removed' });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'scored', clean: 1 });
     await r.stop();
 
     await finalized(uuid(11), T0 + 5_000_000, uuid(2));
@@ -523,7 +568,7 @@ test('a reply that lands after the device changed hands writes nothing and relea
   const r = runner(supabase);
   await r.start();
   expect(await r.drainOnce()).toMatchObject({ done: 0, deferred: 1 });
-  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', estimate: 1, result_json: null });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', result_json: null });
   const item = (await createQueueRepo(db).byKey(`trip:${uuid(10)}`))!;
   expect(item).toMatchObject({ status: 'pending', attempts: 0, next_attempt_at: T0 + 2_000_000 + FOREIGN_OWNER_RETRY_MS });
   await r.stop();

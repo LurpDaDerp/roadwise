@@ -233,6 +233,16 @@ export function createQueueRepo(db: Db) {
       return changes > 0;
     },
 
+    /**
+     * Drop the item under `idempotencyKey` only while it is still held and never tried (`pending`,
+     * no attempt): the guard a re-opened drive takes, in the same transaction as the re-open, so an
+     * upload already claimed or sent is never pulled back. True when it was dropped.
+     */
+    async dropUntried(idempotencyKey: string, on: Db = db): Promise<boolean> {
+      const { changes } = await on.execute("DELETE FROM sync_queue WHERE idempotency_key = ? AND status = 'pending' AND attempts = 0", [idempotencyKey]);
+      return changes > 0;
+    },
+
     /** Every item of one kind the queue has given up on. */
     async listFailed(kind: string, on: Db = db): Promise<QueueItem[]> {
       const { rows } = await on.execute("SELECT * FROM sync_queue WHERE kind = ? AND status = 'failed' ORDER BY id ASC", [kind]);

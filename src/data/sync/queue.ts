@@ -6,7 +6,13 @@ import { createSettingsRepo } from '@/data/db/settings';
 import type { QueueItem } from '@/data/db/types';
 import { emitDataChanged } from '@/data/events';
 import type { SyncKind } from '@/data/sync/kinds';
-import { FinalizeTripPayloadV3Schema, type FinalizeTripPayloadV3 } from '@/data/sync/payload';
+import {
+  DisputeActionSchema,
+  FinalizeTripPayloadV4Schema,
+  NotDrivingActionSchema as NotDrivingWireSchema,
+  parseFinalizeUpload,
+  type FinalizeTripPayloadV4,
+} from '@/data/sync/payload';
 
 export const FINALIZE_KIND: SyncKind = 'finalize-trip';
 export const ACTIONS_KIND: SyncKind = 'trip-actions';
@@ -47,23 +53,12 @@ export async function deviceOwnerIs(on: Db, uid: string): Promise<boolean> {
   }
 }
 
-/** The `trip-actions` request bodies (mirrors `supabase/functions/trip-actions/schema.ts`). */
-export const DisputeActionSchema = z
-  .object({
-    action: z.literal('dispute'),
-    clientTripId: z.uuid(),
-    eventId: z.uuid(),
-    reason: z.enum(['hazard', 'wrong_limit', 'mounted', 'camera_wrong']),
-  })
-  .strict();
-export const NotDrivingActionSchema = z
-  .object({
-    action: z.literal('not_driving'),
-    clientTripId: z.uuid(),
-    /** The local status to restore when the server refuses. Device-only; stripped before the post. */
-    previousStatus: z.string().optional(),
-  })
-  .strict();
+/** The `trip-actions` request bodies, as queued: the contract's (`payload.ts`), plus one device-only key. */
+export { DisputeActionSchema };
+export const NotDrivingActionSchema = NotDrivingWireSchema.extend({
+  /** The local status to restore when the server refuses. Device-only; stripped before the post. */
+  previousStatus: z.string().optional(),
+}).strict();
 export const TripActionSchema = z.discriminatedUnion('action', [DisputeActionSchema, NotDrivingActionSchema]);
 export type TripAction = z.infer<typeof TripActionSchema>;
 
@@ -71,8 +66,8 @@ export type TripAction = z.infer<typeof TripActionSchema>;
  * Validate the payload against the contract, then queue it. Idempotent on the trip. Given a
  * transaction handle `on`, the queue item joins that transaction.
  */
-export async function enqueueFinalize(db: Db, payload: FinalizeTripPayloadV3, now: number = Date.now(), on?: Db): Promise<QueueItem> {
-  const valid = FinalizeTripPayloadV3Schema.parse(payload);
+export async function enqueueFinalize(db: Db, payload: FinalizeTripPayloadV4, now: number = Date.now(), on?: Db): Promise<QueueItem> {
+  const valid = FinalizeTripPayloadV4Schema.parse(payload);
   const owner = await currentOwnerUid(db);
   const item = await createQueueRepo(db).enqueue(FINALIZE_KIND, valid, finalizeIdempotencyKey(valid.clientTripId), now, on, owner);
   // Delivered on a macrotask, so a drain it wakes meets the committed row, not the lock.
@@ -89,10 +84,19 @@ export async function enqueueAction(db: Db, action: TripAction, now: number = Da
   return item;
 }
 
-/** The payload queued for a trip, in whatever state the item has reached, or null. */
-export async function findFinalize(db: Db, clientTripId: string): Promise<FinalizeTripPayloadV3 | null> {
+/**
+ * The payload queued for a trip, in whatever state the item has reached, as v4 (one queued by an
+ * older build is upgraded), or null.
+ */
+export async function findFinalize(db: Db, clientTripId: string): Promise<FinalizeTripPayloadV4 | null> {
   const item = await createQueueRepo(db).byKey(finalizeIdempotencyKey(clientTripId));
   if (!item) return null;
-  const parsed = FinalizeTripPayloadV3Schema.safeParse(JSON.parse(item.payload_json));
+  let body: unknown;
+  try {
+    body = JSON.parse(item.payload_json);
+  } catch {
+    return null;
+  }
+  const parsed = parseFinalizeUpload(body);
   return parsed.success ? parsed.data : null;
 }

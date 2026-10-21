@@ -40,7 +40,7 @@ export async function reportEvent(clientTripId: string, eventId: string, reason:
 
 export type NotDrivingOutcome = 'queued' | 'already' | 'missing';
 
-/** "Wasn't driving": the drive's gains and penalties are taken back by the server. */
+/** "Wasn't driving": the drive leaves the Safety Rating and the week's goals once the server agrees. */
 export async function markNotDriving(clientTripId: string, deps: DriveActionDeps): Promise<NotDrivingOutcome> {
   const { db } = deps;
   const now = deps.now ?? Date.now;
@@ -49,7 +49,7 @@ export async function markNotDriving(clientTripId: string, deps: DriveActionDeps
   if (trip === null) return 'missing';
   if (trip.status === 'not_driving') return 'already';
   await db.transaction(async (tx) => {
-    await trips.update(clientTripId, { status: 'not_driving', points_net: 0 }, now(), tx);
+    await trips.update(clientTripId, { status: 'not_driving' }, now(), tx);
     await enqueueAction(db, { action: 'not_driving', clientTripId, previousStatus: trip.status }, now(), tx);
   });
   emitDataChanged({ source: 'enqueue' });
