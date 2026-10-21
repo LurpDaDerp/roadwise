@@ -337,6 +337,18 @@ describe('a drive', () => {
     await h.host.stop({ endOpenTrip: false });
   });
 
+  test('an unknown speed reaches the lock screen as none ("-"), never 0: at the start, and in the push-to-start state', async () => {
+    const h = build();
+    await h.host.boot();
+    await drive(h, rows(16, { speedMps: 15 }).map((r, i) => ({ ...r, lng: START.lng + (i * 15) / M_PER_DEG_LNG })));
+    // The drive opened before its first row reached the engine: no speed yet.
+    const first = h.display.states[0]!;
+    expect(h.display.log[0]).toMatch(/^start /);
+    expect(first.speed).toBeNull();
+    expect(h.display.states.some((s) => s.speed !== null && s.speed > 0)).toBe(true);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
   test('alerts play only with RoadWise in front: behind, every decision is suppressed, and lastAlert still shows', async () => {
     const h = build();
     await h.host.boot();
@@ -904,6 +916,8 @@ describe('iOS: the drive detector', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(pushed).toHaveLength(1);
     expect(pushed[0]).toMatchObject({ clientTripId: uuid(71), startedAt: T0 + 1_000_000, state: { unit: 'mph', weatherKind: null } });
+    // The pushed speed is the drive's own, or none ("-") before its first fix: never a made-up 0.
+    expect(pushed[0]!.state.speed === null || pushed[0]!.state.speed > 0).toBe(true);
     expect(h.display.log.filter((l) => l.startsWith('start'))).toEqual([]);
     // Back in front: the Live Activity is adopted (or started) here.
     h.appState.set('active');

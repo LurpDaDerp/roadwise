@@ -637,11 +637,15 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     return lastFixAt === null ? false : sunIsDown(new Date(lastFixAt.ts), lastFixAt.lat, lastFixAt.lng);
   }
 
-  /** What the background surfaces show for `s`: the speed (0 while unknown), the limit, its tint, the hint and the weather. */
+  /**
+   * What the background surfaces show for `s`: the speed (null until the drive's first fix: the
+   * Live Activity and the Android notification both show "-" then, where the driving screen shows
+   * 0), the limit, its tint, the hint and the weather.
+   */
   function displayState(s: EngineSnapshot): DriveDisplayState {
     const w = shownWeather();
     return {
-      speed: inDisplayUnit(s.speedKnown ? mpsToMph(s.speedMps) : 0, displayUnit),
+      speed: s.speedKnown && s.speedAt !== null ? inDisplayUnit(mpsToMph(s.speedMps), displayUnit) : null,
       limit: inDisplayUnit(s.limitMph, displayUnit),
       unit: displayUnit,
       points: null,
