@@ -1,11 +1,11 @@
-import { AXES, isDashcamType, SPEEDING_GRACE_S, type DriveEvent } from '@scoring';
+import { AXES, isDashcamType, PHONE_PICKUP_MIN_MPH, phonePickupTier, SCORING_VERSION, SPEEDING_GRACE_S, type DriveEvent } from '@scoring';
 
-import type { FinalizeTripPayloadV4 } from '@/data/sync/payload';
+import type { FinalizeTripPayloadV5 } from '@/data/sync/payload';
 import { decodeRuns } from '@/lib/polyline';
 
 interface Drive {
   trip: { route: string; reverse: boolean; short?: boolean; day: { back: number } };
-  payload: FinalizeTripPayloadV4;
+  payload: FinalizeTripPayloadV5;
   stored: { kept: DriveEvent[]; dashcam: { on: boolean }; scored: boolean; reason: string | null; activeEventCount: number };
 }
 interface DemoSpot {
@@ -30,9 +30,9 @@ const seed = require('../seed-demo.js') as {
     axes: Record<string, number | null>;
     counts: Record<string, number>;
   };
-  uploadProblem: (p: FinalizeTripPayloadV4) => string | null;
-  toEnvelope: (userId: string, p: FinalizeTripPayloadV4, stored: Drive['stored']) => Record<string, unknown>;
-  batchSql: (userId: string, items: { payload: FinalizeTripPayloadV4; envelope: unknown }[]) => string;
+  uploadProblem: (p: FinalizeTripPayloadV5) => string | null;
+  toEnvelope: (userId: string, p: FinalizeTripPayloadV5, stored: Drive['stored']) => Record<string, unknown>;
+  batchSql: (userId: string, items: { payload: FinalizeTripPayloadV5; envelope: unknown }[]) => string;
   DEMO_SPOTS: DemoSpot[];
 };
 
@@ -56,10 +56,10 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
     expect(seed.buildHistory(now).map((d) => d.payload)).toEqual(drives.map((d) => d.payload));
   });
 
-  it('uploads what a phone would: v4, no integrity refusal, oldest first, before now, never a merge', () => {
+  it('uploads what a phone would: v5, no integrity refusal, oldest first, before now, never a merge', () => {
     for (const d of drives) {
       expect(seed.uploadProblem(d.payload)).toBeNull();
-      expect(d.payload.v).toBe(4);
+      expect(d.payload.v).toBe(5);
       expect(d.payload.endedAt).toBeLessThan(now);
       expect([d.payload.origin, d.payload.notDrivingExpired]).toEqual(['manual', false]);
     }
@@ -75,13 +75,21 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
     }
   });
 
-  it('carries no phone use and no points anywhere', () => {
+  it('carries no phone handling and no points anywhere', () => {
     for (const d of drives) {
-      for (const e of d.payload.events) expect(['phone_pickup', 'phone_handling']).not.toContain(e.type);
+      for (const e of d.payload.events) expect(e.type).not.toBe('phone_handling');
       const env = JSON.stringify(seed.toEnvelope(USER, d.payload, d.stored));
       expect(env).not.toMatch(/"(net|breakdown|streak|safeMiles|isLoop|loopRepeat|safeMilesEarlierToday)"/);
       expect(Object.keys(d.payload)).not.toContain('safeMiles');
-      expect(JSON.stringify(d.payload.events)).not.toMatch(/"(units|stoppedInTraffic|mounted|maxSpeedMph)"/);
+      expect(JSON.stringify(d.payload.events)).not.toMatch(/"(units|stoppedInTraffic|mounted)"/);
+    }
+  });
+
+  it('picks the phone up only on drives where something else happened, so a clean drive stays clean', () => {
+    for (const d of drives) {
+      if (d.payload.events.some((e) => e.type === 'phone_pickup')) {
+        expect(d.payload.events.some((e) => e.type !== 'phone_pickup' && !isDashcamType(e.type))).toBe(true);
+      }
     }
   });
 
@@ -103,7 +111,7 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
     expect(summary.miles90).toBeGreaterThanOrEqual(100);
     expect(summary.rating).not.toBeNull();
     expect(summary.ranked).toBe(true);
-    expect(Object.keys(summary.counts).sort()).toEqual(['drowsy', 'eyes_off', 'hard_accel', 'hard_brake', 'hard_corner', 'speeding'].sort());
+    expect(Object.keys(summary.counts).sort()).toEqual(['drowsy', 'eyes_off', 'hard_accel', 'hard_brake', 'hard_corner', 'phone_pickup', 'speeding'].sort());
     expect(summary.clean / summary.scored).toBeGreaterThan(0.2);
     expect(summary.clean / summary.scored).toBeLessThan(0.6);
     expect(Object.keys(summary.axes).sort()).toEqual([...AXES].sort());
@@ -112,23 +120,35 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
     expect(drives.some((d) => d.payload.dashcam !== undefined)).toBe(true);
   });
 
-  it('reads like a decent driver: a Safety Rating in the high 70s to 80s, no category under 60', () => {
-    expect(summary.rating).toBeGreaterThanOrEqual(77);
-    expect(summary.rating).toBeLessThan(90);
+  it('reads like a decent driver: a Safety Rating of 79 to 85, Phone use among the rest, no category under 60', () => {
+    expect(summary.rating).toBeGreaterThanOrEqual(79);
+    expect(summary.rating).toBeLessThanOrEqual(85);
+    expect(summary.axes.phone).toBeGreaterThanOrEqual(75);
+    expect(summary.axes.phone).toBeLessThanOrEqual(90);
     for (const v of Object.values(summary.axes)) expect(v).toBeGreaterThanOrEqual(60);
   });
 
-  it('measures what the phone does: speeding past the grace with its mph-seconds over the line; counters for every drive', () => {
+  it('measures what the phone does: speeding past the grace with its mph-seconds over the line; pickups at driving speed, whole seconds in hand; counters for every drive', () => {
     for (const d of drives) {
       for (const e of d.payload.events) {
         if (e.type === 'speeding') {
           expect(e.durationS).toBeGreaterThan(SPEEDING_GRACE_S);
           expect(e.measured.overMphS).toBeGreaterThan(0);
         }
+        if (e.type === 'phone_pickup') {
+          expect(Number.isInteger(e.durationS) && e.durationS >= 1).toBe(true);
+          expect(e.tier).toBe(phonePickupTier(e.durationS));
+          expect(e.measured.speedMph).toBeGreaterThanOrEqual(PHONE_PICKUP_MIN_MPH);
+          expect(e.measured.maxSpeedMph).toBeGreaterThanOrEqual(e.measured.speedMph!);
+        }
       }
       const x = d.payload.exposure!;
       expect(x.limitS).toBeLessThanOrEqual(x.movingS);
       expect(x.movingS).toBeLessThanOrEqual(d.payload.durationS);
+      // every drive was watched for phone use, held as the server holds it
+      expect(x.phoneS).toBeLessThanOrEqual(x.movingS);
+      expect(x.phoneS).toBeLessThanOrEqual(Math.ceil(d.payload.miles * 360 * 1.25) + 60);
+      if (!d.trip.short) expect(x.phoneS).toBeGreaterThan(0);
     }
   });
 
@@ -145,7 +165,8 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
       expect(d.stored.activeEventCount).toBe(env.events.filter((e) => !isDashcamType(e.type)).length);
       expect(env.events.every((e) => e.status === 'active')).toBe(true);
       expect([env.scored, env.reason]).toEqual(d.trip.short ? [false, 'too_short'] : [true, null]);
-      expect([env.scoringVersion, env.payload.origin, env.payload.notDrivingExpired]).toEqual([7, 'manual', false]);
+      expect([env.scoringVersion, env.payload.origin, env.payload.notDrivingExpired]).toEqual([SCORING_VERSION, 'manual', false]);
+      expect(SCORING_VERSION).toBe(8);
       expect(env.payload.exposure).toEqual(d.payload.exposure);
     }
   });

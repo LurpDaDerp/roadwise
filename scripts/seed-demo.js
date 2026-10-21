@@ -18,11 +18,13 @@
  * auth.users) and a new one is made. Nothing derived is written by hand. The account is created
  * through the Auth admin API and onboarded through the app's own RPCs (claim_username,
  * complete_onboarding, update_profile). Every drive goes through the same path as a phone upload:
- * a v4 upload (its counters as the server would estimate them), stored as finalize-trip stores it
- * (`keepDashcamEvents`, `classifyDrive`) through `private.drive_context` + `private.apply_drive`,
- * oldest first. So the Safety Rating, the weekly goals and the achievements are the server's own
- * derivations. A few places repeat the same event (`DEMO_SPOTS`), so Spots to watch has two active
- * spots and one cleared.
+ * a v5 upload (its counters as the server would estimate them, and its seconds at driving speed, so
+ * every drive was watched for phone use; now and then a phone pickup), stored as finalize-trip
+ * stores it (`keepDashcamEvents`, `classifyDrive`) through `private.drive_context` +
+ * `private.apply_drive`, oldest first. So the Safety Rating (Phone use included), the weekly goals
+ * and the achievements are the server's own derivations. A few places repeat the same event
+ * (`DEMO_SPOTS`), so Spots to watch has two active spots and one cleared; phone pickups never repeat
+ * at a place (spots never read them).
  *
  * `private.*` is not on the Data API, so the drives go through `supabase db query`: `--local` when
  * SUPABASE_URL is a local address, else `--linked` (the CLI's linked project, which must be the
@@ -428,6 +430,73 @@ function makeEvents(trip, rec, rnd, opts) {
   return events.sort((a, b) => a.startedAt - b.startedAt).map((e) => ({ id: uuid(rnd), ...e }));
 }
 
+/**
+ * Phone pickups per mile^0.85 (as the other events scale) on a drive that already had an event: the
+ * demo driver reaches for the phone on the drives where the attention slips anyway (so a clean drive
+ * stays clean), less in the last month. At these rates Phone use reads around 80, near the rest of
+ * the categories, so it shows on Analytics without moving the Safety Rating far.
+ */
+function phoneRate(back) {
+  if (back >= 30) return PHONE_RATE[0];
+  if (back >= 13) return PHONE_RATE[1];
+  return PHONE_RATE[2];
+}
+const PHONE_RATE = [0.4, 0.34, 0.3];
+
+/**
+ * The phone pickups of one drive, from their own generator (`rnd`), so the rest of the history and
+ * the spots are the same with or without them. Each starts at driving speed on the visible route,
+ * at least a minute from every other event and away from the demo spots; mostly a few seconds in
+ * hand (moderate), now and then longer (severe, past `PHONE_SEVERE_S`).
+ */
+function phonePickups(trip, rec, rnd, others) {
+  if (trip.short || others.every((e) => scoring.isDashcamType(e.type))) return [];
+  const slots = rec.visible.filter(
+    (i) => rec.times[i] >= 45 && rec.times[i] <= rec.durationS - 75 && DEMO_SPOTS.every((spot) => distanceM([rec.track[i].lat, rec.track[i].lng], spot.at) > SPOT_CLEAR_M)
+  );
+  if (slots.length === 0) return [];
+  const used = others.map((e) => e.startedAt);
+  const pickups = [];
+  for (let n = poisson(rnd, phoneRate(trip.day.back) * Math.pow(rec.miles, 0.85)); n > 0; n -= 1) {
+    let placed = null;
+    for (let tries = 0; tries < 20 && placed === null; tries += 1) {
+      const i = pick(rnd, slots);
+      const startedAt = rec.startedAt + Math.round(rec.times[i] * 1000);
+      if (used.every((t) => Math.abs(t - startedAt) >= 60_000)) placed = { i, startedAt };
+    }
+    if (placed === null) break;
+    used.push(placed.startedAt);
+    const p = rec.track[placed.i];
+    const pace = rec.paceBy.get(p.limit) ?? p.limit;
+    const inHand = rnd() < 0.6 ? intBetween(rnd, 3, scoring.PHONE_SEVERE_S) : intBetween(rnd, scoring.PHONE_SEVERE_S + 1, 50);
+    const speedMph = round(Math.max(scoring.PHONE_PICKUP_MIN_MPH, pace * between(rnd, 0.85, 1.0)), 1);
+    pickups.push({
+      id: uuid(rnd),
+      type: 'phone_pickup',
+      tier: scoring.phonePickupTier(inHand),
+      startedAt: placed.startedAt,
+      durationS: inHand,
+      lat: round(p.lat, 5),
+      lng: round(p.lng, 5),
+      measured: { speedMph, maxSpeedMph: round(speedMph + between(rnd, 0, 6), 1) },
+    });
+  }
+  return pickups;
+}
+
+/**
+ * The seconds a drive spent at driving speed (`PHONE_PICKUP_MIN_MPH` or more), with the motion
+ * sensors read throughout: every stretch it drove at that pace, held to its moving time and to the
+ * bound the server holds it to (ceil(mi x 450) + 60, as limit time).
+ */
+function phoneSecondsOf(rec, movingS) {
+  let secs = 0;
+  for (let i = 1; i < rec.track.length; i += 1) {
+    if ((rec.paceBy.get(rec.track[i - 1].limit) ?? 0) >= scoring.PHONE_PICKUP_MIN_MPH) secs += rec.times[i] - rec.times[i - 1];
+  }
+  return Math.min(movingS, Math.ceil(rec.miles * 360 * 1.25) + 60, Math.round(secs));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Problem spots: places the demo driver keeps doing the same thing (spots.md §8)
 
@@ -507,12 +576,13 @@ function spotEvents(tripIndex, rec, rndSpots, picked) {
 // ---------------------------------------------------------------------------------------------
 // The whole history, stored as finalize-trip stores it
 
-/** The finalize-trip upload (v4) a phone would have sent for a recorded drive. */
+/** The finalize-trip upload (v5) a phone would have sent for a recorded drive. */
 function toPayload(trip, rec, events, rnd, dashcam) {
   const first = rec.track[0];
   const last = rec.track[rec.track.length - 1];
+  const exposure = scoring.estimateExposure(rec.miles, rec.durationS);
   const payload = {
-    v: 4,
+    v: 5,
     clientTripId: uuid(rnd),
     startedAt: rec.startedAt,
     endedAt: rec.endedAt,
@@ -529,8 +599,9 @@ function toPayload(trip, rec, events, rnd, dashcam) {
     appVersion: APP_VERSION,
     origin: 'manual',
     notDrivingExpired: false,
-    // the counters the phone would have counted, as the server would estimate them for this drive
-    exposure: scoring.estimateExposure(rec.miles, rec.durationS),
+    // the counters the phone would have counted, as the server would estimate them for this drive,
+    // and its seconds at driving speed
+    exposure: { ...exposure, phoneS: phoneSecondsOf(rec, exposure.movingS) },
   };
   if (dashcam) {
     const movingS = Math.round(rec.durationS * 0.93);
@@ -599,6 +670,7 @@ function toEnvelope(userId, p, stored) {
 function buildHistory(now, seed = SEED) {
   const rnd = mulberry32(seed);
   const rndSpots = mulberry32(seed ^ 0x5b07);
+  const rndPhone = mulberry32(seed ^ 0x9e37);
   const trips = planTrips(now, rnd).filter((t) => localInstant(t.day, t.minutes) < now - 2 * 3600 * 1000);
   const picked = spotTrips(trips);
   const scoredIdx = trips.map((t, i) => (t.short ? -1 : i)).filter((i) => i >= 0);
@@ -610,7 +682,8 @@ function buildHistory(now, seed = SEED) {
   return trips.map((trip, i) => {
     const rec = recordDrive(trip, rnd);
     const dashcamEvent = i === lateIdx ? 'drowsy' : i === eyesIdx ? 'eyes_off' : null;
-    const events = [...makeEvents(trip, rec, rnd, { dashcamEvent }), ...spotEvents(i, rec, rndSpots, picked)].sort((a, b) => a.startedAt - b.startedAt);
+    const others = [...makeEvents(trip, rec, rnd, { dashcamEvent }), ...spotEvents(i, rec, rndSpots, picked)];
+    const events = [...others, ...phonePickups(trip, rec, rndPhone, others)].sort((a, b) => a.startedAt - b.startedAt);
     const payload = toPayload(trip, rec, events, rnd, dashcamIdx.includes(i));
     return { trip, payload, stored: storeUpload(payload) };
   });
@@ -618,7 +691,7 @@ function buildHistory(now, seed = SEED) {
 
 /**
  * What the history should add up to on the server: the Safety Rating as of `now` (scoring
- * `ratingAt`, as migration 0023's `private.rating_at` computes it), its categories (whole numbers,
+ * `ratingAt`, as migration 0026's `private.rating_at` computes it), its categories (whole numbers,
  * as Analytics shows them) and the event counts.
  */
 function summarize(drives, now) {
@@ -650,11 +723,11 @@ function summarize(drives, now) {
   };
 }
 
-/** Why finalize-trip would not take an upload as a fresh scored drive (null: it would): the v4 contract and the integrity rules. */
+/** Why finalize-trip would not take an upload as a fresh scored drive (null: it would): the v5 contract and the integrity rules. */
 function uploadProblem(p) {
   const parsed = parseFinalizeUpload(p);
   if (!parsed.success) return `breaks the upload contract: ${parsed.error.message}`;
-  if (p.v !== 4) return 'is not a v4 upload';
+  if (p.v !== 5) return 'is not a v5 upload';
   const refused = integrityReason(p);
   if (refused) return `would be stored unscored as ${refused}`;
   return null;
