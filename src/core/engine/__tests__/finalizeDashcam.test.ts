@@ -87,10 +87,10 @@ describe('finalizeTrip with DashPal facts', () => {
     ]);
     expect(await findFinalize(db, TRIP)).toEqual(payload);
 
-    expect(result.breakdown).toMatchObject({ streakMult: 1.2, dashcamMult: 1.25, mult: 1.5, cleanBonus: 25, penalties: 40, ratingPenalty: 0, activeEventCount: 0 });
+    expect(result.breakdown).toMatchObject({ streakMult: 1.2, dashcamMult: 1.25, mult: 1.5, cleanBonus: 50, pointsPerMile: 20, penalties: 40, ratingPenalty: 0, activeEventCount: 0 });
     // the estimate is exactly the server's scoring of what was uploaded
     const server = scoreDrive(
-      { miles: payload.miles, safeMiles: payload.safeMiles, events: payload.events, dashcam: dashcamDrive(payload.dashcam) },
+      { miles: payload.miles, safeMiles: payload.safeMiles, events: payload.events, dashcam: dashcamDrive(payload.dashcam), durationS: payload.durationS },
       { streak: 10, safeMilesEarlierToday: 0 }
     );
     expect(result.breakdown).toEqual(server);

@@ -1,4 +1,6 @@
 /** @jest-environment node */
+import { scoreDrive } from '@scoring';
+
 import { T0 } from '@/core/detectors/__fixtures__/rows';
 import { brakeEvent, closedSession, rows, speedingEvent, TZ, uuid } from '@/core/engine/__fixtures__/drives';
 import type { TripSession } from '@/core/engine/engine.types';
@@ -313,4 +315,44 @@ test.each([
   const result = await finalizeTrip(session, deps());
   expect(result.trip.end_cause).toBe(stored);
   expect(JSON.stringify(result.payload)).not.toContain(stored);
+});
+
+describe('round 7: what the estimate reads', () => {
+  test('sanitizeEvent keeps and clamps maxSpeedMph (0..250) and overMphS (0..1e6), and drops what is not a finite number', () => {
+    const base = { id: 'x', type: 'speeding', tier: 'minor', startedAt: T0, durationS: 10 } as const;
+    expect(sanitizeEvent({ ...base, measured: { overMphS: 12.34567, maxSpeedMph: 61.23456 } }, T0, T0 + 60_000).measured).toEqual({ maxSpeedMph: 61.235, overMphS: 12.346 });
+    expect(sanitizeEvent({ ...base, measured: { overMphS: 5e6, maxSpeedMph: 400 } }, T0, T0 + 60_000).measured).toEqual({ maxSpeedMph: 250, overMphS: 1e6 });
+    expect(sanitizeEvent({ ...base, measured: { overMphS: -3, maxSpeedMph: -1 } }, T0, T0 + 60_000).measured).toEqual({ maxSpeedMph: 0, overMphS: 0 });
+    expect(sanitizeEvent({ ...base, measured: { overMphS: Number.NaN, maxSpeedMph: Number.POSITIVE_INFINITY } }, T0, T0 + 60_000).measured).toEqual({});
+  });
+
+  test('the estimate prices speeding from its measured overMphS and phone use at its highest speed, exactly as the server scores the upload', async () => {
+    const speeding = { ...speedingEvent(T0 + 300_000, 35), measured: { speedMph: 41, limitMph: 35, overMphS: 90 } };
+    const pickup = { id: uuid(3), type: 'phone_pickup' as const, tier: 'severe' as const, startedAt: T0 + 600_000, durationS: 8, measured: { mounted: false, speedMph: 30, maxSpeedMph: 52 } };
+    const session = closedSession(1200, [speeding, pickup]);
+    const result = await finalizeTrip(session, deps());
+    const payload = result.payload!;
+    expect(FinalizeTripPayloadV3Schema.safeParse(payload).success).toBe(true);
+    expect(payload.events.map((e) => e.measured)).toEqual([
+      { speedMph: 41, limitMph: 35, overMphS: 90 },
+      { mounted: false, speedMph: 30, maxSpeedMph: 52 },
+    ]);
+    // 30 s charged at 3 mph past the line: 18; a pickup over 45 mph: 32 × 2. An 11-mile drive: no short scale.
+    expect(result.breakdown.events).toEqual([
+      { id: uuid(1), penalty: 18 },
+      { id: uuid(3), penalty: 64 },
+    ]);
+    const server = scoreDrive({ miles: payload.miles, safeMiles: payload.safeMiles, events: payload.events, durationS: payload.durationS }, { streak: 0, safeMilesEarlierToday: 0 });
+    expect(result.breakdown).toEqual(server);
+  });
+
+  test('a drive under 0.5 mi is scored once it lasts 2 min (and too short under both)', async () => {
+    // 150 rows at 5 m/s: 0.47 mi in 150 s.
+    const long = closedSession(150, [], { speedMps: 5 });
+    const scored = await finalizeTrip(long, deps());
+    expect(scored.trip.miles).toBeLessThan(0.5);
+    expect(scored.breakdown).toMatchObject({ scored: true, pointsPerMile: 20 });
+    const short = closedSession(110, [], { speedMps: 5, clientTripId: uuid(8) });
+    expect((await finalizeTrip(short, deps())).breakdown).toMatchObject({ scored: false, reason: 'too_short' });
+  });
 });

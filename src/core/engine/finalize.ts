@@ -4,7 +4,8 @@
 //   1. the route is trimmed (zones + first/last 0.25 mi) and the events located on it;
 //   2. the v3 payload is built and validated against the upload contract;
 //   3. the drive is scored locally with `scoreDrive` and the cached context — an estimate until
-//      the server answers;
+//      the server answers, from exactly what is uploaded (the events with what they measured, the
+//      drive's duration);
 //   4. ONE transaction replaces the events, updates the trip row (`pending`), queues the upload
 //      and purges the samples. It commits or it does not.
 // A payload the contract refuses is stored as `failed` (never uploaded, never left `recording`).
@@ -200,15 +201,23 @@ export function dashcamBlock(facts: DashcamTripFacts | null): DashcamV3 | null {
   return { deviceId, movingS, coveredS, synced: facts.synced === true };
 }
 
+/** The contract's ceiling on `measured.overMphS` (mph-seconds past the speeding line). */
+const MAX_OVER_MPH_S = 1e6;
+
+const finiteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
 /** A copy of the event with every number finite and rounded, so the contract holds whatever a detector emitted. */
 export function sanitizeEvent(e: DetectedEvent, tripStartedAt: number, tripEndedAt: number): DetectedEvent {
   const startedAt = clamp(Number.isFinite(e.startedAt) ? Math.round(e.startedAt) : tripStartedAt, tripStartedAt, tripEndedAt);
   const maxDuration = Math.max(0, (tripEndedAt - startedAt) / 1000 + 2);
   const measured: DetectedEvent['measured'] = {};
-  if (typeof e.measured.speedMph === 'number' && Number.isFinite(e.measured.speedMph)) measured.speedMph = clamp(round3(e.measured.speedMph), 0, 250);
-  if (typeof e.measured.limitMph === 'number' && Number.isFinite(e.measured.limitMph)) measured.limitMph = clamp(Math.round(e.measured.limitMph), 0, 120);
-  if (typeof e.measured.peakG === 'number' && Number.isFinite(e.measured.peakG)) measured.peakG = clamp(round3(e.measured.peakG), 0, 10);
-  if (typeof e.measured.mounted === 'boolean') measured.mounted = e.measured.mounted;
+  const m = e.measured;
+  if (finiteNumber(m.speedMph)) measured.speedMph = clamp(round3(m.speedMph), 0, 250);
+  if (finiteNumber(m.maxSpeedMph)) measured.maxSpeedMph = clamp(round3(m.maxSpeedMph), 0, 250);
+  if (finiteNumber(m.limitMph)) measured.limitMph = clamp(Math.round(m.limitMph), 0, 120);
+  if (finiteNumber(m.peakG)) measured.peakG = clamp(round3(m.peakG), 0, 10);
+  if (finiteNumber(m.overMphS)) measured.overMphS = clamp(round3(m.overMphS), 0, MAX_OVER_MPH_S);
+  if (typeof m.mounted === 'boolean') measured.mounted = m.mounted;
   // The contract's rule: a DashPal event carries source dashcam, and nothing else does.
   if (isDashcamType(e.type)) measured.source = 'dashcam';
   const out: DetectedEvent = {
@@ -409,9 +418,10 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   // 3. The local estimate.
   const streak = (await deps.context?.().catch(() => null))?.streak ?? 0;
   const ctx: DriveContext = { streak, safeMilesEarlierToday: await safeMilesEarlierToday(db, localDay, startedAt) };
-  const driveEvents: DriveEvent[] = cleaned.map(({ measured: _m, ...e }) => e);
-  // The same derivation as the server's: the DashPal bonus from the block's seconds.
-  const breakdown = scoreDrive({ miles, safeMiles, events: driveEvents, dashcam: dashcamDrive(dashcam) }, ctx);
+  // The same input as the server's: the events with what they measured (speeding's cost, phone use's
+  // speed), the drive's duration (the minimum-drive rule) and the DashPal bonus from the block's seconds.
+  const driveEvents: DriveEvent[] = cleaned;
+  const breakdown = scoreDrive({ miles, safeMiles, events: driveEvents, dashcam: dashcamDrive(dashcam), durationS }, ctx);
   const penaltyOf = new Map(breakdown.events.map((e) => [e.id, e.penalty]));
   const counts = countEvents(cleaned);
 
