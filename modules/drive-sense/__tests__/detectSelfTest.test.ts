@@ -52,6 +52,7 @@ describe('the detect self-test', () => {
       suppress: () => ({ cause: 'never' }),
       suppressResume: (a) => ({ ...a, causes: (a.causes as unknown[]).map(() => 'still') }),
       resume: (a) => ({ decision: a.decision === 'resume' ? 'orphan' : 'resume' }),
+      resumeSeq: (a) => ({ lastSeq: (a.lastSeq as number) - 999 }),
       status: (a) => ({ ...a, missing: ['motion'] }),
     };
     for (const kind of Object.keys(drifted) as DetectVector['kind'][]) {

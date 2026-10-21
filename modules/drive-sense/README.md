@@ -905,8 +905,10 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   GPS off, the parked region at the last fix, `armed`. `lastEnd` is not touched.
 - **A relaunch** (`resumeAtLaunch`, at didFinishLaunching and at the first unlock): the wakes are
   asked for again; a candidate never survives a process; a drive whose journal's last row is 5 min
-  old or less resumes (the torn tail cut off, a `gap` line, sensors on, rows from the next `seq`,
-  the still clock from the last row); an older one ends as an `orphan` (`driveEnded`, for JS to
+  old or less resumes (the torn tail cut off, a `gap` line, sensors on, the still clock from the
+  last row; its rows go on past `RESUME_SEQ_GAP` (1000) seqs after the journal's highest, which the
+  `gap` line carries as `lastSeq`, because the last unsynced rows may be gone from the file while JS
+  holds them, and a seq handed out twice would make JS drop the new row as a repeat); an older one ends as an `orphan` (`driveEnded`, for JS to
   finalize); a rest resumes until its 3 h cap (measured from when it began), its still clock
   starting again at the relaunch, so a relaunch never ends it at once.
 
@@ -915,11 +917,11 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
 `<Application Support>/drivesense/journal/<driveId>.ndjson` (`RowJournal.swift`,
 `RowJournalRead.swift`), excluded from backup, protected until the first unlock (rows keep landing
 with the phone locked). One JSON object per line: `start` (`v: 1`, the drive's start, `confirmedAt`,
-`nativeBuild`), `row` (the `row` payload with `seq`), `gap { from, to }`, `end { endedAt, cause,
-decidedAt, lastRowTs, lastSeq }`. fsync on `start`, `gap`, `end` and every 30 rows; 16 MiB a drive at
+`nativeBuild`), `row` (the `row` payload with `seq`), `gap { from, to, lastSeq }` (a resume: the rows
+go on after `lastSeq`), `end { endedAt, cause, decidedAt, lastRowTs, lastSeq }`. fsync on `start`, `gap`, `end` and every 30 rows; 16 MiB a drive at
 most; at most 4 files (opening a fifth deletes the oldest file JS never drained, ended or orphaned,
 counted in `journalDropped`). A cancelled drive's file is deleted at once. Readers drop a torn last line and
-any row whose `seq` is not the last plus one. No file timestamps, attribute reads or disk-space
+any row whose `seq` is not the last plus one (a `gap` moves the last to its `lastSeq`). No file timestamps, attribute reads or disk-space
 reads (the privacy manifest declares none). `src/detect/journal.ts` reads the same format.
 
 ### The Live Activity and the "Recording your drive" note
@@ -947,6 +949,6 @@ did.
 
 `detect` vectors (§8): every row of `src/detect/vectors.ts` (confirmation, trace-back, start and
 fallbacks, the motion summary and gate, the wake gate, a candidate's clock, the safety stop, the
-rest's end, a rest resumed at a relaunch, a relaunch's decision, the status) runs through the production `DetectPolicy` on the
+rest's end, a rest resumed at a relaunch, a relaunch's decision and seq, the status) runs through the production `DetectPolicy` on the
 phone (`DetectSelfTest.swift`) and is diffed by `diffDetectSelfTest`.
 

@@ -2,15 +2,17 @@
 // `listDrives`, a resume and an orphan's end), and its rows in order after a seq (for `readRows`).
 // `listDrives` lists a file with no end that is not the live drive as an orphan JS adopts.
 // A torn last line (no newline, or not JSON) is never read, and a row whose seq is not the last one
-// plus one is dropped. `readRows` keeps its place in each file, so draining a long drive page by
-// page reads it once. Journal queue only, except `list` and `read`, which hop onto it and answer on
-// main.
+// plus one is dropped (a resume's `gap` moves the last one to its `lastSeq`). `readRows` keeps its
+// place in each file, so draining a long drive page by page reads it once. Journal queue only,
+// except `list` and `read`, which hop onto it and answer on main.
 import Foundation
 
 /// What a journal file holds, from its first line and its tail.
 struct JournalSummary {
   var start: [String: Any]
   var lastSeq = 0
+  /// The highest seq the file has handed out or reserved: its last row's, or a later resume's `gap`.
+  var topSeq = 0
   var lastRowTs: Double?
   /// The last trusted fix (the parked spot after an orphan end).
   var lastFixLat: Double?
@@ -61,6 +63,8 @@ extension RowJournal {
     for line in lines.reversed() {
       guard let o = Self.object(line), let k = o["k"] as? String else { continue }
       if k == "end" && s.end == nil { s.end = o }
+      // A resume after the last row reserved the seqs up to its `lastSeq`.
+      if k == "gap", s.lastRowTs == nil, let g = (o["lastSeq"] as? NSNumber)?.intValue { s.topSeq = max(s.topSeq, g) }
       guard k == "row" else { continue }
       if s.lastRowTs == nil {
         s.lastSeq = (o["seq"] as? NSNumber)?.intValue ?? 0
@@ -73,6 +77,7 @@ extension RowJournal {
       }
     }
     if let n = (s.end?["lastSeq"] as? NSNumber)?.intValue { s.lastSeq = n }
+    s.topSeq = max(s.topSeq, s.lastSeq)
     return s
   }
 
@@ -149,7 +154,11 @@ extension RowJournal {
       var lineStart = buf.startIndex
       while let nl = buf[lineStart...].firstIndex(of: 0x0A) {
         let lineEnd = bufAt + UInt64(buf.distance(from: buf.startIndex, to: nl) + 1)
-        if let o = Self.object(buf[lineStart..<nl]), o["k"] as? String == "row", let seq = (o["seq"] as? NSNumber)?.intValue, seq == last + 1 {
+        let o = Self.object(buf[lineStart..<nl])
+        if o?["k"] as? String == "gap", let g = (o?["lastSeq"] as? NSNumber)?.intValue, g > last {
+          // A resume: the rows go on after its seq.
+          last = g
+        } else if let o = o, o["k"] as? String == "row", let seq = (o["seq"] as? NSNumber)?.intValue, seq == last + 1 {
           last = seq
           if seq > afterSeq {
             var row = o

@@ -3,11 +3,12 @@
 //
 //   {"k":"start","v":1,"driveId":…,"origin":…,"startedAt":…,"startSource":…,"startLat":…,"startLng":…,"continues":…,"confirmedAt":…,"nativeBuild":…}
 //   {"k":"row","seq":1, …the `row` event payload…}
-//   {"k":"gap","from":…,"to":…}                       (a relaunch resumed the drive)
+//   {"k":"gap","from":…,"to":…,"lastSeq":…}           (a relaunch resumed the drive; rows go on after lastSeq)
 //   {"k":"end","endedAt":…,"cause":…,"decidedAt":…,"lastRowTs":…,"lastSeq":…}
 //
-// `seq` starts at 1 and rises by one. A reader drops a torn last line (no `\n`, or not JSON) and any
-// row whose `seq` is not the last one plus one. A file with no `end` that is not the live drive is
+// `seq` starts at 1 and rises by one, except across a resume's `gap`, after which the rows go on
+// from its `lastSeq` + 1. A reader drops a torn last line (no `\n`, or not JSON) and any row whose
+// `seq` is not the last one plus one. A file with no `end` that is not the live drive is
 // an orphan, listed as ended (`listedEnd`). Used by the fake detector, the tests and the
 // diagnostics screen; native reads its own files.
 import type { DriveOrigin, EndCauseNative, JournaledDrive, StartSource } from './types';
@@ -37,6 +38,11 @@ export interface JournalGap {
   k: 'gap';
   from: number;
   to: number;
+  /**
+   * The seq the resumed rows go on after (`resumeSeq`): the journal's highest plus a gap, so a row
+   * JS took in that the journal lost is never reused. Absent in a gap written before it existed.
+   */
+  lastSeq?: number;
 }
 
 export interface JournalEnd {
@@ -103,7 +109,8 @@ export function parseJournalLine(line: string): JournalLine | null {
       return { k: 'row', seq: r.seq, row };
     }
     case 'gap':
-      return isInt(r.from) && isInt(r.to) ? { k: 'gap', from: r.from, to: r.to } : null;
+      if (!isInt(r.from) || !isInt(r.to) || !(r.lastSeq === undefined || isInt(r.lastSeq))) return null;
+      return r.lastSeq === undefined ? { k: 'gap', from: r.from, to: r.to } : { k: 'gap', from: r.from, to: r.to, lastSeq: r.lastSeq };
     case 'end':
       if (!isInt(r.endedAt) || !CAUSES.has(r.cause) || !isInt(r.decidedAt) || !(r.lastRowTs === null || isInt(r.lastRowTs)) || !isInt(r.lastSeq)) return null;
       return { k: 'end', endedAt: r.endedAt, cause: r.cause as JournalEnd['cause'], decidedAt: r.decidedAt, lastRowTs: r.lastRowTs, lastSeq: r.lastSeq };
@@ -138,8 +145,11 @@ export function readJournal(text: string): ReadJournal {
       continue;
     }
     if (line.k === 'start') out.start = out.start ?? line;
-    else if (line.k === 'gap') out.gaps.push(line);
-    else if (line.k === 'end') out.end = line;
+    else if (line.k === 'gap') {
+      out.gaps.push(line);
+      // A resume: the rows go on after its seq.
+      if (line.lastSeq !== undefined && line.lastSeq > last) last = line.lastSeq;
+    } else if (line.k === 'end') out.end = line;
     else if (line.seq === last + 1) {
       out.rows.push(line.row);
       last = line.seq;

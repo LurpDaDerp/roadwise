@@ -222,6 +222,31 @@ describe('the fake detector', () => {
     expect((await d.listDrives()).map((x) => x.driveId)).toEqual([live.driveId]);
   });
 
+  test('a relaunch after a power loss resumes the seqs past a gap: no row JS already took in has its seq handed out again (review M7)', async () => {
+    let now = 1_760_000_000_000;
+    const d = createFakeDriveDetect({ now: () => now });
+    await d.setArmed(true, OWNER);
+    const ev = d.confirm({ rows: Array.from({ length: 40 }, (_, i) => row(now - 40_000 + i * 1000)) });
+    // JS took in seq 1-40 live; the power loss took the last 10 from the file before they were synced.
+    let jsLast = 40;
+    now += 120_000;
+    expect(d.relaunch(10)).toBe(30 + DETECT.RESUME_SEQ_GAP);
+    expect(d.emitRows([row(now), row(now + 1000), row(now + 2000)])).toEqual([1031, 1032, 1033]);
+    // A gap-fill read after JS's last seq (as the host does) hands every new row over, none as a repeat.
+    const page = await d.readRows(ev.driveId, jsLast, 300);
+    const taken = page.rows.map((r) => (r as { seq: number }).seq).filter((seq) => seq > jsLast);
+    expect(taken).toEqual([1031, 1032, 1033]);
+    jsLast = page.lastSeq;
+    expect(jsLast).toBe(1033);
+    // The whole file: the durable rows, then the rows past the gap.
+    const all = await d.readRows(ev.driveId, 0, 600);
+    expect(all.rows.map((r) => (r as { seq: number }).seq)).toEqual([...Array.from({ length: 30 }, (_, i) => i + 1), 1031, 1032, 1033]);
+    expect((await d.listDrives())[0]).toMatchObject({ lastSeq: 1033, ended: null });
+    // A second relaunch before any new row reaches the file goes on past the first one's reservation.
+    expect(d.relaunch(3)).toBe(1030 + DETECT.RESUME_SEQ_GAP);
+    expect(d.emitRows([row(now + 3000)])).toEqual([2031]);
+  });
+
   test('a journal left by an earlier process lists with its end, and getState clears journalDropped', async () => {
     const d = createFakeDriveDetect();
     const id = '0f8fad5b-d9cb-469f-a165-70867728950e';

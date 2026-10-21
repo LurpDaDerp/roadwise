@@ -111,6 +111,7 @@ enum DetectPolicy {
   static let VISIT_FRESH_MS: Double = 600_000
   static let WAKE_TASK_MAX_MS: Double = 25_000
   static let RESUME_MAX_GAP_MS: Double = 300_000
+  static let RESUME_SEQ_GAP: Int = 1_000
   static let WAIT_MAX_MS: Double = 300_000
   static let CONTINUE_GAP_MS: Double = 300_000
   static let CONTINUE_DIST_M: Double = 150
@@ -264,6 +265,9 @@ enum DetectPolicy {
   static func resumeDecision(lastRowTs: Double?, startedAt: Double, now: Double) -> String {
     now - (lastRowTs ?? startedAt) <= RESUME_MAX_GAP_MS ? "resume" : "orphan"
   }
+
+  /// policy.ts `resumeSeq`: a resumed drive's rows go on after the journal's highest seq plus the gap.
+  static func resumeSeq(_ topSeq: Int) -> Int { topSeq + RESUME_SEQ_GAP }
 
   /// policy.ts `statusOf`.
   static func statusOf(_ p: StatusInputs) -> (status: String, missing: [String], requiredOk: Bool) {

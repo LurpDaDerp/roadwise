@@ -63,6 +63,8 @@ export const DETECT = {
   WAKE_TASK_MAX_MS: 25_000,
   /** A relaunch resumes a journaled drive whose last row is this young. */
   RESUME_MAX_GAP_MS: 300_000,
+  /** A resumed drive's rows go on this many seqs past the journal's highest (`resumeSeq`). */
+  RESUME_SEQ_GAP: 1_000,
   /** The Start card's wait (reset by every touch). */
   WAIT_MAX_MS: 300_000,
   /** `continues`: a traced start this soon after the last end's decision… */
@@ -454,6 +456,18 @@ export function suppressionResume(until: number | null, now: number): number | n
 /** A relaunch resumes a journaled drive whose last row (else its start) is 5 min old or less; older ones end as orphans. */
 export function resumeDecision(lastRowTs: number | null, startedAt: number, now: number): 'resume' | 'orphan' {
   return now - (lastRowTs ?? startedAt) <= DETECT.RESUME_MAX_GAP_MS ? 'resume' : 'orphan';
+}
+
+/**
+ * A resumed drive's rows go on after this seq: the journal's highest (`topSeq`: its last row's, or
+ * an earlier resume's reservation) plus `RESUME_SEQ_GAP`. A power loss, or a kill with rows still
+ * queued for the file, loses the rows the journal had not synced (at most 30, plus the write queue),
+ * and JS may already hold them: resuming right after the durable seq would hand their seqs out
+ * again and JS would drop the new rows as repeats. The `gap` line carries it, so a reader goes on
+ * from it.
+ */
+export function resumeSeq(topSeq: number): number {
+  return topSeq + DETECT.RESUME_SEQ_GAP;
 }
 
 // ——— Status ———

@@ -530,7 +530,24 @@ describe('iOS drive detector: the state machine (text)', () => {
     const resume = fn(d, 'func resumeDrive(');
     expect(resume).toMatch(/DetectPolicy\.resumeDecision\(lastRowTs: s\.lastRowTs, startedAt: startedAt, now: now\) == "resume" else \{\s*self\.commitEnd\(cause: "orphan", endedAt: now\)/);
     expect(resume).toMatch(/"k": "gap"/);
-    expect(resume).toMatch(/self\.nextSeq = s\.lastSeq \+ 1/);
+    // an orphan's end line keeps the durable last seq
+    expect(resume.indexOf('self.nextSeq = s.lastSeq + 1')).toBeGreaterThan(-1);
+    expect(resume.indexOf('self.nextSeq = s.lastSeq + 1')).toBeLessThan(resume.indexOf('self.commitEnd(cause: "orphan"'));
+  });
+
+  it('a resume hands out no seq twice: rows go on past the journal’s highest seq plus RESUME_SEQ_GAP, which the gap line carries (review M7)', () => {
+    const resume = fn(detector(), 'func resumeDrive(');
+    expect(resume).toMatch(/let skipTo = DetectPolicy\.resumeSeq\(s\.topSeq\)\s*self\.nextSeq = skipTo \+ 1\s*self\.journal\.appendMarker\(driveId, \[\s*"k": "gap", "from": [^\n]*"lastSeq": skipTo,\s*\], close: false\)/);
+    expect(resume.indexOf('let skipTo')).toBeGreaterThan(resume.indexOf('self.commitEnd(cause: "orphan"'));
+    expect(code('DetectPolicy.swift')).toMatch(/static func resumeSeq\(_ topSeq: Int\) -> Int \{ topSeq \+ RESUME_SEQ_GAP \}/);
+    // the highest seq: the last row's, or a later resume's reservation
+    const r = code('RowJournalRead.swift');
+    expect(r).toMatch(/var topSeq = 0/);
+    expect(r).toMatch(/if k == "gap", s\.lastRowTs == nil, let g = \(o\["lastSeq"\] as\? NSNumber\)\?\.intValue \{ s\.topSeq = max\(s\.topSeq, g\) \}/);
+    expect(r).toMatch(/s\.topSeq = max\(s\.topSeq, s\.lastSeq\)\s*return s/);
+    // a reader goes on from the gap's seq
+    const read = fn(r, 'private func readNow(');
+    expect(read).toMatch(/if o\?\["k"\] as\? String == "gap", let g = \(o\?\["lastSeq"\] as\? NSNumber\)\?\.intValue, g > last \{\s*last = g\s*\} else if let o = o, o\["k"\] as\? String == "row"/);
   });
 
   it('the Start card: While Using and Precise; busy while a drive records; an auto candidate becomes the wait', () => {
@@ -639,12 +656,12 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
 
   it('each rule of policy.ts has its Swift function, and the self-test runs every row kind through them', () => {
     const policy = code('DetectPolicy.swift') + code('DetectEndPolicy.swift');
-    for (const fn of ['trusted', 'slow', 'moving', 'distanceM', 'confirmStep', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'endDue', 'suppressionDue', 'suppressionResume']) {
+    for (const fn of ['trusted', 'slow', 'moving', 'distanceM', 'confirmStep', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'endDue', 'suppressionDue', 'suppressionResume', 'resumeSeq']) {
       expect({ fn, declared: new RegExp(`static func ${fn}\\(`).test(policy) }).toEqual({ fn, declared: true });
     }
     const st = code('DetectSelfTest.swift');
-    for (const kind of ['confirm', 'trace', 'start', 'summary', 'motionGate', 'wake', 'candidate', 'end', 'suppress', 'suppressResume', 'resume', 'status']) expect(st).toContain(`case "${kind}":`);
-    for (const call of ['confirmStep(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'endClockAt(', 'endOnRow(', 'endDue(', 'suppressionDue(', 'suppressionResume(', 'resumeDecision(', 'statusOf(']) {
+    for (const kind of ['confirm', 'trace', 'start', 'summary', 'motionGate', 'wake', 'candidate', 'end', 'suppress', 'suppressResume', 'resume', 'resumeSeq', 'status']) expect(st).toContain(`case "${kind}":`);
+    for (const call of ['confirmStep(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'endClockAt(', 'endOnRow(', 'endDue(', 'suppressionDue(', 'suppressionResume(', 'resumeDecision(', 'resumeSeq(', 'statusOf(']) {
       expect({ call, used: st.includes(`DetectPolicy.${call}`) }).toEqual({ call, used: true });
     }
     // the trace-back loop is bounded, and the dip breaks only past 5 s

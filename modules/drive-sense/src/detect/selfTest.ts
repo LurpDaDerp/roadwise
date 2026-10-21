@@ -18,6 +18,7 @@ import {
   endOnRow,
   motionGate,
   resumeDecision,
+  resumeSeq,
   startOf,
   statusOf,
   summarize,
@@ -112,6 +113,8 @@ export function runDetectRow(v: DetectRowInputs): DetectActual {
     }
     case 'resume':
       return { decision: resumeDecision(v.lastRowTs, v.startedAt, v.now) };
+    case 'resumeSeq':
+      return { lastSeq: resumeSeq(v.topSeq) };
     case 'status': {
       const s = statusOf(v.inputs);
       return { status: s.status, missing: s.missing };
@@ -141,6 +144,8 @@ export function expectedActual(v: DetectVector): DetectActual {
       return { results: v.expected };
     case 'resume':
       return { decision: v.expected };
+    case 'resumeSeq':
+      return { lastSeq: v.expected };
   }
 }
 

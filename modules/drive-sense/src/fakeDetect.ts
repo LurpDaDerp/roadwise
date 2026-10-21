@@ -6,10 +6,12 @@
 //   DriveSense `row` event, as native does);
 // - `endFor()` is a native safety stop or a cancel (`driveEnded`), `jsStop()` a JS `stopCapture`;
 // - `wipe()` forgets everything (journals, last end, rest, owner) and leaves it off;
+// - `relaunch()` resumes the live drive as native does after a kill or a power loss (a `gap`, seqs
+//   going on past it);
 // - the journal is ndjson text per drive, read back by `readJournal` exactly as native reads it;
 // - events nobody listens for are buffered and delivered when the first listener attaches.
-import { journalLine, listedEnd, readJournal } from './detect/journal';
-import { DETECT, continuesFrom, statusOf, wakeGate, type WakeReason } from './detect/policy';
+import { journalLine, listedEnd, parseJournalLine, readJournal } from './detect/journal';
+import { DETECT, continuesFrom, resumeSeq, statusOf, wakeGate, type WakeReason } from './detect/policy';
 import type {
   DetectPermissions,
   DetectReason,
@@ -68,6 +70,13 @@ export interface FakeDetectControls {
   jsStop(endedAt?: number): void;
   /** The Start-card wait ran out natively (`detectState` reason `waitTimeout`). */
   waitTimeout(): void;
+  /**
+   * A relaunch resumes the live drive (`resumeAtLaunch`): its last `lostRows` row lines are gone from
+   * the journal (a power loss before they were synced, though JS may hold them), a `gap` line reserves
+   * `resumeSeq` past the journal's highest seq, and rows go on after it. The gap's seq, or null when
+   * nothing records.
+   */
+  relaunch(lostRows?: number): number | null;
   /** Lines of each journal file (ndjson). */
   readonly journal: ReadonlyMap<string, string>;
   /** Puts a journal file in place (a drive left by an earlier process). */
@@ -176,7 +185,7 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       continues: j.start.continues,
       confirmedAt: j.start.confirmedAt,
       firstSeq: 1,
-      lastSeq: j.end?.lastSeq ?? j.rows.length,
+      lastSeq: j.end?.lastSeq ?? (typeof last?.seq === 'number' ? last.seq : 0),
       lastRowTs: j.end?.lastRowTs ?? (typeof last?.ts === 'number' ? last.ts : null),
       bytes: text.length,
       // A file with no end that is not the live drive is an orphan, listed as ended (as native lists it).
@@ -416,6 +425,26 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
     },
     jsStop(endedAt) {
       commit('js', endedAt ?? now());
+    },
+    relaunch(lostRows = 0) {
+      if (!live) return null;
+      const lines = (journal.get(live.driveId) ?? '').split('\n').filter((l) => l !== '');
+      for (let i = lines.length - 1, n = lostRows; i >= 0 && n > 0; i--) {
+        if (parseJournalLine(lines[i]!)?.k !== 'row') continue;
+        lines.splice(i, 1);
+        n -= 1;
+      }
+      const text = lines.map((l) => `${l}\n`).join('');
+      const kept = readJournal(text);
+      const lastRow = kept.rows[kept.rows.length - 1];
+      live.lastRowTs = typeof lastRow?.ts === 'number' ? lastRow.ts : null;
+      const top = Math.max(typeof lastRow?.seq === 'number' ? lastRow.seq : 0, ...kept.gaps.map((g) => g.lastSeq ?? 0));
+      const skipTo = resumeSeq(top);
+      const gap = { k: 'gap', from: live.lastRowTs ?? live.startedAt, to: now(), lastSeq: skipTo };
+      journal.set(live.driveId, text + journalLine(gap));
+      live.nextSeq = skipTo + 1;
+      announce('resumed');
+      return skipTo;
     },
     waitTimeout() {
       if (phase !== 'candidate' || origin !== 'manual') return;

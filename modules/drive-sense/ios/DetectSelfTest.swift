@@ -53,6 +53,9 @@ enum DetectSelfTest {
     case "resume":
       guard let startedAt = jsonNumber(v["startedAt"]), let now = jsonNumber(v["now"]) else { return nil }
       return ["decision": DetectPolicy.resumeDecision(lastRowTs: jsonNumber(v["lastRowTs"]), startedAt: startedAt, now: now)]
+    case "resumeSeq":
+      guard let top = jsonNumber(v["topSeq"]), top >= 0, top <= Double(Int32.max) else { return nil }
+      return ["lastSeq": DetectPolicy.resumeSeq(Int(top))]
     case "status":
       guard let p = statusInputsOf(v["inputs"]) else { return nil }
       let s = DetectPolicy.statusOf(p)

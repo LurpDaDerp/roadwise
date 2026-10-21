@@ -161,7 +161,7 @@ extension DriveDetector {
   }
 
   /// The journal says where the drive got to: a last row 5 min old or less resumes it (a `gap` line,
-  /// sensors on, rows from the next seq); older, it ends as an orphan for JS to finalize.
+  /// sensors on, rows from past the gap's seq); older, it ends as an orphan for JS to finalize.
   func resumeDrive(_ driveId: String) {
     journal.reopen(driveId) { [weak self] summary in
       guard let self = self, var r = self.rec, r.driveId == driveId, self.capture.sensing == .off else { return }
@@ -183,7 +183,13 @@ extension DriveDetector {
         self.commitEnd(cause: "orphan", endedAt: now)
         return
       }
-      self.journal.appendMarker(driveId, ["k": "gap", "from": DetectStateRecord.ms(s.lastRowTs ?? startedAt), "to": DetectStateRecord.ms(now)], close: false)
+      // The last unsynced rows may be lost from the file but held by JS: the rows go on past a gap
+      // of seqs (the `gap` line carries it), so none is handed out twice.
+      let skipTo = DetectPolicy.resumeSeq(s.topSeq)
+      self.nextSeq = skipTo + 1
+      self.journal.appendMarker(driveId, [
+        "k": "gap", "from": DetectStateRecord.ms(s.lastRowTs ?? startedAt), "to": DetectStateRecord.ms(now), "lastSeq": skipTo,
+      ], close: false)
       // The still clock restarts at the last row journaled (a kill at a light does not end the drive).
       self.endClock = DetectPolicy.endClockAt(s.lastRowTs ?? now)
       self.capture.beginSensing()

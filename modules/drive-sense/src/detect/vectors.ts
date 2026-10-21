@@ -115,6 +115,7 @@ export type DetectVector =
       expected: { resumed: boolean; causes: ('cap' | 'walking' | 'still' | null)[] };
     }
   | { name: string; kind: 'resume'; lastRowTs: number | null; startedAt: number; now: number; expected: 'resume' | 'orphan' }
+  | { name: string; kind: 'resumeSeq'; topSeq: number; expected: number }
   | { name: string; kind: 'status'; inputs: StatusInputs; expected: { status: DetectStatus; missing: DetectMissing[] } };
 
 const no = (n: number) => Array.from({ length: n }, () => false);
@@ -399,6 +400,9 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   { name: 'resume: a last row 5 min old resumes', kind: 'resume', lastRowTs: at(0), startedAt: at(-600), now: at(300), expected: 'resume' },
   { name: 'resume: a last row older than 5 min is an orphan', kind: 'resume', lastRowTs: at(0), startedAt: at(-600), now: at(301), expected: 'orphan' },
   { name: 'resume: no rows yet, a start 2 min old resumes', kind: 'resume', lastRowTs: null, startedAt: at(0), now: at(120), expected: 'resume' },
+  { name: 'resume seq: rows go on 1000 seqs past the journal’s highest, so none JS took in is reused', kind: 'resumeSeq', topSeq: 412, expected: 1412 },
+  { name: 'resume seq: a drive with no rows yet', kind: 'resumeSeq', topSeq: 0, expected: 1000 },
+  { name: 'resume seq: a second resume goes on past the first one’s reservation', kind: 'resumeSeq', topSeq: 1412, expected: 2412 },
 
   // ——— the status Settings and Home read ———
   { name: 'status: not armed is off', kind: 'status', inputs: statusIn({ armed: false, location: 'whenInUse' }), expected: { status: 'off', missing: [] } },

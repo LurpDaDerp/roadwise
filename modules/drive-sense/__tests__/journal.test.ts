@@ -99,3 +99,22 @@ describe('listedEnd (what listDrives reports as the end)', () => {
     expect(listedEnd(readJournal(text(row(1))), false)).toBeNull();
   });
 });
+
+describe('a resume (review M7)', () => {
+  test('a gap line may carry the seq the rows go on after; anything else there is refused', () => {
+    expect(parseJournalLine('{"k":"gap","from":1,"to":2,"lastSeq":1042}')).toEqual({ k: 'gap', from: 1, to: 2, lastSeq: 1042 });
+    expect(parseJournalLine('{"k":"gap","from":1,"to":2}')).toEqual({ k: 'gap', from: 1, to: 2 });
+    for (const bad of ['{"k":"gap","from":1,"to":2,"lastSeq":"1042"}', '{"k":"gap","from":1,"to":2,"lastSeq":-1}', '{"k":"gap","from":1,"to":2,"lastSeq":1.5}']) {
+      expect({ bad, line: parseJournalLine(bad) }).toEqual({ bad, line: null });
+    }
+  });
+
+  test('rows go on after the gap’s seq; a seq the gap reserved is never read', () => {
+    const gap = { k: 'gap', from: 1_760_000_003_000, to: 1_760_000_100_000, lastSeq: 1003 };
+    const text = [start, row(1), row(2), row(3), gap, row(4), row(1004), row(1005)].map((l) => journalLine(l as Record<string, unknown>)).join('');
+    const j = readJournal(text);
+    expect(j.rows.map((r) => r.seq)).toEqual([1, 2, 3, 1004, 1005]);
+    expect(j.gaps).toEqual([gap]);
+    expect(j.dropped).toBe(1);
+  });
+});
