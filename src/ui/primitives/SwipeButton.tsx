@@ -35,10 +35,37 @@ export type SwipeButtonProps = {
   disabled?: boolean;
   onSwipe: () => void;
   testID?: string;
+  /**
+   * How far (pt) a finger may move up or down before the drag counts as horizontal and the swipe
+   * gives way (only before it starts). Default 16: a swipe inside a scroll view leaves vertical drags
+   * to it. Where nothing scrolls, wider forgives a diagonal start (End takes 24).
+   */
+  verticalSlop?: number;
 };
 
-/** How far (of the knob's full travel) a swipe must reach to count. */
-export const SWIPE_COMMIT = 0.85;
+/** How far (of the knob's full travel) a drag must reach to arm the swipe… */
+export const SWIPE_COMMIT = 0.6;
+/** …and never less than this (pt), so a short track still takes a deliberate drag (capped at the travel). */
+export const SWIPE_COMMIT_MIN_PT = 72;
+/** Armed, the knob stays at the end until the finger comes back this far (pt) under the commit point. */
+export const SWIPE_DISARM_PT = 24;
+/** A quick flick counts when let go at this speed (pt/s) or faster… */
+export const SWIPE_FLING_PT_S = 800;
+/** …past this much of the travel (and at least `SWIPE_FLING_MIN_PT`, capped at the travel). */
+export const SWIPE_FLING_FROM = 0.4;
+export const SWIPE_FLING_MIN_PT = 56;
+
+/** Where a drag arms the swipe on a knob that travels `travel` pt: 60 % of it, at least 72 pt. */
+export function swipeCommitAt(travel: number): number {
+  'worklet';
+  return Math.min(travel, Math.max(SWIPE_COMMIT * travel, SWIPE_COMMIT_MIN_PT));
+}
+
+/** How far a flick must have carried the knob to count: 40 % of the travel, at least 56 pt. */
+export function swipeFlingFrom(travel: number): number {
+  'worklet';
+  return Math.min(travel, Math.max(SWIPE_FLING_FROM * travel, SWIPE_FLING_MIN_PT));
+}
 /** After a swipe, the knob slides home this long after its action is (or stops being) not busy. */
 export const SWIPE_SETTLE_MS = 800;
 const PAD = 6;
@@ -46,11 +73,14 @@ const SPRING = { damping: 18, stiffness: 220, mass: 0.6 } as const;
 
 /**
  * Swipe-to-confirm: a capsule with a knob at its left carrying the icon and the words to its right.
- * The driver drags the knob right; an accent fill opens behind it as it goes. Past
- * `SWIPE_COMMIT` of the way a light tick says it will count; letting go there snaps it to the end
- * with a success haptic and fires `onSwipe`. Letting go short of it springs the knob home and does
- * nothing, so a knock or a brush cannot fire it. The drag runs on the UI thread. A screen reader's
- * double-tap is a deliberate act, so the `activate` action fires straight away.
+ * The driver drags the knob right; an accent fill opens behind it as it goes. Past the commit point
+ * (`swipeCommitAt`: 60 % of the way, at least 72 pt) a light tick says it will count and the knob
+ * springs the rest of the way by itself; dragging back more than 24 pt under the point lets it go
+ * again. Letting go while it is armed, or flicking it (800 pt/s or faster, past 40 % of the way and at
+ * least 56 pt), fires `onSwipe` with a success haptic. Only letting go decides: letting go anywhere
+ * else springs the knob home and does nothing, and a tap does nothing, so a knock or a brush cannot
+ * fire it. The drag runs on the UI thread. A screen reader's double-tap is a deliberate act, so the
+ * `activate` action fires straight away.
  *
  * While `busy` the knob stays at the end with a spinner. When `busy` clears (the action failed), or
  * when a swipe's action never goes busy, it springs home after `SWIPE_SETTLE_MS`.
@@ -66,6 +96,7 @@ export function SwipeButton({
   disabled = false,
   onSwipe,
   testID,
+  verticalSlop = 16,
 }: SwipeButtonProps) {
   const knob = height - PAD * 2;
   const x = useSharedValue(0);
@@ -110,26 +141,39 @@ export function SwipeButton({
         .withTestId(testID ? `${testID}-pan` : 'swipe-pan')
         .enabled(!inactive)
         .activeOffsetX(8)
-        .failOffsetY([-16, 16])
+        .failOffsetY([-verticalSlop, verticalSlop])
         .onUpdate((e) => {
           const m = travel.get();
           const nx = Math.min(Math.max(e.translationX, 0), m);
-          x.set(nx);
-          const over = m > 0 && nx >= m * SWIPE_COMMIT;
-          if (over !== armed.get()) {
-            armed.set(over);
-            if (over) scheduleOnRN(tick);
+          const at = swipeCommitAt(m);
+          if (armed.get()) {
+            // Armed: the knob sits at the end until the finger comes well back under the point.
+            if (nx >= at - SWIPE_DISARM_PT) return;
+            armed.set(false);
+            x.set(nx);
+            return;
           }
+          if (m > 0 && nx >= at) {
+            // The magnet: the knob springs on to the end by itself.
+            armed.set(true);
+            x.set(withSpring(m, SPRING));
+            scheduleOnRN(tick);
+            return;
+          }
+          x.set(nx);
         })
-        .onEnd((_e, success) => {
+        .onEnd((e, success) => {
           const m = travel.get();
+          const wasArmed = armed.get();
           armed.set(false);
-          if (success && m > 0 && x.get() >= m * SWIPE_COMMIT) {
+          const dx = Math.min(Math.max(e.translationX, 0), m);
+          const fling = e.velocityX >= SWIPE_FLING_PT_S && dx >= swipeFlingFrom(m);
+          if (success && m > 0 && (wasArmed || fling)) {
             x.set(withTiming(m, { duration: 120 }));
             scheduleOnRN(commit);
           } else x.set(withSpring(0, SPRING));
         }),
-    [testID, inactive, travel, x, armed, tick, commit]
+    [testID, inactive, verticalSlop, travel, x, armed, tick, commit]
   );
 
   const onLayout = useCallback(
@@ -179,6 +223,7 @@ export function SwipeButton({
           <Ionicons name="chevron-forward" size={20} color={colors.hint} />
         </Animated.View>
         <Animated.View
+          testID={testID ? `${testID}-knob` : undefined}
           pointerEvents="none"
           style={[
             styles.knob,
