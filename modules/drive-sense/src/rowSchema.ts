@@ -102,6 +102,13 @@ export const MOCK_ROW_KEY = 'mock';
 export const CALL_ROW_KEY = 'call';
 const CALL_VALUES: ReadonlySet<unknown> = new Set(['ring', 'live']);
 
+/**
+ * The third bridge-only key (iOS, plan §3.2): `seq`, the row's place in its drive's journal (an
+ * integer, 1 and up). Split off and re-attached like `mock`; anything but a positive safe integer
+ * rejects the row. Android rows and stored traces have none.
+ */
+export const SEQ_ROW_KEY = 'seq';
+
 let unknownKeys = 0;
 /** Unknown row keys stripped since the last reset (diagnostics; C0 round 1, C0-m1). */
 export const unknownRowKeys = (): number => unknownKeys;
@@ -122,6 +129,7 @@ export function parseRow(raw: unknown): DriveSenseRow | null {
   let input = raw;
   let mock: boolean | undefined;
   let call: 'ring' | 'live' | undefined;
+  let seq: number | undefined;
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
     const entries = Object.entries(raw);
     const m = (raw as Record<string, unknown>)[MOCK_ROW_KEY];
@@ -135,9 +143,14 @@ export function parseRow(raw: unknown): DriveSenseRow | null {
       if (!CALL_VALUES.has(c)) return null;
       call = c as 'ring' | 'live';
     }
-    const extra = entries.filter(([k]) => !ROW_KEYS.has(k) && k !== MOCK_ROW_KEY && k !== CALL_ROW_KEY);
+    const q = (raw as Record<string, unknown>)[SEQ_ROW_KEY];
+    if (SEQ_ROW_KEY in raw) {
+      if (typeof q !== 'number' || !Number.isSafeInteger(q) || q < 1) return null;
+      seq = q;
+    }
+    const extra = entries.filter(([k]) => !ROW_KEYS.has(k) && k !== MOCK_ROW_KEY && k !== CALL_ROW_KEY && k !== SEQ_ROW_KEY);
     if (extra.length > 0) unknownKeys += extra.length;
-    if (extra.length > 0 || mock !== undefined || call !== undefined) {
+    if (extra.length > 0 || mock !== undefined || call !== undefined || seq !== undefined) {
       input = Object.fromEntries(entries.filter(([k]) => ROW_KEYS.has(k)));
     }
   }
@@ -146,6 +159,7 @@ export function parseRow(raw: unknown): DriveSenseRow | null {
   const row: DriveSenseRow = parsed.data;
   if (mock !== undefined) row.mock = mock;
   if (call !== undefined) row.call = call;
+  if (seq !== undefined) row.seq = seq;
   for (const key of Object.keys(ROW_DECIMALS) as (keyof typeof ROW_DECIMALS)[]) {
     row[key] = roundTo(row[key], ROW_DECIMALS[key]);
   }
@@ -257,6 +271,8 @@ export const exitInfoSchema: z.ZodType<ExitInfo> = z.strictObject({
 
 /** A display colour: "#RRGGBB", null or absent. */
 const skyHex = z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional();
+/** A dangerous-weather kind id (`DANGER_ORDER`), short snake case. */
+const weatherKind = z.string().regex(/^[a-z][a-z_]{0,31}$/).nullable().optional();
 
 export const driveDisplaySchema: z.ZodType<DriveDisplayState> = z.strictObject({
   speed: z.number().nullable(),
@@ -270,6 +286,11 @@ export const driveDisplaySchema: z.ZodType<DriveDisplayState> = z.strictObject({
   skyMid: skyHex,
   skyLow: skyHex,
   accent: skyHex,
+  speedTint: skyHex,
+  speeding: z.boolean().optional(),
+  notDrivingAvailable: z.boolean().optional(),
+  weatherKind,
+  weatherText: z.string().min(1).max(60).nullable().optional(),
 });
 
 export const tripReminderStatusSchema: z.ZodType<TripReminderStatus> = z.strictObject({

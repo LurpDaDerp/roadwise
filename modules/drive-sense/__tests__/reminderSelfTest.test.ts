@@ -1,7 +1,7 @@
 /** @jest-environment node */
 // The forgot-to-start reminder's self-test (README §10 "Self-test"): the matcher the device diff
 // uses passes the TypeScript reference on every row and catches a planted drift of each row kind,
-// and the diff accepts a skip only for the other platform's rows.
+// and the diff accepts a skip only for a row the platform does not run (iOS, which has no reminder, runs none).
 import { createFakeDriveSense } from '../src/fake';
 import {
   diffReminderSelfTest,
@@ -90,24 +90,20 @@ describe('the reminder self-test', () => {
     expect(diff.results.some((r) => r.skipped)).toBe(true);
   });
 
-  test('each platform runs its own rules: Android the stop gate, the shared ops, the hand-over, its claim, the batch, the timeout; iOS the gates, the shared ops, its claim, the wake, the look and the stop', () => {
+  test('Android runs the stop gate, the shared ops, the hand-over, its claim, the batch and the timeout; iOS has no reminder and skips every row', () => {
     const runs = (p: string) => REMINDER_VECTORS.filter((v) => reminderRowRunsOn(v, p)).map((v) => v.kind);
     expect(new Set(runs('android'))).toEqual(new Set(['gate', 'ops', 'tap', 'claim', 'transitions', 'expires', 'stored']));
-    expect(new Set(runs('ios'))).toEqual(new Set(['gate', 'ops', 'claim', 'wake', 'summary', 'fixes', 'stop', 'stored']));
+    expect(runs('ios')).toEqual([]);
     for (const v of REMINDER_VECTORS) {
       if (v.kind === 'gate') expect({ v: v.name, android: reminderRowRunsOn(v, 'android') }).toEqual({ v: v.name, android: v.phase === 'stop' });
       if (v.kind === 'claim') {
-        expect({ v: v.name, android: reminderRowRunsOn(v, 'android'), ios: reminderRowRunsOn(v, 'ios') }).toEqual({ v: v.name, android: v.requireDelivery, ios: !v.requireDelivery });
+        expect({ v: v.name, android: reminderRowRunsOn(v, 'android') }).toEqual({ v: v.name, android: v.requireDelivery });
         if (v.requireDelivery) expect(v.motion).toBeNull();
       }
       if (v.kind === 'ops') {
-        const android = v.ops.every((o) => o.op !== 'lookEnded');
-        const ios = v.ops.every((o) => o.op !== 'captureTransitions');
-        expect({ v: v.name, android: reminderRowRunsOn(v, 'android'), ios: reminderRowRunsOn(v, 'ios') }).toEqual({ v: v.name, android, ios });
+        expect({ v: v.name, android: reminderRowRunsOn(v, 'android') }).toEqual({ v: v.name, android: v.ops.every((o) => o.op !== 'lookEnded') });
       }
     }
-    // every row runs somewhere
-    for (const v of REMINDER_VECTORS) expect({ v: v.name, runs: reminderRowRunsOn(v, 'android') || reminderRowRunsOn(v, 'ios') }).toEqual({ v: v.name, runs: true });
   });
 
   test('a drifted answer, a wrong skip, a missing row, an error and unusable output all fail', () => {
@@ -116,14 +112,19 @@ describe('the reminder self-test', () => {
     expect(drift.ok).toBe(false);
     expect(drift.results.find((r) => r.name === name)).toMatchObject({ ok: false, mismatches: [{ path: 'effect', expected: 'post', actual: 'none' }] });
 
-    const skipped = diffReminderSelfTest(REMINDER_VECTORS, nativeOutput('ios', (n, r) => (n === 'gate: off' ? { name: n, kind: 'reminder', skipped: 'x' } : r)));
-    expect(skipped.results.find((r) => r.name === 'gate: off')).toMatchObject({ ok: false, error: 'skipped (x), but ios has this rule' });
+    const stop = REMINDER_VECTORS.find((v) => v.kind === 'gate' && v.phase === 'stop')!.name;
+    const skipped = diffReminderSelfTest(REMINDER_VECTORS, nativeOutput('android', (n, r) => (n === stop ? { name: n, kind: 'reminder', skipped: 'x' } : r)));
+    expect(skipped.results.find((r) => r.name === stop)).toMatchObject({ ok: false, error: 'skipped (x), but android has this rule' });
 
-    const missing = diffReminderSelfTest(REMINDER_VECTORS, nativeOutput('ios', (n, r) => (n === 'gate: off' ? { name: 'renamed', kind: 'reminder', actual: {} } : r)));
+    const missing = diffReminderSelfTest(REMINDER_VECTORS, nativeOutput('ios', (n, r) => (n === 'gate: off' ? { name: 'renamed', kind: 'reminder', skipped: 'x' } : r)));
     expect(missing.results.find((r) => r.name === 'gate: off')).toMatchObject({ ok: false, error: 'missing from the native output' });
 
     const errored = diffReminderSelfTest(REMINDER_VECTORS, nativeOutput('ios', (n, r) => (n === 'gate: off' ? { name: n, kind: 'reminder', error: 'boom' } : r)));
     expect(errored.results.find((r) => r.name === 'gate: off')).toMatchObject({ ok: false, error: 'boom' });
+
+    // an answer that is wrong fails wherever it comes from
+    const answered = diffReminderSelfTest(REMINDER_VECTORS, nativeOutput('ios', (n, r) => (n === 'gate: off' ? { name: n, kind: 'reminder', actual: { reason: 'x' } } : r)));
+    expect(answered.results.find((r) => r.name === 'gate: off')?.ok).toBe(false);
 
     expect(diffReminderSelfTest(REMINDER_VECTORS, 'nope')).toMatchObject({ ok: false, error: 'The native output is not JSON' });
     expect(diffReminderSelfTest(REMINDER_VECTORS, '{"version":2}')).toMatchObject({ ok: false });

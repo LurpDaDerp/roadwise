@@ -1,18 +1,17 @@
 // The drive-sense contract: what the Swift and Kotlin modules implement and what the drive host
 // consumes. README.md is the prose version; this file is the binding one.
 //
-// v3 (plan §1 decision 4, §6): drives start only from a tap in the app. There is no arming and no
-// auto-start. Native captures only between a JS `startCapture` and `stopCapture` (plus the Android
-// sticky restart of a capture the user already started, under the watchdog).
+// iOS (plan §3.1): drives start on their own. The drive detector (`DriveDetect`, `./detect/types.ts`,
+// a second Expo module in the same pod) wakes on significant-location changes, the parked car's
+// region and visits, confirms a drive at 15 mph held 30 s (a Start-card session at 10 mph held
+// 15 s), traces its start back, journals every row to disk and emits it here as a `row` with a
+// bridge-only `seq`. JS adopts the drive wherever it runs and decides its end; native stops on its
+// own only as a safety stop. On iOS the shared reminder methods are fixed stubs and nothing reads the
+// phone's lock state any more.
 //
-// The one thing that runs with no drive open is the optional forgot-to-start reminder (off by
-// default; README "Forgot-to-start reminder"): it notices driving natively and posts at most one
-// notification a session, which carries a one-use token. JS switches it (`setTripReminder`) and
-// reads its status. It never starts a capture: a tap on its note reaches JS (iOS through
-// expo-notifications, Android through `takeReminderTap`), JS claims the token
-// (`claimReminderTap`) and only then starts the drive itself, through the Start Drive path. On iOS it
-// is the only reason the app asks for "Always" location, and only when the driver turns it on
-// (`requestReminderLocation`).
+// Android (frozen): drives start only from a tap in the app through `startCapture`; native captures
+// between a JS `startCapture` and `stopCapture` (plus its sticky restart under the watchdog). Its
+// forgot-to-start reminder code is unchanged and unreachable once JS stops turning it on.
 import type { FeatureRow } from '../../../src/core/engine/types';
 import type { ExtractedRow } from './extract/types';
 import type { TripReminderMissing, TripReminderStatus } from './reminder/policy';
@@ -79,9 +78,14 @@ export type ThermalLevel = 'nominal' | 'fair' | 'serious' | 'critical';
  * iOS 15+ `sourceInformation?.isSimulatedBySoftware`). Optional: rows persisted before v3 and rows
  * from an older native build parse without it, and a consumer reads absent as "not known to be
  * mocked". Integrity (spec "GPS spoofing") reads it; the extractor never does.
+ *
+ * `seq` (iOS, plan §3.2): the row's place in its drive's journal, 1 and up by one. Bridge-only like
+ * `mock` and `call`: never a `FeatureRow` field, absent on Android and in stored traces. The host
+ * checks each live row is the last plus one and fetches a gap from the journal (`DriveDetect.readRows`).
  */
 export interface DriveSenseRow extends FeatureRow {
   mock?: boolean;
+  seq?: number;
 }
 
 /**
@@ -119,31 +123,33 @@ export interface DriveSenseState {
   capturing: boolean;
   /** null while not capturing */
   rate: CaptureRate | null;
-  /** null while not capturing */
+  /**
+   * null while not capturing. iOS: `auto` for a drive the detector started, `mounted` for a
+   * Start-card drive, else the mode JS gave `startCapture`.
+   */
   mode: CaptureMode | null;
   platform: 'ios' | 'android';
   /**
-   * The OS location authorisation. A drive needs While Using only (plan §1 decision 4); the app
-   * asks for Always only on iOS, only when the driver turns on the forgot-to-start reminder.
+   * The OS location authorisation. Start drive needs While Using; on iOS drives that start on their
+   * own need Always (asked once, through `DriveDetect.requestAlways`).
    */
   location: 'none' | 'whenInUse' | 'always';
   motion: 'granted' | 'denied' | 'undetermined' | 'unavailable';
-  /**
-   * rev1: I11 — iOS: 'unreliable' without a passcode (isProtectedDataAvailable never goes false),
-   * 'lagged' with one (~10 s); Android 'reliable'.
-   */
+  /** Android 'reliable'. iOS reads no lock state: always 'unreliable'. */
   lockSignal: 'reliable' | 'lagged' | 'unreliable';
-  /**
-   * iOS: this phone has shown a lock reported within 15 s of RoadWise leaving the screen (the lock
-   * probe, or an in-drive proof written back with `markLockProof`), so its screen switches can be
-   * told from locks. Cleared while there is no passcode. Android: always false (it needs none).
-   */
+  /** Always false (iOS keeps no lock proof; Android needs none). */
   lockProof: boolean;
-  /** iOS: the delay (ms) measured with that proof, null before any. Android: null. */
+  /** Always null. */
   lockDelayMs: number | null;
-  /** rev1: I2 — a capture was open when the process last ended (persisted natively). */
+  /**
+   * rev1: I2 — a capture was open when the process last ended (persisted natively). On iOS a drive
+   * open then is resumed or ended from its journal; this only reports that the process died mid-drive.
+   */
   captureWasOpen: boolean;
-  /** epoch ms (integer) the current capture started; null while not capturing */
+  /**
+   * epoch ms (integer) the current capture started; null while not capturing. iOS: a detector drive's
+   * traced start (`capturing` is true only while it records, never during a candidate).
+   */
   captureStartedAt: number | null;
   /** epoch ms of the last row emitted in this process; null before any */
   lastRowTs: number | null;
@@ -160,8 +166,8 @@ export interface ExitInfo {
  * What the background surface shows (plan §6): the Android foreground notification and, on iOS,
  * the Live Activity (forwarded natively when one is running). Callers throttle to ≤ 1 update per
  * 3 s, send on change, and re-send an unchanged state every 60 s (the Live Activity's 2-min stale
- * date). `null` speed or limit shows "—". `points` is shown only when non-null
- * (the host passes it only while stopped).
+ * date). `null` speed or limit shows "—". `points`, `pointsDelta` and `stopped` are read only by
+ * the frozen Android notification (the host sends null points); the iOS Live Activity ignores them.
  */
 export interface DriveDisplayState {
   speed: number | null;
@@ -181,6 +187,17 @@ export interface DriveDisplayState {
   skyMid?: string | null;
   skyLow?: string | null;
   accent?: string | null;
+  /**
+   * iOS Live Activity only (Android ignores these): the speed's colour ("#RRGGBB", the driving
+   * screen's numeral at its speeding tint; null or absent = white), over the limit now (for
+   * VoiceOver), whether the "Not driving?" hint shows, and the dangerous-weather line (a `DangerKind`
+   * id and its title, e.g. "heavy_rain" / "Heavy rain"; null or absent = none).
+   */
+  speedTint?: string | null;
+  speeding?: boolean;
+  notDrivingAvailable?: boolean;
+  weatherKind?: string | null;
+  weatherText?: string | null;
 }
 
 export type DriveSenseEvents = {
@@ -303,13 +320,17 @@ export interface DriveSenseApi {
   /**
    * Start (or keep) full-rate capture in `mode`. Also the JS *claim* of a capture native restarted
    * on its own (the Android sticky restart; rev1: C2): the watchdog stops an unclaimed one after
-   * 60 s. Idempotent: while already capturing it only updates the mode and claims. Only ever
-   * called from a user's tap in the foreground (plan §1 decision 4).
+   * 60 s. Idempotent: while already capturing it only updates the mode and claims. Android: only
+   * ever called from a user's tap in the foreground. iOS: the app's Start uses
+   * `DriveDetect.startWaiting`; with a detector drive recording this only re-modes it, and with
+   * nothing open it starts a plain capture (tests and dev tools: no journal, rows without `seq`).
    */
   startCapture(mode: CaptureMode): Promise<void>;
   /**
-   * Idempotent; clears the persisted capture-open flag. `end`: the drive's end, for the reminder's
-   * session (left out: the end is now, nothing more known, as the native watchdog's stop).
+   * Idempotent; clears the persisted capture-open flag. `end`: the drive's end (left out: now,
+   * nothing more known). iOS: a detector drive's end is journaled with cause `js` at
+   * `end.drivingEndedAt` (now when null or left out), the parked spot is set and detection is armed
+   * again; no `driveEnded` event follows (JS knows).
    */
   stopCapture(end?: CaptureEnd): Promise<void>;
   /** Ignored (resolves) while not capturing. */
@@ -325,7 +346,8 @@ export interface DriveSenseApi {
    * The background surface (plan §6). Android: updates the capture's foreground notification
    * (title "Driving"; "34 mph · limit 35"; a points line only when `points` is non-null; the End
    * drive action only while `stopped`); ignored while not capturing. iOS: forwarded to the Live
-   * Activity when one is running, else a no-op. Never rejects.
+   * Activity when one is running (with `speedTint`, `speeding`, `notDrivingAvailable`,
+   * `weatherKind` and `weatherText`), else a no-op. Never rejects.
    */
   setDriveDisplay(state: DriveDisplayState): Promise<void>;
   /** Android ApplicationExitInfo (+ 'watchdog' from the persisted record); iOS null. */
@@ -339,23 +361,24 @@ export interface DriveSenseApi {
   /** Runs the native extractor over golden vectors; returns a `SelfTestOutput` as JSON (README §Self-test). */
   selfTest(vectorsJson: string): Promise<string>;
   /**
-   * The forgot-to-start reminder's switch (README "Forgot-to-start reminder"). On: saved on even
-   * when a permission is missing (the status says what), the session kept, the Android channel
-   * created. Off: all of its state forgotten, its feed and wakes stopped, any notification taken
-   * down. Never rejects; never starts a capture.
+   * Android: the forgot-to-start reminder's switch (README "Forgot-to-start reminder"). On: saved on
+   * even when a permission is missing (the status says what), the session kept, the channel created.
+   * Off: all of its state forgotten, its feed and wakes stopped, any notification taken down. Never
+   * rejects; never starts a capture. iOS (no reminder): resolves `{ enabled: false, state: 'off',
+   * missing: [] }`.
    */
   setTripReminder(enabled: boolean): Promise<TripReminderStatus>;
-  /** The reminder's status for Settings, brought up to now first. */
+  /** Android: the reminder's status, brought up to now first. iOS: `{ enabled: false, state: 'off', missing: [] }`. */
   getTripReminderStatus(): Promise<TripReminderStatus>;
   /**
-   * iOS: the one "Always" location request, made only from the driver's tap that turns the reminder
-   * on, with While Using already granted; never asked twice. Android: `notNeeded`.
+   * iOS: the current location answer, without prompting (the Always request is
+   * `DriveDetect.requestAlways`). Android: `notNeeded`.
    */
   requestReminderLocation(): Promise<ReminderLocationAnswer>;
   /**
-   * A tap on the reminder's note: true once, for the note's own token, while the reminder is on, its
-   * session lasts and no drive is open (Android: within 2 min of the tap's hand-over). True spends
-   * the token and takes the note down. It never starts a capture: the caller starts the drive.
+   * Android: a tap on the reminder's note: true once, for the note's own token, while the reminder is
+   * on, its session lasts, no drive is open and within 2 min of the tap's hand-over. True spends the
+   * token and takes the note down. It never starts a capture. iOS: always false.
    */
   claimReminderTap(token: string): Promise<boolean>;
   /**
@@ -365,9 +388,8 @@ export interface DriveSenseApi {
    */
   takeReminderTap(): Promise<ReminderTap | null>;
   /**
-   * iOS: an in-drive lock proof (a lock reported `delayMs` after RoadWise left the screen): stored
-   * as the phone's proof when `delayMs` is 15 000 or less, so later drives count screen switches
-   * from their start. Android: resolves with no effect. Never rejects for a valid argument.
+   * Resolves with no effect on both platforms (phone use is not tracked). Never rejects for a valid
+   * argument.
    */
   markLockProof(delayMs: number): Promise<void>;
   /**
@@ -447,9 +469,9 @@ export interface FakeControls {
   /** The last `setDriveDisplay` argument delivered while capturing, or null (cleared by stopCapture, as the notification goes). */
   readonly driveDisplay: DriveDisplayState | null;
   /**
-   * The phone as the reminder sees it: `available` false = no Play services / motion hardware
+   * Android: the phone as the reminder sees it: `available` false = no Play services
    * (`unavailable`); `missing` = what `needs` reports; `location` = what `requestReminderLocation`
-   * answers (default: iOS `always`, Android `notNeeded`).
+   * answers (default `notNeeded`). iOS has no reminder and ignores it.
    */
   setTripReminderEnv(env: { available?: boolean; missing?: TripReminderMissing[]; location?: ReminderLocationAnswer }): void;
   /** Android: the apps `listInstalledApps` finds (by package; others are not installed). Default none. */

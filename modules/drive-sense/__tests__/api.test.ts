@@ -150,6 +150,13 @@ describe('every method goes to native with its arguments', () => {
     const sky = { ...display, skyTop: '#0B2A5C', skyMid: '#123B7A', skyLow: '#1A4C94', accent: null };
     await DriveSense.setDriveDisplay(sky);
     expect(mockNative.setDriveDisplay).toHaveBeenLastCalledWith(sky);
+    // The iOS Live Activity's keys (plan §3.10): the speed's tint, over the limit, the hint, the weather line.
+    const live = { ...display, points: null, pointsDelta: null, speedTint: '#FF5A4F', speeding: true, notDrivingAvailable: true, weatherKind: 'heavy_rain', weatherText: 'Heavy rain' };
+    await DriveSense.setDriveDisplay(live);
+    expect(mockNative.setDriveDisplay).toHaveBeenLastCalledWith(live);
+    const calm = { ...display, points: null, pointsDelta: null, speedTint: null, speeding: false, notDrivingAvailable: false, weatherKind: null, weatherText: null };
+    await DriveSense.setDriveDisplay(calm);
+    expect(mockNative.setDriveDisplay).toHaveBeenLastCalledWith(calm);
   });
 
   test('query methods resolve native results', async () => {
@@ -317,6 +324,12 @@ describe('bridge validation', () => {
     ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null }]],
     ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, extra: 1 }]],
     ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, skyMid: 'rgba(0, 0, 0, 1)' }]],
+    ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, speedTint: 'red' }]],
+    ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, speeding: 'yes' }]],
+    ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, notDrivingAvailable: 1 }]],
+    ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, weatherKind: 'Heavy Rain' }]],
+    ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, weatherText: '' }]],
+    ['setDriveDisplay', [{ speed: 34, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: true, weatherText: 'x'.repeat(61) }]],
     ['selfTest', [{}]],
     ['setTripReminder', ['yes']],
     ['claimReminderTap', ['']],

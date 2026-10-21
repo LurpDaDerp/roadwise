@@ -6,9 +6,8 @@
 // rule that drifts from the table fails on the phone.
 //
 // Android has the shared rules, the tap's hand-over, the claim with its hand-over check, the
-// activity-transition batch and the note's timeout; iOS the shared rules, the claim after a motion
-// fold, and the wake, look and stop rules. A row of the other platform's rules is answered
-// `skipped`, and a skip is accepted only for those rows.
+// activity-transition batch and the note's timeout. iOS has no reminder (the drive detector replaced
+// it): it answers every row `skipped`. A skip is accepted only for a row the platform does not run.
 import { z } from 'zod';
 
 import { MISMATCH_CAP, type Mismatch, type SelfTestDiff, type VectorDiff } from '../selfTest';
@@ -243,20 +242,8 @@ export function reminderRowRunsOn(v: ReminderVector, platform: string): boolean 
         return false;
     }
   }
-  if (platform === 'ios') {
-    switch (v.kind) {
-      case 'ops':
-        return v.ops.every((o) => o.op !== 'captureTransitions');
-      case 'claim':
-        return !v.requireDelivery;
-      case 'tap':
-      case 'transitions':
-      case 'expires':
-        return false;
-      default:
-        return true;
-    }
-  }
+  // iOS has no reminder: every row is Android's.
+  if (platform === 'ios') return false;
   return true;
 }
 

@@ -35,7 +35,7 @@ import { isNavAppPackage } from './navPackages';
 import type { AudioOutputState, CaptureEnd, DriveSenseApi, DriveSenseEvent, DriveSenseEvents, DriveSenseSyncMethod, Subscription } from './types';
 
 export * from './types';
-export { CALL_ROW_KEY, MOCK_ROW_KEY, parseActivity, parseRow, parseSpeed, REMINDER_TOKEN, resetUnknownRowKeys, unknownRowKeys } from './rowSchema';
+export { CALL_ROW_KEY, MOCK_ROW_KEY, parseActivity, parseRow, parseSpeed, REMINDER_TOKEN, resetUnknownRowKeys, SEQ_ROW_KEY, unknownRowKeys } from './rowSchema';
 export { createFakeDriveSense, driveSenseError } from './fake';
 export type { FakeOptions } from './fake';
 export { diffSelfTest, parseVectors } from './selfTest';
@@ -45,6 +45,74 @@ export { gravityFilter, initialGravityState, androidAccelToReference } from './e
 export { runSelfTest, runVector } from './extract/vectors';
 export { REMINDER } from './reminder/policy';
 export { isNavAppPackage, NAV_APP_PACKAGES } from './navPackages';
+// The iOS drive detector (plan §3.1.1): its bridge, fake, rules, decision table, self-test and journal format.
+export {
+  DriveDetect,
+  DRIVE_ID,
+  droppedDetectEvents,
+  isDriveDetectError,
+  resetDroppedDetectEvents,
+} from './detect';
+export * from './detect/types';
+export { createFakeDriveDetect } from './fakeDetect';
+export type { FakeConfirm, FakeDetectControls, FakeDetectOptions } from './fakeDetect';
+export {
+  AUTO_TRIGGER,
+  candidateDue,
+  CONFIRM_START,
+  confirmHoldMs,
+  confirmMps,
+  confirmStep,
+  continuesFrom,
+  DETECT,
+  distanceM,
+  endClockAt,
+  endDue,
+  endOnRow,
+  MANUAL_TRIGGER,
+  motionGate,
+  moving,
+  MPS_PER_MPH,
+  recentStarts,
+  resumeDecision,
+  slow,
+  startOf,
+  statusOf,
+  summarize,
+  suppressionDue,
+  traceStart,
+  trusted,
+  wakeGate,
+} from './detect/policy';
+export type {
+  ActivitySample,
+  ConfirmState,
+  DetectLastEnd,
+  DetectRow,
+  EndClock,
+  LatLng,
+  MotionGate,
+  MotionSummary,
+  SafetyCause,
+  StatusInputs,
+  TracedStart,
+  TriggerKind,
+  WakeCtx,
+  WakeGate,
+  WakeReason,
+} from './detect/policy';
+export { DETECT_VECTORS } from './detect/vectors';
+export type { DetectVector } from './detect/vectors';
+export {
+  detectWireVectors,
+  diffDetectSelfTest,
+  matchDetectRow,
+  referenceDetectOutput,
+  runDetectRow,
+} from './detect/selfTest';
+export type { DetectActual, DetectWireVector } from './detect/selfTest';
+export { journalLine, parseJournalLine, readJournal } from './detect/journal';
+export type { JournalEnd, JournalGap, JournalLine, JournalRow, JournalStart, ReadJournal } from './detect/journal';
 export {
   diffReminderSelfTest,
   matchReminderRow,

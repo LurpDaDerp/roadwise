@@ -239,20 +239,14 @@ test('every bridged method is implemented and logged', async () => {
   expect(fake.calls).toEqual(['requestMotionPermission', 'setDriveDisplay', 'selfTest']);
 });
 
-test('the lock proof: iOS proven with a 10 s delay by default, Android none; an in-drive proof of 15 s or less is kept on iOS only', async () => {
-  const ios = createFakeDriveSense();
-  expect(await ios.getState()).toMatchObject({ lockProof: true, lockDelayMs: 10_000 });
-  const fresh = createFakeDriveSense({ lockProof: false, lockDelayMs: null });
-  expect(await fresh.getState()).toMatchObject({ lockProof: false, lockDelayMs: null });
-  await fresh.markLockProof(15_001);
-  expect(await fresh.getState()).toMatchObject({ lockProof: false, lockDelayMs: null });
-  await fresh.markLockProof(11_400.4);
-  expect(await fresh.getState()).toMatchObject({ lockProof: true, lockDelayMs: 11_400 });
-  expect(fresh.calls).toEqual(['markLockProof:15001', 'markLockProof:11400.4']);
-  const android = createFakeDriveSense({ platform: 'android' });
-  expect(await android.getState()).toMatchObject({ lockProof: false, lockDelayMs: null });
-  await android.markLockProof(10_000);
-  expect(await android.getState()).toMatchObject({ lockProof: false, lockDelayMs: null });
+test('no lock proof on either platform: false and null by default, and markLockProof only logs', async () => {
+  for (const platform of ['ios', 'android'] as const) {
+    const fake = createFakeDriveSense({ platform });
+    expect(await fake.getState()).toMatchObject({ lockProof: false, lockDelayMs: null });
+    await fake.markLockProof(10_000);
+    expect(await fake.getState()).toMatchObject({ lockProof: false, lockDelayMs: null });
+    expect(fake.calls).toEqual(['markLockProof:10000']);
+  }
 });
 
 test('navigation apps: Android finds the installed ones in the order asked and launches them; iOS answers none', async () => {
@@ -277,10 +271,10 @@ test('navigation apps: Android finds the installed ones in the order asked and l
   await expect(ios.launchApp('com.waze')).resolves.toBe(false);
 });
 
-test('platform defaults: iOS lagged lock signal and battery-optimisation true; Android reliable and false', async () => {
+test('platform defaults: iOS unreliable lock signal (it reads none) and battery-optimisation true; Android reliable and false', async () => {
   const ios = createFakeDriveSense();
   expect((await ios.getState()).platform).toBe('ios');
-  expect((await ios.getState()).lockSignal).toBe('lagged');
+  expect((await ios.getState()).lockSignal).toBe('unreliable');
   await expect(ios.isIgnoringBatteryOptimizations()).resolves.toBe(true);
   const android = createFakeDriveSense({ platform: 'android' });
   expect((await android.getState()).lockSignal).toBe('reliable');
@@ -460,13 +454,13 @@ test('selfTest runs the TypeScript reference, so a fake diff is clean', async ()
   expect(out.results).toEqual([{ name: 'no-imu', kind: 'extract', rows: vector.expected.rows }]);
 });
 
-describe('the forgot-to-start reminder (README "Forgot-to-start reminder")', () => {
+describe('the forgot-to-start reminder (README "Forgot-to-start reminder"): Android only', () => {
   test('off by default; on and off through the switch, logged; the status follows the phone', async () => {
     let now = 1_700_000_000_000;
-    const fake = createFakeDriveSense({ platform: 'ios', now: () => now });
+    const fake = createFakeDriveSense({ platform: 'android', now: () => now });
     await expect(fake.getTripReminderStatus()).resolves.toEqual({ enabled: false, state: 'off', missing: [] });
-    fake.setTripReminderEnv({ missing: ['locationAlways'] });
-    await expect(fake.setTripReminder(true)).resolves.toMatchObject({ enabled: true, state: 'needs', missing: ['locationAlways'] });
+    fake.setTripReminderEnv({ missing: ['notifications'] });
+    await expect(fake.setTripReminder(true)).resolves.toMatchObject({ enabled: true, state: 'needs', missing: ['notifications'] });
     expect(fake.tripReminderOn).toBe(true);
     fake.setTripReminderEnv({ missing: [] });
     now += 1000;
@@ -478,7 +472,7 @@ describe('the forgot-to-start reminder (README "Forgot-to-start reminder")', () 
     expect(fake.queries).toEqual(['getTripReminderStatus', 'getTripReminderStatus', 'getTripReminderStatus']);
   });
 
-  test("a tap on the note: Android hands it over once and claims it within 2 min, once; iOS hands nothing over", async () => {
+  test('a tap on the note: Android hands it over once and claims it within 2 min, once', async () => {
     let now = 1_700_000_000_000;
     const android = createFakeDriveSense({ platform: 'android', now: () => now });
     const announced = jest.fn();
@@ -509,34 +503,58 @@ describe('the forgot-to-start reminder (README "Forgot-to-start reminder")', () 
     await android.startCapture('mounted');
     await expect(android.claimReminderTap('tok-c')).resolves.toBe(false);
     expect(android.calls.filter((c) => c.startsWith('startCapture'))).toEqual(['startCapture:mounted']);
-
-    const ios = createFakeDriveSense({ platform: 'ios', now: () => now });
-    const iosAnnounced = jest.fn();
-    ios.addListener('reminderTap', iosAnnounced);
-    await ios.setTripReminder(true);
-    ios.postReminderForTest('tok-i');
-    expect(ios.tapReminderForTest('tok-i')).toBe(false);
-    expect(iosAnnounced).not.toHaveBeenCalled();
-    await expect(ios.takeReminderTap()).resolves.toBeNull();
-    // iOS claims with no hand-over check, once
-    await expect(ios.claimReminderTap('tok-i')).resolves.toBe(true);
-    await expect(ios.claimReminderTap('tok-i')).resolves.toBe(false);
   });
 
-  test('a claim never starts a capture, and the reminder switched off refuses every claim', async () => {
-    const fake = createFakeDriveSense({ platform: 'ios' });
-    fake.postReminderForTest('tok-a');
-    await expect(fake.claimReminderTap('tok-a')).resolves.toBe(false);
-    expect(fake.calls).toEqual(['claimReminderTap']);
-  });
-
-  test('the location answer: iOS always by default, Android notNeeded; settable', async () => {
-    await expect(createFakeDriveSense({ platform: 'ios' }).requestReminderLocation()).resolves.toBe('always');
+  test('the location answer: Android notNeeded; settable', async () => {
     const android = createFakeDriveSense({ platform: 'android' });
     await expect(android.requestReminderLocation()).resolves.toBe('notNeeded');
     android.setTripReminderEnv({ location: 'whenInUse' });
     await expect(android.requestReminderLocation()).resolves.toBe('whenInUse');
     expect(android.calls).toEqual(['requestReminderLocation', 'requestReminderLocation']);
+  });
+
+  test('iOS has no reminder: fixed stubs, the location answer read without a prompt, nothing claimed or handed over', async () => {
+    const ios = createFakeDriveSense({ platform: 'ios' });
+    const announced = jest.fn();
+    ios.addListener('reminderTap', announced);
+    await expect(ios.setTripReminder(true)).resolves.toEqual({ enabled: false, state: 'off', missing: [] });
+    await expect(ios.getTripReminderStatus()).resolves.toEqual({ enabled: false, state: 'off', missing: [] });
+    expect(ios.tripReminderOn).toBe(false);
+    await expect(ios.requestReminderLocation()).resolves.toBe('denied');
+    ios.setState({ location: 'whenInUse' });
+    await expect(ios.requestReminderLocation()).resolves.toBe('whenInUse');
+    ios.setState({ location: 'always' });
+    await expect(ios.requestReminderLocation()).resolves.toBe('always');
+    ios.postReminderForTest('tok-i');
+    expect(ios.tapReminderForTest('tok-i')).toBe(false);
+    await expect(ios.claimReminderTap('tok-i')).resolves.toBe(false);
+    await expect(ios.takeReminderTap()).resolves.toBeNull();
+    expect(announced).not.toHaveBeenCalled();
+  });
+});
+
+describe('rows with the journal seq (iOS, rowSeq)', () => {
+  test('each capture numbers its rows from 1; without the option rows carry none', async () => {
+    const fake = createFakeDriveSense({ rowSeq: true });
+    fake.setState({ location: 'always' });
+    const seen: unknown[] = [];
+    fake.addListener('row', (r) => seen.push((r as { seq?: number }).seq));
+    fake.loadTrace(rows.slice(0, 3));
+    await fake.startCapture('auto');
+    fake.drain();
+    await fake.stopCapture();
+    fake.loadTrace(rows.slice(0, 2));
+    await fake.startCapture('mounted');
+    fake.drain();
+    expect(seen).toEqual([1, 2, 3, 1, 2]);
+    const plain = createFakeDriveSense();
+    plain.setState({ location: 'always' });
+    const bare: unknown[] = [];
+    plain.addListener('row', (r) => bare.push((r as { seq?: number }).seq));
+    plain.loadTrace(rows.slice(0, 2));
+    await plain.startCapture('mounted');
+    plain.drain();
+    expect(bare).toEqual([undefined, undefined]);
   });
 });
 

@@ -5,7 +5,11 @@
 // - events nobody listens for are buffered (bounded, oldest row dropped first) and delivered
 //   asynchronously when the first listener attaches;
 // - with `asyncDelivery: true` every event is delivered on a microtask, as the native bridge
-//   always does; the default is synchronous delivery, for step-by-step tests (review M4).
+//   always does; the default is synchronous delivery, for step-by-step tests (review M4);
+// - iOS answers the shared reminder methods with its fixed stubs and reads no lock state; the
+//   forgot-to-start reminder runs on Android only;
+// - with `rowSeq: true` (iOS) every row carries the journal's `seq`, 1 and up per capture.
+import { isDetectWireVector, referenceDetectOutput } from './detect/selfTest';
 import { runSelfTest } from './extract/vectors';
 import { claim, INITIAL, newSession, posted, setEnabled, settle, statusOf, tapDelivered, type ReminderState } from './reminder/policy';
 import { isReminderWireVector, referenceReminderOutput } from './reminder/selfTest';
@@ -50,16 +54,21 @@ export interface FakeOptions {
    * device. Default false: `emit`/`step` call listeners before returning.
    */
   asyncDelivery?: boolean;
-  /** `getState().lockProof` at start; default true on iOS (a proven phone), false on Android. */
+  /** `getState().lockProof` at start; default false (no platform keeps a lock proof). */
   lockProof?: boolean;
-  /** `getState().lockDelayMs` at start; default 10 000 on iOS, null on Android. */
+  /** `getState().lockDelayMs` at start; default null. */
   lockDelayMs?: number | null;
+  /** iOS: stamp each emitted row with the journal's `seq` (1 and up per capture). Default false. */
+  rowSeq?: boolean;
 }
 
 /** An Error carrying a drive-sense `code`, as an Expo `CodedError` does. */
 export function driveSenseError(code: DriveSenseErrorCode, message: string): Error & { code: DriveSenseErrorCode } {
   return Object.assign(new Error(message), { code });
 }
+
+/** iOS's fixed reminder answer (it has no reminder). */
+const IOS_REMINDER_OFF = { enabled: false, state: 'off', missing: [] } as const;
 
 export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & FakeControls {
   const platform = opts.platform ?? 'ios';
@@ -72,9 +81,9 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     platform,
     location: 'none',
     motion: 'undetermined',
-    lockSignal: platform === 'ios' ? 'lagged' : 'reliable',
-    lockProof: opts.lockProof ?? platform === 'ios',
-    lockDelayMs: opts.lockDelayMs !== undefined ? opts.lockDelayMs : platform === 'ios' ? 10_000 : null,
+    lockSignal: platform === 'ios' ? 'unreliable' : 'reliable',
+    lockProof: opts.lockProof ?? false,
+    lockDelayMs: opts.lockDelayMs !== undefined ? opts.lockDelayMs : null,
     captureWasOpen: false,
     captureStartedAt: null,
     lastRowTs: null,
@@ -91,7 +100,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   let reminder: ReminderState = INITIAL;
   let reminderAvailable = true;
   let reminderMissing: TripReminderMissing[] = [];
-  let reminderLocation: ReminderLocationAnswer = platform === 'ios' ? 'always' : 'notNeeded';
+  let reminderLocation: ReminderLocationAnswer = 'notNeeded';
   /** Android: the apps installed on the phone, and what a launch of one answers. */
   let installedApps: InstalledApp[] = [];
   let launchOk = true;
@@ -104,6 +113,8 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   let dashpalLinkStartAllowed = true;
   const holdAwakeCalls: number[] = [];
   let queue: DriveSenseRow[] = [];
+  /** The next row's `seq` (`rowSeq`), reset by a new capture. */
+  let nextSeq = 1;
   const listeners = new Map<DriveSenseEvent, Set<Listener>>();
   let buffer: Buffered[] = [];
   const calls: string[] = [];
@@ -161,6 +172,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
         // best effort: a failed subscription never rejects the start nor stops the capture.
         captureFeed = state.motion === 'granted' && !captureSubscribeFails;
       }
+      if (!state.capturing) nextSeq = 1;
       state = state.capturing
         ? { ...state, mode }
         : { ...state, capturing: true, mode, rate: 'full', captureStartedAt: now() };
@@ -225,6 +237,10 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
         if (Array.isArray(all) && all.length > 0 && all.every(isReminderWireVector)) {
           return resolve(JSON.stringify(referenceReminderOutput(all)));
         }
+        // The drive detector's rows run through its TS reference, as the Swift policy would.
+        if (Array.isArray(all) && all.length > 0 && all.every(isDetectWireVector)) {
+          return resolve(JSON.stringify(referenceDetectOutput(all)));
+        }
         return resolve(JSON.stringify(runSelfTest(parseVectors(vectorsJson), 'reference')));
       } catch (e) {
         return Promise.reject(driveSenseError('E_INVALID_INPUT', e instanceof Error ? e.message : String(e)));
@@ -232,21 +248,27 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     setTripReminder(enabled: boolean) {
       command('setTripReminder', String(enabled));
+      // iOS has no reminder: a fixed answer.
+      if (platform === 'ios') return resolve({ ...IOS_REMINDER_OFF, missing: [] });
       reminder = setEnabled(reminder, enabled);
       return resolve(statusOf(reminder, reminderAvailable, reminderMissing));
     },
     getTripReminderStatus() {
       query('getTripReminderStatus');
+      if (platform === 'ios') return resolve({ ...IOS_REMINDER_OFF, missing: [] });
       reminder = settle(reminder, now(), state.capturing);
       return resolve(statusOf(reminder, reminderAvailable, reminderMissing));
     },
     requestReminderLocation() {
       command('requestReminderLocation');
+      // iOS: the current location answer, without prompting.
+      if (platform === 'ios') return resolve(state.location === 'none' ? 'denied' : state.location);
       return resolve(reminderLocation);
     },
     claimReminderTap(token: string) {
       command('claimReminderTap');
-      const r = claim(reminder, token, now(), state.capturing, platform === 'android');
+      if (platform === 'ios') return resolve(false);
+      const r = claim(reminder, token, now(), state.capturing, true);
       reminder = r.state;
       return resolve(r.ok);
     },
@@ -298,9 +320,8 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       return dashpalLink !== null;
     },
     markLockProof(delayMs: number) {
+      // No platform keeps a lock proof any more: logged, nothing changes.
       command('markLockProof', String(delayMs));
-      // iOS keeps a proof of 15 s or less (LockProbe.record); Android has nothing to prove.
-      if (platform === 'ios' && delayMs >= 0 && delayMs <= 15_000) state = { ...state, lockProof: true, lockDelayMs: Math.round(delayMs) };
       return resolve(undefined);
     },
     addListener<E extends DriveSenseEvent>(
@@ -345,7 +366,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
       if (!state.capturing && !o?.force) return false;
       const next = queue.shift();
       if (!next) return false;
-      emitRaw('row', { ...next });
+      emitRaw('row', opts.rowSeq && platform === 'ios' && next.seq === undefined ? { ...next, seq: nextSeq++ } : { ...next });
       return true;
     },
     drain(o) {

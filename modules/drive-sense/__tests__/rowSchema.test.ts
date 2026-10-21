@@ -214,6 +214,21 @@ describe('the call state', () => {
 });
 
 // README §3: the `speed` payload, one fix's speed as it lands.
+// plan §3.2 (iOS): `seq` rides on the row payload, the row's place in its drive's journal.
+describe('the journal seq', () => {
+  test('a positive integer survives beside mock and call; absent when native did not send it; never counted as unknown', () => {
+    resetUnknownRowKeys();
+    expect(parseRow({ ...good, seq: 1 })).toEqual({ ...good, seq: 1 });
+    expect(parseRow({ ...good, seq: 43_200, mock: false, call: 'live' })).toEqual({ ...good, seq: 43_200, mock: false, call: 'live' });
+    expect(parseRow(good)).not.toHaveProperty('seq');
+    expect(unknownRowKeys()).toBe(0);
+  });
+
+  test('anything else rejects the row', () => {
+    for (const seq of [0, -1, 1.5, '1', null, true, Number.NaN, 2 ** 53, undefined]) expect({ seq, row: parseRow({ ...good, seq }) }).toEqual({ seq, row: null });
+  });
+});
+
 describe('parseSpeed', () => {
   const good = { ts: 1_700_000_000_123, speed: 13.4, speedAcc: 0.6, hAcc: 4.5, ageMs: 240 };
 
