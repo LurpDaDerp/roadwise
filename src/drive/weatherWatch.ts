@@ -2,9 +2,9 @@
 // While a drive records, in any app state (iOS keeps RoadWise running on location during a drive),
 // the weather at the car is checked once as the drive opens, then every 15 min, and again after
 // each 20 km of the trip's own odometer, never faster than those. The position is the drive's own
-// latest fix, else the phone's last known one. Everything fails silently: no position, no network,
-// a slow answer or a malformed body all mean "no alert". The host shows the answer on the driving
-// screen and the iOS Live Activity.
+// latest fix, else the phone's last known one (with neither, the first fix makes the check).
+// Everything fails silently: no network, a slow answer or a malformed body all mean "no alert". The
+// host shows the answer on the driving screen and the iOS Live Activity.
 import { dangerFrom, type DangerAlert } from '@/features/weather/danger';
 import { fetchWeather } from '@/features/weather/openMeteo';
 
@@ -65,13 +65,19 @@ export function createWeatherWatch(deps: WeatherWatchDeps): WeatherWatch {
     lastCheckAt = deps.now();
     void (async () => {
       let alert: DangerAlert | null = null;
+      let at: { lat: number; lng: number } | null = null;
       try {
-        const at = await position();
+        at = await position();
         alert = at === null ? null : await lookup(at.lat, at.lng);
       } catch {
         alert = null;
       } finally {
         inFlight = false;
+      }
+      // With no position yet the check waits for the drive's first fix.
+      if (at === null) {
+        lastCheckAt = null;
+        return;
       }
       if (!stopped) deps.onAlert(alert);
     })();

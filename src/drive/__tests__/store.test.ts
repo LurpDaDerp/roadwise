@@ -60,3 +60,25 @@ test('in front every host change is published; in the background only status and
   expect(store.getState().speedMps).toBe(13);
   expect(h.listeners.size).toBe(1);
 });
+
+test('in the background the wait, its phase, the "Not driving?" offer and the weather kind are published too', () => {
+  const h = hostStub({ waiting: null, notDrivingAvailable: false, weather: null });
+  const app = appState('background');
+  const store = createDriveStore(h.host, app);
+  let renders = 0;
+  store.subscribe(() => (renders += 1));
+  const wait = { since: 1, phase: 'waiting' as const, deadlineAt: 2, speedMps: null, limitMph: null };
+  h.set({ waiting: wait });
+  expect(renders).toBe(1);
+  h.set({ waiting: { ...wait, speedMps: 3 } });
+  expect(renders).toBe(1);
+  h.set({ waiting: { ...wait, phase: 'popup' } });
+  expect(renders).toBe(2);
+  h.set({ waiting: null, status: 'recording', notDrivingAvailable: true });
+  expect(renders).toBe(3);
+  h.set({ notDrivingAvailable: false });
+  expect(renders).toBe(4);
+  h.set({ weather: { kind: 'heavy_rain', text: 'Heavy rain' } });
+  expect(renders).toBe(5);
+  store.dispose();
+});

@@ -1,89 +1,128 @@
-// The drive host (product spec v3 "Starting and ending a drive", "Driving screen"; plan §5, §6, §10).
+// The drive host (product spec "Starting and ending a drive", "Driving screen"; modes plan §3.2,
+// §3.5-§3.10, §3.15, §10 A2).
 //
-// One object wires the native capture module, the engine, the detectors, the speed-limit client,
-// the alert player, the background display and persistence together, and publishes one `DriveState`
-// for the UI. Rules:
-// - **Manual start only.** `start()` is the one way a drive begins: it asks for While-Using location
-//   just in time, then starts the capture, at any speed; nothing reads the speed on the tap. Nothing here
-//   starts a drive from a notification, a wake or a relaunch; `boot({ adopt })` only continues a
-//   drive the user already started (the previous process died recording it).
+// One object wires the native capture, the iOS drive detector, the engine, the detectors, the
+// speed-limit client, the alert player, the background display and persistence together, and
+// publishes one `DriveState` for the UI. Rules:
+// - **How a drive begins.** iOS: native notices driving (15 mph held 30 s) or confirms the Start
+//   card's wait (10 mph held 15 s), traces the start back and journals every row; the host adopts
+//   the journal wherever JS runs (a `driveStarted` event, or `boot`) and replays it into the
+//   engine. Android (no detector): the Start card starts the capture at once and a JS waiting
+//   session confirms from the rows with the same trigger and trace-back. Either way a drive
+//   confirmed within 5 min and 150 m of a held drive's end re-opens that trip (`continuation.ts`).
+// - **How it ends.** The engine decides (5 min still, a walk at 3 mph or slower, 12 h, End); native
+//   stops on its own only as a fallback and the engine then cuts at the last movement. "Not
+//   driving?" discards the drive (`cancelDrive`), only while its 2-minute visible budget lasts.
 // - **One queue.** Every engine dispatch and the native command that follows it run on one serial
-//   chain; after each task the capture is reconciled with the engine's state.
+//   chain; after each task the capture is reconciled with the engine's state (on iOS the host never
+//   starts a capture: native owns it, and `stopCapture` tells native the JS end and its cut).
+// - **In front only.** Alert sounds, voice and haptics play only while RoadWise is active; the
+//   spot nudge shows only then. The drive records the same either way.
 // - **Battery.** Nothing runs while idle: no timer, no read. While recording, one timeout at most
-//   (the automatic end, re-armed lazily: `ticks.ts`), the display throttled to one update per 3 s, the points estimate
-//   computed once per stop, and the state published at most once per row.
-// - **Background.** Each row first pumps the process's timers (`src/lib/timers.ts`): with the app
-//   in the Android background JS timers are paused, and the rows are what keeps the alert player
-//   and the DashPal link moving.
-import { parseActivity, parseRow, parseSpeed, type CaptureEnd } from '@drive-sense';
-import { MERGE_GAP_S, scoreDrive, type DriveContext } from '@scoring';
+//   (the automatic end, `ticks.ts`), the display throttled to one update per 3 s, the weather
+//   checked every 15 min or 20 km, the state published at most once per row.
+// - **Background (Android).** Each row first pumps the process's timers (`src/lib/timers.ts`): with
+//   the app in the Android background JS timers are paused, and the rows are what keeps the alert
+//   player, the waiting clock and the DashPal link moving.
+import { parseActivity, parseRow, parseSpeed, type CaptureEnd, type DriveDetectApi, type DriveStartedEvent, type DriveEndedEvent, type DetectStateEvent, type EndCauseNative, type JournaledDrive } from '@drive-sense';
+import type { LiveDriveState } from '@live-drive';
+import { MERGE_GAP_S } from '@scoring';
 
-import { decisionFor } from '@/core/alerts/policy';
+import { decisionFor, ALERT_GLOW_MS } from '@/core/alerts/policy';
 import type { AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
-import { knownSpeed } from '@/core/detectors/common';
-import { LEAVE_WAIT_S, RESTART_GRACE_S } from '@/core/detectors/phoneSwitch';
-import type { AdoptedTrip, AlertEvent, EndCause, EngineSnapshot, EngineStatus, TripSession } from '@/core/engine/engine.types';
-import { closeDrive, isDropped, type DropReason } from '@/core/engine/finalize';
+import { knownSpeed, limitShownMph, ROW_MS, speedTrusted, UNKNOWN_LIMIT } from '@/core/detectors/common';
+import type { AdoptedTrip, AlertEvent, DriveOrigin, EndCause, EngineSnapshot, EngineStatus, StartSource, TripSession } from '@/core/engine/engine.types';
+import { closeDrive, dropTrip, isDropped, type DropReason } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
 import { createRecorder } from '@/core/engine/recorder';
-import type { DetectorSuite, FeatureRow } from '@/core/engine/types';
+import { rebuildFromSamples, type RebuildDeps } from '@/core/engine/replay';
+import type { FeatureRow } from '@/core/engine/types';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
+import { NUDGE_AFTER_ALERT_MS } from '@/core/spots/constants';
+import type { WatchSpot } from '@/core/spots/types';
+import { createSpotWatcher, type SpotNudge, type SpotWatcher } from '@/core/spots/watcher';
 import { dashcamFinalizeDeps } from '@/dashcam/finalizeDeps';
-import { createTripsRepo, type Db, type TripStatus } from '@/data/db';
-import { createSettingsRepo } from '@/data/db/settings';
+import { createSettingsRepo, createTripsRepo, type Db, type TripStatus } from '@/data/db';
 import { emitDataChanged } from '@/data/events';
 import type { AppStateLike } from '@/data/foreground';
+import { readWatchSpots } from '@/data/queries/spots';
+import { WEATHER_TITLES } from '@/features/weather/copy';
+import { moreSevere, type DangerAlert, type DangerKind } from '@/features/weather/danger';
 import { processTimers } from '@/lib/timers';
-import { KMH_PER_MPH, metersToMiles, mpsToMph } from '@/lib/units';
+import { sunIsDown } from '@/lib/time';
+import { KMH_PER_MPH, mpsToMph } from '@/lib/units';
 
-import type { DriveDisplay, DriveDisplayState } from './display';
+import { continuationFor, reopenTrip, type Continuation } from './continuation';
+import { toLive, type DriveDisplay, type DriveDisplayState } from './display';
+import { displayLook } from './displayLook';
+import { speedTintOf } from './displayTint';
 import { clearDropNotice, writeDropNotice } from './dropNotice';
-import { type LeaveState, readPhoneSwitch, writePhoneSwitch } from './phoneSwitchStore';
-import { detectorContext, isBusyStatus, NO_SWITCH, type PhoneSwitchCtx, switchSignalFor } from './policy';
+import { budgetFor, NOT_DRIVING_KEY, NOT_DRIVING_PERSIST_EVERY_MS, spend, writeBudget, type NotDrivingBudget } from './notDriving';
+import { isBusyStatus } from './policy';
 import type { DriveSource } from './source';
-import { createTicker, type Scheduler } from './ticks';
+import { createTicker, realScheduler, type Scheduler } from './ticks';
+import { createWaitingSession, nextWaitingChange, WAIT_TOTAL_MS, waitingDeadline, waitingPhaseAt, type WaitingPublic, type WaitingSession } from './waiting';
+import { createWeatherWatch, type WeatherLookup, type WeatherWatch } from './weatherWatch';
 
 export type { DriveSource } from './source';
 
 /**
- * The outcome of the last finalize, for the end flow and the summary notification. `dropped`: the
- * drive was not kept (it never moved), so it has no row, status or points.
+ * The outcome of the last finalize (or "Not driving?"), for the end flow and the recap
+ * notification. `dropped`: the drive was not kept (it never moved, or `cancelled`), so it has no
+ * row, status, time or distance.
  */
 export type LastFinalized =
-  | { clientTripId: string; ok: true; status: TripStatus | null; pointsNet: number | null; dropped: DropReason | null; endCause: EndCause; at: number }
+  | {
+      clientTripId: string;
+      ok: true;
+      status: TripStatus | null;
+      dropped: DropReason | null;
+      endCause: EndCause;
+      at: number;
+      /** The kept drive's length (s) and distance (mi), for the recap notification; null when dropped. */
+      durationS: number | null;
+      miles: number | null;
+    }
   | { clientTripId: string; ok: false; at: number }
   | null;
 
-export interface DrivePoints {
-  total: number;
-  sinceLastStop: number;
+/** What the Live Activity and the driving screen show for the weather: the alert's kind and its title. */
+export interface ShownWeather {
+  kind: DangerKind;
+  text: string;
 }
 
 export interface DriveState extends EngineSnapshot {
-  /** A hands-free call is active (iOS CallKit observer; Android phone-state receiver where present). */
+  /** A hands-free call is active (iOS CallKit observer; Android phone-state receiver where present): the player's in-call gain. */
   callActive: boolean;
-  screenLocked: boolean;
   lastFinalized: LastFinalized;
   /** False when a sound failed during this drive; the drive still records, silently. */
   alertsAvailable: boolean;
-  /** The local estimate, non-null only while stopped (≤ 5 mph). */
-  points: DrivePoints | null;
   /** A `persistence: 'none'` host (the diagnostics simulation): nothing is stored. */
   dryRun: boolean;
-  /** Compatibility for consumers written against v2: a v3 drive is always a mounted driver's. */
-  mode: 'mounted';
-  role: 'driver';
+  /** The Start card's wait (no drive yet: `status` is idle), or null. */
+  waiting: WaitingPublic | null;
+  /** "Not driving?" may still be offered on this drive (its 2-minute budget lasts); false with no drive. */
+  notDrivingAvailable: boolean;
+  /** Of the budget, the visible ms spent so far. */
+  notDrivingSpentMs: number;
+  /** The driving screen's "Watch your speed here" line (shown once per key), or null. */
+  spotNudge: SpotNudge | null;
+  /** The dangerous-weather alert at the car, unless dismissed this drive (a more severe kind shows again); null with no drive. */
+  weatherAlert: DangerAlert | null;
+  /** The same alert as the Live Activity carries it: its kind and title. */
+  weather: ShownWeather | null;
 }
 
 /**
- * Why a Start Drive tap started nothing: no location (`permission`), approximate location only
+ * Why a Start Drive swipe started no wait: no location (`permission`), approximate location only
  * (`precise`), the phone's Location Services off (`services`), a drive already open (`busy`), or
- * not ready / signed out / a failure (`error`). Never the speed.
+ * not ready / signed out / a failure (`error`).
  */
 export type StartRefusalReason = 'permission' | 'precise' | 'services' | 'busy' | 'error';
 
-export type StartResult = { ok: true; clientTripId: string } | { ok: false; reason: StartRefusalReason };
+export type StartResult = { ok: true; waiting: true } | { ok: false; reason: StartRefusalReason };
 
 /** `end()`: the drive closed, but finalizing it failed; End again retries it. */
 export class DriveEndFailedError extends Error {
@@ -94,7 +133,7 @@ export class DriveEndFailedError extends Error {
 }
 
 /**
- * What the tap reads before a drive can start: location (asked once if never answered), and,
+ * What the swipe reads before a wait can start: location (asked once if never answered), and,
  * read only, Precise Location and the Location Services switch (null: could not be read, which
  * never refuses).
  */
@@ -105,17 +144,26 @@ export interface DriveStartPermissions {
 }
 
 export interface DriveHost {
-  /** Attach to native events; continue `adopt` (a drive the previous process was recording). */
+  /** Attach to native events; continue `adopt` (a drive the previous process was recording) and, on iOS, every journaled drive. */
   boot(opts?: { adopt?: AdoptedTrip | null }): Promise<void>;
-  /** The user's Start Drive tap, at any speed. Refuses without location, Location Services or Precise Location, while busy, or signed out. */
+  /** The Start card: the wait begins (the driving screen opens in its waiting state). Already waiting: a touch. */
   start(): Promise<StartResult>;
+  /** Any touch on the waiting driving screen (and "Keep waiting"): a fresh 5 min. */
+  touchWaiting(): void;
+  /** "Cancel" (the sheet's, or End swiped while waiting): the wait ends, nothing is stored. */
+  cancelWaiting(): Promise<void>;
   /**
-   * The swipe-to-end. Resolves once the drive is finalized; null when none was open. `dropped`: that
-   * drive was not kept (whichever end closed it: this one or an automatic end it raced). Rejects with
-   * `DriveEndFailedError` when the drive closed but could not be finalized (stored, scored, queued);
-   * with no drive open, the next `end()` finalizes that drive again.
+   * The swipe-to-end. Resolves once the drive is finalized; null when none was open (a wait is
+   * cancelled). `dropped`: that drive was not kept. Rejects with `DriveEndFailedError` when the
+   * drive closed but could not be finalized; with no drive open, the next `end()` finalizes it again.
    */
   end(): Promise<{ clientTripId: string; dropped: DropReason | null } | null>;
+  /** "Not driving?": discards the drive. False (nothing done) unless a drive records and its budget lasts. */
+  cancelDrive(): Promise<boolean>;
+  /** The driving screen is focused (true) or not: with RoadWise active, the "Not driving?" budget counts. */
+  setHudVisible(visible: boolean): void;
+  /** The driving screen's ✕ on the weather banner: hidden for the rest of the drive (a more severe kind shows again). */
+  dismissWeather(): void;
   stop(opts: { endOpenTrip: boolean }): Promise<void>;
   isBusy(): boolean;
   captureActive(): boolean;
@@ -127,7 +175,7 @@ export interface DriveHost {
   /** `boot` has run (and `stop` has not): until then `start` answers `error`. */
   booted(): boolean;
   signedIn(): boolean;
-  /** Sign-out: an open drive is ended and finalized under the current owner. */
+  /** Sign-out: a wait is cancelled, an open drive is ended and finalized under the current owner. */
   suspendForSignOut(): Promise<void>;
   resumeAfterSignIn(): Promise<void>;
   signedInAgain(opts?: { initial?: boolean }): Promise<void>;
@@ -139,34 +187,30 @@ export interface DriveHost {
   sessionEnded(): Promise<void>;
   reportAlertsUnavailable(): void;
   reportAlertsAvailable(): void;
-  /**
-   * The navigation button is opening the navigation app (only while recording): from the next row
-   * until RoadWise is back in front, the phone locks or its screen goes off, the rows are excused
-   * from screen switches (stamped `exempt: 'nav'`). If RoadWise has not left within `LEAVE_WAIT_S`
-   * of the last row seen at the tap (row clock), the exemption ends. Persisted, so a relaunch keeps it.
-   */
-  beginLeave(): void;
-  /** The navigation app did not open: the exemption ends at once. */
-  cancelLeave(): void;
-  /** A drive is recording (the "End the drive first" guard). */
+  /** A drive is recording. */
   recording(): boolean;
 }
 
 /**
- * The DashPal dashcam, as the host drives it (plan §7.7; `src/dashcam/runtime.ts`). Every hook is
- * optional work beside the drive: a failure never stops a row, an alert or a finalize.
+ * The DashPal dashcam, as the host drives it (`src/dashcam/runtime.ts`). Every hook is optional
+ * work beside the drive: a failure never stops a row, an alert or a finalize.
  */
 export interface DriveHostDashcam {
   /** Every drive row: the dashcam's context (STATE, its tick) and this drive's coverage. */
   row(row: FeatureRow, drive: { clientTripId: string | null; recording: boolean; dryRun: boolean }): void;
-  /** A drive continued after a relaunch: its coverage totals are reloaded. */
+  /** A drive continued after a relaunch (or re-opened): its coverage totals are reloaded. */
   adopt(clientTripId: string): Promise<void>;
-  /** The stopped-points estimate: a DashPal drive so far. */
-  estimateOn(clientTripId: string | null): boolean;
   /** Drive end: wait ≤ 3 s for the phone to catch up to the dashcam, then stamp the sync time. */
   beforeFinalize(clientTripId: string, opts: { dryRun: boolean }): Promise<void>;
   /** A DashPal continuous alert is active: phone alerts are then haptic + visual only. */
   continuousAlertActive(): boolean;
+}
+
+/** The first Live Activity state, for a server push-to-start (iOS 17.2+). */
+export interface PushToStartRequest {
+  clientTripId: string;
+  startedAt: number;
+  state: LiveDriveState;
 }
 
 export interface DriveHostDeps {
@@ -184,22 +228,27 @@ export interface DriveHostDeps {
    * Location Services switch and Precise Location (read only).
    */
   permissions?: () => Promise<DriveStartPermissions>;
-  /**
-   * The phone's cached position (no GPS of its own), or null. The speed-limit tiles around it are
-   * asked for the moment a drive starts, before its first fix.
-   */
+  /** The phone's cached position (no GPS of its own), or null: the limit tiles at a start, the weather before a fix. */
   lastPosition?: () => Promise<{ lat: number; lng: number } | null>;
-  /** The cached summary context for the points estimate; null when nothing is cached. */
-  context?: () => Promise<DriveContext | null>;
   voiceEnabled?: () => boolean;
   appState?: AppStateLike;
   scheduler?: Scheduler;
   alertsAvailable?: boolean;
   signedOut?: boolean;
-  /** `none`: a dry run (a simulation) — no checkpoint, finalize or change event. */
+  /** `none`: a dry run (a simulation) — no checkpoint, finalize, change event, weather or spots. */
   persistence?: 'full' | 'none';
   /** The DashPal dashcam (none: no hooks). */
   dashcam?: DriveHostDashcam;
+  /** iOS: the drive detector (`DriveDetect`); null or absent on Android. */
+  detect?: DriveDetectApi | null;
+  /** iOS: ask our server to push-start the Live Activity (a drive noticed with RoadWise behind). False: the native note stands. */
+  pushToStart?: (req: PushToStartRequest) => Promise<boolean>;
+  /** The held drive a confirmed start continues (default `continuationFor` over `db`). */
+  continuation?: (now: number, fix: { lat: number; lng: number } | null) => Promise<Continuation | null>;
+  /** The spots the driving screen nudges about (default `readWatchSpots` over `db`). */
+  spots?: { readWatchSpots(): Promise<WatchSpot[]> };
+  /** The weather at a place (default Open-Meteo). */
+  weather?: WeatherLookup;
   /**
    * Called as each row arrives: fires the pumped timers that are due (`src/lib/timers.ts`), which
    * Android leaves unfired while the app is in the background. Default: the process's.
@@ -210,19 +259,21 @@ export interface DriveHostDeps {
 
 const noop = (): void => {};
 
-/** The local mirror of `profiles.units` (plan §10): 'km' shows km/h on the background display. */
+/** The local mirror of `profiles.units`: 'km' shows km/h on the background display. */
 export const UNITS_KEY = 'units';
-
+/** Which native journal feeds which trip (they differ for a re-opened drive). Cleared at every end. */
+export const JOURNAL_LINK_KEY = 'drive.journalLink';
+/** Journal rows replayed per boot at most; the rest arrive live. */
+export const MAX_JOURNAL_REPLAY_ROWS = 1800;
+/** Rows read from the journal per call. */
+export const JOURNAL_READ_ROWS = 300;
 /** The car counts as still driving at the end only when its latest speed reading is at most this old then. */
 export const DRIVING_AT_END_MS = 5_000;
 
 /**
- * What the reminder's session takes from a drive that closed at `at` (`stopCapture`'s end): its
- * driving end (the cut where the car last moved, or the End tap), and whether the car was still at
- * driving speed as it ended: the drive's latest GPS speed reading is the second of two trusted
- * readings of 10 mph or more in a row, and it is at most `DRIVING_AT_END_MS` old. A car that slowed
- * under 10 mph or stopped before the End tap (any later speed reading) is not driving on, however
- * recent its last driving-speed reading. A drive that is not kept passes null as its driving end.
+ * What native takes from a drive that closed at `at` (`stopCapture`'s end): its driving end (the
+ * cut where the car last moved, or the End tap), and whether the car was still at driving speed as
+ * it ended. A drive that is not kept passes null as its driving end.
  */
 export function captureEndOf(session: Readonly<TripSession>, at: number, kept: boolean): CaptureEnd {
   const last = session.lastDroveAt;
@@ -235,9 +286,61 @@ export type DisplayUnit = 'mph' | 'km/h';
 export const inDisplayUnit = (mph: number | null, unit: DisplayUnit): number | null =>
   mph === null ? null : Math.round(unit === 'km/h' ? mph * KMH_PER_MPH : mph);
 
+/** The engine's end cause for native's own stop. */
+export function endCauseOfNative(cause: EndCauseNative | 'js'): EndCause {
+  if (cause === 'walking') return 'walking';
+  if (cause === 'limit') return 'limit';
+  if (cause === 'still') return 'stopped';
+  return 'orphan';
+}
+
+/** A trusted GPS speed from a `speed` event, m/s, or null. */
+const trustedSampleSpeed = (s: { speed: number; speedAcc: number; hAcc: number }): number | null =>
+  s.speed >= 0 && (s.speedAcc < 0 || s.speedAcc <= 2) && s.hAcc >= 0 && s.hAcc <= 30 ? s.speed : null;
+
+interface JournalLink {
+  driveId: string;
+  clientTripId: string;
+}
+
+const parseLink = (raw: unknown): JournalLink | null => {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  return typeof r.driveId === 'string' && typeof r.clientTripId === 'string' ? { driveId: r.driveId, clientTripId: r.clientTripId } : null;
+};
+
+/** A row with its bridge-only journal `seq` (iOS). */
+type SeqRow = FeatureRow & { seq?: number };
+
+interface Waiting {
+  since: number;
+  /** Android: the JS confirmation; null on iOS (native confirms). */
+  session: WaitingSession | null;
+  speedMps: number | null;
+  limitMph: number | null;
+  timer: unknown;
+  phase: WaitingPublic['phase'];
+}
+
+/** How the host begins a confirmed drive. */
+interface Begin {
+  ts: number;
+  clientTripId?: string;
+  origin: DriveOrigin;
+  startSource: StartSource;
+  /** The parked spot (a motion-history start), else null. */
+  startPlace: { lat: number; lng: number } | null;
+  /** Where the drive starts (the traced row's fix), for the continuation check; null when unknown. */
+  fix: { lat: number; lng: number } | null;
+  continues: boolean;
+}
+
 export function createDriveHost(deps: DriveHostDeps): DriveHost {
   const { db, source, limits, player, now, tz, newId } = deps;
   const persist = (deps.persistence ?? 'full') === 'full';
+  const detect = deps.detect && deps.detect.available ? deps.detect : null;
+  const ios = detect !== null;
+  const scheduler = deps.scheduler ?? realScheduler;
 
   function report(error: unknown, ctx: string): void {
     try {
@@ -250,36 +353,17 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   // --- host-owned state ---------------------------------------------------------------------------
   let booted = false;
   let captureOn = false;
-  /** The finalized drive's end for the next `stopCapture` (the reminder's session), or null. */
+  /** The finalized drive's end for the next `stopCapture`, or null. */
   let captureEnd: CaptureEnd | null = null;
   let callActive = false;
-  /** This drive's screen-switch signal (fixed at the Start tap or restored on adopt), and the phone. */
-  let phoneSwitch: PhoneSwitchCtx = NO_SWITCH;
-  let platform: 'ios' | 'android' = 'android';
-  /** The navigation button's exemption in progress, or null. */
-  let leave: LeaveState | null = null;
-  /** After an adopt (a process restart mid-drive): the home screen it left behind is excused, at most `RESTART_GRACE_S`. Never persisted. */
-  let restart: { firstTs: number | null } | null = null;
-  /** `ts` of the last row this host took in (the leave window's clock). */
-  let lastRowTs: number | null = null;
-  /** The drive's detector suite (its in-drive lock proof), and whether that proof went to native. */
-  let suite: DetectorSuite | null = null;
-  let proofWritten = false;
-  /** The drive's `drive.phoneSwitch` writes, in order; a failed one is reported and never blocks a row. */
-  let switchWrites: Promise<void> = Promise.resolve();
-  let screenLocked = false;
   let lastFinalized: LastFinalized = null;
   /** The closed drive whose finalize failed, kept for End to finalize again; null when none. */
   let unfinalized: Readonly<TripSession> | null = null;
   let soundFailedThisDrive = false;
   let signedOut = deps.signedOut === true;
   let signingOut = false;
-  let points: DrivePoints | null = null;
   /** The driver's units, read as the drive starts; every display call of the drive uses it. */
   let displayUnit: DisplayUnit = 'mph';
-  let pointsCtx: DriveContext = { streak: 0, safeMilesEarlierToday: 0 };
-  let lastStopTotal = 0;
-  let wasStopped = false;
   let startTripPending = false;
   let finalizedPending = false;
   let prevStatus: EngineStatus = 'idle';
@@ -287,11 +371,42 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let prevSpeedingOver = false;
   /** Bumped by every speeding sound: only the newest one queued may still play. */
   let speedingSounds = 0;
-  /** The points the newest speeding sound took, while it has not started: a newer one plays the points-lost cue for them. */
-  let speedingPointsOwed = 0;
+  /** The Start card's wait, or null. */
+  let waiting: Waiting | null = null;
+  /** iOS: the native drive feeding the open trip, and the last journal `seq` taken in. */
+  let liveDrive: { driveId: string; clientTripId: string; lastSeq: number } | null = null;
+  /** iOS: native journals to delete once the host has settled (their drive is stored). */
+  const discardQueue: string[] = [];
+  /** Rows replayed from journals at this boot (capped). */
+  let replayBudget = MAX_JOURNAL_REPLAY_ROWS;
+  /** The open drive's "Not driving?" budget, or null. */
+  let budget: NotDrivingBudget | null = null;
+  let hudFocused = false;
+  /** `hudVisible()` as last settled (the budget counts while it holds). */
+  let visibleNow = false;
+  /** The journal link was written for the open drive. */
+  let linkWritten = false;
+  let lastCountedRowTs: number | null = null;
+  let lastAccrualAt = 0;
+  let persistedSpent = 0;
+  let budgetWrites: Promise<void> = Promise.resolve();
+  /** The open drive's surfaces are live (not an ended journal drive replayed at boot). */
+  let surfaces = false;
+  /** Drives a push-to-start was asked for. */
+  const pushedFor = new Set<string>();
+  let spotWatcher: SpotWatcher | null = null;
+  let spotNudge: SpotNudge | null = null;
+  let spotsLoad = 0;
+  let weatherWatch: WeatherWatch | null = null;
+  let weatherRaw: DangerAlert | null = null;
+  let weatherDismissed: DangerKind | null = null;
+  let lastFixAt: { lat: number; lng: number; ts: number } | null = null;
   let subscriptions: (() => void)[] = [];
   const idleWaiters = new Set<() => void>();
   const listeners = new Set<(s: DriveState) => void>();
+
+  const appActive = (): boolean => (deps.appState?.currentState ?? 'active') === 'active';
+  const hudVisible = (): boolean => hudFocused && appActive();
 
   // --- engine wiring -------------------------------------------------------------------------------
 
@@ -312,24 +427,44 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         tz: tz(),
         now,
         appVersion: deps.appVersion,
-        context: async () => (await deps.context?.()) ?? null,
+        notDrivingExpired: budget !== null && budget.clientTripId === id && budget.expired,
         ...dashcamFinalizeDeps(db),
       });
       const endCause = session.endCause ?? 'manual';
       if (isDropped(result)) {
         captureEnd = captureEndOf(session, closedAt, false);
-        lastFinalized = { clientTripId: id, ok: true, status: null, pointsNet: null, dropped: result.dropped, endCause, at: now() };
-        // Home says why; no OS notification (nothing was earned or lost).
+        lastFinalized = { clientTripId: id, ok: true, status: null, dropped: result.dropped, endCause, at: now(), durationS: null, miles: null };
+        // Home says why; no OS notification (nothing was kept).
         await writeDropNotice(db, { clientTripId: id, cause: endCause, reason: result.dropped, at: now() }).catch((e: unknown) => report(e, 'dropNotice'));
       } else {
-        lastFinalized = { clientTripId: id, ok: true, status: result.trip.status, pointsNet: result.trip.points_net, dropped: null, endCause, at: now() };
+        lastFinalized = { clientTripId: id, ok: true, status: result.trip.status, dropped: null, endCause, at: now(), durationS: result.trip.duration_s, miles: result.trip.miles };
       }
       finalizedPending = true;
       if (unfinalized?.clientTripId === id) unfinalized = null;
+      if (liveDrive !== null && liveDrive.clientTripId === id) discardQueue.push(liveDrive.driveId);
     } catch (error) {
       lastFinalized = { clientTripId: id, ok: false, at: now() };
       unfinalized = session;
       throw error;
+    }
+  }
+
+  /** "Not driving?": the drive goes whole (a re-opened one with its earlier leg); nothing is kept, sent or told. */
+  async function onCancel(session: Readonly<TripSession>): Promise<void> {
+    const id = session.clientTripId;
+    captureEnd = null;
+    if (persist) {
+      await dropTrip(db, id);
+      await createSettingsRepo(db).remove(NOT_DRIVING_KEY).catch((e: unknown) => report(e, 'notDriving'));
+    }
+    lastFinalized = { clientTripId: id, ok: true, status: null, dropped: 'cancelled', endCause: 'manual', at: now(), durationS: null, miles: null };
+    finalizedPending = persist;
+    if (unfinalized?.clientTripId === id) unfinalized = null;
+    if (ios && detect !== null) {
+      // Native deletes the journal and rests until walking or 5 min still; it is no capture of ours to stop.
+      captureOn = false;
+      liveDrive = null;
+      await detect.notDriving().catch((e: unknown) => report(e, 'notDriving'));
     }
   }
 
@@ -360,52 +495,57 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         if (persist) limits.prefetch(lat, lng, course);
       },
     },
-    createDetectors: () => (suite = createDetectors(newId)),
-    ctx: () => detectorContext(callActive, phoneSwitch, platform),
+    createDetectors: () => createDetectors(newId),
+    ctx: () => ({}),
     onAlert(alert: AlertEvent) {
-      // Speeding sounds never queue up: a newer one drops one that has not started. One that took
-      // points is never lost: a newer one that drops it plays the points-lost cue for those points
-      // too, and it still plays with the car back under the line (while its drive records). A plain
-      // chime is dropped once the row is not over the line. A held session is released then.
-      const sounded = alert.type === 'speeding' && speedingPointsOwed > 0 ? { ...alert, points: (alert.points ?? 0) + speedingPointsOwed } : alert;
-      const decision = decisionFor(sounded, { voiceEnabled: deps.voiceEnabled?.() ?? false });
+      // Speeding sounds never queue up: a newer one drops one that has not started, and one still
+      // queued is dropped once the row is not over the line. A held session is released then.
+      const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
       if (alert.type === 'speeding') {
         speedingSounds += 1;
         const mine = speedingSounds;
-        const points = sounded.points ?? 0;
-        const trip = engine.snapshot().clientTripId;
-        speedingPointsOwed = points;
-        decision.stillWanted = () => {
-          if (mine !== speedingSounds) return false;
-          const state = engine.snapshot();
-          const wanted = points > 0 ? state.status === 'recording' && state.clientTripId === trip : state.speedingOver;
-          // Started: its points are told.
-          if (wanted) speedingPointsOwed = 0;
-          return wanted;
-        };
+        decision.stillWanted = () => mine === speedingSounds && engine.snapshot().speedingOver;
       }
       // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.
       if (dashcamAlertActive()) decision.silent = true;
+      // RoadWise behind: nothing sounds or vibrates; the driving screen never replays what was missed.
+      if (!appActive()) decision.suppressed = true;
       player.deliver(decision).catch((e: unknown) => report(e, 'player'));
     },
     onCheckpoint: (session) => (persist ? recorder.onCheckpoint(session) : Promise.resolve()),
     onFinalize,
+    onCancel,
     onError: (e) => report(e, 'engine'),
   });
 
   // --- the published state ------------------------------------------------------------------------
 
+  function waitingPublic(): WaitingPublic | null {
+    if (waiting === null) return null;
+    return { since: waiting.since, phase: waiting.phase, deadlineAt: waitingDeadline(waiting.since, waiting.phase), speedMps: waiting.speedMps, limitMph: waiting.limitMph };
+  }
+
+  function shownWeather(): DangerAlert | null {
+    if (weatherRaw === null || engine.snapshot().status !== 'recording') return null;
+    return weatherDismissed === null || moreSevere(weatherRaw.kind, weatherDismissed) ? weatherRaw : null;
+  }
+
+  const notDrivingAvailable = (): boolean => budget !== null && !budget.expired && engine.snapshot().status === 'recording' && budget.clientTripId === engine.snapshot().clientTripId;
+
   function build(): DriveState {
+    const alertNow = shownWeather();
     return Object.freeze({
       ...engine.snapshot(),
       callActive,
-      screenLocked,
       lastFinalized,
       alertsAvailable: (deps.alertsAvailable ?? true) && !soundFailedThisDrive,
-      points,
       dryRun: !persist,
-      mode: 'mounted' as const,
-      role: 'driver' as const,
+      waiting: waitingPublic(),
+      notDrivingAvailable: notDrivingAvailable(),
+      notDrivingSpentMs: budget?.spentMs ?? 0,
+      spotNudge,
+      weatherAlert: alertNow,
+      weather: alertNow === null ? null : { kind: alertNow.kind, text: WEATHER_TITLES[alertNow.kind] },
     });
   }
 
@@ -441,46 +581,16 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
-  /**
-   * The local estimate for the drive so far, computed once per stop. A DashPal drive so far counts
-   * its bonus; DashPal deductions are not estimated (they are decided at the end).
-   */
-  function estimateNow(): number {
-    const s = engine.session();
-    if (s === null) return 0;
-    const miles = metersToMiles(s.distanceM);
-    let dashcamOn = false;
-    try {
-      dashcamOn = deps.dashcam?.estimateOn(s.clientTripId) ?? false;
-    } catch (e) {
-      report(e, 'dashcam');
-    }
-    // The events keep what they measured (speeding's overMphS, phone use's speeds), as the server reads them.
-    const durationS = s.lastRowTs === null ? 0 : Math.max(0, (s.lastRowTs + 1000 - s.startedAt) / 1000);
-    const bd = scoreDrive({ miles, safeMiles: Math.min(miles, metersToMiles(s.safeDistanceM)), events: s.events, dashcam: dashcamOn, durationS }, pointsCtx);
-    return bd.scored ? bd.net : 0;
+  /** The driving screen's night look, for the Live Activity's tint: the theme's when it says, else the sun at the car. */
+  function night(): boolean {
+    const look = displayLook();
+    if (typeof look?.night === 'boolean') return look.night;
+    return lastFixAt === null ? false : sunIsDown(new Date(lastFixAt.ts), lastFixAt.lat, lastFixAt.lng);
   }
 
-  function updatePoints(s: EngineSnapshot): void {
-    if (s.status !== 'recording') {
-      points = null;
-      wasStopped = false;
-      return;
-    }
-    if (s.stopped && !wasStopped) {
-      const total = estimateNow();
-      points = { total, sinceLastStop: total - lastStopTotal };
-      lastStopTotal = total;
-    } else if (!s.stopped) {
-      // Not a confirmed stop (a known speed ≤ 5 mph): no points, whether moving or without a fix —
-      // a fix lost while pulling away must not leave the stopped estimate on the screen.
-      points = null;
-    }
-    wasStopped = s.stopped;
-  }
-
-  /** What the background surfaces show for `s`: the speed (0 while it is unknown) and the limit only. */
+  /** What the background surfaces show for `s`: the speed (0 while unknown), the limit, its tint, the hint and the weather. */
   function displayState(s: EngineSnapshot): DriveDisplayState {
+    const w = shownWeather();
     return {
       speed: inDisplayUnit(s.speedKnown ? mpsToMph(s.speedMps) : 0, displayUnit),
       limit: inDisplayUnit(s.limitMph, displayUnit),
@@ -488,12 +598,26 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       points: null,
       pointsDelta: null,
       stopped: s.stopped,
+      speedTint: speedTintOf(s.speedingRatio, night()),
+      speeding: s.speedingTier !== null,
+      notDrivingAvailable: notDrivingAvailable(),
+      weatherKind: w?.kind ?? null,
+      weatherText: w === null ? null : WEATHER_TITLES[w.kind],
     };
   }
 
   function display(s: EngineSnapshot): void {
-    if (!deps.display || s.status !== 'recording') return;
+    if (!deps.display || !surfaces || s.status !== 'recording') return;
     deps.display.update(displayState(s));
+  }
+
+  /** A change the lock screen must show now (the weather line, the hint running out). */
+  function refreshDisplay(): void {
+    const s = engine.snapshot();
+    if (!deps.display || !surfaces || s.status !== 'recording') return;
+    const state = displayState(s);
+    if (deps.display.refresh) deps.display.refresh(state);
+    else deps.display.update(state);
   }
 
   engine.subscribe((s) => {
@@ -508,35 +632,39 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       // A drive left unfinalized stays `recording` in storage: the next launch recovers it.
       unfinalized = null;
       soundFailedThisDrive = false;
-      points = null;
-      lastStopTotal = 0;
-      wasStopped = false;
-      // Points an earlier drive's speeding sound took are never told in this one.
-      speedingPointsOwed = 0;
       startTripPending = true;
-      // The drive's own speed and limit from the first state (0 before the first fix), never "-": the
-      // display then holds this state for its 3-s throttle.
-      deps.display?.start({ ...displayState(s), stopped: s.lastRowTs === null || s.stopped });
+      spotNudge = null;
     }
-    updatePoints(s);
     display(s);
     // The car is back under the speeding line (or the drive ended): its alert's held session goes.
     if (prevSpeedingOver && !s.speedingOver) player.release?.('speeding').catch((e: unknown) => report(e, 'player'));
     prevSpeedingOver = s.speedingOver;
-    if (closed) {
-      limits.resetTrip();
-      startTripPending = false;
-      deps.display?.end();
-      phoneSwitch = NO_SWITCH;
-      leave = null;
-      restart = null;
-      lastRowTs = null;
-      suite = null;
-      proofWritten = false;
-    }
+    if (closed) closeSurfaces();
     publish();
     if (closed) afterClose();
   });
+
+  /** Everything a drive opened beside the engine goes with it. */
+  function closeSurfaces(): void {
+    limits.resetTrip();
+    startTripPending = false;
+    if (surfaces) deps.display?.end();
+    surfaces = false;
+    budget = null;
+    lastCountedRowTs = null;
+    persistedSpent = 0;
+    spotWatcher = null;
+    spotNudge = null;
+    spotsLoad += 1;
+    weatherWatch?.stop();
+    weatherWatch = null;
+    weatherRaw = null;
+    weatherDismissed = null;
+    lastFixAt = null;
+    if (persist && linkWritten) void createSettingsRepo(db).remove(JOURNAL_LINK_KEY).catch((e: unknown) => report(e, 'journalLink'));
+    linkWritten = false;
+    liveDrive = null;
+  }
 
   function afterClose(): void {
     player.stopCurrent().catch((e: unknown) => report(e, 'player'));
@@ -546,6 +674,132 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
     for (const resolve of [...idleWaiters]) resolve();
     idleWaiters.clear();
+  }
+
+  // --- a drive's surfaces -------------------------------------------------------------------------
+
+  /**
+   * A drive just opened (started, re-opened or adopted): its "Not driving?" budget comes back by
+   * trip id, the display starts (or, behind on iOS, the server is asked for a push-to-start), and
+   * the weather watch and the spot nudges begin. `quiet`: an ended journal drive replayed at boot
+   * (it closes at once): none of that.
+   */
+  async function driveOpened(opts: { adopted: boolean; quiet?: boolean }): Promise<void> {
+    const s = engine.snapshot();
+    const id = s.clientTripId;
+    if (s.status !== 'recording' || id === null) return;
+    if (opts.adopted) await deps.dashcam?.adopt(id).catch((e: unknown) => report(e, 'dashcam'));
+    budget = persist ? await budgetFor(db, id, now()).catch(() => null) : null;
+    budget ??= { clientTripId: id, spentMs: 0, expired: false, updatedAt: now() };
+    persistedSpent = budget.spentMs;
+    lastCountedRowTs = null;
+    lastAccrualAt = now();
+    if (opts.quiet) return;
+    surfaces = true;
+    if (deps.display) {
+      if (!ios || appActive()) deps.display.start({ ...displayState(s), stopped: s.lastRowTs === null || s.stopped });
+      else if (s.origin === 'auto') void askPushToStart(id, s.startedAt ?? now());
+    }
+    if (persist) {
+      weatherWatch = createWeatherWatch({
+        now,
+        lookup: deps.weather,
+        lastPosition: deps.lastPosition,
+        onAlert: (a) => {
+          const before = shownWeather();
+          weatherRaw = a;
+          const after = shownWeather();
+          if (before?.kind !== after?.kind || before?.gustMph !== after?.gustMph || before?.visibilityM !== after?.visibilityM) {
+            publish();
+            refreshDisplay();
+          }
+        },
+      });
+      const gen = (spotsLoad += 1);
+      const read = deps.spots ? deps.spots.readWatchSpots() : readWatchSpots(db);
+      read
+        .then((spots) => {
+          if (gen === spotsLoad && engine.snapshot().status === 'recording') spotWatcher = createSpotWatcher(spots);
+        })
+        .catch((e: unknown) => report(e, 'spots'));
+    }
+  }
+
+  /** iOS, RoadWise behind: the server push-starts the Live Activity, once per drive, unless one already runs. */
+  async function askPushToStart(id: string, startedAt: number): Promise<void> {
+    if (!deps.pushToStart || pushedFor.has(id)) return;
+    pushedFor.add(id);
+    try {
+      if (await deps.display?.isRunning?.()) return;
+      const look = displayLook();
+      const state: LiveDriveState = {
+        ...toLive(displayState(engine.snapshot())),
+        weatherKind: null,
+        weatherText: null,
+        skyTop: look?.skyTop ?? null,
+        skyMid: look?.skyMid ?? null,
+        skyLow: look?.skyLow ?? null,
+        accent: look?.accent ?? null,
+      };
+      await deps.pushToStart({ clientTripId: id, startedAt, state });
+    } catch (e) {
+      report(e, 'pushToStart');
+    }
+  }
+
+  // --- "Not driving?" budget ----------------------------------------------------------------------
+
+  function persistBudget(): void {
+    const b = budget;
+    if (!persist || b === null) return;
+    persistedSpent = b.spentMs;
+    budgetWrites = budgetWrites.then(() => writeBudget(db, b)).catch((e: unknown) => report(e, 'notDriving'));
+  }
+
+  function accrue(dt: number): void {
+    const b = budget;
+    if (b === null || b.expired || dt <= 0 || engine.snapshot().status !== 'recording') return;
+    budget = spend(b, dt, now());
+    if (budget.expired) {
+      persistBudget();
+      const id = budget.clientTripId;
+      if (persist) {
+        budgetWrites = budgetWrites
+          .then(async () => {
+            await createTripsRepo(db).update(id, { not_driving_expired: 1 }, now());
+          })
+          .catch((e: unknown) => report(e, 'notDriving'));
+      }
+      publish();
+      refreshDisplay();
+    } else if (budget.spentMs - persistedSpent >= NOT_DRIVING_PERSIST_EVERY_MS) {
+      persistBudget();
+    }
+  }
+
+  /** The visible flag may have changed (the driving screen's focus, or RoadWise's app state): settle the time so far. */
+  function updateVisibility(): void {
+    const is = hudVisible();
+    if (is === visibleNow) return;
+    if (visibleNow) accrue(Math.min(ROW_MS, Math.max(0, now() - lastAccrualAt)));
+    visibleNow = is;
+    lastCountedRowTs = null;
+    lastAccrualAt = now();
+    persistBudget();
+    publish();
+  }
+
+  /** A live row while the drive records: visible time on the row clock, one row's worth at most. */
+  function accrueRow(row: FeatureRow): void {
+    if (!hudVisible()) {
+      lastCountedRowTs = null;
+      return;
+    }
+    // The first row since the screen showed counts the host clock since then; later rows the row clock.
+    const dt = Math.min(ROW_MS, Math.max(0, lastCountedRowTs === null ? now() - lastAccrualAt : row.ts - lastCountedRowTs));
+    lastCountedRowTs = row.ts;
+    lastAccrualAt = now();
+    accrue(dt);
   }
 
   // --- the queue ---------------------------------------------------------------------------------
@@ -575,11 +829,24 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     const s = engine.snapshot();
     await reconcileCapture(s.status);
     ticker.update(s.status === 'recording' ? s.autoEndAt : null);
+    // Stored drives' journals go (never the live one: native would refuse it).
+    if (detect !== null && discardQueue.length > 0) {
+      for (const id of discardQueue.splice(0)) {
+        if (liveDrive !== null && liveDrive.driveId === id) discardQueue.push(id);
+        else await detect.discardDrive(id).catch((e: unknown) => report(e, 'discardDrive'));
+      }
+    }
   }
 
+  /**
+   * The capture follows the engine: on while a drive records (Android: also while the Start card
+   * waits), off after. iOS never starts one (native owns it); its `stopCapture` tells native the
+   * JS end and the cut.
+   */
   async function reconcileCapture(status: EngineStatus): Promise<void> {
-    const want = status === 'recording';
+    const want = status === 'recording' || (waiting !== null && !ios);
     if (want === captureOn) return;
+    if (want && ios) return;
     try {
       if (want) {
         captureEnd = null;
@@ -596,116 +863,409 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   }
 
   /**
-   * The phone's previous drive ended within `MERGE_GAP_S` of this tap (a restart): the new drive has
-   * no warm-up, so End then Start never buys 30 s without events. Unreadable: false.
+   * The phone's previous drive ended within `MERGE_GAP_S` of `at`: the new drive has no warm-up,
+   * so End then Start never buys 30 s without events. Unreadable: false.
    */
   async function continuesPrevious(at: number): Promise<boolean> {
     if (!persist) return false;
     try {
       const last = await createTripsRepo(db).lastEndedAt();
-      return last !== null && at - last <= MERGE_GAP_S * 1000;
+      return last !== null && at - last <= MERGE_GAP_S * 1000 && at >= last;
     } catch (e) {
       report(e, 'continues');
       return false;
     }
   }
 
-  // --- native events -------------------------------------------------------------------------------
-
-  /** Persist the drive's switch state (fire and forget, in order). */
-  function persistSwitch(): void {
-    if (!persist) return;
-    const id = engine.snapshot().clientTripId;
-    if (id === null) return;
-    const value = { clientTripId: id, signal: phoneSwitch.signal, lockDelayMs: phoneSwitch.lockDelayMs, leave: leave === null ? null : { ...leave } };
-    switchWrites = switchWrites.then(() => writePhoneSwitch(db, value)).catch((e: unknown) => report(e, 'phoneSwitch'));
-  }
+  const rebuildDeps: RebuildDeps = {
+    createDetectors: () => createDetectors(newId),
+    limits: { lookup: (lat, lng, course) => limits.lookupStored(lat, lng, course) },
+  };
 
   /**
-   * The exemption stamps (design §6.2), on the row clock, before the engine sees the row: the stamped
-   * row is what is stored and replayed. `restart` first: excused until RoadWise is in front, a lock or
-   * the screen off, or `RESTART_GRACE_S` of rows. Then the navigation button's: stamped until RoadWise
-   * is back in front after leaving, the phone locks or its screen goes off; ended if it never left
-   * within `LEAVE_WAIT_S`.
+   * A confirmed drive: it re-opens the held drive it continues (`continuation.ts`), else it starts.
+   * Runs inside the queue.
    */
-  function stamp(row: FeatureRow): void {
-    if (restart !== null) {
-      if (row.appForeground || !row.screenOn || row.locked) {
-        restart = null;
-      } else {
-        restart.firstTs ??= row.ts;
-        if (row.ts - restart.firstTs < RESTART_GRACE_S * 1000) row.exempt = 'restart';
-        else restart = null;
+  async function beginDrive(b: Begin, opts: { quiet?: boolean } = {}): Promise<void> {
+    if (engine.snapshot().status !== 'idle') return;
+    const at = now();
+    await readDisplayUnit();
+    let c: Continuation | null = null;
+    if (persist) {
+      try {
+        c = await (deps.continuation ?? ((t, fix) => continuationFor(db, t, fix)))(at, b.fix);
+      } catch (e) {
+        report(e, 'continuation');
       }
     }
-    if (leave !== null) {
-      leave.sinceRowTs ??= row.ts;
-      if (row.locked || !row.screenOn) {
-        // A lock or the screen off ends it: what the driver unlocks into next is a switch like any
-        // other, so one tap never covers the rest of the drive (reopen the app with the button).
-        leave = null;
-        persistSwitch();
-      } else if (!row.appForeground) {
-        row.exempt = 'nav';
-        if (!leave.left) {
-          leave.left = true;
-          persistSwitch();
+    if (c !== null) {
+      try {
+        const adopted = await reopenTrip(db, c, { ...rebuildDeps, now: at, at: b.ts });
+        if (adopted !== null) {
+          // The re-opened drive's journal is a new one: its rows count from 1.
+          adopted.session.lastSeq = null;
+          await createTripsRepo(db).update(c.clientTripId, { last_seq: null }, at);
+          await engine.dispatch({ type: 'adopt', trip: adopted, ts: at });
+          await driveOpened({ adopted: true, quiet: opts.quiet });
+          return;
         }
-      } else if (leave.left || row.ts - leave.sinceRowTs > LEAVE_WAIT_S * 1000) {
-        // back in front (not stamped), or the navigation app never took the screen
-        leave = null;
-        persistSwitch();
-      } else {
-        row.exempt = 'nav';
+      } catch (e) {
+        report(e, 'reopen');
       }
     }
+    const continues = b.continues || (await continuesPrevious(b.ts));
+    await engine.dispatch({ type: 'start', ts: b.ts, clientTripId: b.clientTripId, origin: b.origin, continues, startSource: b.startSource, startPlace: b.startPlace });
+    if (engine.snapshot().status !== 'recording') return;
+    await driveOpened({ adopted: false, quiet: opts.quiet });
+    // A new drive replaces Home's notice about the last one that was not kept.
+    if (persist) await clearDropNotice(db).catch((e: unknown) => report(e, 'dropNotice'));
   }
 
+  /** Continue a drive rebuilt from its stored rows (a relaunch mid-drive). */
+  async function adoptTrip(trip: AdoptedTrip, opts: { quiet?: boolean } = {}): Promise<void> {
+    if (engine.snapshot().status !== 'idle') return;
+    await readDisplayUnit();
+    await engine.dispatch({ type: 'adopt', trip, ts: now() });
+    await driveOpened({ adopted: true, quiet: opts.quiet });
+  }
+
+  // --- the waiting session ------------------------------------------------------------------------
+
+  function armWaitingTimer(): void {
+    const w = waiting;
+    if (w === null) return;
+    if (w.timer !== null) scheduler.clearTimeout(w.timer);
+    const at = nextWaitingChange(w.since, now());
+    w.timer = scheduler.setTimeout(
+      () => {
+        w.timer = null;
+        void run(() => evaluateWaiting(), 'waiting');
+      },
+      Math.max(ROW_MS, at - now())
+    );
+  }
+
+  /** The wait's phase now: the sheet, the countdown, or the quiet end at 5 min. */
+  async function evaluateWaiting(): Promise<void> {
+    const w = waiting;
+    if (w === null) return;
+    const phase = waitingPhaseAt(w.since, now());
+    if (phase === 'expired') {
+      await endWaiting('expired');
+      return;
+    }
+    if (phase !== w.phase) {
+      w.phase = phase;
+      publish();
+    }
+    if (w.timer === null) armWaitingTimer();
+  }
+
+  /** The wait ends with nothing stored (`expired`, `cancelled`; `native`: native already let it go). */
+  async function endWaiting(why: 'expired' | 'cancelled' | 'native' | 'confirmed'): Promise<void> {
+    const w = waiting;
+    if (w === null) return;
+    waiting = null;
+    if (w.timer !== null) scheduler.clearTimeout(w.timer);
+    if (why !== 'confirmed' && engine.snapshot().status === 'idle') limits.resetTrip();
+    if (ios && detect !== null && (why === 'expired' || why === 'cancelled')) await detect.cancelWaiting().catch((e: unknown) => report(e, 'cancelWaiting'));
+    publish();
+  }
+
+  /** A row while the Start card waits (Android): the sign and the speed, the phase, and the confirmation. */
+  async function onWaitingRow(row: FeatureRow): Promise<void> {
+    const w = waiting;
+    if (w === null) return;
+    const speed = knownSpeed(row);
+    if (speed !== null && speedTrusted(row)) w.speedMps = speed;
+    const sample = limits.lookup(row.lat, row.lng, row.course, { gnssValid: row.gnssValid, speedMps: speed }) ?? UNKNOWN_LIMIT;
+    w.limitMph = limitShownMph(row, sample);
+    const confirmed = w.session?.push(row) ?? null;
+    if (confirmed === null) {
+      await evaluateWaiting();
+      publish();
+      return;
+    }
+    await endWaiting('confirmed');
+    await beginDrive({
+      ts: confirmed.startedAt,
+      origin: 'manual',
+      startSource: confirmed.startSource,
+      startPlace: null,
+      fix: confirmed.startFix ?? (row.gnssValid ? { lat: row.lat, lng: row.lng } : null),
+      continues: false,
+    });
+    for (const r of confirmed.rows) await onRow(r, { replay: true });
+  }
+
+  // --- rows ----------------------------------------------------------------------------------------
+
   /**
-   * The speed-limit tiles around the phone's cached position, at the tap, while the capture waits
-   * for its first fix (which asks again from the fix itself: tiles already held cost nothing).
+   * The speed-limit tiles around the phone's cached position, while the capture waits for its
+   * first fix (which asks again from the fix itself: tiles already held cost nothing).
    */
-  function fetchLimitsAtStart(id: string): void {
-    if (!deps.lastPosition) return;
+  function fetchLimitsNearby(): void {
+    if (!deps.lastPosition || !persist) return;
     deps
       .lastPosition()
       .then((p) => {
-        if (p === null || !startTripPending || engine.snapshot().clientTripId !== id) return;
-        limits.startTrip(p.lat, p.lng, -1);
+        if (p !== null && (startTripPending || waiting !== null)) limits.startTrip(p.lat, p.lng, -1);
       })
       .catch((e: unknown) => report(e, 'lastPosition'));
   }
 
-  /** iOS: the drive's first in-drive lock proof goes to native once, so later drives count switches from their start. */
-  function writeProof(): void {
-    if (proofWritten || suite === null || platform !== 'ios') return;
-    const proof = suite.lockProof();
-    if (proof === null) return;
-    proofWritten = true;
-    source.markLockProof?.(Math.min(proof.delayMs, 60_000))?.catch((e: unknown) => report(e, 'lockProof'));
-  }
-
-  async function onRow(row: FeatureRow): Promise<void> {
-    screenLocked = row.locked;
-    if (engine.snapshot().status === 'recording') {
-      lastRowTs = row.ts;
-      stamp(row);
+  /** One row through the engine and everything beside it. `replay`: a journal or waiting-buffer row (no live budget time, no nudge). */
+  async function onRow(row: FeatureRow, opts: { replay?: boolean } = {}): Promise<void> {
+    if (waiting !== null && waiting.session !== null && engine.snapshot().status === 'idle') {
+      await onWaitingRow(row);
+      return;
     }
     if (startTripPending && row.gnssValid) {
       startTripPending = false;
       if (persist) limits.startTrip(row.lat, row.lng, row.course);
     }
+    // Visible time first, so the state the row publishes carries it.
+    if (!opts.replay && engine.snapshot().status === 'recording') accrueRow(row);
     await engine.dispatch({ type: 'row', row });
-    writeProof();
+    const snap = engine.snapshot();
+    const recording = snap.status === 'recording';
+    if (recording) {
+      if (row.gnssValid) lastFixAt = { lat: row.lat, lng: row.lng, ts: row.ts };
+      weatherWatch?.onRow(row, snap.distanceM);
+      if (!opts.replay && spotWatcher !== null) {
+        const nudge = spotWatcher.push({
+          ts: row.ts,
+          lat: row.lat,
+          lng: row.lng,
+          hAcc: row.hAcc,
+          gnssValid: row.gnssValid,
+          speedMps: row.speed,
+          courseDeg: row.course >= 0 ? row.course : snap.courseDeg,
+          recording: true,
+          foreground: appActive(),
+          busy: (snap.lastAlert !== null && row.ts - snap.lastAlert.at < ALERT_GLOW_MS + NUDGE_AFTER_ALERT_MS) || dashcamAlertActive(),
+          speedingOver: snap.speedingOver,
+        });
+        if (nudge !== null) {
+          spotNudge = nudge;
+          publish();
+        }
+      }
+    }
     if (deps.dashcam) {
-      const snap = engine.snapshot();
       try {
-        deps.dashcam.row(row, { clientTripId: snap.clientTripId, recording: snap.status === 'recording', dryRun: !persist });
+        deps.dashcam.row(row, { clientTripId: snap.clientTripId, recording, dryRun: !persist });
       } catch (e) {
         report(e, 'dashcam');
       }
     }
   }
+
+  /**
+   * Journal rows of `driveId` after `afterSeq`, oldest first, through `onRow` (as replays), until
+   * the file holds no more or the boot's cap is spent. Returns the last `seq` taken in.
+   */
+  async function drainJournal(driveId: string, afterSeq: number, opts: { capped: boolean }): Promise<number> {
+    if (detect === null) return afterSeq;
+    let last = afterSeq;
+    for (;;) {
+      if (opts.capped && replayBudget <= 0) return last;
+      const limit = opts.capped ? Math.max(1, Math.min(JOURNAL_READ_ROWS, replayBudget)) : JOURNAL_READ_ROWS;
+      let page: { rows: unknown[]; lastSeq: number; done: boolean };
+      try {
+        page = await detect.readRows(driveId, last, limit);
+      } catch (e) {
+        report(e, 'readRows');
+        return last;
+      }
+      for (const raw of page.rows) {
+        const row: SeqRow | null = parseRow(raw);
+        if (row === null) continue;
+        const seq = row.seq;
+        if (typeof seq === 'number') {
+          if (seq <= last) continue;
+          last = seq;
+        }
+        if (liveDrive !== null && liveDrive.driveId === driveId) liveDrive.lastSeq = last;
+        if (opts.capped) replayBudget -= 1;
+        await onRow(row, { replay: true });
+      }
+      if (page.lastSeq > last) last = page.lastSeq;
+      if (liveDrive !== null && liveDrive.driveId === driveId) liveDrive.lastSeq = last;
+      if (page.done || page.rows.length === 0) return last;
+    }
+  }
+
+  /** A live `row` event. iOS: in journal order (a gap is filled from the journal first, a repeat dropped). */
+  async function onLiveRow(row: SeqRow): Promise<void> {
+    const seq = row.seq;
+    const live = liveDrive;
+    if (ios && typeof seq === 'number' && live !== null && engine.snapshot().status === 'recording') {
+      if (seq <= live.lastSeq) return;
+      if (seq > live.lastSeq + 1) {
+        await drainJournal(live.driveId, live.lastSeq, { capped: false });
+        if (liveDrive === null || seq <= liveDrive.lastSeq) return;
+      }
+      if (liveDrive !== null) liveDrive.lastSeq = seq;
+    }
+    await onRow(row);
+  }
+
+  // --- iOS: the drive detector ---------------------------------------------------------------------
+
+  async function writeLink(driveId: string, clientTripId: string): Promise<void> {
+    if (!persist) return;
+    linkWritten = true;
+    await createSettingsRepo(db)
+      .set(JOURNAL_LINK_KEY, { driveId, clientTripId })
+      .catch((e: unknown) => report(e, 'journalLink'));
+  }
+
+  const beginOf = (j: Pick<JournaledDrive, 'driveId' | 'origin' | 'startedAt' | 'startSource' | 'startLat' | 'startLng' | 'continues'>): Begin => {
+    const fix = j.startLat === null || j.startLng === null ? null : { lat: j.startLat, lng: j.startLng };
+    return { ts: j.startedAt, clientTripId: j.driveId, origin: j.origin, startSource: j.startSource, startPlace: j.startSource === 'motion' ? fix : null, fix, continues: j.continues };
+  };
+
+  /** A native drive starts (or is found at boot with no trip of its own): begin it and take its journal in. */
+  async function beginNative(j: Pick<JournaledDrive, 'driveId' | 'origin' | 'startedAt' | 'startSource' | 'startLat' | 'startLng' | 'continues'>, opts: { capped: boolean; quiet?: boolean }): Promise<boolean> {
+    await beginDrive(beginOf(j), { quiet: opts.quiet });
+    const s = engine.snapshot();
+    if (s.status !== 'recording' || s.clientTripId === null) return false;
+    liveDrive = { driveId: j.driveId, clientTripId: s.clientTripId, lastSeq: 0 };
+    await writeLink(j.driveId, s.clientTripId);
+    await drainJournal(j.driveId, 0, { capped: opts.capped });
+    return true;
+  }
+
+  async function onDriveStarted(e: DriveStartedEvent): Promise<void> {
+    if (liveDrive !== null && liveDrive.driveId === e.driveId) return;
+    if (engine.snapshot().status !== 'idle') {
+      report(new Error('a native drive started while another is open'), 'driveStarted');
+      return;
+    }
+    if (waiting !== null) await endWaiting('confirmed');
+    if (await beginNative(e, { capped: false })) captureOn = true;
+  }
+
+  async function onDriveEnded(e: DriveEndedEvent): Promise<void> {
+    const live = liveDrive;
+    if (live === null || live.driveId !== e.driveId) {
+      // Not the drive we hold: an ended journal is taken in at the next boot (or now, while idle).
+      if (e.cause !== 'cancelled' && engine.snapshot().status === 'idle' && detect !== null) {
+        const j = (await detect.listDrives().catch(() => [] as JournaledDrive[])).find((x) => x.driveId === e.driveId && x.ended !== null);
+        if (j) await adoptEndedJournal(j, null);
+      }
+      return;
+    }
+    if (e.cause === 'cancelled') {
+      // Native discarded it ("Not driving?" from here already dropped the trip).
+      captureOn = false;
+      liveDrive = null;
+      if (engine.snapshot().status === 'recording' && engine.snapshot().clientTripId === live.clientTripId) await engine.dispatch({ type: 'cancel', ts: now() });
+      return;
+    }
+    await drainJournal(live.driveId, live.lastSeq, { capped: false });
+    // Native stopped sensing on its own: the engine still decides the cut, at the last movement.
+    captureOn = false;
+    await engine.dispatch({ type: 'end', ts: e.endedAt, cause: endCauseOfNative(e.cause) });
+  }
+
+  function onDetectState(e: DetectStateEvent): void {
+    if (waiting === null) return;
+    if (e.reason === 'waitTimeout' || e.reason === 'cancelled') void run(() => endWaiting('native'), 'detectState');
+  }
+
+  /**
+   * A drive native ended while JS was away (or one still journaled): taken in from where SQLite
+   * stops, ended where native ended it (the engine cuts at the last movement), finalized, and its
+   * journal deleted. A drive already stored is just deleted from the journal.
+   */
+  async function adoptEndedJournal(j: JournaledDrive, recovered: AdoptedTrip | null): Promise<AdoptedTrip | null> {
+    if (j.ended === null || engine.snapshot().status !== 'idle' || detect === null) return recovered;
+    const link = persist ? parseLink(await createSettingsRepo(db).get<unknown>(JOURNAL_LINK_KEY).catch(() => null)) : null;
+    const tripId = link !== null && link.driveId === j.driveId ? link.clientTripId : j.driveId;
+    let afterSeq = 0;
+    if (recovered !== null && recovered.session.clientTripId === tripId) {
+      await adoptTrip(recovered, { quiet: true });
+      afterSeq = recovered.session.lastSeq ?? 0;
+      recovered = null;
+    } else {
+      const trip = persist ? await createTripsRepo(db).get(tripId) : null;
+      if (trip === null) {
+        await beginDrive(beginOf(j), { quiet: true });
+      } else if (trip.status === 'recording') {
+        const rebuilt = await rebuildFromSamples(db, trip, rebuildDeps);
+        if (rebuilt === null) await beginDrive(beginOf(j), { quiet: true });
+        else {
+          await adoptTrip(rebuilt, { quiet: true });
+          afterSeq = trip.last_seq ?? 0;
+        }
+      } else {
+        discardQueue.push(j.driveId);
+        return recovered;
+      }
+    }
+    const s = engine.snapshot();
+    if (s.status !== 'recording' || s.clientTripId === null) return recovered;
+    liveDrive = { driveId: j.driveId, clientTripId: s.clientTripId, lastSeq: afterSeq };
+    await drainJournal(j.driveId, afterSeq, { capped: true });
+    if (engine.snapshot().status === 'recording') await engine.dispatch({ type: 'end', ts: j.ended.endedAt, cause: endCauseOfNative(j.ended.cause) });
+    return recovered;
+  }
+
+  /** iOS at boot: every ended journal first (oldest first), then the recovered drive, then the live one. */
+  async function bootIos(recoveredIn: AdoptedTrip | null): Promise<void> {
+    if (detect === null) return;
+    let recovered = recoveredIn;
+    let d: Awaited<ReturnType<DriveDetectApi['getState']>> | null = null;
+    let drives: JournaledDrive[] = [];
+    try {
+      d = await detect.getState();
+      drives = await detect.listDrives();
+    } catch (e) {
+      report(e, 'detect');
+    }
+    const liveId = d !== null && (d.state === 'recording' || d.state === 'ending') ? d.driveId : null;
+    const ended = drives.filter((j) => j.ended !== null && j.driveId !== liveId).sort((a, b) => a.startedAt - b.startedAt);
+    for (const j of ended) {
+      recovered = await adoptEndedJournal(j, recovered);
+      if (engine.snapshot().status !== 'idle') break;
+    }
+    if (recovered !== null && engine.snapshot().status === 'idle') await adoptTrip(recovered);
+    if (liveId === null || d === null) return;
+    const link = persist ? parseLink(await createSettingsRepo(db).get<unknown>(JOURNAL_LINK_KEY).catch(() => null)) : null;
+    const tripId = link !== null && link.driveId === liveId ? link.clientTripId : liveId;
+    const j: JournaledDrive | undefined = drives.find((x) => x.driveId === liveId);
+    const s = engine.snapshot();
+    if (s.status === 'recording' && s.clientTripId === tripId) {
+      liveDrive = { driveId: liveId, clientTripId: tripId, lastSeq: engine.session()?.lastSeq ?? 0 };
+      captureOn = true;
+      await drainJournal(liveId, liveDrive.lastSeq, { capped: true });
+      return;
+    }
+    if (s.status !== 'idle') {
+      report(new Error('the live native drive is not the open one'), 'detect');
+      return;
+    }
+    const trip = persist ? await createTripsRepo(db).get(tripId) : null;
+    if (trip !== null && trip.status === 'recording') {
+      const rebuilt = await rebuildFromSamples(db, trip, rebuildDeps);
+      if (rebuilt !== null) {
+        await adoptTrip(rebuilt);
+        liveDrive = { driveId: liveId, clientTripId: tripId, lastSeq: trip.last_seq ?? 0 };
+        captureOn = true;
+        await drainJournal(liveId, liveDrive.lastSeq, { capped: true });
+        return;
+      }
+    } else if (trip !== null) {
+      report(new Error('the live native drive is already stored'), 'detect');
+      return;
+    }
+    const begin = j ?? { driveId: liveId, origin: d.origin ?? 'auto', startedAt: d.startedAt ?? now(), startSource: 'wake' as const, startLat: null, startLng: null, continues: false };
+    if (await beginNative(begin, { capped: true })) captureOn = true;
+  }
+
+  // --- native events -------------------------------------------------------------------------------
 
   function attachNative(): void {
     const remover = (sub: { remove(): void }) => () => sub.remove();
@@ -719,17 +1279,26 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           } catch (e) {
             report(e, 'timers');
           }
-          const row = parseRow(raw);
+          const row: SeqRow | null = parseRow(raw);
           if (row === null) return;
-          void run(() => onRow(row), 'row');
+          void run(() => onLiveRow(row), 'row');
         })
       ),
       remover(
         // Each fix's speed the moment it lands, straight to the screen's number: not queued behind
-        // the rows (a checkpoint's write must not hold it), and timed at the fix (arrival less its age).
+        // the rows (a checkpoint's write must not hold it), and timed at the fix (arrival less its
+        // age). While the Start card waits (iOS: no rows yet), it is the waiting screen's speed.
         source.addListener('speed', (raw) => {
           const s = parseSpeed(raw);
           if (s === null) return;
+          if (waiting !== null && engine.snapshot().status === 'idle') {
+            const v = trustedSampleSpeed(s);
+            if (v !== null && v !== waiting.speedMps) {
+              waiting.speedMps = v;
+              publish();
+            }
+            return;
+          }
           try {
             engine.speed({ at: now() - s.ageMs, mps: s.speed, acc: s.speedAcc, hAcc: s.hAcc });
           } catch (e) {
@@ -744,11 +1313,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           const activity = parseActivity(raw);
           if (activity === null) return;
           void run(() => engine.dispatch({ type: 'motion', activity, ts: now() }), 'activity');
-        })
-      ),
-      remover(
-        source.addListener('screen', (p) => {
-          screenLocked = p.locked;
         })
       ),
       remover(
@@ -773,6 +1337,31 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         })
       )
     );
+    if (detect !== null) {
+      subscriptions.push(
+        remover(detect.addListener('driveStarted', (e) => void run(() => onDriveStarted(e), 'driveStarted'))),
+        remover(detect.addListener('driveEnded', (e) => void run(() => onDriveEnded(e), 'driveEnded'))),
+        remover(detect.addListener('detectState', (e) => onDetectState(e)))
+      );
+    }
+    if (deps.appState) {
+      let wasActive = appActive();
+      const sub = deps.appState.addEventListener('change', () => {
+        const active = appActive();
+        updateVisibility();
+        if (active && !wasActive) {
+          void run(async () => {
+            // Back in front during a drive: the Live Activity is adopted (pushed) or started here.
+            const s = engine.snapshot();
+            if (s.status === 'recording' && surfaces && deps.display) deps.display.start({ ...displayState(s), stopped: s.lastRowTs === null || s.stopped });
+            await evaluateWaiting();
+          }, 'foreground');
+        }
+        wasActive = active;
+        publish();
+      });
+      subscriptions.push(() => sub.remove());
+    }
   }
 
   // --- the host ------------------------------------------------------------------------------------
@@ -793,33 +1382,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         try {
           const state = await source.getState();
           captureOn = state.capturing;
-          platform = state.platform;
         } catch (e) {
           report(e, 'getState');
         }
-        if (opts.adopt) {
-          try {
-            pointsCtx = (await deps.context?.()) ?? pointsCtx;
-          } catch (e) {
-            report(e, 'context');
-          }
-          await readDisplayUnit();
-          // The drive's own switch signal and a navigation exemption in progress come back with it;
-          // another drive's (or none): no switch counts for the rest of this one.
-          let stored: Awaited<ReturnType<typeof readPhoneSwitch>> = null;
-          try {
-            stored = persist ? await readPhoneSwitch(db) : null;
-          } catch (e) {
-            report(e, 'phoneSwitch');
-          }
-          const own = stored !== null && stored.clientTripId === opts.adopt.session.clientTripId ? stored : null;
-          await engine.dispatch({ type: 'adopt', trip: opts.adopt, ts: now() });
-          phoneSwitch = own === null ? NO_SWITCH : { signal: own.signal, lockDelayMs: own.lockDelayMs };
-          leave = own?.leave ?? null;
-          restart = { firstTs: null };
-          suite = opts.adopt.detectors;
-          await deps.dashcam?.adopt(opts.adopt.session.clientTripId).catch((e: unknown) => report(e, 'dashcam'));
-        }
+        replayBudget = MAX_JOURNAL_REPLAY_ROWS;
+        if (ios) await bootIos(opts.adopt ?? null);
+        else if (opts.adopt) await adoptTrip(opts.adopt);
         attachNative();
       }, 'boot');
     },
@@ -827,6 +1395,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     async start() {
       if (!booted || signedOut) return { ok: false, reason: 'error' };
       if (isBusyStatus(engine.snapshot().status)) return { ok: false, reason: 'busy' };
+      if (waiting !== null) {
+        self.touchWaiting();
+        return { ok: true, waiting: true };
+      }
       try {
         const perms = await deps.permissions?.();
         if (perms !== undefined && perms.location !== 'granted') return { ok: false, reason: 'permission' };
@@ -843,49 +1415,68 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           result = { ok: false, reason: 'busy' };
           return;
         }
-        // The drive's screen-switch signal is fixed here, at the tap; unreadable: none counts.
-        let signal: PhoneSwitchCtx = NO_SWITCH;
-        try {
-          const state = await source.getState();
-          captureOn = state.capturing;
-          platform = state.platform;
-          signal = switchSignalFor(state);
-        } catch (e) {
-          report(e, 'getState');
-        }
-        try {
-          pointsCtx = (await deps.context?.()) ?? { streak: 0, safeMilesEarlierToday: 0 };
-        } catch (e) {
-          report(e, 'context');
-          pointsCtx = { streak: 0, safeMilesEarlierToday: 0 };
-        }
-        await readDisplayUnit();
-        const at = now();
-        await engine.dispatch({ type: 'start', ts: at, continues: await continuesPrevious(at) });
-        const id = engine.snapshot().clientTripId;
-        if (id === null) return;
-        phoneSwitch = signal;
-        leave = null;
-        restart = null;
-        persistSwitch();
-        try {
-          await source.startCapture('mounted');
-          captureOn = true;
-        } catch (e) {
-          report(e, 'startCapture');
-          await engine.dispatch({ type: 'end', ts: now() });
+        if (waiting !== null) {
+          result = { ok: true, waiting: true };
           return;
         }
-        result = { ok: true, clientTripId: id };
-        if (persist) fetchLimitsAtStart(id);
-        // A new drive replaces Home's notice about the last one that was not kept.
-        if (persist) await clearDropNotice(db).catch((e: unknown) => report(e, 'dropNotice'));
+        if (ios && detect !== null) {
+          let r: Awaited<ReturnType<DriveDetectApi['startWaiting']>>;
+          try {
+            r = await detect.startWaiting();
+          } catch (e) {
+            report(e, 'startWaiting');
+            return;
+          }
+          if (!r.ok) {
+            result = { ok: false, reason: r.reason === 'permission' ? 'permission' : r.reason === 'busy' ? 'busy' : 'error' };
+            return;
+          }
+          waiting = { since: r.waitUntil - WAIT_TOTAL_MS, session: null, speedMps: null, limitMph: null, timer: null, phase: 'waiting' };
+        } else {
+          try {
+            await source.startCapture('mounted');
+            captureOn = true;
+          } catch (e) {
+            report(e, 'startCapture');
+            return;
+          }
+          waiting = { since: now(), session: createWaitingSession(), speedMps: null, limitMph: null, timer: null, phase: 'waiting' };
+        }
+        await readDisplayUnit();
+        fetchLimitsNearby();
+        armWaitingTimer();
+        result = { ok: true, waiting: true };
+        publish();
       }, 'start');
       return result;
     },
 
+    touchWaiting() {
+      if (waiting === null) return;
+      waiting.since = now();
+      waiting.phase = 'waiting';
+      armWaitingTimer();
+      publish();
+      if (ios && detect !== null) {
+        detect
+          .extendWaiting()
+          .then((until) => {
+            if (until !== null && waiting !== null) waiting.since = until - WAIT_TOTAL_MS;
+          })
+          .catch((e: unknown) => report(e, 'extendWaiting'));
+      }
+    },
+
+    async cancelWaiting() {
+      await run(() => endWaiting('cancelled'), 'cancelWaiting');
+    },
+
     async end() {
       const open = engine.snapshot().clientTripId;
+      if (open === null && waiting !== null) {
+        await self.cancelWaiting();
+        return null;
+      }
       const id = open ?? unfinalized?.clientTripId ?? null;
       if (id === null) return null;
       if (open !== null) {
@@ -902,10 +1493,36 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       return { clientTripId: id, dropped: f !== null && f.ok && f.clientTripId === id ? f.dropped : null };
     },
 
+    async cancelDrive() {
+      if (engine.snapshot().status !== 'recording' || !notDrivingAvailable()) return false;
+      let cancelled = false;
+      await run(async () => {
+        if (engine.snapshot().status !== 'recording' || !notDrivingAvailable()) return;
+        cancelled = true;
+        await engine.dispatch({ type: 'cancel', ts: now() });
+      }, 'cancelDrive');
+      await self.untilIdle();
+      return cancelled;
+    },
+
+    setHudVisible(visible) {
+      hudFocused = visible;
+      updateVisibility();
+    },
+
+    dismissWeather() {
+      const shown = shownWeather();
+      if (shown === null) return;
+      weatherDismissed = weatherDismissed === null || moreSevere(shown.kind, weatherDismissed) ? shown.kind : weatherDismissed;
+      publish();
+      refreshDisplay();
+    },
+
     async stop({ endOpenTrip }) {
       if (!booted) return;
       if (endOpenTrip) {
         await run(async () => {
+          await endWaiting('cancelled');
           if (isBusyStatus(engine.snapshot().status)) await engine.dispatch({ type: 'end', ts: now() });
         }, 'stop');
       }
@@ -913,6 +1530,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       for (const unsubscribe of subscriptions) unsubscribe();
       subscriptions = [];
       ticker.stop();
+      if (waiting?.timer != null) scheduler.clearTimeout(waiting.timer);
+      weatherWatch?.stop();
       booted = false;
       for (const resolve of [...idleWaiters]) resolve();
       idleWaiters.clear();
@@ -947,6 +1566,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       await run(async () => {
         signedOut = true;
         signingOut = true;
+        await endWaiting('cancelled');
         if (isBusyStatus(engine.snapshot().status)) await engine.dispatch({ type: 'end', ts: now() });
       }, 'signOut');
       await self.untilIdle();
@@ -979,16 +1599,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       if (!soundFailedThisDrive) return;
       soundFailedThisDrive = false;
       publish();
-    },
-    beginLeave() {
-      if (engine.snapshot().status !== 'recording') return;
-      leave = { sinceRowTs: lastRowTs, left: false };
-      persistSwitch();
-    },
-    cancelLeave() {
-      if (leave === null) return;
-      leave = null;
-      persistSwitch();
     },
     recording: () => engine.snapshot().status === 'recording',
   };

@@ -1,18 +1,19 @@
-// The hooks screens read the drive through (plan §10).
+// The hooks screens read the drive through (modes plan §3.9).
 import type { EventType, Tier } from '@scoring';
 import { useCallback, useContext, useMemo } from 'react';
 
-import type { Deduction } from '@/core/engine/engine.types';
+import type { DriveOrigin, EventShake } from '@/core/engine/engine.types';
 import type { DropReason } from '@/core/engine/finalize';
+import type { SpotNudge } from '@/core/spots/types';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
-import { useDriveWeather, WEATHER_REFETCH_DISTANCE_M } from '@/features/drive/weather';
 import type { DangerAlert } from '@/features/weather/danger';
 import { mpsToMph } from '@/lib/units';
 
 import { DriveContext, type DriveContextValue } from './DriveProvider';
-import type { DriveHost, DriveState, StartResult } from './host';
+import type { DriveHost, DriveState, ShownWeather, StartResult } from './host';
+import type { WaitingPublic } from './waiting';
 
 function useDriveContext(): DriveContextValue {
   const value = useContext(DriveContext);
@@ -35,20 +36,43 @@ export function useDriveHost(): DriveHost {
 }
 
 export interface DriveControls {
-  /** Start Drive. Only from a user tap; at any speed. */
+  /** Start Drive: the wait begins (the driving screen opens in its waiting state). */
   start(): Promise<StartResult>;
   /** End the drive; resolves once it is finalized (`dropped`: it was not kept). Navigation is the caller's job. */
   end(): Promise<{ clientTripId: string; dropped: DropReason | null } | null>;
+  /** Any touch on the waiting screen, and "Keep waiting": a fresh 5 min. */
+  touchWaiting(): void;
+  /** "Cancel" while waiting: nothing is stored. */
+  cancelWaiting(): Promise<void>;
+  /** "Not driving?": the drive is discarded; false when it is no longer offered. */
+  cancelDrive(): Promise<boolean>;
+  /** The driving screen's focus (true on focus, false on blur and unmount): the "Not driving?" budget counts while it shows. */
+  setHudVisible(visible: boolean): void;
+  /** The weather banner's ✕: hidden for the rest of the drive (a more severe kind shows again). */
+  dismissWeather(): void;
 }
 
 export function useDriveControls(): DriveControls {
   const host = useDriveHost();
-  return useMemo(() => ({ start: () => host.start(), end: () => host.end() }), [host]);
+  return useMemo(
+    () => ({
+      start: () => host.start(),
+      end: () => host.end(),
+      touchWaiting: () => host.touchWaiting(),
+      cancelWaiting: () => host.cancelWaiting(),
+      cancelDrive: () => host.cancelDrive(),
+      setHudVisible: (visible: boolean) => host.setHudVisible(visible),
+      dismissWeather: () => host.dismissWeather(),
+    }),
+    [host]
+  );
 }
 
 export interface DriveLive {
   status: 'idle' | 'recording' | 'finalizing';
   clientTripId: string | null;
+  /** How the open drive began; null when none records. */
+  origin: DriveOrigin | null;
   /** The newest row's GPS speed (mph, tenths), null when it had none: the halo's speeding hold. */
   rowSpeedMph: number | null;
   /** The limit the sign shows (the last one held up to 10 s through a row without one); null → "-". */
@@ -59,41 +83,49 @@ export interface DriveLive {
    * the speeding detector can use; else null. The halo's tint.
    */
   speedingRatio: number | null;
-  /** The current row is over the points line (L + T): the halo pulses. */
+  /** The current row is over the speeding line (L + T): the halo pulses. */
   speedingOver: boolean;
   /** The last GPS course (degrees clockwise from true north) taken at 5 mph or more, held; null before the first. */
   courseDeg: number | null;
-  /** The latest points-off estimate; the halo shakes on each new `key`. Null before the first of the drive. */
-  lastDeduction: Deduction | null;
+  /** The latest event the halo shakes on (a hard event, a speeding episode's grace end), with its tier; null before the first. */
+  lastShake: EventShake | null;
   stopped: boolean;
   lastAlert: { type: EventType; tier: Tier; at: number } | null;
-  /** The dangerous-weather alert near the car (plan D14), or null. */
+  /** The dangerous-weather alert at the car (unless dismissed this drive), or null. */
   weatherAlert: DangerAlert | null;
-  /** Non-null only while stopped (≤ 5 mph). */
-  points: { total: number; sinceLastStop: number } | null;
+  /** The same alert's kind and title, as the Live Activity shows it. */
+  weather: ShownWeather | null;
   startedAt: number | null;
   /** The newest row's time (the row clock), or null before any row. */
   rowTs: number | null;
-  /** The confirmed phone episode's first use row while it is open (row clock), else null. */
-  phoneUseSince: number | null;
+  /** The Start card's wait (no drive yet), or null. */
+  waiting: WaitingPublic | null;
+  /** "Not driving?" is still offered on this drive. */
+  notDrivingAvailable: boolean;
+  /** The spot nudge to flash ("Watch your speed here"), or null. */
+  spotNudge: SpotNudge | null;
 }
 
 const selectLive = (s: DriveState) => ({
   status: s.status,
   clientTripId: s.clientTripId,
+  origin: s.origin,
   rowSpeedMph: s.rowSpeedMps === null ? null : Math.round(mpsToMph(s.rowSpeedMps) * 10) / 10,
   limitMph: s.limitMph,
   speedingTier: s.speedingTier,
   speedingRatio: s.speedingRatio,
   speedingOver: s.speedingOver,
   courseDeg: s.courseDeg,
-  lastDeduction: s.lastDeduction,
+  lastShake: s.lastShake,
   stopped: s.stopped,
   lastAlert: s.lastAlert,
-  points: s.points,
+  weatherAlert: s.weatherAlert,
+  weather: s.weather,
   startedAt: s.startedAt,
   rowTs: s.lastRowTs,
-  phoneUseSince: s.phoneUseSince,
+  waiting: s.waiting,
+  notDrivingAvailable: s.notDrivingAvailable,
+  spotNudge: s.spotNudge,
 });
 
 /** The speed the driving screen shows, as of its last fix (`displaySpeed.ts`). */
@@ -124,19 +156,14 @@ export function useHeading(): number | null {
   return useDrive(selectHeading);
 }
 
-/** The weather leg: changes once per refetch distance, so the odometer never re-renders the HUD per row. */
-const selectWeatherLeg = (s: DriveState) => Math.floor(s.distanceM / WEATHER_REFETCH_DISTANCE_M);
-
 /** Everything the driving screen shows; published at most once per row (1 Hz). */
 export function useDriveLive(): DriveLive {
   const live = useDrive(selectLive);
-  const leg = useDrive(selectWeatherLeg);
-  const weatherAlert = useDriveWeather(live.status === 'recording', leg * WEATHER_REFETCH_DISTANCE_M);
   const lastAlert = useMemo(
     () => (live.lastAlert === null ? null : { type: live.lastAlert.type, tier: live.lastAlert.tier, at: live.lastAlert.at }),
     [live.lastAlert]
   );
-  return { ...live, lastAlert, weatherAlert };
+  return { ...live, lastAlert };
 }
 
 /** A stable callback to start a drive, for Home's button. */

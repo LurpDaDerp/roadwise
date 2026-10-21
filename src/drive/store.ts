@@ -2,8 +2,9 @@
 //
 // While RoadWise is in front, every host change is published — the driving screen needs each row
 // (at most one per second). While it is in the background nobody is looking, so only what the
-// root layout reads is published: `status` and `lockedOut`. The store catches up with the full
-// snapshot the moment the app is active again.
+// root layout reads is published: `status`, `lockedOut`, the Start card's wait and whether
+// "Not driving?" is still offered. The store catches up with the full snapshot the moment the app
+// is active again.
 import { createStore, type StoreApi } from 'zustand/vanilla';
 
 import type { AppStateLike } from '@/data/foreground';
@@ -27,7 +28,9 @@ export function createDriveStore(host: DriveHost, appState: AppStateLike): Drive
     let active = isActive(appState.currentState);
     const offHost = host.subscribe((s) => {
       const shown = store.getState();
-      if (active || s.status !== shown.status || s.lockedOut !== shown.lockedOut) store.setState(s, true);
+      if (active || s.status !== shown.status || s.lockedOut !== shown.lockedOut || (s.waiting === null) !== (shown.waiting === null) || s.waiting?.phase !== shown.waiting?.phase || s.notDrivingAvailable !== shown.notDrivingAvailable || s.weather?.kind !== shown.weather?.kind) {
+        store.setState(s, true);
+      }
     });
     const offApp = appState.addEventListener('change', (next) => {
       active = isActive(next);

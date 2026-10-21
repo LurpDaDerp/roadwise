@@ -1,4 +1,4 @@
-import { createDriveDisplay, DISPLAY_KEEPALIVE_MS, DISPLAY_MIN_INTERVAL_MS, type DriveDisplayState } from '@/drive/display';
+import { createDriveDisplay, DISPLAY_KEEPALIVE_MS, DISPLAY_MIN_INTERVAL_MS, toLive, type DriveDisplayState } from '@/drive/display';
 import { displayLook, setDisplayLook, type DisplayLook } from '@/drive/displayLook';
 
 const state = (over: Partial<DriveDisplayState> = {}): DriveDisplayState => ({ speed: 30, limit: 35, unit: 'mph', points: null, pointsDelta: null, stopped: false, ...over });
@@ -121,9 +121,9 @@ test("every state wears the app's sky (null for all four without one) and goes o
   d.update(state());
   expect(set).toHaveBeenCalledTimes(2); // nothing changed
   d.end();
-  // The Live Activity starts in the sky of its moment.
+  // The Live Activity starts in the sky of its moment, with no points or stopped flag.
   d.start(state());
-  expect(live.start).toHaveBeenLastCalledWith({ ...state(), ...look });
+  expect(live.start).toHaveBeenLastCalledWith({ speed: 30, limit: 35, unit: 'mph', speedTint: null, speeding: false, notDrivingAvailable: false, weatherKind: null, weatherText: null, ...look });
 });
 
 test('by default the display wears the look the app set', () => {
@@ -140,4 +140,49 @@ test('by default the display wears the look the app set', () => {
     setDisplayLook(null);
   }
   expect(displayLook()).toBeNull();
+});
+
+test('the Live Activity state carries the tint, the speeding flag, the hint and the weather line, and never points', () => {
+  expect(toLive(state({ speedTint: '#E0884F', speeding: true, notDrivingAvailable: true, weatherKind: 'heavy_rain', weatherText: 'Heavy rain', points: 5 } as Partial<DriveDisplayState>))).toEqual({
+    speed: 30,
+    limit: 35,
+    unit: 'mph',
+    speedTint: '#E0884F',
+    speeding: true,
+    notDrivingAvailable: true,
+    weatherKind: 'heavy_rain',
+    weatherText: 'Heavy rain',
+    skyTop: null,
+    skyMid: null,
+    skyLow: null,
+    accent: null,
+  });
+});
+
+test('a change in the tint, the hint or the weather is a change; refresh sends it at once, outside the 3 s throttle, once', () => {
+  let now = 0;
+  const { set } = sinks();
+  const d = createDriveDisplay({ setDriveDisplay: set }, { now: () => now, platform: 'ios' });
+  d.start(state({ notDrivingAvailable: true }));
+  now = 500;
+  d.refresh!(state({ notDrivingAvailable: false }));
+  expect(set).toHaveBeenCalledTimes(2);
+  d.refresh!(state({ notDrivingAvailable: false }));
+  expect(set).toHaveBeenCalledTimes(2);
+  now = 1000;
+  d.refresh!(state({ notDrivingAvailable: false, weatherKind: 'dense_fog', weatherText: 'Dense fog' }));
+  expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ weatherKind: 'dense_fog', weatherText: 'Dense fog' }));
+  now = 4500;
+  d.update(state({ notDrivingAvailable: false, weatherKind: 'dense_fog', weatherText: 'Dense fog', speedTint: '#FFCC00' }));
+  expect(set).toHaveBeenCalledTimes(4);
+});
+
+test('isRunning asks LiveDrive on iOS only; false where none can run or it fails', async () => {
+  const running = jest.fn(async () => true);
+  const ios = createDriveDisplay({ liveDrive: { start: jest.fn(async () => true), end: jest.fn(async () => {}), isRunning: running } }, { now: () => 0, platform: 'ios' });
+  expect(await ios.isRunning!()).toBe(true);
+  const android = createDriveDisplay({ liveDrive: { start: jest.fn(async () => true), end: jest.fn(async () => {}), isRunning: running } }, { now: () => 0, platform: 'android' });
+  expect(await android.isRunning!()).toBe(false);
+  const failing = createDriveDisplay({ liveDrive: { start: jest.fn(async () => true), end: jest.fn(async () => {}), isRunning: async () => Promise.reject(new Error('x')) } }, { now: () => 0, platform: 'ios', onError: () => {} });
+  expect(await failing.isRunning!()).toBe(false);
 });
