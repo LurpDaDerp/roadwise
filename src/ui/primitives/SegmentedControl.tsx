@@ -11,7 +11,7 @@ export type SegmentedControlProps<V extends string> = {
   segments: readonly Segment<V>[];
   value: V;
   onChange: (value: V) => void;
-  /** Names the group for VoiceOver, e.g. "Leaderboard". */
+  /** Names the group for VoiceOver, e.g. "History". */
   accessibilityLabel?: string;
   style?: StyleProp<ViewStyle>;
   testID?: string;

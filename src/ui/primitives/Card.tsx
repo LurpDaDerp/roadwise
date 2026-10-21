@@ -13,7 +13,7 @@ export type CardProps = {
    *   charcoal face with a hairline.
    * - `raised`: one step up (surfaceRaised) — a card inside a sheet, a selected tile.
    * - `hero`: the scene card for the one headline block on a screen (Home's drive card, the
-   *   summary points, a league or profile header): the sky's deep gradient for this hour and
+   *   recap's score, a profile header): the sky's deep gradient for this hour and
    *   weather, with a road over low hills. Its children render under the scene palette
    *   automatically (white ink, repaired to AA on every stop), so any primitive inside reads.
    * - `outline`: no fill, a strong rule. Placeholders, "add" slots.

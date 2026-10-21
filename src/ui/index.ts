@@ -13,11 +13,9 @@ export {
   type ColorSet,
   type Elevation,
   type HudSet,
-  type LeagueTier,
   type Signal,
   type SignalColors,
   type StatHealth,
-  type TierColors,
   type TypeScale,
   type TypeVariant,
 } from './tokens';
@@ -67,7 +65,6 @@ export {
   type StatTileProps,
 } from './primitives/StatTile';
 export { Text, useFontScale, type AppTextProps, type TextTone } from './primitives/Text';
-export { TIER_LABEL, TIER_ORDER, TierBadge, type TierBadgeProps } from './primitives/TierBadge';
 export { ToggleRow, type ToggleRowProps } from './primitives/ToggleRow';
 export {
   describeTrend,

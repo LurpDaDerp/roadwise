@@ -8,21 +8,18 @@ import { fontFamilies } from './fonts';
  * The ground is plain: off-white paper and near-black ink in light, the reverse in dark, and the
  * primary action is an ink (or paper) capsule. Colour comes from the sky: the accent and the
  * backdrop follow the time of day and the weather (`src/ui/sky/`). Gold stays for rewards only
- * (the streak flame, the gold tier, unlocked achievements). Around them sit two families of
- * signal colour that always arrive with a glyph or a word, never alone:
+ * (the top merit tier, unlocked achievements). Around them sits a family of signal colour that
+ * always arrives with a glyph or a word, never alone:
  *
  * - `signal` — event severity and stat health: clean (green) · minor (yellow) · moderate (orange)
  *   · severe (red). Each has a `fill` for large areas with its own `onFill` ink, a `text` variant
  *   that clears 4.5:1 on `bg`, `surface` and `surfaceRaised` (use it for small marks too: dots,
  *   arrows, ring strokes), and a `faint` wash its `text` also reads on.
- * - `tier` — weekly league tiers Bronze → Silver → Gold → Platinum → Diamond: a two-stop `face`
- *   for the badge, `ink` for the glyph on that face, `text` for the tier name on a card.
  *
  * Every value is measured, not eyeballed: `src/ui/__tests__/tokens.test.ts` holds the floor.
  */
 
 export type Signal = 'clean' | 'minor' | 'moderate' | 'severe';
-export type LeagueTier = 'bronze' | 'silver' | 'gold' | 'platinum' | 'diamond';
 /** Stat health per the spec's threshold table; same strings as the scoring package's `statColor`. */
 export type StatHealth = 'green' | 'yellow' | 'red';
 
@@ -34,15 +31,6 @@ export type SignalColors = {
   text: string;
   /** Tinted wash behind a pill or banner. */
   faint: string;
-};
-
-export type TierColors = {
-  /** Badge gradient, top-left → bottom-right. */
-  face: [string, string];
-  /** Glyph drawn on the face. */
-  ink: string;
-  /** The tier's name on a card (≥ 4.5:1 on bg / surface). */
-  text: string;
 };
 
 export type ColorSet = {
@@ -67,7 +55,7 @@ export type ColorSet = {
   primary: string;
   primaryPressed: string;
   onPrimary: string;
-  /** Brand gold as a highlight (flame, gold tier, sparkle). Not for small text in light mode. */
+  /** Brand gold as a highlight (the top merit tier, sparkle). Not for small text in light mode. */
   gold: string;
   /** Ink on a gold fill. */
   onGold: string;
@@ -81,7 +69,6 @@ export type ColorSet = {
   infoFaint: string;
   scrim: string;
   signal: Record<Signal, SignalColors>;
-  tier: Record<LeagueTier, TierColors>;
   /** Deterministic avatar backgrounds; all carry `avatarInk` at ≥ 4.5:1. */
   avatar: readonly string[];
   avatarInk: string;
@@ -185,13 +172,6 @@ const light: ColorSet = {
     moderate: { fill: '#F07400', onFill: '#111113', text: '#AD4800', faint: '#FFEBDB' },
     severe: { fill: '#E0283F', onFill: '#FFFFFF', text: '#C21F33', faint: '#FDE4E7' },
   },
-  tier: {
-    bronze: { face: ['#D9844A', '#A85A24'], ink: '#2B1400', text: '#934B19' },
-    silver: { face: ['#D5DDE6', '#97A5B6'], ink: '#1B2735', text: '#56657A' },
-    gold: { face: ['#FFCB1F', '#D99A00'], ink: '#2E2100', text: '#755600' },
-    platinum: { face: ['#5FE3D2', '#1FA595'], ink: '#00302B', text: '#0A6E62' },
-    diamond: { face: ['#A9C6FF', '#7B86FF'], ink: '#0B1550', text: '#4A4BD0' },
-  },
   avatar: ['#FFC300', '#4FD1C5', '#7FB2FF', '#B79CFF', '#FF8FA3', '#FF9F43', '#5EE08A', '#A9BCD2'],
   avatarInk: '#111113',
   stamp: '#7A5C00',
@@ -233,13 +213,6 @@ const dark: ColorSet = {
     minor: { fill: '#FFE14A', onFill: '#111113', text: '#FFE14A', faint: '#302A0A' },
     moderate: { fill: '#FF8C2E', onFill: '#111113', text: '#FF9A45', faint: '#36220F' },
     severe: { fill: '#FF5468', onFill: '#111113', text: '#FF7A8A', faint: '#3A1620' },
-  },
-  tier: {
-    bronze: { face: ['#D9844A', '#A85A24'], ink: '#2B1400', text: '#F0A06A' },
-    silver: { face: ['#D5DDE6', '#97A5B6'], ink: '#1B2735', text: '#C9D3DE' },
-    gold: { face: ['#FFCB1F', '#D99A00'], ink: '#2E2100', text: '#FFC300' },
-    platinum: { face: ['#5FE3D2', '#1FA595'], ink: '#00302B', text: '#6FE6D6' },
-    diamond: { face: ['#A9C6FF', '#7B86FF'], ink: '#0B1550', text: '#A9C2FF' },
   },
   avatar: ['#FFC300', '#4FD1C5', '#7FB2FF', '#B79CFF', '#FF8FA3', '#FF9F43', '#5EE08A', '#A9BCD2'],
   avatarInk: '#111113',

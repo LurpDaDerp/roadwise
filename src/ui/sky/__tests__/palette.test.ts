@@ -66,7 +66,6 @@ describe.each([...moods, ...lightCloud].map((m) => [name(m), m] as const))('%s',
     }
     expectContrast(c.accent, c.accentFaint, AA, 'accent on its wash');
     expectContrast(c.accentText, c.accent, AA, 'accentText on accent');
-    for (const t of Object.values(c.tier)) expectContrast(t.text, c.bg, AA, 'tier name on bg');
   });
 
   test('the white sky inks, the sky accent and signals read on every backdrop stop, bare and under the cover, the sun glow, cloud, haze and a storm wash', () => {

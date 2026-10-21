@@ -1,7 +1,6 @@
 import { View } from 'react-native';
 
 import { useTheme } from '../theme';
-import type { LeagueTier } from '../tokens';
 import { Text } from './Text';
 
 export type AvatarSize = 'sm' | 'md' | 'lg' | 'xl';
@@ -33,8 +32,6 @@ export type AvatarProps = {
   username: string;
   /** sm 32 · md 40 · lg 56 · xl 88. Default `md`. */
   size?: AvatarSize;
-  /** Draws a ring in the league tier's colour around the disc. */
-  tier?: LeagueTier;
   /**
    * Avatars are decorative by default (the username is always printed beside them). Pass a label
    * only when the avatar stands alone.
@@ -44,11 +41,10 @@ export type AvatarProps = {
 };
 
 /** Initials on a colour picked from the username. No photos, ever (teen safety). */
-export function Avatar({ username, size = 'md', tier, accessibilityLabel, testID }: AvatarProps) {
+export function Avatar({ username, size = 'md', accessibilityLabel, testID }: AvatarProps) {
   const t = useTheme();
   const d = AVATAR_PT[size];
   const bg = t.colors.avatar[avatarColorIndex(username, t.colors.avatar.length)]!;
-  const ring = tier ? Math.max(2, Math.round(d / 18)) : 0;
 
   return (
     <View
@@ -58,36 +54,25 @@ export function Avatar({ username, size = 'md', tier, accessibilityLabel, testID
       importantForAccessibility={accessibilityLabel ? 'yes' : 'no-hide-descendants'}
       accessibilityElementsHidden={!accessibilityLabel}
       style={{
-        width: d + ring * 2,
-        height: d + ring * 2,
-        borderRadius: d,
-        padding: ring,
-        backgroundColor: tier ? t.colors.tier[tier].face[1] : 'transparent',
+        width: d,
+        height: d,
+        borderRadius: d / 2,
+        backgroundColor: bg,
+        alignItems: 'center',
+        justifyContent: 'center',
       }}
     >
-      <View
+      <Text
+        allowFontScaling={false}
         style={{
-          flex: 1,
-          borderRadius: d / 2,
-          backgroundColor: bg,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderWidth: tier ? 2 : 0,
-          borderColor: t.colors.bg,
+          fontFamily: t.type.display.fontFamily,
+          fontSize: Math.round(d * 0.4),
+          lineHeight: Math.round(d * 0.48),
+          color: t.colors.avatarInk,
         }}
       >
-        <Text
-          allowFontScaling={false}
-          style={{
-            fontFamily: t.type.display.fontFamily,
-            fontSize: Math.round(d * 0.4),
-            lineHeight: Math.round(d * 0.48),
-            color: t.colors.avatarInk,
-          }}
-        >
-          {avatarInitials(username)}
-        </Text>
-      </View>
+        {avatarInitials(username)}
+      </Text>
     </View>
   );
 }

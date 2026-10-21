@@ -1,13 +1,12 @@
 import { contrastRatio } from '@/ui/contrast';
 import { progressColor, progressTrack } from '@/ui/primitives/progress';
 import { plainBundle } from '@/ui/sky/palette';
-import { tokens, type LeagueTier, type Signal } from '@/ui/tokens';
+import { tokens, type Signal } from '@/ui/tokens';
 
 const AA = 4.5;
 const NON_TEXT = 3;
 const schemes = ['light', 'dark'] as const;
 const signals: Signal[] = ['clean', 'minor', 'moderate', 'severe'];
-const tiers: LeagueTier[] = ['bronze', 'silver', 'gold', 'platinum', 'diamond'];
 
 function expectContrast(fg: string, bg: string, min: number, what: string) {
   const r = contrastRatio(fg, bg);
@@ -61,14 +60,6 @@ describe.each(schemes)('%s scheme', (s) => {
     for (const [g, bg] of Object.entries(grounds)) expectContrast(v.text, bg, AA, `${sig}.text on ${g}`);
     expectContrast(v.text, v.faint, AA, `${sig}.text on faint`);
     expectContrast(v.onFill, v.fill, AA, `${sig}.onFill on fill`);
-  });
-
-  test.each(tiers)('tier %s: name on grounds, glyph on its face', (tier) => {
-    const v = c.tier[tier];
-    expectContrast(v.text, c.bg, AA, `${tier}.text on bg`);
-    expectContrast(v.text, c.surface, AA, `${tier}.text on surface`);
-    expectContrast(v.ink, v.face[0], AA, `${tier}.ink on face top`);
-    expectContrast(v.ink, v.face[1], NON_TEXT, `${tier}.ink on face bottom`);
   });
 
   test('avatar initials read on every avatar colour', () => {

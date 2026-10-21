@@ -18,7 +18,6 @@ import { StepDots, StepTransition } from '@/ui/primitives/StepTransition';
 import { Button } from '@/ui/primitives/Button';
 import { Text } from '@/ui/primitives/Text';
 import { StatTile } from '@/ui/primitives/StatTile';
-import { TierBadge } from '@/ui/primitives/TierBadge';
 import { ToggleRow } from '@/ui/primitives/ToggleRow';
 import { describeTrend, TrendArrow } from '@/ui/primitives/TrendArrow';
 import { ThemeProvider } from '@/ui/theme';
@@ -92,18 +91,18 @@ test('SegmentedControl exposes tabs and reports the chosen value', async () => {
   const onChange = jest.fn();
   await wrap(
     <SegmentedControl
-      accessibilityLabel="Leaderboard"
+      accessibilityLabel="History"
       segments={[
-        { value: 'friends', label: 'Friends & clan' },
-        { value: 'league', label: 'League' },
+        { value: 'all', label: 'All' },
+        { value: 'clean', label: 'Clean' },
       ]}
-      value="friends"
+      value="all"
       onChange={onChange}
     />
   );
-  expect(screen.getByRole('tab', { name: 'Friends & clan' })).toBeSelected();
-  await fireEvent.press(screen.getByRole('tab', { name: 'League' }));
-  expect(onChange).toHaveBeenCalledWith('league');
+  expect(screen.getByRole('tab', { name: 'All' })).toBeSelected();
+  await fireEvent.press(screen.getByRole('tab', { name: 'Clean' }));
+  expect(onChange).toHaveBeenCalledWith('clean');
 });
 
 test('SegmentedControl: the thumb sits under the selected segment from the render that selects it', async () => {
@@ -129,23 +128,18 @@ test('SegmentedControl: the thumb sits under the selected segment from the rende
 
 describe('progress', () => {
   test('a bar speaks its percent and clamps out-of-range values', async () => {
-    await wrap(<ProgressBar value={1.7} accessibilityLabel="Level progress" />);
-    expect(screen.getByRole('progressbar', { name: 'Level progress' })).toHaveAccessibilityValue({ now: 100 });
+    await wrap(<ProgressBar value={1.7} accessibilityLabel="Goal progress" />);
+    expect(screen.getByRole('progressbar', { name: 'Goal progress' })).toHaveAccessibilityValue({ now: 100 });
   });
 
   test('a ring can speak a custom value and draws its centre', async () => {
     await wrap(
-      <ProgressRing value={0.68} accessibilityLabel="Clan goal" accessibilityValueText="340 of 500 clean miles" />
+      <ProgressRing value={0.68} accessibilityLabel="Weekly goal" accessibilityValueText="34 of 50 clean miles" />
     );
-    expect(screen.getByRole('progressbar', { name: 'Clan goal' })).toHaveAccessibilityValue({
-      text: '340 of 500 clean miles',
+    expect(screen.getByRole('progressbar', { name: 'Weekly goal' })).toHaveAccessibilityValue({
+      text: '34 of 50 clean miles',
     });
   });
-});
-
-test('TierBadge names the tier and rank, so it never relies on colour', async () => {
-  await wrap(<TierBadge tier="platinum" rank={4} />);
-  expect(screen.getByLabelText('Platinum league, rank 4')).toBeOnTheScreen();
 });
 
 describe('StatTile', () => {

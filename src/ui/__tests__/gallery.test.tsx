@@ -20,7 +20,7 @@ test.each(['light', 'dark'] as const)('the gallery renders every primitive in %s
     </SafeAreaProvider>
   );
   expect(screen.getByRole('header', { name: 'Design system' })).toBeOnTheScreen();
-  expect(screen.getAllByLabelText('Diamond league').length).toBeGreaterThan(0);
+  expect(screen.getByLabelText('maya_drives')).toBeOnTheScreen();
   expect(screen.getByText('Take your first drive')).toBeOnTheScreen();
 });
 

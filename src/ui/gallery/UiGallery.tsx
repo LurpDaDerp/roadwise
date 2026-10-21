@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 
 import { ThemeProvider, useTheme } from '../theme';
-import type { LeagueTier, Signal, TypeVariant } from '../tokens';
+import type { Signal, TypeVariant } from '../tokens';
 import { Avatar } from '../primitives/Avatar';
 import { Banner } from '../primitives/Banner';
 import { Button } from '../primitives/Button';
@@ -24,7 +24,6 @@ import { Sheet } from '../primitives/Sheet';
 import { Skeleton } from '../primitives/Skeleton';
 import { StatTile } from '../primitives/StatTile';
 import { Text } from '../primitives/Text';
-import { TIER_ORDER, TierBadge } from '../primitives/TierBadge';
 import { ToggleRow } from '../primitives/ToggleRow';
 import { TrendArrow } from '../primitives/TrendArrow';
 import type { SkyMood } from '../sky/palette';
@@ -247,26 +246,17 @@ function Body() {
         </Row>
       </Section>
 
-      <Section title="Avatars and tiers">
+      <Section title="Avatars">
         <Row>
           {NAMES.map((n) => (
             <Avatar key={n} username={n} />
           ))}
         </Row>
         <Row>
-          <Avatar username="maya_drives" size="xl" tier="diamond" accessibilityLabel="maya_drives" />
-          <Avatar username="LurpDaDerp" size="lg" tier="gold" />
+          <Avatar username="maya_drives" size="xl" accessibilityLabel="maya_drives" />
+          <Avatar username="LurpDaDerp" size="lg" />
           <Avatar username="jordan" size="sm" />
         </Row>
-        {TIER_ORDER.map((tier: LeagueTier) => (
-          <TierBadge key={tier} tier={tier} />
-        ))}
-        <Row>
-          {TIER_ORDER.map((tier) => (
-            <TierBadge key={tier} tier={tier} size="sm" showLabel={false} />
-          ))}
-        </Row>
-        <TierBadge tier="platinum" size="lg" rank={2} />
       </Section>
 
       <Section title="Lists">
