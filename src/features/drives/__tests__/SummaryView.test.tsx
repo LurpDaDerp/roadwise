@@ -1,7 +1,8 @@
-import { screen, within } from '@testing-library/react-native';
+import { act, render, screen, within } from '@testing-library/react-native';
+import type { ReactElement } from 'react';
 
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
-import { fontFamilies, SHEET_DISMISS_FALLBACK_MS } from '@/ui';
+import { fontFamilies, SHEET_DISMISS_FALLBACK_MS, ThemeProvider, tokens } from '@/ui';
 import { plainBundle } from '@/ui/sky/palette';
 
 import { DAY, draw, drive, event, HOUR, NOW, press, result } from '../__fixtures__/drives';
@@ -122,6 +123,103 @@ describe('the drive score', () => {
     await draw(<SummaryView {...props({ drive: drive({ status: 'pending', estimate: true, pointsNet: 40, result: null }) })} />);
     expect(within(screen.getByTestId('summary-total-label')).getByTestId('estimate')).toBeOnTheScreen();
     expect(screen.getByTestId('summary-total-label')).toHaveStyle({ flexDirection: 'row', flexWrap: 'wrap' });
+  });
+
+  describe('the total keeps its room while it counts', () => {
+    // The count-up runs on requestAnimationFrame: fake timers drive it inside act().
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(async () => {
+      await act(async () => {
+        jest.runOnlyPendingTimers();
+      });
+      jest.useRealTimers();
+    });
+
+    const moving = (ui: ReactElement) => (
+      <ThemeProvider scheme="light" reduceMotion={false}>
+        {ui}
+      </ThemeProvider>
+    );
+    const hidden = { includeHiddenElements: true } as const;
+    /** What each copy in the total's room reads: the totals the row breaks its line on. */
+    const room = () =>
+      within(screen.getByTestId('summary-points-room', hidden))
+        .getAllByTestId(/^summary-points-room-/, hidden)
+        .map((n) => within(n).getByText(/\d/, hidden).props.children as string);
+    /** The line the score is laid out on: the wrapping row, the item beside it, and the score's own place on it. */
+    const line = () => {
+      const row = screen.getByTestId('summary-total');
+      const total = screen.getByTestId('summary-points').parent!;
+      return {
+        row: row.props.style,
+        total: total.props.style,
+        sameItem: screen.getByTestId('summary-points-room', hidden).parent === total,
+        score: screen.getByTestId('summary-score').props.style,
+      };
+    };
+
+    test('a fresh summary counts a wide total up from 0 while the row breaks its line on the final total, first frame to last', async () => {
+      await render(moving(<SummaryView {...props({ fresh: true, drive: drive({ pointsNet: 1240 }) })} />));
+      // First frame: the number on screen is still small, the room already holds the final total.
+      expect(within(screen.getByTestId('summary-points')).getByText('0')).toBeOnTheScreen();
+      expect(room()).toEqual(['+1,240']);
+      const first = line();
+      expect(first.sameItem).toBe(true);
+      expect(first.total).toMatchObject({ flexShrink: 1, minWidth: 0 });
+
+      await act(async () => {
+        jest.advanceTimersByTime(tokens.motion.countUp / 3);
+      });
+      const mid = within(screen.getByTestId('summary-points')).getByText(/^\+\d/).props.children as string;
+      expect(mid).not.toBe('+1,240');
+      expect(room()).toEqual(['+1,240']);
+      expect(line()).toEqual(first);
+
+      await act(async () => {
+        jest.advanceTimersByTime(tokens.motion.countUp + 200);
+      });
+      expect(within(screen.getByTestId('summary-points')).getByText('+1,240')).toBeOnTheScreen();
+      expect(room()).toEqual(['+1,240']);
+      expect(line()).toEqual(first);
+    });
+
+    test('the room is invisible: no height, clipped, transparent, hidden from screen readers and touches', async () => {
+      await render(moving(<SummaryView {...props({ drive: drive({ pointsNet: 1240 }) })} />));
+      const r = screen.getByTestId('summary-points-room', hidden);
+      expect(r).toHaveStyle({ height: 0, overflow: 'hidden', opacity: 0 });
+      expect(r).toHaveProp('accessibilityElementsHidden', true);
+      expect(r).toHaveProp('importantForAccessibility', 'no-hide-descendants');
+      expect(r).toHaveProp('pointerEvents', 'none');
+      expect(screen.queryByTestId('summary-points-room')).toBeNull();
+      // Screen readers hear the total once.
+      expect(screen.getAllByLabelText(/\+1,240 points/)).toHaveLength(1);
+    });
+
+    test('a total replaced while the card is open (an estimate by the server answer) keeps the room of the one it replaced', async () => {
+      const estimate = drive({ status: 'pending', estimate: true, pointsNet: 1240, result: null });
+      const view = await render(moving(<SummaryView {...props({ fresh: true, drive: estimate })} />));
+      await act(async () => {
+        jest.advanceTimersByTime(tokens.motion.countUp + 200);
+      });
+      await view.rerender(moving(<SummaryView {...props({ fresh: true, drive: drive({ pointsNet: 980 }) })} />));
+      expect(room()).toEqual(['+1,240', '+980']);
+      await act(async () => {
+        jest.advanceTimersByTime(tokens.motion.countUp + 200);
+      });
+      expect(within(screen.getByTestId('summary-points')).getByText('+980')).toBeOnTheScreen();
+      expect(room()).toEqual(['+1,240', '+980']);
+    });
+
+    test('no room without a score beside the total: none at the accessibility text sizes or with no score', async () => {
+      mockFontScale.mockReturnValue(SCORE_STACK_FONT_SCALE);
+      await render(moving(<SummaryView {...props({ drive: drive({ pointsNet: 1240 }) })} />));
+      expect(screen.getByTestId('summary-score')).toBeOnTheScreen();
+      expect(screen.queryByTestId('summary-points-room', hidden)).toBeNull();
+      mockFontScale.mockReturnValue(1);
+      await render(moving(<SummaryView {...props({ drive: drive({ miles: 0, pointsNet: 1240 }) })} />));
+      expect(screen.queryByTestId('summary-score')).toBeNull();
+      expect(screen.queryByTestId('summary-points-room', hidden)).toBeNull();
+    });
   });
 
   test('a rough drive is coloured further toward red', async () => {

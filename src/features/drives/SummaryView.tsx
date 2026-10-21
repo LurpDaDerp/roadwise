@@ -88,13 +88,51 @@ function DriveScore({ score, stacked }: { score: number; stacked: boolean }) {
 }
 
 /**
+ * Every total this card has shown, the latest last. A total that was replaced (an estimate by the
+ * server's answer) stays in the list, so its room still holds while the number counts down from it.
+ */
+function useTotalsShown(value: number): readonly number[] {
+  const [shown, setShown] = useState<readonly number[]>([value]);
+  if (shown.includes(value)) return shown;
+  // A new total lands in this same render (React's "adjust state when a prop changes").
+  const next = [...shown, value];
+  setShown(next);
+  return next;
+}
+
+/**
+ * The total's room on its line: invisible copies of every total the card has shown (no height,
+ * clipped and transparent, hidden from screen readers and touches) beside the counting number. The row breaks its line on
+ * the widest of them, never on the number mid-count, so the score keeps its line from the first
+ * frame of a count-up to the last. Numerals are tabular, so no number on the way is wider than
+ * the totals it runs between.
+ */
+function TotalRoom({ values }: { values: readonly number[] }) {
+  return (
+    <View
+      testID="summary-points-room"
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={{ height: 0, overflow: 'hidden', opacity: 0 }}
+    >
+      {values.map((v) => (
+        <PointsCounter key={v} value={v} react={false} size="hero" signed testID={`summary-points-room-${v}`} />
+      ))}
+    </View>
+  );
+}
+
+/**
  * The drive's total in bold, counting up on a fresh summary, with the drive score to its right. At
  * the accessibility text sizes the score goes under the total; below them the row wraps, so a total
- * too wide to share its line puts the score on the next one rather than under the number.
+ * too wide to share its line puts the score on the next one rather than under the number. Whether
+ * it fits is decided by the total itself (its room), not by the number counting up to it.
  */
 function Total({ value, fresh, estimate, score }: { value: number; fresh: boolean; estimate: boolean; score: number | null }) {
   const t = useTheme();
   const stacked = useFontScale() >= SCORE_STACK_FONT_SCALE;
+  const shown = useTotalsShown(value);
   return (
     <View style={{ gap: t.space.xs }}>
       <View testID="summary-total-label" style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: t.space.sm, rowGap: t.space.xs }}>
@@ -113,6 +151,7 @@ function Total({ value, fresh, estimate, score }: { value: number; fresh: boolea
       >
         <View style={stacked ? undefined : { flexShrink: 1, minWidth: 0 }}>
           <PointsCounter value={value} from={fresh ? 0 : undefined} react={fresh} size="hero" signed label="Points this drive" testID="summary-points" />
+          {score !== null && !stacked ? <TotalRoom values={shown} /> : null}
         </View>
         {score !== null ? <DriveScore score={score} stacked={stacked} /> : null}
       </View>
