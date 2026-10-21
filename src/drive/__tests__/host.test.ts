@@ -16,8 +16,8 @@ import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRep
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
 import { speedTintOf } from '@/drive/displayTint';
 import { isManualDrop, readDropNotice, writeDropNotice } from '@/drive/dropNotice';
-import { createDriveHost, DriveEndFailedError, JOURNAL_LINK_KEY, MAX_JOURNAL_REPLAY_ROWS, type PushToStartRequest } from '@/drive/host';
-import { CANCEL_KEY, finishPendingCancel } from '@/drive/cancel';
+import { createDriveHost, DriveEndFailedError, finishPendingCancel, JOURNAL_LINK_KEY, MAX_JOURNAL_REPLAY_ROWS, type PushToStartRequest } from '@/drive/host';
+import { CANCEL_KEY } from '@/drive/cancel';
 import { NOT_DRIVING_BUDGET_MS, NOT_DRIVING_KEY, readBudget } from '@/drive/notDriving';
 import type { Scheduler } from '@/drive/ticks';
 import { WAIT_COUNTDOWN_MS, WAIT_POPUP_MS, WAIT_TOTAL_MS } from '@/drive/waiting';

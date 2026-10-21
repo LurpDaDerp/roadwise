@@ -58,7 +58,7 @@ import { toLive, type DriveDisplay, type DriveDisplayState } from './display';
 import { displayLook } from './displayLook';
 import { speedTintOf } from './displayTint';
 import { clearDropNotice, writeDropNotice } from './dropNotice';
-import { clearCancelMarker, writeCancelMarker } from './cancel';
+import { clearCancelMarker, readCancelMarker, writeCancelMarker } from './cancel';
 import { budgetFor, NOT_DRIVING_KEY, NOT_DRIVING_PERSIST_EVERY_MS, spend, writeBudget, type NotDrivingBudget } from './notDriving';
 import { isBusyStatus } from './policy';
 import type { DriveSource } from './source';
@@ -309,6 +309,31 @@ export type DisplayUnit = 'mph' | 'km/h';
 /** A whole speed or limit in the display's unit; null stays null. */
 export const inDisplayUnit = (mph: number | null, unit: DisplayUnit): number | null =>
   mph === null ? null : Math.round(unit === 'km/h' ? mph * KMH_PER_MPH : mph);
+
+/**
+ * At a launch, before any drive is recovered: a "Not driving?" the last process did not finish is
+ * finished. Native is told first (iOS: the drive still recording is cancelled, an ended journal
+ * deleted), then the trip goes whole, then the marker. Returns the cancelled trip's id, or null
+ * when nothing was pending. Rejects (the marker kept for the next launch) when the trip cannot be
+ * deleted.
+ */
+export async function finishPendingCancel(db: Db, detect: DriveDetectApi | null, onError?: (e: unknown, ctx: string) => void): Promise<string | null> {
+  const c = await readCancelMarker(db);
+  if (c === null) return null;
+  if (detect !== null && detect.available && c.driveId !== null) {
+    try {
+      const state = await detect.getState();
+      if ((state.state === 'recording' || state.state === 'ending') && state.driveId === c.driveId) await detect.notDriving();
+      else await detect.discardDrive(c.driveId);
+    } catch (e) {
+      onError?.(e, 'notDriving');
+    }
+  }
+  await dropTrip(db, c.clientTripId);
+  await createSettingsRepo(db).remove(NOT_DRIVING_KEY).catch((e: unknown) => onError?.(e, 'notDriving'));
+  await clearCancelMarker(db);
+  return c.clientTripId;
+}
 
 /** The engine's end cause for native's own stop. */
 export function endCauseOfNative(cause: EndCauseNative | 'js'): EndCause {
