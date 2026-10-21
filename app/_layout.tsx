@@ -121,16 +121,20 @@ export default function RootLayout() {
   const { loaded, error } = useAppFonts();
   const { choice, loaded: appearanceLoaded } = useAppearance();
   // The sky the theme wears under Adaptive: the sun at the phone's last known position and the
-  // weather there. Read from the first render, behind the splash, so the first frame already has it.
-  // A static look turns it off: no position read and no weather request for the sky.
-  const mood = useSkyMood(appSkyPorts, { enabled: choice === 'adaptive' });
+  // weather there. Read behind the splash once the stored choice is known (the splash waits for it),
+  // so the first frame already has it. Until then, and under a static look, it is off: no position
+  // read and no weather request for the sky (the choice the store holds before its read is only
+  // the default, not the driver's).
+  const mood = useSkyMood(appSkyPorts, { enabled: appearanceLoaded && choice === 'adaptive' });
   // Under System, the phone's own scheme (the override is handed back, so this reads the phone's).
   const phoneScheme = useColorScheme() === 'dark' ? 'dark' : 'light';
   const staticScheme = choice === 'light' || choice === 'dark' ? choice : phoneScheme;
-  // The Live Activity and the Android drive notification wear the same look (`src/drive/displayLook.ts`).
+  // The Live Activity and the Android drive notification wear the same look (`src/drive/displayLook.ts`),
+  // from the moment the choice is known.
   useEffect(() => {
+    if (!appearanceLoaded) return;
     setDisplayLook(lookFor(choice === 'adaptive' ? skyBundle(mood) : plainBundle(staticScheme)));
-  }, [choice, mood, staticScheme]);
+  }, [appearanceLoaded, choice, mood, staticScheme]);
   const [timedOut, setTimedOut] = useState(false);
   // The record: SQLite opened and migrated, the interrupted drive recovered or adopted, the drive
   // host started, the sync runner started (`src/boot/bootstrap.ts`). The controller owns it: the

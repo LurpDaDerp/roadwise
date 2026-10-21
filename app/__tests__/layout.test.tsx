@@ -358,6 +358,38 @@ describe('the root layout', () => {
       position.mockRestore();
     }
   });
+
+  test('the failed-launch and switching-accounts screens wear the Appearance choice too', async () => {
+    const override = jest.spyOn(Appearance, 'setColorScheme').mockImplementation(() => {});
+    const position = jest.spyOn(appSkyPorts, 'position').mockResolvedValue(null);
+    try {
+      await act(async () => appearance.set('dark'));
+      mockController.state = { status: 'failed', runtime: null, error: new Error('disk'), generation: 0 };
+      await render(<RootLayout />);
+      expect(screen.getByRole('header')).toHaveStyle({ color: plainBundle('dark').colors.text });
+      expect(override).toHaveBeenLastCalledWith('dark');
+
+      await act(async () => appearance.set('light'));
+      expect(screen.getByRole('header')).toHaveStyle({ color: plainBundle('light').colors.text });
+      expect(override).toHaveBeenLastCalledWith('light');
+
+      await act(async () => mockController.set({ status: 'switching', runtime: null, error: null }));
+      expect(screen.getByText('Setting this phone up for you')).toHaveStyle({ color: plainBundle('light').colors.text });
+      expect(override).toHaveBeenLastCalledWith('light');
+
+      await act(async () => appearance.set('dark'));
+      expect(screen.getByText('Setting this phone up for you')).toHaveStyle({ color: plainBundle('dark').colors.text });
+      expect(override).toHaveBeenLastCalledWith('dark');
+
+      await act(async () => appearance.set('system'));
+      expect(override).toHaveBeenLastCalledWith('unspecified');
+      expect(position).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => appearance.set('adaptive'));
+      override.mockRestore();
+      position.mockRestore();
+    }
+  });
 });
 
 describe('sign-out and sign-in reach the drive host (final review I3; final-fix security I-1)', () => {
