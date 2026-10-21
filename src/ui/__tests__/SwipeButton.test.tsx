@@ -6,6 +6,7 @@ import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-han
 import { getAnimatedStyle } from 'react-native-reanimated';
 
 import {
+  SWIPE_CATCH_MS,
   SWIPE_COMMIT,
   SWIPE_DISARM_PT,
   SWIPE_SETTLE_MS,
@@ -147,6 +148,91 @@ test('dragged back well under the commit point it lets go of the end and lands n
   await drag([TRAVEL, swipeCommitAt(TRAVEL) - SWIPE_DISARM_PT - 6]);
   expect(onSwipe).not.toHaveBeenCalled();
   expect(Haptics.impactAsync).toHaveBeenCalledTimes(1);
+});
+
+/** The pan's own callbacks, to hold a drag between frames (a finger position at a time). */
+type Pan = {
+  handlers: {
+    onUpdate(e: { translationX: number }): void;
+    onEnd(e: { translationX: number; velocityX: number }, success: boolean): void;
+  };
+};
+
+test('let go of the end, the knob slides back to the finger instead of jumping to it, then follows it', async () => {
+  await renderSwipe();
+  const pan = getByGestureTestId('swipe-pan') as unknown as Pan;
+  const move = (translationX: number) => act(() => pan.handlers.onUpdate({ translationX }));
+  await move(TRAVEL);
+  await act(() => jest.advanceTimersByTime(1000));
+  expect(knobX()).toBeCloseTo(TRAVEL, 0);
+  // well back under the point (about 78 pt): it lets go of the end…
+  const back = swipeCommitAt(TRAVEL) - SWIPE_DISARM_PT - 40;
+  await move(back);
+  await act(() => jest.advanceTimersByTime(32));
+  // …and two frames on the knob is on its way back, not already there (no 158 pt jump)
+  expect(knobX()).toBeLessThan(TRAVEL - 1);
+  expect(knobX()).toBeGreaterThan(back + 20);
+  await act(() => jest.advanceTimersByTime(SWIPE_CATCH_MS));
+  expect(knobX()).toBeCloseTo(back, 0);
+  // caught up, it is under the finger again
+  await move(back - 20);
+  await act(() => jest.advanceTimersByTime(20));
+  expect(knobX()).toBeCloseTo(back - 20, 0);
+  expect(onSwipe).not.toHaveBeenCalled();
+});
+
+test('a finger that keeps moving while the knob catches up: the knob never jumps, and ends under the finger', async () => {
+  await renderSwipe();
+  const pan = getByGestureTestId('swipe-pan') as unknown as Pan;
+  await act(() => pan.handlers.onUpdate({ translationX: TRAVEL }));
+  await act(() => jest.advanceTimersByTime(1000));
+  let prev = knobX();
+  // a fast drag back, a move each frame (16 ms): the knob slides after the finger, never 60 pt in one frame
+  for (const t of [100, 80, 60, 40, 30, 20, 20, 20, 20, 20, 20, 20]) {
+    await act(() => pan.handlers.onUpdate({ translationX: t }));
+    await act(() => jest.advanceTimersByTime(16));
+    const now = knobX();
+    expect(prev - now).toBeLessThan(60);
+    prev = now;
+  }
+  expect(knobX()).toBeCloseTo(20, 0);
+});
+
+test('armed again while the knob is still sliding back: it turns for the end from where it shows, never dipping back', async () => {
+  await renderSwipe();
+  const pan = getByGestureTestId('swipe-pan') as unknown as Pan;
+  await act(() => pan.handlers.onUpdate({ translationX: TRAVEL }));
+  await act(() => jest.advanceTimersByTime(1000));
+  await act(() => pan.handlers.onUpdate({ translationX: 70 }));
+  await act(() => jest.advanceTimersByTime(32));
+  const shown = knobX();
+  expect(shown).toBeLessThan(TRAVEL - 1);
+  await act(() => pan.handlers.onUpdate({ translationX: TRAVEL }));
+  for (let f = 0; f < 30; f += 1) {
+    await act(() => jest.advanceTimersByTime(16));
+    expect(knobX()).toBeGreaterThan(shown - 1);
+  }
+  expect(knobX()).toBeCloseTo(TRAVEL, 0);
+  // a tick each time it arms
+  expect(Haptics.impactAsync).toHaveBeenCalledTimes(2);
+});
+
+test('a flick while the knob is still sliding back fires it, and the knob slides on to the end from where it shows, never past it', async () => {
+  await renderSwipe();
+  const pan = getByGestureTestId('swipe-pan') as unknown as Pan;
+  await act(() => pan.handlers.onUpdate({ translationX: TRAVEL }));
+  await act(() => jest.advanceTimersByTime(1000));
+  await act(() => pan.handlers.onUpdate({ translationX: 100 }));
+  await act(() => jest.advanceTimersByTime(16));
+  // a flick from 100 pt: it fires, and the knob slides on to the end without overshooting it
+  await act(() => pan.handlers.onEnd({ translationX: 100, velocityX: 1200 }, true));
+  for (let f = 0; f < 20; f += 1) {
+    await act(() => jest.advanceTimersByTime(16));
+    expect(knobX()).toBeLessThanOrEqual(TRAVEL + 0.5);
+  }
+  expect(knobX()).toBeCloseTo(TRAVEL, 0);
+  await act(() => jest.advanceTimersByTime(20));
+  expect(onSwipe).toHaveBeenCalledTimes(1);
 });
 
 test('dragged back a little (inside 24 pt of the point) it stays armed and fires on release', async () => {

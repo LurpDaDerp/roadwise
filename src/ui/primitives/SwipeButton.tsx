@@ -3,7 +3,15 @@ import * as Haptics from 'expo-haptics';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { interpolate, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, {
+  Easing,
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+  type SharedValue,
+} from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
 import type { IconName } from './Button';
@@ -49,6 +57,8 @@ export const SWIPE_COMMIT = 0.6;
 export const SWIPE_COMMIT_MIN_PT = 72;
 /** Armed, the knob stays at the end until the finger comes back this far (pt) under the commit point. */
 export const SWIPE_DISARM_PT = 24;
+/** Let go of the end, the knob slides back to the finger over this long (ms) instead of jumping to it. */
+export const SWIPE_CATCH_MS = 160;
 /** A quick flick counts when let go at this speed (pt/s) or faster… */
 export const SWIPE_FLING_PT_S = 800;
 /** …past this much of the travel (and at least `SWIPE_FLING_MIN_PT`, capped at the travel). */
@@ -72,14 +82,27 @@ const PAD = 6;
 const SPRING = { damping: 18, stiffness: 220, mass: 0.6 } as const;
 
 /**
+ * What is left of the knob's slide back to the finger joins `x`, so whatever moves the knob next (the
+ * magnet, letting go) starts from where it shows.
+ */
+function land(x: SharedValue<number>, lag: SharedValue<number>) {
+  'worklet';
+  const l = lag.get();
+  if (l === 0) return;
+  lag.set(0);
+  x.set(x.get() + l);
+}
+
+/**
  * Swipe-to-confirm: a capsule with a knob at its left carrying the icon and the words to its right.
  * The driver drags the knob right; an accent fill opens behind it as it goes. Past the commit point
  * (`swipeCommitAt`: 60 % of the way, at least 72 pt) a light tick says it will count and the knob
  * springs the rest of the way by itself; dragging back more than 24 pt under the point lets it go
- * again. Letting go while it is armed, or flicking it (800 pt/s or faster, past 40 % of the way and at
- * least 56 pt), fires `onSwipe` with a success haptic. Only letting go decides: letting go anywhere
- * else springs the knob home and does nothing, and a tap does nothing, so a knock or a brush cannot
- * fire it. The drag runs on the UI thread. A screen reader's double-tap is a deliberate act, so the
+ * again, the knob sliding back to the finger (`SWIPE_CATCH_MS`) and following it from there. Letting
+ * go while it is armed, or flicking it (800 pt/s or faster, past 40 % of the way and at least 56 pt),
+ * fires `onSwipe` with a success haptic. Only letting go decides: letting go anywhere else springs the
+ * knob home and does nothing, and a tap does nothing, so a knock or a brush cannot fire it. The drag
+ * runs on the UI thread. A screen reader's double-tap is a deliberate act, so the
  * `activate` action fires straight away.
  *
  * While `busy` the knob stays at the end with a spinner. When `busy` clears (the action failed), or
@@ -99,7 +122,10 @@ export function SwipeButton({
   verticalSlop = 16,
 }: SwipeButtonProps) {
   const knob = height - PAD * 2;
+  // The knob sits at `x + lag`: `x` is where the drag (or a spring) puts it, `lag` how far it still
+  // trails that after letting go of the end, easing to 0 so it never jumps to the finger.
   const x = useSharedValue(0);
+  const lag = useSharedValue(0);
   const travel = useSharedValue(0);
   const armed = useSharedValue(false);
   // Swipes so far: the one just made waits a moment for its action to go busy before sliding home.
@@ -150,12 +176,16 @@ export function SwipeButton({
             // Armed: the knob sits at the end until the finger comes well back under the point.
             if (nx >= at - SWIPE_DISARM_PT) return;
             armed.set(false);
+            // It slides back from where it is (at or on its way to the end) to the finger.
+            lag.set(x.get() + lag.get() - nx);
+            lag.set(withTiming(0, { duration: SWIPE_CATCH_MS, easing: Easing.inOut(Easing.quad) }));
             x.set(nx);
             return;
           }
           if (m > 0 && nx >= at) {
             // The magnet: the knob springs on to the end by itself.
             armed.set(true);
+            land(x, lag);
             x.set(withSpring(m, SPRING));
             scheduleOnRN(tick);
             return;
@@ -168,12 +198,13 @@ export function SwipeButton({
           armed.set(false);
           const dx = Math.min(Math.max(e.translationX, 0), m);
           const fling = e.velocityX >= SWIPE_FLING_PT_S && dx >= swipeFlingFrom(m);
+          land(x, lag);
           if (success && m > 0 && (wasArmed || fling)) {
             x.set(withTiming(m, { duration: 120 }));
             scheduleOnRN(commit);
           } else x.set(withSpring(0, SPRING));
         }),
-    [testID, inactive, verticalSlop, travel, x, armed, tick, commit]
+    [testID, inactive, verticalSlop, travel, x, lag, armed, tick, commit]
   );
 
   const onLayout = useCallback(
@@ -183,14 +214,14 @@ export function SwipeButton({
     [travel, knob]
   );
 
-  const knobStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.get() }] }));
-  const fillStyle = useAnimatedStyle(() => ({
-    width: x.get() + knob + PAD * 2,
-    opacity: interpolate(x.get(), [0, 24], [0, 1], 'clamp'),
-  }));
+  const knobStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.get() + lag.get() }] }));
+  const fillStyle = useAnimatedStyle(() => {
+    const at = x.get() + lag.get();
+    return { width: at + knob + PAD * 2, opacity: interpolate(at, [0, 24], [0, 1], 'clamp') };
+  });
   const labelStyle = useAnimatedStyle(() => {
     const m = travel.get();
-    return { opacity: m > 0 ? interpolate(x.get(), [0, m * 0.6], [1, 0], 'clamp') : 1 };
+    return { opacity: m > 0 ? interpolate(x.get() + lag.get(), [0, m * 0.6], [1, 0], 'clamp') : 1 };
   });
 
   return (
