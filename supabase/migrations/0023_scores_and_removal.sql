@@ -348,6 +348,12 @@ begin
   if p_user is null or p_client_trip_id is null or p_started_at is null or p_local_day is null then
     raise exception 'user, clientTripId, startedAt and localDay are required' using errcode = 'invalid_parameter_value';
   end if;
+  -- a drive dated to end more than 10 minutes from now is moved back to end now (apply_drive's
+  -- rule), so the merge is decided on the times that will be stored
+  if p_ended_at is not null and p_ended_at > now() + interval '10 minutes' then
+    p_started_at := p_started_at - (p_ended_at - now());
+    p_ended_at := now();
+  end if;
   if (p_start_lat is null) <> (p_start_lng is null)
      or (p_start_lat is not null and (p_start_lat not between -90 and 90 or p_start_lng not between -180 and 180)) then
     raise exception 'start must be a lat/lng pair on the globe' using errcode = 'invalid_parameter_value';
@@ -537,6 +543,12 @@ declare
   v_exp record;
   v_slow int; v_up int; v_turn int; v_limit int; v_moving int;
   v_own_slow int; v_own_up int; v_own_turn int; v_own_limit int; v_own_moving int;
+  v_count_cap int;
+  v_shift interval := interval '0';
+  v_shift_ms numeric := 0;
+  v_own_started timestamptz;
+  v_own_local_day date;
+  v_ev_ms numeric;
   v_challenges jsonb := '[]'::jsonb;
   v_achievements jsonb := '[]'::jsonb;
   v_resp jsonb;
@@ -583,6 +595,21 @@ begin
      or v_dur not between 0 and 43200 or char_length(v_poly) > 16384 or v_ended <= v_started or v_ended - v_started > interval '12 hours' then
     raise exception 'payload metrics are out of range' using errcode = 'invalid_parameter_value';
   end if;
+  -- the clock: a drive dated to end more than 10 minutes from now would sit outside the rating's
+  -- window today and count in full later, so it is moved back, start, end and events together, to
+  -- end now (its length kept, its local day and week read again; drive_context applies the same
+  -- rule). Nothing is refused, so a phone with a wrong clock never loses a drive. A drive dated in
+  -- the past is taken as dated: it weighs less (or nothing, past 90 days), which is no more than
+  -- the driver could get by never uploading it.
+  if v_ended > now() + interval '10 minutes' then
+    v_shift := v_ended - now();
+    v_shift_ms := extract(epoch from v_shift) * 1000;
+    v_started := v_started - v_shift;
+    v_ended := now();
+    v_local_day := (v_started at time zone v_tz)::date;
+  end if;
+  v_own_started := v_started;
+  v_own_local_day := v_local_day;
   -- DashPal: the stored seconds and their flag (absent = none)
   dc := case when jsonb_typeof(p -> 'dashcam') = 'object' then p -> 'dashcam' else null end;
   pdc := case when jsonb_typeof(pl -> 'dashcam') = 'object' then pl -> 'dashcam' else null end;
@@ -609,11 +636,19 @@ begin
     raise exception 'exposure counters are out of range' using errcode = 'invalid_parameter_value';
   end if;
   select * into v_exp from private.estimate_exposure(v_miles, v_dur);
-  v_own_slow := least(20000, coalesce(floor((ex ->> 'slowdowns')::numeric)::int, v_exp.slowdowns));
-  v_own_up := least(20000, coalesce(floor((ex ->> 'speedups')::numeric)::int, v_exp.speedups));
-  v_own_turn := least(20000, coalesce(floor((ex ->> 'turns')::numeric)::int, v_exp.turns));
-  v_own_moving := least(43200, coalesce(floor((ex ->> 'movingS')::numeric)::int, v_exp.moving_s));
-  v_own_limit := least(v_own_moving, least(43200, coalesce(floor((ex ->> 'limitS')::numeric)::int, v_exp.limit_s)));
+  -- the counters are the phone's word, so each is held to what the drive itself allows (clamped,
+  -- never refused, so a real drive is never lost): moving time within the drive's length and limit
+  -- time within moving time; a slowdown or a speed-up needs a 12 mph swing (15 s of moving or more
+  -- each) and a turn 60 degrees at 10 mph or more (10 s or more each); and no count above 40 a mile.
+  -- The estimate's densest knot is 3 slowdowns or speed-ups and 2 turns a mile (a 10 mph average),
+  -- and stop-and-go with a stop every 100 m is about 16 a mile, so 40 a mile (one every 40 m) is far
+  -- above any real drive and only cuts a count claimed to dilute the drive's event rates.
+  v_own_moving := least(v_dur, 43200, coalesce(floor((ex ->> 'movingS')::numeric)::int, v_exp.moving_s));
+  v_own_limit := least(v_own_moving, coalesce(floor((ex ->> 'limitS')::numeric)::int, v_exp.limit_s));
+  v_count_cap := least(20000, ceil(v_miles * 40)::int);
+  v_own_slow := least(v_count_cap, greatest(1, ceil(v_own_moving / 15.0)::int), coalesce(floor((ex ->> 'slowdowns')::numeric)::int, v_exp.slowdowns));
+  v_own_up := least(v_count_cap, greatest(1, ceil(v_own_moving / 15.0)::int), coalesce(floor((ex ->> 'speedups')::numeric)::int, v_exp.speedups));
+  v_own_turn := least(v_count_cap, greatest(1, ceil(v_own_moving / 10.0)::int), coalesce(floor((ex ->> 'turns')::numeric)::int, v_exp.turns));
   v_slow := v_own_slow; v_up := v_own_up; v_turn := v_own_turn; v_limit := v_own_limit; v_moving := v_own_moving;
 
   perform 1 from public.progress where user_id = v_user for update;
@@ -689,14 +724,20 @@ begin
        or (e ->> 'type' in ('eyes_off', 'drowsy') and e ->> 'tier' <> 'severe') then
       raise exception 'event needs id, type, tier, startedAt and durationS' using errcode = 'invalid_parameter_value';
     end if;
-    if (e ->> 'startedAt')::numeric not between extract(epoch from v_started) * 1000 - 60000 and extract(epoch from v_ended) * 1000 + 60000 then
+    -- an event the drive already holds (the merge target's, re-sent) stays exactly as stored
+    if exists (select 1 from public.trip_events x where x.trip_id = v_trip and x.client_event_id = (e ->> 'id')::uuid) then
+      continue;
+    end if;
+    -- the upload's own event, moved with its drive when the clock rule moved it
+    v_ev_ms := (e ->> 'startedAt')::numeric - v_shift_ms;
+    if v_ev_ms not between extract(epoch from v_started) * 1000 - 60000 and extract(epoch from v_ended) * 1000 + 60000 then
       raise exception 'event starts outside the drive' using errcode = 'invalid_parameter_value';
     end if;
     if jsonb_typeof(e -> 'measured') = 'object' and pg_column_size(e -> 'measured') > 1024 then
       raise exception 'event measured is too large' using errcode = 'invalid_parameter_value';
     end if;
     insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, started_at, duration_s, zone, lat, lng, measured, status)
-      values (v_trip, (e ->> 'id')::uuid, v_user, e ->> 'type', e ->> 'tier', to_timestamp((e ->> 'startedAt')::numeric / 1000.0),
+      values (v_trip, (e ->> 'id')::uuid, v_user, e ->> 'type', e ->> 'tier', to_timestamp(v_ev_ms / 1000.0),
         least(43200, greatest(0, (e ->> 'durationS')::numeric)), case when e ->> 'zone' in ('school', 'construction') then e ->> 'zone' end,
         (e ->> 'lat')::double precision, (e ->> 'lng')::double precision,
         case when jsonb_typeof(e -> 'measured') = 'object' then e -> 'measured' else '{}'::jsonb end,
@@ -720,8 +761,8 @@ begin
         dashcam_device_id, dashcam_moving_s, dashcam_covered_s, dashcam_synced,
         polyline, scored, merged_into, origin, not_driving_expired, slowdowns, speedups, turns, limit_s, moving_s,
         scoring_version, app_version)
-      values (v_user, v_client, to_timestamp((pl ->> 'startedAt')::bigint / 1000.0), v_ended, (pl ->> 'localDay')::date,
-        private.league_week(to_timestamp((pl ->> 'startedAt')::bigint / 1000.0)), pl ->> 'tz',
+      values (v_user, v_client, v_own_started, v_ended, v_own_local_day,
+        private.league_week(v_own_started), pl ->> 'tz',
         (pl ->> 'miles')::numeric, (pl ->> 'nightMiles')::numeric, (pl ->> 'durationS')::int,
         pdc ->> 'deviceId', coalesce((pdc ->> 'movingS')::int, 0), coalesce((pdc ->> 'coveredS')::int, 0), coalesce((pdc ->> 'synced')::boolean, false),
         coalesce(pl ->> 'polyline', ''), false, v_trip,
