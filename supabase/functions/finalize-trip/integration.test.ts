@@ -1,4 +1,4 @@
-// Integration: the real handlers against the local stack (migrations 0001–0016) over the real
+// Integration: the real handlers against the local stack (migrations 0001–0022) over the real
 // engine. Runs only when FUNCTIONS_IT_DB_URL is readable — `npm run functions:test` has no env
 // permission and skips it; run it with
 //
@@ -54,8 +54,10 @@ Deno.test({
       const first = await handleFinalizeTrip(post('finalize-trip', base), deps);
       assertEquals(first.status, 200);
       const r1 = await first.json();
-      // a fresh user: streak 0 → 118, minus the minor hard brake
-      assertEquals([r1.scored, r1.net, r1.streak.after, r1.progress.points, r1.achievements, r1.league.placed], [true, 108, 1, 108, ['first_drive'], true]);
+      // a fresh user: streak 0 → 11.8 × 20 = 236, minus the minor hard brake (8)
+      assertEquals([r1.scored, r1.net, r1.streak.after, r1.progress.points, r1.achievements, r1.league.placed], [true, 228, 1, 228, ['first_drive'], true]);
+      // one minor hard brake on 12 mi: braking 95, the rest 100 → 99.3; ranked from 10 mi
+      assertEquals([r1.progress.safetyRating, r1.progress.ranked, r1.breakdown.pointsPerMile], [99.3, true, 20]);
       assertEquals(r1.clientTripId, TRIP);
 
       // 2. replay: byte-identical stored response, nothing applied twice
@@ -84,28 +86,34 @@ Deno.test({
       assertEquals(merged.status, 200);
       const r2 = await merged.json();
       assertEquals([r2.mergedInto, r2.clientTripId, r2.tripId], [TRIP, TRIP_2, r1.tripId]);
-      // 15 mi, 14.8 safe, two minor hard brakes (10 + 12.5 → 10 + 13 = 23), streak 0: 148 → 125
-      assertEquals([r2.breakdown.safeMiles, r2.breakdown.gains, r2.breakdown.penalties, r2.net, r2.streak.before, r2.streak.after], [14.8, 148, 23, 125, 0, 1]);
-      const [trip] = await sql`select miles, points_net, rev, n_hard_brake, polyline from public.trips where id = ${r1.tripId}::uuid`;
-      assertEquals([Number(trip.miles), trip.points_net, trip.rev, trip.n_hard_brake], [15, 125, 2, 2]);
+      // 15 mi, 14.8 safe, two minor hard brakes (8 + 10 at ×1.25 = 18), streak 0: 296 → 278
+      assertEquals([r2.breakdown.safeMiles, r2.breakdown.gains, r2.breakdown.penalties, r2.net, r2.streak.before, r2.streak.after], [14.8, 296, 18, 278, 0, 1]);
+      const [trip] = await sql`select miles, points_net, rev, n_hard_brake, polyline, duration_s, scoring_version from public.trips where id = ${r1.tripId}::uuid`;
+      assertEquals([Number(trip.miles), trip.points_net, trip.rev, trip.n_hard_brake, trip.duration_s, trip.scoring_version], [15, 278, 2, 2, 2880, 6]);
       // the union's route is both drives' runs, space-joined and otherwise untouched: two runs, no line across the stop
       assertEquals(trip.polyline, `${base.polyline} ${second.polyline}`);
       const [{ points, lifetime }] = await sql`select points, lifetime from public.progress where user_id = ${USER}::uuid`;
-      assertEquals([points, lifetime], [125, 125]);
+      assertEquals([points, lifetime], [278, 278]);
+      // two brakes over 15 mi: braking 100 / (1 + 20 / 15 / 16) = 92.3 → (92.3 + 600) / 7 = 98.9
+      const [{ safety_rating: ratingBefore }] = await sql`select safety_rating from public.progress where user_id = ${USER}::uuid`;
+      assertEquals(Number(ratingBefore), 98.9);
 
-      // 4. dispute the first hard brake as a hazard: accepted, re-scored, +13 credited (the repeat multiplier moves to the other brake)
+      // 4. dispute the first hard brake as a hazard: accepted, re-scored with the stored length and version, +10 credited
+      // (the repeat multiplier moves to the other brake)
       const dispute = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), deps);
       assertEquals(dispute.status, 200);
       const d = await dispute.json();
-      assertEquals([d.status, d.net, d.delta, d.progress.points, d.quotaLeft], ['accepted', 138, 13, 138, 2]);
+      assertEquals([d.status, d.net, d.delta, d.progress.points, d.quotaLeft], ['accepted', 288, 10, 288, 2]);
       // the itemised list the device shows now sums to the net: one hard brake left at its first-of-type penalty
-      assertEquals(d.breakdown.events, [{ id: EVENT_B, penalty: 10 }]);
-      assertEquals([d.breakdown.net, d.breakdown.penalties], [138, 10]);
+      assertEquals(d.breakdown.events, [{ id: EVENT_B, penalty: 8 }]);
+      assertEquals([d.breakdown.net, d.breakdown.penalties, d.breakdown.pointsPerMile], [288, 8, 20]);
+      // one brake over 15 mi: braking 96.0 → 99.4
+      assertEquals(d.progress.safetyRating, 99.4);
       // a repeat (the first answer was lost) answers what the first did and credits nothing again (0016)
       const twice = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), deps);
       assertEquals([twice.status, await twice.json()], [200, d]);
       const [{ points: afterRepeat }] = await sql`select points from public.progress where user_id = ${USER}::uuid`;
-      assertEquals(afterRepeat, 138);
+      assertEquals(afterRepeat, 288);
       // the same event for another reason is still refused
       const other = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'wrong_limit' }), deps);
       assertEquals([other.status, (await other.json()).code], [409, 'already_disputed']);
@@ -158,24 +166,26 @@ Deno.test({
       await sql`insert into auth.users (id, email) values (${user}::uuid, ${`it-${user}@example.com`})`;
       await sql`update public.profiles set username = ${'dp_' + user.slice(0, 8)}, onboarded_at = now() where id = ${user}::uuid`;
 
-      // streak 0, DashPal: 118 x 1.25 = 147.5 -> 148, minus 10 (brake) and 50 (drowsy)
+      // streak 0, DashPal: 236 x 1.25 = 295, minus 8 (brake) and 40 (drowsy)
       const res = await handleFinalizeTrip(post('finalize-trip', drive), deps);
       assertEquals(res.status, 200);
       const r = await res.json();
-      assertEquals([r.net, r.breakdown.dashcamMult, r.breakdown.mult, r.breakdown.gains, r.breakdown.penalties, r.breakdown.ratingPenalty, r.breakdown.activeEventCount], [88, 1.25, 1.25, 148, 60, 10, 1]);
+      assertEquals([r.net, r.breakdown.dashcamMult, r.breakdown.mult, r.breakdown.gains, r.breakdown.penalties, r.breakdown.ratingPenalty, r.breakdown.activeEventCount], [247, 1.25, 1.25, 295, 48, 10, 1]);
+      // braking 95.0 over 12 mi; Attention: the drowsy (50) over the 10.8 watched miles (12 × 1350 / 1500) → 77.6; (95.0 + 77.6 + 600) / 8 = 96.6
+      assertEquals(r.progress.safetyRating, 96.6);
       const [t1] = await sql`select dashcam_device_id, dashcam_moving_s, dashcam_covered_s, dashcam_synced, dashcam_on, n_events, n_dashcam, clean, rating_penalty, scoring_version
         from public.trips where id = ${r.tripId}::uuid`;
       assertEquals(
         [t1.dashcam_device_id, t1.dashcam_moving_s, t1.dashcam_covered_s, t1.dashcam_synced, t1.dashcam_on, t1.n_events, t1.n_dashcam, t1.clean, t1.rating_penalty, t1.scoring_version],
-        [DASHCAM, 1500, 1350, true, true, 1, 1, false, 10, 4]
+        [DASHCAM, 1500, 1350, true, true, 1, 1, false, 10, 6]
       );
 
       // the brake was a hazard: the drowsy stays charged and no longer stands between the drive and clean
       const hazard = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), deps);
       assertEquals(hazard.status, 200);
       const h = await hazard.json();
-      // (118 + 25) x 1.25 = 178.75 -> 179, minus 50
-      assertEquals([h.status, h.net, h.delta, h.quotaLeft, h.breakdown.cleanBonus, h.breakdown.dashcamMult], ['accepted', 129, 41, 2, 25, 1.25]);
+      // (236 + 50) x 1.25 = 357.5 -> 358, minus 40
+      assertEquals([h.status, h.net, h.delta, h.quotaLeft, h.breakdown.cleanBonus, h.breakdown.dashcamMult], ['accepted', 318, 71, 2, 50, 1.25]);
       const [t2] = await sql`select n_events, n_dashcam, clean from public.trips where id = ${r.tripId}::uuid`;
       assertEquals([t2.n_events, t2.n_dashcam, t2.clean], [0, 1, true]);
 
@@ -183,9 +193,11 @@ Deno.test({
       const wrong = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: DROWSY, reason: 'camera_wrong' }), deps);
       assertEquals(wrong.status, 200);
       const w = await wrong.json();
-      assertEquals([w.status, w.net, w.delta, w.quotaLeft, w.breakdown.gains], ['accepted', 179, 50, 2, 179]);
+      assertEquals([w.status, w.net, w.delta, w.quotaLeft, w.breakdown.gains], ['accepted', 358, 40, 2, 358]);
       const [t3] = await sql`select n_dashcam, points_net from public.trips where id = ${r.tripId}::uuid`;
-      assertEquals([t3.n_dashcam, t3.points_net], [0, 179]);
+      assertEquals([t3.n_dashcam, t3.points_net], [0, 358]);
+      // nothing left on the drive: 100
+      assertEquals(w.progress.safetyRating, 100);
       const again = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'camera_wrong' }), deps);
       assertEquals([again.status, (await again.json()).code], [409, 'already_disputed']);
     } finally {

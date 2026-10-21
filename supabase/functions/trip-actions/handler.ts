@@ -100,7 +100,8 @@ export async function handleTripAction(req: Request, deps: ActionsDeps): Promise
         rejectReason: d.rejectReason,
       };
       if (d.status === 'accepted' && d.rescore) {
-        // The stored input with the event already marked removed, under the drive's own context.
+        // The stored input with the event already marked removed, under the drive's own context
+        // and the rules it was first scored under.
         const bd = scoreDrive(
           {
             miles: d.rescore.input.miles,
@@ -108,6 +109,11 @@ export async function handleTripAction(req: Request, deps: ActionsDeps): Promise
             loopRepeat: d.rescore.input.loopRepeat,
             // a DashPal drive keeps its ×1.25, so an accepted dispute never lowers the net
             dashcam: d.rescore.input.dashcam,
+            // the stored length, so a scored drive stays scored (the minimum-drive rule reads it)
+            durationS: d.rescore.input.durationS,
+            // a drive first scored before the earn rate doubled keeps 10 a mile and its 25 bonus:
+            // the re-score moves the net by the disputed event's penalty, never by a new rate
+            scoringVersion: d.rescore.input.scoringVersion,
             events: d.rescore.input.events as DriveEvent[],
           },
           d.rescore.ctx

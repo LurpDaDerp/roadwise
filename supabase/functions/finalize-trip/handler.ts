@@ -40,6 +40,8 @@ import {
   keepDashcamEvents,
   scoreDrive,
   SCORING_VERSION,
+  SPEEDING_MAX_OVER_MPH,
+  speedingChargedS,
   type DriveContext,
   type DriveEvent,
   type DriveInput,
@@ -77,8 +79,23 @@ const fromStored = (e: StoredEvent): EnvelopeEvent => ({
   measured: e.measured,
 });
 
+type PayloadEvent = FinalizeTripPayloadV3['events'][number];
+
+/**
+ * What an uploaded event measured, as stored and scored: a speeding event's `overMphS` (mph-seconds
+ * over the line after the grace) is capped at `SPEEDING_MAX_OVER_MPH` per charged second, as the
+ * scorer reads it, so a bad reading is never kept for a later re-score. Every other key travels
+ * untouched.
+ */
+export function clampMeasured(e: PayloadEvent): PayloadEvent['measured'] {
+  const m = e.measured;
+  if (e.type !== 'speeding' || typeof m.overMphS !== 'number') return m;
+  const cap = speedingChargedS(e.durationS) * SPEEDING_MAX_OVER_MPH;
+  return m.overMphS > cap ? { ...m, overMphS: cap } : m;
+}
+
 /** An uploaded event, in the envelope's shape (always active). */
-const fromPayload = (e: FinalizeTripPayloadV3['events'][number]): EnvelopeEvent => ({
+const fromPayload = (e: PayloadEvent): EnvelopeEvent => ({
   id: e.id,
   type: e.type,
   tier: e.tier,
@@ -90,7 +107,7 @@ const fromPayload = (e: FinalizeTripPayloadV3['events'][number]): EnvelopeEvent 
   status: 'active',
   lat: e.lat,
   lng: e.lng,
-  measured: e.measured,
+  measured: clampMeasured(e),
 });
 
 /**
@@ -141,6 +158,8 @@ export function buildScoringInput(
         events: events as DriveEvent[],
         loopRepeat: merge.loopRepeat,
         dashcam: dashcam.on,
+        // the union's length: the minimum-drive rule (under 0.5 mi AND under 2 min) reads it
+        durationS: merge.durationS + p.durationS,
       },
       ctx: { streak: merge.streak.streak, safeMilesEarlierToday: merge.safeMilesEarlierToday },
       streak: merge.streak,
@@ -155,7 +174,7 @@ export function buildScoringInput(
   const loopRepeat = isLoop && loopDrivesToday >= 2;
   const dashcam = dashcamOf(p, null);
   return {
-    input: { miles: p.miles, safeMiles: p.safeMiles, events: events as DriveEvent[], loopRepeat, dashcam: dashcam.on },
+    input: { miles: p.miles, safeMiles: p.safeMiles, events: events as DriveEvent[], loopRepeat, dashcam: dashcam.on, durationS: p.durationS },
     ctx: { streak: streakNow.streak, safeMilesEarlierToday },
     streak: streakNow,
     events,

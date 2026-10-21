@@ -23,7 +23,8 @@ const disputeAccepted: DisputeContext = {
   status: 'accepted',
   rejectReason: null,
   scored: true,
-  oldNet: 119,
+  // 283 − 8 − 10 (the second brake at ×1.25)
+  oldNet: 265,
   quotaLeft: 3,
   rescore: {
     input: {
@@ -31,6 +32,8 @@ const disputeAccepted: DisputeContext = {
       safeMiles: 11.8,
       loopRepeat: false,
       dashcam: false,
+      durationS: 1800,
+      scoringVersion: 6,
       events: [
         { id: EVENT, type: 'hard_brake', tier: 'minor', startedAt: STARTED_AT, durationS: 2, units: null, stoppedInTraffic: null, zone: null, status: 'removed', lat: null, lng: null, measured: {}, penalty: 10 },
         { id: EVENT_2, type: 'hard_brake', tier: 'minor', startedAt: STARTED_AT + 1000, durationS: 2, units: null, stoppedInTraffic: null, zone: null, status: 'active', lat: null, lng: null, measured: {}, penalty: 10 },
@@ -47,8 +50,8 @@ const disputeResult = (e: ApplyDisputeEnvelope) => ({
   rejectReason: e.rejectReason ?? null,
   quotaLeft: e.status === 'accepted' ? 2 : 0,
   breakdown: e.breakdown ?? null,
-  net: e.net ?? 119,
-  delta: (e.net ?? 119) - 119,
+  net: e.net ?? 265,
+  delta: (e.net ?? 265) - 265,
   progress: { points: 132, lifetime: 142, level: 1, levelUp: false, safetyRating: 92, ranked: false },
 });
 
@@ -87,12 +90,76 @@ Deno.test('dispute accepted: the stored input is re-scored with the event remove
   assertEquals([body.action, body.status, body.quotaLeft, body.clientTripId], ['dispute', 'accepted', 2, TRIP]);
   const e = h.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
   assertEquals([e.user, e.tripId, e.eventId, e.reason, e.status], [USER, TRIP_ID, EVENT, 'hazard', 'accepted']);
-  // one minor hard brake left of two: 142 − 8
-  assertEquals(e.net, 134);
+  // one minor hard brake left of two: 283 − 8
+  assertEquals(e.net, 275);
   assertEquals(e.breakdown?.events, [{ id: EVENT_2, penalty: 8 }]);
-  assertEquals(e.breakdown?.streakMult, 1.2);
+  assertEquals([e.breakdown?.streakMult, e.breakdown?.pointsPerMile], [1.2, 20]);
   assertEquals(body.breakdown.events, [{ id: EVENT_2, penalty: 8 }]);
-  assertEquals(body.breakdown.net, 134);
+  assertEquals([body.breakdown.net, body.delta], [275, 10]);
+});
+
+Deno.test('a drive first scored before the earn rate doubled keeps its rules: the re-score moves the net by the shed penalty, never by the new rate', async () => {
+  // stored under version 5: 11.8 × 10 × 1.2 = 141.6 → 142, minus 8 and 10 = 124; the first brake goes, the other becomes first-of-type (8)
+  const h = harness({ disputeContext: { ...disputeAccepted, oldNet: 124, rescore: { ...disputeAccepted.rescore!, input: { ...disputeAccepted.rescore!.input, scoringVersion: 5 } } } });
+  const res = await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), h.deps);
+  assertEquals(res.status, 200);
+  const e = h.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
+  assertEquals([e.breakdown?.gains, e.breakdown?.pointsPerMile, e.breakdown?.penalties, e.net], [142, 10, 8, 134]);
+  assertEquals(e.net! - 124, 10);
+  // a version 5 drive with a phone pickup at 50 mph: the pickup stays 32 (no speed multiplier) once the brake is gone
+  const PICKUP = 'abababab-abab-4bab-8bab-abababababab';
+  const h2 = harness({
+    disputeContext: {
+      ...disputeAccepted,
+      oldNet: 124,
+      rescore: {
+        ...disputeAccepted.rescore!,
+        input: {
+          ...disputeAccepted.rescore!.input,
+          scoringVersion: 5,
+          events: [
+            disputeAccepted.rescore!.input.events[0],
+            { ...disputeAccepted.rescore!.input.events[1], id: PICKUP, type: 'phone_pickup', tier: 'severe', measured: { speedMph: 50, maxSpeedMph: 50 } },
+          ],
+        },
+      },
+    },
+  });
+  await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), h2.deps);
+  const e2 = h2.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
+  assertEquals([e2.breakdown?.events, e2.net], [[{ id: PICKUP, penalty: 32 }], 110]);
+  // the same drive stored under version 6 pays 283 and charges the pickup ×2 at 50 mph
+  const v6 = harness({
+    disputeContext: {
+      ...disputeAccepted,
+      rescore: {
+        ...disputeAccepted.rescore!,
+        input: {
+          ...disputeAccepted.rescore!.input,
+          events: [
+            disputeAccepted.rescore!.input.events[0],
+            { ...disputeAccepted.rescore!.input.events[1], id: PICKUP, type: 'phone_pickup', tier: 'severe', measured: { speedMph: 50, maxSpeedMph: 50 } },
+          ],
+        },
+      },
+    },
+  });
+  await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), v6.deps);
+  const e3 = v6.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
+  assertEquals([e3.breakdown?.gains, e3.breakdown?.events, e3.net], [283, [{ id: PICKUP, penalty: 64 }], 219]);
+});
+
+Deno.test('the stored length reaches the re-score: a short drive that was scored for its minutes stays scored', async () => {
+  // 0.3 mi in 6 min, one brake (the only event) removed: scored, 0.3 × 20 × 1.2 = 7.2 → 7, no bonus under 2 mi
+  const ctx: DisputeContext = {
+    ...disputeAccepted,
+    oldNet: 3,
+    rescore: { ...disputeAccepted.rescore!, input: { ...disputeAccepted.rescore!.input, miles: 0.3, safeMiles: 0.3, durationS: 360, events: [disputeAccepted.rescore!.input.events[0]] } },
+  };
+  const h = harness({ disputeContext: ctx });
+  await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), h.deps);
+  const e = h.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
+  assertEquals([e.breakdown?.scored, e.breakdown?.reason, e.breakdown?.cleanBonus, e.net], [true, undefined, 0, 7]);
 });
 
 type Stored = DisputeContext['rescore'] extends infer R ? (R extends { input: { events: (infer E)[] } } ? E : never) : never;
@@ -120,22 +187,22 @@ Deno.test('camera_wrong on a DashPal drive: re-scored with the ×1.25 kept, so t
     reason,
     eventId: events[0].id,
     oldNet,
-    rescore: { input: { miles: 40, safeMiles: 40, loopRepeat: false, dashcam: true, events }, ctx: { streak: 10, safeMilesEarlierToday: 0 } },
+    rescore: { input: { miles: 40, safeMiles: 40, loopRepeat: false, dashcam: true, durationS: 3600, scoringVersion: 6, events }, ctx: { streak: 10, safeMilesEarlierToday: 0 } },
   });
-  // before: 600 − 40 (drowsy) − 8 (brake) = 552; the drowsy was wrong → 600 − 8 = 592
-  const h = harness({ disputeContext: ctx([stored(DROWSY, 'drowsy', 'removed', 1000), stored(EVENT_2, 'hard_brake', 'active', 2000)], 552, 'camera_wrong') });
+  // before: 1200 − 40 (drowsy) − 8 (brake) = 1152; the drowsy was wrong → 1200 − 8 = 1192
+  const h = harness({ disputeContext: ctx([stored(DROWSY, 'drowsy', 'removed', 1000), stored(EVENT_2, 'hard_brake', 'active', 2000)], 1152, 'camera_wrong') });
   const res = await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: DROWSY, reason: 'camera_wrong' }), h.deps);
   assertEquals(res.status, 200);
   const e = h.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
-  assertEquals([e.reason, e.breakdown?.dashcamMult, e.breakdown?.mult, e.breakdown?.gains, e.net], ['camera_wrong', 1.25, 1.5, 600, 592]);
-  assertEquals(e.net! - 552 >= 0, true);
+  assertEquals([e.reason, e.breakdown?.dashcamMult, e.breakdown?.mult, e.breakdown?.gains, e.net], ['camera_wrong', 1.25, 1.5, 1200, 1192]);
+  assertEquals(e.net! - 1152 >= 0, true);
   // a hazard on a DashPal drive that also has a drowsy: the brake goes, the drowsy stays charged and does not
-  // break the now-clean drive: (400 + 25) × 1.5 = 637.5 → 638, − 40
-  const h2 = harness({ disputeContext: ctx([stored(EVENT, 'hard_brake', 'removed', 1000), stored(DROWSY, 'drowsy', 'active', 2000)], 552, 'hazard') });
+  // break the now-clean drive: (800 + 50) × 1.5 = 1275, − 40
+  const h2 = harness({ disputeContext: ctx([stored(EVENT, 'hard_brake', 'removed', 1000), stored(DROWSY, 'drowsy', 'active', 2000)], 1152, 'hazard') });
   await handleTripAction(post({ action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), h2.deps);
   const e2 = h2.fake.calls.find((c) => c.fn === 'applyDispute')!.args as ApplyDisputeEnvelope;
-  assertEquals([e2.breakdown?.activeEventCount, e2.breakdown?.cleanBonus, e2.breakdown?.penalties, e2.net], [0, 25, 40, 598]);
-  assertEquals(e2.net! - 552 >= 0, true);
+  assertEquals([e2.breakdown?.activeEventCount, e2.breakdown?.cleanBonus, e2.breakdown?.penalties, e2.net], [0, 50, 40, 1235]);
+  assertEquals(e2.net! - 1152 >= 0, true);
 });
 
 Deno.test('every reason the sheet offers passes the contract; anything else is a 400 before the engine', async () => {

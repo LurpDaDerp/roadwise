@@ -110,6 +110,10 @@ export const DisputeContextSchema = z.object({
         loopRepeat: z.boolean(),
         /** The drive was stored as a DashPal drive (`trips.dashcam_on`): the re-score keeps its ×1.25. */
         dashcam: z.boolean(),
+        /** The stored drive's length in seconds (`trips.duration_s`): the minimum-drive rule reads it. */
+        durationS: Num,
+        /** The `SCORING_VERSION` the drive was first scored under (`trips.scoring_version`): the re-score keeps its earning rules. */
+        scoringVersion: Num.nullable(),
         events: z.array(StoredEventSchema),
       }),
       ctx: z.object({ streak: Num, safeMilesEarlierToday: Num }),

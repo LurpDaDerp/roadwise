@@ -3,7 +3,7 @@ import type { ApplyDriveEnvelope } from '../_shared/engine.ts';
 import { PgError } from '../_shared/pg.ts';
 import { fakeEngine, type FakeEngineScript } from '../_shared/testing/fake_engine.ts';
 import { DASHCAM, EVENT, EVENT_2, mergeTarget, payload, response, STARTED_AT, TRIP, TRIP_2, USER } from '../_shared/testing/v3_fixtures.ts';
-import { dashcamOf, handleFinalizeTrip, MAX_UPLOADS_PER_DAY, TZ_REFUSAL, UPLOAD_LIMIT_KEY } from './handler.ts';
+import { clampMeasured, dashcamOf, handleFinalizeTrip, MAX_UPLOADS_PER_DAY, TZ_REFUSAL, UPLOAD_LIMIT_KEY } from './handler.ts';
 
 const quiet = { warn: () => {}, error: () => {} };
 const freshContext = {
@@ -35,19 +35,20 @@ const post = (body: unknown, token = 'good', init: RequestInit = {}) =>
 
 const envelopeOf = (h: ReturnType<typeof harness>): ApplyDriveEnvelope => h.fake.calls.find((c) => c.fn === 'applyDrive')!.args as ApplyDriveEnvelope;
 
-Deno.test('happy path: the spec example scores 142 − 8 = 134 inside one transaction and the stored response is returned', async () => {
+Deno.test('happy path: the spec example scores 283 − 8 = 275 inside one transaction and the stored response is returned', async () => {
   const h = harness();
   const res = await handleFinalizeTrip(post(payload()), h.deps);
   assertEquals(res.status, 200);
   const body = await res.json();
-  assertEquals([body.net, body.scored, body.clientTripId], [134, true, TRIP]);
+  assertEquals([body.net, body.scored, body.clientTripId], [275, true, TRIP]);
   assertEquals(h.fake.transactions, { opened: 1, failed: 0 });
   assertEquals(h.fake.calls.map((c) => c.fn), ['driveContext', 'takeRateLimit', 'applyDrive']);
   assertEquals(h.fake.calls[0].args, { userId: USER, clientTripId: TRIP, startedAt: STARTED_AT, endedAt: STARTED_AT + 30 * 60_000, localDay: '2026-10-05', start: { lat: 40.7128, lng: -74.006 } });
   assertEquals(h.fake.calls[1].args, { userId: USER, key: UPLOAD_LIMIT_KEY, window: '1 day', max: MAX_UPLOADS_PER_DAY });
   const e = envelopeOf(h);
-  assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.net], [USER, null, true, null, 134]);
-  assertEquals(e.breakdown.gains, 142);
+  assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.net], [USER, null, true, null, 275]);
+  // 11.8 safe mi × 20 × 1.2 = 283.2
+  assertEquals([e.breakdown.gains, e.breakdown.pointsPerMile], [283, 20]);
   assertEquals(e.breakdown.events, [{ id: EVENT, penalty: 8 }]);
   assertEquals(e.streak, { before: { streak: 10 }, after: { streak: 11, atRisk: false, freezes: 2, cleanRun: 0 }, outcome: 'grew', freezeEarned: false });
   // the uploaded event goes in active whatever the device said, with its position and measurements
@@ -73,16 +74,16 @@ const drowsyEvent = {
   measured: { source: 'dashcam' as const, speedMph: 48 },
 };
 
-Deno.test('a DashPal drive: 118 × 1.50 = 177 − 8 = 169; the seconds and the derived flag go to apply_drive', async () => {
+Deno.test('a DashPal drive: 236 × 1.50 = 354 − 8 = 346; the seconds and the derived flag go to apply_drive', async () => {
   const h = harness();
   const res = await handleFinalizeTrip(post(payload({ dashcam: covered() })), h.deps);
   assertEquals(res.status, 200);
   const e = envelopeOf(h);
-  assertEquals([e.breakdown.streakMult, e.breakdown.dashcamMult, e.breakdown.mult, e.breakdown.gains, e.net], [1.2, 1.25, 1.5, 177, 169]);
+  assertEquals([e.breakdown.streakMult, e.breakdown.dashcamMult, e.breakdown.mult, e.breakdown.gains, e.net], [1.2, 1.25, 1.5, 354, 346]);
   assertEquals(e.dashcam, { deviceId: DASHCAM, movingS: 1500, coveredS: 1350, synced: true, on: true });
   assertEquals(e.payload.dashcam, covered());
   const body = await res.json();
-  assertEquals([body.breakdown.dashcamMult, body.breakdown.mult, body.net], [1.25, 1.5, 169]);
+  assertEquals([body.breakdown.dashcamMult, body.breakdown.mult, body.net], [1.25, 1.5, 346]);
 });
 
 Deno.test('no bonus under 80 % coverage, under 60 s moving, or not synced at the end; the payload stays valid', async () => {
@@ -96,7 +97,7 @@ Deno.test('no bonus under 80 % coverage, under 60 s moving, or not synced at the
     const res = await handleFinalizeTrip(post(payload({ dashcam: dc })), h.deps);
     assertEquals(res.status, 200, why);
     const e = envelopeOf(h);
-    assertEquals([e.dashcam.on, e.breakdown.dashcamMult, e.breakdown.mult, e.net], [false, 1, 1.2, 134], why);
+    assertEquals([e.dashcam.on, e.breakdown.dashcamMult, e.breakdown.mult, e.net], [false, 1, 1.2, 275], why);
     assertEquals([e.dashcam.movingS, e.dashcam.coveredS, e.dashcam.deviceId], [dc.movingS, dc.coveredS, DASHCAM], why);
   }
   // exactly 80 % earns it
@@ -118,7 +119,8 @@ Deno.test('a drowsy event costs its points but keeps the clean bonus, adds 0 to 
   const res = await handleFinalizeTrip(post(payload({ miles: 5, safeMiles: 5, events: [drowsyEvent] })), h.deps);
   assertEquals(res.status, 200);
   const e = envelopeOf(h);
-  assertEquals([e.breakdown.cleanBonus, e.breakdown.gains, e.breakdown.penalties, e.net, e.breakdown.ratingPenalty, e.breakdown.activeEventCount], [25, 75, 40, 35, 0, 0]);
+  // 5 mi × 20 + the 50 bonus, minus the drowsy's 40
+  assertEquals([e.breakdown.cleanBonus, e.breakdown.gains, e.breakdown.penalties, e.net, e.breakdown.ratingPenalty, e.breakdown.activeEventCount], [50, 150, 40, 110, 0, 0]);
   assertEquals(e.events.map((x) => [x.id, x.type, x.status, x.measured]), [[DROWSY, 'drowsy', 'active', { source: 'dashcam', speedMph: 48 }]]);
   // the streak sees a clean, net-positive drive
   assertEquals([e.streak.outcome, e.streak.after.cleanRun], ['grew', 1]);
@@ -135,8 +137,8 @@ Deno.test('merge: DashPal seconds are summed over the target and the upload and 
   const h2 = harness({ context: target({ deviceId: DASHCAM, movingS: 600, coveredS: 500, synced: false }) });
   await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, dashcam: covered({ movingS: 3000, coveredS: 2900 }) })), h2.deps);
   assertEquals(envelopeOf(h2).dashcam, { deviceId: DASHCAM, movingS: 3600, coveredS: 3400, synced: true, on: true });
-  // 15 mi, 14.8 safe, streak 4: 148 × (1.08 × 1.25 = 1.35) = 199.8 → 200, minus 8
-  assertEquals([envelopeOf(h2).breakdown.mult, envelopeOf(h2).breakdown.gains, envelopeOf(h2).net], [1.35, 200, 192]);
+  // 15 mi, 14.8 safe, streak 4: 296 × (1.08 × 1.25 = 1.35) = 399.6 → 400, minus 8
+  assertEquals([envelopeOf(h2).breakdown.mult, envelopeOf(h2).breakdown.gains, envelopeOf(h2).net], [1.35, 400, 392]);
   // synced comes from the upload (the newest part): absent there → not synced, no bonus
   const h3 = harness({ context: target({ deviceId: DASHCAM, movingS: 3000, coveredS: 3000, synced: true }) });
   await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2 })), h3.deps);
@@ -163,8 +165,8 @@ Deno.test('merge: the union is scored with the target context and streak; the re
   const e = envelopeOf(h);
   assertEquals(e.mergeInto, '99999999-9999-4999-8999-999999999999');
   assertEquals(e.events.map((x) => [x.id, x.status]), [[EVENT_2, 'removed'], [EVENT, 'active']]);
-  // 15 miles, 14.8 safe, streak 4 (the target's snapshot): 148 × 1.08 → 159.84 → 160, minus 8
-  assertEquals([e.breakdown.safeMiles, e.breakdown.streakMult, e.breakdown.gains, e.net], [14.8, 1.08, 160, 152]);
+  // 15 miles, 14.8 safe, streak 4 (the target's snapshot): 296 × 1.08 → 319.68 → 320, minus 8
+  assertEquals([e.breakdown.safeMiles, e.breakdown.streakMult, e.breakdown.gains, e.net], [14.8, 1.08, 320, 312]);
   assertEquals(e.breakdown.events, [{ id: EVENT, penalty: 8 }]);
   assertEquals(e.streak.before, { streak: 4 });
   assertEquals(e.streak.after, { streak: 5, atRisk: false, freezes: 1, cleanRun: 0 });
@@ -227,7 +229,7 @@ Deno.test("merge: at most one drowsy per 10 min and one eyes-off per 5 min over 
     { id: dcId(6), penalty: 50 },
     { id: EVENT, penalty: 8 },
   ]);
-  assertEquals([e.breakdown.penalties, e.breakdown.ratingPenalty, e.breakdown.activeEventCount, e.net], [170, 10, 1, 160 - 170]);
+  assertEquals([e.breakdown.penalties, e.breakdown.ratingPenalty, e.breakdown.activeEventCount, e.net], [170, 10, 1, 320 - 170]);
   const body = await res.json();
   assertEquals(body.breakdown.events.map((x: { id: string }) => x.id).includes(dcId(3)), false);
 });
@@ -295,17 +297,68 @@ Deno.test('loop: start and end within 402 m under 5 miles is a loop; the third o
   const loop = payload({ miles: 2.5, safeMiles: 2.5, end: { lat: 40.7135, lng: -74.0055 }, events: [] });
   const h1 = harness({ context: { ...freshContext, loopDrivesToday: 1 } });
   await handleFinalizeTrip(post(loop), h1.deps);
-  assertEquals([envelopeOf(h1).isLoop, envelopeOf(h1).loopRepeat, envelopeOf(h1).breakdown.cleanBonus], [true, false, 25]);
+  assertEquals([envelopeOf(h1).isLoop, envelopeOf(h1).loopRepeat, envelopeOf(h1).breakdown.cleanBonus], [true, false, 50]);
   const h2 = harness({ context: { ...freshContext, loopDrivesToday: 2 } });
   await handleFinalizeTrip(post(loop), h2.deps);
   const e = envelopeOf(h2);
   assertEquals([e.isLoop, e.loopRepeat, e.breakdown.creditedMiles, e.breakdown.cleanBonus], [true, true, 1.25, 0]);
 });
 
-Deno.test('too short: under 0.5 mi is stored unscored with reason too_short', async () => {
+Deno.test('too short: under 0.5 mi AND under 2 min is stored unscored with reason too_short; either one reached scores it', async () => {
   const h = harness();
-  await handleFinalizeTrip(post(payload({ miles: 0.3, safeMiles: 0.3, events: [] })), h.deps);
+  await handleFinalizeTrip(post(payload({ miles: 0.3, safeMiles: 0.3, durationS: 119, endedAt: STARTED_AT + 119_000, events: [] })), h.deps);
   assertEquals([envelopeOf(h).scored, envelopeOf(h).reason, envelopeOf(h).net], [false, 'too_short', 0]);
+  // 0.3 mi that took 6 minutes: scored, over its short-drive scale (0.3 × 20 × 1.2 = 7.2 → 7, the clean bonus needs 2 mi)
+  const slow = harness();
+  await handleFinalizeTrip(post(payload({ miles: 0.3, safeMiles: 0.3, durationS: 360, endedAt: STARTED_AT + 360_000, events: [] })), slow.deps);
+  assertEquals([envelopeOf(slow).scored, envelopeOf(slow).reason, envelopeOf(slow).breakdown.cleanBonus, envelopeOf(slow).net], [true, null, 0, 7]);
+  // 0.5 mi in 90 s: scored
+  const quick = harness();
+  await handleFinalizeTrip(post(payload({ miles: 0.5, safeMiles: 0.5, durationS: 90, endedAt: STARTED_AT + 90_000, events: [] })), quick.deps);
+  assertEquals([envelopeOf(quick).scored, envelopeOf(quick).net], [true, 12]);
+  // a merge: the union's length counts (a 0.2 mi / 60 s upload onto a 0.2 mi / 70 s target is 0.4 mi over 130 s: scored)
+  const target = mergeTarget({ miles: 0.2, safeMiles: 0.2, durationS: 70, events: [] });
+  const merged = harness({ context: { ...freshContext, merge: target } });
+  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, miles: 0.2, safeMiles: 0.2, durationS: 60, endedAt: STARTED_AT + 60_000, events: [] })), merged.deps);
+  assertEquals([envelopeOf(merged).scored, envelopeOf(merged).mergeInto], [true, target.tripId]);
+  const short = harness({ context: { ...freshContext, merge: mergeTarget({ miles: 0.2, safeMiles: 0.2, durationS: 50, events: [] }) } });
+  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, miles: 0.2, safeMiles: 0.2, durationS: 60, endedAt: STARTED_AT + 60_000, events: [] })), short.deps);
+  assertEquals([envelopeOf(short).scored, envelopeOf(short).reason], [false, 'too_short']);
+});
+
+const SPEEDING = '55555555-5555-4555-8555-555555555555';
+const speeding = (durationS: number, measured: Record<string, number>) => ({
+  id: SPEEDING,
+  type: 'speeding' as const,
+  tier: 'minor' as const,
+  startedAt: STARTED_AT + 5 * 60_000,
+  durationS,
+  lat: null,
+  lng: null,
+  measured,
+});
+
+Deno.test("a speeding event's overMphS is stored at most 150 mph over per charged second, and priced from the stored value", async () => {
+  // 15 s over the line: 10 charged seconds, so at most 1500 mph-seconds; priced 0.15 × 150 × ((1.02^10 − 1) / 0.02) = 246
+  const h = harness();
+  await handleFinalizeTrip(post(payload({ events: [speeding(15, { limitMph: 35, speedMph: 48, overMphS: 999_999 })] })), h.deps);
+  const e = envelopeOf(h);
+  assertEquals(e.events.map((x) => [x.id, x.measured]), [[SPEEDING, { limitMph: 35, speedMph: 48, overMphS: 1500 }]]);
+  assertEquals(e.breakdown.events, [{ id: SPEEDING, penalty: 246 }]);
+  // a reading inside the cap travels untouched: 10 charged seconds at 3 over → 5
+  const ok = harness();
+  await handleFinalizeTrip(post(payload({ events: [speeding(15, { limitMph: 35, speedMph: 42, overMphS: 30 })] })), ok.deps);
+  assertEquals(envelopeOf(ok).events[0].measured, { limitMph: 35, speedMph: 42, overMphS: 30 });
+  assertEquals(envelopeOf(ok).breakdown.events, [{ id: SPEEDING, penalty: 5 }]);
+  // no overMphS (an older app): the tier price, nothing added
+  const legacy = harness();
+  await handleFinalizeTrip(post(payload({ events: [speeding(15, { limitMph: 35, speedMph: 42 })] })), legacy.deps);
+  assertEquals(envelopeOf(legacy).events[0].measured, { limitMph: 35, speedMph: 42 });
+  assertEquals(envelopeOf(legacy).breakdown.events, [{ id: SPEEDING, penalty: 12 }]);
+  // the pure helper: the grace is free, so 5 s or less is one charged second; only speeding is touched
+  assertEquals(clampMeasured(speeding(5, { overMphS: 400 })).overMphS, 150);
+  assertEquals(clampMeasured(speeding(65, { overMphS: 9000 })).overMphS, 9000);
+  assertEquals(clampMeasured({ ...speeding(5, { overMphS: 400 }), type: 'hard_brake', tier: 'minor' }).overMphS, 400);
 });
 
 Deno.test('refusals before any database work: method, token, size, JSON, contract, zone, local day', async () => {
