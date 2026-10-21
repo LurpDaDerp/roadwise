@@ -52,6 +52,12 @@ export type Theme = {
   sky: SkyColors;
   /** The time of day and weather the theme is wearing; null when pinned (tests, gallery). */
   mood: SkyMood | null;
+  /**
+   * Whether the driving screen wears its night look, as the theme decides it: null when the theme
+   * follows the sky (Adaptive: the driving screen judges night by the sun itself), true or false
+   * when the theme is static.
+   */
+  hudNight: boolean | null;
   hud: HudSet;
   type: TypeScale;
   elevation: Elevation;
@@ -125,6 +131,7 @@ function buildTheme(bundle: SkyBundle, mood: SkyMood | null, reduceMotion: boole
     onSky: bundle.onSky,
     sky: bundle.sky,
     mood,
+    hudNight: null,
     hud: tokens.color.hud,
     type: tokens.type,
     elevation: tokens.elevation[bundle.scheme],
