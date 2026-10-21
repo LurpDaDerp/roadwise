@@ -1,44 +1,28 @@
 import { RANKED_MIN_MILES } from '@scoring';
 
-import { distanceIn, formatDistance, type Units } from '@/lib/units';
+import { formatDistance, type Units } from '@/lib/units';
 
-/** Drivers need this many miles in 30 days for the global board (`get_global_board`). */
-const GLOBAL_MIN_MILES = 100;
-
-/** Every string on the Leaderboards tab. Plain, short, second person, no guilt. */
+/** Every string on the Friends tab. Plain, short, second person, no guilt. */
 export const leaguesCopy = {
-  title: 'Leaderboards',
-  segments: { friends: 'Friends', global: 'Global' },
-  segmentsLabel: 'Choose a board',
+  title: 'Friends',
+  add: 'Add friends',
   loadFailed: {
-    title: "Couldn't load this board",
+    title: "Couldn't load your friends",
     body: 'Check your connection and try again.',
     retry: 'Try again',
   },
   refreshFailed: "Couldn't refresh. Showing the last board we loaded.",
   you: 'You',
-  pts: 'pts',
   friends: {
-    week: 'Weekly points',
-    rating: 'Safety Rating',
-    metricLabel: 'Rank by',
+    /** "128 mi in 90 days". */
+    miles: (dist: string) => `${dist} in 90 days`,
+    /** "4 of 10 mi to a rating". */
+    toRating: (progress: string) => `${progress} to a rating`,
+    noRatingSpoken: 'No rating yet',
+    caption: 'Ranked by Safety Rating, last 90 days',
+    unratedNote: (u: Units) => `Drivers get a Safety Rating after ${formatDistance(RANKED_MIN_MILES, u, { digits: 0 })} in 90 days.`,
     emptyTitle: 'Bring your crew',
-    emptyBody: 'Add friends to see how you stack up against them.',
+    emptyBody: 'Add friends to see how your Safety Ratings compare.',
     emptyAction: 'Add friends',
-    unrankedNote: (u: Units) => `Unranked drivers need ${formatDistance(RANKED_MIN_MILES, u, { digits: 0 })} in 30 days to get a Safety Rating.`,
-  },
-  global: {
-    allStates: 'All states',
-    filterLabel: 'Filter by state',
-    sheetTitle: 'Pick a state',
-    notEligibleTitle: (u: Units) => `Drive ${formatDistance(GLOBAL_MIN_MILES, u, { digits: 0 })} in 30 days to join`,
-    notEligibleBody: (u: Units) =>
-      `The global board ranks drivers by Safety Rating once they drive ${formatDistance(GLOBAL_MIN_MILES, u, { digits: 0, spoken: true })} in 30 days.`,
-    notInState: 'You’re not on this state’s board.',
-    rank: 'Your rank',
-    rating: 'Your Safety Rating',
-    cleanMiles: (n: number, u: Units) => `${Math.round(distanceIn(n, u)).toLocaleString('en-US')} clean ${u}`,
-    emptyTitle: 'No one here yet',
-    emptyBody: (u: Units) => `Nobody in this state has driven ${formatDistance(GLOBAL_MIN_MILES, u, { digits: 0 })} in the last 30 days. Try all states.`,
   },
 } as const;

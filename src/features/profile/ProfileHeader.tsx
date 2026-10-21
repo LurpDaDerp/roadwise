@@ -1,53 +1,63 @@
 import type { ReactNode } from 'react';
 import { View } from 'react-native';
 
-import { MAX_FREEZES, RANKED_MIN_MILES } from '@scoring';
+import { RANKED_MIN_MILES } from '@scoring';
 
 import { useUnits } from '@/data/queries/units';
+import { timeMetric } from '@/features/analytics/format';
+import { ratingTrend } from '@/features/home/HomeHeader';
 import { formatRating } from '@/lib/rating';
-import { formatDistanceProgress } from '@/lib/units';
-import { Avatar, Card, Divider, formatPointsValue, FreezeCount, ProgressBar, StreakFlame, Text, useFontScale, useTheme } from '@/ui';
+import { distanceIn, distanceWord, formatDistance, formatDistanceProgress } from '@/lib/units';
+import { Avatar, Card, Divider, Text, TrendArrow, useFontScale, useTheme } from '@/ui';
 
 import { profileCopy as copy } from './copy';
 
+export interface ProfileTotals {
+  drives: number;
+  miles: number;
+  durationS: number;
+}
+
 export interface ProfileHeaderProps {
   username: string;
-  level: number;
   safetyRating: number | null;
   ranked: boolean;
-  streak: number;
-  /** The tab's own card adds the way to the next level, points, freezes and the way to being ranked; others' don't. */
+  /** Your own card adds when you started, the week's change, the way to a rating and your totals; a friend's doesn't. */
   own?: {
-    /** The points total (never below 0): the level follows it. */
-    points: number;
-    levelFloor: number;
-    levelNext: number | null;
-    miles30d: number;
-    nextMult: number;
-    atRisk: boolean;
-    freezes: number;
+    /** "Oct 2026": the month you joined; null when unknown. */
+    since: string | null;
+    ratingTrend: number | null;
+    miles90d: number;
+    totals: ProfileTotals;
   };
   testID?: string;
 }
 
+/** "Oct 2026" from the moment the account finished onboarding; null when unknown or unreadable. */
+export function sinceMonth(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(d);
+}
+
 /**
- * The public card: avatar from the username (never a photo), username and level, then the numbers
- * that matter: Safety Rating (or Unranked) and streak, plus points and freezes on your own card.
- * The same card, without your own extras, is what friends see on `/u/<username>`.
+ * The profile card: the avatar (initials, never a photo) and the username, then the Safety Rating.
+ * Your own card adds the month you started, the rating's change this week (in words, with an
+ * arrow) and your all-time drives, distance and time on the road. A friend's card is the same
+ * without your extras: what friends see on `/u/<username>`.
  */
-export function ProfileHeader({ username, level, safetyRating, ranked, streak, own, testID }: ProfileHeaderProps) {
+export function ProfileHeader({ username, safetyRating, ranked, own, testID }: ProfileHeaderProps) {
   const th = useTheme();
   const scale = useFontScale();
   const stack = scale > 1.35;
   const units = useUnits();
   const rated = ranked && safetyRating !== null;
   const ratingText = formatRating(safetyRating, ranked);
-  const span = own && own.levelNext !== null ? own.levelNext - own.levelFloor : 0;
-  const levelProgress = own && span > 0 ? Math.min(1, Math.max(0, (own.points - own.levelFloor) / span)) : 1;
-  const toNext = own && own.levelNext !== null ? copy.toNext(Math.max(0, own.levelNext - own.points), level + 1) : copy.maxLevel;
-  const freezes = own ? Math.max(0, Math.min(own.freezes, MAX_FREEZES)) : 0;
-  const toRank = own && !rated ? copy.unrankedMiles(formatDistanceProgress(own.miles30d, RANKED_MIN_MILES, units).text) : null;
-  const unrankedLabel = toRank ? `${copy.rating}: ${copy.unranked}, ${toRank}` : `${copy.rating}: ${copy.unranked}`;
+  const progress = own && !rated && own.miles90d > 0 ? formatDistanceProgress(own.miles90d, RANKED_MIN_MILES, units) : null;
+  const toRating = progress ? copy.toRating(`${progress.done} of ${progress.target} ${units}`) : null;
+  const toRatingSpoken = progress ? copy.toRating(`${progress.done} of ${progress.target} ${distanceWord(units)}`) : null;
+  const trend = own && rated ? ratingTrend(own.ratingTrend) : null;
   const row = { flexDirection: stack ? 'column' : 'row', gap: th.space.lg, alignItems: stack ? 'flex-start' : 'flex-end' } as const;
 
   return (
@@ -58,79 +68,63 @@ export function ProfileHeader({ username, level, safetyRating, ranked, streak, o
           <Text variant="title1" numberOfLines={1} adjustsFontSizeToFit accessibilityRole="header" testID="profile-username">
             {username}
           </Text>
-          <Text variant="headline" tone="muted" testID="profile-level">
-            {copy.level(level)}
-          </Text>
+          {own?.since ? (
+            <Text variant="headline" tone="muted" testID="profile-since">
+              {copy.since(own.since)}
+            </Text>
+          ) : null}
         </View>
       </View>
 
-      {own ? (
-        <View style={{ gap: th.space.xs }}>
-          <ProgressBar value={levelProgress} tone="accent" accessibilityLabel={copy.level(level)} accessibilityValueText={toNext} />
-          <Text variant="footnote" tone="muted">
-            {toNext}
-          </Text>
-        </View>
-      ) : null}
-
       <Divider />
 
-      <View style={{ gap: th.space.lg }}>
-        <View style={row}>
-          <Stat
-            stack={stack}
-            wide
-            label={toRank ?? copy.rating}
-            accessibilityLabel={rated ? `${copy.rating} ${ratingText}` : unrankedLabel}
-            testID="profile-rating"
-          >
-            {rated ? <Text variant="display">{ratingText}</Text> : <Text variant="title2">{copy.unranked}</Text>}
+      <View style={row}>
+        <Stat
+          stack={stack}
+          wide
+          label={toRating ?? copy.rating}
+          accessibilityLabel={rated ? `${copy.rating} ${ratingText}` : `${copy.rating}: ${copy.noRating}${toRatingSpoken ? `, ${toRatingSpoken}` : ''}`}
+          testID="profile-rating"
+        >
+          {rated ? <Text variant="display">{ratingText}</Text> : <Text variant="title2">{copy.noRating}</Text>}
+        </Stat>
+        {trend ? (
+          <Stat stack={stack} label={copy.trend.label} accessibilityLabel={copy.trend.spoken(trend.word)} testID="profile-trend">
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.xs, minHeight: th.type.stat.lineHeight }}>
+              <TrendArrow direction={trend.direction} better="up" size={20} accessible={false} />
+              <Text variant="title3">{trend.word}</Text>
+            </View>
           </Stat>
-          <Stat stack={stack} label={copy.streak} accessibilityLabel={`${copy.streak} ${streak}`} testID="profile-streak">
-            <StreakFlame count={streak} multiplier={own?.nextMult} state={own?.atRisk ? 'atRisk' : 'active'} />
-          </Stat>
-        </View>
+        ) : null}
+      </View>
 
-        {own ? (
-          <View style={row}>
-            <Stat
-              stack={stack}
-              wide
-              label={copy.points}
-              accessibilityLabel={`${copy.points} ${formatPointsValue(own.points)}`}
-              testID="profile-points"
-            >
-              <Text variant="stat" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} testID="profile-points-value">
-                {formatPointsValue(own.points)}
+      {own ? (
+        <>
+          <Divider />
+          <View style={row} testID="profile-totals">
+            <Stat stack={stack} label={copy.totals.drives} accessibilityLabel={`${copy.totals.drives} ${own.totals.drives}`} testID="profile-drives">
+              <Text variant="stat" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                {own.totals.drives.toLocaleString('en-US')}
               </Text>
             </Stat>
             <Stat
               stack={stack}
-              label={copy.freezes}
-              accessibilityLabel={`${copy.freezes} ${copy.freezesHeld(freezes, MAX_FREEZES)}`}
-              testID="profile-freezes"
+              label={copy.totals.distance}
+              accessibilityLabel={`${copy.totals.distance} ${formatDistance(own.totals.miles, units, { digits: distanceIn(own.totals.miles, units) >= 100 ? 0 : 1, spoken: true })}`}
+              testID="profile-distance"
             >
-              {/* Wraps so "N of 3" drops under the snowflakes when the column is narrow (320 pt, large text). */}
-              <View
-                testID="profile-freezes-row"
-                style={{
-                  flexDirection: 'row',
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  columnGap: th.space.sm,
-                  rowGap: th.space.xs,
-                  minHeight: th.type.stat.lineHeight,
-                }}
-              >
-                <FreezeCount count={freezes} max={MAX_FREEZES} />
-                <Text variant="title3" numberOfLines={1} style={{ flexShrink: 1, fontVariant: ['tabular-nums'] }}>
-                  {copy.freezesHeld(freezes, MAX_FREEZES)}
-                </Text>
-              </View>
+              <Text variant="stat" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                {formatDistance(own.totals.miles, units, { digits: distanceIn(own.totals.miles, units) >= 100 ? 0 : 1 })}
+              </Text>
+            </Stat>
+            <Stat stack={stack} label={copy.totals.time} accessibilityLabel={`${copy.totals.time} ${timeMetric(own.totals.durationS).spoken}`} testID="profile-time">
+              <Text variant="stat" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                {`${timeMetric(own.totals.durationS).value} ${timeMetric(own.totals.durationS).unit}`}
+              </Text>
             </Stat>
           </View>
-        ) : null}
-      </View>
+        </>
+      ) : null}
     </Card>
   );
 }
@@ -145,7 +139,7 @@ function Stat({
   children,
 }: {
   stack: boolean;
-  /** The left column, a little wider (the Safety Rating's big number and the points sit there). */
+  /** The left column, a little wider (the Safety Rating's big number sits there). */
   wide?: boolean;
   label: string;
   accessibilityLabel: string;

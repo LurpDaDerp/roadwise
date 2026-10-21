@@ -50,13 +50,13 @@ beforeEach(() => {
   mockDrive.status = 'idle';
 });
 
-test('the tabs are Home, Analytics, Leaderboards and Profile, in that order', async () => {
+test('the tabs are Home, Analytics, Friends and Profile, in that order', async () => {
   await draw();
   const icon = (o: TabOptions, focused: boolean) => o.tabBarIcon({ color: '#000', size: 24, focused }).props.name;
   expect(mockTabs.screens.map((s) => [s.name, s.options.title, icon(s.options, false), icon(s.options, true)])).toEqual([
     ['home', 'Home', 'home-outline', 'home'],
     ['analytics', 'Analytics', 'analytics-outline', 'analytics'],
-    ['leagues', 'Leaderboards', 'trophy-outline', 'trophy'],
+    ['leagues', 'Friends', 'people-outline', 'people'],
     ['profile', 'Profile', 'person-circle-outline', 'person-circle'],
   ]);
 });

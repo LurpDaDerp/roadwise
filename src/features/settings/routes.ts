@@ -11,5 +11,5 @@ export const SETTINGS_HREFS = {
   blocked: '/settings/blocked' as Href,
   permissions: '/settings/permissions' as Href,
   dashcam: '/settings/dashcam' as Href,
-  howPointsWork: '/how-points-work' as Href,
+  howScoresWork: '/how-scores-work' as Href,
 } as const;

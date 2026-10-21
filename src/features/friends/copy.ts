@@ -12,10 +12,9 @@ export const friendsCopy = {
   cancel: 'Cancel',
   cancelHint: (u: string) => `Cancels your request to ${u}`,
   acceptHint: (u: string) => `Adds ${u} as a friend`,
-  level: (n: number) => `Level ${n}`,
   rating: (r: number | null) => (r === null ? UNRANKED : `Safety Rating ${formatRating(r, true)}`),
   empty: 'No friends yet',
-  emptyBody: 'Add friends by username or QR code, then race them on the friends board.',
+  emptyBody: 'Add friends by username or QR code, then see how your ratings compare on the Friends tab.',
   loadError: "Couldn't load your friends.",
   retry: 'Try again',
 

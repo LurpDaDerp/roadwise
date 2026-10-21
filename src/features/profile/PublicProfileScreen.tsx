@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Alert, View } from 'react-native';
 
 import { statsFrom, type StatSums } from '@scoring';
+import { AXES } from '@/features/analytics/model';
 import { useUnits } from '@/data/queries/units';
 import { formatStat, STAT_LABEL } from '@/features/drives/stats';
 import { backOrHome, TopBar } from '@/features/settings/parts';
@@ -57,9 +58,9 @@ function confirm(title: string, body: string | undefined, yes: string, no: strin
 }
 
 /**
- * `/u/<username>`: another driver's public card, the friend button for where the two of you are,
- * their 30-day stats when you're friends, their heat map only if they share it with you, and
- * Report / Block. Not found and blocked look the same.
+ * `/u/<username>`: another driver's card, the friend button for where the two of you are, then
+ * what they share with you as a friend: their category scores, badges, 30-day stats and heat map,
+ * each only when they turned it on. Report / Block. Not found and blocked look the same.
  */
 export function PublicProfileScreen({ username }: { username: string }) {
   const th = useTheme();
@@ -109,20 +110,19 @@ export function PublicProfileScreen({ username }: { username: string }) {
         title=""
         trailing={others ? <IconButton icon="ellipsis-horizontal" accessibilityLabel={copy.more} onPress={() => setMenu(true)} testID="profile-more" /> : undefined}
       />
-      <ProfileHeader
-        username={p.username}
-        level={p.level}
-        safetyRating={p.safety_rating}
-        ranked={p.ranked}
-        streak={p.streak}
-      />
+      <ProfileHeader username={p.username} safetyRating={p.safety_rating} ranked={p.ranked} />
       {action.error ? <Banner tone="danger" message={action.error} testID="relationship-error" /> : null}
       <RelationshipButtons rel={p.relationship} pending={action.pending !== null} onPress={(a) => void relate(a)} />
 
-      <Card>
-        <Text variant="headline">{profileCopy.achievements.title}</Text>
-        <AchievementBadges unlocked={p.achievements} testID="public-achievements" />
-      </Card>
+      {p.scores ? <CategoriesCard scores={p.scores} /> : null}
+
+      {/* A friend who keeps their badges to themselves sends none: no card, rather than three locks. */}
+      {!others || p.achievements.length > 0 ? (
+        <Card>
+          <Text variant="headline">{profileCopy.achievements.title}</Text>
+          <AchievementBadges unlocked={p.achievements} testID="public-achievements" />
+        </Card>
+      ) : null}
 
       {p.can_view_stats && others ? <MemberStats profile={p} /> : null}
       {p.can_view_heatmap && others ? <MemberHeatmap userId={p.user_id} /> : null}
@@ -174,6 +174,32 @@ export function RelationshipButtons({ rel, pending, onPress }: { rel: Relationsh
         />
       ))}
     </View>
+  );
+}
+
+/** A friend's five category scores, whole numbers ("—" where unscored), when they share them. */
+function CategoriesCard({ scores }: { scores: NonNullable<PublicProfile['scores']> }) {
+  const th = useTheme();
+  const c = profileCopy.categories;
+  return (
+    <Card testID="public-categories">
+      <Text variant="headline" accessibilityRole="header">
+        {c.title}
+      </Text>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: th.space.md }}>
+        {AXES.map((a) => {
+          const s = scores[a.key] ?? null;
+          return (
+            <View key={a.key} style={{ width: '50%', gap: 2 }} accessible accessibilityLabel={c.spoken(a.label, s)} testID={`public-category-${a.key}`}>
+              <Text variant="stat">{s === null ? c.noScore : String(Math.round(s))}</Text>
+              <Text variant="label" tone="muted">
+                {a.label}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    </Card>
   );
 }
 

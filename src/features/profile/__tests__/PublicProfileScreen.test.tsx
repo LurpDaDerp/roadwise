@@ -41,16 +41,13 @@ async function tap(testID: string) {
 const profile = (over: Partial<PublicProfile> = {}): PublicProfile => ({
   user_id: 'u-fox',
   username: 'swift_fox',
-  level: 4,
   safety_rating: 91.2,
   ranked: true,
-  league_tier: 'silver',
-  streak: 6,
   achievements: ['first_drive'],
-  clan: null,
   relationship: 'none',
   can_view_stats: false,
   can_view_heatmap: false,
+  scores: null,
   ...over,
 });
 
@@ -191,12 +188,11 @@ describe('moderation', () => {
     expect(await screen.findByTestId('report-sent')).toBeOnTheScreen();
   });
 
-  it('the menu reports only the driver, even when the server still sends an old clan', async () => {
-    await show(profile({ clan: { id: 'c-owls', name: 'Night Owls' } }));
+  it('the menu reports only the driver', async () => {
+    await show(profile());
     await tap('profile-more');
     expect(screen.getByTestId('profile-report')).toBeOnTheScreen();
     expect(screen.queryByTestId('profile-report-clan')).toBeNull();
-    expect(screen.queryByText(/clan/i)).toBeNull();
   });
 
   it('not found (or blocked) is one friendly empty state', async () => {
@@ -207,16 +203,41 @@ describe('moderation', () => {
 });
 
 describe('what friends see', () => {
-  it('the card has no league tier and no clan name', async () => {
-    await show(profile({ league_tier: 'gold', clan: { id: 'c-owls', name: 'Night Owls' } }));
+  it('the card: the avatar, the username and the Safety Rating, nothing of your own; no level, streak or league', async () => {
+    await show(profile());
     expect(await screen.findByTestId('profile-username')).toHaveTextContent('swift_fox');
-    expect(screen.getByTestId('profile-level')).toHaveTextContent(/^Level 4$/);
     expect(screen.getByLabelText('Safety Rating 91')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Streak 6')).toBeOnTheScreen();
-    expect(screen.queryByText(/gold|league|clan|night owls/i)).toBeNull();
-    // Points and freezes are only on your own card.
-    expect(screen.queryByTestId('profile-points')).toBeNull();
-    expect(screen.queryByTestId('profile-freezes')).toBeNull();
+    expect(screen.queryByTestId('profile-since')).toBeNull();
+    expect(screen.queryByTestId('profile-trend')).toBeNull();
+    expect(screen.queryByTestId('profile-totals')).toBeNull();
+    expect(screen.queryByText(/level|streak|league|clan|points?\b|pts/i)).toBeNull();
+  });
+
+  it('a driver who keeps their rating from you reads "No rating yet"', async () => {
+    await show(profile({ safety_rating: null, ranked: false }));
+    expect(await screen.findByLabelText('Safety Rating: No rating yet')).toBeOnTheScreen();
+  });
+
+  it('a Categories card with the five whole-number scores, only when they share them', async () => {
+    await show(profile({ relationship: 'friend', scores: { acceleration: 95, braking: 72, turning: 100, attention: null, speed: 88 } }));
+    const card = await screen.findByTestId('public-categories');
+    expect(card).toHaveTextContent(/Categories/);
+    expect(screen.getByLabelText('Braking 72')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Attention, no score yet')).toBeOnTheScreen();
+    expect(screen.getByTestId('public-category-speed')).toHaveTextContent(/88/);
+    await clearQueryClients();
+    await show(profile({ relationship: 'friend', scores: null }));
+    await screen.findByTestId('profile-username');
+    expect(screen.queryByTestId('public-categories')).toBeNull();
+  });
+
+  it('badges show when they share them; a friend who keeps them sends none and the card stays away', async () => {
+    await show(profile({ relationship: 'friend', achievements: ['first_drive', 'clean_100'] }));
+    expect(await screen.findByTestId('achievement-clean_100-unlocked')).toBeOnTheScreen();
+    await clearQueryClients();
+    await show(profile({ relationship: 'friend', achievements: [] }));
+    await screen.findByTestId('profile-username');
+    expect(screen.queryByTestId('public-achievements')).toBeNull();
   });
 
   it('stats only when allowed', async () => {
@@ -224,8 +245,7 @@ describe('what friends see', () => {
       if (fn === 'get_profile') return profile({ relationship: 'friend', can_view_stats: true });
       if (fn === 'get_member_stats')
         return {
-          miles: 200, durationS: 20000, nightMiles: 0, drives: 10, cleanDrives: 9, speeding: 1, pickups: 0,
-          handlingS: 0, hardBrake: 2, hardAccel: 0, hardCorner: 0,
+          miles: 200, durationS: 20000, nightMiles: 0, drives: 10, cleanDrives: 9, speeding: 1, hardBrake: 2, hardAccel: 0, hardCorner: 0,
         };
       return null;
     });
@@ -234,6 +254,8 @@ describe('what friends see', () => {
     await screen.findByTestId('relationship-remove');
     expect(await screen.findByTestId('member-stats', {}, { timeout: 3000 })).toBeOnTheScreen();
     expect(await screen.findByLabelText(/Clean drives/)).toBeOnTheScreen();
+    expect(screen.getByLabelText(/^Distance, 200/)).toBeOnTheScreen();
+    expect(screen.queryByText('Phone pickups')).toBeNull();
     expect(mockRpc).toHaveBeenCalledWith('get_member_stats', { p_user_id: 'u-fox' });
     expect(mockRpc).not.toHaveBeenCalledWith('get_heatmap', expect.anything());
   });

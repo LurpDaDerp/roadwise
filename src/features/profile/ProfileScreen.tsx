@@ -3,6 +3,7 @@ import { RefreshControl, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useStatSums } from '@/data/queries';
 import { useMySummary } from '@/data/server/summary';
 import { useFriends } from '@/features/social/api';
 import { LinkRow, Section } from '@/features/settings/parts';
@@ -11,7 +12,7 @@ import { Banner, Card, Pill, ScreenTitle, SectionHeader, Skeleton, useSkyScrollH
 
 import { AchievementBadges } from './AchievementBadges';
 import { profileCopy as copy } from './copy';
-import { ProfileHeader } from './ProfileHeader';
+import { ProfileHeader, sinceMonth } from './ProfileHeader';
 
 export const PROFILE_HREFS = {
   achievements: '/achievements' as Href,
@@ -20,17 +21,19 @@ export const PROFILE_HREFS = {
 } as const;
 
 /**
- * The Profile tab: the public card (what others see, plus your points and freezes), the five
- * achievements, then everything about you and your account: friends, who can see your heat map, how
- * points work, settings, account and blocked users. It sits on the page sky, so the title uses the
- * white sky ink and the pull-to-refresh spinner does too. Like every tab, it scrolls below the
- * status bar (clipped at the safe area), never under it.
+ * The Profile tab: your card (the public one, plus when you started, the week's change and your
+ * all-time totals), the three achievements, then everything about you and your account: friends,
+ * who can see your heat map, how scores work, settings, account and blocked users. It sits on the
+ * page sky, so the title uses the white sky ink and the pull-to-refresh spinner does too. Like
+ * every tab, it scrolls below the status bar (clipped at the safe area), never under it.
  */
 export function ProfileScreen() {
   const th = useTheme();
   const router = useRouter();
   const summary = useMySummary();
   const friends = useFriends();
+  // All kept drives on this phone (restore fills them in on sign-in).
+  const totals = useStatSums(null);
   const data = summary.data;
   const requests = friends.data?.incoming.length ?? 0;
   // the sky behind the tabs scrolls with Profile
@@ -47,7 +50,7 @@ export function ProfileScreen() {
         refreshControl={
           <RefreshControl
             refreshing={summary.isRefetching}
-            onRefresh={() => void Promise.all([summary.refetch(), friends.refetch()])}
+            onRefresh={() => void Promise.all([summary.refetch(), friends.refetch(), totals.refetch()])}
             tintColor={th.onSky.text}
           />
         }
@@ -60,18 +63,17 @@ export function ProfileScreen() {
           <ProfileHeader
             testID="profile-card"
             username={data.profile.username}
-            level={data.progress.level}
             safetyRating={data.progress.safety_rating}
             ranked={data.progress.ranked}
-            streak={data.progress.streak}
             own={{
-              points: data.progress.points,
-              levelFloor: data.progress.level_floor,
-              levelNext: data.progress.level_next,
-              miles30d: data.progress.miles_30d,
-              nextMult: data.progress.next_mult,
-              atRisk: data.progress.at_risk,
-              freezes: data.progress.freezes,
+              since: sinceMonth(data.profile.onboarded_at),
+              ratingTrend: data.progress.rating_trend,
+              miles90d: data.progress.miles_90d,
+              totals: {
+                drives: totals.data?.drives ?? 0,
+                miles: totals.data?.miles ?? 0,
+                durationS: totals.data?.durationS ?? 0,
+              },
             }}
           />
         ) : summary.isError ? (
@@ -105,7 +107,7 @@ export function ProfileScreen() {
             testID="profile-friends"
           />
           <LinkRow icon="map-outline" title={copy.rows.heatmap.title} subtitle={copy.rows.heatmap.subtitle} onPress={() => router.push(PROFILE_HREFS.heatmap)} testID="profile-heatmap" />
-          <LinkRow icon="help-circle-outline" title={copy.rows.how.title} subtitle={copy.rows.how.subtitle} onPress={() => router.push(SETTINGS_HREFS.howPointsWork)} testID="profile-how" />
+          <LinkRow icon="help-circle-outline" title={copy.rows.how.title} subtitle={copy.rows.how.subtitle} onPress={() => router.push(SETTINGS_HREFS.howScoresWork)} testID="profile-how" />
         </Section>
 
         <Section>

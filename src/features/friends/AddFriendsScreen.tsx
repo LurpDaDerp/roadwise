@@ -5,7 +5,6 @@ import { Share, TextInput, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { useMySummary } from '@/data/server/summary';
-import { blockedDuringDrive } from '@/drive/leave';
 import { Section, TopBar } from '@/features/settings/parts';
 import { searchQuery, useSearchUsers } from '@/features/social/api';
 import { addLink, profileHref } from '@/features/social/links';
@@ -98,7 +97,7 @@ export function AddFriendsScreen({ debounceMs = SEARCH_DEBOUNCE_MS }: { debounce
                 <ListRow
                   key={r.user_id}
                   title={r.username}
-                  subtitle={`${copy.level(r.level)} · ${copy.rating(r.safety_rating)}`}
+                  subtitle={r.safety_rating !== null && r.ranked !== false ? copy.rating(r.safety_rating) : undefined}
                   leading={<Avatar username={r.username} size="md" />}
                   onPress={() => router.push(profileHref(r.username))}
                   testID={`result-${r.username}`}
@@ -137,8 +136,6 @@ export function AddFriendsScreen({ debounceMs = SEARCH_DEBOUNCE_MS }: { debounce
               variant="ghost"
               size="md"
               onPress={() => {
-                // A share target opens outside RoadWise: not during a drive (src/drive/leave.ts).
-                if (blockedDuringDrive()) return;
                 void Share.share({ message: copy.shareMessage(link) }).catch(() => {});
               }}
               testID="share-link"

@@ -21,10 +21,9 @@ export const en = {
   'signIn.offline': "You're offline. Connect to sign in.",
   'tabs.home': 'Home',
   'tabs.analytics': 'Analytics',
-  'tabs.leaderboards': 'Leaderboards',
+  'tabs.friends': 'Friends',
   'tabs.profile': 'Profile',
   'home.signOut': 'Sign out',
-  'summary.pointsEarned': '+{points} points',
   'format.distanceMi': '{value} mi',
   'format.minutes': '{m} min',
   'format.hoursMinutes': '{h} h {m} min',
@@ -35,7 +34,6 @@ export const en = {
   // In-drive voice phrases (§8.8: audio first, ≤ 3 words — the break suggestion is the exception).
   'alert.easeOff': 'Ease off',
   'alert.slowDown': 'Slow down',
-  'alert.phoneDown': 'Phone down',
   // The one in-drive phrase over 3 words: the break suggestion is an L1 nudge, never urgent.
   'alert.takeABreak': 'Take a break soon',
   // Spoken at drive start (product spec §8.4) and the dim label on the pocket screen (C4).

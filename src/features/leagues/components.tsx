@@ -88,10 +88,11 @@ export function RetryButton({ onPress }: { onPress: () => void }) {
 // ---------------------------------------------------------------------------
 
 export type BoardRowProps = {
-  /** Null: listed but not placed (an unranked driver on the rating board). */
+  /** Null: listed but not placed (a driver without a rating yet). */
   rank: number | null;
   username: string;
-  subtitle: string;
+  /** The line under the name; none when there is nothing to say. */
+  subtitle?: string;
   value: string;
   unit?: string;
   /** How the value reads aloud, when "value unit" isn't clear on its own. */
@@ -141,7 +142,7 @@ export function BoardRow({
     username,
     me ? copy.you : null,
     subtitle,
-    valueLabel ?? (unit ? `${value} ${unit === copy.pts ? 'points' : unit}` : value),
+    valueLabel ?? (unit ? `${value} ${unit}` : value),
   ]
     .filter(Boolean)
     .join(', ');
@@ -176,9 +177,11 @@ export function BoardRow({
             </Text>
             {me ? <Pill label={copy.you} tone="accent" emphasis="solid" accessible={false} /> : null}
           </View>
-          <Text variant="footnote" tone="muted" numberOfLines={1}>
-            {subtitle}
-          </Text>
+          {subtitle ? (
+            <Text variant="footnote" tone="muted" numberOfLines={1}>
+              {subtitle}
+            </Text>
+          ) : null}
         </View>
         <View style={{ alignItems: 'flex-end' }}>
           <Text variant="title3" style={{ fontVariant: ['tabular-nums'] }}>

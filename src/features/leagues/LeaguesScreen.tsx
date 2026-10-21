@@ -1,42 +1,39 @@
-import { useState } from 'react';
+import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 
-import { Screen, ScreenTitle, SegmentedControl, useTheme } from '@/ui';
+import { IconButton, Screen, ScreenTitle, useTheme } from '@/ui';
 
 import { leaguesCopy } from './copy';
 import { FriendsBoard } from './FriendsBoard';
-import { GlobalBoard } from './GlobalBoard';
-
-export type LeaguesSegment = 'friends' | 'global';
-
-const SEGMENTS = [
-  { value: 'friends', label: leaguesCopy.segments.friends },
-  { value: 'global', label: leaguesCopy.segments.global },
-] as const;
+import { FRIENDS_ADD_HREF } from './routes';
 
 /**
- * The Leaderboards tab (route `/leagues`): Friends (default) · Global, ranked by weekly points or
- * the Safety Rating.
+ * The Friends tab (route `/leagues`): you and your friends ranked by Safety Rating, with a button
+ * beside the title to add friends.
  */
-export function LeaguesScreen({ initial = 'friends' }: { initial?: LeaguesSegment }) {
+export function LeaguesScreen() {
   const t = useTheme();
-  const [segment, setSegment] = useState<LeaguesSegment>(initial);
-
+  const router = useRouter();
   return (
     <Screen padded={false} bottomInset={false} sky testID="leagues-screen">
-      <View style={{ paddingHorizontal: t.space.lg, paddingTop: t.space.lg, gap: t.space.md }}>
-        <ScreenTitle testID="leagues-title">{leaguesCopy.title}</ScreenTitle>
-        <SegmentedControl
-          segments={SEGMENTS}
-          value={segment}
-          onChange={setSegment}
-          accessibilityLabel={leaguesCopy.segmentsLabel}
-          testID="leagues-segments"
-        />
+      <View style={{ paddingHorizontal: t.space.lg, paddingTop: t.space.lg }}>
+        <ScreenTitle
+          testID="leagues-title"
+          trailing={
+            <IconButton
+              icon="person-add-outline"
+              variant="surface"
+              accessibilityLabel={leaguesCopy.add}
+              onPress={() => router.push(FRIENDS_ADD_HREF)}
+              testID="leagues-add"
+            />
+          }
+        >
+          {leaguesCopy.title}
+        </ScreenTitle>
       </View>
       <View style={{ flex: 1 }}>
-        {segment === 'friends' ? <FriendsBoard /> : null}
-        {segment === 'global' ? <GlobalBoard /> : null}
+        <FriendsBoard />
       </View>
     </Screen>
   );

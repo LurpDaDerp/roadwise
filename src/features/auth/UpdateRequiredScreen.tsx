@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Linking, View } from 'react-native';
 
-import { blockedDuringDrive } from '@/drive/leave';
 import { Banner, Button, Screen, Text, useTheme } from '@/ui';
 
 export const updateRequiredCopy = {
@@ -32,8 +31,6 @@ export function UpdateRequiredScreen({
 
   const onGet = () => {
     if (!storeUrl) return;
-    // The store opens outside RoadWise: never during a drive.
-    if (blockedDuringDrive()) return;
     setFailed(false);
     open(storeUrl).catch(() => setFailed(true));
   };

@@ -1,37 +1,24 @@
-/** Pure view logic for the Leaderboards tab: rating text and the friends board order. No React. */
+/** Pure view logic for the Friends tab: rating text and the board's order. No React. */
 import { formatRating } from '@/lib/rating';
 
-import type { FriendsBoardRow, FriendsMetric } from './api';
-
-// ---------------------------------------------------------------------------
-// numbers and words
-// ---------------------------------------------------------------------------
+import type { FriendsBoardRow } from './api';
 
 export { UNRANKED } from '@/lib/rating';
 
-/** A Safety Rating, never shown for an unranked driver (under 10 mi in 30 days): the shared rule. */
+/** A Safety Rating, never shown for a driver without one (under 10 mi in 90 days): the shared rule. */
 export const ratingText = (rating: number | null, ranked: boolean): string => formatRating(rating, ranked);
 
-export function percentileText(percentile: number): string {
-  return `You're in the top ${percentile}%`;
-}
-
-export function rankText(rank: number): string {
-  return `#${rank.toLocaleString('en-US')}`;
-}
-
 export interface RankedFriendRow extends Omit<FriendsBoardRow, 'rank'> {
-  /** Null for an unranked driver on the rating board: they are listed, not placed. */
+  /** Null for a driver without a rating: listed, not placed. */
   rank: number | null;
 }
 
 /**
- * The friends board as shown. Week points keep the server's order. On the rating board an
- * unranked driver's number is a few miles of noise, so ranked drivers come first by rating (ties
- * by username, as the server does) and unranked ones follow, alphabetical, with no place.
+ * The friends board as shown: ranked drivers first by Safety Rating (ties by username, as the
+ * server does), then those without a rating yet, alphabetical, with no place (their number is a
+ * few miles of noise).
  */
-export function rankFriendsBoard(rows: readonly FriendsBoardRow[], metric: FriendsMetric): RankedFriendRow[] {
-  if (metric === 'week') return [...rows].sort((a, b) => a.rank - b.rank);
+export function rankFriendsBoard(rows: readonly FriendsBoardRow[]): RankedFriendRow[] {
   const byName = (a: FriendsBoardRow, b: FriendsBoardRow) => a.username.localeCompare(b.username);
   const ranked = rows
     .filter((r) => r.ranked && r.value !== null)

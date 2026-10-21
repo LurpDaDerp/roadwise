@@ -12,7 +12,7 @@ import { friendsCopy as copy } from './copy';
 
 export const ADD_FRIENDS_HREF = '/friends/add' as Href;
 
-const subtitle = (c: PublicCard) => `${copy.level(c.level)} · ${copy.rating(c.ranked ? c.safety_rating : null)}`;
+const subtitle = (c: PublicCard) => copy.rating(c.ranked ? c.safety_rating : null);
 
 /**
  * `/friends`: requests to answer first, then friends, then requests you sent (each cancellable).

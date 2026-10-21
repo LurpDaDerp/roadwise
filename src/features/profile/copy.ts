@@ -1,16 +1,22 @@
 /** The Profile tab, public profile, achievements and heat map privacy words. Usernames only, ever. */
 export const profileCopy = {
   tab: 'Profile',
-  level: (n: number) => `Level ${n}`,
-  toNext: (pts: number, next: number) => `${pts.toLocaleString('en-US')} pts to level ${next}`,
-  maxLevel: 'Top level reached',
+  /** "Driving with RoadWise since Oct 2026". */
+  since: (monthYear: string) => `Driving with RoadWise since ${monthYear}`,
   rating: 'Safety Rating',
-  unranked: 'Unranked',
-  unrankedMiles: (progress: string) => `${progress} to rank`,
-  streak: 'Streak',
-  points: 'Points',
-  freezes: 'Freezes',
-  freezesHeld: (held: number, max: number) => `${held} of ${max}`,
+  noRating: 'No rating yet',
+  /** "4 of 10 mi to your rating". */
+  toRating: (progress: string) => `${progress} to your rating`,
+  trend: {
+    label: 'This week',
+    spoken: (word: string) => `${word} this week`,
+  },
+  totals: { drives: 'Drives', distance: 'Distance', time: 'On the road' },
+  categories: {
+    title: 'Categories',
+    noScore: '—',
+    spoken: (label: string, score: number | null) => (score === null ? `${label}, no score yet` : `${label} ${score}`),
+  },
   loadError: "Couldn't load your profile.",
   retry: 'Try again',
 
@@ -26,7 +32,7 @@ export const profileCopy = {
     friends: { title: 'Friends', subtitle: 'Add by username or QR code' },
     requests: (n: number) => (n === 1 ? '1 request' : `${n} requests`),
     heatmap: { title: 'Heat map', subtitle: 'Who can see your routes' },
-    how: { title: 'How points work', subtitle: 'Miles, events, streaks and levels' },
+    how: { title: 'How scores work', subtitle: 'Drive scores and your Safety Rating' },
     settings: { title: 'Settings', subtitle: 'Privacy, alerts, notifications' },
     account: { title: 'Account', subtitle: 'Sign out, export or delete' },
     blocked: { title: 'Blocked users', subtitle: 'See and unblock' },
@@ -45,10 +51,8 @@ export const profileCopy = {
 
   achievementHints: {
     first_drive: 'Finish a drive of half a mile or more.',
-    clean_100: 'Drive 100 miles with zero events.',
-    perfect_week: '3 or more drives in one week, all with zero events.',
-    phone_free_25: (run: number) => `${run} of 25 drives in a row without picking up your phone.`,
-    streak_10: (streak: number) => `Your streak is ${streak}. Reach 10.`,
+    clean_100: 'Drive 100 miles with no events.',
+    perfect_week: 'Take 3 or more drives in one week, all with no events.',
   },
 
   public: {
@@ -62,14 +66,14 @@ export const profileCopy = {
     cancelTitle: (u: string) => `Cancel your request to ${u}?`,
     cancelRequest: 'Cancel request',
     removeTitle: (u: string) => `Remove ${u} as a friend?`,
-    removeBody: "You won't see each other on your friends board.",
+    removeBody: "You won't see each other on the Friends tab.",
     remove: 'Remove friend',
     keep: 'Keep',
     more: 'More options',
     report: 'Report',
     block: 'Block',
     blockTitle: (u: string) => `Block ${u}?`,
-    blockBody: "They can't find or add you, and you won't see each other on boards. You can unblock them in Settings.",
+    blockBody: "They can't find or add you, and you won't see each other on the Friends tab. You can unblock them in Settings.",
     cancel: 'Cancel',
     stats: 'Last 30 days',
     statsEmpty: 'No drives in the last 30 days.',

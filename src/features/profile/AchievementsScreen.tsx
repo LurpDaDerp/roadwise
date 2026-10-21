@@ -2,7 +2,7 @@ import { View } from 'react-native';
 
 import { useMySummary } from '@/data/server/summary';
 import { TopBar } from '@/features/settings/parts';
-import { Card, Pill, ProgressBar, Screen, Text, useTheme } from '@/ui';
+import { Card, Pill, Screen, Text, useTheme } from '@/ui';
 
 import { AchievementMedal } from './AchievementBadges';
 import { achievementViews } from './achievements';
@@ -10,11 +10,11 @@ import { profileCopy } from './copy';
 
 const copy = profileCopy.achievements;
 
-/** `/achievements`: the five in the spec’s order, unlocked ones in gold, each with how to get it or how close you are. */
+/** `/achievements`: the three in the spec’s order, unlocked ones in gold, each with how to get it. */
 export function AchievementsScreen() {
   const th = useTheme();
   const summary = useMySummary().data;
-  const views = achievementViews(summary?.achievements ?? [], summary?.progress ?? null);
+  const views = achievementViews(summary?.achievements ?? []);
   const got = views.filter((v) => v.unlocked).length;
 
   return (
@@ -31,9 +31,6 @@ export function AchievementsScreen() {
             <Text variant="subhead" tone="muted" testID={`achievement-hint-${a.id}`}>
               {a.hint}
             </Text>
-            {!a.unlocked && a.progress !== null ? (
-              <ProgressBar value={a.progress} accessibilityLabel={a.title} accessibilityValueText={a.hint} />
-            ) : null}
           </View>
         </Card>
       ))}

@@ -44,11 +44,8 @@ jest.mock('expo-camera', () => {
 const card = (username: string, over: Partial<PublicCard> = {}): PublicCard => ({
   user_id: `id-${username}`,
   username,
-  level: 3,
   safety_rating: 90,
   ranked: true,
-  league_tier: 'bronze',
-  streak: 2,
   ...over,
 });
 
@@ -91,6 +88,15 @@ describe('Friends list', () => {
     expect(mockRouter.push).toHaveBeenCalledWith('/u/crush');
   });
 
+  it('each friend reads their Safety Rating, or "No rating yet"; no level', async () => {
+    answerRpc(mockRpc, { list_friends: { friends: [card('pal'), card('quiet', { safety_rating: null, ranked: false })], incoming: [], outgoing: [] } });
+    const w = await appWorld();
+    await w.render(<FriendsScreen />);
+    expect(await screen.findByText('Safety Rating 90')).toBeOnTheScreen();
+    expect(screen.getByText('No rating yet')).toBeOnTheScreen();
+    expect(screen.queryByText(/Level/)).toBeNull();
+  });
+
   it('a friend opens their profile', async () => {
     answerRpc(mockRpc, { list_friends: { friends: [card('Pal')], incoming: [], outgoing: [] } });
     const w = await appWorld();
@@ -99,11 +105,12 @@ describe('Friends list', () => {
     expect(mockRouter.push).toHaveBeenCalledWith('/u/pal');
   });
 
-  it('nobody yet: says how to add someone', async () => {
+  it('nobody yet: says how to add someone, and where ratings compare', async () => {
     answerRpc(mockRpc, { list_friends: { friends: [], incoming: [], outgoing: [] } });
     const w = await appWorld();
     await w.render(<FriendsScreen />);
     expect(await screen.findByText(copy.empty)).toBeOnTheScreen();
+    expect(screen.getByText('Add friends by username or QR code, then see how your ratings compare on the Friends tab.')).toBeOnTheScreen();
   });
 });
 
@@ -111,7 +118,7 @@ describe('Add friends', () => {
   it('searches only from 3 letters, and the QR code is my add link', async () => {
     answerRpc(mockRpc, {
       get_my_summary: { profile: { username: 'swift_fox' } },
-      search_users: [{ user_id: 'id-maya', username: 'maya_16', level: 2, safety_rating: null }],
+      search_users: [{ user_id: 'id-maya', username: 'maya_16', safety_rating: null }],
     });
     const w = await appWorld();
     await w.render(<AddFriendsScreen debounceMs={0} />);

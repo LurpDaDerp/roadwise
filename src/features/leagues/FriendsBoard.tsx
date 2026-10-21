@@ -1,107 +1,80 @@
+import { RANKED_MIN_MILES } from '@scoring';
 import { useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { FlatList, RefreshControl, View } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
-import { Card, Chip, EmptyState, formatPointsValue, useTheme } from '@/ui';
+import { distanceIn, formatDistance, formatDistanceProgress, type Units } from '@/lib/units';
+import { Card, EmptyState, useTheme } from '@/ui';
 
-import { useFriendsBoard, type FriendsMetric } from './api';
-import {
-  BoardNote,
-  BoardRow,
-  ListSkeleton,
-  LoadFailed,
-  RefreshFailedNote,
-  RowSeparator,
-  usePullRefresh,
-} from './components';
+import { useFriendsBoard } from './api';
+import { BoardNote, BoardRow, ListSkeleton, LoadFailed, RefreshFailedNote, RowSeparator, usePullRefresh } from './components';
 import { leaguesCopy } from './copy';
 import { rankFriendsBoard, ratingText, type RankedFriendRow } from './model';
 import { FRIENDS_ADD_HREF, profileHref } from './routes';
 
-const copy = leaguesCopy;
+const copy = leaguesCopy.friends;
 
-/** Friends: you and your friends, by week points or Safety Rating. */
+/** The line under a driver's name: their 90-day distance, or how far they are from a rating; nothing when they don't share it. */
+export function boardSubtitle(r: Pick<RankedFriendRow, 'rank' | 'miles_90d'>, units: Units): string | undefined {
+  if (r.miles_90d === null || r.miles_90d === undefined) return undefined;
+  if (r.rank !== null) return copy.miles(formatDistance(r.miles_90d, units, { digits: distanceIn(r.miles_90d, units) >= 10 ? 0 : 1 }));
+  const p = formatDistanceProgress(r.miles_90d, RANKED_MIN_MILES, units);
+  return copy.toRating(`${p.done} of ${p.target} ${units}`);
+}
+
+/** The Friends tab's board: you and your friends, ranked by Safety Rating over the last 90 days. */
 export function FriendsBoard() {
   const t = useTheme();
   const router = useRouter();
   const units = useUnits();
-  const [metric, setMetric] = useState<FriendsMetric>('week');
-  const q = useFriendsBoard(metric);
+  const q = useFriendsBoard();
   const pull = usePullRefresh(q.refetch);
-  // switching the metric keeps the last board on screen until the new one lands; with two metrics,
-  // a held (placeholder) board is always the other one, so read it with that metric
-  const stale = q.isPlaceholderData;
-  const shownMetric: FriendsMetric = stale ? (metric === 'week' ? 'rating' : 'week') : metric;
-  const rows = useMemo(() => (q.data ? rankFriendsBoard(q.data, shownMetric) : []), [q.data, shownMetric]);
-  const anyUnranked = shownMetric === 'rating' && rows.some((r) => r.rank === null);
-
-  const header = (
-    <View style={{ gap: t.space.md, paddingBottom: t.space.md }}>
-      <View style={{ flexDirection: 'row', gap: t.space.sm }} accessibilityLabel={copy.friends.metricLabel}>
-        <Chip
-          label={copy.friends.week}
-          icon="flash"
-          selected={metric === 'week'}
-          onPress={() => setMetric('week')}
-          testID="metric-week"
-        />
-        <Chip
-          label={copy.friends.rating}
-          icon="shield-checkmark"
-          selected={metric === 'rating'}
-          onPress={() => setMetric('rating')}
-          testID="metric-rating"
-        />
-      </View>
-      {q.isError && q.data ? <RefreshFailedNote /> : null}
-    </View>
-  );
+  const rows = useMemo(() => (q.data ? rankFriendsBoard(q.data) : []), [q.data]);
+  const anyUnrated = rows.some((r) => r.rank === null);
 
   if (q.data === undefined) {
     return (
       <View style={{ padding: t.space.lg, gap: t.space.md }}>
-        {header}
         {q.isError ? <LoadFailed onRetry={() => void q.refetch()} /> : <ListSkeleton />}
       </View>
     );
   }
 
-  const value = (r: RankedFriendRow) =>
-    shownMetric === 'week' ? formatPointsValue(r.value ?? 0) : ratingText(r.value, r.ranked);
-
   return (
     <FlatList
       testID="friends-board"
-      style={{ opacity: stale ? 0.6 : 1 }}
       data={rows}
       keyExtractor={(r) => r.user_id}
       contentContainerStyle={{ padding: t.space.lg }}
       ItemSeparatorComponent={RowSeparator}
-      ListHeaderComponent={header}
+      ListHeaderComponent={q.isError ? <View style={{ paddingBottom: t.space.md }}><RefreshFailedNote /></View> : null}
       refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={t.onSky.text} />}
-      renderItem={({ item }) => (
-        <BoardRow
-          rank={item.rank}
-          username={item.username}
-          subtitle={`Level ${item.level}`}
-          value={value(item)}
-          unit={shownMetric === 'week' ? copy.pts : undefined}
-          me={item.is_me}
-          onPress={() => router.push(profileHref(item.username))}
-          testID={`friend-row-${item.username}`}
-        />
-      )}
+      renderItem={({ item }) => {
+        const rated = item.rank !== null;
+        return (
+          <BoardRow
+            rank={item.rank}
+            username={item.username}
+            subtitle={boardSubtitle(item, units)}
+            value={rated ? ratingText(item.value, item.ranked) : '—'}
+            valueLabel={rated ? undefined : copy.noRatingSpoken}
+            me={item.is_me}
+            onPress={() => router.push(profileHref(item.username))}
+            testID={`friend-row-${item.username}`}
+          />
+        );
+      }}
       ListFooterComponent={
         <View style={{ gap: t.space.lg, paddingTop: t.space.lg }}>
-          {anyUnranked ? <BoardNote>{copy.friends.unrankedNote(units)}</BoardNote> : null}
+          {rows.length > 0 ? <BoardNote testID="friends-caption">{anyUnrated ? `${copy.caption}. ${copy.unratedNote(units)}` : copy.caption}</BoardNote> : null}
           {rows.length <= 1 ? (
             <Card padded={false}>
               <EmptyState
                 icon="people"
-                title={copy.friends.emptyTitle}
-                body={copy.friends.emptyBody}
-                action={{ label: copy.friends.emptyAction, onPress: () => router.push(FRIENDS_ADD_HREF) }}
+                title={copy.emptyTitle}
+                body={copy.emptyBody}
+                action={{ label: copy.emptyAction, onPress: () => router.push(FRIENDS_ADD_HREF) }}
                 testID="friends-empty"
               />
             </Card>

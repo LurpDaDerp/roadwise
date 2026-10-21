@@ -8,34 +8,35 @@ import { useCallback, useRef, useState } from 'react';
 
 import { callRpc } from '@/data/server/rpc';
 import { invalidateAfterWrite } from '@/data/server/invalidate';
-import type { LeagueTier } from '@/data/server/summary';
 import { SERVER_SLOW_STALE_MS, useServerQuery } from '@/data/server/useServerQuery';
-import type { StatSums } from '@scoring';
+import type { AxisKey, StatSums } from '@scoring';
 
 import { friendlyError } from './errors';
 import { USERNAME_RE } from './links';
 
-/** `private.public_card`: what anyone allowed to see a driver sees. */
+/**
+ * `private.public_card`: what a driver shows. The Safety Rating is there only for themselves and
+ * for friends they share it with (null and unranked for anyone else).
+ */
 export interface PublicCard {
   user_id: string;
   username: string;
-  level: number;
   safety_rating: number | null;
   ranked: boolean;
-  /** Still sent by the server; the app shows no league tier. */
-  league_tier: LeagueTier;
-  streak: number;
 }
 
 export type Relationship = 'self' | 'friend' | 'incoming' | 'outgoing' | 'none';
 
 export interface PublicProfile extends PublicCard {
+  /** Empty unless it is you, or a friend who shares their achievements. */
   achievements: string[];
-  /** Still sent by the server; the app shows no clan. */
-  clan: { id: string; name: string } | null;
   relationship: Relationship;
+  /** You, or a friend who shares their driving stats. */
   can_view_stats: boolean;
+  /** You, or a friend whose heat map is set to Friends. */
   can_view_heatmap: boolean;
+  /** The five category scores, whole numbers (null each where unscored); null unless it is you or a friend who shares them. */
+  scores: Record<AxisKey, number | null> | null;
 }
 
 export interface FriendsList {
@@ -44,11 +45,12 @@ export interface FriendsList {
   outgoing: PublicCard[];
 }
 
+/** A search hit: a rating only ever for a friend who shares it. */
 export interface SearchResult {
   user_id: string;
   username: string;
-  level: number;
   safety_rating: number | null;
+  ranked?: boolean;
 }
 
 export interface BlockedUser {

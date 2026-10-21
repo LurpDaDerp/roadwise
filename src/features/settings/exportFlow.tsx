@@ -1,6 +1,5 @@
 import { useState } from 'react';
 
-import { blockedDuringDrive } from '@/drive/leave';
 import { Banner } from '@/ui';
 
 import { exportMyData, type AccountDeps, type ExportResult } from './api';
@@ -23,8 +22,6 @@ export function useExport(deps: ExportDeps = {}) {
   const [state, setState] = useState<ExportState>('idle');
   const run = async () => {
     if (state === 'working') return;
-    // The share sheet and the Android folder picker open outside RoadWise: not during a drive.
-    if (blockedDuringDrive()) return;
     setState('working');
     const r = await (deps.exportData ?? (() => exportMyData(deps.account)))();
     if (!r.ok) {

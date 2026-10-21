@@ -36,7 +36,7 @@ export function AchievementMedal({ id, unlocked, size = 52 }: { id: AchievementI
   );
 }
 
-/** The five medals in a row, each named under it. */
+/** The three medals in a row, each named under it. */
 export function AchievementBadges({ unlocked, testID }: { unlocked: readonly string[]; testID?: string }) {
   const th = useTheme();
   const scale = useFontScale();
@@ -44,7 +44,7 @@ export function AchievementBadges({ unlocked, testID }: { unlocked: readonly str
   return (
     <View
       testID={testID}
-      style={{ flexDirection: 'row', flexWrap: stacked ? 'wrap' : 'nowrap', justifyContent: 'space-between', rowGap: th.space.md }}
+      style={{ flexDirection: 'row', flexWrap: stacked ? 'wrap' : 'nowrap', justifyContent: 'space-around', rowGap: th.space.md }}
     >
       {ACHIEVEMENTS.map((a) => {
         const got = unlocked.includes(a.id);
@@ -54,7 +54,7 @@ export function AchievementBadges({ unlocked, testID }: { unlocked: readonly str
             accessible
             accessibilityLabel={`${a.title}, ${got ? profileCopy.achievements.unlocked : profileCopy.achievements.locked}`}
             testID={`achievement-${a.id}-${got ? 'unlocked' : 'locked'}`}
-            style={{ alignItems: 'center', gap: th.space.xs, width: stacked ? '33%' : '19%' }}
+            style={{ alignItems: 'center', gap: th.space.xs, width: stacked ? '50%' : '33%' }}
           >
             <AchievementMedal id={a.id} unlocked={got} />
             <Text variant="caption" tone={got ? 'default' : 'muted'} numberOfLines={2} style={{ textAlign: 'center' }}>
