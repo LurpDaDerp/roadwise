@@ -1,4 +1,4 @@
-import { isDashcamType, type DriveBreakdown } from '@scoring';
+import { AXES, isDashcamType, SPEEDING_GRACE_S, type DriveBreakdown } from '@scoring';
 
 import type { FinalizeTripPayloadV3 } from '@/data/sync/payload';
 import { decodeRuns } from '@/lib/polyline';
@@ -76,9 +76,22 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
     );
     expect(summary.clean / summary.scored).toBeGreaterThan(0.2);
     expect(summary.clean / summary.scored).toBeLessThan(0.6);
+    expect(Object.keys(summary.axes30)).toEqual([...AXES]);
     expect(Object.values(summary.axes30).every((v) => v > 0 && v <= 100)).toBe(true);
     expect(drives.some((d) => d.payload.nightMiles > 0)).toBe(true);
     expect(drives.some((d) => d.payload.dashcam !== undefined)).toBe(true);
+  });
+
+  it('measures what the phone does: speeding past the grace with its mph over the line, phone use with its top speed', () => {
+    for (const d of drives) {
+      for (const e of d.payload.events) {
+        if (e.type === 'speeding') {
+          expect(e.durationS).toBeGreaterThan(SPEEDING_GRACE_S);
+          expect(e.measured.overMphS).toBeGreaterThan(0);
+        }
+        if (e.type === 'phone_pickup' || e.type === 'phone_handling') expect(e.measured.maxSpeedMph).toBeGreaterThan(0);
+      }
+    }
   });
 
   it('builds the envelope finalize-trip would, agreeing with apply_drive', () => {

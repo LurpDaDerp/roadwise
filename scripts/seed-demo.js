@@ -284,7 +284,8 @@ function recordDrive(trip, rnd) {
   if (trip.short) track = track.slice(0, 6);
   const startedAt = localInstant(trip.day, trip.minutes) + intBetween(rnd, 0, 59) * 1000;
   const paceBy = new Map();
-  let t = between(rnd, 25, 70);
+  // A move down the block pulls away and parks at once: under MIN_SCORED_S as well as under half a mile.
+  let t = trip.short ? between(rnd, 5, 15) : between(rnd, 25, 70);
   let distM = 0;
   let nightM = 0;
   const times = [t];
@@ -302,8 +303,9 @@ function recordDrive(trip, rnd) {
     times.push(t);
     cum.push(distM);
   }
-  const durationS = Math.round(t + between(rnd, 20, 90));
+  const durationS = Math.round(t + (trip.short ? between(rnd, 5, 15) : between(rnd, 20, 90)));
   const miles = round(distM / M_PER_MILE, 2);
+  if (Boolean(trip.short) !== scoring.tooShort(miles, durationS)) throw new Error('a drive is not as short (or long) as the scoring package needs it to be');
   // The phone trims the first and last 0.25 mi (plus up to 400 m of jitter) off the route it sends.
   const trimStart = 402 + between(rnd, 0, 400);
   const trimEnd = 402 + between(rnd, 0, 400);
@@ -367,8 +369,11 @@ function makeEvents(trip, rec, rnd, opts) {
     const over = tier === 'minor' ? between(rnd, 0.6, 3.6) : tier === 'moderate' ? between(rnd, 4.6, 8.6) : between(rnd, 9.6, 15);
     const speedMph = round(p.limit + scoring.speedTolerance(p.limit) + over, 1);
     if (scoring.speedTier(speedMph, p.limit) !== tier) throw new Error('speeding tier drifted from the scoring package');
-    const durationS = tier === 'severe' ? intBetween(rnd, 4, 18) : intBetween(rnd, 6, gentle ? 25 : 70);
-    events.push({ type: 'speeding', tier, startedAt: p.startedAt, durationS, lat: p.lat, lng: p.lng, measured: { speedMph, limitMph: p.limit } });
+    // Every over-the-line row, more than the grace (a shorter episode is never an event).
+    const durationS = intBetween(rnd, scoring.SPEEDING_GRACE_S + 1, tier === 'severe' ? 18 : gentle ? 25 : 70);
+    // mph over the points line summed over the rows after the grace, at a steady speed
+    const overMphS = round((durationS - scoring.SPEEDING_GRACE_S) * (speedMph - p.limit - scoring.speedTolerance(p.limit)), 1);
+    events.push({ type: 'speeding', tier, startedAt: p.startedAt, durationS, lat: p.lat, lng: p.lng, measured: { speedMph, limitMph: p.limit, overMphS } });
   }
   const harsh = (type, rate, g) => {
     for (let n = poisson(rnd, rate * scale); n > 0; n -= 1) {
@@ -398,7 +403,17 @@ function makeEvents(trip, rec, rnd, opts) {
       const p = at(i);
       const usedS = rnd() < 0.55 ? intBetween(rnd, 4, 14) : intBetween(rnd, 20, 55);
       const pickupS = Math.min(usedS, 15);
-      events.push({ type: 'phone_pickup', tier: 'severe', startedAt: p.startedAt, durationS: usedS, lat: p.lat, lng: p.lng, measured: { mounted: false, speedMph: round(p.mph * between(rnd, 0.7, 1), 1) } });
+      // The highest speed during the phone use: the pace of the road (it prices both events).
+      const maxSpeedMph = round(p.mph, 1);
+      events.push({
+        type: 'phone_pickup',
+        tier: 'severe',
+        startedAt: p.startedAt,
+        durationS: usedS,
+        lat: p.lat,
+        lng: p.lng,
+        measured: { mounted: false, speedMph: round(p.mph * between(rnd, 0.7, 1), 1), maxSpeedMph },
+      });
       if (usedS > pickupS) {
         // The detector's split (src/core/detectors/phoneUse.ts): handling is what follows the first 15 s.
         const extra = usedS - 15;
@@ -412,7 +427,7 @@ function makeEvents(trip, rec, rnd, opts) {
           units: Math.max(1, Math.ceil(extra / 15)),
           lat: round(rec.track[j].lat, 5),
           lng: round(rec.track[j].lng, 5),
-          measured: { mounted: false },
+          measured: { mounted: false, maxSpeedMph },
         });
       }
     }
@@ -487,7 +502,7 @@ function scoreUpload(p, ctx) {
     ? { deviceId: p.dashcam.deviceId, movingS: p.dashcam.movingS, coveredS: p.dashcam.coveredS, synced: p.dashcam.synced, on: scoring.dashcamDrive(p.dashcam) }
     : { deviceId: null, movingS: 0, coveredS: 0, synced: false, on: false };
   const breakdown = scoring.scoreDrive(
-    { miles: p.miles, safeMiles: p.safeMiles, events: kept, loopRepeat: false, dashcam: dashcam.on },
+    { miles: p.miles, safeMiles: p.safeMiles, events: kept, loopRepeat: false, dashcam: dashcam.on, durationS: p.durationS },
     { streak: ctx.streak.streak, safeMilesEarlierToday: ctx.safeMilesEarlierToday }
   );
   const streak = scoring.applyStreak(ctx.streak, { scored: breakdown.scored, net: breakdown.net, activeEventCount: breakdown.activeEventCount });
@@ -588,31 +603,27 @@ function buildHistory(now, seed = SEED) {
   return drives;
 }
 
-/** What the history should add up to on the server (the Safety Rating's 30 days, the streak, the axes). */
+/**
+ * What the history should add up to on the server: the Safety Rating over 30 days
+ * (`safetyRatingOf`, as migration 0022's `private.rating_window` computes it), the streak and the
+ * radar's category scores (`axisScores` over the window's miles floored at `RANKED_MIN_MILES`,
+ * whole numbers, as the Analytics tab shows them).
+ */
 function summarize(drives, now) {
   const since = now - 30 * 86400000;
   const scored = drives.filter((d) => d.scored.breakdown.scored);
   const recent = scored.filter((d) => d.payload.startedAt > since);
-  const miles30 = recent.reduce((s, d) => s + d.payload.miles, 0);
-  const penalty30 = recent.reduce((s, d) => s + d.scored.breakdown.ratingPenalty, 0);
-  // Attention (DashPal): its events over the miles the dashcam watched, as the server rates it
-  const watched = (list) =>
-    list.reduce((s, d) => s + (d.payload.dashcam ? scoring.watchedMiles(d.payload.miles, d.payload.dashcam.movingS, d.payload.dashcam.coveredS) : 0), 0);
-  const attention = (list) => ({
-    penalty: list.reduce((s, d) => s + d.scored.kept.reduce((t, e) => t + scoring.attentionPenalty(e), 0), 0),
-    watchedMiles: watched(list),
+  // A window: its stored events' rating penalties per category, its miles and the miles DashPal watched (Attention's).
+  const ratingWindow = (list) => ({
+    penalties: scoring.axisPenalties(list.flatMap((d) => d.scored.kept)),
+    miles: list.reduce((s, d) => s + d.payload.miles, 0),
+    watchedMiles: list.reduce(
+      (s, d) => s + (d.payload.dashcam ? scoring.watchedMiles(d.payload.miles, d.payload.dashcam.movingS, d.payload.dashcam.coveredS) : 0),
+      0
+    ),
   });
-  const axes = (list) => {
-    const miles = list.reduce((s, d) => s + d.payload.miles, 0);
-    const p = { speeding: 0, braking: 0, accel: 0, cornering: 0, phone: 0 };
-    const axis = { speeding: 'speeding', hard_brake: 'braking', hard_accel: 'accel', hard_corner: 'cornering', phone_pickup: 'phone', phone_handling: 'phone' };
-    for (const d of list) for (const e of d.scored.kept) if (axis[e.type]) p[axis[e.type]] += scoring.ratingPenalty(e);
-    const out = {};
-    for (const k of Object.keys(p)) out[k] = Math.round(Math.min(100, Math.max(0, 100 - (10 * p[k]) / miles)));
-    const a = attention(list);
-    out.attention = a.watchedMiles > 0 ? Math.round(Math.min(100, Math.max(0, 100 - scoring.attentionDeficit(a.penalty, a.watchedMiles)))) : null;
-    return out;
-  };
+  const axes = (list) =>
+    Object.fromEntries(Object.entries(scoring.axisScores(ratingWindow(list), scoring.RANKED_MIN_MILES)).map(([k, v]) => [k, v === null ? null : Math.round(v)]));
   const counts = {};
   for (const d of drives) for (const e of d.payload.events) counts[e.type] = (counts[e.type] ?? 0) + 1;
   const last = drives[drives.length - 1];
@@ -622,8 +633,8 @@ function summarize(drives, now) {
     clean: scored.filter((d) => d.scored.breakdown.activeEventCount === 0).length,
     drives30: recent.length,
     miles: round(scored.reduce((s, d) => s + d.payload.miles, 0), 1),
-    miles30: round(miles30, 1),
-    rating30: scoring.safetyRating(penalty30, miles30, attention(recent)).rating,
+    miles30: round(ratingWindow(recent).miles, 1),
+    rating30: scoring.safetyRatingOf(ratingWindow(recent)).rating,
     axes30: axes(recent),
     axesAll: axes(scored),
     counts,
