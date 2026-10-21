@@ -404,8 +404,9 @@ export const TREND_EVENT_DAYS = RANGE_DAYS.year + COACH_DAYS;
 
 export interface TrendOptions {
   /**
-   * The driver's points total now (the server's, as Home's pill shows it): the Points line's
-   * latest value. Null or absent: the total after the latest drive, carried forward.
+   * The driver's points total now (the server's, as Home's pill shows it): with the net points of
+   * any drive the server has not answered yet added, the Points line's latest value. Null or
+   * absent: the total after the latest drive, carried forward.
    */
   pointsNow?: number | null;
 }
@@ -492,8 +493,9 @@ function hourTicks(sinceMs: number, now: number): TrendTick[] {
  *   the total before it plus its net points, never below 0. Each slot holds the total after the
  *   last drive at or before its end, carried through slots with no drives (on Day: a point at the
  *   range's start, one per drive, and one now); there is no point before the first drive. The
- *   latest point (now) is `pointsNow` when given, so credits and challenge rewards since the last
- *   drive show.
+ *   latest point (now) is `pointsNow` when given, plus the net points of every drive still
+ *   waiting for the server (never below 0), so credits and challenge rewards since the last drive
+ *   show and a waiting drive never makes the line dip at now.
  *
  * An event belongs to the drive it happened in: the latest drive started at or before it (drives
  * never overlap).
@@ -579,7 +581,13 @@ export function trend(drives: readonly LocalDrive[], events: readonly DriveEvent
     while (k + 1 < scored.length && scored[k + 1]!.startedAt <= at) k += 1;
     return k >= 0 ? totals[k]! : null;
   };
-  const pinned = typeof opts.pointsNow === 'number' && Number.isFinite(opts.pointsNow) ? opts.pointsNow : null;
+  // The server's total now leaves out every drive it has not answered yet (still pending): add
+  // their estimates (in drive order, never below 0), as the line itself does, so a waiting drive
+  // never dips it.
+  const pinned =
+    typeof opts.pointsNow === 'number' && Number.isFinite(opts.pointsNow)
+      ? scored.reduce((t, d) => (d.status === 'pending' && d.startedAt <= now ? Math.max(0, t + (d.pointsNet ?? 0)) : t), opts.pointsNow)
+      : null;
   if (step === 'drive') {
     const before = totalAt(sinceMs - 1);
     if (before !== null) series.points.push({ x: 0, value: before, when: `at ${clock(sinceMs)}` });
