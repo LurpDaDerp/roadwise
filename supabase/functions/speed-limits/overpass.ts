@@ -1,5 +1,6 @@
-// The Overpass side of the road-layer fill (migration 0013): one query per 0.1° cell for the twelve
-// drivable classes osm.ways holds, streamed and normalised into `osm_upsert_ways` rows.
+// The Overpass side of the road-layer fill (migrations 0013, 0021): one query per 0.1° cell for the
+// street classes osm.ways holds and the service roads that post a limit, streamed and normalised
+// into `osm_upsert_ways` rows (a limit read per direction of travel, numbers and implicit values).
 //
 //   * `out geom` prints each way's complete geometry (the sample run showed ways reaching outside
 //     the bbox), so a way crossing a cell edge is stored whole, once, under its OSM id, whichever
@@ -76,12 +77,23 @@ export const userAgent = (contact?: string | null): string =>
 export const OVERPASS_TIMEOUT_S = 90;
 export const OVERPASS_ABORT_MS = 100_000;
 
-/** The road classes osm.ways accepts (migration 0002's CHECK), in the query's regex. */
+/**
+ * The street classes osm.ways holds whatever their tags (migration 0021's CHECK), in the query's
+ * regex: the drivable network, living streets and `road` (a way not yet classified) included.
+ */
 export const HIGHWAY_CLASSES: readonly string[] = [
   'motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified', 'residential',
   'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link',
+  'living_street', 'road',
 ];
+/**
+ * Classes loaded only where a way posts a limit of its own (`maxspeed`, or one per direction): a
+ * service road is a parking aisle, a driveway or an alley as often as a campus or park road, and
+ * without a limit it would only crowd the roads beside it.
+ */
+export const LIMITED_CLASSES: readonly string[] = ['service'];
 const HIGHWAY_SET: ReadonlySet<string> = new Set(HIGHWAY_CLASSES);
+const LIMITED_SET: ReadonlySet<string> = new Set(LIMITED_CLASSES);
 
 /** One row of an `osm_upsert_ways` batch; `line` is `[lng, lat]` pairs, as GeoJSON orders them. */
 export interface WayRow {
@@ -94,36 +106,133 @@ export interface WayRow {
   line: [number, number][];
 }
 
+/**
+ * A two-way road posting a different limit each way (`maxspeed:forward` / `:backward`) is stored as
+ * two one-way rows over the same line: the way's own id along it, and this much more against it.
+ * Above every OSM id (about 1.5e9 in 2026), under JavaScript's and the tile id's limits.
+ */
+export const BACKWARD_ID_OFFSET = 2 ** 50;
+
 const fix = (n: number): number => Math.round(n * 1e7) / 1e7;
 
 /**
- * The Overpass QL for one cell: anchored on the class list (`residential` must not catch a
- * `living_street`-like tag through a loose regex), `out geom` for the coordinates.
+ * The Overpass QL for one cell: the street classes, anchored (`residential` must not catch a
+ * `living_street`-like tag through a loose regex), and the service roads that post a limit; `out
+ * geom` for the coordinates.
  */
 export function overpassQuery(b: BBox): string {
   const bbox = [b.minLat, b.minLng, b.maxLat, b.maxLng].map(fix).join(',');
-  return `[out:json][timeout:${OVERPASS_TIMEOUT_S}];way["highway"~"^(${HIGHWAY_CLASSES.join('|')})$"](${bbox});out geom;`;
+  return (
+    `[out:json][timeout:${OVERPASS_TIMEOUT_S}];(` +
+    `way["highway"~"^(${HIGHWAY_CLASSES.join('|')})$"](${bbox});` +
+    `way["highway"~"^(${LIMITED_CLASSES.join('|')})$"][~"^maxspeed(:forward|:backward)?$"~"."](${bbox});` +
+    `);out geom;`
+  );
 }
 
 const KMH_PER_MPH = 1.609344;
 const MPH_PER_KNOT = 1.150779;
 
 /**
+ * Implicit limits: a country's legal default named instead of a number ("DE:urban", in `maxspeed`
+ * itself or in `maxspeed:type`, `source:maxspeed` or `zone:maxspeed`), from the OSM wiki's
+ * "Default speed limits". Only the defaults that are one number for every vehicle of the class;
+ * "DE:motorway" (no limit) and the like are left out, so their roads keep the class default.
+ */
+const ZONE_KMH: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  AT: { urban: 50, rural: 100, trunk: 100, motorway: 130 },
+  BG: { urban: 50, rural: 90, motorway: 140 },
+  BY: { urban: 60, rural: 90, motorway: 110 },
+  CH: { urban: 50, rural: 80, trunk: 100, motorway: 120 },
+  CZ: { urban: 50, rural: 90, motorway: 130 },
+  DE: { urban: 50, rural: 100, bicycle_road: 30 },
+  DK: { urban: 50, rural: 80, motorway: 130 },
+  EE: { urban: 50, rural: 90 },
+  ES: { urban: 50, rural: 90, motorway: 120 },
+  FI: { urban: 50, rural: 80, motorway: 120 },
+  FR: { urban: 50, rural: 80, motorway: 130 },
+  GR: { urban: 50, rural: 90, motorway: 130 },
+  HR: { urban: 50, rural: 90, motorway: 130 },
+  HU: { urban: 50, rural: 90, motorway: 130 },
+  IE: { urban: 50, rural: 80, motorway: 120 },
+  IT: { urban: 50, rural: 90, motorway: 130 },
+  LU: { urban: 50, rural: 90, motorway: 130 },
+  LV: { urban: 50, rural: 90 },
+  NL: { urban: 50, rural: 80 },
+  NO: { urban: 50, rural: 80 },
+  PL: { urban: 50, rural: 90, motorway: 140 },
+  PT: { urban: 50, rural: 90, motorway: 120 },
+  RO: { urban: 50, rural: 90, motorway: 130 },
+  RU: { urban: 60, rural: 90, motorway: 110, living_street: 20 },
+  SE: { urban: 50, rural: 70 },
+  SI: { urban: 50, rural: 90, motorway: 130 },
+  SK: { urban: 50, rural: 90, motorway: 130 },
+  UA: { urban: 50, rural: 90, motorway: 130 },
+};
+const ZONE_MPH: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  GB: { nsl_single: 60, nsl_dual: 70, motorway: 70, nsl_restricted: 30 },
+};
+
+/** Whole mph in 5..85, else null. */
+const inRange = (mph: number): number | null => {
+  const r = Math.round(mph);
+  return r >= 5 && r <= 85 ? r : null;
+};
+
+/**
+ * An implicit value as whole mph: "DE:urban" → 31 (50 km/h), "GB:nsl_single" → 60, a zone such as
+ * "DE:zone30" or "FR:zone:30" in the country's unit (mph in GB) → 19 (30 km/h). Null for anything
+ * else, a region code ("BE-VLG:urban") or a country without one default (the United States has
+ * none: "US:urban" is null).
+ */
+export function implicitMaxspeed(raw: unknown): number | null {
+  if (typeof raw !== 'string') return null;
+  const m = /^([a-z]{2}):([a-z_]+?)(?::?(\d{1,3}))?$/i.exec(raw.trim());
+  if (!m) return null;
+  const cc = m[1]!.toUpperCase();
+  const rest = m[2]!.toLowerCase();
+  if (m[3] !== undefined) {
+    if (rest !== 'zone') return null;
+    const n = Number(m[3]);
+    return inRange(cc === 'GB' ? n : n / KMH_PER_MPH);
+  }
+  const kmh = ZONE_KMH[cc]?.[rest];
+  if (kmh !== undefined) return inRange(kmh / KMH_PER_MPH);
+  const mph = ZONE_MPH[cc]?.[rest];
+  return mph === undefined ? null : inRange(mph);
+}
+
+/**
  * An OSM `maxspeed` as whole mph in 5..85, or null for anything that is not one posted number:
- * "25 mph" → 25; a bare number or "50 km/h" is km/h (OSM's default unit) → 31; "none", "signals",
- * "walk", "variable", a country code such as "US:urban", a pair like "25 mph;35 mph", or junk → null.
+ * "25 mph" → 25; a bare number or "50 km/h" is km/h (OSM's default unit) → 31; an implicit value
+ * ("DE:urban") through `implicitMaxspeed`; "none", "signals", "walk", "variable", a pair like
+ * "25 mph;35 mph", or junk → null.
  */
 export function parseMaxspeed(raw: unknown): number | null {
   if (typeof raw !== 'string') return null;
   const s = raw.trim().toLowerCase();
-  let mph: number;
   let m = /^(\d+(?:\.\d+)?)\s*mph$/.exec(s);
-  if (m) mph = Number(m[1]);
-  else if ((m = /^(\d+(?:\.\d+)?)\s*(?:km\/h|kmh|kph)?$/.exec(s))) mph = Number(m[1]) / KMH_PER_MPH;
-  else if ((m = /^(\d+(?:\.\d+)?)\s*knots$/.exec(s))) mph = Number(m[1]) * MPH_PER_KNOT;
-  else return null;
-  const r = Math.round(mph);
-  return r >= 5 && r <= 85 ? r : null;
+  if (m) return inRange(Number(m[1]));
+  if ((m = /^(\d+(?:\.\d+)?)\s*(?:km\/h|kmh|kph)?$/.exec(s))) return inRange(Number(m[1]) / KMH_PER_MPH);
+  if ((m = /^(\d+(?:\.\d+)?)\s*knots$/.exec(s))) return inRange(Number(m[1]) * MPH_PER_KNOT);
+  return implicitMaxspeed(raw);
+}
+
+/** The tags that name a road's implicit limit when it posts no number, in the order read. */
+const ZONE_KEYS = ['maxspeed:type', 'source:maxspeed', 'zone:maxspeed'] as const;
+
+/**
+ * The way's limit in each direction of travel, whole mph or null: `maxspeed:forward` along the
+ * digitised direction and `maxspeed:backward` against it, else `maxspeed`, else the implicit limit
+ * its zone tags name (`maxspeed:type=DE:urban` and the like).
+ */
+export function wayLimits(tags: Record<string, unknown>): { forward: number | null; backward: number | null } {
+  let base = parseMaxspeed(tags.maxspeed);
+  for (const k of ZONE_KEYS) base ??= implicitMaxspeed(tags[k]);
+  return {
+    forward: parseMaxspeed(tags['maxspeed:forward']) ?? base,
+    backward: parseMaxspeed(tags['maxspeed:backward']) ?? base,
+  };
 }
 
 /**
@@ -145,17 +254,22 @@ const text = (v: unknown, max: number): string | null => {
   return t.length === 0 ? null : t.slice(0, max);
 };
 
-/** One Overpass element as an upsert row, or null for anything but a drivable way with a line. */
-export function toWayRow(el: unknown): WayRow | null {
-  if (el === null || typeof el !== 'object') return null;
+/**
+ * One Overpass element as upsert rows: none for anything but a road of a loaded class with a line;
+ * one for most roads, carrying the limit for its direction of travel (`wayLimits`); two for a
+ * two-way road with a different limit each way, one-way each (`BACKWARD_ID_OFFSET`). A service road
+ * gives a row only for a direction it posts a limit for.
+ */
+export function toWayRows(el: unknown): WayRow[] {
+  if (el === null || typeof el !== 'object') return [];
   const e = el as Record<string, unknown>;
-  if (e.type !== 'way') return null;
+  if (e.type !== 'way') return [];
   const id = e.id;
-  if (typeof id !== 'number' || !Number.isInteger(id) || id <= 0 || id > Number.MAX_SAFE_INTEGER) return null;
+  if (typeof id !== 'number' || !Number.isInteger(id) || id <= 0 || id >= BACKWARD_ID_OFFSET) return [];
   const tags = e.tags !== null && typeof e.tags === 'object' ? (e.tags as Record<string, unknown>) : {};
   const highway = tags.highway;
-  if (typeof highway !== 'string' || !HIGHWAY_SET.has(highway)) return null;
-  if (!Array.isArray(e.geometry)) return null;
+  if (typeof highway !== 'string' || !(HIGHWAY_SET.has(highway) || LIMITED_SET.has(highway))) return [];
+  if (!Array.isArray(e.geometry)) return [];
   const line: [number, number][] = [];
   for (const p of e.geometry as unknown[]) {
     if (p === null || typeof p !== 'object') continue;
@@ -164,16 +278,33 @@ export function toWayRow(el: unknown): WayRow | null {
     if (lat < -90 || lat > 90 || lon < -180 || lon > 180) continue;
     line.push([lon, lat]);
   }
-  if (line.length < 2) return null;
-  return {
-    id,
+  if (line.length < 2) return [];
+  const oneway = parseOneway(tags);
+  const { forward, backward } = wayLimits(tags);
+  const raw = (key: string): string | null => text(tags[key], 64) ?? text(tags.maxspeed, 64);
+  const row = (rowId: number, mph: number | null, rawKey: string, dir: -1 | 0 | 1): WayRow => ({
+    id: rowId,
     highway,
-    maxspeed_mph: parseMaxspeed(tags.maxspeed),
-    maxspeed_raw: text(tags.maxspeed, 64),
+    maxspeed_mph: mph,
+    maxspeed_raw: raw(rawKey),
     name: text(tags.name, 128),
-    oneway: parseOneway(tags),
+    oneway: dir,
     line,
-  };
+  });
+  const rows =
+    oneway === 1
+      ? [row(id, forward, 'maxspeed:forward', 1)]
+      : oneway === -1
+        ? [row(id, backward, 'maxspeed:backward', -1)]
+        : forward === backward
+          ? [row(id, forward, 'maxspeed:forward', 0)]
+          : [row(id, forward, 'maxspeed:forward', 1), row(id + BACKWARD_ID_OFFSET, backward, 'maxspeed:backward', -1)];
+  return LIMITED_SET.has(highway) ? rows.filter((r) => r.maxspeed_mph !== null) : rows;
+}
+
+/** The way's own row (`toWayRows`' first), or null. */
+export function toWayRow(el: unknown): WayRow | null {
+  return toWayRows(el)[0] ?? null;
 }
 
 /** Overpass finished the body with a `remark` (its own runtime error): the elements are partial. */
@@ -413,8 +544,7 @@ export async function* fetchWays(
         throw new OverpassRefused(res.status);
       }
       for await (const el of streamElements(res.body, gate ? () => gate.megabyte(url) : undefined)) {
-        const row = toWayRow(el);
-        if (row) {
+        for (const row of toWayRows(el)) {
           yielded = true;
           yield row;
         }

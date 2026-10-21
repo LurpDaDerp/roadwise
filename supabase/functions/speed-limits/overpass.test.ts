@@ -1,7 +1,10 @@
 import { assert, assertEquals, assertRejects, assertStringIncludes } from '@std/assert';
 import {
   fetchWays,
+  BACKWARD_ID_OFFSET,
   HIGHWAY_CLASSES,
+  implicitMaxspeed,
+  LIMITED_CLASSES,
   MAX_EDGE_BYTES,
   MAX_ELEMENT_BYTES,
   MAX_REPLY_BYTES,
@@ -23,8 +26,10 @@ import {
   PRIVATE_COFFEE,
   streamElements,
   toWayRow,
+  toWayRows,
   userAgent,
   VK_MAPS,
+  wayLimits,
   type WayRow,
 } from './overpass.ts';
 
@@ -61,13 +66,17 @@ const collect = async <T>(it: AsyncIterable<T>): Promise<T[]> => {
 
 // --- the query ---
 
-Deno.test('the query names the twelve classes anchored, the cell bbox south,west,north,east, json and a 90 s timeout, out geom', () => {
+Deno.test('the query names the street classes anchored and the service roads that post a limit, the cell bbox south,west,north,east, json and a 90 s timeout, out geom', () => {
   const q = overpassQuery(CELL);
   assertEquals(
     q,
-    '[out:json][timeout:90];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](47.6,-122.4,47.7,-122.3);out geom;'
+    '[out:json][timeout:90];(' +
+      'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|living_street|road)$"](47.6,-122.4,47.7,-122.3);' +
+      'way["highway"~"^(service)$"][~"^maxspeed(:forward|:backward)?$"~"."](47.6,-122.4,47.7,-122.3);' +
+      ');out geom;'
   );
-  assertEquals(HIGHWAY_CLASSES.length, 12);
+  assertEquals(HIGHWAY_CLASSES.length, 14);
+  assertEquals(LIMITED_CLASSES, ['service']);
   // private.coffee first (no rate limit), VK Maps next (no request limits), the main instance last
   // (fill.ts holds it to its policy)
   assertEquals(OVERPASS_ENDPOINTS, [
@@ -101,8 +110,25 @@ Deno.test('maxspeed: mph as is, km/h (bare or tagged) converted to the nearest m
     ['signals', null],
     ['walk', null],
     ['variable', null],
+    // implicit values: a country's legal default by name (a zone in its own unit)
+    ['DE:urban', 31],
+    ['DE:rural', 62],
+    ['de:urban', 31],
+    ['RU:rural', 56],
+    ['RU:urban', 37],
+    ['FR:zone30', 19],
+    ['FR:zone:30', 19],
+    ['DE:zone20', 12],
+    ['GB:nsl_single', 60],
+    ['GB:nsl_dual', 70],
+    ['GB:zone20', 20],
+    ['DE:motorway', null],
+    ['DE:living_street', null],
     ['US:urban', null],
-    ['DE:rural', null],
+    ['US:rural', null],
+    ['BE-VLG:urban', null],
+    ['XX:urban', null],
+    ['DE:urban30', null],
     ['25 mph;35 mph', null],
     ['25 mph|35 mph', null],
     ['twenty five', null],
@@ -158,12 +184,14 @@ Deno.test('an untagged residential way keeps null limit and name; raw and name a
   assertEquals(toWayRow(way(8, { highway: 'residential', name: '   ' }))?.name, null);
 });
 
-Deno.test('not a row: nodes and relations, other classes (a living_street, a footway), bad ids, lines under two points or off the globe', () => {
+Deno.test('not a row: nodes and relations, other classes (a footway, a busway), a service road with no limit, bad ids, lines under two points or off the globe', () => {
   assertEquals(toWayRow({ type: 'node', id: 1, lat: 47.6, lon: -122.3 }), null);
   assertEquals(toWayRow({ type: 'relation', id: 1, members: [] }), null);
-  assertEquals(toWayRow(way(1, { highway: 'living_street' })), null);
   assertEquals(toWayRow(way(1, { highway: 'footway' })), null);
   assertEquals(toWayRow(way(1, { highway: 'service' })), null);
+  assertEquals(toWayRow(way(1, { highway: 'service', maxspeed: 'none' })), null);
+  assertEquals(toWayRow(way(1, { highway: 'busway' })), null);
+  assertEquals(toWayRow(way(BACKWARD_ID_OFFSET, { highway: 'residential' })), null);
   assertEquals(toWayRow(way(1, {})), null);
   assertEquals(toWayRow(way(0, { highway: 'residential' })), null);
   assertEquals(toWayRow(way(-3, { highway: 'residential' })), null);
@@ -176,6 +204,55 @@ Deno.test('not a row: nodes and relations, other classes (a living_street, a foo
   // a null position (a missing node) is dropped, the rest of the line stands
   const r = toWayRow({ ...way(1, { highway: 'residential' }), geometry: [{ lat: 47.61, lon: -122.31 }, null, { lat: 47.611, lon: -122.309 }] });
   assertEquals(r?.line, [[-122.31, 47.61], [-122.309, 47.611]]);
+});
+
+Deno.test('living streets and unclassified roads are rows whatever their tags; a service road only where it posts a limit (Seattle: way 10383518, 15 mph)', () => {
+  assertEquals(toWayRow(way(1, { highway: 'living_street' }))?.highway, 'living_street');
+  assertEquals(toWayRow(way(2, { highway: 'road' }))?.maxspeed_mph, null);
+  assertEquals(toWayRow(way(10383518, { highway: 'service', maxspeed: '15 mph' })), {
+    id: 10383518,
+    highway: 'service',
+    maxspeed_mph: 15,
+    maxspeed_raw: '15 mph',
+    name: null,
+    oneway: 0,
+    line: [[-122.31, 47.61], [-122.309, 47.611]],
+  });
+});
+
+Deno.test('a limit per direction: forward on a one-way along its line, backward on one against it, the same both ways as one row', () => {
+  const lim = (rows: WayRow[]) => rows.map((r) => [r.id, r.oneway, r.maxspeed_mph, r.maxspeed_raw]);
+  assertEquals(lim(toWayRows(way(5, { highway: 'primary', oneway: 'yes', 'maxspeed:forward': '35 mph', maxspeed: '45 mph' }))), [[5, 1, 35, '35 mph']]);
+  assertEquals(lim(toWayRows(way(5, { highway: 'primary', oneway: '-1', 'maxspeed:backward': '30 mph' }))), [[5, -1, 30, '30 mph']]);
+  assertEquals(lim(toWayRows(way(5, { highway: 'primary', oneway: '-1', maxspeed: '40 mph', 'maxspeed:forward': '25 mph' }))), [[5, -1, 40, '40 mph']]);
+  assertEquals(lim(toWayRows(way(5, { highway: 'primary', 'maxspeed:forward': '35 mph', 'maxspeed:backward': '35 mph' }))), [[5, 0, 35, '35 mph']]);
+  assertEquals(lim(toWayRows(way(5, { highway: 'primary', maxspeed: '35 mph' }))), [[5, 0, 35, '35 mph']]);
+});
+
+Deno.test('a two-way road with a different limit each way is two one-way rows over its line, the second 2^50 above its id', () => {
+  assertEquals(BACKWARD_ID_OFFSET, 1125899906842624);
+  const rows = toWayRows(way(4711, { highway: 'secondary', 'maxspeed:forward': '45 mph', 'maxspeed:backward': '35 mph', name: 'Main' }));
+  assertEquals(rows.map((r) => [r.id, r.oneway, r.maxspeed_mph, r.maxspeed_raw, r.name]), [
+    [4711, 1, 45, '45 mph', 'Main'],
+    [4711 + BACKWARD_ID_OFFSET, -1, 35, '35 mph', 'Main'],
+  ]);
+  assertEquals(rows[0]!.line, rows[1]!.line);
+  // One direction posted, the other on the plain tag or on nothing (its class default on the sign).
+  assertEquals(toWayRows(way(9, { highway: 'secondary', maxspeed: '40 mph', 'maxspeed:backward': '30 mph' })).map((r) => [r.oneway, r.maxspeed_mph]), [[1, 40], [-1, 30]]);
+  assertEquals(toWayRows(way(9, { highway: 'secondary', 'maxspeed:forward': '30 mph' })).map((r) => [r.oneway, r.maxspeed_mph]), [[1, 30], [-1, null]]);
+  // A service road keeps only the direction it posts a limit for.
+  assertEquals(toWayRows(way(9, { highway: 'service', 'maxspeed:forward': '10 mph' })).map((r) => [r.oneway, r.maxspeed_mph]), [[1, 10]]);
+});
+
+Deno.test('a road naming its zone instead of a number: maxspeed:type, source:maxspeed or zone:maxspeed, when it posts no number', () => {
+  assertEquals(wayLimits({ 'maxspeed:type': 'DE:urban' }), { forward: 31, backward: 31 });
+  assertEquals(wayLimits({ 'source:maxspeed': 'FR:rural' }), { forward: 50, backward: 50 });
+  assertEquals(wayLimits({ 'zone:maxspeed': 'DE:30' }), { forward: null, backward: null });
+  assertEquals(wayLimits({ 'zone:maxspeed': 'DE:zone30' }), { forward: 19, backward: 19 });
+  assertEquals(wayLimits({ maxspeed: '30 mph', 'maxspeed:type': 'US:urban' }), { forward: 30, backward: 30 });
+  assertEquals(wayLimits({ maxspeed: '70', 'source:maxspeed': 'DE:rural' }), { forward: 43, backward: 43 });
+  assertEquals(wayLimits({ 'source:maxspeed': 'sign' }), { forward: null, backward: null });
+  assertEquals(implicitMaxspeed(42), null);
 });
 
 // --- the stream ---

@@ -8,9 +8,11 @@ import {
   cellsCovering,
   CLAIM_BUDGET,
   createOsmFill,
+  createOsmFillDb,
   DONE_MEMO_MS,
   expand,
   fillable,
+  FILL_VERSION,
   FILLING_MEMO_MS,
   LOOKAHEAD_M,
   lookaheadCells,
@@ -502,4 +504,24 @@ Deno.test("the operator's instances (OVERPASS_URL) are asked first at no budget;
   // SEATTLE: the operator's instance fails, private.coffee answers; SOUTH: the operator's instance is resting
   assertEquals(h.fetches.map((f) => f.url), [mine, PRIVATE_COFFEE, PRIVATE_COFFEE]);
   assertEquals(h.finishes.map((f) => f.outcome), ['done', 'done']);
+});
+
+// --- the database port ---
+
+Deno.test('the claim and the finish carry the road-layer version, so a cell filled by an older one is filled again (0021)', async () => {
+  assertEquals(FILL_VERSION, 2);
+  const calls: [string, unknown][] = [];
+  const client = {
+    rpc: (name: string, args: unknown) => {
+      calls.push([name, args]);
+      return Promise.resolve({ data: name === 'osm_claim_fill_cell' ? 'claimed' : true, error: null });
+    },
+  };
+  const db = createOsmFillDb(client as never);
+  assertEquals(await db.claimFillCell(SEATTLE), 'claimed');
+  assertEquals(await db.finishFillCell(SEATTLE, 'done', 12), true);
+  assertEquals(calls, [
+    ['osm_claim_fill_cell', { p_y: 476, p_x: -1224, p_version: FILL_VERSION }],
+    ['osm_finish_fill_cell', { p_y: 476, p_x: -1224, p_outcome: 'done', p_way_count: 12, p_version: FILL_VERSION }],
+  ]);
 });

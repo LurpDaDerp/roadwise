@@ -14,26 +14,26 @@ select policies_are('osm', 'filled_cells', '{}'::name[], 'osm.filled_cells has n
 select table_privs_are('osm', 'filled_cells', 'anon', '{}'::name[], 'anon has no privileges on osm.filled_cells');
 select table_privs_are('osm', 'filled_cells', 'authenticated', '{}'::name[], 'authenticated has no privileges on osm.filled_cells');
 select table_privs_are('osm', 'filled_cells', 'service_role', array['SELECT', 'INSERT', 'UPDATE'], 'service_role reads and writes osm.filled_cells');
-select table_privs_are('osm', 'ways', 'service_role', array['SELECT', 'INSERT', 'UPDATE'], 'service_role may now insert and update osm.ways (the fill)');
+select table_privs_are('osm', 'ways', 'service_role', array['SELECT', 'INSERT', 'UPDATE', 'DELETE'], 'service_role may insert, update and (0021: a refill''s stale ways) delete osm.ways (the fill)');
 select table_privs_are('osm', 'ways', 'authenticated', '{}'::name[], 'authenticated still has no privileges on osm.ways');
 
-select function_privs_are('public', 'osm_claim_fill_cell', array['int', 'int'], 'anon', '{}'::name[], 'anon cannot call osm_claim_fill_cell');
-select function_privs_are('public', 'osm_claim_fill_cell', array['int', 'int'], 'authenticated', '{}'::name[], 'authenticated cannot call osm_claim_fill_cell');
-select function_privs_are('public', 'osm_finish_fill_cell', array['int', 'int', 'text', 'int'], 'authenticated', '{}'::name[], 'authenticated cannot call osm_finish_fill_cell');
+select function_privs_are('public', 'osm_claim_fill_cell', array['int', 'int', 'int'], 'anon', '{}'::name[], 'anon cannot call osm_claim_fill_cell');
+select function_privs_are('public', 'osm_claim_fill_cell', array['int', 'int', 'int'], 'authenticated', '{}'::name[], 'authenticated cannot call osm_claim_fill_cell');
+select function_privs_are('public', 'osm_finish_fill_cell', array['int', 'int', 'text', 'int', 'int'], 'authenticated', '{}'::name[], 'authenticated cannot call osm_finish_fill_cell');
 select function_privs_are('public', 'osm_upsert_ways', array['jsonb'], 'authenticated', '{}'::name[], 'authenticated cannot call osm_upsert_ways');
 select function_privs_are('public', 'get_current_speed_limit', array['double precision', 'double precision', 'double precision'], 'authenticated', '{}'::name[], 'authenticated cannot call get_current_speed_limit');
 select function_privs_are('public', 'get_current_speed_limit', array['double precision', 'double precision', 'double precision'], 'service_role', array['EXECUTE'], 'service_role calls get_current_speed_limit');
 
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4"}', true);
-select throws_ok($$ select public.osm_claim_fill_cell(476, -1224) $$, '42501', null, 'authenticated is refused at the door of osm_claim_fill_cell');
+select throws_ok($$ select public.osm_claim_fill_cell(477, -1224) $$, '42501', null, 'authenticated is refused at the door of osm_claim_fill_cell');
 select throws_ok($$ select count(*) from osm.filled_cells $$, '42501', null, 'authenticated cannot read osm.filled_cells');
 reset role;
 
 -- the writers refuse any JWT role but service_role in their first statement, even as the owner
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4"}', true);
-select throws_ok($$ select public.osm_claim_fill_cell(476, -1224) $$, '42501', 'osm_claim_fill_cell requires the service role', 'osm_claim_fill_cell requires the service role');
-select throws_ok($$ select public.osm_finish_fill_cell(476, -1224, 'done', 0) $$, '42501', 'osm_finish_fill_cell requires the service role', 'osm_finish_fill_cell requires the service role');
+select throws_ok($$ select public.osm_claim_fill_cell(477, -1224) $$, '42501', 'osm_claim_fill_cell requires the service role', 'osm_claim_fill_cell requires the service role');
+select throws_ok($$ select public.osm_finish_fill_cell(477, -1224, 'done', 0) $$, '42501', 'osm_finish_fill_cell requires the service role', 'osm_finish_fill_cell requires the service role');
 select throws_ok($$ select public.osm_upsert_ways('[]') $$, '42501', 'osm_upsert_ways requires the service role', 'osm_upsert_ways requires the service role');
 
 set local role service_role;
@@ -42,14 +42,14 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 -- ---------------------------------------------------------------------------
 -- osm_claim_fill_cell / osm_finish_fill_cell
 -- ---------------------------------------------------------------------------
-select is(public.osm_claim_fill_cell(476, -1224), 'claimed', 'the first claim of a cell is claimed');
-select is(public.osm_claim_fill_cell(476, -1224), 'filling', 'a second claim while it is being filled is filling');
-select is((select row(status, attempts, way_count)::text from osm.filled_cells where cell_y = 476 and cell_x = -1224), row('filling', 1, 0)::text, 'the row is filling after one attempt');
-select is(public.osm_finish_fill_cell(476, -1224, 'done', 1234), true, 'the claimant finishes it');
-select is((select row(status, way_count, filled_at is not null)::text from osm.filled_cells where cell_y = 476 and cell_x = -1224), row('done', 1234, true)::text, 'done, with the way count and the fill time');
-select is(public.osm_claim_fill_cell(476, -1224), 'done', 'a done cell answers done');
-select is(public.osm_finish_fill_cell(476, -1224, 'done', 5), false, 'finishing a cell nobody holds changes nothing');
-select is((select way_count from osm.filled_cells where cell_y = 476 and cell_x = -1224), 1234, 'and its count stands');
+select is(public.osm_claim_fill_cell(477, -1224), 'claimed', 'the first claim of a cell is claimed');
+select is(public.osm_claim_fill_cell(477, -1224), 'filling', 'a second claim while it is being filled is filling');
+select is((select row(status, attempts, way_count)::text from osm.filled_cells where cell_y = 477 and cell_x = -1224), row('filling', 1, 0)::text, 'the row is filling after one attempt');
+select is(public.osm_finish_fill_cell(477, -1224, 'done', 1234), true, 'the claimant finishes it');
+select is((select row(status, way_count, filled_at is not null)::text from osm.filled_cells where cell_y = 477 and cell_x = -1224), row('done', 1234, true)::text, 'done, with the way count and the fill time');
+select is(public.osm_claim_fill_cell(477, -1224), 'done', 'a done cell answers done');
+select is(public.osm_finish_fill_cell(477, -1224, 'done', 5), false, 'finishing a cell nobody holds changes nothing');
+select is((select way_count from osm.filled_cells where cell_y = 477 and cell_x = -1224), 1234, 'and its count stands');
 
 select is(public.osm_claim_fill_cell(0, 0), 'claimed', 'another cell has its own claim');
 select is(public.osm_finish_fill_cell(0, 0, 'failed', null), true, 'a fill can fail');
@@ -70,7 +70,7 @@ select throws_ok($$ select public.osm_finish_fill_cell(0, 0, 'done', -1) $$, '22
 
 -- stale and old claims are retaken (the clock is moved on the rows themselves)
 reset role;
-update osm.filled_cells set filled_at = now() - interval '31 days' where cell_y = 476 and cell_x = -1224;
+update osm.filled_cells set filled_at = now() - interval '31 days' where cell_y = 477 and cell_x = -1224;
 -- the failure time is the touch trigger's updated_at: moved back with the trigger off
 alter table osm.filled_cells disable trigger filled_cells_touch;
 update osm.filled_cells set updated_at = now() - interval '11 minutes' where cell_y = 0 and cell_x = 0;
@@ -78,8 +78,8 @@ alter table osm.filled_cells enable trigger filled_cells_touch;
 insert into osm.filled_cells (cell_y, cell_x, status, claimed_at) values (1, 1, 'filling', now() - interval '6 minutes');
 insert into osm.filled_cells (cell_y, cell_x, status, claimed_at) values (2, 2, 'filling', now() - interval '4 minutes');
 set local role service_role;
-select is(public.osm_claim_fill_cell(476, -1224), 'claimed', 'a cell done over 30 days ago is refreshed');
-select is((select attempts from osm.filled_cells where cell_y = 476 and cell_x = -1224), 2, 'counting the second attempt');
+select is(public.osm_claim_fill_cell(477, -1224), 'claimed', 'a cell done over 30 days ago is refreshed');
+select is((select attempts from osm.filled_cells where cell_y = 477 and cell_x = -1224), 2, 'counting the second attempt');
 select is(public.osm_claim_fill_cell(0, 0), 'claimed', 'a cell that failed over 10 minutes ago is retaken');
 select is(public.osm_claim_fill_cell(1, 1), 'claimed', 'a claim left filling for over 5 minutes is retaken');
 select is(public.osm_claim_fill_cell(2, 2), 'filling', 'a claim 4 minutes old is still held');
@@ -107,7 +107,7 @@ select is((select count(*) from osm.ways where osm_id in (9100000003, 9100000004
 
 select is(public.osm_upsert_ways($$[
   {"id": 9100000001, "highway": "residential", "maxspeed_mph": 25, "maxspeed_raw": "25 mph", "name": "Fill Street", "oneway": 0, "line": [[-122.31, 47.61], [-122.309, 47.61]]}
-]$$::jsonb), 0, 'an identical way again writes nothing');
+]$$::jsonb), 1, 'an identical way again is stored again (0021: every way given is stamped seen)');
 select is(public.osm_upsert_ways($$[
   {"id": 9100000001, "highway": "residential", "maxspeed_mph": 20, "maxspeed_raw": "20 mph", "name": "Fill Street", "oneway": 0, "line": [[-122.31, 47.61], [-122.309, 47.61]]},
   {"id": 9100000002, "highway": "motorway_link", "maxspeed_mph": null, "maxspeed_raw": null, "name": null, "oneway": 1, "line": [[-122.309, 47.612], [-122.31, 47.612], [-122.308, 47.6125]]}

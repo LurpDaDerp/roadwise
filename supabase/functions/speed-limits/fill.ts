@@ -69,6 +69,14 @@ export const OVERPASS_DE_MIB = { key: 'overpass_de_mib', window: '1 day', max: 1
 export const OVERPASS_DE_START = { key: 'overpass_de_start', window: '2 minutes', max: 1 } as const;
 /** A mirror that refused (429, 406, 504, …) is not asked again from this isolate for this long (policy: 30 s or more). */
 export const REFUSED_COOLDOWN_MS = 60_000;
+/**
+ * The road layer this code loads (migration 0021): a cell filled by an older one is filled again
+ * the next time a driver needs it, so a change to the classes or to how a limit is read reaches
+ * every loaded area, not only new ones. Raised with `TILE_DATA_VERSION` on the device, which then
+ * fetches its stored tiles again. 2: living streets, `road`s and service roads with a limit;
+ * limits per direction; implicit (zone) limits.
+ */
+export const FILL_VERSION = 2;
 
 const M_PER_DEG = 111_320;
 const DEG = Math.PI / 180;
@@ -83,7 +91,7 @@ export interface Cell {
 export type ClaimStatus = 'claimed' | 'filling' | 'done';
 export type FillOutcome = 'done' | 'failed' | 'released';
 
-/** The fill's database port: the three 0013 functions and the two budgets, service-role only. */
+/** The fill's database port: the three fill functions (0013, versioned in 0021) and the two budgets, service-role only. */
 export interface OsmFillDb {
   claimFillCell(cell: Cell): Promise<ClaimStatus>;
   finishFillCell(cell: Cell, outcome: FillOutcome, wayCount: number): Promise<boolean>;
@@ -164,12 +172,18 @@ const toStatus = (v: unknown): ClaimStatus => (v === 'claimed' || v === 'done' ?
 export function createOsmFillDb(client: SupabaseClient): OsmFillDb {
   return {
     async claimFillCell(cell) {
-      const { data, error } = await client.rpc('osm_claim_fill_cell', { p_y: cell.y, p_x: cell.x });
+      const { data, error } = await client.rpc('osm_claim_fill_cell', { p_y: cell.y, p_x: cell.x, p_version: FILL_VERSION });
       if (error) throw asPgError(error);
       return toStatus(data);
     },
     async finishFillCell(cell, outcome, wayCount) {
-      const { data, error } = await client.rpc('osm_finish_fill_cell', { p_y: cell.y, p_x: cell.x, p_outcome: outcome, p_way_count: wayCount });
+      const { data, error } = await client.rpc('osm_finish_fill_cell', {
+        p_y: cell.y,
+        p_x: cell.x,
+        p_outcome: outcome,
+        p_way_count: wayCount,
+        p_version: FILL_VERSION,
+      });
       if (error) throw asPgError(error);
       return data === true;
     },

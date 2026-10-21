@@ -82,7 +82,9 @@ export type MatchResult =
 /**
  * The limit assumed for an OSM road of each class when neither OSM, HPMS nor the cache posts one
  * (mph; typical US statutory defaults). `public.get_current_speed_limit` (migration 0013) carries
- * the same table. A class not listed here (none of the twelve the tiles carry) has no default.
+ * the same table. A class not listed here has no default: a living street, a `road` (not yet
+ * classified) or a service road (the tiles carry one only where it posts a limit) shows no number
+ * untagged.
  */
 export const DEFAULT_LIMIT_MPH: Readonly<Record<string, number>> = {
   motorway: 65,
