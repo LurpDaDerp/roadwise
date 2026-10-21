@@ -143,6 +143,12 @@ export interface OpenEpisode {
    * waits out its 26 s inside an open pickup, else null. Speeding never sets it.
    */
   phase?: 'switching' | 'hold' | null;
+  /** Phone: the pickup was made stopped mid-drive (half price, no speed multiplier). */
+  stoppedInTraffic?: boolean;
+  /** Phone: the GPS speed at the pickup, mph, or null. */
+  speedMph?: number | null;
+  /** Phone: the highest trusted GPS speed of the episode so far, mph, or null (the points estimate's multiplier). */
+  maxSpeedMph?: number | null;
 }
 
 /** The speeding episode in progress (its end window included), as the engine's alerts read it. */

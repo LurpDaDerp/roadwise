@@ -11,7 +11,7 @@ describe('phone pickup and handling (spec event table, "Rules against false posi
     const e = only(drive(createPhoneUseDetector(counterIds()), rows).all);
     expect(e).toMatchObject({ type: 'phone_pickup', tier: 'severe', startedAt: T0 + 10_000, durationS: 8 });
     expect(e.stoppedInTraffic).toBeUndefined();
-    expect(e.measured).toEqual({ mounted: false, speedMph: 35 });
+    expect(e.measured).toEqual({ mounted: false, speedMph: 35, maxSpeedMph: 35 });
   });
 
   test('handling past 15 s adds a phone_handling event in 15-s units: 40 s → moderate? no: >30 s is severe, 2 units', () => {
@@ -89,5 +89,49 @@ describe('phone pickup and handling (spec event table, "Rules against false posi
     expect(det.active()).toBe(false);
     expect(det.flush()).toEqual([]);
     expect(confirmedAt).toContain(17);
+  });
+});
+
+describe('maxSpeedMph: the highest trusted GPS speed from the episode start to its last use row', () => {
+  test('a pickup and its handling both carry it; an untrusted speed, the rows before the start and the quiet rows after are left out', () => {
+    const rows = seq(
+      [10, { speed: mph(70) }],
+      [6, { speed: mph(30), ...handled }],
+      [1, { speed: mph(62), speedAcc: 3, ...handled }],
+      [6, { speed: mph(48.04), ...handled }],
+      [6, { speed: mph(40), ...handled }],
+      [1, { speed: mph(80) }],
+      [10, { speed: mph(30) }]
+    );
+    const { all } = drive(createPhoneUseDetector(counterIds()), rows);
+    expect(all.map((e) => e.type)).toEqual(['phone_pickup', 'phone_handling']);
+    expect(all[0]!.measured).toEqual({ mounted: false, speedMph: 30, maxSpeedMph: 48 });
+    expect(all[1]!.measured).toEqual({ mounted: false, maxSpeedMph: 48 });
+  });
+
+  test('no trusted speed at all: no maxSpeedMph', () => {
+    const rows = seq([10, { speed: mph(35) }], [8, { speed: mph(35), speedAcc: 3, ...handled }], [10, { speed: mph(35), speedAcc: 3 }]);
+    const e = only(drive(createPhoneUseDetector(counterIds()), rows).all);
+    expect(e.measured.maxSpeedMph).toBeUndefined();
+  });
+
+  test('a switch charged from its first chargeable row finds the speeds of the run before it counted', () => {
+    const away = { appForeground: false, screenOn: true, locked: false } as const;
+    const front = { appForeground: true, screenOn: true, locked: false } as const;
+    const rows = seq([10, { speed: mph(30), ...front }], [1, { speed: mph(55), ...away }], [3, { speed: mph(30), ...away }], [10, { speed: mph(30), ...front }]);
+    const e = only(drive(createPhoneUseDetector(counterIds()), rows).all);
+    expect(e).toMatchObject({ type: 'phone_pickup', startedAt: T0 + 10_000 });
+    expect(e.measured.maxSpeedMph).toBe(55);
+  });
+
+  test('open() tells the alerts the pickup speed, stopped-in-traffic and the highest speed so far', () => {
+    const det = createPhoneUseDetector(counterIds());
+    const rows = seq([10, { speed: mph(35) }], [2, { speed: mph(35), ...handled }], [1, { speed: mph(52), ...handled }]);
+    for (const r of rows) det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, ctx());
+    expect(det.open()).toMatchObject({ confirmed: true, stoppedInTraffic: false, speedMph: 52, maxSpeedMph: 52 });
+    const stopped = createPhoneUseDetector(counterIds());
+    const still = seq([10, { speed: mph(35) }], [3, { speed: 0 }], [3, { speed: 0, ...handled }]);
+    for (const r of still) stopped.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, ctx());
+    expect(stopped.open()).toMatchObject({ confirmed: true, stoppedInTraffic: true, speedMph: 0, maxSpeedMph: 0 });
   });
 });

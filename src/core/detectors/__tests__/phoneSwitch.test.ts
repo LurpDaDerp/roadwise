@@ -67,7 +67,7 @@ describe('the constants and their derived values', () => {
 describe('Android (switchSignal reliable)', () => {
   test('1. 120 s in another app: one pickup from the first away row, never mounted, and 7 severe handling units', () => {
     const e = run(seq([10, front], [120, away], [10, front]));
-    expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 120, measured: { mounted: false, speedMph: 35 } })]);
+    expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 120, measured: { mounted: false, speedMph: 35, maxSpeedMph: 35 } })]);
     expect(handlingOf(e)).toEqual([expect.objectContaining({ tier: 'severe', units: 7, durationS: 105 })]);
   });
 
@@ -160,7 +160,7 @@ describe('Android (switchSignal reliable)', () => {
 
   test('11. motion handling then a switch: one episode, never mounted, to the last away row', () => {
     const e = run(seq([10, front], [4, { ...front, ...tapped }], [10, away], [5, front]));
-    expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 14, measured: { mounted: false, speedMph: 35 } })]);
+    expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 14, measured: { mounted: false, speedMph: 35, maxSpeedMph: 35 } })]);
   });
 
   test('12. a parking-lot motion episode, then a switch while moving: one pickup, from the switch', () => {
@@ -245,7 +245,7 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
     test('14 s is nothing; 15 s is a pickup of 15 s, confirmed on the return row (never while away)', () => {
       expect(run(seq([10, front], [14, away], [10, front]), IOS)).toEqual([]);
       const t = trace(seq([10, front], [15, away], [10, front]), IOS);
-      expect(pickups(t.events)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 15, measured: { mounted: false, speedMph: 35 } })]);
+      expect(pickups(t.events)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 15, measured: { mounted: false, speedMph: 35, maxSpeedMph: 35 } })]);
       expect(handlingOf(t.events)).toEqual([]);
       expect(t.confirmed.indexOf(true)).toBe(10 + 15);
     });
@@ -272,11 +272,11 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
     });
     test('a departure held in an open motion pickup that ends back in RoadWise at 20 s joins it: one episode, never mounted', () => {
       const e = run(seq([10, front], [3, { ...front, ...tapped }], [20, away], [10, front]), IOS);
-      expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 23, measured: { mounted: false, speedMph: 35 } })]);
+      expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 23, measured: { mounted: false, speedMph: 35, maxSpeedMph: 35 } })]);
       expect(handlingOf(e)).toHaveLength(1);
       // held for 14 s and back: the departure adds nothing, the pickup stays mounted
       const short = run(seq([10, front], [3, { ...front, ...tapped }], [14, away], [10, front]), IOS);
-      expect(pickups(short)).toEqual([expect.objectContaining({ durationS: 3, measured: { mounted: true, speedMph: 35 } })]);
+      expect(pickups(short)).toEqual([expect.objectContaining({ durationS: 3, measured: { mounted: true, speedMph: 35, maxSpeedMph: 35 } })]);
     });
   });
 
@@ -313,7 +313,7 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
   test('23. a motion pickup, then a lock with RoadWise in front: the departure is held, then nothing of it is applied', () => {
     const rows = seq([10, front], [3, { ...front, ...tapped }], [10, away], [30, locked]);
     const t = trace(rows, IOS);
-    expect(pickups(t.events)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 3, measured: { mounted: true, speedMph: 35 } })]);
+    expect(pickups(t.events)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 3, measured: { mounted: true, speedMph: 35, maxSpeedMph: 35 } })]);
     expect(handlingOf(t.events)).toEqual([]);
     // the held rows are not unsafe
     expect(t.active.slice(13, 23)).toEqual(Array(10).fill(false));
@@ -321,12 +321,12 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
 
   test('24. a motion pickup, then a real switch of 30 s: held to age 26, then one episode, never mounted', () => {
     const e = run(seq([10, front], [3, { ...front, ...tapped }], [30, away], [10, front]), IOS);
-    expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 33, measured: { mounted: false, speedMph: 35 } })]);
+    expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 33, measured: { mounted: false, speedMph: 35, maxSpeedMph: 35 } })]);
   });
 
   test('25. a switch that joined a motion pickup and counted, then a lock 5 s later: its share is dropped and mounted restored', () => {
     const e = run(seq([10, front], [3, { ...front, ...tapped }], [19, away], [30, locked]), IOS);
-    expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 3, measured: { mounted: true, speedMph: 35 } })]);
+    expect(pickups(e)).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 3, measured: { mounted: true, speedMph: 35, maxSpeedMph: 35 } })]);
   });
 
   test('26. unproven: no switch counts until a lock is reported in time; after that they do', () => {
@@ -375,7 +375,7 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
   describe('31. bursts: a short switch counts toward one only when it outlasted the lock cut (a lock undone before its report never does)', () => {
     const three = (n: number) => seq([10, front], [n, away], [10, front], [n, away], [10, front], [n, away], [5, front]);
     test('three 13-s switches ending in RoadWise within 2 min are one pickup (span 12 s > the 11-s cut)', () => {
-      expect(pickups(run(three(13), IOS))).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 15, measured: { mounted: false, speedMph: 35 } })]);
+      expect(pickups(run(three(13), IOS))).toEqual([expect.objectContaining({ startedAt: at(10), durationS: 15, measured: { mounted: false, speedMph: 35, maxSpeedMph: 35 } })]);
     });
     test.each([2, 5, 6, 10, 12])('three %i-s runs ending in RoadWise (a lock and an unlock before iOS reports it reads the same): nothing', (n) => {
       expect(run(three(n), IOS)).toEqual([]);
@@ -426,7 +426,7 @@ describe('iPhone (switchSignal lagged, lock delay unmeasured: the cut is 11 s)',
     });
     test('unlocked into another app for 40 s: one pickup from its first row, confirmed at age 26', () => {
       const t = trace(afterLock(40), IOS);
-      expect(pickups(t.events)).toEqual([expect.objectContaining({ startedAt: at(40), durationS: 40, measured: { mounted: false, speedMph: 35 } })]);
+      expect(pickups(t.events)).toEqual([expect.objectContaining({ startedAt: at(40), durationS: 40, measured: { mounted: false, speedMph: 35, maxSpeedMph: 35 } })]);
       expect(t.confirmed.indexOf(true)).toBe(40 + 25);
     });
     test('the boundary, even ending back in RoadWise (unlocked back into RoadWise is a lock undone): 25 rows then RoadWise is nothing, 26 is a pickup of 26 s', () => {

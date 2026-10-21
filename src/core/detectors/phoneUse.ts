@@ -28,11 +28,13 @@
 //   no handling. A pickup with a switch in it is never `mounted`.
 //
 // The episode closes after two quiet rows. Its use time is from its start to its last use row:
-// past 15 s it adds one `phone_handling` event (moderate ≤ 30 s, severe beyond).
+// past 15 s it adds one `phone_handling` event (moderate ≤ 30 s, severe beyond). Both events carry
+// `measured.maxSpeedMph`, the highest trusted GPS speed from the episode's start to its last use
+// row (the phone speed multiplier on points reads it).
 import { PHONE_MIN_MPH, type Tier } from '@scoring';
 
 import type { DetectedEvent, Detector, DetectorContext, FeatureRow, OpenEpisode } from '../engine/types';
-import { inWarmup, knownSpeedMph, mountedStable, round1, ROW_MS, rowEligible } from './common';
+import { inWarmup, knownSpeedMph, mountedStable, round1, ROW_MS, rowEligible, speedTrusted } from './common';
 import {
   ageS,
   BURST_RUNS,
@@ -133,8 +135,26 @@ function usedS(e: Episode): number | null {
   return burstS + Math.max(0, (last - e.burstUntil) / 1000);
 }
 
+/** A trusted GPS speed of one row: what `maxSpeedMph` is taken from. */
+interface SpeedMark {
+  ts: number;
+  mph: number;
+}
+
 export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
   let ep: Episode | null = null;
+  /**
+   * The trusted speeds of the recent rows, oldest first: back to the start of anything that may yet
+   * be, or become, an episode (an episode, a run, a burst's window), so an episode charged from an
+   * earlier row still finds its speeds there.
+   */
+  let speeds: SpeedMark[] = [];
+  /** The highest trusted speed from `from` to `to` (row clock, both included), or null. */
+  const maxSpeed = (from: number, to: number): number | null => {
+    let best: number | null = null;
+    for (const m of speeds) if (m.ts >= from && m.ts <= to && (best === null || m.mph > best)) best = m.mph;
+    return best;
+  };
   /** The car has moved above 5 mph at some point of the drive. */
   let moved = false;
   const classifier = createSwitchClassifier();
@@ -174,8 +194,11 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
     if (e === null || !e.confirmed || e.ignored) return [];
     const durationS = usedS(e);
     if (durationS === null) return [];
+    const last = lastUse(e);
+    const top = last === null ? null : maxSpeed(e.startedAt, last);
     const measured: DetectedEvent['measured'] = { mounted: e.mounted };
     if (e.speedAtPickupMph !== null) measured.speedMph = round1(e.speedAtPickupMph);
+    if (top !== null) measured.maxSpeedMph = round1(top);
     const pickup: DetectedEvent = {
       id: e.id,
       type: 'phone_pickup',
@@ -195,7 +218,7 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
       startedAt: e.startedAt + HANDLING_FREE_S * 1000,
       durationS: extra,
       units: Math.max(1, Math.ceil(extra / HANDLING_UNIT_S)),
-      measured: { mounted: e.mounted },
+      measured: top === null ? { mounted: e.mounted } : { mounted: e.mounted, maxSpeedMph: round1(top) },
     };
     return [pickup, handling];
   };
@@ -305,9 +328,10 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
   return {
     push(row, _limit, ctx) {
       motionNow = false;
-      // 1. the car has moved
+      // 1. the car has moved; the row's trusted speed is kept for `maxSpeedMph`
       const speedMph = knownSpeedMph(row);
       if (speedMph !== null && speedMph > PHONE_MIN_MPH) moved = true;
+      if (speedMph !== null && speedTrusted(row)) speeds.push({ ts: row.ts, mph: speedMph });
       if (proven === null) proven = ctx.switchSignal === 'lagged';
 
       // 2. classify the row for switches; an iPhone lock report within 15 s of leaving proves the phone
@@ -420,7 +444,9 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
         endRun(ended, row, c.lockRow, ctx);
       }
 
-      // 8. quiet and close
+      // 8. quiet and close (the speeds kept reach back to whatever may still be charged)
+      const keepFrom = Math.min(row.ts - (BURST_WINDOW_S + 5) * 1000, ep?.startedAt ?? Infinity, run?.startTs ?? Infinity, bursts[0]?.startTs ?? Infinity);
+      if (speeds.length > 0 && speeds[0]!.ts < keepFrom) speeds = speeds.filter((m) => m.ts >= keepFrom);
       if (ep === null || motionUse || countingRow || heldRow) return [];
       ep.quiet += 1;
       if (ep.quiet < CLOSE_AFTER_QUIET_ROWS) return [];
@@ -441,6 +467,11 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
       // The use so far as the alerts read it (`lastUseAt − startedAt`): a burst's clamp included.
       const used = usedS(ep);
       if (used !== null) out.lastUseAt = ep.startedAt + (used - 1) * 1000;
+      // What the alerts' points estimate reads: the pickup's own speed and the highest so far.
+      out.stoppedInTraffic = ep.stoppedInTraffic;
+      out.speedMph = ep.speedAtPickupMph;
+      const latest = speeds.length > 0 ? speeds[speeds.length - 1]!.ts : ep.startedAt;
+      out.maxSpeedMph = maxSpeed(ep.startedAt, Math.max(latest, lastUse(ep) ?? ep.startedAt));
       return out;
     },
     active: () => ep !== null && ep.confirmed && !ep.ignored && !(ep.phase === 'hold' && !motionNow),
