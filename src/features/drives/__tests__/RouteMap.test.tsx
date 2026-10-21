@@ -5,7 +5,8 @@ import { contrastRatio, tokens } from '@/ui';
 
 import { draw, event, press, ROUTE } from '../__fixtures__/drives';
 import { EVENT_ICON } from '../format';
-import { RECENTER_MS, resetMapsCache, RING_INK, RouteMap } from '../RouteMap';
+import { pinAnchor, PIN_PLACE as PLACE } from '../Pin';
+import { PIN, PIN_PLACE, RECENTER_MS, resetMapsCache, RING_INK, RouteMap } from '../RouteMap';
 
 /** The map is hidden from screen readers (the breakdown says it all), so queries must look inside. */
 const H = { includeHiddenElements: true } as const;
@@ -50,7 +51,7 @@ test('the map is a square with no legend, a pin per event with its icon, and the
         event(),
         event({ id: 'b2', tier: 'severe', lat: ROUTE[15]!.lat, lng: ROUTE[15]!.lng }),
         event({ id: 's', type: 'speeding', tier: 'severe', durationS: 30, lat: ROUTE[3]!.lat, lng: ROUTE[3]!.lng }),
-        event({ id: 'p', type: 'phone_pickup', tier: 'severe', lat: null, lng: null }),
+        event({ id: 'p', type: 'hard_accel', tier: 'severe', lat: null, lng: null }),
       ]}
       highlighted={null}
     />
@@ -206,4 +207,12 @@ test('the highlight ring keeps 3:1 on light and dark map tiles alike', async () 
   const e = event();
   await draw(<RouteMap runs={[ROUTE]} events={[e]} highlighted={e} />);
   expect(within(screen.getByTestId('map-highlight', H)).getByTestId('map-highlight-ring', H)).toHaveStyle({ borderColor: RING_INK });
+});
+
+test('the pin lives in its own module: the route map re-exports its size and placement', () => {
+  expect(PIN_PLACE).toBe(PLACE);
+  expect(PIN).toMatchObject({ width: 32, height: 44, tipY: 42 });
+  // A wider view (a pin with a label chip) keeps its tip on the coordinate on both engines.
+  expect(pinAnchor(100, 44, 16, 42)).toEqual({ anchor: { x: 0.16, y: 42 / 44 }, centerOffset: { x: 34, y: -20 } });
+  expect(pinAnchor(32, 44, 16, 42)).toEqual(PLACE);
 });

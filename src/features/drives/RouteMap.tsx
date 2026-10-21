@@ -1,9 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { EventType, Tier } from '@scoring';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import type MapViewType from 'react-native-maps';
-import Svg, { Path } from 'react-native-svg';
 
 import type { LatLng } from '@/lib/geo';
 import { IconButton, Text, tokens, useTheme } from '@/ui';
@@ -11,6 +10,7 @@ import { IconButton, Text, tokens, useTheme } from '@/ui';
 import { EventIcon } from './EventIcon';
 import { DASHPAL_MARK, EVENT_LABEL, eventKind, eventName, formatClock, formatEventDuration, spokenEventDuration, TIER_SIGNAL } from './format';
 import type { LocalDriveEvent } from './model';
+import { PIN, PIN_PLACE, TeardropPin, useSettling } from './Pin';
 import {
   allPoints,
   awayFrom,
@@ -71,14 +71,8 @@ const TIER_Z: Record<Tier, number> = { minor: 1, moderate: 2, severe: 3 };
 /** How long Recenter takes to bring the map back to the view it opened on. */
 export const RECENTER_MS = 300;
 
-/**
- * The pin: a round head tapering to a point, Google Maps style, in a fixed 32 × 44 point view. The
- * tip is 42 points down (the 2 below it hold the drop shadow); the head is a 28-point circle
- * centred 15 points down.
- */
-export const PIN = { width: 32, height: 44, tipY: 42, headY: 15, headR: 14 } as const;
-const PIN_PATH = 'M16 42 C13.2 35 2 26.5 2 15 A14 14 0 1 1 30 15 C30 26.5 18.8 35 16 42 Z';
-export const PIN_PLACE = tipAnchor(PIN.height, PIN.tipY);
+/** The teardrop pin and its placement (`./Pin`), kept exported here for the map's callers. */
+export { PIN, PIN_PLACE };
 
 /** The ring around the head of the pin picked in the breakdown: its foot on the pin's tip. */
 const RING_D = 44;
@@ -87,8 +81,6 @@ export const RING_PLACE = tipAnchor(RING_H, RING_H);
 
 /** A tap on the map this soon after a pin tap is the same touch (Apple Maps reports both). */
 const SAME_TAP_MS = 400;
-/** How long a newly drawn custom marker keeps redrawing before it is frozen (Android snapshots). */
-const SETTLE_MS = 800;
 
 /** Singular and plural for the map's spoken summary. */
 const SPOKEN: Record<EventType, [string, string]> = {
@@ -96,8 +88,6 @@ const SPOKEN: Record<EventType, [string, string]> = {
   hard_brake: ['hard brake', 'hard brakes'],
   hard_accel: ['hard acceleration', 'hard accelerations'],
   hard_corner: ['hard corner', 'hard corners'],
-  phone_pickup: ['phone pickup', 'phone pickups'],
-  phone_handling: ['phone handling', 'phone handling'],
   eyes_off: ['eyes off road', 'eyes off road'],
   drowsy: ['drowsy alert', 'drowsy alerts'],
 };
@@ -125,27 +115,7 @@ export function eventDetail(e: Pick<LocalDriveEvent, 'type' | 'tier' | 'duration
 /** A map pin in its tier's colour with the event's icon, its tip on the spot. */
 function Pin({ mark }: { mark: EventMark }) {
   const ink = INK[TIER_SIGNAL[mark.tier]];
-  return (
-    <View collapsable={false} style={{ width: PIN.width, height: PIN.height }}>
-      <Svg width={PIN.width} height={PIN.height} viewBox={`0 0 ${PIN.width} ${PIN.height}`} style={StyleSheet.absoluteFill}>
-        <Path d={PIN_PATH} fill="#000000" fillOpacity={0.22} transform="translate(0 1.5)" />
-        <Path d={PIN_PATH} fill={ink.fill} stroke={PAPER} strokeWidth={1.5} strokeLinejoin="round" />
-      </Svg>
-      <View
-        style={{
-          position: 'absolute',
-          left: PIN.width / 2 - PIN.headR,
-          top: PIN.headY - PIN.headR,
-          width: PIN.headR * 2,
-          height: PIN.headR * 2,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <EventIcon type={mark.type} size={16} color={ink.onFill} />
-      </View>
-    </View>
-  );
+  return <TeardropPin fill={ink.fill} edge={PAPER} type={mark.type} iconColor={ink.onFill} />;
 }
 
 /** The small card a tapped pin opens over the bottom of the map: what happened and for how long. */
@@ -201,19 +171,6 @@ export function highlightCaption(e: LocalDriveEvent): string {
   return e.lat === null || e.lng === null
     ? `${what} is hidden for privacy, so it isn't on the map.`
     : `Circled on the map: ${what}`;
-}
-
-/**
- * True while custom markers drawn for `key` may still be painting: they redraw for a moment, then
- * freeze, so Android's marker snapshot holds the finished pin and the map stays cheap afterwards.
- */
-function useSettling(key: string): boolean {
-  const [settled, setSettled] = useState<string | null>(null);
-  useEffect(() => {
-    const timer = setTimeout(() => setSettled(key), SETTLE_MS);
-    return () => clearTimeout(timer);
-  }, [key]);
-  return settled !== key;
 }
 
 /**
