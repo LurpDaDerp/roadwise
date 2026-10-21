@@ -1,8 +1,8 @@
 # drive-sense — the native contract
 
-Local Expo module that records a drive the user started: 1 Hz GNSS, 25 Hz IMU reduced natively to
-one `FeatureRow` per second, motion activity (for the drive's walking end), phone state, the
-background surface (Android notification / iOS Live Activity hand-off), and a few utilities. This README is **binding** for the Swift (`ios/`)
+Local Expo module that records drives: 1 Hz GNSS, 25 Hz IMU reduced natively to one `FeatureRow`
+per second, motion activity (for the drive's walking end), the background surface (Android
+notification / iOS Live Activity hand-off), the iOS drive detector (§11) and a few utilities. This README is **binding** for the Swift (`ios/`)
 and Kotlin (`android/`) implementations. The TypeScript sources are the machine-checked half of
 the same contract:
 
@@ -14,25 +14,30 @@ the same contract:
 | `src/fake.ts` | `createFakeDriveSense()` — the in-memory implementation every JS test runs against |
 | `src/extract/*.ts` | the feature-extraction and gravity-filter **reference** the native code ports |
 | `src/extract/constants.ts` | every tunable number, by the name the ports must use |
-| `src/reminder/policy.ts` | the forgot-to-start reminder's decision policy and its constants (§10); `src/reminder/vectors.ts` is its decision table |
+| `src/reminder/policy.ts` | the Android forgot-to-start reminder's decision policy and its constants (§10); `src/reminder/vectors.ts` is its decision table |
+| `src/detect/types.ts`, `src/detect.ts` | the iOS drive detector's bridge (`DriveDetect`, §11): `DRIVE_DETECT_EVENTS`, `DRIVE_DETECT_METHODS`, the state and event types, the wrapper |
+| `src/detect/policy.ts` | the detector's rules and every number (§11), mirrored by `ios/DetectPolicy.swift` and `ios/DetectEndPolicy.swift`; `src/detect/vectors.ts` is its decision table, `src/detect/selfTest.ts` the phone's diff |
+| `src/detect/journal.ts` | the row journal's line format (§11) |
+| `src/fakeDetect.ts` | `createFakeDriveDetect()` — the in-memory detector the host's tests run against |
 | `assets/vectors/*.json` | golden vectors the ports must reproduce (`selfTest`) |
 | `src/selfTest.ts` | vector validation and the native-vs-reference diff |
 
 Where this README and the TypeScript disagree, the TypeScript wins and the README is a bug.
 
-**v3 (plan §1 decision 4, §6).** A drive starts only from a tap on Start Drive in the app. This
-module has **no arming and no auto-start**: a capture runs only between a JS `startCapture` and
-`stopCapture` — plus, on Android, the `START_STICKY` restart of a capture the user had already
-started, under the watchdog (§6). A drive needs location "While Using" only: iOS keeps a capture
-started in the foreground running through the `location` background mode; Android through the
-location foreground service.
+**iOS: drives start on their own (§11).** A native drive detector, armed by JS for a signed-in
+owner with Location Always, Precise Location and Motion & Fitness, wakes on a significant move, on
+leaving the spot the car last parked in, or on leaving a place the phone stayed at; it watches with
+GPS for up to 3 minutes, confirms a drive once the car holds 15 mph for 30 s (10 mph for 15 s after
+Start drive), traces the drive's start back to where the car pulled away, writes every row to a
+journal on disk and emits it as a `row` with its `seq`. JS adopts the drive wherever it runs and
+decides its end; native stops sensing on its own only as a safety stop. Phone use is not read: rows
+carry a fixed phone sample, and the lock, screen and reminder methods answer fixed values.
 
-The one thing that runs with no drive open is the optional **forgot-to-start reminder** (§10), off
-by default: it notices driving natively and posts at most one notification a session, with a
-one-use token. It never starts a capture: a tap on its note reaches JS, which claims the token
-(`claimReminderTap`) and only then starts the drive itself, through the Start Drive path. It is the only user of significant-location wakes, of "Always"
-location (iOS, asked only when the driver turns it on) and of the boot receiver (Android, enabled
-only while it is on).
+**Android (frozen).** A drive starts only from a tap on Start drive: a capture runs only between a
+JS `startCapture` and `stopCapture`, plus the `START_STICKY` restart of a capture the user had
+already started, under the watchdog (§6), on location "While Using" through the location foreground
+service. The one thing that runs with no drive open is the optional **forgot-to-start reminder**
+(§10), off by default; JS no longer turns it on (a reminder left on from before is switched off once).
 
 ---
 
@@ -61,12 +66,12 @@ only while it is on).
 - **Silence while moving (SR9).** A failed sensor, a refused foreground-service start or a lost
   fix never produces a notification, sound or modal. Record it (Android: for `getLastExitInfo`)
   and carry on or stop.
-- **Nothing of the capture runs between captures.** No capture GPS, no IMU, no capture timers and
-  no motion feed to JS while idle, and nothing ever starts a capture but `startCapture`. GPS 1 Hz
-  only while capturing. IMU 25 Hz batched natively and reduced per second — never per sample to
-  JS. No WorkManager jobs. With no drive open, only the forgot-to-start reminder (§10) runs, and
-  only while the driver has it on; it only notifies, and reaches JS with nothing but a tap on its
-  note (`reminderTap`, Android).
+- **Nothing senses while idle.** No GPS, no IMU, no timers and no motion feed to JS between drives.
+  GPS 1 Hz only while a drive records, a candidate is watched or (iOS) "Not driving?" rests the
+  detector. IMU 25 Hz batched natively and reduced per second — never per sample to JS. No WorkManager
+  jobs. iOS: with no drive open only the detector's wakes run (significant-location changes, one
+  region, visits: no GPS). Android: nothing ever starts a capture but `startCapture`; with no drive
+  open only the forgot-to-start reminder (§10) may run, if it was left on.
 
 ---
 
@@ -77,24 +82,24 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 
 | Method | Behaviour |
 |---|---|
-| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second; iOS `kCLLocationAccuracyBestForNavigation` with `.automotiveNavigation` and no distance filter, so Core Location fuses the motion sensors into each fix; Android the fused provider at `PRIORITY_HIGH_ACCURACY`, 1 s) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of the Android sticky restart** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: a `SecurityException` from the location foreground service → `E_PERMISSION`; any other refusal → `E_FGS_REFUSED`. iOS: a new capture emits `call { active: true }` once if a phone call is already in progress (later changes as they happen). Both platforms subscribe the motion-activity feed for the capture's life when `motion` is `granted`, **best effort** (Android: a `SecurityException` or missing Play services is logged and swallowed, never rejects `startCapture`, never stops the capture), for the drive's walking end. Only ever called from a user's tap in the foreground. |
-| `stopCapture(end?)` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service (its notification goes with it) and the capture's activity-transition subscription. Idempotent. `end` (`CaptureEnd`): the drive's driving end (`drivingEndedAt`, epoch ms, or null for a drive that was not kept) and whether the car was still at driving speed as it ended (`drivingAtEnd`), for the reminder's session (§10); sent natively as `(kind, endedAt, drivingAtEnd)` with kind `now` (no `end`), `dropped` or `at`. The watchdog's stop passes none (now). |
-| `setCaptureRate(rate)` | `full` as above. `low`: coarse location (iOS `kCLLocationAccuracyHundredMeters`, `distanceFilter = 50`; Android `PRIORITY_BALANCED_POWER_ACCURACY` at 10 s), IMU stopped, and a row is emitted **only when a fix arrives** (IMU-absent encoding, §4). The process stays alive. iOS reads the phone state (`locked`/`screenOn`/`appForeground`, and `screen` changes) on each fix at `low` rather than polling at 1 Hz, so the low rate wakes nothing per second. Ignored (resolves) while not capturing. |
+| `startCapture(mode)` | Start full-rate capture (1 Hz GNSS + 25 Hz IMU, rows every second; iOS `kCLLocationAccuracyBestForNavigation` with `.automotiveNavigation` and no distance filter, so Core Location fuses the motion sensors into each fix; Android the fused provider at `PRIORITY_HIGH_ACCURACY`, 1 s) in `mode` ∈ `mounted`/`pocket`/`auto`, set the persisted capture-open flag, `captureStartedAt` = now. **Also the JS claim of the Android sticky restart** (§6). While already capturing it only updates `mode` and claims — `captureStartedAt` and the rate are unchanged. A new capture takes its `ClockAnchor` (§7 "Time base"). **Requires** `location` `whenInUse` or `always`, else rejects `E_PERMISSION` and does not capture. Motion permission is not needed (the IMU needs none). Android: a `SecurityException` from the location foreground service → `E_PERMISSION`; any other refusal → `E_FGS_REFUSED`. iOS: a new capture emits `call { active: true }` once if a phone call is already in progress (later changes as they happen). Both platforms subscribe the motion-activity feed for the capture's life when `motion` is `granted`, **best effort** (Android: a `SecurityException` or missing Play services is logged and swallowed, never rejects `startCapture`, never stops the capture), for the drive's walking end. Android: only ever called from a user's tap in the foreground. **iOS:** the app's Start drive is `DriveDetect.startWaiting` (§11); while a detector drive records `startCapture` only re-modes it, while a candidate or a rest runs it starts nothing, and with nothing open it starts a **plain capture** (tests and dev tools: rows without `seq`, no journal). |
+| `stopCapture(end?)` | Stop GNSS, IMU and rows; clear the capture-open flag; Android stops the foreground service (its notification goes with it) and the capture's activity-transition subscription. Idempotent. `end` (`CaptureEnd`): the drive's driving end (`drivingEndedAt`, epoch ms, or null for a drive that was not kept) and whether the car was still at driving speed as it ended (`drivingAtEnd`); sent natively as `(kind, endedAt, drivingAtEnd)` with kind `now` (no `end`), `dropped` or `at`. Android: for the reminder's session (§10); the watchdog's stop passes none (now). **iOS:** a recording detector drive's end: its journal gets `end { cause: "js", endedAt: drivingEndedAt ?? now }` (JS's cut), sensing stops, the parked region is set at the last trusted fix and detection is armed again; no `driveEnded` follows (§11). |
+| `setCaptureRate(rate)` | `full` as above. `low`: coarse location (iOS `kCLLocationAccuracyHundredMeters` with **no distance filter**: iOS 16.4+ suspends an app whose location updates use one while significant-change monitoring runs; Android `PRIORITY_BALANCED_POWER_ACCURACY` at 10 s), IMU stopped, and a row is emitted **only when a fix arrives** (IMU-absent encoding, §4). The process stays alive. Ignored (resolves) while not capturing. |
 | `getState()` | `DriveSenseState` (below). |
-| `getScreenState()` | `{ locked, on }` now (same derivation as the `screen` event). |
+| `getScreenState()` | Android: `{ locked, on }` now (same derivation as the `screen` event). iOS: always `{ locked: false, on: true }` (nothing is read). |
 | `getThermalState()` | `nominal`/`fair`/`serious`/`critical` (iOS `ProcessInfo.thermalState`; Android `PowerManager` thermal status: NONE/LIGHT → nominal, MODERATE → fair, SEVERE → serious, CRITICAL and above → critical). |
 | `requestMotionPermission()` | iOS: triggers the motion prompt with a one-minute activity query; Android API 29+: requests `ACTIVITY_RECOGNITION` (below 29 it is install-time: `granted`). Resolves `granted`/`denied`/`unavailable` (hardware without motion activity). **Never rejects.** Already granted → `granted` without a prompt. When the OS will not ask again (iOS `denied`/`restricted`; Android refused with `shouldShowRequestPermissionRationale` false after a request, i.e. "don't ask again") → `denied` **without prompting**; the app must send the user to Settings. |
 | `excludeFromBackup(uri)` | iOS: sets `isExcludedFromBackup` on the file or directory at `uri` (`file://` URI or a path). Android: resolves (backup exclusion is manifest-level). Rejects `E_NOT_FOUND` if nothing exists at `uri`, and `E_IO` if it exists but the attribute could not be set (iOS). JS callers treat a rejection as non-fatal. |
-| `setDriveDisplay(state)` | The background surface (spec "Driving screen · Background"; plan §6). `state` = `{ speed, limit, unit, points, pointsDelta, stopped, ended? }` (`DriveDisplayState`). **Android:** updates the capture's foreground notification — title **"Driving"**, text **"34 mph · limit 35"** (`—` for a null speed or limit, the unit from `state`), a sub-line **"1,240 pts (+18)"** only when `points` is non-null (the delta only when non-null and non-zero), the **End drive** action (→ `notificationAction`) only while `stopped` and not `ended`; tapping opens the app. Ignored while not capturing; the display resets with each capture. **iOS:** forwarded to the Live Activity (`modules/live-drive`) through the process-local `roadwise.driveDisplay` notification; a no-op when none is running. Callers throttle to ≤ 1 update per 3 s, send on change, and re-send an unchanged state every 60 s (keeps the Live Activity's 2-min stale date from lapsing at a long stop). Never rejects. |
+| `setDriveDisplay(state)` | The background surface (spec "Driving screen · Background"; plan §6). `state` = `{ speed, limit, unit, points, pointsDelta, stopped, ended?, sky…?, speedTint?, speeding?, notDrivingAvailable?, weatherKind?, weatherText? }` (`DriveDisplayState`; the last five are the iOS Live Activity's and Android ignores them). **Android:** updates the capture's foreground notification — title **"Driving"**, text **"34 mph · limit 35"** (`—` for a null speed or limit, the unit from `state`), a sub-line **"1,240 pts (+18)"** only when `points` is non-null (the delta only when non-null and non-zero), the **End drive** action (→ `notificationAction`) only while `stopped` and not `ended`; tapping opens the app. Ignored while not capturing; the display resets with each capture. **iOS:** forwarded to the Live Activity (`modules/live-drive`) through the process-local `roadwise.driveDisplay` notification (every key, the tint, the hint and the weather line included); a no-op when none is running. Callers throttle to ≤ 1 update per 3 s, send on change, and re-send an unchanged state every 60 s (keeps the Live Activity's 2-min stale date from lapsing at a long stop). Never rejects. |
 | `getLastExitInfo()` | Android: the most recent of `ActivityManager.getHistoricalProcessExitReasons(pkg, 0, 1)` and the persisted watchdog record, as `ExitInfo` (mapping: `REASON_USER_REQUESTED`/`USER_STOPPED` → `user_stopped`, `LOW_MEMORY` → `low_memory`, `CRASH`/`CRASH_NATIVE` → `crash`, `ANR` → `anr`, watchdog stop → `watchdog`, a refused FGS start → `other`, anything else → `other`, unknown → `unknown`); `whileCapturing` from the persisted capture-open flag at that time. iOS: `null`. |
 | `isIgnoringBatteryOptimizations()` | Android: `PowerManager.isIgnoringBatteryOptimizations(packageName)` — whether the app is exempt from battery optimisation (permission health). **iOS: always `true`** — iOS has no equivalent per-app restriction, so there is nothing for the user to fix. |
-| `selfTest(vectorsJson)` | Runs the native extractor and (Android) gravity filter over golden vectors; resolves a JSON string (§8). Rejects `E_INVALID_INPUT` only if the vectors JSON cannot be parsed at all. |
-| `setTripReminder(enabled)` | The forgot-to-start reminder's switch (§10); resolves its `TripReminderStatus`. On: saved on even when something is missing (the status says what), the session kept, the Android channel created, the wake started where allowed. Off: everything it kept is forgotten, its feed or wake stopped, its boot receiver disabled (Android), any notification taken down. Never starts a capture. |
-| `getTripReminderStatus()` | The reminder's `TripReminderStatus` (§10), brought up to now first. |
-| `requestReminderLocation()` | iOS: the one "Always" request, from the driver's tap that turns the reminder on, only with While Using granted and only once ever (`always`/`whenInUse`/`denied`; no prompt → the current answer). Android: `notNeeded` (its reminder uses no location). |
-| `claimReminderTap(token)` | A tap on the reminder's note (§10): `true` once, for the live note's token, while the reminder is on, its session lasts (iOS: the motion history folded in first) and no drive is open; Android also within 2 min of the tap's hand-over. `true` spends the token and takes the note down. The token must match `REMINDER_TOKEN` (`[A-Za-z0-9-]{1,64}`) before it crosses. Never starts a capture: the caller starts the drive. |
-| `takeReminderTap()` | Android: the tap the phone handed RoadWise, once — `{ token, at }` (`at` = the hand-over time) — or `null`; it reads the launch intent itself when nothing is held. iOS: always `null` (its taps arrive through expo-notifications). |
-| `markLockProof(delayMs)` | iOS: an in-drive lock proof (a lock reported `delayMs` after RoadWise left the screen, §5): kept as the phone's proof, with that delay, when `delayMs` ≤ 15 000; a longer one is ignored. Android: resolves with no effect. The wrapper accepts a finite `delayMs` of 0–60 000 only. |
+| `selfTest(vectorsJson)` | Runs the native extractor and (Android) gravity filter over golden vectors, (iOS) the drive detector's policy over `detect` rows and (Android) the reminder's over `reminder` rows; resolves a JSON string (§8). Rejects `E_INVALID_INPUT` only if the vectors JSON cannot be parsed at all. |
+| `setTripReminder(enabled)` | Android: the forgot-to-start reminder's switch (§10); resolves its `TripReminderStatus`. On: saved on even when something is missing (the status says what), the session kept, the channel created. Off: everything it kept is forgotten, its feed stopped, its boot receiver disabled, any notification taken down. Never starts a capture. **iOS** (no reminder): resolves `{ enabled: false, state: 'off', missing: [] }`. |
+| `getTripReminderStatus()` | Android: the reminder's `TripReminderStatus` (§10), brought up to now first. iOS: `{ enabled: false, state: 'off', missing: [] }`. |
+| `requestReminderLocation()` | iOS: the current location answer (`always`/`whenInUse`/`denied`) without prompting; the one "Always" request is `DriveDetect.requestAlways` (§11). Android: `notNeeded`. |
+| `claimReminderTap(token)` | Android: a tap on the reminder's note (§10): `true` once, for the live note's token, while the reminder is on, its session lasts, no drive is open and within 2 min of the tap's hand-over. `true` spends the token and takes the note down. The token must match `REMINDER_TOKEN` (`[A-Za-z0-9-]{1,64}`) before it crosses. Never starts a capture. iOS: always `false`. |
+| `takeReminderTap()` | Android: the tap the phone handed RoadWise, once — `{ token, at }` (`at` = the hand-over time) — or `null`; it reads the launch intent itself when nothing is held. iOS: always `null`. |
+| `markLockProof(delayMs)` | Resolves with no effect on both platforms (phone use is not tracked). The wrapper accepts a finite `delayMs` of 0–60 000 only. |
 | `listInstalledApps(packages)` | The navigation button. **Android:** for each package, in the order given, `{ package, label }` when `getLaunchIntentForPackage` finds a launcher activity and the app is enabled; `label` is the app's own (`getApplicationLabel`). Only packages the module manifest's `<queries>` names are visible (API 30+ package visibility: exactly the catalogue's Android packages, `src/features/navigation/catalog.ts`; never `QUERY_ALL_PACKAGES`); any failure skips that package. **iOS:** always `[]` (navigation apps are found by URL scheme in JS). The wrapper accepts 1–32 package names, each one of the navigation apps (`NAV_APP_PACKAGES`, `src/navPackages.ts`, equal to the catalogue and the manifest's `<queries>`); native skips any other (`NavPackages.ALLOWED`). |
 | `launchApp(package)` | **Android:** opens the app with its launch intent plus `FLAG_ACTIVITY_NEW_TASK \| FLAG_ACTIVITY_RESET_TASK_IF_NEEDED`, as a launcher tap does, so a route in progress is resumed, not reset; resolves `true`, or `false` for a package outside `NavPackages.ALLOWED`, with no launch intent or when the start fails. The wrapper refuses any package that is not one of the navigation apps (`NAV_APP_PACKAGES`) before the bridge. **iOS:** always `false`. |
 | `setDashpalLink(state)` | DashPal alerts on the phone. **Android:** the DashPal link service, a `connectedDevice` foreground service (`DashpalLinkService`, notification id 7310 on the silent `dashpal_link` channel "DashPal link", `IMPORTANCE_LOW`: no sound, vibration or badge, a small status-bar icon; title **"DashPal"**, text **"Connected. DashPal alerts play on this phone."** for `connected`, **"Not connected. DashPal plays its alerts itself."** for `waiting`; a tap opens RoadWise), which keeps the process from being cached and frozen while a DashPal is paired, so the dashcam's frames reach JS in the background. `off`: a running service stops (its notification goes) → `stopped`; none running → `stopped`. A **running** service takes `waiting` or `connected` through its own instance (the notification text, the reconnect tick) → `running`: never a second start, so it works from the background. A **stopped** one starts only when a RoadWise activity is visible or the process is in front, and on Android 14+ `BLUETOOTH_CONNECT` is granted; otherwise, or when Android refuses the start, → `refused` (nothing started); else `running` once it is in the foreground (`refused` after 10 s without that). `START_NOT_STICKY`: a process Android ends comes back only when RoadWise is opened. While `waiting` it emits `dashpalLinkTick` every 30 s. It never touches a capture or a wake lock. **iOS:** `unsupported` (an ALERT wakes the app through `bluetooth-central`). Never rejects. |
@@ -116,6 +121,9 @@ tests for one. Anything else a native method throws is a bug.
 | `E_IO` | `excludeFromBackup` (iOS) | the file exists but `isExcludedFromBackup` could not be set |
 | `E_INVALID_INPUT` | `selfTest` | the vectors JSON is unparseable |
 
+The detector's bridge (`DriveDetect`, §11) has its own list, `DRIVE_DETECT_ERROR_CODES`: `E_BUSY`
+(`discardDrive` on the drive that still records); `isDriveDetectError` tests for it.
+
 Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 `getScreenState`, `getThermalState`, `requestMotionPermission`, `setDriveDisplay`,
 `getLastExitInfo` (`null` below Android 11), `isIgnoringBatteryOptimizations`, `setTripReminder`,
@@ -126,16 +134,16 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 
 | Field | Meaning |
 |---|---|
-| `capturing` | as set by `startCapture`/`stopCapture` (and by the Android sticky restart, §6) |
-| `rate`, `mode` | the current capture's; `null` while not capturing |
+| `capturing` | as set by `startCapture`/`stopCapture` (and by the Android sticky restart, §6). iOS: also true while a detector drive records (`recording` or `ending`), never during a candidate or a rest |
+| `rate`, `mode` | the current capture's; `null` while not capturing. iOS: a detector drive reports `auto` (it started on its own) or `mounted` (from Start drive) |
 | `platform` | `ios` / `android` |
-| `location` | the OS location authorisation. iOS: `authorizedAlways` → `always` (asked for only by `requestReminderLocation`, when the driver turns on the forgot-to-start reminder; a drive never needs it), `authorizedWhenInUse` → `whenInUse`, `notDetermined`/`denied`/`restricted` → `none`; reduced (approximate) accuracy reports its authorisation unchanged. Android: fine or coarse granted → `whenInUse`; neither → `none`. Android never reports `always`: the manifest declares no `ACCESS_BACKGROUND_LOCATION`. |
+| `location` | the OS location authorisation. iOS: `authorizedAlways` → `always` (asked once by `DriveDetect.requestAlways`; drives that start on their own need it, Start drive does not), `authorizedWhenInUse` → `whenInUse`, `notDetermined`/`denied`/`restricted` → `none`; reduced (approximate) accuracy reports its authorisation unchanged. Android: fine or coarse granted → `whenInUse`; neither → `none`. Android never reports `always`: the manifest declares no `ACCESS_BACKGROUND_LOCATION`. |
 | `motion` | iOS: `CMMotionActivityManager.isActivityAvailable()` false → `unavailable`, else `authorizationStatus()` `authorized` → `granted`, `denied`/`restricted` → `denied`, `notDetermined` → `undetermined`. Android: no Google Play services → `unavailable`; API < 29 → `granted` (install-time); else `ACTIVITY_RECOGNITION` granted → `granted`, requested and refused → `denied`, never requested → `undetermined` (persist a "requested once" flag to tell these apart) |
-| `lockSignal` | how far `locked` can be trusted: Android `reliable`; iOS `lagged` with a passcode, `unreliable` without (§5) |
-| `lockProof` | iOS: the lock probe (or `markLockProof`) has seen this phone report a lock within 15 s of RoadWise leaving the screen (§5); cleared, with the delay and the probe's try counter, whenever `getState` finds no passcode. Android: `false` (locks are exact there) |
-| `lockDelayMs` | iOS: the delay measured with that proof, integer ms, or `null` before any. Android: `null` |
-| `captureWasOpen` | the persisted capture-open flag was set when this process started — a capture was open when the previous process ended (rev1: I2). iOS clears the flag on read (no relaunch ever restarts a capture there), so it reports once |
-| `captureStartedAt` | integer epoch ms of the current capture's start; `null` while not capturing |
+| `lockSignal` | Android `reliable`; iOS always `unreliable` (it reads no lock state, §5) |
+| `lockProof` | always `false` |
+| `lockDelayMs` | always `null` |
+| `captureWasOpen` | the persisted capture-open flag was set when this process started — a capture was open when the previous process ended (rev1: I2). iOS resumes or ends that drive from its journal (§11); the flag only reports that the process died mid-drive |
+| `captureStartedAt` | integer epoch ms of the current capture's start (iOS: a detector drive's traced start); `null` while not capturing |
 | `lastRowTs` | `ts` of the last row emitted in this process; `null` before any |
 
 ---
@@ -144,10 +152,10 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 
 | Event | Payload | When |
 |---|---|---|
-| `activity` | `MotionActivity` `{ type, confidence, ts, exit? }` | a motion-activity change **while capturing** (both platforms subscribe the feed for the capture's life only) |
-| `row` | a `DriveSenseRow` (§4) | once per second while capturing at `full`; once per fix at `low` |
+| `activity` | `MotionActivity` `{ type, confidence, ts, exit? }` | a motion-activity change **while capturing** (Android), **while the detector senses** (iOS: a candidate, a drive, a rest) |
+| `row` | a `DriveSenseRow` (§4) | once per second while capturing at `full`; once per fix at `low`. iOS: a detector drive's rows carry their journal `seq`; a candidate's rows are never emitted (the drive's first rows, from its traced start, come at the confirmation) |
 | `speed` | `SpeedSample` `{ ts, speed, speedAcc, hAcc, ageMs }` | each fix at `full` rate, the moment it lands (before its row): the fix's own time (integer epoch ms), its Doppler speed (m/s), speed accuracy (m/s) and horizontal accuracy (m), each `-1` when unknown, and `ageMs`, how old the fix already is (integer ms, ≥ 0; iOS the wall clock less `CLLocation.timestamp`, Android the capture's anchored boot clock less the fix's `elapsedRealtimeNanos`). It drives the driving screen's speed only (`src/core/engine/displaySpeed.ts`); the rows still carry every fix for scoring. Sent only while a JS listener is attached, **never buffered** (a stale speed is worthless). Validate with `parseSpeed` |
-| `screen` | `{ locked, on, ts }` | lock/screen change while capturing (Android `SCREEN_ON`/`SCREEN_OFF`/`USER_PRESENT`; iOS on a change of the 1 Hz poll) |
+| `screen` | `{ locked, on, ts }` | Android only: lock/screen change while capturing (`SCREEN_ON`/`SCREEN_OFF`/`USER_PRESENT`). Declared on iOS, never emitted |
 | `thermal` | `{ level, ts }` | a thermal-state change while capturing |
 | `notificationAction` | `{ action: 'endDrive', ts }` | Android: the notification's End drive action (offered only while `setDriveDisplay` says `stopped`) |
 | `call` | `{ active, ts }` | iOS only: `CXCallObserver` — a call started or ended |
@@ -214,6 +222,8 @@ buffered natively and delivered, in order, when the first listener for it attach
 `OnStartObserving`), after `addListener` returns. The buffer holds at most **300** events across
 all events; when full, drop the **oldest `row`** first, else the oldest event.
 (`createFakeDriveSense` implements the same rule, and `EVENT_BUFFER_MAX` in `src/fake.ts` is the number.)
+iOS keeps a second buffer, with the same rule, for the `DriveDetect` module's events (§11). A row
+dropped from the buffer is still in its drive's journal, where the host's `seq` check finds it.
 
 ---
 
@@ -221,7 +231,7 @@ all events; when full, drop the **oldest `row`** first, else the oldest event.
 
 `row` payloads must pass `parseRow` (`src/rowSchema.ts`): exactly M1's `FeatureRow` keys
 (`src/core/engine/types.ts`), finite numbers, booleans for the three phone flags, and `ts` a
-non-negative integer epoch ms — **plus the bridge-only `mock` and `call`** (below). Native emits exactly those keys (pinned by
+non-negative integer epoch ms — **plus the bridge-only `mock`, `call` and (iOS) `seq`** (below). Native emits exactly those keys (pinned by
 the native text tests and the golden vectors). On the JS side an **unknown key fails soft** (C0
 round 1): it is stripped and counted (`unknownRowKeys()`), and the row is kept, so a future native
 field can never cost an older bundle a drive's rows; a known key with a wrong type still rejects
@@ -237,9 +247,10 @@ the row. The encodings:
 | `gnssValid` | the window has a fix (chosen by fix timestamp, §7 "Windows") ∧ `0 ≤ hAcc ≤ GNSS_MAX_HACC_M` (50 m) ∧ age at `ts` ≤ `GNSS_MAX_AGE_S` (1.5 s) |
 | fewer than `MIN_IMU_SAMPLES` (10) IMU samples in the second, or IMU stopped (`low` rate) | **IMU absent**: `aLonMax`, `aLonMin`, `aLatMax`, `aLatMin`, `yawRateMax`, `jerkMax`, `gravityStability`, `orientationDelta`, `handlingScore` all `0` (M1's `finalize.ts` reads "IMU present" from the six extremes) |
 | IMU present, frame not aligned | `aLonMax`, `aLonMin`, `aLatMax`, `aLatMin`, `jerkMax` are `0`; `yawRateMax`, `gravityStability`, `orientationDelta`, `handlingScore` are computed |
-| `locked` / `screenOn` / `appForeground` | the phone state at the end of the second (§5) |
+| `locked` / `screenOn` / `appForeground` | Android: the phone state at the end of the second (§5). iOS: always `false` / `true` / `true` (nothing is read) |
 | **`mock`** (v3, plan §6; spec "Integrity · GPS spoofing") | a boolean beside the `FeatureRow` keys: the window's fix came from a mock location provider — Android `Location.isMock()` (API 31+) / `isFromMockProvider()` (before); iOS 15+ `sourceInformation?.isSimulatedBySoftware` (false below 15). `false` when the window has no fix. It is **not** a `FeatureRow` field: native adds it at the emit site, never in the row struct's own map, so the self-test rows (§8) keep exactly the contract's keys; `parseRow` splits it off, validates it as a boolean (a wrong type rejects the row), and returns it on `DriveSenseRow.mock`. Optional on the wire: rows from older builds parse without it, and a consumer reads absent as "not known to be mocked". |
 | **`call`** (screen switches; spec "Event detection") | `"ring"` while a call rings or dials, `"live"` while one is connected, **absent** with no call, read at the emit site. **Android:** `PhoneStateReceiver.callState` from `AudioManager.getMode()`: `MODE_RINGTONE` → `ring`, `MODE_IN_CALL` → `live`, `MODE_IN_COMMUNICATION` → `live` only while `activeRecordingConfigurations` is non-empty (a VoIP call with the microphone open), no permission; the one Kotlin reading of the call state. **iOS:** `CallObserver.state()` from the capture's `CXCallObserver`: a call `hasConnected && !hasEnded` → `live`, else any `!hasEnded` → `ring`. Not a `FeatureRow` extraction field (the self-test rows and golden vectors never carry it); `parseRow` splits it off, accepts only `"ring"` / `"live"` (any other value rejects the row) and returns it on `row.call`. A call's own screen is not a screen switch (§5). |
+| **`seq`** (iOS, §11) | the row's place in its drive's journal: an integer, 1 for the drive's first row (its traced start) and up by one. Not a `FeatureRow` field; `parseRow` splits it off, accepts only a positive safe integer (anything else rejects the row) and returns it on `row.seq`. The host checks each live row is the last plus one and fetches a gap from the journal (`DriveDetect.readRows`). Android rows, plain-capture rows and stored traces have none. |
 | `exempt` | **never sent by native.** The drive host stamps `nav` / `restart` on a parsed row (the navigation button's and a restart's exemption, §5); a native `exempt` is stripped and counted as an unknown key. |
 
 Units: g for accelerations, g/s for jerk, rad/s for yaw rate, rad for `orientationDelta`,
@@ -249,68 +260,36 @@ m and m/s for GNSS, degrees clockwise from true north for `course`.
 
 ## 5. Phone state
 
-- **`appForeground` is "RoadWise is in front"** (visible, and not sharing a phone screen).
-  - **Android:** `AppVisibility`, an `Application.ActivityLifecycleCallbacks` registered from
-    `Application.onCreate` by `DriveSensePackage` (an Expo `Package`, found by autolinking), before
-    any activity; the module's `OnCreate` registers late, seeded from the current activity, only if
-    that hook never ran. In front = at least one RoadWise activity *started* and not in split screen
-    on a display whose smallest width is under 600 dp. A dialog over RoadWise, the notification
-    shade, the assistant overlay, a chat bubble, a heads-up and another app's picture-in-picture
-    leave the activity started; Home, Recents and another app stop it. An activity stopped with
-    `isChangingConfigurations` (a rotation, a fold) is recreated and never counts as leaving. Split
-    screen is a configuration change, not a lifecycle callback, so the capture re-samples it on main
-    after every row (at most a row stale). Not the process importance: during a drive the capture's
-    foreground service holds the process at 125, so a paused-but-visible RoadWise would read as gone.
-    `AppVisibility.visible()` (any started activity, split screen included) is the plain visibility.
-  - **iOS:** `applicationState != .background`: Notification Center, Control Center, Siri, a call
-    banner, a system alert and the app switcher make the app `.inactive` while it stays on screen.
-- **Android**: `locked = KeyguardManager.isKeyguardLocked`, `screenOn = PowerManager.isInteractive`;
-  `lockSignal: 'reliable'`.
-- **iOS**: `UIApplication.isProtectedDataAvailable` polled at 1 Hz while capturing:
-  `locked = !available`, `screenOn = available`.
-  - With a passcode, protected data becomes unavailable about **10 s after** the side-button
-    press (the file-protection grace period), so `locked` lags the real lock by ~10 s:
-    `lockSignal: 'lagged'`.
-  - **Without a passcode**, protected data never becomes unavailable, so `locked` stays `false`
-    and a locked phone is indistinguishable from an unlocked one in the background:
-    `lockSignal: 'unreliable'` (`LAContext().canEvaluatePolicy(.deviceOwnerAuthentication)`
-    false).
-  - **The lock probe** (`LockProbe.swift`, started from the module's `OnCreate`, no app-delegate
-    hook): it observes `didEnterBackground` (RoadWise left the screen, a lock included),
-    `protectedDataWillBecomeUnavailable` (the lock report) and `willEnterForeground`, on main. A
-    report within 15 s of leaving is the phone's **lock proof**, persisted in UserDefaults
-    (`drivesense.lockProof`, the delay in `drivesense.lockDelayMs`); a later one proves nothing and
-    is not kept. Outside a drive the app may be suspended before the report, so on a passcode phone
-    not yet proven each departure begins one finite background task (`drivesense.lockProbe`), ended
-    by the report, a return to the front or after 16 s, **at most 20 times per install**
-    (`drivesense.lockProbeTries`); without a passcode none runs and `getState` clears the proof,
-    the delay and the counter. During a drive the app is alive anyway, and the detector's own
-    in-drive proof is written back with `markLockProof`.
-- **Phone use reads these flags for screen switches** (`src/core/detectors/phoneSwitch.ts`,
-  `phoneUse.ts`): RoadWise not in front (`appForeground` false) while the phone is in use is a
-  screen switch, unless the row is excused (the drive host's `exempt` stamp, a call's own screen from
-  the row's `call` key, the warm-up). Android: unlocked with its screen on, exact. iPhone: not
-  reported `locked`; because the report lags about 10 s (and a lock screen a notification wakes
-  reads as unlocked once Face ID sees the driver), a switch counts while away only after 15 s plus
-  the lock delay and a second (26 s with the usual delay), or when RoadWise is back in front after
-  15 s or more that also outlasted the lock delay and a second (a woken lock screen that goes dark
-  ends in a lock report instead; not a run that began after a lock report), a lock report cuts it
-  back to the estimated press, and only a phone with a lock proof (above) counts at all; `lockSignal: 'unreliable'` never does.
-  Motion (`handlingScore`) is the other evidence, whatever app is in front. Which app is in front is never read: iOS offers no way to, and on Android it would
-  take Usage access (`PACKAGE_USAGE_STATS`), which the app does not ask for.
+Phone use is not tracked. **iOS reads no phone state:** every row carries `locked: false`,
+`screenOn: true`, `appForeground: true`, `getScreenState` answers `{ locked: false, on: true }`,
+the `screen` event is never emitted and `getState` reports `lockSignal: 'unreliable'`,
+`lockProof: false`, `lockDelayMs: null`. The keys stay because the row contract is shared with
+Android and with stored traces; JS ignores them. The thermal state is still read (`thermal`,
+`getThermalState`; diagnostics).
+
+**Android (frozen)** still reports them: `locked = KeyguardManager.isKeyguardLocked`,
+`screenOn = PowerManager.isInteractive`, `lockSignal: 'reliable'`, and `appForeground` is "RoadWise
+is in front": `AppVisibility`, an `Application.ActivityLifecycleCallbacks` registered from
+`Application.onCreate` by `DriveSensePackage` (an Expo `Package`, found by autolinking), before any
+activity; the module's `OnCreate` registers late, seeded from the current activity, only if that
+hook never ran. In front = at least one RoadWise activity *started* and not in split screen on a
+display whose smallest width is under 600 dp. An activity stopped with `isChangingConfigurations` (a
+rotation, a fold) is recreated and never counts as leaving; split screen is re-sampled on main after
+every row. JS ignores these values too.
 
 ---
 
-## 6. Watchdog (rev1: C2) — capture nobody records must stop
+## 6. Watchdog (rev1: C2) — Android: capture nobody records must stop
 
-Only JS can decide a drive is over, so native must not keep sensing when JS is not there:
+**iOS has no watchdog:** every detector drive is journaled and resumed or ended from its journal,
+and the detector's own safety stop (§11) ends a drive JS never ends. On Android only JS can decide a
+drive is over, so native must not keep sensing when JS is not there:
 
 1. **Claim within 60 s (Android).** The one capture native restarts by itself — the `START_STICKY`
    null-intent restart after the process died mid-capture, of a capture the user had started —
    must be claimed by a JS `startCapture` within **60 s**. Otherwise stop capture, clear the
    capturing and capture-open flags, stop the foreground service, and record exit reason
-   `watchdog`. iOS never restarts a capture on its own (no relaunch without Always), so it has no
-   claim guard.
+   `watchdog`.
 2. **A row listener must exist.** While capturing, if **no JS listener for `row`** has been
    attached for **5 minutes** continuously (Expo `OnStartObserving`/`OnStopObserving` for `row`),
    do the same. The liveness signal is "a JS row listener is attached" — no JS timer or heartbeat
@@ -676,10 +655,15 @@ diagnostics screen (U5) — never by a production code path.
    first 20 mismatches per vector are listed by path (`rows[8].aLonMin`). A `skipped` result is
    accepted only for a `gravityFilter` or `androidRaw` vector on `platform: "ios"`; anywhere else
    it fails.
-6. A second call sends the forgot-to-start reminder's decision table as `reminder` vectors
-   (`{ "name", "kind": "reminder", "inputs": row }`); native answers `{ "name", "kind": "reminder",
-   "actual": {…} }` or the `skipped` form for the other platform's rows, and JS diffs with
-   `diffReminderSelfTest` (§10 "Self-test").
+6. A second call sends the drive detector's decision table as `detect` vectors
+   (`{ "name", "kind": "detect", "inputs": row }`, `src/detect/vectors.ts` without each row's
+   `expected`); iOS runs each through the production `DetectPolicy` (`DetectSelfTest.swift`) and
+   answers `{ "name", "kind": "detect", "actual": {…} }`; Android has no detector and answers
+   `skipped`. JS diffs with `diffDetectSelfTest` (`src/detect/selfTest.ts`), which accepts a skip
+   only from Android.
+7. A third call sends the forgot-to-start reminder's decision table as `reminder` vectors; Android
+   answers `{ "name", "kind": "reminder", "actual": {…} }` (or `skipped` for a row it does not run),
+   iOS (no reminder) `skipped` for every row, and JS diffs with `diffReminderSelfTest` (§10).
 
 ---
 ## 9. JS usage
@@ -714,21 +698,31 @@ instead. The fake follows this contract where host tests depend on it:
   as native always does — use it in integration tests so a host that relies on synchronous
   delivery fails in Jest rather than on a device;
 - buffering before the first listener and the 300-event cap are native's, and `speed` is
-  dropped, never buffered, while no listener is attached.
+  dropped, never buffered, while no listener is attached;
+- iOS (`platform: 'ios'`, the default) answers the reminder methods with its fixed stubs and keeps no
+  lock proof; `rowSeq: true` stamps each row with the journal's `seq` (1 and up per capture).
+
+`createFakeDriveDetect({ available, now, asyncDelivery, sense, permissions })` (`src/fakeDetect.ts`)
+is the detector's: `wake()`, `confirm()`, `emitRows()` (journaled with `seq`, and emitted through
+`sense` as `row` events), `endFor(cause)`, `jsStop(endedAt)`, `waitTimeout()`, an ndjson journal
+read back by `readJournal`, settable permissions and the Always answer.
 
 The other controls (`emit`, `loadTrace`, `listenerCount`, `setLastExitInfo`,
 `setIgnoringBatteryOptimizations`, `transition`, `failCaptureSubscribe`, `strandSubscription`,
 `setTripReminderEnv`, `tripReminderOn`, `postReminderForTest`, `tapReminderForTest`) are documented on
 `FakeControls` in `src/types.ts`; `driveSenseError(code, message)` builds a coded rejection for a
-hand-rolled stub. The fake's reminder runs the reference policy (`src/reminder/policy.ts`) for its
-switch, status, claim and (Android) the tap's one hand-over.
+hand-rolled stub. The fake's Android reminder runs the reference policy (`src/reminder/policy.ts`) for
+its switch, status, claim and the tap's one hand-over.
 
 ---
 
-## 10. The forgot-to-start reminder
+## 10. The forgot-to-start reminder (Android only)
 
-Optional, **off by default**, switched on from an optional onboarding step or Settings › Driving
-(`setTripReminder`). It works in **sessions**: a session is a stretch of driving, and it ends 30 min
+**Android only** (iOS drives start on their own, §11; its reminder code is gone and its methods are
+fixed stubs). The app no longer offers the reminder: JS switches it off once per install
+(`setTripReminder(false)`) so one left on from before stops posting. What follows is the frozen
+Android behaviour. Optional, **off by default**, formerly switched on from onboarding or Settings ›
+Driving (`setTripReminder`). It works in **sessions**: a session is a stretch of driving, and it ends 30 min
 after its last driving moment (`SESSION_GAP_MS`); every driving moment starts the 30 min again, and
 an open drive counts as driving (a session never ends while a drive is open; the drive's driving
 end, which JS passes to `stopCapture`, is a driving moment, a drive that was not kept leaves the
@@ -745,49 +739,36 @@ minimum trip time, no check of calls, Low Power Mode or RoadWise being in front.
 The note says **"Forgot to start drive?"** / **"Tap here to start"**, has no buttons and no link, and
 carries a **one-use token** (a random UUID per note). **It never starts a capture**: no reminder file
 can reach a capture start (`__tests__/native-*.test.ts`) and the capture tells the reminder when it
-starts and ends (one direction only). A tap reaches JS (iOS: the notification response through
-expo-notifications, `data.kind === 'tripReminder'`, `data.reminderToken`; Android: the module reads
-`EXTRA_TAP` off the launch intent and hands it over once, `reminderTap` + `takeReminderTap`), and
-JS asks `claimReminderTap(token)`: true once, for the live note's token, while the reminder is on,
-its session lasts and no drive is open, and (Android) within 2 min of the tap's hand-over
-(`TAP_FRESH_MS`). True spends the token and takes the note down. Only after a true does JS start the
-drive, through the Start Drive button's own `host.start()` (`src/features/notifications/reminderTap.ts`).
-A refused start does not give the session another reminder.
+starts and ends (one direction only). A tap reaches native (the module reads `EXTRA_TAP` off the
+launch intent and hands it over once, `reminderTap` + `takeReminderTap`), and `claimReminderTap(token)`
+answers true once, for the live note's token, while the reminder is on, its session lasts and no
+drive is open, and within 2 min of the tap's hand-over (`TAP_FRESH_MS`). True spends the token and
+takes the note down. The app no longer starts a drive from a tap (the JS feature is gone).
 
-The note comes down when a drive starts (any way), when its session ends (Android: its system
-timeout falls at the session's end; iOS: the next time native code runs, and a tap until then is
-refused by the claim), when it is claimed, when the reminder is turned off, and (iOS) when the
-reminder loses "Always" or Precise Location. It is **not** taken down when the car moves on, when
+The note comes down when a drive starts (any way), when its session ends (its system timeout falls
+at the session's end), when it is claimed and when the reminder is turned off. It is **not** taken down when the car moves on, when
 the driver walks off or when RoadWise comes to the front: there is one reminder a session, and it
 stays tappable.
 
 The policy is one pure reference, `src/reminder/policy.ts`, mirrored by `TripReminderPolicy.kt`
 (the shared rules, the tap's hand-over and claim, the transition batch, a capture batch and the
-note's timeout) and `TripReminderPolicy.swift` / `TripReminderWakePolicy.swift` (the shared rules,
-the claim, and the motion history, wake, look and stop) under the same constant names and values;
+note's timeout) under the same constant names and values (its iOS-only rules stay in the reference
+and the table, unused);
 `src/reminder/vectors.ts` is the decision table. Jest runs every row against the reference, and a
 ground-truth simulation (`__tests__/reminderPolicy.test.ts`: days of trips, red lights, parks and
 drives, delivered with each platform's delays, tier changes and replays) checks that no true
 session gets two reminders, none comes during a drive, and none comes without driving speed since
 the last drive; the self-test runs each row through the native mirror on the phone (below).
 
-**State** is native only (no JS settings key): Android `DriveSensePrefs.tripReminderJson`, iOS
-UserDefaults `drivesense.tripReminder` (and `drivesense.tripReminder.alwaysAsked`), both the
-`ReminderState` JSON of `policy.ts` (`v: 3`: `enabled`, `session`, `lastDriveEndAt`, `token`,
-`postedAt`, `tapSeen`, `tapAt`, `lookRestUntil`). A stored v2 (the reminder before sessions) keeps
-only its switch; anything unreadable is off. iOS decides and saves nothing while nothing is stored:
-a state that reads as missing (before the first unlock after a reboot, or in a process iOS started
-then) is never saved back as the default, and only turning the reminder on writes a first state.
-Stored times more than a day ahead are a clock change and become now.
+**State** is native only (no JS settings key): `DriveSensePrefs.tripReminderJson`, the
+`ReminderState` JSON of `policy.ts` (`v: 3`). A stored v2 keeps only its switch; anything
+unreadable is off. Stored times more than a day ahead are a clock change and become now.
 
 **Self-test.** The diagnostics self-test (§8) sends each row of `vectors.ts`, without its
-`expected`, as a `reminder` vector; `TripReminderSelfTest.kt` / `.swift` run it through the
-production policy and answer the row's `actual`, and `diffReminderSelfTest`
-(`src/reminder/selfTest.ts`) matches it against the row's `expected` with the matcher Jest runs over
-the reference. Android answers the iOS rows (the wake and look gates, the motion history, the look's
-fixes, the held stop, a look's end, a claim without the hand-over check) with `skipped`; iOS answers
-Android's (the hand-over, a claim with the hand-over check, the transition batch, a capture batch,
-the note's timeout) so. A skip of a row the platform has fails.
+`expected`, as a `reminder` vector; `TripReminderSelfTest.kt` runs it through the production policy
+and answers the row's `actual`, and `diffReminderSelfTest` (`src/reminder/selfTest.ts`) matches it
+against the row's `expected`. Android answers the iOS-only rows with `skipped`; iOS answers every
+row `skipped` (`reminderRowRunsOn('ios', …)` is false). A skip of a row the platform has fails.
 
 ### Android: activity recognition only
 
@@ -827,58 +808,143 @@ rarely reported (catching lights would need background location); a Play service
 clear can drop the registration with no broadcast (it comes back at the next app open); a force
 stop or an OEM "deep sleeping" list stops it until RoadWise is opened.
 
-### iOS: significant-location wake → motion history → bounded GPS look
-
-While the reminder is on with "Always" and Precise Location, `startMonitoringSignificantLocationChanges`
-wakes (or relaunches) the app after a significant move; `TripReminderAppDelegate`
-(`appDelegateSubscribers`, `didFinishLaunching` only) restarts the monitor at every launch and adds
-no notification delegate (it never sets the notification center's delegate). iOS has no vehicle
-state: `inVehicle` stays false and a session ends by time. **Driving** is the end of a confident
-CoreMotion `automotive` stretch that is not `stationary` (a car standing still is neither driving
-nor a break; each activity lasts until the next begins, the newest until now), read from the last
-3 h of motion history (`IOS_MOTION_LOOKBACK_MS`, always the same window) at every wake, claim,
-status read, launch, return to the front, and a drive's start and end, but only while the reminder
-is on (off, `motionWhileOn` queries nothing and folds in an empty summary, which changes nothing as
-off has no session); and every GPS fix at 10 mph or more during a look. A car run that began 30 min or more after the session's last driving moment
-(only 30 min without moving car motion splits a run) is a new trip after a park: the old session
-ends. A wake first runs the cheap checks (off, permissions, a drive open), then reads the motion
-history; a session opens on moving car motion from the last 2 min with the driver not on foot. A
-**GPS look** (its own `CLLocationManager`, ten-metre accuracy, every fix, never paused, no
-indicator) starts only while the session has had no reminder, the car motion is fresh and the
-driver is not on foot, and not within 10 min of a look that ran its full 10 min with no stop
-(`IOS_LOOK_REST_MS`, battery). It looks for a stop: valid speed (accuracy ≤ 2 m/s) of 10 mph first,
-then under 3 mph held 12 s by fix time; walking or running (not cycling) during the hold is an
-arrival (no post). While the walking and notification checks run, fixes still move the tracker: if
-one breaks the stop (3 mph or more), nothing posts and the look looks again (10 mph first). It
-lasts at most 10 min, ends after 3 min without 10 mph, and never outlives 13 min whatever check is
-in flight; every held stop ends it. The look's 10 mph fixes are driving moments and its driving
-speed. The note has sound, interruption level `.active` (a Focus holds it), identifier
-`roadwise.tripReminder` (one note, replaced) and `userInfo` `{ kind: 'tripReminder', reminderToken }`;
-a note iOS refuses is taken back. GPS stays off for the rest of a session once its reminder is
-posted. Every async continuation (the wake's and claim's motion reads, the look's checks, the post's
-completion, a drive's start and end) reloads the stored state before it saves. A wake whose
-background task iOS ends early does not hold the next wake. After a swipe-away iOS does not relaunch
-the app for location changes: the reminder waits until RoadWise is opened.
-
-"Always" is asked by `requestReminderLocation` only from the turn-on tap, only with While Using
-already granted, and only once (resolving on a changed authorisation, on RoadWise active again
-plus 1 s, on no prompt within 1 s, or after 60 s). Kept at While Using, the status says
-`locationAlways` and nothing asks again.
-
-### Rules (both platforms)
+### Rules
 
 | Rule | Number |
 |---|---|
 | A session ends this long after its last driving moment (an open drive counts as driving) | 30 min |
 | Reminders a session | at most 1 |
 | Never while a drive is open; after a drive, driving speed with no drive open again, then a stop | — |
-| A stop: iOS under 3 mph held after 10 mph; Android STILL after leaving the vehicle | 12 s; 2 min |
+| A stop: STILL after leaving the vehicle | 2 min |
 | A stop too old on arrival (Android) | 45 s |
-| A tap is claimed and started within this of its hand-over (Android natively; JS on both) | 2 min |
-| GPS look (iOS): at most / without 10 mph / rest after a full look | 10 min / 3 min / 10 min |
+| A tap is claimed within this of its hand-over | 2 min |
 | The note's timeout while the phone is in a vehicle (Android) | 3 h |
 
 `TripReminderStatus` (`getTripReminderStatus`): `state` `off` / `on` / `needs` (`missing`:
-`motion`, `notifications` — iOS: allowed with alerts, provisional is not enough —,
-`locationAlways`, `locationPrecise`) / `unavailable` (no Play services; iOS: no motion activity or
-significant-change hardware); `enabled`, so a reminder still on can always be switched off.
+`motion`, `notifications`) / `unavailable` (no Play services); `enabled`, so a reminder still on
+can always be switched off.
+
+---
+
+## 11. The iOS drive detector (`DriveDetect`)
+
+iOS only. A second Expo module in this pod (`ios/DriveDetectModule.swift`, registered for Apple
+only in `expo-module.config.json`, with the launch hook `DriveDetectAppDelegate`). Android has no
+such module: JS reads `DriveDetect.available === false` as "drives start only from Start drive" and
+keeps today's capture path. `src/detect/types.ts` is the binding contract; `src/detect/policy.ts`
+holds every rule and number, mirrored constant for constant by `ios/DetectPolicy.swift` and
+`ios/DetectEndPolicy.swift` (the native text test compares them).
+
+### Bridge
+
+| Method / event | Behaviour |
+|---|---|
+| `setArmed(armed, ownerId)` | JS's arming for the signed-in owner (at onboarding's end, at sign-in, at each foreground; off at sign-out, account switch and deletion). Resolves the `DetectState`. Detection runs only with Always, Precise and Motion & Fitness: without them the state stays `off` and `status` says `needs`. A different owner forgets the last end. Never rejects. |
+| `getState()` | The `DetectState`: `armed`, `ownerId`, `state` (`off`/`armed`/`candidate`/`recording`/`ending`/`suppressed`), `origin`, the live `driveId` and `startedAt`, `since`, `waitUntil`, `lastEnd { decidedAt, cut, lat, lng, driveId }`, `suppressedUntil`, `status` (`on`/`needs`/`unavailable`/`off`) with `missing` (Location Always, Precise Location, Motion & Fitness, Background App Refresh, then Live Activities, only with `needs`), `permissions` (incl. `backgroundRefresh`, `liveActivities`, `canAskAlways`) and `journalDropped` (reported once). |
+| `requestAlways()` | The one "Always" request, only from While Using, once per install (`drivesense.detect.alwaysAsked`); afterwards the current answer (`always`/`whenInUse`/`denied`) and JS offers Settings. |
+| `startWaiting()` | Start drive: a manual candidate with a 5-min wait (`WAIT_MAX_MS`); While Using and Precise are enough. `{ ok: true, waitUntil }`, or `{ ok: false, reason: 'permission' \| 'busy' \| 'unavailable' }`. An auto candidate already open becomes the wait. |
+| `extendWaiting()` | Any touch on the waiting screen: `waitUntil` = now + 5 min; `null` when not waiting. |
+| `cancelWaiting()` | Ends the wait quietly. |
+| `notDriving()` | "Not driving?": the live drive is cancelled (its journal deleted, `driveEnded { cause: 'cancelled' }`) and detection rests (`suppressed`). No-op when nothing records. |
+| `listDrives()` | Every journal file as a `JournaledDrive` (its start line, last seq and row time, bytes, the end if any). |
+| `readRows(driveId, afterSeq, limit)` | The rows after `afterSeq`, in order, at most `limit` (1-600), each a `row` payload with its `seq`; `done` when the file holds no more. Keeps its place in the file, so a drain reads it once. |
+| `discardDrive(driveId)` | Deletes the journal file (JS, once the drive is finalized); resolves when none exists; **rejects `E_BUSY` for the drive that still records**. |
+| `detectState` | every transition, with its `reason` (`armed`, `wake:slc`, `confirmed`, `stillClock`, `moved`, `ended`, `notDriving`, `resumed`, …). |
+| `driveStarted` | `{ driveId, origin, startedAt, startSource, startLat, startLng, continues, confirmedAt, firstSeq }` at every confirmation. |
+| `driveEnded` | `{ driveId, endedAt, cause, decidedAt, lastSeq, lastRowTs }` when native ends a drive (`still`, `walking`, `limit`, `orphan`) or cancels it (`cancelled`); never for a JS end. |
+
+The three events are buffered by their own hub (`EventHub.detect`, 300 events) until the first
+listener. A drive id is a lowercase UUID (the JS `client_trip_id`); native refuses any other before
+it names a file.
+
+### States and transitions
+
+The record (`DetectStateRecord`, UserDefaults `drivesense.detect`) is saved before each transition's
+side effects; a missing read (unreadable before the first unlock after a reboot) decides nothing.
+
+- **`off` → `armed`** when JS armed it and the three permissions hold: significant-location changes,
+  visits and the parked region (`roadwise.parked`, 150 m, exit only, at the last end's place) run.
+  None turns GPS on. A permission lost later turns an idle detector `off`; a drive in progress
+  finishes first.
+- **A wake** (`WakeSources.swift`): a significant change (the cached fix delivered at start, older
+  than `SLC_STALE_MS`, is not one), leaving the parked region, or leaving a visit within 10 min.
+  The gate (`wakeGate`): armed, an owner, the permissions, idle, not resting (a significant change or
+  visit within 10 min of a timed-out candidate), fewer than 6 candidates in the hour. A region exit
+  then opens a candidate at once; the others first read the last 3 h of motion history and need
+  confident moving car motion in the last 2 min with the driver not on foot (`motionGate`). The
+  wake's background task ends at the first fix or after 25 s.
+- **`candidate`**: navigation GPS with no distance filter, 25 Hz IMU, the live motion activity and
+  rows into a ring of the last 600 (10 min); `speed` events go to JS (the waiting screen), rows do
+  not. An auto candidate ends after 3 min (and rests significant-change and visit wakes for 10 min)
+  or on a walk standing 20 s; a Start-card one at its wait. Every 5 s the detector's clock checks.
+- **Confirmation** (`confirmStep`): trusted rows (a valid fix within 30 m, speed rated 2 m/s or
+  better or unrated) at 15 mph (auto) or 10 mph (Start) spanning 30 s / 15 s on the row clock; a dip
+  under the trigger (or untrusted rows) spanning 5 s or less keeps the hold, more breaks it. An auto
+  hold waits while a confident cycling, walking or running report is 30 s old or less.
+- **The start** (`startOf`): the last trusted row at or under 3 mph before the confirming run,
+  going back past a stop shorter than 5 min that had driving at 10 mph or more before it (a red
+  light), unless the stop was 5 min or more (a parking). An auto drive whose rows begin moving starts
+  when the motion history's car run began, placed at the last end when the car could have come from
+  there (40 m/s plus 300 m), else at the first row. `continues` when the start is within 5 min of
+  the last end's decision and 150 m of its place (a hint: JS decides a re-open itself).
+- **`recording`**: a new drive id; the journal opens with its `start` line; the rows from the
+  traced start are journaled and emitted with `seq` 1, 2, …, then every new row; `driveStarted`;
+  `capturing` true for `getState` (mode `auto` or `mounted`); the "Recording your drive" check is
+  scheduled (below).
+- **`ending`**: a JS end rule is overdue (5 min without movement, fix-less car time not counting;
+  a walk standing 20 s with no fix over 3 mph in the last minute; 12 h). Movement again returns to
+  `recording`. **The native safety stop** commits the end one minute later (`SAFETY_SLACK_MS`) if JS
+  has not: the journal gets `end { cause, endedAt: decidedAt }` (native never computes a cut) and
+  JS hears `driveEnded`. JS's own end (`stopCapture`) journals `end { cause: 'js', endedAt: its cut }`
+  and emits nothing. After any end: sensing off, the capture flag cleared, the Live Activity ended
+  (`roadwise.driveDisplay` `ended`), the note removed, `lastEnd` and the parked region at the last
+  trusted fix, `armed` again. There is no native merge grace.
+- **`suppressed`** ("Not driving?"): ten-metre GPS, no IMU, no rows, the live motion activity. It
+  ends on a walk standing 20 s, after 5 min with no trusted fix over 3 mph, or at its 3 h cap; then
+  GPS off, the parked region at the last fix, `armed`. `lastEnd` is not touched.
+- **A relaunch** (`resumeAtLaunch`, at didFinishLaunching and at the first unlock): the wakes are
+  asked for again; a candidate never survives a process; a drive whose journal's last row is 5 min
+  old or less resumes (the torn tail cut off, a `gap` line, sensors on, rows from the next `seq`,
+  the still clock from the last row); an older one ends as an `orphan` (`driveEnded`, for JS to
+  finalize); a rest resumes until its cap.
+
+### The row journal
+
+`<Application Support>/drivesense/journal/<driveId>.ndjson` (`RowJournal.swift`,
+`RowJournalRead.swift`), excluded from backup, protected until the first unlock (rows keep landing
+with the phone locked). One JSON object per line: `start` (`v: 1`, the drive's start, `confirmedAt`,
+`nativeBuild`), `row` (the `row` payload with `seq`), `gap { from, to }`, `end { endedAt, cause,
+decidedAt, lastRowTs, lastSeq }`. fsync on `start`, `gap`, `end` and every 30 rows; 16 MiB a drive at
+most; at most 4 files (opening a fifth deletes the oldest ended file JS never drained, counted in
+`journalDropped`). A cancelled drive's file is deleted at once. Readers drop a torn last line and
+any row whose `seq` is not the last plus one. No file timestamps, attribute reads or disk-space
+reads (the privacy manifest declares none). `src/detect/journal.ts` reads the same format.
+
+### The Live Activity and the "Recording your drive" note
+
+The Live Activity is `modules/live-drive`'s. drive-sense only forwards the display state and posts
+`ended` at every end. At every confirmation `DriveNotifier` schedules a check 20 s out
+(`FALLBACK_NOTE_DELAY_MS`): if no Live Activity runs by then (live-drive posts
+`roadwise.liveActivity` with `running`) and the drive still records, a quiet local notification goes
+up: identifier `roadwise.driveRecording`, title "Recording your drive", body "Tap to open it. Not
+driving? You can stop it there.", no sound, the `.active` level, thread `drive-recording`, `userInfo
+{ kind: 'driveRecording', url: '/drive' }`. An activity that starts or is adopted cancels the check
+and takes the note down (live-drive removes it too), and every end or cancel removes it. So the
+driver sees the Live Activity (a push-to-start brings its own alert) or the note, never both.
+
+### Permissions and battery
+
+Location Always + Precise + Motion & Fitness for drives that start on their own; While Using +
+Precise for Start drive. Background App Refresh off (Low Power Mode turns it off) is reported as a
+need: iOS may then not relaunch RoadWise for a wake. The blue background-location indicator never
+shows (`showsBackgroundLocationIndicator = false` on every manager). Idle costs nothing but the
+wakes; a candidate is bounded (3 min, 6 an hour, the motion gate); a drive costs what a manual drive
+did.
+
+### Self-test
+
+`detect` vectors (§8): every row of `src/detect/vectors.ts` (confirmation, trace-back, start and
+fallbacks, the motion summary and gate, the wake gate, a candidate's clock, the safety stop, the
+rest's end, a relaunch's decision, the status) runs through the production `DetectPolicy` on the
+phone (`DetectSelfTest.swift`) and is diffed by `diffDetectSelfTest`.
+
