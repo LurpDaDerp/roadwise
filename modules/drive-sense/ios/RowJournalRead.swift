@@ -1,5 +1,6 @@
 // Reading the row journal (plan §3.2): a file's first line and its last complete lines (for
 // `listDrives`, a resume and an orphan's end), and its rows in order after a seq (for `readRows`).
+// `listDrives` lists a file with no end that is not the live drive as an orphan JS adopts.
 // A torn last line (no newline, or not JSON) is never read, and a row whose seq is not the last one
 // plus one is dropped. `readRows` keeps its place in each file, so draining a long drive page by
 // page reads it once. Journal queue only, except `list` and `read`, which hop onto it and answer on
@@ -75,23 +76,32 @@ extension RowJournal {
     return s
   }
 
-  /// `listDrives`: every journal file as a `JournaledDrive` (src/detect/types.ts), on main.
-  func list(_ done: @escaping ([[String: Any]]) -> Void) {
+  /// `listDrives`: every journal file as a `JournaledDrive` (src/detect/types.ts), on main. A file
+  /// with no end that is not the live drive (`liveId`) is an orphan: the state record lost that drive
+  /// (a power loss before it was saved), so nothing would ever end it. It is listed as ended, cause
+  /// `orphan`, for JS to adopt and finish like any drive native ended. Only with the record read
+  /// (`recordKnown`): before the first unlock the live drive is unknown, and nothing is an orphan.
+  func list(liveId: String?, recordKnown: Bool, _ done: @escaping ([[String: Any]]) -> Void) {
     queue.async {
       var out: [[String: Any]] = []
       for f in self.files() {
-        if let s = self.summary(f.url) { out.append(Self.listed(f.id, s)) }
+        if let s = self.summary(f.url) { out.append(Self.listed(f.id, s, orphan: recordKnown && f.id != liveId)) }
       }
       let drives = out
       DispatchQueue.main.async { done(drives) }
     }
   }
 
-  static func listed(_ id: String, _ s: JournalSummary) -> [String: Any] {
+  static func listed(_ id: String, _ s: JournalSummary, orphan: Bool) -> [String: Any] {
     let st = s.start
     var ended: Any = NSNull()
     if let e = s.end {
       let endInfo: [String: Any] = ["endedAt": e["endedAt"] ?? 0, "cause": e["cause"] ?? "orphan", "decidedAt": e["decidedAt"] ?? 0]
+      ended = endInfo
+    } else if orphan {
+      // An orphan ends at its last row (else its start); JS cuts it at the last movement.
+      let at = DetectStateRecord.ms(s.lastRowTs ?? jsonNumber(st["startedAt"]) ?? 0)
+      let endInfo: [String: Any] = ["endedAt": at, "cause": "orphan", "decidedAt": at]
       ended = endInfo
     }
     return [

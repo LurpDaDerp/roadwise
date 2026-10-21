@@ -846,7 +846,7 @@ holds every rule and number, mirrored constant for constant by `ios/DetectPolicy
 | `extendWaiting()` | Any touch on the waiting screen: `waitUntil` = now + 5 min; `null` when not waiting. |
 | `cancelWaiting()` | Ends the wait quietly. |
 | `notDriving()` | "Not driving?": the live drive is cancelled (its journal deleted, `driveEnded { cause: 'cancelled' }`) and detection rests (`suppressed`). No-op when nothing records. |
-| `listDrives()` | Every journal file as a `JournaledDrive` (its start line, last seq and row time, bytes, the end if any). |
+| `listDrives()` | Every journal file as a `JournaledDrive` (its start line, last seq and row time, bytes, the end if any). A file with no end that is not the live drive is an orphan (the state record lost that drive, e.g. a power loss before it was saved): it is listed as ended, cause `orphan`, at its last row (else its start), so JS adopts and finishes it like any drive native ended. Before the first unlock (the record unreadable) nothing is called an orphan. |
 | `readRows(driveId, afterSeq, limit)` | The rows after `afterSeq`, in order, at most `limit` (1-600), each a `row` payload with its `seq`; `done` when the file holds no more. Keeps its place in the file, so a drain reads it once. |
 | `discardDrive(driveId)` | Deletes the journal file (JS, once the drive is finalized); resolves when none exists; **rejects `E_BUSY` for the drive that still records**. |
 | `wipe()` | The sign-out, device and account-switch wipes: a candidate, a wait, a drive or a rest stops (no `driveEnded`: JS ends its own drive first), every journal file goes, the record starts again empty (no owner, last end, parked region, rest or drive) and the detector is `off` until JS arms it again. Resolves once the files are gone; on Android (no module) a no-op that resolves. |
@@ -917,8 +917,8 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
 with the phone locked). One JSON object per line: `start` (`v: 1`, the drive's start, `confirmedAt`,
 `nativeBuild`), `row` (the `row` payload with `seq`), `gap { from, to }`, `end { endedAt, cause,
 decidedAt, lastRowTs, lastSeq }`. fsync on `start`, `gap`, `end` and every 30 rows; 16 MiB a drive at
-most; at most 4 files (opening a fifth deletes the oldest ended file JS never drained, counted in
-`journalDropped`). A cancelled drive's file is deleted at once. Readers drop a torn last line and
+most; at most 4 files (opening a fifth deletes the oldest file JS never drained, ended or orphaned,
+counted in `journalDropped`). A cancelled drive's file is deleted at once. Readers drop a torn last line and
 any row whose `seq` is not the last plus one. No file timestamps, attribute reads or disk-space
 reads (the privacy manifest declares none). `src/detect/journal.ts` reads the same format.
 

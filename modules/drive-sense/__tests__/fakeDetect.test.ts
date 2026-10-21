@@ -199,6 +199,29 @@ describe('the fake detector', () => {
     expect(got).toHaveBeenCalledWith(ev);
   });
 
+  test('a journal with no end that is not the live drive (an orphan) lists as ended, cause orphan, at its last row; the live one does not', async () => {
+    const d = createFakeDriveDetect();
+    await d.setArmed(true, OWNER);
+    const orphan = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    d.putJournal(
+      orphan,
+      [
+        { k: 'start', v: 1, driveId: orphan, origin: 'manual', startedAt: 1_000, startSource: 'trace', startLat: 47.6, startLng: -122.33, continues: false, confirmedAt: 2_000, nativeBuild: '1' },
+        { k: 'row', seq: 1, ts: 3_000 },
+        { k: 'row', seq: 2, ts: 4_000 },
+      ]
+        .map((l) => `${JSON.stringify(l)}\n`)
+        .join('')
+    );
+    const live = d.confirm({ rows: [row(5_000)] });
+    const listed = await d.listDrives();
+    expect(listed.find((x) => x.driveId === orphan)).toMatchObject({ origin: 'manual', lastSeq: 2, lastRowTs: 4_000, ended: { endedAt: 4_000, cause: 'orphan', decidedAt: 4_000 } });
+    expect(listed.find((x) => x.driveId === live.driveId)?.ended).toBeNull();
+    // Taken in and finalized by JS, it goes like any other.
+    await expect(d.discardDrive(orphan)).resolves.toBeUndefined();
+    expect((await d.listDrives()).map((x) => x.driveId)).toEqual([live.driveId]);
+  });
+
   test('a journal left by an earlier process lists with its end, and getState clears journalDropped', async () => {
     const d = createFakeDriveDetect();
     const id = '0f8fad5b-d9cb-469f-a165-70867728950e';

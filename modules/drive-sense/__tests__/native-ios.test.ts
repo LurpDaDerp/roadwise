@@ -674,11 +674,25 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
     const marker = /func appendMarker\([\s\S]*?\n {2}\}/.exec(j)?.[0] ?? '';
     expect(marker).toMatch(/self\.bytes \+= data\.count\s*self\.sync\(\)/);
     expect(j).toMatch(/private func sync\(\) \{\s*try\? handle\?\.synchronize\(\)/);
-    // rotation: only an ended file goes, the oldest by its start
+    // rotation: the oldest undrained file by its start, ended or orphaned (review M6); never the new one
     const rotate = /private func rotate\([\s\S]*?\n {2}\}/.exec(j)?.[0] ?? '';
+    expect(rotate).toMatch(/var list = files\(\)\.filter \{ \$0\.id != driveId \}/);
     expect(rotate).toMatch(/while list\.count >= DetectPolicy\.JOURNAL_MAX_DRIVES/);
-    expect(rotate).toMatch(/s\.end != nil/);
-    expect(rotate).toMatch(/ended\.min\(by: \{ \$0\.startedAt < \$1\.startedAt \}\)/);
+    expect(rotate).toMatch(/guard let s = summary\(f\.url\) else \{ return nil \}/);
+    expect(rotate).not.toMatch(/s\.end != nil/);
+    expect(rotate).toMatch(/undrained\.min\(by: \{ \$0\.startedAt < \$1\.startedAt \}\)/);
+  });
+
+  it('an orphan (no end, not the live drive) is listed as ended, cause orphan, at its last row; only with the record read (review M6)', () => {
+    expect(detectCode()).toMatch(
+      /AsyncFunction\("listDrives"\) \{ \(promise: Promise\) in\s*let d = DriveDetector\.shared\s*let liveId = d\.isRecording \? d\.rec\?\.driveId : nil\s*RowJournal\.shared\.list\(liveId: liveId, recordKnown: d\.rec != nil\)/
+    );
+    const r = code('RowJournalRead.swift');
+    expect(r).toMatch(/out\.append\(Self\.listed\(f\.id, s, orphan: recordKnown && f\.id != liveId\)\)/);
+    const listed = fn(r, 'static func listed(');
+    expect(listed).toMatch(/if let e = s\.end \{[\s\S]*?\} else if orphan \{\s*let at = DetectStateRecord\.ms\(s\.lastRowTs \?\? jsonNumber\(st\["startedAt"\]\) \?\? 0\)\s*let endInfo: \[String: Any\] = \["endedAt": at, "cause": "orphan", "decidedAt": at\]/);
+    // the live drive stays unended: JS adopts it as the live drive
+    expect(listed).toMatch(/var ended: Any = NSNull\(\)/);
   });
 
   it('a reader never reads a torn last line, drops a seq out of order, and keeps its place; a resume cuts the torn tail off', () => {

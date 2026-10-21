@@ -7,9 +7,10 @@
 //   {"k":"end","endedAt":…,"cause":…,"decidedAt":…,"lastRowTs":…,"lastSeq":…}
 //
 // `seq` starts at 1 and rises by one. A reader drops a torn last line (no `\n`, or not JSON) and any
-// row whose `seq` is not the last one plus one. Used by the fake detector, the tests and the
+// row whose `seq` is not the last one plus one. A file with no `end` that is not the live drive is
+// an orphan, listed as ended (`listedEnd`). Used by the fake detector, the tests and the
 // diagnostics screen; native reads its own files.
-import type { DriveOrigin, EndCauseNative, StartSource } from './types';
+import type { DriveOrigin, EndCauseNative, JournaledDrive, StartSource } from './types';
 
 export interface JournalStart {
   k: 'start';
@@ -145,6 +146,20 @@ export function readJournal(text: string): ReadJournal {
     } else out.dropped += 1;
   }
   return out;
+}
+
+/**
+ * A journal's end as `listDrives` reports it: its `end` line; else, for a file that is not the live
+ * drive (an orphan: the state record lost that drive, so nothing would ever end it), an `orphan` end
+ * at its last row (else its start), for JS to adopt and finish like any drive native ended; else
+ * null (the live drive, still recording).
+ */
+export function listedEnd(j: ReadJournal, live: boolean): JournaledDrive['ended'] {
+  if (j.end !== null) return { endedAt: j.end.endedAt, cause: j.end.cause, decidedAt: j.end.decidedAt };
+  if (live || j.start === null) return null;
+  const last = j.rows[j.rows.length - 1];
+  const at = typeof last?.ts === 'number' ? last.ts : j.start.startedAt;
+  return { endedAt: at, cause: 'orphan', decidedAt: at };
 }
 
 /** A line as native writes it: the object's JSON and `\n`. */

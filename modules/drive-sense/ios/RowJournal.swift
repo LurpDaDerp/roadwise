@@ -3,8 +3,8 @@
 // only until the first unlock, so rows keep landing with the phone locked. A `start` line, every row
 // with its `seq` (1 and up), a `gap` line where a relaunch resumed the drive, an `end` line. fsync on
 // `start`, `gap`, `end` and every `JOURNAL_SYNC_EVERY_ROWS` rows: a crash loses nothing, a power
-// loss at most 30 s. At most `JOURNAL_MAX_DRIVES` files: opening one more deletes the oldest ended
-// file JS never drained (counted for `journalDropped`). A file is deleted only by `discardDrive` (JS,
+// loss at most 30 s. At most `JOURNAL_MAX_DRIVES` files: opening one more deletes the oldest file JS
+// never drained, ended or orphaned (counted for `journalDropped`). A file is deleted only by `discardDrive` (JS,
 // once the trip is finalized) or a cancelled drive. No file timestamps, sizes from attributes or
 // disk-space reads (the privacy manifest declares none). Reading is in RowJournalRead.swift.
 //
@@ -182,16 +182,18 @@ final class RowJournal {
     rowsSinceSync = 0
   }
 
-  /// At `JOURNAL_MAX_DRIVES` files the oldest ended one (by its start) goes. Returns how many went.
+  /// At `JOURNAL_MAX_DRIVES` files the oldest (by its start) goes: an ended file JS never drained, or
+  /// an orphan (no end, the record lost it). Only a new drive opens a file, and none other records
+  /// then, so every other file is one or the other. Returns how many went.
   private func rotate(keepingRoomFor driveId: String) -> Int {
     var list = files().filter { $0.id != driveId }
     var dropped = 0
     while list.count >= DetectPolicy.JOURNAL_MAX_DRIVES {
-      let ended = list.compactMap { f -> (id: String, url: URL, startedAt: Double)? in
-        guard let s = summary(f.url), s.end != nil else { return nil }
+      let undrained = list.compactMap { f -> (id: String, url: URL, startedAt: Double)? in
+        guard let s = summary(f.url) else { return nil }
         return (id: f.id, url: f.url, startedAt: jsonNumber(s.start["startedAt"]) ?? 0)
       }
-      guard let oldest = ended.min(by: { $0.startedAt < $1.startedAt }) else { break }
+      guard let oldest = undrained.min(by: { $0.startedAt < $1.startedAt }) else { break }
       try? FileManager.default.removeItem(at: oldest.url)
       cursors[oldest.id] = nil
       list.removeAll { $0.id == oldest.id }

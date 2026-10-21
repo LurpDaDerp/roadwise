@@ -60,8 +60,11 @@ public final class DriveDetectModule: Module, DriveSenseEventSink {
       promise.resolve(nil)
     }.runOnQueue(.main)
 
+    // A file with no end that is not the live drive is listed as an orphan (ended) for JS to adopt.
     AsyncFunction("listDrives") { (promise: Promise) in
-      RowJournal.shared.list { promise.resolve($0) }
+      let d = DriveDetector.shared
+      let liveId = d.isRecording ? d.rec?.driveId : nil
+      RowJournal.shared.list(liveId: liveId, recordKnown: d.rec != nil) { promise.resolve($0) }
     }.runOnQueue(.main)
 
     AsyncFunction("readRows") { (driveId: String, afterSeq: Int, limit: Int, promise: Promise) in

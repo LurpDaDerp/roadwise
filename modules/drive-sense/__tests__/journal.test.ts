@@ -1,7 +1,7 @@
 /** @jest-environment node */
 // The row journal's format (plan §3.2) as JS reads it: each line kind parses, a torn last line and
 // a seq out of order are dropped (never fatal), and anything that is not a journal line is refused.
-import { journalLine, parseJournalLine, readJournal } from '../src/detect/journal';
+import { journalLine, listedEnd, parseJournalLine, readJournal } from '../src/detect/journal';
 
 const ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 const start = { k: 'start', v: 1, driveId: ID, origin: 'auto', startedAt: 1_760_000_000_000, startSource: 'trace', startLat: 47.6, startLng: -122.33, continues: false, confirmedAt: 1_760_000_045_000, nativeBuild: '412' };
@@ -74,5 +74,28 @@ describe('readJournal', () => {
 
   test('a line is the JSON and a newline', () => {
     expect(journalLine({ k: 'gap', from: 1, to: 2 })).toBe('{"k":"gap","from":1,"to":2}\n');
+  });
+});
+
+describe('listedEnd (what listDrives reports as the end)', () => {
+  const text = (...lines: object[]) => lines.map((l) => journalLine(l as Record<string, unknown>)).join('');
+
+  test('a file with its end line: that end, live or not', () => {
+    const j = readJournal(text(start, row(1), row(2), row(3), end));
+    expect(listedEnd(j, false)).toEqual({ endedAt: end.endedAt, cause: 'still', decidedAt: end.decidedAt });
+    expect(listedEnd(j, true)).toEqual({ endedAt: end.endedAt, cause: 'still', decidedAt: end.decidedAt });
+  });
+
+  test('the live drive with no end: none (it still records)', () => {
+    expect(listedEnd(readJournal(text(start, row(1), row(2))), true)).toBeNull();
+  });
+
+  test('an orphan (no end, not the live drive): ended as an orphan at its last row, else its start (review M6)', () => {
+    expect(listedEnd(readJournal(text(start, row(1), row(2))), false)).toEqual({ endedAt: row(2).ts, cause: 'orphan', decidedAt: row(2).ts });
+    expect(listedEnd(readJournal(text(start)), false)).toEqual({ endedAt: start.startedAt, cause: 'orphan', decidedAt: start.startedAt });
+  });
+
+  test('a file with no start line is never listed as anything', () => {
+    expect(listedEnd(readJournal(text(row(1))), false)).toBeNull();
   });
 });

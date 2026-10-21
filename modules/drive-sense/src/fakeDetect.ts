@@ -8,7 +8,7 @@
 // - `wipe()` forgets everything (journals, last end, rest, owner) and leaves it off;
 // - the journal is ndjson text per drive, read back by `readJournal` exactly as native reads it;
 // - events nobody listens for are buffered and delivered when the first listener attaches.
-import { journalLine, readJournal } from './detect/journal';
+import { journalLine, listedEnd, readJournal } from './detect/journal';
 import { DETECT, continuesFrom, statusOf, wakeGate, type WakeReason } from './detect/policy';
 import type {
   DetectPermissions,
@@ -179,7 +179,8 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       lastSeq: j.end?.lastSeq ?? j.rows.length,
       lastRowTs: j.end?.lastRowTs ?? (typeof last?.ts === 'number' ? last.ts : null),
       bytes: text.length,
-      ended: j.end ? { endedAt: j.end.endedAt, cause: j.end.cause, decidedAt: j.end.decidedAt } : null,
+      // A file with no end that is not the live drive is an orphan, listed as ended (as native lists it).
+      ended: listedEnd(j, live?.driveId === driveId),
     };
   }
 
