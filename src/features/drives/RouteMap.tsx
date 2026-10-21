@@ -60,7 +60,12 @@ export function resetMapsCache(): void {
  */
 const INK = tokens.color.light.signal;
 const PAPER = tokens.color.light.surface;
-const RING = tokens.color.light.accent;
+/**
+ * The highlight ring's own blue, fixed whatever the theme: at least 3:1 on the light tiles
+ * (#F9F5ED 3.76, white 4.08) and the dark ones (#242424 3.80, #2B2B2B 3.47), which the theme's
+ * accent is not.
+ */
+export const RING_INK = '#2F7BEA';
 const ROUTE_WIDTH = 5;
 const TIER_Z: Record<Tier, number> = { minor: 1, moderate: 2, severe: 3 };
 /** How long Recenter takes to bring the map back to the view it opened on. */
@@ -364,7 +369,10 @@ export function RouteMap({
               {...hidden}
             >
               <View collapsable={false} style={{ width: RING_D, height: RING_H }}>
-                <View style={{ width: RING_D, height: RING_D, borderRadius: RING_D / 2, borderWidth: 3, borderColor: RING, backgroundColor: 'rgba(255,255,255,0.25)' }} />
+                <View
+                  testID="map-highlight-ring"
+                  style={{ width: RING_D, height: RING_D, borderRadius: RING_D / 2, borderWidth: 3, borderColor: RING_INK, backgroundColor: 'rgba(255,255,255,0.25)' }}
+                />
               </View>
             </Marker>
           ) : null}

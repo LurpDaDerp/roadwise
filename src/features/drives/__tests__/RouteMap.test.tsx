@@ -1,11 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { fireEvent, screen, within } from '@testing-library/react-native';
 
-import { tokens } from '@/ui';
+import { contrastRatio, tokens } from '@/ui';
 
 import { draw, event, press, ROUTE } from '../__fixtures__/drives';
 import { EVENT_ICON } from '../format';
-import { RECENTER_MS, resetMapsCache, RouteMap } from '../RouteMap';
+import { RECENTER_MS, resetMapsCache, RING_INK, RouteMap } from '../RouteMap';
 
 /** The map is hidden from screen readers (the breakdown says it all), so queries must look inside. */
 const H = { includeHiddenElements: true } as const;
@@ -197,4 +197,13 @@ test('a ring circles the head of the highlighted pin, under the pins so the pin 
   expect(ring).toHaveProp('anchor', { x: 0.5, y: 1 });
   expect(ring).toHaveProp('centerOffset', { x: 0, y: -49 / 2 });
   expect(ring.props.zIndex).toBeLessThan(screen.getByTestId('pin-e1').props.zIndex);
+});
+
+test('the highlight ring keeps 3:1 on light and dark map tiles alike', async () => {
+  // Light tiles (cream, white) and dark ones (the night greys).
+  for (const tile of ['#F9F5ED', '#FFFFFF', '#242424', '#2B2B2B']) expect(contrastRatio(RING_INK, tile)).toBeGreaterThanOrEqual(3);
+  expect(contrastRatio(RING_INK, '#2B2B2B')).toBeCloseTo(3.47, 2);
+  const e = event();
+  await draw(<RouteMap runs={[ROUTE]} events={[e]} highlighted={e} />);
+  expect(within(screen.getByTestId('map-highlight', H)).getByTestId('map-highlight-ring', H)).toHaveStyle({ borderColor: RING_INK });
 });
