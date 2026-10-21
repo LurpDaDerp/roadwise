@@ -208,7 +208,7 @@ describe('the compass', () => {
     await act(() => jest.advanceTimersByTime(1000));
     expect(rotation()).toBe('-370deg');
     // heading 10: N sits 10 degrees left of the top, moved there without turning
-    const n = getAnimatedStyle(screen.getByTestId('hud-compass-N', HIDDEN)) as { transform: Record<string, number>[] };
+    const n = getAnimatedStyle(screen.getByTestId('hud-compass-N', HIDDEN)) as unknown as { transform: Record<string, number>[] };
     expect(n.transform[0]!['translateX']).toBeLessThan(0);
     expect(n.transform[1]!['translateY']).toBeLessThan(0);
     expect(n.transform.some((t) => 'rotate' in t)).toBe(false);
