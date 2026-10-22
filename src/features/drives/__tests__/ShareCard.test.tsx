@@ -6,8 +6,8 @@ import { plainBundle } from '@/ui/sky/palette';
 import { draw, press, ROUTE } from '../__fixtures__/drives';
 import { textsUnder } from '../__fixtures__/texts';
 import { resetMapsCache } from '../RouteMap';
-import { ShareSheet, type ShareCardData } from '../ShareCard';
-import { MAP_TIMEOUT_MS, routePath, shareFrame } from '../ShareMap';
+import { MAP_BAND, MAP_BOX, ShareSheet, type ShareCardData } from '../ShareCard';
+import { bandAlpha, MAP_TIMEOUT_MS, routePath, shareFrame } from '../ShareMap';
 import { meritInk } from '../merit';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
@@ -94,7 +94,7 @@ test('on: the snapshot of the route area is the backdrop, the route is drawn ove
   expect(screen.getByTestId('share-map-note')).toHaveTextContent('The map shows the area around your trimmed route.');
   await mapLoads();
   // The snapshot renders the card's own region at the card's size.
-  const frame = shareFrame([ROUTE], 320, 400, { left: 24, top: 72, right: 296, bottom: 228 })!;
+  const frame = shareFrame([ROUTE], 320, 400, MAP_BOX)!;
   expect(mockTakeSnapshot).toHaveBeenCalledWith(
     expect.objectContaining({
       width: 320,
@@ -158,7 +158,7 @@ test('Share waits for a map still loading, and shares nothing when it never arri
 });
 
 test('the route is framed inside the box and lands on it through the same projection', () => {
-  const box = { left: 24, top: 72, right: 296, bottom: 228 };
+  const box = MAP_BOX;
   const b = shareFrame([ROUTE], 320, 400, box)!;
   expect(b.north).toBeGreaterThan(b.south);
   expect(b.east).toBeGreaterThan(b.west);
@@ -177,6 +177,43 @@ test('the route is framed inside the box and lands on it through the same projec
   // Two runs stay two subpaths; no route frames nothing.
   expect(routePath([ROUTE.slice(0, 10), ROUTE.slice(20)], b, 320, 400)!.match(/M/g)).toHaveLength(2);
   expect(shareFrame([[ROUTE[0]!]], 320, 400, box)).toBeNull();
+});
+
+test('the sky fades the map out over long eased stretches: solid behind the wordmark and the facts, soft around the route', async () => {
+  // Opaque behind the wordmark (ends near y = 44) and the facts' text (starts near y = 252): 4.5:1 holds.
+  expect(bandAlpha(0, MAP_BAND)).toBe(1);
+  expect(bandAlpha(40, MAP_BAND)).toBe(1);
+  expect(bandAlpha(252, MAP_BAND)).toBeGreaterThanOrEqual(0.97);
+  expect(bandAlpha(300, MAP_BAND)).toBe(1);
+  // Nothing covers the map in the clear middle, and the fades are long (never a hard edge).
+  expect(bandAlpha(MAP_BAND.topEnd, MAP_BAND)).toBe(0);
+  expect(bandAlpha(MAP_BAND.bottomStart, MAP_BAND)).toBe(0);
+  expect(MAP_BAND.topEnd - MAP_BAND.topSolid).toBeGreaterThanOrEqual(60);
+  expect(MAP_BAND.bottomSolid - MAP_BAND.bottomStart).toBeGreaterThanOrEqual(100);
+  // The route's edges keep clear of both solid zones, and the sky covers them under half.
+  expect(MAP_BOX.top - MAP_BAND.topSolid).toBeGreaterThanOrEqual(36);
+  expect(MAP_BAND.bottomSolid - MAP_BOX.bottom).toBeGreaterThanOrEqual(48);
+  expect(bandAlpha(MAP_BOX.top, MAP_BAND)).toBeLessThan(0.5);
+  expect(bandAlpha(MAP_BOX.bottom, MAP_BAND)).toBeLessThan(0.5);
+  // Eased: the cover only grows towards the facts, and only shrinks away from the wordmark.
+  let last = 1;
+  for (let y = MAP_BAND.topSolid; y <= MAP_BAND.topEnd; y += 4) {
+    expect(bandAlpha(y, MAP_BAND)).toBeLessThanOrEqual(last);
+    last = bandAlpha(y, MAP_BAND);
+  }
+  last = 0;
+  for (let y = MAP_BAND.bottomStart; y <= MAP_BAND.bottomSolid; y += 4) {
+    expect(bandAlpha(y, MAP_BAND)).toBeGreaterThanOrEqual(last);
+    last = bandAlpha(y, MAP_BAND);
+  }
+  // Both gradients are multi-stop on the card, the preview and the shared image alike.
+  await draw(sheet());
+  await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+  for (const id of ['share-map-fade-top', 'share-map-fade-bottom']) {
+    const g = screen.getByTestId(id, H);
+    expect(g.props.colors.length).toBeGreaterThanOrEqual(5);
+    expect(g.props.locations).toHaveLength(g.props.colors.length);
+  }
 });
 
 describe('the card holds only time, distance and score', () => {

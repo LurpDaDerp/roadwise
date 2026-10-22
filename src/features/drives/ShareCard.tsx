@@ -11,7 +11,7 @@ import { Banner, Button, SceneScope, Sheet, Text, ToggleRow, tokens, useTheme } 
 import { MeritFacts } from './MeritFacts';
 import type { Runs } from './route';
 import { RouteSketch } from './RouteSketch';
-import { mapOffered, ShareMapBackdrop, type Box, type MapStatus } from './ShareMap';
+import { mapOffered, ShareMapBackdrop, type Band, type Box, type MapStatus } from './ShareMap';
 
 export type ShareCardData = {
   /** The route's visible runs, each drawn apart (`decodeRoute`). */
@@ -30,10 +30,19 @@ export type ShareCardData = {
 const GOLD = tokens.color.dark.gold;
 const W = 320;
 const H = 400;
-/** With the map on: where the route sits, clear of the header and the facts. */
-const MAP_BOX: Box = { left: 24, top: 72, right: W - 24, bottom: 228 };
-/** With the map on: the opaque sky behind the header (top) and the facts (bottom), and its fade. */
-const MAP_BAND = { top: 60, bottom: 156, fade: 40 };
+/**
+ * With the map on: where the route sits. The wordmark ends near y = 44 and the facts' text starts
+ * near y = 252, and the sky fades the map out in between (`MAP_BAND`), so the box keeps to the
+ * clearly visible middle: about 40 pt of eased fade above the route and 50 pt below it, where the
+ * sky covers it less than half.
+ */
+export const MAP_BOX: Box = { left: 24, top: 82, right: W - 24, bottom: 202 };
+/**
+ * With the map on: how the sky covers the map (card points from the top). Opaque to y = 40 behind
+ * the wordmark and eased out to nothing by 104; nothing before 150, eased in to opaque by 256, just
+ * behind the facts (their text starts near 252, over 99 % sky), and solid to the bottom.
+ */
+export const MAP_BAND: Band = { topSolid: 40, topEnd: 104, bottomStart: 150, bottomSolid: 256 };
 
 /** Text on the captured card: a fixed-size image, so its type never follows Dynamic Type (the shared PNG would clip). */
 function CardText({ children, style, testID }: { children: React.ReactNode; style?: TextStyle; testID?: string }) {

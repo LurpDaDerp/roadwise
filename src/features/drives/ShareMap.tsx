@@ -20,6 +20,39 @@ export type Bounds = { north: number; south: number; east: number; west: number 
 /** A rectangle on the card, in points. */
 export type Box = { left: number; top: number; right: number; bottom: number };
 
+/**
+ * Where the card's sky covers the map, in card points from its top edge: fully opaque down to
+ * `topSolid` (behind the wordmark), then eased out to nothing at `topEnd`; nothing above
+ * `bottomStart`, then eased in to fully opaque at `bottomSolid` (just behind the facts' text) and
+ * solid to the card's bottom.
+ */
+export type Band = { topSolid: number; topEnd: number; bottomStart: number; bottomSolid: number };
+
+/** How many stops an eased fade is sampled at; the gradient is linear between them. */
+const EASE_STOPS = 8;
+/** The smoothstep: 0 → 1 with a flat start and end, so a fade has no visible edge. */
+const ease = (u: number) => u * u * (3 - 2 * u);
+
+/** How much of the sky covers the map `y` points down the card: 1 behind the wordmark and the facts, 0 in the clear middle. */
+export function bandAlpha(y: number, band: Band): number {
+  const clamp = (n: number) => Math.min(1, Math.max(0, n));
+  const top = 1 - ease(clamp((y - band.topSolid) / (band.topEnd - band.topSolid)));
+  const bottom = ease(clamp((y - band.bottomStart) / (band.bottomSolid - band.bottomStart)));
+  return Math.max(top, bottom);
+}
+
+/** The colours and stop positions of an eased fade of `color` between two opacities, sampled along its length (`from` → `to`). */
+function easedFade(color: string, from: 0 | 1, to: 0 | 1) {
+  const steps = Array.from({ length: EASE_STOPS }, (_, i) => i / (EASE_STOPS - 1));
+  return { colors: steps.map((u) => withAlpha(color, from + (to - from) * ease(u))), steps };
+}
+
+/** A gradient's colours and where they sit, typed the way `LinearGradient` takes them (two at least). */
+const stops = (colors: string[], locations: number[]) => ({
+  colors: colors as [string, string, ...string[]],
+  locations: locations as [number, number, ...number[]],
+});
+
 /** The narrowest stretch of map the card shows across, in degrees of longitude (about 400 m). */
 const MIN_SPAN_DEG = 0.005;
 const RAD = Math.PI / 180;
@@ -93,8 +126,9 @@ export function mapOffered(runs: Runs, w: number, h: number, box: Box): boolean 
 
 /**
  * The share card's map backdrop: the map of the route's area, a light wash of the card's sky over
- * it, the sky as an opaque band behind the header and the facts (so every line of text keeps the
- * contrast it has on the plain card), and the route in `stroke` on top.
+ * it, the sky fading in from the map over a long, eased stretch to fully opaque behind the header
+ * (top) and the facts (bottom) (so every line of text keeps the contrast it has on the plain card,
+ * while the map around the route stays soft and clear), and the route in `stroke` on top.
  *
  * How the map gets into the image: `captureRef` cannot be trusted with a live native map view (it
  * often comes out blank or black), so the live map is only a placeholder. Once it is ready, its
@@ -123,8 +157,8 @@ export function ShareMapBackdrop({
   scene: readonly [string, string, string];
   stroke: string;
   strokeWidth: number;
-  /** How far the opaque sky reaches down from the top and up from the bottom, and how long each fades. */
-  band: { top: number; bottom: number; fade: number };
+  /** Where the sky covers the map: opaque behind the header and the facts, eased away between them. */
+  band: Band;
   onStatus: (s: MapStatus) => void;
 }) {
   const maps = loadMaps();
@@ -174,6 +208,8 @@ export function ShareMapBackdrop({
   };
 
   const [top, mid, low] = scene;
+  const topFade = useMemo(() => easedFade(top, 1, 0), [top]);
+  const bottomFade = useMemo(() => easedFade(low, 0, 1), [low]);
   const MapView = maps?.default;
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" testID="share-map">
@@ -202,14 +238,14 @@ export function ShareMapBackdrop({
       ) : null}
       <View style={[StyleSheet.absoluteFill, { backgroundColor: withAlpha(mid, 0.3) }]} />
       <LinearGradient
-        colors={[top, top, withAlpha(top, 0)]}
-        locations={[0, band.top / (band.top + band.fade), 1]}
-        style={{ position: 'absolute', left: 0, right: 0, top: 0, height: band.top + band.fade }}
+        {...stops([top, ...topFade.colors], [0, ...topFade.steps.map((u) => (band.topSolid + u * (band.topEnd - band.topSolid)) / band.topEnd)])}
+        style={{ position: 'absolute', left: 0, right: 0, top: 0, height: band.topEnd }}
+        testID="share-map-fade-top"
       />
       <LinearGradient
-        colors={[withAlpha(low, 0), low, low]}
-        locations={[0, band.fade / (band.bottom + band.fade), 1]}
-        style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: band.bottom + band.fade }}
+        {...stops([...bottomFade.colors, low], [...bottomFade.steps.map((u) => (u * (band.bottomSolid - band.bottomStart)) / (height - band.bottomStart)), 1])}
+        style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: height - band.bottomStart }}
+        testID="share-map-fade-bottom"
       />
       {status === 'ready' && path ? <RouteLine d={path} width={width} height={height} stroke={stroke} strokeWidth={strokeWidth} /> : null}
     </View>
