@@ -50,6 +50,7 @@ jest.mock('expo-modules-core', () => {
     readRows: jest.fn(async () => ({ rows: [{ seq: 1 }], lastSeq: 1, done: true })),
     discardDrive: jest.fn(async () => undefined),
     wipe: jest.fn(async () => null),
+    appForeground: jest.fn(async () => null),
     addListener: jest.fn((event: string, fn: (mockPayload: unknown) => void) => {
       listeners.set(event, fn);
       return { remove: () => listeners.delete(event) };
@@ -66,9 +67,9 @@ type Native = Record<string, jest.Mock> & { state: DetectState; listeners: Map<s
 const native = (jest.requireMock('expo-modules-core') as { __detect: Native }).__detect;
 
 describe('the contract lists', () => {
-  test('three events, eleven methods, one error code', () => {
+  test('three events, twelve methods, one error code', () => {
     expect([...DRIVE_DETECT_EVENTS]).toEqual(['detectState', 'driveStarted', 'driveEnded']);
-    expect([...DRIVE_DETECT_METHODS]).toEqual(['setArmed', 'getState', 'requestAlways', 'startWaiting', 'extendWaiting', 'cancelWaiting', 'notDriving', 'listDrives', 'readRows', 'discardDrive', 'wipe']);
+    expect([...DRIVE_DETECT_METHODS]).toEqual(['setArmed', 'getState', 'requestAlways', 'startWaiting', 'extendWaiting', 'cancelWaiting', 'notDriving', 'listDrives', 'readRows', 'discardDrive', 'wipe', 'appForeground']);
     expect([...DRIVE_DETECT_ERROR_CODES]).toEqual(['E_BUSY']);
     for (const m of DRIVE_DETECT_METHODS) expect(typeof DriveDetect[m]).toBe('function');
   });
@@ -99,6 +100,27 @@ describe('with the native module', () => {
     expect(native.discardDrive).toHaveBeenCalledWith(ID);
     await expect(DriveDetect.wipe()).resolves.toBeUndefined();
     expect(native.wipe).toHaveBeenCalledWith();
+    await expect(DriveDetect.appForeground()).resolves.toBeUndefined();
+    expect(native.appForeground).toHaveBeenCalledWith();
+  });
+
+  test('startWaiting takes the answer of a native build from before the drive opened at the tap: no drive id or start', async () => {
+    native.startWaiting!.mockResolvedValueOnce({ ok: true, waitUntil: 1_760_000_300_000 });
+    await expect(DriveDetect.startWaiting()).resolves.toEqual({ ok: true, waitUntil: 1_760_000_300_000, driveId: null, startedAt: null });
+    native.startWaiting!.mockResolvedValueOnce({ ok: false, reason: 'busy' });
+    await expect(DriveDetect.startWaiting()).resolves.toEqual({ ok: false, reason: 'busy' });
+  });
+
+  test('appForeground resolves on a native build that has no such method, and rejects a malformed answer', async () => {
+    const fn = native.appForeground!;
+    delete (native as Record<string, unknown>).appForeground;
+    try {
+      await expect(DriveDetect.appForeground()).resolves.toBeUndefined();
+    } finally {
+      native.appForeground = fn;
+    }
+    fn.mockResolvedValueOnce({ woke: true });
+    await expect(DriveDetect.appForeground()).rejects.toThrow('DriveDetect.appForeground: invalid result');
   });
 
   test('wipe rejects a malformed native result like every other method', async () => {
@@ -127,7 +149,9 @@ describe('with the native module', () => {
   test.each([
     ['getState', { armed: 'yes' }],
     ['startWaiting', { ok: true }],
-    ['startWaiting', { ok: true, waitUntil: 1_760_000_300_000 }],
+    ['startWaiting', { ok: true, waitUntil: 1_760_000_300_000, driveId: ID }],
+    ['startWaiting', { ok: true, waitUntil: 1_760_000_300_000, extra: 1 }],
+    ['startWaiting', { ok: true, waitUntil: -1 }],
     ['startWaiting', { ok: true, waitUntil: 1_760_000_300_000, driveId: 'x', startedAt: 1_760_000_000_000 }],
     ['startWaiting', { ok: false, reason: 'tired' }],
     ['extendWaiting', 1.5],
@@ -195,6 +219,7 @@ describe('with the native module', () => {
     DriveDetect.addListener('detectState', state);
     native.listeners.get('detectState')!({ ...native.state, reason: 'wake:region' });
     native.listeners.get('detectState')!({ ...native.state, reason: 'phone' });
-    expect(state).toHaveBeenCalledTimes(1);
+    for (const reason of ['wake:app', 'linger', 'cap']) native.listeners.get('detectState')!({ ...native.state, reason });
+    expect(state).toHaveBeenCalledTimes(4);
   });
 });

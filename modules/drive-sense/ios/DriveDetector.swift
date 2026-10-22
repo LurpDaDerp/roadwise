@@ -1,10 +1,11 @@
 // The iOS drive detector (plan §3.1.1): notices a drive, confirms it, traces its start back,
 // journals it and hands it to JS; stops on its own only as a safety stop (JS decides ends, R1).
-// off → armed (JS armed it, Always + Precise + Motion) → candidate (a wake, or the Start card) →
-// recording ⇄ ending (a JS end rule is overdue) → armed; "Not driving?" → suppressed → armed.
-// The record (`DetectStateRecord`) is saved before each transition's side effects. Every decision
-// is `DetectPolicy`'s; this class reads the phone and acts. Rows, fixes, motion, the clock and a
-// relaunch are in DriveDetectorSensing.swift. Main thread only.
+// off → armed (JS armed it, Always + Precise + Motion) → candidate (a wake, RoadWise coming to the
+// front, the watch after an automatic end, or the Start card) → recording ⇄ ending (a JS end rule
+// is overdue) → armed; "Not driving?" → suppressed → armed. The record (`DetectStateRecord`) is
+// saved before each transition's side effects. Every decision is `DetectPolicy`'s; this class reads
+// the phone and acts. Wakes and candidates are in DriveDetectorWatch.swift; rows, fixes, motion, the
+// clock and a relaunch in DriveDetectorSensing.swift. Main thread only.
 import Foundation
 import UIKit
 
@@ -29,11 +30,25 @@ final class DriveDetector {
   var lastOverStopTs: Double?
   var walkSince: Double?
   var latest: MotionReport?
+  /// This candidate's standing motion report (reset as it opens): confident moving car motion, and
+  /// any confident automotive report (a car at a light too).
+  var carStanding = false
+  var vehicleStanding = false
+  /// When confident moving car motion was last seen (a wake's motion history, the live feed); 0: never.
+  var lastCarMotionAt: Double = 0
+  /// This candidate's last vehicle sign (a trusted row at 10 mph or more, unvetoed, or a confident
+  /// automotive report); nil: none yet.
+  var lastVehicleTs: Double?
+  /// The candidate is the watch after an automatic end (`linger`): no hourly cap, rest or parked spot.
+  var lingering = false
   var clock: DispatchSourceTimer?
   var wakeTask: UIBackgroundTaskIdentifier = .invalid
   var waking = false
   var wakeId = 0
+  var endTask: UIBackgroundTaskIdentifier = .invalid
+  var endTaskId = 0
   private var unlockObserver: NSObjectProtocol?
+  private var activeObserver: NSObjectProtocol?
 
   private init() {
     dispatchPrecondition(condition: .onQueue(.main))
@@ -49,6 +64,10 @@ final class DriveDetector {
     unlockObserver = NotificationCenter.default.addObserver(
       forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
     ) { [weak self] _ in self?.resumeAtLaunch() }
+    // RoadWise came to the front: an "app" wake (mid-drive, the watch opens at once).
+    activeObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+    ) { [weak self] _ in self?.appForeground() }
   }
 
   static func now() -> Double { jsRound(TimeBase.nowEpochMs()) }
@@ -177,38 +196,17 @@ final class DriveDetector {
     endCandidate(reason: "cancelled", rest: false)
   }
 
-  /// DriveSense `stopCapture`: a recording drive's end from JS (its cut, else now); else a plain capture's.
+  /// DriveSense `stopCapture`: a recording drive's end from JS (its cut, else now); else a plain
+  /// capture's. A JS end that a JS end rule would have made by now was automatic: the watch lingers.
   func stopCapture(end: CaptureEnd?) {
     if isRecording {
-      commitEnd(cause: "js", endedAt: end?.drivingEndedAt ?? DriveDetector.now())
+      commitEnd(cause: "js", endedAt: end?.drivingEndedAt ?? DriveDetector.now(), linger: automaticEndDue())
     } else {
       capture.stopPlainCapture()
     }
   }
 
-  // MARK: - Wakes and candidates
-
-  func onWake(_ reason: String) {
-    guard !waking, let r = rec else { return }
-    let ctx = WakeCtx(now: DriveDetector.now(), reason: reason, phase: r.state, armed: r.armed, hasOwner: r.ownerId != nil,
-                      permissionsOk: access.snapshot().requiredOk, candidateRestUntil: r.candidateRestUntil, candidateStarts: r.candidateStarts)
-    guard DetectPolicy.wakeGate(ctx) == "ok", capture.sensing == .off else { return }
-    beginWakeTask()
-    // A region exit is car-motion evidence enough; the others need car motion in the last 2 min.
-    if reason == "region" {
-      beginCandidate(origin: "auto", reason: "wake:region")
-      return
-    }
-    let to = Date()
-    ActivitySource.motionSummary(from: to.addingTimeInterval(-DetectPolicy.MOTION_LOOKBACK_MS / 1000), to: to) { [weak self] m in
-      guard let self = self else { return }
-      guard self.phase == "armed", self.capture.sensing == .off, DetectPolicy.motionGate(m, DriveDetector.now()) == "ok" else {
-        self.endWakeTask()
-        return
-      }
-      self.beginCandidate(origin: "auto", reason: "wake:\(reason)")
-    }
-  }
+  // MARK: - Background tasks
 
   /// One background task per wake, until the first fix (location updates then keep RoadWise running)
   /// or `WAKE_TASK_MAX_MS`; a late finish never ends a newer wake's task.
@@ -232,47 +230,24 @@ final class DriveDetector {
     wakeTask = .invalid
   }
 
-  func beginCandidate(origin: String, reason: String) {
-    guard var r = rec else {
-      endWakeTask()
-      return
+  /// One background task per drive end, so JS can take the end in, store the drive and post its
+  /// recap before iOS suspends a RoadWise whose GPS just went off; it ends after `END_TASK_MAX_MS`
+  /// (or when iOS says time is up). A newer end's task replaces it; a late finish never ends it.
+  func beginEndTask() {
+    endEndTask()
+    endTaskId &+= 1
+    let id = endTaskId
+    endTask = UIApplication.shared.beginBackgroundTask(withName: "drivesense.end") { [weak self] in
+      if self?.endTaskId == id { self?.endEndTask() }
     }
-    let now = DriveDetector.now()
-    r.state = "candidate"
-    r.origin = origin
-    r.since = now
-    r.driveId = nil
-    r.startedAt = nil
-    r.startSource = nil
-    r.waitUntil = origin == "manual" ? now + DetectPolicy.WAIT_MAX_MS : nil
-    if origin == "auto" { r.candidateStarts = DetectPolicy.recentStarts(r.candidateStarts, now) + [now] }
-    r.suppressedSince = nil
-    r.suppressedUntil = nil
-    save(r)
-    buffer.clear()
-    confirmState = ConfirmState()
-    confirming = false
-    walkSince = nil
-    capture.beginSensing()
-    startClock()
-    emitState(reason)
+    DispatchQueue.main.asyncAfter(wallDeadline: .now() + DetectPolicy.END_TASK_MAX_MS / 1000) { [weak self] in
+      if self?.endTaskId == id { self?.endEndTask() }
+    }
   }
 
-  /// A candidate ends unconfirmed: sensors off, nothing kept. A timeout rests the next
-  /// significant-change and visit wakes.
-  func endCandidate(reason: String, rest: Bool) {
-    guard var r = rec, r.state == "candidate" else { return }
-    let now = DriveDetector.now()
-    if rest { r.candidateRestUntil = now + DetectPolicy.CANDIDATE_REST_MS }
-    settle(&r, now)
-    save(r)
-    buffer.clear()
-    confirmState = ConfirmState()
-    confirming = false
-    capture.endSensing()
-    stopClock()
-    endWakeTask()
-    syncWakes()
-    emitState(reason)
+  func endEndTask() {
+    guard endTask != .invalid else { return }
+    UIApplication.shared.endBackgroundTask(endTask)
+    endTask = .invalid
   }
 }

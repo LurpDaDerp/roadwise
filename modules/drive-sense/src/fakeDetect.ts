@@ -1,7 +1,9 @@
 // An in-memory drive detector for host and bootstrap tests, following the `DriveDetect` contract
 // (plan §3.1.1) closely enough that a host tested on it behaves on a phone:
-// - `wake()` opens an auto candidate when the wake gate passes; `startWaiting()` opens a manual
-//   drive at once, from the tap (journaled, `driveStarted`), waiting for driving speed;
+// - `wake()` opens an auto candidate when the wake gate passes, and `appForeground()` takes an `app`
+//   wake when the phone has had car motion (`setCarMotion`, off by default, as at a desk);
+//   `startWaiting()` opens a manual drive at once, from the tap (journaled, `driveStarted`), waiting
+//   for driving speed;
 // - `confirm()` turns the candidate into a recording drive, journals its `start` line and emits
 //   `driveStarted`; `emitRows()` journals rows with `seq` (and, given `sense`, emits each as a
 //   DriveSense `row` event, as native does);
@@ -61,6 +63,8 @@ export interface FakeDetectControls {
   setAlwaysAnswer(a: 'always' | 'whenInUse' | 'denied'): void;
   /** A wake: an auto candidate when the gate passes (motion assumed fresh). Returns whether one opened. */
   wake(reason?: WakeReason): boolean;
+  /** Car motion in the last 2 min, which `appForeground` needs to open a candidate (default false). */
+  setCarMotion(fresh: boolean): void;
   /** The candidate confirms (an auto one by default when none is open). */
   confirm(c?: FakeConfirm): DriveStartedEvent;
   /** Rows journaled with the next `seq`s; returns the seqs. */
@@ -104,6 +108,7 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
   const available = opts.available ?? true;
   let permissions: DetectPermissions = { ...PERMISSIONS, ...opts.permissions };
   let alwaysAnswer: 'always' | 'whenInUse' | 'denied' | null = null;
+  let carMotion = false;
   let intent = false;
   let owner: string | null = null;
   let phase: DetectState['state'] = 'off';
@@ -334,6 +339,12 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       announce(waitingNow ? 'cancelled' : 'disarmed');
       return resolve(undefined);
     },
+    appForeground() {
+      calls.push('appForeground');
+      // Nothing to wake without the module (Android): a no-op that resolves, as the wrapper's.
+      if (available && carMotion) api.wake('app');
+      return resolve(undefined);
+    },
     addListener<E extends DriveDetectEvent>(event: E, fn: (p: DriveDetectEvents[E]) => void): DetectSubscription {
       if (!available) return { remove() {} };
       const listener = fn as (p: unknown) => void;
@@ -363,6 +374,9 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
     },
     setAlwaysAnswer(a) {
       alwaysAnswer = a;
+    },
+    setCarMotion(fresh) {
+      carMotion = fresh;
     },
     wake(reason = 'slc') {
       const gate = wakeGate({

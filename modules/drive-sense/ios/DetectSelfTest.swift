@@ -19,8 +19,7 @@ enum DetectSelfTest {
     switch kind {
     case "confirm":
       guard let trigger = v["trigger"] as? String, let rows = rowsOf(v["rows"]) else { return nil }
-      let veto = (v["veto"] as? [Any])?.map { jsonBool($0) ?? false } ?? []
-      let hit = confirm(trigger, rows, veto)
+      let hit = confirm(trigger, rows, flags(v["veto"]), flags(v["car"]))
       return ["confirmedAt": opt(hit?.confirmedAt), "runStartTs": opt(hit?.runStartTs)]
     case "trace":
       guard let rows = rowsOf(v["rows"]), let h = jsonNumber(v["h"]) else { return nil }
@@ -40,8 +39,14 @@ enum DetectSelfTest {
       return ["reason": DetectPolicy.wakeGate(c)]
     case "candidate":
       guard let trigger = v["trigger"] as? String, let since = jsonNumber(v["since"]), let now = jsonNumber(v["now"]) else { return nil }
-      let cause = DetectPolicy.candidateDue(trigger, since: since, waitUntil: jsonNumber(v["waitUntil"]), walkSince: jsonNumber(v["walkSince"]), now: now)
+      let cause = DetectPolicy.candidateDue(trigger, since: since, waitUntil: jsonNumber(v["waitUntil"]), walkSince: jsonNumber(v["walkSince"]), now: now,
+                                            lastVehicleTs: jsonNumber(v["lastVehicleTs"]), hasEvidence: jsonBool(v["hasEvidence"]) ?? false)
       return ["cause": cause.map { $0 as Any } ?? NSNull()]
+    case "startsAfter":
+      guard let list = v["starts"] as? [Any], let since = jsonNumber(v["since"]), let saw = jsonBool(v["sawVehicle"]) else { return nil }
+      let starts = list.compactMap { jsonNumber($0) }
+      guard starts.count == list.count else { return nil }
+      return ["starts": DetectPolicy.startsAfter(starts, since: since, sawVehicle: saw)]
     case "end":
       return end(v)
     case "suppress":
@@ -65,11 +70,16 @@ enum DetectSelfTest {
     }
   }
 
+  /// A row's per-row flags (`veto`, `car`): missing or not a bool is false.
+  private static func flags(_ value: Any?) -> [Bool] {
+    (value as? [Any])?.map { jsonBool($0) ?? false } ?? []
+  }
+
   /// The confirmation over `rows`: the confirming row's index, its run's start and its time.
-  private static func confirm(_ trigger: String, _ rows: [DetectRow], _ veto: [Bool]) -> (c: Int, runStartTs: Double, confirmedAt: Double)? {
+  private static func confirm(_ trigger: String, _ rows: [DetectRow], _ veto: [Bool], _ car: [Bool]) -> (c: Int, runStartTs: Double, confirmedAt: Double)? {
     var s = ConfirmState()
     for (i, r) in rows.enumerated() {
-      let step = DetectPolicy.confirmStep(s, r, trigger, veto: i < veto.count && veto[i])
+      let step = DetectPolicy.confirmStep(s, r, trigger, veto: i < veto.count && veto[i], carFresh: i < car.count && car[i])
       s = step.state
       if step.confirmed, let run = s.runStartTs { return (i, run, r.ts) }
     }
@@ -79,7 +89,7 @@ enum DetectSelfTest {
   private static func start(_ v: [String: Any]) -> [String: Any]? {
     guard let trigger = v["trigger"] as? String, let rows = rowsOf(v["rows"]), let since = jsonNumber(v["automotiveSince"]) else { return nil }
     let lastEnd = lastEndOf(v["lastEnd"])
-    guard let hit = confirm(trigger, rows, []) else { return ["confirmedAt": NSNull(), "start": NSNull()] }
+    guard let hit = confirm(trigger, rows, [], flags(v["car"])) else { return ["confirmedAt": NSNull(), "start": NSNull()] }
     let buffer = Array(rows[0...hit.c])
     let h = buffer.firstIndex { $0.ts == hit.runStartTs } ?? 0
     let s = DetectPolicy.startOf(buffer, h, trigger, since, lastEnd)

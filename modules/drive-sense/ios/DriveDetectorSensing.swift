@@ -1,7 +1,8 @@
-// The drive detector's inputs (plan §3.1.1, §3.3, §3.6): rows (a candidate's buffer and hold, a
-// drive's journal), fixes (the "Not driving?" rest, the wake's background task), live motion (walking,
-// the cycling veto, the fix-less hold), its own 5 s clock, and a relaunch (a drive resumed from its
-// journal when its last row is 5 min old or less, else ended as an orphan). Main thread only.
+// The drive detector's inputs (plan §3.1.1, §3.3, §3.6): rows (a candidate's buffer and evidence, a
+// drive's journal), fixes (a candidate's and the "Not driving?" rest's last place, the wake's
+// background task), live motion (walking, the cycling veto, car motion and vehicle signs, the
+// fix-less hold), its own 5 s clock, and a relaunch (a drive resumed from its journal when its last
+// row is 5 min old or less, else ended as an orphan). Main thread only.
 import Foundation
 import UIKit
 
@@ -15,7 +16,10 @@ extension DriveDetector {
       buffer.append(d, body)
       guard !confirming, let r = rec else { return }
       let kind = r.origin == "manual" ? "manual" : "auto"
-      let step = DetectPolicy.confirmStep(confirmState, d, kind, veto: kind == "auto" && vetoNow())
+      let veto = kind == "auto" && vetoNow()
+      // A trusted row at 10 mph or more with no fresh walk, run or ride report is a vehicle sign.
+      if kind == "auto" && DetectPolicy.moving(d) && !veto { lastVehicleTs = d.ts }
+      let step = DetectPolicy.confirmStep(confirmState, d, kind, veto: veto, carFresh: kind == "auto" && carFresh())
       confirmState = step.state
       if step.confirmed { confirm(kind) }
     case "recording", "ending":
@@ -29,18 +33,27 @@ extension DriveDetector {
   func onFix(_ fix: FixSample) {
     // Location updates now keep RoadWise running: the wake's task can end.
     if wakeTask != .invalid { endWakeTask() }
-    guard phase == "suppressed" else { return }
+    let p = phase
+    guard p == "suppressed" || p == "candidate" else { return }
     let d = DetectRow(ts: fix.t, lat: fix.lat, lng: fix.lng, hAcc: fix.hAcc, speed: fix.speed, speedAcc: fix.speedAcc, gnssValid: fix.hAcc >= 0)
     guard DetectPolicy.trusted(d) else { return }
     lastFix = (lat: d.lat, lng: d.lng)
-    if d.speed > DetectPolicy.STOP_MPS { lastOverStopTs = d.ts }
+    if p == "suppressed" && d.speed > DetectPolicy.STOP_MPS { lastOverStopTs = d.ts }
   }
 
-  /// A confident walk or run stands from when it arrived until another report replaces it.
+  /// A confident walk or run stands from when it arrived until a report other than a walk or run
+  /// replaces it; one at low confidence says nothing either way (JS reads it as "unsure" too). Car
+  /// motion lasts until the report that replaces it; any confident automotive report during a
+  /// candidate is a vehicle sign.
   func onActivity(_ a: MotionReport) {
+    let car = a.confident && a.automotive && !a.stationary
+    if car || carStanding { lastCarMotionAt = max(lastCarMotionAt, a.at) }
+    carStanding = car
+    vehicleStanding = a.confident && a.automotive
+    if vehicleStanding && phase == "candidate" { lastVehicleTs = a.at }
     latest = a
-    if a.walking && a.confident {
-      if walkSince == nil { walkSince = a.at }
+    if a.walking {
+      if a.confident && walkSince == nil { walkSince = a.at }
     } else {
       walkSince = nil
     }
@@ -75,17 +88,14 @@ extension DriveDetector {
     clock = nil
   }
 
-  /// Every 5 s while sensing: a candidate's deadline, the safety stop when rows stall, the rest's end.
+  /// Every 5 s while sensing: a candidate's deadline (`candidateTick`), the safety stop when rows
+  /// stall, the rest's end.
   func tick() {
     guard let r = rec else { return }
     let now = DriveDetector.now()
     switch r.state {
     case "candidate":
-      guard !confirming else { return }
-      let kind = r.origin == "manual" ? "manual" : "auto"
-      if let cause = DetectPolicy.candidateDue(kind, since: r.since, waitUntil: r.waitUntil, walkSince: walkSince, now: now) {
-        endCandidate(reason: cause, rest: cause == "timeout")
-      }
+      candidateTick(r, now)
     case "recording", "ending":
       evaluateEnd()
     case "suppressed":

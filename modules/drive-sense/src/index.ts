@@ -58,10 +58,9 @@ export { createFakeDriveDetect } from './fakeDetect';
 export type { FakeConfirm, FakeDetectControls, FakeDetectOptions } from './fakeDetect';
 export {
   AUTO_TRIGGER,
+  autoHoldMs,
   candidateDue,
   CONFIRM_START,
-  confirmHoldMs,
-  confirmMps,
   confirmStep,
   continuesFrom,
   DETECT,
@@ -75,8 +74,10 @@ export {
   MPS_PER_MPH,
   recentStarts,
   resumeDecision,
+  rolling,
   slow,
   startOf,
+  startsAfter,
   statusOf,
   summarize,
   suppressionDue,
@@ -86,6 +87,7 @@ export {
 } from './detect/policy';
 export type {
   ActivitySample,
+  CandidateCause,
   ConfirmState,
   DetectLastEnd,
   DetectRow,

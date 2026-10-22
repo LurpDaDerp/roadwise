@@ -20,6 +20,7 @@ import {
   resumeDecision,
   resumeSeq,
   startOf,
+  startsAfter,
   statusOf,
   summarize,
   suppressionDue,
@@ -59,11 +60,11 @@ export function isDetectWireVector(v: unknown): v is DetectWireVector {
 }
 
 /** Runs the confirmation over `rows` and answers where it confirmed (and the index of the run's first row). */
-function runConfirm(v: { trigger: 'auto' | 'manual'; rows: readonly DetectRow[]; veto?: readonly boolean[] }) {
+function runConfirm(v: { trigger: 'auto' | 'manual'; rows: readonly DetectRow[]; veto?: readonly boolean[]; car?: readonly boolean[] }) {
   let s = CONFIRM_START;
   for (let i = 0; i < v.rows.length; i++) {
     const r = v.rows[i]!;
-    const step = confirmStep(s, r, v.trigger, v.veto?.[i] === true);
+    const step = confirmStep(s, r, v.trigger, v.veto?.[i] === true, v.car?.[i] === true);
     s = step.state;
     if (step.confirmed) return { c: i, runStartTs: s.runStartTs, confirmedAt: r.ts };
   }
@@ -80,7 +81,7 @@ export function runDetectRow(v: DetectRowInputs): DetectActual {
     case 'trace':
       return { index: traceStart(v.rows, v.h) };
     case 'start': {
-      const hit = runConfirm({ trigger: v.trigger, rows: v.rows });
+      const hit = runConfirm({ trigger: v.trigger, rows: v.rows, car: v.car });
       if (hit === null) return { confirmedAt: null, start: null };
       const buffer = v.rows.slice(0, hit.c + 1);
       const h = buffer.findIndex((r) => r.ts === hit.runStartTs);
@@ -94,7 +95,9 @@ export function runDetectRow(v: DetectRowInputs): DetectActual {
     case 'wake':
       return { reason: wakeGate(v.ctx) };
     case 'candidate':
-      return { cause: candidateDue(v.trigger, v.since, v.waitUntil, v.walkSince, v.now) };
+      return { cause: candidateDue(v.trigger, v.since, v.waitUntil, v.walkSince, v.now, v.lastVehicleTs, v.hasEvidence) };
+    case 'startsAfter':
+      return { starts: startsAfter(v.starts, v.since, v.sawVehicle) };
     case 'end': {
       let clock = endClockAt(v.startedAt);
       const results: { due: string | null; overdue: string | null }[] = [];
@@ -140,6 +143,8 @@ export function expectedActual(v: DetectVector): DetectActual {
     case 'candidate':
     case 'suppress':
       return { cause: v.expected };
+    case 'startsAfter':
+      return { starts: v.expected };
     case 'end':
       return { results: v.expected };
     case 'resume':

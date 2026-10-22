@@ -17,7 +17,13 @@ import {
 
 import { HERO, howItWorks, rules, type DriveNumbers } from '@/content/howScores';
 
-const N: DriveNumbers = { autoTriggerMph: 20, autoTriggerS: 10, waitMin: 5, notDrivingMin: 2 };
+const HOLDS = [
+  { mph: 15, s: 30 },
+  { mph: 20, s: 15 },
+  { mph: 25, s: 10 },
+  { mph: 30, s: 5 },
+];
+const N: DriveNumbers = { autoHolds: HOLDS, autoInstantMph: 35, waitMin: 5, notDrivingMin: 2 };
 const all = (auto: boolean) => [HERO.title, HERO.body, ...howItWorks(auto).flatMap((i) => [i.title, i.body]), ...rules(auto, N).flatMap((s) => [s.title, ...s.lines])];
 const section = (auto: boolean, id: string) => rules(auto, N).find((s) => s.id === id)!.lines;
 
@@ -45,14 +51,14 @@ test('the sections, in order', () => {
 
 test('every number comes from the rules: the trigger, the wait, the budget, the end and the merge', () => {
   expect(section(true, 'drives')).toEqual([
-    `Once you’ve been moving at about 20 mph for 10 s, RoadWise starts recording, counting from the moment you set off.`,
+    'Once you’re moving, RoadWise starts recording after about 30 s at 15 mph, 15 s at 20, 10 s at 25, 5 s at 30, or right away from 35 mph. Short stops in traffic don’t reset it, and the drive counts from the moment you set off.',
     `It ends once you park and walk away, or after ${IDLE_END_S / 60} min parked.`,
     `Stop for under ${MERGE_GAP_S / 60} min and set off again from the same spot, and it stays one drive.`,
     'Riding along? Open the drive screen and tap “Not driving?”. It shows once the car reaches driving speed, for your first 2 minutes on that screen.',
     'Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to 5 min for you to get moving.',
   ]);
-  const other = rules(true, { autoTriggerMph: 20, autoTriggerS: 45, waitMin: 7, notDrivingMin: 3 });
-  expect(other.find((s) => s.id === 'drives')!.lines.join(' ')).toMatch(/about 20 mph for 45 s.*first 3 minutes.*up to 7 min/);
+  const other = rules(true, { autoHolds: [{ mph: 12, s: 40 }, { mph: 22, s: 8 }], autoInstantMph: 40, waitMin: 7, notDrivingMin: 3 });
+  expect(other.find((s) => s.id === 'drives')!.lines.join(' ')).toMatch(/about 40 s at 12 mph, 8 s at 22, or right away from 40 mph.*first 3 minutes.*up to 7 min/);
   expect(section(false, 'drives')[0]).toBe('Swipe Start drive on Home before you pull out. RoadWise waits up to 5 min for you to get moving.');
   expect(section(false, 'drives')[2]).toBe('Riding along? Tap “Not driving?” on the drive screen. It shows once the car reaches driving speed, for your first 2 minutes on that screen.');
   // Too short: a Start-card drive is not saved at all, an automatic one gets no score.

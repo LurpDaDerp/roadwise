@@ -6,9 +6,11 @@ import Foundation
 
 extension DriveDetector {
   /// The hold confirmed on the buffer's last row: the start traced back (an auto drive whose rows
-  /// begin moving reads the motion history for when the car set off), then the drive begins.
+  /// begin moving reads the motion history for when the car set off), then the drive begins. A run
+  /// that began before the oldest buffered row traces from the first one (the motion history then
+  /// dates a drive whose rows begin moving).
   func confirm(_ kind: String) {
-    guard let runStart = confirmState.runStartTs, let h = buffer.index(ofTs: runStart) else { return }
+    let h = confirmState.runStartTs.flatMap { buffer.index(ofTs: $0) } ?? 0
     confirming = true
     let rows = buffer.rows
     let lastEnd = rec?.lastEnd
@@ -63,6 +65,8 @@ extension DriveDetector {
     let now = DriveDetector.now()
     let driveId = UUID().uuidString.lowercased()
     let continues = DetectPolicy.continuesFrom(r.lastEnd, start.startedAt, start.startLat, start.startLng)
+    // A confirmed candidate was a real drive: it leaves the hourly cap's record.
+    r.candidateStarts = DetectPolicy.startsAfter(r.candidateStarts, since: r.since, sawVehicle: true)
     r.state = "recording"
     r.since = now
     r.driveId = driveId
@@ -71,7 +75,9 @@ extension DriveDetector {
     r.waitUntil = waitUntil
     save(r)
     confirming = false
-    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+    lingering = false
+    lastVehicleTs = nil
+    let build =Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
     let startLine: [String: Any] = [
       "k": "start", "v": 1, "driveId": driveId, "origin": kind,
       "startedAt": DetectStateRecord.ms(start.startedAt), "startSource": start.startSource,
@@ -90,7 +96,9 @@ extension DriveDetector {
     capture.openCapture(startedAt: start.startedAt, mode: kind == "auto" ? "auto" : "mounted")
     let kept = buffer.items.filter { $0.row.ts >= firstTs }
     buffer.clear()
-    for item in kept { record(item.row, item.body) }
+    // The buffered rows can span 30 min: the safety stop waits for the first live row, so an old
+    // movement replayed against the clock now never ends the drive it starts.
+    for item in kept { record(item.row, item.body, evaluate: false) }
     DriveNotifier.scheduleFallback { [weak self] in self?.isLive(driveId) == true }
     EventHub.detect.emit("driveStarted", [
       "driveId": driveId, "origin": kind, "startedAt": DetectStateRecord.ms(start.startedAt), "startSource": start.startSource,
@@ -100,8 +108,9 @@ extension DriveDetector {
     emitState("confirmed")
   }
 
-  /// One row of the drive: journaled and emitted with the next `seq`, the safety-stop clock fed.
-  func record(_ d: DetectRow, _ body: [String: Any]) {
+  /// One row of the drive: journaled and emitted with the next `seq`, the safety-stop clock fed and
+  /// (a live row) checked.
+  func record(_ d: DetectRow, _ body: [String: Any], evaluate: Bool = true) {
     guard let driveId = rec?.driveId else { return }
     var line = body
     line["seq"] = nextSeq
@@ -111,7 +120,7 @@ extension DriveDetector {
     lastRowTs = d.ts
     if DetectPolicy.trusted(d) { lastFix = (lat: d.lat, lng: d.lng) }
     endClock = DetectPolicy.endOnRow(endClock, d, automotiveNow: automotiveNow())
-    evaluateEnd()
+    if evaluate { evaluateEnd() }
   }
 
   /// The safety stop: native ends the drive a minute after a JS rule would have; meanwhile the state
@@ -121,7 +130,7 @@ extension DriveDetector {
     let now = DriveDetector.now()
     let d = DetectPolicy.endDue(endClock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: r.waitUntil)
     if let cause = d.due {
-      commitEnd(cause: cause, endedAt: now)
+      commitEnd(cause: cause, endedAt: now, linger: cause == "still" || cause == "walking")
       return
     }
     let next = d.overdue == nil ? "recording" : "ending"
@@ -133,11 +142,15 @@ extension DriveDetector {
   }
 
   /// Commits the drive's end: journaled (`end`) and closed, sensing off, the parked region at the last
-  /// trusted fix, armed again. A native cause goes to JS as `driveEnded`; JS's own ("js", with its cut
-  /// as `endedAt`) does not. Native never computes a cut: its `endedAt` is when it decided.
-  func commitEnd(cause: String, endedAt: Double) {
+  /// trusted fix, armed again, all inside a background task (JS stores the drive and posts its recap).
+  /// A native cause goes to JS as `driveEnded`; JS's own ("js", with its cut as `endedAt`) does not.
+  /// Native never computes a cut: its `endedAt` is when it decided. `linger`: an automatic end (5 min
+  /// still, or a walk); unless it was a Start-card drive still waiting for driving speed, a candidate
+  /// watches on at once, so a quick restart from the same spot confirms and re-opens the held drive.
+  func commitEnd(cause: String, endedAt: Double, linger: Bool = false) {
     guard var r = rec, isRecording, let driveId = r.driveId else { return }
     let now = DriveDetector.now()
+    let lingerAfter = linger && r.waitUntil == nil
     let lastSeq = nextSeq - 1
     let rowTs = lastRowTs
     journal.appendMarker(driveId, [
@@ -147,6 +160,7 @@ extension DriveDetector {
     r.lastEnd = lastFix.map { DetectLastEnd(decidedAt: now, cut: cause == "js" ? endedAt : now, lat: $0.lat, lng: $0.lng, driveId: driveId) }
     settle(&r, now)
     save(r)
+    beginEndTask()
     finishSensing()
     if r.state == "armed" { wakes.setParked(lastFix) }
     lastFix = nil
@@ -158,6 +172,14 @@ extension DriveDetector {
       ])
     }
     emitState("ended")
+    if lingerAfter, rec?.state == "armed", capture.sensing == .off { beginCandidate(origin: "auto", reason: "linger") }
+  }
+
+  /// A JS end that a JS end rule would have made by now (5 min still, or a walk) was an automatic one.
+  func automaticEndDue() -> Bool {
+    guard let r = rec, isRecording, let startedAt = r.startedAt else { return false }
+    let o = DetectPolicy.endDue(endClock, startedAt: startedAt, now: DriveDetector.now(), walkSince: walkSince, waitUntil: r.waitUntil).overdue
+    return o == "still" || o == "walking"
   }
 
   /// "Not driving?": the drive is cancelled (its journal deleted, nothing kept) and detection rests
@@ -212,6 +234,8 @@ extension DriveDetector {
     lastFix = nil
     lastOverStopTs = nil
     walkSince = nil
+    lastVehicleTs = nil
+    lingering = false
     save(DetectStateRecord())
     wakes.stop()
     journal.wipe(done: done)

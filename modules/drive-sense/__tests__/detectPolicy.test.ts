@@ -2,10 +2,12 @@
 // The drive detector's rules (plan §3.3, §3.4, §3.6): every row of the shared decision table holds
 // for the TypeScript reference, the numbers agree with the scoring package and the triggers the UI
 // quotes, and a few properties hold over generated rows as well as the table's.
-import { END_CRAWL_MPH, END_NATIVE_SLACK_S, IDLE_END_S, MERGE_GAP_S, MERGE_RADIUS_M } from '@scoring';
+import { END_CRAWL_MPH, END_NATIVE_SLACK_S, IDLE_END_S, MERGE_GAP_S, MERGE_RADIUS_M, WALK_END_S } from '@scoring';
 
 import {
   AUTO_TRIGGER,
+  autoHoldMs,
+  candidateDue,
   CONFIRM_START,
   confirmStep,
   DETECT,
@@ -15,12 +17,15 @@ import {
   endOnRow,
   MANUAL_TRIGGER,
   MPS_PER_MPH,
+  rolling,
   slow,
   startOf,
+  startsAfter,
   suppressionDue,
   suppressionResume,
   traceStart,
   trusted,
+  type ConfirmState,
   type DetectRow,
 } from '../src/detect/policy';
 import { matchDetectRow, runDetectRow } from '../src/detect/selfTest';
@@ -41,22 +46,70 @@ describe('the decision table', () => {
 
   test('every rule has rows', () => {
     const kinds = new Set(DETECT_VECTORS.map((v) => v.kind));
-    expect([...kinds].sort()).toEqual(['candidate', 'confirm', 'end', 'motionGate', 'resume', 'resumeSeq', 'start', 'status', 'summary', 'suppress', 'suppressResume', 'trace', 'wake'].sort());
+    expect([...kinds].sort()).toEqual(['candidate', 'confirm', 'end', 'motionGate', 'resume', 'resumeSeq', 'start', 'startsAfter', 'status', 'summary', 'suppress', 'suppressResume', 'trace', 'wake'].sort());
   });
 });
 
 describe('the numbers', () => {
   test('the triggers the UI quotes are the ones confirmed', () => {
-    expect(DETECT.CONFIRM_MPS_AUTO).toBeCloseTo(AUTO_TRIGGER.mph * MPS_PER_MPH, 9);
-    expect(DETECT.CONFIRM_HOLD_MS_AUTO).toBe(AUTO_TRIGGER.holdMs);
+    expect(AUTO_TRIGGER).toEqual({
+      minMph: 15,
+      instantMph: 35,
+      holds: [
+        { mph: 15, s: 30 },
+        { mph: 20, s: 15 },
+        { mph: 25, s: 10 },
+        { mph: 30, s: 5 },
+      ],
+      maxHAccM: 30,
+    });
+    // the anchors are the quoted ones, and the curve passes through them
+    const anchors = [
+      [DETECT.AUTO_MIN_MPS, DETECT.AUTO_HOLD_MS_15],
+      [DETECT.AUTO_MPS_20, DETECT.AUTO_HOLD_MS_20],
+      [DETECT.AUTO_MPS_25, DETECT.AUTO_HOLD_MS_25],
+      [DETECT.AUTO_MPS_30, DETECT.AUTO_HOLD_MS_30],
+    ];
+    AUTO_TRIGGER.holds.forEach((h, i) => {
+      expect(anchors[i]![0]).toBeCloseTo(h.mph * MPS_PER_MPH, 9);
+      expect(anchors[i]![1]).toBe(h.s * 1000);
+      expect(autoHoldMs(h.mph * MPS_PER_MPH)).toBeCloseTo(h.s * 1000, 6);
+    });
+    expect(DETECT.AUTO_MIN_MPS).toBeCloseTo(AUTO_TRIGGER.minMph * MPS_PER_MPH, 9);
+    expect(DETECT.AUTO_INSTANT_MPS).toBeCloseTo(AUTO_TRIGGER.instantMph * MPS_PER_MPH, 9);
+    // in between: linear; under 15 mph: never; from about 34 mph: the 1 s floor (the second reading)
+    expect(autoHoldMs(17.5 * MPS_PER_MPH)).toBeCloseTo(22_500, 6);
+    expect(autoHoldMs(22 * MPS_PER_MPH)).toBeCloseTo(13_000, 6);
+    expect(autoHoldMs(33 * MPS_PER_MPH)).toBeCloseTo(2_000, 6);
+    expect(autoHoldMs(14.99 * MPS_PER_MPH)).toBe(Infinity);
+    expect(autoHoldMs(0)).toBe(Infinity);
+    expect(autoHoldMs(Number.NaN)).toBe(Infinity);
+    for (const mph of [34, 34.5, 35, 40, 90]) expect(autoHoldMs(mph * MPS_PER_MPH)).toBe(DETECT.AUTO_HOLD_MIN_MS);
+    expect(DETECT.AUTO_HOLD_MIN_MS).toBe(DETECT.ROW_MS);
+    // the Start card's
     expect(DETECT.CONFIRM_MPS_MANUAL).toBeCloseTo(MANUAL_TRIGGER.mph * MPS_PER_MPH, 9);
     expect(DETECT.CONFIRM_HOLD_MS_MANUAL).toBe(MANUAL_TRIGGER.holdMs);
-    for (const t of [AUTO_TRIGGER, MANUAL_TRIGGER]) {
-      expect(t.dipMaxMs).toBe(DETECT.CONFIRM_DIP_MAX_MS);
-      expect(t.maxHAccM).toBe(DETECT.TRUSTED_HACC_M);
-    }
-    expect(AUTO_TRIGGER).toEqual({ mph: 20, holdMs: 10_000, dipMaxMs: 5_000, maxHAccM: 30 });
+    expect(MANUAL_TRIGGER.dipMaxMs).toBe(DETECT.CONFIRM_DIP_MAX_MS);
+    for (const t of [AUTO_TRIGGER, MANUAL_TRIGGER]) expect(t.maxHAccM).toBe(DETECT.TRUSTED_HACC_M);
     expect(MANUAL_TRIGGER).toEqual({ mph: 10, holdMs: 15_000, dipMaxMs: 5_000, maxHAccM: 30 });
+  });
+
+  test('a hold never gets longer as the speed rises, and stays within its anchors', () => {
+    let last = Infinity;
+    for (let mph = 15; mph <= 60; mph += 0.25) {
+      const h = autoHoldMs(mph * MPS_PER_MPH);
+      expect({ mph, ok: h <= last && h >= DETECT.AUTO_HOLD_MIN_MS && h <= DETECT.AUTO_HOLD_MS_15 }).toEqual({ mph, ok: true });
+      last = h;
+    }
+  });
+
+  test('the watch: the buffer holds the whole of the longest candidate; evidence lives as long as a stop inside a drive', () => {
+    expect(DETECT.CANDIDATE_BUFFER_MAX_ROWS * DETECT.ROW_MS).toBe(DETECT.CANDIDATE_CAP_MS);
+    expect(DETECT.CANDIDATE_CAP_MS).toBe(30 * 60_000);
+    expect(DETECT.AUTO_FORGET_MS).toBe(DETECT.STILL_END_MS);
+    expect(DETECT.AUTO_FORGET_MS).toBe(DETECT.TRACE_STOP_SPLIT_MS);
+    expect(DETECT.CANDIDATE_MAX_MS).toBe(3 * 60_000);
+    expect(DETECT.AUTO_ROW_GAP_MAX_MS).toBe(2 * DETECT.ROW_MS);
   });
 
   test('the end and merge numbers are the scoring package’s (plan §3.4, §3.5)', () => {
@@ -72,6 +125,10 @@ describe('the numbers', () => {
     expect(DETECT.MAX_DRIVE_MS).toBe(12 * 3_600_000);
     expect(DETECT.SUPPRESS_MAX_MS).toBe(3 * 3_600_000);
     expect(DETECT.WAIT_MAX_MS).toBe(5 * 60_000);
+    // the walking end: 5 s for a drive (native stops 60 s after that), 20 s for a candidate and the rest
+    expect(DETECT.WALK_END_MS).toBe(WALK_END_S * 1000);
+    expect(DETECT.WALK_END_MS).toBe(5_000);
+    expect(DETECT.WALK_CONFIRM_MS).toBe(20_000);
   });
 
   test('every value is a plain decimal number Swift reads as written', () => {
@@ -106,32 +163,125 @@ function randomRows(seed: number, n = 240): DetectRow[] {
 }
 
 describe('properties', () => {
-  test('a hold never confirms across a dip spanning more than 5 s, and always spans the hold', () => {
+  test('the Start card: a hold never confirms across a dip spanning more than 5 s, and always spans the hold', () => {
     for (let seed = 1; seed <= 200; seed++) {
       const rows = randomRows(seed);
-      for (const kind of ['auto', 'manual'] as const) {
-        let s = CONFIRM_START;
-        for (const row of rows) {
-          const step = confirmStep(s, row, kind);
-          s = step.state;
-          if (!step.confirmed) continue;
-          const run = rows.filter((x) => x.ts >= s.runStartTs! && x.ts <= row.ts);
-          const mps = kind === 'auto' ? DETECT.CONFIRM_MPS_AUTO : DETECT.CONFIRM_MPS_MANUAL;
-          const fast = (x: DetectRow) => trusted(x) && x.speed >= mps;
-          expect(fast(run[0]!) && fast(row)).toBe(true);
-          expect(row.ts - run[0]!.ts).toBeGreaterThanOrEqual(kind === 'auto' ? DETECT.CONFIRM_HOLD_MS_AUTO : DETECT.CONFIRM_HOLD_MS_MANUAL);
-          let dipStart: number | null = null;
-          for (const x of run) {
-            if (fast(x)) dipStart = null;
-            else {
-              dipStart = dipStart ?? x.ts;
-              expect(x.ts - dipStart).toBeLessThanOrEqual(DETECT.CONFIRM_DIP_MAX_MS);
-            }
+      let s = CONFIRM_START;
+      for (const row of rows) {
+        const step = confirmStep(s, row, 'manual');
+        s = step.state;
+        if (!step.confirmed) continue;
+        const run = rows.filter((x) => x.ts >= s.runStartTs! && x.ts <= row.ts);
+        const fast = (x: DetectRow) => trusted(x) && x.speed >= DETECT.CONFIRM_MPS_MANUAL;
+        expect(fast(run[0]!) && fast(row)).toBe(true);
+        expect(row.ts - run[0]!.ts).toBeGreaterThanOrEqual(DETECT.CONFIRM_HOLD_MS_MANUAL);
+        let dipStart: number | null = null;
+        for (const x of run) {
+          if (fast(x)) dipStart = null;
+          else {
+            dipStart = dipStart ?? x.ts;
+            expect(x.ts - dipStart).toBeLessThanOrEqual(DETECT.CONFIRM_DIP_MAX_MS);
           }
-          break;
         }
+        break;
       }
     }
+  });
+
+  /** The auto evidence over `rows`: each row's state and whether it confirmed. */
+  function autoRun(rows: readonly DetectRow[], veto: (i: number) => boolean = () => false, car: (i: number) => boolean = () => false) {
+    let s: ConfirmState = CONFIRM_START;
+    const out: { s: ConfirmState; confirmed: boolean }[] = [];
+    rows.forEach((row, i) => {
+      const step = confirmStep(s, row, 'auto', veto(i), car(i));
+      s = step.state;
+      out.push({ s, confirmed: step.confirmed });
+    });
+    return out;
+  }
+  const firstConfirm = (rows: readonly DetectRow[], veto?: (i: number) => boolean, car?: (i: number) => boolean) => autoRun(rows, veto, car).findIndex((x) => x.confirmed);
+  const fast = (x: DetectRow) => trusted(x) && x.speed >= DETECT.AUTO_MIN_MPS;
+
+  test('auto: a confirmation always has its run start and the confirming row and the row before it trusted at 15 mph or more', () => {
+    for (let seed = 1; seed <= 300; seed++) {
+      const rows = randomRows(seed, 600);
+      const r = rng(seed * 7);
+      const car = rows.map(() => r() < 0.6);
+      const steps = autoRun(rows, () => false, (i) => car[i]!);
+      const c = steps.findIndex((x) => x.confirmed);
+      if (c < 0) continue;
+      const run = steps[c]!.s.runStartTs!;
+      const h = rows.findIndex((x) => x.ts === run);
+      expect({ seed, ok: h >= 0 && h < c && fast(rows[h]!) && fast(rows[c]!) && fast(rows[c - 1]!) }).toEqual({ seed, ok: true });
+      // under 20 mph a row earned only with car motion
+      if (rows[c]!.speed < DETECT.AUTO_MPS_20) expect(car[c]).toBe(true);
+    }
+  });
+
+  test('auto: rows that never reach 15 mph never confirm, nor rows a fresh walk, run or ride report covers', () => {
+    for (let seed = 1; seed <= 200; seed++) {
+      const slowRows = randomRows(seed, 400).map((x) => (x.speed >= DETECT.AUTO_MIN_MPS ? { ...x, speed: DETECT.AUTO_MIN_MPS - 0.01 } : x));
+      expect({ seed, c: firstConfirm(slowRows, undefined, () => true) }).toEqual({ seed, c: -1 });
+      expect({ seed, c: firstConfirm(randomRows(seed, 400), () => true, () => true) }).toEqual({ seed, c: -1 });
+    }
+  });
+
+  test('auto: one GPS spike among rows that never reach 15 mph never confirms, wherever it lands', () => {
+    for (let seed = 1; seed <= 60; seed++) {
+      const base = randomRows(seed, 200).map((x) => (x.speed >= DETECT.AUTO_MIN_MPS ? { ...x, speed: 10 * MPS_PER_MPH } : x));
+      for (let i = 0; i < base.length; i += 7) {
+        const rows = base.map((x, j) => (j === i ? vrow((x.ts - T0) / 1000, 60) : x));
+        expect({ seed, i, c: firstConfirm(rows, undefined, () => true) }).toEqual({ seed, i, c: -1 });
+      }
+    }
+  });
+
+  test('auto: a higher steady speed never confirms later', () => {
+    let last = Infinity;
+    for (let mph = 15; mph <= 60; mph += 0.5) {
+      const c = firstConfirm(vrows(0, 60, mph), undefined, () => true);
+      expect({ mph, ok: c >= 1 && c <= last }).toEqual({ mph, ok: true });
+      last = c;
+    }
+  });
+
+  test('auto: the evidence only grows, except that 5 min with no trusted row over 3 mph forgets it', () => {
+    for (let seed = 1; seed <= 200; seed++) {
+      const r = rng(seed);
+      // driving, a long stop now and then, and poor fixes
+      const rows: DetectRow[] = [];
+      let t = 0;
+      while (rows.length < 1200) {
+        const stop = r() < 0.2 ? 250 + Math.floor(r() * 120) : Math.floor(r() * 60);
+        rows.push(...vrows(t, t + stop - 1, 0));
+        t += stop;
+        const go = 3 + Math.floor(r() * 6);
+        rows.push(...vrows(t, t + go - 1, 15 + r() * 6, () => ({ hAcc: r() < 0.1 ? 60 : 5 })));
+        t += go;
+      }
+      const steps = autoRun(rows, () => false, () => r() < 0.5);
+      let prev = CONFIRM_START;
+      steps.forEach(({ s }, i) => {
+        if (s.evidence < prev.evidence) {
+          expect({ seed, i, e: s.evidence, first: s.runStartTs }).toEqual({ seed, i, e: 0, first: null });
+          expect(rows[i]!.ts - prev.lastMoveTs!).toBeGreaterThanOrEqual(DETECT.AUTO_FORGET_MS);
+        }
+        expect(s.evidence > 0).toBe(s.runStartTs !== null);
+        prev = s;
+      });
+    }
+  });
+
+  test('a candidate: the cap first, then the vehicle clock, then a walk; only one that saw a vehicle leaves the cap record', () => {
+    const t0 = T0;
+    expect(candidateDue('auto', t0, null, t0, t0 + DETECT.CANDIDATE_CAP_MS, t0 + DETECT.CANDIDATE_CAP_MS, true)).toBe('cap');
+    expect(candidateDue('auto', t0, null, t0, t0 + DETECT.CANDIDATE_MAX_MS, null, false)).toBe('timeout');
+    expect(candidateDue('auto', t0, null, t0 + 100_000, t0 + 130_000, null, false)).toBe('walking');
+    // a vehicle sign before the candidate opened counts from when it opened
+    expect(candidateDue('auto', t0, null, null, t0 + DETECT.CANDIDATE_MAX_MS - 1, t0 - 60_000, false)).toBeNull();
+    expect(startsAfter([1, 2, 3], 2, true)).toEqual([1, 3]);
+    expect(startsAfter([1, 2, 3], 2, false)).toEqual([1, 2, 3]);
+    expect(startsAfter([1, 3], 2, true)).toEqual([1, 3]);
   });
 
   test('a traced start is always a trusted row at or under 3 mph before the run, or a fallback', () => {
@@ -155,6 +305,20 @@ describe('properties', () => {
     }
     const parked = [...vrows(0, 30, 25), ...vrows(31, 331, 0), ...vrows(332, 400, 25)];
     expect(traceStart(parked, 332)).toBe(331);
+  });
+
+  test('a departure that crawls (5-14 mph) is never cut at a stop shorter than 5 min: it goes back to the kerb', () => {
+    for (let seed = 1; seed <= 100; seed++) {
+      const r = rng(seed);
+      const crawl = (from: number, to: number) => vrows(from, to, 0).map((x, i) => vrow(from + i, 5 + r() * 9.9));
+      const stopS = 1 + Math.floor(r() * 298);
+      const a = 31 + Math.floor(r() * 120);
+      const b = a + 1 + stopS;
+      const c = b + 1 + Math.floor(r() * 120);
+      const rows = [...vrows(0, 30, 0), ...crawl(31, a), ...vrows(a + 1, b, 0), ...crawl(b + 1, c), ...vrows(c + 1, c + 40, 20)];
+      expect({ seed, start: traceStart(rows, c + 1) }).toEqual({ seed, start: 30 });
+      for (const x of rows) if (x.speed >= 5 * MPS_PER_MPH) expect(rolling(x)).toBe(true);
+    }
   });
 
   test('the still clock restarts at every movement and only fix-less car rows pause it', () => {

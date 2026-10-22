@@ -1,13 +1,12 @@
 // End drive's lock at speed (modes plan §3.6): locked at 20 mph and over, back under 10, an unknown
 // speed holds.
-import { AUTO_TRIGGER, MANUAL_TRIGGER } from '@drive-sense';
+import { MANUAL_TRIGGER } from '@drive-sense';
 
 import { END_LOCK_MPH, END_UNLOCK_MPH, nextEndLock } from '../endLock';
 
-test('the numbers are the two triggers: locked from the automatic one (20 mph), free under the manual one (10 mph)', () => {
+test('the numbers: locked from 20 mph, free under the Start card trigger (10 mph)', () => {
   expect(END_LOCK_MPH).toBe(20);
   expect(END_UNLOCK_MPH).toBe(10);
-  expect(END_LOCK_MPH).toBe(AUTO_TRIGGER.mph);
   expect(END_UNLOCK_MPH).toBe(MANUAL_TRIGGER.mph);
 });
 

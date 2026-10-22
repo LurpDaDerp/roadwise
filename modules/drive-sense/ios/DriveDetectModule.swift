@@ -97,6 +97,12 @@ public final class DriveDetectModule: Module, DriveSenseEventSink {
     AsyncFunction("wipe") { (promise: Promise) in
       DriveDetector.shared.wipe { promise.resolve(nil) }
     }.runOnQueue(.main)
+
+    // RoadWise came to the front: an "app" wake (the detector also takes one on didBecomeActive).
+    AsyncFunction("appForeground") { (promise: Promise) in
+      DriveDetector.shared.appForeground()
+      promise.resolve(nil)
+    }.runOnQueue(.main)
   }
 
   /// A drive id names a file: a lowercase UUID and nothing else.

@@ -48,6 +48,7 @@ describe('the detect self-test', () => {
       motionGate: () => ({ reason: 'ok-ish' }),
       wake: () => ({ reason: 'resting' }),
       candidate: () => ({ cause: 'walking' }),
+      startsAfter: (a) => ({ starts: [...(a.starts as number[]), 1] }),
       end: (a) => ({ results: (a.results as unknown[]).map(() => ({ due: 'limit', overdue: 'limit' })) }),
       suppress: () => ({ cause: 'never' }),
       suppressResume: (a) => ({ ...a, causes: (a.causes as unknown[]).map(() => 'still') }),

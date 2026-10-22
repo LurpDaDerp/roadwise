@@ -4,8 +4,8 @@
 // counted, never passed on.
 //
 // The lookup is `requireOptionalNativeModule`: on Android (the module is registered for Apple only),
-// Jest, Expo Go and web `available` is false, every method but `wipe` rejects (a wipe resolves: there
-// is nothing to wipe) and every listener is inert.
+// Jest, Expo Go and web `available` is false, every method but `wipe` and `appForeground` rejects
+// (those two resolve: there is nothing to wipe or wake) and every listener is inert.
 // Tests inject `createFakeDriveDetect()`.
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import { z } from 'zod';
@@ -118,6 +118,8 @@ export const readRowsResultSchema: z.ZodType<ReadRowsResult> = z.strictObject({
 
 export const startWaitingResultSchema: z.ZodType<StartWaitingResult> = z.union([
   z.strictObject({ ok: z.literal(true), waitUntil: epoch, driveId, startedAt: epoch }),
+  // A native build from before the drive opened at the tap answers the wait alone.
+  z.strictObject({ ok: z.literal(true), waitUntil: epoch }).transform((v) => ({ ...v, driveId: null, startedAt: null })),
   z.strictObject({ ok: z.literal(false), reason: z.enum(['permission', 'busy', 'unavailable']) }),
 ]);
 
@@ -188,6 +190,8 @@ export const DriveDetect: DriveDetectApi = {
   discardDrive: (id) => call('discardDrive', [id], isDriveId(id), voidResult),
   // A wipe must never fail where there is no detector (Android, Jest, Expo Go, web): nothing to wipe.
   wipe: () => (native ? call('wipe', [], true, voidResult) : Promise.resolve()),
+  // Nor a wake: nothing to wake there, nor in a native build from before the method.
+  appForeground: () => (native && typeof native.appForeground === 'function' ? call('appForeground', [], true, voidResult) : Promise.resolve()),
   addListener<E extends DriveDetectEvent>(event: E, fn: (p: DriveDetectEvents[E]) => void): DetectSubscription {
     if (!native) return { remove() {} };
     const schema = EVENT_SCHEMAS[event] as z.ZodType<DriveDetectEvents[E]>;

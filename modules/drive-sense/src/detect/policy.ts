@@ -2,9 +2,9 @@
 //
 // `ios/DetectPolicy.swift` and `ios/DetectEndPolicy.swift` mirror every constant below under the
 // same name (the native text test compares them) and every function under the same rule;
-// `vectors.ts` is the shared decision table that Jest runs here and the phone runs through the
-// Swift policy (`DetectSelfTest.swift`). Android has no native detector: its waiting session (the
-// drive host) uses `confirmStep` with the manual trigger and `startOf` from here.
+// decision table that Jest runs here and the phone runs through the
+// Swift policy (`DetectSelfTest.swift`). Android has no native detector and uses none of this (its
+// Start-card wait is the engine's own).
 //
 // Pure: no platform, no clock. Every time is epoch ms; every speed m/s; every distance metres.
 
@@ -12,15 +12,32 @@ export const MPS_PER_MPH = 0.44704;
 
 /** The detector's numbers. Same names, same values in `DetectPolicy.swift`. */
 export const DETECT = {
-  /** The auto trigger: 20 mph held 10 s. */
-  CONFIRM_MPS_AUTO: 8.9408,
-  CONFIRM_HOLD_MS_AUTO: 10_000,
+  /**
+   * The auto trigger (`autoHoldMs`): the hold a speed needs, piecewise linear through 15 mph 30 s,
+   * 20 mph 15 s, 25 mph 10 s and 30 mph 5 s, falling to 0 at 35 mph and floored at
+   * `AUTO_HOLD_MIN_MS`, so from about 34 mph a drive confirms on the second good reading in a row.
+   * Under 15 mph a reading earns nothing; under 20 mph only with fresh car motion.
+   */
+  AUTO_MIN_MPS: 6.7056,
+  AUTO_HOLD_MS_15: 30_000,
+  AUTO_MPS_20: 8.9408,
+  AUTO_HOLD_MS_20: 15_000,
+  AUTO_MPS_25: 11.176,
+  AUTO_HOLD_MS_25: 10_000,
+  AUTO_MPS_30: 13.4112,
+  AUTO_HOLD_MS_30: 5_000,
+  AUTO_INSTANT_MPS: 15.6464,
+  AUTO_HOLD_MIN_MS: 1_000,
+  /** Two readings further apart than this earn nothing for the interval between them (what was earned stays). */
+  AUTO_ROW_GAP_MAX_MS: 2_000,
+  /** The evidence is forgotten after this long with no trusted reading over 3 mph (a stop that long ends a drive). */
+  AUTO_FORGET_MS: 300_000,
   /** A Start-card session: 10 mph held 15 s. */
   CONFIRM_MPS_MANUAL: 4.4704,
   CONFIRM_HOLD_MS_MANUAL: 15_000,
-  /** A dip under the trigger (or an untrusted row) spanning this long or less keeps the hold. */
+  /** A dip under the Start card's trigger (or an untrusted row) spanning this long or less keeps the hold. */
   CONFIRM_DIP_MAX_MS: 5_000,
-  /** A confident cycling, walking or running report this recent holds an auto confirmation back. */
+  /** A confident cycling, walking or running report this recent earns an auto candidate nothing. */
   VETO_FRESH_MS: 30_000,
   /** A row counts only with a fix this accurate… */
   TRUSTED_HACC_M: 30,
@@ -28,17 +45,17 @@ export const DETECT = {
   TRUSTED_SPEED_ACC_MPS: 2,
   /** 3 mph: "at or under 3 mph". */
   STOP_MPS: 1.34112,
-  /** 10 mph: driving before a stop (the trace-back). */
+  /** 10 mph: a vehicle sign that keeps an auto candidate open. */
   MOVING_MPS: 4.4704,
-  /** 5 mph: movement for the still clock (two trusted rows in a row over it). */
+  /** 5 mph: movement for the still clock (two trusted rows in a row over it), and rolling before a stop (the trace-back). */
   MOVE_MPS: 2.2352,
   MOVE_PACE_ROWS: 2,
   /** Or a trusted fix this far from where the car went still. */
   MOVE_DISPLACEMENT_M: 100,
   /** A stop shorter than this inside the rise is a red light, not the start. */
   TRACE_STOP_SPLIT_MS: 300_000,
-  /** The candidate's rolling buffer (iOS). */
-  CANDIDATE_BUFFER_MAX_ROWS: 600,
+  /** The candidate's rolling buffer (iOS): 30 min at 1 Hz, the whole of the longest candidate. */
+  CANDIDATE_BUFFER_MAX_ROWS: 1_800,
   /** The parked spot is the motion start's place only when reachable at this speed, plus the slack. */
   PLAUSIBLE_MPS_MAX: 40,
   PLAUSIBLE_SLACK_M: 300,
@@ -48,10 +65,13 @@ export const DETECT = {
   MOTION_LOOKBACK_MS: 10_800_000,
   /** Only this long without moving car motion starts a new car run. */
   MOTION_RUN_GAP_MS: 1_800_000,
-  /** An auto candidate without a confirmation ends after this. */
+  /** An auto candidate ends after this long without a vehicle sign (`AUTO_FORGET_MS` once it holds evidence). */
   CANDIDATE_MAX_MS: 180_000,
-  /** After a timed-out candidate, significant-change and visit wakes start none for this long. */
+  /** An auto candidate ends after this long whatever it sees. */
+  CANDIDATE_CAP_MS: 1_800_000,
+  /** After a candidate that saw no vehicle (or reached its cap), significant-change and visit wakes start none for this long. */
   CANDIDATE_REST_MS: 600_000,
+  /** At most this many candidates that saw no vehicle start in an hour. */
   CANDIDATES_PER_HOUR_MAX: 6,
   HOUR_MS: 3_600_000,
   PARKED_REGION_RADIUS_M: 150,
@@ -61,6 +81,8 @@ export const DETECT = {
   VISIT_FRESH_MS: 600_000,
   /** A wake's background task ends once a fix arrives or after this. */
   WAKE_TASK_MAX_MS: 25_000,
+  /** A drive's end runs inside a background task this long, so JS can store it and post its recap. */
+  END_TASK_MAX_MS: 25_000,
   /** A relaunch resumes a journaled drive whose last row is this young. */
   RESUME_MAX_GAP_MS: 300_000,
   /** A resumed drive's rows go on this many seqs past the journal's highest (`resumeSeq`). */
@@ -73,8 +95,10 @@ export const DETECT = {
   CONTINUE_DIST_M: 150,
   /** The JS still end (`IDLE_END_S`); the native safety stop adds the slack. */
   STILL_END_MS: 300_000,
-  /** An on-foot report standing this long ends the drive (the JS walking end). */
+  /** An on-foot report standing this long stops an auto candidate and ends the "Not driving?" rest. */
   WALK_CONFIRM_MS: 20_000,
+  /** An on-foot report standing this long ends a drive (the JS walking end, `WALK_END_S`). */
+  WALK_END_MS: 5_000,
   /** A fix over 3 mph this recent says the car is still driving: no walking end. */
   WALK_STALE_FIX_MS: 60_000,
   END_CRAWL_MPS: 1.34112,
@@ -103,14 +127,29 @@ export const DETECT = {
 
 export type DetectConstant = keyof typeof DETECT;
 
-/** The auto trigger (U2) and the Start card's, in the words the UI quotes. */
-export const AUTO_TRIGGER = { mph: 20, holdMs: 10_000, dipMaxMs: 5_000, maxHAccM: 30 } as const;
+/**
+ * The auto trigger and the Start card's, in the words the UI quotes. Auto: the hold each speed needs
+ * (in between, the hold is interpolated), nothing under `minMph`, and from `instantMph` the second
+ * good reading in a row.
+ */
+export const AUTO_TRIGGER = {
+  minMph: 15,
+  instantMph: 35,
+  holds: [
+    { mph: 15, s: 30 },
+    { mph: 20, s: 15 },
+    { mph: 25, s: 10 },
+    { mph: 30, s: 5 },
+  ],
+  maxHAccM: 30,
+} as const;
 export const MANUAL_TRIGGER = { mph: 10, holdMs: 15_000, dipMaxMs: 5_000, maxHAccM: 30 } as const;
 
 export type TriggerKind = 'auto' | 'manual';
 export type DetectPhase = 'off' | 'armed' | 'candidate' | 'recording' | 'ending' | 'suppressed';
 export type StartSource = 'trace' | 'motion' | 'wake';
-export type WakeReason = 'slc' | 'region' | 'visit';
+/** `app`: RoadWise came to the front. */
+export type WakeReason = 'slc' | 'region' | 'visit' | 'app';
 
 /** The row fields the detector reads (a `FeatureRow` has them all). */
 export interface DetectRow {
@@ -154,6 +193,8 @@ export function trusted(r: DetectRow): boolean {
 export const slow = (r: DetectRow): boolean => trusted(r) && r.speed <= DETECT.STOP_MPS;
 /** Trusted and at 10 mph or more. */
 export const moving = (r: DetectRow): boolean => trusted(r) && r.speed >= DETECT.MOVING_MPS;
+/** Trusted and at 5 mph or more: the car rolling before a stop (the trace-back). */
+export const rolling = (r: DetectRow): boolean => trusted(r) && r.speed >= DETECT.MOVE_MPS;
 
 /** Great-circle metres (haversine). */
 export function distanceM(a: LatLng, b: LatLng): number {
@@ -166,42 +207,101 @@ export function distanceM(a: LatLng, b: LatLng): number {
 
 // ——— Confirmation ———
 
-export const confirmMps = (k: TriggerKind): number => (k === 'auto' ? DETECT.CONFIRM_MPS_AUTO : DETECT.CONFIRM_MPS_MANUAL);
-export const confirmHoldMs = (k: TriggerKind): number => (k === 'auto' ? DETECT.CONFIRM_HOLD_MS_AUTO : DETECT.CONFIRM_HOLD_MS_MANUAL);
-
-/** The hold in progress: when its run of fast rows began, and when the current dip began. */
+/**
+ * The confirmation in progress. The Start card's hold: when its run of fast rows began, and when the
+ * current dip began. The auto evidence: how much has built (1 confirms), when the first interval that
+ * earned since the last forget began (`runStartTs`, where the trace-back starts), the previous row's
+ * time and earning rate, and the last trusted row over 3 mph.
+ */
 export interface ConfirmState {
   runStartTs: number | null;
   dipStartTs: number | null;
+  evidence: number;
+  prevTs: number | null;
+  prevRate: number;
+  lastMoveTs: number | null;
 }
 
-export const CONFIRM_START: ConfirmState = Object.freeze({ runStartTs: null, dipStartTs: null });
+export const CONFIRM_START: ConfirmState = Object.freeze({ runStartTs: null, dipStartTs: null, evidence: 0, prevTs: null, prevRate: 0, lastMoveTs: null });
+
+/** The evidence is a float sum, which may land a hair under 1 (`evidenceEps` in Swift). */
+const EVIDENCE_EPS = 0.000000001;
 
 /**
- * One row of the hold. A trusted row at the trigger or over it extends the run (and ends any dip);
- * the run confirms once it spans the hold on the row clock, unless `veto` (an auto candidate with a
- * fresh confident cycling, walking or running report) holds it to the next row. A row under the
- * trigger, or untrusted, starts or extends a dip; a dip spanning more than `CONFIRM_DIP_MAX_MS`
- * breaks the run.
+ * The hold (ms) a speed (m/s) needs to confirm an auto drive on its own: piecewise linear through
+ * 15 mph 30 s, 20 mph 15 s, 25 mph 10 s, 30 mph 5 s and 35 mph 0, never under `AUTO_HOLD_MIN_MS`;
+ * infinite under 15 mph.
  */
-export function confirmStep(s: ConfirmState, r: DetectRow, kind: TriggerKind, veto = false): { state: ConfirmState; confirmed: boolean } {
-  if (trusted(r) && r.speed >= confirmMps(kind)) {
+export function autoHoldMs(mps: number): number {
+  if (!(mps >= DETECT.AUTO_MIN_MPS)) return Infinity;
+  const pts = [
+    { v: DETECT.AUTO_MIN_MPS, t: DETECT.AUTO_HOLD_MS_15 },
+    { v: DETECT.AUTO_MPS_20, t: DETECT.AUTO_HOLD_MS_20 },
+    { v: DETECT.AUTO_MPS_25, t: DETECT.AUTO_HOLD_MS_25 },
+    { v: DETECT.AUTO_MPS_30, t: DETECT.AUTO_HOLD_MS_30 },
+    { v: DETECT.AUTO_INSTANT_MPS, t: 0 },
+  ];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!;
+    const b = pts[i]!;
+    if (mps <= b.v) return Math.max(DETECT.AUTO_HOLD_MIN_MS, a.t + ((b.t - a.t) * (mps - a.v)) / (b.v - a.v));
+  }
+  return DETECT.AUTO_HOLD_MIN_MS;
+}
+
+/**
+ * One row of the auto evidence. A trusted row at 15 mph or more earns at `1 / autoHoldMs(speed)`
+ * per ms, unless `veto` (a fresh confident cycling, walking or running report) or it is under
+ * 20 mph without fresh car motion (`carFresh`). The interval between two rows that both earn adds
+ * its length at the slower one's rate, so a lone fast reading earns nothing; a gap over
+ * `AUTO_ROW_GAP_MAX_MS` adds nothing. Crawling and stops keep the evidence; 5 min with no trusted
+ * row over 3 mph forgets it. It confirms once the evidence reaches 1.
+ */
+function autoStep(s: ConfirmState, r: DetectRow, veto: boolean, carFresh: boolean): { state: ConfirmState; confirmed: boolean } {
+  const ok = trusted(r);
+  const earns = ok && !veto && r.speed >= DETECT.AUTO_MIN_MPS && (r.speed >= DETECT.AUTO_MPS_20 || carFresh);
+  const rate = earns ? 1 / autoHoldMs(r.speed) : 0;
+  let e = s.evidence;
+  let first = s.runStartTs;
+  if (s.prevTs !== null && rate > 0 && s.prevRate > 0 && r.ts - s.prevTs > 0 && r.ts - s.prevTs <= DETECT.AUTO_ROW_GAP_MAX_MS) {
+    e += (r.ts - s.prevTs) * Math.min(rate, s.prevRate);
+    if (first === null) first = s.prevTs;
+  }
+  const lastMove = ok && r.speed > DETECT.STOP_MPS ? r.ts : s.lastMoveTs;
+  if (e > 0 && lastMove !== null && r.ts - lastMove >= DETECT.AUTO_FORGET_MS) {
+    e = 0;
+    first = null;
+  }
+  const state: ConfirmState = { runStartTs: first, dipStartTs: null, evidence: e, prevTs: r.ts, prevRate: rate, lastMoveTs: lastMove };
+  return { state, confirmed: e >= 1 - EVIDENCE_EPS && !veto };
+}
+
+/**
+ * One row of the confirmation. Auto: the evidence (`autoStep`; `carFresh`: confident car motion in
+ * the last 2 min). The Start card: a trusted row at 10 mph or over extends the run (and ends any
+ * dip), and the run confirms once it spans 15 s on the row clock; a row under it, or untrusted,
+ * starts or extends a dip, and a dip spanning more than `CONFIRM_DIP_MAX_MS` breaks the run.
+ */
+export function confirmStep(s: ConfirmState, r: DetectRow, kind: TriggerKind, veto = false, carFresh = false): { state: ConfirmState; confirmed: boolean } {
+  if (kind === 'auto') return autoStep(s, r, veto, carFresh);
+  if (trusted(r) && r.speed >= DETECT.CONFIRM_MPS_MANUAL) {
     const run = s.runStartTs ?? r.ts;
-    return { state: { runStartTs: run, dipStartTs: null }, confirmed: r.ts - run >= confirmHoldMs(kind) && !veto };
+    return { state: { ...CONFIRM_START, runStartTs: run, dipStartTs: null }, confirmed: r.ts - run >= DETECT.CONFIRM_HOLD_MS_MANUAL && !veto };
   }
   if (s.runStartTs === null) return { state: CONFIRM_START, confirmed: false };
   const dip = s.dipStartTs ?? r.ts;
   if (r.ts - dip > DETECT.CONFIRM_DIP_MAX_MS) return { state: CONFIRM_START, confirmed: false };
-  return { state: { runStartTs: s.runStartTs, dipStartTs: dip }, confirmed: false };
+  return { state: { ...CONFIRM_START, runStartTs: s.runStartTs, dipStartTs: dip }, confirmed: false };
 }
 
 // ——— The start ———
 
 /**
  * The trace-back (native-ios §6.2): from the first row of the confirming run (`h`), the start is
- * the last trusted row at or under 3 mph before it, unless trusted driving at 10 mph or more came
- * before that stop less than `TRACE_STOP_SPLIT_MS` earlier (a red light inside the departure): then
- * the search goes on back from that driving. Null when the rows begin already moving.
+ * the last trusted row at or under 3 mph before it, unless the car was rolling (trusted, 5 mph or
+ * more) before that stop less than `TRACE_STOP_SPLIT_MS` earlier (a red light inside the departure,
+ * a crawl out of a jam included): then the search goes on back from there. Null when the rows begin
+ * already moving.
  */
 export function traceStart(rows: readonly DetectRow[], h: number): number | null {
   let k = Math.min(Math.max(h, 0), rows.length);
@@ -216,7 +316,7 @@ export function traceStart(rows: readonly DetectRow[], h: number): number | null
     if (s < 0) return null;
     let j = -1;
     for (let i = s - 1; i >= 0; i--) {
-      if (moving(rows[i]!)) {
+      if (rolling(rows[i]!)) {
         j = i;
         break;
       }
@@ -343,29 +443,50 @@ export type WakeGate = 'ok' | 'off' | 'noOwner' | 'permission' | 'busy' | 'resti
 /** Candidate starts within the last hour. */
 export const recentStarts = (starts: readonly number[], now: number): number[] => starts.filter((t) => t <= now && now - t < DETECT.HOUR_MS);
 
-/** The cheap checks a wake passes before any motion query or GPS, in order. A region exit ignores the rest. */
+/**
+ * The cheap checks a wake passes before any motion query or GPS, in order. A region exit and
+ * RoadWise coming to the front ignore the rest.
+ */
 export function wakeGate(c: WakeCtx): WakeGate {
   if (!c.armed) return 'off';
   if (!c.hasOwner) return 'noOwner';
   if (!c.permissionsOk) return 'permission';
   if (c.phase !== 'armed') return 'busy';
-  if (c.reason !== 'region' && c.now < c.candidateRestUntil) return 'resting';
+  if (c.reason !== 'region' && c.reason !== 'app' && c.now < c.candidateRestUntil) return 'resting';
   if (recentStarts(c.candidateStarts, c.now).length >= DETECT.CANDIDATES_PER_HOUR_MAX) return 'capped';
   return 'ok';
 }
 
-/** A candidate's own clock: an auto one ends at 3 min or on a walk standing 20 s; a Start-card one at its wait. */
+export type CandidateCause = 'cap' | 'timeout' | 'walking' | 'waitTimeout';
+
+/**
+ * A candidate's own clock. An auto one ends at its 30 min cap; 3 min after its last vehicle sign
+ * (a trusted row at 10 mph or more with no fresh veto, or a confident automotive report), or after
+ * it opened when it has seen none, 5 min once it holds evidence (a long light in a jam keeps it); or
+ * on a walk standing 20 s. A Start-card one ends at its wait.
+ */
 export function candidateDue(
   kind: TriggerKind,
   since: number,
   waitUntil: number | null,
   walkSince: number | null,
-  now: number
-): 'timeout' | 'walking' | 'waitTimeout' | null {
+  now: number,
+  lastVehicleTs: number | null = null,
+  hasEvidence = false
+): CandidateCause | null {
   if (kind === 'manual') return waitUntil !== null && now >= waitUntil ? 'waitTimeout' : null;
-  if (now - since >= DETECT.CANDIDATE_MAX_MS) return 'timeout';
+  if (now - since >= DETECT.CANDIDATE_CAP_MS) return 'cap';
+  if (now - Math.max(since, lastVehicleTs ?? since) >= (hasEvidence ? DETECT.AUTO_FORGET_MS : DETECT.CANDIDATE_MAX_MS)) return 'timeout';
   if (walkSince !== null && now - walkSince >= DETECT.WALK_CONFIRM_MS) return 'walking';
   return null;
+}
+
+/**
+ * The hourly cap's record once a candidate is over: one that saw a vehicle (it confirmed, or it
+ * watched a vehicle and did not) leaves it, its start (`since`) dropped; only empty ones count.
+ */
+export function startsAfter(starts: readonly number[], since: number, sawVehicle: boolean): number[] {
+  return sawVehicle ? starts.filter((t) => t !== since) : [...starts];
 }
 
 // ——— The native safety stop (R1: JS ends drives; native only after the slack) ———
@@ -406,7 +527,7 @@ export function endOnRow(c: EndClock, r: DetectRow, automotiveNow: boolean): End
 export type SafetyCause = 'still' | 'walking' | 'limit';
 
 /**
- * `overdue`: a JS end rule would have ended the drive by now (12 h; a walk standing 20 s with no fix
+ * `overdue`: a JS end rule would have ended the drive by now (12 h; a walk standing 5 s with no fix
  * over 3 mph in the last minute; 5 min without movement, holds excluded). `due`: the same plus the
  * slack, when native stops sensing on its own. The limit comes first, then walking, then still.
  * `waitUntil`: a Start-card drive still waiting for driving speed (JS ends it unsaved at that
@@ -426,7 +547,7 @@ export function endDue(
   const still = now - c.lastMoveTs - c.holdMs;
   const pick = (slack: number): SafetyCause | null => {
     if (age >= DETECT.MAX_DRIVE_MS + slack) return 'limit';
-    if (walked >= DETECT.WALK_CONFIRM_MS + slack) return 'walking';
+    if (walked >= DETECT.WALK_END_MS + slack) return 'walking';
     if (still >= DETECT.STILL_END_MS + slack && (waitUntil === null || now >= waitUntil + slack)) return 'still';
     return null;
   };

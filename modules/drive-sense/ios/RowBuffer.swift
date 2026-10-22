@@ -1,5 +1,5 @@
-// A candidate's rolling row buffer (plan §3.3): the last `CANDIDATE_BUFFER_MAX_ROWS` rows (10 min
-// at 1 Hz), oldest first, each with its `row` payload. At a confirmation the trace-back reads it and
+// A candidate's rolling row buffer (plan §3.3): the last `CANDIDATE_BUFFER_MAX_ROWS` rows (30 min
+// at 1 Hz, the longest candidate), oldest first, each with its `row` payload. At a confirmation the trace-back reads it and
 // the rows from the traced start become the drive's first journaled rows; rows before it (the
 // parked car's) are dropped. Main thread only.
 import Foundation

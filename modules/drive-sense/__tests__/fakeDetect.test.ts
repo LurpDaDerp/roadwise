@@ -132,6 +132,31 @@ describe('the fake detector', () => {
     await expect(d.extendWaiting()).resolves.toBeNull();
   });
 
+  test('appForeground: an app wake opens an auto candidate only with fresh car motion, ignoring nothing else; a no-op without the module', async () => {
+    const d = createFakeDriveDetect();
+    const states: string[] = [];
+    d.addListener('detectState', (e) => states.push(`${e.reason}:${e.state}`));
+    await d.appForeground();
+    expect((await d.getState()).state).toBe('off');
+    await d.setArmed(true, OWNER);
+    await d.appForeground();
+    expect((await d.getState()).state).toBe('armed');
+    d.setCarMotion(true);
+    await d.appForeground();
+    expect((await d.getState()).state).toBe('candidate');
+    expect(states).toEqual(['armed:armed', 'wake:app:candidate']);
+    // watching already: nothing more
+    await d.appForeground();
+    expect(states).toHaveLength(2);
+    d.confirm();
+    await d.appForeground();
+    expect((await d.getState()).state).toBe('recording');
+    expect(d.calls.filter((c) => c === 'appForeground')).toHaveLength(5);
+    const off = createFakeDriveDetect({ available: false });
+    off.setCarMotion(true);
+    await expect(off.appForeground()).resolves.toBeUndefined();
+  });
+
   test('requestAlways answers once from While Using; an unavailable fake rejects everything', async () => {
     const d = createFakeDriveDetect({ permissions: { location: 'whenInUse', canAskAlways: true } });
     d.setAlwaysAnswer('always');

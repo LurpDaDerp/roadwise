@@ -1,7 +1,7 @@
 // The `DriveDetect` contract (plan §3.1.1): the iOS drive detector's bridge, a second Expo module in
 // the drive-sense pod (`ios/DriveDetectModule.swift`). Android, Jest, Expo Go and web have no such
-// module: `DriveDetect.available` is false there and every method but `wipe` rejects (a wipe
-// resolves). The shared `DriveSense` contract (`../types.ts`) is unchanged by it apart from the
+// module: `DriveDetect.available` is false there and every method but `wipe` and `appForeground` rejects
+// (they resolve). The shared `DriveSense` contract (`../types.ts`) is unchanged by it apart from the
 // bridge-only `seq` on rows.
 import type { DetectMissing, DetectPhase, DetectStatus, StartSource } from './policy';
 
@@ -23,6 +23,7 @@ export const DRIVE_DETECT_METHODS = [
   'readRows',
   'discardDrive',
   'wipe',
+  'appForeground',
 ] as const;
 
 /** `discardDrive` on the live drive. Every other method never rejects. */
@@ -109,10 +110,13 @@ export type DetectReason =
   | 'wake:slc'
   | 'wake:region'
   | 'wake:visit'
+  | 'wake:app'
+  | 'linger'
   | 'waiting'
   | 'extended'
   | 'confirmed'
   | 'timeout'
+  | 'cap'
   | 'waitTimeout'
   | 'cancelled'
   | 'walking'
@@ -130,10 +134,13 @@ export const DETECT_REASONS: readonly DetectReason[] = [
   'wake:slc',
   'wake:region',
   'wake:visit',
+  'wake:app',
+  'linger',
   'waiting',
   'extended',
   'confirmed',
   'timeout',
+  'cap',
   'waitTimeout',
   'cancelled',
   'walking',
@@ -175,9 +182,13 @@ export type DriveDetectEvents = {
 
 export type DriveDetectEvent = keyof DriveDetectEvents;
 
-/** `ok`: the drive opened at the tap (`driveId`, `startedAt`), waiting for driving speed until `waitUntil`. */
+/**
+ * `ok`: the drive opened at the tap (`driveId`, `startedAt`), waiting for driving speed until
+ * `waitUntil`. A native build from before the drive opened at the tap answers only `{ ok, waitUntil }`:
+ * then `driveId` and `startedAt` are null (`getState` has the drive, if one records).
+ */
 export type StartWaitingResult =
-  | { ok: true; waitUntil: number; driveId: string; startedAt: number }
+  | { ok: true; waitUntil: number; driveId: string | null; startedAt: number | null }
   | { ok: false; reason: 'permission' | 'busy' | 'unavailable' };
 
 export interface ReadRowsResult {
@@ -192,7 +203,7 @@ export interface DetectSubscription {
 }
 
 export interface DriveDetectApi {
-  /** False on Android, Jest, Expo Go and web: every method but `wipe` then rejects and every listener is inert. */
+  /** False on Android, Jest, Expo Go and web: every method but `wipe` and `appForeground` then rejects and every listener is inert. */
   readonly available: boolean;
   /** Arms (needs Always + Precise + Motion, else resolves status 'needs' and stays off) or disarms. Never rejects. */
   setArmed(armed: boolean, ownerId: string): Promise<DetectState>;
@@ -224,6 +235,14 @@ export interface DriveDetectApi {
    * files are gone. On Android, or with no native module, a no-op that resolves.
    */
   wipe(): Promise<void>;
+  /**
+   * RoadWise came to the front: an `app` wake (the native detector also takes one by itself on
+   * `didBecomeActive`). Like a significant-change wake it opens an auto candidate only with car
+   * motion in the last 2 min, the driver not on foot, but it ignores the rest after an empty
+   * candidate; nothing while disarmed, watching, recording or resting. On Android, or with no
+   * native module (or a native build without it), a no-op that resolves.
+   */
+  appForeground(): Promise<void>;
   /** A payload that fails validation is dropped (counted by `droppedDetectEvents`), never passed on. */
   addListener<E extends DriveDetectEvent>(event: E, fn: (p: DriveDetectEvents[E]) => void): DetectSubscription;
 }

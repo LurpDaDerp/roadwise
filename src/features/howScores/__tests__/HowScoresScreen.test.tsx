@@ -32,10 +32,20 @@ test('without automatic drives the page says to start each drive', async () => {
 
 test('the drive numbers come from the drive code', () => {
   expect(DRIVE_NUMBERS).toEqual({
-    autoTriggerMph: AUTO_TRIGGER.mph,
-    autoTriggerS: AUTO_TRIGGER.holdMs / 1000,
+    autoHolds: AUTO_TRIGGER.holds,
+    autoInstantMph: AUTO_TRIGGER.instantMph,
     waitMin: WAIT_TOTAL_MS / 60_000,
     notDrivingMin: NOT_DRIVING_BUDGET_MS / 60_000,
   });
-  expect(DRIVE_NUMBERS).toEqual({ autoTriggerMph: 20, autoTriggerS: 10, waitMin: 5, notDrivingMin: 2 });
+  expect(DRIVE_NUMBERS).toEqual({
+    autoHolds: [
+      { mph: 15, s: 30 },
+      { mph: 20, s: 15 },
+      { mph: 25, s: 10 },
+      { mph: 30, s: 5 },
+    ],
+    autoInstantMph: 35,
+    waitMin: 5,
+    notDrivingMin: 2,
+  });
 });

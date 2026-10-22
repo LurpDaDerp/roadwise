@@ -49,10 +49,10 @@ export interface RuleSection {
 
 /** The drive rules the rules quote that live outside the scoring package (the screen reads them from the drive code). */
 export interface DriveNumbers {
-  /** The speed that starts a drive on its own, mph. */
-  autoTriggerMph: number;
-  /** How long it has to hold, s. */
-  autoTriggerS: number;
+  /** How long each speed (mph) has to hold before a drive starts on its own (s), slowest first. */
+  autoHolds: readonly { readonly mph: number; readonly s: number }[];
+  /** From this speed (mph) a drive starts on its own right away. */
+  autoInstantMph: number;
   /** How long a Start drive waits for the car to move, min. */
   waitMin: number;
   /** How long "Not driving?" lasts on the drive screen, min. */
@@ -166,7 +166,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
         title: 'How drives start and end',
         icon: 'car-sport-outline',
         lines: [
-          `Once you’ve been moving at about ${n.autoTriggerMph} mph for ${n.autoTriggerS} s, RoadWise starts recording, counting from the moment you set off.`,
+          `Once you’re moving, RoadWise starts recording after about ${n.autoHolds.map((h, i) => `${h.s} s at ${h.mph}${i === 0 ? ' mph' : ''}`).join(', ')}, or right away from ${n.autoInstantMph} mph. Short stops in traffic don’t reset it, and the drive counts from the moment you set off.`,
           `It ends once you park and walk away, or after ${IDLE_MIN} min parked.`,
           `Stop for under ${MERGE_MIN} min and set off again from the same spot, and it stays one drive.`,
           `Riding along? Open the drive screen and tap “${ND}”. It shows once the car reaches driving speed, for your first ${n.notDrivingMin} minutes on that screen.`,

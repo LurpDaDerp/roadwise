@@ -15,8 +15,8 @@ import { HowItWorksList } from './HowItWorksList';
 
 /** The drive rules the page quotes, from the drive code itself. */
 export const DRIVE_NUMBERS: DriveNumbers = {
-  autoTriggerMph: AUTO_TRIGGER.mph,
-  autoTriggerS: AUTO_TRIGGER.holdMs / 1000,
+  autoHolds: AUTO_TRIGGER.holds,
+  autoInstantMph: AUTO_TRIGGER.instantMph,
   waitMin: WAIT_TOTAL_MS / 60_000,
   notDrivingMin: NOT_DRIVING_BUDGET_MS / 60_000,
 };
