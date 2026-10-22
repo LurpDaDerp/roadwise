@@ -410,6 +410,24 @@ describe('the driving screen contract', () => {
     expect(h.engine.snapshot()).toMatchObject({ speedingRatio: null, speedingOver: false, lastShake: null });
   });
 
+  test('the sign shows the limit on a fix up to 30 m (display only: past 20 m nothing is judged); past 30 m it holds the last one for 10 s', async () => {
+    const h = harness();
+    await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
+    // The first row is already a poor fix (31 m): nothing to show or hold.
+    await feed(h, seq([1, { speed: mph(50), hAcc: 31, ts: T0 + 31_000 }]));
+    expect(h.engine.snapshot()).toMatchObject({ limitMph: null, speedingRatio: null });
+    // 25 m: shown, never judged.
+    await feed(h, seq([1, { speed: mph(50), hAcc: 25, ts: T0 + 32_000 }]));
+    expect(h.engine.snapshot()).toMatchObject({ limitMph: 35, speedingRatio: null, speedingOver: false });
+    await feed(h, seq([1, { speed: mph(50), hAcc: 30, ts: T0 + 33_000 }]));
+    expect(h.engine.snapshot().limitMph).toBe(35);
+    // 40 m: held for 10 s after the last shown row, then "-".
+    await feed(h, seq([1, { speed: mph(50), hAcc: 40, ts: T0 + 43_000 }]));
+    expect(h.engine.snapshot().limitMph).toBe(35);
+    await feed(h, seq([1, { speed: mph(50), hAcc: 40, ts: T0 + 44_000 }]));
+    expect(h.engine.snapshot().limitMph).toBeNull();
+  });
+
   test('a class default is shown on the sign but never tints: no ratio', async () => {
     const h = harness({ limits: { lookup: () => limit(mph(35), 'statutory'), prefetch: () => {} } });
     await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });

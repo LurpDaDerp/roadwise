@@ -124,9 +124,19 @@ export function limitMphFor(row: FeatureRow, limit: LimitSample): number | null 
   return wholeMph(limit);
 }
 
-/** The limit in whole mph the sign prints for the row, or null for "—": `limitMphFor` plus defaults. */
+/**
+ * The sign's own GPS gate (m), display only: a valid fix this accurate or better prints the lookup's
+ * limit. Looser than `MAX_H_ACC_M` (20 m), which still gates every detector and score, because
+ * downtown fixes often sit at 20 to 30 m and the sign went blank there.
+ */
+export const SIGN_MAX_H_ACC_M = 30;
+
+/**
+ * The limit in whole mph the sign prints for the row, or null for "—": every limit `limitMphFor`
+ * judges by, plus confident defaults, on a valid fix within `SIGN_MAX_H_ACC_M` (display only).
+ */
 export function limitShownMph(row: FeatureRow, limit: LimitSample): number | null {
-  if (gnssPoor(row) || !limitShown(limit)) return null;
+  if (!row.gnssValid || !(row.hAcc <= SIGN_MAX_H_ACC_M) || !limitShown(limit)) return null;
   return wholeMph(limit);
 }
 

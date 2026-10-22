@@ -177,12 +177,17 @@ describe('limit sign ⇔ speeding is recorded, over the matcher’s real outputs
     if (signShown && !judged) expect(sample.source).toBe('statutory');
   });
 
-  test('a poor fix shows "—" even on a confident limit', () => {
+  test('a fix worse than 20 m is never judged; the sign shows its limit up to 30 m, "—" past that', () => {
     expect(limitMphFor(row({ hAcc: 30 }), osmNear)).toBeNull();
     expect(limitMphFor(row({ gnssValid: false }), osmNear)).toBeNull();
     expect(limitMphFor(row({ hAcc: 5 }), osmNear)).toBe(35);
     const statutory = matched(cand('osm', 'osm:1', null, 5, 'residential'));
-    expect(limitShownMph(row({ hAcc: 30 }), statutory)).toBeNull();
+    // The sign's own gate is looser (display only): up to 30 m it prints, past that "—".
+    expect(limitShownMph(row({ hAcc: 30 }), statutory)).toBe(25);
+    expect(limitShownMph(row({ hAcc: 25 }), osmNear)).toBe(35);
+    expect(limitMphFor(row({ hAcc: 25 }), osmNear)).toBeNull();
+    expect(limitShownMph(row({ hAcc: 31 }), statutory)).toBeNull();
+    expect(limitShownMph(row({ gnssValid: false }), statutory)).toBeNull();
     expect(limitShownMph(row({ hAcc: 5 }), statutory)).toBe(25);
     expect(limitMphFor(row({ hAcc: 5 }), statutory)).toBeNull();
   });

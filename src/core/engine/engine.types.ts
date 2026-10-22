@@ -242,8 +242,9 @@ export interface EngineSnapshot {
   /**
    * The limit the sign shows, whole mph: a posted limit or, on a road with none, its class default
    * (`limit.source` says `statutory`; shown, never scored); a row with none (unknown, low-confidence
-   * or hAcc > 20 m) keeps the last one for up to 10 s (`displayLimit.ts`), then null → "-". Display
-   * only: the detectors judge each row against its own `limit` (`limitMphFor`).
+   * or hAcc > 30 m, `SIGN_MAX_H_ACC_M`) keeps the last one for up to 10 s (`displayLimit.ts`), then
+   * null → "-". Display only: the detectors judge each row against its own `limit` (`limitMphFor`,
+   * which also refuses a fix worse than 20 m).
    */
   limitMph: number | null;
   /** The speeding tier of the current row's episode, for the driving screen's halo. */
