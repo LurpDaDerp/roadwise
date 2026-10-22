@@ -32,6 +32,9 @@ import { NOT_DRIVING_BUDGET_MS, NOT_DRIVING_KEY, readBudget } from '@/drive/notD
 import type { Scheduler } from '@/drive/ticks';
 import { WAIT_COUNTDOWN_MS, WAIT_POPUP_MS, WAIT_TOTAL_MS } from '@/drive/waiting';
 import type { DangerAlert } from '@/features/weather/danger';
+import { attachSummaryNotifier, type SummaryNotificationPort, type SummaryRequest } from '@/features/drive/summaryNotifier';
+
+jest.mock('expo-notifications', () => ({}));
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const M_PER_DEG_LNG = 111_194.93 * Math.cos((START.lat * Math.PI) / 180);
@@ -2030,5 +2033,72 @@ describe('the speed and limit pipeline beside the rows (plan decision 6)', () =>
     await d.host.start();
     await d.host.cancelWaiting();
     expect(d.host.snapshot().lastFinalized).toMatchObject({ ok: true, dropped: expect.any(String), endedAt: null });
+  });
+});
+
+describe('the recap notification with the real host (plan decision 3)', () => {
+  function recapPort() {
+    const scheduled: SummaryRequest[] = [];
+    const port: SummaryNotificationPort = {
+      permissionGranted: async () => true,
+      schedule: async (r) => void scheduled.push(r),
+      scheduled: async () => scheduled.map((r) => r.identifier),
+      cancel: async () => {},
+    };
+    return { port, scheduled };
+  }
+
+  /** A first process: native records and ends a drive (60 s moving, then parked), with no JS. */
+  function endedWithoutJs(id: string): I {
+    const pre = buildIos();
+    void pre.detect.setArmed(true, 'user-1');
+    pre.detect.wake();
+    const moving = rows(60, { speedMps: 15 });
+    const parked = rows(30, { t0: T0 + 60_000, speedMps: 0 }).map((r) => ({ ...r, lng: moving.at(-1)!.lng }));
+    clock = T0 + 91_000;
+    pre.detect.confirm({ driveId: id, startedAt: T0, rows: journalRows([...moving, ...parked]) });
+    pre.detect.endFor('still', clock);
+    return pre;
+  }
+
+  test('attached before the boot, a drive native ended while no process ran posts its recap when it ended within 2 h; one stored hours later does not', async () => {
+    for (const [launchAt, posts] of [
+      [T0 + 10 * 60_000, true],
+      [T0 + 3 * 60 * 60_000, false],
+    ] as const) {
+      const id = uuid(posts ? 95 : 96);
+      const pre = endedWithoutJs(id);
+      clock = launchAt;
+      const h = buildIos({ detect: pre.detect as DriveDetectApi, source: pre.source }, { appState: 'background' });
+      const { port, scheduled } = recapPort();
+      const n = attachSummaryNotifier(h.host, { port, appState: h.appState, now: () => clock });
+      await h.host.boot();
+      await h.host.settled();
+      await n.settled();
+      expect(await createTripsRepo(db).get(id)).toMatchObject({ status: 'pending', ended_at: T0 + 60_000 });
+      expect(scheduled.map((r) => r.url)).toEqual(posts ? [`/drives/${id}?fresh=1`] : []);
+      n.detach();
+      await h.host.stop({ endOpenTrip: false });
+    }
+  });
+
+  test('an automatic drive that native ends with RoadWise behind posts its recap, which opens the fresh recap', async () => {
+    const h = buildIos({}, { appState: 'background' });
+    const { port, scheduled } = recapPort();
+    const n = attachSummaryNotifier(h.host, { port, appState: h.appState, now: () => clock });
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    const parkedLng = START.lng + (59 * 15) / M_PER_DEG_LNG;
+    await confirm(h, [...rows(60, { speedMps: 15 }), ...rows(30, { t0: T0 + 60_000, speedMps: 0 }).map((r) => ({ ...r, lng: parkedLng }))]);
+    expect(scheduled).toEqual([]);
+    clock = T0 + 95_000;
+    h.detect.endFor('walking', T0 + 95_000);
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.untilIdle();
+    await n.settled();
+    expect(scheduled).toEqual([expect.objectContaining({ identifier: `drive-summary:${NATIVE}`, url: `/drives/${NATIVE}?fresh=1`, title: 'Your drive recap is ready' })]);
+    n.detach();
+    await h.host.stop({ endOpenTrip: false });
   });
 });
