@@ -160,7 +160,50 @@ function panelUnder(row: Rect, below: Rect): Rect {
 
 const num = (v: number, d = 0): number => (Number.isFinite(v) ? v : d);
 
+/**
+ * A coordinate on the whole-point grid. The nudge settles values a float hair under .5 the same way
+ * as .5 itself, so two edges that meet before snapping still meet after.
+ */
+const snapPt = (v: number): number => Math.round(v + 1e-7);
+
+/**
+ * A rect on whole points: each edge snapped on its own (rounding keeps every edge's order, so
+ * nothing that was apart, inside or level is moved into another thing), a whole-point size kept as
+ * it is (the halo stays square). React Native 0.86's text drawing on iOS can lose a line, or shrink
+ * it to 4 pt, on a frame a hair off the pixel grid (RN #52642); whole-point rects keep every frame
+ * on the screen exact.
+ */
+export function snapRect<R extends Rect>(r: R): R {
+  const x = snapPt(r.x);
+  const y = snapPt(r.y);
+  const w = Number.isInteger(r.w) ? r.w : Math.max(0, snapPt(r.x + r.w) - x);
+  const h = Number.isInteger(r.h) ? r.h : Math.max(0, snapPt(r.y + r.h) - y);
+  return { ...r, x, y, w, h };
+}
+
+/** The layout with every rect on whole points (`snapRect`). */
+function snapLayout(l: HudLayout): HudLayout {
+  return {
+    ...l,
+    band: snapRect(l.band),
+    line: snapRect(l.line),
+    chip: l.chip === null ? null : snapRect(l.chip),
+    halo: snapRect(l.halo),
+    notDriving: l.notDriving === 'line' ? 'line' : snapRect(l.notDriving),
+    row: snapRect(l.row),
+    sign: snapRect(l.sign),
+    nav: snapRect(l.nav),
+    end: snapRect(l.end),
+    panel: snapRect(l.panel),
+  };
+}
+
+/** Where everything on the driving screen goes, every rect on whole points. */
 export function hudLayout(i: HudLayoutInput): HudLayout {
+  return snapLayout(layoutRects(i));
+}
+
+function layoutRects(i: HudLayoutInput): HudLayout {
   const width = Math.max(0, num(i.width));
   const height = Math.max(0, num(i.height));
   const ins = { top: num(i.insets.top), bottom: num(i.insets.bottom), left: num(i.insets.left), right: num(i.insets.right) };

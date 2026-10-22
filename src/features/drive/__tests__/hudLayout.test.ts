@@ -1,8 +1,9 @@
 // The driving screen's layout (drive-screen design §3, §5.12): worked phones, End always inside the
 // window, nothing overlapping, the numerals large enough.
 import { compassGeometry, DIGIT_ADVANCE_EM, DIGIT_HEIGHT_EM, haloGeometry, numeralLineHeight, signMetrics, SPEED_UNIT_GAP_PT, unitLineHeight, unitTop } from '@/ui/drive';
+import { numeralBoxWidth, numeralWidthEm } from '@/ui/drive/SpeedReadout';
 
-import { HUD_COMPACT_NAV_H_PT, HUD_NAV_H_PT, HUD_NAV_W_PT, HUD_NOT_DRIVING_PT, hudLayout, type HudLayout, type HudLayoutInput, type Rect } from '../hudLayout';
+import { HUD_COMPACT_NAV_H_PT, HUD_NAV_H_PT, HUD_NAV_W_PT, HUD_NOT_DRIVING_PT, hudLayout, snapRect, type HudLayout, type HudLayoutInput, type Rect } from '../hudLayout';
 
 const ZERO = { top: 0, bottom: 0, left: 0, right: 0 };
 const L = (o: Partial<HudLayoutInput> & { width: number; height: number }): HudLayout => hudLayout({ insets: ZERO, fontScale: 1, chip: false, units: 'mi', ...o });
@@ -67,10 +68,12 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(max.numeralPt2).toBe(168);
   });
 
-  test('a narrow window (280 wide): the side slots are a third of the row; the navigation circle still fits', () => {
+  test('a narrow window (280 wide): the side slots are a third of the row (on whole points); the navigation circle still fits', () => {
     const l = L({ width: 280, height: 600 });
     expect(l.end.w).toBe(248);
-    expect(l.nav.w).toBeCloseTo(248 / 3, 6);
+    // 248 / 3 = 82.67 from the row's right edge (264): its left edge snaps to 181
+    expect(l.nav).toMatchObject({ x: 181, w: 83 });
+    expect(l.nav.x + l.nav.w).toBe(l.row.x + l.row.w);
     expect(l.sign.w).toBeLessThanOrEqual(248 / 3);
   });
 
@@ -96,8 +99,9 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l).toMatchObject({ orientation: 'landscape', compact: false });
     expect(l.halo).toMatchObject({ x: 128, y: 12, w: 347, h: 347, ring: true });
     const mid = l.halo.y + l.halo.h / 2;
-    // the sign in the left column, level with the halo's centre
-    expect(l.sign).toEqual({ x: 16, y: mid - 60, w: 96, h: 120 });
+    // the sign in the left column, level with the halo's centre (185.5: its top snaps from 125.5 to 126)
+    expect(mid).toBe(185.5);
+    expect(l.sign).toEqual({ x: 16, y: 126, w: 96, h: 120 });
     // the right column, top to bottom: the band, the navigation button, End (160 wide)
     expect(l.band).toEqual({ x: 491, y: 12, w: 160, h: 56 });
     expect(l.nav).toEqual({ x: 523, y: 167, w: 96, h: 104 });
@@ -182,19 +186,60 @@ describe('invariants across windows', () => {
     }
   });
 
-  test('the sign’s print always fits inside it with the number at full size (two digits in miles, three in km/h): every window, both orientations, any insets and font scale (user report: the sign looked empty on the driving screen)', () => {
-    // The sign's face (Barlow Semi Condensed ExtraBold): its widest digit, "4", is 0.566 em.
-    const DIGIT_EM = 0.566;
+  test('the sign’s print always fits inside it, two digits and "-" at full size in both units, three in km/h shrunk only to clear the ring: every window, both orientations, any insets and font scale (user report: the sign looked empty on the driving screen)', () => {
     for (const c of cases)
       for (const fontScale of [1, 2, 3])
         for (const units of ['mi', 'km'] as const) {
           const l = L({ width: c.w, height: c.h, insets: c.ins, chip: c.chip, units, fontScale });
-          const m = signMetrics(units, l.sign.h);
           const at = `${units} ${c.w}x${c.h} x${fontScale}: sign ${l.sign.w}x${l.sign.h}`;
-          if (l.sign.h < 64 || m.contentH > m.room) throw new Error(`the print overflows the sign (${m.contentH} > ${m.room}) at ${at}`);
-          if ((units === 'km' ? 3 : 2) * DIGIT_EM * m.numeralPt > m.textW) throw new Error(`the number shrinks at ${at}`);
-          expect(m.numeralPt).toBeGreaterThanOrEqual(30);
+          // the sign tests' invariants cover every height from 64 to 144
+          if (l.sign.h < 64 || l.sign.h > 144) throw new Error(`a sign outside 64 to 144 pt at ${at}`);
+          for (const v of ['88', '-', units === 'km' ? '888' : '88']) {
+            const m = signMetrics(units, l.sign.h, v);
+            expect([m.width, m.height]).toEqual([l.sign.w, l.sign.h]);
+            if (numeralWidthEm(v) * m.numeralPt > m.textW) throw new Error(`"${v}" overflows at ${at}`);
+            if (v.length <= 2 && m.numeralPt !== m.numeralFullPt) throw new Error(`"${v}" shrinks at ${at}`);
+            if (m.numeralPt < (v.length <= 2 ? 30 : 0.85 * m.numeralFullPt)) throw new Error(`"${v}" at ${m.numeralPt} pt is too small at ${at}`);
+          }
         }
+  });
+
+  test('every rect is on whole points (and every numeral size whole): every window, both orientations, any insets and font scale, fractional insets too', () => {
+    const extra = [
+      { w: 393, h: 852, ins: { top: 59.33, bottom: 34.5, left: 0, right: 0 } },
+      { w: 852, h: 393, ins: { top: 0, bottom: 20.67, left: 59.5, right: 59.5 } },
+      { w: 412.5, h: 300.25, ins: ZERO },
+    ];
+    for (const c of [...cases, ...extra.map((e) => ({ ...e, chip: true, units: 'mi' as const }))])
+      for (const fontScale of [1, 1.18, 1.6, 2]) {
+        const l = L({ width: c.w, height: c.h, insets: c.ins, chip: c.chip, units: c.units, fontScale });
+        const rects: [string, Rect][] = [
+          ['band', l.band],
+          ['line', l.line],
+          ['halo', l.halo],
+          ['row', l.row],
+          ['sign', l.sign],
+          ['nav', l.nav],
+          ['end', l.end],
+          ['panel', l.panel],
+        ];
+        if (l.chip) rects.push(['chip', l.chip]);
+        if (l.notDriving !== 'line') rects.push(['notDriving', l.notDriving]);
+        for (const [name, r] of rects)
+          for (const v of [r.x, r.y, r.w, r.h]) if (!Number.isInteger(v)) throw new Error(`${name} ${JSON.stringify(r)} at ${c.w}x${c.h} ${JSON.stringify(c.ins)} x${fontScale}`);
+        if (l.halo.ring) expect(l.halo.w).toBe(l.halo.h);
+        for (const pt of [l.numeralPt2, l.numeralPt3]) expect(Number.isInteger(pt)).toBe(true);
+        // the speed readout's own boxes for those sizes are whole too
+        for (const [s, pt] of [
+          ['8', l.numeralPt2],
+          ['88', l.numeralPt2],
+          ['-', l.numeralPt2],
+          ['188', l.numeralPt3],
+        ] as const) {
+          expect(Number.isInteger(numeralBoxWidth(s, pt))).toBe(true);
+          expect(Number.isInteger(numeralLineHeight(pt))).toBe(true);
+        }
+      }
   });
 
   test('nothing overlaps: band items, the link, sign, End and navigation never meet each other or the halo ring', () => {
@@ -395,5 +440,30 @@ describe('compact windows (§3.3)', () => {
   test('a nonsense window (0 × 0, NaN) never throws', () => {
     expect(() => L({ width: 0, height: 0 })).not.toThrow();
     expect(() => L({ width: Number.NaN, height: 500 })).not.toThrow();
+  });
+});
+
+describe('snapRect', () => {
+  test('a whole-point size is kept and the corner rounded (the halo stays square); a fractional size snaps both edges', () => {
+    expect(snapRect({ x: 16.5, y: 262.5, w: 361, h: 361, ring: true })).toEqual({ x: 17, y: 263, w: 361, h: 361, ring: true });
+    expect(snapRect({ x: 181.33333333333334, y: 12, w: 82.66666666666667, h: 104 })).toEqual({ x: 181, y: 12, w: 83, h: 104 });
+    expect(snapRect({ x: 0.2, y: 0.4, w: 0.2, h: 0.05 })).toEqual({ x: 0, y: 0, w: 0, h: 0 });
+  });
+
+  test('edges that touch, sit apart or nest before snapping still do after (rounding keeps their order)', () => {
+    const at = [0, 0.25, 0.5, 0.75, 1 / 3, 2 / 3, 0.4999999999999, 0.5000000001];
+    for (const a of at)
+      for (const b of at)
+        for (const w of [10, 10.5, 82.66666666666667]) {
+          const left = { x: 100 + a, y: 50 + b, w, h: w };
+          // a rect starting where `left` ends, and one 12 pt further on
+          const touching = { x: left.x + w, y: left.y + w, w: 7, h: 7 };
+          const apart = { x: left.x + w + 12, y: left.y + w + 12, w: 7, h: 7 };
+          const [l, t, p] = [snapRect(left), snapRect(touching), snapRect(apart)];
+          expect(l.x + l.w).toBe(t.x);
+          expect(l.y + l.h).toBe(t.y);
+          expect(p.x - (l.x + l.w)).toBe(12);
+          expect(p.y - (l.y + l.h)).toBe(12);
+        }
   });
 });
