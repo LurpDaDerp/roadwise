@@ -120,13 +120,14 @@ describe('RadarCard', () => {
     expect(onOpen).toHaveBeenLastCalledWith('attention');
   });
 
-  test('without a DashPal, Attention is locked: a greyed chip with a lock, no point on the shape, and it still opens', async () => {
+  test('without a DashPal, Attention is locked: a greyed chip with a lock, a greyed dot on the zero ring, and it still opens', async () => {
     const onOpen = jest.fn();
     await draw(<RadarCard dashpalPaired={false} rating={80} scores={SCORES} onOpen={onOpen} />);
     expect(screen.getByTestId('radar-lock-attention')).toBeOnTheScreen();
     expect(screen.queryByTestId('radar-lock-speed')).toBeNull();
-    expect(screen.queryByTestId('radar-dot-attention', { includeHiddenElements: true })).toBeNull();
-    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(5);
+    expect(screen.getByTestId('radar-dot-attention', { includeHiddenElements: true })).toBeOnTheScreen();
+    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(6);
+    expect(shapePoints()).toBe(6);
     expect(
       screen.getByLabelText('Safety Rating 80 out of 100. Acceleration 95, Braking 72, Turning 100, Attention needs DashPal, Phone use 84, Speed 88.')
     ).toBeOnTheScreen();
@@ -136,12 +137,12 @@ describe('RadarCard', () => {
     expect(radarPolygon([100, 100, 100, 100, 100], 100, { x: 150, y: 150 }, [3]).split(' ')).toHaveLength(4);
   });
 
-  test('Phone use with no score yet has no point on the shape: its neighbours join across it, and it still opens', async () => {
+  test('Phone use with no score yet keeps its vertex on the shape, greyed out, and it still opens', async () => {
     const onOpen = jest.fn();
     await draw(<RadarCard dashpalPaired rating={80} scores={{ ...SCORES, phone: null }} onOpen={onOpen} />);
-    expect(screen.queryByTestId('radar-dot-phone', { includeHiddenElements: true })).toBeNull();
-    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(5);
-    expect(shapePoints()).toBe(5);
+    expect(screen.getByTestId('radar-dot-phone', { includeHiddenElements: true })).toBeOnTheScreen();
+    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(6);
+    expect(shapePoints()).toBe(6);
     expect(screen.getByLabelText(/Phone use no data, Speed 88\.$/)).toBeOnTheScreen();
     await press(screen.getByRole('button', { name: 'Phone use, no score yet' }));
     expect(onOpen).toHaveBeenLastCalledWith('phone');
@@ -190,8 +191,9 @@ describe('RadarCard', () => {
     expect(screen.getByTestId('radar-rating')).toHaveTextContent('—');
     expect(screen.queryByTestId('radar-out-of')).toBeNull();
     expect(screen.getAllByText('—')).toHaveLength(1);
-    // no dots pile up under the dash for axes with no score
-    expect(screen.queryAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(0);
+    // every axis keeps a (greyed-out) dot on the zero ring: a perfect small hexagon
+    expect(screen.getAllByTestId(/^radar-dot-/, { includeHiddenElements: true })).toHaveLength(6);
+    expect(shapePoints()).toBe(6);
     expect(radarLabel(null, NO_SCORES)).toBe(
       'Safety Rating, no score yet. Acceleration no data, Braking no data, Turning no data, Attention no data, Phone use no data, Speed no data.'
     );

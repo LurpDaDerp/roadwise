@@ -1,12 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { type GestureResponderEvent, Pressable, useWindowDimensions, View } from 'react-native';
-import Svg, { Circle, Line, Polygon } from 'react-native-svg';
+import Svg, { Circle, Defs, Line, LinearGradient, Polygon, Stop } from 'react-native-svg';
 
 import { Card, Sheet, Text, tokens, useFontScale, useTheme, withAlpha } from '@/ui';
 
 import { analyticsCopy } from './copy';
-import { AXES, DASHPAL_AXIS, PHONE_AXIS, type AxisKey, type AxisScores } from './model';
+import { AXES, DASHPAL_AXIS, type AxisKey, type AxisScores } from './model';
 import { sizeAt } from './textSize';
 
 const HOW = analyticsCopy.radar.how;
@@ -162,11 +162,13 @@ export function radarLabel(rating: number | null, scores: AxisScores, locked: re
  * one filled polygon, and the Safety Rating in the middle. All of it in the page ink (no colour
  * coding), with each axis's name around the outside on a faint chip: a button that opens that
  * category's details, whether or not it has a score yet. A tap on the chart itself opens the
- * category whose spoke it is nearest. Without a paired DashPal, Attention is locked: its chip is
- * greyed with a lock, its spoke faint, it has no point on the shape, and its sheet says how to get
- * it. Phone use with no score yet (no drive watched for pickups) has no point on the shape either,
- * so a category nobody has measured never pulls it in. Under the chart, "Last 90 days" and a "How
- * it works" button that opens a sheet saying what makes the total.
+ * category whose spoke it is nearest. Every axis always has a vertex, so the shape is always a
+ * hexagon. An axis with no score (Attention without a paired DashPal, which is locked: its chip is
+ * greyed with a lock, its spoke faint, and its sheet says how to get it; Phone use before any drive
+ * was watched for pickups; any axis with no score yet) sits at the zero ring, where a score of 0
+ * would, as a greyed-out dot, and the two edges leading into it fade from the ink to that grey as
+ * they approach it, so it reads as not counting. Under the chart, "Last 90 days" and a "How it
+ * works" button that opens a sheet saying what makes the total.
  */
 export function RadarCard({
   rating,
@@ -189,8 +191,10 @@ export function RadarCard({
   const locked: AxisKey[] = dashpalPaired ? [] : [DASHPAL_AXIS];
   const isLocked = (key: AxisKey) => locked.includes(key);
   const values = AXES.map((a) => (isLocked(a.key) ? null : scores[a.key]));
-  // A locked axis, and Phone use before any drive was watched for it, are left out of the shape.
-  const skip = AXES.flatMap((a, i) => (isLocked(a.key) || (a.key === PHONE_AXIS && scores[a.key] === null) ? [i] : []));
+  // An axis with no score (locked, or nothing measured yet) still has its vertex, on the zero ring, but is greyed out.
+  const na = values.map((s) => s === null);
+  const vertices = values.map((s, i) => radarPoint(i, n, radiusFor(s, r), c));
+  const grey = t.colors.textSubtle;
   const ring = (k: number) =>
     Array.from({ length: n }, (_, i) => radarPoint(i, n, radiusFor(k * 100, r), c))
       .map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)
@@ -238,20 +242,42 @@ export function RadarCard({
                   />
                 );
               })}
-              <Polygon
-                testID="radar-shape"
-                points={radarPolygon(values, r, c, skip)}
-                fill={withAlpha(t.colors.text, 0.12)}
-                stroke={t.colors.text}
-                strokeWidth={2}
-                strokeLinejoin="round"
-              />
-              {/* No dot for an axis with no score: the shape meets the zero ring there, unmarked. */}
-              {values.map((s, i) => {
-                if (s === null) return null;
-                const p = radarPoint(i, n, radiusFor(s, r), c);
-                return <Circle key={AXES[i]!.key} cx={p.x} cy={p.y} r={3} fill={t.colors.text} testID={`radar-dot-${AXES[i]!.key}`} />;
+              <Defs>
+                {vertices.map((p, i) => {
+                  const j = (i + 1) % n;
+                  // Only an edge with exactly one greyed end fades; the fade runs from the scored vertex to the greyed one.
+                  if (na[i] === na[j]) return null;
+                  const from = na[i] ? vertices[j]! : p;
+                  const to = na[i] ? p : vertices[j]!;
+                  return (
+                    <LinearGradient key={i} id={`radar-edge-${i}`} gradientUnits="userSpaceOnUse" x1={from.x} y1={from.y} x2={to.x} y2={to.y}>
+                      <Stop offset={0} stopColor={t.colors.text} />
+                      <Stop offset={1} stopColor={grey} />
+                    </LinearGradient>
+                  );
+                })}
+              </Defs>
+              <Polygon testID="radar-shape" points={vertices.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')} fill={withAlpha(t.colors.text, 0.12)} />
+              {vertices.map((p, i) => {
+                const j = (i + 1) % n;
+                const q = vertices[j]!;
+                const stroke = na[i] && na[j] ? grey : na[i] || na[j] ? `url(#radar-edge-${i})` : t.colors.text;
+                return (
+                  <Line key={AXES[i]!.key} testID={`radar-edge-${i}`} x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={stroke} strokeWidth={2} strokeLinecap="round" />
+                );
               })}
+              {/* A greyed-out dot for an axis with no score, at the zero ring: it does not count. */}
+              {vertices.map((p, i) => (
+                <Circle
+                  key={AXES[i]!.key}
+                  cx={p.x}
+                  cy={p.y}
+                  r={3}
+                  fill={na[i] ? grey : t.colors.text}
+                  opacity={na[i] ? 0.8 : 1}
+                  testID={`radar-dot-${AXES[i]!.key}`}
+                />
+              ))}
             </Svg>
           </View>
           <View
