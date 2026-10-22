@@ -24,6 +24,20 @@ export {
   type LiveActivityTokenPort,
   type PushPort,
 } from './pushToken';
-export { LIVE_ACTIVITY_START_FUNCTION, LIVE_ACTIVITY_START_TIMEOUT_MS, requestLiveActivityStart, type LiveActivityStartDeps, type LiveActivityStartRequest } from './liveActivity';
+export {
+  createLiveActivityStarter,
+  createPushToStart,
+  LIVE_ACTIVITY_START_FUNCTION,
+  LIVE_ACTIVITY_START_TIMEOUT_MS,
+  requestLiveActivityStart,
+  requestLiveActivityStartOutcome,
+  STARTER_MEMORY,
+  type LiveActivityStartDeps,
+  type LiveActivityStarter,
+  type LiveActivityStartOutcome,
+  type LiveActivityStartReason,
+  type LiveActivityStartRequest,
+  type PushToStartDeps,
+} from './liveActivity';
 export { onDeviceSyncRequested, requestDeviceSync } from './events';
 export { DeviceHost, type DeviceHostDeps, type DeviceHostProps } from './DeviceHost';
