@@ -77,7 +77,7 @@ extension DriveDetector {
     confirming = false
     lingering = false
     lastVehicleTs = nil
-    let build =Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
     let startLine: [String: Any] = [
       "k": "start", "v": 1, "driveId": driveId, "origin": kind,
       "startedAt": DetectStateRecord.ms(start.startedAt), "startSource": start.startSource,

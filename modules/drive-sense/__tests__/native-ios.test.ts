@@ -97,6 +97,20 @@ describe('iOS drive-sense module (text)', () => {
     expect(code('DriveDetectAppDelegate.swift')).toMatch(/public class DriveDetectAppDelegate: ExpoAppDelegateSubscriber \{/);
   });
 
+  it('writes every assignment `=` with the same whitespace on both sides (Swift refuses `a =b`)', () => {
+    for (const f of swiftFiles) {
+      const lines = code(f).split('\n');
+      lines.forEach((raw, i) => {
+        const line = raw.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+        for (const m of line.matchAll(/(?<![=!<>+\-*/%&|^?~])=(?!=)/g)) {
+          const before = line[m.index! - 1] ?? ' ';
+          const after = line[m.index! + 1] ?? ' ';
+          expect({ f, line: i + 1, balanced: /\s/.test(before) === /\s/.test(after) }).toEqual({ f, line: i + 1, balanced: true });
+        }
+      });
+    }
+  });
+
   it('keeps every Swift file under 300 lines', () => {
     for (const f of swiftFiles) {
       expect({ file: f, lines: read(f).split('\n').length < 300 }).toEqual({ file: f, lines: true });
