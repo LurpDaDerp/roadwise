@@ -924,7 +924,7 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   Activity ended (`roadwise.driveDisplay` `ended`), the note removed, `lastEnd` and the parked region
   at the last trusted fix, `armed` again. After an automatic end (native's 5 min still or walk, or a
   JS end that a JS rule would have made by then), unless it was a Start-card drive still waiting, an
-  auto candidate opens at once (`linger`: no hourly cap entry, no rest, no parked spot): a quick
+  auto candidate opens at once (`linger`: 3 min from the end, 5 once it holds evidence, whatever it sees; no hourly cap entry, no rest, no parked spot): a quick
   restart confirms near where the drive ended, and `continues` lets JS re-open the held drive.
   The walk is read as JS reads it: a confident walking or running report stands until a report of
   another kind replaces it; one at low confidence leaves a standing walk alone.

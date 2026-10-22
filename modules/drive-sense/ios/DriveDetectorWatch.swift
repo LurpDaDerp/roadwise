@@ -109,13 +109,15 @@ extension DriveDetector {
   }
 
   /// The candidate's clock (every 5 s): a standing automotive report is a vehicle sign now; then the
-  /// policy's deadline. Rest only after one that saw no vehicle, or at the cap; never after the linger.
+  /// policy's deadline. The linger is for a quick restart: it watches 3 min from the end (5 once it
+  /// holds evidence), whatever it sees, so a car idling where it parked never keeps GPS on. Rest
+  /// only after one that saw no vehicle, or at the cap; never after the linger.
   func candidateTick(_ r: DetectStateRecord, _ now: Double) {
     guard !confirming else { return }
     let kind = r.origin == "manual" ? "manual" : "auto"
     if kind == "auto" && vehicleStanding { lastVehicleTs = now }
     let due = DetectPolicy.candidateDue(kind, since: r.since, waitUntil: r.waitUntil, walkSince: walkSince, now: now,
-                                        lastVehicleTs: lastVehicleTs, hasEvidence: confirmState.evidence > 0)
+                                        lastVehicleTs: lingering ? nil : lastVehicleTs, hasEvidence: confirmState.evidence > 0)
     guard let cause = due else { return }
     endCandidate(reason: cause, rest: !lingering && (cause == "cap" || (cause == "timeout" && lastVehicleTs == nil)))
   }

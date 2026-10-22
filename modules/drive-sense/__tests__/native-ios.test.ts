@@ -473,7 +473,7 @@ describe('iOS drive detector: the state machine (text)', () => {
     const tick = fn(d, 'func candidateTick(');
     expect(tick).toMatch(/guard !confirming else \{ return \}/);
     expect(tick).toMatch(/if kind == "auto" && vehicleStanding \{ lastVehicleTs = now \}/);
-    expect(tick).toMatch(/DetectPolicy\.candidateDue\(kind, since: r\.since, waitUntil: r\.waitUntil, walkSince: walkSince, now: now,\s*lastVehicleTs: lastVehicleTs, hasEvidence: confirmState\.evidence > 0\)/);
+    expect(tick).toMatch(/DetectPolicy\.candidateDue\(kind, since: r\.since, waitUntil: r\.waitUntil, walkSince: walkSince, now: now,\s*lastVehicleTs: lingering \? nil : lastVehicleTs, hasEvidence: confirmState\.evidence > 0\)/);
     expect(tick).toMatch(/endCandidate\(reason: cause, rest: !lingering && \(cause == "cap" \|\| \(cause == "timeout" && lastVehicleTs == nil\)\)\)/);
     const end = fn(d, 'func endCandidate(');
     expect(end).toMatch(/if rest \{ r\.candidateRestUntil = now \+ DetectPolicy\.CANDIDATE_REST_MS \}/);
