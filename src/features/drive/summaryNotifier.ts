@@ -108,8 +108,17 @@ export function createExpoSummaryPort(): SummaryNotificationPort {
       });
     },
     async scheduled() {
-      const pending = await Notifications.getAllScheduledNotificationsAsync();
-      return pending.filter((n) => n.content.data?.kind === DRIVE_SUMMARY_KIND).map((n) => n.identifier);
+      // Posted with no trigger, a recap is delivered at once and never pending: the ones in
+      // Notification Center are listed too, so the handover wipe takes them down as well.
+      const [pending, presented] = await Promise.all([
+        Notifications.getAllScheduledNotificationsAsync(),
+        Notifications.getPresentedNotificationsAsync().catch(() => [] as Notifications.Notification[]),
+      ]);
+      const ids = [
+        ...pending.filter((n) => n.content.data?.kind === DRIVE_SUMMARY_KIND).map((n) => n.identifier),
+        ...presented.filter((n) => n.request.content.data?.kind === DRIVE_SUMMARY_KIND).map((n) => n.request.identifier),
+      ];
+      return [...new Set(ids)];
     },
     async cancel(identifier) {
       await Notifications.cancelScheduledNotificationAsync(identifier);
