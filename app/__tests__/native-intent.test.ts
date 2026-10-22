@@ -46,3 +46,9 @@ test.each([
 test('the dev client launcher links pass untouched', async () => {
   expect(await go('exp+roadwise://expo-development-client/?url=x')).toBe('exp+roadwise://expo-development-client/?url=x');
 });
+
+test('the Live Activity and Dynamic Island link reaches the driving screen on a cold launch and on a warm one alike', async () => {
+  for (const initial of [true, false]) {
+    expect(await redirectSystemPath({ path: 'roadwise://drive', initial })).toBe('/drive');
+  }
+});
