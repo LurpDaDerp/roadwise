@@ -118,7 +118,9 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
       'Every drive gets a score from 0 to 100 for braking, starts, turns, speed and phone use, plus attention when DashPal rides along. A drive with no events scores 100.',
       'Each one is judged against your chances: hard brakes against the times you slowed down, hard starts against the times you sped up, and sharp turns against the real turns you made. A busy city drive isn’t marked down just for having more stops.',
       'Speed is judged by how much of your driving time with a known limit you spent over it, and by how far over.',
-      `A drive under ${MIN_SCORED_MILES} mi that takes under ${MIN_SCORED_S / 60} min doesn’t get a score.`,
+      autoDrives
+        ? `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, it isn’t saved at all.`
+        : `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving isn’t saved at all.`,
       'The score’s colour and icon show how a drive went for its length: a short perfect drive stays humble, a long smooth one earns the top.',
     ],
   },
@@ -167,7 +169,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
           `Once you’ve been moving at about ${n.autoTriggerMph} mph for ${n.autoTriggerS} s, RoadWise starts recording, counting from the moment you set off.`,
           `It ends once you park and walk away, or after ${IDLE_MIN} min parked.`,
           `Stop for under ${MERGE_MIN} min and set off again from the same spot, and it stays one drive.`,
-          `Riding along? Open the drive screen and tap “${ND}”. It’s there for your first ${n.notDrivingMin} minutes on that screen.`,
+          `Riding along? Open the drive screen and tap “${ND}”. It shows once the car reaches driving speed, for your first ${n.notDrivingMin} minutes on that screen.`,
           `Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
         ],
       }
@@ -178,7 +180,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
         lines: [
           `Swipe Start drive on Home before you pull out. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
           `It records until you swipe End drive, park and walk away, or stay parked for ${IDLE_MIN} min.`,
-          `Riding along? Tap “${ND}” on the drive screen. It’s there for your first ${n.notDrivingMin} minutes on that screen.`,
+          `Riding along? Tap “${ND}” on the drive screen. It shows once the car reaches driving speed, for your first ${n.notDrivingMin} minutes on that screen.`,
         ],
       },
   {

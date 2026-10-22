@@ -4,6 +4,8 @@ import {
   DISPUTE_AUTO_PER_WEEK,
   IDLE_END_S,
   MERGE_GAP_S,
+  MIN_SCORED_MILES,
+  MIN_SCORED_S,
   NOT_DRIVING_PER_MONTH,
   PHONE_PICKUP_MIN_MPH,
   PHONE_PICKUP_WEIGHT_S,
@@ -46,12 +48,18 @@ test('every number comes from the rules: the trigger, the wait, the budget, the 
     `Once you’ve been moving at about 20 mph for 10 s, RoadWise starts recording, counting from the moment you set off.`,
     `It ends once you park and walk away, or after ${IDLE_END_S / 60} min parked.`,
     `Stop for under ${MERGE_GAP_S / 60} min and set off again from the same spot, and it stays one drive.`,
-    'Riding along? Open the drive screen and tap “Not driving?”. It’s there for your first 2 minutes on that screen.',
+    'Riding along? Open the drive screen and tap “Not driving?”. It shows once the car reaches driving speed, for your first 2 minutes on that screen.',
     'Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to 5 min for you to get moving.',
   ]);
   const other = rules(true, { autoTriggerMph: 20, autoTriggerS: 45, waitMin: 7, notDrivingMin: 3 });
   expect(other.find((s) => s.id === 'drives')!.lines.join(' ')).toMatch(/about 20 mph for 45 s.*first 3 minutes.*up to 7 min/);
   expect(section(false, 'drives')[0]).toBe('Swipe Start drive on Home before you pull out. RoadWise waits up to 5 min for you to get moving.');
+  expect(section(false, 'drives')[2]).toBe('Riding along? Tap “Not driving?” on the drive screen. It shows once the car reaches driving speed, for your first 2 minutes on that screen.');
+  // Too short: a Start-card drive is not saved at all, an automatic one gets no score.
+  expect(section(true, 'drive-score')[3]).toBe(
+    `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, it isn’t saved at all.`
+  );
+  expect(section(false, 'drive-score')[3]).toBe(`A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving isn’t saved at all.`);
   expect(section(true, 'speeding')[1]).toBe(`You hear a chime when you cross that line. Ease off within ${SPEEDING_GRACE_S} s and it doesn’t count.`);
   expect(section(true, 'rating')).toContain(`You get a rating once you’ve driven ${RANKED_MIN_MILES} mi in the last ${RATING_WINDOW_DAYS} days.`);
   expect(section(true, 'mistakes').join(' ')).toContain(`up to ${DISPUTE_AUTO_PER_WEEK} times a week`);
