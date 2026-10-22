@@ -117,7 +117,7 @@ export function resolveGate(
   gate: ProfileGate,
   update: UpdateStatus,
   segments: readonly string[],
-  drive: DriveFacts
+  drive: Pick<DriveFacts, 'busy' | 'tripOpen'>
 ): GateRoute | null {
   // rev1: I10 — no redirect of any kind while a drive is under way or the driving screen is showing.
   // The effect re-runs when the host goes idle, and the gate answers then.
