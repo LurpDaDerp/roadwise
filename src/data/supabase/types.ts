@@ -1097,6 +1097,10 @@ export type Database = {
         Args: { p_holder: string; p_name: string }
         Returns: undefined
       }
+      release_live_activity_start: {
+        Args: { p_client_trip_id: string; p_device_id: string; p_leg?: number }
+        Returns: boolean
+      }
       remove_friend: { Args: { p_user_id: string }; Returns: undefined }
       remove_member: { Args: { p_user_id: string }; Returns: undefined }
       report_target: {
