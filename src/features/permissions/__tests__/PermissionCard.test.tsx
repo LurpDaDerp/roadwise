@@ -65,10 +65,10 @@ function fakeBoard(r: PermissionBoardRead | null, prefs: HomePrefs = EMPTY_HOME_
   return b;
 }
 
-async function draw(board: PermissionBoard, opts: { recording?: boolean; onSeeAll?: () => void } = {}) {
+async function draw(board: PermissionBoard, opts: { recording?: boolean; autoDisabled?: boolean; onSeeAll?: () => void } = {}) {
   const ui = (b: PermissionBoard) => (
     <ThemeProvider>
-      <PermissionCard board={b} recording={opts.recording ?? false} onSeeAll={opts.onSeeAll ?? (() => {})} />
+      <PermissionCard board={b} recording={opts.recording ?? false} autoDisabled={opts.autoDisabled} onSeeAll={opts.onSeeAll ?? (() => {})} />
     </ThemeProvider>
   );
   const r = await render(ui(board));
@@ -100,6 +100,17 @@ test('a row that can only be fixed in Settings says Open Settings; one row alone
   await draw(fakeBoard(read({ platform: 'ios', motion: 'denied' })));
   expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Motion & Fitness is off. Drives won’t start themselves.');
   expect(screen.getByTestId('home-permission-action')).toHaveTextContent('Open Settings');
+  expect(screen.queryByTestId('home-permissions-more')).toBeNull();
+});
+
+test('with Automatic drives switched off, no Location Always or Background App Refresh row; Motion still shows', async () => {
+  const autoOnly = read({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied' });
+  await draw(fakeBoard(autoOnly));
+  expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Set Location to Always so drives start themselves.');
+  await draw(fakeBoard(autoOnly), { autoDisabled: true });
+  expect(screen.queryByTestId('home-permissions')).toBeNull();
+  await draw(fakeBoard(read({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied', motion: 'denied' })), { autoDisabled: true });
+  expect(screen.getByTestId('home-permission-motion')).toBeOnTheScreen();
   expect(screen.queryByTestId('home-permissions-more')).toBeNull();
 });
 

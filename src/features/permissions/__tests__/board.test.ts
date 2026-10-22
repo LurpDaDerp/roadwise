@@ -125,6 +125,39 @@ describe('overall', () => {
   });
 });
 
+describe('with the Automatic drives switch off', () => {
+  // An iPhone at While Using that can still ask for Always, with Background App Refresh off.
+  const autoOnly = board({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied' });
+
+  it('switch on: Home asks for Location Always, then Background App Refresh; the summary needs a look', () => {
+    expect(homeCard(autoOnly, prefs(), false)).toMatchObject({ row: { id: 'locationAlways' }, more: 1 });
+    expect(homeCard(autoOnly, prefs(), false, false)).toMatchObject({ row: { id: 'locationAlways' }, more: 1 });
+    expect(overall(settingsRows(autoOnly, prefs()))).toBe('attention');
+    expect(settingsRows(autoOnly, prefs()).filter((r) => r.autoOff)).toEqual([]);
+  });
+
+  it('switch off: no Home row for Location Always or Background App Refresh, and the summary is ok', () => {
+    expect(homeCard(autoOnly, prefs(), false, true)).toEqual({ row: null, more: 0 });
+    const bgOnly = board({ platform: 'ios', location: 'always', backgroundRefresh: 'denied' });
+    expect(homeCard(bgOnly, prefs(), false)).toMatchObject({ row: { id: 'backgroundRefresh' } });
+    expect(homeCard(bgOnly, prefs(), false, true)).toEqual({ row: null, more: 0 });
+    const rows = settingsRows(autoOnly, prefs(), true);
+    expect(rows.filter((r) => r.autoOff).map((r) => r.id)).toEqual(['locationAlways', 'backgroundRefresh']);
+    expect(overall(rows)).toBe('ok');
+  });
+
+  it('switch off: Motion and Notifications still ask, and the summary still needs a look for them', () => {
+    const read = board({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied', motion: 'denied', notifications: 'undetermined' });
+    expect(homeCard(read, prefs(), false, true)).toMatchObject({ row: { id: 'motion' }, more: 1 });
+    expect(overall(settingsRows(read, prefs(), true))).toBe('attention');
+  });
+
+  it('switch off: a hidden auto-only row offers no Show on Home', () => {
+    const rows = settingsRows(autoOnly, prefs({ hidden: ['locationAlways'] }), true);
+    expect(rows.find((r) => r.id === 'locationAlways')).toMatchObject({ autoOff: true, hiddenFromHome: false });
+  });
+});
+
 describe('readPermissionBoard', () => {
   function deps(over: Partial<BoardReadDeps> = {}) {
     const calls: string[] = [];

@@ -6,6 +6,7 @@
 import { screen, waitFor, within } from '@testing-library/react-native';
 
 import { HOME_HIDDEN_KEY } from '@/core/permissions';
+import type { AutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { PAIRED_KEY } from '@/dashcam/keys';
 
 import { appWorld, clearQueryClients, fakeAdapter, fakeAppState, snap, tap, type FakeAdapter } from '../__fixtures__/harness';
@@ -15,8 +16,13 @@ import type { PermissionBoardDeps } from '../usePermissionBoard';
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 jest.mock('@/data/supabase/session', () => ({ useSession: () => ({ session: { user: { id: 'u1' } } }) }));
 jest.mock('expo-router', () => ({ useRouter: () => ({ back: jest.fn(), push: jest.fn(), canGoBack: () => true }) }));
+let mockAuto: AutoDrives = { state: 'unsupported' };
+jest.mock('@/features/autoDrives/useAutoDrives', () => ({ useAutoDrives: () => mockAuto }));
 
-afterEach(() => clearQueryClients());
+afterEach(() => {
+  clearQueryClients();
+  mockAuto = { state: 'unsupported' };
+});
 
 const PAIRED = { dashcamId: 'a1b2c3d4e5f6', peripheralId: 'AA:BB', name: 'DashPal-E5F6', pairedAt: 1, secure: true as const };
 function deps(adapter: FakeAdapter): PermissionBoardDeps {
@@ -87,6 +93,24 @@ it('iOS lists Location Always and Background App Refresh with the note about Alw
       'On a drive, RoadWise feels when your phone is picked up, from motion alone. It never sees your screen, apps or messages.'
     )
   ).toBeOnTheScreen();
+});
+
+it('with Automatic drives switched off, Location Always and Background App Refresh read Not in use and leave the summary', async () => {
+  const ios = () => fakeAdapter(snap({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied' }));
+  mockAuto = { state: 'off', missing: ['locationAlways', 'backgroundRefresh'] };
+  await open(ios());
+  expect(screen.getByTestId('permissions-summary')).toHaveTextContent('A couple of things could be better');
+  expect(screen.getByTestId('permission-locationAlways-status')).toHaveTextContent('Needs a look');
+  clearQueryClients();
+  mockAuto = { state: 'disabled' };
+  await open(ios());
+  expect(screen.getByTestId('permissions-summary')).toHaveTextContent('Everything RoadWise needs is on');
+  for (const id of ['locationAlways', 'backgroundRefresh']) {
+    expect(screen.getByTestId(`permission-${id}-status`)).toHaveTextContent('Not in use');
+    expect(screen.getByTestId(`permission-${id}-detail`)).toHaveTextContent('Only needed for automatic drives, which are switched off.');
+  }
+  // The driver can still grant it.
+  expect(screen.getByTestId('permission-locationAlways-fix')).toHaveTextContent('Allow Always');
 });
 
 it('Bluetooth: Not in use without a pairing; Off with a pairing and the permission gone, fixed only in Settings', async () => {

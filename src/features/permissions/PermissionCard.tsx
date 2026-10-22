@@ -4,7 +4,8 @@
  * phone ("Allow") or opens its Settings ("Open Settings"). A right-to-left swipe, a long press or
  * the screen reader's "Don't remind me again" action asks to hide that row; confirming hides it
  * until Show on Home in Settings › Permissions, and the next row takes its place. Nothing shows
- * while the board loads, can't be read, or a drive records.
+ * while the board loads, can't be read, or a drive records. With the Automatic drives switch off
+ * (`autoDisabled`), it never asks for Location Always or Background App Refresh.
  */
 import { Ionicons } from '@expo/vector-icons';
 import { useRef, useState } from 'react';
@@ -26,10 +27,21 @@ export const SWIPE_PANEL_W = 120;
 export const SWIPE_THRESHOLD = 72;
 export const LONG_PRESS_MS = 500;
 
-export function PermissionCard({ board, recording, onSeeAll }: { board: PermissionBoard; recording: boolean; onSeeAll: () => void }) {
+export function PermissionCard({
+  board,
+  recording,
+  autoDisabled = false,
+  onSeeAll,
+}: {
+  board: PermissionBoard;
+  recording: boolean;
+  /** The Automatic drives switch is off; the caller's `homeCard` must get the same flag. */
+  autoDisabled?: boolean;
+  onSeeAll: () => void;
+}) {
   const read = board.status === 'ready' ? board.read : null;
   if (read === null || recording) return null;
-  const card = homeCard(read, board.prefs, recording);
+  const card = homeCard(read, board.prefs, recording, autoDisabled);
   if (card.row === null) return null;
   return <PermissionCardBody board={board} read={read} row={card.row} more={card.more} onSeeAll={onSeeAll} />;
 }

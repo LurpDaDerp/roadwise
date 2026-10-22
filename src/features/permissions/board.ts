@@ -68,38 +68,57 @@ export interface HomeCard {
   more: number;
 }
 
-/** Home shows a row exactly when it is missing, has a Home row, is not hidden, and no drive records. */
-export function homeCard(read: PermissionBoardRead, prefs: HomePrefs, recording: boolean): HomeCard {
+/**
+ * The permissions only automatic drives use (Motion stays: it also ends a drive when the driver
+ * walks away). While the Automatic drives switch is off, nothing asks for them.
+ */
+export const AUTO_ONLY: ReadonlySet<PermissionId> = new Set<PermissionId>(['locationAlways', 'backgroundRefresh']);
+
+/** A missing permission that only automatic drives use, while they are switched off. */
+const autoOff = (r: BoardRow, autoDisabled: boolean) => autoDisabled && AUTO_ONLY.has(r.id) && r.state.kind === 'missing';
+
+/**
+ * Home shows a row exactly when it is missing, has a Home row, is not hidden, and no drive records;
+ * never Location Always or Background App Refresh while the Automatic drives switch is off.
+ */
+export function homeCard(read: PermissionBoardRead, prefs: HomePrefs, recording: boolean, autoDisabled = false): HomeCard {
   if (recording) return { row: null, more: 0 };
-  const visible = boardRows(read).filter((r) => r.def.homeRow && r.state.kind === 'missing' && !prefs.hidden.includes(r.id));
+  const visible = boardRows(read).filter(
+    (r) => r.def.homeRow && r.state.kind === 'missing' && !prefs.hidden.includes(r.id) && !autoOff(r, autoDisabled)
+  );
   return { row: visible[0] ?? null, more: Math.max(0, visible.length - 1) };
 }
 
 export interface SettingsRow extends BoardRow {
   /** Missing and hidden from Home: the row offers Show on Home. */
   hiddenFromHome: boolean;
+  /** Missing, used only by automatic drives, and they are switched off: shown as not in use, never as needing a look. */
+  autoOff: boolean;
 }
 
 /**
  * Settings › Permissions: every permission of this platform, except Precise Location while location
  * is not allowed, and motion or Background App Refresh on a phone that cannot report it.
  */
-export function settingsRows(read: PermissionBoardRead, prefs: HomePrefs): SettingsRow[] {
+export function settingsRows(read: PermissionBoardRead, prefs: HomePrefs, autoDisabled = false): SettingsRow[] {
   return boardRows(read)
     .filter((r) => {
       if (r.id === 'precise') return r.state.kind !== 'idle';
       if (r.id === 'motion' || r.id === 'backgroundRefresh') return r.state.kind !== 'unknown';
       return true;
     })
-    .map((r) => ({ ...r, hiddenFromHome: r.state.kind === 'missing' && prefs.hidden.includes(r.id) }));
+    .map((r) => {
+      const off = autoOff(r, autoDisabled);
+      return { ...r, hiddenFromHome: !off && r.state.kind === 'missing' && prefs.hidden.includes(r.id), autoOff: off };
+    });
 }
 
 export type Overall = 'ok' | 'attention' | 'broken';
 
-/** The summary: broken while a drive cannot record; ok when nothing is missing. */
-export function overall(rows: readonly BoardRow[]): Overall {
+/** The summary: broken while a drive cannot record; ok when nothing in use is missing (an `autoOff` row is not in use). */
+export function overall(rows: readonly (BoardRow & { autoOff?: boolean })[]): Overall {
   if (rows.some((r) => r.def.need === 'required' && r.state.kind === 'missing')) return 'broken';
-  return rows.every((r) => r.state.kind !== 'missing') ? 'ok' : 'attention';
+  return rows.every((r) => r.state.kind !== 'missing' || r.autoOff === true) ? 'ok' : 'attention';
 }
 
 /** Whether a stored "no effect" signature still applies to this read. */

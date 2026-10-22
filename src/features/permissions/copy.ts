@@ -42,6 +42,8 @@ export const permissionsCopy = {
   status: { on: 'On', notYet: 'Needs a look', off: 'Off', idle: 'Not in use', unknown: "Can't check" },
   openSettings: 'Open Settings',
   hiddenFromHome: 'Hidden from Home',
+  /** A Settings row's detail for Location Always or Background App Refresh while the Automatic drives switch is off. */
+  autoOff: 'Only needed for automatic drives, which are switched off.',
   showOnHome: 'Show on Home',
   home: {
     allow: 'Allow',

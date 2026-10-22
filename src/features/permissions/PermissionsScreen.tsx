@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Platform, View } from 'react-native';
 
+import { useAutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { Section, TopBar } from '@/features/settings/parts';
 import { Banner, Card, Screen, Skeleton, Text, useTheme } from '@/ui';
 
@@ -16,11 +17,13 @@ import { usePermissionBoard, type PermissionBoardDeps } from './usePermissionBoa
  * its state, what it means, and its fix (the phone's prompt while it can still ask, otherwise its
  * Settings page; Bluetooth and the camera only Settings). A permission hidden from Home offers Show
  * on Home. A fix is the driver's own tap, so it goes to the phone directly; back from Settings, the
- * phone is read again.
+ * phone is read again. With the Automatic drives switch off, a missing Location Always or Background
+ * App Refresh reads Not in use, says it is only needed for automatic drives, and leaves the summary.
  */
 export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps }) {
   const th = useTheme();
   const board = usePermissionBoard(deps);
+  const autoDisabled = useAutoDrives().state === 'disabled';
   const [busy, setBusy] = useState<PermissionId | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -66,7 +69,7 @@ export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps })
   } else {
     const read = board.read;
     const ctx: CopyCtx = { platform: read.snapshot.platform, androidApi: read.androidApi };
-    const rows = settingsRows(read, board.prefs);
+    const rows = settingsRows(read, board.prefs, autoDisabled);
     body = (
       <>
         <Text variant="title3" testID="permissions-summary">
@@ -81,9 +84,9 @@ export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps })
                 key={r.id}
                 testID={`permission-${r.id}`}
                 title={rowTitle(r.id, ctx)}
-                word={statusWord(r.state)}
+                word={r.autoOff ? 'idle' : statusWord(r.state)}
                 required={r.def.need === 'required'}
-                detail={rowDetail(r.id, r.state, ctx)}
+                detail={r.autoOff ? copy.autoOff : rowDetail(r.id, r.state, ctx)}
                 fixLabel={label}
                 busy={busy === r.id}
                 onFix={() => void onFix(r.id)}
