@@ -217,16 +217,59 @@ describe('the compass', () => {
     expect(n.transform.some((t) => 'rotate' in t)).toBe(false);
   });
 
-  test('no course yet: the ticks with the letters dimmed; a lost course holds the card where it was', async () => {
-    const r = await render(view(HALO_CALM, { heading: null }));
+  test('no heading yet: north-up, the ticks with the letters dimmed, nothing turning', async () => {
+    await render(view(HALO_CALM, { heading: null }));
     expect(screen.getByTestId('hud-compass-N', HIDDEN)).toHaveStyle({ opacity: COMPASS_DIM_LETTERS });
+    expect(mockTiming).not.toHaveBeenCalledWith(expect.anything(), HALO_TIMINGS.compass);
+    expect(rotation()).toBe('0deg');
+  });
+
+  test('a heading lights the letters; losing it turns the card back north-up the short way and dims them', async () => {
+    const r = await render(view(HALO_CALM, { heading: null }));
     await r.rerender(view(HALO_CALM, { heading: 45 }));
     expect(screen.getByTestId('hud-compass-N', HIDDEN)).toHaveStyle({ opacity: 1 });
+    expect(mockTiming).toHaveBeenCalledWith(-45, HALO_TIMINGS.compass);
     await act(() => jest.advanceTimersByTime(1000));
+    expect(rotation()).toBe('-45deg');
     mockTiming.mockClear();
     await r.rerender(view(HALO_CALM, { heading: null }));
+    expect(screen.getByTestId('hud-compass-N', HIDDEN)).toHaveStyle({ opacity: COMPASS_DIM_LETTERS });
+    expect(mockTiming).toHaveBeenCalledWith(0, HALO_TIMINGS.compass);
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(rotation()).toBe('0deg');
+    // a heading past south comes back through the short side: 270 is -270, north-up from there is -360
+    await r.rerender(view(HALO_CALM, { heading: 270 }));
+    expect(mockTiming).toHaveBeenLastCalledWith(90, HALO_TIMINGS.compass);
+    await act(() => jest.advanceTimersByTime(1000));
+    mockTiming.mockClear();
+    // already north-up and staying so: no animation at all
+    await r.rerender(view(HALO_CALM, { heading: null }));
+    expect(mockTiming).toHaveBeenCalledWith(0, HALO_TIMINGS.compass);
+    await act(() => jest.advanceTimersByTime(1000));
+    mockTiming.mockClear();
+    await r.rerender(view({ ...HALO_CALM, severity: 0.1 }, { heading: null }));
     expect(mockTiming).not.toHaveBeenCalledWith(expect.anything(), HALO_TIMINGS.compass);
-    expect(rotation()).toBe('-45deg');
+  });
+
+  test('one heading for another (the phone’s, then the track bearing): the short way round, in 700 ms', async () => {
+    const r = await render(view(HALO_CALM, { heading: 20 }));
+    await act(() => jest.advanceTimersByTime(1000));
+    mockTiming.mockClear();
+    await r.rerender(view(HALO_CALM, { heading: 340 }));
+    expect(mockTiming).toHaveBeenCalledWith(20, HALO_TIMINGS.compass);
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(rotation()).toBe('20deg');
+  });
+
+  test('Reduce Motion: losing the heading snaps north-up', async () => {
+    const r = await render(view(HALO_CALM, { heading: 120, reduceMotion: true }));
+    await act(() => jest.advanceTimersByTime(20));
+    expect(rotation()).toBe('-120deg');
+    mockTiming.mockClear();
+    await r.rerender(view(HALO_CALM, { heading: null, reduceMotion: true }));
+    expect(mockTiming).not.toHaveBeenCalledWith(expect.anything(), HALO_TIMINGS.compass);
+    await act(() => jest.advanceTimersByTime(20));
+    expect(rotation()).toBe('0deg');
   });
 
   test('N in the halo ink, the other letters in the compass ink, the ticks muted (never red)', async () => {

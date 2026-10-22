@@ -1,10 +1,11 @@
 // The compass around the halo (product spec "Driving screen"): heading-up, so the direction of travel
 // always sits at 12 o'clock over a fixed mark, and the card (N/E/S/W and a tick every 15° between
-// them) turns the short way round as the car's GPS course changes, in about 700 ms (it snaps under
-// Reduce Motion). One card concentric with the ring at an even gap outside it (`compassGeometry`):
-// the letters (ExtraBold, as large as the card's room allows) stand upright on one circle with the
-// ticks centred on it, and the mark (a triangle in the gap at the top) points out at the course.
-// Before the drive's first course it shows its ticks with the letters dimmed. It sits outside
+// them) turns the short way round as the heading changes, in about 700 ms (it snaps under Reduce
+// Motion). The heading is the car's track bearing, or before the drive's first one the phone's own
+// heading (`useDeviceHeading`). One card concentric with the ring at an even gap outside it
+// (`compassGeometry`): the letters (ExtraBold, as large as the card's room allows) stand upright on
+// one circle with the ticks centred on it, and the mark (a triangle in the gap at the top) points out
+// at the heading. With no heading it turns north-up (the same way) and dims its letters. It sits outside
 // everything that pulses or shakes, so it never grows, fades or moves with the ring. Quiet HUD
 // inks: the ticks muted, E, S and W in the compass's ink (a step brighter, so they read over the
 // glow), N and the mark in the halo's ink, the brightest (never red: red is the severe tier). Drawn
@@ -27,13 +28,13 @@ import {
 import { HALO_TIMINGS } from './haloMotion';
 import type { HudPalette } from './hudTokens';
 
-/** The letters' strength before the drive's first course. */
+/** The letters' strength while there is no heading to show. */
 export const COMPASS_DIM_LETTERS = 0.3;
 
 export type HaloCompassProps = {
   /** the halo's square box, pt */
   size: number;
-  /** the car's course, degrees clockwise from true north; null before the first (held while slow) */
+  /** degrees clockwise from true north: the car's track bearing, else the phone's heading; null: none (north-up, letters dimmed) */
   heading: number | null;
   palette: HudPalette;
   reduceMotion: boolean;
@@ -50,8 +51,9 @@ export const HaloCompass = memo(function HaloCompass({ size, heading, palette, r
   const rot = useSharedValue(start);
   const last = useRef(start);
   useEffect(() => {
-    if (!known(heading)) return; // no course: the card holds where it is
-    const target = nextCompassAngle(last.current, -heading);
+    // No heading: the card turns back north-up (already there: nothing moves).
+    const target = nextCompassAngle(last.current, known(heading) ? -heading : 0);
+    if (!known(heading) && target === last.current) return;
     last.current = target;
     if (reduceMotion) {
       cancelAnimation(rot);

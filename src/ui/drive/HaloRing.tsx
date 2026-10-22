@@ -12,7 +12,7 @@
 // - Compass (`HaloCompass`): outside the pulse view, so it never grows, fades or shakes.
 // - The speed is a sibling of the ring views: the ring is hidden from screen readers, the speed not.
 // - Reduce Motion (live): no frame clock, no flow, no pulse, no shake; colours still change (250 ms
-//   fades) and the compass snaps to each course.
+//   fades) and the compass snaps to each heading.
 import { useEffect, useId, useMemo, useRef, type ReactNode } from 'react';
 import { StyleSheet, View, type TextStyle } from 'react-native';
 import Animated, {
@@ -50,7 +50,7 @@ export type HaloProps = {
   /** the screen is dimmed (the halo shows at reduced strength unless a warning shows) */
   dimmed: boolean;
   reduceMotion: boolean;
-  /** the car's GPS course for the compass (degrees clockwise from north), null before the first */
+  /** the compass's heading (degrees clockwise from north): the car's track bearing, else the phone's; null: none (north-up, letters dimmed) */
   heading?: number | null;
   /** the speed, given the animated colour style for its numerals */
   numerals: (numeralStyle: AnimatedStyle<TextStyle>) => ReactNode;
