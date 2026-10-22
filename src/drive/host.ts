@@ -5,9 +5,9 @@
 // speed-limit client, the alert player, the background display and persistence together, and
 // publishes one `DriveState` for the UI. Rules:
 // - **How a drive begins.** On its own (iOS): native notices driving once the speed has been held
-//   long enough (30 s at 15 mph, 15 s at 20, 10 s at 25, 5 s at 30, the second reading from about
-//   34 mph), traces the start back and journals every row; the host adopts the journal wherever JS
-//   runs (a `driveStarted` event, or `boot`) and replays it into the engine. From the Start card
+//   long enough (drive-sense's `AUTO_TRIGGER`: the faster the car, the shorter the hold), traces
+//   the start back and journals every row; the host adopts the journal wherever JS runs (a
+//   `driveStarted` event, or `boot`) and replays it into the engine. From the Start card
 //   (both): the drive records from the tap (iOS: native opens a journaled drive at once,
 //   `startWaiting`; a native build too old for that, or an answer that cannot be used, falls back to
 //   a plain capture once native's own wait is cancelled; Android: the capture starts), and a start
@@ -2074,7 +2074,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       waiting.phase = 'waiting';
       armWaitingTimer();
       publish();
-      if (ios && detect !== null) {
+      // A plain capture (the Start fallback) has no native wait to move on.
+      if (ios && detect !== null && !plainCapture) {
         detect
           .extendWaiting()
           .then((until) => {

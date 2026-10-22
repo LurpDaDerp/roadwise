@@ -1568,6 +1568,10 @@ describe('iOS: a Start that cannot be refused by a step beside it (plan decision
     expect(h.host.snapshot()).toMatchObject({ status: 'recording', origin: 'manual', startedAt: T0, waiting: { since: T0, phase: 'waiting' } });
     expect(await createTripsRepo(db).get(id)).toMatchObject({ status: 'recording', origin: 'manual', started_at: T0 });
     expect(h.display.log[0]).toMatch(/^start /);
+    // A touch moves the wait on here; native has no wait of its own to move.
+    h.host.touchWaiting();
+    expect(h.host.snapshot().waiting).toMatchObject({ since: T0, phase: 'waiting' });
+    expect(h.detect.calls).not.toContain('extendWaiting');
     // The capture's rows (no `seq`) reach the drive, and driving speed ends the wait.
     await feedPlain(h, moving(200, T0 + 1000));
     expect(h.host.snapshot()).toMatchObject({ status: 'recording', waiting: null, lastRowTs: T0 + 200_000 });
