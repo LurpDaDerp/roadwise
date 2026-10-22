@@ -91,13 +91,16 @@ test('a perturbed native field is named by its path, with both values', async ()
 
 test('a native detector rule that drifts from the table is named; an iPhone that skips a row fails', async () => {
   const detect = detectOutput('ios');
-  detect.results[0] = { ...detect.results[0], actual: { drifted: true } };
+  // A confirmation time no row of the table answers (null or a real time alike), so the drift
+  // holds whichever row comes first.
+  detect.results[0] = { ...detect.results[0], actual: { ...(detect.results[0]!.actual as Record<string, unknown>), confirmedAt: 12_345 } };
   const skippedName = String(detect.results[1]!.name);
   detect.results[1] = { name: skippedName, kind: 'detect', skipped: 'no' };
   await renderPanel(sourceAnswering(referenceOutput('android'), detect));
   await fireEvent.press(screen.getByRole('button', { name: 'Run self-test' }));
   expect(await screen.findByText(`2 of ${N} vectors differ from the reference`)).toBeTruthy();
   expect(screen.getByText(String(detect.results[0]!.name))).toBeTruthy();
+  expect(screen.getByText('confirmedAt')).toBeTruthy();
   expect(screen.getByText('skipped (no), but ios has the drive detector')).toBeTruthy();
 });
 
