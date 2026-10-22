@@ -227,11 +227,14 @@ describe('live-drive: the widget extension target', () => {
     expect(lock).toContain('LimitSign(limit: state.limit, unit: state.unit, height: 56)');
     expect(lock).toMatch(/WeatherLine\(state: state\)[\s\S]*NotDrivingHint\(state: state\)/);
     expect(src).toContain('SpeedBlock(state: state, size: 40)');
-    expect(src).toContain('LimitSign(limit: state.limit, unit: state.unit, height: 44)');
+    expect(src).toMatch(/DynamicIslandExpandedRegion\(\.trailing\) \{\s*IslandSign\(limit: state\.limit, size: 26\)\s*\.padding\(\.trailing, 6\)/);
     expect(src).toMatch(/DynamicIslandExpandedRegion\(\.bottom\) \{\s*HStack\(spacing: 8\) \{\s*WeatherLine\(state: state\)\s*Spacer\(minLength: 0\)\s*NotDrivingHint\(state: state\)/);
     expect(src).toMatch(/compactLeading: \{\s*SpeedNumber\(state: state, size: 15\)/);
-    expect(src).toMatch(/compactTrailing: \{\s*LimitSign\(limit: state\.limit, unit: state\.unit, height: 20\)/);
+    expect(src).toMatch(/compactTrailing: \{\s*IslandSign\(limit: state\.limit, size: 14\)\s*\.padding\(\.trailing, 2\)/);
     expect(src).toMatch(/minimal: \{\s*SpeedNumber\(state: state, size: 13\)/);
+    // the full sign is the lock screen's alone; the island shows the simplified one
+    expect(src.match(/LimitSign\(limit:/g)).toHaveLength(1);
+    expect(src.match(/IslandSign\(limit:/g)).toHaveLength(2);
     // "-" for an unknown speed or limit
     expect(src).toMatch(/guard let v = v, v\.isFinite else \{ return "-" \}/);
   });
@@ -245,15 +248,59 @@ describe('live-drive: the widget extension target', () => {
     expect(src.match(/\.widgetURL\(Copy\.tapURL\)/g)).toHaveLength(2);
   });
 
-  it("the sign is the driving screen's for the unit: the US plate in mph (0.8 wide, the legend from 30 pt), the round red-ringed sign in km/h", () => {
+  it("the lock screen's sign is the driving screen's for the unit: the US plate in mph (0.8 wide, the legend from 30 pt), the round red-ringed sign in km/h", () => {
     const sign = view('LimitSign');
     expect(sign).toMatch(/if unit == "km\/h" \{ roundSign \} else \{ usPlate \}/);
     expect(sign).toMatch(/let w = height \* 0\.8/);
-    expect(sign).toMatch(/strokeBorder\(Color\.black, lineWidth: max\(1\.5, w \* 0\.025\)\)/);
-    expect(sign).toMatch(/if height >= 30 \{\s*Text\("SPEED"\)\.font\(\.system\(size: height \* 0\.167, weight: \.bold\)\)\s*Text\("LIMIT"\)/);
-    expect(sign).toMatch(/size: height \* 0\.46, weight: \.heavy/);
-    expect(sign).toContain('Circle().strokeBorder(Palette.signRed, lineWidth: max(2, height * 0.09))');
+    expect(sign).toMatch(/let line = max\(1\.5, w \* 0\.025\)/);
+    expect(sign).toMatch(/strokeBorder\(Color\.black, lineWidth: line\)\s*\.padding\(2\)/);
+    expect(sign).toMatch(/let legend = height \* 0\.167/);
+    expect(sign).toMatch(/let numeral = height \* 0\.46/);
+    expect(sign).toMatch(/let showsLegend = height >= 30/);
+    expect(sign).toMatch(/if showsLegend \{\s*Text\("SPEED"\)\.font\(\.system\(size: legend, weight: \.bold\)\)[\s\S]*?Text\("LIMIT"\)\.font\(\.system\(size: legend, weight: \.bold\)\)/);
+    expect(sign).toMatch(/size: numeral, weight: \.heavy, design: \.rounded/);
+    expect(sign).toContain('Circle().strokeBorder(Palette.signRed, lineWidth: ring)');
+    expect(sign).toMatch(/let ring = max\(2, height \* 0\.09\)/);
     expect(sign).toMatch(/size: height \* 0\.42, weight: \.bold/);
+    expect(sign).toMatch(/\.accessibilityLabel\(Format\.limitLabel\(limit\)\)/);
+  });
+
+  it('the plate lays its lines out inside the border by what shows, with even room, and holds them off its sides', () => {
+    const sign = view('LimitSign');
+    // capitals and digits are 0.705 of the size, centred in their line; lines are placed by their centre
+    expect(sign).toMatch(/private static let cap: CGFloat = 0\.705/);
+    expect(sign).toMatch(/let edge = 2 \+ line/);
+    expect(sign).toMatch(/let legendSpan: CGFloat = showsLegend \? 2\.4 \* capL : 0\s*let room = height - 2 \* edge - legendSpan - capN/);
+    expect(sign).toMatch(/let gap = room \/ \(showsLegend \? 3 : 2\)/);
+    expect(sign).toMatch(/let speedY = edge \+ gap \+ capL \/ 2/);
+    expect(sign).toMatch(/let numeralY = height - edge - gap - capN \/ 2/);
+    expect(sign).toMatch(/let textWidth = w - 2 \* \(edge \+ 2\.5\)/);
+    expect(sign.match(/\.plateLine\(width: textWidth, x: w \/ 2, y: /g)).toHaveLength(3);
+    expect(sign).toContain('y: speedY + 1.4 * capL');
+    expect(widget()).toMatch(/func plateLine\(width: CGFloat, x: CGFloat, y: CGFloat\) -> some View \{\s*lineLimit\(1\)\s*\.minimumScaleFactor\(0\.5\)\s*\.frame\(width: width\)\s*\.position\(x: x, y: y\)/);
+    // the plate's lines are no longer a stack centred over the border
+    expect(sign).not.toMatch(/VStack/);
+    // the round sign's number is held inside the ring
+    expect(sign).toMatch(/\.frame\(width: \(height - 2 \* ring\) \* 0\.8\)/);
+
+    // with these numbers the lock screen's 56 pt plate leaves 5 pt between the border and the
+    // legend's top, above the number and under it
+    const w = 56 * 0.8;
+    const edge = 2 + Math.max(1.5, w * 0.025);
+    const gap = (56 - 2 * edge - 2.4 * 56 * 0.167 * 0.705 - 56 * 0.46 * 0.705) / 3;
+    expect(gap).toBeGreaterThan(4.5);
+  });
+
+  it("the island's sign is simplified, in both units: the number alone in a white box with an inset black outline, sized from the number", () => {
+    const sign = view('IslandSign');
+    expect(sign).not.toMatch(/SPEED|LIMIT|unit/);
+    expect(sign).toMatch(/Text\(Format\.speed\(limit\)\)\s*\.font\(\.system\(size: size, weight: \.heavy, design: \.rounded\)\)\s*\.monospacedDigit\(\)\s*\.foregroundColor\(\.black\)\s*\.lineLimit\(1\)\s*\.minimumScaleFactor\(0\.6\)/);
+    // the box is the number's line padded past the outline's inner edge, so the number never reaches it
+    expect(sign).toMatch(/\.padding\(\.horizontal, edge \+ size \* 0\.25\)\s*\.padding\(\.vertical, edge \+ size \* 0\.05\)\s*\.frame\(minWidth: size \* 1\.4\)\s*\.background \{ box \}/);
+    expect(sign).toMatch(/private var line: CGFloat \{ max\(1\.5, size \* 0\.08\) \}/);
+    expect(sign).toMatch(/private var edge: CGFloat \{ 2 \* line \}/);
+    expect(sign).toMatch(/RoundedRectangle\(cornerRadius: size \* 0\.2\)\.fill\(Color\.white\)/);
+    expect(sign).toMatch(/RoundedRectangle\(cornerRadius: max\(0, size \* 0\.2 - line\)\)\s*\.strokeBorder\(Color\.black, lineWidth: line\)\s*\.padding\(line\)/);
     expect(sign).toMatch(/\.accessibilityLabel\(Format\.limitLabel\(limit\)\)/);
   });
 

@@ -2,10 +2,11 @@
 // speed, coloured as the driving screen colours it when over the limit (it never pulses), the speed
 // limit in the driving screen's sign style (the US SPEED LIMIT plate in mph, the round red-ringed
 // sign in km/h), the driving screen's dangerous-weather line when it has one, and "Not driving?"
-// while that option is available. The island: expanded = speed, sign, and the weather line and
-// the hint below; compact = speed | mini sign; minimal = speed. The lock screen wears the app's sky
-// (navy until the app sends it), the island's keyline the sky accent (gold without one). A tap opens
-// the driving screen; nothing else is interactive.
+// while that option is available. The island shows the limit as a simplified sign in both units
+// (the number alone in a white box with a black outline): expanded = speed, that sign, and the
+// weather line and the hint below; compact = speed | that sign; minimal = speed. The lock screen
+// wears the app's sky (navy until the app sends it), the island's keyline the sky accent (gold
+// without one). A tap opens the driving screen; nothing else is interactive.
 import ActivityKit
 import SwiftUI
 import WidgetKit
@@ -63,13 +64,17 @@ enum Format {
   }
 }
 
-/// The posted limit in the driving screen's sign style for the unit: the US R2-1 plate for mph
-/// (white, a black inner border, "SPEED" / "LIMIT" when 30 pt tall or more, the number), the round
-/// sign for km/h (white disc, red ring, the number). "-" when unknown.
+/// The posted limit on the lock screen, in the driving screen's sign style for the unit: the US
+/// R2-1 plate for mph (white, a black inner border, "SPEED" / "LIMIT" when 30 pt tall or more, the
+/// number), the round sign for km/h (white disc, red ring, the number). "-" when unknown.
 struct LimitSign: View {
   let limit: Double?
   let unit: String
-  var height: CGFloat = 44
+  var height: CGFloat = 56
+
+  /// SF's capitals and digits stand this much of the point size and sit centred in their line
+  /// (0.247 of the size above them, 0.241 below), so a line placed by its centre places what shows.
+  private static let cap: CGFloat = 0.705
 
   var body: some View {
     Group {
@@ -79,41 +84,110 @@ struct LimitSign: View {
     .accessibilityLabel(Format.limitLabel(limit))
   }
 
+  /// Each line sits by its centre inside the border's inner edge: the legend's two lines 0.4 of a
+  /// capital apart, and the room left split evenly over the top, the gap above the number and the
+  /// bottom. Every line keeps 2.5 pt clear of the border at the sides and shrinks (to half) first.
   private var usPlate: some View {
     let w = height * 0.8
+    let line = max(1.5, w * 0.025)
+    let edge = 2 + line
+    let legend = height * 0.167
+    let numeral = height * 0.46
+    let showsLegend = height >= 30
+    let capL = legend * LimitSign.cap
+    let capN = numeral * LimitSign.cap
+    let legendSpan: CGFloat = showsLegend ? 2.4 * capL : 0
+    let room = height - 2 * edge - legendSpan - capN
+    let gap = room / (showsLegend ? 3 : 2)
+    let speedY = edge + gap + capL / 2
+    let numeralY = height - edge - gap - capN / 2
+    let textWidth = w - 2 * (edge + 2.5)
     return ZStack {
       RoundedRectangle(cornerRadius: w * 0.06).fill(Color.white)
       RoundedRectangle(cornerRadius: max(0, w * 0.06 - 2))
-        .strokeBorder(Color.black, lineWidth: max(1.5, w * 0.025))
+        .strokeBorder(Color.black, lineWidth: line)
         .padding(2)
-      VStack(spacing: 0) {
-        if height >= 30 {
-          Text("SPEED").font(.system(size: height * 0.167, weight: .bold))
-          Text("LIMIT").font(.system(size: height * 0.167, weight: .bold))
-        }
-        Text(Format.speed(limit))
-          .font(.system(size: height * 0.46, weight: .heavy, design: .rounded))
-          .monospacedDigit()
+      if showsLegend {
+        Text("SPEED").font(.system(size: legend, weight: .bold))
+          .plateLine(width: textWidth, x: w / 2, y: speedY)
+        Text("LIMIT").font(.system(size: legend, weight: .bold))
+          .plateLine(width: textWidth, x: w / 2, y: speedY + 1.4 * capL)
       }
-      .foregroundColor(.black)
-      .minimumScaleFactor(0.5)
-      .lineLimit(1)
+      Text(Format.speed(limit))
+        .font(.system(size: numeral, weight: .heavy, design: .rounded))
+        .monospacedDigit()
+        .plateLine(width: textWidth, x: w / 2, y: numeralY)
     }
+    .foregroundColor(.black)
     .frame(width: w, height: height)
   }
 
+  /// The number is held to 0.8 of the ring's inside, so three digits shrink before they reach it.
   private var roundSign: some View {
-    ZStack {
+    let ring = max(2, height * 0.09)
+    return ZStack {
       Circle().fill(Color.white)
-      Circle().strokeBorder(Palette.signRed, lineWidth: max(2, height * 0.09))
+      Circle().strokeBorder(Palette.signRed, lineWidth: ring)
       Text(Format.speed(limit))
         .font(.system(size: height * 0.42, weight: .bold, design: .rounded))
         .monospacedDigit()
         .foregroundColor(.black)
         .minimumScaleFactor(0.6)
         .lineLimit(1)
+        .frame(width: (height - 2 * ring) * 0.8)
     }
     .frame(width: height, height: height)
+  }
+}
+
+private extension View {
+  /// One line of the plate: a single line that shrinks (to half) to `width` rather than run wider,
+  /// centred on (x, y).
+  func plateLine(width: CGFloat, x: CGFloat, y: CGFloat) -> some View {
+    lineLimit(1)
+      .minimumScaleFactor(0.5)
+      .frame(width: width)
+      .position(x: x, y: y)
+  }
+}
+
+/// The limit in the Dynamic Island, in both units: a simplified plate, the number alone (no legend)
+/// in a white box with an inset black outline (a white rim outside it, so it shows on the island's
+/// black). The box is the number's own line padded past the outline (a quarter of the size a side,
+/// a twentieth above and below, on top of the line's room over and under the digits), so it grows
+/// with the number and the number never reaches the outline; at least 1.4 × the size wide.
+struct IslandSign: View {
+  let limit: Double?
+  /// The number's point size; the box follows from it.
+  let size: CGFloat
+
+  var body: some View {
+    Text(Format.speed(limit))
+      .font(.system(size: size, weight: .heavy, design: .rounded))
+      .monospacedDigit()
+      .foregroundColor(.black)
+      .lineLimit(1)
+      .minimumScaleFactor(0.6)
+      .padding(.horizontal, edge + size * 0.25)
+      .padding(.vertical, edge + size * 0.05)
+      .frame(minWidth: size * 1.4)
+      .background { box }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(Format.limitLabel(limit))
+  }
+
+  /// The outline's width, and the white rim outside it.
+  private var line: CGFloat { max(1.5, size * 0.08) }
+  /// The outline's inner edge, from the box's edge.
+  private var edge: CGFloat { 2 * line }
+
+  private var box: some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: size * 0.2).fill(Color.white)
+      RoundedRectangle(cornerRadius: max(0, size * 0.2 - line))
+        .strokeBorder(Color.black, lineWidth: line)
+        .padding(line)
+    }
   }
 }
 
@@ -249,7 +323,7 @@ struct LiveDriveActivityWidget: Widget {
             .padding(.leading, 6)
         }
         DynamicIslandExpandedRegion(.trailing) {
-          LimitSign(limit: state.limit, unit: state.unit, height: 44)
+          IslandSign(limit: state.limit, size: 26)
             .padding(.trailing, 6)
         }
         DynamicIslandExpandedRegion(.bottom) {
@@ -264,7 +338,8 @@ struct LiveDriveActivityWidget: Widget {
         SpeedNumber(state: state, size: 15)
           .padding(.leading, 2)
       } compactTrailing: {
-        LimitSign(limit: state.limit, unit: state.unit, height: 20)
+        IslandSign(limit: state.limit, size: 14)
+          .padding(.trailing, 2)
       } minimal: {
         SpeedNumber(state: state, size: 13)
       }
