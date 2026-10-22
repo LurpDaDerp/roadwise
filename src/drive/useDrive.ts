@@ -36,7 +36,7 @@ export function useDriveHost(): DriveHost {
 }
 
 export interface DriveControls {
-  /** Start Drive: the wait begins (the driving screen opens in its waiting state). */
+  /** Start Drive: a drive records from the tap, waiting for driving speed (the driving screen opens with the wait's band). */
   start(): Promise<StartResult>;
   /** End the drive; resolves once it is finalized (`dropped`: it was not kept). Navigation is the caller's job. */
   end(): Promise<{ clientTripId: string; dropped: DropReason | null } | null>;
@@ -98,7 +98,7 @@ export interface DriveLive {
   startedAt: number | null;
   /** The newest row's time (the row clock), or null before any row. */
   rowTs: number | null;
-  /** The Start card's wait (no drive yet), or null. */
+  /** A Start-card drive still waiting for driving speed (it records from the tap), or null. */
   waiting: WaitingPublic | null;
   /** "Not driving?" is still offered on this drive. */
   notDrivingAvailable: boolean;

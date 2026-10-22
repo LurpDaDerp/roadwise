@@ -152,8 +152,9 @@ export type HudScreenProps = {
  *   screen is focused with RoadWise in front); a tap discards the drive and goes Home. A touch that
  *   starts while the screen is dimmed only wakes it.
  * - Waiting (a Start drive swipe, until the car reaches driving speed): the drive records from the
- *   tap (its speed, its limit, its halo and alerts, "Not driving?" as for any drive); the band says
- *   "Ready to roll" · "Saved once you drive", End is "Cancel". At 2:00 a panel asks "Still planning
+ *   tap (its speed, its limit, its halo and alerts); the band says "Ready to roll" · "Saved once you
+ *   drive", End is "Cancel", the one discard ("Not driving?" only once the car has reached driving
+ *   speed, its budget counted from then). At 2:00 a panel asks "Still planning
  *   to drive?", from 4:30 it counts down; any touch waits a fresh 5 minutes; at 5:00, or on Cancel,
  *   the drive ends unsaved and the screen goes Home, saying nothing.
  * - Landscape: the halo the full height, the sign left of it; on the right the band, the link, the
@@ -388,8 +389,9 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // for the rest of the drive (a more severe kind shows again).
   const weather = live.weatherAlert;
   const dismissWeather = useCallback(() => controls.dismissWeather(), [controls]);
-  // "Not driving?" while the drive's budget lasts (from the tap for a Start-card drive); never while saving or already going.
-  const showLink = live.status === 'recording' && live.notDrivingAvailable && !busy && !cancelling;
+  // "Not driving?" while the drive's budget lasts; never while a Start-card drive waits (Cancel is its
+  // discard then), while saving or already going.
+  const showLink = live.status === 'recording' && !isWaiting && live.notDrivingAvailable && !busy && !cancelling;
   const link = <NotDrivingLink palette={p} dimmed={dimmed} onPress={() => void onNotDriving()} />;
 
   return (

@@ -207,7 +207,7 @@ describe('the Start card (Android: the capture at once; the drive records from t
       origin: 'manual',
       startedAt: T0,
       waiting: { since: T0, phase: 'waiting', deadlineAt: T0 + WAIT_POPUP_MS },
-      notDrivingAvailable: true,
+      notDrivingAvailable: false,
     });
     expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'recording', origin: 'manual', started_at: T0, start_source: 'wake' });
     // The drive's notification (the Live Activity on iPhone) from the tap.
@@ -286,6 +286,30 @@ describe('the Start card (Android: the capture at once; the drive records from t
     expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'pending', origin: 'manual', start_source: 'wake', started_at: T0 });
     expect(h.host.snapshot().lastFinalized).toMatchObject({ clientTripId: uuid(1), ok: true, status: 'pending', dropped: null, durationS: expect.any(Number), miles: expect.any(Number) });
     await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('"Not driving?" is never offered while the drive waits and the wait spends none of its budget; at driving speed it is offered, counted from then', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    h.host.setHudVisible(true);
+    expect(h.host.snapshot()).toMatchObject({ waiting: { phase: 'waiting' }, notDrivingAvailable: false });
+    // 90 s parked with the driving screen showing.
+    await feed(h, rows(90, { t0: T0 + 1000, speedMps: 0 }));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', waiting: { phase: 'waiting' }, notDrivingAvailable: false, notDrivingSpentMs: 0 });
+    expect(await h.host.cancelDrive()).toBe(false);
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', waiting: { phase: 'waiting' } });
+    expect(h.display.states.length).toBeGreaterThan(1);
+    expect(h.display.states.every((st) => st.notDrivingAvailable !== true)).toBe(true);
+    expect(await readBudget(db)).toBeNull();
+    // Pulling away: the wait ends on the second row at driving speed, and the lock screen's hint comes at once.
+    const away = rows(30, { t0: T0 + 91_000, speedMps: 15 });
+    await feed(h, away.slice(0, 2));
+    expect(h.host.snapshot()).toMatchObject({ waiting: null, notDrivingAvailable: true, notDrivingSpentMs: 0 });
+    expect(h.display.log.at(-1)).toBe('refresh hint -');
+    await feed(h, away.slice(2));
+    expect(h.host.snapshot().notDrivingSpentMs).toBe(28_000);
+    await h.host.stop({ endOpenTrip: true });
   });
 
   test('a Start-card drive under 0.5 mi and under 2 min is not kept: nothing stored or queued, and Home says it was too short', async () => {
@@ -759,6 +783,39 @@ describe('a continuation re-opens the held drive', () => {
     await h.host.end();
     expect(await tripCount()).toBe(1);
     expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'pending', continuations: 1, started_at: T0 });
+    await h.host.stop({ endOpenTrip: false });
+  });
+});
+
+describe('a Start-card drive re-opening the held drive', () => {
+  test('gives it back its own "Not driving?" budget: one that ran out stays gone (the wait never overwrote it)', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    h.host.setHudVisible(true);
+    const first = rows(150, { speedMps: 15 });
+    await feed(h, first);
+    expect(h.host.snapshot()).toMatchObject({ clientTripId: uuid(1), waiting: null, notDrivingAvailable: false, notDrivingSpentMs: NOT_DRIVING_BUDGET_MS });
+    // Parked: the still end at 5 min; the screen goes to the recap.
+    const end = first.at(-1)!;
+    await feed(h, rows(301, { t0: T0 + 150_000, speedMps: 0 }).map((r) => ({ ...r, lng: end.lng })));
+    await h.host.untilIdle();
+    h.host.setHudVisible(false);
+    expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'pending', not_driving_expired: 1 });
+    // Start again 30 s later where it parked, the driving screen showing through the wait.
+    const t1 = T0 + 481_000;
+    clock = t1;
+    await h.host.start();
+    h.host.setHudVisible(true);
+    const manual = h.host.snapshot().clientTripId;
+    expect(manual).not.toBe(uuid(1));
+    await feed(h, rows(20, { t0: t1, speedMps: 0 }).map((r) => ({ ...r, lng: end.lng })));
+    expect(h.host.snapshot()).toMatchObject({ clientTripId: manual, waiting: { phase: 'waiting' }, notDrivingAvailable: false });
+    // It drives off: the held drive is re-opened, its budget spent as it was.
+    await feed(h, rows(10, { t0: t1 + 20_000, speedMps: 15 }).map((r) => ({ ...r, lng: r.lng - START.lng + end.lng })));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(1), waiting: null, notDrivingAvailable: false });
+    expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'recording', continuations: 1 });
+    expect(await h.host.cancelDrive()).toBe(false);
     await h.host.stop({ endOpenTrip: false });
   });
 });

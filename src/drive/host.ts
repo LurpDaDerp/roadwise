@@ -14,7 +14,9 @@
 //   driving speed) within 5 min and 150 m of a held drive's end re-opens that trip (`continuation.ts`).
 // - **How it ends.** The engine decides (5 min still, a walk at 3 mph or slower, 12 h, End); native
 //   stops on its own only as a fallback and the engine then cuts at the last movement. "Not
-//   driving?" discards the drive (`cancelDrive`), only while its 2-minute visible budget lasts.
+//   driving?" discards the drive (`cancelDrive`), only while its 2-minute visible budget lasts,
+//   and never while a Start-card drive still waits (its Cancel discards it then; the wait spends
+//   none of the budget).
 // - **One queue.** Every engine dispatch and the native command that follows it run on one serial
 //   chain; after each task the capture is reconciled with the engine's state (on iOS the host never
 //   starts a capture: native owns it, and `stopCapture` tells native the JS end and its cut).
@@ -110,7 +112,7 @@ export interface DriveState extends EngineSnapshot {
   dryRun: boolean;
   /** A Start-card drive still waiting for driving speed (it records from the tap: `status` is recording), or null. */
   waiting: WaitingPublic | null;
-  /** "Not driving?" may still be offered on this drive (its 2-minute budget lasts); false with no drive. */
+  /** "Not driving?" may still be offered on this drive (its 2-minute budget lasts); false with no drive, and while it still waits. */
   notDrivingAvailable: boolean;
   /** Of the budget, the visible ms spent so far. */
   notDrivingSpentMs: number;
@@ -169,7 +171,7 @@ export interface DriveHost {
    * with no drive open, the next `end()` finalizes it again.
    */
   end(): Promise<{ clientTripId: string; dropped: DropReason | null } | null>;
-  /** "Not driving?": discards the drive. False (nothing done) unless a drive records and its budget lasts. */
+  /** "Not driving?": discards the drive. False (nothing done) unless a drive records, no longer waits, and its budget lasts. */
   cancelDrive(): Promise<boolean>;
   /** The driving screen is focused (true) or not: with RoadWise active, the "Not driving?" budget counts. */
   setHudVisible(visible: boolean): void;
@@ -652,7 +654,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     return weatherDismissed === null || moreSevere(weatherRaw.kind, weatherDismissed) ? weatherRaw : null;
   }
 
-  const notDrivingAvailable = (): boolean => budget !== null && !budget.expired && engine.snapshot().status === 'recording' && budget.clientTripId === engine.snapshot().clientTripId;
+  /** Never while a Start-card drive still waits for driving speed: its Cancel is the one discard then. */
+  const notDrivingAvailable = (): boolean =>
+    waiting === null && budget !== null && !budget.expired && engine.snapshot().status === 'recording' && budget.clientTripId === engine.snapshot().clientTripId;
 
   function build(): DriveState {
     const alertNow = shownWeather();
@@ -887,16 +891,21 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   // --- "Not driving?" budget ----------------------------------------------------------------------
 
+  /**
+   * Never while a Start-card drive waits: nothing was spent, and the stored budget stays the last
+   * drive's, so a held drive this one re-opens (`foldInto`) gets its own back, an expired one too.
+   */
   function persistBudget(): void {
     const b = budget;
-    if (!persist || b === null) return;
+    if (!persist || b === null || waiting !== null) return;
     persistedSpent = b.spentMs;
     budgetWrites = budgetWrites.then(() => writeBudget(db, b)).catch((e: unknown) => report(e, 'notDriving'));
   }
 
+  /** Visible time spent from the budget; none while a Start-card drive still waits (the link is not offered then). */
   function accrue(dt: number): void {
     const b = budget;
-    if (b === null || b.expired || dt <= 0 || engine.snapshot().status !== 'recording') return;
+    if (b === null || b.expired || dt <= 0 || waiting !== null || engine.snapshot().status !== 'recording') return;
     budget = spend(b, dt, now());
     if (budget.expired) {
       persistBudget();
@@ -929,7 +938,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   /** A live row while the drive records: visible time on the row clock, one row's worth at most. */
   function accrueRow(row: FeatureRow): void {
-    if (!hudVisible()) {
+    if (!hudVisible() || waiting !== null) {
       lastCountedRowTs = null;
       return;
     }
@@ -1142,8 +1151,12 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       return;
     }
     dropWaiting();
+    // "Not driving?" is offered from here, its visible time counted from now.
+    lastCountedRowTs = null;
+    lastAccrualAt = now();
     await continueHeld(w.stillFix);
     publish();
+    refreshDisplay();
   }
 
   /**

@@ -1409,8 +1409,11 @@ describe('a Start-card drive waiting for driving speed (drive-fixes brief)', () 
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('12');
   });
 
-  test('"Not driving?" follows the drive’s own rules: shown while its budget lasts, also while it waits', async () => {
+  test('"Not driving?" never shows while the drive waits (Cancel is the one discard then); once at driving speed it follows the drive’s budget', async () => {
     const h = await renderHud(waitDrive({}, { notDrivingAvailable: true }));
+    expect(screen.queryByTestId('hud-not-driving')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    await h.update({ waiting: null, speedMph: 12, notDrivingAvailable: true });
     expect(screen.getByTestId('hud-not-driving')).toBeTruthy();
     await h.update({ notDrivingAvailable: false });
     expect(screen.queryByTestId('hud-not-driving')).toBeNull();
