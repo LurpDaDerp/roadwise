@@ -26,9 +26,11 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 
 **iOS: drives start on their own (§11).** A native drive detector, armed by JS for a signed-in
 owner with Location Always, Precise Location and Motion & Fitness, wakes on a significant move, on
-leaving the spot the car last parked in, or on leaving a place the phone stayed at; it watches with
-GPS for up to 3 minutes, confirms a drive once the car holds 20 mph for 10 s, traces the drive's
-start back to where the car pulled away, writes every row to a journal on disk and emits it as a
+leaving the spot the car last parked in, on leaving a place the phone stayed at, or when RoadWise
+comes to the front; it watches with GPS while it sees a vehicle (up to 30 minutes), confirms a drive
+once the speed has been held long enough (30 s at 15 mph, 15 s at 20, 10 s at 25, 5 s at 30, the
+second reading from about 34 mph; stops in traffic keep what was earned), traces the drive's start
+back to where the car pulled away, writes every row to a journal on disk and emits it as a
 `row` with its `seq`. Start drive opens a drive at once, from the tap, journaled the same way. JS adopts the drive wherever it runs and
 decides its end; native stops sensing on its own only as a safety stop. Phone use is not read: rows
 carry a fixed phone sample, and the lock, screen and reminder methods answer fixed values.
@@ -195,10 +197,10 @@ these mappings decide whether walking can end a drive.
   was last at driving speed (two consecutive rows with a known, trusted GPS speed of 10 mph or
   more): two such rows, the second at or after the walk began, void it for good, however late the
   report arrives. W1: once the car has reached driving speed, such a report that stays the latest
-  report for 20 s ends the drive unless the last known speed is 10 mph or more and 60 s old or
-  less, cut at the last movement at or before the walk began. W2: before driving speed, an on-foot report
-  that stays the latest for 20 s ends a drive at least 10 min old (it is then dropped, never
-  driven). Without motion permission no reports come and neither applies.
+  report for 5 s ends the drive unless the last known speed is over 3 mph and 60 s old or less (a
+  walker's own pace, 5 mph or less from a phone that reads as carried, excepted), cut at the last
+  movement at or before the walk began. W2: before driving speed, an on-foot report that stays the
+  latest for 5 s ends a drive at least 10 min old (it is then dropped, never driven). Without motion permission no reports come and neither applies.
 
   `ts` is the transition's `getElapsedRealTimeNanos()` converted with §7 "Time base" (an anchor
   read when the transition is received). Nothing is stored. `createFakeDriveSense` has no mapping
@@ -843,7 +845,7 @@ holds every rule and number, mirrored constant for constant by `ios/DetectPolicy
 | `setArmed(armed, ownerId)` | JS's arming for the signed-in owner (at onboarding's end, at sign-in, at each foreground; off at sign-out, account switch and deletion). Resolves the `DetectState`. Detection runs only with Always, Precise and Motion & Fitness: without them the state stays `off` and `status` says `needs`. A different owner forgets the last end. Never rejects. |
 | `getState()` | The `DetectState`: `armed`, `ownerId`, `state` (`off`/`armed`/`candidate`/`recording`/`ending`/`suppressed`), `origin`, the live `driveId` and `startedAt`, `since`, `waitUntil`, `lastEnd { decidedAt, cut, lat, lng, driveId }`, `suppressedUntil`, `status` (`on`/`needs`/`unavailable`/`off`) with `missing` (Location Always, Precise Location, Motion & Fitness, Background App Refresh, then Live Activities, only with `needs`), `permissions` (incl. `backgroundRefresh`, `liveActivities`, `canAskAlways`) and `journalDropped` (reported once). |
 | `requestAlways()` | The one "Always" request, only from While Using, once per install (`drivesense.detect.alwaysAsked`); afterwards the current answer (`always`/`whenInUse`/`denied`) and JS offers Settings. |
-| `startWaiting()` | Start drive: a manual drive opens at once, from the tap (`recording`, origin `manual`, `startSource` `wake`, journaled, `driveStarted`; an auto candidate already open gives way to it, its rows dropped); While Using and Precise are enough. It waits for driving speed (the manual trigger, 10 mph held 15 s) until `waitUntil` (5 min, `WAIT_MAX_MS`): meanwhile the safety stop never ends it on a walk, and on the still clock only once `waitUntil` has passed too (JS ends it unsaved at that deadline). `{ ok: true, waitUntil, driveId, startedAt }`, or `{ ok: false, reason: 'permission' \| 'busy' \| 'unavailable' }`. |
+| `startWaiting()` | Start drive: a manual drive opens at once, from the tap (`recording`, origin `manual`, `startSource` `wake`, journaled, `driveStarted`; an auto candidate already open gives way to it, its rows dropped); While Using and Precise are enough. It waits for driving speed (the manual trigger, 10 mph held 15 s) until `waitUntil` (5 min, `WAIT_MAX_MS`): meanwhile the safety stop never ends it on a walk, and on the still clock only once `waitUntil` has passed too (JS ends it unsaved at that deadline). `{ ok: true, waitUntil, driveId, startedAt }`, or `{ ok: false, reason: 'permission' \| 'busy' \| 'unavailable' }`. A native build from before the drive opened at the tap answers `{ ok: true, waitUntil }`: the wrapper passes it on with `driveId` and `startedAt` null. |
 | `extendWaiting()` | Any touch while the Start-card drive waits: `waitUntil` = now + 5 min; `null` when it waits no more. |
 | `cancelWaiting()` | Ends a manual candidate quietly (none opens any more: JS ends a waiting drive through `stopCapture`). |
 | `notDriving()` | "Not driving?": the live drive is cancelled (its journal deleted, `driveEnded { cause: 'cancelled' }`) and detection rests (`suppressed`). No-op when nothing records. |
@@ -851,7 +853,8 @@ holds every rule and number, mirrored constant for constant by `ios/DetectPolicy
 | `readRows(driveId, afterSeq, limit)` | The rows after `afterSeq`, in order, at most `limit` (1-600), each a `row` payload with its `seq`; `done` when the file holds no more. Keeps its place in the file, so a drain reads it once. |
 | `discardDrive(driveId)` | Deletes the journal file (JS, once the drive is finalized); resolves when none exists; **rejects `E_BUSY` for the drive that still records**. |
 | `wipe()` | The sign-out, device and account-switch wipes: a candidate, a wait, a drive or a rest stops (no `driveEnded`: JS ends its own drive first), every journal file goes, the record starts again empty (no owner, last end, parked region, rest or drive) and the detector is `off` until JS arms it again. Resolves once the files are gone; on Android (no module) a no-op that resolves. |
-| `detectState` | every transition, with its `reason` (`armed`, `wake:slc`, `confirmed`, `stillClock`, `moved`, `ended`, `notDriving`, `resumed`, …). |
+| `appForeground()` | RoadWise came to the front: an `app` wake (native also takes one on `didBecomeActive`), through the wake gate and the motion gate like a significant change, but past the rest an empty candidate left. Resolves; on Android, or a native build without it, a no-op that resolves. |
+| `detectState` | every transition, with its `reason` (`armed`, `wake:slc`, `wake:app`, `linger`, `confirmed`, `timeout`, `cap`, `stillClock`, `moved`, `ended`, `notDriving`, `resumed`, …). |
 | `driveStarted` | `{ driveId, origin, startedAt, startSource, startLat, startLng, continues, confirmedAt, firstSeq }` at every confirmation. |
 | `driveEnded` | `{ driveId, endedAt, cause, decidedAt, lastSeq, lastRowTs }` when native ends a drive (`still`, `walking`, `limit`, `orphan`) or cancels it (`cancelled`); never for a JS end. |
 
@@ -868,41 +871,63 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   visits and the parked region (`roadwise.parked`, 150 m, exit only, at the last end's place) run.
   None turns GPS on. A permission lost later turns an idle detector `off`; a drive in progress
   finishes first.
-- **A wake** (`WakeSources.swift`): a significant change (the cached fix delivered at start, older
-  than `SLC_STALE_MS`, is not one), leaving the parked region, or leaving a visit within 10 min.
-  The gate (`wakeGate`): armed, an owner, the permissions, idle, not resting (a significant change or
-  visit within 10 min of a timed-out candidate), fewer than 6 candidates in the hour. A region exit
-  then opens a candidate at once; the others first read the last 3 h of motion history and need
-  confident moving car motion in the last 2 min with the driver not on foot (`motionGate`). The
-  wake's background task ends at the first fix or after 25 s.
+- **A wake** (`WakeSources.swift`, `DriveDetectorWatch.swift`): a significant change (the cached fix
+  delivered at start, older than `SLC_STALE_MS`, is not one), leaving the parked region, leaving a
+  visit within 10 min, or RoadWise coming to the front (`app`: `didBecomeActive`, or JS
+  `appForeground`). The gate (`wakeGate`): armed, an owner, the permissions, idle, not resting (a
+  significant change or visit within 10 min of a candidate that saw no vehicle or reached its cap),
+  fewer than 6 such empty candidates in the hour. A region exit then opens a candidate at once; the
+  others first read the last 3 h of motion history and need confident moving car motion in the last
+  2 min with the driver not on foot (`motionGate`). The wake's background task ends at the first fix
+  or after 25 s.
 - **`candidate`**: navigation GPS with no distance filter, 25 Hz IMU, the live motion activity and
-  rows into a ring of the last 600 (10 min); `speed` events go to JS, rows do not. An auto
-  candidate ends after 3 min (and rests significant-change and visit wakes for 10 min) or on a walk
-  standing 20 s. Every 5 s the detector's clock checks.
-- **Confirmation** (`confirmStep`): trusted rows (a valid fix within 30 m, speed rated 2 m/s or
-  better or unrated) at 20 mph spanning 10 s on the row clock (10 mph spanning 15 s ends a
-  Start-card drive's wait for driving speed); a dip
-  under the trigger (or untrusted rows) spanning 5 s or less keeps the hold, more breaks it. An auto
-  hold waits while a confident cycling, walking or running report is 30 s old or less.
-- **The start** (`startOf`): the last trusted row at or under 3 mph before the confirming run,
-  going back past a stop shorter than 5 min that had driving at 10 mph or more before it (a red
-  light), unless the stop was 5 min or more (a parking). An auto drive whose rows begin moving starts
+  rows into a ring of the last 1800 (30 min, the longest candidate); `speed` events go to JS, rows
+  do not. An auto candidate watches while it sees a vehicle sign (a trusted row at 10 mph or more
+  with no fresh walk, run or ride report, or a confident automotive report, a car at a light too):
+  it ends 3 min after the last one (or after it opened, with none), 5 min once it holds evidence, at
+  30 min whatever it sees (`cap`), or on a walk standing 20 s. One that saw no vehicle, or reached
+  its cap, rests significant-change and visit wakes for 10 min; only one that saw no vehicle stays
+  in the hourly cap's record; one that timed out seeing none puts the parked region where the phone
+  rests (its last trusted fix). Every 5 s the detector's clock checks.
+- **Confirmation** (`confirmStep`, auto): evidence. A trusted row (a valid fix within 30 m, speed
+  rated 2 m/s or better or unrated) at 15 mph or more earns at 1 / hold per ms, the hold
+  interpolated through 15 mph 30 s, 20 mph 15 s, 25 mph 10 s and 30 mph 5 s down to 0 at 35 mph,
+  never under 1 s (`autoHoldMs`). Under 20 mph a row earns only with fresh car motion (a standing
+  confident moving automotive report, or one in the last 2 min, the wake's motion history included),
+  so a bike or an e-scooter in that band never confirms; a row with a confident cycling, walking or
+  running report 30 s old or less earns nothing. The interval between two earning rows at most 2 s
+  apart adds its length at the slower one's rate, so a lone GPS spike earns nothing and from about
+  34 mph a drive confirms on the second reading. Crawling and stops keep the evidence; 5 min with
+  no trusted row over 3 mph forgets it. It confirms at 1. The Start card's trigger (10 mph spanning
+  15 s on the row clock, a dip under it of 5 s or less kept) ends a Start-card drive's wait for
+  driving speed.
+- **The start** (`startOf`): the last trusted row at or under 3 mph before the first interval that
+  earned, going back past a stop shorter than 5 min the car rolled into (trusted, 5 mph or more:
+  a red light, a crawl out of a jam), unless the stop was 5 min or more (a parking). A run that
+  began before the oldest buffered row is traced from the first one. An auto drive whose rows begin moving starts
   when the motion history's car run began, placed at the last end when the car could have come from
   there (40 m/s plus 300 m), else at the first row. `continues` when the start is within 5 min of
   the last end's decision and 150 m of its place (a hint: JS decides a re-open itself).
 - **`recording`**: a new drive id; the journal opens with its `start` line; the rows from the
-  traced start are journaled and emitted with `seq` 1, 2, …, then every new row; `driveStarted`;
+  traced start are journaled and emitted with `seq` 1, 2, … (the safety stop checks from the first
+  live row on, so old buffered rows never end the drive they start), then every new row; `driveStarted`;
   `capturing` true for `getState` (mode `auto` or `mounted`); the "Recording your drive" check is
   scheduled (below).
 - **`ending`**: a JS end rule is overdue (5 min without movement, fix-less car time not counting;
-  a walk standing 20 s with no fix over 3 mph in the last minute; 12 h; for a Start-card drive still
+  a walk standing 5 s with no fix over 3 mph in the last minute; 12 h; for a Start-card drive still
   waiting for driving speed, no walk, and the 5 min only once its `waitUntil` has passed). Movement again returns to
   `recording`. **The native safety stop** commits the end one minute later (`SAFETY_SLACK_MS`) if JS
   has not: the journal gets `end { cause, endedAt: decidedAt }` (native never computes a cut) and
   JS hears `driveEnded`. JS's own end (`stopCapture`) journals `end { cause: 'js', endedAt: its cut }`
-  and emits nothing. After any end: sensing off, the capture flag cleared, the Live Activity ended
-  (`roadwise.driveDisplay` `ended`), the note removed, `lastEnd` and the parked region at the last
-  trusted fix, `armed` again. There is no native merge grace.
+  and emits nothing. Every end runs inside a background task (`drivesense.end`, 25 s), so JS can
+  store the drive and post its recap. After any end: sensing off, the capture flag cleared, the Live
+  Activity ended (`roadwise.driveDisplay` `ended`), the note removed, `lastEnd` and the parked region
+  at the last trusted fix, `armed` again. After an automatic end (native's 5 min still or walk, or a
+  JS end that a JS rule would have made by then), unless it was a Start-card drive still waiting, an
+  auto candidate opens at once (`linger`: no hourly cap entry, no rest, no parked spot): a quick
+  restart confirms near where the drive ended, and `continues` lets JS re-open the held drive.
+  The walk is read as JS reads it: a confident walking or running report stands until a report of
+  another kind replaces it; one at low confidence leaves a standing walk alone.
 - **`suppressed`** ("Not driving?"): ten-metre GPS, no IMU, no rows, the live motion activity. It
   ends on a walk standing 20 s, after 5 min with no trusted fix over 3 mph, or at its 3 h cap; then
   GPS off, the parked region at the last fix, `armed`. `lastEnd` is not touched.
@@ -945,8 +970,8 @@ Location Always + Precise + Motion & Fitness for drives that start on their own;
 Precise for Start drive. Background App Refresh off (Low Power Mode turns it off) is reported as a
 need: iOS may then not relaunch RoadWise for a wake. The blue background-location indicator never
 shows (`showsBackgroundLocationIndicator = false` on every manager). Idle costs nothing but the
-wakes; a candidate is bounded (3 min, 6 an hour, the motion gate); a drive costs what a manual drive
-did.
+wakes; a candidate is bounded (3 min without a vehicle sign, 30 min at most, 6 empty ones an hour,
+the motion gate); a drive costs what a manual drive did.
 
 ### Self-test
 
