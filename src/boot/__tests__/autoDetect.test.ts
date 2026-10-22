@@ -16,6 +16,7 @@ import { SIGN_OUT_SETTINGS, wipeDevice, wipeForSignOut } from '@/boot/device';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, migrate, SPOTS_META_KEY, type Db } from '@/data/db';
 import { NOT_DRIVING_KEY } from '@/drive/notDriving';
+import { DRIVE_SCREEN_ENTERED_KEY } from '@/features/drive/hudPresence';
 
 jest.mock('expo-notifications', () => ({}));
 
@@ -148,10 +149,12 @@ test('both wipes disarm automatic drives (iPhone) and wipe native’s drive stat
   await wipeDevice(db, { detect: launch });
   expect(launch.snapshot.armed).toBe(false);
   expect(launchWipe).toHaveBeenCalledTimes(1);
-  expect(SIGN_OUT_SETTINGS).toEqual(expect.arrayContaining([NOT_DRIVING_KEY, SPOTS_META_KEY]));
+  expect(SIGN_OUT_SETTINGS).toEqual(expect.arrayContaining([NOT_DRIVING_KEY, SPOTS_META_KEY, DRIVE_SCREEN_ENTERED_KEY]));
   await createSettingsRepo(db).set(NOT_DRIVING_KEY, { clientTripId: 'x', spentMs: 1, expired: false, updatedAt: 1 });
+  await createSettingsRepo(db).set(DRIVE_SCREEN_ENTERED_KEY, 'x');
   await wipeForSignOut(db);
   expect(await createSettingsRepo(db).get(NOT_DRIVING_KEY)).toBeNull();
+  expect(await createSettingsRepo(db).get(DRIVE_SCREEN_ENTERED_KEY)).toBeNull();
 });
 
 describe('the Automatic drives switch', () => {

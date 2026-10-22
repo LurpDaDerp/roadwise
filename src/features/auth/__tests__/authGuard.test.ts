@@ -11,12 +11,14 @@ import {
 import type { EngineStatus } from '@/core/engine/engine.types';
 import type { UpdateStatus } from '@/features/auth/version';
 
-const IDLE: DriveFacts = { busy: false, tripOpen: false, origin: null };
-const RECORDING: DriveFacts = { busy: true, tripOpen: true, origin: 'manual' };
+const IDLE: DriveFacts = { busy: false, tripOpen: false, origin: null, entered: false };
+const RECORDING: DriveFacts = { busy: true, tripOpen: true, origin: 'manual', entered: false };
 /** An open trip whose origin the snapshot did not carry: treated as manual (the driving screen). */
-const RECORDING_UNKNOWN: DriveFacts = { busy: true, tripOpen: true, origin: null };
-const RECORDING_AUTO: DriveFacts = { busy: true, tripOpen: true, origin: 'auto' };
-const FINALIZING: DriveFacts = { busy: true, tripOpen: false, origin: null };
+const RECORDING_UNKNOWN: DriveFacts = { busy: true, tripOpen: true, origin: null, entered: false };
+const RECORDING_AUTO: DriveFacts = { busy: true, tripOpen: true, origin: 'auto', entered: false };
+/** An automatic drive whose driving screen was shown during it (this process or before a relaunch). */
+const RECORDING_AUTO_ENTERED: DriveFacts = { busy: true, tripOpen: true, origin: 'auto', entered: true };
+const FINALIZING: DriveFacts = { busy: true, tripOpen: false, origin: null, entered: false };
 
 describe('profileGate (v3: onboarded_at and a username)', () => {
   test.each<[string, unknown, ProfileGate]>([
@@ -34,9 +36,9 @@ describe('profileGate (v3: onboarded_at and a username)', () => {
 
 describe('driveFacts', () => {
   test.each<[string, boolean, DriveFacts]>([
-    ['idle', false, { busy: false, tripOpen: false, origin: null }],
-    ['recording', true, { busy: true, tripOpen: true, origin: null }],
-    ['finalizing', true, { busy: true, tripOpen: false, origin: null }],
+    ['idle', false, { busy: false, tripOpen: false, origin: null, entered: false }],
+    ['recording', true, { busy: true, tripOpen: true, origin: null, entered: false }],
+    ['finalizing', true, { busy: true, tripOpen: false, origin: null, entered: false }],
   ])('%s', (status, hostBusy, expected) =>
     expect(driveFacts({ status: status as EngineStatus }, hostBusy)).toEqual(expected)
   );
@@ -46,8 +48,15 @@ describe('driveFacts', () => {
     expect(driveFacts({ status: 'recording', origin: 'manual' }, true).origin).toBe('manual');
     expect(driveFacts({ status: 'recording', origin: null }, true).origin).toBeNull();
     // finalizing is over, whatever the snapshot still says
-    expect(driveFacts({ status: 'finalizing', origin: 'manual' }, true)).toEqual({ busy: true, tripOpen: false, origin: null });
+    expect(driveFacts({ status: 'finalizing', origin: 'manual' }, true)).toEqual({ busy: true, tripOpen: false, origin: null, entered: false });
     expect(driveFacts({ status: 'idle', origin: 'auto' }, false).origin).toBeNull();
+  });
+
+  test('entered is carried only while a trip is open, and is false unless given', () => {
+    expect(driveFacts({ status: 'recording', origin: 'auto' }, true, true).entered).toBe(true);
+    expect(driveFacts({ status: 'recording', origin: 'auto' }, true).entered).toBe(false);
+    expect(driveFacts({ status: 'finalizing', origin: 'auto' }, true, true).entered).toBe(false);
+    expect(driveFacts({ status: 'idle' }, false, true).entered).toBe(false);
   });
 
   test('the host saying busy is enough, whatever the snapshot says', () =>
@@ -71,6 +80,10 @@ describe('resolveStart', () => {
     ['loading', 'unknown', 'ok', RECORDING_AUTO, null],
     ['signedIn', 'unknown', 'ok', RECORDING_AUTO, null],
     ['signedIn', 'ready', 'required', RECORDING_AUTO, '/update-required'],
+    // An automatic drive whose driving screen was shown during it goes back to it, like a manual one.
+    ['signedIn', 'ready', 'ok', RECORDING_AUTO_ENTERED, '/drive'],
+    ['loading', 'unknown', null, RECORDING_AUTO_ENTERED, '/drive'],
+    ['signedIn', 'ready', 'required', RECORDING_AUTO_ENTERED, '/drive'],
     // Finalizing is already over: never the driving screen.
     ['signedIn', 'ready', 'ok', FINALIZING, '/(tabs)/home'],
     // The config has not been read: hold the frame.

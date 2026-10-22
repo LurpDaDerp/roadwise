@@ -8,6 +8,7 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { DataProvider } from '@/data/queries/context';
 import { SessionProvider } from '@/data/supabase/session';
 import { writeProfileCache } from '@/features/auth/profileCache';
+import { markDriveScreenEntered, resetDriveScreenPresence } from '@/features/drive/hudPresence';
 import { ThemeProvider } from '@/ui/theme';
 
 import Launch, { launchCopy } from '../index';
@@ -20,9 +21,11 @@ const mockWorld: {
   driveStatus: string;
   /** How the open drive began (the engine snapshot's origin). */
   driveOrigin: 'auto' | 'manual' | null;
+  /** The open drive's id (the engine snapshot's clientTripId). */
+  driveTripId: string | null;
   hostBusy: boolean;
   update: 'required' | 'ok' | 'unknown' | null;
-} = { session: null, profile: 'fail', driveStatus: 'idle', driveOrigin: null, hostBusy: false, update: 'ok' };
+} = { session: null, profile: 'fail', driveStatus: 'idle', driveOrigin: null, driveTripId: null, hostBusy: false, update: 'ok' };
 const mockProfileCalls: string[] = [];
 
 jest.mock('expo-router', () => {
@@ -47,7 +50,8 @@ jest.mock('@/data/supabase/profile', () => ({
   }),
 }));
 jest.mock('@/drive/useDrive', () => ({
-  useDrive: (select: (s: { status: string; origin: string | null }) => unknown) => select({ status: mockWorld.driveStatus, origin: mockWorld.driveOrigin }),
+  useDrive: (select: (s: { status: string; origin: string | null; clientTripId: string | null }) => unknown) =>
+    select({ status: mockWorld.driveStatus, origin: mockWorld.driveOrigin, clientTripId: mockWorld.driveTripId }),
   useDriveHost: () => ({ isBusy: () => mockWorld.hostBusy }),
 }));
 jest.mock('@/features/auth/version', () => ({ useUpdateStatus: () => mockWorld.update }));
@@ -60,11 +64,13 @@ beforeEach(async () => {
   db = await createSqlJsDb();
   await migrate(db);
   mockProfileCalls.length = 0;
+  resetDriveScreenPresence();
   Object.assign(mockWorld, {
     session: { user: { id: 'u1' } },
     profile: ONBOARDED,
     driveStatus: 'idle',
     driveOrigin: null,
+    driveTripId: null,
     hostBusy: false,
     update: 'ok',
   });
@@ -106,6 +112,20 @@ describe('an open trip on a cold start (rev1: I2, N-m3)', () => {
 
   test('an automatic drive → Home, where its Drive in progress strip leads to the driving screen', async () => {
     Object.assign(mockWorld, { driveStatus: 'recording', driveOrigin: 'auto', hostBusy: true });
+    await launch();
+    expect(landed()).toBe('redirect:/(tabs)/home');
+  });
+
+  test('an automatic drive whose driving screen was shown during it (kept across the relaunch) → the driving screen', async () => {
+    Object.assign(mockWorld, { driveStatus: 'recording', driveOrigin: 'auto', driveTripId: 't-auto', hostBusy: true });
+    markDriveScreenEntered('t-auto');
+    await launch();
+    expect(landed()).toBe('redirect:/drive');
+  });
+
+  test('an automatic drive: the driving screen shown for another drive does not count (Home)', async () => {
+    Object.assign(mockWorld, { driveStatus: 'recording', driveOrigin: 'auto', driveTripId: 't-auto', hostBusy: true });
+    markDriveScreenEntered('t-earlier');
     await launch();
     expect(landed()).toBe('redirect:/(tabs)/home');
   });

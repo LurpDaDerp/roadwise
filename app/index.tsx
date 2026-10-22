@@ -1,11 +1,12 @@
 import { Redirect, type Href } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { AccessibilityInfo, View } from 'react-native';
 
 import { useSession } from '@/data/supabase/session';
 import { useDrive, useDriveHost } from '@/drive/useDrive';
 import { driveFacts, profileGate, resolveStart } from '@/features/auth/authGuard';
 import { useUpdateStatus } from '@/features/auth/version';
+import { driveScreenEnteredFor, subscribeDriveScreen } from '@/features/drive/hudPresence';
 import { t } from '@/i18n';
 import { Banner, Button, Screen, Skeleton, Text } from '@/ui';
 
@@ -21,20 +22,21 @@ export const PROFILE_WAIT_MS = 10_000;
 
 /**
  * A1: the launch router. It draws a held frame, never a screen, and then hands off:
- * - an open manual trip (recording or ending) goes straight back to the driving screen, before any
- *   other rule;
- * - then `resolveStart`: a required update, sign-in, onboarding, or Home (an automatic drive under
- *   way included: Home's Drive in progress strip leads to its driving screen).
+ * - an open manual trip (recording or ending), or an automatic one whose driving screen was shown
+ *   during it, goes straight back to the driving screen, before any other rule;
+ * - then `resolveStart`: a required update, sign-in, onboarding, or Home (an automatic drive never
+ *   opened included: Home's Drive in progress strip leads to its driving screen).
  * A signed-in driver whose profile cannot be read and is not cached (a first launch offline) gets
  * the retry after 10 s; a cached profile lands them as usual (rev1: I11).
  */
 export default function Launch() {
   const { status, profile, refreshProfile } = useSession();
   const host = useDriveHost();
-  const drive = useDrive((s) => ({ status: s.status, origin: s.origin }));
+  const drive = useDrive((s) => ({ status: s.status, origin: s.origin, tripId: s.clientTripId }));
+  const entered = useSyncExternalStore(subscribeDriveScreen, () => driveScreenEnteredFor(drive.tripId));
   const update = useUpdateStatus();
   const gate = profileGate(profile);
-  const to = resolveStart(status, gate, update, driveFacts(drive, host.isBusy()));
+  const to = resolveStart(status, gate, update, driveFacts(drive, host.isBusy(), entered));
 
   const [waited, setWaited] = useState(false);
   const [retrying, setRetrying] = useState(false);

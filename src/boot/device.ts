@@ -21,6 +21,7 @@ import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { DROP_NOTICE_KEY } from '@/drive/dropNotice';
 import { NOT_DRIVING_KEY } from '@/drive/notDriving';
 import { PENDING_TERMS_KEY } from '@/features/auth/pendingTermsKey';
+import { DRIVE_SCREEN_ENTERED_KEY } from '@/features/drive/hudPresence';
 
 import { autoDetectOff } from './autoDetect';
 
@@ -69,7 +70,14 @@ export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'da
  * "Not driving?" budget, the problem spots' bookkeeping, and the record that this driver's restore
  * ran to the end: their drives just left the phone, so the next sign-in restores them again.
  */
-export const SIGN_OUT_SETTINGS: readonly string[] = ['privacy.zones', DROP_NOTICE_KEY, NOT_DRIVING_KEY, SPOTS_META_KEY, RESTORED_AT_KEY];
+export const SIGN_OUT_SETTINGS: readonly string[] = [
+  'privacy.zones',
+  DROP_NOTICE_KEY,
+  NOT_DRIVING_KEY,
+  SPOTS_META_KEY,
+  RESTORED_AT_KEY,
+  DRIVE_SCREEN_ENTERED_KEY,
+];
 
 /** How long a wipe waits for the drive summaries to be cancelled before going on without it. */
 export const CANCEL_SUMMARIES_TIMEOUT_MS = 2_000;
