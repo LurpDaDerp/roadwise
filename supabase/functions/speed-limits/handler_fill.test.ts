@@ -6,7 +6,7 @@ import type { BBox } from '../_shared/speedLimits/geometry';
 import { parseTileKey, tileBounds } from '../_shared/speedLimits/tiles';
 import { TileBatchResponseSchema } from '../_shared/speedLimits/wire';
 import type { OsmFill } from './fill.ts';
-import { createSpeedLimitsDb, FILLING_EXPIRY_MS, handleSpeedLimits, type SpeedLimitsDeps } from './handler.ts';
+import { createSpeedLimitsDb, FILLING_CACHE_CONTROL, FILLING_EXPIRY_MS, handleSpeedLimits, type SpeedLimitsDeps } from './handler.ts';
 
 const UID = '00000000-0000-4000-8000-000000000001';
 const NOW = 1_790_000_000_000 - 30 * 86_400_000;
@@ -86,7 +86,9 @@ Deno.test('a tile batch hands every requested tile box to the fill, and a tile w
   assertEquals(checked.tiles.map((t) => t.expiresAt), [1_790_000_000_000, NOW + FILLING_EXPIRY_MS, 1_790_000_000_000]);
   assertEquals(checked.tiles[1].segments.length, 1, 'the rows already there are sent as they stand');
   assert(!('filling' in body.tiles[0]), 'a loaded tile carries no flag');
-  assertEquals(res.headers.get('cache-control'), 'private, max-age=25');
+  // One tile filling: the batch is stored by no HTTP cache, so the device's re-ask reaches the server.
+  assertEquals(FILLING_CACHE_CONTROL, 'no-store');
+  assertEquals(res.headers.get('cache-control'), 'no-store');
   assertEquals(h.infos.at(-1)?.outcome, 'served_filling');
 });
 
@@ -105,7 +107,7 @@ Deno.test('a filling expiry never pushes a tile later than its own expiry', asyn
   const res = await handleSpeedLimits(get(KEYS), h.deps);
   const body = await res.json();
   assertEquals(body.tiles[0].expiresAt, 1_790_000_000_000);
-  assertEquals(res.headers.get('cache-control'), 'private, max-age=1');
+  assertEquals(res.headers.get('cache-control'), 'no-store');
 });
 
 Deno.test('a point request claims the box of the point itself (one cell, plus its look-ahead) and answers as before', async () => {

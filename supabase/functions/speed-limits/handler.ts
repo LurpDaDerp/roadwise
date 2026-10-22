@@ -152,11 +152,17 @@ export const MAX_BODY_BYTES = 1_024;
 export const TILE_MAX_AGE_S = 86_400;
 /** A tile whose cell is still filling expires this soon, so the device asks for it again. */
 export const FILLING_EXPIRY_MS = 25_000;
+/**
+ * A batch with any tile still filling is stored by no HTTP cache: the device asks for that tile
+ * again within seconds, and a cached copy would answer the re-ask with the same "filling" reply.
+ */
+export const FILLING_CACHE_CONTROL = 'no-store';
 
 /**
  * The batch's `Cache-Control` (ruling B2-I1): never cached past the earliest tile expiry in it, so
  * a cache row's refresh (or its expiry) is never hidden behind a stale HTTP copy; at most a day.
- * `max(0, floor((min(expiresAt) - now) / 1000))`, capped at `TILE_MAX_AGE_S`.
+ * `max(0, floor((min(expiresAt) - now) / 1000))`, capped at `TILE_MAX_AGE_S`. A batch with a tile
+ * still filling is never cached at all (`FILLING_CACHE_CONTROL`).
  */
 export function tileCacheControl(expiresAt: readonly number[], nowMs: number): string {
   const earliest = Math.min(...expiresAt);
@@ -459,7 +465,7 @@ async function tiles(req: Request, run: Run): Promise<Outcome> {
     filling?.[i] ? { ...t, filling: true, expiresAt: Math.min(t.expiresAt, nowMs + FILLING_EXPIRY_MS) } : t
   );
   const body = { ...checked.data, tiles };
-  const cacheControl = tileCacheControl(tiles.map((t) => t.expiresAt), nowMs);
+  const cacheControl = tiles.some((t) => t.filling === true) ? FILLING_CACHE_CONTROL : tileCacheControl(tiles.map((t) => t.expiresAt), nowMs);
   const res = await jsonEncoded(req, 200, body, { 'cache-control': cacheControl });
   return { res, outcome: filling?.some(Boolean) ? 'served_filling' : 'served', source: null };
 }
