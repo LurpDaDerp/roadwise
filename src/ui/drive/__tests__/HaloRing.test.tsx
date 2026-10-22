@@ -6,7 +6,7 @@ import { act, render, screen, within } from '@testing-library/react-native';
 import { StyleSheet, View } from 'react-native';
 import { getAnimatedStyle } from 'react-native-reanimated';
 
-import { HALO_CALM, type HaloVisual } from '../halo';
+import { compassGeometry, HALO_CALM, type HaloVisual } from '../halo';
 import { COMPASS_DIM_LETTERS } from '../HaloCompass';
 import { HALO_TIMINGS } from '../haloMotion';
 import { Halo } from '../HaloRing';
@@ -232,6 +232,63 @@ describe('the compass', () => {
     const color = (l: string) => StyleSheet.flatten(within(screen.getByTestId(`hud-compass-${l}`, HIDDEN)).getByText(l, HIDDEN).props.style).color;
     expect(color('N')).toBe(p.haloInk);
     for (const l of ['E', 'S', 'W']) expect(color(l)).toBe(p.haloInkMuted);
+  });
+
+  test('the letters: ExtraBold at the card’s size, no Dynamic Type, their ink centred on the letters’ circle', async () => {
+    await render(view(HALO_CALM, { heading: 0 }));
+    const cg = compassGeometry(343);
+    expect(cg.letterPt).toBe(19);
+    for (const l of ['N', 'E', 'S', 'W']) {
+      const text = within(screen.getByTestId(`hud-compass-${l}`, HIDDEN)).getByText(l, HIDDEN);
+      expect(text.props.allowFontScaling).toBe(false);
+      expect(StyleSheet.flatten(text.props.style)).toMatchObject({ fontFamily: 'BarlowSemiCondensed_800ExtraBold', fontSize: 19, lineHeight: 19 * 1.2 });
+      // its box centred on the halo's centre, raised so the caps (not the line) sit on the point
+      const box = StyleSheet.flatten(screen.getByTestId(`hud-compass-${l}`, HIDDEN).props.style) as { left: number; top: number; width: number };
+      expect(box.width).toBe(Math.ceil(19 * 1.2));
+      expect(box.left).toBe(343 / 2 - box.width / 2);
+      expect(box.top).toBeCloseTo(343 / 2 - box.width / 2 - 0.05 * 19, 9);
+    }
+    // heading 0: N at 12 o'clock on the letters' circle
+    const n = getAnimatedStyle(screen.getByTestId('hud-compass-N', HIDDEN)) as unknown as { transform: Record<string, number>[] };
+    expect(n.transform[0]!['translateX']).toBeCloseTo(0, 9);
+    expect(n.transform[1]!['translateY']).toBeCloseTo(-cg.letterR, 9);
+  });
+
+  test('the ticks: one every 15° between the letters, the four halfway between them longer and bolder, centred on the letters’ circle', async () => {
+    await render(view(HALO_CALM, { heading: 0 }));
+    const cg = compassGeometry(343);
+    const ticks = screen.getAllByTestId('hud-compass-tick', HIDDEN);
+    expect(ticks).toHaveLength(20);
+    const c = 343 / 2;
+    for (const t of ticks) {
+      const { x1, y1, x2, y2, strokeWidth } = t.props as { x1: number; y1: number; x2: number; y2: number; strokeWidth: number };
+      const r1 = Math.hypot(x1 - c, y1 - c);
+      const r2 = Math.hypot(x2 - c, y2 - c);
+      expect((r1 + r2) / 2).toBeCloseTo(cg.letterR, 6);
+      const bearing = Math.round(((Math.atan2(x1 - c, c - y1) * 180) / Math.PI + 360) % 360);
+      expect(bearing % 15).toBe(0);
+      expect(bearing % 90).not.toBe(0);
+      const major = bearing % 45 === 0;
+      expect(r1 - r2).toBeCloseTo(major ? cg.tick : cg.minorTick, 6);
+      expect(Number(strokeWidth)).toBe(major ? 2.5 : 1.5);
+    }
+  });
+
+  test('the fixed mark: a triangle in the gap at the top, pointing out at the course, clear of the ring at its largest pulse', async () => {
+    await render(view(HALO_CALM, { heading: 0 }));
+    const cg = compassGeometry(343);
+    const d = String(screen.getByTestId('hud-compass-arrow', HIDDEN).props.d);
+    const n = (d.match(/-?[\d.]+/g) ?? []).map(Number);
+    const [bx1, by1, bx2, by2, tx, ty] = n as [number, number, number, number, number, number];
+    const c = 343 / 2;
+    expect([cg.markH, cg.markW]).toEqual([9, 14]);
+    expect(by1).toBeCloseTo(by2, 9);
+    expect(bx2 - bx1).toBeCloseTo(cg.markW, 9);
+    expect(tx).toBeCloseTo(c, 9);
+    // the tip nearer the card than the base: it points out
+    expect(c - ty).toBeCloseTo(cg.markTip, 9);
+    expect(c - by1).toBeCloseTo(cg.markTip - cg.markH, 9);
+    expect(c - by1).toBeGreaterThan(cg.ring);
   });
 
   test('Reduce Motion: the card snaps to each course', async () => {

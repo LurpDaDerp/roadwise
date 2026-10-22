@@ -293,25 +293,55 @@ export const COMPASS_LETTERS = [
   { label: 'S', bearing: 180 },
   { label: 'W', bearing: 270 },
 ] as const;
-/** A tick every this many degrees. */
+/** A tick every this many degrees (none at N, E, S and W: the letters stand there). */
 export const COMPASS_TICK_DEG = 15;
-/** Half a letter's extent from its centre, of its type size (a wide W). */
-const COMPASS_LETTER_HALF_EM = 0.42;
-/** Between the ticks and the letters. */
-const COMPASS_GAP_PT = 2;
+/**
+ * The letters' ink in Barlow Semi Condensed ExtraBold (fontTools), of their type size: half the
+ * widest one's width (W, 0.765 em) and half the tallest one's height (S, 0.716 em with its overshoot).
+ */
+export const COMPASS_LETTER_INK_EM = { halfW: 0.383, halfH: 0.358 } as const;
+/** The farthest a letter's ink reaches from its centre at any angle on the card: its ink box's half-diagonal, rounded up. */
+export const COMPASS_LETTER_REACH_EM = 0.53;
+/** The letters are as large as the card's room allows, between these (never larger than the speed's unit). */
+export const COMPASS_LETTER_MIN_PT = 12;
+export const COMPASS_LETTER_MAX_PT = 20;
+/**
+ * In a line 1.2 em tall (ascender 1, descender 0.2) the caps (0.7 em) sit 0.05 em under the line's
+ * middle; each letter is raised this much so its ink is centred on its point of the card.
+ */
+export const COMPASS_LETTER_RISE_EM = 0.05;
+/** The type's line height, of its size (the face's ascender and descender, so no platform adds room). */
+export const COMPASS_LETTER_LINE_EM = 1.2;
+/** The ticks' strokes: the four between the letters (NE, SE, SW, NW), and the rest. */
+export const COMPASS_TICK_STROKE = { major: 2.5, minor: 1.5 } as const;
+/**
+ * The card's inner edge sits this far outside the ring at its largest pulse wherever the box allows:
+ * a severe event's full shake (7 pt) and 2 pt to spare, so the compass rings every halo at the same gap.
+ */
+export const COMPASS_RING_GAP_PT = SHAKE_PT.severe + 2;
+/** Kept clear between the shaken ring at its largest pulse and anything the compass draws. */
+const COMPASS_CLEAR_PT = 1;
+/** Between the fixed mark's tip and a letter passing over it. */
+const COMPASS_MARK_GAP_PT = 2;
 
 export interface CompassGeometry {
-  /** the outer edge: where the ticks end and the fixed mark sits */
+  /** the compass's bound, just inside the box: nothing it draws reaches past it (the portrait band clears it) */
   outer: number;
-  /** a cardinal tick's length, and the others' */
-  tick: number;
-  minorTick: number;
-  /** the letters' type size and the radius their centres sit on */
+  /** the ring's outer edge at its largest pulse, which nothing the compass draws comes inside */
+  ring: number;
+  /** the card's inner edge: the nearest a letter's ink or a tick comes to the centre, at any rotation */
+  inner: number;
+  /** the letters' type size, and the circle their ink is centred on (the ticks' middles sit on it too) */
   letterPt: number;
   letterR: number;
-  /** the innermost reach of anything the compass draws */
-  inner: number;
-  /** the fixed mark at the top: a triangle pointing in */
+  /** a tick's length between the letters (NE, SE, SW, NW), and the others' */
+  tick: number;
+  minorTick: number;
+  /**
+   * The fixed mark at 12 o'clock, between the ring and the card: a triangle pointing out at the
+   * course, its tip `markTip` from the centre, `markH` tall on a base `markW` wide.
+   */
+  markTip: number;
   markH: number;
   markW: number;
   /** the farthest the ring may shake sideways and stay clear of the compass at its largest pulse */
@@ -319,21 +349,38 @@ export interface CompassGeometry {
 }
 
 /**
- * The compass in a halo box of side `B`: ticks just inside the box's edge, the letters inside them,
- * all of it outside the ring at its largest pulse with room for the shake. It never scales.
+ * The compass in a halo box of side `B`: one card around the ring, concentric with it, its inner
+ * edge `COMPASS_RING_GAP_PT` outside the ring at its largest pulse; the letters as large as fit
+ * between that and the box's edge (12–20 pt) with the ticks centred on their circle, and the fixed
+ * mark in the gap at the top. A box too small for that gap and 12 pt letters puts the card against
+ * its edge and narrows the gap (and the shake) instead. It never scales with the pulse.
  */
 export function compassGeometry(B: number): CompassGeometry {
   const g = haloGeometry(B);
+  const ring = (g.r + g.W / 2) * HALO_MAX_SCALE;
   const outer = B / 2 - 1;
-  const tick = Math.min(7, Math.max(4, Math.round(0.016 * B)));
-  const minorTick = Math.max(2, Math.round(0.55 * tick));
-  const letterPt = Math.min(14, Math.max(10, Math.round(0.034 * B)));
-  const half = COMPASS_LETTER_HALF_EM * letterPt;
-  const letterR = outer - tick - COMPASS_GAP_PT - half;
-  const inner = letterR - half;
-  const ringMax = (g.r + g.W / 2) * HALO_MAX_SCALE;
-  const shakeMax = Math.max(0, Math.floor((inner - ringMax - 1) * 10) / 10);
-  return { outer, tick, minorTick, letterPt, letterR, inner, markH: tick + 1, markW: Math.round(1.4 * (tick + 1)), shakeMax };
+  const reach = COMPASS_LETTER_REACH_EM;
+  const fit = Math.floor((outer - ring - COMPASS_RING_GAP_PT) / (2 * reach));
+  const letterPt = Math.min(COMPASS_LETTER_MAX_PT, Math.max(COMPASS_LETTER_MIN_PT, fit));
+  const inner = Math.min(ring + COMPASS_RING_GAP_PT, outer - 2 * reach * letterPt);
+  const letterR = inner + reach * letterPt;
+  // The mark's tip a gap under a letter at the top; as tall as fits above the ring at its largest
+  // pulse (a sideways shake never lifts the ring's top).
+  const markTip = letterR - COMPASS_LETTER_INK_EM.halfH * letterPt - COMPASS_MARK_GAP_PT;
+  const markH = Math.max(0, Math.min(Math.round(0.45 * letterPt), Math.floor(markTip - ring - COMPASS_CLEAR_PT)));
+  return {
+    outer,
+    ring,
+    inner,
+    letterPt,
+    letterR,
+    tick: Math.round(0.5 * letterPt),
+    minorTick: Math.round(0.3 * letterPt),
+    markTip,
+    markH,
+    markW: Math.round(1.6 * markH),
+    shakeMax: Math.max(0, Math.floor((inner - ring - COMPASS_CLEAR_PT) * 10 + 1e-6) / 10),
+  };
 }
 
 // ——— geometry ———

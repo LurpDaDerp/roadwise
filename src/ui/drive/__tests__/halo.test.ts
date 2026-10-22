@@ -6,8 +6,16 @@ import { contrastRatio } from '@/ui/contrast';
 
 import {
   burstFor,
+  COMPASS_LETTER_INK_EM,
+  COMPASS_LETTER_MAX_PT,
+  COMPASS_LETTER_MIN_PT,
+  COMPASS_LETTER_REACH_EM,
   COMPASS_LETTERS,
+  COMPASS_RING_GAP_PT,
+  COMPASS_TICK_DEG,
+  COMPASS_TICK_STROKE,
   compassGeometry,
+  type CompassGeometry,
   dashpalSeverity,
   deltaEOk,
   glowStops,
@@ -358,10 +366,12 @@ describe('the shake', () => {
         expect(a).toBeLessThanOrEqual(c.shakeMax);
         expect((g.r + g.W / 2) * HALO_MAX_SCALE + a).toBeLessThan(c.inner);
       }
-      expect(c.shakeMax).toBeGreaterThanOrEqual(2.5);
+      expect(c.shakeMax).toBeGreaterThanOrEqual(5);
     }
-    // a small box caps a severe shake at its gap
-    expect(shakeAmplitudePt('severe', 260)).toBe(compassGeometry(260).shakeMax);
+    // a severe shake in full from a 260 pt box up; the smallest boxes cap it at their gap
+    expect(shakeAmplitudePt('severe', 260)).toBe(7);
+    expect(shakeAmplitudePt('severe', 220)).toBe(compassGeometry(220).shakeMax);
+    expect(compassGeometry(220).shakeMax).toBe(5);
   });
 
   test('swings side to side, fading out, back to rest: four swings, six for a severe event', () => {
@@ -402,27 +412,113 @@ describe('the compass', () => {
     ]);
   });
 
-  test('in every ring box: inside the box, outside the ring at its largest pulse, letters 10 to 14 pt, ticks 4 to 7', () => {
+  // A letter's ink box on the card turned `rot` degrees, from the halo's centre (y down): every letter
+  // as wide as a W and as tall as an S.
+  const inkBox = (c: CompassGeometry, bearing: number, rot: number) => {
+    const a = ((bearing + rot) * Math.PI) / 180;
+    return { x: c.letterR * Math.sin(a), y: -c.letterR * Math.cos(a), w: COMPASS_LETTER_INK_EM.halfW * c.letterPt, h: COMPASS_LETTER_INK_EM.halfH * c.letterPt };
+  };
+  type Box = ReturnType<typeof inkBox>;
+  const farthest = (b: Box) => Math.hypot(Math.abs(b.x) + b.w, Math.abs(b.y) + b.h);
+  /** The nearest the box comes to a ring centre moved `dx` sideways (the shake). */
+  const nearestFrom = (b: Box, dx: number) => Math.hypot(Math.max(0, Math.abs(b.x - dx) - b.w), Math.max(0, Math.abs(b.y) - b.h));
+  const rotations = Array.from({ length: 720 }, (_, i) => i / 2);
+  const tickBearings = Array.from({ length: 24 }, (_, i) => i * COMPASS_TICK_DEG).filter((b) => b % 90 !== 0);
+
+  test('every letter, at every rotation of the card, in every ring box: its ink inside the compass’s bound, clear of the ring at its largest pulse shaken either way', () => {
     for (let B = 220; B <= 420; B += 1) {
       const c = compassGeometry(B);
       const g = haloGeometry(B);
-      expect(c.outer).toBeLessThanOrEqual(B / 2);
-      expect(c.inner).toBeGreaterThan((g.r + g.W / 2) * HALO_MAX_SCALE);
-      expect(c.letterPt).toBeGreaterThanOrEqual(10);
-      expect(c.letterPt).toBeLessThanOrEqual(14);
-      expect(c.tick).toBeGreaterThanOrEqual(4);
-      expect(c.tick).toBeLessThanOrEqual(7);
-      expect(c.minorTick).toBeLessThan(c.tick);
-      // the letters sit inside the ticks; the fixed mark reaches past the ticks, never into a letter
-      expect(c.letterR).toBeLessThan(c.outer - c.tick);
-      expect(c.outer - c.markH).toBeGreaterThan(c.letterR + 0.42 * c.letterPt);
+      expect(c.outer).toBe(B / 2 - 1);
+      expect(c.ring).toBeCloseTo((g.r + g.W / 2) * HALO_MAX_SCALE, 9);
+      let far = 0;
+      let near = Infinity;
+      for (const rot of rotations) {
+        for (const l of COMPASS_LETTERS) {
+          const b = inkBox(c, l.bearing, rot);
+          far = Math.max(far, farthest(b));
+          near = Math.min(near, nearestFrom(b, c.shakeMax), nearestFrom(b, -c.shakeMax));
+        }
+      }
+      expect(far).toBeLessThanOrEqual(c.outer);
+      expect(near).toBeGreaterThanOrEqual(c.ring + 1 - 1e-9);
+      // the card's inner edge is the letters' nearest reach
+      expect(c.inner).toBeCloseTo(c.letterR - COMPASS_LETTER_REACH_EM * c.letterPt, 9);
+      expect(c.shakeMax).toBeLessThanOrEqual(c.inner - c.ring - 1 + 1e-9);
     }
   });
 
-  test('worked boxes: 260 (Android 360 × 640) and 361 (iPhone 15)', () => {
-    expect(compassGeometry(260)).toMatchObject({ outer: 129, tick: 4, letterPt: 10, shakeMax: 6.4 });
-    expect(compassGeometry(361)).toMatchObject({ outer: 179.5, tick: 6, letterPt: 12 });
-    expect(compassGeometry(361).shakeMax).toBeGreaterThan(12);
+  test('the ticks: none at N, E, S and W, the ones between them longer, all centred on the letters’ circle inside the card', () => {
+    expect(tickBearings).toHaveLength(20);
+    expect(tickBearings.filter((b) => b % 45 === 0)).toEqual([45, 135, 225, 315]);
+    expect(COMPASS_TICK_STROKE).toEqual({ major: 2.5, minor: 1.5 });
+    for (let B = 220; B <= 420; B += 1) {
+      const c = compassGeometry(B);
+      expect(c.minorTick).toBeLessThan(c.tick);
+      // a round cap reaches half the stroke past each end
+      expect(c.letterR + c.tick / 2 + COMPASS_TICK_STROKE.major / 2).toBeLessThanOrEqual(c.outer);
+      expect(c.letterR - c.tick / 2 - COMPASS_TICK_STROKE.major / 2).toBeGreaterThanOrEqual(c.inner);
+      // the ticks clear the mark when they pass over it
+      expect(c.letterR - c.tick / 2 - COMPASS_TICK_STROKE.major / 2).toBeGreaterThan(c.markTip + 1);
+    }
+  });
+
+  test('the fixed mark: in the gap at the top, clear of the ring at its largest pulse, its tip under any letter passing over it', () => {
+    for (let B = 220; B <= 420; B += 1) {
+      const c = compassGeometry(B);
+      const base = c.markTip - c.markH;
+      // a sideways shake never lifts the ring's top, so the base only clears the largest pulse
+      expect(base).toBeGreaterThanOrEqual(c.ring + 1);
+      expect(c.markH).toBeGreaterThanOrEqual(5);
+      expect(c.markW).toBe(Math.round(1.6 * c.markH));
+      let gap = Infinity;
+      for (const rot of rotations) {
+        for (const l of COMPASS_LETTERS) {
+          const b = inkBox(c, l.bearing, rot);
+          if (Math.abs(b.x) >= b.w + c.markW / 2 || b.y > 0) continue;
+          gap = Math.min(gap, -b.y - b.h - c.markTip);
+        }
+      }
+      expect(gap).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  test('one gap round every ring: the card 9 pt outside the ring at its largest pulse from a 253 pt box up (room for a severe shake), the letters 12 to 20 pt', () => {
+    expect(COMPASS_RING_GAP_PT).toBe(9);
+    for (let B = 220; B <= 420; B += 1) {
+      const c = compassGeometry(B);
+      expect(c.letterPt).toBeGreaterThanOrEqual(COMPASS_LETTER_MIN_PT);
+      expect(c.letterPt).toBeLessThanOrEqual(COMPASS_LETTER_MAX_PT);
+      if (B >= 253) {
+        expect(c.inner - c.ring).toBeCloseTo(COMPASS_RING_GAP_PT, 9);
+        expect(c.shakeMax).toBe(8);
+      } else {
+        // too small for the gap and 12 pt letters: the card against the bound, the gap narrower
+        expect(c.letterPt).toBe(COMPASS_LETTER_MIN_PT);
+        expect(c.letterR + COMPASS_LETTER_REACH_EM * c.letterPt).toBeCloseTo(c.outer, 9);
+        expect(c.inner - c.ring).toBeLessThan(COMPASS_RING_GAP_PT);
+      }
+    }
+    expect(COMPASS_LETTER_MIN_PT).toBe(12);
+    expect(COMPASS_LETTER_MAX_PT).toBe(20);
+  });
+
+  test('worked boxes: 240 (320 × 568), 260 (Android 360 × 640), 295 (iPhone SE), 343 (13 mini), 361 (iPhone 15), 398 (15 Pro Max), 420', () => {
+    const pick = (B: number) => {
+      const c = compassGeometry(B);
+      return [c.letterPt, c.tick, c.minorTick, c.markH, c.markW, c.shakeMax];
+    };
+    expect(pick(240)).toEqual([12, 6, 4, 5, 8, 6]);
+    expect(pick(260)).toEqual([12, 6, 4, 5, 8, 8]);
+    expect(pick(295)).toEqual([15, 8, 5, 7, 11, 8]);
+    expect(pick(343)).toEqual([19, 10, 6, 9, 14, 8]);
+    expect(pick(361)).toEqual([20, 10, 6, 9, 14, 8]);
+    expect(pick(398)).toEqual([20, 10, 6, 9, 14, 8]);
+    expect(pick(420)).toEqual([20, 10, 6, 9, 14, 8]);
+    const c = compassGeometry(361);
+    expect(c.outer).toBe(179.5);
+    expect(c.inner).toBeCloseTo(157.26, 2);
+    expect(c.letterR).toBeCloseTo(167.86, 2);
   });
 });
 
