@@ -40,6 +40,7 @@ import { writeDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, finishPendingCancel, isJournaled, playerInputs, type DriveHost, type DriveStartPermissions, type PushToStartOutcome, type PushToStartRequest } from '@/drive/host';
 import { isDriveScreenFocused } from '@/features/drive/hudPresence';
 import type { PhoneReminder } from '@/features/drive/phoneReminder';
+import type { StoredDrive } from '@/features/drive/summaryNotifier';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
 import { nativeDashpal, nativeDriveDetect, nativeDriveSource, type DashpalNative, type DriveSource } from '@/drive/source';
@@ -92,6 +93,13 @@ export interface DashcamArgs {
   native: DashpalNative;
 }
 
+/** The recap notifier as the launch holds it: `announceStored` takes the orphans crash recovery stored. */
+export interface LaunchSummaryNotifier {
+  detach(): void;
+  settled?(): Promise<void>;
+  announceStored?(drives: readonly StoredDrive[]): void;
+}
+
 export interface BootstrapDeps {
   openDb?: () => Promise<Db>;
   supabase?: BootSupabase;
@@ -118,7 +126,7 @@ export interface BootstrapDeps {
   /** The phone's cached position for the speed-limit fetch at Start. Default: expo-location's last known (≤ 10 min old). */
   lastPosition?: () => Promise<{ lat: number; lng: number } | null>;
   voiceEnabled?: () => boolean;
-  attachSummaryNotifier?: ((host: DriveHost, db: Db) => { detach(): void; settled?(): Promise<void> }) | null;
+  attachSummaryNotifier?: ((host: DriveHost, db: Db) => LaunchSummaryNotifier) | null;
   /** The phone reminder (a pickup while RoadWise is not active). Default: `createPhoneReminder` over expo-notifications. `null`: none. */
   createPhoneReminder?: (() => PhoneReminder) | null;
   /**
@@ -329,7 +337,9 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   });
 
   // Crash recovery finalizes with the drive's stored DashPal facts too (plan §7.7). An orphan that
-  // never moved is dropped, and Home says why (no OS notification).
+  // never moved is dropped, and Home says why (no OS notification). One kept is handed to the recap
+  // notifier once it is attached (it decides whether it is recent enough to post).
+  const storedOrphans: StoredDrive[] = [];
   const finalizeDeps = async (session: Readonly<TripSession>): Promise<'finalized' | 'dropped'> => {
     const result = await closeDrive(session, {
       db,
@@ -338,7 +348,20 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       appVersion,
       ...dashcamFinalizeDeps(db),
     });
-    if (!isDropped(result)) return 'finalized';
+    if (!isDropped(result)) {
+      storedOrphans.push({
+        clientTripId: result.trip.client_trip_id,
+        ok: true,
+        status: result.trip.status,
+        dropped: null,
+        endCause: 'orphan',
+        at: now(),
+        durationS: result.trip.duration_s,
+        miles: result.trip.miles,
+        endedAt: result.trip.ended_at ?? session.endedAt ?? null,
+      });
+      return 'finalized';
+    }
     await writeDropNotice(db, { clientTripId: result.clientTripId, cause: 'orphan', reason: result.dropped, at: now(), origin: session.origin }).catch((e: unknown) => onError(e, 'dropNotice'));
     return 'dropped';
   };
@@ -458,11 +481,10 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     setActiveDashcam(dc);
     // Before the boot: a drive the boot ends (a journal read to its end) takes its reminder down too.
     const detachReminder = remind?.attach(drive) ?? (() => {});
-    // Before the boot too: a drive the boot stores (native ended it while no process ran, or the
-    // relaunch ends an orphan) gets its recap notification; the notifier decides which are recent
-    // enough to post.
+    // Before the boot too: a drive the boot stores (native ended it while no process ran) gets its
+    // recap notification; the notifier decides which are recent enough to post.
     const attach = deps.attachSummaryNotifier === undefined ? defaultSummaryNotifier : deps.attachSummaryNotifier;
-    let notifier: { detach(): void; settled?(): Promise<void> } | null = null;
+    let notifier: LaunchSummaryNotifier | null = null;
     if (attach) {
       try {
         notifier = attach(drive, db);
@@ -477,6 +499,15 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       // The launch fails with this host: nothing it would announce may post.
       notifier?.detach();
       throw error;
+    }
+    // The orphans crash recovery stored before the host existed, once the boot shows whether a
+    // drive records now (their recaps then wait until none does).
+    if (storedOrphans.length > 0) {
+      try {
+        notifier?.announceStored?.(storedOrphans);
+      } catch (error) {
+        onError(error, 'summary notifier');
+      }
     }
     // A reminder an earlier process left for a drive that is no longer recording comes down.
     remind?.sweep();
@@ -673,7 +704,7 @@ function defaultPhoneReminder(onError: (error: unknown, context: string) => void
   return createPhoneReminder({ onError: (error, context) => onError(error, context) });
 }
 
-function defaultSummaryNotifier(host: DriveHost, db: Db): { detach(): void; settled(): Promise<void> } {
+function defaultSummaryNotifier(host: DriveHost, db: Db): LaunchSummaryNotifier {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
   const { attachSummaryNotifier, summaryUnits } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
   // The driving screen in focus shows a drive's end itself (it opens the recap): no notification then.

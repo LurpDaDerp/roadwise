@@ -592,6 +592,46 @@ test('iOS: the recap notifier is attached before the boot, so a drive native end
   expect(detach).toHaveBeenCalledTimes(1);
 });
 
+test('an orphan crash recovery stores at launch is handed to the recap notifier after the boot; one it drops is not', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  const trips = createTripsRepo(db);
+  // Kept: 300 s of driving that ended just now, its capture gone.
+  await trips.insert({ client_trip_id: uuid(16), started_at: clock - 300_000, tz: TZ, status: 'recording' }, clock);
+  await createSamplesRepo(db).appendMany(uuid(16), rows(300, { t0: clock - 300_000 }).map((r) => ({ ts: r.ts, row: r })));
+  // Dropped: it never moved.
+  await trips.insert({ client_trip_id: uuid(17), started_at: clock - 600_000, tz: TZ, status: 'recording' }, clock);
+  await createSamplesRepo(db).appendMany(uuid(17), rows(300, { t0: clock - 600_000, speedMps: 0 }).map((r) => ({ ts: r.ts, row: r })));
+  const handed: { booted: boolean | undefined; drives: unknown[] }[] = [];
+  const attachSummaryNotifier = (host: DriveHost) => ({
+    detach: () => {},
+    announceStored: (drives: readonly unknown[]) => void handed.push({ booted: host.booted?.(), drives: [...drives] }),
+  });
+  const rt = await bootstrapApp({ ...deps().deps, attachSummaryNotifier });
+  expect(rt.recovery).toMatchObject({ finalized: [uuid(16)], dropped: [uuid(17)] });
+  const stored = await trips.get(uuid(16));
+  expect(handed).toEqual([
+    {
+      booted: true,
+      drives: [
+        {
+          clientTripId: uuid(16),
+          ok: true,
+          status: 'pending',
+          dropped: null,
+          endCause: 'orphan',
+          at: clock,
+          durationS: stored!.duration_s,
+          miles: stored!.miles,
+          endedAt: stored!.ended_at,
+        },
+      ],
+    },
+  ]);
+  expect(stored!.ended_at).toEqual(expect.any(Number));
+  await rt.stop();
+});
+
 test('a boot that fails takes the recap notifier down with it', async () => {
   const detach = jest.fn();
   const failing = deps({
