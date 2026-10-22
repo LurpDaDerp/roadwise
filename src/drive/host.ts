@@ -20,8 +20,10 @@
 // - **One queue.** Every engine dispatch and the native command that follows it run on one serial
 //   chain; after each task the capture is reconciled with the engine's state (on iOS the host never
 //   starts a capture: native owns it, and `stopCapture` tells native the JS end and its cut).
-// - **In front only.** Alert sounds, voice and haptics play only while RoadWise is active; the
-//   spot nudge shows only then. A phone pickup's alert plays only while the driving screen shows
+// - **In front only.** Alert sounds, voice and haptics play only while RoadWise is active, and
+//   never for a replayed row (a journal drained, rows moved into a re-opened drive: old news, which
+//   the engine never shows or shakes either); the spot nudge shows only then. A phone pickup's
+//   alert plays only while the driving screen shows
 //   (focused, RoadWise active) and never for a replayed row; with RoadWise not active its first
 //   alert, from a live row, posts the phone reminder instead (`phoneReminder`), never for a dry
 //   run. The drive records the same either way.
@@ -445,11 +447,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let quietEnd = false;
   /** A Start-card drive is moving into the held drive it continues (`foldInto`): nothing closes or opens meanwhile. */
   let folding = false;
-  /**
-   * While that drive's rows are taken in again by the held drive (`foldInto`): the last row it took
-   * in live. An alert on a row up to it already played on that drive, so it plays nothing again.
-   */
-  let heardUntil: number | null = null;
   /** iOS: the native drive feeding the open trip, and the last journal `seq` taken in. */
   let liveDrive: { driveId: string; clientTripId: string; lastSeq: number } | null = null;
   /** iOS: native journals to delete once the host has settled (their drive is stored). */
@@ -487,7 +484,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let weatherRaw: DangerAlert | null = null;
   let weatherDismissed: DangerKind | null = null;
   let lastFixAt: { lat: number; lng: number; ts: number } | null = null;
-  /** The row the engine is taking in is a replay (a journal drained, the wait's buffer): no reminder from it. */
+  /** The row the engine is taking in is a replay (a journal drained, a Start-card drive's rows moved into a re-opened drive): no sound or reminder from it. */
   let replayingRow = false;
   let subscriptions: (() => void)[] = [];
   const idleWaiters = new Set<() => void>();
@@ -611,8 +608,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.
       if (dashcamAlertActive()) decision.silent = true;
       // RoadWise behind: nothing sounds or vibrates; the driving screen never replays what was missed.
-      // Nor does an alert played already, on a row a re-opened drive takes in again.
-      if (!appActive() || (heardUntil !== null && alert.at <= heardUntil)) decision.suppressed = true;
+      // Nor does a replayed row (a journal drained, a Start-card drive's rows moved into the held
+      // drive it re-opens): it is old news, or played already; the engine never shows it either.
+      if (!appActive() || replayingRow) decision.suppressed = true;
       player.deliver(decision).catch((e: unknown) => report(e, 'player'));
     },
     onCheckpoint: (session) => (persist ? recorder.onCheckpoint(session) : Promise.resolve()),
@@ -628,8 +626,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    * repeat the tone and haptic) only while the driving screen shows, focused with RoadWise active.
    * RoadWise not active: nothing plays, and the pickup's first alert from a live, fresh row of a
    * stored drive tells the phone reminder. RoadWise active on another screen: nothing at all. A
-   * replayed row (a journal drained, the wait's buffer) plays nothing either: it is old news, maybe
-   * minutes old. The pickup counts the same either way.
+   * replayed row (a journal drained, rows moved into a re-opened drive) plays nothing either: it is
+   * old news, maybe minutes old. The pickup counts the same either way.
    */
   function phoneAlert(alert: AlertEvent): void {
     const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
@@ -1232,17 +1230,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       return;
     }
     await driveOpened({ adopted: true, quiet: true });
-    heardUntil = own.lastRowTs;
-    try {
-      if (native !== null) {
-        liveDrive = { driveId: native.driveId, clientTripId: c.clientTripId, lastSeq: 0 };
-        await writeLink(native.driveId, c.clientTripId);
-        await drainJournal(native.driveId, 0, { capped: false });
-      } else {
-        for (const r of rows) await onRow(r, { replay: true });
-      }
-    } finally {
-      heardUntil = null;
+    // Replays: their alerts played on this drive already, and play, show and shake nothing again.
+    if (native !== null) {
+      liveDrive = { driveId: native.driveId, clientTripId: c.clientTripId, lastSeq: 0 };
+      await writeLink(native.driveId, c.clientTripId);
+      await drainJournal(native.driveId, 0, { capped: false });
+    } else {
+      for (const r of rows) await onRow(r, { replay: true });
     }
   }
 
@@ -1285,7 +1279,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (!opts.replay && engine.snapshot().status === 'recording') accrueRow(row);
     replayingRow = opts.replay === true;
     try {
-      await engine.dispatch({ type: 'row', row });
+      await engine.dispatch({ type: 'row', row, replay: opts.replay === true });
     } finally {
       replayingRow = false;
     }

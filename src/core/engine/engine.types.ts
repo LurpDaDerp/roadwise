@@ -341,7 +341,12 @@ export type EngineEvent =
       startSource?: StartSource;
       startPlace?: { lat: number; lng: number } | null;
     }
-  | { type: 'row'; row: FeatureRow }
+  /**
+   * A row. `replay`: one taken in again or late (a native journal drained, a Start-card drive's rows
+   * moved into the held drive it re-opens): its alerts are told (the host plays nothing for them)
+   * but never shown (`lastAlert`) or shaken (`lastShake`), as old news.
+   */
+  | { type: 'row'; row: FeatureRow; replay?: boolean }
   /**
    * An OS motion-activity report (`parseActivity`), for the walking end (`motion.ts`). `ts`: the
    * host's clock at arrival, used only before the drive's first row.

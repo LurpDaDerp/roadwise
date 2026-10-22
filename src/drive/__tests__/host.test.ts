@@ -687,12 +687,15 @@ describe('a phone pickup (phone plan P4)', () => {
     expect(rest).toEqual([]);
     expect(replayed!.ts).toBeLessThan(T0 + 15_000);
     expect(replayed!.suppressed).toBe(true);
-    // Picked up again on live rows: it plays.
+    // Nor is it shown or shaken: the driving screen never flashes or shakes for old news.
+    expect(h.host.snapshot()).toMatchObject({ lastAlert: null, lastShake: null });
+    // Picked up again on live rows: it plays, shows and shakes.
     await feedIos(h, pickupRows(30, 0, 5));
     const live = phoneDecisions(h).slice(1);
     expect(live).toHaveLength(1);
     expect(live[0]).toMatchObject({ ts: T0 + 42_000, voice: 'Phone down' });
     expect(live[0]!.suppressed).toBeUndefined();
+    expect(h.host.snapshot()).toMatchObject({ lastAlert: { type: 'phone_pickup', at: T0 + 42_000 }, lastShake: { at: T0 + 42_000 } });
     const id = h.host.snapshot().clientTripId!;
     await h.host.end();
     // Both still count.
@@ -847,7 +850,7 @@ describe('a Start-card drive re-opening the held drive', () => {
     await h.host.stop({ endOpenTrip: false });
   });
 
-  test('a hard start as it pulls away after a minute’s wait sounds once: its rows taken in again by the re-opened drive play nothing again', async () => {
+  test('a hard start as it pulls away after a minute’s wait sounds, shows and shakes once: its rows taken in again by the re-opened drive play, show and shake nothing', async () => {
     const h = build();
     await h.host.boot();
     const first = rows(120, { speedMps: 15 });
@@ -861,6 +864,12 @@ describe('a Start-card drive re-opening the held drive', () => {
     h.host.setHudVisible(true);
     await feed(h, rows(60, { t0: t1, speedMps: 0 }).map((r) => ({ ...r, lng: end.lng, aLonMax: 0.02, aLonMin: -0.02 })));
     const before = h.player.delivered.length;
+    const shown = new Set<string>();
+    const shaken = new Set<string>();
+    h.host.subscribe((st) => {
+      if (st.lastAlert !== null) shown.add(st.lastAlert.id);
+      if (st.lastShake !== null) shaken.add(st.lastShake.key);
+    });
     // A minute later, away hard: 0 → 3 → 5 → 6.5 m/s at 0.4 g, the GNSS vouching for it (past the
     // re-opened leg's 30 s warm-up, so the held drive's detectors confirm it again).
     let lng = end.lng;
@@ -873,6 +882,9 @@ describe('a Start-card drive re-opening the held drive', () => {
     const accel = h.player.delivered.slice(before).filter((d) => d.kind === 'hard_accel');
     expect(accel.length).toBeGreaterThan(1);
     expect(accel.filter((d) => d.suppressed !== true)).toEqual([expect.objectContaining({ ts: T0 + 511_000 })]);
+    // Shown and shaken once too: the replay never flashes the banner or shakes the halo again.
+    expect(shown.size).toBe(1);
+    expect(shaken.size).toBe(1);
     // A live hard brake after it sounds as ever.
     const brake = [15, 15, 15, 15, 15, 11, 11, 11, 11, 11].map((v, i) => {
       lng += v / M_PER_DEG_LNG;
@@ -1039,6 +1051,24 @@ describe('iOS: the drive detector', () => {
     const stored = (await db.execute('SELECT row_json FROM samples')).rows.map((r) => JSON.parse(String(r.row_json)) as Record<string, unknown>);
     expect(stored.length).toBe(30);
     expect(stored.some((r) => 'seq' in r)).toBe(false);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the alerts on a journal drained as a drive is taken in (old news) neither sound nor show nor shake; live rows after them sound', async () => {
+    const h = buildIos();
+    await h.host.boot();
+    h.host.setHudVisible(true);
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    // 56 mph on a 35: speeding from the journal's rows on.
+    await confirm(h, rows(40, { speedMps: 25 }));
+    const replayed = h.player.delivered.filter((d) => d.kind === 'speeding');
+    expect(replayed.length).toBeGreaterThan(0);
+    expect(replayed.every((d) => d.suppressed === true)).toBe(true);
+    expect(h.host.snapshot()).toMatchObject({ speedingOver: true, lastAlert: null, lastShake: null });
+    await feedIos(h, rows(20, { t0: T0 + 40_000, speedMps: 25 }));
+    const live = h.player.delivered.filter((d) => d.kind === 'speeding').slice(replayed.length);
+    expect(live.some((d) => d.suppressed !== true)).toBe(true);
     await h.host.stop({ endOpenTrip: false });
   });
 

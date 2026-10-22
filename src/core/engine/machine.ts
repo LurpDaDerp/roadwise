@@ -123,6 +123,9 @@ export function createEngine(deps: EngineDeps): Engine {
   /** The host holds the automatic ends (a Start-card drive still waiting): only the 12 h cap applies. */
   const held = (): boolean => deps.holdEnds?.() === true;
 
+  /** The row being taken in is a replay (`EngineEvent` row `replay`): its alerts are told, never shown or shaken. */
+  let replaying = false;
+
   function snapshot(): EngineSnapshot {
     const row = seen?.row ?? null;
     const speed = row === null ? null : knownSpeed(row);
@@ -173,11 +176,13 @@ export function createEngine(deps: EngineDeps): Engine {
     touch();
   }
 
-  /** An alert the HUD shows (`lastAlert`) and the alert layer plays. */
+  /** An alert the HUD shows (`lastAlert`; never one on a replayed row) and the alert layer plays. */
   function alert(id: string, type: EventType, tier: Tier, at: number): void {
     const event: AlertEvent = { id, type, tier, at };
-    lastAlert = event;
-    touch();
+    if (!replaying) {
+      lastAlert = event;
+      touch();
+    }
     tell(event);
   }
 
@@ -189,8 +194,9 @@ export function createEngine(deps: EngineDeps): Engine {
     }
   }
 
-  /** The halo shakes for `key` on the row at `at`; a later shake on the same row replaces it (one shake per row). */
+  /** The halo shakes for `key` on the row at `at`; a later shake on the same row replaces it (one shake per row). Never on a replayed row. */
   function shake(key: string, at: number, tier: Tier): void {
+    if (replaying) return;
     lastShake = { key, at, tier };
     touch();
   }
@@ -486,7 +492,12 @@ export function createEngine(deps: EngineDeps): Engine {
           await endIfDue(e.row.ts + ROW_MS);
           return;
         }
-        await processRow(e.row);
+        replaying = e.replay === true;
+        try {
+          await processRow(e.row);
+        } finally {
+          replaying = false;
+        }
         return;
       }
       case 'motion':

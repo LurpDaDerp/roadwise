@@ -485,6 +485,28 @@ describe('speeding alerts and the event shake', () => {
     expect(gaps.filter((g) => g === 1)).toHaveLength(1);
   });
 
+  test('a replayed row (a journal drained, rows moved into a re-opened drive) tells its alerts but never shows or shakes them: a hard brake, speeding and its grace end alike', async () => {
+    const steady = { aLonMax: 0.02, aLonMin: -0.02 };
+    const at = (fromS: number, n: number, o: Partial<FeatureRow>) => seq([n, (i) => ({ ...o, ts: T0 + 31_000 + (fromS + i) * 1000 })]);
+    // 60 on a 35 for 5 rows (over the line, its grace ending), then a hard brake to 50.
+    const list = [...at(0, 5, { speed: mph(60), ...steady }), ...at(5, 1, { speed: mph(50), aLonMax: 0.02, aLonMin: -0.35 }), ...at(6, 4, { speed: mph(50), ...steady })];
+    const replayed = await started();
+    for (const r of list) await replayed.engine.dispatch({ type: 'row', row: r, replay: true });
+    expect(replayed.alerts.map((a) => a.type)).toEqual(expect.arrayContaining(['speeding', 'hard_brake']));
+    expect(replayed.snapshots.every((st) => st.lastAlert === null && st.lastShake === null)).toBe(true);
+    // The same rows live: shown and shaken.
+    const live = await started();
+    await feed(live, list);
+    expect(live.alerts.map((a) => a.type)).toEqual(replayed.alerts.map((a) => a.type));
+    expect(live.engine.snapshot().lastAlert).not.toBeNull();
+    expect(live.engine.snapshot().lastShake).not.toBeNull();
+    // A live row after replayed ones shows its own alert as ever.
+    await replayed.engine.dispatch({ type: 'row', row: at(10, 1, { speed: mph(40), aLonMax: 0.02, aLonMin: -0.5 })[0]! });
+    await feed(replayed, at(11, 3, { speed: mph(40), ...steady }));
+    expect(replayed.engine.snapshot().lastAlert).toMatchObject({ type: 'hard_brake', at: T0 + 41_000 });
+    expect(replayed.engine.snapshot().lastShake).toMatchObject({ at: T0 + 41_000 });
+  });
+
   test('a hard brake shakes with its tier; on the row the speeding grace ends the two are one shake, the grace’s key', async () => {
     const h = await started();
     // 60 on a 35 for 5 rows, then a hard brake to 50 on the 6th over row (still over the line, 39).
