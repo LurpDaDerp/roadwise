@@ -17,8 +17,12 @@ import { hudCopy } from './hudCopy';
 
 const OUTLINE_PT = 2;
 const BAR_MIN_PT = 40;
-/** The line's type: the full band, and a compact window's narrow band (as the weather banner). */
-const TYPE = { full: { size: 20, line: 24 }, compact: { size: 16, line: 19 } } as const;
+/**
+ * The line's type: the full band, and a compact window's narrow band (as the weather banner). The line is a
+ * whole number of points and sits on whole points in the bar's 36 pt content box ((36 − line) / 2); the text
+ * never scales itself (a long line gets a tail ellipsis).
+ */
+const TYPE = { full: { size: 20, line: 24 }, compact: { size: 16, line: 20 } } as const;
 
 /** A nudge on screen, with the JS time its 4 s end. */
 export type ShownNudge = SpotNudge & { until: number };
@@ -49,8 +53,6 @@ function SpotNudgeLineView({ nudge, palette: p, compact }: { nudge: SpotNudge; p
       <Text
         allowFontScaling={false}
         numberOfLines={1}
-        adjustsFontSizeToFit
-        minimumFontScale={0.75}
         style={[styles.words, { color: p.ink, fontSize: t.size, lineHeight: t.line }]}
       >
         {words}

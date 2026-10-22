@@ -12,10 +12,14 @@ import { hudCopy } from './hudCopy';
 
 const OUTLINE_PT = 2;
 const BAR_MIN_PT = 40;
-/** The two lines' type: the full band (56 pt), and a compact window's narrow band (as the weather banner). */
+/**
+ * The two lines' type: the full band (56 pt), and a compact window's narrow band (as the weather banner).
+ * The lines are whole points and the compact pair (20 + 16) fills the bar's 36 pt content box, so every
+ * Text frame lands on whole points in any band; the texts never scale themselves (a long line gets a tail ellipsis).
+ */
 const TYPE = {
   full: { title: 20, titleLine: 24, line: 15, lineLine: 18, pad: 3 },
-  compact: { title: 16, titleLine: 19, line: 13, lineLine: 16, pad: 0 },
+  compact: { title: 16, titleLine: 20, line: 13, lineLine: 16, pad: 0 },
 } as const;
 
 function WaitingBannerView({ palette: p, compact }: { palette: HudPalette; compact: boolean }) {
@@ -32,8 +36,6 @@ function WaitingBannerView({ palette: p, compact }: { palette: HudPalette; compa
         <Text
           allowFontScaling={false}
           numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.75}
           style={[styles.title, { color: p.ink, fontSize: t.title, lineHeight: t.titleLine }]}
         >
           {hudCopy.waiting.title}
@@ -42,8 +44,6 @@ function WaitingBannerView({ palette: p, compact }: { palette: HudPalette; compa
           testID="hud-waiting-line"
           allowFontScaling={false}
           numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.8}
           style={[styles.line, { color: p.inkMuted, fontSize: t.line, lineHeight: t.lineLine }]}
         >
           {hudCopy.waiting.line}

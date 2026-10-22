@@ -1,7 +1,7 @@
 // A problem spot's nudge on the driving screen (spots design §7.5): its words per kind, read out as
 // an alert, for 4 s on the row clock, never the one standing at mount or one already 4 s old.
 import { act, render, screen, within } from '@testing-library/react-native';
-import { Text } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 
 import { SPOT_NUDGE_MS } from '@/core/spots/constants';
 import type { SpotKind, SpotNudge } from '@/core/spots/types';
@@ -72,4 +72,16 @@ test('one that reaches the screen 1 s late shows for the 3 s left; 4 s late, nev
 test('the nudge standing when the screen mounts is not shown', async () => {
   await render(<Probe n={nudge('hard_corner', T)} rowTs={T} />);
   expect(screen.getByTestId('f')).toHaveTextContent('none');
+});
+
+test.each([false, true])('no self-scaling text (adjustsFontSizeToFit, minimumFontScale): one line, tail-ellipsized, on whole points (compact %s)', async (compact) => {
+  await render(<SpotNudgeLine nudge={nudge('speeding', T)} palette={HUD.day} compact={compact} />);
+  const el = screen.getByText('Watch your speed here');
+  expect(el.props.adjustsFontSizeToFit).toBeUndefined();
+  expect(el.props.minimumFontScale).toBeUndefined();
+  expect(el.props.allowFontScaling).toBe(false);
+  expect(el.props.numberOfLines).toBe(1);
+  // centred in the bar's 36 pt content box (40 less its outlines): the top is a whole number of points
+  const { lineHeight } = StyleSheet.flatten(el.props.style) as { lineHeight: number };
+  expect(Number.isInteger((36 - lineHeight) / 2)).toBe(true);
 });

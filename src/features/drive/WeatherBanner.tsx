@@ -13,10 +13,14 @@ export const WEATHER_CLOSE_PT = 34;
 
 const OUTLINE_PT = 2;
 const BAR_MIN_PT = 40;
-/** The two lines' type: the full band (56 pt), and a compact window's narrow band between the sign and the navigation button. */
+/**
+ * The two lines' type: the full band (56 pt), and a compact window's narrow band between the sign and the navigation button.
+ * The lines are whole points and the compact pair (20 + 16) fills the words' 36 pt box, so every Text frame lands on
+ * whole points in any band; the texts never scale themselves (a long line gets a tail ellipsis).
+ */
 const TYPE = {
   full: { title: 20, titleLine: 24, action: 15, actionLine: 18, pad: 3 },
-  compact: { title: 16, titleLine: 19, action: 13, actionLine: 16, pad: 0 },
+  compact: { title: 16, titleLine: 20, action: 13, actionLine: 16, pad: 0 },
 } as const;
 
 /** The banner's height at most: its two lines, padding and outline, or its floor (the band must hold it). */
@@ -56,8 +60,6 @@ function WeatherBannerView({
           <Text
             allowFontScaling={false}
             numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.75}
             style={[styles.title, { color: p.ink, fontSize: t.title, lineHeight: t.titleLine }]}
           >
             {weatherTitle(alert)}
@@ -66,8 +68,6 @@ function WeatherBannerView({
             testID="hud-weather-action"
             allowFontScaling={false}
             numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.8}
             style={[styles.action, { color: p.inkMuted, fontSize: t.action, lineHeight: t.actionLine }]}
           >
             {weatherAction(alert)}
