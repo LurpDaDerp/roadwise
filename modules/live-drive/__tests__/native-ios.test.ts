@@ -99,8 +99,8 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(start).toMatch(/if activity != nil \{\s*update\(state\)\s*return true\s*\}/);
     expect(start.indexOf('update(state)')).toBeLessThan(start.indexOf('Activity.request('));
     expect(start).toMatch(/pushType: nil/);
-    expect(c).toMatch(/func update\([\s\S]{0,80}guard let a = activity else \{ return \}/);
-    expect(c).toMatch(/func end\(\) \{\s*guard let a = activity else \{ return \}/);
+    expect(c).toMatch(/func update\([\s\S]{0,120}guard let a = activity else \{ return \}/);
+    expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*guard let a = activity else \{ return \}/);
     expect(c).toMatch(/dismissalPolicy: \.immediate/);
     expect(c).toMatch(/func isRunning\(\) -> Bool \{/);
   });
@@ -113,10 +113,10 @@ describe('live-drive: the Expo module (iOS)', () => {
     // any open drive takes it: nothing reads the drive's origin or leg
     expect(adopt).toMatch(/guard LiveDriveController\.driveOpen else \{/);
     expect(c).not.toMatch(/captureMode|origin/);
-    expect(adopt).toMatch(/activity = a\s*removeRecordingNote\(\)\s*\}$/);
+    expect(adopt).toMatch(/activity = a\s*removeRecordingNote\(\)\s*applyLatest\(to: a\)\s*\}$/);
     // every drive end clears the held activity, so the next leg's pushed one is adopted
     expect(c).toMatch(/if info\["ended"\] as\? Bool == true \{\s*self\.end\(\)/);
-    expect(c).toMatch(/func end\(\) \{\s*guard let a = activity else \{ return \}\s*activity = nil/);
+    expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*guard let a = activity else \{ return \}\s*activity = nil/);
     // adopting announces `running`, and drive-sense's note then cancels its 20 s check and comes down
     expect(c).toMatch(/didSet \{\s*if activity\?\.id != oldValue\?\.id \{ announce\(\) \}/);
     const note = code(path.join(ROOT, 'modules', 'drive-sense', 'ios'), 'DriveNotifier.swift');
@@ -129,7 +129,7 @@ describe('live-drive: the Expo module (iOS)', () => {
     const c = ctrl();
     expect(c).toMatch(/private static func live\(_ a: Activity<LiveDriveAttributes>\) -> Bool \{\s*a\.activityState == \.active \|\| a\.activityState == \.stale\s*\}/);
     const start = /func start\([\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
-    expect(start).toMatch(/\{\s*if let a = activity, !LiveDriveController\.live\(a\) \{ activity = nil \}\s*if activity == nil \{ adoptRunning\(\) \}\s*if activity != nil \{\s*update\(state\)/);
+    expect(start).toMatch(/\{\s*latest = \(state: state, at: Date\(\)\)\s*if let a = activity, !LiveDriveController\.live\(a\) \{ activity = nil \}\s*if activity == nil \{ adoptRunning\(\) \}\s*if activity != nil \{\s*update\(state\)/);
     // isRunning answers only for a live one (a dismissed one is replaced by what adoptRunning finds live)
     expect(c).toMatch(/func isRunning\(\) -> Bool \{\s*if let a = activity, LiveDriveController\.live\(a\) \{ return true \}\s*adoptRunning\(\)/);
     const adopt = /func adoptRunning\(\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
@@ -139,9 +139,40 @@ describe('live-drive: the Expo module (iOS)', () => {
   it('every content carries a stale date, and the widget blanks a stale state (review I1)', () => {
     const c = ctrl();
     expect(c).toMatch(/STALE_AFTER_S: TimeInterval = 120/);
-    expect(c).toContain('staleDate: Date().addingTimeInterval(STALE_AFTER_S)');
+    // the stale date runs from when the state was sent: now, or when a kept state came (applyLatest)
+    expect(c).toContain('content(_ state: LiveDriveAttributes.ContentState, since: Date = Date())');
+    expect(c).toContain('staleDate: since.addingTimeInterval(STALE_AFTER_S)');
     expect(c).not.toMatch(/staleDate: nil/);
+    expect(c.match(/staleDate:/g)).toHaveLength(1);
     expect(c.match(/LiveDriveController\.content\(state\)/g)).toHaveLength(2);
+    expect(c.match(/LiveDriveController\.content\(l\.state, since: l\.at\)/g)).toHaveLength(1);
+  });
+
+  it("keeps the newest display state while no activity is held and applies it the moment one is adopted, never a stale or an old drive's one (round 8)", () => {
+    const c = ctrl();
+    expect(c).toMatch(/private var latest: \(state: LiveDriveAttributes\.ContentState, at: Date\)\?/);
+    // every state is kept before anything else, an update with no activity held included (nothing is dropped; the newest wins)
+    const update = /\n {2}func update\(_ state: LiveDriveAttributes\.ContentState\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
+    expect(update).toMatch(/\{\s*latest = \(state: state, at: Date\(\)\)\s*guard let a = activity else \{ return \}/);
+    // drive-sense's setDriveDisplay goes through update, so it is kept too
+    expect(c).toMatch(/self\.update\(LiveDriveController\.state\(from: info\)\)/);
+    const start = /func start\([\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
+    expect(start.indexOf('latest = (state: state, at: Date())')).toBeGreaterThan(-1);
+    expect(start.indexOf('latest = (state: state, at: Date())')).toBeLessThan(start.indexOf('adoptRunning()'));
+    // the two ways an activity is adopted both apply it: a pushed one (activityUpdates) and one found running
+    const adopt = /private func adopt\(_ a: Activity<LiveDriveAttributes>\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
+    expect(adopt).toMatch(/activity = a\s*removeRecordingNote\(\)\s*applyLatest\(to: a\)/);
+    expect(adopt.indexOf('applyLatest')).toBeGreaterThan(adopt.indexOf('guard LiveDriveController.driveOpen else'));
+    const running = /func adoptRunning\(\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
+    expect(running).toMatch(/activity = keep\s*if let k = keep \{\s*removeRecordingNote\(\)\s*applyLatest\(to: k\)\s*\}/);
+    // applied only while fresh, with its own stale date; on the activity just adopted
+    const apply = /private func applyLatest\(to a: Activity<LiveDriveAttributes>\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
+    expect(apply).toMatch(/guard let l = latest, Date\(\)\.timeIntervalSince\(l\.at\) < LiveDriveController\.STALE_AFTER_S else \{ return \}/);
+    expect(apply).toMatch(/Task \{ await a\.update\(content\) \}/);
+    // the drive's end forgets it, even with no activity held, so the next drive never shows it
+    expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*guard let a = activity/);
+    expect(c.match(/latest = nil/g)).toHaveLength(1);
+    expect(c.match(/latest = \(state: state, at: Date\(\)\)/g)).toHaveLength(2);
   });
 
   it('a running activity takes the "Recording your drive" note down, and every change is announced to drive-sense', () => {

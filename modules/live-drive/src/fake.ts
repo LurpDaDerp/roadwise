@@ -1,11 +1,16 @@
 // In-memory live-drive for tests: one activity at a time, started by `start` or by a push, updated
 // (never replaced) by a later `start`, gone on `end` or when the driver dismisses it (`dismiss`: the
-// next `start` brings a new one); a settable push-to-start token and its event.
+// next `start` brings a new one); a settable push-to-start token and its event. As the native
+// controller does, the newest state sent (`start` or `update`, with or without an activity) is kept
+// until `end`, and an activity started by a push shows it rather than its pushed state (the native
+// one also leaves out a state older than its 2 min stale window; the fake has no clock).
 import type { LiveDriveApi, LiveDriveEvent, LiveDriveEvents, LiveDriveFakeControls, LiveDriveState } from './types';
 
 export function createFakeLiveDrive(opts: { supported?: boolean; token?: string | null } = {}): LiveDriveApi & LiveDriveFakeControls {
   let supported = opts.supported ?? true;
   let active: LiveDriveState | null = null;
+  /** The newest state sent this drive, whether or not an activity showed it. */
+  let latest: LiveDriveState | null = null;
   let token: string | null = opts.token ?? null;
   const calls: string[] = [];
   const tokenListeners = new Set<(p: LiveDriveEvents['pushToStartToken']) => void>();
@@ -24,6 +29,7 @@ export function createFakeLiveDrive(opts: { supported?: boolean; token?: string 
     },
     start(state) {
       calls.push('start');
+      latest = { ...state };
       // A running activity (a pushed one too) is updated, never replaced.
       if (active) active = { ...state };
       else active = supported ? { ...state } : null;
@@ -31,12 +37,14 @@ export function createFakeLiveDrive(opts: { supported?: boolean; token?: string 
     },
     update(state) {
       calls.push('update');
+      latest = { ...state };
       if (active) active = { ...state };
       return Promise.resolve();
     },
     end() {
       calls.push('end');
       active = null;
+      latest = null;
       return Promise.resolve();
     },
     addListener<E extends LiveDriveEvent>(_event: E, fn: (payload: LiveDriveEvents[E]) => void) {
@@ -52,7 +60,7 @@ export function createFakeLiveDrive(opts: { supported?: boolean; token?: string 
       return active ? { ...active } : null;
     },
     pushStart(state) {
-      active = { ...state };
+      active = { ...(latest ?? state) };
     },
     dismiss() {
       active = null;

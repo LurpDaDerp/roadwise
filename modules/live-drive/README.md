@@ -28,7 +28,7 @@ targets/live-drive-widget/       the widget extension (@bacons/apple-targets): e
 | `isRunning()` | An activity shows the drive now: one started here, adopted at launch, or started by a push. |
 | `getPushToStartToken()` | The push-to-start token (lowercase hex, iOS 17.2+) the phone last received, persisted under `livedrive.pushToStartToken`; `null` before one arrived or below 17.2. |
 | `start(state)` | Shows the drive. A running activity (a push-started one included) is **updated, never replaced**; else one is requested. One the driver dismissed (or iOS ended) no longer runs, so the next `start` (the app back in front) requests a new one. Resolves whether one now runs: `false` when unsupported, disabled, or refused (iOS refuses a request from the background); the drive goes on regardless. |
-| `update(state)` | Updates the running activity; a no-op without one. |
+| `update(state)` | Updates the running activity; without one the state is kept as the newest, for an activity adopted later. |
 | `end()` | Ends the running activity at once; a no-op without one. Called on drive end or cancel. |
 | `pushToStartToken` event | `{ token }` each time iOS hands the app a new push-to-start token (iOS 17.2+). The app registers it with RoadWise's server (`register_device`), which starts the activity by APNs for a drive that starts with the app in the background. |
 
@@ -49,7 +49,11 @@ arrives through `Activity.activityUpdates` and is adopted the same way (a duplic
 `DriveSense.setDriveDisplay(state)` reaches the activity too — drive-sense posts the process-local
 `roadwise.driveDisplay` notification, which the controller maps to a content state (`ended: true`
 ends it) — and every drive end or cancel in drive-sense posts `ended`, so the activity never
-outlives its drive. Every content carries a `staleDate` 120 s out: with no update for that long (the
+outlives its drive. The controller keeps the drive's newest display state (from `start`, `update`
+or `roadwise.driveDisplay`) even while it holds no activity: a pushed activity adopted later shows
+that state at once instead of its pushed one (often without a speed or a limit), so nothing sent
+while waiting for the push is lost. A kept state older than the 120 s stale window is left out,
+and `end` (or `ended`) forgets it, so the next drive never shows the last one's. Every content carries a `staleDate` 120 s out: with no update for that long (the
 app was killed) the widget shows "-" and hides the hint and the weather line (`context.isStale`).
 
 Whenever the running activity changes the controller posts `roadwise.liveActivity`

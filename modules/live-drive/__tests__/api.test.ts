@@ -179,6 +179,26 @@ describe('the fake', () => {
     expect(fake.active).toMatchObject({ speed: 50 });
   });
 
+  test('states sent before a pushed activity is adopted are never lost: it shows the newest, not its pushed state; a drive end forgets it (round 8)', async () => {
+    const fake = createFakeLiveDrive();
+    await fake.update({ ...state, speed: 20, limit: null });
+    await fake.update({ ...state, speed: 27, limit: 30 }); // the newest wins
+    expect(fake.active).toBeNull();
+    fake.pushStart({ ...state, speed: null, limit: null });
+    expect(fake.active).toMatchObject({ speed: 27, limit: 30 });
+    // a refused local start is kept too (iOS refuses one from the background)
+    await fake.end();
+    fake.setSupported(false);
+    await expect(fake.start({ ...state, speed: 31 })).resolves.toBe(false);
+    fake.setSupported(true);
+    fake.pushStart({ ...state, speed: null });
+    expect(fake.active).toMatchObject({ speed: 31 });
+    // the next drive's pushed activity never shows the last drive's state
+    await fake.end();
+    fake.pushStart({ ...state, speed: null, limit: 45 });
+    expect(fake.active).toMatchObject({ speed: null, limit: 45 });
+  });
+
   test('a dismissed activity no longer runs, and the next start brings a new one (review M8)', async () => {
     const fake = createFakeLiveDrive();
     await fake.start(state);
