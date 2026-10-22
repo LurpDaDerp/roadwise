@@ -1,7 +1,7 @@
 // The one notification response listener: a tap on the iPhone's recording note or the phone
 // reminder opens the driving screen while a drive records (never held past the drive, never
 // replayed, starting nothing), and any other tap opens its allowlisted route, held during a drive
-// (the driving screen meanwhile while the drive records).
+// (the driving screen meanwhile only for a drive recap, and only while the engine records).
 import { act, render } from '@testing-library/react-native';
 
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
@@ -79,8 +79,11 @@ async function mount(o: { drive?: Drive; ready?: boolean } = {}) {
       busyListeners.delete(fn);
     };
   };
+  // As the root layout wires them: foreground notes hidden for the whole drive, finalizing included;
+  // the driving screen only while the engine records.
   const props = () => ({
-    isRecording: () => drive === 'recording',
+    isRecording: () => drive !== 'idle',
+    isDriveRecording: () => drive === 'recording',
     isBusy: () => drive !== 'idle',
     subscribeBusy,
     navigate,
@@ -146,6 +149,37 @@ test('with no drive recording, the note opens nothing', async () => {
   expect(h.navigate).not.toHaveBeenCalled();
 });
 
+test('while a drive only finalizes, the recording note and the phone reminder open nothing', async () => {
+  const h = await mount({ drive: 'closing' });
+  await act(async () => mockNotifications.listener!(recordingTap(31)));
+  await act(async () =>
+    mockNotifications.listener!({
+      actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
+      notification: { date: 32, request: { identifier: 'phone-reminder:trip-1', content: { data: { kind: 'phoneReminder', url: '/drive' } } } },
+    })
+  );
+  await h.settle();
+  await h.setDrive('idle');
+  expect(h.navigate).not.toHaveBeenCalled();
+});
+
+test('a friend request or the weekly recap tapped while a drive records keeps the current screen, and opens once the drive is over', async () => {
+  const push = (url: string, date: number) => ({
+    actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
+    notification: { date, request: { identifier: `push-${date}`, content: { data: { url } } } },
+  });
+  for (const [url, date] of [['/friends', 33], ['/home', 34], ['/drives', 35]] as const) {
+    const h = await mount({ drive: 'recording' });
+    await act(async () => mockNotifications.listener!(push(url, date)));
+    await h.settle();
+    expect(h.navigate).not.toHaveBeenCalled();
+    await h.setDrive('closing');
+    expect(h.navigate).not.toHaveBeenCalled();
+    await h.setDrive('idle');
+    expect(h.navigate.mock.calls).toEqual([[url]]);
+  }
+});
+
 test('a tap before the navigator is up waits for it, and opens the driving screen only if the drive still records', async () => {
   mockNotifications.last = recordingTap(4);
   const h = await mount({ drive: 'recording', ready: false });
@@ -185,7 +219,7 @@ test('only the drive’s own notes open the driving screen: /drive under another
 test('without an injected navigate, the note routes with router.navigate (onto a driving screen already showing, never a second one)', async () => {
   await render(
     <DataProvider db={db} now={() => T}>
-      <NotificationsHost isRecording={() => true} isBusy={() => true} subscribeBusy={() => () => {}} />
+      <NotificationsHost isRecording={() => true} isDriveRecording={() => true} isBusy={() => true} subscribeBusy={() => () => {}} />
     </DataProvider>
   );
   await act(async () => mockNotifications.listener!(recordingTap(7)));

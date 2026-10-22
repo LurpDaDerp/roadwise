@@ -12,14 +12,16 @@
  * A tap on the drive's recording note (`kind: 'driveRecording'`, the iPhone's note while a drive
  * records) or its phone reminder (`kind: 'phoneReminder'`, posted when the phone is picked up with
  * RoadWise in the background) opens the driving screen, through `router.navigate` so it never stacks a second one, and
- * only while a drive records; one that lands before the navigator is mounted waits for it. It is
- * never held past the drive, never replayed, and starts nothing.
+ * only while the engine is recording (`isDriveRecording`; not while a drive only finalizes); one
+ * that lands before the navigator is mounted waits for it. It is never held past the drive, never
+ * replayed, and starts nothing.
  *
  * Any other tap (or a held one's replay) opens its route, except a drive's summary already on
  * screen: the driving screen opened it as the drive ended, so its "Drive ended" note opens nothing more.
- * One held because a drive records (a recap of the drive before, say) opens the driving screen
- * meanwhile, as the recording note does, and its own route once the drive is over; one held while a
- * drive only finalizes opens nothing until then.
+ * A drive recap held because a drive records (the recap of the drive before) opens the driving
+ * screen meanwhile, as the recording note does, and its own route once the drive is over. Every
+ * other held tap (a friend request, the weekly recap, the drive list), and any tap held while a
+ * drive only finalizes, keeps the current screen and opens its route once the drive is over.
  *
  * Battery (§3.5): no timer and no polling. The busy subscription fires with the drive host's state
  * changes; while nothing is held it returns after one boolean read.
@@ -39,8 +41,16 @@ import { DRIVE_HREF, drivingHrefOf, SUMMARY_HREF } from './hrefs';
 import { handleResponse, replayPendingHref, type ResponseDeps } from './responses';
 
 export interface NotificationsHostProps {
-  /** A drive is recording now: foreground notifications are not shown. Read per notification. */
+  /**
+   * Foreground notifications are not shown (the root layout: a drive under way, finalizing
+   * included). Read per notification.
+   */
   isRecording: () => boolean;
+  /**
+   * The engine is recording a drive now (not finalizing): only then does a tap open the driving
+   * screen (the recording note, the phone reminder, a held drive recap).
+   */
+  isDriveRecording: () => boolean;
   /** A drive is under way (recording → finalizing): taps are held, not navigated. */
   isBusy: () => boolean;
   /** Called on every change of the busy signal's source; returns the unsubscribe. */
@@ -96,7 +106,7 @@ export function NotificationsHost(props: NotificationsHostProps): null {
   const replay = useRef<() => void>(() => {});
   /** Counts deferrals, so a replay that raced one runs again. */
   const deferrals = useRef(0);
-  /** A tap for the driving screen (the recording note, or one held while a drive records) waiting for the navigator. */
+  /** A tap for the driving screen (the recording note, the phone reminder, or a recap held while a drive records) waiting for the navigator. */
   const driveTap = useRef(false);
 
   /** Opens the driving screen for a waiting tap, once the navigator is up. Reads only refs. */
@@ -105,7 +115,7 @@ export function NotificationsHost(props: NotificationsHostProps): null {
     driveTap.current = false;
     const l = latest.current;
     // The drive already ended: its note has nothing left to open.
-    if (!l.props.isRecording() || l.pathname === DRIVE_HREF) return;
+    if (!l.props.isDriveRecording() || l.pathname === DRIVE_HREF) return;
     (l.props.navigate ?? defaultDriveNavigate)(DRIVE_HREF);
   });
 
@@ -150,9 +160,10 @@ export function NotificationsHost(props: NotificationsHostProps): null {
           if (out.kind !== 'deferred') return;
           mayHavePending.current = true;
           deferrals.current += 1;
-          // Held because a drive records: the driving screen meanwhile (the held route opens after
-          // the drive), now or once the navigator is up.
-          if (latest.current.props.isRecording()) {
+          // A drive recap held because a drive records: the driving screen meanwhile (the recap
+          // opens after the drive), now or once the navigator is up. Any other held route keeps the
+          // current screen until the drive is over.
+          if (SUMMARY_HREF.test(out.href) && latest.current.props.isDriveRecording()) {
             driveTap.current = true;
             openDrive.current();
           }

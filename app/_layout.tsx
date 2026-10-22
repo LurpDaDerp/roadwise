@@ -70,11 +70,14 @@ function RootTheme({ choice, mood, children }: { choice: AppearanceChoice; mood:
  * - `NotificationsHost`: the app's only notification handler and response listener (rev1: C1).
  *   Foreground banners stay hidden for the whole of a drive, not only while recording (T5 review).
  *   U3's summary notifier stays attached by the runtime itself (bootstrap), not here. A tap on the
- *   iPhone's recording note opens the driving screen while the drive records; no tap starts a drive.
+ *   iPhone's recording note, the phone reminder or a recap held mid-drive opens the driving screen
+ *   only while the engine records (`isDriveRecording`, never while a drive only finalizes); no tap
+ *   starts a drive.
  */
 function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean }) {
   const host = runtime.drive;
   const isBusy = useCallback(() => host.isBusy(), [host]);
+  const isDriveRecording = useCallback(() => host.snapshot().status === 'recording', [host]);
   const subscribeBusy = useCallback((listener: () => void) => host.subscribe(() => listener()), [host]);
   const onForeground = useCallback(
     (userId: string) => syncNotificationPrefs(userId, { db: runtime.db }),
@@ -83,7 +86,7 @@ function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean 
   return (
     <>
       <DeviceHost onForeground={onForeground} />
-      <NotificationsHost isRecording={isBusy} isBusy={isBusy} subscribeBusy={subscribeBusy} ready={ready} />
+      <NotificationsHost isRecording={isBusy} isDriveRecording={isDriveRecording} isBusy={isBusy} subscribeBusy={subscribeBusy} ready={ready} />
     </>
   );
 }
