@@ -39,7 +39,7 @@ import { carStillDriving, footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS } from '
 import { appendRow, autoEndAt, closeAtLastMovement, closeSession, createSession, idleSince, noteWarmup, snapshotSession } from './session';
 import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
-/** Speed-limit tiles are prefetched once per this much distance, never per fix. */
+/** Speed-limit tiles are prefetched once per this much distance, never per fix, and never from a replayed row. */
 export const PREFETCH_EVERY_M = 1000;
 /** Rows between checkpoints (30 s at 1 Hz). */
 export const CHECKPOINT_ROWS = 30;
@@ -285,7 +285,9 @@ export function createEngine(deps: EngineDeps): Engine {
       }
     }
     appendRow(s, row, { unsafe: det.unsafe(), limitUsable: det.speedingNow() !== null, platform: ctx.platform });
-    maybePrefetch(row, s.distanceM);
+    // A replayed row is where the car was, not where it is going: the tiles ahead are asked for from
+    // the first live row (the drive's distance so far does not count against it).
+    if (!replaying) maybePrefetch(row, s.distanceM);
 
     if (await endIfDue(row.ts + ROW_MS)) return;
     if (await checkFoot(row.ts + ROW_MS)) return;

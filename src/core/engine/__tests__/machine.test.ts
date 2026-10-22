@@ -436,6 +436,32 @@ describe('the driving screen contract', () => {
   });
 });
 
+describe('the speed-limit prefetch', () => {
+  const M_PER_DEG_LAT = (6371008.8 * Math.PI) / 180;
+  /** Rows north at 30 m/s from T0 + `from` s: row i is `30·(from + i)` m north of the start. */
+  const north = (n: number, from = 0) =>
+    seq([n, (i) => ({ speed: 30, course: 0, lat: 37.7749 + (30 * (from + i)) / M_PER_DEG_LAT, ts: T0 + (from + i) * 1000 })]);
+
+  test('once per 1000 m from live rows; replayed rows (where the car was) never ask, and the first live row after them does', async () => {
+    const asked: [number, number, number][] = [];
+    const h = harness({ limits: { lookup: () => limit(mph(35)), prefetch: (lat, lng, course) => asked.push([lat, lng, course]) } });
+    await h.engine.dispatch({ type: 'start', ts: T0, origin: 'auto', continues: false });
+    // 3 km of a drained journal: no prefetch along the old route.
+    for (const r of north(100)) await h.engine.dispatch({ type: 'row', row: r, replay: true });
+    expect(asked).toEqual([]);
+    // The first live row asks from where the car is now.
+    const live = north(40, 100);
+    await feed(h, live.slice(0, 1));
+    expect(asked).toEqual([[live[0]!.lat, live[0]!.lng, 0]]);
+    // Then once per 1000 m of live travel (34 rows at 30 m/s pass it).
+    await feed(h, live.slice(1, 34));
+    expect(asked).toHaveLength(1);
+    await feed(h, live.slice(34, 35));
+    expect(asked).toHaveLength(2);
+    expect(asked[1]![0]).toBe(live[34]!.lat);
+  });
+});
+
 describe('speeding alerts and the event shake', () => {
   /** After the warm-up: row i sits at T0 + 31 s + i. */
   // Forward extremes on every row: the axis is learned, so a sharp slowdown is never a GPS-only brake.
