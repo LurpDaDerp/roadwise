@@ -27,9 +27,9 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 **iOS: drives start on their own (§11).** A native drive detector, armed by JS for a signed-in
 owner with Location Always, Precise Location and Motion & Fitness, wakes on a significant move, on
 leaving the spot the car last parked in, or on leaving a place the phone stayed at; it watches with
-GPS for up to 3 minutes, confirms a drive once the car holds 15 mph for 30 s (10 mph for 15 s after
-Start drive), traces the drive's start back to where the car pulled away, writes every row to a
-journal on disk and emits it as a `row` with its `seq`. JS adopts the drive wherever it runs and
+GPS for up to 3 minutes, confirms a drive once the car holds 15 mph for 30 s, traces the drive's
+start back to where the car pulled away, writes every row to a journal on disk and emits it as a
+`row` with its `seq`. Start drive opens a drive at once, from the tap, journaled the same way. JS adopts the drive wherever it runs and
 decides its end; native stops sensing on its own only as a safety stop. Phone use is not read: rows
 carry a fixed phone sample, and the lock, screen and reminder methods answer fixed values.
 
@@ -704,7 +704,8 @@ instead. The fake follows this contract where host tests depend on it:
 
 `createFakeDriveDetect({ available, now, asyncDelivery, sense, permissions })` (`src/fakeDetect.ts`)
 is the detector's: `wake()`, `confirm()`, `emitRows()` (journaled with `seq`, and emitted through
-`sense` as `row` events), `endFor(cause)`, `jsStop(endedAt)`, `waitTimeout()`, an ndjson journal
+`sense` as `row` events), `startWaiting()` (a manual drive from the tap), `waitOver()` (its wait for
+driving speed is over), `endFor(cause)`, `jsStop(endedAt)`, an ndjson journal
 read back by `readJournal`, settable permissions and the Always answer.
 
 The other controls (`emit`, `loadTrace`, `listenerCount`, `setLastExitInfo`,
@@ -842,9 +843,9 @@ holds every rule and number, mirrored constant for constant by `ios/DetectPolicy
 | `setArmed(armed, ownerId)` | JS's arming for the signed-in owner (at onboarding's end, at sign-in, at each foreground; off at sign-out, account switch and deletion). Resolves the `DetectState`. Detection runs only with Always, Precise and Motion & Fitness: without them the state stays `off` and `status` says `needs`. A different owner forgets the last end. Never rejects. |
 | `getState()` | The `DetectState`: `armed`, `ownerId`, `state` (`off`/`armed`/`candidate`/`recording`/`ending`/`suppressed`), `origin`, the live `driveId` and `startedAt`, `since`, `waitUntil`, `lastEnd { decidedAt, cut, lat, lng, driveId }`, `suppressedUntil`, `status` (`on`/`needs`/`unavailable`/`off`) with `missing` (Location Always, Precise Location, Motion & Fitness, Background App Refresh, then Live Activities, only with `needs`), `permissions` (incl. `backgroundRefresh`, `liveActivities`, `canAskAlways`) and `journalDropped` (reported once). |
 | `requestAlways()` | The one "Always" request, only from While Using, once per install (`drivesense.detect.alwaysAsked`); afterwards the current answer (`always`/`whenInUse`/`denied`) and JS offers Settings. |
-| `startWaiting()` | Start drive: a manual candidate with a 5-min wait (`WAIT_MAX_MS`); While Using and Precise are enough. `{ ok: true, waitUntil }`, or `{ ok: false, reason: 'permission' \| 'busy' \| 'unavailable' }`. An auto candidate already open becomes the wait. |
-| `extendWaiting()` | Any touch on the waiting screen: `waitUntil` = now + 5 min; `null` when not waiting. |
-| `cancelWaiting()` | Ends the wait quietly. |
+| `startWaiting()` | Start drive: a manual drive opens at once, from the tap (`recording`, origin `manual`, `startSource` `wake`, journaled, `driveStarted`; an auto candidate already open gives way to it, its rows dropped); While Using and Precise are enough. It waits for driving speed (the manual trigger, 10 mph held 15 s) until `waitUntil` (5 min, `WAIT_MAX_MS`): meanwhile the safety stop never ends it on a walk, and on the still clock only once `waitUntil` has passed too (JS ends it unsaved at that deadline). `{ ok: true, waitUntil, driveId, startedAt }`, or `{ ok: false, reason: 'permission' \| 'busy' \| 'unavailable' }`. |
+| `extendWaiting()` | Any touch while the Start-card drive waits: `waitUntil` = now + 5 min; `null` when it waits no more. |
+| `cancelWaiting()` | Ends a manual candidate quietly (none opens any more: JS ends a waiting drive through `stopCapture`). |
 | `notDriving()` | "Not driving?": the live drive is cancelled (its journal deleted, `driveEnded { cause: 'cancelled' }`) and detection rests (`suppressed`). No-op when nothing records. |
 | `listDrives()` | Every journal file as a `JournaledDrive` (its start line, last seq and row time, bytes, the end if any). A file with no end that is not the live drive is an orphan (the state record lost that drive, e.g. a power loss before it was saved): it is listed as ended, cause `orphan`, at its last row (else its start), so JS adopts and finishes it like any drive native ended. Before the first unlock (the record unreadable) nothing is called an orphan. |
 | `readRows(driveId, afterSeq, limit)` | The rows after `afterSeq`, in order, at most `limit` (1-600), each a `row` payload with its `seq`; `done` when the file holds no more. Keeps its place in the file, so a drain reads it once. |
@@ -875,11 +876,12 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   confident moving car motion in the last 2 min with the driver not on foot (`motionGate`). The
   wake's background task ends at the first fix or after 25 s.
 - **`candidate`**: navigation GPS with no distance filter, 25 Hz IMU, the live motion activity and
-  rows into a ring of the last 600 (10 min); `speed` events go to JS (the waiting screen), rows do
-  not. An auto candidate ends after 3 min (and rests significant-change and visit wakes for 10 min)
-  or on a walk standing 20 s; a Start-card one at its wait. Every 5 s the detector's clock checks.
+  rows into a ring of the last 600 (10 min); `speed` events go to JS, rows do not. An auto
+  candidate ends after 3 min (and rests significant-change and visit wakes for 10 min) or on a walk
+  standing 20 s. Every 5 s the detector's clock checks.
 - **Confirmation** (`confirmStep`): trusted rows (a valid fix within 30 m, speed rated 2 m/s or
-  better or unrated) at 15 mph (auto) or 10 mph (Start) spanning 30 s / 15 s on the row clock; a dip
+  better or unrated) at 15 mph spanning 30 s on the row clock (10 mph spanning 15 s ends a
+  Start-card drive's wait for driving speed); a dip
   under the trigger (or untrusted rows) spanning 5 s or less keeps the hold, more breaks it. An auto
   hold waits while a confident cycling, walking or running report is 30 s old or less.
 - **The start** (`startOf`): the last trusted row at or under 3 mph before the confirming run,
@@ -893,7 +895,8 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   `capturing` true for `getState` (mode `auto` or `mounted`); the "Recording your drive" check is
   scheduled (below).
 - **`ending`**: a JS end rule is overdue (5 min without movement, fix-less car time not counting;
-  a walk standing 20 s with no fix over 3 mph in the last minute; 12 h). Movement again returns to
+  a walk standing 20 s with no fix over 3 mph in the last minute; 12 h; for a Start-card drive still
+  waiting for driving speed, no walk, and the 5 min only once its `waitUntil` has passed). Movement again returns to
   `recording`. **The native safety stop** commits the end one minute later (`SAFETY_SLACK_MS`) if JS
   has not: the journal gets `end { cause, endedAt: decidedAt }` (native never computes a cut) and
   JS hears `driveEnded`. JS's own end (`stopCapture`) journals `end { cause: 'js', endedAt: its cut }`
