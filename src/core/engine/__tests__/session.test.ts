@@ -27,6 +27,19 @@ test('distance integrates consecutive valid fixes; safe and night distance follo
   expect(s.maxSpeedMps).toBe(10);
 });
 
+test('the top speed counts only trusted speeds: a 75 m/s spike rated 8 m/s is left out; no accuracy reported (-1) and exactly 2 m/s count', () => {
+  const s = start();
+  const rows = eastward(6, 10, (i) => (i === 2 ? { speed: 75, speedAcc: 8 } : {}));
+  rows.forEach((r) => appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' }));
+  expect(s.maxSpeedMps).toBe(10);
+  appendRow(s, { ...rows[5]!, ts: T0 + 6000, speed: 30, speedAcc: -1 }, { unsafe: false, limitUsable: false, platform: 'ios' });
+  expect(s.maxSpeedMps).toBe(30);
+  appendRow(s, { ...rows[5]!, ts: T0 + 7000, speed: 31, speedAcc: 2 }, { unsafe: false, limitUsable: false, platform: 'ios' });
+  expect(s.maxSpeedMps).toBe(31);
+  appendRow(s, { ...rows[5]!, ts: T0 + 8000, speed: 32, speedAcc: 2.01 }, { unsafe: false, limitUsable: false, platform: 'ios' });
+  expect(s.maxSpeedMps).toBe(31);
+});
+
 test('night distance counts metres driven after sunset at the car’s position', () => {
   const s = createSession({ clientTripId: 't1', startedAt: T0 + 8 * 3_600_000, origin: 'manual' });
   // 22:13 PST: dark.

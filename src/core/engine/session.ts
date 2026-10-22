@@ -297,7 +297,9 @@ function accumulate(session: TripSession, row: FeatureRow, unsafe: boolean): voi
   if (row.mock === true) session.mockRows += 1;
   const speed = knownSpeed(row);
   if (speed !== null) {
-    if (speed > session.maxSpeedMps) session.maxSpeedMps = speed;
+    // The peak counts only a trusted speed: one bad Doppler reading (a fix reacquired with a wide
+    // speed accuracy) must not become the drive's top speed and read as implausible.
+    if (speedTrusted(row) && speed > session.maxSpeedMps) session.maxSpeedMps = speed;
     if (speed >= MOVING_MIN_MPH * MPS_PER_MPH) {
       session.movingRows += 1;
       if (session.firstMovingAt === null) session.firstMovingAt = row.ts;
