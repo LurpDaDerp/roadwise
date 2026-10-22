@@ -83,8 +83,8 @@ export type HomeViewProps = {
  * drives, distance and goals in three pills (the goals pill scrolls to the goals section), then the drive card, the screen's hero, with the Safety Rating in
  * its ring and Start drive. Right under it, the action items, each only when it applies: dangerous
  * weather, a permission to fix, DashPal, a coaching tip. Then the detail (stats, recent drives,
- * this week's goals; until 3 scored drives a first-drive prompt instead) and How it works, always
- * last.
+ * this week's goals; until 3 scored drives the first-drive prompt and the recent drives come first,
+ * then the goals) and How it works, always last.
  */
 export function HomeView({ scrollRef: outerRef, ...p }: HomeViewProps) {
   const t = useTheme();
@@ -108,8 +108,8 @@ export function HomeView({ scrollRef: outerRef, ...p }: HomeViewProps) {
     goalsY.current = e.nativeEvent.layout.y;
   };
   const goals = goalsDone(p.summary?.challenges);
-  // The section only renders in the full Home (not under the first-run card), so the pill is a button only then.
-  const goalsShown = full && goals !== null;
+  // The section renders in the first-run Home too (after the card and the recent drives), so the pill is a button whenever it is there.
+  const goalsShown = (full || firstRun) && goals !== null;
   const showGoals = () => {
     if (goalsY.current === null) return;
     scrollRef.current?.scrollTo({ y: Math.max(0, goalsY.current - t.space.md), animated: true });
@@ -170,6 +170,7 @@ export function HomeView({ scrollRef: outerRef, ...p }: HomeViewProps) {
           <>
             <FirstRunCard driveCount={p.driveCount ?? 0} autoDrives={auto} />
             {p.recent && p.recent.length > 0 ? <RecentDrives drives={p.recent} scores={p.scores} onOpen={p.onOpenDrive} onSeeAll={p.onSeeAll} /> : null}
+            <WeeklyGoals goals={p.summary?.challenges ?? []} onLayout={onGoalsLayout} />
           </>
         ) : null}
 

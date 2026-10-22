@@ -30,8 +30,8 @@ export function StatPill({
     minHeight: 56,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: t.space.sm,
-    paddingHorizontal: t.space.lg,
+    gap: t.space.xs,
+    paddingHorizontal: t.space.md,
     paddingVertical: t.space.sm,
     borderRadius: t.radius.pill,
     borderCurve: 'continuous',
@@ -76,7 +76,7 @@ export function goalsDone(challenges: readonly MySummary['challenges'][number][]
 /**
  * The row under the greeting: this week's drives and distance (local, since Monday) in two pills,
  * and the weekly goals done (the server's) in a third, which hides while there are none. They sit
- * on one row and wrap onto the next at large text. With `onGoals` the goals pill is a button.
+ * on one row at the default text size (a 375 pt phone and up) and wrap onto the next at large text. With `onGoals` the goals pill is a button.
  */
 export function WeekPills({
   drives,

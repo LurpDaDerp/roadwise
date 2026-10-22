@@ -47,7 +47,7 @@ describe('the full Home', () => {
     expect(within(pills).getByLabelText('4 drives this week')).toBeOnTheScreen();
     expect(within(pills).getByText('38 mi')).toBeOnTheScreen();
     expect(within(pills).getByLabelText('38 miles since Monday')).toBeOnTheScreen();
-    expect(within(pills).getByText('1 of 3 goals')).toBeOnTheScreen();
+    expect(within(pills).getByText('1/3 goals')).toBeOnTheScreen();
     expect(within(pills).getByLabelText('1 of 3 weekly goals done')).toBeOnTheScreen();
     const card = screen.getByTestId('home-header');
     expect(within(card).getByTestId('rating-value')).toHaveTextContent('92');
@@ -142,7 +142,7 @@ describe('the full Home', () => {
 });
 
 describe('first run', () => {
-  test('before any drive: header, Start, "Take your first drive" and how it works only', async () => {
+  test('before any drive: header, Start, "Take your first drive", the week goals and how it works only', async () => {
     const p = props({ driveCount: 0, recent: [] });
     await draw(<HomeView {...p} />);
     expect(screen.getByTestId('home-header')).toBeOnTheScreen();
@@ -153,7 +153,7 @@ describe('first run', () => {
     expect(screen.getByText('Start, then drive')).toBeOnTheScreen();
     expect(screen.queryByTestId('stats-card')).toBeNull();
     expect(screen.queryByTestId('recent-drives')).toBeNull();
-    expect(screen.queryByTestId('goals')).toBeNull();
+    expect(screen.getByTestId('goals')).toBeOnTheScreen();
     await press(screen.getByText('How scores work'));
     expect(p.onHowScores).toHaveBeenCalled();
   });
@@ -366,11 +366,37 @@ describe('the goals pill', () => {
     expect(scrollTo()).not.toHaveBeenCalled();
   });
 
-  test('is not a button while the first-run card stands in for the goals section', async () => {
+  test('is a button in the first-run Home too, where the goals section stands after the first-run card and the recent drives', async () => {
     await draw(<HomeView {...props({ driveCount: 1, recent: [drive()] })} />);
+    expect(screen.getByTestId('first-run')).toBeOnTheScreen();
+    const tree = treeJson();
+    expect(tree.indexOf('Take your first drive')).toBeLessThan(tree.indexOf('Recent drives'));
+    expect(tree.indexOf('Recent drives')).toBeLessThan(tree.indexOf("This week's goals"));
+    expect(tree.indexOf("This week's goals")).toBeLessThan(tree.indexOf('How it works'));
+    const pill = screen.getByRole('button', { name: '1 of 3 weekly goals done' });
+    await layOut(700);
+    await press(pill);
+    expect(scrollTo()).toHaveBeenCalledWith({ y: 700 - tokens.space.md, animated: true });
+  });
+
+  test('is not a button, and no section shows, when no goals are assigned', async () => {
+    await draw(<HomeView {...props({ driveCount: 1, summary: summary({ challenges: [] }) })} />);
     expect(screen.queryByTestId('goals')).toBeNull();
-    expect(screen.getByLabelText('1 of 3 weekly goals done')).toBeOnTheScreen();
+    expect(screen.queryByTestId('home-week-goals')).toBeNull();
+  });
+
+  test('stays a static pill while the drive count is still loading (no section yet)', async () => {
+    await draw(<HomeView {...props({ driveCount: undefined })} />);
+    expect(screen.queryByTestId('goals')).toBeNull();
     expect(screen.queryByRole('button', { name: '1 of 3 weekly goals done' })).toBeNull();
+  });
+
+  test('the three pills fit one row at the default text size on a 375 pt phone: tight padding and gap, "1/3 goals"', async () => {
+    await draw(<HomeView {...props()} />);
+    for (const id of ['home-week-drives', 'home-week-distance', 'home-week-goals']) {
+      expect(screen.getByTestId(id)).toHaveStyle({ paddingHorizontal: tokens.space.md, gap: tokens.space.xs });
+    }
+    expect(screen.getByText('1/3 goals')).toBeOnTheScreen();
   });
 });
 
