@@ -24,6 +24,50 @@ export function signSize(units: 'mi' | 'km', height: number): { width: number; h
   return units === 'km' ? { width: height, height } : { width: Math.round(R2_1_ASPECT * height), height };
 }
 
+/** The sign's print for its height (pt): what the drawing uses, and what the layout tests pin. */
+export interface SignMetrics {
+  /** The legend's size and line (miles only: "SPEED", "LIMIT"); 0 for the round sign. */
+  legendPt: number;
+  legendLine: number;
+  /** The number's size and line. */
+  numeralPt: number;
+  numeralLine: number;
+  /** The border (miles) or the red ring (kilometres), and the width the print has inside it. */
+  edge: number;
+  textW: number;
+  /** The print's height, padding included: never more than the room inside the sign. */
+  contentH: number;
+  room: number;
+}
+
+const SIGN_PAD_PT = 4;
+
+export function signMetrics(units: 'mi' | 'km', height: number): SignMetrics {
+  if (units === 'km') {
+    const D = height;
+    const ring = Math.round(0.09 * D);
+    const numeral = Math.round(0.4 * D);
+    const numeralLine = Math.round(numeral * 1.1);
+    return { legendPt: 0, legendLine: 0, numeralPt: numeral, numeralLine, edge: ring, textW: D - 2 * ring - 8, contentH: numeralLine, room: D - 2 * ring };
+  }
+  const H = height;
+  const W = Math.round(R2_1_ASPECT * H);
+  const legend = Math.round(0.167 * H);
+  const numeral = Math.round(0.46 * H);
+  const numeralLine = Math.round(numeral * 1.05);
+  const line = Math.max(2, Math.round(0.025 * W));
+  return {
+    legendPt: legend,
+    legendLine: legend + 2,
+    numeralPt: numeral,
+    numeralLine,
+    edge: line,
+    textW: W - 2 * (line + 6),
+    contentH: 2 * SIGN_PAD_PT + 2 * (legend + 2) + numeralLine,
+    room: H,
+  };
+}
+
 /**
  * The speed limit as a real sign, so it is spotted at a glance: in miles the US white rectangle
  * with "SPEED LIMIT" over the number, in kilometres the round white face in a red ring. An unknown
@@ -34,10 +78,11 @@ export function signSize(units: 'mi' | 'km', height: number): { width: number; h
 function SpeedSignView({ limit, palette: p, units, height }: SpeedSignProps) {
   const label = limit === null ? 'Speed limit unknown' : `Speed limit ${limit}`;
   const value = limit === null ? t('common.unknown') : String(limit);
+  const m = signMetrics(units, height);
   if (units === 'km') {
     const D = height;
-    const ring = Math.round(0.09 * D);
-    const numeral = Math.round(0.4 * D);
+    const ring = m.edge;
+    const numeral = m.numeralPt;
     return (
       <View
         testID="hud-limit"
@@ -51,7 +96,7 @@ function SpeedSignView({ limit, palette: p, units, height }: SpeedSignProps) {
           allowFontScaling={false}
           numberOfLines={1}
           adjustsFontSizeToFit
-          style={[styles.value, { color: p.signInk, fontSize: numeral, lineHeight: Math.round(numeral * 1.1), width: D - 2 * ring - 8 }]}
+          style={[styles.value, { color: p.signInk, fontSize: numeral, lineHeight: m.numeralLine, width: m.textW }]}
         >
           {value}
         </Text>
@@ -60,9 +105,9 @@ function SpeedSignView({ limit, palette: p, units, height }: SpeedSignProps) {
   }
   const H = height;
   const W = Math.round(R2_1_ASPECT * H);
-  const legend = Math.round(0.167 * H);
-  const numeral = Math.round(0.46 * H);
-  const line = Math.max(2, Math.round(0.025 * W));
+  const legend = m.legendPt;
+  const numeral = m.numeralPt;
+  const line = m.edge;
   return (
     <View
       testID="hud-limit"
@@ -77,10 +122,10 @@ function SpeedSignView({ limit, palette: p, units, height }: SpeedSignProps) {
         style={[styles.border, { borderWidth: line, borderColor: p.signInk, borderRadius: Math.max(0, Math.round(0.06 * W) - 2) }]}
       />
       <View testID="hud-limit-words" style={styles.words}>
-        <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit style={[styles.legend, { color: p.signInk, fontSize: legend, lineHeight: legend + 2, width: W - 2 * (line + 6) }]}>
+        <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit style={[styles.legend, { color: p.signInk, fontSize: legend, lineHeight: m.legendLine, width: m.textW }]}>
           SPEED
         </Text>
-        <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit style={[styles.legend, { color: p.signInk, fontSize: legend, lineHeight: legend + 2, width: W - 2 * (line + 6) }]}>
+        <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit style={[styles.legend, { color: p.signInk, fontSize: legend, lineHeight: m.legendLine, width: m.textW }]}>
           LIMIT
         </Text>
       </View>
@@ -89,7 +134,7 @@ function SpeedSignView({ limit, palette: p, units, height }: SpeedSignProps) {
         allowFontScaling={false}
         numberOfLines={1}
         adjustsFontSizeToFit
-        style={[styles.value, { color: p.signInk, fontSize: numeral, lineHeight: Math.round(numeral * 1.05), width: W - 2 * (line + 6) }]}
+        style={[styles.value, { color: p.signInk, fontSize: numeral, lineHeight: m.numeralLine, width: m.textW }]}
       >
         {value}
       </Text>
@@ -101,7 +146,7 @@ export const SpeedSign = memo(SpeedSignView);
 
 const styles = StyleSheet.create({
   round: { alignItems: 'center', justifyContent: 'center' },
-  rect: { alignItems: 'center', justifyContent: 'center', paddingVertical: 4 },
+  rect: { alignItems: 'center', justifyContent: 'center', paddingVertical: SIGN_PAD_PT },
   border: { position: 'absolute', top: 2, left: 2, right: 2, bottom: 2 },
   words: { alignItems: 'center' },
   legend: { fontFamily: fontFamilies.fieldBold, letterSpacing: 0.5, textAlign: 'center', includeFontPadding: false },

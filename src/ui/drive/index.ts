@@ -30,7 +30,7 @@ export {
   unitLineHeight,
   unitTop,
 } from './SpeedReadout';
-export { R2_1_ASPECT, signSize, SpeedSign, type SpeedSignProps } from './SpeedSign';
+export { R2_1_ASPECT, signMetrics, signSize, SpeedSign, type SignMetrics, type SpeedSignProps } from './SpeedSign';
 export * from './halo';
 export { HALO_TIMINGS } from './haloMotion';
 export { Halo, type HaloProps } from './HaloRing';

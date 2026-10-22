@@ -3,7 +3,7 @@
 import { render, screen } from '@testing-library/react-native';
 
 import { HUD } from '@/ui/drive/hudTokens';
-import { signSize, SpeedSign } from '@/ui/drive/SpeedSign';
+import { signMetrics, signSize, SpeedSign } from '@/ui/drive/SpeedSign';
 
 const p = HUD.day;
 
@@ -57,4 +57,13 @@ describe('kilometres: the round sign', () => {
 test('a sign graphic: no Dynamic Type on any of its print', async () => {
   await render(<SpeedSign limit={50} palette={p} units="mi" height={128} />);
   for (const t of [screen.getByText('SPEED'), screen.getByText('LIMIT'), screen.getByTestId('hud-limit-value')]) expect(t.props.allowFontScaling).toBe(false);
+});
+
+test('the print is drawn from signMetrics: at the 112 pt top row the R2-1 holds 105 pt of print, the number 52 pt in a 74 pt line', async () => {
+  const m = signMetrics('mi', 112);
+  expect(m).toMatchObject({ legendPt: 19, numeralPt: 52, numeralLine: 55, textW: 74, contentH: 105, room: 112 });
+  await render(<SpeedSign limit={35} palette={p} units="mi" height={112} />);
+  expect(screen.getByTestId('hud-limit-value')).toHaveStyle({ fontSize: 52, lineHeight: 55, width: 74 });
+  const k = signMetrics('km', 112);
+  expect(k).toMatchObject({ numeralPt: 45, numeralLine: 50, textW: 84, contentH: 50, room: 92 });
 });

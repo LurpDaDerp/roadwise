@@ -1,6 +1,6 @@
 // The driving screen's layout (drive-screen design §3, §5.12): worked phones, End always inside the
 // window, nothing overlapping, the numerals large enough.
-import { compassGeometry, DIGIT_ADVANCE_EM, DIGIT_HEIGHT_EM, haloGeometry, numeralLineHeight, SPEED_UNIT_GAP_PT, unitLineHeight, unitTop } from '@/ui/drive';
+import { compassGeometry, DIGIT_ADVANCE_EM, DIGIT_HEIGHT_EM, haloGeometry, numeralLineHeight, signMetrics, SPEED_UNIT_GAP_PT, unitLineHeight, unitTop } from '@/ui/drive';
 
 import { HUD_COMPACT_NAV_H_PT, HUD_NAV_H_PT, HUD_NAV_W_PT, HUD_NOT_DRIVING_PT, hudLayout, type HudLayout, type HudLayoutInput, type Rect } from '../hudLayout';
 
@@ -180,6 +180,21 @@ describe('invariants across windows', () => {
       expect(l.end.w).toBeGreaterThanOrEqual(l.orientation === 'landscape' && !l.compact ? 160 : 200);
       expect(l.end.w).toBeLessThanOrEqual(420);
     }
+  });
+
+  test('the sign’s print always fits inside it with the number at full size (two digits in miles, three in km/h): every window, both orientations, any insets and font scale (user report: the sign looked empty on the driving screen)', () => {
+    // The sign's face (Barlow Semi Condensed ExtraBold): its widest digit, "4", is 0.566 em.
+    const DIGIT_EM = 0.566;
+    for (const c of cases)
+      for (const fontScale of [1, 2, 3])
+        for (const units of ['mi', 'km'] as const) {
+          const l = L({ width: c.w, height: c.h, insets: c.ins, chip: c.chip, units, fontScale });
+          const m = signMetrics(units, l.sign.h);
+          const at = `${units} ${c.w}x${c.h} x${fontScale}: sign ${l.sign.w}x${l.sign.h}`;
+          if (l.sign.h < 64 || m.contentH > m.room) throw new Error(`the print overflows the sign (${m.contentH} > ${m.room}) at ${at}`);
+          if ((units === 'km' ? 3 : 2) * DIGIT_EM * m.numeralPt > m.textW) throw new Error(`the number shrinks at ${at}`);
+          expect(m.numeralPt).toBeGreaterThanOrEqual(30);
+        }
   });
 
   test('nothing overlaps: band items, the link, sign, End and navigation never meet each other or the halo ring', () => {
