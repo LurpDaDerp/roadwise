@@ -1,10 +1,25 @@
 import type { DriveHost, DriveState, LastFinalized } from '@/drive/host';
-import { attachSummaryNotifier, cancelDriveSummaries, summaryCopy, summaryHref, type SummaryNotificationPort, type SummaryRequest } from '@/features/drive/summaryNotifier';
+import { resetDriveScreenPresence, setDriveScreenFocused } from '@/features/drive/hudPresence';
+import {
+  attachSummaryNotifier,
+  cancelDriveSummaries,
+  RECAP_MAX_AGE_MS,
+  summaryCopy,
+  summaryHref,
+  type SummaryNotificationPort,
+  type SummaryNotifierDeps,
+  type SummaryRequest,
+} from '@/features/drive/summaryNotifier';
 
 jest.mock('expo-notifications', () => ({}));
 
+/** "Now" for every notifier here: the drives below ended moments before it. */
+const NOW = 1_000_000;
+
+afterEach(() => resetDriveScreenPresence());
+
 function hostStub(initial: Partial<DriveState>) {
-  let s = { status: 'idle', lastFinalized: null, ...initial } as DriveState;
+  let s = { status: 'idle', clientTripId: null, lastFinalized: null, ...initial } as DriveState;
   const listeners = new Set<(s: DriveState) => void>();
   const host = {
     snapshot: () => s,
@@ -32,7 +47,13 @@ function port(granted = true) {
   return { p, scheduled, cancelled };
 }
 
-const kept = (clientTripId: string, at: number, o: { durationS?: number | null; miles?: number | null; endCause?: 'stopped' | 'manual' } = {}): LastFinalized => ({
+const attach = (host: Pick<DriveHost, 'subscribe' | 'snapshot'>, deps: SummaryNotifierDeps) => attachSummaryNotifier(host, { now: () => NOW, ...deps });
+
+const kept = (
+  clientTripId: string,
+  at: number,
+  o: { durationS?: number | null; miles?: number | null; endCause?: 'stopped' | 'manual'; endedAt?: number | null } = {}
+): LastFinalized => ({
   clientTripId,
   ok: true,
   status: 'pending',
@@ -41,12 +62,15 @@ const kept = (clientTripId: string, at: number, o: { durationS?: number | null; 
   at,
   durationS: o.durationS === undefined ? 1440 : o.durationS,
   miles: o.miles === undefined ? 12 : o.miles,
+  ...(o.endedAt === undefined ? {} : { endedAt: o.endedAt }),
 });
+
+const cancelledOf = (clientTripId: string): LastFinalized => ({ clientTripId, ok: true, status: null, dropped: 'cancelled', endCause: 'manual', at: NOW, durationS: null, miles: null });
 
 test('a kept drive that ends while the app is not in front posts "Your drive recap is ready" with its time and distance, opening the fresh recap', async () => {
   const { host, set } = hostStub({});
   const { p, scheduled } = port();
-  const n = attachSummaryNotifier(host, { port: p, appState: { currentState: 'background' } });
+  const n = attach(host, { port: p, appState: { currentState: 'background' } });
   set({ status: 'idle', lastFinalized: kept('abc', 5) });
   await n.settled();
   expect(scheduled).toHaveLength(1);
@@ -69,7 +93,7 @@ test('a kept drive that ends while the app is not in front posts "Your drive rec
 test('kilometres when the driver uses them; without numbers, the last sentence alone; no points', async () => {
   const { host, set } = hostStub({});
   const { p, scheduled } = port();
-  const n = attachSummaryNotifier(host, { port: p, appState: { currentState: 'background' }, units: async () => 'km' });
+  const n = attach(host, { port: p, appState: { currentState: 'background' }, units: async () => 'km' });
   set({ lastFinalized: kept('abc', 5, { durationS: 3900, miles: 10 }) });
   await n.settled();
   expect(scheduled[0]!.body).toBe('1 h 05 min · 16.1 km. See how it went.');
@@ -81,7 +105,7 @@ test('kilometres when the driver uses them; without numbers, the last sentence a
 test('units that cannot be read fall back to miles', async () => {
   const { host, set } = hostStub({});
   const { p, scheduled } = port();
-  const n = attachSummaryNotifier(host, {
+  const n = attach(host, {
     port: p,
     appState: { currentState: 'background' },
     units: async () => {
@@ -94,47 +118,118 @@ test('units that cannot be read fall back to miles', async () => {
   n.detach();
 });
 
-test('a drive set off again within 5 minutes re-posts under the same identifier with the longer drive', async () => {
+test('a drive set off again within 5 minutes takes its first recap down while it records, then re-posts under the same identifier with the longer drive', async () => {
   const { host, set } = hostStub({});
-  const { p, scheduled } = port();
-  const n = attachSummaryNotifier(host, { port: p, appState: { currentState: 'background' } });
+  const { p, scheduled, cancelled } = port();
+  const n = attach(host, { port: p, appState: { currentState: 'background' } });
   set({ lastFinalized: kept('abc', 5, { durationS: 600, miles: 4 }) });
-  // the continuation re-opens the same trip and ends later
-  set({ status: 'recording' });
-  set({ status: 'idle', lastFinalized: kept('abc', 900, { durationS: 1500, miles: 9 }) });
+  await n.settled();
+  expect(scheduled.map((r) => r.identifier)).toEqual(['drive-summary:abc']);
+  // The continuation re-opens the same trip: no "recap is ready" on the lock screen while it records.
+  set({ status: 'recording', clientTripId: 'abc' });
+  await n.settled();
+  expect(cancelled).toEqual(['drive-summary:abc']);
+  set({ status: 'idle', clientTripId: null, lastFinalized: kept('abc', 900, { durationS: 1500, miles: 9 }) });
   await n.settled();
   expect(scheduled.map((r) => [r.identifier, r.body])).toEqual([
     ['drive-summary:abc', '10 min · 4.0 mi. See how it went.'],
     ['drive-summary:abc', '25 min · 9.0 mi. See how it went.'],
   ]);
+  expect(cancelled).toEqual(['drive-summary:abc']);
   n.detach();
 });
 
-test('nothing while the app shows the end flow, without permission, or for a failed save', async () => {
+test('a drive re-opened before its recap went out posts nothing until its next end; another drive opening takes no recap down', async () => {
   const { host, set } = hostStub({});
-  const { p, scheduled } = port();
-  const n = attachSummaryNotifier(host, { port: p, appState: { currentState: 'active' } });
-  set({ lastFinalized: kept('abc', 5) });
+  const { p, scheduled, cancelled } = port();
+  const n = attach(host, { port: p, appState: { currentState: 'background' } });
+  set({ lastFinalized: kept('other', 1) });
   await n.settled();
-  expect(scheduled).toEqual([]);
+  // A new drive (another trip) opens and ends: the first recap stays.
+  set({ status: 'recording', clientTripId: 'abc' });
+  set({ status: 'idle', clientTripId: null, lastFinalized: kept('abc', 5) });
+  // ... and is re-opened at once, before its recap is out.
+  set({ status: 'recording', clientTripId: 'abc' });
+  await n.settled();
+  expect(scheduled.map((r) => r.identifier)).toEqual(['drive-summary:other']);
+  expect(cancelled).toEqual([]);
+  set({ status: 'idle', clientTripId: null, lastFinalized: kept('abc', 900, { durationS: 1500, miles: 9 }) });
+  await n.settled();
+  expect(scheduled.map((r) => [r.identifier, r.body])).toEqual([
+    ['drive-summary:other', '24 min · 12.0 mi. See how it went.'],
+    ['drive-summary:abc', '25 min · 9.0 mi. See how it went.'],
+  ]);
+  expect(cancelled).toEqual([]);
   n.detach();
+});
 
+test('in front, it posts unless the driving screen shows the end (it opens the recap itself): by default the driving screen’s focus decides', async () => {
+  // Told the end flow shows: nothing.
+  const a = hostStub({});
+  const pa = port();
+  const na = attach(a.host, { port: pa.p, appState: { currentState: 'active' }, isSummaryVisible: () => true });
+  a.set({ lastFinalized: kept('abc', 5) });
+  await na.settled();
+  expect(pa.scheduled).toEqual([]);
+  na.detach();
+
+  // Told it does not (Home, Analytics, a recap of another drive): it posts.
+  const b = hostStub({});
+  const pb = port();
+  const nb = attach(b.host, { port: pb.p, appState: { currentState: 'active' }, isSummaryVisible: () => false });
+  b.set({ lastFinalized: kept('abc', 5) });
+  await nb.settled();
+  expect(pb.scheduled.map((r) => r.clientTripId)).toEqual(['abc']);
+  nb.detach();
+
+  // The default: the driving screen focused with RoadWise in front holds it; on another screen it posts.
+  const c = hostStub({});
+  const pc = port();
+  const appState = { currentState: 'active' as string | null };
+  const nc = attach(c.host, { port: pc.p, appState });
+  setDriveScreenFocused(true, 'abc');
+  c.set({ lastFinalized: kept('abc', 5) });
+  await nc.settled();
+  expect(pc.scheduled).toEqual([]);
+  setDriveScreenFocused(false, 'abc');
+  c.set({ lastFinalized: kept('def', 6) });
+  await nc.settled();
+  expect(pc.scheduled.map((r) => r.clientTripId)).toEqual(['def']);
+  // Behind, the screen's last focus never holds it.
+  setDriveScreenFocused(true, 'ghi');
+  appState.currentState = 'background';
+  c.set({ lastFinalized: kept('ghi', 7) });
+  await nc.settled();
+  expect(pc.scheduled.map((r) => r.clientTripId)).toEqual(['def', 'ghi']);
+  nc.detach();
+});
+
+test('nothing without permission, or for a failed save', async () => {
   const denied = port(false);
   const b = hostStub({});
-  const n2 = attachSummaryNotifier(b.host, { port: denied.p, appState: { currentState: 'background' } });
+  const n2 = attach(b.host, { port: denied.p, appState: { currentState: 'background' } });
   b.set({ lastFinalized: kept('abc', 5) });
   b.set({ lastFinalized: { clientTripId: 'ghi', ok: false, at: 6 } });
   await n2.settled();
   expect(denied.scheduled).toEqual([]);
   n2.detach();
+
+  const ok = port();
+  const c = hostStub({});
+  const n3 = attach(c.host, { port: ok.p, appState: { currentState: 'background' } });
+  c.set({ lastFinalized: { clientTripId: 'ghi', ok: false, at: 6 } });
+  c.set({ lastFinalized: { ...(kept('jkl', 7) as object), status: 'failed' } as LastFinalized });
+  await n3.settled();
+  expect(ok.scheduled).toEqual([]);
+  n3.detach();
 });
 
 test('a drive that was not kept, or was discarded with "Not driving?", posts nothing, in the background too; a kept one after it still does', async () => {
   const { host, set } = hostStub({});
   const { p, scheduled } = port();
-  const n = attachSummaryNotifier(host, { port: p, appState: { currentState: 'background' } });
+  const n = attach(host, { port: p, appState: { currentState: 'background' } });
   set({ status: 'idle', lastFinalized: { clientTripId: 'gone', ok: true, status: null, dropped: 'no_movement', endCause: 'stopped', at: 5, durationS: null, miles: null } });
-  set({ status: 'idle', lastFinalized: { clientTripId: 'passenger', ok: true, status: null, dropped: 'cancelled', endCause: 'manual', at: 6, durationS: null, miles: null } });
+  set({ status: 'idle', lastFinalized: cancelledOf('passenger') });
   await n.settled();
   expect(scheduled).toEqual([]);
   set({ lastFinalized: kept('kept', 9, { endCause: 'manual' }) });
@@ -147,18 +242,101 @@ test('a re-opened drive discarded with "Not driving?" takes down the recap its f
   const { host, set } = hostStub({});
   const { p, scheduled, cancelled } = port();
   const appState = { currentState: 'background' as string | null };
-  const n = attachSummaryNotifier(host, { port: p, appState });
+  const n = attach(host, { port: p, appState });
   set({ lastFinalized: kept('other', 1) });
   set({ lastFinalized: kept('abc', 5) });
   await n.settled();
   expect(scheduled.map((r) => r.identifier)).toEqual(['drive-summary:other', 'drive-summary:abc']);
   // The car sets off again: the trip re-opens, and the passenger taps "Not driving?" on the driving screen.
   appState.currentState = 'active';
-  set({ status: 'recording' });
-  set({ status: 'idle', lastFinalized: { clientTripId: 'abc', ok: true, status: null, dropped: 'cancelled', endCause: 'manual', at: 400, durationS: null, miles: null } });
+  set({ status: 'recording', clientTripId: 'abc' });
+  set({ status: 'idle', clientTripId: null, lastFinalized: { ...(cancelledOf('abc') as object), at: 400 } as LastFinalized });
   await n.settled();
-  expect(cancelled).toEqual(['drive-summary:abc']);
+  expect(cancelled.every((id) => id === 'drive-summary:abc')).toBe(true);
+  expect(cancelled.length).toBeGreaterThan(0);
   n.detach();
+});
+
+test('a drive that ended more than 2 h ago (stored at a later launch) posts nothing; one that ended within 2 h does, its end time deciding', async () => {
+  const { host, set } = hostStub({});
+  const { p, scheduled } = port();
+  const n = attach(host, { port: p, appState: { currentState: 'background' } });
+  expect(RECAP_MAX_AGE_MS).toBe(2 * 60 * 60_000);
+  // Finalized now, but ended 2 h and 1 ms ago: too old.
+  set({ lastFinalized: kept('old', NOW, { endedAt: NOW - RECAP_MAX_AGE_MS - 1 }) });
+  // Ended exactly 2 h ago: still posts.
+  set({ lastFinalized: kept('edge', NOW + 1, { endedAt: NOW - RECAP_MAX_AGE_MS }) });
+  // Without an end time, the finalize time stands in.
+  set({ lastFinalized: kept('noEnd', NOW - RECAP_MAX_AGE_MS - 5) });
+  set({ lastFinalized: kept('fresh', NOW + 2, { endedAt: NOW - 60_000 }) });
+  await n.settled();
+  expect(scheduled.map((r) => r.clientTripId)).toEqual(['edge', 'fresh']);
+  n.detach();
+});
+
+test('attached before the host boots: a drive the boot stores posts; one due while the next drive records waits until no drive records, then posts by the same rules', async () => {
+  // A host not booted yet: idle, nothing finalized.
+  const { host, set } = hostStub({});
+  const { p, scheduled, cancelled } = port();
+  const n = attach(host, { port: p, appState: { currentState: 'background' } });
+  // The boot takes an ended journal in (quiet), ends it, stores it ...
+  set({ status: 'recording', clientTripId: 'ended' });
+  set({ status: 'finalizing' });
+  set({ status: 'idle', clientTripId: null, lastFinalized: kept('ended', NOW, { endedAt: NOW - 30 * 60_000 }) });
+  // ... then begins the drive native records now, before the recap's chain got to the OS.
+  set({ status: 'recording', clientTripId: 'live' });
+  await n.settled();
+  expect(scheduled).toEqual([]);
+  // A change while it records posts nothing either.
+  set({ status: 'recording', clientTripId: 'live' });
+  await n.settled();
+  expect(scheduled).toEqual([]);
+  // The live drive ends: both recaps post, the held one too; nothing was taken down.
+  set({ status: 'idle', clientTripId: null, lastFinalized: kept('live', NOW + 10) });
+  await n.settled();
+  expect(scheduled.map((r) => r.clientTripId).sort()).toEqual(['ended', 'live']);
+  expect(cancelled).toEqual([]);
+  n.detach();
+});
+
+test('an end published while its drive is still finishing waits for the idle state, then posts once', async () => {
+  const { host, set } = hostStub({ status: 'recording', clientTripId: 'abc' });
+  const { p, scheduled } = port();
+  const n = attach(host, { port: p, appState: { currentState: 'background' } });
+  set({ status: 'finalizing', lastFinalized: kept('abc', 5) });
+  await n.settled();
+  expect(scheduled).toEqual([]);
+  set({ status: 'idle', clientTripId: null });
+  await n.settled();
+  set({ status: 'idle' });
+  await n.settled();
+  expect(scheduled.map((r) => r.clientTripId)).toEqual(['abc']);
+  n.detach();
+});
+
+test('a held recap is not posted once its drive is re-opened, nor after the notifier is detached', async () => {
+  const { host, set } = hostStub({});
+  const { p, scheduled } = port();
+  const n = attach(host, { port: p, appState: { currentState: 'background' } });
+  set({ lastFinalized: kept('abc', 5) });
+  set({ status: 'recording', clientTripId: 'other' });
+  await n.settled();
+  // 'other' closes without a finalize of its own, and 'abc' re-opens before the held recap's turn.
+  set({ status: 'recording', clientTripId: 'abc' });
+  set({ status: 'idle', clientTripId: null });
+  await n.settled();
+  expect(scheduled).toEqual([]);
+
+  const b = hostStub({});
+  const pb = port();
+  const nb = attach(b.host, { port: pb.p, appState: { currentState: 'background' } });
+  b.set({ lastFinalized: kept('def', 5) });
+  b.set({ status: 'recording', clientTripId: 'other' });
+  await nb.settled();
+  nb.detach();
+  b.set({ status: 'idle', clientTripId: null });
+  await nb.settled();
+  expect(pb.scheduled).toEqual([]);
 });
 
 test('cancelDriveSummaries removes every scheduled summary (the handover wipe)', async () => {
