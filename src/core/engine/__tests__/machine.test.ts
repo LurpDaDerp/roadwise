@@ -76,7 +76,7 @@ test('a drive starts only on `start` and ends on `end`, handing the finalizer on
   expect(h.engine.snapshot().clientTripId).toBe('id2');
 });
 
-test('an on-foot report at 40 mph is cancelled by driving; one at a stop ends the drive 20 s after it arrives, cut at the last movement', async () => {
+test('an on-foot report at 40 mph is cancelled by driving; one at a stop ends the drive 5 s after the report (WALK_END_S), cut at the last movement', async () => {
   const w = harness();
   await w.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
   await feed(w, seq([3, { speed: mph(40) }]));
@@ -85,7 +85,9 @@ test('an on-foot report at 40 mph is cancelled by driving; one at a stop ends th
   await feed(w, seq([25, (i) => ({ speed: 0, ts: T0 + 5000 + i * 1000 })]));
   expect(w.engine.snapshot().status).toBe('recording'); // the misfire at 40 mph was cancelled
   await w.engine.dispatch({ type: 'motion', activity: { type: 'walking', confidence: 'high', ts: T0 + 29_000 }, ts: T0 + 30_000 });
-  await feed(w, seq([20, (i) => ({ speed: 0, ts: T0 + 30_000 + i * 1000 })]));
+  await feed(w, seq([4, (i) => ({ speed: 0, ts: T0 + 30_000 + i * 1000 })]));
+  expect(w.finalized).toHaveLength(0); // 4 s after the report (29 s): still recording
+  await feed(w, seq([2, (i) => ({ speed: 0, ts: T0 + 34_000 + i * 1000 })]));
   expect(w.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 5000, cut: true });
 });
 
