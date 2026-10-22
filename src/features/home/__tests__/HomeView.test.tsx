@@ -1,5 +1,5 @@
-import { screen, within } from '@testing-library/react-native';
-import { Text } from 'react-native';
+import { fireEvent, screen, within } from '@testing-library/react-native';
+import { ScrollView, Text } from 'react-native';
 
 import { draw, drive, NOW, press, summary, sums, swipe } from '@/features/drives/__fixtures__/drives';
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
@@ -32,6 +32,9 @@ const props = (over: Partial<HomeViewProps> = {}): HomeViewProps => ({
   ...over,
 });
 
+/** The rendered tree as text, without the scroll's forwarded ref (an object that points back into the renderer). */
+const treeJson = () => JSON.stringify(screen.toJSON(), (key, value) => (key === 'forwardedRef' ? undefined : value));
+
 const NO_POINTS = /\bpoints?\b|\bpts\b|streak|freeze|\blevel\b|leaderboard/i;
 
 describe('the full Home', () => {
@@ -56,7 +59,7 @@ describe('the full Home', () => {
     await press(block);
     expect(p.onAnalytics).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(NO_POINTS)).toBeNull();
-    expect(JSON.stringify(screen.toJSON())).not.toMatch(NO_POINTS);
+    expect(treeJson()).not.toMatch(NO_POINTS);
   });
 
   test('a first drive of the week, no goals yet and no trend: the pills say zero, the goals pill and trend line hide', async () => {
@@ -258,7 +261,7 @@ describe('the action items', () => {
 
   test('directly under the drive card, in order: weather, permission, DashPal, tip; then stats, drives, goals, and How it works last', async () => {
     await draw(<HomeView {...props({ weather, permissions: card, dashpal, coaching: fair })} />);
-    const tree = JSON.stringify(screen.toJSON());
+    const tree = treeJson();
     const at = (s: string) => {
       const i = tree.indexOf(s);
       expect(i).toBeGreaterThan(-1);
@@ -285,7 +288,7 @@ describe('the action items', () => {
     await draw(<HomeView {...props({ permissions: card, recording: true, inProgress: <Text testID="in-progress">Drive in progress</Text> })} />);
     expect(screen.queryByTestId('perm-card')).toBeNull();
     expect(screen.getByTestId('in-progress')).toBeOnTheScreen();
-    const tree = JSON.stringify(screen.toJSON());
+    const tree = treeJson();
     expect(tree.indexOf('Drive in progress')).toBeGreaterThan(tree.indexOf('Hey, lurp'));
     expect(tree.indexOf('Drive in progress')).toBeLessThan(tree.indexOf('4 drives'));
   });
@@ -297,7 +300,7 @@ describe('the action items', () => {
 
   test('How it works is last for a first-run driver too', async () => {
     await draw(<HomeView {...props({ driveCount: 1, recent: [drive()], weather })} />);
-    const tree = JSON.stringify(screen.toJSON());
+    const tree = treeJson();
     expect(tree.indexOf('How it works')).toBeGreaterThan(tree.indexOf('Recent drives'));
     expect(tree.indexOf('How it works')).toBeGreaterThan(tree.indexOf('1 more drive'));
   });
@@ -340,6 +343,34 @@ describe('on the sky', () => {
       </Screen>
     );
     expect(screen.getByTestId('home-week-drives')).toHaveStyle({ backgroundColor: tokens.color.light.surface });
+  });
+});
+
+describe('the goals pill', () => {
+  const scrollTo = () => (ScrollView.prototype as unknown as { scrollTo: jest.Mock }).scrollTo;
+  const layOut = async (y: number) => fireEvent(screen.getByTestId('goals'), 'layout', { nativeEvent: { layout: { x: 0, y, width: 300, height: 240 } } });
+  beforeEach(() => scrollTo().mockClear());
+
+  test('is a button that scrolls (animated) to the goals section, its header just below the top', async () => {
+    await draw(<HomeView {...props()} />);
+    const pill = screen.getByRole('button', { name: '1 of 3 weekly goals done' });
+    expect(pill).toHaveProp('accessibilityHint', "Shows this week's goals");
+    await layOut(900);
+    await press(pill);
+    expect(scrollTo()).toHaveBeenCalledWith({ y: 900 - tokens.space.md, animated: true });
+  });
+
+  test('does nothing before the section has been laid out', async () => {
+    await draw(<HomeView {...props()} />);
+    await press(screen.getByRole('button', { name: '1 of 3 weekly goals done' }));
+    expect(scrollTo()).not.toHaveBeenCalled();
+  });
+
+  test('is not a button while the first-run card stands in for the goals section', async () => {
+    await draw(<HomeView {...props({ driveCount: 1, recent: [drive()] })} />);
+    expect(screen.queryByTestId('goals')).toBeNull();
+    expect(screen.getByLabelText('1 of 3 weekly goals done')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: '1 of 3 weekly goals done' })).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { View } from 'react-native';
+import { View, type LayoutChangeEvent } from 'react-native';
 
 import type { MySummary } from '@/data/server/summary';
 import { DriveRow } from '@/features/drives/DriveRow';
@@ -116,13 +116,14 @@ type Goal = MySummary['challenges'][number];
 
 /**
  * This week's three goals, one row each: a ring with the fraction while open, or full with a check
- * when done, then the title and its line. No rewards: they change no score.
+ * when done, then the title and its line. No rewards: they change no score. `onLayout` lets Home
+ * scroll to it.
  */
-export function WeeklyGoals({ goals }: { goals: readonly Goal[] }) {
+export function WeeklyGoals({ goals, onLayout }: { goals: readonly Goal[]; onLayout?: (e: LayoutChangeEvent) => void }) {
   const t = useTheme();
   if (goals.length === 0) return null;
   return (
-    <View style={{ gap: t.space.sm }} testID="goals">
+    <View style={{ gap: t.space.sm }} onLayout={onLayout} testID="goals">
       <SectionHeader title={homeCopy.goals.title} />
       <Card padded={false}>
         {[...goals]

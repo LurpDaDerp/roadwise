@@ -1,6 +1,6 @@
 import type { StatSums } from '@scoring';
-import type { ReactNode, RefObject } from 'react';
-import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import { useRef, type ReactNode, type RefObject } from 'react';
+import { Pressable, RefreshControl, ScrollView, View, type LayoutChangeEvent } from 'react-native';
 import Animated from 'react-native-reanimated';
 
 import { useUnits, useUnitsFromServer } from '@/data/queries/units';
@@ -80,13 +80,13 @@ export type HomeViewProps = {
 
 /**
  * Home, a dashboard in the travel-card mould: the greeting with your avatar on the sky, this week's
- * drives and goals in two pills, then the drive card, the screen's hero, with the Safety Rating in
+ * drives, distance and goals in three pills (the goals pill scrolls to the goals section), then the drive card, the screen's hero, with the Safety Rating in
  * its ring and Start drive. Right under it, the action items, each only when it applies: dangerous
  * weather, a permission to fix, DashPal, a coaching tip. Then the detail (stats, recent drives,
  * this week's goals; until 3 scored drives a first-drive prompt instead) and How it works, always
  * last.
  */
-export function HomeView({ scrollRef, ...p }: HomeViewProps) {
+export function HomeView({ scrollRef: outerRef, ...p }: HomeViewProps) {
   const t = useTheme();
   const onSky = useOnSky();
   const units = useUnits();
@@ -100,6 +100,20 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
   const tip = p.coaching && showsTip(p.coaching) ? (p.coaching as Coaching & { level: Level }) : null;
   // the sky behind the tabs scrolls with Home
   const onScroll = useSkyScrollHandler();
+  // The goals pill scrolls to the goals section: its top in the scroll's content, from its layout.
+  const ownRef = useRef<ScrollView>(null);
+  const scrollRef = outerRef ?? ownRef;
+  const goalsY = useRef<number | null>(null);
+  const onGoalsLayout = (e: LayoutChangeEvent) => {
+    goalsY.current = e.nativeEvent.layout.y;
+  };
+  const goals = goalsDone(p.summary?.challenges);
+  // The section only renders in the full Home (not under the first-run card), so the pill is a button only then.
+  const goalsShown = full && goals !== null;
+  const showGoals = () => {
+    if (goalsY.current === null) return;
+    scrollRef.current?.scrollTo({ y: Math.max(0, goalsY.current - t.space.md), animated: true });
+  };
 
   return (
     <View style={{ flex: 1 }}>
@@ -133,7 +147,7 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
           {name ? homeCopy.greeting(name) : 'Home'}
         </ScreenTitle>
         {p.recording ? p.inProgress : null}
-        {p.thisWeek ? <WeekPills drives={p.thisWeek.drives} miles={p.thisWeek.miles} units={units} goals={goalsDone(p.summary?.challenges)} /> : null}
+        {p.thisWeek ? <WeekPills drives={p.thisWeek.drives} miles={p.thisWeek.miles} units={units} goals={goals} onGoals={goalsShown ? showGoals : undefined} /> : null}
         <View style={{ gap: t.space.md }}>
           <HomeHeader
             summary={p.summary}
@@ -163,7 +177,7 @@ export function HomeView({ scrollRef, ...p }: HomeViewProps) {
           <>
             {stats ? <StatsCard stats={stats.stats} window={stats.window} onAllStats={p.onAllStats} /> : null}
             <RecentDrives drives={p.recent ?? []} scores={p.scores} onOpen={p.onOpenDrive} onSeeAll={p.onSeeAll} />
-            <WeeklyGoals goals={p.summary?.challenges ?? []} />
+            <WeeklyGoals goals={p.summary?.challenges ?? []} onLayout={onGoalsLayout} />
           </>
         ) : null}
 
