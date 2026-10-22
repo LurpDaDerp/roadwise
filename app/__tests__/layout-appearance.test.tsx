@@ -150,6 +150,8 @@ function readyRuntime() {
     alertsAvailable: true,
     dryRun: false,
     courseDeg: null,
+    bearingDeg: null,
+    bearingSource: null,
     speedingRatio: null,
     speedingOver: false,
     waiting: null,

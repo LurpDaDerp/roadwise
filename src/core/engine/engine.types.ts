@@ -265,6 +265,16 @@ export interface EngineSnapshot {
    */
   courseDeg: number | null;
   /**
+   * The compass's bearing, degrees clockwise from true north, [0, 360): worked out from where the
+   * car went (the newest fix against one at least 15 m back within 15 s, accuracy-gated), the GPS
+   * course standing in or winning through a turn (`displayBearing.ts`), so the phone's own
+   * orientation never moves it. Held while stopped or crawling under 3 mph and through lost fixes;
+   * null before the drive's first and when not recording (the screen then shows the phone's heading).
+   */
+  bearingDeg: number | null;
+  /** Where `bearingDeg` came from: `'track'` (the car's movement) whenever there is one; null with none. */
+  bearingSource: 'track' | null;
+  /**
    * The latest event the halo shakes on (`EventShake`), or null before the first of the drive and
    * when not recording. The driving screen shakes on each new `key`.
    */

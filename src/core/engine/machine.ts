@@ -33,6 +33,7 @@ import { MAX_DRIVE_MS } from '@/data/sync/payload';
 import type { MotionActivity } from '@drive-sense';
 
 import type { AdoptedTrip, AlertEvent, EndCause, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, EventShake, TripSession } from './engine.types';
+import { nextBearing, NO_BEARING, type DisplayBearing } from './displayBearing';
 import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './displayLimit';
 import { displayFix, displayRow, type DisplaySpeed } from './displaySpeed';
 import { carStillDriving, footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS } from './motion';
@@ -87,6 +88,8 @@ export function createEngine(deps: EngineDeps): Engine {
   let lastShake: EventShake | null = null;
   /** The last GPS course taken (`COURSE_MIN_MPS`), held until the next. */
   let course: number | null = null;
+  /** The compass's bearing from where the car went (`displayBearing.ts`), held while stopped. */
+  let bearing: DisplayBearing = NO_BEARING;
   /** The speeding episode the alerts follow (`speedingAlertsOn`), or null. */
   let speeding: SpeedingAlerts | null = null;
 
@@ -151,6 +154,8 @@ export function createEngine(deps: EngineDeps): Engine {
       speedingRatio: reading === null ? null : reading.ratio,
       speedingOver: recording && open !== null,
       courseDeg: recording ? course : null,
+      bearingDeg: recording ? bearing.deg : null,
+      bearingSource: recording && bearing.deg !== null ? 'track' : null,
       lastShake: recording ? lastShake : null,
       stopped: recording && speed !== null && speed <= STOPPED_MPS,
       autoEndAt: recording && session !== null ? (held() ? session.startedAt + MAX_DRIVE_MS : autoEndAt(session)) : null,
@@ -173,6 +178,7 @@ export function createEngine(deps: EngineDeps): Engine {
     lastAlert = null;
     lastShake = null;
     course = null;
+    bearing = NO_BEARING;
     speeding = null;
     touch();
   }
@@ -260,6 +266,8 @@ export function createEngine(deps: EngineDeps): Engine {
     seen = { row, limit, limitMph: limitShownMph(row, limit) };
     const speedMps = knownSpeed(row);
     if (row.course >= 0 && row.course <= 360 && speedMps !== null && speedMps >= COURSE_MIN_MPS) course = row.course % 360;
+    // Replayed rows too: where the car went is a fact, whenever it is taken in.
+    bearing = nextBearing(bearing, row);
     shown = displayRow(shown, row, knownSpeed(row));
     shownLimit = nextDisplayLimit(shownLimit, row.ts, seen.limitMph);
     touch();

@@ -156,6 +156,21 @@ export function useHeading(): number | null {
   return useDrive(selectHeading);
 }
 
+/** The compass's bearing from where the car went (`EngineSnapshot.bearingDeg`), and where it came from. */
+export interface DriveBearing {
+  /** Degrees clockwise from true north, [0, 360), held while stopped; null before the drive's first and with no drive. */
+  deg: number | null;
+  /** `'track'` (the car's movement) whenever `deg` is known; null with none (show the phone's own heading). */
+  source: 'track' | null;
+}
+
+export const selectBearing = (s: DriveState): DriveBearing => ({ deg: s.bearingDeg ?? null, source: s.bearingSource ?? null });
+
+/** The compass's bearing alone: re-renders only when it (or its source) changes. */
+export function useBearing(): DriveBearing {
+  return useDrive(selectBearing);
+}
+
 /** Everything the driving screen shows; published at most once per row (1 Hz). */
 export function useDriveLive(): DriveLive {
   const live = useDrive(selectLive);

@@ -385,6 +385,35 @@ describe('the driving screen contract', () => {
     expect(h.engine.snapshot().courseDeg).toBeNull();
   });
 
+  test('bearingDeg: from where the car went (the phone pointing anywhere), held when stopped, replayed rows included; null when not recording; reset per drive', async () => {
+    const M_PER_DEG_LAT = (6371008.8 * Math.PI) / 180;
+    const north = (s: number, m: number, over: Partial<FeatureRow> = {}) =>
+      row({ ts: T0 + s * 1000, lat: 37.7749 + m / M_PER_DEG_LAT, lng: -122.4194, speed: 10, course: -1, ...over });
+    const h = harness();
+    expect(h.engine.snapshot()).toMatchObject({ bearingDeg: null, bearingSource: null });
+    await h.engine.dispatch({ type: 'start', ts: T0, origin: 'auto', continues: false });
+    expect(h.engine.snapshot()).toMatchObject({ bearingDeg: null, bearingSource: null });
+    // Replayed rows (a drained journal) build it: positions are facts.
+    await h.engine.dispatch({ type: 'row', row: north(0, 0), replay: true });
+    await h.engine.dispatch({ type: 'row', row: north(1, 10), replay: true });
+    expect(h.engine.snapshot().bearingDeg).toBeNull();
+    await h.engine.dispatch({ type: 'row', row: north(2, 20, { orientationDelta: 1.5 }), replay: true });
+    expect(h.engine.snapshot()).toMatchObject({ bearingDeg: 0, bearingSource: 'track' });
+    // A turn east the GPS course reports at speed wins over the lagging track.
+    await feed(h, [north(3, 30, { course: 90 })]);
+    expect(h.engine.snapshot().bearingDeg).toBe(90);
+    // Stopped with jitter and a stale course: held.
+    await feed(h, [north(4, 60, { speed: 0, course: 270 }), north(5, 0, { speed: 0 })]);
+    expect(h.engine.snapshot()).toMatchObject({ bearingDeg: 90, bearingSource: 'track' });
+    // The old courseDeg keeps its own rule (the GPS course at 5 mph or more) until the screen switches.
+    expect(h.engine.snapshot().courseDeg).toBe(90);
+    await h.engine.dispatch({ type: 'end', ts: T0 + 6000 });
+    expect(h.engine.snapshot()).toMatchObject({ bearingDeg: null, bearingSource: null });
+    await h.engine.dispatch({ type: 'start', ts: T0 + 10_000, origin: 'manual', continues: false });
+    await feed(h, [north(10, 0)]);
+    expect(h.engine.snapshot()).toMatchObject({ bearingDeg: null, bearingSource: null });
+  });
+
   test('speedingRatio and speedingOver: the row speed over the posted limit it is judged on; over from the speeding line', async () => {
     const h = harness();
     await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
