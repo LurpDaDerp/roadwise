@@ -12,7 +12,7 @@ import { Banner, Card, Pill, ScreenTitle, SectionHeader, Skeleton, useSkyScrollH
 
 import { AchievementBadges } from './AchievementBadges';
 import { profileCopy as copy } from './copy';
-import { ProfileHeader, sinceMonth } from './ProfileHeader';
+import { ProfileHeader } from './ProfileHeader';
 
 export const PROFILE_HREFS = {
   achievements: '/achievements' as Href,
@@ -21,7 +21,7 @@ export const PROFILE_HREFS = {
 } as const;
 
 /**
- * The Profile tab: your card (the public one, plus when you started, the week's change and your
+ * The Profile tab: your card (the public one, plus the week's change and your
  * all-time totals), the three achievements, then everything about you and your account: friends,
  * who can see your heat map, how scores work, settings, account and blocked users. It sits on the
  * page sky, so the title uses the white sky ink and the pull-to-refresh spinner does too. Like
@@ -66,7 +66,6 @@ export function ProfileScreen() {
             safetyRating={data.progress.safety_rating}
             ranked={data.progress.ranked}
             own={{
-              since: sinceMonth(data.profile.onboarded_at),
               ratingTrend: data.progress.rating_trend,
               miles90d: data.progress.miles_90d,
               totals: {

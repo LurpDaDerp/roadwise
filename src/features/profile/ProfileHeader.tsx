@@ -22,10 +22,8 @@ export interface ProfileHeaderProps {
   username: string;
   safetyRating: number | null;
   ranked: boolean;
-  /** Your own card adds when you started, the week's change, the way to a rating and your totals; a friend's doesn't. */
+  /** Your own card adds the week's change, the way to a rating and your totals; a friend's doesn't. */
   own?: {
-    /** "Oct 2026": the month you joined; null when unknown. */
-    since: string | null;
     ratingTrend: number | null;
     miles90d: number;
     totals: ProfileTotals;
@@ -33,17 +31,9 @@ export interface ProfileHeaderProps {
   testID?: string;
 }
 
-/** "Oct 2026" from the moment the account finished onboarding; null when unknown or unreadable. */
-export function sinceMonth(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(d);
-}
-
 /**
  * The profile card: the avatar (initials, never a photo) and the username, then the Safety Rating.
- * Your own card adds the month you started, the rating's change this week (in words, with an
+ * Your own card adds the rating's change this week (in words, with an
  * arrow) and your all-time drives, distance and time on the road. A friend's card is the same
  * without your extras: what friends see on `/u/<username>`.
  */
@@ -68,11 +58,6 @@ export function ProfileHeader({ username, safetyRating, ranked, own, testID }: P
           <Text variant="title1" numberOfLines={1} adjustsFontSizeToFit accessibilityRole="header" testID="profile-username">
             {username}
           </Text>
-          {own?.since ? (
-            <Text variant="headline" tone="muted" testID="profile-since">
-              {copy.since(own.since)}
-            </Text>
-          ) : null}
         </View>
       </View>
 

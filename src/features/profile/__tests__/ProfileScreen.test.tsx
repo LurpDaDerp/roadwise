@@ -1,6 +1,6 @@
 /**
  * The Profile tab and achievements: the card from `get_my_summary` (the Safety Rating, its change
- * this week, the month you started) with your all-time totals from this phone, the three
+ * this week) with your all-time totals from this phone, the three
  * achievements locked or unlocked, the entries, and the heat map row's privacy-only screen.
  */
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react-native';
@@ -13,7 +13,6 @@ import { achievementViews } from '../achievements';
 import { AchievementsScreen } from '../AchievementsScreen';
 import { profileCopy } from '../copy';
 import { HeatmapScreen } from '../HeatmapScreen';
-import { sinceMonth } from '../ProfileHeader';
 import { PROFILE_HREFS, ProfileScreen } from '../ProfileScreen';
 
 const mockRpc = jest.fn();
@@ -38,13 +37,13 @@ jest.mock('@/data/queries', () => ({
   useStatSums: () => ({ data: mockTotals, refetch: jest.fn(async () => undefined) }),
 }));
 
-const summary = (over: { ranked?: boolean; achievements?: string[]; heatmap?: string; trend?: number | null; onboarded?: string | null } = {}) => ({
+const summary = (over: { ranked?: boolean; achievements?: string[]; heatmap?: string; trend?: number | null } = {}) => ({
   profile: {
     user_id: 'me',
     username: 'swift_fox',
     units: 'mi',
     heatmap_visibility: over.heatmap ?? 'only_me',
-    onboarded_at: over.onboarded === undefined ? '2026-10-02T12:00:00Z' : over.onboarded,
+    onboarded_at: '2026-10-02T12:00:00Z',
     share_rating: true,
     share_categories: false,
     share_achievements: false,
@@ -70,7 +69,7 @@ beforeEach(() => {
 });
 afterEach(() => clearQueryClients());
 
-it('the card: when you started, the Safety Rating with its week, your totals; the three achievements; a badge for friend requests; no points', async () => {
+it('the card: the Safety Rating with its week, your totals; the three achievements; a badge for friend requests; no points', async () => {
   answerRpc(mockRpc, {
     get_my_summary: summary(),
     list_friends: { friends: [], incoming: [{ user_id: 'x', username: 'newbie' }], outgoing: [] },
@@ -78,7 +77,7 @@ it('the card: when you started, the Safety Rating with its week, your totals; th
   const w = await appWorld();
   await w.render(<ProfileScreen />);
   expect(await screen.findByTestId('profile-username')).toHaveTextContent('swift_fox');
-  expect(screen.getByTestId('profile-since')).toHaveTextContent('Driving with RoadWise since Oct 2026');
+  expect(screen.queryByText(/since/i)).toBeNull();
   expect(screen.getByLabelText('Safety Rating 92')).toBeOnTheScreen();
   expect(screen.getByLabelText('Up 2 this week')).toBeOnTheScreen();
   expect(within(screen.getByTestId('profile-trend')).getByText('This week')).toBeOnTheScreen();
@@ -125,13 +124,11 @@ it('no rating yet says how far there is to go, and no week', async () => {
 it.each([
   [-0.6, 'Down 1'],
   [0.2, 'Steady'],
-])('a week of %s reads "%s"; an unknown week and start month show nothing', async (trend, word) => {
+])('a week of %s reads "%s"; an unknown week shows nothing', async (trend, word) => {
   answerRpc(mockRpc, { get_my_summary: summary({ trend }), list_friends: { friends: [], incoming: [], outgoing: [] } });
   const w = await appWorld();
   await w.render(<ProfileScreen />);
   expect(await screen.findByTestId('profile-trend')).toHaveTextContent(new RegExp(word));
-  expect(sinceMonth(null)).toBeNull();
-  expect(sinceMonth('not a date')).toBeNull();
 });
 
 it('achievement hints say how to get each one', () => {

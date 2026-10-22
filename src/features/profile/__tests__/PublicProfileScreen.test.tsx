@@ -214,7 +214,6 @@ describe('what friends see', () => {
     await show(profile());
     expect(await screen.findByTestId('profile-username')).toHaveTextContent('swift_fox');
     expect(screen.getByLabelText('Safety Rating 91')).toBeOnTheScreen();
-    expect(screen.queryByTestId('profile-since')).toBeNull();
     expect(screen.queryByTestId('profile-trend')).toBeNull();
     expect(screen.queryByTestId('profile-totals')).toBeNull();
     expect(screen.queryByText(/level|streak|league|clan|points?\b|pts/i)).toBeNull();

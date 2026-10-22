@@ -1,8 +1,6 @@
 /** The Profile tab, public profile, achievements and heat map privacy words. Usernames only, ever. */
 export const profileCopy = {
   tab: 'Profile',
-  /** "Driving with RoadWise since Oct 2026". */
-  since: (monthYear: string) => `Driving with RoadWise since ${monthYear}`,
   rating: 'Safety Rating',
   noRating: 'No rating yet',
   /** "4 of 10 mi to your rating". */
