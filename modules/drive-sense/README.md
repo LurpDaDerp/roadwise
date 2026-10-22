@@ -929,7 +929,11 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   at the last trusted fix, `armed` again. After an automatic end (native's 5 min still or walk, or a
   JS end that a JS rule would have made by then), unless it was a Start-card drive still waiting, an
   auto candidate opens at once (`linger`: 3 min from the end, 5 once it holds evidence, whatever it sees; no hourly cap entry, no rest, no parked spot): a quick
-  restart confirms near where the drive ended, and `continues` lets JS re-open the held drive.
+  restart confirms near where the drive ended, and `continues` lets JS re-open the held drive. The
+  parked region's exit during the linger (which iOS sends only once) is never dropped: the linger
+  becomes an ordinary watch from the exit (`detectState` `wake:region`), with its evidence, an hourly
+  cap entry until it sees a vehicle, vehicle signs (rows at 10 mph or more) keeping it open up to the
+  30 min cap, and an empty timeout's parked spot, so a slow restart in traffic is still watched.
   The walk is read as JS reads it: a confident walking or running report stands until a report of
   another kind replaces it; one at low confidence leaves a standing walk alone.
 - **`suppressed`** ("Not driving?"): ten-metre GPS, no IMU, no rows, the live motion activity. It

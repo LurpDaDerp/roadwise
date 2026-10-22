@@ -531,6 +531,14 @@ describe('iOS drive detector: the state machine (text)', () => {
     const auto = fn(d, 'func automaticEndDue()');
     expect(auto).toMatch(/DetectPolicy\.endDue\(endClock, startedAt: startedAt, now: DriveDetector\.now\(\), walkSince: walkSince, waitUntil: r\.waitUntil\)\.overdue/);
     expect(auto).toMatch(/return o == "still" \|\| o == "walking"/);
+    // a region exit during the linger is never dropped as "busy": the linger becomes an ordinary
+    // watch from the exit (vehicle signs keep it open, an hourly cap entry, its evidence kept)
+    const wake = fn(d, 'func onWake(');
+    expect(wake).toMatch(/func onWake\(_ reason: String\) \{\s*if reason == "region", lingerToWatch\(\) \{ return \}\s*guard !waking, let r = rec else \{ return \}/);
+    const toWatch = fn(d, 'func lingerToWatch()');
+    expect(toWatch).toMatch(/guard lingering, var r = rec, r\.state == "candidate", r\.origin == "auto" else \{ return false \}/);
+    expect(toWatch).toMatch(/lingering = false\s*r\.since = now\s*r\.candidateStarts = DetectPolicy\.recentStarts\(r\.candidateStarts, now\) \+ \[now\]\s*save\(r\)\s*emitState\("wake:region"\)\s*return true/);
+    expect(toWatch).not.toMatch(/confirmState|buffer\.clear|beginCandidate/);
     // the orphan and "Not driving?" never linger
     expect(fn(d, 'func resumeDrive(')).toMatch(/self\.commitEnd\(cause: "orphan", endedAt: now\)/);
     expect(fn(d, 'func notDriving()')).not.toMatch(/linger|beginCandidate/);

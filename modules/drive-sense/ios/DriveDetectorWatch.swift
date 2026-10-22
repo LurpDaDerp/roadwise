@@ -2,7 +2,8 @@
 // visit, RoadWise coming to the front) opens an auto candidate, which watches GPS and motion while it
 // sees vehicle signs, at most 30 min (`DetectPolicy.candidateDue`); an automatic end opens one at
 // once (the linger), so a quick restart within 150 m re-opens the held drive instead of splitting
-// it. A candidate's end decides the rest, the hourly cap's record and a parked spot. Main thread only.
+// it; a region exit during the linger turns it into an ordinary watch. A candidate's end decides the
+// rest, the hourly cap's record and a parked spot. Main thread only.
 import Foundation
 
 extension DriveDetector {
@@ -15,6 +16,7 @@ extension DriveDetector {
   }
 
   func onWake(_ reason: String) {
+    if reason == "region", lingerToWatch() { return }
     guard !waking, let r = rec else { return }
     let ctx = WakeCtx(now: DriveDetector.now(), reason: reason, phase: r.state, armed: r.armed, hasOwner: r.ownerId != nil,
                       permissionsOk: access.snapshot().requiredOk, candidateRestUntil: r.candidateRestUntil, candidateStarts: r.candidateStarts)
@@ -34,6 +36,23 @@ extension DriveDetector {
       }
       self.beginCandidate(origin: "auto", reason: "wake:\(reason)", carMotionAt: m.lastAutomotiveAt)
     }
+  }
+
+  /// A region exit during the linger: the phone has left the parked spot (a car idling where it
+  /// parked never does), and iOS sends that exit only once, so it is never dropped as "busy". The
+  /// linger becomes an ordinary watch from the exit, as a region wake's candidate would be: in the
+  /// hourly cap's record until it sees a vehicle, kept open by its vehicle signs (rows at 10 mph or
+  /// more included) up to the 30 min cap, and an empty timeout leaves the parked spot where the
+  /// phone rests. Its evidence stays. False (nothing done) unless the linger is running.
+  func lingerToWatch() -> Bool {
+    guard lingering, var r = rec, r.state == "candidate", r.origin == "auto" else { return false }
+    let now = DriveDetector.now()
+    lingering = false
+    r.since = now
+    r.candidateStarts = DetectPolicy.recentStarts(r.candidateStarts, now) + [now]
+    save(r)
+    emitState("wake:region")
+    return true
   }
 
   // MARK: - Candidates
@@ -110,8 +129,9 @@ extension DriveDetector {
 
   /// The candidate's clock (every 5 s): a standing automotive report is a vehicle sign now; then the
   /// policy's deadline. The linger is for a quick restart: it watches 3 min from the end (5 once it
-  /// holds evidence), whatever it sees, so a car idling where it parked never keeps GPS on. Rest
-  /// only after one that saw no vehicle, or at the cap; never after the linger.
+  /// holds evidence), whatever it sees, so a car idling where it parked never keeps GPS on; a region
+  /// exit makes it an ordinary watch (`lingerToWatch`). Rest only after one that saw no vehicle, or
+  /// at the cap; never after the linger.
   func candidateTick(_ r: DetectStateRecord, _ now: Double) {
     guard !confirming else { return }
     let kind = r.origin == "manual" ? "manual" : "auto"
