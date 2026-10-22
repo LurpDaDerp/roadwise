@@ -1,10 +1,10 @@
-// The waiting panels (modes plan §3.7): a Start drive swipe waits up to 5 minutes for the car to
-// move. At 2:00 with no driving and no touch, "Still planning to drive?" asks (Keep waiting /
-// Cancel); from 4:30 it counts down the last 30 s ("Stopping in 0:27"). Any touch on the screen
-// waits a fresh 5 minutes (the screen's own touch handler), and the panel closes; Cancel stops the
-// wait, nothing saved. Each panel opens with one light haptic. It sits where the navigation list
-// does (the two never show together) in the app's own sheet colours, and shows only with the car
-// still, before a drive confirms.
+// The waiting panels (modes plan §3.7; drive-fixes brief): a Start-card drive records from the tap
+// and waits up to 5 minutes for the car to reach driving speed. At 2:00 with no driving and no
+// touch, "Still planning to drive?" asks (Keep waiting / Cancel); from 4:30 it counts down the last
+// 30 s ("Stopping in 0:27"). Any touch on the screen waits a fresh 5 minutes (the screen's own touch
+// handler), and the panel closes; Cancel ends the drive, nothing saved. Each panel opens with one
+// light haptic. It sits where the navigation list does (the two never show together) in the app's
+// own sheet colours, and shows only while the drive has not yet reached driving speed.
 import * as Haptics from 'expo-haptics';
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';

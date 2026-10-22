@@ -7,7 +7,8 @@ import { spotsCopy } from '@/features/spots/copy';
  * The words on the driving screen. Anything a driver may see while moving is one to three words
  * (spec "Driving screen"); a place heads-up (a spot's nudge) may take four. Spoken-only strings
  * (screen-reader labels and hints) may be full sentences: they are heard, not read. The waiting
- * screen and its panels show only before a drive confirms, with the car still.
+ * band and its panels show only while a Start-card drive, recording from the tap, has not yet
+ * reached driving speed.
  */
 export const hudCopy = {
   end: 'End drive',
@@ -22,7 +23,7 @@ export const hudCopy = {
   /** After End failed: two words while moving; the full sentence is spoken. */
   endFailed: 'Swipe again',
   endFailedLabel: "Couldn't end the drive. Swipe End again.",
-  /** End while waiting for the car to move: it stops the wait. */
+  /** End while a Start-card drive still waits for driving speed: it ends the drive unsaved. */
   cancel: 'Cancel',
   cancelLabel: 'Cancel',
   cancelHint: 'Swipe right to stop waiting. Nothing is saved.',
@@ -30,7 +31,7 @@ export const hudCopy = {
   notDriving: 'Not driving?',
   notDrivingLabel: 'Not driving? Stop this drive',
   notDrivingHint: "Stops recording. This trip won't count.",
-  /** The band while a Start drive swipe waits for the car to move. */
+  /** The band while a Start-card drive still waits for driving speed. */
   waiting: {
     title: 'Ready to roll',
     line: 'Saved once you drive',
