@@ -25,8 +25,10 @@ jest.mock('@/features/permissions/PermissionCard', () => {
   const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
   const { homeCard } = jest.requireActual<typeof import('@/features/permissions/board')>('@/features/permissions/board');
   return {
-    PermissionCard: ({ board, recording }: { board: MockBoard; recording: boolean }) =>
-      board.status === 'ready' && board.read && homeCard(board.read as never, board.prefs as never, recording).row ? <Text testID="home-permissions">a permission row</Text> : null,
+    PermissionCard: ({ board, recording, autoDisabled }: { board: MockBoard; recording: boolean; autoDisabled?: boolean }) =>
+      board.status === 'ready' && board.read && homeCard(board.read as never, board.prefs as never, recording, autoDisabled).row ? (
+        <Text testID="home-permissions">a permission row</Text>
+      ) : null,
   };
 });
 
@@ -110,6 +112,8 @@ const ALL_ON = {
   camera: null,
 };
 const MOTION_OFF = { ...ALL_ON, snapshot: { ...ALL_ON.snapshot, motion: 'denied' } };
+// Location While Using and Background App Refresh off: rows only automatic drives need.
+const AUTO_ONLY_OFF = { ...ALL_ON, snapshot: { ...ALL_ON.snapshot, location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied' } };
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -302,6 +306,27 @@ describe('the permission card', () => {
     await draw(<HomeScreen />);
     expect(screen.queryByTestId('home-permissions')).toBeNull();
     expect(scrollTo()).not.toHaveBeenCalled();
+  });
+
+  test('Automatic drives switched off: Location Always and Background App Refresh never ask on Home (no card, no scroll)', async () => {
+    mockBoard = boardWith(AUTO_ONLY_OFF);
+    mockAuto = { state: 'disabled' };
+    await draw(<HomeScreen />);
+    expect(screen.queryByTestId('home-permissions')).toBeNull();
+    expect(scrollTo()).not.toHaveBeenCalled();
+  });
+
+  test('Automatic drives not switched off: Location Always and Background App Refresh still ask on Home', async () => {
+    mockBoard = boardWith(AUTO_ONLY_OFF);
+    await draw(<HomeScreen />);
+    expect(screen.getByTestId('home-permissions')).toBeOnTheScreen();
+  });
+
+  test('Automatic drives switched off: Motion still asks on Home', async () => {
+    mockBoard = boardWith(MOTION_OFF);
+    mockAuto = { state: 'disabled' };
+    await draw(<HomeScreen />);
+    expect(screen.getByTestId('home-permissions')).toBeOnTheScreen();
   });
 
   test('pull to refresh reads the board again', async () => {

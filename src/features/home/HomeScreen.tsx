@@ -52,6 +52,8 @@ export function HomeScreen() {
   const thisWeek = useStatSums(weekStart(now()));
   const { coaching } = useCoaching();
   const autoDrives = useAutoDrives();
+  // Automatic drives switched off: Home never asks for Location Always or Background App Refresh.
+  const autoDisabled = autoDrives.state === 'disabled';
   const { start } = useDriveControls();
   // The status alone (not useDriveLive), so Home doesn't re-render on every 1 Hz drive tick: a
   // drive recording, or a Start waiting for the car to move.
@@ -96,7 +98,7 @@ export function HomeScreen() {
   const board = usePermissionBoard();
   const scrollRef = useRef<ScrollView>(null);
   // Only a ready board (the phone read and the stored prefs both in), as the card itself shows.
-  const hasRow = !recording && board.status === 'ready' && board.read !== null && homeCard(board.read, board.prefs, recording).row !== null;
+  const hasRow = !recording && board.status === 'ready' && board.read !== null && homeCard(board.read, board.prefs, recording, autoDisabled).row !== null;
   const focused = useRef(false);
   const showsRow = useRef(hasRow);
   const toTop = useCallback(() => {
@@ -202,7 +204,7 @@ export function HomeScreen() {
         inProgress={<DriveInProgressBanner />}
         weather={<HomeWeatherAlert />}
         coaching={coaching}
-        permissions={<PermissionCard board={board} recording={recording} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}
+        permissions={<PermissionCard board={board} recording={recording} autoDisabled={autoDisabled} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}
         dashpal={<HomeDashpal hidden={recording} pull={pulls} />}
         scrollRef={scrollRef}
         refreshing={refreshing}
