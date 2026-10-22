@@ -40,6 +40,14 @@ describe('onboarding copy', () => {
     }
   });
 
+  it('tells an iPhone passenger to open the drive screen from the Drive in progress strip, then tap Not driving?', () => {
+    const row = onboardingCopy.how.rows.ios[1]!;
+    expect(row.title).toBe('Just riding along?');
+    expect(row.body).toBe('Open the drive screen from the “Drive in progress” strip in RoadWise, then tap “Not driving?” so that trip won’t count.');
+    expect(row.body).not.toMatch(/^Open RoadWise/);
+    expect(onboardingCopy.how.rows.android[1]!.body).toBe('Tap “Not driving?” on the drive screen so that trip won’t count.');
+  });
+
   it('words how drives start for each phone: on their own on an iPhone, from Start drive on Android', () => {
     expect(onboardingCopy.how.rows.ios[0]!.title).toBe('It notices your drives');
     expect(onboardingCopy.how.rows.android[0]!.body).toBe('Swipe Start drive on Home before you pull out. RoadWise records until you park.');
