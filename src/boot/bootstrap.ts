@@ -38,7 +38,7 @@ import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { writeDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, finishPendingCancel, isJournaled, playerInputs, type DriveHost, type DriveStartPermissions, type PushToStartOutcome, type PushToStartRequest } from '@/drive/host';
-import { isDriveScreenFocused } from '@/features/drive/hudPresence';
+import { bindDriveScreenMemory, DRIVE_SCREEN_ENTERED_KEY, isDriveScreenFocused, markDriveScreenEntered } from '@/features/drive/hudPresence';
 import type { PhoneReminder } from '@/features/drive/phoneReminder';
 import type { StoredDrive } from '@/features/drive/summaryNotifier';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
@@ -492,13 +492,29 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
         onError(error, 'summary notifier');
       }
     }
+    // The drive the driving screen is first shown for is written down, so a relaunch in the middle
+    // of it keeps it entered (the lockout, and an automatic drive's way back to its screen).
+    const screenMemory = createSettingsRepo(db);
+    const unbindScreenMemory = bindDriveScreenMemory((tripId) => {
+      void screenMemory.set(DRIVE_SCREEN_ENTERED_KEY, tripId).catch((error: unknown) => onError(error, 'drive screen'));
+    });
     const adopt: AdoptedTrip | null = recovery.adopt;
     try {
       await drive.boot({ adopt });
     } catch (error) {
       // The launch fails with this host: nothing it would announce may post.
       notifier?.detach();
+      unbindScreenMemory();
       throw error;
+    }
+    // A drive taken in at this launch that the driving screen was shown for before it: still entered.
+    const taken = drive.snapshot();
+    if (taken.status === 'recording' && taken.clientTripId !== null) {
+      const enteredFor = await screenMemory.get<unknown>(DRIVE_SCREEN_ENTERED_KEY).catch((error: unknown) => {
+        onError(error, 'drive screen');
+        return null;
+      });
+      if (enteredFor === taken.clientTripId) markDriveScreenEntered(taken.clientTripId);
     }
     // The orphans crash recovery stored before the host existed, once the boot shows whether a
     // drive records now (their recaps then wait until none does).
@@ -523,6 +539,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     }
     const release = async (): Promise<void> => {
       unmountDiagnostics();
+      unbindScreenMemory();
       await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
       notifier?.detach();
       await remind?.settled().catch((error: unknown) => onError(error, 'phone reminder'));

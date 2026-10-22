@@ -17,6 +17,7 @@ import { setActiveDashcam } from '@/dashcam/registry';
 import { INSTALL_ID_KEY, readInstallId } from '@/data/devices/installId';
 import { DROP_NOTICE_KEY, readDropNotice } from '@/drive/dropNotice';
 import type { DriveHost } from '@/drive/host';
+import { DRIVE_SCREEN_ENTERED_KEY, driveScreenEnteredFor, resetDriveScreenPresence, setDriveScreenFocused } from '@/features/drive/hudPresence';
 import type { PhoneReminder } from '@/features/drive/phoneReminder';
 import { QueryClient } from '@tanstack/react-query';
 import { subscribeInvalidation } from '@/data/queries/invalidate';
@@ -561,6 +562,40 @@ test('iOS: a drive native journals is continued at launch whatever the capture s
   expect(rt.drive.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(9), origin: 'auto', lastRowTs: list.at(-1)!.ts });
   expect(detect.calls).toContain(`readRows:${uuid(9)}:60:300`);
   await rt.stop({ endOpenTrip: false });
+});
+
+test('iOS: a relaunch in the middle of an automatic drive the driving screen was shown for keeps it entered; another drive does not', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  const relaunch = async (id: string, written: string) => {
+    resetDriveScreenPresence();
+    await createSettingsRepo(db).set(DRIVE_SCREEN_ENTERED_KEY, written);
+    const detect = createFakeDriveDetect({ now: () => clock });
+    await detect.setArmed(true, 'user-1');
+    detect.wake();
+    const list = rows(120, { t0: clock - 120_000 });
+    await createTripsRepo(db).insert({ client_trip_id: id, started_at: clock - 120_000, tz: TZ, status: 'recording', origin: 'auto', last_seq: 0 }, clock);
+    detect.confirm({ driveId: id, startedAt: clock - 120_000, rows: list.map((r) => ({ ...r })) });
+    const rt = await bootstrapApp({ ...deps().deps, detect });
+    expect(rt.drive.snapshot()).toMatchObject({ status: 'recording', clientTripId: id, origin: 'auto' });
+    return rt;
+  };
+  const rt = await relaunch(uuid(18), uuid(18));
+  const entered = driveScreenEnteredFor(uuid(18));
+  await rt.stop({ endOpenTrip: false });
+  expect(entered).toBe(true);
+
+  const rt2 = await relaunch(uuid(19), uuid(18));
+  const other = driveScreenEnteredFor(uuid(19));
+  // Shown now: written down for the next relaunch.
+  setDriveScreenFocused(true, uuid(19));
+  setDriveScreenFocused(false, uuid(19));
+  for (let i = 0; i < 5; i += 1) await Promise.resolve();
+  const written = await createSettingsRepo(db).get(DRIVE_SCREEN_ENTERED_KEY);
+  await rt2.stop({ endOpenTrip: false });
+  resetDriveScreenPresence();
+  expect(other).toBe(false);
+  expect(written).toBe(uuid(19));
 });
 
 test('iOS: the recap notifier is attached before the boot, so a drive native ended while no process ran, stored by the boot, reaches it', async () => {
