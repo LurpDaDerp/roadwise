@@ -27,18 +27,20 @@ const body = (over: Record<string, unknown> = {}) => ({ deviceId: DEVICE, client
 
 interface Calls {
   claims: { userToken: string; deviceId: string; clientTripId: string; leg: number }[];
+  releases: { userToken: string; deviceId: string; clientTripId: string; leg: number }[];
   sends: { token: string; startedAt: number; state: LiveActivityContentState }[];
   logs: unknown[][];
 }
 
-function harness(opts: { claim?: unknown | Error; apns?: ApnsResult | null; auth?: 'good' | 'down' } = {}) {
-  const calls: Calls = { claims: [], sends: [], logs: [] };
+function harness(opts: { claim?: unknown | Error; release?: unknown | Error; apns?: ApnsResult | null | Error; auth?: 'good' | 'down' } = {}) {
+  const calls: Calls = { claims: [], releases: [], sends: [], logs: [] };
   const apns: ApnsClient | null =
     opts.apns === null
       ? null
       : {
           sendLiveActivityStart(token, args) {
             calls.sends.push({ token, ...args });
+            if (opts.apns instanceof Error) return Promise.reject(opts.apns);
             return Promise.resolve(opts.apns ?? { ok: true, status: 200, reason: null, host: 'production' });
           },
         };
@@ -48,6 +50,11 @@ function harness(opts: { claim?: unknown | Error; apns?: ApnsResult | null; auth
       calls.claims.push({ userToken, deviceId, clientTripId, leg });
       const c = opts.claim ?? { token: PUSH_TOKEN, duplicate: false };
       return c instanceof Error ? Promise.reject(c) : Promise.resolve(c);
+    },
+    release: (userToken, deviceId, clientTripId, leg) => {
+      calls.releases.push({ userToken, deviceId, clientTripId, leg });
+      const r = opts.release === undefined ? true : opts.release;
+      return r instanceof Error ? Promise.reject(r) : Promise.resolve(r);
     },
     apns,
     now: () => NOW,
@@ -105,11 +112,80 @@ Deno.test('no token, a duplicate, an Apple refusal, no APNs secrets: a plain ans
   assertEquals(dup.calls.sends, []);
   const refused = harness({ apns: { ok: false, status: 410, reason: 'Unregistered', host: 'production' } });
   const r = await handleLiveActivityStart(post(body()), refused.deps);
-  assertEquals([r.status, await r.json()], [200, { sent: false, reason: 'apns_error' }]);
+  assertEquals([r.status, await r.json()], [200, { sent: false, reason: 'apns_error', detail: 'Unregistered', retry: false }]);
   // nothing is claimed when there is no way to send
   const off = harness({ apns: null });
   assertEquals(await (await handleLiveActivityStart(post(body()), off.deps)).json(), { sent: false, reason: 'unconfigured' });
   assertEquals(off.calls.claims, []);
+});
+
+Deno.test("the first content state carries the drive's speed and limit as the phone sent them, and unknown ones as null (\"-\")", async () => {
+  const h = harness();
+  await handleLiveActivityStart(post(body({ state: { ...state, speed: 27.4, limit: 30 } })), h.deps);
+  assertEquals([h.calls.sends[0].state.speed, h.calls.sends[0].state.limit], [27.4, 30]);
+  await handleLiveActivityStart(post(body({ state: { ...state, speed: 0, limit: null, unit: 'km/h' } })), h.deps);
+  assertEquals([h.calls.sends[1].state.speed, h.calls.sends[1].state.limit, h.calls.sends[1].state.unit], [0, null, 'km/h']);
+  await handleLiveActivityStart(post(body({ state: { ...state, speed: null, limit: 120, unit: 'km/h' } })), h.deps);
+  assertEquals([h.calls.sends[2].state.speed, h.calls.sends[2].state.limit], [null, 120]);
+});
+
+Deno.test('a send Apple refused or never answered hands its claim back as the caller, and says why and whether a retry can help', async () => {
+  // a passing failure (no answer, Apple busy or failing): released, so a retry can send
+  for (const apns of [
+    { ok: false, status: 0, reason: 'timeout', host: 'production' },
+    { ok: false, status: 0, reason: 'network', host: 'production' },
+    { ok: false, status: 429, reason: 'TooManyRequests', host: 'production' },
+    { ok: false, status: 503, reason: 'ServiceUnavailable', host: 'sandbox' },
+    { ok: false, status: 500, reason: null, host: 'production' },
+  ] as ApnsResult[]) {
+    const h = harness({ apns });
+    const res = await handleLiveActivityStart(post(body({ leg: 2 })), h.deps);
+    assertEquals([res.status, await res.json()], [200, { sent: false, reason: 'apns_error', detail: apns.reason, retry: true }], JSON.stringify(apns));
+    assertEquals(h.calls.releases, [{ userToken: 'good', deviceId: DEVICE, clientTripId: TRIP, leg: 2 }]);
+  }
+  // a refusal that will repeat (a dead token, a wrong topic, a bad key): released all the same, but no retry is worth it
+  for (const apns of [
+    { ok: false, status: 400, reason: 'BadDeviceToken', host: 'sandbox' },
+    { ok: false, status: 400, reason: 'TopicDisallowed', host: 'production' },
+    { ok: false, status: 403, reason: 'InvalidProviderToken', host: 'production' },
+    { ok: false, status: 0, reason: 'bad_key', host: 'production' },
+  ] as ApnsResult[]) {
+    const h = harness({ apns });
+    assertEquals(await (await handleLiveActivityStart(post(body()), h.deps)).json(), { sent: false, reason: 'apns_error', detail: apns.reason, retry: false });
+    assertEquals(h.calls.releases.length, 1);
+  }
+  // a client that throws counts as nothing sent
+  const threw = harness({ apns: new Error('boom') });
+  assertEquals(await (await handleLiveActivityStart(post(body()), threw.deps)).json(), { sent: false, reason: 'apns_error', detail: 'network', retry: true });
+  assertEquals(threw.calls.releases.length, 1);
+});
+
+Deno.test('a release that hands nothing back, or fails (0027 not applied), leaves the claim: no retry, never a 5xx, its code logged', async () => {
+  const none = harness({ apns: { ok: false, status: 0, reason: 'timeout', host: 'production' }, release: false });
+  assertEquals(await (await handleLiveActivityStart(post(body()), none.deps)).json(), { sent: false, reason: 'apns_error', detail: 'timeout', retry: false });
+  const missing = harness({ apns: { ok: false, status: 0, reason: 'network', host: 'production' }, release: new PgError('PGRST202', 'Could not find the function') });
+  const res = await handleLiveActivityStart(post(body()), missing.deps);
+  assertEquals([res.status, await res.json()], [200, { sent: false, reason: 'apns_error', detail: 'network', retry: false }]);
+  const text = JSON.stringify(missing.calls.logs);
+  assert(text.includes('PGRST202'));
+  assertEquals([text.includes(PUSH_TOKEN), text.includes(DEVICE), text.includes('good')], [false, false, false]);
+});
+
+Deno.test('nothing is released when the push went, nor when nothing was claimed', async () => {
+  const sent = harness();
+  await handleLiveActivityStart(post(body()), sent.deps);
+  const dup = harness({ claim: { token: PUSH_TOKEN, duplicate: true } });
+  await handleLiveActivityStart(post(body()), dup.deps);
+  const none = harness({ claim: { token: null, duplicate: false } });
+  await handleLiveActivityStart(post(body()), none.deps);
+  const off = harness({ apns: null });
+  await handleLiveActivityStart(post(body()), off.deps);
+  assertEquals([sent.calls.releases, dup.calls.releases, none.calls.releases, off.calls.releases], [[], [], [], []]);
+});
+
+Deno.test('a detail that is not a plain code is left out', async () => {
+  const h = harness({ apns: { ok: false, status: 400, reason: 'Bad Device Token!', host: 'production' } });
+  assertEquals(await (await handleLiveActivityStart(post(body()), h.deps)).json(), { sent: false, reason: 'apns_error', detail: null, retry: false });
 });
 
 Deno.test('the logs never carry the push token, the device id or a position', async () => {
@@ -149,6 +225,13 @@ Deno.test('refusals before any claim: method, token, size, JSON, the strict cont
     body({ state: { ...state, unit: 'knots' } }),
     body({ state: { ...state, speedTint: 'red' } }),
     body({ state: { ...state, speed: 900 } }),
+    body({ state: { ...state, speed: -1 } }),
+    body({ state: { ...state, speed: '34' } }),
+    body({ state: { ...state, limit: 250 } }),
+    body({ state: { ...state, limit: -5 } }),
+    body({ state: { ...state, limit: '35' } }),
+    body({ state: { ...state, limit: undefined } }),
+    body({ state: { ...state, speed: undefined } }),
     body({ state: { ...state, extra: 1 } }),
     body({ state: { ...state, weatherText: 'x'.repeat(65) } }),
     body({ startedAt: NOW - 13 * 3_600_000 }),
@@ -160,6 +243,11 @@ Deno.test('refusals before any claim: method, token, size, JSON, the strict cont
     body({ leg: null }),
   ]) {
     assertEquals((await handleLiveActivityStart(post(bad), h.deps)).status, 400, JSON.stringify(bad).slice(0, 80));
+  }
+  // a number JSON reads as infinite (1e999) is not a speed or a limit
+  for (const key of ['speed', 'limit']) {
+    const raw = JSON.stringify(body({ state: { ...state, [key]: 7777 } })).replace('7777', '1e999');
+    assertEquals((await handleLiveActivityStart(post(raw), h.deps)).status, 400, key);
   }
   assertEquals(h.calls.claims, []);
 });
