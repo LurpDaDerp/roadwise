@@ -82,8 +82,8 @@ struct StatusInputs {
 }
 
 enum DetectPolicy {
-  static let CONFIRM_MPS_AUTO: Double = 6.7056
-  static let CONFIRM_HOLD_MS_AUTO: Double = 30_000
+  static let CONFIRM_MPS_AUTO: Double = 8.9408
+  static let CONFIRM_HOLD_MS_AUTO: Double = 10_000
   static let CONFIRM_MPS_MANUAL: Double = 4.4704
   static let CONFIRM_HOLD_MS_MANUAL: Double = 15_000
   static let CONFIRM_DIP_MAX_MS: Double = 5_000

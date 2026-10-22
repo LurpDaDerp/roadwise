@@ -137,7 +137,7 @@ function setShown(s: typeof lastShown): void {
       : { mps: s.speedMph * MPS_PER_MPH, accel: s.speedAccelMph * MPS_PER_MPH, at: s.speedAt };
 }
 
-/** The speed a test drives at unless it says (End locks at 15 mph, so its tests run slower). */
+/** The speed a test drives at unless it says (End locks at 20 mph, so its tests run slower). */
 let mockDefaultMph = 34;
 
 function live(over: Partial<DriveLive> = {}): DriveLive {
@@ -558,7 +558,7 @@ test('no points anywhere on the screen, stopped or moving', async () => {
 });
 
 describe('swipe to end', () => {
-  // Slow enough for End (it locks at 15 mph).
+  // Slow enough for End (it locks at 20 mph).
   beforeEach(() => {
     mockDefaultMph = 8;
   });
@@ -1190,11 +1190,11 @@ describe('End locks at speed (modes plan §3.6)', () => {
   const end = () => screen.getByTestId('hud-end');
   const locked = () => end().props.accessibilityState?.disabled === true;
 
-  test('at 15 mph it greys out with a lock and takes no swipe, saying when it comes back; it stays so down to 10 and is back under 10', async () => {
-    const h = await renderHud({ speedMph: 14.9 });
+  test('at 20 mph it greys out with a lock and takes no swipe, saying when it comes back; it stays so down to 10 and is back under 10', async () => {
+    const h = await renderHud({ speedMph: 19.9 });
     expect(locked()).toBe(false);
     expect(end()).toHaveProp('accessibilityHint', hudCopy.endHint);
-    await h.update({ speedMph: 15 });
+    await h.update({ speedMph: 20 });
     expect(locked()).toBe(true);
     expect(end()).toHaveProp('accessibilityHint', 'Available below 10 mph.');
     expect(end()).toHaveStyle({ opacity: 0.5 });
@@ -1203,7 +1203,7 @@ describe('End locks at speed (modes plan §3.6)', () => {
     expect(within(end()).getByText(hudCopy.end)).toBeTruthy();
     await swipeEnd(end());
     expect(mockEnd).not.toHaveBeenCalled();
-    for (const mph of [14, 12, 10]) {
+    for (const mph of [19, 14, 10]) {
       await h.update({ speedMph: mph });
       expect(locked()).toBe(true);
     }

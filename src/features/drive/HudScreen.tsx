@@ -159,7 +159,7 @@ export type HudScreenProps = {
  * - Landscape: the halo the full height, the sign left of it; on the right the band, the link, the
  *   navigation button and End under it.
  * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive. At
- *   15 mph and over it greys out with a lock and takes no swipe, until the car is back under 10.
+ *   20 mph and over it greys out with a lock and takes no swipe, until the car is back under 10.
  *   End and the navigation button wear the app's paper, ink and sky accent (`hudButtonColors`).
  *   End, the navigation button (under 35 mph), "Not driving?" and the weather banner's ✕ are the
  *   only touch targets while moving. Every other touch only undims.
@@ -224,7 +224,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const [navLocked, setNavLocked] = useState(false);
   const nextLocked = nextNavLock(navLocked, lockMph);
   if (nextLocked !== navLocked) setNavLocked(nextLocked);
-  // End greys out at 15 mph and over, back under 10 (an unknown speed holds it); never while waiting.
+  // End greys out at 20 mph and over, back under 10 (an unknown speed holds it); never while waiting.
   const [endLocked, setEndLocked] = useState(false);
   const nextEnd = isWaiting ? false : nextEndLock(endLocked, live.rowSpeedMph);
   if (nextEnd !== endLocked) setEndLocked(nextEnd);

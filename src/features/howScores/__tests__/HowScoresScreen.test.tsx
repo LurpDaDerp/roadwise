@@ -37,5 +37,5 @@ test('the drive numbers come from the drive code', () => {
     waitMin: WAIT_TOTAL_MS / 60_000,
     notDrivingMin: NOT_DRIVING_BUDGET_MS / 60_000,
   });
-  expect(DRIVE_NUMBERS).toEqual({ autoTriggerMph: 15, autoTriggerS: 30, waitMin: 5, notDrivingMin: 2 });
+  expect(DRIVE_NUMBERS).toEqual({ autoTriggerMph: 20, autoTriggerS: 10, waitMin: 5, notDrivingMin: 2 });
 });

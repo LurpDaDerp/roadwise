@@ -12,9 +12,9 @@ export const MPS_PER_MPH = 0.44704;
 
 /** The detector's numbers. Same names, same values in `DetectPolicy.swift`. */
 export const DETECT = {
-  /** The auto trigger: 15 mph held 30 s. */
-  CONFIRM_MPS_AUTO: 6.7056,
-  CONFIRM_HOLD_MS_AUTO: 30_000,
+  /** The auto trigger: 20 mph held 10 s. */
+  CONFIRM_MPS_AUTO: 8.9408,
+  CONFIRM_HOLD_MS_AUTO: 10_000,
   /** A Start-card session: 10 mph held 15 s. */
   CONFIRM_MPS_MANUAL: 4.4704,
   CONFIRM_HOLD_MS_MANUAL: 15_000,
@@ -104,7 +104,7 @@ export const DETECT = {
 export type DetectConstant = keyof typeof DETECT;
 
 /** The auto trigger (U2) and the Start card's, in the words the UI quotes. */
-export const AUTO_TRIGGER = { mph: 15, holdMs: 30_000, dipMaxMs: 5_000, maxHAccM: 30 } as const;
+export const AUTO_TRIGGER = { mph: 20, holdMs: 10_000, dipMaxMs: 5_000, maxHAccM: 30 } as const;
 export const MANUAL_TRIGGER = { mph: 10, holdMs: 15_000, dipMaxMs: 5_000, maxHAccM: 30 } as const;
 
 export type TriggerKind = 'auto' | 'manual';

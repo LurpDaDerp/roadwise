@@ -15,7 +15,7 @@ export const hudCopy = {
   endLabel: 'End drive',
   endHint: 'Swipe right to end the drive.',
   /**
-   * End while greyed out for speed, in the driver's units: it locks at 15 mph but only comes back
+   * End while greyed out for speed, in the driver's units: it locks at 20 mph but only comes back
    * under 10 (16 km/h is about 10 mph), so the hint names the speed where it comes back.
    */
   endLockedHint: (units: 'mi' | 'km') => (units === 'km' ? 'Available below 16 km/h.' : 'Available below 10 mph.'),

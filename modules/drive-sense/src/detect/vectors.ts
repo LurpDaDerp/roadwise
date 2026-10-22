@@ -160,16 +160,16 @@ const none = { due: null, overdue: null };
 
 export const DETECT_VECTORS: readonly DetectVector[] = [
   // ——— confirmation ———
-  { name: 'auto: 20 mph held 30 s confirms on the row 30 s after the run began', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 20)), expected: { confirmedAt: at(30), runStartTs: at(0) } },
-  { name: 'auto: 29 s at 20 mph then a stop never confirms', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 29, 20), ...vrows(30, 60, 0)]), expected: { confirmedAt: null, runStartTs: null } },
-  { name: 'auto: 14 mph never confirms', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 14)), expected: { confirmedAt: null, runStartTs: null } },
-  { name: 'auto: a dip under the trigger spanning 5 s keeps the hold', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 10, 20), ...vrows(11, 16, 10), ...vrows(17, 40, 20)]), expected: { confirmedAt: at(30), runStartTs: at(0) } },
-  { name: 'auto: a dip spanning 6 s breaks the hold; the next run starts after it', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 10, 20), ...vrows(11, 17, 10), ...vrows(18, 60, 20)]), expected: { confirmedAt: at(48), runStartTs: at(18) } },
-  { name: 'auto: rows with a 50 m fix are a dip', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 10, 20), ...vrows(11, 13, 20, { hAcc: 50 }), ...vrows(14, 40, 20)]), expected: { confirmedAt: at(30), runStartTs: at(0) } },
-  { name: 'auto: rows with no fix are a dip', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 10, 20), ...vrows(11, 14, null), ...vrows(15, 40, 20)]), expected: { confirmedAt: at(30), runStartTs: at(0) } },
+  { name: 'auto: 20 mph held 10 s confirms on the row 10 s after the run began', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 20)), expected: { confirmedAt: at(10), runStartTs: at(0) } },
+  { name: 'auto: 9 s at 20 mph then a stop never confirms', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 9, 20), ...vrows(10, 60, 0)]), expected: { confirmedAt: null, runStartTs: null } },
+  { name: 'auto: 19 mph never confirms', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 19)), expected: { confirmedAt: null, runStartTs: null } },
+  { name: 'auto: a dip under the trigger spanning 5 s keeps the hold', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 2, 20), ...vrows(3, 8, 10), ...vrows(9, 40, 20)]), expected: { confirmedAt: at(10), runStartTs: at(0) } },
+  { name: 'auto: a dip spanning 6 s breaks the hold; the next run starts after it', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 2, 20), ...vrows(3, 9, 10), ...vrows(10, 60, 20)]), expected: { confirmedAt: at(20), runStartTs: at(10) } },
+  { name: 'auto: rows with a 50 m fix are a dip', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 2, 20), ...vrows(3, 5, 20, { hAcc: 50 }), ...vrows(6, 40, 20)]), expected: { confirmedAt: at(10), runStartTs: at(0) } },
+  { name: 'auto: rows with no fix are a dip', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 2, 20), ...vrows(3, 6, null), ...vrows(7, 40, 20)]), expected: { confirmedAt: at(10), runStartTs: at(0) } },
   { name: 'auto: a speed rated worse than 2 m/s never counts', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 20, { speedAcc: 3 })), expected: { confirmedAt: null, runStartTs: null } },
-  { name: 'auto: an unrated speed counts', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 20, { speedAcc: -1 })), expected: { confirmedAt: at(30), runStartTs: at(0) } },
-  { name: 'auto: a fresh cycling report holds the confirmation to the next row', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 20), (s) => s === 30 || s === 31), expected: { confirmedAt: at(32), runStartTs: at(0) } },
+  { name: 'auto: an unrated speed counts', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 20, { speedAcc: -1 })), expected: { confirmedAt: at(10), runStartTs: at(0) } },
+  { name: 'auto: a fresh cycling report holds the confirmation to the next row', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 20), (s) => s === 10 || s === 11), expected: { confirmedAt: at(12), runStartTs: at(0) } },
   { name: 'manual: 10 mph held 15 s confirms', kind: 'confirm', trigger: 'manual', ...confirmRows(vrows(0, 20, 12)), expected: { confirmedAt: at(15), runStartTs: at(0) } },
   { name: 'manual: 8 mph never confirms', kind: 'confirm', trigger: 'manual', ...confirmRows(vrows(0, 40, 8)), expected: { confirmedAt: null, runStartTs: null } },
 
@@ -208,7 +208,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     rows: kerb,
     automotiveSince: 0,
     lastEnd: null,
-    expected: { confirmedAt: at(95), start: { index: 60, startedAt: at(60), startSource: 'trace', startLat: north(0), startLng: LNG, continues: false } },
+    expected: { confirmedAt: at(75), start: { index: 60, startedAt: at(60), startSource: 'trace', startLat: north(0), startLng: LNG, continues: false } },
   },
   {
     name: 'start: rows that begin moving start at the car motion, at the parked spot it could have come from',
@@ -217,7 +217,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     rows: vrows(0, 40, 20, (s) => ({ northM: 500 + 9 * s })),
     automotiveSince: at(-60),
     lastEnd: lastEndAt(-600, 0),
-    expected: { confirmedAt: at(30), start: { index: 0, startedAt: at(-60), startSource: 'motion', startLat: north(0), startLng: LNG, continues: false } },
+    expected: { confirmedAt: at(10), start: { index: 0, startedAt: at(-60), startSource: 'motion', startLat: north(0), startLng: LNG, continues: false } },
   },
   {
     name: 'start: the motion start is not placed at a parked spot it could not have come from',
@@ -226,7 +226,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     rows: vrows(0, 40, 20, (s) => ({ northM: 500 + 9 * s })),
     automotiveSince: at(-60),
     lastEnd: lastEndAt(-600, -5000),
-    expected: { confirmedAt: at(30), start: { index: 0, startedAt: at(-60), startSource: 'motion', startLat: null, startLng: null, continues: false } },
+    expected: { confirmedAt: at(10), start: { index: 0, startedAt: at(-60), startSource: 'motion', startLat: null, startLng: null, continues: false } },
   },
   {
     name: 'start: without car motion before it, the first row starts the drive',
@@ -235,7 +235,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     rows: vrows(0, 40, 20, (s) => ({ northM: 9 * s })),
     automotiveSince: 0,
     lastEnd: null,
-    expected: { confirmedAt: at(30), start: { index: 0, startedAt: at(0), startSource: 'wake', startLat: north(0), startLng: LNG, continues: false } },
+    expected: { confirmedAt: at(10), start: { index: 0, startedAt: at(0), startSource: 'wake', startLat: north(0), startLng: LNG, continues: false } },
   },
   {
     name: 'start: a Start-card drive never uses the motion start',
@@ -253,7 +253,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     rows: kerb,
     automotiveSince: 0,
     lastEnd: lastEndAt(0, -50),
-    expected: { confirmedAt: at(95), start: { index: 60, startedAt: at(60), startSource: 'trace', startLat: north(0), startLng: LNG, continues: true } },
+    expected: { confirmedAt: at(75), start: { index: 60, startedAt: at(60), startSource: 'trace', startLat: north(0), startLng: LNG, continues: true } },
   },
   {
     name: 'start: 6 min after the last end is a new drive',
@@ -262,7 +262,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     rows: kerb,
     automotiveSince: 0,
     lastEnd: lastEndAt(-300, -50),
-    expected: { confirmedAt: at(95), start: { index: 60, startedAt: at(60), startSource: 'trace', startLat: north(0), startLng: LNG, continues: false } },
+    expected: { confirmedAt: at(75), start: { index: 60, startedAt: at(60), startSource: 'trace', startLat: north(0), startLng: LNG, continues: false } },
   },
   {
     name: 'start: 200 m from the last end is a new drive',
@@ -271,7 +271,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     rows: kerb,
     automotiveSince: 0,
     lastEnd: lastEndAt(0, -200),
-    expected: { confirmedAt: at(95), start: { index: 60, startedAt: at(60), startSource: 'trace', startLat: north(0), startLng: LNG, continues: false } },
+    expected: { confirmedAt: at(75), start: { index: 60, startedAt: at(60), startSource: 'trace', startLat: north(0), startLng: LNG, continues: false } },
   },
   { name: 'start: no confirmation, no start', kind: 'start', trigger: 'auto', rows: vrows(0, 60, 12), automotiveSince: 0, lastEnd: null, expected: { confirmedAt: null, start: null } },
 

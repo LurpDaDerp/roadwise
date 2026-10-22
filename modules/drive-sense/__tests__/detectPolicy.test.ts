@@ -55,7 +55,7 @@ describe('the numbers', () => {
       expect(t.dipMaxMs).toBe(DETECT.CONFIRM_DIP_MAX_MS);
       expect(t.maxHAccM).toBe(DETECT.TRUSTED_HACC_M);
     }
-    expect(AUTO_TRIGGER).toEqual({ mph: 15, holdMs: 30_000, dipMaxMs: 5_000, maxHAccM: 30 });
+    expect(AUTO_TRIGGER).toEqual({ mph: 20, holdMs: 10_000, dipMaxMs: 5_000, maxHAccM: 30 });
     expect(MANUAL_TRIGGER).toEqual({ mph: 10, holdMs: 15_000, dipMaxMs: 5_000, maxHAccM: 30 });
   });
 

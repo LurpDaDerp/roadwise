@@ -27,7 +27,7 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 **iOS: drives start on their own (§11).** A native drive detector, armed by JS for a signed-in
 owner with Location Always, Precise Location and Motion & Fitness, wakes on a significant move, on
 leaving the spot the car last parked in, or on leaving a place the phone stayed at; it watches with
-GPS for up to 3 minutes, confirms a drive once the car holds 15 mph for 30 s, traces the drive's
+GPS for up to 3 minutes, confirms a drive once the car holds 20 mph for 10 s, traces the drive's
 start back to where the car pulled away, writes every row to a journal on disk and emits it as a
 `row` with its `seq`. Start drive opens a drive at once, from the tap, journaled the same way. JS adopts the drive wherever it runs and
 decides its end; native stops sensing on its own only as a safety stop. Phone use is not read: rows
@@ -880,7 +880,7 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   candidate ends after 3 min (and rests significant-change and visit wakes for 10 min) or on a walk
   standing 20 s. Every 5 s the detector's clock checks.
 - **Confirmation** (`confirmStep`): trusted rows (a valid fix within 30 m, speed rated 2 m/s or
-  better or unrated) at 15 mph spanning 30 s on the row clock (10 mph spanning 15 s ends a
+  better or unrated) at 20 mph spanning 10 s on the row clock (10 mph spanning 15 s ends a
   Start-card drive's wait for driving speed); a dip
   under the trigger (or untrusted rows) spanning 5 s or less keeps the hold, more breaks it. An auto
   hold waits while a confident cycling, walking or running report is 30 s old or less.

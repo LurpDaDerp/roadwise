@@ -15,7 +15,7 @@ import {
 
 import { HERO, howItWorks, rules, type DriveNumbers } from '@/content/howScores';
 
-const N: DriveNumbers = { autoTriggerMph: 15, autoTriggerS: 30, waitMin: 5, notDrivingMin: 2 };
+const N: DriveNumbers = { autoTriggerMph: 20, autoTriggerS: 10, waitMin: 5, notDrivingMin: 2 };
 const all = (auto: boolean) => [HERO.title, HERO.body, ...howItWorks(auto).flatMap((i) => [i.title, i.body]), ...rules(auto, N).flatMap((s) => [s.title, ...s.lines])];
 const section = (auto: boolean, id: string) => rules(auto, N).find((s) => s.id === id)!.lines;
 
@@ -43,7 +43,7 @@ test('the sections, in order', () => {
 
 test('every number comes from the rules: the trigger, the wait, the budget, the end and the merge', () => {
   expect(section(true, 'drives')).toEqual([
-    `Once you’ve been moving at about 15 mph for 30 s, RoadWise starts recording, counting from the moment you set off.`,
+    `Once you’ve been moving at about 20 mph for 10 s, RoadWise starts recording, counting from the moment you set off.`,
     `It ends once you park and walk away, or after ${IDLE_END_S / 60} min parked.`,
     `Stop for under ${MERGE_GAP_S / 60} min and set off again from the same spot, and it stays one drive.`,
     'Riding along? Open the drive screen and tap “Not driving?”. It’s there for your first 2 minutes on that screen.',

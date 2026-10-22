@@ -4,7 +4,7 @@
 // One object wires the native capture, the iOS drive detector, the engine, the detectors, the
 // speed-limit client, the alert player, the background display and persistence together, and
 // publishes one `DriveState` for the UI. Rules:
-// - **How a drive begins.** On its own (iOS): native notices driving (15 mph held 30 s), traces the
+// - **How a drive begins.** On its own (iOS): native notices driving (20 mph held 10 s), traces the
 //   start back and journals every row; the host adopts the journal wherever JS runs (a
 //   `driveStarted` event, or `boot`) and replays it into the engine. From the Start card (both):
 //   the drive records from the tap (iOS: native opens a journaled drive at once, `startWaiting`;
