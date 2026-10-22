@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Children, type ComponentProps, type ReactNode } from 'react';
-import { View } from 'react-native';
+import { Pressable, Switch, View } from 'react-native';
 
 import { HOME_HREF } from '@/features/drives/routes';
 import { Card, Divider, IconButton, ListRow, Text, useFontScale, useTheme } from '@/ui';
@@ -119,5 +119,64 @@ export function LinkRow({
       accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
       onPress={onPress}
     />
+  );
+}
+
+/**
+ * A switch row with the leading mark of the rows around it (`ToggleRow`'s behaviour: a tap anywhere
+ * on the row flips it, and the switch is the one accessible element, named with the line under the
+ * title). The test ID is the switch's.
+ */
+export function SwitchRow({
+  icon,
+  title,
+  subtitle,
+  value,
+  onValueChange,
+  testID,
+}: {
+  icon: IconName;
+  title: string;
+  subtitle?: string;
+  value: boolean;
+  onValueChange: (next: boolean) => void;
+  testID?: string;
+}) {
+  const th = useTheme();
+  return (
+    <Pressable
+      accessible={false}
+      onPress={() => onValueChange(!value)}
+      style={({ pressed }) => ({
+        minHeight: 56,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: th.space.md,
+        paddingVertical: th.space.md,
+        paddingHorizontal: th.space.lg,
+        backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
+      })}
+    >
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <RowIcon name={icon} />
+      </View>
+      <View style={{ flex: 1, gap: 2 }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <Text variant="body">{title}</Text>
+        {subtitle ? (
+          <Text variant="footnote" tone="muted">
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
+      <Switch
+        testID={testID}
+        accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{ true: th.colors.accent, false: th.colors.border }}
+        ios_backgroundColor={th.colors.border}
+        thumbColor="#FFFFFF"
+      />
+    </Pressable>
   );
 }

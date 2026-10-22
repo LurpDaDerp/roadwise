@@ -30,11 +30,16 @@ export const settingsCopy = {
 
   root: {
     driving: 'Driving',
-    /** iPhone only: whether drives start on their own, and what they need first. */
+    /** iPhone only: the switch for drives that start on their own, and what they need first while it is on. */
     autoDrives: {
       title: 'Automatic drives',
       on: 'On. RoadWise notices your drives.',
-      off: (what: string) => `Off. Needs ${what}.`,
+      /** Switched off: a drive records only from the Start drive swipe. */
+      disabled: 'Off. Swipe Start drive on Home before you pull out.',
+      /** Switched on, but the phone still has to allow something. */
+      needs: (what: string) => `On, but it needs ${what}.`,
+      /** The row under the switch while something is missing: where to allow it. */
+      fix: 'Fix it in Permissions',
       what: {
         locationAlways: 'Location set to Always',
         precise: 'Precise Location',

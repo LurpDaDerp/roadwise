@@ -1,14 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Platform, Pressable, View } from 'react-native';
 
 import { dashcamStatus } from '@/dashcam/ui/status';
 import { useDashcamState } from '@/dashcam/ui/useDashcam';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { useMySummary, type HeatmapVisibility } from '@/data/server/summary';
-import { useAutoDrives, type AutoDrives } from '@/features/autoDrives/useAutoDrives';
+import { setAutoDrivesEnabled, useAutoDrives, type AutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, ToggleRow, useTheme } from '@/ui';
 import { appearance as appAppearance, APPEARANCE_CHOICES, useAppearance, type AppearanceStore } from '@/ui/appearance';
@@ -16,18 +16,57 @@ import { appearance as appAppearance, APPEARANCE_CHOICES, useAppearance, type Ap
 import { settingsCopy, shownVisibility, VISIBILITY_SEGMENTS } from './copy';
 
 import { readUnits, writeUnits, type Units } from './localPrefs';
-import { LinkRow, RowIcon, Section, TopBar } from './parts';
+import { LinkRow, RowIcon, Section, SwitchRow, TopBar } from './parts';
 import { readZones } from './privacyZones';
 import { SETTINGS_HREFS } from './routes';
 import { useProfileEdit, type ProfileFields } from './useProfileEdit';
 
 const copy = settingsCopy.root;
 
-/** The Automatic drives row's line: on, or the first thing it needs. Null hides the row (Android, or not read yet). */
+/**
+ * The Automatic drives switch's line: on, switched off, or on with the first thing it still needs.
+ * Null: no line (not read yet, Android).
+ */
 export function autoDrivesLine(a: AutoDrives): string | null {
   if (a.state === 'on') return copy.autoDrives.on;
-  if (a.state === 'off' && a.missing[0]) return copy.autoDrives.off(copy.autoDrives.what[a.missing[0]]);
+  if (a.state === 'disabled') return copy.autoDrives.disabled;
+  if (a.state === 'off' && a.missing[0]) return copy.autoDrives.needs(copy.autoDrives.what[a.missing[0]]);
   return null;
+}
+
+/** Whether the switch shows: a reading of an iPhone that runs automatic drives (never Android). */
+const autoDrivesKnown = (a: AutoDrives): boolean => a.state === 'on' || a.state === 'off' || a.state === 'disabled';
+
+/**
+ * The Automatic drives switch: what the native status says, with the driver's flip shown at once
+ * while it is stored and the status read again. Once shown it stays through an `unknown` reading
+ * (switched back on before arming has caught up), so the switch never vanishes under a finger.
+ */
+function useAutoDrivesSwitch() {
+  const auto = useAutoDrives();
+  const [wanted, setWanted] = useState<boolean | null>(null);
+  const [seen, setSeen] = useState(false);
+  const flips = useRef(0);
+  const known = autoDrivesKnown(auto);
+  // Kept from the render that first knew it (React's adjust-state-while-rendering pattern).
+  if (known && !seen) setSeen(true);
+  const shown: AutoDrives = wanted === false ? { state: 'disabled' } : wanted === true && auto.state === 'disabled' ? { state: 'unknown' } : auto;
+  const flip = useCallback((next: boolean) => {
+    const mine = ++flips.current;
+    setWanted(next);
+    void setAutoDrivesEnabled(next).finally(() => {
+      // Only the last flip settles the switch back onto the status.
+      if (flips.current === mine) setWanted(null);
+    });
+  }, []);
+  return {
+    visible: Platform.OS === 'ios' && (known || (seen && auto.state === 'unknown')),
+    value: wanted ?? auto.state !== 'disabled',
+    line: autoDrivesLine(shown),
+    // While switched on and something is missing: the way to allow it.
+    needsFix: shown.state === 'off' && shown.missing.length > 0,
+    flip,
+  };
 }
 
 /** The four sharing switches of Settings › Privacy, in order, and whether each is on by default. */
@@ -109,8 +148,10 @@ function RadioRow({ label, detail, chosen, onPress }: { label: string; detail?: 
  * `/settings`: everything a driver tunes, grouped by what it touches: the drive, privacy and what
  * friends see, you, notifications. Every control saves as it changes; there is no Save button.
  * Appearance is this phone's own (`src/ui/appearance.ts`): it lands at once and is never uploaded.
- * On an iPhone, Automatic drives says whether drives start on their own; it has no switch (the
- * phone's own permissions are the way to turn it off) and opens Settings › Permissions.
+ * On an iPhone, Automatic drives is a switch (this phone's own, on until switched off): it says
+ * whether drives start on their own, and while it is on but the phone still has to allow
+ * something, a row under it opens Settings › Permissions. Switching it off mid-drive lets that
+ * drive finish; the Start drive swipe works either way.
  */
 export function SettingsScreen({ deps = {} }: { deps?: { appearance?: AppearanceStore } }) {
   const router = useRouter();
@@ -120,7 +161,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
   const summary = useMySummary();
   const profile = summary.data?.profile;
   const edit = useProfileEdit();
-  const autoLine = autoDrivesLine(useAutoDrives());
+  const auto = useAutoDrivesSwitch();
 
   const [units, setUnits] = useState<Units | null>(null);
   const [zoneCount, setZoneCount] = useState(0);
@@ -174,8 +215,18 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
       {edit.error ? <Banner tone="danger" message={copy.saveError} testID="settings-save-error" /> : null}
 
       <Section title={copy.driving}>
-        {autoLine ? (
-          <LinkRow icon="car-sport-outline" title={copy.autoDrives.title} subtitle={autoLine} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-auto-drives" />
+        {auto.visible ? (
+          <SwitchRow
+            icon="car-sport-outline"
+            title={copy.autoDrives.title}
+            subtitle={auto.line ?? undefined}
+            value={auto.value}
+            onValueChange={auto.flip}
+            testID="settings-auto-drives"
+          />
+        ) : null}
+        {auto.visible && auto.needsFix ? (
+          <LinkRow icon="shield-checkmark-outline" title={copy.autoDrives.fix} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-auto-drives-fix" />
         ) : null}
         <LinkRow icon="videocam-outline" title={copy.dashcam.title} subtitle={dashcam.label} onPress={() => router.push(SETTINGS_HREFS.dashcam)} testID="settings-dashcam" />
         <LinkRow icon="volume-high-outline" title={copy.alerts.title} subtitle={copy.alerts.subtitle} onPress={() => router.push(SETTINGS_HREFS.alerts)} testID="settings-alerts" />

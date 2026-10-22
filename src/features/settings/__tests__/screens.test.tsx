@@ -49,7 +49,16 @@ jest.mock('@/drive/policy', () => ({ isBusyStatus: (s: string) => s === 'recordi
 jest.mock('../deviceWipe', () => ({ wipeThisPhone: jest.fn(async () => {}) }));
 /** The native automatic-drive status (null: Android). */
 const mockAutoStatus = jest.fn<unknown, []>(() => null);
-jest.mock('@/features/autoDrives/port', () => ({ readAutoDetectStatus: async () => mockAutoStatus() }));
+/** The switch's store-and-sync; by default it makes the status follow the choice, as the boot package does. */
+const mockSetAutoEnabled = jest.fn(async (on: boolean) => {
+  const s = mockAutoStatus() as Record<string, unknown> | null;
+  if (s) mockAutoStatus.mockReturnValue(on ? { ...s, enabled: true, armed: true, status: 'on' } : { ...s, enabled: false, armed: false, status: 'off' });
+  return on ? 'on' : 'disabled';
+});
+jest.mock('@/features/autoDrives/port', () => ({
+  readAutoDetectStatus: async () => mockAutoStatus(),
+  setAutoDetectEnabled: (on: boolean) => mockSetAutoEnabled(on),
+}));
 const ALL_ON = { location: 'always', precise: true, motion: 'granted', backgroundRefresh: 'available', liveActivities: true, canAskAlways: false };
 
 const SUMMARY = {
@@ -81,6 +90,7 @@ beforeEach(() => {
   mockSession.signOut.mockImplementation(async () => ({ signedOut: true }));
   mockDrive.status = 'idle';
   mockAutoStatus.mockReturnValue(null);
+  mockSetAutoEnabled.mockClear();
   resetAutoDrivesForTests();
   resetVoicePrefForTests();
   resetAlertStylePrefForTests();
@@ -99,20 +109,48 @@ function scrollsWithin(el: unknown, panelTestID: string): boolean {
 
 describe('Settings', () => {
   describe('Automatic drives (iPhone)', () => {
-    it('says On, first in Driving, and opens Settings › Permissions; it has no switch', async () => {
-      mockAutoStatus.mockReturnValue({ armed: true, status: 'on', missing: [], permissions: ALL_ON });
+    const autoSwitch = () => screen.getByRole('switch', { name: /^Automatic drives/ });
+
+    it('is a switch, first in Driving: on says RoadWise notices your drives', async () => {
+      mockAutoStatus.mockReturnValue({ enabled: true, armed: true, status: 'on', missing: [], permissions: ALL_ON });
       const w = await appWorld();
       await w.render(<SettingsScreen />);
-      const row = await screen.findByTestId('settings-auto-drives');
-      expect(row).toHaveTextContent('Automatic drives', { exact: false });
-      expect(screen.getByText('On. RoadWise notices your drives.')).toBeOnTheScreen();
-      expect(screen.queryByRole('switch', { name: /Automatic drives/ })).toBeNull();
-      await tap('settings-auto-drives');
-      expect(mockRouter.push).toHaveBeenLastCalledWith(SETTINGS_HREFS.permissions);
+      const sw = await screen.findByTestId('settings-auto-drives');
+      expect(sw).toBe(autoSwitch());
+      expect(sw.props.value).toBe(true);
+      expect(sw).toHaveProp('accessibilityLabel', 'Automatic drives, On. RoadWise notices your drives.');
+      expect(screen.queryByTestId('settings-auto-drives-fix')).toBeNull();
+      // nothing to fix: no trip to Permissions from here
+      expect(mockRouter.push).not.toHaveBeenCalled();
     });
 
-    it('off names the first thing it needs', async () => {
+    it('switching it off stores the choice, says Off with the Start drive swipe, and switching on again arms', async () => {
+      mockAutoStatus.mockReturnValue({ enabled: true, armed: true, status: 'on', missing: [], permissions: ALL_ON });
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      await screen.findByTestId('settings-auto-drives');
+      await act(async () => fireEvent(autoSwitch(), 'valueChange', false));
+      expect(mockSetAutoEnabled).toHaveBeenLastCalledWith(false);
+      await waitFor(() => expect(autoSwitch().props.value).toBe(false));
+      expect(autoSwitch()).toHaveProp('accessibilityLabel', 'Automatic drives, Off. Swipe Start drive on Home before you pull out.');
+      await act(async () => fireEvent(autoSwitch(), 'valueChange', true));
+      expect(mockSetAutoEnabled).toHaveBeenLastCalledWith(true);
+      await waitFor(() => expect(autoSwitch().props.value).toBe(true));
+      expect(autoSwitch()).toHaveProp('accessibilityLabel', 'Automatic drives, On. RoadWise notices your drives.');
+    });
+
+    it('switched off reads as off whatever is missing, with nothing to fix', async () => {
+      mockAutoStatus.mockReturnValue({ enabled: false, armed: false, status: 'off', missing: [], permissions: { ...ALL_ON, location: 'whenInUse' } });
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      await waitFor(() => expect(autoSwitch().props.value).toBe(false));
+      expect(autoSwitch()).toHaveProp('accessibilityLabel', 'Automatic drives, Off. Swipe Start drive on Home before you pull out.');
+      expect(screen.queryByTestId('settings-auto-drives-fix')).toBeNull();
+    });
+
+    it('on but not ready: the switch stays on, names the first thing it needs, and the row under it opens Settings › Permissions', async () => {
       mockAutoStatus.mockReturnValue({
+        enabled: true,
         armed: true,
         status: 'needs',
         missing: ['motion', 'backgroundRefresh'],
@@ -120,15 +158,50 @@ describe('Settings', () => {
       });
       const w = await appWorld();
       await w.render(<SettingsScreen />);
-      expect(await screen.findByText('Off. Needs Motion & Fitness.')).toBeOnTheScreen();
+      await screen.findByTestId('settings-auto-drives');
+      expect(autoSwitch().props.value).toBe(true);
+      expect(autoSwitch()).toHaveProp('accessibilityLabel', 'Automatic drives, On, but it needs Motion & Fitness.');
+      await tap('settings-auto-drives-fix');
+      expect(mockRouter.push).toHaveBeenLastCalledWith(SETTINGS_HREFS.permissions);
+    });
+
+    it('the switch shows the flip at once, and stays shown when switched on before arming catches up', async () => {
+      mockAutoStatus.mockReturnValue({ enabled: false, armed: false, status: 'off', missing: [], permissions: ALL_ON });
+      let finish: () => void = () => {};
+      mockSetAutoEnabled.mockImplementationOnce(
+        (_on: boolean) =>
+          new Promise((r) => {
+            finish = () => r('off');
+          })
+      );
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      await waitFor(() => expect(autoSwitch().props.value).toBe(false));
+      await act(async () => fireEvent(autoSwitch(), 'valueChange', true));
+      expect(autoSwitch().props.value).toBe(true);
+      // switched on, nothing missing, not armed yet: the reading is unknown, and the switch stays
+      mockAutoStatus.mockReturnValue({ enabled: true, armed: false, status: 'off', missing: [], permissions: ALL_ON });
+      await act(async () => finish());
+      expect(autoSwitch().props.value).toBe(true);
     });
 
     it('the line follows the order Location Always, Precise Location, Motion & Fitness, Background App Refresh', () => {
-      expect(autoDrivesLine({ state: 'off', missing: ['locationAlways', 'motion'] })).toBe('Off. Needs Location set to Always.');
-      expect(autoDrivesLine({ state: 'off', missing: ['precise'] })).toBe('Off. Needs Precise Location.');
-      expect(autoDrivesLine({ state: 'off', missing: ['backgroundRefresh'] })).toBe('Off. Needs Background App Refresh.');
+      expect(autoDrivesLine({ state: 'off', missing: ['locationAlways', 'motion'] })).toBe('On, but it needs Location set to Always.');
+      expect(autoDrivesLine({ state: 'off', missing: ['precise'] })).toBe('On, but it needs Precise Location.');
+      expect(autoDrivesLine({ state: 'off', missing: ['backgroundRefresh'] })).toBe('On, but it needs Background App Refresh.');
+      expect(autoDrivesLine({ state: 'disabled' })).toBe('Off. Swipe Start drive on Home before you pull out.');
+      expect(autoDrivesLine({ state: 'on' })).toBe('On. RoadWise notices your drives.');
       expect(autoDrivesLine({ state: 'unknown' })).toBeNull();
       expect(autoDrivesLine({ state: 'unsupported' })).toBeNull();
+    });
+
+    it('not read yet, or nothing known: no switch', async () => {
+      mockAutoStatus.mockReturnValue({ enabled: true, armed: false, status: 'off', missing: [], permissions: ALL_ON });
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      await screen.findByTestId('settings-alerts');
+      await act(async () => {});
+      expect(screen.queryByTestId('settings-auto-drives')).toBeNull();
     });
 
     it('is not shown on Android, and there is no reminder or state row', async () => {

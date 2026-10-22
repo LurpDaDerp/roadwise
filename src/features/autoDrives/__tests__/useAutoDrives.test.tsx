@@ -1,11 +1,12 @@
 import { act, render, screen } from '@testing-library/react-native';
 import { AppState, Text, type AppStateStatus } from 'react-native';
 
-import { autoDrivesFrom, readAutoDrives, resetAutoDrivesForTests, useAutoDrives, type AutoDetectStatus } from '../useAutoDrives';
+import { autoDrivesFrom, autoDrivesOn, readAutoDrives, resetAutoDrivesForTests, setAutoDrivesEnabled, useAutoDrives, type AutoDetectStatus } from '../useAutoDrives';
 
 const mockRead = jest.fn();
+const mockSetEnabled = jest.fn(async (_on: boolean) => 'on');
 // The boot package's reader (the native status), through the screens' one door to it.
-jest.mock('../port', () => ({ readAutoDetectStatus: () => mockRead() }));
+jest.mock('../port', () => ({ readAutoDetectStatus: () => mockRead(), setAutoDetectEnabled: (on: boolean) => mockSetEnabled(on) }));
 let mockFocus: (() => void) | null = null;
 jest.mock('expo-router', () => {
   const { useEffect } = jest.requireActual<typeof import('react')>('react');
@@ -23,6 +24,7 @@ const status = (over: Partial<NonNullable<AutoDetectStatus>> = {}): AutoDetectSt
 
 beforeEach(() => {
   mockRead.mockReset();
+  mockSetEnabled.mockClear();
   resetAutoDrivesForTests();
 });
 
@@ -99,5 +101,57 @@ describe('useAutoDrives', () => {
     mockRead.mockReturnValue(new Promise(() => {}));
     await render(<Probe />);
     expect(screen.getByTestId('auto')).toHaveTextContent('on');
+  });
+});
+
+describe('the Automatic drives switch', () => {
+  test('off by choice reads as disabled, before anything missing; never as on', () => {
+    expect(autoDrivesFrom(status({ enabled: false, status: 'off', armed: false }))).toEqual({ state: 'disabled' });
+    expect(autoDrivesFrom(status({ enabled: false, status: 'needs', armed: false, missing: ['locationAlways'] }))).toEqual({ state: 'disabled' });
+    expect(autoDrivesOn({ state: 'disabled' })).toBe(false);
+    // an iPhone that cannot run it, and Android, stay unsupported whatever the switch says
+    expect(autoDrivesFrom(status({ enabled: false, status: 'unavailable', armed: false }))).toEqual({ state: 'unsupported' });
+    // switched on (or a status without the field): as before
+    expect(autoDrivesFrom(status({ enabled: true }))).toEqual({ state: 'on' });
+    expect(autoDrivesFrom(status({ enabled: true, status: 'needs', armed: false, missing: ['motion'] }))).toEqual({ state: 'off', missing: ['motion'] });
+  });
+
+  test('setAutoDrivesEnabled stores the choice, then every mounted screen reads the new status', async () => {
+    function Probe({ id }: { id: string }) {
+      const a = useAutoDrives();
+      return <Text testID={id}>{a.state}</Text>;
+    }
+    mockRead.mockResolvedValue(status());
+    await render(
+      <>
+        <Probe id="a" />
+        <Probe id="b" />
+      </>
+    );
+    await act(async () => {});
+    expect(screen.getByTestId('a')).toHaveTextContent('on');
+    mockRead.mockResolvedValue(status({ enabled: false, status: 'off', armed: false }));
+    await act(async () => {
+      await expect(setAutoDrivesEnabled(false)).resolves.toEqual({ state: 'disabled' });
+    });
+    expect(mockSetEnabled).toHaveBeenCalledWith(false);
+    expect(screen.getByTestId('a')).toHaveTextContent('disabled');
+    expect(screen.getByTestId('b')).toHaveTextContent('disabled');
+  });
+
+  test('a read that started before the switch and lands after it never replaces the newer reading', async () => {
+    let answer: (s: AutoDetectStatus) => void = () => {};
+    mockRead.mockReturnValueOnce(new Promise<AutoDetectStatus>((r) => (answer = r)));
+    const stale = readAutoDrives();
+    mockRead.mockResolvedValueOnce(status({ enabled: false, status: 'off', armed: false }));
+    await expect(setAutoDrivesEnabled(false)).resolves.toEqual({ state: 'disabled' });
+    answer(status());
+    await expect(stale).resolves.toEqual({ state: 'disabled' });
+    mockRead.mockReturnValue(new Promise(() => {}));
+    function Probe() {
+      return <Text testID="auto">{useAutoDrives().state}</Text>;
+    }
+    await render(<Probe />);
+    expect(screen.getByTestId('auto')).toHaveTextContent('disabled');
   });
 });

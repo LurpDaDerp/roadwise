@@ -38,10 +38,12 @@ describe('the rest of the settings words', () => {
     );
   });
 
-  it('Automatic drives: on, and off with what it needs', () => {
+  it('Automatic drives: on, switched off, and on with what it still needs', () => {
     const a = settingsCopy.root.autoDrives;
     expect(a.on).toBe('On. RoadWise notices your drives.');
-    expect(a.off(a.what.locationAlways)).toBe('Off. Needs Location set to Always.');
+    expect(a.disabled).toBe('Off. Swipe Start drive on Home before you pull out.');
+    expect(a.needs(a.what.locationAlways)).toBe('On, but it needs Location set to Always.');
+    expect(a.fix).toBe('Fix it in Permissions');
     expect(Object.values(a.what)).toEqual(['Location set to Always', 'Precise Location', 'Motion & Fitness', 'Background App Refresh']);
   });
 
