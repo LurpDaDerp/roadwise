@@ -385,7 +385,7 @@ describe('automatic drives and the waiting Start', () => {
     expect(screen.getByText('Drives record themselves')).toBeOnTheScreen();
   });
 
-  test.each([{ state: 'unsupported' }, { state: 'unknown' }, { state: 'off', missing: ['locationAlways'] }] as AutoDrives[])('%o: the manual words', async (a) => {
+  test.each([{ state: 'unsupported' }, { state: 'unknown' }, { state: 'off', missing: ['locationAlways'] }, { state: 'disabled' }] as AutoDrives[])('%o: the manual words (switched off in Settings too)', async (a) => {
     mockAuto = a;
     await draw(<HomeScreen />);
     expect(screen.queryByTestId('start-caption')).toBeNull();
