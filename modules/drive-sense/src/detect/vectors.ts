@@ -111,7 +111,14 @@ export type DetectVector =
       expected: CandidateCause | null;
     }
   | { name: string; kind: 'startsAfter'; starts: number[]; since: number; sawVehicle: boolean; expected: number[] }
-  | { name: string; kind: 'end'; startedAt: number; steps: EndStep[]; expected: { due: SafetyCause | null; overdue: SafetyCause | null }[] }
+  | {
+      name: string;
+      kind: 'end';
+      startedAt: number;
+      steps: EndStep[];
+      /** `linger` (`lingerAfterJsEnd`: a JS end at that check opens the linger) is checked only where given. */
+      expected: { due: SafetyCause | null; overdue: SafetyCause | null; linger?: boolean }[];
+    }
   | {
       name: string;
       kind: 'suppress';
@@ -515,6 +522,39 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     startedAt: at(0),
     steps: [...steps(vrows(0, 10, 20)), ...steps(vrows(11, 20, 0)), check(24, 20), check(25, 20), check(84, 20), check(85, 20)],
     expected: [none, { due: null, overdue: 'walking' }, { due: null, overdue: 'walking' }, { due: 'walking', overdue: 'walking' }],
+  },
+  {
+    name: 'end: a JS end after the walking end or the still end opens the linger',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...steps(vrows(11, 20, 0)), check(24, 20), check(25, 20), check(309), check(310)],
+    expected: [
+      { due: null, overdue: null, linger: false },
+      { due: null, overdue: 'walking', linger: true },
+      { due: null, overdue: null, linger: false },
+      { due: null, overdue: 'still', linger: true },
+    ],
+  },
+  {
+    name: 'end: a walk standing 5 s after a 4 mph fix 5 s old (a carried phone): no walking end, but a JS end opens the linger',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...steps(vrows(11, 20, 4)), check(24, 20), check(25, 20), check(25, 20, 300)],
+    expected: [
+      { due: null, overdue: null, linger: false },
+      { due: null, overdue: null, linger: true },
+      { due: null, overdue: null, linger: false },
+    ],
+  },
+  {
+    name: 'end: a walker\'s pace tops out at 5 mph: a 6 mph fix keeps the car driving and opens no linger',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...steps(vrows(11, 20, 5)), check(25, 20), ...steps(vrows(21, 30, 6)), check(35, 30)],
+    expected: [
+      { due: null, overdue: null, linger: true },
+      { due: null, overdue: null, linger: false },
+    ],
   },
   {
     name: 'end: a walk with a fix over 3 mph in the last minute does not end the drive',

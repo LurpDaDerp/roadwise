@@ -175,11 +175,11 @@ extension DriveDetector {
     if lingerAfter, rec?.state == "armed", capture.sensing == .off { beginCandidate(origin: "auto", reason: "linger") }
   }
 
-  /// A JS end that a JS end rule would have made by now (5 min still, or a walk) was an automatic one.
+  /// A JS end that a JS end rule would have made by now (5 min still, or a walk, a carried phone's
+  /// walking pace included) was an automatic one (`DetectPolicy.lingerAfterJsEnd`).
   func automaticEndDue() -> Bool {
     guard let r = rec, isRecording, let startedAt = r.startedAt else { return false }
-    let o = DetectPolicy.endDue(endClock, startedAt: startedAt, now: DriveDetector.now(), walkSince: walkSince, waitUntil: r.waitUntil).overdue
-    return o == "still" || o == "walking"
+    return DetectPolicy.lingerAfterJsEnd(endClock, startedAt: startedAt, now: DriveDetector.now(), walkSince: walkSince, waitUntil: r.waitUntil)
   }
 
   /// "Not driving?": the drive is cancelled (its journal deleted, nothing kept) and detection rests

@@ -77,6 +77,18 @@ extension DetectPolicy {
     return (pick(SAFETY_SLACK_MS), pick(0))
   }
 
+  /// policy.ts `lingerAfterJsEnd`: JS's end was an automatic one (the linger watches on) when a JS
+  /// rule would have made it by now (`endDue` overdue "still" or "walking"), or a walk has stood 5 s
+  /// with the last trusted fix at a walker's pace or under (JS's walking end lets a carried phone at
+  /// 5 mph or under end the drive; native keeps no carried state, and a spare linger is harmless).
+  /// Never on a walk while a Start-card drive still waits for driving speed.
+  static func lingerAfterJsEnd(_ c: EndClock, startedAt: Double, now: Double, walkSince: Double?, waitUntil: Double? = nil) -> Bool {
+    let o = endDue(c, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil).overdue
+    if o == "still" || o == "walking" { return true }
+    guard waitUntil == nil, let w = walkSince, now - w >= WALK_END_MS, let mps = c.lastFixMps else { return false }
+    return mps <= WALKER_PACE_MAX_MPS
+  }
+
   /// policy.ts `suppressionDue`: "cap", "walking", "still" or nil.
   static func suppressionDue(since: Double, until: Double, lastOverStopTs: Double?, walkSince: Double?, now: Double) -> String? {
     if now >= until { return "cap" }

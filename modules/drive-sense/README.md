@@ -927,7 +927,9 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   store the drive and post its recap. After any end: sensing off, the capture flag cleared, the Live
   Activity ended (`roadwise.driveDisplay` `ended`), the note removed, `lastEnd` and the parked region
   at the last trusted fix, `armed` again. After an automatic end (native's 5 min still or walk, or a
-  JS end that a JS rule would have made by then), unless it was a Start-card drive still waiting, an
+  JS end that a JS rule would have made by then, `lingerAfterJsEnd`: a walk standing 5 s with the
+  last trusted fix at a walker's pace, 5 mph or under, counts too, since JS's walking end lets a
+  carried phone that slow end the drive), unless it was a Start-card drive still waiting, an
   auto candidate opens at once (`linger`: 3 min from the end, 5 once it holds evidence, whatever it sees; no hourly cap entry, no rest, no parked spot): a quick
   restart confirms near where the drive ended, and `continues` lets JS re-open the held drive. The
   parked region's exit during the linger (which iOS sends only once) is never dropped: the linger

@@ -135,6 +135,7 @@ enum DetectPolicy {
   static let WALK_END_MS: Double = 5_000
   static let WALK_STALE_FIX_MS: Double = 60_000
   static let END_CRAWL_MPS: Double = 1.34112
+  static let WALKER_PACE_MAX_MPS: Double = 2.2352
   static let SAFETY_SLACK_MS: Double = 60_000
   static let FIXLESS_HOLD_MAX_MS: Double = 3_600_000
   static let ROW_MS: Double = 1_000

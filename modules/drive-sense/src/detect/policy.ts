@@ -100,6 +100,8 @@ export const DETECT = {
   /** A fix over 3 mph this recent says the car is still driving: no walking end. */
   WALK_STALE_FIX_MS: 60_000,
   END_CRAWL_MPS: 1.34112,
+  /** 5 mph: a walker's own pace tops out here (JS's walking end lets a carried phone this slow end a drive). */
+  WALKER_PACE_MAX_MPS: 2.2352,
   /** The native safety stop fires only this long after the JS rule would have. */
   SAFETY_SLACK_MS: 60_000,
   /** A fix-less stretch with car motion pauses the still clock, at most this long. */
@@ -530,6 +532,21 @@ export function endDue(
     return null;
   };
   return { due: pick(DETECT.SAFETY_SLACK_MS), overdue: pick(0) };
+}
+
+/**
+ * Whether JS's end (`stopCapture`) was an automatic one, so the linger watches on after it: a JS
+ * end rule would have made it by now (`endDue` overdue 'still' or 'walking'), or a walk has stood
+ * 5 s while the last trusted fix was at a walker's pace or under (`WALKER_PACE_MAX_MPS`). JS's
+ * walking end lets a carried phone at 5 mph or under end the drive where `endDue` still reads the
+ * car as driving; native keeps no carried state, so any fix that slow counts here. A spare linger
+ * is harmless: a 20 s walk ends it, and it takes no hourly cap entry, rest or parked spot. Like the
+ * walking end, never on a walk while a Start-card drive still waits for driving speed.
+ */
+export function lingerAfterJsEnd(c: EndClock, startedAt: number, now: number, walkSince: number | null, waitUntil: number | null = null): boolean {
+  const o = endDue(c, startedAt, now, walkSince, waitUntil).overdue;
+  if (o === 'still' || o === 'walking') return true;
+  return waitUntil === null && walkSince !== null && now - walkSince >= DETECT.WALK_END_MS && c.lastFix !== null && c.lastFix.mps <= DETECT.WALKER_PACE_MAX_MPS;
 }
 
 // ——— "Not driving?" ———

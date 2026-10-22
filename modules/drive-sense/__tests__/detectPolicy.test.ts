@@ -15,6 +15,7 @@ import {
   endClockAt,
   endDue,
   endOnRow,
+  lingerAfterJsEnd,
   MANUAL_TRIGGER,
   MPS_PER_MPH,
   rolling,
@@ -106,6 +107,34 @@ describe('the numbers', () => {
       for (const r of vrows(0, 10, 10)) s = confirmStep(s, r, 'auto').state;
       expect(confirmStep(s, vrow(11, mph), 'auto').confirmed).toBe(false);
     }
+  });
+
+  test('the linger after a JS end: a carried phone walking off at 3-5 mph ends the JS drive, so native lingers though its safety stop still reads the car as driving', () => {
+    const clockAt = (mph: number) => {
+      let c = endClockAt(T0);
+      for (const r of [...vrows(0, 10, 20), ...vrows(11, 20, mph)]) c = endOnRow(c, r, false);
+      return c;
+    };
+    const walk = T0 + 20_000;
+    const now = T0 + 25_000;
+    for (const mph of [3.5, 4, 5]) {
+      const c = clockAt(mph);
+      // the safety stop is unchanged: a fix over 3 mph this recent blocks its walking end
+      expect({ mph, d: endDue(c, T0, now, walk) }).toEqual({ mph, d: { due: null, overdue: null } });
+      expect({ mph, linger: lingerAfterJsEnd(c, T0, now, walk) }).toEqual({ mph, linger: true });
+      // not before the walk has stood 5 s, not without a walk, not while a Start-card drive waits
+      expect(lingerAfterJsEnd(c, T0, now - 1, walk)).toBe(false);
+      expect(lingerAfterJsEnd(c, T0, now, null)).toBe(false);
+      expect(lingerAfterJsEnd(c, T0, now, walk, T0 + 300_000)).toBe(false);
+    }
+    // over a walker's pace the car is driving: no linger
+    for (const mph of [5.5, 6, 20]) expect({ mph, linger: lingerAfterJsEnd(clockAt(mph), T0, now, walk) }).toEqual({ mph, linger: false });
+    // the rules a JS end already shares with endDue open it as before
+    const stopped = clockAt(0);
+    expect(lingerAfterJsEnd(stopped, T0, now, walk)).toBe(true);
+    expect(lingerAfterJsEnd(stopped, T0, T0 + 310_000, null)).toBe(true);
+    expect(lingerAfterJsEnd(stopped, T0, T0 + 309_000, null)).toBe(false);
+    expect(DETECT.WALKER_PACE_MAX_MPS).toBeCloseTo(5 * MPS_PER_MPH, 9);
   });
 
   test('the watch: the buffer holds the whole of the longest candidate; evidence lives as long as a stop inside a drive', () => {

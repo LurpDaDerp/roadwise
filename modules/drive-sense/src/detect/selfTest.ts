@@ -16,6 +16,7 @@ import {
   endClockAt,
   endDue,
   endOnRow,
+  lingerAfterJsEnd,
   motionGate,
   resumeDecision,
   resumeSeq,
@@ -100,10 +101,15 @@ export function runDetectRow(v: DetectRowInputs): DetectActual {
       return { starts: startsAfter(v.starts, v.since, v.sawVehicle) };
     case 'end': {
       let clock = endClockAt(v.startedAt);
-      const results: { due: string | null; overdue: string | null }[] = [];
+      const results: { due: string | null; overdue: string | null; linger: boolean }[] = [];
       for (const step of v.steps) {
-        if ('row' in step) clock = endOnRow(clock, step.row, step.automotive);
-        else results.push(endDue(clock, v.startedAt, step.check, step.walkSince, step.waitUntil ?? null));
+        if ('row' in step) {
+          clock = endOnRow(clock, step.row, step.automotive);
+        } else {
+          const waitUntil = step.waitUntil ?? null;
+          const d = endDue(clock, v.startedAt, step.check, step.walkSince, waitUntil);
+          results.push({ ...d, linger: lingerAfterJsEnd(clock, v.startedAt, step.check, step.walkSince, waitUntil) });
+        }
       }
       return { results };
     }

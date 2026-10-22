@@ -528,9 +528,18 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(end).toMatch(/let lingerAfter = linger && r\.waitUntil == nil/);
     expect(end).toMatch(/emitState\("ended"\)\s*if lingerAfter, rec\?\.state == "armed", capture\.sensing == \.off \{ beginCandidate\(origin: "auto", reason: "linger"\) \}/);
     expect(fn(d, 'func evaluateEnd()')).toMatch(/commitEnd\(cause: cause, endedAt: now, linger: cause == "still" \|\| cause == "walking"\)/);
+    // a JS end is automatic by the shared policy helper (policy.ts lingerAfterJsEnd), the carried
+    // phone's walking pace included
     const auto = fn(d, 'func automaticEndDue()');
-    expect(auto).toMatch(/DetectPolicy\.endDue\(endClock, startedAt: startedAt, now: DriveDetector\.now\(\), walkSince: walkSince, waitUntil: r\.waitUntil\)\.overdue/);
-    expect(auto).toMatch(/return o == "still" \|\| o == "walking"/);
+    expect(auto).toMatch(/return DetectPolicy\.lingerAfterJsEnd\(endClock, startedAt: startedAt, now: DriveDetector\.now\(\), walkSince: walkSince, waitUntil: r\.waitUntil\)/);
+    const helper = fn(code('DetectEndPolicy.swift'), 'static func lingerAfterJsEnd(');
+    expect(helper).toMatch(/let o = endDue\(c, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil\)\.overdue\s*if o == "still" \|\| o == "walking" \{ return true \}/);
+    expect(helper).toMatch(/guard waitUntil == nil, let w = walkSince, now - w >= WALK_END_MS, let mps = c\.lastFixMps else \{ return false \}\s*return mps <= WALKER_PACE_MAX_MPS/);
+    expect(fs.readFileSync(path.join(MODULE_DIR, 'src', 'detect', 'policy.ts'), 'utf8')).toContain(
+      'return waitUntil === null && walkSince !== null && now - walkSince >= DETECT.WALK_END_MS && c.lastFix !== null && c.lastFix.mps <= DETECT.WALKER_PACE_MAX_MPS;'
+    );
+    // the self-test answers it for every end check
+    expect(code('DetectSelfTest.swift')).toMatch(/let linger = DetectPolicy\.lingerAfterJsEnd\(clock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil\)/);
     // a region exit during the linger is never dropped as "busy": the linger becomes an ordinary
     // watch from the exit (vehicle signs keep it open, an hourly cap entry, its evidence kept)
     const wake = fn(d, 'func onWake(');
