@@ -3,7 +3,7 @@
 // flickers it. With the drive locked in, "Not driving?" (while it is
 // still offered) is the way to drop a drive at speed; End is for a car that has slowed or stopped.
 
-/** End locks at this row speed (mph) and over (its own number: the automatic trigger is a curve, `AUTO_TRIGGER`). */
+/** End locks at this row speed (mph) and over (its own number: the automatic trigger's hold slides with speed, `AUTO_TRIGGER`). */
 export const END_LOCK_MPH = 20;
 /** …and unlocks only under this (mph): the manual trigger's speed (`MANUAL_TRIGGER.mph`). */
 export const END_UNLOCK_MPH = 10;

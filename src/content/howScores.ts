@@ -49,9 +49,15 @@ export interface RuleSection {
 
 /** The drive rules the rules quote that live outside the scoring package (the screen reads them from the drive code). */
 export interface DriveNumbers {
-  /** How long each speed (mph) has to hold before a drive starts on its own (s), slowest first. */
-  autoHolds: readonly { readonly mph: number; readonly s: number }[];
-  /** From this speed (mph) a drive starts on its own right away. */
+  /** Only over this speed (mph) does a drive start on its own… */
+  autoMinMph: number;
+  /** …after holding it this long (s) just over it… */
+  autoMaxHoldS: number;
+  /** …this much less (s)… */
+  autoStepS: number;
+  /** …for every this much faster (mph)… */
+  autoStepMph: number;
+  /** …and right away from this speed (mph). */
   autoInstantMph: number;
   /** How long a Start drive waits for the car to move, min. */
   waitMin: number;
@@ -166,7 +172,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
         title: 'How drives start and end',
         icon: 'car-sport-outline',
         lines: [
-          `Once you’re moving, RoadWise starts recording after about ${n.autoHolds.map((h, i) => `${h.s} s at ${h.mph}${i === 0 ? ' mph' : ''}`).join(', ')}, or right away from ${n.autoInstantMph} mph. Short stops in traffic don’t reset it, and the drive counts from the moment you set off.`,
+          `Once you’re over ${n.autoMinMph} mph, RoadWise starts recording after about ${n.autoMaxHoldS} s, ${n.autoStepS} s sooner for every ${n.autoStepMph} mph faster, and right away from ${n.autoInstantMph} mph. Short stops in traffic don’t reset it, and the drive counts from the moment you set off.`,
           `It ends once you park and walk away, or after ${IDLE_MIN} min parked.`,
           `Stop for under ${MERGE_MIN} min and set off again from the same spot, and it stays one drive.`,
           `Riding along? Open the drive screen and tap “${ND}”. It shows once the car reaches driving speed, for your first ${n.notDrivingMin} minutes on that screen.`,

@@ -28,8 +28,9 @@ Where this README and the TypeScript disagree, the TypeScript wins and the READM
 owner with Location Always, Precise Location and Motion & Fitness, wakes on a significant move, on
 leaving the spot the car last parked in, on leaving a place the phone stayed at, or when RoadWise
 comes to the front; it watches with GPS while it sees a vehicle (up to 30 minutes), confirms a drive
-once the speed has been held long enough (30 s at 15 mph, 15 s at 20, 10 s at 25, 5 s at 30, the
-second reading from about 34 mph; stops in traffic keep what was earned), traces the drive's start
+once the speed has been held long enough ((5/3)·(30 − mph) s over 15 mph: 25 s just over 15, 5 s
+less for every 3 mph faster, the second reading in a row from 30 mph; stops in traffic keep what was
+earned), traces the drive's start
 back to where the car pulled away, writes every row to a journal on disk and emits it as a
 `row` with its `seq`. Start drive opens a drive at once, from the tap, journaled the same way. JS adopts the drive wherever it runs and
 decides its end; native stops sensing on its own only as a safety stop. Phone use is not read: rows
@@ -890,15 +891,17 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   in the hourly cap's record; one that timed out seeing none puts the parked region where the phone
   rests (its last trusted fix). Every 5 s the detector's clock checks.
 - **Confirmation** (`confirmStep`, auto): evidence. A trusted row (a valid fix within 30 m, speed
-  rated 2 m/s or better or unrated) at 15 mph or more earns at 1 / hold per ms, the hold
-  interpolated through 15 mph 30 s, 20 mph 15 s, 25 mph 10 s and 30 mph 5 s down to 0 at 35 mph,
-  never under 1 s (`autoHoldMs`). Under 20 mph a row earns only with fresh car motion (a standing
-  confident moving automotive report, or one in the last 2 min, the wake's motion history included),
+  rated 2 m/s or better or unrated) over 15 mph earns at 1 / hold per ms, the hold (5/3)·(30 − mph)
+  s: 25 s just over 15 mph, 20 s at 18, 15 s at 21, 10 s at 24, 5 s at 27 and 0 at 30, never under
+  1 s (`autoHoldMs`). 15 mph and under earns nothing. Under 20 mph a row earns only with fresh car
+  motion (a standing confident moving automotive report, or one in the last 2 min, the wake's motion
+  history included),
   so a bike or an e-scooter in that band never confirms; a row with a confident cycling, walking or
   running report 30 s old or less earns nothing. The interval between two earning rows at most 2 s
-  apart adds its length at the slower one's rate, so a lone GPS spike earns nothing and from about
-  34 mph a drive confirms on the second reading. Crawling and stops keep the evidence; 5 min with
-  no trusted row over 3 mph forgets it. It confirms at 1. The Start card's trigger (10 mph spanning
+  apart adds its length at the slower one's rate, so a lone GPS spike earns nothing, and the 1 s floor
+  is the spike guard: from 29.4 mph (30 mph and over included) a drive confirms on the second good
+  reading in a row, never on one. Crawling and stops keep the evidence; 5 min with no trusted row
+  over 3 mph forgets it. It confirms at 1. The Start card's trigger (10 mph spanning
   15 s on the row clock, a dip under it of 5 s or less kept) ends a Start-card drive's wait for
   driving speed.
 - **The start** (`startOf`): the last trusted row at or under 3 mph before the first interval that

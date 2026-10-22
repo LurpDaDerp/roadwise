@@ -9,33 +9,22 @@ extension DetectPolicy {
 
   // MARK: - Confirmation
 
-  /// policy.ts `autoHoldMs`: the hold (ms) a speed (m/s) needs on its own, piecewise linear through
-  /// 15 mph 30 s, 20 mph 15 s, 25 mph 10 s, 30 mph 5 s and 35 mph 0, never under `AUTO_HOLD_MIN_MS`;
-  /// infinite under 15 mph.
+  /// policy.ts `autoHoldMs`: the hold (ms) a speed (m/s) needs on its own, (5/3)·(30 − mph) s: the
+  /// line from `AUTO_HOLD_MS_15` at 15 mph down to 0 at `AUTO_INSTANT_MPS` (30 mph), never under
+  /// `AUTO_HOLD_MIN_MS` (the GPS-spike guard: at 30 mph and over a drive confirms on the second good
+  /// reading in a row, never on one); infinite at 15 mph and under.
   static func autoHoldMs(_ mps: Double) -> Double {
-    if !(mps >= AUTO_MIN_MPS) { return Double.infinity }
-    let pts: [(v: Double, t: Double)] = [
-      (v: AUTO_MIN_MPS, t: AUTO_HOLD_MS_15),
-      (v: AUTO_MPS_20, t: AUTO_HOLD_MS_20),
-      (v: AUTO_MPS_25, t: AUTO_HOLD_MS_25),
-      (v: AUTO_MPS_30, t: AUTO_HOLD_MS_30),
-      (v: AUTO_INSTANT_MPS, t: 0),
-    ]
-    for i in 1..<pts.count {
-      let a = pts[i - 1]
-      let b = pts[i]
-      if mps <= b.v { return max(AUTO_HOLD_MIN_MS, a.t + (b.t - a.t) * (mps - a.v) / (b.v - a.v)) }
-    }
-    return AUTO_HOLD_MIN_MS
+    if !(mps > AUTO_MIN_MPS) { return Double.infinity }
+    return max(AUTO_HOLD_MIN_MS, AUTO_HOLD_MS_15 * (AUTO_INSTANT_MPS - mps) / (AUTO_INSTANT_MPS - AUTO_MIN_MPS))
   }
 
-  /// policy.ts `autoStep`: a trusted row at 15 mph or more earns at 1 / hold per ms (not when vetoed,
+  /// policy.ts `autoStep`: a trusted row over 15 mph earns at 1 / hold per ms (not when vetoed,
   /// nor under 20 mph without fresh car motion); the interval between two earning rows at most 2 s
   /// apart adds its length at the slower one's rate; 5 min with no trusted row over 3 mph forgets it
   /// all; it confirms at 1.
   static func autoStep(_ s: ConfirmState, _ r: DetectRow, veto: Bool, carFresh: Bool) -> (state: ConfirmState, confirmed: Bool) {
     let ok = trusted(r)
-    let earns = ok && !veto && r.speed >= AUTO_MIN_MPS && (r.speed >= AUTO_MPS_20 || carFresh)
+    let earns = ok && !veto && r.speed > AUTO_MIN_MPS && (r.speed >= AUTO_MPS_20 || carFresh)
     let rate: Double = earns ? 1 / autoHoldMs(r.speed) : 0
     var e = s.evidence
     var first = s.runStartTs

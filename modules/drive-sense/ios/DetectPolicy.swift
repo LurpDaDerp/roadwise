@@ -91,14 +91,9 @@ struct StatusInputs {
 
 enum DetectPolicy {
   static let AUTO_MIN_MPS: Double = 6.7056
-  static let AUTO_HOLD_MS_15: Double = 30_000
+  static let AUTO_HOLD_MS_15: Double = 25_000
   static let AUTO_MPS_20: Double = 8.9408
-  static let AUTO_HOLD_MS_20: Double = 15_000
-  static let AUTO_MPS_25: Double = 11.176
-  static let AUTO_HOLD_MS_25: Double = 10_000
-  static let AUTO_MPS_30: Double = 13.4112
-  static let AUTO_HOLD_MS_30: Double = 5_000
-  static let AUTO_INSTANT_MPS: Double = 15.6464
+  static let AUTO_INSTANT_MPS: Double = 13.4112
   static let AUTO_HOLD_MIN_MS: Double = 1_000
   static let AUTO_ROW_GAP_MAX_MS: Double = 2_000
   static let AUTO_FORGET_MS: Double = 300_000

@@ -780,7 +780,7 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
     // the auto evidence: the same order of operations as policy.ts autoStep
     const step = fn(code('DetectStartPolicy.swift'), 'static func autoStep(');
     const order = [
-      'let earns = ok && !veto && r.speed >= AUTO_MIN_MPS && (r.speed >= AUTO_MPS_20 || carFresh)',
+      'let earns = ok && !veto && r.speed > AUTO_MIN_MPS && (r.speed >= AUTO_MPS_20 || carFresh)',
       'let rate: Double = earns ? 1 / autoHoldMs(r.speed) : 0',
       'if let p = s.prevTs, rate > 0, s.prevRate > 0, r.ts - p > 0, r.ts - p <= AUTO_ROW_GAP_MAX_MS {',
       'e += (r.ts - p) * min(rate, s.prevRate)',
@@ -797,11 +797,14 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
     }
     expect(code('DetectStartPolicy.swift')).toMatch(/private static let evidenceEps: Double = 0\.000000001/);
     expect(fs.readFileSync(path.join(MODULE_DIR, 'src', 'detect', 'policy.ts'), 'utf8')).toMatch(/const EVIDENCE_EPS = 0\.000000001;/);
-    // the hold's anchors, a local list (the constants stay scalars)
+    // the hold: (5/3)·(30 − mph) s over 15 mph, the line from AUTO_HOLD_MS_15 to 0 at AUTO_INSTANT_MPS,
+    // floored at AUTO_HOLD_MIN_MS, in policy.ts's order of operations
     const hold = fn(code('DetectStartPolicy.swift'), 'static func autoHoldMs(');
-    expect(hold).toMatch(/if !\(mps >= AUTO_MIN_MPS\) \{ return Double\.infinity \}/);
-    expect(hold).toMatch(/\(v: AUTO_MIN_MPS, t: AUTO_HOLD_MS_15\),\s*\(v: AUTO_MPS_20, t: AUTO_HOLD_MS_20\),\s*\(v: AUTO_MPS_25, t: AUTO_HOLD_MS_25\),\s*\(v: AUTO_MPS_30, t: AUTO_HOLD_MS_30\),\s*\(v: AUTO_INSTANT_MPS, t: 0\),/);
-    expect(hold).toMatch(/if mps <= b\.v \{ return max\(AUTO_HOLD_MIN_MS, a\.t \+ \(b\.t - a\.t\) \* \(mps - a\.v\) \/ \(b\.v - a\.v\)\) \}/);
+    expect(hold).toMatch(/if !\(mps > AUTO_MIN_MPS\) \{ return Double\.infinity \}/);
+    expect(hold).toContain('return max(AUTO_HOLD_MIN_MS, AUTO_HOLD_MS_15 * (AUTO_INSTANT_MPS - mps) / (AUTO_INSTANT_MPS - AUTO_MIN_MPS))');
+    expect(fs.readFileSync(path.join(MODULE_DIR, 'src', 'detect', 'policy.ts'), 'utf8')).toContain(
+      'return Math.max(DETECT.AUTO_HOLD_MIN_MS, (DETECT.AUTO_HOLD_MS_15 * (DETECT.AUTO_INSTANT_MPS - mps)) / (DETECT.AUTO_INSTANT_MPS - DETECT.AUTO_MIN_MPS));'
+    );
     // the drive's walking end is 5 s (the candidate and the rest keep 20 s)
     expect(code('DetectEndPolicy.swift')).toMatch(/if walked >= WALK_END_MS \+ slack \{ return "walking" \}/);
     expect(code('DetectEndPolicy.swift')).toMatch(/if let w = walkSince, now - w >= WALK_CONFIRM_MS \{ return "walking" \}/);

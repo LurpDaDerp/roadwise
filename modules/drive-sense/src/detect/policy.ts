@@ -13,20 +13,17 @@ export const MPS_PER_MPH = 0.44704;
 /** The detector's numbers. Same names, same values in `DetectPolicy.swift`. */
 export const DETECT = {
   /**
-   * The auto trigger (`autoHoldMs`): the hold a speed needs, piecewise linear through 15 mph 30 s,
-   * 20 mph 15 s, 25 mph 10 s and 30 mph 5 s, falling to 0 at 35 mph and floored at
-   * `AUTO_HOLD_MIN_MS`, so from about 34 mph a drive confirms on the second good reading in a row.
-   * Under 15 mph a reading earns nothing; under 20 mph only with fresh car motion.
+   * The auto trigger (`autoHoldMs`): the hold a speed needs is (5/3)·(30 − mph) s for a speed over
+   * 15 mph, 5 s less for every 3 mph faster: 25 s just over 15 mph (`AUTO_HOLD_MS_15`, where the line
+   * starts), 20 s at 18, 15 s at 21, 10 s at 24, 5 s at 27 and 0 at 30 mph (`AUTO_INSTANT_MPS`). The
+   * hold never falls under `AUTO_HOLD_MIN_MS`, a GPS-spike guard: from 29.4 mph a drive
+   * confirms on the second good reading in a row, never on a single one. 15 mph and under earns
+   * nothing; under 20 mph only with fresh car motion.
    */
   AUTO_MIN_MPS: 6.7056,
-  AUTO_HOLD_MS_15: 30_000,
+  AUTO_HOLD_MS_15: 25_000,
   AUTO_MPS_20: 8.9408,
-  AUTO_HOLD_MS_20: 15_000,
-  AUTO_MPS_25: 11.176,
-  AUTO_HOLD_MS_25: 10_000,
-  AUTO_MPS_30: 13.4112,
-  AUTO_HOLD_MS_30: 5_000,
-  AUTO_INSTANT_MPS: 15.6464,
+  AUTO_INSTANT_MPS: 13.4112,
   AUTO_HOLD_MIN_MS: 1_000,
   /** Two readings further apart than this earn nothing for the interval between them (what was earned stays). */
   AUTO_ROW_GAP_MAX_MS: 2_000,
@@ -128,21 +125,11 @@ export const DETECT = {
 export type DetectConstant = keyof typeof DETECT;
 
 /**
- * The auto trigger and the Start card's, in the words the UI quotes. Auto: the hold each speed needs
- * (in between, the hold is interpolated), nothing under `minMph`, and from `instantMph` the second
- * good reading in a row.
+ * The auto trigger and the Start card's, in the words the UI quotes. Auto: over `minMph` the hold is
+ * `maxHoldS` and `stepS` shorter for every `stepMph` faster, reaching nothing at `instantMph` (from
+ * there, the second good reading in a row).
  */
-export const AUTO_TRIGGER = {
-  minMph: 15,
-  instantMph: 35,
-  holds: [
-    { mph: 15, s: 30 },
-    { mph: 20, s: 15 },
-    { mph: 25, s: 10 },
-    { mph: 30, s: 5 },
-  ],
-  maxHAccM: 30,
-} as const;
+export const AUTO_TRIGGER = { minMph: 15, maxHoldS: 25, stepS: 5, stepMph: 3, instantMph: 30, maxHAccM: 30 } as const;
 export const MANUAL_TRIGGER = { mph: 10, holdMs: 15_000, dipMaxMs: 5_000, maxHAccM: 30 } as const;
 
 export type TriggerKind = 'auto' | 'manual';
@@ -228,38 +215,27 @@ export const CONFIRM_START: ConfirmState = Object.freeze({ runStartTs: null, dip
 const EVIDENCE_EPS = 0.000000001;
 
 /**
- * The hold (ms) a speed (m/s) needs to confirm an auto drive on its own: piecewise linear through
- * 15 mph 30 s, 20 mph 15 s, 25 mph 10 s, 30 mph 5 s and 35 mph 0, never under `AUTO_HOLD_MIN_MS`;
- * infinite under 15 mph.
+ * The hold (ms) a speed (m/s) needs to confirm an auto drive on its own: (5/3)·(30 − mph) s, the
+ * line from `AUTO_HOLD_MS_15` at 15 mph down to 0 at `AUTO_INSTANT_MPS` (30 mph), never under
+ * `AUTO_HOLD_MIN_MS` (the GPS-spike guard: at 30 mph and over a drive confirms on the second good
+ * reading in a row, never on one); infinite at 15 mph and under.
  */
 export function autoHoldMs(mps: number): number {
-  if (!(mps >= DETECT.AUTO_MIN_MPS)) return Infinity;
-  const pts = [
-    { v: DETECT.AUTO_MIN_MPS, t: DETECT.AUTO_HOLD_MS_15 },
-    { v: DETECT.AUTO_MPS_20, t: DETECT.AUTO_HOLD_MS_20 },
-    { v: DETECT.AUTO_MPS_25, t: DETECT.AUTO_HOLD_MS_25 },
-    { v: DETECT.AUTO_MPS_30, t: DETECT.AUTO_HOLD_MS_30 },
-    { v: DETECT.AUTO_INSTANT_MPS, t: 0 },
-  ];
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1]!;
-    const b = pts[i]!;
-    if (mps <= b.v) return Math.max(DETECT.AUTO_HOLD_MIN_MS, a.t + ((b.t - a.t) * (mps - a.v)) / (b.v - a.v));
-  }
-  return DETECT.AUTO_HOLD_MIN_MS;
+  if (!(mps > DETECT.AUTO_MIN_MPS)) return Infinity;
+  return Math.max(DETECT.AUTO_HOLD_MIN_MS, (DETECT.AUTO_HOLD_MS_15 * (DETECT.AUTO_INSTANT_MPS - mps)) / (DETECT.AUTO_INSTANT_MPS - DETECT.AUTO_MIN_MPS));
 }
 
 /**
- * One row of the auto evidence. A trusted row at 15 mph or more earns at `1 / autoHoldMs(speed)`
- * per ms, unless `veto` (a fresh confident cycling, walking or running report) or it is under
- * 20 mph without fresh car motion (`carFresh`). The interval between two rows that both earn adds
- * its length at the slower one's rate, so a lone fast reading earns nothing; a gap over
+ * One row of the auto evidence. A trusted row over 15 mph earns at `1 / autoHoldMs(speed)` per ms,
+ * unless `veto` (a fresh confident cycling, walking or running report) or it is under 20 mph
+ * without fresh car motion (`carFresh`). The interval between two rows that both earn adds its
+ * length at the slower one's rate, so a lone fast reading earns nothing; a gap over
  * `AUTO_ROW_GAP_MAX_MS` adds nothing. Crawling and stops keep the evidence; 5 min with no trusted
  * row over 3 mph forgets it. It confirms once the evidence reaches 1.
  */
 function autoStep(s: ConfirmState, r: DetectRow, veto: boolean, carFresh: boolean): { state: ConfirmState; confirmed: boolean } {
   const ok = trusted(r);
-  const earns = ok && !veto && r.speed >= DETECT.AUTO_MIN_MPS && (r.speed >= DETECT.AUTO_MPS_20 || carFresh);
+  const earns = ok && !veto && r.speed > DETECT.AUTO_MIN_MPS && (r.speed >= DETECT.AUTO_MPS_20 || carFresh);
   const rate = earns ? 1 / autoHoldMs(r.speed) : 0;
   let e = s.evidence;
   let first = s.runStartTs;

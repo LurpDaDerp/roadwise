@@ -52,39 +52,24 @@ describe('the decision table', () => {
 
 describe('the numbers', () => {
   test('the triggers the UI quotes are the ones confirmed', () => {
-    expect(AUTO_TRIGGER).toEqual({
-      minMph: 15,
-      instantMph: 35,
-      holds: [
-        { mph: 15, s: 30 },
-        { mph: 20, s: 15 },
-        { mph: 25, s: 10 },
-        { mph: 30, s: 5 },
-      ],
-      maxHAccM: 30,
-    });
-    // the anchors are the quoted ones, and the curve passes through them
-    const anchors = [
-      [DETECT.AUTO_MIN_MPS, DETECT.AUTO_HOLD_MS_15],
-      [DETECT.AUTO_MPS_20, DETECT.AUTO_HOLD_MS_20],
-      [DETECT.AUTO_MPS_25, DETECT.AUTO_HOLD_MS_25],
-      [DETECT.AUTO_MPS_30, DETECT.AUTO_HOLD_MS_30],
-    ];
-    AUTO_TRIGGER.holds.forEach((h, i) => {
-      expect(anchors[i]![0]).toBeCloseTo(h.mph * MPS_PER_MPH, 9);
-      expect(anchors[i]![1]).toBe(h.s * 1000);
-      expect(autoHoldMs(h.mph * MPS_PER_MPH)).toBeCloseTo(h.s * 1000, 6);
-    });
+    expect(AUTO_TRIGGER).toEqual({ minMph: 15, maxHoldS: 25, stepS: 5, stepMph: 3, instantMph: 30, maxHAccM: 30 });
+    // the quoted rule is the line the constants draw: 25 s at 15 mph, 5 s less every 3 mph, 0 at 30
     expect(DETECT.AUTO_MIN_MPS).toBeCloseTo(AUTO_TRIGGER.minMph * MPS_PER_MPH, 9);
     expect(DETECT.AUTO_INSTANT_MPS).toBeCloseTo(AUTO_TRIGGER.instantMph * MPS_PER_MPH, 9);
-    // in between: linear; under 15 mph: never; from about 34 mph: the 1 s floor (the second reading)
-    expect(autoHoldMs(17.5 * MPS_PER_MPH)).toBeCloseTo(22_500, 6);
-    expect(autoHoldMs(22 * MPS_PER_MPH)).toBeCloseTo(13_000, 6);
-    expect(autoHoldMs(33 * MPS_PER_MPH)).toBeCloseTo(2_000, 6);
-    expect(autoHoldMs(14.99 * MPS_PER_MPH)).toBe(Infinity);
-    expect(autoHoldMs(0)).toBe(Infinity);
+    expect(DETECT.AUTO_HOLD_MS_15).toBe(AUTO_TRIGGER.maxHoldS * 1000);
+    expect((AUTO_TRIGGER.stepS / AUTO_TRIGGER.stepMph) * (AUTO_TRIGGER.instantMph - AUTO_TRIGGER.minMph)).toBe(AUTO_TRIGGER.maxHoldS);
+    expect(DETECT.AUTO_MPS_20).toBeCloseTo(20 * MPS_PER_MPH, 9);
+    // y = (-5/3)·(x - 30) s over 15 mph
+    for (const mph of [15.01, 16, 17.5, 18, 20, 21, 22, 24, 25, 27, 29]) {
+      expect({ mph, ms: autoHoldMs(mph * MPS_PER_MPH) }).toEqual({ mph, ms: expect.closeTo((-5 / 3) * (mph - 30) * 1000, 6) });
+    }
+    for (const [mph, s] of [[18, 20], [21, 15], [24, 10], [27, 5]] as const) expect(autoHoldMs(mph * MPS_PER_MPH)).toBeCloseTo(s * 1000, 6);
+    // 15 mph and under: never
+    for (const mph of [15, 14.99, 10, 0]) expect(autoHoldMs(mph * MPS_PER_MPH)).toBe(Infinity);
+    expect(autoHoldMs(DETECT.AUTO_MIN_MPS)).toBe(Infinity);
     expect(autoHoldMs(Number.NaN)).toBe(Infinity);
-    for (const mph of [34, 34.5, 35, 40, 90]) expect(autoHoldMs(mph * MPS_PER_MPH)).toBe(DETECT.AUTO_HOLD_MIN_MS);
+    // from 29.4 mph (30 mph and over included): the 1 s floor, the second reading in a row
+    for (const mph of [29.5, 30, 31, 35, 40, 90]) expect(autoHoldMs(mph * MPS_PER_MPH)).toBe(DETECT.AUTO_HOLD_MIN_MS);
     expect(DETECT.AUTO_HOLD_MIN_MS).toBe(DETECT.ROW_MS);
     // the Start card's
     expect(DETECT.CONFIRM_MPS_MANUAL).toBeCloseTo(MANUAL_TRIGGER.mph * MPS_PER_MPH, 9);
@@ -94,9 +79,9 @@ describe('the numbers', () => {
     expect(MANUAL_TRIGGER).toEqual({ mph: 10, holdMs: 15_000, dipMaxMs: 5_000, maxHAccM: 30 });
   });
 
-  test('a hold never gets longer as the speed rises, and stays within its anchors', () => {
+  test('a hold never gets longer as the speed rises, and stays between the floor and 25 s', () => {
     let last = Infinity;
-    for (let mph = 15; mph <= 60; mph += 0.25) {
+    for (let mph = 15.25; mph <= 60; mph += 0.25) {
       const h = autoHoldMs(mph * MPS_PER_MPH);
       expect({ mph, ok: h <= last && h >= DETECT.AUTO_HOLD_MIN_MS && h <= DETECT.AUTO_HOLD_MS_15 }).toEqual({ mph, ok: true });
       last = h;
@@ -200,9 +185,9 @@ describe('properties', () => {
     return out;
   }
   const firstConfirm = (rows: readonly DetectRow[], veto?: (i: number) => boolean, car?: (i: number) => boolean) => autoRun(rows, veto, car).findIndex((x) => x.confirmed);
-  const fast = (x: DetectRow) => trusted(x) && x.speed >= DETECT.AUTO_MIN_MPS;
+  const fast = (x: DetectRow) => trusted(x) && x.speed > DETECT.AUTO_MIN_MPS;
 
-  test('auto: a confirmation always has its run start and the confirming row and the row before it trusted at 15 mph or more', () => {
+  test('auto: a confirmation always has its run start and the confirming row and the row before it trusted over 15 mph', () => {
     for (let seed = 1; seed <= 300; seed++) {
       const rows = randomRows(seed, 600);
       const r = rng(seed * 7);
@@ -218,9 +203,9 @@ describe('properties', () => {
     }
   });
 
-  test('auto: rows that never reach 15 mph never confirm, nor rows a fresh walk, run or ride report covers', () => {
+  test('auto: rows never over 15 mph never confirm (15.0 mph included), nor rows a fresh walk, run or ride report covers', () => {
     for (let seed = 1; seed <= 200; seed++) {
-      const slowRows = randomRows(seed, 400).map((x) => (x.speed >= DETECT.AUTO_MIN_MPS ? { ...x, speed: DETECT.AUTO_MIN_MPS - 0.01 } : x));
+      const slowRows = randomRows(seed, 400).map((x) => (x.speed >= DETECT.AUTO_MIN_MPS ? { ...x, speed: DETECT.AUTO_MIN_MPS } : x));
       expect({ seed, c: firstConfirm(slowRows, undefined, () => true) }).toEqual({ seed, c: -1 });
       expect({ seed, c: firstConfirm(randomRows(seed, 400), () => true, () => true) }).toEqual({ seed, c: -1 });
     }
@@ -238,7 +223,7 @@ describe('properties', () => {
 
   test('auto: a higher steady speed never confirms later', () => {
     let last = Infinity;
-    for (let mph = 15; mph <= 60; mph += 0.5) {
+    for (let mph = 15.5; mph <= 60; mph += 0.5) {
       const c = firstConfirm(vrows(0, 60, mph), undefined, () => true);
       expect({ mph, ok: c >= 1 && c <= last }).toEqual({ mph, ok: true });
       last = c;

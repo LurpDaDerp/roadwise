@@ -142,13 +142,13 @@ const flags = (rows: DetectRow[], f: Flag = false) => rows.map((r) => (typeof f 
 /** The rows with a flag per row: `veto` (a fresh walk, run or ride report) and `car` (fresh car motion), both off by default. */
 const confirmRows = (rows: DetectRow[], o: { veto?: Flag; car?: Flag } = {}) => ({ rows, veto: flags(rows, o.veto), car: flags(rows, o.car) });
 
-const kerb = [...vrows(0, 60, 0), vrow(61, 5), vrow(62, 8), vrow(63, 12), vrow(64, 14), ...vrows(65, 100, 20)];
+const kerb = [...vrows(0, 60, 0), vrow(61, 5), vrow(62, 8), vrow(63, 12), vrow(64, 14), ...vrows(65, 100, 21)];
 
 /**
  * Heavy city traffic: parked 30 s, then `cycles` minutes of 30 s stopped at a light, 10 s at 8 mph,
- * 6 s at 18.5 mph (a 19.5 s hold), 10 s at 10 mph and 4 s at 5 mph. Only the 18.5 mph rows earn, and
- * only with car motion; each minute adds 5/19.5 of the evidence, so it confirms on the 4th burst's
- * 6th row (t = 255 s).
+ * 6 s at 18.5 mph (a 19.17 s hold), 10 s at 10 mph and 4 s at 5 mph. Only the 18.5 mph rows earn,
+ * and only with car motion; each minute adds 5/19.17 of the evidence, so it confirms on the 4th
+ * burst's 6th row (t = 255 s).
  */
 function stopAndGo(cycles: number): DetectRow[] {
   const out = vrows(0, 29, 0);
@@ -159,8 +159,8 @@ function stopAndGo(cycles: number): DetectRow[] {
   return out;
 }
 
-/** From the kerb, a crawl at 8 mph, a 45 s red light, then 25 mph (a 10 s hold). */
-const kerbRedLight = [...vrows(0, 30, 0), ...vrows(31, 50, 8), ...vrows(51, 95, 0), ...vrows(96, 140, 25)];
+/** From the kerb, a crawl at 8 mph, a 45 s red light, then 24 mph (a 10 s hold). */
+const kerbRedLight = [...vrows(0, 30, 0), ...vrows(31, 50, 8), ...vrows(51, 95, 0), ...vrows(96, 140, 24)];
 
 const act = (start: number, o: Partial<ActivitySample>): ActivitySample => ({ start, automotive: false, stationary: false, onFoot: false, confident: true, ...o });
 
@@ -197,21 +197,29 @@ const none = { due: null, overdue: null };
 
 export const DETECT_VECTORS: readonly DetectVector[] = [
   // ——— confirmation ———
-  // The auto trigger: the hold a speed needs (15 mph 30 s, 20 mph 15 s, 25 mph 10 s, 30 mph 5 s, the
-  // second reading from about 34 mph), each interval between two earning rows at the slower one's rate.
-  { name: 'auto: 15 mph held 30 s with fresh car motion confirms', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 15), { car: true }), expected: { confirmedAt: at(30), runStartTs: at(0) } },
-  { name: 'auto: 15 mph held a minute without fresh car motion never confirms', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 15)), expected: { confirmedAt: null, runStartTs: null } },
-  { name: 'auto: 17.5 mph with car motion confirms at 23 s (a 22.5 s hold)', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 17.5), { car: true }), expected: { confirmedAt: at(23), runStartTs: at(0) } },
+  // The auto trigger: the hold a speed needs is (5/3)·(30 − mph) s over 15 mph (25 s just over it,
+  // 20 s at 18, 15 s at 21, 10 s at 24, 5 s at 27, 0 at 30), never under 1 s, so from 29.4 mph a
+  // drive confirms on the second reading in a row; each interval between two earning rows earns at
+  // the slower one's rate.
+  { name: 'auto: 15.0 mph never confirms, even with fresh car motion', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 120, 15), { car: true }), expected: { confirmedAt: null, runStartTs: null } },
+  { name: 'auto: just over 15 mph (15.01) with car motion confirms at 25 s (a 24.98 s hold)', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 15.01), { car: true }), expected: { confirmedAt: at(25), runStartTs: at(0) } },
+  { name: 'auto: 16 mph with car motion confirms at 24 s (a 23.3 s hold)', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 16), { car: true }), expected: { confirmedAt: at(24), runStartTs: at(0) } },
+  { name: 'auto: 16 mph held a minute without fresh car motion never confirms', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 16)), expected: { confirmedAt: null, runStartTs: null } },
   { name: 'auto: 17 mph without car motion never confirms (a bike)', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 120, 17)), expected: { confirmedAt: null, runStartTs: null } },
-  { name: 'auto: 20 mph confirms after 15 s, car motion or not', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 20)), expected: { confirmedAt: at(15), runStartTs: at(0) } },
-  { name: 'auto: 22 mph without car motion confirms after 13 s', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 22)), expected: { confirmedAt: at(13), runStartTs: at(0) } },
-  { name: 'auto: 25 mph confirms after 10 s', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 25)), expected: { confirmedAt: at(10), runStartTs: at(0) } },
-  { name: 'auto: 30 mph confirms after 5 s', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 30)), expected: { confirmedAt: at(5), runStartTs: at(0) } },
-  { name: 'auto: 33 mph confirms after 2 s', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 33)), expected: { confirmedAt: at(2), runStartTs: at(0) } },
-  { name: 'auto: 36 mph confirms on the second reading', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 36)), expected: { confirmedAt: at(1), runStartTs: at(0) } },
-  { name: 'auto: 34 mph confirms on the second reading too (the 1 s floor)', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 34)), expected: { confirmedAt: at(1), runStartTs: at(0) } },
-  { name: 'auto: alternating 20 and 30 mph earns at 20 mph (the slower end of each interval)', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 20).map((r, i) => (i % 2 === 1 ? vrow(i, 30) : r))), expected: { confirmedAt: at(15), runStartTs: at(0) } },
+  { name: 'auto: 18 mph with car motion confirms after 20 s', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 18), { car: true }), expected: { confirmedAt: at(20), runStartTs: at(0) } },
+  { name: 'auto: 20 mph confirms at 17 s (a 16.7 s hold), car motion or not', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 20)), expected: { confirmedAt: at(17), runStartTs: at(0) } },
+  { name: 'auto: 21 mph confirms after 15 s', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 21)), expected: { confirmedAt: at(15), runStartTs: at(0) } },
+  { name: 'auto: 22 mph without car motion confirms at 14 s (a 13.3 s hold)', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 22)), expected: { confirmedAt: at(14), runStartTs: at(0) } },
+  { name: 'auto: 24 mph confirms after 10 s', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 24)), expected: { confirmedAt: at(10), runStartTs: at(0) } },
+  { name: 'auto: 27 mph confirms after 5 s', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 27)), expected: { confirmedAt: at(5), runStartTs: at(0) } },
+  { name: 'auto: 29 mph confirms at 2 s (a 1.7 s hold)', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 29)), expected: { confirmedAt: at(2), runStartTs: at(0) } },
+  { name: 'auto: 29.5 mph confirms on the second reading (the 1 s floor)', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 29.5)), expected: { confirmedAt: at(1), runStartTs: at(0) } },
+  { name: 'auto: 30 mph confirms on the second reading, never the first', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 30)), expected: { confirmedAt: at(1), runStartTs: at(0) } },
+  { name: 'auto: 45 mph confirms on the second reading too', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 45)), expected: { confirmedAt: at(1), runStartTs: at(0) } },
+  { name: 'auto: alternating 21 and 30 mph earns at 21 mph (the slower end of each interval)', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 21).map((r, i) => (i % 2 === 1 ? vrow(i, 30) : r))), expected: { confirmedAt: at(15), runStartTs: at(0) } },
   { name: 'auto: 14 mph never confirms, even with car motion', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 120, 14), { car: true }), expected: { confirmedAt: null, runStartTs: null } },
+  { name: 'auto: a lone 40 mph spike never confirms', kind: 'confirm', trigger: 'auto', ...confirmRows([vrow(0, 40)], { car: true }), expected: { confirmedAt: null, runStartTs: null } },
+  { name: 'auto: two 40 mph readings 3 s apart never confirm (the gap earns nothing)', kind: 'confirm', trigger: 'auto', ...confirmRows([vrow(0, 40), vrow(3, 40)], { car: true }), expected: { confirmedAt: null, runStartTs: null } },
   {
     name: 'auto: a single 40 mph GPS spike among stopped rows does not confirm',
     kind: 'confirm',
@@ -241,48 +249,48 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     name: 'auto: a fresh cycling report earns nothing for the intervals it touches',
     kind: 'confirm',
     trigger: 'auto',
-    ...confirmRows(vrows(0, 40, 20), { veto: (s) => s === 10 || s === 11 }),
+    ...confirmRows(vrows(0, 40, 21), { veto: (s) => s === 10 || s === 11 }),
     expected: { confirmedAt: at(18), runStartTs: at(0) },
   },
   {
-    name: 'auto: 10 s at 20 mph, a 299 s stop, then 20 mph confirms 6 s into the second run (the evidence kept)',
+    name: 'auto: 10 s at 21 mph, a 299 s stop, then 21 mph confirms 6 s into the second run (the evidence kept)',
     kind: 'confirm',
     trigger: 'auto',
-    ...confirmRows([...vrows(0, 9, 20), ...vrows(10, 308, 0), ...vrows(309, 400, 20)]),
+    ...confirmRows([...vrows(0, 9, 21), ...vrows(10, 308, 0), ...vrows(309, 400, 21)]),
     expected: { confirmedAt: at(315), runStartTs: at(0) },
   },
   {
     name: 'auto: evidence is forgotten after 5 min with no movement: after a 300 s stop it takes 15 s again',
     kind: 'confirm',
     trigger: 'auto',
-    ...confirmRows([...vrows(0, 9, 20), ...vrows(10, 309, 0), ...vrows(310, 400, 20)]),
+    ...confirmRows([...vrows(0, 9, 21), ...vrows(10, 309, 0), ...vrows(310, 400, 21)]),
     expected: { confirmedAt: at(325), runStartTs: at(310) },
   },
   {
     name: 'auto: crawling keeps the evidence through a 6 min jam',
     kind: 'confirm',
     trigger: 'auto',
-    ...confirmRows([...vrows(0, 9, 20), ...vrows(10, 369, 6), ...vrows(370, 400, 20)]),
+    ...confirmRows([...vrows(0, 9, 21), ...vrows(10, 369, 6), ...vrows(370, 400, 21)]),
     expected: { confirmedAt: at(376), runStartTs: at(0) },
   },
-  { name: 'auto: 10 s at 20 mph then a stop does not confirm', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 9, 20), ...vrows(10, 60, 0)]), expected: { confirmedAt: null, runStartTs: null } },
+  { name: 'auto: 10 s at 21 mph then a stop does not confirm', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 9, 21), ...vrows(10, 60, 0)]), expected: { confirmedAt: null, runStartTs: null } },
   {
     name: 'auto: a row with a 50 m fix earns nothing for its two intervals; what was earned stays',
     kind: 'confirm',
     trigger: 'auto',
-    ...confirmRows([...vrows(0, 4, 20), vrow(5, 20, { hAcc: 50 }), ...vrows(6, 40, 20)]),
+    ...confirmRows([...vrows(0, 4, 21), vrow(5, 21, { hAcc: 50 }), ...vrows(6, 40, 21)]),
     expected: { confirmedAt: at(17), runStartTs: at(0) },
   },
   {
     name: 'auto: a 4 s gap between readings earns nothing for itself',
     kind: 'confirm',
     trigger: 'auto',
-    ...confirmRows([...vrows(0, 4, 20), ...vrows(8, 40, 20)]),
+    ...confirmRows([...vrows(0, 4, 21), ...vrows(8, 40, 21)]),
     expected: { confirmedAt: at(19), runStartTs: at(0) },
   },
-  { name: 'auto: rows with no fix earn nothing', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 4, 20), ...vrows(5, 7, null), ...vrows(8, 40, 20)]), expected: { confirmedAt: at(19), runStartTs: at(0) } },
-  { name: 'auto: a speed rated worse than 2 m/s never counts', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 20, { speedAcc: 3 })), expected: { confirmedAt: null, runStartTs: null } },
-  { name: 'auto: an unrated speed counts', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 20, { speedAcc: -1 })), expected: { confirmedAt: at(15), runStartTs: at(0) } },
+  { name: 'auto: rows with no fix earn nothing', kind: 'confirm', trigger: 'auto', ...confirmRows([...vrows(0, 4, 21), ...vrows(5, 7, null), ...vrows(8, 40, 21)]), expected: { confirmedAt: at(19), runStartTs: at(0) } },
+  { name: 'auto: a speed rated worse than 2 m/s never counts', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 60, 21, { speedAcc: 3 })), expected: { confirmedAt: null, runStartTs: null } },
+  { name: 'auto: an unrated speed counts', kind: 'confirm', trigger: 'auto', ...confirmRows(vrows(0, 40, 21, { speedAcc: -1 })), expected: { confirmedAt: at(15), runStartTs: at(0) } },
   { name: 'manual: 10 mph held 15 s confirms', kind: 'confirm', trigger: 'manual', ...confirmRows(vrows(0, 20, 12)), expected: { confirmedAt: at(15), runStartTs: at(0) } },
   { name: 'manual: 8 mph never confirms', kind: 'confirm', trigger: 'manual', ...confirmRows(vrows(0, 40, 8)), expected: { confirmedAt: null, runStartTs: null } },
   { name: 'manual: a dip under 10 mph spanning 5 s keeps the hold', kind: 'confirm', trigger: 'manual', ...confirmRows([...vrows(0, 2, 12), ...vrows(3, 8, 6), ...vrows(9, 40, 12)]), expected: { confirmedAt: at(15), runStartTs: at(0) } },
@@ -362,7 +370,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     name: 'start: rows that begin moving start at the car motion, at the parked spot it could have come from',
     kind: 'start',
     trigger: 'auto',
-    ...confirmRows(vrows(0, 40, 20, (s) => ({ northM: 500 + 9 * s }))),
+    ...confirmRows(vrows(0, 40, 21, (s) => ({ northM: 500 + 9 * s }))),
     automotiveSince: at(-60),
     lastEnd: lastEndAt(-600, 0),
     expected: { confirmedAt: at(15), start: { index: 0, startedAt: at(-60), startSource: 'motion', startLat: north(0), startLng: LNG, continues: false } },
@@ -371,7 +379,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     name: 'start: the motion start is not placed at a parked spot it could not have come from',
     kind: 'start',
     trigger: 'auto',
-    ...confirmRows(vrows(0, 40, 20, (s) => ({ northM: 500 + 9 * s }))),
+    ...confirmRows(vrows(0, 40, 21, (s) => ({ northM: 500 + 9 * s }))),
     automotiveSince: at(-60),
     lastEnd: lastEndAt(-600, -5000),
     expected: { confirmedAt: at(15), start: { index: 0, startedAt: at(-60), startSource: 'motion', startLat: null, startLng: null, continues: false } },
@@ -380,7 +388,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     name: 'start: without car motion before it, the first row starts the drive',
     kind: 'start',
     trigger: 'auto',
-    ...confirmRows(vrows(0, 40, 20, (s) => ({ northM: 9 * s }))),
+    ...confirmRows(vrows(0, 40, 21, (s) => ({ northM: 9 * s }))),
     automotiveSince: 0,
     lastEnd: null,
     expected: { confirmedAt: at(15), start: { index: 0, startedAt: at(0), startSource: 'wake', startLat: north(0), startLng: LNG, continues: false } },
