@@ -96,24 +96,43 @@ describe('readable on every sky, in day and night, over the glow', () => {
     }
     return 0;
   }
-  /** The lowest contrast of `ink` over the ground at `x` pt from the centre. */
-  function worst(B: number, x: number, ink: 'haloInk' | 'haloInkMuted'): number {
+  const grounds = {
+    day: [...new Set([HUD.day.ground, ...bundles.flatMap((b) => b.sky.hud.day.stops.map(opaque))])],
+    night: [...new Set([HUD.night.ground, ...bundles.flatMap((b) => b.sky.hud.night.stops.map(opaque))])],
+  };
+  /** The lowest contrast of `ink` over the ground at `x` pt from the centre, in both palettes. */
+  function worst(B: number, x: number, ink: 'haloInk' | 'compassInk' | 'haloInkMuted'): number {
     const alpha = glowAt(B, x);
     let min = Infinity;
     for (const set of ['day', 'night'] as const) {
       const p = HUD[set];
-      const grounds = [p.ground, ...bundles.flatMap((b) => b.sky.hud[set].stops.map(opaque))];
-      for (const ground of grounds) for (const glow of ringRamp(p)) min = Math.min(min, contrastRatio(p[ink], opaque(over(ground, withAlpha(glow, alpha)))));
+      for (const ground of grounds[set]) for (const glow of ringRamp(p)) min = Math.min(min, contrastRatio(p[ink], opaque(over(ground, withAlpha(glow, alpha)))));
     }
     return min;
   }
   const sizes = [...new Set(PHONES.map(([, phone]) => layoutOf(phone).halo.w))];
 
-  test.each(sizes)('a %i pt halo: the letters on their circle (N at 10:1, the rest 5.5:1, their inmost ink 4:1), the mark 6.5:1', (B) => {
+  test.each(sizes)('a %i pt halo: the letters on their circle (N at 10:1, E/S/W 6:1), the ticks 4.5:1 and the mark 6.5:1', (B) => {
     const c = compassGeometry(B);
     expect(worst(B, c.letterR, 'haloInk')).toBeGreaterThanOrEqual(10);
-    expect(worst(B, c.letterR, 'haloInkMuted')).toBeGreaterThanOrEqual(5.5);
-    expect(worst(B, c.inner, 'haloInkMuted')).toBeGreaterThanOrEqual(4);
+    expect(worst(B, c.letterR, 'compassInk')).toBeGreaterThanOrEqual(6);
+    // a tick's inner end (the nearer the ring, the brighter the glow)
+    expect(worst(B, c.letterR - c.tick / 2, 'haloInkMuted')).toBeGreaterThanOrEqual(4.5);
     expect(worst(B, c.markTip - c.markH / 2, 'haloInk')).toBeGreaterThanOrEqual(6.5);
+  });
+
+  test('every letter’s inmost ink, in every ring box, holds 4.5:1 (E/S/W in the compass ink, where the muted ink would not)', () => {
+    let n = Infinity;
+    let esw = Infinity;
+    let muted = Infinity;
+    for (let B = 220; B <= 420; B += 1) {
+      const c = compassGeometry(B);
+      n = Math.min(n, worst(B, c.inner, 'haloInk'));
+      esw = Math.min(esw, worst(B, c.inner, 'compassInk'));
+      muted = Math.min(muted, worst(B, c.inner, 'haloInkMuted'));
+    }
+    expect(esw).toBeGreaterThanOrEqual(4.5);
+    expect(n).toBeGreaterThan(esw);
+    expect(muted).toBeLessThan(4.5);
   });
 });

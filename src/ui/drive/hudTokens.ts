@@ -35,6 +35,11 @@ export type HudPalette = {
   haloInk: string;
   /** The unit label inside the halo. */
   haloInkMuted: string;
+  /**
+   * The compass's E, S and W: a step brighter than the muted print, so they read over the halo's glow
+   * in any tint (N and the mark are `haloInk`, still the brightest).
+   */
+  compassInk: string;
   /** A good state: the DashPal chip's connected dot. */
   gain: string;
   /** The End swipe's capsule, and quiet edges (the navigation list's panel). */
@@ -56,6 +61,7 @@ const day: HudPalette = {
   haloSevere: '#FF3B3B',
   haloInk: '#F3F6FB',
   haloInkMuted: '#A9BAD6',
+  compassInk: '#BCC9DF',
   gain: '#5EE08A',
   chrome: '#001D3D',
   chromeEdge: '#003566',
@@ -75,6 +81,7 @@ const night: HudPalette = {
   haloSevere: '#D63A3A',
   haloInk: '#D3D9E2',
   haloInkMuted: '#9AA3B0',
+  compassInk: '#A0A8B5',
   gain: '#4FBF78',
   chrome: '#00142B',
   chromeEdge: '#002A52',
@@ -107,6 +114,7 @@ export const HUD_CONTRAST_PAIRS: readonly (readonly [keyof HudPalette, keyof Hud
   ['haloCalm', 'ground'],
   ['haloInk', 'ground'],
   ['haloInkMuted', 'ground'],
+  ['compassInk', 'ground'],
 ];
 
 /** [graphic, background] pairs that must hold ≥ 4.5:1 in both palettes (the halo's red end). */
@@ -125,6 +133,7 @@ export const HUD_LIT_KEYS: readonly (keyof HudPalette)[] = [
   'haloSevere',
   'haloInk',
   'haloInkMuted',
+  'compassInk',
 ];
 
 /** HUD touch targets (DESIGN.md: 64 pt in the car). */

@@ -6,8 +6,9 @@
 // ticks centred on it, and the mark (a triangle in the gap at the top) points out at the course.
 // Before the drive's first course it shows its ticks with the letters dimmed. It sits outside
 // everything that pulses or shakes, so it never grows, fades or moves with the ring. Quiet HUD
-// inks: the ticks and letters muted, N and the mark in the halo's ink (never red: red is the severe
-// tier). Drawn inside the halo's view, which screen readers skip.
+// inks: the ticks muted, E, S and W in the compass's ink (a step brighter, so they read over the
+// glow), N and the mark in the halo's ink, the brightest (never red: red is the severe tier). Drawn
+// inside the halo's view, which screen readers skip.
 import { memo, useEffect, useMemo, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Animated, { cancelAnimation, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
@@ -106,7 +107,7 @@ export const HaloCompass = memo(function HaloCompass({ size, heading, palette, r
           centre={c}
           radius={cg.letterR}
           pt={cg.letterPt}
-          color={l.label === 'N' ? palette.haloInk : palette.haloInkMuted}
+          color={l.label === 'N' ? palette.haloInk : palette.compassInk}
           dim={!hasCourse}
         />
       ))}

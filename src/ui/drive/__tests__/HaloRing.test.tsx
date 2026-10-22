@@ -6,6 +6,8 @@ import { act, render, screen, within } from '@testing-library/react-native';
 import { StyleSheet, View } from 'react-native';
 import { getAnimatedStyle } from 'react-native-reanimated';
 
+import { relativeLuminance } from '@/ui/contrast';
+
 import { compassGeometry, HALO_CALM, type HaloVisual } from '../halo';
 import { COMPASS_DIM_LETTERS } from '../HaloCompass';
 import { HALO_TIMINGS } from '../haloMotion';
@@ -227,11 +229,17 @@ describe('the compass', () => {
     expect(rotation()).toBe('-45deg');
   });
 
-  test('N in the halo ink, the other letters muted (never red)', async () => {
+  test('N in the halo ink, the other letters in the compass ink, the ticks muted (never red)', async () => {
     await render(view(HALO_CALM, { heading: 0 }));
     const color = (l: string) => StyleSheet.flatten(within(screen.getByTestId(`hud-compass-${l}`, HIDDEN)).getByText(l, HIDDEN).props.style).color;
     expect(color('N')).toBe(p.haloInk);
-    for (const l of ['E', 'S', 'W']) expect(color(l)).toBe(p.haloInkMuted);
+    for (const l of ['E', 'S', 'W']) expect(color(l)).toBe(p.compassInk);
+    for (const t of screen.getAllByTestId('hud-compass-tick', HIDDEN)) expect(t.props.stroke).toMatchObject({ payload: (0xff000000 | parseInt(p.haloInkMuted.slice(1), 16)) >>> 0 });
+    // N the brightest, then E/S/W, then the muted ticks, in both palettes
+    for (const q of [HUD.day, HUD.night]) {
+      expect(relativeLuminance(q.haloInk)).toBeGreaterThan(relativeLuminance(q.compassInk));
+      expect(relativeLuminance(q.compassInk)).toBeGreaterThan(relativeLuminance(q.haloInkMuted));
+    }
   });
 
   test('the letters: ExtraBold at the card’s size, no Dynamic Type, their ink centred on the letters’ circle', async () => {
