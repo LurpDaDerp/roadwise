@@ -5,8 +5,10 @@
 // speed-limit client, the alert player, the background display and persistence together, and
 // publishes one `DriveState` for the UI. Rules:
 // - **How a drive begins.** On its own (iOS): native notices driving once the speed has been held
-//   long enough (drive-sense's `AUTO_TRIGGER`: the faster the car, the shorter the hold), traces
-//   the start back and journals every row; the host adopts the journal wherever JS runs (a
+//   long enough (drive-sense's `AUTO_TRIGGER`: over 15 mph, (5/3)·(30 − mph) s, so about 25 s
+//   just over 15 and 5 s less for every 3 mph faster, and from about 30 mph the second good reading
+//   in a row; under 20 mph only with fresh car motion, and 15 mph and under never), traces the
+//   start back and journals every row; the host adopts the journal wherever JS runs (a
 //   `driveStarted` event, or `boot`) and replays it into the engine. From the Start card
 //   (both): the drive records from the tap (iOS: native opens a journaled drive at once,
 //   `startWaiting`; a native build too old for that, or an answer that cannot be used, falls back to
@@ -16,7 +18,8 @@
 //   reaches it the screen asks "Still planning to drive?" at 2 min and the drive ends unsaved at
 //   5 min from the tap or the last touch. A drive confirmed (or, from the Start card, reaching
 //   driving speed) within 5 min and 150 m of a held drive's end re-opens that trip (`continuation.ts`).
-// - **How it ends.** The engine decides (5 min still, a walk at 3 mph or slower, 12 h, End); native
+// - **How it ends.** The engine decides (5 min still, 5 s of walking once the car is at 3 mph or
+//   slower, 12 h, End); native
 //   stops on its own only as a fallback and the engine then cuts at the last movement. "Not
 //   driving?" discards the drive (`cancelDrive`), only while its 2-minute visible budget lasts,
 //   and never while a Start-card drive still waits (its Cancel discards it then; the wait spends

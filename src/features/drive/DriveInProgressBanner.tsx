@@ -8,9 +8,11 @@ import { Text, useTheme } from '@/ui';
 import { DRIVE_HREF, hudCopy } from './hudCopy';
 
 /**
- * A strip for in-app screens while a drive is recording (reached from a notification tap at a
- * stop): "Ready to roll" while a Start-card drive still waits for driving speed. One tap goes back
- * to the driving screen. Nothing else: the drive is ended (or the wait stopped) there.
+ * A strip for in-app screens while a drive is recording: during an automatic drive it is the way
+ * into the driving screen (opening RoadWise then lands on Home with it), and otherwise the way back
+ * after a notification opened another screen at a stop. "Ready to roll" while a Start-card drive
+ * still waits for driving speed. One tap opens the driving screen. Nothing else: the drive is
+ * ended (or the wait stopped) there.
  */
 export function DriveInProgressBanner() {
   const th = useTheme();
