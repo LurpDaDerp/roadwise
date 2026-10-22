@@ -637,3 +637,44 @@ test('the default speed-limit client hands its options to the network: a re-ask 
   expect(again[0]!.headers).toEqual({ 'Cache-Control': 'no-cache' });
   await rt.stop();
 });
+
+test('iOS: the default push-to-start asks the server over the launch’s client with this install’s id, and a refusal reaches the host with its reason', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  await createSettingsRepo(db).set(INSTALL_ID_KEY, 'install-0001');
+  const background = deps();
+  background.appState.set('background');
+  const detect = createFakeDriveDetect({ now: () => clock });
+  await detect.setArmed(true, 'user-1');
+  detect.wake();
+  // An automatic drive native confirmed while RoadWise was behind, 30 s of it journaled.
+  const list = rows(30, { t0: clock - 30_000 });
+  detect.confirm({ driveId: uuid(21), startedAt: clock - 30_000, rows: list.map((r) => ({ ...r })) });
+  const supabase = createFakeSupabase({
+    uid: 'user-1',
+    invoke: (call) => (call.name === 'live-activity-start' ? invokeOk({ sent: false, reason: 'no_token' }) : invokeOk({})),
+    rpc: () => ({ data: [], error: null }),
+  });
+  const display = { start: jest.fn(), update: jest.fn(), refresh: jest.fn(), end: jest.fn(), isRunning: async () => false };
+  const errors: string[] = [];
+  const source = createFakeDriveSense({ platform: 'ios', now: () => clock });
+  source.setState({ location: 'always', motion: 'granted' });
+  const rt = await bootstrapApp({
+    ...background.deps,
+    supabase: supabase as unknown as BootSupabase,
+    source,
+    detect,
+    display,
+    onError: (e, ctx) => void errors.push(`${ctx}: ${e instanceof Error ? e.message : String(e)}`),
+  });
+  expect(rt.drive.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(21) });
+  await rt.drive.settled();
+  await new Promise((r) => setTimeout(r, 0));
+  await rt.drive.settled();
+  const asks = supabase.invokes.filter((c) => c.name === 'live-activity-start');
+  expect(asks).toHaveLength(1);
+  expect(asks[0]!.body).toMatchObject({ deviceId: 'install-0001', clientTripId: uuid(21), leg: 0, startedAt: clock - 30_000 });
+  // The server's own reason, not a bare false: no token is not worth a retry.
+  expect(errors).toContain('drive pushToStart: push-to-start not sent: no_token');
+  await rt.stop({ endOpenTrip: false });
+});

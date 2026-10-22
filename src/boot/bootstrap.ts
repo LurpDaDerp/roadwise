@@ -21,7 +21,7 @@ import { refreshAppConfig, type AppConfigSupabase } from '@/data/config/appConfi
 import { createExpoDb, createQueueRepo, createSettingsRepo, migrate, type Db, type TripRow } from '@/data/db';
 import { preloadDeviceSecret } from '@/data/devices/deviceSecret';
 import { getInstallId } from '@/data/devices/installId';
-import { requestLiveActivityStart } from '@/data/devices/liveActivity';
+import { createPushToStart } from '@/data/devices/liveActivity';
 import { onDataChanged } from '@/data/events';
 import { runWhenForeground, type AppStateLike as ForegroundAppState } from '@/data/foreground';
 import { restoreDrives, type RestoreResult } from '@/data/hydrate/restore';
@@ -37,7 +37,7 @@ import { setActiveDashcam } from '@/dashcam/registry';
 import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { writeDropNotice } from '@/drive/dropNotice';
-import { createDriveHost, finishPendingCancel, isJournaled, playerInputs, type DriveHost, type DriveStartPermissions, type PushToStartRequest } from '@/drive/host';
+import { createDriveHost, finishPendingCancel, isJournaled, playerInputs, type DriveHost, type DriveStartPermissions, type PushToStartOutcome, type PushToStartRequest } from '@/drive/host';
 import { isDriveScreenFocused } from '@/features/drive/hudPresence';
 import type { PhoneReminder } from '@/features/drive/phoneReminder';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
@@ -102,8 +102,12 @@ export interface BootstrapDeps {
   source?: DriveSource;
   /** iOS: the drive detector. Default: the native module (null on Android, in Jest and on web). */
   detect?: DriveDetectApi | null;
-  /** iOS: ask the server to push-start a drive's Live Activity. Default: `requestLiveActivityStart` with this install's id. */
-  pushToStart?: (req: PushToStartRequest) => Promise<boolean>;
+  /**
+   * iOS: ask the server to push-start a drive's Live Activity, answering whether it was sent and, if
+   * not, why and whether a retry soon may send. Default: `createPushToStart` (one retry-safe starter
+   * for the launch) with this install's id, over the launch's Supabase client.
+   */
+  pushToStart?: (req: PushToStartRequest) => Promise<boolean | PushToStartOutcome>;
   limits?: SpeedLimitClient;
   speedLimitsSupabase?: SpeedLimitsSupabase;
   appConfig?: AppConfigSupabase;
@@ -428,7 +432,13 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       permissions: deps.permissions ?? defaultPermissions(db),
       lastPosition: deps.lastPosition ?? defaultLastPosition,
       detect,
-      pushToStart: deps.pushToStart ?? ((req) => defaultPushToStart(db, req, onError)),
+      pushToStart:
+        deps.pushToStart ??
+        createPushToStart({
+          deviceId: () => getInstallId(createSettingsRepo(db)),
+          invoke: (name, options) => identity.supabase.functions.invoke(name, options),
+          onError,
+        }),
       voiceEnabled: deps.voiceEnabled ?? defaultVoiceEnabled,
       appState,
       phoneReminder: remind ? (pickup) => remind.pickup(pickup) : undefined,
@@ -595,17 +605,6 @@ async function retireReminder(db: Db, source: DriveSource, onError: (error: unkn
     await settings.set(REMINDER_RETIRED_KEY, 1);
   } catch (error) {
     onError(error, 'reminder retirement');
-  }
-}
-
-/** The push-to-start request with this install's id (the device row whose token the push goes to). */
-async function defaultPushToStart(db: Db, req: PushToStartRequest, onError: (error: unknown, context: string) => void): Promise<boolean> {
-  try {
-    const deviceId = await getInstallId(createSettingsRepo(db));
-    return await requestLiveActivityStart({ deviceId, ...req }, { onError });
-  } catch (error) {
-    onError(error, 'live activity start');
-    return false;
   }
 }
 
