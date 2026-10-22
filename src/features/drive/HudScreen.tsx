@@ -2,12 +2,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BackHandler, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { BackHandler, Dimensions, Platform, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DashpalChip, DashpalHudBanner, useDashpalChip, useDashpalFlash, useDashpalHeld } from '@/dashcam/ui/HudDashpal';
 import { useOptionalDb } from '@/data/queries/context';
-import { useDrive, useDriveControls, useDriveHost, useDriveLive } from '@/drive/useDrive';
+import { useBearing, useDrive, useDriveControls, useDriveHost, useDriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { clearHomeNotice, showHomeNotice } from '@/features/home/homeNotice';
 import { navAppById } from '@/features/navigation/catalog';
@@ -26,6 +26,7 @@ import {
   speedingTint,
   SpeedSign,
   type BurstSource,
+  type HaloProps,
 } from '@/ui/drive';
 
 import { nextEndLock } from './endLock';
@@ -33,11 +34,13 @@ import { EventBanner, useAlertFlash } from './EventBanner';
 import { hudButtonColors } from './hudButtons';
 import { hudCopy } from './hudCopy';
 import { hudLayout, type Rect } from './hudLayout';
+import { setDriveScreenFocused } from './hudPresence';
 import { navHighlight, NavigationButton, nextNavLock } from './NavigationButton';
 import { NotDrivingLink } from './NotDrivingLink';
 import { SpotNudgeLine, useSpotNudgeFlash } from './SpotNudge';
 import { useEventShake } from './useEventShake';
-import { useHaloBurst } from './useHaloBurst';
+import { compassHeadingOf, deviceHeadingWanted, nextHeldTrack, useDeviceHeading, type HeldTrack } from './useDeviceHeading';
+import { useAppActive, useHaloBurst } from './useHaloBurst';
 import { HaloReadout } from './HaloReadout';
 import { inUnits, useHudUnits } from './useHudUnits';
 import { WaitingBanner } from './WaitingBanner';
@@ -134,9 +137,12 @@ export type HudScreenProps = {
  *   (driver-not-visible included): warmer and faster the more serious and the longer. A hard brake,
  *   hard start or sharp turn, and each DashPal alert start or step (not a reconnect's re-send),
  *   pulse it quickly a few times. Each event (a speeding episode at its grace end too) shakes the
- *   ring sideways once, more for a more serious one. Around it a compass turns with the car's GPS
- *   course (heading up, never growing or moving with the ring). Rules in `src/ui/drive/halo.ts`;
- *   drawing in `HaloRing.tsx` and `HaloCompass.tsx`.
+ *   ring sideways once, more for a more serious one. Around it a compass turns with the car's track
+ *   bearing (the engine's, from where the car went; heading up, never growing or moving with the
+ *   ring); before the drive's first one, in portrait on iOS, with the phone's own heading, smoothed
+ *   (`useDeviceHeading`); once a track bearing has shown, never the phone's again that drive. With
+ *   neither (landscape before the first track bearing) it sits north-up, its letters dimmed. Rules
+ *   in `src/ui/drive/halo.ts`; drawing in `HaloRing.tsx` and `HaloCompass.tsx`.
  * - Top row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres) on
  *   the left and the navigation button on the right. The navigation button's list of apps shows in
  *   a panel under the row, never a route: on a tap while no app is saved, or on a long press (to
@@ -147,10 +153,16 @@ export type HudScreenProps = {
  *   failed end, "Not driving?" when it has no row of its own, for 4 s a problem spot's nudge
  *   ("Watch your speed here"), then the dangerous-weather banner (its ✕ live at any speed; hidden
  *   for the rest of the drive once dismissed). With a DashPal paired, a small static chip top right.
+ *   Where the link lives in the band's line (compact windows), an event or DashPal banner yields to
+ *   it while it is offered (the halo's burst and the sound still carry the alert), so no run of
+ *   alerts can hide it for its whole budget.
  * - "Not driving?": a small underlined link in its own row above End (landscape: above the
  *   navigation button), shown while the drive's 2-minute budget lasts (the host counts the time this
- *   screen is focused with RoadWise in front); a tap discards the drive and goes Home. A touch that
- *   starts while the screen is dimmed only wakes it.
+ *   screen is focused with RoadWise in front; a Start drive's from driving speed); a tap discards the
+ *   drive and goes Home. A touch that starts while the screen is dimmed only wakes it.
+ * - Presence: while focused with RoadWise in front the screen tells `hudPresence` so (with the
+ *   drive's id): the recap notifier and the lockout read it. Blur, the background and unmount say
+ *   it is not.
  * - Waiting (a Start drive swipe, until the car reaches driving speed): the drive records from the
  *   tap (its speed, its limit, its halo and alerts); the band says "Ready to roll" · "Saved once you
  *   drive", End is "Cancel", the one discard ("Not driving?" only once the car has reached driving
@@ -208,13 +220,27 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
   // The screen's focus: the "Not driving?" budget counts only while this screen is focused (the host
   // adds RoadWise being in front), so the lock-screen hint goes at the same moment the link does.
+  const [focused, setFocused] = useState(false);
   useFocusEffect(
     useCallback(() => {
-      if (overlay) return;
-      controls.setHudVisible(true);
-      return () => controls.setHudVisible(false);
+      setFocused(true);
+      if (!overlay) controls.setHudVisible(true);
+      return () => {
+        setFocused(false);
+        if (!overlay) controls.setHudVisible(false);
+      };
     }, [controls, overlay])
   );
+  // Presence (`hudPresence`): focused with RoadWise in front, for the open drive. Not for the
+  // diagnostics simulation, which is never the driving screen.
+  const appActive = useAppActive();
+  const present = !overlay && focused && appActive;
+  const presenceTripId = live.clientTripId;
+  const [presenceOwner] = useState(() => ({}));
+  useEffect(() => {
+    reportPresence(presenceOwner, present, presenceTripId);
+  }, [presenceOwner, present, presenceTripId]);
+  useEffect(() => () => reportPresence(presenceOwner, false, null), [presenceOwner]);
 
   const alert = useAlertFlash(live.lastAlert, live.rowTs);
   const nudge = useSpotNudgeFlash(live.spotNudge, live.rowTs);
@@ -371,6 +397,13 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // for each event as it happens (fresh on the row clock, never one from the background).
   const shake = useEventShake(live.lastShake, live.rowTs);
   const now = wallClock();
+  // The compass: the drive's track bearing, held for the rest of the drive once shown (advanced once
+  // per render from the last, as the locks are); before it the phone's heading (see `HudHalo`).
+  const bearing = useBearing();
+  const track = bearing.source === 'track' ? bearing.deg : null;
+  const [heldTrack, setHeldTrack] = useState<HeldTrack | null>(null);
+  const nextTrack = nextHeldTrack(heldTrack, track, live.clientTripId);
+  if (nextTrack !== heldTrack) setHeldTrack(nextTrack);
   const eventSource = useMemo<BurstSource | null>(() => (alert === null ? null : { kind: 'event', type: alert.type, at: alert.at, until: alert.until }), [alert]);
   const dashpalSource = useMemo<BurstSource | null>(
     () => (dashpal === null ? null : { kind: 'dashpal', key: dashpal.key, sound: dashpal.sound, tier: dashpal.tier, resend: dashpal.resend, until: dashpal.until }),
@@ -391,14 +424,17 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
   const layout = hudLayout({ width, height, insets, fontScale, chip: dashpalChip !== null, units });
   const compactBand = layout.compact || layout.orientation === 'landscape';
-  const bannerUp = dashpal !== null || alert !== null;
+  // "Not driving?" while the drive's budget lasts; never while a Start-card drive waits (Cancel is its
+  // discard then), while saving or already going.
+  const showLink = live.status === 'recording' && !isWaiting && live.notDrivingAvailable && !busy && !cancelling;
+  // The link in the band's line (a failed end keeps the line first): an alert banner yields to it, so
+  // a run of alerts can never hide it for its whole budget. The halo still bursts and the sound plays.
+  const linkInLine = showLink && layout.notDriving === 'line' && !endFailed;
+  const bannerUp = (dashpal !== null || alert !== null) && !linkInLine;
   // The weather alert at the car (the host leaves out a kind dismissed this drive); its ✕ hides it
   // for the rest of the drive (a more severe kind shows again).
   const weather = live.weatherAlert;
   const dismissWeather = useCallback(() => controls.dismissWeather(), [controls]);
-  // "Not driving?" while the drive's budget lasts; never while a Start-card drive waits (Cancel is its
-  // discard then), while saving or already going.
-  const showLink = live.status === 'recording' && !isWaiting && live.notDrivingAvailable && !busy && !cancelling;
   const link = <NotDrivingLink palette={p} dimmed={dimmed} onPress={() => void onNotDriving()} />;
 
   return (
@@ -406,7 +442,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
       {sky !== null ? <LinearGradient testID="hud-sky" pointerEvents="none" colors={sky.stops} style={StyleSheet.absoluteFill} /> : null}
       {/* The band: an alert banner across all of it, else the line (and the chip beside it). */}
       <View style={[styles.abs, styles.centred, at(layout.band)]}>
-        {dashpal !== null ? (
+        {!bannerUp ? null : dashpal !== null ? (
           <DashpalHudBanner visual={dashpal} palette={p} />
         ) : alert !== null ? (
           <EventBanner alert={alert} palette={p} />
@@ -428,7 +464,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             </Text>
           ) : isWaiting ? (
             <WaitingBanner palette={p} compact={compactBand} />
-          ) : showLink && layout.notDriving === 'line' ? (
+          ) : linkInLine ? (
             link
           ) : nudge !== null ? (
             <SpotNudgeLine nudge={nudge} palette={p} compact={compactBand} />
@@ -496,7 +532,17 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
       {/* Above the scrim: the halo is a safety cue, not decoration. It takes no touch. */}
       <View pointerEvents="none" style={[styles.abs, at(layout.halo)]}>
-        <Halo
+        <HudHalo
+          track={nextTrack}
+          deviceWanted={deviceHeadingWanted({
+            ios: Platform.OS === 'ios',
+            focused,
+            active: appActive,
+            recording: live.status === 'recording',
+            ring: layout.halo.ring,
+            portrait: portraitNow(width, height),
+            hasTrack: nextTrack !== null,
+          })}
           visual={visual}
           size={layout.halo.w}
           height={layout.halo.h}
@@ -504,7 +550,6 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           palette={p}
           dimmed={dimmed}
           reduceMotion={reduceMotion}
-          heading={live.courseDeg}
           numerals={(numeralStyle) => (
             <HaloReadout
               units={units}
@@ -550,6 +595,38 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
       ) : null}
     </View>
   );
+}
+
+/**
+ * The driving screens present now (focused with RoadWise in front), each with its drive's id. Two
+ * can overlap for a moment (one opening as the other goes), so the screen that goes never clears
+ * the presence the other one holds.
+ */
+const presentScreens = new Map<object, string | null>();
+
+function reportPresence(owner: object, present: boolean, tripId: string | null): void {
+  if (present) presentScreens.set(owner, tripId);
+  else if (!presentScreens.delete(owner)) return;
+  const others = [...presentScreens.values()];
+  setDriveScreenFocused(others.length > 0, present ? tripId : (others.at(-1) ?? null));
+}
+
+/**
+ * The halo with its compass's heading: the held track bearing, else (while `deviceWanted`) the
+ * phone's own heading. Its own component, so a turning phone re-renders the halo alone.
+ */
+function HudHalo({ track, deviceWanted, ...halo }: Omit<HaloProps, 'heading'> & { track: HeldTrack | null; deviceWanted: boolean }) {
+  const device = useDeviceHeading(deviceWanted);
+  return <Halo {...halo} heading={compassHeadingOf(track, device)} />;
+}
+
+/**
+ * Portrait, as the phone's compass is measured: the window taller than wide, and the screen too (a
+ * narrow split-screen window on a landscape iPad is not portrait).
+ */
+function portraitNow(width: number, height: number): boolean {
+  const screen = Dimensions.get('screen');
+  return width < height && screen.width < screen.height;
 }
 
 /**

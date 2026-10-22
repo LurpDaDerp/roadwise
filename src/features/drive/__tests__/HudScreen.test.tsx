@@ -1,12 +1,12 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
-import { StyleSheet } from 'react-native';
+import { AppState, Platform, StyleSheet, View } from 'react-native';
 
 import { createFakeDriveSense } from '@drive-sense';
 
 import { T0 as DRIVE_T0 } from '@/core/detectors/__fixtures__/rows';
 import { rows as driveRows, TZ as DRIVE_TZ } from '@/core/engine/__fixtures__/drives';
 import { createDriveHost, type DriveState, type LastFinalized } from '@/drive/host';
-import type { DriveLive, ShownSpeed } from '@/drive/useDrive';
+import type { DriveBearing, DriveLive, ShownSpeed } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { State } from 'react-native-gesture-handler';
 import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
@@ -19,6 +19,7 @@ import { clearHomeNotice, readHomeNotice } from '@/features/home/homeNotice';
 
 import { hudCopy } from '../hudCopy';
 import { hudLayout } from '../hudLayout';
+import { driveScreenEnteredFor, isDriveScreenFocused, resetDriveScreenPresence } from '../hudPresence';
 import { HudScreen, hudNightOf } from '../HudScreen';
 import { WEATHER_CLOSE_PT, weatherBannerPt } from '../WeatherBanner';
 
@@ -40,13 +41,38 @@ let mockStill = false;
 jest.mock('@/ui/theme', () => ({ ...jest.requireActual('@/ui/theme'), useOsReduceMotion: () => mockStill }));
 
 const mockRouter = { replace: jest.fn(), push: jest.fn(), navigate: jest.fn(), dismissTo: jest.fn() };
+/** The route's focus: focused unless a test blurs it (then re-renders). */
+let mockFocused = true;
 jest.mock('expo-router', () => ({
   useRouter: () => mockRouter,
-  // The screen's focus, as a mount effect (the route is always focused in these tests).
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- inside the mock factory
-  useFocusEffect: (fn: () => void | (() => void)) => require('react').useEffect(fn, [fn]),
+  // The screen's focus, as an effect that runs while the route is focused (its cleanup is the blur).
+  useFocusEffect: (fn: () => void | (() => void)) =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- inside the mock factory
+    require('react').useEffect(() => (mockFocused ? fn() : undefined), [fn, mockFocused]),
 }));
-jest.mock('expo-location', () => ({ getLastKnownPositionAsync: jest.fn(async () => null) }));
+/** The phone's heading subscriptions (expo-location `watchHeadingAsync`), newest last. */
+type MockHeadingSub = { emit(h: { trueHeading: number; magHeading: number; accuracy: number }): void; fail(): void; removed: boolean };
+const mockHeadingSubs: MockHeadingSub[] = [];
+/** expo-location's `watchHeadingAsync`, as the fake phone answers it (set again before each test). */
+async function mockWatchHeading(cb: (h: unknown) => void, onError?: (reason: string) => void): Promise<{ remove(): void }> {
+  const sub: MockHeadingSub = {
+    emit: (h) => {
+      if (!sub.removed) cb(h);
+    },
+    fail: () => onError?.('heading unavailable'),
+    removed: false,
+  };
+  mockHeadingSubs.push(sub);
+  return {
+    remove: () => {
+      sub.removed = true;
+    },
+  };
+}
+jest.mock('expo-location', () => ({
+  getLastKnownPositionAsync: jest.fn(async () => null),
+  watchHeadingAsync: jest.fn((cb: (h: unknown) => void, onError?: (reason: string) => void) => mockWatchHeading(cb, onError)),
+}));
 jest.mock('expo-haptics', () => ({
   impactAsync: jest.fn(async () => {}),
   notificationAsync: jest.fn(async () => {}),
@@ -94,7 +120,10 @@ const mockControls = {
 };
 /** The store's newest row time (the row clock), or null before any row. */
 let mockLastRowTs: number | null = null;
+/** The engine's compass bearing (`useBearing`). */
+let mockBearing: DriveBearing = { deg: null, source: null };
 jest.mock('@/drive/useDrive', () => ({
+  useBearing: () => mockBearing,
   useDrive: <T,>(sel: (s: { lastFinalized: LastFinalized; status: DriveLive['status']; startedAt: number | null; lastRowTs: number | null }) => T) =>
     sel({ lastFinalized: mockLastFinalized, status: mockLive.status, startedAt: mockLive.startedAt, lastRowTs: mockLastRowTs }),
   useDriveLive: () => mockLive,
@@ -195,6 +224,12 @@ beforeEach(() => {
   mockDefaultMph = 34;
   mockEnd.mockResolvedValue({ clientTripId: 't1', dropped: null });
   mockControls.cancelDrive.mockResolvedValue(true);
+  mockBearing = { deg: null, source: null };
+  mockFocused = true;
+  mockHeadingSubs.length = 0;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked module
+  (require('expo-location') as { watchHeadingAsync: jest.Mock }).watchHeadingAsync.mockImplementation(mockWatchHeading);
+  resetDriveScreenPresence();
   clearHomeNotice();
 });
 afterEach(() => jest.useRealTimers());
@@ -390,13 +425,227 @@ describe('the shake on an event', () => {
   });
 });
 
-describe('the compass', () => {
-  test('the halo is handed the GPS course; none before the first', async () => {
+/** Every AppState listener the screen adds (its own and the halo burst's), and a way to flip the state for all. */
+function appStateListeners(): { set(state: string): Promise<void>; restore(): void } {
+  const fns: ((s: string) => void)[] = [];
+  // Swapped by hand, not spied: restoring a spy on the preset's own mock would leave it answering nothing.
+  const original = AppState.addEventListener;
+  const target = AppState as unknown as { addEventListener: unknown };
+  target.addEventListener = (_e: string, fn: (s: string) => void) => {
+    fns.push(fn);
+    return {
+      remove: () => {
+        const i = fns.indexOf(fn);
+        if (i >= 0) fns.splice(i, 1);
+      },
+    };
+  };
+  return {
+    set: async (state) => {
+      await act(async () => {
+        for (const fn of [...fns]) fn(state);
+      });
+    },
+    restore: () => {
+      target.addEventListener = original;
+    },
+  };
+}
+
+describe('the compass (round 8 decision 7)', () => {
+  const heading = () => mockHalo.at(-1)!.heading;
+  const subs = () => mockHeadingSubs;
+  const open = () => mockHeadingSubs.filter((x) => !x.removed);
+  /** The phone's compass says `deg` (true north), well calibrated. */
+  const phone = async (deg: number) => {
+    await act(async () => open().at(-1)!.emit({ trueHeading: deg, magHeading: deg, accuracy: 3 }));
+  };
+  const track = (deg: number): DriveBearing => ({ deg, source: 'track' });
+  /** The subscription is asked for after a microtask: let it land. */
+  const settle = () => act(async () => {});
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the hook behind react-native's export
+  const dims = () => require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
+  const landscapeWindow = () => jest.spyOn(dims(), 'default').mockReturnValue({ width: 844, height: 390, scale: 3, fontScale: 1 });
+
+  test('before any heading: north-up with its letters dimmed (the GPS course alone never turns it)', async () => {
     const h = await renderHud({ rowTs: T });
-    expect(mockHalo.at(-1)!.heading).toBeNull();
+    expect(heading()).toBeNull();
     expect(screen.getByTestId('hud-compass', HIDDEN)).toBeTruthy();
     await h.update({ rowTs: T + 1000, courseDeg: 270 });
-    expect(mockHalo.at(-1)!.heading).toBe(270);
+    expect(heading()).toBeNull();
+  });
+
+  test("before the drive's first track bearing it follows the phone's heading (true north, else magnetic)", async () => {
+    await renderHud({ rowTs: T });
+    expect(subs()).toHaveLength(1);
+    await phone(80);
+    expect(heading()).toBe(80);
+    // no true heading (-1): the magnetic one
+    await act(async () => open().at(-1)!.emit({ trueHeading: -1, magHeading: 120, accuracy: 2 }));
+    await act(() => jest.advanceTimersByTime(3000));
+    expect(heading()).toBe(120);
+    // an uncalibrated reading is passed over
+    await act(async () => open().at(-1)!.emit({ trueHeading: 300, magHeading: 300, accuracy: 0 }));
+    await act(() => jest.advanceTimersByTime(3000));
+    expect(heading()).toBe(120);
+  });
+
+  test("smoothed: a jittering phone doesn't turn the card on every reading; a real turn is followed to where the phone points", async () => {
+    await renderHud({ rowTs: T });
+    await phone(90);
+    const before = mockHalo.length;
+    // ±2° of noise around 90, faster than the ticks
+    for (const d of [92, 88, 91, 89, 92, 88]) {
+      await phone(d);
+      await act(() => jest.advanceTimersByTime(100));
+    }
+    const shown = mockHalo.slice(before).map((x) => x.heading as number);
+    expect(shown.every((x) => Math.abs(x - 90) < 3)).toBe(true);
+    expect(new Set(shown).size).toBeLessThanOrEqual(2);
+    await phone(180);
+    await act(() => jest.advanceTimersByTime(250));
+    expect(heading()).toBeGreaterThan(95);
+    expect(heading()).toBeLessThan(180);
+    await act(() => jest.advanceTimersByTime(5000));
+    expect(heading()).toBe(180);
+  });
+
+  test('the track bearing takes over at once, the phone is let go, and the drive never goes back to it', async () => {
+    const h = await renderHud({ rowTs: T });
+    await phone(10);
+    expect(heading()).toBe(10);
+    mockBearing = track(200);
+    await h.update({ rowTs: T + 1000 });
+    expect(heading()).toBe(200);
+    expect(subs().every((x) => x.removed)).toBe(true);
+    // the engine's bearing moves on
+    mockBearing = track(215.5);
+    await h.update({ rowTs: T + 2000 });
+    expect(heading()).toBe(215.5);
+    // even were the bearing lost, the drive keeps its last one and never asks the phone again
+    mockBearing = { deg: null, source: null };
+    await h.update({ rowTs: T + 3000 });
+    expect(heading()).toBe(215.5);
+    await act(() => jest.advanceTimersByTime(5000));
+    expect(subs()).toHaveLength(1);
+    expect(heading()).toBe(215.5);
+    // the drive's end (its id cleared) keeps it too, while the screen saves
+    await h.update({ rowTs: T + 4000, status: 'finalizing', clientTripId: null });
+    expect(heading()).toBe(215.5);
+  });
+
+  test("a new drive on the same screen starts from the phone's heading again", async () => {
+    const h = await renderHud({ rowTs: T });
+    mockBearing = track(45);
+    await h.update({ rowTs: T + 1000 });
+    expect(heading()).toBe(45);
+    mockBearing = { deg: null, source: null };
+    await h.update({ rowTs: T + 2000, clientTripId: 't2' });
+    await settle();
+    expect(heading()).toBeNull();
+    expect(open()).toHaveLength(1);
+    await phone(300);
+    expect(heading()).toBe(300);
+  });
+
+  test('a track bearing from the first render: the phone is never asked', async () => {
+    mockBearing = track(90);
+    await renderHud({ rowTs: T });
+    expect(heading()).toBe(90);
+    await act(() => jest.advanceTimersByTime(1000));
+    expect(subs()).toHaveLength(0);
+  });
+
+  test('landscape: the dimmed north-up card until a track bearing (the phone is not asked)', async () => {
+    const wide = landscapeWindow();
+    const h = await renderHud({ rowTs: T });
+    expect(screen.getByTestId('hud-compass', HIDDEN)).toBeTruthy();
+    expect(subs()).toHaveLength(0);
+    expect(heading()).toBeNull();
+    mockBearing = track(135);
+    await h.update({ rowTs: T + 1000 });
+    expect(heading()).toBe(135);
+    wide.mockRestore();
+  });
+
+  test('turning to landscape lets the phone go (north-up, dimmed); back in portrait it is asked again', async () => {
+    // the window hook stays the same one all along (a swapped hook would change the hook order)
+    let win = { width: 393, height: 852, scale: 3, fontScale: 1 };
+    const spy = jest.spyOn(dims(), 'default').mockImplementation(() => win);
+    const h = await renderHud({ rowTs: T });
+    await phone(60);
+    expect(heading()).toBe(60);
+    win = { width: 852, height: 393, scale: 3, fontScale: 1 };
+    await h.update({ rowTs: T + 1000 });
+    expect(subs().every((x) => x.removed)).toBe(true);
+    expect(heading()).toBeNull();
+    win = { width: 393, height: 852, scale: 3, fontScale: 1 };
+    await h.update({ rowTs: T + 2000 });
+    await settle();
+    expect(open()).toHaveLength(1);
+    spy.mockRestore();
+  });
+
+  test('only while the screen is focused with RoadWise in front', async () => {
+    const app = appStateListeners();
+    const h = await renderHud({ rowTs: T });
+    expect(open()).toHaveLength(1);
+    await phone(30);
+    await app.set('background');
+    expect(open()).toHaveLength(0);
+    expect(heading()).toBeNull();
+    await app.set('active');
+    await settle();
+    expect(open()).toHaveLength(1);
+    // blurred (another route over it): let go; focused again: asked again
+    mockFocused = false;
+    await h.update({ rowTs: T + 1000 });
+    expect(open()).toHaveLength(0);
+    mockFocused = true;
+    await h.update({ rowTs: T + 2000 });
+    await settle();
+    expect(open()).toHaveLength(1);
+    expect(subs()).toHaveLength(3);
+    app.restore();
+  });
+
+  test('not while idle; let go on unmount', async () => {
+    const h = await renderHud({ status: 'idle', rowTs: T });
+    expect(subs()).toHaveLength(0);
+    await h.update({ status: 'recording' });
+    await settle();
+    expect(open()).toHaveLength(1);
+    await screen.unmount();
+    expect(open()).toHaveLength(0);
+  });
+
+  test('a refused permission (or no compass) is silent: dimmed north-up', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked module
+    const Location = require('expo-location') as { watchHeadingAsync: jest.Mock };
+    Location.watchHeadingAsync.mockRejectedValueOnce(new Error('Location permission not granted'));
+    await renderHud({ rowTs: T });
+    await act(async () => {});
+    expect(Location.watchHeadingAsync).toHaveBeenCalledTimes(1);
+    expect(heading()).toBeNull();
+  });
+
+  test('a heading stream that fails mid-drive goes back to dimmed north-up', async () => {
+    await renderHud({ rowTs: T });
+    await phone(250);
+    expect(heading()).toBe(250);
+    await act(async () => open().at(-1)!.fail());
+    expect(heading()).toBeNull();
+  });
+
+  test('Android keeps the dimmed north-up card until a track bearing (its compass is never asked)', async () => {
+    const os = jest.replaceProperty(Platform, 'OS', 'android');
+    const h = await renderHud({ rowTs: T });
+    expect(subs()).toHaveLength(0);
+    expect(heading()).toBeNull();
+    mockBearing = track(10);
+    await h.update({ rowTs: T + 1000 });
+    expect(heading()).toBe(10);
+    os.restore();
   });
 
   test('none in a compact window (no ring)', async () => {
@@ -1056,6 +1305,20 @@ describe('DashPal (plan §7.10)', () => {
     expect(screen.getByTestId('hud-dashpal-dot-bad')).toBeTruthy();
   });
 
+  test('a compact window with "Not driving?" offered: the DashPal banner yields to the link; the halo still bursts', async () => {
+    compactWindow();
+    const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
+    setActiveDashcam(rt);
+    await renderHud({ rowTs: T, notDrivingAvailable: true });
+    await act(async () => rt.set({ link: { visual: visual({ tier: 3, sound: 3 }), held: held(3, 3) } }));
+    expect(screen.queryByTestId('hud-dashpal-alert')).toBeNull();
+    expect(within(screen.getByTestId('hud-line')).getByTestId('hud-not-driving')).toBeTruthy();
+    expect(halo()).toMatchObject({ mode: 'burst', burst: { key: 'dashpal:1:0' } });
+    // gone before the window hook is given back (the afterEach re-renders with the dashcam cleared)
+    await screen.unmount();
+    jest.restoreAllMocks();
+  });
+
   test('a DashPal alert: its banner for 1.5 s per start or level change, over the event chip; the chip steps aside; a critical bursts red', async () => {
     const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
     setActiveDashcam(rt);
@@ -1308,11 +1571,176 @@ describe('"Not driving?" (modes plan §3.6)', () => {
     jest.restoreAllMocks();
   });
 
+  test('a compact window: an event banner yields to the link while it is offered (a run of alerts can never hide it); a tap still discards', async () => {
+    compactWindow();
+    const h = await renderHud({ rowTs: T, notDrivingAvailable: true });
+    const line = () => screen.getByTestId('hud-line');
+    // alert after alert, each before the last one's 1.5 s is out: the link stays, the halo still bursts
+    for (let i = 1; i <= 5; i += 1) {
+      await h.update({ rowTs: T + i * 1000, lastAlert: { type: i % 2 === 0 ? 'hard_brake' : 'hard_accel', tier: 'severe', at: T + i * 1000 } });
+      expect(within(line()).getByTestId('hud-not-driving')).toBeTruthy();
+      expect(screen.queryByTestId('hud-alert')).toBeNull();
+      expect(halo().mode).toBe('burst');
+      await act(() => jest.advanceTimersByTime(1000));
+    }
+    // a tap still discards
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('hud-not-driving'));
+    });
+    expect(mockControls.cancelDrive).toHaveBeenCalledTimes(1);
+    jest.restoreAllMocks();
+  });
+
+  test('a compact window: once the link is spent an alert banner takes the band again', async () => {
+    compactWindow();
+    const h = await renderHud({ rowTs: T, notDrivingAvailable: true });
+    await h.update({ notDrivingAvailable: false, rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
+    expect(screen.getByTestId('hud-alert')).toBeTruthy();
+    expect(screen.queryByTestId('hud-not-driving')).toBeNull();
+    jest.restoreAllMocks();
+  });
+
+  test('a full-size window: the link keeps its own row while an event banner takes the band', async () => {
+    const h = await renderHud({ rowTs: T, notDrivingAvailable: true });
+    await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
+    expect(screen.getByTestId('hud-alert')).toBeTruthy();
+    expect(screen.getByTestId('hud-not-driving')).toBeTruthy();
+    expect(screen.queryByTestId('hud-line')).toBeNull();
+  });
+
+  test('a tap whose discard throws: the notice is taken back and the screen stays', async () => {
+    mockControls.cancelDrive.mockRejectedValueOnce(new Error('queue'));
+    await renderHud({ notDrivingAvailable: true });
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('hud-not-driving'));
+    });
+    expect(readHomeNotice()).toBeNull();
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    // and the link is there for another try
+    expect(screen.getByTestId('hud-not-driving')).toBeTruthy();
+  });
+
+  test('the diagnostics simulation never tells the host it is the driving screen', async () => {
+    mockLive = live({ notDrivingAvailable: true });
+    await render(<HudScreen overlay />);
+    expect(mockControls.setHudVisible).not.toHaveBeenCalled();
+  });
+
   test('the screen tells the host it is showing (the budget counts), and that it is not once it goes', async () => {
     const r = await render(<HudScreen />);
     expect(mockControls.setHudVisible).toHaveBeenLastCalledWith(true);
     await r.unmount();
     expect(mockControls.setHudVisible).toHaveBeenLastCalledWith(false);
+  });
+});
+
+describe('presence (hudPresence: the recap notifier and the lockout read it)', () => {
+  test('focused with RoadWise in front: the driving screen is focused, and entered for this drive', async () => {
+    expect(isDriveScreenFocused()).toBe(false);
+    await renderHud({ clientTripId: 't1' });
+    expect(isDriveScreenFocused()).toBe(true);
+    expect(driveScreenEnteredFor('t1')).toBe(true);
+    expect(driveScreenEnteredFor('t2')).toBe(false);
+  });
+
+  test('the background and back, a blur and back, then unmount', async () => {
+    const app = appStateListeners();
+    try {
+      const h = await renderHud({ clientTripId: 't1' });
+      expect(isDriveScreenFocused()).toBe(true);
+      await app.set('background');
+      expect(isDriveScreenFocused()).toBe(false);
+      await app.set('inactive');
+      expect(isDriveScreenFocused()).toBe(false);
+      await app.set('active');
+      expect(isDriveScreenFocused()).toBe(true);
+      mockFocused = false;
+      await h.update({ rowTs: T + 1000 });
+      expect(isDriveScreenFocused()).toBe(false);
+      mockFocused = true;
+      await h.update({ rowTs: T + 2000 });
+      expect(isDriveScreenFocused()).toBe(true);
+      await screen.unmount();
+      expect(isDriveScreenFocused()).toBe(false);
+      // it was entered during this drive all the same
+      expect(driveScreenEnteredFor('t1')).toBe(true);
+    } finally {
+      app.restore();
+    }
+  });
+
+  test('opened in the background (never in front): not focused, not entered', async () => {
+    const app = appStateListeners();
+    const was = AppState.currentState;
+    const target = AppState as unknown as { currentState: unknown };
+    target.currentState = 'background';
+    try {
+      await renderHud({ clientTripId: 't1' });
+      expect(isDriveScreenFocused()).toBe(false);
+      expect(driveScreenEnteredFor('t1')).toBe(false);
+      await app.set('active');
+      expect(isDriveScreenFocused()).toBe(true);
+      expect(driveScreenEnteredFor('t1')).toBe(true);
+    } finally {
+      target.currentState = was;
+      app.restore();
+    }
+  });
+
+  test("a drive id that arrives after the screen opened is entered; the drive's end (its id cleared) keeps the screen focused until it goes", async () => {
+    const h = await renderHud({ clientTripId: null });
+    expect(isDriveScreenFocused()).toBe(true);
+    await h.update({ clientTripId: 't7' });
+    expect(driveScreenEnteredFor('t7')).toBe(true);
+    await h.update({ status: 'finalizing', clientTripId: null });
+    expect(isDriveScreenFocused()).toBe(true);
+  });
+
+  test('a focus listener hears each change once (no flapping on a re-render or a new row)', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the module the screen writes
+    const { subscribeDriveScreen } = require('../hudPresence') as typeof import('../hudPresence');
+    const heard: boolean[] = [];
+    const off = subscribeDriveScreen((f) => heard.push(f));
+    const h = await renderHud({ clientTripId: 't1' });
+    for (let i = 1; i <= 3; i += 1) await h.update({ rowTs: T + i * 1000, speedMph: 30 + i });
+    await screen.unmount();
+    off();
+    expect(heard).toEqual([true, false]);
+  });
+
+  test('two driving screens overlapping for a moment (one opening as the other goes): the one that goes never clears the other', async () => {
+    mockLive = live({ clientTripId: 't1' });
+    const heard: boolean[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the module the screen writes
+    const off = (require('../hudPresence') as typeof import('../hudPresence')).subscribeDriveScreen((f) => heard.push(f));
+    const r = await render(
+      <View>
+        <HudScreen key="a" />
+        <HudScreen key="b" />
+      </View>
+    );
+    await act(async () => {});
+    expect(isDriveScreenFocused()).toBe(true);
+    await r.rerender(
+      <View>
+        <HudScreen key="b" />
+      </View>
+    );
+    expect(heard).toEqual([true]);
+    expect(isDriveScreenFocused()).toBe(true);
+    await r.unmount();
+    expect(isDriveScreenFocused()).toBe(false);
+    off();
+  });
+
+  test('the diagnostics simulation is never the driving screen', async () => {
+    mockLive = live({ clientTripId: 't1' });
+    const r = await render(<HudScreen overlay />);
+    await act(async () => {});
+    expect(isDriveScreenFocused()).toBe(false);
+    expect(driveScreenEnteredFor('t1')).toBe(false);
+    await r.unmount();
+    expect(isDriveScreenFocused()).toBe(false);
   });
 });
 
