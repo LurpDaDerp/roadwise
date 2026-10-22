@@ -26,6 +26,10 @@
 //   last measured fix more than `SPEED_HOLD_MS` old shows 0 when the car is still or already showed
 //   0 (a parked phone often stops reporting a speed), and otherwise keeps holding. Before the first
 //   fix it is 0. The screen never shows "—" for the speed.
+// S4, the clock stepped back (a manual or network time correction): a fix more than
+//   `CLOCK_STEP_BACK_MS` older than the filter's time, or than the last event's, starts the filter
+//   afresh and becomes the latest event, instead of being ignored as old until the clock catches up
+//   (which froze the number). A fix up to that much older is still ignored as out of order.
 import type { FeatureRow } from './types';
 
 import { MPS_PER_MPH } from '@/core/detectors/common';
@@ -68,6 +72,8 @@ export const EVENT_STALE_MS = 2_500;
 export const ROW_FIX_AGE_MS = 500;
 /** L1: the row's GNSS gate (`modules/drive-sense` `GNSS_MAX_HACC_M`), for a `speed` event too. */
 export const GNSS_MAX_HACC_M = 50;
+/** S4: a fix this much older than the last one (filter or event time) means the clock stepped back. */
+export const CLOCK_STEP_BACK_MS = 2_000;
 
 /** One fix's speed, as the `speed` event or a row brings it. */
 export interface SpeedFix {
@@ -185,10 +191,15 @@ function shown(prev: DisplaySpeed, kf: Kalman, acc: number, eventAt: number | nu
 /** Whether a fix can measure the speed (L1). */
 const measures = (f: SpeedFix): boolean => f.mps >= 0 && f.hAcc >= 0 && f.hAcc <= GNSS_MAX_HACC_M && Number.isFinite(f.at);
 
+/** S4: `at` lies more than `CLOCK_STEP_BACK_MS` before `than`: the clock stepped back between them. */
+const steppedBack = (at: number, than: number | null): boolean => than !== null && at < than - CLOCK_STEP_BACK_MS;
+
 function measure(prev: DisplaySpeed, f: SpeedFix, eventAt: number | null): DisplaySpeed {
-  if (prev.kf !== null && f.at <= prev.kf.t) return eventAt === prev.eventAt ? prev : { ...prev, eventAt };
+  // S4: a filter from before a backward clock step is dropped, so this fix starts it afresh.
+  const kf0 = prev.kf !== null && steppedBack(f.at, prev.kf.t) ? null : prev.kf;
+  if (kf0 !== null && f.at <= kf0.t) return eventAt === prev.eventAt ? prev : { ...prev, eventAt };
   const sigma = sigmaOf(f.acc);
-  const kf = kalmanStep(prev.kf, f.at, f.mps, sigma * sigma);
+  const kf = kalmanStep(kf0, f.at, f.mps, sigma * sigma);
   return shown(prev, kf, f.acc, eventAt, prev.imu);
 }
 
@@ -198,7 +209,8 @@ function measure(prev: DisplaySpeed, f: SpeedFix, eventAt: number | null): Displ
  */
 export function displayFix(prev: DisplaySpeed | null, f: SpeedFix): DisplaySpeed {
   const base = prev ?? EMPTY(f.at);
-  const eventAt = base.eventAt === null ? f.at : Math.max(base.eventAt, f.at);
+  // S4: after a backward clock step the newest event is this one, not the one from the old clock.
+  const eventAt = base.eventAt === null || steppedBack(f.at, base.eventAt) ? f.at : Math.max(base.eventAt, f.at);
   if (!measures(f)) return eventAt === base.eventAt ? base : { ...base, eventAt };
   return measure(base, f, eventAt);
 }

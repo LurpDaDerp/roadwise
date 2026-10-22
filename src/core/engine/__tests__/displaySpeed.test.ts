@@ -3,6 +3,7 @@ import {
   ACCEL_DEADBAND_MPS2,
   CARRY_MAX_MS,
   carriedSpeed,
+  CLOCK_STEP_BACK_MS,
   displayFix,
   displayRow,
   EVENT_STALE_MS,
@@ -140,6 +141,44 @@ describe('L2: a Kalman filter over the Doppler speeds', () => {
     expect(gap.kf).toMatchObject({ v: 25, a: 0 });
     const stop = displayFix(ramp, fix(T + 5000, 0.2));
     expect(stop.kf).toMatchObject({ v: 0.2, a: 0 });
+  });
+});
+
+describe('S4: a backward clock step', () => {
+  test('a fix more than 2 s before the filter restarts it at once (the number follows the new clock, not frozen until the old one is reached)', () => {
+    expect(CLOCK_STEP_BACK_MS).toBe(2_000);
+    const ramp = last(fixes([10, 12, 14, 16, 18]));
+    // The clock steps back a minute: the next fixes are stamped about 60 s earlier.
+    const back = T + 4000 - 60_000;
+    const first = displayFix(ramp, fix(back, 20));
+    expect(first).toMatchObject({ mps: 20, accel: 0, at: back, eventAt: back });
+    expect(first.kf).toMatchObject({ t: back, v: 20, a: 0 });
+    const second = displayFix(first, fix(back + 1000, 21));
+    expect(second.at).toBe(back + 1000);
+    expect(second.mps).toBeGreaterThan(20);
+  });
+
+  test('a fix up to 2 s older is still out of order and ignored', () => {
+    const d = last(fixes([20, 20, 20]));
+    expect(displayFix(d, fix(T + 2000 - CLOCK_STEP_BACK_MS, 30)).mps).toBeCloseTo(d.mps, 9);
+    expect(displayFix(d, fix(T + 2000 - CLOCK_STEP_BACK_MS, 30)).eventAt).toBe(T + 2000);
+  });
+
+  test('a fix that measures nothing after the step still moves the event time back, so rows can stand in on the new clock', () => {
+    const d = last(fixes([20, 20]));
+    const back = T + 1000 - 60_000;
+    const next = displayFix(d, fix(back, 30, { hAcc: 80 }));
+    expect(next.eventAt).toBe(back);
+    expect(next.mps).toBe(d.mps);
+    // Its next measuring fix restarts the filter on the new clock.
+    const after = displayFix(next, fix(back + 1000, 30));
+    expect(after).toMatchObject({ mps: 30, at: back + 1000 });
+  });
+
+  test('a row standing in after the step (no events) restarts the filter too', () => {
+    const first = rows([{ speed: 20 }, { speed: 20 }]);
+    const stepped = rows([{ speed: 25 }], last(first), T - 60_000);
+    expect(stepped[0]).toMatchObject({ mps: 25, at: T - 60_000 - ROW_FIX_AGE_MS });
   });
 });
 
