@@ -12,8 +12,8 @@
 //      hold is over. This drive's own samples stay until its upload is sent or its hold lapses. It
 //      commits or it does not.
 // A payload the contract refuses is stored as `failed` (never uploaded, never left `recording`).
-// A drive that never moved, or never reached driving speed, is not finalized at all: `closeDrive`
-// drops it (nothing stored or queued).
+// A drive that never moved, or never reached driving speed, and a Start-card drive too short to
+// score, is not finalized at all: `closeDrive` drops it (nothing stored or queued).
 //
 // DashPal: before any of that, the dashcam's facts for the drive are read once. Its candidates
 // become severe `eyes_off` / `drowsy` events under the scoring rules (once the drive's warm-up is
@@ -28,6 +28,7 @@ import {
   NO_EVENTS_FIRST_S,
   isDashcamType,
   phonePickupTier,
+  tooShort,
   watchedMiles,
   type DashcamEventType,
   type DriveClass,
@@ -298,15 +299,35 @@ async function readZones(db: Db): Promise<PrivacyZone[]> {
  * Why a closed drive is not kept, whatever ended it: `no_gps` when it never had a valid fix,
  * `no_movement` when the car never moved (`session.ts` "Movement"), `not_driven` when it moved but
  * never reached driving speed (`session.droveAt`: two consecutive trusted readings of 10 mph or
- * more), so a walk or a jog with a drive open earns nothing. `cancelled` is never a finalize's: it
- * is the host's "Not driving?" (`src/drive/host.ts`). Null: the drive is kept.
+ * more), so a walk or a jog with a drive open earns nothing; `too_short` for a Start-card drive
+ * (`manualTooShort`). `cancelled` is never a finalize's: it is the host's "Not driving?"
+ * (`src/drive/host.ts`). Null: the drive is kept.
  */
-export type DropReason = 'no_movement' | 'no_gps' | 'not_driven' | 'cancelled';
+export type DropReason = 'no_movement' | 'no_gps' | 'not_driven' | 'too_short' | 'cancelled';
 
-export function dropReason(session: Pick<TripSession, 'moved' | 'validGnssRows' | 'droveAt'>): Exclude<DropReason, 'cancelled'> | null {
+export function dropReason(session: Pick<TripSession, 'moved' | 'validGnssRows' | 'droveAt'>): Exclude<DropReason, 'cancelled' | 'too_short'> | null {
   if (session.validGnssRows === 0) return 'no_gps';
   if (session.moved === null) return 'no_movement';
   return session.droveAt === null ? 'not_driven' : null;
+}
+
+/** When a closed drive ended: its end, else a second after its last row (or its start). */
+const endedAtOf = (session: Pick<TripSession, 'startedAt' | 'endedAt' | 'lastRowTs'>): number =>
+  Math.round(session.endedAt ?? (session.lastRowTs !== null ? session.lastRowTs + 1000 : Math.round(session.startedAt) + 1000));
+
+/** The drive's miles as the payload states them. */
+const milesOf = (session: Pick<TripSession, 'distanceM'>): number => round3(clamp(metersToMiles(finite(session.distanceM)), 0, 1000));
+
+/**
+ * A drive started from the Start card (and never re-opened) that is too short to score
+ * (`tooShort`: under `MIN_SCORED_MILES` AND under `MIN_SCORED_S`, on the miles and time the payload
+ * would state) is not kept at all; an automatic one is kept unscored. A re-opened drive never is:
+ * its first leg was kept.
+ */
+export function manualTooShort(session: Pick<TripSession, 'origin' | 'continuations' | 'distanceM' | 'startedAt' | 'endedAt' | 'lastRowTs'>): boolean {
+  if (session.origin !== 'manual' || session.continuations > 0) return false;
+  const startedAt = Math.round(session.startedAt);
+  return tooShort(milesOf(session), round3(durationSOf({ startedAt, endedAt: endedAtOf(session) })));
 }
 
 /** A drive that was not kept: nothing stored, uploaded or scored. */
@@ -334,13 +355,13 @@ export async function dropTrip(db: Db, clientTripId: string): Promise<boolean> {
 }
 
 /**
- * The end of every drive: one that never moved or never reached driving speed is dropped
- * (`dropTrip`), any other is finalized (`finalizeTrip`). A retry after a drop finds nothing and
- * drops again; a drive somehow already finalized under the same id is handed back as stored, never
- * deleted.
+ * The end of every drive: one that never moved or never reached driving speed, and a Start-card
+ * drive too short to score, is dropped (`dropTrip`), any other is finalized (`finalizeTrip`). A
+ * retry after a drop finds nothing and drops again; a drive somehow already finalized under the
+ * same id is handed back as stored, never deleted.
  */
 export async function closeDrive(session: Readonly<TripSession>, deps: FinalizeDeps): Promise<FinalizeResult | DroppedResult> {
-  const reason = dropReason(session);
+  const reason = dropReason(session) ?? (manualTooShort(session) ? 'too_short' : null);
   if (reason !== null && (await dropTrip(deps.db, session.clientTripId))) return { dropped: reason, clientTripId: session.clientTripId };
   return finalizeTrip(session, deps);
 }
@@ -356,7 +377,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const samples = createSamplesRepo(db);
   const id = session.clientTripId;
   const startedAt = Math.round(session.startedAt);
-  const endedAt = Math.round(session.endedAt ?? (session.lastRowTs !== null ? session.lastRowTs + 1000 : startedAt + 1000));
+  const endedAt = endedAtOf(session);
   const localDay = dayKey(new Date(startedAt), tz);
 
   // Already finalized (a retried call): hand back what is stored, never re-run.
@@ -420,7 +441,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   });
 
   // 2. The metrics and the payload.
-  const miles = round3(clamp(metersToMiles(finite(session.distanceM)), 0, 1000));
+  const miles = milesOf(session);
   const nightMiles = round3(clamp(metersToMiles(finite(session.nightDistanceM)), 0, miles));
   const durationS = round3(durationSOf({ startedAt, endedAt }));
   const maxSpeedMph = round3(clamp(mpsToMph(finite(session.maxSpeedMps)), 0, MAX_SPEED));

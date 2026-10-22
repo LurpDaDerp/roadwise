@@ -218,6 +218,9 @@ describe('Start drive', () => {
     ['orphan', 'not_driven', 'RoadWise closed during a drive that never reached driving speed, so it wasn’t saved.'],
     ['orphan', 'no_movement', 'RoadWise closed during a drive that never moved, so it wasn’t saved.'],
     ['orphan', 'no_gps', 'RoadWise closed during a drive with no GPS signal, so it wasn’t saved.'],
+    ['manual', 'too_short', 'The drive was too short, so it wasn’t saved.'],
+    ['stopped', 'too_short', 'The drive was too short, so it wasn’t saved.'],
+    ['walking', 'too_short', 'The drive was too short, so it wasn’t saved.'],
   ] as const)('a drive not kept (%s, %s) says why above Start, in at most 90 characters', async (cause, reason, line) => {
     expect(dropCopy(cause, reason)).toBe(line);
     expect(line.length).toBeLessThanOrEqual(90);

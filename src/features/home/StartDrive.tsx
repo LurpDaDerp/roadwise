@@ -22,6 +22,8 @@ const IDLE_MIN = Math.round(IDLE_END_S / 60);
 
 /** Why the last drive was not kept, by what ended it and why it was dropped (product spec v3 Home). */
 export function dropCopy(cause: EndCause, reason: DropReason): string {
+  // A Start-card drive under 0.5 mi and 2 min, however it ended.
+  if (reason === 'too_short') return 'The drive was too short, so it wasn’t saved.';
   switch (cause) {
     case 'walking':
       return 'You walked away before driving, so the drive wasn’t saved.';

@@ -7,6 +7,7 @@ import type { TripSession } from '@/core/engine/engine.types';
 import {
   closeDrive,
   dropReason,
+  manualTooShort,
   dropTrip,
   boundExposure,
   exposureOf,
@@ -453,6 +454,30 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
     const result = await closeDrive(closeAtLastMovement(s, 'stopped'), deps());
     expect(isDropped(result)).toBe(false);
     expect((await createTripsRepo(db).get(ID))!.status).toBe('pending');
+  });
+
+  test('a Start-card drive under 0.5 mi AND under 2 min is too_short and dropped; reaching either one keeps it; an automatic or a re-opened one is kept', async () => {
+    const drive = (n: number, origin: 'auto' | 'manual', continuations = 0) => {
+      const s = createSession({ clientTripId: ID, startedAt: T0, origin, continuations });
+      for (const r of rows(n)) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
+      return s;
+    };
+    // 30 s at 15 m/s: 0.28 mi in 30 s.
+    expect(manualTooShort(closeSession(drive(30, 'manual'), T0 + 30_000, 'manual'))).toBe(true);
+    await createTripsRepo(db).insert({ client_trip_id: ID, started_at: T0, tz: TZ, status: 'recording' }, T0);
+    expect(await closeDrive(closeSession(drive(30, 'manual'), T0 + 30_000, 'manual'), deps())).toEqual({ dropped: 'too_short', clientTripId: ID });
+    expect(await createTripsRepo(db).get(ID)).toBeNull();
+    expect((await db.execute('SELECT * FROM sync_queue')).rows).toEqual([]);
+    // The same 0.28 mi ended 2 min after the tap (the car waited first): long enough.
+    expect(manualTooShort(closeSession(drive(30, 'manual'), T0 + 120_000, 'manual'))).toBe(false);
+    // 0.5 mi in under a minute: far enough.
+    expect(manualTooShort(closeSession(drive(55, 'manual'), T0 + 55_000, 'manual'))).toBe(false);
+    // Automatic: kept, unscored ("Too short to score"); re-opened: its first leg was kept.
+    expect(manualTooShort(closeSession(drive(30, 'auto'), T0 + 30_000, 'manual'))).toBe(false);
+    expect(manualTooShort(closeSession(drive(30, 'manual', 1), T0 + 30_000, 'manual'))).toBe(false);
+    const auto = await closeDrive(closeSession(drive(30, 'auto'), T0 + 30_000, 'manual'), deps());
+    expect(isDropped(auto)).toBe(false);
+    expect(auto).toMatchObject({ drive: { scored: false } });
   });
 
   test('a second closeDrive after a drop neither throws nor inserts; dropTrip never deletes a finalized row', async () => {
