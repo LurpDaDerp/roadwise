@@ -2,11 +2,14 @@
 export const homeCopy = {
   greeting: (name: string) => `Hey, ${name}`,
   week: {
-    /** "4 drives · 38 mi", or the first-of-the-week line. */
-    drives: (n: number, dist: string) => (n === 0 ? 'No drives yet this week' : `${n} ${n === 1 ? 'drive' : 'drives'} · ${dist}`),
-    drivesSpoken: (n: number, dist: string) => (n === 0 ? 'No drives yet this week' : `${n} ${n === 1 ? 'drive' : 'drives'} this week, ${dist}`),
+    /** "4 drives", "1 drive", "0 drives". */
+    drives: (n: number) => `${n} ${n === 1 ? 'drive' : 'drives'}`,
+    drivesSpoken: (n: number) => `${n} ${n === 1 ? 'drive' : 'drives'} this week`,
+    /** The distance pill's words for screen readers, `dist` spoken: "38 miles since Monday". */
+    distanceSpoken: (dist: string) => `${dist} since Monday`,
     goals: (done: number, total: number) => `${done} of ${total} goals`,
     goalsSpoken: (done: number, total: number) => `${done} of ${total} weekly goals done`,
+    goalsHint: "Shows this week's goals",
   },
   rating: {
     label: 'Safety Rating',

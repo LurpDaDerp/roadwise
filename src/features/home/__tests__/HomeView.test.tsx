@@ -35,13 +35,15 @@ const props = (over: Partial<HomeViewProps> = {}): HomeViewProps => ({
 const NO_POINTS = /\bpoints?\b|\bpts\b|streak|freeze|\blevel\b|leaderboard/i;
 
 describe('the full Home', () => {
-  test('this week in two pills, the Safety Rating in its ring with the week and the window, and no points anywhere', async () => {
+  test('this week in three pills, the Safety Rating in its ring with the week and the window, and no points anywhere', async () => {
     const p = props({ recent: [] });
     await draw(<HomeView {...p} />);
     expect(screen.getByText('Hey, lurp')).toBeOnTheScreen();
     const pills = screen.getByTestId('home-week');
-    expect(within(pills).getByText('4 drives · 38 mi')).toBeOnTheScreen();
-    expect(within(pills).getByLabelText('4 drives this week, 38 miles')).toBeOnTheScreen();
+    expect(within(pills).getByText('4 drives')).toBeOnTheScreen();
+    expect(within(pills).getByLabelText('4 drives this week')).toBeOnTheScreen();
+    expect(within(pills).getByText('38 mi')).toBeOnTheScreen();
+    expect(within(pills).getByLabelText('38 miles since Monday')).toBeOnTheScreen();
     expect(within(pills).getByText('1 of 3 goals')).toBeOnTheScreen();
     expect(within(pills).getByLabelText('1 of 3 weekly goals done')).toBeOnTheScreen();
     const card = screen.getByTestId('home-header');
@@ -57,9 +59,11 @@ describe('the full Home', () => {
     expect(JSON.stringify(screen.toJSON())).not.toMatch(NO_POINTS);
   });
 
-  test('a first drive of the week, no goals yet and no trend: the pill says so, the goals pill and trend line hide', async () => {
+  test('a first drive of the week, no goals yet and no trend: the pills say zero, the goals pill and trend line hide', async () => {
     await draw(<HomeView {...props({ thisWeek: sums({ drives: 0, miles: 0 }), summary: summary({ challenges: [], progress: { rating_trend: null } }) })} />);
-    expect(screen.getByText('No drives yet this week')).toBeOnTheScreen();
+    expect(screen.getByText('0 drives')).toBeOnTheScreen();
+    expect(screen.getByText('0 mi')).toBeOnTheScreen();
+    expect(screen.getByLabelText('0 miles since Monday')).toBeOnTheScreen();
     expect(screen.queryByTestId('home-week-goals')).toBeNull();
     expect(screen.queryByTestId('rating-trend')).toBeNull();
     expect(screen.getByRole('button', { name: 'Safety Rating 92 out of 100.' })).toBeOnTheScreen();
@@ -262,7 +266,7 @@ describe('the action items', () => {
     };
     const order = [
       at('Hey, lurp'),
-      at('4 drives · 38 mi'),
+      at('4 drives'),
       at('Safety Rating'),
       at('Start drive'),
       at('Dense fog'),
@@ -283,7 +287,7 @@ describe('the action items', () => {
     expect(screen.getByTestId('in-progress')).toBeOnTheScreen();
     const tree = JSON.stringify(screen.toJSON());
     expect(tree.indexOf('Drive in progress')).toBeGreaterThan(tree.indexOf('Hey, lurp'));
-    expect(tree.indexOf('Drive in progress')).toBeLessThan(tree.indexOf('4 drives · 38 mi'));
+    expect(tree.indexOf('Drive in progress')).toBeLessThan(tree.indexOf('4 drives'));
   });
 
   test('the DashPal slot stays while a drive records (it hides its own cards; a setup sheet it opened stays)', async () => {
@@ -355,7 +359,9 @@ describe('units and rounding', () => {
     await draw(<HomeView {...props({ summary: summary({ profile: { units: 'km' }, progress: { ranked: false, safety_rating: null, miles_90d: 6 } }) })} />);
     expect(screen.getByLabelText('Speeding events, 3, Needs work, Up, worse vs your 30-day average')).toBeOnTheScreen();
     expect(screen.queryByText(/per 100/)).toBeNull();
-    expect(screen.getByText('4 drives · 62 km')).toBeOnTheScreen();
+    expect(screen.getByText('4 drives')).toBeOnTheScreen();
+    expect(screen.getByText('62 km')).toBeOnTheScreen();
+    expect(screen.getByLabelText('62 kilometers since Monday')).toBeOnTheScreen();
     expect(screen.getByText('9 of 16 km to your rating')).toBeOnTheScreen();
   });
 

@@ -1,5 +1,6 @@
 import { summary } from '@/features/drives/__fixtures__/drives';
 
+import { homeCopy } from '../copy';
 import { ratingTrend, toRating } from '../HomeHeader';
 import { goalsDone, weekDistance } from '../WeekPills';
 
@@ -35,6 +36,14 @@ test('weekDistance: whole from 10 up, one decimal under', () => {
   expect(weekDistance(4.24, 'km')).toBe('6.8 km');
   expect(weekDistance(9.99, 'mi')).toBe('10.0 mi');
   expect(weekDistance(38.4, 'mi', true)).toBe('38 miles');
+  expect(weekDistance(0, 'mi')).toBe('0 mi');
+  expect(weekDistance(0, 'km', true)).toBe('0 kilometers');
+});
+
+test('the drives pill is singular for one drive', () => {
+  expect(homeCopy.week.drives(1)).toBe('1 drive');
+  expect(homeCopy.week.drives(0)).toBe('0 drives');
+  expect(homeCopy.week.drivesSpoken(1)).toBe('1 drive this week');
 });
 
 test('goalsDone counts the completed goals, and nothing without goals', () => {
