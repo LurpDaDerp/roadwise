@@ -194,3 +194,33 @@ export function createLiveActivityStarter(deps: LiveActivityStartDeps = {}): Liv
     },
   };
 }
+
+export interface PushToStartDeps extends LiveActivityStartDeps {
+  /** This install's id (`getInstallId`), read per ask: the device row whose token the push goes to. */
+  deviceId: () => Promise<string>;
+  /** The retry-safe starter to ask through (default: one made here, for this function's life). */
+  starter?: LiveActivityStarter;
+}
+
+/**
+ * The drive host's `pushToStart` (one per app process): this install's id, then the retry-safe
+ * starter, so the host's retry never sends two requests at once nor a second push for a leg. An id
+ * that cannot be read is a `network` outcome (worth a retry). Never throws.
+ */
+export function createPushToStart(deps: PushToStartDeps): (req: Omit<LiveActivityStartRequest, 'deviceId'>) => Promise<LiveActivityStartOutcome> {
+  const starter = deps.starter ?? createLiveActivityStarter(deps);
+  return async (req) => {
+    let deviceId: string;
+    try {
+      deviceId = await deps.deviceId();
+    } catch (error) {
+      try {
+        deps.onError?.(error, 'live activity start');
+      } catch {
+        // nobody left to tell
+      }
+      return failed('network');
+    }
+    return starter.start({ ...req, deviceId });
+  };
+}

@@ -1,6 +1,7 @@
 /** @jest-environment node */
 import {
   createLiveActivityStarter,
+  createPushToStart,
   LIVE_ACTIVITY_START_FUNCTION,
   requestLiveActivityStart,
   requestLiveActivityStartOutcome,
@@ -191,4 +192,46 @@ test('the live-drive port: where the module has no token (Jest, Android, an olde
   const port = createLiveDriveTokenPort();
   await expect(port.getToken()).resolves.toBeNull();
   expect(() => port.addTokenListener(() => {}).remove()).not.toThrow();
+});
+
+describe('the drive host’s pushToStart', () => {
+  const { deviceId: _id, ...HOST_REQ } = REQ;
+
+  test('asks with this install’s id through one retry-safe starter: a retry while the first is out shares it, a sent leg is not asked again', async () => {
+    const invoke = jest.fn(async (_name: string, { body }: { body: unknown }) => {
+      expect(body).toMatchObject({ deviceId: 'install-9', clientTripId: REQ.clientTripId, leg: 1 });
+      return { data: { sent: true }, error: null };
+    });
+    const deviceId = jest.fn(async () => 'install-9');
+    const push = createPushToStart({ deviceId, invoke });
+    const [a, b] = await Promise.all([push(HOST_REQ), push(HOST_REQ)]);
+    expect(a).toEqual({ sent: true, reason: null, detail: null, retryable: false });
+    expect(b).toEqual(a);
+    expect((await push(HOST_REQ)).sent).toBe(true);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(deviceId).toHaveBeenCalledTimes(3);
+  });
+
+  test('a failure answers its reason (a retry then asks again); an id that cannot be read is a network outcome worth a retry, reported, never thrown', async () => {
+    const replies = [
+      { data: { sent: false, reason: 'unconfigured' }, error: null },
+      { data: { sent: true }, error: null },
+    ];
+    const invoke = jest.fn(async () => replies.shift()!);
+    const push = createPushToStart({ deviceId: async () => 'install-9', invoke });
+    expect(await push(HOST_REQ)).toEqual({ sent: false, reason: 'unconfigured', detail: null, retryable: false });
+    expect((await push(HOST_REQ)).sent).toBe(true);
+
+    const errors: string[] = [];
+    const failing = createPushToStart({
+      deviceId: async () => {
+        throw new Error('db closed');
+      },
+      invoke,
+      onError: (_e, ctx) => errors.push(ctx),
+    });
+    expect(await failing(HOST_REQ)).toEqual({ sent: false, reason: 'network', detail: null, retryable: true });
+    expect(errors).toEqual(['live activity start']);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
 });
