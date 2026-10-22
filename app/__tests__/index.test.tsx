@@ -18,9 +18,11 @@ const mockWorld: {
   session: unknown;
   profile: 'fail' | Record<string, unknown>;
   driveStatus: string;
+  /** How the open drive began (the engine snapshot's origin). */
+  driveOrigin: 'auto' | 'manual' | null;
   hostBusy: boolean;
   update: 'required' | 'ok' | 'unknown' | null;
-} = { session: null, profile: 'fail', driveStatus: 'idle', hostBusy: false, update: 'ok' };
+} = { session: null, profile: 'fail', driveStatus: 'idle', driveOrigin: null, hostBusy: false, update: 'ok' };
 const mockProfileCalls: string[] = [];
 
 jest.mock('expo-router', () => {
@@ -45,7 +47,7 @@ jest.mock('@/data/supabase/profile', () => ({
   }),
 }));
 jest.mock('@/drive/useDrive', () => ({
-  useDrive: (select: (s: { status: string }) => unknown) => select({ status: mockWorld.driveStatus }),
+  useDrive: (select: (s: { status: string; origin: string | null }) => unknown) => select({ status: mockWorld.driveStatus, origin: mockWorld.driveOrigin }),
   useDriveHost: () => ({ isBusy: () => mockWorld.hostBusy }),
 }));
 jest.mock('@/features/auth/version', () => ({ useUpdateStatus: () => mockWorld.update }));
@@ -62,6 +64,7 @@ beforeEach(async () => {
     session: { user: { id: 'u1' } },
     profile: ONBOARDED,
     driveStatus: 'idle',
+    driveOrigin: null,
     hostBusy: false,
     update: 'ok',
   });
@@ -93,6 +96,24 @@ describe('an open trip on a cold start (rev1: I2, N-m3)', () => {
     Object.assign(mockWorld, { driveStatus: 'recording', hostBusy: true, update: null });
     await launch();
     expect(landed()).toBe('redirect:/drive');
+  });
+
+  test('a manual drive (the Start drive swipe) → the driving screen', async () => {
+    Object.assign(mockWorld, { driveStatus: 'recording', driveOrigin: 'manual', hostBusy: true });
+    await launch();
+    expect(landed()).toBe('redirect:/drive');
+  });
+
+  test('an automatic drive → Home, where its Drive in progress strip leads to the driving screen', async () => {
+    Object.assign(mockWorld, { driveStatus: 'recording', driveOrigin: 'auto', hostBusy: true });
+    await launch();
+    expect(landed()).toBe('redirect:/(tabs)/home');
+  });
+
+  test('an automatic drive takes the usual gates (signed out: sign-in)', async () => {
+    Object.assign(mockWorld, { driveStatus: 'recording', driveOrigin: 'auto', hostBusy: true, session: null });
+    await launch();
+    expect(landed()).toBe('redirect:/(auth)/sign-in');
   });
 
   test('finalizing is not a trip to go back to', async () => {

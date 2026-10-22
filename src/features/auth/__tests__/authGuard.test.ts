@@ -11,9 +11,12 @@ import {
 import type { EngineStatus } from '@/core/engine/engine.types';
 import type { UpdateStatus } from '@/features/auth/version';
 
-const IDLE: DriveFacts = { busy: false, tripOpen: false };
-const RECORDING: DriveFacts = { busy: true, tripOpen: true };
-const FINALIZING: DriveFacts = { busy: true, tripOpen: false };
+const IDLE: DriveFacts = { busy: false, tripOpen: false, origin: null };
+const RECORDING: DriveFacts = { busy: true, tripOpen: true, origin: 'manual' };
+/** An open trip whose origin the snapshot did not carry: treated as manual (the driving screen). */
+const RECORDING_UNKNOWN: DriveFacts = { busy: true, tripOpen: true, origin: null };
+const RECORDING_AUTO: DriveFacts = { busy: true, tripOpen: true, origin: 'auto' };
+const FINALIZING: DriveFacts = { busy: true, tripOpen: false, origin: null };
 
 describe('profileGate (v3: onboarded_at and a username)', () => {
   test.each<[string, unknown, ProfileGate]>([
@@ -31,12 +34,21 @@ describe('profileGate (v3: onboarded_at and a username)', () => {
 
 describe('driveFacts', () => {
   test.each<[string, boolean, DriveFacts]>([
-    ['idle', false, { busy: false, tripOpen: false }],
-    ['recording', true, { busy: true, tripOpen: true }],
-    ['finalizing', true, { busy: true, tripOpen: false }],
+    ['idle', false, { busy: false, tripOpen: false, origin: null }],
+    ['recording', true, { busy: true, tripOpen: true, origin: null }],
+    ['finalizing', true, { busy: true, tripOpen: false, origin: null }],
   ])('%s', (status, hostBusy, expected) =>
     expect(driveFacts({ status: status as EngineStatus }, hostBusy)).toEqual(expected)
   );
+
+  test('the origin is carried only while a trip is open', () => {
+    expect(driveFacts({ status: 'recording', origin: 'auto' }, true).origin).toBe('auto');
+    expect(driveFacts({ status: 'recording', origin: 'manual' }, true).origin).toBe('manual');
+    expect(driveFacts({ status: 'recording', origin: null }, true).origin).toBeNull();
+    // finalizing is over, whatever the snapshot still says
+    expect(driveFacts({ status: 'finalizing', origin: 'manual' }, true)).toEqual({ busy: true, tripOpen: false, origin: null });
+    expect(driveFacts({ status: 'idle', origin: 'auto' }, false).origin).toBeNull();
+  });
 
   test('the host saying busy is enough, whatever the snapshot says', () =>
     expect(driveFacts({ status: 'idle' }, true).busy).toBe(true));
@@ -44,11 +56,21 @@ describe('driveFacts', () => {
 
 describe('resolveStart', () => {
   test.each<[SessionStatus, ProfileGate, UpdateStatus | null, DriveFacts, string | null]>([
-    // An open trip wins over everything: back to the driving screen.
+    // An open manual trip wins over everything: back to the driving screen.
     ['signedIn', 'ready', 'ok', RECORDING, '/drive'],
     ['signedIn', 'onboarding', 'required', RECORDING, '/drive'],
     ['loading', 'unknown', null, RECORDING, '/drive'],
     ['signedOut', 'unknown', 'required', RECORDING, '/drive'],
+    // So does an open trip of no known origin (never less than before).
+    ['signedIn', 'ready', 'ok', RECORDING_UNKNOWN, '/drive'],
+    ['loading', 'unknown', null, RECORDING_UNKNOWN, '/drive'],
+    // An automatic drive opens on Home (its strip leads to the driving screen), by the usual rules.
+    ['signedIn', 'ready', 'ok', RECORDING_AUTO, '/(tabs)/home'],
+    ['signedIn', 'ready', 'unknown', RECORDING_AUTO, '/(tabs)/home'],
+    ['signedIn', 'ready', null, RECORDING_AUTO, null],
+    ['loading', 'unknown', 'ok', RECORDING_AUTO, null],
+    ['signedIn', 'unknown', 'ok', RECORDING_AUTO, null],
+    ['signedIn', 'ready', 'required', RECORDING_AUTO, '/update-required'],
     // Finalizing is already over: never the driving screen.
     ['signedIn', 'ready', 'ok', FINALIZING, '/(tabs)/home'],
     // The config has not been read: hold the frame.

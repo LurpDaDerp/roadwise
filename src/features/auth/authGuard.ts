@@ -1,4 +1,4 @@
-import type { EngineStatus } from '@/core/engine/engine.types';
+import type { DriveOrigin, EngineStatus } from '@/core/engine/engine.types';
 import type { SettingsRepo } from '@/data/db/settings';
 import { isBusyStatus, tripRecords } from '@/drive/policy';
 import { ONBOARDING_PENDING_HREF_KEY } from '@/features/onboarding/state';
@@ -21,18 +21,23 @@ export type ProfileGate = 'unknown' | 'onboarding' | 'ready';
  * The drive, as the gates need it.
  * - `busy`: the host is busy (recording, ending or finalizing). No gate moves anyone then (rev1:
  *   I10): a setup or update screen must never replace a drive.
- * - `tripOpen`: a confirmed trip is open (recording or ending). Only then does a relaunch go back
- *   to the driving screen.
+ * - `tripOpen`: a confirmed trip is open (recording or ending).
+ * - `origin`: how that trip began; null with none open, or when it is not known. A relaunch goes
+ *   back to the driving screen only into an open trip not known to be automatic: an automatic
+ *   drive opens on Home, where the Drive in progress strip leads to its driving screen.
  */
 export interface DriveFacts {
   busy: boolean;
   tripOpen: boolean;
+  origin: DriveOrigin | null;
 }
 
-export function driveFacts(snapshot: { status: EngineStatus }, hostBusy: boolean): DriveFacts {
+export function driveFacts(snapshot: { status: EngineStatus; origin?: DriveOrigin | null }, hostBusy: boolean): DriveFacts {
+  const tripOpen = tripRecords(snapshot.status);
   return {
     busy: hostBusy || isBusyStatus(snapshot.status),
-    tripOpen: tripRecords(snapshot.status),
+    tripOpen,
+    origin: tripOpen ? (snapshot.origin ?? null) : null,
   };
 }
 
@@ -75,9 +80,11 @@ export function resolveStart(
   update: UpdateStatus | null,
   drive: DriveFacts
 ): StartRoute | null {
-  // A relaunch into an open trip goes straight back to it, before any other rule. Nothing else may
-  // stand between a driver and the drive under way.
-  if (drive.tripOpen) return DRIVE;
+  // A relaunch into an open manual trip goes straight back to it, before any other rule. Nothing
+  // else may stand between a driver and the drive under way. An automatic drive takes the rules
+  // below (Home, with its Drive in progress strip): its driving screen opens only when asked for,
+  // and the Live Activity's link reaches `/drive` without passing here.
+  if (drive.tripOpen && drive.origin !== 'auto') return DRIVE;
   if (update === null) return null;
   if (update === 'required') return UPDATE_REQUIRED;
   // While the stored session is still being read nobody may be sent anywhere, or a warm start
