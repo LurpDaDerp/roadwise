@@ -94,6 +94,8 @@ export function useDeviceHeading(enabled: boolean): number | null {
   useEffect(() => {
     if (!enabled) return;
     let live = true;
+    // The stream failed: nothing more is shown until the next subscription.
+    let failed = false;
     let sub: { remove(): void } | null = null;
     let f: HeadingFilter = NO_HEADING;
     const show = (next: HeadingFilter) => {
@@ -115,13 +117,14 @@ export function useDeviceHeading(enabled: boolean): number | null {
       }
     };
     const onReading = (h: HeadingReading) => {
-      if (!live) return;
+      if (!live || failed) return;
       const deg = headingOf(h);
       if (deg !== null) show(readHeading(f, deg));
     };
     const onError = () => {
       // The stream ended (no compass, interference): nothing to show until the next subscription.
-      if (!live) return;
+      if (!live || failed) return;
+      failed = true;
       stop();
       f = NO_HEADING;
       setHeading(null);
@@ -130,7 +133,7 @@ export function useDeviceHeading(enabled: boolean): number | null {
       .then(() => Location.watchHeadingAsync(onReading, onError))
       .then(
         (s) => {
-          if (live) sub = s;
+          if (live && !failed) sub = s;
           else s.remove();
         },
         () => {

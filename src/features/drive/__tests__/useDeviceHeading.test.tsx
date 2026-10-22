@@ -298,6 +298,18 @@ describe('useDeviceHeading', () => {
     t.restore();
   });
 
+  test('a stream that fails before its subscription arrives: the subscription is let go as it lands, later readings ignored', async () => {
+    mockAnswer = 'hold';
+    await render(<Probe on />);
+    await act(async () => {});
+    const sub = mockSubs[0]!;
+    await act(async () => sub.onError?.('heading unavailable'));
+    await act(async () => mockRelease!());
+    expect(sub.removed).toBe(true);
+    await act(async () => sub.cb(good(40)));
+    expect(last()).toBeNull();
+  });
+
   test('a reading after removal is ignored', async () => {
     const r = await render(<Probe on />);
     await act(async () => {});
