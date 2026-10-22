@@ -170,8 +170,12 @@ export interface TripSession {
    * at or after the moment its walk began (`machine.ts`).
    */
   lastDroveAt: number | null;
-  /** The last known GPS speed (any accuracy) and its row `ts`; null before the first. */
-  lastSpeed: Readonly<{ mps: number; ts: number }> | null;
+  /**
+   * The last known GPS speed (any accuracy) and its row `ts`; null before the first. `carried`: that
+   * row read as a carried phone (`session.carried`, never on a row with no IMU), so a reading at walking pace may be the driver's
+   * own walk (`motion.carStillDriving`).
+   */
+  lastSpeed: Readonly<{ mps: number; ts: number; carried: boolean }> | null;
   motion: Readonly<MotionTrack>;
   /** Closed at its last movement (`closeAtLastMovement`): the tail after it is left out. */
   cut: boolean;

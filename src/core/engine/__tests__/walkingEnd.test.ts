@@ -1,4 +1,5 @@
-// The walking end (product spec "Ending on its own"; motion.ts W1/W2, the car at 3 mph or slower) and the shown speed (S2),
+// The walking end (product spec "Ending on its own"; motion.ts W1/W2: 5 s of walking reported with the car at 3 mph or
+// slower, or at a walker's own pace with the phone carried) and the shown speed (S2),
 // through the real engine. Every time is on the row clock: a row at `ts` ends at `ts + 1 s`.
 import type { MotionActivity } from '@drive-sense';
 
@@ -116,15 +117,15 @@ describe('W2: a drive that has not reached driving speed', () => {
     expect(status(h)).toBe('recording');
   });
 
-  test('a report under 20 s old at 10 min waits for its 20 s', async () => {
+  test('a report under 5 s old at 10 min waits for its 5 s', async () => {
     const h = await started();
     const still = path(T0, 0, { n: 640, mps: SLOW });
-    await feed(h, still.slice(0, 595));
-    await report(h, act('walking', T0 + 590_000));
-    // Arrived at T0 + 595 s (row clock): due at T0 + 615 s, past the 10 min.
-    await feed(h, still.slice(595, 614));
+    await feed(h, still.slice(0, 597));
+    await report(h, act('walking', T0 + 592_000));
+    // Arrived at T0 + 597 s (row clock): due at T0 + 602 s, past the 10 min.
+    await feed(h, still.slice(597, 601));
     expect(status(h)).toBe('recording');
-    await feed(h, still.slice(614, 615));
+    await feed(h, still.slice(601, 602));
     expect(h.finalized[0]).toMatchObject({ endCause: 'walking', droveAt: null });
   });
 
@@ -144,32 +145,79 @@ describe('W1: after driving speed', () => {
     return [...head, ...path(T0 + 70_000, metresAfter(head), { n, mps })];
   };
 
-  test('4. a walk-off at 2.8 mph with a fresh fix ends 20 s after the report arrives, cut at the last movement before the walk', async () => {
+  test('4. a walk-off at 2.8 mph with a fresh fix ends 5 s after the report arrives, cut at the last movement before the walk', async () => {
+    expect(WALK_CONFIRM_MS).toBe(5_000);
     const h = await started();
     const rows = walkOff(mph(2.8), 60);
     // The report of the walk that began at T0 + 70 s arrives 30 s later (after the row at T0 + 99 s).
     await feed(h, rows.slice(0, 100));
     await report(h, act('walking', T0 + 70_000));
-    await feed(h, rows.slice(100, 119));
+    await feed(h, rows.slice(100, 104));
     expect(status(h)).toBe('recording');
     const distanceAtMark = h.engine.session()!.marks.findLast((m) => m.rowTs <= T0 + 70_000)!.distanceM;
-    await feed(h, rows.slice(119, 120));
+    await feed(h, rows.slice(104, 105));
     expect(status(h)).toBe('idle');
     expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: DRIVE_END, cut: true, lastRowTs: DRIVE_END - 1000, droveAt: T0 + 1000 });
     expect(h.finalized[0]!.distanceM).toBe(distanceAtMark);
   });
 
-  test('4b. a walk at 3.4 mph with a fresh fix is over 3 mph: no walking end; the still end takes it 5 min after the last movement', async () => {
-    const h = await started();
-    // The phone walks off in a pocket (carried): walking-pace travel, never a crawl that holds the clock.
+  /** 60 s at 30 mph, 10 s stopped, then 400 rows at `mps` from T0 + 70 s, the phone carried (pocket, hand) or mounted. */
+  const walkOn = (mps: number, phone: 'carried' | 'mounted') => {
     const head = path(T0, 0, DRIVE, { n: 10, mps: 0 });
-    const rows = [...head, ...path(T0 + 70_000, metresAfter(head), { n: 400, mps: mph(3.4), over: () => ({ gravityStability: 0.4 }) })];
+    const over = phone === 'carried' ? () => ({ gravityStability: 0.4 }) : undefined;
+    return [...head, ...path(T0 + 70_000, metresAfter(head), { n: 400, mps, over })];
+  };
+
+  test('4b. a brisk walk at 3.4 mph with the phone carried is a walker, not the car: it ends 5 s after the report, cut at the last movement before the walk', async () => {
+    const h = await started();
+    const rows = walkOn(mph(3.4), 'carried');
+    await feed(h, rows.slice(0, 100));
+    await report(h, act('walking', T0 + 70_000));
+    await feed(h, rows.slice(100, 104));
+    expect(status(h)).toBe('recording');
+    await feed(h, rows.slice(104, 105));
+    expect(status(h)).toBe('idle');
+    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: DRIVE_END, cut: true });
+  });
+
+  test('4c. the same 3.4 mph from a mounted phone (a car creeping in a queue) holds the walking end while the reading is fresh; it ends once the car is stopped', async () => {
+    const h = await started();
+    const rows = walkOn(mph(3.4), 'mounted');
     await feed(h, rows.slice(0, 100));
     await report(h, act('walking', T0 + 70_000));
     await feed(h, rows.slice(100, 300));
     expect(status(h)).toBe('recording');
-    await feed(h, rows.slice(300));
-    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: DRIVE_END, cut: true });
+    // The car stops (a fresh 0 mph reading): the standing report ends the drive on that row.
+    const last = rows[299]!;
+    await feed(h, [row({ ts: T0 + 300_000, lat: last.lat, lng: last.lng, speed: 0 })]);
+    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: DRIVE_END, cut: true });
+  });
+
+  test('4d. a walker’s pace goes up to 5 mph: 4.8 mph carried ends by walking, 5.5 mph carried (running pace) does not', async () => {
+    const brisk = await started();
+    const rows = walkOn(mph(4.8), 'carried');
+    await feed(brisk, rows.slice(0, 100));
+    await report(brisk, act('walking', T0 + 70_000));
+    await feed(brisk, rows.slice(100, 105));
+    expect(brisk.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: DRIVE_END, cut: true });
+
+    const runner = await started();
+    const fast = walkOn(mph(5.5), 'carried');
+    await feed(runner, fast.slice(0, 100));
+    await report(runner, act('walking', T0 + 70_000));
+    await feed(runner, fast.slice(100, 300));
+    expect(status(runner)).toBe('recording');
+  });
+
+  test('4e. a walking-pace reading with no IMU at all proves nothing about the phone: it holds the walking end like a mounted phone', async () => {
+    const h = await started();
+    const head = path(T0, 0, DRIVE, { n: 10, mps: 0 });
+    const noImu = { gravityStability: 0, orientationDelta: 0, handlingScore: 0 };
+    const rows = [...head, ...path(T0 + 70_000, metresAfter(head), { n: 60, mps: mph(3.4), over: () => noImu })];
+    await feed(h, rows.slice(0, 100));
+    await report(h, act('walking', T0 + 70_000));
+    await feed(h, rows.slice(100, 130));
+    expect(status(h)).toBe('recording');
   });
 
   test('5. running at 6 mph (pace movement on foot) holds the end while it lasts; once the phone is still it ends, cut before the run', async () => {
@@ -234,15 +282,15 @@ describe('W1: after driving speed', () => {
     expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 215_000, cut: true });
   });
 
-  test('7. a misread at a red light (car stopped, fresh fix) ends 20 s after it arrives, cut at the last movement at or before it', async () => {
+  test('7. a misread at a red light (car stopped, fresh fix) ends 5 s after it arrives, cut at the last movement at or before it', async () => {
     const h = await started();
     const fast = path(T0, 0, { n: 60, mps: mph(40) });
     await feed(h, fast);
     await report(h, act('walking', T0 + 59_500));
     const stopped = path(T0 + 60_000, metresAfter(fast), { n: 30, mps: 0 });
-    await feed(h, stopped.slice(0, 19));
+    await feed(h, stopped.slice(0, 4));
     expect(status(h)).toBe('recording');
-    await feed(h, stopped.slice(19, 20));
+    await feed(h, stopped.slice(4, 5));
     expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: T0 + 60_000, cut: true });
   });
 
@@ -253,7 +301,7 @@ describe('W1: after driving speed', () => {
     await feed(h, [...head, ...dark.slice(0, 5)]);
     // The last fix is the row at T0 + 64 s; the walk began at T0 + 66 s, reported after the row at T0 + 69 s.
     await report(h, act('walking', T0 + 66_000));
-    // 20 s pass at T0 + 90 s, but the car was last known at 15 mph: wait while that is ≤ 60 s old.
+    // 5 s pass at T0 + 75 s, but the car was last known at 15 mph: wait while that is ≤ 60 s old.
     await feed(h, dark.slice(5, 59));
     expect(h.engine.session()!.lastRowTs).toBe(T0 + 123_000);
     expect(status(h)).toBe('recording');
@@ -307,18 +355,18 @@ describe('W1: after driving speed', () => {
     }
   });
 
-  test('3. a confidence change (medium, then high) keeps the first report’s times: the end comes 20 s after the first arrives', async () => {
+  test('3. a confidence change (medium, then high) keeps the first report’s times: the end comes 5 s after the first arrives', async () => {
     const h = await started();
     const head = path(T0, 0, DRIVE, { n: 10, mps: 0 });
     await feed(h, head);
     await report(h, act('walking', T0 + 62_000, 'medium'));
     const stopped = path(T0 + 70_000, metresAfter(head), { n: 40, mps: 0 });
-    await feed(h, stopped.slice(0, 12));
-    await report(h, act('walking', T0 + 80_000, 'high'));
-    await feed(h, stopped.slice(12, 19));
+    await feed(h, stopped.slice(0, 2));
+    await report(h, act('walking', T0 + 71_500, 'high'));
+    await feed(h, stopped.slice(2, 4));
     expect(status(h)).toBe('recording');
-    // First arrival at T0 + 70 s: due at T0 + 90 s, the row at T0 + 89 s.
-    await feed(h, stopped.slice(19, 20));
+    // First arrival at T0 + 70 s: due at T0 + 75 s, the row at T0 + 74 s.
+    await feed(h, stopped.slice(4, 5));
     expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: DRIVE_END });
   });
 
@@ -352,13 +400,13 @@ describe('12. an adopted drive', () => {
     expect(status(h)).toBe('recording');
   });
 
-  test('rows that ended 70 s ago: a report ends it 20 s later, cut at the last movement', async () => {
+  test('rows that ended 70 s ago: a report ends it 5 s later, cut at the last movement', async () => {
     const h = harness();
     await h.engine.dispatch({ type: 'adopt', trip: { session: adopted(), detectors: createDetectors(() => 'x') }, ts: T0 + 129_000 });
     await report(h, act('walking', T0 + 120_000), T0 + 129_000);
-    await h.engine.dispatch({ type: 'tick', ts: T0 + 148_999 });
+    await h.engine.dispatch({ type: 'tick', ts: T0 + 133_999 });
     expect(status(h)).toBe('recording');
-    await h.engine.dispatch({ type: 'tick', ts: T0 + 149_000 });
+    await h.engine.dispatch({ type: 'tick', ts: T0 + 134_000 });
     expect(h.finalized[0]).toMatchObject({ clientTripId: 'old', endCause: 'walking', endedAt: DRIVE_END, cut: true });
   });
 });

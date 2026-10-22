@@ -6,8 +6,9 @@
 // card's waiting session saw 10 mph held 15 s; `ts` is the traced-back start) or `adopt` (a drive
 // the previous process was recording, or a re-opened continuation). It ends on `end` (the
 // swipe-to-end, or native's own stop with its cause), by itself once the car has not moved for
-// `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the driver walks away at 3 mph
-// or slower (`motion` reports; `motion.ts` W1/W2). Every end but a prompt manual one closes the
+// `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the driver walks away, 5 s of
+// walking reported with the car at 3 mph or slower, or at a walker's pace with the phone carried
+// (`motion` reports; `motion.ts` W1/W2). Every end but a prompt manual one closes the
 // drive where the car last moved (`closeAtLastMovement`; a walking end at or before the walk
 // began): a manual end `MANUAL_CUT_AFTER_S` or more after the idle clock's base is cut too, a
 // sooner one ends at the tap. `cancel` ("Not driving?") discards the drive: never finalized.
@@ -34,8 +35,8 @@ import type { MotionActivity } from '@drive-sense';
 import type { AdoptedTrip, AlertEvent, EndCause, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, EventShake, TripSession } from './engine.types';
 import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './displayLimit';
 import { displayFix, displayRow, type DisplaySpeed } from './displaySpeed';
-import { footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS, WALK_STALE_FIX_MS } from './motion';
-import { appendRow, autoEndAt, closeAtLastMovement, closeSession, createSession, END_CRAWL_MPS, idleSince, noteWarmup, snapshotSession } from './session';
+import { carStillDriving, footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS } from './motion';
+import { appendRow, autoEndAt, closeAtLastMovement, closeSession, createSession, idleSince, noteWarmup, snapshotSession } from './session';
 import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
 /** Speed-limit tiles are prefetched once per this much distance, never per fix. */
@@ -322,8 +323,9 @@ export function createEngine(deps: EngineDeps): Engine {
    * A report is void for good once the car has been at driving speed at or after the moment its
    * walk began (`session.lastDroveAt` ≥ `since`: two driving rows in a row, the second at or after
    * it), however late the report came: only a walk that began after the car was last at driving
-   * speed counts. W1 (the car reached driving speed): unless the last known speed is over 3 mph
-   * (`END_CRAWL_MPS`) and `WALK_STALE_FIX_MS` old or less. W2 (it never did): only once the drive
+   * speed counts. W1 (the car reached driving speed): unless the car may still be driving
+   * (`carStillDriving`: the last known speed over 3 mph and `WALK_STALE_FIX_MS` old or less, a
+   * walker's own pace from a carried phone excepted). W2 (it never did): only once the drive
    * is `ON_FOOT_DROP_MS` old. Cut at the last movement at or before the walk began. True when it
    * ended the drive.
    */
@@ -338,10 +340,8 @@ export function createEngine(deps: EngineDeps): Engine {
     if (t - foot.at < WALK_CONFIRM_MS) return false;
     if (s.droveAt === null) {
       if (t - s.startedAt < ON_FOOT_DROP_MS) return false;
-    } else {
-      const last = s.lastSpeed;
-      const carDriving = last !== null && last.mps > END_CRAWL_MPS && t - last.ts <= WALK_STALE_FIX_MS;
-      if (carDriving) return false;
+    } else if (carStillDriving(s.lastSpeed, t)) {
+      return false;
     }
     const since = foot.since;
     await finalize((open) => closeAtLastMovement(open, 'walking', { notAfter: since }));

@@ -41,10 +41,19 @@ export const SPEEDING_END_BUFFER_MPH = 2;
 export const NO_EVENTS_FIRST_S = 30;
 /** GPS accuracy worse than this (m) records no speeding and shows "—". */
 export const MAX_H_ACC_M = 20;
-/** A drive ends on its own after this long without the car moving, cut back to its last movement. */
+/**
+ * A drive ends on its own after this long without the car moving (the clock starts when the car
+ * stops moving and resets the moment it moves again), cut back to its last movement.
+ */
 export const IDLE_END_S = 300;
 /** At or under this speed (mph) the car is crawling: with walking confirmed, the drive ends. */
 export const END_CRAWL_MPH = 3;
+/**
+ * The walking end: a confident walking or running report standing this long (s) ends a drive once
+ * the car has stopped (the driver has left the car). The native safety stop takes the same walk
+ * `END_NATIVE_SLACK_S` later.
+ */
+export const WALK_END_S = 5;
 /** The native safety stop's slack over the JS end rules (s): it fires only when JS has not ended the drive. */
 export const END_NATIVE_SLACK_S = 60;
 /**

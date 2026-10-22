@@ -273,12 +273,13 @@ export function appendRow(session: TripSession, row: FeatureRow, flags: RowFlags
 }
 
 /**
- * The last known speed, and `droveAt` (the first) and `lastDroveAt` (the latest) on the second of
+ * The last known speed (and whether its row read as a carried phone), and `droveAt` (the first) and `lastDroveAt` (the latest) on the second of
  * two consecutive driving rows. Replaces `session.lastSpeed` and `session.motion`; never mutates either.
  */
 function noteDriving(session: TripSession, row: FeatureRow): void {
   const speed = knownSpeed(row);
-  if (speed !== null) session.lastSpeed = Object.freeze({ mps: speed, ts: row.ts });
+  // A row with no IMU at all proves nothing about the phone: never read as carried here.
+  if (speed !== null) session.lastSpeed = Object.freeze({ mps: speed, ts: row.ts, carried: !imuAbsent(row) && carried(row) });
   const d = drivingRow(row);
   if (d && session.motion.prevDrive) {
     if (session.droveAt === null) session.droveAt = row.ts;

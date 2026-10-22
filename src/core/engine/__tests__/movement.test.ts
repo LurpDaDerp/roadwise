@@ -252,11 +252,20 @@ describe('driving speed (droveAt), the last known speed and the kept marks', () 
 
   test('lastSpeed follows every known speed, any accuracy, and keeps through a fix-less row', () => {
     const s = run([fast(0, 0), at(1, 1, { speed: mph(3), speedAcc: 4 })]);
-    expect(s.lastSpeed).toEqual({ mps: mph(3), ts: T0 + 1000 });
+    expect(s.lastSpeed).toEqual({ mps: mph(3), ts: T0 + 1000, carried: false });
     appendRow(s, carLike(2), { unsafe: false, limitUsable: false, platform: 'ios' });
-    expect(s.lastSpeed).toEqual({ mps: mph(3), ts: T0 + 1000 });
+    expect(s.lastSpeed).toEqual({ mps: mph(3), ts: T0 + 1000, carried: false });
     expect(run([]).lastSpeed).toBeNull();
     expect(run([carLike(0)]).lastSpeed).toBeNull();
+  });
+
+  test('lastSpeed says whether its row read as a carried phone (handling, unsteady gravity, a turning phone); never on a row with no IMU', () => {
+    expect(run([at(0, 0, { speed: mph(3.4), gravityStability: 0.4 })]).lastSpeed?.carried).toBe(true);
+    expect(run([at(0, 0, { speed: mph(3.4), handlingScore: 0.7 })]).lastSpeed?.carried).toBe(true);
+    expect(run([at(0, 0, { speed: mph(3.4), orientationDelta: 0.5 })]).lastSpeed?.carried).toBe(true);
+    expect(run([at(0, 0, { speed: mph(3.4) })]).lastSpeed?.carried).toBe(false);
+    // The IMU-absent encoding (all nine fields 0) reads gravityStability 0, which is no evidence of a hand.
+    expect(run([at(0, 0, { speed: mph(3.4), gravityStability: 0, orientationDelta: 0, handlingScore: 0 })]).lastSpeed?.carried).toBe(false);
   });
 
   test('marks keep 5 min behind the newest, oldest first, and moved is the last of them', () => {
@@ -284,7 +293,7 @@ describe('driving speed (droveAt), the last known speed and the kept marks', () 
     expect(marks).toHaveLength(1);
     expect(s.motion).not.toBe(motion);
     expect(s.lastSpeed).not.toBe(last);
-    expect(last).toEqual({ mps: mph(12), ts: T0 + 1000 });
+    expect(last).toEqual({ mps: mph(12), ts: T0 + 1000, carried: false });
     expect(motion.prevDrive).toBe(true);
   });
 

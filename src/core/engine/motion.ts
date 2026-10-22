@@ -6,19 +6,26 @@
 //   (`session.lastDroveAt`): two driving rows in a row, the second at or after the walk began, void
 //   it for good, whenever the report arrives (before or after those rows).
 // - W1: once the car has reached driving speed (`session.droveAt`), such a report that stays the
-//   latest report for `WALK_CONFIRM_MS` ends the drive, unless the last known speed is over 3 mph
-//   (`END_CRAWL_MPH`) and `WALK_STALE_FIX_MS` old or less; the drive is cut at the last movement at
-//   or before the walk began.
+//   latest report for `WALK_CONFIRM_MS` (5 s, `WALK_END_S`) ends the drive, unless the car is still
+//   driving: its last known speed over 3 mph (`END_CRAWL_MPH`) and `WALK_STALE_FIX_MS` old or less,
+//   a walker's own pace (at most 5 mph with the phone carried) excepted (`session.carStillDriving`);
+//   the drive is cut at the last movement at or before the walk began.
 // - W2: a drive that has not reached driving speed is ended by such a report only once it is
 //   `ON_FOOT_DROP_MS` old (and is then not kept).
 // Without the permission no reports come and neither rule ever applies.
 import type { MotionActivity } from '@drive-sense';
+import { WALK_END_S } from '@scoring';
+
+import { MPS_PER_MPH } from '@/core/detectors/common';
+
+import type { TripSession } from './engine.types';
+import { END_CRAWL_MPS, WALK_BAND_MPH } from './session';
 
 /** What one report says: on foot, nothing either way (a low-confidence walk), or not on foot. */
 export type FootReading = 'onFoot' | 'unsure' | 'clear';
 
 /** An on-foot report must stay the latest one this long (row clock) before it ends a drive. */
-export const WALK_CONFIRM_MS = 20_000;
+export const WALK_CONFIRM_MS = WALK_END_S * 1000;
 /** W2: a drive that never reached driving speed is ended on foot only once it is this old. */
 export const ON_FOOT_DROP_MS = 600_000;
 /** The last known speed is no longer the car's once its row is more than this old (parked where there is no sky). */
@@ -32,4 +39,20 @@ export function footReading(a: MotionActivity): FootReading {
   if (a.exit === true) return 'clear';
   if (a.type === 'walking' || a.type === 'running') return a.confidence === 'low' ? 'unsure' : 'onFoot';
   return 'clear';
+}
+
+/** A walker's own pace tops out here (`WALK_BAND_MPH.max`, 5 mph): a carried phone this slow is a person, not the car. */
+export const WALKER_PACE_MAX_MPS = WALK_BAND_MPH.max * MPS_PER_MPH;
+
+/**
+ * W1's guard at `t` (row clock): the car may still be driving, so an on-foot report must not end the
+ * drive. True while the last known GPS speed is over 3 mph (`END_CRAWL_MPS`) and at most
+ * `WALK_STALE_FIX_MS` old, unless that reading is a walker's own: at most 5 mph
+ * (`WALKER_PACE_MAX_MPS`) from a phone that read as carried (handling, an unsteady gravity vector or
+ * a turning phone). A mounted or cup-holder phone in a car creeping at 3 to 5 mph keeps the guard;
+ * a phone in a pocket or a hand walking off at 3.4 mph does not. Running pace (over 5 mph) keeps it.
+ */
+export function carStillDriving(last: TripSession['lastSpeed'], t: number): boolean {
+  if (last === null || !(last.mps > END_CRAWL_MPS) || t - last.ts > WALK_STALE_FIX_MS) return false;
+  return !(last.carried && last.mps <= WALKER_PACE_MAX_MPS);
 }
