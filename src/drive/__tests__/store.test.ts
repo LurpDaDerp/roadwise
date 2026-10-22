@@ -61,6 +61,35 @@ test('in front every host change is published; in the background only status and
   expect(h.listeners.size).toBe(1);
 });
 
+test('inactive (Control Center, a call banner, the app switcher over a screen still showing) publishes every change, like active', () => {
+  const h = hostStub({});
+  const app = appState('active');
+  const store = createDriveStore(h.host, app);
+  let renders = 0;
+  store.subscribe(() => (renders += 1));
+  app.set('inactive');
+  h.set({ speedMps: 10 });
+  h.set({ speedMps: 11 });
+  expect(renders).toBe(2);
+  expect(store.getState().speedMps).toBe(11);
+  app.set('background');
+  h.set({ speedMps: 12 });
+  expect(renders).toBe(2);
+  // Back through inactive (iOS passes it on the way to the front): caught up at once.
+  app.set('inactive');
+  expect(renders).toBe(3);
+  expect(store.getState().speedMps).toBe(12);
+  store.dispose();
+});
+
+test('a store made while inactive publishes every change', () => {
+  const h = hostStub({});
+  const store = createDriveStore(h.host, appState('inactive'));
+  h.set({ speedMps: 9 });
+  expect(store.getState().speedMps).toBe(9);
+  store.dispose();
+});
+
 test('in the background the wait, its phase, the "Not driving?" offer and the weather kind are published too', () => {
   const h = hostStub({ waiting: null, notDrivingAvailable: false, weather: null });
   const app = appState('background');
