@@ -11,8 +11,9 @@ extension DetectPolicy {
 
   /// policy.ts `autoHoldMs`: the hold (ms) a speed (m/s) needs on its own, (5/3)·(30 − mph) s: the
   /// line from `AUTO_HOLD_MS_15` at 15 mph down to 0 at `AUTO_INSTANT_MPS` (30 mph), never under
-  /// `AUTO_HOLD_MIN_MS` (the GPS-spike guard: at 30 mph and over a drive confirms on the second good
-  /// reading in a row, never on one); infinite at 15 mph and under.
+  /// `AUTO_HOLD_MIN_MS` (the GPS-spike guard, a little under the 1 s row interval: at 30 mph and over
+  /// a drive confirms on the second good reading in a row despite timer jitter, never on one);
+  /// infinite at 15 mph and under.
   static func autoHoldMs(_ mps: Double) -> Double {
     if !(mps > AUTO_MIN_MPS) { return Double.infinity }
     return max(AUTO_HOLD_MIN_MS, AUTO_HOLD_MS_15 * (AUTO_INSTANT_MPS - mps) / (AUTO_INSTANT_MPS - AUTO_MIN_MPS))

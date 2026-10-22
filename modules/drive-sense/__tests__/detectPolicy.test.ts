@@ -68,9 +68,12 @@ describe('the numbers', () => {
     for (const mph of [15, 14.99, 10, 0]) expect(autoHoldMs(mph * MPS_PER_MPH)).toBe(Infinity);
     expect(autoHoldMs(DETECT.AUTO_MIN_MPS)).toBe(Infinity);
     expect(autoHoldMs(Number.NaN)).toBe(Infinity);
-    // from 29.4 mph (30 mph and over included): the 1 s floor, the second reading in a row
-    for (const mph of [29.5, 30, 31, 35, 40, 90]) expect(autoHoldMs(mph * MPS_PER_MPH)).toBe(DETECT.AUTO_HOLD_MIN_MS);
-    expect(DETECT.AUTO_HOLD_MIN_MS).toBe(DETECT.ROW_MS);
+    // from about 29.46 mph (30 mph and over included): the 0.9 s floor, the second reading in a row
+    for (const mph of [29.47, 29.5, 30, 31, 35, 40, 90]) expect(autoHoldMs(mph * MPS_PER_MPH)).toBe(DETECT.AUTO_HOLD_MIN_MS);
+    expect(autoHoldMs(29.45 * MPS_PER_MPH)).toBeGreaterThan(DETECT.AUTO_HOLD_MIN_MS);
+    // the floor sits under the 1 s row interval, with room for the 1 Hz timer's jitter
+    expect(DETECT.AUTO_HOLD_MIN_MS).toBe(900);
+    expect(DETECT.AUTO_HOLD_MIN_MS).toBeLessThanOrEqual(DETECT.ROW_MS - 50);
     // the Start card's
     expect(DETECT.CONFIRM_MPS_MANUAL).toBeCloseTo(MANUAL_TRIGGER.mph * MPS_PER_MPH, 9);
     expect(DETECT.CONFIRM_HOLD_MS_MANUAL).toBe(MANUAL_TRIGGER.holdMs);
@@ -85,6 +88,23 @@ describe('the numbers', () => {
       const h = autoHoldMs(mph * MPS_PER_MPH);
       expect({ mph, ok: h <= last && h >= DETECT.AUTO_HOLD_MIN_MS && h <= DETECT.AUTO_HOLD_MS_15 }).toEqual({ mph, ok: true });
       last = h;
+    }
+  });
+
+  test('at 30 mph and over two consecutive 1 Hz readings confirm whatever the timer jitter; one reading never does', () => {
+    for (const mph of [30, 40, 90]) {
+      for (let dt = 960; dt <= 1040; dt += 1) {
+        const a = { ...vrow(0, mph), ts: T0 };
+        const b = { ...vrow(1, mph), ts: T0 + dt };
+        const first = confirmStep(CONFIRM_START, a, 'auto');
+        const second = confirmStep(first.state, b, 'auto');
+        expect({ mph, dt, first: first.confirmed, second: second.confirmed }).toEqual({ mph, dt, first: false, second: true });
+      }
+      // a lone spike row, from a clean state or after slow rows, never confirms
+      expect(confirmStep(CONFIRM_START, vrow(0, mph), 'auto').confirmed).toBe(false);
+      let s: ConfirmState = CONFIRM_START;
+      for (const r of vrows(0, 10, 10)) s = confirmStep(s, r, 'auto').state;
+      expect(confirmStep(s, vrow(11, mph), 'auto').confirmed).toBe(false);
     }
   });
 

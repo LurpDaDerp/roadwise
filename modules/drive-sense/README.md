@@ -893,14 +893,15 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
 - **Confirmation** (`confirmStep`, auto): evidence. A trusted row (a valid fix within 30 m, speed
   rated 2 m/s or better or unrated) over 15 mph earns at 1 / hold per ms, the hold (5/3)·(30 − mph)
   s: 25 s just over 15 mph, 20 s at 18, 15 s at 21, 10 s at 24, 5 s at 27 and 0 at 30, never under
-  1 s (`autoHoldMs`). 15 mph and under earns nothing. Under 20 mph a row earns only with fresh car
+  0.9 s (`autoHoldMs`). 15 mph and under earns nothing. Under 20 mph a row earns only with fresh car
   motion (a standing confident moving automotive report, or one in the last 2 min, the wake's motion
   history included),
   so a bike or an e-scooter in that band never confirms; a row with a confident cycling, walking or
   running report 30 s old or less earns nothing. The interval between two earning rows at most 2 s
-  apart adds its length at the slower one's rate, so a lone GPS spike earns nothing, and the 1 s floor
-  is the spike guard: from 29.4 mph (30 mph and over included) a drive confirms on the second good
-  reading in a row, never on one. Crawling and stops keep the evidence; 5 min with no trusted row
+  apart adds its length at the slower one's rate, so a lone GPS spike earns nothing, and the 0.9 s
+  floor is the spike guard: from about 29.46 mph (30 mph and over included) a drive confirms on the
+  second good reading in a row, never on one; the floor sits under the 1 s row interval, so the 1 Hz
+  timer's jitter (rows 997 ms apart, say) never costs a third reading. Crawling and stops keep the evidence; 5 min with no trusted row
   over 3 mph forgets it. It confirms at 1. The Start card's trigger (10 mph spanning
   15 s on the row clock, a dip under it of 5 s or less kept) ends a Start-card drive's wait for
   driving speed.

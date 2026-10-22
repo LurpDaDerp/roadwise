@@ -16,15 +16,16 @@ export const DETECT = {
    * The auto trigger (`autoHoldMs`): the hold a speed needs is (5/3)·(30 − mph) s for a speed over
    * 15 mph, 5 s less for every 3 mph faster: 25 s just over 15 mph (`AUTO_HOLD_MS_15`, where the line
    * starts), 20 s at 18, 15 s at 21, 10 s at 24, 5 s at 27 and 0 at 30 mph (`AUTO_INSTANT_MPS`). The
-   * hold never falls under `AUTO_HOLD_MIN_MS`, a GPS-spike guard: from 29.4 mph a drive
-   * confirms on the second good reading in a row, never on a single one. 15 mph and under earns
-   * nothing; under 20 mph only with fresh car motion.
+   * hold never falls under `AUTO_HOLD_MIN_MS`, a GPS-spike guard: from about 29.46 mph a drive
+   * confirms on the second good reading in a row, never on a single one. The floor sits a little
+   * under the 1 s row interval, so two 1 Hz readings confirm whatever the timer's jitter (997 ms
+   * apart, say). 15 mph and under earns nothing; under 20 mph only with fresh car motion.
    */
   AUTO_MIN_MPS: 6.7056,
   AUTO_HOLD_MS_15: 25_000,
   AUTO_MPS_20: 8.9408,
   AUTO_INSTANT_MPS: 13.4112,
-  AUTO_HOLD_MIN_MS: 1_000,
+  AUTO_HOLD_MIN_MS: 900,
   /** Two readings further apart than this earn nothing for the interval between them (what was earned stays). */
   AUTO_ROW_GAP_MAX_MS: 2_000,
   /** The evidence is forgotten after this long with no trusted reading over 3 mph (a stop that long ends a drive). */
@@ -217,8 +218,9 @@ const EVIDENCE_EPS = 0.000000001;
 /**
  * The hold (ms) a speed (m/s) needs to confirm an auto drive on its own: (5/3)·(30 − mph) s, the
  * line from `AUTO_HOLD_MS_15` at 15 mph down to 0 at `AUTO_INSTANT_MPS` (30 mph), never under
- * `AUTO_HOLD_MIN_MS` (the GPS-spike guard: at 30 mph and over a drive confirms on the second good
- * reading in a row, never on one); infinite at 15 mph and under.
+ * `AUTO_HOLD_MIN_MS` (the GPS-spike guard, a little under the 1 s row interval: at 30 mph and over
+ * a drive confirms on the second good reading in a row despite timer jitter, never on one);
+ * infinite at 15 mph and under.
  */
 export function autoHoldMs(mps: number): number {
   if (!(mps > DETECT.AUTO_MIN_MPS)) return Infinity;

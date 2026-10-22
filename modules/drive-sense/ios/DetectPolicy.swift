@@ -94,7 +94,7 @@ enum DetectPolicy {
   static let AUTO_HOLD_MS_15: Double = 25_000
   static let AUTO_MPS_20: Double = 8.9408
   static let AUTO_INSTANT_MPS: Double = 13.4112
-  static let AUTO_HOLD_MIN_MS: Double = 1_000
+  static let AUTO_HOLD_MIN_MS: Double = 900
   static let AUTO_ROW_GAP_MAX_MS: Double = 2_000
   static let AUTO_FORGET_MS: Double = 300_000
   static let CONFIRM_MPS_MANUAL: Double = 4.4704
