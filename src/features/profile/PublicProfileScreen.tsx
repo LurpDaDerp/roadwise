@@ -212,8 +212,16 @@ function MemberStats({ profile }: { profile: PublicProfile }) {
   return (
     <Card testID="member-stats">
       <Text variant="headline">{copy.stats}</Text>
-      {!sums ? (
-        <Skeleton width="100%" height={80} />
+      {!sums && stats.isError && !stats.isFetching ? (
+        // A failed read says so with a retry instead of loading forever.
+        <Banner
+          tone="danger"
+          message={profileCopy.loadError}
+          action={{ label: profileCopy.retry, onPress: () => void stats.refetch() }}
+          testID="member-stats-error"
+        />
+      ) : !sums ? (
+        <Skeleton width="100%" height={80} testID="member-stats-loading" />
       ) : sums.drives === 0 ? (
         <Text variant="subhead" tone="muted">
           {copy.statsEmpty}

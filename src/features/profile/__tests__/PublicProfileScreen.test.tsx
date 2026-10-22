@@ -2,7 +2,7 @@
  * `/u/<username>`: the friend button for each relationship, what each press sends, block with a
  * confirm, and "not found" (also how a block looks).
  */
-import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 
 import { RpcError } from '@/data/server/rpc';
@@ -270,5 +270,29 @@ describe('what friends see', () => {
     expect(screen.queryByText('Phone pickups')).toBeNull();
     expect(mockRpc).toHaveBeenCalledWith('get_member_stats', { p_user_id: 'u-fox' });
     expect(mockRpc).not.toHaveBeenCalledWith('get_heatmap', expect.anything());
+  });
+
+  it('a failed stats read shows an error with Retry, never a skeleton forever; Retry loads the tiles', async () => {
+    let statsUp = false;
+    mockRpc.mockImplementation(async (fn: string) => {
+      if (fn === 'get_profile') return profile({ relationship: 'friend', can_view_stats: true });
+      if (fn === 'get_member_stats') {
+        if (!statsUp) throw new Error('offline');
+        return { miles: 200, durationS: 20000, nightMiles: 0, drives: 10, cleanDrives: 9, speeding: 1, hardBrake: 2, hardAccel: 0, hardCorner: 0 };
+      }
+      return null;
+    });
+    const w = await appWorld();
+    await w.render(<PublicProfileScreen username="swift_fox" />);
+    await screen.findByTestId('relationship-remove');
+    const banner = await screen.findByTestId('member-stats-error', {}, { timeout: 5000 });
+    expect(banner).toHaveTextContent(profileCopy.loadError, { exact: false });
+    expect(screen.queryByTestId('member-stats-loading')).toBeNull();
+    statsUp = true;
+    await act(async () => {
+      fireEvent.press(within(banner).getByText(profileCopy.retry));
+    });
+    expect(await screen.findByLabelText(/^Distance, 200/, {}, { timeout: 3000 })).toBeOnTheScreen();
+    expect(screen.queryByTestId('member-stats-error')).toBeNull();
   });
 });
