@@ -42,8 +42,8 @@ test('a tap goes back to the driving screen', async () => {
   expect(mockRouter.navigate).toHaveBeenCalledWith(DRIVE_HREF);
 });
 
-test('while a Start drive swipe waits: "Ready to roll" · "Open", and a tap goes back to the driving screen', async () => {
-  await renderBanner('idle', { since: 1, phase: 'popup', deadlineAt: 2, speedMps: null, limitMph: null });
+test('while a Start-card drive waits for driving speed: "Ready to roll" · "Open", and a tap goes back to the driving screen', async () => {
+  await renderBanner('recording', { since: 1, phase: 'popup', deadlineAt: 2 });
   expect(screen.getByText('Ready to roll')).toBeTruthy();
   expect(screen.getByText('Open')).toBeTruthy();
   await fireEvent.press(screen.getByRole('button', { name: 'Waiting for you to drive. Go back to the driving screen.' }));

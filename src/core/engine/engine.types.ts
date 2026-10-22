@@ -260,8 +260,13 @@ export interface EngineSnapshot {
   lastShake: EventShake | null;
   /** Known speed at or below 5 mph (`MOVING_MIN_MPH`). */
   stopped: boolean;
-  /** epoch ms the drive ends by itself unless the car moves (`session.autoEndAt`); null unless recording. */
+  /**
+   * epoch ms the drive ends by itself unless the car moves (`session.autoEndAt`; only the 12 h cap
+   * while the host holds the ends, `EngineDeps.holdEnds`); null unless recording.
+   */
   autoEndAt: number | null;
+  /** The drive has reached driving speed (`session.droveAt`: two trusted readings of 10 mph or more in a row); false when not recording. */
+  drove: boolean;
   distanceM: number;
   /** Recording at a last known speed (`session.lastSpeed`) above 5 mph: the UI shows only the End control. */
   lockedOut: boolean;
@@ -300,6 +305,12 @@ export interface EngineDeps {
   onFinalize(session: Readonly<TripSession>): Promise<void>;
   /** "Not driving?": the open drive is discarded; drop what was stored. Nothing is scored or uploaded. */
   onCancel(session: Readonly<TripSession>): Promise<void>;
+  /**
+   * The host holds the automatic ends (a Start-card drive still waiting for driving speed, which the
+   * host ends itself when its wait runs out): while true, the still and walking ends wait and only
+   * the 12 h cap ends the drive. Default: never held.
+   */
+  holdEnds?(): boolean;
   /** Failures that must not stop the engine (a finalizer that threw, a subscriber that threw). */
   onError?(err: unknown): void;
 }

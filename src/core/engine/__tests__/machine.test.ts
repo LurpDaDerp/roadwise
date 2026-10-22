@@ -513,3 +513,22 @@ describe('speeding alerts and the event shake', () => {
     expect(s.exposure.limitS).toBe(30);
   });
 });
+
+test('a held drive (a Start-card drive still waiting) ends only at the 12 h cap: no still end, no walking end; `drove` says when it reached driving speed', async () => {
+  let held = true;
+  const h = harness({ holdEnds: () => held });
+  await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
+  expect(h.engine.snapshot()).toMatchObject({ status: 'recording', drove: false, autoEndAt: T0 + 12 * 3600_000 });
+  // Parked 10 min, walking reported: still recording.
+  await feed(h, after(600, { speed: 0 }));
+  await h.engine.dispatch({ type: 'motion', activity: { type: 'walking', confidence: 'high', ts: T0 + 100_000 }, ts: T0 + 100_000 });
+  await h.engine.dispatch({ type: 'tick', ts: T0 + 700_000 });
+  expect(h.engine.snapshot()).toMatchObject({ status: 'recording', drove: false });
+  expect(h.finalized).toEqual([]);
+  // Two rows at driving speed: `drove`.
+  await feed(h, seq([2, (i) => ({ speed: mph(15), ts: T0 + 632_000 + i * 1000 })]));
+  expect(h.engine.snapshot().drove).toBe(true);
+  // The hold lifts: the still end applies again.
+  held = false;
+  expect(h.engine.snapshot().autoEndAt).toBeLessThan(T0 + 12 * 3600_000);
+});

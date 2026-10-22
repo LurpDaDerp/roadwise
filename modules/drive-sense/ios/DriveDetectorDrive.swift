@@ -26,9 +26,39 @@ extension DriveDetector {
     ActivitySource.motionSummary(from: Date(timeIntervalSince1970: fromMs / 1000), to: to) { m in finish(m.automotiveSince) }
   }
 
+  /// The Start card: a manual drive opens at once, from the tap, journaled like any drive (an open
+  /// auto candidate gives way to it, its rows dropped). It waits for driving speed (`waitUntil`, 5 min
+  /// from the tap or the last touch, where JS ends it unsaved): meanwhile the safety stop never ends
+  /// it on a walk, and on the still clock only past that deadline (`DetectPolicy.endDue`).
+  func beginManualDrive() {
+    if phase == "candidate", var r = rec {
+      r.origin = "manual"
+      save(r)
+    } else {
+      beginCandidate(origin: "manual", reason: "waiting")
+    }
+    let now = DriveDetector.now()
+    buffer.clear()
+    confirmState = ConfirmState()
+    confirming = false
+    let start = TracedStart(index: 0, startedAt: now, startSource: "wake", startLat: nil, startLng: nil)
+    beginDrive(start, kind: "manual", firstTs: now, waitUntil: now + DetectPolicy.WAIT_MAX_MS)
+  }
+
+  /// A Start-card drive waiting for driving speed: the Start card's trigger (10 mph held 15 s, the
+  /// policy's manual confirmation) ends the wait, and the safety stop's usual rules apply from there.
+  func waitForDriving(_ d: DetectRow) {
+    let step = DetectPolicy.confirmStep(confirmState, d, "manual")
+    confirmState = step.state
+    guard step.confirmed, var r = rec, r.waitUntil != nil else { return }
+    r.waitUntil = nil
+    save(r)
+    emitState("confirmed")
+  }
+
   /// The drive begins: recorded, journaled from its first kept row (seq 1), announced to JS, and the
-  /// "Recording your drive" check scheduled.
-  func beginDrive(_ start: TracedStart, kind: String, firstTs: Double) {
+  /// "Recording your drive" check scheduled. `waitUntil`: a Start-card drive's wait for driving speed.
+  func beginDrive(_ start: TracedStart, kind: String, firstTs: Double, waitUntil: Double? = nil) {
     guard var r = rec else { return }
     let now = DriveDetector.now()
     let driveId = UUID().uuidString.lowercased()
@@ -38,7 +68,7 @@ extension DriveDetector {
     r.driveId = driveId
     r.startedAt = start.startedAt
     r.startSource = start.startSource
-    r.waitUntil = nil
+    r.waitUntil = waitUntil
     save(r)
     confirming = false
     let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
@@ -89,7 +119,7 @@ extension DriveDetector {
   func evaluateEnd() {
     guard var r = rec, isRecording, let startedAt = r.startedAt else { return }
     let now = DriveDetector.now()
-    let d = DetectPolicy.endDue(endClock, startedAt: startedAt, now: now, walkSince: walkSince)
+    let d = DetectPolicy.endDue(endClock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: r.waitUntil)
     if let cause = d.due {
       commitEnd(cause: cause, endedAt: now)
       return
@@ -141,6 +171,7 @@ extension DriveDetector {
     r.state = "suppressed"
     r.since = now
     r.origin = nil
+    r.waitUntil = nil
     r.driveId = nil
     r.startedAt = nil
     r.startSource = nil

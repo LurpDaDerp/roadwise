@@ -177,7 +177,7 @@ describe('Start drive', () => {
     const p = props();
     await draw(<HomeView {...p} />);
     const start = within(screen.getByTestId('home-header')).getByRole('button', { name: 'Start drive' });
-    expect(start).toHaveProp('accessibilityHint', "Swipe right to start. Recording begins once you're moving.");
+    expect(start).toHaveProp('accessibilityHint', 'Swipe right to start recording.');
     await press(start).catch(() => {});
     expect(p.onStart).not.toHaveBeenCalled();
     await swipe(start);

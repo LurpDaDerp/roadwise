@@ -490,7 +490,7 @@ describe('iOS drive detector: the state machine (text)', () => {
   it('the safety stop: the policy decides; native commits with endedAt = when it decided and tells JS; a JS end is journaled as "js" and not echoed', () => {
     const d = detector();
     const ev = fn(d, 'func evaluateEnd()');
-    expect(ev).toMatch(/DetectPolicy\.endDue\(endClock, startedAt: startedAt, now: now, walkSince: walkSince\)/);
+    expect(ev).toMatch(/DetectPolicy\.endDue\(endClock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: r\.waitUntil\)/);
     expect(ev).toMatch(/if let cause = d\.due \{\s*commitEnd\(cause: cause, endedAt: now\)/);
     const end = fn(d, 'func commitEnd(');
     expect(end).toMatch(/"k": "end"/);
@@ -550,12 +550,31 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(read).toMatch(/if o\?\["k"\] as\? String == "gap", let g = \(o\?\["lastSeq"\] as\? NSNumber\)\?\.intValue, g > last \{\s*last = g\s*\} else if let o = o, o\["k"\] as\? String == "row"/);
   });
 
-  it('the Start card: While Using and Precise; busy while a drive records; an auto candidate becomes the wait', () => {
-    const sw = fn(detector(), 'func startWaiting()');
+  it('the Start card: While Using and Precise; busy while a drive records; else a manual drive opens at once from the tap (an auto candidate gives way), waiting for driving speed', () => {
+    const d = detector();
+    const sw = fn(d, 'func startWaiting()');
     expect(sw).toMatch(/guard p\.location != "none", p\.precise else \{ return \["ok": false, "reason": "permission"\] \}/);
     expect(sw).toMatch(/return \["ok": false, "reason": "busy"\]/);
-    expect(sw).toMatch(/r1\.waitUntil = now \+ DetectPolicy\.WAIT_MAX_MS/);
-    expect(fn(detector(), 'func extendWaiting()')).toMatch(/let until = DriveDetector\.now\(\) \+ DetectPolicy\.WAIT_MAX_MS/);
+    expect(sw.indexOf('return ["ok": false, "reason": "busy"]')).toBeLessThan(sw.indexOf('beginManualDrive()'));
+    // JS takes the drive in from the answer: its id, the tap and the wait's deadline
+    expect(sw).toMatch(/return \["ok": true, "waitUntil": DetectStateRecord\.ms\(waitUntil\), "driveId": driveId, "startedAt": DetectStateRecord\.ms\(startedAt\)\]/);
+    const manual = fn(d, 'func beginManualDrive()');
+    expect(manual).toMatch(/if phase == "candidate", var r = rec \{\s*r\.origin = "manual"\s*save\(r\)\s*\} else \{\s*beginCandidate\(origin: "manual", reason: "waiting"\)\s*\}/);
+    expect(manual).toMatch(/buffer\.clear\(\)/);
+    expect(manual).toMatch(/TracedStart\(index: 0, startedAt: now, startSource: "wake", startLat: nil, startLng: nil\)/);
+    expect(manual).toMatch(/beginDrive\(start, kind: "manual", firstTs: now, waitUntil: now \+ DetectPolicy\.WAIT_MAX_MS\)/);
+    // the wait is saved with the drive, before its side effects
+    expect(fn(d, 'func beginDrive(')).toMatch(/r\.waitUntil = waitUntil\s*save\(r\)/);
+    // a touch moves it on; the manual trigger (10 mph held 15 s) ends it
+    const ext = fn(d, 'func extendWaiting()');
+    expect(ext).toMatch(/guard var r = rec, isRecording, r\.origin == "manual", r\.waitUntil != nil else \{ return nil \}/);
+    expect(ext).toMatch(/let until = DriveDetector\.now\(\) \+ DetectPolicy\.WAIT_MAX_MS/);
+    expect(fn(d, 'func onRow(')).toMatch(/case "recording", "ending":\s*record\(d, body\)\s*if rec\?\.waitUntil != nil \{ waitForDriving\(d\) \}/);
+    const wait = fn(d, 'func waitForDriving(');
+    expect(wait).toMatch(/DetectPolicy\.confirmStep\(confirmState, d, "manual"\)/);
+    expect(wait).toMatch(/guard step\.confirmed, var r = rec, r\.waitUntil != nil else \{ return \}\s*r\.waitUntil = nil\s*save\(r\)/);
+    // "Not driving?" ends any wait with the drive
+    expect(fn(d, 'func notDriving()')).toMatch(/r\.waitUntil = nil/);
   });
 
   it('"Always" is asked once, only from While Using, through DriveDetectAccess', () => {

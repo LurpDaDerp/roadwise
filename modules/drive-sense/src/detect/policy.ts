@@ -409,16 +409,25 @@ export type SafetyCause = 'still' | 'walking' | 'limit';
  * `overdue`: a JS end rule would have ended the drive by now (12 h; a walk standing 20 s with no fix
  * over 3 mph in the last minute; 5 min without movement, holds excluded). `due`: the same plus the
  * slack, when native stops sensing on its own. The limit comes first, then walking, then still.
+ * `waitUntil`: a Start-card drive still waiting for driving speed (JS ends it unsaved at that
+ * deadline, 5 min from the tap or the last touch): no walking end (the walk to the car), and the
+ * still end only once the deadline has passed too, so a touch that keeps the wait keeps the drive.
  */
-export function endDue(c: EndClock, startedAt: number, now: number, walkSince: number | null): { due: SafetyCause | null; overdue: SafetyCause | null } {
+export function endDue(
+  c: EndClock,
+  startedAt: number,
+  now: number,
+  walkSince: number | null,
+  waitUntil: number | null = null
+): { due: SafetyCause | null; overdue: SafetyCause | null } {
   const carDriving = c.lastFix !== null && c.lastFix.mps > DETECT.END_CRAWL_MPS && now - c.lastFix.ts <= DETECT.WALK_STALE_FIX_MS;
   const age = now - startedAt;
-  const walked = walkSince !== null && !carDriving ? now - walkSince : -1;
+  const walked = waitUntil === null && walkSince !== null && !carDriving ? now - walkSince : -1;
   const still = now - c.lastMoveTs - c.holdMs;
   const pick = (slack: number): SafetyCause | null => {
     if (age >= DETECT.MAX_DRIVE_MS + slack) return 'limit';
     if (walked >= DETECT.WALK_CONFIRM_MS + slack) return 'walking';
-    if (still >= DETECT.STILL_END_MS + slack) return 'still';
+    if (still >= DETECT.STILL_END_MS + slack && (waitUntil === null || now >= waitUntil + slack)) return 'still';
     return null;
   };
   return { due: pick(DETECT.SAFETY_SLACK_MS), overdue: pick(0) };

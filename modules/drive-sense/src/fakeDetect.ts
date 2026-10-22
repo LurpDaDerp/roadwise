@@ -1,6 +1,7 @@
 // An in-memory drive detector for host and bootstrap tests, following the `DriveDetect` contract
 // (plan §3.1.1) closely enough that a host tested on it behaves on a phone:
-// - `wake()` opens an auto candidate when the wake gate passes; `startWaiting()` a manual one;
+// - `wake()` opens an auto candidate when the wake gate passes; `startWaiting()` opens a manual
+//   drive at once, from the tap (journaled, `driveStarted`), waiting for driving speed;
 // - `confirm()` turns the candidate into a recording drive, journals its `start` line and emits
 //   `driveStarted`; `emitRows()` journals rows with `seq` (and, given `sense`, emits each as a
 //   DriveSense `row` event, as native does);
@@ -68,8 +69,8 @@ export interface FakeDetectControls {
   endFor(cause: EndCauseNative, at?: number): DriveEndedEvent | null;
   /** A JS `stopCapture` reached native: the end is journaled with cause `js`, no event. */
   jsStop(endedAt?: number): void;
-  /** The Start-card wait ran out natively (`detectState` reason `waitTimeout`). */
-  waitTimeout(): void;
+  /** The Start-card drive reached driving speed natively (10 mph held 15 s): its wait is over (`detectState` reason `confirmed`). */
+  waitOver(): void;
   /**
    * A relaunch resumes the live drive (`resumeAtLaunch`): its last `lostRows` row lines are gone from
    * the journal (a power loss before they were synced, though JS may hold them), a `gap` line reserves
@@ -201,6 +202,7 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       journal.delete(live.driveId);
       live = null;
       origin = null;
+      waitUntil = null;
       enter('suppressed');
       suppressedUntil = decidedAt + DETECT.SUPPRESS_MAX_MS;
       emit('driveEnded', ended);
@@ -257,17 +259,19 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       if (!available) return absent('startWaiting');
       if (permissions.location === 'none' || !permissions.precise) return resolve({ ok: false as const, reason: 'permission' as const });
       if (phase === 'recording' || phase === 'ending') return resolve({ ok: false as const, reason: 'busy' as const });
+      // The drive opens at the tap (an auto candidate gives way to it), waiting for driving speed.
       enter('candidate');
       origin = 'manual';
       suppressedUntil = null;
-      waitUntil = now() + DETECT.WAIT_MAX_MS;
       announce('waiting');
-      return resolve({ ok: true as const, waitUntil });
+      const started = api.confirm({ startedAt: now(), startSource: 'wake', startLat: null, startLng: null, continues: false });
+      waitUntil = now() + DETECT.WAIT_MAX_MS;
+      return resolve({ ok: true as const, waitUntil, driveId: started.driveId, startedAt: started.startedAt });
     },
     extendWaiting() {
       calls.push('extendWaiting');
       if (!available) return absent('extendWaiting');
-      if (phase !== 'candidate' || origin !== 'manual') return resolve(null);
+      if ((phase !== 'recording' && phase !== 'ending') || origin !== 'manual' || waitUntil === null) return resolve(null);
       waitUntil = now() + DETECT.WAIT_MAX_MS;
       announce('extended');
       return resolve(waitUntil);
@@ -446,10 +450,10 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       announce('resumed');
       return skipTo;
     },
-    waitTimeout() {
-      if (phase !== 'candidate' || origin !== 'manual') return;
-      settle();
-      announce('waitTimeout');
+    waitOver() {
+      if (live === null || waitUntil === null) return;
+      waitUntil = null;
+      announce('confirmed');
     },
     get journal() {
       return new Map(journal);

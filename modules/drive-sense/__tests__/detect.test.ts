@@ -42,7 +42,7 @@ jest.mock('expo-modules-core', () => {
     setArmed: jest.fn(async () => state),
     getState: jest.fn(async () => state),
     requestAlways: jest.fn(async () => 'whenInUse'),
-    startWaiting: jest.fn(async () => ({ ok: true, waitUntil: 1_760_000_300_000 })),
+    startWaiting: jest.fn(async () => ({ ok: true, waitUntil: 1_760_000_300_000, driveId: ID, startedAt: 1_760_000_000_000 })),
     extendWaiting: jest.fn(async () => null),
     cancelWaiting: jest.fn(async () => undefined),
     notDriving: jest.fn(async () => null),
@@ -88,7 +88,7 @@ describe('with the native module', () => {
     expect(native.setArmed).toHaveBeenCalledWith(true, native.state.ownerId);
     await expect(DriveDetect.getState()).resolves.toEqual(native.state);
     await expect(DriveDetect.requestAlways()).resolves.toBe('whenInUse');
-    await expect(DriveDetect.startWaiting()).resolves.toEqual({ ok: true, waitUntil: 1_760_000_300_000 });
+    await expect(DriveDetect.startWaiting()).resolves.toEqual({ ok: true, waitUntil: 1_760_000_300_000, driveId: ID, startedAt: 1_760_000_000_000 });
     await expect(DriveDetect.extendWaiting()).resolves.toBeNull();
     await expect(DriveDetect.cancelWaiting()).resolves.toBeUndefined();
     await expect(DriveDetect.notDriving()).resolves.toBeUndefined();
@@ -127,6 +127,8 @@ describe('with the native module', () => {
   test.each([
     ['getState', { armed: 'yes' }],
     ['startWaiting', { ok: true }],
+    ['startWaiting', { ok: true, waitUntil: 1_760_000_300_000 }],
+    ['startWaiting', { ok: true, waitUntil: 1_760_000_300_000, driveId: 'x', startedAt: 1_760_000_000_000 }],
     ['startWaiting', { ok: false, reason: 'tired' }],
     ['extendWaiting', 1.5],
     ['requestAlways', 'sometimes'],

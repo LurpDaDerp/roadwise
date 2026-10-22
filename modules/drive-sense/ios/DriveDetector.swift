@@ -146,32 +146,25 @@ final class DriveDetector {
     if allowed(r) && r.state != "off" { wakes.start() } else { wakes.stop() }
   }
 
-  /// `startWaiting`: the Start card. While Using and Precise are enough (the app is in front).
+  /// `startWaiting`: the Start card. While Using and Precise are enough (the app is in front). The
+  /// drive opens at once, from the tap (`beginManualDrive`), and waits for driving speed meanwhile.
   func startWaiting() -> [String: Any] {
     let p = access.snapshot()
     guard p.location != "none", p.precise else { return ["ok": false, "reason": "permission"] }
     if rec == nil { save(DetectStateRecord()) }
     guard let r = rec else { return ["ok": false, "reason": "unavailable"] }
     if r.state == "recording" || r.state == "ending" || capture.sensing == .plain { return ["ok": false, "reason": "busy"] }
-    let now = DriveDetector.now()
-    if r.state == "candidate" {
-      // An auto candidate becomes the Start card's (its rows kept); a wait already open starts again.
-      var r1 = r
-      r1.origin = "manual"
-      r1.since = now
-      r1.waitUntil = now + DetectPolicy.WAIT_MAX_MS
-      save(r1)
-      confirmState = ConfirmState()
-      emitState("waiting")
-    } else {
-      beginCandidate(origin: "manual", reason: "waiting")
+    beginManualDrive()
+    guard let r1 = rec, isRecording, let driveId = r1.driveId, let startedAt = r1.startedAt, let waitUntil = r1.waitUntil else {
+      return ["ok": false, "reason": "unavailable"]
     }
-    return ["ok": true, "waitUntil": DetectStateRecord.ms(rec?.waitUntil ?? now)]
+    return ["ok": true, "waitUntil": DetectStateRecord.ms(waitUntil), "driveId": driveId, "startedAt": DetectStateRecord.ms(startedAt)]
   }
 
-  /// `extendWaiting`: any touch on the waiting screen; the new deadline, or nil when not waiting.
+  /// `extendWaiting`: any touch while a Start-card drive waits for driving speed; the new deadline,
+  /// or nil when it waits no more.
   func extendWaiting() -> Double? {
-    guard var r = rec, r.state == "candidate", r.origin == "manual" else { return nil }
+    guard var r = rec, isRecording, r.origin == "manual", r.waitUntil != nil else { return nil }
     let until = DriveDetector.now() + DetectPolicy.WAIT_MAX_MS
     r.waitUntil = until
     save(r)

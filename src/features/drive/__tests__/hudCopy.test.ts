@@ -37,7 +37,7 @@ test('End names where it comes back, in the driver units', () => {
 });
 
 test('the words of the waiting screen', () => {
-  expect(hudCopy.waiting).toEqual({ title: 'Ready to roll', line: "Starts once you're moving", spoken: "Ready to roll. Recording starts once you're moving." });
+  expect(hudCopy.waiting).toEqual({ title: 'Ready to roll', line: 'Saved once you drive', spoken: "Ready to roll. Recording now; the drive is saved once you're driving." });
   expect(hudCopy.ask.title).toBe('Still planning to drive?');
   expect(hudCopy.ask.body(3)).toBe("We'll stop waiting in 3 min.");
   expect(hudCopy.countdown.spoken(27)).toBe('Stopping in 27 seconds. Touch the screen to keep waiting.');

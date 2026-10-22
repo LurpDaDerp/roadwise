@@ -58,17 +58,19 @@ extension DetectPolicy {
 
   /// policy.ts `endDue`: `overdue` = a JS rule would have ended the drive by now; `due` = the same
   /// plus the slack. Each "limit", "walking", "still" or nil, in that order of precedence.
-  static func endDue(_ c: EndClock, startedAt: Double, now: Double, walkSince: Double?) -> (due: String?, overdue: String?) {
+  /// `waitUntil`: a Start-card drive still waiting for driving speed: no walking end, and the still
+  /// end only once that deadline has passed too.
+  static func endDue(_ c: EndClock, startedAt: Double, now: Double, walkSince: Double?, waitUntil: Double? = nil) -> (due: String?, overdue: String?) {
     var carDriving = false
     if let mps = c.lastFixMps, let ts = c.lastFixTs { carDriving = mps > END_CRAWL_MPS && now - ts <= WALK_STALE_FIX_MS }
     let age = now - startedAt
     var walked: Double = -1
-    if let w = walkSince, !carDriving { walked = now - w }
+    if let w = walkSince, !carDriving, waitUntil == nil { walked = now - w }
     let still = now - c.lastMoveTs - c.holdMs
     func pick(_ slack: Double) -> String? {
       if age >= MAX_DRIVE_MS + slack { return "limit" }
       if walked >= WALK_CONFIRM_MS + slack { return "walking" }
-      if still >= STILL_END_MS + slack { return "still" }
+      if still >= STILL_END_MS + slack, waitUntil.map({ now >= $0 + slack }) ?? true { return "still" }
       return nil
     }
     return (pick(SAFETY_SLACK_MS), pick(0))

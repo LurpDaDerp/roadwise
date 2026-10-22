@@ -105,7 +105,7 @@ enum DetectSelfTest {
         clock = DetectPolicy.endOnRow(clock, r, automotiveNow: jsonBool(step["automotive"]) ?? false)
       } else {
         guard let now = jsonNumber(step["check"]) else { return nil }
-        let d = DetectPolicy.endDue(clock, startedAt: startedAt, now: now, walkSince: jsonNumber(step["walkSince"]))
+        let d = DetectPolicy.endDue(clock, startedAt: startedAt, now: now, walkSince: jsonNumber(step["walkSince"]), waitUntil: jsonNumber(step["waitUntil"]))
         results.append(["due": d.due.map { $0 as Any } ?? NSNull(), "overdue": d.overdue.map { $0 as Any } ?? NSNull()])
       }
     }

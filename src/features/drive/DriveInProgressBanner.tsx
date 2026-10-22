@@ -9,13 +9,13 @@ import { DRIVE_HREF, hudCopy } from './hudCopy';
 
 /**
  * A strip for in-app screens while a drive is recording (reached from a notification tap at a
- * stop), or while a Start drive swipe waits for the car to move: one tap goes back to the driving
- * screen. Nothing else: the drive is ended (or the wait stopped) there.
+ * stop): "Ready to roll" while a Start-card drive still waits for driving speed. One tap goes back
+ * to the driving screen. Nothing else: the drive is ended (or the wait stopped) there.
  */
 export function DriveInProgressBanner() {
   const th = useTheme();
   const router = useRouter();
-  const state = useDrive((d) => (d.status === 'recording' ? 'recording' : d.waiting !== null && d.status === 'idle' ? 'waiting' : null));
+  const state = useDrive((d) => (d.status !== 'recording' ? null : d.waiting !== null ? 'waiting' : 'recording'));
   if (state === null) return null;
   const waiting = state === 'waiting';
 

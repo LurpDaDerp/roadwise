@@ -117,7 +117,7 @@ export const readRowsResultSchema: z.ZodType<ReadRowsResult> = z.strictObject({
 });
 
 export const startWaitingResultSchema: z.ZodType<StartWaitingResult> = z.union([
-  z.strictObject({ ok: z.literal(true), waitUntil: epoch }),
+  z.strictObject({ ok: z.literal(true), waitUntil: epoch, driveId, startedAt: epoch }),
   z.strictObject({ ok: z.literal(false), reason: z.enum(['permission', 'busy', 'unavailable']) }),
 ]);
 

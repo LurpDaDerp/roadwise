@@ -33,8 +33,8 @@ export const hudCopy = {
   /** The band while a Start drive swipe waits for the car to move. */
   waiting: {
     title: 'Ready to roll',
-    line: "Starts once you're moving",
-    spoken: "Ready to roll. Recording starts once you're moving.",
+    line: 'Saved once you drive',
+    spoken: "Ready to roll. Recording now; the drive is saved once you're driving.",
   },
   /** The panel at 2:00 of waiting. */
   ask: {

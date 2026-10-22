@@ -1,5 +1,5 @@
 // The band while a Start drive swipe waits for the car to move (modes plan §3.7): "Ready to roll",
-// and under it "Starts once you're moving". The car is still, so this is the one band line that
+// and under it "Saved once you drive". The car is still, so this is the one band line that
 // is not an alert: a quiet chrome bar with the screen's own outline, read out once as one sentence.
 import { Ionicons } from '@expo/vector-icons';
 import { memo } from 'react';

@@ -100,7 +100,7 @@ export function runDetectRow(v: DetectRowInputs): DetectActual {
       const results: { due: string | null; overdue: string | null }[] = [];
       for (const step of v.steps) {
         if ('row' in step) clock = endOnRow(clock, step.row, step.automotive);
-        else results.push(endDue(clock, v.startedAt, step.check, step.walkSince));
+        else results.push(endDue(clock, v.startedAt, step.check, step.walkSince, step.waitUntil ?? null));
       }
       return { results };
     }

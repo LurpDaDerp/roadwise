@@ -1363,38 +1363,36 @@ describe('the band: a spot nudge, the weather, a failed end', () => {
   });
 });
 
-describe('waiting for the car to move (modes plan §3.7)', () => {
+describe('a Start-card drive waiting for driving speed (drive-fixes brief)', () => {
   const W = (o: Partial<NonNullable<DriveLive['waiting']>> = {}): NonNullable<DriveLive['waiting']> => ({
     since: T,
     phase: 'waiting',
     deadlineAt: T + 120_000,
-    speedMps: null,
-    limitMph: null,
     ...o,
   });
-  const idleWait = (o: Partial<NonNullable<DriveLive['waiting']>> = {}): LiveOver => ({
-    status: 'idle',
-    clientTripId: null,
-    startedAt: null,
+  /** The host's state while it waits: the drive records from the tap (its own speed and limit). */
+  const waitDrive = (o: Partial<NonNullable<DriveLive['waiting']>> = {}, over: LiveOver = {}): LiveOver => ({
+    status: 'recording',
+    clientTripId: 't1',
+    startedAt: T,
     speedMph: null,
     limitMph: null,
     notDrivingAvailable: false,
     waiting: W(o),
+    ...over,
   });
 
-  test('the band says "Ready to roll"; End is Cancel, never locked; the halo shows the wait’s own speed and the sign its limit; no "Not driving?"', async () => {
-    const h = await renderHud(idleWait());
+  test('the band says "Ready to roll" · "Saved once you drive"; End is Cancel, never locked; the halo and the sign are the drive’s own', async () => {
+    const h = await renderHud(waitDrive());
     expect(screen.getByTestId('hud-waiting')).toHaveTextContent(/Ready to roll/);
-    expect(screen.getByTestId('hud-waiting-line')).toHaveTextContent("Starts once you're moving");
-    expect(screen.getByTestId('hud-waiting')).toHaveProp('accessibilityLabel', "Ready to roll. Recording starts once you're moving.");
+    expect(screen.getByTestId('hud-waiting-line')).toHaveTextContent('Saved once you drive');
+    expect(screen.getByTestId('hud-waiting')).toHaveProp('accessibilityLabel', "Ready to roll. Recording now; the drive is saved once you're driving.");
     const cancel = screen.getByRole('button', { name: 'Cancel' });
     expect(cancel).toHaveProp('accessibilityHint', 'Swipe right to stop waiting. Nothing is saved.');
     expect(cancel).not.toBeDisabled();
-    expect(screen.queryByTestId('hud-not-driving')).toBeNull();
-    // 0 before a fix, the limit unknown
-    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('0');
+    // the limit unknown before the drive's first fix
     expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('-');
-    await h.update({ waiting: W({ speedMps: 12 * MPS_PER_MPH, limitMph: 25 }) });
+    await h.update({ speedMph: 12, limitMph: 25 });
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('12');
     expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('25');
     // at 12 mph End stays a Cancel that takes a swipe
@@ -1403,11 +1401,26 @@ describe('waiting for the car to move (modes plan §3.7)', () => {
     expect(screen.getByTestId('hud-nav').props.accessibilityState).toMatchObject({ disabled: false });
   });
 
+  test('the sign shows the drive’s own limit while a Start-card drive waits, as the lock screen does (user report: the sign stayed "-" on the driving screen while the widget showed 35)', async () => {
+    // The host's state on an iPhone: the engine holds the limit (the Live Activity shows it).
+    await renderHud(waitDrive({}, { limitMph: 35, speedMph: 12 }));
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('35');
+    expect(screen.getByLabelText('Speed limit 35')).toBeTruthy();
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('12');
+  });
+
+  test('"Not driving?" follows the drive’s own rules: shown while its budget lasts, also while it waits', async () => {
+    const h = await renderHud(waitDrive({}, { notDrivingAvailable: true }));
+    expect(screen.getByTestId('hud-not-driving')).toBeTruthy();
+    await h.update({ notDrivingAvailable: false });
+    expect(screen.queryByTestId('hud-not-driving')).toBeNull();
+  });
+
   test('any touch on the screen waits a fresh 5 minutes; with no wait, a touch only undims', async () => {
-    const h = await renderHud(idleWait());
+    const h = await renderHud(waitDrive());
     await fireEvent(screen.getByTestId('hud-screen'), 'touchStart');
     expect(mockControls.touchWaiting).toHaveBeenCalledTimes(1);
-    await h.update({ waiting: null, status: 'recording', clientTripId: 't1', speedMph: 12 });
+    await h.update({ waiting: null, speedMph: 12 });
     await fireEvent(screen.getByTestId('hud-screen'), 'touchStart');
     expect(mockControls.touchWaiting).toHaveBeenCalledTimes(1);
   });
@@ -1416,7 +1429,7 @@ describe('waiting for the car to move (modes plan §3.7)', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked module
     const Haptics = require('expo-haptics') as { impactAsync: jest.Mock };
     jest.setSystemTime(T + 120_000);
-    const h = await renderHud(idleWait());
+    const h = await renderHud(waitDrive());
     expect(screen.queryByTestId('hud-wait')).toBeNull();
     await h.update({ waiting: W({ phase: 'popup', deadlineAt: T + 270_000 }) });
     expect(screen.getByTestId('hud-wait')).toBeTruthy();
@@ -1434,7 +1447,7 @@ describe('waiting for the car to move (modes plan §3.7)', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked module
     const Haptics = require('expo-haptics') as { impactAsync: jest.Mock };
     jest.setSystemTime(T + 273_000);
-    await renderHud(idleWait({ phase: 'countdown', deadlineAt: T + 300_000 }));
+    await renderHud(waitDrive({ phase: 'countdown', deadlineAt: T + 300_000 }));
     expect(screen.getByText('Stopping in')).toBeTruthy();
     expect(screen.getByTestId('hud-wait-countdown')).toHaveTextContent('0:27');
     expect(screen.getByLabelText('Stopping in 27 seconds. Touch the screen to keep waiting.')).toBeTruthy();
@@ -1444,9 +1457,9 @@ describe('waiting for the car to move (modes plan §3.7)', () => {
     expect(screen.getByTestId('hud-wait-countdown')).toHaveTextContent('0:26');
   });
 
-  test('Cancel on the panel stops the wait and goes Home, saying nothing', async () => {
+  test('Cancel on the panel ends the drive unsaved and goes Home, saying nothing', async () => {
     jest.setSystemTime(T + 130_000);
-    await renderHud(idleWait({ phase: 'popup', deadlineAt: T + 270_000 }));
+    await renderHud(waitDrive({ phase: 'popup', deadlineAt: T + 270_000 }));
     await act(async () => {
       fireEvent.press(screen.getByTestId('hud-wait-cancel'));
     });
@@ -1456,8 +1469,8 @@ describe('waiting for the car to move (modes plan §3.7)', () => {
     expect(readHomeNotice()).toBeNull();
   });
 
-  test('End swiped while waiting is Cancel: the wait stops and the screen goes Home', async () => {
-    await renderHud(idleWait());
+  test('End swiped while waiting is Cancel: the drive ends unsaved and the screen goes Home', async () => {
+    await renderHud(waitDrive());
     await act(async () => {
       await swipeEnd(screen.getByRole('button', { name: 'Cancel' }));
     });
@@ -1469,7 +1482,7 @@ describe('waiting for the car to move (modes plan §3.7)', () => {
 
   test('the panel closes the navigation list', async () => {
     jest.setSystemTime(T + 100_000);
-    const h = await renderHud(idleWait());
+    const h = await renderHud(waitDrive());
     await fireEvent.press(screen.getByTestId('hud-nav'));
     await act(async () => {});
     expect(screen.getByTestId('hud-nav-panel')).toBeTruthy();
@@ -1480,11 +1493,11 @@ describe('waiting for the car to move (modes plan §3.7)', () => {
     expect(screen.getByTestId('hud-wait')).toBeTruthy();
   });
 
-  test('the drive confirming closes the panel and the band at once, and the screen stays', async () => {
+  test('reaching driving speed closes the panel and the band at once, and the screen stays on the same drive', async () => {
     jest.setSystemTime(T + 280_000);
-    const h = await renderHud(idleWait({ phase: 'countdown', deadlineAt: T + 300_000 }));
+    const h = await renderHud(waitDrive({ phase: 'countdown', deadlineAt: T + 300_000 }));
     expect(screen.getByTestId('hud-wait')).toBeTruthy();
-    await h.update({ waiting: null, status: 'recording', clientTripId: 't1', startedAt: T + 270_000, speedMph: 12, notDrivingAvailable: true });
+    await h.update({ waiting: null, speedMph: 12, notDrivingAvailable: true });
     expect(screen.queryByTestId('hud-wait')).toBeNull();
     expect(screen.queryByTestId('hud-waiting')).toBeNull();
     expect(screen.getByRole('button', { name: hudCopy.endLabel })).toBeTruthy();
@@ -1493,10 +1506,11 @@ describe('waiting for the car to move (modes plan §3.7)', () => {
     expect(mockRouter.replace).not.toHaveBeenCalled();
   });
 
-  test('a wait that runs out ends quietly: Home once, no notice', async () => {
-    const h = await renderHud(idleWait());
-    await h.update({ waiting: null });
-    await h.update({ waiting: null });
+  test('a wait that runs out ends the drive unsaved: Home once, no notice', async () => {
+    const h = await renderHud(waitDrive());
+    mockLastFinalized = { clientTripId: 't1', ok: true, status: null, dropped: 'no_movement', endCause: 'manual', at: T, durationS: null, miles: null };
+    await h.update({ waiting: null, status: 'idle', clientTripId: null });
+    await h.update({ waiting: null, status: 'idle', clientTripId: null });
     expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
     expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
     expect(mockRouter.replace).not.toHaveBeenCalled();
@@ -1504,8 +1518,8 @@ describe('waiting for the car to move (modes plan §3.7)', () => {
   });
 });
 
-describe('a Start-card drive confirming, as a real host publishes it (review I1)', () => {
-  /** Every state an Android host (a dry run: nothing stored) publishes from the wait through the confirmation. */
+describe('a Start-card drive, as a real host publishes it (review I1)', () => {
+  /** Every state an Android host (a dry run: nothing stored) publishes from the tap until the car has reached driving speed. */
   async function hostStates(): Promise<DriveState[]> {
     let clock = DRIVE_T0;
     let ids = 0;
@@ -1536,7 +1550,7 @@ describe('a Start-card drive confirming, as a real host publishes it (review I1)
     const states: DriveState[] = [];
     host.subscribe((st) => states.push(st));
     await host.start();
-    const list = driveRows(20, { speedMps: 15 });
+    const list = [...driveRows(5, { speedMps: 0 }), ...driveRows(5, { t0: DRIVE_T0 + 5000, speedMps: 15 })];
     source.loadTrace(list);
     for (const r of list) {
       clock = r.ts;
@@ -1559,16 +1573,21 @@ describe('a Start-card drive confirming, as a real host publishes it (review I1)
     waiting: st.waiting === null ? null : { ...st.waiting, since: T, deadlineAt: T + 120_000 },
   });
 
-  test('every state published across the confirmation keeps the screen: the wait, then the drive, never Home', async () => {
+  test('every state published from the tap is the drive, waiting with the drive’s own limit, then driving: never Home', async () => {
     jest.useRealTimers();
     const states = await hostStates();
     jest.useFakeTimers();
     jest.setSystemTime(T);
-    const at = states.findIndex((st) => st.status === 'recording');
-    expect(at).toBeGreaterThan(0);
+    expect(states.every((st) => st.status === 'recording')).toBe(true);
+    const over = states.findIndex((st) => st.waiting === null);
+    expect(over).toBeGreaterThan(0);
     const h = await renderHud(liveOf(states[0]!));
     expect(screen.getByTestId('hud-waiting')).toBeTruthy();
-    for (const st of states.slice(1, at + 3)) await h.update(liveOf(st));
+    for (const st of states.slice(1, over)) await h.update(liveOf(st));
+    // still waiting, the sign the drive's own limit
+    expect(screen.getByTestId('hud-waiting')).toBeTruthy();
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('35');
+    for (const st of states.slice(over)) await h.update(liveOf(st));
     expect(mockRouter.dismissTo).not.toHaveBeenCalled();
     expect(mockRouter.replace).not.toHaveBeenCalled();
     expect(screen.queryByTestId('hud-waiting')).toBeNull();

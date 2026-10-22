@@ -23,7 +23,7 @@ export const homeCopy = {
   },
   start: {
     label: 'Start drive',
-    hint: "Swipe right to start. Recording begins once you're moving.",
+    hint: 'Swipe right to start recording.',
     auto: 'Or just drive. RoadWise notices on its own.',
   },
   notices: {

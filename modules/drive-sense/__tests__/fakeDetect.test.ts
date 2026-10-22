@@ -7,6 +7,7 @@ import { readJournal } from '../src/detect/journal';
 import { DETECT } from '../src/detect/policy';
 import { createFakeDriveSense } from '../src/fake';
 import { createFakeDriveDetect } from '../src/fakeDetect';
+import type { DriveStartedEvent } from '../src/detect/types';
 
 const OWNER = '3b2e4c1a-1111-4222-8333-444455556666';
 const row = (ts: number) => ({ ts, speed: 9, lat: 47.6, lng: -122.33 });
@@ -108,26 +109,27 @@ describe('the fake detector', () => {
     expect(ended).toHaveLength(2);
   });
 
-  test('a Start-card wait: needs While Using and Precise, extends, cancels and times out', async () => {
+  test('the Start card: needs While Using and Precise; opens a manual drive at the tap, waiting for driving speed; a touch extends the wait; busy while one records', async () => {
     let now = 1_000_000;
     const d = createFakeDriveDetect({ now: () => now, permissions: { location: 'none' } });
     await expect(d.startWaiting()).resolves.toEqual({ ok: false, reason: 'permission' });
     d.setPermissions({ location: 'whenInUse' });
-    await expect(d.startWaiting()).resolves.toEqual({ ok: true, waitUntil: now + DETECT.WAIT_MAX_MS });
+    const started: DriveStartedEvent[] = [];
+    d.addListener('driveStarted', (e) => started.push(e));
+    const r = await d.startWaiting();
+    expect(r).toEqual({ ok: true, waitUntil: now + DETECT.WAIT_MAX_MS, driveId: expect.any(String), startedAt: now });
+    await Promise.resolve();
+    expect(started).toEqual([expect.objectContaining({ driveId: r.ok ? r.driveId : '', origin: 'manual', startedAt: now, startSource: 'wake', continues: false })]);
+    expect(await d.getState()).toMatchObject({ state: 'recording', origin: 'manual', waitUntil: now + DETECT.WAIT_MAX_MS });
+    expect((await d.listDrives()).map((j) => j.driveId)).toEqual([r.ok ? r.driveId : '']);
     now += 60_000;
     await expect(d.extendWaiting()).resolves.toBe(now + DETECT.WAIT_MAX_MS);
-    await d.cancelWaiting();
-    await expect(d.extendWaiting()).resolves.toBeNull();
-    await d.startWaiting();
-    const reasons: string[] = [];
-    d.addListener('detectState', (e) => reasons.push(e.reason));
-    d.waitTimeout();
-    await Promise.resolve();
-    expect(reasons).toContain('waitTimeout');
-    await d.startWaiting();
-    const ev = d.confirm();
-    expect(ev.origin).toBe('manual');
     await expect(d.startWaiting()).resolves.toEqual({ ok: false, reason: 'busy' });
+    d.waitOver();
+    await expect(d.extendWaiting()).resolves.toBeNull();
+    expect((await d.getState()).waitUntil).toBeNull();
+    d.jsStop(now);
+    await expect(d.extendWaiting()).resolves.toBeNull();
   });
 
   test('requestAlways answers once from While Using; an unavailable fake rejects everything', async () => {
@@ -181,7 +183,7 @@ describe('the fake detector', () => {
     await d.startWaiting();
     reasons.length = 0;
     await d.wipe();
-    expect(reasons).toEqual(['cancelled']);
+    expect(reasons).toEqual(['disarmed']);
     expect(await d.extendWaiting()).toBeNull();
     const off = createFakeDriveDetect({ available: false });
     await expect(off.wipe()).resolves.toBeUndefined();

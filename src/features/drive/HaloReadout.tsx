@@ -52,27 +52,14 @@ export type HaloReadoutProps = {
   unitColor: string;
   numeralStyle?: AnimatedStyle<TextStyle>;
   speeding?: boolean;
-  /**
-   * While a Start drive swipe waits for the car to move: the wait's last GPS speed (m/s; 0 before a
-   * fix), shown in place of the drive's. Undefined while a drive records.
-   */
-  waitingMps?: number | null;
 };
-
-/** The waiting speed, whole, in the driver's units (0 before a fix). */
-export function waitingSpeed(mps: number | null, units: HudUnits): number {
-  if (mps === null || !Number.isFinite(mps) || mps <= 0) return 0;
-  return Math.round((mps / MPS_PER_MPH) * (units === 'km' ? KMH_PER_MPH : 1));
-}
 
 /**
  * The speed inside the halo, carried on between fixes (`useCarriedSpeed`): its own component reading
  * its own slice of the drive, so each fix and each tick re-render the numerals and nothing else.
- * While waiting for the car to move it shows the wait's own speed.
  */
-export function HaloReadout({ units, pt2, pt3, waitingMps, ...rest }: HaloReadoutProps) {
-  const carried = useCarriedSpeed(useShownSpeed(), units);
-  const speed = waitingMps === undefined ? carried : waitingSpeed(waitingMps, units);
+export function HaloReadout({ units, pt2, pt3, ...rest }: HaloReadoutProps) {
+  const speed = useCarriedSpeed(useShownSpeed(), units);
   const size = speedDigits(speed) >= 3 ? pt3 : pt2;
   return <SpeedReadout speed={speed} unit={unitLabel(units)} size={size} {...rest} />;
 }

@@ -262,13 +262,9 @@ describe('SimulationPanel', () => {
     await fireEvent.press(screen.getByRole('button', { name: /5×/ }));
     jest.useFakeTimers();
     await fireEvent.press(screen.getByRole('button', { name: 'Simulate a drive' }));
-    // The Start card's wait first (the HUD shows it), then the drive once 10 mph has held 15 s.
+    // The drive records from the Start tap (the HUD shows its wait until driving speed).
     await act(async () => {
       await jest.advanceTimersByTimeAsync(1000);
-    });
-    expect(screen.getByTestId('stub-hud').props.children).toBe('idle dry');
-    await act(async () => {
-      await jest.advanceTimersByTimeAsync(3000);
     });
     expect(screen.getByTestId('stub-hud').props.children).toBe('recording dry');
     for (let i = 0; i < 200 && !screen.queryByText(/Nothing was stored/); i += 1) {

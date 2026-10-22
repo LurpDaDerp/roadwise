@@ -143,6 +143,7 @@ function readyRuntime() {
     autoEndAt: null,
     distanceM: 0,
     lockedOut: false,
+    drove: false,
     lastAlert: null,
     callActive: false,
     lastFinalized: null,

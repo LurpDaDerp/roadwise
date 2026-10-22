@@ -68,7 +68,7 @@ export interface DetectState {
   startedAt: number | null;
   /** When the state was entered, epoch ms. */
   since: number;
-  /** A Start-card wait's deadline. */
+  /** A Start-card drive still waiting for driving speed: its deadline (5 min from the tap or the last touch). */
   waitUntil: number | null;
   lastEnd: DetectLastEndState | null;
   /** The 3 h cap while suppressed. */
@@ -175,7 +175,10 @@ export type DriveDetectEvents = {
 
 export type DriveDetectEvent = keyof DriveDetectEvents;
 
-export type StartWaitingResult = { ok: true; waitUntil: number } | { ok: false; reason: 'permission' | 'busy' | 'unavailable' };
+/** `ok`: the drive opened at the tap (`driveId`, `startedAt`), waiting for driving speed until `waitUntil`. */
+export type StartWaitingResult =
+  | { ok: true; waitUntil: number; driveId: string; startedAt: number }
+  | { ok: false; reason: 'permission' | 'busy' | 'unavailable' };
 
 export interface ReadRowsResult {
   /** `row` event payloads with their `seq`: validate each with `parseRow`. */
@@ -196,9 +199,14 @@ export interface DriveDetectApi {
   getState(): Promise<DetectState>;
   /** The one Always request, only from While Using, once per install; otherwise the current answer. */
   requestAlways(): Promise<'always' | 'whenInUse' | 'denied'>;
-  /** The Start card: a manual candidate with a 5-min wait (While Using + Precise is enough; the app is in front). */
+  /**
+   * The Start card: a manual drive opens at once, from the tap, journaled like any drive and announced
+   * with `driveStarted` (While Using + Precise is enough; the app is in front). It waits for driving
+   * speed (10 mph held 15 s) until `waitUntil` (5 min): meanwhile native's safety stop never ends it
+   * on a walk, and on the still clock only past that deadline. JS ends it unsaved at the deadline.
+   */
   startWaiting(): Promise<StartWaitingResult>;
-  /** Any touch on the waiting screen: the 5 min start again; the new waitUntil, or null when not waiting. */
+  /** Any touch while the Start-card drive waits: the 5 min start again; the new waitUntil, or null when it waits no more. */
   extendWaiting(): Promise<number | null>;
   cancelWaiting(): Promise<void>;
   /** "Not driving?": cancel the live drive (journal deleted) and suppress detection. No-op when nothing records. */

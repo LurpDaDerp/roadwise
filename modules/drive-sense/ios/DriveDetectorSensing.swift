@@ -20,6 +20,7 @@ extension DriveDetector {
       if step.confirmed { confirm(kind) }
     case "recording", "ending":
       record(d, body)
+      if rec?.waitUntil != nil { waitForDriving(d) }
     default:
       break
     }

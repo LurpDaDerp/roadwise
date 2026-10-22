@@ -14,7 +14,6 @@ import { navAppById } from '@/features/navigation/catalog';
 import { NavAppPicker } from '@/features/navigation/NavAppPicker';
 import { useNavigationButton } from '@/features/navigation/useNavigationButton';
 import { sunIsDown } from '@/lib/time';
-import { mpsToMph } from '@/lib/units';
 import { fontFamilies } from '@/ui/fonts';
 import { SwipeButton } from '@/ui';
 import { useOptionalTheme, useOsReduceMotion } from '@/ui/theme';
@@ -152,10 +151,11 @@ export type HudScreenProps = {
  *   navigation button), shown while the drive's 2-minute budget lasts (the host counts the time this
  *   screen is focused with RoadWise in front); a tap discards the drive and goes Home. A touch that
  *   starts while the screen is dimmed only wakes it.
- * - Waiting (a Start drive swipe, before the car moves): the band says "Ready to roll" · "Starts
- *   once you're moving", the halo shows the wait's own speed, End is "Cancel". At 2:00 a panel asks
- *   "Still planning to drive?", from 4:30 it counts down; any touch waits a fresh 5 minutes; at
- *   5:00, or on Cancel, the wait ends quietly and the screen goes Home.
+ * - Waiting (a Start drive swipe, until the car reaches driving speed): the drive records from the
+ *   tap (its speed, its limit, its halo and alerts, "Not driving?" as for any drive); the band says
+ *   "Ready to roll" · "Saved once you drive", End is "Cancel". At 2:00 a panel asks "Still planning
+ *   to drive?", from 4:30 it counts down; any touch waits a fresh 5 minutes; at 5:00, or on Cancel,
+ *   the drive ends unsaved and the screen goes Home, saying nothing.
  * - Landscape: the halo the full height, the sign left of it; on the right the band, the link, the
  *   navigation button and End under it.
  * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive. At
@@ -198,11 +198,11 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
       : { surface: theme.colors.surface, ink: theme.colors.text, muted: theme.colors.textMuted, edge: theme.colors.border };
   const units = useHudUnits();
 
-  // A Start drive swipe waiting for the car to move (no drive yet), or null.
+  // A Start-card drive still waiting for driving speed (it records from the tap), or null.
   const waiting = live.waiting;
   const isWaiting = waiting !== null;
-  // The speed the locks read: the wait's own GPS speed while waiting, else the newest row's (mph).
-  const lockMph = waiting !== null ? (waiting.speedMps === null ? null : Math.round(mpsToMph(waiting.speedMps) * 10) / 10) : live.rowSpeedMph;
+  // The speed the locks read: the newest row's (mph).
+  const lockMph = live.rowSpeedMph;
 
   // The screen's focus: the "Not driving?" budget counts only while this screen is focused (the host
   // adds RoadWise being in front), so the lock-screen hint goes at the same moment the link does.
@@ -388,8 +388,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // for the rest of the drive (a more severe kind shows again).
   const weather = live.weatherAlert;
   const dismissWeather = useCallback(() => controls.dismissWeather(), [controls]);
-  // "Not driving?" while the drive's budget lasts; never while waiting, saving or already going.
-  const showLink = live.status === 'recording' && live.notDrivingAvailable && !isWaiting && !busy && !cancelling;
+  // "Not driving?" while the drive's budget lasts (from the tap for a Start-card drive); never while saving or already going.
+  const showLink = live.status === 'recording' && live.notDrivingAvailable && !busy && !cancelling;
   const link = <NotDrivingLink palette={p} dimmed={dimmed} onPress={() => void onNotDriving()} />;
 
   return (
@@ -435,7 +435,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
       ) : null}
 
       <View style={[styles.abs, styles.centred, at(layout.sign)]}>
-        <SpeedSign limit={inUnits(waiting !== null ? waiting.limitMph : live.limitMph, units)} palette={p} units={units} height={layout.sign.h} />
+        {/* The drive's own limit, the Live Activity's (a Start-card drive's too: it records from the tap). */}
+        <SpeedSign limit={inUnits(live.limitMph, units)} palette={p} units={units} height={layout.sign.h} />
       </View>
       {showLink && layout.notDriving !== 'line' ? <View style={[styles.abs, styles.centred, at(layout.notDriving)]}>{link}</View> : null}
       <View style={[styles.abs, styles.centred, at(layout.end)]}>
@@ -504,7 +505,6 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
               unitColor={p.haloInkMuted}
               numeralStyle={numeralStyle}
               speeding={speeding}
-              waitingMps={waiting !== null ? waiting.speedMps : undefined}
             />
           )}
         />

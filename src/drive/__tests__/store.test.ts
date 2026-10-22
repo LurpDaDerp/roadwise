@@ -67,10 +67,10 @@ test('in the background the wait, its phase, the "Not driving?" offer and the we
   const store = createDriveStore(h.host, app);
   let renders = 0;
   store.subscribe(() => (renders += 1));
-  const wait = { since: 1, phase: 'waiting' as const, deadlineAt: 2, speedMps: null, limitMph: null };
+  const wait = { since: 1, phase: 'waiting' as const, deadlineAt: 2 };
   h.set({ waiting: wait });
   expect(renders).toBe(1);
-  h.set({ waiting: { ...wait, speedMps: 3 } });
+  h.set({ waiting: { ...wait, since: 5 } });
   expect(renders).toBe(1);
   h.set({ waiting: { ...wait, phase: 'popup' } });
   expect(renders).toBe(2);

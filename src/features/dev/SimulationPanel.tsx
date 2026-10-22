@@ -477,8 +477,8 @@ export function SimulationPanel({
 }
 
 /**
- * What the modal shows: the HUD while the simulated drive waits to confirm (the Start card's wait:
- * 10 mph held 15 s) and while it is open, and a Stop control only while
+ * What the modal shows: the HUD while the simulated drive is open (from the Start tap, its wait for
+ * driving speed included), and a Stop control only while
  * the lockout is off (under 5 mph) — at "speed" the HUD's own touch shield is the only thing on
  * top, exactly as on a real drive. The screen is kept awake for the replay, as the lockout gate
  * does for a mounted trip.

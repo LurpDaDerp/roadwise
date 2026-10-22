@@ -47,7 +47,7 @@ export function dropCopy(cause: EndCause, reason: DropReason): string {
 /**
  * Start drive, the hero action at the foot of Home's drive card: a paper capsule across the scene
  * with an ink disc at its left carrying the car and the words to its right. The driver swipes the
- * car right to start a waiting session (recording begins once the car is moving), opening the
+ * car right to start a drive (it records from the swipe and is saved once the car drives), opening the
  * sky's accent behind it, with a success haptic as it lands; a tap does nothing. While the start
  * is under way the disc sits at the end and spins.
  */

@@ -57,7 +57,8 @@ const lastEndAt = (decidedSec: number, northM: number): DetectLastEnd => ({
   driveId: '00000000-0000-4000-8000-000000000001',
 });
 
-export type EndStep = { row: DetectRow; automotive: boolean } | { check: number; walkSince: number | null };
+/** A row, or a check at `check` (`waitUntil`: a Start-card drive still waiting for driving speed). */
+export type EndStep = { row: DetectRow; automotive: boolean } | { check: number; walkSince: number | null; waitUntil?: number | null };
 
 export interface ExpectedStart {
   index: number;
@@ -150,7 +151,11 @@ const statusIn = (o: Partial<StatusInputs> = {}): StatusInputs => ({
 });
 
 const steps = (rows: DetectRow[], automotive = false): EndStep[] => rows.map((row) => ({ row, automotive }));
-const check = (sec: number, walkSec: number | null = null): EndStep => ({ check: at(sec), walkSince: walkSec === null ? null : at(walkSec) });
+const check = (sec: number, walkSec: number | null = null, waitSec?: number): EndStep => ({
+  check: at(sec),
+  walkSince: walkSec === null ? null : at(walkSec),
+  ...(waitSec === undefined ? {} : { waitUntil: at(waitSec) }),
+});
 const none = { due: null, overdue: null };
 
 export const DETECT_VECTORS: readonly DetectVector[] = [
@@ -360,6 +365,20 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     startedAt: at(0),
     steps: [...steps(vrows(0, 10, 20)), ...steps(vrows(11, 20, 0)), { row: vrow(21, 2, { northM: 150 }), automotive: false }, check(320), check(321)],
     expected: [none, { due: null, overdue: 'still' }],
+  },
+  {
+    name: 'end: a Start-card drive waiting for driving speed never ends on a walk (the walk to the car)',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 20, 0)), check(40, 10, 300), check(100, 10, 300), check(100, 10)],
+    expected: [none, none, { due: 'walking', overdue: 'walking' }],
+  },
+  {
+    name: 'end: a waiting Start-card drive ends on the still clock only once its wait is over too (a touch moves it on)',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 20, 0)), check(310, null, 400), check(400, null, 400), check(459, null, 400), check(460, null, 400), check(310, null, 100), check(360, null, 100)],
+    expected: [none, { due: null, overdue: 'still' }, { due: null, overdue: 'still' }, { due: 'still', overdue: 'still' }, { due: null, overdue: 'still' }, { due: 'still', overdue: 'still' }],
   },
   {
     name: 'end: the 12 h cap comes before the other rules',

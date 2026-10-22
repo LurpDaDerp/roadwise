@@ -120,6 +120,9 @@ export function createEngine(deps: EngineDeps): Engine {
     else throw err;
   }
 
+  /** The host holds the automatic ends (a Start-card drive still waiting): only the 12 h cap applies. */
+  const held = (): boolean => deps.holdEnds?.() === true;
+
   function snapshot(): EngineSnapshot {
     const row = seen?.row ?? null;
     const speed = row === null ? null : knownSpeed(row);
@@ -146,7 +149,8 @@ export function createEngine(deps: EngineDeps): Engine {
       courseDeg: recording ? course : null,
       lastShake: recording ? lastShake : null,
       stopped: recording && speed !== null && speed <= STOPPED_MPS,
-      autoEndAt: recording && session !== null ? autoEndAt(session) : null,
+      autoEndAt: recording && session !== null ? (held() ? session.startedAt + MAX_DRIVE_MS : autoEndAt(session)) : null,
+      drove: recording && session !== null && session.droveAt !== null,
       distanceM: session?.distanceM ?? 0,
       // The last known speed holds the lockout through a dropout, and after an adopt (the rebuilt session's).
       lockedOut: recording && (session?.lastSpeed?.mps ?? 0) > STOPPED_MPS,
@@ -299,6 +303,7 @@ export function createEngine(deps: EngineDeps): Engine {
       await finalize((open) => closeAtLastMovement(open, 'limit'));
       return true;
     }
+    if (held()) return false;
     if (t >= autoEndAt(s)) {
       await finalize((open) => closeAtLastMovement(open, 'stopped'));
       return true;
@@ -317,7 +322,7 @@ export function createEngine(deps: EngineDeps): Engine {
    * ended the drive.
    */
   async function checkFoot(t: number): Promise<boolean> {
-    if (foot === null || status !== 'recording') return false;
+    if (foot === null || status !== 'recording' || held()) return false;
     const s = session as TripSession;
     // The car drove after the walk began: whatever the report said, it was a misread (or the walk to the car).
     if (s.lastDroveAt !== null && s.lastDroveAt >= foot.since) {
