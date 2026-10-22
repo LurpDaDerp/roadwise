@@ -288,6 +288,20 @@ describe('the Start card (Android: the capture at once; the drive records from t
     await h.host.stop({ endOpenTrip: false });
   });
 
+  test('the wait never counts toward its 2 min: 90 s parked, then 40 s and 0.3 mi of driving, is too short and not kept', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(90, { t0: T0 + 1000, speedMps: 0 }));
+    await feed(h, rows(40, { t0: T0 + 91_000, speedMps: 12 }));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', waiting: null, startedAt: T0 });
+    clock = T0 + 131_000;
+    expect(await h.host.end()).toEqual({ clientTripId: uuid(1), dropped: 'too_short' });
+    expect(await tripCount()).toBe(0);
+    expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
+    expect(await readDropNotice(db)).toMatchObject({ clientTripId: uuid(1), reason: 'too_short', origin: 'manual' });
+  });
+
   test('"Not driving?" is never offered while the drive waits and the wait spends none of its budget; at driving speed it is offered, counted from then', async () => {
     const h = build();
     await h.host.boot();

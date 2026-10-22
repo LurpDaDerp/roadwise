@@ -188,6 +188,7 @@ export function createSession(start: SessionStart): TripSession {
     validGnssRows: 0,
     mockRows: 0,
     movingRows: 0,
+    firstMovingAt: null,
     imuActiveRows: 0,
     distanceM: 0,
     safeDistanceM: 0,
@@ -298,6 +299,7 @@ function accumulate(session: TripSession, row: FeatureRow, unsafe: boolean): voi
     if (speed > session.maxSpeedMps) session.maxSpeedMps = speed;
     if (speed >= MOVING_MIN_MPH * MPS_PER_MPH) {
       session.movingRows += 1;
+      if (session.firstMovingAt === null) session.firstMovingAt = row.ts;
       if (imuActive(row)) session.imuActiveRows += 1;
     }
   }

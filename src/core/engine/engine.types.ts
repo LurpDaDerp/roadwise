@@ -125,6 +125,12 @@ export interface TripSession {
   mockRows: number;
   /** Rows with a known speed at or above 5 mph, and how many of them showed any IMU activity. */
   movingRows: number;
+  /**
+   * `ts` of the drive's first row with a known speed at or above 5 mph (`MOVING_MIN_MPH`): when the
+   * car first moved. Null until then; never changes after. A Start-card drive's too-short test
+   * counts from it (`finalize.ts` `manualTooShort`).
+   */
+  firstMovingAt: number | null;
   imuActiveRows: number;
   /** Haversine over consecutive valid fixes, metres (GNSS jumps skipped). */
   distanceM: number;

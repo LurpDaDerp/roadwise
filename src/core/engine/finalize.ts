@@ -319,15 +319,19 @@ const endedAtOf = (session: Pick<TripSession, 'startedAt' | 'endedAt' | 'lastRow
 const milesOf = (session: Pick<TripSession, 'distanceM'>): number => round3(clamp(metersToMiles(finite(session.distanceM)), 0, 1000));
 
 /**
- * A drive started from the Start card (and never re-opened) that is too short to score
- * (`tooShort`: under `MIN_SCORED_MILES` AND under `MIN_SCORED_S`, on the miles and time the payload
- * would state) is not kept at all; an automatic one is kept unscored. A re-opened drive never is:
- * its first leg was kept.
+ * A drive started from the Start card (and never re-opened) that is too short to score is not kept
+ * at all (`tooShort`): under `MIN_SCORED_MILES` on the miles the payload would state AND under
+ * `MIN_SCORED_S` from the car's first movement (`session.firstMovingAt`, the first row at
+ * `MOVING_MIN_MPH` or more) to its end, so the wait before it never counts (the drive's own start
+ * stays the tap). An automatic one is kept unscored. A re-opened drive never is: its first leg was kept.
  */
-export function manualTooShort(session: Pick<TripSession, 'origin' | 'continuations' | 'distanceM' | 'startedAt' | 'endedAt' | 'lastRowTs'>): boolean {
+export function manualTooShort(
+  session: Pick<TripSession, 'origin' | 'continuations' | 'distanceM' | 'startedAt' | 'endedAt' | 'lastRowTs' | 'firstMovingAt'>
+): boolean {
   if (session.origin !== 'manual' || session.continuations > 0) return false;
-  const startedAt = Math.round(session.startedAt);
-  return tooShort(milesOf(session), round3(durationSOf({ startedAt, endedAt: endedAtOf(session) })));
+  const movingFrom = session.firstMovingAt === null ? null : Math.round(session.firstMovingAt);
+  const movingS = movingFrom === null ? 0 : durationSOf({ startedAt: movingFrom, endedAt: endedAtOf(session) });
+  return tooShort(milesOf(session), round3(movingS));
 }
 
 /** A drive that was not kept: nothing stored, uploaded or scored. */

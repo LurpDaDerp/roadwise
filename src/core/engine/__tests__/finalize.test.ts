@@ -468,7 +468,7 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
     expect(await closeDrive(closeSession(drive(30, 'manual'), T0 + 30_000, 'manual'), deps())).toEqual({ dropped: 'too_short', clientTripId: ID });
     expect(await createTripsRepo(db).get(ID)).toBeNull();
     expect((await db.execute('SELECT * FROM sync_queue')).rows).toEqual([]);
-    // The same 0.28 mi ended 2 min after the tap (the car waited first): long enough.
+    // The same 0.28 mi driven for 2 min from its first movement: long enough.
     expect(manualTooShort(closeSession(drive(30, 'manual'), T0 + 120_000, 'manual'))).toBe(false);
     // 0.5 mi in under a minute: far enough.
     expect(manualTooShort(closeSession(drive(55, 'manual'), T0 + 55_000, 'manual'))).toBe(false);
@@ -478,6 +478,43 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
     const auto = await closeDrive(closeSession(drive(30, 'auto'), T0 + 30_000, 'manual'), deps());
     expect(isDropped(auto)).toBe(false);
     expect(auto).toMatchObject({ drive: { scored: false } });
+  });
+
+  test('a Start-card drive’s 2 min count from the car’s first movement (5 mph or more), never the wait before it; one that never moved or never reached driving speed drops by that rule', async () => {
+    /** Parked `parkedS` from the tap, then `drivingS` at `mps`, ended as its last row ends. */
+    const waited = (parkedS: number, drivingS: number, mps: number) => {
+      const s = createSession({ clientTripId: ID, startedAt: T0, origin: 'manual' });
+      const list = [...rows(parkedS, { speedMps: 0 }), ...rows(drivingS, { t0: T0 + parkedS * 1000, speedMps: mps })];
+      for (const r of list) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
+      return closeSession(s, T0 + (parkedS + drivingS) * 1000, 'manual');
+    };
+    // 90 s waiting, then 40 s and 0.3 mi of driving: too short (from the tap it would be 2:10).
+    const short = waited(90, 40, 12);
+    expect(short).toMatchObject({ startedAt: T0, firstMovingAt: T0 + 90_000 });
+    expect(metersToMiles(short.distanceM)).toBeCloseTo(0.29, 2);
+    expect(manualTooShort(short)).toBe(true);
+    await createTripsRepo(db).insert({ client_trip_id: ID, started_at: T0, tz: TZ, status: 'recording' }, T0);
+    expect(await closeDrive(short, deps())).toEqual({ dropped: 'too_short', clientTripId: ID });
+    // 2 min from the first movement, still under 0.5 mi: kept, its payload's time from the tap.
+    expect(manualTooShort(waited(90, 119, 6))).toBe(true);
+    const kept = waited(90, 120, 6);
+    expect(manualTooShort(kept)).toBe(false);
+    await createTripsRepo(db).insert({ client_trip_id: ID, started_at: T0, tz: TZ, status: 'recording' }, T0);
+    const stored = await closeDrive(kept, deps());
+    expect(isDropped(stored)).toBe(false);
+    expect((await createTripsRepo(db).get(ID))!).toMatchObject({ started_at: T0, duration_s: 210 });
+    await db.execute('DELETE FROM sync_queue');
+    await db.execute('DELETE FROM trips');
+    // Never moved: dropped as such, never as too short.
+    const still = waited(120, 0, 0);
+    expect(still.firstMovingAt).toBeNull();
+    await createTripsRepo(db).insert({ client_trip_id: ID, started_at: T0, tz: TZ, status: 'recording' }, T0);
+    expect(await closeDrive(still, deps())).toEqual({ dropped: 'no_movement', clientTripId: ID });
+    // Moved, but never at driving speed (3 m/s, under 10 mph): dropped by the driving-speed rule.
+    const crawl = waited(30, 90, 3);
+    expect(crawl).toMatchObject({ firstMovingAt: T0 + 30_000, droveAt: null });
+    await createTripsRepo(db).insert({ client_trip_id: ID, started_at: T0, tz: TZ, status: 'recording' }, T0);
+    expect(await closeDrive(crawl, deps())).toEqual({ dropped: 'not_driven', clientTripId: ID });
   });
 
   test('a second closeDrive after a drop neither throws nor inserts; dropTrip never deletes a finalized row', async () => {
