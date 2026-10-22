@@ -17,6 +17,9 @@
  *
  * Any other tap (or a held one's replay) opens its route, except a drive's summary already on
  * screen: the driving screen opened it as the drive ended, so its "Drive ended" note opens nothing more.
+ * One held because a drive records (a recap of the drive before, say) opens the driving screen
+ * meanwhile, as the recording note does, and its own route once the drive is over; one held while a
+ * drive only finalizes opens nothing until then.
  *
  * Battery (§3.5): no timer and no polling. The busy subscription fires with the drive host's state
  * changes; while nothing is held it returns after one boolean read.
@@ -93,10 +96,10 @@ export function NotificationsHost(props: NotificationsHostProps): null {
   const replay = useRef<() => void>(() => {});
   /** Counts deferrals, so a replay that raced one runs again. */
   const deferrals = useRef(0);
-  /** A recording-note tap waiting for the navigator. */
+  /** A tap for the driving screen (the recording note, or one held while a drive records) waiting for the navigator. */
   const driveTap = useRef(false);
 
-  /** Opens the driving screen for a waiting recording-note tap, once the navigator is up. Reads only refs. */
+  /** Opens the driving screen for a waiting tap, once the navigator is up. Reads only refs. */
   const openDrive = useRef(() => {
     if (!driveTap.current || !latest.current.ready) return;
     driveTap.current = false;
@@ -147,6 +150,12 @@ export function NotificationsHost(props: NotificationsHostProps): null {
           if (out.kind !== 'deferred') return;
           mayHavePending.current = true;
           deferrals.current += 1;
+          // Held because a drive records: the driving screen meanwhile (the held route opens after
+          // the drive), now or once the navigator is up.
+          if (latest.current.props.isRecording()) {
+            driveTap.current = true;
+            openDrive.current();
+          }
           // What held it may already be over (the navigator mounted during the write).
           replay.current();
         })

@@ -1,6 +1,7 @@
 // The one notification response listener: a tap on the iPhone's recording note or the phone
 // reminder opens the driving screen while a drive records (never held past the drive, never
-// replayed, starting nothing), and any other tap opens its allowlisted route, held during a drive.
+// replayed, starting nothing), and any other tap opens its allowlisted route, held during a drive
+// (the driving screen meanwhile while the drive records).
 import { act, render } from '@testing-library/react-native';
 
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
@@ -242,13 +243,58 @@ describe('a tap on the "Drive ended" note', () => {
     expect(h.navigate.mock.calls).toEqual([['/drives/trip-9?fresh=1']]);
   });
 
-  test('a tap held during a drive is replayed once the drive is over, unless its summary is already on screen', async () => {
+  test('a tap held during a drive opens the driving screen meanwhile and is replayed once the drive is over, unless its summary is already on screen', async () => {
     const h = await mount({ drive: 'recording' });
     await act(async () => mockNotifications.listener!(summaryTap('/drives/trip-9?fresh=1', 13)));
     await h.settle();
-    expect(h.navigate).not.toHaveBeenCalled();
+    expect(h.navigate.mock.calls).toEqual([['/drive']]);
     mockPathname = '/drives/trip-9';
     await h.setDrive('idle');
+    expect(h.navigate.mock.calls).toEqual([['/drive']]);
+  });
+
+  test('held while a drive records: the driving screen now, the recap once the drive is over', async () => {
+    const h = await mount({ drive: 'recording' });
+    await act(async () => mockNotifications.listener!(summaryTap('/drives/trip-9?fresh=1', 14)));
+    await h.settle();
+    expect(h.navigate.mock.calls).toEqual([['/drive']]);
+    await h.setDrive('closing');
+    expect(h.navigate.mock.calls).toEqual([['/drive']]);
+    await h.setDrive('idle');
+    expect(h.navigate.mock.calls).toEqual([['/drive'], ['/drives/trip-9?fresh=1']]);
+  });
+
+  test('held while a drive records, on the driving screen already: nothing more opens until the drive is over', async () => {
+    mockPathname = '/drive';
+    const h = await mount({ drive: 'recording' });
+    await act(async () => mockNotifications.listener!(summaryTap('/drives/trip-9?fresh=1', 15)));
+    await h.settle();
     expect(h.navigate).not.toHaveBeenCalled();
+    await h.setDrive('idle');
+    expect(h.navigate.mock.calls).toEqual([['/drives/trip-9?fresh=1']]);
+  });
+
+  test('held while a drive only finalizes, or before the navigator is up with no drive: no driving screen', async () => {
+    const h = await mount({ drive: 'closing' });
+    await act(async () => mockNotifications.listener!(summaryTap('/drives/trip-9?fresh=1', 16)));
+    await h.settle();
+    expect(h.navigate).not.toHaveBeenCalled();
+    await h.setDrive('idle');
+    expect(h.navigate.mock.calls).toEqual([['/drives/trip-9?fresh=1']]);
+
+    mockNotifications.last = summaryTap('/drives/trip-7?fresh=1', 17);
+    const cold = await mount({ ready: false });
+    await cold.setReady(true);
+    expect(cold.navigate.mock.calls).toEqual([['/drives/trip-7?fresh=1']]);
+  });
+
+  test('held before the navigator is up while a drive records: the driving screen once it is, the recap after the drive', async () => {
+    mockNotifications.last = summaryTap('/drives/trip-6?fresh=1', 18);
+    const h = await mount({ drive: 'recording', ready: false });
+    expect(h.navigate).not.toHaveBeenCalled();
+    await h.setReady(true);
+    expect(h.navigate.mock.calls).toEqual([['/drive']]);
+    await h.setDrive('idle');
+    expect(h.navigate.mock.calls).toEqual([['/drive'], ['/drives/trip-6?fresh=1']]);
   });
 });
