@@ -312,7 +312,10 @@ export function createEngine(deps: EngineDeps): Engine {
 
   /**
    * The automatic end, checked at `t` (a row's end or a tick): at `MAX_DRIVE_MS` (cause `limit`) or
-   * at `autoEndAt` (cause `stopped`), cut at the last movement. True when it ended the drive.
+   * at `autoEndAt` (cause `stopped`), cut at the last movement. True when it ended the drive. A
+   * replayed row never runs the `stopped` end while the drive has not yet been at driving speed
+   * (`droveAt` null): a traced start can sit minutes of crawl before the rows that confirmed the
+   * drive, and those rows come later in the same replay. The first live row or tick judges it.
    */
   async function endIfDue(t: number): Promise<boolean> {
     const s = session as TripSession;
@@ -321,6 +324,7 @@ export function createEngine(deps: EngineDeps): Engine {
       return true;
     }
     if (held()) return false;
+    if (replaying && s.droveAt === null) return false;
     if (t >= autoEndAt(s)) {
       await finalize((open) => closeAtLastMovement(open, 'stopped'));
       return true;

@@ -410,3 +410,37 @@ describe('(s) the 12 h bound', () => {
     expect(h.finalized[0]!.endCause).toBe('stopped');
   });
 });
+
+describe('(t) a replayed journal whose traced start sits minutes of crawl before the confirmation', () => {
+  /** 8 min leaving a car park: 7 s stopped, 5 s at 3.5 mph, a lone 5.5 mph reading every 4th cycle; then 25 mph. */
+  const carPark = (): FeatureRow[] => {
+    const segs: Seg[] = [PARKED(5)];
+    for (let k = 0; k < 40; k += 1) segs.push(PARKED(7), { n: 5, mps: mph(3.5), over: (i) => (k % 4 === 0 && i === 2 ? { speed: mph(5.5) } : {}) });
+    segs.push({ n: 60, mps: mph(25) });
+    return path(T0, ...segs);
+  };
+
+  test('replayed, the crawl never ends the drive: it is still recording at the confirmation, has driven, keeps its start, and ends 300 s after the live stop', async () => {
+    const h = await started();
+    const rows = carPark();
+    for (const r of rows) await h.engine.dispatch({ type: 'row', row: r, replay: true });
+    expect(status(h)).toBe('recording');
+    expect(rows.at(-1)!.ts - T0).toBeGreaterThan(8 * 60_000);
+    expect(h.engine.snapshot()).toMatchObject({ drove: true, startedAt: T0 });
+    const stop = rows.at(-1)!.ts + 1000;
+    await feed(h, path(stop, PARKED(IDLE_END_S)));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', startedAt: T0, endedAt: stop, cut: true });
+  });
+
+  test('the same rows live end the drive 300 s after the start, unmoved', async () => {
+    const h = await started();
+    await feed(h, carPark());
+    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', moved: null, endedAt: T0 + IDLE_MS });
+  });
+
+  test('a replay that has driven still ends by the 5 min rule on a replayed row', async () => {
+    const h = await started();
+    for (const r of path(T0, DRIVE, PARKED(IDLE_END_S))) await h.engine.dispatch({ type: 'row', row: r, replay: true });
+    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: PARKED_AT, cut: true });
+  });
+});
