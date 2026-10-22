@@ -832,6 +832,42 @@ describe('a Start-card drive re-opening the held drive', () => {
     expect(await h.host.cancelDrive()).toBe(false);
     await h.host.stop({ endOpenTrip: false });
   });
+
+  test('a hard start as it pulls away after a minute’s wait sounds once: its rows taken in again by the re-opened drive play nothing again', async () => {
+    const h = build();
+    await h.host.boot();
+    const first = rows(120, { speedMps: 15 });
+    await drive(h, first);
+    const end = first.at(-1)!;
+    await feed(h, rows(301, { t0: T0 + 120_000, speedMps: 0 }).map((r) => ({ ...r, lng: end.lng })));
+    await h.host.untilIdle();
+    const t1 = T0 + 451_000;
+    clock = t1;
+    await h.host.start();
+    h.host.setHudVisible(true);
+    await feed(h, rows(60, { t0: t1, speedMps: 0 }).map((r) => ({ ...r, lng: end.lng, aLonMax: 0.02, aLonMin: -0.02 })));
+    const before = h.player.delivered.length;
+    // A minute later, away hard: 0 → 3 → 5 → 6.5 m/s at 0.4 g, the GNSS vouching for it (past the
+    // re-opened leg's 30 s warm-up, so the held drive's detectors confirm it again).
+    let lng = end.lng;
+    const away = [3, 5, 6.5, 8, 9, 10, 10, 10].map((v, i) => {
+      lng += v / M_PER_DEG_LNG;
+      return { ...rows(1, { t0: t1 + 60_000 + i * 1000, speedMps: v })[0]!, lng, aLonMax: i < 3 ? 0.4 : 0.02, aLonMin: -0.02 };
+    });
+    await feed(h, away);
+    expect(h.host.snapshot()).toMatchObject({ clientTripId: uuid(1), waiting: null });
+    const accel = h.player.delivered.slice(before).filter((d) => d.kind === 'hard_accel');
+    expect(accel.length).toBeGreaterThan(1);
+    expect(accel.filter((d) => d.suppressed !== true)).toEqual([expect.objectContaining({ ts: T0 + 511_000 })]);
+    // A live hard brake after it sounds as ever.
+    const brake = [15, 15, 15, 15, 15, 11, 11, 11, 11, 11].map((v, i) => {
+      lng += v / M_PER_DEG_LNG;
+      return { ...rows(1, { t0: T0 + 519_000 + i * 1000, speedMps: v })[0]!, lng, aLonMax: 0.02, aLonMin: i === 5 ? -0.5 : -0.02 };
+    });
+    await feed(h, brake);
+    expect(h.player.delivered.filter((d) => d.kind === 'hard_brake' && d.suppressed !== true)).toEqual([expect.objectContaining({ ts: T0 + 524_000 })]);
+    await h.host.stop({ endOpenTrip: false });
+  });
 });
 
 describe('the weather at the car', () => {

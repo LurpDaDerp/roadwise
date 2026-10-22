@@ -445,6 +445,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let quietEnd = false;
   /** A Start-card drive is moving into the held drive it continues (`foldInto`): nothing closes or opens meanwhile. */
   let folding = false;
+  /**
+   * While that drive's rows are taken in again by the held drive (`foldInto`): the last row it took
+   * in live. An alert on a row up to it already played on that drive, so it plays nothing again.
+   */
+  let heardUntil: number | null = null;
   /** iOS: the native drive feeding the open trip, and the last journal `seq` taken in. */
   let liveDrive: { driveId: string; clientTripId: string; lastSeq: number } | null = null;
   /** iOS: native journals to delete once the host has settled (their drive is stored). */
@@ -606,7 +611,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.
       if (dashcamAlertActive()) decision.silent = true;
       // RoadWise behind: nothing sounds or vibrates; the driving screen never replays what was missed.
-      if (!appActive()) decision.suppressed = true;
+      // Nor does an alert played already, on a row a re-opened drive takes in again.
+      if (!appActive() || (heardUntil !== null && alert.at <= heardUntil)) decision.suppressed = true;
       player.deliver(decision).catch((e: unknown) => report(e, 'player'));
     },
     onCheckpoint: (session) => (persist ? recorder.onCheckpoint(session) : Promise.resolve()),
@@ -1226,12 +1232,17 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       return;
     }
     await driveOpened({ adopted: true, quiet: true });
-    if (native !== null) {
-      liveDrive = { driveId: native.driveId, clientTripId: c.clientTripId, lastSeq: 0 };
-      await writeLink(native.driveId, c.clientTripId);
-      await drainJournal(native.driveId, 0, { capped: false });
-    } else {
-      for (const r of rows) await onRow(r, { replay: true });
+    heardUntil = own.lastRowTs;
+    try {
+      if (native !== null) {
+        liveDrive = { driveId: native.driveId, clientTripId: c.clientTripId, lastSeq: 0 };
+        await writeLink(native.driveId, c.clientTripId);
+        await drainJournal(native.driveId, 0, { capped: false });
+      } else {
+        for (const r of rows) await onRow(r, { replay: true });
+      }
+    } finally {
+      heardUntil = null;
     }
   }
 
