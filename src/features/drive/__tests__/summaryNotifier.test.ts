@@ -360,3 +360,92 @@ test('cancelDriveSummaries removes every scheduled summary (the handover wipe)',
   await cancelDriveSummaries(p);
   expect(cancelled).toEqual(['drive-summary:a']);
 });
+
+test('a recap held while a later drive recorded still posts when that drive ends on the driving screen (it shows the later drive, not this one)', async () => {
+  const { host, set } = hostStub({});
+  const { p, scheduled } = port();
+  const appState = { currentState: 'background' as string | null };
+  let focused = false;
+  const n = attach(host, { port: p, appState, isSummaryVisible: () => focused });
+  // The boot stores X, and takes in Y (recording now) before X's recap reaches the OS: X is held.
+  set({ status: 'idle', lastFinalized: kept('X', NOW, { endedAt: NOW - 20 * 60_000 }) });
+  set({ status: 'recording', clientTripId: 'Y' });
+  await n.settled();
+  expect(scheduled).toEqual([]);
+  // The driver opened the driving screen from the Live Activity and swipes End there.
+  appState.currentState = 'active';
+  focused = true;
+  set({ status: 'idle', clientTripId: null, lastFinalized: kept('Y', NOW + 5) });
+  await n.settled();
+  // Y's recap the driving screen opens itself; X's posts.
+  expect(scheduled.map((r) => r.identifier)).toEqual(['drive-summary:X']);
+  n.detach();
+});
+
+test('a held recap older than 2 h by the time no drive records posts nothing', async () => {
+  const { host, set } = hostStub({});
+  const { p, scheduled } = port();
+  let clock = NOW;
+  const n = attachSummaryNotifier(host, { port: p, appState: { currentState: 'background' }, now: () => clock });
+  set({ status: 'idle', lastFinalized: kept('X', NOW, { endedAt: NOW - 90 * 60_000 }) });
+  set({ status: 'recording', clientTripId: 'Y' });
+  await n.settled();
+  clock = NOW + 31 * 60_000;
+  set({ status: 'idle', clientTripId: null });
+  await n.settled();
+  expect(scheduled).toEqual([]);
+  n.detach();
+});
+
+describe('announceStored (an orphan the launch\u2019s crash recovery stored)', () => {
+  const orphan = (id: string, endedAt: number, o: Partial<{ status: 'pending' | 'failed'; dropped: 'no_movement' | null }> = {}) =>
+    ({ ...(kept(id, NOW, { endedAt }) as object), endCause: 'orphan', ...o }) as Extract<NonNullable<LastFinalized>, { ok: true }>;
+
+  test('a recent kept orphan posts its recap; one older than 2 h, a failed save or a dropped one does not', async () => {
+    const { host } = hostStub({});
+    const { p, scheduled } = port();
+    const n = attach(host, { port: p, appState: { currentState: 'background' } });
+    n.announceStored([
+      orphan('recent', NOW - 10 * 60_000),
+      orphan('old', NOW - RECAP_MAX_AGE_MS - 1),
+      orphan('failed', NOW - 60_000, { status: 'failed' }),
+      orphan('dropped', NOW - 60_000, { dropped: 'no_movement' }),
+    ]);
+    await n.settled();
+    expect(scheduled.map((r) => [r.identifier, r.body])).toEqual([['drive-summary:recent', '24 min · 12.0 mi. See how it went.']]);
+    n.detach();
+  });
+
+  test('none with the driving screen in front', async () => {
+    const { host } = hostStub({});
+    const { p, scheduled } = port();
+    const n = attach(host, { port: p, appState: { currentState: 'active' }, isSummaryVisible: () => true });
+    n.announceStored([orphan('recent', NOW - 60_000)]);
+    await n.settled();
+    expect(scheduled).toEqual([]);
+    n.detach();
+  });
+
+  test('held while a drive records, posted once none does', async () => {
+    const { host, set } = hostStub({ status: 'recording', clientTripId: 'live' });
+    const { p, scheduled } = port();
+    const n = attach(host, { port: p, appState: { currentState: 'background' } });
+    n.announceStored([orphan('recent', NOW - 60_000)]);
+    await n.settled();
+    expect(scheduled).toEqual([]);
+    set({ status: 'idle', clientTripId: null });
+    await n.settled();
+    expect(scheduled.map((r) => r.clientTripId)).toEqual(['recent']);
+    n.detach();
+  });
+
+  test('nothing once detached', async () => {
+    const { host } = hostStub({});
+    const { p, scheduled } = port();
+    const n = attach(host, { port: p, appState: { currentState: 'background' } });
+    n.detach();
+    n.announceStored([orphan('recent', NOW - 60_000)]);
+    await n.settled();
+    expect(scheduled).toEqual([]);
+  });
+});

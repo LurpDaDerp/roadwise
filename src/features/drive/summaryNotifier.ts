@@ -10,11 +10,13 @@
  * recap its first leg posted (the drive it opens no longer exists).
  *
  * Attached before the drive host boots, so a drive the boot stores (native ended it while no
- * process ran, or the relaunch ends an orphan) posts too, when it ended within the last
- * `RECAP_MAX_AGE_MS`; an older one is only in the drive list. A recap due while a drive records (a
- * launch that stores the last drive and then takes in the one recording now) waits until no drive
- * records, so nothing banners mid-drive. Nothing here asks for notification permission, and nothing
- * here starts a drive.
+ * process ran) posts too, when it ended within the last `RECAP_MAX_AGE_MS`; an older one is only
+ * in the drive list. An orphan the launch's crash recovery ends before the host exists is handed
+ * over by the launch (`announceStored`) and posts by the same rules. A recap due while a drive
+ * records (a launch that stores the last drive and then takes in the one recording now) waits until
+ * no drive records, so nothing banners mid-drive; it then posts even with the driving screen in
+ * front, since that screen shows the later drive, never this one. Nothing here asks for
+ * notification permission, and nothing here starts a drive.
  *
  * Getting the post out before iOS suspends a background app: every detector drive's end (native's
  * own, or JS's through `stopCapture`) runs inside native's 25 s end task (`drivesense.end`), and an
@@ -82,8 +84,17 @@ export interface SummaryNotifierDeps {
   onError?: (e: unknown, ctx: string) => void;
 }
 
+/** A kept drive, as the host's `lastFinalized` states it (and as the launch states an orphan it stored). */
+export type StoredDrive = Extract<NonNullable<LastFinalized>, { ok: true }>;
+
 export interface SummaryNotifier {
   detach(): void;
+  /**
+   * Drives stored without the host (the launch's crash recovery ending an orphan): each kept one
+   * posts by the same rules as a drive the host ends (recent enough, not with the driving screen in
+   * front, held while a drive records).
+   */
+  announceStored(drives: readonly StoredDrive[]): void;
   /** Resolves once every OS call queued so far has finished. */
   settled(): Promise<void>;
 }
@@ -142,7 +153,10 @@ export const RECAP_MAX_AGE_MS = 2 * 60 * 60_000;
 /** Drives this process posted a recap for, remembered for taking it down when one is re-opened. */
 const POSTED_MEMORY = 16;
 
-type Kept = Extract<NonNullable<LastFinalized>, { ok: true }>;
+type Kept = StoredDrive;
+/** Why a recap is announced: a drive's end seen now, a launch's stored orphan, or one held while another drive recorded. */
+type Due = 'end' | 'stored' | 'held';
+const isKept = (f: Kept): boolean => f.status !== 'failed' && f.dropped === null;
 
 export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snapshot'>, deps: SummaryNotifierDeps = {}): SummaryNotifier {
   const port = deps.port ?? createExpoSummaryPort();
@@ -172,12 +186,13 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
     chain = chain.then(fn).catch((e: unknown) => report(e, 'summary notification'));
   };
 
-  const announce = async (f: Kept): Promise<void> => {
+  const announce = async (f: Kept, due: Due): Promise<void> => {
     if (detached) return;
     // Stored at a launch long after it ended: no recap now.
     if (now() - (f.endedAt ?? f.at) > RECAP_MAX_AGE_MS) return;
-    // The driving screen in front opens the recap itself.
-    if (appState.currentState === 'active' && screenShowsEnd()) return;
+    // The driving screen in front opens the recap itself. Not a held one's: that screen showed the
+    // later drive's end, never this one's.
+    if (due !== 'held' && appState.currentState === 'active' && screenShowsEnd()) return;
     if (!(await port.permissionGranted())) return;
     const body = summaryCopy.body(f.durationS, f.miles, await unitsNow());
     if (detached) return;
@@ -230,14 +245,15 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
         if (f.ok && f.dropped === 'cancelled') takeDown(f.clientTripId);
         // A drive that was not kept has no recap. The driving screen in front at the moment the drive
         // ended opens the recap itself (it may have moved on to it before the chain runs).
-        else if (f.ok && f.status !== 'failed' && f.dropped === null && !(appState.currentState === 'active' && screenShowsEnd())) enqueue(() => announce(f));
+        else if (f.ok && isKept(f) && !(appState.currentState === 'active' && screenShowsEnd())) enqueue(() => announce(f, 'end'));
       }
     }
-    // No drive records any more: the recaps held meanwhile post, each by the same rules.
+    // No drive records any more: the recaps held meanwhile post, each by the same rules but the
+    // in-front one (the driving screen in front shows the drive that just ended, not these).
     if (s.status === 'idle' && held.size > 0) {
       const due = [...held.values()];
       held.clear();
-      for (const h of due) enqueue(() => announce(h));
+      for (const h of due) enqueue(() => announce(h, 'held'));
     }
   });
 
@@ -246,6 +262,9 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
       detached = true;
       held.clear();
       off();
+    },
+    announceStored(drives) {
+      for (const f of drives) if (f.ok && isKept(f)) enqueue(() => announce(f, 'stored'));
     },
     settled: () => chain,
   };
