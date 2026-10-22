@@ -608,3 +608,32 @@ test('a boot that fails takes the recap notifier down with it', async () => {
   await expect(bootstrapApp(failing.deps)).rejects.toThrow();
   expect(detach).toHaveBeenCalledTimes(1);
 });
+
+test('the default speed-limit client hands its options to the network: a re-ask for a tile that came back filling misses every HTTP cache', async () => {
+  const asked: { name: string; headers: Record<string, string> | undefined }[] = [];
+  const speedLimitsSupabase = {
+    functions: {
+      invoke: async (name: string, options: { headers?: Record<string, string> }) => {
+        asked.push({ name, headers: options.headers });
+        const keys = new URLSearchParams(name.slice(name.indexOf('?') + 1)).get('tiles')!.split(',');
+        return { data: { tiles: keys.map((tile) => ({ tile, expiresAt: clock + 60_000, truncated: false, filling: true, segments: [] })), fallback: null }, error: null };
+      },
+    },
+  };
+  const rt = await bootstrapApp({ ...deps().deps, limits: undefined, speedLimitsSupabase });
+  rt.limits.startTrip(47.6062, -122.3321, 90);
+  await rt.limits.settled();
+  expect(asked.length).toBeGreaterThan(0);
+  // An ordinary batch: cacheable (no one-off value, no Cache-Control).
+  expect(asked.every((a) => !a.name.includes('fresh=') && a.headers === undefined)).toBe(true);
+  const before = asked.length;
+  // The filling tiles expire after 5 s; the kilometre prefetch over them asks past the cache.
+  clock += 5_000;
+  rt.limits.prefetch(47.6062, -122.3321, 90);
+  await rt.limits.settled();
+  const again = asked.slice(before);
+  expect(again.length).toBeGreaterThan(0);
+  expect(again[0]!.name).toMatch(/^speed-limits\?tiles=[^&]+&fresh=[0-9a-z]+$/);
+  expect(again[0]!.headers).toEqual({ 'Cache-Control': 'no-cache' });
+  await rt.stop();
+});

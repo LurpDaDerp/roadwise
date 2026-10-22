@@ -620,7 +620,7 @@ function defaultLimits(db: Db, deps: BootstrapDeps, now: () => number, onError: 
   return createSpeedLimitClient({
     db,
     api: {
-      getTiles: async (keys) => (await load()).getTiles(keys),
+      getTiles: async (keys, opts) => (await load()).getTiles(keys, opts),
       lookupPoint: async (req) => (await load()).lookupPoint(req),
     },
     now,
