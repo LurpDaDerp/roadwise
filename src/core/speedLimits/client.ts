@@ -18,6 +18,8 @@
 //   first lookup on it after that asks for that one tile again, at most `FILLING_RETRIES_MAX` times
 //   per tile per trip — so the sign fills in seconds after the server has loaded a new area instead
 //   of a kilometre later. Each ask is a read of what the server already holds, never a new load. A filled tile answers with its full expiry and the retries stop.
+//   Every request for a tile that came back filling bypasses the HTTP cache (`fresh`), so the
+//   re-ask can never be answered with the cached "filling" reply it is meant to replace.
 //   The second: the car on a tile held nowhere (not in memory, not fresh in SQLite) asks for it at
 //   once with the batch around the car, then again after `missingRetryMs` (10 s doubling to 2 min)
 //   while it stays missing (`needOwn`). A turn off the course the last prefetch looked along, a
@@ -44,6 +46,9 @@
 //   A tile stored from an older road layer (`TILE_DATA_VERSION`) is not used. Standing with no course and nothing carried (the drive's first
 //   seconds), the nearest road within 25 m is matched as if heading along it, by the matcher's own
 //   rules; no road near, or none with a limit, is null. A server point answer (posted or cached) beats a default.
+//   Moving with no course (iOS reports none on a poor sky view, often in slow traffic), no road can
+//   be told from another, so none is picked: the sign gets a number only when every road within
+//   25 m names the same one (`agreedSample`), as a sign-only sample (shown, never scored); else null.
 // - **Confidence.** `matchConfidence` is the matcher's, unaltered — with one exception: a match
 //   near a tile the server truncated is capped at `TRUNCATED_CONFIDENCE_CAP` (0.6). The server cuts
 //   a dense tile by road class (minor classes first), not by place, so the car's own road can be
@@ -67,7 +72,7 @@ import { mphToMps } from '@/lib/units';
 
 import type { SpeedLimitApi } from './api';
 import { angleDiffDeg, bboxOf, type BBox, nearBBox, nearestOnPolyline, normalizeDeg } from './geometry';
-import { type Candidate, MATCH, matchLimit, type MatchResult, signMatch, type StayOn } from './match';
+import { type Candidate, defaultLimitMph, MATCH, matchLimit, type MatchResult, signMatch, type StayOn, validLimit } from './match';
 import {
   candidatesNear,
   createTileLru,
@@ -140,8 +145,9 @@ export interface SpeedLimitClient {
   /**
    * The limit for this row, from memory only — synchronous, no I/O, called once a second.
    *
-   * - `null`: no limit can be stated (invalid fix, no course while moving, or the tile is not in
-   *   memory yet). The engine treats it as unknown; the HUD shows "—".
+   * - `null`: no limit can be stated (invalid fix, no course while moving where the roads nearby
+   *   name different limits or none, or the tile is not in memory yet). The engine treats it as
+   *   unknown; the HUD shows "—".
    * - `{ source: 'unknown', limitMps: null, matchConfidence: 0 }`: the tile is loaded and no road
    *   with a limit was established.
    * - otherwise a known limit with the matcher's own `matchConfidence`.
@@ -387,7 +393,10 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       if (need.length === 0 || gen !== generation || !isOnline()) return;
 
       trip.requests += 1;
-      const res = await api.getTiles(need);
+      // A tile the server sent `filling` (still standing, or asked again) is never answered from an
+      // HTTP cache: the cached copy is the old "filling" reply the request exists to replace.
+      const fresh = need.some((k) => filling.has(k) || fillingRetries.has(k));
+      const res = await (fresh ? api.getTiles(need, { fresh: true }) : api.getTiles(need));
       fallback = res.fallback;
       const t = now();
       for (const tile of res.tiles) {
@@ -645,6 +654,32 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     return sample.limitMps === null ? null : sample;
   }
 
+  /**
+   * A moving car with no course: no road can be told from another by heading, so none is picked.
+   * The limit every road within `MATCH.RADIUS_M` names (its posted limit, or for an untagged OSM
+   * road its class default; a fill-in with a limit names its own) when they all name the same one,
+   * as a sign-only sample (`signOnly`: shown, never scored, like a class default). Null when no road
+   * is near, any road names none or another number, the roads are past `MATCH.MAX_CANDIDATES`, or
+   * a truncated tile may have dropped the car's road.
+   */
+  function agreedSample(lat: number, lng: number): LimitSample | null {
+    const tiles = freshTiles();
+    const p = { lat, lng };
+    if (truncatedNear(tiles, p, MATCH.RADIUS_M)) return null;
+    const cands = candidatesNear(tiles, p, MATCH.RADIUS_M);
+    if (cands.length === 0 || cands.length > MATCH.MAX_CANDIDATES) return null;
+    let agreed: number | null = null;
+    for (const c of cands) {
+      const own = validLimit(c.limitMph);
+      // A fill-in (HPMS, the AWS cache) without a limit says nothing about any road.
+      if (c.provider !== 'osm' && own === null) continue;
+      const named = own ?? defaultLimitMph(c.highway);
+      if (named === null || (agreed !== null && named !== agreed)) return null;
+      agreed = named;
+    }
+    return agreed === null ? null : signOnly(agreed);
+  }
+
   return {
     lookup(lat, lng, course, { gnssValid, speedMps }) {
       // No valid fix: the position is the last fix's and the course is -1. Nothing is known, and
@@ -665,13 +700,18 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
         unknownRun = 0;
         const kept = held();
         if (kept) return kept;
-        // Standing with nothing carried (a drive's first seconds): the nearest road's own limit.
-        if (speedMps !== null && !slow) return null;
         const own = tileKey(tileFor(lat, lng));
         if (memoryTile(own) === undefined) {
           needOwn(own, lat, lng, course);
           return null;
         }
+        // Moving with no course: only a limit every road here agrees on (never a road picked).
+        if (moving) {
+          const agreed = agreedSample(lat, lng);
+          if (agreed !== null) last = { lat, lng, sample: agreed };
+          return agreed;
+        }
+        // Standing with nothing carried (a drive's first seconds): the nearest road's own limit.
         const standing = standingSample(lat, lng);
         if (standing !== null && limitShown(standing)) last = { lat, lng, sample: standing };
         return standing;

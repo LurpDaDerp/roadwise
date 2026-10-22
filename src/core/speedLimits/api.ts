@@ -26,9 +26,23 @@ export const SPEED_LIMITS_FUNCTION = 'speed-limits';
  */
 export const SPEED_LIMIT_REQUEST_TIMEOUT_MS = 15_000;
 
+/** How one tile request is made. */
+export interface TileRequestOptions {
+  /**
+   * Never answered from an HTTP cache: a request for a tile the server sent `filling`. The URL
+   * carries a one-off `fresh` value (no cache entry can match it) and the request says
+   * `Cache-Control: no-cache`, so a cached "filling" reply can never stand in for the new answer.
+   */
+  fresh?: boolean;
+}
+
+let freshSeq = 0;
+/** A value no earlier request carried. */
+const freshToken = (): string => `${Date.now().toString(36)}${(freshSeq += 1).toString(36)}`;
+
 export interface SpeedLimitApi {
   /** One request for 1..4 z15 tiles (`GET speed-limits?tiles=…`). */
-  getTiles(keys: string[]): Promise<TileBatchResponse>;
+  getTiles(keys: string[], opts?: TileRequestOptions): Promise<TileBatchResponse>;
   /** One point lookup (`POST speed-limits`). Only worth making when a batch said `fallback: 'aws'`. */
   lookupPoint(req: PointRequest | PointRequestInput): Promise<PointResponse>;
 }
@@ -38,20 +52,25 @@ export interface SpeedLimitsSupabase {
   functions: {
     invoke(
       name: string,
-      options: { method?: 'GET' | 'POST'; body?: Record<string, unknown>; timeout?: number }
+      options: { method?: 'GET' | 'POST'; body?: Record<string, unknown>; headers?: Record<string, string>; timeout?: number }
     ): Promise<{ data: unknown; error: unknown }>;
   };
 }
 
 export function createSupabaseSpeedLimitApi(supabase: SpeedLimitsSupabase): SpeedLimitApi {
   return {
-    async getTiles(keys) {
+    async getTiles(keys, opts = {}) {
       const valid = TileKeysSchema.parse(keys);
       // Keys are `15/x/y`: slashes and commas are legal in a query string, and the server reads
-      // the parameter with URLSearchParams, so they are sent as they are.
+      // the parameter with URLSearchParams, so they are sent as they are. The server reads only
+      // `tiles`; `fresh` is there to miss every HTTP cache entry.
+      const fresh = opts.fresh === true;
+      const query = `tiles=${valid.join(',')}${fresh ? `&fresh=${freshToken()}` : ''}`;
       const { data, error } = await supabase.functions.invoke(
-        `${SPEED_LIMITS_FUNCTION}?tiles=${valid.join(',')}`,
-        { method: 'GET', timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS }
+        `${SPEED_LIMITS_FUNCTION}?${query}`,
+        fresh
+          ? { method: 'GET', headers: { 'Cache-Control': 'no-cache' }, timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS }
+          : { method: 'GET', timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS }
       );
       if (error) throw error;
       return TileBatchResponseSchema.parse(data);

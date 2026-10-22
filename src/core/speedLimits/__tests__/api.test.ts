@@ -33,6 +33,21 @@ describe('getTiles', () => {
     });
   });
 
+  it('fresh: a one-off value in the query (no cache entry can match) and Cache-Control: no-cache; the server reads only tiles', async () => {
+    const { supabase, invoke } = fake({ data: batch, error: null });
+    const api = createSupabaseSpeedLimitApi(supabase);
+    await expect(api.getTiles(['15/5249/11443'], { fresh: true })).resolves.toEqual(batch);
+    await api.getTiles(['15/5249/11443'], { fresh: true });
+    const [first, second] = invoke.mock.calls.map((c) => c[0]);
+    expect(first).toMatch(/^speed-limits\?tiles=15\/5249\/11443&fresh=[0-9a-z]+$/);
+    expect(second).not.toBe(first);
+    expect(new URLSearchParams(first!.split('?')[1]).getAll('tiles')).toEqual(['15/5249/11443']);
+    expect(invoke.mock.calls[0]![1]).toEqual({ method: 'GET', headers: { 'Cache-Control': 'no-cache' }, timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS });
+    // Without it (or with fresh false) the request is the ordinary, cacheable one.
+    await api.getTiles(['15/5249/11443'], { fresh: false });
+    expect(invoke.mock.calls[2]).toEqual(['speed-limits?tiles=15/5249/11443', { method: 'GET', timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS }]);
+  });
+
   it('refuses bad keys before touching the network', async () => {
     const { supabase, invoke } = fake({ data: batch, error: null });
     const api = createSupabaseSpeedLimitApi(supabase);

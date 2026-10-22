@@ -132,7 +132,7 @@ export const MATCH = {
 const NEAR_M = 10;
 
 /** A limit the contract allows (whole mph, 5..85); anything else counts as no limit. */
-const validLimit = (v: number | null): number | null =>
+export const validLimit = (v: number | null): number | null =>
   v !== null && Number.isInteger(v) && v >= 5 && v <= 85 ? v : null;
 
 function headingPasses(course: number, c: Candidate): boolean {

@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { limitActionable, limitShown } from '@/core/detectors/common';
 import { createSupabaseSpeedLimitApi, type SpeedLimitApi } from '@/core/speedLimits/api';
 import {
   createSpeedLimitClient,
@@ -54,6 +55,8 @@ const road = (over: Partial<LimitSegment> = {}): LimitSegment => ({
 });
 
 const MOVING = { gnssValid: true, speedMps: 20 };
+/** The sign-only sample (`client.ts` `signOnly`): printed, never scored. */
+const signOnly = (limitMph: number) => ({ limitMps: mphToMps(limitMph), source: 'statutory', matchConfidence: SIGN_ONLY_CONFIDENCE, parallelRoads: false });
 const STOPPED = { gnssValid: true, speedMps: 0.5 };
 
 let clock: number;
@@ -369,7 +372,8 @@ describe('honesty (§13.2, rev1: I8)', () => {
     expect(MIN_MOVING_MPS).toBe(2);
     expect(client.lookup(LAT, LNG0 + mLng(10), -1, STOPPED)).toEqual(match);
     expect(client.lookup(LAT + mLat(40), LNG0, -1, STOPPED)).toBeNull();
-    expect(client.lookup(LAT, LNG0, -1, { gnssValid: true, speedMps: 5 })).toBeNull();
+    // Moving (5 m/s) with no course: not the stopped hold; the one road here names 35 (sign-only).
+    expect(client.lookup(LAT, LNG0, -1, { gnssValid: true, speedMps: 5 })).toEqual(signOnly(35));
   });
 
   it("standing with no course and nothing carried: the nearest road's own limit, matched along it; none within 25 m is null", async () => {
@@ -566,7 +570,8 @@ describe('a tile the server is still filling (the OpenStreetMap load behind a fi
     expect(client.lookup(LAT, LNG0, EAST, MOVING)).toBeNull(); // expired: nothing in memory for this row
     await client.settled();
     expect(getTiles).toHaveBeenCalledTimes(2);
-    expect(getTiles.mock.calls[1]).toEqual([[own]]);
+    // The re-ask bypasses the HTTP cache: the cached copy is the "filling" reply it replaces.
+    expect(getTiles.mock.calls[1]).toEqual([[own], { fresh: true }]);
     expect(client.lookup(LAT, LNG0, EAST, MOVING)).toMatchObject({ source: 'posted', limitMps: mphToMps(35) });
     expect((await createTilesRepo(db).getTile<unknown>(own, clock))?.expires_at).toBe(clock + DAY);
     // Filled: no further retry, however long the drive goes on.
@@ -604,6 +609,122 @@ describe('a tile the server is still filling (the OpenStreetMap load behind a fi
     client.lookup(LAT, LNG0, EAST, MOVING);
     await client.settled();
     expect(getTiles).toHaveBeenCalledTimes(2 + FILLING_RETRIES_MAX);
+  });
+});
+
+describe('HTTP caching of tile requests', () => {
+  it('an ordinary batch may be cached (no options); one with a tile that came back filling is always fresh, filled or not', async () => {
+    const { api, getTiles } = fakeApi();
+    getTiles.mockImplementationOnce(async (keys) => ({
+      tiles: keys.map((tile) => ({ tile, expiresAt: clock + DAY, truncated: false, filling: true, segments: [] })),
+      fallback: null,
+    }));
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    expect(getTiles.mock.calls[0]).toHaveLength(1);
+    const asked = getTiles.mock.calls[0]![0];
+    // The kilometre prefetch over the same (now expired) filling tiles is fresh too.
+    clock += 5_000;
+    client.prefetch(LAT, LNG0, EAST);
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(2);
+    expect(getTiles.mock.calls[1]).toEqual([asked, { fresh: true }]);
+    // Filled now: a later trip's batch over tiles that never came back filling is an ordinary one.
+    client.resetTrip();
+    clock += 2 * DAY;
+    client.startTrip(LAT + mLat(5000), LNG0, EAST);
+    await client.settled();
+    expect(getTiles.mock.calls.at(-1)).toHaveLength(1);
+  });
+});
+
+describe('moving with no GPS course (iOS reports none on a poor sky view)', () => {
+  const NO_COURSE = { gnssValid: true, speedMps: 8 };
+  async function loaded(segments: LimitSegment[], truncated = false) {
+    await createTilesRepo(db).putTile(keyAt(LAT, LNG0), clock + DAY, { v: TILE_DATA_VERSION, truncated, segments });
+    make(fakeApi().api);
+    await client.lookupStored(LAT, LNG0, EAST);
+  }
+  /** A road parallel to the corridor, `northM` metres north of it. */
+  const beside = (northM: number, over: Partial<LimitSegment> = {}): LimitSegment =>
+    road({
+      id: `beside${northM}`,
+      line: encodePolyline([
+        { lat: LAT + mLat(northM), lng: -122.333 },
+        { lat: LAT + mLat(northM), lng: -122.299 },
+      ]),
+      ...over,
+    });
+
+  it('one road within 25 m: its limit, sign-only (shown, never scored), and the stopped hold keeps it', async () => {
+    await loaded([road()]);
+    const out = client.lookup(LAT, LNG0, -1, NO_COURSE);
+    expect(out).toEqual(signOnly(35));
+    expect(limitShown(out!)).toBe(true);
+    expect(limitActionable(out!)).toBe(false);
+    // Slowing to a stop with no course: the last limit shown holds within 30 m.
+    expect(client.lookup(LAT, LNG0 + mLng(10), -1, STOPPED)).toEqual(signOnly(35));
+  });
+
+  it('every road nearby naming the same limit (a divided road, its two carriageways) agrees', async () => {
+    await loaded([road(), beside(15)]);
+    expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toEqual(signOnly(35));
+  });
+
+  it('roads naming different limits, or one naming none: null, never one of them picked', async () => {
+    await loaded([road(), beside(15, { limitMph: 25, highway: 'residential' })]);
+    expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toBeNull();
+    client.resetTrip();
+    await loaded([road(), beside(15, { limitMph: null, highway: 'service' })]);
+    expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toBeNull();
+    // An untagged primary's default (45) is not the corridor's 35.
+    client.resetTrip();
+    await loaded([road(), beside(15, { limitMph: null })]);
+    expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toBeNull();
+  });
+
+  it("an untagged road alone names its class default; a road past 25 m doesn't count", async () => {
+    await loaded([road({ limitMph: null })]);
+    expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toEqual(signOnly(45));
+    client.resetTrip();
+    await loaded([road(), beside(30, { limitMph: 25 })]);
+    expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toEqual(signOnly(35));
+    expect(client.lookup(LAT + mLat(60), LNG0, -1, NO_COURSE)).toBeNull();
+  });
+
+  it('a fill-in naming another number disagrees; one naming none says nothing', async () => {
+    await loaded([road(), beside(5, { provider: 'hpms', id: 'h1', limitMph: 40 })]);
+    expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toBeNull();
+    client.resetTrip();
+    await loaded([road(), beside(5, { provider: 'hpms', id: 'h1', limitMph: null })]);
+    expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toEqual(signOnly(35));
+  });
+
+  it('a truncated tile nearby (the car’s road may be the one dropped): null', async () => {
+    await loaded([road()], true);
+    expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toBeNull();
+  });
+
+  it('the own tile not in memory: null, and it is read from SQLite (or asked for) for the next row', async () => {
+    await store(keyAt(LAT, LNG0), [road()]);
+    make(fakeApi().api);
+    expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toBeNull();
+    await client.settled();
+    expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toEqual(signOnly(35));
+    const { api, getTiles } = fakeApi();
+    make(api);
+    expect(client.lookup(LAT + mLat(5000), LNG0, -1, NO_COURSE)).toBeNull();
+    await client.settled();
+    expect(getTiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('never a point lookup without a course', async () => {
+    const { api, lookupPoint } = fakeApi({ fallback: 'aws', segmentsFor: () => [] });
+    make(api).startTrip(LAT, LNG0, EAST);
+    await client.settled();
+    for (let i = 0; i < 2 * UNKNOWN_ROWS_BEFORE_POINT_LOOKUP; i += 1) expect(client.lookup(LAT, LNG0, -1, NO_COURSE)).toBeNull();
+    await client.settled();
+    expect(lookupPoint).not.toHaveBeenCalled();
   });
 });
 
