@@ -562,3 +562,49 @@ test('iOS: a drive native journals is continued at launch whatever the capture s
   expect(detect.calls).toContain(`readRows:${uuid(9)}:60:300`);
   await rt.stop({ endOpenTrip: false });
 });
+
+test('iOS: the recap notifier is attached before the boot, so a drive native ended while no process ran, stored by the boot, reaches it', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  // A drive native ended while JS was away (the process was gone), never taken in.
+  const detect = createFakeDriveDetect({ now: () => clock });
+  await detect.setArmed(true, 'user-1');
+  detect.wake();
+  detect.confirm({ driveId: uuid(15), startedAt: clock - 600_000, rows: rows(590, { t0: clock - 600_000 }).map((r) => ({ ...r })) });
+  detect.endFor('still', clock - 10_000);
+  const seen: { booted: boolean | undefined; first: unknown; finalized: string[] } = { booted: undefined, first: undefined, finalized: [] };
+  const detach = jest.fn();
+  const attachSummaryNotifier = (host: DriveHost) => {
+    seen.booted = host.booted?.();
+    seen.first = host.snapshot().lastFinalized;
+    host.subscribe((s) => {
+      const f = s.lastFinalized;
+      if (f !== null && f.ok && !seen.finalized.includes(f.clientTripId)) seen.finalized.push(f.clientTripId);
+    });
+    return { detach, settled: async () => {} };
+  };
+  const rt = await bootstrapApp({ ...deps().deps, detect, attachSummaryNotifier });
+  expect(seen.booted).toBe(false);
+  expect(seen.first).toBeNull();
+  expect(seen.finalized).toEqual([uuid(15)]);
+  expect(await createTripsRepo(db).get(uuid(15))).not.toBeNull();
+  await rt.stop();
+  expect(detach).toHaveBeenCalledTimes(1);
+});
+
+test('a boot that fails takes the recap notifier down with it', async () => {
+  const detach = jest.fn();
+  const failing = deps({
+    attachSummaryNotifier: (host: DriveHost) => {
+      Object.assign(host, {
+        boot: async () => {
+          throw new Error('boot failed');
+        },
+      });
+      return { detach };
+    },
+    timeoutMs: 5_000,
+  });
+  await expect(bootstrapApp(failing.deps)).rejects.toThrow();
+  expect(detach).toHaveBeenCalledTimes(1);
+});

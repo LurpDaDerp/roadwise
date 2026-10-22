@@ -38,6 +38,7 @@ import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { writeDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, finishPendingCancel, isJournaled, playerInputs, type DriveHost, type DriveStartPermissions, type PushToStartRequest } from '@/drive/host';
+import { isDriveScreenFocused } from '@/features/drive/hudPresence';
 import type { PhoneReminder } from '@/features/drive/phoneReminder';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
@@ -46,7 +47,7 @@ import { deviceZone } from '@/lib/deviceZone';
 
 import type { DriveDetectApi } from '@drive-sense';
 
-import { autoDetectOff, autoDetectSync, setAutoDetectRuntime } from './autoDetect';
+import { autoDetectForeground, autoDetectOff, autoDetectSync, setAutoDetectRuntime } from './autoDetect';
 import { ensureDeviceOwner, PENDING_OWNER_KEY, readDeviceOwner, type DeviceOwnerOutcome } from './device';
 import { drainPolicy, launchProfile, type LaunchProfile } from './launchProfile';
 
@@ -447,12 +448,9 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     setActiveDashcam(dc);
     // Before the boot: a drive the boot ends (a journal read to its end) takes its reminder down too.
     const detachReminder = remind?.attach(drive) ?? (() => {});
-    const adopt: AdoptedTrip | null = recovery.adopt;
-    await drive.boot({ adopt });
-    // A reminder an earlier process left for a drive that is no longer recording comes down.
-    remind?.sweep();
-    if (!drive.isBusy()) limits.resetTrip();
-
+    // Before the boot too: a drive the boot stores (native ended it while no process ran, or the
+    // relaunch ends an orphan) gets its recap notification; the notifier decides which are recent
+    // enough to post.
     const attach = deps.attachSummaryNotifier === undefined ? defaultSummaryNotifier : deps.attachSummaryNotifier;
     let notifier: { detach(): void; settled?(): Promise<void> } | null = null;
     if (attach) {
@@ -462,6 +460,17 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
         onError(error, 'summary notifier');
       }
     }
+    const adopt: AdoptedTrip | null = recovery.adopt;
+    try {
+      await drive.boot({ adopt });
+    } catch (error) {
+      // The launch fails with this host: nothing it would announce may post.
+      notifier?.detach();
+      throw error;
+    }
+    // A reminder an earlier process left for a drive that is no longer recording comes down.
+    remind?.sweep();
+    if (!drive.isBusy()) limits.resetTrip();
     let unmountDiagnostics: () => void = () => {};
     const mount = deps.mountDiagnostics === undefined ? defaultDiagnostics : deps.mountDiagnostics;
     if (mount) {
@@ -668,7 +677,8 @@ function defaultPhoneReminder(onError: (error: unknown, context: string) => void
 function defaultSummaryNotifier(host: DriveHost, db: Db): { detach(): void; settled(): Promise<void> } {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
   const { attachSummaryNotifier, summaryUnits } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
-  return attachSummaryNotifier(host, { units: summaryUnits(db) });
+  // The driving screen in focus shows a drive's end itself (it opens the recap): no notification then.
+  return attachSummaryNotifier(host, { units: summaryUnits(db), isSummaryVisible: isDriveScreenFocused });
 }
 
 /**
@@ -798,12 +808,13 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
     },
     foreground
   );
-  // Automatic drives (iPhone): armed for the signed-in, onboarded driver on every return to the front.
+  // Automatic drives (iPhone): armed for the signed-in, onboarded driver on every return to the
+  // front while the Automatic drives switch is on (else disarmed), then the app wake.
   const stopAutoDetect = runWhenForeground(
     'autoDetect',
     0,
     async () => {
-      await autoDetectSync();
+      await autoDetectForeground();
     },
     foreground
   );
