@@ -191,7 +191,11 @@ async function dropUnkept(events: EventsRepo, list: EventRow[], resp: FinalizeTr
  * the merged union (metrics and counters summed, events re-parented, "Not driving?" ran out if it
  * ran out on either, the earlier drive's start kept, the server's result) and this one is hidden as
  * `merged`. The samples of both go: a sent drive is never re-opened. A drive re-opened as
- * `recording` in the meantime is left alone (its own upload follows). Runs on a transaction handle.
+ * `recording` in the meantime is left alone (its own upload follows). A drive marked "Wasn't
+ * driving" while its upload was held keeps the mark (no clean flag): the mark's own answer settles
+ * it, and a refusal puts back the status this answer records (`undoAction`). A "Wasn't driving"
+ * refusal the drive already carries (`sync_error`) is kept, so the summary still explains it. Runs
+ * on a transaction handle.
  */
 export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: FinalizeTripResponse, now: number): Promise<void> {
   const trips = createTripsRepo(tx);
@@ -243,21 +247,30 @@ export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: 
 
   const listed = await events.listByTrip(clientTripId, tx);
   const own = await dropUnkept(events, listed, resp, tx);
+  const marked = mine.status === 'not_driving';
   await trips.update(
     clientTripId,
     {
       ...(own.length !== listed.length ? { counts_json: JSON.stringify(countEvents(own)) } : {}),
-      status,
-      clean: cleanOf(own, resp.scored),
+      status: marked ? 'not_driving' : status,
+      clean: marked ? null : cleanOf(own, resp.scored),
       reason: resp.reason,
       result_json: resultJson,
       server_id: resp.tripId,
-      sync_error: null,
+      // Only a refused upload's code (`failed`) is cleared by an answer; any other is a "Wasn't driving" refusal.
+      sync_error: mine.status === 'failed' ? null : mine.sync_error,
     },
     now,
     tx
   );
   await samples.purgeByTrip(clientTripId, tx);
+}
+
+/** Whether the upload answer stored on a drive (`result_json`) scored it; null when there is none. */
+function answeredScored(resultJson: string | null): boolean | null {
+  if (resultJson === null) return null;
+  const parsed = FinalizeTripResponseSchema.safeParse(parseJson(resultJson));
+  return parsed.success ? parsed.data.scored : null;
 }
 
 /** What `applyDisputeResult` reads of a dispute answer. */
@@ -426,17 +439,28 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     });
   }
 
-  /** The server refused for good: the optimistic `pending` is resolved to a rejection the user can read. */
+  /**
+   * The server refused for good: the optimistic `pending` is resolved to a rejection the user can
+   * read. A "Wasn't driving" puts the drive back to the status the server holds: the one its upload
+   * answer recorded when that answer came after the tap (a mark made in the upload hold, whose
+   * `previousStatus` is the stale `pending`), else the status it had when tapped.
+   */
   async function undoAction(uid: string, action: TripAction, code: string): Promise<void> {
     await fenced(uid, async (tx) => {
       if (action.action === 'dispute') {
         await events.update(action.eventId, { dispute_status: 'rejected', dispute_message: DISPUTE_REFUSALS[code] ?? "Couldn't send this report." }, tx);
         return;
       }
-      const previous = (action.previousStatus ?? 'scored') as TripRow['status'];
       const trip = await trips.get(action.clientTripId, tx);
       if (trip === null || trip.status !== 'not_driving') return;
+      const answered = action.previousStatus === 'pending' && !(await createQueueRepo(tx).owes(finalizeIdempotencyKey(action.clientTripId), tx)) ? answeredScored(trip.result_json) : null;
       // The refusal code (`too_old`, `no_uses_left`, `not_driving_expired`, `not_found`) is what the summary explains.
+      if (answered !== null) {
+        const clean = cleanOf(await events.listByTrip(action.clientTripId, tx), answered);
+        await trips.update(action.clientTripId, { status: answered ? 'scored' : 'unscored', clean, sync_error: code }, now(), tx);
+        return;
+      }
+      const previous = (action.previousStatus ?? 'scored') as TripRow['status'];
       await trips.update(action.clientTripId, { status: previous, sync_error: code }, now(), tx);
     }).catch((error: unknown) => report(error, 'sync undo action'));
   }

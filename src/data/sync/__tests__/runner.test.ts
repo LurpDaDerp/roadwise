@@ -8,6 +8,8 @@ import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import { emitDataChanged } from '@/data/events';
 import { enqueueFinalize } from '@/data/sync/queue';
 import { createSyncRunner, FOREIGN_OWNER_RETRY_MS, joinPolylines, NO_SESSION_RETRY_MS, RETRY_WAKE_MIN_MS } from '@/data/sync/runner';
+import { toLocalDrive } from '@/data/queries/rows';
+import { canMarkNotDriving, notDrivingRefusal } from '@/features/drives/summary';
 import { encodePolyline, splitRuns } from '@/lib/polyline';
 
 let db: Db;
@@ -367,6 +369,75 @@ describe('"Wasn’t driving" or a report within the 5 min upload hold (review I5
     await r.drainOnce();
     expect(s.invokes.map((i) => i.name)).toEqual(['finalize-trip', 'trip-actions']);
     expect((await createEventsRepo(db).get(uuid(1)))?.dispute_status).not.toBe('rejected');
+    await r.stop();
+  });
+
+  /** A server that stores uploads and answers each "Wasn't driving" with `mark()`. */
+  function marking(mark: () => ReturnType<typeof invokeOk>, uploads: () => 'ok' | 'lost' = () => 'ok') {
+    const stored = new Set<string>();
+    return createFakeSupabase({
+      invoke: ({ name, body }) => {
+        const b = body as { clientTripId: string };
+        if (name === 'finalize-trip') {
+          stored.add(b.clientTripId);
+          return uploads() === 'lost' ? functionsFetchError() : invokeOk(response(b.clientTripId, { scored: false, reason: 'too_short' }));
+        }
+        return stored.has(b.clientTripId) ? mark() : functionsHttpError(404, { code: 'not_found' });
+      },
+    });
+  }
+
+  test('"Wasn’t driving" in the hold refused for good after the upload answered: back to the upload’s status with the reason, never offered again silently', async () => {
+    const finalizedAt = await heldDrive();
+    const tap = finalizedAt + 60_000;
+    await markNotDriving(uuid(10), { db, now: () => tap });
+    const s = marking(() => functionsHttpError(403, { code: 'no_uses_left' }));
+    const r = runner(s, { now: () => tap + 1000 });
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ done: 1, failed: 1 });
+    expect(s.invokes.map((i) => i.name)).toEqual(['finalize-trip', 'trip-actions']);
+    const trip = (await createTripsRepo(db).get(uuid(10)))!;
+    expect(trip).toMatchObject({ status: 'unscored', clean: null, reason: 'too_short', server_id: uuid(77), sync_error: 'no_uses_left' });
+    expect(notDrivingRefusal(toLocalDrive(trip))).not.toBeNull();
+    expect(canMarkNotDriving(toLocalDrive(trip), tap + 2000)).toBe(false);
+    await r.stop();
+  });
+
+  test('"Wasn’t driving" in the hold whose mark fails on a blip: the upload’s answer keeps the drive marked while the mark retries, then it lands', async () => {
+    const finalizedAt = await heldDrive();
+    const tap = finalizedAt + 60_000;
+    await markNotDriving(uuid(10), { db, now: () => tap });
+    let up = false;
+    const s = marking(() =>
+      up ? invokeOk({ tripId: uuid(77), clientTripId: uuid(10), notDrivingLeft: 1, rating: { safetyRating: null, ranked: false } }) : functionsHttpError(503, { code: 'unavailable' })
+    );
+    let clock = tap + 1000;
+    const r = runner(s, { now: () => clock });
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ done: 1, failed: 0, deferred: 1 });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', clean: null, reason: 'too_short', server_id: uuid(77), sync_error: null });
+    up = true;
+    clock += 120_000;
+    expect(await r.drainOnce()).toMatchObject({ done: 1 });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'not_driving', clean: null });
+    await r.stop();
+  });
+
+  test('a refusal that comes before the upload’s answer (its first answer lost) survives that answer', async () => {
+    const finalizedAt = await heldDrive();
+    const tap = finalizedAt + 60_000;
+    await markNotDriving(uuid(10), { db, now: () => tap });
+    let uploads: 'ok' | 'lost' = 'lost';
+    const s = marking(() => functionsHttpError(403, { code: 'no_uses_left' }), () => uploads);
+    let clock = tap + 1000;
+    const r = runner(s, { now: () => clock });
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ failed: 1, deferred: 1 });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', sync_error: 'no_uses_left' });
+    uploads = 'ok';
+    clock += 120_000;
+    expect(await r.drainOnce()).toMatchObject({ done: 1 });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'unscored', server_id: uuid(77), sync_error: 'no_uses_left' });
     await r.stop();
   });
 
