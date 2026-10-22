@@ -50,7 +50,7 @@ jest.mock('../deviceWipe', () => ({ wipeThisPhone: jest.fn(async () => {}) }));
 /** The native automatic-drive status (null: Android). */
 const mockAutoStatus = jest.fn<unknown, []>(() => null);
 /** The switch's store-and-sync; by default it makes the status follow the choice, as the boot package does. */
-const mockSetAutoEnabled = jest.fn(async (on: boolean) => {
+const mockSetAutoEnabled = jest.fn(async (on: boolean): Promise<string> => {
   const s = mockAutoStatus() as Record<string, unknown> | null;
   if (s) mockAutoStatus.mockReturnValue(on ? { ...s, enabled: true, armed: true, status: 'on' } : { ...s, enabled: false, armed: false, status: 'off' });
   return on ? 'on' : 'disabled';
