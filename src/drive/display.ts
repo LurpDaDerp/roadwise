@@ -1,6 +1,7 @@
 // The background driving display (modes plan §3.10): `DriveSense.setDriveDisplay` reaches the
 // Android foreground notification and, on iOS, a running Live Activity; `LiveDrive.start`/`end`
-// bound the activity's life to the drive. This adapter throttles to one update per 3 s, sends only
+// bound the activity's life to the drive. This adapter throttles to one update per 3 s (the drive's
+// first known speed and first known limit go out at once, outside it), sends only
 // changes — and an unchanged state again every 60 s, so a long stop never leaves the Live Activity
 // stale (its stale date is 2 min on) — and tolerates either module being absent (a missing display
 // must never affect a drive). `refresh` sends at once, outside the throttle (the weather line, the
@@ -120,18 +121,29 @@ export function createDriveDisplay(
   let lastAt = Number.NEGATIVE_INFINITY;
   /** The drive's unit, from its start call, for an end before any update went out. */
   let unit: DriveDisplayState['unit'] = 'mph';
+  /**
+   * This drive's display has shown a speed / a limit: the first of each goes out at once, whatever
+   * the throttle, so the lock screen never keeps "-" for up to 3 s after the drive knows better.
+   */
+  let speedShown = false;
+  let limitShown = false;
 
   function send(state: DriveDisplayState, force: boolean): void {
     const now = deps.now();
-    if (!force && (now - lastAt < minInterval || (same(last, state) && now - lastAt < DISPLAY_KEEPALIVE_MS))) return;
+    const first = (!speedShown && state.speed !== null) || (!limitShown && state.limit !== null);
+    if (!force && !first && (now - lastAt < minInterval || (same(last, state) && now - lastAt < DISPLAY_KEEPALIVE_MS))) return;
     last = state;
     lastAt = now;
+    if (state.speed !== null) speedShown = true;
+    if (state.limit !== null) limitShown = true;
     call(set === null ? null : () => set(state), deps.onError);
   }
 
   return {
     start(state) {
       last = null;
+      speedShown = false;
+      limitShown = false;
       unit = state.unit;
       const worn = wearing(state, look());
       // iOS: starts the activity, or adopts the one running (pushed, or started earlier); false is fine.
@@ -159,6 +171,8 @@ export function createDriveDisplay(
       }
       last = null;
       lastAt = Number.NEGATIVE_INFINITY;
+      speedShown = false;
+      limitShown = false;
     },
     async isRunning() {
       if (!ios || live === null || typeof live.isRunning !== 'function') return false;

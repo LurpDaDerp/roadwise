@@ -16,7 +16,17 @@ import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRep
 import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
 import { speedTintOf } from '@/drive/displayTint';
 import { isManualDrop, readDropNotice, writeDropNotice } from '@/drive/dropNotice';
-import { createDriveHost, DriveEndFailedError, finishPendingCancel, JOURNAL_LINK_KEY, MAX_JOURNAL_REPLAY_ROWS, type PushToStartRequest } from '@/drive/host';
+import {
+  createDriveHost,
+  DriveEndFailedError,
+  finishPendingCancel,
+  JOURNAL_LINK_KEY,
+  MAX_JOURNAL_REPLAY_ROWS,
+  PUSH_START_RETRY_MS,
+  PUSH_START_WAIT_MS,
+  type PushToStartOutcome,
+  type PushToStartRequest,
+} from '@/drive/host';
 import { CANCEL_KEY } from '@/drive/cancel';
 import { NOT_DRIVING_BUDGET_MS, NOT_DRIVING_KEY, readBudget } from '@/drive/notDriving';
 import type { Scheduler } from '@/drive/ticks';
@@ -1284,8 +1294,8 @@ describe('iOS: the drive detector', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(pushed).toHaveLength(1);
     expect(pushed[0]).toMatchObject({ clientTripId: uuid(71), startedAt: T0 + 1_000_000, state: { unit: 'mph', weatherKind: null } });
-    // The pushed speed is the drive's own, or none ("-") before its first fix: never a made-up 0.
-    expect(pushed[0]!.state.speed === null || pushed[0]!.state.speed > 0).toBe(true);
+    // Pushed once the journal is in: the drive's own speed and limit (34 mph on a 35), never a made-up 0 or a blank.
+    expect(pushed[0]!.state).toMatchObject({ speed: 34, limit: 35 });
     expect(h.display.log.filter((l) => l.startsWith('start'))).toEqual([]);
     // Back in front: the Live Activity is adopted (or started) here.
     h.appState.set('active');
@@ -1507,4 +1517,518 @@ test('a drop notice from before is left alone by a refused Start', async () => {
   await h.host.boot();
   await h.host.start();
   expect(await readDropNotice(db)).not.toBeNull();
+});
+
+describe('iOS: a Start that cannot be refused by a step beside it (plan decision 8)', () => {
+  /** An older native build: `startWaiting` answers `{ ok, waitUntil }` alone and waits in a manual candidate of its own. */
+  function legacyNative(h: I): { cancelled: () => boolean } {
+    let candidate = false;
+    let cancelled = false;
+    const realState = h.detect.getState.bind(h.detect);
+    const realCancel = h.detect.cancelWaiting.bind(h.detect);
+    h.detect.startWaiting = async () => {
+      h.detect.calls.push('startWaiting');
+      candidate = true;
+      return { ok: true, waitUntil: clock + WAIT_TOTAL_MS, driveId: null, startedAt: null };
+    };
+    h.detect.getState = async () => {
+      const s = await realState();
+      return candidate ? { ...s, state: 'candidate', origin: 'manual' } : s;
+    };
+    h.detect.cancelWaiting = async () => {
+      if (candidate) cancelled = true;
+      candidate = false;
+      return realCancel();
+    };
+    // While Using, as the Start card asks for (native's plain capture needs it).
+    h.source.setState({ location: 'whenInUse' });
+    return { cancelled: () => cancelled };
+  }
+
+  /** Rows of the plain capture (no journal `seq`), through the fake capture. */
+  async function feedPlain(h: I, list: readonly FeatureRow[]): Promise<void> {
+    await feed(h, list);
+  }
+
+  const moving = (n: number, t0: number) => rows(n, { t0, speedMps: 15 });
+
+  test('an older native build (the 2-key answer): its own wait is cancelled, a plain capture records the drive from the tap, waiting; it reaches driving speed, and End stores it and stops the capture', async () => {
+    const h = buildIos();
+    const legacy = legacyNative(h);
+    await h.host.boot();
+    expect(await h.host.start()).toEqual({ ok: true, waiting: true });
+    expect(legacy.cancelled()).toBe(true);
+    expect(h.source.calls).toContain('startCapture:mounted');
+    expect(h.host.captureActive()).toBe(true);
+    const id = h.host.snapshot().clientTripId!;
+    expect(id).toBe(uuid(1));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', origin: 'manual', startedAt: T0, waiting: { since: T0, phase: 'waiting' } });
+    expect(await createTripsRepo(db).get(id)).toMatchObject({ status: 'recording', origin: 'manual', started_at: T0 });
+    expect(h.display.log[0]).toMatch(/^start /);
+    // The capture's rows (no `seq`) reach the drive, and driving speed ends the wait.
+    await feedPlain(h, moving(200, T0 + 1000));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', waiting: null, lastRowTs: T0 + 200_000 });
+    clock = T0 + 201_000;
+    expect(await h.host.end()).toEqual({ clientTripId: id, dropped: null });
+    await h.host.settled();
+    expect(h.source.calls.at(-1)).toBe('stopCapture');
+    expect(h.host.captureActive()).toBe(false);
+    expect(await createTripsRepo(db).get(id)).toMatchObject({ status: 'pending' });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('a plain-capture drive: Cancel while it waits ends it unsaved and stops the capture; "Not driving?" later stops the capture and never tells native (no detector drive)', async () => {
+    const h = buildIos();
+    legacyNative(h);
+    await h.host.boot();
+    await h.host.start();
+    await h.host.cancelWaiting();
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', lastFinalized: { dropped: expect.any(String) } });
+    expect(h.source.calls.at(-1)).toBe('stopCapture');
+    expect(await tripCount()).toBe(0);
+
+    clock = T0 + 100_000;
+    expect(await h.host.start()).toEqual({ ok: true, waiting: true });
+    await feedPlain(h, moving(20, T0 + 101_000));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', waiting: null, notDrivingAvailable: true });
+    expect(await h.host.cancelDrive()).toBe(true);
+    await h.host.settled();
+    expect(h.detect.calls).not.toContain('notDriving');
+    expect(h.source.calls.at(-1)).toBe('stopCapture');
+    expect(h.host.captureActive()).toBe(false);
+    expect(await tripCount()).toBe(0);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('startWaiting rejects (an answer that could not be read) while native did open its manual drive: that drive is taken in, journaled, no capture of ours', async () => {
+    const h = buildIos();
+    const real = h.detect.startWaiting.bind(h.detect);
+    h.detect.startWaiting = async () => {
+      await real();
+      throw new Error('DriveDetect.startWaiting: invalid result');
+    };
+    await h.host.boot();
+    clock = T0 + 5_000;
+    expect(await h.host.start()).toEqual({ ok: true, waiting: true });
+    const native = h.detect.snapshot;
+    expect(native).toMatchObject({ state: 'recording', origin: 'manual' });
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: native.driveId, origin: 'manual', startedAt: T0 + 5_000, waiting: { since: T0 + 5_000 } });
+    expect(h.source.calls).not.toContain('startCapture:mounted');
+    expect(h.detect.calls).not.toContain('cancelWaiting');
+    expect(await createSettingsRepo(db).get(JOURNAL_LINK_KEY)).toEqual({ driveId: native.driveId, clientTripId: native.driveId });
+    expect(h.errors.some((e) => e.startsWith('startWaiting:'))).toBe(true);
+    // Its rows follow live, as for any journaled Start.
+    await feedIos(h, rows(3, { t0: T0 + 6_000, speedMps: 0 }));
+    expect(h.host.snapshot().lastRowTs).toBe(T0 + 8_000);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('startWaiting rejects with nothing opened (no such method on that build), or answers unavailable: a plain capture records the drive', async () => {
+    for (const answer of ['throw', 'unavailable'] as const) {
+      const h = buildIos();
+      h.detect.startWaiting = async () => {
+        if (answer === 'throw') throw new TypeError('native.startWaiting is not a function');
+        return { ok: false, reason: 'unavailable' };
+      };
+      h.source.setState({ location: 'whenInUse' });
+      await h.host.boot();
+      expect(await h.host.start()).toEqual({ ok: true, waiting: true });
+      expect(h.source.calls).toContain('startCapture:mounted');
+      expect(h.host.snapshot()).toMatchObject({ status: 'recording', origin: 'manual', waiting: { phase: 'waiting' } });
+      await feedPlain(h, moving(3, T0 + 1000));
+      expect(h.host.snapshot().lastRowTs).toBe(T0 + 3_000);
+      await h.host.stop({ endOpenTrip: true });
+    }
+  });
+
+  test('the plain fallback is refused when the capture does not really run (the detector’s own sensing holds the sensors), with nothing left open', async () => {
+    const h = buildIos();
+    h.detect.startWaiting = async () => ({ ok: false, reason: 'unavailable' });
+    // iOS answers the start without capturing anything.
+    h.source.setState({ location: 'whenInUse' });
+    h.source.startCapture = async () => {};
+    await h.host.boot();
+    expect(await h.host.start()).toEqual({ ok: false, reason: 'error' });
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', waiting: null });
+    expect(h.host.captureActive()).toBe(false);
+    expect(await tripCount()).toBe(0);
+    expect(h.errors).toContain('startCapture: the Start fallback capture is not running');
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('every real refusal is kept: native’s permission and busy, a native drive recording that this tap did not open, a capture without permission', async () => {
+    const p = buildIos();
+    p.detect.startWaiting = async () => ({ ok: false, reason: 'permission' });
+    await p.host.boot();
+    expect(await p.host.start()).toEqual({ ok: false, reason: 'permission' });
+    expect(p.source.calls).not.toContain('startCapture:mounted');
+    await p.host.stop({ endOpenTrip: false });
+
+    const b = buildIos();
+    b.detect.startWaiting = async () => ({ ok: false, reason: 'busy' });
+    await b.host.boot();
+    expect(await b.host.start()).toEqual({ ok: false, reason: 'busy' });
+    await b.host.stop({ endOpenTrip: false });
+
+    // The answer is lost and native records an automatic drive: that is a drive already running.
+    const a = buildIos();
+    await a.host.boot();
+    const realState = a.detect.getState.bind(a.detect);
+    a.detect.startWaiting = async () => {
+      throw new Error('bridge');
+    };
+    a.detect.getState = async () => ({ ...(await realState()), state: 'recording', origin: 'auto', driveId: NATIVE, startedAt: T0 });
+    expect(await a.host.start()).toEqual({ ok: false, reason: 'busy' });
+    expect(a.source.calls).not.toContain('startCapture:mounted');
+    expect(a.host.snapshot().status).toBe('idle');
+    await a.host.stop({ endOpenTrip: false });
+
+    // The plain fallback's capture refused for want of location.
+    const l = buildIos();
+    l.detect.startWaiting = async () => ({ ok: false, reason: 'unavailable' });
+    l.source.setState({ location: 'none' });
+    await l.host.boot();
+    expect(await l.host.start()).toEqual({ ok: false, reason: 'permission' });
+    await l.host.stop({ endOpenTrip: false });
+  });
+
+  test('a step beside the drive that throws never refuses the start: the cached position, the display and the permissions read (iOS and Android)', async () => {
+    const throwingDisplay = (): DriveDisplay => ({
+      ...fakeDisplay(),
+      start: () => {
+        throw new Error('display gone');
+      },
+      update: () => {
+        throw new Error('display gone');
+      },
+    });
+    const over: Over = {
+      lastPosition: () => {
+        throw new Error('no location module');
+      },
+      permissions: async () => {
+        throw new Error('permissions module');
+      },
+      display: throwingDisplay(),
+    };
+    const i = buildIos(over);
+    await i.host.boot();
+    expect(await i.host.start()).toEqual({ ok: true, waiting: true });
+    expect(i.host.snapshot()).toMatchObject({ status: 'recording', origin: 'manual', waiting: { phase: 'waiting' } });
+    expect(i.errors).toEqual(expect.arrayContaining(['permissions: permissions module', 'lastPosition: no location module', 'display: display gone']));
+    // The wait's timer runs: the sheet comes at 2:00.
+    expect(i.scheduler.delays()).toContain(WAIT_POPUP_MS);
+    await feedIos(i, rows(3, { t0: T0 + 1000, speedMps: 0 }));
+    expect(i.host.snapshot().lastRowTs).toBe(T0 + 3_000);
+    await i.host.stop({ endOpenTrip: true });
+
+    const a = build({ ...over, display: throwingDisplay() });
+    await a.host.boot();
+    expect(await a.host.start()).toEqual({ ok: true, waiting: true });
+    expect(a.host.snapshot()).toMatchObject({ status: 'recording', origin: 'manual' });
+    await a.host.stop({ endOpenTrip: true });
+  });
+
+  test('Android: a capture refused for want of location is a permission refusal; any other failure an error', async () => {
+    const l = build();
+    l.source.setState({ location: 'none' });
+    await l.host.boot();
+    expect(await l.host.start()).toEqual({ ok: false, reason: 'permission' });
+    const e = build();
+    e.source.startCapture = async () => {
+      throw new Error('service');
+    };
+    await e.host.boot();
+    expect(await e.host.start()).toEqual({ ok: false, reason: 'error' });
+    expect(e.host.snapshot().status).toBe('idle');
+  });
+});
+
+describe('iOS: the push-to-start once the confirming rows are in (plan decision 4)', () => {
+  /** Limits unknown for the first `n` lookups, then 35 mph posted. */
+  function lateLimits(n: number): SpeedLimitClient {
+    const base = fakeLimits();
+    let calls = 0;
+    const unknown: LimitSample = { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false };
+    return { ...base, lookup: (...args: Parameters<SpeedLimitClient['lookup']>) => ((calls += 1) <= n ? unknown : base.lookup(...args)) } as SpeedLimitClient;
+  }
+
+  function pushes(answers: (boolean | PushToStartOutcome)[] = []) {
+    const pushed: PushToStartRequest[] = [];
+    return {
+      pushed,
+      pushToStart: async (req: PushToStartRequest) => {
+        pushed.push(req);
+        return answers.length > 0 ? answers.shift()! : true;
+      },
+    };
+  }
+
+  async function behind(over: Over = {}) {
+    const h = buildIos(over, { appState: 'background' });
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    return h;
+  }
+
+  const flush = async (h: I) => {
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.settled();
+    await new Promise((r) => setTimeout(r, 0));
+  };
+
+  test('it goes after the journal’s rows are drained, carrying the drive’s speed and limit (34 mph on a 35)', async () => {
+    const p = pushes();
+    const h = await behind({ pushToStart: p.pushToStart });
+    await confirm(h, rows(30, { speedMps: 15 }));
+    await flush(h);
+    expect(p.pushed).toHaveLength(1);
+    expect(p.pushed[0]).toMatchObject({ clientTripId: NATIVE, leg: 0, startedAt: T0, state: { speed: 34, limit: 35, unit: 'mph', weatherKind: null } });
+    expect(h.scheduler.delays()).not.toContain(PUSH_START_WAIT_MS);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('it waits up to 1.5 s for a limit: the next live row bringing it sends at once; none by then sends without it', async () => {
+    const p = pushes();
+    const h = await behind({ pushToStart: p.pushToStart, limits: lateLimits(30) });
+    await confirm(h, rows(30, { speedMps: 15 }));
+    await flush(h);
+    expect(p.pushed).toHaveLength(0);
+    expect(h.scheduler.delays()).toContain(PUSH_START_WAIT_MS);
+    await feedIos(h, rows(1, { t0: T0 + 30_000, speedMps: 15 }));
+    await flush(h);
+    expect(p.pushed).toHaveLength(1);
+    expect(p.pushed[0]!.state).toMatchObject({ speed: 34, limit: 35 });
+    await h.host.stop({ endOpenTrip: false });
+
+    const q = pushes();
+    const g = await behind({ pushToStart: q.pushToStart, limits: lateLimits(1_000) });
+    await confirm(g, rows(30, { speedMps: 15 }));
+    await flush(g);
+    expect(q.pushed).toHaveLength(0);
+    clock += PUSH_START_WAIT_MS;
+    g.scheduler.fire();
+    await flush(g);
+    expect(q.pushed).toHaveLength(1);
+    expect(q.pushed[0]!.state).toMatchObject({ speed: 34, limit: null });
+    await g.host.stop({ endOpenTrip: false });
+  });
+
+  test('a failure a retry may fix is reported with its reason and asked once more after 30 s; a final one is not; one already running asks nothing', async () => {
+    const p = pushes([{ sent: false, reason: 'timeout', detail: null, retryable: true }, { sent: false, reason: 'apns_error', detail: 'TooManyRequests', retryable: true }]);
+    const h = await behind({ pushToStart: p.pushToStart });
+    await confirm(h, rows(30, { speedMps: 15 }));
+    await flush(h);
+    expect(p.pushed).toHaveLength(1);
+    expect(h.errors).toContain('pushToStart: push-to-start not sent: timeout; asking again in 30 s');
+    expect(h.scheduler.delays()).toContain(PUSH_START_RETRY_MS);
+    // Rows meanwhile do not ask early.
+    await feedIos(h, rows(2, { t0: T0 + 30_000, speedMps: 15 }));
+    await flush(h);
+    expect(p.pushed).toHaveLength(1);
+    clock = T0 + 62_000;
+    h.scheduler.fire();
+    await flush(h);
+    expect(p.pushed).toHaveLength(2);
+    expect(p.pushed[1]).toMatchObject({ clientTripId: NATIVE, leg: 0, state: { speed: 34, limit: 35 } });
+    // Only once.
+    expect(h.errors).toContain('pushToStart: push-to-start not sent: apns_error (TooManyRequests)');
+    expect(h.scheduler.delays()).not.toContain(PUSH_START_RETRY_MS);
+    h.scheduler.fire();
+    await flush(h);
+    expect(p.pushed).toHaveLength(2);
+    await h.host.stop({ endOpenTrip: false });
+
+    const f = pushes([{ sent: false, reason: 'unconfigured', detail: null, retryable: false }]);
+    const g = await behind({ pushToStart: f.pushToStart });
+    await confirm(g, rows(30, { speedMps: 15 }));
+    await flush(g);
+    expect(g.errors).toContain('pushToStart: push-to-start not sent: unconfigured');
+    expect(g.scheduler.delays()).not.toContain(PUSH_START_RETRY_MS);
+    await g.host.stop({ endOpenTrip: false });
+
+    // A bare false (an outcome without its reason) is asked once more too.
+    const b = pushes([false]);
+    const k = await behind({ pushToStart: b.pushToStart });
+    await confirm(k, rows(30, { speedMps: 15 }));
+    await flush(k);
+    expect(k.scheduler.delays()).toContain(PUSH_START_RETRY_MS);
+    await k.host.stop({ endOpenTrip: false });
+
+    const r = pushes();
+    const display = fakeDisplay(true);
+    const m = await behind({ pushToStart: r.pushToStart, display });
+    await confirm(m, rows(30, { speedMps: 15 }));
+    await flush(m);
+    expect(r.pushed).toEqual([]);
+    await m.host.stop({ endOpenTrip: false });
+  });
+
+  test('RoadWise coming to the front starts the Live Activity locally and drops a push still waiting or to be asked again', async () => {
+    const p = pushes();
+    const h = await behind({ pushToStart: p.pushToStart, limits: lateLimits(1_000) });
+    await confirm(h, rows(30, { speedMps: 15 }));
+    await flush(h);
+    expect(p.pushed).toHaveLength(0);
+    h.appState.set('active');
+    await flush(h);
+    expect(h.display.log.some((l) => l.startsWith('start'))).toBe(true);
+    clock += PUSH_START_WAIT_MS;
+    h.scheduler.fire();
+    await flush(h);
+    expect(p.pushed).toHaveLength(0);
+    await h.host.stop({ endOpenTrip: false });
+
+    const q = pushes([{ sent: false, reason: 'network', detail: null, retryable: true }]);
+    const g = await behind({ pushToStart: q.pushToStart });
+    await confirm(g, rows(30, { speedMps: 15 }));
+    await flush(g);
+    expect(q.pushed).toHaveLength(1);
+    g.appState.set('active');
+    await flush(g);
+    clock += PUSH_START_RETRY_MS;
+    g.scheduler.fire();
+    await flush(g);
+    expect(q.pushed).toHaveLength(1);
+    await g.host.stop({ endOpenTrip: false });
+  });
+
+  test('a drive that ends before its push went asks nothing more', async () => {
+    const p = pushes();
+    const h = await behind({ pushToStart: p.pushToStart, limits: lateLimits(1_000) });
+    await confirm(h, rows(30, { speedMps: 15 }));
+    await flush(h);
+    clock = T0 + 31_000;
+    await h.host.end();
+    clock += PUSH_START_WAIT_MS;
+    h.scheduler.fire();
+    await flush(h);
+    expect(p.pushed).toEqual([]);
+    await h.host.stop({ endOpenTrip: false });
+  });
+});
+
+describe('the speed and limit pipeline beside the rows (plan decision 6)', () => {
+  test('native’s listeners are attached before the boot’s own work runs, so a live speed during the journal drain reaches the drive; events native held still queue behind the boot', async () => {
+    const pre = buildIos();
+    await pre.detect.setArmed(true, 'user-1');
+    pre.detect.wake();
+    clock = T0 + 41_000;
+    pre.detect.confirm({ driveId: uuid(80), startedAt: T0, rows: journalRows(rows(40, { speedMps: 15 })) });
+    const h = buildIos({ detect: pre.detect as DriveDetectApi, source: pre.source, platform: 'ios' });
+    const seen: number[] = [];
+    // (buildIos hands back its own fakes: the host here runs on pre's.)
+    const getState = pre.source.getState.bind(pre.source);
+    pre.source.getState = async () => {
+      seen.push(pre.source.listenerCount('speed'));
+      return getState();
+    };
+    const readRows = pre.detect.readRows.bind(pre.detect);
+    let emitted = false;
+    pre.detect.readRows = async (id, after, limit) => {
+      if (!emitted) {
+        emitted = true;
+        pre.source.emit('speed', { ts: T0 + 40_500, speed: 20, speedAcc: 0.5, hAcc: 5, ageMs: 0 } as never);
+      }
+      return readRows(id, after, limit);
+    };
+    await h.host.boot();
+    await h.host.settled();
+    expect(seen[0]).toBe(1);
+    expect(emitted).toBe(true);
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(80), lastRowTs: T0 + 39_000, speedAt: T0 + 40_500 });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('iPhone: a speed is timed at its fix (never later than now); Android: at arrival less its age', async () => {
+    const h = buildIos({ platform: 'ios' });
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(30, { speedMps: 15 }));
+    clock = T0 + 32_000;
+    h.source.emit('speed', { ts: T0 + 31_000, speed: 15, speedAcc: 0.5, hAcc: 5, ageMs: 4_000 } as never);
+    expect(h.host.snapshot().speedAt).toBe(T0 + 31_000);
+    h.source.emit('speed', { ts: T0 + 40_000, speed: 15, speedAcc: 0.5, hAcc: 5, ageMs: 0 } as never);
+    expect(h.host.snapshot().speedAt).toBe(T0 + 32_000);
+    await h.host.stop({ endOpenTrip: false });
+
+    const a = build({ platform: 'android' });
+    await a.host.boot();
+    await drive(a, rows(20, { speedMps: 15 }));
+    clock = T0 + 25_000;
+    a.source.emit('speed', { ts: T0 + 24_000, speed: 15, speedAcc: 0.5, hAcc: 5, ageMs: 500 } as never);
+    expect(a.host.snapshot().speedAt).toBe(T0 + 24_500);
+    await a.host.stop({ endOpenTrip: true });
+  });
+
+  test('a gap filled from the journal yields the JS thread between pages', async () => {
+    const h = buildIos();
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(10, { speedMps: 15 }));
+    // 700 rows journaled while JS missed them live, then one arrives.
+    const missed = rows(701, { t0: T0 + 10_000, speedMps: 15 }).map((r) => ({ ...r, lng: r.lng + (10 * 15) / M_PER_DEG_LNG }));
+    h.link.lossy = true;
+    h.detect.emitRows(journalRows(missed.slice(0, 700)));
+    h.link.lossy = false;
+    let ticked = false;
+    const at: boolean[] = [];
+    const readRows = h.detect.readRows.bind(h.detect);
+    h.detect.readRows = async (id, after, limit) => {
+      at.push(ticked);
+      return readRows(id, after, limit);
+    };
+    setTimeout(() => {
+      ticked = true;
+    }, 0);
+    clock = missed.at(-1)!.ts + 1000;
+    h.detect.emitRows(journalRows(missed.slice(700)));
+    await h.host.settled();
+    expect(h.host.snapshot().lastRowTs).toBe(missed.at(-1)!.ts);
+    expect(at.length).toBeGreaterThan(2);
+    expect(at[0]).toBe(false);
+    expect(at.slice(1).every(Boolean)).toBe(true);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('replayed rows never take the trip’s first tile batch: it is asked for where the first live row is', async () => {
+    const limits = fakeLimits();
+    const h = buildIos({ limits });
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(30, { speedMps: 15 }));
+    expect(limits.startTrip).not.toHaveBeenCalled();
+    const live = rows(31, { speedMps: 15 }).slice(30);
+    await feedIos(h, live);
+    expect(limits.startTrip).toHaveBeenCalledTimes(1);
+    const [lat, lng, course] = (limits.startTrip as jest.Mock).mock.calls[0] as [number, number, number];
+    expect(lat).toBeCloseTo(live[0]!.lat, 5);
+    expect(lng).toBeCloseTo(live[0]!.lng, 5);
+    expect(course).toBe(live[0]!.course);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the end of a kept drive is on its outcome (for the recap’s age rule); none for one not kept', async () => {
+    const h = buildIos();
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(60, { speedMps: 15 }));
+    clock = T0 + 61_000;
+    await h.host.end();
+    const trip = (await createTripsRepo(db).get(NATIVE))!;
+    expect(trip.ended_at).not.toBeNull();
+    expect(h.host.snapshot().lastFinalized).toMatchObject({ clientTripId: NATIVE, ok: true, dropped: null, endedAt: trip.ended_at });
+    await h.host.stop({ endOpenTrip: false });
+
+    const d = build();
+    await d.host.boot();
+    await d.host.start();
+    await d.host.cancelWaiting();
+    expect(d.host.snapshot().lastFinalized).toMatchObject({ ok: true, dropped: expect.any(String), endedAt: null });
+  });
 });

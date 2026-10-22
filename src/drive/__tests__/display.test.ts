@@ -200,3 +200,49 @@ test('isRunning asks LiveDrive on iOS only; false where none can run or it fails
   const failing = createDriveDisplay({ liveDrive: { start: jest.fn(async () => true), end: jest.fn(async () => {}), isRunning: async () => Promise.reject(new Error('x')) } }, { now: () => 0, platform: 'ios', onError: () => {} });
   expect(await failing.isRunning!()).toBe(false);
 });
+
+test('the first known speed and the first known limit go out at once after a start; later changes keep the 3 s throttle', () => {
+  let now = 0;
+  const { set, live } = sinks();
+  const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios' });
+  d.start(state({ speed: null, limit: null }));
+  expect(set).toHaveBeenCalledTimes(1);
+  now = 200;
+  d.update(state({ speed: 12, limit: null }));
+  // The first speed, inside the 3 s.
+  expect(set).toHaveBeenCalledTimes(2);
+  now = 900;
+  d.update(state({ speed: 14, limit: null }));
+  // Throttled.
+  expect(set).toHaveBeenCalledTimes(2);
+  now = 1500;
+  d.update(state({ speed: 15, limit: 25 }));
+  // The first limit, inside the 3 s.
+  expect(set).toHaveBeenCalledTimes(3);
+  expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 15, limit: 25 }));
+  now = 2000;
+  d.update(state({ speed: null, limit: null }));
+  now = 2500;
+  d.update(state({ speed: 16, limit: 25 }));
+  // Known again: no second bypass.
+  expect(set).toHaveBeenCalledTimes(3);
+  d.end();
+  d.start(state({ speed: null, limit: null }));
+  now = 2600;
+  d.update(state({ speed: 9, limit: null }));
+  // The next drive's start, then its own first speed.
+  expect(set).toHaveBeenCalledTimes(5);
+});
+
+test('a start that already carries a speed and a limit spends both bypasses (the next change waits for the throttle)', () => {
+  let now = 0;
+  const sent: DriveDisplayState[] = [];
+  const d = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: () => now, platform: 'android' });
+  d.start(state({ speed: 30, limit: 35 }));
+  now = 500;
+  d.update(state({ speed: 31, limit: 35 }));
+  expect(sent).toHaveLength(1);
+  now = DISPLAY_MIN_INTERVAL_MS;
+  d.update(state({ speed: 32, limit: 35 }));
+  expect(sent).toHaveLength(2);
+});
