@@ -219,8 +219,9 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
         held.delete(f.clientTripId);
         // "Not driving?" deleted the drive, a re-opened one with its first leg: that leg's recap goes too.
         if (f.ok && f.dropped === 'cancelled') takeDown(f.clientTripId);
-        // A drive that was not kept has no recap.
-        else if (f.ok && f.status !== 'failed' && f.dropped === null) enqueue(() => announce(f));
+        // A drive that was not kept has no recap. The driving screen in front at the moment the drive
+        // ended opens the recap itself (it may have moved on to it before the chain runs).
+        else if (f.ok && f.status !== 'failed' && f.dropped === null && !(appState.currentState === 'active' && screenShowsEnd())) enqueue(() => announce(f));
       }
     }
     // No drive records any more: the recaps held meanwhile post, each by the same rules.

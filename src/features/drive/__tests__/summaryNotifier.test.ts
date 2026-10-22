@@ -204,6 +204,21 @@ test('in front, it posts unless the driving screen shows the end (it opens the r
   nc.detach();
 });
 
+test('the driving screen in front when the drive ends decides, even once it has moved on to the recap before the chain runs', async () => {
+  const { host, set } = hostStub({});
+  const { p, scheduled } = port();
+  let focused = true;
+  const n = attach(host, { port: p, appState: { currentState: 'active' }, isSummaryVisible: () => focused });
+  // Something before it on the chain (a cancel) keeps the chain busy.
+  set({ lastFinalized: cancelledOf('earlier') });
+  set({ lastFinalized: kept('abc', 5) });
+  // The driving screen leaves for the recap right away.
+  focused = false;
+  await n.settled();
+  expect(scheduled).toEqual([]);
+  n.detach();
+});
+
 test('nothing without permission, or for a failed save', async () => {
   const denied = port(false);
   const b = hostStub({});
