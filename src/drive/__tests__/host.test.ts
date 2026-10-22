@@ -472,6 +472,20 @@ describe('a drive', () => {
     await h.host.stop({ endOpenTrip: false });
   });
 
+  test('the Android notification’s End drive while a Start-card drive still waits is its Cancel: ended unsaved, Home says nothing', async () => {
+    const h = build();
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(30, { t0: T0 + 1000, speedMps: 0 }));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', waiting: { phase: 'waiting' } });
+    h.source.emit('notificationAction', { action: 'endDrive', ts: clock });
+    await h.host.untilIdle();
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', waiting: null, lastFinalized: { ok: true, dropped: 'no_movement' } });
+    expect(await tripCount()).toBe(0);
+    expect(await readDropNotice(db)).toBeNull();
+    expect(h.source.calls.at(-1)).toBe('stopCapture');
+  });
+
   test('every native row first pumps the timers; a throwing pump is reported and the row still counts', async () => {
     let pumped = 0;
     const h = build({
