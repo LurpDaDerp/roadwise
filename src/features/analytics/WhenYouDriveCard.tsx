@@ -46,7 +46,7 @@ export const cellLevel = (count: number, max: number): number =>
   count <= 0 || max <= 0 ? 0 : Math.max(1, Math.min(HEAT_STEPS, Math.ceil((count / max) * HEAT_STEPS)));
 
 /**
- * When the range's drives start: weekdays down the side (Monday first), 3-hour bands across,
+ * When every scored drive (all time) started: weekdays down the side (Monday first), 3-hour bands across,
  * each cell coloured on a five-step scale by how many drives started there, with a Fewer–More key.
  */
 export function WhenYouDriveCard({ grid }: { grid: DriveGrid }) {

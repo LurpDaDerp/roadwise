@@ -7,7 +7,7 @@ import { distanceIn, type Units } from '@/lib/units';
 import { Card, SegmentedControl, Text, tokens, useTheme } from '@/ui';
 
 import { analyticsCopy } from './copy';
-import type { Metric } from './format';
+import { percentMetric, type Metric } from './format';
 import type { MetricsLayout } from './MetricsCards';
 import { trendDirection, trendRange, TREND_KINDS, type Trend, type TrendKind, type TrendPoint, type TrendStep, type TrendTick } from './model';
 import { sizeAt } from './textSize';
@@ -38,9 +38,12 @@ export const trendHeaderHeight = (l: Pick<MetricsLayout, 'textScale' | 'fontScal
 /** The chart's box: the plot, then a line of tick labels. The short "not enough drives" line keeps the same box, so nothing jumps. */
 export const chartBoxHeight = (l: Pick<MetricsLayout, 'plot' | 'textScale'>): number => l.plot + TICK_GAP + sizeAt('caption', l.textScale).lineHeight;
 
-/** The whole card: padding, the header row and the chart, with the card's gap between them. */
+/** The range's clean share under the header: one line of `subhead`. */
+export const cleanLineHeight = (l: Pick<MetricsLayout, 'textScale'>): number => sizeAt('subhead', l.textScale).lineHeight;
+
+/** The whole card: padding, the header row, the clean share and the chart, with the card's gap between them. */
 export const trendCardHeight = (l: Pick<MetricsLayout, 'pad' | 'gap' | 'plot' | 'textScale' | 'fontScale'>): number =>
-  l.pad * 2 + trendHeaderHeight(l) + l.gap + chartBoxHeight(l);
+  l.pad * 2 + trendHeaderHeight(l) + l.gap + cleanLineHeight(l) + l.gap + chartBoxHeight(l);
 
 // ---------------------------------------------------------------------------------------------
 // Geometry
@@ -159,6 +162,8 @@ export function trendLabel(kind: TrendKind, points: readonly TrendPoint[], step:
 
 export interface TrendCardProps {
   trend: Trend;
+  /** The range's share of clean drives (`WindowSums.cleanPct`); null with no drives. */
+  cleanPct: number | null;
   layout: MetricsLayout;
   /** The chart's width: the card's inside. */
   width: number;
@@ -167,12 +172,13 @@ export interface TrendCardProps {
 
 /**
  * The range over time, titled "Trends": a Score / Events picker beside the title (the Safety
- * Rating, and events per mile or per km), one monotone line in
+ * Rating, and events per mile or per km), under them the range's share of clean drives ("82% clean
+ * drives", a dash with no drives), then one monotone line in
  * the page ink with a dot per point (the latest labelled with its unit), thin guides at the
  * bottom, middle and top of the range with their values down a Y axis on the left, and a few short
  * ticks under it. Fewer than two points read "Not enough drives yet" in the chart's place.
  */
-export function TrendCard({ trend, layout: l, width, text }: TrendCardProps) {
+export function TrendCard({ trend, cleanPct, layout: l, width, text }: TrendCardProps) {
   const t = useTheme();
   const units = useUnits();
   const [kind, setKind] = useState<TrendKind>('score');
@@ -196,6 +202,7 @@ export function TrendCard({ trend, layout: l, width, text }: TrendCardProps) {
   const tickW = tickWidth(ticks, tick.fontSize);
   const halo = { textShadowColor: t.colors.surface, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6 };
   const guides = [PLOT_EDGE, l.plot / 2, l.plot - PLOT_EDGE];
+  const clean = percentMetric(cleanPct);
 
   return (
     <Card padded={false} style={{ padding: l.pad, gap: l.gap }} testID="metrics-trend">
@@ -211,6 +218,19 @@ export function TrendCard({ trend, layout: l, width, text }: TrendCardProps) {
           style={{ flex: 1, minHeight: pickerHeight(l.fontScale) }}
           testID="metrics-trend-picker"
         />
+      </View>
+      <View
+        accessible
+        accessibilityLabel={`${c.cleanSpoken}, ${clean.spoken}`}
+        style={{ minHeight: cleanLineHeight(l), justifyContent: 'center' }}
+        testID="metrics-trend-clean"
+      >
+        <Text variant="subhead" tone="muted" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85} style={latest}>
+          <Text variant="subhead" style={[latest, { fontWeight: '700', fontVariant: ['tabular-nums'] }]} testID="metrics-trend-clean-value">
+            {cleanPct === null ? clean.value : `${clean.value}${clean.unit}`}
+          </Text>
+          {` ${c.clean}`}
+        </Text>
       </View>
       {points.length < 2 ? (
         <View style={{ height: box, justifyContent: 'center' }} testID="trend-chart-box">

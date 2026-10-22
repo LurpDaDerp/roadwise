@@ -85,7 +85,7 @@ test('useCoaching: the last 90 days’ scores, Safety Rating and advice, as of t
   expect(result.current.error).toBe(false);
 });
 
-test('useAnalytics: range sums with their chances, grid and list; all-time bests and routes; 90-day coaching', async () => {
+test('useAnalytics: range sums with their chances and the trend; all-time totals, grid, list and routes; 90-day coaching', async () => {
   const { result, rerender } = await renderHook(({ range }: { range: 'week' | 'year' }) => useAnalytics(range), {
     wrapper: wrapperFor(db, client, now),
     initialProps: { range: 'week' },
@@ -93,9 +93,12 @@ test('useAnalytics: range sums with their chances, grid and list; all-time bests
   await waitFor(() => expect(result.current.loading).toBe(false));
   expect(result.current.sums).toMatchObject({ drives: 2, miles: 10, hardBrake: 2, cleanPct: 50, slowdowns: 24, speedups: 24, turns: 20, limitS: 600, exposureEstimated: false });
   expect(result.current.sums).not.toHaveProperty('points');
-  expect(result.current.drives.map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2)]);
-  expect(result.current.grid.total).toBe(2);
-  expect(result.current.bests).toEqual({ longestClean: { value: 30, clientTripId: uuid(4) } });
+  // The list and the grid are all time, whatever the range: every scored drive, newest first, never "Wasn't driving".
+  const allTime = [uuid(1), uuid(2), uuid(3), uuid(4)];
+  expect(result.current.drives.map((d) => d.clientTripId)).toEqual(allTime);
+  expect(result.current.grid.total).toBe(4);
+  // All time: the longest clean drive, and the three clean drives (the first one had hard brakes).
+  expect(result.current.allTime).toEqual({ longestClean: { value: 30, clientTripId: uuid(4) }, cleanDrives: 3, nightPct: 0 });
   expect(result.current.coaching.totals.drives).toBe(3);
   expect(result.current.routes).toHaveLength(4);
   expect(result.current.region).toMatchObject({ latitude: 47.62, longitude: -122.3 });
@@ -118,6 +121,11 @@ test('useAnalytics: range sums with their chances, grid and list; all-time bests
   await rerender({ range: 'year' });
   await waitFor(() => expect(result.current.sums.drives).toBe(4));
   expect(result.current.range).toBe('year');
+  expect(result.current.sums.cleanPct).toBe(75);
+  // The range moves the sums and the trend only.
+  expect(result.current.drives.map((d) => d.clientTripId)).toEqual(allTime);
+  expect(result.current.grid.total).toBe(4);
+  expect(result.current.allTime.cleanDrives).toBe(3);
   // Score by month, wherever the 90 days to a month's end hold 10 mi: July to October.
   await waitFor(() => expect(result.current.trend.series.score).toHaveLength(4));
   expect(result.current.trend.series.score.map((p) => p.when)).toEqual(['in July', 'in August', 'in September', 'in October 2026']);
@@ -163,7 +171,7 @@ test('while the window’s events are still loading, nothing is scored: drives a
     const analytics = await renderHook(() => useAnalytics('week'), { wrapper: wrapperFor(db, client, now) });
     mounted.push(analytics);
     const { result } = analytics;
-    await waitFor(() => expect(result.current.drives).toHaveLength(2));
+    await waitFor(() => expect(result.current.drives).toHaveLength(4));
     expect(result.current.coaching.totals.drives).toBe(0);
     expect(Object.values(result.current.coaching.scores).some((s) => s === 100)).toBe(false);
     expect(result.current.coaching.coaching?.level).not.toBe('good');

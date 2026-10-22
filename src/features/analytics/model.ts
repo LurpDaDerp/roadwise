@@ -688,6 +688,20 @@ export function personalBests(drives: readonly LocalDrive[]): PersonalBests {
   return { longestClean };
 }
 
+/** The all-time card's numbers and the time-of-day comment's share after dark: every scored drive. */
+export interface AllTimeTotals extends PersonalBests {
+  /** Scored drives with no events (`clean === true`), counted as `windowSums` counts them. */
+  cleanDrives: number;
+  /** Whole percent of all the miles driven after dark; null with no miles. */
+  nightPct: number | null;
+}
+
+/** All time, over every scored drive: the longest clean drive, the clean drives, the share of miles after dark. */
+export function allTimeTotals(drives: readonly LocalDrive[]): AllTimeTotals {
+  const { cleanDrives, nightPct } = windowSums(drives, null);
+  return { ...personalBests(drives), cleanDrives, nightPct };
+}
+
 // ---------------------------------------------------------------------------------------------
 // When you drive
 
@@ -743,7 +757,7 @@ export interface TimeComment {
 }
 
 /**
- * One or two short, friendly lines about when the range's drives start, read off the When you drive
+ * One or two short, friendly lines about when the drives start, read off the When you drive
  * grid (and the share of miles after dark). It scores nothing and costs nothing: the first rule that
  * fits speaks.
  *

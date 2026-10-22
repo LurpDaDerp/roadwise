@@ -66,15 +66,14 @@ function Row({ drive, onPress }: { drive: LocalDrive; onPress: () => void }) {
 }
 
 /**
- * The range's drives behind a "Drives · 12" header that opens and closes the list: ten rows, then
- * "Show more" adds ten at a time. A new range starts over at ten.
+ * Every scored drive, all time, behind a "Drives · 12" header that opens and closes the list
+ * (closed at first): ten rows, then "Show more" adds ten at a time, so only the rows asked for
+ * are drawn however many drives there are.
  */
-export function DrivesCard({ drives, rangeKey, onOpen }: { drives: readonly LocalDrive[]; rangeKey: string; onOpen: (clientTripId: string) => void }) {
+export function DrivesCard({ drives, onOpen }: { drives: readonly LocalDrive[]; onOpen: (clientTripId: string) => void }) {
   const t = useTheme();
   const [open, setOpen] = useState(false);
-  // Pages counted per range, so switching the range starts the list over at ten.
-  const [page, setPage] = useState({ key: rangeKey, n: DRIVES_PAGE });
-  const shown = page.key === rangeKey ? page.n : DRIVES_PAGE;
+  const [shown, setShown] = useState(DRIVES_PAGE);
   const count = drives.length;
   const title = `${c.title} · ${count}`;
   const canOpen = count > 0;
@@ -118,7 +117,7 @@ export function DrivesCard({ drives, rangeKey, onOpen }: { drives: readonly Loca
           ))}
           {shown < count ? (
             <View style={{ padding: t.space.lg, paddingTop: t.space.sm }}>
-              <Button label={c.showMore} variant="secondary" onPress={() => setPage({ key: rangeKey, n: shown + DRIVES_PAGE })} testID="analytics-drives-more" />
+              <Button label={c.showMore} variant="secondary" onPress={() => setShown((n) => n + DRIVES_PAGE)} testID="analytics-drives-more" />
             </View>
           ) : (
             <View style={{ height: t.space.sm }} />

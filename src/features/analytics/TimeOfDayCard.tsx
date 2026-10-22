@@ -7,9 +7,10 @@ import { analyticsCopy } from './copy';
 import { timeComment, type DriveGrid } from './model';
 
 /**
- * Under When you drive: a short, friendly line about when the range's drives start (`timeComment`).
- * It is a comment, not a score: time of day never costs points or moves the rating. Nothing shows
- * for a range with no drives (the grid already says so).
+ * Under When you drive: a short, friendly line about when the drives start, all time
+ * (`timeComment`, with the share of all the miles after dark). It is a comment, not a score: time
+ * of day never costs points or moves the rating. Nothing shows with no drives (the grid already
+ * says so).
  */
 export function TimeOfDayCard({ grid, nightPct }: { grid: DriveGrid; nightPct: number | null }) {
   const t = useTheme();

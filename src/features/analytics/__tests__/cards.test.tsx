@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import type { ComponentType, ReactNode } from 'react';
 import { StyleSheet, View, type TextStyle, type ViewStyle } from 'react-native';
 
@@ -12,15 +12,57 @@ import { ThemeProvider } from '@/ui/theme';
 import { tokens } from '@/ui/tokens';
 
 import { drives, NO_SCORES, SCORES } from '../__fixtures__/analytics';
-import { BestsCard } from '../BestsCard';
+import { AllTimeCard } from '../AllTimeCard';
 import { categoryGroup, CategorySheet, categoryTitle, rateLine } from '../CategorySheet';
 import { analyticsCopy } from '../copy';
 import { DRIVES_PAGE, DrivesCard, driveLine } from '../DrivesCard';
-import { MAIN_CARDS, metricGroups, metricsBlockHeight, MetricsCards, metricsLayout, METRICS_MAX_SHARE, metricsText } from '../MetricsCards';
-import { AXES, coach, driveGrid, EMPTY_TREND, EMPTY_WINDOW, fitLines, personalBests, toRatingDrives, trend, windowSums, type MapPoint } from '../model';
+import {
+  drivingGroup,
+  MAIN_BLOCK,
+  mainLayout,
+  metricsBlockHeight,
+  MetricsCards,
+  metricsLayout,
+  METRICS_MAX_SHARE,
+  metricsText,
+  NO_CHART_BLOCK,
+  RANGE_GROUP_BORDER,
+  RANGE_GROUP_PAD,
+  rangeGroupChrome,
+} from '../MetricsCards';
+import {
+  allTimeTotals,
+  AXES,
+  coach,
+  driveGrid,
+  EMPTY_TREND,
+  EMPTY_WINDOW,
+  fitLines,
+  toRatingDrives,
+  trend,
+  windowSums,
+  type MapPoint,
+  type Range,
+  type Trend,
+  type WindowSums,
+} from '../model';
 import { axisAt, RADAR_LABEL_MAX_SCALE, RADAR_RINGS, RADAR_ZERO, radarGeometry, radarLabel, radarPoint, radarPolygon, RadarCard, radiusFor } from '../RadarCard';
 import { SummaryCard } from '../SummaryCard';
-import { AXIS_GAP, axisTicks, axisValue, axisWidth, chartBoxHeight, eventsPer, monotonePath, PLOT_EDGE, plotPoint, trendLabel, trendValue, visibleTicks } from '../TrendCard';
+import {
+  AXIS_GAP,
+  axisTicks,
+  axisValue,
+  axisWidth,
+  chartBoxHeight,
+  eventsPer,
+  monotonePath,
+  pickerHeight,
+  PLOT_EDGE,
+  plotPoint,
+  trendLabel,
+  trendValue,
+  visibleTicks,
+} from '../TrendCard';
 import { TripsMapCard } from '../TripsMapCard';
 import { bandSpan, busiest, cellLevel, HEAT_RAMP, WhenYouDriveCard } from '../WhenYouDriveCard';
 
@@ -363,64 +405,85 @@ describe('SummaryCard', () => {
   });
 });
 
-describe('BestsCard', () => {
+describe('AllTimeCard', () => {
   const list = [
     drive({ clientTripId: 'short', miles: 9, clean: true, counts: { ...drive().counts, hardBrake: 0 } }),
     drive({ clientTripId: 'long', miles: 31.24, clean: true, counts: { ...drive().counts, hardBrake: 0 } }),
     drive({ clientTripId: 'rough', miles: 50, clean: false }),
   ];
 
-  test('one best: the longest clean drive, which opens its drive; no points', async () => {
+  test('titled All time: the longest clean drive, which opens its drive, and the clean drives; no points', async () => {
     const onOpen = jest.fn();
-    await draw(<BestsCard bests={personalBests(list)} show={['clean']} onOpen={onOpen} />);
-    expect(screen.getByText('Personal best')).toBeOnTheScreen();
-    expect(screen.getByTestId('best-clean-value')).toHaveTextContent('31.2 mi');
+    await draw(<AllTimeCard allTime={allTimeTotals(list)} onOpen={onOpen} />);
+    expect(screen.getByRole('header', { name: 'All time' })).toBeOnTheScreen();
+    expect(screen.queryByText('Personal best')).toBeNull();
+    expect(screen.getByTestId('all-time-longest-clean-value')).toHaveTextContent('31.2 mi');
     expect(screen.getByLabelText('Longest clean, 31.2 miles')).toBeOnTheScreen();
+    // Two of the three drives had no events.
+    expect(screen.getByTestId('all-time-clean-drives-value')).toHaveTextContent('2');
+    expect(screen.getByLabelText('Clean drives, 2')).toBeOnTheScreen();
+    expect(screen.getByTestId('all-time-clean-drives').props.accessibilityRole).toBeUndefined();
     expect(screen.queryByText(/points?|pts/i)).toBeNull();
-    await press(screen.getByTestId('best-clean'));
+    await press(screen.getByTestId('all-time-longest-clean'));
     expect(onOpen).toHaveBeenCalledWith('long');
   });
 
   test('in kilometres when the driver uses them', async () => {
     publishUnits('km');
-    await draw(<BestsCard bests={personalBests(list)} show={['clean']} onOpen={jest.fn()} />);
-    expect(screen.getByTestId('best-clean-value')).toHaveTextContent('50.3 km');
+    await draw(<AllTimeCard allTime={allTimeTotals(list)} onOpen={jest.fn()} />);
+    expect(screen.getByTestId('all-time-longest-clean-value')).toHaveTextContent('50.3 km');
   });
 
-  test('no drives yet: a dash, nothing to press', async () => {
-    await draw(<BestsCard bests={personalBests([])} show={['clean']} onOpen={jest.fn()} />);
+  test('no drives yet: a dash for the longest, nothing to press, and no clean drives', async () => {
+    await draw(<AllTimeCard allTime={allTimeTotals([])} onOpen={jest.fn()} />);
     expect(screen.getAllByText('—')).toHaveLength(1);
-    expect(screen.getByTestId('best-clean').props.accessibilityRole).toBeUndefined();
+    expect(screen.getByTestId('all-time-longest-clean').props.accessibilityRole).toBeUndefined();
     expect(screen.getByLabelText('Longest clean, none yet')).toBeOnTheScreen();
+    expect(screen.getByTestId('all-time-clean-drives-value')).toHaveTextContent('0');
   });
 });
 
 describe('MetricsCards', () => {
-  test('three cards: Driving with the drive time, Trends, and Clean driving with the clean drives, their rate, the pickups and the time in hand; no points', async () => {
+  const group = (ui: { sums: WindowSums; trend: Trend; range?: Range; onRange?: (r: Range) => void }) => (
+    <MetricsCards sums={ui.sums} trend={ui.trend} range={ui.range ?? 'week'} onRange={ui.onRange ?? jest.fn()} />
+  );
+  /** The group's direct children by testID, top to bottom. */
+  const groupChildren = () =>
+    (screen.getByTestId('analytics-metrics').children as El[]).flatMap(function ids(n: El | string): string[] {
+      if (typeof n === 'string') return [];
+      const id = n.props.testID as unknown;
+      return typeof id === 'string' ? [id] : n.children.flatMap((c) => ids(c as El | string));
+    });
+
+  test('one group: the range toggle at its top, then Driving with the drive time and Trends with the range’s clean share; no Clean driving card, no points', async () => {
     const sums = windowSums(drives(4), null);
-    await draw(<MetricsCards sums={sums} trend={EMPTY_TREND} />);
+    const onRange = jest.fn();
+    await draw(group({ sums, trend: EMPTY_TREND, onRange }));
+    expect(groupChildren()).toEqual(['analytics-range', 'metrics-driving', 'metrics-trend']);
+    expect(screen.getByLabelText('Time range, for Driving and Trends')).toBeOnTheScreen();
+    expect(screen.getByRole('tab', { name: 'Week' })).toBeSelected();
+    await press(screen.getByRole('tab', { name: 'Year' }));
+    expect(onRange).toHaveBeenCalledWith('year');
     for (const [key, title] of [
       ['driving', 'Driving'],
       ['trend', 'Trends'],
-      ['clean', 'Clean driving'],
     ]) expect(screen.getByTestId(`metrics-${key}-title`)).toHaveTextContent(title!);
+    expect(screen.queryByTestId('metrics-clean')).toBeNull();
+    expect(screen.queryByText('Clean driving')).toBeNull();
+    // Phone pickups and time in hand live in Phone use's sheet, not here.
+    for (const key of ['clean', 'clean-rate', 'pickups', 'in-hand']) expect(screen.queryByTestId(`metric-${key}`)).toBeNull();
     expect(screen.queryByTestId('metrics-points')).toBeNull();
     expect(screen.queryByTestId('metrics-events')).toBeNull();
     expect(screen.queryByTestId('metrics-trend-row-0')).toBeNull();
     for (const key of ['speeding', 'brakes', 'starts', 'turns', 'points', 'avg-points', 'after-dark', 'dark-share']) expect(screen.queryByTestId(`metric-${key}`)).toBeNull();
     expect(screen.getByRole('tab', { name: 'Events' })).toBeOnTheScreen();
     expect(screen.queryByRole('tab', { name: 'Points' })).toBeNull();
-    expect(MAIN_CARDS).toEqual([5, 4]);
-    expect(metricGroups(sums, 'mi').map((g) => g.cells.map((c) => c.caption))).toEqual([
-      ['Drives', 'Drive time', 'Distance', 'Avg drive', 'Avg speed'],
-      ['Clean drives', 'Clean rate', 'Phone pickups', 'Time in hand'],
-    ]);
-    // No drive in the range was watched for pickups: dashes, never a made-up 0.
-    expect(screen.getByTestId('metric-pickups-value')).toHaveTextContent('—');
-    expect(screen.getByTestId('metric-in-hand-value')).toHaveTextContent('— min');
-    expect(screen.getByTestId('metric-clean-value')).toHaveTextContent('0');
-    expect(screen.getByTestId('metric-clean-rate-value')).toHaveTextContent('0 %');
-    expect(screen.getByLabelText('Clean rate, 0 percent')).toBeOnTheScreen();
+    expect(MAIN_BLOCK).toEqual({ cards: [5], chart: true, grouped: true });
+    expect(drivingGroup(sums, 'mi').cells.map((c) => c.caption)).toEqual(['Drives', 'Drive time', 'Distance', 'Avg drive', 'Avg speed']);
+    // None of the four drives was clean: the range's share in the Trends card.
+    expect(screen.getByTestId('metrics-trend-clean-value')).toHaveTextContent('0%');
+    expect(screen.getByTestId('metrics-trend-clean')).toHaveTextContent('0% clean drives');
+    expect(screen.getByLabelText('Clean drives, 0 percent')).toBeOnTheScreen();
     expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('4');
     // Four 24-minute drives: 96 min.
     expect(screen.getByTestId('metric-drive-time-value')).toHaveTextContent('1.6 h');
@@ -431,27 +494,55 @@ describe('MetricsCards', () => {
     expect(screen.getByLabelText('Distance, 48.0 miles')).toBeOnTheScreen();
     expect(screen.getByLabelText('Avg drive, 12.0 miles')).toBeOnTheScreen();
     expect(screen.queryByText(/points?\b|pts/i)).toBeNull();
-    expect(metricGroups(sums, 'km')[0]!.cells[3]!.metric).toMatchObject({ value: '19.3', unit: 'km' });
+    expect(drivingGroup(sums, 'km').cells[3]!.metric).toMatchObject({ value: '19.3', unit: 'km' });
+  });
+
+  test('the clean share follows the range’s drives', async () => {
+    const list = [...drives(3, 5, { clean: true }), ...drives(1, 5, { clientTripId: 'x' })];
+    await draw(group({ sums: windowSums(list, null), trend: EMPTY_TREND }));
+    expect(screen.getByTestId('metrics-trend-clean')).toHaveTextContent('75% clean drives');
+    expect(screen.getByLabelText('Clean drives, 75 percent')).toBeOnTheScreen();
   });
 
   test('an empty range reads as zeros and dashes', async () => {
-    await draw(<MetricsCards sums={EMPTY_WINDOW} trend={EMPTY_TREND} />);
+    await draw(group({ sums: EMPTY_WINDOW, trend: EMPTY_TREND }));
     expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('0');
     expect(screen.getByTestId('metric-distance-value')).toHaveTextContent('0.0 mi');
     expect(screen.getByTestId('metric-avg-drive-value')).toHaveTextContent('— mi');
     expect(screen.getByTestId('metric-speed-value')).toHaveTextContent('— mph');
-    expect(screen.getByTestId('metric-clean-rate-value')).toHaveTextContent('— %');
     expect(screen.getByTestId('metric-drive-time-value')).toHaveTextContent('0 min');
+    expect(screen.getByTestId('metrics-trend-clean')).toHaveTextContent('— clean drives');
+    expect(screen.getByLabelText('Clean drives, no data')).toBeOnTheScreen();
     // a zero-drive range from real data reads the same: no NaN or Infinity
-    for (const c of metricGroups(windowSums([], null), 'km').flatMap((g) => g.cells)) expect(c.metric.value).not.toMatch(/NaN|Infinity/);
+    for (const c of drivingGroup(windowSums([], null), 'km', true).cells) expect(c.metric.value).not.toMatch(/NaN|Infinity/);
+  });
+
+  test.each(['light', 'dark'] as const)('the group is a hairline outline in the %s theme’s border colour, its corners concentric with the cards inside', async (scheme) => {
+    await render(
+      <ThemeProvider scheme={scheme} reduceMotion>
+        {group({ sums: EMPTY_WINDOW, trend: EMPTY_TREND })}
+      </ThemeProvider>
+    );
+    const style = flat(screen.getByTestId('analytics-metrics'));
+    expect(style).toMatchObject({
+      borderWidth: RANGE_GROUP_BORDER,
+      borderColor: tokens.color[scheme].border,
+      padding: RANGE_GROUP_PAD,
+      borderRadius: tokens.radius.card + RANGE_GROUP_BORDER + RANGE_GROUP_PAD,
+    });
+    expect(RANGE_GROUP_BORDER).toBe(1);
+    // No fill of its own: the page shows through between the paper cards.
+    expect(style.backgroundColor).toBeUndefined();
+    expect(flat(screen.getByTestId('metrics-driving')).backgroundColor).toBe(tokens.color[scheme].surface);
   });
 
   /**
    * The block's height as drawn, read off the rendered tree: each card's padding, its title's line,
    * and per row the card gap plus the tallest cell (number line + cell gap + caption line); then the
    * gaps between the cards. The trend card counts its header row (the title or the picker, the
-   * taller) and its chart box. The lines are the rendered `lineHeight`s and heights, so this follows
-   * whatever sizes and spacing the cards actually use.
+   * taller), its clean line and its chart box. Around them the group's outline and padding, and the
+   * range toggle with a gap under it. The lines are the rendered `lineHeight`s and heights, so this
+   * follows whatever sizes and spacing the cards actually use.
    */
   const cellsIn = (row: El) => within(row).getAllByTestId(/^metric-(?!.*-(value|caption)$)[a-z-]+$/);
   const rowHeight = (row: El) =>
@@ -474,7 +565,7 @@ describe('MetricsCards', () => {
     return Number(card.padding ?? 0) * 2 + title + rowsH;
   }
   function drawnHeight(): number {
-    const cards = (['driving', 'trend', 'clean'] as const).flatMap((key) => {
+    const cards = (['driving', 'trend'] as const).flatMap((key) => {
       if (key !== 'trend') return [numberCardDrawn(key)];
       const trendCard = screen.queryByTestId('metrics-trend');
       if (!trendCard) return [];
@@ -485,11 +576,15 @@ describe('MetricsCards', () => {
         Number(flat(screen.getByTestId('metrics-trend-picker')).minHeight)
       );
       expect(flat(screen.getByTestId('metrics-trend-header')).minHeight).toBe(header);
+      const clean = Number(flat(screen.getByTestId('metrics-trend-clean')).minHeight);
       const chart = Number(flat(screen.getByTestId('trend-chart-box')).height);
-      return [Number(card.padding ?? 0) * 2 + header + gap + chart];
+      return [Number(card.padding ?? 0) * 2 + header + gap + clean + gap + chart];
     });
-    const blockGap = Number(flat(screen.getByTestId('analytics-metrics')).gap ?? 0);
-    return cards.reduce((a, b) => a + b, 0) + blockGap * (cards.length - 1);
+    const g = flat(screen.getByTestId('analytics-metrics'));
+    const blockGap = Number(g.gap ?? 0);
+    const toggle = Number(flat(screen.getByTestId('analytics-range')).minHeight);
+    const chrome = 2 * (Number(g.borderWidth) + Number(g.padding)) + toggle + blockGap;
+    return chrome + cards.reduce((a, b) => a + b, 0) + blockGap * (cards.length - 1);
   }
 
   test.each([
@@ -506,73 +601,70 @@ describe('MetricsCards', () => {
     ['375 × 667 at 2× text', 375, 667, 2],
     ['360 × 640 at 3× text', 360, 640, 3],
     ['320 × 568 at 2× text', 320, 568, 2],
-  ])('the whole metrics block takes at most three quarters of a %s window', async (_name, width, height, fontScale) => {
+  ])('the whole group, toggle and outline included, takes at most three quarters of a %s window', async (_name, width, height, fontScale) => {
     setWindow(width, height, fontScale);
-    await draw(<MetricsCards sums={windowSums(drives(4), null)} trend={trend(drives(4), [], 'week', NOW)} />);
+    await draw(group({ sums: windowSums(drives(4), null), trend: trend(drives(4), [], 'week', NOW) }));
     const drawn = drawnHeight();
+    const l = mainLayout(height, Math.min(fontScale, 2));
     expect(drawn).toBeLessThanOrEqual(height * METRICS_MAX_SHARE);
     // The layout model agrees with what was drawn.
-    const l = metricsLayout(height, Math.min(fontScale, 2));
-    expect(metricsBlockHeight(l)).toBeCloseTo(drawn, 5);
-    expect(screen.getAllByTestId(/^metric-[a-z-]+-value$/)).toHaveLength(9);
+    expect(metricsBlockHeight(l, l.plot > 0 ? MAIN_BLOCK : NO_CHART_BLOCK)).toBeCloseTo(drawn, 5);
+    // Driving's five numbers, and the clean rate as a sixth while the Trends card is left out.
+    expect(screen.getAllByTestId(/^metric-[a-z-]+-value$/)).toHaveLength(l.plot > 0 ? 5 : 6);
     // With room, the chart is drawn at the plot height the layout gave it.
     if (l.plot > 0) expect(screen.getByTestId('trend-chart').props.height).toBe(l.plot);
     else expect(screen.queryByTestId('metrics-trend')).toBeNull();
   });
 
-  test('the chart takes the room left: the standard cards with the tallest chart on the tallest phones; the shorter block reaches its full chart sooner', () => {
-    expect(metricsLayout(932, 1)).toMatchObject({ name: 'grid', perRow: 2, textScale: 1, plot: 120 });
-    expect(metricsLayout(844, 1)).toMatchObject({ perRow: 2, textScale: 1 });
-    expect(metricsLayout(844, 1).plot).toBeGreaterThan(0);
+  test('the chart takes the room left: the standard cards with the tallest chart on the tallest phones, and a chart on every common phone', () => {
+    expect(mainLayout(932, 1)).toMatchObject({ name: 'grid', perRow: 2, textScale: 1, plot: 120 });
+    expect(mainLayout(844, 1)).toMatchObject({ name: 'grid', perRow: 2, textScale: 1, plot: 120 });
     for (const h of [932, 844, 740, 667, 640]) {
-      const l = metricsLayout(h, 1);
+      const l = mainLayout(h, 1);
       expect(l.plot).toBeGreaterThan(0);
       expect(metricsBlockHeight(l)).toBeLessThanOrEqual(h * METRICS_MAX_SHARE);
     }
-    // The block is the Driving card's five cells and the Clean driving card's four.
-    const l = metricsLayout(844, 1);
-    expect(metricsBlockHeight(l)).toBe(metricsBlockHeight(l, [5, 4]));
-    // Under three quarters of a 568 pt phone at 1× text, and the fallbacks at 2×.
-    expect(metricsBlockHeight(metricsLayout(568, 1))).toBeLessThanOrEqual(568 * METRICS_MAX_SHARE);
-    expect(metricsBlockHeight(metricsLayout(568, 2))).toBeLessThanOrEqual(568 * METRICS_MAX_SHARE);
+    // The block is the Driving card's five cells and the Trends card, in the range group.
+    const l = mainLayout(844, 1);
+    expect(metricsBlockHeight(l)).toBe(metricsBlockHeight(l, { cards: [5], grouped: true }));
+    // The group adds its outline, its padding and the toggle with a gap under it.
+    expect(metricsBlockHeight(l) - metricsBlockHeight(l, { cards: [5], grouped: false })).toBe(rangeGroupChrome(l));
+    expect(rangeGroupChrome(l)).toBe(2 * (RANGE_GROUP_BORDER + RANGE_GROUP_PAD) + pickerHeight(1) + l.blockGap);
+    // The chrome counts against the chart: the same window without it would grow the plot or keep it, never shrink it.
+    const loose = metricsLayout(568, 1, { ...MAIN_BLOCK, grouped: false });
+    expect(mainLayout(568, 1).plot).toBeLessThanOrEqual(loose.plot);
+    // Under three quarters of a 568 pt phone at 2× too.
+    expect(metricsBlockHeight(mainLayout(568, 2), mainLayout(568, 2).plot > 0 ? MAIN_BLOCK : NO_CHART_BLOCK)).toBeLessThanOrEqual(568 * METRICS_MAX_SHARE);
   });
 
-  test('no room for the chart: the Trends card is left out, and the text size comes first', async () => {
-    const big = metricsLayout(740, 2);
+  test('no room for the chart: the Trends card is left out, Driving takes the clean rate, and the text size comes first', async () => {
+    const big = mainLayout(740, 2);
     expect(big.textScale).toBe(2);
-    expect(metricsBlockHeight(big)).toBeLessThanOrEqual(740 * METRICS_MAX_SHARE);
+    expect(metricsBlockHeight(big, big.plot > 0 ? MAIN_BLOCK : NO_CHART_BLOCK)).toBeLessThanOrEqual(740 * METRICS_MAX_SHARE);
     // Too tall even as a row: the block's text stops growing where it fits, never below 1×.
-    const capped = [360, 400, 440, 480, 520].map((h) => [h, metricsLayout(h, 2)] as const);
+    const capped = [300, 340, 380, 420].map((h) => [h, mainLayout(h, 2)] as const);
     expect(capped.some(([, l]) => l.textScale < 2)).toBe(true);
     for (const [h, l] of capped) {
+      expect(l.plot).toBe(0);
       expect(l.textScale).toBeGreaterThanOrEqual(1);
-      if (l.textScale > 1) expect(metricsBlockHeight(l)).toBeLessThanOrEqual(h * METRICS_MAX_SHARE);
+      if (l.textScale > 1) expect(metricsBlockHeight(l, NO_CHART_BLOCK)).toBeLessThanOrEqual(h * METRICS_MAX_SHARE);
     }
 
-    setWindow(390, 568, 2);
-    await draw(<MetricsCards sums={EMPTY_WINDOW} trend={EMPTY_TREND} />);
+    const tight = [568, 520, 480, 440, 400].find((h) => mainLayout(h, 2).plot === 0)!;
+    expect(tight).toBeDefined();
+    setWindow(390, tight, 2);
+    const sums = { ...windowSums(drives(4, 5, { clean: true }), null) };
+    await draw(group({ sums, trend: EMPTY_TREND }));
+    expect(screen.queryByTestId('metrics-trend')).toBeNull();
     expect(screen.getByTestId('metrics-driving')).toBeOnTheScreen();
-    expect(screen.getByTestId('metrics-clean')).toBeOnTheScreen();
-    expect(cellsIn(screen.getByTestId('metrics-clean-row-0'))).toHaveLength(4);
-  });
-
-  test('the range’s phone pickups and their time in hand, once a drive in it was watched', () => {
-    const watched = { ...EMPTY_WINDOW, drives: 3, phoneS: 5400, pickups: 4, inHandS: 95 };
-    const clean = metricGroups(watched, 'mi')[1]!.cells;
-    expect(clean.map((c) => [c.key, `${c.metric.value} ${c.metric.unit}`.trim(), c.metric.spoken])).toEqual([
-      ['clean', '0', '0'],
-      ['clean-rate', '— %', 'no data'],
-      ['pickups', '4', '4'],
-      ['in-hand', '2 min', '2 minutes'],
-    ]);
-    // Watched with no pickups: real zeros.
-    const none = metricGroups({ ...watched, pickups: 0, inHandS: 0 }, 'mi')[1]!.cells;
-    expect(none.slice(2).map((c) => `${c.metric.value} ${c.metric.unit}`.trim())).toEqual(['0', '0 min']);
+    expect(screen.getByTestId('metric-clean-rate-value')).toHaveTextContent('100 %');
+    expect(screen.getByLabelText('Clean rate, 100 percent')).toBeOnTheScreen();
+    expect(drivingGroup(sums, 'mi', true).cells.map((c) => c.key)).toEqual(['drives', 'drive-time', 'distance', 'avg-drive', 'speed', 'clean-rate']);
   });
 
   test('a short last row keeps the grid: its cell stays one column wide, an empty column beside it', async () => {
     const spacers = (row: El): El[] => row.children.flatMap((n) => (typeof n !== 'string' && !n.props.testID ? [n as El] : []));
-    await draw(<MetricsCards sums={windowSums(drives(4), null)} trend={EMPTY_TREND} />);
+    await draw(group({ sums: windowSums(drives(4), null), trend: EMPTY_TREND }));
     // 2 × 2: Drives and Drive time, Distance and Avg drive, then Avg speed beside an empty column.
     const last = screen.getByTestId('metrics-driving-row-2');
     expect(cellsIn(last).map((c) => c.props.testID)).toEqual(['metric-speed']);
@@ -580,23 +672,22 @@ describe('MetricsCards', () => {
     expect(flat(spacers(last)[0]!).flex).toBe(1);
     expect(flat(screen.getByTestId('metric-speed')).flex).toBe(1);
     expect(spacers(screen.getByTestId('metrics-driving-row-0'))).toHaveLength(0);
-    // A row of four (the shortest windows): the fifth cell and three empty columns.
-    const short = [667, 640, 600, 568, 520, 480, 440].find((h) => metricsLayout(h, 1).perRow === 4)!;
+    // A row of four (the shortest windows, the largest text): the fifth cell (or the fifth and the clean rate) and empty columns.
+    const short = [568, 520, 480, 440, 400, 360].find((h) => mainLayout(h, 1.3).perRow === 4)!;
     expect(short).toBeDefined();
-    setWindow(390, short, 1);
-    await draw(<MetricsCards sums={windowSums(drives(4), null)} trend={EMPTY_TREND} />);
+    setWindow(390, short, 1.3);
+    await draw(group({ sums: windowSums(drives(4), null), trend: EMPTY_TREND }));
+    const cells = mainLayout(short, 1.3).plot > 0 ? 5 : 6;
     expect(screen.getAllByTestId(/^metrics-driving-row-/)).toHaveLength(2);
     expect(cellsIn(screen.getByTestId('metrics-driving-row-0'))).toHaveLength(4);
-    expect(spacers(screen.getByTestId('metrics-driving-row-1'))).toHaveLength(3);
-    // The clean card's four cells fill its row.
-    expect(cellsIn(screen.getByTestId('metrics-clean-row-0'))).toHaveLength(4);
-    expect(spacers(screen.getByTestId('metrics-clean-row-0'))).toHaveLength(0);
+    expect(cellsIn(screen.getByTestId('metrics-driving-row-1'))).toHaveLength(cells - 4);
+    expect(spacers(screen.getByTestId('metrics-driving-row-1'))).toHaveLength(8 - cells);
   });
 
   test('large text never draws a number or caption smaller than 1×: the row of four wraps its captions to two lines, and every fit has a floor', async () => {
     setWindow(390, 844, 2);
-    await draw(<MetricsCards sums={windowSums(drives(4), null)} trend={trend(drives(4), [], 'week', NOW)} />);
-    const l = metricsLayout(844, 2);
+    await draw(group({ sums: windowSums(drives(4), null), trend: trend(drives(4), [], 'week', NOW) }));
+    const l = mainLayout(844, 2);
     for (const el of screen.getAllByTestId(/^metric-[a-z-]+-caption$/)) {
       expect(el.props).toMatchObject({ numberOfLines: l.perRow === 4 ? 2 : 1, minimumFontScale: 0.85 });
       // 14 pt label at 2×, floored at 0.85: still above the 14 pt it is at 1×
@@ -604,14 +695,23 @@ describe('MetricsCards', () => {
     }
     for (const el of screen.getAllByTestId(/^metric-[a-z-]+-value$/)) expect(el.props.minimumFontScale).toBe(0.7);
     setWindow(390, 844, 1);
-    await draw(<MetricsCards sums={windowSums(drives(4), null)} trend={trend(drives(4), [], 'week', NOW)} />);
-    expect(screen.getByTestId('metric-clean-rate-caption').props.numberOfLines).toBe(metricsLayout(844, 1).perRow === 4 ? 2 : 1);
+    await draw(group({ sums: windowSums(drives(4), null), trend: trend(drives(4), [], 'week', NOW) }));
+    expect(screen.getByTestId('metric-speed-caption').props.numberOfLines).toBe(mainLayout(844, 1).perRow === 4 ? 2 : 1);
   });
 
-  test('at 390 × 844 a 2 × 2 cell has room for "1,204 mi" in the display face', () => {
-    // Half the card's inner width, less the gap between the two cells.
-    const { pad, colGap } = metricsLayout(844, 1);
-    expect((390 - 2 * tokens.space.lg - 2 * pad - colGap) / 2).toBeGreaterThanOrEqual(150);
+  test('at 390 × 844 a 2 × 2 cell has room for "1,204 mi" in the display face, inside the group', () => {
+    // Half the card's inner width (the gutters, the group's outline and padding, the card's padding), less the gap between the two cells.
+    const { pad, colGap } = mainLayout(844, 1);
+    const inner = 390 - 2 * (tokens.space.lg + RANGE_GROUP_BORDER + RANGE_GROUP_PAD + pad) - colGap;
+    // "1,204" in 28 pt tabular figures and " mi" in 13 pt run about 110 pt.
+    expect(inner / 2).toBeGreaterThanOrEqual(140);
+  });
+
+  test('the trend chart spans the card’s inside within the group', async () => {
+    await draw(group({ sums: windowSums(drives(4), null), trend: trend(drives(4), [], 'week', NOW) }));
+    const l = mainLayout(844, 1);
+    const box = flat(screen.getByTestId('trend-chart-box'));
+    expect(box.width).toBe(390 - 2 * (tokens.space.lg + RANGE_GROUP_BORDER + RANGE_GROUP_PAD + l.pad));
   });
 });
 
@@ -806,9 +906,10 @@ describe('CategorySheet', () => {
     [640, 3],
   ])("its numbers keep the metrics' rule: at most three quarters of a %d pt window (text %d×)", async (height, fontScale) => {
     setWindow(390, height, fontScale);
-    const l = metricsLayout(height, Math.min(fontScale, 2), [3], false);
+    const shape = { cards: [3], chart: false, grouped: false };
+    const l = metricsLayout(height, Math.min(fontScale, 2), shape);
     expect(l.plot).toBe(0);
-    expect(metricsBlockHeight(l, [3])).toBeLessThanOrEqual(height * METRICS_MAX_SHARE);
+    expect(metricsBlockHeight(l, shape)).toBeLessThanOrEqual(height * METRICS_MAX_SHARE);
     await draw(<CategorySheet {...props} axis="speed" score={88} />);
     // The card drawn is the one measured.
     const card = flat(screen.getByTestId('metrics-speed'));
@@ -832,10 +933,10 @@ describe('TrendCard', () => {
   const rated = (at: number) => Math.round(ratingAt(toRatingDrives(list, events), at).rating!);
 
   test('titled Trends; Score by default: the Safety Rating as of each day, one line in the page ink, a dot per point, the latest labelled, weekday ticks', async () => {
-    await draw(<MetricsCards sums={windowSums(list, null)} trend={data} />);
+    await draw(<MetricsCards sums={windowSums(list, null)} trend={data} range="week" onRange={jest.fn()} />);
     expect(screen.getByTestId('metrics-trend-title')).toHaveTextContent('Trends');
     expect(screen.getByRole('tab', { name: 'Score' })).toBeSelected();
-    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(within(screen.getByTestId('metrics-trend')).getAllByRole('tab')).toHaveLength(2);
     expect(screen.getByLabelText('Trend series')).toBeOnTheScreen();
     // The SVG renderer holds colours as ARGB numbers: the page ink, fully opaque.
     expect(screen.getByTestId('trend-line', { includeHiddenElements: true }).props.stroke).toMatchObject({ payload: (0xff000000 | parseInt(light.text.slice(1), 16)) >>> 0 });
@@ -851,7 +952,7 @@ describe('TrendCard', () => {
   });
 
   test('the picker switches the series: Events per mile on each day with drives', async () => {
-    await draw(<MetricsCards sums={windowSums(list, null)} trend={data} />);
+    await draw(<MetricsCards sums={windowSums(list, null)} trend={data} range="week" onRange={jest.fn()} />);
     await press(screen.getByRole('tab', { name: 'Events' }));
     expect(screen.getByRole('tab', { name: 'Events' })).toBeSelected();
     // Sunday: 3 events over 30 mi; Monday none over 10.
@@ -860,7 +961,7 @@ describe('TrendCard', () => {
   });
 
   test('a Y axis down the left labels the three guides, top to bottom, for each series', async () => {
-    await draw(<MetricsCards sums={windowSums(list, null)} trend={data} />);
+    await draw(<MetricsCards sums={windowSums(list, null)} trend={data} range="week" onRange={jest.fn()} />);
     const labels = () => screen.getAllByTestId('trend-y-label', { includeHiddenElements: true }).map((t) => t.props.children);
     expect(labels()).toEqual(['100', '50', '0']);
     await press(screen.getByRole('tab', { name: 'Events' }));
@@ -876,7 +977,7 @@ describe('TrendCard', () => {
 
   test('in kilometres, Events are per kilometre', async () => {
     publishUnits('km');
-    await draw(<MetricsCards sums={windowSums(list, null)} trend={data} />);
+    await draw(<MetricsCards sums={windowSums(list, null)} trend={data} range="week" onRange={jest.fn()} />);
     await press(screen.getByRole('tab', { name: 'Events' }));
     expect(screen.getByTestId('trend-chart-box')).toHaveAccessibleName('Events per kilometer by day. Lowest 0 events per kilometer today, latest 0 events per kilometer, trending down.');
     expect(screen.getByTestId('trend-latest', { includeHiddenElements: true })).toHaveTextContent('0 events/km');
@@ -889,20 +990,20 @@ describe('TrendCard', () => {
   });
 
   test('no event counts under the chart: they live in the radar categories', async () => {
-    await draw(<MetricsCards sums={windowSums(list, null)} trend={data} />);
+    await draw(<MetricsCards sums={windowSums(list, null)} trend={data} range="week" onRange={jest.fn()} />);
     expect(screen.queryByTestId('metrics-trend-row-0')).toBeNull();
     for (const key of ['speeding', 'brakes', 'starts', 'turns']) expect(within(screen.getByTestId('metrics-trend')).queryByTestId(`metric-${key}`)).toBeNull();
   });
 
   test('fewer than two points: one muted line in the chart’s place, at the same height', async () => {
     const one = trend(list.slice(0, 1), [], 'week', NOW);
-    await draw(<MetricsCards sums={windowSums(list, null)} trend={one} />);
+    await draw(<MetricsCards sums={windowSums(list, null)} trend={one} range="week" onRange={jest.fn()} />);
     expect(screen.getByTestId('trend-empty')).toHaveTextContent('Not enough drives yet');
     expect(screen.queryByTestId('trend-chart')).toBeNull();
-    const l = metricsLayout(844, 1);
+    const l = mainLayout(844, 1);
     expect(flat(screen.getByTestId('trend-chart-box')).height).toBe(chartBoxHeight(l));
     // Score waits for the events.
-    await draw(<MetricsCards sums={windowSums(list, null)} trend={trend(list, null, 'week', NOW)} />);
+    await draw(<MetricsCards sums={windowSums(list, null)} trend={trend(list, null, 'week', NOW)} range="week" onRange={jest.fn()} />);
     expect(screen.getByTestId('trend-empty')).toBeOnTheScreen();
     await press(screen.getByRole('tab', { name: 'Events' }));
     expect(screen.queryByTestId('trend-empty')).toBeNull();
@@ -1069,9 +1170,9 @@ describe('TripsMapCard', () => {
 });
 
 describe('DrivesCard', () => {
-  test('closed at first; opens to the range’s drives titled by date and time', async () => {
+  test('closed at first; opens to the drives titled by date and time', async () => {
     const onOpen = jest.fn();
-    await draw(<DrivesCard drives={drives(3)} rangeKey="week" onOpen={onOpen} />);
+    await draw(<DrivesCard drives={drives(3)} onOpen={onOpen} />);
     const toggle = screen.getByTestId('analytics-drives-toggle');
     expect(toggle).toHaveAccessibleName('Drives, 3');
     expect(screen.getByText('Drives · 3')).toBeOnTheScreen();
@@ -1089,9 +1190,9 @@ describe('DrivesCard', () => {
     expect(onOpen).toHaveBeenCalledWith('d1');
   });
 
-  test('ten rows, then Show more adds ten at a time; a new range starts over', async () => {
+  test('ten rows, then Show more adds ten at a time', async () => {
     const list = drives(25, 5);
-    const { rerender } = await draw(<DrivesCard drives={list} rangeKey="week" onOpen={jest.fn()} />);
+    await draw(<DrivesCard drives={list} onOpen={jest.fn()} />);
     await press(screen.getByTestId('analytics-drives-toggle'));
     expect(screen.getAllByTestId(/^analytics-drive-d/)).toHaveLength(DRIVES_PAGE);
     await press(screen.getByTestId('analytics-drives-more'));
@@ -1099,16 +1200,19 @@ describe('DrivesCard', () => {
     await press(screen.getByTestId('analytics-drives-more'));
     expect(screen.getAllByTestId(/^analytics-drive-d/)).toHaveLength(25);
     expect(screen.queryByTestId('analytics-drives-more')).toBeNull();
-    await rerender(
-      <ThemeProvider scheme="light" reduceMotion>
-        <DrivesCard drives={list} rangeKey="month" onOpen={jest.fn()} />
-      </ThemeProvider>
-    );
+  });
+
+  test('a long all-time list draws only the rows asked for: none while closed, then ten', async () => {
+    const list = drives(600, 2);
+    await draw(<DrivesCard drives={list} onOpen={jest.fn()} />);
+    expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, 600');
+    expect(screen.queryAllByTestId(/^analytics-drive-d/)).toHaveLength(0);
+    await press(screen.getByTestId('analytics-drives-toggle'));
     expect(screen.getAllByTestId(/^analytics-drive-d/)).toHaveLength(DRIVES_PAGE);
   });
 
   test('a row reads as one button with the whole line in words', async () => {
-    await draw(<DrivesCard drives={drives(1)} rangeKey="week" onOpen={jest.fn()} />);
+    await draw(<DrivesCard drives={drives(1)} onOpen={jest.fn()} />);
     await press(screen.getByTestId('analytics-drives-toggle'));
     expect(screen.getByTestId('analytics-drive-d0')).toHaveAccessibleName('Mon, Oct 5 · 2:00 PM, 12.0 miles, 24 minutes, 1 event');
   });
@@ -1120,8 +1224,8 @@ describe('DrivesCard', () => {
     expect(driveLine(drive(), 'km').text).toBe('19.3 km · 24 min · 1 event');
   });
 
-  test('no drives in the range: the header says so and does not open', async () => {
-    await draw(<DrivesCard drives={[]} rangeKey="day" onOpen={jest.fn()} />);
+  test('no drives yet: the header says so and does not open', async () => {
+    await draw(<DrivesCard drives={[]} onOpen={jest.fn()} />);
     const header = screen.getByTestId('analytics-drives-toggle');
     expect(header).toHaveAccessibleName('Drives, none yet');
     expect(header.props.accessibilityRole).toBe('header');

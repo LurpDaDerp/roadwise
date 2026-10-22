@@ -5,6 +5,7 @@ import { EMPTY_COUNTS, type LocalDrive } from '@/data/queries/rows';
 import { encodePolyline, encodeRuns } from '@/lib/polyline';
 
 import {
+  allTimeTotals,
   AXES,
   AXIS_TIP,
   AXIS_TITLE,
@@ -399,6 +400,21 @@ describe('personal bests', () => {
   test('none without a qualifying drive', () => {
     expect(personalBests([])).toEqual({ longestClean: null });
     expect(personalBests([drive({ clean: false })])).toEqual({ longestClean: null });
+  });
+});
+
+describe('all-time totals', () => {
+  test('every scored drive, whenever it was: the longest clean drive, the clean drives as the range counts them, the share after dark', () => {
+    const old = drive({ clientTripId: 'old', startedAt: 0, endedAt: 1, miles: 20, nightMiles: 10, clean: true });
+    const list = [
+      drive({ clientTripId: 'a', miles: 10, nightMiles: 0, clean: true }),
+      drive({ clientTripId: 'b', miles: 10, nightMiles: 0, clean: false }),
+      drive({ clientTripId: 'gone', miles: 50, nightMiles: 50, clean: true, status: 'not_driving' }),
+      old,
+    ];
+    expect(allTimeTotals(list)).toEqual({ longestClean: { value: 20, clientTripId: 'old' }, cleanDrives: 2, nightPct: 25 });
+    expect(allTimeTotals(list).cleanDrives).toBe(windowSums(list, null).cleanDrives);
+    expect(allTimeTotals([])).toEqual({ longestClean: null, cleanDrives: 0, nightPct: null });
   });
 });
 

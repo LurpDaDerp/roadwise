@@ -11,11 +11,11 @@ import { useScoredDrives, useWindowEvents } from '@/data/queries/analytics';
 import type { Region } from '@/features/settings/maps';
 
 import {
+  allTimeTotals,
   coachWindow,
   COACH_DAYS,
   driveGrid,
   fitLines,
-  personalBests,
   rangeStart,
   routeLines,
   scoredSince,
@@ -25,8 +25,8 @@ import {
   windowSums,
   type CoachWindow,
   type DriveGrid,
+  type AllTimeTotals,
   type MapPoint,
-  type PersonalBests,
   type Range,
   type Trend,
   type WindowSums,
@@ -62,15 +62,15 @@ export interface AnalyticsData {
   sinceMs: number;
   /** The last 90 days, whatever the range: the radar's scores and centre, and the advice. */
   coaching: CoachWindow;
-  /** All time. */
-  bests: PersonalBests;
-  /** The range's metric sums. */
+  /** All time: the longest clean drive and the clean drives (the All time card), the share of miles after dark (the time-of-day comment). */
+  allTime: AllTimeTotals;
+  /** The range's metric sums (the Driving card, Trends' clean share, the category sheets). */
   sums: WindowSums;
-  /** The range's drives by weekday × 3-hour band. */
+  /** Every scored drive, all time, by weekday × 3-hour band (When you drive and the time-of-day comment). */
   grid: DriveGrid;
   /** The range's Score and Events over time (the Trends card). */
   trend: Trend;
-  /** The range's scored drives, newest first (the Drives list; its length matches `sums.drives`). */
+  /** Every scored drive, all time, newest first (the Drives list, which pages them ten at a time). */
   drives: LocalDrive[];
   /** Every scored drive's route, all time, one line per privacy run (no "Wasn't driving" trips). */
   routes: MapPoint[][];
@@ -81,7 +81,11 @@ export interface AnalyticsData {
   refetch(): void;
 }
 
-/** Everything the Analytics tab draws, for the chosen range. */
+/**
+ * Everything the Analytics tab draws. The range drives only the sums (the Driving card, Trends'
+ * clean share, the category sheets) and the trend; the grid, the drive list, the map and the
+ * all-time card read every scored drive.
+ */
 export function useAnalytics(range: Range): AnalyticsData {
   const { now } = useDataSource();
   const at = now();
@@ -104,13 +108,14 @@ export function useAnalytics(range: Range): AnalyticsData {
     () => coachWindow(events.data ? (drives ?? []) : [], events.data ?? [], coachSince, hourEnd),
     [drives, events.data, coachSince, hourEnd]
   );
-  const bests = useMemo(() => personalBests(drives ?? []), [drives]);
+  // All time: the drive list (already newest first, paged by its card), the grid and the totals.
+  const lifetime = useMemo(() => {
+    const list = drives ?? [];
+    return { allTime: allTimeTotals(list), grid: driveGrid(list, null), drives: scoredSince(list, null) };
+  }, [drives]);
   // The range's time over the limit reads its speeding events (the year and 90 days' read holds every range's).
   const rangeEventList = rangeEvents.data;
-  const windowed = useMemo(() => {
-    const list = drives ?? [];
-    return { sums: windowSums(list, sinceMs, rangeEventList ?? []), grid: driveGrid(list, sinceMs), drives: scoredSince(list, sinceMs) };
-  }, [drives, sinceMs, rangeEventList]);
+  const sums = useMemo(() => windowSums(drives ?? [], sinceMs, rangeEventList ?? []), [drives, sinceMs, rangeEventList]);
   const trendData = useMemo(() => trend(drives ?? [], trendEvents, range, hourEnd), [drives, trendEvents, range, hourEnd]);
   // The map draws the same drives as every other card: scored ones, not "Wasn't driving".
   const map = useMemo(() => {
@@ -134,8 +139,8 @@ export function useAnalytics(range: Range): AnalyticsData {
     range,
     sinceMs,
     coaching,
-    bests,
-    ...windowed,
+    ...lifetime,
+    sums,
     trend: trendData,
     ...map,
     loading: all.isLoading || events.isLoading || rangeEvents.isLoading,

@@ -65,9 +65,9 @@ const withRating = (rating: number | null, ranked: boolean) => (range: MockRange
 const SECTIONS = [
   'analytics-radar',
   'analytics-summary',
-  'analytics-bests',
-  'analytics-range',
+  'analytics-all-time',
   'analytics-metrics',
+  'analytics-range',
   'analytics-grid',
   'analytics-time-of-day',
   'analytics-map',
@@ -88,7 +88,7 @@ function order(): string[] {
   return out;
 }
 
-test('top to bottom: radar, summary, bests, range, metrics, when you drive, time of day, map, spots to watch, drives', async () => {
+test('top to bottom: radar, summary, all time, the range group (its toggle at the top), when you drive, time of day, map, spots to watch, drives', async () => {
   await draw(<AnalyticsScreen />);
   expect(screen.getByRole('header', { name: 'Analytics' })).toBeOnTheScreen();
   expect(order()).toEqual(SECTIONS);
@@ -139,26 +139,43 @@ test('a spot that leaves the list closes its sheet', async () => {
   expect(screen.queryByTestId('spot-sheet')).toBeNull();
 });
 
-test('the range starts on Week and switching it re-reads everything below it', async () => {
+test('the range starts on Week and moves only the Driving and Trends cards in its group', async () => {
   await draw(<AnalyticsScreen />);
   expect(mockUseAnalytics).toHaveBeenLastCalledWith('week');
   expect(screen.getByRole('tab', { name: 'Week' })).toBeSelected();
   expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('6');
-  expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, 6');
+  // Below the group everything is all time: all ten drives.
+  expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, 10');
+  const grid = screen.getByTestId('analytics-grid');
+  const gridLabel = within(grid).getByRole('image').props.accessibilityLabel as string;
+  expect(gridLabel).toMatch(/^When you drive\. 10 drives\./);
+  const comment = screen.getByTestId('analytics-time-of-day-text').props.children as string;
 
   await press(screen.getByRole('tab', { name: 'Month' }));
   expect(mockUseAnalytics).toHaveBeenLastCalledWith('month');
   expect(screen.getByRole('tab', { name: 'Month' })).toBeSelected();
   expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('10');
   expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, 10');
-  expect(screen.getByLabelText('Time range')).toBeOnTheScreen();
-  for (const r of ['Day', 'Week', 'Month', 'Year']) expect(screen.getByRole('tab', { name: r })).toBeOnTheScreen();
+  expect(within(screen.getByTestId('analytics-grid')).getByRole('image').props.accessibilityLabel).toBe(gridLabel);
+  expect(screen.getByTestId('analytics-time-of-day-text').props.children).toBe(comment);
+
+  await press(screen.getByRole('tab', { name: 'Day' }));
+  expect(screen.getByTestId('metric-drives-value')).toHaveTextContent('1');
+  expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, 10');
+  // The toggle says what it changes, and sits inside the group with the two cards.
+  const group = screen.getByTestId('analytics-metrics');
+  expect(within(group).getByLabelText('Time range, for Driving and Trends')).toBeOnTheScreen();
+  for (const r of ['Day', 'Week', 'Month', 'Year']) expect(within(group).getByRole('tab', { name: r })).toBeOnTheScreen();
+  for (const id of ['analytics-all-time', 'analytics-grid', 'analytics-time-of-day', 'analytics-map', 'analytics-drives']) {
+    expect(within(group).queryByTestId(id)).toBeNull();
+  }
 });
 
-test('the trend card sits between Driving and Clean driving and follows the range', async () => {
+test('the group holds Driving then Trends, which carries the range’s clean share and follows the range', async () => {
   await draw(<AnalyticsScreen />);
   const cards = within(screen.getByTestId('analytics-metrics')).getAllByTestId(/^metrics-[a-z]+$/);
-  expect(cards.map((c) => c.props.testID)).toEqual(['metrics-driving', 'metrics-trend', 'metrics-clean']);
+  expect(cards.map((c) => c.props.testID)).toEqual(['metrics-driving', 'metrics-trend']);
+  expect(screen.getByTestId('metrics-trend-clean')).toHaveTextContent('0% clean drives');
   expect(screen.getByTestId('metrics-trend-title')).toHaveTextContent('Trends');
   expect(screen.getByRole('tab', { name: 'Score' })).toBeSelected();
   // Six drives 30 hours apart in the week: the Safety Rating by day.
@@ -177,10 +194,13 @@ test('the page keeps only general numbers: no category counts, rates or bests, a
     expect(screen.queryByTestId(`metric-${key}-rate`)).toBeNull();
   }
   expect(screen.queryByTestId('best-points')).toBeNull();
-  // Clean drives belong to no radar category, so they stay on the page.
-  expect(screen.getByTestId('metric-clean')).toBeOnTheScreen();
-  expect(screen.getByTestId('metric-clean-rate')).toBeOnTheScreen();
-  expect(screen.getByTestId('best-clean')).toBeOnTheScreen();
+  // Clean drives belong to no radar category, so they stay on the page: the all-time count and
+  // longest, and the range's share in Trends. The Clean driving card is gone.
+  expect(screen.getByTestId('all-time-clean-drives')).toBeOnTheScreen();
+  expect(screen.getByTestId('all-time-longest-clean')).toBeOnTheScreen();
+  expect(screen.getByTestId('metrics-trend-clean')).toBeOnTheScreen();
+  expect(screen.queryByTestId('metrics-clean')).toBeNull();
+  for (const key of ['clean', 'clean-rate', 'pickups', 'in-hand']) expect(screen.queryByTestId(`metric-${key}`)).toBeNull();
   expect(screen.queryByTestId('category-sheet')).toBeNull();
   expect(screen.queryByText(/\bpoints?\b|\bpts\b/i)).toBeNull();
   // The radar's per-category numbers are its scores, nothing else.
@@ -265,10 +285,15 @@ test('a drive in the list opens its summary page', async () => {
   expect(mockRouter.push).toHaveBeenCalledWith(driveSummaryHref('d2'));
 });
 
-test('the personal best, the longest clean drive, opens its drive', async () => {
-  mockData = (range) => mockAnalytics(mockDrives(3, 30, { clean: true }), range);
+test('the All time card: the clean drives over every drive, and the longest clean one opens its drive', async () => {
+  mockData = (range) => mockAnalytics([...mockDrives(3, 30, { clean: true }), ...mockDrives(2, 30, { clientTripId: 'rough' })], range);
   await draw(<AnalyticsScreen />);
-  await press(screen.getByTestId('best-clean'));
+  const card = screen.getByTestId('analytics-all-time');
+  expect(within(card).getByRole('header', { name: 'All time' })).toBeOnTheScreen();
+  expect(within(card).getByTestId('all-time-clean-drives-value')).toHaveTextContent('3');
+  await press(screen.getByRole('tab', { name: 'Day' }));
+  expect(within(screen.getByTestId('analytics-all-time')).getByTestId('all-time-clean-drives-value')).toHaveTextContent('3');
+  await press(screen.getByTestId('all-time-longest-clean'));
   expect(mockRouter.push).toHaveBeenCalledWith(driveSummaryHref('d0'));
 });
 

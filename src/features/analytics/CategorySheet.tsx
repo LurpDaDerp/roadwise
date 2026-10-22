@@ -136,7 +136,7 @@ export function CategorySheet({ axis, visible, onClose, score, last90, sums, ran
   const units = useUnits();
   const { height } = useWindowDimensions();
   const group = categoryGroup(axis, sums, range, units);
-  const l = metricsLayout(height, useFontScale(), [group.cells.length], false);
+  const l = metricsLayout(height, useFontScale(), { cards: [group.cells.length], chart: false, grouped: false });
   const verdict = axisCoaching(axis, score, last90);
   const icon = verdict.level ? LEVEL_ICON[verdict.level] : 'time-outline';
   const color = verdict.level ? t.colors[LEVEL_TONE[verdict.level]] : t.colors.textMuted;

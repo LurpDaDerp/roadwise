@@ -2,62 +2,67 @@ import { useWindowDimensions, View, type TextStyle } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
 import type { Units } from '@/lib/units';
-import { Card, Text, tokens, useFontScale, type CardVariant } from '@/ui';
+import { Card, SegmentedControl, Text, tokens, useFontScale, useTheme, type CardVariant } from '@/ui';
 
 import { analyticsCopy } from './copy';
 import { countMetric, distanceMetric, percentMetric, speedMetric, timeMetric, type Metric } from './format';
 import { METRIC_CELL_GAP, MetricCell } from './MetricCell';
-import type { Trend, WindowSums } from './model';
+import { RANGE_LABEL, RANGES, type Range, type Trend, type WindowSums } from './model';
 import { sizeAt } from './textSize';
-import { TrendCard, trendCardHeight } from './TrendCard';
+import { pickerHeight, TrendCard, trendCardHeight } from './TrendCard';
 
 const m = analyticsCopy.metrics;
+const SEGMENTS = RANGES.map((value) => ({ value, label: RANGE_LABEL[value] }));
 
 export interface MetricGroup {
   key: string;
   title: string;
   /**
-   * Up to five cells, read as rows of two (or rows of four in the densest layout), a short last
+   * Up to six cells, read as rows of two (or rows of four in the densest layout), a short last
    * row keeping the grid's columns. `spokenCaption` is the caption in words for a screen reader.
    */
   cells: { key: string; caption: string; spokenCaption?: string; metric: Metric }[];
 }
 
 /**
- * The range's general numbers: Driving (drives, the time spent driving, distance and two averages)
- * and Clean driving (the drives with no events, their share, and the phone pickups and time in hand
- * that break a clean drive; a dash for those while no drive in the range was watched for pickups).
- * Each radar category's own numbers live in its sheet.
+ * The range's Driving card: drives, the time spent driving, distance and two averages. With
+ * `cleanRate` (only while the Trends card, which carries the range's clean share, is left out)
+ * it also holds the share of clean drives, so the number never leaves the page. Each radar
+ * category's own numbers live in its sheet.
  */
-export function metricGroups(s: WindowSums, units: Units): MetricGroup[] {
-  const watched = s.phoneS > 0 || s.pickups > 0;
-  return [
-    {
-      key: 'driving',
-      title: m.driving,
-      cells: [
-        { key: 'drives', caption: m.drives, metric: countMetric(s.drives) },
-        { key: 'drive-time', caption: m.driveTime, metric: timeMetric(s.durationS) },
-        { key: 'distance', caption: m.distance, metric: distanceMetric(s.miles, units) },
-        { key: 'avg-drive', caption: m.avgDrive, metric: distanceMetric(s.avgMiles, units) },
-        { key: 'speed', caption: m.avgSpeed, metric: speedMetric(s.avgMph, units) },
-      ],
-    },
-    {
-      key: 'clean',
-      title: m.clean,
-      cells: [
-        { key: 'clean', caption: m.cleanDrives, metric: countMetric(s.cleanDrives) },
-        { key: 'clean-rate', caption: m.cleanRate, metric: percentMetric(s.cleanPct) },
-        { key: 'pickups', caption: m.pickups, metric: countMetric(watched ? s.pickups : null) },
-        { key: 'in-hand', caption: m.inHand, metric: timeMetric(watched ? s.inHandS : null) },
-      ],
-    },
+export function drivingGroup(s: WindowSums, units: Units, cleanRate = false): MetricGroup {
+  const cells: MetricGroup['cells'] = [
+    { key: 'drives', caption: m.drives, metric: countMetric(s.drives) },
+    { key: 'drive-time', caption: m.driveTime, metric: timeMetric(s.durationS) },
+    { key: 'distance', caption: m.distance, metric: distanceMetric(s.miles, units) },
+    { key: 'avg-drive', caption: m.avgDrive, metric: distanceMetric(s.avgMiles, units) },
+    { key: 'speed', caption: m.avgSpeed, metric: speedMetric(s.avgMph, units) },
   ];
+  if (cleanRate) cells.push({ key: 'clean-rate', caption: m.cleanRate, metric: percentMetric(s.cleanPct) });
+  return { key: 'driving', title: m.driving, cells };
 }
 
-/** The main block's number cards by their cell counts: Driving and Clean driving. */
-export const MAIN_CARDS: readonly number[] = [5, 4];
+/** The Driving card's cells: five, or six with the clean rate when the Trends card is left out. */
+export const DRIVING_CELLS = 5;
+
+/**
+ * A block's shape: its number cards by cell count, whether it tries for the trend chart, and
+ * whether it sits in the range group (the outline holding the range toggle at its top).
+ */
+export interface BlockShape {
+  cards: readonly number[];
+  chart: boolean;
+  grouped: boolean;
+}
+
+/** The Analytics tab's range group: the toggle, Driving and Trends. */
+export const MAIN_BLOCK: BlockShape = { cards: [DRIVING_CELLS], chart: true, grouped: true };
+/** The same group once the Trends card is left out: Driving takes the clean rate as a sixth cell. */
+export const NO_CHART_BLOCK: BlockShape = { cards: [DRIVING_CELLS + 1], chart: false, grouped: true };
+
+/** The range group's hairline outline and its padding inside it (the toggle and cards sit this far in). */
+export const RANGE_GROUP_BORDER = 1;
+export const RANGE_GROUP_PAD = tokens.space.sm;
 
 /** The user's rule: the metrics block never takes more than this share of the window's height. */
 export const METRICS_MAX_SHARE = 0.75;
@@ -72,13 +77,13 @@ export interface MetricsLayout {
   gap: number;
   /** Between cells in a row. */
   colGap: number;
-  /** Between the cards. */
+  /** Between the cards (and between the range toggle and the first card). */
   blockGap: number;
   /** The number's size at 1× (the display face either way). */
   stat: { fontSize: number; lineHeight: number };
   /** The Dynamic Type multiple the block's text is drawn at (each style still stops at its own cap). */
   textScale: number;
-  /** The system's multiple (capped at 2×): the trend picker's labels follow it, not `textScale`. */
+  /** The system's multiple (capped at 2×): the pickers' labels follow it, not `textScale`. */
   fontScale: number;
   /** The trend chart's plot height; 0 when there is no room for it (or no chart) and the Trends card is left out. */
   plot: number;
@@ -131,41 +136,53 @@ function numberCardHeight(l: MetricsLayout, cells: number): number {
   return l.pad * 2 + sizeAt('title3', l.textScale).lineHeight + rows * (l.gap + cell);
 }
 
-/** The block's height in a layout: its number cards (by cell count), the trend card when it has a plot, and the gaps. */
-export function metricsBlockHeight(l: MetricsLayout, cards: readonly number[] = MAIN_CARDS): number {
-  const parts = cards.map((n) => numberCardHeight(l, n));
+/**
+ * What the range group adds around its cards: the outline and its padding, top and bottom, and the
+ * range toggle (as tall as the trend picker at the system text size) with the block's gap under it.
+ */
+export const rangeGroupChrome = (l: Pick<MetricsLayout, 'fontScale' | 'blockGap'>): number =>
+  2 * (RANGE_GROUP_BORDER + RANGE_GROUP_PAD) + pickerHeight(l.fontScale) + l.blockGap;
+
+/**
+ * The block's height in a layout: its number cards (by cell count), the trend card when it has a
+ * plot, and the gaps, inside the range group's outline and under its toggle when `grouped`.
+ */
+export function metricsBlockHeight(l: MetricsLayout, shape: Pick<BlockShape, 'cards' | 'grouped'> = MAIN_BLOCK): number {
+  const parts = shape.cards.map((n) => numberCardHeight(l, n));
   if (l.plot > 0) parts.push(trendCardHeight(l));
-  return parts.reduce((a, b) => a + b, 0) + l.blockGap * (parts.length - 1);
+  const cards = parts.reduce((a, b) => a + b, 0) + l.blockGap * (parts.length - 1);
+  return shape.grouped ? cards + rangeGroupChrome(l) : cards;
 }
 
 /**
- * The densest layout a block of number cards (and, with `chart`, the trend card) needs to stay
- * within three quarters of the window's height at the reader's text size: the standard 2 × 2
- * cards, then tighter 2 × 2 cards, then one row of four. In each, the trend chart takes the room
- * that is left, up to the layout's most, and the layout fits only if that is at least its least.
+ * The densest layout a block of number cards (and, with `chart`, the trend card; with `grouped`,
+ * the range group's outline and toggle) needs to stay within three quarters of the window's
+ * height at the reader's text size: the standard 2 × 2 cards, then tighter 2 × 2 cards, then one
+ * row of four. In each, the trend chart takes the room that is left, up to the layout's most, and
+ * the layout fits only if that is at least its least.
  *
  * The reader's text size comes before the chart: when no layout has room for it (the shortest
  * phones, the largest text), the Trends card is left out and the number cards go through the same
  * steps. When even their row is too tall, the block's text stops growing at the largest size that
  * fits (never below 1×). A category sheet's numbers use the same rule with no chart.
  */
-export function metricsLayout(windowHeight: number, fontScale: number, cards: readonly number[] = MAIN_CARDS, chart = true): MetricsLayout {
+export function metricsLayout(windowHeight: number, fontScale: number, shape: BlockShape = MAIN_BLOCK): MetricsLayout {
   const limit = windowHeight * METRICS_MAX_SHARE;
-  if (chart) {
+  if (shape.chart) {
     for (const base of [GRID, COMPACT, ROW]) {
       const l = { ...base, textScale: fontScale, fontScale, plot: base.plotMin };
       // The block grows one for one with the plot, so whatever is left under the limit is the plot's.
-      const room = Math.floor(base.plotMin + limit - metricsBlockHeight(l, cards));
+      const room = Math.floor(base.plotMin + limit - metricsBlockHeight(l, shape));
       if (room >= base.plotMin) return { ...l, plot: Math.min(base.plotMax, room) };
     }
   }
   for (const base of [GRID, COMPACT, ROW]) {
     const l = { ...base, textScale: fontScale, fontScale, plot: 0 };
-    if (metricsBlockHeight(l, cards) <= limit) return l;
+    if (metricsBlockHeight(l, shape) <= limit) return l;
   }
   for (let s = Math.floor(fontScale * 20) / 20; s > 1; s = Math.round((s - 0.05) * 100) / 100) {
     const l = { ...ROW, textScale: s, fontScale, plot: 0 };
-    if (metricsBlockHeight(l, cards) <= limit) return l;
+    if (metricsBlockHeight(l, shape) <= limit) return l;
   }
   return { ...ROW, textScale: Math.min(fontScale, 1), fontScale, plot: 0 };
 }
@@ -220,24 +237,51 @@ export function NumberCard({ group: g, layout: l, text, variant }: { group: Metr
   );
 }
 
+/** The block's layout on the Analytics tab: with the chart when it fits, else Driving with the clean rate and no chart. */
+export function mainLayout(windowHeight: number, fontScale: number): MetricsLayout {
+  const l = metricsLayout(windowHeight, fontScale, MAIN_BLOCK);
+  return l.plot > 0 ? l : metricsLayout(windowHeight, fontScale, NO_CHART_BLOCK);
+}
+
 /**
- * The range's general cards: Driving and Clean driving, each a grid of numbers, and between them
- * the range's trend (left out when the window has no room for its chart).
+ * The range group: the only part of the tab the range toggle moves, drawn as one outlined group
+ * (a 1 pt hairline in `border` at the card radius plus its inset, so the corners stay concentric
+ * with the cards inside) holding the toggle at its top, then the range's Driving card and its
+ * Trends card (with the range's clean share). The Trends card is left out when the window has no
+ * room for its chart, and Driving then carries the clean rate.
  */
-export function MetricsCards({ sums, trend }: { sums: WindowSums; trend: Trend }) {
+export function MetricsCards({ sums, trend, range, onRange }: { sums: WindowSums; trend: Trend; range: Range; onRange: (range: Range) => void }) {
+  const t = useTheme();
   const units = useUnits();
   const { width, height } = useWindowDimensions();
-  const l = metricsLayout(height, useFontScale());
+  const l = mainLayout(height, useFontScale());
   const text = metricsText(l);
-  const [driving, clean] = metricGroups(sums, units);
+  const inset = RANGE_GROUP_BORDER + RANGE_GROUP_PAD;
   return (
-    <View style={{ gap: l.blockGap }} testID="analytics-metrics">
-      <NumberCard group={driving!} layout={l} text={text} />
+    <View
+      style={{
+        borderWidth: RANGE_GROUP_BORDER,
+        borderColor: t.colors.border,
+        borderRadius: t.radius.card + inset,
+        borderCurve: 'continuous',
+        padding: RANGE_GROUP_PAD,
+        gap: l.blockGap,
+      }}
+      testID="analytics-metrics"
+    >
+      <SegmentedControl
+        accessibilityLabel={analyticsCopy.rangeGroup}
+        segments={SEGMENTS}
+        value={range}
+        onChange={onRange}
+        style={{ minHeight: pickerHeight(l.fontScale) }}
+        testID="analytics-range"
+      />
+      <NumberCard group={drivingGroup(sums, units, l.plot === 0)} layout={l} text={text} />
       {l.plot > 0 ? (
-        // The chart spans the card's inside: the window less the screen gutter and the card's padding, each side.
-        <TrendCard trend={trend} layout={l} width={width - 2 * space.lg - 2 * l.pad} text={text} />
+        // The chart spans the card's inside: the window less the screen gutter, the group's outline and padding, and the card's padding, each side.
+        <TrendCard trend={trend} cleanPct={sums.cleanPct} layout={l} width={width - 2 * (space.lg + inset + l.pad)} text={text} />
       ) : null}
-      <NumberCard group={clean!} layout={l} text={text} />
     </View>
   );
 }

@@ -3,7 +3,7 @@ import { weightedScore } from '@scoring';
 import { drive, NOW } from '@/features/drives/__fixtures__/drives';
 import type { LocalDrive } from '@/features/drives/model';
 
-import { coach, driveGrid, fitLines, personalBests, rangeStart, scoredSince, trend, windowSums, type AxisScores, type Range } from '../model';
+import { allTimeTotals, coach, driveGrid, fitLines, rangeStart, scoredSince, trend, windowSums, type AxisScores, type Range } from '../model';
 import type { AnalyticsData } from '../useAnalytics';
 
 export { NOW };
@@ -41,12 +41,12 @@ export function analytics(list: readonly LocalDrive[], range: Range = 'week', ov
     range,
     sinceMs,
     coaching: { scores: SCORES, rating: { rating: SCORES_RATING, ranked: true }, totals, coaching: coach(SCORES, totals) },
-    bests: personalBests(list),
+    allTime: allTimeTotals(list),
     sums: windowSums(list, sinceMs),
-    grid: driveGrid(list, sinceMs),
+    grid: driveGrid(list, null),
     // No events: every Score point reads 100.
     trend: trend(list, [], range, NOW),
-    drives: scoredSince(list, sinceMs),
+    drives: scoredSince(list, null),
     routes,
     region: fitLines(routes),
     loading: false,

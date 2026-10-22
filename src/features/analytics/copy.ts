@@ -108,15 +108,18 @@ export const analyticsCopy = {
       estimated: (line: string) => `${line} (estimated)`,
     },
   },
-  bests: {
-    title: 'Personal best',
+  allTime: {
+    title: 'All time',
     longestClean: 'Longest clean',
+    cleanDrives: 'Clean drives',
     hint: 'Opens the drive',
   },
+  /** The range toggle's name for a screen reader (a category sheet's own toggle). */
   range: 'Time range',
+  /** The page's range toggle: it says what it changes. */
+  rangeGroup: 'Time range, for Driving and Trends',
   metrics: {
     driving: 'Driving',
-    clean: 'Clean driving',
     drives: 'Drives',
     driveTime: 'Drive time',
     distance: 'Distance',
@@ -131,7 +134,6 @@ export const analyticsCopy = {
     turns: 'Turns',
     overLimit: 'Over the limit',
     withLimit: 'With a limit',
-    cleanDrives: 'Clean drives',
     cleanRate: 'Clean rate',
     pickups: 'Phone pickups',
     inHand: 'Time in hand',
@@ -143,6 +145,10 @@ export const analyticsCopy = {
     score: 'Score',
     events: 'Events',
     notEnough: 'Not enough drives yet',
+    /** The range's clean share under the title: "82%" then this. */
+    clean: 'clean drives',
+    /** The same for a screen reader ("Clean drives, 82 percent"). */
+    cleanSpoken: 'Clean drives',
     /** What a screen reader calls each series and its step ("Safety Rating by day"). */
     spoken: {
       score: 'Safety Rating',

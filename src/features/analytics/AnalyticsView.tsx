@@ -1,14 +1,14 @@
 import { useState } from 'react';
 
 import type { SpotsView } from '@/data/queries/spots';
-import { Banner, Screen, SegmentedControl, Skeleton, useTheme } from '@/ui';
+import { Banner, Screen, Skeleton, useTheme } from '@/ui';
 
-import { BestsCard } from './BestsCard';
+import { AllTimeCard } from './AllTimeCard';
 import { CategorySheet } from './CategorySheet';
 import { analyticsCopy } from './copy';
 import { DrivesCard } from './DrivesCard';
 import { MetricsCards } from './MetricsCards';
-import { RANGE_LABEL, RANGES, type AxisKey, type Range } from './model';
+import type { AxisKey, Range } from './model';
 import { RadarCard } from './RadarCard';
 import { SpotSheet, SpotsCard } from './spots';
 import { SummaryCard } from './SummaryCard';
@@ -16,8 +16,6 @@ import { TimeOfDayCard } from './TimeOfDayCard';
 import { TripsMapCard } from './TripsMapCard';
 import type { AnalyticsData } from './useAnalytics';
 import { WhenYouDriveCard } from './WhenYouDriveCard';
-
-const SEGMENTS = RANGES.map((value) => ({ value, label: RANGE_LABEL[value] }));
 
 export interface AnalyticsViewProps {
   data: AnalyticsData;
@@ -36,11 +34,12 @@ export interface AnalyticsViewProps {
 
 /**
  * The Analytics tab, top to bottom: the 90-day radar with the Safety Rating, the coaching line,
- * the all-time best, then the range toggle and everything it drives (the general metrics, when you
- * drive and a comment on it, the drives list), with the all-trips map (always all time, with the
- * problem spots on it) and the spots to watch between them. Every card is paper. Each radar
- * category opens a sheet with that behaviour's own numbers, and each spot its own sheet; the page
- * keeps only general ones.
+ * the all-time totals (the longest clean drive and the clean drives), then the range group (an
+ * outline holding the range toggle and the only two cards it moves: Driving and Trends), then,
+ * all time, when you drive and a comment on it, the all-trips map with the problem spots on it,
+ * the spots to watch and the drives list. Every card is paper. Each radar category opens a sheet
+ * with that behaviour's own numbers over the range, and each spot its own sheet; the page keeps
+ * only general ones.
  */
 export function AnalyticsView({ data, rating, spots = null, range, onRange, onOpenDrive, dashpalPaired, onPairDashpal }: AnalyticsViewProps) {
   const t = useTheme();
@@ -65,14 +64,13 @@ export function AnalyticsView({ data, rating, spots = null, range, onRange, onOp
         <>
           <RadarCard rating={rating} scores={data.coaching.scores} dashpalPaired={dashpalPaired} onOpen={(axis) => setSheet({ axis, open: true })} />
           <SummaryCard coaching={data.coaching.coaching} />
-          <BestsCard bests={data.bests} show={['clean']} onOpen={onOpenDrive} />
-          <SegmentedControl accessibilityLabel={analyticsCopy.range} segments={SEGMENTS} value={range} onChange={onRange} testID="analytics-range" />
-          <MetricsCards sums={data.sums} trend={data.trend} />
+          <AllTimeCard allTime={data.allTime} onOpen={onOpenDrive} />
+          <MetricsCards sums={data.sums} trend={data.trend} range={range} onRange={onRange} />
           <WhenYouDriveCard grid={data.grid} />
-          <TimeOfDayCard grid={data.grid} nightPct={data.sums.nightPct} />
+          <TimeOfDayCard grid={data.grid} nightPct={data.allTime.nightPct} />
           <TripsMapCard routes={data.routes} region={data.region} spots={spots?.active ?? []} onSpot={openSpot} />
           <SpotsCard view={spots} onOpen={openSpot} />
-          <DrivesCard drives={data.drives} rangeKey={range} onOpen={onOpenDrive} />
+          <DrivesCard drives={data.drives} onOpen={onOpenDrive} />
           <CategorySheet
             axis={sheet.axis}
             visible={sheet.open}
