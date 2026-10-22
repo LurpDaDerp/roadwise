@@ -58,7 +58,7 @@ export const onboardingCopy = {
     },
     rows: {
       ios: [
-        { icon: 'car-sport-outline', title: 'It notices your drives', body: 'Once you’re on the road, RoadWise starts recording by itself. No buttons to remember.' },
+        { icon: 'car-sport-outline', title: 'It notices your drives', body: 'Once you’re on the road, RoadWise starts recording by itself.' },
         { icon: 'person-outline', title: 'Just riding along?', body: `Open RoadWise and tap “${hudCopy.notDriving}” so that trip won’t count.` },
         { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
         { icon: 'phone-portrait-outline', title: 'Phone down', body: PHONE_ROW },
