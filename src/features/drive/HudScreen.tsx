@@ -154,9 +154,10 @@ export type HudScreenProps = {
  * - Waiting (a Start drive swipe, until the car reaches driving speed): the drive records from the
  *   tap (its speed, its limit, its halo and alerts); the band says "Ready to roll" · "Saved once you
  *   drive", End is "Cancel", the one discard ("Not driving?" only once the car has reached driving
- *   speed, its budget counted from then). At 2:00 a panel asks "Still planning
- *   to drive?", from 4:30 it counts down; any touch waits a fresh 5 minutes; at 5:00, or on Cancel,
- *   the drive ends unsaved and the screen goes Home, saying nothing.
+ *   speed, its budget counted from then). At 2:00 a panel asks "Still planning to drive?", from
+ *   4:30 it counts down; any touch waits a fresh 5 minutes; at 5:00, or on Cancel, the drive ends
+ *   unsaved and the screen goes Home, saying nothing (a Cancel that lands as the car reaches driving
+ *   speed stays on the drive).
  * - Landscape: the halo the full height, the sign left of it; on the right the band, the link, the
  *   navigation button and End under it.
  * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive. At
@@ -285,15 +286,21 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // "Not driving?" is discarding the drive.
   const [cancelling, setCancelling] = useState(false);
 
-  /** Stop the wait (nothing is stored) and go Home, saying nothing. */
+  /**
+   * Stop the wait (nothing is stored) and go Home, saying nothing. The car reached driving speed as
+   * Cancel landed (the host no longer waits, so nothing was cancelled): the drive goes on here, End
+   * is End again.
+   */
   const stopWaiting = useCallback(async () => {
     try {
       await controls.cancelWaiting();
     } catch {
       // The wait ends with the session either way.
     }
+    const s = host.snapshot();
+    if (s.status === 'recording' && s.waiting === null) return;
     leave(null);
-  }, [controls, leave]);
+  }, [controls, host, leave]);
 
   const onEnd = useCallback(async () => {
     if (ending) return;

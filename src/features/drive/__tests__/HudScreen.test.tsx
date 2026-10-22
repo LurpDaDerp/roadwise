@@ -100,7 +100,7 @@ jest.mock('@/drive/useDrive', () => ({
   useDriveLive: () => mockLive,
   useShownSpeed: () => mockShown,
   useDriveControls: () => mockControls,
-  useDriveHost: () => ({ snapshot: () => ({ lastFinalized: mockLastFinalized }) }),
+  useDriveHost: () => ({ snapshot: () => ({ lastFinalized: mockLastFinalized, status: mockLive.status, waiting: mockLive.waiting }) }),
 }));
 
 const p = HUD.day;
@@ -1481,6 +1481,23 @@ describe('a Start-card drive waiting for driving speed (drive-fixes brief)', () 
     expect(mockEnd).not.toHaveBeenCalled();
     expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
     expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+  });
+
+  test('a Cancel that lands as the car reaches driving speed (the host no longer waits) stays on the drive: no Home, End is End again', async () => {
+    const h = await renderHud(waitDrive({}, { speedMph: 12 }));
+    // The row that reached driving speed was taken in before the Cancel ran: nothing was cancelled.
+    mockControls.cancelWaiting.mockImplementationOnce(async () => {
+      mockLive = { ...mockLive, waiting: null };
+    });
+    await act(async () => {
+      await swipeEnd(screen.getByRole('button', { name: 'Cancel' }));
+    });
+    expect(mockControls.cancelWaiting).toHaveBeenCalledTimes(1);
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    await h.update({ waiting: null });
+    expect(screen.getByRole('button', { name: hudCopy.endLabel })).not.toBeDisabled();
+    expect(screen.getByText(hudCopy.end)).toBeTruthy();
   });
 
   test('the panel closes the navigation list', async () => {
