@@ -3,8 +3,9 @@
 // limit in the driving screen's sign style (the US SPEED LIMIT plate in mph, the round red-ringed
 // sign in km/h), the driving screen's dangerous-weather line when it has one, and "Not driving?"
 // while that option is available. The island shows the limit as a simplified sign in both units
-// (the number alone in a white box with a black outline): expanded = speed, that sign, and the
-// weather line and the hint below; compact = speed | that sign; minimal = speed. The lock screen
+// (the number alone, condensed, in a tall narrow white box with a black outline): expanded =
+// speed, that sign, and the weather line and the hint below; compact = speed | that sign;
+// minimal = speed. The lock screen
 // wears the app's sky (navy until the app sends it), the island's keyline the sky accent (gold
 // without one). A tap opens the driving screen; nothing else is interactive.
 import ActivityKit
@@ -151,11 +152,15 @@ private extension View {
   }
 }
 
-/// The limit in the Dynamic Island, in both units: a simplified plate, the number alone (no legend)
-/// in a white box with an inset black outline (a white rim outside it, so it shows on the island's
-/// black). The box is the number's own line padded past the outline (a quarter of the size a side,
-/// a twentieth above and below, on top of the line's room over and under the digits), so it grows
-/// with the number and the number never reaches the outline; at least 1.4 × the size wide.
+/// The limit in the Dynamic Island (compact and expanded), in both units: a simplified plate, the
+/// number alone (no legend) in a white box with an inset black outline (a white rim outside it, so it
+/// shows on the island's black), standing taller than it is wide like the R2-1 plate. The number is
+/// SF Pro Condensed Heavy (its proportional digits, drawn `tracking` closer together), so the box can
+/// stay narrow: it is the number's own width (at least 0.95 × the size, the width of two digits, so
+/// "-" sits centred in a box as wide as "35") plus a sixteenth of the size past the outline's inner
+/// edge a side, and a fixed 1.85 × the size tall with the number centred. About 0.8 as wide as tall
+/// for two digits; three (100 km/h and up) make it about square. The number never reaches the
+/// outline: the box grows with it, and only a box held narrower than that shrinks it (to 0.6).
 struct IslandSign: View {
   let limit: Double?
   /// The number's point size; the box follows from it.
@@ -163,19 +168,21 @@ struct IslandSign: View {
 
   var body: some View {
     Text(Format.speed(limit))
-      .font(.system(size: size, weight: .heavy, design: .rounded))
-      .monospacedDigit()
+      .font(.system(size: size, weight: .heavy).width(.condensed))
+      .tracking(tracking)
       .foregroundColor(.black)
       .lineLimit(1)
       .minimumScaleFactor(0.6)
-      .padding(.horizontal, edge + size * 0.25)
-      .padding(.vertical, edge + size * 0.05)
-      .frame(minWidth: size * 1.4)
+      .frame(minWidth: size * 0.95)
+      .padding(.horizontal, edge + size * 0.06)
+      .frame(height: size * 1.85)
       .background { box }
       .accessibilityElement(children: .ignore)
       .accessibilityLabel(Format.limitLabel(limit))
   }
 
+  /// The digits are drawn this much closer together (pt; 4% of the size).
+  private var tracking: CGFloat { -size * 0.04 }
   /// The outline's width, and the white rim outside it.
   private var line: CGFloat { max(1.5, size * 0.08) }
   /// The outline's inner edge, from the box's edge.

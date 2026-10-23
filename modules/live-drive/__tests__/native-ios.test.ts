@@ -322,13 +322,26 @@ describe('live-drive: the widget extension target', () => {
     expect(gap).toBeGreaterThan(4.5);
   });
 
-  it("the island's sign is simplified, in both units: the number alone in a white box with an inset black outline, sized from the number", () => {
+  it("the island's sign is simplified, in both units: the number alone, condensed, in a tall narrow white box with an inset black outline, sized from the number", () => {
     const sign = view('IslandSign');
     expect(sign).not.toMatch(/SPEED|LIMIT|unit/);
-    expect(sign).toMatch(/Text\(Format\.speed\(limit\)\)\s*\.font\(\.system\(size: size, weight: \.heavy, design: \.rounded\)\)\s*\.monospacedDigit\(\)\s*\.foregroundColor\(\.black\)\s*\.lineLimit\(1\)\s*\.minimumScaleFactor\(0\.6\)/);
-    // the box is the number's line padded past the outline's inner edge, so the number never reaches it
-    expect(sign).toMatch(/\.padding\(\.horizontal, edge \+ size \* 0\.25\)\s*\.padding\(\.vertical, edge \+ size \* 0\.05\)\s*\.frame\(minWidth: size \* 1\.4\)\s*\.background \{ box \}/);
+    // SF Pro Condensed Heavy (Font.width is iOS 16.0, under the target's 16.2), digits drawn 4% of the size closer
+    expect(sign).toMatch(/Text\(Format\.speed\(limit\)\)\s*\.font\(\.system\(size: size, weight: \.heavy\)\.width\(\.condensed\)\)\s*\.tracking\(tracking\)\s*\.foregroundColor\(\.black\)\s*\.lineLimit\(1\)\s*\.minimumScaleFactor\(0\.6\)/);
+    expect(sign).toMatch(/private var tracking: CGFloat \{ -size \* 0\.04 \}/);
+    expect(sign).not.toMatch(/design: \.rounded|monospacedDigit/);
+    // the box hugs the number (two digits' room at least, so "-" is as wide as "35"), a sliver past
+    // the outline's inner edge a side, and stands 1.85 × the size tall: taller than wide
+    expect(sign).toMatch(/\.frame\(minWidth: size \* 0\.95\)\s*\.padding\(\.horizontal, edge \+ size \* 0\.06\)\s*\.frame\(height: size \* 1\.85\)\s*\.background \{ box \}/);
+    expect(sign).not.toMatch(/\.padding\(\.vertical/);
     expect(sign).toMatch(/private var line: CGFloat \{ max\(1\.5, size \* 0\.08\) \}/);
+    // two condensed digits are about 0.98 of the size: the compact (14 pt) and expanded (26 pt) signs stand tall
+    for (const size of [14, 26]) {
+      const line = Math.max(1.5, size * 0.08);
+      const width = 0.98 * size + 2 * (2 * line + size * 0.06);
+      expect(width / (size * 1.85)).toBeLessThan(0.86);
+      // the outline's inner edges leave the number's line (1.19 × the size) room above and below
+      expect(size * 1.85 - 4 * line).toBeGreaterThan(1.19 * size);
+    }
     expect(sign).toMatch(/private var edge: CGFloat \{ 2 \* line \}/);
     expect(sign).toMatch(/RoundedRectangle\(cornerRadius: size \* 0\.2\)\.fill\(Color\.white\)/);
     expect(sign).toMatch(/RoundedRectangle\(cornerRadius: max\(0, size \* 0\.2 - line\)\)\s*\.strokeBorder\(Color\.black, lineWidth: line\)\s*\.padding\(line\)/);
