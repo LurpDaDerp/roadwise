@@ -3,8 +3,9 @@
 // here animates; `Halo.tsx` feeds the visual into shared values.
 //
 // Severity is one number `s` in [0, 1], never rounded:
-// - Speeding: a tint from the row speed over the posted limit (`speedingTint`: 0 at the limit, 1 at
-//   1.7 × it), following each row; it pulses only while the row is over the speeding line (L + T).
+// - Speeding: a tint from the speed shown over the limit the sign shows (`speedingTint`: 0 at the
+//   limit, 1 at 1.7 × it), from the first moment the speed passes the sign; it pulses only while the
+//   row is over the speeding line (L + T).
 // - DashPal: a critical 0.80 + 0.07 per level + 0.02 per second (≤ 1); a warning, driver-not-visible
 //   among them, 0.50 + 0.03 per second (≤ 0.80); a continuous advisory 0.30 + 0.01 per second (≤ 0.45,
 //   below a warning's start).
@@ -89,9 +90,9 @@ export function glowWeight(layer: number, s: number): number {
 export const HALO_TINT_FULL_RATIO = 1.7;
 
 /**
- * The halo's speeding tint from the row speed over the posted limit speeding is judged on
- * (`speedingRatio`): 0 at or under the limit, rising straight to 1 at 1.7 × it, so just over the
- * limit is all but the calm colour. 0 with no ratio (no usable limit or speed).
+ * The halo's speeding tint from the speed shown over the limit the sign shows (`speedingRatio`): 0
+ * at or under the limit, rising straight to 1 at 1.7 × it, so just over the limit is all but the
+ * calm colour and it grows with every mph over. 0 with no ratio (the sign shows "-").
  */
 export function speedingTint(ratio: number | null): number {
   if (ratio === null || !Number.isFinite(ratio)) return 0;

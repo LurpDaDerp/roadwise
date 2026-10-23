@@ -1,7 +1,7 @@
 import { createDetectors } from '@/core/detectors';
 import { limit, mph, row, seq, T0 } from '@/core/detectors/__fixtures__/rows';
 import type { AlertEvent, EngineDeps, EngineSnapshot, TripSession } from '@/core/engine/engine.types';
-import { CHECKPOINT_ROWS, createEngine } from '@/core/engine/machine';
+import { CHECKPOINT_ROWS, createEngine, tintRatio } from '@/core/engine/machine';
 import { createSession, stillWithoutFix } from '@/core/engine/session';
 import type { FeatureRow } from '@/core/engine/types';
 
@@ -416,29 +416,43 @@ describe('the driving screen contract', () => {
     expect(h.engine.snapshot()).toMatchObject({ bearingDeg: null, bearingSource: null });
   });
 
-  test('speedingRatio and speedingOver: the row speed over the posted limit it is judged on; over from the speeding line', async () => {
+  test('speedingRatio: the speed shown over the limit the sign shows, from the first row (no warm-up, no detector gate); over from the speeding line', async () => {
     const h = harness();
     await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
-    // In the warm-up (a start from a standstill) the detector cannot use the row: no ratio.
+    const ratioNow = () => {
+      const s = h.engine.snapshot();
+      return { ratio: s.speedingRatio, shown: tintRatio(s.speedMps, s.limitMph) };
+    };
+    // In the warm-up (a start from a standstill) the detector cannot use the row, but the tint already follows the sign.
     await feed(h, [row({ speed: 0, ts: T0 + 1000 }), row({ speed: mph(42), ts: T0 + 2000 })]);
-    expect(h.engine.snapshot()).toMatchObject({ speedingRatio: null, speedingOver: false });
-    // 35 on a 35: at the limit, not over the line (L + T = 39).
-    await feed(h, after(1, { speed: mph(35) }));
-    expect(h.engine.snapshot().speedingRatio).toBeCloseTo(1, 9);
+    expect(ratioNow().ratio).not.toBeNull();
+    expect(ratioNow().ratio).toBe(ratioNow().shown);
+    expect(ratioNow().ratio!).toBeGreaterThan(1);
     expect(h.engine.snapshot().speedingOver).toBe(false);
-    await feed(h, seq([1, { speed: mph(39), ts: T0 + 32_000 }]));
-    expect(h.engine.snapshot().speedingRatio).toBeCloseTo(39 / 35, 9);
+    // A steady 35 on a 35: at the limit, not over the line (L + T = 39).
+    await feed(h, after(5, { speed: mph(35) }));
+    expect(h.engine.snapshot().speedingRatio).toBeCloseTo(1, 2);
     expect(h.engine.snapshot().speedingOver).toBe(false);
-    await feed(h, seq([1, { speed: mph(39.5), ts: T0 + 33_000 }]));
-    expect(h.engine.snapshot().speedingRatio).toBeCloseTo(39.5 / 35, 9);
+    await feed(h, seq([1, { speed: mph(39.5), ts: T0 + 36_000 }]));
     expect(h.engine.snapshot().speedingOver).toBe(true);
-    // An untrusted speed, a poor fix: not a usable row.
-    await feed(h, seq([1, { speed: mph(45), speedAcc: 3, ts: T0 + 34_000 }]));
-    expect(h.engine.snapshot()).toMatchObject({ speedingRatio: null, speedingOver: false });
-    await feed(h, seq([1, { speed: mph(45), hAcc: 40, ts: T0 + 35_000 }]));
-    expect(h.engine.snapshot()).toMatchObject({ speedingRatio: null, speedingOver: false });
-    await h.engine.dispatch({ type: 'end', ts: T0 + 36_000 });
+    expect(ratioNow().ratio).toBe(ratioNow().shown);
+    // An untrusted speed, or a fix the detector refuses (25 m) but the sign still shows: tinted, never judged.
+    await feed(h, seq([3, (i) => ({ speed: mph(45), speedAcc: 3, ts: T0 + 37_000 + i * 1000 })]));
+    expect(h.engine.snapshot()).toMatchObject({ limitMph: 35, speedingOver: false });
+    expect(h.engine.snapshot().speedingRatio!).toBeGreaterThan(1.1);
+    await feed(h, seq([1, { speed: mph(45), hAcc: 25, ts: T0 + 40_000 }]));
+    expect(h.engine.snapshot()).toMatchObject({ limitMph: 35, speedingOver: false });
+    expect(h.engine.snapshot().speedingRatio!).toBeGreaterThan(1.1);
+    await h.engine.dispatch({ type: 'end', ts: T0 + 41_000 });
     expect(h.engine.snapshot()).toMatchObject({ speedingRatio: null, speedingOver: false, lastShake: null });
+  });
+
+  test('tintRatio: the shown speed over the shown limit; null with no limit on the sign', () => {
+    expect(tintRatio(mph(40), 35)).toBeCloseTo(40 / 35, 9);
+    expect(tintRatio(mph(35), 35)).toBeCloseTo(1, 9);
+    expect(tintRatio(0, 25)).toBe(0);
+    expect(tintRatio(mph(40), null)).toBeNull();
+    expect(tintRatio(Number.NaN, 35)).toBeNull();
   });
 
   test('the sign shows the limit on a fix up to 30 m (display only: past 20 m nothing is judged); past 30 m it holds the last one for 10 s', async () => {
@@ -447,9 +461,10 @@ describe('the driving screen contract', () => {
     // The first row is already a poor fix (31 m): nothing to show or hold.
     await feed(h, seq([1, { speed: mph(50), hAcc: 31, ts: T0 + 31_000 }]));
     expect(h.engine.snapshot()).toMatchObject({ limitMph: null, speedingRatio: null });
-    // 25 m: shown, never judged.
+    // 25 m: shown and tinted, never judged.
     await feed(h, seq([1, { speed: mph(50), hAcc: 25, ts: T0 + 32_000 }]));
-    expect(h.engine.snapshot()).toMatchObject({ limitMph: 35, speedingRatio: null, speedingOver: false });
+    expect(h.engine.snapshot()).toMatchObject({ limitMph: 35, speedingOver: false });
+    expect(h.engine.snapshot().speedingRatio!).toBeGreaterThan(1.3);
     await feed(h, seq([1, { speed: mph(50), hAcc: 30, ts: T0 + 33_000 }]));
     expect(h.engine.snapshot().limitMph).toBe(35);
     // 40 m: held for 10 s after the last shown row, then "-".
@@ -459,11 +474,12 @@ describe('the driving screen contract', () => {
     expect(h.engine.snapshot().limitMph).toBeNull();
   });
 
-  test('a class default is shown on the sign but never tints: no ratio', async () => {
+  test('a class default is shown on the sign and tints like a posted limit, but is never judged', async () => {
     const h = harness({ limits: { lookup: () => limit(mph(35), 'statutory'), prefetch: () => {} } });
     await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
     await feed(h, after(2, { speed: mph(50) }));
-    expect(h.engine.snapshot()).toMatchObject({ limitMph: 35, speedingRatio: null, speedingOver: false });
+    expect(h.engine.snapshot()).toMatchObject({ limitMph: 35, speedingOver: false });
+    expect(h.engine.snapshot().speedingRatio).toBeCloseTo(50 / 35, 2);
   });
 });
 

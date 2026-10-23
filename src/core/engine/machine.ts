@@ -68,6 +68,17 @@ interface Seen {
 
 const noop = (): void => {};
 
+/**
+ * The halo's tint ratio: the speed the screen shows over the limit the sign shows (1 = at the
+ * limit), or null while the sign shows "-". Display only, read straight off the two numbers the
+ * driver sees, so the colour moves the moment the speed passes the sign: no warm-up, no GPS or
+ * match gate beyond the sign's own, and a class default or a held limit tints like a posted one.
+ */
+export function tintRatio(speedMps: number, limitMph: number | null): number | null {
+  if (limitMph === null || !(limitMph > 0) || !Number.isFinite(speedMps)) return null;
+  return Math.max(0, speedMps) / MPS_PER_MPH / limitMph;
+}
+
 export function createEngine(deps: EngineDeps): Engine {
   let status: EngineStatus = 'idle';
   let session: TripSession | null = null;
@@ -135,7 +146,6 @@ export function createEngine(deps: EngineDeps): Engine {
     const speed = row === null ? null : knownSpeed(row);
     const recording = status === 'recording';
     const open = suite?.openSpeeding() ?? null;
-    const reading = recording ? (suite?.speedingNow() ?? null) : null;
     return Object.freeze({
       status,
       clientTripId: session?.clientTripId ?? null,
@@ -151,7 +161,7 @@ export function createEngine(deps: EngineDeps): Engine {
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
       limitMph: shownLimit.mph,
       speedingTier: recording && open !== null ? open.tier : null,
-      speedingRatio: reading === null ? null : reading.ratio,
+      speedingRatio: recording ? tintRatio(shown?.mps ?? 0, shownLimit.mph) : null,
       speedingOver: recording && open !== null,
       courseDeg: recording ? course : null,
       bearingDeg: recording ? bearing.deg : null,

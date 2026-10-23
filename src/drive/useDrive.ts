@@ -79,8 +79,8 @@ export interface DriveLive {
   limitMph: number | null;
   speedingTier: Tier | null;
   /**
-   * The current row's speed over the posted limit speeding is judged on (1 = at the limit), on a row
-   * the speeding detector can use; else null. The halo's tint.
+   * The speed shown over the limit the sign shows (1 = at the limit); null while the sign shows "-".
+   * The halo's tint, from the first row the sign has a number.
    */
   speedingRatio: number | null;
   /** The current row is over the speeding line (L + T): the halo pulses. */

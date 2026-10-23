@@ -130,9 +130,9 @@ export type HudScreenProps = {
  * The driving screen (spec "Driving screen"): built to be glanced at, not watched.
  *
  * - Middle: the halo, a glowing ring with the speed inside it (white when calm, the halo's colour
- *   otherwise). Calm: light blue-white, light moving slowly round it. Past the posted limit it tints
- *   toward yellow, orange and red with the speed over it (all but calm just over, red at 1.7 × the
- *   limit), following each row; it pulses only while the car is over the speeding line (limit plus
+ *   otherwise). Calm: light blue-white, light moving slowly round it. Past the limit on the sign it
+ *   tints toward yellow, orange and red with the speed shown over it (all but calm just over, red at
+ *   1.7 × the limit), from the first moment the speed passes the sign; it pulses only while the car is over the speeding line (limit plus
  *   tolerance), faster the further over, and stops on the first row back under it. A DashPal alert
  *   (driver-not-visible included): warmer and faster the more serious and the longer. A hard brake,
  *   hard start or sharp turn, and each DashPal alert start or step (not a reconnect's re-send),
@@ -389,11 +389,11 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
     } else if (sawWaiting.current && !isWaiting) leave(null);
   }, [live.status, isWaiting, ending, cancelling, leave, droppedId, failedId]);
 
-  // Over the posted limit speeding is judged on (the speed's spoken label says so).
+  // Over the limit the sign shows (the speed's spoken label says so).
   const speeding = live.speedingRatio !== null && live.speedingRatio > 1;
   const busy = ending || live.status === 'finalizing';
 
-  // The halo: tinted from the limit on each row, pulsing only over the speeding line; it shakes once
+  // The halo: tinted from the sign's limit up, pulsing only over the speeding line; it shakes once
   // for each event as it happens (fresh on the row clock, never one from the background).
   const shake = useEventShake(live.lastShake, live.rowTs);
   const now = wallClock();

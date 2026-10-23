@@ -250,10 +250,12 @@ export interface EngineSnapshot {
   /** The speeding tier of the current row's episode, for the driving screen's halo. */
   speedingTier: Tier | null;
   /**
-   * The current row's GPS speed over the posted limit speeding is judged on (`limitMphFor`: never a
-   * class default, a ramp's or a held display limit), on a row the speeding detector can use (a
-   * trusted speed on a good fix past the warm-up); null otherwise and when not recording. 1 is at
-   * the limit. The driving screen's halo tints from it.
+   * The speed the screen shows (`speedMps`) over the limit the sign shows (`limitMph`), 1 at the
+   * limit (`machine.tintRatio`); null while the sign shows "-" and when not recording. Display only:
+   * the colour follows the two numbers the driver reads from the first row, with no warm-up and no
+   * gate past the sign's own (a class default, a sign-only match and a held limit tint like a posted
+   * one), so it starts to move the moment the speed passes the sign. The driving screen's halo and
+   * the Live Activity's speed colour tint from it; speeding itself is judged by the detector.
    */
   speedingRatio: number | null;
   /** The current row is over the speeding line (L + T): the halo pulses. False when not recording. */
