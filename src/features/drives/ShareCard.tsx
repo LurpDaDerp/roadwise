@@ -6,9 +6,11 @@ import { Text as RNText, StyleSheet, View, type TextStyle } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
 import type { Units } from '@/lib/units';
-import { Banner, Button, SceneScope, Sheet, Text, ToggleRow, tokens, useTheme } from '@/ui';
+import { mix } from '@/ui/sky/color';
+import { Banner, Button, SceneScope, Sheet, Text, ToggleRow, tokens, useTheme, withAlpha } from '@/ui';
 
 import { MeritFacts } from './MeritFacts';
+import { meritCardStops } from './merit';
 import type { Runs } from './route';
 import { RouteSketch } from './RouteSketch';
 import { mapOffered, ShareMapBackdrop, type Band, type Box, type MapStatus } from './ShareMap';
@@ -28,6 +30,8 @@ export type ShareCardData = {
 
 /** Gold, the reward colour, carries the route on the card. */
 const GOLD = tokens.color.dark.gold;
+/** The ink on a merit-coloured card. */
+const WHITE = '#FFFFFF';
 const W = 320;
 const H = 400;
 /**
@@ -61,8 +65,9 @@ function CardText({ children, style, testID }: { children: React.ReactNode; styl
 }
 
 /**
- * The Strava-style image: the "RoadWise" wordmark, the hour's sky (the same scene as the app's hero
- * cards), the (already privacy-trimmed) route in gold or, with "Show map" on, the map of its area,
+ * The Strava-style image: the "RoadWise" wordmark in white, a dark gradient of the drive's merit
+ * colour (`meritCardStops`: the merit tag's hue, deepened; a drive with no tier keeps the hour's sky,
+ * the same scene as the app's hero cards), the (already privacy-trimmed) route in gold or, with "Show map" on, the map of its area,
  * then the drive's three facts as the recap's hero shows them (`MeritFacts`): the tier's icon beside
  * the score, then distance and time, in the tier's colour. Nothing else: no date, place, event
  * count, rating, badge or tier name, and never a speed.
@@ -80,10 +85,14 @@ export const ShareCard = forwardRef<
 >(function ShareCard({ data, map }, ref) {
   const t = useTheme();
   const scene = t.sky.scene;
+  const tiered = data.tier !== null;
+  const stops = data.tier === null ? scene : meritCardStops(data.tier);
+  // The map's backdrop wants three stops (its middle one washes the map): a merit gradient's midpoint.
+  const mapScene: readonly [string, string, string] = data.tier === null ? scene : [stops[0]!, mix(stops[0]!, stops[1]!, 0.5), stops[1]!];
   return (
     <SceneScope>
       <View ref={ref} collapsable={false} testID="share-card" style={{ width: W, height: H, borderRadius: 28, overflow: 'hidden', padding: 20 }}>
-        <LinearGradient colors={scene} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={StyleSheet.absoluteFill} />
+        <LinearGradient colors={stops} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={StyleSheet.absoluteFill} testID="share-card-bg" />
         {map ? (
           <ShareMapBackdrop
             key={map.attempt}
@@ -91,14 +100,14 @@ export const ShareCard = forwardRef<
             width={W}
             height={H}
             box={MAP_BOX}
-            scene={scene}
+            scene={mapScene}
             stroke={GOLD}
             strokeWidth={5}
             band={MAP_BAND}
             onStatus={map.onStatus}
           />
         ) : null}
-        <CardText style={{ fontStyle: 'italic' }} testID="share-wordmark">
+        <CardText style={{ fontStyle: 'italic', ...(tiered ? { color: WHITE } : null) }} testID="share-wordmark">
           RoadWise
         </CardText>
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -111,12 +120,12 @@ export const ShareCard = forwardRef<
           durationS={data.durationS}
           units={data.units}
           tier={data.tier}
-          surfaces={scene}
-          plainInk={t.onScene.text}
+          surfaces={stops}
+          plainInk={tiered ? WHITE : t.onScene.text}
           testID="share-facts"
         />
         {map ? (
-          <CardText style={{ position: 'absolute', right: 20, bottom: 4, fontSize: 9, lineHeight: 12, fontStyle: 'normal', color: t.onScene.textMuted }}>Map © Apple</CardText>
+          <CardText style={{ position: 'absolute', right: 20, bottom: 4, fontSize: 9, lineHeight: 12, fontStyle: 'normal', color: tiered ? withAlpha(WHITE, 0.7) : t.onScene.textMuted }}>Map © Apple</CardText>
         ) : null}
       </View>
     </SceneScope>

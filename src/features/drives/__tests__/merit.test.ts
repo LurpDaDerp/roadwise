@@ -8,7 +8,7 @@ import type { WeatherKind } from '@/ui/sky/weather';
 import { tokens } from '@/ui/tokens';
 
 import { factInks } from '../MeritFacts';
-import { MERIT_BASE, meritInk, meritWash } from '../merit';
+import { MERIT_BASE, meritCardStops, meritInk, meritWash } from '../merit';
 
 const AA = 4.5;
 const TIERS: MeritTier[] = [1, 2, 3, 4, 5];
@@ -50,6 +50,34 @@ describe.each(scenes)('the share card on the %s sky', (_name, scene) => {
     const { label } = factInks(3, scene, '#FFFFFF');
     for (const stop of scene) expect(ratio(label, stop)).toBeGreaterThanOrEqual(AA);
   });
+});
+
+describe.each(TIERS)('the share card on the tier %i merit gradient', (tier) => {
+  const stops = meritCardStops(tier);
+
+  test('two opaque stops, both darker than the base and the second the deeper', () => {
+    expect(stops).toHaveLength(2);
+    for (const s of stops) expect(s).toMatch(/^#[0-9A-F]{6}$/);
+    expect(ratio('#FFFFFF', stops[1])).toBeGreaterThan(ratio('#FFFFFF', stops[0]));
+    expect(ratio('#FFFFFF', stops[0])).toBeGreaterThan(ratio('#FFFFFF', MERIT_BASE[tier]));
+  });
+
+  test('white reads at 7:1 on both stops', () => {
+    for (const s of stops) expect(ratio('#FFFFFF', s)).toBeGreaterThanOrEqual(7);
+  });
+
+  test("the tier's own ink reads at 4.5:1 on both stops", () => {
+    const ink = meritInk(tier, stops);
+    for (const s of stops) expect(ratio(ink, s)).toBeGreaterThanOrEqual(AA);
+  });
+
+  test('the gold route reads at 3:1 on both stops', () => {
+    for (const s of stops) expect(ratio(tokens.color.dark.gold, s)).toBeGreaterThanOrEqual(3);
+  });
+});
+
+test('the gradients keep their hues apart: five different top stops', () => {
+  expect(new Set(TIERS.map((t) => meritCardStops(t)[0])).size).toBe(5);
 });
 
 describe.each(['light', 'dark'] as const)('the recap and history in the static %s look', (scheme) => {

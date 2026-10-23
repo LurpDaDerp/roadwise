@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, within } from '@testing-library/react-native';
+import { processColor } from 'react-native';
 
 import { ThemeProvider } from '@/ui';
 import { plainBundle } from '@/ui/sky/palette';
@@ -8,7 +9,7 @@ import { textsUnder } from '../__fixtures__/texts';
 import { resetMapsCache } from '../RouteMap';
 import { MAP_BAND, MAP_BOX, ShareSheet, type ShareCardData } from '../ShareCard';
 import { bandAlpha, MAP_TIMEOUT_MS, routePath, shareFrame } from '../ShareMap';
-import { meritInk } from '../merit';
+import { meritCardStops, meritInk } from '../merit';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
 jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn(async () => 'file:///card.png') }));
@@ -222,7 +223,7 @@ describe('the card holds only time, distance and score', () => {
     expect(cardTexts()).toEqual(['RoadWise', '92', 'score', '12.0 mi', 'distance', '24 min', 'time']);
     const card = screen.getByTestId('share-card');
     expect(within(card).getByTestId('share-facts-icon', H)).toBeTruthy();
-    const ink = meritInk(4, plainBundle('light').sky.scene);
+    const ink = meritInk(4, meritCardStops(4));
     for (const id of ['share-facts-score', 'share-facts-distance', 'share-facts-time']) expect(within(card).getByTestId(id)).toHaveStyle({ color: ink });
     // no date, place, event count, rating, badge, points or tier name
     const all = cardTexts().join(' ');
@@ -234,11 +235,30 @@ describe('the card holds only time, distance and score', () => {
     expect(within(card).getByTestId('share-facts-distance')).toHaveStyle({ fontSize: 28 });
   });
 
+  test('a tiered drive: the background is its merit gradient, with white ink', async () => {
+    await draw(sheet());
+    expect(screen.getByTestId('share-card-bg').props.colors).toEqual(meritCardStops(4).map((c) => processColor(c)));
+    expect(screen.getByTestId('share-wordmark')).toHaveStyle({ color: '#FFFFFF' });
+    const ink = meritInk(4, meritCardStops(4));
+    expect(screen.getByTestId('share-facts-score')).toHaveStyle({ color: ink });
+    expect(screen.getByTestId('share-facts-distance-label')).toBeTruthy();
+  });
+
+  test('with the map on, the map fades into the merit background and the credit is 70 % white', async () => {
+    await draw(sheet());
+    await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+    const fade = screen.getByTestId('share-map-fade-top', H);
+    expect(fade.props.colors[0]).toBe(processColor(meritCardStops(4)[0]));
+    expect(within(screen.getByTestId('share-card')).getByText('Map © Apple')).toHaveStyle({ color: 'rgba(255, 255, 255, 0.7)' });
+  });
+
   test('a drive with no score shows a dash, no icon, and the plain ink', async () => {
     await draw(sheet(true, { ...data, score: null, tier: null, miles: 0.3, durationS: 70 }));
     expect(cardTexts()).toEqual(['RoadWise', '—', 'score', '0.3 mi', 'distance', '1 min', 'time']);
     expect(screen.queryByTestId('share-facts-icon', H)).toBeNull();
     expect(screen.getByTestId('share-facts-score')).toHaveStyle({ color: plainBundle('light').onScene.text });
+    // no tier: the hour's sky, not a merit gradient
+    expect(screen.getByTestId('share-card-bg').props.colors).toEqual(plainBundle('light').sky.scene.map((c) => processColor(c)));
     expect(screen.getByLabelText('No score, 0.3 miles, 1 minute.')).toBeOnTheScreen();
   });
 

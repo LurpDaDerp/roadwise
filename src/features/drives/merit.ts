@@ -6,7 +6,7 @@
 import type { MeritTier } from '@scoring';
 
 import { ensureContrast, withAlpha } from '@/ui';
-import { opaque } from '@/ui/sky/color';
+import { mix, opaque } from '@/ui/sky/color';
 import { tokens } from '@/ui/tokens';
 
 /** The minimum contrast of a merit ink on what it sits on: the AA floor for text. */
@@ -20,6 +20,12 @@ export const MERIT_BASE: Readonly<Record<MeritTier, string>> = {
   4: '#9B6DFF',
   5: tokens.color.dark.gold,
 };
+
+/** The share card's two ground stops: the tier base pulled this far toward a near-black (top-left, then bottom-right). */
+const CARD_STOP_MIX = [
+  { toward: '#0B0E16', amount: 0.62 },
+  { toward: '#05070B', amount: 0.8 },
+] as const;
 
 /** The wash's strength behind the recap hero (≤ 12 % of the base): a touch more on the dark card. */
 export const MERIT_WASH_ALPHA: Readonly<Record<'light' | 'dark', number>> = { light: 0.1, dark: 0.12 };
@@ -36,4 +42,15 @@ export function meritInk(tier: MeritTier, surfaces: readonly string[]): string {
 /** The soft tint behind the recap hero: the tier's base at 10 % on paper, 12 % on the dark card. */
 export function meritWash(tier: MeritTier, scheme: 'light' | 'dark'): string {
   return withAlpha(MERIT_BASE[tier], MERIT_WASH_ALPHA[scheme]);
+}
+
+/**
+ * The share card's background for a tier: a two-stop gradient, the tier's base ink (the merit tag's
+ * hue) pulled 62 % toward a near-black for the top-left and 80 % for the bottom-right. Deep and
+ * clearly that tier's hue (grey only for tier 1), with white at 7:1 or better on both stops, the
+ * tier's own ink repaired to 4.5:1 and the gold route at 3:1 or better.
+ */
+export function meritCardStops(tier: MeritTier): readonly [string, string] {
+  const base = MERIT_BASE[tier];
+  return [mix(base, CARD_STOP_MIX[0].toward, CARD_STOP_MIX[0].amount), mix(base, CARD_STOP_MIX[1].toward, CARD_STOP_MIX[1].amount)];
 }
