@@ -13,7 +13,7 @@ import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import type { WatchSpot } from '@/core/spots/types';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
-import type { DriveDisplay, DriveDisplayState } from '@/drive/display';
+import type { DriveDisplay, DriveDisplayState, SpeedCarry } from '@/drive/display';
 import { speedTintOf } from '@/drive/displayTint';
 import { isManualDrop, readDropNotice, writeDropNotice } from '@/drive/dropNotice';
 import {
@@ -69,19 +69,22 @@ function fakePlayer(): AlertPlayer & { delivered: AlertDecision[]; releases: str
   };
 }
 
-function fakeDisplay(running = false): DriveDisplay & { log: string[]; states: DriveDisplayState[]; running: boolean } {
+function fakeDisplay(running = false): DriveDisplay & { log: string[]; states: DriveDisplayState[]; carries: (SpeedCarry | null | undefined)[]; running: boolean } {
   const log: string[] = [];
   const states: DriveDisplayState[] = [];
+  const carries: (SpeedCarry | null | undefined)[] = [];
   const d = {
     log,
     states,
+    carries,
     running,
     start: (s: DriveDisplayState) => {
       states.push(s);
       log.push(`start ${s.speed}/${s.limit}${s.stopped ? ' stopped' : ''}`);
     },
-    update: (s: DriveDisplayState) => {
+    update: (s: DriveDisplayState, carry?: SpeedCarry | null) => {
       states.push(s);
+      carries.push(carry);
       log.push(`update ${s.speed}/${s.limit}`);
     },
     refresh: (s: DriveDisplayState) => {
@@ -395,6 +398,10 @@ describe('a drive', () => {
     expect(update).toMatchObject({ unit: 'mph', points: null, pointsDelta: null, speeding: true, notDrivingAvailable: true, weatherKind: null, weatherText: null });
     expect(update.speedTint).toBe(speedTintOf(h.host.snapshot().speedingRatio, false));
     expect(update.speedTint).toMatch(/^#[0-9A-F]{6}$/);
+    // the halo's speed goes along, for the Live Activity to carry as the halo does
+    const snap = h.host.snapshot();
+    expect(h.display.carries.at(-1)).toEqual({ mps: snap.speedMps, accel: snap.speedAccelMps2, at: snap.speedAt });
+    expect(snap.speedMps).toBeCloseTo(25, 0);
     expect(h.display.log[0]).toMatch(/^start /);
     clock = T0 + 121_000;
     await h.host.end();

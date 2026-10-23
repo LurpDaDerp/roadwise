@@ -1,12 +1,20 @@
 // The background driving display (modes plan §3.10): `DriveSense.setDriveDisplay` reaches the
 // Android foreground notification and, on iOS, a running Live Activity; `LiveDrive.start`/`end`
-// bound the activity's life to the drive. This adapter throttles to one update per 3 s (the drive's
-// first known speed and first known limit go out at once, outside it), sends only
-// changes — and an unchanged state again every 60 s, so a long stop never leaves the Live Activity
-// stale (its stale date is 2 min on) — and tolerates either module being absent (a missing display
-// must never affect a drive). `refresh` sends at once, outside the throttle (the weather line, the
-// "Not driving?" hint running out). Every state goes out wearing the app's current sky
-// (`displayLook.ts`).
+// bound the activity's life to the drive. This adapter sends only changes (and an unchanged state
+// again every 60 s, so a long stop never leaves the Live Activity stale: its stale date is 2 min
+// on), at most one per 3 s on Android and one per 200 ms on iOS (the drive's first known speed and
+// first known limit go out at once, outside either), and tolerates either module being absent (a
+// missing display must never affect a drive). `refresh` sends at once, outside the throttle (the
+// weather line, the "Not driving?" hint running out). Every state goes out wearing the app's
+// current sky (`displayLook.ts`).
+//
+// iOS, the lock screen's number: given the halo's speed (`SpeedCarry`: the engine's estimate, its
+// acceleration and the time it stands for), the Live Activity shows the halo's own number, the
+// estimate carried on from its time along its acceleration (`carriedSpeed`) and rounded with the
+// halo's hysteresis (`wholeSpeed`). It is re-read every `SPEED_TICK_MS` (4 a second) while it is
+// carried (up to `CARRY_MAX_MS` after each fix) and while a change still waits behind the
+// throttle, and each whole-number change goes out as it comes. A cruise or a stop sends nothing
+// between fixes: there is nothing new to show. Android's notification never carries.
 //
 // iOS: `start` starts a local activity, or adopts one already running (a push-started one); it is
 // called as a drive opens with RoadWise in front and again on every return to the front while it
@@ -15,15 +23,36 @@
 import type { DriveDisplayState } from '@drive-sense';
 import type { LiveDriveApi, LiveDriveState } from '@live-drive';
 
+import { MPS_PER_MPH } from '@/core/detectors/common';
+import { CARRY_MAX_MS, carriedSpeed, SPEED_TICK_MS, wholeSpeed } from '@/core/engine/displaySpeed';
+import { KMH_PER_MPH } from '@/lib/units';
+
 import { displayLook, type DisplayLook } from './displayLook';
 
 export type { DriveDisplayState };
 
+/**
+ * The halo's speed (`EngineSnapshot.speedMps`, `speedAccelMps2`, `speedAt`), for the Live Activity
+ * to carry on between fixes as the halo does; null before the drive's first fix.
+ */
+export interface SpeedCarry {
+  /** m/s at `at` */
+  mps: number;
+  /** m/s² to carry it on with; 0: not carried */
+  accel: number;
+  /** the time `mps` stands for (host clock, as `now`) */
+  at: number;
+}
+
 export interface DriveDisplay {
   start(state: DriveDisplayState): void;
-  update(state: DriveDisplayState): void;
-  /** Send `state` now, whatever the throttle (an unchanged state is not sent again). */
-  refresh?(state: DriveDisplayState): void;
+  /** `carry`: the halo's speed, which the Live Activity's number follows (iOS; ignored elsewhere). */
+  update(state: DriveDisplayState, carry?: SpeedCarry | null): void;
+  /**
+   * Send `state` now, whatever the throttle (an unchanged state is not sent again); `carry` as for
+   * `update`, the last one kept when left out.
+   */
+  refresh?(state: DriveDisplayState, carry?: SpeedCarry | null): void;
   end(): void;
   /** iOS: a Live Activity is running (a pushed or local one); false where none can run. */
   isRunning?(): Promise<boolean>;
@@ -35,7 +64,10 @@ export interface DisplaySinks {
   liveDrive?: Pick<LiveDriveApi, 'start' | 'end'> & Partial<Pick<LiveDriveApi, 'isRunning'>>;
 }
 
+/** Android: the notification takes a change this often at most. */
 export const DISPLAY_MIN_INTERVAL_MS = 3000;
+/** iOS: the Live Activity takes a change this often at most (5 a second; its number is re-read 4 a second). */
+export const LIVE_MIN_INTERVAL_MS = 200;
 /** An unchanged display is re-sent this often (one update a minute at a stop). */
 export const DISPLAY_KEEPALIVE_MS = 60_000;
 
@@ -91,6 +123,11 @@ const wearing = (state: DriveDisplayState, look: DisplayLook | null): DriveDispl
   accent: look?.accent ?? null,
 });
 
+const defaultEvery = (ms: number, fn: () => void): (() => void) => {
+  const id = setInterval(fn, ms);
+  return () => clearInterval(id);
+};
+
 const call = (fn: (() => Promise<unknown> | unknown) | null, onError?: (e: unknown) => void): void => {
   if (fn === null) return;
   try {
@@ -110,11 +147,14 @@ export function createDriveDisplay(
     onError?: (e: unknown) => void;
     /** The sky to wear (default: the app's, from `displayLook.ts`). */
     look?: () => DisplayLook | null;
+    /** Runs `fn` every `ms` until the returned stop is called (default: setInterval). */
+    every?: (ms: number, fn: () => void) => () => void;
   }
 ): DriveDisplay {
   const ios = deps.platform === 'ios';
   const look = deps.look ?? displayLook;
-  const minInterval = deps.minIntervalMs ?? DISPLAY_MIN_INTERVAL_MS;
+  const every = deps.every ?? defaultEvery;
+  const minInterval = deps.minIntervalMs ?? (ios ? LIVE_MIN_INTERVAL_MS : DISPLAY_MIN_INTERVAL_MS);
   const set = typeof sinks.setDriveDisplay === 'function' ? sinks.setDriveDisplay : null;
   const live = sinks.liveDrive && typeof sinks.liveDrive.start === 'function' && typeof sinks.liveDrive.end === 'function' ? sinks.liveDrive : null;
   let last: DriveDisplayState | null = null;
@@ -123,10 +163,15 @@ export function createDriveDisplay(
   let unit: DriveDisplayState['unit'] = 'mph';
   /**
    * This drive's display has shown a speed / a limit: the first of each goes out at once, whatever
-   * the throttle, so the lock screen never keeps "-" for up to 3 s after the drive knows better.
+   * the throttle, so the lock screen never keeps "-" after the drive knows better.
    */
   let speedShown = false;
   let limitShown = false;
+  /** iOS: the newest state given (with the host's own speed), the halo's speed, the number carried last, the ticks. */
+  let given: DriveDisplayState | null = null;
+  let carry: SpeedCarry | null = null;
+  let whole: number | null = null;
+  let stopTicks: (() => void) | null = null;
 
   function send(state: DriveDisplayState, force: boolean): void {
     const now = deps.now();
@@ -139,24 +184,71 @@ export function createDriveDisplay(
     call(set === null ? null : () => set(state), deps.onError);
   }
 
+  /** `state` with the halo's number at `now` in place of the host's (iOS, with a carry and a known speed). */
+  function carried(state: DriveDisplayState, now: number): DriveDisplayState {
+    if (!ios || carry === null || state.speed === null) return state;
+    const perMps = (state.unit === 'km/h' ? KMH_PER_MPH : 1) / MPS_PER_MPH;
+    whole = wholeSpeed(whole, carriedSpeed(carry.mps, carry.accel, now - carry.at) * perMps);
+    return whole === state.speed ? state : { ...state, speed: whole };
+  }
+
+  /** The halo moves its number on between fixes at `now`. */
+  const carrying = (now: number): boolean => carry !== null && carry.mps > 0 && carry.accel !== 0 && now - carry.at < CARRY_MAX_MS;
+
+  function stop(): void {
+    stopTicks?.();
+    stopTicks = null;
+  }
+
+  /** A tick re-reads the number and sends a change; the ticks stop once nothing moves and nothing waits. */
+  function tick(): void {
+    if (given === null) {
+      stop();
+      return;
+    }
+    const now = deps.now();
+    const s = carried(given, now);
+    send(s, false);
+    if (!carrying(now) && same(last, s)) stop();
+  }
+
+  /** iOS: the ticks run while the number is carried or a change waits behind the throttle. */
+  function tickWhileNeeded(now: number, s: DriveDisplayState): void {
+    if (!ios || stopTicks !== null) return;
+    if (carrying(now) || !same(last, s)) stopTicks = every(SPEED_TICK_MS, tick);
+  }
+
   return {
     start(state) {
       last = null;
       speedShown = false;
       limitShown = false;
+      stop();
+      carry = null;
+      whole = null;
       unit = state.unit;
       const worn = wearing(state, look());
+      given = worn;
       // iOS: starts the activity, or adopts the one running (pushed, or started earlier); false is fine.
       if (ios) call(live === null ? null : () => live.start(toLive(worn)), deps.onError);
       send(worn, true);
     },
-    update(state) {
-      send(wearing(state, look()), false);
+    update(state, c) {
+      const now = deps.now();
+      given = wearing(state, look());
+      carry = ios ? (c ?? null) : null;
+      const s = carried(given, now);
+      send(s, false);
+      tickWhileNeeded(now, s);
     },
-    refresh(state) {
-      const worn = wearing(state, look());
-      if (same(last, worn)) return;
-      send(worn, true);
+    refresh(state, c) {
+      const now = deps.now();
+      given = wearing(state, look());
+      if (c !== undefined) carry = ios ? c : null;
+      const s = carried(given, now);
+      if (same(last, s)) return;
+      send(s, true);
+      tickWhileNeeded(now, s);
     },
     end() {
       // Exactly one end path: iOS ends the Live Activity through `LiveDrive.end()` (a `setDriveDisplay`
@@ -173,6 +265,10 @@ export function createDriveDisplay(
       lastAt = Number.NEGATIVE_INFINITY;
       speedShown = false;
       limitShown = false;
+      stop();
+      given = null;
+      carry = null;
+      whole = null;
     },
     async isRunning() {
       if (!ios || live === null || typeof live.isRunning !== 'function') return false;

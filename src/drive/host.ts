@@ -805,11 +805,15 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     };
   }
 
-  /** Never throws: a display that fails must not keep a change from being published, nor a drive from closing. */
+  /**
+   * Never throws: a display that fails must not keep a change from being published, nor a drive from
+   * closing. The halo's speed goes along, so the Live Activity's number is the halo's (display.ts).
+   */
   function display(s: EngineSnapshot): void {
     if (!deps.display || !surfaces || s.status !== 'recording') return;
     try {
-      deps.display.update(displayState(s));
+      const carry = s.speedKnown && s.speedAt !== null ? { mps: s.speedMps, accel: s.speedAccelMps2, at: s.speedAt } : null;
+      deps.display.update(displayState(s), carry);
     } catch (e) {
       report(e, 'display');
     }

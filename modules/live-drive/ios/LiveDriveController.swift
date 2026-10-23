@@ -5,9 +5,10 @@
 // for a drive that started with the app in the background) arrives through `activityUpdates` and is
 // adopted too. `start` updates a running activity instead of ending and requesting another; one the
 // driver dismissed (or iOS ended) is no longer running, so `start` requests a new one.
-// Updated by `update` or drive-sense's `setDriveDisplay` (the `roadwise.driveDisplay` notification),
-// ended by `end` or the drive's end. The newest display state is kept even while no activity is
-// held (a pushed one not adopted yet), and an activity adopted later shows it at once instead of its
+// Updated by `update` or drive-sense's `setDriveDisplay` (the `roadwise.driveDisplay` notification;
+// up to 5 a second while the speed changes, src/drive/display.ts), one update at a time and the
+// newest last (`send`); ended by `end` or the drive's end. The newest display state is kept even
+// while no activity is held (a pushed one not adopted yet), and an activity adopted later shows it at once instead of its
 // older pushed state: nothing sent while waiting is lost, the newest wins. The push-to-start token
 // is persisted and announced. Each change of the running activity is posted as
 // "roadwise.liveActivity", and an activity that runs takes the "Recording your drive" note down:
@@ -31,6 +32,8 @@ final class LiveDriveController {
   static let tokenKey = "livedrive.pushToStartToken"
   /// No update for this long means the app is gone: the widget then shows "-" (`context.isStale`).
   static let STALE_AFTER_S: TimeInterval = 120
+  /// An `Activity.update` that has not returned after this long no longer holds the next one back.
+  static let SEND_TIMEOUT_S: TimeInterval = 2
 
   private var activity: Activity<LiveDriveAttributes>? {
     didSet {
@@ -41,6 +44,11 @@ final class LiveDriveController {
   /// held: an activity adopted later (a pushed one) takes it at once (`applyLatest`). Each state
   /// replaces the one before; the drive's end clears it.
   private var latest: (state: LiveDriveAttributes.ContentState, at: Date)?
+  /// The newest content not yet handed to `Activity.update`, when the update on its way went (nil:
+  /// none is), and a count of updates handed over, so only the newest one's landing sends the next (`send`).
+  private var waiting: ActivityContent<LiveDriveAttributes.ContentState>?
+  private var sentAt: Date?
+  private var sends = 0
   private var observer: NSObjectProtocol?
   private var updatesTask: Task<Void, Never>?
   private var tokenTask: Task<Void, Never>?
@@ -154,8 +162,7 @@ final class LiveDriveController {
   /// once a minute while a drive records, so in a drive it never is).
   private func applyLatest(to a: Activity<LiveDriveAttributes>) {
     guard let l = latest, Date().timeIntervalSince(l.at) < LiveDriveController.STALE_AFTER_S else { return }
-    let content = LiveDriveController.content(l.state, since: l.at)
-    Task { await a.update(content) }
+    send(LiveDriveController.content(l.state, since: l.at), to: a)
   }
 
   func isRunning() -> Bool {
@@ -195,14 +202,40 @@ final class LiveDriveController {
   func update(_ state: LiveDriveAttributes.ContentState) {
     latest = (state: state, at: Date())
     guard let a = activity else { return }
-    let content = LiveDriveController.content(state)
-    Task { await a.update(content) }
+    send(LiveDriveController.content(state), to: a)
+  }
+
+  /// `content` for the held activity. Updates go one at a time, in the order sent: each
+  /// `Activity.update` is awaited before the next starts, and one sent while another is on its way
+  /// replaces any already waiting, so the newest always lands last (separate tasks could land out of
+  /// order at the lock screen's 4 a second) and a burst never queues up behind itself. What waits
+  /// goes to whichever activity is held when the one on its way lands. One still on its way after
+  /// `SEND_TIMEOUT_S` no longer holds the next back (only the newest one's landing sends what waits).
+  private func send(_ content: ActivityContent<LiveDriveAttributes.ContentState>, to a: Activity<LiveDriveAttributes>) {
+    waiting = content
+    let free = sentAt.map { Date().timeIntervalSince($0) > LiveDriveController.SEND_TIMEOUT_S } ?? true
+    if free { flush(a) }
+  }
+
+  private func flush(_ a: Activity<LiveDriveAttributes>) {
+    guard let content = waiting else { return }
+    waiting = nil
+    sentAt = Date()
+    sends += 1
+    let mine = sends
+    Task { @MainActor [weak self] in
+      await a.update(content)
+      guard let self = self, self.sends == mine else { return }
+      self.sentAt = nil
+      if let held = self.activity, self.waiting != nil { self.flush(held) }
+    }
   }
 
   /// Ends the running activity at once, and forgets the drive's newest state (the next drive's
   /// activity never shows this one's).
   func end() {
     latest = nil
+    waiting = nil
     guard let a = activity else { return }
     activity = nil
     Task { await a.end(nil, dismissalPolicy: .immediate) }

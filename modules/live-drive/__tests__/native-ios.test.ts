@@ -100,7 +100,7 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(start.indexOf('update(state)')).toBeLessThan(start.indexOf('Activity.request('));
     expect(start).toMatch(/pushType: nil/);
     expect(c).toMatch(/func update\([\s\S]{0,120}guard let a = activity else \{ return \}/);
-    expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*guard let a = activity else \{ return \}/);
+    expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*waiting = nil\s*guard let a = activity else \{ return \}/);
     expect(c).toMatch(/dismissalPolicy: \.immediate/);
     expect(c).toMatch(/func isRunning\(\) -> Bool \{/);
   });
@@ -116,7 +116,7 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(adopt).toMatch(/activity = a\s*removeRecordingNote\(\)\s*applyLatest\(to: a\)\s*\}$/);
     // every drive end clears the held activity, so the next leg's pushed one is adopted
     expect(c).toMatch(/if info\["ended"\] as\? Bool == true \{\s*self\.end\(\)/);
-    expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*guard let a = activity else \{ return \}\s*activity = nil/);
+    expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*waiting = nil\s*guard let a = activity else \{ return \}\s*activity = nil/);
     // adopting announces `running`, and drive-sense's note then cancels its 20 s check and comes down
     expect(c).toMatch(/didSet \{\s*if activity\?\.id != oldValue\?\.id \{ announce\(\) \}/);
     const note = code(path.join(ROOT, 'modules', 'drive-sense', 'ios'), 'DriveNotifier.swift');
@@ -168,11 +168,25 @@ describe('live-drive: the Expo module (iOS)', () => {
     // applied only while fresh, with its own stale date; on the activity just adopted
     const apply = /private func applyLatest\(to a: Activity<LiveDriveAttributes>\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
     expect(apply).toMatch(/guard let l = latest, Date\(\)\.timeIntervalSince\(l\.at\) < LiveDriveController\.STALE_AFTER_S else \{ return \}/);
-    expect(apply).toMatch(/Task \{ await a\.update\(content\) \}/);
+    expect(apply).toMatch(/send\(LiveDriveController\.content\(l\.state, since: l\.at\), to: a\)/);
     // the drive's end forgets it, even with no activity held, so the next drive never shows it
-    expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*guard let a = activity/);
+    expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*waiting = nil\s*guard let a = activity/);
     expect(c.match(/latest = nil/g)).toHaveLength(1);
     expect(c.match(/latest = \(state: state, at: Date\(\)\)/g)).toHaveLength(2);
+  });
+
+  it('updates go to the activity one at a time and the newest last (round 9: up to 5 a second), never as racing tasks', () => {
+    const c = ctrl();
+    // every update and every adoption's newest state goes through `send`; no other Task updates
+    expect(c.match(/await a\.update\(/g)).toHaveLength(1);
+    expect(c.match(/send\(LiveDriveController\.content\(/g)).toHaveLength(2);
+    const send = /private func send\([\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
+    expect(send).toMatch(/waiting = content\s*let free = sentAt\.map \{ Date\(\)\.timeIntervalSince\(\$0\) > LiveDriveController\.SEND_TIMEOUT_S \} \?\? true\s*if free \{ flush\(a\) \}/);
+    const flush = /private func flush\([\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
+    expect(flush).toMatch(/guard let content = waiting else \{ return \}\s*waiting = nil\s*sentAt = Date\(\)\s*sends \+= 1\s*let mine = sends/);
+    // only the newest update's landing frees the queue, and what waits goes to the activity held then
+    expect(flush).toMatch(/Task \{ @MainActor \[weak self\] in\s*await a\.update\(content\)\s*guard let self = self, self\.sends == mine else \{ return \}\s*self\.sentAt = nil\s*if let held = self\.activity, self\.waiting != nil \{ self\.flush\(held\) \}/);
+    expect(c).toMatch(/static let SEND_TIMEOUT_S: TimeInterval = 2/);
   });
 
   it('a running activity takes the "Recording your drive" note down, and every change is announced to drive-sense', () => {
