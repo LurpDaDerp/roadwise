@@ -12,7 +12,6 @@ import {
   PHONE_PUTDOWN_QUIET_S,
   RANKED_MIN_MILES,
   RATING_WINDOW_DAYS,
-  SPEEDING_GRACE_S,
 } from '@scoring';
 
 import { HERO, howItWorks, rules, type DriveNumbers } from '@/content/howScores';
@@ -56,11 +55,17 @@ test('every number comes from the rules: the trigger, the wait, the budget, the 
   expect(section(false, 'drives')[0]).toBe('Swipe Start drive on Home before you pull out. RoadWise waits up to 5 min for you to get moving.');
   expect(section(false, 'drives')[2]).toBe('Riding along? Tap “Not driving?” on the drive screen. It shows once the car reaches driving speed, for your first 2 minutes on that screen.');
   // Too short: a Start-card drive is not saved at all, an automatic one gets no score.
-  expect(section(true, 'drive-score')[3]).toBe(
+  expect(section(true, 'drive-score')[4]).toBe(
     `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, it isn’t saved at all.`
   );
-  expect(section(false, 'drive-score')[3]).toBe(`A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving isn’t saved at all.`);
-  expect(section(true, 'speeding')[1]).toBe(`You hear a chime when you cross that line. Ease off within ${SPEEDING_GRACE_S} s and it doesn’t count.`);
+  expect(section(false, 'drive-score')[4]).toBe(`A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving isn’t saved at all.`);
+  expect(section(true, 'speeding')[1]).toBe('You hear a chime and see “Slow down” when you cross that line. Every second over it counts, and more the further over you are.');
+  // Every event counts, weighed by how serious it was and against the whole drive.
+  expect(section(true, 'drive-score')[3]).toBe(
+    'Every event counts, and a more serious one counts more: a harder brake, start or turn, a longer or faster stretch over the limit, a longer pickup or one at a higher speed. Each is weighed against the whole drive, so one event marks a long drive down less than a short one.'
+  );
+  expect(all(true).join(' ')).not.toMatch(/Ease off within/);
+  expect(section(true, 'dashpal')[1]).toBe('They count only at 10 mph or more with good GPS. Each one counts more the faster you were going and the longer it lasted.');
   expect(section(true, 'rating')).toContain(`You get a rating once you’ve driven ${RANKED_MIN_MILES} mi in the last ${RATING_WINDOW_DAYS} days.`);
   expect(section(true, 'mistakes').join(' ')).toContain(`up to ${DISPUTE_AUTO_PER_WEEK} times a week`);
   expect(section(true, 'mistakes').join(' ')).toContain(`up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of those`);
@@ -72,7 +77,7 @@ test('Phone use: felt from motion alone, never the screen; every number from the
     'RoadWise feels for your phone being picked up while you drive, from its motion alone. It never sees your screen, your apps or your messages.',
     `A pickup counts once the car is going ${PHONE_PICKUP_MIN_MPH} mph or more. Pick it up at a red light and put it down before you pull away, and it doesn’t count.`,
     `Every second it stays in your hand while you’re moving adds to it. Put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s and it’s still one pickup.`,
-    `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, judged against your time at driving speed, so a long drive isn’t marked down for being long.`,
+    `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at 60 mph as at 30), judged against your time at driving speed, so a long drive isn’t marked down for being long.`,
     'With the drive screen open, you hear a tone and see “Phone down”. With RoadWise in the background, you get a quiet notification instead.',
   ]);
   expect(section(false, 'phone')).toEqual(section(true, 'phone'));

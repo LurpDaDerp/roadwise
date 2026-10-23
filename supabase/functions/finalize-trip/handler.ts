@@ -7,7 +7,7 @@
 // is ever lost), the time zone and local day (derived here from tz + startedAt; an unknown IANA
 // zone or a mislabelled day is refused), then ONE database transaction: `drive_context` (lock,
 // idempotency, the merge target) → the daily upload budget → integrity → the merge union (the
-// DashPal limits re-applied over it) → `classifyDrive`'s length rule → `apply_drive` → the
+// DashPal speed gate re-applied over it) → `classifyDrive`'s length rule → `apply_drive` → the
 // response, stored for replays.
 //
 // A user id comes from the JWT and nowhere else. Logs carry the request id, the client trip id and
@@ -64,7 +64,7 @@ const fromStored = (e: StoredEvent): EnvelopeEvent => ({ ...e });
 
 /**
  * What an uploaded event measured, as stored and rated: a speeding event's `overMphS` (mph-seconds
- * over the line after the grace) is capped at `SPEEDING_MAX_OVER_MPH` per charged second, as the
+ * over the line) is capped at `SPEEDING_MAX_OVER_MPH` per charged second, as the
  * rating reads it, so a bad reading is never kept. Every other key travels untouched.
  */
 export function clampMeasured(e: PayloadEvent): PayloadEvent['measured'] {
@@ -104,11 +104,10 @@ export function dashcamOf(p: FinalizeTripPayloadV5, merge: MergeTarget | null): 
 }
 
 /**
- * What is stored: the upload alone, or its union with the merge target. The DashPal limits are
- * re-applied over the whole drive (scoring `keepDashcamEvents`): an uploaded eyes-off or drowsy
- * event under 10 mph or with no measured speed, or within 5 min (eyes-off) or 10 min (drowsy) of
- * one the drive already keeps (the merge target's, or an earlier one of the upload), is dropped —
- * never stored, never rated. The target's own events always stand. `short` is the length rule
+ * What is stored: the upload alone, or its union with the merge target. The DashPal speed gate is
+ * re-applied (scoring `keepDashcamEvents`): an uploaded eyes-off or drowsy event under 10 mph or
+ * with no measured speed is dropped, never stored, never rated; every other one counts. The
+ * target's own events always stand. `short` is the length rule
  * (scoring `classifyDrive`: under 0.5 mi AND under 2 min) over what is stored.
  */
 export function buildStoredDrive(
@@ -116,7 +115,7 @@ export function buildStoredDrive(
   merge: MergeTarget | null
 ): { events: EnvelopeEvent[]; dashcam: EnvelopeDashcam; short: boolean } {
   if (merge) {
-    const events = [...merge.events.map(fromStored), ...keepDashcamEvents(p.events, merge.events).map(fromPayload)];
+    const events = [...merge.events.map(fromStored), ...keepDashcamEvents(p.events).map(fromPayload)];
     return {
       events,
       dashcam: dashcamOf(p, merge),

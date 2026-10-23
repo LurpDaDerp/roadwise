@@ -53,45 +53,46 @@ test.each(names)('%s is a 1 Hz drive that asserts something', (name) => {
 
 /**
  * Each trace's opportunity counters (slowdowns, speed-ups, turns, limit seconds, moving seconds,
- * phone seconds), with the harness's 30 s warm-up. The synthetic drives run straight east, so only
+ * phone seconds), from the first row: the harness's 30 s warm-up holds back hard events only, never
+ * the limit seconds. The synthetic drives run straight east, so only
  * `turn-right-90` turns; a 35 → 25 mph brake is a 10 mph drop, under the 12 mph slowdown line. Phone
  * seconds are every row at 10 mph or more on a trusted speed on which a pickup could be seen (the
  * motion sensors read; on iPhone no call: `phone-hands-free-call` loses its 20 call rows, Android's
  * `phone-call-android` keeps them), the warm-up's included.
  */
 const EXPOSURE: Record<string, readonly [number, number, number, number, number, number]> = {
-  'clean-commute': [0, 0, 0, 270, 300, 300],
-  'hard-accel-confirmed': [0, 0, 0, 170, 200, 200],
-  'hard-brake-confirmed': [0, 0, 0, 170, 200, 200],
-  'hard-brake-poor-speedacc': [0, 0, 0, 168, 200, 198],
-  'hard-brake-severe': [1, 0, 0, 170, 200, 200],
-  'hard-brake-unconfirmed': [0, 0, 0, 170, 200, 200],
-  'hard-corner-no-course': [0, 0, 0, 170, 200, 200],
-  'hard-corner-plausible': [0, 0, 0, 170, 200, 200],
-  'hard-corner-straight': [0, 0, 0, 170, 200, 200],
-  'hard-corner-wrong-side': [0, 0, 0, 170, 200, 200],
-  'phone-call-android': [0, 0, 0, 170, 200, 200],
-  'phone-handling-long': [0, 0, 0, 210, 240, 240],
-  'phone-hands-free-call': [0, 0, 0, 170, 200, 180],
+  'clean-commute': [0, 0, 0, 300, 300, 300],
+  'hard-accel-confirmed': [0, 0, 0, 200, 200, 200],
+  'hard-brake-confirmed': [0, 0, 0, 200, 200, 200],
+  'hard-brake-poor-speedacc': [0, 0, 0, 198, 200, 198],
+  'hard-brake-severe': [1, 0, 0, 200, 200, 200],
+  'hard-brake-unconfirmed': [0, 0, 0, 200, 200, 200],
+  'hard-corner-no-course': [0, 0, 0, 200, 200, 200],
+  'hard-corner-plausible': [0, 0, 0, 200, 200, 200],
+  'hard-corner-straight': [0, 0, 0, 200, 200, 200],
+  'hard-corner-wrong-side': [0, 0, 0, 200, 200, 200],
+  'phone-call-android': [0, 0, 0, 200, 200, 200],
+  'phone-handling-long': [0, 0, 0, 240, 240, 240],
+  'phone-hands-free-call': [0, 0, 0, 200, 200, 180],
   'phone-parked-start': [0, 1, 0, 120, 120, 120],
-  'phone-pickup': [0, 0, 0, 170, 200, 200],
-  'phone-red-light-drive-off': [1, 1, 0, 180, 210, 210],
-  'phone-slide-false-positive': [0, 0, 0, 170, 200, 200],
-  'phone-stopped-in-traffic': [1, 1, 0, 170, 200, 200],
-  'phone-tap-mounted': [0, 0, 0, 170, 200, 200],
-  'speeding-blip': [0, 0, 0, 170, 200, 200],
-  'speeding-blip-hover': [0, 0, 0, 170, 200, 200],
-  'speeding-grace': [1, 1, 0, 170, 200, 200],
-  'speeding-hover': [0, 0, 0, 210, 240, 240],
-  'speeding-minor': [0, 0, 0, 210, 240, 240],
-  'speeding-poor-gps': [1, 1, 0, 130, 200, 200],
-  'speeding-poor-speedacc': [0, 0, 0, 190, 240, 220],
-  'speeding-severe-brief': [1, 1, 0, 170, 200, 200],
-  'speeding-split': [0, 0, 0, 170, 200, 200],
-  'speeding-unknown-limit': [1, 1, 0, 120, 200, 200],
-  'speeding-warmup': [1, 0, 0, 170, 200, 200],
-  'stop-and-go': [3, 3, 0, 139, 181, 169],
-  'turn-right-90': [0, 0, 1, 170, 200, 200],
+  'phone-pickup': [0, 0, 0, 200, 200, 200],
+  'phone-red-light-drive-off': [1, 1, 0, 210, 210, 210],
+  'phone-slide-false-positive': [0, 0, 0, 200, 200, 200],
+  'phone-stopped-in-traffic': [1, 1, 0, 200, 200, 200],
+  'phone-tap-mounted': [0, 0, 0, 200, 200, 200],
+  'speeding-blip': [0, 0, 0, 200, 200, 200],
+  'speeding-blip-hover': [0, 0, 0, 200, 200, 200],
+  'speeding-hover': [0, 0, 0, 240, 240, 240],
+  'speeding-minor': [0, 0, 0, 240, 240, 240],
+  'speeding-poor-gps': [1, 1, 0, 160, 200, 200],
+  'speeding-poor-speedacc': [0, 0, 0, 220, 240, 220],
+  'speeding-severe-brief': [1, 1, 0, 200, 200, 200],
+  'speeding-short-severe': [1, 1, 0, 200, 200, 200],
+  'speeding-split': [0, 0, 0, 200, 200, 200],
+  'speeding-unknown-limit': [1, 1, 0, 150, 200, 200],
+  'speeding-warmup': [1, 0, 0, 200, 200, 200],
+  'stop-and-go': [3, 3, 0, 169, 181, 169],
+  'turn-right-90': [0, 0, 1, 200, 200, 200],
 };
 
 test('every trace pins its opportunity counters', () => {

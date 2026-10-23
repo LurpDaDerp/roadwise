@@ -91,7 +91,7 @@ const measuredFields = {
   speedMph: z.number().min(0).max(250).optional(),
   limitMph: z.number().min(0).max(120).optional(),
   peakG: z.number().min(0).max(10).optional(),
-  /** speeding: mph-seconds over the speeding line after the grace (the Speed weight reads it). */
+  /** speeding: mph-seconds over the speeding line, every over row (the Speed weight reads it). */
   overMphS: z.number().min(0).max(1_000_000).optional(),
   /** Who saw it: `dashcam` on (and only on) a DashPal event. */
   source: z.literal('dashcam').optional(),

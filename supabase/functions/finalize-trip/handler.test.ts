@@ -68,7 +68,7 @@ Deno.test('happy path: a v5 upload is stored in one transaction with its origin,
   const e = envelopeOf(h);
   assertEquals(Object.keys(e).sort(), ENVELOPE_KEYS);
   assertEquals(Object.keys(e.payload).sort(), PAYLOAD_KEYS);
-  assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.scoringVersion], [USER, null, true, null, 8]);
+  assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.scoringVersion], [USER, null, true, null, 9]);
   assertEquals([e.payload.origin, e.payload.notDrivingExpired], ['auto', false]);
   assertEquals(e.payload.exposure, { slowdowns: 18, speedups: 17, turns: 11, limitS: 1200, movingS: 1650, phoneS: 1500 });
   // the uploaded event goes in active whatever the device said, with its position and measurements
@@ -230,7 +230,7 @@ Deno.test('merge: the union keeps the target\'s events with their status, then t
   assertEquals([e.scored, e.reason], [true, null]);
 });
 
-// The DashPal limits on the server: re-applied over the whole drive, merge target included.
+// The DashPal speed gate on the server: every episode at 10 mph or more counts, merge target included.
 const dcId = (n: number): string => `dddddddd-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const MIN = 60_000;
 /** An uploaded DashPal event `m` minutes after the upload's start; `speedMph` null = not measured. */
@@ -251,36 +251,46 @@ const storedDc = (n: number, type: 'drowsy' | 'eyes_off', m: number, status: 'ac
   status,
 });
 
-Deno.test("merge: at most one drowsy per 10 min and one eyes-off per 5 min over the merged drive; the target's events stand, the upload's too-close ones are dropped", async () => {
+Deno.test("merge: every DashPal episode counts, however close to another; the target's events stand, the upload's are all kept", async () => {
   const merge = mergeTarget({ events: [...mergeTarget().events, storedDc(1, 'drowsy', -5), storedDc(2, 'eyes_off', -3)] });
   const h = harness({ context: withMerge(merge) });
   const upload = payload({
     clientTripId: TRIP_2,
     events: [
       ...payload().events, // the hard brake: the phone's own event, never touched
-      dcEvent(3, 'drowsy', 1), // 6 min after the target's drowsy: dropped
-      dcEvent(4, 'eyes_off', 1), // 4 min after the target's eyes-off: dropped
-      dcEvent(5, 'eyes_off', 2), // 5 min after it: kept
-      dcEvent(6, 'drowsy', 5), // 10 min after it: kept
-      dcEvent(7, 'drowsy', 14.9), // 9.9 min after the kept one: dropped
+      dcEvent(3, 'drowsy', 1), // 6 min after the target's drowsy
+      dcEvent(4, 'eyes_off', 1), // 4 min after the target's eyes-off
+      dcEvent(5, 'eyes_off', 2),
+      dcEvent(6, 'drowsy', 5),
+      dcEvent(7, 'drowsy', 14.9),
     ],
   });
   const res = await handleFinalizeTrip(post(upload), h.deps);
   assertEquals(res.status, 200);
   assertEquals(
     envelopeOf(h).events.map((x) => [x.id, x.status]),
-    [[EVENT_2, 'removed'], [dcId(1), 'active'], [dcId(2), 'active'], [EVENT, 'active'], [dcId(5), 'active'], [dcId(6), 'active']]
+    [
+      [EVENT_2, 'removed'],
+      [dcId(1), 'active'],
+      [dcId(2), 'active'],
+      [EVENT, 'active'],
+      [dcId(3), 'active'],
+      [dcId(4), 'active'],
+      [dcId(5), 'active'],
+      [dcId(6), 'active'],
+      [dcId(7), 'active'],
+    ]
   );
 });
 
-Deno.test('merge: a removed (disputed) target drowsy holds nothing back; without a merge the same upload keeps its first drowsy only', async () => {
+Deno.test('merge: a removed (disputed) target drowsy stays removed; without a merge the same upload keeps both drowsy episodes, in input order', async () => {
   const merge = mergeTarget({ events: [storedDc(1, 'drowsy', -5, 'removed')] });
   const h = harness({ context: withMerge(merge) });
   await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, events: [dcEvent(3, 'drowsy', 1), dcEvent(4, 'drowsy', 2)] })), h.deps);
-  assertEquals(envelopeOf(h).events.map((x) => [x.id, x.status]), [[dcId(1), 'removed'], [dcId(3), 'active']]);
+  assertEquals(envelopeOf(h).events.map((x) => [x.id, x.status]), [[dcId(1), 'removed'], [dcId(3), 'active'], [dcId(4), 'active']]);
   const fresh = harness();
   await handleFinalizeTrip(post(payload({ events: [dcEvent(4, 'drowsy', 2), dcEvent(3, 'drowsy', 1)] })), fresh.deps);
-  assertEquals(envelopeOf(fresh).events.map((x) => x.id), [dcId(3)]);
+  assertEquals(envelopeOf(fresh).events.map((x) => x.id), [dcId(4), dcId(3)]);
 });
 
 Deno.test('a DashPal event under 10 mph or with no measured speed is dropped, not the drive', async () => {
@@ -356,17 +366,18 @@ const speeding = (durationS: number, measured: Record<string, number>) => ({
   measured,
 });
 
-Deno.test("a speeding event's overMphS is stored at most 150 mph over per charged second (the rating reads it)", async () => {
+Deno.test("a speeding event's overMphS is stored at most 150 mph over per second over the line (the rating reads it)", async () => {
   const h = harness();
   await handleFinalizeTrip(post(payload({ events: [speeding(15, { limitMph: 35, speedMph: 48, overMphS: 999_999 })] })), h.deps);
-  assertEquals(envelopeOf(h).events.map((x) => [x.id, x.measured]), [[SPEEDING, { limitMph: 35, speedMph: 48, overMphS: 1500 }]]);
+  assertEquals(envelopeOf(h).events.map((x) => [x.id, x.measured]), [[SPEEDING, { limitMph: 35, speedMph: 48, overMphS: 2250 }]]);
   const ok = harness();
   await handleFinalizeTrip(post(payload({ events: [speeding(15, { limitMph: 35, speedMph: 42, overMphS: 30 })] })), ok.deps);
   assertEquals(envelopeOf(ok).events[0].measured, { limitMph: 35, speedMph: 42, overMphS: 30 });
   const legacy = harness();
   await handleFinalizeTrip(post(payload({ events: [speeding(15, { limitMph: 35, speedMph: 42 })] })), legacy.deps);
   assertEquals(envelopeOf(legacy).events[0].measured, { limitMph: 35, speedMph: 42 });
-  assertEquals(clampMeasured(speeding(5, { overMphS: 400 })).overMphS, 150);
+  assertEquals(clampMeasured(speeding(5, { overMphS: 400 })).overMphS, 400);
+  assertEquals(clampMeasured(speeding(2, { overMphS: 400 })).overMphS, 300);
   assertEquals(clampMeasured(speeding(65, { overMphS: 9000 })).overMphS, 9000);
   assertEquals(clampMeasured({ ...speeding(5, { overMphS: 400 }), type: 'hard_brake', tier: 'minor' }).overMphS, 400);
 });

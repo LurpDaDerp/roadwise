@@ -78,9 +78,10 @@ export interface LimitSample {
 
 export interface DetectorContext {
   /**
-   * epoch ms before which no event starts: `NO_EVENTS_FIRST_S` after the start for a drive that
-   * starts stopped, the first trusted reading over 5 mph for one started while moving, the start
-   * itself for a continuation (`TripSession.warmup`).
+   * epoch ms before which no hard brake, start or turn starts: `NO_EVENTS_FIRST_S` after the start
+   * for a drive that starts stopped, the first trusted reading over 5 mph for one started while
+   * moving, the start itself for a continuation (`TripSession.warmup`). Speeding and phone pickups
+   * do not wait for it.
    */
   warmupEndsAt: number;
   /** The phone that recorded the drive: on iPhone a row with a call is never phone use. */
@@ -92,7 +93,7 @@ export interface EventMeasured {
   speedMph?: number;
   limitMph?: number;
   peakG?: number;
-  /** speeding: mph past the speeding line summed over the over rows after the grace (1 dp); the Speed weight reads it. */
+  /** speeding: mph past the speeding line summed over every over row (1 dp); the Speed weight reads it. */
   overMphS?: number;
   /** phone_pickup: the highest trusted GPS speed from the pickup's start through its last use row, mph (1 dp). */
   maxSpeedMph?: number;
@@ -119,8 +120,6 @@ export interface OpenEpisode {
   /** The tier so far (speeding: the current row's). */
   tier: Tier;
   startedAt: number;
-  /** Long enough to count as an incident (speeding: past the 5-s grace). */
-  confirmed: boolean;
 }
 
 /** The three hard-movement kinds. */
@@ -151,10 +150,8 @@ export interface SpeedingEpisode {
   startedAt: number;
   /** Over rows so far (`durationS` if it closed now). */
   overRows: number;
-  /** mph past the line summed over the over rows after the grace, unrounded (0 within the grace). */
+  /** mph past the line summed over every over row, unrounded. */
   overMphS: number;
-  /** Past the grace: it is an event. */
-  confirmed: boolean;
   /** The current row is over the line. */
   over: boolean;
 }
@@ -173,7 +170,7 @@ export interface DetectorSuite extends Detector {
   openSpeeding(): OpenEpisode | null;
   /**
    * The speeding detector's reading of the latest row: null when it could not use it (no posted
-   * limit it acts on, an unknown or untrusted speed, a poor fix, the warm-up).
+   * limit it acts on, an unknown or untrusted speed, a poor fix).
    */
   speedingNow(): SpeedingReading | null;
   /** The speeding episode in progress, its end window included (whatever the current row), or null. */
@@ -182,6 +179,6 @@ export interface DetectorSuite extends Detector {
   harshAlerts(): HarshAlert[];
   /** The phone pickup alerts the latest row raised (at most one; each told once). */
   phoneAlerts(): PhoneAlert[];
-  /** A speeding episode past its grace is active on the latest row: its distance is not safe miles. */
+  /** A speeding episode is active on the latest row: its distance is not safe miles. */
   unsafe(): boolean;
 }

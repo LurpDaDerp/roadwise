@@ -61,7 +61,7 @@ Deno.test({
       assertEquals([r1.scored, r1.reason, r1.mergedInto, r1.eventIds, r1.achievements, r1.rating.ranked], [true, null, null, [EVENT, PICKUP], ['first_drive'], true]);
       assert(typeof r1.rating.safetyRating === 'number');
       const [t1] = await sql`select origin, not_driving_expired, slowdowns, speedups, turns, limit_s, moving_s, phone_s, n_events, scoring_version from public.trips where id = ${r1.tripId}::uuid`;
-      assertEquals([t1.origin, t1.not_driving_expired, t1.slowdowns, t1.speedups, t1.turns, t1.limit_s, t1.moving_s, t1.phone_s, t1.n_events, t1.scoring_version], ['auto', false, 18, 17, 11, 1200, 1650, 1500, 2, 8]);
+      assertEquals([t1.origin, t1.not_driving_expired, t1.slowdowns, t1.speedups, t1.turns, t1.limit_s, t1.moving_s, t1.phone_s, t1.n_events, t1.scoring_version], ['auto', false, 18, 17, 11, 1200, 1650, 1500, 2, 9]);
       const [p1] = await sql`select type, tier, duration_s, measured from public.trip_events where client_event_id = ${PICKUP}::uuid`;
       assertEquals([p1.type, p1.tier, Number(p1.duration_s), p1.measured], ['phone_pickup', 'severe', 24, { speedMph: 31.2, maxSpeedMph: 38.4 }]);
       const [rating] = await sql`select private.rating_at(${user}::uuid, now()) -> 'scores' ->> 'phone' as phone`;
@@ -96,7 +96,7 @@ Deno.test({
       assertEquals([r2.mergedInto, r2.clientTripId, r2.tripId, r2.eventIds.length], [TRIP, TRIP_2, r1.tripId, 3]);
       const [union] = await sql`select miles, n_hard_brake, polyline, duration_s, scoring_version, origin, not_driving_expired, slowdowns, phone_s from public.trips where id = ${r1.tripId}::uuid`;
       // the union keeps the first leg's origin, ORs the "Not driving?" flag and sums the counters (3 mi in 18 min, 10 mph, estimates 9 slowdowns and no phone seconds)
-      assertEquals([Number(union.miles), union.n_hard_brake, union.duration_s, union.scoring_version, union.origin, union.not_driving_expired, union.slowdowns, union.phone_s], [15, 2, 2880, 8, 'auto', true, 27, 1500]);
+      assertEquals([Number(union.miles), union.n_hard_brake, union.duration_s, union.scoring_version, union.origin, union.not_driving_expired, union.slowdowns, union.phone_s], [15, 2, 2880, 9, 'auto', true, 27, 1500]);
       assertEquals(union.polyline, `${base.polyline} ${second.polyline}`);
 
       // 4. report the first hard brake as a hazard: accepted, the event removed, one brake left
@@ -163,7 +163,7 @@ Deno.test({
       const r4 = await fromV4.json();
       assertEquals(r4.mergedInto, null);
       const [t4] = await sql`select phone_s, moving_s, scoring_version from public.trips where id = ${r4.tripId}::uuid`;
-      assertEquals([t4.phone_s, t4.moving_s, t4.scoring_version], [0, 1100, 8]);
+      assertEquals([t4.phone_s, t4.moving_s, t4.scoring_version], [0, 1100, 9]);
     } finally {
       await deleteTestUser(sql, user);
       await engine.close();

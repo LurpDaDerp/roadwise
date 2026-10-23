@@ -136,7 +136,7 @@ export type HudScreenProps = {
  *   tolerance), faster the further over, and stops on the first row back under it. A DashPal alert
  *   (driver-not-visible included): warmer and faster the more serious and the longer. A hard brake,
  *   hard start or sharp turn, and each DashPal alert start or step (not a reconnect's re-send),
- *   pulse it quickly a few times. Each event (a speeding episode at its grace end too) shakes the
+ *   pulse it quickly a few times. Each event (a speeding episode as it alerts too) shakes the
  *   ring sideways once, more for a more serious one. Around it a compass turns with the car's track
  *   bearing (the engine's, from where the car went; heading up, never growing or moving with the
  *   ring); before the drive's first one, in portrait on iOS, with the phone's own heading, smoothed

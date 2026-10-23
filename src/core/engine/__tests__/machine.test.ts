@@ -287,10 +287,11 @@ describe('the warm-up in a live drive (Start Drive at any speed)', () => {
     expect(s.events).toEqual([expect.objectContaining({ type: 'phone_pickup', startedAt: T0 + 10_000, durationS: 3 })]);
   });
 
-  test('a stopped start (first reading 0 mph) keeps the 30 s', async () => {
+  test('a stopped start (first reading 0 mph) keeps the 30 s for hard events; speeding and a pickup in them count', async () => {
     const s = await drive(false, [...at(0, 5, { speed: 0 }), ...at(5, 5, { speed: mph(40) }), ...at(10, 3, { speed: mph(40), ...handled }), ...at(13, 5, { speed: mph(40) })]);
     expect(s.warmup).toMatchObject({ decided: true, endsAt: T0 + 30_000 });
-    expect(types(s)).toEqual([]);
+    expect(types(s).sort()).toEqual(['phone_pickup', 'speeding']);
+    expect(s.events.find((e) => e.type === 'speeding')).toMatchObject({ startedAt: T0 + 5000, durationS: 13 });
   });
 
   test('a continuation (continues) that starts stopped has no warm-up', async () => {
@@ -298,11 +299,11 @@ describe('the warm-up in a live drive (Start Drive at any speed)', () => {
     expect(s.warmup).toMatchObject({ continues: true, endsAt: T0 });
   });
 
-  test('speeding counts from the first trusted reading of a moving start, and only after 30 s on a stopped one', async () => {
+  test('speeding counts from the first over row, on a moving start and a stopped one alike (no warm-up for speeding)', async () => {
     const moving = await drive(false, [...at(0, 20, { speed: mph(55) }), ...at(20, 10, { speed: mph(30) })]);
     expect(moving.events.filter((e) => e.type === 'speeding').map((e) => [e.startedAt, e.durationS])).toEqual([[T0, 20]]);
     const stopped = await drive(false, [...at(0, 1, { speed: 0 }), ...at(1, 39, { speed: mph(55) }), ...at(40, 10, { speed: mph(30) })]);
-    expect(stopped.events.filter((e) => e.type === 'speeding').map((e) => [e.startedAt, e.durationS])).toEqual([[T0 + 30_000, 10]]);
+    expect(stopped.events.filter((e) => e.type === 'speeding').map((e) => [e.startedAt, e.durationS])).toEqual([[T0 + 1000, 39]]);
   });
 
   test('a hard brake 10 s into a moving start counts; on a stopped start it does not', async () => {
@@ -423,12 +424,12 @@ describe('the driving screen contract', () => {
       const s = h.engine.snapshot();
       return { ratio: s.speedingRatio, shown: tintRatio(s.speedMps, s.limitMph) };
     };
-    // In the warm-up (a start from a standstill) the detector cannot use the row, but the tint already follows the sign.
+    // The first seconds of a start from a standstill: the tint already follows the sign.
     await feed(h, [row({ speed: 0, ts: T0 + 1000 }), row({ speed: mph(42), ts: T0 + 2000 })]);
     expect(ratioNow().ratio).not.toBeNull();
     expect(ratioNow().ratio).toBe(ratioNow().shown);
     expect(ratioNow().ratio!).toBeGreaterThan(1);
-    expect(h.engine.snapshot().speedingOver).toBe(false);
+    expect(h.engine.snapshot().speedingOver).toBe(true);
     // A steady 35 on a 35: at the limit, not over the line (L + T = 39).
     await feed(h, after(5, { speed: mph(35) }));
     expect(h.engine.snapshot().speedingRatio).toBeCloseTo(1, 2);
@@ -521,7 +522,7 @@ describe('speeding alerts and the event shake', () => {
   }
   const rowOf = (at: number) => (at - T0 - 31_000) / 1000;
 
-  test('the first over row alerts at once; the chime repeats while over and as the grace ends, where the halo shakes once', async () => {
+  test('the first over row alerts at once and shakes the halo once; the chime repeats while over', async () => {
     const h = await started();
     await feed(h, over(20, 47));
     const speeding = h.alerts.filter((a) => a.type === 'speeding');
@@ -529,26 +530,29 @@ describe('speeding alerts and the event shake', () => {
     expect(speeding.map((a) => [rowOf(a.at), a.repeat === true])).toEqual([
       [0, false],
       [3, true],
-      [5, true],
-      [8, true],
-      [11, true],
-      [14, true],
-      [17, true],
+      [6, true],
+      [9, true],
+      [12, true],
+      [15, true],
+      [18, true],
     ]);
     // No points ride on any alert.
     for (const a of speeding) expect(Object.keys(a).sort()).toEqual(a.repeat ? ['at', 'id', 'repeat', 'tier', 'type'] : ['at', 'id', 'tier', 'type']);
-    // The repeats never touch lastAlert (no banner); the grace end is the one shake.
+    // The repeats never touch lastAlert (no banner) and never shake; the first over row is the one shake.
     expect(h.engine.snapshot().lastAlert).toMatchObject({ type: 'speeding', at: T0 + 31_000 });
-    expect(h.engine.snapshot().lastShake).toEqual({ key: `${speeding[0]!.id}:grace`, at: T0 + 31_000 + 5000, tier: 'moderate' });
+    expect(h.engine.snapshot().lastShake).toEqual({ key: speeding[0]!.id, at: T0 + 31_000, tier: 'moderate' });
     const keys = new Set(h.snapshots.map((s) => s.lastShake?.key).filter((k) => k !== undefined));
     expect(keys.size).toBe(1);
   });
 
-  test('back under the line within the grace: one alert, no shake', async () => {
+  test('a short episode, back under the line in 5 s: one alert and one shake, and an event of 5 s', async () => {
     const h = await started();
     await feed(h, [...over(5, 45), ...over(10, 30, 5)]);
-    expect(h.alerts.filter((a) => a.type === 'speeding' && a.repeat !== true)).toHaveLength(1);
-    expect(h.engine.snapshot().lastShake).toBeNull();
+    const shown = h.alerts.filter((a) => a.type === 'speeding' && a.repeat !== true);
+    expect(shown).toHaveLength(1);
+    expect(h.engine.snapshot().lastShake).toMatchObject({ key: shown[0]!.id, at: T0 + 31_000 });
+    await h.engine.dispatch({ type: 'end', ts: T0 + 50_000 });
+    expect(h.finalized[0]!.events.filter((e) => e.type === 'speeding').map((e) => e.durationS)).toEqual([5]);
   });
 
   test('hovering at the line is one episode: no new alert, repeats only on rows over the line; 5 s under the buffer ends it', async () => {
@@ -566,20 +570,20 @@ describe('speeding alerts and the event shake', () => {
     expect(shown()).toHaveLength(2);
   });
 
-  test('the cadence quickens the further over and the longer it lasts: repeats never under 2 s apart, the grace end sounds at once', async () => {
+  test('the cadence quickens the further over and the longer it lasts: repeats never under 2 s apart', async () => {
     const h = await started();
     await feed(h, over(60, 70));
     const at = h.alerts.filter((a) => a.type === 'speeding').map((a) => rowOf(a.at));
     const gaps = at.slice(1).map((t, i) => t - at[i]!);
-    // 31 past the line: 8 / 7.2 s ≈ 1.1, held at the 2-s floor (the grace end at row 5 sounds at once).
-    expect(gaps.every((g) => g >= 1 && g <= 2)).toBe(true);
-    expect(gaps.filter((g) => g === 1)).toHaveLength(1);
+    // 31 past the line: 8 / 7.2 s ≈ 1.1, held at the 2-s floor.
+    expect(gaps.length).toBeGreaterThan(20);
+    expect(gaps.every((g) => g === 2)).toBe(true);
   });
 
-  test('a replayed row (a journal drained, rows moved into a re-opened drive) tells its alerts but never shows or shakes them: a hard brake, speeding and its grace end alike', async () => {
+  test('a replayed row (a journal drained, rows moved into a re-opened drive) tells its alerts but never shows or shakes them: a hard brake and speeding alike', async () => {
     const steady = { aLonMax: 0.02, aLonMin: -0.02 };
     const at = (fromS: number, n: number, o: Partial<FeatureRow>) => seq([n, (i) => ({ ...o, ts: T0 + 31_000 + (fromS + i) * 1000 })]);
-    // 60 on a 35 for 5 rows (over the line, its grace ending), then a hard brake to 50.
+    // 60 on a 35 for 5 rows (over the line), then a hard brake to 50.
     const list = [...at(0, 5, { speed: mph(60), ...steady }), ...at(5, 1, { speed: mph(50), aLonMax: 0.02, aLonMin: -0.35 }), ...at(6, 4, { speed: mph(50), ...steady })];
     const replayed = await started();
     for (const r of list) await replayed.engine.dispatch({ type: 'row', row: r, replay: true });
@@ -598,18 +602,21 @@ describe('speeding alerts and the event shake', () => {
     expect(replayed.engine.snapshot().lastShake).toMatchObject({ at: T0 + 41_000 });
   });
 
-  test('a hard brake shakes with its tier; on the row the speeding grace ends the two are one shake, the grace’s key', async () => {
+  test('a hard brake shakes with its tier; a speeding episode shakes on its first over row, never again', async () => {
     const h = await started();
     // 60 on a 35 for 5 rows, then a hard brake to 50 on the 6th over row (still over the line, 39).
     const steady = { aLonMax: 0.02, aLonMin: -0.02 };
     const at = (fromS: number, n: number, o: Partial<FeatureRow>) => seq([n, (i) => ({ ...o, ts: T0 + 31_000 + (fromS + i) * 1000 })]);
     await feed(h, [...at(0, 5, { speed: mph(60), ...steady }), ...at(5, 1, { speed: mph(50), aLonMax: 0.02, aLonMin: -0.35 }), ...at(6, 4, { speed: mph(50), ...steady })]);
     const brakeRow = T0 + 31_000 + 5000;
-    expect(h.alerts.filter((a) => a.at === brakeRow).map((a) => a.type)).toEqual(['hard_brake', 'speeding']);
-    // The state is published once per row: that row carries one shake.
-    const published = h.snapshots.map((s) => s.lastShake).filter((d) => d !== null && d.at === brakeRow);
-    expect(new Set(published.map((d) => d!.key)).size).toBe(1);
-    expect(published[0]!.key).toMatch(/:grace$/);
+    const first = h.alerts.find((a) => a.type === 'speeding')!;
+    expect(first.at).toBe(T0 + 31_000);
+    expect(h.snapshots.some((st) => st.lastShake?.key === first.id && st.lastShake.at === T0 + 31_000)).toBe(true);
+    // The brake's row carries one shake, the brake's.
+    const published = h.snapshots.map((st) => st.lastShake).filter((d) => d !== null && d.at === brakeRow);
+    const brakeAlert = h.alerts.find((a) => a.type === 'hard_brake')!;
+    expect(new Set(published.map((d) => d!.key))).toEqual(new Set([brakeAlert.id]));
+    expect(h.snapshots.filter((st) => st.lastShake?.key === first.id).every((st) => st.lastShake!.at === T0 + 31_000)).toBe(true);
 
     const b = await started();
     await feed(b, [...at(0, 5, { speed: mph(30), ...steady }), ...at(5, 1, { speed: mph(15), aLonMax: 0.02, aLonMin: -0.5 }), ...at(6, 4, { speed: mph(15), ...steady })]);

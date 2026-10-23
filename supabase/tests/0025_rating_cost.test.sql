@@ -1,6 +1,6 @@
 -- the rating's cost at scale: a driver with 3,000 back-dated drives (and about 9,000 events) in the
 -- 90-day window. private.rating_at agrees to the digit with the per-drive loop it replaced (kept
--- here as the reference, with Phone use since 0026), get_profile reads the rating once, and
+-- here as the reference, with Phone use since 0026 and the 0028 weights), get_profile reads the rating once, and
 -- get_my_summary reads the stored week-ago rating instead of computing one. The timings print as a
 -- diag line.
 create extension if not exists pgtap with schema extensions;
@@ -42,14 +42,14 @@ begin
       (select count(*) from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'hard_corner') as t_n,
       coalesce((select sum(private.event_weight_of(e.type, e.tier, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
                 from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'speeding'), 0::float8) as s_w,
-      coalesce((select sum(greatest(1::float8, greatest(0::float8, e.duration_s::float8) - 5::float8) order by e.started_at, e.client_event_id)
+      coalesce((select sum(greatest(1::float8, greatest(0::float8, e.duration_s::float8)) order by e.started_at, e.client_event_id)
                 from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'speeding'), 0::float8) as s_n,
       coalesce((select sum(private.event_weight_of(e.type, e.tier, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
                 from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'phone_pickup'), 0::float8) as p_w,
       coalesce((select sum(least(43200::float8, greatest(0::float8, e.duration_s::float8)) order by e.started_at, e.client_event_id)
                 from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'phone_pickup'), 0::float8) as p_n,
-      coalesce((select sum(private.attention_penalty_of(e.type))
-                from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type in ('eyes_off', 'drowsy')), 0) as att
+      coalesce((select sum(private.attention_weight(e.type, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
+                from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type in ('eyes_off', 'drowsy')), 0::float8) as att
     from public.trips t
     where t.user_id = p_user and t.scored and not t.not_driving and t.merged_into is null
       and t.started_at > p_at - interval '2160 hours' and t.started_at <= p_at
@@ -62,7 +62,7 @@ begin
     tw := tw + w * r.t_w;  tow := tow + w * greatest(coalesce(r.turns, 0), r.t_n)::float8;
     sw := sw + w * r.s_w;  so := so + w * greatest(coalesce(r.limit_s, 0)::float8, r.s_n);
     pw := pw + w * r.p_w;  po := po + w * greatest(coalesce(r.phone_s, 0)::float8, r.p_n);
-    ap := ap + w * r.att::float8;  am := am + w * r.watched;
+    ap := ap + w * r.att;  am := am + w * r.watched;
   end loop;
   if v_miles <= 0 then
     return jsonb_build_object('rating', null, 'ranked', false, 'miles', 0, 'scores', jsonb_build_object(
@@ -123,7 +123,8 @@ insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_d
   cross join lateral (select case when k <= 20 then now() - interval '2160 hours' - make_interval(hours => k - 1)
                                   else now() + make_interval(hours => k - 20) end as s) x;
 -- 0 to 6 events a drive, every type and tier, some removed, some starting together (event order
--- falls to client_event_id), speeding with and without a measured overMphS
+-- falls to client_event_id), speeding with and without a measured overMphS, hard events with and
+-- without a peak, DashPal events at a speed and a length
 insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, started_at, duration_s, measured, status)
   select t.id, md5('ev-' || g.i || '-' || k)::uuid, t.user_id,
     (array['hard_brake', 'hard_accel', 'hard_corner', 'speeding', 'phone_pickup', 'eyes_off', 'drowsy'])[1 + (g.i + k) % 7],
@@ -131,9 +132,12 @@ insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, s
          when (g.i + k) % 7 = 4 then case when 1 + (g.i * k) % 40 > 15 then 'severe' else 'moderate' end
          else (array['minor', 'moderate', 'severe'])[1 + (g.i * k) % 3] end,
     t.started_at + make_interval(secs => case when g.i % 4 = 0 and k = 3 then 60 else k * 30 end),
-    case when (g.i + k) % 7 = 3 then 3.5 + (g.i * k) % 90 when (g.i + k) % 7 = 4 then 1 + (g.i * k) % 40 else 1.5 end,
+    case when (g.i + k) % 7 = 3 then 3.5 + (g.i * k) % 90 when (g.i + k) % 7 = 4 then 1 + (g.i * k) % 40
+         when (g.i + k) % 7 >= 5 then 0.5 + (g.i * k) % 23 else 1.5 end,
     case when (g.i + k) % 7 = 3 and (g.i + k) % 4 <> 0 then jsonb_build_object('overMphS', (g.i * k) % 400 + 0.25)
          when (g.i + k) % 7 = 4 then jsonb_build_object('speedMph', 20 + (g.i * k) % 30, 'maxSpeedMph', 25 + (g.i * k) % 30)
+         when (g.i + k) % 7 < 3 and (g.i + k) % 3 <> 0 then jsonb_build_object('peakG', 0.3 + ((g.i * k) % 37) * 0.01)
+         when (g.i + k) % 7 >= 5 then jsonb_build_object('source', 'dashcam', 'speedMph', 10 + (g.i * k) % 70)
          else '{}'::jsonb end,
     case when (g.i * 3 + k) % 11 = 0 then 'removed' else 'active' end
   from g join public.trips t on t.client_trip_id = g.cid and t.user_id = '00000000-0000-0000-0000-0000000000a1'

@@ -87,7 +87,7 @@ export interface DriveLive {
   speedingOver: boolean;
   /** The last GPS course (degrees clockwise from true north) taken at 5 mph or more, held; null before the first. */
   courseDeg: number | null;
-  /** The latest event the halo shakes on (a hard event, a speeding episode's grace end), with its tier; null before the first. */
+  /** The latest event the halo shakes on (a hard event, a phone pickup, a speeding episode as it alerts), with its tier; null before the first. */
   lastShake: EventShake | null;
   stopped: boolean;
   lastAlert: { type: EventType; tier: Tier; at: number } | null;

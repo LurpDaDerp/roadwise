@@ -1,7 +1,7 @@
 /** @jest-environment node */
 // Finalize with the DashPal dashcam's facts (plan §8.4): candidates → scored eyes_off / drowsy
 // events under the scoring rules, seconds → the payload's dashcam block. Edge-case rows 33 (speed,
-// GPS, first 30 s), 36 (per-drive limits) and 37 (not a DashPal drive, payload still valid).
+// GPS, inside the drive), 36 (every episode counts) and 37 (not a DashPal drive, payload still valid).
 import { dashcamDrive } from '@scoring';
 
 import { T0 } from '@/core/detectors/__fixtures__/rows';
@@ -95,7 +95,7 @@ describe('finalizeTrip with DashPal facts', () => {
     expect(JSON.parse(result.events[0]!.measured_json!)).toEqual({ source: 'dashcam', speedMph: 33.457 });
   });
 
-  test('row 33: a candidate under 10 mph, without a good GPS fix, in the first 30 s or outside the drive is not scored', async () => {
+  test('row 33: a candidate under 10 mph, without a good GPS fix or outside the drive is not scored', async () => {
     const result = await finalizeTrip(
       session(),
       deps(async () =>
@@ -103,7 +103,7 @@ describe('finalizeTrip with DashPal facts', () => {
           events: [
             cand(1, 'drowsy', 100, { speedMph: 9.99 }),
             cand(2, 'eyes_off', 200, { speedMph: null }),
-            cand(3, 'drowsy', 29.999),
+            cand(3, 'drowsy', -0.001),
             cand(4, 'eyes_off', 1200.001),
             cand(5, 'drowsy', 400, { startedAt: Number.NaN }),
             cand(6, 'drowsy', 30, { speedMph: 10 }),
@@ -111,22 +111,21 @@ describe('finalizeTrip with DashPal facts', () => {
         })
       )
     );
-    // only the one at exactly 30 s and exactly 10 mph
+    // only the one at exactly 10 mph inside the drive
     expect(result.payload!.events.map((e) => e.id)).toEqual([cid(6)]);
   });
 
-  test('the warm-up is the drive’s own: a candidate 5 s in is scored when the warm-up ended at 2 s (a start while moving), not on a stopped start', async () => {
+  test('no warm-up: a candidate in the first seconds of a drive, stopped start or moving, is scored', async () => {
     const loader = async () => facts({ events: [cand(1, 'drowsy', 5), cand(2, 'eyes_off', 1)] });
     const moving = { ...session(), warmup: Object.freeze({ continues: false, decided: true, endsAt: at(2) }) };
-    expect((await finalizeTrip(moving, deps(loader))).payload!.events.map((e) => e.id)).toEqual([cid(1)]);
+    expect((await finalizeTrip(moving, deps(loader))).payload!.events.map((e) => e.id)).toEqual([cid(2), cid(1)]);
     await db.execute('DELETE FROM trips');
     await db.execute('DELETE FROM sync_queue');
-    expect((await finalizeTrip(session(), deps(loader))).payload!.events).toEqual([]);
-    expect(dashcamEvents([cand(1, 'drowsy', 5)], { startedAt: T0, endedAt: at(100), warmupEndsAt: T0 }, []).map((e) => e.id)).toEqual([cid(1)]);
-    expect(dashcamEvents([cand(1, 'drowsy', 5)], { startedAt: T0, endedAt: at(100) }, [])).toEqual([]);
+    expect((await finalizeTrip(session(), deps(loader))).payload!.events.map((e) => e.id)).toEqual([cid(2), cid(1)]);
+    expect(dashcamEvents([cand(1, 'drowsy', 0)], { startedAt: T0, endedAt: at(100) }, []).map((e) => e.id)).toEqual([cid(1)]);
   });
 
-  test('row 36: at most one drowsy per 10 min and one eyes-off per 5 min, the earliest kept', async () => {
+  test('row 36: every episode counts, however close to the last of its kind', async () => {
     const result = await finalizeTrip(
       session(),
       deps(async () =>
@@ -145,7 +144,7 @@ describe('finalizeTrip with DashPal facts', () => {
         })
       )
     );
-    expect(result.payload!.events.map((e) => e.id)).toEqual([cid(5), cid(1), cid(7), cid(4), cid(9)]);
+    expect(result.payload!.events.map((e) => e.id)).toEqual([cid(5), cid(1), cid(6), cid(7), cid(8), cid(2), cid(3), cid(4), cid(9)]);
     expect(result.drive.activeEventCount).toBe(0);
   });
 

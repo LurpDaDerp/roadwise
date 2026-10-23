@@ -10,8 +10,6 @@ import {
   AXES,
   AXIS_WEIGHT,
   CAMERA_DISPUTE_AUTO_PER_WEEK,
-  DASHCAM_DROWSY_GAP_S,
-  DASHCAM_EYES_OFF_GAP_S,
   DASHCAM_MIN_MPH,
   DISPUTE_AUTO_PER_WEEK,
   IDLE_END_S,
@@ -24,7 +22,7 @@ import {
   PHONE_PUTDOWN_QUIET_S,
   RANKED_MIN_MILES,
   RATING_WINDOW_DAYS,
-  SPEEDING_GRACE_S,
+  SPEED_FACTOR,
   speedTolerance,
   type AxisKey,
 } from '@scoring';
@@ -65,8 +63,6 @@ export interface DriveNumbers {
   notDrivingMin: number;
 }
 
-/** "every 5 min" from seconds. */
-const everyMin = (s: number) => `every ${Math.round(s / 60)} min`;
 const IDLE_MIN = Math.round(IDLE_END_S / 60);
 const MERGE_MIN = Math.round(MERGE_GAP_S / 60);
 
@@ -124,6 +120,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
       'Every drive gets a score from 0 to 100 for braking, starts, turns, speed and phone use, plus attention when DashPal rides along. A drive with no events scores 100.',
       'Each one is judged against your chances: hard brakes against the times you slowed down, hard starts against the times you sped up, and sharp turns against the real turns you made. A busy city drive isn’t marked down just for having more stops.',
       'Speed is judged by how much of your driving time with a known limit you spent over it, and by how far over.',
+      'Every event counts, and a more serious one counts more: a harder brake, start or turn, a longer or faster stretch over the limit, a longer pickup or one at a higher speed. Each is weighed against the whole drive, so one event marks a long drive down less than a short one.',
       autoDrives
         ? `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, it isn’t saved at all.`
         : `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving isn’t saved at all.`,
@@ -136,7 +133,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     icon: 'speedometer-outline',
     lines: [
       `Speeding starts a few mph over the posted limit: ${speedTolerance(25)} over at 25 mph, ${speedTolerance(35)} at 35, ${speedTolerance(45)} at 45, ${speedTolerance(55)} at 55 and ${speedTolerance(65)} at 65 (${speedTolerance(25, 'school')} in a school or construction zone).`,
-      `You hear a chime when you cross that line. Ease off within ${SPEEDING_GRACE_S} s and it doesn’t count.`,
+      `You hear a chime and see “${hudCopy.alert.speeding}” when you cross that line. Every second over it counts, and more the further over you are.`,
       'Where the limit isn’t known, nothing counts as speeding.',
     ],
   },
@@ -148,7 +145,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
       'RoadWise feels for your phone being picked up while you drive, from its motion alone. It never sees your screen, your apps or your messages.',
       `A pickup counts once the car is going ${PHONE_PICKUP_MIN_MPH} mph or more. Pick it up at a red light and put it down before you pull away, and it doesn’t count.`,
       `Every second it stays in your hand while you’re moving adds to it. Put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s and it’s still one pickup.`,
-      `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, judged against your time at driving speed, so a long drive isn’t marked down for being long.`,
+      `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at ${2 * SPEED_FACTOR.refMph} mph as at ${SPEED_FACTOR.refMph}), judged against your time at driving speed, so a long drive isn’t marked down for being long.`,
       `With the drive screen open, you hear a tone and see “${hudCopy.alert.phone_pickup}”. With RoadWise in the background, you get a quiet notification instead.`,
     ],
   },
@@ -195,7 +192,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     icon: 'videocam-outline',
     lines: [
       'With a DashPal, eyes off the road and drowsiness count toward Attention, only on the miles it watched.',
-      `They count only at ${DASHCAM_MIN_MPH} mph or more with good GPS, at most once ${everyMin(DASHCAM_EYES_OFF_GAP_S)} for eyes off and once ${everyMin(DASHCAM_DROWSY_GAP_S)} for drowsiness.`,
+      `They count only at ${DASHCAM_MIN_MPH} mph or more with good GPS. Each one counts more the faster you were going and the longer it lasted.`,
       'DashPal may alarm at lower speeds, even stopped. Those alarms don’t count.',
       'Without a DashPal, Attention is left out and your rating comes from the rest.',
     ],

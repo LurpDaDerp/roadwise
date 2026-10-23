@@ -16,21 +16,17 @@
 // score, is not finalized at all: `closeDrive` drops it (nothing stored or queued).
 //
 // DashPal: before any of that, the dashcam's facts for the drive are read once. Its candidates
-// become severe `eyes_off` / `drowsy` events under the scoring rules (once the drive's warm-up is
-// over, at 10 mph or more on a good fix, at most one drowsy per 10 min and one eyes-off per 5 min),
-// and its seconds become the payload's `dashcam` block.
+// become severe `eyes_off` / `drowsy` events under the scoring rules (inside the drive, at 10 mph or
+// more on a good fix; every such episode counts), and its seconds become the payload's `dashcam`
+// block.
 import {
   classifyDrive,
-  DASHCAM_DROWSY_GAP_S,
-  DASHCAM_EYES_OFF_GAP_S,
   DASHCAM_MIN_MPH,
   MERGE_GAP_S,
-  NO_EVENTS_FIRST_S,
   isDashcamType,
   phonePickupTier,
   tooShort,
   watchedMiles,
-  type DashcamEventType,
   type DriveClass,
   type DriveEvent,
   type Exposure,
@@ -144,37 +140,31 @@ export function normaliseZone(raw: string | null | undefined): string {
 /** A lowercase uuid the upload contract (`z.uuid()`) and the server (`apply_drive`) both accept. */
 const EVENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DASHCAM_ID = /^[0-9a-f]{12}$/;
-const GAP_MS: Readonly<Record<DashcamEventType, number>> = { drowsy: DASHCAM_DROWSY_GAP_S * 1000, eyes_off: DASHCAM_EYES_OFF_GAP_S * 1000 };
 
 const candidateDuration = (c: DashcamCandidate): number => (Number.isFinite(c.durationS) ? Math.max(0, c.durationS) : 0);
 
 /**
- * The scored DashPal events of a drive from the dashcam's candidates, in time order: kept only when
- * they start once the drive's warm-up is over (`warmupEndsAt`; default `NO_EVENTS_FIRST_S` after
- * the start) and by its end, at a known GPS speed of `DASHCAM_MIN_MPH` or more (an unknown speed
- * drops it); then at most one drowsy per `DASHCAM_DROWSY_GAP_S` and one eyes-off per
- * `DASHCAM_EYES_OFF_GAP_S`, the earliest kept. A candidate whose id is not a lowercase uuid, or
- * repeats an id already on the drive, is dropped rather than refuse the whole upload.
+ * The scored DashPal events of a drive from the dashcam's candidates (each one episode, alerts within
+ * 60 s of each other joined), in time order: every one that starts inside the drive (from its start,
+ * no warm-up) at a known GPS speed of `DASHCAM_MIN_MPH` or more (an unknown speed drops it). A
+ * candidate whose id is not a lowercase uuid, or repeats an id already on the drive, is dropped
+ * rather than refuse the whole upload.
  */
 export function dashcamEvents(
   candidates: readonly DashcamCandidate[],
-  trip: { startedAt: number; endedAt: number; warmupEndsAt?: number },
+  trip: { startedAt: number; endedAt: number },
   driveEvents: readonly Pick<DriveEvent, 'id' | 'type' | 'startedAt' | 'durationS' | 'status'>[]
 ): DetectedEvent[] {
-  const earliest = trip.warmupEndsAt ?? trip.startedAt + NO_EVENTS_FIRST_S * 1000;
   const taken = new Set(driveEvents.map((e) => e.id));
   const eligible = candidates
     .filter((c) => (c.kind === 'eyes_off' || c.kind === 'drowsy') && typeof c.id === 'string' && EVENT_UUID.test(c.id) && !taken.has(c.id))
-    .filter((c) => Number.isFinite(c.startedAt) && c.startedAt >= earliest && c.startedAt <= trip.endedAt)
+    .filter((c) => Number.isFinite(c.startedAt) && c.startedAt >= trip.startedAt && c.startedAt <= trip.endedAt)
     .filter((c) => c.speedMph !== null && Number.isFinite(c.speedMph) && c.speedMph >= DASHCAM_MIN_MPH)
     .slice()
     .sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const lastKept: Partial<Record<DashcamEventType, number>> = {};
   const out: DetectedEvent[] = [];
   for (const c of eligible) {
-    const prev = lastKept[c.kind];
-    if (taken.has(c.id) || (prev !== undefined && c.startedAt - prev < GAP_MS[c.kind])) continue;
-    lastKept[c.kind] = c.startedAt;
+    if (taken.has(c.id)) continue;
     taken.add(c.id);
     out.push({
       id: c.id,
@@ -426,7 +416,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const [fromLabel, toLabel] = await Promise.all([labelFor(from, zones, geocode), labelFor(session.lastFix, zones, geocode)]);
 
   const phoneEvents = session.events.filter((e) => e.startedAt < endedAt + 2000).map((e) => sanitizeEvent(e, startedAt, endedAt));
-  const fromDashcam = dashcamEvents(facts?.events ?? [], { startedAt, endedAt, warmupEndsAt: session.warmup.endsAt }, phoneEvents).map((e) => sanitizeEvent(e, startedAt, endedAt));
+  const fromDashcam = dashcamEvents(facts?.events ?? [], { startedAt, endedAt }, phoneEvents).map((e) => sanitizeEvent(e, startedAt, endedAt));
   const cleaned = [...phoneEvents, ...fromDashcam]
     .sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1))
     .slice(0, MAX_EVENTS);

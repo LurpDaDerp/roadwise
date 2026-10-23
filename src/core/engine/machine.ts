@@ -14,12 +14,12 @@
 // sooner one ends at the tap. `cancel` ("Not driving?") discards the drive: never finalized.
 //
 // Alerts (`deps.onAlert`; the HUD shows `lastAlert`): speeding as the car first passes the speeding
-// line, then the chime again while the row stays over it (`speedingRepeatS`, and as the grace
-// ends; sounded only, never `lastAlert`); a hard brake, start or turn the row it is confirmed; a
+// line, then the chime again while the row stays over it (`speedingRepeatS`; sounded only, never
+// `lastAlert`); a hard brake, start or turn the row it is confirmed; a
 // phone pickup the row it is confirmed, then again (sounded only) as its time in hand reaches 15 s
 // and every 60 s more (`detectors/phoneUse.ts`). The halo shakes (`lastShake`) on a hard event and
-// a phone pickup as they alert (never on a repeat) and on a speeding episode as its grace ends; two
-// on one row are one shake, the later key's. Where a phone alert plays is the host's call.
+// a phone pickup and a speeding episode as they alert (never on a repeat); two on one row are one
+// shake, the later key's. Where a phone alert plays is the host's call.
 //
 // A reducer over one explicit state, driven by 1 Hz rows and a few events through a serialised
 // `dispatch`; the only clock is the `ts` on what comes in. Everything the engine wants done —
@@ -51,13 +51,11 @@ export const MANUAL_CUT_AFTER_S = 120;
 /** The compass takes the GPS course only at this speed or faster (5 mph): slower, the course is noise and the last one holds. */
 export const COURSE_MIN_MPS = 5 * MPS_PER_MPH;
 
-/** The speeding episode the alerts follow: its last sound and whether its grace has ended. */
+/** The speeding episode the alerts follow, and its last sound. */
 interface SpeedingAlerts {
   id: string;
   /** Row clock of its last sound (the first alert or a repeat). */
   lastSoundAt: number;
-  /** Its grace has ended: it is an event (the halo shook for it). */
-  graceDone: boolean;
 }
 
 interface Seen {
@@ -219,9 +217,9 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   /**
-   * Speeding: the alert on the episode's first over row (`lastAlert`); then, while the row stays
-   * over the line, the chime again every `speedingRepeatS` and on the row its grace ends (sounded
-   * only). The halo shakes as the grace ends: the episode is an event from there.
+   * Speeding: the alert ("Slow down") and the halo's shake on the episode's first over row
+   * (`lastAlert`): it is an event from there. Then, while the row stays over the line, the chime
+   * again every `speedingRepeatS` (sounded only, never shaken).
    */
   function speedingAlertsOn(row: FeatureRow, det: DetectorSuite): void {
     const ep = det.speedingEpisode();
@@ -231,21 +229,17 @@ export function createEngine(deps: EngineDeps): Engine {
     }
     const open = det.openSpeeding();
     if (speeding === null || speeding.id !== ep.id) {
-      // A new episode (or one a rebuilt drive was already in: past its grace, it does not shake again).
-      speeding = { id: ep.id, lastSoundAt: row.ts, graceDone: ep.confirmed };
-      if (ep.over && open !== null) alert(ep.id, 'speeding', open.tier, row.ts);
+      speeding = { id: ep.id, lastSoundAt: row.ts };
+      if (ep.over && open !== null) {
+        alert(ep.id, 'speeding', open.tier, row.ts);
+        shake(ep.id, row.ts, open.tier);
+      }
       return;
     }
     if (!ep.over || open === null) return;
-    const graceEnds = ep.confirmed && !speeding.graceDone;
     const overMph = det.speedingNow()?.overMph ?? 0;
-    const due = row.ts - speeding.lastSoundAt >= speedingRepeatS(overMph, (row.ts - ep.startedAt) / 1000) * 1000;
-    if (!graceEnds && !due) return;
+    if (row.ts - speeding.lastSoundAt < speedingRepeatS(overMph, (row.ts - ep.startedAt) / 1000) * 1000) return;
     speeding.lastSoundAt = row.ts;
-    if (graceEnds) {
-      speeding.graceDone = true;
-      shake(`${ep.id}:grace`, row.ts, open.tier);
-    }
     tell({ id: ep.id, type: 'speeding', tier: open.tier, at: row.ts, repeat: true });
   }
 

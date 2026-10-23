@@ -2,7 +2,8 @@
 -- a driver DashPal watched, beside the per-opportunity categories; a removed event counts nothing;
 -- list_my_drives hands the DashPal seconds back. The values are scoring ratingAt's for the same drive
 -- (2 days old, 20 mi, exposure {40, 40, 25, 2400, 3200}, a severe speeding of 30 s at 12 mph over
--- and a minor hard brake), to the digit.
+-- and a minor hard brake; the DashPal events at no measured speed, 3 s long, weigh their base), to
+-- the digit (scoring version 9: every second over the line counts).
 create extension if not exists pgtap with schema extensions;
 
 begin;
@@ -29,24 +30,24 @@ select private.apply_drive(jsonb_build_object(
   'scored', true, 'reason', null, 'scoringVersion', 7,
   'events', jsonb_build_array(
     jsonb_build_object('id', 'a1a1a1a1-0000-4000-8000-000000000001', 'type', 'speeding', 'tier', 'severe', 'startedAt', floor(extract(epoch from pg_temp.t0() + interval '1 minute') * 1000)::bigint,
-      'durationS', 30, 'lat', null, 'lng', null, 'measured', '{"overMphS": 300}'::jsonb),
+      'durationS', 30, 'lat', null, 'lng', null, 'measured', '{"overMphS": 360}'::jsonb),
     jsonb_build_object('id', 'a1a1a1a1-0000-4000-8000-000000000003', 'type', 'hard_brake', 'tier', 'minor', 'startedAt', floor(extract(epoch from pg_temp.t0() + interval '1 minute') * 1000)::bigint,
       'durationS', 2, 'lat', null, 'lng', null, 'measured', '{}'::jsonb))));
 
-select is(pg_temp.r() - 'scores', '{"miles": 20.00, "rating": 85.5, "ranked": true}'::jsonb, 'the phone''s categories alone: 85.5');
-select is(array[(pg_temp.r() -> 'scores' ->> 'speed')::float8, (pg_temp.r() -> 'scores' ->> 'braking')::float8], array[85.15585961738446::float8, 78.2358180731074],
+select is(pg_temp.r() - 'scores', '{"miles": 20.00, "rating": 85.1, "ranked": true}'::jsonb, 'the phone''s categories alone: 85.1');
+select is(array[(pg_temp.r() -> 'scores' ->> 'speed')::float8, (pg_temp.r() -> 'scores' ->> 'braking')::float8], array[84.21415492821761::float8, 78.2358180731074],
   'speed and braking to the digit');
 
 -- an eyes-off look on a drive DashPal never watched counts nothing
 insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, started_at, duration_s, measured)
   values (pg_temp.trip(), 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', '00000000-0000-0000-0000-000000000001', 'eyes_off', 'severe', pg_temp.t0() + interval '5 minutes', 3, '{"source": "dashcam"}');
 select is(pg_temp.r() -> 'scores' -> 'attention', 'null'::jsonb, 'no watched miles: Attention has no score');
-select is((pg_temp.r() ->> 'rating')::numeric, 85.5, 'and takes nothing');
+select is((pg_temp.r() ->> 'rating')::numeric, 85.1, 'and takes nothing');
 
 -- watched all 20 miles: Attention 40 over 20 watched mi joins the mean
 update public.trips set dashcam_moving_s = 1000, dashcam_covered_s = 1000 where id = pg_temp.trip();
 select is((pg_temp.r() -> 'scores' ->> 'attention')::float8, 88.88888888888889::float8, 'watched: Attention scores 40 over 20 mi');
-select is((pg_temp.r() ->> 'rating')::numeric, 86.1, 'and joins the mean');
+select is((pg_temp.r() ->> 'rating')::numeric, 85.7, 'and joins the mean');
 
 -- watched 2 of the 20 miles: Attention is over at least 10 watched miles
 update public.trips set dashcam_covered_s = 100 where id = pg_temp.trip();
@@ -56,7 +57,7 @@ select is((pg_temp.r() -> 'scores' ->> 'attention')::float8, 81.03563542067624::
 insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, started_at, duration_s, measured)
   values (pg_temp.trip(), 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', '00000000-0000-0000-0000-000000000001', 'drowsy', 'severe', pg_temp.t0() + interval '9 minutes', 3, '{"source": "dashcam"}');
 update public.trip_events set status = 'removed' where client_event_id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
-select is(array[(pg_temp.r() -> 'scores' ->> 'attention')::float8, (pg_temp.r() ->> 'rating')::float8], array[77.36756848238679::float8, 84.1],
+select is(array[(pg_temp.r() -> 'scores' ->> 'attention')::float8, (pg_temp.r() ->> 'rating')::float8], array[77.36756848238679::float8, 83.8],
   'a removed event counts nothing, a drowsy one 50');
 
 set local role authenticated;

@@ -14,7 +14,7 @@ import {
   type DriveEvent,
   type EventType,
 } from '../src/drive';
-import { PHONE_SEVERE_S, SPEEDING_GRACE_S } from '../src/thresholds';
+import { PHONE_SEVERE_S } from '../src/thresholds';
 import * as barrel from '../src';
 
 let seq = 0;
@@ -71,16 +71,20 @@ describe('speedTier — tier boundaries for every row', () => {
 });
 
 describe('speeding: charged seconds', () => {
-  test('the constants', () => expect([SPEEDING_MAX_OVER_MPH, SPEEDING_GRACE_S]).toEqual([150, 5]));
+  test('the constants', () => {
+    expect(SPEEDING_MAX_OVER_MPH).toBe(150);
+    expect(Object.keys(barrel)).not.toContain('SPEEDING_GRACE_S');
+  });
 
-  test('charged seconds: durationS less the 5 grace rows, never under 1', () => {
-    expect(speedingChargedS(6)).toBe(1);
-    expect(speedingChargedS(15)).toBe(10);
-    expect(speedingChargedS(5)).toBe(1);
+  test('charged seconds: every over-the-line row (no grace), never under 1', () => {
+    expect(speedingChargedS(1)).toBe(1);
+    expect(speedingChargedS(5)).toBe(5);
+    expect(speedingChargedS(6)).toBe(6);
+    expect(speedingChargedS(15)).toBe(15);
     expect(speedingChargedS(0)).toBe(1);
     expect(speedingChargedS(-3)).toBe(1);
     expect(speedingChargedS(Number.NaN)).toBe(1);
-    expect(speedingChargedS(35.5)).toBe(30.5);
+    expect(speedingChargedS(35.5)).toBe(35.5);
   });
 });
 
@@ -195,9 +199,9 @@ describe('keepDashcamEvents passes a phone pickup untouched', () => {
   });
 });
 
-test('SCORING_VERSION is 8 and the barrel exports the API, and nothing about points', () => {
-  expect(SCORING_VERSION).toBe(8);
-  expect(barrel.SCORING_VERSION).toBe(8);
+test('SCORING_VERSION is 9 and the barrel exports the API, and nothing about points', () => {
+  expect(SCORING_VERSION).toBe(9);
+  expect(barrel.SCORING_VERSION).toBe(9);
   expect(barrel.phonePickupTier).toBe(phonePickupTier);
   expect(barrel.classifyDrive).toBe(classifyDrive);
   expect(barrel.dashcamDrive).toBe(dashcamDrive);
@@ -228,7 +232,7 @@ test('SCORING_VERSION is 8 and the barrel exports the API, and nothing about poi
   }
 });
 
-describe('keepDashcamEvents — the DashPal limits re-applied over the whole drive', () => {
+describe('keepDashcamEvents: the DashPal speed gate re-applied', () => {
   const MIN = 60_000;
   const t = (m: number): number => 1_800_000_000_000 + m * MIN;
   const dc = (id: string, type: 'drowsy' | 'eyes_off', m: number, speedMph: unknown = 30, status?: 'active' | 'removed') => ({
@@ -250,20 +254,12 @@ describe('keepDashcamEvents — the DashPal limits re-applied over the whole dri
     expect(ids(keepDashcamEvents(up))).toEqual(['d', 'p', 'q']);
   });
 
-  test('at most one drowsy per 10 min and one eyes_off per 5 min, the earliest kept, in input order', () => {
+  test('every episode at 10 mph or more counts, however close to the last of its kind, in input order', () => {
     const up = [dc('late', 'drowsy', 9.99), dc('first', 'drowsy', 0), dc('ten', 'drowsy', 10), dc('e1', 'eyes_off', 1), dc('e2', 'eyes_off', 5.9), dc('e3', 'eyes_off', 6)];
-    expect(ids(keepDashcamEvents(up))).toEqual(['first', 'ten', 'e1', 'e3']);
-    // the same start: the lower id is kept
-    expect(ids(keepDashcamEvents([dc('y', 'drowsy', 0), dc('x', 'drowsy', 0)]))).toEqual(['x']);
-  });
-
-  test('a merge: stored events stand and anchor the limits; a removed stored one anchors nothing; the gap is checked both ways', () => {
-    const stored = [dc('s1', 'drowsy', 0), dc('s2', 'eyes_off', 2), dc('gone', 'drowsy', 30, 30, 'removed'), own('sp', 1)];
-    const up = [dc('u1', 'drowsy', 9), dc('u2', 'drowsy', 10), dc('u3', 'eyes_off', 6.9), dc('u4', 'eyes_off', 7), dc('u5', 'drowsy', 31), own('up', 8)];
-    expect(ids(keepDashcamEvents(up, stored))).toEqual(['u2', 'u4', 'u5', 'up']);
-    // a stored event later than an upload still blocks it
-    expect(ids(keepDashcamEvents([dc('early', 'drowsy', 50)], [dc('s', 'drowsy', 55)]))).toEqual([]);
-    expect(keepDashcamEvents([], stored)).toEqual([]);
+    expect(ids(keepDashcamEvents(up))).toEqual(['late', 'first', 'ten', 'e1', 'e2', 'e3']);
+    expect(ids(keepDashcamEvents([dc('y', 'drowsy', 0), dc('x', 'drowsy', 0)]))).toEqual(['y', 'x']);
+    // a start that is not a number is dropped
+    expect(keepDashcamEvents([{ ...dc('n', 'drowsy', 0), startedAt: Number.NaN }])).toEqual([]);
   });
 
   test('pure: the inputs are not mutated', () => {

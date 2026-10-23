@@ -183,8 +183,8 @@ export interface TripSession {
 
 /**
  * An alert the engine raised: the alert layer plays it, the HUD glows for 1.5 s (`lastAlert`; a
- * `repeat` is sounded only). `id` is the episode's, which may never become an event (a speeding
- * episode that ends within its grace): use it as a key only.
+ * `repeat` is sounded only). `id` is the episode's (a speeding episode's becomes its event's when it
+ * closes): use it as a key only.
  */
 export interface AlertEvent {
   id: string;
@@ -201,7 +201,7 @@ export interface AlertEvent {
 
 /**
  * The halo shakes on it: a hard brake, start or turn and a phone pickup as they are confirmed, a
- * speeding episode as its grace ends. Two on the same row are one shake (the later key wins). Never
+ * speeding episode on its first over row. Two on the same row are one shake (the later key wins). Never
  * a DashPal alert, never a repeat.
  */
 export interface EventShake {

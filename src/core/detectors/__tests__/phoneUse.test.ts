@@ -140,11 +140,10 @@ describe('phone pickups (phone plan P1)', () => {
     expect(only(run([...rowsAt([10, 11, 12, 13]), ...rowsAt([21, 22, 23]), row({ ...at(35), ts: T0 + 90_000 })]).all)).toMatchObject({ durationS: 7 });
   });
 
-  test('no episode opens during the warm-up; one going on past it starts at its first use row after', () => {
+  test('no warm-up: a pickup at driving speed in the first seconds of a drive counts from its first use row', () => {
     const c = ctx({ warmupEndsAt: T0 + 20_000 });
-    expect(run(seq([10, at(35)], [8, use(35)], [20, at(35)]), c).all).toEqual([]);
-    const across = run(seq([10, at(35)], [16, use(35)], [20, at(35)]), c).all;
-    expect(only(across)).toMatchObject({ startedAt: T0 + 20_000, durationS: 6 });
+    expect(only(run(seq([10, at(35)], [8, use(35)], [20, at(35)]), c).all)).toMatchObject({ startedAt: T0 + 10_000, durationS: 8 });
+    expect(only(run(seq([10, at(35)], [16, use(35)], [20, at(35)]), c).all)).toMatchObject({ startedAt: T0 + 10_000, durationS: 16 });
   });
 
   test('iPhone: handling during a call is never a pickup (hands-free cannot be told from handheld); Android counts it', () => {

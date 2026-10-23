@@ -2,8 +2,6 @@ import * as barrel from '../src';
 import {
   ACHIEVEMENTS,
   CAMERA_DISPUTE_AUTO_PER_WEEK,
-  DASHCAM_DROWSY_GAP_S,
-  DASHCAM_EYES_OFF_GAP_S,
   DASHCAM_MIN_COVERAGE,
   DASHCAM_MIN_MOVING_S,
   DASHCAM_MIN_MPH,
@@ -19,6 +17,7 @@ import {
   MIN_SCORED_MILES,
   MIN_SCORED_S,
   MOVING_MIN_MPH,
+  NO_EVENTS_FIRST_S,
   NOT_DRIVING_PER_MONTH,
   NOT_DRIVING_WINDOW_S,
   PHONE_HANDLING_MIN_SCORE,
@@ -26,7 +25,6 @@ import {
   PHONE_PICKUP_MIN_ROWS,
   PHONE_PUTDOWN_QUIET_S,
   PHONE_SEVERE_S,
-  SPEEDING_GRACE_S,
   TRIM_ENDS_M,
 } from '../src/thresholds';
 
@@ -42,7 +40,7 @@ test('detection thresholds match the spec', () => {
   expect(HARD_BRAKE_G).toEqual({ minor: 0.3, severe: 0.45 });
   expect(HARD_ACCEL_G).toEqual({ minor: 0.32, severe: 0.45 });
   expect(HARD_CORNER_G).toEqual({ minor: 0.4, severe: 0.55 });
-  expect(SPEEDING_GRACE_S).toBe(5);
+  expect(NO_EVENTS_FIRST_S).toBe(30);
   expect(MOVING_MIN_MPH).toBe(5);
   expect(MIN_SCORED_MILES).toBe(0.5);
   expect(MIN_SCORED_S).toBe(120);
@@ -72,7 +70,7 @@ test('"Wasn\'t driving": 2 a month, until a day after the end', () => {
 });
 
 test('the DashPal rules match the plan', () => {
-  expect([DASHCAM_MIN_MPH, DASHCAM_DROWSY_GAP_S, DASHCAM_EYES_OFF_GAP_S, DASHCAM_MIN_MOVING_S, DASHCAM_MIN_COVERAGE]).toEqual([10, 600, 300, 60, 0.8]);
+  expect([DASHCAM_MIN_MPH, DASHCAM_MIN_MOVING_S, DASHCAM_MIN_COVERAGE]).toEqual([10, 60, 0.8]);
   expect([CAMERA_DISPUTE_AUTO_PER_WEEK, DISPUTE_AUTO_PER_WEEK]).toEqual([3, 3]);
 });
 
@@ -87,6 +85,9 @@ test('the barrel re-exports the constants, and none of the removed ones', () => 
     'MAX_FREEZES',
     'DASHCAM_PHONE_OVERLAP_S',
     'SPEEDING_MIN_S',
+    'SPEEDING_GRACE_S',
+    'DASHCAM_DROWSY_GAP_S',
+    'DASHCAM_EYES_OFF_GAP_S',
     'LEAGUE_TIERS',
   ]) {
     expect(names).not.toContain(gone);

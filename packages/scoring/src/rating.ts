@@ -1,12 +1,17 @@
 // The Safety Rating, its category scores and the drive score, judged per opportunity: hard brakes
-// per slowdown, hard starts per speed-up, sharp turns per turn, the share of driving time with a
-// known limit spent over the speeding line, weighted by how far over, and phone pickups (each
-// weighted by its seconds in hand) per second driven at driving speed. Attention (DashPal) stays
-// per watched mile. The window is the last 90 days, recent weeks counting more.
+// per slowdown, hard starts per speed-up and sharp turns per turn (each weighted by its peak force
+// over its type's threshold), the share of driving time with a known limit spent over the speeding
+// line (every second of every episode, weighted by how far over), and phone pickups (each weighted
+// by its seconds in hand and the speed it was driven at) per second driven at driving speed.
+// Attention (DashPal) stays per watched mile, each event weighted by its speed and its length. Every
+// event that qualifies weighs something, and more for a more severe one; dividing by the drive's own
+// opportunities means one event marks a long drive down less than a short one. The window is the
+// last 90 days, recent weeks counting more.
 //
 // Pure and deterministic. The SQL copy (`private.rating_at` and its helpers) matches it to the digit.
 import { isDashcamType, speedingChargedS, type DriveEvent, type Tier } from './drive';
 import { clamp, roundTo } from './num';
+import { HARD_ACCEL_G, HARD_BRAKE_G, HARD_CORNER_G } from './thresholds';
 
 /** The Safety Rating's window, in days. */
 export const RATING_WINDOW_DAYS = 90;
@@ -88,16 +93,39 @@ export const BASELINE: Readonly<Record<RateAxis, Baseline>> = {
 };
 /** What a phone pickup weighs on top of its seconds in hand: the reach and the look away. */
 export const PHONE_PICKUP_WEIGHT_S = 10;
-/** A hard brake, start or turn: minor 1, severe 2 (a two-level type reads anything below severe as minor). */
+/**
+ * The speed a phone pickup's or a DashPal event's weight is judged at: `speedFactor` is the speed
+ * over `refMph` (30 mph weighs 1), read between `minMph` and `maxMph` (so 1/3 to 8/3). The faster the
+ * car, the farther it goes while the driver is not watching the road.
+ */
+export const SPEED_FACTOR = { minMph: 10, refMph: 30, maxMph: 80 } as const;
+/**
+ * A hard brake, start or turn without a measured peak (an event an older app recorded): minor 1,
+ * severe 2 (a two-level type reads anything below severe as minor).
+ */
 export const HARD_EVENT_WEIGHT: Readonly<Record<'minor' | 'severe', number>> = { minor: 1, severe: 2 };
+/** A hard event's weight never passes this (its peak at twice its threshold). */
+export const HARD_EVENT_WEIGHT_MAX = 4;
+/** Each hard event type's threshold, g: its weight is (peak / this)². */
+export const HARD_EVENT_MIN_G: Readonly<Record<'hard_brake' | 'hard_accel' | 'hard_corner', number>> = {
+  hard_brake: HARD_BRAKE_G.minor,
+  hard_accel: HARD_ACCEL_G.minor,
+  hard_corner: HARD_CORNER_G.minor,
+};
 /** Speeding: the over-the-line reference (5 mph over weighs 1 per charged second)… */
 export const OVER_REF_MPH = 5;
 /** …and the cap on the mean over. */
 export const OVER_CAP_MPH = 40;
 /** An older speeding event without `overMphS`: its tier's assumed mean mph over the line. */
 export const LEGACY_MEAN_OVER_MPH: Readonly<Record<Tier, number>> = { minor: 2, moderate: 6.5, severe: 12 };
-/** Attention (DashPal): its events' penalty per watched mile on `categoryScore`. */
+/**
+ * Attention (DashPal): each event's base penalty per watched mile on `categoryScore`, before its
+ * speed (`speedFactor`) and its length (`ATTENTION_REF_S`).
+ */
 export const ATTENTION_PENALTY = { eyes_off: 40, drowsy: 50 } as const;
+/** A DashPal episode this long (s) or shorter weighs its base; longer weighs in proportion, up to `ATTENTION_LENGTH_MAX` times. */
+export const ATTENTION_REF_S = 5;
+export const ATTENTION_LENGTH_MAX = 3;
 /** The window's watched-miles floor for Attention. */
 export const ATTENTION_MIN_MILES = 10;
 /** One drive's watched-miles floor for Attention. */
@@ -191,10 +219,11 @@ export function estimateExposure(miles: number, durationS: number): Exposure {
 }
 
 /**
- * A speeding event's weight: charged seconds `n = max(1, durationS − SPEEDING_GRACE_S)` × (x · √x),
- * where x = min(OVER_CAP_MPH, max(0, meanOver)) / OVER_REF_MPH and meanOver = overMphS / n (or the
- * tier's LEGACY_MEAN_OVER_MPH without a finite overMphS). Written as x * Math.sqrt(x), never
- * x ** 1.5, so the SQL copy (x * sqrt(x)) is bit-identical.
+ * A speeding event's weight: its seconds over the line `n = max(1, durationS)` (every one, the first
+ * included) × (x · √x), where x = min(OVER_CAP_MPH, max(0, meanOver)) / OVER_REF_MPH and meanOver =
+ * overMphS / n (or the tier's LEGACY_MEAN_OVER_MPH without a finite overMphS): longer and further
+ * over weighs more, a second 1 mph over the line about 0.09, a second 10 mph over about 2.8. Written
+ * as x * Math.sqrt(x), never x ** 1.5, so the SQL copy (x * sqrt(x)) is bit-identical.
  */
 export function speedingWeight(durationS: number, overMphS: number | null, tier: Tier): number {
   const n = speedingChargedS(durationS);
@@ -203,12 +232,54 @@ export function speedingWeight(durationS: number, overMphS: number | null, tier:
   return n * x * Math.sqrt(x);
 }
 
-/** The event's measured `overMphS`, when it is a finite number. */
-function overMphSOf(e: DriveEvent): number | null {
+/** The event's measured `key`, when it is a finite number. */
+function measuredOf(e: DriveEvent, key: 'overMphS' | 'peakG' | 'speedMph' | 'maxSpeedMph'): number | null {
   const m: unknown = e.measured;
   if (typeof m !== 'object' || m === null) return null;
-  const v = (m as Record<string, unknown>).overMphS;
+  const v = (m as Record<string, unknown>)[key];
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * The speed factor at `mph`: min(80, max(10, mph)) / 30 (`SPEED_FACTOR`), so 30 mph is 1, 10 mph or
+ * slower 1/3 and 80 mph or faster 8/3; 1 with no speed (null or not finite).
+ */
+export function speedFactor(mph: number | null): number {
+  if (mph === null || !Number.isFinite(mph)) return 1;
+  return Math.min(SPEED_FACTOR.maxMph, Math.max(SPEED_FACTOR.minMph, mph)) / SPEED_FACTOR.refMph;
+}
+
+/**
+ * A hard brake, start or turn's weight: (peakG / its type's threshold)², between 1 and
+ * `HARD_EVENT_WEIGHT_MAX` (4): a brake at 0.30 g weighs 1, at 0.45 g 2.25, at 0.60 g or more 4.
+ * Without a finite peak, its tier's `HARD_EVENT_WEIGHT`. Written r * r, as the SQL copy is.
+ */
+export function hardEventWeight(type: 'hard_brake' | 'hard_accel' | 'hard_corner', tier: Tier, peakG: number | null): number {
+  if (peakG === null || !Number.isFinite(peakG)) return HARD_EVENT_WEIGHT[tier === 'severe' ? 'severe' : 'minor'];
+  const r = peakG / HARD_EVENT_MIN_G[type];
+  return Math.min(HARD_EVENT_WEIGHT_MAX, Math.max(1, r * r));
+}
+
+/**
+ * A DashPal event's penalty on Attention: ATTENTION_PENALTY × speedFactor(its speed) ×
+ * min(3, max(1, durationS / 5)), so an episode at 30 mph of 5 s or less weighs its base (eyes off
+ * 40, drowsy 50), one at 60 mph twice that, and one of 10 s twice again. 0 for a removed event or
+ * any other type. Multiplied left to right, as the SQL copy is.
+ */
+export function attentionWeight(e: DriveEvent): number {
+  if (e.status === 'removed' || !isDashcamType(e.type)) return 0;
+  const d = Number.isFinite(e.durationS) ? Math.max(0, e.durationS) : 0;
+  const length = Math.min(ATTENTION_LENGTH_MAX, Math.max(1, d / ATTENTION_REF_S));
+  return ATTENTION_PENALTY[e.type] * speedFactor(measuredOf(e, 'speedMph')) * length;
+}
+
+/**
+ * A phone pickup's weight: (PHONE_PICKUP_WEIGHT_S + its seconds in hand) × speedFactor of the
+ * highest speed it was driven at (`maxSpeedMph`, else `speedMph`, else 1).
+ */
+export function phonePickupWeight(e: DriveEvent): number {
+  const v = measuredOf(e, 'maxSpeedMph') ?? measuredOf(e, 'speedMph');
+  return (PHONE_PICKUP_WEIGHT_S + phoneInHandS(e.durationS)) * speedFactor(v);
 }
 
 /**
@@ -220,8 +291,8 @@ export function phoneInHandS(durationS: number): number {
 }
 
 /**
- * The weight an active event adds to its category: HARD_EVENT_WEIGHT, speedingWeight, a phone
- * pickup's PHONE_PICKUP_WEIGHT_S + its seconds in hand (`phoneInHandS`), or 0 (removed, DashPal).
+ * The weight an active event adds to its rate category: `hardEventWeight`, `speedingWeight`,
+ * `phonePickupWeight`, or 0 (removed; DashPal, whose weight is `attentionWeight`).
  */
 export function eventWeight(e: DriveEvent): number {
   if (e.status === 'removed') return 0;
@@ -229,11 +300,11 @@ export function eventWeight(e: DriveEvent): number {
     case 'hard_brake':
     case 'hard_accel':
     case 'hard_corner':
-      return HARD_EVENT_WEIGHT[e.tier === 'severe' ? 'severe' : 'minor'];
+      return hardEventWeight(e.type, e.tier, measuredOf(e, 'peakG'));
     case 'speeding':
-      return speedingWeight(e.durationS, overMphSOf(e), e.tier);
+      return speedingWeight(e.durationS, measuredOf(e, 'overMphS'), e.tier);
     case 'phone_pickup':
-      return PHONE_PICKUP_WEIGHT_S + phoneInHandS(e.durationS);
+      return phonePickupWeight(e);
     default:
       return 0;
   }
@@ -247,7 +318,7 @@ export interface AxisLoad {
 }
 export interface DriveLoads {
   rates: Record<RateAxis, AxisLoad>;
-  /** Σ ATTENTION_PENALTY of the active eyes_off / drowsy events. */
+  /** Σ `attentionWeight` of the active eyes_off / drowsy events. */
   attentionPenalty: number;
 }
 
@@ -255,9 +326,9 @@ const byStart = (x: DriveEvent, y: DriveEvent): number => x.startedAt - y.starte
 
 /**
  * Over the drive's ACTIVE events (sorted by startedAt then id, so sums are order-stable) and its
- * exposure: braking/acceleration/turning weight and count; speed weight and count = Σ charged
- * seconds; phone weight and count = Σ seconds in hand; opportunities = slowdowns / speedups / turns
- * / phoneS / limitS. Attention = Σ ATTENTION_PENALTY of eyes_off / drowsy.
+ * exposure: braking/acceleration/turning weight and count; speed weight and count = Σ seconds over
+ * the line; phone weight and count = Σ seconds in hand; opportunities = slowdowns / speedups / turns
+ * / phoneS / limitS. Attention = Σ `attentionWeight` of eyes_off / drowsy.
  */
 export function driveLoads(events: readonly DriveEvent[], exposure: Exposure): DriveLoads {
   const rates: Record<RateAxis, AxisLoad> = {
@@ -270,7 +341,7 @@ export function driveLoads(events: readonly DriveEvent[], exposure: Exposure): D
   let attentionPenalty = 0;
   for (const e of events.filter((x) => x.status !== 'removed').sort(byStart)) {
     if (isDashcamType(e.type)) {
-      attentionPenalty += ATTENTION_PENALTY[e.type];
+      attentionPenalty += attentionWeight(e);
       continue;
     }
     const axis = axisOf(e.type);

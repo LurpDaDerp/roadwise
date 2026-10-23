@@ -1,19 +1,18 @@
 // Speeding episodes (product spec "Speeding"): a usable row (an actionable limit, a speed the phone
-// rates at 2 m/s or better, a good fix, past the warm-up) whose speed is beyond the speeding line
-// L + T(L) is an over row. The first over row opens an episode (the driving screen alerts on it);
-// the episode ends after `SPEEDING_END_S` rows in a row back under L + T − 2 mph or without a usable
-// row (hovering in that 2-mph buffer neither extends nor ends it, so hovering at the line is one
-// episode, alerted once). An episode is an event only once it has MORE than `SPEEDING_GRACE_S` over
-// rows (the 6th one), whatever its tier: the driver gets the grace to react to the alert. An episode
-// that never gets there is never an event, weighs nothing and takes no safe miles.
+// rates at 2 m/s or better, a good fix; from the drive's first row, with no warm-up) whose speed is
+// beyond the speeding line L + T(L) is an over row. The first over row opens an episode (the driving
+// screen alerts on it, "Slow down"); the episode ends after `SPEEDING_END_S` rows in a row back under
+// L + T − 2 mph or without a usable row (hovering in that 2-mph buffer neither extends nor ends it,
+// so hovering at the line is one episode, alerted once). Every episode is an event from its first
+// over row, however short: there is no grace, and every second over the line weighs on Speed.
 //
-// The event: `startedAt` the first over row, `durationS` every over row (the grace's included),
-// the tier by its peak, `measured.overMphS` the mph past the line summed over the over rows after
-// the grace (what the Speed weight reads), and the peak speed with the limit there.
-import { speedTier, speedTolerance, SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, SPEEDING_GRACE_S, type Tier } from '@scoring';
+// The event: `startedAt` the first over row, `durationS` every over row, the tier by its peak,
+// `measured.overMphS` the mph past the line summed over every over row (what the Speed weight
+// reads), and the peak speed with the limit there.
+import { speedTier, speedTolerance, SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, type Tier } from '@scoring';
 
 import type { DetectedEvent, Detector, OpenEpisode, SpeedingEpisode, SpeedingReading } from '../engine/types';
-import { knownSpeedMph, limitMphFor, round1, rowEligible, speedTrusted } from './common';
+import { gnssPoor, knownSpeedMph, limitMphFor, round1, speedTrusted } from './common';
 
 const RANK: Record<Tier, number> = { minor: 0, moderate: 1, severe: 2 };
 const worse = (a: Tier, b: Tier): Tier => (RANK[a] >= RANK[b] ? a : b);
@@ -23,7 +22,7 @@ interface Episode {
   startedAt: number;
   /** Over rows so far: the event's `durationS`. */
   overRows: number;
-  /** Σ (speed − (L + T)) over the over rows after the first `SPEEDING_GRACE_S`, mph (unrounded). */
+  /** Σ (speed − (L + T)) over every over row, mph (unrounded). */
   overMphS: number;
   /** Consecutive rows back under L + T − 2 (or without a usable row). */
   belowRows: number;
@@ -34,15 +33,12 @@ interface Episode {
   current: Tier | null;
 }
 
-/** The episode is an event: it has more over rows than the grace. */
-const confirmed = (e: Episode): boolean => e.overRows > SPEEDING_GRACE_S;
-
 export interface SpeedingDetector extends Detector {
   /** The episode in progress while the current row is beyond the line, else null. */
   open(): OpenEpisode | null;
   /** The episode in progress (its end window included), whatever the current row, or null. */
   episode(): SpeedingEpisode | null;
-  /** An episode past its grace is open (its end window included): the row's distance is not safe miles. */
+  /** An episode is open (its end window included): the row's distance is not safe miles. */
   active(): boolean;
   /** The latest row's reading, or null when the row was not usable. */
   reading(): SpeedingReading | null;
@@ -55,7 +51,7 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
   const close = (): DetectedEvent[] => {
     const e = ep;
     ep = null;
-    if (e === null || !confirmed(e)) return [];
+    if (e === null) return [];
     return [
       {
         id: e.id,
@@ -69,10 +65,11 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
   };
 
   return {
-    push(row, limit, ctx) {
+    push(row, limit) {
       const limitMph = limitMphFor(row, limit);
       const speedMph = knownSpeedMph(row);
-      const usable = limitMph !== null && speedMph !== null && speedTrusted(row) && rowEligible(row, ctx);
+      // No warm-up: speeding is read off the GPS speed and the posted limit alone, from the first row.
+      const usable = limitMph !== null && speedMph !== null && speedTrusted(row) && !gnssPoor(row);
       const line = usable ? limitMph + speedTolerance(limitMph) : null;
       now = usable && line !== null ? { ratio: speedMph / limitMph, overMph: speedMph - line } : null;
       const tier = usable ? speedTier(speedMph, limitMph) : null;
@@ -82,7 +79,7 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
           ep = { id: newId(), startedAt: row.ts, overRows: 0, overMphS: 0, belowRows: 0, peak: tier, peakSpeedMph: speedMph, limitAtPeak: limitMph, current: tier };
         }
         ep.overRows += 1;
-        if (ep.overRows > SPEEDING_GRACE_S) ep.overMphS += Math.max(0, speedMph - line);
+        ep.overMphS += Math.max(0, speedMph - line);
         ep.belowRows = 0;
         ep.current = tier;
         if (RANK[tier] > RANK[ep.peak] || (tier === ep.peak && speedMph > ep.peakSpeedMph)) {
@@ -104,13 +101,13 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
     flush: close,
     open() {
       if (ep === null || ep.current === null) return null;
-      return { id: ep.id, type: 'speeding', tier: ep.current, startedAt: ep.startedAt, confirmed: confirmed(ep) };
+      return { id: ep.id, type: 'speeding', tier: ep.current, startedAt: ep.startedAt };
     },
     episode() {
       if (ep === null) return null;
-      return { id: ep.id, startedAt: ep.startedAt, overRows: ep.overRows, overMphS: ep.overMphS, confirmed: confirmed(ep), over: ep.current !== null };
+      return { id: ep.id, startedAt: ep.startedAt, overRows: ep.overRows, overMphS: ep.overMphS, over: ep.current !== null };
     },
-    active: () => ep !== null && confirmed(ep),
+    active: () => ep !== null,
     reading: () => now,
   };
 }

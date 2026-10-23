@@ -57,7 +57,7 @@ select is((select array_agg(column_name::text order by column_name::text) from i
     and column_name in ('penalty', 'units', 'stopped_in_traffic')), null, 'trip_events keeps no penalty, units or stopped-in-traffic');
 select col_default_is('public', 'trips', 'origin', 'manual'::text, 'a drive started manually unless it says otherwise');
 select col_default_is('public', 'trips', 'not_driving_expired', 'false', 'its "Not driving?" never ran out unless it says so');
-select col_default_is('public', 'trips', 'scoring_version', '8', 'scoring version 8 (7 here, 8 since 0026)');
+select col_default_is('public', 'trips', 'scoring_version', '9', 'scoring version 9 (7 here, 8 since 0026, 9 since 0028)');
 select is((select array_agg(column_name::text || '=' || is_nullable order by column_name::text) from information_schema.columns where table_schema = 'public' and table_name = 'trips'
     and column_name in ('slowdowns', 'speedups', 'turns', 'limit_s', 'moving_s')),
   array['limit_s=NO', 'moving_s=NO', 'slowdowns=NO', 'speedups=NO', 'turns=NO'], 'every drive holds its five counters (the backfill left none null)');
@@ -133,8 +133,8 @@ select is(array[private.rate_score(0.01, 0.01), private.rate_score(0.02, 0.01), 
 select is(array[private.speeding_weight(30, '{"overMphS": 125}', 'minor'), private.speeding_weight(25, '{"overMphS": 160}', 'moderate'), private.speeding_weight(65, '{"overMphS": 720}', 'severe'),
     private.speeding_weight(3, '{"overMphS": 0}', 'minor'), private.speeding_weight(60, '{"overMphS": 0}', 'severe'), private.speeding_weight(10, '{"overMphS": 100000}', 'severe'),
     private.speeding_weight(30, '{}', 'minor'), private.speeding_weight(30, '{}', 'moderate'), private.speeding_weight(30, '{}', 'severe')],
-  array[25, 40.47715405015526, 223.08384074154722, 0, 0, 113.13708498984761, 6.324555320336759, 37.05570131572199, 92.95160030897802]::float8[],
-  'speeding_weight: charged seconds x (over / 5)^1.5, capped at 40 over; the tier mean without overMphS');
+  array[22.82177322938192, 36.20386719675123, 214.3320213701522, 0, 0, 226.27416997969522, 7.58946638440411, 44.466841578866386, 111.54192037077361]::float8[],
+  'speeding_weight: every second over the line x (over / 5)^1.5, capped at 40 over; the tier mean without overMphS (0028)');
 select is(array[private.recency_weight(0), private.recency_weight(1), private.recency_weight(7), private.recency_weight(21), private.recency_weight(42), private.recency_weight(63),
     private.recency_weight(89), private.recency_weight(90), private.recency_weight(-1)],
   array[1, 0.9675, 0.7937, 0.5, 0.25, 0.125, 0.053, 0, 0]::float8[], 'recency_weight: half every 21 days, 0 outside the 90-day window');
@@ -147,29 +147,29 @@ select is((select array_agg(row(e.*)::text order by n) from (values (1, 8::numer
 select is(array[private.event_weight_of('hard_brake', 'minor', 2, '{}'), private.event_weight_of('hard_brake', 'severe', 2, '{}'), private.event_weight_of('hard_accel', 'moderate', 2, '{}'),
     private.event_weight_of('hard_corner', 'severe', 2, '{}'), private.event_weight_of('speeding', 'moderate', 25, '{"overMphS": 160}'), private.event_weight_of('eyes_off', 'severe', 2, '{}'),
     private.event_weight_of('phone_handling', 'severe', 2, '{}')],
-  array[1, 2, 1, 2, 40.47715405015526, 0, 0]::float8[], 'event_weight_of: a hard event 1 / 2, speeding its weight, DashPal and anything else 0 (0026 pins a pickup)');
+  array[1, 2, 1, 2, 36.20386719675123, 0, 0]::float8[], 'event_weight_of: a hard event without a peak 1 / 2, speeding its weight, DashPal and anything else 0 (0026 pins a pickup, 0028 the peaks)');
 
 -- A, B, C (one driver, ava): drives 0, 10 and 40 days old, each an hour long, with their counters
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000-8000-00000000000a', now() - interval '1 hour', 3600, 6,
   '[{"id":"a1000000-0000-4000-8000-000000000001","type":"hard_brake"},{"id":"a1000000-0000-4000-8000-000000000002","type":"speeding","tier":"moderate","durationS":25,"measured":{"overMphS":160},"at":120}]',
   pg_temp.exp(15, 15, 9, 840, 1136));
-select is(private.rating_at('00000000-0000-0000-0000-000000000001', now()) - 'scores', '{"miles": 6.00, "rating": 83.2, "ranked": false}'::jsonb, 'pin A: 83.2, not ranked');
+select is(private.rating_at('00000000-0000-0000-0000-000000000001', now()) - 'scores', '{"miles": 6.00, "rating": 83.3, "ranked": false}'::jsonb, 'pin A: 83.3, not ranked');
 select is((select array[(s ->> 'acceleration')::float8, (s ->> 'braking')::float8, (s ->> 'turning')::float8, (s ->> 'speed')::float8] from (select private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' as s) x),
-  array[87.62886597938144, 72.64957264957265, 86.69623059866963, 84.50913652825136]::float8[], 'pin A: the unrounded categories to the digit');
+  array[87.62886597938144, 72.64957264957265, 86.69623059866963, 84.8134771697258]::float8[], 'pin A: the unrounded categories to the digit');
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000-8000-00000000000b', now() - interval '10 days', 3600, 20,
   '[{"id":"b1000000-0000-4000-8000-000000000001","type":"hard_brake","tier":"severe"},{"id":"b1000000-0000-4000-8000-000000000002","type":"hard_accel"}]',
   pg_temp.exp(40, 40, 25, 2400, 3200));
 select is((select array[(r ->> 'rating')::float8, (s ->> 'acceleration')::float8, (s ->> 'braking')::float8, (s ->> 'turning')::float8, (s ->> 'speed')::float8]
     from (select r, r -> 'scores' as s from (select private.rating_at('00000000-0000-0000-0000-000000000001', now()) as r) y) x),
-  array[82.3, 79.68828603627973, 65.93366008869643, 89.14703209011581, 88.33868749246123]::float8[], 'pin B: 82.3 with the categories to the digit');
+  array[82.4, 79.68828603627973, 65.93366008869643, 89.14703209011581, 88.57795986947009]::float8[], 'pin B: 82.4 with the categories to the digit');
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000-8000-00000000000c', now() - interval '40 days', 3600, 30,
-  '[{"id":"c1000000-0000-4000-8000-000000000001","type":"eyes_off","tier":"severe","measured":{"source":"dashcam","speedMph":40}},{"id":"c1000000-0000-4000-8000-000000000002","type":"hard_corner","tier":"severe"},
+  '[{"id":"c1000000-0000-4000-8000-000000000001","type":"eyes_off","tier":"severe","measured":{"source":"dashcam","speedMph":30}},{"id":"c1000000-0000-4000-8000-000000000002","type":"hard_corner","tier":"severe"},
     {"id":"c1000000-0000-4000-8000-000000000003","type":"speeding","tier":"severe","durationS":65,"measured":{"overMphS":720},"at":180}]',
   pg_temp.exp(10, 10, 5, 1800, 2000), '{"dashcam": {"deviceId": "a4c1380f2b7e", "movingS": 2000, "coveredS": 2000, "synced": true, "on": true}}'::jsonb);
 select is((select array[(r ->> 'rating')::float8, (s ->> 'acceleration')::float8, (s ->> 'braking')::float8, (s ->> 'turning')::float8, (s ->> 'attention')::float8, (s ->> 'speed')::float8]
     from (select r, r -> 'scores' as s from (select private.rating_at('00000000-0000-0000-0000-000000000001', now()) as r) y) x),
-  array[82.0, 80.09658912192572, 66.5022298398257, 79.78673027342722, 93.74047948255254, 86.05770434358871]::float8[], 'pin C: 82.0 with Attention, to the digit');
-select is((select row(safety_rating, ranked, miles_90d)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(82.0, true, 56.00)::text,
+  array[82.1, 80.09658912192572, 66.5022298398257, 79.78673027342722, 93.74047948255254, 86.38393595803475]::float8[], 'pin C: 82.1 with Attention, to the digit');
+select is((select row(safety_rating, ranked, miles_90d)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(82.1, true, 56.00)::text,
   'refresh_rating stores the rating, ranked and the 90-day miles');
 select is((select rating_week_ago from public.progress where user_id = '00000000-0000-0000-0000-000000000001'),
   private.rating_as_of('00000000-0000-0000-0000-000000000001', now() - interval '7 days'), 'and the rating as of 7 days before, for the trend');
@@ -177,7 +177,7 @@ select is((select rating_week_ago from public.progress where user_id = '00000000
 select is(private.rating_at('00000000-0000-0000-0000-000000000001', now() - interval '41 days') -> 'rating', 'null'::jsonb, 'a time before every drive has no rating');
 -- a removed speeding event lowers the Speed weight
 update public.trip_events set status = 'removed' where client_event_id = 'c1000000-0000-4000-8000-000000000003';
-select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' ->> 'speed')::float8, '>', 86.05770434358871::float8, 'a removed speeding event no longer weighs on Speed');
+select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' ->> 'speed')::float8, '>', 86.38393595803475::float8, 'a removed speeding event no longer weighs on Speed');
 update public.trip_events set status = 'active' where client_event_id = 'c1000000-0000-4000-8000-000000000003';
 
 -- E and F: one clean 6-mi drive (ben), the same at 10 mi (cat)
@@ -267,28 +267,28 @@ select is((select completed_at is null from public.weekly_challenges where user_
 -- ---------------------------------------------------------------------------
 -- reads: the summary, the profile, the export, the board
 -- ---------------------------------------------------------------------------
-create temporary table trend as select 82.0 - private.rating_as_of('00000000-0000-0000-0000-000000000001', now() - interval '7 days') as d;
+create temporary table trend as select 82.1 - private.rating_as_of('00000000-0000-0000-0000-000000000001', now() - interval '7 days') as d;
 grant select on trend to authenticated;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
 create temporary table s as select public.get_my_summary() as s;
 select is((select array(select jsonb_object_keys(s) order by 1) from s), array['achievements', 'challenges', 'not_driving_left', 'profile', 'progress'], 'the summary has no league');
 select is((select (s -> 'progress') - 'rating_trend' from s),
-  '{"safety_rating": 82.0, "ranked": true, "miles_90d": 56.00, "points": 0, "lifetime": 0, "level": 1, "level_floor": 0, "level_next": 250, "streak": 0, "at_risk": false, "next_mult": 1, "freezes": 0, "clean_run": 0, "freeze_progress": 0, "phone_free_run": 0, "clean_miles_30d": 0, "league_tier": "bronze", "miles_30d": 56.00}'::jsonb,
+  '{"safety_rating": 82.1, "ranked": true, "miles_90d": 56.00, "points": 0, "lifetime": 0, "level": 1, "level_floor": 0, "level_next": 250, "streak": 0, "at_risk": false, "next_mult": 1, "freezes": 0, "clean_run": 0, "freeze_progress": 0, "phone_free_run": 0, "clean_miles_30d": 0, "league_tier": "bronze", "miles_30d": 56.00}'::jsonb,
   'progress: the rating, ranked and the 90-day miles, plus the LEGACY literals an older build reads');
 select is((select s -> 'progress' -> 'rating_trend' from s), (select to_jsonb(d) from trend),
   'the trend is the rating less the rating a week ago');
 select is((select array_agg(c ->> 'id' order by c ->> 'id') from s, jsonb_array_elements(s -> 'challenges') c), array['clean', 'no_speeding', 'smooth'], 'this week''s three goals');
 select is(public.get_profile('ava') - 'user_id' - 'scores' - 'achievements',
-  '{"clan": null, "level": 1, "ranked": true, "streak": 0, "username": "ava", "league_tier": "bronze", "relationship": "self", "safety_rating": 82.0, "can_view_stats": true, "can_view_heatmap": true}'::jsonb,
+  '{"clan": null, "level": 1, "ranked": true, "streak": 0, "username": "ava", "league_tier": "bronze", "relationship": "self", "safety_rating": 82.1, "can_view_stats": true, "can_view_heatmap": true}'::jsonb,
   'the profile card keeps its LEGACY level, streak and tier literals');
 select is((select array_agg(x ->> 'username' || '=' || coalesce(x ->> 'value', '-') || '/' || (x ->> 'rank') order by (x ->> 'rank')::int) from jsonb_array_elements(public.get_friends_board()) x),
-  array['ava=82.0/1'], 'with no friends the board is the driver alone, by rating');
+  array['ava=82.1/1'], 'with no friends the board is the driver alone, by rating');
 reset role;
 insert into public.friendships (user_a, user_b) values ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002'), ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000003');
 set local role authenticated;
 select is((select array_agg(x ->> 'username' || '=' || coalesce(x ->> 'value', '-') order by (x ->> 'rank')::int) from jsonb_array_elements(public.get_friends_board()) x),
-  array['cat=87.4', 'ava=82.0', 'ben=-'], 'the board ranks by Safety Rating; an unranked friend comes last with no value');
+  array['cat=87.4', 'ava=82.1', 'ben=-'], 'the board ranks by Safety Rating; an unranked friend comes last with no value');
 reset role;
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);

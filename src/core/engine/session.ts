@@ -246,7 +246,7 @@ const imuActive = (row: FeatureRow): boolean =>
 
 /** What the detectors said about a row, for the accumulators. */
 export interface RowFlags {
-  /** A speeding episode past its grace is active on the row: its distance is not safe miles. */
+  /** A speeding episode is active on the row: its distance is not safe miles. */
   unsafe: boolean;
   /** The speeding detector could use the row (`DetectorSuite.speedingNow() !== null`): it counts toward limit time. */
   limitUsable: boolean;

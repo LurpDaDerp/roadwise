@@ -334,8 +334,8 @@ function recordDrive(trip, rnd) {
 /**
  * Events per drive: the earlier months had harder driving than the last 30 days. Hard brakes, starts
  * and turns stay near the scoring package's typical rates (`BASELINE`: about 1 per 100 slowdowns and
- * 1 per 125 speed-ups or turns), so with the Fremont spot the demo reads as a decent driver: a Safety
- * Rating around 80 and no category under 60.
+ * 1 per 125 speed-ups or turns), most of them just past their threshold, so with the Fremont spot the
+ * demo reads as a decent driver: a Safety Rating around 80 and no category under 60.
  */
 function eventRates(back) {
   if (back >= 30) return { speeding: 0.19, hard_brake: 0.02, hard_accel: 0.016, hard_corner: 0.012 };
@@ -343,8 +343,8 @@ function eventRates(back) {
   return { speeding: 0.15, hard_brake: 0.008, hard_accel: 0.008, hard_corner: 0.006 };
 }
 
-/** mph-seconds over the speeding line after the grace, at a steady `over` mph past the line for `durationS` rows. */
-const overMphSOf = (durationS, over) => round(Math.max(1, durationS - scoring.SPEEDING_GRACE_S) * over, 1);
+/** mph-seconds over the speeding line, every over row, at a steady `over` mph past the line for `durationS` rows. */
+const overMphSOf = (durationS, over) => round(scoring.speedingChargedS(durationS) * over, 1);
 
 /** The events of one drive, on its visible route, with what the detectors would have measured. */
 function makeEvents(trip, rec, rnd, opts) {
@@ -385,8 +385,8 @@ function makeEvents(trip, rec, rnd, opts) {
     const over = tier === 'minor' ? between(rnd, 0.6, 3.6) : tier === 'moderate' ? between(rnd, 4.6, 8.6) : between(rnd, 9.6, 15);
     const speedMph = round(p.limit + scoring.speedTolerance(p.limit) + over, 1);
     if (scoring.speedTier(speedMph, p.limit) !== tier) throw new Error('speeding tier drifted from the scoring package');
-    // Every over-the-line row, more than the grace (a shorter episode is never an event).
-    const durationS = intBetween(rnd, scoring.SPEEDING_GRACE_S + 1, tier === 'severe' ? 18 : 70);
+    // Every over-the-line row (every episode is an event, however short).
+    const durationS = intBetween(rnd, 1, tier === 'severe' ? 13 : 65);
     const overMphS = overMphSOf(durationS, speedMph - p.limit - scoring.speedTolerance(p.limit));
     events.push({ type: 'speeding', tier, startedAt: p.startedAt, durationS, lat: p.lat, lng: p.lng, measured: { speedMph, limitMph: p.limit, overMphS } });
   }
@@ -396,7 +396,8 @@ function makeEvents(trip, rec, rnd, opts) {
       if (i === null) break;
       const p = at(i);
       const severe = rnd() < 0.18;
-      const peakG = round(severe ? between(rnd, g.severe, g.severe + 0.12) : between(rnd, g.minor, g.severe - 0.01), 2);
+      // a minor one just past its threshold (each weighs its peak over the threshold, squared)
+      const peakG = round(severe ? between(rnd, g.severe, g.severe + 0.02) : between(rnd, g.minor, g.minor + 0.03), 2);
       events.push({
         type,
         tier: severe ? 'severe' : 'minor',
@@ -423,7 +424,8 @@ function makeEvents(trip, rec, rnd, opts) {
         durationS: opts.dashcamEvent === 'drowsy' ? intBetween(rnd, 2, 4) : intBetween(rnd, 3, 6),
         lat: p.lat,
         lng: p.lng,
-        measured: { source: 'dashcam', speedMph: round(Math.max(25, p.mph), 1) },
+        // in town, 25 to 30 mph: a DashPal event weighs more the faster the car was going
+        measured: { source: 'dashcam', speedMph: round(Math.min(30, Math.max(25, p.mph)), 1) },
       });
     }
   }
@@ -508,11 +510,11 @@ function phoneSecondsOf(rec, movingS) {
  */
 const DEMO_SPOTS = [
   // Speeding on the 35 mph stretch down Dexter on the way to work: 2 of every 3 commutes in the last 45 days.
-  { type: 'speeding', route: 'work', reverse: false, at: [47.6415, -122.3434], rule: { lastDays: 45, hit: (n) => n % 3 !== 2 }, durationS: 16, overMph: 7 },
+  { type: 'speeding', route: 'work', reverse: false, at: [47.6415, -122.3434], rule: { lastDays: 45, hit: (n) => n % 3 !== 2 }, durationS: 11, overMph: 7 },
   // A firm (minor) brake just before the turn in Fremont on the way home: every third evening commute in the last 45 days.
-  { type: 'hard_brake', route: 'work', reverse: true, at: [47.6492, -122.3497], rule: { lastDays: 45, hit: (n) => n % 3 === 0 }, peakG: 0.38 },
+  { type: 'hard_brake', route: 'work', reverse: true, at: [47.6492, -122.3497], rule: { lastDays: 45, hit: (n) => n % 3 === 0 }, peakG: 0.33 },
   // Hard starts from the light at N 39th: the 4 newest commutes started more than 16 days ago, clean since (a cleared spot).
-  { type: 'hard_accel', route: 'work', reverse: false, at: [47.6553, -122.3421], rule: { newestBefore: 16, count: 4 }, peakG: 0.36 },
+  { type: 'hard_accel', route: 'work', reverse: false, at: [47.6553, -122.3421], rule: { newestBefore: 16, count: 4 }, peakG: 0.34 },
 ];
 
 /** No random event starts this close to a demo spot. */

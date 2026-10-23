@@ -350,7 +350,7 @@ export interface WindowSums {
   turns: number;
   /** Seconds driven at 10 mph or more under a known limit. */
   limitS: number;
-  /** Seconds over the line after each speeding episode's grace (Σ `speedingChargedS` of the active speeding events). */
+  /** Seconds over the line of every speeding episode (Σ `speedingChargedS` of the active speeding events). */
   speedingS: number;
   /** Active phone pickups. */
   pickups: number;

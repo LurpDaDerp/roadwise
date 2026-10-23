@@ -26,18 +26,13 @@ export const PHONE_PICKUP_MIN_ROWS = 3;
 export const PHONE_PUTDOWN_QUIET_S = 10;
 /** A pickup in hand up to this many seconds is moderate; longer is severe. */
 export const PHONE_SEVERE_S = 15;
-/**
- * The grace on speeding: an episode is an event only once it has MORE than this many rows over the
- * speeding line (L + T), whatever its tier (the 6th row makes it one), and the Speed weight counts
- * the rows after these (`speedingChargedS`). An episode that never gets there is never an event,
- * weighs nothing and does not break a clean drive. The alert sounds on the first over row, so the
- * driver has this long to react before it counts.
- */
-export const SPEEDING_GRACE_S = 5;
 /** A speeding episode ends after this long back under L + T − `SPEEDING_END_BUFFER_MPH`. */
 export const SPEEDING_END_S = 5;
 export const SPEEDING_END_BUFFER_MPH = 2;
-/** No events in the first 30 s of a drive. */
+/**
+ * No hard brake, start or turn in the first 30 s of a drive started from a standstill (the phone
+ * settling into its mount). Speeding, phone pickups and DashPal events count from the first row.
+ */
 export const NO_EVENTS_FIRST_S = 30;
 /** GPS accuracy worse than this (m) records no speeding and shows "—". */
 export const MAX_H_ACC_M = 20;
@@ -81,10 +76,6 @@ export const DISPUTE_AUTO_PER_WEEK = 3;
 
 /** DashPal events score only at this phone GPS speed or faster, on a good fix. */
 export const DASHCAM_MIN_MPH = 10;
-/** At most one `drowsy` per this many seconds of a drive (the earliest is kept). */
-export const DASHCAM_DROWSY_GAP_S = 600;
-/** At most one `eyes_off` per this many seconds of a drive (the earliest is kept). */
-export const DASHCAM_EYES_OFF_GAP_S = 300;
 /** A DashPal drive needs at least this many seconds moving at 5 mph or more… */
 export const DASHCAM_MIN_MOVING_S = 60;
 /** …with the dashcam watching the driver for at least this share of them. */

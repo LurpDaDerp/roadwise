@@ -95,7 +95,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     expected: [{ type: 'speeding', startsNear: at(60), tier: 'minor', durationMin: 19, durationMax: 21 }],
   }),
 
-  /** 8 s at 52 mph on a 35 (severe above 48): an event from its 6th over row, from the first; peak tier severe. */
+  /** 8 s at 52 mph on a 35 (severe above 48): an event of all 8 over rows; peak tier severe. */
   'speeding-severe-brief': () => ({
     name: 'speeding-severe-brief',
     rows: drive(200, (i) => ({ speedMph: between(i, 60, 68) ? 52 : 34 })),
@@ -103,22 +103,20 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     expected: [{ type: 'speeding', startsNear: at(60), tier: 'severe', durationMin: 8, durationMax: 8 }],
   }),
 
-  /** 5 s at 52 mph on a 35, back under the line within the 5-s grace: severe, but no incident. */
-  'speeding-grace': () => ({
-    name: 'speeding-grace',
+  /** 5 s at 52 mph on a 35, then back under the line: a severe event of 5 s (there is no grace). */
+  'speeding-short-severe': () => ({
+    name: 'speeding-short-severe',
     rows: drive(200, (i) => ({ speedMph: between(i, 60, 65) ? 52 : 34 })),
     limits: [posted(35)],
-    expected: [{ type: 'speeding', startsNear: at(60), absent: true }],
-    noEvents: true,
+    expected: [{ type: 'speeding', startsNear: at(60), tier: 'severe', durationMin: 5, durationMax: 5 }],
   }),
 
-  /** 3 s at 42 mph: within the 5-s grace, no incident. */
+  /** 3 s at 42 mph: a minor event of 3 s; every second over the line counts. */
   'speeding-blip': () => ({
     name: 'speeding-blip',
     rows: drive(200, (i) => ({ speedMph: between(i, 60, 63) ? 42 : 34 })),
     limits: [posted(35)],
-    expected: [{ type: 'speeding', startsNear: at(60), absent: true }],
-    noEvents: true,
+    expected: [{ type: 'speeding', startsNear: at(60), tier: 'minor', durationMin: 3, durationMax: 3 }],
   }),
 
   /** Hovering at 37 mph (between L+T−2 = 37 and L+T = 39) after 8 s over keeps the episode open: one incident. */
@@ -131,19 +129,18 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
 
   /**
    * Five scattered 1-s blips over L+T, hovering at 37 (in the 2-mph buffer) between them: one episode
-   * of five over rows, all within the grace: no incident.
+   * of five over rows, one minor event (the hover between them adds no seconds).
    */
   'speeding-blip-hover': () => ({
     name: 'speeding-blip-hover',
     rows: drive(200, (i) => ({ speedMph: between(i, 60, 100) && i % 8 === 0 ? 41 : between(i, 60, 100) ? 37 : 34 })),
     limits: [posted(35)],
-    expected: [{ type: 'speeding', startsNear: at(60), absent: true }],
-    noEvents: true,
+    expected: [{ type: 'speeding', startsNear: at(64), tier: 'minor', durationMin: 5, durationMax: 5 }],
   }),
 
   /**
    * 3 s over, one row under the buffer, 3 s over: one episode (it ends only after 5 s back under the
-   * buffer), still over past the 5-s grace: an incident of 6 over rows from the first.
+   * buffer), an incident of 6 over rows from the first.
    */
   'speeding-split': () => ({
     name: 'speeding-split',
@@ -170,13 +167,12 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** Speeding in the first 30 s only: the warm-up swallows it. */
+  /** Speeding in the first 30 s only: no warm-up for speeding, a severe event from the first row. */
   'speeding-warmup': () => ({
     name: 'speeding-warmup',
     rows: drive(200, (i) => ({ speedMph: i < 25 ? 55 : 34 })),
     limits: [posted(35)],
-    expected: [{ type: 'speeding', startsNear: T0, absent: true }],
-    noEvents: true,
+    expected: [{ type: 'speeding', startsNear: T0, tier: 'severe', durationMin: 25, durationMax: 25 }],
   }),
 
   /** A 0.35 g brake the GNSS confirms (35 → 25 mph in a second): one minor hard brake. */

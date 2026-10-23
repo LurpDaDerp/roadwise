@@ -1,4 +1,4 @@
-import { AXES, isDashcamType, PHONE_PICKUP_MIN_MPH, phonePickupTier, SCORING_VERSION, SPEEDING_GRACE_S, type DriveEvent } from '@scoring';
+import { AXES, isDashcamType, PHONE_PICKUP_MIN_MPH, phonePickupTier, SCORING_VERSION, type DriveEvent } from '@scoring';
 
 import type { FinalizeTripPayloadV5 } from '@/data/sync/payload';
 import { decodeRuns } from '@/lib/polyline';
@@ -132,7 +132,7 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
     for (const d of drives) {
       for (const e of d.payload.events) {
         if (e.type === 'speeding') {
-          expect(e.durationS).toBeGreaterThan(SPEEDING_GRACE_S);
+          expect(e.durationS).toBeGreaterThanOrEqual(1);
           expect(e.measured.overMphS).toBeGreaterThan(0);
         }
         if (e.type === 'phone_pickup') {
@@ -166,7 +166,7 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
       expect(env.events.every((e) => e.status === 'active')).toBe(true);
       expect([env.scored, env.reason]).toEqual(d.trip.short ? [false, 'too_short'] : [true, null]);
       expect([env.scoringVersion, env.payload.origin, env.payload.notDrivingExpired]).toEqual([SCORING_VERSION, 'manual', false]);
-      expect(SCORING_VERSION).toBe(8);
+      expect(SCORING_VERSION).toBe(9);
       expect(env.payload.exposure).toEqual(d.payload.exposure);
     }
   });

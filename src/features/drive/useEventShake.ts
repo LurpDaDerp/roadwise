@@ -8,7 +8,7 @@ import { useAppActive } from './useHaloBurst';
 
 /**
  * The event the halo shakes for right now (`DriveLive.lastShake`: a hard brake, start or turn as it
- * is confirmed, a speeding episode at its grace end): each new one (by its key and row) for what is
+ * is confirmed, a speeding episode as it alerts): each new one (by its key and row) for what is
  * left of `ms` (1.5 s, as an alert's flash) on the row clock, then nothing; its tier sizes the shake.
  * It shakes only while RoadWise is in front: one first seen while it is not never shakes, then or
  * later, and neither does one already that old when it reaches the screen, nor the one standing

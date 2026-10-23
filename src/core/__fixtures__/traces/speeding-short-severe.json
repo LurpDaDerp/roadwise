@@ -1,5 +1,5 @@
 {
-  "name": "speeding-grace",
+  "name": "speeding-short-severe",
   "limits": [
     {
       "fromTs": 1700000000000,
@@ -13,10 +13,11 @@
     {
       "type": "speeding",
       "startsNear": 1700000060000,
-      "absent": true
+      "tier": "severe",
+      "durationMin": 5,
+      "durationMax": 5
     }
   ],
-  "noEvents": true,
   "rows": [
     {"hAcc":5,"speedAcc":0.5,"course":90,"alt":50,"gnssValid":true,"aLonMax":0.02,"aLonMin":-0.02,"aLatMax":0.02,"aLatMin":-0.02,"yawRateMax":0.01,"jerkMax":0.02,"gravityStability":0.99,"orientationDelta":0.01,"handlingScore":0,"locked":true,"screenOn":false,"appForeground":true,"ts":1700000000000,"lat":47.6062,"lng":-122.3321,"speed":15.19936},
     {"hAcc":5,"speedAcc":0.5,"course":90,"alt":50,"gnssValid":true,"aLonMax":0.02,"aLonMin":-0.02,"aLatMax":0.02,"aLatMin":-0.02,"yawRateMax":0.01,"jerkMax":0.02,"gravityStability":0.99,"orientationDelta":0.01,"handlingScore":0,"locked":true,"screenOn":false,"appForeground":true,"ts":1700000001000,"lat":47.6062,"lng":-122.33189726109798,"speed":15.19936},

@@ -38,17 +38,25 @@ function uuid(rnd) {
 // ---------------------------------------------------------------------------------------------
 // How big an event is
 
-/** A speeding episode: rows over the line (past the grace), its tier and how far over the line it went. */
+/** A speeding episode: its rows over the line (every one counts), its tier and how far over the line it went. */
 function drawSpeeding(rnd) {
-  const d = Math.min(80, Math.round(scoring.SPEEDING_GRACE_S + 3 + -Math.log(1 - rnd()) * 20));
+  const d = Math.min(80, Math.round(3 + -Math.log(1 - rnd()) * 20));
   const roll = rnd();
   const tier = roll < 0.3 ? 'minor' : roll < 0.75 ? 'moderate' : 'severe';
   const peakOver = tier === 'minor' ? between(rnd, 0.8, 3.8) : tier === 'moderate' ? between(rnd, 4.4, 8.8) : between(rnd, 9.4, 15);
   const meanOver = peakOver * between(rnd, 0.6, 0.9);
-  return { d, tier, peakOver, overMphS: round(Math.max(1, d - scoring.SPEEDING_GRACE_S) * meanOver, 1) };
+  return { d, tier, peakOver, overMphS: round(scoring.speedingChargedS(d) * meanOver, 1) };
 }
 
 const hardTier = (rnd) => (rnd() < 0.16 ? 'severe' : 'minor');
+const hardG = (type) => (type === 'hard_brake' ? scoring.HARD_BRAKE_G : type === 'hard_accel' ? scoring.HARD_ACCEL_G : scoring.HARD_CORNER_G);
+/** A hard event's peak force (g) at its tier: just past the tier's threshold (an event weighs its peak over the threshold, squared). */
+const hardPeak = (type, tier, rnd) => {
+  const g = hardG(type);
+  return round(tier === 'severe' ? between(rnd, g.severe, g.severe + 0.03) : between(rnd, g.minor, g.minor + 0.015), 2);
+};
+/** The mean speed factor (scoring `speedFactor`) over the track points `at`: a pickup or a DashPal event weighs more the faster the car. */
+const paceFactor = (v, at) => (at.length > 0 ? scoring.speedFactor(at.reduce((sum, i) => sum + v[i], 0) / at.length / MPH) : 1);
 const drawPhone = (rnd) => {
   const r = rnd();
   if (r < 0.55) return intBetween(rnd, 4, 14);
@@ -65,13 +73,23 @@ const MEAN_WEIGHT = (() => {
   };
   let speed = 0;
   let phone = 0;
+  const hard = { hard_brake: 0, hard_accel: 0, hard_corner: 0 };
   const N = 6000;
   for (let i = 0; i < N; i += 1) {
     const e = drawSpeeding(rnd);
     speed += scoring.speedingWeight(e.d, e.overMphS, e.tier);
     phone += scoring.PHONE_PICKUP_WEIGHT_S + drawPhone(rnd);
+    // each hard event weighs its peak over its threshold, squared (hardEvent's own peaks)
+    for (const type of Object.keys(hard)) {
+      const tier = hardTier(rnd);
+      hard[type] += scoring.hardEventWeight(type, tier, hardPeak(type, tier, rnd));
+    }
   }
-  return { speed: speed / N, phone: phone / N, hard: 1 + 0.16 };
+  return {
+    speed: speed / N,
+    phone: phone / N,
+    hard: { hard_brake: hard.hard_brake / N, hard_accel: hard.hard_accel / N, hard_corner: hard.hard_corner / N },
+  };
 })();
 
 // ---------------------------------------------------------------------------------------------
@@ -129,9 +147,9 @@ function speedingAt(rec, i, rnd, draw, zone) {
     }
     return tr.cum[e] - tr.cum[i] >= need * 0.999;
   };
-  while (d > scoring.SPEEDING_GRACE_S + 1 && !reach(d)) d -= 1;
-  if (!reach(d) || d <= scoring.SPEEDING_GRACE_S) return null;
-  const overMphS = d === draw.d ? draw.overMphS : round(Math.max(1, d - scoring.SPEEDING_GRACE_S) * (draw.overMphS / Math.max(1, draw.d - scoring.SPEEDING_GRACE_S)), 1);
+  while (d > 1 && !reach(d)) d -= 1;
+  if (!reach(d)) return null;
+  const overMphS = d === draw.d ? draw.overMphS : round(scoring.speedingChargedS(d) * (draw.overMphS / scoring.speedingChargedS(draw.d)), 1);
   return {
     type: 'speeding',
     tier: draw.tier,
@@ -144,9 +162,8 @@ function speedingAt(rec, i, rnd, draw, zone) {
 }
 
 function hardEvent(rec, type, i, rnd) {
-  const g = type === 'hard_brake' ? scoring.HARD_BRAKE_G : type === 'hard_accel' ? scoring.HARD_ACCEL_G : scoring.HARD_CORNER_G;
   const tier = hardTier(rnd);
-  const peakG = round(tier === 'severe' ? between(rnd, g.severe, g.severe + 0.14) : between(rnd, g.minor, g.severe - 0.01), 2);
+  const peakG = hardPeak(type, tier, rnd);
   const mph = rec.v[i] / MPH;
   let speedMph;
   if (type === 'hard_corner') speedMph = Math.sqrt(peakG * 9.81 * between(rnd, 14, 26)) / MPH;
@@ -229,7 +246,7 @@ function makeEvents(rec, ctx, rnd) {
         prep.cruise,
         (i) => {
           const draw = drawSpeeding(rnd);
-          draw.d = Math.max(draw.d, 12);
+          draw.d = Math.max(draw.d, 7);
           return speedingAt(rec, i, rnd, draw, null);
         },
         200,
@@ -251,11 +268,11 @@ function makeEvents(rec, ctx, rnd) {
     const ex = rec.exposure;
     const scale = ctx.u * share;
     const n = {
-      braking: poisson(rnd, (ctx.k.braking * 0.01 * ex.slowdowns * scale) / MEAN_WEIGHT.hard),
-      acceleration: poisson(rnd, (ctx.k.acceleration * 0.008 * ex.speedups * scale) / MEAN_WEIGHT.hard),
-      turning: poisson(rnd, (ctx.k.turning * 0.008 * ex.turns * scale) / MEAN_WEIGHT.hard),
+      braking: poisson(rnd, (ctx.k.braking * 0.01 * ex.slowdowns * scale) / MEAN_WEIGHT.hard.hard_brake),
+      acceleration: poisson(rnd, (ctx.k.acceleration * 0.008 * ex.speedups * scale) / MEAN_WEIGHT.hard.hard_accel),
+      turning: poisson(rnd, (ctx.k.turning * 0.008 * ex.turns * scale) / MEAN_WEIGHT.hard.hard_corner),
       speed: poisson(rnd, (ctx.k.speed * 0.04 * ex.limitS * scale) / MEAN_WEIGHT.speed),
-      phone: poisson(rnd, (ctx.k.phone * 0.04 * ex.phoneS * scale) / MEAN_WEIGHT.phone),
+      phone: poisson(rnd, (ctx.k.phone * 0.04 * ex.phoneS * scale) / (MEAN_WEIGHT.phone * paceFactor(v, prep.fast))),
     };
     for (let c = 0; c < n.speed; c += 1) {
       place(prep.cruise, (i) => {
@@ -270,12 +287,12 @@ function makeEvents(rec, ctx, rnd) {
     for (let c = 0; c < n.phone; c += 1) place(prep.fast, (i) => phoneAt(rec, i, rnd));
   }
 
-  // DashPal: eyes off the road (at most one per 5 min) and, now and then, drowsiness (one per 10 min)
+  // DashPal: eyes off the road (spaced at least 5 min apart here) and, now and then, drowsiness
   const d = ctx.dashcam;
   if (d && d.watched > 0) {
     const watchedMiles = rec.miles * d.watched;
-    const gapMs = scoring.DASHCAM_EYES_OFF_GAP_S * 1000 + 5000;
-    const want = poisson(rnd, d.eyes * watchedMiles);
+    const gapMs = 305_000;
+    const want = poisson(rnd, (d.eyes * watchedMiles) / paceFactor(v, prep.fast.filter((i) => v[i] >= 18 * MPH)));
     const mine = [];
     for (let c = 0; c < want; c += 1) {
       place(prep.fast.filter((i) => v[i] >= 18 * MPH), (i) => {
@@ -314,7 +331,7 @@ function forcedEvent(rec, spot, i, rnd) {
     const L = tr.limit[i];
     const speedMph = round(L + scoring.speedTolerance(L) + spot.over, 1);
     const tier = scoring.speedTier(speedMph, L);
-    const d = spot.durationS;
+    const d = Math.max(1, spot.durationS - 5);
     // starts early enough to be at speed along the stretch
     return {
       type: 'speeding',
@@ -322,11 +339,12 @@ function forcedEvent(rec, spot, i, rnd) {
       startedAt: eventTime(rec, i),
       durationS: d,
       ...here(rec, i),
-      measured: { speedMph, limitMph: L, overMphS: round(Math.max(1, d - scoring.SPEEDING_GRACE_S) * spot.over * between(rnd, 0.8, 1), 1) },
+      measured: { speedMph, limitMph: L, overMphS: round(scoring.speedingChargedS(d) * spot.over * between(rnd, 0.8, 1), 1) },
     };
   }
   const g = spot.kind === 'hard_brake' ? scoring.HARD_BRAKE_G : spot.kind === 'hard_corner' ? scoring.HARD_CORNER_G : scoring.HARD_ACCEL_G;
-  const peakG = round(between(rnd, g.minor + 0.02, g.severe - 0.02), 2);
+  // a firm one, just past its threshold (an event weighs its peak over the threshold, squared)
+  const peakG = round(between(rnd, g.minor + 0.005, g.minor + 0.03), 2);
   const speedMph = spot.kind === 'hard_corner' ? Math.sqrt(peakG * 9.81 * between(rnd, 14, 26)) / MPH : Math.max(spot.kind === 'hard_brake' ? 16 : 8, (rec.v[i] / MPH) * between(rnd, 0.9, 1.1));
   return {
     type: spot.kind,

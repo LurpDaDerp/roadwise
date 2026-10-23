@@ -4,20 +4,10 @@
 //
 // Pure and deterministic: no clock, no randomness, no imports outside this package.
 import { clamp, roundTo } from './num';
-import {
-  DASHCAM_DROWSY_GAP_S,
-  DASHCAM_EYES_OFF_GAP_S,
-  DASHCAM_MIN_COVERAGE,
-  DASHCAM_MIN_MOVING_S,
-  DASHCAM_MIN_MPH,
-  MIN_SCORED_MILES,
-  MIN_SCORED_S,
-  PHONE_SEVERE_S,
-  SPEEDING_GRACE_S,
-} from './thresholds';
+import { DASHCAM_MIN_COVERAGE, DASHCAM_MIN_MOVING_S, DASHCAM_MIN_MPH, MIN_SCORED_MILES, MIN_SCORED_S, PHONE_SEVERE_S } from './thresholds';
 
 /** Bumped whenever the rules a drive is judged by change; stored with every drive. */
-export const SCORING_VERSION = 8;
+export const SCORING_VERSION = 9;
 
 export type EventType = 'speeding' | 'hard_brake' | 'hard_accel' | 'hard_corner' | 'phone_pickup' | 'eyes_off' | 'drowsy';
 
@@ -43,20 +33,23 @@ export type Zone = 'school' | 'construction';
  */
 export type DriveEventMeasured = {
   /**
-   * The GPS speed at the event, mph (a DashPal event's speed gate reads it). phone_pickup: the
-   * trusted speed at the row the pickup starts, 1 dp.
+   * The GPS speed at the event, mph (a DashPal event's speed gate and its Attention weight read it).
+   * phone_pickup: the trusted speed at the row the pickup starts, 1 dp.
    */
   speedMph?: number;
-  /** phone_pickup: the highest trusted GPS speed from its start to its last use row, mph, 1 dp. */
+  /**
+   * phone_pickup: the highest trusted GPS speed from its start to its last use row, mph, 1 dp; its
+   * Phone use weight reads it (`speedFactor`).
+   */
   maxSpeedMph?: number;
   /** speeding: the posted limit, mph. */
   limitMph?: number;
-  /** harsh events: the peak force, g. */
+  /** harsh events: the peak force, g; the event's weight reads it against its type's threshold. */
   peakG?: number;
   /**
-   * speeding: the sum, over the over-the-line rows AFTER the first `SPEEDING_GRACE_S`, of
-   * (row speed − (L + T)) in mph, 1 dp. Absent on an event an older app recorded: its Speed weight
-   * then reads its tier's assumed mean over (`LEGACY_MEAN_OVER_MPH`).
+   * speeding: the sum, over every over-the-line row, of (row speed − (L + T)) in mph, 1 dp. Absent
+   * on an event an older app recorded: its Speed weight then reads its tier's assumed mean over
+   * (`LEGACY_MEAN_OVER_MPH`).
    */
   overMphS?: number;
   /** A DashPal event. */
@@ -74,13 +67,17 @@ export interface DriveEvent {
   tier: Tier;
   /** epoch ms */
   startedAt: number;
-  /** phone_pickup: the seconds in hand while moving (whole, at least 1); the Phone use weight reads it. */
+  /**
+   * speeding: its seconds over the line (the Speed weight reads them); phone_pickup: the seconds in
+   * hand while moving (whole, at least 1; the Phone use weight reads it); eyes_off and drowsy: the
+   * episode's length (the Attention weight reads it).
+   */
   durationS: number;
   /** A school or construction zone: the speeding line's tolerance is 2 mph there. */
   zone?: Zone | null;
   /** removed = accepted dispute → counted nowhere. */
   status?: 'active' | 'removed';
-  /** What the detector measured (`DriveEventMeasured`); the Speed weight reads `overMphS`. */
+  /** What the detector measured (`DriveEventMeasured`); the weights read it. */
   measured?: DriveEventMeasured;
 }
 
@@ -114,40 +111,20 @@ export interface DashcamLimitEvent {
   measured?: Readonly<Record<string, unknown>>;
 }
 
-const DASHCAM_GAP_MS: Readonly<Record<DashcamEventType, number>> = {
-  drowsy: DASHCAM_DROWSY_GAP_S * 1000,
-  eyes_off: DASHCAM_EYES_OFF_GAP_S * 1000,
-};
-
 /**
- * The uploaded events a drive keeps once the DashPal limits are re-applied over the whole drive:
- * the upload, plus `stored` (the events the drive it merges into already holds; none for a fresh
- * drive). An uploaded DashPal event is dropped, never the whole drive, when its measured speed is
- * missing or under `DASHCAM_MIN_MPH`, or when it starts within `DASHCAM_DROWSY_GAP_S` (drowsy) or
- * `DASHCAM_EYES_OFF_GAP_S` (eyes_off) of a kept event of its type: an active stored one, or an
- * uploaded one kept before it (time order, then id, so the earliest is kept). Stored events always
- * stand and the phone's own events pass untouched. Returns the kept uploads in their input order. Pure.
+ * The uploaded events a drive keeps once the DashPal speed gate is re-applied: an uploaded DashPal
+ * event is dropped, never the whole drive, when its measured speed is missing or under
+ * `DASHCAM_MIN_MPH` (or its start is not a number). Every other DashPal episode counts (the phone
+ * already joins alerts within 60 s of each other into one episode), and the phone's own events pass
+ * untouched. The events a drive it merges into already holds always stand. Returns the kept uploads
+ * in their input order. Pure.
  */
-export function keepDashcamEvents<E extends DashcamLimitEvent>(uploaded: readonly E[], stored: readonly DashcamLimitEvent[] = []): E[] {
-  const kept: Record<DashcamEventType, number[]> = { drowsy: [], eyes_off: [] };
-  for (const s of stored) {
-    if (isDashcamType(s.type) && s.status !== 'removed' && Number.isFinite(s.startedAt)) kept[s.type].push(s.startedAt);
-  }
-  const dropped = new Set<E>();
-  const dashcam = uploaded
-    .filter((e) => isDashcamType(e.type))
-    .sort((x, y) => x.startedAt - y.startedAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
-  for (const e of dashcam) {
-    const type = e.type as DashcamEventType;
+export function keepDashcamEvents<E extends DashcamLimitEvent>(uploaded: readonly E[]): E[] {
+  return uploaded.filter((e) => {
+    if (!isDashcamType(e.type)) return true;
     const speed = e.measured?.speedMph;
-    const fast = typeof speed === 'number' && Number.isFinite(speed) && speed >= DASHCAM_MIN_MPH;
-    if (!fast || !Number.isFinite(e.startedAt) || kept[type].some((t) => Math.abs(e.startedAt - t) < DASHCAM_GAP_MS[type])) {
-      dropped.add(e);
-      continue;
-    }
-    kept[type].push(e.startedAt);
-  }
-  return uploaded.filter((e) => !dropped.has(e));
+    return typeof speed === 'number' && Number.isFinite(speed) && speed >= DASHCAM_MIN_MPH && Number.isFinite(e.startedAt);
+  });
 }
 
 /**
@@ -179,12 +156,12 @@ export function phonePickupTier(inHandS: number): Tier {
 export const SPEEDING_MAX_OVER_MPH = 150;
 
 /**
- * The seconds a speeding event is charged for: every over-the-line row (`durationS`) less the
- * `SPEEDING_GRACE_S` grace rows, never under 1.
+ * The seconds a speeding event is charged for: every over-the-line row (`durationS`, the first
+ * included), never under 1.
  */
 export function speedingChargedS(durationS: number): number {
   const d = Number.isFinite(durationS) ? Math.max(0, durationS) : 0;
-  return Math.max(1, d - SPEEDING_GRACE_S);
+  return Math.max(1, d);
 }
 
 /**

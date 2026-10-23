@@ -1,4 +1,4 @@
-import { AXES, isDashcamType, MERIT_RULES, PHONE_PICKUP_MIN_MPH, phonePickupTier, SCORING_VERSION, SPEEDING_GRACE_S, type DriveEvent } from '@scoring';
+import { AXES, isDashcamType, MERIT_RULES, PHONE_PICKUP_MIN_MPH, phonePickupTier, SCORING_VERSION, type DriveEvent } from '@scoring';
 
 import type { FinalizeTripPayloadV5 } from '@/data/sync/payload';
 import { decodeRuns } from '@/lib/polyline';
@@ -121,7 +121,7 @@ describe.each(ALL.map((p) => [p.key, p] as const))('the history of %s', (_key, p
         expect(e.startedAt).toBeGreaterThanOrEqual(d.payload.startedAt + 30_000);
         expect(e.startedAt + e.durationS * 1000).toBeLessThanOrEqual(d.payload.endedAt);
         if (e.type === 'speeding') {
-          expect(e.durationS).toBeGreaterThan(SPEEDING_GRACE_S);
+          expect(e.durationS).toBeGreaterThanOrEqual(1);
           expect(e.measured.overMphS).toBeGreaterThan(0);
         }
         if (e.type === 'phone_pickup') {

@@ -61,7 +61,7 @@ create function pg_temp.scores(p_user uuid) returns float8[] language sql stable
 -- ---------------------------------------------------------------------------
 select col_not_null('public', 'trips', 'phone_s', 'every drive holds its phone seconds');
 select col_default_is('public', 'trips', 'phone_s', '0', 'a drive stored before phone tracking has none');
-select col_default_is('public', 'trips', 'scoring_version', '8', 'scoring version 8');
+select col_default_is('public', 'trips', 'scoring_version', '9', 'scoring version 9 (since 0028)');
 select is(array[private.axis_of('speeding'), private.axis_of('hard_brake'), private.axis_of('hard_accel'), private.axis_of('hard_corner'), private.axis_of('phone_pickup'),
     private.axis_of('eyes_off'), private.axis_of('drowsy'), private.axis_of('phone_handling'), private.axis_of('nope')],
   array['speed', 'braking', 'acceleration', 'turning', 'phone', 'attention', 'attention', null, null], 'axis_of: a phone pickup counts toward Phone use (scoring axisOf)');
@@ -100,14 +100,14 @@ select is((select d - 'rating' - 'tripId' from m1), '{"eventId": "a2000000-0000-
 select is((select row(status, (select n_events from pg_temp.t('a0000000-0000-4000-8000-0000000000a2')))::text from public.trip_events where client_event_id = 'a2000000-0000-4000-8000-000000000002'),
   row('removed', 2)::text, 'the pickup is removed and the drive''s events recounted');
 select is(pg_temp.scores('00000000-0000-0000-0000-000000000001'),
-  array[88.5, 91.9280828053141, 81.02731927681675, 89.93932012720053, null, 87.53190614131702, 90.60932370702443]::float8[],
-  'pin P: 88.5, Phone use 87.53190614131702 and every category to the digit (scoring ratingAt)');
-select is((select row(safety_rating, ranked, miles_90d)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(88.5, true, 43.00)::text,
+  array[88.3, 91.9280828053141, 81.02731927681675, 89.93932012720053, null, 86.73833371909146, 90.7045529239451]::float8[],
+  'pin P: 88.3, Phone use 86.73833371909146 (each pickup weighed by its top speed since 0028) and every category to the digit (scoring ratingAt)');
+select is((select row(safety_rating, ranked, miles_90d)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(88.3, true, 43.00)::text,
   'the stored rating counts Phone use');
 select is(private.dispute_event('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000-8000-0000000000a2', 'a2000000-0000-4000-8000-000000000002', 'mounted'), (select d from m1),
   'a repeat of the report answers what was stored');
 
--- P1 alone (ben): the phone axis by hand, 52 + 144 over 900 + 3600
+-- P1 alone (ben), its pickups with no measured speed (a speed factor of 1): the phone axis by hand, 52 + 144 over 900 + 3600
 select pg_temp.drive('00000000-0000-0000-0000-000000000002', 'b0000000-0000-4000-8000-0000000000b1', now() - interval '1 hour', 3600, 6,
   '[{"id":"b1000000-0000-4000-8000-000000000001","type":"phone_pickup","tier":"moderate","durationS":8,"at":120},
     {"id":"b1000000-0000-4000-8000-000000000002","type":"hard_brake","at":180},
@@ -259,7 +259,7 @@ select is((select d -> 'exposure' from jsonb_array_elements(public.list_my_drive
 select is((select array_agg(e ->> 'type' order by e ->> 'startedAt') from jsonb_array_elements(public.list_my_drives(null, 20)) d, jsonb_array_elements(d -> 'events') e
     where d ->> 'clientTripId' = 'a0000000-0000-4000-8000-0000000000a1'), array['phone_pickup', 'hard_brake', 'phone_pickup'], 'and its pickups');
 select is(public.get_profile('ava') -> 'scores',
-  '{"acceleration": 92, "braking": 81, "turning": 90, "attention": null, "phone": 88, "speed": 91}'::jsonb, 'the profile''s category scores name Phone use, whole numbers');
+  '{"acceleration": 92, "braking": 81, "turning": 90, "attention": null, "phone": 87, "speed": 91}'::jsonb, 'the profile''s category scores name Phone use, whole numbers');
 select is(public.get_profile('cat') -> 'scores', 'null'::jsonb, 'a stranger''s scores stay hidden');
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
 select is(public.get_profile('cat') -> 'scores' -> 'phone', '88'::jsonb, 'cat''s own Phone use (87.6 rounds to 88)');

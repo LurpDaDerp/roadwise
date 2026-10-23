@@ -5,7 +5,8 @@
 //   whose motion sensors reported (an IMU-absent row is evidence of nothing). On iPhone a row with a
 //   call (`call` set, ringing or connected) is never a use row, live and rebuilt alike: iOS cannot
 //   tell hands-free from handheld. Android motion is never suppressed by a call.
-// - **An episode** opens on a use row past the warm-up.
+// - **An episode** opens on any use row, from the drive's first row (no warm-up: a pickup needs
+//   driving speed anyway).
 // - **A pickup** (the episode confirmed): `PHONE_PICKUP_MIN_ROWS` use rows, and one of them at driving
 //   speed (`atDrivingSpeed`: a known, trusted GPS speed of `PHONE_PICKUP_MIN_MPH` or more). A pickup
 //   at a red light put down before the car reaches driving speed, and parking-lot use, never count.
@@ -33,7 +34,7 @@
 import { MOVING_MIN_MPH, PHONE_HANDLING_MIN_SCORE, PHONE_PICKUP_MIN_ROWS, PHONE_PUTDOWN_QUIET_S, PHONE_SEVERE_S, phonePickupTier } from '@scoring';
 
 import type { DetectedEvent, Detector, DetectorContext, FeatureRow, PhoneAlert } from '../engine/types';
-import { atDrivingSpeed, inWarmup, knownSpeed, mph, MPS_PER_MPH, phoneWatchable, round1, ROW_MS, speedTrusted } from './common';
+import { atDrivingSpeed, knownSpeed, mph, MPS_PER_MPH, phoneWatchable, round1, ROW_MS, speedTrusted } from './common';
 
 /** After the first repeat (at `PHONE_SEVERE_S` in hand), the next one comes each time this much more is in hand. */
 export const PHONE_REPEAT_IN_HAND_S = 60;
@@ -115,7 +116,7 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
       if (ep !== null && row.ts - (ep.lastUseTs + ROW_MS) >= (ep.confirmed ? QUIET_MS : CLOSE_AFTER_QUIET_ROWS * ROW_MS)) out = close();
       const use = isUseRow(row, ctx.platform);
       if (ep === null) {
-        if (!use || inWarmup(row, ctx)) return out;
+        if (!use) return out;
         ep = {
           id: '',
           useRows: 0,
