@@ -19,13 +19,6 @@ export const recapCopy = {
   },
   share: 'Share',
   notSynced: "Not synced yet. We'll keep trying.",
-  startNote: 'Started on its own',
-  endNote: {
-    stopped: (min: number) => `Ended after ${min} min parked`,
-    walking: 'Ended when you walked away',
-    limit: 'Ended at the 12-hour limit',
-    manual_still: 'Ends where the car stopped',
-  },
   states: {
     recording: { title: 'Drive in progress', body: 'Your score shows up when the drive ends.' },
     tooShort: { title: 'Too short to score', body: (dist: string, min: number) => `Drives under ${dist} that take under ${min} min don't get a score.` },

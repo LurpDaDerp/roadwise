@@ -9,7 +9,6 @@ import { plainBundle } from '@/ui/sky/palette';
 import { DAY, draw, drive, event, HOUR, NOW, press } from '../__fixtures__/drives';
 import { meritInk, meritWash } from '../merit';
 import { SummaryView, type SummaryViewProps } from '../SummaryView';
-import { endNote, startNote } from '../summary';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
 jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn(async () => 'file:///card.png') }));
@@ -389,29 +388,9 @@ describe('units', () => {
   });
 });
 
-describe('how the drive started and ended (this phone only)', () => {
-  test.each([
-    ['stopped', 'Ended after 5 min parked'],
-    ['walking', 'Ended when you walked away'],
-    ['limit', 'Ended at the 12-hour limit'],
-    ['manual_still', 'Ends where the car stopped'],
-  ] as const)('a drive ended %s says so under the time and distance, and in the header label', async (endCause, line) => {
-    expect(endNote({ endCause })).toBe(line);
-    await draw(<SummaryView {...props({ drive: drive({ endCause }) })} />);
-    expect(screen.getByTestId('summary-end-note')).toHaveTextContent(line);
-    expect(screen.getByRole('header', { name: new RegExp(`${line.slice(0, 20)}`) })).toBeOnTheScreen();
-  });
-
-  test('a drive RoadWise noticed on its own says so, with how it ended', async () => {
-    expect(startNote({ origin: 'auto' })).toBe('Started on its own');
-    expect(startNote({ origin: 'manual' })).toBeNull();
-    await draw(<SummaryView {...props({ drive: drive({ origin: 'auto', endCause: 'walking' }) })} />);
-    expect(screen.getByTestId('summary-end-note')).toHaveTextContent('Started on its own · Ended when you walked away');
-  });
-
-  test.each(['manual', 'orphan', null] as const)('none for %s (a hold at the tap, a drive left open, a drive from the server)', async (endCause) => {
-    expect(endNote({ endCause })).toBeNull();
-    await draw(<SummaryView {...props({ drive: drive({ endCause }) })} />);
-    expect(screen.queryByTestId('summary-end-note')).toBeNull();
+describe('how the drive started and ended', () => {
+  test.each(['stopped', 'walking', 'limit', 'manual_still', 'manual', 'orphan', null] as const)('a drive ended %s says nothing about how it started or ended', async (endCause) => {
+    await draw(<SummaryView {...props({ drive: drive({ origin: 'auto', endCause }) })} />);
+    expect(screen.queryByText(/Started on its own|Ended |Ends where|walked away/)).toBeNull();
   });
 });

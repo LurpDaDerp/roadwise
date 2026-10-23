@@ -23,7 +23,6 @@ import {
   meritOf,
   notDrivingLabel,
   notDrivingRefusal,
-  originLine,
   scoreState,
   type ReportReason,
   type ScoreState,
@@ -105,7 +104,6 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
   const reportEvent = events.find((e) => e.id === reporting) ?? null;
   const notDrivingOk = canMarkNotDriving(drive, now) && notDrivingLeft !== 0;
   const refusal = notDrivingRefusal(drive);
-  const note = originLine(drive);
   // The events list for a drive that is kept; a drive in progress, merged away or marked has none to work on.
   const listed = state.kind === 'score' || state.kind === 'too_short' || state.kind === 'not_scored';
   const wash = tier !== null && score !== null ? meritWash(tier, t.scheme) : null;
@@ -125,7 +123,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
             testID="summary-trip"
             accessible
             accessibilityRole="header"
-            accessibilityLabel={`${spokenDuration(drive.durationS)}, ${formatDistance(drive.miles, units, { spoken: true })}. ${formatDay(drive.startedAt)}, ${formatTimeSpan(drive.startedAt, drive.endedAt)}${note ? `. ${note}` : ''}`}
+            accessibilityLabel={`${spokenDuration(drive.durationS)}, ${formatDistance(drive.miles, units, { spoken: true })}. ${formatDay(drive.startedAt)}, ${formatTimeSpan(drive.startedAt, drive.endedAt)}`}
           >
             <Text variant="title2">
               {formatDuration(drive.durationS)} · {formatDistance(drive.miles, units)}
@@ -133,11 +131,6 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
             <Text variant="subhead" tone="muted">
               {formatDay(drive.startedAt)} · {formatTimeSpan(drive.startedAt, drive.endedAt)}
             </Text>
-            {note ? (
-              <Text variant="footnote" tone="muted" testID="summary-end-note">
-                {note}
-              </Text>
-            ) : null}
           </View>
         </View>
 

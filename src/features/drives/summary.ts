@@ -6,7 +6,6 @@
 import {
   driveMerit,
   driveScore,
-  IDLE_END_S,
   isDashcamType,
   NOT_DRIVING_WINDOW_S,
   type DriveEvent,
@@ -19,35 +18,6 @@ import type { Units } from '@/lib/units';
 import { recapCopy } from './copy';
 import { eventName, formatClock, pickupDetail } from './format';
 import type { LocalDrive, LocalDriveEvent } from './model';
-
-// ── Notes under the time and distance ───────────────────────────────────────────────────
-
-/** "Started on its own" for a drive RoadWise noticed by itself; null for one started from Start drive. */
-export function startNote(d: Pick<LocalDrive, 'origin'>): string | null {
-  return d.origin === 'auto' ? recapCopy.startNote : null;
-}
-
-/** How the drive ended, on the phone that recorded it, when it ended by itself (or with End standing still). Null otherwise. */
-export function endNote(d: Pick<LocalDrive, 'endCause'>): string | null {
-  switch (d.endCause) {
-    case 'stopped':
-      return recapCopy.endNote.stopped(Math.round(IDLE_END_S / 60));
-    case 'walking':
-      return recapCopy.endNote.walking;
-    case 'limit':
-      return recapCopy.endNote.limit;
-    case 'manual_still':
-      return recapCopy.endNote.manual_still;
-    default:
-      return null;
-  }
-}
-
-/** "Started on its own · Ended when you walked away", or either alone, or null. */
-export function originLine(d: Pick<LocalDrive, 'origin' | 'endCause'>): string | null {
-  const parts = [startNote(d), endNote(d)].filter((s): s is string => s !== null);
-  return parts.length > 0 ? parts.join(' · ') : null;
-}
 
 // ── Score ───────────────────────────────────────────────────────────────────────────────
 

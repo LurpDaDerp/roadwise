@@ -28,7 +28,6 @@ import {
   isShownEvent,
   meritOf,
   notDrivingLabel,
-  originLine,
   REPORT_LABEL,
   reportReasons,
   scoreState,
@@ -292,13 +291,6 @@ describe('summary', () => {
     expect(stateWord({ kind: 'not_scored' })).toBe('Not scored');
     expect(stateWord({ kind: 'not_driving' })).toBe('Not driving');
     expect(stateWord({ kind: 'merged' })).toBe('Merged');
-  });
-
-  test('how the drive started and ended, one line', () => {
-    expect(originLine(drive({ origin: 'auto', endCause: 'stopped' }))).toBe('Started on its own · Ended after 5 min parked');
-    expect(originLine(drive({ origin: 'auto', endCause: null }))).toBe('Started on its own');
-    expect(originLine(drive({ origin: 'manual', endCause: 'walking' }))).toBe('Ended when you walked away');
-    expect(originLine(drive({ origin: 'manual', endCause: 'manual' }))).toBeNull();
   });
 
   test('the event list: shown events, oldest first, a phone pickup with its time in hand and speed; never an old phone handling', () => {

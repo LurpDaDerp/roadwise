@@ -26,7 +26,6 @@ export function dropCopy(cause: EndCause, reason: DropReason): string {
   if (reason === 'too_short') return 'The drive was too short, so it wasn’t saved.';
   switch (cause) {
     case 'walking':
-      return 'You walked away before driving, so the drive wasn’t saved.';
     case 'manual':
       if (reason === 'no_gps') return 'There was no GPS signal, so the drive wasn’t saved.';
       return reason === 'not_driven' ? 'The car never reached driving speed, so the drive wasn’t saved.' : 'The car never moved, so the drive wasn’t saved.';
