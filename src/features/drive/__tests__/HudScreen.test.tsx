@@ -764,7 +764,7 @@ describe('event alerts', () => {
     expect(halo().mode).toBe('calm');
   });
 
-  test('a speeding alert shows its words but never bursts', async () => {
+  test('a speeding alert says "Slow down" but never bursts', async () => {
     const h = await renderHud({ rowTs: T });
     await h.update({
       rowTs: T + 1000,
@@ -774,7 +774,8 @@ describe('event alerts', () => {
       speedingOver: true,
       lastAlert: { type: 'speeding', tier: 'minor', at: T + 1000 },
     });
-    expect(screen.getByTestId('hud-alert')).toBeTruthy();
+    expect(screen.getByTestId('hud-alert')).toHaveTextContent(/Slow down/);
+    expect(screen.getByTestId('hud-alert')).not.toHaveTextContent(/Speeding/);
     expect(halo().mode).toBe('speeding');
     expect(halo().burst).toBeNull();
   });

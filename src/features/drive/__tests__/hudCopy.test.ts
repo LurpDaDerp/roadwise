@@ -17,6 +17,7 @@ function strings(v: unknown): string[] {
 test('an alert chip for each of the seven event types, three words at most; a phone pickup says "Phone down"', () => {
   expect(Object.keys(hudCopy.alert).sort()).toEqual(['drowsy', 'eyes_off', 'hard_accel', 'hard_brake', 'hard_corner', 'phone_pickup', 'speeding']);
   expect(hudCopy.alert.phone_pickup).toBe('Phone down');
+  expect(hudCopy.alert.speeding).toBe('Slow down');
   for (const w of Object.values(hudCopy.alert)) expect(words(w)).toBeLessThanOrEqual(3);
 });
 

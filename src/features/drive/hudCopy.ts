@@ -52,9 +52,13 @@ export const hudCopy = {
   },
   /** A problem spot's nudge, one per kind (four words at most; the spot sheet quotes the same line). */
   spot: spotsCopy.nudge,
-  /** The alert chip at the top, one per event type. */
+  /**
+   * The alert chip at the top, one per event type: what to do now. Speeding's says "Slow down" as
+   * the car passes the speeding line (the recap, history and analytics still name the event
+   * "Speeding").
+   */
   alert: {
-    speeding: 'Speeding',
+    speeding: 'Slow down',
     hard_brake: 'Hard brake',
     hard_accel: 'Hard start',
     hard_corner: 'Sharp turn',
