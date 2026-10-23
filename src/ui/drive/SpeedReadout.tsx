@@ -1,6 +1,6 @@
-import { memo } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { StyleSheet, Text, useWindowDimensions, View, type TextStyle } from 'react-native';
-import Animated, { type AnimatedStyle } from 'react-native-reanimated';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming, type AnimatedStyle } from 'react-native-reanimated';
 
 import { t } from '@/i18n';
 
@@ -22,6 +22,8 @@ export type SpeedReadoutProps = {
   numeralStyle?: AnimatedStyle<TextStyle>;
   /** Spoken only: over the limit right now. */
   speeding?: boolean;
+  /** A changed digit crossfades (`SPEED_FADE_MS`); false (Reduce Motion; the default) swaps it at once. */
+  fade?: boolean;
 };
 
 /**
@@ -30,6 +32,8 @@ export type SpeedReadoutProps = {
  * that stands for an unknown value, and anything else at a generous 0.6.
  */
 export const NUMERAL_DIGIT_MAX_EM = 0.566;
+/** The face's tabular digits' advance (its `.tf` figures), in em: each digit's cell. */
+export const NUMERAL_DIGIT_ADVANCE_EM = 0.535;
 export const NUMERAL_DASH_EM = 0.376;
 const NUMERAL_OTHER_EM = 0.6;
 /** The hyphen's ink, in em above the baseline (the digits run from 0 to `DIGIT_HEIGHT_EM`). */
@@ -38,10 +42,15 @@ export const DASH_INK_EM = { bottom: 0.219, top: 0.361 };
 export const DIGIT_CENTRE_EM = DIGIT_HEIGHT_EM / 2;
 export const DASH_CENTRE_EM = (DASH_INK_EM.bottom + DASH_INK_EM.top) / 2;
 
+const isDigit = (ch: string): boolean => ch >= '0' && ch <= '9';
+
+/** One character's cell in the numerals' row, in em: a digit's tabular advance, the hyphen's own, anything else 0.6. */
+export const numeralAdvanceEm = (ch: string): number => (isDigit(ch) ? NUMERAL_DIGIT_ADVANCE_EM : ch === '-' ? NUMERAL_DASH_EM : NUMERAL_OTHER_EM);
+
 /** The width of `text` in the numerals' face, in em, never less than the real drawing. */
 export function numeralWidthEm(text: string): number {
   let em = 0;
-  for (const ch of text) em += ch >= '0' && ch <= '9' ? NUMERAL_DIGIT_MAX_EM : ch === '-' ? NUMERAL_DASH_EM : NUMERAL_OTHER_EM;
+  for (const ch of text) em += isDigit(ch) ? NUMERAL_DIGIT_MAX_EM : ch === '-' ? NUMERAL_DASH_EM : NUMERAL_OTHER_EM;
   return em;
 }
 
@@ -86,38 +95,111 @@ export const unitTop = (size: number): number => numeralLineHeight(size) / 2 + (
 /** The unit label's line height at `unitPt`. */
 export const unitLineHeight = (unitPt: number): number => Math.round(1.2 * unitPt);
 
+/** A changed digit's crossfade: the old one out and the new one in, together, over this long. */
+export const SPEED_FADE_MS = 200;
+const FADE = { duration: SPEED_FADE_MS, easing: Easing.inOut(Easing.quad) };
+
+/** Two strings share a layout (a digit-for-digit change): the same number of digits and nothing else in either. */
+export const sameShape = (a: string, b: string): boolean => a.length === b.length && /^\d+$/.test(a) && /^\d+$/.test(b);
+
+type DigitMode = 'still' | 'in' | 'out';
+
+type DigitProps = {
+  ch: string;
+  /** Read at mount: shown at once, fading in from nothing, or fading out from full. */
+  mode: DigitMode;
+  size: number;
+  lineHeight: number;
+  color: string;
+  numeralStyle?: AnimatedStyle<TextStyle>;
+  testID: string;
+};
+
 /**
- * The current speed, large and tabular so the number never shifts sideways as it changes. Its box is
- * the numerals alone, with the digits optically centred in it, so the parent can centre the digits
- * in the halo; the unit label hangs under them. The colour comes from the halo (`numeralStyle`).
- * Nothing flashes. Silent to screen readers apart from its label: no live region, since continuous
- * speech is itself a distraction. The numerals' size comes from the layout (`haloNumeralPt` for the
- * string's digit count), never from the text system shrinking them.
+ * One character in its cell (its advance wide), its `Text` the character's widest drawing plus the
+ * slack wide and centred on the cell, so it is never cut short. A fade runs on the UI thread from
+ * the frame it mounts: an incoming digit mounts at 0, so it never shows at full first.
  */
-function SpeedReadoutView({ speed, unit = 'mph', color, unitColor, size, numeralStyle, speeding = false }: SpeedReadoutProps) {
+const Digit = memo(function Digit({ ch, mode, size, lineHeight, color, numeralStyle, testID }: DigitProps) {
+  const [from] = useState(mode);
+  const opacity = useSharedValue(from === 'in' ? 0 : 1);
+  useEffect(() => {
+    if (from === 'in') opacity.set(withTiming(1, FADE));
+    else if (from === 'out') opacity.set(withTiming(0, FADE));
+  }, [from, opacity]);
+  const fadeStyle = useAnimatedStyle(() => ({ opacity: opacity.get() }));
+  const cell = numeralAdvanceEm(ch) * size;
+  const textW = numeralBoxWidth(ch, size);
+  return (
+    <View style={{ width: cell, height: lineHeight + TEXT_SLACK_PT }}>
+      <Animated.Text
+        testID={testID}
+        allowFontScaling={false}
+        numberOfLines={1}
+        style={[
+          styles.numeral,
+          { color, fontSize: size, lineHeight, width: textW, height: lineHeight + TEXT_SLACK_PT, left: (cell - textW) / 2 },
+          numeralStyle,
+          from === 'still' ? null : fadeStyle,
+        ]}
+      >
+        {ch}
+      </Animated.Text>
+    </View>
+  );
+});
+
+/**
+ * The current speed, large and tabular so the number never shifts sideways as it changes: each
+ * character in its own cell (a digit's is the face's tabular advance), the row centred in a box that
+ * is the numerals alone, with the digits optically centred in it, so the parent can centre the
+ * digits in the halo; the unit label hangs under them. The colour comes from the halo
+ * (`numeralStyle`). Like the lock screen's number, a change is a soft crossfade, digit by digit:
+ * with `fade`, each digit that changes fades out as its new one fades in, together, over
+ * `SPEED_FADE_MS` (one change per new whole number, at most 4 a second as the halo carries the
+ * speed), while the digits that stay never move or dim. A change in the number of digits, to or
+ * from "-", and every change without `fade` (Reduce Motion) swap at once. The fades run on the UI
+ * thread; the JS side renders once per new number. Nothing flashes. Silent to screen readers apart
+ * from its label: no live region, since continuous speech is itself a distraction. The numerals'
+ * size comes from the layout (`haloNumeralPt` for the string's digit count), never from the text
+ * system shrinking them.
+ */
+function SpeedReadoutView({ speed, unit = 'mph', color, unitColor, size, numeralStyle, speeding = false, fade = false }: SpeedReadoutProps) {
   const { fontScale } = useWindowDimensions();
   const spokenUnit = unit === 'km/h' ? 'kilometers per hour' : 'miles per hour';
   const label =
     speed === null ? 'Speed unknown' : `Speed ${speed} ${spokenUnit}${speeding ? ', over the limit' : ''}`;
   const text = speed === null ? t('common.unknown') : String(speed);
+  // The number shown before this one, while its changed digits fade out (null: nothing fades), and
+  // a count of changes, so each change's fade-outs are new ones (React's state-from-props pattern).
+  const [trail, setTrail] = useState<{ text: string; prev: string | null; n: number }>({ text, prev: null, n: 0 });
+  if (trail.text !== text) setTrail({ text, prev: fade && sameShape(trail.text, text) ? trail.text : null, n: trail.n + 1 });
+  const prev = trail.text === text ? trail.prev : null;
   const lineHeight = numeralLineHeight(size);
   const boxW = numeralBoxWidth(text, size);
   const unitPt = SPEED_UNIT_PT * hudLabelScale(fontScale);
   const unitLine = unitLineHeight(unitPt);
+  const row = [styles.row, { width: boxW, height: lineHeight + TEXT_SLACK_PT, transform: [{ translateY: numeralShift(size, text) }] }];
+  const digit = { size, lineHeight, color, numeralStyle };
+  const chars = [...text];
   return (
     <View testID="hud-speed" accessible accessibilityRole="text" accessibilityLabel={label} style={[styles.box, { width: boxW, height: lineHeight }]}>
-      <Animated.Text
-        testID="hud-speed-numeral"
-        allowFontScaling={false}
-        numberOfLines={1}
-        style={[
-          styles.numeral,
-          { color, fontSize: size, lineHeight, width: boxW, height: lineHeight + TEXT_SLACK_PT, transform: [{ translateY: numeralShift(size, text) }] },
-          numeralStyle,
-        ]}
-      >
-        {text}
-      </Animated.Text>
+      {prev !== null ? (
+        <View testID="hud-speed-fading" pointerEvents="none" style={row}>
+          {[...prev].map((ch, i) =>
+            ch === chars[i] ? (
+              <View key={`${trail.n}:${i}`} style={{ width: numeralAdvanceEm(ch) * size }} />
+            ) : (
+              <Digit key={`${trail.n}:${i}`} ch={ch} mode="out" testID="hud-speed-digit-out" {...digit} />
+            )
+          )}
+        </View>
+      ) : null}
+      <View key={`${chars.length}${/^\d+$/.test(text) ? 'd' : 'x'}`} testID="hud-speed-numeral" style={row}>
+        {chars.map((ch, i) => (
+          <Digit key={`${i}:${ch}`} ch={ch} mode={prev !== null && prev[i] !== ch ? 'in' : 'still'} testID="hud-speed-digit" {...digit} />
+        ))}
+      </View>
       <View pointerEvents="none" style={[styles.unitRow, { top: unitTop(size) }]}>
         <Text
           testID="hud-speed-unit"
@@ -135,9 +217,13 @@ function SpeedReadoutView({ speed, unit = 'mph', color, unitColor, size, numeral
 export const SpeedReadout = memo(SpeedReadoutView);
 
 const styles = StyleSheet.create({
-  // The numerals' frame runs TEXT_SLACK_PT past the box's foot (empty, drawn over nothing).
+  // The numerals' frames run TEXT_SLACK_PT past the box's foot (empty, drawn over nothing).
   box: { overflow: 'visible', justifyContent: 'flex-start', alignItems: 'center' },
+  // Each row lies over the box from its top-left and centres its cells.
+  row: { position: 'absolute', top: 0, left: 0, flexDirection: 'row', justifyContent: 'center', overflow: 'visible' },
   numeral: {
+    position: 'absolute',
+    top: 0,
     fontFamily: fontFamilies.numeralsBold,
     fontVariant: ['tabular-nums'],
     includeFontPadding: false,

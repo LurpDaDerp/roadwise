@@ -7,6 +7,7 @@ import { CARRY_MAX_MS, carriedSpeed, SPEED_TICK_MS, wholeSpeed } from '@/core/en
 import { useShownSpeed, type ShownSpeed } from '@/drive/useDrive';
 import { KMH_PER_MPH } from '@/lib/units';
 import { speedDigits, SpeedReadout } from '@/ui/drive';
+import { useOsReduceMotion } from '@/ui/theme';
 
 import { unitLabel, type HudUnits } from './useHudUnits';
 
@@ -56,10 +57,13 @@ export type HaloReadoutProps = {
 
 /**
  * The speed inside the halo, carried on between fixes (`useCarriedSpeed`): its own component reading
- * its own slice of the drive, so each fix and each tick re-render the numerals and nothing else.
+ * its own slice of the drive, so each fix and each tick re-render the numerals and nothing else
+ * (and only when the whole number changes). Each change crossfades digit by digit, as the lock
+ * screen's number does; under Reduce Motion it swaps at once.
  */
 export function HaloReadout({ units, pt2, pt3, ...rest }: HaloReadoutProps) {
   const speed = useCarriedSpeed(useShownSpeed(), units);
+  const still = useOsReduceMotion();
   const size = speedDigits(speed) >= 3 ? pt3 : pt2;
-  return <SpeedReadout speed={speed} unit={unitLabel(units)} size={size} {...rest} />;
+  return <SpeedReadout speed={speed} unit={unitLabel(units)} size={size} fade={!still} {...rest} />;
 }

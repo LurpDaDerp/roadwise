@@ -271,6 +271,20 @@ describe('speed and limit', () => {
     expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('33');
   });
 
+  test('a new number crossfades the digits that change, as the lock screen does; under Reduce Motion it swaps at once', async () => {
+    const h = await renderHud({ speedMph: 40 });
+    expect(screen.queryByTestId('hud-speed-fading')).toBeNull();
+    await h.update({ speedMph: 43 });
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('43');
+    expect(screen.getAllByTestId('hud-speed-digit-out').map((d) => d.props.children)).toEqual(['0']);
+    await screen.unmount();
+    mockStill = true;
+    const still = await renderHud({ speedMph: 40 });
+    await still.update({ speedMph: 43 });
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('43');
+    expect(screen.queryByTestId('hud-speed-fading')).toBeNull();
+  });
+
   test("speeding up or slowing, it moves on 4 times a second along the acceleration from the fix's own time, for at most 1.5 s", async () => {
     // A fix 250 ms old as it lands: 40 mph, slowing 3 mph/s. 39.25 at once, then 38.5, 37.75, 37,
     // 36.25 and 35.5 every 250 ms, held at 35.5 past 1.5 s; whole numbers move 0.8 past the last one.
@@ -326,7 +340,7 @@ describe('the halo while speeding', () => {
     expect(halo()).toMatchObject({ mode: 'calm', flow: true, pulsePeriodMs: 0 });
     // the numerals take the halo's colour at severity 0: the halo white (#F3F6FB), through Reanimated
     expect(p.haloInk).toBe('#F3F6FB');
-    expect(JSON.stringify(screen.getByTestId('hud-speed-numeral').props.style)).toMatch(/rgba\(243, 246(\.\d+)?, 251, 1\)/);
+    expect(JSON.stringify(screen.getAllByTestId('hud-speed-digit')[0]!.props.style)).toMatch(/rgba\(243, 246(\.\d+)?, 251, 1\)/);
     expect(screen.getByTestId('hud-halo', HIDDEN)).toBeTruthy();
   });
 
@@ -386,9 +400,9 @@ describe('the halo while speeding', () => {
   test('a speed with three digits takes the three-digit size', async () => {
     mockUnits = 'km';
     const h = await renderHud({ speedMph: 55 });
-    const two = Number(screen.getByTestId('hud-speed-numeral').props.style.flat?.(9).find((x: { fontSize?: number }) => x?.fontSize)?.fontSize ?? 0);
+    const two = Number(screen.getAllByTestId('hud-speed-digit')[0]!.props.style.flat?.(9).find((x: { fontSize?: number }) => x?.fontSize)?.fontSize ?? 0);
     await h.update({ speedMph: 70 }); // 113 km/h
-    const three = Number(screen.getByTestId('hud-speed-numeral').props.style.flat?.(9).find((x: { fontSize?: number }) => x?.fontSize)?.fontSize ?? 0);
+    const three = Number(screen.getAllByTestId('hud-speed-digit')[0]!.props.style.flat?.(9).find((x: { fontSize?: number }) => x?.fontSize)?.fontSize ?? 0);
     expect(three).toBeGreaterThan(0);
     expect(three).toBeLessThan(two);
   });
@@ -2058,7 +2072,7 @@ describe("the driving screen wears the hour's sky, still", () => {
     mockLive = live();
     const plain = await render(<HudScreen />);
     await act(async () => {});
-    const bare = screen.getByTestId('hud-speed-numeral', HIDDEN).props.style;
+    const bare = screen.getAllByTestId('hud-speed-digit', HIDDEN)[0]!.props.style;
     await plain.rerender(
       <ThemeProvider mood={mood}>
         <HudScreen />
@@ -2074,9 +2088,9 @@ describe("the driving screen wears the hour's sky, still", () => {
     expect(screen.queryByTestId('sky-ambient', HIDDEN)).toBeNull();
     // the speed in the HUD palette of that set, as without a sky (the day set: exactly as bare)
     const set = bundle.scheme === 'dark' ? 'night' : 'day';
-    expect(JSON.stringify(screen.getByTestId('hud-speed-numeral', HIDDEN).props.style)).toContain(HUD[set].haloInk);
+    expect(JSON.stringify(screen.getAllByTestId('hud-speed-digit', HIDDEN)[0]!.props.style)).toContain(HUD[set].haloInk);
     expect(mockHalo.at(-1)!.palette.haloInk).toBe(HUD[set].haloInk);
-    expect(set === 'night' || JSON.stringify(screen.getByTestId('hud-speed-numeral', HIDDEN).props.style) === JSON.stringify(bare)).toBe(true);
+    expect(set === 'night' || JSON.stringify(screen.getAllByTestId('hud-speed-digit', HIDDEN)[0]!.props.style) === JSON.stringify(bare)).toBe(true);
     expect(halo().mode).toBe('calm');
   });
 
