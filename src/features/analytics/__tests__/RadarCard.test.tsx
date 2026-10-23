@@ -6,7 +6,8 @@ import { tokens } from '@/ui/tokens';
 
 import { NO_SCORES, SCORES } from '../__fixtures__/analytics';
 import { AXES } from '../model';
-import { RADAR_ZERO, radarGeometry, radarPoint, RadarCard } from '../RadarCard';
+import { analyticsCopy } from '../copy';
+import { axisAt, RADAR_ZERO, RADAR_ZERO_MIN, radarGeometry, radarPoint, RadarCard, radiusFor, zeroRadius } from '../RadarCard';
 
 jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
   __esModule: true,
@@ -27,6 +28,7 @@ const argb = (c: string) => Number(processColor(c)) | 0;
 const payload = (v: { payload: number }) => v.payload | 0;
 const GREY = argb(light.textSubtle);
 const INK = argb(light.text);
+const SURFACE = argb(light.surface);
 interface Gradient {
   name: string;
   x1: number;
@@ -60,13 +62,17 @@ describe('RadarCard with scores that do not count', () => {
     const pts = shape();
     expect(pts).toHaveLength(6);
     pts.forEach((p, i) => {
-      const z = radarPoint(i, 6, g.r * RADAR_ZERO, g.c);
+      const z = radarPoint(i, 6, zeroRadius(g.r), g.c);
       expect(p.x).toBeCloseTo(z.x, 0);
       expect(p.y).toBeCloseTo(z.y, 0);
     });
     for (const a of AXES) {
-      expect(payload(dot(a.key).props.fill)).toBe(GREY);
-      expect(dot(a.key).props.opacity).toBeLessThan(1);
+      // hollow: the card's colour inside a grey ring, a touch bigger than a scored dot, at full strength
+      expect(payload(dot(a.key).props.fill)).toBe(SURFACE);
+      expect(payload(dot(a.key).props.stroke)).toBe(GREY);
+      expect(dot(a.key).props.strokeWidth).toBe(1.5);
+      expect(dot(a.key).props.r).toBe(3.5);
+      expect(dot(a.key).props.opacity).toBe(1);
     }
     for (let i = 0; i < 6; i++) {
       expect(fades(i)).toBe(false);
@@ -81,12 +87,14 @@ describe('RadarCard with scores that do not count', () => {
     const att = AXES.findIndex((a) => a.key === 'attention');
     const pts = shape();
     expect(pts).toHaveLength(6);
-    const z = radarPoint(att, 6, g.r * RADAR_ZERO, g.c);
+    const z = radarPoint(att, 6, zeroRadius(g.r), g.c);
     expect(pts[att]!.x).toBeCloseTo(z.x, 0);
     expect(pts[att]!.y).toBeCloseTo(z.y, 0);
-    // the N/A dot is grey and the same size; a scored one is the ink at full strength
-    expect(payload(dot('attention').props.fill)).toBe(GREY);
-    expect(dot('attention').props.r).toBe(dot('speed').props.r);
+    // the N/A dot is hollow (surface fill, grey ring); a scored one is a solid ink dot of r 3
+    expect(payload(dot('attention').props.fill)).toBe(SURFACE);
+    expect(payload(dot('attention').props.stroke)).toBe(GREY);
+    expect(dot('attention').props.r).toBe(3.5);
+    expect(dot('speed').props.r).toBe(3);
     expect(payload(dot('speed').props.fill)).toBe(INK);
     expect(dot('speed').props.opacity).toBe(1);
     // exactly the edge into it and the edge out of it fade, each running from the scored end to the N/A vertex
@@ -129,5 +137,56 @@ describe('RadarCard with scores that do not count', () => {
     expect(
       screen.getByLabelText('Safety Rating 80 out of 100. Acceleration 95, Braking 72, Turning 100, Attention needs DashPal, Phone use 84, Speed 88.')
     ).toBeOnTheScreen();
+  });
+});
+
+describe('the zero ring and the centre', () => {
+  test('the zero ring is a share of the radius but never under the minimum', () => {
+    expect(RADAR_ZERO_MIN).toBe(40);
+    expect(zeroRadius(56)).toBe(40);
+    expect(zeroRadius(200)).toBe(60);
+    expect(zeroRadius(110)).toBe(40); // 33 pt of share is under the minimum
+    expect(zeroRadius(150)).toBeCloseTo(RADAR_ZERO * 150, 5);
+  });
+
+  test('a score maps linearly from the zero ring (0) to the outer ring (100)', () => {
+    for (const r of [56, 90, 110]) {
+      expect(radiusFor(0, r)).toBe(zeroRadius(r));
+      expect(radiusFor(null, r)).toBe(zeroRadius(r));
+      expect(radiusFor(100, r)).toBe(r);
+      expect(radiusFor(50, r)).toBeCloseTo((zeroRadius(r) + r) / 2, 5);
+    }
+  });
+
+  test('a tap inside the zero ring opens nothing; just outside it opens the nearest axis', () => {
+    const c = { x: 100, y: 100 };
+    for (const r of [56, 110]) {
+      expect(axisAt(c.x, c.y - zeroRadius(r) + 1, r, c)).toBeNull();
+      expect(axisAt(c.x, c.y - zeroRadius(r) - 1, r, c)).toBe(0);
+    }
+  });
+
+  test('the centre is the number at the stat size with "/100" under it, and no caption', async () => {
+    await draw(<RadarCard dashpalPaired rating={80} scores={SCORES} onOpen={jest.fn()} />);
+    const num = screen.getByTestId('radar-rating', opts);
+    expect(num).toHaveTextContent('80');
+    expect(num).toHaveStyle({ fontSize: 28, lineHeight: 32 });
+    expect(screen.getByTestId('radar-out-of', opts)).toHaveTextContent('/100');
+    expect(screen.getByTestId('radar-out-of', opts)).toHaveStyle({ fontSize: 12, textAlign: 'center' });
+    expect(num).toHaveStyle({ textShadowRadius: 4 });
+    // "Safety Rating" is no longer in the middle: only the footer's "Safety Rating · Last 90 days" and the chart's label carry it
+    expect(screen.queryByText('Safety Rating', { includeHiddenElements: true })).toBeNull();
+  });
+
+  test('with no rating the centre is a dash alone', async () => {
+    await draw(<RadarCard dashpalPaired={false} rating={null} scores={NO_SCORES} onOpen={jest.fn()} />);
+    expect(screen.getByTestId('radar-rating', opts)).toHaveTextContent('—');
+    expect(screen.queryByTestId('radar-out-of', opts)).toBeNull();
+  });
+
+  test('the footer names the rating and the window', async () => {
+    await draw(<RadarCard dashpalPaired rating={80} scores={SCORES} onOpen={jest.fn()} />);
+    expect(analyticsCopy.radar.ratingWindow).toBe('Safety Rating · Last 90 days');
+    expect(screen.getByText('Safety Rating · Last 90 days')).toBeOnTheScreen();
   });
 });

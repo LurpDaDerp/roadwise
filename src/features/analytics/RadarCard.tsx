@@ -15,9 +15,12 @@ const HOW = analyticsCopy.radar.how;
 export const RADAR_RINGS = [0, 0.25, 0.5, 0.75, 1] as const;
 /**
  * Where a score of 0 sits, as a share of the radius: the zero ring is a hexagon of its own around
- * the centre number, so a shape with low scores (or none yet) is never a point.
+ * the centre number, so a shape with low scores (or none yet) is never a point. On a small chart
+ * `RADAR_ZERO_MIN` takes over (see `zeroRadius`).
  */
 export const RADAR_ZERO = 0.3;
+/** The zero ring is never smaller than this (pt), so the centre number fits inside it and a greyed dot on it is never covered. */
+export const RADAR_ZERO_MIN = 40;
 /** The chart's radius stays within these, so it reads on a small phone and stays near its labels on a big one. */
 export const RADAR_R_MIN = 56;
 export const RADAR_R_MAX = 110;
@@ -44,10 +47,16 @@ export function radarPoint(i: number, n: number, r: number, c: Pt): Pt {
   return { x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) };
 }
 
-/** A score's distance from the centre: 0 on the zero ring (`RADAR_ZERO` × r), 100 on the outer one; clamped to 0–100, a missing score as 0. */
+/** The zero ring's radius for a chart of radius `r`: `RADAR_ZERO` × r, but never under `RADAR_ZERO_MIN`. */
+export function zeroRadius(r: number): number {
+  return Math.max(RADAR_ZERO * r, RADAR_ZERO_MIN);
+}
+
+/** A score's distance from the centre: 0 on the zero ring (`zeroRadius(r)`), 100 on the outer one (r), linear between; clamped to 0–100, a missing score as 0. */
 export function radiusFor(score: number | null, r: number): number {
   const s = score === null || !Number.isFinite(score) ? 0 : Math.max(0, Math.min(100, score));
-  return r * (RADAR_ZERO + ((1 - RADAR_ZERO) * s) / 100);
+  const z = zeroRadius(r);
+  return z + ((r - z) * s) / 100;
 }
 
 /**
@@ -66,14 +75,14 @@ export function radarPolygon(scores: readonly (number | null)[], r: number, c: P
 
 /**
  * The axis a tap on the chart at (x, y) is nearest to by angle, or null inside the zero ring (the
- * rating) and well outside the outer ring. A tap anywhere on a category's spoke opens it, as its
+ * rating, `zeroRadius(r)`) and well outside the outer ring. A tap anywhere on a category's spoke opens it, as its
  * label does.
  */
 export function axisAt(x: number, y: number, r: number, c: Pt, n: number = AXES.length): number | null {
   const dx = x - c.x;
   const dy = y - c.y;
   const d = Math.hypot(dx, dy);
-  if (!(d >= r * RADAR_ZERO) || d > r + 2 * LABEL_GAP) return null;
+  if (!(d >= zeroRadius(r)) || d > r + 2 * LABEL_GAP) return null;
   const step = (2 * Math.PI) / n;
   const i = Math.round((Math.atan2(dy, dx) + Math.PI / 2) / step);
   return ((i % n) + n) % n;
@@ -158,16 +167,17 @@ export function radarLabel(rating: number | null, scores: AxisScores, locked: re
 
 /**
  * The six-axis radar of the last 90 days (a hexagon): grid rings at 0/25/50/75/100 (0 is a small
- * hexagon of its own around the centre, where a score of 0, or none yet, sits), a spoke per axis,
- * one filled polygon, and the Safety Rating in the middle. All of it in the page ink (no colour
+ * hexagon of its own around the centre, never under `RADAR_ZERO_MIN` across, where a score of 0, or
+ * none yet, sits), a spoke per axis, one filled polygon, and the Safety Rating number, with "/100"
+ * under it, inside the zero ring (its name is in the footer and the chart's label). All of it in the page ink (no colour
  * coding), with each axis's name around the outside on a faint chip: a button that opens that
  * category's details, whether or not it has a score yet. A tap on the chart itself opens the
  * category whose spoke it is nearest. Every axis always has a vertex, so the shape is always a
  * hexagon. An axis with no score (Attention without a paired DashPal, which is locked: its chip is
  * greyed with a lock, its spoke faint, and its sheet says how to get it; Phone use before any drive
  * was watched for pickups; any axis with no score yet) sits at the zero ring, where a score of 0
- * would, as a greyed-out dot, and the two edges leading into it fade from the ink to that grey as
- * they approach it, so it reads as not counting. Under the chart, "Last 90 days" and a "How it
+ * would, as a hollow grey dot on the ring that nothing covers, and the two edges leading into it fade from the ink to that grey as
+ * they approach it, so it reads as not counting. Under the chart, "Safety Rating · Last 90 days" and a "How it
  * works" button that opens a sheet saying what makes the total.
  */
 export function RadarCard({
@@ -203,7 +213,7 @@ export function RadarCard({
   const halo = {
     textShadowColor: t.colors.surface,
     textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 6,
+    textShadowRadius: 4,
   };
   // Everything drawn inside the chart ignores touches, so a tap's location is in the chart's own frame.
   const tapChart = (e: GestureResponderEvent) => {
@@ -266,15 +276,17 @@ export function RadarCard({
                   <Line key={AXES[i]!.key} testID={`radar-edge-${i}`} x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={stroke} strokeWidth={2} strokeLinecap="round" />
                 );
               })}
-              {/* A greyed-out dot for an axis with no score, at the zero ring: it does not count. */}
+              {/* A hollow grey dot for an axis with no score, on the zero ring: it does not count. */}
               {vertices.map((p, i) => (
                 <Circle
                   key={AXES[i]!.key}
                   cx={p.x}
                   cy={p.y}
-                  r={3}
-                  fill={na[i] ? grey : t.colors.text}
-                  opacity={na[i] ? 0.8 : 1}
+                  r={na[i] ? 3.5 : 3}
+                  fill={na[i] ? t.colors.surface : t.colors.text}
+                  stroke={na[i] ? grey : undefined}
+                  strokeWidth={na[i] ? 1.5 : undefined}
+                  opacity={1}
                   testID={`radar-dot-${AXES[i]!.key}`}
                 />
               ))}
@@ -294,19 +306,14 @@ export function RadarCard({
             }}
           >
             {/* A halo in the card's colour keeps the shape's lines from running through the glyphs. */}
-            <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-              <Text variant="display" testID="radar-rating" style={halo}>
-                {shownRating}
-              </Text>
-              {rating === null ? null : (
-                <Text variant="footnote" tone="muted" testID="radar-out-of" style={halo}>
-                  {analyticsCopy.radar.outOf}
-                </Text>
-              )}
-            </View>
-            <Text variant="caption" tone="muted" style={halo}>
-              {analyticsCopy.radar.rating}
+            <Text variant="stat" testID="radar-rating" style={[{ fontSize: t.type.stat.fontSize, lineHeight: t.type.stat.lineHeight }, halo]}>
+              {shownRating}
             </Text>
+            {rating === null ? null : (
+              <Text variant="caption" tone="muted" testID="radar-out-of" style={[{ fontSize: t.type.caption.fontSize, lineHeight: t.type.caption.lineHeight, textAlign: 'center' }, halo]}>
+                {analyticsCopy.radar.outOf}
+              </Text>
+            )}
           </View>
         </Pressable>
         {AXES.map((a, i) => {
@@ -365,7 +372,7 @@ export function RadarCard({
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }} testID="radar-footer">
         <Text variant="footnote" tone="subtle" style={{ flex: 1 }}>
-          {analyticsCopy.radar.window}
+          {analyticsCopy.radar.ratingWindow}
         </Text>
         <Pressable
           testID="radar-how"

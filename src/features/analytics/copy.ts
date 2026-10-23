@@ -50,6 +50,8 @@ export const analyticsCopy = {
     rating: 'Safety Rating',
     outOf: '/100',
     window: 'Last 90 days',
+    /** The chart footer's left text: what the number in the middle is, and over what. */
+    ratingWindow: 'Safety Rating · Last 90 days',
     noScore: 'no score yet',
     /** An axis's button for a screen reader ("Speeding, score 82"). */
     axis: (label: string, score: number | null) => (score === null ? `${label}, no score yet` : `${label}, score ${score}`),
