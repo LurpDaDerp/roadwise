@@ -39,7 +39,6 @@ import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/dri
 import { writeDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, finishPendingCancel, isJournaled, playerInputs, type DriveHost, type DriveStartPermissions, type PushToStartOutcome, type PushToStartRequest } from '@/drive/host';
 import { bindDriveScreenMemory, DRIVE_SCREEN_ENTERED_KEY, isDriveScreenFocused, markDriveScreenEntered } from '@/features/drive/hudPresence';
-import type { PhoneReminder } from '@/features/drive/phoneReminder';
 import type { StoredDrive } from '@/features/drive/summaryNotifier';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
@@ -127,8 +126,6 @@ export interface BootstrapDeps {
   lastPosition?: () => Promise<{ lat: number; lng: number } | null>;
   voiceEnabled?: () => boolean;
   attachSummaryNotifier?: ((host: DriveHost, db: Db) => LaunchSummaryNotifier) | null;
-  /** The phone reminder (a pickup while RoadWise is not active). Default: `createPhoneReminder` over expo-notifications. `null`: none. */
-  createPhoneReminder?: (() => PhoneReminder) | null;
   /**
    * The DashPal dashcam runtime (plan §7). Default: `createDashcamRuntime` over the process BLE
    * transport, which is only created once a dashcam is paired or setup runs. `null`: none.
@@ -431,16 +428,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       }
     }
     const dc = dashcam;
-    const makeReminder = deps.createPhoneReminder === undefined ? () => defaultPhoneReminder(onError) : deps.createPhoneReminder;
-    let reminder: PhoneReminder | null = null;
-    if (makeReminder) {
-      try {
-        reminder = makeReminder();
-      } catch (error) {
-        onError(error, 'phone reminder');
-      }
-    }
-    const remind = reminder;
     const display = deps.display === undefined ? createDriveDisplay(nativeDisplaySinks(), { now, platform: Platform.OS, onError: (e) => onError(e, 'display') }) : deps.display;
     const drive = createDriveHost({
       db,
@@ -464,7 +451,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
         }),
       voiceEnabled: deps.voiceEnabled ?? defaultVoiceEnabled,
       appState,
-      phoneReminder: remind ? (pickup) => remind.pickup(pickup) : undefined,
       alertsAvailable,
       signedOut: identity.owner === 'signed-out',
       dashcam: dc
@@ -479,9 +465,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     });
     host = drive;
     setActiveDashcam(dc);
-    // Before the boot: a drive the boot ends (a journal read to its end) takes its reminder down too.
-    const detachReminder = remind?.attach(drive) ?? (() => {});
-    // Before the boot too: a drive the boot stores (native ended it while no process ran) gets its
+    // Before the boot: a drive the boot stores (native ended it while no process ran) gets its
     // recap notification; the notifier decides which are recent enough to post.
     const attach = deps.attachSummaryNotifier === undefined ? defaultSummaryNotifier : deps.attachSummaryNotifier;
     let notifier: LaunchSummaryNotifier | null = null;
@@ -525,8 +509,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
         onError(error, 'summary notifier');
       }
     }
-    // A reminder an earlier process left for a drive that is no longer recording comes down.
-    remind?.sweep();
     if (!drive.isBusy()) limits.resetTrip();
     let unmountDiagnostics: () => void = () => {};
     const mount = deps.mountDiagnostics === undefined ? defaultDiagnostics : deps.mountDiagnostics;
@@ -542,8 +524,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       unbindScreenMemory();
       await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
       notifier?.detach();
-      await remind?.settled().catch((error: unknown) => onError(error, 'phone reminder'));
-      detachReminder();
       if (dc) {
         // The pending link work (a write, an ACK) is let go: the transport outlives this runtime.
         await dc.link.settled().catch((error: unknown) => onError(error, 'dashcam'));
@@ -713,12 +693,6 @@ function defaultDiagnostics(host: DriveHost, db: Db, onError: (error: unknown) =
   const { createDriveBatteryRecorder } = require('@/features/dev/battery') as typeof import('@/features/dev/battery');
   /* eslint-enable @typescript-eslint/no-require-imports */
   return createDriveBatteryRecorder({ host, settings: createSettingsRepo(db), onError });
-}
-
-function defaultPhoneReminder(onError: (error: unknown, context: string) => void): PhoneReminder {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
-  const { createPhoneReminder } = require('@/features/drive/phoneReminder') as typeof import('@/features/drive/phoneReminder');
-  return createPhoneReminder({ onError: (error, context) => onError(error, context) });
 }
 
 function defaultSummaryNotifier(host: DriveHost, db: Db): LaunchSummaryNotifier {

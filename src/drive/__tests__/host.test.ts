@@ -602,8 +602,7 @@ describe('a phone pickup (phone plan P4)', () => {
   const phoneDecisions = (h: H) => h.player.delivered.filter((d) => d.kind === 'phone_pickup');
 
   test('with the driving screen showing (focused, RoadWise active) the pickup plays: the urgent tone, "Phone down", the haptic, shown and shaken; at 15 s in hand a repeat, tone and haptic only', async () => {
-    const reminders: { clientTripId: string; at: number }[] = [];
-    const h = build({ voiceEnabled: () => true, phoneReminder: (p) => reminders.push(p) });
+    const h = build({ voiceEnabled: () => true });
     await h.host.boot();
     h.host.setHudVisible(true);
     await drive(h, rows(40, { speedMps: 15 }));
@@ -617,7 +616,6 @@ describe('a phone pickup (phone plan P4)', () => {
     expect(repeat!.suppressed).toBeUndefined();
     expect(h.host.snapshot().lastAlert).toMatchObject({ type: 'phone_pickup', tier: 'moderate', at: T0 + 42_000 });
     expect(h.host.snapshot().lastShake).toMatchObject({ at: T0 + 42_000, tier: 'moderate' });
-    expect(reminders).toEqual([]);
     const id = h.host.snapshot().clientTripId!;
     await h.host.end();
     const pickups = (await createEventsRepo(db).listByTrip(id)).filter((e) => e.type === 'phone_pickup');
@@ -625,15 +623,13 @@ describe('a phone pickup (phone plan P4)', () => {
     expect((await createTripsRepo(db).get(id))!.phone_s).toBeGreaterThan(0);
   });
 
-  test('RoadWise in front on another screen: nothing plays and no reminder; the pickup still counts', async () => {
-    const reminders: { clientTripId: string; at: number }[] = [];
-    const h = build({ phoneReminder: (p) => reminders.push(p) });
+  test('RoadWise in front on another screen: nothing plays; the pickup still counts', async () => {
+    const h = build();
     await h.host.boot();
     await drive(h, rows(40, { speedMps: 15 }));
     await feed(h, pickupRows(30, 0, 20));
     expect(phoneDecisions(h).length).toBe(2);
     expect(phoneDecisions(h).every((d) => d.suppressed === true)).toBe(true);
-    expect(reminders).toEqual([]);
     // The other alerts keep their own rule: in front, they play.
     await feed(h, rows(30, { t0: T0 + 70_000, speedMps: 25 }));
     expect(h.player.delivered.filter((d) => d.kind === 'speeding').every((d) => d.suppressed !== true)).toBe(true);
@@ -642,9 +638,8 @@ describe('a phone pickup (phone plan P4)', () => {
     expect((await createEventsRepo(db).listByTrip(id)).map((e) => e.type)).toContain('phone_pickup');
   });
 
-  test('RoadWise behind: nothing plays, and the first alert of each pickup (never a repeat) tells the reminder its drive and row', async () => {
-    const reminders: { clientTripId: string; at: number }[] = [];
-    const h = build({ phoneReminder: (p) => reminders.push(p) });
+  test('RoadWise behind or locked: nothing plays and nothing is posted, and every pickup is still recorded with its time in hand', async () => {
+    const h = build();
     await h.host.boot();
     h.host.setHudVisible(true);
     await drive(h, rows(40, { speedMps: 15 }));
@@ -652,47 +647,17 @@ describe('a phone pickup (phone plan P4)', () => {
     await feed(h, pickupRows(60, 0, 20));
     // A second pickup after a put-down (11 s and more without a use row).
     await feed(h, pickupRows(20, 0, 5, T0 + 100_000));
-    expect(phoneDecisions(h).length).toBe(3);
-    expect(phoneDecisions(h).every((d) => d.suppressed === true)).toBe(true);
-    const id = h.host.snapshot().clientTripId!;
-    expect(reminders).toEqual([
-      { clientTripId: id, at: T0 + 42_000 },
-      { clientTripId: id, at: T0 + 102_000 },
-    ]);
     // Inactive (a call screen, the notification shade) counts as behind too.
     h.appState.set('inactive');
     await feed(h, pickupRows(20, 0, 5, T0 + 120_000));
-    expect(reminders).toHaveLength(3);
-    await h.host.stop({ endOpenTrip: true });
-  });
-
-  test('no reminder from a replayed row (a journal drained), a row more than 15 s old or a dry run', async () => {
-    const reminders: { clientTripId: string; at: number }[] = [];
-    const h = buildIos({ phoneReminder: (p) => reminders.push(p) });
-    await h.host.boot();
-    h.appState.set('background');
-    await h.detect.setArmed(true, 'user-1');
-    h.detect.wake();
-    // Handled from the second row: the pickup confirms on the journal native kept before the drive was taken in.
-    await confirm(h, rows(40, { speedMps: 15, over: (i) => (i >= 1 ? handled : {}) }));
-    expect(phoneDecisions(h)[0]!.ts).toBeLessThan(T0 + 15_000);
-    expect(reminders).toEqual([]);
-    // Put down, then picked up again on a row that reached the host 16 s late.
-    await feedIos(h, pickupRows(30, 15, 20, T0 + 60_000), 16_000);
-    expect(phoneDecisions(h).some((d) => d.ts === T0 + 77_000)).toBe(true);
-    expect(reminders).toEqual([]);
-    await h.host.stop({ endOpenTrip: true });
-
-    // A dry run's Start, tapped as its rows begin.
-    clock = T0;
-    const dry = build({ persistence: 'none', phoneReminder: (p) => reminders.push(p) });
-    await dry.host.boot();
-    await drive(dry, rows(40, { speedMps: 15 }));
-    dry.appState.set('background');
-    await feed(dry, pickupRows(30, 0, 20));
-    expect(dry.player.delivered.some((d) => d.kind === 'phone_pickup')).toBe(true);
-    expect(reminders).toEqual([]);
-    await dry.host.stop({ endOpenTrip: true });
+    expect(phoneDecisions(h).length).toBe(4);
+    expect(phoneDecisions(h).every((d) => d.suppressed === true)).toBe(true);
+    const id = h.host.snapshot().clientTripId!;
+    await h.host.end();
+    const pickups = (await createEventsRepo(db).listByTrip(id)).filter((e) => e.type === 'phone_pickup');
+    expect(pickups.map((e) => e.started_at)).toEqual([T0 + 40_000, T0 + 100_000, T0 + 120_000]);
+    expect(pickups[0]).toMatchObject({ duration_s: 20, tier: 'severe' });
+    expect((await createTripsRepo(db).get(id))!.phone_s).toBeGreaterThan(0);
   });
 
   test('with the driving screen showing, a pickup confirmed on a replayed row (a journal drained) plays nothing; a live one plays', async () => {

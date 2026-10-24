@@ -10,8 +10,7 @@
  * drive's busy signal says it is over.
  *
  * A tap on the drive's recording note (`kind: 'driveRecording'`, the iPhone's note while a drive
- * records) or its phone reminder (`kind: 'phoneReminder'`, posted when the phone is picked up with
- * RoadWise in the background) opens the driving screen, through `router.navigate` so it never stacks a second one, and
+ * records) opens the driving screen, through `router.navigate` so it never stacks a second one, and
  * only while the engine is recording (`isDriveRecording`; not while a drive only finalizes); one
  * that lands before the navigator is mounted waits for it. It is never held past the drive, never
  * replayed, and starts nothing.
@@ -48,7 +47,7 @@ export interface NotificationsHostProps {
   isRecording: () => boolean;
   /**
    * The engine is recording a drive now (not finalizing): only then does a tap open the driving
-   * screen (the recording note, the phone reminder, a held drive recap).
+   * screen (the recording note, a held drive recap).
    */
   isDriveRecording: () => boolean;
   /** A drive is under way (recording → finalizing): taps are held, not navigated. */
@@ -106,7 +105,7 @@ export function NotificationsHost(props: NotificationsHostProps): null {
   const replay = useRef<() => void>(() => {});
   /** Counts deferrals, so a replay that raced one runs again. */
   const deferrals = useRef(0);
-  /** A tap for the driving screen (the recording note, the phone reminder, or a recap held while a drive records) waiting for the navigator. */
+  /** A tap for the driving screen (the recording note, or a recap held while a drive records) waiting for the navigator. */
   const driveTap = useRef(false);
 
   /** Opens the driving screen for a waiting tap, once the navigator is up. Reads only refs. */

@@ -5,7 +5,6 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { bindPendingTerms, clearTermsAccepted } from '@/features/auth/pendingConsent';
 import { readProfileCache, writeProfileCache } from '@/features/auth/profileCache';
-import { cancelPhoneReminders } from '@/features/drive/phoneReminder';
 import { cancelDriveSummaries } from '@/features/drive/summaryNotifier';
 import { clearHomeNotice } from '@/features/home/homeNotice';
 
@@ -393,8 +392,6 @@ export function SessionProvider({
         await runBudgeted([...afterSignOut]);
         // A summary scheduled for this driver's last drive must not fire once they have left (U3).
         void cancelDriveSummaries().catch(() => {});
-        // Nor a phone reminder of their drive.
-        void cancelPhoneReminders().catch(() => {});
         // Home's notice line was this driver's: it goes with them.
         clearHomeNotice();
         // A Terms acceptance ticked on this device and not yet recorded belongs to the driver who

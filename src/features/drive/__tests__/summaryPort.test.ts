@@ -32,7 +32,7 @@ beforeEach(() => {
 });
 
 test('scheduled() lists the recaps in Notification Center as well as the pending ones, each once, and only drive summaries', async () => {
-  mockOs.pending = [request('drive-summary:a', 'driveSummary'), request('phone-reminder:x', 'phoneReminder')];
+  mockOs.pending = [request('drive-summary:a', 'driveSummary'), request('friend-2', 'friend_request')];
   mockOs.presented = [delivered('drive-summary:b', 'driveSummary'), delivered('drive-summary:a', 'driveSummary'), delivered('friend-1', 'friend_request')];
   expect(await createExpoSummaryPort().scheduled()).toEqual(['drive-summary:a', 'drive-summary:b']);
 });

@@ -31,9 +31,8 @@
 //   never for a replayed row (a journal drained, rows moved into a re-opened drive: old news, which
 //   the engine never shows or shakes either); the spot nudge shows only then. A phone pickup's
 //   alert plays only while the driving screen shows
-//   (focused, RoadWise active) and never for a replayed row; with RoadWise not active its first
-//   alert, from a live row, posts the phone reminder instead (`phoneReminder`), never for a dry
-//   run. The drive records the same either way.
+//   (focused, RoadWise active) and never for a replayed row; with RoadWise not active nothing plays
+//   or is posted. The drive records the same either way.
 // - **Battery.** Nothing runs while idle: no timer, no read. While recording, one timeout at most
 //   (the automatic end, `ticks.ts`), the display throttled to one update per 3 s, the weather
 //   checked every 15 min or 20 km, the state published at most once per row.
@@ -304,12 +303,6 @@ export interface DriveHostDeps {
   /** The phone recording the drives (default `Platform.OS`): the phone detector reads it (on iPhone a row with a call is never phone use). */
   platform?: 'ios' | 'android';
   /**
-   * The phone reminder (`src/features/drive/phoneReminder.ts`): told of a phone pickup's first alert
-   * while RoadWise is not active, from a live row at most `PHONE_REMINDER_MAX_AGE_MS` old, on a drive
-   * that is stored (never a dry run). It posts (or not) by its own rules.
-   */
-  phoneReminder?: (pickup: { clientTripId: string; at: number }) => void;
-  /**
    * Called as each row arrives: fires the pumped timers that are due (`src/lib/timers.ts`), which
    * Android leaves unfired while the app is in the background. Default: the process's.
    */
@@ -332,8 +325,6 @@ export const MAX_JOURNAL_REPLAY_ROWS = 1800;
 export const JOURNAL_READ_ROWS = 300;
 /** The car counts as still driving at the end only when its latest speed reading is at most this old then. */
 export const DRIVING_AT_END_MS = 5_000;
-/** A phone pickup confirmed on a row older than this (host clock) posts no reminder: it is old news. */
-export const PHONE_REMINDER_MAX_AGE_MS = 15_000;
 
 /**
  * Whether native's journal (or the journal link of a re-opened drive) holds `clientTripId`: the
@@ -689,8 +680,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   /**
    * A phone pickup's alert (phone plan P4): it plays (the urgent tone, "Phone down", the haptic; a
    * repeat the tone and haptic) only while the driving screen shows, focused with RoadWise active.
-   * RoadWise not active: nothing plays, and the pickup's first alert from a live, fresh row of a
-   * stored drive tells the phone reminder. RoadWise active on another screen: nothing at all. A
+   * RoadWise not active, or active on another screen: nothing plays and nothing is posted. A
    * replayed row (a journal drained, rows moved into a re-opened drive) plays nothing either: it is
    * old news, maybe minutes old. The pickup counts the same either way.
    */
@@ -700,15 +690,6 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (dashcamAlertActive()) decision.silent = true;
     if (!hudVisible() || replayingRow) decision.suppressed = true;
     player.deliver(decision).catch((e: unknown) => report(e, 'player'));
-    if (appActive() || alert.repeat === true || !persist || replayingRow || !deps.phoneReminder) return;
-    if (now() - alert.at > PHONE_REMINDER_MAX_AGE_MS) return;
-    const id = engine.snapshot().clientTripId;
-    if (id === null) return;
-    try {
-      deps.phoneReminder({ clientTripId: id, at: alert.at });
-    } catch (e) {
-      report(e, 'phoneReminder');
-    }
   }
 
   // --- the published state ------------------------------------------------------------------------

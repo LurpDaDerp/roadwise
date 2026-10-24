@@ -98,13 +98,11 @@ function restartDashcamLink(): void {
 async function cancelSummariesBounded(): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    /* eslint-disable @typescript-eslint/no-require-imports -- deferred native module */
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
     const { cancelDriveSummaries } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
-    const { cancelPhoneReminders } = require('@/features/drive/phoneReminder') as typeof import('@/features/drive/phoneReminder');
-    /* eslint-enable @typescript-eslint/no-require-imports */
     await Promise.race([
-      // The drive recaps and the phone reminders were the leaving driver's.
-      Promise.all([cancelDriveSummaries().catch(() => {}), cancelPhoneReminders().catch(() => {})]),
+      // The drive recaps were the leaving driver's.
+      cancelDriveSummaries().catch(() => {}),
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, CANCEL_SUMMARIES_TIMEOUT_MS);
       }),

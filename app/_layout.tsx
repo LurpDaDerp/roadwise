@@ -70,7 +70,7 @@ function RootTheme({ choice, mood, children }: { choice: AppearanceChoice; mood:
  * - `NotificationsHost`: the app's only notification handler and response listener (rev1: C1).
  *   Foreground banners stay hidden for the whole of a drive, not only while recording (T5 review).
  *   U3's summary notifier stays attached by the runtime itself (bootstrap), not here. A tap on the
- *   iPhone's recording note, the phone reminder or a recap held mid-drive opens the driving screen
+ *   iPhone's recording note or a recap held mid-drive opens the driving screen
  *   only while the engine records (`isDriveRecording`, never while a drive only finalizes); no tap
  *   starts a drive.
  */

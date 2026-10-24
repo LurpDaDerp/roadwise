@@ -30,8 +30,6 @@ const mockProfileQueue: Gate<unknown>[] = [];
 const authCalls: string[] = [];
 // What `auth.signOut` answers: null (ended), or the error Supabase reports when it could not end it.
 const mockSignOutError: { current: unknown } = { current: null };
-// The phone reminders taken down at a sign-out.
-const reminderCalls: string[] = [];
 
 jest.mock('@/data/supabase/client', () => ({
   supabase: {
@@ -46,12 +44,6 @@ jest.mock('@/data/supabase/client', () => ({
 jest.mock('@/features/drive/summaryNotifier', () => ({
   cancelDriveSummaries: jest.fn(async () => {
     authCalls.push('cancelDriveSummaries');
-  }),
-}));
-// Nor may a phone reminder of their drive stay up.
-jest.mock('@/features/drive/phoneReminder', () => ({
-  cancelPhoneReminders: jest.fn(async () => {
-    reminderCalls.push('cancelPhoneReminders');
   }),
 }));
 jest.mock('@/data/supabase/profile', () => ({
@@ -91,7 +83,6 @@ beforeEach(async () => {
   profileCalls.length = 0;
   mockProfileQueue.length = 0;
   authCalls.length = 0;
-  reminderCalls.length = 0;
   mockSignOutError.current = null;
   delete mockSessionGate.resolve;
   delete mockSessionGate.reject;
@@ -185,9 +176,8 @@ test('signOut asks Supabase to end the session and clears it on the event', asyn
 
   showHomeNotice('notDriving');
   await act(async () => { fireEvent.press(screen.getByText('sign out')); });
-  // The session ends first; then the pending drive summaries are cancelled, and the phone reminders.
+  // The session ends first; then the pending drive summaries are cancelled.
   expect(authCalls).toEqual(['signOut', 'cancelDriveSummaries']);
-  expect(reminderCalls).toEqual(['cancelPhoneReminders']);
   // Home's notice line belongs to this driver: the next one never sees it.
   expect(readHomeNotice()).toBeNull();
 

@@ -18,7 +18,6 @@ import { INSTALL_ID_KEY, readInstallId } from '@/data/devices/installId';
 import { DROP_NOTICE_KEY, readDropNotice } from '@/drive/dropNotice';
 import type { DriveHost } from '@/drive/host';
 import { DRIVE_SCREEN_ENTERED_KEY, driveScreenEnteredFor, resetDriveScreenPresence, setDriveScreenFocused } from '@/features/drive/hudPresence';
-import type { PhoneReminder } from '@/features/drive/phoneReminder';
 import { QueryClient } from '@tanstack/react-query';
 import { subscribeInvalidation } from '@/data/queries/invalidate';
 import { queryKeys } from '@/data/queries/keys';
@@ -72,7 +71,6 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
       appVersion: '2.0.0',
       permissions: async () => ({ location: 'granted' as const }),
       attachSummaryNotifier: null,
-      createPhoneReminder: null,
       mountDiagnostics: null,
       mayDrain: () => false,
       onError: () => {},
@@ -97,36 +95,6 @@ test('a cold launch: migrates, records the owner, boots the host idle, starts th
   const again = deps();
   const rt2 = await bootstrapApp(again.deps);
   expect(again.source.calls).toEqual([]);
-  await rt2.stop();
-});
-
-test('the phone reminder follows the host from before its boot, sweeps once the host has booted, and goes with the runtime', async () => {
-  const calls: string[] = [];
-  const reminder: PhoneReminder = {
-    pickup: (p) => void calls.push(`pickup ${p.clientTripId}`),
-    attach: (host) => {
-      calls.push(`attach booted=${String((host as Partial<DriveHost>).booted?.())}`);
-      return () => void calls.push('detach');
-    },
-    sweep: () => void calls.push('sweep'),
-    settled: async () => void calls.push('settled'),
-  };
-  const d = deps({ createPhoneReminder: () => reminder });
-  const rt = await bootstrapApp(d.deps);
-  expect(calls).toEqual(['attach booted=false', 'sweep']);
-  await rt.stop();
-  expect(calls).toEqual(['attach booted=false', 'sweep', 'settled', 'detach']);
-  // One that cannot be built is reported; the launch goes on without it.
-  const errors: string[] = [];
-  const broken = deps({
-    createPhoneReminder: () => {
-      throw new Error('no notifications');
-    },
-    onError: (_e, ctx) => void errors.push(ctx),
-  });
-  const rt2 = await bootstrapApp(broken.deps);
-  expect(errors).toContain('phone reminder');
-  expect(rt2.drive.snapshot().status).toBe('idle');
   await rt2.stop();
 });
 

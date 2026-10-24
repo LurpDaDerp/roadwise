@@ -1,5 +1,5 @@
-// The one notification response listener: a tap on the iPhone's recording note or the phone
-// reminder opens the driving screen while a drive records (never held past the drive, never
+// The one notification response listener: a tap on the iPhone's recording note opens the
+// driving screen while a drive records (never held past the drive, never
 // replayed, starting nothing), and any other tap opens its allowlisted route, held during a drive
 // (the driving screen meanwhile only for a drive recap, and only while the engine records).
 import { act, render } from '@testing-library/react-native';
@@ -149,15 +149,9 @@ test('with no drive recording, the note opens nothing', async () => {
   expect(h.navigate).not.toHaveBeenCalled();
 });
 
-test('while a drive only finalizes, the recording note and the phone reminder open nothing', async () => {
+test('while a drive only finalizes, the recording note opens nothing', async () => {
   const h = await mount({ drive: 'closing' });
   await act(async () => mockNotifications.listener!(recordingTap(31)));
-  await act(async () =>
-    mockNotifications.listener!({
-      actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
-      notification: { date: 32, request: { identifier: 'phone-reminder:trip-1', content: { data: { kind: 'phoneReminder', url: '/drive' } } } },
-    })
-  );
   await h.settle();
   await h.setDrive('idle');
   expect(h.navigate).not.toHaveBeenCalled();
@@ -192,21 +186,6 @@ test('a tap before the navigator is up waits for it, and opens the driving scree
   await late.setDrive('idle');
   await late.setReady(true);
   expect(late.navigate).not.toHaveBeenCalled();
-});
-
-test('the phone reminder opens the driving screen while the drive records, and nothing once it is over', async () => {
-  const reminder = (date: number) => ({
-    actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
-    notification: { date, request: { identifier: 'phone-reminder:trip-1', content: { data: { kind: 'phoneReminder', url: '/drive' } } } },
-  });
-  const h = await mount({ drive: 'recording' });
-  await act(async () => mockNotifications.listener!(reminder(21)));
-  await h.settle();
-  expect(h.navigate.mock.calls).toEqual([['/drive']]);
-  await h.setDrive('idle');
-  await act(async () => mockNotifications.listener!(reminder(22)));
-  await h.settle();
-  expect(h.navigate.mock.calls).toEqual([['/drive']]);
 });
 
 test('only the drive’s own notes open the driving screen: /drive under another kind opens Home', async () => {

@@ -1,7 +1,6 @@
 import type * as Notifications from 'expo-notifications';
 
-import { foregroundBehavior, installForegroundHandler, PHONE_REMINDER_BEHAVIOR, type HandlerApi } from '../handler';
-import { PHONE_REMINDER_KIND } from '../hrefs';
+import { foregroundBehavior, installForegroundHandler, type HandlerApi } from '../handler';
 
 type Handler = Parameters<HandlerApi['setNotificationHandler']>[0];
 
@@ -27,13 +26,5 @@ describe('foreground notification handler', () => {
       throw new Error('boom');
     });
     expect(await h.handleNotification(note({}))).toEqual(foregroundBehavior(true));
-  });
-
-  it('always shows the phone-pickup reminder, silently, even while a drive records', async () => {
-    for (const recording of [true, false]) {
-      const behavior = await install(() => recording).handleNotification(note({ kind: PHONE_REMINDER_KIND, url: '/drive' }));
-      expect(behavior).toEqual(PHONE_REMINDER_BEHAVIOR);
-      expect(behavior).toMatchObject({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false });
-    }
   });
 });
