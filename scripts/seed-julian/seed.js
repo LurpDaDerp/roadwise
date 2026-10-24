@@ -214,12 +214,8 @@ function batchSql(userId, items) {
 // ---------------------------------------------------------------------------------------------
 // Passwords
 
-/** Julian's password: 20 characters from an alphabet without look-alikes (about 100 bits), in groups of four so it can be typed. */
-function typeablePassword() {
-  const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
-  const group = () => Array.from({ length: 4 }, () => alphabet[crypto.randomInt(alphabet.length)]).join('');
-  return Array.from({ length: 5 }, group).join('-');
-}
+/** Julian's password: the same on every run, so a re-seed does not lock the demo out. */
+const JULIAN_PASSWORD = 'test1234';
 
 /** A friend's password: nobody signs in as a friend, so it is 256 random bits and is not kept. */
 const secretPassword = () => crypto.randomBytes(32).toString('base64url');
@@ -512,7 +508,7 @@ async function main() {
   const passwords = {};
   for (const b of builds) {
     const person = b.person;
-    passwords[person.key] = person.key === 'julian' ? typeablePassword() : secretPassword();
+    passwords[person.key] = person.key === 'julian' ? JULIAN_PASSWORD : secretPassword();
     const account = await createAccount(target, target.url, keys, person, passwords[person.key]);
     ids[person.key] = account.id;
     console.log(`  created @${person.username} (${account.id})`);
