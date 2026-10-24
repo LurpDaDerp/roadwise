@@ -213,7 +213,7 @@ describe('RadarCard', () => {
     const q = radarPoint(5, 6, 90, c);
     expect(keyAt(q.x + 4, q.y - 3)).toBe('speed');
     expect(keyAt(150, 150)).toBeNull();
-    expect(keyAt(160, 160)).toBeNull();
+    expect(keyAt(156, 156)).toBeNull();
     // Inside the zero ring is the rating's; just outside it is the spoke's.
     expect(keyAt(150, 150 - zeroRadius(100) + 1)).toBeNull();
     expect(keyAt(150, 150 - zeroRadius(100) - 1)).toBe('acceleration');
@@ -249,15 +249,15 @@ describe('RadarCard', () => {
     expect(new Set(zero.split(' ')).size).toBe(5);
   });
 
-  test('the zero ring: 0 sits at 30 % of the radius (at least 40 pt), 100 on the outer ring, rings drawn at 0/25/50/75/100', async () => {
-    expect(RADAR_ZERO).toBe(0.3);
+  test('the zero ring: 0 sits at 10 % of the radius (at least 13⅓ pt), 100 on the outer ring, rings drawn at 0/25/50/75/100', async () => {
+    expect(RADAR_ZERO).toBe(0.1);
     expect(RADAR_RINGS).toEqual([0, 0.25, 0.5, 0.75, 1]);
-    expect(radiusFor(0, 100)).toBeCloseTo(40);
-    expect(radiusFor(null, 100)).toBeCloseTo(40);
-    expect(radiusFor(50, 100)).toBeCloseTo(70);
+    expect(radiusFor(0, 100)).toBeCloseTo(40 / 3);
+    expect(radiusFor(null, 100)).toBeCloseTo(40 / 3);
+    expect(radiusFor(50, 100)).toBeCloseTo(50 + 40 / 6);
     expect(radiusFor(100, 100)).toBeCloseTo(100);
     expect(radiusFor(140, 100)).toBeCloseTo(100);
-    expect(radiusFor(-5, 100)).toBeCloseTo(40);
+    expect(radiusFor(-5, 100)).toBeCloseTo(40 / 3);
     await draw(<RadarCard dashpalPaired rating={80} scores={{ ...SCORES, braking: 0 }} onOpen={jest.fn()} />);
     for (const k of [0, 25, 50, 75, 100]) expect(screen.getByTestId(`radar-ring-${k}`, { includeHiddenElements: true })).toBeOnTheScreen();
     // A 0 still has its dot, on the zero ring.
@@ -277,9 +277,9 @@ describe('RadarCard', () => {
     expect(radarPoint(3, 5, 50, c).x).toBeCloseTo(100 - 50 * Math.sin(Math.PI / 5), 5);
     expect(radarPolygon([100, 50, 0, 0, 0], 100, c).split(' ')[0]).toBe('100.0,0.0');
     expect(radarPolygon([140, 50, 0, 0, 0], 100, c).split(' ')[0]).toBe('100.0,0.0');
-    // a score of 0 sits on the zero ring, straight up 40 from the centre (the zero ring's floor)
-    expect(radarPolygon([0, 50, 0, 0, 0], 100, c).split(' ')[0]).toBe('100.0,60.0');
-    expect(radarPolygon([50, 50, 0, 0, 0], 100, c).split(' ')[0]).toBe('100.0,30.0');
+    // a score of 0 sits on the zero ring, straight up 13⅓ from the centre (the zero ring's floor)
+    expect(radarPolygon([0, 50, 0, 0, 0], 100, c).split(' ')[0]).toBe('100.0,86.7');
+    expect(radarPolygon([50, 50, 0, 0, 0], 100, c).split(' ')[0]).toBe('100.0,43.3');
   });
 
   const overlaps = (a: { left: number; top: number; width: number; height: number }, b: typeof a) =>

@@ -142,10 +142,10 @@ describe('RadarCard with scores that do not count', () => {
 
 describe('the zero ring and the centre', () => {
   test('the zero ring is a share of the radius but never under the minimum', () => {
-    expect(RADAR_ZERO_MIN).toBe(40);
-    expect(zeroRadius(56)).toBe(40);
-    expect(zeroRadius(200)).toBe(60);
-    expect(zeroRadius(110)).toBe(40); // 33 pt of share is under the minimum
+    expect(RADAR_ZERO_MIN).toBeCloseTo(40 / 3, 5);
+    expect(zeroRadius(56)).toBeCloseTo(40 / 3, 5);
+    expect(zeroRadius(200)).toBeCloseTo(20, 5);
+    expect(zeroRadius(110)).toBeCloseTo(40 / 3, 5); // 11 pt of share is under the minimum
     expect(zeroRadius(150)).toBeCloseTo(RADAR_ZERO * 150, 5);
   });
 

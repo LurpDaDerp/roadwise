@@ -14,13 +14,13 @@ const HOW = analyticsCopy.radar.how;
 /** Grid rings, as a share of the full score: 0, 25, 50, 75 and 100. */
 export const RADAR_RINGS = [0, 0.25, 0.5, 0.75, 1] as const;
 /**
- * Where a score of 0 sits, as a share of the radius: the zero ring is a hexagon of its own around
- * the centre number, so a shape with low scores (or none yet) is never a point. On a small chart
- * `RADAR_ZERO_MIN` takes over (see `zeroRadius`).
+ * Where a score of 0 sits, as a share of the radius: the zero ring is a small hexagon of its own
+ * close to the centre number, so a shape with low scores (or none yet) is never a point. On a small
+ * chart `RADAR_ZERO_MIN` takes over (see `zeroRadius`).
  */
-export const RADAR_ZERO = 0.3;
-/** The zero ring is never smaller than this (pt), so the centre number fits inside it and a greyed dot on it is never covered. */
-export const RADAR_ZERO_MIN = 40;
+export const RADAR_ZERO = 0.1;
+/** The zero ring is never smaller than this (pt), so a greyed dot on it is never covered by the others. */
+export const RADAR_ZERO_MIN = 40 / 3;
 /** The chart's radius stays within these, so it reads on a small phone and stays near its labels on a big one. */
 export const RADAR_R_MIN = 56;
 export const RADAR_R_MAX = 110;
@@ -56,7 +56,7 @@ export function zeroRadius(r: number): number {
 export function radiusFor(score: number | null, r: number): number {
   const s = score === null || !Number.isFinite(score) ? 0 : Math.max(0, Math.min(100, score));
   const z = zeroRadius(r);
-  return z + ((r - z) * s) / 100;
+  return s === 100 ? r : z + ((r - z) * s) / 100;
 }
 
 /**
@@ -167,9 +167,9 @@ export function radarLabel(rating: number | null, scores: AxisScores, locked: re
 
 /**
  * The six-axis radar of the last 90 days (a hexagon): grid rings at 0/25/50/75/100 (0 is a small
- * hexagon of its own around the centre, never under `RADAR_ZERO_MIN` across, where a score of 0, or
+ * hexagon of its own near the centre, never under `RADAR_ZERO_MIN` out, where a score of 0, or
  * none yet, sits), a spoke per axis, one filled polygon, and the Safety Rating number, with "/100"
- * under it, inside the zero ring (its name is in the footer and the chart's label). All of it in the page ink (no colour
+ * under it, over the middle of the zero ring (its name is in the footer and the chart's label). All of it in the page ink (no colour
  * coding), with each axis's name around the outside on a faint chip: a button that opens that
  * category's details, whether or not it has a score yet. A tap on the chart itself opens the
  * category whose spoke it is nearest. Every axis always has a vertex, so the shape is always a
