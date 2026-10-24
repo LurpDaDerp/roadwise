@@ -17,6 +17,26 @@ import { TripsMapCard } from './TripsMapCard';
 import type { AnalyticsData } from './useAnalytics';
 import { WhenYouDriveCard } from './WhenYouDriveCard';
 
+/** The cards' place while the tab loads: the radar's and the coaching line's. */
+function LoadingCards() {
+  const t = useTheme();
+  return (
+    <>
+      <Skeleton width="100%" height={340} radius={t.radius.card} testID="analytics-loading" />
+      <Skeleton width="100%" height={88} radius={t.radius.card} />
+    </>
+  );
+}
+
+/** The tab as it loads, with no data read yet: its title over the loading cards. */
+export function AnalyticsLoading() {
+  return (
+    <Screen sky scroll bottomInset={false} title={analyticsCopy.title} testID="analytics-screen">
+      <LoadingCards />
+    </Screen>
+  );
+}
+
 export interface AnalyticsViewProps {
   data: AnalyticsData;
   /** The 90-day Safety Rating (`data.coaching.rating`, 1 decimal); null while unranked or before it exists. */
@@ -42,7 +62,6 @@ export interface AnalyticsViewProps {
  * only general ones.
  */
 export function AnalyticsView({ data, rating, spots = null, range, onRange, onOpenDrive, dashpalPaired, onPairDashpal }: AnalyticsViewProps) {
-  const t = useTheme();
   // The axis stays set while the sheet slides away, so its content doesn't blank on the way out.
   const [sheet, setSheet] = useState<{ axis: AxisKey; open: boolean }>({ axis: 'speed', open: false });
   const close = () => setSheet((s) => ({ ...s, open: false }));
@@ -56,10 +75,7 @@ export function AnalyticsView({ data, rating, spots = null, range, onRange, onOp
     <Screen sky scroll bottomInset={false} title={analyticsCopy.title} testID="analytics-screen">
       {data.error ? <Banner tone="warning" message={analyticsCopy.error} /> : null}
       {first ? (
-        <>
-          <Skeleton width="100%" height={340} radius={t.radius.card} testID="analytics-loading" />
-          <Skeleton width="100%" height={88} radius={t.radius.card} />
-        </>
+        <LoadingCards />
       ) : (
         <>
           <RadarCard rating={rating} scores={data.coaching.scores} dashpalPaired={dashpalPaired} onOpen={(axis) => setSheet({ axis, open: true })} />

@@ -838,27 +838,30 @@ export function routeLines(polylines: readonly string[]): MapPoint[][] {
 export const FIT_SPAN_SCALE = 1.6;
 export const FIT_MIN_DELTA = 0.02;
 
-function quantile(sorted: readonly number[], q: number): number {
+function quantile(sorted: ArrayLike<number>, q: number): number {
   return sorted[Math.round(q * (sorted.length - 1))]!;
 }
 
 /**
  * The region the trip map opens on: centred on the median point, wide enough for the 10th–90th
  * percentile span × 1.6 (at least 0.02°), so the most-driven roads sit in the middle with room
- * around them and outliers stay a pinch away. Null with no points.
+ * around them and outliers stay a pinch away. Null with no points. Every route point is sorted, so
+ * the sorts are numeric typed-array sorts (a comparator sort of every point stalls the tab).
  */
 export function fitRegion(points: readonly MapPoint[]): Region | null {
-  const lats: number[] = [];
-  const lngs: number[] = [];
+  const latBuf = new Float64Array(points.length);
+  const lngBuf = new Float64Array(points.length);
+  let n = 0;
   for (const p of points) {
     if (Number.isFinite(p.latitude) && Number.isFinite(p.longitude)) {
-      lats.push(p.latitude);
-      lngs.push(p.longitude);
+      latBuf[n] = p.latitude;
+      lngBuf[n] = p.longitude;
+      n += 1;
     }
   }
-  if (lats.length === 0) return null;
-  lats.sort((a, b) => a - b);
-  lngs.sort((a, b) => a - b);
+  if (n === 0) return null;
+  const lats = latBuf.subarray(0, n).sort();
+  const lngs = lngBuf.subarray(0, n).sort();
   return {
     latitude: quantile(lats, 0.5),
     longitude: quantile(lngs, 0.5),
