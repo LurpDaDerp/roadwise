@@ -38,11 +38,11 @@ function uuid(rnd) {
 // ---------------------------------------------------------------------------------------------
 // How big an event is
 
-/** A speeding episode: its rows over the line (every one counts), its tier and how far over the line it went. */
+/** A speeding episode: its rows over the line (every one counts), its tier and how far over the line it went. Mostly short and mild, now and then a long hard one, as real speeding is. */
 function drawSpeeding(rnd) {
-  const d = Math.min(80, Math.round(3 + -Math.log(1 - rnd()) * 20));
+  const d = Math.min(70, Math.round(3 + -Math.log(1 - rnd()) * 13));
   const roll = rnd();
-  const tier = roll < 0.3 ? 'minor' : roll < 0.75 ? 'moderate' : 'severe';
+  const tier = roll < 0.4 ? 'minor' : roll < 0.82 ? 'moderate' : 'severe';
   const peakOver = tier === 'minor' ? between(rnd, 0.8, 3.8) : tier === 'moderate' ? between(rnd, 4.4, 8.8) : between(rnd, 9.4, 15);
   const meanOver = peakOver * between(rnd, 0.6, 0.9);
   return { d, tier, peakOver, overMphS: round(scoring.speedingChargedS(d) * meanOver, 1) };
@@ -303,7 +303,7 @@ function makeEvents(rec, ctx, rnd) {
           type: 'eyes_off',
           tier: 'severe',
           startedAt,
-          durationS: intBetween(rnd, 3, 6),
+          durationS: rnd() < 0.8 ? intBetween(rnd, 3, 6) : intBetween(rnd, 7, 12),
           ...here(rec, i),
           measured: { source: 'dashcam', speedMph: round(v[i] / MPH, 1) },
         };

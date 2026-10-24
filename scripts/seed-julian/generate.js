@@ -38,11 +38,13 @@ const lerp = (a, b, f) => a + (b - a) * f;
 function skillAt(person, back) {
   const p = Math.min(1, Math.max(0, 1 - back / DAYS));
   const s = person.skill;
-  const f = Math.pow(1 - p, s.curve);
   const week = Math.floor((DAYS - back) / 7);
   const wob = mulberry32(person.seed + week * 977)() * 2 - 1;
   const k = {};
-  for (const a of AXES) k[a] = Math.max(0.05, (s.end[a] + (s.start[a] - s.end[a]) * f) * (1 + s.wobble * wob));
+  for (const a of AXES) {
+    const f = Math.pow(1 - p, (s.curves && s.curves[a]) ?? s.curve);
+    k[a] = Math.max(0.05, (s.end[a] + (s.start[a] - s.end[a]) * f) * (1 + s.wobble * wob));
+  }
   return { k, pCalm: lerp(s.calm[0], s.calm[1], p) };
 }
 

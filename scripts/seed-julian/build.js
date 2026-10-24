@@ -41,15 +41,11 @@ function julianStory(r) {
   if (!r.ranked || scored.some((v) => v === null)) must.push('not ranked, or a category has no score');
   else {
     if (a.braking !== Math.min(...scored) || a.braking >= 80) must.push(`braking ${a.braking} is not the weak spot a tip is for`);
-    if (a.braking < 68) must.push(`braking ${a.braking} is too low`);
-    if (!(r.rating >= 83 && r.rating <= 89)) must.push(`rating ${r.rating}`);
-    if (Math.min(a.acceleration, a.turning) < 78) must.push(`acceleration ${a.acceleration} / turning ${a.turning}`);
+    if (a.braking < 62) must.push(`braking ${a.braking} is too low`);
+    if (!(r.rating >= 82 && r.rating <= 89)) must.push(`rating ${r.rating}`);
+    if (Math.min(a.acceleration, a.turning) < 74) must.push(`acceleration ${a.acceleration} / turning ${a.turning}`);
   }
   if (!Object.values(r.achievements).every(Boolean)) must.push('an achievement is missing');
-  if (r.thisWeekDrives >= 5) {
-    const done = Object.values(r.goals).filter((g) => Number(g.split('/')[0]) >= Number(g.split('/')[1])).length;
-    if (done < 1 || done > 2) must.push(`goals ${JSON.stringify(r.goals)}`);
-  }
   const active = r.spots.filter((s) => s.state === 'active');
   const kinds = new Set(active.map((s) => s.kind));
   if (active.length < 3 || active.length > 4 || !kinds.has('speeding') || !kinds.has('hard_brake') || active.filter((x) => x.kind === 'speeding').length > 2) must.push(`spots ${active.map((x) => x.kind)}`);
@@ -58,7 +54,8 @@ function julianStory(r) {
   if (!r.disputable.hazard || !r.disputable.mounted) must.push('nothing to report in the last week');
   if (r.recentMerits.length < 5) must.push(`recent merit tiers ${r.recentMerits}`);
   const h = r.home;
-  if (h.window !== '7d' || h.speeding.color === 'red' || h.harsh.color === 'red' || h.clean.color === 'red') must.push(`home colours ${h.speeding.color}/${h.harsh.color}/${h.clean.color}`);
+  // (the speeding tile may read red: Home marks over 4 events per 100 mi red, and a driver who still speeds shows it)
+  if (h.window !== '7d' || h.harsh.color === 'red' || h.clean.color === 'red') must.push(`home colours ${h.speeding.color}/${h.harsh.color}/${h.clean.color}`);
   const mean = (list) => list.reduce((s, w) => s + w.score, 0) / Math.max(1, list.length);
   const gap = mean(r.trend.filter((w) => w.weeksAgo <= 2)) - mean(r.trend.filter((w) => w.weeksAgo >= 9));
   if (gap < 7) must.push(`score trend ${gap.toFixed(1)}`);
@@ -68,14 +65,16 @@ function julianStory(r) {
   // closer to the story is better: a rating in the mid-80s that rose lately, Braking the plain weak spot,
   // the rest good, Home's arrows pointing the way it improved
   let penalty = 0;
-  penalty += outside(r.rating, 85, 87.5) * 3;
+  penalty += outside(r.rating, 84.5, 87.5) * 3;
   penalty += outside(gain, 1, 2.5) * 2;
-  penalty += outside(a.braking ?? 0, 72, 78);
-  penalty += outside(a.phone ?? 0, 80, 86) + outside(a.speed ?? 0, 90, 95) + outside(a.attention ?? 0, 90, 94) + outside(Math.min(a.acceleration ?? 0, a.turning ?? 0), 82, 100);
+  penalty += outside(a.braking ?? 0, 68, 78);
+  penalty += outside(a.phone ?? 0, 80, 88) + outside(a.speed ?? 0, 84, 92) + outside(a.attention ?? 0, 88, 94) + outside(Math.min(a.acceleration ?? 0, a.turning ?? 0), 82, 100);
+  // a week with some goals still under way reads better than one with everything done or nothing started
+  const doneGoals = Object.values(r.goals).filter((g) => Number(g.split('/')[0]) >= Number(g.split('/')[1])).length;
+  penalty += r.thisWeekDrives >= 4 && (doneGoals < 1 || doneGoals > 2) ? 4 : 0;
   penalty += h.speeding.total > h.speeding.avgWeek + 0.05 ? 6 : 0;
   penalty += h.clean.value < h.clean.month ? 6 : 0;
-  penalty += h.speeding.color === 'green' ? 0 : 2;
-  penalty += outside(gap, 10, 40);
+    penalty += outside(gap, 10, 40);
   return { must, penalty };
 }
 

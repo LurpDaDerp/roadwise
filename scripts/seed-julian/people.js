@@ -241,16 +241,16 @@ const JULIAN = {
   plan: planJulian,
   tempo: [0.9, 0.99],
   skill: {
-    start: K(6.0, 4.0, 3.0, 2.4, 6.5),
-    end: K(0.2, 0.3, 0.1, 0.08, 0.85),
+    start: K(5.0, 3.5, 2.5, 2.0, 6.5),
+    end: K(0.55, 0.15, 0.06, 0.05, 0.85),
     curve: 2.0,
+    // speeding fades more slowly than the rest: it is the habit that takes longest to break
+    curves: { speed: 1.5 },
     calm: [0.05, 0.55],
     wobble: 0.22,
   },
   plant: ['hard_brake', 'phone_pickup'],
-  // this week's drives, in order: clean ones and ones with a single hard event (then hard events), so Clean sweep is done and Smooth operator under way
-  weekMix: ['calm', 'hard_brake', 'calm', 'hard_accel', 'calm', 'hard_corner'],
-  dashcam: { fromBack: 52, eyes: [0.07, 0.022], drowsyBacks: [36, 9] },
+  dashcam: { fromBack: 88, eyes: [0.09, 0.026], drowsyBacks: [64, 43, 24, 9] },
   schoolZone: { lat: 47.677, lng: -122.3157 },
   origin: 0.85,
   // moving the car a few metres: too short to score
@@ -262,9 +262,9 @@ const JULIAN = {
   // at the corner by Roosevelt on the way home, and (since cleared) hard starts out of the school lot
   spots: [
     { id: 'speed45th', active: true, kind: 'speeding', route: 'home_school', reverse: false, atM: 760, over: 6.5, durationS: 17, hit: (back) => (back <= 75 ? (back > 35 ? 0.65 : back > 14 ? 0.35 : 0.25) : 0) },
-    { id: 'brakeRoosevelt', active: true, kind: 'hard_brake', route: 'school_home', reverse: false, atM: 1895, hit: (back) => (back <= 60 ? (back > 25 ? 0.55 : 0.3) : 0) },
-    { id: 'cornerUvillage', active: true, kind: 'hard_corner', route: 'home_job', reverse: false, atM: 2870, hit: (back) => (back <= 55 ? (back > 20 ? 0.45 : 0.3) : 0) },
-    { id: 'launchSchool', kind: 'hard_accel', route: 'school_home', reverse: false, atM: 640, hit: (back) => (back <= 62 && back > 22 ? 0.5 : 0) },
+    { id: 'brakeRoosevelt', active: true, kind: 'hard_brake', route: 'school_home', reverse: false, atM: 1895, hit: (back) => (back <= 60 ? (back > 25 ? 0.45 : 0.25) : 0) },
+    { id: 'cornerUvillage', active: true, kind: 'hard_corner', route: 'home_job', reverse: false, atM: 2870, hit: (back) => (back <= 55 ? (back > 20 ? 0.4 : 0.25) : 0) },
+    { id: 'launchSchool', kind: 'hard_accel', route: 'school_home', reverse: false, atM: 640, hit: (back) => (back <= 62 && back > 22 ? 0.4 : 0) },
   ],
   share: { rating: true, categories: true, achievements: true, stats: true, heatmap: 'friends' },
 };
