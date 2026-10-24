@@ -29,7 +29,8 @@ import {
   PERMISSIONS_HREF,
   PROFILE_HREF,
 } from '@/features/drives/routes';
-import { HomeWeatherAlert } from '@/features/weather/HomeWeatherAlert';
+import { useWeatherAlert } from '@/features/weather/useWeatherAlert';
+import { WeatherAlertSlot } from '@/features/weather/HomeWeatherAlert';
 import { Screen } from '@/ui';
 
 import { homeCopy } from './copy';
@@ -55,6 +56,8 @@ export function HomeScreen() {
   // Automatic drives switched off: Home never asks for Location Always or Background App Refresh.
   const autoDisabled = autoDrives.state === 'disabled';
   const { start } = useDriveControls();
+  // One Open-Meteo reading feeds both the dangerous-weather card and the drive card's weather.
+  const weather = useWeatherAlert();
   // The status alone (not useDriveLive), so Home doesn't re-render on every 1 Hz drive tick: a
   // drive recording, or a Start waiting for the car to move.
   const recording = useDrive((d) => d.status === 'recording' || Boolean(d.waiting));
@@ -202,7 +205,8 @@ export function HomeScreen() {
         onProfile={() => router.navigate(PROFILE_HREF)}
         recording={recording}
         inProgress={<DriveInProgressBanner />}
-        weather={<HomeWeatherAlert />}
+        weather={<WeatherAlertSlot feed={weather} />}
+        conditions={weather.conditions}
         coaching={coaching}
         permissions={<PermissionCard board={board} recording={recording} autoDisabled={autoDisabled} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}
         dashpal={<HomeDashpal hidden={recording} pull={pulls} />}

@@ -7,7 +7,7 @@ import { IconButton, Text, useTheme } from '@/ui';
 
 import { weatherCopy, weatherLabel, weatherLine, weatherTitle } from './copy';
 import type { DangerAlert } from './danger';
-import { useWeatherAlert, type DismissStore, type WeatherPorts } from './useWeatherAlert';
+import { useWeatherAlert, type DismissStore, type HomeWeather, type WeatherPorts } from './useWeatherAlert';
 
 /**
  * Home's dangerous-weather card (plan D14): the first action item under the drive card. Renders
@@ -15,10 +15,14 @@ import { useWeatherAlert, type DismissStore, type WeatherPorts } from './useWeat
  * it until that danger ends or a different one starts. `ports` and `store` are for tests.
  */
 export function HomeWeatherAlert({ ports, store }: { ports?: WeatherPorts; store?: DismissStore } = {}) {
-  const { alert, dismiss } = useWeatherAlert(ports, store);
+  return <WeatherAlertSlot feed={useWeatherAlert(ports, store)} />;
+}
+
+/** The card for a feed Home already holds (it reads the same feed for the drive card's weather). */
+export function WeatherAlertSlot({ feed }: { feed: HomeWeather }) {
   const units = useUnits();
-  if (alert === null) return null;
-  return <WeatherAlertCard alert={alert} units={units} onDismiss={dismiss} />;
+  if (feed.alert === null) return null;
+  return <WeatherAlertCard alert={feed.alert} units={units} onDismiss={feed.dismiss} />;
 }
 
 /**

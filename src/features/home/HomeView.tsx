@@ -8,6 +8,7 @@ import type { MySummary } from '@/data/server/summary';
 import type { LocalDrive } from '@/features/drives/model';
 import { homeStats } from '@/features/drives/stats';
 import { showsTip, type Coaching, type Level } from '@/features/analytics/model';
+import type { Conditions } from '@/features/weather/conditions';
 import { Avatar, ScreenTitle, useOnSky, useSkyScrollHandler, useTheme } from '@/ui';
 
 import { CoachTipCard } from './ActionCards';
@@ -64,6 +65,8 @@ export type HomeViewProps = {
   inProgress?: ReactNode;
   /** The dangerous-weather card: the first action item under the drive card (it renders nothing when all is well). */
   weather?: ReactNode;
+  /** The weather now (°F, icon, words), shown on the drive card above Start drive. */
+  conditions?: Conditions | null;
   /** The permission card, an action item under the weather card (never while a drive records). */
   permissions?: ReactNode;
   /**
@@ -157,6 +160,7 @@ export function HomeView({ scrollRef: outerRef, ...p }: HomeViewProps) {
             onRetry={p.onRetrySummary}
             start={p.recording ? undefined : <StartDriveButton onStart={p.onStart} starting={p.starting} />}
             caption={auto ? homeCopy.start.auto : null}
+            conditions={p.conditions}
           />
           {p.recording ? null : <StartNotice refusal={p.refusal} onRefusalAction={p.onRefusalAction} notice={p.dropNotice ?? null} />}
         </View>

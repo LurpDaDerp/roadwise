@@ -5,6 +5,7 @@ import { AppState } from 'react-native';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useOptionalDb } from '@/data/queries/context';
 
+import { conditionsFrom, type Conditions } from './conditions';
 import { dangerFrom, isDangerKind, type DangerAlert, type DangerKind } from './danger';
 import { fetchWeather, type FetchLike } from './openMeteo';
 import { lastKnownPlace, type Place } from './ports';
@@ -62,10 +63,12 @@ export type HomeWeather = {
   alert: DangerAlert | null;
   /** Hide it until that danger ends or a different one starts. */
   dismiss: () => void;
+  /** The weather now for the drive card (°F, icon, words); null until a reading, and after a failed one. */
+  conditions: Conditions | null;
 };
 
 /**
- * Home's dangerous-weather alert. Asked when Home comes into view and when RoadWise returns to
+ * Home's dangerous-weather alert and the drive card's weather now. Asked when Home comes into view and when RoadWise returns to
  * the front, at most every 15 min. Silent on any failure: no position, no network, a bad answer.
  * A hidden alert stays hidden (across restarts) until a reading says its danger has ended or a
  * different one has begun.
@@ -75,6 +78,7 @@ export function useWeatherAlert(ports: WeatherPorts = defaultWeatherPorts, injec
   const store = injected ?? fallback;
   const [alert, setAlert] = useState<DangerAlert | null>(null);
   const [dismissed, setDismissed] = useState<DangerKind | null>(null);
+  const [conditions, setConditions] = useState<Conditions | null>(null);
   // `undefined`: no reading yet (the stored dismissal can't be judged before one).
   const latest = useRef<DangerAlert | null | undefined>(undefined);
   const hidden = useRef<DangerKind | null>(null);
@@ -130,11 +134,13 @@ export function useWeatherAlert(ports: WeatherPorts = defaultWeatherPorts, injec
       // A failed ask says nothing: no alert, and a hidden one stays hidden.
       if (reading === null) {
         setAlert(null);
+        setConditions(null);
         return;
       }
       const next = dangerFrom(reading);
       latest.current = next;
       setAlert(next);
+      setConditions(conditionsFrom(reading.samples[0]));
       reconcile();
     } finally {
       busy.current = false;
@@ -168,5 +174,5 @@ export function useWeatherAlert(ports: WeatherPorts = defaultWeatherPorts, injec
     void storeRef.current.write(kind).catch(() => {});
   }, []);
 
-  return { alert: alert !== null && alert.kind !== dismissed ? alert : null, dismiss };
+  return { alert: alert !== null && alert.kind !== dismissed ? alert : null, dismiss, conditions };
 }

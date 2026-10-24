@@ -8,7 +8,10 @@ import { formatRating } from '@/lib/rating';
 import { distanceWord, formatDistanceProgress, type Units } from '@/lib/units';
 import { Button, Card, ProgressRing, Skeleton, Text, TrendArrow, useFontScale, useTheme, type TrendDirection } from '@/ui';
 
+import type { Conditions } from '@/features/weather/conditions';
+
 import { homeCopy } from './copy';
+import { WeatherReadout } from './WeatherReadout';
 
 type Progress = MySummary['progress'];
 
@@ -125,7 +128,7 @@ export function RatingBlock({ progress, onPress }: { progress: Progress; onPress
 
 /**
  * Home's drive card, the screen's hero: the hour's sky with the Safety Rating big in its ring, its
- * change this week, and Start drive across its foot with, on an iPhone set up for automatic
+ * change this week, the weather now (once known) and Start drive across its foot with, on an iPhone set up for automatic
  * drives, one quiet line under it. While progress loads or fails the card says so; Start stays in
  * it either way.
  */
@@ -137,6 +140,7 @@ export function HomeHeader({
   onRetry,
   start,
   caption,
+  conditions,
 }: {
   summary: MySummary | undefined;
   loading: boolean;
@@ -148,6 +152,8 @@ export function HomeHeader({
   start?: ReactNode;
   /** The muted line under Start ("Or just drive…"), only with automatic drives on. */
   caption?: string | null;
+  /** The weather now, above Start drive; absent until it is known. */
+  conditions?: Conditions | null;
 }) {
   const t = useTheme();
 
@@ -177,6 +183,7 @@ export function HomeHeader({
     <Card variant="hero" testID="home-header" style={{ minHeight: start ? 300 : 220 }}>
       {top}
       <View style={{ flex: 1, minHeight: t.space.xl }} />
+      {conditions ? <WeatherReadout conditions={conditions} /> : null}
       {start}
       {start && caption ? (
         <Text variant="footnote" tone="muted" style={{ textAlign: 'center' }} testID="start-caption">

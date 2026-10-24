@@ -1,5 +1,5 @@
 import { act, screen } from '@testing-library/react-native';
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState, Text, type AppStateStatus } from 'react-native';
 
 import { draw, press } from '@/features/drives/__fixtures__/drives';
 import { publishUnits } from '@/data/queries/units';
@@ -8,7 +8,7 @@ import { tokens } from '@/ui/tokens';
 import { okJson, openMeteoBody } from '../__fixtures__/openMeteo';
 import type { DangerKind } from '../danger';
 import { HomeWeatherAlert } from '../HomeWeatherAlert';
-import { HOME_WEATHER_REFRESH_MS, WEATHER_DISMISSED_KEY, type DismissStore, type WeatherPorts } from '../useWeatherAlert';
+import { HOME_WEATHER_REFRESH_MS, useWeatherAlert, WEATHER_DISMISSED_KEY, type DismissStore, type WeatherPorts } from '../useWeatherAlert';
 
 // Focus runs its effect on mount (and again whenever the callback changes), as on a real focus;
 // `mockFocus.blur()` runs its cleanup, as another screen coming to the front does.
@@ -238,5 +238,27 @@ describe('the ✕', () => {
     clock += HOME_WEATHER_REFRESH_MS;
     await foreground();
     expect(mockSettings.has(WEATHER_DISMISSED_KEY)).toBe(false);
+  });
+});
+
+describe('the weather now for the drive card', () => {
+  const Probe = () => {
+    const { conditions } = useWeatherAlert(ports, memoryStore());
+    return <Text testID="probe">{conditions ? `${conditions.tempF}° F ${conditions.label}` : 'none'}</Text>;
+  };
+
+  test('the same reading as the alerts: °F and the sky in words, with no request of its own', async () => {
+    body = { current: { weather_code: 2, temperature_2m: 21.7 } };
+    await draw(<Probe />);
+    await act(async () => {});
+    expect(screen.getByTestId('probe')).toHaveTextContent('71° F Partly cloudy');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('a failed ask leaves it empty', async () => {
+    body = 'fail';
+    await draw(<Probe />);
+    await act(async () => {});
+    expect(screen.getByTestId('probe')).toHaveTextContent('none');
   });
 });

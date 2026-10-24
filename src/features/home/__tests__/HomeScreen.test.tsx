@@ -55,8 +55,13 @@ let mockCoaching: { level: string | null; axis: string | null; title: string; ti
 jest.mock('@/features/analytics/useAnalytics', () => ({ useCoaching: () => ({ coaching: mockCoaching }) }));
 jest.mock('@/features/weather/HomeWeatherAlert', () => {
   const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
-  return { HomeWeatherAlert: () => <Text testID="home-weather">weather</Text> };
+  return { WeatherAlertSlot: () => <Text testID="home-weather">weather</Text> };
 });
+// The weather now on the drive card, the test's to set.
+let mockConditions: { tempF: number; label: string; icon: string; color: string } | null = null;
+jest.mock('@/features/weather/useWeatherAlert', () => ({
+  useWeatherAlert: () => ({ alert: null, dismiss: jest.fn(), conditions: mockConditions }),
+}));
 jest.mock('@/data/server/summary', () => ({ useMySummary: () => mockOk(mockSummary()) }));
 let mockRecording = false;
 let mockWaiting = false;

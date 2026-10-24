@@ -165,6 +165,26 @@ describe('first run', () => {
     expect(within(screen.getByTestId('home-header')).getByTestId('start-caption')).toHaveTextContent('Or just drive. RoadWise notices on its own.');
   });
 
+  test('the weather now sits on the drive card above Start: a coloured icon, "72° F" and the sky in words', async () => {
+    const conditions = { tempF: 72, label: 'Partly cloudy', icon: 'partly-sunny' as const, color: '#FFC53D' };
+    await draw(<HomeView {...props({ conditions })} />);
+    const card = screen.getByTestId('home-header');
+    const readout = within(card).getByTestId('home-conditions');
+    expect(readout).toHaveProp('accessibilityLabel', '72 degrees Fahrenheit, Partly cloudy');
+    expect(within(readout).getByTestId('home-conditions-temp')).toHaveTextContent('72° F');
+    expect(within(readout).getByTestId('home-conditions-label')).toHaveTextContent('Partly cloudy');
+    expect(within(readout).getByTestId('home-conditions-icon')).toHaveStyle({ color: '#FFC53D' });
+    // above Start drive, inside the card
+    const order = (id: string) => JSON.stringify(screen.toJSON(), (k, v) => (k === 'forwardedRef' ? undefined : v)).indexOf(`"${id}"`);
+    expect(order('home-conditions')).toBeGreaterThan(-1);
+    expect(order('home-conditions')).toBeLessThan(order('start-drive'));
+  });
+
+  test('no weather yet: nothing on the card for it', async () => {
+    await draw(<HomeView {...props({ conditions: null })} />);
+    expect(screen.queryByTestId('home-conditions')).toBeNull();
+  });
+
   test('without automatic drives there is no caption under Start', async () => {
     await draw(<HomeView {...props({ autoDrives: false })} />);
     expect(screen.queryByTestId('start-caption')).toBeNull();
