@@ -1,6 +1,10 @@
+import { act, renderHook } from '@testing-library/react-native';
+
 import { MPS_PER_MPH } from '@/core/detectors/common';
 import { createDriveDisplay, DISPLAY_KEEPALIVE_MS, DISPLAY_MIN_INTERVAL_MS, LIVE_MIN_INTERVAL_MS, toLive, type DriveDisplayState } from '@/drive/display';
 import { displayLook, setDisplayLook, type DisplayLook } from '@/drive/displayLook';
+import type { ShownSpeed } from '@/drive/useDrive';
+import { useCarriedSpeed } from '@/features/drive/HaloReadout';
 
 // The host always sends the tint, the hint and the weather (values or null), as native's contract asks.
 const state = (over: Partial<DriveDisplayState> = {}): DriveDisplayState => ({
@@ -251,9 +255,9 @@ test('a start that already carries a speed and a limit spends both bypasses (the
 const mph = (n: number) => n * MPS_PER_MPH;
 const speeds = (set: jest.Mock) => set.mock.calls.map((a) => (a as unknown as [DriveDisplayState])[0].speed);
 
-describe('iOS: the Live Activity at most once a second, with the halo’s number', () => {
-  test('a change goes out 1 s after the last (once a second at most) and no timer ever runs; Android keeps its 3 s', () => {
-    expect(LIVE_MIN_INTERVAL_MS).toBe(1000);
+describe('iOS: the Live Activity about once a second, with the halo’s number', () => {
+  test('a change goes out about 1 s after the last (a row or fix a few ms early included) and no timer ever runs; Android keeps its 3 s', () => {
+    expect(LIVE_MIN_INTERVAL_MS).toBe(900);
     expect(DISPLAY_MIN_INTERVAL_MS).toBe(3000);
     jest.useFakeTimers();
     try {
@@ -268,12 +272,12 @@ describe('iOS: the Live Activity at most once a second, with the halo’s number
       // inside the second: dropped, and nothing is scheduled to send them later
       expect(set).toHaveBeenCalledTimes(1);
       expect(jest.getTimerCount()).toBe(0);
-      now = 1000;
+      now = 995;
       d.update(state({ speed: 33 }));
-      // the next call past the second sends the newest state
+      // the next row or fix on the one-second beat sends the newest state, even a few ms early
       expect(set).toHaveBeenCalledTimes(2);
       expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 33 }));
-      now = 1999;
+      now = 1850;
       d.update(state({ speed: 34 }));
       expect(set).toHaveBeenCalledTimes(2);
       now = 2400;
@@ -351,6 +355,46 @@ describe('iOS: the Live Activity at most once a second, with the halo’s number
     at = 8000;
     android.update(state({ speed: 34 }), { mps: mph(30), accel: mph(3), at: 4000 });
     expect(sent.map((s) => s.speed)).toEqual([30, 34]);
+  });
+
+  test("the halo's re-reads between updates are walked through, so its number and the Live Activity's agree through the hysteresis", async () => {
+    // A fix at 10 s reads 30.2 mph gaining 0.6 m/s²; its speed event lands 200 ms later and a row
+    // 100 ms after that. The halo re-reads at 10.45 s (30.8: past the band, 31). The next fix reads
+    // 30.6 with no acceleration: inside the band of 31 (the halo keeps 31), of 30 too.
+    jest.useFakeTimers();
+    try {
+      jest.setSystemTime(9200);
+      const { set, live } = sinks();
+      const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => Date.now(), platform: 'ios' });
+      const cruise = { mps: mph(29.9), accel: 0, at: 9000 };
+      const halo = await renderHook((shown: ShownSpeed) => useCarriedSpeed(shown, 'mi'), { initialProps: cruise });
+      d.start(state({ speed: 30 }));
+      d.update(state({ speed: 30 }), cruise);
+      expect(halo.result.current).toBe(30);
+      expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 30 }));
+
+      const pulling = { mps: mph(30.2), accel: 0.6, at: 10_000 };
+      const step = async (ms: number) => act(() => void jest.advanceTimersByTime(ms));
+      await step(1000);
+      await halo.rerender(pulling);
+      d.update(state({ speed: 30 }), pulling);
+      await step(100);
+      d.update(state({ speed: 30 }), pulling);
+      await step(900);
+      const level = { mps: mph(30.6), accel: 0, at: 11_000 };
+      await halo.rerender(level);
+      d.update(state({ speed: 31 }), level);
+      await step(100);
+      d.update(state({ speed: 31 }), level);
+      await step(1000);
+      d.update(state({ speed: 31 }), level);
+      expect(halo.result.current).toBe(31);
+      expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 31 }));
+      // read only at the update instants (10.2, 10.3, 11.2 s), the same carries would leave it on 30
+      expect(speeds(set)).toEqual([30, 31]);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('the end and the next start forget the carried number', () => {

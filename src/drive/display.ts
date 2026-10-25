@@ -2,8 +2,8 @@
 // Android foreground notification and, on iOS, a running Live Activity; `LiveDrive.start`/`end`
 // bound the activity's life to the drive. This adapter sends only changes (and an unchanged state
 // again every 60 s, so a long stop never leaves the Live Activity stale: its stale date is 2 min
-// on), at most one per 3 s on Android and one a second on iOS (the drive's first known speed and
-// first known limit go out at once, outside either), and tolerates either module being absent (a
+// on), at most one per 3 s on Android and about one a second on iOS (the drive's first known speed
+// and first known limit go out at once, outside either), and tolerates either module being absent (a
 // missing display must never affect a drive). A change held by the throttle needs no timer: rows
 // (once a second, at a stop too) and speed events call `update` again, and the newest state goes
 // out on the first call past the interval. `refresh` sends at once, outside the throttle (the
@@ -13,8 +13,11 @@
 // iOS, the lock screen's number: given the halo's speed (`SpeedCarry`: the engine's estimate, its
 // acceleration and the time it stands for), each update shows the halo's number at that moment,
 // the estimate carried on from its time along its acceleration (`carriedSpeed`) and rounded with
-// the halo's hysteresis (`wholeSpeed`). Nothing re-reads it between updates: the Live Activity
-// holds its number until the next one (about once per GPS fix). Android's notification never carries.
+// the halo's hysteresis (`wholeSpeed`). The hysteresis depends on the path, so each update first
+// walks the carry through the halo's own re-reads (every `SPEED_TICK_MS` from when the carry came,
+// until `CARRY_MAX_MS` after its time) without any timer, and the number lands where the halo's
+// does. The Live Activity holds its number until the next update (about once per GPS fix).
+// Android's notification never carries.
 //
 // iOS: `start` starts a local activity, or adopts one already running (a push-started one); it is
 // called as a drive opens with RoadWise in front and again on every return to the front while it
@@ -24,7 +27,7 @@ import type { DriveDisplayState } from '@drive-sense';
 import type { LiveDriveApi, LiveDriveState } from '@live-drive';
 
 import { MPS_PER_MPH } from '@/core/detectors/common';
-import { carriedSpeed, wholeSpeed } from '@/core/engine/displaySpeed';
+import { CARRY_MAX_MS, carriedSpeed, SPEED_TICK_MS, wholeSpeed } from '@/core/engine/displaySpeed';
 import { KMH_PER_MPH } from '@/lib/units';
 
 import { displayLook, type DisplayLook } from './displayLook';
@@ -66,8 +69,11 @@ export interface DisplaySinks {
 
 /** Android: the notification takes a change this often at most. */
 export const DISPLAY_MIN_INTERVAL_MS = 3000;
-/** iOS: the Live Activity takes a change at most once a second (about once per GPS fix). */
-export const LIVE_MIN_INTERVAL_MS = 1000;
+/**
+ * iOS: the Live Activity takes a change about once a second (once per GPS fix). A little under the
+ * second, so a row or a fix arriving a few ms early on its one-second beat is never dropped.
+ */
+export const LIVE_MIN_INTERVAL_MS = 900;
 /** An unchanged display is re-sent this often (one update a minute at a stop). */
 export const DISPLAY_KEEPALIVE_MS = 60_000;
 
@@ -159,9 +165,14 @@ export function createDriveDisplay(
    */
   let speedShown = false;
   let limitShown = false;
-  /** iOS: the halo's speed and the number carried last (its hysteresis). */
+  /**
+   * iOS: the halo's speed, the number carried last (its hysteresis), when this carry came (the
+   * halo's re-reads run from then) and the instant `whole` has walked it to.
+   */
   let carry: SpeedCarry | null = null;
   let whole: number | null = null;
+  let cameAt = 0;
+  let walkedTo = 0;
 
   function send(state: DriveDisplayState, force: boolean): void {
     const now = deps.now();
@@ -174,11 +185,39 @@ export function createDriveDisplay(
     call(set === null ? null : () => set(state), deps.onError);
   }
 
+  /**
+   * `whole` through the halo's re-reads of the carry up to `to`: every `SPEED_TICK_MS` from when it
+   * came, while the one before fell short of `CARRY_MAX_MS` after its time (the halo's own ticker).
+   */
+  function walk(to: number, perMps: number): void {
+    if (carry === null || !(carry.mps > 0) || carry.accel === 0) return;
+    const end = carry.at + CARRY_MAX_MS;
+    for (let t = cameAt + SPEED_TICK_MS; t <= to && t - SPEED_TICK_MS < end; t += SPEED_TICK_MS) {
+      if (t > walkedTo) whole = wholeSpeed(whole, carriedSpeed(carry.mps, carry.accel, t - carry.at) * perMps);
+    }
+    walkedTo = Math.max(walkedTo, to);
+  }
+
+  /**
+   * Takes `c` as the halo's speed at `now` (iOS). A different one is what the halo re-renders on:
+   * the old one is walked up to `now` first, and the new one read at once.
+   */
+  function take(c: SpeedCarry | null, state: DriveDisplayState, now: number): void {
+    const changed = c === null || carry === null || c.at !== carry.at || c.mps !== carry.mps || c.accel !== carry.accel;
+    if (!changed) return;
+    const perMps = (state.unit === 'km/h' ? KMH_PER_MPH : 1) / MPS_PER_MPH;
+    walk(now, perMps);
+    carry = c;
+    cameAt = now;
+    walkedTo = now;
+    if (c !== null) whole = wholeSpeed(whole, carriedSpeed(c.mps, c.accel, now - c.at) * perMps);
+  }
+
   /** `state` with the halo's number at `now` in place of the host's (iOS, with a carry and a known speed). */
   function carried(state: DriveDisplayState, now: number): DriveDisplayState {
     if (!ios || carry === null || state.speed === null) return state;
-    const perMps = (state.unit === 'km/h' ? KMH_PER_MPH : 1) / MPS_PER_MPH;
-    whole = wholeSpeed(whole, carriedSpeed(carry.mps, carry.accel, now - carry.at) * perMps);
+    walk(now, (state.unit === 'km/h' ? KMH_PER_MPH : 1) / MPS_PER_MPH);
+    if (whole === null) return state;
     return whole === state.speed ? state : { ...state, speed: whole };
   }
 
@@ -196,12 +235,14 @@ export function createDriveDisplay(
       send(worn, true);
     },
     update(state, c) {
-      carry = ios ? (c ?? null) : null;
-      send(carried(wearing(state, look()), deps.now()), false);
+      const now = deps.now();
+      if (ios) take(c ?? null, state, now);
+      send(carried(wearing(state, look()), now), false);
     },
     refresh(state, c) {
-      if (c !== undefined) carry = ios ? c : null;
-      const s = carried(wearing(state, look()), deps.now());
+      const now = deps.now();
+      if (ios && c !== undefined) take(c, state, now);
+      const s = carried(wearing(state, look()), now);
       if (same(last, s)) return;
       send(s, true);
     },
