@@ -1,10 +1,14 @@
-import { act, render } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { useEffect } from 'react';
 import { Text } from 'react-native';
+import { captureRef } from 'react-native-view-shot';
 
 import { SKY_BLEND_MS, ThemeProvider, useTheme, type Theme } from '@/ui/theme';
 import { plainBundle, skyBundle, type SkyMood } from '@/ui/sky/palette';
 import { CLEAR } from '@/ui/sky/weather';
+
+jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn() }));
+const capture = captureRef as jest.Mock;
 
 const DAY: SkyMood = { phase: 'day', glow: 0, weather: CLEAR };
 const NIGHT: SkyMood = { phase: 'night', glow: 0, weather: CLEAR };
@@ -19,13 +23,24 @@ function Probe() {
   return <Text>{t.colors.bg}</Text>;
 }
 
+const themed = (mood: SkyMood | null, extra: { scheme?: 'light' | 'dark'; reduceMotion?: boolean } = {}) => (
+  <ThemeProvider mood={mood} {...extra}>
+    <Probe />
+  </ThemeProvider>
+);
+
 beforeEach(() => {
   jest.useFakeTimers();
   seen = null;
+  capture.mockReset().mockResolvedValue('file:///old-look.jpg');
 });
 afterEach(() => {
   jest.useRealTimers();
 });
+
+// The snapshot is hidden from screen readers, so the queries must look at hidden elements too.
+const HIDDEN = { includeHiddenElements: true };
+const veil = () => screen.getByTestId('theme-veil', HIDDEN);
 
 const tick = async (ms: number) => {
   await act(async () => {
@@ -33,66 +48,96 @@ const tick = async (ms: number) => {
   });
 };
 
-test('the first sky lands at once; later changes blend over a couple of seconds, light to dark included', async () => {
-  const view = await render(
-    <ThemeProvider mood={DAY}>
-      <Probe />
-    </ThemeProvider>
-  );
+test('the first sky lands at once; a later change is one switch under a snapshot of the old look that fades out, light to dark included', async () => {
+  const view = await render(themed(DAY));
   const day = skyBundle(DAY);
   const night = skyBundle(NIGHT);
   expect(seen!.colors.bg).toBe(day.colors.bg);
   expect(seen!.scheme).toBe('light');
   await tick(2000);
 
-  await view.rerender(
-    <ThemeProvider mood={NIGHT}>
-      <Probe />
-    </ThemeProvider>
-  );
-  // Still the day palette: the blend starts on the next frame.
+  await view.rerender(themed(NIGHT));
+  await tick(0);
+  // The old look was captured and is on screen; the new one waits for the image to be drawn.
+  expect(capture).toHaveBeenCalledTimes(1);
+  expect(veil()).toBeOnTheScreen();
   expect(seen!.colors.bg).toBe(day.colors.bg);
-  await tick(SKY_BLEND_MS * 0.5);
-  const mid = seen!.colors.bg;
-  expect(mid).not.toBe(day.colors.bg);
-  expect(mid).not.toBe(night.colors.bg);
-  await tick(SKY_BLEND_MS);
+  await fireEvent(veil(), 'load');
+  // One switch: the new palette is whole at once, never a blend of the two.
   expect(seen!.colors.bg).toBe(night.colors.bg);
   expect(seen!.scheme).toBe('dark');
   expect(seen!.mood).toEqual(NIGHT);
+  const renders = seen;
+  await tick(SKY_BLEND_MS * 0.5);
+  expect(seen).toBe(renders);
+  await tick(SKY_BLEND_MS);
+  expect(screen.queryByTestId('theme-veil', HIDDEN)).toBeNull();
+  expect(seen!.colors.bg).toBe(night.colors.bg);
 });
 
-test('an equal mood in a new object does not re-blend; a weather change does', async () => {
-  const view = await render(
-    <ThemeProvider mood={DAY}>
-      <Probe />
-    </ThemeProvider>
-  );
+test('a snapshot that cannot be taken, is too slow or will not draw lands the new sky at once', async () => {
+  const view = await render(themed(DAY));
+  await tick(2000);
+  capture.mockRejectedValueOnce(new Error('no native module'));
+  await view.rerender(themed(NIGHT));
+  await tick(0);
+  expect(seen!.colors.bg).toBe(skyBundle(NIGHT).colors.bg);
+  expect(screen.queryByTestId('theme-veil', HIDDEN)).toBeNull();
+
+  capture.mockReturnValueOnce(new Promise(() => {}));
+  await view.rerender(themed(DAY));
+  await tick(1000);
+  expect(seen!.colors.bg).toBe(skyBundle(DAY).colors.bg);
+
+  await view.rerender(themed(NIGHT));
+  await tick(0);
+  expect(veil()).toBeOnTheScreen();
+  await tick(1100);
+  expect(seen!.colors.bg).toBe(skyBundle(NIGHT).colors.bg);
+});
+
+test('Reduce Motion lands a new sky at once, without a snapshot', async () => {
+  const view = await render(themed(DAY, { reduceMotion: true }));
+  await tick(2000);
+  await view.rerender(themed(NIGHT, { reduceMotion: true }));
+  await tick(0);
+  expect(capture).not.toHaveBeenCalled();
+  expect(seen!.colors.bg).toBe(skyBundle(NIGHT).colors.bg);
+});
+
+test('an equal mood in a new object does not fade; a weather change does', async () => {
+  const view = await render(themed(DAY));
   await tick(2000);
   const before = seen;
-  await view.rerender(
-    <ThemeProvider mood={{ ...DAY, weather: { ...CLEAR } }}>
-      <Probe />
-    </ThemeProvider>
-  );
+  await view.rerender(themed({ ...DAY, weather: { ...CLEAR } }));
   await tick(100);
   expect(seen!.colors).toBe(before!.colors);
+  expect(capture).not.toHaveBeenCalled();
 
-  await view.rerender(
-    <ThemeProvider mood={RAIN_DAY}>
-      <Probe />
-    </ThemeProvider>
-  );
-  await tick(SKY_BLEND_MS + 100);
+  await view.rerender(themed(RAIN_DAY));
+  await tick(0);
+  await fireEvent(veil(), 'load');
+  expect(seen!.colors.accent).toBe(skyBundle(RAIN_DAY).colors.accent);
+});
+
+test('a new sky while one is fading drops the snapshot and starts again from what is on screen', async () => {
+  const view = await render(themed(DAY));
+  await tick(2000);
+  await view.rerender(themed(NIGHT));
+  await tick(0);
+  await fireEvent(veil(), 'load');
+  await tick(500);
+  capture.mockResolvedValueOnce('file:///mid-fade.jpg');
+  await view.rerender(themed(RAIN_DAY));
+  await tick(0);
+  expect(capture).toHaveBeenCalledTimes(2);
+  expect(screen.getAllByTestId('theme-veil', HIDDEN)).toHaveLength(1);
+  await fireEvent(veil(), 'load');
   expect(seen!.colors.accent).toBe(skyBundle(RAIN_DAY).colors.accent);
 });
 
 test('a pinned scheme switches at once and ignores the mood', async () => {
-  const view = await render(
-    <ThemeProvider scheme="light" mood={NIGHT}>
-      <Probe />
-    </ThemeProvider>
-  );
+  const view = await render(themed(NIGHT, { scheme: 'light' }));
   expect(seen!.scheme).toBe('light');
   expect(seen!.mood).toBeNull();
   await view.rerender(
@@ -101,42 +146,28 @@ test('a pinned scheme switches at once and ignores the mood', async () => {
     </ThemeProvider>
   );
   expect(seen!.scheme).toBe('dark');
+  expect(capture).not.toHaveBeenCalled();
 });
 
 test('a switch from the sky to a static look lands at once, and back to the sky at once too, even after the sky had settled', async () => {
-  const view = await render(
-    <ThemeProvider mood={DAY}>
-      <Probe />
-    </ThemeProvider>
-  );
+  const view = await render(themed(DAY));
   await tick(2000);
-  await view.rerender(
-    <ThemeProvider scheme="dark" mood={null}>
-      <Probe />
-    </ThemeProvider>
-  );
+  await view.rerender(themed(null, { scheme: 'dark' }));
   expect(seen!.colors).toBe(plainBundle('dark').colors);
   expect(seen!.sky).toBe(plainBundle('dark').sky);
   expect(seen!.mood).toBeNull();
   await tick(2000);
-  await view.rerender(
-    <ThemeProvider mood={NIGHT}>
-      <Probe />
-    </ThemeProvider>
-  );
+  await view.rerender(themed(NIGHT));
   expect(seen!.colors.bg).toBe(skyBundle(NIGHT).colors.bg);
   expect(seen!.sky).toEqual(skyBundle(NIGHT).sky);
   expect(seen!.mood).toEqual(NIGHT);
-  // Once back on the sky, a later change of sky blends again.
+  expect(capture).not.toHaveBeenCalled();
+  // Once back on the sky, a later change of sky fades again.
   await tick(2000);
-  await view.rerender(
-    <ThemeProvider mood={DAY}>
-      <Probe />
-    </ThemeProvider>
-  );
-  await tick(SKY_BLEND_MS * 0.5);
-  expect(seen!.colors.bg).not.toBe(skyBundle(DAY).colors.bg);
-  expect(seen!.colors.bg).not.toBe(skyBundle(NIGHT).colors.bg);
+  await view.rerender(themed(DAY));
+  await tick(0);
+  expect(capture).toHaveBeenCalledTimes(1);
+  expect(veil()).toBeOnTheScreen();
 });
 
 test("the theme tells the driving screen its night: left to the sun under the sky, Light by day and Dark by night in a static look, the phone's scheme under System", async () => {

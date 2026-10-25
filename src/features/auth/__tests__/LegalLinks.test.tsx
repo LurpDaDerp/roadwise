@@ -41,7 +41,10 @@ test('only the document that exists is linked', async () => {
 
 test('nothing published renders nothing at all', async () => {
   await mount({ published: false, tos: null, privacy: null });
-  expect(screen.toJSON()).toBeNull();
+  // The theme's own wrapper view is all that is left.
+  expect(screen.queryAllByRole('link')).toHaveLength(0);
+  expect(screen.queryByText('Terms')).toBeNull();
+  expect(screen.queryByText('Privacy Policy')).toBeNull();
 });
 
 test('each link is a 44 pt target', async () => {
