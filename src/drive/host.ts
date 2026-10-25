@@ -18,8 +18,9 @@
 //   reaches it the screen asks "Still planning to drive?" at 2 min and the drive ends unsaved at
 //   5 min from the tap or the last touch. Every confirmed drive is a drive of its own, however
 //   soon and near the last one ended.
-// - **How it ends.** The engine decides (5 min still, 5 s of walking once the car is at 3 mph or
-//   slower, 12 h, End); native
+// - **How it ends.** The engine decides (5 min still, 10 s after a reported walk began with the
+//   report standing 3 s at least, once the car is at 3 mph or slower or its last speed is over
+//   15 s old, 12 h, End); native
 //   stops on its own only as a fallback and the engine then cuts at the last movement. "Not
 //   driving?" discards the drive (`cancelDrive`), only while its 2-minute visible budget lasts,
 //   and never while a Start-card drive still waits (its Cancel discards it then; the wait spends
@@ -34,7 +35,8 @@
 //   (focused, RoadWise active) and never for a replayed row; with RoadWise not active nothing plays
 //   or is posted. The drive records the same either way.
 // - **Battery.** Nothing runs while idle: no timer, no read. While recording, one timeout at most
-//   (the automatic end, `ticks.ts`), the display throttled to one update per 3 s, the weather
+//   (the automatic end, `ticks.ts`), the display throttled (about one update a second on iOS, one
+//   per 3 s on Android), the weather
 //   checked every 15 min or 20 km, the state published at most once per row.
 // - **Background (Android).** Each row first pumps the process's timers (`src/lib/timers.ts`): with
 //   the app in the Android background JS timers are paused, and the rows are what keeps the alert

@@ -57,12 +57,12 @@ export const END_NATIVE_SLACK_S = 60;
 /** The native safety stop's slack over the JS walking end (s): it fires only when JS has not ended the drive. */
 export const END_NATIVE_WALK_SLACK_S = 10;
 /**
- * A drive confirmed within this gap (s) of the previous drive's end, starting within
- * `MERGE_RADIUS_M` of where it ended, is the same drive (the phone continues it; the server joins
- * the two when the first was already sent). Also the upload hold after every end.
+ * A drive started within this gap (s) of the previous drive's end has no warm-up (`continues`);
+ * native's warm-up hint also needs the start within `MERGE_RADIUS_M` of that end. Every drive is
+ * a drive of its own, however soon and near it starts.
  */
 export const MERGE_GAP_S = 300;
-/** The distance (m) from the previous drive's end to the next drive's start for a merge. */
+/** The distance (m) from the previous drive's end to the next drive's start for native's warm-up hint. */
 export const MERGE_RADIUS_M = 150;
 /** The privacy trim: the route's first and last this many metres are cut before upload. */
 export const TRIM_ENDS_M = 402;

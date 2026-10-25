@@ -89,7 +89,7 @@ export interface DriveStartedEvent {
   startSource: StartSource;
   startLat: number | null;
   startLng: number | null;
-  /** Native's merge hint: within 5 min and 150 m of the last end (JS decides the re-open itself). */
+  /** Native's warm-up hint: within 5 min and 150 m of the last end (JS decides the warm-up itself). */
   continues: boolean;
   confirmedAt: number;
   firstSeq: number;

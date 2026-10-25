@@ -348,7 +348,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     expected: { index: 60 },
   },
 
-  // ——— the start (confirmation, trace-back, fallbacks, the merge hint) ———
+  // ——— the start (confirmation, trace-back, fallbacks, the warm-up hint) ———
   {
     name: 'start: a kerb departure starts at the kerb, placed there',
     kind: 'start',

@@ -357,7 +357,7 @@ export function startOf(
   return { index: 0, startedAt: first.ts, startSource: 'wake', startLat: ok ? first.lat : null, startLng: ok ? first.lng : null };
 }
 
-/** Native's merge hint: the start is within 5 min of the last end's decision and 150 m of its place. */
+/** Native's warm-up hint: the start is within 5 min of the last end's decision and 150 m of its place. */
 export function continuesFrom(lastEnd: DetectLastEnd | null, startedAt: number, lat: number | null, lng: number | null): boolean {
   if (lastEnd === null || lat === null || lng === null) return false;
   return startedAt - lastEnd.decidedAt <= DETECT.CONTINUE_GAP_MS && distanceM(lastEnd, { lat, lng }) <= DETECT.CONTINUE_DIST_M;

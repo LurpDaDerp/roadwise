@@ -1,9 +1,9 @@
 // live-activity-start: shows a drive's Live Activity on the lock screen when the drive was noticed
 // in the background (iOS 17.2 and later, ActivityKit push-to-start).
 //
-// The phone calls this once per drive it adopted while RoadWise was not in front, and again for each
-// time that drive is re-opened after a stop: `{ deviceId, clientTripId, startedAt, state, leg? }`,
-// `leg` the drive's continuation count (0 to 50, 0 when left out). Order of work, cheapest refusal
+// The phone calls this once per drive it adopted while RoadWise was not in front:
+// `{ deviceId, clientTripId, startedAt, state, leg? }`, `leg` 0 from this app (0 to 50, 0 when left
+// out; an older build sent 1, 2, … for a drive it re-opened after a stop, each leg its own claim). Order of work, cheapest refusal
 // first: method, JWT, size (4 KB), JSON, the contract (strict), then: APNs configured at all (else
 // `unconfigured`, before anything is claimed), then `claim_live_activity_start` AS THE USER (the
 // publishable key with the caller's token: RLS and `auth.uid()` decide whose device it is; 30 an
@@ -65,7 +65,7 @@ export const LiveActivityStartSchema = z
     /** The drive's start, epoch ms (the activity's `startedAt` attribute). */
     startedAt: z.number().int().positive(),
     state: LiveDriveStateSchema,
-    /** How many times the drive was re-opened after a stop: each leg may start its activity once. */
+    /** The drive's leg: each leg may start its activity once. This app sends 0 (one start per drive). */
     leg: z.number().int().min(0).max(50).default(0),
   })
   .strict();

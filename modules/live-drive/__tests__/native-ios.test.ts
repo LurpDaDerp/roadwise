@@ -105,16 +105,16 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(c).toMatch(/func isRunning\(\) -> Bool \{/);
   });
 
-  it('a push-started activity is adopted for any background drive (auto, manual, a re-opened leg) unless a live one runs, and adopting it takes the 20 s note down (review I2)', () => {
+  it('a push-started activity is adopted for any background drive (auto or manual) unless a live one runs, and adopting it takes the 20 s note down (review I2)', () => {
     const c = ctrl();
     const adopt = /private func adopt\(_ a: Activity<LiveDriveAttributes>\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
-    // only a LIVE held activity refuses it (a dismissed or ended one, the last leg's included, does not)
+    // only a LIVE held activity refuses it (a dismissed or ended one, the last drive's included, does not)
     expect(adopt).toMatch(/if let current = activity, LiveDriveController\.live\(current\) \{\s*Task \{ await a\.end\(nil, dismissalPolicy: \.immediate\) \}\s*return\s*\}/);
-    // any open drive takes it: nothing reads the drive's origin or leg
+    // any open drive takes it: nothing reads the drive's origin
     expect(adopt).toMatch(/guard LiveDriveController\.driveOpen else \{/);
     expect(c).not.toMatch(/captureMode|origin/);
     expect(adopt).toMatch(/activity = a\s*removeRecordingNote\(\)\s*applyLatest\(to: a\)\s*\}$/);
-    // every drive end clears the held activity, so the next leg's pushed one is adopted
+    // every drive end clears the held activity, so the next drive's pushed one is adopted
     expect(c).toMatch(/if info\["ended"\] as\? Bool == true \{\s*self\.end\(\)/);
     expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*guard let a = activity else \{ return \}\s*activity = nil/);
     // adopting announces `running`, and drive-sense's note then cancels its 20 s check and comes down
