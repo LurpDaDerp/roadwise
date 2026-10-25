@@ -138,6 +138,8 @@ export function createEngine(deps: EngineDeps): Engine {
 
   /** The row being taken in is a replay (`EngineEvent` row `replay`): its alerts are told, never shown or shaken. */
   let replaying = false;
+  /** The row being taken in came with RoadWise not in front (`EngineEvent` row `unseen`): its alerts are told, never shown or shaken. */
+  let unseen = false;
 
   function snapshot(): EngineSnapshot {
     const row = seen?.row ?? null;
@@ -191,10 +193,10 @@ export function createEngine(deps: EngineDeps): Engine {
     touch();
   }
 
-  /** An alert the HUD shows (`lastAlert`; never one on a replayed row) and the alert layer plays. */
+  /** An alert the HUD shows (`lastAlert`; never one on a replayed or unseen row) and the alert layer plays. */
   function alert(id: string, type: EventType, tier: Tier, at: number): void {
     const event: AlertEvent = { id, type, tier, at };
-    if (!replaying) {
+    if (!replaying && !unseen) {
       lastAlert = event;
       touch();
     }
@@ -209,9 +211,9 @@ export function createEngine(deps: EngineDeps): Engine {
     }
   }
 
-  /** The halo shakes for `key` on the row at `at`; a later shake on the same row replaces it (one shake per row). Never on a replayed row. */
+  /** The halo shakes for `key` on the row at `at`; a later shake on the same row replaces it (one shake per row). Never on a replayed or unseen row. */
   function shake(key: string, at: number, tier: Tier): void {
-    if (replaying) return;
+    if (replaying || unseen) return;
     lastShake = { key, at, tier };
     touch();
   }
@@ -511,10 +513,12 @@ export function createEngine(deps: EngineDeps): Engine {
           return;
         }
         replaying = e.replay === true;
+        unseen = e.unseen === true;
         try {
           await processRow(e.row);
         } finally {
           replaying = false;
+          unseen = false;
         }
         return;
       }

@@ -638,6 +638,33 @@ describe('a phone pickup (phone plan P4)', () => {
     expect((await createEventsRepo(db).listByTrip(id)).map((e) => e.type)).toContain('phone_pickup');
   });
 
+  test('on the driving screen a pickup alerts; behind, the next one is silent and never shown; back on the driving screen, the one after alerts again', async () => {
+    const h = build({ voiceEnabled: () => true });
+    await h.host.boot();
+    h.host.setHudVisible(true);
+    await drive(h, rows(40, { speedMps: 15 }));
+    await feed(h, pickupRows(20, 0, 5));
+    h.appState.set('background');
+    await feed(h, pickupRows(20, 0, 5, T0 + 100_000));
+    h.appState.set('active');
+    expect(h.host.snapshot().lastAlert).toMatchObject({ type: 'phone_pickup', at: T0 + 42_000 });
+    expect(h.host.snapshot().lastShake).toMatchObject({ at: T0 + 42_000 });
+    await feed(h, pickupRows(20, 0, 5, T0 + 140_000));
+    const [front, behind, again, ...more] = phoneDecisions(h);
+    expect(more).toEqual([]);
+    expect(front).toMatchObject({ ts: T0 + 42_000, voice: 'Phone down', intensity: 4 });
+    expect(front!.suppressed).toBeUndefined();
+    expect(behind).toMatchObject({ ts: T0 + 102_000, suppressed: true });
+    expect(again).toMatchObject({ ts: T0 + 142_000, voice: 'Phone down', intensity: 4 });
+    expect(again!.suppressed).toBeUndefined();
+    expect(h.host.snapshot().lastAlert).toMatchObject({ type: 'phone_pickup', at: T0 + 142_000 });
+    expect(h.host.snapshot().lastShake).toMatchObject({ at: T0 + 142_000 });
+    const id = h.host.snapshot().clientTripId!;
+    await h.host.end();
+    const pickups = (await createEventsRepo(db).listByTrip(id)).filter((e) => e.type === 'phone_pickup');
+    expect(pickups.map((e) => e.started_at)).toEqual([T0 + 40_000, T0 + 100_000, T0 + 140_000]);
+  });
+
   test('RoadWise behind or locked: nothing plays and nothing is posted, and every pickup is still recorded with its time in hand', async () => {
     const h = build();
     await h.host.boot();

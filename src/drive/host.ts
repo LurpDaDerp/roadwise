@@ -1451,7 +1451,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (!opts.replay && engine.snapshot().status === 'recording') accrueRow(row);
     replayingRow = opts.replay === true;
     try {
-      await engine.dispatch({ type: 'row', row, replay: opts.replay === true });
+      // RoadWise behind: the row's alerts are never shown or shaken, then or when the driver comes back.
+      await engine.dispatch({ type: 'row', row, replay: opts.replay === true, unseen: !appActive() });
     } finally {
       replayingRow = false;
     }
