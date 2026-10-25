@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { distanceM, integrityReason, milesExceedRoute, polylineMiles, SERVER_MERGE } from './finalize_rules.ts';
+import { distanceM, integrityReason, milesExceedRoute, polylineMiles } from './finalize_rules.ts';
 import { localDayOf, isKnownTz } from './local_day.ts';
 import { lineOfMiles, payload } from './testing/v5_fixtures.ts';
 
@@ -41,8 +41,7 @@ Deno.test('miles cross-check sums every visible run: a 10 mi drive through a mid
   assertEquals(polylineMiles(' '), 0);
 });
 
-Deno.test('the server merge rule is the one the phone uses: 300 s and 150 m (drive_context holds them as literals, pinned by pgTAP)', () => {
-  assertEquals(SERVER_MERGE, { gapS: 300, radiusM: 150 });
+Deno.test('distanceM is great-circle metres', () => {
   const a = { lat: 40.7128, lng: -74.006 };
   assertEquals(Math.round(distanceM(a, { lat: 40.7128 + 150 / 111_195, lng: -74.006 })), 150);
 });

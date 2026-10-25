@@ -1,9 +1,6 @@
 // The server-side rules around storing a drive that are not the scorer's: integrity (mock location
-// or an implausible drive is stored unscored with a reason) and the server merge rule
-// `drive_context` applies (its SQL holds the same numbers as literals). Pure, so every rule is a
-// unit test.
+// or an implausible drive is stored unscored with a reason). Pure, so every rule is a unit test.
 import type { FinalizeTripPayloadV5 } from './payload.ts';
-import { MERGE_GAP_S, MERGE_RADIUS_M } from './scoring/index';
 import { decodeLine } from './speedLimits/geometry.ts';
 
 /** Faster than this, sustained over a whole drive, is not a car on a road. */
@@ -12,14 +9,6 @@ export const MAX_AVG_MPH = 120;
 export const MAX_PEAK_MPH = 160;
 /** Below this share of valid fixes the miles cannot be trusted (drives under a mile are excused). */
 export const MIN_VALID_GNSS_PCT = 30;
-/**
- * The server merge rule (`private.drive_context`, migration 0023): an upload that starts within
- * `gapS` of the user's latest kept drive's end, and within `radiusM` of where it ended, is joined
- * to it. The phone continues a drive by the same rule (scoring `MERGE_GAP_S`, `MERGE_RADIUS_M`);
- * the SQL literals are pinned by pgTAP (0023: 149 m and 300 s merge, 151 m and 301 s do not).
- */
-export const SERVER_MERGE = { gapS: MERGE_GAP_S, radiusM: MERGE_RADIUS_M } as const;
-
 /** The route may be up to this much longer than its drawn polyline (GPS noise, simplification)… */
 export const POLYLINE_SLACK_FACTOR = 1.25;
 /** …plus this many miles hidden by the 0.25 mi end trims and up to three 800 m privacy zones. */
@@ -27,9 +16,6 @@ export const POLYLINE_SLACK_MILES = 6;
 const M_PER_MILE = 1609.344;
 
 export type IntegrityReason = 'spoofed' | 'implausible';
-
-/** A stored drive with one of these reasons is never a merge target. */
-export const isRefusedReason = (reason: string | null | undefined): boolean => reason === 'spoofed' || reason === 'implausible';
 
 /** The runs of an uploaded route: encoded polylines joined by single spaces (the device's `encodeRuns`). */
 export const POLYLINE_RUN_SEPARATOR = ' ';

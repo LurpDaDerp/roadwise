@@ -6,15 +6,16 @@
 // parsing), JSON, the upload contract (v5; a v4 or v3 body from an older build is upgraded, so no drive
 // is ever lost), the time zone and local day (derived here from tz + startedAt; an unknown IANA
 // zone or a mislabelled day is refused), then ONE database transaction: `drive_context` (lock,
-// idempotency, the merge target) → the daily upload budget → integrity → the merge union (the
-// DashPal speed gate re-applied over it) → `classifyDrive`'s length rule → `apply_drive` → the
-// response, stored for replays.
+// idempotency) → the daily upload budget → integrity → the DashPal speed gate re-applied →
+// `classifyDrive`'s length rule → `apply_drive` → the response, stored for replays. Every upload is
+// stored as its own drive: the envelope's `mergeInto` is always null, so the response's `mergedInto`
+// is too.
 //
 // A user id comes from the JWT and nowhere else. Logs carry the request id, the client trip id and
 // codes — never a position, a name or a database message.
-import type { ApplyDriveEnvelope, Engine, EnvelopeDashcam, EnvelopeEvent, MergeTarget, StoredEvent } from '../_shared/engine.ts';
+import type { ApplyDriveEnvelope, Engine, EnvelopeDashcam, EnvelopeEvent } from '../_shared/engine.ts';
 import { EngineContractError } from '../_shared/engine.ts';
-import { integrityReason, isRefusedReason } from '../_shared/finalize_rules.ts';
+import { integrityReason } from '../_shared/finalize_rules.ts';
 import {
   bearerToken,
   invalidPayload,
@@ -59,9 +60,6 @@ export interface FinalizeDeps {
   log?: Logger;
 }
 
-/** A stored event of the merge target, in the envelope's shape (its status survives). */
-const fromStored = (e: StoredEvent): EnvelopeEvent => ({ ...e });
-
 /**
  * What an uploaded event measured, as stored and rated: a speeding event's `overMphS` (mph-seconds
  * over the line) is capped at `SPEEDING_MAX_OVER_MPH` per charged second, as the
@@ -89,41 +87,27 @@ const fromPayload = (e: PayloadEvent): EnvelopeEvent => ({
 });
 
 /**
- * The DashPal seconds of what is stored. A fresh drive: the upload's own (absent = none). A merge:
- * the moving and covered seconds summed over the target and the upload, `synced` from the upload
- * (the newest part, absent = false), the device id the upload's else the target's — and the
- * DashPal-drive flag derived from those sums (never an OR of the two parts' flags).
+ * The DashPal seconds of what is stored: the upload's own (absent = none, `synced` absent = false),
+ * with the DashPal-drive flag derived from them.
  */
-export function dashcamOf(p: FinalizeTripPayloadV5, merge: MergeTarget | null): EnvelopeDashcam {
+export function dashcamOf(p: FinalizeTripPayloadV5): EnvelopeDashcam {
   const own = p.dashcam ?? null;
-  const movingS = (merge?.dashcam.movingS ?? 0) + (own?.movingS ?? 0);
-  const coveredS = (merge?.dashcam.coveredS ?? 0) + (own?.coveredS ?? 0);
+  const movingS = own?.movingS ?? 0;
+  const coveredS = own?.coveredS ?? 0;
   const synced = own?.synced ?? false;
-  const deviceId = own?.deviceId ?? merge?.dashcam.deviceId ?? null;
+  const deviceId = own?.deviceId ?? null;
   return { deviceId, movingS, coveredS, synced, on: dashcamDrive({ movingS, coveredS, synced }) };
 }
 
 /**
- * What is stored: the upload alone, or its union with the merge target. The DashPal speed gate is
- * re-applied (scoring `keepDashcamEvents`): an uploaded eyes-off or drowsy event under 10 mph or
- * with no measured speed is dropped, never stored, never rated; every other one counts. The
- * target's own events always stand. `short` is the length rule
+ * What is stored: the upload alone. The DashPal speed gate is re-applied (scoring
+ * `keepDashcamEvents`): an uploaded eyes-off or drowsy event under 10 mph or with no measured speed
+ * is dropped, never stored, never rated; every other one counts. `short` is the length rule
  * (scoring `classifyDrive`: under 0.5 mi AND under 2 min) over what is stored.
  */
-export function buildStoredDrive(
-  p: FinalizeTripPayloadV5,
-  merge: MergeTarget | null
-): { events: EnvelopeEvent[]; dashcam: EnvelopeDashcam; short: boolean } {
-  if (merge) {
-    const events = [...merge.events.map(fromStored), ...keepDashcamEvents(p.events).map(fromPayload)];
-    return {
-      events,
-      dashcam: dashcamOf(p, merge),
-      short: !classifyDrive({ miles: merge.miles + p.miles, durationS: merge.durationS + p.durationS, events }).scored,
-    };
-  }
+export function buildStoredDrive(p: FinalizeTripPayloadV5): { events: EnvelopeEvent[]; dashcam: EnvelopeDashcam; short: boolean } {
   const events = keepDashcamEvents(p.events).map(fromPayload);
-  return { events, dashcam: dashcamOf(p, null), short: !classifyDrive({ miles: p.miles, durationS: p.durationS, events }).scored };
+  return { events, dashcam: dashcamOf(p), short: !classifyDrive({ miles: p.miles, durationS: p.durationS, events }).scored };
 }
 
 export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Promise<Response> {
@@ -171,17 +155,15 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
         return { kind: 'limited' as const };
       }
 
-      // An integrity-refused drive is stored alone and unscored: it never merges into a good one,
-      // and a refused target is never merged into.
+      // An integrity-refused drive is stored unscored.
       const refused = integrityReason(p);
-      const merge = refused || isRefusedReason(context.merge?.reason ?? null) ? null : context.merge;
-      const s = buildStoredDrive(p, merge);
+      const s = buildStoredDrive(p);
       const scored = !refused && !s.short;
       const reason: ApplyDriveEnvelope['reason'] = refused ?? (s.short ? 'too_short' : null);
 
       const envelope: ApplyDriveEnvelope = {
         user: userId,
-        mergeInto: merge ? merge.tripId : null,
+        mergeInto: null,
         dashcam: s.dashcam,
         payload: {
           clientTripId: p.clientTripId,

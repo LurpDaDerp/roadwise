@@ -1,8 +1,8 @@
 // The drive engine port: the `private.*` SQL functions of migrations 0023 and 0026, reached over a DIRECT
 // Postgres connection — the `private` schema is not exposed by the Data API, so nothing but these
 // functions (and the service role) can call them. Every request runs inside ONE transaction:
-// `drive_context` locks the user's progress row and finds the merge target, the TypeScript decides
-// what is stored, `apply_drive` writes; a replay returns the stored response. A "Wasn't driving" and
+// `drive_context` locks the user's progress row and finds a replay, the TypeScript decides what is
+// stored, `apply_drive` writes; a replay returns the stored response. A "Wasn't driving" and
 // a report are one SQL call each (`mark_not_driving`, `dispute_event`).
 //
 // Answers are zod-checked against the SQL contract (server-side drift is a 500, never a half-stored
@@ -10,65 +10,26 @@
 // maps. The handlers never see a query builder or a column name.
 import postgres, { type TransactionSql } from 'postgres';
 import { z } from 'zod';
-import { EVENT_TYPES, type FinalizeTripPayloadV5, type PayloadEvent } from './payload.ts';
+import type { FinalizeTripPayloadV5, PayloadEvent } from './payload.ts';
 import { PgError } from './pg.ts';
 import type { Exposure } from './scoring/index';
-
-const Uuid = z.uuid();
-const Num = z.coerce.number();
-
-/** A stored event as `private.trip_events_json` returns it: a `DriveEvent` plus where and what was measured. */
-export const StoredEventSchema = z.object({
-  id: Uuid,
-  type: z.enum(EVENT_TYPES),
-  tier: z.enum(['minor', 'moderate', 'severe']),
-  startedAt: Num,
-  durationS: Num,
-  zone: z.enum(['school', 'construction']).nullable(),
-  status: z.enum(['active', 'removed']),
-  lat: Num.nullable(),
-  lng: Num.nullable(),
-  measured: z.record(z.string(), z.unknown()),
-});
-export type StoredEvent = z.infer<typeof StoredEventSchema>;
-
-/** A stored drive's DashPal seconds (`trips.dashcam_*`); a drive no dashcam covered holds zeros and no device. */
-export const StoredDashcamSchema = z.object({
-  deviceId: z.string().nullable(),
-  movingS: Num,
-  coveredS: Num,
-  synced: z.boolean(),
-});
-export type StoredDashcam = z.infer<typeof StoredDashcamSchema>;
 
 /** The report reasons the engine decides (`not_driving` is the whole-drive action). */
 export type EngineDisputeReason = 'hazard' | 'wrong_limit' | 'camera_wrong' | 'mounted';
 
-/** The drive a new upload joins (drive_context's rule: started within 300 s and 150 m of its end). */
-export const MergeTargetSchema = z.object({
-  tripId: Uuid,
-  clientTripId: Uuid,
-  /** A refused (spoofed / implausible) drive is never merged into, whatever the SQL answered. */
-  reason: z.enum(['too_short', 'spoofed', 'implausible']).nullable(),
-  miles: Num,
-  durationS: Num,
-  events: z.array(StoredEventSchema),
-  dashcam: StoredDashcamSchema,
-});
-export type MergeTarget = z.infer<typeof MergeTargetSchema>;
-
 /**
- * `private.drive_context`: a replay (`existing`) or the merge target of a fresh drive. `version: 23`
- * is what makes an older database (or older function) fail loudly as a 500, never a 400; so is
+ * `private.drive_context`: a replay (`existing`) or null for a fresh drive. `version: 23` is what
+ * makes an older database (or older function) fail loudly as a 500, never a 400; so is
  * `phoneUse: true` (0026): a database that cannot store a phone pickup would refuse one with a 400
  * the phone never retries, so this function refuses to run on it. The key is additive, so the
- * function before this one keeps working on a database with 0026.
+ * function before this one keeps working on a database with 0026. `merge` (the SQL still answers
+ * the drive an upload could be joined to) is read by nothing: every upload is stored as its own drive.
  */
 export const DriveContextSchema = z.object({
   version: z.literal(23),
   phoneUse: z.literal(true),
   existing: z.record(z.string(), z.unknown()).nullable(),
-  merge: MergeTargetSchema.nullable(),
+  merge: z.unknown(),
 });
 export type DriveContext = z.infer<typeof DriveContextSchema>;
 
@@ -83,7 +44,7 @@ export interface DriveContextArgs {
   start: { lat: number; lng: number } | null;
 }
 
-/** The DashPal seconds of what is stored: the union on a merge, with the derived DashPal-drive flag. */
+/** The DashPal seconds of what is stored, with the derived DashPal-drive flag. */
 export interface EnvelopeDashcam {
   deviceId: string | null;
   movingS: number;
@@ -93,16 +54,15 @@ export interface EnvelopeDashcam {
   on: boolean;
 }
 
-/** An event as `apply_drive` stores it: the merge target's (status kept) or the upload's (active). */
-export type EnvelopeEvent =
-  | StoredEvent
-  | (Omit<PayloadEvent, 'zone' | 'status'> & { zone: StoredEvent['zone']; status: 'active' });
+/** An event as `apply_drive` stores it: the upload's, always active. */
+export type EnvelopeEvent = Omit<PayloadEvent, 'zone' | 'status'> & { zone: 'school' | 'construction' | null; status: 'active' };
 
 /** The `private.apply_drive` envelope. */
 export interface ApplyDriveEnvelope {
   user: string;
+  /** Always null: every upload is stored as its own drive (apply_drive's join branch never runs). */
   mergeInto: string | null;
-  /** What the stored (merged) drive holds; `payload.dashcam` is the upload's own, kept on a merged-away row. */
+  /** What the stored drive holds, derived from `payload.dashcam` (the upload's own, as sent). */
   dashcam: EnvelopeDashcam;
   payload: {
     clientTripId: string;
@@ -121,13 +81,13 @@ export interface ApplyDriveEnvelope {
     notDrivingExpired: boolean;
     /**
      * The upload's own counters (clamped), `phoneS` included; apply_drive estimates them when absent
-     * (with no phone seconds) and sums them on a merge.
+     * (with no phone seconds).
      */
     exposure: Exposure | null;
   };
   scored: boolean;
   reason: 'too_short' | 'spoofed' | 'implausible' | null;
-  /** The stored drive's events: the merge target's (status kept) then the upload's kept ones. */
+  /** The stored drive's events: the upload's kept ones. */
   events: EnvelopeEvent[];
   scoringVersion: number;
 }

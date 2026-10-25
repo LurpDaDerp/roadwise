@@ -33,7 +33,7 @@ const nyDay = (t: number): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(t));
 
 Deno.test({
-  name: 'finalize-trip + trip-actions against the local stack: v5 answer with a pickup, replay, merge at 2 min / 100 m, reports ("mounted" too), "Wasn\'t driving", a v4 upload',
+  name: 'finalize-trip + trip-actions against the local stack: v5 answer with a pickup, replay, a drive of its own at 2 min / 100 m, reports ("mounted" too), "Wasn\'t driving", a v4 upload',
   ignore: !DB_URL,
   sanitizeResources: false,
   sanitizeOps: false,
@@ -74,7 +74,7 @@ Deno.test({
       const [{ n }] = await sql`select count(*)::int as n from public.trips where user_id = ${user}::uuid`;
       assertEquals(n, 1);
 
-      // 3. merge: starts 2 minutes after the first ended, about 100 m from its end; no counters (estimated)
+      // 3. a drive of its own: starts 2 minutes after the first ended, about 100 m from its end; no counters (estimated)
       const second = payload({
         clientTripId: TRIP_2,
         startedAt: base.endedAt + 2 * 60_000,
@@ -90,14 +90,19 @@ Deno.test({
         exposure: undefined,
         events: [{ id: EVENT_B, type: 'hard_brake', tier: 'minor', startedAt: base.endedAt + 5 * 60_000, durationS: 2, lat: null, lng: null, measured: {} }],
       });
-      const merged = await handleFinalizeTrip(post('finalize-trip', second), deps);
-      assertEquals(merged.status, 200);
-      const r2 = await merged.json();
-      assertEquals([r2.mergedInto, r2.clientTripId, r2.tripId, r2.eventIds.length], [TRIP, TRIP_2, r1.tripId, 3]);
-      const [union] = await sql`select miles, n_hard_brake, polyline, duration_s, scoring_version, origin, not_driving_expired, slowdowns, phone_s from public.trips where id = ${r1.tripId}::uuid`;
-      // the union keeps the first leg's origin, ORs the "Not driving?" flag and sums the counters (3 mi in 18 min, 10 mph, estimates 9 slowdowns and no phone seconds)
-      assertEquals([Number(union.miles), union.n_hard_brake, union.duration_s, union.scoring_version, union.origin, union.not_driving_expired, union.slowdowns, union.phone_s], [15, 2, 2880, 9, 'auto', true, 27, 1500]);
-      assertEquals(union.polyline, `${base.polyline} ${second.polyline}`);
+      const own = await handleFinalizeTrip(post('finalize-trip', second), deps);
+      assertEquals(own.status, 200);
+      const r2 = await own.json();
+      assertEquals([r2.mergedInto, r2.clientTripId, r2.eventIds], [null, TRIP_2, [EVENT_B]]);
+      assert(r2.tripId !== r1.tripId);
+      const drives = await sql`select id, miles, n_hard_brake, duration_s, origin, not_driving_expired, merged_into from public.trips where user_id = ${user}::uuid order by started_at`;
+      assertEquals(
+        drives.map((t) => [t.id, Number(t.miles), t.n_hard_brake, t.duration_s, t.origin, t.not_driving_expired, t.merged_into]),
+        [
+          [r1.tripId, 12, 1, 1800, 'auto', false, null],
+          [r2.tripId, 3, 1, 1080, 'manual', true, null],
+        ]
+      );
 
       // 4. report the first hard brake as a hazard: accepted, the event removed, one brake left
       const dispute = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'hazard' }), deps);
@@ -108,20 +113,20 @@ Deno.test({
       assertEquals([twice.status, await twice.json()], [200, d]);
       const other = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT, reason: 'wrong_limit' }), deps);
       assertEquals([other.status, (await other.json()).code], [409, 'already_disputed']);
-      const mismatch = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT_B, reason: 'wrong_limit' }), deps);
+      const mismatch = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP_2, eventId: EVENT_B, reason: 'wrong_limit' }), deps);
       assertEquals([mismatch.status, (await mismatch.json()).code], [400, 'reason_mismatch']);
-      const notMounted = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT_B, reason: 'mounted' }), deps);
+      const notMounted = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP_2, eventId: EVENT_B, reason: 'mounted' }), deps);
       assertEquals([notMounted.status, (await notMounted.json()).code], [400, 'reason_mismatch']);
-      // "My phone was mounted" on the pickup: accepted from the same weekly three
+      // "My phone was mounted" on the pickup: accepted from the same weekly three; the first drive is clean then
       const mounted = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: PICKUP, reason: 'mounted' }), deps);
       assertEquals(mounted.status, 200);
       const md = await mounted.json();
-      assertEquals([md.status, md.rejectReason, md.quotaLeft, md.clean], ['accepted', null, 1, false]);
-      const brake2 = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP, eventId: EVENT_B, reason: 'hazard' }), deps);
+      assertEquals([md.status, md.rejectReason, md.quotaLeft, md.clean], ['accepted', null, 1, true]);
+      const brake2 = await handleTripAction(post('trip-actions', { action: 'dispute', clientTripId: TRIP_2, eventId: EVENT_B, reason: 'hazard' }), deps);
       assertEquals((await brake2.json()).clean, true);
 
-      // 5. the merged drive's "Not driving?" ran out: "Wasn't driving" is refused with its own code
-      const expired = await handleTripAction(post('trip-actions', { action: 'not_driving', clientTripId: TRIP }), deps);
+      // 5. the second drive's "Not driving?" ran out: "Wasn't driving" is refused with its own code
+      const expired = await handleTripAction(post('trip-actions', { action: 'not_driving', clientTripId: TRIP_2 }), deps);
       assertEquals([expired.status, (await expired.json()).code], [403, 'not_driving_expired']);
 
       // 6. an older build's v3 upload of a later drive: upgraded, its phone pickup gone, then marked as not driving

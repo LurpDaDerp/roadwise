@@ -7,7 +7,6 @@ import {
   EVENT,
   EVENT_2,
   EVENT_3,
-  mergeTarget,
   payload,
   payloadV3,
   payloadV4,
@@ -23,7 +22,17 @@ import { buildStoredDrive, clampMeasured, dashcamOf, handleFinalizeTrip, MAX_UPL
 
 const quiet = { warn: () => {}, error: () => {} };
 const freshContext = { version: 23, phoneUse: true, existing: null, merge: null };
-const withMerge = (merge = mergeTarget()) => ({ ...freshContext, merge });
+/** What `drive_context` still answers for an upload 2 min and 100 m after the drive before: read by nothing. */
+const JOINABLE = {
+  tripId: '99999999-9999-4999-8999-999999999999',
+  clientTripId: TRIP_2,
+  reason: null,
+  miles: 3,
+  durationS: 2280,
+  events: [{ id: EVENT_2, type: 'eyes_off', tier: 'severe', startedAt: STARTED_AT - 20 * 60_000, durationS: 3, zone: null, status: 'removed', lat: null, lng: null, measured: { source: 'dashcam', speedMph: 30 } }],
+  dashcam: { deviceId: DASHCAM, movingS: 600, coveredS: 600, synced: true },
+};
+const joinable = { ...freshContext, merge: JOINABLE };
 
 function harness(script: FakeEngineScript = {}, auth: 'good' | 'bad' | 'down' = 'good') {
   const fake = fakeEngine({
@@ -99,10 +108,6 @@ Deno.test('a phone pickup travels to apply_drive as uploaded: its tier, its seco
     ]
   );
   assertEquals([e.scored, e.reason, e.payload.exposure?.phoneS], [true, null, 1500]);
-  // a pickup on a merge: the union keeps the target's events, then the upload's (the pickup included)
-  const m = harness({ context: withMerge() });
-  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, events: [pickup({ tier: 'moderate', durationS: 15 })] })), m.deps);
-  assertEquals(envelopeOf(m).events.map((x) => [x.id, x.tier, x.status]), [[EVENT_2, 'severe', 'removed'], [PICKUP, 'moderate', 'active']]);
 });
 
 Deno.test('the contract refuses a pickup the phone could not have recorded', async () => {
@@ -193,21 +198,6 @@ Deno.test('a DashPal drive: the seconds and the derived flag go to apply_drive; 
   assertEquals([envelopeOf(none).dashcam, envelopeOf(none).payload.dashcam], [{ deviceId: null, movingS: 0, coveredS: 0, synced: false, on: false }, null]);
 });
 
-Deno.test('merge: DashPal seconds are summed over the target and the upload and the flag is derived from the sums, never OR-ed', async () => {
-  const target = (dashcam: { deviceId: string | null; movingS: number; coveredS: number; synced: boolean }) => withMerge(mergeTarget({ dashcam }));
-  const h1 = harness({ context: target({ deviceId: DASHCAM, movingS: 600, coveredS: 600, synced: true }) });
-  await handleFinalizeTrip(post(payload({ dashcam: covered({ movingS: 1800, coveredS: 0 }) })), h1.deps);
-  assertEquals(envelopeOf(h1).dashcam, { deviceId: DASHCAM, movingS: 2400, coveredS: 600, synced: true, on: false });
-  const h2 = harness({ context: target({ deviceId: DASHCAM, movingS: 600, coveredS: 500, synced: false }) });
-  await handleFinalizeTrip(post(payload({ dashcam: covered({ movingS: 1800, coveredS: 1700 }) })), h2.deps);
-  assertEquals(envelopeOf(h2).dashcam, { deviceId: DASHCAM, movingS: 2400, coveredS: 2200, synced: true, on: true });
-  const h3 = harness({ context: target({ deviceId: DASHCAM, movingS: 1800, coveredS: 1800, synced: true }) });
-  await handleFinalizeTrip(post(payload()), h3.deps);
-  assertEquals(envelopeOf(h3).dashcam, { deviceId: DASHCAM, movingS: 1800, coveredS: 1800, synced: false, on: false });
-  const both = dashcamOf(payload({ dashcam: covered({ deviceId: 'ffffffffffff' }) }), mergeTarget({ dashcam: { deviceId: DASHCAM, movingS: 1, coveredS: 1, synced: true } }));
-  assertEquals(both.deviceId, 'ffffffffffff');
-});
-
 Deno.test('a replay returns the stored answer from the context and applies nothing', async () => {
   const stored = response({ achievements: [] });
   const h = harness({ context: { version: 23, phoneUse: true, existing: stored, merge: null } });
@@ -218,19 +208,26 @@ Deno.test('a replay returns the stored answer from the context and applies nothi
   assertEquals(h.fake.calls.map((c) => c.fn), ['driveContext']);
 });
 
-Deno.test('merge: the union keeps the target\'s events with their status, then the upload\'s; the upload\'s own facts travel', async () => {
-  const h = harness({ context: withMerge() });
-  const res = await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2 })), h.deps);
+Deno.test('every upload is stored as its own drive: one 2 min and 100 m after the drive before keeps mergeInto null, its own events, seconds and length', async () => {
+  const h = harness({ context: joinable });
+  const res = await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, events: [...payload().events, pickup()] })), h.deps);
   assertEquals(res.status, 200);
+  assertEquals((await res.json()).mergedInto, null);
   const e = envelopeOf(h);
-  assertEquals(e.mergeInto, '99999999-9999-4999-8999-999999999999');
-  assertEquals(e.events.map((x) => [x.id, x.status]), [[EVENT_2, 'removed'], [EVENT, 'active']]);
-  // the payload's own metrics travel; SQL sums the union (counters included)
+  assertEquals(e.mergeInto, null);
+  assertEquals(e.events.map((x) => [x.id, x.status]), [[EVENT, 'active'], [PICKUP, 'active']]);
+  assertEquals(e.dashcam, { deviceId: null, movingS: 0, coveredS: 0, synced: false, on: false });
   assertEquals([e.payload.miles, e.payload.clientTripId, e.payload.exposure?.slowdowns], [12, TRIP_2, 18]);
   assertEquals([e.scored, e.reason], [true, null]);
+  // short on its own is too short, whatever the drive before it held
+  const short = harness({ context: joinable });
+  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, events: [], exposure: undefined, miles: 0.2, durationS: 60, endedAt: STARTED_AT + 60_000 })), short.deps);
+  assertEquals([envelopeOf(short).scored, envelopeOf(short).reason, envelopeOf(short).mergeInto], [false, 'too_short', null]);
+  // the DashPal seconds are the upload's own
+  assertEquals(dashcamOf(payload({ dashcam: { deviceId: DASHCAM, movingS: 100, coveredS: 90, synced: true } })), { deviceId: DASHCAM, movingS: 100, coveredS: 90, synced: true, on: true });
 });
 
-// The DashPal speed gate on the server: every episode at 10 mph or more counts, merge target included.
+// The DashPal speed gate on the server: every episode at 10 mph or more counts.
 const dcId = (n: number): string => `dddddddd-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const MIN = 60_000;
 /** An uploaded DashPal event `m` minutes after the upload's start; `speedMph` null = not measured. */
@@ -244,22 +241,13 @@ const dcEvent = (n: number, type: 'drowsy' | 'eyes_off', m: number, speedMph: nu
   lng: null,
   measured: speedMph === null ? { source: 'dashcam' as const } : { source: 'dashcam' as const, speedMph },
 });
-/** A stored DashPal event of the merge target, `m` minutes after the upload's start (negative: before). */
-const storedDc = (n: number, type: 'drowsy' | 'eyes_off', m: number, status: 'active' | 'removed' = 'active') => ({
-  ...dcEvent(n, type, m),
-  zone: null,
-  status,
-});
-
-Deno.test("merge: every DashPal episode counts, however close to another; the target's events stand, the upload's are all kept", async () => {
-  const merge = mergeTarget({ events: [...mergeTarget().events, storedDc(1, 'drowsy', -5), storedDc(2, 'eyes_off', -3)] });
-  const h = harness({ context: withMerge(merge) });
+Deno.test('every DashPal episode counts, however close to another; the phone\'s own events are never touched', async () => {
+  const h = harness();
   const upload = payload({
-    clientTripId: TRIP_2,
     events: [
       ...payload().events, // the hard brake: the phone's own event, never touched
-      dcEvent(3, 'drowsy', 1), // 6 min after the target's drowsy
-      dcEvent(4, 'eyes_off', 1), // 4 min after the target's eyes-off
+      dcEvent(3, 'drowsy', 1),
+      dcEvent(4, 'eyes_off', 1),
       dcEvent(5, 'eyes_off', 2),
       dcEvent(6, 'drowsy', 5),
       dcEvent(7, 'drowsy', 14.9),
@@ -270,9 +258,6 @@ Deno.test("merge: every DashPal episode counts, however close to another; the ta
   assertEquals(
     envelopeOf(h).events.map((x) => [x.id, x.status]),
     [
-      [EVENT_2, 'removed'],
-      [dcId(1), 'active'],
-      [dcId(2), 'active'],
       [EVENT, 'active'],
       [dcId(3), 'active'],
       [dcId(4), 'active'],
@@ -283,11 +268,7 @@ Deno.test("merge: every DashPal episode counts, however close to another; the ta
   );
 });
 
-Deno.test('merge: a removed (disputed) target drowsy stays removed; without a merge the same upload keeps both drowsy episodes, in input order', async () => {
-  const merge = mergeTarget({ events: [storedDc(1, 'drowsy', -5, 'removed')] });
-  const h = harness({ context: withMerge(merge) });
-  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, events: [dcEvent(3, 'drowsy', 1), dcEvent(4, 'drowsy', 2)] })), h.deps);
-  assertEquals(envelopeOf(h).events.map((x) => [x.id, x.status]), [[dcId(1), 'removed'], [dcId(3), 'active'], [dcId(4), 'active']]);
+Deno.test('an upload keeps both drowsy episodes, in input order', async () => {
   const fresh = harness();
   await handleFinalizeTrip(post(payload({ events: [dcEvent(4, 'drowsy', 2), dcEvent(3, 'drowsy', 1)] })), fresh.deps);
   assertEquals(envelopeOf(fresh).events.map((x) => x.id), [dcId(4), dcId(3)]);
@@ -306,8 +287,8 @@ Deno.test('a DashPal event under 10 mph or with no measured speed is dropped, no
   assertEquals(e.events[0].measured, { peakG: 0.42 });
 });
 
-Deno.test('integrity: a mock location is stored unscored as spoofed and never merged; an implausible drive the same', async () => {
-  const h = harness({ context: withMerge() });
+Deno.test('integrity: a mock location is stored unscored as spoofed, on its own; an implausible drive the same', async () => {
+  const h = harness({ context: joinable });
   const res = await handleFinalizeTrip(post(payload({ integrity: { mockLocation: true, motionMismatch: false, validGnssPct: 100, maxSpeedMph: 50 } })), h.deps);
   assertEquals(res.status, 200);
   const e = envelopeOf(h);
@@ -320,18 +301,7 @@ Deno.test('integrity: a mock location is stored unscored as spoofed and never me
   assertEquals([envelopeOf(h3).scored, envelopeOf(h3).reason], [false, 'implausible']);
 });
 
-Deno.test('a refused merge target (spoofed / implausible) is never merged into: the drive is stored on its own; a too-short one still merges', async () => {
-  for (const reason of ['spoofed', 'implausible'] as const) {
-    const h = harness({ context: withMerge(mergeTarget({ reason })) });
-    assertEquals((await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2 })), h.deps)).status, 200);
-    assertEquals([envelopeOf(h).mergeInto, envelopeOf(h).events.length], [null, 1], reason);
-  }
-  const h = harness({ context: withMerge(mergeTarget({ reason: 'too_short' })) });
-  await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2 })), h.deps);
-  assertEquals(envelopeOf(h).mergeInto, '99999999-9999-4999-8999-999999999999');
-});
-
-Deno.test('too short: under 0.5 mi AND under 2 min is stored unscored with reason too_short; either one reached scores it; a merge reads the union', async () => {
+Deno.test('too short: under 0.5 mi AND under 2 min is stored unscored with reason too_short; either one reached scores it', async () => {
   const short = (over: Partial<ReturnType<typeof payload>>) => payload({ events: [], exposure: undefined, ...over });
   const h = harness();
   await handleFinalizeTrip(post(short({ miles: 0.3, durationS: 119, endedAt: STARTED_AT + 119_000 })), h.deps);
@@ -342,16 +312,8 @@ Deno.test('too short: under 0.5 mi AND under 2 min is stored unscored with reaso
   const quick = harness();
   await handleFinalizeTrip(post(short({ miles: 0.5, durationS: 90, endedAt: STARTED_AT + 90_000 })), quick.deps);
   assertEquals(envelopeOf(quick).scored, true);
-  // a 0.2 mi / 60 s upload onto a 0.2 mi / 70 s target is 0.4 mi over 130 s: scored
-  const target = mergeTarget({ miles: 0.2, durationS: 70, events: [] });
-  const merged = harness({ context: withMerge(target) });
-  await handleFinalizeTrip(post(short({ clientTripId: TRIP_2, miles: 0.2, durationS: 60, endedAt: STARTED_AT + 60_000 })), merged.deps);
-  assertEquals([envelopeOf(merged).scored, envelopeOf(merged).mergeInto], [true, target.tripId]);
-  const tiny = harness({ context: withMerge(mergeTarget({ miles: 0.2, durationS: 50, events: [] })) });
-  await handleFinalizeTrip(post(short({ clientTripId: TRIP_2, miles: 0.2, durationS: 60, endedAt: STARTED_AT + 60_000 })), tiny.deps);
-  assertEquals([envelopeOf(tiny).scored, envelopeOf(tiny).reason], [false, 'too_short']);
   // the pure rule
-  assertEquals(buildStoredDrive(short({ miles: 0.49, durationS: 119, endedAt: STARTED_AT + 119_000 }), null).short, true);
+  assertEquals(buildStoredDrive(short({ miles: 0.49, durationS: 119, endedAt: STARTED_AT + 119_000 })).short, true);
 });
 
 const SPEEDING = '55555555-5555-4555-8555-555555555555';

@@ -1,6 +1,5 @@
 // Fixtures for the v5 upload: a valid payload, a phone pickup, the v4 and v3 payloads older builds
-// send (for the upgrade paths), a stored finalize response, and a merge target.
-import type { MergeTarget } from '../engine.ts';
+// send (for the upgrade paths) and a stored finalize response.
 import type { FinalizeTripPayloadV3, FinalizeTripPayloadV4, FinalizeTripPayloadV5, FinalizeTripResponse, PayloadEvent } from '../payload.ts';
 
 export const USER = '11111111-1111-4111-8111-111111111111';
@@ -174,33 +173,6 @@ export function response(over: Partial<FinalizeTripResponse> = {}): FinalizeTrip
     rating: { safetyRating: 87.4, ranked: true },
     challenges: [],
     achievements: ['first_drive'],
-    ...over,
-  };
-}
-
-/** The drive before: 3 miles that ended 2 minutes before `payload()` started, one removed DashPal event. */
-export function mergeTarget(over: Partial<MergeTarget> = {}): MergeTarget {
-  return {
-    tripId: '99999999-9999-4999-8999-999999999999',
-    clientTripId: TRIP_2,
-    reason: null,
-    miles: 3,
-    durationS: 2280,
-    events: [
-      {
-        id: EVENT_2,
-        type: 'eyes_off',
-        tier: 'severe',
-        startedAt: STARTED_AT - 20 * 60_000,
-        durationS: 3,
-        zone: null,
-        status: 'removed',
-        lat: null,
-        lng: null,
-        measured: { source: 'dashcam', speedMph: 30 },
-      },
-    ],
-    dashcam: { deviceId: null, movingS: 0, coveredS: 0, synced: false },
     ...over,
   };
 }
