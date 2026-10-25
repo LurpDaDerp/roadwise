@@ -1,5 +1,4 @@
 import { MPS_PER_MPH } from '@/core/detectors/common';
-import { CARRY_MAX_MS, SPEED_TICK_MS } from '@/core/engine/displaySpeed';
 import { createDriveDisplay, DISPLAY_KEEPALIVE_MS, DISPLAY_MIN_INTERVAL_MS, LIVE_MIN_INTERVAL_MS, toLive, type DriveDisplayState } from '@/drive/display';
 import { displayLook, setDisplayLook, type DisplayLook } from '@/drive/displayLook';
 
@@ -249,135 +248,128 @@ test('a start that already carries a speed and a limit spends both bypasses (the
   expect(sent).toHaveLength(2);
 });
 
-/** A manual clock and interval for the iOS ticks. */
-function clock() {
-  let now = 0;
-  const ticks: { ms: number; fn: () => void }[] = [];
-  const every = jest.fn((ms: number, fn: () => void) => {
-    const t = { ms, fn };
-    ticks.push(t);
-    return () => {
-      ticks.splice(ticks.indexOf(t), 1);
-    };
-  });
-  return {
-    every,
-    now: () => now,
-    running: () => ticks.length,
-    /** Moves the clock on by whole ticks, running each tick as it falls due. */
-    advance(ms: number) {
-      for (let left = ms; left > 0; left -= SPEED_TICK_MS) {
-        now += Math.min(SPEED_TICK_MS, left);
-        for (const t of [...ticks]) t.fn();
-      }
-    },
-    set(t: number) {
-      now = t;
-    },
-  };
-}
-
 const mph = (n: number) => n * MPS_PER_MPH;
+const speeds = (set: jest.Mock) => set.mock.calls.map((a) => (a as unknown as [DriveDisplayState])[0].speed);
 
-describe('iOS: the Live Activity at the halo’s pace', () => {
-  test('a change goes out 200 ms after the last (5 a second at most); Android keeps its 3 s', () => {
-    expect(LIVE_MIN_INTERVAL_MS).toBe(200);
-    const c = clock();
-    const { set, live } = sinks();
-    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: c.now, platform: 'ios', every: c.every });
-    d.start(state());
-    c.set(200);
-    d.update(state({ speed: 31 }));
-    c.set(400);
-    d.update(state({ speed: 32 }));
-    expect(set).toHaveBeenCalledTimes(3);
-    c.set(500);
-    d.update(state({ speed: 33 }));
-    // inside the 200 ms: it waits, and a tick sends it once due
-    expect(set).toHaveBeenCalledTimes(3);
-    expect(c.running()).toBe(1);
-    c.advance(SPEED_TICK_MS);
-    expect(set).toHaveBeenCalledTimes(4);
-    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 33 }));
-    // nothing moves and nothing waits: the ticks stop
-    expect(c.running()).toBe(0);
+describe('iOS: the Live Activity at most once a second, with the halo’s number', () => {
+  test('a change goes out 1 s after the last (once a second at most) and no timer ever runs; Android keeps its 3 s', () => {
+    expect(LIVE_MIN_INTERVAL_MS).toBe(1000);
+    expect(DISPLAY_MIN_INTERVAL_MS).toBe(3000);
+    jest.useFakeTimers();
+    try {
+      let now = 0;
+      const { set, live } = sinks();
+      const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios' });
+      d.start(state());
+      now = 200;
+      d.update(state({ speed: 31 }));
+      now = 600;
+      d.update(state({ speed: 32 }));
+      // inside the second: dropped, and nothing is scheduled to send them later
+      expect(set).toHaveBeenCalledTimes(1);
+      expect(jest.getTimerCount()).toBe(0);
+      now = 1000;
+      d.update(state({ speed: 33 }));
+      // the next call past the second sends the newest state
+      expect(set).toHaveBeenCalledTimes(2);
+      expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 33 }));
+      now = 1999;
+      d.update(state({ speed: 34 }));
+      expect(set).toHaveBeenCalledTimes(2);
+      now = 2400;
+      d.update(state({ speed: 35 }), { mps: mph(35), accel: mph(3), at: 2400 });
+      expect(speeds(set)).toEqual([30, 33, 35]);
+      // a carried number is not re-read between updates either
+      jest.advanceTimersByTime(5000);
+      expect(set).toHaveBeenCalledTimes(3);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
-  test("with the halo's speed the number is the halo's: carried on along its acceleration, 4 a second, with its hysteresis, for at most 1.5 s after the fix", () => {
-    const c = clock();
+  test("with the halo's speed, each update shows the halo's number at that moment: carried along its acceleration, with its hysteresis", () => {
+    let now = 0;
     const { set, live } = sinks();
-    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: c.now, platform: 'ios', every: c.every });
-    d.start(state({ speed: 30 }));
-    c.set(1000);
-    // a fix at t = 900 ms: 30 mph and gaining 2 mph a second (0.894 m/s²); the host rounds 30
-    d.update(state({ speed: 30 }), { mps: mph(30), accel: mph(2), at: 900 });
-    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 30 }));
-    expect(c.running()).toBe(1);
-    const shown: number[] = [];
-    set.mockImplementation(async (...args: unknown[]) => {
-      shown.push((args[0] as DriveDisplayState).speed!);
-    });
-    c.advance(1500);
-    // 30.6 mph at 1.25 s … 33 at 2.4 s, held there (1.5 s of carry): each whole number once, 0.8 past the last
-    expect(shown).toEqual([31, 32, 33]);
-    expect(c.running()).toBe(0);
-    expect(c.now() - 900).toBeGreaterThanOrEqual(CARRY_MAX_MS);
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios' });
+    d.start(state({ speed: 28 }));
+    // a fix at t = 900 ms: 30 mph and gaining 2 mph a second; the host rounds 30
+    const fix = { mps: mph(30), accel: mph(2), at: 900 };
+    now = 1000;
+    d.update(state({ speed: 30 }), fix);
+    now = 2000;
+    // 32.2 mph, 1.1 s on
+    d.update(state({ speed: 30 }), fix);
+    now = 2600;
+    // 33.4 mph: inside the second, dropped
+    d.update(state({ speed: 30 }), fix);
+    now = 3000;
+    // held at 1.5 s of carry: 33
+    d.update(state({ speed: 30 }), fix);
+    expect(speeds(set)).toEqual([28, 30, 32, 33]);
+    now = 4000;
+    // a new fix of 33.6 mph, not carried: the host rounds 34, the halo still reads 33 (0.6 past it)
+    d.update(state({ speed: 34, limit: 40 }), { mps: mph(33.6), accel: 0, at: 4000 });
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 33, limit: 40 }));
+    now = 5000;
+    d.update(state({ speed: 34, limit: 40 }), { mps: mph(33.9), accel: 0, at: 5000 });
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 34 }));
   });
 
-  test('a slowing car is carried down too, and 0 (never below) once under 1 mph; a cruise sends nothing between fixes', () => {
-    const c = clock();
+  test('km/h is carried in km/h; a slowing car reads 0 (never below) under 1 mph; an unknown speed stays "-"; Android never carries', () => {
+    let now = 0;
     const { set, live } = sinks();
-    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: c.now, platform: 'ios', every: c.every });
-    d.start(state({ speed: 3 }));
-    c.set(1000);
-    d.update(state({ speed: 3 }), { mps: mph(3), accel: -mph(4), at: 1000 });
-    c.advance(CARRY_MAX_MS);
-    expect(set.mock.calls.map((a) => (a as unknown as [DriveDisplayState])[0].speed)).toEqual([3, 2, 1, 0]);
-    expect(c.running()).toBe(0);
-    set.mockClear();
-    c.set(5000);
-    d.update(state({ speed: 40 }), { mps: mph(40), accel: 0, at: 4900 });
-    expect(set).toHaveBeenCalledTimes(1);
-    expect(c.running()).toBe(0);
-  });
-
-  test('km/h is carried in km/h; an unknown speed stays "-"; Android never carries or ticks', () => {
-    const c = clock();
-    const { set, live } = sinks();
-    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: c.now, platform: 'ios', every: c.every });
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios' });
     d.start(state({ unit: 'km/h', speed: null }));
-    c.set(1000);
+    now = 1000;
     d.update(state({ unit: 'km/h', speed: 80 }), { mps: 22.5, accel: 0, at: 1000 });
     expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 81 }));
-    c.set(2000);
-    d.update(state({ unit: 'km/h', speed: null }), { mps: 22.5, accel: 1, at: 2000 });
+
+    set.mockClear();
+    d.end();
+    now = 2000;
+    d.start(state({ speed: 5 }));
+    now = 3000;
+    // 3 mph and losing 4 mph a second
+    const slowing = { mps: mph(3), accel: -mph(4), at: 3000 };
+    d.update(state({ speed: 3 }), slowing);
+    now = 4000;
+    d.update(state({ speed: 3 }), slowing);
+    expect(speeds(set)).toEqual([5, 3, 0]);
+    now = 5000;
+    d.update(state({ speed: null }), { mps: mph(20), accel: 1, at: 5000 });
     expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: null }));
 
-    const a = clock();
+    let at = 0;
     const sent: DriveDisplayState[] = [];
-    const android = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: a.now, platform: 'android', every: a.every });
+    const android = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: () => at, platform: 'android' });
     android.start(state());
-    a.set(5000);
-    android.update(state({ speed: 30 }), { mps: mph(30), accel: mph(3), at: 5000 });
-    a.set(5500);
-    android.update(state({ speed: 34 }), { mps: mph(30), accel: mph(3), at: 5000 });
-    // the host's own speed, at the 3 s pace (carried, it would read 32)
+    at = 5000;
+    android.update(state({ speed: 30 }), { mps: mph(30), accel: mph(3), at: 4000 });
+    // the host's own speed (carried, it would read 33)
+    expect(sent.map((s) => s.speed)).toEqual([30]);
+    at = 8000;
+    android.update(state({ speed: 34 }), { mps: mph(30), accel: mph(3), at: 4000 });
     expect(sent.map((s) => s.speed)).toEqual([30, 34]);
-    expect(a.every).not.toHaveBeenCalled();
   });
 
-  test('the end and the next start stop the ticks and forget the carried number', () => {
-    const c = clock();
+  test('the end and the next start forget the carried number', () => {
+    let now = 0;
     const { set, live } = sinks();
-    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: c.now, platform: 'ios', every: c.every });
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios' });
     d.start(state());
-    c.set(1000);
-    d.update(state({ speed: 30 }), { mps: mph(30), accel: mph(3), at: 1000 });
-    expect(c.running()).toBe(1);
+    now = 1000;
+    d.update(state({ speed: 30 }), { mps: mph(30.6), accel: 0, at: 1000 });
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 31 }));
     d.end();
-    expect(c.running()).toBe(0);
     d.start(state({ speed: 50 }));
     expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 50 }));
-    expect(c.running()).toBe(0);
+    // no carry kept: a refresh without one shows the host's speed
+    d.refresh!(state({ speed: 44 }));
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 44 }));
+    now = 2000;
+    // no hysteresis kept either: 30.4 mph reads 30 (with 31 still remembered, it would hold 31)
+    d.update(state({ speed: 30 }), { mps: mph(30.4), accel: 0, at: 2000 });
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 30 }));
   });
 });
