@@ -6,8 +6,9 @@
 // adopted too. `start` updates a running activity instead of ending and requesting another; one the
 // driver dismissed (or iOS ended) is no longer running, so `start` requests a new one.
 // Updated by `update` or drive-sense's `setDriveDisplay` (the `roadwise.driveDisplay` notification;
-// at most once a second, src/drive/display.ts), each update handed to ActivityKit as it comes
-// (`Task { await a.update(content) }`, logged with a running count under app.roadwise / LiveDrive);
+// about once a second, src/drive/display.ts), each update handed to ActivityKit as it comes, in send
+// order (`Task { @MainActor in await a.update(content) }`), and logged with a running count at
+// notice level (Console.app shows it by default: subsystem app.roadwise, category LiveDrive);
 // ended by `end` or the drive's end. The newest display state is kept even while no activity is
 // held (a pushed one not adopted yet), and an activity adopted later shows it at once instead of its
 // older pushed state: nothing sent while waiting is lost, the newest wins. The push-to-start token
@@ -34,7 +35,8 @@ final class LiveDriveController {
   static let tokenKey = "livedrive.pushToStartToken"
   /// No update for this long means the app is gone: the widget then shows "-" (`context.isStale`).
   static let STALE_AFTER_S: TimeInterval = 120
-  /// One debug line per update (Console.app: subsystem app.roadwise, category LiveDrive).
+  /// One notice line per update, handed over or kept with no activity held (Console.app: subsystem
+  /// app.roadwise, category LiveDrive; notice level, so it shows without "Include Debug Messages").
   private static let log = Logger(subsystem: "app.roadwise", category: "LiveDrive")
 
   private var activity: Activity<LiveDriveAttributes>? {
@@ -46,7 +48,7 @@ final class LiveDriveController {
   /// held: an activity adopted later (a pushed one) takes it at once (`applyLatest`). Each state
   /// replaces the one before; the drive's end clears it.
   private var latest: (state: LiveDriveAttributes.ContentState, at: Date)?
-  /// Updates handed to the held activity by `update` this process, for the debug log.
+  /// `update` calls this process, for the log.
   private var updates = 0
   private var observer: NSObjectProtocol?
   private var updatesTask: Task<Void, Never>?
@@ -162,7 +164,7 @@ final class LiveDriveController {
   private func applyLatest(to a: Activity<LiveDriveAttributes>) {
     guard let l = latest, Date().timeIntervalSince(l.at) < LiveDriveController.STALE_AFTER_S else { return }
     let content = LiveDriveController.content(l.state, since: l.at)
-    Task { await a.update(content) }
+    Task { @MainActor in await a.update(content) }
   }
 
   func isRunning() -> Bool {
@@ -197,17 +199,22 @@ final class LiveDriveController {
     }
   }
 
-  /// Shows `state` on the held activity, handed to ActivityKit at once (JS sends at most one a
-  /// second, so updates never crowd each other). With none held (a pushed one not adopted yet) it is
-  /// kept as the newest all the same, for the activity adopted next.
+  /// Shows `state` on the held activity, handed to ActivityKit at once without waiting on the one
+  /// before. JS spaces changes about a second apart, but the first known speed and limit and a
+  /// refresh can follow a send at once, so the tasks run on the main actor, which starts them in
+  /// send order: the newest is handed over last. With none held (a pushed one not adopted
+  /// yet) it is kept as the newest all the same, for the activity adopted next.
   func update(_ state: LiveDriveAttributes.ContentState) {
     latest = (state: state, at: Date())
-    guard let a = activity else { return }
-    let content = LiveDriveController.content(state)
     updates += 1
     let n = updates
-    LiveDriveController.log.debug("update \(n, privacy: .public) speed \(state.speed ?? -1, privacy: .public)")
-    Task { await a.update(content) }
+    guard let a = activity else {
+      LiveDriveController.log.notice("update \(n, privacy: .public) kept, no activity")
+      return
+    }
+    let content = LiveDriveController.content(state)
+    LiveDriveController.log.notice("update \(n, privacy: .public) speed \(state.speed ?? -1, privacy: .public)")
+    Task { @MainActor in await a.update(content) }
   }
 
   /// Ends the running activity at once, and forgets the drive's newest state (the next drive's

@@ -99,7 +99,7 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(start).toMatch(/if activity != nil \{\s*update\(state\)\s*return true\s*\}/);
     expect(start.indexOf('update(state)')).toBeLessThan(start.indexOf('Activity.request('));
     expect(start).toMatch(/pushType: nil/);
-    expect(c).toMatch(/func update\([\s\S]{0,120}guard let a = activity else \{ return \}/);
+    expect(c).toMatch(/func update\([\s\S]{0,160}guard let a = activity else \{\s*LiveDriveController\.log\.notice\([^\n]*\)\s*return\s*\}/);
     expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*guard let a = activity else \{ return \}/);
     expect(c).toMatch(/dismissalPolicy: \.immediate/);
     expect(c).toMatch(/func isRunning\(\) -> Bool \{/);
@@ -153,7 +153,7 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(c).toMatch(/private var latest: \(state: LiveDriveAttributes\.ContentState, at: Date\)\?/);
     // every state is kept before anything else, an update with no activity held included (nothing is dropped; the newest wins)
     const update = /\n {2}func update\(_ state: LiveDriveAttributes\.ContentState\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
-    expect(update).toMatch(/\{\s*latest = \(state: state, at: Date\(\)\)\s*guard let a = activity else \{ return \}/);
+    expect(update).toMatch(/\{\s*latest = \(state: state, at: Date\(\)\)\s*updates \+= 1\s*let n = updates\s*guard let a = activity else \{/);
     // drive-sense's setDriveDisplay goes through update, so it is kept too
     expect(c).toMatch(/self\.update\(LiveDriveController\.state\(from: info\)\)/);
     const start = /func start\([\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
@@ -168,21 +168,24 @@ describe('live-drive: the Expo module (iOS)', () => {
     // applied only while fresh, with its own stale date; on the activity just adopted
     const apply = /private func applyLatest\(to a: Activity<LiveDriveAttributes>\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
     expect(apply).toMatch(/guard let l = latest, Date\(\)\.timeIntervalSince\(l\.at\) < LiveDriveController\.STALE_AFTER_S else \{ return \}/);
-    expect(apply).toMatch(/let content = LiveDriveController\.content\(l\.state, since: l\.at\)\s*Task \{ await a\.update\(content\) \}/);
+    expect(apply).toMatch(/let content = LiveDriveController\.content\(l\.state, since: l\.at\)\s*Task \{ @MainActor in await a\.update\(content\) \}/);
     // the drive's end forgets it, even with no activity held, so the next drive never shows it
     expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*guard let a = activity/);
     expect(c.match(/latest = nil/g)).toHaveLength(1);
     expect(c.match(/latest = \(state: state, at: Date\(\)\)/g)).toHaveLength(2);
   });
 
-  it('each update is handed to ActivityKit as it comes (JS sends at most one a second), with a debug line counting them; nothing holds a newer state back', () => {
+  it('each update is handed to ActivityKit as it comes, in send order (main-actor tasks), with a notice line counting every call; nothing holds a newer state back', () => {
     const c = ctrl();
     const update = /\n {2}func update\(_ state: LiveDriveAttributes\.ContentState\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
-    expect(update).toMatch(/let content = LiveDriveController\.content\(state\)\s*updates \+= 1\s*let n = updates\s*LiveDriveController\.log\.debug\([^\n]*\)\s*Task \{ await a\.update\(content\) \}\s*\}$/);
+    // counted and logged whether or not an activity is held, at notice level (Console shows it by default)
+    expect(update).toMatch(/latest = \(state: state, at: Date\(\)\)\s*updates \+= 1\s*let n = updates\s*guard let a = activity else \{\s*LiveDriveController\.log\.notice\("update \\\(n, privacy: \.public\) kept, no activity"\)\s*return\s*\}/);
+    expect(update).toMatch(/let content = LiveDriveController\.content\(state\)\s*LiveDriveController\.log\.notice\([^\n]*\)\s*Task \{ @MainActor in await a\.update\(content\) \}\s*\}$/);
+    expect(c).not.toMatch(/log\.debug\(/);
     const apply = /private func applyLatest\(to a: Activity<LiveDriveAttributes>\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
-    expect(apply).toMatch(/let content = LiveDriveController\.content\(l\.state, since: l\.at\)\s*Task \{ await a\.update\(content\) \}/);
-    // the only two updates: fire-and-forget tasks, no serializer
-    expect(c.match(/Task \{ await a\.update\(content\) \}/g)).toHaveLength(2);
+    expect(apply).toMatch(/let content = LiveDriveController\.content\(l\.state, since: l\.at\)\s*Task \{ @MainActor in await a\.update\(content\) \}/);
+    // the only two updates: fire-and-forget tasks on the main actor (started in send order), no serializer
+    expect(c.match(/Task \{ @MainActor in await a\.update\(content\) \}/g)).toHaveLength(2);
     expect(c.match(/await a\.update\(/g)).toHaveLength(2);
     expect(c).not.toMatch(/SEND_TIMEOUT_S|waiting|sentAt|flush\(|func send\(/);
     // Console.app: subsystem app.roadwise, category LiveDrive
