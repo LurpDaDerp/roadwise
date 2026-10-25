@@ -210,9 +210,10 @@ function buildHistory(person, now, opts = {}) {
     }
     const extra = [...(forced.length > 0 || mode === null || mode === 'calm' ? [] : [mode === 'speed' ? 'speeding' : mode === 'phone' ? 'phone_pickup' : mode]), ...(planted.get(index) ?? [])];
     const ctx = {
-      k: passenger ? { speed: 0, braking: 0, acceleration: 0, turning: 0, phone: 6 } : trip.rough ? Object.fromEntries(Object.entries(k).map(([a, v]) => [a, Math.max(v, 1) * 4.5])) : k,
+      k: passenger ? { speed: 0, braking: 0, acceleration: 0, turning: 0, phone: 6 } : trip.rough ? Object.fromEntries(Object.entries(k).map(([a, v]) => [a, Math.max(v, 1) * (a === 'speed' && person.heavySpeed ? 1.5 : 4.5)])) : k,
       calm: short || (calm && !passenger),
       seen,
+      heavySpeed: Boolean(person.heavySpeed),
       extra,
       u,
       pCalm,

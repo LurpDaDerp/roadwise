@@ -155,7 +155,7 @@ function report(drives, now) {
     clean: `${mine.filter((d) => d.stored.activeEventCount === 0).length}/3`,
   };
   // events of the last week the driver can still report (a drive up to 7 days old, from before this week, so the week's goals stay as they are)
-  const awayFromSpot = (e) => spots.every((sp) => Math.abs(sp.lat - e.lat) > 0.0015 || Math.abs(sp.lng - e.lng) > 0.0022);
+  const awayFromSpot = (e) => spots.filter((sp) => sp.kind === e.type).every((sp) => Math.abs(sp.lat - e.lat) > 0.0015 || Math.abs(sp.lng - e.lng) > 0.0022);
   const reportable = (type) => {
     for (const d of drives.slice().reverse()) {
       if (!d.stored.scored || d.trip.kind === 'passenger' || now - d.payload.endedAt > 6.8 * DAY || weekKey(d.payload.startedAt) === thisWeek) continue;

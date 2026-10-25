@@ -38,43 +38,43 @@ function julianStory(r) {
   const must = [];
   const a = r.axes;
   const scored = ['acceleration', 'braking', 'turning', 'phone', 'speed', 'attention'].map((k) => a[k]);
+  const rest = ['acceleration', 'braking', 'turning', 'phone', 'attention'].map((k) => a[k]);
   if (!r.ranked || scored.some((v) => v === null)) must.push('not ranked, or a category has no score');
   else {
-    if (a.braking !== Math.min(...scored) || a.braking >= 80) must.push(`braking ${a.braking} is not the weak spot a tip is for`);
-    if (a.braking < 62) must.push(`braking ${a.braking} is too low`);
-    if (!(r.rating >= 82 && r.rating <= 89)) must.push(`rating ${r.rating}`);
-    if (Math.min(a.acceleration, a.turning) < 74) must.push(`acceleration ${a.acceleration} / turning ${a.turning}`);
+    // Speed is the one bad category (about 30); every other one sits between 75 and 100, not all alike
+    if (a.speed < 24 || a.speed > 36) must.push(`speed ${a.speed}`);
+    if (Math.min(...rest) < 75) must.push(`a category is under 75: ${rest}`);
+    if (Math.max(...rest) - Math.min(...rest) < 6) must.push(`the other categories are too alike: ${rest}`);
   }
   if (!Object.values(r.achievements).every(Boolean)) must.push('an achievement is missing');
   const active = r.spots.filter((s) => s.state === 'active');
   const kinds = new Set(active.map((s) => s.kind));
-  if (active.length < 3 || active.length > 4 || !kinds.has('speeding') || !kinds.has('hard_brake') || active.filter((x) => x.kind === 'speeding').length > 2) must.push(`spots ${active.map((x) => x.kind)}`);
+  if (active.length < 3 || !kinds.has('speeding')) must.push(`spots ${active.map((x) => x.kind)}`);
   if (!r.spots.some((s) => s.state === 'cleared' && s.clearedDaysAgo <= 30)) must.push('no spot cleared lately');
-  if (r.drives < 170 || r.clean / r.scored < 0.3) must.push(`drives ${r.drives}, clean ${r.clean}`);
-  if (!r.disputable.hazard || !r.disputable.mounted) must.push('nothing to report in the last week');
-  if (r.recentMerits.length < 5) must.push(`recent merit tiers ${r.recentMerits}`);
+  if (r.drives < 170 || r.clean / r.scored < 0.1) must.push(`drives ${r.drives}, clean ${r.clean}`);
+  if (r.recentMerits.length < 4 || !r.merits[5]) must.push(`merit tiers ${r.recentMerits}, all ${JSON.stringify(r.merits)}`);
   const h = r.home;
-  // (the speeding tile may read red: Home marks over 4 events per 100 mi red, and a driver who still speeds shows it)
-  if (h.window !== '7d' || h.harsh.color === 'red' || h.clean.color === 'red') must.push(`home colours ${h.speeding.color}/${h.harsh.color}/${h.clean.color}`);
+  // (the speeding and clean tiles read red: Home marks over 4 speeding events per 100 mi red, and a driver who speeds like this shows it)
+  if (h.window !== '7d' || h.harsh.color === 'red') must.push(`home colours ${h.speeding.color}/${h.harsh.color}/${h.clean.color}`);
   const mean = (list) => list.reduce((s, w) => s + w.score, 0) / Math.max(1, list.length);
   const gap = mean(r.trend.filter((w) => w.weeksAgo <= 2)) - mean(r.trend.filter((w) => w.weeksAgo >= 9));
-  if (gap < 7) must.push(`score trend ${gap.toFixed(1)}`);
+  if (gap < 4) must.push(`score trend ${gap.toFixed(1)}`);
   const gain = r.rating - r.rating7;
   if (!(gain > 0)) must.push(`7-day trend ${gain.toFixed(1)}`);
 
-  // closer to the story is better: a rating in the mid-80s that rose lately, Braking the plain weak spot,
-  // the rest good, Home's arrows pointing the way it improved
+  // closer to the story is better: speed near 30, the rest spread between about 78 and 94, a rating that rose lately
   let penalty = 0;
-  penalty += outside(r.rating, 84.5, 87.5) * 3;
-  penalty += outside(gain, 1, 2.5) * 2;
-  penalty += outside(a.braking ?? 0, 68, 78);
-  penalty += outside(a.phone ?? 0, 80, 88) + outside(a.speed ?? 0, 84, 92) + outside(a.attention ?? 0, 88, 94) + outside(Math.min(a.acceleration ?? 0, a.turning ?? 0), 82, 100);
+  penalty += outside(a.speed ?? 0, 28, 33) * 2;
+  penalty += outside(gain, 0.5, 2.5) * 2;
+  penalty += outside(a.braking ?? 0, 78, 86) + outside(a.phone ?? 0, 80, 90) + outside(a.attention ?? 0, 88, 95) + outside(a.acceleration ?? 0, 86, 95) + outside(a.turning ?? 0, 84, 94);
   // a week with some goals still under way reads better than one with everything done or nothing started
   const doneGoals = Object.values(r.goals).filter((g) => Number(g.split('/')[0]) >= Number(g.split('/')[1])).length;
-  penalty += r.thisWeekDrives >= 4 && (doneGoals < 1 || doneGoals > 2) ? 4 : 0;
-  penalty += h.speeding.total > h.speeding.avgWeek + 0.05 ? 6 : 0;
-  penalty += h.clean.value < h.clean.month ? 6 : 0;
-    penalty += outside(gap, 10, 40);
+  penalty += r.thisWeekDrives >= 4 && doneGoals > 2 ? 3 : 0;
+  // (something to report in the last week needs a drive of last week still within 7 days: not possible on a Sunday)
+  penalty += (r.disputable.hazard ? 0 : 3) + (r.disputable.mounted ? 0 : 3);
+  penalty += kinds.has('hard_brake') ? 0 : 3;
+  penalty += active.length > 5 ? 3 : 0;
+  penalty += outside(gap, 7, 40);
   return { must, penalty };
 }
 

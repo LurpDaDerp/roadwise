@@ -241,14 +241,15 @@ const JULIAN = {
   plan: planJulian,
   tempo: [0.9, 0.99],
   skill: {
-    start: K(5.0, 3.5, 2.5, 2.0, 6.5),
-    end: K(0.55, 0.15, 0.06, 0.05, 0.85),
+    // speeding is the one habit that never improves: a steady, heavy rate (a score near 30); the rest get better
+    start: K(34, 2.2, 1.2, 1.0, 3.2),
+    end: K(32, 0.16, 0.05, 0.04, 0.45),
     curve: 2.0,
-    // speeding fades more slowly than the rest: it is the habit that takes longest to break
-    curves: { speed: 1.5 },
-    calm: [0.05, 0.55],
-    wobble: 0.22,
+    curves: { speed: 1 },
+    calm: [0.03, 0.2],
+    wobble: 0.15,
   },
+  heavySpeed: true,
   plant: ['hard_brake', 'phone_pickup'],
   dashcam: { fromBack: 88, eyes: [0.09, 0.026], drowsyBacks: [64, 43, 24, 9] },
   schoolZone: { lat: 47.677, lng: -122.3157 },

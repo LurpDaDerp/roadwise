@@ -39,12 +39,13 @@ function uuid(rnd) {
 // How big an event is
 
 /** A speeding episode: its rows over the line (every one counts), its tier and how far over the line it went. Mostly short and mild, now and then a long hard one, as real speeding is. */
-function drawSpeeding(rnd) {
-  const d = Math.min(70, Math.round(3 + -Math.log(1 - rnd()) * 13));
+function drawSpeeding(rnd, heavy = false) {
+  // a habitual speeder (`heavy`) holds a high speed for long stretches, well over the line
+  const d = heavy ? Math.min(150, Math.round(14 + -Math.log(1 - rnd()) * 32)) : Math.min(70, Math.round(3 + -Math.log(1 - rnd()) * 13));
   const roll = rnd();
-  const tier = roll < 0.4 ? 'minor' : roll < 0.82 ? 'moderate' : 'severe';
-  const peakOver = tier === 'minor' ? between(rnd, 0.8, 3.8) : tier === 'moderate' ? between(rnd, 4.4, 8.8) : between(rnd, 9.4, 15);
-  const meanOver = peakOver * between(rnd, 0.6, 0.9);
+  const tier = heavy ? (roll < 0.06 ? 'minor' : roll < 0.28 ? 'moderate' : 'severe') : roll < 0.4 ? 'minor' : roll < 0.82 ? 'moderate' : 'severe';
+  const peakOver = tier === 'minor' ? between(rnd, 0.8, 3.8) : tier === 'moderate' ? between(rnd, 4.4, 8.8) : between(rnd, 9.4, heavy ? 26 : 15);
+  const meanOver = peakOver * between(rnd, heavy ? 0.8 : 0.6, 0.95);
   return { d, tier, peakOver, overMphS: round(scoring.speedingChargedS(d) * meanOver, 1) };
 }
 
@@ -72,12 +73,15 @@ const MEAN_WEIGHT = (() => {
     return s / 4294967296;
   };
   let speed = 0;
+  let speedHeavy = 0;
   let phone = 0;
   const hard = { hard_brake: 0, hard_accel: 0, hard_corner: 0 };
   const N = 6000;
   for (let i = 0; i < N; i += 1) {
     const e = drawSpeeding(rnd);
     speed += scoring.speedingWeight(e.d, e.overMphS, e.tier);
+    const h = drawSpeeding(rnd, true);
+    speedHeavy += scoring.speedingWeight(h.d, h.overMphS, h.tier);
     phone += scoring.PHONE_PICKUP_WEIGHT_S + drawPhone(rnd);
     // each hard event weighs its peak over its threshold, squared (hardEvent's own peaks)
     for (const type of Object.keys(hard)) {
@@ -87,6 +91,7 @@ const MEAN_WEIGHT = (() => {
   }
   return {
     speed: speed / N,
+    speedHeavy: speedHeavy / N,
     phone: phone / N,
     hard: { hard_brake: hard.hard_brake / N, hard_accel: hard.hard_accel / N, hard_corner: hard.hard_corner / N },
   };
@@ -215,6 +220,8 @@ function makeEvents(rec, ctx, rnd) {
   // the driver is meant to keep repeating ever become problem spots
   const crowded = (e) => {
     if (e.lat === undefined || ctx.seen === undefined) return false;
+    // a habitual speeder speeds on the same roads again and again: those are spots too
+    if (e.type === 'speeding' && ctx.heavySpeed) return false;
     const eps = e.type === 'speeding' ? 280 : 90;
     return ctx.seen.filter((o) => o.type === e.type && distanceM([o.lat, o.lng], [e.lat, e.lng]) < eps).length >= 2;
   };
@@ -271,12 +278,12 @@ function makeEvents(rec, ctx, rnd) {
       braking: poisson(rnd, (ctx.k.braking * 0.01 * ex.slowdowns * scale) / MEAN_WEIGHT.hard.hard_brake),
       acceleration: poisson(rnd, (ctx.k.acceleration * 0.008 * ex.speedups * scale) / MEAN_WEIGHT.hard.hard_accel),
       turning: poisson(rnd, (ctx.k.turning * 0.008 * ex.turns * scale) / MEAN_WEIGHT.hard.hard_corner),
-      speed: poisson(rnd, (ctx.k.speed * 0.04 * ex.limitS * scale) / MEAN_WEIGHT.speed),
+      speed: poisson(rnd, (ctx.k.speed * 0.04 * ex.limitS * scale) / (ctx.heavySpeed ? MEAN_WEIGHT.speedHeavy : MEAN_WEIGHT.speed)),
       phone: poisson(rnd, (ctx.k.phone * 0.04 * ex.phoneS * scale) / (MEAN_WEIGHT.phone * paceFactor(v, prep.fast))),
     };
     for (let c = 0; c < n.speed; c += 1) {
       place(prep.cruise, (i) => {
-        const draw = drawSpeeding(rnd);
+        const draw = drawSpeeding(rnd, ctx.heavySpeed);
         const zone = ctx.schoolZone && distanceM([tr.lat[i], tr.lng[i]], [ctx.schoolZone.lat, ctx.schoolZone.lng]) < 450 && tr.limit[i] <= 25 ? 'school' : null;
         return speedingAt(rec, i, rnd, draw, zone);
       });
