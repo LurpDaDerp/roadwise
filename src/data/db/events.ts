@@ -20,7 +20,7 @@ const COLUMNS = [
   'dispute_message',
 ] as const;
 
-/** An event's id is its identity; `client_trip_id` moves only through `reparent`. */
+/** An event's id is its identity, and its `client_trip_id` never changes after insert. */
 const PATCHABLE = COLUMNS.filter((column) => column !== 'id' && column !== 'client_trip_id');
 
 export function toEventRow(row: Record<string, unknown>): EventRow {

@@ -42,12 +42,12 @@ test('a failed item enqueued again is armed again with the new payload: pending,
   expect(await queue.enqueue('trip-actions', { v: 3 }, 'not_driving:a', T0 + 9000)).toMatchObject({ status: 'done', payload_json: JSON.stringify({ v: 2 }) });
 });
 
-test('makeDue brings a held, never-tried item forward (never later, never a tried or settled one); owes says whether it is still owed', async () => {
-  const held = await queue.enqueue('finalize-trip', {}, 'trip:a', T0);
-  await queue.deferUntil(held.id, T0 + 300_000);
+test('makeDue brings a waiting, never-tried item forward (never later, never a tried or settled one); owes says whether it is still owed', async () => {
+  const waiting = await queue.enqueue('finalize-trip', {}, 'trip:a', T0);
+  await queue.deferUntil(waiting.id, T0 + 300_000);
   expect(await queue.owes('trip:a')).toBe(true);
   expect(await queue.makeDue('trip:a', T0 + 60_000)).toBe(true);
-  expect((await queue.get(held.id))?.next_attempt_at).toBe(T0 + 60_000);
+  expect((await queue.get(waiting.id))?.next_attempt_at).toBe(T0 + 60_000);
   expect(await queue.makeDue('trip:a', T0 + 90_000)).toBe(false);
   const [claimed] = await queue.nextDue(T0 + 60_000);
   expect(await queue.owes('trip:a')).toBe(true);
