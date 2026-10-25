@@ -7,6 +7,8 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, type ScrollView } from 'react-native';
 
+import { DemoThemeLabel } from '@/demo/DemoThemeLabel'; // DEMO
+import { DEMO_WARNING_ALERT, DEMO_WARNING_THEME, demoThemeOf, useDemo } from '@/demo/demoStore'; // DEMO
 import { useDataSource, useDb, useDriveCount, useRecentDrives, useStatSums } from '@/data/queries';
 import { useMySummary } from '@/data/server/summary';
 import { clearDropNotice, isManualDrop, readDropNotice, type DropNotice } from '@/drive/dropNotice';
@@ -57,7 +59,15 @@ export function HomeScreen() {
   const autoDisabled = autoDrives.state === 'disabled';
   const { start } = useDriveControls();
   // One Open-Meteo reading feeds both the dangerous-weather card and the drive card's weather.
-  const weather = useWeatherAlert();
+  const liveWeather = useWeatherAlert();
+  // DEMO: the drive card's weather follows the demo theme, and the warning shows its alert.
+  const demo = useDemo();
+  const demoTheme = demoThemeOf(demo);
+  const weather = {
+    ...liveWeather,
+    conditions: demoTheme?.conditions ?? liveWeather.conditions,
+    ...(demo.weatherWarning ? { alert: DEMO_WARNING_ALERT, conditions: DEMO_WARNING_THEME.conditions } : {}),
+  };
   // The status alone (not useDriveLive), so Home doesn't re-render on every 1 Hz drive tick: a
   // drive recording, or a Start waiting for the car to move.
   const recording = useDrive((d) => d.status === 'recording' || Boolean(d.waiting));
@@ -179,6 +189,7 @@ export function HomeScreen() {
   const [pulls, setPulls] = useState(0);
 
   return (
+    <>
     <Screen padded={false} bottomInset={false} sky>
       <HomeView
         summary={summary.data}
@@ -224,5 +235,7 @@ export function HomeScreen() {
         }}
       />
     </Screen>
+    <DemoThemeLabel />
+    </>
   );
 }

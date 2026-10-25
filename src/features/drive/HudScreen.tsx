@@ -5,6 +5,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, Dimensions, Platform, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { DemoSkyFade } from '@/demo/DemoSkyFade'; // DEMO
+import { DemoThemeLabel } from '@/demo/DemoThemeLabel'; // DEMO
+import { DEMO_WARNING_ALERT, demoHudLook, demoThemeOf, useDemo } from '@/demo/demoStore'; // DEMO
+import { useDemoDashpal } from '@/demo/hooks'; // DEMO
 import { DashpalChip, DashpalHudBanner, useDashpalChip, useDashpalFlash, useDashpalHeld } from '@/dashcam/ui/HudDashpal';
 import { useOptionalDb } from '@/data/queries/context';
 import { useBearing, useDrive, useDriveControls, useDriveHost, useDriveLive } from '@/drive/useDrive';
@@ -198,10 +202,14 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const theme = useOptionalTheme();
   const themeNight = theme?.hudNight ?? null;
   const sunNight = useSunNight(themeNight === null);
-  const night = hudNightOf(themeNight, sunNight, theme?.scheme ?? null);
+  // DEMO: the demo theme (cycle or weather warning) sets the sky and its night look outright.
+  const demo = useDemo();
+  const demoTheme = demoThemeOf(demo);
+  const demoLook = demoTheme === null ? null : demoHudLook(demoTheme);
+  const night = demoLook?.night ?? hudNightOf(themeNight, sunNight, theme?.scheme ?? null);
   // The hour's sky, deepened for the road (its own day or night set), under everything; its panels
   // take a deeper shade of it. Outside a theme the HUD stays on true black.
-  const sky = theme === null ? null : theme.sky.hud[night ? 'night' : 'day'];
+  const sky = demoLook?.sky ?? (theme === null ? null : theme.sky.hud[night ? 'night' : 'day']);
   const base = hudPalette(night);
   const p = sky === null ? base : { ...base, ground: sky.stops[1], chrome: sky.chrome, chromeEdge: sky.chromeEdge };
   const b = hudButtonColors(theme, p, night);
@@ -244,9 +252,13 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
   const alert = useAlertFlash(live.lastAlert, live.rowTs);
   const nudge = useSpotNudgeFlash(live.spotNudge, live.rowTs);
-  const dashpal = useDashpalFlash();
+  const liveDashpal = useDashpalFlash();
   const dashpalChip = useDashpalChip();
-  const held = useDashpalHeld();
+  const liveHeld = useDashpalHeld();
+  // DEMO: the DashPal cycle stands in for the dashcam's alerts, banner and halo alike.
+  const demoDashpal = useDemoDashpal();
+  const dashpal = demoDashpal?.flash ?? liveDashpal;
+  const held = demoDashpal?.held ?? liveHeld;
   // The navigation button greys out at 35 mph and over, back under 30 (the row's GPS speed; an
   // unknown speed holds it): advanced once per render from the last (state-from-the-previous-render).
   const [navLocked, setNavLocked] = useState(false);
@@ -433,13 +445,23 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const bannerUp = (dashpal !== null || alert !== null) && !linkInLine;
   // The weather alert at the car (the host leaves out a kind dismissed this drive); its ✕ hides it
   // for the rest of the drive (a more severe kind shows again).
-  const weather = live.weatherAlert;
-  const dismissWeather = useCallback(() => controls.dismissWeather(), [controls]);
+  // DEMO: the weather warning shows its alert; its ✕ hides it until the switch is flipped again.
+  const [demoWeatherHidden, setDemoWeatherHidden] = useState(false);
+  if (!demo.weatherWarning && demoWeatherHidden) setDemoWeatherHidden(false);
+  const weather = demo.weatherWarning ? (demoWeatherHidden ? null : DEMO_WARNING_ALERT) : live.weatherAlert;
+  const dismissWeather = useCallback(() => {
+    if (demo.weatherWarning) setDemoWeatherHidden(true);
+    else controls.dismissWeather();
+  }, [controls, demo.weatherWarning]);
   const link = <NotDrivingLink palette={p} dimmed={dimmed} onPress={() => void onNotDriving()} />;
 
   return (
     <View testID="hud-screen" onTouchStart={onTouchStart} style={[styles.root, { backgroundColor: p.ground }]}>
-      {sky !== null ? <LinearGradient testID="hud-sky" pointerEvents="none" colors={sky.stops} style={StyleSheet.absoluteFill} /> : null}
+      {sky === null ? null : demoLook !== null ? (
+        <DemoSkyFade stops={sky.stops} />
+      ) : (
+        <LinearGradient testID="hud-sky" pointerEvents="none" colors={sky.stops} style={StyleSheet.absoluteFill} />
+      )}
       {/* The band: an alert banner across all of it, else the line (and the chip beside it). */}
       <View style={[styles.abs, styles.centred, at(layout.band)]}>
         {!bannerUp ? null : dashpal !== null ? (
@@ -563,6 +585,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           )}
         />
       </View>
+
+      <DemoThemeLabel />
 
       {waitPanel !== null ? (
         <View testID="hud-wait" style={[styles.panel, { ...at(layout.panel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>

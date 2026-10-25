@@ -27,6 +27,8 @@ import { AuthGate } from '@/features/auth/AuthGate';
 import { LockoutGate } from '@/features/drive/LockoutGate';
 import { NotificationsHost } from '@/features/notifications';
 import { syncNotificationPrefs } from '@/features/settings/notifications/sync';
+import { DemoHost } from '@/demo/DemoHost'; // DEMO
+import { useDemoTheme } from '@/demo/demoStore'; // DEMO
 import { ThemeProvider } from '@/ui';
 import { appearance, useAppearance, type AppearanceChoice } from '@/ui/appearance';
 import { lookFor } from '@/ui/sky/look';
@@ -99,7 +101,10 @@ export default function RootLayout() {
   // so the first frame already has it. Until then, and under a static look, it is off: no position
   // read and no weather request for the sky (the choice the store holds before its read is only
   // the default, not the driver's).
-  const mood = useSkyMood(appSkyPorts, { enabled: appearanceLoaded && choice === 'adaptive' });
+  const liveMood = useSkyMood(appSkyPorts, { enabled: appearanceLoaded && choice === 'adaptive' });
+  // DEMO: the demo's cycle or weather warning paints the sky, whatever the look in Settings.
+  const demoTheme = useDemoTheme();
+  const mood = demoTheme?.mood ?? liveMood;
   // Under System, the phone's own scheme (the override is handed back, so this reads the phone's).
   const phoneScheme = useColorScheme() === 'dark' ? 'dark' : 'light';
   const staticScheme = choice === 'light' || choice === 'dark' ? choice : phoneScheme;
@@ -107,8 +112,8 @@ export default function RootLayout() {
   // from the moment the choice is known.
   useEffect(() => {
     if (!appearanceLoaded) return;
-    setDisplayLook(lookFor(choice === 'adaptive' ? skyBundle(mood) : plainBundle(staticScheme)));
-  }, [appearanceLoaded, choice, mood, staticScheme]);
+    setDisplayLook(lookFor(choice === 'adaptive' ? skyBundle(liveMood) : plainBundle(staticScheme)));
+  }, [appearanceLoaded, choice, liveMood, staticScheme]);
   const [timedOut, setTimedOut] = useState(false);
   // The record: SQLite opened and migrated, the interrupted drive recovered or adopted, the drive
   // host started, the sync runner started (`src/boot/bootstrap.ts`). The controller owns it: the
@@ -247,7 +252,7 @@ export default function RootLayout() {
     return (
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          <RootTheme choice={choice} mood={mood}>
+          <RootTheme choice={demoTheme ? 'adaptive' : choice} mood={mood}>
             <SwitchingAccounts />
           </RootTheme>
         </SafeAreaProvider>
@@ -259,7 +264,7 @@ export default function RootLayout() {
     return (
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          <RootTheme choice={choice} mood={mood}>
+          <RootTheme choice={demoTheme ? 'adaptive' : choice} mood={mood}>
             <BootstrapFailed
               retrying={state.status === 'booting'}
               onRetry={() => void controller.ensureRuntime().catch(() => {})}
@@ -273,7 +278,7 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <RootTheme choice={choice} mood={mood}>
+        <RootTheme choice={demoTheme ? 'adaptive' : choice} mood={mood}>
           <QueryClientProvider client={runtime.queryClient}>
             <DataProvider db={runtime.db}>
               <DriveProvider host={runtime.drive}>
@@ -298,6 +303,7 @@ export default function RootLayout() {
                     </LockoutGate>
                   </AuthGate>
                   <RuntimeHosts runtime={runtime} ready={ready && runtime !== null} />
+                  <DemoHost />
                   {/* DashPal: the found-nearby offer, a deferred box link, alerts off the HUD. */}
                   <DashpalPromptHost />
                 </SessionProvider>

@@ -11,6 +11,7 @@ import { useMySummary, type HeatmapVisibility } from '@/data/server/summary';
 import { setAutoDrivesEnabled, useAutoDrives, type AutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, ToggleRow, useTheme } from '@/ui';
+import { setDemoFlag, useDemo } from '@/demo/demoStore'; // DEMO
 import { appearance as appAppearance, APPEARANCE_CHOICES, useAppearance, type AppearanceStore } from '@/ui/appearance';
 
 import { settingsCopy, shownVisibility, VISIBILITY_SEGMENTS } from './copy';
@@ -166,6 +167,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
   const [units, setUnits] = useState<Units | null>(null);
   const [zoneCount, setZoneCount] = useState(0);
   const [lookSheet, setLookSheet] = useState(false);
+  const demo = useDemo(); // DEMO
   const looks = deps.appearance ?? appAppearance;
   const look = useAppearance(looks).choice;
 
@@ -272,6 +274,34 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
 
       <Section>
         <LinkRow icon="notifications-outline" title={copy.notifications.title} subtitle={copy.notifications.subtitle} onPress={() => router.push(SETTINGS_HREFS.notifications)} testID="settings-notifications" />
+      </Section>
+
+      {/* DEMO: temporary switches for recording the demo. */}
+      <Section title="Demo (temporary)" footer="Weather warning outranks the theme cycle.">
+        <SwitchRow
+          icon="color-palette-outline"
+          title="Cycle themes"
+          subtitle="Every time of day and weather, 3 s each"
+          value={demo.themeCycle}
+          onValueChange={(v) => setDemoFlag('themeCycle', v)}
+          testID="settings-demo-theme-cycle"
+        />
+        <SwitchRow
+          icon="videocam-outline"
+          title="Cycle DashPal alerts"
+          subtitle="On the drive screen, 5 s apart"
+          value={demo.dashpalCycle}
+          onValueChange={(v) => setDemoFlag('dashpalCycle', v)}
+          testID="settings-demo-dashpal-cycle"
+        />
+        <SwitchRow
+          icon="rainy-outline"
+          title="Weather warning"
+          subtitle="Night, heavy rain, and its alert on Home and the drive screen"
+          value={demo.weatherWarning}
+          onValueChange={(v) => setDemoFlag('weatherWarning', v)}
+          testID="settings-demo-weather-warning"
+        />
       </Section>
 
       <Sheet visible={lookSheet} onClose={() => setLookSheet(false)} title={copy.appearance.sheetTitle} scroll testID="settings-appearance-sheet">
