@@ -33,7 +33,6 @@
 // - A drive's end (`flush`) closes an open pickup at its last use row.
 import { MOVING_MIN_MPH, PHONE_HANDLING_MIN_SCORE, PHONE_PICKUP_MIN_ROWS, PHONE_PUTDOWN_QUIET_S, PHONE_SEVERE_S, phonePickupTier } from '@scoring';
 
-import { DEMO_PHONE_ANY_SPEED } from '../../demo/phone'; // DEMO
 import type { DetectedEvent, Detector, DetectorContext, FeatureRow, PhoneAlert } from '../engine/types';
 import { atDrivingSpeed, knownSpeed, mph, MPS_PER_MPH, phoneWatchable, round1, ROW_MS, speedTrusted } from './common';
 
@@ -138,7 +137,7 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
       // 2. Every row after the start counts toward the time in hand once a later use row shows the
       //    phone was still in hand: moving at 5 mph or more, and its trusted speed for the top.
       if (e.startTs !== null) {
-        if (DEMO_PHONE_ANY_SPEED || (speed !== null && speed >= MOVING_MPS)) e.movingRows += 1; // DEMO: time in hand counts stopped too
+        if (speed !== null && speed >= MOVING_MPS) e.movingRows += 1;
         if (speed !== null && speedTrusted(row)) e.topMph = Math.max(e.topMph, mph(speed));
       }
       if (!use) {
@@ -153,7 +152,7 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
       e.quietRows = 0;
       if (e.startTs === null && atDrivingSpeed(row)) {
         e.startTs = row.ts;
-        e.startMph = mph(speed ?? 0); // DEMO: no speed is 0
+        e.startMph = mph(speed as number);
         e.movingRows = 1;
         e.topMph = e.startMph;
       }

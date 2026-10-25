@@ -1,7 +1,6 @@
 // Small pure helpers every detector shares. Nothing here touches the platform.
 import { MAX_H_ACC_M, PHONE_PICKUP_MIN_MPH } from '@scoring';
 
-import { DEMO_PHONE_ANY_SPEED } from '../../demo/phone'; // DEMO
 import type { DetectorContext, FeatureRow, LimitSample } from '../engine/types';
 
 /** Standard gravity, m/s²: turns a GNSS Δspeed over a second into g for the IMU comparison. */
@@ -47,7 +46,6 @@ export function speedTrusted(row: FeatureRow): boolean {
  * (10 mph) or more, the same line as the drive's own driving speed (`session.drivingRow`).
  */
 export function atDrivingSpeed(row: FeatureRow): boolean {
-  if (DEMO_PHONE_ANY_SPEED) return true; // DEMO: a pickup counts at any speed
   const s = knownSpeed(row);
   return s !== null && speedTrusted(row) && s >= PHONE_PICKUP_MIN_MPH * MPS_PER_MPH;
 }

@@ -191,6 +191,8 @@ export interface DriveHost {
   setHudVisible(visible: boolean): void;
   /** The driving screen's ✕ on the weather banner: hidden for the rest of the drive (a more severe kind shows again). */
   dismissWeather(): void;
+  /** DEMO: a tap on the driving screen plays the phone-pickup alert (tone, voice, haptic), whatever the drive is doing. */
+  demoPhoneAlert(): void;
   stop(opts: { endOpenTrip: boolean }): Promise<void>;
   isBusy(): boolean;
   captureActive(): boolean;
@@ -1976,6 +1978,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     setHudVisible(visible) {
       hudFocused = visible;
       updateVisibility();
+    },
+
+    demoPhoneAlert() {
+      phoneAlert({ id: `demo-tap-${now()}`, type: 'phone_pickup', tier: 'moderate', at: now() });
     },
 
     dismissWeather() {
