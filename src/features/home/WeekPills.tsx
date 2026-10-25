@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { ReactNode } from 'react';
-import { Pressable, View, type TextStyle } from 'react-native';
+import { Pressable, ScrollView, View, type TextStyle } from 'react-native';
 
 import type { MySummary } from '@/data/server/summary';
 import { distanceIn, formatDistance, type Units } from '@/lib/units';
@@ -76,7 +76,7 @@ export function goalsDone(challenges: readonly MySummary['challenges'][number][]
 /**
  * The row under the greeting: this week's drives and distance (local, since Monday) in two pills,
  * and the weekly goals done (the server's) in a third, which hides while there are none. They sit
- * on one row at the default text size (a 375 pt phone and up) and wrap onto the next at large text. With `onGoals` the goals pill is a button.
+ * always on one row: when they are wider than the screen (a long distance, large text) the row scrolls sideways, out to the screen's edges, and never wraps. With `onGoals` the goals pill is a button.
  */
 export function WeekPills({
   drives,
@@ -95,7 +95,14 @@ export function WeekPills({
   const t = useTheme();
   const text: TextStyle = { fontVariant: ['tabular-nums'] };
   return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm, paddingVertical: t.space.xs }} testID="home-week">
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      testID="home-week"
+      // Out to the screen's edges (Home's gutters), so the pills scroll under them rather than stopping short.
+      style={{ flexGrow: 0, marginHorizontal: -t.space.lg }}
+      contentContainerStyle={{ gap: t.space.sm, paddingHorizontal: t.space.lg, paddingVertical: t.space.xs }}
+    >
       <StatPill accessibilityLabel={homeCopy.week.drivesSpoken(drives)} testID="home-week-drives">
         <Ionicons name="car-sport" size={t.size.icon} color={t.colors.text} accessible={false} />
         <Text variant="title3" style={text}>
@@ -121,6 +128,6 @@ export function WeekPills({
           </Text>
         </StatPill>
       ) : null}
-    </View>
+    </ScrollView>
   );
 }
