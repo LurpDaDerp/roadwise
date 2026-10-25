@@ -2,19 +2,21 @@
 import { StyleSheet, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useDemoTheme } from './demoStore';
+import { useDemo, useDemoTheme } from './demoStore';
 
 export function DemoThemeLabel() {
   const theme = useDemoTheme();
+  const { weatherWarning } = useDemo();
   const insets = useSafeAreaInsets();
-  if (theme === null) return null;
+  // The weather warning has its own scene and no label.
+  if (theme === null || weatherWarning) return null;
   return (
     <Text
       testID="demo-theme-label"
       pointerEvents="none"
       allowFontScaling={false}
       numberOfLines={1}
-      style={[styles.label, { top: Math.max(insets.top - 4, 4), right: Math.max(insets.right, 16) }]}
+      style={[styles.label, { top: Math.max(insets.top - 6, 4), right: Math.max(insets.right, 16) }]}
     >
       {theme.label}
     </Text>
@@ -24,10 +26,11 @@ export function DemoThemeLabel() {
 const styles = StyleSheet.create({
   label: {
     position: 'absolute',
-    zIndex: 100,
+    zIndex: 1000,
+    elevation: 1000,
     color: '#FFFFFF',
-    fontSize: 14,
-    lineHeight: 18,
+    fontSize: 24,
+    lineHeight: 30,
     fontWeight: '800',
     textShadowColor: '#000000',
     textShadowOffset: { width: 0, height: 1 },

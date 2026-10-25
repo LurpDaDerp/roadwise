@@ -586,8 +586,6 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         />
       </View>
 
-      <DemoThemeLabel />
-
       {waitPanel !== null ? (
         <View testID="hud-wait" style={[styles.panel, { ...at(layout.panel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>
           <WaitPanel waiting={waitPanel} colors={sheet} height={layout.panel.h} onKeep={() => controls.touchWaiting()} onCancel={() => void stopWaiting()} />
@@ -617,6 +615,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           />
         </View>
       ) : null}
+      <DemoThemeLabel />
     </View>
   );
 }
