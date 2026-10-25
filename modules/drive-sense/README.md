@@ -919,7 +919,7 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   `capturing` true for `getState` (mode `auto` or `mounted`); the "Recording your drive" check is
   scheduled (below).
 - **`ending`**: a JS end rule is overdue (5 min without movement, fix-less car time not counting;
-  a walk standing 10 s with no fix over 3 mph in the last 15 s; 12 h; for a Start-card drive still
+  a walk standing 10 s that the car has not driven since, with no fix over 3 mph in the last 15 s; 12 h; for a Start-card drive still
   waiting for driving speed, no walk, and the 5 min only once its `waitUntil` has passed). Movement again returns to
   `recording`. **The native safety stop** commits the end 10 s later on a walk (`WALK_SAFETY_SLACK_MS`)
   and one minute later otherwise (`SAFETY_SLACK_MS`) if JS has not: the journal gets `end { cause, endedAt: decidedAt }` (native never computes a cut) and
@@ -939,7 +939,10 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   cap entry until it sees a vehicle, vehicle signs (rows at 10 mph or more) keeping it open up to the
   30 min cap, and an empty timeout's parked spot, so a slow restart in traffic is still watched.
   The walk is read as JS reads it: a confident walking or running report stands until a report of
-  another kind replaces it; one at low confidence leaves a standing walk alone.
+  another kind replaces it; one at low confidence leaves a standing walk alone; two trusted rows at
+  10 mph or more in a row, the second at or after its arrival, drop it (the walk to the car, a
+  misread at a light or at speed), so it never ends a drive or opens the linger at a later stop, and
+  the next confident walking report starts a new one.
 - **`suppressed`** ("Not driving?"): ten-metre GPS, no IMU, no rows, the live motion activity. It
   ends on a walk standing 20 s, after 5 min with no trusted fix over 3 mph, or at its 3 h cap; then
   GPS off, the parked region at the last fix, `armed`. `lastEnd` is not touched.

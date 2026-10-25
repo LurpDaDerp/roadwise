@@ -487,34 +487,51 @@ export interface EndClock {
   anchor: LatLng | null;
   /** The last trusted fix: when, how fast, where. */
   lastFix: { ts: number; mps: number; lat: number; lng: number } | null;
+  /** The last row was a trusted one at 10 mph or more. */
+  prevDrive: boolean;
+  /** The second of the last two trusted rows in a row at 10 mph or more (JS's `lastDroveAt`). */
+  lastDroveTs: number | null;
 }
 
-export const endClockAt = (ts: number): EndClock => ({ lastMoveTs: ts, holdMs: 0, paceRun: 0, anchor: null, lastFix: null });
+export const endClockAt = (ts: number): EndClock => ({ lastMoveTs: ts, holdMs: 0, paceRun: 0, anchor: null, lastFix: null, prevDrive: false, lastDroveTs: null });
 
 /**
  * One recorded row. Two trusted rows over 5 mph in a row, or a trusted fix 100 m from where the car
  * went still, is movement: the clock restarts there. A row with no valid fix while the phone's
  * standing motion report is car motion (`automotiveNow`) adds a second to the hold, up to an hour.
+ * Two trusted rows at 10 mph or more in a row are driving (`lastDroveTs` at the second), which
+ * voids a walk that arrived at or before it (`walkStanding`).
  */
 export function endOnRow(c: EndClock, r: DetectRow, automotiveNow: boolean): EndClock {
   if (trusted(r)) {
     const paceRun = r.speed > DETECT.MOVE_MPS ? c.paceRun + 1 : 0;
+    const prevDrive = r.speed >= DETECT.MOVING_MPS;
+    const lastDroveTs = prevDrive && c.prevDrive ? r.ts : c.lastDroveTs;
     const lastFix = { ts: r.ts, mps: r.speed, lat: r.lat, lng: r.lng };
     const far = c.anchor !== null && distanceM(c.anchor, r) >= DETECT.MOVE_DISPLACEMENT_M;
-    if (paceRun >= DETECT.MOVE_PACE_ROWS || far) return { lastMoveTs: r.ts, holdMs: 0, paceRun, anchor: { lat: r.lat, lng: r.lng }, lastFix };
-    return { ...c, paceRun, anchor: c.anchor ?? { lat: r.lat, lng: r.lng }, lastFix };
+    if (paceRun >= DETECT.MOVE_PACE_ROWS || far) return { lastMoveTs: r.ts, holdMs: 0, paceRun, anchor: { lat: r.lat, lng: r.lng }, lastFix, prevDrive, lastDroveTs };
+    return { ...c, paceRun, anchor: c.anchor ?? { lat: r.lat, lng: r.lng }, lastFix, prevDrive, lastDroveTs };
   }
   const holdMs = !r.gnssValid && automotiveNow ? Math.min(DETECT.FIXLESS_HOLD_MAX_MS, c.holdMs + DETECT.ROW_MS) : c.holdMs;
-  return { ...c, paceRun: 0, holdMs };
+  return { ...c, paceRun: 0, holdMs, prevDrive: false };
+}
+
+/**
+ * The standing walk's arrival, or null once the car has driven at or after it (`lastDroveTs` at or
+ * after `walkSince`): as JS voids a walk the car drove after (`checkFoot`), only a walk that
+ * arrived after the car was last at driving speed counts toward the walking end or the linger.
+ */
+export function walkStanding(c: EndClock, walkSince: number | null): number | null {
+  return walkSince !== null && (c.lastDroveTs === null || c.lastDroveTs < walkSince) ? walkSince : null;
 }
 
 export type SafetyCause = 'still' | 'walking' | 'limit';
 
 /**
- * `overdue`: a JS end rule would have ended the drive by now (12 h; a walk standing 10 s with no fix
- * over 3 mph in the last 15 s; 5 min without movement, holds excluded). `due`: the same plus the
- * slack (10 s on the walk, a minute on the others), when native stops sensing on its own. The
- * limit comes first, then walking, then still.
+ * `overdue`: a JS end rule would have ended the drive by now (12 h; a walk standing 10 s that the
+ * car has not driven since, with no fix over 3 mph in the last 15 s; 5 min without movement, holds
+ * excluded). `due`: the same plus the slack (10 s on the walk, a minute on the others), when
+ * native stops sensing on its own. The limit comes first, then walking, then still.
  * `waitUntil`: a Start-card drive still waiting for driving speed (JS ends it unsaved at that
  * deadline, 5 min from the tap or the last touch): no walking end (the walk to the car), and the
  * still end only once the deadline has passed too, so a touch that keeps the wait keeps the drive.
@@ -528,7 +545,8 @@ export function endDue(
 ): { due: SafetyCause | null; overdue: SafetyCause | null } {
   const carDriving = c.lastFix !== null && c.lastFix.mps > DETECT.END_CRAWL_MPS && now - c.lastFix.ts <= DETECT.WALK_STALE_FIX_MS;
   const age = now - startedAt;
-  const walked = waitUntil === null && walkSince !== null && !carDriving ? now - walkSince : -1;
+  const walk = walkStanding(c, walkSince);
+  const walked = waitUntil === null && walk !== null && !carDriving ? now - walk : -1;
   const still = now - c.lastMoveTs - c.holdMs;
   const pick = (slack: number, walkSlack: number): SafetyCause | null => {
     if (age >= DETECT.MAX_DRIVE_MS + slack) return 'limit';
@@ -541,10 +559,11 @@ export function endDue(
 
 /**
  * Whether JS's end (`stopCapture`) was an automatic one, so the linger watches on after it: a JS
- * end rule would have made it by now (`endDue` overdue 'still' or 'walking'), or a walk has stood
- * `WALK_STAND_MIN_MS` less a row (JS counts its walking end on the row clock, which runs a row
- * ahead of the wall clock native reads here) while the last trusted fix was at a walker's pace or
- * under (`WALKER_PACE_MAX_MPS`), more than `WALK_STALE_FIX_MS` old, or missing. JS's walking end
+ * end rule would have made it by now (`endDue` overdue 'still' or 'walking'), or a walk the car has
+ * not driven since (`walkStanding`) has stood `WALK_STAND_MIN_MS` less a row (JS counts its walking
+ * end on the row clock, which runs a row ahead of the wall clock native reads here) while the last
+ * trusted fix was at a walker's pace or under (`WALKER_PACE_MAX_MPS`), more than
+ * `WALK_STALE_FIX_MS` old, or missing. JS's walking end
  * fires 10 s after the walk began as the phone dates it, so as soon as 3 s after the report
  * arrived, where native counts from the arrival and is not yet overdue. It also lets a carried
  * phone at 5 mph or under end the drive where `endDue` still reads the car as driving; native keeps
@@ -555,7 +574,8 @@ export function endDue(
 export function lingerAfterJsEnd(c: EndClock, startedAt: number, now: number, walkSince: number | null, waitUntil: number | null = null): boolean {
   const o = endDue(c, startedAt, now, walkSince, waitUntil).overdue;
   if (o === 'still' || o === 'walking') return true;
-  if (waitUntil !== null || walkSince === null || now - walkSince < DETECT.WALK_STAND_MIN_MS - DETECT.ROW_MS) return false;
+  const walk = walkStanding(c, walkSince);
+  if (waitUntil !== null || walk === null || now - walk < DETECT.WALK_STAND_MIN_MS - DETECT.ROW_MS) return false;
   return c.lastFix === null || c.lastFix.mps <= DETECT.WALKER_PACE_MAX_MPS || now - c.lastFix.ts > DETECT.WALK_STALE_FIX_MS;
 }
 

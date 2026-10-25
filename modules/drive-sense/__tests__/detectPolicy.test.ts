@@ -26,6 +26,7 @@ import {
   suppressionResume,
   traceStart,
   trusted,
+  walkStanding,
   type ConfirmState,
   type DetectRow,
 } from '../src/detect/policy';
@@ -384,6 +385,29 @@ describe('properties', () => {
     expect(c.holdMs).toBe(60_000);
     expect(endDue(c, T0, T0 + 20_000 + DETECT.STILL_END_MS + 59_999, null).overdue).toBeNull();
     expect(endDue(c, T0, T0 + 20_000 + DETECT.STILL_END_MS + 60_000, null).overdue).toBe('still');
+  });
+
+  test('a walk the car has driven since is void, as JS voids it: two trusted rows at 10 mph or more in a row, the second at or after its arrival', () => {
+    const walk = T0 + 12_000;
+    const feed = (rows: DetectRow[]) => rows.reduce((c, r) => endOnRow(c, r, false), endClockAt(T0));
+    // a misread at a light, then the car pulls away and stops again 20 s after the walk arrived
+    const drove = feed([...vrows(0, 10, 20), ...vrows(11, 15, 0), ...vrows(16, 25, 20), ...vrows(26, 40, 0)]);
+    expect(drove.lastDroveTs).toBe(T0 + 25_000);
+    expect(walkStanding(drove, walk)).toBeNull();
+    expect(endDue(drove, T0, T0 + 40_000, walk)).toEqual({ due: null, overdue: null });
+    expect(lingerAfterJsEnd(drove, T0, T0 + 40_000, walk)).toBe(false);
+    // a walk that arrived after the car was last at driving speed stands
+    expect(walkStanding(drove, T0 + 26_000)).toBe(T0 + 26_000);
+    expect(walkStanding(drove, null)).toBeNull();
+    // one row at 10 mph is not driving, nor two split by a fix-less row or a slower one
+    for (const gap of [vrow(17, null), vrow(17, 9.9)]) {
+      const c = feed([...vrows(0, 15, 0), vrow(16, 20), gap, vrow(18, 20), ...vrows(19, 40, 0)]);
+      expect(c.lastDroveTs).toBeNull();
+      expect(endDue(c, T0, T0 + 40_000, walk).due).toBe('walking');
+    }
+    // 10 mph exactly is driving speed (JS's DRIVING_SPEED_MPS)
+    expect(feed(vrows(0, 1, 10)).lastDroveTs).toBe(T0 + 1_000);
+    expect(DETECT.MOVING_MPS).toBeCloseTo(10 * MPS_PER_MPH, 9);
   });
 
   test('a rest resumed at a relaunch ends no sooner than 5 min after it (nothing over 3 mph) and never past its cap', () => {

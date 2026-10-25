@@ -565,6 +565,38 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     expected: [none, { due: null, overdue: 'walking' }, { due: null, overdue: 'walking' }, { due: 'walking', overdue: 'walking' }],
   },
   {
+    name: 'end: a walk the car drives on from (a misread at a light) never ends the drive or opens the linger at the next stop; a walk after it does',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...steps(vrows(11, 15, 0)), ...steps(vrows(16, 25, 20)), ...steps(vrows(26, 45, 0)), check(45, 12), check(45, 35), check(55, 35)],
+    expected: [
+      { due: null, overdue: null, linger: false },
+      { due: null, overdue: 'walking', linger: true },
+      { due: 'walking', overdue: 'walking', linger: true },
+    ],
+  },
+  {
+    name: 'end: the walk to the car is void once the car drives: no walking end at the first stop',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 5, 0)), ...steps(vrows(6, 30, 15)), ...steps(vrows(31, 50, 0)), check(50, 1)],
+    expected: [{ due: null, overdue: null, linger: false }],
+  },
+  {
+    name: 'end: one row at driving speed after a walk is not driving: the walk stands',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...steps(vrows(11, 20, 0)), ...steps(vrows(21, 21, 20)), ...steps(vrows(22, 41, 0)), check(41, 21)],
+    expected: [{ due: 'walking', overdue: 'walking' }],
+  },
+  {
+    name: 'end: two rows at driving speed, the second at the walk\'s arrival, void it; a walk arriving a second later stands',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...steps(vrows(11, 19, 0)), ...steps(vrows(20, 21, 20)), ...steps(vrows(22, 45, 0)), check(45, 21), check(45, 22)],
+    expected: [none, { due: 'walking', overdue: 'walking' }],
+  },
+  {
     name: 'end: a JS end on a walk standing 3 s after a driving fix over 15 s old (no sky) opens the linger; one 14 s old does not',
     kind: 'end',
     startedAt: at(0),

@@ -109,7 +109,9 @@ extension DriveDetector {
   }
 
   /// One row of the drive: journaled and emitted with the next `seq`, the safety-stop clock fed and
-  /// (a live row) checked.
+  /// (a live row) checked. A walk the car has driven since (the walk to the car, a misread at a
+  /// light or at speed) is dropped, as JS drops it, so the next confident walking report starts a
+  /// new one.
   func record(_ d: DetectRow, _ body: [String: Any], evaluate: Bool = true) {
     guard let driveId = rec?.driveId else { return }
     var line = body
@@ -120,6 +122,7 @@ extension DriveDetector {
     lastRowTs = d.ts
     if DetectPolicy.trusted(d) { lastFix = (lat: d.lat, lng: d.lng) }
     endClock = DetectPolicy.endOnRow(endClock, d, automotiveNow: automotiveNow())
+    if walkSince != nil && DetectPolicy.walkStanding(endClock, walkSince) == nil { walkSince = nil }
     if evaluate { evaluateEnd() }
   }
 
@@ -177,8 +180,10 @@ extension DriveDetector {
     if lingerAfter, rec?.state == "armed", capture.sensing == .off { beginCandidate(origin: "auto", reason: "linger") }
   }
 
-  /// A JS end that a JS end rule would have made by now (5 min still, or a walk that has stood 3 s, a
-  /// carried phone's walking pace included) was an automatic one (`DetectPolicy.lingerAfterJsEnd`).
+  /// A JS end that a JS end rule would have made by now was an automatic one
+  /// (`DetectPolicy.lingerAfterJsEnd`): 5 min still, or a walk the car has not driven since that has
+  /// stood JS's 3 s floor less a row (2 s; JS's row clock runs a row ahead), with the last trusted
+  /// fix at a walker's pace or under (a carried phone), more than 15 s old, or missing.
   func automaticEndDue() -> Bool {
     guard let r = rec, isRecording, let startedAt = r.startedAt else { return false }
     return DetectPolicy.lingerAfterJsEnd(endClock, startedAt: startedAt, now: DriveDetector.now(), walkSince: walkSince, waitUntil: r.waitUntil)
