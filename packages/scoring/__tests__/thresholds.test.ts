@@ -8,6 +8,7 @@ import {
   DISPUTE_AUTO_PER_WEEK,
   END_CRAWL_MPH,
   END_NATIVE_SLACK_S,
+  END_NATIVE_WALK_SLACK_S,
   HARD_ACCEL_G,
   HARD_BRAKE_G,
   HARD_CORNER_G,
@@ -26,6 +27,8 @@ import {
   PHONE_PUTDOWN_QUIET_S,
   PHONE_SEVERE_S,
   TRIM_ENDS_M,
+  WALK_END_S,
+  WALK_STAND_MIN_S,
 } from '../src/thresholds';
 
 test('the three achievements, each with its title and description', () => {
@@ -59,6 +62,9 @@ test('the end, merge and privacy-trim rules', () => {
   expect(IDLE_END_S).toBe(300);
   expect(END_CRAWL_MPH).toBe(3);
   expect(END_NATIVE_SLACK_S).toBe(60);
+  expect(WALK_END_S).toBe(10);
+  expect(WALK_STAND_MIN_S).toBe(3);
+  expect(END_NATIVE_WALK_SLACK_S).toBe(10);
   expect(MERGE_GAP_S).toBe(300);
   expect(MERGE_RADIUS_M).toBe(150);
   expect(TRIM_ENDS_M).toBe(402);

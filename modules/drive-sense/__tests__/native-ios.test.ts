@@ -534,10 +534,12 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(auto).toMatch(/return DetectPolicy\.lingerAfterJsEnd\(endClock, startedAt: startedAt, now: DriveDetector\.now\(\), walkSince: walkSince, waitUntil: r\.waitUntil\)/);
     const helper = fn(code('DetectEndPolicy.swift'), 'static func lingerAfterJsEnd(');
     expect(helper).toMatch(/let o = endDue\(c, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil\)\.overdue\s*if o == "still" \|\| o == "walking" \{ return true \}/);
-    expect(helper).toMatch(/guard waitUntil == nil, let w = walkSince, now - w >= WALK_END_MS, let mps = c\.lastFixMps else \{ return false \}\s*return mps <= WALKER_PACE_MAX_MPS/);
-    expect(fs.readFileSync(path.join(MODULE_DIR, 'src', 'detect', 'policy.ts'), 'utf8')).toContain(
-      'return waitUntil === null && walkSince !== null && now - walkSince >= DETECT.WALK_END_MS && c.lastFix !== null && c.lastFix.mps <= DETECT.WALKER_PACE_MAX_MPS;'
-    );
+    // a walk standing JS's 3 s floor less a row, unless a trusted fix over a walker's pace 15 s old
+    // or less says the car is driving
+    expect(helper).toMatch(/guard waitUntil == nil, let w = walkSince, now - w >= WALK_STAND_MIN_MS - ROW_MS else \{ return false \}\s*guard let mps = c\.lastFixMps, let ts = c\.lastFixTs else \{ return true \}\s*return mps <= WALKER_PACE_MAX_MPS \|\| now - ts > WALK_STALE_FIX_MS/);
+    const tsPolicy = fs.readFileSync(path.join(MODULE_DIR, 'src', 'detect', 'policy.ts'), 'utf8');
+    expect(tsPolicy).toContain('if (waitUntil !== null || walkSince === null || now - walkSince < DETECT.WALK_STAND_MIN_MS - DETECT.ROW_MS) return false;');
+    expect(tsPolicy).toContain('return c.lastFix === null || c.lastFix.mps <= DETECT.WALKER_PACE_MAX_MPS || now - c.lastFix.ts > DETECT.WALK_STALE_FIX_MS;');
     // the self-test answers it for every end check
     expect(code('DetectSelfTest.swift')).toMatch(/let linger = DetectPolicy\.lingerAfterJsEnd\(clock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil\)/);
     // a region exit during the linger is never dropped as "busy": the linger becomes an ordinary
@@ -822,8 +824,10 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
     expect(fs.readFileSync(path.join(MODULE_DIR, 'src', 'detect', 'policy.ts'), 'utf8')).toContain(
       'return Math.max(DETECT.AUTO_HOLD_MIN_MS, (DETECT.AUTO_HOLD_MS_15 * (DETECT.AUTO_INSTANT_MPS - mps)) / (DETECT.AUTO_INSTANT_MPS - DETECT.AUTO_MIN_MPS));'
     );
-    // the drive's walking end is 5 s (the candidate and the rest keep 20 s)
-    expect(code('DetectEndPolicy.swift')).toMatch(/if walked >= WALK_END_MS \+ slack \{ return "walking" \}/);
+    // the drive's walking end is 10 s with its own 10 s slack; the still end and the cap keep a
+    // minute (the candidate and the rest keep a 20 s walk)
+    expect(code('DetectEndPolicy.swift')).toMatch(/if walked >= WALK_END_MS \+ walkSlack \{ return "walking" \}/);
+    expect(code('DetectEndPolicy.swift')).toMatch(/return \(pick\(SAFETY_SLACK_MS, WALK_SAFETY_SLACK_MS\), pick\(0, 0\)\)/);
     expect(code('DetectEndPolicy.swift')).toMatch(/if let w = walkSince, now - w >= WALK_CONFIRM_MS \{ return "walking" \}/);
     expect(code('DetectPolicy.swift')).toMatch(/if let w = walkSince, now - w >= WALK_CONFIRM_MS \{ return "walking" \}/);
   });

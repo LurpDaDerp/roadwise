@@ -2,7 +2,7 @@
 // The drive detector's rules (plan §3.3, §3.4, §3.6): every row of the shared decision table holds
 // for the TypeScript reference, the numbers agree with the scoring package and the triggers the UI
 // quotes, and a few properties hold over generated rows as well as the table's.
-import { END_CRAWL_MPH, END_NATIVE_SLACK_S, IDLE_END_S, MERGE_GAP_S, MERGE_RADIUS_M, WALK_END_S } from '@scoring';
+import { END_CRAWL_MPH, END_NATIVE_SLACK_S, END_NATIVE_WALK_SLACK_S, IDLE_END_S, MERGE_GAP_S, MERGE_RADIUS_M, WALK_END_S, WALK_STAND_MIN_S } from '@scoring';
 
 import {
   AUTO_TRIGGER,
@@ -122,15 +122,27 @@ describe('the numbers', () => {
       // the safety stop is unchanged: a fix over 3 mph this recent blocks its walking end
       expect({ mph, d: endDue(c, T0, now, walk) }).toEqual({ mph, d: { due: null, overdue: null } });
       expect({ mph, linger: lingerAfterJsEnd(c, T0, now, walk) }).toEqual({ mph, linger: true });
-      // not before the walk has stood 5 s, not without a walk, not while a Start-card drive waits
-      expect(lingerAfterJsEnd(c, T0, now - 1, walk)).toBe(false);
+      // not before the walk has stood 2 s (JS's 3 s floor less a row), not without a walk, not
+      // while a Start-card drive waits
+      expect(lingerAfterJsEnd(c, T0, walk + 2_000, walk)).toBe(true);
+      expect(lingerAfterJsEnd(c, T0, walk + 1_999, walk)).toBe(false);
       expect(lingerAfterJsEnd(c, T0, now, null)).toBe(false);
       expect(lingerAfterJsEnd(c, T0, now, walk, T0 + 300_000)).toBe(false);
     }
     // over a walker's pace the car is driving: no linger
     for (const mph of [5.5, 6, 20]) expect({ mph, linger: lingerAfterJsEnd(clockAt(mph), T0, now, walk) }).toEqual({ mph, linger: false });
-    // the rules a JS end already shares with endDue open it as before
+    // JS ends on a walk 10 s after it began, as soon as 3 s after the report arrived: a walk standing
+    // 3 s opens it where native, counting from the arrival, is not yet overdue
     const stopped = clockAt(0);
+    expect(endDue(stopped, T0, walk + 3_000, walk)).toEqual({ due: null, overdue: null });
+    expect(lingerAfterJsEnd(stopped, T0, walk + 3_000, walk)).toBe(true);
+    // a driving fix more than 15 s old is no longer the car's (parked where there is no sky); with no
+    // trusted fix at all nothing says the car is driving
+    const driving = clockAt(20);
+    expect(lingerAfterJsEnd(driving, T0, T0 + 36_000, T0 + 33_000)).toBe(true);
+    expect(lingerAfterJsEnd(driving, T0, T0 + 35_000, T0 + 32_000)).toBe(false);
+    expect(lingerAfterJsEnd(endClockAt(T0), T0, T0 + 3_000, T0)).toBe(true);
+    // the rules a JS end already shares with endDue open it as before
     expect(lingerAfterJsEnd(stopped, T0, now, walk)).toBe(true);
     expect(lingerAfterJsEnd(stopped, T0, T0 + 310_000, null)).toBe(true);
     expect(lingerAfterJsEnd(stopped, T0, T0 + 309_000, null)).toBe(false);
@@ -159,9 +171,16 @@ describe('the numbers', () => {
     expect(DETECT.MAX_DRIVE_MS).toBe(12 * 3_600_000);
     expect(DETECT.SUPPRESS_MAX_MS).toBe(3 * 3_600_000);
     expect(DETECT.WAIT_MAX_MS).toBe(5 * 60_000);
-    // the walking end: 5 s for a drive (native stops 60 s after that), 20 s for a candidate and the rest
+    // the walking end: 10 s for a drive, the report standing 3 s at least (native stops 10 s after
+    // that, the still end a minute after its own), 20 s for a candidate and the rest
     expect(DETECT.WALK_END_MS).toBe(WALK_END_S * 1000);
-    expect(DETECT.WALK_END_MS).toBe(5_000);
+    expect(DETECT.WALK_END_MS).toBe(10_000);
+    expect(DETECT.WALK_STAND_MIN_MS).toBe(WALK_STAND_MIN_S * 1000);
+    expect(DETECT.WALK_STAND_MIN_MS).toBe(3_000);
+    expect(DETECT.WALK_SAFETY_SLACK_MS).toBe(END_NATIVE_WALK_SLACK_S * 1000);
+    expect(DETECT.WALK_SAFETY_SLACK_MS).toBe(10_000);
+    expect(DETECT.SAFETY_SLACK_MS).toBe(60_000);
+    expect(DETECT.WALK_STALE_FIX_MS).toBe(15_000);
     expect(DETECT.WALK_CONFIRM_MS).toBe(20_000);
   });
 

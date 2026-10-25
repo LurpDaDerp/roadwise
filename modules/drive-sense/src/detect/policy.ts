@@ -95,15 +95,19 @@ export const DETECT = {
   STILL_END_MS: 300_000,
   /** An on-foot report standing this long stops an auto candidate and ends the "Not driving?" rest. */
   WALK_CONFIRM_MS: 20_000,
-  /** An on-foot report standing this long ends a drive (the JS walking end, `WALK_END_S`). */
-  WALK_END_MS: 5_000,
+  /** The JS walking end (`WALK_END_S`, from when the walk began); native's walk standing this long. */
+  WALK_END_MS: 10_000,
+  /** The JS walking end never fires before the report has stood this long (`WALK_STAND_MIN_S`). */
+  WALK_STAND_MIN_MS: 3_000,
   /** A fix over 3 mph this recent says the car is still driving: no walking end. */
-  WALK_STALE_FIX_MS: 60_000,
+  WALK_STALE_FIX_MS: 15_000,
   END_CRAWL_MPS: 1.34112,
   /** 5 mph: a walker's own pace tops out here (JS's walking end lets a carried phone this slow end a drive). */
   WALKER_PACE_MAX_MPS: 2.2352,
-  /** The native safety stop fires only this long after the JS rule would have. */
+  /** The native safety stop fires only this long after the JS still end or 12 h cap would have (`END_NATIVE_SLACK_S`)… */
   SAFETY_SLACK_MS: 60_000,
+  /** …and this long after the JS walking end would have (`END_NATIVE_WALK_SLACK_S`). */
+  WALK_SAFETY_SLACK_MS: 10_000,
   /** A fix-less stretch with car motion pauses the still clock, at most this long. */
   FIXLESS_HOLD_MAX_MS: 3_600_000,
   ROW_MS: 1_000,
@@ -507,9 +511,10 @@ export function endOnRow(c: EndClock, r: DetectRow, automotiveNow: boolean): End
 export type SafetyCause = 'still' | 'walking' | 'limit';
 
 /**
- * `overdue`: a JS end rule would have ended the drive by now (12 h; a walk standing 5 s with no fix
- * over 3 mph in the last minute; 5 min without movement, holds excluded). `due`: the same plus the
- * slack, when native stops sensing on its own. The limit comes first, then walking, then still.
+ * `overdue`: a JS end rule would have ended the drive by now (12 h; a walk standing 10 s with no fix
+ * over 3 mph in the last 15 s; 5 min without movement, holds excluded). `due`: the same plus the
+ * slack (10 s on the walk, a minute on the others), when native stops sensing on its own. The
+ * limit comes first, then walking, then still.
  * `waitUntil`: a Start-card drive still waiting for driving speed (JS ends it unsaved at that
  * deadline, 5 min from the tap or the last touch): no walking end (the walk to the car), and the
  * still end only once the deadline has passed too, so a touch that keeps the wait keeps the drive.
@@ -525,28 +530,33 @@ export function endDue(
   const age = now - startedAt;
   const walked = waitUntil === null && walkSince !== null && !carDriving ? now - walkSince : -1;
   const still = now - c.lastMoveTs - c.holdMs;
-  const pick = (slack: number): SafetyCause | null => {
+  const pick = (slack: number, walkSlack: number): SafetyCause | null => {
     if (age >= DETECT.MAX_DRIVE_MS + slack) return 'limit';
-    if (walked >= DETECT.WALK_END_MS + slack) return 'walking';
+    if (walked >= DETECT.WALK_END_MS + walkSlack) return 'walking';
     if (still >= DETECT.STILL_END_MS + slack && (waitUntil === null || now >= waitUntil + slack)) return 'still';
     return null;
   };
-  return { due: pick(DETECT.SAFETY_SLACK_MS), overdue: pick(0) };
+  return { due: pick(DETECT.SAFETY_SLACK_MS, DETECT.WALK_SAFETY_SLACK_MS), overdue: pick(0, 0) };
 }
 
 /**
  * Whether JS's end (`stopCapture`) was an automatic one, so the linger watches on after it: a JS
  * end rule would have made it by now (`endDue` overdue 'still' or 'walking'), or a walk has stood
- * 5 s while the last trusted fix was at a walker's pace or under (`WALKER_PACE_MAX_MPS`). JS's
- * walking end lets a carried phone at 5 mph or under end the drive where `endDue` still reads the
- * car as driving; native keeps no carried state, so any fix that slow counts here. A spare linger
- * is harmless: a 20 s walk ends it, and it takes no hourly cap entry, rest or parked spot. Like the
- * walking end, never on a walk while a Start-card drive still waits for driving speed.
+ * `WALK_STAND_MIN_MS` less a row (JS counts its walking end on the row clock, which runs a row
+ * ahead of the wall clock native reads here) while the last trusted fix was at a walker's pace or
+ * under (`WALKER_PACE_MAX_MPS`), more than `WALK_STALE_FIX_MS` old, or missing. JS's walking end
+ * fires 10 s after the walk began as the phone dates it, so as soon as 3 s after the report
+ * arrived, where native counts from the arrival and is not yet overdue. It also lets a carried
+ * phone at 5 mph or under end the drive where `endDue` still reads the car as driving; native keeps
+ * no carried state, so any fix that slow counts here. A spare linger is harmless: a 20 s walk ends
+ * it, and it takes no hourly cap entry, rest or parked spot. Like the walking end, never on a walk
+ * while a Start-card drive still waits for driving speed.
  */
 export function lingerAfterJsEnd(c: EndClock, startedAt: number, now: number, walkSince: number | null, waitUntil: number | null = null): boolean {
   const o = endDue(c, startedAt, now, walkSince, waitUntil).overdue;
   if (o === 'still' || o === 'walking') return true;
-  return waitUntil === null && walkSince !== null && now - walkSince >= DETECT.WALK_END_MS && c.lastFix !== null && c.lastFix.mps <= DETECT.WALKER_PACE_MAX_MPS;
+  if (waitUntil !== null || walkSince === null || now - walkSince < DETECT.WALK_STAND_MIN_MS - DETECT.ROW_MS) return false;
+  return c.lastFix === null || c.lastFix.mps <= DETECT.WALKER_PACE_MAX_MPS || now - c.lastFix.ts > DETECT.WALK_STALE_FIX_MS;
 }
 
 // ——— "Not driving?" ———

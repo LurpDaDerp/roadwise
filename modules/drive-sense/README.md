@@ -198,10 +198,11 @@ these mappings decide whether walking can end a drive.
   was last at driving speed (two consecutive rows with a known, trusted GPS speed of 10 mph or
   more): two such rows, the second at or after the walk began, void it for good, however late the
   report arrives. W1: once the car has reached driving speed, such a report that stays the latest
-  report for 5 s ends the drive unless the last known speed is over 3 mph and 60 s old or less (a
-  walker's own pace, 5 mph or less from a phone that reads as carried, excepted), cut at the last
-  movement at or before the walk began. W2: before driving speed, an on-foot report that stays the
-  latest for 5 s ends a drive at least 10 min old (it is then dropped, never driven). Without motion permission no reports come and neither applies.
+  report ends the drive 10 s after its walk began (its `ts`), once it has stood 3 s since it
+  arrived, unless the last known speed is over 3 mph and 15 s old or less (a walker's own pace,
+  5 mph or less from a phone that reads as carried, excepted), cut at the last movement at or
+  before the walk began. W2: before driving speed, an on-foot report that stays the latest as long
+  ends a drive at least 10 min old (it is then dropped, never driven). Without motion permission no reports come and neither applies.
 
   `ts` is the transition's `getElapsedRealTimeNanos()` converted with §7 "Time base" (an anchor
   read when the transition is received). Nothing is stored. `createFakeDriveSense` has no mapping
@@ -918,20 +919,21 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   `capturing` true for `getState` (mode `auto` or `mounted`); the "Recording your drive" check is
   scheduled (below).
 - **`ending`**: a JS end rule is overdue (5 min without movement, fix-less car time not counting;
-  a walk standing 5 s with no fix over 3 mph in the last minute; 12 h; for a Start-card drive still
+  a walk standing 10 s with no fix over 3 mph in the last 15 s; 12 h; for a Start-card drive still
   waiting for driving speed, no walk, and the 5 min only once its `waitUntil` has passed). Movement again returns to
-  `recording`. **The native safety stop** commits the end one minute later (`SAFETY_SLACK_MS`) if JS
-  has not: the journal gets `end { cause, endedAt: decidedAt }` (native never computes a cut) and
+  `recording`. **The native safety stop** commits the end 10 s later on a walk (`WALK_SAFETY_SLACK_MS`)
+  and one minute later otherwise (`SAFETY_SLACK_MS`) if JS has not: the journal gets `end { cause, endedAt: decidedAt }` (native never computes a cut) and
   JS hears `driveEnded`. JS's own end (`stopCapture`) journals `end { cause: 'js', endedAt: its cut }`
   and emits nothing. Every end runs inside a background task (`drivesense.end`, 25 s), so JS can
   store the drive and post its recap. After any end: sensing off, the capture flag cleared, the Live
   Activity ended (`roadwise.driveDisplay` `ended`), the note removed, `lastEnd` and the parked region
   at the last trusted fix, `armed` again. After an automatic end (native's 5 min still or walk, or a
-  JS end that a JS rule would have made by then, `lingerAfterJsEnd`: a walk standing 5 s with the
-  last trusted fix at a walker's pace, 5 mph or under, counts too, since JS's walking end lets a
-  carried phone that slow end the drive), unless it was a Start-card drive still waiting, an
-  auto candidate opens at once (`linger`: 3 min from the end, 5 once it holds evidence, whatever it sees; no hourly cap entry, no rest, no parked spot): a quick
-  restart confirms near where the drive ended, and `continues` lets JS re-open the held drive. The
+  JS end that a JS rule would have made by then, `lingerAfterJsEnd`: a walk standing 2 s, the 3 s
+  floor of JS's walking end less a row, with the last trusted fix at a walker's pace, 5 mph or
+  under, more than 15 s old or missing, counts too, since JS counts its walking end from when the
+  walk began and lets a carried phone that slow end the drive), unless it was a Start-card drive
+  still waiting, an auto candidate opens at once (`linger`: 3 min from the end, 5 once it holds evidence, whatever it sees; no hourly cap entry, no rest, no parked spot): a car
+  that sets off again soon is confirmed at once as a new drive with its whole route. The
   parked region's exit during the linger (which iOS sends only once) is never dropped: the linger
   becomes an ordinary watch from the exit (`detectState` `wake:region`), with its evidence, an hourly
   cap entry until it sees a vehicle, vehicle signs (rows at 10 mph or more) keeping it open up to the

@@ -6,12 +6,12 @@
 // card's waiting session saw 10 mph held 15 s; `ts` is the traced-back start) or `adopt` (a drive
 // the previous process was recording, or a re-opened continuation). It ends on `end` (the
 // swipe-to-end, or native's own stop with its cause), by itself once the car has not moved for
-// `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the driver walks away, 5 s of
-// walking reported with the car at 3 mph or slower, or at a walker's pace with the phone carried
-// (`motion` reports; `motion.ts` W1/W2). Every end but a prompt manual one closes the
-// drive where the car last moved (`closeAtLastMovement`; a walking end at or before the walk
-// began): a manual end `MANUAL_CUT_AFTER_S` or more after the idle clock's base is cut too, a
-// sooner one ends at the tap. `cancel` ("Not driving?") discards the drive: never finalized.
+// `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the driver walks away, 10 s
+// after a reported walk began (the report standing 3 s at least) with the car at 3 mph or slower,
+// or at a walker's pace with the phone carried (`motion` reports; `motion.ts` W1/W2). Every end
+// but a prompt manual one closes the drive where the car last moved (`closeAtLastMovement`; a
+// walking end at or before the walk began): a manual end `MANUAL_CUT_AFTER_S` or more after the
+// idle clock's base is cut too, a sooner one ends at the tap. `cancel` ("Not driving?") discards the drive: never finalized.
 //
 // Alerts (`deps.onAlert`; the HUD shows `lastAlert`): speeding as the car first passes the speeding
 // line, then the chime again while the row stays over it (`speedingRepeatS`; sounded only, never
@@ -36,7 +36,7 @@ import type { AdoptedTrip, AlertEvent, EndCause, Engine, EngineDeps, EngineEvent
 import { nextBearing, NO_BEARING, type DisplayBearing } from './displayBearing';
 import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './displayLimit';
 import { displayFix, displayRow, type DisplaySpeed } from './displaySpeed';
-import { carStillDriving, footReading, ON_FOOT_DROP_MS, WALK_CONFIRM_MS } from './motion';
+import { carStillDriving, footReading, ON_FOOT_DROP_MS, WALK_END_MS, WALK_STAND_MIN_MS } from './motion';
 import { appendRow, autoEndAt, closeAtLastMovement, closeSession, createSession, idleSince, noteWarmup, snapshotSession } from './session';
 import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
@@ -339,15 +339,16 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   /**
-   * The walking end at `t` (row clock), once the standing on-foot report is `WALK_CONFIRM_MS` old.
-   * A report is void for good once the car has been at driving speed at or after the moment its
-   * walk began (`session.lastDroveAt` ≥ `since`: two driving rows in a row, the second at or after
-   * it), however late the report came: only a walk that began after the car was last at driving
-   * speed counts. W1 (the car reached driving speed): unless the car may still be driving
-   * (`carStillDriving`: the last known speed over 3 mph and `WALK_STALE_FIX_MS` old or less, a
-   * walker's own pace from a carried phone excepted). W2 (it never did): only once the drive
-   * is `ON_FOOT_DROP_MS` old. Cut at the last movement at or before the walk began. True when it
-   * ended the drive.
+   * The walking end at `t` (row clock), once the standing on-foot report's walk began `WALK_END_MS`
+   * ago (`since`, the phone's own date for it) and the report has stood `WALK_STAND_MIN_MS` (`at`,
+   * its arrival): a report that arrives late ends the drive soon after. A report is void for good
+   * once the car has been at driving speed at or after the moment its walk began
+   * (`session.lastDroveAt` ≥ `since`: two driving rows in a row, the second at or after it), however
+   * late the report came: only a walk that began after the car was last at driving speed counts. W1
+   * (the car reached driving speed): unless the car may still be driving (`carStillDriving`: the
+   * last known speed over 3 mph and `WALK_STALE_FIX_MS` old or less, a walker's own pace from a
+   * carried phone excepted). W2 (it never did): only once the drive is `ON_FOOT_DROP_MS` old. Cut
+   * at the last movement at or before the walk began. True when it ended the drive.
    */
   async function checkFoot(t: number): Promise<boolean> {
     if (foot === null || status !== 'recording' || held()) return false;
@@ -357,7 +358,7 @@ export function createEngine(deps: EngineDeps): Engine {
       foot = null;
       return false;
     }
-    if (t - foot.at < WALK_CONFIRM_MS) return false;
+    if (t - foot.since < WALK_END_MS || t - foot.at < WALK_STAND_MIN_MS) return false;
     if (s.droveAt === null) {
       if (t - s.startedAt < ON_FOOT_DROP_MS) return false;
     } else if (carStillDriving(s.lastSpeed, t)) {

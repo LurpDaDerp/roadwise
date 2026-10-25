@@ -44,13 +44,18 @@ export const IDLE_END_S = 300;
 /** At or under this speed (mph) the car is crawling: with walking confirmed, the drive ends. */
 export const END_CRAWL_MPH = 3;
 /**
- * The walking end: a confident walking or running report standing this long (s) ends a drive once
- * the car has stopped (the driver has left the car). The native safety stop takes the same walk
- * `END_NATIVE_SLACK_S` later.
+ * The walking end: a confident walking or running report ends a drive once the car has stopped (the
+ * driver has left the car) this long (s) after the walk began, as the phone dates it, and once the
+ * report has stood `WALK_STAND_MIN_S`. The native safety stop takes a walk standing this long
+ * `END_NATIVE_WALK_SLACK_S` later.
  */
-export const WALK_END_S = 5;
-/** The native safety stop's slack over the JS end rules (s): it fires only when JS has not ended the drive. */
+export const WALK_END_S = 10;
+/** The walking end's floor: the on-foot report must have stood this long (s) since it arrived. */
+export const WALK_STAND_MIN_S = 3;
+/** The native safety stop's slack over the JS still end (s): it fires only when JS has not ended the drive. */
 export const END_NATIVE_SLACK_S = 60;
+/** The native safety stop's slack over the JS walking end (s): it fires only when JS has not ended the drive. */
+export const END_NATIVE_WALK_SLACK_S = 10;
 /**
  * A drive confirmed within this gap (s) of the previous drive's end, starting within
  * `MERGE_RADIUS_M` of where it ended, is the same drive (the phone continues it; the server joins

@@ -123,8 +123,9 @@ extension DriveDetector {
     if evaluate { evaluateEnd() }
   }
 
-  /// The safety stop: native ends the drive a minute after a JS rule would have; meanwhile the state
-  /// says `ending` while a JS end is overdue and `recording` again once the car moves.
+  /// The safety stop: native ends the drive 10 s after the JS walking end or a minute after another
+  /// JS rule would have; meanwhile the state says `ending` while a JS end is overdue and `recording`
+  /// again once the car moves.
   func evaluateEnd() {
     guard var r = rec, isRecording, let startedAt = r.startedAt else { return }
     let now = DriveDetector.now()
@@ -146,7 +147,8 @@ extension DriveDetector {
   /// A native cause goes to JS as `driveEnded`; JS's own ("js", with its cut as `endedAt`) does not.
   /// Native never computes a cut: its `endedAt` is when it decided. `linger`: an automatic end (5 min
   /// still, or a walk); unless it was a Start-card drive still waiting for driving speed, a candidate
-  /// watches on at once, so a quick restart from the same spot confirms and re-opens the held drive.
+  /// watches on at once, so a car that sets off again soon is confirmed at once as a new drive with
+  /// its whole route.
   func commitEnd(cause: String, endedAt: Double, linger: Bool = false) {
     guard var r = rec, isRecording, let driveId = r.driveId else { return }
     let now = DriveDetector.now()
@@ -175,8 +177,8 @@ extension DriveDetector {
     if lingerAfter, rec?.state == "armed", capture.sensing == .off { beginCandidate(origin: "auto", reason: "linger") }
   }
 
-  /// A JS end that a JS end rule would have made by now (5 min still, or a walk, a carried phone's
-  /// walking pace included) was an automatic one (`DetectPolicy.lingerAfterJsEnd`).
+  /// A JS end that a JS end rule would have made by now (5 min still, or a walk that has stood 3 s, a
+  /// carried phone's walking pace included) was an automatic one (`DetectPolicy.lingerAfterJsEnd`).
   func automaticEndDue() -> Bool {
     guard let r = rec, isRecording, let startedAt = r.startedAt else { return false }
     return DetectPolicy.lingerAfterJsEnd(endClock, startedAt: startedAt, now: DriveDetector.now(), walkSince: walkSince, waitUntil: r.waitUntil)

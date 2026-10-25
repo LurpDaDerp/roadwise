@@ -1,7 +1,7 @@
 // The native safety stop and the "Not driving?" rest (plan §3.4, §3.6): the Swift mirror of the end
 // half of `src/detect/policy.ts`. JS decides a drive's end and its cut (R1); native stops sensing
-// on its own only when JS has not, a minute after a JS rule would have fired, and never computes a
-// cut. Pure: Foundation only.
+// on its own only when JS has not, 10 s after the JS walking end or a minute after another JS rule
+// would have fired, and never computes a cut. Pure: Foundation only.
 import Foundation
 
 /// What the still clock and the walking veto know, row by row (policy.ts `EndClock`).
@@ -56,9 +56,10 @@ extension DetectPolicy {
     return c
   }
 
-  /// policy.ts `endDue`: `overdue` = a JS rule would have ended the drive by now (a walk standing 5 s
-  /// with no fix over 3 mph in the last minute, 5 min still, 12 h); `due` = the same
-  /// plus the slack. Each "limit", "walking", "still" or nil, in that order of precedence.
+  /// policy.ts `endDue`: `overdue` = a JS rule would have ended the drive by now (a walk standing 10 s
+  /// with no fix over 3 mph in the last 15 s, 5 min still, 12 h); `due` = the same plus the slack
+  /// (10 s on the walk, a minute on the others). Each "limit", "walking", "still" or nil, in that
+  /// order of precedence.
   /// `waitUntil`: a Start-card drive still waiting for driving speed: no walking end, and the still
   /// end only once that deadline has passed too.
   static func endDue(_ c: EndClock, startedAt: Double, now: Double, walkSince: Double?, waitUntil: Double? = nil) -> (due: String?, overdue: String?) {
@@ -68,25 +69,29 @@ extension DetectPolicy {
     var walked: Double = -1
     if let w = walkSince, !carDriving, waitUntil == nil { walked = now - w }
     let still = now - c.lastMoveTs - c.holdMs
-    func pick(_ slack: Double) -> String? {
+    func pick(_ slack: Double, _ walkSlack: Double) -> String? {
       if age >= MAX_DRIVE_MS + slack { return "limit" }
-      if walked >= WALK_END_MS + slack { return "walking" }
+      if walked >= WALK_END_MS + walkSlack { return "walking" }
       if still >= STILL_END_MS + slack, waitUntil.map({ now >= $0 + slack }) ?? true { return "still" }
       return nil
     }
-    return (pick(SAFETY_SLACK_MS), pick(0))
+    return (pick(SAFETY_SLACK_MS, WALK_SAFETY_SLACK_MS), pick(0, 0))
   }
 
   /// policy.ts `lingerAfterJsEnd`: JS's end was an automatic one (the linger watches on) when a JS
-  /// rule would have made it by now (`endDue` overdue "still" or "walking"), or a walk has stood 5 s
-  /// with the last trusted fix at a walker's pace or under (JS's walking end lets a carried phone at
-  /// 5 mph or under end the drive; native keeps no carried state, and a spare linger is harmless).
+  /// rule would have made it by now (`endDue` overdue "still" or "walking"), or a walk has stood
+  /// `WALK_STAND_MIN_MS` less a row (JS's row clock runs a row ahead of this one) with the last
+  /// trusted fix at a walker's pace or under, more than `WALK_STALE_FIX_MS` old, or missing. JS's
+  /// walking end comes 10 s after the walk began as the phone dates it, so as soon as 3 s after the
+  /// report arrived, and it lets a carried phone at 5 mph or under end the drive; native counts from
+  /// the arrival and keeps no carried state, and a spare linger is harmless.
   /// Never on a walk while a Start-card drive still waits for driving speed.
   static func lingerAfterJsEnd(_ c: EndClock, startedAt: Double, now: Double, walkSince: Double?, waitUntil: Double? = nil) -> Bool {
     let o = endDue(c, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil).overdue
     if o == "still" || o == "walking" { return true }
-    guard waitUntil == nil, let w = walkSince, now - w >= WALK_END_MS, let mps = c.lastFixMps else { return false }
-    return mps <= WALKER_PACE_MAX_MPS
+    guard waitUntil == nil, let w = walkSince, now - w >= WALK_STAND_MIN_MS - ROW_MS else { return false }
+    guard let mps = c.lastFixMps, let ts = c.lastFixTs else { return true }
+    return mps <= WALKER_PACE_MAX_MPS || now - ts > WALK_STALE_FIX_MS
   }
 
   /// policy.ts `suppressionDue`: "cap", "walking", "still" or nil.
