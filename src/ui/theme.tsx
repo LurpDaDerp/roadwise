@@ -1,9 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, Animated, Easing, Image, StyleSheet, useColorScheme, View } from 'react-native';
+import { createContext, startTransition, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { AccessibilityInfo, useColorScheme } from 'react-native';
 import * as Reanimated from 'react-native-reanimated';
 
 import { plainBundle, skyBundle, type SkyBundle, type SkyColors, type SkyMood } from './sky/palette';
-import { snapshotBlocked } from './snapshotGuard';
 import { tokens, type ColorSet, type Elevation, type HudSet, type TypeScale } from './tokens';
 
 // expo-router's testing library swaps in a Reanimated mock without this hook; fall back to the
@@ -69,127 +68,37 @@ export type Theme = {
 };
 
 const Ctx = createContext<Theme | null>(null);
+/** Whether a change of sky fades in now: kept off the theme, so the settle after launch re-renders only the sky's layers. */
+const FadeCtx = createContext(false);
 
 /** How long a change of sky takes to fade in (light ⇄ dark included). */
 export const SKY_BLEND_MS = 2400;
 /** The first sky after launch lands at once (it is behind the splash); later changes fade. */
 const SETTLE_MS = 1500;
-/** A snapshot that is not back in this long is given up on: the new sky lands at once. */
-const CAPTURE_TIMEOUT_MS = 600;
-/** An image that has not loaded in this long is given up on the same way. */
-const VEIL_LOAD_TIMEOUT_MS = 1000;
 
-/** The screen as it is now, as an image file's uri, or null when it cannot be taken (no native support, a timeout). */
-type Capture = () => Promise<string | null>;
-
-type Veil = { id: number; uri: string; target: SkyBundle };
+/** What the theme wears: the palette and the sky it was built for, switched together. */
+type Look = { bundle: SkyBundle; mood: SkyMood | null };
 
 /**
- * `target`, reached by one switch under a fading snapshot of the screen as it was, so a change of
- * sky costs a single render of the app instead of a repaint of every themed view at 20 Hz for
- * seconds (which stalled the JS thread and every touch with it). The old look is captured as an
- * image, laid over the screen, the new look is applied in that one render, and the image fades out
- * on the native side without the JS thread. Anything that keeps the snapshot from coming (no native
- * module, a slow capture, an image that will not load) lands the new look at once instead. A new
- * target mid-fade drops the snapshot and starts over from what is on screen.
+ * `target`, reached in a single render. A change of sky (`gentle`) renders as a React transition:
+ * React builds the new look in short slices between frames and yields to every touch, scroll and
+ * live update (the driving screen's speed) on the way, so a change of sky never stalls the JS thread
+ * however much of the app it repaints, and nothing is laid over the screen meanwhile. The sky's own
+ * layers then fade to it on the UI thread (`SkyFade`). Any other change (a static look, Reduce
+ * Motion, the first sky) lands in the same render (React's "adjust state when a prop changes"
+ * pattern), so a pinned scheme never shows a stale frame.
  */
-export function useVeiledBundle(target: SkyBundle, animate: boolean, capture: Capture): { bundle: SkyBundle; veil: ReactNode } {
+export function useLook(target: Look, gentle: boolean): Look {
   const [shown, setShown] = useState(target);
   const [prev, setPrev] = useState(target);
-  const [veil, setVeil] = useState<Veil | null>(null);
-  // Names each snapshot (its uri is the whole image, too long to be a key).
-  const veilCount = useRef(0);
-  // A change that is not to be faded lands in the same render (React's "adjust state when a prop
-  // changes" pattern), so a pinned scheme never shows a stale frame; any fade in flight is dropped.
   if (prev !== target) {
     setPrev(target);
-    if (veil !== null) setVeil(null);
-    if (!animate) setShown(target);
+    if (!gentle) setShown(target);
   }
-  // The snapshot of the look on screen, taken before anything changes.
   useEffect(() => {
-    if (!animate || shown === target) return;
-    let live = true;
-    capture().then(
-      (uri) => {
-        if (!live) return;
-        if (uri === null) setShown(target);
-        else setVeil({ id: (veilCount.current += 1), uri, target });
-      },
-      () => {
-        if (live) setShown(target);
-      }
-    );
-    return () => {
-      live = false;
-    };
-  }, [animate, shown, target, capture]);
-  // The snapshot is up and drawn (or it failed to be): the new look goes in underneath it.
-  const landed = veil !== null && veil.target === shown;
-  const waiting = veil !== null && !landed;
-  useEffect(() => {
-    if (!waiting || veil === null) return;
-    const timer = setTimeout(() => setShown(veil.target), VEIL_LOAD_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [waiting, veil]);
-  const lands = useCallback(() => {
-    if (veil !== null) setShown(veil.target);
-  }, [veil]);
-  const gone = useCallback(() => setVeil(null), []);
-  return {
-    bundle: shown,
-    veil: veil === null ? null : <ThemeVeil key={veil.id} uri={veil.uri} landed={landed} onLoad={lands} onDone={gone} />,
-  };
-}
-
-/** The old screen over the new one, fading out natively once the new look is in. */
-function ThemeVeil({ uri, landed, onLoad, onDone }: { uri: string; landed: boolean; onLoad: () => void; onDone: () => void }) {
-  const [opacity] = useState(() => new Animated.Value(1));
-  useEffect(() => {
-    if (!landed) return;
-    const fade = Animated.timing(opacity, { toValue: 0, duration: SKY_BLEND_MS, easing: Easing.inOut(Easing.cubic), useNativeDriver: true });
-    fade.start(({ finished }) => {
-      if (finished) onDone();
-    });
-    return () => fade.stop();
-  }, [landed, opacity, onDone]);
-  return (
-    <Animated.View
-      pointerEvents="none"
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
-      style={[StyleSheet.absoluteFill, { opacity }]}
-    >
-      <Image testID="theme-veil" source={{ uri }} resizeMode="stretch" fadeDuration={0} onLoad={onLoad} onError={onLoad} style={StyleSheet.absoluteFill} />
-    </Animated.View>
-  );
-}
-
-/**
- * The root's snapshot through react-native-view-shot, loaded on first use so a missing native module
- * only costs the fade. It is held in memory as a data uri and never written to a file: a screen
- * that must not be copied (`snapshotBlocked`, the DashPal aiming picture) gets none, before or after
- * the capture.
- */
-function snapshotOf(view: View | null): Promise<string | null> {
-  if (view === null || snapshotBlocked()) return Promise.resolve(null);
-  return new Promise<string | null>((resolve) => {
-    const timer = setTimeout(() => resolve(null), CAPTURE_TIMEOUT_MS);
-    const done = (uri: string | null) => {
-      clearTimeout(timer);
-      resolve(uri);
-    };
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
-      const { captureRef } = require('react-native-view-shot') as typeof import('react-native-view-shot');
-      captureRef(view, { format: 'jpg', quality: 0.6, result: 'data-uri' }).then(
-        (uri) => done(typeof uri === 'string' && uri.startsWith('data:') && !snapshotBlocked() ? uri : null),
-        () => done(null)
-      );
-    } catch {
-      done(null);
-    }
-  });
+    if (gentle && shown !== target) startTransition(() => setShown(target));
+  }, [gentle, shown, target]);
+  return shown;
 }
 
 function buildTheme(bundle: SkyBundle, mood: SkyMood | null, hudNight: boolean | null, reduceMotion: boolean): Theme {
@@ -216,9 +125,9 @@ const moodKey = (m: SkyMood | null) => (m ? `${m.phase}|${m.glow}|${m.weather.ki
 
 /**
  * The app's theme. With a `mood` (Adaptive: the root, fed by `useSkyMood`) the palette follows the
- * sky and every change of sky fades in over a couple of seconds, light ⇄ dark included (a snapshot
- * of the old look fades out over the new one: `useVeiledBundle`). Without
- * one it is the static look (`plainBundle`) for the pinned scheme (Light, Dark, tests, the gallery)
+ * sky and every change of sky fades in over a couple of seconds, light ⇄ dark included: the app
+ * takes the new palette in one render that never blocks a touch (`useLook`), and the sky itself
+ * fades to it on the UI thread (`SkyFade`). Without one it is the static look (`plainBundle`) for the pinned scheme (Light, Dark, tests, the gallery)
  * or, with none pinned, the system's (System). A switch between Adaptive and a static look is the
  * driver's own and lands at once, either way.
  */
@@ -248,7 +157,10 @@ export function ThemeProvider({
   if (moodKey(stable) !== moodKey(live)) setStable(live);
   const plainScheme = forced ?? sysScheme;
 
-  const target = useMemo(() => (stable ? skyBundle(stable) : plainBundle(plainScheme)), [stable, plainScheme]);
+  // Bundles are cached by mood, so the phone's scheme (which the sky itself sets, `SkyChrome`)
+  // never makes a new target under the sky.
+  const bundle = stable ? skyBundle(stable) : plainBundle(plainScheme);
+  const target = useMemo<Look>(() => ({ bundle, mood: stable }), [bundle, stable]);
   // The first sky lands at once (it is behind the splash, or the driver just chose Adaptive); every
   // later change of sky fades. A static look starts the settle over.
   const [settled, setSettled] = useState(false);
@@ -262,21 +174,17 @@ export function ThemeProvider({
     return () => clearTimeout(timer);
   }, [hasMood]);
   // Under Reduce Motion the sky lands at once, as a static look's switch does.
-  const rootRef = useRef<View>(null);
-  const capture = useCallback(() => snapshotOf(rootRef.current), []);
-  const { bundle, veil } = useVeiledBundle(target, hasMood && settled && !reduceMotion, capture);
+  const fades = hasMood && settled && !reduceMotion;
+  const look = useLook(target, fades);
 
   const value = useMemo<Theme>(
-    () => buildTheme(bundle, stable, hudNight, reduceMotion),
-    [bundle, stable, hudNight, reduceMotion]
+    () => buildTheme(look.bundle, look.mood, hudNight, reduceMotion),
+    [look, hudNight, reduceMotion]
   );
 
   return (
     <Ctx.Provider value={value}>
-      <View ref={rootRef} collapsable={false} style={{ flex: 1 }}>
-        {children}
-      </View>
-      {veil}
+      <FadeCtx.Provider value={fades}>{children}</FadeCtx.Provider>
     </Ctx.Provider>
   );
 }
@@ -306,6 +214,11 @@ export function SkyScope({ children }: { children: ReactNode }) {
     [parent]
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+}
+
+/** Whether a change of sky fades in now (the sky has settled and Reduce Motion is off); else it lands at once. */
+export function useSkyFades(): boolean {
+  return useContext(FadeCtx);
 }
 
 export function useTheme(): Theme {

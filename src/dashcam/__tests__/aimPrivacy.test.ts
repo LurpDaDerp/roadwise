@@ -48,11 +48,9 @@ describe('the aiming picture stays in memory', () => {
     expect(text).not.toMatch(/request\w*PermissionsAsync/);
   });
 
-  it('the aiming screen keeps the theme from taking a snapshot of the app, and a snapshot never reaches a file', () => {
-    expect(src('ui', 'wizard', 'StepAim.tsx')).toContain("useSnapshotBlocked('dashpal-aim')");
-    const theme = readFileSync(join(__dirname, '..', '..', 'ui', 'theme.tsx'), 'utf8');
-    expect(theme).toContain("result: 'data-uri'");
-    expect(theme).not.toMatch(/tmpfile|base64|file:\/\//);
-    expect(theme).toMatch(/snapshotBlocked\(\)/);
+  it('a change of theme never takes a picture of the app (the aiming picture with it)', () => {
+    for (const f of [['theme.tsx'], ['sky', 'SkyFade.tsx'], ['sky', 'SkyBackdrop.tsx']]) {
+      expect(readFileSync(join(__dirname, '..', '..', 'ui', ...f), 'utf8')).not.toMatch(/view-shot|captureRef/);
+    }
   });
 });

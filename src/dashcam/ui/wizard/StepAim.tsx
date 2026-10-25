@@ -2,7 +2,6 @@ import { usePreventScreenCapture } from 'expo-screen-capture';
 import { View } from 'react-native';
 
 import { Button, Text, useTheme } from '@/ui';
-import { useSnapshotBlocked } from '@/ui/snapshotGuard';
 
 import { dashpalCopy } from '../../copy';
 import type { ViewReason } from '../../protocol';
@@ -42,8 +41,6 @@ export function StepAim({
 }) {
   const th = useTheme();
   usePreventScreenCapture('dashpal-aim');
-  // Nor is the theme's fade allowed a snapshot of the app while the picture shows.
-  useSnapshotBlocked('dashpal-aim');
   const refused = status === 'refused';
   const canRetry = refused && reason !== null && AIM_RETRY.includes(reason);
   return (

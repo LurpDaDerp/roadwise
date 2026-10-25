@@ -32,7 +32,7 @@ import { useDemoTheme } from '@/demo/demoStore'; // DEMO
 import { ThemeProvider } from '@/ui';
 import { appearance, useAppearance, type AppearanceChoice } from '@/ui/appearance';
 import { lookFor } from '@/ui/sky/look';
-import { plainBundle, skyBundle, type SkyMood } from '@/ui/sky/palette';
+import { plainBundle, skyBundle } from '@/ui/sky/palette';
 import { appSkyPorts } from '@/ui/sky/ports';
 import { SkyChrome } from '@/ui/sky/SkyChrome';
 import { useSkyMood } from '@/ui/sky/useSkyMood';
@@ -53,12 +53,35 @@ const controller = runtimeController;
 /**
  * The theme every tree of the root wears, from the phone's Appearance choice: the sky (Adaptive),
  * a pinned static look (Light, Dark), or the static look for the phone's own scheme (System, which
- * also hands the keyboard, alerts and maps back to the phone's setting).
+ * also hands the keyboard, alerts and maps back to the phone's setting). The outermost element of
+ * the root on every branch, splash included, and the holder of the sky's own state (the mood, the
+ * phone's scheme): a change of sky re-renders the theme and what wears it, never the root and the
+ * providers under it.
  */
-function RootTheme({ choice, mood, children }: { choice: AppearanceChoice; mood: SkyMood; children: ReactNode }) {
+function RootTheme({ choice: chosen, loaded, children }: { choice: AppearanceChoice; loaded: boolean; children: ReactNode }) {
+  // The sky the theme wears under Adaptive: the sun at the phone's last known position and the
+  // weather there. Read behind the splash once the stored choice is known (the splash waits for it),
+  // so the first frame already has it. Until then, and under a static look, it is off: no position
+  // read and no weather request for the sky (the choice the store holds before its read is only
+  // the default, not the driver's).
+  const liveMood = useSkyMood(appSkyPorts, { enabled: loaded && chosen === 'adaptive' });
+  // DEMO: the demo's cycle or weather warning paints the sky, whatever the look in Settings.
+  const demoTheme = useDemoTheme();
+  const mood = demoTheme?.mood ?? liveMood;
+  const choice = demoTheme ? 'adaptive' : chosen; // DEMO
+  // Under System, the phone's own scheme (the override is handed back, so this reads the phone's).
+  const phoneScheme = useColorScheme() === 'dark' ? 'dark' : 'light';
+  const staticScheme = chosen === 'light' || chosen === 'dark' ? chosen : phoneScheme;
+  // The Live Activity and the Android drive notification wear the same look (`src/drive/displayLook.ts`),
+  // from the moment the choice is known.
+  useEffect(() => {
+    if (!loaded) return;
+    setDisplayLook(lookFor(chosen === 'adaptive' ? skyBundle(liveMood) : plainBundle(staticScheme)));
+  }, [loaded, chosen, liveMood, staticScheme]);
   return (
     <ThemeProvider mood={choice === 'adaptive' ? mood : null} scheme={choice === 'light' || choice === 'dark' ? choice : undefined}>
-      <SkyChrome followSystem={choice === 'system'} />
+      {/* Behind the splash nothing is drawn, so no scheme is forced on the phone yet. */}
+      {children === null ? null : <SkyChrome followSystem={choice === 'system'} />}
       {children}
     </ThemeProvider>
   );
@@ -96,24 +119,6 @@ function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean 
 export default function RootLayout() {
   const { loaded, error } = useAppFonts();
   const { choice, loaded: appearanceLoaded } = useAppearance();
-  // The sky the theme wears under Adaptive: the sun at the phone's last known position and the
-  // weather there. Read behind the splash once the stored choice is known (the splash waits for it),
-  // so the first frame already has it. Until then, and under a static look, it is off: no position
-  // read and no weather request for the sky (the choice the store holds before its read is only
-  // the default, not the driver's).
-  const liveMood = useSkyMood(appSkyPorts, { enabled: appearanceLoaded && choice === 'adaptive' });
-  // DEMO: the demo's cycle or weather warning paints the sky, whatever the look in Settings.
-  const demoTheme = useDemoTheme();
-  const mood = demoTheme?.mood ?? liveMood;
-  // Under System, the phone's own scheme (the override is handed back, so this reads the phone's).
-  const phoneScheme = useColorScheme() === 'dark' ? 'dark' : 'light';
-  const staticScheme = choice === 'light' || choice === 'dark' ? choice : phoneScheme;
-  // The Live Activity and the Android drive notification wear the same look (`src/drive/displayLook.ts`),
-  // from the moment the choice is known.
-  useEffect(() => {
-    if (!appearanceLoaded) return;
-    setDisplayLook(lookFor(choice === 'adaptive' ? skyBundle(liveMood) : plainBundle(staticScheme)));
-  }, [appearanceLoaded, choice, liveMood, staticScheme]);
   const [timedOut, setTimedOut] = useState(false);
   // The record: SQLite opened and migrated, the interrupted drive recovered or adopted, the drive
   // host started, the sync runner started (`src/boot/bootstrap.ts`). The controller owns it: the
@@ -246,39 +251,39 @@ export default function RootLayout() {
     if (ready) void SplashScreen.hideAsync().catch(() => {});
   }, [ready]);
 
-  if (!ready) return null;
+  if (!ready) return <RootTheme choice={choice} loaded={appearanceLoaded}>{null}</RootTheme>;
 
   if (state.status === 'switching') {
     return (
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaProvider>
-          <RootTheme choice={demoTheme ? 'adaptive' : choice} mood={mood}>
+      <RootTheme choice={choice} loaded={appearanceLoaded}>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <SafeAreaProvider>
             <SwitchingAccounts />
-          </RootTheme>
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
+          </SafeAreaProvider>
+        </GestureHandlerRootView>
+      </RootTheme>
     );
   }
 
   if (runtime === null) {
     return (
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaProvider>
-          <RootTheme choice={demoTheme ? 'adaptive' : choice} mood={mood}>
+      <RootTheme choice={choice} loaded={appearanceLoaded}>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <SafeAreaProvider>
             <BootstrapFailed
               retrying={state.status === 'booting'}
               onRetry={() => void controller.ensureRuntime().catch(() => {})}
             />
-          </RootTheme>
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
+          </SafeAreaProvider>
+        </GestureHandlerRootView>
+      </RootTheme>
     );
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <RootTheme choice={demoTheme ? 'adaptive' : choice} mood={mood}>
+    <RootTheme choice={choice} loaded={appearanceLoaded}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaProvider>
           <QueryClientProvider client={runtime.queryClient}>
             <DataProvider db={runtime.db}>
               <DriveProvider host={runtime.drive}>
@@ -310,8 +315,8 @@ export default function RootLayout() {
               </DriveProvider>
             </DataProvider>
           </QueryClientProvider>
-        </RootTheme>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    </RootTheme>
   );
 }

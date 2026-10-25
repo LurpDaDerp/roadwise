@@ -1,48 +1,53 @@
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { useEffect } from 'react';
+import { act, render, screen } from '@testing-library/react-native';
+import React, { useEffect } from 'react';
 import { Text } from 'react-native';
-import { captureRef } from 'react-native-view-shot';
-
-import { useSnapshotBlocked } from '@/ui/snapshotGuard';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { SKY_BLEND_MS, ThemeProvider, useTheme, type Theme } from '@/ui/theme';
 import { plainBundle, skyBundle, type SkyMood } from '@/ui/sky/palette';
+import { SkyBackdrop } from '@/ui/sky/SkyBackdrop';
 import { CLEAR } from '@/ui/sky/weather';
-
-jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn() }));
-const capture = captureRef as jest.Mock;
 
 const DAY: SkyMood = { phase: 'day', glow: 0, weather: CLEAR };
 const NIGHT: SkyMood = { phase: 'night', glow: 0, weather: CLEAR };
 const RAIN_DAY: SkyMood = { phase: 'day', glow: 0, weather: { kind: 'rain', intensity: 'moderate' } };
 
 let seen: Theme | null = null;
-function Probe() {
+let renders = 0;
+// Memoised, as the app's screens are below the root: it renders only when the theme changes.
+const Probe = React.memo(function Probe() {
   const t = useTheme();
+  renders += 1;
   useEffect(() => {
     seen = t;
   });
   return <Text>{t.colors.bg}</Text>;
-}
+});
 
+// The sky behind the tabs, still (no weather loops), so only the change of sky can be fading.
 const themed = (mood: SkyMood | null, extra: { scheme?: 'light' | 'dark'; reduceMotion?: boolean } = {}) => (
-  <ThemeProvider mood={mood} {...extra}>
-    <Probe />
-  </ThemeProvider>
+  <SafeAreaProvider>
+    <ThemeProvider mood={mood} {...extra}>
+      <SkyBackdrop active={false} />
+      <Probe />
+    </ThemeProvider>
+  </SafeAreaProvider>
 );
 
 beforeEach(() => {
   jest.useFakeTimers();
   seen = null;
-  capture.mockReset().mockResolvedValue('data:image/jpg;base64,AAAA');
+  renders = 0;
 });
 afterEach(() => {
   jest.useRealTimers();
+  jest.restoreAllMocks();
 });
 
-// The snapshot is hidden from screen readers, so the queries must look at hidden elements too.
+// The sky is hidden from screen readers, so the queries must look at hidden elements too.
 const HIDDEN = { includeHiddenElements: true };
-const veil = () => screen.getByTestId('theme-veil', HIDDEN);
+const fading = () => screen.queryAllByTestId('sky-fading', HIDDEN)[0] ?? null;
+const grounds = () => screen.getAllByTestId('sky-ground', HIDDEN).map((g) => (g.props.style as { backgroundColor: string }[])[1]?.backgroundColor);
 
 const tick = async (ms: number) => {
   await act(async () => {
@@ -50,92 +55,87 @@ const tick = async (ms: number) => {
   });
 };
 
-test('the first sky lands at once; a later change is one switch under a snapshot of the old look that fades out, light to dark included', async () => {
+test('the first sky lands at once; a later change is one switch of the whole palette, as a transition, while the sky fades to it on the UI thread', async () => {
+  const transition = jest.spyOn(React, 'startTransition');
   const view = await render(themed(DAY));
   const day = skyBundle(DAY);
   const night = skyBundle(NIGHT);
   expect(seen!.colors.bg).toBe(day.colors.bg);
   expect(seen!.scheme).toBe('light');
+  expect(fading()).toBeNull();
   await tick(2000);
+  expect(transition).not.toHaveBeenCalled();
 
+  renders = 0;
   await view.rerender(themed(NIGHT));
   await tick(0);
-  // The old look was captured and is on screen; the new one waits for the image to be drawn.
-  expect(capture).toHaveBeenCalledTimes(1);
-  expect(veil()).toBeOnTheScreen();
-  expect(seen!.colors.bg).toBe(day.colors.bg);
-  await fireEvent(veil(), 'load');
-  // One switch: the new palette is whole at once, never a blend of the two.
+  // One switch, in a transition that yields to every touch: the new palette is whole at once,
+  // never a blend of the two, and the app renders it once.
+  expect(transition).toHaveBeenCalledTimes(1);
   expect(seen!.colors.bg).toBe(night.colors.bg);
   expect(seen!.scheme).toBe('dark');
   expect(seen!.mood).toEqual(NIGHT);
-  const renders = seen;
-  await tick(SKY_BLEND_MS * 0.5);
-  expect(seen).toBe(renders);
+  expect(renders).toBe(1);
+  // The sky holds the old ground under the new one fading in; nothing lies over the app.
+  expect(fading()).toBeOnTheScreen();
+  expect(grounds()).toEqual([day.colors.bg, night.colors.bg]);
+  // The fade costs the app no render.
   await tick(SKY_BLEND_MS);
-  expect(screen.queryByTestId('theme-veil', HIDDEN)).toBeNull();
-  expect(seen!.colors.bg).toBe(night.colors.bg);
+  expect(renders).toBe(1);
+  expect(fading()).toBeNull();
+  expect(grounds()).toEqual([night.colors.bg]);
 });
 
-test('a snapshot that cannot be taken, is too slow or will not draw lands the new sky at once', async () => {
-  const view = await render(themed(DAY));
-  await tick(2000);
-  capture.mockRejectedValueOnce(new Error('no native module'));
-  await view.rerender(themed(NIGHT));
-  await tick(0);
-  expect(seen!.colors.bg).toBe(skyBundle(NIGHT).colors.bg);
-  expect(screen.queryByTestId('theme-veil', HIDDEN)).toBeNull();
-
-  capture.mockReturnValueOnce(new Promise(() => {}));
-  await view.rerender(themed(DAY));
-  await tick(1000);
-  expect(seen!.colors.bg).toBe(skyBundle(DAY).colors.bg);
-
-  await view.rerender(themed(NIGHT));
-  await tick(0);
-  expect(veil()).toBeOnTheScreen();
-  await tick(1100);
-  expect(seen!.colors.bg).toBe(skyBundle(NIGHT).colors.bg);
-});
-
-test('Reduce Motion lands a new sky at once, without a snapshot', async () => {
+test('Reduce Motion lands a new sky at once, the sky included', async () => {
   const view = await render(themed(DAY, { reduceMotion: true }));
   await tick(2000);
   await view.rerender(themed(NIGHT, { reduceMotion: true }));
-  await tick(0);
-  expect(capture).not.toHaveBeenCalled();
   expect(seen!.colors.bg).toBe(skyBundle(NIGHT).colors.bg);
+  expect(fading()).toBeNull();
+  expect(grounds()).toEqual([skyBundle(NIGHT).colors.bg]);
 });
 
-test('an equal mood in a new object does not fade; a weather change does', async () => {
+test('an equal mood in a new object changes nothing; a weather change does', async () => {
   const view = await render(themed(DAY));
   await tick(2000);
   const before = seen;
+  renders = 0;
   await view.rerender(themed({ ...DAY, weather: { ...CLEAR } }));
   await tick(100);
-  expect(seen!.colors).toBe(before!.colors);
-  expect(capture).not.toHaveBeenCalled();
+  expect(seen).toBe(before);
+  expect(fading()).toBeNull();
 
   await view.rerender(themed(RAIN_DAY));
   await tick(0);
-  await fireEvent(veil(), 'load');
   expect(seen!.colors.accent).toBe(skyBundle(RAIN_DAY).colors.accent);
+  expect(fading()).toBeOnTheScreen();
 });
 
-test('a new sky while one is fading drops the snapshot and starts again from what is on screen', async () => {
+test("the phone's scheme flipping under the sky (the sky sets it itself) starts no second change", async () => {
+  const rn = jest.requireActual<typeof import('react-native')>('react-native');
+  const spy = jest.spyOn(rn, 'useColorScheme').mockReturnValue('light');
   const view = await render(themed(DAY));
   await tick(2000);
   await view.rerender(themed(NIGHT));
-  await tick(0);
-  await fireEvent(veil(), 'load');
-  await tick(500);
-  capture.mockResolvedValueOnce('data:image/jpg;base64,BBBB');
+  const after = seen;
+  renders = 0;
+  spy.mockReturnValue('dark');
+  await view.rerender(themed(NIGHT));
+  expect(seen).toBe(after);
+  expect(renders).toBe(0);
+  // The fade under way is left alone.
+  expect(grounds()).toEqual([skyBundle(DAY).colors.bg, skyBundle(NIGHT).colors.bg]);
+});
+
+test('a new sky while one is fading starts again from the one fading in', async () => {
+  const view = await render(themed(DAY));
+  await tick(2000);
+  await view.rerender(themed(NIGHT));
   await view.rerender(themed(RAIN_DAY));
-  await tick(0);
-  expect(capture).toHaveBeenCalledTimes(2);
-  expect(screen.getAllByTestId('theme-veil', HIDDEN)).toHaveLength(1);
-  await fireEvent(veil(), 'load');
   expect(seen!.colors.accent).toBe(skyBundle(RAIN_DAY).colors.accent);
+  expect(grounds()).toEqual([skyBundle(NIGHT).colors.bg, skyBundle(RAIN_DAY).colors.bg]);
+  await tick(SKY_BLEND_MS);
+  expect(grounds()).toEqual([skyBundle(RAIN_DAY).colors.bg]);
 });
 
 test('a pinned scheme switches at once and ignores the mood', async () => {
@@ -148,7 +148,7 @@ test('a pinned scheme switches at once and ignores the mood', async () => {
     </ThemeProvider>
   );
   expect(seen!.scheme).toBe('dark');
-  expect(capture).not.toHaveBeenCalled();
+  expect(fading()).toBeNull();
 });
 
 test('a switch from the sky to a static look lands at once, and back to the sky at once too, even after the sky had settled', async () => {
@@ -163,13 +163,12 @@ test('a switch from the sky to a static look lands at once, and back to the sky 
   expect(seen!.colors.bg).toBe(skyBundle(NIGHT).colors.bg);
   expect(seen!.sky).toEqual(skyBundle(NIGHT).sky);
   expect(seen!.mood).toEqual(NIGHT);
-  expect(capture).not.toHaveBeenCalled();
+  expect(fading()).toBeNull();
   // Once back on the sky, a later change of sky fades again.
   await tick(2000);
   await view.rerender(themed(DAY));
   await tick(0);
-  expect(capture).toHaveBeenCalledTimes(1);
-  expect(veil()).toBeOnTheScreen();
+  expect(fading()).toBeOnTheScreen();
 });
 
 test("the theme tells the driving screen its night: left to the sun under the sky, Light by day and Dark by night in a static look, the phone's scheme under System", async () => {
@@ -211,30 +210,3 @@ test("the theme tells the driving screen its night: left to the sun under the sk
   spy.mockRestore();
 });
 
-test('the snapshot is held in memory (a data uri, never a file), and none is taken while a screen that must not be copied is up', async () => {
-  function Aim() {
-    useSnapshotBlocked('test-aim');
-    return null;
-  }
-  const view = await render(themed(DAY));
-  await tick(2000);
-  await view.rerender(themed(NIGHT));
-  await tick(0);
-  expect(capture).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ result: 'data-uri' }));
-  await fireEvent(veil(), 'load');
-  await tick(SKY_BLEND_MS + 100);
-
-  capture.mockClear();
-  const guarded = (mood: SkyMood) => (
-    <ThemeProvider mood={mood}>
-      <Probe />
-      <Aim />
-    </ThemeProvider>
-  );
-  await view.rerender(guarded(NIGHT));
-  await view.rerender(guarded(DAY));
-  await tick(0);
-  expect(capture).not.toHaveBeenCalled();
-  expect(screen.queryByTestId('theme-veil', HIDDEN)).toBeNull();
-  expect(seen!.colors.bg).toBe(skyBundle(DAY).colors.bg);
-});

@@ -20,8 +20,9 @@ import Svg, { Defs, Ellipse, RadialGradient, Rect, Stop } from 'react-native-svg
 import { relativeLuminance } from '../contrast';
 import { useTheme } from '../theme';
 import { opaque, parseColor, withAlpha } from './color';
-import type { SkyMood } from './palette';
+import type { SkyColors, SkyMood } from './palette';
 import { useSkyOffset } from './scroll';
+import { SkyFade } from './SkyFade';
 import type { WeatherIntensity, WeatherKind } from './weather';
 
 /** How much of the window the painted sky covers, from the top, before it has faded into the page. */
@@ -56,7 +57,8 @@ export const STORM_WASH = { gapMs: 8000, upMs: 700, downMs: 1400 } as const;
  * - It scrolls with the tab in front (see `./scroll`): the band moves up as the content does, so
  *   page-ink text that rests below the fade never rides up onto the sky. A fixed strip of the
  *   sky's top stays under the status bar, so its light icons always sit on the sky.
- * - Every loop runs on the UI thread; nothing re-renders React per frame.
+ * - Every loop runs on the UI thread; nothing re-renders React per frame. A change of sky fades the
+ *   ground, the band and the glow to the new sky on the UI thread too (`SkyFade`).
  */
 export function SkyBackdrop({
   height,
@@ -79,22 +81,32 @@ export function SkyBackdrop({
   const insets = useSafeAreaInsets();
   const offset = useSkyOffset();
   const follow = useAnimatedStyle(() => ({ transform: [{ translateY: offset ? -Math.max(0, offset.value) : 0 }] }));
+  // What a change of sky fades between: the bundles are cached, so an equal sky is the same object.
+  const paint = useMemo<Paint>(() => ({ sky: s, bg: t.colors.bg }), [s, t.colors.bg]);
   return (
     <View
       testID="sky-backdrop"
       pointerEvents="none"
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
-      style={[StyleSheet.absoluteFill, { backgroundColor: t.colors.bg }]}
+      style={StyleSheet.absoluteFill}
     >
+      <SkyFade look={paint} paint={(p) => <View testID="sky-ground" style={[StyleSheet.absoluteFill, { backgroundColor: p.bg }]} />} />
       <Animated.View testID="sky-band" style={[StyleSheet.absoluteFill, follow]}>
-        <Painted height={h} />
-        <Glow />
+        <SkyFade
+          look={paint}
+          paint={(p) => (
+            <>
+              <Painted paint={p} height={h} />
+              <Glow sky={p.sky} />
+            </>
+          )}
+        />
         {t.mood && active ? <Ambient mood={t.mood} height={h} still={t.reduceMotion} /> : null}
       </Animated.View>
       {insets.top > 0 ? (
         <View testID="sky-status-strip" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, overflow: 'hidden' }}>
-          <Painted height={h} />
+          <SkyFade look={paint} paint={(p) => <Painted paint={p} height={h} />} />
         </View>
       ) : null}
       {onTop ? <StatusBar style={lightBar ? 'light' : 'dark'} animated /> : null}
@@ -102,14 +114,16 @@ export function SkyBackdrop({
   );
 }
 
+/** One sky as the backdrop paints it: its colours and the page ground it fades into. */
+type Paint = { sky: SkyColors; bg: string };
+
 /** The painted gradient (backdrop stops, horizon, page ground) and the cloud cover over it. */
-function Painted({ height }: { height: number }) {
-  const t = useTheme();
-  const s = t.sky;
+function Painted({ paint, height }: { paint: Paint; height: number }) {
+  const s = paint.sky;
   return (
     <>
       <LinearGradient
-        colors={[s.backdrop[0], s.backdrop[1], s.backdrop[2], s.horizon, t.colors.bg]}
+        colors={[s.backdrop[0], s.backdrop[1], s.backdrop[2], s.horizon, paint.bg]}
         locations={SKY_LOCATIONS}
         style={{ position: 'absolute', top: 0, left: 0, right: 0, height }}
       />
@@ -124,12 +138,11 @@ function Painted({ height }: { height: number }) {
 }
 
 /** The sun's soft glow (or the moon and its glow), in the top-right corner behind the avatar. */
-function Glow() {
-  const t = useTheme();
+function Glow({ sky }: { sky: SkyColors }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const halo = parseColor(t.sky.halo);
-  const disc = parseColor(t.sky.disc);
+  const halo = parseColor(sky.halo);
+  const disc = parseColor(sky.disc);
   if (halo.a <= 0 && disc.a <= 0) return null;
   const size = Math.min(440, width * 1.1);
   const haloRgb = `rgb(${halo.r}, ${halo.g}, ${halo.b})`;

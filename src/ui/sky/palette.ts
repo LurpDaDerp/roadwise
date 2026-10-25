@@ -17,7 +17,7 @@ import { CLEAR, type SkyWeather, type WeatherKind } from './weather';
  * the sun's glow, cloud and haze, a storm's wash: see {@link skyVeils}). Every
  * other colour that carries text or a mark is repaired to AA against the grounds it sits on, so
  * any mix, and any blend between two of them, stays readable. Pure functions: the provider calls
- * `skyBundle(mood)` and interpolates bundles.
+ * `skyBundle(mood)`, which hands an equal mood the same bundle.
  */
 
 export type SkyMood = {
@@ -388,8 +388,22 @@ function inkColors(
   };
 }
 
-/** The whole theme for a mood. */
+/** The last few moods' bundles, so an equal mood is always the same object and is built once. */
+const moodBundles = new Map<string, SkyBundle>();
+const MOOD_CACHE = 32;
+
+/** The whole theme for a mood; an equal mood gives the same object. */
 export function skyBundle(mood: SkyMood): SkyBundle {
+  const key = `${mood.phase}|${mood.glow}|${mood.weather.kind}|${mood.weather.intensity}`;
+  const hit = moodBundles.get(key);
+  if (hit) return hit;
+  const b = buildSkyBundle(mood);
+  if (moodBundles.size >= MOOD_CACHE) moodBundles.delete(moodBundles.keys().next().value as string);
+  moodBundles.set(key, b);
+  return b;
+}
+
+function buildSkyBundle(mood: SkyMood): SkyBundle {
   const scheme = PHASE_SCHEME[mood.phase];
   const base = tokens.color[scheme];
   const light = scheme === 'light';
