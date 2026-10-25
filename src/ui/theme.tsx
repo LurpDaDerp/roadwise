@@ -3,6 +3,7 @@ import { AccessibilityInfo, Animated, Easing, Image, StyleSheet, useColorScheme,
 import * as Reanimated from 'react-native-reanimated';
 
 import { plainBundle, skyBundle, type SkyBundle, type SkyColors, type SkyMood } from './sky/palette';
+import { snapshotBlocked } from './snapshotGuard';
 import { tokens, type ColorSet, type Elevation, type HudSet, type TypeScale } from './tokens';
 
 // expo-router's testing library swaps in a Reanimated mock without this hook; fall back to the
@@ -81,7 +82,7 @@ const VEIL_LOAD_TIMEOUT_MS = 1000;
 /** The screen as it is now, as an image file's uri, or null when it cannot be taken (no native support, a timeout). */
 type Capture = () => Promise<string | null>;
 
-type Veil = { uri: string; target: SkyBundle };
+type Veil = { id: number; uri: string; target: SkyBundle };
 
 /**
  * `target`, reached by one switch under a fading snapshot of the screen as it was, so a change of
@@ -96,6 +97,8 @@ export function useVeiledBundle(target: SkyBundle, animate: boolean, capture: Ca
   const [shown, setShown] = useState(target);
   const [prev, setPrev] = useState(target);
   const [veil, setVeil] = useState<Veil | null>(null);
+  // Names each snapshot (its uri is the whole image, too long to be a key).
+  const veilCount = useRef(0);
   // A change that is not to be faded lands in the same render (React's "adjust state when a prop
   // changes" pattern), so a pinned scheme never shows a stale frame; any fade in flight is dropped.
   if (prev !== target) {
@@ -111,7 +114,7 @@ export function useVeiledBundle(target: SkyBundle, animate: boolean, capture: Ca
       (uri) => {
         if (!live) return;
         if (uri === null) setShown(target);
-        else setVeil({ uri, target });
+        else setVeil({ id: (veilCount.current += 1), uri, target });
       },
       () => {
         if (live) setShown(target);
@@ -135,7 +138,7 @@ export function useVeiledBundle(target: SkyBundle, animate: boolean, capture: Ca
   const gone = useCallback(() => setVeil(null), []);
   return {
     bundle: shown,
-    veil: veil === null ? null : <ThemeVeil key={veil.uri} uri={veil.uri} landed={landed} onLoad={lands} onDone={gone} />,
+    veil: veil === null ? null : <ThemeVeil key={veil.id} uri={veil.uri} landed={landed} onLoad={lands} onDone={gone} />,
   };
 }
 
@@ -162,9 +165,14 @@ function ThemeVeil({ uri, landed, onLoad, onDone }: { uri: string; landed: boole
   );
 }
 
-/** The root's snapshot through react-native-view-shot, loaded on first use so a missing native module only costs the fade. */
+/**
+ * The root's snapshot through react-native-view-shot, loaded on first use so a missing native module
+ * only costs the fade. It is held in memory as a data uri and never written to a file: a screen
+ * that must not be copied (`snapshotBlocked`, the DashPal aiming picture) gets none, before or after
+ * the capture.
+ */
 function snapshotOf(view: View | null): Promise<string | null> {
-  if (view === null) return Promise.resolve(null);
+  if (view === null || snapshotBlocked()) return Promise.resolve(null);
   return new Promise<string | null>((resolve) => {
     const timer = setTimeout(() => resolve(null), CAPTURE_TIMEOUT_MS);
     const done = (uri: string | null) => {
@@ -174,8 +182,8 @@ function snapshotOf(view: View | null): Promise<string | null> {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
       const { captureRef } = require('react-native-view-shot') as typeof import('react-native-view-shot');
-      captureRef(view, { format: 'jpg', quality: 0.8, result: 'tmpfile' }).then(
-        (uri) => done(typeof uri === 'string' && uri.length > 0 ? (uri.startsWith('/') ? `file://${uri}` : uri) : null),
+      captureRef(view, { format: 'jpg', quality: 0.6, result: 'data-uri' }).then(
+        (uri) => done(typeof uri === 'string' && uri.startsWith('data:') && !snapshotBlocked() ? uri : null),
         () => done(null)
       );
     } catch {

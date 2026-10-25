@@ -3,6 +3,8 @@ import { useEffect } from 'react';
 import { Text } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
+import { useSnapshotBlocked } from '@/ui/snapshotGuard';
+
 import { SKY_BLEND_MS, ThemeProvider, useTheme, type Theme } from '@/ui/theme';
 import { plainBundle, skyBundle, type SkyMood } from '@/ui/sky/palette';
 import { CLEAR } from '@/ui/sky/weather';
@@ -32,7 +34,7 @@ const themed = (mood: SkyMood | null, extra: { scheme?: 'light' | 'dark'; reduce
 beforeEach(() => {
   jest.useFakeTimers();
   seen = null;
-  capture.mockReset().mockResolvedValue('file:///old-look.jpg');
+  capture.mockReset().mockResolvedValue('data:image/jpg;base64,AAAA');
 });
 afterEach(() => {
   jest.useRealTimers();
@@ -127,7 +129,7 @@ test('a new sky while one is fading drops the snapshot and starts again from wha
   await tick(0);
   await fireEvent(veil(), 'load');
   await tick(500);
-  capture.mockResolvedValueOnce('file:///mid-fade.jpg');
+  capture.mockResolvedValueOnce('data:image/jpg;base64,BBBB');
   await view.rerender(themed(RAIN_DAY));
   await tick(0);
   expect(capture).toHaveBeenCalledTimes(2);
@@ -207,4 +209,32 @@ test("the theme tells the driving screen its night: left to the sun under the sk
   expect(seen!.scheme).toBe('light');
   expect(seen!.hudNight).toBe(false);
   spy.mockRestore();
+});
+
+test('the snapshot is held in memory (a data uri, never a file), and none is taken while a screen that must not be copied is up', async () => {
+  function Aim() {
+    useSnapshotBlocked('test-aim');
+    return null;
+  }
+  const view = await render(themed(DAY));
+  await tick(2000);
+  await view.rerender(themed(NIGHT));
+  await tick(0);
+  expect(capture).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ result: 'data-uri' }));
+  await fireEvent(veil(), 'load');
+  await tick(SKY_BLEND_MS + 100);
+
+  capture.mockClear();
+  const guarded = (mood: SkyMood) => (
+    <ThemeProvider mood={mood}>
+      <Probe />
+      <Aim />
+    </ThemeProvider>
+  );
+  await view.rerender(guarded(NIGHT));
+  await view.rerender(guarded(DAY));
+  await tick(0);
+  expect(capture).not.toHaveBeenCalled();
+  expect(screen.queryByTestId('theme-veil', HIDDEN)).toBeNull();
+  expect(seen!.colors.bg).toBe(skyBundle(DAY).colors.bg);
 });
