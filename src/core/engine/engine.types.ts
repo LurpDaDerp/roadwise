@@ -109,8 +109,6 @@ export interface TripSession {
   startedAt: number;
   /** How the drive began. */
   origin: DriveOrigin;
-  /** How many times a continuation re-opened this trip (`src/drive/continuation.ts`). Local only. */
-  continuations: number;
   /** Where `startedAt` came from; null for a drive rebuilt from a trip row that does not say. */
   startSource: StartSource | null;
   /** The place the drive started when it is not its first row (the parked spot native fell back to), else null. */
@@ -359,8 +357,7 @@ export type EngineEvent =
       startPlace?: { lat: number; lng: number } | null;
     }
   /**
-   * A row. `replay`: one taken in again or late (a native journal drained, a Start-card drive's rows
-   * moved into the held drive it re-opens): its alerts are told (the host plays nothing for them)
+   * A row. `replay`: one taken in again or late (a native journal drained): its alerts are told (the host plays nothing for them)
    * but never shown (`lastAlert`) or shaken (`lastShake`), as old news. `unseen`: one taken in with
    * RoadWise not in front: its alerts are told (the host plays nothing for them) but never shown or
    * shaken either, so nothing flashes when the driver comes back.
@@ -386,7 +383,7 @@ export type EngineEvent =
   | { type: 'release'; ts: number }
   /** The host's one timer: the automatic end (`autoEndAt`) may have passed with no row. */
   | { type: 'tick'; ts: number }
-  /** Continue a drive the previous process was recording (or a re-opened one). Applied only while idle. */
+  /** Continue a drive the previous process was recording. Applied only while idle. */
   | { type: 'adopt'; trip: AdoptedTrip; ts: number };
 
 export interface Engine {

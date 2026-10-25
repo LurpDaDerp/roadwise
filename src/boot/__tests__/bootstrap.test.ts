@@ -82,7 +82,7 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
 test('a cold launch: migrates, records the owner, boots the host idle, starts the runner; nothing is armed or started', async () => {
   const d = deps();
   const rt = await bootstrapApp(d.deps);
-  expect(rt.schemaVersion).toBe(11);
+  expect(rt.schemaVersion).toBe(12);
   expect(rt.owner).toBe('first');
   expect(await readDeviceOwner(db)).toBe('user-1');
   expect(rt.drive.snapshot().status).toBe('idle');
@@ -408,7 +408,7 @@ test('a plain sign-out takes the DashPal events, boots and coverage with the dri
   await rt.stop();
 });
 
-test('flushBeforeSignOut first makes a held upload due: no drive continues after a sign-out', async () => {
+test('flushBeforeSignOut first makes a waiting upload due: it goes while the session can still send it', async () => {
   const d = deps();
   const rt = await bootstrapApp(d.deps);
   await db.execute(

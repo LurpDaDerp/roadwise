@@ -53,13 +53,10 @@ test('insertMany is all or nothing and refuses an unknown trip explicitly', asyn
   expect(await events.listByTrip('a')).toEqual([]);
 });
 
-test('update settles a dispute; reparent moves a merged drive’s events', async () => {
+test('update settles a dispute', async () => {
   await events.insert({ id: 'e1', client_trip_id: 'b', type: 'hard_corner', tier: 'severe', started_at: T0 });
   await events.update('e1', { dispute_status: 'accepted', status: 'removed' });
   expect(await events.get('e1')).toMatchObject({ dispute_status: 'accepted', status: 'removed' });
-  expect(await events.reparent('b', 'a')).toBe(1);
-  expect((await events.listByTrip('a')).map((e) => e.id)).toEqual(['e1']);
-  await expect(events.reparent('a', 'nope')).rejects.toBeInstanceOf(MissingTripError);
 });
 
 test('removeByTrip', async () => {

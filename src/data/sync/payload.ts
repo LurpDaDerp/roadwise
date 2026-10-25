@@ -471,11 +471,11 @@ const RatingWireSchema = z.object({
 export const FinalizeTripResponseSchema = z.object({
   tripId: z.uuid(),
   clientTripId: z.uuid(),
-  /** clientTripId of the drive this upload was merged into. */
+  /** Always null from this server; an older server's answer may name the drive it joined this upload into. */
   mergedInto: z.uuid().nullable(),
   scored: z.boolean(),
   reason: z.enum(['too_short', 'spoofed', 'implausible']).nullable(),
-  /** Every event the stored drive keeps (the union's on a merge): the phone drops a DashPal event the server did not keep. */
+  /** Every event the stored drive keeps: the phone drops a DashPal event the server did not keep. */
   eventIds: z.array(z.uuid()),
   rating: RatingWireSchema,
   /** Weekly goals this drive completed. */

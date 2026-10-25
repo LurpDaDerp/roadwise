@@ -37,7 +37,6 @@ export type SummaryViewProps = {
   notDrivingLeft: number | null;
   now: number;
   onBack: () => void;
-  onOpenDrive: (clientTripId: string) => void;
   onReport: (eventId: string, reason: Exclude<ReportReason, 'not_driving'>) => Promise<void>;
   onNotDriving: () => Promise<void>;
 };
@@ -54,8 +53,7 @@ function StateBlock({ title, body, testID }: { title: string; body: string; test
 }
 
 /** What the score card says when the drive has no score. */
-function StateHead({ state, drive, units, onOpenDrive }: { state: Exclude<ScoreState, { kind: 'score' }>; drive: LocalDrive; units: Units; onOpenDrive: (id: string) => void }) {
-  const t = useTheme();
+function StateHead({ state, drive, units }: { state: Exclude<ScoreState, { kind: 'score' }>; drive: LocalDrive; units: Units }) {
   const s = recapCopy.states;
   switch (state.kind) {
     case 'too_short':
@@ -66,15 +64,6 @@ function StateHead({ state, drive, units, onOpenDrive }: { state: Exclude<ScoreS
       return <StateBlock testID="state-not-driving" title={s.notDriving.title} body={s.notDriving.body} />;
     case 'recording':
       return <StateBlock testID="state-recording" title={s.recording.title} body={s.recording.body} />;
-    case 'merged':
-      return (
-        <View style={{ gap: t.space.md, flexShrink: 1 }} testID="state-merged">
-          <StateBlock testID="state-merged-text" title={s.merged.title} body={s.merged.body} />
-          {state.into ? (
-            <Button label={s.merged.action} variant="secondary" size="sm" onPress={() => onOpenDrive(state.into!)} style={{ alignSelf: 'flex-start' }} />
-          ) : null}
-        </View>
-      );
   }
 }
 
@@ -84,7 +73,7 @@ function StateHead({ state, drive, units, onOpenDrive }: { state: Exclude<ScoreS
  * score, distance and time in the tier's colour on a soft wash of it) with Share right beside it,
  * and the drive's events under it. "Wasn't driving" sits in a fixed footer.
  */
-export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack, onOpenDrive, onReport, onNotDriving }: SummaryViewProps) {
+export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack, onReport, onNotDriving }: SummaryViewProps) {
   const t = useTheme();
   const units = useUnits();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -104,7 +93,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
   const reportEvent = events.find((e) => e.id === reporting) ?? null;
   const notDrivingOk = canMarkNotDriving(drive, now) && notDrivingLeft !== 0;
   const refusal = notDrivingRefusal(drive);
-  // The events list for a drive that is kept; a drive in progress, merged away or marked has none to work on.
+  // The events list for a drive that is kept; a drive in progress or marked has none to work on.
   const listed = state.kind === 'score' || state.kind === 'too_short' || state.kind === 'not_scored';
   const wash = tier !== null && score !== null ? meritWash(tier, t.scheme) : null;
   const surface = opaque(t.colors.surface);
@@ -179,7 +168,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
           ) : (
             <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.md }}>
               <View style={{ flex: 1, minWidth: 0 }}>
-                <StateHead state={state} drive={drive} units={units} onOpenDrive={onOpenDrive} />
+                <StateHead state={state} drive={drive} units={units} />
               </View>
               {share}
             </View>

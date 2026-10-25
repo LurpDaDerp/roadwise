@@ -885,9 +885,9 @@ export async function endSession(runtime: Pick<AppRuntime, 'drive'>): Promise<vo
   await runtime.drive.sessionEnded().catch(() => {});
 }
 
-/** Before the session ends at sign-out: one drain while the session can still send (held uploads too). */
+/** Before the session ends at sign-out: one drain while the session can still send (waiting uploads too). */
 export async function flushBeforeSignOut(runtime: AppRuntime): Promise<{ sent: number; left: number }> {
-  // A held upload (the 5 min continuation window) goes now: no drive continues after a sign-out.
+  // An upload not yet tried (it waited for a session or a busy database) goes now, while it still can.
   await createQueueRepo(runtime.db).makeUntriedDue(runtime.now());
   const result = await runtime.runner.drainOnce();
   return { sent: result.done, left: await runtime.runner.owed() };

@@ -7,14 +7,13 @@ import type { EventType, Tier } from '@scoring';
 export type Flag = 0 | 1;
 
 /** `trips.status` (plan §10 `DriveStatus`). */
-export type TripStatus = 'recording' | 'pending' | 'scored' | 'unscored' | 'not_driving' | 'merged' | 'failed';
+export type TripStatus = 'recording' | 'pending' | 'scored' | 'unscored' | 'not_driving' | 'failed';
 export const TRIP_STATUSES: readonly TripStatus[] = [
   'recording',
   'pending',
   'scored',
   'unscored',
   'not_driving',
-  'merged',
   'failed',
 ];
 
@@ -69,7 +68,6 @@ export interface TripRow {
   clean: Flag | null;
   counts_json: string | null;
   reason: string | null;
-  merged_into: string | null;
   /** The server's finalize response (v4), verbatim. */
   result_json: string | null;
   server_id: string | null;
@@ -87,9 +85,7 @@ export interface TripRow {
   origin: DriveOrigin;
   /** 1: the in-drive "Not driving?" ran out of its 2-minute budget, so "Wasn't driving" is never offered. */
   not_driving_expired: Flag;
-  /** Times the drive was re-opened because the car set off again within the upload hold. Local only. */
-  continuations: number;
-  /** When the end was decided (epoch ms); the upload hold and a re-open run from it. Null while recording. */
+  /** When the end was decided (epoch ms). Null while recording. */
   finalized_at: number | null;
   /** Where the start came from; null on a drive started before it was recorded, or restored. */
   start_source: StartSource | null;

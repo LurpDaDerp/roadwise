@@ -132,7 +132,7 @@ test('a start carries native’s id, the origin, where the start came from and t
   const h = harness();
   await h.engine.dispatch({ type: 'start', ts: T0 + 0.4, clientTripId: 'native-id', origin: 'auto', continues: false, startSource: 'motion', startPlace: { lat: 1, lng: 2 } });
   expect(h.engine.snapshot()).toMatchObject({ status: 'recording', clientTripId: 'native-id', origin: 'auto', startedAt: T0 });
-  expect(h.checkpoints[0]).toMatchObject({ clientTripId: 'native-id', origin: 'auto', startSource: 'motion', startPlace: { lat: 1, lng: 2 }, continuations: 0 });
+  expect(h.checkpoints[0]).toMatchObject({ clientTripId: 'native-id', origin: 'auto', startSource: 'motion', startPlace: { lat: 1, lng: 2 } });
   await h.engine.dispatch({ type: 'end', ts: T0 + 1000 });
   expect(h.engine.snapshot().origin).toBeNull();
   await h.engine.dispatch({ type: 'start', ts: T0 + 2000, origin: 'manual', continues: false });
@@ -294,7 +294,7 @@ describe('the warm-up in a live drive (Start Drive at any speed)', () => {
     expect(s.events.find((e) => e.type === 'speeding')).toMatchObject({ startedAt: T0 + 5000, durationS: 13 });
   });
 
-  test('a continuation (continues) that starts stopped has no warm-up', async () => {
+  test('a drive that continues the one before (continues) and starts stopped has no warm-up', async () => {
     const s = await drive(true, [...at(0, 2, { speed: 0 }), ...at(2, 3, { speed: mph(35) }), ...at(5, 3, { speed: mph(35), ...handled }), ...at(8, 5, { speed: mph(35) })]);
     expect(s.warmup).toMatchObject({ continues: true, endsAt: T0 });
   });
@@ -580,7 +580,7 @@ describe('speeding alerts and the event shake', () => {
     expect(gaps.every((g) => g === 2)).toBe(true);
   });
 
-  test('a replayed row (a journal drained, rows moved into a re-opened drive) tells its alerts but never shows or shakes them: a hard brake and speeding alike', async () => {
+  test('a replayed row (a journal drained) tells its alerts but never shows or shakes them: a hard brake and speeding alike', async () => {
     const steady = { aLonMax: 0.02, aLonMin: -0.02 };
     const at = (fromS: number, n: number, o: Partial<FeatureRow>) => seq([n, (i) => ({ ...o, ts: T0 + 31_000 + (fromS + i) * 1000 })]);
     // 60 on a 35 for 5 rows (over the line), then a hard brake to 50.

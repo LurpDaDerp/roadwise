@@ -27,8 +27,7 @@ export type ScoreState =
   | { kind: 'recording' }
   | { kind: 'too_short' }
   | { kind: 'not_scored' }
-  | { kind: 'not_driving' }
-  | { kind: 'merged'; into: string | null };
+  | { kind: 'not_driving' };
 
 /** Whether a drive has a score to show, before its events are read: scored, uploading or not synced yet, and long enough. */
 export type DriveKind = { kind: 'scorable'; notSynced: boolean } | Exclude<ScoreState, { kind: 'score' }>;
@@ -38,8 +37,6 @@ export function driveKind(d: LocalDrive): DriveKind {
   switch (d.status) {
     case 'recording':
       return { kind: 'recording' };
-    case 'merged':
-      return { kind: 'merged', into: d.mergedInto };
     case 'not_driving':
       return { kind: 'not_driving' };
     case 'unscored':
@@ -97,8 +94,6 @@ export function stateWord(s: Pick<ScoreState, 'kind'>): string | null {
       return recapCopy.history.words.not_scored;
     case 'not_driving':
       return recapCopy.history.words.not_driving;
-    case 'merged':
-      return recapCopy.history.words.merged;
     default:
       return null;
   }

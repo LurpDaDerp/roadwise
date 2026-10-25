@@ -184,7 +184,7 @@ const finiteOrNull = (v: unknown): number | null => (typeof v === 'number' && Nu
  * The recompute job's inputs at `now`: the newest 400 scored drives started in the last 120 days
  * that have a route, and the newest 3 000 events of theirs (`SPOT_READ`)
  * that can make a spot: active, not reported (or reported and turned down), one of the four kinds,
- * with a place. "Wasn't driving", merged, recording, too-short and unscored drives are out.
+ * with a place. "Wasn't driving", recording, too-short and unscored drives are out.
  */
 export async function readSpotInputs(db: Db, now: number): Promise<SpotInputs> {
   const since = now - SPOT_READ.windowDays * DAY_MS;

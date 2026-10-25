@@ -305,10 +305,8 @@ export const REMOVAL_V10: readonly string[] = [
  * - `origin`: how the drive started, noticed on its own (`auto`) or a Start tap (`manual`);
  * - `not_driving_expired`: 1 once the in-drive "Not driving?" ran out of its 2-minute budget (no
  *   "Wasn't driving" later);
- * - `continuations`: how many times the drive was re-opened because the car set off again near
- *   where it stopped while its upload was still held (local only);
- * - `finalized_at`: when the end was decided (epoch ms); the upload hold and the re-open window run
- *   from it;
+ * - `continuations`: a local counter, always 0, that nothing reads;
+ * - `finalized_at`: when the end was decided (epoch ms);
  * - `start_source`: where the start came from (`trace`: traced back over the rows, `motion`: the
  *   motion history, `wake`: the first row); the start place lives in the existing
  *   `start_lat`/`start_lng`;
@@ -391,4 +389,18 @@ export const SCHEMA_V11: readonly string[] = [
   `UPDATE trips SET counts_json = json_set(counts_json, '$.pickups', (SELECT COUNT(*) FROM trip_events e
        WHERE e.client_trip_id = trips.client_trip_id AND e.status = 'active' AND e.type = 'phone_pickup'))
      WHERE counts_json IS NOT NULL AND json_valid(counts_json) AND json_type(counts_json) = 'object'`,
+];
+
+/**
+ * V12: every drive is a drive of its own. The legacy `merged` rows (a drive the server joined into
+ * the one before it, which holds the union) go with their events, samples and DashPal coverage,
+ * explicitly, since foreign keys may be off in the migration's transaction; the raw DashPal events
+ * stamped with one keep no id of a row that is gone. The table's CHECK still names the status.
+ */
+export const SCHEMA_V12: readonly string[] = [
+  "DELETE FROM trip_events WHERE client_trip_id IN (SELECT client_trip_id FROM trips WHERE status = 'merged')",
+  "DELETE FROM samples WHERE client_trip_id IN (SELECT client_trip_id FROM trips WHERE status = 'merged')",
+  "DELETE FROM dashcam_coverage WHERE client_trip_id IN (SELECT client_trip_id FROM trips WHERE status = 'merged')",
+  "UPDATE dashcam_events SET client_trip_id = NULL WHERE client_trip_id IN (SELECT client_trip_id FROM trips WHERE status = 'merged')",
+  "DELETE FROM trips WHERE status = 'merged'",
 ];

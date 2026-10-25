@@ -28,7 +28,6 @@ const props = (over: Partial<SummaryViewProps> = {}): SummaryViewProps => ({
   notDrivingLeft: 2,
   now: NOW,
   onBack: jest.fn(),
-  onOpenDrive: jest.fn(),
   onReport: jest.fn(async () => undefined),
   onNotDriving: jest.fn(async () => undefined),
   ...over,
@@ -117,20 +116,12 @@ describe('the hero mirrors the share card', () => {
     [{ status: 'unscored', reason: 'too_short', result: null }, 'state-too-short', 'Too short to score', "Drives under 0.5 mi that take under 2 min don't get a score."],
     [{ status: 'pending', reason: 'too_short', result: null }, 'state-too-short', 'Too short to score', "Drives under 0.5 mi that take under 2 min don't get a score."],
     [{ status: 'not_driving' }, 'state-not-driving', 'Marked as not driving', "This drive doesn't count toward your Safety Rating."],
-    [{ status: 'merged', mergedInto: 'z' }, 'state-merged-text', 'Added to your last drive', 'You set off again within 5 minutes, so the two count as one drive.'],
   ] as const)('%o: the state instead of a score, Share still beside it', async (over, id, title, body) => {
     await draw(<SummaryView {...props({ drive: drive(over as never) })} />);
     expect(screen.getByTestId(id)).toHaveTextContent(title, { exact: false });
     expect(screen.getByText(body)).toBeOnTheScreen();
     expect(screen.queryByTestId('summary-facts')).toBeNull();
     expect(screen.getByTestId('share')).toBeOnTheScreen();
-  });
-
-  test('a merged drive opens the one it joined', async () => {
-    const p = props({ drive: drive({ status: 'merged', mergedInto: 'z' }) });
-    await draw(<SummaryView {...p} />);
-    await press(screen.getByText('Open that drive'));
-    expect(p.onOpenDrive).toHaveBeenCalledWith('z');
   });
 
   test('Share opens the card with the same score, tier ink and facts', async () => {
@@ -202,10 +193,10 @@ describe('the events', () => {
     expect(screen.getByTestId('map-highlight-caption')).toHaveTextContent(/isn't on the map/);
   });
 
-  test('a too-short drive still lists its events; a drive in progress, merged or marked lists none', async () => {
+  test('a too-short drive still lists its events; a drive in progress or marked lists none', async () => {
     await draw(<SummaryView {...props({ drive: drive({ status: 'unscored', reason: 'too_short' }) })} />);
     expect(screen.getByTestId('event-e1')).toBeOnTheScreen();
-    for (const over of [{ status: 'recording' }, { status: 'merged', mergedInto: 'z' }, { status: 'not_driving' }] as const) {
+    for (const over of [{ status: 'recording' }, { status: 'not_driving' }] as const) {
       await draw(<SummaryView {...props({ drive: drive(over) })} />);
       expect(screen.queryByTestId('event-list')).toBeNull();
     }

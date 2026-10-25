@@ -73,8 +73,8 @@ describe('finalizeTrip with DashPal facts', () => {
       })
     );
     expect(calls).toEqual([{ trip: { clientTripId: TRIP, startedAt: T0, endedAt: T0 + 1_200_000 }, samples: 1 }]);
-    // The drive's samples stay through its upload hold.
-    expect(await createSamplesRepo(db).count(TRIP)).toBe(1);
+    // The facts were read before the drive's samples went with the finalize.
+    expect(await createSamplesRepo(db).count(TRIP)).toBe(0);
 
     const payload = result.payload!;
     expect(FinalizeTripPayloadV5Schema.safeParse(payload).success).toBe(true);

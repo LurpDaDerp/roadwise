@@ -4,7 +4,7 @@
 //
 // A drive starts only on `start` (the host's confirmation: native noticed driving, or the Start
 // card's waiting session saw 10 mph held 15 s; `ts` is the traced-back start) or `adopt` (a drive
-// the previous process was recording, or a re-opened continuation). It ends on `end` (the
+// the previous process was recording). It ends on `end` (the
 // swipe-to-end, or native's own stop with its cause), by itself once the car has not moved for
 // `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the driver walks away, 10 s
 // after a reported walk began (the report standing 3 s at least) with the car at 3 mph or slower,

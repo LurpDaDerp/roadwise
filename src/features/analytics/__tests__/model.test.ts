@@ -73,13 +73,11 @@ function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     counts: { ...EMPTY_COUNTS },
     result: null,
     reason: null,
-    mergedInto: null,
     syncError: null,
     endCause: null,
     watchedMiles: 0,
     origin: 'manual',
     notDrivingExpired: false,
-    continuations: 0,
     startSource: null,
     exposure: { ...EXPOSURE },
     exposureEstimated: false,
@@ -381,7 +379,7 @@ describe('windows', () => {
   test('scoredSince keeps scored and uploading drives in the window, in order, never a short one', () => {
     const a = drive({ startedAt: 5 });
     const b = drive({ startedAt: 4, status: 'pending' });
-    const c = drive({ startedAt: 3, status: 'merged' });
+    const c = drive({ startedAt: 3, status: 'not_driving' });
     const short = drive({ startedAt: 3, status: 'pending', reason: 'too_short' });
     const d = drive({ startedAt: 1 });
     expect(scoredSince([a, b, c, short, d], 2)).toEqual([a, b]);

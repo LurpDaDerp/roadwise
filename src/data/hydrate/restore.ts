@@ -4,9 +4,8 @@
  * the device does not hold becomes a settled local drive (the server's result) with its events,
  * how it started, whether its "Not driving?" ran out and its counted chances to slip with its phone
  * seconds (absent: they are estimated at read, with none), and a drive the device already holds is
- * left as it is. From/to labels,
- * the end note and the re-open count are not restored (they only ever lived on the old device). An
- * event of a type this build does not know is skipped; the drive is kept.
+ * left as it is. From/to labels and the end note are not restored (they only ever lived on the old
+ * device). An event of a type this build does not know is skipped; the drive is kept.
  *
  * A restore runs to the end once per owner: `RESTORED_AT_KEY` records `{ uid, at }` only after the
  * last page, so one cut short (offline, the app closed) starts again at the next try and fills

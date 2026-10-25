@@ -1,9 +1,9 @@
 /**
  * The two things a user may do to a stored drive (plan §4, §10): report one event, or mark the
  * drive as "wasn't driving". Both update the local rows optimistically to `pending`, queue the
- * request to `trip-actions`, and let the runner resolve them to the server's answer. A drive still
- * in its 5-minute upload hold uploads at once, ahead of the action (the server must hold the drive
- * before it can act on it; acting on the recap rules out a continuation).
+ * request to `trip-actions`, and let the runner resolve them to the server's answer. A drive whose
+ * upload has not gone yet (it waits for a session, or a busy database) is made due at once, ahead
+ * of the action: the server must hold the drive before it can act on it.
  */
 import type { QueryClient } from '@tanstack/react-query';
 
@@ -39,7 +39,7 @@ export async function reportEvent(clientTripId: string, eventId: string, reason:
   const at = now();
   await db.transaction(async (tx) => {
     await events.update(eventId, { dispute_status: 'pending', dispute_reason: reason, dispute_message: null }, tx);
-    // The drive's held upload goes first (the same due time, queued earlier).
+    // The drive's waiting upload goes first (the same due time, queued earlier).
     await createQueueRepo(db).makeDue(finalizeIdempotencyKey(clientTripId), at, tx);
     await enqueueAction(db, { action: 'dispute', clientTripId, eventId, reason }, at, tx);
   });
@@ -61,7 +61,7 @@ export async function markNotDriving(clientTripId: string, deps: DriveActionDeps
   const at = now();
   await db.transaction(async (tx) => {
     await trips.update(clientTripId, { status: 'not_driving' }, at, tx);
-    // The drive's held upload goes first (the same due time, queued earlier).
+    // The drive's waiting upload goes first (the same due time, queued earlier).
     await createQueueRepo(db).makeDue(finalizeIdempotencyKey(clientTripId), at, tx);
     await enqueueAction(db, { action: 'not_driving', clientTripId, previousStatus: trip.status }, at, tx);
   });

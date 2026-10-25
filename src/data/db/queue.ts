@@ -213,8 +213,8 @@ export function createQueueRepo(db: Db) {
 
     /**
      * Items never tried yet (held back only for want of a session, another owner's turn or a busy
-     * database) are due now: a sign-in sends them without waiting out the hold. Items in a retry
-     * back-off keep their time. Returns how many moved.
+     * database) are due now: a sign-in sends them at once. Items in a retry back-off keep their
+     * time. Returns how many moved.
      */
     async makeUntriedDue(now: number = Date.now()): Promise<number> {
       const { changes } = await db.execute(
@@ -225,8 +225,8 @@ export function createQueueRepo(db: Db) {
     },
 
     /**
-     * The held, never-tried item under `idempotencyKey` is due at `at` (no later): a drive the
-     * driver acts on (a report, "Wasn't driving") uploads first. One already due, tried or settled
+     * The never-tried item under `idempotencyKey` is due at `at` (no later): a drive the driver acts
+     * on (a report, "Wasn't driving") uploads first. One already due, tried or settled
      * keeps its time. True when it moved. Given a transaction handle `on`, it joins that transaction.
      */
     async makeDue(idempotencyKey: string, at: number, on: Db = db): Promise<boolean> {
@@ -257,16 +257,6 @@ export function createQueueRepo(db: Db) {
 
     async dropByKey(idempotencyKey: string, on: Db = db): Promise<boolean> {
       const { changes } = await on.execute('DELETE FROM sync_queue WHERE idempotency_key = ?', [idempotencyKey]);
-      return changes > 0;
-    },
-
-    /**
-     * Drop the item under `idempotencyKey` only while it is still held and never tried (`pending`,
-     * no attempt): the guard a re-opened drive takes, in the same transaction as the re-open, so an
-     * upload already claimed or sent is never pulled back. True when it was dropped.
-     */
-    async dropUntried(idempotencyKey: string, on: Db = db): Promise<boolean> {
-      const { changes } = await on.execute("DELETE FROM sync_queue WHERE idempotency_key = ? AND status = 'pending' AND attempts = 0", [idempotencyKey]);
       return changes > 0;
     },
 

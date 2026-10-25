@@ -7,10 +7,9 @@ import { answer, finishedDrive, payloadV3, payloadV4, pickup, speeding, T0, uuid
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import { emitDataChanged } from '@/data/events';
 import { enqueueFinalize } from '@/data/sync/queue';
-import { createSyncRunner, FOREIGN_OWNER_RETRY_MS, joinPolylines, NO_SESSION_RETRY_MS, RETRY_WAKE_MIN_MS } from '@/data/sync/runner';
+import { createSyncRunner, FOREIGN_OWNER_RETRY_MS, NO_SESSION_RETRY_MS, RETRY_WAKE_MIN_MS } from '@/data/sync/runner';
 import { toLocalDrive } from '@/data/queries/rows';
 import { canMarkNotDriving, notDrivingRefusal } from '@/features/drives/summary';
-import { encodePolyline, splitRuns } from '@/lib/polyline';
 
 let db: Db;
 beforeEach(async () => {
@@ -98,15 +97,10 @@ test('enqueueFinalize refuses anything but a valid v5 upload', async () => {
   expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
 });
 
-test('mergedInto: the earlier local drive becomes the union (counters summed, "Not driving?" ran out if it did on either, its own start kept) and this one is hidden as merged', async () => {
-  await finishedDrive(db, uuid(10), { t0: T0, events: [speeding(uuid(510), T0)], origin: 'auto' });
-  await finishedDrive(db, uuid(11), {
-    t0: T0 + 1_400_000,
-    events: [speeding(uuid(511), T0 + 1_400_000)],
-    notDrivingExpired: true,
-    exposure: { slowdowns: 1, speedups: 2, turns: 3, limitS: 400, movingS: 1000, phoneS: 700 },
-    row: { end_cause: 'walking' },
-  });
+test('an answer naming a mergedInto (an older server joined this upload to the drive before) takes the local drive away with its events and samples; the drive before is untouched', async () => {
+  await finishedDrive(db, uuid(10), { t0: T0, events: [speeding(uuid(510), T0)] });
+  await finishedDrive(db, uuid(11), { t0: T0 + 1_400_000, events: [speeding(uuid(511), T0 + 1_400_000)] });
+  await createSamplesRepo(db).appendMany(uuid(11), [{ ts: T0 + 1_400_000, row: {} }]);
   const supabase = createFakeSupabase({
     invoke: ({ body }) => {
       const id = (body as { clientTripId: string }).clientTripId;
@@ -118,47 +112,12 @@ test('mergedInto: the earlier local drive becomes the union (counters summed, "N
   await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   await r.drainOnce();
   const trips = createTripsRepo(db);
-  const first = (await trips.get(uuid(10)))!;
-  const second = (await trips.get(uuid(11)))!;
-  expect(second).toMatchObject({ status: 'merged', merged_into: uuid(10), server_id: uuid(77) });
-  expect(first).toMatchObject({
-    status: 'scored',
-    clean: 0,
-    miles: 22,
-    duration_s: 2400,
-    ended_at: T0 + 1_400_000 + 1_200_000,
-    end_cause: 'walking',
-    origin: 'auto',
-    not_driving_expired: 1,
-    slowdowns: 5,
-    speedups: 7,
-    turns: 6,
-    limit_s: 1300,
-    moving_s: 2100,
-    phone_s: 1700,
-  });
+  expect(await trips.get(uuid(11))).toBeNull();
   expect(await createEventsRepo(db).listByTrip(uuid(11))).toEqual([]);
-  expect(await createEventsRepo(db).listByTrip(uuid(10))).toHaveLength(2);
-  expect(JSON.parse(first.counts_json!).speeding).toBe(2);
-  expect(await samplesOf(uuid(10))).toBe(0);
   expect(await samplesOf(uuid(11))).toBe(0);
-  await r.stop();
-});
-
-test('mergedInto: a leg recorded before the counters leaves the union to be estimated', async () => {
-  await finishedDrive(db, uuid(10), { t0: T0 });
-  await finishedDrive(db, uuid(11), { t0: T0 + 1_400_000, exposure: null });
-  const supabase = createFakeSupabase({
-    invoke: ({ body }) => {
-      const id = (body as { clientTripId: string }).clientTripId;
-      return invokeOk(id === uuid(10) ? response(uuid(10)) : response(uuid(11), { mergedInto: uuid(10) }));
-    },
-  });
-  const r = runner(supabase);
-  await r.start();
-  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
-  await r.drainOnce();
-  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ clean: 1, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null, phone_s: 0 });
+  expect(await trips.get(uuid(10))).toMatchObject({ status: 'scored', miles: 11, server_id: uuid(77) });
+  expect((await createEventsRepo(db).listByTrip(uuid(10))).map((e) => e.id)).toEqual([uuid(510)]);
+  expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
   await r.stop();
 });
 
@@ -178,35 +137,6 @@ async function dashpal(clientTripId: string, id: string, type: 'drowsy' | 'eyes_
     dispute_status: over.dispute_status ?? 'none',
   });
 }
-
-test('mergedInto: a DashPal event the server dropped under the DashPal limits (a drowsy within 10 min of the target’s) is deleted and the counts follow', async () => {
-  await finalized(uuid(10), T0, uuid(510));
-  await finalized(uuid(11), T0 + 1_400_000, uuid(511));
-  await dashpal(uuid(10), uuid(600), 'drowsy', T0 + 1_000_000);
-  await dashpal(uuid(11), uuid(601), 'drowsy', T0 + 1_500_000); // 8.3 min after the target's: dropped
-  await dashpal(uuid(11), uuid(602), 'eyes_off', T0 + 1_600_000);
-  const merged = response(uuid(11), { mergedInto: uuid(10), eventIds: [uuid(510), uuid(600), uuid(511), uuid(602)] });
-  const supabase = createFakeSupabase({
-    invoke: ({ body }) => {
-      const id = (body as { clientTripId: string }).clientTripId;
-      return invokeOk(id === uuid(10) ? response(uuid(10), { eventIds: [uuid(510), uuid(600)] }) : merged);
-    },
-  });
-  const r = runner(supabase);
-  await r.start();
-  await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
-  await r.drainOnce();
-  const events = await createEventsRepo(db).listByTrip(uuid(10));
-  expect(events.map((e) => [e.id, e.type])).toEqual([
-    [uuid(510), 'speeding'],
-    [uuid(600), 'drowsy'],
-    [uuid(602), 'eyes_off'],
-    [uuid(511), 'speeding'],
-  ]);
-  expect(await createEventsRepo(db).get(uuid(601))).toBeNull();
-  expect(JSON.parse((await createTripsRepo(db).get(uuid(10)))!.counts_json!)).toMatchObject({ speeding: 2, drowsy: 1, eyesOff: 1 });
-  await r.stop();
-});
 
 test('every answer: a DashPal event the server did not keep is deleted and the counts follow; a phone-recorded event and one with a report in flight stay; an unscored drive has no clean flag', async () => {
   await finalized(uuid(10), T0, uuid(1));
@@ -232,7 +162,7 @@ test('every answer: a DashPal event the server did not keep is deleted and the c
   await r.stop();
 });
 
-test('a drive re-opened while its answer was on its way is left recording (its own upload follows)', async () => {
+test('a drive whose row reads recording when its answer lands is left as it is', async () => {
   await finalized(uuid(10));
   const supabase = createFakeSupabase({
     invoke: async ({ body }) => {
@@ -318,7 +248,7 @@ test('a report on an event the server does not hold (404 not_found) reads as ref
   await r.stop();
 });
 
-describe('"Wasn’t driving" or a report within the 5 min upload hold (review I5)', () => {
+describe('"Wasn’t driving" or a report before the drive’s upload has gone (review I5)', () => {
   /** A server that holds a drive only once its upload arrived: an action on any other is `not_found`. */
   function server(opts: { uploads?: () => 'ok' | 'down' } = {}) {
     const stored = new Set<string>();
@@ -337,16 +267,16 @@ describe('"Wasn’t driving" or a report within the 5 min upload hold (review I5
     });
   }
 
-  /** The drive as finalize leaves it: upload held 5 min from its finalize. */
-  async function heldDrive(): Promise<number> {
+  /** A finished drive whose upload has not gone yet (it waits, say for a session): due 5 min from its finalize. */
+  async function waitingDrive(): Promise<number> {
     await finalized(uuid(10), T0, uuid(1));
     const item = (await createQueueRepo(db).byKey(`trip:${uuid(10)}`))!;
     await createQueueRepo(db).deferUntil(item.id, item.next_attempt_at + 300_000);
     return item.next_attempt_at;
   }
 
-  test('"Wasn’t driving" a minute after the end: the held upload is due at once and goes first, then the mark lands', async () => {
-    const finalizedAt = await heldDrive();
+  test('"Wasn’t driving" a minute after the end: the waiting upload is due at once and goes first, then the mark lands', async () => {
+    const finalizedAt = await waitingDrive();
     const tap = finalizedAt + 60_000;
     expect(await markNotDriving(uuid(10), { db, now: () => tap })).toBe('queued');
     expect((await createQueueRepo(db).byKey(`trip:${uuid(10)}`))?.next_attempt_at).toBe(tap);
@@ -360,7 +290,7 @@ describe('"Wasn’t driving" or a report within the 5 min upload hold (review I5
   });
 
   test('a report a minute after the end: the upload goes first and the report is settled, never rejected as missing', async () => {
-    const finalizedAt = await heldDrive();
+    const finalizedAt = await waitingDrive();
     const tap = finalizedAt + 60_000;
     expect(await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db, now: () => tap })).toBe('queued');
     const s = server();
@@ -387,8 +317,8 @@ describe('"Wasn’t driving" or a report within the 5 min upload hold (review I5
     });
   }
 
-  test('"Wasn’t driving" in the hold refused for good after the upload answered: back to the upload’s status with the reason, never offered again silently', async () => {
-    const finalizedAt = await heldDrive();
+  test('"Wasn’t driving" before the upload went, refused for good after the upload answered: back to the upload’s status with the reason, never offered again silently', async () => {
+    const finalizedAt = await waitingDrive();
     const tap = finalizedAt + 60_000;
     await markNotDriving(uuid(10), { db, now: () => tap });
     const s = marking(() => functionsHttpError(403, { code: 'no_uses_left' }));
@@ -403,8 +333,8 @@ describe('"Wasn’t driving" or a report within the 5 min upload hold (review I5
     await r.stop();
   });
 
-  test('"Wasn’t driving" in the hold whose mark fails on a blip: the upload’s answer keeps the drive marked while the mark retries, then it lands', async () => {
-    const finalizedAt = await heldDrive();
+  test('"Wasn’t driving" before the upload went, whose mark fails on a blip: the upload’s answer keeps the drive marked while the mark retries, then it lands', async () => {
+    const finalizedAt = await waitingDrive();
     const tap = finalizedAt + 60_000;
     await markNotDriving(uuid(10), { db, now: () => tap });
     let up = false;
@@ -424,7 +354,7 @@ describe('"Wasn’t driving" or a report within the 5 min upload hold (review I5
   });
 
   test('a refusal that comes before the upload’s answer (its first answer lost) survives that answer', async () => {
-    const finalizedAt = await heldDrive();
+    const finalizedAt = await waitingDrive();
     const tap = finalizedAt + 60_000;
     await markNotDriving(uuid(10), { db, now: () => tap });
     let uploads: 'ok' | 'lost' = 'lost';
@@ -442,7 +372,7 @@ describe('"Wasn’t driving" or a report within the 5 min upload hold (review I5
   });
 
   test('not_found while the drive’s upload is still owed is no refusal: nothing is undone, and the mark goes once the drive is up; a failed mark tapped again is really sent', async () => {
-    const finalizedAt = await heldDrive();
+    const finalizedAt = await waitingDrive();
     const tap = finalizedAt + 60_000;
     await markNotDriving(uuid(10), { db, now: () => tap });
     // The upload fails on a server blip; the action reaches the server first and is told not_found.
@@ -729,26 +659,6 @@ test('the runner wakes on the enqueue change event and on foreground', async () 
   } finally {
     jest.useRealTimers();
   }
-});
-
-test('joinPolylines carries every run of both drives as separate runs, never a line across the hidden gap; over the caps the shortest go first', () => {
-  expect(joinPolylines(null, null)).toBeNull();
-  expect(joinPolylines('', null)).toBeNull();
-  const one = encodePolyline([{ lat: 47.6, lng: -122.3 }, { lat: 47.61, lng: -122.3 }]);
-  const three = encodePolyline([{ lat: 48.6, lng: -122.3 }, { lat: 48.61, lng: -122.3 }, { lat: 48.62, lng: -122.3 }]);
-  const two = encodePolyline([{ lat: 49.6, lng: -122.3 }, { lat: 49.61, lng: -122.3 }]);
-  expect(joinPolylines(one, null)).toBe(one);
-  expect(joinPolylines(null, three)).toBe(three);
-  // Target's runs first, then the new drive's: each still its own run (the strings are unchanged, so no chord is drawn).
-  expect(joinPolylines(one, three)).toBe(`${one} ${three}`);
-  expect(joinPolylines(`${one} ${two}`, three)).toBe(`${one} ${two} ${three}`);
-  expect(splitRuns(joinPolylines(`${one} ${two}`, three))).toEqual([one, two, three]);
-  // Over the run cap or the byte cap, the shortest runs are dropped and the rest keep their order.
-  const shorter = one.length <= two.length ? one : two;
-  const longer = shorter === one ? two : one;
-  expect(joinPolylines(`${one} ${two}`, three, 16_384, 2)).toBe(`${longer} ${three}`);
-  expect(joinPolylines(`${one} ${two}`, three, three.length + longer.length + 1)).toBe(`${longer} ${three}`);
-  expect(joinPolylines(one, three, three.length)).toBe(three);
 });
 
 test('a reply that lands after the device changed hands writes nothing and releases the item', async () => {

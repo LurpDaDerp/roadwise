@@ -2,7 +2,20 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
-import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9, SCHEMA_V10, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+import {
+  SCHEMA_V1,
+  SCHEMA_V2,
+  SCHEMA_V3,
+  SCHEMA_V4,
+  SCHEMA_V5,
+  SCHEMA_V6,
+  SCHEMA_V7,
+  SCHEMA_V8,
+  SCHEMA_V9,
+  SCHEMA_V10,
+  SCHEMA_V11,
+  SCHEMA_VERSION_TABLE,
+} from '@/data/db/schema';
 
 const TABLES = [
   'schema_version',
@@ -39,11 +52,11 @@ test('creates every v3, v5 and v10 table and index, and nothing of v2', async ()
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
-test('records the schema version it reached (11)', async () => {
+test('records the schema version it reached (12)', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
-  expect(CURRENT_SCHEMA_VERSION).toBe(11);
+  expect(CURRENT_SCHEMA_VERSION).toBe(12);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 11 }]);
+  expect(rows).toEqual([{ version: 12 }]);
 });
 
 test('is idempotent', async () => {
@@ -52,7 +65,7 @@ test('is idempotent', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
   expect(await names(db, 'table')).toEqual(tables);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 11 }]);
+  expect(rows).toEqual([{ version: 12 }]);
 });
 
 test('the trips table carries the current columns (phone time among them) and none of the points or screen-switch ones', async () => {
@@ -226,7 +239,7 @@ test('a v9 database steps up through v10: the old phone events and the points co
     await db.execute("INSERT INTO settings (key, value_json) VALUES (?, 'true')", [key]);
   }
 
-  await expect(migrate(db)).resolves.toBe(11);
+  await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
   expect((await db.execute('SELECT id FROM trip_events ORDER BY id')).rows).toEqual([{ id: 'b1' }, { id: 'd1' }]);
   const fresh = { result_json: null, origin: 'manual', not_driving_expired: 0, continuations: 0, finalized_at: null };
@@ -273,7 +286,7 @@ test('a v10 database steps up to v11: every drive gets 0 phone seconds and its s
     await db.execute("INSERT INTO trip_events (id, client_trip_id, type, tier, started_at, status) VALUES (?, 'now', 'phone_pickup', 'moderate', 1, ?)", [id, status]);
   }
 
-  await expect(migrate(db)).resolves.toBe(11);
+  await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
   const rows = (await db.execute('SELECT client_trip_id, counts_json, phone_s, moving_s FROM trips ORDER BY client_trip_id')).rows;
   expect(rows.map((r) => [r.client_trip_id, r.counts_json === null || r.counts_json === 'not json' ? r.counts_json : JSON.parse(String(r.counts_json)), r.phone_s, r.moving_s])).toEqual([
@@ -281,6 +294,53 @@ test('a v10 database steps up to v11: every drive gets 0 phone seconds and its s
     ['none', null, 0, 600],
     ['now', { speeding: 0, pickups: 1 }, 0, 600],
     ['old', { speeding: 1, pickups: 0, handlingS: 40, hardBrake: 0 }, 0, 600],
+  ]);
+});
+
+test('a v11 database steps up to v12: every merged-away drive goes with its events, samples and DashPal coverage, its raw DashPal events unstamped; the rest stays', async () => {
+  for (const statement of [...SCHEMA_V1, ...SCHEMA_V2, ...SCHEMA_V3, ...SCHEMA_V4, ...SCHEMA_V5, ...SCHEMA_V6, ...SCHEMA_V7, ...SCHEMA_V8, ...SCHEMA_V9, ...SCHEMA_V10, ...SCHEMA_V11]) {
+    await db.execute(statement);
+  }
+  await db.execute(SCHEMA_VERSION_TABLE);
+  await db.execute('INSERT INTO schema_version (version) VALUES (11)');
+  // Foreign keys off, as a device transaction may run: every child row must go explicitly.
+  await db.execute('PRAGMA foreign_keys = OFF');
+  const trip = (id: string, status: string, mergedInto: string | null) =>
+    db.execute("INSERT INTO trips (client_trip_id, started_at, tz, status, merged_into, created_at, updated_at) VALUES (?, 1, 'UTC', ?, ?, 1, 1)", [id, status, mergedInto]);
+  await trip('target', 'scored', null);
+  await trip('leg', 'merged', 'target');
+  await trip('rec', 'recording', null);
+  for (const [id, tripId] of [
+    ['e-target', 'target'],
+    ['e-leg', 'leg'],
+  ] as const) {
+    await db.execute("INSERT INTO trip_events (id, client_trip_id, type, tier, started_at) VALUES (?, ?, 'speeding', 'minor', 1)", [id, tripId]);
+  }
+  await db.execute("INSERT INTO samples (client_trip_id, ts, row_json) VALUES ('leg', 1, '{}'), ('rec', 1, '{}')");
+  await db.execute("INSERT INTO dashcam_coverage (client_trip_id, moving_s, covered_s) VALUES ('target', 10, 8), ('leg', 5, 4)");
+  for (const [seq, tripId] of [
+    [1, 'target'],
+    [2, 'leg'],
+  ] as const) {
+    await db.execute(
+      `INSERT INTO dashcam_events (dashcam_id, boot_id, seq, id, ev, name, tier, audible, detail, t_ms, dur_ds, value, received_at_ms, client_trip_id)
+       VALUES ('a4cf12b3c4d5', 7, ?, ?, 0, 'MICROSLEEP', 3, 1, 0, 100, 5, 1.5, 1, ?)`,
+      [seq, `dc-${seq}`, tripId]
+    );
+  }
+
+  await expect(migrate(db)).resolves.toBe(12);
+
+  expect((await db.execute('SELECT client_trip_id, status FROM trips ORDER BY client_trip_id')).rows).toEqual([
+    { client_trip_id: 'rec', status: 'recording' },
+    { client_trip_id: 'target', status: 'scored' },
+  ]);
+  expect((await db.execute('SELECT id FROM trip_events ORDER BY id')).rows).toEqual([{ id: 'e-target' }]);
+  expect((await db.execute('SELECT client_trip_id FROM samples')).rows).toEqual([{ client_trip_id: 'rec' }]);
+  expect((await db.execute('SELECT client_trip_id FROM dashcam_coverage')).rows).toEqual([{ client_trip_id: 'target' }]);
+  expect((await db.execute('SELECT id, client_trip_id FROM dashcam_events ORDER BY id')).rows).toEqual([
+    { id: 'dc-1', client_trip_id: 'target' },
+    { id: 'dc-2', client_trip_id: null },
   ]);
 });
 

@@ -13,7 +13,6 @@ import {
   DASHCAM_MIN_MPH,
   DISPUTE_AUTO_PER_WEEK,
   IDLE_END_S,
-  MERGE_GAP_S,
   MIN_SCORED_MILES,
   MIN_SCORED_S,
   NOT_DRIVING_PER_MONTH,
@@ -64,7 +63,6 @@ export interface DriveNumbers {
 }
 
 const IDLE_MIN = Math.round(IDLE_END_S / 60);
-const MERGE_MIN = Math.round(MERGE_GAP_S / 60);
 
 /** Each category as a sentence names it. */
 const AXIS_WORD: Record<AxisKey, string> = {
@@ -171,7 +169,6 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
         lines: [
           `Once you’re over ${n.autoMinMph} mph, RoadWise starts recording after about ${n.autoMaxHoldS} s, ${n.autoStepS} s sooner for every ${n.autoStepMph} mph faster, and right away from ${n.autoInstantMph} mph. Short stops in traffic don’t reset it, and the drive counts from the moment you set off.`,
           `It ends once you park and walk away, or after ${IDLE_MIN} min parked.`,
-          `Stop for under ${MERGE_MIN} min and set off again from the same spot, and it stays one drive.`,
           `Riding along? Open the drive screen and tap “${ND}”. It shows once the car reaches driving speed, for your first ${n.notDrivingMin} minutes on that screen.`,
           `Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
         ],

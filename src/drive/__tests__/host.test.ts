@@ -387,7 +387,7 @@ describe('a Start-card drive is on screen from the tap', () => {
 });
 
 describe('a drive', () => {
-  test('rows publish, the display wears the tint, the hint and the speed; the end finalizes and queues the upload held 5 min', async () => {
+  test('rows publish, the display wears the tint, the hint and the speed; the end finalizes and queues the upload, due at once', async () => {
     const h = build();
     await h.host.boot();
     const published: number[] = [];
@@ -409,7 +409,7 @@ describe('a drive', () => {
     const trip = (await createTripsRepo(db).get(uuid(1)))!;
     expect(trip).toMatchObject({ status: 'pending', origin: 'manual', finalized_at: clock });
     const item = (await createQueueRepo(db).byKey(`trip:${uuid(1)}`))!;
-    expect(item.next_attempt_at).toBe(clock + 300_000);
+    expect(item.next_attempt_at).toBe(clock);
     expect(h.source.calls.at(-1)).toBe('stopCapture');
     await h.host.stop({ endOpenTrip: false });
   });
@@ -801,8 +801,8 @@ describe('"Not driving?"', () => {
   });
 });
 
-describe('a continuation re-opens the held drive', () => {
-  test('stopped 6 min and on again 100 m on: one drive, one row, continuations 1', async () => {
+describe('every drive is a drive of its own', () => {
+  test('stopped 6 min and on again 100 m on, 30 s after the end: a new trip; the one before stays as it ended, its upload due at once', async () => {
     const h = build();
     await h.host.boot();
     const first = rows(120, { speedMps: 15 });
@@ -812,98 +812,24 @@ describe('a continuation re-opens the held drive', () => {
     const parked = rows(301, { t0: T0 + 120_000, speedMps: 0 }).map((r) => ({ ...r, lng: end.lng }));
     await feed(h, parked);
     await h.host.untilIdle();
-    const held = (await createTripsRepo(db).get(uuid(1)))!;
-    expect(held.status).toBe('pending');
-    // A new Start 30 s later, 100 m on: confirmed, it re-opens the same trip.
+    const before = (await createTripsRepo(db).get(uuid(1)))!;
+    expect(before.status).toBe('pending');
+    const upload = (await createQueueRepo(db).byKey(`trip:${uuid(1)}`))!;
+    expect(upload.next_attempt_at).toBe(before.finalized_at);
+    // A new Start 30 s later, 100 m on: confirmed, it is a trip of its own.
     const t1 = T0 + 451_000;
     clock = t1;
-    const again = rows(40, { t0: t1, speedMps: 15 }).map((r, i) => ({ ...r, lat: START.lat, lng: held.end_lng! + (100 + i * 15) / M_PER_DEG_LNG }));
+    const again = rows(60, { t0: t1, speedMps: 15 }).map((r, i) => ({ ...r, lat: START.lat, lng: before.end_lng! + (100 + i * 15) / M_PER_DEG_LNG }));
     await drive(h, again);
-    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(1) });
-    expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'recording', continuations: 1 });
-    expect(await createQueueRepo(db).byKey(`trip:${uuid(1)}`)).toBeNull();
-    clock = t1 + 41_000;
+    const second = h.host.snapshot().clientTripId!;
+    expect(second).not.toBe(uuid(1));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: second });
+    expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'pending', ended_at: before.ended_at });
+    expect(await createQueueRepo(db).byKey(`trip:${uuid(1)}`)).toMatchObject({ id: upload.id, next_attempt_at: upload.next_attempt_at });
+    clock = t1 + 61_000;
     await h.host.end();
-    expect(await tripCount()).toBe(1);
-    expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'pending', continuations: 1, started_at: T0 });
-    await h.host.stop({ endOpenTrip: false });
-  });
-});
-
-describe('a Start-card drive re-opening the held drive', () => {
-  test('gives it back its own "Not driving?" budget: one that ran out stays gone (the wait never overwrote it)', async () => {
-    const h = build();
-    await h.host.boot();
-    await h.host.start();
-    h.host.setHudVisible(true);
-    const first = rows(150, { speedMps: 15 });
-    await feed(h, first);
-    expect(h.host.snapshot()).toMatchObject({ clientTripId: uuid(1), waiting: null, notDrivingAvailable: false, notDrivingSpentMs: NOT_DRIVING_BUDGET_MS });
-    // Parked: the still end at 5 min; the screen goes to the recap.
-    const end = first.at(-1)!;
-    await feed(h, rows(301, { t0: T0 + 150_000, speedMps: 0 }).map((r) => ({ ...r, lng: end.lng })));
-    await h.host.untilIdle();
-    h.host.setHudVisible(false);
-    expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'pending', not_driving_expired: 1 });
-    // Start again 30 s later where it parked, the driving screen showing through the wait.
-    const t1 = T0 + 481_000;
-    clock = t1;
-    await h.host.start();
-    h.host.setHudVisible(true);
-    const manual = h.host.snapshot().clientTripId;
-    expect(manual).not.toBe(uuid(1));
-    await feed(h, rows(20, { t0: t1, speedMps: 0 }).map((r) => ({ ...r, lng: end.lng })));
-    expect(h.host.snapshot()).toMatchObject({ clientTripId: manual, waiting: { phase: 'waiting' }, notDrivingAvailable: false });
-    // It drives off: the held drive is re-opened, its budget spent as it was.
-    await feed(h, rows(10, { t0: t1 + 20_000, speedMps: 15 }).map((r) => ({ ...r, lng: r.lng - START.lng + end.lng })));
-    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(1), waiting: null, notDrivingAvailable: false });
-    expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'recording', continuations: 1 });
-    expect(await h.host.cancelDrive()).toBe(false);
-    await h.host.stop({ endOpenTrip: false });
-  });
-
-  test('a hard start as it pulls away after a minute’s wait sounds, shows and shakes once: its rows taken in again by the re-opened drive play, show and shake nothing', async () => {
-    const h = build();
-    await h.host.boot();
-    const first = rows(120, { speedMps: 15 });
-    await drive(h, first);
-    const end = first.at(-1)!;
-    await feed(h, rows(301, { t0: T0 + 120_000, speedMps: 0 }).map((r) => ({ ...r, lng: end.lng })));
-    await h.host.untilIdle();
-    const t1 = T0 + 451_000;
-    clock = t1;
-    await h.host.start();
-    h.host.setHudVisible(true);
-    await feed(h, rows(60, { t0: t1, speedMps: 0 }).map((r) => ({ ...r, lng: end.lng, aLonMax: 0.02, aLonMin: -0.02 })));
-    const before = h.player.delivered.length;
-    const shown = new Set<string>();
-    const shaken = new Set<string>();
-    h.host.subscribe((st) => {
-      if (st.lastAlert !== null) shown.add(st.lastAlert.id);
-      if (st.lastShake !== null) shaken.add(st.lastShake.key);
-    });
-    // A minute later, away hard: 0 → 3 → 5 → 6.5 m/s at 0.4 g, the GNSS vouching for it (past the
-    // re-opened leg's 30 s warm-up, so the held drive's detectors confirm it again).
-    let lng = end.lng;
-    const away = [3, 5, 6.5, 8, 9, 10, 10, 10].map((v, i) => {
-      lng += v / M_PER_DEG_LNG;
-      return { ...rows(1, { t0: t1 + 60_000 + i * 1000, speedMps: v })[0]!, lng, aLonMax: i < 3 ? 0.4 : 0.02, aLonMin: -0.02 };
-    });
-    await feed(h, away);
-    expect(h.host.snapshot()).toMatchObject({ clientTripId: uuid(1), waiting: null });
-    const accel = h.player.delivered.slice(before).filter((d) => d.kind === 'hard_accel');
-    expect(accel.length).toBeGreaterThan(1);
-    expect(accel.filter((d) => d.suppressed !== true)).toEqual([expect.objectContaining({ ts: T0 + 511_000 })]);
-    // Shown and shaken once too: the replay never flashes the banner or shakes the halo again.
-    expect(shown.size).toBe(1);
-    expect(shaken.size).toBe(1);
-    // A live hard brake after it sounds as ever.
-    const brake = [15, 15, 15, 15, 15, 11, 11, 11, 11, 11].map((v, i) => {
-      lng += v / M_PER_DEG_LNG;
-      return { ...rows(1, { t0: T0 + 519_000 + i * 1000, speedMps: v })[0]!, lng, aLonMax: 0.02, aLonMin: i === 5 ? -0.5 : -0.02 };
-    });
-    await feed(h, brake);
-    expect(h.player.delivered.filter((d) => d.kind === 'hard_brake' && d.suppressed !== true)).toEqual([expect.objectContaining({ ts: T0 + 524_000 })]);
+    expect(await tripCount()).toBe(2);
+    expect(await createTripsRepo(db).get(second)).toMatchObject({ status: 'pending', started_at: t1 });
     await h.host.stop({ endOpenTrip: false });
   });
 });
@@ -1435,7 +1361,7 @@ describe('iOS: the drive detector', () => {
     await f.host.stop({ endOpenTrip: false });
   });
 
-  test('a Start-card drive set off within 5 min where a held drive ended re-opens it once at driving speed (native’s journal then feeds it); a Start that is cancelled leaves the held drive as it was', async () => {
+  test('a Start-card drive set off within 5 min where a drive ended is a drive of its own at driving speed (native’s journal feeds it); a Start that is cancelled leaves the drive before as it was', async () => {
     const h = buildIos();
     await h.host.boot();
     await h.detect.setArmed(true, 'user-1');
@@ -1447,42 +1373,42 @@ describe('iOS: the drive detector', () => {
     await new Promise((r) => setTimeout(r, 0));
     await h.host.untilIdle();
     expect(await createTripsRepo(db).get(NATIVE)).toMatchObject({ status: 'pending' });
-    const held = (await createQueueRepo(db).byKey(`trip:${NATIVE}`))!;
+    const upload = (await createQueueRepo(db).byKey(`trip:${NATIVE}`))!;
 
-    // A Start 1 min later that never reaches driving speed: cancelled, the held drive untouched.
+    // A Start 1 min later that never reaches driving speed: cancelled, the drive before untouched.
     clock = T0 + 155_000;
     await h.host.start();
     await feedIos(h, rows(5, { t0: T0 + 156_000, speedMps: 0 }).map((r) => ({ ...r, lng: parkedLng })));
     await h.host.cancelWaiting();
-    expect(await createTripsRepo(db).get(NATIVE)).toMatchObject({ status: 'pending', continuations: 0 });
-    expect(await createQueueRepo(db).byKey(`trip:${NATIVE}`)).toMatchObject({ id: held.id, next_attempt_at: held.next_attempt_at });
+    expect(await createTripsRepo(db).get(NATIVE)).toMatchObject({ status: 'pending' });
+    expect(await createQueueRepo(db).byKey(`trip:${NATIVE}`)).toMatchObject({ id: upload.id, next_attempt_at: upload.next_attempt_at });
     expect(await tripCount()).toBe(1);
 
-    // Again 1 min later, and it drives off: the same drive, re-opened.
+    // Again 1 min later, and it drives off: a drive of its own, the one before as it ended.
     clock = T0 + 215_000;
     await h.host.start();
     const manual = h.host.snapshot().clientTripId!;
     expect(manual).not.toBe(NATIVE);
     await feedIos(h, rows(5, { t0: T0 + 216_000, speedMps: 0 }).map((r) => ({ ...r, lng: parkedLng })));
     expect(h.host.snapshot()).toMatchObject({ clientTripId: manual, waiting: { phase: 'waiting' } });
-    await feedIos(h, rows(40, { t0: T0 + 221_000, speedMps: 15 }).map((r) => ({ ...r, lng: r.lng - START.lng + parkedLng })));
-    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: NATIVE, waiting: null, lastRowTs: T0 + 260_000 });
-    expect(await createTripsRepo(db).get(NATIVE)).toMatchObject({ status: 'recording', continuations: 1 });
-    expect(await createTripsRepo(db).get(manual)).toBeNull();
-    expect(await createSettingsRepo(db).get(JOURNAL_LINK_KEY)).toEqual({ driveId: manual, clientTripId: NATIVE });
+    await feedIos(h, rows(100, { t0: T0 + 221_000, speedMps: 15 }).map((r) => ({ ...r, lng: r.lng - START.lng + parkedLng })));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: manual, waiting: null, lastRowTs: T0 + 320_000 });
+    expect(await createTripsRepo(db).get(manual)).toMatchObject({ status: 'recording' });
+    expect(await createTripsRepo(db).get(NATIVE)).toMatchObject({ status: 'pending' });
+    expect(await createSettingsRepo(db).get(JOURNAL_LINK_KEY)).toEqual({ driveId: manual, clientTripId: manual });
     // Live rows go on into it.
-    await feedIos(h, rows(5, { t0: T0 + 261_000, speedMps: 15 }).map((r) => ({ ...r, lng: r.lng - START.lng + parkedLng + (40 * 15) / M_PER_DEG_LNG })));
-    expect(h.host.snapshot().lastRowTs).toBe(T0 + 265_000);
-    clock = T0 + 266_000;
-    expect(await h.host.end()).toEqual({ clientTripId: NATIVE, dropped: null });
+    await feedIos(h, rows(5, { t0: T0 + 321_000, speedMps: 15 }).map((r) => ({ ...r, lng: r.lng - START.lng + parkedLng + (100 * 15) / M_PER_DEG_LNG })));
+    expect(h.host.snapshot().lastRowTs).toBe(T0 + 325_000);
+    clock = T0 + 326_000;
+    expect(await h.host.end()).toEqual({ clientTripId: manual, dropped: null });
     await h.host.settled();
-    expect(await tripCount()).toBe(1);
-    expect(await createTripsRepo(db).get(NATIVE)).toMatchObject({ status: 'pending', continuations: 1, started_at: T0 });
-    expect(h.detect.journal.has(manual)).toBe(false);
+    expect(await tripCount()).toBe(2);
+    expect(await createTripsRepo(db).get(NATIVE)).toMatchObject({ status: 'pending', started_at: T0 });
+    expect(await createTripsRepo(db).get(manual)).toMatchObject({ status: 'pending', origin: 'manual' });
     await h.host.stop({ endOpenTrip: false });
   });
 
-  test('behind, a drive re-opened after a stop asks again for its new leg (the first leg’s Live Activity ended with it)', async () => {
+  test('behind, a drive confirmed soon after a stop asks for its own push (leg 0; the first drive’s Live Activity ended with it)', async () => {
     const pushed: PushToStartRequest[] = [];
     const h = buildIos({ pushToStart: async (req) => (pushed.push(req), true) }, { appState: 'background' });
     await h.host.boot();
@@ -1498,16 +1424,17 @@ describe('iOS: the drive detector', () => {
     await new Promise((r) => setTimeout(r, 0));
     await h.host.untilIdle();
     expect(h.display.log.at(-1)).toBe('end');
-    // 2 min later the car sets off again from where it parked: native's new drive re-opens the trip.
+    // 2 min later the car sets off again from where it parked: native's new drive is a trip of its own.
+    const SECOND = '22222222-2222-4222-8222-222222222222';
     h.detect.wake();
     const again = rows(30, { t0: T0 + 215_000, speedMps: 15 }).map((r) => ({ ...r, lng: r.lng - START.lng + parkedLng }));
-    await confirm(h, again, { driveId: '22222222-2222-4222-8222-222222222222' });
+    await confirm(h, again, { driveId: SECOND });
     await new Promise((r) => setTimeout(r, 0));
-    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: NATIVE });
-    expect(await createTripsRepo(db).get(NATIVE)).toMatchObject({ continuations: 1 });
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: SECOND });
+    expect(await createTripsRepo(db).get(NATIVE)).toMatchObject({ status: 'pending' });
     expect(pushed.map((r) => [r.clientTripId, r.leg])).toEqual([
       [NATIVE, 0],
-      [NATIVE, 1],
+      [SECOND, 0],
     ]);
     await h.host.stop({ endOpenTrip: false });
   });

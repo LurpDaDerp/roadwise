@@ -2,11 +2,9 @@
 //
 // It drains the `sync_queue` the finalizer and the drive actions fill. A `finalize-trip` item
 // posts its payload as v4 (one an older build queued as v3 is upgraded first) and writes the
-// server's answer back: the trip becomes `scored` or `unscored` with its result, or — when the
-// server merged it into the drive before it — the earlier local drive becomes the merged union and
-// this one is marked `merged`. Once the answer is written the drive's samples go: a sent drive is
-// never re-opened. A `trip-actions` item posts a dispute or "wasn't driving" and resolves the
-// optimistic `pending` rows.
+// server's answer back: the trip becomes `scored` or `unscored` with its result. Once the answer is
+// written the drive's samples go. A `trip-actions` item posts a dispute or "wasn't driving" and
+// resolves the optimistic `pending` rows.
 //
 // Rules:
 // - **Never while the engine is recording or finalizing**: a drain competes for SQLite's write lock.
@@ -32,8 +30,6 @@ import { isSyncKind } from '@/data/sync/kinds';
 import { FinalizeTripResponseSchema, parseFinalizeUpload, type FinalizeTripResponse } from '@/data/sync/payload';
 import { deviceOwnerIs, finalizeIdempotencyKey, SESSION_UID_KEY, TripActionSchema, type TripAction } from '@/data/sync/queue';
 import { classifyInvokeError, DisputeResultSchema, FUNCTION_NOT_FOUND_CODE, isDatabaseLocked, NotDrivingResultSchema, type Failure } from '@/data/sync/response';
-import { MAX_POLYLINE_BYTES, MAX_POLYLINE_RUNS } from '@/data/sync/payload';
-import { RUN_SEPARATOR, splitRuns } from '@/lib/polyline';
 
 export const FINALIZE_FUNCTION = 'finalize-trip';
 export const ACTIONS_FUNCTION = 'trip-actions';
@@ -113,10 +109,7 @@ export interface SyncRunner {
   idle(): Promise<void>;
   /** Items still owed: pending or in flight. */
   owed(): Promise<number>;
-  /**
-   * The device's owner signed in: what waited only for a session is sent now, not when its hold
-   * runs out or the app next comes to the front.
-   */
+  /** The device's owner signed in: what waited only for a session is sent now, not when the app next comes to the front. */
   signedIn(): Promise<void>;
 }
 
@@ -134,47 +127,15 @@ function parseJson(text: string): unknown {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
-/**
- * The route of a merged drive: every visible run of both drives, in order, still as separate runs.
- * The runs are never connected — a line from the end of one to the start of the next would cross
- * the hidden gap (the trimmed 0.25 mi + the stop + 0.25 mi), an intermediate destination the
- * trimming exists to hide. Over the contract's run or byte cap, the shortest runs go first.
- */
-export function joinPolylines(a: string | null, b: string | null, maxBytes = MAX_POLYLINE_BYTES, maxRuns = MAX_POLYLINE_RUNS): string | null {
-  let runs = [...splitRuns(a), ...splitRuns(b)];
-  const joined = (): string => runs.join(RUN_SEPARATOR);
-  while (runs.length > 0 && (runs.length > maxRuns || joined().length > maxBytes)) {
-    let shortest = 0;
-    runs.forEach((r, i) => {
-      if (r.length < (runs[shortest] as string).length) shortest = i;
-    });
-    runs = runs.filter((_, i) => i !== shortest);
-  }
-  return runs.length === 0 ? null : joined();
-}
-
 /** The drive's clean flag from the events it keeps: no active event other than DashPal's; null when unscored. */
 const cleanOf = (events: readonly EventRow[], scored: boolean): 0 | 1 | null =>
   scored ? (events.some((e) => e.status === 'active' && !isDashcamType(e.type)) ? 0 : 1) : null;
 
 /**
- * The counters of a merged drive: the five and the phone seconds summed when both legs counted
- * them, else none (estimated at read, with no phone seconds).
- */
-type ExposureCols = Pick<TripRow, 'slowdowns' | 'speedups' | 'turns' | 'limit_s' | 'moving_s' | 'phone_s'>;
-const EXPOSURE_COLS = ['slowdowns', 'speedups', 'turns', 'limit_s', 'moving_s'] as const;
-function sumExposure(a: ExposureCols, b: ExposureCols): ExposureCols {
-  const counted = EXPOSURE_COLS.every((k) => a[k] !== null && b[k] !== null);
-  const out = {} as Record<(typeof EXPOSURE_COLS)[number], number | null>;
-  for (const k of EXPOSURE_COLS) out[k] = counted ? (a[k] as number) + (b[k] as number) : null;
-  return { ...out, phone_s: counted ? a.phone_s + b.phone_s : 0 } as ExposureCols;
-}
-
-/**
- * The answer lists every event the server keeps (the union's on a merge). A local DashPal event it
- * does not list (one the server dropped under the DashPal limits, e.g. a drowsy within 10 min of the
- * merge target's) never reached the drive: it is deleted here, so the summary itemizes what was
- * kept. An event with a report in flight or accepted is left alone. Returns the events that remain.
+ * The answer lists every event the server keeps. A local DashPal event it does not list (one the
+ * server dropped under the DashPal limits) never reached the drive: it is deleted here, so the
+ * summary itemizes what was kept. An event with a report in flight or accepted is left alone.
+ * Returns the events that remain.
  */
 async function dropUnkept(events: EventsRepo, list: EventRow[], resp: FinalizeTripResponse, tx: Db): Promise<EventRow[]> {
   const kept = new Set(resp.eventIds);
@@ -187,15 +148,14 @@ async function dropUnkept(events: EventsRepo, list: EventRow[], resp: FinalizeTr
 }
 
 /**
- * Write a finalize response into the local rows. With `mergedInto`, the earlier local drive becomes
- * the merged union (metrics and counters summed, events re-parented, "Not driving?" ran out if it
- * ran out on either, the earlier drive's start kept, the server's result) and this one is hidden as
- * `merged`. The samples of both go: a sent drive is never re-opened. A drive re-opened as
- * `recording` in the meantime is left alone (its own upload follows). A drive marked "Wasn't
- * driving" while its upload was held keeps the mark (no clean flag): the mark's own answer settles
- * it, and a refusal puts back the status this answer records (`undoAction`). A "Wasn't driving"
- * refusal the drive already carries (`sync_error`) is kept, so the summary still explains it. Runs
- * on a transaction handle.
+ * Write a finalize response into the local rows, and the drive's samples go. A row that is
+ * `recording` is left alone. A drive marked "Wasn't driving" before its upload was answered keeps
+ * the mark (no clean flag): the mark's own answer settles it, and a refusal puts back the status
+ * this answer records (`undoAction`). A "Wasn't driving" refusal the drive already carries
+ * (`sync_error`) is kept, so the summary still explains it. An answer naming a `mergedInto` (only a
+ * server older than this build joins drives; a replay of an old answer can still carry one) means
+ * the server holds this drive inside another: the local row goes, with its events and samples,
+ * rather than stand as a duplicate. Runs on a transaction handle.
  */
 export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: FinalizeTripResponse, now: number): Promise<void> {
   const trips = createTripsRepo(tx);
@@ -207,41 +167,7 @@ export async function applyFinalizeResponse(tx: Db, clientTripId: string, resp: 
   const resultJson = JSON.stringify(resp);
 
   if (resp.mergedInto !== null) {
-    const target = await trips.get(resp.mergedInto, tx);
-    if (target !== null && target.client_trip_id !== clientTripId) {
-      await events.reparent(clientTripId, target.client_trip_id, tx);
-      const all = await dropUnkept(events, await events.listByTrip(target.client_trip_id, tx), resp, tx);
-      await trips.update(
-        target.client_trip_id,
-        {
-          ended_at: mine.ended_at ?? target.ended_at,
-          end_lat: mine.end_lat ?? target.end_lat,
-          end_lng: mine.end_lng ?? target.end_lng,
-          to_label: mine.to_label ?? target.to_label,
-          end_cause: mine.end_cause ?? target.end_cause,
-          miles: target.miles + mine.miles,
-          night_miles: target.night_miles + mine.night_miles,
-          duration_s: target.duration_s + mine.duration_s,
-          watched_miles: target.watched_miles + mine.watched_miles,
-          max_speed_mph: Math.max(target.max_speed_mph, mine.max_speed_mph),
-          polyline: joinPolylines(target.polyline, mine.polyline),
-          not_driving_expired: target.not_driving_expired === 1 || mine.not_driving_expired === 1 ? 1 : 0,
-          ...sumExposure(target, mine),
-          status,
-          clean: cleanOf(all, resp.scored),
-          counts_json: JSON.stringify(countEvents(all)),
-          reason: resp.reason,
-          result_json: resultJson,
-          server_id: resp.tripId,
-          sync_error: null,
-        },
-        now,
-        tx
-      );
-      await samples.purgeByTrip(target.client_trip_id, tx);
-    }
-    await trips.update(clientTripId, { status: 'merged', merged_into: resp.mergedInto, result_json: resultJson, server_id: resp.tripId, sync_error: null }, now, tx);
-    await samples.purgeByTrip(clientTripId, tx);
+    await trips.remove(clientTripId, tx);
     return;
   }
 
@@ -442,8 +368,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   /**
    * The server refused for good: the optimistic `pending` is resolved to a rejection the user can
    * read. A "Wasn't driving" puts the drive back to the status the server holds: the one its upload
-   * answer recorded when that answer came after the tap (a mark made in the upload hold, whose
-   * `previousStatus` is the stale `pending`), else the status it had when tapped.
+   * answer recorded when that answer came after the tap (a mark made before the upload was
+   * answered, whose `previousStatus` is the stale `pending`), else the status it had when tapped.
    */
   async function undoAction(uid: string, action: TripAction, code: string): Promise<void> {
     await fenced(uid, async (tx) => {

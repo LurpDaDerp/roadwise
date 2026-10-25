@@ -59,7 +59,7 @@ describe('inputs', () => {
       { client_trip_id: uuid(1), started_at: T0 - DAY, tz: 'UTC', status: 'scored', polyline: ROAD },
       { client_trip_id: uuid(2), started_at: T0 - 2 * DAY, tz: 'UTC', status: 'pending', polyline: ROAD },
       { client_trip_id: uuid(3), started_at: T0 - 3 * DAY, tz: 'UTC', status: 'not_driving', polyline: ROAD },
-      { client_trip_id: uuid(4), started_at: T0 - 4 * DAY, tz: 'UTC', status: 'merged', polyline: ROAD },
+      { client_trip_id: uuid(4), started_at: T0 - 4 * DAY, tz: 'UTC', status: 'failed', polyline: ROAD },
       { client_trip_id: uuid(5), started_at: T0 - 5 * DAY, tz: 'UTC', status: 'recording', polyline: ROAD },
       { client_trip_id: uuid(6), started_at: T0 - 6 * DAY, tz: 'UTC', status: 'unscored', reason: 'too_short', polyline: ROAD },
       { client_trip_id: uuid(7), started_at: T0 - 7 * DAY, tz: 'UTC', status: 'pending', reason: 'too_short', polyline: ROAD },

@@ -251,8 +251,8 @@ function planTrips(now, rnd) {
         lateHome = rnd() < 0.2;
         add(day, lateHome ? intBetween(rnd, 19 * 60, 20 * 60 + 15) : intBetween(rnd, 17 * 60, 18 * 60 + 45), 'work', true);
       }
-      // No evening errand after a late commute home: leaving again minutes after arriving would read
-      // as one drive continued (the server joins drives within 5 min and 150 m).
+      // No evening errand after a late commute home: drive_context still names the drive before as a
+      // merge for one started within 5 min and 150 m of its end, and the seed refuses such a drive.
       if (recent && !lastWeek && !lateHome && rnd() < 0.07) {
         const errand = pick(rnd, ERRANDS);
         add(day, intBetween(rnd, 19 * 60 + 30, 20 * 60 + 30), errand, false);

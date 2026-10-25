@@ -7,8 +7,8 @@ import { createSettingsRepo, type Db } from '@/data/db';
 /**
  * A "Not driving?" under way (settings): written first, cleared last, so a process killed between
  * telling native and deleting the trip finishes the cancel at the next launch (host's `finishPendingCancel`)
- * instead of recording the drive again. `driveId`: native's journal (iOS; it differs from the trip
- * for a re-opened drive), else null.
+ * instead of recording the drive again. `driveId`: native's journal (iOS; a drive begun under an
+ * older build may have one that differs from the trip), else null.
  */
 export const CANCEL_KEY = 'drive.cancelling';
 

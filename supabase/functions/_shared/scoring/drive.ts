@@ -116,8 +116,7 @@ export interface DashcamLimitEvent {
  * event is dropped, never the whole drive, when its measured speed is missing or under
  * `DASHCAM_MIN_MPH` (or its start is not a number). Every other DashPal episode counts (the phone
  * already joins alerts within 60 s of each other into one episode), and the phone's own events pass
- * untouched. The events a drive it merges into already holds always stand. Returns the kept uploads
- * in their input order. Pure.
+ * untouched. Returns the kept uploads in their input order. Pure.
  */
 export function keepDashcamEvents<E extends DashcamLimitEvent>(uploaded: readonly E[]): E[] {
   return uploaded.filter((e) => {

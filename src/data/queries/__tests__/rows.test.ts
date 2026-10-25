@@ -42,7 +42,6 @@ const trip = (over: Partial<TripRow> = {}): TripRow => ({
   clean: 1,
   counts_json: null,
   reason: null,
-  merged_into: null,
   result_json: null,
   server_id: null,
   sync_error: null,
@@ -54,7 +53,6 @@ const trip = (over: Partial<TripRow> = {}): TripRow => ({
   watched_miles: 0,
   origin: 'manual',
   not_driving_expired: 0,
-  continuations: 0,
   finalized_at: null,
   start_source: null,
   last_seq: null,
@@ -107,7 +105,7 @@ test('a drive counts toward stats when scored, or pending and long enough to sco
   expect(isScoredDrive({ status: 'scored', reason: null })).toBe(true);
   expect(isScoredDrive({ status: 'pending', reason: null })).toBe(true);
   expect(isScoredDrive({ status: 'pending', reason: 'too_short' })).toBe(false);
-  for (const status of ['recording', 'unscored', 'not_driving', 'merged', 'failed'] as const) expect(isScoredDrive({ status, reason: null })).toBe(false);
+  for (const status of ['recording', 'unscored', 'not_driving', 'failed'] as const) expect(isScoredDrive({ status, reason: null })).toBe(false);
 });
 
 test('the stored answer reads as v4; an older points answer or garbage is null', () => {
@@ -131,14 +129,13 @@ test('exposure: the counted columns when all five are there, with the phone seco
   expect(exposureOf(trip())).toEqual({ exposure: estimateExposure(12, 1800), estimated: true });
 });
 
-test('a local drive carries how it started, its "Not driving?" verdict, its continuations, start source and exposure', () => {
+test('a local drive carries how it started, its "Not driving?" verdict, start source and exposure', () => {
   const d = toLocalDrive(
-    trip({ origin: 'auto', not_driving_expired: 1, continuations: 2, start_source: 'trace', slowdowns: 3, speedups: 4, turns: 2, limit_s: 600, moving_s: 900, result_json: JSON.stringify(ANSWER) })
+    trip({ origin: 'auto', not_driving_expired: 1, start_source: 'trace', slowdowns: 3, speedups: 4, turns: 2, limit_s: 600, moving_s: 900, result_json: JSON.stringify(ANSWER) })
   );
   expect(d).toMatchObject({
     origin: 'auto',
     notDrivingExpired: true,
-    continuations: 2,
     startSource: 'trace',
     exposure: { slowdowns: 3, speedups: 4, turns: 2, limitS: 600, movingS: 900, phoneS: 0 },
     exposureEstimated: false,
@@ -146,5 +143,5 @@ test('a local drive carries how it started, its "Not driving?" verdict, its cont
   });
   expect(d).not.toHaveProperty('pointsNet');
   expect(d).not.toHaveProperty('estimate');
-  expect(toLocalDrive(trip())).toMatchObject({ origin: 'manual', notDrivingExpired: false, continuations: 0, startSource: null, exposureEstimated: true });
+  expect(toLocalDrive(trip())).toMatchObject({ origin: 'manual', notDrivingExpired: false, startSource: null, exposureEstimated: true });
 });

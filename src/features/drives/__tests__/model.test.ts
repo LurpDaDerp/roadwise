@@ -277,7 +277,6 @@ describe('summary', () => {
     expect(driveKind(drive({ status: 'unscored', reason: 'too_short' }))).toEqual({ kind: 'too_short' });
     expect(driveKind(drive({ status: 'unscored', reason: 'spoofed' }))).toEqual({ kind: 'not_scored' });
     expect(driveKind(drive({ status: 'not_driving' }))).toEqual({ kind: 'not_driving' });
-    expect(driveKind(drive({ status: 'merged', mergedInto: 'z' }))).toEqual({ kind: 'merged', into: 'z' });
     expect(driveKind(drive({ status: 'recording', result: null }))).toEqual({ kind: 'recording' });
   });
 
@@ -290,7 +289,6 @@ describe('summary', () => {
     expect(stateWord({ kind: 'too_short' })).toBe('Too short');
     expect(stateWord({ kind: 'not_scored' })).toBe('Not scored');
     expect(stateWord({ kind: 'not_driving' })).toBe('Not driving');
-    expect(stateWord({ kind: 'merged' })).toBe('Merged');
   });
 
   test('the event list: shown events, oldest first, a phone pickup with its time in hand and speed; never an old phone handling', () => {
@@ -344,7 +342,7 @@ describe('summary', () => {
     expect(canMarkNotDriving(drive({ notDrivingExpired: true }), ended)).toBe(false);
     for (const status of ['scored', 'pending', 'unscored'] as const) expect(canMarkNotDriving(drive({ status }), ended)).toBe(true);
     // A drive whose upload the server refused was never stored there: nothing to mark (it would come back not_found).
-    for (const status of ['recording', 'merged', 'not_driving', 'failed'] as const) expect(canMarkNotDriving(drive({ status }), ended)).toBe(false);
+    for (const status of ['recording', 'not_driving', 'failed'] as const) expect(canMarkNotDriving(drive({ status }), ended)).toBe(false);
     expect(canMarkNotDriving(drive({ syncError: 'too_old' }), ended)).toBe(false);
     expect(canMarkNotDriving(drive({ syncError: 'invalid_payload' }), ended)).toBe(true);
     expect(canMarkNotDriving(drive({ status: 'failed', syncError: 'invalid_payload' }), ended)).toBe(false);
@@ -404,7 +402,6 @@ describe('drive score', () => {
     expect(driveScoreOf(drive({ status: 'unscored', reason: 'too_short', result: null }), e)).toBeNull();
     expect(driveScoreOf(drive({ status: 'unscored', reason: 'spoofed', result: null }), e)).toBeNull();
     expect(driveScoreOf(drive({ status: 'not_driving' }), e)).toBeNull();
-    expect(driveScoreOf(drive({ status: 'merged', mergedInto: 'z' }), e)).toBeNull();
     expect(driveScoreOf(drive({ status: 'recording', result: null }), e)).toBeNull();
     expect(driveScoreOf(drive({ miles: 0 }), e)).toBeNull();
   });

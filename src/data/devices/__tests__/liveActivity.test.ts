@@ -14,19 +14,19 @@ import { createLiveDriveTokenPort } from '@/data/devices/pushToken';
 const REQ = {
   deviceId: 'install-1234',
   clientTripId: '00000000-0000-4000-8000-000000000001',
-  leg: 1,
+  leg: 0,
   startedAt: 1_700_000_000_000,
   state: { speed: 34, limit: 35, unit: 'mph', speedTint: null, speeding: false, notDrivingAvailable: true, weatherKind: null, weatherText: null },
 } as unknown as LiveActivityStartRequest;
 
-test('asks live-activity-start with the device, the drive, its leg and its first state; true only when the server says it sent the push', async () => {
+test('asks live-activity-start with the device, the drive, leg 0 and its first state; true only when the server says it sent the push', async () => {
   const calls: [string, unknown][] = [];
   const invoke = async (name: string, { body }: { body: unknown }) => {
     calls.push([name, body]);
     return { data: { sent: true }, error: null };
   };
   expect(await requestLiveActivityStart(REQ, { invoke })).toBe(true);
-  expect(calls).toEqual([[LIVE_ACTIVITY_START_FUNCTION, { deviceId: REQ.deviceId, clientTripId: REQ.clientTripId, leg: 1, startedAt: REQ.startedAt, state: REQ.state }]]);
+  expect(calls).toEqual([[LIVE_ACTIVITY_START_FUNCTION, { deviceId: REQ.deviceId, clientTripId: REQ.clientTripId, leg: 0, startedAt: REQ.startedAt, state: REQ.state }]]);
   expect(LIVE_ACTIVITY_START_FUNCTION).toBe('live-activity-start');
 });
 
@@ -133,7 +133,7 @@ describe('the retry-safe starter', () => {
     return { promise, resolve };
   };
 
-  test('a call while one for the same drive and leg is in flight shares its outcome: one request', async () => {
+  test('a call while one for the same drive is in flight shares its outcome: one request', async () => {
     const d = deferred();
     const invoke = jest.fn(() => d.promise);
     const starter = createLiveActivityStarter({ invoke });
@@ -145,15 +145,14 @@ describe('the retry-safe starter', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  test('once sent, the same leg is never asked again; another leg or drive is', async () => {
+  test('once sent, the same drive is never asked again; another drive is', async () => {
     const invoke = jest.fn(async () => ({ data: { sent: true }, error: null }));
     const starter = createLiveActivityStarter({ invoke });
     await starter.start(REQ);
     expect((await starter.start(REQ)).sent).toBe(true);
     expect(invoke).toHaveBeenCalledTimes(1);
-    await starter.start({ ...REQ, leg: 2 });
     await starter.start({ ...REQ, clientTripId: '00000000-0000-4000-8000-000000000002' });
-    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 
   test('after a failure the next call asks again (the retry), and a success then sticks', async () => {
@@ -176,14 +175,15 @@ describe('the retry-safe starter', () => {
     expect((await starter.start(REQ)).sent).toBe(true);
   });
 
-  test(`it remembers the last ${STARTER_MEMORY} sent legs`, async () => {
+  test(`it remembers the last ${STARTER_MEMORY} sent drives`, async () => {
     const invoke = jest.fn(async () => ({ data: { sent: true }, error: null }));
     const starter = createLiveActivityStarter({ invoke });
-    for (let leg = 0; leg <= STARTER_MEMORY; leg += 1) await starter.start({ ...REQ, leg });
+    const trip = (n: number) => `00000000-0000-4000-8000-${String(100 + n).padStart(12, '0')}`;
+    for (let n = 0; n <= STARTER_MEMORY; n += 1) await starter.start({ ...REQ, clientTripId: trip(n) });
     expect(invoke).toHaveBeenCalledTimes(STARTER_MEMORY + 1);
-    await starter.start({ ...REQ, leg: STARTER_MEMORY }); // remembered
+    await starter.start({ ...REQ, clientTripId: trip(STARTER_MEMORY) }); // remembered
     expect(invoke).toHaveBeenCalledTimes(STARTER_MEMORY + 1);
-    await starter.start({ ...REQ, leg: 0 }); // the oldest was let go: asked again (the server answers duplicate)
+    await starter.start({ ...REQ, clientTripId: trip(0) }); // the oldest was let go: asked again (the server answers duplicate)
     expect(invoke).toHaveBeenCalledTimes(STARTER_MEMORY + 2);
   });
 });
@@ -197,9 +197,9 @@ test('the live-drive port: where the module has no token (Jest, Android, an olde
 describe('the drive host’s pushToStart', () => {
   const { deviceId: _id, ...HOST_REQ } = REQ;
 
-  test('asks with this install’s id through one retry-safe starter: a retry while the first is out shares it, a sent leg is not asked again', async () => {
+  test('asks with this install’s id through one retry-safe starter: a retry while the first is out shares it, a sent drive is not asked again', async () => {
     const invoke = jest.fn(async (_name: string, { body }: { body: unknown }) => {
-      expect(body).toMatchObject({ deviceId: 'install-9', clientTripId: REQ.clientTripId, leg: 1 });
+      expect(body).toMatchObject({ deviceId: 'install-9', clientTripId: REQ.clientTripId, leg: 0 });
       return { data: { sent: true }, error: null };
     });
     const deviceId = jest.fn(async () => 'install-9');

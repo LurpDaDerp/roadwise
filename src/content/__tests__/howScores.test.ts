@@ -3,7 +3,6 @@ import {
   CAMERA_DISPUTE_AUTO_PER_WEEK,
   DISPUTE_AUTO_PER_WEEK,
   IDLE_END_S,
-  MERGE_GAP_S,
   MIN_SCORED_MILES,
   MIN_SCORED_S,
   NOT_DRIVING_PER_MONTH,
@@ -42,11 +41,10 @@ test('the sections, in order', () => {
   expect(rules(false, N).find((s) => s.id === 'drives')!.title).toBe('Starting a drive');
 });
 
-test('every number comes from the rules: the trigger, the wait, the budget, the end and the merge', () => {
+test('every number comes from the rules: the trigger, the wait, the budget and the end', () => {
   expect(section(true, 'drives')).toEqual([
     'Once you’re over 15 mph, RoadWise starts recording after about 25 s, 5 s sooner for every 3 mph faster, and right away from 30 mph. Short stops in traffic don’t reset it, and the drive counts from the moment you set off.',
     `It ends once you park and walk away, or after ${IDLE_END_S / 60} min parked.`,
-    `Stop for under ${MERGE_GAP_S / 60} min and set off again from the same spot, and it stays one drive.`,
     'Riding along? Open the drive screen and tap “Not driving?”. It shows once the car reaches driving speed, for your first 2 minutes on that screen.',
     'Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to 5 min for you to get moving.',
   ]);

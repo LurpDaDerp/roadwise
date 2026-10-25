@@ -51,15 +51,24 @@ jest.mock('@/dashcam/transport', () => {
   };
 });
 
-const finalizeCalls: { clientTripId: string; deps: Record<string, unknown> }[] = [];
+const finalizeCalls: { clientTripId: string; deps: Record<string, unknown>; facts: unknown[] }[] = [];
 jest.mock('@/core/engine/finalize', () => {
   const actual = jest.requireActual<typeof import('@/core/engine/finalize')>('@/core/engine/finalize');
   return {
     ...actual,
     // Both call sites close a drive through closeDrive (it finalizes, or drops one that never moved).
+    // The facts the finalize read are kept: its samples are gone once it has stored the drive.
     closeDrive: (session: { clientTripId: string }, deps: Record<string, unknown>) => {
-      finalizeCalls.push({ clientTripId: session.clientTripId, deps });
-      return actual.closeDrive(session as never, deps as never);
+      const call = { clientTripId: session.clientTripId, deps, facts: [] as unknown[] };
+      finalizeCalls.push(call);
+      const read = deps.dashcamFacts as ((mockTrip: unknown) => Promise<unknown>) | undefined;
+      const record = async (mockTrip: unknown) => {
+        const out = await read!(mockTrip);
+        call.facts.push(out);
+        return out;
+      };
+      const seen = read === undefined ? deps : { ...deps, dashcamFacts: record };
+      return actual.closeDrive(session as never, seen as never);
     },
   };
 });
@@ -146,15 +155,12 @@ test('row 41: crash mid-drive, then recovery finalizes the orphan with its store
   const call = finalizeCalls.find((c) => c.clientTripId === uuid(5));
   expect(call).toBeDefined();
   expect(typeof call!.deps.dashcamFacts).toBe('function');
-  const trip = await createTripsRepo(db).get(uuid(5));
-  const facts = (await (call!.deps.dashcamFacts as (t: unknown) => Promise<DashcamTripFacts>)({
-    clientTripId: uuid(5),
-    startedAt: trip!.started_at,
-    endedAt: trip!.ended_at!,
-  })) as DashcamTripFacts;
+  // The facts are read once, at the finalize, before its samples go: the speed at the event comes
+  // from them, the fixture's 15 m/s.
+  expect(call!.facts).toHaveLength(1);
+  const facts = call!.facts[0] as DashcamTripFacts;
   expect(facts).toMatchObject({ dashcamId: CAM, movingS: 300, coveredS: 280, synced: false });
-  // The finalize keeps the drive's samples through the continuation hold (they go once the upload is
-  // done), so the speed at the event still comes from them: the fixture's 15 m/s.
+  expect(await createSamplesRepo(db).count(uuid(5))).toBe(0);
   expect(facts.events).toEqual([
     { id: '11111111-2222-4333-8444-555555555555', kind: 'drowsy', startedAt: started + 120_000 - 1500, durationS: 1.5, speedMph: expect.closeTo(15 / 0.44704, 6) },
   ]);

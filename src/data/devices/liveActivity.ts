@@ -1,9 +1,9 @@
 /**
  * Asking the server to start the drive's Live Activity by push (`live-activity-start`, iOS 17.2+):
- * the drive host calls it once per drive and leg when a drive begins, or is re-opened after a stop,
- * with RoadWise not in front, so the lock screen shows it. The server sends the ActivityKit
- * push-to-start to the token this install registered (`register_device`), at most once per drive
- * and leg; a send Apple refused or never answered hands its claim back, so a retry can send.
+ * the drive host calls it once per drive when the drive begins with RoadWise not in front, so the
+ * lock screen shows it. The server sends the ActivityKit push-to-start to the token this install
+ * registered (`register_device`), at most once per drive; a send Apple refused or never answered
+ * hands its claim back, so a retry can send.
  *
  * The request's `state` is the activity's first content state: its `speed` and `limit` (in `unit`,
  * null for "-") are what the activity shows the moment it appears, so the host fills them before it
@@ -12,7 +12,7 @@
  * Nothing here throws and nothing waits long: no token, no network, a server without the function
  * or any other failure is an outcome with its reason (`requestLiveActivityStartOutcome`), and the
  * drive's own "Recording your drive" notification stands in. `createLiveActivityStarter` is the
- * retry-safe way to ask: one request per drive and leg at a time, and none again once one was sent.
+ * retry-safe way to ask: one request per drive at a time, and none again once one was sent.
  * Nothing about the drive is stored here.
  */
 import type { LiveDriveState } from '@live-drive';
@@ -25,8 +25,8 @@ export interface LiveActivityStartRequest {
   /** This install's id (`getInstallId`): the device row whose token the push goes to. */
   deviceId: string;
   clientTripId: string;
-  /** The drive's leg: 0 for the first, then one more each time the drive is re-opened (an integer). */
-  leg: number;
+  /** Always 0: the server keys its pushes by drive and leg, and a drive has one. */
+  leg: 0;
   /** The drive's start, epoch ms (the activity's `startedAt`). */
   startedAt: number;
   /** The first lock-screen state, its speed and limit included (weather none: the push never carries it). */
@@ -36,7 +36,7 @@ export interface LiveActivityStartRequest {
 /**
  * Why no push went:
  * - the server's answers: `no_token` (this install registered no push-to-start token), `duplicate`
- *   (already sent for this drive and leg, or a later leg, in the last 15 minutes), `apns_error`
+ *   (already sent for this drive in the last 15 minutes), `apns_error`
  *   (Apple refused or did not answer; `detail` holds Apple's code), `unconfigured` (the server has
  *   no APNs secrets);
  * - the server refused the call: `rate_limited` (30 an hour), `unauthorized` (the session token was
@@ -67,7 +67,7 @@ export interface LiveActivityStartOutcome {
   /** `apns_error` only: Apple's reason code (`BadDeviceToken`, ...) or `timeout` / `network` / `bad_key`; else null. */
   detail: string | null;
   /**
-   * Asking again soon (for the same drive and leg) may send: `timeout`, `network`, `server_error`,
+   * Asking again soon (for the same drive) may send: `timeout`, `network`, `server_error`,
    * `unauthorized` (the session refreshes itself), and `apns_error` when the server handed its claim
    * back after a passing failure. False when sent and for every other reason.
    */
@@ -156,14 +156,14 @@ export async function requestLiveActivityStart(req: LiveActivityStartRequest, de
   return (await requestLiveActivityStartOutcome(req, deps)).sent;
 }
 
-/** How many sent drive legs a starter remembers (a drive has a few legs at most; older ones are long over). */
+/** How many sent drives a starter remembers (older ones are long over). */
 export const STARTER_MEMORY = 16;
 
 export interface LiveActivityStarter {
   /**
-   * Asks for the drive and leg in `req`, retry-safe: a call while one for the same install, drive
-   * and leg is in flight gets that call's outcome (never two requests at once); once one was sent,
-   * later calls answer `sent` again without asking (never a second push for a leg); after a failure
+   * Asks for the drive in `req`, retry-safe: a call while one for the same install and drive is in
+   * flight gets that call's outcome (never two requests at once); once one was sent, later calls
+   * answer `sent` again without asking (never a second push for a drive); after a failure
    * a call asks again (the retry; the outcome's `retryable` says whether one is worth it soon).
    * Never throws.
    */
@@ -175,7 +175,7 @@ export function createLiveActivityStarter(deps: LiveActivityStartDeps = {}): Liv
   const sent = new Set<string>();
   return {
     start(req) {
-      const key = `${req.deviceId}|${req.clientTripId}|${req.leg}`;
+      const key = `${req.deviceId}|${req.clientTripId}`;
       if (sent.has(key)) return Promise.resolve(sentOutcome());
       const running = inFlight.get(key);
       if (running) return running;
@@ -204,7 +204,7 @@ export interface PushToStartDeps extends LiveActivityStartDeps {
 
 /**
  * The drive host's `pushToStart` (one per app process): this install's id, then the retry-safe
- * starter, so the host's retry never sends two requests at once nor a second push for a leg. An id
+ * starter, so the host's retry never sends two requests at once nor a second push for a drive. An id
  * that cannot be read is a `network` outcome (worth a retry). Never throws.
  */
 export function createPushToStart(deps: PushToStartDeps): (req: Omit<LiveActivityStartRequest, 'deviceId'>) => Promise<LiveActivityStartOutcome> {

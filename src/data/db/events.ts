@@ -93,13 +93,6 @@ export function createEventsRepo(db: Db) {
       return changes === 0 ? null : get(id, on);
     },
 
-    /** Move every event of `from` under `to` (a merged drive's events belong to the drive it merged into). */
-    async reparent(from: string, to: string, on: Db = db): Promise<number> {
-      await assertTripExists(on, to);
-      const { changes } = await on.execute('UPDATE trip_events SET client_trip_id = ? WHERE client_trip_id = ?', [to, from]);
-      return changes;
-    },
-
     async remove(id: string, on: Db = db): Promise<number> {
       const { changes } = await on.execute('DELETE FROM trip_events WHERE id = ?', [id]);
       return changes;

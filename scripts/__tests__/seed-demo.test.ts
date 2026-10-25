@@ -66,7 +66,7 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
     const starts = drives.map((d) => d.payload.startedAt);
     expect(starts).toEqual([...starts].sort((a, b) => a - b));
     for (const d of drives) for (const v of [d.payload.miles, d.payload.nightMiles]) expect(Math.round(v * 100) / 100).toBe(v);
-    // the server would join a drive started within 300 s and 150 m of the one before
+    // drive_context still names a merge for a drive started within 300 s and 150 m of the one before, which the seed refuses
     for (let i = 1; i < drives.length; i += 1) {
       const prev = drives[i - 1]!.payload;
       const next = drives[i]!.payload;

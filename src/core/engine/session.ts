@@ -168,8 +168,6 @@ export interface SessionStart {
   startSource?: StartSource | null;
   /** The parked spot the drive started from when it is not the first row; default null. */
   startPlace?: { lat: number; lng: number } | null;
-  /** Re-opened this many times (a rebuilt continuation); default 0. */
-  continuations?: number;
 }
 
 export function createSession(start: SessionStart): TripSession {
@@ -178,7 +176,6 @@ export function createSession(start: SessionStart): TripSession {
     clientTripId: start.clientTripId,
     startedAt: start.startedAt,
     origin: start.origin,
-    continuations: start.continuations ?? 0,
     startSource: start.startSource ?? null,
     startPlace: start.startPlace ?? null,
     endedAt: null,

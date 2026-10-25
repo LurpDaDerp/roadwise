@@ -16,7 +16,6 @@ beforeEach(async () => {
     { client_trip_id: uuid(1), started_at: T0 - 1000, tz: 'UTC', status: 'scored', miles: 10, duration_s: 600, clean: 1, counts_json: JSON.stringify({ speeding: 0, hardBrake: 0, hardAccel: 0, hardCorner: 0 }), polyline: 'abc', origin: 'auto' },
     // an older build's counts_json still names its phone handling count: it is ignored (V11 recounted its pickups)
     { client_trip_id: uuid(2), started_at: T0 - 2000, tz: 'UTC', status: 'pending', miles: 4, duration_s: 300, clean: 0, counts_json: JSON.stringify({ speeding: 1, pickups: 0, handlingS: 20 }), night_miles: 1, not_driving_expired: 1 },
-    { client_trip_id: uuid(3), started_at: T0 - 3000, tz: 'UTC', status: 'merged', merged_into: uuid(1) },
     { client_trip_id: uuid(4), started_at: T0 - 4000, tz: 'UTC', status: 'not_driving', miles: 3 },
     { client_trip_id: uuid(5), started_at: T0 - 5000, tz: 'UTC', status: 'recording' },
     { client_trip_id: uuid(6), started_at: T0 - 90 * 86_400_000, tz: 'UTC', status: 'unscored', reason: 'too_short', miles: 0.2, polyline: 'old' },
@@ -29,7 +28,7 @@ beforeEach(async () => {
   ]);
 });
 
-test('lists hide merged and recording drives, and keep a drive that failed to upload; filters pick clean / passenger', async () => {
+test('lists hide recording drives, and keep a drive that failed to upload; filters pick clean / passenger', async () => {
   expect(DRIVE_HISTORY_FILTERS).toEqual(['all', 'clean', 'passenger']);
   const all = await readDriveHistory(db, 'all');
   expect(all.map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2), uuid(4), uuid(8), uuid(6), uuid(7)]);
@@ -74,13 +73,13 @@ test('row bridges: counts from events, filters on a drive view', () => {
   const row: TripRow = {
     client_trip_id: 'x', started_at: 1, ended_at: 2, tz: 'UTC', local_day: null, miles: 1, night_miles: 0, duration_s: 1,
     start_lat: null, start_lng: null, end_lat: null, end_lng: null, polyline: null, from_label: 'Home', to_label: null, max_speed_mph: 0, integrity_json: null,
-    status: 'failed', clean: null, counts_json: 'not json', reason: null, merged_into: null, result_json: 'nope', server_id: null, sync_error: 'x', checkpoint_ts: null,
-    created_at: 1, updated_at: 1, continues: 0, end_cause: null, watched_miles: 0, origin: 'manual', not_driving_expired: 0, continuations: 0, finalized_at: null,
+    status: 'failed', clean: null, counts_json: 'not json', reason: null, result_json: 'nope', server_id: null, sync_error: 'x', checkpoint_ts: null,
+    created_at: 1, updated_at: 1, continues: 0, end_cause: null, watched_miles: 0, origin: 'manual', not_driving_expired: 0, finalized_at: null,
     start_source: null, last_seq: null, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null, phone_s: 0,
   };
   const d = toLocalDrive(row);
   expect(d).toMatchObject({ fromLabel: 'Home', result: null, counts: expect.objectContaining({ speeding: 0 }) });
   // A drive that failed to upload is still a drive the user made: listed, under "Not synced".
   expect(matchesHistoryFilter(d, 'all')).toBe(true);
-  expect(matchesHistoryFilter({ ...d, status: 'merged' }, 'all')).toBe(false);
+  expect(matchesHistoryFilter({ ...d, status: 'recording' }, 'all')).toBe(false);
 });

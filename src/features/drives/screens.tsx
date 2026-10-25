@@ -56,7 +56,6 @@ export function DriveHistoryScreen() {
 
 export function DriveSummaryScreen() {
   const t = useTheme();
-  const router = useRouter();
   const back = useBack();
   const qc = useQueryClient();
   const db = useDb();
@@ -98,7 +97,6 @@ export function DriveSummaryScreen() {
         notDrivingLeft={summary.data?.not_driving_left ?? null}
         now={now()}
         onBack={back}
-        onOpenDrive={(id) => router.replace(driveSummaryHref(id))}
         onReport={async (eventId, reason) => {
           const outcome = await reportEvent(drive.clientTripId, eventId, reason, { db, queryClient: qc });
           if (outcome === 'missing') throw new Error('event not found');

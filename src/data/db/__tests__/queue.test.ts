@@ -127,24 +127,18 @@ test('purgeDone removes old finished items only', async () => {
   expect(await queue.purgeDone(T0 + 1)).toBe(1);
 });
 
-test('the upload hold: deferUntil inside a transaction holds an item; makeUntriedDue frees it; dropUntried pulls back only an item never tried', async () => {
-  const HOLD = 300_000;
-  const held = await queue.enqueue('finalize-trip', { clientTripId: 'a' }, 'trip:a', T0);
-  await db.transaction((tx) => queue.deferUntil(held.id, T0 + HOLD, tx));
-  expect(await queue.nextDue(T0 + HOLD - 1)).toEqual([]);
+test('deferUntil inside a transaction puts an item off; makeUntriedDue makes it due now; a tried one keeps its time', async () => {
+  const WAIT = 300_000;
+  const waiting = await queue.enqueue('finalize-trip', { clientTripId: 'a' }, 'trip:a', T0);
+  await db.transaction((tx) => queue.deferUntil(waiting.id, T0 + WAIT, tx));
+  expect(await queue.nextDue(T0 + WAIT - 1)).toEqual([]);
   expect(await queue.makeUntriedDue(T0 + 10)).toBe(1);
-  expect((await queue.get(held.id))?.next_attempt_at).toBe(T0 + 10);
+  expect((await queue.get(waiting.id))?.next_attempt_at).toBe(T0 + 10);
 
-  // a claimed (in flight) item, or one already tried, is never dropped
   const [claimed] = await queue.nextDue(T0 + 10);
-  expect(claimed?.id).toBe(held.id);
-  expect(await queue.dropUntried('trip:a')).toBe(false);
-  await queue.markAttempt(held.id, false, 'network', T0 + 20);
-  expect(await queue.dropUntried('trip:a')).toBe(false);
-  expect(await queue.byKey('trip:a')).not.toBeNull();
-
-  await queue.enqueue('finalize-trip', { clientTripId: 'b' }, 'trip:b', T0);
-  expect(await db.transaction((tx) => queue.dropUntried('trip:b', tx))).toBe(true);
-  expect(await queue.byKey('trip:b')).toBeNull();
-  expect(await queue.dropUntried('trip:b')).toBe(false);
+  expect(claimed?.id).toBe(waiting.id);
+  await queue.markAttempt(waiting.id, false, 'network', T0 + 20);
+  const backoff = (await queue.get(waiting.id))?.next_attempt_at;
+  expect(await queue.makeUntriedDue(T0 + 30)).toBe(0);
+  expect((await queue.get(waiting.id))?.next_attempt_at).toBe(backoff);
 });

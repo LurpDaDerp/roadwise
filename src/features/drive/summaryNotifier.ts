@@ -3,11 +3,8 @@
  * ends while the driving screen is not in front to open the recap itself (RoadWise behind or the
  * phone locked, or RoadWise in front on another screen): "24 min · 12.0 mi. See how it went."
  * Tapping it opens the recap (`/drives/<id>?fresh=1`). An automatic drive that ends on its own in
- * the background posts it like any other. A drive set off again within 5 minutes continues the same
- * trip: the recap its first leg posted comes down while it records, and its next end posts again
- * under the same identifier with the longer drive's numbers. A drive discarded with "Not driving?",
- * or not kept, posts nothing; a re-opened drive discarded with "Not driving?" also takes down the
- * recap its first leg posted (the drive it opens no longer exists).
+ * the background posts it like any other. Each drive posts its recap once, and it stays up; a drive
+ * discarded with "Not driving?", or not kept, posts nothing.
  *
  * Attached before the drive host boots, so a drive the boot stores (native ended it while no
  * process ran) posts too, when it ended within the last `RECAP_MAX_AGE_MS`; an older one is only
@@ -20,17 +17,17 @@
  *
  * Getting the post out before iOS suspends a background app: every detector drive's end (native's
  * own, or JS's through `stopCapture`) runs inside native's 25 s end task (`drivesense.end`), and an
- * automatic end keeps GPS on for the 3-minute linger after it; the chain here (permission, units,
- * schedule) takes well under a second.
+ * automatic end keeps GPS on for native's post-end watch after it; the chain here (permission,
+ * units, schedule) takes well under a second.
  *
  * Battery: the host listener compares a few fields per change and returns; the OS is touched only
- * when a drive finalizes or one it posted for is re-opened.
+ * when a drive finalizes.
  */
 import * as Notifications from 'expo-notifications';
 import { AppState } from 'react-native';
 
 import { createSettingsRepo, type Db } from '@/data/db';
-import type { DriveHost, DriveState, LastFinalized } from '@/drive/host';
+import type { DriveHost, LastFinalized } from '@/drive/host';
 import { formatDuration } from '@/features/drives/format';
 import { isDriveScreenFocused } from '@/features/drive/hudPresence';
 import { ensureNotificationSetup } from '@/features/notifications/categories';
@@ -150,8 +147,6 @@ export async function cancelDriveSummaries(port: SummaryNotificationPort = creat
 
 /** A drive that ended longer ago than this (a launch storing it hours later) posts no recap: it is in the drive list. */
 export const RECAP_MAX_AGE_MS = 2 * 60 * 60_000;
-/** Drives this process posted a recap for, remembered for taking it down when one is re-opened. */
-const POSTED_MEMORY = 16;
 
 type Kept = StoredDrive;
 /** Why a recap is announced: a drive's end seen now, a launch's stored orphan, or one held while another drive recorded. */
@@ -166,10 +161,6 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
   const report = (e: unknown, ctx: string) => deps.onError?.(e, ctx);
   let chain: Promise<void> = Promise.resolve();
   let seen: LastFinalized = host.snapshot().lastFinalized;
-  /** The drive recording when last seen (a change of it is a drive opening or re-opening). */
-  let recordingId: string | null = recordingOf(host.snapshot());
-  /** Trips this process posted a recap for, oldest first. */
-  const posted: string[] = [];
   /** Recaps due while a drive recorded: they post once none does. */
   const held = new Map<string, Kept>();
   let detached = false;
@@ -196,19 +187,12 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
     if (!(await port.permissionGranted())) return;
     const body = summaryCopy.body(f.durationS, f.miles, await unitsNow());
     if (detached) return;
-    const s = host.snapshot();
-    if (s.status !== 'idle') {
-      // The same trip recording again (re-opened within 5 min): its next end posts the longer drive.
-      // Another drive recording (or this end still finishing): this recap waits until none is open.
-      if (!(s.status === 'recording' && s.clientTripId === f.clientTripId)) held.set(f.clientTripId, f);
+    // Another drive recording (or this end still finishing): this recap waits until none is open.
+    if (host.snapshot().status !== 'idle') {
+      held.set(f.clientTripId, f);
       return;
     }
-    // Remembered before the post: a re-open landing meanwhile queues its take-down behind it.
-    const at = posted.indexOf(f.clientTripId);
-    if (at >= 0) posted.splice(at, 1);
-    posted.push(f.clientTripId);
-    if (posted.length > POSTED_MEMORY) posted.shift();
-    // One identifier per trip: a continuation's end replaces the first recap with the longer drive.
+    // One identifier per trip.
     await port.schedule({
       identifier: `${IDENTIFIER_PREFIX}${f.clientTripId}`,
       clientTripId: f.clientTripId,
@@ -218,34 +202,17 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
     });
   };
 
-  const takeDown = (id: string): void => {
-    held.delete(id);
-    const at = posted.indexOf(id);
-    if (at >= 0) posted.splice(at, 1);
-    enqueue(() => port.cancel(`${IDENTIFIER_PREFIX}${id}`));
-  };
-
   const off = host.subscribe((s) => {
-    // A drive opens: one this process posted a recap for is the held drive re-opened, and its recap comes down.
-    const rec = recordingOf(s);
-    if (rec !== recordingId) {
-      recordingId = rec;
-      if (rec !== null) {
-        held.delete(rec);
-        if (posted.includes(rec)) takeDown(rec);
-      }
-    }
     const f = s.lastFinalized;
     if (f !== seen && f !== null) {
       const fresh = seen === null || f.clientTripId !== seen.clientTripId || f.at !== seen.at;
       seen = f;
       if (fresh) {
         held.delete(f.clientTripId);
-        // "Not driving?" deleted the drive, a re-opened one with its first leg: that leg's recap goes too.
-        if (f.ok && f.dropped === 'cancelled') takeDown(f.clientTripId);
-        // A drive that was not kept has no recap. The driving screen in front at the moment the drive
-        // ended opens the recap itself (it may have moved on to it before the chain runs).
-        else if (f.ok && isKept(f) && !(appState.currentState === 'active' && screenShowsEnd())) enqueue(() => announce(f, 'end'));
+        // A drive that was not kept (or discarded with "Not driving?") has no recap. The driving
+        // screen in front at the moment the drive ended opens the recap itself (it may have moved on
+        // to it before the chain runs).
+        if (f.ok && isKept(f) && !(appState.currentState === 'active' && screenShowsEnd())) enqueue(() => announce(f, 'end'));
       }
     }
     // No drive records any more: the recaps held meanwhile post, each by the same rules but the
@@ -270,7 +237,3 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
   };
 }
 
-/** The drive recording in `s`, or null. */
-function recordingOf(s: Pick<DriveState, 'status' | 'clientTripId'>): string | null {
-  return s.status === 'recording' ? (s.clientTripId ?? null) : null;
-}

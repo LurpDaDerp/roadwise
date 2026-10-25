@@ -1,16 +1,14 @@
 // The finalize pipeline (modes plan §3.5, §3.11; phone plan P5): the closed session the engine hands
 // over becomes a stored drive with a privacy-trimmed route, from/to labels, its opportunity counters
-// and one queued, held upload.
+// and one queued upload.
 //
 //   1. the route is trimmed (zones + first/last 0.25 mi) and the events located on it;
 //   2. the v5 payload is built and validated against the upload contract (how the drive started,
 //      whether its "Not driving?" ran out, its exposure with the phone seconds, its phone pickups);
 //   3. the drive is classified (`classifyDrive`: scored, or too short; the events that break clean);
 //   4. ONE transaction replaces the events, updates the trip row (`pending`, `finalized_at`), queues
-//      the upload HELD for `UPLOAD_HOLD_MS` (a drive confirmed in that window, starting near this
-//      end, re-opens this trip: `src/drive/continuation.ts`), and sweeps the samples of drives whose
-//      hold is over. This drive's own samples stay until its upload is sent or its hold lapses. It
-//      commits or it does not.
+//      the upload (due at once), and sweeps the samples of every finished drive, this one's too:
+//      they only ever served a relaunch mid-drive. It commits or it does not.
 // A payload the contract refuses is stored as `failed` (never uploaded, never left `recording`).
 // A drive that never moved, or never reached driving speed, and a Start-card drive too short to
 // score, is not finalized at all: `closeDrive` drops it (nothing stored or queued).
@@ -22,7 +20,6 @@
 import {
   classifyDrive,
   DASHCAM_MIN_MPH,
-  MERGE_GAP_S,
   isDashcamType,
   phonePickupTier,
   tooShort,
@@ -34,7 +31,7 @@ import {
 
 import type { DashcamCandidate, DashcamTripFacts } from '@/dashcam/facts';
 
-import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db, type EventRow, type NewEvent, type TripRow } from '@/data/db';
+import { createEventsRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db, type EventRow, type NewEvent, type TripRow } from '@/data/db';
 import { deviceTrimSeed } from '@/data/devices/deviceSecret';
 import { countEvents } from '@/data/queries/rows';
 import {
@@ -58,12 +55,6 @@ import { expoGeocoder, labelFor, startPoint, type Geocoder } from './labels';
 import { parseZones, PRIVACY_ZONES_KEY, trimRoute, type PrivacyZone } from './privacy';
 import { durationSOf } from './session';
 import type { DetectedEvent } from './types';
-
-/**
- * Every finalized drive's upload waits this long from its finalize (`trips.finalized_at`), and its
- * samples are kept as long: a drive confirmed within it, starting near this end, re-opens the trip.
- */
-export const UPLOAD_HOLD_MS = MERGE_GAP_S * 1000;
 
 export interface FinalizeDeps {
   db: Db;
@@ -309,16 +300,16 @@ const endedAtOf = (session: Pick<TripSession, 'startedAt' | 'endedAt' | 'lastRow
 const milesOf = (session: Pick<TripSession, 'distanceM'>): number => round3(clamp(metersToMiles(finite(session.distanceM)), 0, 1000));
 
 /**
- * A drive started from the Start card (and never re-opened) that is too short to score is not kept
- * at all (`tooShort`): under `MIN_SCORED_MILES` on the miles the payload would state AND under
- * `MIN_SCORED_S` from the car's first movement (`session.firstMovingAt`, the first row at
- * `MOVING_MIN_MPH` or more) to its end, so the wait before it never counts (the drive's own start
- * stays the tap). An automatic one is kept unscored. A re-opened drive never is: its first leg was kept.
+ * A drive started from the Start card that is too short to score is not kept at all (`tooShort`):
+ * under `MIN_SCORED_MILES` on the miles the payload would state AND under `MIN_SCORED_S` from the
+ * car's first movement (`session.firstMovingAt`, the first row at `MOVING_MIN_MPH` or more) to its
+ * end, so the wait before it never counts (the drive's own start stays the tap). An automatic one
+ * is kept unscored.
  */
 export function manualTooShort(
-  session: Pick<TripSession, 'origin' | 'continuations' | 'distanceM' | 'startedAt' | 'endedAt' | 'lastRowTs' | 'firstMovingAt'>
+  session: Pick<TripSession, 'origin' | 'distanceM' | 'startedAt' | 'endedAt' | 'lastRowTs' | 'firstMovingAt'>
 ): boolean {
-  if (session.origin !== 'manual' || session.continuations > 0) return false;
+  if (session.origin !== 'manual') return false;
   const movingFrom = session.firstMovingAt === null ? null : Math.round(session.firstMovingAt);
   const movingS = movingFrom === null ? 0 : durationSOf({ startedAt: movingFrom, endedAt: endedAtOf(session) });
   return tooShort(milesOf(session), round3(movingS));
@@ -333,7 +324,7 @@ export interface DroppedResult {
 /**
  * Delete a drive that is not kept, in one transaction: its samples, events and DashPal coverage,
  * then the trip row, but only while that row is still `recording` (a finalized drive is never
- * deleted; a re-opened continuation is `recording` again, so it goes whole). Nothing is queued.
+ * deleted). Nothing is queued.
  * Returns false when a finalized row stood in the way.
  */
 export async function dropTrip(db: Db, clientTripId: string): Promise<boolean> {
@@ -501,7 +492,6 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     checkpoint_ts: null,
     origin: session.origin,
     not_driving_expired: notDrivingExpired ? 1 : 0,
-    continuations: session.continuations,
     start_source: session.startSource,
     finalized_at: stamp,
     slowdowns: exposure.slowdowns,
@@ -530,13 +520,9 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
       tx
     );
     if (!trip) throw new Error(`trip ${id} vanished before finalize`);
-    if (parsed.success) {
-      const item = await enqueueFinalize(db, parsed.data, stamp, tx);
-      // Held: the car setting off again near here within the hold re-opens this trip instead.
-      await createQueueRepo(db).deferUntil(item.id, stamp + UPLOAD_HOLD_MS, tx);
-    }
-    // This drive's samples stay for its hold; drives whose hold is over let theirs go.
-    await samples.purgeFinishedBefore(stamp - UPLOAD_HOLD_MS, tx);
+    if (parsed.success) await enqueueFinalize(db, parsed.data, stamp, tx);
+    // A finished drive needs no samples (they rebuild a drive under way): this one's go too.
+    await samples.purgeFinished(tx);
     return { trip, eventRows };
   });
 

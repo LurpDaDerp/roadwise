@@ -47,7 +47,6 @@ const COLUMNS = [
   'clean',
   'counts_json',
   'reason',
-  'merged_into',
   'result_json',
   'server_id',
   'sync_error',
@@ -59,7 +58,6 @@ const COLUMNS = [
   'watched_miles',
   'origin',
   'not_driving_expired',
-  'continuations',
   'finalized_at',
   'start_source',
   'last_seq',
@@ -108,7 +106,6 @@ export function toTripRow(row: Record<string, unknown>): TripRow {
     clean: asFlagOrNull(row, 'clean'),
     counts_json: asTextOrNull(row, 'counts_json'),
     reason: asTextOrNull(row, 'reason'),
-    merged_into: asTextOrNull(row, 'merged_into'),
     result_json: asTextOrNull(row, 'result_json'),
     server_id: asTextOrNull(row, 'server_id'),
     sync_error: asTextOrNull(row, 'sync_error'),
@@ -120,7 +117,6 @@ export function toTripRow(row: Record<string, unknown>): TripRow {
     watched_miles: asNumberOrNull(row, 'watched_miles') ?? 0,
     origin: asEnum(row, 'origin', DRIVE_ORIGINS),
     not_driving_expired: asFlag(row, 'not_driving_expired'),
-    continuations: asNumberOrNull(row, 'continuations') ?? 0,
     finalized_at: asNumberOrNull(row, 'finalized_at'),
     start_source: startSourceOf(asTextOrNull(row, 'start_source')),
     last_seq: asNumberOrNull(row, 'last_seq'),
@@ -200,47 +196,16 @@ export function createTripsRepo(db: Db) {
     },
 
     /**
-     * When the phone's most recent closed drive ended (merged ones included: they were driven too),
-     * or null. A drive started within `MERGE_GAP_S` of it has no warm-up.
+     * When the phone's most recent closed drive ended, or null. A drive started within `MERGE_GAP_S`
+     * of it has no warm-up.
      */
     async lastEndedAt(): Promise<number | null> {
       const { rows } = await db.execute("SELECT MAX(ended_at) AS t FROM trips WHERE status != 'recording' AND ended_at IS NOT NULL");
       return asNumberOrNull(rows[0] ?? {}, 't');
     },
 
-    /** The latest drive that is not merged away or still recording. */
-    async latestFinished(): Promise<TripRow | null> {
-      const { rows } = await db.execute(
-        "SELECT * FROM trips WHERE status NOT IN ('recording', 'merged') ORDER BY started_at DESC LIMIT 1"
-      );
-      const row = rows[0];
-      return row ? toTripRow(row) : null;
-    },
-
     checkpoint: (clientTripId: string, checkpointTs: number, now: number = Date.now(), on?: Db) =>
       update(clientTripId, { checkpoint_ts: checkpointTs }, now, on),
-
-    /** Stamp when the drive's end was decided (the upload hold and a re-open run from it). Null when there is no such trip. */
-    setFinalized: (clientTripId: string, at: number, on?: Db) => update(clientTripId, { finalized_at: at }, at, on),
-
-    /**
-     * Re-open a finished drive the car has set off again from, within the upload hold: the row goes
-     * back to `recording` with no end (`ended_at`, `end_cause`, `finalized_at` cleared), one more
-     * continuation, and its checkpoint at its newest sample, so the engine resumes after the rows it
-     * already holds. Only a `pending` drive (its upload held, never sent) can be re-opened; anything
-     * else answers null and nothing changes.
-     */
-    async reopen(clientTripId: string, now: number = Date.now(), on: Db = db): Promise<TripRow | null> {
-      const { changes } = await on.execute(
-        `UPDATE trips SET status = 'recording', ended_at = NULL, end_cause = NULL, finalized_at = NULL,
-           continuations = continuations + 1,
-           checkpoint_ts = (SELECT MAX(ts) FROM samples WHERE samples.client_trip_id = trips.client_trip_id),
-           sync_error = NULL, updated_at = ?
-         WHERE client_trip_id = ? AND status = 'pending'`,
-        [now, clientTripId]
-      );
-      return changes === 0 ? null : get(clientTripId, on);
-    },
 
     /** Takes the trip's events, samples and DashPal coverage with it (explicitly: foreign keys may be off in a device transaction). */
     async remove(clientTripId: string, on: Db = db): Promise<boolean> {

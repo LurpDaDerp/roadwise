@@ -1,7 +1,7 @@
-// Rebuilding an interrupted drive from its durable rows, for `adopt` (a relaunch mid-drive, or a
-// drive re-opened by a continuation) and for finalizing an orphan (the process died and the capture
-// with it). The rows replay through the same session and detector steps as live, so the rebuilt
-// drive (its miles, events and opportunity counters) is the one the live engine had.
+// Rebuilding an interrupted drive from its durable rows, for `adopt` (a relaunch mid-drive) and for
+// finalizing an orphan (the process died and the capture with it). The rows replay through the same
+// session and detector steps as live, so the rebuilt drive (its miles, events and opportunity
+// counters) is the one the live engine had.
 import { createSamplesRepo, type Db, type TripRow } from '@/data/db';
 
 import { ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
@@ -40,7 +40,6 @@ export async function rebuildFromSamples(db: Db, trip: TripRow, deps: RebuildDep
     continues: trip.continues === 1,
     startSource: trip.start_source,
     startPlace: startPlaceOf(trip),
-    continuations: trip.continuations,
   });
   const detectors = deps.createDetectors();
   for (const sample of stored) {

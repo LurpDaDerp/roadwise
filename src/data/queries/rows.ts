@@ -49,7 +49,6 @@ export interface LocalDrive {
   /** The server's answer (v4); null until it answered, and for one stored before this build. */
   result: FinalizeTripResponse | null;
   reason: string | null;
-  mergedInto: string | null;
   /** Why the server last refused an action on this drive (e.g. a "Wasn't driving": `too_old`). */
   syncError: string | null;
   /** What ended it, on the phone that recorded it (null otherwise). */
@@ -60,8 +59,6 @@ export interface LocalDrive {
   origin: DriveOrigin;
   /** The in-drive "Not driving?" ran out, so "Wasn't driving" is never offered for it. */
   notDrivingExpired: boolean;
-  /** Times it was re-opened because the car set off again within the upload hold. */
-  continuations: number;
   /** Where the start came from; null on an older or restored drive. */
   startSource: StartSource | null;
   /**
@@ -185,13 +182,11 @@ export function toLocalDrive(row: TripRow): LocalDrive {
     counts: parseCounts(row.counts_json),
     result: parseResult(row.result_json),
     reason: row.reason,
-    mergedInto: row.merged_into,
     syncError: row.sync_error,
     endCause: row.end_cause,
     watchedMiles: row.watched_miles,
     origin: row.origin,
     notDrivingExpired: row.not_driving_expired === 1,
-    continuations: row.continuations,
     startSource: row.start_source,
     exposure,
     exposureEstimated: estimated,
@@ -246,10 +241,10 @@ export function toLocalDriveEvent(row: EventRow): LocalDriveEvent {
 }
 
 /**
- * A drive the lists show: not merged away, not still recording. One that failed to upload is still
- * a drive the user made, and is listed under "Not synced" rather than lost.
+ * A drive the lists show: not still recording. One that failed to upload is still a drive the user
+ * made, and is listed under "Not synced" rather than lost.
  */
-export const isListed = (d: Pick<LocalDrive, 'status'>): boolean => d.status !== 'merged' && d.status !== 'recording';
+export const isListed = (d: Pick<LocalDrive, 'status'>): boolean => d.status !== 'recording';
 
 /**
  * A drive that counts toward stats and the first-run count: scored by the server, or pending and

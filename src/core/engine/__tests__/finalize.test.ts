@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { classifyDrive, MERGE_GAP_S } from '@scoring';
+import { classifyDrive } from '@scoring';
 
 import { T0 } from '@/core/detectors/__fixtures__/rows';
 import { brakeEvent, closedSession, rows, speedingEvent, TZ, uuid } from '@/core/engine/__fixtures__/drives';
@@ -16,7 +16,6 @@ import {
   isDropped,
   normaliseZone,
   sanitizeEvent,
-  UPLOAD_HOLD_MS,
 } from '@/core/engine/finalize';
 import { PRIVACY_ZONES_KEY } from '@/core/engine/privacy';
 import { appendRow, closeAtLastMovement, closeSession, createSession, noteWarmup } from '@/core/engine/session';
@@ -69,7 +68,6 @@ test('a 20-minute drive is stored as pending with its classification, trimmed ro
     sync_error: null,
     origin: 'auto',
     not_driving_expired: 0,
-    continuations: 0,
     finalized_at: NOW,
     reason: null,
     clean: 0,
@@ -109,9 +107,8 @@ test('a 20-minute drive is stored as pending with its classification, trimmed ro
   expect(await findFinalize(db, session.clientTripId)).toEqual(payload);
   const item = await createQueueRepo(db).byKey(`trip:${session.clientTripId}`);
   expect(item?.owner_uid).toBe('user-1');
-  // Held: the upload waits out the merge window from the finalize.
-  expect(item?.next_attempt_at).toBe(NOW + UPLOAD_HOLD_MS);
-  expect(UPLOAD_HOLD_MS).toBe(MERGE_GAP_S * 1000);
+  // Due at once: the drive is final.
+  expect(item?.next_attempt_at).toBe(NOW);
 });
 
 test('a phone pickup goes up (v5) with its whole seconds in hand and its speeds, is counted and breaks a clean drive', async () => {
@@ -128,22 +125,22 @@ test('a phone pickup goes up (v5) with its whole seconds in hand and its speeds,
   expect(result.events[0]).toMatchObject({ type: 'phone_pickup', duration_s: 12, measured_json: JSON.stringify({ speedMph: 33.5, maxSpeedMph: 33.6 }) });
 });
 
-test('the drive’s own samples stay through its hold; drives whose hold is over lose theirs (the sweep)', async () => {
+test('every finished drive loses its samples at a finalize, this one too; one still recording keeps them (the sweep)', async () => {
   const trips = createTripsRepo(db);
   const samples = createSamplesRepo(db);
-  // An older drive finalized 6 min ago, and one finalized 2 min ago: only the first is swept.
-  for (const [n, at] of [
-    [21, NOW - 360_000],
-    [22, NOW - 120_000],
+  // A drive finalized 2 min ago, and one recording (a relaunch would rebuild it from them).
+  for (const [n, status] of [
+    [21, 'pending'],
+    [22, 'recording'],
   ] as const) {
-    await trips.insert({ client_trip_id: uuid(n), started_at: T0 - 3_600_000, tz: TZ, status: 'pending', finalized_at: at }, T0);
+    await trips.insert({ client_trip_id: uuid(n), started_at: T0 - 3_600_000, tz: TZ, status, finalized_at: status === 'pending' ? NOW - 120_000 : null }, T0);
     await samples.appendMany(uuid(n), rows(3).map((r) => ({ ts: r.ts, row: r })));
   }
   const list = rows(200);
   const session = closedSession(200);
   await recorded(session, list);
   await finalizeTrip(session, deps());
-  expect(await samples.count(session.clientTripId)).toBe(200);
+  expect(await samples.count(session.clientTripId)).toBe(0);
   expect(await samples.count(uuid(21))).toBe(0);
   expect(await samples.count(uuid(22))).toBe(3);
 });
@@ -163,11 +160,11 @@ test('a drive whose "Not driving?" ran out (the row says so, or the host does) u
 test('a drive started from the parked spot (start source motion) labels and stores that spot; the upload’s start stays its first row', async () => {
   const base = closedSession(300);
   const parked = { lat: 47.61, lng: -122.34 };
-  const session: Readonly<TripSession> = { ...base, startSource: 'motion', startPlace: parked, continuations: 2 };
+  const session: Readonly<TripSession> = { ...base, startSource: 'motion', startPlace: parked };
   const labelled: string[] = [];
   const result = await finalizeTrip(session, deps({ geocode: async (p) => (labelled.push(`${p.lat},${p.lng}`), 'Somewhere') }));
   expect(labelled[0]).toBe(`${parked.lat},${parked.lng}`);
-  expect(result.trip).toMatchObject({ start_lat: 47.61, start_lng: -122.34, start_source: 'motion', continuations: 2 });
+  expect(result.trip).toMatchObject({ start_lat: 47.61, start_lng: -122.34, start_source: 'motion' });
   expect(result.payload!.start).toEqual({ lat: 47.6062, lng: -122.3321 });
 });
 
@@ -456,9 +453,9 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
     expect((await createTripsRepo(db).get(ID))!.status).toBe('pending');
   });
 
-  test('a Start-card drive under 0.5 mi AND under 2 min is too_short and dropped; reaching either one keeps it; an automatic or a re-opened one is kept', async () => {
-    const drive = (n: number, origin: 'auto' | 'manual', continuations = 0) => {
-      const s = createSession({ clientTripId: ID, startedAt: T0, origin, continuations });
+  test('a Start-card drive under 0.5 mi AND under 2 min is too_short and dropped; reaching either one keeps it; an automatic one is kept', async () => {
+    const drive = (n: number, origin: 'auto' | 'manual') => {
+      const s = createSession({ clientTripId: ID, startedAt: T0, origin });
       for (const r of rows(n)) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios' });
       return s;
     };
@@ -472,9 +469,8 @@ describe('a drive that never moved is dropped (closeDrive)', () => {
     expect(manualTooShort(closeSession(drive(30, 'manual'), T0 + 120_000, 'manual'))).toBe(false);
     // 0.5 mi in under a minute: far enough.
     expect(manualTooShort(closeSession(drive(55, 'manual'), T0 + 55_000, 'manual'))).toBe(false);
-    // Automatic: kept, unscored ("Too short to score"); re-opened: its first leg was kept.
+    // Automatic: kept, unscored ("Too short to score").
     expect(manualTooShort(closeSession(drive(30, 'auto'), T0 + 30_000, 'manual'))).toBe(false);
-    expect(manualTooShort(closeSession(drive(30, 'manual', 1), T0 + 30_000, 'manual'))).toBe(false);
     const auto = await closeDrive(closeSession(drive(30, 'auto'), T0 + 30_000, 'manual'), deps());
     expect(isDropped(auto)).toBe(false);
     expect(auto).toMatchObject({ drive: { scored: false } });

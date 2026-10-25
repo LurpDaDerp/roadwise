@@ -4,10 +4,9 @@ import { assertTripExists } from '@/data/db/trips';
 import type { SampleRow } from '@/data/db/types';
 
 /**
- * The 1 Hz feature rows of a drive. They exist so a relaunch can rebuild the drive under way and a
- * drive re-opened within its upload hold can carry on from them. They go when the drive's upload is
- * sent, or when the hold is over (`purgeFinishedBefore`), which is what keeps this table from
- * growing without bound.
+ * The 1 Hz feature rows of a drive. They exist so a relaunch can rebuild the drive under way. They
+ * go when the drive is finalized (`purgeFinished`), which is what keeps this table from growing
+ * without bound.
  */
 
 function toSampleRow(row: Record<string, unknown>): SampleRow {
@@ -92,16 +91,13 @@ export function createSamplesRepo(db: Db) {
     },
 
     /**
-     * The sweep: drops the samples of every drive that is closed (not `recording`) and whose end was
-     * decided before `ts` (or never stamped), i.e. drives past the window in which the car setting
-     * off again re-opens them. Returns how many rows went. Runs on `on` when given.
+     * The sweep: drops the samples of every drive that is closed (not `recording`). Returns how many
+     * rows went. Runs on `on` when given.
      */
-    async purgeFinishedBefore(ts: number, on: Db = db): Promise<number> {
+    async purgeFinished(on: Db = db): Promise<number> {
       const { changes } = await on.execute(
         `DELETE FROM samples WHERE client_trip_id IN (
-           SELECT client_trip_id FROM trips
-            WHERE status != 'recording' AND (finalized_at IS NULL OR finalized_at < ?))`,
-        [ts]
+           SELECT client_trip_id FROM trips WHERE status != 'recording')`
       );
       return changes;
     },

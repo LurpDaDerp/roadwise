@@ -80,8 +80,8 @@ export interface DetectorContext {
   /**
    * epoch ms before which no hard brake, start or turn starts: `NO_EVENTS_FIRST_S` after the start
    * for a drive that starts stopped, the first trusted reading over 5 mph for one started while
-   * moving, the start itself for a continuation (`TripSession.warmup`). Speeding and phone pickups
-   * do not wait for it.
+   * moving, the start itself for one that continues the one before (`TripSession.warmup`). Speeding
+   * and phone pickups do not wait for it.
    */
   warmupEndsAt: number;
   /** The phone that recorded the drive: on iPhone a row with a call is never phone use. */

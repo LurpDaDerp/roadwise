@@ -24,7 +24,6 @@ export const recapCopy = {
     tooShort: { title: 'Too short to score', body: (dist: string, min: number) => `Drives under ${dist} that take under ${min} min don't get a score.` },
     notScored: { title: 'Not scored', body: "This drive didn't get a score." },
     notDriving: { title: 'Marked as not driving', body: "This drive doesn't count toward your Safety Rating." },
-    merged: { title: 'Added to your last drive', body: 'You set off again within 5 minutes, so the two count as one drive.', action: 'Open that drive' },
   },
   notScoredWhy: {
     spoofed: "This drive's location didn't look right, so it wasn't scored.",
@@ -64,7 +63,7 @@ export const recapCopy = {
     title: 'Your drives',
     score: 'score',
     notSynced: 'not synced',
-    words: { recording: 'Recording', too_short: 'Too short', not_scored: 'Not scored', not_driving: 'Not driving', merged: 'Merged' },
+    words: { recording: 'Recording', too_short: 'Too short', not_scored: 'Not scored', not_driving: 'Not driving' },
     week: (n: number, dist: string) => `${n} ${n === 1 ? 'drive' : 'drives'} · ${dist}`,
     emptyAuto: { title: 'No drives yet', body: "Your drives show up here after you've driven. RoadWise notices them on its own." },
     emptyManual: { title: 'No drives yet', body: 'Swipe Start drive on Home before you pull out. Every drive shows up here.' },

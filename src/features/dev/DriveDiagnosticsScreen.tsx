@@ -9,7 +9,7 @@
 // Rows come from SQLite (`samples`), not from a native `row` listener: a JS listener attached here
 // would receive the rows native buffered for the drive host (README §3, "Buffering") and would
 // count as the watchdog's liveness signal (§6.2), so opening this screen could lose rows or keep
-// an orphaned capture alive. Samples exist only for a drive still recording or within its upload hold.
+// an orphaned capture alive. Samples exist only for a drive still recording.
 //
 // iPhone: the drive detector's state (what phase it is in and since when: a `candidate` is the last
 // wake), its permissions and its journal, read with `getState`/`listDrives` only. Every platform:
@@ -183,7 +183,7 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 async function lastDriveLoads(db: Db): Promise<DriveLoadRow[]> {
   const { rows } = await db.execute(
     `SELECT client_trip_id, started_at, miles, duration_s, slowdowns, speedups, turns, limit_s, moving_s, phone_s FROM trips
-      WHERE status NOT IN ('recording', 'merged') ORDER BY started_at DESC LIMIT 5`
+      WHERE status != 'recording' ORDER BY started_at DESC LIMIT 5`
   );
   const out: DriveLoadRow[] = [];
   for (const r of rows) {
