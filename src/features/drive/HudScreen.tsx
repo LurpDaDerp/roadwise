@@ -5,13 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, Dimensions, Platform, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { demoTap } from '@/demo/tapAlert'; // DEMO
-import { DemoSkyFade } from '@/demo/DemoSkyFade'; // DEMO
-import { DemoThemeLabel } from '@/demo/DemoThemeLabel'; // DEMO
-import { DEMO_WARNING_ALERT, demoHudLook, demoThemeOf, useDemo } from '@/demo/demoStore'; // DEMO
-import { useDemoDashpal } from '@/demo/hooks'; // DEMO
 import { DashpalChip, DashpalHudBanner, useDashpalChip, useDashpalFlash, useDashpalHeld } from '@/dashcam/ui/HudDashpal';
-import { ALERT_GLOW_MS } from '@/core/alerts/policy';
 import { useOptionalDb } from '@/data/queries/context';
 import { useBearing, useDrive, useDriveControls, useDriveHost, useDriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
@@ -36,7 +30,7 @@ import {
 } from '@/ui/drive';
 
 import { nextEndLock } from './endLock';
-import { EventBanner, useAlertFlash, type HudFlash } from './EventBanner';
+import { EventBanner, useAlertFlash } from './EventBanner';
 import { hudButtonColors } from './hudButtons';
 import { hudCopy } from './hudCopy';
 import { hudLayout, type Rect } from './hudLayout';
@@ -52,9 +46,6 @@ import { inUnits, useHudUnits } from './useHudUnits';
 import { WaitingBanner } from './WaitingBanner';
 import { WaitPanel } from './WaitPanel';
 import { WeatherBanner } from './WeatherBanner';
-
-/** DEMO: taps closer together than this play the phone alert once. */
-const TAP_ALERT_GAP_MS = 1000;
 
 /** End's swipe forgives this much up or down before it gives way (nothing scrolls under it). */
 const END_VERTICAL_SLOP_PT = 24;
@@ -207,14 +198,10 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const theme = useOptionalTheme();
   const themeNight = theme?.hudNight ?? null;
   const sunNight = useSunNight(themeNight === null);
-  // DEMO: the demo theme (cycle or weather warning) sets the sky and its night look outright.
-  const demo = useDemo();
-  const demoTheme = demoThemeOf(demo);
-  const demoLook = demoTheme === null ? null : demoHudLook(demoTheme);
-  const night = demoLook?.night ?? hudNightOf(themeNight, sunNight, theme?.scheme ?? null);
+  const night = hudNightOf(themeNight, sunNight, theme?.scheme ?? null);
   // The hour's sky, deepened for the road (its own day or night set), under everything; its panels
   // take a deeper shade of it. Outside a theme the HUD stays on true black.
-  const sky = demoLook?.sky ?? (theme === null ? null : theme.sky.hud[night ? 'night' : 'day']);
+  const sky = theme === null ? null : theme.sky.hud[night ? 'night' : 'day'];
   const base = hudPalette(night);
   const p = sky === null ? base : { ...base, ground: sky.stops[1], chrome: sky.chrome, chromeEdge: sky.chromeEdge };
   const b = hudButtonColors(theme, p, night);
@@ -255,24 +242,11 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   }, [presenceOwner, present, presenceTripId]);
   useEffect(() => () => reportPresence(presenceOwner, false, null), [presenceOwner]);
 
-  const liveAlert = useAlertFlash(live.lastAlert, live.rowTs);
-  // DEMO: a tap on the screen plays the phone alert (sound, voice, haptic from the host) and shows it here.
-  const [tapAlert, setTapAlert] = useState<HudFlash | null>(null);
-  const lastTapAt = useRef(0);
-  useEffect(() => {
-    if (tapAlert === null) return;
-    const timer = setTimeout(() => setTapAlert(null), Math.max(0, tapAlert.until - Date.now()));
-    return () => clearTimeout(timer);
-  }, [tapAlert]);
-  const alert = tapAlert ?? liveAlert;
+  const alert = useAlertFlash(live.lastAlert, live.rowTs);
   const nudge = useSpotNudgeFlash(live.spotNudge, live.rowTs);
-  const liveDashpal = useDashpalFlash();
+  const dashpal = useDashpalFlash();
   const dashpalChip = useDashpalChip();
-  const liveHeld = useDashpalHeld();
-  // DEMO: the DashPal cycle stands in for the dashcam's alerts, banner and halo alike.
-  const demoDashpal = useDemoDashpal();
-  const dashpal = demoDashpal?.flash ?? liveDashpal;
-  const held = demoDashpal?.held ?? liveHeld;
+  const held = useDashpalHeld();
   // The navigation button greys out at 35 mph and over, back under 30 (the row's GPS speed; an
   // unknown speed holds it): advanced once per render from the last (state-from-the-previous-render).
   const [navLocked, setNavLocked] = useState(false);
@@ -311,13 +285,6 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const onTouchStart = useCallback(() => {
     wake();
     if (isWaiting) controls.touchWaiting();
-    // DEMO: any tap plays the phone alert, at most once a second.
-    const at = Date.now();
-    if (demoTap.on && at - lastTapAt.current >= TAP_ALERT_GAP_MS) {
-      lastTapAt.current = at;
-      controls.demoPhoneAlert();
-      setTapAlert({ type: 'phone_pickup', tier: 'moderate', at, until: at + ALERT_GLOW_MS });
-    }
   }, [wake, isWaiting, controls]);
 
   // Where the drive goes once it is over: its summary, fresh, or Home when there was none (a drive
@@ -466,23 +433,13 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const bannerUp = (dashpal !== null || alert !== null) && !linkInLine;
   // The weather alert at the car (the host leaves out a kind dismissed this drive); its ✕ hides it
   // for the rest of the drive (a more severe kind shows again).
-  // DEMO: the weather warning shows its alert; its ✕ hides it until the switch is flipped again.
-  const [demoWeatherHidden, setDemoWeatherHidden] = useState(false);
-  if (!demo.weatherWarning && demoWeatherHidden) setDemoWeatherHidden(false);
-  const weather = demo.weatherWarning ? (demoWeatherHidden ? null : DEMO_WARNING_ALERT) : live.weatherAlert;
-  const dismissWeather = useCallback(() => {
-    if (demo.weatherWarning) setDemoWeatherHidden(true);
-    else controls.dismissWeather();
-  }, [controls, demo.weatherWarning]);
+  const weather = live.weatherAlert;
+  const dismissWeather = useCallback(() => controls.dismissWeather(), [controls]);
   const link = <NotDrivingLink palette={p} dimmed={dimmed} onPress={() => void onNotDriving()} />;
 
   return (
     <View testID="hud-screen" onTouchStart={onTouchStart} style={[styles.root, { backgroundColor: p.ground }]}>
-      {sky === null ? null : demoLook !== null ? (
-        <DemoSkyFade stops={sky.stops} />
-      ) : (
-        <LinearGradient testID="hud-sky" pointerEvents="none" colors={sky.stops} style={StyleSheet.absoluteFill} />
-      )}
+      {sky !== null ? <LinearGradient testID="hud-sky" pointerEvents="none" colors={sky.stops} style={StyleSheet.absoluteFill} /> : null}
       {/* The band: an alert banner across all of it, else the line (and the chip beside it). */}
       <View style={[styles.abs, styles.centred, at(layout.band)]}>
         {!bannerUp ? null : dashpal !== null ? (
@@ -636,7 +593,6 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           />
         </View>
       ) : null}
-      <DemoThemeLabel />
     </View>
   );
 }

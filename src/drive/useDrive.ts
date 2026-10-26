@@ -50,8 +50,6 @@ export interface DriveControls {
   setHudVisible(visible: boolean): void;
   /** The weather banner's ✕: hidden for the rest of the drive (a more severe kind shows again). */
   dismissWeather(): void;
-  /** DEMO: plays the phone-pickup alert. */
-  demoPhoneAlert(): void;
 }
 
 export function useDriveControls(): DriveControls {
@@ -65,7 +63,6 @@ export function useDriveControls(): DriveControls {
       cancelDrive: () => host.cancelDrive(),
       setHudVisible: (visible: boolean) => host.setHudVisible(visible),
       dismissWeather: () => host.dismissWeather(),
-      demoPhoneAlert: () => host.demoPhoneAlert(),
     }),
     [host]
   );

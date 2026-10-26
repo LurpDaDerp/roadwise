@@ -27,8 +27,6 @@ import { AuthGate } from '@/features/auth/AuthGate';
 import { LockoutGate } from '@/features/drive/LockoutGate';
 import { NotificationsHost } from '@/features/notifications';
 import { syncNotificationPrefs } from '@/features/settings/notifications/sync';
-import { DemoHost } from '@/demo/DemoHost'; // DEMO
-import { useDemoTheme } from '@/demo/demoStore'; // DEMO
 import { ThemeProvider } from '@/ui';
 import { appearance, useAppearance, type AppearanceChoice } from '@/ui/appearance';
 import { lookFor } from '@/ui/sky/look';
@@ -58,26 +56,22 @@ const controller = runtimeController;
  * phone's scheme): a change of sky re-renders the theme and what wears it, never the root and the
  * providers under it.
  */
-function RootTheme({ choice: chosen, loaded, children }: { choice: AppearanceChoice; loaded: boolean; children: ReactNode }) {
+function RootTheme({ choice, loaded, children }: { choice: AppearanceChoice; loaded: boolean; children: ReactNode }) {
   // The sky the theme wears under Adaptive: the sun at the phone's last known position and the
   // weather there. Read behind the splash once the stored choice is known (the splash waits for it),
   // so the first frame already has it. Until then, and under a static look, it is off: no position
   // read and no weather request for the sky (the choice the store holds before its read is only
   // the default, not the driver's).
-  const liveMood = useSkyMood(appSkyPorts, { enabled: loaded && chosen === 'adaptive' });
-  // DEMO: the demo's cycle or weather warning paints the sky, whatever the look in Settings.
-  const demoTheme = useDemoTheme();
-  const mood = demoTheme?.mood ?? liveMood;
-  const choice = demoTheme ? 'adaptive' : chosen; // DEMO
+  const mood = useSkyMood(appSkyPorts, { enabled: loaded && choice === 'adaptive' });
   // Under System, the phone's own scheme (the override is handed back, so this reads the phone's).
   const phoneScheme = useColorScheme() === 'dark' ? 'dark' : 'light';
-  const staticScheme = chosen === 'light' || chosen === 'dark' ? chosen : phoneScheme;
+  const staticScheme = choice === 'light' || choice === 'dark' ? choice : phoneScheme;
   // The Live Activity and the Android drive notification wear the same look (`src/drive/displayLook.ts`),
   // from the moment the choice is known.
   useEffect(() => {
     if (!loaded) return;
-    setDisplayLook(lookFor(chosen === 'adaptive' ? skyBundle(liveMood) : plainBundle(staticScheme)));
-  }, [loaded, chosen, liveMood, staticScheme]);
+    setDisplayLook(lookFor(choice === 'adaptive' ? skyBundle(mood) : plainBundle(staticScheme)));
+  }, [loaded, choice, mood, staticScheme]);
   return (
     <ThemeProvider mood={choice === 'adaptive' ? mood : null} scheme={choice === 'light' || choice === 'dark' ? choice : undefined}>
       {/* Behind the splash nothing is drawn, so no scheme is forced on the phone yet. */}
@@ -308,7 +302,6 @@ export default function RootLayout() {
                     </LockoutGate>
                   </AuthGate>
                   <RuntimeHosts runtime={runtime} ready={ready && runtime !== null} />
-                  <DemoHost />
                   {/* DashPal: the found-nearby offer, a deferred box link, alerts off the HUD. */}
                   <DashpalPromptHost />
                 </SessionProvider>

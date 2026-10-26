@@ -18,7 +18,6 @@ import { ThemeProvider, useTheme, type Theme } from '@/ui/theme';
 import { clearHomeNotice, readHomeNotice } from '@/features/home/homeNotice';
 
 import { hudCopy } from '../hudCopy';
-import { demoTap } from '@/demo/tapAlert';
 import { hudLayout } from '../hudLayout';
 import { driveScreenEnteredFor, isDriveScreenFocused, resetDriveScreenPresence } from '../hudPresence';
 import { HudScreen, hudNightOf } from '../HudScreen';
@@ -118,7 +117,6 @@ const mockControls = {
   cancelDrive: jest.fn(async () => true),
   setHudVisible: jest.fn(),
   dismissWeather: jest.fn(),
-  demoPhoneAlert: jest.fn(),
 };
 /** The store's newest row time (the row clock), or null before any row. */
 let mockLastRowTs: number | null = null;
@@ -1026,30 +1024,6 @@ describe('swipe to end', () => {
   test('while the drive is being saved, End is disabled', async () => {
     await renderHud({ status: 'finalizing' });
     expect(screen.getByRole('button', { name: hudCopy.endLabel })).toBeDisabled();
-  });
-});
-
-describe('demo: a tap plays the phone alert', () => {
-  beforeEach(() => {
-    demoTap.on = true;
-  });
-  afterEach(() => {
-    demoTap.on = false;
-  });
-
-  test('a tap asks the host for the phone alert and shows it for 1.5 s; taps within a second play it once', async () => {
-    await renderHud();
-    expect(screen.queryByTestId('hud-alert')).toBeNull();
-    await fireEvent(screen.getByTestId('hud-screen'), 'touchStart');
-    expect(mockControls.demoPhoneAlert).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('hud-alert')).toBeTruthy();
-    await act(() => jest.advanceTimersByTime(500));
-    await fireEvent(screen.getByTestId('hud-screen'), 'touchStart');
-    expect(mockControls.demoPhoneAlert).toHaveBeenCalledTimes(1);
-    await act(() => jest.advanceTimersByTime(1100));
-    expect(screen.queryByTestId('hud-alert')).toBeNull();
-    await fireEvent(screen.getByTestId('hud-screen'), 'touchStart');
-    expect(mockControls.demoPhoneAlert).toHaveBeenCalledTimes(2);
   });
 });
 
