@@ -360,9 +360,12 @@ describe('iOS drive-sense module (text)', () => {
     expect(podspec).toContain("s.platforms      = { :ios => '16.4' }");
   });
 
-  it('sends each full-rate fix as a live `speed` event the moment it lands (never buffered), a candidate’s too', () => {
+  it('sends each full-rate fix of a drive JS records as a live `speed` event the moment it lands (never buffered), never a watch’s', () => {
     const cap = code('CaptureController.swift');
-    expect(cap).toMatch(/emitSpeed\(fix\)\s*pipeline\.queue\.async \{ self\.pipeline\.addFix\(fix\) \}/);
+    // `capturing` opens at the Start tap and at an auto drive's confirmation (`openCapture`)
+    expect(cap).toMatch(/if capturing \{ emitSpeed\(fix\) \}\s*pipeline\.queue\.async \{ self\.pipeline\.addFix\(fix\) \}/);
+    expect(fn(cap, 'func openCapture(')).toMatch(/capturing = true/);
+    expect(fn(detector(), 'func beginDrive(')).toMatch(/capture\.openCapture\(startedAt: start\.startedAt/);
     expect(cap).toMatch(/EventHub\.shared\.emitLive\("speed", \[/);
     for (const key of ['"ts"', '"speed"', '"speedAcc"', '"hAcc"', '"ageMs"']) expect(cap).toContain(key);
     expect(cap).toMatch(/let age = Swift\.max\(0, TimeBase\.nowEpochMs\(\) - fix\.t\)/);

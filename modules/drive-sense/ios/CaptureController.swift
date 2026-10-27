@@ -228,7 +228,8 @@ final class CaptureController {
       let p = phone.poll()
       pipeline.queue.async { self.pipeline.lowRateFix(fix, phone: p, generation: gen) }
     } else {
-      emitSpeed(fix)
+      // Only a drive JS records shows a speed: a watch's fixes would wake JS for nothing.
+      if capturing { emitSpeed(fix) }
       pipeline.queue.async { self.pipeline.addFix(fix) }
     }
   }
