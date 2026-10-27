@@ -237,7 +237,7 @@ test('a key read that failed at launch is not retried under a setup’s pairing 
   r.rt.dispose();
 });
 
-test('a paired dashcam: settings loaded, the key read, the transport connected through a session, the 1 s tick only while in the foreground', async () => {
+test('a paired dashcam: settings loaded, the key read, the transport connected through a session, the 1 s tick only while in the foreground and connected', async () => {
   await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
   await createSettingsRepo(db).set(BUZZER_TOO_KEY, true);
   const r = rig();
@@ -254,6 +254,16 @@ test('a paired dashcam: settings loaded, the key read, the transport connected t
   // The link's first frame went out sealed: COMMAND 7 hello.
   expect(r.cam.received[0]).toEqual({ type: 'COMMAND', op: 7, arg: 0 });
   expect(r.ble.writes.filter((w) => w.characteristic === RX_CHAR).every((w) => !decodeRx(w.bytes).ok)).toBe(true);
+  // Out of range (the reconnect waits): no tick; back in range: the tick again.
+  r.ble.connectMode.set(PID, 'hang');
+  r.ble.drop(PID);
+  await flush();
+  expect(r.rt.state().link.lifecycle).toBe('connecting');
+  expect(r.repeats.live).toBe(0);
+  r.ble.completeConnect(PID);
+  await flush();
+  expect(r.rt.state().link.lifecycle).toBe('connected');
+  expect(r.repeats.live).toBe(1);
   r.rt.dispose();
   expect(r.repeats.live).toBe(0);
 });

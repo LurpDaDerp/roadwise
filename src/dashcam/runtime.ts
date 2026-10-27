@@ -342,6 +342,7 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     const s = state();
     feedStatus(s.link);
     driveLinkService(s.link);
+    syncRepeat(s.link);
     for (const fn of [...listeners]) {
       try {
         fn(s);
@@ -403,9 +404,12 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     if (result !== 'refused') driveLinkService();
   }
 
-  /** The 1 s tick while the app is in the foreground and a dashcam is paired (§7.3). */
-  function syncRepeat(): void {
-    const want = foreground && link.snapshot().paired !== null && !disposed;
+  /**
+   * The 1 s tick while the app is in the foreground and the paired dashcam is connected (§7.3): with
+   * no link it would tick an empty table (the link's own wake covers everything due once it is up).
+   */
+  function syncRepeat(snap: LinkSnapshot = link.snapshot()): void {
+    const want = foreground && snap.paired !== null && snap.lifecycle === 'connected' && !disposed;
     if (want && repeat === null) repeat = setRepeat(() => link.tick(), 1000);
     if (!want && repeat !== null) {
       clearRepeat(repeat);
