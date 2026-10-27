@@ -848,7 +848,7 @@ holds every rule and number, mirrored constant for constant by `ios/DetectPolicy
 | `setArmed(armed, ownerId)` | JS's arming for the signed-in owner (at onboarding's end, at sign-in, at each foreground; off at sign-out, account switch and deletion). Resolves the `DetectState`. Detection runs only with Always, Precise and Motion & Fitness: without them the state stays `off` and `status` says `needs`. A different owner forgets the last end. Never rejects. |
 | `getState()` | The `DetectState`: `armed`, `ownerId`, `state` (`off`/`armed`/`candidate`/`recording`/`ending`/`suppressed`), `origin`, the live `driveId` and `startedAt`, `since`, `waitUntil`, `lastEnd { decidedAt, cut, lat, lng, driveId }`, `suppressedUntil`, `status` (`on`/`needs`/`unavailable`/`off`) with `missing` (Location Always, Precise Location, Motion & Fitness, Background App Refresh, then Live Activities, only with `needs`), `permissions` (incl. `backgroundRefresh`, `liveActivities`, `canAskAlways`) and `journalDropped` (reported once). |
 | `requestAlways()` | The one "Always" request, only from While Using, once per install (`drivesense.detect.alwaysAsked`); afterwards the current answer (`always`/`whenInUse`/`denied`) and JS offers Settings. |
-| `startWaiting()` | Start drive: a manual drive opens at once, from the tap (`recording`, origin `manual`, `startSource` `wake`, journaled, `driveStarted`; an auto candidate already open gives way to it, its rows dropped); While Using and Precise are enough. It waits for driving speed (the manual trigger, 10 mph held 15 s) until `waitUntil` (5 min, `WAIT_MAX_MS`): meanwhile the safety stop never ends it on a walk, and on the still clock only once `waitUntil` has passed too (JS ends it unsaved at that deadline). `{ ok: true, waitUntil, driveId, startedAt }`, or `{ ok: false, reason: 'permission' \| 'busy' \| 'unavailable' }`. A native build from before the drive opened at the tap answers `{ ok: true, waitUntil }`: the wrapper passes it on with `driveId` and `startedAt` null. |
+| `startWaiting()` | Start drive: a manual drive opens at once, from the tap (`recording`, origin `manual`, `startSource` `wake`, journaled, `driveStarted`; an auto candidate already open gives way to it, its rows dropped); While Using and Precise are enough. It waits for driving speed (two trusted rows at 10 mph or more in a row, as JS's wait) until `waitUntil` (5 min, `WAIT_MAX_MS`): meanwhile the safety stop never ends it on a walk, and on the still clock only once `waitUntil` has passed too (JS ends it unsaved at that deadline). A relaunch ends the wait, as JS takes the drive back without one. `{ ok: true, waitUntil, driveId, startedAt }`, or `{ ok: false, reason: 'permission' \| 'busy' \| 'unavailable' }`. A native build from before the drive opened at the tap answers `{ ok: true, waitUntil }`: the wrapper passes it on with `driveId` and `startedAt` null. |
 | `extendWaiting()` | Any touch while the Start-card drive waits: `waitUntil` = now + 5 min; `null` when it waits no more. |
 | `cancelWaiting()` | Ends a manual candidate quietly (none opens any more: JS ends a waiting drive through `stopCapture`). |
 | `notDriving()` | "Not driving?": the live drive is cancelled (its journal deleted, `driveEnded { cause: 'cancelled' }`) and detection rests (`suppressed`). No-op when nothing records. |
@@ -884,8 +884,8 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   2 min with the driver not on foot (`motionGate`). The wake's background task ends at the first fix
   or after 25 s.
 - **`candidate`**: navigation GPS with no distance filter, 25 Hz IMU, the live motion activity and
-  rows into a ring of the last 1800 (30 min, the longest candidate); `speed` events go to JS, rows
-  do not. An auto candidate watches while it sees a vehicle sign (a trusted row at 10 mph or more
+  rows into a ring of the last 1800 (30 min, the longest candidate); neither `speed` events nor rows
+  go to JS (`speed` goes only while a capture is open: a drive from its confirmation or tap). An auto candidate watches while it sees a vehicle sign (a trusted row at 10 mph or more
   with no fresh walk, run or ride report, or a confident automotive report, a car at a light too):
   it ends 3 min after the last one (or after it opened, with none), 5 min once it holds evidence, at
   30 min whatever it sees (`cap`), or on a walk standing 20 s. One that saw no vehicle, or reached
@@ -963,8 +963,8 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
 `RowJournalRead.swift`), excluded from backup, protected until the first unlock (rows keep landing
 with the phone locked). One JSON object per line: `start` (`v: 1`, the drive's start, `confirmedAt`,
 `nativeBuild`), `row` (the `row` payload with `seq`), `gap { from, to, lastSeq }` (a resume: the rows
-go on after `lastSeq`), `end { endedAt, cause, decidedAt, lastRowTs, lastSeq }`. fsync on `start`, `gap`, `end` and every 30 rows; 16 MiB a drive at
-most; at most 4 files (opening a fifth deletes the oldest file JS never drained, ended or orphaned,
+go on after `lastSeq`), `end { endedAt, cause, decidedAt, lastRowTs, lastSeq }`. fsync on `start`, `gap`, `end` and every 30 rows; 32 MiB a drive at
+most (12 h of rows with room); at most 4 files (opening a fifth deletes the oldest file JS never drained, ended or orphaned,
 counted in `journalDropped`). A cancelled drive's file is deleted at once. Readers drop a torn last line and
 any row whose `seq` is not the last plus one (a `gap` moves the last to its `lastSeq`). No file timestamps, attribute reads or disk-space
 reads (the privacy manifest declares none). `src/detect/journal.ts` reads the same format.

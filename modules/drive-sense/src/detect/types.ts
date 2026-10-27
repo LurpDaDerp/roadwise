@@ -213,8 +213,9 @@ export interface DriveDetectApi {
   /**
    * The Start card: a manual drive opens at once, from the tap, journaled like any drive and announced
    * with `driveStarted` (While Using + Precise is enough; the app is in front). It waits for driving
-   * speed (10 mph held 15 s) until `waitUntil` (5 min): meanwhile native's safety stop never ends it
-   * on a walk, and on the still clock only past that deadline. JS ends it unsaved at the deadline.
+   * speed (two trusted readings at 10 mph or more in a row, as JS's wait) until `waitUntil` (5 min):
+   * meanwhile native's safety stop never ends it on a walk, and on the still clock only past that
+   * deadline. JS ends it unsaved at the deadline; a relaunch ends native's wait too.
    */
   startWaiting(): Promise<StartWaitingResult>;
   /** Any touch while the Start-card drive waits: the 5 min start again; the new waitUntil, or null when it waits no more. */

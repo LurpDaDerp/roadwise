@@ -5,7 +5,8 @@
 // a second Expo module in the same pod) wakes on significant-location changes, the parked car's
 // region, visits and RoadWise coming to the front, confirms a drive once the speed has been held
 // long enough ((5/3)·(30 − mph) s over 15 mph, the second reading from 30 mph, `AUTO_TRIGGER`; a
-// Start-card drive opens at the tap and waits for 10 mph held 15 s), traces its start back,
+// Start-card drive opens at the tap and waits for two trusted readings at 10 mph or more in a
+// row), traces its start back,
 // journals every row to disk and emits it here as a `row` with a bridge-only `seq`. JS adopts the drive wherever it runs and decides its end; native stops on its
 // own only as a safety stop. On iOS the shared reminder methods are fixed stubs and nothing reads the
 // phone's lock state any more.
