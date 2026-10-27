@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, View } from 'react-native';
 
 import { dashcamStatus } from '@/dashcam/ui/status';
-import { useDashcamState } from '@/dashcam/ui/useDashcam';
+import { useDashcamSelector } from '@/dashcam/ui/useDashcam';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { useMySummary, type HeatmapVisibility } from '@/data/server/summary';
@@ -202,7 +202,8 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
       .catch(() => {});
   }, [serverUnits, units, settings]);
 
-  const dashcam = dashcamStatus(useDashcamState());
+  // Only the row's status: Settings is not drawn again for each DashPal STATUS (its fps, temperature, time).
+  const dashcam = useDashcamSelector(dashcamStatus);
 
   const shownUnits = edit.value('units', profile?.units) ?? units;
   // The category scores average to the Safety Rating, so friends get them only with the rating: while
