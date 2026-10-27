@@ -458,8 +458,12 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(d).toMatch(/func allowed\(_ r: DetectStateRecord\) -> Bool \{ r\.armed && r\.ownerId != nil && access\.snapshot\(\)\.requiredOk \}/);
     expect(fn(d, 'func setArmed(')).toMatch(/if armed && r\.ownerId != nil && r\.ownerId != ownerId \{ r\.lastEnd = nil \}/);
     expect(code('DriveDetectAccess.swift')).toMatch(/var requiredOk: Bool \{ DetectPolicy\.statusOf\(inputs\(armed: true\)\)\.requiredOk \}/);
-    // the wakes run only while allowed and not off
-    expect(fn(d, 'func syncWakes()')).toMatch(/if allowed\(r\) && r\.state != "off" \{ wakes\.start\(\) \} else \{ wakes\.stop\(\) \}/);
+    // the wakes run while allowed and not off, and while any drive records with Always (armed or
+    // not), so a kill mid-drive is relaunched; the gate refuses every wake while unarmed
+    expect(fn(d, 'func syncWakes()')).toMatch(/if \(allowed\(r\) && r\.state != "off"\) \|\| \(isRecording && access\.snapshot\(\)\.location == "always"\) \{ wakes\.start\(\) \} else \{ wakes\.stop\(\) \}/);
+    expect(fn(d, 'func beginDrive(')).toMatch(/emitState\("confirmed"\)\s*syncWakes\(\)\s*\}$/);
+    expect(fn(d, 'func commitEnd(')).toMatch(/settle\(&r, now\)[\s\S]*syncWakes\(\)/);
+    expect(code('DetectPolicy.swift')).toMatch(/if !c\.armed \{ return "off" \}/);
   });
 
   it('a wake: the gate first; a region exit starts a candidate at once, the others after the motion gate; inside a background task', () => {

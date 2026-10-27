@@ -159,10 +159,13 @@ final class DriveDetector {
     syncWakes()
   }
 
-  /// The wakes run while detection is allowed and not off (through a drive, for a relaunch).
+  /// The wakes run while detection is allowed and not off (through a drive, for a relaunch), and
+  /// while any drive records with Location Always, armed or not (a Start drive with automatic drives
+  /// off, a disarm mid-drive), so iOS relaunches RoadWise after a kill. Unarmed, the wake gate
+  /// refuses every wake they bring.
   func syncWakes() {
     guard let r = rec else { return }
-    if allowed(r) && r.state != "off" { wakes.start() } else { wakes.stop() }
+    if (allowed(r) && r.state != "off") || (isRecording && access.snapshot().location == "always") { wakes.start() } else { wakes.stop() }
   }
 
   /// `startWaiting`: the Start card. While Using and Precise are enough (the app is in front). The

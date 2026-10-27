@@ -105,6 +105,8 @@ extension DriveDetector {
       "continues": continues, "confirmedAt": DetectStateRecord.ms(now), "firstSeq": 1,
     ])
     emitState("confirmed")
+    // Significant changes run through the drive, so a kill is relaunched (a Start drive unarmed too).
+    syncWakes()
   }
 
   /// One row of the drive: journaled and emitted with the next `seq`, the safety-stop clock fed and
