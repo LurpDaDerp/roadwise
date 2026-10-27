@@ -12,7 +12,7 @@
 import type { DriveDetectApi } from '@drive-sense';
 
 import { activeDashcam } from '@/dashcam/registry';
-import { createSettingsRepo, SPOTS_META_KEY, type Db } from '@/data/db';
+import { createSettingsRepo, REFUSED_NEVER, SPOTS_META_KEY, type Db } from '@/data/db';
 import { clearDeviceSecret } from '@/data/devices/deviceSecret';
 import { emitDataChanged } from '@/data/events';
 import { RESTORED_AT_KEY } from '@/data/hydrate/restore';
@@ -165,8 +165,9 @@ export async function wipeForSignOut(db: Db): Promise<void> {
   await db.transaction(async (tx) => {
     for (const table of SIGN_OUT_TABLES) await tx.execute(`DELETE FROM ${table}`);
     for (const key of SIGN_OUT_SETTINGS) await tx.execute('DELETE FROM settings WHERE key = ?', [key]);
-    // Finished queue items still carry the drives' payloads; what is still owed stays for the next sign-in.
-    await tx.execute("DELETE FROM sync_queue WHERE status IN ('done', 'failed')");
+    // Finished and refused queue items still carry the drives' payloads; what is still owed (one out
+    // of retries but never refused included) stays for the next sign-in.
+    await tx.execute("DELETE FROM sync_queue WHERE status = 'done' OR (status = 'failed' AND next_attempt_at = ?)", [REFUSED_NEVER]);
   });
   // The cached lists and stats would otherwise show the drives that just left until they went stale.
   emitDataChanged({ source: 'wipe' });

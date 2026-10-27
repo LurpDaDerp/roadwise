@@ -7,7 +7,7 @@ import { rows, TZ } from '@/core/engine/__fixtures__/drives';
 import type { LimitSample } from '@/core/engine/types';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
-import { createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db } from '@/data/db';
+import { createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, REFUSED_NEVER, type Db } from '@/data/db';
 import { createFakeAppState, createFakeSupabase, invokeOk } from '@/data/sync/__fixtures__/fakes';
 import { bootstrapApp, endSession, flushBeforeSignOut, REMINDER_RETIRED_KEY, startForegroundJobs, type BootSupabase } from '@/boot/bootstrap';
 import { createDriveHeadlessTask } from '@/boot/headless';
@@ -217,17 +217,19 @@ test('a plain sign-out with nothing owed wipes the drives and zones but keeps th
   await createSettingsRepo(db).set('privacy.zones', [{ id: 'h', name: 'Home', lat: 1, lng: 1, radiusM: 300 }]);
   await createSettingsRepo(db).set(INSTALL_ID_KEY, 'install-keeps-1234');
   await createSettingsRepo(db).set(DROP_NOTICE_KEY, { clientTripId: uuid(2), cause: 'stopped', reason: 'no_movement', at: T0 });
-  for (const [status, key] of [['done', 'a'], ['failed', 'b'], ['pending', 'c']] as const) {
+  for (const [status, key, at] of [['done', 'a', 0], ['failed', 'b', REFUSED_NEVER], ['pending', 'c', 0], ['failed', 'd', 0]] as const) {
     await db.execute(
-      "INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, next_attempt_at, created_at) VALUES ('trip.finalize', '{}', ?, ?, 0, 0)",
-      [key, status]
+      "INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, next_attempt_at, created_at) VALUES ('trip.finalize', '{}', ?, ?, ?, 0)",
+      [key, status, at]
     );
   }
   await wipeForSignOut(db);
   expect(await createTripsRepo(db).count()).toBe(0);
-  // Finished and failed queue rows (they hold the payloads) go; the one still owed stays.
+  // Finished and refused queue rows (they hold the payloads) go; the ones still owed stay (one out
+  // of retries but never refused included).
   expect(await createQueueRepo(db).countByStatus('done')).toBe(0);
-  expect(await createQueueRepo(db).countByStatus('failed')).toBe(0);
+  expect((await createQueueRepo(db).byKey('b'))).toBeNull();
+  expect((await createQueueRepo(db).byKey('d'))?.status).toBe('failed');
   expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
   expect(await createSettingsRepo(db).get('privacy.zones')).toBeNull();
   expect(await createSettingsRepo(db).get(DROP_NOTICE_KEY)).toBeNull();
@@ -418,6 +420,26 @@ test('flushBeforeSignOut first makes a waiting upload due: it goes while the ses
   await flushBeforeSignOut(rt);
   const item = await createQueueRepo(db).byKey('trip:x');
   expect(item!.next_attempt_at).toBeLessThanOrEqual(clock);
+  await rt.stop();
+});
+
+test('flushBeforeSignOut sends an upload in a retry back-off and one that ran out on server answers; a refused one is not owed', async () => {
+  const marked = { tripId: uuid(101), clientTripId: uuid(1), notDrivingLeft: 1, rating: { safetyRating: 90, ranked: true } };
+  const supabase = createFakeSupabase({ uid: 'user-1', invoke: () => invokeOk(marked), rpc: () => ({ data: [], error: null }) });
+  const d = deps({ mayDrain: () => true, supabase: supabase as unknown as BootSupabase });
+  const rt = await bootstrapApp(d.deps);
+  const insert = (key: string, status: string, attempts: number, at: number, error: string | null) =>
+    db.execute(
+      "INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, last_error, owner_uid, created_at) VALUES ('trip-actions', ?, ?, ?, ?, ?, ?, 'user-1', 0)",
+      [JSON.stringify({ action: 'not_driving', clientTripId: uuid(1) }), key, status, attempts, at, error]
+    );
+  await insert('not_driving:backoff', 'pending', 3, clock + 240_000, 'network');
+  await insert('not_driving:ranout', 'failed', 20, clock - 60_000, 'server_behind');
+  await insert('not_driving:refused', 'failed', 1, REFUSED_NEVER, 'too_old');
+  // Before the flush the run-out item is still owed (a sign-out must not take it as nothing left).
+  expect(await rt.runner.owed()).toBe(2);
+  expect(await flushBeforeSignOut(rt)).toEqual({ sent: 2, left: 0 });
+  expect((await createQueueRepo(db).byKey('not_driving:refused'))?.status).toBe('failed');
   await rt.stop();
 });
 

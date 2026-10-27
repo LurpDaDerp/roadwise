@@ -887,8 +887,11 @@ export async function endSession(runtime: Pick<AppRuntime, 'drive'>): Promise<vo
 
 /** Before the session ends at sign-out: one drain while the session can still send (waiting uploads too). */
 export async function flushBeforeSignOut(runtime: AppRuntime): Promise<{ sent: number; left: number }> {
-  // An upload not yet tried (it waited for a session or a busy database) goes now, while it still can.
-  await createQueueRepo(runtime.db).makeUntriedDue(runtime.now());
+  // Everything still owed goes now, while it still can: an upload not yet tried, one in a retry
+  // back-off, and one that ran out of retries on server answers without being refused.
+  await createQueueRepo(runtime.db).makeOwedDue(runtime.now());
+  // A pass already under way may have looked for due items before they were made due: a fresh one does.
+  await runtime.runner.idle();
   const result = await runtime.runner.drainOnce();
   return { sent: result.done, left: await runtime.runner.owed() };
 }

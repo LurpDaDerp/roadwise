@@ -18,7 +18,7 @@ import { isDashcamType } from '@scoring';
 
 import type { Db } from '@/data/db/driver';
 import { createEventsRepo, type EventsRepo } from '@/data/db/events';
-import { createQueueRepo, TRANSPORT_FAILURE } from '@/data/db/queue';
+import { createQueueRepo, MAX_DELAY_S, TRANSPORT_FAILURE } from '@/data/db/queue';
 import { createSamplesRepo } from '@/data/db/samples';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
@@ -107,7 +107,7 @@ export interface SyncRunner {
   drainOnce(): Promise<DrainResult>;
   /** Resolves once no pass is running. */
   idle(): Promise<void>;
-  /** Items still owed: pending or in flight. */
+  /** Items still owed: pending, in flight, or out of retries but never refused (`queue.owedCount`). */
   owed(): Promise<number>;
   /** The device's owner signed in: what waited only for a session is sent now, not when the app next comes to the front. */
   signedIn(): Promise<void>;
@@ -393,7 +393,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
 
   function failureOutcome(failure: Failure): Outcome {
     if (failure.kind === 'terminal') return { kind: 'refused', error: failure.code };
-    const untilMs = failure.retryAfterS !== null ? now() + failure.retryAfterS * 1000 : undefined;
+    // Held to the back-off's ceiling: the queue reads a time further ahead as a clock set back.
+    const untilMs = failure.retryAfterS !== null ? now() + Math.min(failure.retryAfterS, MAX_DELAY_S) * 1000 : undefined;
     return { kind: 'retry', error: failure.status === null ? TRANSPORT_FAILURE : failure.code, ...(untilMs !== undefined ? { untilMs } : {}) };
   }
 
@@ -573,7 +574,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     idle: async () => {
       await draining?.catch(noop);
     },
-    owed: async () => (await queue.countByStatus('pending')) + (await queue.countByStatus('inflight')),
+    owed: () => queue.owedCount(),
     async signedIn() {
       if (!started) return;
       await queue.makeUntriedDue(now()).catch((error: unknown) => report(error, 'sync signed in'));

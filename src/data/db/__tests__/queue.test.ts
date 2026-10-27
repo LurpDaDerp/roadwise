@@ -119,6 +119,65 @@ test('markFailed is final; reopenRetryable reopens only exhausted ladders (trans
   expect((await queue.byKey('trip:server'))?.status).toBe('pending');
 });
 
+test('an item out of retries but never refused is still owed (owes, owedCount); a refused or settled one is not', async () => {
+  for (const key of ['trip:ranout', 'trip:refused', 'trip:done', 'trip:waiting']) await queue.enqueue('finalize-trip', {}, key, T0);
+  for (let n = 0; n < MAX_ATTEMPTS; n += 1) {
+    const items = await queue.nextDue(T0 + 10_000_000);
+    for (const item of items) {
+      if (item.idempotency_key === 'trip:ranout') await queue.markAttempt(item.id, false, 'server_behind', T0);
+      else if (item.idempotency_key === 'trip:refused' && n === 0) {
+        await queue.markAttempt(item.id, false, 'invalid_payload', T0);
+        await queue.markFailed(item.id, 'invalid_payload');
+      } else if (item.idempotency_key === 'trip:done') await queue.markAttempt(item.id, true, null, T0);
+      else await queue.release(item.id, T0 + 20_000_000);
+    }
+  }
+  expect((await queue.byKey('trip:ranout'))?.status).toBe('failed');
+  expect(await queue.owes('trip:ranout')).toBe(true);
+  expect(await queue.owes('trip:refused')).toBe(false);
+  expect(await queue.owes('trip:done')).toBe(false);
+  expect(await queue.owedCount()).toBe(2);
+});
+
+test('makeOwedDue: a waiting item and one in a back-off are due now, one out of retries gets a clean ladder; in-flight and refused keep theirs', async () => {
+  const backoff = await queue.enqueue('finalize-trip', {}, 'trip:backoff', T0);
+  const ranout = await queue.enqueue('finalize-trip', {}, 'trip:ranout', T0);
+  const refused = await queue.enqueue('finalize-trip', {}, 'trip:refused', T0);
+  await db.execute("UPDATE sync_queue SET attempts = 3, next_attempt_at = ? WHERE id = ?", [T0 + 240_000, backoff.id]);
+  await db.execute("UPDATE sync_queue SET status = 'failed', attempts = ?, next_attempt_at = ?, last_error = 'http_503' WHERE id = ?", [MAX_ATTEMPTS, T0 - 1000, ranout.id]);
+  await db.execute("UPDATE sync_queue SET status = 'failed', attempts = 1, next_attempt_at = ?, last_error = 'invalid_payload' WHERE id = ?", [REFUSED_NEVER, refused.id]);
+  const flying = await queue.enqueue('finalize-trip', {}, 'trip:flying', T0);
+  await db.execute("UPDATE sync_queue SET status = 'inflight', claimed_at = ? WHERE id = ?", [T0, flying.id]);
+  expect(await queue.makeOwedDue(T0 + 10)).toBe(2);
+  expect(await queue.get(backoff.id)).toMatchObject({ status: 'pending', attempts: 3, next_attempt_at: T0 + 10 });
+  expect(await queue.get(ranout.id)).toMatchObject({ status: 'pending', attempts: 0, next_attempt_at: T0 + 10, last_error: null });
+  expect(await queue.get(refused.id)).toMatchObject({ status: 'failed', next_attempt_at: REFUSED_NEVER });
+  expect(await queue.get(flying.id)).toMatchObject({ status: 'inflight', claimed_at: T0 });
+});
+
+test('a clock set back strands nothing: a back-off, a claim and a give-up stamped far ahead read as passed', async () => {
+  const AHEAD = 24 * 3_600_000;
+  await queue.enqueue('finalize-trip', {}, 'trip:a', T0 + AHEAD);
+  const [claimed] = await queue.nextDue(T0 + AHEAD);
+  await queue.markAttempt(claimed!.id, false, 'network', T0 + AHEAD);
+  // The clock goes back a day: the back-off (a day and 30 s ahead) is due at once.
+  const [again] = await queue.nextDue(T0);
+  expect(again?.idempotency_key).toBe('trip:a');
+  // Killed holding a claim stamped ahead: reclaimed, not left in flight until the clock catches up.
+  await queue.enqueue('finalize-trip', {}, 'trip:b', T0);
+  await db.execute("UPDATE sync_queue SET status = 'inflight', claimed_at = ? WHERE idempotency_key = 'trip:b'", [T0 + AHEAD]);
+  await queue.release(again!.id, T0 + 3_600_000);
+  expect((await queue.nextDue(T0 + 1000)).map((i) => i.idempotency_key)).toEqual(['trip:b']);
+  // A server-side give-up stamped ahead reopens; one stamped an hour on still waits its day.
+  await queue.enqueue('finalize-trip', {}, 'trip:c', T0);
+  await queue.enqueue('finalize-trip', {}, 'trip:d', T0);
+  await db.execute("UPDATE sync_queue SET status = 'failed', attempts = ?, last_error = 'http_503', next_attempt_at = ? WHERE idempotency_key = 'trip:c'", [MAX_ATTEMPTS, T0 + AHEAD]);
+  await db.execute("UPDATE sync_queue SET status = 'failed', attempts = ?, last_error = 'http_503', next_attempt_at = ? WHERE idempotency_key = 'trip:d'", [MAX_ATTEMPTS, T0 + 3_600_000]);
+  expect(await queue.reopenRetryable(T0)).toBe(1);
+  expect((await queue.byKey('trip:c'))?.status).toBe('pending');
+  expect((await queue.byKey('trip:d'))?.status).toBe('failed');
+});
+
 test('purgeDone removes old finished items only', async () => {
   await queue.enqueue('finalize-trip', {}, 'trip:a', T0);
   const [item] = await queue.nextDue(T0);

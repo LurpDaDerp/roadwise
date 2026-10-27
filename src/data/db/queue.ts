@@ -15,7 +15,7 @@ import { QUEUE_STATUSES, type QueueItem, type QueueStatus } from '@/data/db/type
  */
 
 const FIRST_DELAY_S = 30;
-const MAX_DELAY_S = 3600;
+export const MAX_DELAY_S = 3600;
 export const MAX_ATTEMPTS = 20;
 
 /** How long a claim may stand before `nextDue` assumes the uploader died holding it. */
@@ -38,6 +38,18 @@ export const TRANSPORT_FAILURE = 'network';
 export const FUNCTION_MISSING = 'http_404';
 /** An item that ran out on server answers is reopened only this long after it gave up. */
 export const SERVER_REOPEN_AFTER_MS = 24 * 60 * 60 * 1000;
+/**
+ * The furthest ahead a time this queue writes can lie (a back-off, a release and a `Retry-After` are
+ * each held to an hour). A time further ahead was written under a clock that has since been set
+ * back: it is treated as passed, so the item is not stranded until the clock catches up.
+ */
+export const MAX_AHEAD_MS = 2 * MAX_DELAY_S * 1000;
+
+/**
+ * An item still owed to the server: waiting, being sent, or out of retries without ever being
+ * refused (a later foreground reopens it). Bound with `REFUSED_NEVER`.
+ */
+const OWED = "(status IN ('pending', 'inflight') OR (status = 'failed' AND next_attempt_at <> ?))";
 
 function toQueueItem(row: Record<string, unknown>): QueueItem {
   return {
@@ -69,10 +81,11 @@ export function createQueueRepo(db: Db) {
   }
 
   async function reclaimInflight(olderThanS: number, now: number, on: Db): Promise<number> {
+    // A claim stamped after `now` was made under a clock since set back: it is as stale as an old one.
     const { changes } = await on.execute(
       `UPDATE sync_queue SET status = 'pending', next_attempt_at = ?, claimed_at = NULL
-        WHERE status = 'inflight' AND (claimed_at IS NULL OR claimed_at <= ?)`,
-      [now, now - olderThanS * 1000]
+        WHERE status = 'inflight' AND (claimed_at IS NULL OR claimed_at <= ? OR claimed_at > ?)`,
+      [now, now - olderThanS * 1000, now]
     );
     return changes;
   }
@@ -130,7 +143,7 @@ export function createQueueRepo(db: Db) {
     nextDue(now: number = Date.now(), limit = 10, reclaimAfterS: number = RECLAIM_AFTER_S): Promise<QueueItem[]> {
       return db.transaction(async (tx) => {
         await reclaimInflight(reclaimAfterS, now, tx);
-        return claim(tx, "status = 'pending' AND next_attempt_at <= ?", [now], now, limit);
+        return claim(tx, "status = 'pending' AND (next_attempt_at <= ? OR next_attempt_at > ?)", [now, now + MAX_AHEAD_MS], now, limit);
       });
     },
 
@@ -200,7 +213,8 @@ export function createQueueRepo(db: Db) {
         let reopened = 0;
         for (const item of rows.map(toQueueItem)) {
           const serverSide = item.last_error !== TRANSPORT_FAILURE && item.last_error !== FUNCTION_MISSING;
-          if (serverSide && now - item.next_attempt_at < SERVER_REOPEN_AFTER_MS) continue;
+          const clockSetBack = item.next_attempt_at > now + MAX_AHEAD_MS;
+          if (serverSide && !clockSetBack && now - item.next_attempt_at < SERVER_REOPEN_AFTER_MS) continue;
           reopened += 1;
           await tx.execute(
             "UPDATE sync_queue SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL, claimed_at = NULL WHERE id = ? AND status = 'failed'",
@@ -237,10 +251,33 @@ export function createQueueRepo(db: Db) {
       return changes > 0;
     },
 
-    /** Whether the item under `idempotencyKey` is still owed (waiting or being sent). */
+    /**
+     * Everything still owed goes now (a sign-out's last chance under this session): a waiting item and
+     * one in a retry back-off are due at once, and one that ran out of retries without being refused
+     * is armed again with a clean ladder. Items in flight or refused keep theirs. Returns how many moved.
+     */
+    makeOwedDue(now: number = Date.now()): Promise<number> {
+      return db.transaction(async (tx) => {
+        const waiting = await tx.execute("UPDATE sync_queue SET next_attempt_at = ? WHERE status = 'pending' AND next_attempt_at > ?", [now, now]);
+        const ranOut = await tx.execute(
+          `UPDATE sync_queue SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL, claimed_at = NULL
+            WHERE status = 'failed' AND next_attempt_at <> ?`,
+          [now, REFUSED_NEVER]
+        );
+        return waiting.changes + ranOut.changes;
+      });
+    },
+
+    /** Whether the item under `idempotencyKey` is still owed (waiting, being sent, or out of retries but never refused). */
     async owes(idempotencyKey: string, on: Db = db): Promise<boolean> {
-      const { rows } = await on.execute("SELECT 1 AS owed FROM sync_queue WHERE idempotency_key = ? AND status IN ('pending', 'inflight')", [idempotencyKey]);
+      const { rows } = await on.execute(`SELECT 1 AS owed FROM sync_queue WHERE idempotency_key = ? AND ${OWED}`, [idempotencyKey, REFUSED_NEVER]);
       return rows.length > 0;
+    },
+
+    /** How many items are still owed, by the same rule as `owes`: what a sign-out would leave behind. */
+    async owedCount(): Promise<number> {
+      const { rows } = await db.execute(`SELECT count(*) AS n FROM sync_queue WHERE ${OWED}`, [REFUSED_NEVER]);
+      return asNumber(rows[0] ?? {}, 'n');
     },
 
     /** The earliest `next_attempt_at` of an item still owed, or null when none is. */

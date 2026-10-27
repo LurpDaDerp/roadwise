@@ -188,6 +188,32 @@ test('a server older than the upload (a 400 that refuses the contract version) i
   await r.stop();
 });
 
+test('an upload that ran out of retries on server answers is still owed: the drive stays pending and a sign-out would not take it as nothing left', async () => {
+  await finalized(uuid(10));
+  const behind = functionsHttpError(400, { code: 'invalid_payload', issues: [{ path: 'v', message: 'Invalid input: expected 5' }] });
+  let clock = T0 + 2_000_000;
+  const r = createSyncRunner({ db, supabase: createFakeSupabase({ invoke: () => behind }), mayDrain: () => true, isRecording: () => false, now: () => clock });
+  await r.start();
+  for (let n = 0; n < 25; n += 1) {
+    await r.drainOnce();
+    clock += 3_600_000 + 1000;
+  }
+  expect(await createQueueRepo(db).byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'failed', attempts: 20, last_error: 'server_behind' });
+  expect((await createTripsRepo(db).get(uuid(10)))?.status).toBe('pending');
+  expect(await createQueueRepo(db).reopenRetryable(clock)).toBe(0);
+  expect(await r.owed()).toBe(1);
+  await r.stop();
+});
+
+test('a Retry-After past an hour is held to the hour', async () => {
+  await finalized(uuid(10));
+  const r = runner(createFakeSupabase({ invoke: () => functionsHttpError(503, {}, { 'Retry-After': '86400' }) }));
+  await r.start();
+  await r.drainOnce();
+  expect((await createQueueRepo(db).byKey(`trip:${uuid(10)}`))?.next_attempt_at).toBe(T0 + 2_000_000 + 3_600_000);
+  await r.stop();
+});
+
 test('a terminal refusal fails the item and the drive for good; a transport failure retries; a 429 defers by Retry-After', async () => {
   await finalized(uuid(10));
   let mode: 'refuse' | 'network' | 'busy' = 'refuse';
