@@ -157,7 +157,7 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 |---|---|---|
 | `activity` | `MotionActivity` `{ type, confidence, ts, exit? }` | a motion-activity change **while capturing** (Android), **while the detector senses** (iOS: a candidate, a drive, a rest) |
 | `row` | a `DriveSenseRow` (§4) | once per second while capturing at `full`; once per fix at `low`. iOS: a detector drive's rows carry their journal `seq`; a candidate's rows are never emitted (the drive's first rows, from its traced start, come at the confirmation) |
-| `speed` | `SpeedSample` `{ ts, speed, speedAcc, hAcc, ageMs }` | each fix at `full` rate, the moment it lands (before its row): the fix's own time (integer epoch ms), its Doppler speed (m/s), speed accuracy (m/s) and horizontal accuracy (m), each `-1` when unknown, and `ageMs`, how old the fix already is (integer ms, ≥ 0; iOS the wall clock less `CLLocation.timestamp`, Android the capture's anchored boot clock less the fix's `elapsedRealtimeNanos`). It drives the driving screen's speed only (`src/core/engine/displaySpeed.ts`); the rows still carry every fix for scoring. Sent only while a JS listener is attached, **never buffered** (a stale speed is worthless). Validate with `parseSpeed` |
+| `speed` | `SpeedSample` `{ ts, speed, speedAcc, hAcc, ageMs }` | each fix at `full` rate, the moment it lands (before its row; iOS: only while a capture is open, never during a watch): the fix's own time (integer epoch ms), its Doppler speed (m/s), speed accuracy (m/s) and horizontal accuracy (m), each `-1` when unknown, and `ageMs`, how old the fix already is (integer ms, ≥ 0; iOS the wall clock less `CLLocation.timestamp`, Android the capture's anchored boot clock less the fix's `elapsedRealtimeNanos`). It drives the driving screen's speed only (`src/core/engine/displaySpeed.ts`); the rows still carry every fix for scoring. Sent only while a JS listener is attached, **never buffered** (a stale speed is worthless). Validate with `parseSpeed` |
 | `screen` | `{ locked, on, ts }` | Android only: lock/screen change while capturing (`SCREEN_ON`/`SCREEN_OFF`/`USER_PRESENT`). Declared on iOS, never emitted |
 | `thermal` | `{ level, ts }` | a thermal-state change while capturing |
 | `notificationAction` | `{ action: 'endDrive', ts }` | Android: the notification's End drive action (offered only while `setDriveDisplay` says `stopped`) |
@@ -904,9 +904,7 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   floor is the spike guard: from about 29.46 mph (30 mph and over included) a drive confirms on the
   second good reading in a row, never on one; the floor sits under the 1 s row interval, so the 1 Hz
   timer's jitter (rows 997 ms apart, say) never costs a third reading. Crawling and stops keep the evidence; 5 min with no trusted row
-  over 3 mph forgets it. It confirms at 1. The Start card's trigger (10 mph spanning
-  15 s on the row clock, a dip under it of 5 s or less kept) ends a Start-card drive's wait for
-  driving speed.
+  over 3 mph forgets it. It confirms at 1.
 - **The start** (`startOf`): the last trusted row at or under 3 mph before the first interval that
   earned, going back past a stop shorter than 5 min the car rolled into (trusted, 5 mph or more:
   a red light, a crawl out of a jam), unless the stop was 5 min or more (a parking). A run that
