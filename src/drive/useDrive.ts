@@ -2,7 +2,7 @@
 import type { EventType, Tier } from '@scoring';
 import { useCallback, useContext, useMemo } from 'react';
 
-import type { DriveOrigin, EventShake } from '@/core/engine/engine.types';
+import type { EventShake } from '@/core/engine/engine.types';
 import type { DropReason } from '@/core/engine/finalize';
 import type { SpotNudge } from '@/core/spots/types';
 import { useStore } from 'zustand';
@@ -10,9 +10,10 @@ import { useShallow } from 'zustand/react/shallow';
 
 import type { DangerAlert } from '@/features/weather/danger';
 import { mpsToMph } from '@/lib/units';
+import { speedingTint } from '@/ui/drive/halo';
 
 import { DriveContext, type DriveContextValue } from './DriveProvider';
-import type { DriveHost, DriveState, ShownWeather, StartResult } from './host';
+import type { DriveHost, DriveState, StartResult } from './host';
 import type { WaitingPublic } from './waiting';
 
 function useDriveContext(): DriveContextValue {
@@ -71,31 +72,24 @@ export function useDriveControls(): DriveControls {
 export interface DriveLive {
   status: 'idle' | 'recording' | 'finalizing';
   clientTripId: string | null;
-  /** How the open drive began; null when none records. */
-  origin: DriveOrigin | null;
   /** The newest row's GPS speed (mph, tenths), null when it had none: the halo's speeding hold. */
   rowSpeedMph: number | null;
   /** The limit the sign shows (the last one held up to 10 s through a row without one); null → "-". */
   limitMph: number | null;
-  speedingTier: Tier | null;
   /**
-   * The speed shown over the limit the sign shows (1 = at the limit); null while the sign shows "-".
-   * The halo's tint, from the first row the sign has a number.
+   * The halo's speeding tint (`speedingTint` of the speed shown over the limit the sign shows): 0 at
+   * or under that limit and while the sign shows "-", 1 (full red) at 1.7 × it.
    */
-  speedingRatio: number | null;
+  speedingTint: number;
+  /** The speed shown is over the limit the sign shows (the spoken speed says so). */
+  overSign: boolean;
   /** The current row is over the speeding line (L + T): the halo pulses. */
   speedingOver: boolean;
-  /** The last GPS course (degrees clockwise from true north) taken at 5 mph or more, held; null before the first. */
-  courseDeg: number | null;
   /** The latest event the halo shakes on (a hard event, a phone pickup, a speeding episode as it alerts), with its tier; null before the first. */
   lastShake: EventShake | null;
-  stopped: boolean;
   lastAlert: { type: EventType; tier: Tier; at: number } | null;
   /** The dangerous-weather alert at the car (unless dismissed this drive), or null. */
   weatherAlert: DangerAlert | null;
-  /** The same alert's kind and title, as the Live Activity shows it. */
-  weather: ShownWeather | null;
-  startedAt: number | null;
   /** The newest row's time (the row clock), or null before any row. */
   rowTs: number | null;
   /** A Start-card drive still waiting for driving speed (it records from the tap), or null. */
@@ -106,24 +100,27 @@ export interface DriveLive {
   spotNudge: SpotNudge | null;
 }
 
-const selectLive = (s: DriveState) => ({
+/**
+ * What the driving screen draws, and nothing more: every field here is compared by identity, so a
+ * value that changes on every fix with nothing to show for it (the raw speed over the limit while
+ * under it) or an object built afresh on every publish (the wait) would re-render it for nothing.
+ * The tint changes only over the limit; the wait comes as its parts.
+ */
+export const selectLive = (s: DriveState) => ({
   status: s.status,
   clientTripId: s.clientTripId,
-  origin: s.origin,
   rowSpeedMph: s.rowSpeedMps === null ? null : Math.round(mpsToMph(s.rowSpeedMps) * 10) / 10,
   limitMph: s.limitMph,
-  speedingTier: s.speedingTier,
-  speedingRatio: s.speedingRatio,
+  speedingTint: speedingTint(s.speedingRatio),
+  overSign: s.speedingRatio !== null && s.speedingRatio > 1,
   speedingOver: s.speedingOver,
-  courseDeg: s.courseDeg,
   lastShake: s.lastShake,
-  stopped: s.stopped,
   lastAlert: s.lastAlert,
   weatherAlert: s.weatherAlert,
-  weather: s.weather,
-  startedAt: s.startedAt,
   rowTs: s.lastRowTs,
-  waiting: s.waiting,
+  waitingSince: s.waiting?.since ?? null,
+  waitingPhase: s.waiting?.phase ?? null,
+  waitingDeadlineAt: s.waiting?.deadlineAt ?? null,
   notDrivingAvailable: s.notDrivingAvailable,
   spotNudge: s.spotNudge,
 });
@@ -171,14 +168,21 @@ export function useBearing(): DriveBearing {
   return useDrive(selectBearing);
 }
 
-/** Everything the driving screen shows; published at most once per row (1 Hz). */
+/**
+ * Everything the driving screen shows: a new value once per row (1 Hz), and on a fix only over the
+ * limit, where the tint follows each reading.
+ */
 export function useDriveLive(): DriveLive {
-  const live = useDrive(selectLive);
+  const { waitingSince, waitingPhase, waitingDeadlineAt, ...live } = useDrive(selectLive);
   const lastAlert = useMemo(
     () => (live.lastAlert === null ? null : { type: live.lastAlert.type, tier: live.lastAlert.tier, at: live.lastAlert.at }),
     [live.lastAlert]
   );
-  return { ...live, lastAlert };
+  const waiting = useMemo<WaitingPublic | null>(
+    () => (waitingSince === null || waitingPhase === null || waitingDeadlineAt === null ? null : { since: waitingSince, phase: waitingPhase, deadlineAt: waitingDeadlineAt }),
+    [waitingSince, waitingPhase, waitingDeadlineAt]
+  );
+  return { ...live, lastAlert, waiting };
 }
 
 /** A stable callback to start a drive, for Home's button. */

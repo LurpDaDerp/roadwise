@@ -23,7 +23,6 @@ import {
   Halo,
   haloVisual,
   hudPalette,
-  speedingTint,
   SpeedSign,
   type BurstSource,
   type HaloProps,
@@ -393,7 +392,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   }, [live.status, isWaiting, ending, cancelling, leave, droppedId, failedId]);
 
   // Over the limit the sign shows (the speed's spoken label says so).
-  const speeding = live.speedingRatio !== null && live.speedingRatio > 1;
+  const speeding = live.overSign;
   const busy = ending || live.status === 'finalizing';
 
   // The halo: tinted from the sign's limit up, pulsing only over the speeding line; it shakes once
@@ -416,7 +415,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const visual = haloVisual({
     reduceMotion,
     status: live.status,
-    speeding: speedingTint(live.speedingRatio),
+    speeding: live.speedingTint,
     speedingOver: live.speedingOver,
     shake,
     rowTs: live.rowTs,

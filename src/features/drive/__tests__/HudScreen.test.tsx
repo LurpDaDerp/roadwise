@@ -11,7 +11,7 @@ import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { State } from 'react-native-gesture-handler';
 import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
 
-import { DIM_AFTER_MS, END_SWIPE_H_PT, HUD, HUD_MIN_TARGET_PT, type HaloProps, type HaloVisual } from '@/ui/drive';
+import { DIM_AFTER_MS, END_SWIPE_H_PT, HUD, HUD_MIN_TARGET_PT, speedingTint, type HaloProps, type HaloVisual } from '@/ui/drive';
 import { skyBundle, type SkyMood } from '@/ui/sky/palette';
 import { ThemeProvider, useTheme, type Theme } from '@/ui/theme';
 
@@ -120,12 +120,14 @@ const mockControls = {
 };
 /** The store's newest row time (the row clock), or null before any row. */
 let mockLastRowTs: number | null = null;
+/** The drive's start as the store has it (the navigation button's warm-up highlight). */
+let mockStartedAt: number | null = null;
 /** The engine's compass bearing (`useBearing`). */
 let mockBearing: DriveBearing = { deg: null, source: null };
 jest.mock('@/drive/useDrive', () => ({
   useBearing: () => mockBearing,
   useDrive: <T,>(sel: (s: { lastFinalized: LastFinalized; status: DriveLive['status']; startedAt: number | null; lastRowTs: number | null }) => T) =>
-    sel({ lastFinalized: mockLastFinalized, status: mockLive.status, startedAt: mockLive.startedAt, lastRowTs: mockLastRowTs }),
+    sel({ lastFinalized: mockLastFinalized, status: mockLive.status, startedAt: mockStartedAt, lastRowTs: mockLastRowTs }),
   useDriveLive: () => mockLive,
   useShownSpeed: () => mockShown,
   useDriveControls: () => mockControls,
@@ -141,14 +143,17 @@ const halo = (): HaloVisual => mockHalo.at(-1)!.visual;
 /**
  * A test's view of the drive: `speedMph` is both the newest row's GPS speed (the halo's speeding
  * hold) and the speed the readout shows, standing for `speedAt` (the clock now when not given),
- * carried on with `speedAccelMph` (mph/s).
+ * carried on with `speedAccelMph` (mph/s). `speedingRatio` (the speed shown over the limit the sign
+ * shows) is handed to the screen as the store hands it: its tint and whether it is over the sign.
  */
-type LiveOver = Partial<DriveLive> & { speedMph?: number | null; speedAccelMph?: number; speedAt?: number | null };
+type LiveOver = Partial<DriveLive> & { speedMph?: number | null; speedAccelMph?: number; speedAt?: number | null; speedingRatio?: number | null };
 
 let lastShown: { speedMph: number | null; speedAccelMph: number; speedAt: number | null } = { speedMph: 34, speedAccelMph: 0, speedAt: null };
 
 function split(over: LiveOver, base: typeof lastShown): { live: Partial<DriveLive>; shown: typeof lastShown } {
-  const { speedMph, speedAccelMph, speedAt, ...rest } = over;
+  const { speedMph, speedAccelMph, speedAt, speedingRatio, ...given } = over;
+  const rest: Partial<DriveLive> =
+    speedingRatio === undefined ? given : { speedingTint: speedingTint(speedingRatio), overSign: speedingRatio !== null && speedingRatio > 1, ...given };
   const shown = {
     speedMph: speedMph === undefined ? base.speedMph : speedMph,
     speedAccelMph: speedAccelMph ?? (speedMph === undefined ? base.speedAccelMph : 0),
@@ -175,17 +180,12 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
     clientTripId: 't1',
     rowSpeedMph: mockDefaultMph,
     limitMph: 35,
-    speedingTier: null,
-    speedingRatio: null,
+    speedingTint: 0,
+    overSign: false,
     speedingOver: false,
-    courseDeg: null,
-    origin: 'manual',
     lastShake: null,
-    stopped: false,
     lastAlert: null,
     weatherAlert: null,
-    weather: null,
-    startedAt: T,
     rowTs: null,
     waiting: null,
     notDrivingAvailable: false,
@@ -220,6 +220,7 @@ beforeEach(() => {
   mockUnits = null;
   mockNavApp = null;
   mockLastRowTs = null;
+  mockStartedAt = T;
   mockLastFinalized = null;
   mockDefaultMph = 34;
   mockEnd.mockResolvedValue({ clientTripId: 't1', dropped: null });
@@ -505,7 +506,7 @@ describe('the compass (round 8 decision 7)', () => {
     const h = await renderHud({ rowTs: T });
     expect(heading()).toBeNull();
     expect(screen.getByTestId('hud-compass', HIDDEN)).toBeTruthy();
-    await h.update({ rowTs: T + 1000, courseDeg: 270 });
+    await h.update({ rowTs: T + 1000 });
     expect(heading()).toBeNull();
   });
 
@@ -706,7 +707,7 @@ describe('the compass (round 8 decision 7)', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- the hook behind react-native's export
     const dims = require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
     jest.spyOn(dims, 'default').mockReturnValue({ width: 400, height: 300, scale: 2, fontScale: 1 });
-    await renderHud({ courseDeg: 90 });
+    await renderHud();
     expect(screen.queryByTestId('hud-compass', HIDDEN)).toBeNull();
     jest.restoreAllMocks();
   });
@@ -761,7 +762,7 @@ describe('the dangerous-weather banner (plan D14)', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- the hook behind react-native's export
     const dims = require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
     jest.spyOn(dims, 'default').mockReturnValue({ width: 400, height: 300, scale: 2, fontScale: 1 });
-    await renderHud({ weatherAlert: ICE, speedMph: 60, stopped: false });
+    await renderHud({ weatherAlert: ICE, speedMph: 60 });
     expect(screen.getByTestId('hud-weather-action')).toHaveStyle({ fontSize: 13 });
     expect(screen.getByTestId('hud-weather-close')).toBeOnTheScreen();
     expect(screen.getByText('Freezing rain')).toHaveStyle({ fontSize: 16 });
@@ -777,9 +778,9 @@ describe('the dangerous-weather banner (plan D14)', () => {
   });
 
   test('the ✕ shows and works at any speed: it asks the host to hide it for the rest of the drive', async () => {
-    const h = await renderHud({ weatherAlert: ICE, speedMph: 3, stopped: true });
+    const h = await renderHud({ weatherAlert: ICE, speedMph: 3 });
     expect(screen.getByRole('button', { name: 'Hide weather alert' })).toBeOnTheScreen();
-    await h.update({ speedMph: 70, stopped: false });
+    await h.update({ speedMph: 70 });
     const close = screen.getByRole('button', { name: 'Hide weather alert' });
     expect(close).not.toBeDisabled();
     expect(close).toHaveProp('accessibilityHint', 'Hides it for the rest of this drive.');
@@ -822,7 +823,6 @@ describe('event alerts', () => {
     const h = await renderHud({ rowTs: T });
     await h.update({
       rowTs: T + 1000,
-      speedingTier: 'minor',
       speedMph: 41,
       speedingRatio: 41 / 35,
       speedingOver: true,
@@ -856,7 +856,7 @@ describe('event alerts', () => {
 
 test('no points anywhere on the screen, stopped or moving', async () => {
   const h = await renderHud({ speedMph: 30 });
-  await h.update({ stopped: true, speedMph: 0 });
+  await h.update({ speedMph: 0 });
   expect(screen.queryByTestId('hud-points')).toBeNull();
   expect(screen.queryByText(/\bpts\b|points?/)).toBeNull();
 });
@@ -1109,14 +1109,14 @@ describe('dimming', () => {
 
 test('while moving, End, the navigation button, "Not driving?" and the weather ✕ are the only controls on the screen, the same as stopped', async () => {
   const fog = { kind: 'dense_fog', gustMph: null, visibilityM: 150 } as const;
-  const h = await renderHud({ speedMph: 45, stopped: false });
+  const h = await renderHud({ speedMph: 45 });
   expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav']);
   await h.update({ weatherAlert: fog });
   expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-weather-close']);
-  await h.update({ speedMph: 0, stopped: true });
+  await h.update({ speedMph: 0 });
   expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-weather-close']);
   // while it is offered, "Not driving?" too
-  await h.update({ speedMph: 45, stopped: false, notDrivingAvailable: true });
+  await h.update({ speedMph: 45, notDrivingAvailable: true });
   expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-not-driving', 'hud-weather-close']);
 });
 
@@ -1377,7 +1377,7 @@ describe('DashPal (plan §7.10)', () => {
   test('a DashPal alert: its banner for 1.5 s per start or level change, over the event chip; the chip steps aside; a critical bursts red', async () => {
     const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' } });
     setActiveDashcam(rt);
-    const h = await renderHud({ rowTs: T, speedingTier: 'minor', speedMph: 41 });
+    const h = await renderHud({ rowTs: T, speedMph: 41 });
     expect(screen.getByTestId('hud-dashpal-chip')).toBeTruthy();
     await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'moderate', at: T + 1000 } });
     expect(screen.queryByTestId('hud-dashpal-chip')).toBeNull(); // the event banner takes the band
@@ -1483,7 +1483,7 @@ describe('layout, accessibility and Reduce Motion', () => {
 
   test('Reduce Motion: no pulse, no flow, colours unchanged, a burst as colour only', async () => {
     mockStill = true;
-    const h = await renderHud({ rowTs: T, speedMph: 52, speedingTier: 'severe', speedingRatio: 52 / 35, speedingOver: true });
+    const h = await renderHud({ rowTs: T, speedMph: 52, speedingRatio: 52 / 35, speedingOver: true });
     expect(halo()).toMatchObject({ mode: 'speeding', pulsePeriodMs: 0, flow: false });
     expect(halo().colorSeverity).toBeCloseTo((52 / 35 - 1) / 0.7, 9);
     await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
@@ -1492,7 +1492,7 @@ describe('layout, accessibility and Reduce Motion', () => {
   });
 
   test('not recording (saving): calm whatever the signals', async () => {
-    await renderHud({ status: 'finalizing', rowTs: T, speedingTier: 'severe', speedMph: 90, speedingRatio: 2, speedingOver: true, lastShake: { key: 'k', tier: 'severe', at: T } });
+    await renderHud({ status: 'finalizing', rowTs: T, speedMph: 90, speedingRatio: 2, speedingOver: true, lastShake: { key: 'k', tier: 'severe', at: T } });
     expect(halo().mode).toBe('calm');
   });
 });
@@ -1857,7 +1857,6 @@ describe('a Start-card drive waiting for driving speed (drive-fixes brief)', () 
   const waitDrive = (o: Partial<NonNullable<DriveLive['waiting']>> = {}, over: LiveOver = {}): LiveOver => ({
     status: 'recording',
     clientTripId: 't1',
-    startedAt: T,
     speedMph: null,
     limitMph: null,
     notDrivingAvailable: false,
@@ -2067,8 +2066,6 @@ describe('a Start-card drive, as a real host publishes it (review I1)', () => {
   const liveOf = (st: DriveState): LiveOver => ({
     status: st.status,
     clientTripId: st.clientTripId,
-    origin: st.origin,
-    startedAt: st.startedAt,
     limitMph: st.limitMph,
     notDrivingAvailable: st.notDrivingAvailable,
     rowTs: st.lastRowTs,
