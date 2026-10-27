@@ -85,6 +85,21 @@ test('useCoaching: the last 90 days’ scores, Safety Rating and advice, as of t
   expect(result.current.error).toBe(false);
 });
 
+test('the all-trips map draws each run simplified to 30 m, keeping its ends and any bend wider than that', async () => {
+  // A 2 km straight road sampled every 10 m, then a turn: 200 points, three that matter.
+  const straight = Array.from({ length: 200 }, (_, i) => ({ lat: 47.6 + i * 0.00009, lng: -122.3 }));
+  const bend = { lat: straight[199]!.lat, lng: -122.29 };
+  await seedTrips(db, [
+    { client_trip_id: uuid(7), started_at: NOW - DAY, tz: 'UTC', status: 'scored', miles: 2, duration_s: 300, polyline: encodeRuns([[...straight, bend]]) },
+  ]);
+  const { result } = await renderHook(() => useAnalytics('week'), { wrapper: wrapperFor(db, client, now) });
+  await waitFor(() => expect(result.current.routes).toHaveLength(5));
+  const drawn = result.current.routes.find((r) => r.length !== 2)!;
+  expect(drawn).toHaveLength(3);
+  expect(drawn[0]).toMatchObject({ latitude: 47.6, longitude: -122.3 });
+  expect(drawn[2]).toMatchObject({ latitude: bend.lat, longitude: bend.lng });
+});
+
 test('useAnalytics: range sums with their chances and the trend; all-time totals, grid, list and routes; 90-day coaching', async () => {
   const { result, rerender } = await renderHook(({ range }: { range: 'week' | 'year' }) => useAnalytics(range), {
     wrapper: wrapperFor(db, client, now),

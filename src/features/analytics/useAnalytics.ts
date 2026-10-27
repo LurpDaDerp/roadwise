@@ -5,6 +5,7 @@
  */
 import { useMemo } from 'react';
 
+import { simplifyTrack } from '@/core/engine/privacy';
 import type { LocalDrive } from '@/data/queries/rows';
 import { useDataSource } from '@/data/queries/context';
 import { useScoredDrives, useWindowEvents } from '@/data/queries/analytics';
@@ -31,6 +32,17 @@ import {
   type Trend,
   type WindowSums,
 } from './model';
+
+/** The all-trips map shows every route at once, too far out for detail under this (m): each run is drawn simplified to it. */
+export const TRIPS_MAP_SIMPLIFY_M = 30;
+
+/** One run for the overview map: its points within `TRIPS_MAP_SIMPLIFY_M` of the road it drew. */
+function overviewRun(run: readonly MapPoint[]): MapPoint[] {
+  return simplifyTrack(
+    run.map((p) => ({ lat: p.latitude, lng: p.longitude })),
+    TRIPS_MAP_SIMPLIFY_M
+  ).map((q) => ({ latitude: q.lat, longitude: q.lng }));
+}
 
 export interface CoachingData extends CoachWindow {
   /** The 90-day window's cutoff. */
@@ -117,9 +129,10 @@ export function useAnalytics(range: Range): AnalyticsData {
   const rangeEventList = rangeEvents.data;
   const sums = useMemo(() => windowSums(drives ?? [], sinceMs, rangeEventList ?? []), [drives, sinceMs, rangeEventList]);
   const trendData = useMemo(() => trend(drives ?? [], trendEvents, range, hourEnd), [drives, trendEvents, range, hourEnd]);
-  // The map draws the same drives as every other card: scored ones, not "Wasn't driving".
+  // The map draws the same drives as every other card: scored ones, not "Wasn't driving". Simplified
+  // (the overview can't show what it drops), and the region fitted on what is drawn.
   const map = useMemo(() => {
-    const routes = routeLines((drives ?? []).flatMap((d) => (d.polyline ? [d.polyline] : [])));
+    const routes = routeLines((drives ?? []).flatMap((d) => (d.polyline ? [d.polyline] : []))).map(overviewRun);
     return { routes, region: fitLines(routes) };
   }, [drives]);
 
