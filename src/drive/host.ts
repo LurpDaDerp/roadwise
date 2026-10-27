@@ -438,6 +438,8 @@ interface Begin {
   /** The parked spot (a motion-history start), else null. */
   startPlace: { lat: number; lng: number } | null;
   continues: boolean;
+  /** When native confirmed it (every row of it comes before); absent: now. */
+  confirmedAt?: number;
 }
 
 export function createDriveHost(deps: DriveHostDeps): DriveHost {
@@ -1185,6 +1187,25 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
+  /**
+   * A start traced back to the car's motion (`motion`), never before the end of the phone's last
+   * stored drive, so two drives never overlap (the server stores an overlapping one unscored):
+   * CoreMotion can date that motion from before the window it was asked about, as early as the
+   * drive before. Every other start is a row's own time, after the drive before. A stored end after
+   * `by` (when the drive was confirmed) is not the drive before this one: left alone. Unreadable:
+   * the start as given.
+   */
+  async function startAfterLastEnd(at: number, by: number): Promise<number> {
+    if (!persist) return at;
+    try {
+      const last = await createTripsRepo(db).lastEndedAt();
+      return last !== null && at < last && last <= by ? last : at;
+    } catch (e) {
+      report(e, 'start');
+      return at;
+    }
+  }
+
   const rebuildDeps: RebuildDeps = {
     createDetectors: () => createDetectors(newId),
     platform,
@@ -1195,8 +1216,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   async function beginDrive(b: Begin, opts: { quiet?: boolean } = {}): Promise<void> {
     if (engine.snapshot().status !== 'idle') return;
     await readDisplayUnit();
-    const continues = b.continues || (await continuesPrevious(b.ts));
-    await engine.dispatch({ type: 'start', ts: b.ts, clientTripId: b.clientTripId, origin: b.origin, continues, startSource: b.startSource, startPlace: b.startPlace });
+    const ts = b.startSource === 'motion' ? await startAfterLastEnd(b.ts, b.confirmedAt ?? now()) : b.ts;
+    const continues = b.continues || (await continuesPrevious(ts));
+    await engine.dispatch({ type: 'start', ts, clientTripId: b.clientTripId, origin: b.origin, continues, startSource: b.startSource, startPlace: b.startPlace });
     if (engine.snapshot().status !== 'recording') return;
     await driveOpened({ adopted: false, quiet: opts.quiet });
     // A new drive replaces Home's notice about the last one that was not kept.
@@ -1435,9 +1457,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       .catch((e: unknown) => report(e, 'journalLink'));
   }
 
-  const beginOf = (j: Pick<JournaledDrive, 'driveId' | 'origin' | 'startedAt' | 'startSource' | 'startLat' | 'startLng' | 'continues'>): Begin => {
+  const beginOf = (j: Pick<JournaledDrive, 'driveId' | 'origin' | 'startedAt' | 'startSource' | 'startLat' | 'startLng' | 'continues'> & { confirmedAt?: number }): Begin => {
     const fix = j.startLat === null || j.startLng === null ? null : { lat: j.startLat, lng: j.startLng };
-    return { ts: j.startedAt, clientTripId: j.driveId, origin: j.origin, startSource: j.startSource, startPlace: j.startSource === 'motion' ? fix : null, continues: j.continues };
+    return { ts: j.startedAt, clientTripId: j.driveId, origin: j.origin, startSource: j.startSource, startPlace: j.startSource === 'motion' ? fix : null, continues: j.continues, confirmedAt: j.confirmedAt };
   };
 
   /**
@@ -1447,7 +1469,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    * whatever happened after the drive opened, and rows a failed read missed come with the next live
    * row's gap).
    */
-  async function beginNative(j: Pick<JournaledDrive, 'driveId' | 'origin' | 'startedAt' | 'startSource' | 'startLat' | 'startLng' | 'continues'>, opts: { capped: boolean; quiet?: boolean }): Promise<boolean> {
+  async function beginNative(j: Pick<JournaledDrive, 'driveId' | 'origin' | 'startedAt' | 'startSource' | 'startLat' | 'startLng' | 'continues'> & { confirmedAt?: number }, opts: { capped: boolean; quiet?: boolean }): Promise<boolean> {
     try {
       await beginDrive(beginOf(j), { quiet: opts.quiet });
     } catch (e) {

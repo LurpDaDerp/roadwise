@@ -2011,6 +2011,30 @@ describe('the speed and limit pipeline beside the rows (plan decision 6)', () =>
     await h.host.stop({ endOpenTrip: false });
   });
 
+  test('a start CoreMotion dates before the end of the phone’s last stored drive begins at that end, so the two never overlap', async () => {
+    await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0 - 600_000, tz: TZ, status: 'pending', ended_at: T0 - 30_000 }, T0 - 30_000);
+    const h = buildIos();
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    // The car's motion dated 90 s before the first row: 60 s inside the drive before.
+    await confirm(h, rows(30, { speedMps: 15 }), { startedAt: T0 - 90_000, startSource: 'motion' });
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: NATIVE, startedAt: T0 - 30_000 });
+    expect((await createTripsRepo(db).get(NATIVE))!.started_at).toBe(T0 - 30_000);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('a stored drive that ends after this one was confirmed (not the drive before it) leaves the start alone', async () => {
+    await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0 + 100_000, tz: TZ, status: 'pending', ended_at: T0 + 200_000 }, T0);
+    const h = buildIos();
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(30, { speedMps: 15 }), { startedAt: T0 - 60_000, startSource: 'motion' });
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: NATIVE, startedAt: T0 - 60_000 });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
   test('the DashPal is told which rows are replayed (the confirmation journal) and which are live', async () => {
     const seen: { ts: number; replay: boolean }[] = [];
     const dashcam: DriveHostDashcam = {
