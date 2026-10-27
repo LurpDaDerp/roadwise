@@ -129,6 +129,36 @@ describe('the privacy zones screen', () => {
     expect(screen.getByText(settingsCopy.zones.max)).toBeOnTheScreen();
   });
 
+  it('a location fix that lands late keeps the name typed meanwhile', async () => {
+    const w = await appWorld();
+    let land: (r: { ok: true; lat: number; lng: number }) => void = () => {};
+    const locate = jest.fn(() => new Promise<{ ok: true; lat: number; lng: number }>((resolve) => (land = resolve)));
+    await w.render(<PrivacyZonesScreen deps={{ locate }} />);
+    await tap('zones-add');
+    await tap('zone-use-location');
+    await act(async () => {
+      fireEvent.changeText(screen.getByTestId('zone-name'), 'Gym');
+    });
+    await act(async () => land({ ok: true, lat: 40.75, lng: -73.99 }));
+    expect(screen.getByTestId('zone-name')).toHaveProp('value', 'Gym');
+    expect(screen.getByTestId('zone-center-status')).toHaveTextContent(settingsCopy.zones.centerSet);
+  });
+
+  it('a location fix that lands after the editor closed does not reopen it', async () => {
+    const w = await appWorld();
+    let land: (r: { ok: true; lat: number; lng: number }) => void = () => {};
+    const locate = jest.fn(() => new Promise<{ ok: true; lat: number; lng: number }>((resolve) => (land = resolve)));
+    await w.render(<PrivacyZonesScreen deps={{ locate }} />);
+    await tap('zones-add');
+    await tap('zone-use-location');
+    await act(async () => {
+      fireEvent(screen.getByTestId('zone-editor-modal'), 'requestClose');
+    });
+    expect(screen.queryByTestId('zone-name')).toBeNull();
+    await act(async () => land({ ok: true, lat: 40.75, lng: -73.99 }));
+    expect(screen.queryByTestId('zone-name')).toBeNull();
+  });
+
   it('a refused location says so plainly', async () => {
     const w = await appWorld();
     await w.render(<PrivacyZonesScreen deps={{ locate: async () => ({ ok: false, reason: 'denied' }) }} />);

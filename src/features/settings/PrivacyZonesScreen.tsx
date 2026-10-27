@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, TextInput, View } from 'react-native';
 
 import { createPermissionsAdapter } from '@/core/permissions';
@@ -188,6 +188,11 @@ export function PrivacyZonesScreen({ deps = {} }: { deps?: PrivacyZonesDeps }) {
               setProblem(null);
               setDraft(d);
             }}
+            onCenter={(lat, lng) => {
+              setProblem(null);
+              // The draft as it is when the fix lands: what was typed meanwhile stays, and a closed editor stays closed.
+              setDraft((cur) => (cur === null ? null : { ...cur, lat, lng }));
+            }}
             problem={problem}
             locate={deps.locate ?? locateOnce}
             onSave={() => void onSave()}
@@ -216,6 +221,7 @@ function InfoLine({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: 
 function ZoneEditor({
   draft,
   onChange,
+  onCenter,
   problem,
   locate,
   onSave,
@@ -223,6 +229,8 @@ function ZoneEditor({
 }: {
   draft: Draft;
   onChange: (d: Draft) => void;
+  /** A centre that arrives later (the location fix): applied to the draft as it is by then. */
+  onCenter: (lat: number, lng: number) => void;
   problem: ZoneProblem | null;
   locate: () => Promise<LocateResult>;
   onSave: () => void;
@@ -234,13 +242,22 @@ function ZoneEditor({
   const [locateError, setLocateError] = useState<'denied' | 'failed' | null>(null);
   const maps = loadMaps();
   const hasCenter = draft.lat !== null && draft.lng !== null;
+  // A fix that lands after this editor closed belongs to no draft (a reopened editor is a new one).
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const locateHere = async () => {
     setLocating(true);
     setLocateError(null);
     const r = await locate();
+    if (!mounted.current) return;
     setLocating(false);
-    if (r.ok) onChange({ ...draft, lat: r.lat, lng: r.lng });
+    if (r.ok) onCenter(r.lat, r.lng);
     else setLocateError(r.reason);
   };
 
