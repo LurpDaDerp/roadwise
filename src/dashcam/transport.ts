@@ -31,8 +31,11 @@
 //
 // Connecting: iOS keeps a pending connect by peripheral id (it never times out); Android re-issues
 // `connect(id, { autoconnect: true })` after every disconnect (ble-manager closes the GATT on
-// disconnect). One GATT operation is in flight at a time; ALERT_ACK jumps the queue, and every frame
-// is sealed as its operation runs, so counters rise in the order frames go out.
+// disconnect). A connect to a peripheral this phone just disconnected while it was connected waits
+// for that disconnect's event (at most `RELEASE_WAIT_MS`): iOS ble-manager fails every connect still
+// pending for the peripheral when the event lands, one asked for after the disconnect included. One
+// GATT operation is in flight at a time; ALERT_ACK jumps the queue, and every frame is sealed as its
+// operation runs, so counters rise in the order frames go out.
 import { processTimers } from '@/lib/timers';
 
 import { createSealer, parseAuthRecord, proofOk, R, sessionFin, sessionKeys, sessionRequest, type AuthRecord, type Sealer } from './auth';
@@ -216,6 +219,8 @@ export const PENDING_READS = 10;
 /** iOS: an R_MTU waits this long (the MTU exchange may still be running) before asking again. */
 export const IOS_MTU_WAIT_MS = 300;
 export const SETUP_CONNECT_TIMEOUT_MS = 15_000;
+/** A connect waits at most this long for the event of the disconnect this phone asked of the same connected peripheral. */
+export const RELEASE_WAIT_MS = 1500;
 export const FRAME_BUFFER_MAX = 256;
 /** RX writes and AUTH writes are never split by ble-manager: one sealed frame (≤ 40) or AUTH message (≤ 98) per write. */
 export const RX_MAX_BYTES = 64;
@@ -296,6 +301,8 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
   const setupViews = new Map<string, (record: number[]) => void>();
   const setupFails = new Map<string, number>();
   let scanHit: ((e: BlePeripheralEvent) => void) | null = null;
+  /** Connected peripherals this phone disconnected whose disconnect event has not come (lowercase id). */
+  const releasing = new Map<string, { done: Promise<void>; settle: () => void }>();
 
   function report(e: unknown, ctx: string): void {
     try {
@@ -316,6 +323,33 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
   }
 
   const sleep = (ms: number): Promise<void> => new Promise<void>((resolve) => setTimer(resolve, ms));
+
+  /**
+   * Disconnect a peripheral this phone knows is connected: a connect to it waits for the event that
+   * follows (or `RELEASE_WAIT_MS`), so that event cannot fail the connect (iOS).
+   */
+  function hangUp(id: string): Promise<void> {
+    const lower = id.toLowerCase();
+    if (!releasing.has(lower)) {
+      let timer: unknown = null;
+      let settle: () => void = () => {};
+      const done = new Promise<void>((resolve) => {
+        settle = () => {
+          if (releasing.get(lower)?.done === done) releasing.delete(lower);
+          clearTimer(timer);
+          resolve();
+        };
+      });
+      releasing.set(lower, { done, settle });
+      timer = setTimer(settle, RELEASE_WAIT_MS);
+    }
+    return api.disconnect(id, true);
+  }
+
+  /** Resolves once no disconnect this phone asked of `id` is still waiting for its event. */
+  function released(id: string): Promise<void> {
+    return releasing.get(id.toLowerCase())?.done ?? Promise.resolve();
+  }
 
   // ——— one GATT op at a time; urgent ops first ———
 
@@ -499,8 +533,9 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
   /** Drop this connection and try again after `delayMs` (the disconnect event then changes nothing). */
   function dropAndRetry(t: TransportTarget, delayMs: number, ctx: string): void {
     if (tgt !== t) return;
+    const wasConnected = conn === 'setting_up' || conn === 'up';
     markDown();
-    api.disconnect(t.peripheralId, true).catch((e: unknown) => report(e, `disconnect (${ctx})`));
+    (wasConnected ? hangUp(t.peripheralId) : api.disconnect(t.peripheralId, true)).catch((e: unknown) => report(e, `disconnect (${ctx})`));
     armConnect(Math.max(1, delayMs));
   }
 
@@ -563,11 +598,15 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     attempt += 1;
     const mine = attempt;
     sink?.connecting();
-    const call = platform === 'android' ? api.connect(t.peripheralId, { autoconnect: true }) : api.connect(t.peripheralId);
+    const call = released(t.peripheralId).then(() => {
+      // A newer attempt or target took over while this one waited: it never asks.
+      if (mine !== attempt || tgt !== t) return new Promise<void>(() => {});
+      return platform === 'android' ? api.connect(t.peripheralId, { autoconnect: true }) : api.connect(t.peripheralId);
+    });
     call.then(
       () => {
         if (mine !== attempt || tgt !== t) {
-          api.disconnect(t.peripheralId, true).catch((e: unknown) => report(e, 'disconnect (stale connect)'));
+          hangUp(t.peripheralId).catch((e: unknown) => report(e, 'disconnect (stale connect)'));
           return;
         }
         void onConnected(t, { maybeUp: false });
@@ -708,6 +747,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     api.onDisconnectPeripheral((e) => {
       pump();
       const lower = e.peripheral.toLowerCase();
+      releasing.get(lower)?.settle();
       setupLinks.delete(lower);
       setupFails.delete(lower);
       for (const id of [...setupViews.keys()]) if (same(id, e.peripheral)) setupViews.delete(id);
@@ -766,7 +806,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     if (n < SEAL_FAIL_MAX) return;
     report(new Error('too many setup frames that did not open'), 'setup seal');
     setupFails.delete(lower);
-    api.disconnect(peripheral, true).catch((err: unknown) => report(err, 'disconnect (setup seal)'));
+    hangUp(peripheral).catch((err: unknown) => report(err, 'disconnect (setup seal)'));
   }
 
   /** A VIEW notification: opened under the setup session and handed to its listener; nothing without one. */
@@ -883,6 +923,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       attempt += 1;
       cancelRetry();
       if (before) {
+        const was = conn;
         const wasActive = conn !== 'down';
         conn = 'down';
         linkInfo = null;
@@ -890,7 +931,8 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
         buffer.length = 0;
         failQueued('the target changed');
         // Cancels a pending connect too (iOS cancelPeripheralConnection; Android disconnect+close).
-        api.disconnect(before.peripheralId, true).catch((e: unknown) => report(e, 'disconnect (target)'));
+        const wasConnected = was === 'setting_up' || was === 'up';
+        (wasConnected ? hangUp(before.peripheralId) : api.disconnect(before.peripheralId, true)).catch((e: unknown) => report(e, 'disconnect (target)'));
         if (wasActive) sink?.linkDown();
       }
       if (next && restored.length > 0) {
@@ -962,6 +1004,9 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
         if (bonded.some((p) => same(p.id, peripheralId))) await gatt('removeBond', () => api.removeBond(peripheralId)).catch((e: unknown) => report(e, 'removeBond'));
       }
       try {
+        // A connection this phone just let go of (the paired DashPal stepping aside for Set up again):
+        // its disconnect lands first, so it cannot fail this connect.
+        await released(peripheralId);
         await bounded(api.connect(peripheralId), timeoutMs, 'connect');
       } catch (e) {
         await api.disconnect(peripheralId, true).catch(() => {});
@@ -1041,13 +1086,14 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     },
 
     async disconnect(peripheralId) {
+      const wasUp = setupLinks.has(peripheralId.toLowerCase());
       setupFrames.delete(peripheralId);
       setupViews.delete(peripheralId);
       setupFails.delete(peripheralId.toLowerCase());
       setupLinks.delete(peripheralId.toLowerCase());
       setupSealers.get(peripheralId)?.dispose();
       setupSealers.delete(peripheralId);
-      await api.disconnect(peripheralId, true);
+      await (wasUp ? hangUp(peripheralId) : api.disconnect(peripheralId, true));
     },
   };
   return self;

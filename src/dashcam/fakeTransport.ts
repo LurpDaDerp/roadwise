@@ -4,8 +4,10 @@
 // `__fixtures__/fakeDashcam.ts` plays a whole link v2 dashcam on top of it.
 //
 // As ble-manager 12.5.3 does: `removeBond` never settles unless the phone holds a bond with that
-// peripheral (its promise waits for a BONDED -> NONE broadcast), and a write that fails rejects with
-// a `status=N` text.
+// peripheral (its promise waits for a BONDED -> NONE broadcast), a write that fails rejects with
+// a `status=N` text, and the phone disconnecting a connected peripheral is followed by its disconnect
+// event (soon after, as on Android; with `lateDisconnects`, as on iOS: a few macrotasks later, failing
+// every connect asked of that peripheral in between).
 import type { BleApi, BlePeripheralEvent, BleServicesInfo, BleSub } from './transport';
 import { AUTH_CHAR, DASHPAL_SERVICE, IDENTIFY_CHAR, INFO_CHAR, PAIRING_NEW, PAIRING_OPEN, PAIRING_SETUP, RX_CHAR, TX_CHAR, VIEW_CHAR } from './protocol';
 
@@ -45,6 +47,11 @@ export interface FakeBle extends BleApi {
   readonly connected: Set<string>;
   /** How the next `connect` calls behave, per peripheral (default resolve). */
   connectMode: Map<string, ConnectMode>;
+  /**
+   * iOS: the event of a disconnect the phone asked of a connected peripheral lands a few macrotasks
+   * later, and fails every connect to that peripheral still pending then (asked before it or after).
+   */
+  lateDisconnects: boolean;
   /** An error the next call of this method (and characteristic, for read) rejects with. */
   failNext(method: string, error: unknown): void;
   /** The next call of this method never settles. */
@@ -106,6 +113,19 @@ export function createFakeBle(): FakeBle {
   };
   const hanging = new Map<string, { resolve: () => void; reject: (e: unknown) => void }[]>();
   const bondedAndroid = new Set<string>();
+  /** peripherals whose phone-initiated disconnect has not delivered its event yet (`lateDisconnects`) */
+  const leaving = new Set<string>();
+  /** connects asked of a leaving peripheral: failed when its event lands */
+  const parked = new Map<string, ((e: unknown) => void)[]>();
+
+  /** The disconnect event of a disconnect the phone asked for, as ble-manager sends it. */
+  function disconnected(id: string): void {
+    leaving.delete(id);
+    const waiting = parked.get(id) ?? [];
+    parked.delete(id);
+    for (const reject of waiting) reject(new Error(`Peripheral did disconnect: ${id}`));
+    for (const fn of [...handlers.disconnect]) fn({ peripheral: id });
+  }
 
   function sub<T>(set: Set<Handler<T>>, fn: Handler<T>): BleSub {
     set.add(fn);
@@ -134,6 +154,7 @@ export function createFakeBle(): FakeBle {
     scans,
     connected,
     connectMode: new Map(),
+    lateDisconnects: false,
     onWrite: null,
     onRead: null,
     onConnect: null,
@@ -164,6 +185,11 @@ export function createFakeBle(): FakeBle {
     },
     connect(id, o) {
       calls.push(`connect:${id}${o?.autoconnect ? ':auto' : ''}`);
+      if (leaving.has(id)) {
+        return new Promise<void>((_, reject) => {
+          parked.set(id, [...(parked.get(id) ?? []), reject]);
+        });
+      }
       const mode = fake.connectMode.get(id) ?? 'resolve';
       if (failures.has('connect')) {
         const e = failures.get('connect');
@@ -197,7 +223,17 @@ export function createFakeBle(): FakeBle {
         for (const p of pending) p.reject(new Error(`Peripheral did disconnect: ${id}`));
       }
       const was = connected.delete(id);
-      if (was) fake.onDisconnect?.(id);
+      if (!was) return;
+      fake.onDisconnect?.(id);
+      if (!fake.lateDisconnects) {
+        queueMicrotask(() => disconnected(id));
+        return;
+      }
+      leaving.add(id);
+      void (async () => {
+        for (let i = 0; i < 3; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+        disconnected(id);
+      })();
     },
     async retrieveServices(id) {
       calls.push(`retrieveServices:${id}`);

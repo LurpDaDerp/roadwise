@@ -15,6 +15,7 @@ import {
   createBleTransport,
   IOS_FAULT_RETRY_MAX_MS,
   IOS_MTU_WAIT_MS,
+  RELEASE_WAIT_MS,
   RESTORE_ID,
   SEAL_FAIL_MAX,
   SOFT_REPAIR_EVERY_MS,
@@ -296,6 +297,43 @@ test('a wrong dashcam proof three times in a row: unverified, still retrying wit
   expect(r.ble.writes.filter((w) => w.characteristic === RX_CHAR)).toEqual([]);
   await r.clock.advance(4000);
   expect(r.t.linked()).toBe(true);
+});
+
+test('iOS: the paired DashPal let go of and taken back at once (a new key): the connect waits for the late disconnect, so it is never failed by it', async () => {
+  const r = rig('ios');
+  r.ble.lateDisconnects = true;
+  await up(r, 'ios');
+  expect(r.t.linked()).toBe(true);
+  const before = connects(r);
+  // Set up again finished: the same DashPal under a new pairing (same peripheral, another key).
+  r.t.setTarget(null);
+  r.t.setTarget(TARGET);
+  await flush();
+  expect(connects(r) - before).toBe(1);
+  expect(r.errors).not.toContain('connect');
+  expect(r.t.linked()).toBe(true);
+});
+
+test('a disconnect whose event never comes holds a connect to that peripheral at most RELEASE_WAIT_MS', async () => {
+  const r = rig('ios');
+  await up(r, 'ios');
+  expect(r.t.linked()).toBe(true);
+  // This phone's disconnect is answered with no event at all.
+  const disconnect = r.ble.disconnect.bind(r.ble);
+  r.ble.disconnect = async (id) => {
+    r.ble.calls.push(`disconnect:${id}`);
+    r.ble.connected.delete(id);
+  };
+  const before = connects(r);
+  r.t.setTarget(null);
+  r.t.setTarget(TARGET);
+  await flush();
+  expect(connects(r) - before).toBe(0);
+  await r.clock.advance(RELEASE_WAIT_MS - 1);
+  expect(connects(r) - before).toBe(0);
+  r.ble.disconnect = disconnect;
+  await r.clock.advance(1);
+  expect(connects(r) - before).toBe(1);
 });
 
 test('another mac at the paired address three times: unverified; the session is never attempted', async () => {

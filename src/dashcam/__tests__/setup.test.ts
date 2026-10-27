@@ -353,6 +353,32 @@ describe('one tap, the hold, the commit', () => {
     expect(r.log.filter((l) => l === 'stepAside')).toHaveLength(1);
   });
 
+  test('Set up again while the paired DashPal is connected (iOS): the link it lets go of is gone before the setup connects, so its late disconnect fails nothing and setup keeps its one reconnect', async () => {
+    const id = idOf('ios', 0xd5);
+    const r = rig({ platform: 'ios', previous: previousOf(0xd5, 'ios'), cams: [{ last: 0xd5, phones: [{ id: Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]), kPair: new Uint8Array(32).fill(0xab) }] }] });
+    // iOS ble-manager: a disconnect's event lands later and fails every connect then pending.
+    r.ble.lateDisconnects = true;
+    await r.secrets.writePendingAuth({ dashcamId: camOf(0xd5), phoneId: '0102030405060708', kPair: 'ab'.repeat(32) });
+    await r.secrets.finalizeAuth();
+    // The paired DashPal is connected through a session.
+    r.t.setTarget({ peripheralId: id, dashcamId: camOf(0xd5), auth: { phoneId: '0102030405060708', kPair: 'ab'.repeat(32) } });
+    await r.t.start();
+    r.ble.setState('on');
+    for (let i = 0; i < 100 && !r.t.linked(); i++) await flush();
+    expect(r.t.linked()).toBe(true);
+    void r.flow.start({ again: true });
+    await r.until('confirm');
+    const connects = () => r.ble.calls.filter((c) => c === `connect:${id}`).length;
+    const before = connects();
+    r.flow.pair();
+    await r.until('instructions');
+    // One connect: the setup waited for the paired link's disconnect instead of being failed by it.
+    expect(connects() - before).toBe(1);
+    expect(r.log.filter((l) => l.startsWith('error:connect'))).toEqual([]);
+    r.flow.next();
+    expect((await untilEnd(r)).kind).toBe('done');
+  });
+
   test('Set up again with the window closed: “Press the DashPal’s button 5 times”, watched up to 60 s; it opens and pairing goes on; never: window_closed', async () => {
     const r = rig({ previous: previousOf(0xd5), cams: [{ last: 0xd5, windowOpen: false }] });
     void r.flow.start({ again: true });
