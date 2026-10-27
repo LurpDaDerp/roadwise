@@ -5,8 +5,9 @@ import type { PermissionsAdapter } from '@/core/permissions';
 import { dashpalCopy } from '@/dashcam/copy';
 import { COMMAND, SOUND } from '@/dashcam/protocol';
 import { AddPhoneSheet } from '@/dashcam/ui/AddPhoneSheet';
+import type { DashcamState } from '@/dashcam/runtime';
 import { dashcamStatus } from '@/dashcam/ui/status';
-import { useDashcamRuntime, useDashcamState } from '@/dashcam/ui/useDashcam';
+import { useDashcamRuntime, useDashcamSelector } from '@/dashcam/ui/useDashcam';
 import { PairWizardSheet } from '@/dashcam/ui/wizard/PairWizardSheet';
 import type { SetupFlowDeps } from '@/dashcam/ui/wizard/useSetupFlow';
 import type { SetupStart } from '@/dashcam/setup';
@@ -16,6 +17,22 @@ import { Banner, Button, Card, Divider, Screen, Sheet, Text, ToggleRow, useTheme
 import { TopBar } from './parts';
 
 const copy = dashpalCopy.screen;
+
+/**
+ * What the screen shows, and only that: a STATUS that changes nothing here (its receipt time, the
+ * frame rate, the temperature) does not draw it again.
+ */
+function selectScreen(s: DashcamState | null) {
+  const connected = s?.link.lifecycle === 'connected';
+  return {
+    status: dashcamStatus(s),
+    paired: s?.link.paired ?? null,
+    connected,
+    phones: connected ? (s?.link.status?.bondCount ?? null) : null,
+    newPhone: s?.newPhone ?? false,
+    buzzerToo: s?.buzzerToo ?? false,
+  };
+}
 
 /**
  * `/settings/dashcam` (Settings › Driving › DashPal). Unpaired: what DashPal is and "Set up
@@ -29,8 +46,7 @@ const copy = dashpalCopy.screen;
 export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAdapter; now?: () => number; setup?: SetupFlowDeps } }) {
   const th = useTheme();
   const runtime = useDashcamRuntime();
-  const state = useDashcamState();
-  const status = dashcamStatus(state);
+  const { status, paired, connected, phones, newPhone, buzzerToo } = useDashcamSelector(selectScreen);
   const now = deps.now ?? Date.now;
   const [notice, setNotice] = useState<{ tone: 'info' | 'warning'; message: string } | null>(null);
   const [confirmForget, setConfirmForget] = useState(false);
@@ -38,9 +54,6 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
   const [sheet, setSheet] = useState<{ at: number } | null>(null);
   /** the setup sheet: search mode (Set up DashPal) or the paired DashPal (Set up again) */
   const [setup, setSetup] = useState<SetupStart | null>(null);
-  const paired = state?.link.paired ?? null;
-  const connected = state?.link.lifecycle === 'connected';
-  const phones = connected ? (state?.link.status?.bondCount ?? null) : null;
 
   const command = async (op: number, arg: number) => {
     if (!runtime) return;
@@ -122,7 +135,7 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
                 {copy.phonesPairedHelp}
               </Text>
             ) : null}
-            {state?.newPhone ? (
+            {newPhone ? (
               <View style={{ gap: th.space.sm, marginTop: th.space.sm }}>
                 <Banner tone="warning" message={copy.newPhone} testID="dashcam-new-phone" />
                 <Button label={copy.newPhoneOk} variant="secondary" size="sm" onPress={() => void runtime?.dismissNewPhone()} testID="dashcam-new-phone-ok" />
@@ -138,7 +151,7 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
             <ToggleRow
               title={copy.buzzerToo.title}
               subtitle={copy.buzzerToo.subtitle}
-              value={state?.buzzerToo ?? false}
+              value={buzzerToo}
               onValueChange={(on) => void runtime?.setBuzzerToo(on).catch(() => setNotice({ tone: 'warning', message: copy.commandFailed }))}
               testID="dashcam-buzzer-too"
             />

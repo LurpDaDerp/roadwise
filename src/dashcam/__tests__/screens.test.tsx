@@ -5,7 +5,7 @@
  * DashPal", which opens the setup sheet) and the prompt host. The sheet's own steps: wizard.test.tsx.
  */
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
-import { useState } from 'react';
+import { Profiler, useState } from 'react';
 import { Pressable } from 'react-native';
 
 import type { AppStateLike } from '@/data/foreground';
@@ -308,6 +308,27 @@ describe('Settings › DashPal', () => {
     expect(screen.queryByTestId('dashcam-phones')).toBeNull();
     await act(async () => rt.set({ link: { lifecycle: 'connected', status: null } }));
     expect(screen.queryByTestId('dashcam-phones')).toBeNull();
+  });
+
+  it('a STATUS that changes nothing it shows (receipt time, frame rate, temperature) does not draw it again', async () => {
+    const status = (o: { at: number; fpsX10: number; tempC: number }) => ({ state: 3, flags: 0, bondCount: 1, ...o });
+    const rt = createFakeDashcamRuntime({ link: { lifecycle: 'connected', paired: PAIRED, status: status({ at: 1, fpsX10: 200, tempC: 40 }) } });
+    setActiveDashcam(rt);
+    let renders = 0;
+    const w = await appWorld();
+    await w.render(
+      <Profiler id="dashcam" onRender={() => void (renders += 1)}>
+        <DashcamScreen deps={{ adapter: fakeAdapter() }} />
+      </Profiler>
+    );
+    expect(await screen.findByTestId('dashcam-phones')).toHaveTextContent('Phones paired: 1');
+    const before = renders;
+    for (let i = 2; i < 6; i++) await act(async () => rt.set({ link: { lifecycle: 'connected', status: status({ at: i * 2000, fpsX10: 190 + i, tempC: 40 + i }) } }));
+    expect(renders).toBe(before);
+    // A change it shows draws it.
+    await act(async () => rt.set({ link: { lifecycle: 'connected', status: { ...status({ at: 20_000, fpsX10: 200, tempC: 40 }), bondCount: 2 } } }));
+    expect(renders).toBeGreaterThan(before);
+    expect(screen.getByTestId('dashcam-phones')).toHaveTextContent('Phones paired: 2');
   });
 
   it('commands while not connected say so and send nothing; a failed one says it did not reach', async () => {
