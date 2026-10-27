@@ -832,8 +832,10 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
     if (restoredThisLaunch) return;
     // No owner yet (a launch signed out on a phone nobody has used): nothing is marked done and no
     // stamp is written, so the sign-in that names the owner (`runNow`) or the next foreground restores.
-    if ((await runtime.restore()) === null) throw new Error('no device owner yet: nothing to restore');
-    restoredThisLaunch = true;
+    const result = await runtime.restore();
+    if (result === null) throw new Error('no device owner yet: nothing to restore');
+    // A run that read its most pages and has more to go carries on at the next return to the front.
+    restoredThisLaunch = result.complete;
     await runtime.limits.purgeExpired().catch((error: unknown) => onError(error, 'purge expired tiles'));
   };
   const stopRestore = runWhenForeground('restore', 60_000, restore, foreground);

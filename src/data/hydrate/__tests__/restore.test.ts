@@ -3,7 +3,7 @@ import { uuid } from '@/data/sync/__fixtures__/drives';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { onDataChanged } from '@/data/events';
-import { applyServerDrive, RESTORED_AT_KEY, RestoreAbandonedError, restoreDrives, ServerDriveSchema, toEventRows, toTripRow } from '@/data/hydrate/restore';
+import { applyServerDrive, MAX_PAGES, RESTORE_CURSOR_KEY, RESTORED_AT_KEY, RestoreAbandonedError, restoreDrives, ServerDriveSchema, toEventRows, toTripRow } from '@/data/hydrate/restore';
 import { readDriveCount, readRecentDrives } from '@/data/queries/drives';
 
 const T0 = 1_700_000_000_000;
@@ -125,6 +125,32 @@ test('a restore cut short keeps what it wrote, shows it, and the next run picks 
   expect(await restoreDrives({ db, uid: UID, pageSize: 2, rpc })).toMatchObject({ restored: 1, complete: true });
   expect(await createTripsRepo(db).get(uuid(3))).not.toBeNull();
   off();
+});
+
+test('a history longer than one run’s pages is not stamped complete: the next run carries on from the oldest drive written, then stamps it', async () => {
+  const server = Array.from({ length: MAX_PAGES + 5 }, (_, i) => serverDrive(i + 1));
+  const calls: (string | undefined)[] = [];
+  const rpc = async (_fn: string, args?: Record<string, unknown>) => {
+    const before = typeof args?.p_before === 'string' ? Date.parse(args.p_before) : Infinity;
+    calls.push(args?.p_before as string | undefined);
+    return server.filter((d) => d.startedAt < before).slice(0, Number(args?.p_limit));
+  };
+  expect(await restoreDrives({ db, uid: UID, pageSize: 1, rpc })).toEqual({ skipped: false, restored: MAX_PAGES, complete: false });
+  expect(await createSettingsRepo(db).get(RESTORED_AT_KEY)).toBeNull();
+  expect(await createSettingsRepo(db).get(RESTORE_CURSOR_KEY)).toEqual({ uid: UID, before: T0 - MAX_PAGES * 3_600_000 });
+  calls.length = 0;
+  expect(await restoreDrives({ db, uid: UID, pageSize: 1, rpc })).toEqual({ skipped: false, restored: 5, complete: true });
+  // It started where the last run stopped, not at the newest page.
+  expect(calls[0]).toBe(new Date(T0 - MAX_PAGES * 3_600_000).toISOString());
+  expect(await createTripsRepo(db).count()).toBe(MAX_PAGES + 5);
+  expect(await createSettingsRepo(db).get(RESTORED_AT_KEY)).toMatchObject({ uid: UID });
+  expect(await createSettingsRepo(db).get(RESTORE_CURSOR_KEY)).toBeNull();
+  // Another driver's cursor is never followed.
+  await createSettingsRepo(db).remove(RESTORED_AT_KEY);
+  await createSettingsRepo(db).set(RESTORE_CURSOR_KEY, { uid: 'someone-else', before: T0 - 3_600_000 });
+  calls.length = 0;
+  await restoreDrives({ db, uid: UID, pageSize: 1, rpc });
+  expect(calls[0]).toBeUndefined();
 });
 
 test('a restore that outlives its driver writes nothing more: another owner on the device, or the run no longer wanted', async () => {

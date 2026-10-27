@@ -15,7 +15,7 @@ import { activeDashcam } from '@/dashcam/registry';
 import { createSettingsRepo, REFUSED_NEVER, SPOTS_META_KEY, type Db } from '@/data/db';
 import { clearDeviceSecret } from '@/data/devices/deviceSecret';
 import { emitDataChanged } from '@/data/events';
-import { RESTORED_AT_KEY } from '@/data/hydrate/restore';
+import { RESTORE_CURSOR_KEY, RESTORED_AT_KEY } from '@/data/hydrate/restore';
 import { publishUnits } from '@/data/queries/units';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { DROP_NOTICE_KEY } from '@/drive/dropNotice';
@@ -67,8 +67,8 @@ export const WIPE_KEEPS_SETTINGS_PREFIX = 'dashcam.';
 export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'dashcam_events', 'dashcam_boots', 'dashcam_coverage', 'problem_spots', 'trips'];
 /**
  * The zones, the notice of a drive that was not kept (`src/drive/dropNotice.ts`), the last drive's
- * "Not driving?" budget, the problem spots' bookkeeping, and the record that this driver's restore
- * ran to the end: their drives just left the phone, so the next sign-in restores them again.
+ * "Not driving?" budget, the problem spots' bookkeeping, and the record of how far this driver's
+ * restore ran: their drives just left the phone, so the next sign-in restores them again from the top.
  */
 export const SIGN_OUT_SETTINGS: readonly string[] = [
   'privacy.zones',
@@ -76,6 +76,7 @@ export const SIGN_OUT_SETTINGS: readonly string[] = [
   NOT_DRIVING_KEY,
   SPOTS_META_KEY,
   RESTORED_AT_KEY,
+  RESTORE_CURSOR_KEY,
   DRIVE_SCREEN_ENTERED_KEY,
 ];
 

@@ -8,8 +8,9 @@
  * device). An event of a type this build does not know is skipped; the drive is kept.
  *
  * A restore runs to the end once per owner: `RESTORED_AT_KEY` records `{ uid, at }` only after the
- * last page, so one cut short (offline, the app closed) starts again at the next try and fills
- * in what is still missing, and a drive recorded before the restore ran never stops it.
+ * last page (a short or empty one), and a drive recorded before the restore ran never stops it.
+ * Each page written moves `RESTORE_CURSOR_KEY` to its oldest drive, so a run cut short (offline,
+ * the app closed, `MAX_PAGES` reached) carries on from there at the next try.
  *
  * Every page is written only while the device still belongs to the driver it was started for, and
  * only while `isCurrent` says the run is still wanted: a restore that outlives a sign-out or a
@@ -28,6 +29,8 @@ export const RESTORE_PAGE = 50;
 export const MAX_PAGES = 40;
 /** Settings key: `{ uid, at }`, the driver whose restore last ran to the end and when. */
 export const RESTORED_AT_KEY = 'restore.completedAt';
+/** Settings key: `{ uid, before }`, where that driver's unfinished restore carries on (epoch ms). */
+export const RESTORE_CURSOR_KEY = 'restore.cursor';
 
 /** The restore stopped because the device or the session no longer belongs to its driver. */
 export class RestoreAbandonedError extends Error {
@@ -117,6 +120,17 @@ export interface RestoreResult {
 interface RestoredAt {
   uid: string;
   at: number;
+}
+
+interface RestoreCursor {
+  uid: string;
+  before: number;
+}
+
+/** Where `uid`'s unfinished restore carries on, or null to start from the newest page. */
+async function readCursor(db: Db, uid: string): Promise<number | null> {
+  const stored = await createSettingsRepo(db).get<Partial<RestoreCursor>>(RESTORE_CURSOR_KEY);
+  return stored !== null && typeof stored === 'object' && stored.uid === uid && typeof stored.before === 'number' ? stored.before : null;
 }
 
 /** Whether `uid`'s restore has already run to the end on this device. */
@@ -238,6 +252,7 @@ export async function applyServerDrive(tx: Db, d: ServerDrive, now: number): Pro
  * Restore every drive of `uid` the device does not hold yet. Idempotent per row (an existing id is
  * kept). Skipped once `uid`'s restore has run to the end; rejects with `RestoreAbandonedError` when
  * the device or session changed hands mid-way (the rows already written stay, and are announced).
+ * `complete` is false when `MAX_PAGES` were read and more may follow: the next run carries on.
  */
 export async function restoreDrives(deps: RestoreDeps): Promise<RestoreResult> {
   const { db, uid } = deps;
@@ -247,8 +262,9 @@ export async function restoreDrives(deps: RestoreDeps): Promise<RestoreResult> {
   if (await restoreCompleted(db, uid)) return { skipped: true, restored: 0, complete: true };
   const isCurrent = deps.isCurrent ?? (() => true);
   const pageSize = deps.pageSize ?? RESTORE_PAGE;
-  let before: number | null = null;
+  let before = await readCursor(db, uid);
   let restored = 0;
+  let complete = false;
   try {
     for (let page = 0; page < MAX_PAGES; page += 1) {
       if (!(await isCurrent())) throw new RestoreAbandonedError();
@@ -260,6 +276,9 @@ export async function restoreDrives(deps: RestoreDeps): Promise<RestoreResult> {
       const drives = rows.data.map((r) => ServerDriveSchema.safeParse(r)).flatMap((p) => (p.success ? [p.data] : []));
       // The page was read under whoever holds the session now: it is written only if that is still this driver.
       if (!(await isCurrent())) throw new RestoreAbandonedError();
+      const oldest = drives.length === 0 ? null : Math.min(...drives.map((d) => d.startedAt));
+      // The last page: a short or empty one, or one that does not reach further back than the one before.
+      const last = rows.data.length < pageSize || oldest === null || (before !== null && oldest >= before);
       const written = await db.transaction(async (tx) => {
         if (!(await deviceOwnerIs(tx, uid))) return null;
         let n = 0;
@@ -269,22 +288,28 @@ export async function restoreDrives(deps: RestoreDeps): Promise<RestoreResult> {
           await events.insertMany(toEventRows(d), tx);
           n += 1;
         }
+        // The page and where the next one starts are written together.
+        if (!last && oldest !== null) await createSettingsRepo(tx).set(RESTORE_CURSOR_KEY, { uid, before: oldest } satisfies RestoreCursor);
         return n;
       });
       if (written === null) throw new RestoreAbandonedError();
       restored += written;
-      if (rows.data.length < pageSize || drives.length === 0) break;
-      const oldest = Math.min(...drives.map((d) => d.startedAt));
-      if (before !== null && oldest >= before) break;
+      if (last) {
+        complete = true;
+        break;
+      }
       before = oldest;
     }
-    await db.transaction(async (tx) => {
-      if (!(await deviceOwnerIs(tx, uid))) throw new RestoreAbandonedError();
-      await createSettingsRepo(tx).set(RESTORED_AT_KEY, { uid, at: now() } satisfies RestoredAt);
-    });
+    if (complete) {
+      await db.transaction(async (tx) => {
+        if (!(await deviceOwnerIs(tx, uid))) throw new RestoreAbandonedError();
+        await createSettingsRepo(tx).set(RESTORED_AT_KEY, { uid, at: now() } satisfies RestoredAt);
+        await createSettingsRepo(tx).remove(RESTORE_CURSOR_KEY);
+      });
+    }
   } finally {
     // Whatever was written is shown, also when the run stopped part-way.
     if (restored > 0) emitDataChanged({ source: 'hydrate' });
   }
-  return { skipped: false, restored, complete: true };
+  return { skipped: false, restored, complete };
 }
