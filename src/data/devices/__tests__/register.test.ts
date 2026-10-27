@@ -52,6 +52,24 @@ test('registeredRecently: a registration that went up with no push token is not 
   expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + 1000, null, true)).toBe(false);
   await settings.set(LAST_REGISTER_KEY, { userId: 'u1', deviceId: 'install-1234', at: T0, token: 'ExponentPushToken[x]' });
   expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + 1000, null, true)).toBe(true);
+  // Allowed already when it went up, but no token could be had (no FCM, Expo's service down): the 6 hours stand.
+  await settings.set(LAST_REGISTER_KEY, { userId: 'u1', deviceId: 'install-1234', at: T0, token: null, permitted: true });
+  expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + 1000, null, true)).toBe(true);
+});
+
+test('a grant bypasses the throttle once, even when its token cannot be had; after that the 6 hours stand', async () => {
+  const db = await createSqlJsDb();
+  await migrate(db);
+  const settings = createSettingsRepo(db);
+  const rpc = jest.fn(async () => ({ league_eligible: false }));
+  const base = { rpc, settings, userId: 'u1', deviceId: 'install-1234', platform: 'android' as const, pushToken: null, now: () => T0 };
+  expect(await registerDevice({ ...base, pushAllowed: false })).toBe('saved');
+  expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + 1000, null, true)).toBe(false);
+  expect(await registerDevice({ ...base, pushAllowed: true, now: () => T0 + 1000 })).toBe('saved');
+  expect(await settings.get(LAST_REGISTER_KEY)).toMatchObject({ token: null, permitted: true });
+  expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + 2000, null, true)).toBe(true);
+  expect(await registerDevice({ ...base, pushAllowed: true, now: () => T0 + 2000 })).toBe('throttled');
+  expect(rpc).toHaveBeenCalledTimes(2);
 });
 
 test('pushAllowed: a device with permission, read locally; a simulator, no permission or a failed read is false', async () => {

@@ -21,6 +21,8 @@ export interface RegisterDeps {
   pushToken: string | null;
   /** The Live Activity push-to-start token (lowercase hex), or null where there is none. */
   liveActivityToken?: string | null;
+  /** Whether notifications were allowed when the token was read (`pushAllowed`). Absent: whether a token was read. */
+  pushAllowed?: boolean;
   now: () => number;
   force?: boolean;
   onError?: (error: unknown, context: string) => void;
@@ -35,6 +37,8 @@ interface LastRegister {
   token: string | null;
   /** The Live Activity token registered with it (absent in a stamp from before it existed: none). */
   laToken?: string | null;
+  /** Notifications were allowed when it was made (absent in a stamp from before it existed: whether it carried a token). */
+  permitted: boolean;
 }
 
 function parseLast(raw: unknown): LastRegister | null {
@@ -47,6 +51,7 @@ function parseLast(raw: unknown): LastRegister | null {
     at: r.at,
     token: typeof r.token === 'string' ? r.token : null,
     laToken: typeof r.laToken === 'string' ? r.laToken : null,
+    permitted: typeof r.permitted === 'boolean' ? r.permitted : typeof r.token === 'string',
   };
 }
 
@@ -109,8 +114,9 @@ export async function releaseDevice(deps: ReleaseDeps): Promise<'released' | 'sk
  * new token arrives through the token listener, which forces a registration anyway). Given the
  * Live Activity token read now (a local read), a token the last registration did not carry makes
  * it false, so a changed one is registered at the next foreground even without its event. Given
- * whether a push token can be had now (`pushAllowed`, a local read), a registration that went up
- * with none while one can be had now (notifications allowed since) is not recent either.
+ * whether a push token can be had now (`pushAllowed`, a local read), a registration made before
+ * notifications were allowed is not recent either: a grant is registered at the next foreground,
+ * once (a token that still cannot be had then waits the 6 hours like any other).
  */
 export async function registeredRecently(
   settings: Pick<SettingsRepo, 'get'>,
@@ -122,7 +128,7 @@ export async function registeredRecently(
 ): Promise<boolean> {
   const last = parseLast(await settings.get<unknown>(LAST_REGISTER_KEY));
   if (last === null || last.userId !== userId || last.deviceId !== deviceId || last.at > now || now - last.at >= REGISTER_INTERVAL_MS) return false;
-  if (pushAllowedNow === true && last.token === null) return false;
+  if (pushAllowedNow === true && !last.permitted) return false;
   return liveActivityToken === undefined || (last.laToken ?? null) === liveActivityToken;
 }
 
@@ -131,8 +137,10 @@ export async function registerDevice(deps: RegisterDeps): Promise<RegisterResult
   const now = deps.now();
   const last = parseLast(await settings.get<unknown>(LAST_REGISTER_KEY));
   const laToken = deps.liveActivityToken ?? null;
+  const permitted = deps.pushAllowed ?? deps.pushToken !== null;
   const same = last !== null && last.userId === userId && last.deviceId === deviceId;
-  if (!deps.force && same && last.token === deps.pushToken && (last.laToken ?? null) === laToken && last.at <= now && now - last.at < REGISTER_INTERVAL_MS) return 'throttled';
+  // A grant is new even when its token could not be had: the stamp records it, so it bypasses the throttle once.
+  if (!deps.force && same && last.token === deps.pushToken && (last.laToken ?? null) === laToken && last.permitted === permitted && last.at <= now && now - last.at < REGISTER_INTERVAL_MS) return 'throttled';
 
   try {
     const args: Record<string, unknown> = { p_device_id: deviceId, p_platform: deps.platform };
@@ -144,7 +152,7 @@ export async function registerDevice(deps: RegisterDeps): Promise<RegisterResult
     deps.onError?.(asError(error, 'register_device failed'), 'register device');
     return 'error';
   }
-  const stamp: LastRegister = { userId, deviceId, at: now, token: deps.pushToken, laToken };
+  const stamp: LastRegister = { userId, deviceId, at: now, token: deps.pushToken, laToken, permitted };
   await settings.set(LAST_REGISTER_KEY, stamp);
   return 'saved';
 }

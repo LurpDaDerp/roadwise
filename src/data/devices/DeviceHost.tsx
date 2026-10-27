@@ -108,14 +108,14 @@ export function DeviceHost(props: DeviceHostProps): null {
       // A local read (no network): a token the last registration did not carry is registered now.
       const liveActivityToken = d.platform === 'ios' ? await readLiveActivityToken(d.liveActivity, (e) => report(e, 'devices live activity token')) : null;
       if (!live) return;
-      // Also local: notifications allowed since a registration that went up with no push token.
-      const canPush = force ? false : await pushAllowed(d.push);
+      // Also local: notifications allowed since the last registration (kept on its stamp).
+      const canPush = await pushAllowed(d.push);
       if (!live) return;
       if (!force && (await registeredRecently(settings, userId, deviceId, now(), liveActivityToken, canPush))) return;
       if (!live) return;
       const pushToken = await readPushToken(d.push, d.projectId, (e) => report(e, 'devices push token'));
       if (!live) return;
-      const result = await registerDevice({ rpc: d.rpc, settings, userId, deviceId, platform: d.platform, pushToken, liveActivityToken, now, force, onError: report });
+      const result = await registerDevice({ rpc: d.rpc, settings, userId, deviceId, platform: d.platform, pushToken, liveActivityToken, pushAllowed: canPush, now, force, onError: report });
       if (result !== 'error') forcedFor.current = userId;
     };
 
