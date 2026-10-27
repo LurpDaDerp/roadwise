@@ -466,6 +466,8 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(fn(d, 'func syncWakes()')).toMatch(/if \(allowed\(r\) && r\.state != "off"\) \|\| \(isRecording && access\.snapshot\(\)\.location == "always"\) \{ wakes\.start\(\) \} else \{ wakes\.stop\(\) \}/);
     expect(fn(d, 'func beginDrive(')).toMatch(/emitState\("confirmed"\)\s*syncWakes\(\)\s*\}$/);
     expect(fn(d, 'func commitEnd(')).toMatch(/settle\(&r, now\)[\s\S]*syncWakes\(\)/);
+    // "Not driving?" leaves no drive recording: unarmed, the wakes stop for the rest
+    expect(fn(d, 'func notDriving()')).toMatch(/r\.state = "suppressed"[\s\S]*emitState\("notDriving"\)\s*syncWakes\(\)\s*\}$/);
     expect(code('DetectPolicy.swift')).toMatch(/if !c\.armed \{ return "off" \}/);
   });
 

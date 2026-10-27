@@ -130,6 +130,11 @@ describe('the fake detector', () => {
     expect((await d.getState()).waitUntil).toBeNull();
     d.jsStop(now);
     await expect(d.extendWaiting()).resolves.toBeNull();
+    // A relaunch during the wait ends it, as native's resume does (JS takes the drive back without one).
+    expect(await d.startWaiting()).toMatchObject({ ok: true });
+    expect(d.relaunch()).not.toBeNull();
+    expect((await d.getState()).waitUntil).toBeNull();
+    await expect(d.extendWaiting()).resolves.toBeNull();
   });
 
   test('appForeground: an app wake opens an auto candidate only with fresh car motion, ignoring nothing else; a no-op without the module', async () => {

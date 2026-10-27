@@ -78,8 +78,8 @@ export interface FakeDetectControls {
   /**
    * A relaunch resumes the live drive (`resumeAtLaunch`): its last `lostRows` row lines are gone from
    * the journal (a power loss before they were synced, though JS may hold them), a `gap` line reserves
-   * `resumeSeq` past the journal's highest seq, and rows go on after it. The gap's seq, or null when
-   * nothing records.
+   * `resumeSeq` past the journal's highest seq, and rows go on after it; a Start-card drive's wait
+   * ends with it. The gap's seq, or null when nothing records.
    */
   relaunch(lostRows?: number): number | null;
   /** Lines of each journal file (ndjson). */
@@ -461,6 +461,8 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       const gap = { k: 'gap', from: live.lastRowTs ?? live.startedAt, to: now(), lastSeq: skipTo };
       journal.set(live.driveId, text + journalLine(gap));
       live.nextSeq = skipTo + 1;
+      // JS takes a relaunched Start-card drive back without its wait: native's goes with it.
+      waitUntil = null;
       announce('resumed');
       return skipTo;
     },

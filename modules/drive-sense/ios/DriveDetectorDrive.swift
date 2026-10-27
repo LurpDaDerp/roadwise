@@ -221,6 +221,8 @@ extension DriveDetector {
       "lastSeq": lastSeq, "lastRowTs": DetectStateRecord.ms(rowTs),
     ])
     emitState("notDriving")
+    // The drive no longer holds the wakes on: unarmed, they stop for the rest.
+    syncWakes()
   }
 
   /// `wipe` (a sign-out, a device or account switch): nothing of the last owner stays. A candidate,
