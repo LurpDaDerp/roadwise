@@ -276,6 +276,8 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
   let stepped = false;
   /** Cancel came while the commit was answered (the screen left): a commit that does not go through is undone */
   let cancelAfter = false;
+  /** a resumable failure's watch for a drive opening (no segment runs meanwhile) */
+  let offHeldDrive: (() => void) | null = null;
 
   // ——— the setup under way ———
   let t: DashcamTransport | null = null;
@@ -1187,9 +1189,36 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     assembler.start();
   }
 
+  function startSpeed(): void {
+    stopSpeed();
+    speed = (deps.speed ?? (() => createSetupSpeed()))();
+    void speed.start().catch((e: unknown) => report(e, 'speed'));
+  }
+
+  const resumable = (p: SetupPhase): boolean => p.kind === 'failed' && (p.retry === 'commit' || p.retry === 'resume');
+
+  /**
+   * A failure that Try again resumes keeps the hold, but no segment runs to see a drive open: one
+   * that opens meanwhile stops the setup as it would during one (the hold undone, the paired
+   * DashPal given back).
+   */
+  function watchHeldFailure(): void {
+    offHeldDrive?.();
+    const onDrive = (): void => {
+      if (running || !deps.isBusy() || !resumable(phase)) return;
+      offHeldDrive?.();
+      offHeldDrive = null;
+      void runSegment(() => Promise.reject(new DriveOpen()));
+    };
+    offHeldDrive = deps.onDriveChange(onDrive);
+    onDrive();
+  }
+
   /** Run one segment of the setup to its end (a phase that waits for nothing, or a failure). */
   async function runSegment(body: () => Promise<SetupPhase>): Promise<void> {
     if (running) return;
+    offHeldDrive?.();
+    offHeldDrive = null;
     running = true;
     cancelled = false;
     cancelAfter = false;
@@ -1236,11 +1265,15 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       offApp();
       running = false;
     }
-    if (result.kind !== 'done' && !(result.kind === 'failed' && (result.retry === 'commit' || result.retry === 'resume'))) {
+    if (resumable(result)) {
+      // Nothing is sent until Try again (which starts the speed watch again).
+      stopSpeed();
+    } else if (result.kind !== 'done') {
       stopSpeed();
       await giveBack();
     }
     set(result);
+    if (resumable(result)) watchHeldFailure();
   }
 
   async function fresh(opts: SetupStart): Promise<SetupPhase> {
@@ -1293,8 +1326,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
     check();
     if (tap === null) throw new Cancelled();
     stepAside();
-    speed = (deps.speed ?? (() => createSetupSpeed()))();
-    void speed.start().catch((e: unknown) => report(e, 'speed'));
+    startSpeed();
     await connectAndPair(mode);
     await waitNext();
     return commit();
@@ -1343,6 +1375,7 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       }
       // The hold may still stand: send the commit again (after a reconnect for an unanswered one).
       await runSegment(async () => {
+        startSpeed();
         if (kind === 'resume') {
           stage = 'commit';
           set({ kind: 'finishing', reconnecting: true });
@@ -1372,6 +1405,8 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
       }
       if (phase.kind === 'done' || phase.kind === 'cancelled') return;
       // Not running (a failure that kept the hold, or nothing under way): undo and close.
+      offHeldDrive?.();
+      offHeldDrive = null;
       if (stage !== 'pre' || pending) set({ kind: 'stopping' });
       await undo();
       stopSpeed();
