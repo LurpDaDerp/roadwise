@@ -5,7 +5,7 @@ import { uuid } from '@/core/engine/__fixtures__/drives';
 import type { Db, DbResult } from '@/data/db';
 import { createTestDb, seedEvents, seedTrips, wrapperFor } from '@/data/queries/__fixtures__/harness';
 import { createQueryClient } from '@/data/queries/client';
-import { readDriveDetail, readDriveHistory } from '@/data/queries/drives';
+import { readDriveDetail, readDriveHistory, type LocalDrive } from '@/data/queries/drives';
 import { invalidateAfterSync } from '@/data/queries/invalidate';
 
 import { driveScoreOf } from '../summary';
@@ -81,7 +81,7 @@ test('one events read for the whole list, and each drive scores as its recap doe
 
 test('a change refreshes the list’s scores with one read; a drive added to the list waits for its own events', async () => {
   const drives = await readDriveHistory(db, 'all');
-  const { result, rerender } = await renderHook(({ list }) => useDriveScores(list), {
+  const { result, rerender } = await renderHook(({ list }: { list: LocalDrive[] }) => useDriveScores(list), {
     wrapper: wrapperFor(db, client, now),
     initialProps: { list: drives },
   });
