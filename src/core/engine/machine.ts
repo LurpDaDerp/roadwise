@@ -266,7 +266,15 @@ export function createEngine(deps: EngineDeps): Engine {
   async function processRow(row: FeatureRow): Promise<void> {
     const s = session as TripSession;
     const det = suite as DetectorSuite;
-    const limit = deps.limits.lookup(row.lat, row.lng, row.course, { gnssValid: row.gnssValid, speedMps: knownSpeed(row) }) ?? UNKNOWN_LIMIT;
+    // A replayed row waits for the stored tiles: a journal comes in a burst, faster than the live
+    // lookup's reads land, so it would find none yet, and it never asks the network along the old route.
+    const limits = deps.limits;
+    const limit =
+      (replaying && limits.lookupStored !== undefined
+        ? row.gnssValid
+          ? await limits.lookupStored(row.lat, row.lng, row.course)
+          : null
+        : limits.lookup(row.lat, row.lng, row.course, { gnssValid: row.gnssValid, speedMps: knownSpeed(row) })) ?? UNKNOWN_LIMIT;
     // The sign's number: a posted limit or a confident class default. The detectors judge the row
     // against `limit` themselves (`limitMphFor`), which refuses a default.
     seen = { row, limit, limitMph: limitShownMph(row, limit) };

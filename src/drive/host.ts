@@ -633,6 +633,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     limits: {
       // The row's own fix: the stopped hold, the lost-fix reset and the point fallback read it.
       lookup: (lat, lng, course, fix) => limits.lookup(lat, lng, course, fix ?? { gnssValid: true, speedMps: null }),
+      // A replayed row (a journal drained): the stored tiles, never the network.
+      lookupStored: (lat, lng, course) => limits.lookupStored(lat, lng, course),
       prefetch: (lat, lng, course) => {
         if (persist) limits.prefetch(lat, lng, course);
       },

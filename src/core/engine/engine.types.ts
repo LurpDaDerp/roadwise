@@ -312,6 +312,12 @@ export interface EngineDeps {
      * point answer after a run of unknown limits while moving.
      */
     lookup(lat: number, lng: number, course: number, fix?: LimitFix): LimitSample | null;
+    /**
+     * The limit from the stored tiles, read as it is asked for (SQLite, never the network), for a
+     * replayed row: a journal arrives in a burst, faster than `lookup`'s reads land, and its rows are
+     * where the car was. Absent, replayed rows take `lookup` too.
+     */
+    lookupStored?(lat: number, lng: number, course: number): Promise<LimitSample | null>;
     /** Warm the cache along the heading; called once per `PREFETCH_EVERY_M` travelled. */
     prefetch(lat: number, lng: number, course: number): void;
   };

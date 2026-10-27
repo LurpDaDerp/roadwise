@@ -1683,7 +1683,12 @@ describe('iOS: the push-to-start once the confirming rows are in (plan decision 
     const base = fakeLimits();
     let calls = 0;
     const unknown: LimitSample = { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false };
-    return { ...base, lookup: (...args: Parameters<SpeedLimitClient['lookup']>) => ((calls += 1) <= n ? unknown : base.lookup(...args)) } as SpeedLimitClient;
+    // Replayed rows read the stored tiles (`lookupStored`), live ones `lookup`: the first `n` of either know nothing.
+    return {
+      ...base,
+      lookup: (...args: Parameters<SpeedLimitClient['lookup']>) => ((calls += 1) <= n ? unknown : base.lookup(...args)),
+      lookupStored: async (...args: Parameters<SpeedLimitClient['lookupStored']>) => ((calls += 1) <= n ? unknown : base.lookupStored(...args)),
+    } as SpeedLimitClient;
   }
 
   function pushes(answers: (boolean | PushToStartOutcome)[] = []) {
