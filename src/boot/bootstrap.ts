@@ -25,7 +25,7 @@ import { createPushToStart } from '@/data/devices/liveActivity';
 import { onDataChanged } from '@/data/events';
 import { runWhenForeground, type AppStateLike as ForegroundAppState } from '@/data/foreground';
 import { restoreDrives, type RestoreResult } from '@/data/hydrate/restore';
-import { getSharedOnline } from '@/data/net/net';
+import { createExpoNet, getSharedOnline } from '@/data/net/net';
 import { createQueryClient } from '@/data/queries/client';
 import { subscribeInvalidation } from '@/data/queries/invalidate';
 import { invalidateAfterDrive } from '@/data/server/invalidate';
@@ -136,6 +136,17 @@ export interface BootstrapDeps {
   /** The diagnostics battery recorder, dev builds only. Default: `defaultDiagnostics`. `null`: none. */
   mountDiagnostics?: ((host: DriveHost, db: Db, onError: (error: unknown) => void) => () => void) | null;
   sessionTimeoutMs?: number;
+  /**
+   * The process's network adapter, which the speed limits and the account screens read
+   * (`getSharedOnline`), made at launch and not waited for. Default: `createExpoNet`. `null`: none.
+   */
+  createNet?: (() => Promise<unknown>) | null;
+  /**
+   * iOS: keep the database out of iCloud and Finder backups, not waited for. Default: drive-sense's
+   * `excludeFromBackup` on expo-sqlite's directory, when the launch opened that database itself
+   * (not an injected `openDb`). `null`: none.
+   */
+  excludeFromBackup?: (() => Promise<void>) | null;
   /** The driver a handover already knows: the identity stage decides on this uid with no session read. */
   expectedUid?: string;
   queryClient?: QueryClient;
@@ -267,6 +278,11 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   const db = await stage('open', () => (deps.openDb ?? (() => createExpoDb(DB_NAME)))());
   enter('migrate');
   const schemaVersion = await stage('migrate', () => migrate(db));
+  // Neither holds the launch, and a failure costs only what it would have given.
+  const createNet = deps.createNet === undefined ? createExpoNet : deps.createNet;
+  if (createNet) void createNet().catch((error: unknown) => onError(error, 'network state'));
+  const exclude = deps.excludeFromBackup === undefined ? (deps.openDb ? null : excludeDatabaseFromBackup) : deps.excludeFromBackup;
+  if (exclude) void exclude().catch((error: unknown) => onError(error, 'backup exclusion'));
   // The privacy-trim secret into memory while the phone is in hand: a locked-phone auto-end or a
   // background recovery finalizes from the cache (expo-secure-store, AFTER_FIRST_UNLOCK).
   void preloadDeviceSecret(undefined, (error) => onError(error, 'device secret'));
@@ -622,6 +638,16 @@ function readAppVersion(): string {
   } catch {
     return 'unknown';
   }
+}
+
+/**
+ * iOS: the database directory (the driver's drive history, problem spots, zones and, during a drive,
+ * its per-second rows) is kept out of iCloud and Finder backups, as the drive's own file is.
+ */
+async function excludeDatabaseFromBackup(): Promise<void> {
+  if (Platform.OS !== 'ios') return;
+  const directory = (await import('expo-sqlite')).defaultDatabaseDirectory as string;
+  await (await import('@drive-sense')).default.excludeFromBackup(directory);
 }
 
 /** The forgot-to-start reminder's one switch-off per install (it is retired). Never fails the launch. */

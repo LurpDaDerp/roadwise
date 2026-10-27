@@ -229,9 +229,11 @@ function fakeRuntime(drive: Partial<DriveState>) {
     drainOnce: jest.fn(async () => ({ done: 2 })),
     owed: jest.fn(async () => 1),
     signedIn: jest.fn(async () => {}),
+    idle: jest.fn(async () => {}),
   };
-  // The sign-out drain first makes never-tried (waiting) uploads due (one UPDATE on the queue).
-  const db = { execute: jest.fn(async () => ({ rows: [], changes: 0 })) };
+  // The sign-out drain first makes every owed upload due (two UPDATEs on the queue, in one transaction).
+  const execute = jest.fn(async () => ({ rows: [], changes: 0 }));
+  const db = { execute, transaction: async <T,>(fn: (tx: { execute: typeof execute }) => Promise<T>) => fn({ execute }) };
   return {
     runtime: { db, now: () => 1_000, queryClient, drive: host, runner } as unknown as NonNullable<RuntimeState['runtime']>,
     host,

@@ -72,6 +72,7 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
       permissions: async () => ({ location: 'granted' as const }),
       attachSummaryNotifier: null,
       mountDiagnostics: null,
+      createNet: null,
       mayDrain: () => false,
       onError: () => {},
       ...over,
@@ -96,6 +97,18 @@ test('a cold launch: migrates, records the owner, boots the host idle, starts th
   const rt2 = await bootstrapApp(again.deps);
   expect(again.source.calls).toEqual([]);
   await rt2.stop();
+});
+
+test('the launch makes the network adapter and keeps the database out of backups, waiting for neither; a failure is reported and the launch goes on', async () => {
+  const errors: string[] = [];
+  const createNet = jest.fn(() => new Promise<never>(() => {}));
+  const excludeFromBackup = jest.fn(async () => Promise.reject(new Error('E_IO')));
+  const rt = await bootstrapApp(deps({ createNet, excludeFromBackup, onError: (_e, context) => void errors.push(context) }).deps);
+  expect(createNet).toHaveBeenCalledTimes(1);
+  expect(excludeFromBackup).toHaveBeenCalledTimes(1);
+  await new Promise((r) => setTimeout(r, 0));
+  expect(errors).toContain('backup exclusion');
+  await rt.stop();
 });
 
 test('a drive the previous process was recording is continued when the capture still runs, else finalized as an orphan', async () => {
