@@ -183,8 +183,10 @@ export type HudScreenProps = {
  *   yet, the sky's scheme).
  * - Every position comes from `hudLayout` (absolute rects): End is always on screen.
  *
- * It re-renders when `useDriveLive` publishes (≤ 1 Hz), a flash or the dim state flips, or DashPal's
- * held alert changes. The halo moves on the UI thread; under Reduce Motion it only changes colour.
+ * It re-renders when `useDriveLive` publishes (once a row, and on a fix only over the limit, where
+ * the tint follows each reading), a flash or the dim state flips, or DashPal's held alert changes;
+ * with RoadWise in the background the store holds still and it draws nothing. The halo moves on the
+ * UI thread; under Reduce Motion it only changes colour.
  */
 export function HudScreen({ overlay = false }: HudScreenProps) {
   const live = useDriveLive();
