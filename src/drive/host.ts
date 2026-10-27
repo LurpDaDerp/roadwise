@@ -648,11 +648,14 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       }
       // Speeding sounds never queue up: a newer one drops one that has not started, and one still
       // queued is dropped once the row is not over the line. A held session is released then.
+      // Any alert still queued when RoadWise goes behind is dropped unplayed.
       const decision = decisionFor(alert, { voiceEnabled: deps.voiceEnabled?.() ?? false });
       if (alert.type === 'speeding') {
         speedingSounds += 1;
         const mine = speedingSounds;
-        decision.stillWanted = () => mine === speedingSounds && engine.snapshot().speedingOver;
+        decision.stillWanted = () => appActive() && mine === speedingSounds && engine.snapshot().speedingOver;
+      } else {
+        decision.stillWanted = appActive;
       }
       // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.
       if (dashcamAlertActive()) decision.silent = true;
@@ -682,6 +685,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     // A DashPal continuous alert owns the sound: a phone alert meanwhile is haptic + visual only.
     if (dashcamAlertActive()) decision.silent = true;
     if (!hudVisible() || replayingRow) decision.suppressed = true;
+    // Still queued once the driving screen is gone (RoadWise behind, or another screen): dropped unplayed.
+    decision.stillWanted = hudVisible;
     player.deliver(decision).catch((e: unknown) => report(e, 'player'));
   }
 

@@ -443,6 +443,29 @@ describe('a drive', () => {
     await h.host.stop({ endOpenTrip: true });
   });
 
+  test('an alert raised in front but still queued when RoadWise goes behind is no longer wanted: it is dropped unplayed', async () => {
+    const h = build();
+    await h.host.boot();
+    await drive(h, rows(40, { speedMps: 25 }));
+    const latest = h.player.delivered.filter((d) => d.kind === 'speeding').at(-1)!;
+    expect(latest.suppressed).toBeUndefined();
+    expect(latest.stillWanted!()).toBe(true);
+    h.appState.set('background');
+    expect(latest.stillWanted!()).toBe(false);
+    h.appState.set('inactive');
+    expect(latest.stillWanted!()).toBe(false);
+    h.appState.set('active');
+    expect(latest.stillWanted!()).toBe(true);
+    // A hard brake (0.40 g, the GPS 2 m/s slower over the second) the same way.
+    await feed(h, rows(3, { t0: T0 + 40_000, speedMps: 15, over: (i) => (i === 0 ? { speed: 13, aLonMin: -0.4 } : {}) }));
+    const brake = h.player.delivered.find((d) => d.kind === 'hard_brake')!;
+    expect(brake.suppressed).toBeUndefined();
+    expect(brake.stillWanted!()).toBe(true);
+    h.appState.set('background');
+    expect(brake.stillWanted!()).toBe(false);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
   test('the automatic end after 5 min still: the one timer covers rows that stop coming', async () => {
     const h = build();
     await h.host.boot();
@@ -621,6 +644,25 @@ describe('a phone pickup (phone plan P4)', () => {
     const pickups = (await createEventsRepo(db).listByTrip(id)).filter((e) => e.type === 'phone_pickup');
     expect(pickups).toEqual([expect.objectContaining({ started_at: T0 + 40_000, duration_s: 20, tier: 'severe' })]);
     expect((await createTripsRepo(db).get(id))!.phone_s).toBeGreaterThan(0);
+  });
+
+  test('a pickup alert still queued once the driving screen is gone (another screen, or RoadWise behind) is dropped unplayed', async () => {
+    const h = build({ voiceEnabled: () => true });
+    await h.host.boot();
+    h.host.setHudVisible(true);
+    await drive(h, rows(40, { speedMps: 15 }));
+    await feed(h, pickupRows(20, 0, 5));
+    const [first] = phoneDecisions(h);
+    expect(first!.suppressed).toBeUndefined();
+    expect(first!.stillWanted!()).toBe(true);
+    h.host.setHudVisible(false);
+    expect(first!.stillWanted!()).toBe(false);
+    h.host.setHudVisible(true);
+    h.appState.set('background');
+    expect(first!.stillWanted!()).toBe(false);
+    h.appState.set('active');
+    expect(first!.stillWanted!()).toBe(true);
+    await h.host.stop({ endOpenTrip: true });
   });
 
   test('RoadWise in front on another screen: nothing plays; the pickup still counts', async () => {
