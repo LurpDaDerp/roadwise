@@ -67,10 +67,12 @@ function RootTheme({ choice, loaded, children }: { choice: AppearanceChoice; loa
   const phoneScheme = useColorScheme() === 'dark' ? 'dark' : 'light';
   const staticScheme = choice === 'light' || choice === 'dark' ? choice : phoneScheme;
   // The Live Activity and the Android drive notification wear the same look (`src/drive/displayLook.ts`),
-  // from the moment the choice is known.
+  // from the moment the choice is known. A static look also says day or night, so the lock screen's
+  // speeding tint takes the driving screen's palette; under Adaptive the host reads the sun at the car.
   useEffect(() => {
     if (!loaded) return;
-    setDisplayLook(lookFor(choice === 'adaptive' ? skyBundle(mood) : plainBundle(staticScheme)));
+    if (choice === 'adaptive') setDisplayLook(lookFor(skyBundle(mood)));
+    else setDisplayLook({ ...lookFor(plainBundle(staticScheme)), night: staticScheme === 'dark' });
   }, [loaded, choice, mood, staticScheme]);
   return (
     <ThemeProvider mood={choice === 'adaptive' ? mood : null} scheme={choice === 'light' || choice === 'dark' ? choice : undefined}>

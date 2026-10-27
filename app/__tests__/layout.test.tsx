@@ -345,11 +345,13 @@ describe('the root layout', () => {
       await act(async () => appearance.set('dark'));
       await renderReady();
       expect(position).not.toHaveBeenCalled();
-      expect(displayLook()).toEqual(lookFor(plainBundle('dark')));
+      // A static look says day or night itself (Dark: always night), so the lock screen's
+      // speeding tint takes the driving screen's palette.
+      expect(displayLook()).toEqual({ ...lookFor(plainBundle('dark')), night: true });
       expect(override).toHaveBeenLastCalledWith('dark');
 
       await act(async () => appearance.set('light'));
-      expect(displayLook()).toEqual(lookFor(plainBundle('light')));
+      expect(displayLook()).toEqual({ ...lookFor(plainBundle('light')), night: false });
       expect(override).toHaveBeenLastCalledWith('light');
       expect(position).not.toHaveBeenCalled();
 
@@ -359,6 +361,8 @@ describe('the root layout', () => {
 
       await act(async () => appearance.set('adaptive'));
       expect(position).toHaveBeenCalled();
+      // Adaptive leaves day or night to the sun at the car.
+      expect(displayLook()?.night).toBeUndefined();
     } finally {
       await act(async () => appearance.set('adaptive'));
       override.mockRestore();

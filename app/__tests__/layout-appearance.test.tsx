@@ -221,7 +221,8 @@ test('a stored Dark read after the first render: the splash and the sky wait for
     await settle();
     expect(appearance.get()).toEqual({ choice: 'dark', loaded: true });
     expect(SplashScreen.hideAsync).toHaveBeenCalledTimes(1);
-    expect(displayLook()).toEqual(lookFor(plainBundle('dark')));
+    // Dark is always the night look, so the lock screen's speeding tint takes the night palette.
+    expect(displayLook()).toEqual({ ...lookFor(plainBundle('dark')), night: true });
     expect(override).toHaveBeenLastCalledWith('dark');
 
     // The read landed in time, so the give-way to Adaptive never comes.
