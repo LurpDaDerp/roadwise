@@ -149,6 +149,39 @@ it('the achievements screen lists all three with their state', async () => {
 
 const NO_FRIENDS = { friends: [], incoming: [], outgoing: [] };
 
+it('the achievements screen shows nothing as locked while the summary loads', async () => {
+  mockRpc.mockImplementation(() => new Promise(() => {}));
+  const w = await appWorld();
+  await w.render(<AchievementsScreen />);
+  expect(await screen.findByTestId('achievement-loading-first_drive', { includeHiddenElements: true })).toBeOnTheScreen();
+  expect(screen.queryByText(profileCopy.achievements.count(0, 3))).toBeNull();
+  expect(screen.queryByTestId('achievement-row-first_drive')).toBeNull();
+  expect(screen.queryByText(profileCopy.achievements.locked)).toBeNull();
+});
+
+it('the achievements screen that cannot load says so, and Try again loads it', async () => {
+  answerRpc(mockRpc, { get_my_summary: new Error('offline') });
+  const w = await appWorld();
+  await w.render(<AchievementsScreen />);
+  // The query tries once more (after about a second) before it fails.
+  expect(await screen.findByTestId('achievements-load-error', {}, { timeout: 4000 })).toHaveTextContent(new RegExp(profileCopy.loadError));
+  expect(screen.queryByText(profileCopy.achievements.count(0, 3))).toBeNull();
+  answerRpc(mockRpc, { get_my_summary: summary({ achievements: ['first_drive'] }) });
+  await act(async () => {
+    fireEvent.press(screen.getByText(profileCopy.retry));
+  });
+  expect(await screen.findByText(profileCopy.achievements.count(1, 3))).toBeOnTheScreen();
+});
+
+it("the Profile card's badges wait for the summary instead of showing every one locked", async () => {
+  mockRpc.mockImplementation(async (fn: string) => (fn === 'list_friends' ? NO_FRIENDS : new Promise(() => {})));
+  const w = await appWorld();
+  await w.render(<ProfileScreen />);
+  expect(await screen.findByTestId('profile-achievements-loading', { includeHiddenElements: true })).toBeOnTheScreen();
+  expect(screen.queryByTestId('achievement-first_drive-locked')).toBeNull();
+});
+
+
 it('the totals fit a narrow card: each number shrinks to one line', async () => {
   mockTotals = { ...mockTotals, drives: 12345, miles: 123456 };
   answerRpc(mockRpc, { get_my_summary: summary(), list_friends: NO_FRIENDS });

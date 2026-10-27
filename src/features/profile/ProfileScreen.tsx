@@ -92,7 +92,8 @@ export function ProfileScreen() {
             action={{ label: copy.achievements.seeAll, onPress: () => router.push(PROFILE_HREFS.achievements) }}
           />
           <Card onPress={() => router.push(PROFILE_HREFS.achievements)} accessibilityLabel={copy.achievements.title} testID="profile-achievements">
-            <AchievementBadges unlocked={data?.achievements ?? []} />
+            {/* Never shown as locked before the summary is here (the card above says when it can't load). */}
+            {data ? <AchievementBadges unlocked={data.achievements} /> : <Skeleton width="100%" height={88} radius={th.radius.md} testID="profile-achievements-loading" />}
           </Card>
         </View>
 
