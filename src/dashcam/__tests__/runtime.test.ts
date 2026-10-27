@@ -624,6 +624,27 @@ describe('phone-first sound: the audio probe and the Android DashPal link servic
     return { rt, ble, appState, errors, clock };
   }
 
+  test("iOS: the drive host's call flag counts only while a drive records; outside one the probe decides (a flag left on by a call that outlasted the drive never withholds alerts)", async () => {
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const host = { recording: false, driveOpen: false, playerAvailable: true, callActive: true };
+    let call = false;
+    const r = svcRig({ platform: 'ios', host, audio: () => ({ callActive: call, volume: 1, headphones: false }) });
+    await r.rt.ready;
+    // The host's flag is stale (the call ended after the drive's capture stopped): the phone plays.
+    expect(r.rt.link.canPlay(true)).toBe(true);
+    // A call up now: the probe says so.
+    call = true;
+    expect(r.rt.link.canPlay(true)).toBe(false);
+    call = false;
+    // While a drive records, the capture's flag counts too.
+    host.recording = true;
+    host.driveOpen = true;
+    expect(r.rt.link.canPlay(true)).toBe(false);
+    host.callActive = false;
+    expect(r.rt.link.canPlay(true)).toBe(true);
+    r.rt.dispose();
+  });
+
   test('the probe memo: two reads within 500 ms are one native read; a fresh read always reads; a throwing probe is reported and reads as unknown', async () => {
     let reads = 0;
     let fail = false;

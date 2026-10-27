@@ -276,8 +276,11 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
       foreground,
       playerAvailable: h.playerAvailable && backgroundSoundHeld(h),
       styleAllowsSound: deps.styleAllowsSound(),
-      // Android has no call signal the app can rely on (plan §7.3): only iOS reports one.
-      callActive: deps.platform === 'ios' && h.callActive,
+      // Android has no call signal the app can rely on (plan §7.3): only iOS reports one, and only
+      // while a drive records (its capture watches calls). Outside a drive the host's flag is the
+      // last one a capture saw and may be stale (a call that outlasted the drive); the audio probe,
+      // read fresh, says whether a call is up then.
+      callActive: deps.platform === 'ios' && h.recording && h.callActive,
       buzzerToo,
     };
   };
