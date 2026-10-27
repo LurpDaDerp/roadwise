@@ -685,14 +685,20 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(manual).toMatch(/beginDrive\(start, kind: "manual", firstTs: now, waitUntil: now \+ DetectPolicy\.WAIT_MAX_MS\)/);
     // the wait is saved with the drive, before its side effects
     expect(fn(d, 'func beginDrive(')).toMatch(/r\.waitUntil = waitUntil\s*save\(r\)/);
-    // a touch moves it on; the manual trigger (10 mph held 15 s) ends it
+    // a touch moves it on; driving speed ends it as JS's wait ends: two trusted rows at 10 mph or
+    // more in a row (the end clock's `lastDroveTs`), never the 15 s manual trigger
     const ext = fn(d, 'func extendWaiting()');
     expect(ext).toMatch(/guard var r = rec, isRecording, r\.origin == "manual", r\.waitUntil != nil else \{ return nil \}/);
     expect(ext).toMatch(/let until = DriveDetector\.now\(\) \+ DetectPolicy\.WAIT_MAX_MS/);
-    expect(fn(d, 'func onRow(')).toMatch(/case "recording", "ending":\s*record\(d, body\)\s*if rec\?\.waitUntil != nil \{ waitForDriving\(d\) \}/);
-    const wait = fn(d, 'func waitForDriving(');
-    expect(wait).toMatch(/DetectPolicy\.confirmStep\(confirmState, d, "manual"\)/);
-    expect(wait).toMatch(/guard step\.confirmed, var r = rec, r\.waitUntil != nil else \{ return \}\s*r\.waitUntil = nil\s*save\(r\)/);
+    expect(fn(d, 'func onRow(')).toMatch(/case "recording", "ending":\s*record\(d, body\)\s*if rec\?\.waitUntil != nil \{ endWaitAtDrivingSpeed\(\) \}/);
+    const wait = fn(d, 'func endWaitAtDrivingSpeed()');
+    expect(wait).toMatch(/guard endClock\.lastDroveTs != nil, var r = rec, r\.waitUntil != nil else \{ return \}\s*r\.waitUntil = nil\s*save\(r\)\s*emitState\("confirmed"\)/);
+    expect(d).not.toMatch(/waitForDriving|confirmStep\(confirmState, d, "manual"\)/);
+    // `lastDroveTs` is the second of two trusted rows at 10 mph or more in a row (JS's `droveAt`)
+    expect(fn(code('DetectEndPolicy.swift'), 'static func endOnRow(')).toMatch(/c\.prevDrive = r\.speed >= MOVING_MPS\s*if c\.prevDrive && c0\.prevDrive \{ c\.lastDroveTs = r\.ts \}/);
+    expect(DETECT.MOVING_MPS).toBeCloseTo(10 * 0.44704, 9);
+    // a relaunched Start-card drive is taken back by JS without its wait: native's goes too
+    expect(fn(d, 'func resumeDrive(')).toMatch(/== "resume" else \{\s*self\.commitEnd\(cause: "orphan", endedAt: now\)\s*return\s*\}\s*if r\.waitUntil != nil \{\s*r\.waitUntil = nil\s*self\.save\(r\)\s*\}/);
     // "Not driving?" ends any wait with the drive
     expect(fn(d, 'func notDriving()')).toMatch(/r\.waitUntil = nil/);
   });

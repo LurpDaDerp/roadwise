@@ -73,7 +73,7 @@ export interface FakeDetectControls {
   endFor(cause: EndCauseNative, at?: number): DriveEndedEvent | null;
   /** A JS `stopCapture` reached native: the end is journaled with cause `js`, no event. */
   jsStop(endedAt?: number): void;
-  /** The Start-card drive reached driving speed natively (10 mph held 15 s): its wait is over (`detectState` reason `confirmed`). */
+  /** The Start-card drive reached driving speed natively (two trusted rows at 10 mph or more in a row): its wait is over (`detectState` reason `confirmed`). */
   waitOver(): void;
   /**
    * A relaunch resumes the live drive (`resumeAtLaunch`): its last `lostRows` row lines are gone from

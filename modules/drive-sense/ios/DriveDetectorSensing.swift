@@ -24,7 +24,7 @@ extension DriveDetector {
       if step.confirmed { confirm(kind) }
     case "recording", "ending":
       record(d, body)
-      if rec?.waitUntil != nil { waitForDriving(d) }
+      if rec?.waitUntil != nil { endWaitAtDrivingSpeed() }
     default:
       break
     }
@@ -193,6 +193,11 @@ extension DriveDetector {
       guard DetectPolicy.resumeDecision(lastRowTs: s.lastRowTs, startedAt: startedAt, now: now) == "resume" else {
         self.commitEnd(cause: "orphan", endedAt: now)
         return
+      }
+      // JS takes a relaunched Start-card drive back without its wait: native's goes with it.
+      if r.waitUntil != nil {
+        r.waitUntil = nil
+        self.save(r)
       }
       // The last unsynced rows may be lost from the file but held by JS: the rows go on past a gap
       // of seqs (the `gap` line carries it), so none is handed out twice.

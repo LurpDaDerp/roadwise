@@ -47,12 +47,11 @@ extension DriveDetector {
     beginDrive(start, kind: "manual", firstTs: now, waitUntil: now + DetectPolicy.WAIT_MAX_MS)
   }
 
-  /// A Start-card drive waiting for driving speed: the Start card's trigger (10 mph held 15 s, the
-  /// policy's manual confirmation) ends the wait, and the safety stop's usual rules apply from there.
-  func waitForDriving(_ d: DetectRow) {
-    let step = DetectPolicy.confirmStep(confirmState, d, "manual")
-    confirmState = step.state
-    guard step.confirmed, var r = rec, r.waitUntil != nil else { return }
+  /// A Start-card drive waiting for driving speed: two trusted rows at 10 mph or more in a row (the
+  /// end clock's `lastDroveTs`, JS's driving speed) end the wait, and the safety stop's usual rules
+  /// apply from there.
+  func endWaitAtDrivingSpeed() {
+    guard endClock.lastDroveTs != nil, var r = rec, r.waitUntil != nil else { return }
     r.waitUntil = nil
     save(r)
     emitState("confirmed")
