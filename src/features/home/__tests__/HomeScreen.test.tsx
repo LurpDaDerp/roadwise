@@ -187,6 +187,27 @@ test('no location: nothing is recorded, Home says location is needed and Fix it 
   expect(mockRouter.push).not.toHaveBeenCalledWith('/drive');
 });
 
+test('a start that failed says so with OK, which takes the line down and opens nothing', async () => {
+  mockStart.mockRejectedValue(new Error('boom'));
+  await draw(<HomeScreen />);
+  await swipe(screen.getByTestId('start-drive'));
+  expect(await screen.findByTestId('start-refusal')).toHaveTextContent(/Couldn’t start the drive\. Try again\./);
+  expect(screen.queryByText('Fix it')).toBeNull();
+  await press(screen.getByText('OK'));
+  expect(screen.queryByTestId('start-refusal')).toBeNull();
+  expect(mockRouter.push).not.toHaveBeenCalled();
+});
+
+test('a failed start set before Home mounts goes with OK too', async () => {
+  showHomeNotice('error');
+  await draw(<HomeScreen />);
+  expect(await screen.findByTestId('start-refusal')).toBeOnTheScreen();
+  await press(screen.getByText('OK'));
+  expect(screen.queryByTestId('start-refusal')).toBeNull();
+  expect(readHomeNotice()).toBeNull();
+  expect(mockRouter.push).not.toHaveBeenCalled();
+});
+
 test('while a drive is recording, the in-progress strip replaces Start', async () => {
   mockRecording = true;
   await draw(<HomeScreen />);

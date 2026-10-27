@@ -75,9 +75,9 @@ export function StartDriveButton({ onStart, starting }: { onStart: () => void; s
 }
 
 /**
- * The line under the drive card: a refused start says why, with its fix; with no refusal, an
- * information line (the "Not driving?" acknowledgement, or why a started drive was not kept) stays
- * until OK. Nothing is recorded either way.
+ * The line under the drive card: a refused start says why, with its fix (or OK where there is none:
+ * `onRefusalAction` then takes it down); with no refusal, an information line (the "Not driving?"
+ * acknowledgement, or why a started drive was not kept) stays until OK. Nothing is recorded either way.
  */
 export function StartNotice({
   refusal,
@@ -89,7 +89,7 @@ export function StartNotice({
   notice?: { message: string; onDismiss: () => void; testID?: string } | null;
 }) {
   const fixable = refusal === 'permission' || refusal === 'precise' || refusal === 'services';
-  const action = fixable ? { label: 'Fix it', onPress: onRefusalAction } : refusal === 'busy' ? { label: 'Open it', onPress: onRefusalAction } : undefined;
+  const action = { label: fixable ? 'Fix it' : refusal === 'busy' ? 'Open it' : homeCopy.notices.ok, onPress: onRefusalAction };
   if (refusal) return <Banner tone="danger" message={REFUSAL_COPY[refusal]} action={action} testID="start-refusal" />;
   if (notice) {
     return <Banner tone="info" message={notice.message} action={{ label: homeCopy.notices.ok, onPress: notice.onDismiss }} testID={notice.testID ?? 'drive-dropped'} />;

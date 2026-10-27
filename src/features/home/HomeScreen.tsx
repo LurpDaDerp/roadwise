@@ -131,8 +131,14 @@ export function HomeScreen() {
 
   // Fix it on a refused Start: Precise Location and Location Services run that row's own fix (the
   // phone's dialog where it has one, otherwise its Settings page); anything else, or a fix that
-  // could not run, opens Settings › Permissions.
+  // could not run, opens Settings › Permissions. A start that failed has nothing to fix: OK takes
+  // the line down.
   const onRefusalAction = async () => {
+    if (shownRefusal === 'error') {
+      setRefusal(null);
+      if (notice !== null && notice !== 'notDriving') clearHomeNotice();
+      return;
+    }
     if (shownRefusal === 'busy') {
       router.push(DRIVE_HREF);
       return;
