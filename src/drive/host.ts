@@ -1191,15 +1191,15 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    * A start traced back to the car's motion (`motion`), never before the end of the phone's last
    * stored drive, so two drives never overlap (the server stores an overlapping one unscored):
    * CoreMotion can date that motion from before the window it was asked about, as early as the
-   * drive before. Every other start is a row's own time, after the drive before. A stored end after
-   * `by` (when the drive was confirmed) is not the drive before this one: left alone. Unreadable:
-   * the start as given.
+   * drive before. Every other start is a row's own time, after the drive before. The drive before
+   * is the latest stored end at or before `by` (when the drive was confirmed): a drive stored after
+   * this one (an older journal taken in late) is not it. Unreadable: the start as given.
    */
   async function startAfterLastEnd(at: number, by: number): Promise<number> {
     if (!persist) return at;
     try {
-      const last = await createTripsRepo(db).lastEndedAt();
-      return last !== null && at < last && last <= by ? last : at;
+      const last = await createTripsRepo(db).lastEndedAt(by);
+      return last !== null && at < last ? last : at;
     } catch (e) {
       report(e, 'start');
       return at;

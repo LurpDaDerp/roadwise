@@ -197,10 +197,14 @@ export function createTripsRepo(db: Db) {
 
     /**
      * When the phone's most recent closed drive ended, or null. A drive started within `MERGE_GAP_S`
-     * of it has no warm-up.
+     * of it has no warm-up. With `notAfter`, the most recent end at or before it (the drive before
+     * one confirmed then, whatever drives are stored after it).
      */
-    async lastEndedAt(): Promise<number | null> {
-      const { rows } = await db.execute("SELECT MAX(ended_at) AS t FROM trips WHERE status != 'recording' AND ended_at IS NOT NULL");
+    async lastEndedAt(notAfter?: number): Promise<number | null> {
+      const { rows } =
+        notAfter === undefined
+          ? await db.execute("SELECT MAX(ended_at) AS t FROM trips WHERE status != 'recording' AND ended_at IS NOT NULL")
+          : await db.execute("SELECT MAX(ended_at) AS t FROM trips WHERE status != 'recording' AND ended_at IS NOT NULL AND ended_at <= ?", [notAfter]);
       return asNumberOrNull(rows[0] ?? {}, 't');
     },
 

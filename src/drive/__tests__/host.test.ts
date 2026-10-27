@@ -2024,6 +2024,18 @@ describe('the speed and limit pipeline beside the rows (plan decision 6)', () =>
     await h.host.stop({ endOpenTrip: false });
   });
 
+  test('with a later drive already stored (an older journal taken in late), the start still begins at the end of the drive just before', async () => {
+    await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0 - 600_000, tz: TZ, status: 'pending', ended_at: T0 - 30_000 }, T0 - 30_000);
+    await createTripsRepo(db).insert({ client_trip_id: uuid(8), started_at: T0 + 100_000, tz: TZ, status: 'pending', ended_at: T0 + 200_000 }, T0);
+    const h = buildIos();
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(30, { speedMps: 15 }), { startedAt: T0 - 90_000, startSource: 'motion' });
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: NATIVE, startedAt: T0 - 30_000 });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
   test('a stored drive that ends after this one was confirmed (not the drive before it) leaves the start alone', async () => {
     await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0 + 100_000, tz: TZ, status: 'pending', ended_at: T0 + 200_000 }, T0);
     const h = buildIos();
