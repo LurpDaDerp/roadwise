@@ -4,6 +4,12 @@ import type { BluetoothPort, RadioState } from '@/core/permissions/adapters';
 
 import { getDashcamTransport, type DashcamTransport } from './transport';
 
+/**
+ * How long the start waits for Bluetooth's state to settle: on iOS that is the driver answering the
+ * permission prompt, which waits on them (an answer later than this reads as undetermined).
+ */
+export const PROMPT_SETTLE_MS = 60_000;
+
 export function createBluetoothPort(transport: () => DashcamTransport): BluetoothPort {
   return {
     async radio() {
@@ -13,7 +19,7 @@ export function createBluetoothPort(transport: () => DashcamTransport): Bluetoot
     async startRadio() {
       const t = transport();
       await t.start();
-      return (await t.settledBluetoothState()) as RadioState;
+      return (await t.settledBluetoothState(PROMPT_SETTLE_MS)) as RadioState;
     },
   };
 }
