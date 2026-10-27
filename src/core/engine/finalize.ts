@@ -449,8 +449,9 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     miles,
     nightMiles,
     durationS,
-    start: point(session.firstFix),
-    end: point(session.lastFix),
+    // where the drive started and ended never leaves the phone: the route is trimmed to hide them
+    start: null,
+    end: null,
     polyline,
     integrity,
     events: payloadEvents,
@@ -467,6 +468,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const counts = countEvents(cleaned);
   const stamp = now();
   const start = point(from);
+  const end = point(session.lastFix);
 
   const patch = {
     started_at: startedAt,
@@ -479,8 +481,8 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     duration_s: durationS,
     start_lat: start?.lat ?? null,
     start_lng: start?.lng ?? null,
-    end_lat: candidate.end?.lat ?? null,
-    end_lng: candidate.end?.lng ?? null,
+    end_lat: end?.lat ?? null,
+    end_lng: end?.lng ?? null,
     polyline: polyline === '' ? null : polyline,
     from_label: fromLabel,
     to_label: toLabel,

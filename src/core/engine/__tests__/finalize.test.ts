@@ -87,7 +87,10 @@ test('a 20-minute drive is stored as pending with its classification, trimmed ro
   expect(FinalizeTripPayloadV5Schema.safeParse(payload).success).toBe(true);
   expect(payload).toMatchObject({ v: 5, clientTripId: session.clientTripId, startedAt: T0, endedAt: T0 + 1_200_000, tz: TZ, localDay: '2023-11-14', appVersion: '2.0.0', origin: 'auto', notDrivingExpired: false });
   expect(payload).not.toHaveProperty('safeMiles');
-  expect(payload.start).toEqual({ lat: 47.6062, lng: -122.3321 });
+  // where the drive started and ended never leaves the phone; the phone's own copy keeps both
+  expect([payload.start, payload.end]).toEqual([null, null]);
+  expect([result.trip.start_lat, result.trip.start_lng]).toEqual([47.6062, -122.3321]);
+  expect([typeof result.trip.end_lat, typeof result.trip.end_lng]).toEqual(['number', 'number']);
   expect(payload.integrity).toMatchObject({ mockLocation: false, motionMismatch: false, validGnssPct: 100 });
   expect(payload.integrity.maxSpeedMph).toBeCloseTo(33.55, 1);
   // The opportunities: one per row moving at 5 mph or more, the stored columns the same.
@@ -157,7 +160,7 @@ test('a drive whose "Not driving?" ran out (the row says so, or the host does) u
   expect((await finalizeTrip(other, deps({ notDrivingExpired: true }))).payload).toMatchObject({ notDrivingExpired: true, origin: 'manual' });
 });
 
-test('a drive started from the parked spot (start source motion) labels and stores that spot; the upload’s start stays its first row', async () => {
+test('a drive started from the parked spot (start source motion) labels and stores that spot on the phone; the upload carries no start point', async () => {
   const base = closedSession(300);
   const parked = { lat: 47.61, lng: -122.34 };
   const session: Readonly<TripSession> = { ...base, startSource: 'motion', startPlace: parked };
@@ -165,7 +168,7 @@ test('a drive started from the parked spot (start source motion) labels and stor
   const result = await finalizeTrip(session, deps({ geocode: async (p) => (labelled.push(`${p.lat},${p.lng}`), 'Somewhere') }));
   expect(labelled[0]).toBe(`${parked.lat},${parked.lng}`);
   expect(result.trip).toMatchObject({ start_lat: 47.61, start_lng: -122.34, start_source: 'motion' });
-  expect(result.payload!.start).toEqual({ lat: 47.6062, lng: -122.3321 });
+  expect([result.payload!.start, result.payload!.end]).toEqual([null, null]);
 });
 
 test('a drive through a mid-route privacy zone uploads both visible runs, so the whole visible distance passes the server miles check', async () => {
