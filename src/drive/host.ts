@@ -598,6 +598,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       captureOn = false;
       liveDrive = null;
       await detect.notDriving().catch((e: unknown) => report(e, 'notDriving'));
+      // Native may have ended the drive itself just before (its still, walking or 12 h stop), when
+      // `notDriving` finds nothing recording: its ended journal goes too, or its `driveEnded` would
+      // take the drive back in (as `finishPendingCancel` does).
+      if (driveId !== null) await detect.discardDrive(driveId).catch((e: unknown) => report(e, 'notDriving'));
     }
     lastFinalized = { clientTripId: id, ok: true, status: null, dropped: 'cancelled', endCause: 'manual', at: now(), durationS: null, miles: null, endedAt: null };
     finalizedPending = persist;

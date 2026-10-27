@@ -1217,6 +1217,24 @@ describe('iOS: the drive detector', () => {
     await h.host.stop({ endOpenTrip: false });
   });
 
+  test('"Not driving?" racing native’s own stop (native ended the drive before it was told): the ended journal is discarded too, and the trip never comes back', async () => {
+    const h = buildIos();
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(60, { speedMps: 15 }));
+    const cancelled = h.host.cancelDrive();
+    h.detect.endFor('walking', clock);
+    expect(await cancelled).toBe(true);
+    await h.host.settled();
+    expect(h.detect.calls).toContain(`discardDrive:${NATIVE}`);
+    expect(h.detect.journal.has(NATIVE)).toBe(false);
+    expect(await createTripsRepo(db).get(NATIVE)).toBeNull();
+    expect(await tripCount()).toBe(0);
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', lastFinalized: { dropped: 'cancelled' } });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
   test('boot: a drive native ended while JS was away is stored from the journal and the journal deleted; a live one is adopted and keeps recording', async () => {
     const pre = buildIos();
     // A first process: native records and ends a drive, then a second one is still recording, with no JS.
