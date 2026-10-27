@@ -10,11 +10,11 @@
  *   own pass) and `hydrate` (nothing was queued);
  * - the query cache invalidates on all of them (on `spots`, only the spots view).
  *
- * **Delivery is on a macrotask, never inline.** The callers that matter emit from inside, or at
- * the very end of, a write: `finalizeTrip` enqueues inside the transaction that writes the trip
- * row, and a drain pass emits as its last statement. A listener that woke a drain inline would
- * meet SQLite's write lock (or, under sql.js, an illegal nested BEGIN); by the time a
- * `setTimeout(0)` runs, the transaction has committed and every row the listener reads is there.
+ * **Delivery is on a macrotask, never inline.** The callers that matter emit at the very end of a
+ * write: a drain pass emits as its last statement, and the drive host announces `finalize` once the
+ * finalize transaction (which queues the upload without announcing it) has committed. A listener
+ * that woke a drain inline would meet SQLite's write lock (or, under sql.js, an illegal nested
+ * BEGIN); by the time a `setTimeout(0)` runs, every row the listener reads is there.
  *
  * **Coalescing.** A burst of the same bare event (ten enqueues in one batch) is delivered once. A
  * `sync` event carries the pass's counts, so two of those in one macrotask are both delivered —
