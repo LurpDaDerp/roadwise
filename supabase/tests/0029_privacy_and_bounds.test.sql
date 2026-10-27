@@ -6,7 +6,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(33);
+select plan(36);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -153,17 +153,33 @@ select is((select array_agg(r.from_id order by r.from_id) from public.friend_req
     and r.from_id in ('00000000-0000-0000-0000-000000000007', '00000000-0000-0000-0000-000000000008')),
   array['00000000-0000-0000-0000-000000000007', '00000000-0000-0000-0000-000000000008']::uuid[], 'the unpushed requests wait in Friends like any other');
 
--- a day later the count starts again
-update public.inbox set created_at = now() - interval '25 hours' where user_id = '00000000-0000-0000-0000-000000000001' and kind = 'friend_request';
+-- deleting a sender takes their request and its push row (profile_gone), but gives no push back
+delete from auth.users where id = '00000000-0000-0000-0000-000000000002';
+select is(array[pg_temp.requests(), pg_temp.pushes()], array[6, 4], 'a deleted sender''s request and push row go with the account');
 set local role authenticated;
 select pg_temp.as_user(9);
 select public.send_friend_request('00000000-0000-0000-0000-000000000001');
 reset role;
-select is(array[pg_temp.requests(), pg_temp.pushes()], array[8, 6], 'past 24 hours the earlier pushes no longer count');
+select is(array[pg_temp.requests(), pg_temp.pushes()], array[7, 4], 'and free no push: the recipient''s count is their own');
+
+-- a day later the count starts again; a re-sent request then pushes, and a second re-send spends nothing
+update public.rate_limits set window_start = now() - interval '25 hours'
+  where user_id = '00000000-0000-0000-0000-000000000001' and key = 'friend_request_push';
+set local role authenticated;
+select pg_temp.as_user(7);
+select public.send_friend_request('00000000-0000-0000-0000-000000000001');
+reset role;
+select is(array[pg_temp.requests(), pg_temp.pushes()], array[7, 5], 'past the 24-hour window a request pushes again');
+set local role authenticated;
+select pg_temp.as_user(7);
+select public.send_friend_request('00000000-0000-0000-0000-000000000001');
+reset role;
+select is((select count from public.rate_limits where user_id = '00000000-0000-0000-0000-000000000001' and key = 'friend_request_push'), 1,
+  'a request already pushed, sent again, spends no push');
 
 -- the cap is the recipient's: another driver is pushed as before
 set local role authenticated;
-select pg_temp.as_user(2);
+select pg_temp.as_user(4);
 select public.send_friend_request('00000000-0000-0000-0000-000000000003');
 reset role;
 select is((select count(*)::int from public.inbox where user_id = '00000000-0000-0000-0000-000000000003' and kind = 'friend_request'), 1,

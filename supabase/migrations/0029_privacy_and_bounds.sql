@@ -13,9 +13,12 @@
 --     row is part of its target. finalize-trip stores such an upload unscored as implausible: one
 --     person drives one car at a time, so a second drive in the same minutes was not driven. The
 --     minute is slack for a start traced back to a row a few seconds before the last drive's end.
---   * send_friend_request still records every request, but adds the inbox row (the push) only while
---     the recipient got fewer than 5 friend-request rows in the last 24 hours, so throwaway accounts
---     cannot flood one driver with pushes. The requests still show in Friends.
+--   * send_friend_request still records every request, but adds the inbox row (the push) only for a
+--     sender not yet pushed to that recipient and while the recipient has had fewer than 5 such pushes
+--     in their 24-hour window, so throwaway accounts cannot flood one driver with pushes. The count is
+--     the recipient's own rate-limit row (private.take_rate_limit, 'friend_request_push'): it takes one
+--     request at a time, and deleting a sender's account (whose inbox rows go with it) gives no push
+--     back. The requests still show in Friends.
 --   * leave_clan, the last clan RPC a client could call (clans left the app in 0012), is server-only.
 --
 -- Deploy order: this migration, then finalize-trip. The finalize-trip before this one keeps working
@@ -56,8 +59,8 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- send_friend_request(p_user_id): auto-accepts when the reverse request exists; refused when
 -- blocked either way (as "not found"), when already friends, or over the 200-friend cap; 20/h. The
--- request is always recorded; its push (the inbox row) goes only while the recipient got fewer than
--- 5 friend-request rows in the last 24 hours.
+-- request is always recorded; its push (the inbox row) goes only for a sender not yet pushed to the
+-- recipient, and at most 5 times in the recipient's 24-hour window.
 create or replace function public.send_friend_request(p_user_id uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -89,11 +92,15 @@ begin
     return jsonb_build_object('status', 'friends');
   end if;
   insert into public.friend_requests (from_id, to_id) values (v_uid, p_user_id) on conflict do nothing;
-  if (select count(*) from public.inbox i
-      where i.user_id = p_user_id and i.kind = 'friend_request' and i.created_at > now() - interval '24 hours') < 5 then
-    insert into public.inbox (user_id, kind, payload, dedupe_key)
-      values (p_user_id, 'friend_request', jsonb_build_object('from_user_id', v_uid), 'friend_request:' || v_uid)
-      on conflict (user_id, dedupe_key) do nothing;
+  -- a re-sent request (its push row already there) spends nothing; the count lives in the
+  -- recipient's own rate-limit row, locked per recipient, which a sender's account deletion leaves
+  -- alone (two ifs: SQL does not promise to skip the take when the first test fails)
+  if not exists (select 1 from public.inbox i where i.user_id = p_user_id and i.dedupe_key = 'friend_request:' || v_uid) then
+    if private.take_rate_limit(p_user_id, 'friend_request_push', interval '24 hours', 5) then
+      insert into public.inbox (user_id, kind, payload, dedupe_key)
+        values (p_user_id, 'friend_request', jsonb_build_object('from_user_id', v_uid), 'friend_request:' || v_uid)
+        on conflict (user_id, dedupe_key) do nothing;
+    end if;
   end if;
   return jsonb_build_object('status', 'requested');
 end $$;
