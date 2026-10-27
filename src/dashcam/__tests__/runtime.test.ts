@@ -413,6 +413,19 @@ const row = (speed: number): FeatureRow => ({
   locked: false, screenOn: true, appForeground: true,
 });
 
+test('a replayed row (the drive host passes `replay`) reaches neither the totals nor the drive coverage', async () => {
+  await createTripsRepo(db).insert({ client_trip_id: TRIP, started_at: 0, tz: 'UTC', status: 'recording' }, 0);
+  await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+  const r = rig();
+  await r.rt.ready;
+  for (let i = 0; i < MIN_MOVING_S; i++) r.rt.row(row(10), { clientTripId: TRIP, recording: true, dryRun: false, replay: true });
+  await r.rt.link.settled();
+  expect(await createDashcamStore(db).coverage(TRIP)).toBeNull();
+  r.rt.row(row(10), { clientTripId: TRIP, recording: true, dryRun: false, replay: false });
+  await r.rt.link.settled();
+  expect(await createDashcamStore(db).coverage(TRIP)).toMatchObject({ movingS: 1, coveredS: 0 });
+});
+
 test('estimateOn follows the drive totals (≥ 60 s moving, ≥ 80 % covered); adopt reloads them from the drive', async () => {
   await createTripsRepo(db).insert({ client_trip_id: TRIP, started_at: 0, tz: 'UTC', status: 'recording' }, 0);
   await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);

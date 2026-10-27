@@ -1309,11 +1309,75 @@ describe('coverage (§7.5)', () => {
     expect(await r.store.coverage(TRIP)).toBeNull();
   });
 
+  test('a replayed row (the journal taken in again) counts no coverage, stamps no sync time and is never the speed STATE sends', async () => {
+    const r = rig();
+    await connect(r);
+    r.ctx.recording = true;
+    const live = { clientTripId: TRIP, recording: true, dryRun: false };
+    const replay = { ...live, replay: true };
+    status(r, STATUS_FLAG.LIVE | STATUS_FLAG.PRIMARY);
+    // Twenty minutes of the drive replayed at 60 km/h while the car now stands still.
+    for (let i = 0; i < 30; i++) expect(r.link.row(row(r.clock.t, { speed: 16.7 }), replay)).toBeNull();
+    r.advance(1000);
+    const state = () => r.sent('STATE').at(-1)!;
+    expect(state().flags & STATE_FLAG.SPEED_VALID).toBe(0);
+    expect(state().speedCms).toBe(0);
+    await r.settle();
+    expect(await r.store.coverage(TRIP)).toBeNull();
+    // A live row is the car now: its speed, its coverage.
+    r.link.row(row(r.clock.t, { speed: 0 }), live);
+    r.link.row(row(r.clock.t, { speed: 16.7 }), replay);
+    r.advance(1000);
+    expect(state().flags & STATE_FLAG.SPEED_VALID).toBe(STATE_FLAG.SPEED_VALID);
+    expect(state().speedCms).toBe(0);
+    await r.settle();
+    expect(await r.store.coverage(TRIP)).toEqual({ movingS: 0, coveredS: 0, lastSyncedAtMs: expect.any(Number) });
+  });
+
+  test('a replayed row sends no STATE of its own (timers paused: only live rows do)', async () => {
+    const r = rig({ timersPaused: () => true });
+    await connect(r);
+    r.ctx.recording = true;
+    r.clear();
+    for (let i = 0; i < 5; i++) {
+      r.clock.t += 1000;
+      r.link.row(row(r.clock.t), { clientTripId: TRIP, recording: true, dryRun: false, replay: true });
+    }
+    expect(r.sent('STATE')).toEqual([]);
+    r.clock.t += 1000;
+    r.link.row(row(r.clock.t), { clientTripId: TRIP, recording: true, dryRun: false });
+    expect(r.sent('STATE')).toHaveLength(1);
+  });
+
+  test('the drive end stamps the sync time only when the drive had a live row in the last 30 s: never for one taken in from its journal', async () => {
+    const r = rig();
+    await connect(r, { nextSeq: 0 });
+    expect(r.link.snapshot().synced).toBe(true);
+    // An ended drive taken in at a launch: every row a replay.
+    r.link.row(row(r.clock.t), { clientTripId: TRIP, recording: true, dryRun: false, replay: true });
+    await r.link.beforeFinalize(TRIP);
+    expect((await r.store.coverage(TRIP))?.lastSyncedAtMs ?? null).toBeNull();
+    // A drive whose last live row is 31 s old.
+    const OLD = '55555555-5555-4555-8555-555555555555';
+    await createTripsRepo(db).insert({ client_trip_id: OLD, started_at: T0, tz: 'UTC', status: 'recording' }, T0);
+    r.link.row(row(r.clock.t), { clientTripId: OLD, recording: true, dryRun: false });
+    const liveAt = r.clock.t;
+    r.advance(31_000);
+    await r.link.beforeFinalize(OLD);
+    expect((await r.store.coverage(OLD))?.lastSyncedAtMs).toBe(liveAt);
+    // One whose last live row was a moment ago: stamped now.
+    r.link.row(row(r.clock.t), { clientTripId: TRIP, recording: true, dryRun: false });
+    r.advance(500);
+    await r.link.beforeFinalize(TRIP);
+    expect((await r.store.coverage(TRIP))?.lastSyncedAtMs).toBe(r.clock.t);
+  });
+
   test('the drive end waits for the phone to catch up (≤ 3 s), then stamps the sync time; disconnected: no stamp', async () => {
     const r = rig();
     await connect(r, { nextSeq: 2 });
-    // The dashcam announced 2 events; none is stored yet.
+    // The dashcam announced 2 events; none is stored yet. The drive's last live row was just now.
     expect(r.link.snapshot().synced).toBe(false);
+    r.link.row(row(r.clock.t), { clientTripId: TRIP, recording: true, dryRun: false });
     const ending = r.link.beforeFinalize(TRIP);
     r.rx(ev(0));
     r.rx(ev(1));
@@ -1346,6 +1410,7 @@ describe('coverage (§7.5)', () => {
     const r = rig({ delay: never, timersPaused: () => paused });
     await connect(r, { nextSeq: 2 });
     expect(r.link.snapshot().synced).toBe(false);
+    r.link.row(row(r.clock.t), { clientTripId: TRIP, recording: true, dryRun: false });
     let done = false;
     const ending = r.link.beforeFinalize(TRIP).then(() => (done = true));
     await r.settle();
@@ -1376,6 +1441,7 @@ describe('coverage (§7.5)', () => {
     const r4 = rig({ delay: never, timersPaused: () => paused });
     await connect(r4, { nextSeq: 0 });
     expect(r4.link.snapshot().synced).toBe(true);
+    r4.link.row(row(r4.clock.t), { clientTripId: T4, recording: true, dryRun: false });
     await r4.link.beforeFinalize(T4);
     expect((await r4.store.coverage(T4))?.lastSyncedAtMs).toBeGreaterThanOrEqual(T0);
     expect([...r.errors, ...r2.errors, ...r3.errors, ...r4.errors]).toEqual([]);

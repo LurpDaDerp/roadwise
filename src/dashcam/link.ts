@@ -53,6 +53,7 @@ import { knownSpeed } from '@/core/detectors/common';
 import type { FeatureRow } from '@/core/engine/types';
 
 import { createDashcamAlerts, STALE_MS, type ContinuingAlert, type DashcamVisual, type HeldAlert } from './alerts';
+import { SYNCED_WITHIN_MS } from './episodes';
 import type { PairedDashcam } from './keys';
 import {
   COMMAND,
@@ -347,10 +348,16 @@ export interface DashcamLink {
   /**
    * One drive row (host row hook): the context for STATE, a tick, and this row's coverage (written
    * to the drive; returned so the caller can keep the drive's totals). Null: nothing counted (no
-   * dashcam paired, not recording, a dry run).
+   * dashcam paired, not recording, a dry run, a replay). `replay`: a journal row taken in again, the
+   * past: it reaches neither STATE (its speed is not the car's now) nor the coverage or the sync
+   * stamp (the link knows nothing of the dashcam then).
    */
-  row(row: FeatureRow, drive: { clientTripId: string | null; recording: boolean; dryRun: boolean }): { moving: boolean; covered: boolean } | null;
-  /** Drive end: wait ≤ 3 s for the phone to catch up, then stamp the sync time on the drive. */
+  row(row: FeatureRow, drive: { clientTripId: string | null; recording: boolean; dryRun: boolean; replay?: boolean }): { moving: boolean; covered: boolean } | null;
+  /**
+   * Drive end: wait ≤ 3 s for the phone to catch up, then stamp the sync time on the drive, only when
+   * its last live row is at most `SYNCED_WITHIN_MS` old (a drive taken in from its journal later, or
+   * one whose rows stopped long ago, is not caught up at its end by a sync now).
+   */
   beforeFinalize(clientTripId: string, opts?: { dryRun?: boolean }): Promise<void>;
   command(op: number, arg?: number): Promise<boolean>;
   /** The phone can play a DashPal alert now; `fresh`: with the audio output read now. */
@@ -386,8 +393,10 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
   let pingSeq = 0;
   const counters = { badFrames: 0, lateAlerts: 0, stored: 0, ignored: 0, duplicates: 0, orphanEvents: 0, storeErrors: 0 };
   const listeners = new Set<(s: LinkSnapshot) => void>();
-  /** the latest drive row and when it arrived */
+  /** the latest live drive row and when it arrived (a replayed row never) */
   let lastRow: { row: FeatureRow; at: number } | null = null;
+  /** the drive the latest live recording row belonged to, and when it arrived */
+  let lastLive: { clientTripId: string; at: number } | null = null;
   /** serial chain for HELLO/EVENT persistence */
   let chain: Promise<void> = Promise.resolve();
   /** serial chain for coverage writes (one per row) */
@@ -1160,8 +1169,11 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     tick,
 
     row(row, drive) {
+      // The past (a journal row taken in again): nothing of it reaches STATE, the coverage or the sync stamp.
+      if (drive.replay === true) return null;
       const now = deps.now();
       lastRow = { row, at: now };
+      if (drive.recording && drive.clientTripId !== null) lastLive = { clientTripId: drive.clientTripId, at: now };
       tickAt(now, true);
       if (!paired || !drive.recording || drive.dryRun || drive.clientTripId === null) return null;
       const s = session;
@@ -1205,7 +1217,10 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
         await drained();
       }
       await coverageChain;
-      if (synced()) {
+      // Caught up now says nothing of a drive whose last live second is long gone.
+      const live = lastLive !== null && lastLive.clientTripId === clientTripId ? lastLive.at : null;
+      const recent = live !== null && deps.now() - live <= SYNCED_WITHIN_MS && deps.now() >= live;
+      if (recent && synced()) {
         try {
           await store.addCoverage(clientTripId, 0, 0, deps.now());
         } catch (e) {

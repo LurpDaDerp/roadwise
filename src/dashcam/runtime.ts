@@ -59,7 +59,8 @@ export interface DashcamRuntime {
   /** The process transport, created on first use; null when Bluetooth is unavailable in this build. */
   transport(): DashcamTransport | null;
   // ——— the drive host's hooks ———
-  row(row: FeatureRow, drive: { clientTripId: string | null; recording: boolean; dryRun: boolean }): void;
+  /** `replay`: a journal row taken in again (the past): it counts toward neither STATE nor the coverage. */
+  row(row: FeatureRow, drive: { clientTripId: string | null; recording: boolean; dryRun: boolean; replay?: boolean }): void;
   /** A drive continued after a relaunch: reload its coverage totals. */
   adopt(clientTripId: string): Promise<void>;
   /** Would this drive be a DashPal drive so far (the stopped-points estimate)? */
