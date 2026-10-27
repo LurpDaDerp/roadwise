@@ -2,9 +2,9 @@
 // by events. Nothing here touches Bluetooth: the transport hands it bytes and connection changes,
 // and it hands back frames to write.
 //
-// `tick(now)` runs on every drive row, every inbound frame and a 1 s timer while the app is in the
-// foreground (Android pauses JS timers in the background unless a headless task runs; rows keep
-// arriving during a drive). Each tick: STATE when due, ACKs batched ≤ 200 ms, TIME_PINGs due, RESUME
+// `tick(now)` runs on every live drive row, every inbound frame, its own wake (`wake`, at the next
+// thing due) and a 1 s timer while the app is in the foreground with the link up (Android pauses JS
+// timers in the background unless a headless task runs; rows keep arriving during a drive). Each tick: STATE when due, ACKs batched ≤ 200 ms, TIME_PINGs due, RESUME
 // when due, the 3 s staleness stop, alert repeats, the HELLO retry.
 //
 // Phone-first sound (BLE_PROTOCOL §1, §5): the dashcam routes every alert to its connected primary
