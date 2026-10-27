@@ -92,12 +92,24 @@ export async function readJsonBody(req: Request, maxBytes: number): Promise<Body
   }
 }
 
-/** The 400 for a contract refusal: dotted paths, an unknown key reports path ''. */
-export const invalidPayload = (error: ZodError): Response =>
-  json(400, {
+/**
+ * Most issues a refusal names. A body of thousands of bad array items is thousands of issues, and
+ * the refusal stays a few kilobytes whatever was sent.
+ */
+export const MAX_ISSUES = 20;
+
+/**
+ * The 400 for a contract refusal: dotted paths, an unknown key reports path ''. At most
+ * `MAX_ISSUES`, the contract version's (`v`) first: the phone reads it as a server behind it.
+ */
+export const invalidPayload = (error: ZodError): Response => {
+  const issues = error.issues.map((i) => ({ path: i.path.join('.'), message: i.message }));
+  const version = issues.filter((i) => i.path === 'v');
+  return json(400, {
     code: 'invalid_payload',
-    issues: error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+    issues: [...version, ...issues.filter((i) => i.path !== 'v')].slice(0, MAX_ISSUES),
   });
+};
 
 /**
  * The shared mapping of a failure to a response, logged under `name`:

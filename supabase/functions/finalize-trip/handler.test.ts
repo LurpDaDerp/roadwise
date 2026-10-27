@@ -358,6 +358,14 @@ Deno.test('refusals before any database work: method, token, size, JSON, contrac
   const vBody = await version.json();
   assertEquals(vBody.code, 'invalid_payload');
   assert(vBody.issues.some((i: { path: string }) => i.path === 'v'));
+  // a body just under the cap that is a quarter of a million bad events: a refusal of a few lines
+  const flood = `{"v":5,"events":[${new Array(262_000).fill('0').join(',')}]}`;
+  assert(flood.length < 524_288);
+  const flooded = await handleFinalizeTrip(post(flood), h.deps);
+  assertEquals(flooded.status, 400);
+  const floodText = await flooded.text();
+  assert(floodText.length < 4096, `refusal of ${floodText.length} bytes`);
+  assert(JSON.parse(floodText).issues.length <= 20);
   // v5 refuses what only the old phone use (screen switches) and points carried
   const handling = { ...payload().events[0], id: EVENT_3, type: 'phone_handling', tier: 'severe' };
   for (const bad of [
