@@ -82,22 +82,23 @@ select pg_temp.as_user(1);
 select is(public.get_heatmap('00000000-0000-0000-0000-000000000001'), '[]'::jsonb, 'your own map is always yours');
 
 -- ---------------------------------------------------------------------------
--- clan RPCs are server-only; leave_clan still lets a member out; the rows stay
+-- clan RPCs are server-only, leave_clan too since 0029; the rows stay
 -- ---------------------------------------------------------------------------
 reset role;
 select is(
   (select array_agg(f order by f) from unnest(array['public.create_clan(text, text)', 'public.preview_clan(text)', 'public.join_clan(text)', 'public.get_my_clan()',
-      'public.set_member_role(uuid, text)', 'public.transfer_leadership(uuid)', 'public.remove_member(uuid)', 'public.regenerate_clan_code()', 'public.update_clan(text, text)']) f
+      'public.set_member_role(uuid, text)', 'public.transfer_leadership(uuid)', 'public.remove_member(uuid)', 'public.regenerate_clan_code()', 'public.update_clan(text, text)',
+      'public.leave_clan()']) f
     where has_function_privilege('authenticated', f, 'execute') or has_function_privilege('anon', f, 'execute')),
-  null, 'no client role may call a clan RPC that reads or changes a clan');
+  null, 'no client role may call a clan RPC');
 set local role authenticated;
 select pg_temp.as_user(2);
 select throws_ok($$ select public.get_my_clan() $$, '42501', null, 'get_my_clan is refused to a member');
 select throws_ok($$ select public.preview_clan('ABCDEFGH') $$, '42501', null, 'preview_clan is refused');
-select lives_ok($$ select public.leave_clan() $$, 'a member can still leave');
+select throws_ok($$ select public.leave_clan() $$, '42501', null, 'leave_clan is refused too (0029)');
 reset role;
 select is((select array_agg(user_id order by user_id) from public.clan_members),
-  array['00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000004']::uuid[], 'the rest of the clan keeps its rows');
+  array['00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000004']::uuid[], 'the clan keeps its rows');
 
 select * from finish();
 rollback;
