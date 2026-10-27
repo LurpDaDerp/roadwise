@@ -223,10 +223,14 @@ async function setUp(r: Rig, opts?: SetupStart, o: { next?: boolean } = {}): Pro
 
 const previousOf = (last: number, platform: 'ios' | 'android' = 'android'): PairedDashcam => ({ dashcamId: camOf(last), peripheralId: idOf(platform, last), name: nameOfLast(last), pairedAt: 1, secure: true });
 
-/** Let virtual time run on screen 2 for `ms` (the loops sleep in 50-ms steps). */
+/**
+ * Let virtual time run on screen 2 for `ms`, one macrotask at a time: the loops sleep in `POLL_MS`
+ * steps, one per macrotask, so the clock stops within a step of `ms` (a whole `flush` could run
+ * dozens of steps past it).
+ */
 async function idle(r: Rig, ms: number): Promise<void> {
   const end = r.clock.t + ms;
-  for (let i = 0; i < 10_000 && r.clock.t < end; i++) await flush();
+  for (let i = 0; i < 1_000_000 && r.clock.t < end; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 describe('one tap, the hold, the commit', () => {

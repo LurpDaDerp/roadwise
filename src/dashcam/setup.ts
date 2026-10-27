@@ -91,8 +91,11 @@ export const AIM_GIVE_UP_MS = 15_000;
 export const AIM_RETRY: readonly ViewReason[] = ['moving', 'busy', 'camera', 'no_state', 'memory'];
 /** iOS: an R_MTU waits this long before the request is sent again. */
 export const IOS_MTU_WAIT_MS = 300;
-/** How often the loops look at what they heard. */
-export const POLL_MS = 50;
+/**
+ * How often the loops look at what they heard: a tap takes effect within this long, and it divides
+ * the STATE's 0.9 s, the spinner's 0.6 s and the check mark's 0.9 s, so those keep their times.
+ */
+export const POLL_MS = 150;
 
 export interface Candidate {
   id: string;
