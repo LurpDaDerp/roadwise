@@ -147,7 +147,9 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
     scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
       const a = await linkedA(w);
       await afterState(w, a, 100);
+      // An iOS call with no drive recording: the audio probe reads it (the drive's call flag counts only while one records).
       a.host.callActive = true;
+      a.audio.callActive = true;
       const t0 = w.W;
       await w.dashcam('SND 1 2 0');
       const alert = w.txOf('ALERT', 1, t0)[0]!;
@@ -835,6 +837,7 @@ describeSim('DashPal alert routing (firmware simulator ↔ app link)', () => {
       await w.advance(1000);
       const t1 = w.W;
       a.host.callActive = true;
+      a.audio.callActive = true;
       await w.advance(1500);
       const fb = w.txOf('ALERT_FALLBACK', 1, t1);
       expect(fb).toHaveLength(1);
