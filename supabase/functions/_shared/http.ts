@@ -103,11 +103,11 @@ export const MAX_ISSUES = 20;
  * `MAX_ISSUES`, the contract version's (`v`) first: the phone reads it as a server behind it.
  */
 export const invalidPayload = (error: ZodError): Response => {
-  const issues = error.issues.map((i) => ({ path: i.path.join('.'), message: i.message }));
-  const version = issues.filter((i) => i.path === 'v');
+  const isVersion = (i: ZodError['issues'][number]): boolean => i.path.length === 1 && i.path[0] === 'v';
+  const kept = [...error.issues.filter(isVersion), ...error.issues.filter((i) => !isVersion(i))].slice(0, MAX_ISSUES);
   return json(400, {
     code: 'invalid_payload',
-    issues: [...version, ...issues.filter((i) => i.path !== 'v')].slice(0, MAX_ISSUES),
+    issues: kept.map((i) => ({ path: i.path.join('.'), message: i.message })),
   });
 };
 
