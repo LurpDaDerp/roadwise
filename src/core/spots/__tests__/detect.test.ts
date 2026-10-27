@@ -2,7 +2,7 @@ import { haversineMeters } from '@/lib/geo';
 import { cumulative } from '@/lib/runs';
 
 import { at, DAY, drive, ev, line, metres, NORTH, PARALLEL, seeded, shuffle, SOUTH, T0, TURN } from '../__fixtures__/spots';
-import { cleanNeededFor, detectSpots, modeLimit, replay, type PassMark, type ReplayStep } from '../detect';
+import { cleanNeededFor, detectSpots, modeLimit, replay, spotsStableUntil, type PassMark, type ReplayStep } from '../detect';
 import type { SpotDrive, SpotEvent } from '../types';
 
 const length = (pts: readonly { lat: number; lng: number }[]) => {
@@ -239,6 +239,46 @@ describe('time', () => {
     const rates = spots.map((s) => s.rate);
     expect([...rates].sort((a, b) => b - a)).toEqual(rates);
     expect(spots[0]!.id).toBe('hard_brake:e0-00');
+  });
+
+  test('a hidden spot (inside a privacy zone) takes no rank: the sixth moves up', () => {
+    const drives: SpotDrive[] = [];
+    const events: SpotEvent[] = [];
+    const n = 12;
+    for (let i = 0; i < n; i++) {
+      const d = drive(`d${String(i).padStart(2, '0')}`, i);
+      drives.push(d);
+      for (let k = 0; k < 6; k++) {
+        const hit = k === 0 || i % (k + 1) === 0 || i >= n - 3;
+        if (hit) events.push(ev(`e${k}-${String(i).padStart(2, '0')}`, d, 'hard_brake', [300 + 200 * k, 0]));
+      }
+    }
+    const all = detectSpots(drives, events, T0 + n * DAY);
+    const top = all[0]!;
+    const zoned = (s: { pin: { lat: number; lng: number } }) => metres(s.pin, top.pin) < 50;
+    const spots = detectSpots(drives, events, T0 + n * DAY, zoned);
+    expect(spots).toHaveLength(5);
+    expect(spots.map((s) => s.rank)).toEqual([1, 2, 3, 4, 5]);
+    expect(spots.some((s) => s.id === top.id)).toBe(false);
+    // The ranks after the hidden one move up, and the sixth spot takes rank 5.
+    expect(spots.slice(0, 4).map((s) => s.id)).toEqual(all.slice(1).map((s) => s.id));
+    expect(all.some((s) => s.id === spots[4]!.id)).toBe(false);
+  });
+
+  test('the answer holds up to the first time limit ahead; a cleared spot ageing out is one of them', () => {
+    // 3 hits, then 10 clean passes clear it: a cleared spot, shown for 30 days.
+    const { drives, events } = brakeRoad(13, (i) => i < 3);
+    const now = T0 + 13 * DAY;
+    const answer = detectSpots(drives, events, now);
+    const until = spotsStableUntil(drives, events, now);
+    expect(until).toBeGreaterThan(now);
+    for (const t of [now + 1, Math.round((now + until) / 2), until]) expect(detectSpots(drives, events, t)).toEqual(answer);
+    // Asked a day before the cleared spot leaves, the horizon never passes that moment.
+    const leaves = answer[0]!.clearedAt! + 30 * DAY;
+    expect(spotsStableUntil(drives, events, leaves - DAY)).toBeLessThanOrEqual(leaves);
+    expect(detectSpots(drives, events, leaves)).toEqual(answer);
+    expect(detectSpots(drives, events, leaves + 1)).toEqual([]);
+    expect(spotsStableUntil([], [], now)).toBe(Infinity);
   });
 
   test('a cleared spot is kept for the footnote for 30 days, then dropped', () => {

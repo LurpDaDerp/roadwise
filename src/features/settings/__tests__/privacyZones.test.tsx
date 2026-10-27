@@ -24,6 +24,8 @@ import { PrivacyZonesScreen } from '../PrivacyZonesScreen';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 jest.mock('expo-router', () => ({ useRouter: () => ({ back: jest.fn(), push: jest.fn(), canGoBack: () => true }) }));
+const mockRecompute = jest.fn();
+jest.mock('@/features/spots/recompute', () => ({ requestSpotRecompute: () => mockRecompute() }));
 
 const zone = (over: Partial<PrivacyZone> = {}): PrivacyZone => ({
   id: 'z1',
@@ -36,6 +38,7 @@ const zone = (over: Partial<PrivacyZone> = {}): PrivacyZone => ({
 
 beforeAll(() => setMapsForTests(null));
 afterAll(() => setMapsForTests(undefined));
+beforeEach(() => mockRecompute.mockClear());
 afterEach(() => clearQueryClients());
 
 describe('zone rules', () => {
@@ -104,6 +107,8 @@ describe('the privacy zones screen', () => {
       expect(await readZones(w.settings)).toEqual([expect.objectContaining({ name: 'Home', lat: 40.75, lng: -73.99, radiusM: 350 })])
     );
     expect(await screen.findByText('Home')).toBeOnTheScreen();
+    // The problem spots are worked out again: one inside the zone gives up its rank.
+    expect(mockRecompute).toHaveBeenCalledTimes(1);
   });
 
   it('says what is missing instead of saving a zone with no centre', async () => {

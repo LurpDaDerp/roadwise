@@ -5,6 +5,7 @@ import { Alert, TextInput, View } from 'react-native';
 import { createPermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
+import { requestSpotRecompute } from '@/features/spots/recompute';
 import { Banner, Button, Chip, EmptyState, IconButton, ListRow, Screen, Sheet, Text, useFontScale, useTheme, withAlpha } from '@/ui';
 
 import { settingsCopy } from './copy';
@@ -95,6 +96,8 @@ export function PrivacyZonesScreen({ deps = {} }: { deps?: PrivacyZonesDeps }) {
     try {
       await writeZones(settings, next);
       setZones(next);
+      // A spot inside a zone gives up its rank to the next one.
+      requestSpotRecompute();
       return true;
     } catch {
       setSaveError(true);

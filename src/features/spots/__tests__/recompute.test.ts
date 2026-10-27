@@ -10,7 +10,7 @@ import { createTestDb, seedEvents, seedTrips } from '@/data/queries/__fixtures__
 import * as queries from '@/data/queries/spots';
 import { encodePolyline } from '@/lib/polyline';
 
-import { startSpotJobs, type SpotJobs } from '../recompute';
+import { requestSpotRecompute, startSpotJobs, type SpotJobs } from '../recompute';
 
 jest.mock('@/data/queries/spots', () => {
   const actual = jest.requireActual<typeof import('@/data/queries/spots')>('@/data/queries/spots');
@@ -195,7 +195,7 @@ test('a drive that starts mid-run abandons it, and the next ask after the drive 
 test('names the spots one at a time 1.2 s apart, never inside a privacy zone, then announces the names', async () => {
   await seedDrives(db, [500, 1000, 1500]);
   await stampDaily();
-  // A zone over the third place: no request is made for it.
+  // A zone over the third place: that spot is left out, and no request is made for it.
   await createSettingsRepo(db).set(PRIVACY_ZONES_KEY, [{ id: 'z', name: 'Home', ...at(1500, 0), radiusM: 200 }]);
   const calls: { at: number; p: { lat: number; lng: number } }[] = [];
   const geocode = jest.fn(async (p: { lat: number; lng: number }) => {
@@ -204,15 +204,14 @@ test('names the spots one at a time 1.2 s apart, never inside a privacy zone, th
   });
   start(fakeAppState('active'), geocode);
   await jest.advanceTimersByTimeAsync(2_100);
-  expect(await listSpots()).toHaveLength(3);
+  expect(await listSpots()).toHaveLength(2);
   const before = changes.filter((c) => c === 'spots').length;
   expect(before).toBeGreaterThanOrEqual(1);
   await jest.advanceTimersByTimeAsync(5_000);
   expect(geocode).toHaveBeenCalledTimes(2);
   expect(calls[1]!.at - calls[0]!.at).toBeGreaterThanOrEqual(1_200);
   const rows = await listSpots();
-  const zoned = rows.find((r) => Math.abs(r.lat - at(1500, 0).lat) < 1e-4)!;
-  expect(zoned).toMatchObject({ label: null, label_at: null });
+  expect(rows.find((r) => Math.abs(r.lat - at(1500, 0).lat) < 1e-4)).toBeUndefined();
   const named = rows.filter((r) => r.label_at !== null);
   expect(named).toHaveLength(2);
   expect(named.map((r) => r.label).sort()).toEqual(['Dexter Ave N', null]);
@@ -227,6 +226,59 @@ test('names the spots one at a time 1.2 s apart, never inside a privacy zone, th
   emitDataChanged({ source: 'sync' });
   await jest.advanceTimersByTimeAsync(10_000);
   expect(geocode).toHaveBeenCalledTimes(3);
+});
+
+test('a spot inside a privacy zone takes no rank; a change of zones recomputes', async () => {
+  await seedDrives(db, [500, 1000]);
+  await stampDaily();
+  start(fakeAppState('active'));
+  await jest.advanceTimersByTimeAsync(2_100);
+  expect((await listSpots()).map((r) => r.rank).sort()).toEqual([1, 2]);
+  // A zone added around the place at 1 km: asked for at once, its spot is gone and the other is 1.
+  await createSettingsRepo(db).set(PRIVACY_ZONES_KEY, [{ id: 'z', name: 'Home', ...at(1000, 0), radiusM: 200 }]);
+  requestSpotRecompute();
+  await jest.advanceTimersByTimeAsync(2_100);
+  const rows = await listSpots();
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ rank: 1 });
+  expect(Math.abs(rows[0]!.lat - at(500, 0).lat)).toBeLessThan(1e-4);
+});
+
+test("a run whose inputs are the last run's, before any of its time limits, writes nothing again", async () => {
+  await seedDrives(db);
+  await stampDaily();
+  start(fakeAppState('active'));
+  await jest.advanceTimersByTimeAsync(2_100);
+  const first = await createSettingsRepo(db).get(SPOTS_META_KEY);
+  const spotChanges = () => changes.filter((c) => c === 'spots').length;
+  const before = spotChanges();
+  // A sync that changed nothing the spots read: read, then skipped.
+  now += 60_000;
+  emitDataChanged({ source: 'sync' });
+  await jest.advanceTimersByTimeAsync(2_100);
+  expect(readInputs).toHaveBeenCalledTimes(2);
+  expect(await createSettingsRepo(db).get(SPOTS_META_KEY)).toEqual(first);
+  expect(spotChanges()).toBe(before);
+  // A new event is a new input: it recomputes.
+  await seedEvents(db, [
+    { id: uuid(900), client_trip_id: uuid(3), type: 'hard_brake', tier: 'minor', started_at: T0 + 2 * DAY + 90_000, duration_s: 1, ...at(1000, 0), measured_json: '{"speedMph":30}' },
+  ]);
+  emitDataChanged({ source: 'sync' });
+  await jest.advanceTimersByTimeAsync(2_100);
+  expect(await createSettingsRepo(db).get(SPOTS_META_KEY)).toEqual({ v: 1, computedAt: now, drives: 3 });
+  expect(spotChanges()).toBeGreaterThan(before);
+});
+
+test('after a wipe the next run computes, even from the same inputs', async () => {
+  await seedDrives(db);
+  await stampDaily();
+  start(fakeAppState('active'));
+  await jest.advanceTimersByTimeAsync(2_100);
+  await createSettingsRepo(db).remove(SPOTS_META_KEY);
+  emitDataChanged({ source: 'wipe' });
+  emitDataChanged({ source: 'sync' });
+  await jest.advanceTimersByTimeAsync(2_100);
+  expect(await createSettingsRepo(db).get(SPOTS_META_KEY)).toEqual({ v: 1, computedAt: now, drives: 3 });
 });
 
 test('stop ends it: no more runs', async () => {

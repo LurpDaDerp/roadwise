@@ -527,8 +527,14 @@ export function modeLimit(limits: readonly (number | null)[]): number | null {
 /**
  * The spots of a driver at `now` from their scored drives and located events: the active ones
  * (rank 1..5, best first) then the ones cleared in the last 30 days (rank 0), each group by id.
+ * `hidden` drops a spot before the ranking (one inside a privacy zone), so it never takes a rank.
  */
-export function detectSpots(drives: readonly SpotDrive[], events: readonly SpotEvent[], now: number): DetectedSpot[] {
+export function detectSpots(
+  drives: readonly SpotDrive[],
+  events: readonly SpotEvent[],
+  now: number,
+  hidden?: (spot: Pick<DetectedSpot, 'pin' | 'segment'>) => boolean
+): DetectedSpot[] {
   const since = now - SPOT_WINDOW_MS;
   const kept = keptDrives(drives, since);
   const located = locate(events, kept, since);
@@ -589,14 +595,32 @@ export function detectSpots(drives: readonly SpotDrive[], events: readonly SpotE
     });
   }
 
-  const actives = found
+  const shown = hidden ? found.filter((s) => !hidden(s)) : found;
+  const actives = shown
     .filter((s) => s.state === 'active')
     .sort((a, b) => b.rate - a.rate || b.lastHitAt - a.lastHitAt || cmp(a.id, b.id))
     .slice(0, MAX_SPOTS)
     .map((s, i) => ({ ...s, rank: i + 1 }));
-  const cleared = found
+  const cleared = shown
     .filter((s) => s.state === 'cleared')
     .sort((a, b) => cmp(a.id, b.id))
     .map((s) => ({ ...s, rank: 0 }));
   return [...actives, ...cleared];
+}
+
+/**
+ * Until when `detectSpots` gives the same answer for these inputs as it does at `now`: `now` counts
+ * only through a drive or an event leaving the window, a spot's last pass going dormant and a
+ * cleared spot's clearing ageing out, each a drive's or an event's start plus a fixed age. The
+ * earliest of those still ahead (inclusive); Infinity with none.
+ */
+export function spotsStableUntil(drives: readonly Pick<SpotDrive, 'startedAt'>[], events: readonly Pick<SpotEvent, 'startedAt'>[], now: number): number {
+  const ages = [SPOT_WINDOW_MS, DORMANT_DAYS * DAY_MS, CLEARED_SHOWN_DAYS * DAY_MS];
+  let until = Infinity;
+  const consider = (t: number) => {
+    if (t >= now && t < until) until = t;
+  };
+  for (const d of drives) for (const age of ages) consider(d.startedAt + age);
+  for (const e of events) consider(e.startedAt + SPOT_WINDOW_MS);
+  return until;
 }
