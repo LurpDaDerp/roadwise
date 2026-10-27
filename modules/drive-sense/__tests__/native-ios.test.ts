@@ -621,7 +621,10 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(end).toMatch(/close: true/);
     expect(end).toMatch(/cut: cause == "js" \? endedAt : now/);
     expect(end).toMatch(/if cause != "js" \{\s*EventHub\.detect\.emit\("driveEnded"/);
-    expect(end).toMatch(/if r\.state == "armed" \{ wakes\.setParked\(lastFix\) \}/);
+    // the parked spot and the last end move only to a trusted fix: a drive with none keeps both
+    expect(end).toMatch(/if let f = lastFix \{ r\.lastEnd = DetectLastEnd\(decidedAt: now, cut: cause == "js" \? endedAt : now, lat: f\.lat, lng: f\.lng, driveId: driveId\) \}/);
+    expect(end).toMatch(/if r\.state == "armed", let f = lastFix \{ wakes\.setParked\(f\) \}/);
+    expect(end).not.toMatch(/r\.lastEnd = lastFix\.map|setParked\(lastFix\)/);
     expect(fn(d, 'func stopCapture(')).toMatch(/commitEnd\(cause: "js", endedAt: end\?\.drivingEndedAt \?\? DriveDetector\.now\(\), linger: automaticEndDue\(\)\)/);
     expect(moduleCode()).toMatch(/AsyncFunction\("stopCapture"\)[\s\S]{0,140}DriveDetector\.shared\.stopCapture\(end: CaptureEnd\.of\(kind, endedAt, drivingAtEnd\)\)/);
   });

@@ -163,12 +163,14 @@ extension DriveDetector {
       "k": "end", "endedAt": DetectStateRecord.ms(endedAt), "cause": cause, "decidedAt": DetectStateRecord.ms(now),
       "lastRowTs": DetectStateRecord.ms(rowTs), "lastSeq": lastSeq,
     ], close: true)
-    r.lastEnd = lastFix.map { DetectLastEnd(decidedAt: now, cut: cause == "js" ? endedAt : now, lat: $0.lat, lng: $0.lng, driveId: driveId) }
+    // A drive with no trusted fix (a Start drive cancelled indoors) keeps the last end and its
+    // parked spot: the car is still where it last parked.
+    if let f = lastFix { r.lastEnd = DetectLastEnd(decidedAt: now, cut: cause == "js" ? endedAt : now, lat: f.lat, lng: f.lng, driveId: driveId) }
     settle(&r, now)
     save(r)
     beginEndTask()
     finishSensing()
-    if r.state == "armed" { wakes.setParked(lastFix) }
+    if r.state == "armed", let f = lastFix { wakes.setParked(f) }
     lastFix = nil
     syncWakes()
     if cause != "js" {
