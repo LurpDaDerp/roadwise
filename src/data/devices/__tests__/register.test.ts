@@ -1,7 +1,7 @@
 /** @jest-environment node */
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, migrate } from '@/data/db';
-import { readLiveActivityToken, readPushToken, type LiveActivityTokenPort, type PushPort } from '@/data/devices/pushToken';
+import { pushAllowed, readLiveActivityToken, readPushToken, type LiveActivityTokenPort, type PushPort } from '@/data/devices/pushToken';
 import { LAST_REGISTER_KEY, REGISTER_INTERVAL_MS, registerDevice, registeredRecently, releaseDevice } from '@/data/devices/register';
 
 const T0 = 1_700_000_000_000;
@@ -41,6 +41,32 @@ test('registeredRecently: true only for this account and install within 6 hours 
   expect(await registeredRecently(settings, 'u1', 'install-9999', T0 + 1000)).toBe(false);
   expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + REGISTER_INTERVAL_MS)).toBe(false);
   expect(await registeredRecently(settings, 'u1', 'install-1234', T0 - 1)).toBe(false);
+});
+
+test('registeredRecently: a registration that went up with no push token is not recent once notifications are allowed', async () => {
+  const db = await createSqlJsDb();
+  await migrate(db);
+  const settings = createSettingsRepo(db);
+  await settings.set(LAST_REGISTER_KEY, { userId: 'u1', deviceId: 'install-1234', at: T0, token: null });
+  expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + 1000, null, false)).toBe(true);
+  expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + 1000, null, true)).toBe(false);
+  await settings.set(LAST_REGISTER_KEY, { userId: 'u1', deviceId: 'install-1234', at: T0, token: 'ExponentPushToken[x]' });
+  expect(await registeredRecently(settings, 'u1', 'install-1234', T0 + 1000, null, true)).toBe(true);
+});
+
+test('pushAllowed: a device with permission, read locally; a simulator, no permission or a failed read is false', async () => {
+  const port = (isDevice: boolean, permitted: () => Promise<boolean>): PushPort => ({
+    isDevice: () => isDevice,
+    permitted,
+    getExpoPushToken: jest.fn(async () => 'ExponentPushToken[abcdefgh12345678]'),
+    addPushTokenListener: () => ({ remove() {} }),
+  });
+  const allowed = port(true, async () => true);
+  expect(await pushAllowed(allowed)).toBe(true);
+  expect(allowed.getExpoPushToken).not.toHaveBeenCalled();
+  expect(await pushAllowed(port(false, async () => true))).toBe(false);
+  expect(await pushAllowed(port(true, async () => false))).toBe(false);
+  expect(await pushAllowed(port(true, async () => Promise.reject(new Error('x'))))).toBe(false);
 });
 
 test('releaseDevice calls release_device within its budget, clears the local stamp, and tolerates failure', async () => {

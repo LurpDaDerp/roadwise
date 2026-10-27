@@ -63,6 +63,18 @@ export async function readPushToken(port: PushPort, projectId: string | null, on
   }
 }
 
+/**
+ * Whether a push token can be had now (a device, with notification permission): a local read, no
+ * Expo call. Never throws: a failed read is false.
+ */
+export async function pushAllowed(port: PushPort): Promise<boolean> {
+  try {
+    return port.isDevice() && (await port.permitted());
+  } catch {
+    return false;
+  }
+}
+
 /** The server's own pattern for a Live Activity token (0024 `devices.live_activity_token`): lowercase hex. */
 export const LIVE_ACTIVITY_TOKEN_PATTERN = /^[0-9a-f]{32,200}$/;
 

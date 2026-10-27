@@ -23,6 +23,7 @@ import {
   createExpoPushPort,
   createLiveDriveTokenPort,
   easProjectId,
+  pushAllowed,
   readLiveActivityToken,
   readPushToken,
   type LiveActivityTokenPort,
@@ -107,7 +108,10 @@ export function DeviceHost(props: DeviceHostProps): null {
       // A local read (no network): a token the last registration did not carry is registered now.
       const liveActivityToken = d.platform === 'ios' ? await readLiveActivityToken(d.liveActivity, (e) => report(e, 'devices live activity token')) : null;
       if (!live) return;
-      if (!force && (await registeredRecently(settings, userId, deviceId, now(), liveActivityToken))) return;
+      // Also local: notifications allowed since a registration that went up with no push token.
+      const canPush = force ? false : await pushAllowed(d.push);
+      if (!live) return;
+      if (!force && (await registeredRecently(settings, userId, deviceId, now(), liveActivityToken, canPush))) return;
       if (!live) return;
       const pushToken = await readPushToken(d.push, d.projectId, (e) => report(e, 'devices push token'));
       if (!live) return;

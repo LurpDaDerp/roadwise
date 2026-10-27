@@ -108,17 +108,21 @@ export async function releaseDevice(deps: ReleaseDeps): Promise<'released' | 'sk
  * the push token is read on a plain foreground, so a throttled foreground costs no Expo call (a
  * new token arrives through the token listener, which forces a registration anyway). Given the
  * Live Activity token read now (a local read), a token the last registration did not carry makes
- * it false, so a changed one is registered at the next foreground even without its event.
+ * it false, so a changed one is registered at the next foreground even without its event. Given
+ * whether a push token can be had now (`pushAllowed`, a local read), a registration that went up
+ * with none while one can be had now (notifications allowed since) is not recent either.
  */
 export async function registeredRecently(
   settings: Pick<SettingsRepo, 'get'>,
   userId: string,
   deviceId: string,
   now: number,
-  liveActivityToken?: string | null
+  liveActivityToken?: string | null,
+  pushAllowedNow?: boolean
 ): Promise<boolean> {
   const last = parseLast(await settings.get<unknown>(LAST_REGISTER_KEY));
   if (last === null || last.userId !== userId || last.deviceId !== deviceId || last.at > now || now - last.at >= REGISTER_INTERVAL_MS) return false;
+  if (pushAllowedNow === true && last.token === null) return false;
   return liveActivityToken === undefined || (last.laToken ?? null) === liveActivityToken;
 }
 
