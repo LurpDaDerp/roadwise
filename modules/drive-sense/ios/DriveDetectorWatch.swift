@@ -17,7 +17,8 @@ extension DriveDetector {
 
   func onWake(_ reason: String) {
     if reason == "region", lingerToWatch() { return }
-    guard !waking, let r = rec else { return }
+    // iOS sends a region exit once: it is never dropped for a wake still reading the motion history.
+    guard reason == "region" || !waking, let r = rec else { return }
     let ctx = WakeCtx(now: DriveDetector.now(), reason: reason, phase: r.state, armed: r.armed, hasOwner: r.ownerId != nil,
                       permissionsOk: access.snapshot().requiredOk, candidateRestUntil: r.candidateRestUntil, candidateStarts: r.candidateStarts)
     guard DetectPolicy.wakeGate(ctx) == "ok", capture.sensing == .off else { return }
@@ -27,11 +28,13 @@ extension DriveDetector {
       beginCandidate(origin: "auto", reason: "wake:region")
       return
     }
+    let id = wakeId
     let to = Date()
     ActivitySource.motionSummary(from: to.addingTimeInterval(-DetectPolicy.MOTION_LOOKBACK_MS / 1000), to: to) { [weak self] m in
       guard let self = self else { return }
       guard self.phase == "armed", self.capture.sensing == .off, DetectPolicy.motionGate(m, DriveDetector.now()) == "ok" else {
-        self.endWakeTask()
+        // A region exit meanwhile has its own task: only this wake's ends.
+        if self.wakeId == id { self.endWakeTask() }
         return
       }
       self.beginCandidate(origin: "auto", reason: "wake:\(reason)", carMotionAt: m.lastAutomotiveAt)

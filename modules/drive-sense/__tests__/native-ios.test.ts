@@ -473,6 +473,11 @@ describe('iOS drive detector: the state machine (text)', () => {
     // the wake's motion history seeds the candidate's car motion (the 15-20 mph band needs it)
     expect(wake).toMatch(/self\.beginCandidate\(origin: "auto", reason: "wake:\\\(reason\)", carMotionAt: m\.lastAutomotiveAt\)/);
     expect(wake).toMatch(/if reason == "region" \{\s*beginCandidate\(origin: "auto", reason: "wake:region"\)/);
+    // a region exit (sent once) is never dropped for another wake still reading the motion history,
+    // and that wake's late answer ends only its own background task
+    expect(wake).toMatch(/guard reason == "region" \|\| !waking, let r = rec else \{ return \}/);
+    expect(wake).toMatch(/let id = wakeId\s*let to = Date\(\)\s*ActivitySource\.motionSummary/);
+    expect(wake).toMatch(/== "ok" else \{\s*if self\.wakeId == id \{ self\.endWakeTask\(\) \}\s*return\s*\}/);
   });
 
   it('RoadWise coming to the front is an "app" wake: on didBecomeActive and from JS appForeground, through the same gate', () => {
@@ -552,7 +557,7 @@ describe('iOS drive detector: the state machine (text)', () => {
     // a region exit during the linger is never dropped as "busy": the linger becomes an ordinary
     // watch from the exit (vehicle signs keep it open, an hourly cap entry, its evidence kept)
     const wake = fn(d, 'func onWake(');
-    expect(wake).toMatch(/func onWake\(_ reason: String\) \{\s*if reason == "region", lingerToWatch\(\) \{ return \}\s*guard !waking, let r = rec else \{ return \}/);
+    expect(wake).toMatch(/func onWake\(_ reason: String\) \{\s*if reason == "region", lingerToWatch\(\) \{ return \}\s*guard reason == "region" \|\| !waking, let r = rec else \{ return \}/);
     const toWatch = fn(d, 'func lingerToWatch()');
     expect(toWatch).toMatch(/guard lingering, var r = rec, r\.state == "candidate", r\.origin == "auto" else \{ return false \}/);
     expect(toWatch).toMatch(/lingering = false\s*r\.since = now\s*r\.candidateStarts = DetectPolicy\.recentStarts\(r\.candidateStarts, now\) \+ \[now\]\s*save\(r\)\s*emitState\("wake:region"\)\s*return true/);
