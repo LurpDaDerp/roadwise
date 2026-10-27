@@ -1,4 +1,4 @@
-// Integration: the real handlers against the local stack (migrations 0001–0026) over the real
+// Integration: the real handlers against the local stack (migrations 0001–0029) over the real
 // engine. Runs only when FUNCTIONS_IT_DB_URL is readable — `npm run functions:test` has no env
 // permission and skips it; run it with
 //
@@ -33,7 +33,7 @@ const nyDay = (t: number): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(t));
 
 Deno.test({
-  name: 'finalize-trip + trip-actions against the local stack: v5 answer with a pickup, replay, a drive of its own at 2 min / 100 m, reports ("mounted" too), "Wasn\'t driving", a v4 upload',
+  name: 'finalize-trip + trip-actions against the local stack: v5 answer with a pickup, replay, a drive of its own at 2 min / 100 m, reports ("mounted" too), "Wasn\'t driving", a v4 upload, an overlapping drive, no end point kept',
   ignore: !DB_URL,
   sanitizeResources: false,
   sanitizeOps: false,
@@ -169,6 +169,23 @@ Deno.test({
       assertEquals(r4.mergedInto, null);
       const [t4] = await sql`select phone_s, moving_s, scoring_version from public.trips where id = ${r4.tripId}::uuid`;
       assertEquals([t4.phone_s, t4.moving_s, t4.scoring_version], [0, 1100, 9]);
+
+      // 8. a drive that overlaps the first by 20 minutes: stored, unscored as implausible
+      const overlapping = payload({
+        clientTripId: crypto.randomUUID(),
+        startedAt: started + 10 * 60_000,
+        endedAt: started + 40 * 60_000,
+        localDay: nyDay(started + 10 * 60_000),
+        events: [],
+      });
+      const both = await handleFinalizeTrip(post('finalize-trip', overlapping), deps);
+      assertEquals(both.status, 200);
+      const r5 = await both.json();
+      assertEquals([r5.scored, r5.reason], [false, 'implausible']);
+
+      // 9. no upload left a point behind: every one sent its start and end, none is kept
+      const [g] = await sql`select last_end_lat, last_end_lng, last_end_at from public.progress where user_id = ${user}::uuid`;
+      assertEquals([g.last_end_lat, g.last_end_lng, g.last_end_at !== null], [null, null, true]);
     } finally {
       await deleteTestUser(sql, user);
       await engine.close();

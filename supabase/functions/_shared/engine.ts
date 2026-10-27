@@ -1,9 +1,10 @@
-// The drive engine port: the `private.*` SQL functions of migrations 0023 and 0026, reached over a DIRECT
+// The drive engine port: the `private.*` SQL functions of migrations 0023, 0026 and 0029, reached over a DIRECT
 // Postgres connection — the `private` schema is not exposed by the Data API, so nothing but these
 // functions (and the service role) can call them. Every request runs inside ONE transaction:
-// `drive_context` locks the user's progress row and finds a replay, the TypeScript decides what is
-// stored, `apply_drive` writes; a replay returns the stored response. A "Wasn't driving" and
-// a report are one SQL call each (`mark_not_driving`, `dispute_event`).
+// `drive_context` locks the user's progress row and finds a replay, `drive_overlaps` finds a drive
+// the upload overlaps, the TypeScript decides what is stored, `apply_drive` writes; a replay returns
+// the stored response. A "Wasn't driving" and a report are one SQL call each (`mark_not_driving`,
+// `dispute_event`).
 //
 // Answers are zod-checked against the SQL contract (server-side drift is a 500, never a half-stored
 // drive); a writer's refusal is a `PgError` carrying the SQLSTATE and fixed message `pgFailure`
@@ -22,8 +23,9 @@ export type EngineDisputeReason = 'hazard' | 'wrong_limit' | 'camera_wrong' | 'm
  * makes an older database (or older function) fail loudly as a 500, never a 400; so is
  * `phoneUse: true` (0026): a database that cannot store a phone pickup would refuse one with a 400
  * the phone never retries, so this function refuses to run on it. The key is additive, so the
- * function before this one keeps working on a database with 0026. `merge` (the SQL still answers
- * the drive an upload could be joined to) is read by nothing: every upload is stored as its own drive.
+ * function before this one keeps working on a database with 0026. `merge` (the drive an upload
+ * could be joined to) is always null, since no start point is passed, and read by nothing: every
+ * upload is stored as its own drive.
  */
 export const DriveContextSchema = z.object({
   version: z.literal(23),
@@ -41,7 +43,6 @@ export interface DriveContextArgs {
   endedAt: number;
   /** YYYY-MM-DD, the server's own derivation */
   localDay: string;
-  start: { lat: number; lng: number } | null;
 }
 
 /** The DashPal seconds of what is stored, with the derived DashPal-drive flag. */
@@ -73,7 +74,8 @@ export interface ApplyDriveEnvelope {
     miles: number;
     nightMiles: number;
     durationS: number;
-    end: { lat: number; lng: number } | null;
+    /** Always null: apply_drive would keep the end point for the old merge check. */
+    end: null;
     polyline: string;
     appVersion: string;
     dashcam: FinalizeTripPayloadV5['dashcam'] | null;
@@ -97,6 +99,12 @@ export interface ApplyDriveEnvelope {
 export interface EngineTx {
   takeRateLimit(userId: string, key: string, window: string, max: number): Promise<boolean>;
   driveContext(args: DriveContextArgs): Promise<DriveContext>;
+  /**
+   * `private.drive_overlaps` (0029): whether another stored drive of the user starts more than a
+   * minute before this one ends and ends more than a minute after it starts (a replay of this
+   * clientTripId is not one), on the times apply_drive will store.
+   */
+  driveOverlaps(userId: string, clientTripId: string, startedAt: number, endedAt: number): Promise<boolean>;
   applyDrive(envelope: ApplyDriveEnvelope): Promise<unknown>;
   /** `private.mark_not_driving`: "Wasn't driving" on one drive. */
   markNotDriving(userId: string, clientTripId: string): Promise<unknown>;
@@ -154,10 +162,16 @@ function txPort(tx: Tx): EngineTx {
       call<boolean>('private.take_rate_limit', () =>
         tx<{ r: boolean }[]>`select private.take_rate_limit(${userId}::uuid, ${key}, ${window}::interval, ${max}::int) as r`
       ),
+    driveOverlaps: (userId, clientTripId, startedAt, endedAt) =>
+      call<boolean>('private.drive_overlaps', () =>
+        tx<{ r: boolean }[]>`select private.drive_overlaps(${userId}::uuid, ${clientTripId}::uuid, to_timestamp(${startedAt}::double precision / 1000.0),
+          to_timestamp(${endedAt}::double precision / 1000.0)) as r`
+      ),
     async driveContext(a) {
+      // no start point: where a drive started is never passed on (only the old merge check read it)
       const r = await call<unknown>('private.drive_context', () =>
         tx<{ r: unknown }[]>`select private.drive_context(${a.userId}::uuid, ${a.clientTripId}::uuid, to_timestamp(${a.startedAt}::double precision / 1000.0),
-          ${a.localDay}::date, ${a.start?.lat ?? null}::double precision, ${a.start?.lng ?? null}::double precision,
+          ${a.localDay}::date, null::double precision, null::double precision,
           to_timestamp(${a.endedAt}::double precision / 1000.0)) as r`
       );
       const parsed = DriveContextSchema.safeParse(r);

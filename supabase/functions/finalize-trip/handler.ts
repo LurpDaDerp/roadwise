@@ -6,10 +6,15 @@
 // parsing), JSON, the upload contract (v5; a v4 or v3 body from an older build is upgraded, so no drive
 // is ever lost), the time zone and local day (derived here from tz + startedAt; an unknown IANA
 // zone or a mislabelled day is refused), then ONE database transaction: `drive_context` (lock,
-// idempotency) → the daily upload budget → integrity → the DashPal speed gate re-applied →
-// `classifyDrive`'s length rule → `apply_drive` → the response, stored for replays. Every upload is
-// stored as its own drive: the envelope's `mergeInto` is always null, so the response's `mergedInto`
-// is too.
+// idempotency) → the daily upload budget → `drive_overlaps` → integrity → the DashPal speed gate
+// re-applied → `classifyDrive`'s length rule → `apply_drive` → the response, stored for replays.
+// Every upload is stored as its own drive: the envelope's `mergeInto` is always null, so the
+// response's `mergedInto` is too. A drive that overlaps another stored drive of the user (by more
+// than a minute) is stored unscored as implausible: one person drives one car at a time.
+//
+// Where a drive started and ended (the upload's `start` and `end`, which an older build still sends)
+// goes no further than this function: neither is passed to the database, so no point outside the
+// trimmed route is ever kept.
 //
 // A user id comes from the JWT and nowhere else. Logs carry the request id, the client trip id and
 // codes — never a position, a name or a database message.
@@ -149,14 +154,15 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
 
   try {
     const result = await deps.engine.transaction(async (tx) => {
-      const context = await tx.driveContext({ userId, clientTripId: p.clientTripId, startedAt: p.startedAt, endedAt: p.endedAt, localDay, start: p.start });
+      const context = await tx.driveContext({ userId, clientTripId: p.clientTripId, startedAt: p.startedAt, endedAt: p.endedAt, localDay });
       if (context.existing) return { kind: 'replay' as const, response: context.existing };
       if (!(await tx.takeRateLimit(userId, UPLOAD_LIMIT_KEY, '1 day', MAX_UPLOADS_PER_DAY))) {
         return { kind: 'limited' as const };
       }
+      const overlaps = await tx.driveOverlaps(userId, p.clientTripId, p.startedAt, p.endedAt);
 
-      // An integrity-refused drive is stored unscored.
-      const refused = integrityReason(p);
+      // An integrity-refused drive, or one overlapping another, is stored unscored.
+      const refused = integrityReason(p) ?? (overlaps ? 'implausible' : null);
       const s = buildStoredDrive(p);
       const scored = !refused && !s.short;
       const reason: ApplyDriveEnvelope['reason'] = refused ?? (s.short ? 'too_short' : null);
@@ -174,7 +180,7 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
           miles: p.miles,
           nightMiles: p.nightMiles,
           durationS: Math.round(p.durationS),
-          end: p.end,
+          end: null,
           polyline: p.polyline,
           appVersion: p.appVersion,
           dashcam: p.dashcam ?? null,
@@ -187,7 +193,7 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
         events: s.events,
         scoringVersion: SCORING_VERSION,
       };
-      if (refused) log.warn('finalize-trip stored unscored', { ...ctxLog, reason: refused });
+      if (refused) log.warn('finalize-trip stored unscored', { ...ctxLog, reason: refused, overlaps });
       return { kind: 'applied' as const, response: await tx.applyDrive(envelope) };
     });
 

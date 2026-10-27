@@ -71,9 +71,11 @@ Deno.test('happy path: a v5 upload is stored in one transaction with its origin,
   const body = await res.json();
   assertEquals(body, response({ eventIds: [EVENT] }));
   assertEquals(h.fake.transactions, { opened: 1, failed: 0 });
-  assertEquals(h.fake.calls.map((c) => c.fn), ['driveContext', 'takeRateLimit', 'applyDrive']);
-  assertEquals(h.fake.calls[0].args, { userId: USER, clientTripId: TRIP, startedAt: STARTED_AT, endedAt: STARTED_AT + 30 * 60_000, localDay: '2026-10-05', start: { lat: 40.7128, lng: -74.006 } });
+  assertEquals(h.fake.calls.map((c) => c.fn), ['driveContext', 'takeRateLimit', 'driveOverlaps', 'applyDrive']);
+  // the upload's start point goes no further (the fixture sends one, as an older build does)
+  assertEquals(h.fake.calls[0].args, { userId: USER, clientTripId: TRIP, startedAt: STARTED_AT, endedAt: STARTED_AT + 30 * 60_000, localDay: '2026-10-05' });
   assertEquals(h.fake.calls[1].args, { userId: USER, key: UPLOAD_LIMIT_KEY, window: '1 day', max: MAX_UPLOADS_PER_DAY });
+  assertEquals(h.fake.calls[2].args, { userId: USER, clientTripId: TRIP, startedAt: STARTED_AT, endedAt: STARTED_AT + 30 * 60_000 });
   const e = envelopeOf(h);
   assertEquals(Object.keys(e).sort(), ENVELOPE_KEYS);
   assertEquals(Object.keys(e.payload).sort(), PAYLOAD_KEYS);
@@ -82,7 +84,9 @@ Deno.test('happy path: a v5 upload is stored in one transaction with its origin,
   assertEquals(e.payload.exposure, { slowdowns: 18, speedups: 17, turns: 11, limitS: 1200, movingS: 1650, phoneS: 1500 });
   // the uploaded event goes in active whatever the device said, with its position and measurements
   assertEquals(e.events.map((x) => [x.id, x.status, x.lat, x.measured]), [[EVENT, 'active', 40.72, { peakG: 0.42 }]]);
-  assertEquals([e.payload.localDay, e.payload.end], ['2026-10-05', { lat: 40.7306, lng: -73.9352 }]);
+  // nor its end point: apply_drive never keeps where a drive ended
+  assertEquals([e.payload.localDay, e.payload.end], ['2026-10-05', null]);
+  assertEquals(JSON.stringify(h.fake.calls).match(/40\.7128|40\.7306/), null);
   assertEquals(JSON.stringify(e).match(/"(net|breakdown|streak|safeMiles|isLoop|loopRepeat|safeMilesEarlierToday)"/), null);
   assertEquals(res.headers.get('x-replayed'), null);
 });
@@ -299,6 +303,30 @@ Deno.test('integrity: a mock location is stored unscored as spoofed, on its own;
   const h3 = harness();
   await handleFinalizeTrip(post(payload({ miles: 40, integrity: { mockLocation: false, motionMismatch: false, validGnssPct: 100, maxSpeedMph: 90 } })), h3.deps);
   assertEquals([envelopeOf(h3).scored, envelopeOf(h3).reason], [false, 'implausible']);
+});
+
+Deno.test('a drive overlapping another stored drive of the user is stored unscored as implausible; a replay never asks', async () => {
+  const h = harness({ overlaps: true });
+  const res = await handleFinalizeTrip(post(payload()), h.deps);
+  assertEquals(res.status, 200);
+  const e = envelopeOf(h);
+  assertEquals([e.scored, e.reason, e.events.length], [false, 'implausible', 1]);
+  assertEquals((await res.json()).scored, false);
+  // integrity's own reason stands; an overlapping short drive is implausible, not too short
+  const spoofed = harness({ overlaps: true });
+  await handleFinalizeTrip(post(payload({ integrity: { mockLocation: true, motionMismatch: false, validGnssPct: 100, maxSpeedMph: 50 } })), spoofed.deps);
+  assertEquals([envelopeOf(spoofed).scored, envelopeOf(spoofed).reason], [false, 'spoofed']);
+  const short = harness({ overlaps: true });
+  await handleFinalizeTrip(post(payload({ events: [], exposure: undefined, miles: 0.2, durationS: 60, endedAt: STARTED_AT + 60_000 })), short.deps);
+  assertEquals([envelopeOf(short).scored, envelopeOf(short).reason], [false, 'implausible']);
+  // a replay answers from the context before any overlap is looked for
+  const replay = harness({ overlaps: true, context: { version: 23, phoneUse: true, existing: response(), merge: null } });
+  assertEquals((await handleFinalizeTrip(post(payload()), replay.deps)).status, 200);
+  assertEquals(replay.fake.calls.map((c) => c.fn), ['driveContext']);
+  // a failing overlap read is the transaction's failure: retried, nothing stored
+  const busy = harness({ overlaps: new PgError('55P03', 'lock timeout') });
+  assertEquals((await handleFinalizeTrip(post(payload()), busy.deps)).status, 503);
+  assertEquals(busy.fake.calls.map((c) => c.fn), ['driveContext', 'takeRateLimit', 'driveOverlaps']);
 });
 
 Deno.test('too short: under 0.5 mi AND under 2 min is stored unscored with reason too_short; either one reached scores it', async () => {

@@ -21,6 +21,8 @@ export interface FakeEngineScript {
   rateLimit?: boolean;
   /** What drive_context answers (checked against `DriveContextSchema`), or the error it throws. */
   context?: unknown;
+  /** What drive_overlaps answers (false when left out), or the error it throws. */
+  overlaps?: boolean | Error;
   apply?: unknown | Error | ((envelope: ApplyDriveEnvelope) => unknown);
   notDriving?: unknown | Error;
   dispute?: unknown | Error | ((args: { userId: string; clientTripId: string; eventId: string; reason: string }) => unknown);
@@ -52,6 +54,10 @@ export function fakeEngine(script: FakeEngineScript = {}): FakeEngine {
       const parsed = DriveContextSchema.safeParse(raw);
       if (!parsed.success) return Promise.reject(new EngineContractError('private.drive_context'));
       return Promise.resolve(parsed.data);
+    },
+    driveOverlaps(userId, clientTripId, startedAt, endedAt) {
+      calls.push({ fn: 'driveOverlaps', args: { userId, clientTripId, startedAt, endedAt } });
+      return Promise.resolve(answer(script.overlaps ?? false));
     },
     applyDrive(envelope) {
       calls.push({ fn: 'applyDrive', args: envelope });
