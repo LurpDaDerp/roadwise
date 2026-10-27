@@ -200,15 +200,21 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const night = hudNightOf(themeNight, sunNight, theme?.scheme ?? null);
   // The hour's sky, deepened for the road (its own day or night set), under everything; its panels
   // take a deeper shade of it. Outside a theme the HUD stays on true black.
+  // Held as the same objects from render to render (a row re-renders the screen), so the memoised
+  // parts under it (the compass, the sign, the buttons) and the halo's colour animations stay put.
   const sky = theme === null ? null : theme.sky.hud[night ? 'night' : 'day'];
   const base = hudPalette(night);
-  const p = sky === null ? base : { ...base, ground: sky.stops[1], chrome: sky.chrome, chromeEdge: sky.chromeEdge };
-  const b = hudButtonColors(theme, p, night);
+  const p = useMemo(() => (sky === null ? base : { ...base, ground: sky.stops[1], chrome: sky.chrome, chromeEdge: sky.chromeEdge }), [base, sky]);
+  const b = useMemo(() => hudButtonColors(theme, p, night), [theme, p, night]);
+  const endColors = useMemo(() => ({ track: b.paper, fill: b.fill, knob: b.ink, knobInk: b.paper, hint: b.ink }), [b]);
   // The list of navigation apps and the waiting panels wear the app's own sheet colours, as in Settings.
-  const sheet =
-    theme === null
-      ? { surface: p.chrome, ink: p.ink, muted: p.inkMuted, edge: p.chromeEdge }
-      : { surface: theme.colors.surface, ink: theme.colors.text, muted: theme.colors.textMuted, edge: theme.colors.border };
+  const sheet = useMemo(
+    () =>
+      theme === null
+        ? { surface: p.chrome, ink: p.ink, muted: p.inkMuted, edge: p.chromeEdge }
+        : { surface: theme.colors.surface, ink: theme.colors.text, muted: theme.colors.textMuted, edge: theme.colors.border },
+    [theme, p]
+  );
   const units = useHudUnits();
 
   // A Start-card drive still waiting for driving speed (it records from the tap), or null.
@@ -437,7 +443,13 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // for the rest of the drive (a more severe kind shows again).
   const weather = live.weatherAlert;
   const dismissWeather = useCallback(() => controls.dismissWeather(), [controls]);
-  const link = <NotDrivingLink palette={p} dimmed={dimmed} onPress={() => void onNotDriving()} />;
+  // Stable handlers, so the memoised link and buttons (and End's swipe gesture) are not rebuilt per row.
+  const pressNotDriving = useCallback(() => void onNotDriving(), [onNotDriving]);
+  const swipeEnd = useCallback(() => void onEnd(), [onEnd]);
+  const { press: navPress, change: navChange } = nav;
+  const pressNav = useCallback(() => void navPress(), [navPress]);
+  const longPressNav = useCallback(() => void navChange(), [navChange]);
+  const link = <NotDrivingLink palette={p} dimmed={dimmed} onPress={pressNotDriving} />;
 
   return (
     <View testID="hud-screen" onTouchStart={onTouchStart} style={[styles.root, { backgroundColor: p.ground }]}>
@@ -493,12 +505,12 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             accessibilityLabel={isWaiting ? hudCopy.cancelLabel : hudCopy.endLabel}
             accessibilityHint={isWaiting ? hudCopy.cancelHint : nextEnd ? hudCopy.endLockedHint(units) : hudCopy.endHint}
             icon={isWaiting ? 'close' : nextEnd ? 'lock-closed' : 'stop'}
-            colors={{ track: b.paper, fill: b.fill, knob: b.ink, knobInk: b.paper, hint: b.ink }}
+            colors={endColors}
             height={layout.end.h}
             busy={busy}
             disabled={nextEnd}
             verticalSlop={END_VERTICAL_SLOP_PT}
-            onSwipe={() => void onEnd()}
+            onSwipe={swipeEnd}
             label={
               <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit style={[styles.endLabel, { color: b.ink }]}>
                 {isWaiting ? hudCopy.cancel : busy ? hudCopy.ending : hudCopy.end}
@@ -519,8 +531,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           colors={b}
           width={layout.nav.w}
           height={layout.nav.h}
-          onPress={() => void nav.press()}
-          onLongPress={() => void nav.change()}
+          onPress={pressNav}
+          onLongPress={longPressNav}
         />
       </View>
 

@@ -2131,6 +2131,24 @@ describe("the driving screen wears the hour's sky, still", () => {
     expect(halo().mode).toBe('calm');
   });
 
+  test('a new row under a sky hands the halo the same palette and End the same swipe gesture (nothing under the screen is rebuilt)', async () => {
+    const mood: SkyMood = { phase: 'day', glow: 0, weather: { kind: 'clear', intensity: 'moderate' } };
+    mockLive = live({ rowTs: T });
+    const tree = () => (
+      <ThemeProvider mood={mood}>
+        <HudScreen />
+      </ThemeProvider>
+    );
+    const r = await render(tree());
+    await act(async () => {});
+    const palette = mockHalo.at(-1)!.palette;
+    const gesture = getByGestureTestId('hud-end-pan');
+    mockLive = { ...mockLive, rowTs: T + 1000, rowSpeedMph: 12 };
+    await r.rerender(tree());
+    expect(mockHalo.at(-1)!.palette).toBe(palette);
+    expect(getByGestureTestId('hud-end-pan')).toBe(gesture);
+  });
+
   test('Adaptive: night by the sun at the last known position, over the sky\'s own scheme', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked module
     const Location = require('expo-location') as { getLastKnownPositionAsync: jest.Mock };
