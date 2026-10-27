@@ -1,35 +1,37 @@
 /**
  * The scores a list of drives shows on its rows (Home's recent drives, Drive history). A row's
- * drive carries no events, so each drive that can have a score reads its own (the recap's query,
- * shared with it) and scores them on the phone, exactly as its recap does.
+ * drive carries no events, so the events of every listed drive that can have a score are read in
+ * one query and each drive is scored on the phone, exactly as its recap does.
  */
-import { useQueries, type UseQueryResult } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
-import { queryKeys, readDriveDetail, useDataSource } from '@/data/queries';
+import { queryKeys, readDriveEvents, useDataSource } from '@/data/queries';
 
-import type { LocalDrive, LocalDriveEvent } from './model';
+import type { LocalDrive } from './model';
 import { driveKind, driveScoreOf } from './summary';
 
-type Detail = { drive: LocalDrive; events: LocalDriveEvent[] } | null;
-
-/** Each loaded drive's score by id (a stable function, so react-query keeps the map until a result changes). */
-function scoresOf(results: UseQueryResult<Detail>[]): ReadonlyMap<string, number> {
-  const out = new Map<string, number>();
-  for (const r of results) {
-    if (!r.data) continue;
-    const s = driveScoreOf(r.data.drive, r.data.events);
-    if (s !== null) out.set(r.data.drive.clientTripId, s);
-  }
-  return out;
-}
-
-/** Each listed drive's score by id; a drive with no score (or still loading) is absent. */
+/** Each listed drive's score by id; a drive with no score (or whose events are still loading) is absent. */
 export function useDriveScores(drives: readonly LocalDrive[] | undefined): ReadonlyMap<string, number> {
   const { db } = useDataSource();
   const scorable = useMemo(() => (drives ?? []).filter((d) => driveKind(d).kind === 'scorable'), [drives]);
-  return useQueries({
-    queries: scorable.map((d) => ({ queryKey: queryKeys.drive(d.clientTripId), queryFn: (): Promise<Detail> => readDriveDetail(db, d.clientTripId) })),
-    combine: scoresOf,
+  const ids = useMemo(() => scorable.map((d) => d.clientTripId), [scorable]);
+  // While a changed list loads, the last answer stands: a drive it read keeps its score, a new one waits.
+  const events = useQuery({
+    queryKey: queryKeys.driveEvents(ids.join(',')),
+    queryFn: () => readDriveEvents(db, ids),
+    placeholderData: keepPreviousData,
   });
+  return useMemo(() => {
+    const out = new Map<string, number>();
+    const byTrip = events.data;
+    if (!byTrip) return out;
+    for (const d of scorable) {
+      const list = byTrip.get(d.clientTripId);
+      if (list === undefined) continue;
+      const s = driveScoreOf(d, list);
+      if (s !== null) out.set(d.clientTripId, s);
+    }
+    return out;
+  }, [scorable, events.data]);
 }

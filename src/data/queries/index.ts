@@ -4,6 +4,7 @@ export { DataProvider, MissingDataProviderError, useDataSource, useDb, type Data
 export {
   readDriveCount,
   readDriveDetail,
+  readDriveEvents,
   readDriveHistory,
   readDrives,
   readRecentDrives,

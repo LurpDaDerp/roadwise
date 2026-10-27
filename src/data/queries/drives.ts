@@ -10,7 +10,7 @@ import type { StatSums } from '@scoring';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 
 import type { Db } from '@/data/db/driver';
-import { createEventsRepo } from '@/data/db/events';
+import { createEventsRepo, toEventRow } from '@/data/db/events';
 import { asEnum, asNumber, asNumberOrNull, asTextOrNull } from '@/data/db/row';
 import { createTripsRepo, toTripRow } from '@/data/db/trips';
 import { TRIP_STATUSES } from '@/data/db/types';
@@ -47,6 +47,24 @@ export async function readRecentDrives(db: Db, limit: number): Promise<LocalDriv
 export async function readDriveHistory(db: Db, filter: DriveHistoryFilter): Promise<LocalDrive[]> {
   const { rows } = await db.execute(`SELECT * FROM trips t WHERE t.status != 'recording' ${NEWEST_FIRST}`);
   return rows.map((row) => toListedDrive(toTripRow(row))).filter((d) => matchesHistoryFilter(d, filter));
+}
+
+/**
+ * The events of each of `clientTripIds` in one read, oldest first per drive (`listByTrip`'s order).
+ * Every id asked for is in the answer, a drive with none under an empty list.
+ */
+export async function readDriveEvents(db: Db, clientTripIds: readonly string[]): Promise<ReadonlyMap<string, LocalDriveEvent[]>> {
+  const out = new Map<string, LocalDriveEvent[]>(clientTripIds.map((id) => [id, []]));
+  if (clientTripIds.length === 0) return out;
+  const { rows } = await db.execute(
+    `SELECT * FROM trip_events WHERE client_trip_id IN (SELECT value FROM json_each(?)) ORDER BY client_trip_id ASC, started_at ASC, id ASC`,
+    [JSON.stringify(clientTripIds)]
+  );
+  for (const row of rows) {
+    const event = toEventRow(row);
+    out.get(event.client_trip_id)?.push(toLocalDriveEvent(event));
+  }
+  return out;
 }
 
 export async function readDriveDetail(

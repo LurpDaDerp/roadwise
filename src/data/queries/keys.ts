@@ -9,6 +9,8 @@ export const queryKeys = {
   recentDrives: (limit: number) => ['drives', 'recent', limit] as const,
   driveHistory: (filter: DriveHistoryFilter) => ['drives', 'history', filter] as const,
   drive: (clientTripId: string) => ['drive', clientTripId] as const,
+  /** The events of a list's drives (`ids`, comma-joined): one read for a whole list's scores. */
+  driveEvents: (ids: string) => ['drives', 'events', ids] as const,
   statSums: (sinceMs: number | null) => ['stats', sinceMs] as const,
   driveCount: () => ['driveCount'] as const,
   routes: (sinceMs: number | null) => ['routes', sinceMs] as const,
