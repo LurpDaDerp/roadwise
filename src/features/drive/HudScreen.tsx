@@ -1,13 +1,13 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, Dimensions, Platform, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DashpalChip, DashpalHudBanner, useDashpalChip, useDashpalFlash, useDashpalHeld } from '@/dashcam/ui/HudDashpal';
 import { useOptionalDb } from '@/data/queries/context';
-import { useBearing, useDrive, useDriveControls, useDriveHost, useDriveLive } from '@/drive/useDrive';
+import { rowSpeedMphOf, useBearing, useDrive, useDriveControls, useDriveHost, useDriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { clearHomeNotice, showHomeNotice } from '@/features/home/homeNotice';
 import { navAppById } from '@/features/navigation/catalog';
@@ -264,6 +264,28 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const [endLocked, setEndLocked] = useState(false);
   const nextEnd = isWaiting ? false : nextEndLock(endLocked, live.rowSpeedMph);
   if (nextEnd !== endLocked) setEndLocked(nextEnd);
+  // With RoadWise in the background the store holds still (`src/drive/store.ts`), so this screen sees
+  // no rows. Both locks are advanced over every state the host publishes meanwhile, and taken up on
+  // the way back before the screen is drawn, so a dip under 10 mph that happened only while the phone
+  // was locked still frees End, as it would have on screen.
+  const locks = useRef({ end: nextEnd, nav: nextLocked });
+  useLayoutEffect(() => {
+    locks.current = { end: nextEnd, nav: nextLocked };
+  });
+  useLayoutEffect(() => {
+    if (!behind) return;
+    let { end, nav: navLock } = locks.current;
+    const off = host.subscribe((s) => {
+      const mph = rowSpeedMphOf(s);
+      end = s.waiting !== null ? false : nextEndLock(end, mph);
+      navLock = nextNavLock(navLock, mph);
+    });
+    return () => {
+      off();
+      setEndLocked(end);
+      setNavLocked(navLock);
+    };
+  }, [behind, host]);
   const nav = useNavigationButton(useOptionalDb(), undefined, nextLocked);
   const savedApp = nav.saved === null ? null : navAppById(nav.saved);
   // The button's warm-up highlight: an app is saved and the drive's rows are still under 30 s old (row clock).

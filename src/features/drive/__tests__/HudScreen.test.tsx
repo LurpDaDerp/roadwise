@@ -122,16 +122,25 @@ const mockControls = {
 let mockLastRowTs: number | null = null;
 /** The drive's start as the store has it (the navigation button's warm-up highlight). */
 let mockStartedAt: number | null = null;
+/** Who listens to the host itself (every state it publishes, also while the store holds still behind). */
+const mockHostListeners = new Set<(s: DriveState) => void>();
 /** The engine's compass bearing (`useBearing`). */
 let mockBearing: DriveBearing = { deg: null, source: null };
 jest.mock('@/drive/useDrive', () => ({
+  rowSpeedMphOf: jest.requireActual('@/drive/useDrive').rowSpeedMphOf,
   useBearing: () => mockBearing,
   useDrive: <T,>(sel: (s: { lastFinalized: LastFinalized; status: DriveLive['status']; startedAt: number | null; lastRowTs: number | null }) => T) =>
     sel({ lastFinalized: mockLastFinalized, status: mockLive.status, startedAt: mockStartedAt, lastRowTs: mockLastRowTs }),
   useDriveLive: () => mockLive,
   useShownSpeed: () => mockShown,
   useDriveControls: () => mockControls,
-  useDriveHost: () => ({ snapshot: () => ({ lastFinalized: mockLastFinalized, status: mockLive.status, waiting: mockLive.waiting }) }),
+  useDriveHost: () => ({
+    snapshot: () => ({ lastFinalized: mockLastFinalized, status: mockLive.status, waiting: mockLive.waiting }),
+    subscribe: (fn: (s: DriveState) => void) => {
+      mockHostListeners.add(fn);
+      return () => mockHostListeners.delete(fn);
+    },
+  }),
 }));
 
 const p = HUD.day;
@@ -221,6 +230,7 @@ beforeEach(() => {
   mockNavApp = null;
   mockLastRowTs = null;
   mockStartedAt = T;
+  mockHostListeners.clear();
   mockLastFinalized = null;
   mockDefaultMph = 34;
   mockEnd.mockResolvedValue({ clientTripId: 't1', dropped: null });
@@ -461,6 +471,13 @@ describe('the shake on an event', () => {
 });
 
 /** Every AppState listener the screen adds (its own and the halo burst's), and a way to flip the state for all. */
+/** The host publishes a row at `mph` (as it does once a second, also while the store holds still behind). */
+async function hostRows(...mphs: number[]): Promise<void> {
+  await act(async () => {
+    for (const mph of mphs) for (const fn of [...mockHostListeners]) fn({ rowSpeedMps: mph * MPS_PER_MPH, waiting: null } as DriveState);
+  });
+}
+
 function appStateListeners(): { set(state: string): Promise<void>; restore(): void } {
   const fns: ((s: string) => void)[] = [];
   // Swapped by hand, not spied: restoring a spy on the preset's own mock would leave it answering nothing.
@@ -1285,6 +1302,29 @@ describe('the navigation button (design §7.4, §8)', () => {
       expect(locked()).toBe(false);
     });
 
+    test('a dip under 30 mph while RoadWise was in the background frees it on the way back; staying at 30 or over keeps it greyed', async () => {
+      const app = appStateListeners();
+      try {
+        const h = await renderHud({ speedMph: 40 });
+        expect(locked()).toBe(true);
+        await app.set('background');
+        await hostRows(25, 32);
+        // back in front, the store catches up on the newest row
+        mockLive = { ...mockLive, rowSpeedMph: 32 };
+        await app.set('active');
+        expect(locked()).toBe(false);
+        await h.update({ speedMph: 40 });
+        expect(locked()).toBe(true);
+        await app.set('background');
+        await hostRows(31, 32);
+        mockLive = { ...mockLive, rowSpeedMph: 32 };
+        await app.set('active');
+        expect(locked()).toBe(true);
+      } finally {
+        app.restore();
+      }
+    });
+
     test('kilometres: the hint in km/h', async () => {
       mockUnits = 'km';
       await renderHud({ speedMph: 60 });
@@ -1542,6 +1582,30 @@ describe('End locks at speed (modes plan §3.6)', () => {
     await h.update({ speedMph: 5 });
     await h.update({ speedMph: null });
     expect(locked()).toBe(false);
+  });
+
+  test('a dip under 10 mph while RoadWise was in the background frees End on the way back; staying at 10 or over keeps it locked', async () => {
+    const app = appStateListeners();
+    try {
+      const h = await renderHud({ speedMph: 25 });
+      expect(locked()).toBe(true);
+      // the store holds still behind: the screen sees none of these rows, the host publishes each
+      await app.set('background');
+      await hostRows(8, 15);
+      // back in front, the store catches up on the newest row
+      mockLive = { ...mockLive, rowSpeedMph: 15 };
+      await app.set('active');
+      expect(locked()).toBe(false);
+      await h.update({ speedMph: 25 });
+      expect(locked()).toBe(true);
+      await app.set('background');
+      await hostRows(12, 15);
+      mockLive = { ...mockLive, rowSpeedMph: 15 };
+      await app.set('active');
+      expect(locked()).toBe(true);
+    } finally {
+      app.restore();
+    }
   });
 });
 

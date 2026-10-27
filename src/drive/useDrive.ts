@@ -100,6 +100,9 @@ export interface DriveLive {
   spotNudge: SpotNudge | null;
 }
 
+/** The newest row's GPS speed as the driving screen reads it (mph, tenths), null when it had none. */
+export const rowSpeedMphOf = (s: DriveState): number | null => (s.rowSpeedMps === null ? null : Math.round(mpsToMph(s.rowSpeedMps) * 10) / 10);
+
 /**
  * What the driving screen draws, and nothing more: every field here is compared by identity, so a
  * value that changes on every fix with nothing to show for it (the raw speed over the limit while
@@ -109,7 +112,7 @@ export interface DriveLive {
 export const selectLive = (s: DriveState) => ({
   status: s.status,
   clientTripId: s.clientTripId,
-  rowSpeedMph: s.rowSpeedMps === null ? null : Math.round(mpsToMph(s.rowSpeedMps) * 10) / 10,
+  rowSpeedMph: rowSpeedMphOf(s),
   limitMph: s.limitMph,
   speedingTint: speedingTint(s.speedingRatio),
   overSign: s.speedingRatio !== null && s.speedingRatio > 1,
