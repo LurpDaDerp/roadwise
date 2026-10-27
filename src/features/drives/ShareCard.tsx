@@ -1,7 +1,7 @@
 import type { MeritTier } from '@scoring';
 import * as Sharing from 'expo-sharing';
 import { LinearGradient } from 'expo-linear-gradient';
-import { forwardRef, useCallback, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Text as RNText, StyleSheet, View, type TextStyle } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
@@ -147,6 +147,8 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
   const [attempt, setAttempt] = useState(0);
   const status = useRef<MapStatus>('loading');
   const waiters = useRef<((ready: boolean) => void)[]>([]);
+  /** Bumped when the sheet opens or closes and when Show map goes off: a share begun before stops quietly. */
+  const shareGen = useRef(0);
 
   // Off every time the sheet opens.
   const [open, setOpen] = useState(visible);
@@ -157,6 +159,15 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
       setState('idle');
     }
   }
+
+  /** A share waiting for the map is let go (its map is gone): it never resumes on a later map. */
+  const dropWaiters = useCallback(() => {
+    shareGen.current += 1;
+    const ws = waiters.current;
+    waiters.current = [];
+    for (const w of ws) w(false);
+  }, []);
+  useEffect(dropWaiters, [visible, dropWaiters]);
 
   const onMapStatus = useCallback((s: MapStatus) => {
     status.current = s;
@@ -180,18 +191,27 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
   };
 
   const share = async () => {
+    const gen = shareGen.current;
+    const stale = () => gen !== shareGen.current;
     setState('busy');
     try {
-      if (withMap && offered && !(await mapReady())) {
-        setState('mapError');
-        return;
+      if (withMap && offered) {
+        const ready = await mapReady();
+        if (stale()) return;
+        if (!ready) {
+          setState('mapError');
+          return;
+        }
       }
-      if (!(await Sharing.isAvailableAsync())) throw new Error('sharing unavailable');
+      const available = await Sharing.isAvailableAsync();
+      if (stale()) return;
+      if (!available) throw new Error('sharing unavailable');
       const uri = await captureRef(card, { format: 'png', quality: 1, result: 'tmpfile' });
+      if (stale()) return;
       await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: 'Share your drive', UTI: 'public.png' });
-      setState('idle');
+      if (!stale()) setState('idle');
     } catch {
-      setState('error');
+      if (!stale()) setState('error');
     }
   };
 
@@ -211,6 +231,7 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
                 setWithMap(on);
                 setState('idle');
                 if (on) loadMap();
+                else dropWaiters();
               }}
               testID="share-map-toggle"
             />

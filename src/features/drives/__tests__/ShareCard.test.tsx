@@ -1,5 +1,6 @@
 import { act, fireEvent, screen, within } from '@testing-library/react-native';
 import { processColor } from 'react-native';
+import { useState } from 'react';
 
 import { ThemeProvider } from '@/ui';
 import { plainBundle } from '@/ui/sky/palette';
@@ -153,6 +154,38 @@ test('Share waits for a map still loading, and shares nothing when it never arri
     expect(screen.getByTestId('share-map-error')).toBeOnTheScreen();
     expect(captureRef).not.toHaveBeenCalled();
     expect(sharing().shareAsync).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('a share left waiting for the map when the sheet closes never resumes on a later map', async () => {
+  let setShown: (v: boolean) => void = () => {};
+  function Controlled() {
+    const [shown, set] = useState(true);
+    setShown = set;
+    return <ShareSheet visible={shown} data={data} onClose={jest.fn()} />;
+  }
+  jest.useFakeTimers();
+  try {
+    // The first map never arrives; Share waits on it, and the sheet closes meanwhile.
+    mockTakeSnapshot.mockImplementationOnce(() => new Promise(() => {}));
+    await draw(<Controlled />);
+    await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+    setTimeout(() => setShown(false), 10);
+    const pressed = press(screen.getByTestId('share-image'));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    jest.advanceTimersByTime(10);
+    await pressed;
+    // Opened again later, with Show map switched on and the map loading this time.
+    await act(async () => setShown(true));
+    await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+    await mapLoads();
+    expect(screen.getByTestId('share-map-route', H)).toBeOnTheScreen();
+    expect(sharing().shareAsync).not.toHaveBeenCalled();
+    // A tap of its own shares.
+    await press(screen.getByTestId('share-image'));
+    expect(sharing().shareAsync).toHaveBeenCalledTimes(1);
   } finally {
     jest.useRealTimers();
   }
