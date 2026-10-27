@@ -19,6 +19,7 @@ import { isManualDrop, readDropNotice, writeDropNotice } from '@/drive/dropNotic
 import {
   createDriveHost,
   DriveEndFailedError,
+  type DriveHostDashcam,
   finishPendingCancel,
   JOURNAL_LINK_KEY,
   MAX_JOURNAL_REPLAY_ROWS,
@@ -2007,6 +2008,25 @@ describe('the speed and limit pipeline beside the rows (plan decision 6)', () =>
     expect(lat).toBeCloseTo(live[0]!.lat, 5);
     expect(lng).toBeCloseTo(live[0]!.lng, 5);
     expect(course).toBe(live[0]!.course);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the DashPal is told which rows are replayed (the confirmation journal) and which are live', async () => {
+    const seen: { ts: number; replay: boolean }[] = [];
+    const dashcam: DriveHostDashcam = {
+      row: (r, drive) => void seen.push({ ts: r.ts, replay: drive.replay }),
+      adopt: async () => {},
+      beforeFinalize: async () => {},
+      continuousAlertActive: () => false,
+    };
+    const h = buildIos({ dashcam });
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(30, { speedMps: 15 }));
+    await feedIos(h, rows(31, { speedMps: 15 }).slice(30));
+    expect(seen.filter((s) => s.replay).map((s) => s.ts)).toEqual(rows(30).map((r) => r.ts));
+    expect(seen.filter((s) => !s.replay).map((s) => s.ts)).toEqual([T0 + 30_000]);
     await h.host.stop({ endOpenTrip: false });
   });
 

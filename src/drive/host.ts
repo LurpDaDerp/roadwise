@@ -223,8 +223,11 @@ export interface DriveHost {
  * work beside the drive: a failure never stops a row, an alert or a finalize.
  */
 export interface DriveHostDashcam {
-  /** Every drive row: the dashcam's context (STATE, its tick) and this drive's coverage. */
-  row(row: FeatureRow, drive: { clientTripId: string | null; recording: boolean; dryRun: boolean }): void;
+  /**
+   * Every drive row: the dashcam's context (STATE, its tick) and this drive's coverage. `replay`: a
+   * journal row taken in again (the past, not where the car is now).
+   */
+  row(row: FeatureRow, drive: { clientTripId: string | null; recording: boolean; dryRun: boolean; replay: boolean }): void;
   /** A drive continued after a relaunch: its coverage totals are reloaded. */
   adopt(clientTripId: string): Promise<void>;
   /** Drive end: wait ≤ 3 s for the phone to catch up to the dashcam, then stamp the sync time. */
@@ -1354,7 +1357,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
     if (deps.dashcam) {
       try {
-        deps.dashcam.row(row, { clientTripId: snap.clientTripId, recording, dryRun: !persist });
+        deps.dashcam.row(row, { clientTripId: snap.clientTripId, recording, dryRun: !persist, replay: opts.replay === true });
       } catch (e) {
         report(e, 'dashcam');
       }
