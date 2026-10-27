@@ -144,7 +144,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
       `A pickup counts once the car is going ${PHONE_PICKUP_MIN_MPH} mph or more. Pick it up at a red light and put it down before you pull away, and it doesn’t count.`,
       `Every second it stays in your hand while you’re moving adds to it. Put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s and it’s still one pickup.`,
       `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at ${2 * SPEED_FACTOR.refMph} mph as at ${SPEED_FACTOR.refMph}), judged against your time at driving speed, so a long drive isn’t marked down for being long.`,
-      `With the drive screen open, you hear a tone and see “${hudCopy.alert.phone_pickup}”. With RoadWise in the background, you get a quiet notification instead.`,
+      `With the drive screen open, you hear a tone and see “${hudCopy.alert.phone_pickup}”. With RoadWise in the background, it’s recorded quietly and still counts.`,
     ],
   },
   {
