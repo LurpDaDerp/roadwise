@@ -289,6 +289,13 @@ describe('iOS drive-sense module (text)', () => {
     expect(code('ExtractMath.swift')).not.toMatch(/"call"/);
   });
 
+  it('a call still up as observing stops is told over, so JS never holds a stale call between sensing sessions', () => {
+    const calls = code('CallObserver.swift');
+    expect(fn(calls, 'func stop()')).toMatch(/observer = nil\s*if active \{ emit\(false\) \}\s*active = false/);
+    // the start still says so only for a call in progress
+    expect(fn(calls, 'func start()')).toMatch(/active = anyCallActive\(\)\s*if active \{ emit\(true\) \}/);
+  });
+
   it('reads no phone state: every row carries the fixed sample, the screen state is fixed, no lock proof', () => {
     const p = code('PhoneState.swift');
     expect(p).toMatch(/static func snapshot\(\) -> PhoneSample \{\s*PhoneSample\(locked: false, screenOn: true, appForeground: true\)\s*\}/);

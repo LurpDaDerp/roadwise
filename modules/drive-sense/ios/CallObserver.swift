@@ -23,10 +23,13 @@ final class CallObserver: NSObject, CXCallObserverDelegate {
     if active { emit(true) }
   }
 
+  /// Main thread. A call still up says it is over: nothing tells JS once observing stops, and the
+  /// next start says so only for a call in progress.
   func stop() {
     dispatchPrecondition(condition: .onQueue(.main))
     observer?.setDelegate(nil, queue: nil)
     observer = nil
+    if active { emit(false) }
     active = false
   }
 
