@@ -67,6 +67,20 @@ export function useAppActive(): boolean {
   return active;
 }
 
+/**
+ * RoadWise is in the background (AppState `background`), live. `inactive` is not: Control Center,
+ * a call banner or Siri over the screen leaves it showing, and its speed, sign and compass keep
+ * updating.
+ */
+export function useAppBehind(): boolean {
+  const [behind, setBehind] = useState(() => AppState.currentState === 'background');
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => setBehind(next === 'background'));
+    return () => sub.remove();
+  }, []);
+  return behind;
+}
+
 /** The halo's burst this render, from the event chip's and DashPal's flashes (null: none showing). */
 export function useHaloBurst({ event, dashpal, now }: { event: BurstSource | null; dashpal: BurstSource | null; now: number }): HaloBurst | null {
   const active = useAppActive();

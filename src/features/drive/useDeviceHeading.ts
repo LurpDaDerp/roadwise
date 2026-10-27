@@ -5,7 +5,8 @@
 // has shown it stays for the rest of the drive: never back to the phone's heading. The phone's
 // heading is read only on iOS, in portrait (iOS measures it from the top of the phone held upright,
 // so it is a quarter turn off in landscape), while the driving screen is focused with RoadWise in
-// front and the compass is drawn; with no heading to show the card sits north-up, its letters dimmed.
+// front (Control Center, a call banner or Siri over it included: only the background stops it) and
+// the compass is drawn; with no heading to show the card sits north-up, its letters dimmed.
 import * as Location from 'expo-location';
 import { useEffect, useState } from 'react';
 
@@ -177,7 +178,11 @@ export function compassHeadingOf(track: HeldTrack | null, device: number | null)
   return device;
 }
 
-/** Whether the phone's heading is read now (iOS, portrait, the compass drawn, the screen focused with RoadWise in front, a drive recording, no track bearing yet). */
+/**
+ * Whether the phone's heading is read now (iOS, portrait, the compass drawn, the screen focused with
+ * RoadWise in front, a drive recording, no track bearing yet). `active`: RoadWise is not in the
+ * background (an overlay such as Control Center over the screen still counts as in front).
+ */
 export function deviceHeadingWanted(o: {
   ios: boolean;
   focused: boolean;

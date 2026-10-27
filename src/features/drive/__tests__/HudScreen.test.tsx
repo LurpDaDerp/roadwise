@@ -312,6 +312,26 @@ describe('speed and limit', () => {
     expect(shown()).toHaveTextContent('37');
   });
 
+  test('in the background it never ticks; with Control Center over the screen (inactive) it keeps moving on', async () => {
+    const app = appStateListeners();
+    try {
+      await renderHud({ speedMph: 40, speedAccelMph: -3, speedAt: T - 250 });
+      const shown = () => screen.getByTestId('hud-speed-numeral');
+      expect(shown()).toHaveTextContent('39');
+      await app.set('background');
+      await act(() => jest.advanceTimersByTime(750));
+      // 37.75 by now on screen, but nobody is looking: the readout holds what it showed last
+      expect(shown()).toHaveTextContent('39');
+      // in front again (an overlay over the screen counts): where the carry stands now, 37, then on
+      await app.set('inactive');
+      expect(shown()).toHaveTextContent('37');
+      await act(() => jest.advanceTimersByTime(500));
+      expect(shown()).toHaveTextContent('36');
+    } finally {
+      app.restore();
+    }
+  });
+
   test('a speed sitting near x.5 does not flicker: the whole number moves only 0.3 past the half', async () => {
     const h = await renderHud({ speedMph: 34.6 });
     const shown = () => screen.getByTestId('hud-speed-numeral');
@@ -621,6 +641,26 @@ describe('the compass (round 8 decision 7)', () => {
     expect(open()).toHaveLength(1);
     expect(subs()).toHaveLength(3);
     app.restore();
+  });
+
+  test('Control Center, a call banner or Siri over the screen (inactive) keeps following the phone', async () => {
+    const app = appStateListeners();
+    try {
+      await renderHud({ rowTs: T });
+      await phone(30);
+      expect(heading()).toBe(30);
+      await app.set('inactive');
+      expect(open()).toHaveLength(1);
+      expect(heading()).toBe(30);
+      await phone(90);
+      await act(() => jest.advanceTimersByTime(5000));
+      expect(heading()).toBe(90);
+      await app.set('active');
+      expect(subs()).toHaveLength(1);
+      expect(heading()).toBe(90);
+    } finally {
+      app.restore();
+    }
   });
 
   test('not while idle; let go on unmount', async () => {

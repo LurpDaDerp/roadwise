@@ -40,7 +40,7 @@ import { NotDrivingLink } from './NotDrivingLink';
 import { SpotNudgeLine, useSpotNudgeFlash } from './SpotNudge';
 import { useEventShake } from './useEventShake';
 import { compassHeadingOf, deviceHeadingWanted, nextHeldTrack, useDeviceHeading, type HeldTrack } from './useDeviceHeading';
-import { useAppActive, useHaloBurst } from './useHaloBurst';
+import { useAppActive, useAppBehind, useHaloBurst } from './useHaloBurst';
 import { HaloReadout } from './HaloReadout';
 import { inUnits, useHudUnits } from './useHudUnits';
 import { WaitingBanner } from './WaitingBanner';
@@ -234,6 +234,9 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // Presence (`hudPresence`): focused with RoadWise in front, for the open drive. Not for the
   // diagnostics simulation, which is never the driving screen.
   const appActive = useAppActive();
+  // In the background, not merely covered: Control Center or a call banner over the screen keeps
+  // the compass on the phone's heading (`inactive` is still in front).
+  const behind = useAppBehind();
   const present = !overlay && focused && appActive;
   const presenceTripId = live.clientTripId;
   const [presenceOwner] = useState(() => ({}));
@@ -537,7 +540,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           deviceWanted={deviceHeadingWanted({
             ios: Platform.OS === 'ios',
             focused,
-            active: appActive,
+            active: !behind,
             recording: live.status === 'recording',
             ring: layout.halo.ring,
             portrait: portraitNow(width, height),

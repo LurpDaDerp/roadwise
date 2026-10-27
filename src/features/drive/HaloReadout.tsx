@@ -9,6 +9,7 @@ import { KMH_PER_MPH } from '@/lib/units';
 import { speedDigits, SpeedReadout } from '@/ui/drive';
 import { useOsReduceMotion } from '@/ui/theme';
 
+import { useAppBehind } from './useHaloBurst';
 import { unitLabel, type HudUnits } from './useHudUnits';
 
 const wallClock = (): number => Date.now();
@@ -18,12 +19,14 @@ const wallClock = (): number => Date.now();
  * from the time it stands for along its acceleration (`carriedSpeed`), re-read every
  * `SPEED_TICK_MS` until `CARRY_MAX_MS` after that time, and rounded with a little hysteresis
  * (`wholeSpeed`) so a speed sitting at x.5 doesn't flicker. A cruising car, 0 and a held speed
- * never tick.
+ * never tick, and nothing ticks with RoadWise in the background (`inactive`, an overlay over the
+ * screen, still ticks).
  */
 export function useCarriedSpeed(shown: ShownSpeed, units: HudUnits): number | null {
   const { mps, accel, at } = shown;
   const [, setTick] = useState(0);
-  const carrying = mps !== null && mps > 0 && accel !== 0 && at !== null;
+  const behind = useAppBehind();
+  const carrying = !behind && mps !== null && mps > 0 && accel !== 0 && at !== null;
   useEffect(() => {
     if (!carrying || at === null) return;
     const end = at + CARRY_MAX_MS;
