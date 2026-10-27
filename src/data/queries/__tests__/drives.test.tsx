@@ -3,9 +3,9 @@ import { uuid } from '@/core/engine/__fixtures__/drives';
 import type { Db } from '@/data/db';
 import type { TripRow } from '@/data/db/types';
 import { createTestDb, seedEvents, seedTrips } from '@/data/queries/__fixtures__/harness';
-import { readDriveCount, readDriveDetail, readDriveHistory, readRecentDrives, readRoutePolylines, readStatSums, useDriveCount, useRecentDrives } from '@/data/queries/drives';
+import { readDriveCount, readDriveDetail, readDriveHistory, readDrives, readRecentDrives, readRoutePolylines, readStatSums, useDriveCount, useRecentDrives } from '@/data/queries/drives';
 import { DRIVE_HISTORY_FILTERS } from '@/data/queries/keys';
-import { countEvents, matchesHistoryFilter, toLocalDrive } from '@/data/queries/rows';
+import { countEvents, isListed, isScoredDrive, matchesHistoryFilter, sumStats, toLocalDrive } from '@/data/queries/rows';
 
 const T0 = 1_700_000_000_000;
 let db: Db;
@@ -64,6 +64,27 @@ test('recent drives: the newest listed drives, capped', async () => {
   // The hooks are thin wrappers over these readers (React Query + the provider's db).
   expect(typeof useRecentDrives).toBe('function');
   expect(typeof useDriveCount).toBe('function');
+});
+
+test('the narrow reads answer exactly what filtering the whole table does; only a list leaves the stored server answer unread', async () => {
+  await seedTrips(db, [
+    { client_trip_id: uuid(9), started_at: T0 - 1500, tz: 'UTC', status: 'scored', miles: 0.1 + 0.2, duration_s: 61.7, night_miles: 0.05, clean: 1, counts_json: 'not json', result_json: JSON.stringify({ x: 1 }) },
+    { client_trip_id: uuid(10), started_at: T0 - 1500, tz: 'UTC', status: 'pending', miles: 7.3, duration_s: 420.2, clean: 0, counts_json: JSON.stringify({ hardBrake: 2, speeding: 'x' }) },
+  ]);
+  const whole = await readDrives(db);
+  for (const since of [null, T0 - 1500, T0 - 7 * 86_400_000]) {
+    expect(await readStatSums(db, since)).toEqual(sumStats(whole, since));
+    expect(await readRoutePolylines(db, since)).toEqual(
+      whole.filter((d) => isListed(d) && d.polyline !== null && d.polyline !== '' && (since === null || d.startedAt >= since)).map((d) => d.polyline)
+    );
+  }
+  expect(await readDriveCount(db)).toBe(whole.filter(isScoredDrive).length);
+  for (const limit of [0, 1, 3, 50]) {
+    expect(await readRecentDrives(db, limit)).toEqual(whole.filter(isListed).slice(0, limit));
+  }
+  for (const filter of DRIVE_HISTORY_FILTERS) {
+    expect(await readDriveHistory(db, filter)).toEqual(whole.filter((d) => matchesHistoryFilter(d, filter)).map((d) => ({ ...d, result: null })));
+  }
 });
 
 test('row bridges: counts from events, filters on a drive view', () => {

@@ -3,9 +3,9 @@ import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { REFUSED_NEVER } from '@/data/db/queue';
 import { createFakeAppState, createFakeSupabase, functionsFetchError, functionsHttpError, invokeOk } from '@/data/sync/__fixtures__/fakes';
-import { answer, finishedDrive, payloadV3, payloadV4, pickup, speeding, T0, uuid } from '@/data/sync/__fixtures__/drives';
+import { answer, finishedDrive, payloadV3, payloadV4, payloadV5, pickup, speeding, T0, uuid } from '@/data/sync/__fixtures__/drives';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
-import { emitDataChanged } from '@/data/events';
+import { emitDataChanged, onDataChanged } from '@/data/events';
 import { enqueueFinalize } from '@/data/sync/queue';
 import { createSyncRunner, FOREIGN_OWNER_RETRY_MS, NO_SESSION_RETRY_MS, RETRY_WAKE_MIN_MS } from '@/data/sync/runner';
 import { toLocalDrive } from '@/data/queries/rows';
@@ -667,6 +667,18 @@ describe('an action the server already holds (409: a retry whose first answer wa
     expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
     await r.stop();
   });
+});
+
+test('an upload queued inside a caller’s transaction is not announced (the caller announces once it commits); one queued alone is', async () => {
+  const heard: string[] = [];
+  const off = onDataChanged((c) => heard.push(c.source));
+  await db.transaction((tx) => enqueueFinalize(db, payloadV5(uuid(30)), T0, tx));
+  await new Promise((r) => setTimeout(r, 0));
+  expect(heard).toEqual([]);
+  await enqueueFinalize(db, payloadV5(uuid(31)), T0);
+  await new Promise((r) => setTimeout(r, 0));
+  expect(heard).toEqual(['enqueue']);
+  off();
 });
 
 test('the runner wakes on the enqueue change event and on foreground', async () => {

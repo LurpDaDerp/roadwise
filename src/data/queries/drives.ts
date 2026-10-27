@@ -1,24 +1,32 @@
 /**
  * The local drive data every screen reads (plan §10). Each hook is a namespaced key over a pure
  * reader; the readers are exported so a test can run them against sql.js directly.
+ *
+ * Every reader asks SQLite for only what it shows: a count is a COUNT, the recent drives a LIMIT,
+ * a sum reads the summed columns, and a list leaves each drive's stored server answer unread. The
+ * rows, their order and every number are those of filtering the whole table, as before.
  */
 import type { StatSums } from '@scoring';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 
 import type { Db } from '@/data/db/driver';
 import { createEventsRepo } from '@/data/db/events';
-import { createTripsRepo } from '@/data/db/trips';
+import { asEnum, asNumber, asNumberOrNull, asTextOrNull } from '@/data/db/row';
+import { createTripsRepo, toTripRow } from '@/data/db/trips';
+import { TRIP_STATUSES } from '@/data/db/types';
+import { SCORED_TRIP } from '@/data/queries/analytics';
 import { useDataSource } from '@/data/queries/context';
 import { queryKeys, type DriveHistoryFilter } from '@/data/queries/keys';
 import {
-  isListed,
-  isScoredDrive,
   matchesHistoryFilter,
+  parseCounts,
   sumStats,
+  toListedDrive,
   toLocalDrive,
   toLocalDriveEvent,
   type LocalDrive,
   type LocalDriveEvent,
+  type SummedDrive,
 } from '@/data/queries/rows';
 
 export type { DriveCounts, DriveStatus, LocalDrive, LocalDriveEvent } from '@/data/queries/rows';
@@ -28,12 +36,17 @@ export async function readDrives(db: Db): Promise<LocalDrive[]> {
   return rows.map(toLocalDrive);
 }
 
+/** The order every list reads in (`trips.list`). */
+const NEWEST_FIRST = 'ORDER BY t.started_at DESC, t.client_trip_id ASC';
+
 export async function readRecentDrives(db: Db, limit: number): Promise<LocalDrive[]> {
-  return (await readDrives(db)).filter(isListed).slice(0, Math.max(0, limit));
+  const { rows } = await db.execute(`SELECT * FROM trips t WHERE t.status != 'recording' ${NEWEST_FIRST} LIMIT ?`, [Math.max(0, limit)]);
+  return rows.map((row) => toLocalDrive(toTripRow(row)));
 }
 
 export async function readDriveHistory(db: Db, filter: DriveHistoryFilter): Promise<LocalDrive[]> {
-  return (await readDrives(db)).filter((d) => matchesHistoryFilter(d, filter));
+  const { rows } = await db.execute(`SELECT * FROM trips t WHERE t.status != 'recording' ${NEWEST_FIRST}`);
+  return rows.map((row) => toListedDrive(toTripRow(row))).filter((d) => matchesHistoryFilter(d, filter));
 }
 
 export async function readDriveDetail(
@@ -46,18 +59,42 @@ export async function readDriveDetail(
   return { drive: toLocalDrive(row), events: events.map(toLocalDriveEvent) };
 }
 
+/** The summed columns of the scored drives in the window, newest first: the order (and so the sums) of the whole-table read. */
 export async function readStatSums(db: Db, sinceMs: number | null): Promise<StatSums> {
-  return sumStats(await readDrives(db), sinceMs);
+  const since = sinceMs === null ? '' : 'AND t.started_at >= ?';
+  const { rows } = await db.execute(
+    `SELECT t.status, t.reason, t.started_at, t.miles, t.duration_s, t.night_miles, t.clean, t.counts_json FROM trips t
+     WHERE ${SCORED_TRIP} ${since} ${NEWEST_FIRST}`,
+    sinceMs === null ? [] : [sinceMs]
+  );
+  const drives = rows.map((row): SummedDrive => {
+    const clean = asNumberOrNull(row, 'clean');
+    return {
+      status: asEnum(row, 'status', TRIP_STATUSES),
+      reason: asTextOrNull(row, 'reason'),
+      startedAt: asNumber(row, 'started_at'),
+      miles: asNumber(row, 'miles'),
+      durationS: asNumber(row, 'duration_s'),
+      nightMiles: asNumber(row, 'night_miles'),
+      clean: clean === null ? null : clean !== 0,
+      counts: parseCounts(asTextOrNull(row, 'counts_json')),
+    };
+  });
+  return sumStats(drives, sinceMs);
 }
 
 export async function readDriveCount(db: Db): Promise<number> {
-  return (await readDrives(db)).filter(isScoredDrive).length;
+  const { rows } = await db.execute(`SELECT count(*) AS n FROM trips t WHERE ${SCORED_TRIP}`);
+  return asNumber(rows[0] ?? {}, 'n');
 }
 
 export async function readRoutePolylines(db: Db, sinceMs: number | null): Promise<string[]> {
-  return (await readDrives(db))
-    .filter((d) => isListed(d) && d.polyline !== null && d.polyline !== '' && (sinceMs === null || d.startedAt >= sinceMs))
-    .map((d) => d.polyline as string);
+  const since = sinceMs === null ? '' : 'AND t.started_at >= ?';
+  const { rows } = await db.execute(
+    `SELECT t.polyline FROM trips t WHERE t.status != 'recording' AND t.polyline IS NOT NULL AND t.polyline != '' ${since} ${NEWEST_FIRST}`,
+    sinceMs === null ? [] : [sinceMs]
+  );
+  return rows.map((row) => asTextOrNull(row, 'polyline') ?? '');
 }
 
 /** The last `limit` drives, newest first (Home's "Recent drives"). */

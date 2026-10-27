@@ -46,7 +46,10 @@ export interface LocalDrive {
   /** No active event other than DashPal's; null until classified, and on an unscored drive. */
   clean: boolean | null;
   counts: DriveCounts;
-  /** The server's answer (v4); null until it answered, and for one stored before this build. */
+  /**
+   * The server's answer (v4); null until it answered, for one stored before this build, and in a list
+   * read (`toListedDrive`): only a drive's own read needs it, and `reason` carries its verdict everywhere.
+   */
   result: FinalizeTripResponse | null;
   reason: string | null;
   /** Why the server last refused an action on this drive (e.g. a "Wasn't driving": `too_old`). */
@@ -166,6 +169,18 @@ export function exposureOf(row: Pick<TripRow, 'slowdowns' | 'speedups' | 'turns'
 }
 
 export function toLocalDrive(row: TripRow): LocalDrive {
+  return toDrive(row, parseResult(row.result_json));
+}
+
+/**
+ * A row as a list reads it: the stored server answer left unread (`result` null), so a list of a
+ * whole history spends no schema check per drive on a field it never shows.
+ */
+export function toListedDrive(row: TripRow): LocalDrive {
+  return toDrive(row, null);
+}
+
+function toDrive(row: TripRow, result: FinalizeTripResponse | null): LocalDrive {
   const { exposure, estimated } = exposureOf(row);
   return {
     clientTripId: row.client_trip_id,
@@ -180,7 +195,7 @@ export function toLocalDrive(row: TripRow): LocalDrive {
     status: row.status,
     clean: row.clean === null ? null : row.clean === 1,
     counts: parseCounts(row.counts_json),
-    result: parseResult(row.result_json),
+    result,
     reason: row.reason,
     syncError: row.sync_error,
     endCause: row.end_cause,
@@ -278,8 +293,11 @@ export const EMPTY_SUMS: StatSums = Object.freeze({
   hardCorner: 0,
 });
 
+/** What `sumStats` reads of a drive. */
+export type SummedDrive = Pick<LocalDrive, 'status' | 'reason' | 'startedAt' | 'miles' | 'durationS' | 'nightMiles' | 'clean' | 'counts'>;
+
 /** `StatSums` over scored, non-not_driving drives started at or after `sinceMs` (null: all time). */
-export function sumStats(drives: readonly LocalDrive[], sinceMs: number | null): StatSums {
+export function sumStats(drives: readonly SummedDrive[], sinceMs: number | null): StatSums {
   const out: StatSums = { ...EMPTY_SUMS };
   for (const d of drives) {
     if (!isScoredDrive(d) || (sinceMs !== null && d.startedAt < sinceMs)) continue;

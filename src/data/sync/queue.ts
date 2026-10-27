@@ -64,23 +64,26 @@ export type TripAction = z.infer<typeof TripActionSchema>;
 
 /**
  * Validate the payload against the contract, then queue it. Idempotent on the trip. Given a
- * transaction handle `on`, the queue item joins that transaction.
+ * transaction handle `on`, the queue item joins that transaction and nothing is announced: the
+ * caller announces once it has committed (the drive host's `finalize`, the drive actions' own
+ * `enqueue`), so a drain wakes to the committed row and the screens refresh once, from it.
  */
 export async function enqueueFinalize(db: Db, payload: FinalizeTripPayloadV5, now: number = Date.now(), on?: Db): Promise<QueueItem> {
   const valid = FinalizeTripPayloadV5Schema.parse(payload);
   const owner = await currentOwnerUid(db);
   const item = await createQueueRepo(db).enqueue(FINALIZE_KIND, valid, finalizeIdempotencyKey(valid.clientTripId), now, on, owner);
   // Delivered on a macrotask, so a drain it wakes meets the committed row, not the lock.
-  emitDataChanged({ source: 'enqueue' });
+  if (!on) emitDataChanged({ source: 'enqueue' });
   return item;
 }
 
+/** As `enqueueFinalize`: inside a caller's transaction (`on`), the caller announces after it commits. */
 export async function enqueueAction(db: Db, action: TripAction, now: number = Date.now(), on?: Db): Promise<QueueItem> {
   const valid = TripActionSchema.parse(action);
   const key = valid.action === 'dispute' ? disputeIdempotencyKey(valid.eventId) : notDrivingIdempotencyKey(valid.clientTripId);
   const owner = await currentOwnerUid(db);
   const item = await createQueueRepo(db).enqueue(ACTIONS_KIND, valid, key, now, on, owner);
-  emitDataChanged({ source: 'enqueue' });
+  if (!on) emitDataChanged({ source: 'enqueue' });
   return item;
 }
 
