@@ -145,7 +145,7 @@ enum DetectPolicy {
   static let SUPPRESS_MAX_MS: Double = 10_800_000
   static let SUPPRESS_STILL_MS: Double = 300_000
   static let JOURNAL_SYNC_EVERY_ROWS: Int = 30
-  static let JOURNAL_MAX_BYTES_PER_DRIVE: Int = 16_777_216
+  static let JOURNAL_MAX_BYTES_PER_DRIVE: Int = 33_554_432
   static let JOURNAL_MAX_DRIVES: Int = 4
   static let READ_ROWS_MAX: Int = 600
   static let TICK_MS: Double = 5_000

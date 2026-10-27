@@ -159,6 +159,12 @@ describe('the numbers', () => {
     expect(DETECT.AUTO_ROW_GAP_MAX_MS).toBe(2 * DETECT.ROW_MS);
   });
 
+  test('the journal holds every second of the longest drive: 12 h and the safety slack at 650 bytes a row (native writes unrounded doubles)', () => {
+    const rows = (DETECT.MAX_DRIVE_MS + DETECT.SAFETY_SLACK_MS) / DETECT.ROW_MS;
+    expect(rows * 650).toBeLessThan(DETECT.JOURNAL_MAX_BYTES_PER_DRIVE);
+    expect(DETECT.JOURNAL_MAX_BYTES_PER_DRIVE).toBe(33_554_432);
+  });
+
   test('the end and merge numbers are the scoring package’s (plan §3.4, §3.5)', () => {
     expect(DETECT.STILL_END_MS).toBe(IDLE_END_S * 1000);
     expect(DETECT.SAFETY_SLACK_MS).toBe(END_NATIVE_SLACK_S * 1000);

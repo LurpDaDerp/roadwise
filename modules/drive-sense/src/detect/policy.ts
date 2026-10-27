@@ -118,7 +118,8 @@ export const DETECT = {
   /** …and ends once nothing has moved over 3 mph for this long. */
   SUPPRESS_STILL_MS: 300_000,
   JOURNAL_SYNC_EVERY_ROWS: 30,
-  JOURNAL_MAX_BYTES_PER_DRIVE: 16_777_216,
+  /** A drive's file: 12 h and a minute of rows (about 650 bytes each as native writes them) fit with room. */
+  JOURNAL_MAX_BYTES_PER_DRIVE: 33_554_432,
   JOURNAL_MAX_DRIVES: 4,
   /** `readRows` returns at most this many rows a call. */
   READ_ROWS_MAX: 600,
